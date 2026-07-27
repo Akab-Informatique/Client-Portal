@@ -1,0 +1,11 @@
+node_modules
+dist
+.git
+.env
+.env.*
+!.env.example
+user-uploads
+*.tsbuildinfo
+.DS_Store
+README.md
+.template-id
