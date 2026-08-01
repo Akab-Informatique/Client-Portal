@@ -231,7 +231,7 @@ async function ensureDefaultStaffRolesInner(): Promise<{
     if (!technician.is_system) patch.is_system = true;
     if (technician.name.trim() !== "Technician") patch.name = "Technician";
     if (!technician.active) patch.active = true;
-    // Auto-enable documentation only when the key was never set (legacy roles)
+    // Auto-enable new section keys only when never set (legacy roles)
     const current = parsePermissions(technician.permissions);
     let raw: Record<string, unknown> = {};
     try {
@@ -239,8 +239,16 @@ async function ensureDefaultStaffRolesInner(): Promise<{
     } catch {
       raw = {};
     }
+    let permsChanged = false;
     if (raw.documentation === undefined) {
       current.documentation = true;
+      permsChanged = true;
+    }
+    if (raw.passwords === undefined) {
+      current.passwords = true;
+      permsChanged = true;
+    }
+    if (permsChanged) {
       patch.permissions = serializePermissions(current);
     }
     if (Object.keys(patch).length > 0) {

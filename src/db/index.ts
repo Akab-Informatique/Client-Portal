@@ -33,6 +33,7 @@ export const dbReady = (async () => {
     "sharepoint_client_secret TEXT",
     "documentation_title TEXT",
     "documentation_enabled BOOLEAN",
+    "itglue_organization_id TEXT",
   ]) {
     try {
       await client.exec(`ALTER TABLE companies ADD COLUMN IF NOT EXISTS ${col}`);
@@ -47,11 +48,21 @@ export const dbReady = (async () => {
     "bio TEXT",
     "locale TEXT",
     "staff_role_id INTEGER",
+    "itglue_user_id TEXT",
+    "board_email_opt_in BOOLEAN",
   ]) {
     try {
       await client.exec(`ALTER TABLE users ADD COLUMN IF NOT EXISTS ${col}`);
     } catch {
       /* already exists */
     }
+  }
+  // Default existing users to opted-in when column was just added as NULL
+  try {
+    await client.exec(
+      `UPDATE users SET board_email_opt_in = TRUE WHERE board_email_opt_in IS NULL`,
+    );
+  } catch {
+    /* ignore */
   }
 })();

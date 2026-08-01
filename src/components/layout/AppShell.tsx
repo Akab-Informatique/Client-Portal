@@ -4,6 +4,7 @@ import {
   Building2,
   ChevronDown,
   FileText,
+  KeyRound,
   LayoutDashboard,
   LogOut,
   Megaphone,
@@ -428,17 +429,18 @@ export function useAdminNavEntries(): NavEntry[] {
         perm: "documentation",
       },
       {
+        to: "/admin/passwords",
+        label: t("nav.passwords"),
+        icon: KeyRound,
+        perm: "passwords",
+      },
+      {
         to: "/admin/directory",
         label: t("nav.directory"),
         icon: Users,
         perm: "directory",
       },
-      {
-        to: "/admin/profile/me",
-        label: t("nav.profile"),
-        icon: UserCircle2,
-        perm: "profiles",
-      },
+      // Profile is opened from the bottom user block (name / avatar), not the nav list.
     ];
 
     const settingsChildren: NavItem[] = [];
@@ -509,8 +511,13 @@ export function useClientNav(unreadCount = 0): NavItem[] {
         label: t("nav.documentation"),
         icon: FileText,
       },
+      {
+        to: "/client/passwords",
+        label: t("nav.passwords"),
+        icon: KeyRound,
+      },
       { to: "/client/directory", label: t("nav.directory"), icon: Users },
-      { to: "/client/profile/me", label: t("nav.profile"), icon: UserCircle2 },
+      // Profile is opened from the bottom user block (name / avatar), not the nav list.
     ],
     [t, unreadCount],
   );

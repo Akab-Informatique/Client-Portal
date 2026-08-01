@@ -37,6 +37,7 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card";
+import { Checkbox } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import {
@@ -82,6 +83,8 @@ export function ProfilePage() {
     mobile: "",
     bio: "",
     locale: "en" as Locale,
+    itglue_user_id: "",
+    board_email_opt_in: true,
   });
   const [saving, setSaving] = useState(false);
   const [saveMsg, setSaveMsg] = useState<string | null>(null);
@@ -122,6 +125,8 @@ export function ProfilePage() {
         mobile: p.mobile ?? "",
         bio: p.bio ?? "",
         locale: isLocale(p.locale) ? p.locale : locale,
+        itglue_user_id: p.itglue_user_id ?? "",
+        board_email_opt_in: p.board_email_opt_in !== false,
       });
 
       await dbReady;
@@ -163,6 +168,8 @@ export function ProfilePage() {
       mobile: form.mobile,
       bio: form.bio,
       locale: form.locale,
+      itglue_user_id: form.itglue_user_id,
+      board_email_opt_in: form.board_email_opt_in,
     });
     setSaving(false);
     if (!updated) {
@@ -337,6 +344,18 @@ export function ProfilePage() {
                     {formatDate(profile.created_at)}
                   </dd>
                 </div>
+                <div className="flex justify-between gap-4 border-b border-border/60 py-2">
+                  <dt className="text-muted-foreground">
+                    {profile.role === "client"
+                      ? t("profile.myglueUserId")
+                      : t("profile.itglueUserId")}
+                  </dt>
+                  <dd className="font-medium font-mono tabular-nums">
+                    {profile.itglue_user_id?.trim()
+                      ? `#${profile.itglue_user_id.trim()}`
+                      : t("profile.vaultUserNotLinked")}
+                  </dd>
+                </div>
                 {company && (
                   <div className="flex justify-between gap-4 py-2">
                     <dt className="text-muted-foreground">
@@ -443,6 +462,52 @@ export function ProfilePage() {
                   </p>
                 </div>
 
+                <div className="space-y-2">
+                  <Label htmlFor="pitglue">
+                    {user?.role === "client"
+                      ? t("profile.myglueUserId")
+                      : t("profile.itglueUserId")}
+                  </Label>
+                  <Input
+                    id="pitglue"
+                    inputMode="numeric"
+                    placeholder={t("profile.itglueUserIdPh")}
+                    value={form.itglue_user_id}
+                    onChange={(e) =>
+                      setForm((f) => ({
+                        ...f,
+                        itglue_user_id: e.target.value,
+                      }))
+                    }
+                  />
+                  <p className="text-xs text-muted-foreground">
+                    {user?.role === "client"
+                      ? t("profile.myglueUserIdHint")
+                      : t("profile.itglueUserIdHint")}
+                  </p>
+                </div>
+
+                <label className="flex items-start gap-3 rounded-lg border border-border bg-muted/20 p-3 text-sm">
+                  <Checkbox
+                    checked={form.board_email_opt_in}
+                    onCheckedChange={(v) =>
+                      setForm((f) => ({
+                        ...f,
+                        board_email_opt_in: v === true,
+                      }))
+                    }
+                    className="mt-0.5"
+                  />
+                  <span>
+                    <span className="font-medium">
+                      {t("profile.boardEmailOptIn")}
+                    </span>
+                    <span className="mt-0.5 block text-xs text-muted-foreground">
+                      {t("profile.boardEmailOptInHint")}
+                    </span>
+                  </span>
+                </label>
+
                 {saveErr && (
                   <p className="text-sm text-destructive">{saveErr}</p>
                 )}
@@ -474,6 +539,9 @@ export function ProfilePage() {
                         locale: isLocale(profile.locale)
                           ? profile.locale
                           : locale,
+                        itglue_user_id: profile.itglue_user_id ?? "",
+                        board_email_opt_in:
+                          profile.board_email_opt_in !== false,
                       });
                     }}
                   >

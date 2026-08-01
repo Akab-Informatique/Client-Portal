@@ -65,6 +65,8 @@ export type ProfileUpdate = {
   mobile?: string | null;
   bio?: string | null;
   locale?: string | null;
+  itglue_user_id?: string | null;
+  board_email_opt_in?: boolean | null;
 };
 
 /** Self-only profile update. */
@@ -89,6 +91,12 @@ export async function updateOwnProfile(
       ...(patch.bio !== undefined ? { bio: patch.bio?.trim() || null } : {}),
       ...(patch.locale !== undefined
         ? { locale: patch.locale?.trim() || null }
+        : {}),
+      ...(patch.itglue_user_id !== undefined
+        ? { itglue_user_id: patch.itglue_user_id?.trim() || null }
+        : {}),
+      ...(patch.board_email_opt_in !== undefined
+        ? { board_email_opt_in: patch.board_email_opt_in !== false }
         : {}),
     })
     .where(eq(schema.users.id, userId))

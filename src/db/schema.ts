@@ -44,6 +44,8 @@ export const companies = pgTable("companies", {
   documentation_title: text("documentation_title"),
   /** When false, Documentation is hidden for this client even if a URL is set */
   documentation_enabled: boolean("documentation_enabled"),
+  /** IT Glue / MyGlue organization ID for this client. */
+  itglue_organization_id: text("itglue_organization_id"),
   created_at: timestamp("created_at").defaultNow().notNull(),
 });
 
@@ -86,6 +88,17 @@ export const users = pgTable("users", {
   bio: text("bio"),
   /** Preferred UI language: en | fr */
   locale: text("locale"),
+  /**
+   * Linked IT Glue / MyGlue user id.
+   * Restricted passwords are filtered to this user’s authorized_users list
+   * (same visibility the person would have inside MyGlue).
+   */
+  itglue_user_id: text("itglue_user_id"),
+  /**
+   * When true, this user receives board message emails (if staff checks
+   * “Also send by email” when posting). Default true for new users.
+   */
+  board_email_opt_in: boolean("board_email_opt_in"),
   created_at: timestamp("created_at").defaultNow().notNull(),
 });
 

@@ -1,14 +1,26 @@
 import { useEffect, useMemo, useState, type FormEvent } from "react";
-import { desc, eq } from "drizzle-orm";
-import { Megaphone, Pin, Send } from "lucide-react";
+import { and, desc, eq, inArray } from "drizzle-orm";
+import { Mail, Megaphone, Pin, Send } from "lucide-react";
 import { db, dbReady, schema } from "@/db";
 import { useAuth } from "@/lib/auth";
-import type { BoardMessage, Company } from "@/lib/types";
+import type { BoardMessage, Company, User } from "@/lib/types";
+import {
+  fetchSmtpStatus,
+  isBoardEmailOptedIn,
+  sendBoardEmails,
+  type BoardEmailRecipient,
+} from "@/lib/smtp";
 import { EmptyState } from "@/components/EmptyState";
 import { BlurFade } from "@/components/ui/blur-fade";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import {
+  Card,
+  CardContent,
+  CardDescription,
+  CardHeader,
+  CardTitle,
+} from "@/components/ui/card";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -20,11 +32,15 @@ import { cn } from "@/lib/utils";
 export function MessagesPage() {
   const { user } = useAuth();
   const [clients, setClients] = useState<Company[]>([]);
-  const [messages, setMessages] = useState<(BoardMessage & { companyName: string })[]>([]);
+  const [messages, setMessages] = useState<
+    (BoardMessage & { companyName: string })[]
+  >([]);
   const [selectedIds, setSelectedIds] = useState<number[]>([]);
   const [title, setTitle] = useState("");
   const [body, setBody] = useState("");
   const [pinned, setPinned] = useState(false);
+  const [sendEmail, setSendEmail] = useState(false);
+  const [smtpReady, setSmtpReady] = useState<boolean | null>(null);
   const [filterCompany, setFilterCompany] = useState<number | "all">("all");
   const [loading, setLoading] = useState(true);
   const [sending, setSending] = useState(false);
@@ -35,7 +51,10 @@ export function MessagesPage() {
     await dbReady;
     const [companies, msgs] = await Promise.all([
       db.select().from(schema.companies),
-      db.select().from(schema.board_messages).orderBy(desc(schema.board_messages.created_at)),
+      db
+        .select()
+        .from(schema.board_messages)
+        .orderBy(desc(schema.board_messages.created_at)),
     ]);
     const clientCompanies = (companies as Company[])
       .filter((c) => c.type === "client" && c.active)
@@ -52,7 +71,10 @@ export function MessagesPage() {
   };
 
   useEffect(() => {
-    load();
+    void load();
+    fetchSmtpStatus(false)
+      .then((s) => setSmtpReady(Boolean(s.configured && s.ok)))
+      .catch(() => setSmtpReady(false));
   }, []);
 
   const toggleClient = (id: number) => {
@@ -69,6 +91,43 @@ export function MessagesPage() {
     }
   };
 
+  const collectEmailRecipients = async (
+    companyIds: number[],
+  ): Promise<BoardEmailRecipient[]> => {
+    if (companyIds.length === 0) return [];
+    await dbReady;
+    const rows = (await db
+      .select()
+      .from(schema.users)
+      .where(
+        and(
+          inArray(schema.users.company_id, companyIds),
+          eq(schema.users.active, true),
+          eq(schema.users.role, "client"),
+        ),
+      )) as User[];
+
+    const companyMap = new Map(clients.map((c) => [c.id, c.name]));
+    const recipients: BoardEmailRecipient[] = [];
+    const seen = new Set<string>();
+
+    for (const u of rows) {
+      if (!isBoardEmailOptedIn(u.board_email_opt_in)) continue;
+      const email = (u.email || "").trim().toLowerCase();
+      if (!email || !email.includes("@") || seen.has(email)) continue;
+      seen.add(email);
+      recipients.push({
+        email,
+        name: u.name || email,
+        companyName:
+          u.company_id != null
+            ? companyMap.get(u.company_id) || undefined
+            : undefined,
+      });
+    }
+    return recipients;
+  };
+
   const send = async (e: FormEvent) => {
     e.preventDefault();
     setError(null);
@@ -82,9 +141,18 @@ export function MessagesPage() {
       setError("Title and message body are required.");
       return;
     }
+    if (sendEmail && smtpReady === false) {
+      setError(
+        "SMTP is not configured. Open Settings → Email (SMTP) to connect a mail server, or uncheck “Also send by email”.",
+      );
+      return;
+    }
 
     setSending(true);
     await dbReady;
+
+    const titleTrim = title.trim();
+    const bodyTrim = body.trim();
 
     // One unique message row per selected client board
     await db.insert(schema.board_messages).values(
@@ -92,8 +160,8 @@ export function MessagesPage() {
         company_id: companyId,
         author_id: user.id,
         author_name: user.name,
-        title: title.trim(),
-        body: body.trim(),
+        title: titleTrim,
+        body: bodyTrim,
         pinned,
       })),
     );
@@ -103,15 +171,43 @@ export function MessagesPage() {
       .map((c) => c.name)
       .join(", ");
 
+    let emailNote = "";
+    if (sendEmail) {
+      const recipients = await collectEmailRecipients(selectedIds);
+      if (recipients.length === 0) {
+        emailNote =
+          " No emails sent — no opted-in client users with valid addresses on the selected boards.";
+      } else {
+        const mail = await sendBoardEmails({
+          title: titleTrim,
+          body: bodyTrim,
+          authorName: user.name,
+          portalUrl:
+            typeof window !== "undefined" ? window.location.origin : null,
+          recipients,
+        });
+        if (mail.ok || mail.sent > 0) {
+          emailNote = ` Email: ${mail.sent} private message${mail.sent === 1 ? "" : "s"} sent (one recipient per email).`;
+          if (mail.failed > 0) {
+            emailNote += ` ${mail.failed} failed.`;
+          }
+        } else {
+          emailNote = ` Email failed: ${mail.error || "unknown error"}. Board posts were still saved.`;
+        }
+      }
+    }
+
     setSending(false);
     setTitle("");
     setBody("");
     setPinned(false);
+    setSendEmail(false);
     setSelectedIds([]);
     setSuccess(
-      selectedIds.length === 1
+      (selectedIds.length === 1
         ? `Message posted to ${names}'s board.`
-        : `Message posted to ${selectedIds.length} unique client boards: ${names}.`,
+        : `Message posted to ${selectedIds.length} unique client boards: ${names}.`) +
+        emailNote,
     );
     await load();
   };
@@ -123,7 +219,9 @@ export function MessagesPage() {
 
   const deleteMessage = async (id: number) => {
     await dbReady;
-    await db.delete(schema.board_messages).where(eq(schema.board_messages.id, id));
+    await db
+      .delete(schema.board_messages)
+      .where(eq(schema.board_messages.id, id));
     await load();
   };
 
@@ -147,8 +245,9 @@ export function MessagesPage() {
                 Post to client boards
               </CardTitle>
               <CardDescription>
-                Choose one or multiple clients. Communication is always unique per
-                client board — the same content is written separately to each selected zone.
+                Choose one or multiple clients. Communication is always unique
+                per client board — the same content is written separately to
+                each selected zone.
               </CardDescription>
             </CardHeader>
             <CardContent>
@@ -163,7 +262,8 @@ export function MessagesPage() {
                       onClick={selectAll}
                       disabled={clients.length === 0}
                     >
-                      {selectedIds.length === clients.length && clients.length > 0
+                      {selectedIds.length === clients.length &&
+                      clients.length > 0
                         ? "Clear all"
                         : "Select all"}
                     </Button>
@@ -233,6 +333,51 @@ export function MessagesPage() {
                   Pin to top of board
                 </label>
 
+                <div
+                  className={cn(
+                    "rounded-lg border p-3 space-y-2",
+                    sendEmail
+                      ? "border-primary/40 bg-primary/5"
+                      : "border-border bg-muted/20",
+                  )}
+                >
+                  <label className="flex items-start gap-2 text-sm">
+                    <Checkbox
+                      checked={sendEmail}
+                      onCheckedChange={(v) => setSendEmail(v === true)}
+                      className="mt-0.5"
+                    />
+                    <span>
+                      <span className="flex items-center gap-1.5 font-medium">
+                        <Mail className="size-3.5" />
+                        Also send by email
+                      </span>
+                      <span className="mt-0.5 block text-xs text-muted-foreground">
+                        Emails go only to client users on the selected boards
+                        who opted in. Each person receives a{" "}
+                        <strong>separate private email</strong> (no shared To/Cc
+                        list — recipients never see each other).
+                      </span>
+                    </span>
+                  </label>
+                  {sendEmail && (
+                    <p className="pl-6 text-xs text-muted-foreground">
+                      {smtpReady === null && "Checking SMTP…"}
+                      {smtpReady === true && (
+                        <span className="text-primary">
+                          SMTP ready — private delivery enabled.
+                        </span>
+                      )}
+                      {smtpReady === false && (
+                        <span className="text-destructive">
+                          SMTP not configured. Set it under Settings → Email
+                          (SMTP).
+                        </span>
+                      )}
+                    </p>
+                  )}
+                </div>
+
                 {error && (
                   <div className="rounded-lg border border-destructive/30 bg-destructive/10 px-3 py-2 text-sm text-destructive">
                     {error}
@@ -244,9 +389,19 @@ export function MessagesPage() {
                   </div>
                 )}
 
-                <Button type="submit" className="w-full gap-2" disabled={sending}>
+                <Button
+                  type="submit"
+                  className="w-full gap-2"
+                  disabled={sending}
+                >
                   <Megaphone className="size-4" />
-                  {sending ? "Sending…" : "Send to selected boards"}
+                  {sending
+                    ? sendEmail
+                      ? "Posting & emailing…"
+                      : "Sending…"
+                    : sendEmail
+                      ? "Post boards + email"
+                      : "Send to selected boards"}
                 </Button>
               </form>
             </CardContent>
@@ -259,7 +414,8 @@ export function MessagesPage() {
               <div>
                 <CardTitle>All client board activity</CardTitle>
                 <CardDescription>
-                  Messages are stored per client — boards never mix between companies.
+                  Messages are stored per client — boards never mix between
+                  companies.
                 </CardDescription>
               </div>
               <select
@@ -283,7 +439,10 @@ export function MessagesPage() {
               {loading ? (
                 <div className="space-y-3">
                   {Array.from({ length: 4 }).map((_, i) => (
-                    <div key={i} className="h-24 animate-pulse rounded-lg bg-muted" />
+                    <div
+                      key={i}
+                      className="h-24 animate-pulse rounded-lg bg-muted"
+                    />
                   ))}
                 </div>
               ) : filteredMessages.length === 0 ? (
@@ -316,7 +475,10 @@ export function MessagesPage() {
                                 </Badge>
                               )}
                             </div>
-                            <Badge variant="outline" className="border-primary/30 text-primary">
+                            <Badge
+                              variant="outline"
+                              className="border-primary/30 text-primary"
+                            >
                               {msg.companyName}
                             </Badge>
                           </div>

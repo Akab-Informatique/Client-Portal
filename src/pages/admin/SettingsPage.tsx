@@ -4,6 +4,9 @@ import {
   Cable,
   Cloud,
   FileText,
+  KeyRound,
+  Loader2,
+  Mail,
   Settings2,
   Shield,
   Wrench,
@@ -28,6 +31,8 @@ import {
   fetchSharePointStatus,
   isCompanySharePointLinked,
 } from "@/lib/sharepoint";
+import { fetchItGlueStatus } from "@/lib/itglue";
+import { fetchSmtpStatus, type SmtpStatusResponse } from "@/lib/smtp";
 
 type ConnState = "unknown" | "ok" | "fail" | "off";
 
@@ -36,8 +41,14 @@ export function SettingsPage() {
   const { can } = useAuth();
   const [atStatus, setAtStatus] = useState<ConnState>("unknown");
   const [spStatus, setSpStatus] = useState<ConnState>("unknown");
+  const [igStatus, setIgStatus] = useState<ConnState>("unknown");
+  const [smtpStatus, setSmtpStatus] = useState<ConnState>("unknown");
+  const [smtpDetail, setSmtpDetail] = useState<SmtpStatusResponse | null>(null);
+  const [smtpVerifying, setSmtpVerifying] = useState(false);
+  const [smtpVerifyMsg, setSmtpVerifyMsg] = useState<string | null>(null);
   const [linkedClients, setLinkedClients] = useState<number | null>(null);
   const [totalClients, setTotalClients] = useState<number | null>(null);
+  const [igLinked, setIgLinked] = useState<number | null>(null);
 
   useEffect(() => {
     fetch("/api/autotask/status")
@@ -50,6 +61,19 @@ export function SettingsPage() {
         else setSpStatus(s.ok ? "ok" : "fail");
       })
       .catch(() => setSpStatus("fail"));
+    fetchItGlueStatus()
+      .then((s) => {
+        if (!s.configured) setIgStatus("off");
+        else setIgStatus(s.ok ? "ok" : "fail");
+      })
+      .catch(() => setIgStatus("fail"));
+    fetchSmtpStatus(false)
+      .then((s) => {
+        setSmtpDetail(s);
+        if (!s.configured) setSmtpStatus("off");
+        else setSmtpStatus(s.ok ? "ok" : "fail");
+      })
+      .catch(() => setSmtpStatus("fail"));
     let cancelled = false;
     (async () => {
       await dbReady;
@@ -58,11 +82,39 @@ export function SettingsPage() {
       const clients = rows.filter((c) => c.type === "client");
       setTotalClients(clients.length);
       setLinkedClients(clients.filter(isCompanySharePointLinked).length);
+      setIgLinked(
+        clients.filter((c) => !!(c.itglue_organization_id || "").trim())
+          .length,
+      );
     })();
     return () => {
       cancelled = true;
     };
   }, []);
+
+  const verifySmtp = async () => {
+    setSmtpVerifying(true);
+    setSmtpVerifyMsg(null);
+    try {
+      const s = await fetchSmtpStatus(true);
+      setSmtpDetail(s);
+      if (!s.configured) {
+        setSmtpStatus("off");
+        setSmtpVerifyMsg(s.error || t("settings.smtpNotConfigured"));
+      } else if (s.ok) {
+        setSmtpStatus("ok");
+        setSmtpVerifyMsg(t("settings.smtpVerifyOk"));
+      } else {
+        setSmtpStatus("fail");
+        setSmtpVerifyMsg(s.error || t("settings.statusIssue"));
+      }
+    } catch (e) {
+      setSmtpStatus("fail");
+      setSmtpVerifyMsg(e instanceof Error ? e.message : t("common.tryAgain"));
+    } finally {
+      setSmtpVerifying(false);
+    }
+  };
 
   const statusBadge = (state: ConnState, okLabel: string, offLabel: string) => {
     if (state === "ok") {
@@ -240,6 +292,137 @@ export function SettingsPage() {
                   </Button>
                 )}
               </div>
+            </div>
+
+            <div className="flex flex-col gap-3 rounded-xl border border-border p-4">
+              <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+                <div className="flex items-start gap-3">
+                  <div className="flex size-10 shrink-0 items-center justify-center rounded-lg bg-muted">
+                    <KeyRound className="size-5 text-foreground" />
+                  </div>
+                  <div>
+                    <p className="font-semibold">IT Glue / MyGlue</p>
+                    <p className="text-xs text-muted-foreground">
+                      {t("settings.itglueHint")}
+                    </p>
+                    <p className="mt-1.5 text-xs font-medium text-foreground/80">
+                      Each portal user only sees passwords their linked MyGlue
+                      user can access.
+                    </p>
+                  </div>
+                </div>
+                <div className="flex flex-wrap items-center gap-2">
+                  {statusBadge(
+                    igStatus,
+                    t("settings.itglueReady"),
+                    t("settings.statusNotConfigured"),
+                  )}
+                  {igLinked != null && totalClients != null && (
+                    <Badge variant="outline" className="tabular-nums">
+                      {igLinked}/{totalClients} orgs linked
+                    </Badge>
+                  )}
+                </div>
+              </div>
+              <div className="flex flex-wrap gap-2 pl-0 sm:pl-[3.25rem]">
+                {can("passwords") && (
+                  <Button variant="outline" size="sm" asChild>
+                    <Link to="/admin/passwords">
+                      {t("settings.itglueLinkPasswords")}
+                    </Link>
+                  </Button>
+                )}
+                {can("clients") && (
+                  <Button variant="outline" size="sm" asChild>
+                    <Link to="/admin/clients">{t("nav.clients")}</Link>
+                  </Button>
+                )}
+              </div>
+            </div>
+
+            <div className="flex flex-col gap-3 rounded-xl border border-border p-4">
+              <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+                <div className="flex items-start gap-3">
+                  <div className="flex size-10 shrink-0 items-center justify-center rounded-lg bg-muted">
+                    <Mail className="size-5 text-foreground" />
+                  </div>
+                  <div className="min-w-0">
+                    <p className="font-semibold">{t("settings.smtpTitle")}</p>
+                    <p className="text-xs text-muted-foreground">
+                      {t("settings.smtpHint")}
+                    </p>
+                    <p className="mt-1.5 text-xs font-medium text-foreground/80">
+                      {t("settings.smtpPrivacy")}
+                    </p>
+                    {smtpDetail?.configured && (
+                      <p className="mt-2 font-mono text-[11px] text-muted-foreground">
+                        {smtpDetail.host}:{smtpDetail.port}
+                        {smtpDetail.secure ? " (TLS)" : ""}
+                        {smtpDetail.fromEmail
+                          ? ` · from ${smtpDetail.fromEmail}`
+                          : ""}
+                      </p>
+                    )}
+                    {smtpVerifyMsg && (
+                      <p
+                        className={`mt-2 text-xs ${
+                          smtpStatus === "ok"
+                            ? "text-primary"
+                            : "text-destructive"
+                        }`}
+                      >
+                        {smtpVerifyMsg}
+                      </p>
+                    )}
+                  </div>
+                </div>
+                <div className="flex flex-wrap items-center gap-2">
+                  {statusBadge(
+                    smtpStatus,
+                    t("settings.smtpReady"),
+                    t("settings.statusNotConfigured"),
+                  )}
+                </div>
+              </div>
+              <div className="flex flex-wrap gap-2 pl-0 sm:pl-[3.25rem]">
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => void verifySmtp()}
+                  disabled={smtpVerifying || smtpStatus === "off"}
+                  className="gap-1.5"
+                >
+                  {smtpVerifying ? (
+                    <Loader2 className="size-3.5 animate-spin" />
+                  ) : (
+                    <Mail className="size-3.5" />
+                  )}
+                  {t("settings.smtpTest")}
+                </Button>
+                {can("messages") && (
+                  <Button variant="outline" size="sm" asChild>
+                    <Link to="/admin/messages">{t("nav.messages")}</Link>
+                  </Button>
+                )}
+              </div>
+              {smtpStatus === "off" && (
+                <div className="rounded-lg border border-dashed border-border bg-muted/30 px-3 py-2 text-xs text-muted-foreground sm:ml-[3.25rem]">
+                  <p className="font-medium text-foreground/80">
+                    {t("settings.smtpSecretsTitle")}
+                  </p>
+                  <ul className="mt-1 list-inside list-disc space-y-0.5 font-mono">
+                    <li>SMTP_HOST</li>
+                    <li>SMTP_PORT (default 587)</li>
+                    <li>SMTP_SECURE (true for 465)</li>
+                    <li>SMTP_USER</li>
+                    <li>SMTP_PASS</li>
+                    <li>SMTP_FROM_EMAIL</li>
+                    <li>SMTP_FROM_NAME (optional)</li>
+                    <li>SMTP_REPLY_TO (optional)</li>
+                  </ul>
+                  <p className="mt-1.5">{t("settings.smtpSecretsHint")}</p>
+                </div>
+              )}
             </div>
 
             <Separator />

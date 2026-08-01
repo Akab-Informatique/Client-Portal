@@ -13,6 +13,7 @@ export const en = {
     close: "Close",
     back: "Back",
     search: "Search",
+    refresh: "Refresh",
     loading: "Loading…",
     saving: "Saving…",
     signOut: "Sign out",
@@ -59,6 +60,7 @@ export const en = {
     board: "Message board",
     tickets: "Open tickets",
     documentation: "Documentation",
+    passwords: "Passwords",
     profile: "Profile",
     directory: "Directory",
     settings: "Settings",
@@ -89,6 +91,22 @@ export const en = {
     statusNotConfigured: "Not configured",
     statusIssue: "Issue",
     openDocs: "Browse documentation",
+    itglueHint:
+      "IT Glue / MyGlue password vault. Add ITGLUE_API_KEY (Password Access on) and optionally ITGLUE_REGION (us|eu|au).",
+    itglueReady: "IT Glue connected",
+    itglueLinkPasswords: "Open passwords",
+    smtpTitle: "Email (SMTP)",
+    smtpHint:
+      "Used to email board messages to opted-in users. Configure SMTP secrets on the server.",
+    smtpPrivacy:
+      "Board emails are always sent one recipient at a time (private To). Other users never appear on the same message.",
+    smtpReady: "SMTP configured",
+    smtpNotConfigured: "SMTP is not configured yet.",
+    smtpTest: "Test connection",
+    smtpVerifyOk: "SMTP connection verified successfully.",
+    smtpSecretsTitle: "Required app secrets",
+    smtpSecretsHint:
+      "Add these via the platform secrets / .env on your server, then restart the app.",
     futureTitle: "More settings coming here",
     futureDesc:
       "Branding, notification defaults, network options, and other portal-wide preferences will be added under General settings.",
@@ -151,6 +169,17 @@ export const en = {
     wrongPassword: "Current password is incorrect.",
     preferredLanguage: "Preferred language",
     preferredLanguageHint: "Used for your portal interface.",
+    boardEmailOptIn: "Receive message board emails",
+    boardEmailOptInHint:
+      "When staff posts a board message with “Also send by email”, you get a private email. Other recipients are never shown on the same message.",
+    myglueUserId: "MyGlue user ID",
+    myglueUserIdHint:
+      "Links your portal login to your MyGlue user. Passwords only shows credentials MyGlue would allow for you (organization passwords plus restricted entries shared with you). Leave blank to try auto-match by email.",
+    itglueUserId: "IT Glue user ID",
+    itglueUserIdHint:
+      "Links your portal login to your IT Glue staff user. Passwords only shows credentials that IT Glue would allow for that user in each client organization. Leave blank to try auto-match by email (or unscoped API-key view for staff).",
+    itglueUserIdPh: "e.g. 12345",
+    vaultUserNotLinked: "Not linked",
     onlySelfEdit: "Only this person can edit their profile.",
     viewingAs: "Viewing company profile",
     isolationNote:
@@ -336,6 +365,12 @@ export const en = {
     newPasswordOptional: "New password (optional)",
     roleCol: "Role",
     unassigned: "Unassigned",
+    itglueCol: "IT Glue user",
+    itglueNotLinked: "Not linked",
+    itglueUserId: "IT Glue user ID",
+    itglueUserIdPh: "e.g. 12345",
+    itglueUserIdHint:
+      "Links this staff account to their IT Glue user. On Passwords, they only see credentials that IT Glue allows for that user in each client organization (not the full API-key vault). Leave blank to auto-match by email when possible.",
     rolesTitle: "Access roles",
     rolesDesc:
       "Default Admin and Technician roles are built in. Create more roles with custom section rights.",
@@ -376,6 +411,7 @@ export const en = {
     permUsers: "Client users",
     permMessages: "Message board",
     permDocumentation: "Documentation",
+    permPasswords: "Passwords (IT Glue)",
     permDirectory: "Company directory",
     permProfiles: "Profiles",
     permDescDashboard: "View management dashboard and stats",
@@ -387,10 +423,90 @@ export const en = {
       "Manage client portal users (shown under Clients, not a separate menu)",
     permDescMessages: "Post and manage client board messages",
     permDescDocumentation: "Browse client SharePoint documentation libraries",
+    permDescPasswords:
+      "View IT Glue / MyGlue passwords the user is authorized to see",
     permDescDirectory: "Browse the internal AKAB directory",
     permDescProfiles:
       "View and edit own profile; open colleague profiles",
   },
+  passwords: {
+    title: "Passwords",
+    subtitle: "Credentials from IT Glue / MyGlue for your access level",
+    subtitleClient:
+      "MyGlue passwords for your company — only what your linked MyGlue user is allowed to see",
+    subtitleStaff:
+      "IT Glue passwords for the selected client — filtered to your linked IT Glue user’s access",
+    vaultTitle: "Password vault",
+    vaultDesc:
+      "You only see passwords your linked vault user is allowed to access. Restricted entries stay hidden unless shared with you.",
+    vaultDescClient:
+      "Client view uses MyGlue: organization passwords plus restricted entries shared with your linked MyGlue user.",
+    vaultDescStaff:
+      "Staff view uses IT Glue for your linked IT Glue user in this client organization. Restricted entries stay hidden unless that user is authorized.",
+    demo: "Demo data",
+    live: "IT Glue live",
+    client: "Client company",
+    pickClient: "Select a client",
+    search: "Search",
+    searchPlaceholder: "Name, username, or URL…",
+    emptyTitle: "No passwords available",
+    emptyDesc:
+      "Nothing is shared with your MyGlue user in this organization, or the vault is empty.",
+    errNoOrg:
+      "This company is not linked to an IT Glue organization yet. Ask an admin to set the IT Glue Organization ID under Clients → Edit.",
+    errReveal: "Could not reveal this password.",
+    colName: "Name",
+    colUsername: "Username",
+    colPassword: "Password",
+    colCategory: "Category",
+    colUrl: "URL",
+    view: "View",
+    detailTitle: "Password",
+    detailDesc: "Reveal and copy credentials. Values are not stored in the portal.",
+    copyUser: "Copy user",
+    copyPassword: "Copy password",
+    copyUrl: "Copy URL",
+    reveal: "Reveal",
+    hide: "Hide",
+    notes: "Notes",
+    restricted: "Restricted",
+    restrictedHint:
+      "Only people who are explicitly shared on this password in IT Glue / MyGlue can see it.",
+    staffUnscopedNote:
+      "Staff view without a linked IT Glue user shows organization passwords available to the API key. Link the IT Glue user ID under Staff & roles (or your profile) so passwords match that IT Glue user’s access.",
+    clientMyglueNote:
+      "Client passwords follow MyGlue access for the linked MyGlue user on this portal account.",
+    add: "Add password",
+    addTitle: "Add password",
+    addDesc: "Create a credential in this company's IT Glue organization.",
+    editTitle: "Edit password",
+    editDesc: "Update this credential in IT Glue. Leave password blank to keep the current value.",
+    deleteTitle: "Delete password?",
+    deleteDesc:
+      "This permanently removes “{name}” from IT Glue. This cannot be undone from the portal.",
+    deleteConfirm: "Delete permanently",
+    nameLabel: "Name",
+    namePlaceholder: "e.g. Microsoft 365 Admin",
+    usernamePlaceholder: "login or email",
+    passwordPlaceholder: "Secret value",
+    passwordKeepPlaceholder: "Leave blank to keep current password",
+    urlPlaceholder: "https://…",
+    notesPlaceholder: "Optional notes…",
+    generate: "Generate",
+    creating: "Creating…",
+    updating: "Updating…",
+    deleting: "Deleting…",
+    createSuccess: "Password created in IT Glue.",
+    updateSuccess: "Password updated.",
+    deleteSuccess: "Password deleted.",
+    errCreate: "Could not create password.",
+    errUpdate: "Could not update password.",
+    errDelete: "Could not delete password.",
+    errNameRequired: "Name is required.",
+    errPasswordRequired: "Password value is required.",
+    emptyAction: "Add your first password",
+  },
+
   docs: {
     title: "Documentation",
     adminTitle: "Client documentation",

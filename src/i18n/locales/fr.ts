@@ -15,6 +15,7 @@ export const fr: Dictionary = {
     close: "Fermer",
     back: "Retour",
     search: "Rechercher",
+    refresh: "Actualiser",
     loading: "Chargement…",
     saving: "Enregistrement…",
     signOut: "Déconnexion",
@@ -61,6 +62,7 @@ export const fr: Dictionary = {
     board: "Babillard",
     tickets: "Billets ouverts",
     documentation: "Documentation",
+    passwords: "Mots de passe",
     profile: "Profil",
     directory: "Annuaire",
     settings: "Paramètres",
@@ -91,6 +93,22 @@ export const fr: Dictionary = {
     statusNotConfigured: "Non configuré",
     statusIssue: "Problème",
     openDocs: "Parcourir la documentation",
+    itglueHint:
+      "Coffre IT Glue / MyGlue. Ajoutez ITGLUE_API_KEY (accès mots de passe activé) et optionnellement ITGLUE_REGION (us|eu|au).",
+    itglueReady: "IT Glue connecté",
+    itglueLinkPasswords: "Ouvrir les mots de passe",
+    smtpTitle: "Courriel (SMTP)",
+    smtpHint:
+      "Utilisé pour envoyer les messages du babillard aux utilisateurs abonnés. Configurez les secrets SMTP sur le serveur.",
+    smtpPrivacy:
+      "Les courriels du babillard sont toujours envoyés un destinataire à la fois (À: privé). Les autres utilisateurs n'apparaissent jamais sur le même message.",
+    smtpReady: "SMTP configuré",
+    smtpNotConfigured: "SMTP n'est pas encore configuré.",
+    smtpTest: "Tester la connexion",
+    smtpVerifyOk: "Connexion SMTP vérifiée avec succès.",
+    smtpSecretsTitle: "Secrets d'application requis",
+    smtpSecretsHint:
+      "Ajoutez-les via les secrets de la plateforme / le fichier .env sur votre serveur, puis redémarrez l'application.",
     futureTitle: "D'autres paramètres arriveront ici",
     futureDesc:
       "Image de marque, notifications par défaut, options réseau et préférences globales du portail seront ajoutés sous Paramètres généraux.",
@@ -154,6 +172,17 @@ export const fr: Dictionary = {
     wrongPassword: "Le mot de passe actuel est incorrect.",
     preferredLanguage: "Langue préférée",
     preferredLanguageHint: "Utilisée pour l'interface du portail.",
+    boardEmailOptIn: "Recevoir les courriels du babillard",
+    boardEmailOptInHint:
+      "Lorsque le personnel publie un message avec « Envoyer aussi par courriel », vous recevez un courriel privé. Les autres destinataires ne sont jamais visibles sur le même message.",
+    myglueUserId: "ID utilisateur MyGlue",
+    myglueUserIdHint:
+      "Lie votre connexion portail à votre utilisateur MyGlue. Les mots de passe n'affichent que les identifiants que MyGlue vous autorise (mots de passe d'organisation plus les entrées restreintes partagées avec vous). Laissez vide pour tenter une correspondance automatique par courriel.",
+    itglueUserId: "ID utilisateur IT Glue",
+    itglueUserIdHint:
+      "Lie votre connexion portail à votre utilisateur IT Glue (personnel). Les mots de passe n'affichent que les identifiants autorisés pour cet utilisateur dans chaque organisation cliente. Laissez vide pour tenter une correspondance par courriel (ou vue non filtrée par clé API pour le personnel).",
+    itglueUserIdPh: "ex. 12345",
+    vaultUserNotLinked: "Non lié",
     onlySelfEdit: "Seul ce compte peut modifier son profil.",
     viewingAs: "Profil d'entreprise",
     isolationNote:
@@ -342,6 +371,12 @@ export const fr: Dictionary = {
     newPasswordOptional: "Nouveau mot de passe (facultatif)",
     roleCol: "Rôle",
     unassigned: "Non assigné",
+    itglueCol: "Utilisateur IT Glue",
+    itglueNotLinked: "Non lié",
+    itglueUserId: "ID utilisateur IT Glue",
+    itglueUserIdPh: "ex. 12345",
+    itglueUserIdHint:
+      "Lie ce compte du personnel à son utilisateur IT Glue. Sur Mots de passe, il ne voit que les identifiants qu'IT Glue autorise pour cet utilisateur dans chaque organisation cliente (pas tout le coffre de la clé API). Laissez vide pour tenter une correspondance par courriel.",
     rolesTitle: "Rôles d'accès",
     rolesDesc:
       "Les rôles Admin et Technicien sont fournis par défaut. Créez d'autres rôles avec des droits personnalisés.",
@@ -383,6 +418,7 @@ export const fr: Dictionary = {
     permUsers: "Utilisateurs clients",
     permMessages: "Babillard",
     permDocumentation: "Documentation",
+    permPasswords: "Mots de passe (IT Glue)",
     permDirectory: "Annuaire entreprise",
     permProfiles: "Profils",
     permDescDashboard: "Voir le tableau de bord et les statistiques de gestion",
@@ -394,9 +430,91 @@ export const fr: Dictionary = {
       "Gérer les utilisateurs du portail client (sous Clients, pas un menu séparé)",
     permDescMessages: "Publier et gérer les messages des babillards clients",
     permDescDocumentation: "Parcourir les bibliothèques SharePoint de documentation client",
+    permDescPasswords:
+      "Voir les mots de passe IT Glue / MyGlue autorisés pour l'utilisateur",
     permDescDirectory: "Parcourir l'annuaire interne AKAB",
     permDescProfiles:
       "Voir et modifier son profil; ouvrir les profils des collègues",
+  },
+  passwords: {
+    title: "Mots de passe",
+    subtitle: "Identifiants IT Glue / MyGlue selon votre niveau d'accès",
+    subtitleClient:
+      "Mots de passe MyGlue de votre entreprise — uniquement ce que votre utilisateur MyGlue lié est autorisé à voir",
+    subtitleStaff:
+      "Mots de passe IT Glue du client sélectionné — filtrés selon l'accès de votre utilisateur IT Glue lié",
+    vaultTitle: "Coffre de mots de passe",
+    vaultDesc:
+      "Vous ne voyez que les mots de passe autorisés pour votre utilisateur de coffre lié. Les entrées restreintes restent masquées sauf si elles vous sont partagées.",
+    vaultDescClient:
+      "La vue client utilise MyGlue : mots de passe d'organisation plus les entrées restreintes partagées avec votre utilisateur MyGlue lié.",
+    vaultDescStaff:
+      "La vue personnel utilise IT Glue pour votre utilisateur IT Glue lié dans cette organisation cliente. Les entrées restreintes restent masquées sauf si cet utilisateur y est autorisé.",
+    demo: "Données démo",
+    live: "IT Glue en direct",
+    client: "Entreprise cliente",
+    pickClient: "Choisir un client",
+    search: "Recherche",
+    searchPlaceholder: "Nom, utilisateur ou URL…",
+    emptyTitle: "Aucun mot de passe disponible",
+    emptyDesc:
+      "Rien n'est partagé avec votre utilisateur MyGlue dans cette organisation, ou le coffre est vide.",
+    errNoOrg:
+      "Cette entreprise n'est pas encore liée à une organisation IT Glue. Demandez à un admin de définir l'ID d'organisation sous Clients → Modifier.",
+    errReveal: "Impossible d'afficher ce mot de passe.",
+    colName: "Nom",
+    colUsername: "Nom d'utilisateur",
+    colPassword: "Mot de passe",
+    colCategory: "Catégorie",
+    colUrl: "URL",
+    view: "Voir",
+    detailTitle: "Mot de passe",
+    detailDesc:
+      "Afficher et copier les identifiants. Les valeurs ne sont pas stockées dans le portail.",
+    copyUser: "Copier l'utilisateur",
+    copyPassword: "Copier le mot de passe",
+    copyUrl: "Copier l'URL",
+    reveal: "Afficher",
+    hide: "Masquer",
+    notes: "Notes",
+    restricted: "Restreint",
+    restrictedHint:
+      "Seules les personnes explicitement partagées sur ce mot de passe dans IT Glue / MyGlue peuvent le voir.",
+    staffUnscopedNote:
+      "La vue personnel sans utilisateur IT Glue lié montre les mots de passe d'organisation accessibles via la clé API. Liez l'ID utilisateur IT Glue sous Personnel et rôles (ou votre profil) pour que les mots de passe correspondent aux droits de cet utilisateur IT Glue.",
+    clientMyglueNote:
+      "Les mots de passe clients suivent l'accès MyGlue de l'utilisateur MyGlue lié à ce compte portail.",
+    add: "Ajouter un mot de passe",
+    addTitle: "Ajouter un mot de passe",
+    addDesc:
+      "Créer un identifiant dans l'organisation IT Glue de cette entreprise.",
+    editTitle: "Modifier le mot de passe",
+    editDesc:
+      "Mettre à jour cet identifiant dans IT Glue. Laissez le mot de passe vide pour conserver la valeur actuelle.",
+    deleteTitle: "Supprimer le mot de passe ?",
+    deleteDesc:
+      "Cela supprime définitivement « {name} » d'IT Glue. Cette action ne peut pas être annulée depuis le portail.",
+    deleteConfirm: "Supprimer définitivement",
+    nameLabel: "Nom",
+    namePlaceholder: "ex. Admin Microsoft 365",
+    usernamePlaceholder: "identifiant ou courriel",
+    passwordPlaceholder: "Valeur secrète",
+    passwordKeepPlaceholder: "Laisser vide pour conserver le mot de passe actuel",
+    urlPlaceholder: "https://…",
+    notesPlaceholder: "Notes facultatives…",
+    generate: "Générer",
+    creating: "Création…",
+    updating: "Mise à jour…",
+    deleting: "Suppression…",
+    createSuccess: "Mot de passe créé dans IT Glue.",
+    updateSuccess: "Mot de passe mis à jour.",
+    deleteSuccess: "Mot de passe supprimé.",
+    errCreate: "Impossible de créer le mot de passe.",
+    errUpdate: "Impossible de mettre à jour le mot de passe.",
+    errDelete: "Impossible de supprimer le mot de passe.",
+    errNameRequired: "Le nom est obligatoire.",
+    errPasswordRequired: "La valeur du mot de passe est obligatoire.",
+    emptyAction: "Ajouter votre premier mot de passe",
   },
   docs: {
     title: "Documentation",

@@ -27,6 +27,7 @@ import { ClientDashboard } from "@/pages/client/ClientDashboard";
 import { ClientBoardPage } from "@/pages/client/ClientBoardPage";
 import { ClientTicketsPage } from "@/pages/client/ClientTicketsPage";
 import { ClientDocumentationPage } from "@/pages/client/ClientDocumentationPage";
+import { PasswordsPage } from "@/pages/PasswordsPage";
 import { DirectoryPage, ProfilePage } from "@/pages/ProfilePage";
 import { firstAllowedAdminPath } from "@/lib/permissions";
 import { AkabLoader } from "@/components/AkabLoader";
@@ -103,6 +104,14 @@ function AppRoutes() {
             }
           />
           <Route
+            path="passwords"
+            element={
+              <RequirePermission permission="passwords">
+                <PasswordsPage />
+              </RequirePermission>
+            }
+          />
+          <Route
             path="directory"
             element={
               <RequirePermission permission="directory">
@@ -128,6 +137,7 @@ function AppRoutes() {
           <Route path="board" element={<ClientBoardPage />} />
           <Route path="tickets" element={<ClientTicketsPage />} />
           <Route path="documentation" element={<ClientDocumentationPage />} />
+          <Route path="passwords" element={<PasswordsPage />} />
           <Route path="directory" element={<DirectoryPage />} />
           <Route path="profile" element={<Navigate to="me" replace />} />
           <Route path="profile/:userId" element={<ProfilePage />} />

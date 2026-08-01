@@ -35,6 +35,8 @@ export interface Company {
   documentation_title: string | null;
   /** When false/null with no URL, docs section is inactive. */
   documentation_enabled: boolean | null;
+  /** IT Glue / MyGlue organization id for passwords vault */
+  itglue_organization_id: string | null;
   created_at: Date | string;
 }
 
@@ -78,6 +80,13 @@ export interface User {
   bio: string | null;
   /** Preferred UI language: "en" | "fr" */
   locale: string | null;
+  /** Linked IT Glue / MyGlue user id (for password ACL) */
+  itglue_user_id: string | null;
+  /**
+   * Receive message-board emails when staff posts with “send by email”.
+   * null/undefined treated as true for legacy rows.
+   */
+  board_email_opt_in: boolean | null;
   created_at: Date | string;
 }
 

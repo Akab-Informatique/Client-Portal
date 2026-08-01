@@ -50,6 +50,8 @@ async function toSessionUser(row: {
   mobile?: string | null;
   bio?: string | null;
   locale?: string | null;
+  itglue_user_id?: string | null;
+  board_email_opt_in?: boolean | null;
   created_at: Date | string;
 }): Promise<SessionUser> {
   const resolved = await resolvePermissionsForUser({
@@ -69,6 +71,9 @@ async function toSessionUser(row: {
     mobile: row.mobile ?? null,
     bio: row.bio ?? null,
     locale: row.locale ?? null,
+    itglue_user_id: row.itglue_user_id ?? null,
+    board_email_opt_in:
+      row.board_email_opt_in === false ? false : true,
     created_at: row.created_at,
     permissions: resolved.permissions,
     staff_role_name: resolved.staff_role_name,

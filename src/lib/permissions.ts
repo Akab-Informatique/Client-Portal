@@ -11,6 +11,7 @@ export const STAFF_PERMISSIONS = [
   "users",
   "messages",
   "documentation",
+  "passwords",
   "directory",
   "profiles",
 ] as const;
@@ -28,6 +29,7 @@ export const ADMIN_PERMISSIONS: PermissionMap = {
   users: true,
   messages: true,
   documentation: true,
+  passwords: true,
   directory: true,
   profiles: true,
 };
@@ -43,6 +45,7 @@ export const TECHNICIAN_PERMISSIONS: PermissionMap = {
   users: true,
   messages: true,
   documentation: true,
+  passwords: true,
   directory: true,
   profiles: true,
 };
@@ -55,6 +58,7 @@ export const EMPTY_PERMISSIONS: PermissionMap = {
   users: false,
   messages: false,
   documentation: false,
+  passwords: false,
   directory: false,
   profiles: false,
 };
@@ -103,6 +107,7 @@ export function firstAllowedAdminPath(perms: PermissionMap | null | undefined): 
     { perm: "dashboard", path: "/admin" },
     { perm: "messages", path: "/admin/messages" },
     { perm: "documentation", path: "/admin/documentation" },
+    { perm: "passwords", path: "/admin/passwords" },
     { perm: "clients", path: "/admin/clients" },
     { perm: "technicians", path: "/admin/technicians" },
     { perm: "roles", path: "/admin/technicians?tab=roles" },
@@ -127,6 +132,7 @@ export function permissionForAdminPath(pathname: string): StaffPermission | null
   if (path.startsWith("/admin/settings")) return null;
   if (path.startsWith("/admin/messages")) return "messages";
   if (path.startsWith("/admin/documentation")) return "documentation";
+  if (path.startsWith("/admin/passwords")) return "passwords";
   if (path.startsWith("/admin/directory")) return "directory";
   if (path.startsWith("/admin/profile")) return "profiles";
   return null;

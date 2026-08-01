@@ -78,6 +78,8 @@ const emptyTechForm = {
   password: "",
   active: true,
   staff_role_id: "" as string,
+  /** Linked IT Glue user id — passwords filtered to what this IT Glue user may access */
+  itglue_user_id: "",
 };
 
 const emptyRoleForm = {
@@ -95,6 +97,7 @@ const PERM_LABEL: Record<StaffPermission, string> = {
   users: "staffRoles.permUsers",
   messages: "staffRoles.permMessages",
   documentation: "staffRoles.permDocumentation",
+  passwords: "staffRoles.permPasswords",
   directory: "staffRoles.permDirectory",
   profiles: "staffRoles.permProfiles",
 };
@@ -107,6 +110,7 @@ const PERM_DESC: Record<StaffPermission, string> = {
   users: "staffRoles.permDescUsers",
   messages: "staffRoles.permDescMessages",
   documentation: "staffRoles.permDescDocumentation",
+  passwords: "staffRoles.permDescPasswords",
   directory: "staffRoles.permDescDirectory",
   profiles: "staffRoles.permDescProfiles",
 };
@@ -204,6 +208,7 @@ export function TechniciansPage() {
       password: "",
       active: u.active,
       staff_role_id: u.staff_role_id ? String(u.staff_role_id) : defaultTechRoleId,
+      itglue_user_id: u.itglue_user_id ?? "",
     });
     setError(null);
     setOpen(true);
@@ -262,6 +267,7 @@ export function TechniciansPage() {
     }
 
     const portalRole = portalRoleFromStaffRole(staffRole);
+    const itglueUserId = form.itglue_user_id.trim() || null;
 
     if (editing) {
       await db
@@ -272,10 +278,11 @@ export function TechniciansPage() {
           active: form.active,
           staff_role_id: staffRoleId,
           role: portalRole,
+          itglue_user_id: itglueUserId,
           ...(form.password.trim() ? { password: form.password } : {}),
         })
         .where(eq(schema.users.id, editing.id));
-      // If editing self, refresh session permissions
+      // If editing self, refresh session permissions + IT Glue link
       if (user?.id === editing.id) {
         await refreshUser();
       }
@@ -288,6 +295,7 @@ export function TechniciansPage() {
         company_id: internal.id,
         active: form.active,
         staff_role_id: staffRoleId,
+        itglue_user_id: itglueUserId,
       });
     }
 
@@ -495,6 +503,9 @@ export function TechniciansPage() {
                             <TableHead>{t("common.name")}</TableHead>
                             <TableHead>{t("common.email")}</TableHead>
                             <TableHead>{t("staffRoles.roleCol")}</TableHead>
+                            <TableHead className="hidden lg:table-cell">
+                              {t("staffRoles.itglueCol")}
+                            </TableHead>
                             <TableHead>{t("common.status")}</TableHead>
                             <TableHead className="hidden md:table-cell">
                               {t("common.created")}
@@ -533,6 +544,17 @@ export function TechniciansPage() {
                                     )}
                                     {role?.name ?? t("staffRoles.unassigned")}
                                   </Badge>
+                                </TableCell>
+                                <TableCell className="hidden text-sm text-muted-foreground lg:table-cell">
+                                  {tech.itglue_user_id?.trim() ? (
+                                    <span className="font-mono tabular-nums">
+                                      #{tech.itglue_user_id.trim()}
+                                    </span>
+                                  ) : (
+                                    <span className="text-xs">
+                                      {t("staffRoles.itglueNotLinked")}
+                                    </span>
+                                  )}
                                 </TableCell>
                                 <TableCell>
                                   <Badge
@@ -760,6 +782,21 @@ export function TechniciansPage() {
               </Select>
               <p className="text-xs text-muted-foreground">
                 {t("staffRoles.assignRoleHint")}
+              </p>
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="titglue">{t("staffRoles.itglueUserId")}</Label>
+              <Input
+                id="titglue"
+                inputMode="numeric"
+                placeholder={t("staffRoles.itglueUserIdPh")}
+                value={form.itglue_user_id}
+                onChange={(e) =>
+                  setForm((f) => ({ ...f, itglue_user_id: e.target.value }))
+                }
+              />
+              <p className="text-xs text-muted-foreground">
+                {t("staffRoles.itglueUserIdHint")}
               </p>
             </div>
             <label className="flex items-center gap-2 text-sm">

@@ -51,6 +51,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
+import { Checkbox } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
@@ -82,6 +83,7 @@ const emptyCompany = {
   sharepoint_client_secret: "",
   documentation_title: "",
   documentation_enabled: true,
+  itglue_organization_id: "",
   active: true,
 };
 
@@ -89,6 +91,8 @@ const emptyUser = {
   name: "",
   email: "",
   password: "",
+  itglue_user_id: "",
+  board_email_opt_in: true,
 };
 
 type AtCompanyHit = {
@@ -242,6 +246,7 @@ export function ClientsPage() {
       sharepoint_client_secret: company.sharepoint_client_secret ?? "",
       documentation_title: company.documentation_title ?? "",
       documentation_enabled: company.documentation_enabled !== false,
+      itglue_organization_id: company.itglue_organization_id ?? "",
       active: company.active,
     });
     setError(null);
@@ -441,6 +446,7 @@ export function ClientsPage() {
       sharepoint_client_secret: spClientSecret || null,
       documentation_title: form.documentation_title.trim() || null,
       documentation_enabled: form.documentation_enabled,
+      itglue_organization_id: form.itglue_organization_id.trim() || null,
     };
     if (editing) {
       await db
@@ -500,6 +506,8 @@ export function ClientsPage() {
       role: "client",
       company_id: selectedCompanyId,
       active: true,
+      itglue_user_id: userForm.itglue_user_id.trim() || null,
+      board_email_opt_in: userForm.board_email_opt_in !== false,
     });
     setSaving(false);
     setUserOpen(false);
@@ -978,6 +986,21 @@ export function ClientsPage() {
                   }
                 />
               </div>
+              <div className="space-y-2">
+                <Label htmlFor="citglue">IT Glue organization ID</Label>
+                <Input
+                  id="citglue"
+                  inputMode="numeric"
+                  placeholder="e.g. 123"
+                  value={form.itglue_organization_id}
+                  onChange={(e) =>
+                    setForm((f) => ({
+                      ...f,
+                      itglue_organization_id: e.target.value,
+                    }))
+                  }
+                />
+              </div>
               <div className="flex gap-2">
                 <Input
                   placeholder="Search Autotask by name…"
@@ -1255,7 +1278,28 @@ export function ClientsPage() {
             </div>
 
             <div className="space-y-2">
-              <Label htmlFor="cnotes">Notes</Label>
+              <div className="space-y-2 rounded-lg border border-border bg-muted/20 p-3">
+              <Label htmlFor="citglue">IT Glue organization ID</Label>
+              <Input
+                id="citglue"
+                inputMode="numeric"
+                placeholder="e.g. 123"
+                value={form.itglue_organization_id}
+                onChange={(e) =>
+                  setForm((f) => ({
+                    ...f,
+                    itglue_organization_id: e.target.value,
+                  }))
+                }
+              />
+              <p className="text-xs text-muted-foreground">
+                Links this client to an IT Glue / MyGlue organization. Passwords
+                for this company are loaded only from that org. Each portal user
+                still only sees entries their own MyGlue user can access.
+              </p>
+            </div>
+
+            <Label htmlFor="cnotes">Notes</Label>
               <Textarea
                 id="cnotes"
                 rows={3}
@@ -1341,6 +1385,45 @@ export function ClientsPage() {
                 required
               />
             </div>
+            <div className="space-y-2">
+              <Label htmlFor="uitglue">MyGlue user ID (optional)</Label>
+              <Input
+                id="uitglue"
+                inputMode="numeric"
+                placeholder="e.g. 12345"
+                value={userForm.itglue_user_id}
+                onChange={(e) =>
+                  setUserForm((f) => ({ ...f, itglue_user_id: e.target.value }))
+                }
+              />
+              <p className="text-xs text-muted-foreground">
+                Links this client to their MyGlue user. Passwords only show
+                credentials that MyGlue would allow for that person (org
+                passwords + restricted entries shared with them).
+              </p>
+            </div>
+            <label className="flex items-start gap-3 rounded-lg border border-border bg-muted/20 p-3 text-sm">
+              <Checkbox
+                checked={userForm.board_email_opt_in}
+                onCheckedChange={(v) =>
+                  setUserForm((f) => ({
+                    ...f,
+                    board_email_opt_in: v === true,
+                  }))
+                }
+                className="mt-0.5"
+              />
+              <span>
+                <span className="font-medium">
+                  Receive message board emails
+                </span>
+                <span className="mt-0.5 block text-xs text-muted-foreground">
+                  When staff posts a board message with “Also send by email”,
+                  this user gets a private email (sent individually — other
+                  recipients are never visible).
+                </span>
+              </span>
+            </label>
             {error && <p className="text-sm text-destructive">{error}</p>}
             <DialogFooter>
               <Button
