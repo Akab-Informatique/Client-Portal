@@ -6,8 +6,11 @@ Client portal for **SOLU TI INC. / AKAB** — company zones, Autotask tickets, S
 |--------|--|
 | UI | React 19 · Vite 6 · Tailwind 4 · shadcn/ui |
 | API | Vercel-style serverless routes under `api/` |
-| Data | PGlite + Drizzle (browser-local for v1) |
-| Integrations | Autotask REST · Microsoft Graph / SharePoint |
+| Data | **PostgreSQL** (production) · PGlite fallback (local demo) · Drizzle |
+| Integrations | Autotask REST · Microsoft Graph / SharePoint · IT Glue · SMTP |
+
+**Production install:** see **[INSTALL.md](./INSTALL.md)** (Docker + Postgres + safe upgrades).  
+**Ops cheat sheet:** **[DEPLOY.md](./DEPLOY.md)**.
 
 ---
 

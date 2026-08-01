@@ -12,7 +12,10 @@
     "build": "tsc -b && vite build",
     "preview": "vite preview",
     "start": "node --import tsx server/prod-server.mjs",
-    "typecheck": "tsc -b --pretty false"
+    "typecheck": "tsc -b --pretty false",
+    "db:status": "curl -s http://127.0.0.1:${PORT:-3000}/api/db/status?migrate=1 | python3 -m json.tool || curl -s http://127.0.0.1:${PORT:-3000}/api/db/status?migrate=1",
+    "backup": "bash ./scripts/backup-db.sh",
+    "upgrade": "bash ./scripts/upgrade.sh"
   },
   "dependencies": {
     "@electric-sql/pglite": "^0.2.17",
@@ -25,6 +28,7 @@
     "motion": "^12.40.0",
     "next-themes": "^0.4.6",
     "nodemailer": "^9.0.3",
+    "pg": "^8.22.0",
     "radix-ui": "^1.6.0",
     "react": "^19.0.0",
     "react-dom": "^19.0.0",
@@ -36,6 +40,7 @@
   "devDependencies": {
     "@tailwindcss/vite": "^4.0.0",
     "@types/nodemailer": "^8.0.1",
+    "@types/pg": "^8.20.3",
     "@types/react": "^19.0.0",
     "@types/react-dom": "^19.0.0",
     "@vitejs/plugin-react": "^4.3.4",

@@ -1,26 +1,28 @@
 import { eq } from "drizzle-orm";
-import { db, dbReady, schema } from "@/db";
+import { db, dbMode, dbReady, schema } from "@/db";
 import { backfillUserStaffRoles, ensureDefaultStaffRoles } from "@/lib/roles";
 
-const SEED_FLAG = "soluti-portal-seeded-v1";
-
+/**
+ * Seed only when the database has zero users.
+ * Production Postgres: runs once on first boot, then never again (data stays).
+ * Local PGlite: same rule, keyed off the actual table — not a browser flag.
+ */
 export async function seedIfNeeded() {
   await dbReady;
-  // Always ensure system roles exist (idempotent)
+  // Always ensure system roles exist (idempotent — safe on every boot/upgrade)
   const { admin: adminRole, technician: techRole } =
     await ensureDefaultStaffRoles();
 
-  if (localStorage.getItem(SEED_FLAG) === "1") {
+  const existing = await db.select().from(schema.users).limit(1);
+  if (existing.length > 0) {
     await backfillUserStaffRoles();
     return;
   }
 
-  const existing = await db.select().from(schema.users).limit(1);
-  if (existing.length > 0) {
-    localStorage.setItem(SEED_FLAG, "1");
-    await backfillUserStaffRoles();
-    return;
-  }
+  // Empty DB — install demo/bootstrap data (first production boot or fresh PGlite)
+  console.info(
+    `[akab] Empty database (${dbMode}) — creating bootstrap admin + demo clients`,
+  );
 
   const [solu] = await db
     .insert(schema.companies)
@@ -135,7 +137,8 @@ export async function seedIfNeeded() {
     },
   ]);
 
-  localStorage.setItem(SEED_FLAG, "1");
+  // No browser flag — emptiness of the users table is the only seed gate
+  // so production Postgres is never re-seeded after the first boot.
 }
 
 

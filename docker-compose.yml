@@ -1,6 +1,45 @@
+# AKAB Portal — production stack
+#
+# App + PostgreSQL with a named volume so upgrades never wipe data.
+#
+# First install:
+#   cp .env.example .env   # fill secrets + POSTGRES_PASSWORD
+#   docker compose up -d --build
+#
+# Upgrade (keeps Postgres data):
+#   git pull
+#   docker compose up -d --build
+#
+# NEVER run: docker compose down -v   ← the -v flag deletes the database volume
+
 services:
-  akab-portal:
+  db:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-akab}
+      POSTGRES_USER: ${POSTGRES_USER:-akab}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}
+    # Optional: expose Postgres only on localhost for admin tools / backups
+    ports:
+      - "${POSTGRES_PUBLISH_PORT:-127.0.0.1:5432}:5432"
+    volumes:
+      # Durable data — survives image rebuilds and container recreation
+      - akab_pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+    networks:
+      - akab
+
+  app:
     build: .
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
     ports:
       - "${PORT:-3000}:3000"
     env_file:
@@ -9,4 +48,21 @@ services:
       NODE_ENV: production
       PORT: 3000
       HOST: 0.0.0.0
-    restart: unless-stopped
+      # In-compose networking: app talks to the db service by name
+      DATABASE_URL: postgres://${POSTGRES_USER:-akab}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB:-akab}
+      POSTGRES_HOST: db
+      POSTGRES_PORT: "5432"
+      POSTGRES_DB: ${POSTGRES_DB:-akab}
+      POSTGRES_USER: ${POSTGRES_USER:-akab}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+    networks:
+      - akab
+
+volumes:
+  # Named volume — DO NOT remove unless you intend to destroy all portal data
+  akab_pgdata:
+    name: akab_pgdata
+
+networks:
+  akab:
+    name: akab_net

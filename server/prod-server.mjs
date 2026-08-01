@@ -358,4 +358,33 @@ server.listen(PORT, HOST, () => {
   console.log(`AKAB Portal v1 listening on http://${HOST}:${PORT}`);
   console.log(`  static: ${distDir}`);
   console.log(`  api:    ${apiDir}`);
+
+  // Apply additive PostgreSQL migrations on boot (no-op without DATABASE_URL)
+  import(pathToFileURL(path.join(apiDir, "_lib/pg.ts")).href)
+    .then(async (mod) => {
+      if (!mod.isPostgresConfigured?.()) {
+        console.log(
+          "  db:     PGlite fallback (set DATABASE_URL for durable Postgres)",
+        );
+        return;
+      }
+      try {
+        await mod.runMigrations();
+        const status = await mod.getDbStatus();
+        console.log(
+          `  db:     PostgreSQL ok — ${status.database || "db"} @ ${status.host || "host"}`,
+        );
+      } catch (err) {
+        console.error(
+          "  db:     PostgreSQL migration/connect FAILED:",
+          err instanceof Error ? err.message : err,
+        );
+      }
+    })
+    .catch((err) => {
+      console.warn(
+        "  db:     could not load pg module:",
+        err instanceof Error ? err.message : err,
+      );
+    });
 });

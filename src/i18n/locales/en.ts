@@ -78,6 +78,15 @@ export const en = {
     integrationsTitle: "Integrations & network",
     integrationsDesc:
       "Status of connected systems. Credentials are stored as secure app secrets.",
+    dbTitle: "Database",
+    dbHint:
+      "Production uses PostgreSQL on your server (shared + durable). Without DATABASE_URL the browser falls back to local PGlite (demo only).",
+    dbReady: "PostgreSQL ready",
+    dbLocalOnly: "Local browser only",
+    dbPostgresLive: "Portal data is stored on the server database and survives upgrades.",
+    dbPgliteMode:
+      "No server DATABASE_URL — using browser-local storage. Fine for demo; not multi-user production.",
+    dbChecking: "Checking database connection…",
     autotaskHint:
       "PSA tickets for client zones. Configure Autotask API credentials in app secrets.",
     graphHint:

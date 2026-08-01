@@ -25,7 +25,7 @@ import { Separator } from "@/components/ui/separator";
 import { useAuth } from "@/lib/auth";
 import { useLocale } from "@/hooks/use-locale";
 import { useEffect, useState } from "react";
-import { db, dbReady, schema } from "@/db";
+import { db, dbMode, dbReady, schema } from "@/db";
 import type { Company } from "@/lib/types";
 import {
   fetchSharePointStatus,
@@ -33,8 +33,19 @@ import {
 } from "@/lib/sharepoint";
 import { fetchItGlueStatus } from "@/lib/itglue";
 import { fetchSmtpStatus, type SmtpStatusResponse } from "@/lib/smtp";
+import { Database } from "lucide-react";
 
 type ConnState = "unknown" | "ok" | "fail" | "off";
+
+type DbStatusResponse = {
+  mode?: string;
+  configured?: boolean;
+  ok?: boolean;
+  host?: string | null;
+  database?: string | null;
+  error?: string | null;
+  hint?: string | null;
+};
 
 export function SettingsPage() {
   const { t } = useLocale();
@@ -46,6 +57,8 @@ export function SettingsPage() {
   const [smtpDetail, setSmtpDetail] = useState<SmtpStatusResponse | null>(null);
   const [smtpVerifying, setSmtpVerifying] = useState(false);
   const [smtpVerifyMsg, setSmtpVerifyMsg] = useState<string | null>(null);
+  const [dbStatus, setDbStatus] = useState<ConnState>("unknown");
+  const [dbDetail, setDbDetail] = useState<DbStatusResponse | null>(null);
   const [linkedClients, setLinkedClients] = useState<number | null>(null);
   const [totalClients, setTotalClients] = useState<number | null>(null);
   const [igLinked, setIgLinked] = useState<number | null>(null);
@@ -74,6 +87,21 @@ export function SettingsPage() {
         else setSmtpStatus(s.ok ? "ok" : "fail");
       })
       .catch(() => setSmtpStatus("fail"));
+    fetch("/api/db/status?migrate=1")
+      .then((r) => r.json())
+      .then((d: DbStatusResponse) => {
+        setDbDetail(d);
+        if (!d.configured) setDbStatus("off");
+        else setDbStatus(d.ok ? "ok" : "fail");
+      })
+      .catch(() => {
+        setDbStatus("fail");
+        setDbDetail({
+          configured: false,
+          ok: false,
+          error: "Could not reach /api/db/status",
+        });
+      });
     let cancelled = false;
     (async () => {
       await dbReady;
@@ -221,6 +249,48 @@ export function SettingsPage() {
             <CardDescription>{t("settings.integrationsDesc")}</CardDescription>
           </CardHeader>
           <CardContent className="space-y-4">
+            <div className="flex flex-col gap-3 rounded-xl border border-border p-4">
+              <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+                <div className="flex items-start gap-3">
+                  <div className="flex size-10 shrink-0 items-center justify-center rounded-lg bg-muted">
+                    <Database className="size-5 text-foreground" />
+                  </div>
+                  <div className="min-w-0">
+                    <p className="font-semibold">{t("settings.dbTitle")}</p>
+                    <p className="text-xs text-muted-foreground">
+                      {t("settings.dbHint")}
+                    </p>
+                    <p className="mt-1.5 text-xs font-medium text-foreground/80">
+                      {dbStatus === "ok"
+                        ? t("settings.dbPostgresLive")
+                        : dbStatus === "off"
+                          ? t("settings.dbPgliteMode")
+                          : dbDetail?.error || t("settings.dbChecking")}
+                    </p>
+                    {dbDetail?.configured && dbDetail.ok && (
+                      <p className="mt-2 font-mono text-[11px] text-muted-foreground">
+                        {dbDetail.database || "db"}
+                        {dbDetail.host ? ` @ ${dbDetail.host}` : ""}
+                        {` · client: ${dbMode}`}
+                      </p>
+                    )}
+                    {dbDetail?.hint && (
+                      <p className="mt-1 text-[11px] text-muted-foreground">
+                        {dbDetail.hint}
+                      </p>
+                    )}
+                  </div>
+                </div>
+                <div className="flex flex-wrap items-center gap-2">
+                  {statusBadge(
+                    dbStatus,
+                    t("settings.dbReady"),
+                    t("settings.dbLocalOnly"),
+                  )}
+                </div>
+              </div>
+            </div>
+
             <div className="flex flex-col gap-3 rounded-xl border border-border p-4 sm:flex-row sm:items-center sm:justify-between">
               <div className="flex items-start gap-3">
                 <div className="flex size-10 shrink-0 items-center justify-center rounded-lg bg-muted">

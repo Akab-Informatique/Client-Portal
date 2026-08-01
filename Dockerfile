@@ -17,5 +17,7 @@ COPY --from=build /app/dist ./dist
 COPY api ./api
 COPY server ./server
 COPY vite-plugins ./vite-plugins
+COPY scripts ./scripts
 EXPOSE 3000
+# Additive Postgres migrations run automatically on boot when DATABASE_URL is set
 CMD ["node", "--import", "tsx", "server/prod-server.mjs"]

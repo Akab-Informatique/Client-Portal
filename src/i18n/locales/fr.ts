@@ -80,6 +80,16 @@ export const fr: Dictionary = {
     integrationsTitle: "Intégrations et réseau",
     integrationsDesc:
       "État des systèmes connectés. Les identifiants sont stockés en secrets sécurisés.",
+    dbTitle: "Base de données",
+    dbHint:
+      "La production utilise PostgreSQL sur votre serveur (partagée et durable). Sans DATABASE_URL, le navigateur utilise PGlite local (démo seulement).",
+    dbReady: "PostgreSQL prêt",
+    dbLocalOnly: "Navigateur local seulement",
+    dbPostgresLive:
+      "Les données du portail sont sur la base serveur et survivent aux mises à jour.",
+    dbPgliteMode:
+      "Pas de DATABASE_URL serveur — stockage local du navigateur. Correct pour la démo; pas pour la production multi-utilisateurs.",
+    dbChecking: "Vérification de la base de données…",
     autotaskHint:
       "Billets PSA pour les zones clients. Configurez les identifiants API Autotask dans les secrets de l'app.",
     graphHint:
