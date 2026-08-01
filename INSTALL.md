@@ -85,7 +85,7 @@ Docker Compose **automatically** sets `DATABASE_URL` inside the app container to
 ### C. Start
 
 ```bash
-chmod +x scripts/*.sh
+# scripts/ is in the repo — no chmod needed; always use: bash scripts/...
 docker compose up -d --build
 ```
 
@@ -153,9 +153,9 @@ Bind app to localhost only if the proxy is on the same host (optional hardening 
 From `/opt/akab-portal`:
 
 ```bash
-./scripts/upgrade.sh
+bash scripts/upgrade.sh
 # or pin a release:
-# ./scripts/upgrade.sh v1.1.0
+# bash scripts/upgrade.sh v1.1.0
 ```
 
 What it does:
@@ -169,7 +169,7 @@ What it does:
 ### Manual upgrade (same safety)
 
 ```bash
-./scripts/backup-db.sh
+bash scripts/backup-db.sh
 git pull origin master
 docker compose up -d --build
 curl -s http://127.0.0.1:3000/api/db/status?migrate=1
@@ -195,16 +195,16 @@ docker compose up -d
 
 ```bash
 # Manual
-./scripts/backup-db.sh /var/backups/akab
+bash scripts/backup-db.sh /var/backups/akab
 
 # Cron example (nightly 02:15)
-# 15 2 * * * cd /opt/akab-portal && ./scripts/backup-db.sh /var/backups/akab >> /var/log/akab-backup.log 2>&1
+# 15 2 * * * cd /opt/akab-portal && bash scripts/backup-db.sh /var/backups/akab >> /var/log/akab-backup.log 2>&1
 ```
 
 Restore (replaces DB contents; volume stays):
 
 ```bash
-./scripts/restore-db.sh /var/backups/akab/akab-pg-YYYYMMDD-HHMMSS.sql.gz
+bash scripts/restore-db.sh /var/backups/akab/akab-pg-YYYYMMDD-HHMMSS.sql.gz
 docker compose restart app
 ```
 
@@ -256,7 +256,7 @@ Migrations still run automatically on API boot / first query.
 |-------|------|
 | **This sandbox / laptop** | Feature work (`npm run dev`). Can use PGlite or a dev Postgres. |
 | **GitHub** | Source of truth for code + tags (`v1.0.1`, …) |
-| **Your server** | `git pull` + `./scripts/upgrade.sh` |
+| **Your server** | `git pull` + `bash scripts/upgrade.sh` |
 
 Never point the production `DATABASE_URL` at a disposable database.  
 Never commit `.env`.
@@ -271,7 +271,7 @@ Never commit `.env`.
 | DB API | `curl -s localhost:3000/api/db/status?migrate=1` |
 | UI | Settings → Database → **PostgreSQL ready** |
 | Login | Admin account works after reboot |
-| Upgrade dry-run | `./scripts/backup-db.sh && docker compose up -d --build` |
+| Upgrade dry-run | `bash scripts/backup-db.sh && docker compose up -d --build` |
 
 ---
 
@@ -296,10 +296,10 @@ cp .env.example .env   # set POSTGRES_PASSWORD + integrations
 docker compose up -d --build
 
 # Every update
-cd /opt/akab-portal && ./scripts/upgrade.sh
+cd /opt/akab-portal && bash scripts/upgrade.sh
 
 # Backup
-./scripts/backup-db.sh
+bash scripts/backup-db.sh
 
 # Logs
 docker compose logs -f app

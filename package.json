@@ -14,8 +14,8 @@
     "start": "node --import tsx server/prod-server.mjs",
     "typecheck": "tsc -b --pretty false",
     "db:status": "curl -s http://127.0.0.1:${PORT:-3000}/api/db/status?migrate=1 | python3 -m json.tool || curl -s http://127.0.0.1:${PORT:-3000}/api/db/status?migrate=1",
-    "backup": "bash ./scripts/backup-db.sh",
-    "upgrade": "bash ./scripts/upgrade.sh"
+    "backup": "bash scripts/backup-db.sh",
+    "upgrade": "bash scripts/upgrade.sh"
   },
   "dependencies": {
     "@electric-sql/pglite": "^0.2.17",

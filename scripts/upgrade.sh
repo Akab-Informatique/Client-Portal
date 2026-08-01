@@ -2,8 +2,8 @@
 # Safe production upgrade — pulls code, rebuilds app, keeps Postgres volume.
 #
 # Usage (on the server, inside the app directory):
-#   ./scripts/upgrade.sh
-#   ./scripts/upgrade.sh v1.1.0     # checkout a tag
+#   bash scripts/upgrade.sh
+#   bash scripts/upgrade.sh v1.1.0     # checkout a tag
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
@@ -12,10 +12,10 @@ cd "$ROOT"
 REF="${1:-}"
 
 echo "==> Pre-upgrade backup"
-if [[ -x ./scripts/backup-db.sh ]]; then
-  ./scripts/backup-db.sh ./backups || echo "WARN: backup skipped (db not running yet?)"
+if [[ -f ./scripts/backup-db.sh ]]; then
+  bash ./scripts/backup-db.sh ./backups || echo "WARN: backup skipped (db not running yet?)"
 else
-  echo "WARN: backup script missing"
+  echo "WARN: backup script missing (scripts/backup-db.sh) — pull latest git"
 fi
 
 echo "==> Fetch latest code"

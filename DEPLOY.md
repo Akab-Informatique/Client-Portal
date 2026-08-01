@@ -41,8 +41,8 @@ Details, HTTPS, and bootstrap logins: **INSTALL.md**.
 
 ```bash
 cd /opt/akab-portal
-./scripts/upgrade.sh          # backup + git pull + rebuild
-# ./scripts/upgrade.sh v1.2.0
+bash scripts/upgrade.sh          # backup + git pull + rebuild
+# bash scripts/upgrade.sh v1.2.0
 ```
 
 **Safe:** `docker compose up -d --build`, `docker compose down` (no `-v`)  
@@ -55,8 +55,8 @@ Migrations are **additive only** (new tables/columns). They run on app boot and 
 ## Backups
 
 ```bash
-./scripts/backup-db.sh /var/backups/akab
-./scripts/restore-db.sh /var/backups/akab/akab-pg-….sql.gz
+bash scripts/backup-db.sh /var/backups/akab
+bash scripts/restore-db.sh /var/backups/akab/akab-pg-….sql.gz
 ```
 
 ---
@@ -76,7 +76,7 @@ Migrations are **additive only** (new tables/columns). They run on app boot and 
 
 1. Build features in Devs.ai / laptop  
 2. Commit & push GitHub  
-3. On server: `./scripts/upgrade.sh`  
+3. On server: `bash scripts/upgrade.sh`  
 4. Confirm Settings → Database → PostgreSQL ready  
 
 Portal rows stay in Postgres. Integration credentials stay in server `.env`.
