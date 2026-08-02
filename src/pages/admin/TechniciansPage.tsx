@@ -28,6 +28,7 @@ import {
   portalRoleFromStaffRole,
   updateStaffRole,
 } from "@/lib/roles";
+import { deleteUserById } from "@/lib/deletes";
 import { useAuth } from "@/lib/auth";
 import { useLocale } from "@/hooks/use-locale";
 import { EmptyState } from "@/components/EmptyState";
@@ -248,6 +249,35 @@ export function TechniciansPage() {
     setOpen(true);
   };
 
+  const handleDeleteStaff = async (tech: User) => {
+    setError(null);
+    if (
+      !window.confirm(
+        t("staffRoles.deleteStaffConfirm", { name: tech.name }),
+      )
+    ) {
+      return;
+    }
+    try {
+      const result = await deleteUserById(tech.id, { actorId: user?.id });
+      if (!result.ok) {
+        if (/own account/i.test(result.error)) {
+          setError(t("admin.deleteUserSelf"));
+        } else if (/last active admin/i.test(result.error)) {
+          setError(t("admin.deleteUserLastAdmin"));
+        } else {
+          setError(result.error || t("staffRoles.deleteStaffFailed"));
+        }
+        return;
+      }
+      await load();
+    } catch (e) {
+      setError(
+        e instanceof Error ? e.message : t("staffRoles.deleteStaffFailed"),
+      );
+    }
+  };
+
   const saveTech = async (e: FormEvent) => {
     e.preventDefault();
     setError(null);
@@ -295,16 +325,19 @@ export function TechniciansPage() {
     }>;
     let internal = companies.find((c) => c.type === "internal");
     if (!internal) {
-      const [created] = await db
-        .insert(schema.companies)
-        .values({
-          name: "AKAB Informatique",
-          type: "internal",
-          email: "admin@akab.local",
-          active: true,
-        })
-        .returning();
-      internal = created;
+      // Avoid .returning() over pg-proxy — insert then select
+      await db.insert(schema.companies).values({
+        name: "AKAB Informatique",
+        type: "internal",
+        email: "admin@akab.local",
+        active: true,
+      });
+      const created = (await db.select().from(schema.companies)) as Array<{
+        id: number;
+        type: string;
+        name: string;
+      }>;
+      internal = created.find((c) => c.type === "internal");
     }
 
     const portalRole = portalRoleFromStaffRole(staffRole);
@@ -620,13 +653,34 @@ export function TechniciansPage() {
                                   {formatDate(tech.created_at)}
                                 </TableCell>
                                 <TableCell className="text-right">
-                                  <Button
-                                    variant="ghost"
-                                    size="sm"
-                                    onClick={() => openEdit(tech)}
-                                  >
-                                    <Pencil className="size-4" />
-                                  </Button>
+                                  <div className="flex justify-end gap-1">
+                                    <Button
+                                      variant="ghost"
+                                      size="sm"
+                                      onClick={() => openEdit(tech)}
+                                      title={t("common.edit")}
+                                    >
+                                      <Pencil className="size-4" />
+                                    </Button>
+                                    <Button
+                                      variant="ghost"
+                                      size="sm"
+                                      className="text-destructive hover:bg-destructive/10 hover:text-destructive"
+                                      disabled={
+                                        saving || tech.id === user?.id
+                                      }
+                                      onClick={() =>
+                                        void handleDeleteStaff(tech)
+                                      }
+                                      title={
+                                        tech.id === user?.id
+                                          ? t("admin.deleteUserSelf")
+                                          : t("common.delete")
+                                      }
+                                    >
+                                      <Trash2 className="size-4" />
+                                    </Button>
+                                  </div>
                                 </TableCell>
                               </TableRow>
                             );

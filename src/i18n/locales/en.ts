@@ -368,6 +368,9 @@ export const en = {
     addStaff: "Add staff",
     editStaff: "Edit staff",
     createStaff: "Create staff",
+    deleteStaffConfirm:
+      "Permanently delete staff account “{name}”? They will no longer be able to sign in. This cannot be undone.",
+    deleteStaffFailed: "Could not delete staff account.",
     searchStaff: "Search staff…",
     noStaff: "No staff yet",
     noStaffDesc: "Add technicians or admins and assign them a role.",

@@ -377,6 +377,9 @@ export const fr: Dictionary = {
     addStaff: "Ajouter du personnel",
     editStaff: "Modifier le personnel",
     createStaff: "Créer le compte",
+    deleteStaffConfirm:
+      "Supprimer définitivement le compte « {name} » ? Cette personne ne pourra plus se connecter. Cette action est irréversible.",
+    deleteStaffFailed: "Impossible de supprimer le compte du personnel.",
     searchStaff: "Rechercher le personnel…",
     noStaff: "Aucun personnel pour le moment",
     noStaffDesc: "Ajoutez des techniciens ou admins et assignez-leur un rôle.",
