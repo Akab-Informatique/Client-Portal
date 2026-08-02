@@ -18,6 +18,26 @@ export async function seedIfNeeded() {
   if (!db) {
     throw new Error("Database client is not available");
   }
+
+  // Production Postgres: server already ran migrations + bootstrap via /api/db/status.
+  // Just ensure roles/backfill over the proxy (fast when rows already exist).
+  if (dbMode === "postgres") {
+    try {
+      const existing = await db.select().from(schema.users).limit(1);
+      if (existing.length > 0) {
+        await backfillUserStaffRoles();
+        return;
+      }
+      // Empty despite server bootstrap attempt — try client seed once
+      console.warn(
+        "[akab] Postgres has zero users after server bootstrap — seeding from client",
+      );
+    } catch (err) {
+      console.error("[akab] Postgres pre-seed check failed", err);
+      throw err;
+    }
+  }
+
   // Always ensure system roles exist (idempotent — safe on every boot/upgrade)
   const { admin: adminRole, technician: techRole } =
     await ensureDefaultStaffRoles();

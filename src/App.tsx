@@ -159,14 +159,16 @@ export default function App() {
       if (!cancelled) {
         console.error("[akab] Boot timed out — forcing UI open");
         setBootError(
-          "Portal startup is taking too long. Check database / server logs, then reload.",
+          "Portal startup is taking too long. On the server run: docker compose logs app db && curl -s localhost:3000/api/db/status?migrate=1",
         );
         setReady(true);
       }
-    }, 20000);
+    }, 30000);
 
     (async () => {
       try {
+        // On production Postgres the server already migrated + seeded via /api/db/status.
+        // seedIfNeeded is a fast no-op when users already exist.
         await seedIfNeeded();
         await ensureDemoAutotaskIds();
       } catch (err) {

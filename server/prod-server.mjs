@@ -359,20 +359,23 @@ server.listen(PORT, HOST, () => {
   console.log(`  static: ${distDir}`);
   console.log(`  api:    ${apiDir}`);
 
-  // Apply additive PostgreSQL migrations on boot (no-op without DATABASE_URL)
+  // Apply additive PostgreSQL migrations + empty-DB bootstrap on boot
   import(pathToFileURL(path.join(apiDir, "_lib/pg.ts")).href)
     .then(async (mod) => {
       if (!mod.isPostgresConfigured?.()) {
         console.log(
-          "  db:     PGlite fallback (set DATABASE_URL for durable Postgres)",
+          "  db:     PGlite fallback (set POSTGRES_HOST/USER/PASSWORD/DB or DATABASE_URL)",
         );
         return;
       }
       try {
         await mod.runMigrations();
+        const boot = await mod.ensureBootstrap();
         const status = await mod.getDbStatus();
         console.log(
-          `  db:     PostgreSQL ok — ${status.database || "db"} @ ${status.host || "host"}`,
+          `  db:     PostgreSQL ok — ${status.database || "db"} @ ${status.host || "host"}` +
+            (status.userCount != null ? ` — users=${status.userCount}` : "") +
+            (boot?.seeded ? " — bootstrap seeded" : ""),
         );
       } catch (err) {
         console.error(

@@ -1,12 +1,17 @@
 import type { VercelRequest, VercelResponse } from "@vercel/node";
-import { getDbStatus, isPostgresConfigured, runMigrations } from "../_lib/pg.js";
+import {
+  ensureBootstrap,
+  getDbStatus,
+  isPostgresConfigured,
+  runMigrations,
+} from "../_lib/pg.js";
 
 /**
  * GET /api/db/status
  * Reports whether the server has PostgreSQL configured and reachable.
  * Used by the browser client to choose Postgres proxy vs local PGlite.
  *
- * Query: ?migrate=1 — run additive migrations before checking
+ * Query: ?migrate=1 — run additive migrations + empty-DB bootstrap before checking
  */
 export default async function handler(req: VercelRequest, res: VercelResponse) {
   try {
@@ -22,13 +27,13 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     if (wantMigrate && isPostgresConfigured()) {
       try {
         await runMigrations();
+        await ensureBootstrap();
       } catch (err) {
         return res.status(500).json({
           mode: "postgres",
           configured: true,
           ok: false,
-          error:
-            err instanceof Error ? err.message : "Migration failed",
+          error: err instanceof Error ? err.message : "Migration/bootstrap failed",
         });
       }
     }
@@ -41,12 +46,13 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       host: status.host ?? null,
       database: status.database ?? null,
       migrated: status.migrated ?? false,
+      seeded: status.seeded ?? false,
+      userCount: status.userCount ?? null,
       error: status.error ?? null,
-      // Hint for the UI — never include credentials
       hint: status.configured
         ? status.ok
           ? "PostgreSQL is ready. Portal data is shared and durable."
-          : "PostgreSQL is configured but not reachable. Check DATABASE_URL and that Postgres is running."
+          : "PostgreSQL is configured but not reachable. Check POSTGRES_* / DATABASE_URL and that Postgres is running."
         : "No DATABASE_URL — browser will use local PGlite (single-browser demo mode).",
     });
   } catch (err) {

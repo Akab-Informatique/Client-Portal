@@ -57,6 +57,8 @@ nano .env   # or vim
 # Strong password — app + Postgres share this via compose
 POSTGRES_DB=akab
 POSTGRES_USER=akab
+# Avoid @ # : / ? in the password when possible.
+# If you need `$`, write it as `$$` in the .env file (Docker Compose rule).
 POSTGRES_PASSWORD=use-a-long-random-password-here
 
 # Integrations (as needed)

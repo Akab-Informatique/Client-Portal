@@ -48,13 +48,16 @@ services:
       NODE_ENV: production
       PORT: 3000
       HOST: 0.0.0.0
-      # In-compose networking: app talks to the db service by name
-      DATABASE_URL: postgres://${POSTGRES_USER:-akab}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB:-akab}
+      # Discrete vars (preferred). The app URL-encodes the password itself.
+      # Do NOT interpolate POSTGRES_PASSWORD into DATABASE_URL here — special
+      # characters (@ # $ % etc.) break the URL and cause boot timeouts.
       POSTGRES_HOST: db
       POSTGRES_PORT: "5432"
       POSTGRES_DB: ${POSTGRES_DB:-akab}
       POSTGRES_USER: ${POSTGRES_USER:-akab}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      # Clear any DATABASE_URL from env_file so discrete vars win
+      DATABASE_URL: ""
     networks:
       - akab
 

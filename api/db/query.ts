@@ -1,16 +1,12 @@
 import type { VercelRequest, VercelResponse } from "@vercel/node";
-import {
-  isPostgresConfigured,
-  proxyQuery,
-  runMigrations,
-} from "../_lib/pg.js";
+import { isPostgresConfigured, proxyQuery } from "../_lib/pg.js";
 
 /**
  * POST /api/db/query
  * Drizzle pg-proxy endpoint. Body: { sql, params, method }
  *
  * Only available when DATABASE_URL (or POSTGRES_*) is configured.
- * Same-origin browser client uses this so portal data is shared & durable.
+ * Migrations/bootstrap run on server boot and /api/db/status — not on every query.
  */
 export default async function handler(req: VercelRequest, res: VercelResponse) {
   try {
@@ -26,7 +22,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     if (!isPostgresConfigured()) {
       return res.status(503).json({
         error:
-          "PostgreSQL is not configured on this server. Set DATABASE_URL in .env.",
+          "PostgreSQL is not configured on this server. Set POSTGRES_HOST + POSTGRES_* or DATABASE_URL in .env.",
       });
     }
 
@@ -40,8 +36,6 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         return res.status(401).json({ error: "Unauthorized DB proxy request." });
       }
     }
-
-    await runMigrations();
 
     const body =
       req.body && typeof req.body === "object"
