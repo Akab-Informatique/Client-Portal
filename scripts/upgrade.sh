@@ -31,11 +31,9 @@ sleep 5
 docker compose ps
 
 PORT_VAL="${PORT:-3000}"
-echo "==> Health"
+echo "==> Health (native — must answer in <5s)"
 curl -sS -m 5 "http://127.0.0.1:${PORT_VAL}/api/health" || true
 echo
-curl -sS -m 10 "http://127.0.0.1:${PORT_VAL}/api/db/status" || true
-echo
-curl -sS -m 30 "http://127.0.0.1:${PORT_VAL}/api/db/status?migrate=1" || true
+curl -sS -m 5 "http://127.0.0.1:${PORT_VAL}/api/db/ping" || true
 echo
 echo "OK — upgrade finished. Data volume was NOT deleted."

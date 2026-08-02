@@ -159,11 +159,11 @@ export default function App() {
       if (!cancelled) {
         console.error("[akab] Boot timed out — forcing UI open");
         setBootError(
-          "Portal startup timed out. On the server run: cd /opt/akab-portal && docker compose ps && docker compose logs --tail=80 app && curl -s localhost:3000/api/db/status?migrate=1",
+          "Portal startup timed out. On the server: cd /opt/akab-portal && docker compose ps && docker compose logs --tail=80 app db && curl -sS -m 5 \"http://127.0.0.1:3000/api/health\" && curl -sS -m 5 \"http://127.0.0.1:3000/api/db/ping\"",
         );
         setReady(true);
       }
-    }, 28000);
+    }, 22000);
 
     (async () => {
       try {

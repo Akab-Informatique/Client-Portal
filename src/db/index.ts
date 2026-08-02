@@ -1,11 +1,9 @@
 /**
  * AKAB Portal database client (browser).
  *
- * Production build: PostgreSQL ONLY via POST /api/db/query.
- *   PGlite is never statically imported → no WASM in the production bundle.
+ * Production: PostgreSQL ONLY via POST /api/db/query.
+ * Boot checks /api/db/ping (native Node handler — never hangs on tsx).
  * Local dev: dynamic-import PGlite when Postgres is not configured.
- *
- * Always `await dbReady` before the first query.
  */
 
 import { drizzle as drizzleProxy } from "drizzle-orm/pg-proxy";
@@ -15,10 +13,6 @@ export { schema };
 
 export type DbMode = "postgres" | "pglite" | "none";
 
-/**
- * Loose DB handle so query `.map` callbacks stay typed as needed by call sites.
- * Runtime client is either pg-proxy (prod) or PGlite (dev).
- */
 export type AppDb = {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   select: (...args: any[]) => any;
@@ -77,56 +71,105 @@ type StatusPayload = {
   database?: string | null;
   hint?: string | null;
   passwordSet?: boolean;
+  native?: boolean;
+  latencyMs?: number | null;
 };
 
 function formatFetchError(err: unknown, label: string): string {
   if (err instanceof DOMException && err.name === "AbortError") {
-    return `${label} aborted (timeout or network). The app/API may be down or Postgres is not answering.`;
+    return `${label} timed out. App container may be down.`;
   }
   if (err instanceof Error) {
     const m = err.message || "";
-    if (/abort/i.test(m) || m === "signal is aborted without reason") {
-      return `${label} aborted (timeout or network). Check docker compose ps and /api/health.`;
-    }
+    if (/abort/i.test(m)) return `${label} timed out. Check docker compose ps.`;
     return m;
   }
   return String(err);
 }
 
-async function fetchDbStatus(migrate: boolean): Promise<StatusPayload> {
-  const controller = new AbortController();
-  // Keep client waits short. Server already hard-times-out.
-  const ms = migrate ? 20000 : 10000;
-  const timer = window.setTimeout(() => controller.abort(), ms);
-  const url = migrate ? "/api/db/status?migrate=1" : "/api/db/status";
-  try {
-    const res = await fetch(url, {
-      method: "GET",
-      headers: { Accept: "application/json" },
-      signal: controller.signal,
-      cache: "no-store",
-    });
-    let data: StatusPayload = {};
+/**
+ * Prefer native /api/db/ping (no TypeScript, no migrate) — answers in <1s when healthy.
+ * Falls back to /api/health?db=1, then /api/db/status.
+ */
+async function fetchDbReady(): Promise<StatusPayload> {
+  const paths = ["/api/db/ping", "/api/health?db=1", "/api/db/status"];
+
+  let last: StatusPayload = {
+    configured: false,
+    ok: false,
+    error: "No response from server",
+  };
+
+  for (const path of paths) {
+    const controller = new AbortController();
+    const timer = window.setTimeout(() => controller.abort(), 6000);
     try {
-      data = (await res.json()) as StatusPayload;
-    } catch {
-      data = { error: `DB status returned non-JSON (HTTP ${res.status})` };
+      const res = await fetch(path, {
+        method: "GET",
+        headers: { Accept: "application/json" },
+        signal: controller.signal,
+        cache: "no-store",
+      });
+      let data: Record<string, unknown> = {};
+      try {
+        data = (await res.json()) as Record<string, unknown>;
+      } catch {
+        last = { ok: false, error: `${path} returned non-JSON (HTTP ${res.status})` };
+        continue;
+      }
+
+      // Normalize health?db=1 shape → status shape
+      if (path.includes("/api/health")) {
+        const configured = Boolean(data.postgresConfigured);
+        const ok = Boolean(data.postgresOk ?? data.ok) && configured;
+        last = {
+          mode: configured ? "postgres" : "none",
+          configured,
+          ok,
+          host: (data.postgresHost as string) ?? null,
+          database: (data.database as string) ?? (data.postgresDb as string) ?? null,
+          userCount: (data.userCount as number) ?? null,
+          passwordSet: Boolean(data.passwordSet),
+          error: (data.error as string) ?? null,
+          latencyMs: (data.latencyMs as number) ?? null,
+          native: Boolean(data.native),
+          hint: ok
+            ? "PostgreSQL is ready."
+            : "docker compose logs --tail=80 app db",
+        };
+      } else {
+        last = {
+          mode: (data.mode as string) ?? "postgres",
+          configured: data.configured !== false,
+          ok: Boolean(data.ok),
+          host: (data.host as string) ?? null,
+          database: (data.database as string) ?? null,
+          userCount: (data.userCount as number) ?? null,
+          passwordSet: Boolean(data.passwordSet),
+          error: (data.error as string) ?? null,
+          hint: (data.hint as string) ?? null,
+          latencyMs: (data.latencyMs as number) ?? null,
+          native: Boolean(data.native),
+        };
+      }
+
+      // Success or definitive config error — stop
+      if (last.ok || last.configured === false) return last;
+      // Definitive DB error from native path — stop (don't cascade timeouts)
+      if (last.native && last.error) return last;
+    } catch (err) {
+      last = {
+        configured: true,
+        ok: false,
+        error: formatFetchError(err, path),
+        hint: 'curl -sS -m 5 "http://127.0.0.1:3000/api/health" && curl -sS -m 5 "http://127.0.0.1:3000/api/db/ping"',
+      };
+    } finally {
+      window.clearTimeout(timer);
     }
-    if (!res.ok && !data.error) {
-      data.error = `DB status HTTP ${res.status}`;
-    }
-    return data;
-  } catch (err) {
-    return {
-      configured: true,
-      ok: false,
-      error: formatFetchError(err, migrate ? "DB migrate/status" : "DB status"),
-      hint:
-        'On server: docker compose ps && curl -sS -m 5 "http://127.0.0.1:3000/api/health" && curl -sS -m 10 "http://127.0.0.1:3000/api/db/status"',
-    };
-  } finally {
-    window.clearTimeout(timer);
   }
+
+  return last;
 }
 
 function createProxyDb(): AppDb {
@@ -140,7 +183,7 @@ function createProxyDb(): AppDb {
         headers["x-db-proxy-secret"] = PROXY_SECRET;
       }
       const controller = new AbortController();
-      const timer = window.setTimeout(() => controller.abort(), 20000);
+      const timer = window.setTimeout(() => controller.abort(), 15000);
       try {
         const res = await fetch("/api/db/query", {
           method: "POST",
@@ -169,7 +212,7 @@ function createProxyDb(): AppDb {
 }
 
 async function initPostgres(): Promise<void> {
-  let status = await fetchDbStatus(false);
+  const status = await fetchDbReady();
 
   if (!status.configured) {
     throw new Error(
@@ -179,32 +222,42 @@ async function initPostgres(): Promise<void> {
   }
 
   if (!status.ok) {
-    status = await fetchDbStatus(true);
-  }
-
-  if (!status.ok) {
     throw new Error(
       [
         status.error || "PostgreSQL is not ready",
         status.hint || "",
-        "On the server run:",
+        "",
+        "On the Ubuntu server run:",
         "  cd /opt/akab-portal",
         "  docker compose ps",
         "  docker compose logs --tail=80 app db",
-        '  curl -sS -m 8 "http://127.0.0.1:3000/api/health?db=1"',
-        '  curl -sS -m 10 "http://127.0.0.1:3000/api/db/status"',
+        '  curl -sS -m 5  "http://127.0.0.1:3000/api/health"',
+        '  curl -sS -m 5  "http://127.0.0.1:3000/api/db/ping"',
+        '  curl -sS -m 8  "http://127.0.0.1:3000/api/health?db=1"',
       ]
-        .filter(Boolean)
+        .filter((l) => l !== undefined)
         .join("\n"),
     );
   }
 
   const proxy = createProxyDb();
-  await withTimeout(
-    proxy.select().from(schema.users).limit(1) as unknown as Promise<unknown>,
-    10000,
-    "PostgreSQL query",
-  );
+  // Light smoke test — server already migrated on boot
+  try {
+    await withTimeout(
+      proxy.select().from(schema.users).limit(1) as unknown as Promise<unknown>,
+      8000,
+      "PostgreSQL query",
+    );
+  } catch (err) {
+    // Tables may not exist yet if boot migrate is still running — try once more
+    await new Promise((r) => setTimeout(r, 1500));
+    await withTimeout(
+      proxy.select().from(schema.users).limit(1) as unknown as Promise<unknown>,
+      8000,
+      "PostgreSQL query (retry)",
+    );
+  }
+
   db = proxy;
   dbMode = "postgres";
   dbBootError = null;
@@ -212,10 +265,10 @@ async function initPostgres(): Promise<void> {
     "[akab] Database: PostgreSQL",
     status.database || "",
     status.userCount != null ? `users=${status.userCount}` : "",
+    status.native ? "(native ping)" : "",
   );
 }
 
-/** Dev-only. Loaded via dynamic import — stripped from production rollup. */
 async function initPgliteDev(): Promise<void> {
   const { openPglite } = await import("./pglite-dev");
   try {
@@ -236,7 +289,6 @@ async function initDatabase(): Promise<void> {
   const forcePostgres =
     forced === "postgres" || forced === "server" || forced === "pg";
 
-  // Production: ALWAYS Postgres — never load PGlite
   if ((IS_PROD_BUILD || forcePostgres) && !forcePglite) {
     await initPostgres();
     return;
@@ -244,17 +296,10 @@ async function initDatabase(): Promise<void> {
 
   if (!forcePglite) {
     try {
-      const status = await fetchDbStatus(false);
+      const status = await fetchDbReady();
       if (status.configured && status.ok) {
         await initPostgres();
         return;
-      }
-      if (status.configured && !status.ok) {
-        const s2 = await fetchDbStatus(true);
-        if (s2.ok) {
-          await initPostgres();
-          return;
-        }
       }
     } catch (err) {
       console.warn("[akab] status check failed, using PGlite", err);
@@ -266,10 +311,8 @@ async function initDatabase(): Promise<void> {
 
 export const dbReady: Promise<void> = (async () => {
   try {
-    await withTimeout(initDatabase(), 35000, "Database boot");
-    if (!db) {
-      throw new Error("Database client was not initialized");
-    }
+    await withTimeout(initDatabase(), 25000, "Database boot");
+    if (!db) throw new Error("Database client was not initialized");
   } catch (err) {
     dbBootError = err instanceof Error ? err.message : String(err);
     dbMode = "none";

@@ -56,27 +56,281 @@ loadEnvFileNoExpand(path.join(root, ".env.production"));
 loadEnvFileNoExpand(path.join(root, ".env.production.local"));
 
 // ---------------------------------------------------------------------------
-// Register tsx so we can import api/**/*.ts at runtime
+// Register tsx ONCE so we can import api/**/*.ts at runtime
 // ---------------------------------------------------------------------------
 const require = createRequire(import.meta.url);
-try {
-  require("tsx/cjs");
-} catch {
-  console.warn(
-    "[akab] Optional tip: install tsx for TypeScript API routes (npm i tsx).",
-  );
-}
-
-// Dynamic import of .ts via tsx loader (Node 18+)
-async function importTs(filePath) {
-  // Prefer tsx register path
+let tsxReady = false;
+async function ensureTsx() {
+  if (tsxReady) return;
+  try {
+    require("tsx/cjs");
+  } catch {
+    /* optional */
+  }
   try {
     const { register } = await import("tsx/esm/api");
     register();
   } catch {
-    /* tsx may already be preloaded via NODE_OPTIONS */
+    /* may already be preloaded via: node --import tsx */
   }
-  return import(pathToFileURL(filePath).href + `?t=${Date.now()}`);
+  tsxReady = true;
+}
+
+// Cache compiled handlers — NEVER bust cache with ?t= (that re-transpiles every
+// request and hangs the portal under load / on slow VPS disks).
+const handlerCache = new Map();
+
+async function importTs(filePath) {
+  const hit = handlerCache.get(filePath);
+  if (hit) return hit;
+  await ensureTsx();
+  const pending = import(pathToFileURL(filePath).href)
+    .then((mod) => {
+      handlerCache.set(filePath, mod);
+      return mod;
+    })
+    .catch((err) => {
+      handlerCache.delete(filePath);
+      throw err;
+    });
+  handlerCache.set(filePath, pending);
+  return pending;
+}
+
+// ---------------------------------------------------------------------------
+// Native health / db-ping (NO TypeScript import) — always answers fast
+// ---------------------------------------------------------------------------
+function envClean(v) {
+  if (!v) return "";
+  let s = String(v).trim();
+  if (
+    (s.startsWith('"') && s.endsWith('"')) ||
+    (s.startsWith("'") && s.endsWith("'"))
+  ) {
+    s = s.slice(1, -1);
+  }
+  return s;
+}
+
+function nativePgConfig() {
+  const host = envClean(process.env.POSTGRES_HOST);
+  const database =
+    envClean(process.env.POSTGRES_DB) || envClean(process.env.POSTGRES_DATABASE);
+  const user = envClean(process.env.POSTGRES_USER);
+  const password = envClean(process.env.POSTGRES_PASSWORD);
+  if (host && database && user) {
+    return {
+      host,
+      port: Number(envClean(process.env.POSTGRES_PORT) || "5432") || 5432,
+      database,
+      user,
+      password,
+      passwordSet: Boolean(password),
+      source: "postgres_env",
+    };
+  }
+  return null;
+}
+
+async function nativeDbPing(timeoutMs = 4000) {
+  const cfg = nativePgConfig();
+  if (!cfg) {
+    return {
+      ok: false,
+      configured: false,
+      error: "POSTGRES_* not set",
+    };
+  }
+  if (!cfg.passwordSet) {
+    return {
+      ok: false,
+      configured: true,
+      host: cfg.host,
+      database: cfg.database,
+      user: cfg.user,
+      passwordSet: false,
+      error: "POSTGRES_PASSWORD is empty",
+    };
+  }
+
+  let pg;
+  try {
+    pg = (await import("pg")).default;
+  } catch (err) {
+    return {
+      ok: false,
+      configured: true,
+      error: `pg module missing: ${err instanceof Error ? err.message : err}`,
+    };
+  }
+
+  const client = new pg.Client({
+    host: cfg.host,
+    port: cfg.port,
+    database: cfg.database,
+    user: cfg.user,
+    password: cfg.password,
+    connectionTimeoutMillis: timeoutMs,
+    statement_timeout: timeoutMs,
+  });
+
+  const started = Date.now();
+  let timer;
+  try {
+    const result = await Promise.race([
+      (async () => {
+        await client.connect();
+        const r = await client.query(
+          `SELECT current_database() AS database, current_user AS user,
+                  (SELECT COUNT(*)::int FROM information_schema.tables
+                    WHERE table_schema='public' AND table_name='users') AS has_users`,
+        );
+        const row = r.rows[0] || {};
+        let userCount = null;
+        if (Number(row.has_users) > 0) {
+          const c = await client.query(`SELECT COUNT(*)::int AS n FROM users`);
+          userCount = Number(c.rows[0]?.n ?? 0);
+        }
+        return {
+          ok: true,
+          configured: true,
+          host: cfg.host,
+          database: row.database || cfg.database,
+          user: row.user || cfg.user,
+          passwordSet: true,
+          userCount,
+          latencyMs: Date.now() - started,
+          source: cfg.source,
+        };
+      })(),
+      new Promise((_, reject) => {
+        timer = setTimeout(
+          () => reject(new Error(`native DB ping timed out after ${timeoutMs}ms`)),
+          timeoutMs + 500,
+        );
+      }),
+    ]);
+    return result;
+  } catch (err) {
+    return {
+      ok: false,
+      configured: true,
+      host: cfg.host,
+      database: cfg.database,
+      user: cfg.user,
+      passwordSet: true,
+      latencyMs: Date.now() - started,
+      error: err instanceof Error ? err.message : String(err),
+      source: cfg.source,
+    };
+  } finally {
+    if (timer) clearTimeout(timer);
+    try {
+      await client.end();
+    } catch {
+      /* ignore */
+    }
+  }
+}
+
+function sendJson(res, status, data) {
+  const body = JSON.stringify(data);
+  res.statusCode = status;
+  res.setHeader("Content-Type", "application/json; charset=utf-8");
+  res.setHeader("Cache-Control", "no-store");
+  res.setHeader("Content-Length", Buffer.byteLength(body));
+  res.end(body);
+}
+
+/** Fast paths that never import TypeScript handlers. */
+async function handleNativeApi(req, res, url) {
+  const p = url.pathname.replace(/\/$/, "") || "/";
+
+  if (p === "/api/health" && (req.method === "GET" || req.method === "HEAD")) {
+    const checkDb =
+      url.searchParams.get("db") === "1" ||
+      String(url.searchParams.get("db") || "").toLowerCase() === "true";
+    const cfg = nativePgConfig();
+    const base = {
+      ok: true,
+      service: "akab-portal",
+      postgresConfigured: Boolean(cfg),
+      postgresHost: cfg?.host ?? null,
+      postgresDb: cfg?.database ?? null,
+      postgresUser: cfg?.user ?? null,
+      passwordSet: cfg?.passwordSet ?? false,
+      ts: new Date().toISOString(),
+      native: true,
+    };
+    if (!checkDb) {
+      sendJson(res, 200, base);
+      return true;
+    }
+    const ping = await nativeDbPing(4000);
+    sendJson(res, ping.ok ? 200 : 503, {
+      ...base,
+      ok: ping.ok,
+      postgresOk: ping.ok,
+      database: ping.database ?? null,
+      userCount: ping.userCount ?? null,
+      latencyMs: ping.latencyMs ?? null,
+      error: ping.error ?? null,
+    });
+    return true;
+  }
+
+  // Ultra-fast DB readiness for browser boot — no migrations, no tsx
+  if (
+    (p === "/api/db/ping" || p === "/api/db/status") &&
+    (req.method === "GET" || req.method === "HEAD")
+  ) {
+    // Only use native path when migrate is NOT requested
+    const wantMigrate =
+      url.searchParams.get("migrate") === "1" ||
+      String(url.searchParams.get("migrate") || "").toLowerCase() === "true";
+
+    if (!wantMigrate || p === "/api/db/ping") {
+      const cfg = nativePgConfig();
+      if (!cfg) {
+        sendJson(res, 200, {
+          mode: "none",
+          configured: false,
+          ok: false,
+          host: null,
+          database: null,
+          userCount: null,
+          passwordSet: false,
+          error: "POSTGRES_* not set. Set POSTGRES_PASSWORD in .env",
+          hint: "Edit /opt/akab-portal/.env then: docker compose up -d --build",
+          native: true,
+        });
+        return true;
+      }
+      const ping = await nativeDbPing(4000);
+      sendJson(res, 200, {
+        mode: "postgres",
+        configured: true,
+        ok: Boolean(ping.ok),
+        host: cfg.host,
+        database: ping.database ?? cfg.database,
+        user: ping.user ?? cfg.user,
+        passwordSet: cfg.passwordSet,
+        userCount: ping.userCount ?? null,
+        latencyMs: ping.latencyMs ?? null,
+        migrated: false,
+        seeded: false,
+        error: ping.error ?? null,
+        hint: ping.ok
+          ? "PostgreSQL is ready."
+          : "docker compose logs --tail=80 app db — check POSTGRES_PASSWORD matches volume",
+        native: true,
+        source: cfg.source,
+      });
+      return true;
+    }
+  }
+
+  return false;
 }
 
 // ---------------------------------------------------------------------------

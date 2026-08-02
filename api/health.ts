@@ -43,13 +43,14 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     });
   }
 
-  const ping = await pingDatabase();
+  const ping = await pingDatabase(4000);
   return res.status(ping.ok ? 200 : 503).json({
     ...base,
     ok: ping.ok,
     postgresOk: ping.ok,
     database: ping.database ?? null,
     userCount: ping.userCount ?? null,
+    latencyMs: ping.latencyMs ?? null,
     error: ping.error ?? null,
   });
 }
