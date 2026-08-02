@@ -8,7 +8,16 @@ import { backfillUserStaffRoles, ensureDefaultStaffRoles } from "@/lib/roles";
  * Local PGlite: same rule, keyed off the actual table — not a browser flag.
  */
 export async function seedIfNeeded() {
-  await dbReady;
+  try {
+    await dbReady;
+  } catch (err) {
+    // db/index may throw after exhausting fallbacks — surface and stop
+    console.error("[akab] seedIfNeeded: dbReady failed", err);
+    throw err;
+  }
+  if (!db) {
+    throw new Error("Database client is not available");
+  }
   // Always ensure system roles exist (idempotent — safe on every boot/upgrade)
   const { admin: adminRole, technician: techRole } =
     await ensureDefaultStaffRoles();

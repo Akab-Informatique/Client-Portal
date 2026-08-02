@@ -151,12 +151,43 @@ function AppRoutes() {
 
 export default function App() {
   const [ready, setReady] = useState(false);
+  const [bootError, setBootError] = useState<string | null>(null);
 
   useEffect(() => {
-    seedIfNeeded()
-      .then(() => ensureDemoAutotaskIds())
-      .catch(console.error)
-      .finally(() => setReady(true));
+    let cancelled = false;
+    const hardTimer = window.setTimeout(() => {
+      if (!cancelled) {
+        console.error("[akab] Boot timed out — forcing UI open");
+        setBootError(
+          "Portal startup is taking too long. Check database / server logs, then reload.",
+        );
+        setReady(true);
+      }
+    }, 20000);
+
+    (async () => {
+      try {
+        await seedIfNeeded();
+        await ensureDemoAutotaskIds();
+      } catch (err) {
+        console.error("[akab] Boot seed failed:", err);
+        if (!cancelled) {
+          setBootError(
+            err instanceof Error
+              ? err.message
+              : "Could not prepare the portal database.",
+          );
+        }
+      } finally {
+        window.clearTimeout(hardTimer);
+        if (!cancelled) setReady(true);
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+      window.clearTimeout(hardTimer);
+    };
   }, []);
 
   if (!ready) {
@@ -170,6 +201,21 @@ export default function App() {
           <BrowserRouter>
             <LocaleSync />
             <RouteLoadingOverlay />
+            {bootError && (
+              <div
+                role="alert"
+                className="fixed inset-x-0 top-0 z-[100] border-b border-destructive/40 bg-destructive/15 px-4 py-2 text-center text-sm text-destructive"
+              >
+                {bootError}{" "}
+                <button
+                  type="button"
+                  className="ml-2 underline"
+                  onClick={() => window.location.reload()}
+                >
+                  Reload
+                </button>
+              </div>
+            )}
             <AppRoutes />
           </BrowserRouter>
         </AuthProvider>
