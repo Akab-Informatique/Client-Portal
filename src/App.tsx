@@ -220,8 +220,11 @@ export default function App() {
 git pull origin master
 docker compose up -d --build
 docker compose ps
-docker compose logs --tail=80 app
-curl -s http://127.0.0.1:3000/api/db/status?migrate=1
+docker compose logs --tail=80 app db
+curl -sS -m 5  "http://127.0.0.1:3000/api/health"
+curl -sS -m 8  "http://127.0.0.1:3000/api/health?db=1"
+curl -sS -m 10 "http://127.0.0.1:3000/api/db/status"
+curl -sS -m 30 "http://127.0.0.1:3000/api/db/status?migrate=1"
 `}
           </div>
           <p className="text-xs text-muted-foreground">
@@ -229,7 +232,9 @@ curl -s http://127.0.0.1:3000/api/db/status?migrate=1
             <code className="text-foreground">
               &quot;mode&quot;:&quot;postgres&quot;,&quot;ok&quot;:true
             </code>
-            . Then hard-refresh this page. Login: admin@akab.local / admin123
+            . Always quote URLs that contain{" "}
+            <code className="text-foreground">?</code>. Then hard-refresh this
+            page. Login: admin@akab.local / admin123
           </p>
           <button
             type="button"

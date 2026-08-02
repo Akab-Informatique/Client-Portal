@@ -79,9 +79,24 @@ type StatusPayload = {
   passwordSet?: boolean;
 };
 
+function formatFetchError(err: unknown, label: string): string {
+  if (err instanceof DOMException && err.name === "AbortError") {
+    return `${label} aborted (timeout or network). The app/API may be down or Postgres is not answering.`;
+  }
+  if (err instanceof Error) {
+    const m = err.message || "";
+    if (/abort/i.test(m) || m === "signal is aborted without reason") {
+      return `${label} aborted (timeout or network). Check docker compose ps and /api/health.`;
+    }
+    return m;
+  }
+  return String(err);
+}
+
 async function fetchDbStatus(migrate: boolean): Promise<StatusPayload> {
   const controller = new AbortController();
-  const ms = migrate ? 28000 : 8000;
+  // Keep client waits short. Server already hard-times-out.
+  const ms = migrate ? 20000 : 10000;
   const timer = window.setTimeout(() => controller.abort(), ms);
   const url = migrate ? "/api/db/status?migrate=1" : "/api/db/status";
   try {
@@ -101,6 +116,14 @@ async function fetchDbStatus(migrate: boolean): Promise<StatusPayload> {
       data.error = `DB status HTTP ${res.status}`;
     }
     return data;
+  } catch (err) {
+    return {
+      configured: true,
+      ok: false,
+      error: formatFetchError(err, migrate ? "DB migrate/status" : "DB status"),
+      hint:
+        'On server: docker compose ps && curl -sS -m 5 "http://127.0.0.1:3000/api/health" && curl -sS -m 10 "http://127.0.0.1:3000/api/db/status"',
+    };
   } finally {
     window.clearTimeout(timer);
   }

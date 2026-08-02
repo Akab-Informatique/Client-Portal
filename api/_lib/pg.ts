@@ -593,16 +593,18 @@ export async function proxyQuery(opts: {
 }
 
 /** Fast SELECT 1 — no migrations. Always finishes within ~6s. */
-export async function pingDatabase(): Promise<{
+export async function pingDatabase(timeoutMs = 5000): Promise<{
   ok: boolean;
   error?: string;
   database?: string;
   user?: string;
   userCount?: number;
+  latencyMs?: number;
 }> {
   if (!isPostgresConfigured()) {
     return { ok: false, error: "PostgreSQL is not configured" };
   }
+  const started = Date.now();
   try {
     const p = getPool();
     const r = await withTimeout(
@@ -611,7 +613,7 @@ export async function pingDatabase(): Promise<{
                 (SELECT COUNT(*)::int FROM information_schema.tables
                   WHERE table_schema='public' AND table_name='users') AS has_users_table`,
       ),
-      5000,
+      timeoutMs,
       "DB ping",
     );
     const row = r.rows[0] as {
@@ -623,7 +625,7 @@ export async function pingDatabase(): Promise<{
     if (Number(row?.has_users_table) > 0) {
       const c = await withTimeout(
         p.query(`SELECT COUNT(*)::int AS n FROM users`),
-        4000,
+        Math.min(4000, timeoutMs),
         "user count",
       );
       userCount = Number((c.rows[0] as { n?: number })?.n ?? 0);
@@ -633,12 +635,14 @@ export async function pingDatabase(): Promise<{
       database: row?.database,
       user: row?.user,
       userCount,
+      latencyMs: Date.now() - started,
     };
   } catch (err) {
     resetPool();
     return {
       ok: false,
       error: err instanceof Error ? err.message : "Database connection failed",
+      latencyMs: Date.now() - started,
     };
   }
 }

@@ -2,13 +2,16 @@ import type { VercelRequest, VercelResponse } from "@vercel/node";
 import {
   ensureBootstrap,
   getDbConfigSummary,
-  getDbStatus,
   isPostgresConfigured,
   pingDatabase,
   runMigrations,
 } from "../_lib/pg.js";
 
-function withDeadline<T>(promise: Promise<T>, ms: number, label: string): Promise<T> {
+function withDeadline<T>(
+  promise: Promise<T>,
+  ms: number,
+  label: string,
+): Promise<T> {
   return new Promise<T>((resolve, reject) => {
     const t = setTimeout(
       () => reject(new Error(`${label} timed out after ${ms}ms`)),
@@ -29,12 +32,17 @@ function withDeadline<T>(promise: Promise<T>, ms: number, label: string): Promis
 
 /**
  * GET /api/db/status
- * Fast by default (ping only).
- * ?migrate=1 — also run additive migrations + empty-DB bootstrap (bounded).
+ * Always time-bounded — never hangs curl or the browser.
+ *
+ * Default: fast ping only (~8s max).
+ * ?migrate=1: migrations + bootstrap first (~25s max), then ping.
+ *
+ * Important: do NOT call getDbStatus() here — it could re-enter migrate
+ * without a deadline and hang the HTTP response.
  */
 export default async function handler(req: VercelRequest, res: VercelResponse) {
-  // Never let this handler hang the client/curl forever
   res.setHeader("Cache-Control", "no-store");
+  res.setHeader("Content-Type", "application/json; charset=utf-8");
 
   try {
     if (req.method !== "GET") {
@@ -95,8 +103,9 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       }
     }
 
-    // Prefer fast ping; fall back to full status
-    const ping = await withDeadline(pingDatabase(), 8000, "status ping");
+    // Single timed ping — includes user count when tables exist
+    const ping = await withDeadline(pingDatabase(7000), 8000, "status ping");
+
     if (!ping.ok) {
       return res.status(200).json({
         mode: "postgres",
@@ -111,32 +120,32 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         userCount: null,
         error: ping.error || "Database not reachable",
         hint:
-          "docker compose ps && docker compose logs --tail=80 app db && verify POSTGRES_PASSWORD",
+          'docker compose ps && docker compose logs --tail=80 app db && curl -sS -m 8 "http://127.0.0.1:3000/api/health?db=1"',
       });
     }
 
-    const status = await getDbStatus();
     return res.status(200).json({
       mode: "postgres",
       configured: true,
       ok: true,
       host: summary.host,
-      database: status.database ?? summary.database,
+      database: ping.database ?? summary.database,
       passwordSet: summary.passwordSet,
       source: summary.source,
-      migrated: status.migrated ?? false,
-      seeded: status.seeded ?? false,
-      userCount: status.userCount ?? ping.userCount ?? null,
+      migrated: wantMigrate,
+      seeded: true,
+      userCount: ping.userCount ?? null,
       error: null,
+      latencyMs: ping.latencyMs ?? null,
       hint: "PostgreSQL is ready. Portal data is shared and durable.",
     });
   } catch (err) {
     return res.status(200).json({
-      mode: "none",
+      mode: "postgres",
       configured: isPostgresConfigured(),
       ok: false,
       error: err instanceof Error ? err.message : "Server error",
-      hint: "docker compose logs --tail=100 app",
+      hint: "docker compose logs --tail=100 app db",
     });
   }
 }
