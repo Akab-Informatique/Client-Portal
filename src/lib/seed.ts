@@ -20,12 +20,25 @@ export async function seedIfNeeded() {
   }
 
   // Production Postgres: server already ran migrations + bootstrap via /api/db/status.
-  // Just ensure roles/backfill over the proxy (fast when rows already exist).
+  // Roles/backfill must never block portal open — staff page can repair later.
   if (dbMode === "postgres") {
     try {
       const existing = await db.select().from(schema.users).limit(1);
       if (existing.length > 0) {
-        await backfillUserStaffRoles();
+        try {
+          // Soft timeout so a slow/hung roles migrate cannot freeze boot
+          await Promise.race([
+            backfillUserStaffRoles(),
+            new Promise<void>((_, reject) =>
+              window.setTimeout(
+                () => reject(new Error("staff role backfill timed out")),
+                8000,
+              ),
+            ),
+          ]);
+        } catch (e) {
+          console.warn("[akab] staff role backfill skipped:", e);
+        }
         return;
       }
       // Empty despite server bootstrap attempt — try client seed once

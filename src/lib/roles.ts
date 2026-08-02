@@ -16,17 +16,66 @@ let ensureDefaultsPromise: Promise<{
   technician: StaffRole;
 }> | null = null;
 
+/** True after a successful ensure — skip heavy work on later listStaffRoles calls. */
+let defaultsReady = false;
+
+function asRole(row: unknown): StaffRole {
+  return row as StaffRole;
+}
+
 /**
- * Merge duplicate staff_roles that share the same slug (or the same
- * case-insensitive name for system Admin/Technician leftovers).
- * Keeps the lowest id as canonical, reassigns users, deletes the rest.
+ * Insert without `.returning()` — pg-proxy mapping of RETURNING is fragile and
+ * can hang the browser. Follow with a SELECT by slug instead.
+ */
+async function insertRole(values: {
+  name: string;
+  slug: string;
+  description: string;
+  permissions: string;
+  is_system: boolean;
+  active: boolean;
+}): Promise<StaffRole> {
+  await db.insert(schema.staff_roles).values(values);
+  const rows = await db
+    .select()
+    .from(schema.staff_roles)
+    .where(eq(schema.staff_roles.slug, values.slug))
+    .limit(1);
+  if (!rows[0]) {
+    throw new Error(`Failed to create staff role “${values.slug}”`);
+  }
+  return asRole(rows[0]);
+}
+
+async function updateRoleById(
+  id: number,
+  patch: Record<string, unknown>,
+): Promise<StaffRole> {
+  await db
+    .update(schema.staff_roles)
+    .set(patch)
+    .where(eq(schema.staff_roles.id, id));
+  const rows = await db
+    .select()
+    .from(schema.staff_roles)
+    .where(eq(schema.staff_roles.id, id))
+    .limit(1);
+  if (!rows[0]) {
+    throw new Error(`Staff role #${id} missing after update`);
+  }
+  return asRole(rows[0]);
+}
+
+/**
+ * Merge duplicate staff_roles that share the same slug.
+ * Keeps the lowest system-preferring id, reassigns users, deletes the rest.
+ * Lightweight when there are no duplicates.
  */
 export async function dedupeStaffRoles(): Promise<number> {
   await dbReady;
-  const rows = (await db.select().from(schema.staff_roles)) as StaffRole[];
+  const rows = (await db.select().from(schema.staff_roles)).map(asRole);
   if (rows.length < 2) return 0;
 
-  // Group by normalized slug first
   const bySlug = new Map<string, StaffRole[]>();
   for (const r of rows) {
     const key = (r.slug || "").trim().toLowerCase();
@@ -36,60 +85,24 @@ export async function dedupeStaffRoles(): Promise<number> {
     bySlug.set(key, list);
   }
 
-  // Also collapse same-name system leftovers that somehow got different slugs
-  // (e.g. "Admin" / "admin" custom copies). Prefer slug groups already built.
-  const systemNames = new Set(["admin", "technician"]);
-  const byName = new Map<string, StaffRole[]>();
-  for (const r of rows) {
-    const key = r.name.trim().toLowerCase();
-    if (!systemNames.has(key)) continue;
-    const list = byName.get(key) ?? [];
-    list.push(r);
-    byName.set(key, list);
-  }
-
-  const mergeGroups: StaffRole[][] = [];
-  const seenIds = new Set<number>();
+  let removed = 0;
 
   for (const group of bySlug.values()) {
     if (group.length < 2) continue;
-    mergeGroups.push(group);
-    group.forEach((r) => seenIds.add(r.id));
-  }
 
-  for (const [name, group] of byName) {
-    if (group.length < 2) continue;
-    // Skip if already fully covered by a slug group
-    if (group.every((r) => seenIds.has(r.id))) continue;
-    // Prefer merging into the system slug row when present
-    const preferredSlug =
-      name === "admin"
-        ? SYSTEM_ROLE_SLUGS.admin
-        : SYSTEM_ROLE_SLUGS.technician;
-    const preferred = group.find((r) => r.slug === preferredSlug);
-    const ordered = preferred
-      ? [preferred, ...group.filter((r) => r.id !== preferred.id)]
-      : group;
-    mergeGroups.push(ordered);
-    ordered.forEach((r) => seenIds.add(r.id));
-  }
-
-  let removed = 0;
-
-  for (const group of mergeGroups) {
-    // Canonical = system flag first, then lowest id
     const sorted = [...group].sort((a, b) => {
       if (a.is_system !== b.is_system) return a.is_system ? -1 : 1;
       return a.id - b.id;
     });
     const keep = sorted[0];
     const drop = sorted.slice(1);
-    if (drop.length === 0) continue;
-
     const dropIds = drop.map((r) => r.id);
 
     // Re-point users assigned to duplicates onto the kept role
-    const users = await db.select().from(schema.users);
+    const users = (await db.select().from(schema.users)) as Array<{
+      id: number;
+      staff_role_id: number | null;
+    }>;
     for (const u of users) {
       if (u.staff_role_id != null && dropIds.includes(u.staff_role_id)) {
         await db
@@ -97,45 +110,6 @@ export async function dedupeStaffRoles(): Promise<number> {
           .set({ staff_role_id: keep.id })
           .where(eq(schema.users.id, u.id));
       }
-    }
-
-    // Prefer system flag + richer permissions on the kept row
-    const keepPerms = parsePermissions(keep.permissions);
-    let bestPerms = keepPerms;
-    let bestCount = Object.values(keepPerms).filter(Boolean).length;
-    let wantSystem = keep.is_system;
-    for (const d of drop) {
-      if (d.is_system) wantSystem = true;
-      const p = parsePermissions(d.permissions);
-      const c = Object.values(p).filter(Boolean).length;
-      if (c > bestCount) {
-        bestPerms = p;
-        bestCount = c;
-      }
-    }
-    const patch: {
-      is_system?: boolean;
-      permissions?: string;
-      slug?: string;
-      active?: boolean;
-    } = {};
-    if (wantSystem && !keep.is_system) patch.is_system = true;
-    if (bestCount > Object.values(keepPerms).filter(Boolean).length) {
-      patch.permissions = serializePermissions(bestPerms);
-    }
-    // Normalize slug for system names
-    const n = keep.name.trim().toLowerCase();
-    if (n === "admin" && keep.slug !== SYSTEM_ROLE_SLUGS.admin) {
-      patch.slug = SYSTEM_ROLE_SLUGS.admin;
-    } else if (n === "technician" && keep.slug !== SYSTEM_ROLE_SLUGS.technician) {
-      patch.slug = SYSTEM_ROLE_SLUGS.technician;
-    }
-    if (!keep.active && drop.some((d) => d.active)) patch.active = true;
-    if (Object.keys(patch).length > 0) {
-      await db
-        .update(schema.staff_roles)
-        .set(patch)
-        .where(eq(schema.staff_roles.id, keep.id));
     }
 
     await db
@@ -152,22 +126,32 @@ async function ensureDefaultStaffRolesInner(): Promise<{
   technician: StaffRole;
 }> {
   await dbReady;
-  // Clean any historical duplicates before inserting
-  await dedupeStaffRoles();
 
-  const existing = (await db.select().from(schema.staff_roles)) as StaffRole[];
+  const existing = (await db.select().from(schema.staff_roles)).map(asRole);
+
+  // Only dedupe when we actually see duplicates (common after upgrades)
+  const slugCounts = new Map<string, number>();
+  for (const r of existing) {
+    const k = (r.slug || "").trim().toLowerCase();
+    if (!k) continue;
+    slugCounts.set(k, (slugCounts.get(k) ?? 0) + 1);
+  }
+  if ([...slugCounts.values()].some((n) => n > 1)) {
+    await dedupeStaffRoles();
+  }
+
+  const rows = (await db.select().from(schema.staff_roles)).map(asRole);
 
   let admin =
-    existing.find((r) => r.slug === SYSTEM_ROLE_SLUGS.admin) ??
-    existing.find((r) => r.name.trim().toLowerCase() === "admin");
+    rows.find((r) => r.slug === SYSTEM_ROLE_SLUGS.admin) ??
+    rows.find((r) => r.name.trim().toLowerCase() === "admin");
   let technician =
-    existing.find((r) => r.slug === SYSTEM_ROLE_SLUGS.technician) ??
-    existing.find((r) => r.name.trim().toLowerCase() === "technician");
+    rows.find((r) => r.slug === SYSTEM_ROLE_SLUGS.technician) ??
+    rows.find((r) => r.name.trim().toLowerCase() === "technician");
 
   if (!admin) {
-    const [row] = await db
-      .insert(schema.staff_roles)
-      .values({
+    try {
+      admin = await insertRole({
         name: "Admin",
         slug: SYSTEM_ROLE_SLUGS.admin,
         description:
@@ -175,18 +159,15 @@ async function ensureDefaultStaffRolesInner(): Promise<{
         permissions: serializePermissions(ADMIN_PERMISSIONS),
         is_system: true,
         active: true,
-      })
-      .returning();
-    admin = row as StaffRole;
+      });
+    } catch {
+      // Unique race — read existing
+      const again = (await db.select().from(schema.staff_roles)).map(asRole);
+      admin = again.find((r) => r.slug === SYSTEM_ROLE_SLUGS.admin);
+      if (!admin) throw new Error("Could not ensure Admin staff role");
+    }
   } else {
-    // Normalize system metadata + ensure full permission set (new sections)
-    const patch: {
-      slug?: string;
-      is_system?: boolean;
-      name?: string;
-      active?: boolean;
-      permissions?: string;
-    } = {};
+    const patch: Record<string, unknown> = {};
     if (admin.slug !== SYSTEM_ROLE_SLUGS.admin) patch.slug = SYSTEM_ROLE_SLUGS.admin;
     if (!admin.is_system) patch.is_system = true;
     if (admin.name.trim() !== "Admin") patch.name = "Admin";
@@ -194,19 +175,13 @@ async function ensureDefaultStaffRolesInner(): Promise<{
     const fullAdmin = serializePermissions(ADMIN_PERMISSIONS);
     if (admin.permissions !== fullAdmin) patch.permissions = fullAdmin;
     if (Object.keys(patch).length > 0) {
-      const [row] = await db
-        .update(schema.staff_roles)
-        .set(patch)
-        .where(eq(schema.staff_roles.id, admin.id))
-        .returning();
-      admin = (row as StaffRole) ?? { ...admin, ...patch };
+      admin = await updateRoleById(admin.id, patch);
     }
   }
 
   if (!technician) {
-    const [row] = await db
-      .insert(schema.staff_roles)
-      .values({
+    try {
+      technician = await insertRole({
         name: "Technician",
         slug: SYSTEM_ROLE_SLUGS.technician,
         description:
@@ -214,17 +189,14 @@ async function ensureDefaultStaffRolesInner(): Promise<{
         permissions: serializePermissions(TECHNICIAN_PERMISSIONS),
         is_system: true,
         active: true,
-      })
-      .returning();
-    technician = row as StaffRole;
+      });
+    } catch {
+      const again = (await db.select().from(schema.staff_roles)).map(asRole);
+      technician = again.find((r) => r.slug === SYSTEM_ROLE_SLUGS.technician);
+      if (!technician) throw new Error("Could not ensure Technician staff role");
+    }
   } else {
-    const patch: {
-      slug?: string;
-      is_system?: boolean;
-      name?: string;
-      active?: boolean;
-      permissions?: string;
-    } = {};
+    const patch: Record<string, unknown> = {};
     if (technician.slug !== SYSTEM_ROLE_SLUGS.technician) {
       patch.slug = SYSTEM_ROLE_SLUGS.technician;
     }
@@ -252,26 +224,11 @@ async function ensureDefaultStaffRolesInner(): Promise<{
       patch.permissions = serializePermissions(current);
     }
     if (Object.keys(patch).length > 0) {
-      const [row] = await db
-        .update(schema.staff_roles)
-        .set(patch)
-        .where(eq(schema.staff_roles.id, technician.id))
-        .returning();
-      technician = (row as StaffRole) ?? { ...technician, ...patch };
+      technician = await updateRoleById(technician.id, patch);
     }
   }
 
-  // Final pass in case insert raced somehow (shouldn't with single-flight)
-  await dedupeStaffRoles();
-
-  // Re-read canonical rows after possible dedupe
-  const finalRows = (await db.select().from(schema.staff_roles)) as StaffRole[];
-  admin =
-    finalRows.find((r) => r.slug === SYSTEM_ROLE_SLUGS.admin) ?? admin;
-  technician =
-    finalRows.find((r) => r.slug === SYSTEM_ROLE_SLUGS.technician) ??
-    technician;
-
+  defaultsReady = true;
   return { admin, technician };
 }
 
@@ -284,6 +241,7 @@ export function ensureDefaultStaffRoles(): Promise<{
     ensureDefaultsPromise = ensureDefaultStaffRolesInner().catch((err) => {
       // Allow retry after a failed run
       ensureDefaultsPromise = null;
+      defaultsReady = false;
       throw err;
     });
   }
@@ -294,7 +252,11 @@ export function ensureDefaultStaffRoles(): Promise<{
 export async function backfillUserStaffRoles() {
   await dbReady;
   const { admin, technician } = await ensureDefaultStaffRoles();
-  const users = await db.select().from(schema.users);
+  const users = (await db.select().from(schema.users)) as Array<{
+    id: number;
+    role: string;
+    staff_role_id: number | null;
+  }>;
   for (const u of users) {
     if (u.role === "client") continue;
     if (u.staff_role_id) continue;
@@ -306,14 +268,22 @@ export async function backfillUserStaffRoles() {
   }
 }
 
+/**
+ * List roles for the Staff & Roles UI.
+ * Ensures defaults once, then is a plain SELECT (no repeated dedupe/migrate).
+ */
 export async function listStaffRoles(): Promise<StaffRole[]> {
   await dbReady;
-  await ensureDefaultStaffRoles();
-  // Always collapse any leftovers before rendering
-  await dedupeStaffRoles();
-  const rows = (await db.select().from(schema.staff_roles)) as StaffRole[];
+  if (!defaultsReady) {
+    try {
+      await ensureDefaultStaffRoles();
+    } catch (err) {
+      console.warn("[akab] ensureDefaultStaffRoles failed in listStaffRoles", err);
+      // Fall through — still try to show whatever rows exist
+    }
+  }
+  const rows = (await db.select().from(schema.staff_roles)).map(asRole);
   return rows.sort((a, b) => {
-    // System first, then name
     if (a.is_system !== b.is_system) return a.is_system ? -1 : 1;
     return a.name.localeCompare(b.name);
   });
@@ -329,7 +299,7 @@ export async function getStaffRoleById(
     .from(schema.staff_roles)
     .where(eq(schema.staff_roles.id, id))
     .limit(1);
-  return (rows[0] as StaffRole) ?? null;
+  return rows[0] ? asRole(rows[0]) : null;
 }
 
 export async function resolvePermissionsForUser(row: {
@@ -359,7 +329,6 @@ export async function resolvePermissionsForUser(row: {
 
   const staffRole = await getStaffRoleById(row.staff_role_id);
   if (!staffRole || !staffRole.active) {
-    // Fallback by portal role
     if (row.role === "admin") {
       return {
         permissions: { ...ADMIN_PERMISSIONS },
@@ -400,7 +369,6 @@ export async function createStaffRole(input: {
   const name = input.name.trim();
   if (!name) throw new Error("Name is required");
 
-  // Block creating another Admin/Technician by name — edit the system one instead
   const lower = name.toLowerCase();
   if (lower === "admin" || lower === "technician") {
     throw new Error(
@@ -409,9 +377,8 @@ export async function createStaffRole(input: {
   }
 
   let slug = slugifyRoleName(name);
-  const existing = (await db.select().from(schema.staff_roles)) as StaffRole[];
+  const existing = (await db.select().from(schema.staff_roles)).map(asRole);
 
-  // Also block reserved system slugs
   if (
     slug === SYSTEM_ROLE_SLUGS.admin ||
     slug === SYSTEM_ROLE_SLUGS.technician
@@ -423,23 +390,18 @@ export async function createStaffRole(input: {
     slug = `${slug}-${Date.now().toString(36)}`;
   }
 
-  // Soft uniqueness on display name (case-insensitive)
   if (existing.some((r) => r.name.trim().toLowerCase() === lower)) {
     throw new Error(`A role named "${name}" already exists.`);
   }
 
-  const [row] = await db
-    .insert(schema.staff_roles)
-    .values({
-      name,
-      slug,
-      description: input.description?.trim() || null,
-      permissions: serializePermissions(input.permissions),
-      is_system: false,
-      active: true,
-    })
-    .returning();
-  return row as StaffRole;
+  return insertRole({
+    name,
+    slug,
+    description: input.description?.trim() || "",
+    permissions: serializePermissions(input.permissions),
+    is_system: false,
+    active: true,
+  });
 }
 
 export async function updateStaffRole(
@@ -455,18 +417,12 @@ export async function updateStaffRole(
   const current = await getStaffRoleById(id);
   if (!current) return null;
 
-  const patch: {
-    name?: string;
-    description?: string | null;
-    permissions?: string;
-    active?: boolean;
-  } = {};
+  const patch: Record<string, unknown> = {};
 
   if (input.name != null) {
     const name = input.name.trim();
     if (!name) throw new Error("Name is required");
     const lower = name.toLowerCase();
-    // Prevent renaming a custom role onto a reserved system name (unless it IS that system role)
     if (
       !current.is_system &&
       (lower === "admin" || lower === "technician")
@@ -475,8 +431,7 @@ export async function updateStaffRole(
         `"${name}" is reserved for a system role. Choose a different name.`,
       );
     }
-    // Prevent colliding with another role's display name
-    const others = (await db.select().from(schema.staff_roles)) as StaffRole[];
+    const others = (await db.select().from(schema.staff_roles)).map(asRole);
     if (
       others.some(
         (r) => r.id !== id && r.name.trim().toLowerCase() === lower,
@@ -496,12 +451,8 @@ export async function updateStaffRole(
     patch.active = input.active;
   }
 
-  const [row] = await db
-    .update(schema.staff_roles)
-    .set(patch)
-    .where(eq(schema.staff_roles.id, id))
-    .returning();
-  return (row as StaffRole) ?? null;
+  if (Object.keys(patch).length === 0) return current;
+  return updateRoleById(id, patch);
 }
 
 export async function deleteStaffRole(
@@ -513,10 +464,10 @@ export async function deleteStaffRole(
   if (role.is_system) {
     return { ok: false, error: "System roles cannot be deleted." };
   }
-  const users = await db
+  const users = (await db
     .select()
     .from(schema.users)
-    .where(eq(schema.users.staff_role_id, id));
+    .where(eq(schema.users.staff_role_id, id))) as Array<{ id: number }>;
   if (users.length > 0) {
     return {
       ok: false,
@@ -532,7 +483,6 @@ export function portalRoleFromStaffRole(
   role: StaffRole,
 ): "admin" | "technician" {
   if (role.slug === SYSTEM_ROLE_SLUGS.admin) return "admin";
-  // Any role with technicians+roles manage rights is treated as admin-class
   const perms = parsePermissions(role.permissions);
   if (perms.technicians && perms.roles) return "admin";
   return "technician";

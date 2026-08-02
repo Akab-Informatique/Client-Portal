@@ -109,8 +109,9 @@ export function firstAllowedAdminPath(perms: PermissionMap | null | undefined): 
     { perm: "documentation", path: "/admin/documentation" },
     { perm: "passwords", path: "/admin/passwords" },
     { perm: "clients", path: "/admin/clients" },
+    // Staff & Roles page self-gates technicians vs roles tabs — same path for both
     { perm: "technicians", path: "/admin/technicians" },
-    { perm: "roles", path: "/admin/technicians?tab=roles" },
+    { perm: "roles", path: "/admin/technicians" },
     { perm: "directory", path: "/admin/directory" },
     { perm: "profiles", path: "/admin/profile/me" },
   ];
@@ -125,7 +126,14 @@ export function permissionForAdminPath(pathname: string): StaffPermission | null
   const path = pathname.replace(/\/+$/, "") || "/admin";
   if (path === "/admin") return "dashboard";
   if (path.startsWith("/admin/clients")) return "clients";
-  if (path.startsWith("/admin/technicians")) return "technicians";
+  /**
+   * Staff & Roles is reachable with EITHER technicians OR roles permission.
+   * Return null here so ProtectedRoute does not hard-require one of them
+   * (which caused an infinite redirect loop for roles-only staff when the
+   * fallback was `/admin/technicians?tab=roles` vs pathname `/admin/technicians`).
+   * The page itself gates content.
+   */
+  if (path.startsWith("/admin/technicians")) return null;
   // Legacy users route redirects to clients
   if (path.startsWith("/admin/users")) return "clients";
   // General settings is open to any staff who can reach the admin shell

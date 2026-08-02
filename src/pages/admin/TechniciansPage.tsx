@@ -150,22 +150,56 @@ export function TechniciansPage() {
   const [roleFlash, setRoleFlash] = useState<string | null>(null);
 
   const load = useCallback(async () => {
-    await dbReady;
-    const [rows, roleRows] = await Promise.all([
-      db.select().from(schema.users),
-      listStaffRoles(),
-    ]);
-    setTechnicians(
-      (rows as User[])
-        .filter((u) => u.role === "technician" || u.role === "admin")
-        .sort((a, b) => a.name.localeCompare(b.name)),
-    );
-    setRoles(roleRows);
-    setLoading(false);
+    setLoading(true);
+    setError(null);
+    try {
+      await dbReady;
+      // Load users first so the table can render even if roles bootstrap is slow
+      const rows = (await db.select().from(schema.users)) as User[];
+      setTechnicians(
+        rows
+          .filter((u) => u.role === "technician" || u.role === "admin")
+          .sort((a, b) => a.name.localeCompare(b.name)),
+      );
+
+      try {
+        const roleRows = await listStaffRoles();
+        setRoles(roleRows);
+      } catch (roleErr) {
+        console.error("[akab] listStaffRoles failed", roleErr);
+        setError(
+          roleErr instanceof Error
+            ? roleErr.message
+            : "Could not load staff roles.",
+        );
+        // Best-effort plain read so the Roles tab is not empty forever
+        try {
+          const fallback = (await db
+            .select()
+            .from(schema.staff_roles)) as StaffRole[];
+          setRoles(
+            fallback.sort((a, b) => {
+              if (a.is_system !== b.is_system) return a.is_system ? -1 : 1;
+              return a.name.localeCompare(b.name);
+            }),
+          );
+        } catch {
+          setRoles([]);
+        }
+      }
+    } catch (err) {
+      console.error("[akab] Staff & Roles load failed", err);
+      setError(
+        err instanceof Error ? err.message : "Could not load staff directory.",
+      );
+    } finally {
+      // ALWAYS clear loading — never leave "Loading portal" / skeleton forever
+      setLoading(false);
+    }
   }, []);
 
   useEffect(() => {
-    load();
+    void load();
   }, [load]);
 
   useEffect(() => {

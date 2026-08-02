@@ -39,7 +39,9 @@ export function ProtectedRoute({
     const needed = permission ?? permissionForAdminPath(location.pathname);
     if (needed && !can(needed)) {
       const fallback = firstAllowedAdminPath(user.permissions);
-      if (fallback !== location.pathname) {
+      // Compare path only — query strings must not create redirect loops
+      const fallbackPath = fallback.split("?")[0] || fallback;
+      if (fallbackPath !== location.pathname) {
         return <Navigate to={fallback} replace />;
       }
     }
