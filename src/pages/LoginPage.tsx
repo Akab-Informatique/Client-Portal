@@ -26,8 +26,8 @@ export function LoginPage() {
   const { theme, toggleTheme } = useTheme();
   const { t, locale, setLocale } = useLocale();
   const navigate = useNavigate();
-  const [email, setEmail] = useState("admin@akab.local");
-  const [password, setPassword] = useState("admin123");
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
   const [showPassword, setShowPassword] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
@@ -198,17 +198,6 @@ export function LoginPage() {
                 {submitting ? t("login.submitting") : t("login.submit")}
               </Button>
             </form>
-
-            <div className="mt-6 rounded-lg border border-border bg-muted/40 p-3 text-xs text-muted-foreground">
-              <p className="mb-2 font-semibold text-foreground">
-                {t("login.demoAccounts")}
-              </p>
-              <ul className="space-y-1 font-mono">
-                <li>admin@akab.local / admin123</li>
-                <li>tech@akab.local / tech123</li>
-                <li>client@acme.example / client123</li>
-              </ul>
-            </div>
           </CardContent>
         </Card>
       </BlurFade>

@@ -16,11 +16,13 @@ import {
   Pencil,
   Plus,
   Search,
+  Trash2,
   UserPlus,
   Users,
 } from "lucide-react";
 import { db, dbReady, schema } from "@/db";
 import type { Company, User } from "@/lib/types";
+import { deleteClientCompanyById, deleteUserById } from "@/lib/deletes";
 import {
   defaultClientLayout,
   moveInOrder,
@@ -546,12 +548,57 @@ export function ClientsPage() {
   };
 
   const toggleUserActive = async (user: User) => {
+    setError(null);
     await dbReady;
     await db
       .update(schema.users)
       .set({ active: !user.active })
       .where(eq(schema.users.id, user.id));
     await load();
+  };
+
+  const handleDeleteUser = async (user: User) => {
+    setError(null);
+    if (!window.confirm(t("admin.deleteUserConfirm", { name: user.name }))) {
+      return;
+    }
+    try {
+      const result = await deleteUserById(user.id);
+      if (!result.ok) {
+        setError(result.error || t("admin.deleteUserFailed"));
+        return;
+      }
+      await load();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : t("admin.deleteUserFailed"));
+    }
+  };
+
+  const handleDeleteClient = async (company: Company) => {
+    setError(null);
+    if (
+      !window.confirm(t("admin.deleteClientConfirm", { name: company.name }))
+    ) {
+      return;
+    }
+    setSaving(true);
+    try {
+      const result = await deleteClientCompanyById(company.id);
+      if (!result.ok) {
+        setError(result.error || t("admin.deleteClientFailed"));
+        return;
+      }
+      if (usersExpandedId === company.id) setUsersExpandedId(null);
+      if (editing?.id === company.id) {
+        setCompanyOpen(false);
+        setEditing(null);
+      }
+      await load();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : t("admin.deleteClientFailed"));
+    } finally {
+      setSaving(false);
+    }
   };
 
   const toggleUsersPanel = (companyId: number) => {
@@ -766,6 +813,16 @@ export function ClientsPage() {
                                 >
                                   <Pencil className="size-4" />
                                 </Button>
+                                <Button
+                                  variant="ghost"
+                                  size="sm"
+                                  className="text-destructive hover:bg-destructive/10 hover:text-destructive"
+                                  disabled={saving}
+                                  onClick={() => void handleDeleteClient(company)}
+                                  title={t("admin.deleteClient")}
+                                >
+                                  <Trash2 className="size-4" />
+                                </Button>
                               </div>
                             </TableCell>
                           </TableRow>
@@ -872,17 +929,31 @@ export function ClientsPage() {
                                                 {formatDate(u.created_at)}
                                               </TableCell>
                                               <TableCell className="text-right">
-                                                <Button
-                                                  variant="outline"
-                                                  size="sm"
-                                                  onClick={() =>
-                                                    void toggleUserActive(u)
-                                                  }
-                                                >
-                                                  {u.active
-                                                    ? t("admin.deactivateUser")
-                                                    : t("admin.activateUser")}
-                                                </Button>
+                                                <div className="flex justify-end gap-1.5">
+                                                  <Button
+                                                    variant="outline"
+                                                    size="sm"
+                                                    onClick={() =>
+                                                      void toggleUserActive(u)
+                                                    }
+                                                  >
+                                                    {u.active
+                                                      ? t("admin.deactivateUser")
+                                                      : t("admin.activateUser")}
+                                                  </Button>
+                                                  <Button
+                                                    variant="outline"
+                                                    size="sm"
+                                                    className="gap-1.5 text-destructive hover:bg-destructive/10 hover:text-destructive"
+                                                    onClick={() =>
+                                                      void handleDeleteUser(u)
+                                                    }
+                                                    title={t("admin.deleteUser")}
+                                                  >
+                                                    <Trash2 className="size-3.5" />
+                                                    {t("admin.deleteUser")}
+                                                  </Button>
+                                                </div>
                                               </TableCell>
                                             </TableRow>
                                           ))}

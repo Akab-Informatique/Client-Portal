@@ -1,8 +1,11 @@
 import { useEffect, useMemo, useState } from "react";
 import { eq } from "drizzle-orm";
-import { Search, Users } from "lucide-react";
+import { Search, Trash2, Users } from "lucide-react";
 import { db, dbReady, schema } from "@/db";
 import type { Company, User } from "@/lib/types";
+import { deleteUserById } from "@/lib/deletes";
+import { useAuth } from "@/lib/auth";
+import { useLocale } from "@/hooks/use-locale";
 import { EmptyState } from "@/components/EmptyState";
 import { BlurFade } from "@/components/ui/blur-fade";
 import { Badge } from "@/components/ui/badge";
@@ -27,11 +30,15 @@ import {
 import { formatDate, roleLabel } from "@/lib/format";
 
 export function UsersPage() {
+  const { user: sessionUser } = useAuth();
+  const { t } = useLocale();
   const [users, setUsers] = useState<User[]>([]);
   const [companies, setCompanies] = useState<Company[]>([]);
   const [loading, setLoading] = useState(true);
   const [query, setQuery] = useState("");
   const [roleFilter, setRoleFilter] = useState<string>("all");
+  const [actionError, setActionError] = useState<string | null>(null);
+  const [deletingId, setDeletingId] = useState<number | null>(null);
 
   const load = async () => {
     await dbReady;
@@ -67,12 +74,51 @@ export function UsersPage() {
   });
 
   const toggleActive = async (user: User) => {
+    setActionError(null);
     await dbReady;
     await db
       .update(schema.users)
       .set({ active: !user.active })
       .where(eq(schema.users.id, user.id));
     await load();
+  };
+
+  const handleDelete = async (user: User) => {
+    setActionError(null);
+    if (sessionUser?.id === user.id) {
+      setActionError(t("admin.deleteUserSelf"));
+      return;
+    }
+    if (
+      !window.confirm(
+        t("admin.deleteUserConfirm", { name: user.name }),
+      )
+    ) {
+      return;
+    }
+    setDeletingId(user.id);
+    try {
+      const result = await deleteUserById(user.id, {
+        actorId: sessionUser?.id ?? null,
+      });
+      if (!result.ok) {
+        setActionError(
+          result.error.includes("last active admin")
+            ? t("admin.deleteUserLastAdmin")
+            : result.error.includes("own account")
+              ? t("admin.deleteUserSelf")
+              : result.error || t("admin.deleteUserFailed"),
+        );
+        return;
+      }
+      await load();
+    } catch (e) {
+      setActionError(
+        e instanceof Error ? e.message : t("admin.deleteUserFailed"),
+      );
+    } finally {
+      setDeletingId(null);
+    }
   };
 
   return (
@@ -109,6 +155,12 @@ export function UsersPage() {
               </Select>
             </div>
 
+            {actionError && (
+              <div className="rounded-lg border border-destructive/30 bg-destructive/10 px-3 py-2 text-sm text-destructive">
+                {actionError}
+              </div>
+            )}
+
             {loading ? (
               <div className="space-y-2">
                 {Array.from({ length: 5 }).map((_, i) => (
@@ -136,60 +188,82 @@ export function UsersPage() {
                     </TableRow>
                   </TableHeader>
                   <TableBody>
-                    {filtered.map((user) => (
-                      <TableRow key={user.id}>
-                        <TableCell>
-                          <div>
-                            <p className="font-medium">{user.name}</p>
-                            <p className="text-xs text-muted-foreground md:hidden">
-                              {user.email}
-                            </p>
-                          </div>
-                        </TableCell>
-                        <TableCell className="hidden md:table-cell">{user.email}</TableCell>
-                        <TableCell>
-                          <Badge
-                            variant="outline"
-                            className={
-                              user.role === "admin"
-                                ? "border-primary/40 bg-primary/10 text-primary"
-                                : ""
-                            }
-                          >
-                            {roleLabel(user.role)}
-                          </Badge>
-                        </TableCell>
-                        <TableCell className="hidden lg:table-cell">
-                          {companyName(user.company_id)}
-                        </TableCell>
-                        <TableCell>
-                          <Badge
-                            variant="outline"
-                            className={
-                              user.active
-                                ? "border-primary/40 bg-primary/10 text-primary"
-                                : ""
-                            }
-                          >
-                            {user.active ? "Active" : "Inactive"}
-                          </Badge>
-                        </TableCell>
-                        <TableCell className="hidden text-sm text-muted-foreground xl:table-cell">
-                          {formatDate(user.created_at)}
-                        </TableCell>
-                        <TableCell className="text-right">
-                          {user.role !== "admin" && (
-                            <Button
+                    {filtered.map((user) => {
+                      const isSelf = sessionUser?.id === user.id;
+                      return (
+                        <TableRow key={user.id}>
+                          <TableCell>
+                            <div>
+                              <p className="font-medium">{user.name}</p>
+                              <p className="text-xs text-muted-foreground md:hidden">
+                                {user.email}
+                              </p>
+                            </div>
+                          </TableCell>
+                          <TableCell className="hidden md:table-cell">{user.email}</TableCell>
+                          <TableCell>
+                            <Badge
                               variant="outline"
-                              size="sm"
-                              onClick={() => toggleActive(user)}
+                              className={
+                                user.role === "admin"
+                                  ? "border-primary/40 bg-primary/10 text-primary"
+                                  : ""
+                              }
                             >
-                              {user.active ? "Deactivate" : "Activate"}
-                            </Button>
-                          )}
-                        </TableCell>
-                      </TableRow>
-                    ))}
+                              {roleLabel(user.role)}
+                            </Badge>
+                          </TableCell>
+                          <TableCell className="hidden lg:table-cell">
+                            {companyName(user.company_id)}
+                          </TableCell>
+                          <TableCell>
+                            <Badge
+                              variant="outline"
+                              className={
+                                user.active
+                                  ? "border-primary/40 bg-primary/10 text-primary"
+                                  : ""
+                              }
+                            >
+                              {user.active ? "Active" : "Inactive"}
+                            </Badge>
+                          </TableCell>
+                          <TableCell className="hidden text-sm text-muted-foreground xl:table-cell">
+                            {formatDate(user.created_at)}
+                          </TableCell>
+                          <TableCell className="text-right">
+                            <div className="flex justify-end gap-1.5">
+                              {!isSelf && (
+                                <Button
+                                  variant="outline"
+                                  size="sm"
+                                  onClick={() => void toggleActive(user)}
+                                >
+                                  {user.active
+                                    ? t("admin.deactivateUser")
+                                    : t("admin.activateUser")}
+                                </Button>
+                              )}
+                              <Button
+                                variant="outline"
+                                size="sm"
+                                className="gap-1.5 text-destructive hover:bg-destructive/10 hover:text-destructive"
+                                disabled={isSelf || deletingId === user.id}
+                                title={
+                                  isSelf
+                                    ? t("admin.deleteUserSelf")
+                                    : t("admin.deleteUser")
+                                }
+                                onClick={() => void handleDelete(user)}
+                              >
+                                <Trash2 className="size-3.5" />
+                                {t("admin.deleteUser")}
+                              </Button>
+                            </div>
+                          </TableCell>
+                        </TableRow>
+                      );
+                    })}
                   </TableBody>
                 </Table>
               </div>

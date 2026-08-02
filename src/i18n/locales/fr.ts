@@ -143,7 +143,6 @@ export const fr: Dictionary = {
     hidePassword: "Masquer le mot de passe",
     submit: "Se connecter",
     submitting: "Connexion…",
-    demoAccounts: "Comptes démo",
     invalid: "Courriel ou mot de passe invalide.",
     deactivated: "Ce compte a été désactivé.",
   },
@@ -323,6 +322,18 @@ export const fr: Dictionary = {
     hideUsers: "Masquer les utilisateurs",
     deactivateUser: "Désactiver",
     activateUser: "Activer",
+    deleteUser: "Supprimer",
+    deleteUserConfirm:
+      "Supprimer définitivement l'utilisateur « {name} » ? Sa connexion et ses étiquettes de messages seront retirées. Cette action est irréversible.",
+    deleteUserSelf:
+      "Vous ne pouvez pas supprimer votre propre compte pendant que vous êtes connecté.",
+    deleteUserLastAdmin:
+      "Impossible de supprimer le dernier compte administrateur actif.",
+    deleteUserFailed: "Impossible de supprimer l'utilisateur.",
+    deleteClient: "Supprimer le client",
+    deleteClientConfirm:
+      "Supprimer définitivement le client « {name} » ainsi que tous ses utilisateurs du portail, messages du babillard et données de zone ? Cette action est irréversible.",
+    deleteClientFailed: "Impossible de supprimer le client.",
     boardMessages: "Messages du babillard",
     allBoards: "Tous les babillards clients",
     recentMessages: "Messages récents du babillard",
