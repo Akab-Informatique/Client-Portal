@@ -85,28 +85,31 @@ export function AdminDashboard() {
       ]);
       if (cancelled) return;
 
-      const clientCompanies = companies.filter((c) => c.type === "client");
-      const companyMap = new Map(companies.map((c) => [c.id, c.name]));
+      const allCompanies = companies as Company[];
+      const allUsers = users as Array<{ role: string; active: boolean }>;
+      const allMessages = messages as BoardMessage[];
+      const clientCompanies = allCompanies.filter((c) => c.type === "client");
+      const companyMap = new Map(allCompanies.map((c) => [c.id, c.name]));
 
-      setClients(clientCompanies as Company[]);
+      setClients(clientCompanies);
       setStats({
         clients: clientCompanies.filter((c) => c.active).length,
-        technicians: users.filter(
+        technicians: allUsers.filter(
           (u) => u.role === "technician" && u.active,
         ).length,
-        clientUsers: users.filter((u) => u.role === "client" && u.active)
+        clientUsers: allUsers.filter((u) => u.role === "client" && u.active)
           .length,
-        messages: messages.length,
+        messages: allMessages.length,
       });
 
-      const sorted = [...messages].sort(
+      const sorted = [...allMessages].sort(
         (a, b) =>
           new Date(b.created_at).getTime() - new Date(a.created_at).getTime(),
       );
       setRecentMessages(
         sorted.slice(0, 5).map((m) => ({
-          ...(m as BoardMessage),
-          companyName: companyMap.get(m.company_id) ?? "Unknown",
+          ...m,
+          companyName: String(companyMap.get(m.company_id) ?? "Unknown"),
         })),
       );
       setLoading(false);

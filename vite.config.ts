@@ -30,7 +30,17 @@ export default defineConfig(({ mode }) => {
       sourcemap: false,
       target: "es2020",
       chunkSizeWarningLimit: 900,
+      // Production never loads browser PGlite — drop it from the rollup graph
+      // so the image stays small and WASM cannot hang the portal.
       rollupOptions: {
+        // Keep dynamic import path from resolving pglite into prod assets
+        external: isProd
+          ? (id) =>
+              id === "@electric-sql/pglite" ||
+              id.includes("@electric-sql/pglite") ||
+              id === "drizzle-orm/pglite" ||
+              id.includes("drizzle-orm/pglite")
+          : undefined,
         output: {
           manualChunks: {
             vendor: ["react", "react-dom", "react-router-dom"],

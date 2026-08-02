@@ -56,15 +56,16 @@ export function MessagesPage() {
         .from(schema.board_messages)
         .orderBy(desc(schema.board_messages.created_at)),
     ]);
-    const clientCompanies = (companies as Company[])
+    const allCompanies = companies as Company[];
+    const clientCompanies = allCompanies
       .filter((c) => c.type === "client" && c.active)
       .sort((a, b) => a.name.localeCompare(b.name));
-    const map = new Map(companies.map((c) => [c.id, c.name]));
+    const map = new Map(allCompanies.map((c) => [c.id, c.name] as const));
     setClients(clientCompanies);
     setMessages(
       (msgs as BoardMessage[]).map((m) => ({
         ...m,
-        companyName: map.get(m.company_id) ?? "Unknown client",
+        companyName: String(map.get(m.company_id) ?? "Unknown client"),
       })),
     );
     setLoading(false);

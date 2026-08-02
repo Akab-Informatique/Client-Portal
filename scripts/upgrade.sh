@@ -1,43 +1,41 @@
 #!/usr/bin/env bash
-# Safe production upgrade — pulls code, rebuilds app, keeps Postgres volume.
-#
-# Usage (on the server, inside the app directory):
+# Safe production upgrade — pull code, rebuild app, keep Postgres volume.
+# Usage:
 #   bash scripts/upgrade.sh
-#   bash scripts/upgrade.sh v1.1.0     # checkout a tag
+#   bash scripts/upgrade.sh v1.1.0
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
-
 REF="${1:-}"
 
-echo "==> Pre-upgrade backup"
+echo "==> Pre-upgrade backup (best effort)"
 if [[ -f ./scripts/backup-db.sh ]]; then
-  bash ./scripts/backup-db.sh ./backups || echo "WARN: backup skipped (db not running yet?)"
-else
-  echo "WARN: backup script missing (scripts/backup-db.sh) — pull latest git"
+  bash ./scripts/backup-db.sh ./backups || echo "WARN: backup skipped"
 fi
 
-echo "==> Fetch latest code"
+echo "==> Fetch code"
 git fetch --tags --prune origin || true
-
 if [[ -n "$REF" ]]; then
-  echo "==> Checkout $REF"
   git checkout "$REF"
 else
   BRANCH="$(git rev-parse --abbrev-ref HEAD)"
-  echo "==> Pull $BRANCH"
-  git pull --ff-only origin "$BRANCH"
+  git pull --ff-only origin "$BRANCH" || git reset --hard "origin/$BRANCH"
 fi
 
-echo "==> Rebuild & restart (volume akab_pgdata is preserved)"
+echo "==> Rebuild (volume akab_pgdata is preserved)"
 docker compose up -d --build
 
-echo "==> Wait for health"
-sleep 3
+echo "==> Wait"
+sleep 5
 docker compose ps
 
-echo "==> DB status"
-curl -sf "http://127.0.0.1:${PORT:-3000}/api/db/status?migrate=1" | head -c 500 || true
+PORT_VAL="${PORT:-3000}"
+echo "==> Health"
+curl -sS -m 5 "http://127.0.0.1:${PORT_VAL}/api/health" || true
 echo
-echo "OK — upgrade finished. Portal data volume was NOT deleted."
+curl -sS -m 10 "http://127.0.0.1:${PORT_VAL}/api/db/status" || true
+echo
+curl -sS -m 30 "http://127.0.0.1:${PORT_VAL}/api/db/status?migrate=1" || true
+echo
+echo "OK — upgrade finished. Data volume was NOT deleted."

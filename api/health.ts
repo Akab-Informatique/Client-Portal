@@ -1,72 +1,55 @@
 import type { VercelRequest, VercelResponse } from "@vercel/node";
-import {
-  getDbConfigSummary,
-  isPostgresConfigured,
-  pingDatabase,
-} from "./_lib/pg.js";
+import { getDbConfigSummary, pingDatabase } from "./_lib/pg.js";
 
 /**
- * GET /api/health — always returns quickly.
- * - Without ?db=1: process liveness only (for Docker HEALTHCHECK)
- * - With ?db=1: also pings Postgres (SELECT 1 style), max ~4s
+ * GET /api/health
+ * Default: process liveness only (always fast — used by Docker HEALTHCHECK).
+ * ?db=1 : also ping Postgres (still time-bounded).
  */
 export default async function handler(req: VercelRequest, res: VercelResponse) {
+  res.setHeader("Cache-Control", "no-store");
+
   if (req.method !== "GET") {
     res.setHeader("Allow", "GET");
     return res.status(405).json({ error: "Method not allowed" });
   }
 
-  const wantDb =
+  const checkDb =
     String(req.query.db ?? "") === "1" ||
     String(req.query.db ?? "").toLowerCase() === "true";
 
-  const configured = isPostgresConfigured();
-  const config = getDbConfigSummary();
-
-  if (!wantDb) {
-    return res.status(200).json({
-      ok: true,
-      service: "akab-portal",
-      postgresConfigured: configured,
-      config: {
-        host: config.host,
-        database: config.database,
-        user: config.user,
-        passwordSet: config.passwordSet,
-        source: config.source,
-      },
-      ts: new Date().toISOString(),
-    });
-  }
-
-  if (!configured) {
-    return res.status(503).json({
-      ok: false,
-      service: "akab-portal",
-      postgresConfigured: false,
-      postgresOk: false,
-      error: "POSTGRES_* / DATABASE_URL not set",
-      config,
-      ts: new Date().toISOString(),
-    });
-  }
-
-  const ping = await pingDatabase(4000);
-  return res.status(ping.ok ? 200 : 503).json({
-    ok: ping.ok,
+  const summary = getDbConfigSummary();
+  const base = {
+    ok: true as boolean,
     service: "akab-portal",
-    postgresConfigured: true,
+    postgresConfigured: summary.configured,
+    postgresHost: summary.host,
+    postgresDb: summary.database,
+    postgresUser: summary.user,
+    passwordSet: summary.passwordSet,
+    ts: new Date().toISOString(),
+  };
+
+  if (!checkDb) {
+    return res.status(200).json(base);
+  }
+
+  if (!summary.configured) {
+    return res.status(200).json({
+      ...base,
+      ok: false,
+      postgresOk: false,
+      error: "PostgreSQL not configured",
+    });
+  }
+
+  const ping = await pingDatabase();
+  return res.status(ping.ok ? 200 : 503).json({
+    ...base,
+    ok: ping.ok,
     postgresOk: ping.ok,
     database: ping.database ?? null,
+    userCount: ping.userCount ?? null,
     error: ping.error ?? null,
-    latencyMs: ping.latencyMs ?? null,
-    config: {
-      host: config.host,
-      database: config.database,
-      user: config.user,
-      passwordSet: config.passwordSet,
-      source: config.source,
-    },
-    ts: new Date().toISOString(),
   });
 }

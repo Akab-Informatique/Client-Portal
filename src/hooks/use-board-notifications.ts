@@ -110,7 +110,7 @@ export function useBoardNotifications() {
           .from(schema.board_messages)
           .where(eq(schema.board_messages.company_id, companyId));
 
-        const fresh = rows
+        const fresh = (rows as Array<{ id: number; title: string; body: string; author_name: string }>)
           .filter((m) => m.id > lastNotified)
           .sort((a, b) => a.id - b.id);
 

@@ -241,7 +241,10 @@ export function TechniciansPage() {
     setSaving(true);
     await dbReady;
 
-    const all = await db.select().from(schema.users);
+    const all = (await db.select().from(schema.users)) as Array<{
+      id: number;
+      email: string;
+    }>;
     const emailTaken = all.some(
       (u) => u.email.toLowerCase() === email && u.id !== editing?.id,
     );
@@ -251,7 +254,11 @@ export function TechniciansPage() {
       return;
     }
 
-    const companies = await db.select().from(schema.companies);
+    const companies = (await db.select().from(schema.companies)) as Array<{
+      id: number;
+      type: string;
+      name: string;
+    }>;
     let internal = companies.find((c) => c.type === "internal");
     if (!internal) {
       const [created] = await db
@@ -287,6 +294,11 @@ export function TechniciansPage() {
         await refreshUser();
       }
     } else {
+      if (!internal) {
+        setSaving(false);
+        setError("Internal company not found.");
+        return;
+      }
       await db.insert(schema.users).values({
         name: form.name.trim(),
         email,

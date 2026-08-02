@@ -69,13 +69,24 @@ location / {
 }
 ```
 
-### Option B — Docker
+### Option B — Docker + PostgreSQL (Debian 13 / any Docker host)
 
 ```bash
-cp .env.example .env   # fill secrets
+# One-shot:
+bash scripts/debian-install.sh
+
+# Or manually:
+cp .env.example .env          # set POSTGRES_PASSWORD (letters/numbers)
 docker compose up -d --build
+curl -sS -m 8  "http://127.0.0.1:3000/api/health?db=1"
+curl -sS -m 30 "http://127.0.0.1:3000/api/db/status?migrate=1"
 # → http://localhost:3000
+# Login: admin@akab.local / admin123
+# Data volume akab_pgdata survives upgrades — NEVER: docker compose down -v
+# Upgrade: bash scripts/upgrade.sh
 ```
+
+Full guide: **[INSTALL.md](./INSTALL.md)**.
 
 ### Option C — Vercel
 

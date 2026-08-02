@@ -1,36 +1,35 @@
-# AKAB Portal — production stack
-#
-# App + PostgreSQL with a named volume so upgrades never wipe data.
+# AKAB Portal — production stack for Debian 12/13 (and any Docker host)
 #
 # First install:
-#   cp .env.example .env   # fill secrets + POSTGRES_PASSWORD
+#   cp .env.example .env
+#   # set POSTGRES_PASSWORD=...
 #   docker compose up -d --build
 #
-# Upgrade (keeps Postgres data):
-#   git pull
+# Upgrade (keeps data):
+#   git pull origin master
 #   docker compose up -d --build
 #
-# NEVER run: docker compose down -v   ← the -v flag deletes the database volume
+# NEVER: docker compose down -v   ← deletes the database volume
 
 services:
   db:
-    image: postgres:16-alpine
+    image: postgres:16-bookworm
     restart: unless-stopped
     environment:
       POSTGRES_DB: ${POSTGRES_DB:-akab}
       POSTGRES_USER: ${POSTGRES_USER:-akab}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}
-    # Optional: expose Postgres only on localhost for admin tools / backups
+    # Localhost only — app reaches db via Docker network name "db"
     ports:
       - "${POSTGRES_PUBLISH_PORT:-127.0.0.1:5432}:5432"
     volumes:
-      # Durable data — survives image rebuilds and container recreation
       - akab_pgdata:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB"]
+      test: ["CMD-SHELL", "pg_isready -U \"$$POSTGRES_USER\" -d \"$$POSTGRES_DB\""]
       interval: 5s
       timeout: 5s
-      retries: 20
+      retries: 30
+      start_period: 10s
     networks:
       - akab
 
@@ -48,25 +47,16 @@ services:
       NODE_ENV: production
       PORT: 3000
       HOST: 0.0.0.0
-      # Discrete vars (preferred). The app URL-encodes the password itself.
-      # Do NOT interpolate POSTGRES_PASSWORD into DATABASE_URL here — special
-      # characters (@ # $ % etc.) break the URL and cause boot timeouts.
+      # Discrete connection — app never builds a fragile DATABASE_URL
       POSTGRES_HOST: db
       POSTGRES_PORT: "5432"
       POSTGRES_DB: ${POSTGRES_DB:-akab}
       POSTGRES_USER: ${POSTGRES_USER:-akab}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
-      # Clear any DATABASE_URL from env_file so discrete vars win
-      DATABASE_URL: ""
+      PG_CONNECT_TIMEOUT_MS: "4000"
+      PG_QUERY_TIMEOUT_MS: "12000"
     healthcheck:
-      # Liveness only (no DB) so a slow Postgres never marks the app unhealthy forever
-      test:
-        [
-          "CMD",
-          "node",
-          "-e",
-          "fetch('http://127.0.0.1:3000/api/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))",
-        ]
+      test: ["CMD", "curl", "-fsS", "-m", "4", "http://127.0.0.1:3000/api/health"]
       interval: 15s
       timeout: 5s
       retries: 10
@@ -75,7 +65,6 @@ services:
       - akab
 
 volumes:
-  # Named volume — DO NOT remove unless you intend to destroy all portal data
   akab_pgdata:
     name: akab_pgdata
 

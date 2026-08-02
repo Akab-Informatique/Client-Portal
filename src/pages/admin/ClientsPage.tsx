@@ -493,7 +493,9 @@ export function ClientsPage() {
     const email = userForm.email.trim().toLowerCase();
     setSaving(true);
     await dbReady;
-    const existing = await db.select().from(schema.users);
+    const existing = (await db.select().from(schema.users)) as Array<{
+      email: string;
+    }>;
     if (existing.some((u) => u.email.toLowerCase() === email)) {
       setSaving(false);
       setError("A user with this email already exists.");

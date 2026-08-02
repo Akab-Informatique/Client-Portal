@@ -355,50 +355,52 @@ const server = http.createServer(async (req, res) => {
 });
 
 server.listen(PORT, HOST, () => {
-  console.log(`AKAB Portal v1 listening on http://${HOST}:${PORT}`);
+  console.log(`AKAB Portal listening on http://${HOST}:${PORT}`);
   console.log(`  static: ${distDir}`);
   console.log(`  api:    ${apiDir}`);
+  console.log(`  node:   ${process.version}`);
 
-  // Apply additive PostgreSQL migrations + empty-DB bootstrap on boot (non-blocking)
+  // Listen first; migrate in background so /api/health never blocks on DB
   import(pathToFileURL(path.join(apiDir, "_lib/pg.ts")).href)
     .then(async (mod) => {
       const summary = mod.getDbConfigSummary?.() || {};
       if (!mod.isPostgresConfigured?.()) {
         console.log(
-          "  db:     NOT CONFIGURED (set POSTGRES_HOST/USER/PASSWORD/DB in compose/.env)",
+          "  db:     NOT configured — set POSTGRES_PASSWORD in .env (Compose sets HOST=db)",
         );
         return;
       }
       console.log(
-        `  db:     connecting → host=${summary.host || "?"} db=${summary.database || "?"} user=${summary.user || "?"} passwordSet=${summary.passwordSet}`,
+        `  db:     host=${summary.host} port=${summary.port} db=${summary.database} user=${summary.user} passwordSet=${summary.passwordSet} source=${summary.source}`,
       );
       try {
-        const ping = await mod.pingDatabase?.(5000);
+        const ping = await mod.pingDatabase();
         if (!ping?.ok) {
           console.error("  db:     PING FAILED:", ping?.error || "unknown");
+          console.error(
+            "  db:     Fix POSTGRES_PASSWORD (must match existing volume) or check: docker compose logs db",
+          );
           return;
         }
-        console.log(
-          `  db:     ping ok (${ping.latencyMs || "?"}ms) — ${ping.database}`,
-        );
+        console.log(`  db:     ping ok — database=${ping.database}`);
         await mod.runMigrations();
         const boot = await mod.ensureBootstrap();
-        const status = await mod.getDbStatus({ migrate: false });
+        const status = await mod.getDbStatus();
         console.log(
-          `  db:     PostgreSQL ok — ${status.database || "db"} @ ${status.host || "host"}` +
+          `  db:     READY — ${status.database || "db"} @ ${status.host || "host"}` +
             (status.userCount != null ? ` — users=${status.userCount}` : "") +
-            (boot?.seeded ? " — bootstrap seeded" : ""),
+            (boot?.seeded ? " — seeded admin@akab.local" : ""),
         );
       } catch (err) {
         console.error(
-          "  db:     PostgreSQL migration/connect FAILED:",
+          "  db:     FAILED:",
           err instanceof Error ? err.message : err,
         );
       }
     })
     .catch((err) => {
-      console.warn(
-        "  db:     could not load pg module:",
+      console.error(
+        "  db:     module load failed:",
         err instanceof Error ? err.message : err,
       );
     });

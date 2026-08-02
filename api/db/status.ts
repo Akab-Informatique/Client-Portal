@@ -1,72 +1,142 @@
 import type { VercelRequest, VercelResponse } from "@vercel/node";
-import { getDbStatus, isPostgresConfigured } from "../_lib/pg.js";
+import {
+  ensureBootstrap,
+  getDbConfigSummary,
+  getDbStatus,
+  isPostgresConfigured,
+  pingDatabase,
+  runMigrations,
+} from "../_lib/pg.js";
+
+function withDeadline<T>(promise: Promise<T>, ms: number, label: string): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const t = setTimeout(
+      () => reject(new Error(`${label} timed out after ${ms}ms`)),
+      ms,
+    );
+    promise.then(
+      (v) => {
+        clearTimeout(t);
+        resolve(v);
+      },
+      (e) => {
+        clearTimeout(t);
+        reject(e);
+      },
+    );
+  });
+}
 
 /**
  * GET /api/db/status
- *
  * Fast by default (ping only).
- * ?migrate=1 — run additive migrations + empty-DB bootstrap, then report.
- *
- * Always returns within ~25s max (timeouts inside pg helper).
+ * ?migrate=1 — also run additive migrations + empty-DB bootstrap (bounded).
  */
 export default async function handler(req: VercelRequest, res: VercelResponse) {
-  // Never let this handler hang the HTTP request forever
-  const hardDeadlineMs = 28000;
-  let settled = false;
-  const timer = setTimeout(() => {
-    if (settled || res.headersSent) return;
-    settled = true;
-    res.status(503).json({
-      mode: isPostgresConfigured() ? "postgres" : "none",
-      configured: isPostgresConfigured(),
-      ok: false,
-      error: `DB status handler timed out after ${hardDeadlineMs}ms. Check: docker compose ps && docker compose logs --tail=80 app db`,
-    });
-  }, hardDeadlineMs);
+  // Never let this handler hang the client/curl forever
+  res.setHeader("Cache-Control", "no-store");
 
   try {
     if (req.method !== "GET") {
       res.setHeader("Allow", "GET");
-      settled = true;
-      clearTimeout(timer);
       return res.status(405).json({ error: "Method not allowed" });
     }
 
+    const summary = getDbConfigSummary();
     const wantMigrate =
       String(req.query.migrate ?? "") === "1" ||
       String(req.query.migrate ?? "").toLowerCase() === "true";
 
-    const status = await getDbStatus({ migrate: wantMigrate });
-    if (settled || res.headersSent) return;
-    settled = true;
-    clearTimeout(timer);
+    if (!summary.configured) {
+      return res.status(200).json({
+        mode: "none",
+        configured: false,
+        ok: false,
+        host: null,
+        database: null,
+        migrated: false,
+        seeded: false,
+        userCount: null,
+        passwordSet: false,
+        source: "none",
+        error:
+          "POSTGRES_* not set. In Docker Compose set POSTGRES_PASSWORD in .env",
+        hint: "Edit /opt/akab-portal/.env then: docker compose up -d --build",
+      });
+    }
 
+    if (wantMigrate && isPostgresConfigured()) {
+      try {
+        await withDeadline(
+          (async () => {
+            await runMigrations();
+            await ensureBootstrap();
+          })(),
+          25000,
+          "migrate+bootstrap",
+        );
+      } catch (err) {
+        return res.status(200).json({
+          mode: "postgres",
+          configured: true,
+          ok: false,
+          host: summary.host,
+          database: summary.database,
+          passwordSet: summary.passwordSet,
+          source: summary.source,
+          migrated: false,
+          seeded: false,
+          userCount: null,
+          error:
+            err instanceof Error ? err.message : "Migration/bootstrap failed",
+          hint:
+            "Check: docker compose logs app db | Verify POSTGRES_PASSWORD matches the volume",
+        });
+      }
+    }
+
+    // Prefer fast ping; fall back to full status
+    const ping = await withDeadline(pingDatabase(), 8000, "status ping");
+    if (!ping.ok) {
+      return res.status(200).json({
+        mode: "postgres",
+        configured: true,
+        ok: false,
+        host: summary.host,
+        database: summary.database,
+        passwordSet: summary.passwordSet,
+        source: summary.source,
+        migrated: false,
+        seeded: false,
+        userCount: null,
+        error: ping.error || "Database not reachable",
+        hint:
+          "docker compose ps && docker compose logs --tail=80 app db && verify POSTGRES_PASSWORD",
+      });
+    }
+
+    const status = await getDbStatus();
     return res.status(200).json({
-      mode: status.backend === "postgres" ? "postgres" : "none",
-      configured: status.configured,
-      ok: status.ok,
-      host: status.host ?? null,
-      database: status.database ?? null,
+      mode: "postgres",
+      configured: true,
+      ok: true,
+      host: summary.host,
+      database: status.database ?? summary.database,
+      passwordSet: summary.passwordSet,
+      source: summary.source,
       migrated: status.migrated ?? false,
       seeded: status.seeded ?? false,
-      userCount: status.userCount ?? null,
-      error: status.error ?? null,
-      config: status.config ?? null,
-      hint: status.configured
-        ? status.ok
-          ? "PostgreSQL is ready. Portal data is shared and durable."
-          : "PostgreSQL is configured but not reachable. Check POSTGRES_PASSWORD matches the volume, and db container is healthy."
-        : "No POSTGRES_* / DATABASE_URL — set them in .env and restart compose.",
+      userCount: status.userCount ?? ping.userCount ?? null,
+      error: null,
+      hint: "PostgreSQL is ready. Portal data is shared and durable.",
     });
   } catch (err) {
-    if (settled || res.headersSent) return;
-    settled = true;
-    clearTimeout(timer);
-    return res.status(500).json({
+    return res.status(200).json({
       mode: "none",
-      configured: false,
+      configured: isPostgresConfigured(),
       ok: false,
       error: err instanceof Error ? err.message : "Server error",
+      hint: "docker compose logs --tail=100 app",
     });
   }
 }

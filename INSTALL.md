@@ -1,125 +1,152 @@
-# Install AKAB Portal on your server (production)
+# Install AKAB Portal on Debian 13 (production + PostgreSQL)
 
-This guide installs a **production-ready** stack:
+Tested target: **Debian 13 (Trixie)** with Docker Engine.  
+Also works on Debian 12 / Ubuntu 22.04+.
 
 | Component | Role |
 |-----------|------|
-| **App** (Docker) | React UI + `/api/*` (Autotask, Graph, IT Glue, SMTP, DB proxy) |
-| **PostgreSQL 16** (Docker) | Durable portal data (users, companies, boards, roles…) |
+| **App** (Docker, Debian slim image) | UI + `/api/*` + DB proxy |
+| **PostgreSQL 16** (Docker) | Durable portal data |
 | **Volume `akab_pgdata`** | Survives every upgrade — **never delete it** |
-
-Tickets / docs / vault secrets stay in Autotask, SharePoint, IT Glue.
 
 ---
 
-## Requirements
-
-- Linux server (Ubuntu 22.04+ recommended) with public IP or internal DNS
-- Docker Engine + Docker Compose plugin
-- Git
-- Ports: **80/443** (HTTPS reverse proxy) and optionally **3000** (app, localhost-only is fine)
-- 1+ GB RAM free
+## One-command install (recommended)
 
 ```bash
-# Ubuntu quick install of Docker (if needed)
-sudo apt update
-sudo apt install -y ca-certificates curl git
+# As a sudo-capable user
+sudo apt-get update
+sudo apt-get install -y git curl ca-certificates
+
+# Clone
+sudo mkdir -p /opt && sudo chown "$USER":"$USER" /opt
+cd /opt
+git clone -b master https://github.com/solutidev/Client-Portal.git akab-portal
+cd akab-portal
+
+# Install Docker (if needed) + build + start Postgres + app
+bash scripts/debian-install.sh
+```
+
+Then open: `http://YOUR_SERVER_IP:3000`  
+Login: `admin@akab.local` / `admin123` → **change password immediately**.
+
+---
+
+## Manual install (step by step)
+
+### 1) Docker
+
+```bash
+sudo apt-get update
+sudo apt-get install -y ca-certificates curl git
 curl -fsSL https://get.docker.com | sudo sh
 sudo usermod -aG docker $USER
-# log out/in, then:
+# log out and back in
 docker compose version
 ```
 
----
-
-## 1) First install
-
-### A. Get the code
+### 2) Code
 
 ```bash
-sudo mkdir -p /opt
-sudo chown "$USER":"$USER" /opt
+sudo mkdir -p /opt && sudo chown "$USER":"$USER" /opt
 cd /opt
-git clone https://github.com/YOUR_ORG/akab-portal.git
+git clone -b master https://github.com/solutidev/Client-Portal.git akab-portal
 cd akab-portal
 ```
 
-### B. Configure secrets
+### 3) `.env`
 
 ```bash
 cp .env.example .env
-nano .env   # or vim
+nano .env
 ```
 
-**Minimum for production:**
+**Required:**
 
 ```env
-# Strong password — app + Postgres share this via compose
 POSTGRES_DB=akab
 POSTGRES_USER=akab
-# Avoid @ # : / ? in the password when possible.
-# If you need `$`, write it as `$$` in the .env file (Docker Compose rule).
-POSTGRES_PASSWORD=use-a-long-random-password-here
-
-# Integrations (as needed)
-AUTOTASK_INTEGRATION_CODE=...
-AUTOTASK_USERNAME=...
-AUTOTASK_SECRET=...
-MICROSOFT_TENANT_ID=...
-MICROSOFT_CLIENT_ID=...
-MICROSOFT_CLIENT_SECRET=...
-ITGLUE_API_KEY=...
-ITGLUE_REGION=us
-
-# Board email (optional)
-SMTP_HOST=...
-SMTP_PORT=587
-SMTP_USER=...
-SMTP_PASS=...
-SMTP_FROM_EMAIL=portal@yourdomain.com
-SMTP_FROM_NAME=AKAB Portal
-
+POSTGRES_PASSWORD=UseLongPasswordWithoutSpecialChars123
 PORT=3000
 ```
 
-Docker Compose **automatically** sets `DATABASE_URL` inside the app container to the `db` service. You do **not** need to hand-write `DATABASE_URL` when using Compose.
+Tips:
+- Prefer letters + numbers (no `@ # : / ? $` if possible)
+- If password contains `$`, write `$$` in `.env` (Docker Compose rule)
+- Do **not** set `DATABASE_URL` when using Compose — the app uses `POSTGRES_HOST=db`
 
-### C. Start
+Optional integrations: `AUTOTASK_*`, `MICROSOFT_*`, `ITGLUE_*`, `SMTP_*` (see `.env.example`).
+
+### 4) Start
 
 ```bash
-# scripts/ is in the repo — no chmod needed; always use: bash scripts/...
 docker compose up -d --build
+docker compose ps
 ```
 
-Check:
+### 5) Verify (always quote URLs + use timeouts)
 
 ```bash
-docker compose ps
-curl -s http://127.0.0.1:3000/api/db/status?migrate=1
-# → "mode":"postgres","ok":true
+curl -sS -m 5  "http://127.0.0.1:3000/api/health"
+curl -sS -m 8  "http://127.0.0.1:3000/api/health?db=1"
+curl -sS -m 10 "http://127.0.0.1:3000/api/db/status"
+curl -sS -m 30 "http://127.0.0.1:3000/api/db/status?migrate=1"
+docker compose logs --tail=60 app
 ```
 
-Open `http://YOUR_SERVER:3000` (or your HTTPS domain).
+Healthy DB status:
 
-### D. First login
+```json
+{"mode":"postgres","ok":true,"userCount":3,...}
+```
 
-On an **empty** database the app creates bootstrap accounts once:
+App log line:
 
-| Email | Password | Role |
-|-------|----------|------|
-| `admin@akab.local` | `admin123` | Admin |
-| `tech@akab.local` | `tech123` | Technician |
-| `client@acme.example` | `client123` | Client |
-
-**Change these passwords immediately** (Profile → Change password), or create real staff and disable demos.
-
-Settings → **Database** should show **PostgreSQL ready**.
+```text
+db: PostgreSQL ok — akab @ db — users=3
+```
 
 ---
 
-## 2) HTTPS (recommended)
+## Upgrades (no data loss)
 
-Example **Caddy** (`/etc/caddy/Caddyfile`):
+```bash
+cd /opt/akab-portal
+bash scripts/upgrade.sh
+```
+
+Or:
+
+```bash
+cd /opt/akab-portal
+bash scripts/backup-db.sh
+git pull origin master
+docker compose up -d --build
+```
+
+**Never:**
+
+```bash
+docker compose down -v
+docker volume rm akab_pgdata
+```
+
+---
+
+## HTTPS (Caddy on Debian)
+
+```bash
+sudo apt-get install -y debian-keyring debian-archive-keyring apt-transport-https curl
+curl -1sLf 'https://dl.cloudsmith.io/public/caddy/stable/gpg.key' \
+  | sudo gpg --dearmor -o /usr/share/keyrings/caddy-stable-archive-keyring.gpg
+curl -1sLf 'https://dl.cloudsmith.io/public/caddy/stable/debian.deb.txt' \
+  | sudo tee /etc/apt/sources.list.d/caddy-stable.list
+sudo apt-get update
+sudo apt-get install -y caddy
+```
+
+`/etc/caddy/Caddyfile`:
 
 ```caddy
 portal.yourdomain.com {
@@ -127,184 +154,55 @@ portal.yourdomain.com {
 }
 ```
 
-Or Nginx:
-
-```nginx
-server {
-  listen 443 ssl http2;
-  server_name portal.yourdomain.com;
-  # ssl_certificate ...;
-  # ssl_certificate_key ...;
-
-  location / {
-    proxy_pass http://127.0.0.1:3000;
-    proxy_http_version 1.1;
-    proxy_set_header Host $host;
-    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-    proxy_set_header X-Forwarded-Proto $scheme;
-  }
-}
-```
-
-Bind app to localhost only if the proxy is on the same host (optional hardening in compose `ports`: `"127.0.0.1:3000:3000"`).
-
----
-
-## 3) Easy upgrades (no data loss)
-
-From `/opt/akab-portal`:
-
 ```bash
-bash scripts/upgrade.sh
-# or pin a release:
-# bash scripts/upgrade.sh v1.1.0
-```
-
-What it does:
-
-1. **`pg_dump` backup** → `./backups/`
-2. `git pull` (or checkout tag)
-3. `docker compose up -d --build` — rebuilds **app** image only  
-4. **Keeps volume `akab_pgdata`** (all portal rows stay)
-5. Runs **additive** SQL migrations on boot (`CREATE IF NOT EXISTS` / `ADD COLUMN IF NOT EXISTS` only)
-
-### Manual upgrade (same safety)
-
-```bash
-bash scripts/backup-db.sh
-git pull origin master
-docker compose up -d --build
-curl -s http://127.0.0.1:3000/api/db/status?migrate=1
-```
-
-### Never do this in production
-
-```bash
-docker compose down -v     # -v DELETES the database volume
-docker volume rm akab_pgdata
-```
-
-Stopping/restarting without `-v` is fine:
-
-```bash
-docker compose down        # stops containers, keeps volume
-docker compose up -d
+sudo systemctl reload caddy
 ```
 
 ---
 
-## 4) Backups
-
-```bash
-# Manual
-bash scripts/backup-db.sh /var/backups/akab
-
-# Cron example (nightly 02:15)
-# 15 2 * * * cd /opt/akab-portal && bash scripts/backup-db.sh /var/backups/akab >> /var/log/akab-backup.log 2>&1
-```
-
-Restore (replaces DB contents; volume stays):
-
-```bash
-bash scripts/restore-db.sh /var/backups/akab/akab-pg-YYYYMMDD-HHMMSS.sql.gz
-docker compose restart app
-```
-
-Also keep off-server copies (S3, NAS, another site).
-
----
-
-## 5) How data survives upgrades
-
-```
-┌─────────────┐     rebuild OK      ┌──────────────────┐
-│  app image  │ ──────────────────► │  new app code    │
-└─────────────┘                     └────────┬─────────┘
-                                             │ SQL (additive migrate)
-┌─────────────────────┐                      ▼
-│ volume akab_pgdata  │ ◄──── never removed ─┤ PostgreSQL
-│ users, companies,   │                      │
-│ messages, roles …   │                      │
-└─────────────────────┘
-```
-
-- **Code** → Git  
-- **Secrets** → server `.env` (not in Git)  
-- **Portal rows** → Postgres volume  
-- **External systems** → Autotask / Graph / IT Glue  
-
----
-
-## 6) Install without Docker (optional)
-
-```bash
-# Install Postgres 16 on the host, create role/db, then:
-cd /opt/akab-portal
-cp .env.example .env
-# set DATABASE_URL=postgres://akab:PASSWORD@127.0.0.1:5432/akab
-npm ci
-npm run build
-npm start
-# put under systemd/pm2 + reverse proxy
-```
-
-Migrations still run automatically on API boot / first query.
-
----
-
-## 7) Develop here, publish there
-
-| Where | What |
-|-------|------|
-| **This sandbox / laptop** | Feature work (`npm run dev`). Can use PGlite or a dev Postgres. |
-| **GitHub** | Source of truth for code + tags (`v1.0.1`, …) |
-| **Your server** | `git pull` + `bash scripts/upgrade.sh` |
-
-Never point the production `DATABASE_URL` at a disposable database.  
-Never commit `.env`.
-
----
-
-## 8) Verify production health
-
-| Check | Command / UI |
-|-------|----------------|
-| Containers | `docker compose ps` |
-| DB API | `curl -s localhost:3000/api/db/status?migrate=1` |
-| UI | Settings → Database → **PostgreSQL ready** |
-| Login | Admin account works after reboot |
-| Upgrade dry-run | `bash scripts/backup-db.sh && docker compose up -d --build` |
-
----
-
-## 9) Troubleshooting
+## Troubleshooting
 
 | Symptom | Fix |
 |---------|-----|
-| Settings shows “Local browser only” | `DATABASE_URL` / Compose DB not reachable — `docker compose logs db app` |
-| `password authentication failed` | `POSTGRES_PASSWORD` mismatch; if you change it after first boot you must recreate volume (**destroys data**) or `ALTER USER` inside Postgres |
-| Empty site after upgrade | You used `down -v` — restore from `./backups` |
-| Port 3000 in use | Change `PORT=8080` in `.env` and proxy target |
-| Migrations error | `docker compose logs app` — usually DB not healthy yet; restart app after db is healthy |
+| `curl` hangs | Use quotes + `-m`: `curl -sS -m 8 "http://127.0.0.1:3000/api/health"` |
+| `password authentication failed` | `POSTGRES_PASSWORD` changed after first boot. Restore original password **or** wipe volume (data loss): `docker compose down && docker volume rm akab_pgdata && docker compose up -d --build` |
+| `POSTGRES_* not set` | Create `.env` with `POSTGRES_PASSWORD=...` |
+| Port 3000 closed | `sudo ss -lntp \| grep 3000` · open firewall if needed |
+| App unhealthy | `docker compose logs --tail=100 app` |
+| Still broken after pull | `docker compose build --no-cache app && docker compose up -d` |
+
+### Nuclear rebuild (keeps DB volume)
+
+```bash
+cd /opt/akab-portal
+git fetch origin && git checkout master && git pull origin master
+docker compose build --no-cache
+docker compose up -d
+```
+
+### Nuclear rebuild (WIPES portal DB — demo only)
+
+```bash
+docker compose down
+docker volume rm akab_pgdata
+docker compose up -d --build
+```
 
 ---
 
-## Quick reference card
+## Backups
 
 ```bash
-# Install once
-git clone <repo> /opt/akab-portal && cd /opt/akab-portal
-cp .env.example .env   # set POSTGRES_PASSWORD + integrations
-docker compose up -d --build
-
-# Every update
-cd /opt/akab-portal && bash scripts/upgrade.sh
-
-# Backup
-bash scripts/backup-db.sh
-
-# Logs
-docker compose logs -f app
+bash scripts/backup-db.sh /var/backups/akab
+# restore:
+# bash scripts/restore-db.sh /var/backups/akab/akab-pg-….sql.gz
 ```
 
-You’re done: **develop → push Git → upgrade script on server → data stays in Postgres.**
+---
+
+## Develop → production
+
+1. Build features in Devs.ai / laptop  
+2. Push to GitHub `master`  
+3. On server: `bash scripts/upgrade.sh`  
+4. Data stays in Postgres volume `akab_pgdata`

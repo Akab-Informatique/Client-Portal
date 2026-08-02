@@ -145,7 +145,10 @@ export async function seedIfNeeded() {
   ]);
 
   const adminRows = await db.select().from(schema.users).limit(5);
-  const admin = adminRows.find((u) => u.role === "admin") ?? adminRows[0];
+  const admin =
+    (adminRows as Array<{ id: number; name: string; role: string }>).find(
+      (u) => u.role === "admin",
+    ) ?? (adminRows[0] as { id: number; name: string; role: string });
 
   await db.insert(schema.board_messages).values([
     {
