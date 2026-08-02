@@ -18,6 +18,8 @@ export type DbBackend = "postgres" | "none";
 let pool: pg.Pool | null = null;
 let migratePromise: Promise<void> | null = null;
 let bootstrapPromise: Promise<{ seeded: boolean }> | null = null;
+let migrateDone = false;
+let bootstrapDone = false;
 
 function cleanEnv(value: string | undefined): string {
   if (!value) return "";
@@ -30,6 +32,28 @@ function cleanEnv(value: string | undefined): string {
     v = v.slice(1, -1).trim();
   }
   return v;
+}
+
+function withTimeout<T>(
+  promise: Promise<T>,
+  ms: number,
+  label: string,
+): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const timer = setTimeout(() => {
+      reject(new Error(`${label} timed out after ${ms}ms`));
+    }, ms);
+    promise.then(
+      (value) => {
+        clearTimeout(timer);
+        resolve(value);
+      },
+      (err) => {
+        clearTimeout(timer);
+        reject(err);
+      },
+    );
+  });
 }
 
 /**
@@ -65,6 +89,69 @@ export function isPostgresConfigured(): boolean {
   return getDatabaseUrl() != null;
 }
 
+/** Safe diagnostics — never includes password. */
+export function getDbConfigSummary(): {
+  configured: boolean;
+  host: string | null;
+  port: string | null;
+  database: string | null;
+  user: string | null;
+  passwordSet: boolean;
+  source: "postgres_env" | "database_url" | "none";
+} {
+  const host = cleanEnv(process.env.POSTGRES_HOST);
+  const db =
+    cleanEnv(process.env.POSTGRES_DB) ||
+    cleanEnv(process.env.POSTGRES_DATABASE);
+  const user = cleanEnv(process.env.POSTGRES_USER);
+  const password = cleanEnv(process.env.POSTGRES_PASSWORD);
+  if (host && db && user) {
+    return {
+      configured: true,
+      host,
+      port: cleanEnv(process.env.POSTGRES_PORT) || "5432",
+      database: db,
+      user,
+      passwordSet: Boolean(password),
+      source: "postgres_env",
+    };
+  }
+  const url = cleanEnv(process.env.DATABASE_URL);
+  if (url) {
+    try {
+      const u = new URL(url.replace(/^postgres(ql)?:/i, "http:"));
+      return {
+        configured: true,
+        host: u.hostname || null,
+        port: u.port || "5432",
+        database: (u.pathname || "/").replace(/^\//, "") || null,
+        user: decodeURIComponent(u.username || "") || null,
+        passwordSet: Boolean(u.password),
+        source: "database_url",
+      };
+    } catch {
+      return {
+        configured: true,
+        host: null,
+        port: null,
+        database: null,
+        user: null,
+        passwordSet: url.includes("@"),
+        source: "database_url",
+      };
+    }
+  }
+  return {
+    configured: false,
+    host: null,
+    port: null,
+    database: null,
+    user: null,
+    passwordSet: false,
+    source: "none",
+  };
+}
+
 export function getPool(): pg.Pool {
   if (pool) return pool;
   const connectionString = getDatabaseUrl();
@@ -79,13 +166,17 @@ export function getPool(): pg.Pool {
     cleanEnv(process.env.POSTGRES_SSL_REJECT_UNAUTHORIZED).toLowerCase() !==
     "false";
 
+  // Keep connect timeout short so curl / browser never hang forever
+  const connectTimeout =
+    Number(cleanEnv(process.env.PG_CONNECT_TIMEOUT_MS) || "3000") || 3000;
+
   pool = new Pool({
     connectionString,
     max: Number(cleanEnv(process.env.PG_POOL_MAX) || "10") || 10,
     idleTimeoutMillis: 30_000,
-    // Fail fast so the UI never waits 15–25s on a bad connection string
-    connectionTimeoutMillis:
-      Number(cleanEnv(process.env.PG_CONNECT_TIMEOUT_MS) || "5000") || 5000,
+    connectionTimeoutMillis: connectTimeout,
+    statement_timeout: 10_000,
+    query_timeout: 10_000,
     ssl:
       sslEnv === "true" ||
       sslEnv === "1" ||
@@ -99,6 +190,51 @@ export function getPool(): pg.Pool {
   });
 
   return pool;
+}
+
+/** Lightweight SELECT 1 — no migrations. Always time-bounded. */
+export async function pingDatabase(timeoutMs = 4000): Promise<{
+  ok: boolean;
+  error?: string;
+  database?: string;
+  user?: string;
+  latencyMs?: number;
+}> {
+  if (!isPostgresConfigured()) {
+    return { ok: false, error: "PostgreSQL is not configured" };
+  }
+  const started = Date.now();
+  try {
+    const p = getPool();
+    const r = await withTimeout(
+      p.query("SELECT current_database() AS database, current_user AS user"),
+      timeoutMs,
+      "PostgreSQL ping",
+    );
+    const row = r.rows[0] as { database?: string; user?: string };
+    return {
+      ok: true,
+      database: row?.database,
+      user: row?.user,
+      latencyMs: Date.now() - started,
+    };
+  } catch (err) {
+    // Drop pool so next attempt rebuilds with fresh connections
+    try {
+      if (pool) {
+        const old = pool;
+        pool = null;
+        void old.end().catch(() => undefined);
+      }
+    } catch {
+      /* ignore */
+    }
+    return {
+      ok: false,
+      error: err instanceof Error ? err.message : "Database ping failed",
+      latencyMs: Date.now() - started,
+    };
+  }
 }
 
 /** Additive schema — safe to re-run on every boot / upgrade. Never drops data. */
@@ -231,11 +367,16 @@ const TECH_PERMISSIONS_JSON = JSON.stringify({
  */
 export async function runMigrations(): Promise<void> {
   if (!isPostgresConfigured()) return;
+  if (migrateDone) return;
   if (migratePromise) return migratePromise;
 
   migratePromise = (async () => {
     const p = getPool();
-    const client = await p.connect();
+    const client = await withTimeout(
+      p.connect(),
+      5000,
+      "PostgreSQL connect (migrate)",
+    );
     try {
       await client.query("BEGIN");
       for (const sql of MIGRATION_STATEMENTS) {
@@ -250,6 +391,7 @@ export async function runMigrations(): Promise<void> {
         `UPDATE users SET board_email_opt_in = TRUE WHERE board_email_opt_in IS NULL`,
       );
       await client.query("COMMIT");
+      migrateDone = true;
       console.log(
         "[akab-db] PostgreSQL migrations applied (additive, non-destructive).",
       );
@@ -264,9 +406,12 @@ export async function runMigrations(): Promise<void> {
     } finally {
       client.release();
     }
-  })();
+  })().catch((err) => {
+    migratePromise = null;
+    throw err;
+  });
 
-  return migratePromise;
+  return withTimeout(migratePromise, 20000, "PostgreSQL migrations");
 }
 
 /**
@@ -275,14 +420,18 @@ export async function runMigrations(): Promise<void> {
  */
 export async function ensureBootstrap(): Promise<{ seeded: boolean }> {
   if (!isPostgresConfigured()) return { seeded: false };
+  if (bootstrapDone) return { seeded: false };
   if (bootstrapPromise) return bootstrapPromise;
 
   bootstrapPromise = (async () => {
     await runMigrations();
     const p = getPool();
-    const client = await p.connect();
+    const client = await withTimeout(
+      p.connect(),
+      5000,
+      "PostgreSQL connect (bootstrap)",
+    );
     try {
-      // System roles (idempotent)
       let adminRoleId: number | null = null;
       let techRoleId: number | null = null;
 
@@ -318,7 +467,6 @@ export async function ensureBootstrap(): Promise<{ seeded: boolean }> {
       );
       const n = Number(userCount.rows[0]?.n || "0");
       if (n > 0) {
-        // Backfill staff_role_id for staff missing one
         if (adminRoleId != null) {
           await client.query(
             `UPDATE users SET staff_role_id = $1
@@ -333,6 +481,7 @@ export async function ensureBootstrap(): Promise<{ seeded: boolean }> {
             [techRoleId],
           );
         }
+        bootstrapDone = true;
         return { seeded: false };
       }
 
@@ -401,6 +550,7 @@ export async function ensureBootstrap(): Promise<{ seeded: boolean }> {
         [acmeId, northId, adminId, adminName],
       );
 
+      bootstrapDone = true;
       console.log(
         "[akab-db] Bootstrap complete. Login: admin@akab.local / admin123",
       );
@@ -411,9 +561,12 @@ export async function ensureBootstrap(): Promise<{ seeded: boolean }> {
     } finally {
       client.release();
     }
-  })();
+  })().catch((err) => {
+    bootstrapPromise = null;
+    throw err;
+  });
 
-  return bootstrapPromise;
+  return withTimeout(bootstrapPromise, 25000, "PostgreSQL bootstrap");
 }
 
 /**
@@ -426,7 +579,6 @@ export async function proxyQuery(opts: {
   params?: unknown[];
   method?: string;
 }): Promise<unknown[] | unknown[][]> {
-  // Migrations already run on boot / status — do not block every query
   const sql = String(opts.sql || "").trim();
   if (!sql) return [];
 
@@ -448,22 +600,35 @@ export async function proxyQuery(opts: {
   const params = Array.isArray(opts.params) ? opts.params : [];
 
   if (method === "all") {
-    const result = await p.query({
-      text: sql,
-      values: params,
-      rowMode: "array",
-    });
+    const result = await withTimeout(
+      p.query({
+        text: sql,
+        values: params,
+        rowMode: "array",
+      }),
+      15000,
+      "PostgreSQL query",
+    );
     return result.rows as unknown[][];
   }
 
-  const result = await p.query({
-    text: sql,
-    values: params,
-  });
+  const result = await withTimeout(
+    p.query({
+      text: sql,
+      values: params,
+    }),
+    15000,
+    "PostgreSQL query",
+  );
   return result.rows as unknown[];
 }
 
-export async function getDbStatus(): Promise<{
+/**
+ * Status check.
+ * @param opts.migrate when true, run migrations + bootstrap first
+ * When false (default for health), only ping — never hangs on schema work.
+ */
+export async function getDbStatus(opts?: { migrate?: boolean }): Promise<{
   backend: DbBackend;
   configured: boolean;
   ok: boolean;
@@ -473,46 +638,74 @@ export async function getDbStatus(): Promise<{
   migrated?: boolean;
   seeded?: boolean;
   userCount?: number;
+  config?: ReturnType<typeof getDbConfigSummary>;
 }> {
+  const summary = getDbConfigSummary();
   if (!isPostgresConfigured()) {
     return {
       backend: "none",
       configured: false,
       ok: false,
       error:
-        "DATABASE_URL / POSTGRES_* not set. Portal will use browser-local PGlite (dev only).",
+        "DATABASE_URL / POSTGRES_* not set. Set POSTGRES_PASSWORD in .env and restart compose.",
+      config: summary,
     };
   }
 
   try {
-    await runMigrations();
-    const boot = await ensureBootstrap();
+    let seeded = false;
+    if (opts?.migrate) {
+      await runMigrations();
+      const boot = await ensureBootstrap();
+      seeded = boot.seeded;
+    } else {
+      // Fast path — ping only
+      const ping = await pingDatabase(4000);
+      if (!ping.ok) {
+        return {
+          backend: "postgres",
+          configured: true,
+          ok: false,
+          error: ping.error,
+          host: summary.host || undefined,
+          database: summary.database || undefined,
+          config: summary,
+        };
+      }
+      return {
+        backend: "postgres",
+        configured: true,
+        ok: true,
+        migrated: migrateDone,
+        seeded: false,
+        host: summary.host || undefined,
+        database: ping.database || summary.database || undefined,
+        config: summary,
+      };
+    }
+
     const p = getPool();
-    const r = await p.query(
-      "SELECT current_database() AS database, current_user AS user",
+    const r = await withTimeout(
+      p.query("SELECT current_database() AS database, current_user AS user"),
+      5000,
+      "PostgreSQL status query",
     );
-    const countR = await p.query<{ n: string }>(
-      "SELECT COUNT(*)::text AS n FROM users",
+    const countR = await withTimeout(
+      p.query<{ n: string }>("SELECT COUNT(*)::text AS n FROM users"),
+      5000,
+      "PostgreSQL user count",
     );
     const row = r.rows[0] as { database?: string; user?: string };
-    const url = getDatabaseUrl() || "";
-    let host = cleanEnv(process.env.POSTGRES_HOST) || "configured";
-    if (!cleanEnv(process.env.POSTGRES_HOST)) {
-      try {
-        host = new URL(url.replace(/^postgres(ql)?:/i, "http:")).hostname;
-      } catch {
-        /* ignore */
-      }
-    }
     return {
       backend: "postgres",
       configured: true,
       ok: true,
       migrated: true,
-      seeded: boot.seeded,
-      host,
+      seeded,
+      host: summary.host || undefined,
       database: row?.database,
       userCount: Number(countR.rows[0]?.n || "0"),
+      config: summary,
     };
   } catch (err) {
     return {
@@ -520,6 +713,9 @@ export async function getDbStatus(): Promise<{
       configured: true,
       ok: false,
       error: err instanceof Error ? err.message : "Database connection failed",
+      host: summary.host || undefined,
+      database: summary.database || undefined,
+      config: summary,
     };
   }
 }
@@ -531,5 +727,7 @@ export async function closePool(): Promise<void> {
     pool = null;
     migratePromise = null;
     bootstrapPromise = null;
+    migrateDone = false;
+    bootstrapDone = false;
   }
 }

@@ -359,19 +359,31 @@ server.listen(PORT, HOST, () => {
   console.log(`  static: ${distDir}`);
   console.log(`  api:    ${apiDir}`);
 
-  // Apply additive PostgreSQL migrations + empty-DB bootstrap on boot
+  // Apply additive PostgreSQL migrations + empty-DB bootstrap on boot (non-blocking)
   import(pathToFileURL(path.join(apiDir, "_lib/pg.ts")).href)
     .then(async (mod) => {
+      const summary = mod.getDbConfigSummary?.() || {};
       if (!mod.isPostgresConfigured?.()) {
         console.log(
-          "  db:     PGlite fallback (set POSTGRES_HOST/USER/PASSWORD/DB or DATABASE_URL)",
+          "  db:     NOT CONFIGURED (set POSTGRES_HOST/USER/PASSWORD/DB in compose/.env)",
         );
         return;
       }
+      console.log(
+        `  db:     connecting → host=${summary.host || "?"} db=${summary.database || "?"} user=${summary.user || "?"} passwordSet=${summary.passwordSet}`,
+      );
       try {
+        const ping = await mod.pingDatabase?.(5000);
+        if (!ping?.ok) {
+          console.error("  db:     PING FAILED:", ping?.error || "unknown");
+          return;
+        }
+        console.log(
+          `  db:     ping ok (${ping.latencyMs || "?"}ms) — ${ping.database}`,
+        );
         await mod.runMigrations();
         const boot = await mod.ensureBootstrap();
-        const status = await mod.getDbStatus();
+        const status = await mod.getDbStatus({ migrate: false });
         console.log(
           `  db:     PostgreSQL ok — ${status.database || "db"} @ ${status.host || "host"}` +
             (status.userCount != null ? ` — users=${status.userCount}` : "") +
