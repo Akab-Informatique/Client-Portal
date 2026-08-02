@@ -11,7 +11,7 @@ Also works on Debian 12 / Ubuntu 22.04+.
 
 ---
 
-## One-command install (recommended)
+## One-command install (Ubuntu or Debian)
 
 ```bash
 # As a sudo-capable user
@@ -25,6 +25,7 @@ git clone -b master https://github.com/solutidev/Client-Portal.git akab-portal
 cd akab-portal
 
 # Install Docker (if needed) + build + start Postgres + app
+# (script name is historical — works on Ubuntu too)
 bash scripts/debian-install.sh
 ```
 

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# AKAB Portal — first install / repair on Debian 12 or 13
+# AKAB Portal — first install / repair on Ubuntu 22.04+ / 24.04 / 26.x or Debian 12/13
 # Usage:
 #   bash scripts/debian-install.sh
 #   bash scripts/debian-install.sh /opt/akab-portal
@@ -9,7 +9,7 @@ APP_DIR="${1:-/opt/akab-portal}"
 REPO_URL="${REPO_URL:-https://github.com/solutidev/Client-Portal.git}"
 BRANCH="${BRANCH:-master}"
 
-echo "==> AKAB Portal install (Debian) → $APP_DIR"
+echo "==> AKAB Portal install (Ubuntu/Debian + Docker) → $APP_DIR"
 
 if ! command -v docker >/dev/null 2>&1; then
   echo "==> Installing Docker…"
