@@ -1,14 +1,10 @@
 /**
  * AKAB Portal database client (browser).
  *
- * Dual mode:
- *  1) **PostgreSQL (production)** — when the server has DATABASE_URL / POSTGRES_*,
- *     queries go through POST /api/db/query (Drizzle pg-proxy).
- *     Server runs migrations + first-time bootstrap (admin user) before the UI loads.
- *  2) **PGlite (local demo)** — browser fallback when Postgres is not configured.
+ * Production build: PostgreSQL ONLY via POST /api/db/query (never PGlite).
+ * Local dev: PGlite when the server has no Postgres configured.
  *
  * Always `await dbReady` before the first query.
- * Boot is guarded with short timeouts so the UI never sticks on "Preparing portal…".
  */
 
 import { drizzle as drizzlePglite } from "drizzle-orm/pglite";
@@ -18,21 +14,25 @@ import * as schema from "./schema";
 
 export { schema };
 
-export type DbMode = "postgres" | "pglite";
+export type DbMode = "postgres" | "pglite" | "none";
 
+/** Use PGlite's typed client shape so app query callbacks stay typed. */
 type AnyDb = ReturnType<typeof drizzlePglite<typeof schema>>;
 
 /** Active Drizzle client — assigned once `dbReady` resolves. */
 export let db: AnyDb = null as unknown as AnyDb;
 
 /** Which backend was selected after `dbReady`. */
-export let dbMode: DbMode = "pglite";
+export let dbMode: DbMode = "none";
 
-/** Last boot error (if any) — useful for diagnostics. */
+/** Last boot error (if any) — shown in the UI. */
 export let dbBootError: string | null = null;
 
 const PROXY_SECRET =
   (import.meta.env.VITE_DB_PROXY_SECRET as string | undefined)?.trim() || "";
+
+/** Built production bundle — never boot browser PGlite on a real deploy. */
+const IS_PROD_BUILD = import.meta.env.PROD === true;
 
 function withTimeout<T>(
   promise: Promise<T>,
@@ -56,58 +56,39 @@ function withTimeout<T>(
   });
 }
 
-async function detectServerPostgres(): Promise<{
-  ok: boolean;
+type StatusPayload = {
+  mode?: string;
+  configured?: boolean;
+  ok?: boolean;
   error?: string;
-  userCount?: number;
-}> {
-  const forced = String(import.meta.env.VITE_DATABASE_MODE || "")
-    .trim()
-    .toLowerCase();
-  if (forced === "pglite" || forced === "local") {
-    return { ok: false };
-  }
+  userCount?: number | null;
+  host?: string | null;
+  database?: string | null;
+  hint?: string | null;
+};
 
+async function fetchDbStatus(): Promise<StatusPayload> {
+  const controller = new AbortController();
+  const timer = window.setTimeout(() => controller.abort(), 15000);
   try {
-    const controller = new AbortController();
-    const timer = window.setTimeout(() => controller.abort(), 12000);
-    // migrate=1 also runs server-side bootstrap (roles + admin if empty)
     const res = await fetch("/api/db/status?migrate=1", {
       method: "GET",
       headers: { Accept: "application/json" },
       signal: controller.signal,
       cache: "no-store",
     });
+    let data: StatusPayload = {};
+    try {
+      data = (await res.json()) as StatusPayload;
+    } catch {
+      data = { error: `DB status returned non-JSON (HTTP ${res.status})` };
+    }
+    if (!res.ok && !data.error) {
+      data.error = `DB status HTTP ${res.status}`;
+    }
+    return data;
+  } finally {
     window.clearTimeout(timer);
-    if (!res.ok) {
-      return { ok: false, error: `DB status HTTP ${res.status}` };
-    }
-    const data = (await res.json()) as {
-      mode?: string;
-      configured?: boolean;
-      ok?: boolean;
-      error?: string;
-      userCount?: number;
-    };
-    if (
-      data.mode === "postgres" &&
-      data.configured === true &&
-      data.ok === true
-    ) {
-      return { ok: true, userCount: data.userCount };
-    }
-    if (data.configured && !data.ok) {
-      return {
-        ok: false,
-        error: data.error || "PostgreSQL configured but not reachable",
-      };
-    }
-    return { ok: false };
-  } catch (err) {
-    const msg =
-      err instanceof Error ? err.message : "DB status check failed";
-    console.warn("[akab] DB status check failed — using PGlite", err);
-    return { ok: false, error: msg };
   }
 }
 
@@ -122,7 +103,7 @@ function createProxyDb(): AnyDb {
         headers["x-db-proxy-secret"] = PROXY_SECRET;
       }
       const controller = new AbortController();
-      const timer = window.setTimeout(() => controller.abort(), 15000);
+      const timer = window.setTimeout(() => controller.abort(), 20000);
       try {
         const res = await fetch("/api/db/query", {
           method: "POST",
@@ -151,7 +132,37 @@ function createProxyDb(): AnyDb {
   return client as unknown as AnyDb;
 }
 
-const PGLITE_SCHEMA_SQL = `
+async function initPostgres(status: StatusPayload): Promise<void> {
+  if (!status.ok) {
+    throw new Error(
+      status.error ||
+        status.hint ||
+        "PostgreSQL is not ready. On the server: docker compose logs app db && curl -s localhost:3000/api/db/status?migrate=1",
+    );
+  }
+
+  const proxy = createProxyDb();
+  await withTimeout(
+    proxy.select().from(schema.users).limit(1) as unknown as Promise<unknown>,
+    10000,
+    "PostgreSQL query",
+  );
+  db = proxy;
+  dbMode = "postgres";
+  dbBootError = null;
+  console.info(
+    "[akab] Database: PostgreSQL",
+    status.database || "",
+    status.userCount != null ? `users=${status.userCount}` : "",
+  );
+}
+
+async function createPgliteDb(dataDir?: string): Promise<AnyDb> {
+  const client = dataDir ? new PGlite(dataDir) : new PGlite();
+  await withTimeout(Promise.resolve(client.waitReady), 10000, "PGlite waitReady");
+  (window as unknown as { __devs_pglite?: PGlite }).__devs_pglite = client;
+
+  await client.exec(`
 CREATE TABLE IF NOT EXISTS companies (
   id SERIAL PRIMARY KEY, name TEXT NOT NULL, type TEXT NOT NULL,
   email TEXT, phone TEXT, notes TEXT, active BOOLEAN NOT NULL,
@@ -179,9 +190,7 @@ CREATE TABLE IF NOT EXISTS message_user_states (
   status TEXT NOT NULL, custom_label TEXT, updated_at TEXT,
   created_at TIMESTAMP DEFAULT NOW() NOT NULL
 );
-`;
-
-async function applyPgliteColumns(client: PGlite) {
+`);
   for (const col of [
     "autotask_company_id TEXT",
     "dashboard_layout TEXT",
@@ -195,11 +204,9 @@ async function applyPgliteColumns(client: PGlite) {
     "itglue_organization_id TEXT",
   ]) {
     try {
-      await client.exec(
-        `ALTER TABLE companies ADD COLUMN IF NOT EXISTS ${col}`,
-      );
+      await client.exec(`ALTER TABLE companies ADD COLUMN IF NOT EXISTS ${col}`);
     } catch {
-      /* already exists */
+      /* exists */
     }
   }
   for (const col of [
@@ -215,25 +222,9 @@ async function applyPgliteColumns(client: PGlite) {
     try {
       await client.exec(`ALTER TABLE users ADD COLUMN IF NOT EXISTS ${col}`);
     } catch {
-      /* already exists */
+      /* exists */
     }
   }
-  try {
-    await client.exec(
-      `UPDATE users SET board_email_opt_in = TRUE WHERE board_email_opt_in IS NULL`,
-    );
-  } catch {
-    /* ignore */
-  }
-}
-
-async function createPgliteDb(dataDir?: string): Promise<AnyDb> {
-  const client = dataDir ? new PGlite(dataDir) : new PGlite();
-  // Critical: wait until WASM + backend are ready (otherwise first exec can hang)
-  await client.waitReady;
-  (window as unknown as { __devs_pglite?: PGlite }).__devs_pglite = client;
-  await client.exec(PGLITE_SCHEMA_SQL);
-  await applyPgliteColumns(client);
   return drizzlePglite(client, { schema }) as unknown as AnyDb;
 }
 
@@ -241,88 +232,70 @@ async function initDatabase(): Promise<void> {
   const forced = String(import.meta.env.VITE_DATABASE_MODE || "")
     .trim()
     .toLowerCase();
+  const forcePglite = forced === "pglite" || forced === "local";
   const forcePostgres =
     forced === "postgres" || forced === "server" || forced === "pg";
 
-  const detected = await detectServerPostgres();
-
-  if (detected.ok || forcePostgres) {
+  // Production build: ALWAYS Postgres. Never touch PGlite (avoids WASM hangs).
+  if ((IS_PROD_BUILD || forcePostgres) && !forcePglite) {
+    let status: StatusPayload;
     try {
-      const proxy = createProxyDb();
-      // Fast smoke test — server already migrated + bootstrapped via /api/db/status
-      await withTimeout(
-        proxy.select().from(schema.users).limit(1) as unknown as Promise<unknown>,
-        8000,
-        "PostgreSQL proxy smoke test",
-      );
-      db = proxy;
-      dbMode = "postgres";
-      dbBootError = null;
-      console.info(
-        "[akab] Database mode: PostgreSQL (server, durable)",
-        detected.userCount != null ? `users=${detected.userCount}` : "",
-      );
-      return;
+      status = await fetchDbStatus();
     } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
-      console.error("[akab] PostgreSQL proxy failed:", msg);
-      dbBootError = `PostgreSQL proxy failed: ${msg}`;
-      // On a production host that advertised Postgres, do NOT silently use
-      // browser PGlite (would look like "login broken" against empty local DB).
-      // Still open a memory DB so the UI can render an error and Retry.
-      try {
-        db = await withTimeout(createPgliteDb(), 8000, "Memory PGlite fallback");
-        dbMode = "pglite";
-        console.warn(
-          "[akab] Using temporary in-memory DB so the UI can load. Fix Postgres, then reload.",
-        );
+      throw new Error(
+        `Cannot reach /api/db/status: ${
+          err instanceof Error ? err.message : String(err)
+        }. Is the app container running? docker compose ps && docker compose logs app`,
+      );
+    }
+
+    if (!status.configured) {
+      throw new Error(
+        "PostgreSQL is not configured on the server. Set POSTGRES_PASSWORD in /opt/akab-portal/.env then: docker compose up -d --build",
+      );
+    }
+
+    await initPostgres(status);
+    return;
+  }
+
+  // Dev / sandbox: try Postgres if healthy, else PGlite
+  if (!forcePglite) {
+    try {
+      const status = await fetchDbStatus();
+      if (status.configured && status.ok) {
+        await initPostgres(status);
         return;
-      } catch (memErr) {
-        throw new Error(
-          `PostgreSQL failed (${msg}) and local fallback failed (${
-            memErr instanceof Error ? memErr.message : String(memErr)
-          })`,
-        );
       }
+    } catch (err) {
+      console.warn("[akab] status check failed, using PGlite", err);
     }
   }
 
-  // Local / sandbox demo path
   try {
-    db = await withTimeout(
-      createPgliteDb("idb://app-db"),
-      12000,
-      "PGlite init",
-    );
-    dbMode = "pglite";
-    dbBootError = detected.error || null;
-    console.info(
-      "[akab] Database mode: PGlite (browser-local — not for multi-user production)",
-    );
+    db = await withTimeout(createPgliteDb("idb://app-db"), 12000, "PGlite init");
   } catch (err) {
     console.warn("[akab] IndexedDB PGlite failed, trying memory", err);
     db = await withTimeout(createPgliteDb(), 8000, "Memory PGlite init");
-    dbMode = "pglite";
-    dbBootError =
-      err instanceof Error ? err.message : "PGlite IndexedDB init failed";
-    console.warn("[akab] Using in-memory PGlite (data will not persist)");
   }
+  dbMode = "pglite";
+  console.info("[akab] Database: PGlite (local demo only)");
 }
 
 /**
  * Resolves when the DB client is ready.
- * Prefer Postgres when the server exposes a healthy database.
- * Always settles with a usable `db` when possible (never hangs forever).
+ * Production never falls back to PGlite — failures surface as dbBootError.
  */
 export const dbReady: Promise<void> = (async () => {
   try {
-    await withTimeout(initDatabase(), 22000, "Database boot");
+    await withTimeout(initDatabase(), 25000, "Database boot");
     if (!db) {
       throw new Error("Database client was not initialized");
     }
   } catch (err) {
     dbBootError = err instanceof Error ? err.message : String(err);
-    console.error("[akab] Database boot failed hard:", err);
+    dbMode = "none";
+    console.error("[akab] Database boot failed:", err);
     throw err;
   }
 })();

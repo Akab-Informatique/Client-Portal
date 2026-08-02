@@ -159,20 +159,25 @@ export default function App() {
       if (!cancelled) {
         console.error("[akab] Boot timed out — forcing UI open");
         setBootError(
-          "Portal startup is taking too long. On the server run: docker compose logs app db && curl -s localhost:3000/api/db/status?migrate=1",
+          "Portal startup timed out. On the server run: cd /opt/akab-portal && docker compose ps && docker compose logs --tail=80 app && curl -s localhost:3000/api/db/status?migrate=1",
         );
         setReady(true);
       }
-    }, 30000);
+    }, 28000);
 
     (async () => {
       try {
-        // On production Postgres the server already migrated + seeded via /api/db/status.
+        // Production: server already migrated + seeded via /api/db/status.
         // seedIfNeeded is a fast no-op when users already exist.
         await seedIfNeeded();
-        await ensureDemoAutotaskIds();
+        try {
+          await ensureDemoAutotaskIds();
+        } catch (e) {
+          // Non-fatal branding backfill
+          console.warn("[akab] ensureDemoAutotaskIds:", e);
+        }
       } catch (err) {
-        console.error("[akab] Boot seed failed:", err);
+        console.error("[akab] Boot failed:", err);
         if (!cancelled) {
           setBootError(
             err instanceof Error
@@ -196,6 +201,48 @@ export default function App() {
     return <AkabLoader fullScreen size="xl" label="Preparing portal…" />;
   }
 
+  // Fatal DB error: show instructions (never open a broken empty login)
+  if (bootError) {
+    return (
+      <div className="flex min-h-screen items-center justify-center bg-background p-6">
+        <div className="w-full max-w-xl space-y-4 rounded-xl border border-destructive/40 bg-card p-6 shadow-lg">
+          <h1 className="text-lg font-bold text-destructive">
+            Database connection failed
+          </h1>
+          <p className="whitespace-pre-wrap break-words text-sm text-foreground">
+            {bootError}
+          </p>
+          <div className="rounded-lg bg-muted p-3 font-mono text-xs leading-relaxed text-muted-foreground">
+            <p className="mb-2 font-sans text-sm font-semibold text-foreground">
+              On your Ubuntu server, run:
+            </p>
+            {`cd /opt/akab-portal
+git pull origin master
+docker compose up -d --build
+docker compose ps
+docker compose logs --tail=80 app
+curl -s http://127.0.0.1:3000/api/db/status?migrate=1
+`}
+          </div>
+          <p className="text-xs text-muted-foreground">
+            Expect{" "}
+            <code className="text-foreground">
+              &quot;mode&quot;:&quot;postgres&quot;,&quot;ok&quot;:true
+            </code>
+            . Then hard-refresh this page. Login: admin@akab.local / admin123
+          </p>
+          <button
+            type="button"
+            className="rounded-md bg-primary px-4 py-2 text-sm font-medium text-primary-foreground"
+            onClick={() => window.location.reload()}
+          >
+            Reload
+          </button>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <ThemeProvider>
       <LocaleProvider>
@@ -203,21 +250,6 @@ export default function App() {
           <BrowserRouter>
             <LocaleSync />
             <RouteLoadingOverlay />
-            {bootError && (
-              <div
-                role="alert"
-                className="fixed inset-x-0 top-0 z-[100] border-b border-destructive/40 bg-destructive/15 px-4 py-2 text-center text-sm text-destructive"
-              >
-                {bootError}{" "}
-                <button
-                  type="button"
-                  className="ml-2 underline"
-                  onClick={() => window.location.reload()}
-                >
-                  Reload
-                </button>
-              </div>
-            )}
             <AppRoutes />
           </BrowserRouter>
         </AuthProvider>

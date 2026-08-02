@@ -58,6 +58,18 @@ services:
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
       # Clear any DATABASE_URL from env_file so discrete vars win
       DATABASE_URL: ""
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "node",
+          "-e",
+          "fetch('http://127.0.0.1:3000/api/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))",
+        ]
+      interval: 15s
+      timeout: 5s
+      retries: 10
+      start_period: 40s
     networks:
       - akab
 
