@@ -7,9 +7,17 @@
  * Docs: https://api.itglue.com/developer/
  *
  * Per-user visibility (portal simulation of MyGlue):
- * - Non-restricted passwords in the user’s organization → visible
- * - Restricted passwords → only if the linked IT Glue / MyGlue user
- *   appears in authorized_users (or user_resource_accesses)
+ *
+ * Clients (role=client) with a linked MyGlue user id:
+ *   ONLY passwords that MyGlue would allow for that person —
+ *   explicit user/group resource accesses (restricted shares).
+ *   They never get the full org vault from the API key.
+ *
+ * Staff with a linked IT Glue user id:
+ *   unrestricted org passwords + restricted ones they are authorized for.
+ *
+ * Staff with NO linked user id:
+ *   full API-key view of the organization (unscoped ops mode).
  */
 
 export type ItGlueRegion = "us" | "eu" | "au";
@@ -35,10 +43,14 @@ export type ItGluePassword = {
   folderId: number | null;
   restricted: boolean;
   archived: boolean;
+  /** True when password originated / is flagged as MyGlue */
+  myGlue: boolean;
   updatedAt: string | null;
   createdAt: string | null;
-  /** IT Glue / MyGlue user ids allowed when restricted */
+  /** Explicit user accessors (authorized_users / user_resource_accesses) */
   authorizedUserIds: number[];
+  /** Explicit group accessors (group_resource_accesses) */
+  authorizedGroupIds: number[];
 };
 
 export type ItGlueUser = {
@@ -200,66 +212,156 @@ export function formatItGlueError(
   return `${fallback} (HTTP ${status})`;
 }
 
-function extractAuthorizedUserIds(
-  resource: JsonApiResource,
-  included?: JsonApiResource[],
-): number[] {
-  const ids = new Set<number>();
-
-  // relationships.authorized_users.data
-  const rel = resource.relationships?.authorized_users?.data;
+function pushRelIds(
+  ids: Set<number>,
+  rel: unknown,
+): void {
   if (Array.isArray(rel)) {
     for (const r of rel) {
-      const n = asNumber(r.id);
-      if (n != null) ids.add(n);
+      if (r && typeof r === "object" && "id" in r) {
+        const n = asNumber((r as { id?: string | number }).id);
+        if (n != null) ids.add(n);
+      }
     }
   } else if (rel && typeof rel === "object" && "id" in rel) {
     const n = asNumber((rel as { id?: string | number }).id);
     if (n != null) ids.add(n);
   }
+}
 
-  // Some tenants expose authorized user ids on attributes
-  const attrIds =
+function extractAccessors(
+  resource: JsonApiResource,
+  included?: JsonApiResource[],
+): { userIds: number[]; groupIds: number[] } {
+  const userIds = new Set<number>();
+  const groupIds = new Set<number>();
+  const pwdId = String(resource.id);
+
+  // relationships.authorized_users (single-password GET)
+  pushRelIds(userIds, resource.relationships?.authorized_users?.data);
+
+  // relationships.user_resource_accesses / group_resource_accesses (list include)
+  const uraRel = resource.relationships?.user_resource_accesses?.data;
+  const graRel = resource.relationships?.group_resource_accesses?.data;
+  const uraIds = new Set<string>();
+  const graIds = new Set<string>();
+  if (Array.isArray(uraRel)) {
+    for (const r of uraRel) if (r?.id != null) uraIds.add(String(r.id));
+  } else if (uraRel && typeof uraRel === "object" && "id" in uraRel) {
+    uraIds.add(String((uraRel as { id: string | number }).id));
+  }
+  if (Array.isArray(graRel)) {
+    for (const r of graRel) if (r?.id != null) graIds.add(String(r.id));
+  } else if (graRel && typeof graRel === "object" && "id" in graRel) {
+    graIds.add(String((graRel as { id: string | number }).id));
+  }
+
+  // Attribute fallbacks
+  const attrUserIds =
     attr(resource, "authorized-user-ids") ??
     attr(resource, "authorized_user_ids");
-  if (Array.isArray(attrIds)) {
-    for (const x of attrIds) {
+  if (Array.isArray(attrUserIds)) {
+    for (const x of attrUserIds) {
       const n = asNumber(x);
-      if (n != null) ids.add(n);
+      if (n != null) userIds.add(n);
     }
   }
 
-  // included user_resource_accesses pointing at this password
   if (included?.length) {
-    const pwdId = String(resource.id);
     for (const inc of included) {
-      const t = (inc.type || "").toLowerCase();
-      if (
-        t.includes("user_resource_access") ||
-        t.includes("resource_access")
-      ) {
-        const resourceId = asString(
-          attr(inc, "resource-id") ?? attr(inc, "resource_id"),
-        );
-        const resourceType = asString(
-          attr(inc, "resource-type") ?? attr(inc, "resource_type"),
-        );
-        const userId = asNumber(
-          attr(inc, "user-id") ?? attr(inc, "user_id"),
-        );
-        if (
-          userId != null &&
-          resourceId === pwdId &&
-          (!resourceType || /password/i.test(resourceType))
-        ) {
-          ids.add(userId);
+      const t = (inc.type || "").toLowerCase().replace(/-/g, "_");
+      const incId = inc.id != null ? String(inc.id) : "";
+
+      // Embedded authorized users
+      if (t === "users" || t === "user") {
+        // only count when linked via authorized_users relationship
+        const auth = resource.relationships?.authorized_users?.data;
+        const authIds = new Set<string>();
+        if (Array.isArray(auth)) {
+          for (const r of auth) if (r?.id != null) authIds.add(String(r.id));
+        } else if (auth && typeof auth === "object" && "id" in auth) {
+          authIds.add(String((auth as { id: string | number }).id));
+        }
+        if (authIds.has(incId)) {
+          const n = asNumber(inc.id);
+          if (n != null) userIds.add(n);
         }
       }
-      // authorized_users included as users with relationship back — also accept bare users listed under include when relationship matched above
+
+      const isUserAccess =
+        t.includes("user_resource_access") ||
+        (t.includes("resource_access") && !t.includes("group"));
+      const isGroupAccess = t.includes("group_resource_access");
+
+      if (!isUserAccess && !isGroupAccess) continue;
+
+      // Prefer matching via relationship id list; also match resource-id attrs
+      const linkedByRel =
+        (isUserAccess && uraIds.has(incId)) ||
+        (isGroupAccess && graIds.has(incId));
+
+      const resourceId = asString(
+        attr(inc, "resource-id") ??
+          attr(inc, "resource_id") ??
+          attr(inc, "resourceable-id") ??
+          attr(inc, "resourceable_id"),
+      );
+      const resourceType = asString(
+        attr(inc, "resource-type") ??
+          attr(inc, "resource_type") ??
+          attr(inc, "resourceable-type") ??
+          attr(inc, "resourceable_type"),
+      );
+      const matchesResource =
+        linkedByRel ||
+        (resourceId === pwdId &&
+          (!resourceType || /password/i.test(resourceType)));
+
+      if (!matchesResource) continue;
+
+      // accessor-id / user-id / group-id
+      const accessorType = asString(
+        attr(inc, "accessor-type") ?? attr(inc, "accessor_type"),
+      );
+      const accessorId = asNumber(
+        attr(inc, "accessor-id") ?? attr(inc, "accessor_id"),
+      );
+      const userId = asNumber(
+        attr(inc, "user-id") ??
+          attr(inc, "user_id") ??
+          (accessorType && /user/i.test(accessorType) ? accessorId : null),
+      );
+      const groupId = asNumber(
+        attr(inc, "group-id") ??
+          attr(inc, "group_id") ??
+          (accessorType && /group/i.test(accessorType) ? accessorId : null),
+      );
+
+      // relationship accessor
+      const accRel = inc.relationships?.accessor?.data;
+      if (accRel && typeof accRel === "object" && !Array.isArray(accRel)) {
+        const a = accRel as { id?: string | number; type?: string };
+        const n = asNumber(a.id);
+        const at = (a.type || "").toLowerCase();
+        if (n != null) {
+          if (at.includes("group")) groupIds.add(n);
+          else userIds.add(n);
+        }
+      }
+
+      if (isUserAccess && userId != null) userIds.add(userId);
+      if (isGroupAccess && groupId != null) groupIds.add(groupId);
+      // If type says user access but only accessorId present
+      if (isUserAccess && userId == null && accessorId != null && !accessorType) {
+        userIds.add(accessorId);
+      }
+      if (isGroupAccess && groupId == null && accessorId != null && !accessorType) {
+        groupIds.add(accessorId);
+      }
     }
   }
 
-  return [...ids];
+  return { userIds: [...userIds], groupIds: [...groupIds] };
 }
 
 export function mapPasswordResource(
@@ -294,27 +396,52 @@ export function mapPasswordResource(
     ),
     restricted: asBool(attr(resource, "restricted")),
     archived: asBool(attr(resource, "archived")),
+    myGlue: asBool(
+      attr(resource, "my-glue") ??
+        attr(resource, "my_glue") ??
+        attr(resource, "myglue"),
+    ),
     updatedAt: asString(
       attr(resource, "updated-at") ?? attr(resource, "updated_at"),
     ),
     createdAt: asString(
       attr(resource, "created-at") ?? attr(resource, "created_at"),
     ),
-    authorizedUserIds: extractAuthorizedUserIds(resource, included),
+    ...(() => {
+      const a = extractAccessors(resource, included);
+      return {
+        authorizedUserIds: a.userIds,
+        myGlue: false,
+        authorizedGroupIds: a.groupIds,
+      };
+    })(),
   };
 }
 
+export type PasswordAccessScope = "myglue" | "staff_org" | "unscoped";
+
 /**
- * Whether this IT Glue / MyGlue user may see the password, matching MyGlue rules:
- * unrestricted org passwords are visible; restricted ones need explicit authorization.
+ * Whether this person may see the password.
+ *
+ * scope:
+ * - myglue   → client portal: ONLY passwords explicitly shared with this
+ *              MyGlue user (or one of their groups). Never the full org vault.
+ * - staff_org → staff with linked IT Glue user: unrestricted org passwords
+ *              + restricted ones they are authorized for.
+ * - unscoped → staff with no linked user: full API-key org view
+ *              (restricted still requires auth list when present; if the API
+ *              returns no accessors, restricted items stay hidden).
  */
 export function userCanAccessPassword(
   password: ItGluePassword,
   opts: {
     itglueUserId: number | null;
     organizationId: number | null;
-    /** Staff with no linked user may use full API-key view */
+    /** @deprecated use scope */
     allowUnscopedStaff?: boolean;
+    scope?: PasswordAccessScope;
+    /** Group ids the MyGlue / IT Glue user belongs to */
+    groupIds?: number[] | null;
   },
 ): boolean {
   if (password.archived) return false;
@@ -327,21 +454,53 @@ export function userCanAccessPassword(
     return false;
   }
 
-  // Without a linked IT Glue / MyGlue user id:
-  // - staff may see unrestricted org passwords when allowUnscopedStaff is set
-  // - clients never see anything (caller should block earlier; this is a hard stop)
-  if (opts.itglueUserId == null) {
-    if (!password.restricted && opts.allowUnscopedStaff) return true;
+  const scope: PasswordAccessScope =
+    opts.scope ??
+    (opts.allowUnscopedStaff
+      ? "unscoped"
+      : opts.itglueUserId != null
+        ? "staff_org"
+        : "myglue");
+
+  const uid = opts.itglueUserId;
+  const groups = opts.groupIds ?? [];
+
+  const userExplicit =
+    uid != null && password.authorizedUserIds.includes(uid);
+  const groupExplicit =
+    groups.length > 0 &&
+    password.authorizedGroupIds.some((g) => groups.includes(g));
+  const explicitlyShared = userExplicit || groupExplicit;
+
+  // ---- Client / MyGlue-strict: only what is shared with this account ----
+  if (scope === "myglue") {
+    if (uid == null) return false;
+    // Must be on the access list (user or group). Unrestricted org-wide
+    // passwords from the API key are NOT shown to clients.
+    return explicitlyShared;
+  }
+
+  // ---- Unscoped staff (API key ops view) ----
+  if (scope === "unscoped") {
+    if (!password.restricted) return true;
+    // Restricted: only if we know accessors and... staff unscoped still should
+    // not leak private restricted items without being on the list.
+    // When accessor list is empty (API didn't return shares), hide it.
+    if (password.authorizedUserIds.length === 0 &&
+        password.authorizedGroupIds.length === 0) {
+      return false;
+    }
+    // Unscoped staff still shouldn't open every restricted password.
     return false;
   }
 
+  // ---- Staff with linked IT Glue user (staff_org) ----
+  if (uid == null) return false;
   if (!password.restricted) {
-    // Org-visible for linked MyGlue / IT Glue users in this organization
+    // Unrestricted org password — visible to staff working the tenant
     return true;
   }
-
-  // Restricted: must be explicitly authorized for this vault user
-  return password.authorizedUserIds.includes(opts.itglueUserId);
+  return explicitlyShared;
 }
 
 export async function listPasswordsForOrganization(opts: {
@@ -361,7 +520,7 @@ export async function listPasswordsForOrganization(opts: {
       "page[size]": pageSize,
       "filter[organization_id]": opts.organizationId,
       sort: "name",
-      include: "authorized_users",
+      include: "user_resource_accesses,group_resource_accesses",
     };
     if (!opts.includeArchived) {
       query["filter[archived]"] = "false";
@@ -400,7 +559,7 @@ export async function getPasswordById(
   const res = await itglueFetch(`/passwords/${encodeURIComponent(id)}`, {
     query: {
       "show_password": opts?.showPassword === false ? "false" : "true",
-      include: "authorized_users",
+      include: "authorized_users,user_resource_accesses,group_resource_accesses",
     },
   });
   if (res.status === 404) return null;
@@ -455,6 +614,51 @@ function mapUserResource(resource: JsonApiResource): ItGlueUser {
         attr(resource, "myglue"),
     ),
   };
+}
+
+export async function getUserGroupIds(userId: number): Promise<number[]> {
+  if (!userId || !Number.isFinite(userId)) return [];
+  try {
+    // Preferred: user resource with groups included
+    const res = await itglueFetch(`/users/${userId}`, {
+      query: { include: "groups" },
+    });
+    if (res.ok) {
+      const row = Array.isArray(res.data.data) ? res.data.data[0] : res.data.data;
+      const ids = new Set<number>();
+      if (row) {
+        pushRelIds(ids, row.relationships?.groups?.data);
+      }
+      if (res.data.included?.length) {
+        for (const inc of res.data.included) {
+          const t = (inc.type || "").toLowerCase();
+          if (t.includes("group")) {
+            const n = asNumber(inc.id);
+            if (n != null) ids.add(n);
+          }
+        }
+      }
+      if (ids.size) return [...ids];
+    }
+  } catch {
+    /* fall through */
+  }
+  try {
+    // Fallback: some tenants expose memberships under a nested path
+    const res2 = await itglueFetch(
+      `/users/${userId}/relationships/groups`,
+      { query: { "page[size]": 100 } },
+    );
+    if (res2.ok) {
+      const rows = Array.isArray(res2.data.data) ? res2.data.data : [];
+      return rows
+        .map((r) => asNumber(r.id))
+        .filter((n): n is number => n != null);
+    }
+  } catch {
+    /* ignore */
+  }
+  return [];
 }
 
 export async function getOrganization(
@@ -696,6 +900,8 @@ function seedMockOrg(organizationId: number, itglueUserId: number | null): ItGlu
           return {
             ...p,
             authorizedUserIds: [...p.authorizedUserIds, itglueUserId],
+            authorizedGroupIds: [],
+            myGlue: false,
           };
         }
       }
@@ -710,7 +916,7 @@ function seedMockOrg(organizationId: number, itglueUserId: number | null): ItGlu
       username: "admin@client.example",
       password: "Demo-M365-Password!",
       url: "https://admin.microsoft.com",
-      notes: "Demo credential — replace with live IT Glue data.",
+      notes: "Unrestricted org password — staff only in portal (clients need explicit share).",
       organizationId,
       organizationName: "Demo Organization",
       categoryId: 1,
@@ -721,6 +927,8 @@ function seedMockOrg(organizationId: number, itglueUserId: number | null): ItGlu
       updatedAt: new Date().toISOString(),
       createdAt: new Date().toISOString(),
       authorizedUserIds: [],
+      authorizedGroupIds: [],
+      myGlue: true,
     },
     {
       id: "mock-2",
@@ -728,7 +936,7 @@ function seedMockOrg(organizationId: number, itglueUserId: number | null): ItGlu
       username: "fwadmin",
       password: "Demo-FW-Password!",
       url: "https://192.168.1.1",
-      notes: "Restricted demo password — only linked MyGlue users see this.",
+      notes: "Explicitly shared with the linked MyGlue user — clients can see this.",
       organizationId,
       organizationName: "Demo Organization",
       categoryId: 2,
@@ -739,6 +947,8 @@ function seedMockOrg(organizationId: number, itglueUserId: number | null): ItGlu
       updatedAt: new Date().toISOString(),
       createdAt: new Date().toISOString(),
       authorizedUserIds: itglueUserId != null ? [itglueUserId] : [9001],
+      authorizedGroupIds: [],
+      myGlue: false,
     },
     {
       id: "mock-3",
@@ -757,6 +967,8 @@ function seedMockOrg(organizationId: number, itglueUserId: number | null): ItGlu
       updatedAt: new Date().toISOString(),
       createdAt: new Date().toISOString(),
       authorizedUserIds: [],
+      authorizedGroupIds: [],
+      myGlue: false,
     },
   ];
   store.set(organizationId, seeded);
@@ -775,7 +987,7 @@ export function mockPasswordsForOrg(
     userCanAccessPassword(p, {
       itglueUserId,
       organizationId,
-      allowUnscopedStaff: itglueUserId == null,
+      scope: itglueUserId == null ? "unscoped" : "myglue",
     }),
   );
 }
@@ -807,8 +1019,10 @@ export function mockCreatePassword(
     archived: false,
     updatedAt: now,
     createdAt: now,
-    authorizedUserIds:
-      input.restricted && itglueUserId != null ? [itglueUserId] : [],
+    // Creator is always authorized so MyGlue-scope clients see passwords they add
+    authorizedUserIds: itglueUserId != null ? [itglueUserId] : [],
+    authorizedGroupIds: [],
+    myGlue: true,
   };
   list.push(created);
   mockStore().set(input.organizationId, list);

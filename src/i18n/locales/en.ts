@@ -232,7 +232,7 @@ export const en = {
     unreadCount: "{n} unread",
     empty: "Your board is empty",
     emptyDesc:
-      "When AKAB posts an update for your company, it will show up here as unread.",
+      "No passwords are shared with your MyGlue account in this organization. Ask your provider to share the credentials you need in MyGlue / IT Glue.",
     noFilter: "No messages match this filter",
     noFilterDesc: "Try another filter or clear labels.",
     markRead: "Mark read",
@@ -484,9 +484,9 @@ export const en = {
     vaultDesc:
       "You only see passwords your linked vault user is allowed to access. Restricted entries stay hidden unless shared with you.",
     vaultDescClient:
-      "Client view uses MyGlue: organization passwords plus restricted entries shared with your linked MyGlue user.",
+      "Only passwords explicitly shared with your MyGlue account (user or group access). You will not see the full company vault.",
     vaultDescStaff:
-      "Staff view uses IT Glue for your linked IT Glue user in this client organization. Restricted entries stay hidden unless that user is authorized.",
+      "Staff see organization passwords for the selected client. Restricted items only appear when shared with your linked IT Glue user.",
     demo: "Demo data",
     live: "IT Glue live",
     client: "Client company",
@@ -495,7 +495,7 @@ export const en = {
     searchPlaceholder: "Name, username, or URL…",
     emptyTitle: "No passwords available",
     emptyDesc:
-      "Nothing is shared with your MyGlue user in this organization, or the vault is empty.",
+      "No passwords are shared with your MyGlue account in this organization. Ask your provider to share the credentials you need in MyGlue / IT Glue.",
     emptyNoMyGlueTitle: "MyGlue user not linked",
     emptyNoMyGlueDesc:
       "No passwords are shown until an administrator adds your MyGlue user number on your portal account. Only passwords allowed for that MyGlue user will appear.",

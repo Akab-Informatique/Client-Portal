@@ -7,8 +7,10 @@ import {
   listPasswordsForOrganization,
   mockCreatePassword,
   mockPasswordsForOrg,
+  getUserGroupIds,
   userCanAccessPassword,
   type ItGluePassword,
+  type PasswordAccessScope,
 } from "../_lib/itglue-client.js";
 
 /**
@@ -174,11 +176,30 @@ async function handleList(req: VercelRequest, res: VercelResponse) {
   }
 
   if (!isItGlueConfigured()) {
+    const scope: PasswordAccessScope = !isStaff
+      ? "myglue"
+      : itglueUserId == null
+        ? "unscoped"
+        : "staff_org";
     const mocked = mockPasswordsForOrg(organizationId, itglueUserId).filter(
-      (p) =>
-        !q ||
-        p.name.toLowerCase().includes(q.toLowerCase()) ||
-        (p.username || "").toLowerCase().includes(q.toLowerCase()),
+      (p) => {
+        if (
+          !userCanAccessPassword(p, {
+            itglueUserId,
+            organizationId,
+            scope,
+            groupIds: [],
+          })
+        ) {
+          return false;
+        }
+        if (!q) return true;
+        const qq = q.toLowerCase();
+        return (
+          p.name.toLowerCase().includes(qq) ||
+          (p.username || "").toLowerCase().includes(qq)
+        );
+      },
     );
     return res.status(200).json({
       configured: false,
@@ -187,6 +208,7 @@ async function handleList(req: VercelRequest, res: VercelResponse) {
       itglueUserId,
       organization: { id: organizationId, name: "Demo Organization" },
       passwords: mocked.map(toListItem),
+      scope,
       error:
         "IT Glue API key not configured — showing demo passwords. Add ITGLUE_API_KEY with Password Access.",
     });
@@ -217,12 +239,29 @@ async function handleList(req: VercelRequest, res: VercelResponse) {
     });
   }
 
-  const allowUnscopedStaff = isStaff && itglueUserId == null;
+  // Clients: strict MyGlue share list only.
+  // Staff with linked user: org unrestricted + their restricted shares.
+  // Staff without linked user: unscoped API-key org view (non-restricted).
+  let groupIds: number[] = [];
+  if (itglueUserId != null) {
+    try {
+      groupIds = await getUserGroupIds(itglueUserId);
+    } catch {
+      groupIds = [];
+    }
+  }
+  const scope: PasswordAccessScope = !isStaff
+    ? "myglue"
+    : itglueUserId == null
+      ? "unscoped"
+      : "staff_org";
+  const allowUnscopedStaff = scope === "unscoped";
   const visible = listed.filter((p) =>
     userCanAccessPassword(p, {
       itglueUserId,
       organizationId,
-      allowUnscopedStaff,
+      scope,
+      groupIds,
     }),
   );
 
@@ -246,7 +285,10 @@ async function handleList(req: VercelRequest, res: VercelResponse) {
     resolvedByEmail,
     resolveNote,
     unscopedStaff: allowUnscopedStaff,
+    scope,
+    groupIds,
     totalInOrg: listed.length,
+    visibleCount: filtered.length,
     passwords: filtered.map(toListItem),
   });
 }

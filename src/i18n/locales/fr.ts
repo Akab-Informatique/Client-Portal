@@ -238,7 +238,7 @@ export const fr: Dictionary = {
     unreadCount: "{n} non lu(s)",
     empty: "Votre babillard est vide",
     emptyDesc:
-      "Lorsqu'une mise à jour AKAB est publiée pour votre entreprise, elle apparaîtra ici comme non lue.",
+      "Aucun mot de passe n'est partagé avec votre compte MyGlue dans cette organisation. Demandez à votre fournisseur de partager les identifiants dont vous avez besoin dans MyGlue / IT Glue.",
     noFilter: "Aucun message ne correspond à ce filtre",
     noFilterDesc: "Essayez un autre filtre ou effacez les étiquettes.",
     markRead: "Marquer lu",
@@ -498,7 +498,7 @@ export const fr: Dictionary = {
     vaultDesc:
       "Vous ne voyez que les mots de passe autorisés pour votre utilisateur de coffre lié. Les entrées restreintes restent masquées sauf si elles vous sont partagées.",
     vaultDescClient:
-      "La vue client utilise MyGlue : mots de passe d'organisation plus les entrées restreintes partagées avec votre utilisateur MyGlue lié.",
+      "Uniquement les mots de passe explicitement partagés avec votre compte MyGlue (accès utilisateur ou groupe). Vous ne verrez pas tout le coffre de l'entreprise.",
     vaultDescStaff:
       "La vue personnel utilise IT Glue pour votre utilisateur IT Glue lié dans cette organisation cliente. Les entrées restreintes restent masquées sauf si cet utilisateur y est autorisé.",
     demo: "Données démo",
@@ -509,7 +509,7 @@ export const fr: Dictionary = {
     searchPlaceholder: "Nom, utilisateur ou URL…",
     emptyTitle: "Aucun mot de passe disponible",
     emptyDesc:
-      "Rien n'est partagé avec votre utilisateur MyGlue dans cette organisation, ou le coffre est vide.",
+      "Aucun mot de passe n'est partagé avec votre compte MyGlue dans cette organisation. Demandez à votre fournisseur de partager les identifiants dont vous avez besoin dans MyGlue / IT Glue.",
     emptyNoMyGlueTitle: "Utilisateur MyGlue non lié",
     emptyNoMyGlueDesc:
       "Aucun mot de passe n'est affiché tant qu'un administrateur n'a pas ajouté votre numéro d'utilisateur MyGlue sur votre compte portail. Seuls les mots de passe autorisés pour cet utilisateur MyGlue apparaîtront.",

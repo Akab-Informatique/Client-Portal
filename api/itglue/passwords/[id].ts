@@ -8,8 +8,10 @@ import {
   mockPasswordsForOrg,
   mockUpdatePassword,
   updatePassword,
+  getUserGroupIds,
   userCanAccessPassword,
   type ItGluePassword,
+  type PasswordAccessScope,
 } from "../../_lib/itglue-client.js";
 
 /**
@@ -119,20 +121,27 @@ async function assertAccess(
     orgId: number | null;
     itglueUserId: number | null;
     isStaff: boolean;
+    groupIds?: number[];
   },
 ): Promise<{ ok: true } | { ok: false; status: number; error: string }> {
-  const allowUnscopedStaff = opts.isStaff && opts.itglueUserId == null;
+  const scope: PasswordAccessScope = !opts.isStaff
+    ? "myglue"
+    : opts.itglueUserId == null
+      ? "unscoped"
+      : "staff_org";
   const allowed = userCanAccessPassword(password, {
     itglueUserId: opts.itglueUserId,
     organizationId: opts.orgId ?? password.organizationId,
-    allowUnscopedStaff,
+    scope,
+    groupIds: opts.groupIds ?? [],
   });
   if (!allowed) {
     return {
       ok: false,
       status: 403,
-      error:
-        "This password is restricted and not shared with your MyGlue / IT Glue user.",
+      error: opts.isStaff
+        ? "This password is restricted and not shared with your IT Glue user."
+        : "This password is not shared with your MyGlue account.",
     };
   }
   if (
@@ -195,10 +204,19 @@ async function handleGet(req: VercelRequest, res: VercelResponse) {
     return res.status(404).json({ error: "Password not found in IT Glue." });
   }
 
+  let groupIds: number[] = [];
+  if (itglueUserId != null) {
+    try {
+      groupIds = await getUserGroupIds(itglueUserId);
+    } catch {
+      groupIds = [];
+    }
+  }
   const access = await assertAccess(password, {
     orgId: parsed.orgId,
     itglueUserId,
     isStaff: parsed.isStaff,
+    groupIds,
   });
   if (!access.ok) {
     return res.status(access.status).json({ error: access.error });
@@ -328,10 +346,19 @@ async function handleUpdate(req: VercelRequest, res: VercelResponse) {
     return res.status(404).json({ error: "Password not found in IT Glue." });
   }
 
+  let groupIds: number[] = [];
+  if (itglueUserId != null) {
+    try {
+      groupIds = await getUserGroupIds(itglueUserId);
+    } catch {
+      groupIds = [];
+    }
+  }
   const access = await assertAccess(current, {
     orgId: parsed.orgId,
     itglueUserId,
     isStaff: parsed.isStaff,
+    groupIds,
   });
   if (!access.ok) {
     return res.status(access.status).json({ error: access.error });
@@ -417,10 +444,19 @@ async function handleDelete(req: VercelRequest, res: VercelResponse) {
     return res.status(404).json({ error: "Password not found in IT Glue." });
   }
 
+  let groupIds: number[] = [];
+  if (itglueUserId != null) {
+    try {
+      groupIds = await getUserGroupIds(itglueUserId);
+    } catch {
+      groupIds = [];
+    }
+  }
   const access = await assertAccess(current, {
     orgId: parsed.orgId,
     itglueUserId,
     isStaff: parsed.isStaff,
+    groupIds,
   });
   if (!access.ok) {
     return res.status(access.status).json({ error: access.error });
