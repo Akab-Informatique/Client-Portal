@@ -510,8 +510,15 @@ export const fr: Dictionary = {
     emptyTitle: "Aucun mot de passe disponible",
     emptyDesc:
       "Rien n'est partagé avec votre utilisateur MyGlue dans cette organisation, ou le coffre est vide.",
+    emptyNoMyGlueTitle: "Utilisateur MyGlue non lié",
+    emptyNoMyGlueDesc:
+      "Aucun mot de passe n'est affiché tant qu'un administrateur n'a pas ajouté votre numéro d'utilisateur MyGlue sur votre compte portail. Seuls les mots de passe autorisés pour cet utilisateur MyGlue apparaîtront.",
     errNoOrg:
       "Cette entreprise n'est pas encore liée à une organisation IT Glue. Demandez à un admin de définir l'ID d'organisation sous Clients → Modifier.",
+    errNoMyGlueUser:
+      "Aucun numéro d'utilisateur MyGlue sur ce compte. Aucun mot de passe n'est disponible.",
+    clientNeedsMyGlueNote:
+      "Les mots de passe clients exigent un ID utilisateur MyGlue sur ce compte portail. Demandez à votre administrateur de le définir sous Clients → Utilisateurs.",
     errReveal: "Impossible d'afficher ce mot de passe.",
     colName: "Nom",
     colUsername: "Nom d'utilisateur",

@@ -496,8 +496,15 @@ export const en = {
     emptyTitle: "No passwords available",
     emptyDesc:
       "Nothing is shared with your MyGlue user in this organization, or the vault is empty.",
+    emptyNoMyGlueTitle: "MyGlue user not linked",
+    emptyNoMyGlueDesc:
+      "No passwords are shown until an administrator adds your MyGlue user number on your portal account. Only passwords allowed for that MyGlue user will appear.",
     errNoOrg:
       "This company is not linked to an IT Glue organization yet. Ask an admin to set the IT Glue Organization ID under Clients → Edit.",
+    errNoMyGlueUser:
+      "No MyGlue user number on this account. No passwords are available.",
+    clientNeedsMyGlueNote:
+      "Client passwords require a MyGlue user ID on this portal account. Ask your administrator to set it under Clients → Users.",
     errReveal: "Could not reveal this password.",
     colName: "Name",
     colUsername: "Username",

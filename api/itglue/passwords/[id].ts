@@ -74,7 +74,10 @@ function parseIdentity(req: VercelRequest) {
 async function resolveUserId(
   itglueUserId: number | null,
   email: string,
+  isStaff: boolean,
 ): Promise<number | null> {
+  // Clients: only the explicit MyGlue number on the portal account (no email match)
+  if (!isStaff) return itglueUserId;
   if (itglueUserId != null) return itglueUserId;
   if (!email || !isItGlueConfigured()) return null;
   try {
@@ -84,6 +87,10 @@ async function resolveUserId(
     /* ignore */
   }
   return null;
+}
+
+function clientMissingMyGlue(isStaff: boolean, itglueUserId: number | null) {
+  return !isStaff && itglueUserId == null;
 }
 
 function toDetail(p: ItGluePassword) {
@@ -147,7 +154,19 @@ async function handleGet(req: VercelRequest, res: VercelResponse) {
   if (!id) return res.status(400).json({ error: "Missing password id" });
 
   const parsed = parseIdentity(req);
-  const itglueUserId = await resolveUserId(parsed.itglueUserId, parsed.email);
+  const itglueUserId = await resolveUserId(
+    parsed.itglueUserId,
+    parsed.email,
+    parsed.isStaff,
+  );
+
+  if (clientMissingMyGlue(parsed.isStaff, itglueUserId)) {
+    return res.status(403).json({
+      error:
+        "No MyGlue user ID on this portal account. No passwords are available until an administrator links your MyGlue user number.",
+      requiresMyGlueUser: true,
+    });
+  }
 
   if (!isItGlueConfigured()) {
     if (parsed.orgId == null) {
@@ -251,7 +270,19 @@ async function handleUpdate(req: VercelRequest, res: VercelResponse) {
     return res.status(400).json({ error: "Name cannot be empty." });
   }
 
-  const itglueUserId = await resolveUserId(parsed.itglueUserId, parsed.email);
+  const itglueUserId = await resolveUserId(
+    parsed.itglueUserId,
+    parsed.email,
+    parsed.isStaff,
+  );
+
+  if (clientMissingMyGlue(parsed.isStaff, itglueUserId)) {
+    return res.status(403).json({
+      error:
+        "No MyGlue user ID on this portal account. No passwords are available until an administrator links your MyGlue user number.",
+      requiresMyGlueUser: true,
+    });
+  }
 
   if (!isItGlueConfigured()) {
     try {
@@ -334,7 +365,19 @@ async function handleDelete(req: VercelRequest, res: VercelResponse) {
     return res.status(400).json({ error: "Missing organizationId" });
   }
 
-  const itglueUserId = await resolveUserId(parsed.itglueUserId, parsed.email);
+  const itglueUserId = await resolveUserId(
+    parsed.itglueUserId,
+    parsed.email,
+    parsed.isStaff,
+  );
+
+  if (clientMissingMyGlue(parsed.isStaff, itglueUserId)) {
+    return res.status(403).json({
+      error:
+        "No MyGlue user ID on this portal account. No passwords are available until an administrator links your MyGlue user number.",
+      requiresMyGlueUser: true,
+    });
+  }
 
   if (!isItGlueConfigured()) {
     try {

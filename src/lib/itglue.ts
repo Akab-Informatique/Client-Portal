@@ -32,6 +32,8 @@ export type PasswordsListResponse = {
   resolvedByEmail?: number | null;
   resolveNote?: string | null;
   unscopedStaff?: boolean;
+  /** Client account has no MyGlue user number — vault intentionally empty */
+  requiresMyGlueUser?: boolean;
   totalInOrg?: number;
   error?: string;
 };

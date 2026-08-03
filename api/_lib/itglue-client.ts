@@ -327,15 +327,20 @@ export function userCanAccessPassword(
     return false;
   }
 
+  // Without a linked IT Glue / MyGlue user id:
+  // - staff may see unrestricted org passwords when allowUnscopedStaff is set
+  // - clients never see anything (caller should block earlier; this is a hard stop)
+  if (opts.itglueUserId == null) {
+    if (!password.restricted && opts.allowUnscopedStaff) return true;
+    return false;
+  }
+
   if (!password.restricted) {
-    // Org-visible (MyGlue org members)
+    // Org-visible for linked MyGlue / IT Glue users in this organization
     return true;
   }
 
-  // Restricted: must be explicitly authorized
-  if (opts.itglueUserId == null) {
-    return Boolean(opts.allowUnscopedStaff);
-  }
+  // Restricted: must be explicitly authorized for this vault user
   return password.authorizedUserIds.includes(opts.itglueUserId);
 }
 

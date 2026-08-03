@@ -219,6 +219,9 @@ export function PasswordsPage() {
   }, [user]);
 
   const orgId = company?.itglue_organization_id?.trim() || "";
+  const isClient = user?.role === "client";
+  const clientMyGlueId = (user?.itglue_user_id || "").trim();
+  const clientNeedsMyGlue = Boolean(isClient && !clientMyGlueId);
 
   const identity = useMemo(
     () => ({
@@ -248,6 +251,18 @@ export function PasswordsPage() {
         return;
       }
 
+      // Client with no MyGlue number → never call API, show empty vault
+      if (user.role === "client" && !(user.itglue_user_id || "").trim()) {
+        setItems([]);
+        setConfigured(true);
+        setMock(false);
+        setError(t("passwords.errNoMyGlueUser"));
+        setNote(t("passwords.clientNeedsMyGlueNote"));
+        setLoading(false);
+        setRefreshing(false);
+        return;
+      }
+
       if (soft) setRefreshing(true);
       else setLoading(true);
       setError(null);
@@ -255,8 +270,12 @@ export function PasswordsPage() {
 
       const res = await fetchPasswords({
         organizationId: orgId,
-        itglueUserId: user.itglue_user_id,
-        email: user.email,
+        // Clients: only the linked MyGlue number (never fall back to email match)
+        itglueUserId:
+          user.role === "client"
+            ? (user.itglue_user_id || "").trim() || null
+            : user.itglue_user_id,
+        email: user.role === "client" ? null : user.email,
         role: user.role,
         q: q || null,
       });
@@ -264,18 +283,23 @@ export function PasswordsPage() {
       setItems(res.passwords ?? []);
       setConfigured(Boolean(res.configured));
       setMock(Boolean(res.mock));
-      if (res.resolveNote) setNote(res.resolveNote);
-      if (res.unscopedStaff) {
-        setNote((prev) =>
-          [prev, t("passwords.staffUnscopedNote")].filter(Boolean).join(" "),
-        );
-      }
-      if (res.error && !(res.passwords && res.passwords.length)) {
-        setError(res.error);
-      } else if (res.error && res.mock) {
-        setError(res.error);
+      if (res.requiresMyGlueUser) {
+        setNote(t("passwords.clientNeedsMyGlueNote"));
+        setError(res.error || t("passwords.errNoMyGlueUser"));
       } else {
-        setError(null);
+        if (res.resolveNote) setNote(res.resolveNote);
+        if (res.unscopedStaff) {
+          setNote((prev) =>
+            [prev, t("passwords.staffUnscopedNote")].filter(Boolean).join(" "),
+          );
+        }
+        if (res.error && !(res.passwords && res.passwords.length)) {
+          setError(res.error);
+        } else if (res.error && res.mock) {
+          setError(res.error);
+        } else {
+          setError(null);
+        }
       }
       setLoading(false);
       setRefreshing(false);
@@ -300,10 +324,19 @@ export function PasswordsPage() {
     return () => window.clearTimeout(timer);
   }, [flash]);
 
-  const canMutate = Boolean(user && orgId);
+  const canMutate = Boolean(
+    user && orgId && !(user.role === "client" && !(user.itglue_user_id || "").trim()),
+  );
 
   const openDetail = async (item: ItGluePasswordListItem) => {
     if (!user || !orgId) return;
+    if (user.role === "client" && !(user.itglue_user_id || "").trim()) {
+      setDetailOpen(true);
+      setDetailLoading(false);
+      setDetailError(t("passwords.errNoMyGlueUser"));
+      setDetail({ ...item, password: null });
+      return;
+    }
     setDetailOpen(true);
     setDetailLoading(true);
     setDetailError(null);
@@ -313,8 +346,11 @@ export function PasswordsPage() {
     const res = await revealPassword({
       id: item.id,
       organizationId: orgId,
-      itglueUserId: user.itglue_user_id,
-      email: user.email,
+      itglueUserId:
+        user.role === "client"
+          ? (user.itglue_user_id || "").trim() || null
+          : user.itglue_user_id,
+      email: user.role === "client" ? null : user.email,
       role: user.role,
     });
 
@@ -465,9 +501,11 @@ export function PasswordsPage() {
     return `${company.name}${org} — ${base}`;
   }, [company, t, isStaff]);
 
-  const vaultDesc = isStaff
-    ? t("passwords.vaultDescStaff")
-    : t("passwords.vaultDescClient");
+  const vaultDesc = clientNeedsMyGlue
+    ? t("passwords.emptyNoMyGlueDesc")
+    : isStaff
+      ? t("passwords.vaultDescStaff")
+      : t("passwords.vaultDescClient");
 
   return (
     <div className="space-y-6">
@@ -616,13 +654,27 @@ export function PasswordsPage() {
                   />
                 ))}
               </div>
-            ) : items.length === 0 && !error ? (
+            ) : items.length === 0 && (!error || clientNeedsMyGlue) ? (
               <EmptyState
                 icon={<KeyRound className="size-5" />}
-                title={t("passwords.emptyTitle")}
-                description={t("passwords.emptyDesc")}
-                actionLabel={canMutate ? t("passwords.emptyAction") : undefined}
-                onAction={canMutate ? openCreate : undefined}
+                title={
+                  clientNeedsMyGlue
+                    ? t("passwords.emptyNoMyGlueTitle")
+                    : t("passwords.emptyTitle")
+                }
+                description={
+                  clientNeedsMyGlue
+                    ? t("passwords.emptyNoMyGlueDesc")
+                    : t("passwords.emptyDesc")
+                }
+                actionLabel={
+                  canMutate && !clientNeedsMyGlue
+                    ? t("passwords.emptyAction")
+                    : undefined
+                }
+                onAction={
+                  canMutate && !clientNeedsMyGlue ? openCreate : undefined
+                }
               />
             ) : items.length === 0 ? null : (
               <div className="overflow-hidden rounded-lg border border-border">

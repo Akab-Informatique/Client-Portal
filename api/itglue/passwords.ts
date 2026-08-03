@@ -144,10 +144,34 @@ async function handleList(req: VercelRequest, res: VercelResponse) {
   }
 
   const q = String(req.query.q ?? req.query.search ?? "").trim();
-  const resolved = await resolveItGlueUser(parsed.itglueUserId, parsed.email);
-  const itglueUserId = resolved.itglueUserId;
   const organizationId = parsed.organizationId;
   const isStaff = parsed.isStaff;
+
+  // Clients: ONLY the explicit MyGlue user id on the portal account.
+  // No email auto-match, and no passwords if the id is missing.
+  let itglueUserId: number | null = parsed.itglueUserId;
+  let resolvedByEmail: number | null = null;
+  let resolveNote: string | null = null;
+
+  if (!isStaff) {
+    if (itglueUserId == null) {
+      return res.status(200).json({
+        configured: isItGlueConfigured(),
+        mock: false,
+        organizationId,
+        itglueUserId: null,
+        passwords: [],
+        requiresMyGlueUser: true,
+        error:
+          "No MyGlue user ID on this portal account. Ask your administrator to set the MyGlue user number on your user profile. No passwords are shown until it is linked.",
+      });
+    }
+  } else {
+    const resolved = await resolveItGlueUser(parsed.itglueUserId, parsed.email);
+    itglueUserId = resolved.itglueUserId;
+    resolvedByEmail = resolved.resolvedByEmail;
+    resolveNote = resolved.resolveNote;
+  }
 
   if (!isItGlueConfigured()) {
     const mocked = mockPasswordsForOrg(organizationId, itglueUserId).filter(
@@ -219,8 +243,8 @@ async function handleList(req: VercelRequest, res: VercelResponse) {
       ? { id: organizationId, name: organizationName }
       : { id: organizationId, name: null },
     itglueUserId,
-    resolvedByEmail: resolved.resolvedByEmail,
-    resolveNote: resolved.resolveNote,
+    resolvedByEmail,
+    resolveNote,
     unscopedStaff: allowUnscopedStaff,
     totalInOrg: listed.length,
     passwords: filtered.map(toListItem),
@@ -257,11 +281,25 @@ async function handleCreate(req: VercelRequest, res: VercelResponse) {
     return res.status(400).json({ error: "Password value is required." });
   }
 
-  const resolved = await resolveItGlueUser(parsed.itglueUserId, parsed.email);
-  const itglueUserId = resolved.itglueUserId;
   const organizationId = parsed.organizationId;
+  const isStaff = parsed.isStaff;
 
-  // Anyone who can open the vault for this org may create (staff + client users)
+  // Clients must have an explicit MyGlue user id before any vault mutation
+  let itglueUserId: number | null = parsed.itglueUserId;
+  if (!isStaff) {
+    if (itglueUserId == null) {
+      return res.status(403).json({
+        error:
+          "No MyGlue user ID on this portal account. Passwords cannot be created until an administrator links your MyGlue user number.",
+        requiresMyGlueUser: true,
+      });
+    }
+  } else {
+    const resolved = await resolveItGlueUser(parsed.itglueUserId, parsed.email);
+    itglueUserId = resolved.itglueUserId;
+  }
+
+  // Anyone who can open the vault for this org may create (staff + linked client users)
   if (!isItGlueConfigured()) {
     try {
       const created = mockCreatePassword(
