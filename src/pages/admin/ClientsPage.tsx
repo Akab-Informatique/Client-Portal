@@ -1414,17 +1414,32 @@ export function ClientsPage() {
         </DialogContent>
       </Dialog>
 
-      <Dialog open={userOpen} onOpenChange={setUserOpen}>
+      <Dialog
+        open={userOpen}
+        onOpenChange={(open) => {
+          setUserOpen(open);
+          if (!open) {
+            setEditingUser(null);
+            setError(null);
+          }
+        }}
+      >
         <DialogContent className="sm:max-w-md">
           <DialogHeader>
-            <DialogTitle>Add client user</DialogTitle>
+            <DialogTitle>
+              {editingUser
+                ? t("admin.editUser")
+                : t("admin.clientUsersAdd")}
+            </DialogTitle>
             <DialogDescription>
-              Users in the same company share that client zone.
+              {editingUser
+                ? t("admin.editUserDesc")
+                : t("admin.addUserDesc")}
             </DialogDescription>
           </DialogHeader>
           <form onSubmit={saveUser} className="space-y-4">
             <div className="space-y-2">
-              <Label htmlFor="uname">Full name</Label>
+              <Label htmlFor="uname">{t("common.name")}</Label>
               <Input
                 id="uname"
                 value={userForm.name}
@@ -1435,7 +1450,7 @@ export function ClientsPage() {
               />
             </div>
             <div className="space-y-2">
-              <Label htmlFor="uemail">Email</Label>
+              <Label htmlFor="uemail">{t("common.email")}</Label>
               <Input
                 id="uemail"
                 type="email"
@@ -1447,7 +1462,11 @@ export function ClientsPage() {
               />
             </div>
             <div className="space-y-2">
-              <Label htmlFor="upass">Temporary password</Label>
+              <Label htmlFor="upass">
+                {editingUser
+                  ? t("admin.clientUserPasswordOptional")
+                  : t("admin.clientUserPassword")}
+              </Label>
               <Input
                 id="upass"
                 type="text"
@@ -1455,24 +1474,32 @@ export function ClientsPage() {
                 onChange={(e) =>
                   setUserForm((f) => ({ ...f, password: e.target.value }))
                 }
-                required
+                required={!editingUser}
+                placeholder={
+                  editingUser ? t("admin.clientUserPasswordKeep") : undefined
+                }
               />
+              {editingUser && (
+                <p className="text-xs text-muted-foreground">
+                  {t("admin.clientUserPasswordHint")}
+                </p>
+              )}
             </div>
             <div className="space-y-2">
-              <Label htmlFor="uitglue">MyGlue user ID (optional)</Label>
+              <Label htmlFor="uitglue">
+                {t("admin.clientUserItglueId")}
+              </Label>
               <Input
                 id="uitglue"
                 inputMode="numeric"
-                placeholder="e.g. 12345"
+                placeholder={t("admin.clientUserItgluePh")}
                 value={userForm.itglue_user_id}
                 onChange={(e) =>
                   setUserForm((f) => ({ ...f, itglue_user_id: e.target.value }))
                 }
               />
               <p className="text-xs text-muted-foreground">
-                Links this client to their MyGlue user. Passwords only show
-                credentials that MyGlue would allow for that person (org
-                passwords + restricted entries shared with them).
+                {t("admin.clientUserItglueHint")}
               </p>
             </div>
             <label className="flex items-start gap-3 rounded-lg border border-border bg-muted/20 p-3 text-sm">
@@ -1488,26 +1515,53 @@ export function ClientsPage() {
               />
               <span>
                 <span className="font-medium">
-                  Receive message board emails
+                  {t("admin.clientUserBoardEmail")}
                 </span>
                 <span className="mt-0.5 block text-xs text-muted-foreground">
-                  When staff posts a board message with “Also send by email”,
-                  this user gets a private email (sent individually — other
-                  recipients are never visible).
+                  {t("admin.clientUserBoardEmailHint")}
                 </span>
               </span>
             </label>
+            {editingUser && (
+              <label className="flex items-start gap-3 rounded-lg border border-border bg-muted/20 p-3 text-sm">
+                <Checkbox
+                  checked={userForm.active}
+                  onCheckedChange={(v) =>
+                    setUserForm((f) => ({
+                      ...f,
+                      active: v === true,
+                    }))
+                  }
+                  className="mt-0.5"
+                />
+                <span>
+                  <span className="font-medium">
+                    {t("admin.clientUserActive")}
+                  </span>
+                  <span className="mt-0.5 block text-xs text-muted-foreground">
+                    {t("admin.clientUserActiveHint")}
+                  </span>
+                </span>
+              </label>
+            )}
             {error && <p className="text-sm text-destructive">{error}</p>}
             <DialogFooter>
               <Button
                 type="button"
                 variant="outline"
-                onClick={() => setUserOpen(false)}
+                onClick={() => {
+                  setUserOpen(false);
+                  setEditingUser(null);
+                }}
               >
-                Cancel
+                {t("common.cancel")}
               </Button>
               <Button type="submit" disabled={saving}>
-                {saving ? "Creating…" : "Create user"}
+                {saving
+                  ? t("common.saving")
+                  : editingUser
+                    ? t("admin.saveUser")
+                    : t("admin.createUser")}
               </Button>
             </DialogFooter>
           </form>

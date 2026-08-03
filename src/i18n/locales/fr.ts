@@ -317,6 +317,33 @@ export const fr: Dictionary = {
     clientUsersEmpty: "Aucun utilisateur du portail pour cette entreprise.",
     clientUsersAdd: "Ajouter un utilisateur",
     clientUsersSearch: "Rechercher des utilisateurs…",
+    editUser: "Modifier l'utilisateur",
+    editUserDesc:
+      "Mettez à jour la connexion et les préférences de cet utilisateur du portail.",
+    addUserDesc:
+      "Les utilisateurs de la même entreprise partagent cette zone client.",
+    saveUser: "Enregistrer",
+    createUser: "Créer l'utilisateur",
+    clientUserPassword: "Mot de passe temporaire",
+    clientUserPasswordOptional: "Nouveau mot de passe (facultatif)",
+    clientUserPasswordKeep: "Laisser vide pour conserver le mot de passe",
+    clientUserPasswordHint:
+      "Remplissez seulement si vous voulez réinitialiser le mot de passe.",
+    clientUserItglueId: "ID utilisateur MyGlue (facultatif)",
+    clientUserItgluePh: "ex. 12345",
+    clientUserItglueHint:
+      "Lie ce client à son utilisateur MyGlue. Les mots de passe n'affichent que les identifiants autorisés pour cette personne.",
+    clientUserBoardEmail: "Recevoir les courriels du babillard",
+    clientUserBoardEmailHint:
+      "Lorsque le personnel publie un message avec « Envoyer aussi par courriel », cet utilisateur reçoit un courriel privé.",
+    clientUserActive: "Compte actif",
+    clientUserActiveHint:
+      "Les utilisateurs inactifs ne peuvent pas se connecter au portail.",
+    clientUserErrNameEmail: "Le nom et le courriel sont obligatoires.",
+    clientUserErrPassword:
+      "Le mot de passe est obligatoire pour un nouvel utilisateur.",
+    clientUserErrEmailTaken: "Un utilisateur avec ce courriel existe déjà.",
+    clientUserSaveFailed: "Impossible d'enregistrer l'utilisateur.",
     acrossZones: "Toutes les zones",
     viewUsers: "Utilisateurs",
     hideUsers: "Masquer les utilisateurs",
