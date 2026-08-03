@@ -95,6 +95,7 @@ const emptyUser = {
   password: "",
   itglue_user_id: "",
   board_email_opt_in: true,
+  active: true,
 };
 
 type AtCompanyHit = {
@@ -114,6 +115,7 @@ export function ClientsPage() {
   const [companyOpen, setCompanyOpen] = useState(false);
   const [userOpen, setUserOpen] = useState(false);
   const [editing, setEditing] = useState<Company | null>(null);
+  const [editingUser, setEditingUser] = useState<User | null>(null);
   const [form, setForm] = useState(emptyCompany);
   const [userForm, setUserForm] = useState(emptyUser);
   const [selectedCompanyId, setSelectedCompanyId] = useState<number | null>(
@@ -262,7 +264,23 @@ export function ClientsPage() {
 
   const openAddUser = (companyId: number) => {
     setSelectedCompanyId(companyId);
+    setEditingUser(null);
     setUserForm(emptyUser);
+    setError(null);
+    setUserOpen(true);
+  };
+
+  const openEditUser = (user: User) => {
+    setSelectedCompanyId(user.company_id ?? null);
+    setEditingUser(user);
+    setUserForm({
+      name: user.name,
+      email: user.email,
+      password: "",
+      itglue_user_id: user.itglue_user_id ?? "",
+      board_email_opt_in: user.board_email_opt_in !== false,
+      active: user.active,
+    });
     setError(null);
     setUserOpen(true);
   };
@@ -483,39 +501,73 @@ export function ClientsPage() {
   const saveUser = async (e: FormEvent) => {
     e.preventDefault();
     setError(null);
-    if (!selectedCompanyId) return;
-    if (
-      !userForm.name.trim() ||
-      !userForm.email.trim() ||
-      !userForm.password.trim()
-    ) {
-      setError("Name, email, and password are required.");
+    if (!selectedCompanyId && !editingUser) return;
+    if (!userForm.name.trim() || !userForm.email.trim()) {
+      setError(t("admin.clientUserErrNameEmail"));
+      return;
+    }
+    if (!editingUser && !userForm.password.trim()) {
+      setError(t("admin.clientUserErrPassword"));
       return;
     }
     const email = userForm.email.trim().toLowerCase();
+    const companyId = editingUser?.company_id ?? selectedCompanyId;
+    if (!companyId) return;
+
     setSaving(true);
-    await dbReady;
-    const existing = (await db.select().from(schema.users)) as Array<{
-      email: string;
-    }>;
-    if (existing.some((u) => u.email.toLowerCase() === email)) {
+    try {
+      await dbReady;
+      const existing = (await db.select().from(schema.users)) as Array<{
+        id: number;
+        email: string;
+      }>;
+      const emailTaken = existing.some(
+        (u) => u.email.toLowerCase() === email && u.id !== editingUser?.id,
+      );
+      if (emailTaken) {
+        setError(t("admin.clientUserErrEmailTaken"));
+        return;
+      }
+
+      const itglueUserId = userForm.itglue_user_id.trim() || null;
+      const boardOptIn = userForm.board_email_opt_in !== false;
+
+      if (editingUser) {
+        await db
+          .update(schema.users)
+          .set({
+            name: userForm.name.trim(),
+            email,
+            active: userForm.active,
+            itglue_user_id: itglueUserId,
+            board_email_opt_in: boardOptIn,
+            ...(userForm.password.trim()
+              ? { password: userForm.password }
+              : {}),
+          })
+          .where(eq(schema.users.id, editingUser.id));
+      } else {
+        await db.insert(schema.users).values({
+          name: userForm.name.trim(),
+          email,
+          password: userForm.password,
+          role: "client",
+          company_id: companyId,
+          active: userForm.active !== false,
+          itglue_user_id: itglueUserId,
+          board_email_opt_in: boardOptIn,
+        });
+      }
+      setUserOpen(false);
+      setEditingUser(null);
+      await load();
+    } catch (err) {
+      setError(
+        err instanceof Error ? err.message : t("admin.clientUserSaveFailed"),
+      );
+    } finally {
       setSaving(false);
-      setError("A user with this email already exists.");
-      return;
     }
-    await db.insert(schema.users).values({
-      name: userForm.name.trim(),
-      email,
-      password: userForm.password,
-      role: "client",
-      company_id: selectedCompanyId,
-      active: true,
-      itglue_user_id: userForm.itglue_user_id.trim() || null,
-      board_email_opt_in: userForm.board_email_opt_in !== false,
-    });
-    setSaving(false);
-    setUserOpen(false);
-    await load();
   };
 
   const filtered = companies.filter((c) => {
@@ -929,7 +981,17 @@ export function ClientsPage() {
                                                 {formatDate(u.created_at)}
                                               </TableCell>
                                               <TableCell className="text-right">
-                                                <div className="flex justify-end gap-1.5">
+                                                <div className="flex justify-end gap-1">
+                                                  <Button
+                                                    variant="ghost"
+                                                    size="sm"
+                                                    onClick={() =>
+                                                      openEditUser(u)
+                                                    }
+                                                    title={t("admin.editUser")}
+                                                  >
+                                                    <Pencil className="size-4" />
+                                                  </Button>
                                                   <Button
                                                     variant="outline"
                                                     size="sm"
@@ -944,14 +1006,13 @@ export function ClientsPage() {
                                                   <Button
                                                     variant="outline"
                                                     size="sm"
-                                                    className="gap-1.5 text-destructive hover:bg-destructive/10 hover:text-destructive"
+                                                    className="text-destructive hover:bg-destructive/10 hover:text-destructive"
                                                     onClick={() =>
                                                       void handleDeleteUser(u)
                                                     }
                                                     title={t("admin.deleteUser")}
                                                   >
                                                     <Trash2 className="size-3.5" />
-                                                    {t("admin.deleteUser")}
                                                   </Button>
                                                 </div>
                                               </TableCell>
