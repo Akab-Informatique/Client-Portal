@@ -101,19 +101,50 @@ export function isAutotaskConfigured() {
   return getAutotaskConfigFromEnv() != null;
 }
 
-export async function resolveZoneBase(cfg: AutotaskConfig): Promise<string> {
-  if (cfg.zoneBaseUrl) return normalizeBase(cfg.zoneBaseUrl);
+/** In-memory zone cache (per process). Cleared on 401/410 so a bad pin can recover. */
+let cachedZoneBase: string | null = null;
+let cachedZoneKey: string | null = null;
+
+function zoneCacheKey(cfg: AutotaskConfig): string {
+  return `${cfg.username}|${cfg.zoneBaseUrl || ""}|${cfg.integrationCode.slice(0, 8)}`;
+}
+
+export function clearAutotaskZoneCache(): void {
+  cachedZoneBase = null;
+  cachedZoneKey = null;
+}
+
+export async function resolveZoneBase(
+  cfg: AutotaskConfig,
+  opts?: { forceRefresh?: boolean },
+): Promise<string> {
+  const key = zoneCacheKey(cfg);
+  if (!opts?.forceRefresh && cachedZoneBase && cachedZoneKey === key) {
+    return cachedZoneBase;
+  }
+
+  if (cfg.zoneBaseUrl) {
+    const base = normalizeBase(cfg.zoneBaseUrl);
+    cachedZoneBase = base;
+    cachedZoneKey = key;
+    return base;
+  }
 
   const zoneRes = await fetch(
     `https://webservices.autotask.net/atservicesrest/v1.0/zoneInformation?user=${encodeURIComponent(cfg.username)}`,
     { headers: { Accept: "application/json" } },
   );
   if (!zoneRes.ok) {
-    throw new Error(`Autotask zone lookup failed (${zoneRes.status})`);
+    throw new Error(
+      `Autotask zone lookup failed (${zoneRes.status}). Check AUTOTASK_USERNAME (API Username/Key) is correct.`,
+    );
   }
   const zone = (await zoneRes.json()) as { url?: string; zoneName?: string };
   if (!zone.url) throw new Error("Autotask zone lookup returned no URL");
-  return normalizeBase(zone.url);
+  const base = normalizeBase(zone.url);
+  cachedZoneBase = base;
+  cachedZoneKey = key;
+  return base;
 }
 
 function authHeaders(cfg: AutotaskConfig): Record<string, string> {
@@ -187,6 +218,19 @@ export function formatAutotaskErrorPayload(
   return fallback;
 }
 
+function auth401Help(entityLabel: string, detail: string): string {
+  return (
+    `Autotask ${entityLabel} failed (401 Unauthorized): ${detail || "credentials rejected"}. ` +
+    "Fix on the server .env then recreate the app container: " +
+    "(1) AUTOTASK_INTEGRATION_CODE = API Tracking Identifier on the API User, " +
+    "(2) AUTOTASK_USERNAME = API Username (Key) — not a normal login email, " +
+    "(3) AUTOTASK_SECRET = generated Secret (quote it in .env if it has $ # or spaces), " +
+    "(4) API user security level must be API User (API-only) with CRM → Contacts View, " +
+    "(5) optional AUTOTASK_ZONE_URL must match your zone (or remove it to auto-discover). " +
+    "Check Settings → Integrations / GET /api/autotask/status after updating."
+  );
+}
+
 function throwAutotaskHttpError(
   entityLabel: string,
   status: number,
@@ -197,21 +241,31 @@ function throwAutotaskHttpError(
     data,
     text.slice(0, 400) || "No details",
   );
+  if (status === 401) {
+    throw new Error(auth401Help(entityLabel, detail));
+  }
+  if (status === 403) {
+    throw new Error(
+      `Autotask ${entityLabel} failed (403 Forbidden): ${detail}. ` +
+        "Credentials were accepted but this API user cannot access that entity. " +
+        "Edit the API User security level and enable CRM → Contacts (View) and Service Desk → Tickets (View).",
+    );
+  }
   if (status === 410) {
     throw new Error(
       `Autotask ${entityLabel} failed (410 Gone): ${detail}. ` +
-        "The Autotask zone URL is no longer valid. Clear AUTOTASK_ZONE_URL if set, or wait for zone rediscovery, then retry.",
+        "The Autotask zone URL is no longer valid. Clear AUTOTASK_ZONE_URL if set, then retry.",
     );
   }
   throw new Error(`Autotask ${entityLabel} failed (${status}): ${detail}`);
 }
 
-async function postQuery<T>(
+async function postQueryOnce<T>(
   base: string,
   cfg: AutotaskConfig,
   entityPath: string,
   body: unknown,
-): Promise<T> {
+): Promise<{ ok: true; data: T } | { ok: false; status: number; data: unknown; text: string }> {
   const url = `${base}v1.0/${entityPath}`;
   const res = await atFetch(url, cfg, {
     method: "POST",
@@ -225,9 +279,38 @@ async function postQuery<T>(
     data = { raw: text.slice(0, 500) };
   }
   if (!res.ok) {
-    throwAutotaskHttpError(entityPath, res.status, data, text);
+    return { ok: false, status: res.status, data, text };
   }
-  return data as T;
+  return { ok: true, data: data as T };
+}
+
+async function postQuery<T>(
+  base: string,
+  cfg: AutotaskConfig,
+  entityPath: string,
+  body: unknown,
+): Promise<T> {
+  let result = await postQueryOnce<T>(base, cfg, entityPath, body);
+  if (
+    !result.ok &&
+    (result.status === 401 || result.status === 410) &&
+    !cfg.zoneBaseUrl
+  ) {
+    // Stale zone discovery — refresh once and retry
+    clearAutotaskZoneCache();
+    try {
+      const freshBase = await resolveZoneBase(cfg, { forceRefresh: true });
+      if (freshBase !== base) {
+        result = await postQueryOnce<T>(freshBase, cfg, entityPath, body);
+      }
+    } catch {
+      /* keep original failure */
+    }
+  }
+  if (!result.ok) {
+    throwAutotaskHttpError(entityPath, result.status, result.data, result.text);
+  }
+  return result.data;
 }
 
 type FieldsResponse = {
@@ -339,6 +422,109 @@ const TICKET_INCLUDE_FIELDS = [
   "contactID",
   "createdByContactID",
 ];
+
+
+/** Lightweight auth + Contacts permission probe for /api/autotask/status */
+export async function probeAutotaskAccess(): Promise<{
+  ok: boolean;
+  zoneUrl?: string;
+  ticketsAuthOk?: boolean;
+  contactsAuthOk?: boolean;
+  httpStatus?: number;
+  message: string;
+  detail?: string;
+}> {
+  const cfg = getAutotaskConfigFromEnv();
+  if (!cfg) {
+    return {
+      ok: false,
+      message:
+        "Autotask credentials missing. Set AUTOTASK_INTEGRATION_CODE, AUTOTASK_USERNAME, and AUTOTASK_SECRET.",
+    };
+  }
+
+  let zoneUrl: string;
+  try {
+    zoneUrl = await resolveZoneBase(cfg, { forceRefresh: true });
+  } catch (e) {
+    return {
+      ok: false,
+      message: e instanceof Error ? e.message : "Zone lookup failed",
+    };
+  }
+
+  const headers = authHeaders(cfg);
+
+  const ticketProbe = await fetch(`${zoneUrl}v1.0/Tickets/entityInformation`, {
+    headers: { ...headers, Accept: "application/json" },
+  });
+  if (!ticketProbe.ok) {
+    const text = await ticketProbe.text().catch(() => "");
+    const detail = formatAutotaskErrorPayload(text, text.slice(0, 200) || "No details");
+    return {
+      ok: false,
+      zoneUrl,
+      ticketsAuthOk: false,
+      contactsAuthOk: false,
+      httpStatus: ticketProbe.status,
+      detail,
+      message:
+        ticketProbe.status === 401
+          ? auth401Help("Tickets/entityInformation", detail)
+          : `Autotask Tickets probe failed (${ticketProbe.status}): ${detail}`,
+    };
+  }
+
+  // Contacts are required for client ticket matching by email
+  const contactProbe = await fetch(`${zoneUrl}v1.0/Contacts/entityInformation`, {
+    headers: { ...headers, Accept: "application/json" },
+  });
+  if (!contactProbe.ok) {
+    const text = await contactProbe.text().catch(() => "");
+    const detail = formatAutotaskErrorPayload(text, text.slice(0, 200) || "No details");
+    return {
+      ok: false,
+      zoneUrl,
+      ticketsAuthOk: true,
+      contactsAuthOk: false,
+      httpStatus: contactProbe.status,
+      detail,
+      message:
+        contactProbe.status === 401 || contactProbe.status === 403
+          ? `Autotask accepts the API user for Tickets, but Contacts failed (${contactProbe.status}): ${detail}. ` +
+            "Edit the API User security level → CRM → Contacts → enable View (and Query). Client tickets match portal email to Autotask Contacts."
+          : `Autotask Contacts probe failed (${contactProbe.status}): ${detail}`,
+    };
+  }
+
+  // Tiny Contacts query — catches query-level denials entityInformation might miss
+  try {
+    await postQuery(zoneUrl, cfg, "Contacts/query", {
+      MaxRecords: 1,
+      IncludeFields: ["id", "emailAddress", "companyID"],
+      filter: [{ op: "exist", field: "id" }],
+    });
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e);
+    return {
+      ok: false,
+      zoneUrl,
+      ticketsAuthOk: true,
+      contactsAuthOk: false,
+      httpStatus: /\(401\b/.test(msg) ? 401 : /\(403\b/.test(msg) ? 403 : undefined,
+      detail: msg,
+      message: msg,
+    };
+  }
+
+  return {
+    ok: true,
+    zoneUrl,
+    ticketsAuthOk: true,
+    contactsAuthOk: true,
+    message: "Connected to Autotask PSA (Tickets + Contacts)",
+  };
+}
 
 /**
  * Find Autotask Contact(s) whose email matches the portal user.

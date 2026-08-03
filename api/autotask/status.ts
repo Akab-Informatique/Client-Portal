@@ -2,13 +2,13 @@ import type { VercelRequest, VercelResponse } from "@vercel/node";
 import {
   getAutotaskConfigFromEnv,
   isAutotaskConfigured,
-  resolveZoneBase,
+  probeAutotaskAccess,
 } from "../_lib/autotask-client.js";
 
 /**
  * GET /api/autotask/status
  * Lightweight health check — does not list tickets.
- * Verifies credentials + zone resolution against Autotask.
+ * Verifies credentials + zone + Tickets/Contacts access (needed for client ticket matching).
  */
 export default async function handler(req: VercelRequest, res: VercelResponse) {
   try {
@@ -28,58 +28,25 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     }
 
     const cfg = getAutotaskConfigFromEnv()!;
-
-    let zoneUrl: string;
-    try {
-      zoneUrl = await resolveZoneBase(cfg);
-    } catch (e) {
-      return res.status(200).json({
-        ok: false,
-        configured: true,
-        zoneOk: false,
-        message: e instanceof Error ? e.message : "Zone lookup failed",
-        usernameHint: maskMiddle(cfg.username),
-        integrationCodeHint: maskMiddle(cfg.integrationCode),
-      });
-    }
-
-    // Probe entity info (lightweight auth check)
-    const probeUrl = `${zoneUrl}v1.0/Tickets/entityInformation`;
-    const probe = await fetch(probeUrl, {
-      headers: {
-        ApiIntegrationCode: cfg.integrationCode,
-        UserName: cfg.username,
-        Secret: cfg.secret,
-        Accept: "application/json",
-      },
-    });
-
-    if (!probe.ok) {
-      const text = await probe.text().catch(() => "");
-      return res.status(200).json({
-        ok: false,
-        configured: true,
-        zoneOk: true,
-        zoneUrl,
-        authOk: false,
-        httpStatus: probe.status,
-        usernameHint: maskMiddle(cfg.username),
-        integrationCodeHint: maskMiddle(cfg.integrationCode),
-        secretLength: cfg.secret.length,
-        message:
-          probe.status === 401
-            ? "Autotask rejected credentials (401). Check: (1) API Tracking Identifier / Integration Code, (2) API Username (Key), (3) Secret. Use an API-only user, not a normal login."
-            : `Autotask probe failed (${probe.status}): ${text.slice(0, 200)}`,
-      });
-    }
+    const probe = await probeAutotaskAccess();
 
     return res.status(200).json({
-      ok: true,
+      ok: probe.ok,
       configured: true,
-      zoneOk: true,
-      authOk: true,
-      zoneUrl,
-      message: "Connected to Autotask PSA",
+      zoneOk: Boolean(probe.zoneUrl),
+      zoneUrl: probe.zoneUrl ?? null,
+      authOk: probe.ticketsAuthOk === true,
+      ticketsAuthOk: probe.ticketsAuthOk === true,
+      contactsAuthOk: probe.contactsAuthOk === true,
+      httpStatus: probe.httpStatus ?? null,
+      usernameHint: maskMiddle(cfg.username),
+      integrationCodeHint: maskMiddle(cfg.integrationCode),
+      secretLength: cfg.secret.length,
+      message: probe.message,
+      detail: probe.detail ?? null,
+      hint: probe.ok
+        ? null
+        : "After fixing .env: docker compose up -d --force-recreate app  then hard-refresh Settings.",
     });
   } catch (err) {
     return res.status(500).json({

@@ -145,10 +145,12 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       }
     }
     const isGone = /\(410\b|410 Gone/i.test(message);
-    return res.status(isGone ? 410 : 500).json({
+    const isAuth = /\(401\b|Unauthorized|credentials rejected/i.test(message);
+    return res.status(isGone ? 410 : isAuth ? 502 : 500).json({
       error: message,
       configured: isAutotaskConfigured(),
       tickets: [],
+      authError: isAuth,
     });
   }
 }
