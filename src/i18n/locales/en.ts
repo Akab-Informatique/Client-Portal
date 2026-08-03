@@ -96,6 +96,10 @@ export const en = {
     graphAppReady: "Portal Graph defaults ready",
     graphLinkedCount: "{linked}/{total} clients linked",
     connectPerClient: "Connect client sites & apps",
+    autotaskPartial: "Tickets OK · Contacts issue",
+    autotaskContactsWarn:
+      "Client tickets need Contacts permission on the Autotask API user (CRM → Contacts → View).",
+    retest: "Retest",
     statusConnected: "Connected",
     statusNotConfigured: "Not configured",
     statusIssue: "Issue",

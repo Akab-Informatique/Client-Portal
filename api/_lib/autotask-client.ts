@@ -147,14 +147,21 @@ export async function resolveZoneBase(
   return base;
 }
 
-function authHeaders(cfg: AutotaskConfig): Record<string, string> {
-  return {
+function authHeaders(
+  cfg: AutotaskConfig,
+  opts?: { jsonBody?: boolean },
+): Record<string, string> {
+  const headers: Record<string, string> = {
     ApiIntegrationCode: cfg.integrationCode,
     UserName: cfg.username,
     Secret: cfg.secret,
-    "Content-Type": "application/json",
     Accept: "application/json",
   };
+  // Only set Content-Type when sending a JSON body. Some gateways reject GET + Content-Type.
+  if (opts?.jsonBody) {
+    headers["Content-Type"] = "application/json";
+  }
+  return headers;
 }
 
 async function atFetch(
@@ -162,10 +169,12 @@ async function atFetch(
   cfg: AutotaskConfig,
   init?: RequestInit,
 ): Promise<Response> {
+  const method = (init?.method || "GET").toUpperCase();
+  const hasBody = init?.body != null && method !== "GET" && method !== "HEAD";
   return fetch(url, {
     ...init,
     headers: {
-      ...authHeaders(cfg),
+      ...authHeaders(cfg, { jsonBody: hasBody }),
       ...(init?.headers as Record<string, string> | undefined),
     },
   });
@@ -427,7 +436,9 @@ const TICKET_INCLUDE_FIELDS = [
 /** Lightweight auth + Contacts permission probe for /api/autotask/status */
 export async function probeAutotaskAccess(): Promise<{
   ok: boolean;
+  zoneOk?: boolean;
   zoneUrl?: string;
+  authOk?: boolean;
   ticketsAuthOk?: boolean;
   contactsAuthOk?: boolean;
   httpStatus?: number;
@@ -438,6 +449,10 @@ export async function probeAutotaskAccess(): Promise<{
   if (!cfg) {
     return {
       ok: false,
+      zoneOk: false,
+      authOk: false,
+      ticketsAuthOk: false,
+      contactsAuthOk: false,
       message:
         "Autotask credentials missing. Set AUTOTASK_INTEGRATION_CODE, AUTOTASK_USERNAME, and AUTOTASK_SECRET.",
     };
@@ -449,21 +464,38 @@ export async function probeAutotaskAccess(): Promise<{
   } catch (e) {
     return {
       ok: false,
+      zoneOk: false,
+      authOk: false,
+      ticketsAuthOk: false,
+      contactsAuthOk: false,
       message: e instanceof Error ? e.message : "Zone lookup failed",
     };
   }
 
-  const headers = authHeaders(cfg);
+  // GET probes — no Content-Type header
+  const getHeaders = authHeaders(cfg, { jsonBody: false });
 
   const ticketProbe = await fetch(`${zoneUrl}v1.0/Tickets/entityInformation`, {
-    headers: { ...headers, Accept: "application/json" },
+    method: "GET",
+    headers: getHeaders,
   });
   if (!ticketProbe.ok) {
-    const text = await ticketProbe.text().catch(() => "");
-    const detail = formatAutotaskErrorPayload(text, text.slice(0, 200) || "No details");
+    const textBody = await ticketProbe.text().catch(() => "");
+    let parsed: unknown = textBody;
+    try {
+      parsed = textBody ? JSON.parse(textBody) : null;
+    } catch {
+      /* keep text */
+    }
+    const detail = formatAutotaskErrorPayload(
+      parsed,
+      textBody.slice(0, 200) || "No details",
+    );
     return {
       ok: false,
+      zoneOk: true,
       zoneUrl,
+      authOk: false,
       ticketsAuthOk: false,
       contactsAuthOk: false,
       httpStatus: ticketProbe.status,
@@ -475,61 +507,87 @@ export async function probeAutotaskAccess(): Promise<{
     };
   }
 
-  // Contacts are required for client ticket matching by email
+  // Contacts entity info
+  let contactsEntityOk = false;
   const contactProbe = await fetch(`${zoneUrl}v1.0/Contacts/entityInformation`, {
-    headers: { ...headers, Accept: "application/json" },
+    method: "GET",
+    headers: getHeaders,
   });
-  if (!contactProbe.ok) {
-    const text = await contactProbe.text().catch(() => "");
-    const detail = formatAutotaskErrorPayload(text, text.slice(0, 200) || "No details");
-    return {
-      ok: false,
-      zoneUrl,
-      ticketsAuthOk: true,
-      contactsAuthOk: false,
-      httpStatus: contactProbe.status,
-      detail,
-      message:
-        contactProbe.status === 401 || contactProbe.status === 403
-          ? `Autotask accepts the API user for Tickets, but Contacts failed (${contactProbe.status}): ${detail}. ` +
-            "Edit the API User security level → CRM → Contacts → enable View (and Query). Client tickets match portal email to Autotask Contacts."
-          : `Autotask Contacts probe failed (${contactProbe.status}): ${detail}`,
-    };
+  if (contactProbe.ok) {
+    contactsEntityOk = true;
   }
 
-  // Tiny Contacts query — catches query-level denials entityInformation might miss
-  try {
-    await postQuery(zoneUrl, cfg, "Contacts/query", {
+  // Contacts/query — required for client ticket email matching.
+  // Try a few Autotask-safe filters (tenants differ on "exist").
+  const queryBodies = [
+    {
       MaxRecords: 1,
       IncludeFields: ["id", "emailAddress", "companyID"],
+      filter: [{ op: "gte", field: "id", value: 0 }],
+    },
+    {
+      MaxRecords: 1,
+      IncludeFields: ["id"],
       filter: [{ op: "exist", field: "id" }],
-    });
-  } catch (e) {
-    const msg = e instanceof Error ? e.message : String(e);
+    },
+  ];
+
+  let contactsQueryOk = false;
+  let contactsQueryError: string | null = null;
+  let contactsHttp: number | undefined;
+
+  for (const body of queryBodies) {
+    try {
+      await postQuery(zoneUrl, cfg, "Contacts/query", body);
+      contactsQueryOk = true;
+      contactsQueryError = null;
+      break;
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      contactsQueryError = msg;
+      if (/\(401\b/.test(msg)) contactsHttp = 401;
+      else if (/\(403\b/.test(msg)) contactsHttp = 403;
+      else if (/\(400\b/.test(msg)) contactsHttp = 400;
+      // try next filter shape
+    }
+  }
+
+  const contactsAuthOk = contactsQueryOk || contactsEntityOk;
+
+  // Main connection = Tickets auth. Contacts is reported separately so Settings
+  // does not look "fully down" when only Contacts permission is missing.
+  if (!contactsQueryOk) {
+    const detail = contactsQueryError || "Contacts/query failed";
+    const msg = contactsEntityOk
+      ? `Autotask Tickets API is connected, but Contacts/query failed: ${detail}. Client tickets need Contacts View on the API User security level (CRM → Contacts). Company search may still work.`
+      : `Autotask Tickets API is connected, but Contacts access failed: ${detail}. Enable CRM → Contacts → View on the API User (API-only) security level.`;
+
     return {
-      ok: false,
+      ok: true, // tickets connected
+      zoneOk: true,
       zoneUrl,
+      authOk: true,
       ticketsAuthOk: true,
       contactsAuthOk: false,
-      httpStatus: /\(401\b/.test(msg) ? 401 : /\(403\b/.test(msg) ? 403 : undefined,
-      detail: msg,
+      httpStatus: contactsHttp,
+      detail,
       message: msg,
     };
   }
 
   return {
     ok: true,
+    zoneOk: true,
     zoneUrl,
+    authOk: true,
     ticketsAuthOk: true,
     contactsAuthOk: true,
-    message: "Connected to Autotask PSA (Tickets + Contacts)",
+    message:
+      "Connected to Autotask PSA (Tickets + Contacts). Client tickets load when portal email matches an Autotask Contact and the company has Autotask Company ID set.",
   };
 }
 
-/**
- * Find Autotask Contact(s) whose email matches the portal user.
- * Tries exact match first, then case-insensitive contains fallback.
- */
+
 export async function findContactsByEmail(
   email: string,
   opts?: { companyId?: number | null },

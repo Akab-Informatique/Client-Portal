@@ -99,6 +99,10 @@ export const fr: Dictionary = {
     graphAppReady: "Défauts Graph du portail prêts",
     graphLinkedCount: "{linked}/{total} clients liés",
     connectPerClient: "Connecter sites et apps clients",
+    autotaskPartial: "Tickets OK · problème Contacts",
+    autotaskContactsWarn:
+      "Les billets clients nécessitent la permission Contacts sur l'utilisateur API Autotask (CRM → Contacts → Afficher).",
+    retest: "Retester",
     statusConnected: "Connecté",
     statusNotConfigured: "Non configuré",
     statusIssue: "Problème",

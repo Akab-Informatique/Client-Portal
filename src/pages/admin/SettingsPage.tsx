@@ -51,6 +51,17 @@ export function SettingsPage() {
   const { t } = useLocale();
   const { can } = useAuth();
   const [atStatus, setAtStatus] = useState<ConnState>("unknown");
+  const [atDetail, setAtDetail] = useState<{
+    message?: string;
+    contactsAuthOk?: boolean;
+    authOk?: boolean;
+    configured?: boolean;
+    warnings?: string[];
+    fix?: string[];
+    usernameHint?: string;
+    httpStatus?: number;
+  } | null>(null);
+  const [atChecking, setAtChecking] = useState(false);
   const [spStatus, setSpStatus] = useState<ConnState>("unknown");
   const [igStatus, setIgStatus] = useState<ConnState>("unknown");
   const [smtpStatus, setSmtpStatus] = useState<ConnState>("unknown");
@@ -63,11 +74,52 @@ export function SettingsPage() {
   const [totalClients, setTotalClients] = useState<number | null>(null);
   const [igLinked, setIgLinked] = useState<number | null>(null);
 
+
+  const loadAutotaskStatus = async (refresh: boolean) => {
+    setAtChecking(true);
+    try {
+      const url = refresh
+        ? "/api/autotask/status?refresh=1"
+        : "/api/autotask/status";
+      const r = await fetch(url, { headers: { Accept: "application/json" } });
+      const d = (await r.json()) as {
+        ok?: boolean;
+        configured?: boolean;
+        authOk?: boolean;
+        contactsAuthOk?: boolean;
+        message?: string;
+        warnings?: string[];
+        fix?: string[];
+        usernameHint?: string;
+        httpStatus?: number;
+        error?: string;
+      };
+      setAtDetail({
+        message: d.message || d.error,
+        contactsAuthOk: d.contactsAuthOk,
+        authOk: d.authOk,
+        configured: d.configured,
+        warnings: d.warnings,
+        fix: d.fix,
+        usernameHint: d.usernameHint,
+        httpStatus: d.httpStatus,
+      });
+      if (!d.configured) setAtStatus("off");
+      else if (d.ok && d.authOk !== false) setAtStatus("ok");
+      else setAtStatus("fail");
+    } catch {
+      setAtStatus("fail");
+      setAtDetail({
+        message: "Could not reach /api/autotask/status",
+        configured: false,
+      });
+    } finally {
+      setAtChecking(false);
+    }
+  };
+
   useEffect(() => {
-    fetch("/api/autotask/status")
-      .then((r) => r.json())
-      .then((d: { ok?: boolean }) => setAtStatus(d.ok ? "ok" : "fail"))
-      .catch(() => setAtStatus("fail"));
+    void loadAutotaskStatus(false);
     fetchSharePointStatus(false)
       .then((s) => {
         if (!s.configured) setSpStatus("off");
@@ -291,24 +343,73 @@ export function SettingsPage() {
               </div>
             </div>
 
-            <div className="flex flex-col gap-3 rounded-xl border border-border p-4 sm:flex-row sm:items-center sm:justify-between">
-              <div className="flex items-start gap-3">
-                <div className="flex size-10 shrink-0 items-center justify-center rounded-lg bg-muted">
-                  <Cloud className="size-5 text-foreground" />
+            <div className="flex flex-col gap-3 rounded-xl border border-border p-4">
+              <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+                <div className="flex items-start gap-3">
+                  <div className="flex size-10 shrink-0 items-center justify-center rounded-lg bg-muted">
+                    <Cloud className="size-5 text-foreground" />
+                  </div>
+                  <div className="min-w-0 space-y-1">
+                    <p className="font-semibold">Autotask PSA</p>
+                    <p className="text-xs text-muted-foreground">
+                      {t("settings.autotaskHint")}
+                    </p>
+                    {atDetail?.message && atStatus !== "unknown" && (
+                      <p
+                        className={
+                          atStatus === "ok" && atDetail.contactsAuthOk !== false
+                            ? "text-xs text-muted-foreground"
+                            : "text-xs text-destructive"
+                        }
+                      >
+                        {atDetail.message}
+                      </p>
+                    )}
+                    {atStatus === "ok" && atDetail?.contactsAuthOk === false && (
+                      <p className="text-xs font-medium text-amber-700 dark:text-amber-400">
+                        {t("settings.autotaskContactsWarn")}
+                      </p>
+                    )}
+                    {atDetail?.warnings && atDetail.warnings.length > 0 && (
+                      <ul className="list-disc space-y-0.5 pl-4 text-xs text-amber-700 dark:text-amber-400">
+                        {atDetail.warnings.map((w) => (
+                          <li key={w}>{w}</li>
+                        ))}
+                      </ul>
+                    )}
+                    {atDetail?.fix && atDetail.fix.length > 0 && atStatus === "fail" && (
+                      <ol className="list-decimal space-y-0.5 pl-4 text-xs text-muted-foreground">
+                        {atDetail.fix.map((step) => (
+                          <li key={step} className="break-all font-mono text-[11px]">
+                            {step}
+                          </li>
+                        ))}
+                      </ol>
+                    )}
+                  </div>
                 </div>
-                <div>
-                  <p className="font-semibold">Autotask PSA</p>
-                  <p className="text-xs text-muted-foreground">
-                    {t("settings.autotaskHint")}
-                  </p>
+                <div className="flex flex-wrap items-center gap-2">
+                  {statusBadge(
+                    atStatus,
+                    atDetail?.contactsAuthOk === false
+                      ? t("settings.autotaskPartial")
+                      : t("settings.statusConnected"),
+                    t("settings.statusNotConfigured"),
+                  )}
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    disabled={atChecking}
+                    onClick={() => void loadAutotaskStatus(true)}
+                  >
+                    {atChecking ? (
+                      <Loader2 className="size-3.5 animate-spin" />
+                    ) : (
+                      t("settings.retest")
+                    )}
+                  </Button>
                 </div>
-              </div>
-              <div className="flex flex-wrap items-center gap-2">
-                {statusBadge(
-                  atStatus,
-                  t("settings.statusConnected"),
-                  t("settings.statusNotConfigured"),
-                )}
               </div>
             </div>
 
