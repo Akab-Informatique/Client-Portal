@@ -58,14 +58,99 @@ function cleanEnv(value: string | undefined): string {
   if (!value) return "";
   let v = value.trim();
   if (v.charCodeAt(0) === 0xfeff) v = v.slice(1).trim();
+  // Peel one layer of matching quotes (dotenv / docker / shell may leave them)
   if (
-    (v.startsWith('"') && v.endsWith('"')) ||
-    (v.startsWith("'") && v.endsWith("'"))
+    (v.startsWith('"') && v.endsWith('"') && v.length >= 2) ||
+    (v.startsWith("'") && v.endsWith("'") && v.length >= 2)
   ) {
     v = v.slice(1, -1).trim();
   }
+  // Peel a second layer if nested ("'value'" / '"value"')
+  if (
+    (v.startsWith('"') && v.endsWith('"') && v.length >= 2) ||
+    (v.startsWith("'") && v.endsWith("'") && v.length >= 2)
+  ) {
+    v = v.slice(1, -1).trim();
+  }
+  // Docker Compose / shell sometimes leave a trailing \r from Windows .env
+  v = v.replace(/\r/g, "").trim();
   return v;
 }
+
+/**
+ * Detect common .env corruption for Autotask secrets without logging the value.
+ * Docker Compose interpolates $VAR inside unquoted/double-quoted values.
+ * Unquoted values are truncated at # (comment).
+ */
+export function diagnoseAutotaskEnv(): {
+  configured: boolean;
+  issues: string[];
+  usernameLooksLikeEmail: boolean;
+  secretLength: number;
+  integrationCodeLength: number;
+  usernameLength: number;
+  secretHasDollar: boolean;
+  secretHasHash: boolean;
+  zonePinned: boolean;
+} {
+  const integrationCode = cleanEnv(process.env.AUTOTASK_INTEGRATION_CODE);
+  const username = cleanEnv(process.env.AUTOTASK_USERNAME);
+  const secret = cleanEnv(process.env.AUTOTASK_SECRET);
+  const zone = cleanEnv(process.env.AUTOTASK_ZONE_URL);
+  const issues: string[] = [];
+  const usernameLooksLikeEmail = /@/.test(username);
+
+  if (!integrationCode || !username || !secret) {
+    issues.push(
+      "One or more of AUTOTASK_INTEGRATION_CODE / AUTOTASK_USERNAME / AUTOTASK_SECRET is empty after loading .env",
+    );
+  }
+  if (usernameLooksLikeEmail) {
+    issues.push(
+      "AUTOTASK_USERNAME looks like an email. API-only users usually need the generated Username (Key) from the Credentials tab — not the resource login email.",
+    );
+  }
+  if (secret.includes("$")) {
+    // Not always wrong — Autotask secrets can contain $. But it MUST be single-quoted in .env
+    // or Docker Compose will expand $FOO and corrupt the secret → 401.
+    issues.push(
+      'AUTOTASK_SECRET contains "$". In /opt/akab-portal/.env it MUST be single-quoted: AUTOTASK_SECRET=\'your-secret\' — otherwise Docker Compose expands $variables and Autotask returns 401.',
+    );
+  }
+  if (secret.includes("#")) {
+    issues.push(
+      'AUTOTASK_SECRET contains "#". It MUST be quoted in .env (prefer single quotes) or everything after # is treated as a comment and the secret is truncated → 401.',
+    );
+  }
+  if (secret.length > 0 && secret.length < 12) {
+    issues.push(
+      `AUTOTASK_SECRET looks truncated (length ${secret.length}). Re-copy the full Secret from Autotask Credentials and single-quote it in .env.`,
+    );
+  }
+  if (integrationCode.length > 0 && integrationCode.length < 6) {
+    issues.push(
+      "AUTOTASK_INTEGRATION_CODE looks too short. Use the API Tracking Identifier from the API User Credentials tab.",
+    );
+  }
+  if (secret.includes("${") || (secret.includes("{") && secret.includes("}"))) {
+    issues.push(
+      "AUTOTASK_SECRET looks mangled by Docker Compose variable expansion. Re-paste the full secret inside single quotes in .env, then: docker compose up -d --force-recreate app",
+    );
+  }
+
+  return {
+    configured: Boolean(integrationCode && username && secret),
+    issues,
+    usernameLooksLikeEmail,
+    secretLength: secret.length,
+    integrationCodeLength: integrationCode.length,
+    usernameLength: username.length,
+    secretHasDollar: secret.includes("$"),
+    secretHasHash: secret.includes("#"),
+    zonePinned: Boolean(zone),
+  };
+}
+
 
 /**
  * Normalize zone base to .../atservicesrest/ (lowercase path — IIS is usually
@@ -228,15 +313,33 @@ export function formatAutotaskErrorPayload(
 }
 
 function auth401Help(entityLabel: string, detail: string): string {
+  const envDiag = diagnoseAutotaskEnv();
+  const extra: string[] = [];
+  if (envDiag.usernameLooksLikeEmail) {
+    extra.push(
+      "AUTOTASK_USERNAME looks like an email — use Username (Key) from the Credentials tab instead.",
+    );
+  }
+  if (envDiag.secretHasDollar || envDiag.secretHasHash) {
+    extra.push(
+      "AUTOTASK_SECRET contains $ or # — it MUST be single-quoted in .env or Docker Compose corrupts it.",
+    );
+  }
+  if (envDiag.secretLength > 0 && envDiag.secretLength < 12) {
+    extra.push(
+      `AUTOTASK_SECRET length is only ${envDiag.secretLength} (likely truncated). Re-copy the full secret.`,
+    );
+  }
+  const hint = extra.length ? ` Detected: ${extra.join(" ")}` : "";
   return (
-    `Autotask ${entityLabel} failed (401 Unauthorized): ${detail || "credentials rejected"}. ` +
-    "Fix on the server .env then recreate the app container: " +
-    "(1) AUTOTASK_INTEGRATION_CODE = API Tracking Identifier on the API User, " +
-    "(2) AUTOTASK_USERNAME = API Username (Key) — not a normal login email, " +
-    "(3) AUTOTASK_SECRET = generated Secret (quote it in .env if it has $ # or spaces), " +
-    "(4) API user security level must be API User (API-only) with CRM → Contacts View, " +
-    "(5) optional AUTOTASK_ZONE_URL must match your zone (or remove it to auto-discover). " +
-    "Check Settings → Integrations / GET /api/autotask/status after updating."
+    `Autotask ${entityLabel} failed (401 Unauthorized): ${detail || "credentials rejected"}.${hint} ` +
+    "Fix /opt/akab-portal/.env then recreate the container: " +
+    "(1) AUTOTASK_INTEGRATION_CODE = API Tracking Identifier, " +
+    "(2) AUTOTASK_USERNAME = Username (Key) — not a login email, " +
+    "(3) AUTOTASK_SECRET='full-secret'  ← always use single quotes, " +
+    "(4) API user = API User (API-only) with Tickets View + Contacts View, " +
+    "(5) remove AUTOTASK_ZONE_URL unless you must pin a zone. " +
+    "Then: docker compose up -d --force-recreate app && curl -sS 'http://127.0.0.1:3000/api/autotask/status?refresh=1'"
   );
 }
 

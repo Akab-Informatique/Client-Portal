@@ -43,6 +43,9 @@ services:
       - "${PORT:-3000}:3000"
     env_file:
       - .env
+    # Note: Autotask secrets often contain $ and #.
+    # In .env use SINGLE quotes: AUTOTASK_SECRET='...'
+    # Double quotes or unquoted values let Compose expand/truncate the secret → Autotask 401.
     environment:
       NODE_ENV: production
       PORT: 3000

@@ -1,6 +1,7 @@
 import type { VercelRequest, VercelResponse } from "@vercel/node";
 import {
   clearAutotaskZoneCache,
+  diagnoseAutotaskEnv,
   getAutotaskConfigFromEnv,
   isAutotaskConfigured,
   probeAutotaskAccess,
@@ -41,25 +42,10 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       String(req.query.refresh ?? "").toLowerCase() === "true";
     if (refresh) clearAutotaskZoneCache();
 
-    const usernameLooksLikeEmail = /@/.test(cfg.username);
+    const envDiag = diagnoseAutotaskEnv();
     const probe = await probeAutotaskAccess();
 
-    const warnings: string[] = [];
-    if (usernameLooksLikeEmail) {
-      warnings.push(
-        "AUTOTASK_USERNAME looks like an email. For API-only users you usually need the generated Username (Key) from the Credentials tab — not the resource email/login.",
-      );
-    }
-    if (cfg.secret.length < 8) {
-      warnings.push(
-        "AUTOTASK_SECRET looks too short. Re-copy the generated Secret from the API User Credentials tab.",
-      );
-    }
-    if (cfg.integrationCode.length < 6) {
-      warnings.push(
-        "AUTOTASK_INTEGRATION_CODE looks too short. Use the API Tracking Identifier from the API User.",
-      );
-    }
+    const warnings: string[] = [...envDiag.issues];
     if (probe.ok && probe.contactsAuthOk === false) {
       warnings.push(
         "Tickets API is connected, but Contacts/query failed. Client users will not see their tickets until CRM → Contacts → View is enabled on the API User security level.",
@@ -70,8 +56,11 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       usernameHint: maskMiddle(cfg.username),
       integrationCodeHint: maskMiddle(cfg.integrationCode),
       secretLength: cfg.secret.length,
-      usernameLooksLikeEmail,
-      zonePinned: Boolean(cfg.zoneBaseUrl),
+      secretHasDollar: envDiag.secretHasDollar,
+      secretHasHash: envDiag.secretHasHash,
+      usernameLooksLikeEmail: envDiag.usernameLooksLikeEmail,
+      zonePinned: envDiag.zonePinned,
+      envIssues: envDiag.issues,
       warnings,
     };
 
@@ -89,13 +78,16 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         detail: probe.detail,
         message: probe.message,
         fix: [
-          "Edit /opt/akab-portal/.env with values from Autotask → Admin → Resources → API User → Credentials:",
-          "  AUTOTASK_INTEGRATION_CODE=<API Tracking Identifier>",
-          "  AUTOTASK_USERNAME=<Username (Key) — not a normal login>",
-          '  AUTOTASK_SECRET="<Secret>"   # quote if it has $ # spaces or !',
-          "Comment out AUTOTASK_ZONE_URL unless you know the exact zone URL.",
-          "Then: cd /opt/akab-portal && docker compose up -d --force-recreate app",
-          'Then: curl -sS "http://127.0.0.1:3000/api/autotask/status?refresh=1"',
+          "Edit /opt/akab-portal/.env — use SINGLE quotes around the secret (required if it has $ or #):",
+          "  AUTOTASK_INTEGRATION_CODE=your-tracking-id",
+          "  AUTOTASK_USERNAME=your-username-key-not-email",
+          "  AUTOTASK_SECRET='paste-full-secret-here'",
+          "  # AUTOTASK_ZONE_URL=   ← keep commented unless you must pin a zone",
+          "Save, then recreate so the container reloads env:",
+          "  cd /opt/akab-portal && docker compose up -d --force-recreate app",
+          "  curl -sS 'http://127.0.0.1:3000/api/autotask/status?refresh=1' | jq",
+          "If usernameLooksLikeEmail=true, replace AUTOTASK_USERNAME with Username (Key) from Credentials.",
+          "If secretHasDollar/secretHasHash=true and you still get 401, the secret was corrupted before quoting — re-paste the FULL secret inside single quotes.",
         ],
         ...common,
       });
