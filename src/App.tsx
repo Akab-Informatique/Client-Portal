@@ -40,6 +40,7 @@ function RootRedirect() {
     return <AkabLoader fullScreen size="xl" label={t("app.loading")} />;
   }
   if (!user) return <Navigate to="/login" replace />;
+  if (!user.mfa_enabled) return <Navigate to="/login" replace />;
   if (user.role === "client") return <Navigate to="/client" replace />;
   return <Navigate to={firstAllowedAdminPath(user.permissions)} replace />;
 }

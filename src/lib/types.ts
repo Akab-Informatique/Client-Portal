@@ -87,11 +87,26 @@ export interface User {
    * null/undefined treated as true for legacy rows.
    */
   board_email_opt_in: boolean | null;
+  /** MFA enrolled (authenticator app). Required for full portal access. */
+  mfa_enabled: boolean | null;
+  /** Base32 TOTP secret — never expose on PublicProfile / SessionUser. */
+  mfa_totp_secret: string | null;
+  /** JSON array of hashed recovery codes. */
+  mfa_recovery_codes: string | null;
+  mfa_email_code_hash: string | null;
+  mfa_email_code_expires: string | null;
   created_at: Date | string;
 }
 
 /** Public profile fields safe to show inside the same company only. */
-export type PublicProfile = Omit<User, "password">;
+export type PublicProfile = Omit<
+  User,
+  | "password"
+  | "mfa_totp_secret"
+  | "mfa_recovery_codes"
+  | "mfa_email_code_hash"
+  | "mfa_email_code_expires"
+>;
 
 export interface BoardMessage {
   id: number;
@@ -166,12 +181,21 @@ export interface TicketDetailResponse {
   priorityLabels?: Record<string, string>;
 }
 
-export type SessionUser = Omit<User, "password"> & {
+export type SessionUser = Omit<
+  User,
+  | "password"
+  | "mfa_totp_secret"
+  | "mfa_recovery_codes"
+  | "mfa_email_code_hash"
+  | "mfa_email_code_expires"
+> & {
   /** Resolved staff permissions (admin/technician only). */
   permissions: PermissionMap | null;
   /** Display name of assigned staff role, if any. */
   staff_role_name: string | null;
   staff_role_slug: string | null;
+  /** Authenticator MFA fully enrolled. */
+  mfa_enabled: boolean;
 };
 
 /** Suggested quick labels clients can apply to board messages */

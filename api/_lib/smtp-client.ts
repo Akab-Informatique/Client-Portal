@@ -313,3 +313,55 @@ export async function sendBoardEmailsIndividually(opts: {
 
   return { sent, failed, errors, results };
 }
+
+/** Single transactional email (MFA codes, etc.). One recipient only. */
+export async function sendPlainEmail(opts: {
+  to: string;
+  toName?: string;
+  subject: string;
+  text: string;
+  html?: string;
+  headerTag?: string;
+}): Promise<{ ok: true } | { ok: false; error: string }> {
+  const cfg = getSmtpConfigFromEnv();
+  if (!cfg) {
+    return { ok: false, error: "SMTP is not configured" };
+  }
+  const email = (opts.to || "").trim().toLowerCase();
+  if (!email || !email.includes("@")) {
+    return { ok: false, error: "Invalid recipient email" };
+  }
+  try {
+    const transport = createTransport(cfg);
+    const from =
+      cfg.fromName && cfg.fromEmail
+        ? `"${cfg.fromName.replace(/"/g, "")}" <${cfg.fromEmail}>`
+        : cfg.fromEmail;
+    const html =
+      opts.html ||
+      `<!DOCTYPE html><html><body style="font-family:Inter,Segoe UI,sans-serif;line-height:1.5;color:#0f172a;padding:24px;">
+  <div style="max-width:480px;margin:0 auto;border:1px solid #e2e8f0;border-radius:12px;padding:24px;">
+    <p style="margin:0 0 12px;font-weight:700;">AKAB Portal</p>
+    <pre style="white-space:pre-wrap;font-family:inherit;margin:0;">${escapeHtml(opts.text)}</pre>
+  </div>
+</body></html>`;
+    await transport.sendMail({
+      from,
+      to: email,
+      ...(cfg.replyTo ? { replyTo: cfg.replyTo } : {}),
+      subject: opts.subject,
+      text: opts.text,
+      html,
+      headers: {
+        "X-AKAB-Notification": opts.headerTag || "transactional",
+        "X-Auto-Response-Suppress": "OOF, AutoReply",
+      },
+    });
+    return { ok: true };
+  } catch (err) {
+    return {
+      ok: false,
+      error: err instanceof Error ? err.message : "Send failed",
+    };
+  }
+}

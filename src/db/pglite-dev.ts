@@ -60,6 +60,11 @@ CREATE TABLE IF NOT EXISTS message_user_states (
     ["users", "staff_role_id INTEGER"],
     ["users", "itglue_user_id TEXT"],
     ["users", "board_email_opt_in BOOLEAN"],
+    ["users", "mfa_enabled BOOLEAN"],
+    ["users", "mfa_totp_secret TEXT"],
+    ["users", "mfa_recovery_codes TEXT"],
+    ["users", "mfa_email_code_hash TEXT"],
+    ["users", "mfa_email_code_expires TEXT"],
   ] as const) {
     try {
       await client.exec(`ALTER TABLE ${table} ADD COLUMN IF NOT EXISTS ${col}`);

@@ -150,6 +150,60 @@ export const fr: Dictionary = {
     invalid: "Courriel ou mot de passe invalide.",
     deactivated: "Ce compte a été désactivé.",
   },
+  mfa: {
+    challengeTitle: "Authentification à deux facteurs",
+    challengeDesc:
+      "Entrez un code de votre application d'authentification, ou utilisez le courriel / un code de récupération.",
+    enrollTitle: "Configurer l'authentificateur",
+    enrollDesc:
+      "L'authentification multifacteur est obligatoire. Scannez le code QR avec Google Authenticator, Microsoft Authenticator ou Authy.",
+    enrollRequiredNote:
+      "Chaque compte portail doit activer la MFA avant d'accéder au portail. Conservez vos codes de récupération en lieu sûr.",
+    recoveryTitle: "Enregistrez vos codes de récupération",
+    recoveryDesc:
+      "Chaque code fonctionne une seule fois si vous perdez votre authentificateur. Conservez-les hors ligne.",
+    recoverySaveWarning:
+      "Copiez ces codes maintenant. Ils ne seront plus affichés. Quiconque possède un code peut se connecter à votre place.",
+    methodApp: "Authentificateur",
+    methodEmail: "Code courriel",
+    methodRecovery: "Code de récupération",
+    codeLabel: "Code à 6 chiffres",
+    confirmCodeLabel: "Code de l'authentificateur",
+    recoveryCodeLabel: "Code de récupération",
+    totpHint:
+      "Ouvrez votre application d'authentification et entrez le code à 6 chiffres actuel.",
+    emailHint: "Nous avons envoyé un code à 6 chiffres. Il expire dans 10 minutes.",
+    recoveryHint: "Entrez un code de récupération inutilisé (format XXXXX-XXXXX).",
+    emailSent: "Un code de vérification a été envoyé à votre courriel.",
+    emailSendFailed:
+      "Impossible d'envoyer le code par courriel. Vérifiez le SMTP, ou utilisez l'authentificateur / un code de récupération.",
+    invalidCode: "Ce code n'est pas valide. Réessayez.",
+    codeExpired: "Ce code courriel a expiré. Envoyez-en un nouveau.",
+    sessionExpired: "Votre session de connexion a expiré. Reconnectez-vous.",
+    genericError: "Une erreur s'est produite. Réessayez.",
+    verifying: "Vérification…",
+    verify: "Vérifier et continuer",
+    enableMfa: "Activer la MFA et continuer",
+    backToSignIn: "Retour à la connexion",
+    qrAlt: "Code QR de l'authentificateur",
+    manualSecret: "Ou saisissez cette clé manuellement",
+    copyCodes: "Copier les codes",
+    copied: "Copié",
+    continueToPortal: "J'ai enregistré mes codes — continuer",
+    securityTitle: "Authentification à deux facteurs",
+    securityDesc:
+      "L'application d'authentification est obligatoire. Les codes courriel et de récupération sont des solutions de secours à la connexion.",
+    statusOn: "MFA activée",
+    statusOff: "MFA non configurée",
+    statusOffRequired: "Obligatoire — terminez la configuration pour utiliser le portail",
+    reconfigure: "Configurer l'authentificateur à nouveau",
+    newRecovery: "Générer de nouveaux codes de récupération",
+    newRecoveryHint:
+      "Entrez un code authentificateur actuel pour remplacer tous les codes de récupération.",
+    disableNote:
+      "La MFA est obligatoire pour tous. La désactiver ne sert qu'à la reconfigurer immédiatement.",
+    setupAgain: "Réinscrire la MFA",
+  },
   profile: {
     title: "Profil",
     myTitle: "Mon profil",

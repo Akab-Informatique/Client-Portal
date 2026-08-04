@@ -29,6 +29,11 @@ export function ProtectedRoute({
     return <Navigate to="/login" replace />;
   }
 
+  // MFA is required for every account — block the app until enrolled
+  if (!user.mfa_enabled) {
+    return <Navigate to="/login" replace />;
+  }
+
   if (roles && !roles.includes(user.role)) {
     if (user.role === "client") return <Navigate to="/client" replace />;
     return <Navigate to={firstAllowedAdminPath(user.permissions)} replace />;

@@ -3,7 +3,14 @@ import { db, dbReady, schema } from "@/db";
 import type { PublicProfile, User } from "@/lib/types";
 
 function toPublic(row: User): PublicProfile {
-  const { password: _pw, ...rest } = row;
+  const {
+    password: _pw,
+    mfa_totp_secret: _s,
+    mfa_recovery_codes: _r,
+    mfa_email_code_hash: _h,
+    mfa_email_code_expires: _e,
+    ...rest
+  } = row;
   return {
     ...rest,
     staff_role_id: row.staff_role_id ?? null,
@@ -12,6 +19,7 @@ function toPublic(row: User): PublicProfile {
     mobile: row.mobile ?? null,
     bio: row.bio ?? null,
     locale: row.locale ?? null,
+    mfa_enabled: Boolean(row.mfa_enabled && row.mfa_totp_secret),
   };
 }
 

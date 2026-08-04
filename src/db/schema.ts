@@ -99,6 +99,19 @@ export const users = pgTable("users", {
    * “Also send by email” when posting). Default true for new users.
    */
   board_email_opt_in: boolean("board_email_opt_in"),
+  /**
+   * Multi-factor authentication (required for all portal users).
+   * Primary: TOTP authenticator app. Backup: emailed one-time code + recovery codes.
+   */
+  mfa_enabled: boolean("mfa_enabled"),
+  /** Base32 TOTP secret (only when MFA is enabled / during setup). */
+  mfa_totp_secret: text("mfa_totp_secret"),
+  /** JSON array of SHA-256 hashed one-time recovery codes. */
+  mfa_recovery_codes: text("mfa_recovery_codes"),
+  /** Pending email OTP hash (SHA-256 of 6-digit code). */
+  mfa_email_code_hash: text("mfa_email_code_hash"),
+  /** ISO timestamp when email OTP expires. */
+  mfa_email_code_expires: text("mfa_email_code_expires"),
   created_at: timestamp("created_at").defaultNow().notNull(),
 });
 

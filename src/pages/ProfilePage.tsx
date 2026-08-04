@@ -4,12 +4,17 @@ import { eq } from "drizzle-orm";
 import {
   ArrowLeft,
   Building2,
+  Check,
   CheckCircle2,
+  Copy,
+  KeyRound,
   Lock,
   Mail,
   Phone,
   Save,
   Shield,
+  ShieldCheck,
+  Smartphone,
   User as UserIcon,
   Users,
 } from "lucide-react";
@@ -56,7 +61,7 @@ function profileBasePath(role: string | undefined) {
 
 export function ProfilePage() {
   const { userId: userIdParam } = useParams();
-  const { user, patchSession } = useAuth();
+  const { user, patchSession, regenerateRecoveryCodes } = useAuth();
   const { t, locale, setLocale } = useLocale();
   const navigate = useNavigate();
 
@@ -98,6 +103,13 @@ export function ProfilePage() {
   const [pwBusy, setPwBusy] = useState(false);
   const [pwMsg, setPwMsg] = useState<string | null>(null);
   const [pwErr, setPwErr] = useState<string | null>(null);
+
+  const [mfaCode, setMfaCode] = useState("");
+  const [mfaBusy, setMfaBusy] = useState(false);
+  const [mfaMsg, setMfaMsg] = useState<string | null>(null);
+  const [mfaErr, setMfaErr] = useState<string | null>(null);
+  const [newRecovery, setNewRecovery] = useState<string[] | null>(null);
+  const [mfaCopied, setMfaCopied] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
@@ -177,7 +189,10 @@ export function ProfilePage() {
       return;
     }
     setProfile(updated);
-    patchSession(updated);
+    patchSession({
+      ...updated,
+      mfa_enabled: Boolean(updated.mfa_enabled),
+    });
     if (isLocale(updated.locale)) setLocale(updated.locale);
     setSaveMsg(t("profile.profileUpdated"));
     setEditing(false);
@@ -206,6 +221,39 @@ export function ProfilePage() {
     }
     setPw({ current: "", next: "", confirm: "" });
     setPwMsg(t("profile.passwordChanged"));
+  };
+
+  const onRegenerateRecovery = async (e: FormEvent) => {
+    e.preventDefault();
+    if (!user || !isSelf) return;
+    setMfaBusy(true);
+    setMfaErr(null);
+    setMfaMsg(null);
+    setNewRecovery(null);
+    const res = await regenerateRecoveryCodes(mfaCode);
+    setMfaBusy(false);
+    if (!res.ok) {
+      setMfaErr(
+        res.error === "invalid_code"
+          ? t("mfa.invalidCode")
+          : t("mfa.genericError"),
+      );
+      return;
+    }
+    setMfaCode("");
+    setNewRecovery(res.recoveryCodes);
+    setMfaMsg(t("mfa.recoveryTitle"));
+  };
+
+  const copyNewRecovery = async () => {
+    if (!newRecovery?.length) return;
+    try {
+      await navigator.clipboard.writeText(newRecovery.join("\n"));
+      setMfaCopied(true);
+      setTimeout(() => setMfaCopied(false), 2000);
+    } catch {
+      /* ignore */
+    }
   };
 
   if (loading) {
@@ -615,6 +663,111 @@ export function ProfilePage() {
                   {pwBusy ? t("common.saving") : t("profile.changePassword")}
                 </Button>
               </form>
+            </CardContent>
+          </Card>
+        </BlurFade>
+      )}
+
+      {isSelf && (
+        <BlurFade delay={0.11}>
+          <Card>
+            <CardHeader>
+              <CardTitle className="flex items-center gap-2">
+                <ShieldCheck className="size-5 text-primary" />
+                {t("mfa.securityTitle")}
+              </CardTitle>
+              <CardDescription>{t("mfa.securityDesc")}</CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-4">
+              <div className="flex flex-wrap items-center gap-2">
+                {user?.mfa_enabled ? (
+                  <Badge
+                    variant="outline"
+                    className="gap-1.5 border-primary/40 bg-primary/10 text-primary"
+                  >
+                    <Smartphone className="size-3.5" />
+                    {t("mfa.statusOn")}
+                  </Badge>
+                ) : (
+                  <Badge
+                    variant="outline"
+                    className="border-destructive/40 text-destructive"
+                  >
+                    {t("mfa.statusOffRequired")}
+                  </Badge>
+                )}
+              </div>
+
+              {user?.mfa_enabled && (
+                <form
+                  onSubmit={onRegenerateRecovery}
+                  className="max-w-md space-y-3 rounded-lg border border-border p-4"
+                >
+                  <div className="flex items-start gap-2">
+                    <KeyRound className="mt-0.5 size-4 shrink-0 text-muted-foreground" />
+                    <div>
+                      <p className="text-sm font-medium">
+                        {t("mfa.newRecovery")}
+                      </p>
+                      <p className="text-xs text-muted-foreground">
+                        {t("mfa.newRecoveryHint")}
+                      </p>
+                    </div>
+                  </div>
+                  <div className="space-y-2">
+                    <Label htmlFor="mfaTotp">{t("mfa.codeLabel")}</Label>
+                    <Input
+                      id="mfaTotp"
+                      inputMode="numeric"
+                      autoComplete="one-time-code"
+                      className="font-mono tracking-widest"
+                      placeholder="000000"
+                      value={mfaCode}
+                      onChange={(e) => setMfaCode(e.target.value)}
+                      required
+                    />
+                  </div>
+                  {mfaErr && (
+                    <p className="text-sm text-destructive">{mfaErr}</p>
+                  )}
+                  {mfaMsg && !newRecovery && (
+                    <p className="flex items-center gap-1.5 text-sm text-primary">
+                      <CheckCircle2 className="size-4" />
+                      {mfaMsg}
+                    </p>
+                  )}
+                  <Button type="submit" variant="outline" disabled={mfaBusy}>
+                    {mfaBusy ? t("common.saving") : t("mfa.newRecovery")}
+                  </Button>
+                </form>
+              )}
+
+              {newRecovery && newRecovery.length > 0 && (
+                <div className="max-w-md space-y-3 rounded-lg border border-amber-500/40 bg-amber-500/10 p-4">
+                  <p className="text-sm">{t("mfa.recoverySaveWarning")}</p>
+                  <ul className="grid grid-cols-2 gap-2 font-mono text-sm">
+                    {newRecovery.map((c) => (
+                      <li key={c} className="text-center">
+                        {c}
+                      </li>
+                    ))}
+                  </ul>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    className="gap-2"
+                    onClick={() => void copyNewRecovery()}
+                  >
+                    {mfaCopied ? (
+                      <Check className="size-4" />
+                    ) : (
+                      <Copy className="size-4" />
+                    )}
+                    {mfaCopied ? t("mfa.copied") : t("mfa.copyCodes")}
+                  </Button>
+                </div>
+              )}
             </CardContent>
           </Card>
         </BlurFade>

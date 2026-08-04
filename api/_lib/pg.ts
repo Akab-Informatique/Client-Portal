@@ -306,6 +306,11 @@ const ADDITIVE_COLUMNS: Array<{ table: string; column: string; def: string }> =
     { table: "users", column: "staff_role_id", def: "INTEGER" },
     { table: "users", column: "itglue_user_id", def: "TEXT" },
     { table: "users", column: "board_email_opt_in", def: "BOOLEAN" },
+    { table: "users", column: "mfa_enabled", def: "BOOLEAN" },
+    { table: "users", column: "mfa_totp_secret", def: "TEXT" },
+    { table: "users", column: "mfa_recovery_codes", def: "TEXT" },
+    { table: "users", column: "mfa_email_code_hash", def: "TEXT" },
+    { table: "users", column: "mfa_email_code_expires", def: "TEXT" },
   ];
 
 const ADMIN_PERMISSIONS_JSON = JSON.stringify({

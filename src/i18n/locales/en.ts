@@ -147,6 +147,59 @@ export const en = {
     invalid: "Invalid email or password.",
     deactivated: "This account has been deactivated.",
   },
+  mfa: {
+    challengeTitle: "Two-factor authentication",
+    challengeDesc:
+      "Enter a code from your authenticator app, or use email / a recovery code.",
+    enrollTitle: "Set up authenticator",
+    enrollDesc:
+      "Multi-factor authentication is required. Scan the QR code with Google Authenticator, Microsoft Authenticator, or Authy.",
+    enrollRequiredNote:
+      "Every portal account must enable MFA before accessing the portal. Keep your recovery codes in a safe place.",
+    recoveryTitle: "Save your recovery codes",
+    recoveryDesc:
+      "Each code works once if you lose your authenticator. Store them offline.",
+    recoverySaveWarning:
+      "Copy these codes now. They will not be shown again. Anyone with a code can sign in as you.",
+    methodApp: "Authenticator",
+    methodEmail: "Email code",
+    methodRecovery: "Recovery code",
+    codeLabel: "6-digit code",
+    confirmCodeLabel: "Code from authenticator",
+    recoveryCodeLabel: "Recovery code",
+    totpHint: "Open your authenticator app and enter the current 6-digit code.",
+    emailHint: "We emailed a 6-digit code. It expires in 10 minutes.",
+    recoveryHint: "Enter one unused recovery code (format XXXXX-XXXXX).",
+    emailSent: "A verification code was sent to your email.",
+    emailSendFailed:
+      "Could not send email code. Check SMTP settings, or use your authenticator / recovery code.",
+    invalidCode: "That code is not valid. Try again.",
+    codeExpired: "That email code has expired. Send a new one.",
+    sessionExpired: "Your sign-in session expired. Sign in again.",
+    genericError: "Something went wrong. Try again.",
+    verifying: "Verifying…",
+    verify: "Verify and continue",
+    enableMfa: "Enable MFA and continue",
+    backToSignIn: "Back to sign in",
+    qrAlt: "Authenticator QR code",
+    manualSecret: "Or enter this key manually",
+    copyCodes: "Copy codes",
+    copied: "Copied",
+    continueToPortal: "I saved my codes — continue",
+    // Profile
+    securityTitle: "Two-factor authentication",
+    securityDesc:
+      "Authenticator app is required. Email codes and recovery codes are backups when you sign in.",
+    statusOn: "MFA enabled",
+    statusOff: "Mfa not set up",
+    statusOffRequired: "Required — finish setup to use the portal",
+    reconfigure: "Set up authenticator again",
+    newRecovery: "Generate new recovery codes",
+    newRecoveryHint: "Enter a current authenticator code to replace all recovery codes.",
+    disableNote:
+      "MFA is required for all users. Turning it off only lets you re-enroll immediately.",
+    setupAgain: "Re-enroll MFA",
+  },
   profile: {
     title: "Profile",
     myTitle: "My profile",
