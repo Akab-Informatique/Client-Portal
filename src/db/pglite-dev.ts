@@ -66,6 +66,8 @@ CREATE TABLE IF NOT EXISTS message_user_states (
     ["users", "bio TEXT"],
     ["users", "locale TEXT"],
     ["users", "staff_role_id INTEGER"],
+    ["users", "client_role_id INTEGER"],
+    ["users", "billing_access BOOLEAN"],
     ["users", "itglue_user_id TEXT"],
     ["users", "board_email_opt_in BOOLEAN"],
     ["users", "mfa_enabled BOOLEAN"],
