@@ -72,6 +72,7 @@ import {
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import {
   Table,
   TableBody,
@@ -136,6 +137,7 @@ export function ClientsPage() {
   const [query, setQuery] = useState("");
   const [companyOpen, setCompanyOpen] = useState(false);
   const [userOpen, setUserOpen] = useState(false);
+  const [userTab, setUserTab] = useState("profile");
   const [editing, setEditing] = useState<Company | null>(null);
   const [editingUser, setEditingUser] = useState<User | null>(null);
   const [form, setForm] = useState(emptyCompany);
@@ -311,6 +313,7 @@ export function ClientsPage() {
       additional_role_ids: [],
       billing_access: "",
     });
+    setUserTab("profile");
     setUserOpen(true);
   };
 
@@ -349,6 +352,7 @@ export function ClientsPage() {
       additional_role_ids: additional,
       active: user.active,
     });
+    setUserTab("profile");
     setUserOpen(true);
   };
 
@@ -1603,10 +1607,11 @@ export function ClientsPage() {
           if (!open) {
             setEditingUser(null);
             setError(null);
+            setUserTab("profile");
           }
         }}
       >
-        <DialogContent className="flex max-h-[92vh] w-[min(96vw,42rem)] max-w-2xl flex-col gap-0 overflow-hidden p-0 sm:max-w-2xl">
+        <DialogContent className="flex max-h-[92vh] w-[min(96vw,44rem)] max-w-2xl flex-col gap-0 overflow-hidden p-0 sm:max-w-2xl">
           <DialogHeader className="shrink-0 space-y-1.5 border-b border-border px-6 py-4 text-left">
             <DialogTitle>
               {editingUser
@@ -1623,233 +1628,286 @@ export function ClientsPage() {
             onSubmit={saveUser}
             className="flex min-h-0 flex-1 flex-col"
           >
-            <div className="min-h-0 flex-1 space-y-4 overflow-y-auto px-6 py-4">
-            <div className="space-y-2">
-              <Label htmlFor="uname">{t("common.name")}</Label>
-              <Input
-                id="uname"
-                value={userForm.name}
-                onChange={(e) =>
-                  setUserForm((f) => ({ ...f, name: e.target.value }))
-                }
-                required
-              />
-            </div>
-            <div className="space-y-2">
-              <Label htmlFor="uemail">{t("common.email")}</Label>
-              <Input
-                id="uemail"
-                type="email"
-                value={userForm.email}
-                onChange={(e) =>
-                  setUserForm((f) => ({ ...f, email: e.target.value }))
-                }
-                required
-              />
-            </div>
-            <div className="space-y-2">
-              <Label htmlFor="upass">
-                {editingUser
-                  ? t("admin.clientUserPasswordOptional")
-                  : t("admin.clientUserPassword")}
-              </Label>
-              <Input
-                id="upass"
-                type="text"
-                value={userForm.password}
-                onChange={(e) =>
-                  setUserForm((f) => ({ ...f, password: e.target.value }))
-                }
-                required={!editingUser}
-                placeholder={
-                  editingUser ? t("admin.clientUserPasswordKeep") : undefined
-                }
-              />
-              {editingUser && (
-                <p className="text-xs text-muted-foreground">
-                  {t("admin.clientUserPasswordHint")}
-                </p>
-              )}
-            </div>
-            <div className="space-y-2">
-              <Label htmlFor="uitglue">
-                {t("admin.clientUserItglueId")}
-              </Label>
-              <Input
-                id="uitglue"
-                inputMode="numeric"
-                placeholder={t("admin.clientUserItgluePh")}
-                value={userForm.itglue_user_id}
-                onChange={(e) =>
-                  setUserForm((f) => ({ ...f, itglue_user_id: e.target.value }))
-                }
-              />
-              <p className="text-xs text-muted-foreground">
-                {t("admin.clientUserItglueHint")}
-              </p>
-            </div>
-            <label className="flex items-start gap-3 rounded-lg border border-border bg-muted/20 p-3 text-sm">
-              <Checkbox
-                checked={userForm.board_email_opt_in}
-                onCheckedChange={(v) =>
-                  setUserForm((f) => ({
-                    ...f,
-                    board_email_opt_in: v === true,
-                  }))
-                }
-                className="mt-0.5"
-              />
-              <span>
-                <span className="font-medium">
-                  {t("admin.clientUserBoardEmail")}
-                </span>
-                <span className="mt-0.5 block text-xs text-muted-foreground">
-                  {t("admin.clientUserBoardEmailHint")}
-                </span>
-              </span>
-            </label>
-            <div className="space-y-2">
-              <Label>{t("admin.clientUserCoreRole")}</Label>
-              <div className="flex items-center gap-2 rounded-lg border border-border bg-muted/30 px-3 py-2 text-sm">
-                <Shield className="size-4 shrink-0 text-primary" />
-                <div className="min-w-0">
-                  <p className="font-medium">
-                    {clientRoles.find(
-                      (r) => r.slug === SYSTEM_CLIENT_ROLE_SLUGS.standard,
-                    )?.name ?? "Standard user"}
-                  </p>
-                  <p className="text-xs text-muted-foreground">
-                    {t("admin.clientUserCoreRoleHint")}
-                  </p>
-                </div>
-                <Badge
-                  variant="outline"
-                  className="ml-auto shrink-0 border-primary/40 bg-primary/10 text-[10px] text-primary"
-                >
-                  {t("admin.clientUserCoreBadge")}
-                </Badge>
+            <Tabs
+              value={userTab}
+              onValueChange={setUserTab}
+              className="flex min-h-0 flex-1 flex-col"
+            >
+              <div className="shrink-0 border-b border-border px-6 pt-3">
+                <TabsList className="grid h-auto w-full grid-cols-3 gap-1 bg-muted/60 p-1">
+                  <TabsTrigger value="profile" className="text-xs sm:text-sm">
+                    {t("admin.userTabProfile")}
+                  </TabsTrigger>
+                  <TabsTrigger value="access" className="text-xs sm:text-sm">
+                    {t("admin.userTabAccess")}
+                  </TabsTrigger>
+                  <TabsTrigger value="options" className="text-xs sm:text-sm">
+                    {t("admin.userTabOptions")}
+                  </TabsTrigger>
+                </TabsList>
               </div>
-            </div>
-            <div className="space-y-2">
-              <Label>{t("admin.clientUserAdditionalRoles")}</Label>
-              <p className="text-xs text-muted-foreground">
-                {t("admin.clientUserAdditionalRolesHint")}
-              </p>
-              <div className="space-y-2 rounded-lg border border-border p-3">
-                {clientRoles.filter(
-                  (r) => r.slug !== SYSTEM_CLIENT_ROLE_SLUGS.standard,
-                ).length === 0 ? (
-                  <p className="text-xs text-muted-foreground">
-                    {t("admin.clientUserAdditionalRolesEmpty")}
+
+              <div className="min-h-0 flex-1 overflow-y-auto px-6 py-4">
+                <TabsContent value="profile" className="mt-0 space-y-4 focus-visible:outline-none">
+                  <div className="grid gap-4 sm:grid-cols-2">
+                    <div className="space-y-2 sm:col-span-2">
+                      <Label htmlFor="uname">{t("common.name")}</Label>
+                      <Input
+                        id="uname"
+                        value={userForm.name}
+                        onChange={(e) =>
+                          setUserForm((f) => ({ ...f, name: e.target.value }))
+                        }
+                        required
+                      />
+                    </div>
+                    <div className="space-y-2 sm:col-span-2">
+                      <Label htmlFor="uemail">{t("common.email")}</Label>
+                      <Input
+                        id="uemail"
+                        type="email"
+                        value={userForm.email}
+                        onChange={(e) =>
+                          setUserForm((f) => ({ ...f, email: e.target.value }))
+                        }
+                        required
+                      />
+                    </div>
+                    <div className="space-y-2 sm:col-span-2">
+                      <Label htmlFor="upass">
+                        {editingUser
+                          ? t("admin.clientUserPasswordOptional")
+                          : t("admin.clientUserPassword")}
+                      </Label>
+                      <Input
+                        id="upass"
+                        type="text"
+                        value={userForm.password}
+                        onChange={(e) =>
+                          setUserForm((f) => ({
+                            ...f,
+                            password: e.target.value,
+                          }))
+                        }
+                        required={!editingUser}
+                        placeholder={
+                          editingUser
+                            ? t("admin.clientUserPasswordKeep")
+                            : undefined
+                        }
+                      />
+                      {editingUser && (
+                        <p className="text-xs text-muted-foreground">
+                          {t("admin.clientUserPasswordHint")}
+                        </p>
+                      )}
+                    </div>
+                  </div>
+                </TabsContent>
+
+                <TabsContent value="access" className="mt-0 space-y-4 focus-visible:outline-none">
+                  <div className="rounded-lg border border-primary/25 bg-primary/5 p-3">
+                    <div className="flex items-start gap-3">
+                      <Shield className="mt-0.5 size-4 shrink-0 text-primary" />
+                      <div className="min-w-0 flex-1">
+                        <div className="flex flex-wrap items-center gap-2">
+                          <p className="text-sm font-semibold">
+                            {clientRoles.find(
+                              (r) =>
+                                r.slug === SYSTEM_CLIENT_ROLE_SLUGS.standard,
+                            )?.name ?? t("admin.clientUserDefaultName")}
+                          </p>
+                          <Badge
+                            variant="outline"
+                            className="border-primary/40 bg-primary/10 text-[10px] text-primary"
+                          >
+                            {t("admin.clientUserCoreBadge")}
+                          </Badge>
+                        </div>
+                        <p className="mt-1 text-xs text-muted-foreground">
+                          {t("admin.clientUserCoreRoleHint")}
+                        </p>
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="space-y-2">
+                    <Label>{t("admin.clientUserAdditionalRoles")}</Label>
+                    <p className="text-xs text-muted-foreground">
+                      {t("admin.clientUserAdditionalRolesHint")}
+                    </p>
+                    <div className="max-h-56 space-y-1 overflow-y-auto rounded-lg border border-border p-2">
+                      {clientRoles.filter(
+                        (r) => r.slug !== SYSTEM_CLIENT_ROLE_SLUGS.standard,
+                      ).length === 0 ? (
+                        <p className="px-2 py-3 text-xs text-muted-foreground">
+                          {t("admin.clientUserAdditionalRolesEmpty")}
+                        </p>
+                      ) : (
+                        clientRoles
+                          .filter(
+                            (r) =>
+                              r.slug !== SYSTEM_CLIENT_ROLE_SLUGS.standard,
+                          )
+                          .map((r) => {
+                            const checked =
+                              userForm.additional_role_ids.includes(r.id);
+                            return (
+                              <label
+                                key={r.id}
+                                className="flex cursor-pointer items-start gap-3 rounded-md px-2 py-2 text-sm hover:bg-muted/50"
+                              >
+                                <Checkbox
+                                  checked={checked}
+                                  onCheckedChange={(v) => {
+                                    const on = v === true;
+                                    setUserForm((f) => ({
+                                      ...f,
+                                      additional_role_ids: on
+                                        ? [
+                                            ...new Set([
+                                              ...f.additional_role_ids,
+                                              r.id,
+                                            ]),
+                                          ]
+                                        : f.additional_role_ids.filter(
+                                            (id) => id !== r.id,
+                                          ),
+                                    }));
+                                  }}
+                                  className="mt-0.5"
+                                />
+                                <span className="min-w-0">
+                                  <span className="font-medium">{r.name}</span>
+                                  {r.slug ===
+                                    SYSTEM_CLIENT_ROLE_SLUGS.billing && (
+                                    <span className="ml-1.5 text-[11px] text-primary">
+                                      · {t("admin.clientRoleBillingTag")}
+                                    </span>
+                                  )}
+                                  {r.description && (
+                                    <span className="mt-0.5 block text-xs text-muted-foreground">
+                                      {r.description}
+                                    </span>
+                                  )}
+                                </span>
+                              </label>
+                            );
+                          })
+                      )}
+                    </div>
+                  </div>
+
+                  <div className="space-y-2">
+                    <Label>{t("admin.clientUserBilling")}</Label>
+                    <Select
+                      value={
+                        userForm.billing_access === ""
+                          ? "inherit"
+                          : userForm.billing_access
+                      }
+                      onValueChange={(v) =>
+                        setUserForm((f) => ({
+                          ...f,
+                          billing_access:
+                            v === "inherit" ? "" : (v as "on" | "off"),
+                        }))
+                      }
+                    >
+                      <SelectTrigger>
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="inherit">
+                          {t("admin.clientUserBillingInherit")}
+                        </SelectItem>
+                        <SelectItem value="on">
+                          {t("admin.clientUserBillingOn")}
+                        </SelectItem>
+                        <SelectItem value="off">
+                          {t("admin.clientUserBillingOff")}
+                        </SelectItem>
+                      </SelectContent>
+                    </Select>
+                    <p className="text-xs text-muted-foreground">
+                      {t("admin.clientUserBillingHint")}
+                    </p>
+                  </div>
+                </TabsContent>
+
+                <TabsContent value="options" className="mt-0 space-y-4 focus-visible:outline-none">
+                  <div className="space-y-2">
+                    <Label htmlFor="uitglue">
+                      {t("admin.clientUserItglueId")}
+                    </Label>
+                    <Input
+                      id="uitglue"
+                      inputMode="numeric"
+                      placeholder={t("admin.clientUserItgluePh")}
+                      value={userForm.itglue_user_id}
+                      onChange={(e) =>
+                        setUserForm((f) => ({
+                          ...f,
+                          itglue_user_id: e.target.value,
+                        }))
+                      }
+                    />
+                    <p className="text-xs text-muted-foreground">
+                      {t("admin.clientUserItglueHint")}
+                    </p>
+                  </div>
+                  <label className="flex items-start gap-3 rounded-lg border border-border bg-muted/20 p-3 text-sm">
+                    <Checkbox
+                      checked={userForm.board_email_opt_in}
+                      onCheckedChange={(v) =>
+                        setUserForm((f) => ({
+                          ...f,
+                          board_email_opt_in: v === true,
+                        }))
+                      }
+                      className="mt-0.5"
+                    />
+                    <span>
+                      <span className="font-medium">
+                        {t("admin.clientUserBoardEmail")}
+                      </span>
+                      <span className="mt-0.5 block text-xs text-muted-foreground">
+                        {t("admin.clientUserBoardEmailHint")}
+                      </span>
+                    </span>
+                  </label>
+                  {editingUser && (
+                    <label className="flex items-start gap-3 rounded-lg border border-border bg-muted/20 p-3 text-sm">
+                      <Checkbox
+                        checked={userForm.active}
+                        onCheckedChange={(v) =>
+                          setUserForm((f) => ({
+                            ...f,
+                            active: v === true,
+                          }))
+                        }
+                        className="mt-0.5"
+                      />
+                      <span>
+                        <span className="font-medium">
+                          {t("admin.clientUserActive")}
+                        </span>
+                        <span className="mt-0.5 block text-xs text-muted-foreground">
+                          {t("admin.clientUserActiveHint")}
+                        </span>
+                      </span>
+                    </label>
+                  )}
+                </TabsContent>
+
+                {error && (
+                  <p className="mt-4 rounded-lg border border-destructive/40 bg-destructive/10 px-3 py-2 text-sm text-destructive">
+                    {error}
                   </p>
-                ) : (
-                  clientRoles
-                    .filter(
-                      (r) => r.slug !== SYSTEM_CLIENT_ROLE_SLUGS.standard,
-                    )
-                    .map((r) => {
-                      const checked = userForm.additional_role_ids.includes(
-                        r.id,
-                      );
-                      return (
-                        <label
-                          key={r.id}
-                          className="flex cursor-pointer items-start gap-3 rounded-md px-1 py-1.5 text-sm hover:bg-muted/40"
-                        >
-                          <Checkbox
-                            checked={checked}
-                            onCheckedChange={(v) => {
-                              const on = v === true;
-                              setUserForm((f) => ({
-                                ...f,
-                                additional_role_ids: on
-                                  ? [
-                                      ...new Set([
-                                        ...f.additional_role_ids,
-                                        r.id,
-                                      ]),
-                                    ]
-                                  : f.additional_role_ids.filter(
-                                      (id) => id !== r.id,
-                                    ),
-                              }));
-                            }}
-                            className="mt-0.5"
-                          />
-                          <span className="min-w-0">
-                            <span className="font-medium">{r.name}</span>
-                            {r.slug === SYSTEM_CLIENT_ROLE_SLUGS.billing && (
-                              <span className="ml-1.5 text-[11px] text-primary">
-                                · {t("admin.clientRoleBillingTag")}
-                              </span>
-                            )}
-                            {r.description && (
-                              <span className="mt-0.5 block text-xs text-muted-foreground">
-                                {r.description}
-                              </span>
-                            )}
-                          </span>
-                        </label>
-                      );
-                    })
                 )}
               </div>
-            </div>
-            <div className="space-y-2">
-              <Label>{t("admin.clientUserBilling")}</Label>
-              <Select
-                value={userForm.billing_access === "" ? "inherit" : userForm.billing_access}
-                onValueChange={(v) =>
-                  setUserForm((f) => ({
-                    ...f,
-                    billing_access:
-                      v === "inherit" ? "" : (v as "on" | "off"),
-                  }))
-                }
-              >
-                <SelectTrigger>
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="inherit">
-                    {t("admin.clientUserBillingInherit")}
-                  </SelectItem>
-                  <SelectItem value="on">
-                    {t("admin.clientUserBillingOn")}
-                  </SelectItem>
-                  <SelectItem value="off">
-                    {t("admin.clientUserBillingOff")}
-                  </SelectItem>
-                </SelectContent>
-              </Select>
-              <p className="text-xs text-muted-foreground">
-                {t("admin.clientUserBillingHint")}
-              </p>
-            </div>
-            {editingUser && (
-              <label className="flex items-start gap-3 rounded-lg border border-border bg-muted/20 p-3 text-sm">
-                <Checkbox
-                  checked={userForm.active}
-                  onCheckedChange={(v) =>
-                    setUserForm((f) => ({
-                      ...f,
-                      active: v === true,
-                    }))
-                  }
-                  className="mt-0.5"
-                />
-                <span>
-                  <span className="font-medium">
-                    {t("admin.clientUserActive")}
-                  </span>
-                  <span className="mt-0.5 block text-xs text-muted-foreground">
-                    {t("admin.clientUserActiveHint")}
-                  </span>
-                </span>
-              </label>
-            )}
-            {error && <p className="text-sm text-destructive">{error}</p>}
-            </div>
+            </Tabs>
+
             <DialogFooter className="shrink-0 border-t border-border px-6 py-4 sm:justify-end">
               <Button
                 type="button"

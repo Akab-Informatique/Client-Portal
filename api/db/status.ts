@@ -120,6 +120,10 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
                    AND column_name='company_id'
                ) AS client_roles_company_id,
                EXISTS (
+                 SELECT 1 FROM information_schema.tables
+                 WHERE table_schema='public' AND table_name='client_user_roles'
+               ) AS client_user_roles,
+               EXISTS (
                  SELECT 1 FROM information_schema.columns
                  WHERE table_schema='public' AND table_name='users'
                    AND column_name='client_role_id'
@@ -136,6 +140,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         const row = (r.rows[0] ?? {}) as Record<string, boolean>;
         schemaFlags = {
           client_roles_company_id: !!row.client_roles_company_id,
+          client_user_roles: !!row.client_user_roles,
           users_client_role_id: !!row.users_client_role_id,
           users_billing_access: !!row.users_billing_access,
         };
@@ -166,6 +171,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     const schemaOk =
       !schemaFlags ||
       (schemaFlags.client_roles_company_id &&
+        schemaFlags.client_user_roles &&
         schemaFlags.users_client_role_id);
 
     return res.status(200).json({
@@ -182,11 +188,11 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       schema: schemaFlags,
       error: schemaOk
         ? null
-        : "Database reachable but schema incomplete (missing client_roles.company_id). Run ?migrate=1 after rebuild.",
+        : "Database reachable but schema incomplete (need client_roles.company_id + client_user_roles). Rebuild app, then run ?migrate=1.",
       latencyMs: ping.latencyMs ?? null,
       hint: schemaOk
         ? "PostgreSQL is ready. Portal data is shared and durable."
-        : 'curl -sS -m 30 "http://127.0.0.1:3000/api/db/status?migrate=1"',
+        : 'curl -sS -m 45 "http://127.0.0.1:3000/api/db/status?migrate=1"',
     });
   } catch (err) {
     return res.status(200).json({

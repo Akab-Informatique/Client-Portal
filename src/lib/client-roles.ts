@@ -73,8 +73,9 @@ async function insertRole(values: {
 }
 
 /**
- * Ensure Standard + Billing user roles exist for ONE client company.
- * Safe to call repeatedly.
+ * Ensure Default + Billing user roles exist for ONE client company.
+ * Safe to call repeatedly. Every new client user gets Default automatically.
+ * Additional groups only ADD access (never deny).
  */
 export async function ensureClientUserRolesForCompany(
   companyId: number,
@@ -91,14 +92,34 @@ export async function ensureClientUserRolesForCompany(
   if (!standard) {
     standard = await insertRole({
       company_id: companyId,
-      name: "Standard user",
+      name: "Default",
       slug: SYSTEM_CLIENT_ROLE_SLUGS.standard,
       description:
-        "Core access for every contact at this company. Always assigned — additional roles stack on top.",
+        "Base group for every contact at this company. Always assigned. Edit its sections to tighten what everyone gets; additional groups only add more access.",
       permissions: serializeClientPermissions(STANDARD_CLIENT_PERMISSIONS),
       is_system: true,
       active: true,
     });
+  } else if (
+    standard.name === "Standard user" ||
+    standard.name === "Standard"
+  ) {
+    // Rename legacy "Standard" → "Default" (non-destructive)
+    try {
+      await db
+        .update(schema.client_roles)
+        .set({
+          name: "Default",
+          description:
+            standard.description?.includes("Standard")
+              ? "Base group for every contact at this company. Always assigned. Edit its sections to tighten what everyone gets; additional groups only add more access."
+              : standard.description,
+        })
+        .where(eq(schema.client_roles.id, standard.id));
+      standard = (await selectById(standard.id)) ?? standard;
+    } catch {
+      /* ignore rename */
+    }
   }
 
   let billing = await selectByCompanySlug(
@@ -108,14 +129,28 @@ export async function ensureClientUserRolesForCompany(
   if (!billing) {
     billing = await insertRole({
       company_id: companyId,
-      name: "Billing contact",
+      name: "Billing",
       slug: SYSTEM_CLIENT_ROLE_SLUGS.billing,
       description:
-        "Additional group — grants billing (invoices & contracts). Stacks with Standard. Admins can still override billing per user.",
+        "Additional group — adds Billing (invoices & contracts) on top of Default. Create more groups the same way (e.g. Accounting) to grant only the sections you choose.",
       permissions: serializeClientPermissions(BILLING_CLIENT_PERMISSIONS),
       is_system: true,
       active: true,
     });
+  } else if (billing.name === "Billing contact") {
+    try {
+      await db
+        .update(schema.client_roles)
+        .set({
+          name: "Billing",
+          description:
+            "Additional group — adds Billing (invoices & contracts) on top of Default. Create more groups the same way (e.g. Accounting) to grant only the sections you choose.",
+        })
+        .where(eq(schema.client_roles.id, billing.id));
+      billing = (await selectById(billing.id)) ?? billing;
+    } catch {
+      /* ignore */
+    }
   }
 
   return { standard, billing };
@@ -312,6 +347,11 @@ export async function setUserClientRoles(opts: {
       });
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
+      if (/client_user_roles/i.test(msg) && /does not exist/i.test(msg)) {
+        throw new Error(
+          'Table client_user_roles is missing. Rebuild the app container, then run: curl -sS -m 45 "http://127.0.0.1:3000/api/db/status?migrate=1"',
+        );
+      }
       // unique violation — already there
       if (!/unique|duplicate/i.test(msg)) throw e;
     }
