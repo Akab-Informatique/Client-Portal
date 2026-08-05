@@ -26,6 +26,7 @@ import {
   ContractsPage,
   InvoicesPage,
 } from "@/pages/admin/BillingPlaceholderPage";
+import { TodoPage } from "@/pages/admin/TodoPage";
 import { ClientLayout } from "@/pages/client/ClientLayout";
 import { ClientDashboard } from "@/pages/client/ClientDashboard";
 import { ClientBoardPage } from "@/pages/client/ClientBoardPage";
@@ -92,6 +93,8 @@ function AppRoutes() {
           <Route path="users" element={<Navigate to="/admin/clients" replace />} />
           {/* General settings: any signed-in staff (admin/technician layout already gated) */}
           <Route path="settings" element={<SettingsPage />} />
+          {/* To-do workspace — swaps the whole admin sidebar when open */}
+          <Route path="todo" element={<TodoPage />} />
           <Route
             path="messages"
             element={

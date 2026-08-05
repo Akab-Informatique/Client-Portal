@@ -1,7 +1,9 @@
 import { Link, NavLink, useLocation, useNavigate } from "react-router-dom";
 import {
+  ArrowLeft,
   Bell,
   Building2,
+  CheckSquare,
   ChevronDown,
   FileStack,
   FileText,
@@ -99,6 +101,11 @@ export function AppShell({
   const location = useLocation();
   const [mobileOpen, setMobileOpen] = useState(false);
   const selectedClientCtx = useSelectedClientOptional();
+
+  /** To-do is its own sidebar workspace (replaces the main admin menu). */
+  const isTodoWorkspace =
+    location.pathname === "/admin/todo" ||
+    location.pathname.startsWith("/admin/todo/");
 
   const entries: NavEntry[] = useMemo(() => {
     if (navEntries && navEntries.length > 0) return navEntries;
@@ -304,32 +311,88 @@ export function AppShell({
     );
   };
 
-  const NavItems = ({ onNavigate }: { onNavigate?: () => void }) => (
-    <nav className="flex flex-col gap-3 p-3">
-      {entries.map((entry) => {
-        if (entry.type === "item") {
-          return (
-            <div key={entry.item.to}>{renderLink(entry.item, onNavigate)}</div>
-          );
-        }
-        if (entry.type === "group") {
-          return renderGroup(entry.group, onNavigate);
-        }
+  const exitTodoWorkspace = (onNavigate?: () => void) => {
+    navigate("/admin");
+    onNavigate?.();
+  };
 
-        const { section } = entry;
-        return (
-          <div key={section.id} className="space-y-1">
-            <p className="px-3 pb-1 pt-1 text-[10px] font-bold uppercase tracking-[0.14em] text-muted-foreground">
-              {section.label}
-            </p>
-            {section.items?.map((item) => renderLink(item, onNavigate))}
-            {section.showClientPicker && renderClientPicker()}
-            {section.groups?.map((g) => renderGroup(g, onNavigate))}
-          </div>
-        );
-      })}
+  const TodoNavItems = ({ onNavigate }: { onNavigate?: () => void }) => (
+    <nav className="flex flex-col gap-3 p-3">
+      <Button
+        type="button"
+        variant="outline"
+        className="h-auto w-full justify-start gap-2 border-sidebar-border bg-sidebar-accent/40 px-3 py-2.5 text-left text-sm font-medium text-sidebar-foreground hover:bg-sidebar-accent"
+        onClick={() => exitTodoWorkspace(onNavigate)}
+      >
+        <ArrowLeft className="size-4 shrink-0" />
+        <span className="min-w-0 flex-1 leading-tight">
+          <span className="block truncate">{t("todo.backToMain")}</span>
+          <span className="block truncate text-[11px] font-normal text-muted-foreground">
+            {t("todo.backToDashboard")}
+          </span>
+        </span>
+      </Button>
+
+      <div className="space-y-1">
+        <p className="px-3 pb-1 pt-1 text-[10px] font-bold uppercase tracking-[0.14em] text-muted-foreground">
+          {t("todo.workspaceLabel")}
+        </p>
+        {renderLink(
+          {
+            to: "/admin/todo",
+            label: t("todo.overview"),
+            icon: CheckSquare,
+            end: true,
+          },
+          onNavigate,
+        )}
+      </div>
+
+      <div className="mx-1 rounded-lg border border-dashed border-sidebar-border bg-sidebar-accent/20 px-3 py-3">
+        <p className="text-xs font-medium text-sidebar-foreground">
+          {t("todo.comingTitle")}
+        </p>
+        <p className="mt-1 text-[11px] leading-relaxed text-muted-foreground">
+          {t("todo.comingDesc")}
+        </p>
+      </div>
     </nav>
   );
+
+  const NavItems = ({ onNavigate }: { onNavigate?: () => void }) => {
+    if (isTodoWorkspace) {
+      return <TodoNavItems onNavigate={onNavigate} />;
+    }
+
+    return (
+      <nav className="flex flex-col gap-3 p-3">
+        {entries.map((entry) => {
+          if (entry.type === "item") {
+            return (
+              <div key={entry.item.to}>
+                {renderLink(entry.item, onNavigate)}
+              </div>
+            );
+          }
+          if (entry.type === "group") {
+            return renderGroup(entry.group, onNavigate);
+          }
+
+          const { section } = entry;
+          return (
+            <div key={section.id} className="space-y-1">
+              <p className="px-3 pb-1 pt-1 text-[10px] font-bold uppercase tracking-[0.14em] text-muted-foreground">
+                {section.label}
+              </p>
+              {section.items?.map((item) => renderLink(item, onNavigate))}
+              {section.showClientPicker && renderClientPicker()}
+              {section.groups?.map((g) => renderGroup(g, onNavigate))}
+            </div>
+          );
+        })}
+      </nav>
+    );
+  };
 
   return (
     <div className="flex min-h-screen bg-background">
@@ -590,6 +653,13 @@ export function useAdminNavEntries(): NavEntry[] {
         icon: Settings2,
       });
     }
+
+    // To do — opens a dedicated sidebar workspace (available to all staff)
+    generaleItems.push({
+      to: "/admin/todo",
+      label: t("nav.todo"),
+      icon: CheckSquare,
+    });
 
     const operationsChildren: NavItem[] = [];
     if (allow("documentation")) {

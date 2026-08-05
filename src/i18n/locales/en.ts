@@ -74,6 +74,30 @@ export const en = {
     billing: "Billing",
     invoices: "Invoices",
     contracts: "Contracts",
+    todo: "To do",
+  },
+  todo: {
+    title: "To do",
+    subtitle:
+      "A dedicated workspace. We will build the perfect to-do system here together.",
+    badge: "Workspace",
+    workspaceLabel: "To do",
+    overview: "Overview",
+    backToMain: "Back to main menu",
+    backToDashboard: "Dashboard & full portal",
+    comingTitle: "More sections soon",
+    comingDesc:
+      "Lists, filters, assignments, and client-linked tasks will appear in this sidebar as we build.",
+    workspaceReadyTitle: "To-do workspace is ready",
+    workspaceReadyDesc:
+      "The side menu has switched into To-do mode. Use “Back to main menu” anytime to return to Générale, Operations, and Billing.",
+    buildTitle: "Let’s build this together",
+    buildDesc:
+      "This page is the starting point. Tell me what you want next — personal tasks, team boards, client-linked work, due dates, priorities — and we will shape the perfect to-do.",
+    hintBack:
+      "Left sidebar: Back to main menu returns you to the full admin navigation and dashboard.",
+    hintNext:
+      "Next: we will design task lists, statuses, and how work ties to clients.",
   },
   billing: {
     invoicesTitle: "Invoices",

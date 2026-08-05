@@ -76,6 +76,30 @@ export const fr: Dictionary = {
     billing: "Facturation",
     invoices: "Factures",
     contracts: "Contrats",
+    todo: "À faire",
+  },
+  todo: {
+    title: "À faire",
+    subtitle:
+      "Un espace dédié. Nous construirons ensemble le système de tâches parfait ici.",
+    badge: "Espace de travail",
+    workspaceLabel: "À faire",
+    overview: "Vue d'ensemble",
+    backToMain: "Retour au menu principal",
+    backToDashboard: "Tableau de bord et portail complet",
+    comingTitle: "Plus de sections bientôt",
+    comingDesc:
+      "Listes, filtres, assignations et tâches liées aux clients apparaîtront dans ce menu au fur et à mesure.",
+    workspaceReadyTitle: "L'espace À faire est prêt",
+    workspaceReadyDesc:
+      "Le menu latéral est passé en mode À faire. Utilisez « Retour au menu principal » en tout temps pour revenir à Générale, Opérations et Facturation.",
+    buildTitle: "Construisons ceci ensemble",
+    buildDesc:
+      "Cette page est le point de départ. Dites-moi la suite — tâches personnelles, tableaux d'équipe, travail lié aux clients, échéances, priorités — et nous façonnerons le système parfait.",
+    hintBack:
+      "Menu de gauche : Retour au menu principal ramène la navigation admin complète et le tableau de bord.",
+    hintNext:
+      "Ensuite : nous concevrons les listes de tâches, statuts et le lien avec les clients.",
   },
   billing: {
     invoicesTitle: "Factures",
