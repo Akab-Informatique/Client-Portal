@@ -297,7 +297,16 @@ const MIGRATION_STATEMENTS: string[] = [
   `CREATE INDEX IF NOT EXISTS board_messages_company_id_idx ON board_messages (company_id)`,
   `CREATE INDEX IF NOT EXISTS message_user_states_user_id_idx ON message_user_states (user_id)`,
   `CREATE INDEX IF NOT EXISTS users_company_id_idx ON users (company_id)`,
+];
+
+/**
+ * Indexes that depend on additive columns. MUST run AFTER ADDITIVE_COLUMNS.
+ * Creating users_client_role_id_idx before client_role_id exists on upgraded
+ * DBs aborted the whole migrate transaction and left columns missing.
+ */
+const POST_ALTER_INDEXES: string[] = [
   `CREATE INDEX IF NOT EXISTS users_client_role_id_idx ON users (client_role_id)`,
+  `CREATE INDEX IF NOT EXISTS users_staff_role_id_idx ON users (staff_role_id)`,
 ];
 
 const ADDITIVE_COLUMNS: Array<{ table: string; column: string; def: string }> =
