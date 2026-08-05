@@ -665,6 +665,27 @@ server.listen(PORT, HOST, () => {
   console.log(`  api:    ${apiDir}`);
   console.log(`  node:   ${process.version}`);
 
+  // Non-blocking Autotask env sanity (never logs secret value)
+  try {
+    const ic = String(process.env.AUTOTASK_INTEGRATION_CODE || "").trim();
+    const un = String(process.env.AUTOTASK_USERNAME || "").trim();
+    const sec = String(process.env.AUTOTASK_SECRET || "").trim();
+    if (!ic || !un || !sec) {
+      console.log(
+        "  autotask: NOT configured (set AUTOTASK_INTEGRATION_CODE / USERNAME / SECRET in .env)",
+      );
+    } else {
+      console.log(
+        `  autotask: configured — usernameLen=${un.length} secretLen=${sec.length}` +
+          (/@/.test(un) ? " usernameLooksLikeEmail=true" : "") +
+          (sec.includes("$") ? " secretHas$=true" : "") +
+          (sec.includes("#") ? " secretHas#=true" : ""),
+      );
+    }
+  } catch {
+    /* ignore */
+  }
+
   // Listen first; migrate in background so /api/health never blocks on DB
   import(pathToFileURL(path.join(apiDir, "_lib/pg.ts")).href)
     .then(async (mod) => {
