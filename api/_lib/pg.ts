@@ -318,6 +318,8 @@ const ADDITIVE_COLUMNS: Array<{ table: string; column: string; def: string }> =
     { table: "users", column: "bio", def: "TEXT" },
     { table: "users", column: "locale", def: "TEXT" },
     { table: "users", column: "staff_role_id", def: "INTEGER" },
+    { table: "users", column: "client_role_id", def: "INTEGER" },
+    { table: "users", column: "billing_access", def: "BOOLEAN" },
     { table: "users", column: "itglue_user_id", def: "TEXT" },
     { table: "users", column: "board_email_opt_in", def: "BOOLEAN" },
     { table: "users", column: "mfa_enabled", def: "BOOLEAN" },
