@@ -27,10 +27,21 @@ const PORT = Number(process.env.PORT || 3000);
 const HOST = process.env.HOST || "0.0.0.0";
 
 // ---------------------------------------------------------------------------
-// Load .env without $ expansion (Autotask secrets often contain $)
+// Load .env without $ expansion (Autotask secrets often contain $ and #)
+//
+// Docker Compose may inject env_file values AFTER expanding $VAR inside them
+// (depending on Compose version / quoting). That corrupts AUTOTASK_SECRET and
+// causes permanent 401s after every upgrade rebuild.
+//
+// Fix: mount .env into the container and re-read secrets here WITHOUT expansion.
+// For secret-like keys the file ALWAYS wins over whatever Compose injected.
 // ---------------------------------------------------------------------------
-function loadEnvFileNoExpand(filePath) {
-  if (!fs.existsSync(filePath)) return;
+const FILE_WINS_ENV =
+  /^(AUTOTASK_|MICROSOFT_|ITGLUE_|SMTP_|GITHUB_|SESSION_|OPENAI_|ANTHROPIC_)/i;
+
+function loadEnvFileNoExpand(filePath, { secretsWin = true } = {}) {
+  if (!fs.existsSync(filePath)) return 0;
+  let loaded = 0;
   const text = fs.readFileSync(filePath, "utf8");
   for (const rawLine of text.split(/\r?\n/)) {
     const line = rawLine.trim();
@@ -38,22 +49,42 @@ function loadEnvFileNoExpand(filePath) {
     const eq = line.indexOf("=");
     if (eq <= 0) continue;
     const key = line.slice(0, eq).trim();
+    if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(key)) continue;
     let value = line.slice(eq + 1);
+    // Peel one matching quote layer (single preferred for secrets)
     if (
-      (value.startsWith('"') && value.endsWith('"')) ||
-      (value.startsWith("'") && value.endsWith("'"))
+      (value.startsWith('"') && value.endsWith('"') && value.length >= 2) ||
+      (value.startsWith("'") && value.endsWith("'") && value.length >= 2)
     ) {
       value = value.slice(1, -1);
     }
     value = value.replace(/\\n/g, "\n").replace(/\\r/g, "\r");
-    if (process.env[key] === undefined) process.env[key] = value;
+    const isSecret = FILE_WINS_ENV.test(key);
+    if (process.env[key] === undefined || (secretsWin && isSecret)) {
+      process.env[key] = value;
+      loaded += 1;
+    }
   }
+  return loaded;
 }
 
-loadEnvFileNoExpand(path.join(root, ".env"));
-loadEnvFileNoExpand(path.join(root, ".env.local"));
-loadEnvFileNoExpand(path.join(root, ".env.production"));
-loadEnvFileNoExpand(path.join(root, ".env.production.local"));
+const envCandidates = [
+  path.join(root, ".env"),
+  path.join(root, ".env.local"),
+  path.join(root, ".env.production"),
+  path.join(root, ".env.production.local"),
+  // Compose may mount the host file here explicitly
+  "/run/akab/env",
+];
+let envFilesLoaded = 0;
+for (const p of envCandidates) {
+  envFilesLoaded += loadEnvFileNoExpand(p, { secretsWin: true });
+}
+if (envFilesLoaded > 0) {
+  console.log(
+    `[akab-env] loaded ${envFilesLoaded} key(s) from .env without $ expansion (secrets win over Compose)`,
+  );
+}
 
 // ---------------------------------------------------------------------------
 // Register tsx ONCE so we can import api/**/*.ts at runtime

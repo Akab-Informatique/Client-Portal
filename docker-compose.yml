@@ -43,14 +43,17 @@ services:
       - "${PORT:-3000}:3000"
     env_file:
       - .env
-    # Note: Autotask secrets often contain $ and #.
-    # In .env use SINGLE quotes: AUTOTASK_SECRET='...'
-    # Double quotes or unquoted values let Compose expand/truncate the secret → Autotask 401.
+    # Mount raw .env so the Node server can re-read Autotask/Microsoft secrets
+    # WITHOUT Docker Compose $ expansion. Secrets often contain $ and #.
+    # In .env use SINGLE quotes: AUTOTASK_SECRET='AbC$123#xyz'
+    volumes:
+      - ./.env:/app/.env:ro
     environment:
       NODE_ENV: production
       PORT: 3000
       HOST: 0.0.0.0
       # Discrete connection — app never builds a fragile DATABASE_URL
+      # These override env_file for DB host so the app always reaches the compose db service.
       POSTGRES_HOST: db
       POSTGRES_PORT: "5432"
       POSTGRES_DB: ${POSTGRES_DB:-akab}
