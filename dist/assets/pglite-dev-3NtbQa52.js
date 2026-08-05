@@ -1,4 +1,4 @@
-import{drizzle as i}from"drizzle-orm/pglite";import{PGlite as E}from"@electric-sql/pglite";import{s as N}from"./index-Bg6swYkZ.js";import"./vendor-CXU8bRBo.js";import"./motion-CPslPGox.js";async function O(e){const T=e?new E(e):new E;await T.waitReady,window.__devs_pglite=T,await T.exec(`
+import{drizzle as i}from"drizzle-orm/pglite";import{PGlite as E}from"@electric-sql/pglite";import{s as N}from"./index-PSJ23jcg.js";import"./vendor-CXU8bRBo.js";import"./motion-CPslPGox.js";async function O(e){const T=e?new E(e):new E;await T.waitReady,window.__devs_pglite=T,await T.exec(`
 CREATE TABLE IF NOT EXISTS companies (
   id SERIAL PRIMARY KEY, name TEXT NOT NULL, type TEXT NOT NULL,
   email TEXT, phone TEXT, notes TEXT, active BOOLEAN NOT NULL,
@@ -10,7 +10,8 @@ CREATE TABLE IF NOT EXISTS staff_roles (
   active BOOLEAN NOT NULL, created_at TIMESTAMP DEFAULT NOW() NOT NULL
 );
 CREATE TABLE IF NOT EXISTS client_roles (
-  id SERIAL PRIMARY KEY, name TEXT NOT NULL, slug TEXT NOT NULL,
+  id SERIAL PRIMARY KEY, company_id INTEGER,
+  name TEXT NOT NULL, slug TEXT NOT NULL,
   description TEXT, permissions TEXT NOT NULL, is_system BOOLEAN NOT NULL,
   active BOOLEAN NOT NULL, created_at TIMESTAMP DEFAULT NOW() NOT NULL
 );

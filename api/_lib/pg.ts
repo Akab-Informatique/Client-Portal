@@ -294,7 +294,8 @@ const MIGRATION_STATEMENTS: string[] = [
   )`,
   `CREATE UNIQUE INDEX IF NOT EXISTS users_email_unique ON users (lower(email))`,
   `CREATE UNIQUE INDEX IF NOT EXISTS staff_roles_slug_unique ON staff_roles (slug)`,
-  `CREATE UNIQUE INDEX IF NOT EXISTS client_roles_slug_unique ON client_roles (slug)`,
+  // NOTE: client_roles (company_id, slug) indexes are ONLY in POST_ALTER_INDEXES.
+  // On upgraded DBs company_id is added in phase 2 — creating them here aborts migrate.
   `CREATE INDEX IF NOT EXISTS board_messages_company_id_idx ON board_messages (company_id)`,
   `CREATE INDEX IF NOT EXISTS message_user_states_user_id_idx ON message_user_states (user_id)`,
   `CREATE INDEX IF NOT EXISTS users_company_id_idx ON users (company_id)`,
@@ -308,6 +309,9 @@ const MIGRATION_STATEMENTS: string[] = [
 const POST_ALTER_INDEXES: string[] = [
   `CREATE INDEX IF NOT EXISTS users_client_role_id_idx ON users (client_role_id)`,
   `CREATE INDEX IF NOT EXISTS users_staff_role_id_idx ON users (staff_role_id)`,
+  // Existing DBs: company_id added in phase 2 — create composite unique after that
+  `CREATE UNIQUE INDEX IF NOT EXISTS client_roles_company_slug_unique ON client_roles (company_id, slug)`,
+  `CREATE INDEX IF NOT EXISTS client_roles_company_id_idx ON client_roles (company_id)`,
 ];
 
 const ADDITIVE_COLUMNS: Array<{ table: string; column: string; def: string }> =
@@ -330,6 +334,10 @@ const ADDITIVE_COLUMNS: Array<{ table: string; column: string; def: string }> =
     { table: "users", column: "staff_role_id", def: "INTEGER" },
     { table: "users", column: "client_role_id", def: "INTEGER" },
     { table: "users", column: "billing_access", def: "BOOLEAN" },
+    // CRITICAL: existing DBs created client_roles without company_id.
+    // Must be nullable here so ALTER succeeds when legacy rows exist;
+    // app backfill assigns company_id per client.
+    { table: "client_roles", column: "company_id", def: "INTEGER" },
     { table: "users", column: "itglue_user_id", def: "TEXT" },
     { table: "users", column: "board_email_opt_in", def: "BOOLEAN" },
     { table: "users", column: "mfa_enabled", def: "BOOLEAN" },
@@ -383,6 +391,8 @@ export async function runMigrations(): Promise<void> {
 
       // Phase 2 — additive columns (separate statements; IF NOT EXISTS is idempotent).
       // Keep outside a single giant transaction so one bad ALTER cannot wipe progress.
+      // IMPORTANT: existing DBs that created client_roles before company_id existed
+      // only pick up that column here — CREATE TABLE IF NOT EXISTS is a no-op.
       for (const { table, column, def } of ADDITIVE_COLUMNS) {
         await withTimeout(
           client.query(
@@ -395,19 +405,34 @@ export async function runMigrations(): Promise<void> {
 
       // Phase 3 — indexes that need columns from phase 2
       // Drop legacy global unique on client_roles.slug (roles are per-company now)
-      try {
-        await withTimeout(
-          client.query(
-            `DROP INDEX IF EXISTS client_roles_slug_unique`,
-          ),
-          10000,
-          "migrate drop legacy client_roles slug unique",
-        );
-      } catch {
-        /* ignore */
+      for (const dropSql of [
+        `DROP INDEX IF EXISTS client_roles_slug_unique`,
+        // Some PG versions name unique indexes from constraint name
+        `ALTER TABLE client_roles DROP CONSTRAINT IF EXISTS client_roles_slug_key`,
+        `ALTER TABLE client_roles DROP CONSTRAINT IF EXISTS client_roles_slug_unique`,
+      ]) {
+        try {
+          await withTimeout(
+            client.query(dropSql),
+            10000,
+            "migrate drop legacy client_roles slug unique",
+          );
+        } catch {
+          /* ignore */
+        }
       }
       for (const sql of POST_ALTER_INDEXES) {
-        await withTimeout(client.query(sql), 15000, "migrate post-index");
+        try {
+          await withTimeout(client.query(sql), 15000, "migrate post-index");
+        } catch (idxErr) {
+          // Unique index can fail if duplicate (company_id, slug) during partial
+          // upgrade — log and continue; app still works with non-unique slugs.
+          console.warn(
+            "[akab-db] post-index skipped:",
+            sql,
+            idxErr instanceof Error ? idxErr.message : idxErr,
+          );
+        }
       }
 
       // Phase 4 — data backfills
@@ -418,6 +443,24 @@ export async function runMigrations(): Promise<void> {
         10000,
         "migrate backfill",
       );
+
+      // Verify critical column for per-client user roles
+      const colCheck = await withTimeout(
+        client.query(
+          `SELECT 1 FROM information_schema.columns
+           WHERE table_schema = 'public'
+             AND table_name = 'client_roles'
+             AND column_name = 'company_id'
+           LIMIT 1`,
+        ),
+        5000,
+        "migrate verify client_roles.company_id",
+      );
+      if (!colCheck.rowCount) {
+        throw new Error(
+          "client_roles.company_id missing after migrate — additive ALTER failed",
+        );
+      }
 
       migrateDone = true;
       console.log("[akab-db] migrations OK (additive, phased)");

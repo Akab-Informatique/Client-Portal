@@ -45,7 +45,17 @@ async function insertRole(values: {
   is_system: boolean;
   active: boolean;
 }): Promise<ClientRole> {
-  await db.insert(schema.client_roles).values(values);
+  try {
+    await db.insert(schema.client_roles).values(values);
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e);
+    if (/company_id/i.test(msg) && /does not exist/i.test(msg)) {
+      throw new Error(
+        'Database is missing client_roles.company_id. On the server run: curl -sS -m 30 "http://127.0.0.1:3000/api/db/status?migrate=1" after rebuilding the app container.',
+      );
+    }
+    throw e;
+  }
   const row = await selectByCompanySlug(values.company_id, values.slug);
   if (!row) {
     throw new Error(

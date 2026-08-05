@@ -23,7 +23,8 @@ CREATE TABLE IF NOT EXISTS staff_roles (
   active BOOLEAN NOT NULL, created_at TIMESTAMP DEFAULT NOW() NOT NULL
 );
 CREATE TABLE IF NOT EXISTS client_roles (
-  id SERIAL PRIMARY KEY, name TEXT NOT NULL, slug TEXT NOT NULL,
+  id SERIAL PRIMARY KEY, company_id INTEGER,
+  name TEXT NOT NULL, slug TEXT NOT NULL,
   description TEXT, permissions TEXT NOT NULL, is_system BOOLEAN NOT NULL,
   active BOOLEAN NOT NULL, created_at TIMESTAMP DEFAULT NOW() NOT NULL
 );

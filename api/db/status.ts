@@ -106,6 +106,44 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     // Single timed ping — includes user count when tables exist
     const ping = await withDeadline(pingDatabase(7000), 8000, "status ping");
 
+    // Lightweight schema probe so ops can confirm critical upgrades landed
+    let schemaFlags: Record<string, boolean> | null = null;
+    if (ping.ok && isPostgresConfigured()) {
+      try {
+        const pool = getPool();
+        const r = await withDeadline(
+          pool.query(
+            `SELECT
+               EXISTS (
+                 SELECT 1 FROM information_schema.columns
+                 WHERE table_schema='public' AND table_name='client_roles'
+                   AND column_name='company_id'
+               ) AS client_roles_company_id,
+               EXISTS (
+                 SELECT 1 FROM information_schema.columns
+                 WHERE table_schema='public' AND table_name='users'
+                   AND column_name='client_role_id'
+               ) AS users_client_role_id,
+               EXISTS (
+                 SELECT 1 FROM information_schema.columns
+                 WHERE table_schema='public' AND table_name='users'
+                   AND column_name='billing_access'
+               ) AS users_billing_access`,
+          ),
+          4000,
+          "schema flags",
+        );
+        const row = (r.rows[0] ?? {}) as Record<string, boolean>;
+        schemaFlags = {
+          client_roles_company_id: !!row.client_roles_company_id,
+          users_client_role_id: !!row.users_client_role_id,
+          users_billing_access: !!row.users_billing_access,
+        };
+      } catch {
+        schemaFlags = null;
+      }
+    }
+
     if (!ping.ok) {
       return res.status(200).json({
         mode: "postgres",
@@ -118,16 +156,22 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         migrated: false,
         seeded: false,
         userCount: null,
+        schema: schemaFlags,
         error: ping.error || "Database not reachable",
         hint:
           'docker compose ps && docker compose logs --tail=80 app db && curl -sS -m 8 "http://127.0.0.1:3000/api/health?db=1"',
       });
     }
 
+    const schemaOk =
+      !schemaFlags ||
+      (schemaFlags.client_roles_company_id &&
+        schemaFlags.users_client_role_id);
+
     return res.status(200).json({
       mode: "postgres",
       configured: true,
-      ok: true,
+      ok: schemaOk,
       host: summary.host,
       database: ping.database ?? summary.database,
       passwordSet: summary.passwordSet,
@@ -135,9 +179,14 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       migrated: wantMigrate,
       seeded: true,
       userCount: ping.userCount ?? null,
-      error: null,
+      schema: schemaFlags,
+      error: schemaOk
+        ? null
+        : "Database reachable but schema incomplete (missing client_roles.company_id). Run ?migrate=1 after rebuild.",
       latencyMs: ping.latencyMs ?? null,
-      hint: "PostgreSQL is ready. Portal data is shared and durable.",
+      hint: schemaOk
+        ? "PostgreSQL is ready. Portal data is shared and durable."
+        : 'curl -sS -m 30 "http://127.0.0.1:3000/api/db/status?migrate=1"',
     });
   } catch (err) {
     return res.status(200).json({
