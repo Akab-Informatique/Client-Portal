@@ -58,14 +58,40 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       secretLength: cfg.secret.length,
       secretHasDollar: envDiag.secretHasDollar,
       secretHasHash: envDiag.secretHasHash,
+      secretLooksTruncated: envDiag.secretLooksTruncated,
       usernameLooksLikeEmail: envDiag.usernameLooksLikeEmail,
       zonePinned: envDiag.zonePinned,
       envIssues: envDiag.issues,
+      criticalIssues: envDiag.criticalIssues,
       warnings,
     };
 
     // Full auth failure (wrong credentials / zone)
     if (!probe.ok || probe.authOk === false || probe.ticketsAuthOk === false) {
+      const fix = envDiag.usernameLooksLikeEmail
+        ? [
+            "PRIMARY FIX — AUTOTASK_USERNAME is an email. Autotask rejects that with 401.",
+            "1) Autotask → Admin → Resources (Users) → open your API User",
+            "2) Credentials tab → copy “Username (Key)” (long generated key)",
+            "3) In /opt/akab-portal/.env set:",
+            "     AUTOTASK_USERNAME=paste-username-key-here",
+            "     AUTOTASK_INTEGRATION_CODE=paste-api-tracking-identifier",
+            "     AUTOTASK_SECRET='paste-full-secret-here'",
+            "4) Save, then:",
+            "     cd /opt/akab-portal && docker compose up -d --force-recreate app",
+            "     curl -sS 'http://127.0.0.1:3000/api/autotask/status?refresh=1'",
+            "Do NOT use the resource login email for AUTOTASK_USERNAME.",
+          ]
+        : [
+            "Edit /opt/akab-portal/.env — use SINGLE quotes around the secret:",
+            "  AUTOTASK_INTEGRATION_CODE=your-tracking-id",
+            "  AUTOTASK_USERNAME=your-username-key-not-email",
+            "  AUTOTASK_SECRET='paste-full-secret-here'",
+            "  # AUTOTASK_ZONE_URL=   ← keep commented unless you must pin a zone",
+            "Save, then recreate so the container reloads env:",
+            "  cd /opt/akab-portal && docker compose up -d --force-recreate app",
+            "  curl -sS 'http://127.0.0.1:3000/api/autotask/status?refresh=1'",
+          ];
       return res.status(200).json({
         ok: false,
         configured: true,
@@ -77,18 +103,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         httpStatus: probe.httpStatus,
         detail: probe.detail,
         message: probe.message,
-        fix: [
-          "Edit /opt/akab-portal/.env — use SINGLE quotes around the secret (required if it has $ or #):",
-          "  AUTOTASK_INTEGRATION_CODE=your-tracking-id",
-          "  AUTOTASK_USERNAME=your-username-key-not-email",
-          "  AUTOTASK_SECRET='paste-full-secret-here'",
-          "  # AUTOTASK_ZONE_URL=   ← keep commented unless you must pin a zone",
-          "Save, then recreate so the container reloads env:",
-          "  cd /opt/akab-portal && docker compose up -d --force-recreate app",
-          "  curl -sS 'http://127.0.0.1:3000/api/autotask/status?refresh=1' | jq",
-          "If usernameLooksLikeEmail=true, replace AUTOTASK_USERNAME with Username (Key) from Credentials.",
-          "If secretHasDollar/secretHasHash=true and you still get 401, the secret was corrupted before quoting — re-paste the FULL secret inside single quotes.",
-        ],
+        fix,
         ...common,
       });
     }
