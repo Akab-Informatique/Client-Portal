@@ -68,17 +68,22 @@ export const staff_roles = pgTable("staff_roles", {
 });
 
 /**
- * Client portal roles (Standard, Billing contact, custom…).
+ * Client USER roles — unique per client company.
+ * Each company has its own Standard / Billing / custom roles.
  * permissions is a JSON map of client section → boolean (e.g. billing).
- * Defaults apply to users on that role; admins can still override per user.
+ * Admins can still override billing per user.
  */
 export const client_roles = pgTable("client_roles", {
   id: serial("id").primaryKey(),
+  /** Owning client company (roles never shared across companies). */
+  company_id: integer("company_id").notNull(),
   name: text("name").notNull(),
+  /** Unique within the company: standard | billing | custom-… */
   slug: text("slug").notNull(),
   description: text("description"),
   /** JSON ClientPermissionMap */
   permissions: text("permissions").notNull(),
+  /** Built-in templates for this company cannot be deleted */
   is_system: boolean("is_system").notNull(),
   active: boolean("active").notNull(),
   created_at: timestamp("created_at").defaultNow().notNull(),

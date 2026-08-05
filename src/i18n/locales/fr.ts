@@ -78,7 +78,7 @@ export const fr: Dictionary = {
     invoices: "Factures",
     contracts: "Contrats",
     todo: "À faire",
-    clientRoles: "Rôles clients",
+    clientRoles: "Rôles utilisateurs clients",
   },
   todo: {
     title: "À faire",
@@ -140,7 +140,7 @@ export const fr: Dictionary = {
     managementDesc: "Entreprises, comptes du personnel et rôles d'accès.",
     linkClients: "Entreprises clientes, zones et utilisateurs du portail",
     linkStaff: "Techniciens, admins et rôles de permission",
-    linkClientRoles: "Accès par défaut des contacts clients (facturation et sections futures)",
+    linkClientRoles: "Rôles utilisateurs par client (facturation et accès futurs)",
     integrationsTitle: "Intégrations et réseau",
     integrationsDesc:
       "État des systèmes connectés. Les identifiants sont stockés en secrets sécurisés.",
@@ -438,6 +438,7 @@ export const fr: Dictionary = {
       "Personnes qui se connectent à la zone client de cette entreprise. Gérez-les ici — pas dans un menu séparé.",
     clientUsersEmpty: "Aucun utilisateur du portail pour cette entreprise.",
     clientUsersAdd: "Ajouter un utilisateur",
+    clientUserRolesManage: "Rôles utilisateurs",
     clientUsersSearch: "Rechercher des utilisateurs…",
     editUser: "Modifier l'utilisateur",
     editUserDesc:
@@ -456,7 +457,7 @@ export const fr: Dictionary = {
     clientUserItglueHint:
       "Lie ce client à son utilisateur MyGlue. Les mots de passe n'affichent que les identifiants autorisés pour cette personne.",
     clientUserBoardEmail: "Recevoir les courriels du babillard",
-    clientUserRole: "Rôle client",
+    clientUserRole: "Rôle utilisateur (ce client)",
     clientUserRolePh: "Choisir un rôle",
     clientUserRoleHint:
       "Le rôle définit l'accès par défaut (ex. contact facturation = facturation activée). Vous pouvez encore forcer la facturation ci-dessous.",
@@ -856,4 +857,33 @@ export const fr: Dictionary = {
     linkUsers: "Utilisateurs",
     linkMessages: "Publier un message",
   },
+
+  clientRoles: {
+    title: "Rôles utilisateurs clients",
+    badge: "Par client",
+    subtitle:
+      "Chaque entreprise cliente a ses propres rôles utilisateurs. Les rôles ne se mélangent jamais entre clients. Les défauts (ex. facturation) s’appliquent aux utilisateurs de ce rôle; vous pouvez toujours forcer par personne.",
+    pickClient: "Choisir un client",
+    scopedHint:
+      "Ces rôles s’appliquent uniquement aux utilisateurs portail de cette entreprise.",
+    openClients: "Ouvrir Clients",
+    add: "Ajouter un rôle",
+    addTitle: "Nouveau rôle utilisateur",
+    editTitle: "Modifier le rôle",
+    dialogDesc: "Rôle pour {{name}} seulement — non partagé avec d’autres clients.",
+    dialogDescGeneric: "Rôle uniquement pour l’entreprise cliente sélectionnée.",
+    permissions: "Accès par défaut",
+    permBilling: "Facturation",
+    permBillingHint:
+      "Si activé, les utilisateurs de ce rôle voient Factures et Contrats, sauf blocage par utilisateur.",
+    builtIn: "Intégré",
+    noDescription: "Aucune description",
+    loadFailed: "Impossible de charger les rôles.",
+    saveFailed: "Impossible d’enregistrer le rôle.",
+    deleteFailed: "Impossible de supprimer le rôle.",
+    deleteConfirm: "Supprimer le rôle « {{name}} » ? Les utilisateurs passent au Standard de ce client.",
+    noClientsTitle: "Aucune entreprise cliente",
+    noClientsDesc: "Créez d’abord un client, puis définissez ses rôles utilisateurs.",
+  },
+
 };

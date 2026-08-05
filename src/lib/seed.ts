@@ -1,7 +1,10 @@
 import { eq } from "drizzle-orm";
 import { db, dbMode, dbReady, schema } from "@/db";
 import { backfillUserStaffRoles, ensureDefaultStaffRoles } from "@/lib/roles";
-import { ensureDefaultClientRoles } from "@/lib/client-roles";
+import {
+  ensureAllClientCompanyRoles,
+  ensureClientUserRolesForCompany,
+} from "@/lib/client-roles";
 
 /**
  * Seed only when the database has zero users.
@@ -31,9 +34,8 @@ export async function seedIfNeeded() {
           await Promise.race([
             (async () => {
               await backfillUserStaffRoles();
-              await ensureDefaultClientRoles();
-              await backfillClientRoles();
-            })(),
+              await ensureAllClientCompanyRoles();
+              })(),
             new Promise<void>((_, reject) =>
               window.setTimeout(
                 () => reject(new Error("role backfill timed out")),
@@ -59,12 +61,10 @@ export async function seedIfNeeded() {
   // Always ensure system roles exist (idempotent — safe on every boot/upgrade)
   const { admin: adminRole, technician: techRole } =
     await ensureDefaultStaffRoles();
-  const { standard: standardClientRole } = await ensureDefaultClientRoles();
-
   const existing = await db.select().from(schema.users).limit(1);
   if (existing.length > 0) {
     await backfillUserStaffRoles();
-    await backfillClientRoles();
+    await ensureAllClientCompanyRoles();
     return;
   }
 
@@ -111,6 +111,9 @@ export async function seedIfNeeded() {
     })
     .returning();
 
+  const acmeRoles = await ensureClientUserRolesForCompany(acme.id);
+  const northstarRoles = await ensureClientUserRolesForCompany(northstar.id);
+
   await db.insert(schema.users).values([
     {
       email: "admin@akab.local",
@@ -145,7 +148,7 @@ export async function seedIfNeeded() {
       role: "client",
       company_id: acme.id,
       active: true,
-      client_role_id: standardClientRole.id,
+      client_role_id: acmeRoles.standard.id,
       billing_access: null,
       job_title: "IT Coordinator",
       phone: "555-0100",
@@ -159,7 +162,7 @@ export async function seedIfNeeded() {
       role: "client",
       company_id: northstar.id,
       active: true,
-      client_role_id: standardClientRole.id,
+      client_role_id: northstarRoles.standard.id,
       billing_access: null,
       job_title: "Operations Lead",
       phone: "555-0200",
@@ -195,28 +198,6 @@ export async function seedIfNeeded() {
 
   // No browser flag — emptiness of the users table is the only seed gate
   // so production Postgres is never re-seeded after the first boot.
-}
-
-/** Assign Standard client role to any client user missing client_role_id. */
-async function backfillClientRoles() {
-  try {
-    const { standard } = await ensureDefaultClientRoles();
-    const clients = (await db.select().from(schema.users)) as Array<{
-      id: number;
-      role: string;
-      client_role_id: number | null;
-    }>;
-    for (const u of clients) {
-      if (u.role !== "client") continue;
-      if (u.client_role_id != null) continue;
-      await db
-        .update(schema.users)
-        .set({ client_role_id: standard.id })
-        .where(eq(schema.users.id, u.id));
-    }
-  } catch (e) {
-    console.warn("[akab] client role backfill skipped:", e);
-  }
 }
 
 /** Rename legacy SOLU TI internal company + demo accounts to AKAB (non-destructive). */
@@ -267,9 +248,8 @@ export async function ensureDemoAutotaskIds() {
   await ensureDefaultStaffRoles();
   await backfillUserStaffRoles();
   try {
-    await ensureDefaultClientRoles();
-    await backfillClientRoles();
-  } catch (e) {
+    await ensureAllClientCompanyRoles();
+    } catch (e) {
     console.warn("[akab] client role heal skipped:", e);
   }
 

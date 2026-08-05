@@ -300,6 +300,7 @@ export function SettingsPage() {
                   <p className="text-xs text-muted-foreground">
                     {t("settings.linkClientRoles")}
                   </p>
+                  {/* Roles are unique per client company */}
                 </div>
               </Link>
             )}

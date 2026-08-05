@@ -17,14 +17,15 @@ import {
   Plus,
   Search,
   Trash2,
+  Shield,
   UserPlus,
   Users,
 } from "lucide-react";
 import { db, dbReady, schema } from "@/db";
 import type { ClientRole, Company, User } from "@/lib/types";
 import {
-  ensureDefaultClientRoles,
-  listClientRoles,
+  ensureClientUserRolesForCompany,
+  listClientRolesForCompany,
 } from "@/lib/client-roles";
 import { deleteClientCompanyById, deleteUserById } from "@/lib/deletes";
 import {
@@ -219,12 +220,7 @@ export function ClientsPage() {
         .sort((a, b) => a.name.localeCompare(b.name)),
     );
     setUsers(u as User[]);
-    try {
-      await ensureDefaultClientRoles();
-      setClientRoles(await listClientRoles({ activeOnly: true }));
-    } catch (e) {
-      console.warn("[akab] client roles load failed", e);
-    }
+    // Client user roles are loaded per company when adding/editing a user
     setLoading(false);
   };
 
@@ -283,22 +279,44 @@ export function ClientsPage() {
     setCompanyOpen(true);
   };
 
-  const openAddUser = (companyId: number) => {
+  const loadRolesForCompany = async (companyId: number) => {
+    try {
+      const { standard } = await ensureClientUserRolesForCompany(companyId);
+      const roles = await listClientRolesForCompany(companyId, {
+        activeOnly: true,
+      });
+      setClientRoles(roles);
+      return { roles, standard };
+    } catch (e) {
+      console.warn("[akab] client user roles load failed", e);
+      setClientRoles([]);
+      return { roles: [] as ClientRole[], standard: null as ClientRole | null };
+    }
+  };
+
+  const openAddUser = async (companyId: number) => {
     setSelectedCompanyId(companyId);
     setEditingUser(null);
-    const standard = clientRoles.find((r) => r.slug === "standard");
+    setError(null);
+    const { standard } = await loadRolesForCompany(companyId);
     setUserForm({
       ...emptyUser,
       client_role_id: standard ? String(standard.id) : "",
       billing_access: "",
     });
-    setError(null);
     setUserOpen(true);
   };
 
-  const openEditUser = (user: User) => {
-    setSelectedCompanyId(user.company_id ?? null);
+  const openEditUser = async (user: User) => {
+    const companyId = user.company_id ?? null;
+    setSelectedCompanyId(companyId);
     setEditingUser(user);
+    setError(null);
+    if (companyId != null) {
+      await loadRolesForCompany(companyId);
+    } else {
+      setClientRoles([]);
+    }
     const billing =
       user.billing_access === true
         ? "on"
@@ -316,7 +334,6 @@ export function ClientsPage() {
         user.client_role_id != null ? String(user.client_role_id) : "",
       active: user.active,
     });
-    setError(null);
     setUserOpen(true);
   };
 
@@ -517,8 +534,9 @@ export function ClientsPage() {
         })
         .where(eq(schema.companies.id, editing.id));
     } else {
+      const companyName = form.name.trim();
       await db.insert(schema.companies).values({
-        name: form.name.trim(),
+        name: companyName,
         type: "client",
         email: form.email.trim() || null,
         phone: form.phone.trim() || null,
@@ -527,6 +545,18 @@ export function ClientsPage() {
         active: form.active,
         ...docsPayload,
       });
+      // Create this client's own Standard + Billing user roles immediately
+      try {
+        const rows = (await db.select().from(schema.companies)) as Company[];
+        const created = rows
+          .filter((c) => c.type === "client" && c.name === companyName)
+          .sort((a, b) => b.id - a.id)[0];
+        if (created) {
+          await ensureClientUserRolesForCompany(created.id);
+        }
+      } catch (e) {
+        console.warn("[akab] default client user roles on create:", e);
+      }
     }
     setSaving(false);
     setCompanyOpen(false);
@@ -900,7 +930,7 @@ export function ClientsPage() {
                                 <Button
                                   variant="ghost"
                                   size="sm"
-                                  onClick={() => openAddUser(company.id)}
+                                  onClick={() => void openAddUser(company.id)}
                                   title={t("admin.clientUsersAdd")}
                                 >
                                   <UserPlus className="size-4" />
@@ -955,8 +985,19 @@ export function ClientsPage() {
                                       </div>
                                       <Button
                                         size="sm"
+                                        variant="outline"
                                         className="h-8 gap-1.5"
-                                        onClick={() => openAddUser(company.id)}
+                                        onClick={() => {
+                                          window.location.href = `/admin/client-roles?company=${company.id}`;
+                                        }}
+                                      >
+                                        <Shield className="size-3.5" />
+                                        {t("admin.clientUserRolesManage")}
+                                      </Button>
+                                      <Button
+                                        size="sm"
+                                        className="h-8 gap-1.5"
+                                        onClick={() => void openAddUser(company.id)}
                                       >
                                         <UserPlus className="size-3.5" />
                                         {t("admin.clientUsersAdd")}
@@ -1034,7 +1075,7 @@ export function ClientsPage() {
                                                     variant="ghost"
                                                     size="sm"
                                                     onClick={() =>
-                                                      openEditUser(u)
+                                                      void openEditUser(u)
                                                     }
                                                     title={t("admin.editUser")}
                                                   >

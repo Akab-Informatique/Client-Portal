@@ -244,6 +244,7 @@ const MIGRATION_STATEMENTS: string[] = [
   )`,
   `CREATE TABLE IF NOT EXISTS client_roles (
     id SERIAL PRIMARY KEY,
+    company_id INTEGER NOT NULL,
     name TEXT NOT NULL,
     slug TEXT NOT NULL,
     description TEXT,
@@ -393,6 +394,18 @@ export async function runMigrations(): Promise<void> {
       }
 
       // Phase 3 — indexes that need columns from phase 2
+      // Drop legacy global unique on client_roles.slug (roles are per-company now)
+      try {
+        await withTimeout(
+          client.query(
+            `DROP INDEX IF EXISTS client_roles_slug_unique`,
+          ),
+          10000,
+          "migrate drop legacy client_roles slug unique",
+        );
+      } catch {
+        /* ignore */
+      }
       for (const sql of POST_ALTER_INDEXES) {
         await withTimeout(client.query(sql), 15000, "migrate post-index");
       }

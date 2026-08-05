@@ -64,9 +64,14 @@ export interface StaffRole {
   created_at: Date | string;
 }
 
-/** Client portal role template (Standard, Billing contact, custom…). */
+/**
+ * Client USER role for one company only (Standard, Billing contact, custom…).
+ * Never shared across client companies.
+ */
 export interface ClientRole {
   id: number;
+  /** Owning client company id */
+  company_id: number;
   name: string;
   slug: string;
   description: string | null;

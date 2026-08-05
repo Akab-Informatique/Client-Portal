@@ -76,7 +76,7 @@ export const en = {
     invoices: "Invoices",
     contracts: "Contracts",
     todo: "To do",
-    clientRoles: "Client roles",
+    clientRoles: "Client user roles",
   },
   todo: {
     title: "To do",
@@ -136,7 +136,7 @@ export const en = {
     managementDesc: "Companies, staff accounts, and access roles.",
     linkClients: "Client companies, zones, and portal users",
     linkStaff: "Technicians, admins, and permission roles",
-    linkClientRoles: "Default access for company contacts (billing and future sections)",
+    linkClientRoles: "Per-client user roles (billing defaults and future access)",
     integrationsTitle: "Integrations & network",
     integrationsDesc:
       "Status of connected systems. Credentials are stored as secure app secrets.",
@@ -428,6 +428,7 @@ export const en = {
       "People who sign in to this company's client zone. Manage them here — not as a separate menu.",
     clientUsersEmpty: "No portal users for this company yet.",
     clientUsersAdd: "Add user",
+    clientUserRolesManage: "User roles",
     clientUsersSearch: "Search users…",
     editUser: "Edit user",
     editUserDesc: "Update this portal user’s login and preferences.",
@@ -444,10 +445,10 @@ export const en = {
     clientUserItglueHint:
       "Links this client to their MyGlue user. Passwords only show credentials that MyGlue would allow for that person.",
     clientUserBoardEmail: "Receive message board emails",
-    clientUserRole: "Client role",
+    clientUserRole: "User role (this client)",
     clientUserRolePh: "Select a role",
     clientUserRoleHint:
-      "Role sets default access (e.g. Billing contact gets billing on). You can still override billing below.",
+      "Roles belong to this client only. Billing contact gets billing on by default; you can still override below.",
     clientRoleBillingTag: "billing default on",
     clientUserBilling: "Billing section access",
     clientUserBillingInherit: "Inherit from role (default)",
@@ -836,6 +837,35 @@ export const en = {
     linkUsers: "Users",
     linkMessages: "Post message",
   },
+
+  clientRoles: {
+    title: "Client user roles",
+    badge: "Per client",
+    subtitle:
+      "Each client company has its own user roles. Roles never mix between companies. Defaults (like billing) apply to users on that role; you can still override per person.",
+    pickClient: "Select a client",
+    scopedHint:
+      "These roles only apply to portal users of this company.",
+    openClients: "Open Clients",
+    add: "Add user role",
+    addTitle: "New user role",
+    editTitle: "Edit user role",
+    dialogDesc: "Role for {{name}} only — not shared with other clients.",
+    dialogDescGeneric: "Role for the selected client company only.",
+    permissions: "Default access",
+    permBilling: "Billing",
+    permBillingHint:
+      "When on, users with this role see Invoices & Contracts unless blocked by a per-user override.",
+    builtIn: "Built-in",
+    noDescription: "No description",
+    loadFailed: "Could not load user roles.",
+    saveFailed: "Could not save user role.",
+    deleteFailed: "Could not delete user role.",
+    deleteConfirm: "Delete role “{{name}}”? Users on it move to Standard for this client.",
+    noClientsTitle: "No client companies yet",
+    noClientsDesc: "Create a client company first, then define user roles for that company.",
+  },
+
 };
 
 /** Recursive string leaf map — allows nested groups (e.g. roles.perm). */

@@ -132,6 +132,7 @@ async function toSessionUser(row: UserRow): Promise<SessionUser> {
   });
   const clientAccess = await resolveClientAccessForUser({
     role: row.role,
+    company_id: row.company_id ?? null,
     client_role_id: row.client_role_id ?? null,
     billing_access: row.billing_access ?? null,
   });
