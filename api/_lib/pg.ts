@@ -293,9 +293,11 @@ const MIGRATION_STATEMENTS: string[] = [
   )`,
   `CREATE UNIQUE INDEX IF NOT EXISTS users_email_unique ON users (lower(email))`,
   `CREATE UNIQUE INDEX IF NOT EXISTS staff_roles_slug_unique ON staff_roles (slug)`,
+  `CREATE UNIQUE INDEX IF NOT EXISTS client_roles_slug_unique ON client_roles (slug)`,
   `CREATE INDEX IF NOT EXISTS board_messages_company_id_idx ON board_messages (company_id)`,
   `CREATE INDEX IF NOT EXISTS message_user_states_user_id_idx ON message_user_states (user_id)`,
   `CREATE INDEX IF NOT EXISTS users_company_id_idx ON users (company_id)`,
+  `CREATE INDEX IF NOT EXISTS users_client_role_id_idx ON users (client_role_id)`,
 ];
 
 const ADDITIVE_COLUMNS: Array<{ table: string; column: string; def: string }> =
