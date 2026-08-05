@@ -595,6 +595,26 @@ const server = http.createServer(async (req, res) => {
   try {
     const url = new URL(req.url || "/", `http://${req.headers.host || "localhost"}`);
     if (url.pathname.startsWith("/api/")) {
+      // Native health/ping first — never depends on tsx or migrations.
+      // Without this, a stuck tsx import makes Docker HEALTHCHECK fail and
+      // the browser shows "/api/db/status timed out. App container may be down."
+      try {
+        const nativeHandled = await handleNativeApi(req, res, url);
+        if (nativeHandled) return;
+      } catch (nativeErr) {
+        console.error("[api-native]", url.pathname, nativeErr);
+        if (!res.headersSent) {
+          sendJson(res, 200, {
+            ok: false,
+            error:
+              nativeErr instanceof Error
+                ? nativeErr.message
+                : "Native API handler error",
+            native: true,
+          });
+          return;
+        }
+      }
       await handleApi(req, res, url);
       return;
     }

@@ -364,19 +364,31 @@ export async function runMigrations(): Promise<void> {
     const p = getPool();
     const client = await withTimeout(p.connect(), 5000, "migrate connect");
     try {
+      // Phase 1 — create base tables / safe indexes (one transaction)
       await withTimeout(client.query("BEGIN"), 5000, "migrate BEGIN");
       for (const sql of MIGRATION_STATEMENTS) {
         await withTimeout(client.query(sql), 15000, "migrate DDL");
       }
+      await withTimeout(client.query("COMMIT"), 5000, "migrate COMMIT tables");
+
+      // Phase 2 — additive columns (separate statements; IF NOT EXISTS is idempotent).
+      // Keep outside a single giant transaction so one bad ALTER cannot wipe progress.
       for (const { table, column, def } of ADDITIVE_COLUMNS) {
         await withTimeout(
           client.query(
             `ALTER TABLE ${table} ADD COLUMN IF NOT EXISTS ${column} ${def}`,
           ),
           10000,
-          "migrate ALTER",
+          `migrate ALTER ${table}.${column}`,
         );
       }
+
+      // Phase 3 — indexes that need columns from phase 2
+      for (const sql of POST_ALTER_INDEXES) {
+        await withTimeout(client.query(sql), 15000, "migrate post-index");
+      }
+
+      // Phase 4 — data backfills
       await withTimeout(
         client.query(
           `UPDATE users SET board_email_opt_in = TRUE WHERE board_email_opt_in IS NULL`,
@@ -384,9 +396,9 @@ export async function runMigrations(): Promise<void> {
         10000,
         "migrate backfill",
       );
-      await withTimeout(client.query("COMMIT"), 5000, "migrate COMMIT");
+
       migrateDone = true;
-      console.log("[akab-db] migrations OK (additive)");
+      console.log("[akab-db] migrations OK (additive, phased)");
     } catch (err) {
       try {
         await client.query("ROLLBACK");
