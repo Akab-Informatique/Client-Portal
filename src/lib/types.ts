@@ -66,7 +66,7 @@ export interface StaffRole {
 
 /**
  * Client USER role for one company only (Standard, Billing contact, custom…).
- * Never shared across client companies.
+ * Never shared across client companies. Users may hold several at once.
  */
 export interface ClientRole {
   id: number;
@@ -82,6 +82,25 @@ export interface ClientRole {
   created_at: Date | string;
 }
 
+/** Membership row: user ↔ role within one company. */
+export interface ClientUserRole {
+  id: number;
+  user_id: number;
+  role_id: number;
+  company_id: number;
+  created_at: Date | string;
+}
+
+/** Lightweight member row shown under a role group. */
+export interface ClientRoleMember {
+  user_id: number;
+  name: string;
+  email: string;
+  active: boolean;
+  /** True when this membership is the core Standard role */
+  is_core?: boolean;
+}
+
 export interface User {
   id: number;
   email: string;
@@ -92,11 +111,14 @@ export interface User {
   active: boolean;
   /** FK to staff_roles for admin/technician accounts */
   staff_role_id: number | null;
-  /** FK to client_roles for client portal accounts */
+  /**
+   * Legacy single client role id (backfill / display fallback).
+   * Effective access uses multi-role memberships.
+   */
   client_role_id: number | null;
   /**
    * Per-user billing override for client accounts.
-   * null = inherit from client role; true/false = force on/off.
+   * null = inherit from stacked roles; true/false = force on/off.
    */
   billing_access: boolean | null;
   job_title: string | null;
@@ -221,10 +243,14 @@ export type SessionUser = Omit<
   staff_role_slug: string | null;
   /** Authenticator MFA fully enrolled. */
   mfa_enabled: boolean;
-  /** Client portal role label (clients only). */
+  /** Primary / display client role label (usually Standard). */
   client_role_name: string | null;
   client_role_slug: string | null;
-  /** Effective billing access for client portal users. */
+  /** All client role names assigned (Standard + additional groups). */
+  client_role_names: string[];
+  /** All client role slugs assigned. */
+  client_role_slugs: string[];
+  /** Effective billing access for client portal users (stacked + override). */
   billing_enabled: boolean;
 };
 

@@ -3,11 +3,14 @@ import { Link } from "react-router-dom";
 import {
   Building2,
   Check,
+  ChevronDown,
+  ChevronRight,
   Loader2,
   Plus,
   Receipt,
   Shield,
   Trash2,
+  Users,
 } from "lucide-react";
 import {
   createClientUserRole,
@@ -15,14 +18,16 @@ import {
   ensureAllClientCompanyRoles,
   ensureClientUserRolesForCompany,
   listClientRolesForCompany,
+  listMembersForRole,
   updateClientRole,
 } from "@/lib/client-roles";
 import {
   STANDARD_CLIENT_PERMISSIONS,
+  SYSTEM_CLIENT_ROLE_SLUGS,
   parseClientPermissions,
   type ClientPermissionMap,
 } from "@/lib/client-permissions";
-import type { ClientRole, Company } from "@/lib/types";
+import type { ClientRole, ClientRoleMember, Company } from "@/lib/types";
 import { db, dbReady, schema } from "@/db";
 import { useLocale } from "@/hooks/use-locale";
 import { BlurFade } from "@/components/ui/blur-fade";
@@ -75,11 +80,37 @@ export function ClientRolesPage() {
   const [perms, setPerms] = useState<ClientPermissionMap>({
     ...STANDARD_CLIENT_PERMISSIONS,
   });
+  /** Role ids with members panel expanded */
+  const [expandedMembers, setExpandedMembers] = useState<
+    Record<number, boolean>
+  >({});
+  const [membersByRole, setMembersByRole] = useState<
+    Record<number, ClientRoleMember[]>
+  >({});
+  const [membersLoading, setMembersLoading] = useState<Record<number, boolean>>(
+    {},
+  );
 
   const selectedCompany = useMemo(
     () => companies.find((c) => c.id === companyId) ?? null,
     [companies, companyId],
   );
+
+  const toggleMembers = async (roleId: number) => {
+    const open = !expandedMembers[roleId];
+    setExpandedMembers((prev) => ({ ...prev, [roleId]: open }));
+    if (!open) return;
+    if (membersByRole[roleId]) return;
+    setMembersLoading((prev) => ({ ...prev, [roleId]: true }));
+    try {
+      const list = await listMembersForRole(roleId);
+      setMembersByRole((prev) => ({ ...prev, [roleId]: list }));
+    } catch {
+      setMembersByRole((prev) => ({ ...prev, [roleId]: [] }));
+    } finally {
+      setMembersLoading((prev) => ({ ...prev, [roleId]: false }));
+    }
+  };
 
   const loadCompanies = async () => {
     await dbReady;
@@ -115,6 +146,8 @@ export function ClientRolesPage() {
   const loadRoles = async (cid: number) => {
     setLoading(true);
     setError(null);
+    setExpandedMembers({});
+    setMembersByRole({});
     try {
       await ensureClientUserRolesForCompany(cid);
       setRoles(await listClientRolesForCompany(cid));
@@ -306,6 +339,11 @@ export function ClientRolesPage() {
           <div className="grid gap-3 md:grid-cols-2">
             {roles.map((role) => {
               const p = parseClientPermissions(role.permissions);
+              const isStandard =
+                role.slug === SYSTEM_CLIENT_ROLE_SLUGS.standard;
+              const membersOpen = !!expandedMembers[role.id];
+              const members = membersByRole[role.id];
+              const loadingMembers = !!membersLoading[role.id];
               return (
                 <Card key={role.id}>
                   <CardHeader className="pb-3">
@@ -322,9 +360,22 @@ export function ClientRolesPage() {
                         </div>
                       </div>
                       <div className="flex flex-wrap gap-1">
-                        {role.is_system && (
+                        {isStandard && (
+                          <Badge
+                            variant="outline"
+                            className="border-primary/40 bg-primary/10 text-[10px] text-primary"
+                          >
+                            {t("clientRoles.coreBadge")}
+                          </Badge>
+                        )}
+                        {role.is_system && !isStandard && (
                           <Badge variant="outline" className="text-[10px]">
                             {t("clientRoles.builtIn")}
+                          </Badge>
+                        )}
+                        {!isStandard && (
+                          <Badge variant="outline" className="text-[10px]">
+                            {t("clientRoles.additionalBadge")}
                           </Badge>
                         )}
                         {p.billing && (
@@ -339,26 +390,97 @@ export function ClientRolesPage() {
                       </div>
                     </div>
                   </CardHeader>
-                  <CardContent className="flex flex-wrap gap-2">
-                    <Button
-                      type="button"
-                      size="sm"
-                      variant="outline"
-                      onClick={() => openEdit(role)}
-                    >
-                      {t("common.edit")}
-                    </Button>
-                    {!role.is_system && (
+                  <CardContent className="space-y-3">
+                    <div className="flex flex-wrap gap-2">
                       <Button
                         type="button"
                         size="sm"
-                        variant="ghost"
-                        className="text-destructive hover:bg-destructive/10 hover:text-destructive"
-                        onClick={() => void onDelete(role)}
+                        variant="outline"
+                        className="gap-1.5"
+                        onClick={() => void toggleMembers(role.id)}
                       >
-                        <Trash2 className="size-3.5" />
-                        {t("common.delete")}
+                        {membersOpen ? (
+                          <ChevronDown className="size-3.5" />
+                        ) : (
+                          <ChevronRight className="size-3.5" />
+                        )}
+                        <Users className="size-3.5" />
+                        {membersOpen
+                          ? t("clientRoles.hideMembers")
+                          : t("clientRoles.showMembers")}
+                        {members && (
+                          <span className="tabular-nums text-muted-foreground">
+                            ({members.length})
+                          </span>
+                        )}
                       </Button>
+                      <Button
+                        type="button"
+                        size="sm"
+                        variant="outline"
+                        onClick={() => openEdit(role)}
+                      >
+                        {t("common.edit")}
+                      </Button>
+                      {!role.is_system && (
+                        <Button
+                          type="button"
+                          size="sm"
+                          variant="ghost"
+                          className="text-destructive hover:bg-destructive/10 hover:text-destructive"
+                          onClick={() => void onDelete(role)}
+                        >
+                          <Trash2 className="size-3.5" />
+                          {t("common.delete")}
+                        </Button>
+                      )}
+                    </div>
+                    {membersOpen && (
+                      <div className="rounded-lg border border-border bg-muted/20 p-3">
+                        <p className="mb-2 text-xs font-medium text-muted-foreground">
+                          {t("clientRoles.membersTitle")}
+                        </p>
+                        {loadingMembers ? (
+                          <div className="flex items-center gap-2 text-xs text-muted-foreground">
+                            <Loader2 className="size-3.5 animate-spin" />
+                            {t("common.loading")}
+                          </div>
+                        ) : !members || members.length === 0 ? (
+                          <p className="text-xs text-muted-foreground">
+                            {t("clientRoles.membersEmpty")}
+                          </p>
+                        ) : (
+                          <ul className="divide-y divide-border">
+                            {members.map((m) => (
+                              <li
+                                key={m.user_id}
+                                className="flex items-center justify-between gap-2 py-2 first:pt-0 last:pb-0"
+                              >
+                                <div className="min-w-0">
+                                  <p className="truncate text-sm font-medium">
+                                    {m.name}
+                                  </p>
+                                  <p className="truncate text-xs text-muted-foreground">
+                                    {m.email}
+                                  </p>
+                                </div>
+                                <Badge
+                                  variant="outline"
+                                  className={
+                                    m.active
+                                      ? "shrink-0 border-primary/40 bg-primary/10 text-[10px] text-primary"
+                                      : "shrink-0 text-[10px]"
+                                  }
+                                >
+                                  {m.active
+                                    ? t("common.active")
+                                    : t("common.inactive")}
+                                </Badge>
+                              </li>
+                            ))}
+                          </ul>
+                        )}
+                      </div>
                     )}
                   </CardContent>
                 </Card>

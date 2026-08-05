@@ -42,14 +42,20 @@ export function ClientBillingPage() {
               <h2 className="text-xl font-bold tracking-tight">
                 {t("billing.clientTitle")}
               </h2>
-              {user.client_role_name && (
+              {(user.client_role_names?.length
+                ? user.client_role_names
+                : user.client_role_name
+                  ? [user.client_role_name]
+                  : []
+              ).map((name) => (
                 <Badge
+                  key={name}
                   variant="outline"
                   className="border-primary/40 bg-primary/10 text-primary"
                 >
-                  {user.client_role_name}
+                  {name}
                 </Badge>
-              )}
+              ))}
             </div>
             <p className="mt-1 max-w-2xl text-sm text-muted-foreground">
               {t("billing.clientDesc")}

@@ -28,6 +28,10 @@ CREATE TABLE IF NOT EXISTS client_roles (
   description TEXT, permissions TEXT NOT NULL, is_system BOOLEAN NOT NULL,
   active BOOLEAN NOT NULL, created_at TIMESTAMP DEFAULT NOW() NOT NULL
 );
+CREATE TABLE IF NOT EXISTS client_user_roles (
+  id SERIAL PRIMARY KEY, user_id INTEGER NOT NULL, role_id INTEGER NOT NULL,
+  company_id INTEGER NOT NULL, created_at TIMESTAMP DEFAULT NOW() NOT NULL
+);
 CREATE TABLE IF NOT EXISTS users (
   id SERIAL PRIMARY KEY, email TEXT NOT NULL, password TEXT NOT NULL,
   name TEXT NOT NULL, role TEXT NOT NULL, company_id INTEGER, active BOOLEAN NOT NULL,

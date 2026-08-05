@@ -312,6 +312,10 @@ const POST_ALTER_INDEXES: string[] = [
   // Existing DBs: company_id added in phase 2 — create composite unique after that
   `CREATE UNIQUE INDEX IF NOT EXISTS client_roles_company_slug_unique ON client_roles (company_id, slug)`,
   `CREATE INDEX IF NOT EXISTS client_roles_company_id_idx ON client_roles (company_id)`,
+  `CREATE UNIQUE INDEX IF NOT EXISTS client_user_roles_user_role_unique ON client_user_roles (user_id, role_id)`,
+  `CREATE INDEX IF NOT EXISTS client_user_roles_user_id_idx ON client_user_roles (user_id)`,
+  `CREATE INDEX IF NOT EXISTS client_user_roles_role_id_idx ON client_user_roles (role_id)`,
+  `CREATE INDEX IF NOT EXISTS client_user_roles_company_id_idx ON client_user_roles (company_id)`,
 ];
 
 const ADDITIVE_COLUMNS: Array<{ table: string; column: string; def: string }> =

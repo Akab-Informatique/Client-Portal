@@ -68,30 +68,25 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
     // Full auth failure (wrong credentials / zone)
     if (!probe.ok || probe.authOk === false || probe.ticketsAuthOk === false) {
-      const fix = envDiag.usernameLooksLikeEmail
-        ? [
-            "PRIMARY FIX — AUTOTASK_USERNAME is an email. Autotask rejects that with 401.",
-            "1) Autotask → Admin → Resources (Users) → open your API User",
-            "2) Credentials tab → copy “Username (Key)” (long generated key)",
-            "3) In /opt/akab-portal/.env set:",
-            "     AUTOTASK_USERNAME=paste-username-key-here",
-            "     AUTOTASK_INTEGRATION_CODE=paste-api-tracking-identifier",
-            "     AUTOTASK_SECRET='paste-full-secret-here'",
-            "4) Save, then:",
-            "     cd /opt/akab-portal && docker compose up -d --force-recreate app",
-            "     curl -sS 'http://127.0.0.1:3000/api/autotask/status?refresh=1'",
-            "Do NOT use the resource login email for AUTOTASK_USERNAME.",
-          ]
-        : [
-            "Edit /opt/akab-portal/.env — use SINGLE quotes around the secret:",
-            "  AUTOTASK_INTEGRATION_CODE=your-tracking-id",
-            "  AUTOTASK_USERNAME=your-username-key-not-email",
-            "  AUTOTASK_SECRET='paste-full-secret-here'",
-            "  # AUTOTASK_ZONE_URL=   ← keep commented unless you must pin a zone",
-            "Save, then recreate so the container reloads env:",
-            "  cd /opt/akab-portal && docker compose up -d --force-recreate app",
-            "  curl -sS 'http://127.0.0.1:3000/api/autotask/status?refresh=1'",
-          ];
+      // Username (Key) may legitimately end with @soluti.dev — do not tell the user to remove it.
+      const fix = [
+        "Autotask returned 401 — credentials were rejected (not a portal code bug).",
+        "1) Autotask → Admin → Resources (Users) → your API User (API-only) → Credentials tab",
+        "2) Copy ALL THREE values fresh (regenerate Secret if unsure):",
+        "     • API Tracking Identifier  → AUTOTASK_INTEGRATION_CODE",
+        "     • Username (Key)           → AUTOTASK_USERNAME  (may end with @soluti.dev — keep it)",
+        "     • Secret                   → AUTOTASK_SECRET",
+        "3) Edit /opt/akab-portal/.env exactly like this (single quotes on secret):",
+        "     AUTOTASK_INTEGRATION_CODE=paste-tracking-id",
+        "     AUTOTASK_USERNAME=paste-username-key@soluti.dev",
+        "     AUTOTASK_SECRET='paste-full-secret-with-$-and-#-ok'",
+        "     # AUTOTASK_ZONE_URL=   ← leave unset / commented",
+        "4) Confirm the resource is API User (API-only) and security level allows API + Tickets View",
+        "5) Recreate and retest:",
+        "     cd /opt/akab-portal && docker compose up -d --force-recreate app",
+        "     sleep 8 && curl -sS 'http://127.0.0.1:3000/api/autotask/status?refresh=1'",
+        "Check secretLength in the JSON — if it is much shorter than the Autotask Secret, quotes/# truncated it.",
+      ];
       return res.status(200).json({
         ok: false,
         configured: true,

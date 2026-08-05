@@ -26,7 +26,10 @@ import type { ClientRole, Company, User } from "@/lib/types";
 import {
   ensureClientUserRolesForCompany,
   listClientRolesForCompany,
+  listRolesForUser,
+  setUserClientRoles,
 } from "@/lib/client-roles";
+import { SYSTEM_CLIENT_ROLE_SLUGS } from "@/lib/client-permissions";
 import { deleteClientCompanyById, deleteUserById } from "@/lib/deletes";
 import {
   defaultClientLayout,
@@ -107,9 +110,13 @@ const emptyUser = {
   password: "",
   itglue_user_id: "",
   board_email_opt_in: true,
-  /** "" = inherit from role; "on" | "off" = override */
+  /** "" = inherit from stacked roles; "on" | "off" = override */
   billing_access: "" as "" | "on" | "off",
-  client_role_id: "" as string,
+  /**
+   * Additional role ids on top of Standard (core is always on).
+   * Standard is never listed here — it is forced on save.
+   */
+  additional_role_ids: [] as number[],
   active: true,
 };
 
@@ -298,10 +305,10 @@ export function ClientsPage() {
     setSelectedCompanyId(companyId);
     setEditingUser(null);
     setError(null);
-    const { standard } = await loadRolesForCompany(companyId);
+    await loadRolesForCompany(companyId);
     setUserForm({
       ...emptyUser,
-      client_role_id: standard ? String(standard.id) : "",
+      additional_role_ids: [],
       billing_access: "",
     });
     setUserOpen(true);
@@ -312,8 +319,17 @@ export function ClientsPage() {
     setSelectedCompanyId(companyId);
     setEditingUser(user);
     setError(null);
+    let additional: number[] = [];
     if (companyId != null) {
       await loadRolesForCompany(companyId);
+      try {
+        const roles = await listRolesForUser(user.id);
+        additional = roles
+          .filter((r) => r.slug !== SYSTEM_CLIENT_ROLE_SLUGS.standard)
+          .map((r) => r.id);
+      } catch {
+        additional = [];
+      }
     } else {
       setClientRoles([]);
     }
@@ -330,8 +346,7 @@ export function ClientsPage() {
       itglue_user_id: user.itglue_user_id ?? "",
       board_email_opt_in: user.board_email_opt_in !== false,
       billing_access: billing,
-      client_role_id:
-        user.client_role_id != null ? String(user.client_role_id) : "",
+      additional_role_ids: additional,
       active: user.active,
     });
     setUserOpen(true);
@@ -596,9 +611,6 @@ export function ClientsPage() {
 
       const itglueUserId = userForm.itglue_user_id.trim() || null;
       const boardOptIn = userForm.board_email_opt_in !== false;
-      const clientRoleId = userForm.client_role_id
-        ? Number(userForm.client_role_id)
-        : null;
       const billingAccess =
         userForm.billing_access === "on"
           ? true
@@ -606,6 +618,14 @@ export function ClientsPage() {
             ? false
             : null;
 
+      // Standard is always core; additional roles stack on top
+      const { standard } = await ensureClientUserRolesForCompany(companyId);
+      const roleIds = [
+        standard.id,
+        ...userForm.additional_role_ids.filter((id) => id !== standard.id),
+      ];
+
+      let userId = editingUser?.id ?? null;
       if (editingUser) {
         await db
           .update(schema.users)
@@ -615,7 +635,7 @@ export function ClientsPage() {
             active: userForm.active,
             itglue_user_id: itglueUserId,
             board_email_opt_in: boardOptIn,
-            client_role_id: clientRoleId,
+            client_role_id: standard.id,
             billing_access: billingAccess,
             ...(userForm.password.trim()
               ? { password: userForm.password }
@@ -632,8 +652,20 @@ export function ClientsPage() {
           active: userForm.active !== false,
           itglue_user_id: itglueUserId,
           board_email_opt_in: boardOptIn,
-          client_role_id: clientRoleId,
+          client_role_id: standard.id,
           billing_access: billingAccess,
+        });
+        const created = (
+          (await db.select().from(schema.users)) as User[]
+        ).find((u) => u.email.toLowerCase() === email);
+        userId = created?.id ?? null;
+      }
+
+      if (userId != null) {
+        await setUserClientRoles({
+          userId,
+          companyId,
+          roleIds,
         });
       }
       setUserOpen(false);
@@ -1673,28 +1705,91 @@ export function ClientsPage() {
               </span>
             </label>
             <div className="space-y-2">
-              <Label>{t("admin.clientUserRole")}</Label>
-              <Select
-                value={userForm.client_role_id || undefined}
-                onValueChange={(v) =>
-                  setUserForm((f) => ({ ...f, client_role_id: v }))
-                }
-              >
-                <SelectTrigger>
-                  <SelectValue placeholder={t("admin.clientUserRolePh")} />
-                </SelectTrigger>
-                <SelectContent>
-                  {clientRoles.map((r) => (
-                    <SelectItem key={r.id} value={String(r.id)}>
-                      {r.name}
-                      {r.slug === "billing" ? ` · ${t("admin.clientRoleBillingTag")}` : ""}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
+              <Label>{t("admin.clientUserCoreRole")}</Label>
+              <div className="flex items-center gap-2 rounded-lg border border-border bg-muted/30 px-3 py-2 text-sm">
+                <Shield className="size-4 shrink-0 text-primary" />
+                <div className="min-w-0">
+                  <p className="font-medium">
+                    {clientRoles.find(
+                      (r) => r.slug === SYSTEM_CLIENT_ROLE_SLUGS.standard,
+                    )?.name ?? "Standard user"}
+                  </p>
+                  <p className="text-xs text-muted-foreground">
+                    {t("admin.clientUserCoreRoleHint")}
+                  </p>
+                </div>
+                <Badge
+                  variant="outline"
+                  className="ml-auto shrink-0 border-primary/40 bg-primary/10 text-[10px] text-primary"
+                >
+                  {t("admin.clientUserCoreBadge")}
+                </Badge>
+              </div>
+            </div>
+            <div className="space-y-2">
+              <Label>{t("admin.clientUserAdditionalRoles")}</Label>
               <p className="text-xs text-muted-foreground">
-                {t("admin.clientUserRoleHint")}
+                {t("admin.clientUserAdditionalRolesHint")}
               </p>
+              <div className="space-y-2 rounded-lg border border-border p-3">
+                {clientRoles.filter(
+                  (r) => r.slug !== SYSTEM_CLIENT_ROLE_SLUGS.standard,
+                ).length === 0 ? (
+                  <p className="text-xs text-muted-foreground">
+                    {t("admin.clientUserAdditionalRolesEmpty")}
+                  </p>
+                ) : (
+                  clientRoles
+                    .filter(
+                      (r) => r.slug !== SYSTEM_CLIENT_ROLE_SLUGS.standard,
+                    )
+                    .map((r) => {
+                      const checked = userForm.additional_role_ids.includes(
+                        r.id,
+                      );
+                      return (
+                        <label
+                          key={r.id}
+                          className="flex cursor-pointer items-start gap-3 rounded-md px-1 py-1.5 text-sm hover:bg-muted/40"
+                        >
+                          <Checkbox
+                            checked={checked}
+                            onCheckedChange={(v) => {
+                              const on = v === true;
+                              setUserForm((f) => ({
+                                ...f,
+                                additional_role_ids: on
+                                  ? [
+                                      ...new Set([
+                                        ...f.additional_role_ids,
+                                        r.id,
+                                      ]),
+                                    ]
+                                  : f.additional_role_ids.filter(
+                                      (id) => id !== r.id,
+                                    ),
+                              }));
+                            }}
+                            className="mt-0.5"
+                          />
+                          <span className="min-w-0">
+                            <span className="font-medium">{r.name}</span>
+                            {r.slug === SYSTEM_CLIENT_ROLE_SLUGS.billing && (
+                              <span className="ml-1.5 text-[11px] text-primary">
+                                · {t("admin.clientRoleBillingTag")}
+                              </span>
+                            )}
+                            {r.description && (
+                              <span className="mt-0.5 block text-xs text-muted-foreground">
+                                {r.description}
+                              </span>
+                            )}
+                          </span>
+                        </label>
+                      );
+                    })
+                )}
+              </div>
             </div>
             <div className="space-y-2">
               <Label>{t("admin.clientUserBilling")}</Label>

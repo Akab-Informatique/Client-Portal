@@ -4,6 +4,7 @@ import { backfillUserStaffRoles, ensureDefaultStaffRoles } from "@/lib/roles";
 import {
   ensureAllClientCompanyRoles,
   ensureClientUserRolesForCompany,
+  setUserClientRoles,
 } from "@/lib/client-roles";
 
 /**
@@ -170,6 +171,33 @@ export async function seedIfNeeded() {
       locale: "fr",
     },
   ]);
+
+  // Multi-role memberships: Standard core for every client (+ Billing demo on Acme)
+  try {
+    const seededUsers = (await db.select().from(schema.users)) as Array<{
+      id: number;
+      email: string;
+      company_id: number | null;
+    }>;
+    const jordan = seededUsers.find((u) => u.email === "client@acme.example");
+    const sam = seededUsers.find((u) => u.email === "ops@northstar.example");
+    if (jordan?.company_id) {
+      await setUserClientRoles({
+        userId: jordan.id,
+        companyId: jordan.company_id,
+        roleIds: [acmeRoles.standard.id, acmeRoles.billing.id],
+      });
+    }
+    if (sam?.company_id) {
+      await setUserClientRoles({
+        userId: sam.id,
+        companyId: sam.company_id,
+        roleIds: [northstarRoles.standard.id],
+      });
+    }
+  } catch (e) {
+    console.warn("[akab] seed client memberships skipped:", e);
+  }
 
   const adminRows = await db.select().from(schema.users).limit(5);
   const admin =

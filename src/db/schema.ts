@@ -71,7 +71,8 @@ export const staff_roles = pgTable("staff_roles", {
  * Client USER roles — unique per client company.
  * Each company has its own Standard / Billing / custom roles.
  * permissions is a JSON map of client section → boolean (e.g. billing).
- * Admins can still override billing per user.
+ * Users can hold MULTIPLE roles; permissions stack (OR).
+ * Standard is always the core membership for every client user.
  */
 export const client_roles = pgTable("client_roles", {
   id: serial("id").primaryKey(),
@@ -89,6 +90,19 @@ export const client_roles = pgTable("client_roles", {
   created_at: timestamp("created_at").defaultNow().notNull(),
 });
 
+/**
+ * Many-to-many: a client user can belong to several roles/groups
+ * in their company. Permissions from all memberships are combined (OR).
+ * Standard is always present for every client user.
+ */
+export const client_user_roles = pgTable("client_user_roles", {
+  id: serial("id").primaryKey(),
+  user_id: integer("user_id").notNull(),
+  role_id: integer("role_id").notNull(),
+  company_id: integer("company_id").notNull(),
+  created_at: timestamp("created_at").defaultNow().notNull(),
+});
+
 export const users = pgTable("users", {
   id: serial("id").primaryKey(),
   email: text("email").notNull(),
@@ -100,11 +114,14 @@ export const users = pgTable("users", {
   active: boolean("active").notNull(),
   /** Staff role template (null for client users) */
   staff_role_id: integer("staff_role_id"),
-  /** Client role template (null for staff) */
+  /**
+   * Legacy single client role (kept for migrate/backfill).
+   * Runtime access uses client_user_roles memberships.
+   */
   client_role_id: integer("client_role_id"),
   /**
    * Client billing section access.
-   * null = inherit from client role default; true/false = admin override.
+   * null = inherit from stacked roles; true/false = admin override.
    */
   billing_access: boolean("billing_access"),
   /** Job title shown on company profile */

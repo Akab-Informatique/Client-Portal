@@ -333,35 +333,30 @@ export function formatAutotaskErrorPayload(
 
 function auth401Help(entityLabel: string, detail: string): string {
   const envDiag = diagnoseAutotaskEnv();
-  // Lead with the real blocker — email username causes almost every "sudden" 401.
-  if (envDiag.usernameLooksLikeEmail) {
-    return (
-      `Autotask ${entityLabel} failed (401 Unauthorized): ${detail || "credentials rejected"}. ` +
-      "PRIMARY FIX: AUTOTASK_USERNAME is set to an email. Replace it with the API “Username (Key)” " +
-      "from Autotask → Admin → Resources → API User → Credentials (long key, not the login email). " +
-      "Also set AUTOTASK_INTEGRATION_CODE = API Tracking Identifier and " +
-      "AUTOTASK_SECRET='full-secret' (single quotes). Then: " +
-      "docker compose up -d --force-recreate app && curl -sS 'http://127.0.0.1:3000/api/autotask/status?refresh=1'"
-    );
-  }
   const extra: string[] = [];
   if (envDiag.secretLooksTruncated) {
     extra.push(
-      `AUTOTASK_SECRET length is only ${envDiag.secretLength} (likely truncated). Re-copy the full secret inside single quotes.`,
+      `AUTOTASK_SECRET length is only ${envDiag.secretLength} (likely truncated by # or bad quotes). Re-copy the full secret inside single quotes.`,
     );
   }
-  if (envDiag.criticalIssues.length && !envDiag.usernameLooksLikeEmail) {
+  if (envDiag.secretLooksExpanded) {
+    extra.push(
+      "AUTOTASK_SECRET looks Compose-expanded ($VAR). Use single quotes: AUTOTASK_SECRET='…full…'",
+    );
+  }
+  if (envDiag.criticalIssues.length) {
     extra.push(...envDiag.criticalIssues.slice(0, 2));
   }
   const hint = extra.length ? ` ${extra.join(" ")}` : "";
+  // Username (Key) often ends with @soluti.dev — that is valid for this tenant.
   return (
     `Autotask ${entityLabel} failed (401 Unauthorized): ${detail || "credentials rejected"}.${hint} ` +
-    "Fix /opt/akab-portal/.env then recreate the container: " +
-    "(1) AUTOTASK_INTEGRATION_CODE = API Tracking Identifier, " +
-    "(2) AUTOTASK_USERNAME = Username (Key) — not a login email, " +
-    "(3) AUTOTASK_SECRET='full-secret' ← always use single quotes, " +
-    "(4) API user = API User (API-only) with Tickets View + Contacts View, " +
-    "(5) remove AUTOTASK_ZONE_URL unless you must pin a zone. " +
+    "Autotask rejected ApiIntegrationCode + UserName + Secret. On the server check /opt/akab-portal/.env: " +
+    "(1) AUTOTASK_INTEGRATION_CODE = API Tracking Identifier from Credentials tab, " +
+    "(2) AUTOTASK_USERNAME = Username (Key) exactly as shown (may end with @soluti.dev — that is correct), " +
+    "(3) AUTOTASK_SECRET='full-secret' ← always single-quoted (secrets often contain $ and #), " +
+    "(4) user type = API User (API-only), security level has API access + Tickets View, " +
+    "(5) leave AUTOTASK_ZONE_URL unset unless you must pin a zone. " +
     "Then: docker compose up -d --force-recreate app && curl -sS 'http://127.0.0.1:3000/api/autotask/status?refresh=1'"
   );
 }

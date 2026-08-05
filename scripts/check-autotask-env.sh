@@ -14,6 +14,8 @@ fi
 
 echo "==> Checking $ENV_FILE (values are never printed)"
 echo
+echo "Note: AUTOTASK_USERNAME may end with @soluti.dev — that is valid Username (Key) format."
+echo
 
 get_raw() {
   local key="$1"
@@ -62,15 +64,28 @@ check_key() {
   val="$(strip_quotes "$raw")"
   local len=${#val}
   local flags=()
-  [[ "$val" == *"@"* ]] && flags+=("LOOKS_LIKE_EMAIL")
+  # @ in username is NORMAL for Autotask Username (Key) — only annotate, never fail
+  if [[ "$key" == "AUTOTASK_USERNAME" && "$val" == *"@"* ]]; then
+    flags+=("has_at_domain_OK")
+  fi
   [[ "$val" == *'$'* ]] && flags+=("has_dollar")
   [[ "$val" == *'#'* ]] && flags+=("has_hash")
-  [[ "$len" -lt 12 ]] && flags+=("SHORT")
+  [[ "$len" -lt 8 ]] && flags+=("SHORT")
+  # Compose expansion markers are real problems
+  if [[ "$val" == *'${'* ]] || [[ "$val" =~ \$[A-Za-z_][A-Za-z0-9_]* ]]; then
+    flags+=("LOOKS_COMPOSE_EXPANDED")
+  fi
   local flagstr=""
   if ((${#flags[@]})); then
     flagstr=" [${flags[*]}]"
   fi
   echo "  $key: present  length=$len  quoted=$q$flagstr"
+  if [[ "$len" -lt 8 ]]; then
+    return 1
+  fi
+  if [[ " ${flags[*]} " == *" LOOKS_COMPOSE_EXPANDED "* ]]; then
+    return 1
+  fi
   return 0
 }
 
@@ -80,34 +95,21 @@ check_key AUTOTASK_USERNAME || ok=1
 check_key AUTOTASK_SECRET || ok=1
 
 echo
-raw_user="$(get_raw AUTOTASK_USERNAME)"
-user="$(strip_quotes "$raw_user")"
-if [[ -n "$user" && "$user" == *"@"* ]]; then
-  echo "PRIMARY PROBLEM:"
-  echo "  AUTOTASK_USERNAME is an email address."
-  echo "  Autotask API requires the generated Username (Key) from the Credentials tab,"
-  echo "  not the resource login email. This alone causes 401 Unauthorized."
-  echo
-  echo "Fix:"
-  echo "  1. Autotask → Admin → Resources (Users) → your API User → Credentials"
-  echo "  2. Copy Username (Key), API Tracking Identifier, and Secret"
-  echo "  3. Edit $ENV_FILE:"
-  echo "       AUTOTASK_INTEGRATION_CODE=...tracking-id..."
-  echo "       AUTOTASK_USERNAME=...username-key-not-email..."
-  echo "       AUTOTASK_SECRET='...full-secret...'"
-  echo "  4. cd /opt/akab-portal && docker compose up -d --force-recreate app"
-  echo "  5. curl -sS 'http://127.0.0.1:3000/api/autotask/status?refresh=1'"
-  ok=1
-fi
-
 raw_sec="$(get_raw AUTOTASK_SECRET)"
 if [[ -n "$raw_sec" ]]; then
   q="$(quote_style "$raw_sec")"
+  val="$(strip_quotes "$raw_sec")"
   if [[ "$q" == "none" ]]; then
-    val="$(strip_quotes "$raw_sec")"
     if [[ "$val" == *'$'* || "$val" == *'#'* ]]; then
       echo "WARNING: AUTOTASK_SECRET is unquoted and contains \$ or #."
-      echo "  Wrap it in single quotes: AUTOTASK_SECRET='...'"
+      echo "  Docker Compose / .env parsers will corrupt it → Autotask 401."
+      echo "  Fix: AUTOTASK_SECRET='...full secret...'"
+      ok=1
+    fi
+  elif [[ "$q" == "double" ]]; then
+    if [[ "$val" == *'$'* ]]; then
+      echo "WARNING: AUTOTASK_SECRET uses double quotes and contains \$."
+      echo "  Prefer single quotes so \$ is not expanded: AUTOTASK_SECRET='...'"
       ok=1
     fi
   fi
@@ -115,8 +117,13 @@ fi
 
 echo
 if [[ "$ok" -eq 0 ]]; then
-  echo "Env shape looks OK. If Autotask still 401s, re-copy Username (Key) + Secret from Autotask Credentials"
-  echo "and recreate: docker compose up -d --force-recreate app"
+  echo "Env shape looks OK (including @ in username if present)."
+  echo "If Autotask still 401s:"
+  echo "  • Re-copy all 3 values from Autotask Credentials (or regenerate Secret)"
+  echo "  • Confirm API User (API-only) + API Tracking Identifier match this user"
+  echo "  • docker compose up -d --force-recreate app"
+  echo "  • curl -sS 'http://127.0.0.1:3000/api/autotask/status?refresh=1'"
+  echo "  • Compare secretLength in JSON to the real secret length in Autotask"
 else
   echo "Fix the items above, then recreate the app container."
 fi

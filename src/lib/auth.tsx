@@ -131,6 +131,7 @@ async function toSessionUser(row: UserRow): Promise<SessionUser> {
     staff_role_id: row.staff_role_id ?? null,
   });
   const clientAccess = await resolveClientAccessForUser({
+    id: row.id,
     role: row.role,
     company_id: row.company_id ?? null,
     client_role_id: row.client_role_id ?? null,
@@ -160,6 +161,8 @@ async function toSessionUser(row: UserRow): Promise<SessionUser> {
     staff_role_slug: resolved.staff_role_slug,
     client_role_name: clientAccess.client_role_name,
     client_role_slug: clientAccess.client_role_slug,
+    client_role_names: clientAccess.client_role_names,
+    client_role_slugs: clientAccess.client_role_slugs,
     billing_enabled: clientAccess.billing_enabled,
   };
 }

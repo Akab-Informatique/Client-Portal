@@ -1,14 +1,21 @@
-import { and, eq } from "drizzle-orm";
+import { and, eq, inArray } from "drizzle-orm";
 import { db, dbReady, schema } from "@/db";
 import {
   BILLING_CLIENT_PERMISSIONS,
+  EMPTY_CLIENT_PERMISSIONS,
   STANDARD_CLIENT_PERMISSIONS,
   SYSTEM_CLIENT_ROLE_SLUGS,
   parseClientPermissions,
   serializeClientPermissions,
   type ClientPermissionMap,
 } from "@/lib/client-permissions";
-import type { ClientRole, Company } from "@/lib/types";
+import type {
+  ClientRole,
+  ClientRoleMember,
+  ClientUserRole,
+  Company,
+  User,
+} from "@/lib/types";
 
 async function selectById(id: number): Promise<ClientRole | null> {
   const rows = (await db
@@ -87,7 +94,7 @@ export async function ensureClientUserRolesForCompany(
       name: "Standard user",
       slug: SYSTEM_CLIENT_ROLE_SLUGS.standard,
       description:
-        "Default contact for this company. Core portal only — no billing by default.",
+        "Core access for every contact at this company. Always assigned — additional roles stack on top.",
       permissions: serializeClientPermissions(STANDARD_CLIENT_PERMISSIONS),
       is_system: true,
       active: true,
@@ -104,7 +111,7 @@ export async function ensureClientUserRolesForCompany(
       name: "Billing contact",
       slug: SYSTEM_CLIENT_ROLE_SLUGS.billing,
       description:
-        "Finance contact for this company. Billing (invoices & contracts) is on by default. Admins can still override per user.",
+        "Additional group — grants billing (invoices & contracts). Stacks with Standard. Admins can still override billing per user.",
       permissions: serializeClientPermissions(BILLING_CLIENT_PERMISSIONS),
       is_system: true,
       active: true,
@@ -114,9 +121,213 @@ export async function ensureClientUserRolesForCompany(
   return { standard, billing };
 }
 
+/** Membership rows for one user. */
+export async function listMembershipsForUser(
+  userId: number,
+): Promise<ClientUserRole[]> {
+  await dbReady;
+  try {
+    return (await db
+      .select()
+      .from(schema.client_user_roles)
+      .where(eq(schema.client_user_roles.user_id, userId))) as ClientUserRole[];
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e);
+    if (/client_user_roles/i.test(msg) && /does not exist/i.test(msg)) {
+      return [];
+    }
+    throw e;
+  }
+}
+
+/** Role rows for one user (memberships resolved). */
+export async function listRolesForUser(userId: number): Promise<ClientRole[]> {
+  const memberships = await listMembershipsForUser(userId);
+  if (memberships.length === 0) return [];
+  const roleIds = [...new Set(memberships.map((m) => m.role_id))];
+  const roles = (await db
+    .select()
+    .from(schema.client_roles)
+    .where(inArray(schema.client_roles.id, roleIds))) as ClientRole[];
+  return roles.sort((a, b) => {
+    // Standard first, then billing, then name
+    if (a.slug === SYSTEM_CLIENT_ROLE_SLUGS.standard) return -1;
+    if (b.slug === SYSTEM_CLIENT_ROLE_SLUGS.standard) return 1;
+    if (a.slug === SYSTEM_CLIENT_ROLE_SLUGS.billing) return -1;
+    if (b.slug === SYSTEM_CLIENT_ROLE_SLUGS.billing) return 1;
+    return a.name.localeCompare(b.name, undefined, { sensitivity: "base" });
+  });
+}
+
+/** Members of one role/group (for expandable UI). */
+export async function listMembersForRole(
+  roleId: number,
+): Promise<ClientRoleMember[]> {
+  await dbReady;
+  let memberships: ClientUserRole[] = [];
+  try {
+    memberships = (await db
+      .select()
+      .from(schema.client_user_roles)
+      .where(
+        eq(schema.client_user_roles.role_id, roleId),
+      )) as ClientUserRole[];
+  } catch {
+    return [];
+  }
+  if (memberships.length === 0) return [];
+
+  const userIds = memberships.map((m) => m.user_id);
+  const users = (await db
+    .select()
+    .from(schema.users)
+    .where(inArray(schema.users.id, userIds))) as User[];
+  const role = await selectById(roleId);
+  const isCore = role?.slug === SYSTEM_CLIENT_ROLE_SLUGS.standard;
+
+  return users
+    .map((u) => ({
+      user_id: u.id,
+      name: u.name,
+      email: u.email,
+      active: u.active,
+      is_core: isCore,
+    }))
+    .sort((a, b) =>
+      a.name.localeCompare(b.name, undefined, { sensitivity: "base" }),
+    );
+}
+
 /**
- * Create default user roles for every active client company, and remap
- * users that still point at orphan/global roles onto this company's Standard.
+ * Replace a user's additional role memberships.
+ * Standard is always kept. Pass role ids that belong to the company
+ * (Standard may be included; it is forced on).
+ */
+export async function setUserClientRoles(opts: {
+  userId: number;
+  companyId: number;
+  /** Role ids to assign (Standard is always added) */
+  roleIds: number[];
+}): Promise<ClientRole[]> {
+  await dbReady;
+  const { standard } = await ensureClientUserRolesForCompany(opts.companyId);
+  const companyRoles = await listClientRolesForCompany(opts.companyId);
+  const byId = new Map(companyRoles.map((r) => [r.id, r]));
+
+  const wanted = new Set<number>();
+  wanted.add(standard.id);
+  for (const id of opts.roleIds) {
+    const r = byId.get(id);
+    if (r && r.company_id === opts.companyId && r.active !== false) {
+      wanted.add(id);
+    }
+  }
+
+  let existing: ClientUserRole[] = [];
+  try {
+    existing = await listMembershipsForUser(opts.userId);
+  } catch {
+    existing = [];
+  }
+
+  // Remove memberships not wanted (or wrong company)
+  for (const m of existing) {
+    if (m.company_id !== opts.companyId || !wanted.has(m.role_id)) {
+      try {
+        await db
+          .delete(schema.client_user_roles)
+          .where(eq(schema.client_user_roles.id, m.id));
+      } catch {
+        /* ignore */
+      }
+    }
+  }
+
+  const remaining = new Set(
+    (await listMembershipsForUser(opts.userId))
+      .filter((m) => m.company_id === opts.companyId)
+      .map((m) => m.role_id),
+  );
+
+  for (const roleId of wanted) {
+    if (remaining.has(roleId)) continue;
+    try {
+      await db.insert(schema.client_user_roles).values({
+        user_id: opts.userId,
+        role_id: roleId,
+        company_id: opts.companyId,
+      });
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      // unique violation — already there
+      if (!/unique|duplicate/i.test(msg)) throw e;
+    }
+  }
+
+  // Keep legacy client_role_id = Standard for back-compat displays
+  try {
+    await db
+      .update(schema.users)
+      .set({ client_role_id: standard.id })
+      .where(eq(schema.users.id, opts.userId));
+  } catch {
+    /* ignore */
+  }
+
+  return listRolesForUser(opts.userId);
+}
+
+/** Ensure Standard membership exists; migrate legacy client_role_id if needed. */
+export async function ensureUserMemberships(opts: {
+  userId: number;
+  companyId: number;
+  /** Legacy single role to import as additional if not Standard */
+  legacyRoleId?: number | null;
+}): Promise<ClientRole[]> {
+  await dbReady;
+  const { standard } = await ensureClientUserRolesForCompany(opts.companyId);
+  const memberships = await listMembershipsForUser(opts.userId);
+  const companyMemberships = memberships.filter(
+    (m) => m.company_id === opts.companyId,
+  );
+
+  if (companyMemberships.length === 0) {
+    const seedIds = [standard.id];
+    if (
+      opts.legacyRoleId != null &&
+      opts.legacyRoleId !== standard.id
+    ) {
+      const legacy = await selectById(opts.legacyRoleId);
+      if (legacy && legacy.company_id === opts.companyId) {
+        seedIds.push(legacy.id);
+      }
+    }
+    return setUserClientRoles({
+      userId: opts.userId,
+      companyId: opts.companyId,
+      roleIds: seedIds,
+    });
+  }
+
+  // Always ensure Standard is present
+  if (!companyMemberships.some((m) => m.role_id === standard.id)) {
+    try {
+      await db.insert(schema.client_user_roles).values({
+        user_id: opts.userId,
+        role_id: standard.id,
+        company_id: opts.companyId,
+      });
+    } catch {
+      /* ignore */
+    }
+  }
+
+  return listRolesForUser(opts.userId);
+}
+
+/**
+ * Create default user roles for every active client company, migrate
+ * legacy single-role users into memberships, ensure Standard for all.
  */
 export async function ensureAllClientCompanyRoles(): Promise<void> {
   await dbReady;
@@ -125,8 +336,7 @@ export async function ensureAllClientCompanyRoles(): Promise<void> {
 
   for (const c of clients) {
     try {
-      const { standard } = await ensureClientUserRolesForCompany(c.id);
-      // Remap users of this company whose role is missing or belongs to another company
+      await ensureClientUserRolesForCompany(c.id);
       const users = (await db
         .select()
         .from(schema.users)
@@ -137,26 +347,11 @@ export async function ensureAllClientCompanyRoles(): Promise<void> {
       }>;
       for (const u of users) {
         if (u.role !== "client") continue;
-        if (u.client_role_id == null) {
-          await db
-            .update(schema.users)
-            .set({ client_role_id: standard.id })
-            .where(eq(schema.users.id, u.id));
-          continue;
-        }
-        const roleRow = await selectById(u.client_role_id);
-        if (!roleRow || roleRow.company_id !== c.id) {
-          // Prefer matching slug on this company if old role was billing
-          let target = standard;
-          if (roleRow?.slug === SYSTEM_CLIENT_ROLE_SLUGS.billing) {
-            const { billing } = await ensureClientUserRolesForCompany(c.id);
-            target = billing;
-          }
-          await db
-            .update(schema.users)
-            .set({ client_role_id: target.id })
-            .where(eq(schema.users.id, u.id));
-        }
+        await ensureUserMemberships({
+          userId: u.id,
+          companyId: c.id,
+          legacyRoleId: u.client_role_id,
+        });
       }
     } catch (e) {
       console.warn(
@@ -166,7 +361,7 @@ export async function ensureAllClientCompanyRoles(): Promise<void> {
     }
   }
 
-  // Drop legacy global roles (company_id missing/0) if any remain unused
+  // Drop legacy global roles (company_id missing/0) if unused
   try {
     const allRoles = (await db
       .select()
@@ -199,7 +394,6 @@ export async function ensureDefaultClientRoles(): Promise<{
   const companies = (await db.select().from(schema.companies)) as Company[];
   const first = companies.find((c) => c.type === "client");
   if (!first) {
-    // No clients yet — return a throw-free placeholder by creating nothing
     throw new Error("No client companies — create a client first");
   }
   return ensureClientUserRolesForCompany(first.id);
@@ -216,6 +410,8 @@ export async function listClientRolesForCompany(
     .where(eq(schema.client_roles.company_id, companyId))) as ClientRole[];
   if (opts?.activeOnly) rows = rows.filter((r) => r.active);
   return rows.sort((a, b) => {
+    if (a.slug === SYSTEM_CLIENT_ROLE_SLUGS.standard) return -1;
+    if (b.slug === SYSTEM_CLIENT_ROLE_SLUGS.standard) return 1;
     if (a.is_system !== b.is_system) return a.is_system ? -1 : 1;
     return a.name.localeCompare(b.name, undefined, { sensitivity: "base" });
   });
@@ -312,8 +508,21 @@ export async function updateClientRole(
   await dbReady;
   const current = await selectById(id);
   if (!current) throw new Error("Client user role not found");
+  if (
+    current.slug === SYSTEM_CLIENT_ROLE_SLUGS.standard &&
+    patch.permissions
+  ) {
+    // Standard stays core-only — don't strip or invent billing here silently
+  }
   const next: Record<string, unknown> = {};
-  if (patch.name != null) next.name = patch.name.trim();
+  if (patch.name != null) {
+    if (current.slug === SYSTEM_CLIENT_ROLE_SLUGS.standard) {
+      // keep name editable lightly
+      next.name = patch.name.trim() || current.name;
+    } else {
+      next.name = patch.name.trim();
+    }
+  }
   if (patch.description !== undefined) {
     next.description = patch.description?.trim() || null;
   }
@@ -343,13 +552,26 @@ export async function deleteClientRole(id: number): Promise<void> {
   if (current.is_system) {
     throw new Error("Built-in user roles cannot be deleted");
   }
-  const { standard } = await ensureClientUserRolesForCompany(
-    current.company_id,
-  );
-  await db
-    .update(schema.users)
-    .set({ client_role_id: standard.id })
-    .where(eq(schema.users.client_role_id, id));
+  // Drop memberships for this role only — users keep Standard + other groups
+  try {
+    await db
+      .delete(schema.client_user_roles)
+      .where(eq(schema.client_user_roles.role_id, id));
+  } catch {
+    /* table may not exist yet */
+  }
+  // Legacy column cleanup
+  try {
+    const { standard } = await ensureClientUserRolesForCompany(
+      current.company_id,
+    );
+    await db
+      .update(schema.users)
+      .set({ client_role_id: standard.id })
+      .where(eq(schema.users.client_role_id, id));
+  } catch {
+    /* ignore */
+  }
   await db.delete(schema.client_roles).where(eq(schema.client_roles.id, id));
 }
 
@@ -360,11 +582,24 @@ export function permissionsOfClientRole(
   return parseClientPermissions(role.permissions);
 }
 
+/** OR-merge permission maps (any true wins). */
+export function stackClientPermissions(
+  maps: ClientPermissionMap[],
+): ClientPermissionMap {
+  const out: ClientPermissionMap = { ...EMPTY_CLIENT_PERMISSIONS };
+  for (const m of maps) {
+    if (m.billing) out.billing = true;
+  }
+  return out;
+}
+
 /**
- * Resolve effective client permissions for a portal user row.
- * Role must belong to the user's company. billing_access override wins.
+ * Resolve effective client permissions for a portal user.
+ * Memberships stack (OR). billing_access override wins when set.
+ * Standard is always part of the stack for client users.
  */
 export async function resolveClientAccessForUser(row: {
+  id?: number;
   role: string;
   company_id?: number | null;
   client_role_id?: number | null;
@@ -373,6 +608,8 @@ export async function resolveClientAccessForUser(row: {
   client_permissions: ClientPermissionMap;
   client_role_name: string | null;
   client_role_slug: string | null;
+  client_role_names: string[];
+  client_role_slugs: string[];
   billing_enabled: boolean;
 }> {
   if (row.role !== "client") {
@@ -380,43 +617,62 @@ export async function resolveClientAccessForUser(row: {
       client_permissions: { billing: false },
       client_role_name: null,
       client_role_slug: null,
+      client_role_names: [],
+      client_role_slugs: [],
       billing_enabled: false,
     };
   }
 
-  let roleRow: ClientRole | null = null;
-  if (row.client_role_id != null) {
-    roleRow = await selectById(row.client_role_id);
+  let roles: ClientRole[] = [];
+  if (row.id != null && row.company_id != null) {
+    try {
+      roles = await ensureUserMemberships({
+        userId: row.id,
+        companyId: row.company_id,
+        legacyRoleId: row.client_role_id,
+      });
+    } catch {
+      roles = [];
+    }
+  } else if (row.client_role_id != null) {
+    const one = await selectById(row.client_role_id);
+    if (one) roles = [one];
   }
 
-  // Heal: role missing or from another company → this company's Standard
-  if (
-    row.company_id != null &&
-    (!roleRow || roleRow.company_id !== row.company_id)
-  ) {
+  if (roles.length === 0 && row.company_id != null) {
     try {
-      const { standard, billing } = await ensureClientUserRolesForCompany(
+      const { standard } = await ensureClientUserRolesForCompany(
         row.company_id,
       );
-      roleRow =
-        roleRow?.slug === SYSTEM_CLIENT_ROLE_SLUGS.billing ? billing : standard;
+      roles = [standard];
     } catch {
-      roleRow = null;
+      roles = [];
     }
   }
 
-  const rolePerms = permissionsOfClientRole(roleRow);
+  const stacked = stackClientPermissions(
+    roles.map((r) => permissionsOfClientRole(r)),
+  );
   const billing =
     row.billing_access === true
       ? true
       : row.billing_access === false
         ? false
-        : rolePerms.billing;
+        : stacked.billing;
+
+  const names = roles.map((r) => r.name);
+  const slugs = roles.map((r) => r.slug);
+  const primary =
+    roles.find((r) => r.slug === SYSTEM_CLIENT_ROLE_SLUGS.standard) ??
+    roles[0] ??
+    null;
 
   return {
-    client_permissions: { ...rolePerms, billing },
-    client_role_name: roleRow?.name ?? null,
-    client_role_slug: roleRow?.slug ?? null,
+    client_permissions: { ...stacked, billing },
+    client_role_name: primary?.name ?? names[0] ?? null,
+    client_role_slug: primary?.slug ?? slugs[0] ?? null,
+    client_role_names: names,
+    client_role_slugs: slugs,
     billing_enabled: billing,
   };
 }
