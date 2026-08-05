@@ -252,6 +252,8 @@ export type SessionUser = Omit<
   client_role_slugs: string[];
   /** Effective billing access for client portal users (stacked + override). */
   billing_enabled: boolean;
+  /** Stacked client section permissions (board, tickets, docs, …). */
+  client_permissions: import("@/lib/client-permissions").ClientPermissionMap | null;
 };
 
 /** Suggested quick labels clients can apply to board messages */

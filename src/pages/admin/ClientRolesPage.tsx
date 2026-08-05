@@ -22,9 +22,13 @@ import {
   updateClientRole,
 } from "@/lib/client-roles";
 import {
+  CLIENT_PERMISSIONS,
+  CLIENT_PERMISSION_META,
   STANDARD_CLIENT_PERMISSIONS,
   SYSTEM_CLIENT_ROLE_SLUGS,
+  countClientGranted,
   parseClientPermissions,
+  type ClientPermission,
   type ClientPermissionMap,
 } from "@/lib/client-permissions";
 import type { ClientRole, ClientRoleMember, Company } from "@/lib/types";
@@ -378,13 +382,15 @@ export function ClientRolesPage() {
                             {t("clientRoles.additionalBadge")}
                           </Badge>
                         )}
-                        {p.billing && (
+                        {countClientGranted(p) > 0 && (
                           <Badge
                             variant="outline"
                             className="gap-1 border-primary/40 bg-primary/10 text-[10px] text-primary"
                           >
                             <Receipt className="size-3" />
-                            {t("clientRoles.permBilling")}
+                            {t("clientRoles.accessCount", {
+                              count: String(countClientGranted(p)),
+                            })}
                           </Badge>
                         )}
                       </div>
@@ -491,59 +497,86 @@ export function ClientRolesPage() {
       </BlurFade>
 
       <Dialog open={open} onOpenChange={setOpen}>
-        <DialogContent className="sm:max-w-md">
-          <DialogHeader>
+        <DialogContent className="flex max-h-[92vh] w-[min(96vw,40rem)] max-w-xl flex-col gap-0 overflow-hidden p-0 sm:max-w-xl">
+          <DialogHeader className="shrink-0 space-y-1.5 border-b border-border px-6 py-4 text-left">
             <DialogTitle>
-              {editing ? t("clientRoles.editTitle") : t("clientRoles.addTitle")}
+              {editing
+                ? editing.slug === SYSTEM_CLIENT_ROLE_SLUGS.standard
+                  ? t("clientRoles.editCoreTitle")
+                  : t("clientRoles.editTitle")
+                : t("clientRoles.addTitle")}
             </DialogTitle>
             <DialogDescription>
-              {selectedCompany
-                ? t("clientRoles.dialogDesc", { name: selectedCompany.name })
-                : t("clientRoles.dialogDescGeneric")}
+              {editing?.slug === SYSTEM_CLIENT_ROLE_SLUGS.standard
+                ? t("clientRoles.editCoreDesc")
+                : selectedCompany
+                  ? t("clientRoles.dialogDesc", { name: selectedCompany.name })
+                  : t("clientRoles.dialogDescGeneric")}
             </DialogDescription>
           </DialogHeader>
-          <form onSubmit={onSave} className="space-y-4">
-            <div className="space-y-2">
-              <Label htmlFor="cr-name">{t("common.name")}</Label>
-              <Input
-                id="cr-name"
-                value={name}
-                onChange={(e) => setName(e.target.value)}
-                required
-                disabled={!!editing?.is_system}
-              />
-            </div>
-            <div className="space-y-2">
-              <Label htmlFor="cr-desc">{t("common.description")}</Label>
-              <Textarea
-                id="cr-desc"
-                value={description}
-                onChange={(e) => setDescription(e.target.value)}
-                rows={3}
-              />
-            </div>
-            <div className="space-y-2">
-              <p className="text-sm font-medium">{t("clientRoles.permissions")}</p>
-              <label className="flex items-start gap-3 rounded-lg border border-border bg-muted/20 p-3 text-sm">
-                <Checkbox
-                  checked={perms.billing}
-                  onCheckedChange={(v) =>
-                    setPerms((p) => ({ ...p, billing: v === true }))
-                  }
-                  className="mt-0.5"
+          <form onSubmit={onSave} className="flex min-h-0 flex-1 flex-col">
+            <div className="min-h-0 flex-1 space-y-4 overflow-y-auto px-6 py-4">
+              <div className="space-y-2">
+                <Label htmlFor="cr-name">{t("common.name")}</Label>
+                <Input
+                  id="cr-name"
+                  value={name}
+                  onChange={(e) => setName(e.target.value)}
+                  required
                 />
-                <span>
-                  <span className="font-medium">
-                    {t("clientRoles.permBilling")}
-                  </span>
-                  <span className="mt-0.5 block text-xs text-muted-foreground">
-                    {t("clientRoles.permBillingHint")}
-                  </span>
-                </span>
-              </label>
+                {editing?.slug === SYSTEM_CLIENT_ROLE_SLUGS.standard && (
+                  <p className="text-xs text-muted-foreground">
+                    {t("clientRoles.coreNameHint")}
+                  </p>
+                )}
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor="cr-desc">{t("common.description")}</Label>
+                <Textarea
+                  id="cr-desc"
+                  value={description}
+                  onChange={(e) => setDescription(e.target.value)}
+                  rows={2}
+                />
+              </div>
+              <div className="space-y-2">
+                <p className="text-sm font-medium">
+                  {t("clientRoles.permissions")}
+                </p>
+                {editing?.slug === SYSTEM_CLIENT_ROLE_SLUGS.standard && (
+                  <p className="text-xs text-muted-foreground">
+                    {t("clientRoles.corePermsHint")}
+                  </p>
+                )}
+                <div className="grid gap-2 sm:grid-cols-2">
+                  {CLIENT_PERMISSIONS.map((key) => {
+                    const meta = CLIENT_PERMISSION_META[key as ClientPermission];
+                    return (
+                      <label
+                        key={key}
+                        className="flex items-start gap-3 rounded-lg border border-border bg-muted/20 p-3 text-sm"
+                      >
+                        <Checkbox
+                          checked={!!perms[key]}
+                          onCheckedChange={(v) =>
+                            setPerms((p) => ({ ...p, [key]: v === true }))
+                          }
+                          className="mt-0.5"
+                        />
+                        <span>
+                          <span className="font-medium">{t(meta.labelKey)}</span>
+                          <span className="mt-0.5 block text-xs text-muted-foreground">
+                            {t(meta.hintKey)}
+                          </span>
+                        </span>
+                      </label>
+                    );
+                  })}
+                </div>
+              </div>
+              {error && <p className="text-sm text-destructive">{error}</p>}
             </div>
-            {error && <p className="text-sm text-destructive">{error}</p>}
-            <DialogFooter>
+            <DialogFooter className="shrink-0 border-t border-border px-6 py-4 sm:justify-end">
               <Button
                 type="button"
                 variant="outline"

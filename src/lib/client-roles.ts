@@ -164,6 +164,35 @@ export async function listMembersForRole(
   roleId: number,
 ): Promise<ClientRoleMember[]> {
   await dbReady;
+  const role = await selectById(roleId);
+  if (!role) return [];
+  const isCore = role.slug === SYSTEM_CLIENT_ROLE_SLUGS.standard;
+
+  // Core Standard: ensure every client user of this company is a member, then list them.
+  if (isCore && role.company_id) {
+    try {
+      const companyUsers = (
+        (await db
+          .select()
+          .from(schema.users)
+          .where(eq(schema.users.company_id, role.company_id))) as User[]
+      ).filter((u) => u.role === "client");
+      for (const u of companyUsers) {
+        try {
+          await ensureUserMemberships({
+            userId: u.id,
+            companyId: role.company_id,
+            legacyRoleId: u.client_role_id,
+          });
+        } catch {
+          /* continue */
+        }
+      }
+    } catch {
+      /* ignore ensure failures */
+    }
+  }
+
   let memberships: ClientUserRole[] = [];
   try {
     memberships = (await db
@@ -173,8 +202,34 @@ export async function listMembersForRole(
         eq(schema.client_user_roles.role_id, roleId),
       )) as ClientUserRole[];
   } catch {
-    return [];
+    memberships = [];
   }
+
+  // Fallback for Standard: if membership table empty/missing, show all company clients
+  if (memberships.length === 0 && isCore && role.company_id) {
+    try {
+      const companyUsers = (
+        (await db
+          .select()
+          .from(schema.users)
+          .where(eq(schema.users.company_id, role.company_id))) as User[]
+      ).filter((u) => u.role === "client");
+      return companyUsers
+        .map((u) => ({
+          user_id: u.id,
+          name: u.name,
+          email: u.email,
+          active: u.active,
+          is_core: true,
+        }))
+        .sort((a, b) =>
+          a.name.localeCompare(b.name, undefined, { sensitivity: "base" }),
+        );
+    } catch {
+      return [];
+    }
+  }
+
   if (memberships.length === 0) return [];
 
   const userIds = memberships.map((m) => m.user_id);
@@ -182,8 +237,6 @@ export async function listMembersForRole(
     .select()
     .from(schema.users)
     .where(inArray(schema.users.id, userIds))) as User[];
-  const role = await selectById(roleId);
-  const isCore = role?.slug === SYSTEM_CLIENT_ROLE_SLUGS.standard;
 
   return users
     .map((u) => ({
@@ -588,7 +641,9 @@ export function stackClientPermissions(
 ): ClientPermissionMap {
   const out: ClientPermissionMap = { ...EMPTY_CLIENT_PERMISSIONS };
   for (const m of maps) {
-    if (m.billing) out.billing = true;
+    for (const key of Object.keys(out) as (keyof ClientPermissionMap)[]) {
+      if (m[key]) out[key] = true;
+    }
   }
   return out;
 }
@@ -614,7 +669,7 @@ export async function resolveClientAccessForUser(row: {
 }> {
   if (row.role !== "client") {
     return {
-      client_permissions: { billing: false },
+      client_permissions: { ...EMPTY_CLIENT_PERMISSIONS },
       client_role_name: null,
       client_role_slug: null,
       client_role_names: [],

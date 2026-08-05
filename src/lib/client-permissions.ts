@@ -2,27 +2,83 @@
  * Client portal section permissions (company users only).
  * Staff use staff_roles / PermissionMap instead.
  *
- * Roles define defaults. Admins can override billing per user
- * via users.billing_access (null = inherit from role).
+ * Roles define defaults. Permissions from all assigned roles STACK (OR).
+ * Admins can still override billing per user via users.billing_access
+ * (null = inherit from stacked roles).
+ *
+ * Standard (core) is editable so each client can tighten default access.
  */
 
-export const CLIENT_PERMISSIONS = ["billing"] as const;
+export const CLIENT_PERMISSIONS = [
+  "board",
+  "tickets",
+  "documentation",
+  "passwords",
+  "directory",
+  "billing",
+] as const;
 
 export type ClientPermission = (typeof CLIENT_PERMISSIONS)[number];
 
 export type ClientPermissionMap = Record<ClientPermission, boolean>;
 
-/** Default for most company contacts — no billing. */
+/** Labels for admin UI (i18n keys under clientRoles.perm*). */
+export const CLIENT_PERMISSION_META: Record<
+  ClientPermission,
+  { labelKey: string; hintKey: string }
+> = {
+  board: {
+    labelKey: "clientRoles.permBoard",
+    hintKey: "clientRoles.permBoardHint",
+  },
+  tickets: {
+    labelKey: "clientRoles.permTickets",
+    hintKey: "clientRoles.permTicketsHint",
+  },
+  documentation: {
+    labelKey: "clientRoles.permDocumentation",
+    hintKey: "clientRoles.permDocumentationHint",
+  },
+  passwords: {
+    labelKey: "clientRoles.permPasswords",
+    hintKey: "clientRoles.permPasswordsHint",
+  },
+  directory: {
+    labelKey: "clientRoles.permDirectory",
+    hintKey: "clientRoles.permDirectoryHint",
+  },
+  billing: {
+    labelKey: "clientRoles.permBilling",
+    hintKey: "clientRoles.permBillingHint",
+  },
+};
+
+/** Default for Standard core — full portal except billing. */
 export const STANDARD_CLIENT_PERMISSIONS: ClientPermissionMap = {
+  board: true,
+  tickets: true,
+  documentation: true,
+  passwords: true,
+  directory: true,
   billing: false,
 };
 
-/** Finance / billing contacts — billing section on by default. */
+/** Finance / billing contacts — billing on; other sections inherit from Standard stack. */
 export const BILLING_CLIENT_PERMISSIONS: ClientPermissionMap = {
+  board: false,
+  tickets: false,
+  documentation: false,
+  passwords: false,
+  directory: false,
   billing: true,
 };
 
 export const EMPTY_CLIENT_PERMISSIONS: ClientPermissionMap = {
+  board: false,
+  tickets: false,
+  documentation: false,
+  passwords: false,
+  directory: false,
   billing: false,
 };
 
@@ -32,19 +88,41 @@ export const SYSTEM_CLIENT_ROLE_SLUGS = {
 } as const;
 
 export function allClientPermissions(): ClientPermissionMap {
-  return { ...BILLING_CLIENT_PERMISSIONS };
+  const out = { ...EMPTY_CLIENT_PERMISSIONS };
+  for (const key of CLIENT_PERMISSIONS) out[key] = true;
+  return out;
 }
 
 export function parseClientPermissions(
   raw: string | null | undefined,
 ): ClientPermissionMap {
-  const base: ClientPermissionMap = { ...EMPTY_CLIENT_PERMISSIONS };
+  // Legacy rows only stored { billing: bool } — treat missing section keys as
+  // "on" for core portal sections so upgrades don't lock everyone out.
+  const base: ClientPermissionMap = {
+    board: true,
+    tickets: true,
+    documentation: true,
+    passwords: true,
+    directory: true,
+    billing: false,
+  };
   if (!raw) return base;
   try {
     const parsed = JSON.parse(raw) as Record<string, unknown>;
+    // If the stored map has any of the new keys, use explicit true/false for all.
+    const hasSectionKeys = CLIENT_PERMISSIONS.some(
+      (k) => k !== "billing" && k in parsed,
+    );
     for (const key of CLIENT_PERMISSIONS) {
-      if (parsed[key] === true) base[key] = true;
+      if (key in parsed) {
+        base[key] = parsed[key] === true;
+      } else if (hasSectionKeys) {
+        // Explicit new-format map missing a key → off
+        base[key] = false;
+      }
+      // else keep legacy defaults (core on, billing only if set)
     }
+    if ("billing" in parsed) base.billing = parsed.billing === true;
     return base;
   } catch {
     return base;

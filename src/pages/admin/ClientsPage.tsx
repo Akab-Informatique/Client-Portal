@@ -1606,8 +1606,8 @@ export function ClientsPage() {
           }
         }}
       >
-        <DialogContent className="sm:max-w-md">
-          <DialogHeader>
+        <DialogContent className="flex max-h-[92vh] w-[min(96vw,42rem)] max-w-2xl flex-col gap-0 overflow-hidden p-0 sm:max-w-2xl">
+          <DialogHeader className="shrink-0 space-y-1.5 border-b border-border px-6 py-4 text-left">
             <DialogTitle>
               {editingUser
                 ? t("admin.editUser")
@@ -1619,7 +1619,11 @@ export function ClientsPage() {
                 : t("admin.addUserDesc")}
             </DialogDescription>
           </DialogHeader>
-          <form onSubmit={saveUser} className="space-y-4">
+          <form
+            onSubmit={saveUser}
+            className="flex min-h-0 flex-1 flex-col"
+          >
+            <div className="min-h-0 flex-1 space-y-4 overflow-y-auto px-6 py-4">
             <div className="space-y-2">
               <Label htmlFor="uname">{t("common.name")}</Label>
               <Input
@@ -1845,7 +1849,8 @@ export function ClientsPage() {
               </label>
             )}
             {error && <p className="text-sm text-destructive">{error}</p>}
-            <DialogFooter>
+            </div>
+            <DialogFooter className="shrink-0 border-t border-border px-6 py-4 sm:justify-end">
               <Button
                 type="button"
                 variant="outline"

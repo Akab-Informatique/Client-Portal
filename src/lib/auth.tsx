@@ -164,6 +164,8 @@ async function toSessionUser(row: UserRow): Promise<SessionUser> {
     client_role_names: clientAccess.client_role_names,
     client_role_slugs: clientAccess.client_role_slugs,
     billing_enabled: clientAccess.billing_enabled,
+    client_permissions:
+      row.role === "client" ? clientAccess.client_permissions : null,
   };
 }
 

@@ -754,6 +754,11 @@ export function useClientNav(unreadCount = 0): NavItem[] {
   const { t } = useLocale();
   const { user } = useAuth();
   return useMemo(() => {
+    const p = user?.client_permissions;
+    // Missing map (legacy session) → show core sections; billing still gated.
+    const allow = (key: keyof NonNullable<typeof p>) =>
+      p == null ? key !== "billing" : !!p[key];
+
     const items: NavItem[] = [
       {
         to: "/client",
@@ -761,26 +766,44 @@ export function useClientNav(unreadCount = 0): NavItem[] {
         icon: LayoutDashboard,
         end: true,
       },
-      {
+    ];
+    if (allow("board")) {
+      items.push({
         to: "/client/board",
         label: t("nav.board"),
         icon: Bell,
         badge: unreadCount > 0 ? unreadCount : undefined,
-      },
-      { to: "/client/tickets", label: t("nav.tickets"), icon: Ticket },
-      {
+      });
+    }
+    if (allow("tickets")) {
+      items.push({
+        to: "/client/tickets",
+        label: t("nav.tickets"),
+        icon: Ticket,
+      });
+    }
+    if (allow("documentation")) {
+      items.push({
         to: "/client/documentation",
         label: t("nav.documentation"),
         icon: FileText,
-      },
-      {
+      });
+    }
+    if (allow("passwords")) {
+      items.push({
         to: "/client/passwords",
         label: t("nav.passwords"),
         icon: KeyRound,
-      },
-      { to: "/client/directory", label: t("nav.directory"), icon: Users },
-    ];
-    // Billing only when admin enabled it for this user (role default or override)
+      });
+    }
+    if (allow("directory")) {
+      items.push({
+        to: "/client/directory",
+        label: t("nav.directory"),
+        icon: Users,
+      });
+    }
+    // Billing: stacked role permission + optional per-user override
     if (user?.billing_enabled) {
       items.push({
         to: "/client/billing",
@@ -789,7 +812,7 @@ export function useClientNav(unreadCount = 0): NavItem[] {
       });
     }
     return items;
-  }, [t, unreadCount, user?.billing_enabled]);
+  }, [t, unreadCount, user?.billing_enabled, user?.client_permissions]);
 }
 
 /** @deprecated use useAdminNav / useClientNav for translated labels */
