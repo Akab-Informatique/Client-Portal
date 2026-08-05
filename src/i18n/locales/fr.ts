@@ -67,6 +67,37 @@ export const fr: Dictionary = {
     directory: "Annuaire",
     settings: "Paramètres",
     generalSettings: "Paramètres généraux",
+    generale: "Générale",
+    clientWorkspace: "Client",
+    clientContext: "Client actif",
+    selectClient: "Sélectionner un client",
+    noClients: "Aucun client actif",
+    operations: "Opérations",
+    billing: "Facturation",
+    invoices: "Factures",
+    contracts: "Contrats",
+  },
+  billing: {
+    invoicesTitle: "Factures",
+    invoicesDesc:
+      "Factures Autotask pour le client sélectionné dans le menu. Intégration à venir.",
+    contractsTitle: "Contrats",
+    contractsDesc:
+      "Contrats Autotask pour le client sélectionné dans le menu. Intégration à venir.",
+    comingSoonTitle: "Bientôt lié à Autotask",
+    comingSoonDesc:
+      "Cette section est prête dans le menu. Les données se chargeront depuis Autotask pour le client actif.",
+    invoicesSoonDetail:
+      "La liste des factures, soldes et liens PDF apparaîtront ici une fois l'API de facturation Autotask connectée.",
+    contractsSoonDetail:
+      "La liste des contrats, dates de couverture et statuts apparaîtront ici une fois les contrats Autotask connectés.",
+    noAutotaskId:
+      "Ce client n'a pas encore d'ID d'entreprise Autotask. Configurez-le sous Clients → Modifier.",
+    noClientsDesc:
+      "Ajoutez une entreprise cliente avant d'utiliser les vues de facturation.",
+    pickClientDesc:
+      "Choisissez un client dans le menu de gauche pour cibler cette vue.",
+    manageClients: "Gérer les clients",
   },
   settings: {
     title: "Paramètres généraux",
@@ -636,7 +667,11 @@ export const fr: Dictionary = {
     title: "Documentation",
     adminTitle: "Documentation client",
     adminDesc:
-      "Chaque client a sa propre connexion SharePoint. Choisissez une entreprise pour parcourir uniquement sa bibliothèque — jamais mélangée aux autres.",
+      "Chaque client a sa propre connexion SharePoint. Le client actif est choisi dans le menu de gauche — vous ne parcourez que sa bibliothèque.",
+    usesSidebarClient:
+      "Utilise le client sélectionné dans le menu (espace Opérations).",
+    pickClientSidebar:
+      "Choisissez un client dans le menu de gauche sous Client, puis rouvrez Documentation.",
     clientIntro:
       "Documents privés pour votre entreprise seulement. Les fichiers s'ouvrent dans SharePoint.",
     privateDesc: "Privé à {company} — non partagé avec les autres clients.",

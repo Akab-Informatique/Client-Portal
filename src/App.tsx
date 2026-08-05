@@ -22,6 +22,10 @@ import { TechniciansPage } from "@/pages/admin/TechniciansPage";
 import { MessagesPage } from "@/pages/admin/MessagesPage";
 import { AdminDocumentationPage } from "@/pages/admin/AdminDocumentationPage";
 import { SettingsPage } from "@/pages/admin/SettingsPage";
+import {
+  ContractsPage,
+  InvoicesPage,
+} from "@/pages/admin/BillingPlaceholderPage";
 import { ClientLayout } from "@/pages/client/ClientLayout";
 import { ClientDashboard } from "@/pages/client/ClientDashboard";
 import { ClientBoardPage } from "@/pages/client/ClientBoardPage";
@@ -120,6 +124,8 @@ function AppRoutes() {
               </RequirePermission>
             }
           />
+          <Route path="billing/invoices" element={<InvoicesPage />} />
+          <Route path="billing/contracts" element={<ContractsPage />} />
           <Route path="profile" element={<Navigate to="me" replace />} />
           <Route
             path="profile/:userId"

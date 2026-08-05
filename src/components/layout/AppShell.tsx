@@ -3,6 +3,7 @@ import {
   Bell,
   Building2,
   ChevronDown,
+  FileStack,
   FileText,
   KeyRound,
   LayoutDashboard,
@@ -10,6 +11,7 @@ import {
   Megaphone,
   Menu,
   Moon,
+  Receipt,
   Settings2,
   Sun,
   Ticket,
@@ -22,6 +24,13 @@ import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Separator } from "@/components/ui/separator";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import { cn } from "@/lib/utils";
 import { useAuth } from "@/lib/auth";
 import { useTheme } from "@/hooks/use-theme";
@@ -32,6 +41,7 @@ import { isLocale } from "@/i18n";
 import { updateOwnProfile } from "@/lib/profiles";
 import { BrandLogo } from "@/components/BrandLogo";
 import type { StaffPermission } from "@/lib/permissions";
+import { useSelectedClientOptional } from "@/context/SelectedClientContext";
 
 interface NavItem {
   to: string;
@@ -48,15 +58,27 @@ interface NavGroup {
   children: NavItem[];
 }
 
+interface NavSection {
+  id: string;
+  label: string;
+  /** Flat links under a non-collapsible section label. */
+  items?: NavItem[];
+  /** Collapsible groups under the section (e.g. Operations / Billing). */
+  groups?: NavGroup[];
+  /** Show the global client picker above this section's groups. */
+  showClientPicker?: boolean;
+}
+
 export type NavEntry =
   | { type: "item"; item: NavItem }
-  | { type: "group"; group: NavGroup };
+  | { type: "group"; group: NavGroup }
+  | { type: "section"; section: NavSection };
 
 interface AppShellProps {
   title: string;
   subtitle?: string;
   nav: NavItem[];
-  /** Segmented sidebar (groups + items). When set, takes precedence over flat `nav`. */
+  /** Segmented sidebar (sections / groups / items). When set, takes precedence over flat `nav`. */
   navEntries?: NavEntry[];
   children: ReactNode;
   badge?: string;
@@ -76,36 +98,47 @@ export function AppShell({
   const navigate = useNavigate();
   const location = useLocation();
   const [mobileOpen, setMobileOpen] = useState(false);
+  const selectedClientCtx = useSelectedClientOptional();
 
   const entries: NavEntry[] = useMemo(() => {
     if (navEntries && navEntries.length > 0) return navEntries;
     return nav.map((item) => ({ type: "item" as const, item }));
   }, [nav, navEntries]);
 
-  const groupIds = useMemo(
-    () =>
-      entries
-        .filter((e): e is Extract<NavEntry, { type: "group" }> => e.type === "group")
-        .map((e) => e.group.id),
-    [entries],
-  );
+  const groupIds = useMemo(() => {
+    const ids: string[] = [];
+    for (const entry of entries) {
+      if (entry.type === "group") ids.push(entry.group.id);
+      if (entry.type === "section" && entry.section.groups) {
+        for (const g of entry.section.groups) ids.push(g.id);
+      }
+    }
+    return ids;
+  }, [entries]);
 
   const [openGroups, setOpenGroups] = useState<Record<string, boolean>>({});
+
+  const pathMatches = (item: NavItem, pathname: string) =>
+    item.end
+      ? pathname === item.to
+      : pathname === item.to || pathname.startsWith(`${item.to}/`);
 
   // Auto-expand a group when one of its children is active
   useEffect(() => {
     setOpenGroups((prev) => {
       const next = { ...prev };
-      for (const entry of entries) {
-        if (entry.type !== "group") continue;
-        const active = entry.group.children.some((c) =>
-          c.end
-            ? location.pathname === c.to
-            : location.pathname === c.to ||
-              location.pathname.startsWith(`${c.to}/`),
+      const visit = (group: NavGroup) => {
+        const active = group.children.some((c) =>
+          pathMatches(c, location.pathname),
         );
-        if (active) next[entry.group.id] = true;
-        else if (next[entry.group.id] == null) next[entry.group.id] = false;
+        if (active) next[group.id] = true;
+        else if (next[group.id] == null) next[group.id] = false;
+      };
+      for (const entry of entries) {
+        if (entry.type === "group") visit(entry.group);
+        if (entry.type === "section" && entry.section.groups) {
+          for (const g of entry.section.groups) visit(g);
+        }
       }
       return next;
     });
@@ -144,7 +177,11 @@ export function AppShell({
     }
   };
 
-  const renderLink = (item: NavItem, onNavigate?: () => void, nested = false) => (
+  const renderLink = (
+    item: NavItem,
+    onNavigate?: () => void,
+    nested = false,
+  ) => (
     <NavLink
       key={item.to}
       to={item.to}
@@ -170,55 +207,124 @@ export function AppShell({
     </NavLink>
   );
 
+  const renderGroup = (
+    group: NavGroup,
+    onNavigate?: () => void,
+  ) => {
+    if (group.children.length === 0) return null;
+    const open = !!openGroups[group.id];
+    const childActive = group.children.some((c) =>
+      pathMatches(c, location.pathname),
+    );
+    return (
+      <div key={group.id} className="space-y-1">
+        <button
+          type="button"
+          onClick={() =>
+            setOpenGroups((prev) => ({
+              ...prev,
+              [group.id]: !prev[group.id],
+            }))
+          }
+          className={cn(
+            "flex w-full items-center gap-3 rounded-lg px-3 py-2.5 text-left text-sm font-medium transition-colors",
+            childActive && !open
+              ? "bg-sidebar-accent text-sidebar-accent-foreground"
+              : "text-sidebar-foreground/80 hover:bg-sidebar-accent hover:text-sidebar-accent-foreground",
+          )}
+          aria-expanded={open}
+        >
+          <group.icon className="size-4 shrink-0" />
+          <span className="flex-1 truncate">{group.label}</span>
+          <ChevronDown
+            className={cn(
+              "size-4 shrink-0 text-muted-foreground transition-transform duration-200",
+              open && "rotate-180",
+            )}
+          />
+        </button>
+        {open && (
+          <div className="ml-3 space-y-0.5 border-l border-sidebar-border pl-2">
+            {group.children.map((child) =>
+              renderLink(child, onNavigate, true),
+            )}
+          </div>
+        )}
+      </div>
+    );
+  };
+
+  const renderClientPicker = () => {
+    if (!selectedClientCtx) return null;
+    const {
+      clients,
+      selectedClientId,
+      setSelectedClientId,
+      loading,
+    } = selectedClientCtx;
+
+    return (
+      <div className="space-y-1.5 px-1 pb-2 pt-1">
+        <p className="px-2 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
+          {t("nav.clientContext")}
+        </p>
+        <Select
+          value={
+            selectedClientId != null ? String(selectedClientId) : undefined
+          }
+          onValueChange={(v) => {
+            const id = Number(v);
+            if (Number.isFinite(id)) setSelectedClientId(id);
+          }}
+          disabled={loading || clients.length === 0}
+        >
+          <SelectTrigger
+            className="h-9 w-full border-sidebar-border bg-sidebar-accent/40 text-left text-sm"
+            aria-label={t("nav.selectClient")}
+          >
+            <SelectValue
+              placeholder={
+                loading
+                  ? t("common.loading")
+                  : clients.length === 0
+                    ? t("nav.noClients")
+                    : t("nav.selectClient")
+              }
+            />
+          </SelectTrigger>
+          <SelectContent>
+            {clients.map((c) => (
+              <SelectItem key={c.id} value={String(c.id)}>
+                {c.name}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+      </div>
+    );
+  };
+
   const NavItems = ({ onNavigate }: { onNavigate?: () => void }) => (
-    <nav className="flex flex-col gap-1 p-3">
+    <nav className="flex flex-col gap-3 p-3">
       {entries.map((entry) => {
         if (entry.type === "item") {
-          return renderLink(entry.item, onNavigate);
+          return (
+            <div key={entry.item.to}>{renderLink(entry.item, onNavigate)}</div>
+          );
         }
-        const { group } = entry;
-        if (group.children.length === 0) return null;
-        const open = !!openGroups[group.id];
-        const childActive = group.children.some((c) =>
-          c.end
-            ? location.pathname === c.to
-            : location.pathname === c.to ||
-              location.pathname.startsWith(`${c.to}/`),
-        );
+        if (entry.type === "group") {
+          return renderGroup(entry.group, onNavigate);
+        }
+
+        const { section } = entry;
         return (
-          <div key={group.id} className="space-y-1">
-            <button
-              type="button"
-              onClick={() =>
-                setOpenGroups((prev) => ({
-                  ...prev,
-                  [group.id]: !prev[group.id],
-                }))
-              }
-              className={cn(
-                "flex w-full items-center gap-3 rounded-lg px-3 py-2.5 text-left text-sm font-medium transition-colors",
-                childActive && !open
-                  ? "bg-sidebar-accent text-sidebar-accent-foreground"
-                  : "text-sidebar-foreground/80 hover:bg-sidebar-accent hover:text-sidebar-accent-foreground",
-              )}
-              aria-expanded={open}
-            >
-              <group.icon className="size-4 shrink-0" />
-              <span className="flex-1 truncate">{group.label}</span>
-              <ChevronDown
-                className={cn(
-                  "size-4 shrink-0 text-muted-foreground transition-transform duration-200",
-                  open && "rotate-180",
-                )}
-              />
-            </button>
-            {open && (
-              <div className="ml-3 space-y-0.5 border-l border-sidebar-border pl-2">
-                {group.children.map((child) =>
-                  renderLink(child, onNavigate, true),
-                )}
-              </div>
-            )}
+          <div key={section.id} className="space-y-1">
+            <p className="px-3 pb-1 pt-1 text-[10px] font-bold uppercase tracking-[0.14em] text-muted-foreground">
+              {section.label}
+            </p>
+            {section.items?.map((item) => renderLink(item, onNavigate))}
+            {section.showClientPicker && renderClientPicker()}
+            {section.groups?.map((g) => renderGroup(g, onNavigate))}
           </div>
         );
       })}
@@ -351,9 +457,7 @@ export function AppShell({
             variant="outline"
             size="sm"
             className="px-2 font-semibold sm:hidden"
-            onClick={() =>
-              switchLocale(locale === "en" ? "fr" : "en")
-            }
+            onClick={() => switchLocale(locale === "en" ? "fr" : "en")}
             aria-label={t("common.language")}
           >
             {locale.toUpperCase()}
@@ -365,7 +469,11 @@ export function AppShell({
             onClick={toggleTheme}
             aria-label={t("common.theme")}
           >
-            {theme === "dark" ? <Sun className="size-4" /> : <Moon className="size-4" />}
+            {theme === "dark" ? (
+              <Sun className="size-4" />
+            ) : (
+              <Moon className="size-4" />
+            )}
           </Button>
           <Button
             variant="outline"
@@ -377,7 +485,12 @@ export function AppShell({
               <UserCircle2 className="size-4" />
             </Link>
           </Button>
-          <Button variant="outline" size="sm" onClick={handleLogout} className="gap-2">
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={handleLogout}
+            className="gap-2"
+          >
             <LogOut className="size-4" />
             <span className="hidden sm:inline">{t("common.signOut")}</span>
           </Button>
@@ -391,16 +504,29 @@ export function AppShell({
 
 export function useAdminNav(): NavItem[] {
   const entries = useAdminNavEntries();
-  return useMemo(
-    () =>
-      entries.flatMap((e) =>
-        e.type === "item" ? [e.item] : e.group.children,
-      ),
-    [entries],
-  );
+  return useMemo(() => {
+    const items: NavItem[] = [];
+    for (const e of entries) {
+      if (e.type === "item") items.push(e.item);
+      else if (e.type === "group") items.push(...e.group.children);
+      else if (e.type === "section") {
+        if (e.section.items) items.push(...e.section.items);
+        if (e.section.groups) {
+          for (const g of e.section.groups) items.push(...g.children);
+        }
+      }
+    }
+    return items;
+  }, [entries]);
 }
 
-/** Segmented admin/technician sidebar: operations + Settings group. */
+/**
+ * Admin / technician sidebar:
+ *  Générale → Dashboard, Message board, Settings
+ *  Client picker (drives Operations + Billing)
+ *  Operations → Documentation, Passwords, Directory
+ *  Billing → Invoices, Contracts (Autotask placeholders)
+ */
 export function useAdminNavEntries(): NavEntry[] {
   const { t } = useLocale();
   const { can, user } = useAuth();
@@ -408,41 +534,24 @@ export function useAdminNavEntries(): NavEntry[] {
   return useMemo(() => {
     const allow = (perm: StaffPermission) => can(perm);
 
-    const primary: (NavItem & { perm: StaffPermission })[] = [
-      {
+    const generaleItems: NavItem[] = [];
+    if (allow("dashboard")) {
+      generaleItems.push({
         to: "/admin",
         label: t("nav.dashboard"),
         icon: LayoutDashboard,
         end: true,
-        perm: "dashboard",
-      },
-      {
+      });
+    }
+    if (allow("messages")) {
+      generaleItems.push({
         to: "/admin/messages",
         label: t("nav.messages"),
         icon: Megaphone,
-        perm: "messages",
-      },
-      {
-        to: "/admin/documentation",
-        label: t("nav.documentation"),
-        icon: FileText,
-        perm: "documentation",
-      },
-      {
-        to: "/admin/passwords",
-        label: t("nav.passwords"),
-        icon: KeyRound,
-        perm: "passwords",
-      },
-      {
-        to: "/admin/directory",
-        label: t("nav.directory"),
-        icon: Users,
-        perm: "directory",
-      },
-      // Profile is opened from the bottom user block (name / avatar), not the nav list.
-    ];
+      });
+    }
 
+    // Settings (management + general) — under Générale after Message board
     const settingsChildren: NavItem[] = [];
     if (allow("clients")) {
       settingsChildren.push({
@@ -458,8 +567,6 @@ export function useAdminNavEntries(): NavEntry[] {
         icon: Wrench,
       });
     }
-    // General settings — visible to any staff who can open at least one settings area,
-    // or always for dashboard users so integrations status is reachable.
     if (
       allow("clients") ||
       allow("technicians") ||
@@ -474,18 +581,97 @@ export function useAdminNavEntries(): NavEntry[] {
       });
     }
 
-    const entries: NavEntry[] = primary
-      .filter((item) => allow(item.perm))
-      .map(({ perm: _p, ...item }) => ({ type: "item" as const, item }));
-
+    // Flat Settings entry under Générale (opens the settings hub)
+    // Keep the nested management pages reachable from Settings page + this link.
     if (settingsChildren.length > 0) {
+      generaleItems.push({
+        to: "/admin/settings",
+        label: t("nav.settings"),
+        icon: Settings2,
+      });
+    }
+
+    const operationsChildren: NavItem[] = [];
+    if (allow("documentation")) {
+      operationsChildren.push({
+        to: "/admin/documentation",
+        label: t("nav.documentation"),
+        icon: FileText,
+      });
+    }
+    if (allow("passwords")) {
+      operationsChildren.push({
+        to: "/admin/passwords",
+        label: t("nav.passwords"),
+        icon: KeyRound,
+      });
+    }
+    if (allow("directory")) {
+      operationsChildren.push({
+        to: "/admin/directory",
+        label: t("nav.directory"),
+        icon: Users,
+      });
+    }
+
+    // Billing is visible to any staff who can open the admin shell
+    // (dashboard or clients) — content is placeholder until Autotask links land.
+    const showBilling =
+      allow("dashboard") || allow("clients") || allow("messages");
+    const billingChildren: NavItem[] = showBilling
+      ? [
+          {
+            to: "/admin/billing/invoices",
+            label: t("nav.invoices"),
+            icon: Receipt,
+          },
+          {
+            to: "/admin/billing/contracts",
+            label: t("nav.contracts"),
+            icon: FileStack,
+          },
+        ]
+      : [];
+
+    const clientGroups: NavGroup[] = [];
+    if (operationsChildren.length > 0) {
+      clientGroups.push({
+        id: "operations",
+        label: t("nav.operations"),
+        icon: Wrench,
+        children: operationsChildren,
+      });
+    }
+    if (billingChildren.length > 0) {
+      clientGroups.push({
+        id: "billing",
+        label: t("nav.billing"),
+        icon: Receipt,
+        children: billingChildren,
+      });
+    }
+
+    const entries: NavEntry[] = [];
+
+    if (generaleItems.length > 0) {
       entries.push({
-        type: "group",
-        group: {
-          id: "settings",
-          label: t("nav.settings"),
-          icon: Settings2,
-          children: settingsChildren,
+        type: "section",
+        section: {
+          id: "generale",
+          label: t("nav.generale"),
+          items: generaleItems,
+        },
+      });
+    }
+
+    if (clientGroups.length > 0) {
+      entries.push({
+        type: "section",
+        section: {
+          id: "client-workspace",
+          label: t("nav.clientWorkspace"),
+          showClientPicker: true,
+          groups: clientGroups,
         },
       });
     }
@@ -498,7 +684,12 @@ export function useClientNav(unreadCount = 0): NavItem[] {
   const { t } = useLocale();
   return useMemo(
     () => [
-      { to: "/client", label: t("nav.dashboard"), icon: LayoutDashboard, end: true },
+      {
+        to: "/client",
+        label: t("nav.dashboard"),
+        icon: LayoutDashboard,
+        end: true,
+      },
       {
         to: "/client/board",
         label: t("nav.board"),
@@ -517,7 +708,6 @@ export function useClientNav(unreadCount = 0): NavItem[] {
         icon: KeyRound,
       },
       { to: "/client/directory", label: t("nav.directory"), icon: Users },
-      // Profile is opened from the bottom user block (name / avatar), not the nav list.
     ],
     [t, unreadCount],
   );

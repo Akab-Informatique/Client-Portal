@@ -29,6 +29,7 @@ import {
 } from "@/lib/profiles";
 import type { Company, PublicProfile } from "@/lib/types";
 import { useLocale } from "@/hooks/use-locale";
+import { useSelectedClientOptional } from "@/context/SelectedClientContext";
 import { isLocale, LOCALES, type Locale } from "@/i18n";
 import { formatDate, roleLabel } from "@/lib/format";
 import { EmptyState } from "@/components/EmptyState";
@@ -121,7 +122,46 @@ export function ProfilePage() {
       }
       setLoading(true);
       setForbidden(false);
-      const p = await getProfileInCompany(targetId, user.company_id);
+      // Staff can open any active user (e.g. client directory under Operations).
+      // Clients stay company-isolated.
+      const isStaffViewer =
+        user.role === "admin" || user.role === "technician";
+      let p: PublicProfile | null = null;
+      if (isStaffViewer) {
+        await dbReady;
+        const rows = await db
+          .select()
+          .from(schema.users)
+          .where(eq(schema.users.id, targetId))
+          .limit(1);
+        const row = rows[0] as
+          | (PublicProfile & { password?: string; active?: boolean })
+          | undefined;
+        if (row && row.active !== false) {
+          const {
+            password: _pw,
+            mfa_totp_secret: _s,
+            mfa_recovery_codes: _r,
+            mfa_email_code_hash: _h,
+            mfa_email_code_expires: _e,
+            ...rest
+          } = row as typeof row & {
+            password?: string;
+            mfa_totp_secret?: string | null;
+            mfa_recovery_codes?: string | null;
+            mfa_email_code_hash?: string | null;
+            mfa_email_code_expires?: string | null;
+          };
+          void _pw;
+          void _s;
+          void _r;
+          void _h;
+          void _e;
+          p = rest as PublicProfile;
+        }
+      } else {
+        p = await getProfileInCompany(targetId, user.company_id);
+      }
       if (cancelled) return;
       if (!p) {
         setProfile(null);
@@ -830,25 +870,34 @@ export function DirectoryPage() {
   const { user } = useAuth();
   const { t } = useLocale();
   const base = profileBasePath(user?.role);
+  const isStaff = user?.role === "admin" || user?.role === "technician";
+  const selectedClientCtx = useSelectedClientOptional();
   const [people, setPeople] = useState<PublicProfile[]>([]);
   const [company, setCompany] = useState<Company | null>(null);
   const [query, setQuery] = useState("");
   const [loading, setLoading] = useState(true);
 
+  const targetCompanyId = isStaff
+    ? selectedClientCtx?.selectedClientId ?? null
+    : user?.company_id ?? null;
+
   useEffect(() => {
     let cancelled = false;
     (async () => {
-      if (!user?.company_id) {
+      if (targetCompanyId == null) {
+        setPeople([]);
+        setCompany(null);
         setLoading(false);
         return;
       }
+      setLoading(true);
       await dbReady;
       const [dir, cRows] = await Promise.all([
-        listCompanyDirectory(user.company_id),
+        listCompanyDirectory(targetCompanyId),
         db
           .select()
           .from(schema.companies)
-          .where(eq(schema.companies.id, user.company_id))
+          .where(eq(schema.companies.id, targetCompanyId))
           .limit(1),
       ]);
       if (cancelled) return;
@@ -859,7 +908,7 @@ export function DirectoryPage() {
     return () => {
       cancelled = true;
     };
-  }, [user?.company_id]);
+  }, [targetCompanyId]);
 
   const filtered = people.filter((p) => {
     const q = query.trim().toLowerCase();
@@ -886,8 +935,20 @@ export function DirectoryPage() {
                 ? `${company.name} · ${t("profile.directoryDesc")}`
                 : t("profile.directoryDesc")}
             </CardDescription>
+            {isStaff && (
+              <p className="text-xs text-muted-foreground">
+                {t("docs.usesSidebarClient")}
+              </p>
+            )}
           </CardHeader>
           <CardContent className="space-y-4">
+            {isStaff && targetCompanyId == null && !loading ? (
+              <EmptyState
+                icon={<Users className="size-5" />}
+                title={t("nav.selectClient")}
+                description={t("billing.pickClientDesc")}
+              />
+            ) : null}
             <Input
               placeholder={t("common.search")}
               value={query}

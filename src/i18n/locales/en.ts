@@ -65,6 +65,35 @@ export const en = {
     directory: "Directory",
     settings: "Settings",
     generalSettings: "General settings",
+    generale: "Générale",
+    clientWorkspace: "Client",
+    clientContext: "Active client",
+    selectClient: "Select a client",
+    noClients: "No active clients",
+    operations: "Operations",
+    billing: "Billing",
+    invoices: "Invoices",
+    contracts: "Contracts",
+  },
+  billing: {
+    invoicesTitle: "Invoices",
+    invoicesDesc:
+      "Autotask invoices for the client selected in the sidebar. Integration coming soon.",
+    contractsTitle: "Contracts",
+    contractsDesc:
+      "Autotask contracts for the client selected in the sidebar. Integration coming soon.",
+    comingSoonTitle: "Linked to Autotask soon",
+    comingSoonDesc:
+      "This section is ready in the menu. Data will load from Autotask for the active client.",
+    invoicesSoonDetail:
+      "Invoice list, balances, and PDF links will appear here once the Autotask billing API is connected.",
+    contractsSoonDetail:
+      "Contract list, coverage dates, and status will appear here once Autotask contracts are connected.",
+    noAutotaskId:
+      "This client has no Autotask company ID yet. Set it under Clients → Edit.",
+    noClientsDesc: "Add a client company before using billing views.",
+    pickClientDesc: "Choose a client in the left sidebar to scope this view.",
+    manageClients: "Manage clients",
   },
   settings: {
     title: "General settings",
@@ -619,7 +648,11 @@ export const en = {
     title: "Documentation",
     adminTitle: "Client documentation",
     adminDesc:
-      "Each client has their own SharePoint connection. Pick a company to browse only that company's library — never mixed with others.",
+      "Each client has their own SharePoint connection. The active client is chosen in the left sidebar — you only browse that company's library.",
+    usesSidebarClient:
+      "Uses the client selected in the sidebar (Operations workspace).",
+    pickClientSidebar:
+      "Choose a client in the left sidebar under Client, then open Documentation again.",
     clientIntro:
       "Private documents for your company only. Files open in SharePoint.",
     privateDesc: "Private to {company} — not shared with other clients.",

@@ -1,4 +1,4 @@
-import{drizzle as i}from"drizzle-orm/pglite";import{PGlite as E}from"@electric-sql/pglite";import{s as t}from"./index-BhQg1Ewx.js";import"./vendor-CXU8bRBo.js";import"./motion-CPslPGox.js";async function O(e){const T=e?new E(e):new E;await T.waitReady,window.__devs_pglite=T,await T.exec(`
+import{drizzle as i}from"drizzle-orm/pglite";import{PGlite as E}from"@electric-sql/pglite";import{s as t}from"./index-BXSSvo6O.js";import"./vendor-CXU8bRBo.js";import"./motion-CPslPGox.js";async function O(e){const T=e?new E(e):new E;await T.waitReady,window.__devs_pglite=T,await T.exec(`
 CREATE TABLE IF NOT EXISTS companies (
   id SERIAL PRIMARY KEY, name TEXT NOT NULL, type TEXT NOT NULL,
   email TEXT, phone TEXT, notes TEXT, active BOOLEAN NOT NULL,

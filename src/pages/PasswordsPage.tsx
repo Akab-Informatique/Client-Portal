@@ -53,13 +53,6 @@ import {
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
-import {
   Table,
   TableBody,
   TableCell,
@@ -70,6 +63,7 @@ import {
 import { Textarea } from "@/components/ui/textarea";
 import { useLocale } from "@/hooks/use-locale";
 import { cn } from "@/lib/utils";
+import { useSelectedClientOptional } from "@/context/SelectedClientContext";
 
 type FormMode = "create" | "edit";
 
@@ -140,9 +134,8 @@ export function PasswordsPage() {
   const { user } = useAuth();
   const { t } = useLocale();
   const isStaff = user?.role === "admin" || user?.role === "technician";
+  const selectedClientCtx = useSelectedClientOptional();
 
-  const [companies, setCompanies] = useState<Company[]>([]);
-  const [companyId, setCompanyId] = useState<number | null>(null);
   const [company, setCompany] = useState<Company | null>(null);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
@@ -175,7 +168,7 @@ export function PasswordsPage() {
   const [deleting, setDeleting] = useState(false);
   const [deleteError, setDeleteError] = useState<string | null>(null);
 
-  // Load companies the user may access
+  // Resolve active company (client = own company; staff = sidebar selection)
   useEffect(() => {
     let cancelled = false;
     (async () => {
@@ -184,8 +177,7 @@ export function PasswordsPage() {
       if (user.role === "client") {
         if (!user.company_id) {
           if (!cancelled) {
-            setCompanies([]);
-            setCompanyId(null);
+            setCompany(null);
             setLoading(false);
           }
           return;
@@ -196,27 +188,28 @@ export function PasswordsPage() {
           .where(eq(schema.companies.id, user.company_id))
           .limit(1);
         if (cancelled) return;
-        const c = (rows[0] as Company | undefined) ?? null;
-        setCompanies(c ? [c] : []);
-        setCompany(c);
-        setCompanyId(c?.id ?? null);
+        setCompany((rows[0] as Company | undefined) ?? null);
+      } else if (selectedClientCtx) {
+        setCompany(selectedClientCtx.selectedClient);
       } else {
         const rows = (await db.select().from(schema.companies)) as Company[];
         if (cancelled) return;
         const clients = rows
           .filter((c) => c.type === "client" && c.active)
           .sort((a, b) => a.name.localeCompare(b.name));
-        setCompanies(clients);
         const linked = clients.find((c) => c.itglue_organization_id?.trim());
-        const pick = linked ?? clients[0] ?? null;
-        setCompany(pick);
-        setCompanyId(pick?.id ?? null);
+        setCompany(linked ?? clients[0] ?? null);
       }
     })();
     return () => {
       cancelled = true;
     };
-  }, [user]);
+  }, [
+    user,
+    selectedClientCtx?.selectedClientId,
+    selectedClientCtx?.selectedClient,
+    selectedClientCtx?.loading,
+  ]);
 
   const orgId = company?.itglue_organization_id?.trim() || "";
   const isClient = user?.role === "client";
@@ -310,13 +303,6 @@ export function PasswordsPage() {
   useEffect(() => {
     void load();
   }, [load]);
-
-  // When staff switches company
-  useEffect(() => {
-    if (!isStaff || companyId == null) return;
-    const c = companies.find((x) => x.id === companyId) ?? null;
-    setCompany(c);
-  }, [companyId, companies, isStaff]);
 
   useEffect(() => {
     if (!flash) return;
@@ -570,27 +556,18 @@ export function PasswordsPage() {
           </CardHeader>
           <CardContent className="space-y-4">
             <div className="flex flex-col gap-3 lg:flex-row lg:items-end">
-              {isStaff && companies.length > 0 && (
+              {isStaff && company && (
                 <div className="space-y-1.5 lg:w-64">
                   <Label>{t("passwords.client")}</Label>
-                  <Select
-                    value={companyId != null ? String(companyId) : undefined}
-                    onValueChange={(v) => setCompanyId(Number(v))}
-                  >
-                    <SelectTrigger>
-                      <SelectValue placeholder={t("passwords.pickClient")} />
-                    </SelectTrigger>
-                    <SelectContent>
-                      {companies.map((c) => (
-                        <SelectItem key={c.id} value={String(c.id)}>
-                          {c.name}
-                          {c.itglue_organization_id
-                            ? ` (#${c.itglue_organization_id})`
-                            : ""}
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
+                  <div className="flex h-9 items-center rounded-md border border-border bg-muted/40 px-3 text-sm font-medium">
+                    {company.name}
+                    {company.itglue_organization_id
+                      ? ` (#${company.itglue_organization_id})`
+                      : ""}
+                  </div>
+                  <p className="text-[11px] text-muted-foreground">
+                    {t("docs.usesSidebarClient")}
+                  </p>
                 </div>
               )}
 
