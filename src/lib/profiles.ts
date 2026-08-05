@@ -14,6 +14,8 @@ function toPublic(row: User): PublicProfile {
   return {
     ...rest,
     staff_role_id: row.staff_role_id ?? null,
+    client_role_id: row.client_role_id ?? null,
+    billing_access: row.billing_access ?? null,
     job_title: row.job_title ?? null,
     phone: row.phone ?? null,
     mobile: row.mobile ?? null,

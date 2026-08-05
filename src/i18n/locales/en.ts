@@ -6,6 +6,7 @@ export const en = {
     preparing: "Preparing portal…",
   },
   common: {
+    description: "Description",
     save: "Save",
     cancel: "Cancel",
     edit: "Edit",
@@ -75,6 +76,7 @@ export const en = {
     invoices: "Invoices",
     contracts: "Contracts",
     todo: "To do",
+    clientRoles: "Client roles",
   },
   todo: {
     title: "To do",
@@ -118,6 +120,12 @@ export const en = {
     noClientsDesc: "Add a client company before using billing views.",
     pickClientDesc: "Choose a client in the left sidebar to scope this view.",
     manageClients: "Manage clients",
+    clientTitle: "Billing",
+    clientDesc:
+      "Invoices and contracts for your company. Only contacts with billing access can open this section.",
+    clientDeniedTitle: "Billing not available",
+    clientDeniedDesc:
+      "Your account does not have billing access. Ask your provider administrator to enable it on your user profile.",
   },
   settings: {
     title: "General settings",
@@ -128,6 +136,7 @@ export const en = {
     managementDesc: "Companies, staff accounts, and access roles.",
     linkClients: "Client companies, zones, and portal users",
     linkStaff: "Technicians, admins, and permission roles",
+    linkClientRoles: "Default access for company contacts (billing and future sections)",
     integrationsTitle: "Integrations & network",
     integrationsDesc:
       "Status of connected systems. Credentials are stored as secure app secrets.",
@@ -435,6 +444,17 @@ export const en = {
     clientUserItglueHint:
       "Links this client to their MyGlue user. Passwords only show credentials that MyGlue would allow for that person.",
     clientUserBoardEmail: "Receive message board emails",
+    clientUserRole: "Client role",
+    clientUserRolePh: "Select a role",
+    clientUserRoleHint:
+      "Role sets default access (e.g. Billing contact gets billing on). You can still override billing below.",
+    clientRoleBillingTag: "billing default on",
+    clientUserBilling: "Billing section access",
+    clientUserBillingInherit: "Inherit from role (default)",
+    clientUserBillingOn: "Allow billing (override on)",
+    clientUserBillingOff: "Block billing (override off)",
+    clientUserBillingHint:
+      "Controls whether this person sees Invoices & Contracts in the client portal. Override wins over the role default.",
     clientUserBoardEmailHint:
       "When staff posts a board message with “Also send by email”, this user gets a private email.",
     clientUserActive: "Active account",

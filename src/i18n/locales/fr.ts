@@ -8,6 +8,7 @@ export const fr: Dictionary = {
     preparing: "Préparation du portail…",
   },
   common: {
+    description: "Description",
     save: "Enregistrer",
     cancel: "Annuler",
     edit: "Modifier",
@@ -77,6 +78,7 @@ export const fr: Dictionary = {
     invoices: "Factures",
     contracts: "Contrats",
     todo: "À faire",
+    clientRoles: "Rôles clients",
   },
   todo: {
     title: "À faire",
@@ -122,6 +124,12 @@ export const fr: Dictionary = {
     pickClientDesc:
       "Choisissez un client dans le menu de gauche pour cibler cette vue.",
     manageClients: "Gérer les clients",
+    clientTitle: "Facturation",
+    clientDesc:
+      "Factures et contrats de votre entreprise. Seuls les contacts avec accès facturation voient cette section.",
+    clientDeniedTitle: "Facturation non disponible",
+    clientDeniedDesc:
+      "Votre compte n'a pas accès à la facturation. Demandez à l'administrateur du fournisseur de l'activer sur votre profil.",
   },
   settings: {
     title: "Paramètres généraux",
@@ -132,6 +140,7 @@ export const fr: Dictionary = {
     managementDesc: "Entreprises, comptes du personnel et rôles d'accès.",
     linkClients: "Entreprises clientes, zones et utilisateurs du portail",
     linkStaff: "Techniciens, admins et rôles de permission",
+    linkClientRoles: "Accès par défaut des contacts clients (facturation et sections futures)",
     integrationsTitle: "Intégrations et réseau",
     integrationsDesc:
       "État des systèmes connectés. Les identifiants sont stockés en secrets sécurisés.",
@@ -447,6 +456,17 @@ export const fr: Dictionary = {
     clientUserItglueHint:
       "Lie ce client à son utilisateur MyGlue. Les mots de passe n'affichent que les identifiants autorisés pour cette personne.",
     clientUserBoardEmail: "Recevoir les courriels du babillard",
+    clientUserRole: "Rôle client",
+    clientUserRolePh: "Choisir un rôle",
+    clientUserRoleHint:
+      "Le rôle définit l'accès par défaut (ex. contact facturation = facturation activée). Vous pouvez encore forcer la facturation ci-dessous.",
+    clientRoleBillingTag: "facturation par défaut",
+    clientUserBilling: "Accès section facturation",
+    clientUserBillingInherit: "Hériter du rôle (défaut)",
+    clientUserBillingOn: "Autoriser la facturation (forcé)",
+    clientUserBillingOff: "Bloquer la facturation (forcé)",
+    clientUserBillingHint:
+      "Détermine si cette personne voit Factures et Contrats dans le portail client. Le forçage prime sur le rôle.",
     clientUserBoardEmailHint:
       "Lorsque le personnel publie un message avec « Envoyer aussi par courriel », cet utilisateur reçoit un courriel privé.",
     clientUserActive: "Compte actif",

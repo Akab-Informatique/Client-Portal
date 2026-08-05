@@ -752,8 +752,9 @@ export function useAdminNavEntries(): NavEntry[] {
 
 export function useClientNav(unreadCount = 0): NavItem[] {
   const { t } = useLocale();
-  return useMemo(
-    () => [
+  const { user } = useAuth();
+  return useMemo(() => {
+    const items: NavItem[] = [
       {
         to: "/client",
         label: t("nav.dashboard"),
@@ -778,9 +779,17 @@ export function useClientNav(unreadCount = 0): NavItem[] {
         icon: KeyRound,
       },
       { to: "/client/directory", label: t("nav.directory"), icon: Users },
-    ],
-    [t, unreadCount],
-  );
+    ];
+    // Billing only when admin enabled it for this user (role default or override)
+    if (user?.billing_enabled) {
+      items.push({
+        to: "/client/billing",
+        label: t("nav.billing"),
+        icon: Receipt,
+      });
+    }
+    return items;
+  }, [t, unreadCount, user?.billing_enabled]);
 }
 
 /** @deprecated use useAdminNav / useClientNav for translated labels */

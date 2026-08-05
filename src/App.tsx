@@ -27,11 +27,13 @@ import {
   InvoicesPage,
 } from "@/pages/admin/BillingPlaceholderPage";
 import { TodoPage } from "@/pages/admin/TodoPage";
+import { ClientRolesPage } from "@/pages/admin/ClientRolesPage";
 import { ClientLayout } from "@/pages/client/ClientLayout";
 import { ClientDashboard } from "@/pages/client/ClientDashboard";
 import { ClientBoardPage } from "@/pages/client/ClientBoardPage";
 import { ClientTicketsPage } from "@/pages/client/ClientTicketsPage";
 import { ClientDocumentationPage } from "@/pages/client/ClientDocumentationPage";
+import { ClientBillingPage } from "@/pages/client/ClientBillingPage";
 import { PasswordsPage } from "@/pages/PasswordsPage";
 import { DirectoryPage, ProfilePage } from "@/pages/ProfilePage";
 import { firstAllowedAdminPath } from "@/lib/permissions";
@@ -89,6 +91,14 @@ function AppRoutes() {
             }
           />
           <Route path="technicians" element={<TechniciansPage />} />
+          <Route
+            path="client-roles"
+            element={
+              <RequirePermission permission="clients">
+                <ClientRolesPage />
+              </RequirePermission>
+            }
+          />
           {/* Legacy top-level Users route → Clients (users live under client companies) */}
           <Route path="users" element={<Navigate to="/admin/clients" replace />} />
           {/* General settings: any signed-in staff (admin/technician layout already gated) */}
@@ -149,6 +159,7 @@ function AppRoutes() {
           <Route path="documentation" element={<ClientDocumentationPage />} />
           <Route path="passwords" element={<PasswordsPage />} />
           <Route path="directory" element={<DirectoryPage />} />
+          <Route path="billing" element={<ClientBillingPage />} />
           <Route path="profile" element={<Navigate to="me" replace />} />
           <Route path="profile/:userId" element={<ProfilePage />} />
         </Route>

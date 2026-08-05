@@ -1,6 +1,7 @@
 import { eq } from "drizzle-orm";
 import { db, dbMode, dbReady, schema } from "@/db";
 import { backfillUserStaffRoles, ensureDefaultStaffRoles } from "@/lib/roles";
+import { ensureDefaultClientRoles } from "@/lib/client-roles";
 
 /**
  * Seed only when the database has zero users.
@@ -28,16 +29,20 @@ export async function seedIfNeeded() {
         try {
           // Soft timeout so a slow/hung roles migrate cannot freeze boot
           await Promise.race([
-            backfillUserStaffRoles(),
+            (async () => {
+              await backfillUserStaffRoles();
+              await ensureDefaultClientRoles();
+              await backfillClientRoles();
+            })(),
             new Promise<void>((_, reject) =>
               window.setTimeout(
-                () => reject(new Error("staff role backfill timed out")),
+                () => reject(new Error("role backfill timed out")),
                 8000,
               ),
             ),
           ]);
         } catch (e) {
-          console.warn("[akab] staff role backfill skipped:", e);
+          console.warn("[akab] role backfill skipped:", e);
         }
         return;
       }
@@ -54,10 +59,12 @@ export async function seedIfNeeded() {
   // Always ensure system roles exist (idempotent — safe on every boot/upgrade)
   const { admin: adminRole, technician: techRole } =
     await ensureDefaultStaffRoles();
+  const { standard: standardClientRole } = await ensureDefaultClientRoles();
 
   const existing = await db.select().from(schema.users).limit(1);
   if (existing.length > 0) {
     await backfillUserStaffRoles();
+    await backfillClientRoles();
     return;
   }
 
@@ -138,6 +145,8 @@ export async function seedIfNeeded() {
       role: "client",
       company_id: acme.id,
       active: true,
+      client_role_id: standardClientRole.id,
+      billing_access: null,
       job_title: "IT Coordinator",
       phone: "555-0100",
       bio: "Primary contact for Acme Manufacturing.",
@@ -150,6 +159,8 @@ export async function seedIfNeeded() {
       role: "client",
       company_id: northstar.id,
       active: true,
+      client_role_id: standardClientRole.id,
+      billing_access: null,
       job_title: "Operations Lead",
       phone: "555-0200",
       bio: "Operations contact for Northstar Logistics.",
@@ -186,6 +197,27 @@ export async function seedIfNeeded() {
   // so production Postgres is never re-seeded after the first boot.
 }
 
+/** Assign Standard client role to any client user missing client_role_id. */
+async function backfillClientRoles() {
+  try {
+    const { standard } = await ensureDefaultClientRoles();
+    const clients = (await db.select().from(schema.users)) as Array<{
+      id: number;
+      role: string;
+      client_role_id: number | null;
+    }>;
+    for (const u of clients) {
+      if (u.role !== "client") continue;
+      if (u.client_role_id != null) continue;
+      await db
+        .update(schema.users)
+        .set({ client_role_id: standard.id })
+        .where(eq(schema.users.id, u.id));
+    }
+  } catch (e) {
+    console.warn("[akab] client role backfill skipped:", e);
+  }
+}
 
 /** Rename legacy SOLU TI internal company + demo accounts to AKAB (non-destructive). */
 async function ensureDemoBrand() {
@@ -234,6 +266,12 @@ export async function ensureDemoAutotaskIds() {
   // so standalone use of this helper still heals staff_role links.
   await ensureDefaultStaffRoles();
   await backfillUserStaffRoles();
+  try {
+    await ensureDefaultClientRoles();
+    await backfillClientRoles();
+  } catch (e) {
+    console.warn("[akab] client role heal skipped:", e);
+  }
 
   const companies = await db.select().from(schema.companies);
   for (const c of companies) {

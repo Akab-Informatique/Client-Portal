@@ -287,6 +287,22 @@ export function SettingsPage() {
                 </div>
               </Link>
             )}
+            {can("clients") && (
+              <Link
+                to="/admin/client-roles"
+                className="flex items-start gap-3 rounded-xl border border-border bg-card p-4 transition-colors hover:border-primary/40 hover:bg-primary/5"
+              >
+                <div className="flex size-10 shrink-0 items-center justify-center rounded-lg bg-primary/10 text-primary">
+                  <Shield className="size-5" />
+                </div>
+                <div className="min-w-0">
+                  <p className="font-semibold">{t("nav.clientRoles")}</p>
+                  <p className="text-xs text-muted-foreground">
+                    {t("settings.linkClientRoles")}
+                  </p>
+                </div>
+              </Link>
+            )}
           </CardContent>
         </Card>
       </BlurFade>

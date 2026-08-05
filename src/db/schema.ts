@@ -67,6 +67,23 @@ export const staff_roles = pgTable("staff_roles", {
   created_at: timestamp("created_at").defaultNow().notNull(),
 });
 
+/**
+ * Client portal roles (Standard, Billing contact, custom…).
+ * permissions is a JSON map of client section → boolean (e.g. billing).
+ * Defaults apply to users on that role; admins can still override per user.
+ */
+export const client_roles = pgTable("client_roles", {
+  id: serial("id").primaryKey(),
+  name: text("name").notNull(),
+  slug: text("slug").notNull(),
+  description: text("description"),
+  /** JSON ClientPermissionMap */
+  permissions: text("permissions").notNull(),
+  is_system: boolean("is_system").notNull(),
+  active: boolean("active").notNull(),
+  created_at: timestamp("created_at").defaultNow().notNull(),
+});
+
 export const users = pgTable("users", {
   id: serial("id").primaryKey(),
   email: text("email").notNull(),
@@ -78,6 +95,13 @@ export const users = pgTable("users", {
   active: boolean("active").notNull(),
   /** Staff role template (null for client users) */
   staff_role_id: integer("staff_role_id"),
+  /** Client role template (null for staff) */
+  client_role_id: integer("client_role_id"),
+  /**
+   * Client billing section access.
+   * null = inherit from client role default; true/false = admin override.
+   */
+  billing_access: boolean("billing_access"),
   /** Job title shown on company profile */
   job_title: text("job_title"),
   /** Work phone */

@@ -16,6 +16,7 @@ import {
   type StaffPermission,
 } from "@/lib/permissions";
 import { resolvePermissionsForUser } from "@/lib/roles";
+import { resolveClientAccessForUser } from "@/lib/client-roles";
 import {
   buildOtpAuthUri,
   consumeRecoveryCode,
@@ -129,6 +130,11 @@ async function toSessionUser(row: UserRow): Promise<SessionUser> {
     role: row.role,
     staff_role_id: row.staff_role_id ?? null,
   });
+  const clientAccess = await resolveClientAccessForUser({
+    role: row.role,
+    client_role_id: row.client_role_id ?? null,
+    billing_access: row.billing_access ?? null,
+  });
   return {
     id: row.id,
     email: row.email,
@@ -137,6 +143,8 @@ async function toSessionUser(row: UserRow): Promise<SessionUser> {
     company_id: row.company_id,
     active: row.active,
     staff_role_id: row.staff_role_id ?? null,
+    client_role_id: row.client_role_id ?? null,
+    billing_access: row.billing_access ?? null,
     job_title: row.job_title ?? null,
     phone: row.phone ?? null,
     mobile: row.mobile ?? null,
@@ -149,6 +157,9 @@ async function toSessionUser(row: UserRow): Promise<SessionUser> {
     permissions: resolved.permissions,
     staff_role_name: resolved.staff_role_name,
     staff_role_slug: resolved.staff_role_slug,
+    client_role_name: clientAccess.client_role_name,
+    client_role_slug: clientAccess.client_role_slug,
+    billing_enabled: clientAccess.billing_enabled,
   };
 }
 

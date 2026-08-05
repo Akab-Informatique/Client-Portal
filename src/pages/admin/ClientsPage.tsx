@@ -21,7 +21,11 @@ import {
   Users,
 } from "lucide-react";
 import { db, dbReady, schema } from "@/db";
-import type { Company, User } from "@/lib/types";
+import type { ClientRole, Company, User } from "@/lib/types";
+import {
+  ensureDefaultClientRoles,
+  listClientRoles,
+} from "@/lib/client-roles";
 import { deleteClientCompanyById, deleteUserById } from "@/lib/deletes";
 import {
   defaultClientLayout,
@@ -54,6 +58,13 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { Checkbox } from "@/components/ui/checkbox";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
@@ -95,6 +106,9 @@ const emptyUser = {
   password: "",
   itglue_user_id: "",
   board_email_opt_in: true,
+  /** "" = inherit from role; "on" | "off" = override */
+  billing_access: "" as "" | "on" | "off",
+  client_role_id: "" as string,
   active: true,
 };
 
@@ -118,6 +132,7 @@ export function ClientsPage() {
   const [editingUser, setEditingUser] = useState<User | null>(null);
   const [form, setForm] = useState(emptyCompany);
   const [userForm, setUserForm] = useState(emptyUser);
+  const [clientRoles, setClientRoles] = useState<ClientRole[]>([]);
   const [selectedCompanyId, setSelectedCompanyId] = useState<number | null>(
     null,
   );
@@ -204,6 +219,12 @@ export function ClientsPage() {
         .sort((a, b) => a.name.localeCompare(b.name)),
     );
     setUsers(u as User[]);
+    try {
+      await ensureDefaultClientRoles();
+      setClientRoles(await listClientRoles({ activeOnly: true }));
+    } catch (e) {
+      console.warn("[akab] client roles load failed", e);
+    }
     setLoading(false);
   };
 
@@ -265,7 +286,12 @@ export function ClientsPage() {
   const openAddUser = (companyId: number) => {
     setSelectedCompanyId(companyId);
     setEditingUser(null);
-    setUserForm(emptyUser);
+    const standard = clientRoles.find((r) => r.slug === "standard");
+    setUserForm({
+      ...emptyUser,
+      client_role_id: standard ? String(standard.id) : "",
+      billing_access: "",
+    });
     setError(null);
     setUserOpen(true);
   };
@@ -273,12 +299,21 @@ export function ClientsPage() {
   const openEditUser = (user: User) => {
     setSelectedCompanyId(user.company_id ?? null);
     setEditingUser(user);
+    const billing =
+      user.billing_access === true
+        ? "on"
+        : user.billing_access === false
+          ? "off"
+          : "";
     setUserForm({
       name: user.name,
       email: user.email,
       password: "",
       itglue_user_id: user.itglue_user_id ?? "",
       board_email_opt_in: user.board_email_opt_in !== false,
+      billing_access: billing,
+      client_role_id:
+        user.client_role_id != null ? String(user.client_role_id) : "",
       active: user.active,
     });
     setError(null);
@@ -531,6 +566,15 @@ export function ClientsPage() {
 
       const itglueUserId = userForm.itglue_user_id.trim() || null;
       const boardOptIn = userForm.board_email_opt_in !== false;
+      const clientRoleId = userForm.client_role_id
+        ? Number(userForm.client_role_id)
+        : null;
+      const billingAccess =
+        userForm.billing_access === "on"
+          ? true
+          : userForm.billing_access === "off"
+            ? false
+            : null;
 
       if (editingUser) {
         await db
@@ -541,6 +585,8 @@ export function ClientsPage() {
             active: userForm.active,
             itglue_user_id: itglueUserId,
             board_email_opt_in: boardOptIn,
+            client_role_id: clientRoleId,
+            billing_access: billingAccess,
             ...(userForm.password.trim()
               ? { password: userForm.password }
               : {}),
@@ -556,6 +602,8 @@ export function ClientsPage() {
           active: userForm.active !== false,
           itglue_user_id: itglueUserId,
           board_email_opt_in: boardOptIn,
+          client_role_id: clientRoleId,
+          billing_access: billingAccess,
         });
       }
       setUserOpen(false);
@@ -1583,6 +1631,61 @@ export function ClientsPage() {
                 </span>
               </span>
             </label>
+            <div className="space-y-2">
+              <Label>{t("admin.clientUserRole")}</Label>
+              <Select
+                value={userForm.client_role_id || undefined}
+                onValueChange={(v) =>
+                  setUserForm((f) => ({ ...f, client_role_id: v }))
+                }
+              >
+                <SelectTrigger>
+                  <SelectValue placeholder={t("admin.clientUserRolePh")} />
+                </SelectTrigger>
+                <SelectContent>
+                  {clientRoles.map((r) => (
+                    <SelectItem key={r.id} value={String(r.id)}>
+                      {r.name}
+                      {r.slug === "billing" ? ` · ${t("admin.clientRoleBillingTag")}` : ""}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+              <p className="text-xs text-muted-foreground">
+                {t("admin.clientUserRoleHint")}
+              </p>
+            </div>
+            <div className="space-y-2">
+              <Label>{t("admin.clientUserBilling")}</Label>
+              <Select
+                value={userForm.billing_access === "" ? "inherit" : userForm.billing_access}
+                onValueChange={(v) =>
+                  setUserForm((f) => ({
+                    ...f,
+                    billing_access:
+                      v === "inherit" ? "" : (v as "on" | "off"),
+                  }))
+                }
+              >
+                <SelectTrigger>
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="inherit">
+                    {t("admin.clientUserBillingInherit")}
+                  </SelectItem>
+                  <SelectItem value="on">
+                    {t("admin.clientUserBillingOn")}
+                  </SelectItem>
+                  <SelectItem value="off">
+                    {t("admin.clientUserBillingOff")}
+                  </SelectItem>
+                </SelectContent>
+              </Select>
+              <p className="text-xs text-muted-foreground">
+                {t("admin.clientUserBillingHint")}
+              </p>
+            </div>
             {editingUser && (
               <label className="flex items-start gap-3 rounded-lg border border-border bg-muted/20 p-3 text-sm">
                 <Checkbox

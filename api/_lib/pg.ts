@@ -242,6 +242,16 @@ const MIGRATION_STATEMENTS: string[] = [
     active BOOLEAN NOT NULL DEFAULT TRUE,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
   )`,
+  `CREATE TABLE IF NOT EXISTS client_roles (
+    id SERIAL PRIMARY KEY,
+    name TEXT NOT NULL,
+    slug TEXT NOT NULL,
+    description TEXT,
+    permissions TEXT NOT NULL,
+    is_system BOOLEAN NOT NULL DEFAULT FALSE,
+    active BOOLEAN NOT NULL DEFAULT TRUE,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+  )`,
   `CREATE TABLE IF NOT EXISTS users (
     id SERIAL PRIMARY KEY,
     email TEXT NOT NULL,
@@ -256,6 +266,8 @@ const MIGRATION_STATEMENTS: string[] = [
     bio TEXT,
     locale TEXT,
     staff_role_id INTEGER,
+    client_role_id INTEGER,
+    billing_access BOOLEAN,
     itglue_user_id TEXT,
     board_email_opt_in BOOLEAN DEFAULT TRUE,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()

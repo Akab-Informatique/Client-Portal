@@ -138,6 +138,12 @@ export function permissionForAdminPath(pathname: string): StaffPermission | null
   if (path.startsWith("/admin/users")) return "clients";
   // General settings is open to any staff who can reach the admin shell
   if (path.startsWith("/admin/settings")) return null;
+  // Client role templates — same gate as Clients management
+  if (path.startsWith("/admin/client-roles")) return "clients";
+  // To-do workspace is available to any signed-in staff
+  if (path.startsWith("/admin/todo")) return null;
+  // Admin billing placeholders — open to staff in admin shell
+  if (path.startsWith("/admin/billing")) return null;
   if (path.startsWith("/admin/messages")) return "messages";
   if (path.startsWith("/admin/documentation")) return "documentation";
   if (path.startsWith("/admin/passwords")) return "passwords";

@@ -64,6 +64,19 @@ export interface StaffRole {
   created_at: Date | string;
 }
 
+/** Client portal role template (Standard, Billing contact, custom…). */
+export interface ClientRole {
+  id: number;
+  name: string;
+  slug: string;
+  description: string | null;
+  /** JSON string of ClientPermissionMap */
+  permissions: string;
+  is_system: boolean;
+  active: boolean;
+  created_at: Date | string;
+}
+
 export interface User {
   id: number;
   email: string;
@@ -74,6 +87,13 @@ export interface User {
   active: boolean;
   /** FK to staff_roles for admin/technician accounts */
   staff_role_id: number | null;
+  /** FK to client_roles for client portal accounts */
+  client_role_id: number | null;
+  /**
+   * Per-user billing override for client accounts.
+   * null = inherit from client role; true/false = force on/off.
+   */
+  billing_access: boolean | null;
   job_title: string | null;
   phone: string | null;
   mobile: string | null;
@@ -196,6 +216,11 @@ export type SessionUser = Omit<
   staff_role_slug: string | null;
   /** Authenticator MFA fully enrolled. */
   mfa_enabled: boolean;
+  /** Client portal role label (clients only). */
+  client_role_name: string | null;
+  client_role_slug: string | null;
+  /** Effective billing access for client portal users. */
+  billing_enabled: boolean;
 };
 
 /** Suggested quick labels clients can apply to board messages */
