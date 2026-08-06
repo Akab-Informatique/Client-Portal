@@ -42,7 +42,11 @@ export type SplashtopConfig = {
   token: string;
   baseUrl: string;
   teamId: string | null;
-  channelId: string;
+  /**
+   * Explicit channel id from env, or null = auto-pick the team Default
+   * channel (isDefault / name "Default"), then fall back to private 0.
+   */
+  channelId: string | null;
 };
 
 export function getSplashtopConfigFromEnv(): SplashtopConfig | null {
@@ -53,7 +57,10 @@ export function getSplashtopConfigFromEnv(): SplashtopConfig | null {
     "https://webapi.splashtop.com";
   const baseUrl = baseRaw.replace(/\/+$/, "");
   const teamId = cleanEnv(process.env.SPLASHTOP_TEAM_ID) || null;
-  const channelId = cleanEnv(process.env.SPLASHTOP_CHANNEL_ID) || "0";
+  // Empty / "auto" / "default" → resolve live Default channel at create time
+  const rawCh = cleanEnv(process.env.SPLASHTOP_CHANNEL_ID).toLowerCase();
+  const channelId =
+    !rawCh || rawCh === "auto" || rawCh === "default" ? null : cleanEnv(process.env.SPLASHTOP_CHANNEL_ID);
   return { token, baseUrl, teamId, channelId };
 }
 
@@ -538,16 +545,62 @@ export function sanitizeCustomerName(raw: string | null | undefined): string {
 }
 
 /**
+ * Pick channel order for create:
+ * 1. Explicit opts / SPLASHTOP_CHANNEL_ID pin
+ * 2. Team Default channel (isDefault=true, or name "Default")
+ * 3. Private 0
+ * 4. Any other listed channels
+ */
+export async function resolveChannelPreference(
+  cfg: SplashtopConfig,
+  teamId: string,
+  explicit?: string | null,
+): Promise<{ preferred: string; ordered: string[]; channels: SplashtopChannel[] }> {
+  let channels: SplashtopChannel[] = [];
+  try {
+    channels = await listPsaChannels({ ...cfg, teamId });
+  } catch {
+    channels = [{ id: "0", name: "Private", isDefault: false, isPrivate: true }];
+  }
+
+  const defaultCh =
+    channels.find((c) => c.isDefault && !c.isPrivate) ||
+    channels.find((c) => c.isDefault) ||
+    channels.find((c) => /^default$/i.test(c.name) && !c.isPrivate) ||
+    channels.find((c) => /^default$/i.test(c.name)) ||
+    null;
+
+  const pin = String(explicit ?? cfg.channelId ?? "").trim();
+  // Empty pin → auto Default. Explicit "0" keeps private.
+  const preferred =
+    pin && pin !== "auto" && pin.toLowerCase() !== "default"
+      ? pin
+      : defaultCh?.id || "0";
+
+  const ordered: string[] = [];
+  const push = (id: string | null | undefined) => {
+    const s = String(id ?? "").trim();
+    if (s && !ordered.includes(s)) ordered.push(s);
+  };
+  push(preferred);
+  if (defaultCh) push(defaultCh.id);
+  push("0");
+  for (const c of channels) push(c.id);
+
+  return { preferred, ordered, channels };
+}
+
+/**
  * Create a PSA attended support session (SOS).
  * Returns code + support_portal_link for the end user.
  *
  * Proven working request (Open API PDF §5.8.1.2 + live verify):
  *   POST /api/open/v1/teams/{team_id}/psa/support_sessions
- *   JSON { "channel_id": 0, "customer_name": "…", "customer_issue": "…" }
+ *   JSON { "channel_id": <Default|0>, "customer_name": "…", "customer_issue": "…" }
  *
  * Notes from live testing against this tenant:
  * - customer_name max length is 64 (longer → result 40422 wrong_params)
- * - channel 0 (private) always works when psa scope is present
+ * - Prefer team Default channel (e.g. 4673) over private 0 when present
  * - form/query encodings are unnecessary — JSON is the supported path
  */
 export async function createSupportSession(opts: {
@@ -576,22 +629,13 @@ export async function createSupportSession(opts: {
   cachedTeamId = teamId;
   cachedTeamKey = cfg.token.slice(0, 12);
 
-  const preferred = String(opts.channelId ?? cfg.channelId ?? "0").trim() || "0";
-  const channelIds: string[] = [];
-  const pushCh = (id: string) => {
-    const s = String(id).trim();
-    if (s && !channelIds.includes(s)) channelIds.push(s);
-  };
-  pushCh(preferred);
-  pushCh("0");
-  try {
-    const channels = await listPsaChannels({ ...cfg, teamId });
-    const def = channels.find((c) => c.isDefault);
-    if (def) pushCh(def.id);
-    for (const c of channels) pushCh(c.id);
-  } catch {
-    /* private 0 is enough */
-  }
+  const { preferred, ordered: channelIds, channels } =
+    await resolveChannelPreference(cfg, teamId, opts.channelId);
+  const prefName =
+    channels.find((c) => c.id === preferred)?.name || preferred;
+  console.info(
+    `[splashtop] create session → channel ${preferred} (${prefName}); order=[${channelIds.join(",")}]`,
+  );
 
   const customerName = sanitizeCustomerName(opts.customerName);
   const customerIssue = opts.customerIssue?.trim()
@@ -770,8 +814,16 @@ export async function probeSplashtopAccess(): Promise<{
   scopes?: string[];
   hasPsaScope?: boolean;
   channels?: Array<{ id: string; name: string; isDefault?: boolean }>;
-  channelId?: string;
+  channelId?: string | null;
+  defaultChannelId?: string | null;
+  defaultChannelName?: string | null;
+  channelMode?: string;
   email?: string | null;
+  /** Redacted token fingerprint for support (never the secret). */
+  token?: string;
+  psaTeamId?: string | null;
+  envTeamId?: string | null;
+  envTeamMismatch?: boolean;
 }> {
   const cfg = getSplashtopConfigFromEnv();
   if (!cfg) {
@@ -793,8 +845,19 @@ export async function probeSplashtopAccess(): Promise<{
 
     let channels: SplashtopChannel[] = [];
     let channelErr: string | null = null;
+    let preferredChannel: string | null = cfg.channelId;
+    let defaultChannel: SplashtopChannel | null = null;
     try {
-      channels = await listPsaChannels({ ...cfg, teamId });
+      if (teamId) {
+        const resolved = await resolveChannelPreference(cfg, teamId);
+        channels = resolved.channels;
+        preferredChannel = resolved.preferred;
+        defaultChannel =
+          channels.find((c) => c.isDefault && !c.isPrivate) ||
+          channels.find((c) => c.isDefault) ||
+          channels.find((c) => /^default$/i.test(c.name)) ||
+          null;
+      }
     } catch (e) {
       channelErr = e instanceof Error ? e.message : String(e);
     }
@@ -820,6 +883,13 @@ export async function probeSplashtopAccess(): Promise<{
       Boolean(info.psaTeamId) &&
       cfg.teamId !== info.psaTeamId;
 
+    const channelMode = cfg.channelId ? "pinned" : "auto-default";
+    const channelLabel = cfg.channelId
+      ? `pinned channel ${cfg.channelId}`
+      : defaultChannel
+        ? `Default channel ${defaultChannel.id} (${defaultChannel.name})`
+        : `channel ${preferredChannel || "0"}`;
+
     return {
       ok,
       configured: true,
@@ -836,7 +906,10 @@ export async function probeSplashtopAccess(): Promise<{
         name: c.name,
         isDefault: c.isDefault,
       })),
-      channelId: cfg.channelId,
+      channelId: preferredChannel,
+      defaultChannelId: defaultChannel?.id ?? null,
+      defaultChannelName: defaultChannel?.name ?? null,
+      channelMode,
       email: info.email,
       token: describeSplashtopToken(cfg.token),
       message: ok
@@ -844,7 +917,7 @@ export async function probeSplashtopAccess(): Promise<{
           `${info.email ? `, ${info.email}` : ""}). ` +
           `Scopes: [${info.scopes.join(", ") || "unknown"}]. ` +
           `Channels: ${chSummary}. ` +
-          `Create uses channel ${cfg.channelId || "0"}.` +
+          `Create uses ${channelLabel}.` +
           (envTeamMismatch
             ? ` WARNING: SPLASHTOP_TEAM_ID=${cfg.teamId} ≠ token psa.team_id=${info.psaTeamId} (token id is used).`
             : "")
