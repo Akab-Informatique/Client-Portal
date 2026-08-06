@@ -46,6 +46,13 @@ export const companies = pgTable("companies", {
   documentation_enabled: boolean("documentation_enabled"),
   /** IT Glue / MyGlue organization ID for this client. */
   itglue_organization_id: text("itglue_organization_id"),
+  /** ConnectBooster customer / organization id for invoices & pay portal. */
+  connectbooster_customer_id: text("connectbooster_customer_id"),
+  /**
+   * Optional per-company override of the branded CB portal URL.
+   * Empty → use portal-wide CONNECTBOOSTER_PORTAL_BASE_URL.
+   */
+  connectbooster_portal_url: text("connectbooster_portal_url"),
   created_at: timestamp("created_at").defaultNow().notNull(),
 });
 

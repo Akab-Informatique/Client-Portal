@@ -338,6 +338,16 @@ const ADDITIVE_COLUMNS: Array<{ table: string; column: string; def: string }> =
     { table: "companies", column: "documentation_title", def: "TEXT" },
     { table: "companies", column: "documentation_enabled", def: "BOOLEAN" },
     { table: "companies", column: "itglue_organization_id", def: "TEXT" },
+    {
+      table: "companies",
+      column: "connectbooster_customer_id",
+      def: "TEXT",
+    },
+    {
+      table: "companies",
+      column: "connectbooster_portal_url",
+      def: "TEXT",
+    },
     { table: "users", column: "job_title", def: "TEXT" },
     { table: "users", column: "phone", def: "TEXT" },
     { table: "users", column: "mobile", def: "TEXT" },

@@ -104,10 +104,10 @@ export const en = {
   billing: {
     invoicesTitle: "Invoices",
     invoicesDesc:
-      "Autotask invoices for the client selected in the sidebar. Integration coming soon.",
+      "ConnectBooster invoices for the client selected in the sidebar.",
     contractsTitle: "Contracts",
     contractsDesc:
-      "Autotask contracts for the client selected in the sidebar. Integration coming soon.",
+      "Client-safe Autotask contracts for the selected client (no cost or profit).",
     comingSoonTitle: "Linked to Autotask soon",
     comingSoonDesc:
       "This section is ready in the menu. Data will load from Autotask for the active client.",
@@ -126,6 +126,37 @@ export const en = {
     clientDeniedTitle: "Billing not available",
     clientDeniedDesc:
       "Your account does not have billing access. Ask your provider administrator to enable it on your user profile.",
+    invoicesDescCb:
+      "Invoices from ConnectBooster. Pay open balances in the secure payment portal.",
+    contractsDescSafe:
+      "Your service agreements. Cost, profit, and internal pricing are never shown.",
+    contractsPrivacyNote:
+      "Only client-safe fields are shown (name, type, status, dates, short description). Financial internals stay with your provider.",
+    openCbPortal: "Open ConnectBooster portal",
+    payInCb: "Pay in ConnectBooster",
+    pay: "Pay",
+    view: "View",
+    noConnectBoosterTitle: "Billing portal not linked",
+    noConnectBoosterId:
+      "This company has no ConnectBooster customer ID yet. Ask your provider to set it under Clients → Edit.",
+    invoicesPortalOnly:
+      "Invoice details open in your ConnectBooster payment portal. Use the button below to view invoices and pay.",
+    invoicesEmpty: "No invoices found for this account.",
+    invoicesLoadFailed: "Could not load invoices.",
+    contractsLoadFailed: "Could not load contracts.",
+    contractsEmptyTitle: "No contracts yet",
+    contractsEmptyDesc: "No client-visible contracts were returned for your company.",
+    invoicesFootnote:
+      "Payments are processed securely in ConnectBooster. This portal never stores card or bank details.",
+    colInvoice: "Invoice",
+    colStatus: "Status",
+    colIssued: "Issued",
+    colDue: "Due",
+    colBalance: "Balance",
+    colContract: "Contract",
+    colType: "Type",
+    colStart: "Start",
+    colEnd: "End",
   },
   settings: {
     title: "General settings",
@@ -162,6 +193,9 @@ export const en = {
     autotaskContactsWarn:
       "Client tickets need Contacts permission on the Autotask API user (CRM → Contacts → View).",
     retest: "Retest",
+    connectBoosterHint:
+      "Client invoice pay portal. Set CONNECTBOOSTER_PORTAL_BASE_URL and map each client customer ID.",
+    connectBoosterPartial: "Portal only (no invoice API)",
     statusConnected: "Connected",
     statusNotConfigured: "Not configured",
     statusIssue: "Issue",

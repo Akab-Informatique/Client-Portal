@@ -37,6 +37,10 @@ export interface Company {
   documentation_enabled: boolean | null;
   /** IT Glue / MyGlue organization id for passwords vault */
   itglue_organization_id: string | null;
+  /** ConnectBooster customer id for invoices / pay portal */
+  connectbooster_customer_id: string | null;
+  /** Optional per-company ConnectBooster portal URL override */
+  connectbooster_portal_url: string | null;
   created_at: Date | string;
 }
 

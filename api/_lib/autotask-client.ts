@@ -1628,3 +1628,152 @@ export function primeMockTickets(
 ) {
   ensureMockStore(autotaskCompanyId, userEmail);
 }
+
+
+// ---------------------------------------------------------------------------
+// Contracts — client-safe projection only (never cost/profit/internal)
+// ---------------------------------------------------------------------------
+
+/** Fields we may request from Autotask for client display. */
+const CLIENT_SAFE_CONTRACT_FIELDS = [
+  "id",
+  "contractName",
+  "contractNumber",
+  "contractType",
+  "status",
+  "startDate",
+  "endDate",
+  "companyID",
+  "description",
+] as const;
+
+/**
+ * Fields that must NEVER be requested or returned to clients.
+ * Kept as documentation + runtime strip guard.
+ */
+export const CLIENT_FORBIDDEN_CONTRACT_FIELDS = [
+  "estimatedCost",
+  "estimatedRevenue",
+  "estimatedHours",
+  "setupFee",
+  "contractPeriodCost",
+  "contractPeriodType",
+  "timeReportingRequiresStartAndStopTimes",
+  "isDefaultContract",
+  "opportunityID",
+  "contactID",
+  "contactName",
+  "billingPreference",
+  "exclusionContractID",
+  "internalCurrencySetupFee",
+  "internalCurrencyContractPeriodCost",
+  "setupFeeBillingCodeID",
+] as const;
+
+export type ClientSafeContract = {
+  id: number;
+  name: string;
+  number: string | null;
+  typeLabel: string | null;
+  statusLabel: string | null;
+  startDate: string | null;
+  endDate: string | null;
+  description: string | null;
+};
+
+function stripForbiddenContractFields(
+  raw: Record<string, unknown>,
+): Record<string, unknown> {
+  const out: Record<string, unknown> = {};
+  for (const [k, v] of Object.entries(raw)) {
+    const lower = k.toLowerCase();
+    if (
+      CLIENT_FORBIDDEN_CONTRACT_FIELDS.some(
+        (f) => f.toLowerCase() === lower,
+      ) ||
+      /cost|profit|margin|revenue|internal|setupfee|estimated/i.test(k)
+    ) {
+      continue;
+    }
+    out[k] = v;
+  }
+  return out;
+}
+
+function mapClientSafeContract(
+  raw: Record<string, unknown>,
+  statusLabels: Record<string, string>,
+  typeLabels: Record<string, string>,
+): ClientSafeContract | null {
+  const safe = stripForbiddenContractFields(raw);
+  const id = Number(safe.id);
+  if (!Number.isFinite(id)) return null;
+  const status = safe.status != null ? String(safe.status) : null;
+  const ctype = safe.contractType != null ? String(safe.contractType) : null;
+  const name = String(safe.contractName ?? "").trim() || `Contract #${id}`;
+  const number =
+    safe.contractNumber != null && String(safe.contractNumber).trim()
+      ? String(safe.contractNumber).trim()
+      : null;
+  let description: string | null = null;
+  if (typeof safe.description === "string" && safe.description.trim()) {
+    // Cap length — still no financials
+    description = safe.description.trim().slice(0, 500);
+  }
+  return {
+    id,
+    name,
+    number,
+    typeLabel: ctype ? typeLabels[ctype] || ctype : null,
+    statusLabel: status ? statusLabels[status] || status : null,
+    startDate:
+      safe.startDate != null ? String(safe.startDate).slice(0, 32) : null,
+    endDate: safe.endDate != null ? String(safe.endDate).slice(0, 32) : null,
+    description,
+  };
+}
+
+/**
+ * Contracts for one Autotask company — client-safe fields only.
+ * Never returns cost, profit, margin, internal currency, or setup fees.
+ */
+export async function fetchClientSafeContractsForCompany(
+  autotaskCompanyId: string | number,
+): Promise<{
+  contracts: ClientSafeContract[];
+  zoneUrl: string;
+}> {
+  const cfg = getAutotaskConfigFromEnv();
+  if (!cfg) throw new Error("Autotask is not configured");
+
+  const base = await resolveZoneBase(cfg);
+  const companyIdNum = Number(autotaskCompanyId);
+  if (!Number.isFinite(companyIdNum)) {
+    throw new Error("Invalid Autotask company ID");
+  }
+
+  const [statusLabels, typeLabels] = await Promise.all([
+    getPicklistMap(base, cfg, "Contracts", "status"),
+    getPicklistMap(base, cfg, "Contracts", "contractType"),
+  ]);
+
+  const body = {
+    MaxRecords: 100,
+    IncludeFields: [...CLIENT_SAFE_CONTRACT_FIELDS],
+    filter: [
+      {
+        op: "and",
+        items: [{ op: "eq", field: "companyID", value: companyIdNum }],
+      },
+    ],
+  };
+
+  type QueryRes = { items?: Array<Record<string, unknown>> };
+  const data = await postQuery<QueryRes>(base, cfg, "Contracts/query", body);
+  const contracts = (data.items ?? [])
+    .map((item) => mapClientSafeContract(item, statusLabels, typeLabels))
+    .filter((c): c is ClientSafeContract => c != null)
+    .sort((a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: "base" }));
+
+  return { contracts, zoneUrl: base };
+}

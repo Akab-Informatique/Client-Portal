@@ -128,7 +128,38 @@ export const fr: Dictionary = {
       "Factures et contrats de votre entreprise. Seuls les contacts avec accès facturation voient cette section.",
     clientDeniedTitle: "Facturation non disponible",
     clientDeniedDesc:
-      "Votre compte n'a pas accès à la facturation. Demandez à l'administrateur du fournisseur de l'activer sur votre profil.",
+      "Votre compte n'a pas accès à la facturation. Demandez à votre fournisseur de l'activer sur votre profil.",
+    invoicesDescCb:
+      "Factures ConnectBooster. Payez les soldes ouverts dans le portail de paiement sécurisé.",
+    contractsDescSafe:
+      "Vos ententes de service. Coûts, profits et tarification interne ne sont jamais affichés.",
+    contractsPrivacyNote:
+      "Seuls les champs clients sont affichés (nom, type, statut, dates, courte description). Les données financières restent chez votre fournisseur.",
+    openCbPortal: "Ouvrir le portail ConnectBooster",
+    payInCb: "Payer dans ConnectBooster",
+    pay: "Payer",
+    view: "Voir",
+    noConnectBoosterTitle: "Portail de facturation non lié",
+    noConnectBoosterId:
+      "Cette entreprise n'a pas encore d'ID client ConnectBooster. Demandez à votre fournisseur de le définir sous Clients → Modifier.",
+    invoicesPortalOnly:
+      "Les détails des factures s'ouvrent dans votre portail de paiement ConnectBooster. Utilisez le bouton ci-dessous pour voir et payer.",
+    invoicesEmpty: "Aucune facture pour ce compte.",
+    invoicesLoadFailed: "Impossible de charger les factures.",
+    contractsLoadFailed: "Impossible de charger les contrats.",
+    contractsEmptyTitle: "Aucun contrat pour le moment",
+    contractsEmptyDesc: "Aucun contrat visible n'a été renvoyé pour votre entreprise.",
+    invoicesFootnote:
+      "Les paiements sont traités de façon sécurisée dans ConnectBooster. Ce portail ne stocke jamais de données de carte ou de compte bancaire.",
+    colInvoice: "Facture",
+    colStatus: "Statut",
+    colIssued: "Émise",
+    colDue: "Échéance",
+    colBalance: "Solde",
+    colContract: "Contrat",
+    colType: "Type",
+    colStart: "Début",
+    colEnd: "Fin",
   },
   settings: {
     title: "Paramètres généraux",
@@ -166,6 +197,9 @@ export const fr: Dictionary = {
     autotaskContactsWarn:
       "Les billets clients nécessitent la permission Contacts sur l'utilisateur API Autotask (CRM → Contacts → Afficher).",
     retest: "Retester",
+    connectBoosterHint:
+      "Portail de paiement des factures clients. Définissez CONNECTBOOSTER_PORTAL_BASE_URL et l'ID client par entreprise.",
+    connectBoosterPartial: "Portail seulement (pas d'API factures)",
     statusConnected: "Connecté",
     statusNotConfigured: "Non configuré",
     statusIssue: "Problème",

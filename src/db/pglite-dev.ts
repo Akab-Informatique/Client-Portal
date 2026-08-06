@@ -65,6 +65,8 @@ CREATE TABLE IF NOT EXISTS message_user_states (
     ["companies", "documentation_title TEXT"],
     ["companies", "documentation_enabled BOOLEAN"],
     ["companies", "itglue_organization_id TEXT"],
+    ["companies", "connectbooster_customer_id TEXT"],
+    ["companies", "connectbooster_portal_url TEXT"],
     ["users", "job_title TEXT"],
     ["users", "phone TEXT"],
     ["users", "mobile TEXT"],
