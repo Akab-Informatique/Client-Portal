@@ -33,15 +33,26 @@ function loadEnvFileNoExpand(filePath: string): Record<string, string> {
   return out;
 }
 
+/** Keys where the on-disk .env must beat a stale/empty process.env injection. */
+const FILE_WINS_PREFIXES = [
+  "AUTOTASK_",
+  "SPLASHTOP_",
+  "MICROSOFT_",
+  "ITGLUE_",
+  "SMTP_",
+  "SESSION_",
+];
+
 function injectEnvFromFiles(root: string) {
   // Later files override earlier ones (same idea as Vite)
   const files = [".env", ".env.local", ".env.development", ".env.development.local"];
   for (const name of files) {
     const parsed = loadEnvFileNoExpand(path.join(root, name));
     for (const [key, value] of Object.entries(parsed)) {
-      // Always prefer file values for AUTOTASK_* so a truncated expanded
-      // process.env entry cannot win over the real secret.
-      if (key.startsWith("AUTOTASK_") || process.env[key] === undefined) {
+      // Prefer file values for integration secrets so a truncated / placeholder
+      // process.env entry (Compose, platform inject) cannot win over .env.
+      const fileWins = FILE_WINS_PREFIXES.some((p) => key.startsWith(p));
+      if (fileWins || process.env[key] === undefined) {
         process.env[key] = value;
       }
     }

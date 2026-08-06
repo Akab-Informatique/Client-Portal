@@ -37,7 +37,7 @@ const HOST = process.env.HOST || "0.0.0.0";
 // For secret-like keys the file ALWAYS wins over whatever Compose injected.
 // ---------------------------------------------------------------------------
 const FILE_WINS_ENV =
-  /^(AUTOTASK_|MICROSOFT_|ITGLUE_|SMTP_|GITHUB_|SESSION_|OPENAI_|ANTHROPIC_)/i;
+  /^(AUTOTASK_|MICROSOFT_|ITGLUE_|SMTP_|GITHUB_|SESSION_|OPENAI_|ANTHROPIC_|SPLASHTOP_)/i;
 
 function loadEnvFileNoExpand(filePath, { secretsWin = true } = {}) {
   if (!fs.existsSync(filePath)) return 0;

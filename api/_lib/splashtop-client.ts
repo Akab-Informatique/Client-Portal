@@ -13,9 +13,30 @@
  *                                 (use if API returns stack hosts like my.aws-rd.splashtop.com)
  */
 
+/**
+ * Strip BOM / quotes / CR that Docker Compose, dotenv, or shell can leave on
+ * secret values. Matches the Autotask cleaner so tokens with edge characters
+ * still authenticate (quoted tokens return Splashtop 41406).
+ */
 function cleanEnv(v: unknown): string {
-  return String(v ?? "").trim();
+  if (v == null) return "";
+  let s = String(v).trim();
+  if (s.charCodeAt(0) === 0xfeff) s = s.slice(1).trim();
+  // Peel up to two layers of matching quotes
+  for (let i = 0; i < 2; i++) {
+    if (
+      (s.startsWith('"') && s.endsWith('"') && s.length >= 2) ||
+      (s.startsWith("'") && s.endsWith("'") && s.length >= 2)
+    ) {
+      s = s.slice(1, -1).trim();
+    }
+  }
+  return s.replace(/\r/g, "").trim();
 }
+
+/** Splashtop rejects customer_name longer than 64 chars (result 40422). */
+const CUSTOMER_NAME_MAX = 64;
+const CUSTOMER_ISSUE_MAX = 500;
 
 export type SplashtopConfig = {
   token: string;
@@ -34,6 +55,13 @@ export function getSplashtopConfigFromEnv(): SplashtopConfig | null {
   const teamId = cleanEnv(process.env.SPLASHTOP_TEAM_ID) || null;
   const channelId = cleanEnv(process.env.SPLASHTOP_CHANNEL_ID) || "0";
   return { token, baseUrl, teamId, channelId };
+}
+
+/** Safe for logs — never the full token. */
+export function describeSplashtopToken(token: string | null | undefined): string {
+  const t = cleanEnv(token);
+  if (!t) return "missing";
+  return `len=${t.length} head=${t.slice(0, 4)}…`;
 }
 
 export function isSplashtopConfigured(): boolean {
@@ -498,13 +526,29 @@ function extractSession(data: unknown): Record<string, unknown> | null {
   return null;
 }
 
+/** Clamp + sanitize the end-user display name (max 64 on Splashtop). */
+export function sanitizeCustomerName(raw: string | null | undefined): string {
+  let s = String(raw ?? "")
+    .replace(/[\u0000-\u001f\u007f]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+  if (!s) s = "Client";
+  if (s.length > CUSTOMER_NAME_MAX) s = s.slice(0, CUSTOMER_NAME_MAX).trim();
+  return s || "Client";
+}
+
 /**
  * Create a PSA attended support session (SOS).
  * Returns code + support_portal_link for the end user.
  *
- * Open API PDF §5.8.1.2 parameters (request):
- *   channel_id, customer_name, customer_issue (optional)
- * Do NOT send response-only fields like source_name — some stacks return 40403.
+ * Proven working request (Open API PDF §5.8.1.2 + live verify):
+ *   POST /api/open/v1/teams/{team_id}/psa/support_sessions
+ *   JSON { "channel_id": 0, "customer_name": "…", "customer_issue": "…" }
+ *
+ * Notes from live testing against this tenant:
+ * - customer_name max length is 64 (longer → result 40422 wrong_params)
+ * - channel 0 (private) always works when psa scope is present
+ * - form/query encodings are unnecessary — JSON is the supported path
  */
 export async function createSupportSession(opts: {
   customerName: string;
@@ -514,21 +558,25 @@ export async function createSupportSession(opts: {
   const cfg = getSplashtopConfigFromEnv();
   if (!cfg) throw new Error("Splashtop is not configured (SPLASHTOP_API_TOKEN)");
 
-  // Validate token scopes early (throws if psa missing when scopes are listed)
+  // Validate token + resolve team (throws if psa missing when scopes are listed)
   const info = await fetchBasicInfo(cfg);
-  const teamId = cfg.teamId || info.psaTeamId || info.teamId;
+  // Prefer live psa.team_id over a possibly-stale SPLASHTOP_TEAM_ID pin
+  const teamId = info.psaTeamId || info.teamId || cfg.teamId;
   if (!teamId) {
     throw new Error(
       "Splashtop team id missing. Set SPLASHTOP_TEAM_ID or use a token with psa scope.",
     );
   }
-  // Keep cache warm for later calls
+  if (cfg.teamId && info.psaTeamId && cfg.teamId !== info.psaTeamId) {
+    // Env pin disagrees with token — trust the token (wrong pin → 40404/40403)
+    console.warn(
+      `[splashtop] SPLASHTOP_TEAM_ID=${cfg.teamId} differs from token psa.team_id=${info.psaTeamId}; using token team id`,
+    );
+  }
   cachedTeamId = teamId;
   cachedTeamKey = cfg.token.slice(0, 12);
 
   const preferred = String(opts.channelId ?? cfg.channelId ?? "0").trim() || "0";
-
-  // Build ordered channel candidates: preferred → default channel → private 0 → others
   const channelIds: string[] = [];
   const pushCh = (id: string) => {
     const s = String(id).trim();
@@ -537,170 +585,88 @@ export async function createSupportSession(opts: {
   pushCh(preferred);
   pushCh("0");
   try {
-    const channels = await listPsaChannels(cfg);
+    const channels = await listPsaChannels({ ...cfg, teamId });
     const def = channels.find((c) => c.isDefault);
     if (def) pushCh(def.id);
     for (const c of channels) pushCh(c.id);
   } catch {
-    // channel_list may fail without service_desk — still try preferred + 0
+    /* private 0 is enough */
   }
 
-  const customerName = opts.customerName.slice(0, 120);
+  const customerName = sanitizeCustomerName(opts.customerName);
   const customerIssue = opts.customerIssue?.trim()
-    ? opts.customerIssue.trim().slice(0, 500)
+    ? opts.customerIssue.trim().slice(0, CUSTOMER_ISSUE_MAX)
     : null;
 
   const path = `/api/open/v1/teams/${encodeURIComponent(teamId)}/psa/support_sessions`;
   const errors: string[] = [];
 
-  const tryCreate = async (
-    body: Record<string, unknown>,
-  ): Promise<SplashtopSupportSession | null> => {
-    const res = await stFetch(cfg, path, {
-      method: "POST",
-      body: JSON.stringify(body),
-    });
-    // HTTP-level failure
-    if (!res.ok) {
-      errors.push(
-        `HTTP ${res.status} body=${JSON.stringify(body)} → ${explainCreateError(res.data, res.text.slice(0, 200))}`,
-      );
-      return null;
-    }
-    const code = resultCode(res.data);
-    if (code != null && code !== 20200 && code !== 0) {
-      errors.push(
-        `result=${code} body=${JSON.stringify(body)} → ${explainCreateError(res.data, `code ${code}`)}`,
-      );
-      return null;
-    }
-    const sessionRaw = extractSession(res.data);
-    if (!sessionRaw) {
-      errors.push(
-        `empty support_session for body=${JSON.stringify(body)} raw=${JSON.stringify(res.data).slice(0, 240)}`,
-      );
-      return null;
-    }
-    const session = mapSession(sessionRaw, cfg);
-    if (!session.code && !session.supportPortalLink) {
-      errors.push("session missing code and support_portal_link");
-      return null;
-    }
-    return session;
-  };
-
-  const tryCreateForm = async (
-    fields: Record<string, string>,
-  ): Promise<SplashtopSupportSession | null> => {
-    const res = await stFetch(cfg, path, {
-      method: "POST",
-      headers: { "Content-Type": "application/x-www-form-urlencoded" },
-      body: new URLSearchParams(fields).toString(),
-    });
-    if (!res.ok) {
-      errors.push(
-        `FORM HTTP ${res.status} → ${explainCreateError(res.data, res.text.slice(0, 180))}`,
-      );
-      return null;
-    }
-    const code = resultCode(res.data);
-    if (code != null && code !== 20200 && code !== 0) {
-      errors.push(
-        `FORM result=${code} → ${explainCreateError(res.data, `code ${code}`)}`,
-      );
-      return null;
-    }
-    const sessionRaw = extractSession(res.data);
-    if (!sessionRaw) {
-      errors.push(`FORM empty session raw=${JSON.stringify(res.data).slice(0, 200)}`);
-      return null;
-    }
-    const session = mapSession(sessionRaw, cfg);
-    if (!session.code && !session.supportPortalLink) return null;
-    return session;
-  };
-
-  const tryCreateQuery = async (
-    fields: Record<string, string>,
-  ): Promise<SplashtopSupportSession | null> => {
-    const qs = new URLSearchParams(fields).toString();
-    const res = await stFetch(cfg, `${path}?${qs}`, { method: "POST", body: "" });
-    if (!res.ok) {
-      errors.push(
-        `QUERY HTTP ${res.status} → ${explainCreateError(res.data, res.text.slice(0, 180))}`,
-      );
-      return null;
-    }
-    const code = resultCode(res.data);
-    if (code != null && code !== 20200 && code !== 0) {
-      errors.push(
-        `QUERY result=${code} → ${explainCreateError(res.data, `code ${code}`)}`,
-      );
-      return null;
-    }
-    const sessionRaw = extractSession(res.data);
-    if (!sessionRaw) return null;
-    const session = mapSession(sessionRaw, cfg);
-    if (!session.code && !session.supportPortalLink) return null;
-    return session;
-  };
-
-  // For each channel, try documented body shapes (JSON → form → query)
   for (const ch of channelIds) {
     const chNum = Number(ch);
     const channelValue = Number.isFinite(chNum) ? chNum : ch;
 
-    // Shape A — documented JSON fields only
-    const bodyA: Record<string, unknown> = {
-      channel_id: channelValue,
-      customer_name: customerName,
-    };
-    if (customerIssue) bodyA.customer_issue = customerIssue;
-    const a = await tryCreate(bodyA);
-    if (a) return a;
-
-    // Shape B — without issue (some tenants reject long/special issue text)
-    if (customerIssue) {
-      const bodyB: Record<string, unknown> = {
+    const bodies: Record<string, unknown>[] = [
+      // Primary — documented JSON (verified live)
+      {
         channel_id: channelValue,
         customer_name: customerName,
-      };
-      const b = await tryCreate(bodyB);
-      if (b) return b;
+        ...(customerIssue ? { customer_issue: customerIssue } : {}),
+      },
+    ];
+    // Fallback without issue text
+    if (customerIssue) {
+      bodies.push({ channel_id: channelValue, customer_name: customerName });
+    }
+    // Fallback: short generic name if tenant rejects special characters
+    if (customerName !== "Client") {
+      bodies.push({
+        channel_id: channelValue,
+        customer_name: "Client",
+        ...(customerIssue ? { customer_issue: customerIssue.slice(0, 80) } : {}),
+      });
     }
 
-    // Shape C — channel_id as string
-    if (typeof channelValue === "number") {
-      const bodyC: Record<string, unknown> = {
-        channel_id: String(ch),
-        customer_name: customerName,
-      };
-      if (customerIssue) bodyC.customer_issue = customerIssue;
-      const c = await tryCreate(bodyC);
-      if (c) return c;
+    for (const body of bodies) {
+      const res = await stFetch(cfg, path, {
+        method: "POST",
+        body: JSON.stringify(body),
+      });
+      const code = resultCode(res.data);
+      if (!res.ok || (code != null && code !== 20200 && code !== 0)) {
+        errors.push(
+          `ch=${ch} ${JSON.stringify(body)} → ${explainCreateError(
+            res.data,
+            res.ok ? `code ${code}` : `HTTP ${res.status} ${res.text.slice(0, 120)}`,
+          )}`,
+        );
+        continue;
+      }
+      const sessionRaw = extractSession(res.data);
+      if (!sessionRaw) {
+        errors.push(
+          `ch=${ch} empty session raw=${JSON.stringify(res.data).slice(0, 200)}`,
+        );
+        continue;
+      }
+      const session = mapSession(sessionRaw, cfg);
+      if (!session.code && !session.supportPortalLink) {
+        errors.push(`ch=${ch} session missing code/link`);
+        continue;
+      }
+      return session;
     }
-
-    // Shape D — form-urlencoded (some Open API endpoints accept this)
-    const form: Record<string, string> = {
-      channel_id: String(ch),
-      customer_name: customerName,
-    };
-    if (customerIssue) form.customer_issue = customerIssue;
-    const d = await tryCreateForm(form);
-    if (d) return d;
-
-    // Shape E — query string on POST
-    const e = await tryCreateQuery(form);
-    if (e) return e;
   }
 
   const scopeHint =
     info.scopes.length > 0
       ? ` Token scopes: [${info.scopes.join(", ")}].`
-      : " Token scopes unknown (basic_info returned none) — ensure the Web API token includes psa.";
+      : " Token scopes unknown — ensure the Web API token includes psa.";
+  const teamHint = ` team_id=${teamId} (${describeSplashtopToken(cfg.token)} base=${cfg.baseUrl}).`;
   throw new Error(
-    `Splashtop create session failed after trying channel(s) ${channelIds.join(", ")}. ` +
-      `Last errors: ${errors.slice(-4).join(" | ")}.${scopeHint}`,
+    `Splashtop create session failed after trying channel(s) ${channelIds.join(", ")}.` +
+      teamHint +
+      ` Last errors: ${errors.slice(-3).join(" | ")}.` +
+      scopeHint,
   );
 }
 
@@ -849,11 +815,19 @@ export async function probeSplashtopAccess(): Promise<{
           ? `channel_list failed (${channelErr})`
           : "none";
 
+    const envTeamMismatch =
+      Boolean(cfg.teamId) &&
+      Boolean(info.psaTeamId) &&
+      cfg.teamId !== info.psaTeamId;
+
     return {
       ok,
       configured: true,
       authOk: true,
       teamId,
+      psaTeamId: info.psaTeamId,
+      envTeamId: cfg.teamId,
+      envTeamMismatch,
       baseUrl: cfg.baseUrl,
       scopes: info.scopes,
       hasPsaScope: hasPsa,
@@ -864,12 +838,16 @@ export async function probeSplashtopAccess(): Promise<{
       })),
       channelId: cfg.channelId,
       email: info.email,
+      token: describeSplashtopToken(cfg.token),
       message: ok
         ? `Connected to Splashtop (team ${teamId}` +
           `${info.email ? `, ${info.email}` : ""}). ` +
           `Scopes: [${info.scopes.join(", ") || "unknown"}]. ` +
           `Channels: ${chSummary}. ` +
-          `Create uses channel ${cfg.channelId || "0"}.`
+          `Create uses channel ${cfg.channelId || "0"}.` +
+          (envTeamMismatch
+            ? ` WARNING: SPLASHTOP_TEAM_ID=${cfg.teamId} ≠ token psa.team_id=${info.psaTeamId} (token id is used).`
+            : "")
         : `Token authenticated but PSA may be unavailable. Scopes: [${info.scopes.join(", ") || "none"}]. ` +
           `Recreate Web API token with scope "psa" (Owner/Super Admin).`,
     };
@@ -881,6 +859,7 @@ export async function probeSplashtopAccess(): Promise<{
       teamId: cfg.teamId,
       baseUrl: cfg.baseUrl,
       channelId: cfg.channelId,
+      token: describeSplashtopToken(cfg.token),
       message: e instanceof Error ? e.message : "Splashtop probe failed",
     };
   }

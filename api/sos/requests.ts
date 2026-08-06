@@ -201,8 +201,10 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       }
 
       try {
+        // Splashtop customer_name max is 64 chars (longer → 40422)
+        const displayName = [userName, companyName].filter(Boolean).join(" · ");
         const session = await createSupportSession({
-          customerName: `${userName} · ${companyName || "Client"}`.slice(0, 120),
+          customerName: displayName || userName || "Client",
           customerIssue:
             issue ||
             `SOS from AKAB portal — ${userName} <${userEmail}> (${companyName})`,
