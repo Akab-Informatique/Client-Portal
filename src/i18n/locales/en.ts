@@ -203,14 +203,14 @@ export const en = {
     openClientLink: "Download again",
     openDownloadPage: "Open download page",
     downloadPageHint:
-      "Opens our branded download page — the support app starts downloading automatically.",
+      "Opens our download page — the Default-channel session link starts automatically.",
     customPackageNote:
-      "Staff can brand the app (logo/name) via Splashtop SOS Customization and set package URLs in .env.",
+      "Download uses only the Default-channel session portal link from Splashtop (no backup package URLs).",
     copyLink: "Copy link",
     copied: "Copied",
     packageDefaultName: "Remote support",
     downloadPageDesc:
-      "Your secure remote support session is ready. The app download starts automatically — run the file and wait for a technician. No code to type or share.",
+      "Your secure remote support session is ready. The session download starts automatically — run the file and wait for a technician. No code to type or share.",
     downloadTitle: "Download support app",
     downloadSubtitle:
       "If the download did not start, use the button below. Then open the file (Run / Keep).",
@@ -218,11 +218,11 @@ export const en = {
     downloadTriggered: "Download started",
     downloadAgain: "Download now",
     openSessionLink: "Open session link",
-    directPackageTitle: "Direct package (custom branded app)",
+    directPackageTitle: "Direct package (disabled)",
     directPackageHint:
-      "These links come from your Splashtop custom SOS package (Management → SOS Customization → Share).",
+      "Backup package links are disabled. Only the Default-channel session portal link is used.",
     packageShareLink: "Package share page",
-    downloadStep1: "Download starts automatically (or click Download now).",
+    downloadStep1: "Download starts automatically from your session link (or click Download now).",
     downloadStep2: "Open the file — choose Run / Open / Keep if your browser asks.",
     downloadStep3: "Leave the SOS app open; a technician will connect shortly.",
     backToPortal: "← Back to portal",

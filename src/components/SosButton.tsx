@@ -272,9 +272,6 @@ export function SosButton({ className }: { className?: string }) {
               <li>{t("sos.step2")}</li>
               <li>{t("sos.step3")}</li>
             </ol>
-            <p className="text-[11px] text-muted-foreground">
-              {t("sos.customPackageNote")}
-            </p>
           </div>
 
           <DialogFooter className="gap-2 sm:gap-0">

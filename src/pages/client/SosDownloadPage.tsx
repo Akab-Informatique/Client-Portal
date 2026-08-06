@@ -1,17 +1,13 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Link, useNavigate, useSearchParams } from "react-router-dom";
 import {
-  Apple,
   Check,
   Copy,
   Download,
-  ExternalLink,
   Headphones,
   Loader2,
-  Monitor,
   RefreshCw,
   Siren,
-  Smartphone,
 } from "lucide-react";
 import { useAuth } from "@/lib/auth";
 import { useLocale } from "@/hooks/use-locale";
@@ -19,7 +15,6 @@ import { db, dbReady, schema } from "@/db";
 import { eq } from "drizzle-orm";
 import {
   createSosRequest,
-  detectClientOs,
   ensureClientPortalHref,
   fetchSosPackageConfig,
   fetchSosRequestById,
@@ -39,15 +34,14 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card";
-import { cn } from "@/lib/utils";
 
 /**
  * Branded in-portal SOS download page.
  *
  * Flow:
- *  1. Create / load SOS session (API)
- *  2. Auto-start download (session portal link and/or custom package URL)
- *  3. Client runs the app — no code to share
+ *  1. Create / load SOS session on the Default channel (API)
+ *  2. Auto-start download from that session's support_portal_link only
+ *  3. Client runs the app — no code to share, no package backup URLs
  */
 export function SosDownloadPage() {
   const { t } = useLocale();
@@ -65,13 +59,6 @@ export function SosDownloadPage() {
   const [downloaded, setDownloaded] = useState(false);
   const [copied, setCopied] = useState(false);
   const autoStarted = useRef(false);
-
-  const portalHref = useMemo(
-    () => ensureClientPortalHref(request?.supportPortalLink),
-    [request?.supportPortalLink],
-  );
-
-  const os = detectClientOs();
 
   const primaryUrl = useMemo(
     () =>
@@ -320,17 +307,6 @@ export function SosDownloadPage() {
                   )}
                   {t("sos.downloadAgain")}
                 </Button>
-                {portalHref && portalHref !== primaryUrl && (
-                  <Button
-                    type="button"
-                    variant="outline"
-                    className="gap-1.5"
-                    onClick={() => startDownload(portalHref)}
-                  >
-                    <ExternalLink className="size-4" />
-                    {t("sos.openSessionLink")}
-                  </Button>
-                )}
                 <Button
                   type="button"
                   variant="outline"
@@ -359,86 +335,6 @@ export function SosDownloadPage() {
                   <RefreshCw className="size-4" />
                 </Button>
               </div>
-
-              {/* OS-specific custom package buttons */}
-              {pkg?.hasCustomPackage && (
-                <div className="space-y-2 border-t border-border pt-4">
-                  <p className="text-xs font-medium text-muted-foreground">
-                    {t("sos.directPackageTitle")}
-                  </p>
-                  <div className="flex flex-wrap gap-2">
-                    {pkg.packageUrls.windows && (
-                      <Button
-                        type="button"
-                        size="sm"
-                        variant={os === "windows" ? "default" : "outline"}
-                        className={cn(
-                          "gap-1.5",
-                          os === "windows" && "bg-red-600 hover:bg-red-700",
-                        )}
-                        onClick={() => startDownload(pkg.packageUrls.windows)}
-                      >
-                        <Monitor className="size-3.5" />
-                        Windows
-                      </Button>
-                    )}
-                    {pkg.packageUrls.mac && (
-                      <Button
-                        type="button"
-                        size="sm"
-                        variant={os === "mac" ? "default" : "outline"}
-                        className={cn(
-                          "gap-1.5",
-                          os === "mac" && "bg-red-600 hover:bg-red-700",
-                        )}
-                        onClick={() => startDownload(pkg.packageUrls.mac)}
-                      >
-                        <Apple className="size-3.5" />
-                        Mac
-                      </Button>
-                    )}
-                    {pkg.packageUrls.linux && (
-                      <Button
-                        type="button"
-                        size="sm"
-                        variant={os === "linux" ? "default" : "outline"}
-                        className="gap-1.5"
-                        onClick={() => startDownload(pkg.packageUrls.linux)}
-                      >
-                        <Monitor className="size-3.5" />
-                        Linux
-                      </Button>
-                    )}
-                    {pkg.packageUrls.android && (
-                      <Button
-                        type="button"
-                        size="sm"
-                        variant={os === "android" ? "default" : "outline"}
-                        className="gap-1.5"
-                        onClick={() => startDownload(pkg.packageUrls.android)}
-                      >
-                        <Smartphone className="size-3.5" />
-                        Android
-                      </Button>
-                    )}
-                    {pkg.packageUrls.share && (
-                      <Button
-                        type="button"
-                        size="sm"
-                        variant="outline"
-                        className="gap-1.5"
-                        onClick={() => startDownload(pkg.packageUrls.share)}
-                      >
-                        <ExternalLink className="size-3.5" />
-                        {t("sos.packageShareLink")}
-                      </Button>
-                    )}
-                  </div>
-                  <p className="text-[11px] text-muted-foreground">
-                    {t("sos.directPackageHint")}
-                  </p>
-                </div>
-              )}
 
               {primaryUrl && (
                 <p className="break-all font-mono text-[11px] text-muted-foreground">

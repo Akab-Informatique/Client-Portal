@@ -783,9 +783,6 @@ export function buildTechnicianConnectUrl(opts: {
   return `st-business://com.splashtop.business/?${params.toString()}`;
 }
 
-/** Classic Splashtop SOS download / run page (no Open API required). */
-export const CLASSIC_SOS_PORTAL_URL = "https://sos.splashtop.com";
-
 /**
  * Map Splashtop session fields → portal status.
  */

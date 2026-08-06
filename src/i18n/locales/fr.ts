@@ -204,14 +204,14 @@ export const fr: Dictionary = {
     openClientLink: "Télécharger à nouveau",
     openDownloadPage: "Ouvrir la page de téléchargement",
     downloadPageHint:
-      "Ouvre notre page de téléchargement personnalisée — l’appli démarre automatiquement.",
+      "Ouvre notre page de téléchargement — le lien de session du canal Default démarre automatiquement.",
     customPackageNote:
-      "Le personnel peut personnaliser l’appli (logo/nom) via SOS Customization Splashtop et définir les URL du package dans .env.",
+      "Le téléchargement utilise uniquement le lien de session du canal Default Splashtop (pas d’URL de package de secours).",
     copyLink: "Copier le lien",
     copied: "Copié",
     packageDefaultName: "Assistance à distance",
     downloadPageDesc:
-      "Votre session d’assistance sécurisée est prête. Le téléchargement démarre automatiquement — lancez le fichier et attendez un technicien. Aucun code à saisir.",
+      "Votre session d’assistance sécurisée est prête. Le téléchargement de session démarre automatiquement — lancez le fichier et attendez un technicien. Aucun code à saisir.",
     downloadTitle: "Télécharger l’appli d’assistance",
     downloadSubtitle:
       "Si le téléchargement n’a pas démarré, utilisez le bouton ci-dessous. Puis ouvrez le fichier (Exécuter / Conserver).",
@@ -219,11 +219,11 @@ export const fr: Dictionary = {
     downloadTriggered: "Téléchargement démarré",
     downloadAgain: "Télécharger maintenant",
     openSessionLink: "Ouvrir le lien de session",
-    directPackageTitle: "Package direct (appli personnalisée)",
+    directPackageTitle: "Package direct (désactivé)",
     directPackageHint:
-      "Ces liens proviennent de votre package SOS personnalisé (Management → SOS Customization → Share).",
+      "Les liens de package de secours sont désactivés. Seul le lien de session du canal Default est utilisé.",
     packageShareLink: "Page de partage du package",
-    downloadStep1: "Le téléchargement démarre automatiquement (ou cliquez Télécharger maintenant).",
+    downloadStep1: "Le téléchargement démarre automatiquement depuis le lien de session (ou cliquez Télécharger maintenant).",
     downloadStep2: "Ouvrez le fichier — choisissez Exécuter / Ouvrir / Conserver si demandé.",
     downloadStep3: "Laissez l’appli SOS ouverte ; un technicien se connectera sous peu.",
     backToPortal: "← Retour au portail",

@@ -292,40 +292,18 @@ export function detectClientOs(): "windows" | "mac" | "linux" | "android" | "oth
 }
 
 /**
- * Pick the best auto-download URL for the branded download page.
- * Session portal link is preferred for API-bound sessions (no code to share).
- * Custom package URLs are used when mode is package/both or as OS-specific buttons.
+ * Pick the auto-download URL for the branded download page.
+ * ONLY the Default-channel API session portal link is used — no custom
+ * package / share / OS backup URLs (those bypass the queued session).
  */
 export function pickSosDownloadUrl(opts: {
   supportPortalLink?: string | null;
   packageConfig?: SosPackageConfig | null;
   preferPackage?: boolean;
 }): string | null {
-  const session = ensureClientPortalHref(opts.supportPortalLink);
-  const cfg = opts.packageConfig;
-  const urls = cfg?.packageUrls;
-  const os = detectClientOs();
-  const osUrl =
-    os === "windows"
-      ? urls?.windows
-      : os === "mac"
-        ? urls?.mac
-        : os === "linux"
-          ? urls?.linux
-          : os === "android"
-            ? urls?.android
-            : null;
-  const packageUrl = osUrl || urls?.share || null;
-
-  const mode = cfg?.mode ?? "session";
-  if (opts.preferPackage || mode === "package") {
-    return packageUrl || session;
-  }
-  if (mode === "both") {
-    // Auto-start session (API binding); package buttons remain on the page
-    return session || packageUrl;
-  }
-  return session || packageUrl;
+  void opts.packageConfig;
+  void opts.preferPackage;
+  return ensureClientPortalHref(opts.supportPortalLink);
 }
 
 /** Trigger a file download / navigation without leaving the branded page. */
