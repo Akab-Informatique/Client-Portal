@@ -847,6 +847,17 @@ graphHint:
     findSites: "Trouver des sites",
     siteLinked: "Site lié",
     siteNotLinked: "Non lié",
+    clientSubtitle:
+      "Appareils de votre entreprise via Datto RMM. Contactez votre fournisseur si quelque chose semble incorrect.",
+    clientNoCompanyTitle: "Aucune entreprise liée",
+    clientNoCompanyDesc:
+      "Votre compte n'est pas lié à une entreprise. Demandez à votre fournisseur de corriger votre utilisateur portail.",
+    clientNotReadyTitle: "Inventaire d'appareils indisponible",
+    clientNotReadyDesc:
+      "Votre fournisseur n'a pas encore terminé la connexion de la supervision des appareils. Réessayez plus tard.",
+    clientNoSiteTitle: "Aucun appareil lié pour le moment",
+    clientNoSiteDesc:
+      "Votre entreprise n'est pas encore liée à un site de supervision. Demandez à votre fournisseur de le lier sous Clients.",
   },
   passwords: {
     title: "Mots de passe",
@@ -1117,6 +1128,9 @@ graphHint:
     permPasswordsHint: "Coffre IT Glue / MyGlue pour ce client.",
     permDirectory: "Annuaire",
     permDirectoryHint: "Annuaire des personnes de l'entreprise.",
+    permDevices: "Appareils",
+    permDevicesHint:
+      "Voir l'inventaire d'appareils Datto RMM de cette entreprise (en ligne/hors ligne, SE, dernier utilisateur).",
     permBilling: "Facturation",
     permBillingHint:
       "Factures et contrats. Un forçage par utilisateur peut encore activer/désactiver.",

@@ -12,6 +12,7 @@ import { ensureDemoAutotaskIds, seedIfNeeded } from "@/lib/seed";
 import { isLocale } from "@/i18n";
 import {
   ProtectedRoute,
+  RequireClientPermission,
   RequirePermission,
 } from "@/components/layout/ProtectedRoute";
 import { LoginPage } from "@/pages/LoginPage";
@@ -36,6 +37,7 @@ import { ClientBoardPage } from "@/pages/client/ClientBoardPage";
 import { ClientTicketsPage } from "@/pages/client/ClientTicketsPage";
 import { ClientDocumentationPage } from "@/pages/client/ClientDocumentationPage";
 import { ClientBillingPage } from "@/pages/client/ClientBillingPage";
+import { ClientDevicesPage } from "@/pages/client/ClientDevicesPage";
 import { PasswordsPage } from "@/pages/PasswordsPage";
 import { DirectoryPage, ProfilePage } from "@/pages/ProfilePage";
 import { firstAllowedAdminPath } from "@/lib/permissions";
@@ -171,6 +173,14 @@ function AppRoutes() {
           <Route path="documentation" element={<ClientDocumentationPage />} />
           <Route path="passwords" element={<PasswordsPage />} />
           <Route path="directory" element={<DirectoryPage />} />
+          <Route
+            path="devices"
+            element={
+              <RequireClientPermission permission="devices">
+                <ClientDevicesPage />
+              </RequireClientPermission>
+            }
+          />
           <Route path="billing" element={<ClientBillingPage />} />
           {/* Legacy /client/sos URL → stay in portal (SOS is a dialog now) */}
           <Route path="sos" element={<Navigate to="/client" replace />} />

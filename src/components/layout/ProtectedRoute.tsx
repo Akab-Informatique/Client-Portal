@@ -6,6 +6,10 @@ import {
   permissionForAdminPath,
   type StaffPermission,
 } from "@/lib/permissions";
+import {
+  hasClientPermission,
+  type ClientPermission,
+} from "@/lib/client-permissions";
 import { useLocale } from "@/hooks/use-locale";
 import { AkabLoader } from "@/components/AkabLoader";
 
@@ -75,6 +79,45 @@ export function RequirePermission({
   }
 
   if (!user || user.role === "client" || !can(permission)) {
+    return (
+      <div className="mx-auto max-w-lg rounded-xl border border-border bg-card p-8 text-center">
+        <h2 className="text-lg font-bold">{t("staffRoles.accessDenied")}</h2>
+        <p className="mt-2 text-sm text-muted-foreground">
+          {t("staffRoles.accessDeniedDesc")}
+        </p>
+      </div>
+    );
+  }
+
+  return <>{children}</>;
+}
+
+/** Nested guard for client-portal sections gated by user-role modules. */
+export function RequireClientPermission({
+  permission,
+  children,
+}: {
+  permission: ClientPermission;
+  children: React.ReactNode;
+}) {
+  const { user, loading } = useAuth();
+  const { t } = useLocale();
+
+  if (loading) {
+    return (
+      <div className="flex min-h-[40vh] items-center justify-center">
+        <AkabLoader size="md" label={t("common.loading")} />
+      </div>
+    );
+  }
+
+  const allowed =
+    user?.role === "client" &&
+    (permission === "billing"
+      ? !!user.billing_enabled
+      : hasClientPermission(user.client_permissions, permission));
+
+  if (!user || user.role !== "client" || !allowed) {
     return (
       <div className="mx-auto max-w-lg rounded-xl border border-border bg-card p-8 text-center">
         <h2 className="text-lg font-bold">{t("staffRoles.accessDenied")}</h2>

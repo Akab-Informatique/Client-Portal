@@ -15,6 +15,7 @@ export const CLIENT_PERMISSIONS = [
   "documentation",
   "passwords",
   "directory",
+  "devices",
   "billing",
 ] as const;
 
@@ -47,19 +48,27 @@ export const CLIENT_PERMISSION_META: Record<
     labelKey: "clientRoles.permDirectory",
     hintKey: "clientRoles.permDirectoryHint",
   },
+  devices: {
+    labelKey: "clientRoles.permDevices",
+    hintKey: "clientRoles.permDevicesHint",
+  },
   billing: {
     labelKey: "clientRoles.permBilling",
     hintKey: "clientRoles.permBillingHint",
   },
 };
 
-/** Default for Standard core — full portal except billing. */
+/**
+ * Default for Standard core — full portal except billing + devices.
+ * Devices must be enabled explicitly on a role (sensitive RMM inventory).
+ */
 export const STANDARD_CLIENT_PERMISSIONS: ClientPermissionMap = {
   board: true,
   tickets: true,
   documentation: true,
   passwords: true,
   directory: true,
+  devices: false,
   billing: false,
 };
 
@@ -70,6 +79,7 @@ export const BILLING_CLIENT_PERMISSIONS: ClientPermissionMap = {
   documentation: false,
   passwords: false,
   directory: false,
+  devices: false,
   billing: true,
 };
 
@@ -79,6 +89,7 @@ export const EMPTY_CLIENT_PERMISSIONS: ClientPermissionMap = {
   documentation: false,
   passwords: false,
   directory: false,
+  devices: false,
   billing: false,
 };
 
@@ -98,12 +109,14 @@ export function parseClientPermissions(
 ): ClientPermissionMap {
   // Legacy rows only stored { billing: bool } — treat missing section keys as
   // "on" for core portal sections so upgrades don't lock everyone out.
+  // devices stays off until explicitly granted (RMM inventory).
   const base: ClientPermissionMap = {
     board: true,
     tickets: true,
     documentation: true,
     passwords: true,
     directory: true,
+    devices: false,
     billing: false,
   };
   if (!raw) return base;

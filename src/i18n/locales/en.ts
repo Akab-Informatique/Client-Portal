@@ -836,6 +836,17 @@ graphHint:
     findSites: "Find sites",
     siteLinked: "Site linked",
     siteNotLinked: "Not linked",
+    clientSubtitle:
+      "Devices for your company from Datto RMM. Contact your provider if something looks wrong.",
+    clientNoCompanyTitle: "No company linked",
+    clientNoCompanyDesc:
+      "Your account is not linked to a company. Ask your provider to fix your portal user.",
+    clientNotReadyTitle: "Device inventory unavailable",
+    clientNotReadyDesc:
+      "Your provider has not finished connecting device monitoring yet. Try again later.",
+    clientNoSiteTitle: "No devices linked yet",
+    clientNoSiteDesc:
+      "Your company is not linked to a monitoring site yet. Ask your provider to link it under Clients.",
   },
   passwords: {
     title: "Passwords",
@@ -1104,6 +1115,9 @@ graphHint:
     permPasswordsHint: "IT Glue / MyGlue password vault for this client.",
     permDirectory: "Directory",
     permDirectoryHint: "Company people directory.",
+    permDevices: "Devices",
+    permDevicesHint:
+      "View this company's Datto RMM device inventory (online/offline, OS, last user).",
     permBilling: "Billing",
     permBillingHint:
       "Invoices & Contracts. Per-user override can still force on/off.",

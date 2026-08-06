@@ -823,6 +823,13 @@ export function useClientNav(unreadCount = 0): NavItem[] {
         icon: Users,
       });
     }
+    if (allow("devices")) {
+      items.push({
+        to: "/client/devices",
+        label: t("nav.devices"),
+        icon: Monitor,
+      });
+    }
     // Billing: stacked role permission + optional per-user override
     if (user?.billing_enabled) {
       items.push({
