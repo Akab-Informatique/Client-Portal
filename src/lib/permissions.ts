@@ -13,6 +13,7 @@ export const STAFF_PERMISSIONS = [
   "documentation",
   "passwords",
   "directory",
+  "devices",
   "profiles",
 ] as const;
 
@@ -31,6 +32,7 @@ export const ADMIN_PERMISSIONS: PermissionMap = {
   documentation: true,
   passwords: true,
   directory: true,
+  devices: true,
   profiles: true,
 };
 
@@ -47,6 +49,7 @@ export const TECHNICIAN_PERMISSIONS: PermissionMap = {
   documentation: true,
   passwords: true,
   directory: true,
+  devices: true,
   profiles: true,
 };
 
@@ -60,6 +63,7 @@ export const EMPTY_PERMISSIONS: PermissionMap = {
   documentation: false,
   passwords: false,
   directory: false,
+  devices: false,
   profiles: false,
 };
 
@@ -108,6 +112,7 @@ export function firstAllowedAdminPath(perms: PermissionMap | null | undefined): 
     { perm: "messages", path: "/admin/messages" },
     { perm: "documentation", path: "/admin/documentation" },
     { perm: "passwords", path: "/admin/passwords" },
+    { perm: "devices", path: "/admin/devices" },
     { perm: "clients", path: "/admin/clients" },
     // Staff & Roles page self-gates technicians vs roles tabs — same path for both
     { perm: "technicians", path: "/admin/technicians" },
@@ -144,9 +149,12 @@ export function permissionForAdminPath(pathname: string): StaffPermission | null
   if (path.startsWith("/admin/todo")) return null;
   // Admin billing placeholders — open to staff in admin shell
   if (path.startsWith("/admin/billing")) return null;
+  // SOS queue is available to any signed-in staff
+  if (path.startsWith("/admin/sos")) return null;
   if (path.startsWith("/admin/messages")) return "messages";
   if (path.startsWith("/admin/documentation")) return "documentation";
   if (path.startsWith("/admin/passwords")) return "passwords";
+  if (path.startsWith("/admin/devices")) return "devices";
   if (path.startsWith("/admin/directory")) return "directory";
   if (path.startsWith("/admin/profile")) return "profiles";
   return null;

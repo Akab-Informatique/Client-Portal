@@ -86,6 +86,8 @@ CREATE TABLE IF NOT EXISTS sos_requests (
     ["companies", "documentation_title TEXT"],
     ["companies", "documentation_enabled BOOLEAN"],
     ["companies", "itglue_organization_id TEXT"],
+    ["companies", "datto_rmm_site_uid TEXT"],
+    ["companies", "datto_rmm_site_name TEXT"],
     ["users", "job_title TEXT"],
     ["users", "phone TEXT"],
     ["users", "mobile TEXT"],

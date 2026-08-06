@@ -231,6 +231,11 @@ async function ensureDefaultStaffRolesInner(): Promise<{
       current.passwords = true;
       permsChanged = true;
     }
+    // New Operations → Devices (Datto RMM) section — default on for technicians
+    if (raw.devices === undefined) {
+      current.devices = true;
+      permsChanged = true;
+    }
     if (permsChanged) {
       patch.permissions = serializePermissions(current);
     }

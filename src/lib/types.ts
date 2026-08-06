@@ -37,6 +37,10 @@ export interface Company {
   documentation_enabled: boolean | null;
   /** IT Glue / MyGlue organization id for passwords vault */
   itglue_organization_id: string | null;
+  /** Datto RMM site UID — devices list is scoped to this site */
+  datto_rmm_site_uid: string | null;
+  /** Cached Datto RMM site name for display */
+  datto_rmm_site_name: string | null;
   created_at: Date | string;
 }
 

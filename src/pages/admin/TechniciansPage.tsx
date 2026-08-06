@@ -100,6 +100,7 @@ const PERM_LABEL: Record<StaffPermission, string> = {
   documentation: "staffRoles.permDocumentation",
   passwords: "staffRoles.permPasswords",
   directory: "staffRoles.permDirectory",
+  devices: "staffRoles.permDevices",
   profiles: "staffRoles.permProfiles",
 };
 
@@ -113,6 +114,7 @@ const PERM_DESC: Record<StaffPermission, string> = {
   documentation: "staffRoles.permDescDocumentation",
   passwords: "staffRoles.permDescPasswords",
   directory: "staffRoles.permDescDirectory",
+  devices: "staffRoles.permDescDevices",
   profiles: "staffRoles.permDescProfiles",
 };
 

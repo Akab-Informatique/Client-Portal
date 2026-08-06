@@ -230,6 +230,8 @@ const MIGRATION_STATEMENTS: string[] = [
     documentation_title TEXT,
     documentation_enabled BOOLEAN,
     itglue_organization_id TEXT,
+    datto_rmm_site_uid TEXT,
+    datto_rmm_site_name TEXT,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
   )`,
   `CREATE TABLE IF NOT EXISTS staff_roles (
@@ -363,6 +365,8 @@ const ADDITIVE_COLUMNS: Array<{ table: string; column: string; def: string }> =
     { table: "companies", column: "documentation_title", def: "TEXT" },
     { table: "companies", column: "documentation_enabled", def: "BOOLEAN" },
     { table: "companies", column: "itglue_organization_id", def: "TEXT" },
+    { table: "companies", column: "datto_rmm_site_uid", def: "TEXT" },
+    { table: "companies", column: "datto_rmm_site_name", def: "TEXT" },
     { table: "users", column: "job_title", def: "TEXT" },
     { table: "users", column: "phone", def: "TEXT" },
     { table: "users", column: "mobile", def: "TEXT" },
@@ -394,6 +398,7 @@ const ADMIN_PERMISSIONS_JSON = JSON.stringify({
   documentation: true,
   passwords: true,
   directory: true,
+  devices: true,
   profiles: true,
 });
 
@@ -407,6 +412,7 @@ const TECH_PERMISSIONS_JSON = JSON.stringify({
   documentation: true,
   passwords: true,
   directory: true,
+  devices: true,
   profiles: true,
 });
 

@@ -87,6 +87,10 @@ import {
   fetchSharePointStatus,
   resolveSharePointSite,
 } from "@/lib/sharepoint";
+import {
+  fetchDattoRmmSites,
+  type DattoRmmSite,
+} from "@/lib/datto-rmm";
 
 const emptyCompany = {
   name: "",
@@ -102,6 +106,8 @@ const emptyCompany = {
   documentation_title: "",
   documentation_enabled: true,
   itglue_organization_id: "",
+  datto_rmm_site_uid: "",
+  datto_rmm_site_name: "",
   active: true,
 };
 
@@ -162,6 +168,10 @@ export function ClientsPage() {
   const [spResolving, setSpResolving] = useState(false);
   const [spResolveMsg, setSpResolveMsg] = useState<string | null>(null);
   const [spResolveOk, setSpResolveOk] = useState<boolean | null>(null);
+  const [rmmSearch, setRmmSearch] = useState("");
+  const [rmmHits, setRmmHits] = useState<DattoRmmSite[]>([]);
+  const [rmmSearching, setRmmSearching] = useState(false);
+  const [rmmError, setRmmError] = useState<string | null>(null);
   /** Expanded company row showing that company's portal users */
   const [usersExpandedId, setUsersExpandedId] = useState<number | null>(null);
   const [userQuery, setUserQuery] = useState("");
@@ -258,6 +268,9 @@ export function ClientsPage() {
     setAtHits([]);
     setAtError(null);
     setSpResolveMsg(null);
+    setRmmSearch("");
+    setRmmHits([]);
+    setRmmError(null);
     setCompanyOpen(true);
   };
 
@@ -277,6 +290,8 @@ export function ClientsPage() {
       documentation_title: company.documentation_title ?? "",
       documentation_enabled: company.documentation_enabled !== false,
       itglue_organization_id: company.itglue_organization_id ?? "",
+      datto_rmm_site_uid: company.datto_rmm_site_uid ?? "",
+      datto_rmm_site_name: company.datto_rmm_site_name ?? "",
       active: company.active,
     });
     setError(null);
@@ -285,7 +300,40 @@ export function ClientsPage() {
     setAtError(null);
     setSpResolveMsg(null);
     setSpResolveOk(null);
+    setRmmSearch(company.datto_rmm_site_name || company.name);
+    setRmmHits([]);
+    setRmmError(null);
     setCompanyOpen(true);
+  };
+
+  const searchDattoSites = async () => {
+    setRmmSearching(true);
+    setRmmError(null);
+    try {
+      const res = await fetchDattoRmmSites(rmmSearch.trim() || undefined);
+      if (res.error && res.sites.length === 0) {
+        setRmmError(res.error);
+        setRmmHits([]);
+      } else {
+        setRmmHits(res.sites.slice(0, 40));
+        if (res.error) setRmmError(res.error);
+      }
+    } catch (e) {
+      setRmmHits([]);
+      setRmmError(e instanceof Error ? e.message : "Datto RMM search failed");
+    } finally {
+      setRmmSearching(false);
+    }
+  };
+
+  const pickDattoSite = (site: DattoRmmSite) => {
+    setForm((f) => ({
+      ...f,
+      datto_rmm_site_uid: site.uid,
+      datto_rmm_site_name: site.name,
+    }));
+    setRmmHits([]);
+    setRmmError(null);
   };
 
   const loadRolesForCompany = async (companyId: number) => {
@@ -538,6 +586,8 @@ export function ClientsPage() {
       documentation_title: form.documentation_title.trim() || null,
       documentation_enabled: form.documentation_enabled,
       itglue_organization_id: form.itglue_organization_id.trim() || null,
+      datto_rmm_site_uid: form.datto_rmm_site_uid.trim() || null,
+      datto_rmm_site_name: form.datto_rmm_site_name.trim() || null,
     };
     if (editing) {
       await db
@@ -1536,8 +1586,7 @@ export function ClientsPage() {
               </p>
             </div>
 
-            <div className="space-y-2">
-              <div className="space-y-2 rounded-lg border border-border bg-muted/20 p-3">
+            <div className="space-y-2 rounded-lg border border-border bg-muted/20 p-3">
               <Label htmlFor="citglue">IT Glue organization ID</Label>
               <Input
                 id="citglue"
@@ -1558,7 +1607,114 @@ export function ClientsPage() {
               </p>
             </div>
 
-            <Label htmlFor="cnotes">Notes</Label>
+            <div className="space-y-3 rounded-lg border border-border bg-muted/20 p-3">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <div>
+                  <p className="text-sm font-semibold">{t("devices.siteField")}</p>
+                  <p className="text-xs text-muted-foreground">
+                    {t("devices.siteFieldHint")}
+                  </p>
+                </div>
+                {form.datto_rmm_site_uid.trim() ? (
+                  <Badge
+                    variant="outline"
+                    className="border-primary/40 bg-primary/10 text-primary"
+                  >
+                    {t("devices.siteLinked")}
+                  </Badge>
+                ) : (
+                  <Badge variant="outline">{t("devices.siteNotLinked")}</Badge>
+                )}
+              </div>
+              <div className="grid gap-2 sm:grid-cols-2">
+                <div className="space-y-1.5">
+                  <Label htmlFor="crmmname">{t("devices.siteNameCached")}</Label>
+                  <Input
+                    id="crmmname"
+                    placeholder="e.g. Acme HQ"
+                    value={form.datto_rmm_site_name}
+                    onChange={(e) =>
+                      setForm((f) => ({
+                        ...f,
+                        datto_rmm_site_name: e.target.value,
+                      }))
+                    }
+                  />
+                </div>
+                <div className="space-y-1.5">
+                  <Label htmlFor="crmmuid">{t("devices.siteUidManual")}</Label>
+                  <Input
+                    id="crmmuid"
+                    placeholder="Site UID"
+                    value={form.datto_rmm_site_uid}
+                    onChange={(e) =>
+                      setForm((f) => ({
+                        ...f,
+                        datto_rmm_site_uid: e.target.value,
+                      }))
+                    }
+                  />
+                </div>
+              </div>
+              <div className="flex gap-2">
+                <Input
+                  placeholder={t("devices.siteSearchPh")}
+                  value={rmmSearch}
+                  onChange={(e) => setRmmSearch(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter") {
+                      e.preventDefault();
+                      void searchDattoSites();
+                    }
+                  }}
+                />
+                <Button
+                  type="button"
+                  variant="outline"
+                  disabled={rmmSearching}
+                  onClick={() => void searchDattoSites()}
+                >
+                  {rmmSearching ? (
+                    <Loader2 className="size-4 animate-spin" />
+                  ) : (
+                    <Search className="size-4" />
+                  )}
+                  {t("devices.findSites")}
+                </Button>
+              </div>
+              {rmmError && (
+                <p className="text-xs text-muted-foreground">{rmmError}</p>
+              )}
+              {rmmHits.length > 0 && (
+                <div className="max-h-40 space-y-1 overflow-y-auto rounded-lg border border-border bg-card p-1">
+                  {rmmHits.map((site) => (
+                    <button
+                      key={site.uid}
+                      type="button"
+                      className="flex w-full items-center justify-between gap-2 rounded-md px-2 py-2 text-left text-sm hover:bg-muted"
+                      onClick={() => pickDattoSite(site)}
+                    >
+                      <span className="min-w-0">
+                        <span className="block truncate font-medium">
+                          {site.name}
+                        </span>
+                        <span className="block truncate text-xs text-muted-foreground">
+                          {site.devicesStatus?.numberOfDevices != null
+                            ? `${site.devicesStatus.numberOfDevices} devices`
+                            : site.description || site.uid}
+                        </span>
+                      </span>
+                      <span className="shrink-0 font-mono text-[10px] text-primary">
+                        {site.uid.slice(0, 8)}…
+                      </span>
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
+
+            <div className="space-y-2">
+              <Label htmlFor="cnotes">Notes</Label>
               <Textarea
                 id="cnotes"
                 rows={3}

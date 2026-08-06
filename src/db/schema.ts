@@ -46,6 +46,13 @@ export const companies = pgTable("companies", {
   documentation_enabled: boolean("documentation_enabled"),
   /** IT Glue / MyGlue organization ID for this client. */
   itglue_organization_id: text("itglue_organization_id"),
+  /**
+   * Datto RMM site UID for this client company.
+   * Devices under Operations are loaded from this site only.
+   */
+  datto_rmm_site_uid: text("datto_rmm_site_uid"),
+  /** Optional display name of the linked Datto RMM site (cached for UI). */
+  datto_rmm_site_name: text("datto_rmm_site_name"),
   created_at: timestamp("created_at").defaultNow().notNull(),
 });
 

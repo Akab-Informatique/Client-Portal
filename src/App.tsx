@@ -28,6 +28,7 @@ import {
 } from "@/pages/admin/BillingPlaceholderPage";
 import { TodoPage } from "@/pages/admin/TodoPage";
 import { SosQueuePage } from "@/pages/admin/SosQueuePage";
+import { DevicesPage } from "@/pages/admin/DevicesPage";
 import { ClientRolesPage } from "@/pages/admin/ClientRolesPage";
 import { ClientLayout } from "@/pages/client/ClientLayout";
 import { ClientDashboard } from "@/pages/client/ClientDashboard";
@@ -108,6 +109,14 @@ function AppRoutes() {
           <Route path="todo" element={<TodoPage />} />
           {/* Splashtop SOS incoming queue */}
           <Route path="sos" element={<SosQueuePage />} />
+          <Route
+            path="devices"
+            element={
+              <RequirePermission permission="devices">
+                <DevicesPage />
+              </RequirePermission>
+            }
+          />
           <Route
             path="messages"
             element={

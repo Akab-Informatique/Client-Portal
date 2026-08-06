@@ -8,6 +8,7 @@ import {
   KeyRound,
   Loader2,
   Mail,
+  Monitor,
   Settings2,
   Shield,
   Siren,
@@ -34,6 +35,7 @@ import {
   isCompanySharePointLinked,
 } from "@/lib/sharepoint";
 import { fetchItGlueStatus } from "@/lib/itglue";
+import { fetchDattoRmmStatus } from "@/lib/datto-rmm";
 import { fetchSmtpStatus, type SmtpStatusResponse } from "@/lib/smtp";
 import { fetchSplashtopStatus } from "@/lib/sos";
 
@@ -74,6 +76,16 @@ export function SettingsPage() {
   const [stChecking, setStChecking] = useState(false);
   const [spStatus, setSpStatus] = useState<ConnState>("unknown");
   const [igStatus, setIgStatus] = useState<ConnState>("unknown");
+  const [rmmStatus, setRmmStatus] = useState<ConnState>("unknown");
+  const [rmmDetail, setRmmDetail] = useState<{
+    message?: string | null;
+    apiUrl?: string;
+    siteCount?: number | null;
+    accountName?: string | null;
+    configured?: boolean;
+  } | null>(null);
+  const [rmmChecking, setRmmChecking] = useState(false);
+  const [rmmLinked, setRmmLinked] = useState<number | null>(null);
   const [smtpStatus, setSmtpStatus] = useState<ConnState>("unknown");
   const [smtpDetail, setSmtpDetail] = useState<SmtpStatusResponse | null>(null);
   const [smtpVerifying, setSmtpVerifying] = useState(false);
@@ -148,9 +160,32 @@ export function SettingsPage() {
     }
   };
 
+  const loadDattoRmmStatus = async (refresh: boolean) => {
+    setRmmChecking(true);
+    try {
+      const s = await fetchDattoRmmStatus(refresh);
+      setRmmDetail({
+        message: s.error,
+        apiUrl: s.apiUrl,
+        siteCount: s.siteCount,
+        accountName: s.accountName,
+        configured: s.configured,
+      });
+      if (!s.configured) setRmmStatus("off");
+      else if (s.ok) setRmmStatus("ok");
+      else setRmmStatus("fail");
+    } catch {
+      setRmmStatus("fail");
+      setRmmDetail({ message: "Could not reach /api/datto-rmm/status" });
+    } finally {
+      setRmmChecking(false);
+    }
+  };
+
   useEffect(() => {
     void loadAutotaskStatus(false);
     void loadSplashtopStatus(false);
+    void loadDattoRmmStatus(false);
     fetchSharePointStatus(false)
       .then((s) => {
         if (!s.configured) setSpStatus("off");
@@ -196,6 +231,9 @@ export function SettingsPage() {
       setIgLinked(
         clients.filter((c) => !!(c.itglue_organization_id || "").trim())
           .length,
+      );
+      setRmmLinked(
+        clients.filter((c) => !!(c.datto_rmm_site_uid || "").trim()).length,
       );
     })();
     return () => {
@@ -609,6 +647,74 @@ export function SettingsPage() {
                     <Link to="/admin/passwords">
                       {t("settings.itglueLinkPasswords")}
                     </Link>
+                  </Button>
+                )}
+                {can("clients") && (
+                  <Button variant="outline" size="sm" asChild>
+                    <Link to="/admin/clients">{t("nav.clients")}</Link>
+                  </Button>
+                )}
+              </div>
+            </div>
+
+            <div className="flex flex-col gap-3 rounded-xl border border-border p-4">
+              <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+                <div className="flex items-start gap-3">
+                  <div className="flex size-10 shrink-0 items-center justify-center rounded-lg bg-muted">
+                    <Monitor className="size-5 text-foreground" />
+                  </div>
+                  <div>
+                    <p className="font-semibold">Datto RMM</p>
+                    <p className="text-xs text-muted-foreground">
+                      Devices under Operations for each linked client site.
+                    </p>
+                    {rmmDetail?.apiUrl && (
+                      <p className="mt-1.5 font-mono text-[11px] text-muted-foreground">
+                        {rmmDetail.apiUrl}
+                        {rmmDetail.accountName
+                          ? ` · ${rmmDetail.accountName}`
+                          : ""}
+                        {rmmDetail.siteCount != null
+                          ? ` · ${rmmDetail.siteCount} sites`
+                          : ""}
+                      </p>
+                    )}
+                    {rmmDetail?.message && rmmStatus === "fail" && (
+                      <p className="mt-1.5 text-xs text-destructive">
+                        {rmmDetail.message}
+                      </p>
+                    )}
+                  </div>
+                </div>
+                <div className="flex flex-wrap items-center gap-2">
+                  {statusBadge(
+                    rmmStatus,
+                    t("devices.rmmConnected"),
+                    t("settings.statusNotConfigured"),
+                  )}
+                  {rmmLinked != null && totalClients != null && (
+                    <Badge variant="outline" className="tabular-nums">
+                      {rmmLinked}/{totalClients} sites linked
+                    </Badge>
+                  )}
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    disabled={rmmChecking}
+                    onClick={() => void loadDattoRmmStatus(true)}
+                  >
+                    {rmmChecking ? (
+                      <Loader2 className="size-3.5 animate-spin" />
+                    ) : (
+                      t("common.refresh")
+                    )}
+                  </Button>
+                </div>
+              </div>
+              <div className="flex flex-wrap gap-2 pl-0 sm:pl-[3.25rem]">
+                {can("devices") && (
+                  <Button variant="outline" size="sm" asChild>
+                    <Link to="/admin/devices">{t("nav.devices")}</Link>
                   </Button>
                 )}
                 {can("clients") && (

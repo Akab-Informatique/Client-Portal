@@ -12,6 +12,7 @@ import {
   LogOut,
   Megaphone,
   Menu,
+  Monitor,
   Moon,
   Receipt,
   Settings2,
@@ -686,6 +687,13 @@ export function useAdminNavEntries(): NavEntry[] {
         to: "/admin/passwords",
         label: t("nav.passwords"),
         icon: KeyRound,
+      });
+    }
+    if (allow("devices")) {
+      operationsChildren.push({
+        to: "/admin/devices",
+        label: t("nav.devices"),
+        icon: Monitor,
       });
     }
     if (allow("directory")) {
