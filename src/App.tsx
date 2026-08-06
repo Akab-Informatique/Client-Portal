@@ -35,7 +35,6 @@ import { ClientBoardPage } from "@/pages/client/ClientBoardPage";
 import { ClientTicketsPage } from "@/pages/client/ClientTicketsPage";
 import { ClientDocumentationPage } from "@/pages/client/ClientDocumentationPage";
 import { ClientBillingPage } from "@/pages/client/ClientBillingPage";
-import { SosDownloadPage } from "@/pages/client/SosDownloadPage";
 import { PasswordsPage } from "@/pages/PasswordsPage";
 import { DirectoryPage, ProfilePage } from "@/pages/ProfilePage";
 import { firstAllowedAdminPath } from "@/lib/permissions";
@@ -164,8 +163,8 @@ function AppRoutes() {
           <Route path="passwords" element={<PasswordsPage />} />
           <Route path="directory" element={<DirectoryPage />} />
           <Route path="billing" element={<ClientBillingPage />} />
-          {/* Branded SOS download page (auto-starts custom package / session link) */}
-          <Route path="sos" element={<SosDownloadPage />} />
+          {/* Legacy /client/sos URL → stay in portal (SOS is a dialog now) */}
+          <Route path="sos" element={<Navigate to="/client" replace />} />
           <Route path="profile" element={<Navigate to="me" replace />} />
           <Route path="profile/:userId" element={<ProfilePage />} />
         </Route>
