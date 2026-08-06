@@ -1,14 +1,11 @@
 import type { VercelRequest, VercelResponse } from "@vercel/node";
 import {
-  buildTechnicianConnectUrl,
-  CLASSIC_SOS_PORTAL_URL,
-  createSupportSession,
-  derivePortalStatusFromSession,
-  getSupportSession,
-  isSplashtopConfigured,
-} from "../_lib/splashtop-client.js";
+  buildMeshTechnicianConnectUrl,
+  createTemporaryAgentInvite,
+  getMeshCentralConfigFromEnv,
+  isMeshCentralConfigured,
+} from "../_lib/meshcentral-client.js";
 import {
-  getSosRequestById,
   insertSosRequest,
   listOpenSosRequests,
   listRecentSosRequests,
@@ -16,12 +13,9 @@ import {
   type SosRequestRow,
 } from "../_lib/sos-store.js";
 
-function isApiBacked(row: SosRequestRow): boolean {
-  return Boolean(row.splashtop_session_id);
-}
-
-function publicRow(row: SosRequestRow, opts?: { includeCode?: boolean }) {
-  const apiSession = isApiBacked(row);
+function publicRow(row: SosRequestRow, opts?: { staff?: boolean }) {
+  const cfg = getMeshCentralConfigFromEnv();
+  const connectUrl = opts?.staff ? buildMeshTechnicianConnectUrl(cfg) : undefined;
   return {
     id: row.id,
     companyId: row.company_id,
@@ -31,24 +25,14 @@ function publicRow(row: SosRequestRow, opts?: { includeCode?: boolean }) {
     userEmail: row.user_email,
     issue: row.issue,
     status: row.status,
+    /** Client: run MeshCentral temporary agent from this link (no code). */
     supportPortalLink: row.support_portal_link,
-    /** How the session was created: api | manual */
-    mode: apiSession ? "api" : "manual",
-    classicSosUrl: CLASSIC_SOS_PORTAL_URL,
-    /**
-     * SOS code:
-     * - staff always see it (for Connect)
-     * - client sees it in manual mode so they can confirm what they entered
-     */
-    sosCode:
-      opts?.includeCode || !apiSession ? row.sos_code ?? undefined : undefined,
-    connectUrl:
-      opts?.includeCode && row.sos_code
-        ? buildTechnicianConnectUrl({
-            sosCode: row.sos_code,
-            apiSession,
-          })
-        : undefined,
+    agentInviteUrl: row.support_portal_link,
+    mode: "meshcentral",
+    provider: "meshcentral",
+    /** Staff: open MeshCentral web console to take control */
+    connectUrl: connectUrl || undefined,
+    meshId: row.channel_id,
     expiresAt: row.expires_at,
     errorMessage: row.error_message,
     createdAt: row.created_at,
@@ -57,42 +41,9 @@ function publicRow(row: SosRequestRow, opts?: { includeCode?: boolean }) {
   };
 }
 
-async function refreshFromSplashtop(row: SosRequestRow): Promise<SosRequestRow> {
-  if (!row.splashtop_session_id || !isSplashtopConfigured()) return row;
-  const terminal = ["closed", "expired", "error"];
-  if (terminal.includes(row.status)) return row;
-  try {
-    const session = await getSupportSession(row.splashtop_session_id);
-    const nextStatus = derivePortalStatusFromSession(session, row.status);
-    const snapshot = JSON.stringify({
-      status: session.status,
-      serverName: session.serverName,
-      serverOs: session.serverOs,
-      associatedAt: session.associatedAt,
-      onlineSince: session.onlineSince,
-      connectedSince: session.connectedSince,
-    });
-    const updated = await updateSosRequest(row.id, {
-      status: nextStatus,
-      last_polled_at: new Date().toISOString(),
-      remote_snapshot: snapshot,
-      sos_code: session.code || row.sos_code,
-      support_portal_link:
-        session.supportPortalLink || row.support_portal_link,
-      expires_at: session.expiresAt || row.expires_at,
-    });
-    return updated ?? row;
-  } catch {
-    await updateSosRequest(row.id, {
-      last_polled_at: new Date().toISOString(),
-    });
-    return row;
-  }
-}
-
 /**
- * GET  /api/sos/requests?role=client|staff&userId=&companyId=
- * POST /api/sos/requests  body: { userId, userName, userEmail, companyId, companyName, issue? }
+ * GET  /api/sos/requests?role=client|staff
+ * POST /api/sos/requests — create SOS + MeshCentral temp agent invite
  */
 export default async function handler(req: VercelRequest, res: VercelResponse) {
   try {
@@ -103,9 +54,6 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         userIdRaw != null && String(userIdRaw).trim()
           ? Number(userIdRaw)
           : null;
-      const refresh =
-        String(req.query.refresh ?? "1") !== "0" &&
-        String(req.query.refresh ?? "").toLowerCase() !== "false";
       const includeClosed =
         String(req.query.includeClosed ?? "") === "1" ||
         String(req.query.includeClosed ?? "").toLowerCase() === "true";
@@ -117,43 +65,28 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
             requests: [],
           });
         }
-        let rows = await listOpenSosRequests({ userId, limit: 20 });
-        if (refresh) {
-          rows = await Promise.all(rows.map((r) => refreshFromSplashtop(r)));
-        }
+        const rows = await listOpenSosRequests({ userId, limit: 20 });
         return res.status(200).json({
-          configured: isSplashtopConfigured(),
-          mode: isSplashtopConfigured() ? "api" : "manual",
-          classicSosUrl: CLASSIC_SOS_PORTAL_URL,
-          requests: rows.map((r) => publicRow(r, { includeCode: false })),
+          configured: isMeshCentralConfigured(),
+          mode: "meshcentral",
+          provider: "meshcentral",
+          requests: rows.map((r) => publicRow(r, { staff: false })),
         });
       }
 
-      // staff queue
-      let rows = includeClosed
+      const rows = includeClosed
         ? await listRecentSosRequests({ limit: 80 })
         : await listOpenSosRequests({ limit: 100 });
-      if (refresh) {
-        rows = await Promise.all(
-          rows
-            .filter((r) =>
-              ["open", "waiting", "ready", "connected"].includes(r.status),
-            )
-            .map((r) => refreshFromSplashtop(r)),
-        );
-        // re-list after refresh so closed ones drop when includeClosed=false
-        rows = includeClosed
-          ? await listRecentSosRequests({ limit: 80 })
-          : await listOpenSosRequests({ limit: 100 });
-      }
+
       return res.status(200).json({
-        configured: isSplashtopConfigured(),
-        mode: isSplashtopConfigured() ? "api" : "manual",
-        classicSosUrl: CLASSIC_SOS_PORTAL_URL,
+        configured: isMeshCentralConfigured(),
+        mode: "meshcentral",
+        provider: "meshcentral",
+        connectUrl: buildMeshTechnicianConnectUrl(),
         openCount: rows.filter((r) =>
           ["open", "waiting", "ready", "connected"].includes(r.status),
         ).length,
-        requests: rows.map((r) => publicRow(r, { includeCode: true })),
+        requests: rows.map((r) => publicRow(r, { staff: true })),
       });
     }
 
@@ -173,24 +106,32 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         return res.status(400).json({ error: "companyId is required" });
       }
       if (!userName || !userEmail) {
-        return res.status(400).json({ error: "userName and userEmail are required" });
+        return res
+          .status(400)
+          .json({ error: "userName and userEmail are required" });
       }
 
-      // Reuse an existing open request for this user if still active
+      // Reuse active open request (same invite) when still valid
       const existing = await listOpenSosRequests({ userId, limit: 5 });
-      if (existing[0]?.support_portal_link) {
-        const refreshed = await refreshFromSplashtop(existing[0]);
-        if (["open", "waiting", "ready", "connected"].includes(refreshed.status)) {
+      const active = existing.find((r) =>
+        ["open", "waiting", "ready", "connected"].includes(r.status),
+      );
+      if (active?.support_portal_link) {
+        const exp = active.expires_at ? Date.parse(active.expires_at) : NaN;
+        const stillValid = !Number.isFinite(exp) || exp > Date.now();
+        if (stillValid) {
           return res.status(200).json({
-            configured: isSplashtopConfigured(),
+            configured: isMeshCentralConfigured(),
+            mode: "meshcentral",
+            provider: "meshcentral",
             reused: true,
-            request: publicRow(refreshed, { includeCode: false }),
+            needsRunAgent: true,
+            request: publicRow(active, { staff: false }),
           });
         }
       }
 
-      if (!isSplashtopConfigured()) {
-        // Still record a queue entry so techs see demand; mark error for link
+      if (!isMeshCentralConfigured()) {
         const row = await insertSosRequest({
           company_id: companyId,
           company_name: companyName || `Company #${companyId}`,
@@ -200,22 +141,20 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
           issue,
           status: "error",
           error_message:
-            "Splashtop is not configured on the server (SPLASHTOP_API_TOKEN).",
+            "MeshCentral is not configured (MESHCENTRAL_URL + invite settings).",
         });
         return res.status(503).json({
           configured: false,
+          mode: "meshcentral",
           error:
-            "Remote support is not configured yet. Your request was logged for staff.",
-          request: publicRow(row, { includeCode: false }),
+            "Remote support is not configured yet. Ask your provider to connect MeshCentral.",
+          request: publicRow(row, { staff: false }),
         });
       }
 
       try {
-        const session = await createSupportSession({
-          customerName: `${userName} · ${companyName || "Client"}`.slice(0, 120),
-          customerIssue:
-            issue ||
-            `SOS from AKAB portal — ${userName} <${userEmail}> (${companyName})`,
+        const invite = await createTemporaryAgentInvite({
+          note: `SOS ${userName} <${userEmail}> · ${companyName}${issue ? ` · ${issue}` : ""}`,
         });
         const row = await insertSosRequest({
           company_id: companyId,
@@ -225,19 +164,29 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
           user_email: userEmail,
           issue,
           status: "waiting",
-          splashtop_session_id: session.id || null,
-          sos_code: session.code || null,
-          support_portal_link: session.supportPortalLink || null,
-          channel_id: session.channelId,
-          expires_at: session.expiresAt,
+          // Reuse columns: session id = mesh id marker, link = agent invite
+          splashtop_session_id: invite.meshId
+            ? `mesh:${invite.meshId}`
+            : invite.meshName
+              ? `meshname:${invite.meshName}`
+              : `meshcentral:${invite.source}`,
+          support_portal_link: invite.inviteUrl,
+          channel_id: invite.meshId || invite.meshName,
+          sos_code: null,
+          expires_at: invite.expiresAt,
+          error_message: null,
         });
         return res.status(201).json({
           configured: true,
+          mode: "meshcentral",
+          provider: "meshcentral",
           reused: false,
-          request: publicRow(row, { includeCode: false }),
+          needsRunAgent: true,
+          request: publicRow(row, { staff: false }),
         });
       } catch (e) {
-        const msg = e instanceof Error ? e.message : "Splashtop create failed";
+        const msg =
+          e instanceof Error ? e.message : "MeshCentral invite failed";
         const row = await insertSosRequest({
           company_id: companyId,
           company_name: companyName || `Company #${companyId}`,
@@ -250,8 +199,9 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         });
         return res.status(502).json({
           configured: true,
+          mode: "meshcentral",
           error: msg,
-          request: publicRow(row, { includeCode: false }),
+          request: publicRow(row, { staff: false }),
         });
       }
     }
@@ -261,10 +211,6 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   } catch (err) {
     return res.status(500).json({
       error: err instanceof Error ? err.message : "Server error",
-      requests: [],
     });
   }
 }
-
-// re-export helper for [id] route typecheck silence
-export { getSosRequestById };

@@ -16,12 +16,15 @@ export type SosRequest = {
   userEmail: string;
   issue: string | null;
   status: SosStatus | string;
+  /** MeshCentral temporary agent invite / download page */
   supportPortalLink: string | null;
-  /** api = Open API session; manual = classic SOS code shared via portal */
-  mode?: "api" | "manual" | string;
-  classicSosUrl?: string | null;
-  sosCode?: string | null;
+  agentInviteUrl?: string | null;
+  /** Always meshcentral after migration from Splashtop */
+  mode?: "meshcentral" | string;
+  provider?: string;
+  /** Staff: MeshCentral web console */
   connectUrl?: string | null;
+  meshId?: string | null;
   expiresAt: string | null;
   errorMessage: string | null;
   createdAt: string;
@@ -29,8 +32,6 @@ export type SosRequest = {
   lastPolledAt: string | null;
   remoteSnapshot?: string | null;
 };
-
-export const DEFAULT_CLASSIC_SOS_URL = "https://sos.splashtop.com";
 
 function errMsg(d: unknown, fallback: string): string {
   if (d && typeof d === "object" && "error" in d) {
@@ -47,16 +48,12 @@ export async function createSosRequest(input: {
   companyId: number;
   companyName: string;
   issue?: string | null;
-  /** Manual mode: SOS code from the classic Splashtop SOS app */
-  sosCode?: string | null;
 }): Promise<{
   request: SosRequest | null;
   error: string | null;
   reused?: boolean;
   mode?: string;
-  needsCode?: boolean;
-  classicSosUrl?: string;
-  warning?: string;
+  needsRunAgent?: boolean;
   configured?: boolean;
 }> {
   const r = await fetch("/api/sos/requests", {
@@ -69,49 +66,38 @@ export async function createSosRequest(input: {
     error?: string;
     reused?: boolean;
     mode?: string;
-    needsCode?: boolean;
-    classicSosUrl?: string;
-    warning?: string;
+    needsRunAgent?: boolean;
     configured?: boolean;
   };
   if (!r.ok && !d.request) {
     return {
       request: null,
       error: errMsg(d, `SOS failed (${r.status})`),
-      mode: d.mode,
-      needsCode: d.needsCode,
-      classicSosUrl: d.classicSosUrl,
       configured: d.configured,
+      mode: d.mode,
     };
   }
   return {
     request: d.request ?? null,
     error: d.error ? String(d.error) : null,
     reused: d.reused,
-    mode: d.mode,
-    needsCode: d.needsCode,
-    classicSosUrl: d.classicSosUrl,
-    warning: d.warning,
+    mode: d.mode ?? "meshcentral",
+    needsRunAgent: d.needsRunAgent,
     configured: d.configured,
   };
 }
 
-export async function attachSosCode(
-  requestId: number,
-  sosCode: string,
+export async function markSosAgentRunning(
+  id: number,
 ): Promise<{ request: SosRequest | null; error: string | null }> {
-  const r = await fetch(`/api/sos/requests/${requestId}`, {
+  const r = await fetch(`/api/sos/requests/${id}`, {
     method: "PATCH",
     headers: { "Content-Type": "application/json", Accept: "application/json" },
-    body: JSON.stringify({
-      action: "set_code",
-      role: "client",
-      sosCode,
-    }),
+    body: JSON.stringify({ action: "ready", role: "client" }),
   });
   const d = (await r.json()) as { request?: SosRequest; error?: string };
   if (!r.ok) {
-    return { request: null, error: errMsg(d, `Could not save SOS code (${r.status})`) };
+    return { request: null, error: errMsg(d, `Update failed (${r.status})`) };
   }
   return { request: d.request ?? null, error: null };
 }
@@ -126,7 +112,6 @@ export async function fetchClientSosRequests(
   const q = new URLSearchParams({
     role: "client",
     userId: String(userId),
-    refresh: "1",
   });
   const r = await fetch(`/api/sos/requests?${q}`, {
     headers: { Accept: "application/json" },
@@ -156,9 +141,10 @@ export async function fetchStaffSosQueue(opts?: {
   requests: SosRequest[];
   openCount: number;
   configured: boolean;
+  connectUrl: string | null;
   error: string | null;
 }> {
-  const q = new URLSearchParams({ role: "staff", refresh: "1" });
+  const q = new URLSearchParams({ role: "staff" });
   if (opts?.includeClosed) q.set("includeClosed", "1");
   const r = await fetch(`/api/sos/requests?${q}`, {
     headers: { Accept: "application/json" },
@@ -167,6 +153,7 @@ export async function fetchStaffSosQueue(opts?: {
     requests?: SosRequest[];
     openCount?: number;
     configured?: boolean;
+    connectUrl?: string;
     error?: string;
   };
   if (!r.ok) {
@@ -174,6 +161,7 @@ export async function fetchStaffSosQueue(opts?: {
       requests: [],
       openCount: 0,
       configured: Boolean(d.configured),
+      connectUrl: null,
       error: errMsg(d, `SOS queue failed (${r.status})`),
     };
   }
@@ -181,6 +169,7 @@ export async function fetchStaffSosQueue(opts?: {
     requests: Array.isArray(d.requests) ? d.requests : [],
     openCount: Number(d.openCount ?? 0),
     configured: Boolean(d.configured),
+    connectUrl: d.connectUrl ? String(d.connectUrl) : null,
     error: d.error ? String(d.error) : null,
   };
 }
@@ -203,27 +192,34 @@ export async function closeSosRequest(
   return { ok: true, error: null };
 }
 
-export async function fetchSplashtopStatus(refresh = false): Promise<{
+export async function fetchMeshCentralStatus(refresh = false): Promise<{
   ok: boolean;
   configured: boolean;
   authOk?: boolean;
-  teamId?: string | null;
   message?: string;
   error?: string;
+  baseUrl?: string | null;
+  meshName?: string | null;
+  staticInviteOnly?: boolean;
 }> {
   const q = refresh ? "?refresh=1" : "";
-  const r = await fetch(`/api/splashtop/status${q}`, {
+  const r = await fetch(`/api/meshcentral/status${q}`, {
     headers: { Accept: "application/json" },
   });
   return (await r.json()) as {
     ok: boolean;
     configured: boolean;
     authOk?: boolean;
-    teamId?: string | null;
     message?: string;
     error?: string;
+    baseUrl?: string | null;
+    meshName?: string | null;
+    staticInviteOnly?: boolean;
   };
 }
+
+/** @deprecated use fetchMeshCentralStatus */
+export const fetchSplashtopStatus = fetchMeshCentralStatus;
 
 export function formatSosTime(iso: string | null | undefined): string {
   if (!iso) return "—";

@@ -71,8 +71,8 @@ async function withPg<T>(
   }) => Promise<T>,
 ): Promise<T | null> {
   try {
-    await ensureMigrated();
-    const pool = getPgPool();
+    await runMigrations();
+    const pool = getPool();
     if (!pool) return null;
     const client = await pool.connect();
     try {
