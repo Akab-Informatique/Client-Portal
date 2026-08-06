@@ -14,6 +14,7 @@ export const en = {
     close: "Close",
     back: "Back",
     search: "Search",
+    clear: "Clear",
     refresh: "Refresh",
     loading: "Loading…",
     saving: "Saving…",
@@ -121,14 +122,29 @@ export const en = {
     clientDesc:
       "Invoices from Autotask and a link to pay online. Only contacts with billing access can open this section.",
     invoicesDescAt:
-      "Invoices from Autotask for your company. Use the payment portal button to pay online.",
-    openPaymentPortal: "Open payment portal",
-    paymentPortalTitle: "Pay online",
-    paymentPortalHint:
+      "Non-voided invoices from Autotask for your company. Search by number, preview the PDF, or print it.",
+    openPaymentLink: "Open payment portal",
+    payOnlineTitle: "Pay online",
+    payOnlineHint:
       "Opens the SOLU TI payment portal so you can pay open invoices securely.",
     invoicesEmptyTitle: "No invoices yet",
     invoicesEmptyDesc:
-      "When invoices are posted in Autotask for your company, they will appear here.",
+      "When invoices are posted in Autotask for your company, they will appear here. Voided invoices are hidden.",
+    invoicesSearchEmptyTitle: "No matching invoices",
+    invoicesSearchEmptyDesc:
+      "No non-voided invoices matched that number. Try another search or clear the filter.",
+    searchInvoices: "Search",
+    searchInvoicesPh: "Search invoice number…",
+    searchResults: "{{count}} result(s) for",
+    invoicesCount: "Showing {{count}} invoice(s) (voided hidden).",
+    preview: "Preview",
+    previewInvoice: "Invoice preview",
+    previewHint: "PDF from Autotask. Use Print to send it to your printer.",
+    print: "Print",
+    printInvoice: "Print invoice",
+    openInNewTab: "Open in new tab",
+    pdfFailed: "Could not load the invoice PDF from Autotask.",
+    colActions: "Actions",
     statusOpen: "Open",
     statusPaid: "Paid",
     statusVoided: "Voided",

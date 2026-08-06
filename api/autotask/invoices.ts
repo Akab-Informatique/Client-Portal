@@ -18,6 +18,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     const autotaskCompanyId = String(
       req.query.autotaskCompanyId ?? req.query.atCompanyId ?? "",
     ).trim();
+    const search = String(req.query.search ?? req.query.q ?? "").trim();
 
     if (!autotaskCompanyId) {
       return res.status(400).json({
@@ -37,10 +38,15 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       });
     }
 
-    const { invoices } = await fetchClientInvoicesForCompany(autotaskCompanyId);
+    const { invoices, totalReturned } = await fetchClientInvoicesForCompany(
+      autotaskCompanyId,
+      { search: search || null },
+    );
     return res.status(200).json({
       configured: true,
       companyId: autotaskCompanyId,
+      search: search || null,
+      count: totalReturned,
       invoices,
       error: null,
     });

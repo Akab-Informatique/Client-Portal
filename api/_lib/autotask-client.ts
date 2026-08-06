@@ -1853,15 +1853,73 @@ function mapClientInvoice(raw: Record<string, unknown>): ClientInvoice | null {
   };
 }
 
+type InvoiceQueryRes = {
+  items?: Array<Record<string, unknown>>;
+  pageDetails?: {
+    count?: number;
+    requestCount?: number;
+    nextPageUrl?: string | null;
+    prevPageUrl?: string | null;
+  };
+};
+
+/**
+ * Follow Autotask nextPageUrl pages (GET as-is) until exhausted.
+ * Caps pages to avoid runaway loops.
+ */
+async function fetchAllInvoicePages(
+  cfg: AutotaskConfig,
+  base: string,
+  body: unknown,
+  maxPages = 40,
+): Promise<Array<Record<string, unknown>>> {
+  const first = await postQuery<InvoiceQueryRes>(base, cfg, "Invoices/query", body);
+  const items: Array<Record<string, unknown>> = [...(first.items ?? [])];
+  let nextUrl =
+    first.pageDetails?.nextPageUrl != null
+      ? String(first.pageDetails.nextPageUrl).trim()
+      : "";
+  let pages = 1;
+  while (nextUrl && pages < maxPages) {
+    const res = await atFetch(nextUrl, cfg);
+    const text = await res.text();
+    let data: InvoiceQueryRes | null = null;
+    try {
+      data = text ? (JSON.parse(text) as InvoiceQueryRes) : null;
+    } catch {
+      data = null;
+    }
+    if (!res.ok) {
+      throwAutotaskHttpError(
+        "Invoices/query (page)",
+        res.status,
+        data,
+        text,
+      );
+    }
+    if (data?.items?.length) items.push(...data.items);
+    nextUrl =
+      data?.pageDetails?.nextPageUrl != null
+        ? String(data.pageDetails.nextPageUrl).trim()
+        : "";
+    pages += 1;
+  }
+  return items;
+}
+
 /**
  * Invoices for one Autotask company (client + staff billing views).
- * Uses company Autotask ID only — never ConnectBooster.
+ * - Excludes voided invoices
+ * - Paginates through all Autotask pages (not just first 100)
+ * - Optional search by invoice number (contains)
  */
 export async function fetchClientInvoicesForCompany(
   autotaskCompanyId: string | number,
+  opts?: { search?: string | null },
 ): Promise<{
   invoices: ClientInvoice[];
   zoneUrl: string;
+  totalReturned: number;
 }> {
   const cfg = getAutotaskConfigFromEnv();
   if (!cfg) throw new Error("Autotask is not configured");
@@ -1872,27 +1930,159 @@ export async function fetchClientInvoicesForCompany(
     throw new Error("Invalid Autotask company ID");
   }
 
+  const search = String(opts?.search ?? "").trim();
+  const filterItems: Array<Record<string, unknown>> = [
+    { op: "eq", field: "companyID", value: companyIdNum },
+    // Hide voided invoices from client/staff portal lists
+    { op: "eq", field: "isVoided", value: false },
+  ];
+  if (search) {
+    // Prefer contains on invoiceNumber; if search is pure digits also match id
+    const orItems: Array<Record<string, unknown>> = [
+      { op: "contains", field: "invoiceNumber", value: search },
+    ];
+    if (/^\d+$/.test(search)) {
+      orItems.push({ op: "eq", field: "id", value: Number(search) });
+    }
+    filterItems.push({ op: "or", items: orItems });
+  }
+
   const body = {
-    MaxRecords: 100,
+    MaxRecords: 500,
     IncludeFields: [...CLIENT_INVOICE_FIELDS],
-    filter: [
-      {
-        op: "and",
-        items: [{ op: "eq", field: "companyID", value: companyIdNum }],
-      },
-    ],
+    filter: [{ op: "and", items: filterItems }],
   };
 
-  type QueryRes = { items?: Array<Record<string, unknown>> };
-  const data = await postQuery<QueryRes>(base, cfg, "Invoices/query", body);
-  const invoices = (data.items ?? [])
+  let rawItems: Array<Record<string, unknown>> = [];
+  try {
+    rawItems = await fetchAllInvoicePages(cfg, base, body);
+  } catch (e) {
+    // Some tenants reject isVoided in filter — retry without it and strip client-side
+    const msg = e instanceof Error ? e.message : String(e);
+    if (/isVoided|voided/i.test(msg) || /filter/i.test(msg)) {
+      const fallbackBody = {
+        MaxRecords: 500,
+        IncludeFields: [...CLIENT_INVOICE_FIELDS],
+        filter: [
+          {
+            op: "and",
+            items: filterItems.filter((f) => {
+              const field = (f as { field?: string }).field;
+              return field !== "isVoided";
+            }),
+          },
+        ],
+      };
+      // If search or-block was the only extra, rebuild cleanly
+      const cleanItems: Array<Record<string, unknown>> = [
+        { op: "eq", field: "companyID", value: companyIdNum },
+      ];
+      if (search) {
+        const orItems: Array<Record<string, unknown>> = [
+          { op: "contains", field: "invoiceNumber", value: search },
+        ];
+        if (/^\d+$/.test(search)) {
+          orItems.push({ op: "eq", field: "id", value: Number(search) });
+        }
+        cleanItems.push({ op: "or", items: orItems });
+      }
+      rawItems = await fetchAllInvoicePages(cfg, base, {
+        MaxRecords: 500,
+        IncludeFields: [...CLIENT_INVOICE_FIELDS],
+        filter: [{ op: "and", items: cleanItems }],
+      });
+    } else {
+      throw e;
+    }
+  }
+
+  const invoices = rawItems
     .map((item) => mapClientInvoice(item))
     .filter((inv): inv is ClientInvoice => inv != null)
+    // Always hide voided even if Autotask filter was unavailable
+    .filter((inv) => !inv.isVoided && inv.status !== "voided")
     .sort((a, b) => {
       const da = a.invoiceDate || "";
       const db = b.invoiceDate || "";
       return db.localeCompare(da);
     });
 
-  return { invoices, zoneUrl: base };
+  return { invoices, zoneUrl: base, totalReturned: invoices.length };
+}
+
+/**
+ * Fetch invoice PDF bytes from Autotask InvoicePDF endpoint.
+ * Response is FileQueryResultModel with base64 `data`.
+ */
+export async function fetchInvoicePdf(
+  invoiceId: number,
+): Promise<{
+  bytes: Uint8Array;
+  fileName: string;
+  contentType: string;
+}> {
+  const cfg = getAutotaskConfigFromEnv();
+  if (!cfg) throw new Error("Autotask is not configured");
+  if (!Number.isFinite(invoiceId) || invoiceId <= 0) {
+    throw new Error("Invalid invoice id");
+  }
+
+  const base = await resolveZoneBase(cfg);
+  const url = `${base}v1.0/Invoices/${invoiceId}/InvoicePDF`;
+  const res = await atFetch(url, cfg);
+  const text = await res.text();
+  let data: unknown = null;
+  try {
+    data = text ? JSON.parse(text) : null;
+  } catch {
+    data = { raw: text.slice(0, 400) };
+  }
+  if (!res.ok) {
+    throwAutotaskHttpError(`Invoices/${invoiceId}/InvoicePDF`, res.status, data, text);
+  }
+
+  // Shape may be flat or wrapped in item
+  const root =
+    data && typeof data === "object"
+      ? ((data as { item?: Record<string, unknown> }).item &&
+        typeof (data as { item?: unknown }).item === "object"
+          ? ((data as { item: Record<string, unknown> }).item)
+          : (data as Record<string, unknown>))
+      : null;
+
+  if (!root) throw new Error("Autotask returned an empty PDF payload");
+
+  const rawData = root.data ?? root.Data;
+  if (rawData == null) {
+    throw new Error("Autotask PDF response did not include file data");
+  }
+
+  let bytes: Uint8Array;
+  if (typeof rawData === "string") {
+    // Base64 string (standard Autotask JSON encoding)
+    const b64 = rawData.replace(/\s/g, "");
+    const bin = Buffer.from(b64, "base64");
+    bytes = new Uint8Array(bin);
+  } else if (Array.isArray(rawData)) {
+    bytes = Uint8Array.from(rawData as number[]);
+  } else {
+    throw new Error("Unsupported Autotask PDF data format");
+  }
+
+  if (bytes.length < 5) {
+    throw new Error("Autotask returned an empty or invalid PDF");
+  }
+
+  const fileNameRaw =
+    (typeof root.fileName === "string" && root.fileName.trim()) ||
+    (typeof root.FileName === "string" && String(root.FileName).trim()) ||
+    `invoice-${invoiceId}.pdf`;
+  const fileName = fileNameRaw.toLowerCase().endsWith(".pdf")
+    ? fileNameRaw
+    : `${fileNameRaw}.pdf`;
+  const contentType =
+    (typeof root.contentType === "string" && root.contentType.trim()) ||
+    "application/pdf";
+
+  return { bytes, fileName, contentType };
 }

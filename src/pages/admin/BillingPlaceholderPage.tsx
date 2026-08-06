@@ -1,10 +1,14 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   ExternalLink,
+  Eye,
   FileStack,
   Loader2,
+  Printer,
   Receipt,
   RefreshCw,
+  Search,
+  X,
 } from "lucide-react";
 import { Link, useNavigate } from "react-router-dom";
 import { useSelectedClient } from "@/context/SelectedClientContext";
@@ -14,6 +18,8 @@ import {
   fetchClientInvoices,
   formatInvoiceDate,
   formatMoney,
+  invoicePdfUrl,
+  printInvoicePdf,
   type ClientInvoice,
 } from "@/lib/invoices";
 import {
@@ -32,6 +38,7 @@ import {
   CardTitle,
 } from "@/components/ui/card";
 import { EmptyState } from "@/components/EmptyState";
+import { Input } from "@/components/ui/input";
 import {
   Table,
   TableBody,
@@ -40,6 +47,13 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 
 type BillingKind = "invoices" | "contracts";
 
@@ -51,6 +65,11 @@ export function BillingPlaceholderPage({ kind }: { kind: BillingKind }) {
   const [invLoading, setInvLoading] = useState(false);
   const [invoices, setInvoices] = useState<ClientInvoice[]>([]);
   const [invError, setInvError] = useState<string | null>(null);
+  const [searchInput, setSearchInput] = useState("");
+  const [activeSearch, setActiveSearch] = useState("");
+  const [pdfInvoice, setPdfInvoice] = useState<ClientInvoice | null>(null);
+  const [pdfBusyId, setPdfBusyId] = useState<number | null>(null);
+  const [pdfError, setPdfError] = useState<string | null>(null);
 
   const [ctLoading, setCtLoading] = useState(false);
   const [contracts, setContracts] = useState<ClientSafeContract[]>([]);
@@ -64,29 +83,34 @@ export function BillingPlaceholderPage({ kind }: { kind: BillingKind }) {
       : t("billing.contractsDescSafe");
   const Icon = kind === "invoices" ? Receipt : FileStack;
 
-  const loadInvoices = useCallback(async () => {
-    if (!selectedClient) return;
-    const atId = (selectedClient.autotask_company_id || "").trim();
-    setInvLoading(true);
-    setInvError(null);
-    try {
-      if (!atId) {
+  const loadInvoices = useCallback(
+    async (search?: string) => {
+      if (!selectedClient) return;
+      const atId = (selectedClient.autotask_company_id || "").trim();
+      setInvLoading(true);
+      setInvError(null);
+      try {
+        if (!atId) {
+          setInvoices([]);
+          setInvError(t("billing.noAutotaskId"));
+          return;
+        }
+        const res = await fetchClientInvoices(atId, {
+          search: search?.trim() || null,
+        });
+        setInvoices(res.invoices);
+        if (res.error && res.invoices.length === 0) setInvError(res.error);
+      } catch (e) {
+        setInvError(
+          e instanceof Error ? e.message : t("billing.invoicesLoadFailed"),
+        );
         setInvoices([]);
-        setInvError(t("billing.noAutotaskId"));
-        return;
+      } finally {
+        setInvLoading(false);
       }
-      const res = await fetchClientInvoices(atId);
-      setInvoices(res.invoices);
-      if (res.error && res.invoices.length === 0) setInvError(res.error);
-    } catch (e) {
-      setInvError(
-        e instanceof Error ? e.message : t("billing.invoicesLoadFailed"),
-      );
-      setInvoices([]);
-    } finally {
-      setInvLoading(false);
-    }
-  }, [selectedClient, t]);
+    },
+    [selectedClient, t],
+  );
 
   const loadContracts = useCallback(async () => {
     if (!selectedClient) return;
@@ -114,9 +138,36 @@ export function BillingPlaceholderPage({ kind }: { kind: BillingKind }) {
 
   useEffect(() => {
     if (!selectedClient) return;
-    if (kind === "invoices") void loadInvoices();
+    if (kind === "invoices") void loadInvoices(activeSearch);
     else void loadContracts();
-  }, [selectedClient, kind, loadInvoices, loadContracts]);
+  }, [selectedClient, kind, activeSearch, loadInvoices, loadContracts]);
+
+  const onSearch = (e?: React.FormEvent) => {
+    e?.preventDefault();
+    setActiveSearch(searchInput.trim());
+  };
+
+  const onClearSearch = () => {
+    setSearchInput("");
+    setActiveSearch("");
+  };
+
+  const onPrint = async (inv: ClientInvoice) => {
+    setPdfBusyId(inv.id);
+    setPdfError(null);
+    try {
+      await printInvoicePdf(inv.id);
+    } catch (e) {
+      setPdfError(e instanceof Error ? e.message : t("billing.pdfFailed"));
+    } finally {
+      setPdfBusyId(null);
+    }
+  };
+
+  const filteredCountLabel = useMemo(() => {
+    if (!activeSearch) return null;
+    return t("billing.searchResults", { count: String(invoices.length) });
+  }, [activeSearch, invoices.length, t]);
 
   if (!loading && clients.length === 0) {
     return (
@@ -148,13 +199,6 @@ export function BillingPlaceholderPage({ kind }: { kind: BillingKind }) {
           className="border-emerald-500/40 bg-emerald-500/10 text-emerald-700 dark:text-emerald-400"
         >
           {t("billing.statusPaid")}
-        </Badge>
-      );
-    }
-    if (status === "voided") {
-      return (
-        <Badge variant="outline" className="text-muted-foreground">
-          {t("billing.statusVoided")}
         </Badge>
       );
     }
@@ -195,7 +239,7 @@ export function BillingPlaceholderPage({ kind }: { kind: BillingKind }) {
                   rel="noopener noreferrer"
                 >
                   <ExternalLink className="size-3.5" />
-                  {t("billing.openPaymentPortal")}
+                  {t("billing.openPaymentLink")}
                 </a>
               </Button>
             )}
@@ -209,34 +253,84 @@ export function BillingPlaceholderPage({ kind }: { kind: BillingKind }) {
       {kind === "invoices" ? (
         <BlurFade delay={0.08}>
           <Card>
-            <CardHeader className="flex flex-row items-start justify-between gap-3 space-y-0">
-              <div>
-                <CardTitle className="flex items-center gap-2 text-base">
-                  <Receipt className="size-5 text-primary" />
-                  {t("billing.invoicesTitle")}
-                </CardTitle>
-                <CardDescription>{t("billing.invoicesDescAt")}</CardDescription>
+            <CardHeader className="space-y-3">
+              <div className="flex flex-row items-start justify-between gap-3">
+                <div>
+                  <CardTitle className="flex items-center gap-2 text-base">
+                    <Receipt className="size-5 text-primary" />
+                    {t("billing.invoicesTitle")}
+                  </CardTitle>
+                  <CardDescription>{t("billing.invoicesDescAt")}</CardDescription>
+                </div>
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  className="gap-1.5 shrink-0"
+                  disabled={invLoading}
+                  onClick={() => void loadInvoices(activeSearch)}
+                >
+                  {invLoading ? (
+                    <Loader2 className="size-3.5 animate-spin" />
+                  ) : (
+                    <RefreshCw className="size-3.5" />
+                  )}
+                  {t("common.refresh")}
+                </Button>
               </div>
-              <Button
-                type="button"
-                variant="outline"
-                size="sm"
-                className="gap-1.5"
-                disabled={invLoading}
-                onClick={() => void loadInvoices()}
+              <form
+                onSubmit={onSearch}
+                className="flex flex-col gap-2 sm:flex-row sm:items-center"
               >
-                {invLoading ? (
-                  <Loader2 className="size-3.5 animate-spin" />
-                ) : (
-                  <RefreshCw className="size-3.5" />
-                )}
-                {t("common.refresh")}
-              </Button>
+                <div className="relative min-w-0 flex-1">
+                  <Search className="pointer-events-none absolute left-2.5 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
+                  <Input
+                    value={searchInput}
+                    onChange={(e) => setSearchInput(e.target.value)}
+                    placeholder={t("billing.searchInvoicesPh")}
+                    className="pl-9"
+                    aria-label={t("billing.searchInvoices")}
+                  />
+                </div>
+                <div className="flex shrink-0 gap-2">
+                  <Button type="submit" size="sm" className="gap-1.5" disabled={invLoading}>
+                    <Search className="size-3.5" />
+                    {t("billing.searchInvoices")}
+                  </Button>
+                  {activeSearch ? (
+                    <Button
+                      type="button"
+                      size="sm"
+                      variant="ghost"
+                      className="gap-1.5"
+                      onClick={onClearSearch}
+                    >
+                      <X className="size-3.5" />
+                      {t("common.clear")}
+                    </Button>
+                  ) : null}
+                </div>
+              </form>
+              {filteredCountLabel && (
+                <p className="text-xs text-muted-foreground">
+                  {filteredCountLabel}
+                  {activeSearch ? (
+                    <span className="ml-1 font-medium text-foreground">
+                      “{activeSearch}”
+                    </span>
+                  ) : null}
+                </p>
+              )}
             </CardHeader>
             <CardContent className="space-y-3">
               {invError && (
                 <p className="rounded-lg border border-destructive/40 bg-destructive/10 px-3 py-2 text-sm text-destructive">
                   {invError}
+                </p>
+              )}
+              {pdfError && (
+                <p className="rounded-lg border border-destructive/40 bg-destructive/10 px-3 py-2 text-sm text-destructive">
+                  {pdfError}
                 </p>
               )}
               {invLoading && invoices.length === 0 ? (
@@ -247,8 +341,16 @@ export function BillingPlaceholderPage({ kind }: { kind: BillingKind }) {
               ) : invoices.length === 0 ? (
                 <EmptyState
                   icon={<Receipt className="size-5" />}
-                  title={t("billing.invoicesEmptyTitle")}
-                  description={t("billing.invoicesEmptyDesc")}
+                  title={
+                    activeSearch
+                      ? t("billing.invoicesSearchEmptyTitle")
+                      : t("billing.invoicesEmptyTitle")
+                  }
+                  description={
+                    activeSearch
+                      ? t("billing.invoicesSearchEmptyDesc")
+                      : t("billing.invoicesEmptyDesc")
+                  }
                 />
               ) : (
                 <div className="overflow-x-auto rounded-lg border border-border">
@@ -262,6 +364,9 @@ export function BillingPlaceholderPage({ kind }: { kind: BillingKind }) {
                           {t("billing.colAmount")}
                         </TableHead>
                         <TableHead>{t("billing.colStatus")}</TableHead>
+                        <TableHead className="text-right">
+                          {t("billing.colActions")}
+                        </TableHead>
                       </TableRow>
                     </TableHeader>
                     <TableBody>
@@ -280,11 +385,56 @@ export function BillingPlaceholderPage({ kind }: { kind: BillingKind }) {
                             {formatMoney(inv.total)}
                           </TableCell>
                           <TableCell>{statusBadge(inv.status)}</TableCell>
+                          <TableCell className="text-right">
+                            <div className="flex justify-end gap-1">
+                              <Button
+                                type="button"
+                                size="sm"
+                                variant="outline"
+                                className="h-8 gap-1 px-2"
+                                onClick={() => {
+                                  setPdfError(null);
+                                  setPdfInvoice(inv);
+                                }}
+                                title={t("billing.previewInvoice")}
+                              >
+                                <Eye className="size-3.5" />
+                                <span className="hidden sm:inline">
+                                  {t("billing.preview")}
+                                </span>
+                              </Button>
+                              <Button
+                                type="button"
+                                size="sm"
+                                variant="outline"
+                                className="h-8 gap-1 px-2"
+                                disabled={pdfBusyId === inv.id}
+                                onClick={() => void onPrint(inv)}
+                                title={t("billing.printInvoice")}
+                              >
+                                {pdfBusyId === inv.id ? (
+                                  <Loader2 className="size-3.5 animate-spin" />
+                                ) : (
+                                  <Printer className="size-3.5" />
+                                )}
+                                <span className="hidden sm:inline">
+                                  {t("billing.print")}
+                                </span>
+                              </Button>
+                            </div>
+                          </TableCell>
                         </TableRow>
                       ))}
                     </TableBody>
                   </Table>
                 </div>
+              )}
+              {invoices.length > 0 && (
+                <p className="text-xs text-muted-foreground">
+                  {t("billing.invoicesCount", {
+                    count: String(invoices.length),
+                  })}
+                </p>
               )}
             </CardContent>
           </Card>
@@ -382,6 +532,70 @@ export function BillingPlaceholderPage({ kind }: { kind: BillingKind }) {
           </Card>
         </BlurFade>
       )}
+
+      <Dialog
+        open={!!pdfInvoice}
+        onOpenChange={(open) => {
+          if (!open) {
+            setPdfInvoice(null);
+            setPdfError(null);
+          }
+        }}
+      >
+        <DialogContent className="flex h-[90vh] max-h-[90vh] w-[min(96vw,56rem)] max-w-4xl flex-col gap-0 overflow-hidden p-0 sm:max-w-4xl">
+          <DialogHeader className="shrink-0 space-y-1 border-b border-border px-4 py-3 text-left sm:px-6">
+            <DialogTitle className="flex flex-wrap items-center gap-2">
+              {t("billing.previewInvoice")}
+              {pdfInvoice && (
+                <span className="font-mono text-sm font-normal text-muted-foreground">
+                  {pdfInvoice.number || `#${pdfInvoice.id}`}
+                </span>
+              )}
+            </DialogTitle>
+            <DialogDescription>{t("billing.previewHint")}</DialogDescription>
+          </DialogHeader>
+          <div className="flex shrink-0 flex-wrap items-center gap-2 border-b border-border px-4 py-2 sm:px-6">
+            {pdfInvoice && (
+              <>
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="outline"
+                  className="gap-1.5"
+                  disabled={pdfBusyId === pdfInvoice.id}
+                  onClick={() => void onPrint(pdfInvoice)}
+                >
+                  {pdfBusyId === pdfInvoice.id ? (
+                    <Loader2 className="size-3.5 animate-spin" />
+                  ) : (
+                    <Printer className="size-3.5" />
+                  )}
+                  {t("billing.print")}
+                </Button>
+                <Button asChild size="sm" variant="outline" className="gap-1.5">
+                  <a
+                    href={invoicePdfUrl(pdfInvoice.id, "inline")}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                  >
+                    <ExternalLink className="size-3.5" />
+                    {t("billing.openInNewTab")}
+                  </a>
+                </Button>
+              </>
+            )}
+          </div>
+          <div className="min-h-0 flex-1 bg-muted/30">
+            {pdfInvoice ? (
+              <iframe
+                title={t("billing.previewInvoice")}
+                src={invoicePdfUrl(pdfInvoice.id, "inline")}
+                className="h-full w-full border-0"
+              />
+            ) : null}
+          </div>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

@@ -16,6 +16,7 @@ export const fr: Dictionary = {
     close: "Fermer",
     back: "Retour",
     search: "Rechercher",
+    clear: "Effacer",
     refresh: "Actualiser",
     loading: "Chargement…",
     saving: "Enregistrement…",
@@ -107,31 +108,44 @@ export const fr: Dictionary = {
     invoicesDesc: "Factures Autotask pour le client sélectionné.",
     contractsTitle: "Contrats",
     contractsDesc:
-      "Contrats Autotask (vue client sécurisée, sans coûts ni profits).",
+      "Contrats Autotask (vue client sécurisée) pour le client sélectionné (sans coût ni profit).",
     comingSoonTitle: "Lié à Autotask",
     comingSoonDesc:
-      "Cette section charge les données Autotask pour le client actif.",
+      "Cette section charge les données en direct depuis Autotask pour le client actif.",
     invoicesSoonDetail: "",
     contractsSoonDetail: "",
     noAutotaskId:
-      "Ce client n'a pas encore d'ID d'entreprise Autotask. Configurez-le sous Clients → Modifier.",
-    noClientsDesc:
-      "Ajoutez une entreprise cliente avant d'utiliser les vues de facturation.",
-    pickClientDesc:
-      "Choisissez un client dans le menu de gauche pour cibler cette vue.",
+      "Ce client n'a pas encore d'ID société Autotask. Définissez-le sous Clients → Modifier.",
+    noClientsDesc: "Ajoutez une société cliente avant d'utiliser la facturation.",
+    pickClientDesc: "Choisissez un client dans le menu de gauche pour cibler cette vue.",
     manageClients: "Gérer les clients",
     clientTitle: "Facturation",
     clientDesc:
       "Factures Autotask et lien pour payer en ligne. Seuls les contacts avec accès facturation peuvent ouvrir cette section.",
     invoicesDescAt:
-      "Factures Autotask de votre entreprise. Utilisez le bouton portail de paiement pour payer en ligne.",
-    openPaymentPortal: "Ouvrir le portail de paiement",
-    paymentPortalTitle: "Payer en ligne",
-    paymentPortalHint:
-      "Ouvre le portail de paiement SOLU TI pour régler vos factures en toute sécurité.",
-    invoicesEmptyTitle: "Aucune facture",
+      "Factures non annulées d'Autotask pour votre entreprise. Recherchez par numéro, prévisualisez le PDF ou imprimez-le.",
+    openPaymentLink: "Ouvrir le portail de paiement",
+    payOnlineTitle: "Payer en ligne",
+    payOnlineHint:
+      "Ouvre le portail de paiement SOLU TI pour payer vos factures ouvertes en toute sécurité.",
+    invoicesEmptyTitle: "Aucune facture pour le moment",
     invoicesEmptyDesc:
-      "Lorsque des factures sont publiées dans Autotask pour votre entreprise, elles apparaîtront ici.",
+      "Lorsque des factures sont publiées dans Autotask pour votre entreprise, elles apparaîtront ici. Les factures annulées sont masquées.",
+    invoicesSearchEmptyTitle: "Aucune facture correspondante",
+    invoicesSearchEmptyDesc:
+      "Aucune facture non annulée ne correspond à ce numéro. Essayez une autre recherche ou effacez le filtre.",
+    searchInvoices: "Rechercher",
+    searchInvoicesPh: "Rechercher un numéro de facture…",
+    searchResults: "{{count}} résultat(s) pour",
+    invoicesCount: "{{count}} facture(s) affichée(s) (annulées masquées).",
+    preview: "Aperçu",
+    previewInvoice: "Aperçu de la facture",
+    previewHint: "PDF provenant d'Autotask. Utilisez Imprimer pour l'envoyer à l'imprimante.",
+    print: "Imprimer",
+    printInvoice: "Imprimer la facture",
+    openInNewTab: "Ouvrir dans un nouvel onglet",
+    pdfFailed: "Impossible de charger le PDF de la facture depuis Autotask.",
+    colActions: "Actions",
     statusOpen: "Ouverte",
     statusPaid: "Payée",
     statusVoided: "Annulée",
@@ -146,7 +160,7 @@ export const fr: Dictionary = {
     colEnd: "Fin",
     invoicesLoadFailed: "Impossible de charger les factures.",
     contractsLoadFailed: "Impossible de charger les contrats.",
-    contractsEmptyTitle: "Aucun contrat",
+    contractsEmptyTitle: "Aucun contrat pour le moment",
     contractsEmptyDesc:
       "Lorsque des contrats sont configurés dans Autotask pour votre entreprise, ils apparaîtront ici.",
     contractsDescSafe:
