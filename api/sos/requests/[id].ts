@@ -1,17 +1,19 @@
 import type { VercelRequest, VercelResponse } from "@vercel/node";
 import {
-  buildMeshTechnicianConnectUrl,
-  getMeshCentralConfigFromEnv,
-  isMeshCentralConfigured,
-} from "../../_lib/meshcentral-client.js";
+  buildTechnicianConnectUrl,
+  closeSupportSession,
+  derivePortalStatusFromSession,
+  getSupportSession,
+  isSplashtopConfigured,
+} from "../../_lib/splashtop-client.js";
 import {
   getSosRequestById,
   updateSosRequest,
 } from "../../_lib/sos-store.js";
 
 /**
- * GET   /api/sos/requests/:id
- * PATCH /api/sos/requests/:id  { action: "close"|"ready"|"refresh", closedByUserId? }
+ * GET    /api/sos/requests/:id?role=staff|client
+ * PATCH  /api/sos/requests/:id  { action: "close"|"refresh", closedByUserId? }
  */
 export default async function handler(req: VercelRequest, res: VercelResponse) {
   try {
@@ -24,11 +26,8 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     const row = await getSosRequestById(id);
     if (!row) return res.status(404).json({ error: "SOS request not found" });
 
-    const role = String(
-      req.query.role ?? (req.body as { role?: string } | undefined)?.role ?? "staff",
-    ).toLowerCase();
-    const staff = role === "staff";
-    const cfg = getMeshCentralConfigFromEnv();
+    const role = String(req.query.role ?? req.body?.role ?? "staff").toLowerCase();
+    const includeCode = role === "staff";
 
     const toPublic = (r: typeof row) => ({
       id: r.id,
@@ -40,23 +39,53 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       issue: r.issue,
       status: r.status,
       supportPortalLink: r.support_portal_link,
-      agentInviteUrl: r.support_portal_link,
-      mode: "meshcentral",
-      provider: "meshcentral",
-      connectUrl: staff ? buildMeshTechnicianConnectUrl(cfg) || undefined : undefined,
-      meshId: r.channel_id,
+      sosCode: includeCode ? r.sos_code : undefined,
+      connectUrl:
+        includeCode && r.sos_code
+          ? buildTechnicianConnectUrl({ sosCode: r.sos_code, apiSession: true })
+          : undefined,
       expiresAt: r.expires_at,
       errorMessage: r.error_message,
       createdAt: r.created_at,
       closedAt: r.closed_at,
       lastPolledAt: r.last_polled_at,
-      remoteSnapshot: staff ? r.remote_snapshot : undefined,
+      remoteSnapshot: includeCode ? r.remote_snapshot : undefined,
     });
 
     if (req.method === "GET") {
+      let current = row;
+      if (
+        isSplashtopConfigured() &&
+        row.splashtop_session_id &&
+        !["closed", "expired", "error"].includes(row.status)
+      ) {
+        try {
+          const session = await getSupportSession(row.splashtop_session_id);
+          const next = derivePortalStatusFromSession(session, row.status);
+          current =
+            (await updateSosRequest(row.id, {
+              status: next,
+              last_polled_at: new Date().toISOString(),
+              sos_code: session.code || row.sos_code,
+              support_portal_link:
+                session.supportPortalLink || row.support_portal_link,
+              expires_at: session.expiresAt || row.expires_at,
+              remote_snapshot: JSON.stringify({
+                status: session.status,
+                serverName: session.serverName,
+                serverOs: session.serverOs,
+                associatedAt: session.associatedAt,
+                onlineSince: session.onlineSince,
+                connectedSince: session.connectedSince,
+              }),
+            })) ?? row;
+        } catch {
+          /* keep stored */
+        }
+      }
       return res.status(200).json({
-        configured: isMeshCentralConfigured(),
-        request: toPublic(row),
+        configured: isSplashtopConfigured(),
+        request: toPublic(current),
       });
     }
 
@@ -65,6 +94,13 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       const action = String(body.action ?? "refresh").toLowerCase();
 
       if (action === "close") {
+        if (row.splashtop_session_id && isSplashtopConfigured()) {
+          try {
+            await closeSupportSession(row.splashtop_session_id, "close");
+          } catch {
+            /* still close locally */
+          }
+        }
         const closedBy =
           body.closedByUserId != null ? Number(body.closedByUserId) : null;
         const updated = await updateSosRequest(row.id, {
@@ -79,12 +115,30 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         });
       }
 
-      // Client finished launching the temp agent
-      if (action === "ready" || action === "agent_running") {
+      if (action === "refresh") {
+        if (!row.splashtop_session_id || !isSplashtopConfigured()) {
+          return res.status(200).json({
+            ok: true,
+            request: toPublic(row),
+          });
+        }
+        const session = await getSupportSession(row.splashtop_session_id);
+        const next = derivePortalStatusFromSession(session, row.status);
         const updated = await updateSosRequest(row.id, {
-          status: "ready",
+          status: next,
           last_polled_at: new Date().toISOString(),
-          error_message: null,
+          sos_code: session.code || row.sos_code,
+          support_portal_link:
+            session.supportPortalLink || row.support_portal_link,
+          expires_at: session.expiresAt || row.expires_at,
+          remote_snapshot: JSON.stringify({
+            status: session.status,
+            serverName: session.serverName,
+            serverOs: session.serverOs,
+            associatedAt: session.associatedAt,
+            onlineSince: session.onlineSince,
+            connectedSince: session.connectedSince,
+          }),
         });
         return res.status(200).json({
           ok: true,
@@ -92,24 +146,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         });
       }
 
-      if (action === "refresh") {
-        return res.status(200).json({
-          ok: true,
-          request: toPublic(row),
-        });
-      }
-
-      // Legacy no-ops from Splashtop code flow
-      if (action === "set_code" || action === "attach_code") {
-        return res.status(400).json({
-          error:
-            "SOS now uses MeshCentral temporary agents — no code entry. Open the agent link and run the app.",
-        });
-      }
-
-      return res.status(400).json({
-        error: "Unknown action. Use close, ready, or refresh.",
-      });
+      return res.status(400).json({ error: "Unknown action. Use close or refresh." });
     }
 
     res.setHeader("Allow", "GET, PATCH, POST");

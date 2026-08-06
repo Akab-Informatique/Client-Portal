@@ -54,7 +54,6 @@ export function SosQueuePage() {
   const [requests, setRequests] = useState<SosRequest[]>([]);
   const [openCount, setOpenCount] = useState(0);
   const [configured, setConfigured] = useState(true);
-  const [consoleUrl, setConsoleUrl] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [includeClosed, setIncludeClosed] = useState(false);
   const [busyId, setBusyId] = useState<number | null>(null);
@@ -67,7 +66,6 @@ export function SosQueuePage() {
       setRequests(res.requests);
       setOpenCount(res.openCount);
       setConfigured(res.configured);
-      setConsoleUrl(res.connectUrl);
       if (res.error) setError(res.error);
     } catch (e) {
       setError(e instanceof Error ? e.message : t("sos.queueLoadFailed"));
@@ -84,9 +82,12 @@ export function SosQueuePage() {
   }, [load]);
 
   const onConnect = (req: SosRequest) => {
-    const url = req.connectUrl || consoleUrl;
-    if (url) {
-      window.open(url, "_blank", "noopener,noreferrer");
+    if (req.connectUrl) {
+      window.location.href = req.connectUrl;
+      return;
+    }
+    if (req.sosCode) {
+      window.location.href = `st-business://com.splashtop.business/?sos=${encodeURIComponent(req.sosCode)}&category=40`;
     }
   };
 
@@ -122,7 +123,7 @@ export function SosQueuePage() {
               )}
             </div>
             <p className="mt-1 max-w-2xl text-sm text-muted-foreground">
-              {t("sos.queueDescMesh")}
+              {t("sos.queueDesc")}
             </p>
           </div>
           <div className="flex flex-wrap items-center gap-3">
@@ -130,31 +131,12 @@ export function SosQueuePage() {
               <Checkbox
                 id="sos-closed"
                 checked={includeClosed}
-                onCheckedChange={(v: boolean | "indeterminate") =>
-                  setIncludeClosed(v === true)
-                }
+                onCheckedChange={(v: boolean | "indeterminate") => setIncludeClosed(v === true)}
               />
-              <Label
-                htmlFor="sos-closed"
-                className="text-xs text-muted-foreground"
-              >
+              <Label htmlFor="sos-closed" className="text-xs text-muted-foreground">
                 {t("sos.showClosed")}
               </Label>
             </div>
-            {consoleUrl && (
-              <Button
-                type="button"
-                variant="secondary"
-                size="sm"
-                className="gap-1.5"
-                asChild
-              >
-                <a href={consoleUrl} target="_blank" rel="noopener noreferrer">
-                  <MonitorSmartphone className="size-3.5" />
-                  {t("sos.openMeshConsole")}
-                </a>
-              </Button>
-            )}
             <Button
               type="button"
               variant="outline"
@@ -177,7 +159,7 @@ export function SosQueuePage() {
       {!configured && (
         <BlurFade delay={0.05}>
           <p className="rounded-lg border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-sm text-amber-900 dark:text-amber-200">
-            {t("sos.notConfiguredMesh")}
+            {t("sos.notConfiguredStaff")}
           </p>
         </BlurFade>
       )}
@@ -195,7 +177,7 @@ export function SosQueuePage() {
               <Siren className="size-5 text-red-600" />
               {t("sos.incoming")}
             </CardTitle>
-            <CardDescription>{t("sos.incomingHintMesh")}</CardDescription>
+            <CardDescription>{t("sos.incomingHint")}</CardDescription>
           </CardHeader>
           <CardContent>
             {loading && requests.length === 0 ? (
@@ -207,7 +189,7 @@ export function SosQueuePage() {
               <EmptyState
                 icon={<Headphones className="size-5" />}
                 title={t("sos.emptyTitle")}
-                description={t("sos.emptyDescMesh")}
+                description={t("sos.emptyDesc")}
               />
             ) : (
               <div className="overflow-x-auto rounded-lg border border-border">
@@ -248,23 +230,29 @@ export function SosQueuePage() {
                           <Badge variant={statusVariant(String(req.status))}>
                             {statusLabel(String(req.status))}
                           </Badge>
+                          {req.sosCode && (
+                            <p className="mt-1 font-mono text-[11px] text-muted-foreground">
+                              {req.sosCode}
+                            </p>
+                          )}
                         </TableCell>
                         <TableCell className="text-right">
                           <div className="flex flex-wrap justify-end gap-1">
-                            {["open", "waiting", "ready", "connected"].includes(
-                              String(req.status),
-                            ) && (
-                              <Button
-                                type="button"
-                                size="sm"
-                                className="h-8 gap-1"
-                                onClick={() => onConnect(req)}
-                                title={t("sos.connectHintMesh")}
-                              >
-                                <MonitorSmartphone className="size-3.5" />
-                                {t("sos.connect")}
-                              </Button>
-                            )}
+                            {req.sosCode &&
+                              ["open", "waiting", "ready", "connected"].includes(
+                                String(req.status),
+                              ) && (
+                                <Button
+                                  type="button"
+                                  size="sm"
+                                  className="h-8 gap-1"
+                                  onClick={() => onConnect(req)}
+                                  title={t("sos.connectHint")}
+                                >
+                                  <MonitorSmartphone className="size-3.5" />
+                                  {t("sos.connect")}
+                                </Button>
+                              )}
                             {req.supportPortalLink && (
                               <Button
                                 asChild
@@ -285,13 +273,9 @@ export function SosQueuePage() {
                                 </a>
                               </Button>
                             )}
-                            {[
-                              "open",
-                              "waiting",
-                              "ready",
-                              "connected",
-                              "error",
-                            ].includes(String(req.status)) && (
+                            {["open", "waiting", "ready", "connected", "error"].includes(
+                              String(req.status),
+                            ) && (
                               <Button
                                 type="button"
                                 size="sm"
@@ -306,7 +290,7 @@ export function SosQueuePage() {
                                   <XCircle className="size-3.5" />
                                 )}
                                 <span className="hidden sm:inline">
-                                  {t("sos.closeRequest")}
+                                  {t("sos.close")}
                                 </span>
                               </Button>
                             )}

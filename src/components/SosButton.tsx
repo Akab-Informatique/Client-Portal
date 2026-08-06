@@ -1,11 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
-import {
-  Download,
-  ExternalLink,
-  Headphones,
-  Loader2,
-  Siren,
-} from "lucide-react";
+import { ExternalLink, Headphones, Loader2, Siren } from "lucide-react";
 import { useAuth } from "@/lib/auth";
 import { useLocale } from "@/hooks/use-locale";
 import { db, dbReady, schema } from "@/db";
@@ -13,7 +7,6 @@ import { eq } from "drizzle-orm";
 import {
   createSosRequest,
   fetchClientSosRequests,
-  markSosAgentRunning,
   type SosRequest,
 } from "@/lib/sos";
 import { Button } from "@/components/ui/button";
@@ -31,8 +24,8 @@ import { Badge } from "@/components/ui/badge";
 import { cn } from "@/lib/utils";
 
 /**
- * Client header SOS — MeshCentral temporary agent.
- * Flow: Start SOS → open invite link → run agent → wait (no code/ID).
+ * Client header SOS control — creates a Splashtop attended session and
+ * opens the support portal link so the end user can run the SOS applet.
  */
 export function SosButton({ className }: { className?: string }) {
   const { t } = useLocale();
@@ -41,7 +34,6 @@ export function SosButton({ className }: { className?: string }) {
   const [issue, setIssue] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [info, setInfo] = useState<string | null>(null);
   const [active, setActive] = useState<SosRequest | null>(null);
   const [companyName, setCompanyName] = useState("");
 
@@ -70,7 +62,8 @@ export function SosButton({ className }: { className?: string }) {
     if (!user?.id) return;
     try {
       const res = await fetchClientSosRequests(user.id);
-      setActive(res.requests[0] ?? null);
+      const first = res.requests[0] ?? null;
+      setActive(first);
     } catch {
       /* ignore */
     }
@@ -85,13 +78,6 @@ export function SosButton({ className }: { className?: string }) {
 
   if (!user || user.role !== "client") return null;
 
-  const inviteUrl =
-    active?.agentInviteUrl || active?.supportPortalLink || null;
-
-  const openAgentLink = (url: string) => {
-    window.open(url, "_blank", "noopener,noreferrer");
-  };
-
   const startSos = async () => {
     if (!user.company_id) {
       setError(t("sos.noCompany"));
@@ -99,7 +85,6 @@ export function SosButton({ className }: { className?: string }) {
     }
     setBusy(true);
     setError(null);
-    setInfo(null);
     try {
       const res = await createSosRequest({
         userId: user.id,
@@ -111,35 +96,19 @@ export function SosButton({ className }: { className?: string }) {
       });
       if (res.request) {
         setActive(res.request);
-        const link =
-          res.request.agentInviteUrl || res.request.supportPortalLink;
-        if (link) {
-          openAgentLink(link);
-          setInfo(t("sos.meshOpened"));
+        if (res.request.supportPortalLink) {
+          window.open(
+            res.request.supportPortalLink,
+            "_blank",
+            "noopener,noreferrer",
+          );
         }
       }
       if (res.error && !res.request?.supportPortalLink) {
         setError(res.error);
       } else if (res.error) {
+        // Soft warning — request exists
         setError(res.error);
-      }
-    } catch (e) {
-      setError(e instanceof Error ? e.message : t("sos.createFailed"));
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  const onAgentRunning = async () => {
-    if (!active?.id) return;
-    setBusy(true);
-    setError(null);
-    try {
-      const res = await markSosAgentRunning(active.id);
-      if (res.error) setError(res.error);
-      else if (res.request) {
-        setActive(res.request);
-        setInfo(t("sos.meshWaitingTech"));
       }
     } catch (e) {
       setError(e instanceof Error ? e.message : t("sos.createFailed"));
@@ -165,7 +134,6 @@ export function SosButton({ className }: { className?: string }) {
         )}
         onClick={() => {
           setError(null);
-          setInfo(null);
           setOpen(true);
         }}
         title={t("sos.buttonTitle")}
@@ -181,7 +149,7 @@ export function SosButton({ className }: { className?: string }) {
               <Headphones className="size-5 text-red-600" />
               {t("sos.dialogTitle")}
             </DialogTitle>
-            <DialogDescription>{t("sos.dialogDescMesh")}</DialogDescription>
+            <DialogDescription>{t("sos.dialogDesc")}</DialogDescription>
           </DialogHeader>
 
           <div className="space-y-4">
@@ -189,12 +157,9 @@ export function SosButton({ className }: { className?: string }) {
               <div className="rounded-lg border border-border bg-muted/40 px-3 py-2 text-sm">
                 <div className="flex flex-wrap items-center gap-2">
                   <span className="font-medium">{t("sos.activeRequest")}</span>
-                  <Badge variant="outline">
-                    {statusLabel(String(active.status))}
-                  </Badge>
-                  <Badge variant="secondary">MeshCentral</Badge>
+                  <Badge variant="outline">{statusLabel(String(active.status))}</Badge>
                 </div>
-                {inviteUrl && (
+                {active.supportPortalLink && (
                   <Button
                     asChild
                     variant="link"
@@ -202,12 +167,12 @@ export function SosButton({ className }: { className?: string }) {
                     className="mt-1 h-auto gap-1 px-0"
                   >
                     <a
-                      href={inviteUrl}
+                      href={active.supportPortalLink}
                       target="_blank"
                       rel="noopener noreferrer"
                     >
-                      <Download className="size-3.5" />
-                      {t("sos.openAgentLink")}
+                      <ExternalLink className="size-3.5" />
+                      {t("sos.openClientLink")}
                     </a>
                   </Button>
                 )}
@@ -226,16 +191,10 @@ export function SosButton({ className }: { className?: string }) {
                 value={issue}
                 onChange={(e) => setIssue(e.target.value)}
                 placeholder={t("sos.issuePlaceholder")}
-                rows={2}
+                rows={3}
                 disabled={busy}
               />
             </div>
-
-            {info && (
-              <p className="rounded-md border border-border bg-muted/50 px-3 py-2 text-sm text-foreground">
-                {info}
-              </p>
-            )}
 
             {error && (
               <p className="rounded-md border border-destructive/40 bg-destructive/10 px-3 py-2 text-sm text-destructive">
@@ -244,14 +203,13 @@ export function SosButton({ className }: { className?: string }) {
             )}
 
             <ol className="list-decimal space-y-1 pl-5 text-xs text-muted-foreground">
-              <li>{t("sos.meshStep1")}</li>
-              <li>{t("sos.meshStep2")}</li>
-              <li>{t("sos.meshStep3")}</li>
-              <li>{t("sos.meshStep4")}</li>
+              <li>{t("sos.step1")}</li>
+              <li>{t("sos.step2")}</li>
+              <li>{t("sos.step3")}</li>
             </ol>
           </div>
 
-          <DialogFooter className="flex-col gap-2 sm:flex-row sm:justify-end">
+          <DialogFooter className="gap-2 sm:gap-0">
             <Button
               type="button"
               variant="outline"
@@ -260,32 +218,6 @@ export function SosButton({ className }: { className?: string }) {
             >
               {t("common.close")}
             </Button>
-            {inviteUrl && (
-              <>
-                <Button
-                  type="button"
-                  variant="secondary"
-                  className="gap-1.5"
-                  disabled={busy}
-                  onClick={() => openAgentLink(inviteUrl)}
-                >
-                  <ExternalLink className="size-4" />
-                  {t("sos.openAgentLink")}
-                </Button>
-                <Button
-                  type="button"
-                  variant="secondary"
-                  className="gap-1.5"
-                  disabled={busy}
-                  onClick={() => void onAgentRunning()}
-                >
-                  {busy ? (
-                    <Loader2 className="size-4 animate-spin" />
-                  ) : null}
-                  {t("sos.iRanTheApp")}
-                </Button>
-              </>
-            )}
             <Button
               type="button"
               className="gap-1.5 bg-red-600 text-white hover:bg-red-700"
@@ -297,7 +229,9 @@ export function SosButton({ className }: { className?: string }) {
               ) : (
                 <Siren className="size-4" />
               )}
-              {active ? t("sos.restart") : t("sos.start")}
+              {active?.supportPortalLink
+                ? t("sos.restart")
+                : t("sos.start")}
             </Button>
           </DialogFooter>
         </DialogContent>

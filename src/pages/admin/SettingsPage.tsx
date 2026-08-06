@@ -35,7 +35,7 @@ import {
 } from "@/lib/sharepoint";
 import { fetchItGlueStatus } from "@/lib/itglue";
 import { fetchSmtpStatus, type SmtpStatusResponse } from "@/lib/smtp";
-import { fetchMeshCentralStatus } from "@/lib/sos";
+import { fetchSplashtopStatus } from "@/lib/sos";
 
 type ConnState = "unknown" | "ok" | "fail" | "off";
 
@@ -67,9 +67,8 @@ export function SettingsPage() {
   const [stStatus, setStStatus] = useState<ConnState>("unknown");
   const [stDetail, setStDetail] = useState<{
     message?: string;
-    meshName?: string | null;
+    teamId?: string | null;
     baseUrl?: string | null;
-    staticInviteOnly?: boolean;
     configured?: boolean;
   } | null>(null);
   const [stChecking, setStChecking] = useState(false);
@@ -128,15 +127,14 @@ export function SettingsPage() {
     }
   };
 
-  const loadMeshCentralStatus = async (refresh: boolean) => {
+  const loadSplashtopStatus = async (refresh: boolean) => {
     setStChecking(true);
     try {
-      const s = await fetchMeshCentralStatus(refresh);
+      const s = await fetchSplashtopStatus(refresh);
       setStDetail({
         message: s.message || s.error,
-        meshName: s.meshName,
+        teamId: s.teamId,
         baseUrl: s.baseUrl,
-        staticInviteOnly: s.staticInviteOnly,
         configured: s.configured,
       });
       if (!s.configured) setStStatus("off");
@@ -144,7 +142,7 @@ export function SettingsPage() {
       else setStStatus("fail");
     } catch {
       setStStatus("fail");
-      setStDetail({ message: "Could not reach /api/meshcentral/status" });
+      setStDetail({ message: "Could not reach /api/splashtop/status" });
     } finally {
       setStChecking(false);
     }
@@ -152,7 +150,7 @@ export function SettingsPage() {
 
   useEffect(() => {
     void loadAutotaskStatus(false);
-    void loadMeshCentralStatus(false);
+    void loadSplashtopStatus(false);
     fetchSharePointStatus(false)
       .then((s) => {
         if (!s.configured) setSpStatus("off");
@@ -470,9 +468,9 @@ export function SettingsPage() {
                     <Siren className="size-5 text-red-600" />
                   </div>
                   <div className="min-w-0 space-y-1">
-                    <p className="font-semibold">MeshCentral SOS</p>
+                    <p className="font-semibold">Splashtop SOS</p>
                     <p className="text-xs text-muted-foreground">
-                      {t("settings.meshcentralHint")}
+                      {t("settings.splashtopHint")}
                     </p>
                     {stDetail?.message && stStatus !== "unknown" && (
                       <p
@@ -485,9 +483,9 @@ export function SettingsPage() {
                         {stDetail.message}
                       </p>
                     )}
-                    {stDetail?.meshName && stStatus === "ok" && (
+                    {stDetail?.teamId && stStatus === "ok" && (
                       <p className="font-mono text-[11px] text-muted-foreground">
-                        group {stDetail.meshName}
+                        team {stDetail.teamId}
                       </p>
                     )}
                     {stDetail?.baseUrl && stStatus === "ok" && (
@@ -500,7 +498,7 @@ export function SettingsPage() {
                 <div className="flex flex-wrap items-center gap-2">
                   {statusBadge(
                     stStatus,
-                    t("settings.meshcentralReady"),
+                    t("settings.splashtopReady"),
                     t("settings.statusNotConfigured"),
                   )}
                   <Button
@@ -508,16 +506,16 @@ export function SettingsPage() {
                     variant="outline"
                     size="sm"
                     disabled={stChecking}
-                    onClick={() => void loadMeshCentralStatus(true)}
+                    onClick={() => void loadSplashtopStatus(true)}
                   >
                     {stChecking ? (
                       <Loader2 className="size-3.5 animate-spin" />
                     ) : (
-                      t("settings.retest")
+                      t("settings.recheck")
                     )}
                   </Button>
                   <Button variant="outline" size="sm" asChild>
-                    <Link to="/admin/sos">{t("settings.meshcentralOpenQueue")}</Link>
+                    <Link to="/admin/sos">{t("settings.splashtopOpenQueue")}</Link>
                   </Button>
                 </div>
               </div>
