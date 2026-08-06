@@ -15,7 +15,9 @@ import {
   createSosRequest,
   ensureClientPortalHref,
   fetchClientSosRequests,
+  navigatePendingSosWindow,
   openClientPortalLink,
+  openPendingSosWindow,
   type SosRequest,
 } from "@/lib/sos";
 import { Button } from "@/components/ui/button";
