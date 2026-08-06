@@ -13,6 +13,7 @@ export type ClientSafeContract = {
   endDate: string | null;
   description: string | null;
   monthlyAmount: number | null;
+  nextInvoiceDate: string | null;
   periodType: number | null;
   periodTypeLabel: string | null;
 };
@@ -25,6 +26,7 @@ export type ClientContractService = {
   units: number | null;
   unitPrice: number | null;
   lineTotal: number | null;
+  isActive?: boolean;
 };
 
 export type ContractsResponse = {

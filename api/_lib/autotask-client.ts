@@ -1695,6 +1695,8 @@ export type ClientSafeContract = {
    * Null when services/units are unavailable (e.g. non-recurring contracts).
    */
   monthlyAmount: number | null;
+  /** Next billing/invoice date derived from active ContractServiceUnits periods. */
+  nextInvoiceDate: string | null;
   periodType: number | null;
   periodTypeLabel: string | null;
 };
@@ -1710,6 +1712,8 @@ export type ClientContractService = {
   unitPrice: number | null;
   /** units * unitPrice when both known. */
   lineTotal: number | null;
+  /** True when service has units covering today (active). */
+  isActive: boolean;
 };
 
 function stripForbiddenContractFields(
@@ -1820,6 +1824,7 @@ function mapClientSafeContract(
     endDate: safe.endDate != null ? String(safe.endDate).slice(0, 32) : null,
     description,
     monthlyAmount: null,
+    nextInvoiceDate: null,
     periodType,
     periodTypeLabel,
   };
@@ -1845,13 +1850,52 @@ function periodTotalToMonthly(
  * Sum client-facing period totals for many contracts via ContractServices × units.
  * Never uses internal cost fields. Contracts entity has no period dollar amount.
  */
-async function fetchMonthlyAmountsForContracts(
+/**
+ * Active unit row covering "today" (or soonest future period).
+ */
+function unitCoversDate(
+  start: string | null,
+  end: string | null,
+  day: string,
+): boolean {
+  const sOk = !start || start <= day;
+  const eOk = !end || end >= day || /^0001/.test(end);
+  return sOk && eOk;
+}
+
+function addDaysIso(isoDate: string, days: number): string | null {
+  try {
+    const d = new Date(isoDate + "T00:00:00Z");
+    if (Number.isNaN(d.getTime())) return null;
+    d.setUTCDate(d.getUTCDate() + days);
+    return d.toISOString().slice(0, 10);
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * From active ContractServiceUnits for many contracts:
+ * - monthlyAmount: sum of unitPrice × active units (today), normalized by period
+ * - nextInvoiceDate: start of next period after today, else day after current period end
+ *
+ * Only ACTIVE services (units > 0 covering today) count toward monthly price.
+ */
+async function fetchContractBillingExtras(
   base: string,
   cfg: AutotaskConfig,
   contractIds: number[],
   periodLabelByContractId: Map<number, string | null>,
-): Promise<Map<number, number>> {
-  const result = new Map<number, number>();
+): Promise<
+  Map<number, { monthlyAmount: number | null; nextInvoiceDate: string | null }>
+> {
+  const result = new Map<
+    number,
+    { monthlyAmount: number | null; nextInvoiceDate: string | null }
+  >();
+  for (const id of contractIds) {
+    result.set(id, { monthlyAmount: null, nextInvoiceDate: null });
+  }
   if (contractIds.length === 0) return result;
 
   type QueryRes = { items?: Array<Record<string, unknown>> };
@@ -1867,12 +1911,7 @@ async function fetchMonthlyAmountsForContracts(
         "ContractServices/query",
         {
           MaxRecords: 500,
-          IncludeFields: [
-            "id",
-            "contractID",
-            "serviceID",
-            "unitPrice",
-          ],
+          IncludeFields: ["id", "contractID", "serviceID", "unitPrice"],
           filter: [
             {
               op: "and",
@@ -1907,10 +1946,24 @@ async function fetchMonthlyAmountsForContracts(
 
   if (allCs.length === 0) return result;
 
-  const unitsByCsId = new Map<number, number>();
-  const csIds = allCs
-    .map((r) => Number(r.id))
-    .filter((n) => Number.isFinite(n) && n > 0);
+  type UnitRow = {
+    csId: number;
+    contractId: number;
+    units: number;
+    start: string | null;
+    end: string | null;
+  };
+  const unitRows: UnitRow[] = [];
+  const csToContract = new Map<number, number>();
+  for (const raw of allCs) {
+    const csId = Number(raw.id);
+    const contractId = Number(raw.contractID);
+    if (Number.isFinite(csId) && Number.isFinite(contractId)) {
+      csToContract.set(csId, contractId);
+    }
+  }
+  const csIds = [...csToContract.keys()];
+  const today = new Date().toISOString().slice(0, 10);
 
   for (let i = 0; i < csIds.length; i += chunkSize) {
     const chunk = csIds.slice(i, i + chunkSize);
@@ -1923,6 +1976,7 @@ async function fetchMonthlyAmountsForContracts(
           MaxRecords: 500,
           IncludeFields: [
             "id",
+            "contractID",
             "contractServiceID",
             "units",
             "startDate",
@@ -1931,61 +1985,116 @@ async function fetchMonthlyAmountsForContracts(
           filter: [
             {
               op: "and",
-              items: [
-                { op: "in", field: "contractServiceID", value: chunk },
-              ],
+              items: [{ op: "in", field: "contractServiceID", value: chunk }],
             },
           ],
         },
       );
-      const today = new Date().toISOString().slice(0, 10);
       for (const u of unitsData.items ?? []) {
         const csId = Number(u.contractServiceID);
         const units = Number(u.units);
-        if (!Number.isFinite(csId) || !Number.isFinite(units)) continue;
+        if (!Number.isFinite(csId) || !Number.isFinite(units) || units <= 0) {
+          continue;
+        }
+        const contractId =
+          Number(u.contractID) || csToContract.get(csId) || NaN;
+        if (!Number.isFinite(contractId)) continue;
         const start =
           u.startDate != null ? String(u.startDate).slice(0, 10) : null;
-        const end =
-          u.endDate != null ? String(u.endDate).slice(0, 10) : null;
-        const coversToday =
-          (!start || start <= today) &&
-          (!end || end >= today || /^0001/.test(end));
-        const prev = unitsByCsId.get(csId);
-        if (coversToday || prev == null) {
-          unitsByCsId.set(csId, units);
-        }
+        const end = u.endDate != null ? String(u.endDate).slice(0, 10) : null;
+        unitRows.push({ csId, contractId, units, start, end });
       }
     } catch {
       /* units optional */
     }
   }
 
+  // Active units covering today per ContractService
+  const activeUnitsByCsId = new Map<number, number>();
+  const periodsByContract = new Map<number, Array<{ start: string | null; end: string | null }>>();
+  for (const row of unitRows) {
+    const list = periodsByContract.get(row.contractId) ?? [];
+    list.push({ start: row.start, end: row.end });
+    periodsByContract.set(row.contractId, list);
+    if (unitCoversDate(row.start, row.end, today)) {
+      // Prefer covering-today; keep max units if multiple
+      const prev = activeUnitsByCsId.get(row.csId);
+      if (prev == null || row.units > prev) {
+        activeUnitsByCsId.set(row.csId, row.units);
+      }
+    }
+  }
+
+  // Monthly from ACTIVE services only
   const periodTotalByContract = new Map<number, number>();
   for (const raw of allCs) {
     const contractId = Number(raw.contractID);
     const csId = Number(raw.id);
     if (!Number.isFinite(contractId) || !Number.isFinite(csId)) continue;
-    const unitPrice =
-      parseMoney(raw.unitPrice) ?? parseMoney(raw.adjustedPrice);
+    if (!activeUnitsByCsId.has(csId)) continue; // inactive service — skip
+    const unitPrice = parseMoney(raw.unitPrice);
     if (unitPrice == null) continue;
-    const units = unitsByCsId.has(csId) ? unitsByCsId.get(csId)! : null;
-    // If units unknown, treat as 1 so single-service contracts still show a figure
-    const qty = units != null && units > 0 ? units : 1;
-    const line = unitPrice * qty;
+    const qty = activeUnitsByCsId.get(csId)!;
+    if (!(qty > 0)) continue;
     periodTotalByContract.set(
       contractId,
-      (periodTotalByContract.get(contractId) ?? 0) + line,
+      (periodTotalByContract.get(contractId) ?? 0) + unitPrice * qty,
     );
   }
 
-  for (const [contractId, periodTotal] of periodTotalByContract) {
+  for (const contractId of contractIds) {
     const label = periodLabelByContractId.get(contractId) ?? null;
-    const monthly = periodTotalToMonthly(periodTotal, label);
-    if (Number.isFinite(monthly)) {
-      result.set(contractId, Math.round(monthly * 100) / 100);
+    const periodTotal = periodTotalByContract.get(contractId);
+    let monthlyAmount: number | null = null;
+    if (periodTotal != null && Number.isFinite(periodTotal)) {
+      monthlyAmount =
+        Math.round(periodTotalToMonthly(periodTotal, label) * 100) / 100;
     }
+
+    // Next invoice date from unit periods
+    let nextInvoiceDate: string | null = null;
+    const periods = periodsByContract.get(contractId) ?? [];
+    const futureStarts: string[] = [];
+    const currentEnds: string[] = [];
+    for (const p of periods) {
+      if (p.start && p.start > today) futureStarts.push(p.start);
+      if (unitCoversDate(p.start, p.end, today) && p.end && !/^0001/.test(p.end)) {
+        currentEnds.push(p.end);
+      }
+    }
+    if (futureStarts.length > 0) {
+      futureStarts.sort();
+      nextInvoiceDate = futureStarts[0]!;
+    } else if (currentEnds.length > 0) {
+      currentEnds.sort();
+      const lastEnd = currentEnds[currentEnds.length - 1]!;
+      // Next bill typically the day after current period ends (or period start of next cycle)
+      nextInvoiceDate = addDaysIso(lastEnd, 1);
+    }
+
+    result.set(contractId, { monthlyAmount, nextInvoiceDate });
   }
 
+  return result;
+}
+
+/** @deprecated name kept as thin wrapper if needed externally */
+async function fetchMonthlyAmountsForContracts(
+  base: string,
+  cfg: AutotaskConfig,
+  contractIds: number[],
+  periodLabelByContractId: Map<number, string | null>,
+): Promise<Map<number, number>> {
+  const extras = await fetchContractBillingExtras(
+    base,
+    cfg,
+    contractIds,
+    periodLabelByContractId,
+  );
+  const result = new Map<number, number>();
+  for (const [id, v] of extras) {
+    if (v.monthlyAmount != null) result.set(id, v.monthlyAmount);
+  }
   return result;
 }
 
@@ -2079,23 +2188,27 @@ export async function fetchClientSafeContractsForCompany(
     contracts = contracts.filter((c) => c.isActive);
   }
 
-  // Fill monthly amounts from ContractServices (Contracts has no period $ field)
+  // Fill monthly (active services only) + next invoice date from ContractServiceUnits
   try {
     const periodLabelById = new Map<number, string | null>(
       contracts.map((c) => [c.id, c.periodTypeLabel]),
     );
-    const monthlyById = await fetchMonthlyAmountsForContracts(
+    const extrasById = await fetchContractBillingExtras(
       base,
       cfg,
       contracts.map((c) => c.id),
       periodLabelById,
     );
-    contracts = contracts.map((c) => ({
-      ...c,
-      monthlyAmount: monthlyById.get(c.id) ?? null,
-    }));
+    contracts = contracts.map((c) => {
+      const ex = extrasById.get(c.id);
+      return {
+        ...c,
+        monthlyAmount: ex?.monthlyAmount ?? null,
+        nextInvoiceDate: ex?.nextInvoiceDate ?? null,
+      };
+    });
   } catch {
-    /* monthly optional — list still works without it */
+    /* billing extras optional — list still works without them */
   }
 
   contracts.sort((a, b) =>
@@ -2197,8 +2310,9 @@ export async function fetchContractServicesForContract(
     }
   }
 
-  // Current units per contractService (when entity is available)
+  // Active units covering today per contractService (inactive services excluded)
   const unitsByCsId = new Map<number, number>();
+  let unitsQueryOk = false;
   try {
     const unitsData = await postQuery<QueryRes>(
       base,
@@ -2223,26 +2337,22 @@ export async function fetchContractServicesForContract(
         ],
       },
     );
+    unitsQueryOk = true;
     const today = new Date().toISOString().slice(0, 10);
     for (const u of unitsData.items ?? []) {
       const csId = Number(u.contractServiceID);
       const units = Number(u.units);
-      if (!Number.isFinite(csId) || !Number.isFinite(units)) continue;
+      if (!Number.isFinite(csId) || !Number.isFinite(units) || units <= 0) continue;
       const start =
         u.startDate != null ? String(u.startDate).slice(0, 10) : null;
       const end = u.endDate != null ? String(u.endDate).slice(0, 10) : null;
-      // Prefer rows covering "today"; otherwise keep max units seen
-      const coversToday =
-        (!start || start <= today) && (!end || end >= today || /^0001/.test(end));
+      // Only keep rows covering today (active)
+      if (!unitCoversDate(start, end, today)) continue;
       const prev = unitsByCsId.get(csId);
-      if (coversToday) {
-        unitsByCsId.set(csId, units);
-      } else if (prev == null) {
-        unitsByCsId.set(csId, units);
-      }
+      if (prev == null || units > prev) unitsByCsId.set(csId, units);
     }
   } catch {
-    // Units entity may be restricted — services still return without qty
+    // Units entity may be restricted — services still return without qty filter
   }
 
   // Resolve service names
@@ -2281,12 +2391,13 @@ export async function fetchContractServicesForContract(
     .map((raw): ClientContractService | null => {
       const id = Number(raw.id);
       if (!Number.isFinite(id)) return null;
+      // When units are available, only show active services (units covering today)
+      if (unitsQueryOk && !unitsByCsId.has(id)) return null;
       const serviceId =
         raw.serviceID != null && Number.isFinite(Number(raw.serviceID))
           ? Number(raw.serviceID)
           : null;
-      const unitPrice =
-        parseMoney(raw.unitPrice) ?? parseMoney(raw.adjustedPrice);
+      const unitPrice = parseMoney(raw.unitPrice);
       const units = unitsByCsId.has(id) ? unitsByCsId.get(id)! : null;
       const lineTotal =
         unitPrice != null && units != null ? unitPrice * units : null;
@@ -2307,6 +2418,7 @@ export async function fetchContractServicesForContract(
         units,
         unitPrice,
         lineTotal,
+        isActive: unitsQueryOk ? unitsByCsId.has(id) : true,
       };
     })
     .filter((s): s is ClientContractService => s != null)
@@ -2333,6 +2445,7 @@ const CLIENT_INVOICE_FIELDS = [
   "totalTaxValue",
   "fromDate",
   "toDate",
+  "paymentTerm",
 ] as const;
 
 export type ClientInvoice = {
@@ -2348,9 +2461,15 @@ export type ClientInvoice = {
   status: "open" | "paid" | "voided";
   fromDate: string | null;
   toDate: string | null;
+  paymentTermId: number | null;
+  /** Resolved PaymentTerms name (e.g. Net 30). */
+  paymentTerms: string | null;
 };
 
-function mapClientInvoice(raw: Record<string, unknown>): ClientInvoice | null {
+function mapClientInvoice(
+  raw: Record<string, unknown>,
+  paymentTermLabels: Record<string, string> = {},
+): ClientInvoice | null {
   const id = Number(raw.id);
   if (!Number.isFinite(id)) return null;
   const isVoided = raw.isVoided === true || raw.isVoided === 1 || raw.isVoided === "true";
@@ -2374,6 +2493,15 @@ function mapClientInvoice(raw: Record<string, unknown>): ClientInvoice | null {
       ? String(raw.invoiceNumber).trim()
       : null;
 
+  const paymentTermId =
+    raw.paymentTerm != null && Number.isFinite(Number(raw.paymentTerm))
+      ? Number(raw.paymentTerm)
+      : null;
+  const paymentTerms =
+    paymentTermId != null
+      ? paymentTermLabels[String(paymentTermId)] || null
+      : null;
+
   return {
     id,
     number,
@@ -2389,7 +2517,53 @@ function mapClientInvoice(raw: Record<string, unknown>): ClientInvoice | null {
     status,
     fromDate: raw.fromDate != null ? String(raw.fromDate).slice(0, 32) : null,
     toDate: raw.toDate != null ? String(raw.toDate).slice(0, 32) : null,
+    paymentTermId,
+    paymentTerms,
   };
+}
+
+/** Load PaymentTerms id → name map (tenant-specific). */
+async function getPaymentTermLabels(
+  base: string,
+  cfg: AutotaskConfig,
+): Promise<Record<string, string>> {
+  // Prefer Invoices entity picklist if present
+  const fromPick = await getPicklistMap(base, cfg, "Invoices", "paymentTerm");
+  if (Object.keys(fromPick).length > 0) return fromPick;
+
+  type QueryRes = { items?: Array<Record<string, unknown>> };
+  try {
+    const data = await postQuery<QueryRes>(base, cfg, "PaymentTerms/query", {
+      MaxRecords: 500,
+      IncludeFields: ["id", "name", "isActive"],
+      filter: [{ op: "exist", field: "id" }],
+    });
+    const map: Record<string, string> = {};
+    for (const row of data.items ?? []) {
+      const id = row.id != null ? String(row.id) : "";
+      const name = row.name != null ? String(row.name).trim() : "";
+      if (id && name) map[id] = name;
+    }
+    return map;
+  } catch {
+    try {
+      // Some tenants use GET collection
+      const res = await atFetch(`${base}v1.0/PaymentTerms`, cfg);
+      if (!res.ok) return {};
+      const data = (await res.json()) as {
+        items?: Array<Record<string, unknown>>;
+      };
+      const map: Record<string, string> = {};
+      for (const row of data.items ?? []) {
+        const id = row.id != null ? String(row.id) : "";
+        const name = row.name != null ? String(row.name).trim() : "";
+        if (id && name) map[id] = name;
+      }
+      return map;
+    } catch {
+      return {};
+    }
+  }
 }
 
 type InvoiceQueryRes = {
@@ -2492,16 +2666,34 @@ export async function fetchClientInvoicesForCompany(
     filter: [{ op: "and", items: filterItems }],
   };
 
+  const fieldsWithoutPaymentTerm = CLIENT_INVOICE_FIELDS.filter(
+    (f) => f !== "paymentTerm",
+  );
+
   let rawItems: Array<Record<string, unknown>> = [];
   try {
     rawItems = await fetchAllInvoicePages(cfg, base, body);
   } catch (e) {
-    // Some tenants reject isVoided in filter — retry without it and strip client-side
+    // Some tenants reject isVoided filter and/or paymentTerm IncludeFields
     const msg = e instanceof Error ? e.message : String(e);
-    if (/isVoided|voided/i.test(msg) || /filter/i.test(msg)) {
+    if (/paymentTerm/i.test(msg)) {
+      try {
+        rawItems = await fetchAllInvoicePages(cfg, base, {
+          ...body,
+          IncludeFields: [...fieldsWithoutPaymentTerm],
+        });
+      } catch (e2) {
+        const msg2 = e2 instanceof Error ? e2.message : String(e2);
+        if (!(/isVoided|voided|filter/i.test(msg2))) throw e2;
+        // fall through to voided retry below using e2
+        e = e2;
+      }
+    }
+    const msgFinal = e instanceof Error ? e.message : String(e);
+    if (/isVoided|voided/i.test(msgFinal) || /filter/i.test(msgFinal)) {
       const fallbackBody = {
         MaxRecords: 500,
-        IncludeFields: [...CLIENT_INVOICE_FIELDS],
+        IncludeFields: [...fieldsWithoutPaymentTerm],
         filter: [
           {
             op: "and",
@@ -2527,7 +2719,7 @@ export async function fetchClientInvoicesForCompany(
       }
       rawItems = await fetchAllInvoicePages(cfg, base, {
         MaxRecords: 500,
-        IncludeFields: [...CLIENT_INVOICE_FIELDS],
+        IncludeFields: [...fieldsWithoutPaymentTerm],
         filter: [{ op: "and", items: cleanItems }],
       });
     } else {
@@ -2535,8 +2727,16 @@ export async function fetchClientInvoicesForCompany(
     }
   }
 
+  // Resolve payment term labels (Net 30, etc.)
+  let paymentTermLabels: Record<string, string> = {};
+  try {
+    paymentTermLabels = await getPaymentTermLabels(base, cfg);
+  } catch {
+    paymentTermLabels = {};
+  }
+
   const invoices = rawItems
-    .map((item) => mapClientInvoice(item))
+    .map((item) => mapClientInvoice(item, paymentTermLabels))
     .filter((inv): inv is ClientInvoice => inv != null)
     // Always hide voided even if Autotask filter was unavailable
     .filter((inv) => !inv.isVoided && inv.status !== "voided")

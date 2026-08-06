@@ -17,6 +17,8 @@ export type ClientInvoice = {
   status: "open" | "paid" | "voided";
   fromDate: string | null;
   toDate: string | null;
+  paymentTermId?: number | null;
+  paymentTerms?: string | null;
 };
 
 export type InvoicesResponse = {

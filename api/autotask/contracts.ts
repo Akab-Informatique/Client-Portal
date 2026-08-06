@@ -65,10 +65,11 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         "endDate",
         "description",
         "monthlyAmount",
+        "nextInvoiceDate",
         "periodTypeLabel",
       ],
       clientHiddenNote:
-        "Internal cost, profit, margin, and setup fees are never exposed. Monthly amount is estimated from service unit prices × units.",
+        "Internal cost, profit, margin, and setup fees are never exposed. Monthly amount uses active service units only. Next invoice is derived from billing periods.",
     });
   } catch (err) {
     return res.status(500).json({

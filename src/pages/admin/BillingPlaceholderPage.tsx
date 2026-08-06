@@ -390,6 +390,7 @@ export function BillingPlaceholderPage({ kind }: { kind: BillingKind }) {
                         <TableHead>{t("billing.colNumber")}</TableHead>
                         <TableHead>{t("billing.colDate")}</TableHead>
                         <TableHead>{t("billing.colDue")}</TableHead>
+                        <TableHead>{t("billing.colPaymentTerms")}</TableHead>
                         <TableHead className="text-right">
                           {t("billing.colAmount")}
                         </TableHead>
@@ -410,6 +411,9 @@ export function BillingPlaceholderPage({ kind }: { kind: BillingKind }) {
                           </TableCell>
                           <TableCell className="tabular-nums text-muted-foreground">
                             {formatInvoiceDate(inv.dueDate)}
+                          </TableCell>
+                          <TableCell className="text-muted-foreground">
+                            {inv.paymentTerms || "—"}
                           </TableCell>
                           <TableCell className="text-right font-medium tabular-nums">
                             {formatMoney(inv.total)}
@@ -530,6 +534,7 @@ export function BillingPlaceholderPage({ kind }: { kind: BillingKind }) {
                         <TableHead className="text-right">
                           {t("billing.colMonthly")}
                         </TableHead>
+                        <TableHead>{t("billing.colNextInvoice")}</TableHead>
                         <TableHead>{t("billing.colStart")}</TableHead>
                         <TableHead>{t("billing.colEnd")}</TableHead>
                       </TableRow>
@@ -572,6 +577,9 @@ export function BillingPlaceholderPage({ kind }: { kind: BillingKind }) {
                                 /{t("billing.mo")}
                               </span>
                             )}
+                          </TableCell>
+                          <TableCell className="tabular-nums text-muted-foreground">
+                            {formatContractDate(c.nextInvoiceDate)}
                           </TableCell>
                           <TableCell className="tabular-nums text-muted-foreground">
                             {formatContractDate(c.startDate)}
