@@ -187,3 +187,44 @@ export const message_user_states = pgTable("message_user_states", {
   updated_at: text("updated_at"),
   created_at: timestamp("created_at").defaultNow().notNull(),
 });
+
+/**
+ * Splashtop SOS remote-support requests from client portal users.
+ * Techs see open requests and connect via Splashtop Business deep link.
+ */
+export const sos_requests = pgTable("sos_requests", {
+  id: serial("id").primaryKey(),
+  company_id: integer("company_id").notNull(),
+  company_name: text("company_name").notNull(),
+  user_id: integer("user_id").notNull(),
+  user_name: text("user_name").notNull(),
+  user_email: text("user_email").notNull(),
+  /** Client-provided short description of the issue */
+  issue: text("issue"),
+  /**
+   * open | waiting | ready | connected | closed | expired | error
+   * open/waiting = session created, client may still need to launch SOS
+   * ready = remote endpoint associated (Splashtop reports device online)
+   * connected = tech connected (best-effort from poll)
+   * closed/expired/error = terminal
+   */
+  status: text("status").notNull(),
+  /** Splashtop support session id */
+  splashtop_session_id: text("splashtop_session_id"),
+  /** SOS code used in st-business:// deep link */
+  sos_code: text("sos_code"),
+  /** End-user portal link to download/run SOS applet */
+  support_portal_link: text("support_portal_link"),
+  /** Channel id used when creating the session (0 = private) */
+  channel_id: text("channel_id"),
+  /** Last error message if create/poll failed */
+  error_message: text("error_message"),
+  /** ISO timestamps as text for simple cross-db handling */
+  expires_at: text("expires_at"),
+  closed_at: text("closed_at"),
+  closed_by_user_id: integer("closed_by_user_id"),
+  last_polled_at: text("last_polled_at"),
+  /** JSON blob of last Splashtop session snapshot (optional diagnostics) */
+  remote_snapshot: text("remote_snapshot"),
+  created_at: timestamp("created_at").defaultNow().notNull(),
+});

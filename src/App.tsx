@@ -27,6 +27,7 @@ import {
   InvoicesPage,
 } from "@/pages/admin/BillingPlaceholderPage";
 import { TodoPage } from "@/pages/admin/TodoPage";
+import { SosQueuePage } from "@/pages/admin/SosQueuePage";
 import { ClientRolesPage } from "@/pages/admin/ClientRolesPage";
 import { ClientLayout } from "@/pages/client/ClientLayout";
 import { ClientDashboard } from "@/pages/client/ClientDashboard";
@@ -105,6 +106,8 @@ function AppRoutes() {
           <Route path="settings" element={<SettingsPage />} />
           {/* To-do workspace — swaps the whole admin sidebar when open */}
           <Route path="todo" element={<TodoPage />} />
+          {/* Splashtop SOS incoming queue */}
+          <Route path="sos" element={<SosQueuePage />} />
           <Route
             path="messages"
             element={

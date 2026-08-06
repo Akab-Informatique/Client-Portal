@@ -15,6 +15,7 @@ import {
   Moon,
   Receipt,
   Settings2,
+  Siren,
   Sun,
   Ticket,
   UserCircle2,
@@ -22,6 +23,7 @@ import {
   Wrench,
   X,
 } from "lucide-react";
+import { SosButton } from "@/components/SosButton";
 import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -493,6 +495,9 @@ export function AppShell({
             )}
           </div>
 
+          {/* Client SOS — beside language bar */}
+          {user?.role === "client" && <SosButton />}
+
           {/* Language toggle */}
           <div
             className="hidden items-center rounded-lg border border-border p-0.5 sm:flex"
@@ -659,6 +664,13 @@ export function useAdminNavEntries(): NavEntry[] {
       to: "/admin/todo",
       label: t("nav.todo"),
       icon: CheckSquare,
+    });
+
+    // SOS incoming queue — all staff
+    generaleItems.push({
+      to: "/admin/sos",
+      label: t("nav.sos"),
+      icon: Siren,
     });
 
     const operationsChildren: NavItem[] = [];

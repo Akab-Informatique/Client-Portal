@@ -52,6 +52,27 @@ CREATE TABLE IF NOT EXISTS message_user_states (
   status TEXT NOT NULL, custom_label TEXT, updated_at TEXT,
   created_at TIMESTAMP DEFAULT NOW() NOT NULL
 );
+CREATE TABLE IF NOT EXISTS sos_requests (
+  id SERIAL PRIMARY KEY,
+  company_id INTEGER NOT NULL,
+  company_name TEXT NOT NULL,
+  user_id INTEGER NOT NULL,
+  user_name TEXT NOT NULL,
+  user_email TEXT NOT NULL,
+  issue TEXT,
+  status TEXT NOT NULL,
+  splashtop_session_id TEXT,
+  sos_code TEXT,
+  support_portal_link TEXT,
+  channel_id TEXT,
+  error_message TEXT,
+  expires_at TEXT,
+  closed_at TEXT,
+  closed_by_user_id INTEGER,
+  last_polled_at TEXT,
+  remote_snapshot TEXT,
+  created_at TIMESTAMP DEFAULT NOW() NOT NULL
+);
 `);
 
   for (const [table, col] of [

@@ -300,7 +300,32 @@ const MIGRATION_STATEMENTS: string[] = [
     updated_at TEXT,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
   )`,
+  `CREATE TABLE IF NOT EXISTS sos_requests (
+    id SERIAL PRIMARY KEY,
+    company_id INTEGER NOT NULL,
+    company_name TEXT NOT NULL,
+    user_id INTEGER NOT NULL,
+    user_name TEXT NOT NULL,
+    user_email TEXT NOT NULL,
+    issue TEXT,
+    status TEXT NOT NULL,
+    splashtop_session_id TEXT,
+    sos_code TEXT,
+    support_portal_link TEXT,
+    channel_id TEXT,
+    error_message TEXT,
+    expires_at TEXT,
+    closed_at TEXT,
+    closed_by_user_id INTEGER,
+    last_polled_at TEXT,
+    remote_snapshot TEXT,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+  )`,
   `CREATE UNIQUE INDEX IF NOT EXISTS users_email_unique ON users (lower(email))`,
+  `CREATE INDEX IF NOT EXISTS sos_requests_status_idx ON sos_requests (status)`,
+  `CREATE INDEX IF NOT EXISTS sos_requests_user_id_idx ON sos_requests (user_id)`,
+  `CREATE INDEX IF NOT EXISTS sos_requests_company_id_idx ON sos_requests (company_id)`,
+  `CREATE INDEX IF NOT EXISTS sos_requests_created_at_idx ON sos_requests (created_at DESC)`,
   `CREATE UNIQUE INDEX IF NOT EXISTS staff_roles_slug_unique ON staff_roles (slug)`,
   // NOTE: client_roles (company_id, slug) indexes are ONLY in POST_ALTER_INDEXES.
   // On upgraded DBs company_id is added in phase 2 — creating them here aborts migrate.

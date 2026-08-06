@@ -10,6 +10,7 @@ import {
   Mail,
   Settings2,
   Shield,
+  Siren,
   Wrench,
 } from "lucide-react";
 import { BlurFade } from "@/components/ui/blur-fade";
@@ -34,6 +35,7 @@ import {
 } from "@/lib/sharepoint";
 import { fetchItGlueStatus } from "@/lib/itglue";
 import { fetchSmtpStatus, type SmtpStatusResponse } from "@/lib/smtp";
+import { fetchSplashtopStatus } from "@/lib/sos";
 
 type ConnState = "unknown" | "ok" | "fail" | "off";
 
@@ -62,6 +64,13 @@ export function SettingsPage() {
     httpStatus?: number;
   } | null>(null);
   const [atChecking, setAtChecking] = useState(false);
+  const [stStatus, setStStatus] = useState<ConnState>("unknown");
+  const [stDetail, setStDetail] = useState<{
+    message?: string;
+    teamId?: string | null;
+    configured?: boolean;
+  } | null>(null);
+  const [stChecking, setStChecking] = useState(false);
   const [spStatus, setSpStatus] = useState<ConnState>("unknown");
   const [igStatus, setIgStatus] = useState<ConnState>("unknown");
   const [smtpStatus, setSmtpStatus] = useState<ConnState>("unknown");
@@ -117,8 +126,29 @@ export function SettingsPage() {
     }
   };
 
+  const loadSplashtopStatus = async (refresh: boolean) => {
+    setStChecking(true);
+    try {
+      const s = await fetchSplashtopStatus(refresh);
+      setStDetail({
+        message: s.message || s.error,
+        teamId: s.teamId,
+        configured: s.configured,
+      });
+      if (!s.configured) setStStatus("off");
+      else if (s.ok && s.authOk !== false) setStStatus("ok");
+      else setStStatus("fail");
+    } catch {
+      setStStatus("fail");
+      setStDetail({ message: "Could not reach /api/splashtop/status" });
+    } finally {
+      setStChecking(false);
+    }
+  };
+
   useEffect(() => {
     void loadAutotaskStatus(false);
+    void loadSplashtopStatus(false);
     fetchSharePointStatus(false)
       .then((s) => {
         if (!s.configured) setSpStatus("off");
@@ -424,6 +454,61 @@ export function SettingsPage() {
                     ) : (
                       t("settings.retest")
                     )}
+                  </Button>
+                </div>
+              </div>
+            </div>
+
+            <div className="flex flex-col gap-3 rounded-xl border border-border p-4">
+              <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+                <div className="flex items-start gap-3">
+                  <div className="flex size-10 shrink-0 items-center justify-center rounded-lg bg-muted">
+                    <Siren className="size-5 text-red-600" />
+                  </div>
+                  <div className="min-w-0 space-y-1">
+                    <p className="font-semibold">Splashtop SOS</p>
+                    <p className="text-xs text-muted-foreground">
+                      {t("settings.splashtopHint")}
+                    </p>
+                    {stDetail?.message && stStatus !== "unknown" && (
+                      <p
+                        className={
+                          stStatus === "ok"
+                            ? "text-xs text-muted-foreground"
+                            : "text-xs text-destructive"
+                        }
+                      >
+                        {stDetail.message}
+                      </p>
+                    )}
+                    {stDetail?.teamId && stStatus === "ok" && (
+                      <p className="font-mono text-[11px] text-muted-foreground">
+                        team {stDetail.teamId}
+                      </p>
+                    )}
+                  </div>
+                </div>
+                <div className="flex flex-wrap items-center gap-2">
+                  {statusBadge(
+                    stStatus,
+                    t("settings.splashtopReady"),
+                    t("settings.statusNotConfigured"),
+                  )}
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    disabled={stChecking}
+                    onClick={() => void loadSplashtopStatus(true)}
+                  >
+                    {stChecking ? (
+                      <Loader2 className="size-3.5 animate-spin" />
+                    ) : (
+                      t("settings.retest")
+                    )}
+                  </Button>
+                  <Button variant="outline" size="sm" asChild>
+                    <Link to="/admin/sos">{t("settings.splashtopOpenQueue")}</Link>
                   </Button>
                 </div>
               </div>
