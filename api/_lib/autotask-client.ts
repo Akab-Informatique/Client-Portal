@@ -1706,7 +1706,7 @@ export type ClientContractService = {
   description: string | null;
   /** Units currently on the contract (when available). */
   units: number | null;
-  /** Client unit price (adjustedPrice preferred, else unitPrice). */
+  /** Client unit price (unitPrice). */
   unitPrice: number | null;
   /** units * unitPrice when both known. */
   lineTotal: number | null;
@@ -1872,7 +1872,6 @@ async function fetchMonthlyAmountsForContracts(
             "contractID",
             "serviceID",
             "unitPrice",
-            "adjustedPrice",
           ],
           filter: [
             {
@@ -1967,7 +1966,7 @@ async function fetchMonthlyAmountsForContracts(
     const csId = Number(raw.id);
     if (!Number.isFinite(contractId) || !Number.isFinite(csId)) continue;
     const unitPrice =
-      parseMoney(raw.adjustedPrice) ?? parseMoney(raw.unitPrice);
+      parseMoney(raw.unitPrice) ?? parseMoney(raw.adjustedPrice);
     if (unitPrice == null) continue;
     const units = unitsByCsId.has(csId) ? unitsByCsId.get(csId)! : null;
     // If units unknown, treat as 1 so single-service contracts still show a figure
@@ -2128,6 +2127,7 @@ export async function fetchContractServicesForContract(
   type QueryRes = { items?: Array<Record<string, unknown>> };
 
   // ContractServices on this contract
+  // Note: adjustedPrice is NOT a valid ContractServices field in this tenant
   const csBody = {
     MaxRecords: 500,
     IncludeFields: [
@@ -2135,7 +2135,6 @@ export async function fetchContractServicesForContract(
       "contractID",
       "serviceID",
       "unitPrice",
-      "adjustedPrice",
       "invoiceDescription",
     ],
     filter: [
@@ -2156,24 +2155,43 @@ export async function fetchContractServicesForContract(
     );
     csItems = csData.items ?? [];
   } catch (e) {
-    // Retry with minimal fields if IncludeFields rejected adjustedPrice etc.
+    // Retry with minimal / no IncludeFields if a field name is rejected
     const msg = e instanceof Error ? e.message : String(e);
-    if (/field|include/i.test(msg)) {
-      const csData = await postQuery<QueryRes>(
-        base,
-        cfg,
-        "ContractServices/query",
-        {
-          MaxRecords: 500,
-          filter: [
-            {
-              op: "and",
-              items: [{ op: "eq", field: "contractID", value: contractId }],
-            },
-          ],
-        },
-      );
-      csItems = csData.items ?? [];
+    if (/field|include|unable to find|500/i.test(msg)) {
+      try {
+        const csData = await postQuery<QueryRes>(
+          base,
+          cfg,
+          "ContractServices/query",
+          {
+            MaxRecords: 500,
+            IncludeFields: ["id", "contractID", "serviceID", "unitPrice"],
+            filter: [
+              {
+                op: "and",
+                items: [{ op: "eq", field: "contractID", value: contractId }],
+              },
+            ],
+          },
+        );
+        csItems = csData.items ?? [];
+      } catch {
+        const csData = await postQuery<QueryRes>(
+          base,
+          cfg,
+          "ContractServices/query",
+          {
+            MaxRecords: 500,
+            filter: [
+              {
+                op: "and",
+                items: [{ op: "eq", field: "contractID", value: contractId }],
+              },
+            ],
+          },
+        );
+        csItems = csData.items ?? [];
+      }
     } else {
       throw e;
     }
@@ -2268,7 +2286,7 @@ export async function fetchContractServicesForContract(
           ? Number(raw.serviceID)
           : null;
       const unitPrice =
-        parseMoney(raw.adjustedPrice) ?? parseMoney(raw.unitPrice);
+        parseMoney(raw.unitPrice) ?? parseMoney(raw.adjustedPrice);
       const units = unitsByCsId.has(id) ? unitsByCsId.get(id)! : null;
       const lineTotal =
         unitPrice != null && units != null ? unitPrice * units : null;
