@@ -74,6 +74,48 @@ export function isDattoRmmConfigured(): boolean {
   return getDattoRmmConfigFromEnv() != null;
 }
 
+/**
+ * Derive the Datto RMM web portal base from the API URL.
+ *   merlot-api.centrastage.net  → https://merlot.centrastage.net
+ * Override with DATTO_RMM_PORTAL_URL when needed.
+ */
+export function getDattoRmmPortalBaseUrl(
+  cfg?: DattoRmmConfig | null,
+): string | null {
+  const override = cleanEnv(process.env.DATTO_RMM_PORTAL_URL).replace(
+    /\/+$/,
+    "",
+  );
+  if (override) return override;
+
+  const apiUrl = (cfg ?? getDattoRmmConfigFromEnv())?.apiUrl;
+  if (!apiUrl) return null;
+  try {
+    const u = new URL(apiUrl);
+    // merlot-api.centrastage.net → merlot.centrastage.net
+    const host = u.hostname.replace(/-api(?=\.)/i, "").replace(/^api\./i, "");
+    return `${u.protocol}//${host}`;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Web Remote deep link for a device UID.
+ * Classic path used by Datto UI / integrations:
+ *   https://{platform}.centrastage.net/csm/remote/rto/{deviceUid}
+ */
+export function buildDattoWebRemoteUrl(
+  deviceUid: string,
+  cfg?: DattoRmmConfig | null,
+): string | null {
+  const uid = String(deviceUid || "").trim();
+  if (!uid) return null;
+  const portal = getDattoRmmPortalBaseUrl(cfg);
+  if (!portal) return null;
+  return `${portal}/csm/remote/rto/${encodeURIComponent(uid)}`;
+}
+
 /** Cached bearer token (expires ~100h; we refresh earlier). */
 let tokenCache: { token: string; expiresAt: number } | null = null;
 

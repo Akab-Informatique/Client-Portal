@@ -817,9 +817,16 @@ graphHint:
     colIp: "IP",
     colUser: "Last user",
     colLastSeen: "Last seen",
+    colActions: "Actions",
     online: "Online",
     offline: "Offline",
     reboot: "Reboot",
+    webRemote: "Web Remote",
+    webRemoteHint:
+      "Open Datto RMM Web Remote in a new tab (you must be signed in to Datto RMM).",
+    webRemoteUnavailable: "Web Remote link is not available for this device.",
+    webRemoteBlocked:
+      "Could not open Web Remote. Allow pop-ups for this site, or open Datto RMM manually.",
     siteField: "Datto RMM site",
     siteFieldHint:
       "Search and pick the Datto RMM site for this client. Devices under Operations use this link only.",
