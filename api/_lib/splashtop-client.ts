@@ -389,6 +389,180 @@ export function buildClientPortalUrl(
   return `${host}/service_desk/psa/${encodeURIComponent(code)}`;
 }
 
+export type SosCloudBuildPlatform = "win" | "mac";
+
+export type SosCloudBuildResult = {
+  ok: boolean;
+  platform: SosCloudBuildPlatform;
+  canBuild: boolean;
+  /** Preferred direct file URL (.exe / .dmg) for this session code */
+  downloadUrl: string | null;
+  fileName: string | null;
+  cacheUrl: string | null;
+  backupUrl: string | null;
+  category: number | null;
+  error?: string;
+};
+
+/**
+ * Resolve the real session-bound SOS installer URL.
+ *
+ * Splashtop's HTML page (service_desk/psa/{code}) calls this same endpoint
+ * and shows "App not available" when the session is closed/expired OR when
+ * the SPA fails. We call it server-side and hand the client the .exe/.dmg
+ * so download never depends on that HTML page.
+ *
+ * POST https://my.splashtop.com/api/web/v1/teams/service_desk/{code}/cloud_build_file
+ * body: { category: "win" | "mac" }
+ */
+export async function fetchServiceDeskCloudBuild(
+  sosCode: string,
+  platform: SosCloudBuildPlatform,
+  cfg?: SplashtopConfig | null,
+): Promise<SosCloudBuildResult> {
+  const code = String(sosCode || "").trim();
+  const cat: SosCloudBuildPlatform = platform === "mac" ? "mac" : "win";
+  if (!/^\d{6,12}$/.test(code)) {
+    return {
+      ok: false,
+      platform: cat,
+      canBuild: false,
+      downloadUrl: null,
+      fileName: null,
+      cacheUrl: null,
+      backupUrl: null,
+      category: null,
+      error: "Invalid SOS session code",
+    };
+  }
+  const host = getClientPortalBaseUrl(cfg);
+  const url = `${host}/api/web/v1/teams/service_desk/${encodeURIComponent(code)}/cloud_build_file`;
+  try {
+    const res = await fetch(url, {
+      method: "POST",
+      headers: {
+        Accept: "application/json",
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ category: cat }),
+    });
+    const text = await res.text();
+    let data: unknown = null;
+    try {
+      data = text ? JSON.parse(text) : null;
+    } catch {
+      data = null;
+    }
+    const root = asRecord(data) ?? {};
+    const result = Number(root.result ?? res.status);
+    const payload = asRecord(root.data) ?? {};
+    const canBuild = Boolean(payload.can_build);
+    const cacheUrl = pickString(payload, ["cache_url", "cacheUrl"]) || null;
+    const cacheOkUrl =
+      pickString(payload, ["cache_ok_url", "cacheOkUrl"]) || null;
+    const backupUrl =
+      pickString(payload, ["backup_url", "backupUrl"]) || null;
+    const categoryRaw = payload.category;
+    const category =
+      categoryRaw != null && Number.isFinite(Number(categoryRaw))
+        ? Number(categoryRaw)
+        : null;
+
+    // Prefer cache_url once ready; fall back to signed backup_url.
+    // Splashtop's SPA polls cache_ok_url — we do a quick HEAD first.
+    let downloadUrl: string | null = null;
+    if (canBuild && cacheUrl && cacheOkUrl) {
+      try {
+        const head = await fetch(cacheOkUrl, { method: "HEAD" });
+        if (head.ok) downloadUrl = cacheUrl;
+      } catch {
+        /* use backup */
+      }
+    }
+    if (!downloadUrl && backupUrl) downloadUrl = backupUrl;
+    if (!downloadUrl && cacheUrl) downloadUrl = cacheUrl;
+
+    // Result codes 40403 / 40404 = session blocked / not available
+    if (result === 40403 || result === 40404) {
+      return {
+        ok: false,
+        platform: cat,
+        canBuild: false,
+        downloadUrl: null,
+        fileName: null,
+        cacheUrl,
+        backupUrl,
+        category,
+        error:
+          "App not available — this support session was closed or expired. Start SOS again.",
+      };
+    }
+
+    if (!downloadUrl) {
+      return {
+        ok: false,
+        platform: cat,
+        canBuild,
+        downloadUrl: null,
+        fileName: null,
+        cacheUrl,
+        backupUrl,
+        category,
+        error: canBuild
+          ? "Installer is still building — try Download again in a few seconds."
+          : "App not available for this session. Start SOS again from the portal.",
+      };
+    }
+
+    let fileName: string | null = null;
+    try {
+      const u = new URL(downloadUrl);
+      const last = u.pathname.split("/").filter(Boolean).pop() || "";
+      fileName = decodeURIComponent(last) || null;
+      // backup_url often has filename in content-disposition query
+      const disp = u.searchParams.get("response-content-disposition") || "";
+      const m = /filename\*?=(?:UTF-8''|")?([^\";]+)/i.exec(disp);
+      if (m?.[1]) fileName = decodeURIComponent(m[1].replace(/"/g, ""));
+    } catch {
+      /* ignore */
+    }
+
+    return {
+      ok: true,
+      platform: cat,
+      canBuild,
+      downloadUrl,
+      fileName,
+      cacheUrl,
+      backupUrl,
+      category,
+    };
+  } catch (e) {
+    return {
+      ok: false,
+      platform: cat,
+      canBuild: false,
+      downloadUrl: null,
+      fileName: null,
+      cacheUrl: null,
+      backupUrl: null,
+      category: null,
+      error: e instanceof Error ? e.message : "Cloud build request failed",
+    };
+  }
+}
+
+/** Guess win/mac from a User-Agent string. */
+export function platformFromUserAgent(
+  ua: string | null | undefined,
+): SosCloudBuildPlatform {
+  const s = String(ua || "");
+  if (/Mac OS X|Macintosh|Mac OS/i.test(s) && !/iPhone|iPad|iPod/i.test(s)) {
+    return "mac";
+  }
+  return "win";
+}
+
 /** Prefer API-provided absolute URL; otherwise synthesize from code. */
 export function resolveClientPortalLink(opts: {
   link?: string | null;

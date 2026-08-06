@@ -1,8 +1,6 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { Link, useNavigate, useSearchParams } from "react-router-dom";
 import {
-  Check,
-  Copy,
   Download,
   Headphones,
   Loader2,
@@ -15,12 +13,10 @@ import { db, dbReady, schema } from "@/db";
 import { eq } from "drizzle-orm";
 import {
   createSosRequest,
-  ensureClientPortalHref,
+  fetchSosInstallerDownload,
   fetchSosPackageConfig,
   fetchSosRequestById,
-  pickSosDownloadUrl,
   triggerSosDownload,
-  type SosPackageConfig,
   type SosRequest,
 } from "@/lib/sos";
 import { BrandLogo } from "@/components/BrandLogo";
@@ -36,12 +32,12 @@ import {
 } from "@/components/ui/card";
 
 /**
- * Branded in-portal SOS download page.
+ * Branded SOS download page.
  *
- * Flow:
- *  1. Create / load SOS session on the Default channel (API)
- *  2. Auto-start download from that session's support_portal_link only
- *  3. Client runs the app — no code to share, no package backup URLs
+ * Creates a Default-channel session, then downloads the real session-bound
+ * installer (.exe / .dmg) via /api/sos/download — never opens Splashtop's
+ * HTML page (that page shows "App not available" when the SPA fails or the
+ * session was closed).
  */
 export function SosDownloadPage() {
   const { t } = useLocale();
@@ -52,47 +48,33 @@ export function SosDownloadPage() {
 
   const [loading, setLoading] = useState(true);
   const [starting, setStarting] = useState(false);
+  const [downloading, setDownloading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [request, setRequest] = useState<SosRequest | null>(null);
-  const [pkg, setPkg] = useState<SosPackageConfig | null>(null);
+  const [packageName, setPackageName] = useState("");
   const [companyName, setCompanyName] = useState("");
   const [downloaded, setDownloaded] = useState(false);
-  const [copied, setCopied] = useState(false);
+  const [fileName, setFileName] = useState<string | null>(null);
   const autoStarted = useRef(false);
 
-  const primaryUrl = useMemo(
-    () =>
-      pickSosDownloadUrl({
-        supportPortalLink: request?.supportPortalLink,
-        packageConfig: pkg,
-      }),
-    [request?.supportPortalLink, pkg],
-  );
-
-  const loadPackage = useCallback(async () => {
-    const cfg = await fetchSosPackageConfig();
-    setPkg(cfg);
-    return cfg;
+  const loadRequest = useCallback(async (id: number) => {
+    const res = await fetchSosRequestById(id, "client");
+    if (res.request) setRequest(res.request);
+    if (res.error) setError(res.error);
+    return res.request;
   }, []);
 
-  const loadRequest = useCallback(
-    async (id: number) => {
-      const res = await fetchSosRequestById(id, "client");
-      if (res.request) setRequest(res.request);
-      if (res.error) setError(res.error);
-      return res.request;
-    },
-    [],
-  );
-
-  // Bootstrap: package config + existing request id
+  // Bootstrap branding + existing request
   useEffect(() => {
     let cancelled = false;
     (async () => {
       setLoading(true);
       setError(null);
       try {
-        await loadPackage();
+        const cfg = await fetchSosPackageConfig();
+        if (!cancelled) {
+          setPackageName(cfg.packageName || t("sos.packageDefaultName"));
+        }
         if (user?.company_id) {
           try {
             await dbReady;
@@ -122,9 +104,9 @@ export function SosDownloadPage() {
     return () => {
       cancelled = true;
     };
-  }, [loadPackage, loadRequest, requestIdParam, t, user?.company_id]);
+  }, [loadRequest, requestIdParam, t, user?.company_id]);
 
-  // Poll active request status
+  // Poll request status (client online / connected)
   useEffect(() => {
     if (!request?.id) return;
     if (["closed", "expired", "error"].includes(String(request.status))) return;
@@ -134,33 +116,31 @@ export function SosDownloadPage() {
     return () => window.clearInterval(tmr);
   }, [loadRequest, request?.id, request?.status]);
 
-  const startDownload = useCallback(
-    (url?: string | null) => {
-      const href = url || primaryUrl;
-      if (!href) {
-        setError(t("sos.noLink"));
+  const runInstallerDownload = useCallback(
+    async (requestId: number) => {
+      if (!requestId) return false;
+      setDownloading(true);
+      setError(null);
+      try {
+        const res = await fetchSosInstallerDownload(requestId, "auto");
+        if (!res.ok || !res.downloadUrl) {
+          setError(res.error || t("sos.noLink"));
+          return false;
+        }
+        setFileName(res.fileName);
+        const ok = triggerSosDownload(res.downloadUrl);
+        setDownloaded(true);
+        if (!ok) setError(t("sos.openBlocked"));
+        return ok;
+      } catch (e) {
+        setError(e instanceof Error ? e.message : t("sos.createFailed"));
         return false;
+      } finally {
+        setDownloading(false);
       }
-      const ok = triggerSosDownload(href);
-      setDownloaded(true);
-      if (!ok) setError(t("sos.openBlocked"));
-      return ok;
     },
-    [primaryUrl, t],
+    [t],
   );
-
-  // Auto-start once we have a URL
-  useEffect(() => {
-    if (loading || autoStarted.current) return;
-    if (!primaryUrl) return;
-    if (pkg && pkg.autoDownload === false) return;
-    autoStarted.current = true;
-    // Short delay so the branded UI paints first
-    const tmr = window.setTimeout(() => {
-      startDownload(primaryUrl);
-    }, 400);
-    return () => window.clearTimeout(tmr);
-  }, [loading, primaryUrl, pkg, startDownload]);
 
   const ensureSession = async () => {
     if (!user?.id || !user.company_id) {
@@ -180,15 +160,7 @@ export function SosDownloadPage() {
       });
       if (res.request) {
         setRequest(res.request);
-        // Keep id in URL for refresh / reopen
         navigate(`/client/sos?id=${res.request.id}`, { replace: true });
-        const href = ensureClientPortalHref(res.request.supportPortalLink);
-        if (href) {
-          autoStarted.current = true;
-          window.setTimeout(() => startDownload(href), 200);
-        } else if (!res.error) {
-          setError(t("sos.noLink"));
-        }
         if (res.error) setError(res.error);
         return res.request;
       }
@@ -202,7 +174,7 @@ export function SosDownloadPage() {
     }
   };
 
-  // If landed without id, create session once
+  // Landed without id → create session once
   useEffect(() => {
     if (loading) return;
     if (requestIdParam > 0) return;
@@ -212,16 +184,20 @@ export function SosDownloadPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [loading, requestIdParam, user?.id]);
 
-  const copyLink = async () => {
-    if (!primaryUrl) return;
-    try {
-      await navigator.clipboard.writeText(primaryUrl);
-      setCopied(true);
-      window.setTimeout(() => setCopied(false), 2000);
-    } catch {
-      setError(t("sos.copyFailed"));
+  // Auto-start real installer download once we have a live request
+  useEffect(() => {
+    if (loading || autoStarted.current) return;
+    if (!request?.id) return;
+    if (["closed", "expired", "error"].includes(String(request.status))) {
+      setError(t("sos.sessionGone"));
+      return;
     }
-  };
+    autoStarted.current = true;
+    const tmr = window.setTimeout(() => {
+      void runInstallerDownload(request.id);
+    }, 350);
+    return () => window.clearTimeout(tmr);
+  }, [loading, request, runInstallerDownload, t]);
 
   const statusLabel = (s: string) => {
     const key = `sos.status_${s}`;
@@ -229,7 +205,8 @@ export function SosDownloadPage() {
     return translated === key ? s : translated;
   };
 
-  const packageName = pkg?.packageName || t("sos.packageDefaultName");
+  const title = packageName || t("sos.packageDefaultName");
+  const busy = loading || starting || downloading;
 
   return (
     <div className="relative min-h-[calc(100vh-4rem)] overflow-hidden">
@@ -247,7 +224,7 @@ export function SosDownloadPage() {
               </span>
             </div>
             <h1 className="text-2xl font-bold tracking-tight sm:text-3xl">
-              {packageName}
+              {title}
             </h1>
             <p className="mt-2 max-w-md text-sm text-muted-foreground">
               {t("sos.downloadPageDesc")}
@@ -265,10 +242,12 @@ export function SosDownloadPage() {
               <CardDescription>{t("sos.downloadSubtitle")}</CardDescription>
             </CardHeader>
             <CardContent className="space-y-4">
-              {(loading || starting) && !request && (
+              {busy && !downloaded && (
                 <div className="flex items-center gap-2 text-sm text-muted-foreground">
                   <Loader2 className="size-4 animate-spin" />
-                  {t("sos.preparingDownload")}
+                  {downloading
+                    ? t("sos.fetchingInstaller")
+                    : t("sos.preparingDownload")}
                 </div>
               )}
 
@@ -293,14 +272,30 @@ export function SosDownloadPage() {
                 </p>
               )}
 
-              <div className="flex flex-col gap-2 sm:flex-row sm:flex-wrap">
+              {downloaded && !error && (
+                <p className="rounded-md border border-emerald-500/30 bg-emerald-500/10 px-3 py-2 text-sm text-emerald-800 dark:text-emerald-200">
+                  {t("sos.downloadStarted")}
+                  {fileName ? (
+                    <span className="mt-1 block font-mono text-xs opacity-80">
+                      {fileName}
+                    </span>
+                  ) : null}
+                </p>
+              )}
+
+              <div className="flex flex-col gap-2 sm:flex-row">
                 <Button
                   type="button"
                   className="gap-1.5 bg-red-600 text-white hover:bg-red-700"
-                  disabled={!primaryUrl || starting}
-                  onClick={() => startDownload(primaryUrl)}
+                  disabled={busy || !request?.id}
+                  onClick={() => {
+                    if (request?.id) void runInstallerDownload(request.id);
+                    else void ensureSession().then((r) => {
+                      if (r?.id) void runInstallerDownload(r.id);
+                    });
+                  }}
                 >
-                  {starting ? (
+                  {downloading || starting ? (
                     <Loader2 className="size-4 animate-spin" />
                   ) : (
                     <Download className="size-4" />
@@ -309,38 +304,27 @@ export function SosDownloadPage() {
                 </Button>
                 <Button
                   type="button"
-                  variant="outline"
-                  className="gap-1.5"
-                  disabled={!primaryUrl}
-                  onClick={() => void copyLink()}
-                >
-                  {copied ? (
-                    <Check className="size-4" />
-                  ) : (
-                    <Copy className="size-4" />
-                  )}
-                  {copied ? t("sos.copied") : t("sos.copyLink")}
-                </Button>
-                <Button
-                  type="button"
                   variant="ghost"
                   size="icon"
                   className="shrink-0"
                   title={t("common.refresh")}
+                  disabled={busy}
                   onClick={() => {
-                    if (request?.id) void loadRequest(request.id);
-                    else void ensureSession();
+                    autoStarted.current = false;
+                    if (request?.id) {
+                      void loadRequest(request.id).then((r) => {
+                        if (r?.id) void runInstallerDownload(r.id);
+                      });
+                    } else {
+                      void ensureSession().then((r) => {
+                        if (r?.id) void runInstallerDownload(r.id);
+                      });
+                    }
                   }}
                 >
                   <RefreshCw className="size-4" />
                 </Button>
               </div>
-
-              {primaryUrl && (
-                <p className="break-all font-mono text-[11px] text-muted-foreground">
-                  {primaryUrl}
-                </p>
-              )}
 
               <ol className="list-decimal space-y-1.5 pl-5 text-sm text-muted-foreground">
                 <li>{t("sos.downloadStep1")}</li>

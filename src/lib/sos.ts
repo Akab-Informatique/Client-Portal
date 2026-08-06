@@ -292,21 +292,73 @@ export function detectClientOs(): "windows" | "mac" | "linux" | "android" | "oth
 }
 
 /**
- * Pick the auto-download URL for the branded download page.
- * ONLY the Default-channel API session portal link is used — no custom
- * package / share / OS backup URLs (those bypass the queued session).
+ * Resolve the real session-bound installer (.exe / .dmg) for a SOS request.
+ * Server calls Splashtop cloud_build_file — client never opens the HTML page
+ * that can show "App not available".
  */
-export function pickSosDownloadUrl(opts: {
-  supportPortalLink?: string | null;
-  packageConfig?: SosPackageConfig | null;
-  preferPackage?: boolean;
-}): string | null {
-  void opts.packageConfig;
-  void opts.preferPackage;
-  return ensureClientPortalHref(opts.supportPortalLink);
+export async function fetchSosInstallerDownload(
+  requestId: number,
+  platform: "auto" | "win" | "mac" = "auto",
+): Promise<{
+  ok: boolean;
+  downloadUrl: string | null;
+  fileName: string | null;
+  platform?: string;
+  error: string | null;
+}> {
+  if (!requestId || requestId <= 0) {
+    return {
+      ok: false,
+      downloadUrl: null,
+      fileName: null,
+      error: "Missing request id",
+    };
+  }
+  try {
+    const q = new URLSearchParams({
+      id: String(requestId),
+      platform,
+    });
+    const r = await fetch(`/api/sos/download?${q}`, {
+      headers: { Accept: "application/json" },
+    });
+    const d = (await r.json()) as {
+      ok?: boolean;
+      downloadUrl?: string;
+      fileName?: string;
+      platform?: string;
+      error?: string;
+    };
+    if (!r.ok || !d.downloadUrl) {
+      return {
+        ok: false,
+        downloadUrl: null,
+        fileName: null,
+        platform: d.platform,
+        error: errMsg(d, `Download failed (${r.status})`),
+      };
+    }
+    return {
+      ok: true,
+      downloadUrl: d.downloadUrl,
+      fileName: d.fileName ?? null,
+      platform: d.platform,
+      error: null,
+    };
+  } catch (e) {
+    return {
+      ok: false,
+      downloadUrl: null,
+      fileName: null,
+      error: e instanceof Error ? e.message : "Download failed",
+    };
+  }
 }
 
-/** Trigger a file download / navigation without leaving the branded page. */
+/**
+ * Trigger a file download without leaving the branded page.
+ * Prefer direct .exe/.dmg (attachment). Never open Splashtop HTML as primary.
+ */
 export function triggerSosDownload(url: string | null | undefined): boolean {
   const href = String(url ?? "").trim();
   if (!href) return false;
@@ -314,9 +366,11 @@ export function triggerSosDownload(url: string | null | undefined): boolean {
     const a = document.createElement("a");
     a.href = href;
     a.rel = "noopener noreferrer";
-    // Same-tab download for direct .exe/.dmg; new tab for HTML portal pages
-    const isDirectFile = /\.(exe|dmg|pkg|msi|apk|zip)(\?|#|$)/i.test(href);
+    const isDirectFile =
+      /\.(exe|dmg|pkg|msi|apk|zip)(\?|#|$)/i.test(href) ||
+      /cloudbuild\.splashtop\.com|splashtop-cloudbuild\.s3/i.test(href);
     if (isDirectFile) {
+      // Let the browser download the binary; stay on our page
       a.setAttribute("download", "");
       a.target = "_self";
     } else {

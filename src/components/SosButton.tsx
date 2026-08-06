@@ -1,8 +1,6 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import {
-  Check,
-  Copy,
   ExternalLink,
   Headphones,
   Loader2,
@@ -14,7 +12,6 @@ import { db, dbReady, schema } from "@/db";
 import { eq } from "drizzle-orm";
 import {
   createSosRequest,
-  ensureClientPortalHref,
   fetchClientSosRequests,
   type SosRequest,
 } from "@/lib/sos";
@@ -33,8 +30,8 @@ import { Badge } from "@/components/ui/badge";
 import { cn } from "@/lib/utils";
 
 /**
- * Client header SOS control — creates a Splashtop attended session and
- * sends the user to the branded in-portal download page (auto-starts package).
+ * Client header SOS control — creates a Default-channel session and sends
+ * the user to /client/sos where the real session installer downloads.
  */
 export function SosButton({ className }: { className?: string }) {
   const { t } = useLocale();
@@ -46,7 +43,6 @@ export function SosButton({ className }: { className?: string }) {
   const [error, setError] = useState<string | null>(null);
   const [active, setActive] = useState<SosRequest | null>(null);
   const [companyName, setCompanyName] = useState("");
-  const [copied, setCopied] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
@@ -87,41 +83,12 @@ export function SosButton({ className }: { className?: string }) {
     return () => window.clearInterval(tmr);
   }, [open, refreshActive]);
 
-  const portalHref = useMemo(
-    () => ensureClientPortalHref(active?.supportPortalLink),
-    [active?.supportPortalLink],
-  );
-
   if (!user || user.role !== "client") return null;
 
   const goDownloadPage = (id?: number | null) => {
     const q = id && id > 0 ? `?id=${id}` : "";
     navigate(`/client/sos${q}`);
     setOpen(false);
-  };
-
-  const copyPortal = async () => {
-    if (!portalHref) return;
-    try {
-      await navigator.clipboard.writeText(portalHref);
-      setCopied(true);
-      window.setTimeout(() => setCopied(false), 2000);
-    } catch {
-      try {
-        const ta = document.createElement("textarea");
-        ta.value = portalHref;
-        ta.style.position = "fixed";
-        ta.style.left = "-9999px";
-        document.body.appendChild(ta);
-        ta.select();
-        document.execCommand("copy");
-        document.body.removeChild(ta);
-        setCopied(true);
-        window.setTimeout(() => setCopied(false), 2000);
-      } catch {
-        setError(t("sos.copyFailed"));
-      }
-    }
   };
 
   const startSos = async () => {
@@ -132,7 +99,6 @@ export function SosButton({ className }: { className?: string }) {
     setBusy(true);
     setError(null);
 
-    // Reuse active request → branded download page (auto-starts package)
     if (
       active &&
       ["open", "waiting", "ready", "connected"].includes(String(active.status))
@@ -210,33 +176,15 @@ export function SosButton({ className }: { className?: string }) {
                   </Badge>
                 </div>
                 <div className="mt-2 space-y-2">
-                  <div className="flex flex-wrap gap-2">
-                    <Button
-                      type="button"
-                      size="sm"
-                      className="h-8 gap-1.5 bg-red-600 text-white hover:bg-red-700"
-                      onClick={() => goDownloadPage(active.id)}
-                    >
-                      <ExternalLink className="size-3.5" />
-                      {t("sos.openDownloadPage")}
-                    </Button>
-                    {portalHref && (
-                      <Button
-                        type="button"
-                        size="sm"
-                        variant="outline"
-                        className="h-8 gap-1.5"
-                        onClick={() => void copyPortal()}
-                      >
-                        {copied ? (
-                          <Check className="size-3.5" />
-                        ) : (
-                          <Copy className="size-3.5" />
-                        )}
-                        {copied ? t("sos.copied") : t("sos.copyLink")}
-                      </Button>
-                    )}
-                  </div>
+                  <Button
+                    type="button"
+                    size="sm"
+                    className="h-8 gap-1.5 bg-red-600 text-white hover:bg-red-700"
+                    onClick={() => goDownloadPage(active.id)}
+                  >
+                    <ExternalLink className="size-3.5" />
+                    {t("sos.openDownloadPage")}
+                  </Button>
                   <p className="text-xs text-muted-foreground">
                     {t("sos.downloadPageHint")}
                   </p>
