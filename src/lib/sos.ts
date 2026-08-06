@@ -187,6 +187,59 @@ export function formatSosTime(iso: string | null | undefined): string {
 }
 
 /**
+ * Open a blank tab/window synchronously (must run in the click handler).
+ * After the async create-session call, navigate it to the portal link so the
+ * download starts without being blocked as a late popup.
+ */
+export function openPendingSosWindow(): Window | null {
+  try {
+    const w = window.open("about:blank", "_blank");
+    if (w) {
+      try {
+        w.document.title = "SOS…";
+        w.document.body.innerHTML =
+          '<p style="font-family:system-ui,sans-serif;padding:24px;color:#334">Starting remote support…</p>';
+      } catch {
+        /* cross-origin / opaque about:blank — fine */
+      }
+    }
+    return w;
+  } catch {
+    return null;
+  }
+}
+
+/** Navigate a window opened via openPendingSosWindow, or fall back to a link click. */
+export function navigatePendingSosWindow(
+  pending: Window | null,
+  url: string | null | undefined,
+): boolean {
+  const href = String(url ?? "").trim();
+  if (!href) {
+    try {
+      pending?.close();
+    } catch {
+      /* ignore */
+    }
+    return false;
+  }
+  if (pending && !pending.closed) {
+    try {
+      pending.location.href = href;
+      try {
+        pending.focus();
+      } catch {
+        /* ignore */
+      }
+      return true;
+    } catch {
+      /* fall through */
+    }
+  }
+  return openClientPortalLink(href);
+}
+
+/**
  * Open the end-user Splashtop session link.
  * Prefer a real <a> click over window.open — popup blockers and sandboxed
  * preview iframes often swallow window.open() after async work.

@@ -141,17 +141,25 @@ export function SosButton({ className }: { className?: string }) {
     setBusy(true);
     setError(null);
     setOpenHint(false);
-    try {
-      // Re-open existing active link without creating a duplicate session
-      if (
-        active &&
-        portalHref &&
-        ["open", "waiting", "ready", "connected"].includes(String(active.status))
-      ) {
-        openPortal(portalHref);
-        return;
-      }
 
+    // Open the tab NOW (still inside the click gesture) so the browser allows
+    // navigation after the async API call. That tab loads the session page,
+    // which auto-starts the SOS download for this support session.
+    let pending: Window | null = null;
+    const reuseExisting =
+      active &&
+      portalHref &&
+      ["open", "waiting", "ready", "connected"].includes(String(active.status));
+
+    if (reuseExisting) {
+      openPortal(portalHref);
+      setBusy(false);
+      return;
+    }
+
+    pending = openPendingSosWindow();
+
+    try {
       const res = await createSosRequest({
         userId: user.id,
         userName: user.name,
@@ -164,11 +172,26 @@ export function SosButton({ className }: { className?: string }) {
         setActive(res.request);
         const href = ensureClientPortalHref(res.request.supportPortalLink);
         if (href) {
-          // Small delay so React can paint the link button before navigation
-          window.setTimeout(() => openPortal(href), 50);
-        } else if (!res.error) {
-          setError(t("sos.noLink"));
+          const ok = navigatePendingSosWindow(pending, href);
+          pending = null;
+          setOpenHint(true);
+          if (!ok) setError(t("sos.openBlocked"));
+        } else {
+          try {
+            pending?.close();
+          } catch {
+            /* ignore */
+          }
+          pending = null;
+          if (!res.error) setError(t("sos.noLink"));
         }
+      } else {
+        try {
+          pending?.close();
+        } catch {
+          /* ignore */
+        }
+        pending = null;
       }
       if (res.error && !res.request?.supportPortalLink) {
         setError(res.error);
@@ -177,6 +200,11 @@ export function SosButton({ className }: { className?: string }) {
         setError(res.error);
       }
     } catch (e) {
+      try {
+        pending?.close();
+      } catch {
+        /* ignore */
+      }
       setError(e instanceof Error ? e.message : t("sos.createFailed"));
     } finally {
       setBusy(false);
@@ -228,6 +256,9 @@ export function SosButton({ className }: { className?: string }) {
                 </div>
                 {portalHref ? (
                   <div className="mt-2 space-y-2">
+                    <p className="text-xs text-muted-foreground">
+                      {t("sos.downloadStarted")}
+                    </p>
                     <div className="flex flex-wrap gap-2">
                       <Button
                         type="button"
