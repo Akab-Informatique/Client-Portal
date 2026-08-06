@@ -35,7 +35,39 @@ export type DattoRmmDevice = {
   warrantyDate: string | null;
   cagVersion: string | null;
   portalUrl: string | null;
+  /** Datto Web Remote deep link (opens in new tab; requires RMM login) */
+  webRemoteUrl: string | null;
 };
+
+/** Open Datto Web Remote for a device in a new tab. */
+export function openDattoWebRemote(url: string | null | undefined): boolean {
+  const href = String(url ?? "").trim();
+  if (!href) return false;
+  try {
+    const a = document.createElement("a");
+    a.href = href;
+    a.target = "_blank";
+    a.rel = "noopener noreferrer";
+    a.style.display = "none";
+    document.body.appendChild(a);
+    a.click();
+    window.setTimeout(() => {
+      try {
+        document.body.removeChild(a);
+      } catch {
+        /* ignore */
+      }
+    }, 0);
+    return true;
+  } catch {
+    try {
+      window.open(href, "_blank", "noopener,noreferrer");
+      return true;
+    } catch {
+      return false;
+    }
+  }
+}
 
 export type DattoRmmStatusResponse = {
   configured: boolean;

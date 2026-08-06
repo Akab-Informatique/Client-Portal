@@ -319,7 +319,10 @@ function mapSite(raw: unknown): DattoRmmSite | null {
   };
 }
 
-function mapDevice(raw: unknown): DattoRmmDevice | null {
+function mapDevice(
+  raw: unknown,
+  cfg?: DattoRmmConfig | null,
+): DattoRmmDevice | null {
   const r = asRecord(raw);
   if (!r) return null;
   const uid = pickString(r, ["uid", "deviceUid", "id"]);
@@ -403,6 +406,7 @@ function mapDevice(raw: unknown): DattoRmmDevice | null {
     warrantyDate: toIsoFromDatto(r.warrantyDate ?? r.warrantyExpiryDate),
     cagVersion: pickString(r, ["cagVersion", "agentVersion"]) || null,
     portalUrl,
+    webRemoteUrl: buildDattoWebRemoteUrl(uid, cfg),
   };
 }
 
