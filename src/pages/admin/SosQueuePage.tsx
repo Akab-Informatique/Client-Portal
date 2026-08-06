@@ -87,7 +87,10 @@ export function SosQueuePage() {
       return;
     }
     if (req.sosCode) {
-      window.location.href = `st-business://com.splashtop.business/?sos=${encodeURIComponent(req.sosCode)}&category=40`;
+      // Manual classic SOS: no category=40. API sessions include it in connectUrl.
+      const params = new URLSearchParams({ sos: req.sosCode });
+      if (req.mode === "api") params.set("category", "40");
+      window.location.href = `st-business://com.splashtop.business/?${params}`;
     }
   };
 

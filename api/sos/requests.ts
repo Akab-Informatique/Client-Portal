@@ -1,6 +1,7 @@
 import type { VercelRequest, VercelResponse } from "@vercel/node";
 import {
   buildTechnicianConnectUrl,
+  CLASSIC_SOS_PORTAL_URL,
   createSupportSession,
   derivePortalStatusFromSession,
   getSupportSession,
@@ -15,7 +16,12 @@ import {
   type SosRequestRow,
 } from "../_lib/sos-store.js";
 
+function isApiBacked(row: SosRequestRow): boolean {
+  return Boolean(row.splashtop_session_id);
+}
+
 function publicRow(row: SosRequestRow, opts?: { includeCode?: boolean }) {
+  const apiSession = isApiBacked(row);
   return {
     id: row.id,
     companyId: row.company_id,
@@ -26,11 +32,22 @@ function publicRow(row: SosRequestRow, opts?: { includeCode?: boolean }) {
     issue: row.issue,
     status: row.status,
     supportPortalLink: row.support_portal_link,
-    /** SOS code only for staff (connect deep-link) */
-    sosCode: opts?.includeCode ? row.sos_code : undefined,
+    /** How the session was created: api | manual */
+    mode: apiSession ? "api" : "manual",
+    classicSosUrl: CLASSIC_SOS_PORTAL_URL,
+    /**
+     * SOS code:
+     * - staff always see it (for Connect)
+     * - client sees it in manual mode so they can confirm what they entered
+     */
+    sosCode:
+      opts?.includeCode || !apiSession ? row.sos_code ?? undefined : undefined,
     connectUrl:
       opts?.includeCode && row.sos_code
-        ? buildTechnicianConnectUrl({ sosCode: row.sos_code })
+        ? buildTechnicianConnectUrl({
+            sosCode: row.sos_code,
+            apiSession,
+          })
         : undefined,
     expiresAt: row.expires_at,
     errorMessage: row.error_message,
@@ -106,6 +123,8 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         }
         return res.status(200).json({
           configured: isSplashtopConfigured(),
+          mode: isSplashtopConfigured() ? "api" : "manual",
+          classicSosUrl: CLASSIC_SOS_PORTAL_URL,
           requests: rows.map((r) => publicRow(r, { includeCode: false })),
         });
       }
@@ -129,6 +148,8 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       }
       return res.status(200).json({
         configured: isSplashtopConfigured(),
+        mode: isSplashtopConfigured() ? "api" : "manual",
+        classicSosUrl: CLASSIC_SOS_PORTAL_URL,
         openCount: rows.filter((r) =>
           ["open", "waiting", "ready", "connected"].includes(r.status),
         ).length,

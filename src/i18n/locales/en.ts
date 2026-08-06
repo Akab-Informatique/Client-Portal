@@ -228,6 +228,26 @@ export const en = {
     status_closed: "Closed",
     status_expired: "Expired",
     status_error: "Error",
+      dialogDescManual: "No API needed. Open Splashtop SOS, run the app, then enter the code below so a technician can connect.",
+    modeManual: "Manual code",
+    modeApi: "API session",
+    codeLabel: "SOS code from the app",
+    codePlaceholder: "e.g. 123456789",
+    codeHelp: "After you run Splashtop SOS, type the code shown on screen. Your technician uses it to connect.",
+    submitCode: "Send code",
+    invalidCode: "Enter the numeric code from the SOS app (usually 9 digits).",
+    manualNeedCode: "SOS opened. Run the app, then enter the code here so your technician can connect.",
+    manualCodeSent: "Code sent to the technician queue. Stay online in the SOS app.",
+    openClassicSos: "Open Splashtop SOS",
+    yourCode: "Your code",
+    notifyAgain: "Notify tech again",
+    manualStep1: "Click Start SOS — the Splashtop SOS page opens.",
+    manualStep2: "Download or run the SOS app on this computer.",
+    manualStep3: "Copy the code shown in the SOS app and paste it above.",
+    manualStep4: "Keep the SOS app open until a technician connects.",
+    queueManualBanner: "Splashtop Open API is not configured. Clients share a classic SOS code; Connect still launches Splashtop Business.",
+    waitingForCode: "Waiting for client code",
+    copyCode: "Copy code",
   },
 
   settings: {
@@ -255,7 +275,7 @@ export const en = {
     autotaskHint:
       "PSA tickets for client zones. Configure Autotask API credentials in app secrets.",
     
-    splashtopHint: "Open API token with psa scope. Used for client SOS remote support.",
+    splashtopHint: "Attended remote support (SOS). Works without API: clients share a classic SOS code. With Open API token (psa scope), sessions are created automatically — no code typing.",
     splashtopReady: "Splashtop connected",
     splashtopOpenQueue: "Open SOS queue",
 graphHint:

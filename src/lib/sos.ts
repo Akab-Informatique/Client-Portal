@@ -17,6 +17,9 @@ export type SosRequest = {
   issue: string | null;
   status: SosStatus | string;
   supportPortalLink: string | null;
+  /** api = Open API session; manual = classic SOS code shared via portal */
+  mode?: "api" | "manual" | string;
+  classicSosUrl?: string | null;
   sosCode?: string | null;
   connectUrl?: string | null;
   expiresAt: string | null;
@@ -26,6 +29,8 @@ export type SosRequest = {
   lastPolledAt: string | null;
   remoteSnapshot?: string | null;
 };
+
+export const DEFAULT_CLASSIC_SOS_URL = "https://sos.splashtop.com";
 
 function errMsg(d: unknown, fallback: string): string {
   if (d && typeof d === "object" && "error" in d) {
@@ -42,7 +47,18 @@ export async function createSosRequest(input: {
   companyId: number;
   companyName: string;
   issue?: string | null;
-}): Promise<{ request: SosRequest | null; error: string | null; reused?: boolean }> {
+  /** Manual mode: SOS code from the classic Splashtop SOS app */
+  sosCode?: string | null;
+}): Promise<{
+  request: SosRequest | null;
+  error: string | null;
+  reused?: boolean;
+  mode?: string;
+  needsCode?: boolean;
+  classicSosUrl?: string;
+  warning?: string;
+  configured?: boolean;
+}> {
   const r = await fetch("/api/sos/requests", {
     method: "POST",
     headers: { "Content-Type": "application/json", Accept: "application/json" },
@@ -52,20 +68,61 @@ export async function createSosRequest(input: {
     request?: SosRequest;
     error?: string;
     reused?: boolean;
+    mode?: string;
+    needsCode?: boolean;
+    classicSosUrl?: string;
+    warning?: string;
+    configured?: boolean;
   };
   if (!r.ok && !d.request) {
-    return { request: null, error: errMsg(d, `SOS failed (${r.status})`) };
+    return {
+      request: null,
+      error: errMsg(d, `SOS failed (${r.status})`),
+      mode: d.mode,
+      needsCode: d.needsCode,
+      classicSosUrl: d.classicSosUrl,
+      configured: d.configured,
+    };
   }
   return {
     request: d.request ?? null,
     error: d.error ? String(d.error) : null,
     reused: d.reused,
+    mode: d.mode,
+    needsCode: d.needsCode,
+    classicSosUrl: d.classicSosUrl,
+    warning: d.warning,
+    configured: d.configured,
   };
+}
+
+export async function attachSosCode(
+  requestId: number,
+  sosCode: string,
+): Promise<{ request: SosRequest | null; error: string | null }> {
+  const r = await fetch(`/api/sos/requests/${requestId}`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json", Accept: "application/json" },
+    body: JSON.stringify({
+      action: "set_code",
+      role: "client",
+      sosCode,
+    }),
+  });
+  const d = (await r.json()) as { request?: SosRequest; error?: string };
+  if (!r.ok) {
+    return { request: null, error: errMsg(d, `Could not save SOS code (${r.status})`) };
+  }
+  return { request: d.request ?? null, error: null };
 }
 
 export async function fetchClientSosRequests(
   userId: number,
-): Promise<{ requests: SosRequest[]; error: string | null; configured: boolean }> {
+): Promise<{
+  requests: SosRequest[];
+  error: string | null;
+  configured: boolean;
+}> {
   const q = new URLSearchParams({
     role: "client",
     userId: String(userId),

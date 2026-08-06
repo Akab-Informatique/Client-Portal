@@ -1,6 +1,7 @@
 import type { VercelRequest, VercelResponse } from "@vercel/node";
 import {
   buildTechnicianConnectUrl,
+  CLASSIC_SOS_PORTAL_URL,
   closeSupportSession,
   derivePortalStatusFromSession,
   getSupportSession,
@@ -13,7 +14,8 @@ import {
 
 /**
  * GET    /api/sos/requests/:id?role=staff|client
- * PATCH  /api/sos/requests/:id  { action: "close"|"refresh", closedByUserId? }
+ * PATCH  /api/sos/requests/:id
+ *   { action: "close"|"refresh"|"set_code", sosCode?, closedByUserId? }
  */
 export default async function handler(req: VercelRequest, res: VercelResponse) {
   try {
@@ -28,6 +30,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
     const role = String(req.query.role ?? req.body?.role ?? "staff").toLowerCase();
     const includeCode = role === "staff";
+    const apiSession = Boolean(row.splashtop_session_id);
 
     const toPublic = (r: typeof row) => ({
       id: r.id,
@@ -39,10 +42,18 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       issue: r.issue,
       status: r.status,
       supportPortalLink: r.support_portal_link,
-      sosCode: includeCode ? r.sos_code : undefined,
+      mode: r.splashtop_session_id ? "api" : "manual",
+      classicSosUrl: CLASSIC_SOS_PORTAL_URL,
+      sosCode:
+        includeCode || !r.splashtop_session_id
+          ? r.sos_code ?? undefined
+          : undefined,
       connectUrl:
         includeCode && r.sos_code
-          ? buildTechnicianConnectUrl({ sosCode: r.sos_code })
+          ? buildTechnicianConnectUrl({
+              sosCode: r.sos_code,
+              apiSession: Boolean(r.splashtop_session_id),
+            })
           : undefined,
       expiresAt: r.expires_at,
       errorMessage: r.error_message,
@@ -108,6 +119,39 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
           closed_at: new Date().toISOString(),
           closed_by_user_id:
             closedBy != null && Number.isFinite(closedBy) ? closedBy : null,
+        });
+        return res.status(200).json({
+          ok: true,
+          request: toPublic(updated ?? row),
+        });
+      }
+
+      // Manual mode: client (or staff) attaches the SOS code from the classic app
+      if (action === "set_code" || action === "attach_code") {
+        const sosCode = String(body.sosCode ?? body.code ?? "")
+          .trim()
+          .replace(/\s+/g, "");
+        if (!/^\d{6,12}$/.test(sosCode)) {
+          return res.status(400).json({
+            error:
+              "Enter the numeric SOS code shown in the Splashtop SOS app (usually 9 digits).",
+          });
+        }
+        // Don't overwrite an API-backed session code unless staff forces it
+        if (apiSession && role !== "staff") {
+          return res.status(400).json({
+            error: "This session already has an API-generated code.",
+          });
+        }
+        const updated = await updateSosRequest(row.id, {
+          sos_code: sosCode,
+          status:
+            row.status === "closed" || row.status === "expired"
+              ? row.status
+              : "ready",
+          support_portal_link:
+            row.support_portal_link || CLASSIC_SOS_PORTAL_URL,
+          error_message: null,
         });
         return res.status(200).json({
           ok: true,

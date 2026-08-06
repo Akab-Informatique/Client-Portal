@@ -371,19 +371,30 @@ export async function closeSupportSession(
   }
 }
 
-/** Technician deep-link into Splashtop Business app. */
+/**
+ * Technician deep-link into Splashtop Business app.
+ * - API-created sessions: category=40
+ * - Classic / manual SOS codes (client typed code): omit category
+ */
 export function buildTechnicianConnectUrl(opts: {
   sosCode: string;
   accountEmail?: string | null;
+  /** true when the session was created via Splashtop Open API */
+  apiSession?: boolean;
 }): string {
   const params = new URLSearchParams();
-  params.set("sos", opts.sosCode);
-  params.set("category", "40");
+  params.set("sos", String(opts.sosCode || "").trim());
+  if (opts.apiSession) {
+    params.set("category", "40");
+  }
   if (opts.accountEmail?.trim()) {
     params.set("account", opts.accountEmail.trim());
   }
   return `st-business://com.splashtop.business/?${params.toString()}`;
 }
+
+/** Classic Splashtop SOS download / run page (no Open API required). */
+export const CLASSIC_SOS_PORTAL_URL = "https://sos.splashtop.com";
 
 /**
  * Map Splashtop session fields → portal status.

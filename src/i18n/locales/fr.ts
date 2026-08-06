@@ -229,6 +229,26 @@ export const fr: Dictionary = {
     status_closed: "Fermée",
     status_expired: "Expirée",
     status_error: "Erreur",
+      dialogDescManual: "Sans API. Ouvrez Splashtop SOS, lancez l’appli, puis saisissez le code ci-dessous pour qu’un technicien se connecte.",
+    modeManual: "Code manuel",
+    modeApi: "Session API",
+    codeLabel: "Code SOS de l’appli",
+    codePlaceholder: "ex. 123456789",
+    codeHelp: "Après avoir lancé Splashtop SOS, saisissez le code affiché. Votre technicien l’utilise pour se connecter.",
+    submitCode: "Envoyer le code",
+    invalidCode: "Entrez le code numérique de l’appli SOS (souvent 9 chiffres).",
+    manualNeedCode: "SOS ouvert. Lancez l’appli, puis entrez le code ici pour le technicien.",
+    manualCodeSent: "Code envoyé à la file technicien. Restez en ligne dans l’appli SOS.",
+    openClassicSos: "Ouvrir Splashtop SOS",
+    yourCode: "Votre code",
+    notifyAgain: "Notifier à nouveau",
+    manualStep1: "Cliquez Démarrer SOS — la page Splashtop SOS s’ouvre.",
+    manualStep2: "Téléchargez ou lancez l’appli SOS sur cet ordinateur.",
+    manualStep3: "Copiez le code affiché dans l’appli SOS et collez-le ci-dessus.",
+    manualStep4: "Gardez l’appli SOS ouverte jusqu’à la connexion du technicien.",
+    queueManualBanner: "L’API Splashtop n’est pas configurée. Les clients partagent un code SOS classique ; Connecter lance toujours Splashtop Business.",
+    waitingForCode: "En attente du code client",
+    copyCode: "Copier le code",
   },
 
   settings: {
@@ -257,7 +277,7 @@ export const fr: Dictionary = {
     autotaskHint:
       "Billets PSA pour les zones clients. Configurez les identifiants API Autotask dans les secrets de l'app.",
     
-    splashtopHint: "Jeton Open API avec portée psa. Utilisé pour le SOS client.",
+    splashtopHint: "Assistance à distance SOS. Fonctionne sans API : le client partage un code SOS classique. Avec jeton Open API (scope psa), la session est créée automatiquement.",
     splashtopReady: "Splashtop connecté",
     splashtopOpenQueue: "Ouvrir la file SOS",
 graphHint:
