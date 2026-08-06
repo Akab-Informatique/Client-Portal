@@ -1645,21 +1645,23 @@ const CLIENT_SAFE_CONTRACT_FIELDS = [
   "endDate",
   "companyID",
   "description",
-  // Client-facing period price (what the customer pays) — NOT internal cost
-  "contractPeriodCost",
+  // Billing cycle for recurring-service contracts (not a dollar amount)
   "contractPeriodType",
 ] as const;
 
 /**
  * Fields that must NEVER be requested or returned to clients.
  * Kept as documentation + runtime strip guard.
- * Note: contractPeriodCost is intentionally ALLOWED (client billing amount).
+ *
+ * Note: Autotask Contracts entity has NO contractPeriodCost field.
+ * Monthly amount is computed from ContractServices × units instead.
  */
 export const CLIENT_FORBIDDEN_CONTRACT_FIELDS = [
   "estimatedCost",
   "estimatedRevenue",
   "estimatedHours",
   "setupFee",
+  "contractPeriodCost",
   "timeReportingRequiresStartAndStopTimes",
   "isDefaultContract",
   "opportunityID",
@@ -1688,8 +1690,9 @@ export type ClientSafeContract = {
   endDate: string | null;
   description: string | null;
   /**
-   * Client-facing recurring amount for the contract period (usually monthly).
-   * Sourced from contractPeriodCost when present.
+   * Client-facing estimated monthly amount.
+   * Sum of (unit price × units) on ContractServices, normalized by period type.
+   * Null when services/units are unavailable (e.g. non-recurring contracts).
    */
   monthlyAmount: number | null;
   periodType: number | null;
@@ -1715,8 +1718,8 @@ function stripForbiddenContractFields(
   const out: Record<string, unknown> = {};
   for (const [k, v] of Object.entries(raw)) {
     const lower = k.toLowerCase();
-    // Allow contractPeriodCost through (client-facing amount)
-    if (lower === "contractperiodcost" || lower === "contractperiodtype") {
+    // Allow period type (billing cycle label) — never dollar "cost" fields
+    if (lower === "contractperiodtype") {
       out[k] = v;
       continue;
     }
@@ -1724,12 +1727,14 @@ function stripForbiddenContractFields(
       CLIENT_FORBIDDEN_CONTRACT_FIELDS.some(
         (f) => f.toLowerCase() === lower,
       ) ||
-      /profit|margin|revenue|internal|setupfee|estimated|unitcost/i.test(k)
+      /profit|margin|revenue|internal|setupfee|estimated|unitcost|periodcost/i.test(
+        k,
+      )
     ) {
       continue;
     }
-    // Strip bare "cost" keys except contractPeriodCost handled above
-    if (/cost/i.test(k) && lower !== "contractperiodcost") {
+    // Strip any bare "cost" keys from the contract payload
+    if (/cost/i.test(k)) {
       continue;
     }
     out[k] = v;
@@ -1801,18 +1806,7 @@ function mapClientSafeContract(
       null
     : null;
 
-  // Prefer Autotask period amount; treat as "monthly" when period is monthly
-  const periodAmount = parseMoney(safe.contractPeriodCost);
-  let monthlyAmount: number | null = periodAmount;
-  if (periodAmount != null && periodTypeLabel) {
-    const pl = periodTypeLabel.toLowerCase();
-    if (pl.includes("month")) monthlyAmount = periodAmount;
-    else if (pl.includes("quarter")) monthlyAmount = periodAmount / 3;
-    else if (pl.includes("semi")) monthlyAmount = periodAmount / 6;
-    else if (pl.includes("year") || pl.includes("annual"))
-      monthlyAmount = periodAmount / 12;
-  }
-
+  // monthlyAmount is filled later from ContractServices (Contracts has no period $ field)
   return {
     id,
     name,
@@ -1825,10 +1819,175 @@ function mapClientSafeContract(
       safe.startDate != null ? String(safe.startDate).slice(0, 32) : null,
     endDate: safe.endDate != null ? String(safe.endDate).slice(0, 32) : null,
     description,
-    monthlyAmount,
+    monthlyAmount: null,
     periodType,
     periodTypeLabel,
   };
+}
+
+/**
+ * Normalize a period total into an approximate monthly amount using period label.
+ */
+function periodTotalToMonthly(
+  periodTotal: number,
+  periodTypeLabel: string | null,
+): number {
+  if (!periodTypeLabel) return periodTotal;
+  const pl = periodTypeLabel.toLowerCase();
+  if (pl.includes("month")) return periodTotal;
+  if (pl.includes("quarter")) return periodTotal / 3;
+  if (pl.includes("semi")) return periodTotal / 6;
+  if (pl.includes("year") || pl.includes("annual")) return periodTotal / 12;
+  return periodTotal;
+}
+
+/**
+ * Sum client-facing period totals for many contracts via ContractServices × units.
+ * Never uses internal cost fields. Contracts entity has no period dollar amount.
+ */
+async function fetchMonthlyAmountsForContracts(
+  base: string,
+  cfg: AutotaskConfig,
+  contractIds: number[],
+  periodLabelByContractId: Map<number, string | null>,
+): Promise<Map<number, number>> {
+  const result = new Map<number, number>();
+  if (contractIds.length === 0) return result;
+
+  type QueryRes = { items?: Array<Record<string, unknown>> };
+  const chunkSize = 50;
+  const allCs: Array<Record<string, unknown>> = [];
+
+  for (let i = 0; i < contractIds.length; i += chunkSize) {
+    const chunk = contractIds.slice(i, i + chunkSize);
+    try {
+      const csData = await postQuery<QueryRes>(
+        base,
+        cfg,
+        "ContractServices/query",
+        {
+          MaxRecords: 500,
+          IncludeFields: [
+            "id",
+            "contractID",
+            "serviceID",
+            "unitPrice",
+            "adjustedPrice",
+          ],
+          filter: [
+            {
+              op: "and",
+              items: [{ op: "in", field: "contractID", value: chunk }],
+            },
+          ],
+        },
+      );
+      allCs.push(...(csData.items ?? []));
+    } catch {
+      try {
+        const csData = await postQuery<QueryRes>(
+          base,
+          cfg,
+          "ContractServices/query",
+          {
+            MaxRecords: 500,
+            filter: [
+              {
+                op: "and",
+                items: [{ op: "in", field: "contractID", value: chunk }],
+              },
+            ],
+          },
+        );
+        allCs.push(...(csData.items ?? []));
+      } catch {
+        /* skip chunk */
+      }
+    }
+  }
+
+  if (allCs.length === 0) return result;
+
+  const unitsByCsId = new Map<number, number>();
+  const csIds = allCs
+    .map((r) => Number(r.id))
+    .filter((n) => Number.isFinite(n) && n > 0);
+
+  for (let i = 0; i < csIds.length; i += chunkSize) {
+    const chunk = csIds.slice(i, i + chunkSize);
+    try {
+      const unitsData = await postQuery<QueryRes>(
+        base,
+        cfg,
+        "ContractServiceUnits/query",
+        {
+          MaxRecords: 500,
+          IncludeFields: [
+            "id",
+            "contractServiceID",
+            "units",
+            "startDate",
+            "endDate",
+          ],
+          filter: [
+            {
+              op: "and",
+              items: [
+                { op: "in", field: "contractServiceID", value: chunk },
+              ],
+            },
+          ],
+        },
+      );
+      const today = new Date().toISOString().slice(0, 10);
+      for (const u of unitsData.items ?? []) {
+        const csId = Number(u.contractServiceID);
+        const units = Number(u.units);
+        if (!Number.isFinite(csId) || !Number.isFinite(units)) continue;
+        const start =
+          u.startDate != null ? String(u.startDate).slice(0, 10) : null;
+        const end =
+          u.endDate != null ? String(u.endDate).slice(0, 10) : null;
+        const coversToday =
+          (!start || start <= today) &&
+          (!end || end >= today || /^0001/.test(end));
+        const prev = unitsByCsId.get(csId);
+        if (coversToday || prev == null) {
+          unitsByCsId.set(csId, units);
+        }
+      }
+    } catch {
+      /* units optional */
+    }
+  }
+
+  const periodTotalByContract = new Map<number, number>();
+  for (const raw of allCs) {
+    const contractId = Number(raw.contractID);
+    const csId = Number(raw.id);
+    if (!Number.isFinite(contractId) || !Number.isFinite(csId)) continue;
+    const unitPrice =
+      parseMoney(raw.adjustedPrice) ?? parseMoney(raw.unitPrice);
+    if (unitPrice == null) continue;
+    const units = unitsByCsId.has(csId) ? unitsByCsId.get(csId)! : null;
+    // If units unknown, treat as 1 so single-service contracts still show a figure
+    const qty = units != null && units > 0 ? units : 1;
+    const line = unitPrice * qty;
+    periodTotalByContract.set(
+      contractId,
+      (periodTotalByContract.get(contractId) ?? 0) + line,
+    );
+  }
+
+  for (const [contractId, periodTotal] of periodTotalByContract) {
+    const label = periodLabelByContractId.get(contractId) ?? null;
+    const monthly = periodTotalToMonthly(periodTotal, label);
+    if (Number.isFinite(monthly)) {
+      result.set(contractId, Math.round(monthly * 100) / 100);
+    }
+  }
+
+  return result;
 }
 
 /**
@@ -1882,7 +2041,33 @@ export async function fetchClientSafeContractsForCompany(
   };
 
   type QueryRes = { items?: Array<Record<string, unknown>> };
-  const data = await postQuery<QueryRes>(base, cfg, "Contracts/query", body);
+  let data: QueryRes;
+  try {
+    data = await postQuery<QueryRes>(base, cfg, "Contracts/query", body);
+  } catch (e) {
+    // If IncludeFields rejected contractPeriodType on some tenants, retry minimal
+    const msg = e instanceof Error ? e.message : String(e);
+    if (/field|include|period/i.test(msg)) {
+      data = await postQuery<QueryRes>(base, cfg, "Contracts/query", {
+        MaxRecords: 500,
+        IncludeFields: [
+          "id",
+          "contractName",
+          "contractNumber",
+          "contractType",
+          "status",
+          "startDate",
+          "endDate",
+          "companyID",
+          "description",
+        ],
+        filter: [{ op: "and", items: filterItems }],
+      });
+    } else {
+      throw e;
+    }
+  }
+
   let contracts = (data.items ?? [])
     .map((item) =>
       mapClientSafeContract(item, statusLabels, typeLabels, periodLabels),
@@ -1893,6 +2078,25 @@ export async function fetchClientSafeContractsForCompany(
   // or filter was not applied
   if (!opts?.includeInactive) {
     contracts = contracts.filter((c) => c.isActive);
+  }
+
+  // Fill monthly amounts from ContractServices (Contracts has no period $ field)
+  try {
+    const periodLabelById = new Map<number, string | null>(
+      contracts.map((c) => [c.id, c.periodTypeLabel]),
+    );
+    const monthlyById = await fetchMonthlyAmountsForContracts(
+      base,
+      cfg,
+      contracts.map((c) => c.id),
+      periodLabelById,
+    );
+    contracts = contracts.map((c) => ({
+      ...c,
+      monthlyAmount: monthlyById.get(c.id) ?? null,
+    }));
+  } catch {
+    /* monthly optional — list still works without it */
   }
 
   contracts.sort((a, b) =>

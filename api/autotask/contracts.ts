@@ -68,7 +68,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         "periodTypeLabel",
       ],
       clientHiddenNote:
-        "Internal cost, profit, margin, and setup fees are never exposed to clients. Monthly amount is the client period price.",
+        "Internal cost, profit, margin, and setup fees are never exposed. Monthly amount is estimated from service unit prices × units.",
     });
   } catch (err) {
     return res.status(500).json({

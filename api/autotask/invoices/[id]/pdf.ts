@@ -39,15 +39,21 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
     const { bytes, fileName, contentType } = await fetchInvoicePdf(invoiceId);
 
+    const buf = Buffer.from(bytes);
+    res.statusCode = 200;
     res.setHeader("Content-Type", contentType || "application/pdf");
     res.setHeader(
       "Content-Disposition",
       `${disposition}; filename="${fileName.replace(/"/g, "")}"`,
     );
-    res.setHeader("Content-Length", String(bytes.byteLength));
+    res.setHeader("Content-Length", String(buf.byteLength));
     res.setHeader("Cache-Control", "private, max-age=60");
-    // Node / Vercel: send Buffer
-    return res.status(200).send(Buffer.from(bytes));
+    // Prefer end(Buffer) so wrappers that JSON-stringify objects still work
+    if (typeof res.end === "function") {
+      res.end(buf);
+      return;
+    }
+    return res.status(200).send(buf);
   } catch (err) {
     const message = err instanceof Error ? err.message : "Server error";
     const status = /not configured/i.test(message)

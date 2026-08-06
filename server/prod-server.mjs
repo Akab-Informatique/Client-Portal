@@ -463,8 +463,28 @@ function createVercelRes(res) {
     },
     send(data) {
       res.statusCode = statusCode;
-      if (typeof data === "object" && data !== null) {
-        res.setHeader("Content-Type", "application/json");
+      // Binary payloads (PDF, files): never JSON-stringify Buffers/TypedArrays
+      if (
+        Buffer.isBuffer(data) ||
+        data instanceof Uint8Array ||
+        (typeof ArrayBuffer !== "undefined" && data instanceof ArrayBuffer)
+      ) {
+        const buf = Buffer.isBuffer(data)
+          ? data
+          : Buffer.from(
+              data instanceof ArrayBuffer ? new Uint8Array(data) : data,
+            );
+        if (!res.getHeader("Content-Type")) {
+          res.setHeader("Content-Type", "application/octet-stream");
+        }
+        if (!res.getHeader("Content-Length")) {
+          res.setHeader("Content-Length", String(buf.byteLength));
+        }
+        res.end(buf);
+      } else if (typeof data === "object" && data !== null) {
+        if (!res.getHeader("Content-Type")) {
+          res.setHeader("Content-Type", "application/json");
+        }
         res.end(JSON.stringify(data));
       } else {
         res.end(data == null ? "" : String(data));
@@ -473,11 +493,33 @@ function createVercelRes(res) {
     },
     end(data) {
       res.statusCode = statusCode;
-      res.end(data);
+      if (
+        Buffer.isBuffer(data) ||
+        data instanceof Uint8Array ||
+        (typeof ArrayBuffer !== "undefined" && data instanceof ArrayBuffer)
+      ) {
+        const buf = Buffer.isBuffer(data)
+          ? data
+          : Buffer.from(
+              data instanceof ArrayBuffer ? new Uint8Array(data) : data,
+            );
+        res.end(buf);
+      } else if (typeof data === "object" && data !== null) {
+        if (!res.getHeader("Content-Type")) {
+          res.setHeader("Content-Type", "application/json");
+        }
+        res.end(JSON.stringify(data));
+      } else {
+        res.end(data);
+      }
       return api;
     },
     write(chunk) {
-      res.write(chunk);
+      if (Buffer.isBuffer(chunk) || chunk instanceof Uint8Array) {
+        res.write(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+      } else {
+        res.write(chunk);
+      }
       return api;
     },
     writeHead(code, headers) {
