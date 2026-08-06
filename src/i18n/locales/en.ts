@@ -197,8 +197,19 @@ export const en = {
     start: "Start SOS",
     closeRequest: "Close",
     restart: "Open SOS again",
+    openOrReuse: "Open SOS link",
     activeRequest: "Active request",
     openClientLink: "Open SOS download / launch link",
+    copyLink: "Copy link",
+    copied: "Copied",
+    openHint:
+      "If a new tab did not open, use Open SOS link or paste the URL below into your browser.",
+    waitingLink: "Session created — waiting for the client launch link…",
+    noLink:
+      "No client launch link was returned. Ask staff to check Splashtop settings, or try Start SOS again.",
+    openBlocked:
+      "Your browser blocked the new tab. Copy the link below and open it manually.",
+    copyFailed: "Could not copy the link. Select the URL text and copy it manually.",
     step1: "Click Start SOS — we create a secure remote session.",
     step2: "Download or run the Splashtop SOS app from the link that opens.",
     step3: "Stay on this page; a technician will connect shortly.",

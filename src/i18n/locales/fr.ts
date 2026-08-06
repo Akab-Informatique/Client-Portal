@@ -198,8 +198,19 @@ export const fr: Dictionary = {
     start: "Démarrer SOS",
     closeRequest: "Fermer",
     restart: "Rouvrir SOS",
+    openOrReuse: "Ouvrir le lien SOS",
     activeRequest: "Demande active",
     openClientLink: "Ouvrir le lien de téléchargement / lancement SOS",
+    copyLink: "Copier le lien",
+    copied: "Copié",
+    openHint:
+      "Si un nouvel onglet ne s’est pas ouvert, utilisez Ouvrir le lien SOS ou collez l’URL ci-dessous dans votre navigateur.",
+    waitingLink: "Session créée — en attente du lien de lancement client…",
+    noLink:
+      "Aucun lien client n’a été renvoyé. Demandez au personnel de vérifier Splashtop, ou relancez SOS.",
+    openBlocked:
+      "Votre navigateur a bloqué le nouvel onglet. Copiez le lien ci-dessous et ouvrez-le manuellement.",
+    copyFailed: "Impossible de copier le lien. Sélectionnez l’URL et copiez-la manuellement.",
     step1: "Cliquez Démarrer SOS — une session sécurisée est créée.",
     step2: "Téléchargez ou lancez l’appli Splashtop SOS via le lien qui s’ouvre.",
     step3: "Restez sur cette page ; un technicien se connectera sous peu.",

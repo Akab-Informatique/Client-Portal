@@ -5,6 +5,7 @@ import {
   derivePortalStatusFromSession,
   getSupportSession,
   isSplashtopConfigured,
+  resolveClientPortalLink,
 } from "../../_lib/splashtop-client.js";
 import {
   getSosRequestById,
@@ -38,7 +39,11 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       userEmail: r.user_email,
       issue: r.issue,
       status: r.status,
-      supportPortalLink: r.support_portal_link,
+      supportPortalLink:
+        resolveClientPortalLink({
+          link: r.support_portal_link,
+          code: r.sos_code,
+        }) || null,
       sosCode: includeCode ? r.sos_code : undefined,
       connectUrl:
         includeCode && r.sos_code
@@ -62,13 +67,17 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         try {
           const session = await getSupportSession(row.splashtop_session_id);
           const next = derivePortalStatusFromSession(session, row.status);
+          const portalLink =
+            resolveClientPortalLink({
+              link: session.supportPortalLink || row.support_portal_link,
+              code: session.code || row.sos_code,
+            }) || row.support_portal_link;
           current =
             (await updateSosRequest(row.id, {
               status: next,
               last_polled_at: new Date().toISOString(),
               sos_code: session.code || row.sos_code,
-              support_portal_link:
-                session.supportPortalLink || row.support_portal_link,
+              support_portal_link: portalLink,
               expires_at: session.expiresAt || row.expires_at,
               remote_snapshot: JSON.stringify({
                 status: session.status,
@@ -124,12 +133,16 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         }
         const session = await getSupportSession(row.splashtop_session_id);
         const next = derivePortalStatusFromSession(session, row.status);
+        const portalLink =
+          resolveClientPortalLink({
+            link: session.supportPortalLink || row.support_portal_link,
+            code: session.code || row.sos_code,
+          }) || row.support_portal_link;
         const updated = await updateSosRequest(row.id, {
           status: next,
           last_polled_at: new Date().toISOString(),
           sos_code: session.code || row.sos_code,
-          support_portal_link:
-            session.supportPortalLink || row.support_portal_link,
+          support_portal_link: portalLink,
           expires_at: session.expiresAt || row.expires_at,
           remote_snapshot: JSON.stringify({
             status: session.status,

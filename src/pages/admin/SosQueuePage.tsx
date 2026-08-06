@@ -12,8 +12,10 @@ import { useAuth } from "@/lib/auth";
 import { useLocale } from "@/hooks/use-locale";
 import {
   closeSosRequest,
+  ensureClientPortalHref,
   fetchStaffSosQueue,
   formatSosTime,
+  openClientPortalLink,
   type SosRequest,
 } from "@/lib/sos";
 import { BlurFade } from "@/components/ui/blur-fade";
@@ -253,24 +255,26 @@ export function SosQueuePage() {
                                   {t("sos.connect")}
                                 </Button>
                               )}
-                            {req.supportPortalLink && (
+                            {ensureClientPortalHref(req.supportPortalLink) && (
                               <Button
-                                asChild
                                 type="button"
                                 size="sm"
                                 variant="outline"
                                 className="h-8 gap-1"
+                                onClick={() =>
+                                  openClientPortalLink(
+                                    ensureClientPortalHref(req.supportPortalLink),
+                                  )
+                                }
+                                title={
+                                  ensureClientPortalHref(req.supportPortalLink) ??
+                                  undefined
+                                }
                               >
-                                <a
-                                  href={req.supportPortalLink}
-                                  target="_blank"
-                                  rel="noopener noreferrer"
-                                >
-                                  <ExternalLink className="size-3.5" />
-                                  <span className="hidden sm:inline">
-                                    {t("sos.clientLink")}
-                                  </span>
-                                </a>
+                                <ExternalLink className="size-3.5" />
+                                <span className="hidden sm:inline">
+                                  {t("sos.clientLink")}
+                                </span>
                               </Button>
                             )}
                             {["open", "waiting", "ready", "connected", "error"].includes(

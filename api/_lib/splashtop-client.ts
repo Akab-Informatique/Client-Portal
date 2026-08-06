@@ -5,10 +5,12 @@
  * Reference PDF: https://files.splashtop.com/doc/Splashtop_Open_API.pdf
  *
  * Env:
- *   SPLASHTOP_API_TOKEN   — Bearer token with `psa` (+ ideally `users`) scope
- *   SPLASHTOP_TEAM_ID     — optional; auto-discovered via /users/basic_info
- *   SPLASHTOP_BASE_URL    — optional; default https://webapi.splashtop.com
- *   SPLASHTOP_CHANNEL_ID  — optional; default 0 (private channel)
+ *   SPLASHTOP_API_TOKEN         — Bearer token with `psa` (+ ideally `users`) scope
+ *   SPLASHTOP_TEAM_ID           — optional; auto-discovered via /users/basic_info
+ *   SPLASHTOP_BASE_URL          — optional; default https://webapi.splashtop.com
+ *   SPLASHTOP_CHANNEL_ID        — optional; default 0 (private channel)
+ *   SPLASHTOP_PORTAL_BASE_URL   — optional client-link host; default my.splashtop.com|eu
+ *                                 (use if API returns stack hosts like my.aws-rd.splashtop.com)
  */
 
 function cleanEnv(v: unknown): string {
@@ -179,94 +181,183 @@ export type SplashtopSupportSession = {
   raw: Record<string, unknown>;
 };
 
-function mapSession(raw: Record<string, unknown>): SplashtopSupportSession {
-  const id = raw.id != null ? String(raw.id) : "";
-  const code = raw.code != null ? String(raw.code) : "";
-  const link =
-    raw.support_portal_link != null
-      ? String(raw.support_portal_link)
-      : raw.supportPortalLink != null
-        ? String(raw.supportPortalLink)
-        : "";
+/**
+ * Portal host for end-user SOS session links.
+ * API base is webapi.splashtop.com|eu — client links live on my.splashtop.com|eu
+ * (or a stack-specific host like my.aws-rd.splashtop.com when API returns one).
+ */
+export function getClientPortalBaseUrl(cfg?: SplashtopConfig | null): string {
+  const pinned = cleanEnv(process.env.SPLASHTOP_PORTAL_BASE_URL);
+  if (pinned) return pinned.replace(/\/+$/, "");
+
+  const base = (cfg?.baseUrl || cleanEnv(process.env.SPLASHTOP_BASE_URL) || "")
+    .toLowerCase()
+    .replace(/\/+$/, "");
+  if (base.includes("splashtop.eu") || base.includes("webapi.splashtop.eu")) {
+    return "https://my.splashtop.eu";
+  }
+  if (base.includes("splashtop.nr")) {
+    return "https://my.splashtop.nr";
+  }
+  return "https://my.splashtop.com";
+}
+
+/**
+ * Build the end-user session link from a 9-digit SOS code.
+ * Format (Open API PDF): https://my…/service_desk/psa/{code}
+ */
+export function buildClientPortalUrl(
+  sosCode: string,
+  cfg?: SplashtopConfig | null,
+): string {
+  const code = String(sosCode || "").trim();
+  if (!code) return "";
+  const host = getClientPortalBaseUrl(cfg);
+  return `${host}/service_desk/psa/${encodeURIComponent(code)}`;
+}
+
+/** Prefer API-provided absolute URL; otherwise synthesize from code. */
+export function resolveClientPortalLink(opts: {
+  link?: string | null;
+  code?: string | null;
+  cfg?: SplashtopConfig | null;
+}): string {
+  const raw = String(opts.link ?? "").trim();
+  if (raw) {
+    // Absolute http(s) link from API — use as-is
+    if (/^https?:\/\//i.test(raw)) return raw;
+    // Protocol-relative
+    if (raw.startsWith("//")) return `https:${raw}`;
+    // Path-only from API — attach to portal host
+    if (raw.startsWith("/")) {
+      return `${getClientPortalBaseUrl(opts.cfg)}${raw}`;
+    }
+    // Bare host/path without scheme
+    if (/^[a-z0-9.-]+\//i.test(raw) || raw.includes("splashtop.")) {
+      return `https://${raw.replace(/^\/+/, "")}`;
+    }
+  }
+  return buildClientPortalUrl(String(opts.code ?? ""), opts.cfg);
+}
+
+function pickString(
+  raw: Record<string, unknown>,
+  keys: string[],
+): string {
+  for (const k of keys) {
+    const v = raw[k];
+    if (v != null && String(v).trim()) return String(v).trim();
+  }
+  return "";
+}
+
+function mapSession(
+  raw: Record<string, unknown>,
+  cfg?: SplashtopConfig | null,
+): SplashtopSupportSession {
+  const id = pickString(raw, ["id", "session_id", "support_session_id"]);
+  const code = pickString(raw, ["code", "sos_code", "session_code"]);
+  const linkFromApi = pickString(raw, [
+    "support_portal_link",
+    "supportPortalLink",
+    "portal_link",
+    "portalLink",
+    "session_link",
+    "sessionLink",
+    "client_link",
+    "clientLink",
+    "url",
+    "link",
+  ]);
+  const link = resolveClientPortalLink({
+    link: linkFromApi,
+    code,
+    cfg: cfg ?? getSplashtopConfigFromEnv(),
+  });
   return {
     id,
     code,
     supportPortalLink: link,
-    status: raw.status != null ? String(raw.status) : "open",
-    channelId:
-      raw.channel_id != null
-        ? String(raw.channel_id)
-        : raw.channelId != null
-          ? String(raw.channelId)
-          : null,
-    expiresAt:
-      raw.expires_at != null
-        ? String(raw.expires_at)
-        : raw.expiresAt != null
-          ? String(raw.expiresAt)
-          : null,
-    assigneeEmail:
-      raw.assignee_email != null
-        ? String(raw.assignee_email)
-        : raw.assigneeEmail != null
-          ? String(raw.assigneeEmail)
-          : null,
-    customerName:
-      raw.name != null
-        ? String(raw.name)
-        : raw.customer_name != null
-          ? String(raw.customer_name)
-          : null,
-    serverName:
-      raw.server_name != null
-        ? String(raw.server_name)
-        : raw.serverName != null
-          ? String(raw.serverName)
-          : null,
-    serverOs:
-      raw.server_os != null
-        ? String(raw.server_os)
-        : raw.serverOs != null
-          ? String(raw.serverOs)
-          : null,
-    associatedAt:
-      raw.associated_at != null
-        ? String(raw.associated_at)
-        : raw.associatedAt != null
-          ? String(raw.associatedAt)
-          : null,
-    onlineSince:
-      raw.online_since != null
-        ? String(raw.online_since)
-        : raw.onlineSince != null
-          ? String(raw.onlineSince)
-          : null,
-    connectedSince:
-      raw.connected_since != null
-        ? String(raw.connected_since)
-        : raw.connectedSince != null
-          ? String(raw.connectedSince)
-          : null,
+    status: pickString(raw, ["status"]) || "open",
+    channelId: (() => {
+      const v = pickString(raw, ["channel_id", "channelId"]);
+      return v || null;
+    })(),
+    expiresAt: (() => {
+      const v = pickString(raw, ["expires_at", "expiresAt"]);
+      return v || null;
+    })(),
+    assigneeEmail: (() => {
+      const v = pickString(raw, ["assignee_email", "assigneeEmail"]);
+      return v || null;
+    })(),
+    customerName: (() => {
+      const v = pickString(raw, ["name", "customer_name", "customerName"]);
+      return v || null;
+    })(),
+    serverName: (() => {
+      const v = pickString(raw, ["server_name", "serverName"]);
+      return v || null;
+    })(),
+    serverOs: (() => {
+      const v = pickString(raw, ["server_os", "serverOs"]);
+      return v || null;
+    })(),
+    associatedAt: (() => {
+      const v = pickString(raw, ["associated_at", "associatedAt"]);
+      return v || null;
+    })(),
+    onlineSince: (() => {
+      const v = pickString(raw, ["online_since", "onlineSince"]);
+      return v || null;
+    })(),
+    connectedSince: (() => {
+      const v = pickString(raw, ["connected_since", "connectedSince"]);
+      return v || null;
+    })(),
     raw,
   };
 }
 
 function extractSession(data: unknown): Record<string, unknown> | null {
   if (!data || typeof data !== "object") return null;
-  const root = data as {
-    data?: {
-      support_session?: Record<string, unknown>;
-      supportSession?: Record<string, unknown>;
-    };
-    support_session?: Record<string, unknown>;
-  };
-  return (
-    root.data?.support_session ||
-    root.data?.supportSession ||
-    root.support_session ||
-    (root.data as Record<string, unknown> | undefined) ||
-    null
-  );
+  const root = data as Record<string, unknown>;
+  const dataNode =
+    root.data && typeof root.data === "object"
+      ? (root.data as Record<string, unknown>)
+      : null;
+
+  const candidates: unknown[] = [
+    dataNode?.support_session,
+    dataNode?.supportSession,
+    dataNode?.session,
+    root.support_session,
+    root.supportSession,
+    root.session,
+    // list-style: data.support_sessions[0]
+    Array.isArray(dataNode?.support_sessions)
+      ? (dataNode!.support_sessions as unknown[])[0]
+      : null,
+    Array.isArray(dataNode?.supportSessions)
+      ? (dataNode!.supportSessions as unknown[])[0]
+      : null,
+    // bare session object under data
+    dataNode &&
+    (dataNode.id != null || dataNode.code != null || dataNode.support_portal_link != null)
+      ? dataNode
+      : null,
+    // top-level session fields
+    root.id != null || root.code != null || root.support_portal_link != null
+      ? root
+      : null,
+  ];
+
+  for (const c of candidates) {
+    if (c && typeof c === "object" && !Array.isArray(c)) {
+      return c as Record<string, unknown>;
+    }
+  }
+  return null;
 }
 
 /**
@@ -317,7 +408,7 @@ export async function createSupportSession(opts: {
   if (!sessionRaw) {
     throw new Error("Splashtop create session returned no support_session payload");
   }
-  const session = mapSession(sessionRaw);
+  const session = mapSession(sessionRaw, cfg);
   if (!session.code && !session.supportPortalLink) {
     throw new Error("Splashtop session missing code and support_portal_link");
   }
@@ -343,10 +434,10 @@ export async function getSupportSession(
   if (!sessionRaw) {
     // Some responses return the session at top-level data
     const d = res.data as { data?: Record<string, unknown> };
-    if (d.data && d.data.id != null) return mapSession(d.data);
+    if (d.data && d.data.id != null) return mapSession(d.data, cfg);
     throw new Error("Splashtop get session returned empty payload");
   }
-  return mapSession(sessionRaw);
+  return mapSession(sessionRaw, cfg);
 }
 
 export async function closeSupportSession(

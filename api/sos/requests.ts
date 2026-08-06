@@ -5,6 +5,7 @@ import {
   derivePortalStatusFromSession,
   getSupportSession,
   isSplashtopConfigured,
+  resolveClientPortalLink,
 } from "../_lib/splashtop-client.js";
 import {
   getSosRequestById,
@@ -16,6 +17,12 @@ import {
 } from "../_lib/sos-store.js";
 
 function publicRow(row: SosRequestRow, opts?: { includeCode?: boolean }) {
+  // Always synthesize a client portal URL when API omitted the absolute link
+  const supportPortalLink =
+    resolveClientPortalLink({
+      link: row.support_portal_link,
+      code: row.sos_code,
+    }) || null;
   return {
     id: row.id,
     companyId: row.company_id,
@@ -25,7 +32,7 @@ function publicRow(row: SosRequestRow, opts?: { includeCode?: boolean }) {
     userEmail: row.user_email,
     issue: row.issue,
     status: row.status,
-    supportPortalLink: row.support_portal_link,
+    supportPortalLink,
     /** SOS code only for staff (connect deep-link) */
     sosCode: opts?.includeCode ? row.sos_code : undefined,
     connectUrl:
@@ -55,13 +62,17 @@ async function refreshFromSplashtop(row: SosRequestRow): Promise<SosRequestRow> 
       onlineSince: session.onlineSince,
       connectedSince: session.connectedSince,
     });
+    const portalLink =
+      resolveClientPortalLink({
+        link: session.supportPortalLink || row.support_portal_link,
+        code: session.code || row.sos_code,
+      }) || row.support_portal_link;
     const updated = await updateSosRequest(row.id, {
       status: nextStatus,
       last_polled_at: new Date().toISOString(),
       remote_snapshot: snapshot,
       sos_code: session.code || row.sos_code,
-      support_portal_link:
-        session.supportPortalLink || row.support_portal_link,
+      support_portal_link: portalLink,
       expires_at: session.expiresAt || row.expires_at,
     });
     return updated ?? row;
@@ -196,6 +207,11 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
             issue ||
             `SOS from AKAB portal — ${userName} <${userEmail}> (${companyName})`,
         });
+        const portalLink =
+          resolveClientPortalLink({
+            link: session.supportPortalLink,
+            code: session.code,
+          }) || null;
         const row = await insertSosRequest({
           company_id: companyId,
           company_name: companyName || `Company #${companyId}`,
@@ -206,7 +222,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
           status: "waiting",
           splashtop_session_id: session.id || null,
           sos_code: session.code || null,
-          support_portal_link: session.supportPortalLink || null,
+          support_portal_link: portalLink,
           channel_id: session.channelId,
           expires_at: session.expiresAt,
         });

@@ -1,12 +1,21 @@
-import { useCallback, useEffect, useState } from "react";
-import { ExternalLink, Headphones, Loader2, Siren } from "lucide-react";
+import { useCallback, useEffect, useMemo, useState } from "react";
+import {
+  Check,
+  Copy,
+  ExternalLink,
+  Headphones,
+  Loader2,
+  Siren,
+} from "lucide-react";
 import { useAuth } from "@/lib/auth";
 import { useLocale } from "@/hooks/use-locale";
 import { db, dbReady, schema } from "@/db";
 import { eq } from "drizzle-orm";
 import {
   createSosRequest,
+  ensureClientPortalHref,
   fetchClientSosRequests,
+  openClientPortalLink,
   type SosRequest,
 } from "@/lib/sos";
 import { Button } from "@/components/ui/button";
@@ -36,6 +45,8 @@ export function SosButton({ className }: { className?: string }) {
   const [error, setError] = useState<string | null>(null);
   const [active, setActive] = useState<SosRequest | null>(null);
   const [companyName, setCompanyName] = useState("");
+  const [copied, setCopied] = useState(false);
+  const [openHint, setOpenHint] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
@@ -76,7 +87,51 @@ export function SosButton({ className }: { className?: string }) {
     return () => window.clearInterval(tmr);
   }, [open, refreshActive]);
 
+  const portalHref = useMemo(
+    () => ensureClientPortalHref(active?.supportPortalLink),
+    [active?.supportPortalLink],
+  );
+
   if (!user || user.role !== "client") return null;
+
+  const openPortal = (href: string | null | undefined) => {
+    const url = ensureClientPortalHref(href);
+    if (!url) {
+      setError(t("sos.noLink"));
+      return false;
+    }
+    const ok = openClientPortalLink(url);
+    setOpenHint(true);
+    if (!ok) {
+      setError(t("sos.openBlocked"));
+    }
+    return ok;
+  };
+
+  const copyPortal = async () => {
+    if (!portalHref) return;
+    try {
+      await navigator.clipboard.writeText(portalHref);
+      setCopied(true);
+      window.setTimeout(() => setCopied(false), 2000);
+    } catch {
+      // Fallback for restricted clipboard
+      try {
+        const ta = document.createElement("textarea");
+        ta.value = portalHref;
+        ta.style.position = "fixed";
+        ta.style.left = "-9999px";
+        document.body.appendChild(ta);
+        ta.select();
+        document.execCommand("copy");
+        document.body.removeChild(ta);
+        setCopied(true);
+        window.setTimeout(() => setCopied(false), 2000);
+      } catch {
+        setError(t("sos.copyFailed"));
+      }
+    }
+  };
 
   const startSos = async () => {
     if (!user.company_id) {
@@ -85,7 +140,18 @@ export function SosButton({ className }: { className?: string }) {
     }
     setBusy(true);
     setError(null);
+    setOpenHint(false);
     try {
+      // Re-open existing active link without creating a duplicate session
+      if (
+        active &&
+        portalHref &&
+        ["open", "waiting", "ready", "connected"].includes(String(active.status))
+      ) {
+        openPortal(portalHref);
+        return;
+      }
+
       const res = await createSosRequest({
         userId: user.id,
         userName: user.name,
@@ -96,12 +162,12 @@ export function SosButton({ className }: { className?: string }) {
       });
       if (res.request) {
         setActive(res.request);
-        if (res.request.supportPortalLink) {
-          window.open(
-            res.request.supportPortalLink,
-            "_blank",
-            "noopener,noreferrer",
-          );
+        const href = ensureClientPortalHref(res.request.supportPortalLink);
+        if (href) {
+          // Small delay so React can paint the link button before navigation
+          window.setTimeout(() => openPortal(href), 50);
+        } else if (!res.error) {
+          setError(t("sos.noLink"));
         }
       }
       if (res.error && !res.request?.supportPortalLink) {
@@ -134,6 +200,7 @@ export function SosButton({ className }: { className?: string }) {
         )}
         onClick={() => {
           setError(null);
+          setOpenHint(false);
           setOpen(true);
         }}
         title={t("sos.buttonTitle")}
@@ -159,22 +226,46 @@ export function SosButton({ className }: { className?: string }) {
                   <span className="font-medium">{t("sos.activeRequest")}</span>
                   <Badge variant="outline">{statusLabel(String(active.status))}</Badge>
                 </div>
-                {active.supportPortalLink && (
-                  <Button
-                    asChild
-                    variant="link"
-                    size="sm"
-                    className="mt-1 h-auto gap-1 px-0"
-                  >
-                    <a
-                      href={active.supportPortalLink}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                    >
-                      <ExternalLink className="size-3.5" />
-                      {t("sos.openClientLink")}
-                    </a>
-                  </Button>
+                {portalHref ? (
+                  <div className="mt-2 space-y-2">
+                    <div className="flex flex-wrap gap-2">
+                      <Button
+                        type="button"
+                        size="sm"
+                        className="h-8 gap-1.5 bg-red-600 text-white hover:bg-red-700"
+                        onClick={() => openPortal(portalHref)}
+                      >
+                        <ExternalLink className="size-3.5" />
+                        {t("sos.openClientLink")}
+                      </Button>
+                      <Button
+                        type="button"
+                        size="sm"
+                        variant="outline"
+                        className="h-8 gap-1.5"
+                        onClick={() => void copyPortal()}
+                      >
+                        {copied ? (
+                          <Check className="size-3.5" />
+                        ) : (
+                          <Copy className="size-3.5" />
+                        )}
+                        {copied ? t("sos.copied") : t("sos.copyLink")}
+                      </Button>
+                    </div>
+                    <p className="break-all font-mono text-[11px] text-muted-foreground">
+                      {portalHref}
+                    </p>
+                    {openHint && (
+                      <p className="text-xs text-muted-foreground">
+                        {t("sos.openHint")}
+                      </p>
+                    )}
+                  </div>
+                ) : (
+                  <p className="mt-1 text-xs text-muted-foreground">
+                    {t("sos.waitingLink")}
+                  </p>
                 )}
                 {active.errorMessage && (
                   <p className="mt-1 text-xs text-destructive">
@@ -229,9 +320,7 @@ export function SosButton({ className }: { className?: string }) {
               ) : (
                 <Siren className="size-4" />
               )}
-              {active?.supportPortalLink
-                ? t("sos.restart")
-                : t("sos.start")}
+              {portalHref ? t("sos.openOrReuse") : t("sos.start")}
             </Button>
           </DialogFooter>
         </DialogContent>

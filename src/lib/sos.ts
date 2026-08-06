@@ -185,3 +185,51 @@ export function formatSosTime(iso: string | null | undefined): string {
     return iso.slice(0, 16);
   }
 }
+
+/**
+ * Open the end-user Splashtop session link.
+ * Prefer a real <a> click over window.open — popup blockers and sandboxed
+ * preview iframes often swallow window.open() after async work.
+ */
+export function openClientPortalLink(url: string | null | undefined): boolean {
+  const href = String(url ?? "").trim();
+  if (!href) return false;
+  try {
+    const a = document.createElement("a");
+    a.href = href;
+    a.target = "_blank";
+    a.rel = "noopener noreferrer";
+    // Keep it in the DOM briefly so some browsers honor the navigation
+    a.style.display = "none";
+    document.body.appendChild(a);
+    a.click();
+    window.setTimeout(() => {
+      try {
+        document.body.removeChild(a);
+      } catch {
+        /* ignore */
+      }
+    }, 0);
+    return true;
+  } catch {
+    try {
+      window.open(href, "_blank", "noopener,noreferrer");
+      return true;
+    } catch {
+      return false;
+    }
+  }
+}
+
+/** Normalize / repair a stored portal link on the client if needed. */
+export function ensureClientPortalHref(
+  link: string | null | undefined,
+): string | null {
+  const raw = String(link ?? "").trim();
+  if (!raw) return null;
+  if (/^https?:\/\//i.test(raw)) return raw;
+  if (raw.startsWith("//")) return `https:${raw}`;
+  if (raw.startsWith("/")) return `https://my.splashtop.com${raw}`;
+  if (/^[a-z0-9.-]+(\/|$)/i.test(raw)) return `https://${raw}`;
+  return raw;
+}
