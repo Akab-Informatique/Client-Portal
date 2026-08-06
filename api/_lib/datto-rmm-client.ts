@@ -47,6 +47,11 @@ export type DattoRmmDevice = {
   warrantyDate: string | null;
   cagVersion: string | null;
   portalUrl: string | null;
+  /**
+   * Browser Web Remote launch URL for this device.
+   * Opens Datto RMM HTML5 remote (technician must be logged into the RMM portal).
+   */
+  webRemoteUrl: string | null;
 };
 
 function cleanEnv(value: string | undefined | null): string {
