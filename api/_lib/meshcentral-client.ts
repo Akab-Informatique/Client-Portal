@@ -511,8 +511,9 @@ export async function createTemporaryAgentInvite(opts?: {
 /** Open MeshCentral web UI for technicians (browser). */
 export function buildMeshCentralConsoleUrl(opts?: {
   meshId?: string | null;
+  cfg?: MeshCentralConfig | null;
 }): string {
-  const cfg = getMeshCentralConfigFromEnv();
+  const cfg = opts?.cfg ?? getMeshCentralConfigFromEnv();
   if (!cfg) return "";
   if (cfg.connectPath) {
     if (/^https?:\/\//i.test(cfg.connectPath)) return cfg.connectPath;
@@ -523,6 +524,16 @@ export function buildMeshCentralConsoleUrl(opts?: {
     return `${base}/?viewmode=1`;
   }
   return base;
+}
+
+/**
+ * Technician "Connect" URL for SOS queue (alias used by API routes).
+ * Accepts optional pre-loaded config from getMeshCentralConfigFromEnv().
+ */
+export function buildMeshTechnicianConnectUrl(
+  cfg?: MeshCentralConfig | null,
+): string {
+  return buildMeshCentralConsoleUrl({ cfg: cfg ?? null });
 }
 
 export async function probeMeshCentralAccess(): Promise<{
