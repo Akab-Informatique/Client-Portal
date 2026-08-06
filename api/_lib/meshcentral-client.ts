@@ -420,6 +420,12 @@ function pickInviteUrl(data: WsJson, baseUrl: string): string | null {
   return null;
 }
 
+export type MeshGroupInfo = {
+  id: string;
+  name: string;
+  mtype: number | null;
+};
+
 export type MeshInviteResult = {
   inviteUrl: string;
   expiresAt: string | null;
@@ -428,6 +434,163 @@ export type MeshInviteResult = {
   flags: number;
   source: "api" | "static";
 };
+
+/** Normalize meshes payload (array or id→object map) into a flat list. */
+export function parseMeshGroups(data: WsJson | null | undefined): MeshGroupInfo[] {
+  if (!data) return [];
+  const raw = (data as WsJson).meshes ?? (data as WsJson).result ?? data;
+  const out: MeshGroupInfo[] = [];
+
+  const pushOne = (item: unknown) => {
+    if (!item || typeof item !== "object") return;
+    const m = item as Record<string, unknown>;
+    const id = String(m._id ?? m.id ?? m.meshid ?? "").trim();
+    const name = String(m.name ?? m.meshname ?? "").trim();
+    if (!id && !name) return;
+    const mtypeRaw = m.mtype ?? m.type;
+    const mtype =
+      typeof mtypeRaw === "number"
+        ? mtypeRaw
+        : mtypeRaw != null && String(mtypeRaw).trim() !== ""
+          ? Number(mtypeRaw)
+          : null;
+    out.push({
+      id,
+      name,
+      mtype: Number.isFinite(mtype as number) ? (mtype as number) : null,
+    });
+  };
+
+  if (Array.isArray(raw)) {
+    for (const item of raw) pushOne(item);
+    return out;
+  }
+  if (raw && typeof raw === "object") {
+    for (const [key, item] of Object.entries(raw as Record<string, unknown>)) {
+      if (item && typeof item === "object") {
+        const m = item as Record<string, unknown>;
+        if (m._id == null && m.id == null) {
+          pushOne({ ...m, _id: key });
+        } else {
+          pushOne(item);
+        }
+      }
+    }
+  }
+  return out;
+}
+
+/** MeshCentral full ids look like mesh//HEX or mesh/domain/HEX */
+export function normalizeMeshId(raw: string | null | undefined): string | null {
+  const s = String(raw ?? "").trim();
+  if (!s) return null;
+  if (s.startsWith("mesh/")) return s;
+  // bare 64-char hex / base64-ish id → default domain
+  if (/^[A-Za-z0-9@+_=-]{40,128}$/.test(s) && !s.includes(" ")) {
+    return `mesh//${s}`;
+  }
+  return s;
+}
+
+/**
+ * List device groups visible to the API user.
+ */
+export async function listMeshGroups(
+  cfg?: MeshCentralConfig | null,
+): Promise<MeshGroupInfo[]> {
+  const c = cfg ?? getMeshCentralConfigFromEnv();
+  if (!c || !c.username || !c.password) {
+    throw new Error("MeshCentral API credentials missing for listing groups");
+  }
+  const data = await meshRpc(
+    c,
+    { action: "meshes", responseid: `akab-meshes-${Date.now()}` },
+    { matchAction: "meshes", timeoutMs: 15_000 },
+  );
+  return parseMeshGroups(data);
+}
+
+/**
+ * Resolve MESHCENTRAL_MESH_ID / MESH_NAME to a full mesh//… id the server accepts.
+ * MeshCentral's createInviteLink needs a viewable agent group (mtype 2).
+ */
+export async function resolveMeshGroup(
+  cfg?: MeshCentralConfig | null,
+): Promise<{
+  meshId: string;
+  meshName: string | null;
+  groups: MeshGroupInfo[];
+}> {
+  const c = cfg ?? getMeshCentralConfigFromEnv();
+  if (!c) throw new Error("MeshCentral is not configured (MESHCENTRAL_URL)");
+
+  const groups = await listMeshGroups(c);
+  const agentGroups = groups.filter((g) => g.mtype == null || g.mtype === 2);
+  const pool = agentGroups.length ? agentGroups : groups;
+
+  const wantedId = normalizeMeshId(c.meshId);
+  const wantedName = (c.meshName || "").trim();
+
+  if (wantedId) {
+    const byId = pool.find(
+      (g) =>
+        g.id === wantedId ||
+        g.id.endsWith(`/${wantedId.replace(/^mesh\/+/, "")}`) ||
+        normalizeMeshId(g.id) === wantedId,
+    );
+    if (byId) {
+      return {
+        meshId: byId.id,
+        meshName: byId.name || wantedName || null,
+        groups,
+      };
+    }
+    // Still try the configured id — server may accept it even if not in list payload
+    if (wantedId.startsWith("mesh/")) {
+      return { meshId: wantedId, meshName: wantedName || null, groups };
+    }
+  }
+
+  if (wantedName) {
+    const lower = wantedName.toLowerCase();
+    const exact = pool.filter((g) => g.name.toLowerCase() === lower);
+    if (exact.length === 1) {
+      return { meshId: exact[0].id, meshName: exact[0].name, groups };
+    }
+    if (exact.length > 1) {
+      throw new Error(
+        `MeshCentral: Duplicate device groups named "${wantedName}". Set MESHCENTRAL_MESH_ID to the full id (mesh//…). ` +
+          `Matches: ${exact.map((g) => g.id).join(", ")}`,
+      );
+    }
+    const partial = pool.filter((g) => g.name.toLowerCase().includes(lower));
+    if (partial.length === 1) {
+      return { meshId: partial[0].id, meshName: partial[0].name, groups };
+    }
+  }
+
+  // If only one agent group exists, use it (common first-time setup)
+  if (!wantedId && pool.length === 1) {
+    return { meshId: pool[0].id, meshName: pool[0].name, groups };
+  }
+
+  const available =
+    pool.length === 0
+      ? "none (API user cannot see any device groups — grant access in MeshCentral)"
+      : pool
+          .slice(0, 12)
+          .map((g) => `"${g.name || "(unnamed)"}" → ${g.id}`)
+          .join("; ") + (pool.length > 12 ? ` … +${pool.length - 12} more` : "");
+
+  throw new Error(
+    `MeshCentral: Invalid group id` +
+      (wantedName ? ` (MESHCENTRAL_MESH_NAME="${wantedName}" not found or not visible)` : "") +
+      (wantedId ? ` (MESHCENTRAL_MESH_ID="${wantedId}" not found or not visible)` : "") +
+      `. Create a Device Group in MeshCentral, give this API user rights on it, then set MESHCENTRAL_MESH_NAME exactly or MESHCENTRAL_MESH_ID=mesh//…. ` +
+      `Groups visible to this user: ${available}. ` +
+      `Behind NPM this is not a proxy issue once WS works — it is group name/rights.`,
+  );
+}
 
 /**
  * Create an interactive-only (temporary) agent invite link for SOS.
@@ -445,16 +608,16 @@ export async function createTemporaryAgentInvite(opts?: {
   const flags = opts?.flags ?? cfg.inviteFlags;
 
   if (isMeshCentralApiConfigured()) {
-    const op: WsJson = {
-      action: "createInviteLink",
-      expire: hours,
-      flags,
-      responseid: `akab-invite-${Date.now()}`,
-    };
-    if (cfg.meshId) op.meshid = cfg.meshId;
-    else if (cfg.meshName) op.meshname = cfg.meshName;
-
     try {
+      const resolved = await resolveMeshGroup(cfg);
+      const op: WsJson = {
+        action: "createInviteLink",
+        expire: hours,
+        flags,
+        meshid: resolved.meshId,
+        responseid: `akab-invite-${Date.now()}`,
+      };
+
       const data = await meshRpc(cfg, op, {
         matchAction: "createInviteLink",
         timeoutMs: 25_000,
@@ -472,8 +635,8 @@ export async function createTemporaryAgentInvite(opts?: {
       return {
         inviteUrl,
         expiresAt,
-        meshId: cfg.meshId,
-        meshName: cfg.meshName,
+        meshId: resolved.meshId,
+        meshName: resolved.meshName,
         flags,
         source: "api",
       };
@@ -595,27 +758,42 @@ export async function probeMeshCentralAccess(): Promise<{
   const wsUrls = listControlWsUrls(cfg);
 
   try {
-    const data = await meshRpc(
-      cfg,
-      { action: "meshes", responseid: `akab-probe-${Date.now()}` },
-      { matchAction: "meshes", timeoutMs: 15_000 },
-    );
-    const meshes = data.meshes ?? data.result;
-    const count = Array.isArray(meshes) ? meshes.length : null;
+    const groups = await listMeshGroups(cfg);
+    let resolvedId: string | null = cfg.meshId;
+    let resolvedName: string | null = cfg.meshName;
+    let groupOk = false;
+    let groupMessage = "";
+    try {
+      const resolved = await resolveMeshGroup(cfg);
+      resolvedId = resolved.meshId;
+      resolvedName = resolved.meshName;
+      groupOk = true;
+      groupMessage = `Group OK: "${resolvedName || "?"}" (${resolvedId}).`;
+    } catch (ge) {
+      groupOk = false;
+      groupMessage = ge instanceof Error ? ge.message : String(ge);
+    }
+
+    const names = groups
+      .slice(0, 20)
+      .map((g) => g.name || g.id)
+      .filter(Boolean);
+
     return {
-      ok: true,
+      ok: groupOk,
       configured: true,
       authOk: true,
-      meshId: cfg.meshId,
-      meshName: cfg.meshName,
+      meshId: resolvedId,
+      meshName: resolvedName,
       baseUrl: cfg.baseUrl,
       wsUrls,
       mode: "api",
       tlsVerify: cfg.rejectUnauthorized,
+      groups: groups.map((g) => ({ id: g.id, name: g.name, mtype: g.mtype })),
       message:
-        count != null
-          ? `MeshCentral connected (${count} device group(s)). WS OK. TLS verify=${cfg.rejectUnauthorized ? "on" : "off"}.`
-          : `MeshCentral connected. WS OK. TLS verify=${cfg.rejectUnauthorized ? "on" : "off"}.`,
+        `MeshCentral WS OK (${groups.length} group(s) visible). TLS verify=${cfg.rejectUnauthorized ? "on" : "off"}. ` +
+        groupMessage +
+        (names.length ? ` Visible: ${names.join(", ")}.` : ""),
     };
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);
