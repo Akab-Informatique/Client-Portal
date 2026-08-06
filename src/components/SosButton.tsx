@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
+import { useNavigate } from "react-router-dom";
 import {
   Check,
   Copy,
@@ -15,9 +16,6 @@ import {
   createSosRequest,
   ensureClientPortalHref,
   fetchClientSosRequests,
-  navigatePendingSosWindow,
-  openClientPortalLink,
-  openPendingSosWindow,
   type SosRequest,
 } from "@/lib/sos";
 import { Button } from "@/components/ui/button";
@@ -36,11 +34,12 @@ import { cn } from "@/lib/utils";
 
 /**
  * Client header SOS control — creates a Splashtop attended session and
- * opens the support portal link so the end user can run the SOS applet.
+ * sends the user to the branded in-portal download page (auto-starts package).
  */
 export function SosButton({ className }: { className?: string }) {
   const { t } = useLocale();
   const { user } = useAuth();
+  const navigate = useNavigate();
   const [open, setOpen] = useState(false);
   const [issue, setIssue] = useState("");
   const [busy, setBusy] = useState(false);
@@ -48,7 +47,6 @@ export function SosButton({ className }: { className?: string }) {
   const [active, setActive] = useState<SosRequest | null>(null);
   const [companyName, setCompanyName] = useState("");
   const [copied, setCopied] = useState(false);
-  const [openHint, setOpenHint] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
@@ -96,18 +94,10 @@ export function SosButton({ className }: { className?: string }) {
 
   if (!user || user.role !== "client") return null;
 
-  const openPortal = (href: string | null | undefined) => {
-    const url = ensureClientPortalHref(href);
-    if (!url) {
-      setError(t("sos.noLink"));
-      return false;
-    }
-    const ok = openClientPortalLink(url);
-    setOpenHint(true);
-    if (!ok) {
-      setError(t("sos.openBlocked"));
-    }
-    return ok;
+  const goDownloadPage = (id?: number | null) => {
+    const q = id && id > 0 ? `?id=${id}` : "";
+    navigate(`/client/sos${q}`);
+    setOpen(false);
   };
 
   const copyPortal = async () => {
@@ -117,7 +107,6 @@ export function SosButton({ className }: { className?: string }) {
       setCopied(true);
       window.setTimeout(() => setCopied(false), 2000);
     } catch {
-      // Fallback for restricted clipboard
       try {
         const ta = document.createElement("textarea");
         ta.value = portalHref;
@@ -142,24 +131,16 @@ export function SosButton({ className }: { className?: string }) {
     }
     setBusy(true);
     setError(null);
-    setOpenHint(false);
 
-    // Open the tab NOW (still inside the click gesture) so the browser allows
-    // navigation after the async API call. That tab loads the session page,
-    // which auto-starts the SOS download for this support session.
-    let pending: Window | null = null;
-    const reuseExisting =
+    // Reuse active request → branded download page (auto-starts package)
+    if (
       active &&
-      portalHref &&
-      ["open", "waiting", "ready", "connected"].includes(String(active.status));
-
-    if (reuseExisting) {
-      openPortal(portalHref);
+      ["open", "waiting", "ready", "connected"].includes(String(active.status))
+    ) {
+      goDownloadPage(active.id);
       setBusy(false);
       return;
     }
-
-    pending = openPendingSosWindow();
 
     try {
       const res = await createSosRequest({
@@ -172,41 +153,12 @@ export function SosButton({ className }: { className?: string }) {
       });
       if (res.request) {
         setActive(res.request);
-        const href = ensureClientPortalHref(res.request.supportPortalLink);
-        if (href) {
-          const ok = navigatePendingSosWindow(pending, href);
-          pending = null;
-          setOpenHint(true);
-          if (!ok) setError(t("sos.openBlocked"));
-        } else {
-          try {
-            pending?.close();
-          } catch {
-            /* ignore */
-          }
-          pending = null;
-          if (!res.error) setError(t("sos.noLink"));
-        }
+        goDownloadPage(res.request.id);
+        if (res.error) setError(res.error);
       } else {
-        try {
-          pending?.close();
-        } catch {
-          /* ignore */
-        }
-        pending = null;
-      }
-      if (res.error && !res.request?.supportPortalLink) {
-        setError(res.error);
-      } else if (res.error) {
-        // Soft warning — request exists
-        setError(res.error);
+        setError(res.error || t("sos.createFailed"));
       }
     } catch (e) {
-      try {
-        pending?.close();
-      } catch {
-        /* ignore */
-      }
       setError(e instanceof Error ? e.message : t("sos.createFailed"));
     } finally {
       setBusy(false);
@@ -230,7 +182,6 @@ export function SosButton({ className }: { className?: string }) {
         )}
         onClick={() => {
           setError(null);
-          setOpenHint(false);
           setOpen(true);
         }}
         title={t("sos.buttonTitle")}
@@ -254,23 +205,22 @@ export function SosButton({ className }: { className?: string }) {
               <div className="rounded-lg border border-border bg-muted/40 px-3 py-2 text-sm">
                 <div className="flex flex-wrap items-center gap-2">
                   <span className="font-medium">{t("sos.activeRequest")}</span>
-                  <Badge variant="outline">{statusLabel(String(active.status))}</Badge>
+                  <Badge variant="outline">
+                    {statusLabel(String(active.status))}
+                  </Badge>
                 </div>
-                {portalHref ? (
-                  <div className="mt-2 space-y-2">
-                    <p className="text-xs text-muted-foreground">
-                      {t("sos.downloadStarted")}
-                    </p>
-                    <div className="flex flex-wrap gap-2">
-                      <Button
-                        type="button"
-                        size="sm"
-                        className="h-8 gap-1.5 bg-red-600 text-white hover:bg-red-700"
-                        onClick={() => openPortal(portalHref)}
-                      >
-                        <ExternalLink className="size-3.5" />
-                        {t("sos.openClientLink")}
-                      </Button>
+                <div className="mt-2 space-y-2">
+                  <div className="flex flex-wrap gap-2">
+                    <Button
+                      type="button"
+                      size="sm"
+                      className="h-8 gap-1.5 bg-red-600 text-white hover:bg-red-700"
+                      onClick={() => goDownloadPage(active.id)}
+                    >
+                      <ExternalLink className="size-3.5" />
+                      {t("sos.openDownloadPage")}
+                    </Button>
+                    {portalHref && (
                       <Button
                         type="button"
                         size="sm"
@@ -285,21 +235,12 @@ export function SosButton({ className }: { className?: string }) {
                         )}
                         {copied ? t("sos.copied") : t("sos.copyLink")}
                       </Button>
-                    </div>
-                    <p className="break-all font-mono text-[11px] text-muted-foreground">
-                      {portalHref}
-                    </p>
-                    {openHint && (
-                      <p className="text-xs text-muted-foreground">
-                        {t("sos.openHint")}
-                      </p>
                     )}
                   </div>
-                ) : (
-                  <p className="mt-1 text-xs text-muted-foreground">
-                    {t("sos.waitingLink")}
+                  <p className="text-xs text-muted-foreground">
+                    {t("sos.downloadPageHint")}
                   </p>
-                )}
+                </div>
                 {active.errorMessage && (
                   <p className="mt-1 text-xs text-destructive">
                     {active.errorMessage}
@@ -331,6 +272,9 @@ export function SosButton({ className }: { className?: string }) {
               <li>{t("sos.step2")}</li>
               <li>{t("sos.step3")}</li>
             </ol>
+            <p className="text-[11px] text-muted-foreground">
+              {t("sos.customPackageNote")}
+            </p>
           </div>
 
           <DialogFooter className="gap-2 sm:gap-0">
@@ -353,7 +297,7 @@ export function SosButton({ className }: { className?: string }) {
               ) : (
                 <Siren className="size-4" />
               )}
-              {portalHref ? t("sos.openOrReuse") : t("sos.start")}
+              {active ? t("sos.openOrReuse") : t("sos.start")}
             </Button>
           </DialogFooter>
         </DialogContent>

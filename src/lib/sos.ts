@@ -186,6 +186,185 @@ export function formatSosTime(iso: string | null | undefined): string {
   }
 }
 
+export type SosPackageConfig = {
+  ok: boolean;
+  packageName: string;
+  autoDownload: boolean;
+  mode: "session" | "package" | "both";
+  hasCustomPackage: boolean;
+  packageUrls: {
+    share: string | null;
+    windows: string | null;
+    mac: string | null;
+    linux: string | null;
+    android: string | null;
+  };
+  hints?: {
+    createPackage?: string;
+    applyToApiSessions?: string;
+    envKeys?: string[];
+  };
+  error?: string;
+};
+
+export async function fetchSosPackageConfig(): Promise<SosPackageConfig> {
+  try {
+    const r = await fetch("/api/sos/package-config", {
+      headers: { Accept: "application/json" },
+    });
+    const d = (await r.json()) as SosPackageConfig;
+    if (!r.ok) {
+      return {
+        ok: false,
+        packageName: "Remote support",
+        autoDownload: true,
+        mode: "session",
+        hasCustomPackage: false,
+        packageUrls: {
+          share: null,
+          windows: null,
+          mac: null,
+          linux: null,
+          android: null,
+        },
+        error: errMsg(d, `Package config failed (${r.status})`),
+      };
+    }
+    return {
+      ok: Boolean(d.ok),
+      packageName: d.packageName || "Remote support",
+      autoDownload: d.autoDownload !== false,
+      mode: d.mode === "package" || d.mode === "both" ? d.mode : "session",
+      hasCustomPackage: Boolean(d.hasCustomPackage),
+      packageUrls: {
+        share: d.packageUrls?.share ?? null,
+        windows: d.packageUrls?.windows ?? null,
+        mac: d.packageUrls?.mac ?? null,
+        linux: d.packageUrls?.linux ?? null,
+        android: d.packageUrls?.android ?? null,
+      },
+      hints: d.hints,
+    };
+  } catch (e) {
+    return {
+      ok: false,
+      packageName: "Remote support",
+      autoDownload: true,
+      mode: "session",
+      hasCustomPackage: false,
+      packageUrls: {
+        share: null,
+        windows: null,
+        mac: null,
+        linux: null,
+        android: null,
+      },
+      error: e instanceof Error ? e.message : "Package config failed",
+    };
+  }
+}
+
+export async function fetchSosRequestById(
+  id: number,
+  role: "client" | "staff" = "client",
+): Promise<{ request: SosRequest | null; error: string | null }> {
+  const q = new URLSearchParams({ role });
+  const r = await fetch(`/api/sos/requests/${id}?${q}`, {
+    headers: { Accept: "application/json" },
+  });
+  const d = (await r.json()) as { request?: SosRequest; error?: string };
+  if (!r.ok) {
+    return { request: null, error: errMsg(d, `SOS request failed (${r.status})`) };
+  }
+  return { request: d.request ?? null, error: d.error ? String(d.error) : null };
+}
+
+/** Detect client OS for package picker (best-effort). */
+export function detectClientOs(): "windows" | "mac" | "linux" | "android" | "other" {
+  if (typeof navigator === "undefined") return "other";
+  const ua = navigator.userAgent || "";
+  if (/Android/i.test(ua)) return "android";
+  if (/iPhone|iPad|iPod/i.test(ua)) return "other";
+  if (/Win/i.test(ua)) return "windows";
+  if (/Mac/i.test(ua)) return "mac";
+  if (/Linux/i.test(ua)) return "linux";
+  return "other";
+}
+
+/**
+ * Pick the best auto-download URL for the branded download page.
+ * Session portal link is preferred for API-bound sessions (no code to share).
+ * Custom package URLs are used when mode is package/both or as OS-specific buttons.
+ */
+export function pickSosDownloadUrl(opts: {
+  supportPortalLink?: string | null;
+  packageConfig?: SosPackageConfig | null;
+  preferPackage?: boolean;
+}): string | null {
+  const session = ensureClientPortalHref(opts.supportPortalLink);
+  const cfg = opts.packageConfig;
+  const urls = cfg?.packageUrls;
+  const os = detectClientOs();
+  const osUrl =
+    os === "windows"
+      ? urls?.windows
+      : os === "mac"
+        ? urls?.mac
+        : os === "linux"
+          ? urls?.linux
+          : os === "android"
+            ? urls?.android
+            : null;
+  const packageUrl = osUrl || urls?.share || null;
+
+  const mode = cfg?.mode ?? "session";
+  if (opts.preferPackage || mode === "package") {
+    return packageUrl || session;
+  }
+  if (mode === "both") {
+    // Auto-start session (API binding); package buttons remain on the page
+    return session || packageUrl;
+  }
+  return session || packageUrl;
+}
+
+/** Trigger a file download / navigation without leaving the branded page. */
+export function triggerSosDownload(url: string | null | undefined): boolean {
+  const href = String(url ?? "").trim();
+  if (!href) return false;
+  try {
+    const a = document.createElement("a");
+    a.href = href;
+    a.rel = "noopener noreferrer";
+    // Same-tab download for direct .exe/.dmg; new tab for HTML portal pages
+    const isDirectFile = /\.(exe|dmg|pkg|msi|apk|zip)(\?|#|$)/i.test(href);
+    if (isDirectFile) {
+      a.setAttribute("download", "");
+      a.target = "_self";
+    } else {
+      a.target = "_blank";
+    }
+    a.style.display = "none";
+    document.body.appendChild(a);
+    a.click();
+    window.setTimeout(() => {
+      try {
+        document.body.removeChild(a);
+      } catch {
+        /* ignore */
+      }
+    }, 0);
+    return true;
+  } catch {
+    try {
+      window.open(href, "_blank", "noopener,noreferrer");
+      return true;
+    } catch {
+      return false;
+    }
+  }
+}
+
 /**
  * Open a blank tab/window synchronously (must run in the click handler).
  * After the async create-session call, navigate it to the portal link so the

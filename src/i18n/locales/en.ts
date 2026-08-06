@@ -192,28 +192,51 @@ export const en = {
     buttonTitle: "Request remote support (SOS)",
     dialogTitle: "Remote support (SOS)",
     dialogDesc:
-      "Click Start SOS. A new tab opens and the support app download starts automatically. Run the file, then wait — no code to type or share.",
+      "Click Start SOS. We open our branded download page and the support app starts downloading automatically. Run the file, then wait — no code to type or share.",
     issueLabel: "What do you need help with? (optional)",
     issuePlaceholder: "e.g. Cannot print, VPN not connecting…",
     start: "Start SOS",
     closeRequest: "Close",
     restart: "Open SOS again",
-    openOrReuse: "Download / open again",
+    openOrReuse: "Open download page",
     activeRequest: "Active request",
     openClientLink: "Download again",
+    openDownloadPage: "Open download page",
+    downloadPageHint:
+      "Opens our branded download page — the support app starts downloading automatically.",
+    customPackageNote:
+      "Staff can brand the app (logo/name) via Splashtop SOS Customization and set package URLs in .env.",
     copyLink: "Copy link",
     copied: "Copied",
+    packageDefaultName: "Remote support",
+    downloadPageDesc:
+      "Your secure remote support session is ready. The app download starts automatically — run the file and wait for a technician. No code to type or share.",
+    downloadTitle: "Download support app",
+    downloadSubtitle:
+      "If the download did not start, use the button below. Then open the file (Run / Keep).",
+    preparingDownload: "Preparing your session and download…",
+    downloadTriggered: "Download started",
+    downloadAgain: "Download now",
+    openSessionLink: "Open session link",
+    directPackageTitle: "Direct package (custom branded app)",
+    directPackageHint:
+      "These links come from your Splashtop custom SOS package (Management → SOS Customization → Share).",
+    packageShareLink: "Package share page",
+    downloadStep1: "Download starts automatically (or click Download now).",
+    downloadStep2: "Open the file — choose Run / Open / Keep if your browser asks.",
+    downloadStep3: "Leave the SOS app open; a technician will connect shortly.",
+    backToPortal: "← Back to portal",
     downloadStarted:
-      "Download should start in the new tab. Open the file when it finishes (Run / Open). Keep the SOS app open until a technician connects.",
+      "Download should start automatically. Open the file when it finishes (Run / Open). Keep the SOS app open until a technician connects.",
     openHint:
-      "If nothing downloaded, click Download again or paste the URL below into your browser.",
+      "If nothing downloaded, click Download now or paste the URL below into your browser.",
     waitingLink: "Session created — starting download…",
     noLink:
       "No client launch link was returned. Ask staff to check Splashtop settings, or try Start SOS again.",
     openBlocked:
-      "Your browser blocked the download tab. Allow pop-ups for this site, or copy the link below and open it manually.",
+      "Your browser blocked the download. Allow pop-ups for this site, or copy the link and open it manually.",
     copyFailed: "Could not copy the link. Select the URL text and copy it manually.",
-    step1: "Click Start SOS — download starts automatically in a new tab.",
+    step1: "Click Start SOS — we open the download page and start the app download.",
     step2: "Open the downloaded SOS file (you may need to choose Run / Keep).",
     step3: "Stay online in the SOS app; a technician will connect shortly.",
     noCompany: "Your account is not linked to a company.",

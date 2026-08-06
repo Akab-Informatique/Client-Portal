@@ -193,28 +193,51 @@ export const fr: Dictionary = {
     buttonTitle: "Demander une assistance à distance (SOS)",
     dialogTitle: "Assistance à distance (SOS)",
     dialogDesc:
-      "Cliquez Démarrer SOS. Un nouvel onglet s’ouvre et le téléchargement de l’appli démarre automatiquement. Lancez le fichier, puis attendez — aucun code à saisir.",
+      "Cliquez Démarrer SOS. Notre page de téléchargement s’ouvre et l’appli démarre automatiquement. Lancez le fichier, puis attendez — aucun code à saisir.",
     issueLabel: "De quoi avez-vous besoin ? (optionnel)",
     issuePlaceholder: "ex. Impression bloquée, VPN ne se connecte pas…",
     start: "Démarrer SOS",
     closeRequest: "Fermer",
     restart: "Rouvrir SOS",
-    openOrReuse: "Télécharger / ouvrir à nouveau",
+    openOrReuse: "Ouvrir la page de téléchargement",
     activeRequest: "Demande active",
     openClientLink: "Télécharger à nouveau",
+    openDownloadPage: "Ouvrir la page de téléchargement",
+    downloadPageHint:
+      "Ouvre notre page de téléchargement personnalisée — l’appli démarre automatiquement.",
+    customPackageNote:
+      "Le personnel peut personnaliser l’appli (logo/nom) via SOS Customization Splashtop et définir les URL du package dans .env.",
     copyLink: "Copier le lien",
     copied: "Copié",
+    packageDefaultName: "Assistance à distance",
+    downloadPageDesc:
+      "Votre session d’assistance sécurisée est prête. Le téléchargement démarre automatiquement — lancez le fichier et attendez un technicien. Aucun code à saisir.",
+    downloadTitle: "Télécharger l’appli d’assistance",
+    downloadSubtitle:
+      "Si le téléchargement n’a pas démarré, utilisez le bouton ci-dessous. Puis ouvrez le fichier (Exécuter / Conserver).",
+    preparingDownload: "Préparation de la session et du téléchargement…",
+    downloadTriggered: "Téléchargement démarré",
+    downloadAgain: "Télécharger maintenant",
+    openSessionLink: "Ouvrir le lien de session",
+    directPackageTitle: "Package direct (appli personnalisée)",
+    directPackageHint:
+      "Ces liens proviennent de votre package SOS personnalisé (Management → SOS Customization → Share).",
+    packageShareLink: "Page de partage du package",
+    downloadStep1: "Le téléchargement démarre automatiquement (ou cliquez Télécharger maintenant).",
+    downloadStep2: "Ouvrez le fichier — choisissez Exécuter / Ouvrir / Conserver si demandé.",
+    downloadStep3: "Laissez l’appli SOS ouverte ; un technicien se connectera sous peu.",
+    backToPortal: "← Retour au portail",
     downloadStarted:
-      "Le téléchargement devrait démarrer dans le nouvel onglet. Ouvrez le fichier une fois terminé (Exécuter / Ouvrir). Gardez l’appli SOS ouverte jusqu’à la connexion du technicien.",
+      "Le téléchargement devrait démarrer automatiquement. Ouvrez le fichier une fois terminé (Exécuter / Ouvrir). Gardez l’appli SOS ouverte jusqu’à la connexion du technicien.",
     openHint:
-      "Si rien ne s’est téléchargé, cliquez Télécharger à nouveau ou collez l’URL ci-dessous dans votre navigateur.",
+      "Si rien ne s’est téléchargé, cliquez Télécharger maintenant ou collez l’URL ci-dessous dans votre navigateur.",
     waitingLink: "Session créée — démarrage du téléchargement…",
     noLink:
       "Aucun lien client n’a été renvoyé. Demandez au personnel de vérifier Splashtop, ou relancez SOS.",
     openBlocked:
-      "Votre navigateur a bloqué l’onglet de téléchargement. Autorisez les pop-ups pour ce site, ou copiez le lien ci-dessous et ouvrez-le manuellement.",
+      "Votre navigateur a bloqué le téléchargement. Autorisez les pop-ups pour ce site, ou copiez le lien et ouvrez-le manuellement.",
     copyFailed: "Impossible de copier le lien. Sélectionnez l’URL et copiez-la manuellement.",
-    step1: "Cliquez Démarrer SOS — le téléchargement démarre automatiquement dans un nouvel onglet.",
+    step1: "Cliquez Démarrer SOS — la page de téléchargement s’ouvre et l’appli démarre.",
     step2: "Ouvrez le fichier SOS téléchargé (Exécuter / Conserver si demandé).",
     step3: "Restez en ligne dans l’appli SOS ; un technicien se connectera sous peu.",
     noCompany: "Votre compte n’est pas lié à une entreprise.",
