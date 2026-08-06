@@ -15,7 +15,8 @@
  *   MESHCENTRAL_INVITE_HOURS     — link lifetime hours (default 8)
  *   MESHCENTRAL_INVITE_FLAGS     — 0 both, 1 interactive-only (default), 2 background-only
  *   MESHCENTRAL_STATIC_INVITE_URL— optional fixed invite page if API login unavailable
- *   MESHCENTRAL_REJECT_UNAUTHORIZED — "false" to allow self-signed TLS (dev only)
+ *   MESHCENTRAL_REJECT_UNAUTHORIZED — TLS verify (default false for self-hosted MeshCentral).
+ *                                     Set "true" only when Mesh has a public CA cert.
  *   MESHCENTRAL_CONNECT_PATH     — path/hash for tech UI (default empty → base URL)
  */
 
@@ -23,6 +24,14 @@ import WebSocket from "ws";
 
 function cleanEnv(v: unknown): string {
   return String(v ?? "").trim();
+}
+
+function envFlag(name: string, defaultValue: boolean): boolean {
+  const raw = cleanEnv(process.env[name]).toLowerCase();
+  if (!raw) return defaultValue;
+  if (["1", "true", "yes", "on"].includes(raw)) return true;
+  if (["0", "false", "no", "off"].includes(raw)) return false;
+  return defaultValue;
 }
 
 export type MeshCentralConfig = {
@@ -34,6 +43,7 @@ export type MeshCentralConfig = {
   inviteHours: number;
   inviteFlags: number;
   staticInviteUrl: string | null;
+  /** When false, Node accepts self-signed / incomplete MeshCentral certs. */
   rejectUnauthorized: boolean;
   connectPath: string;
 };
@@ -57,9 +67,13 @@ export function getMeshCentralConfigFromEnv(): MeshCentralConfig | null {
   const inviteFlags = Number(flagsRaw);
   const flags = Number.isFinite(inviteFlags) ? inviteFlags : 1;
 
-  const rejectUnauthorized =
-    cleanEnv(process.env.MESHCENTRAL_REJECT_UNAUTHORIZED).toLowerCase() !==
-    "false";
+  // Self-hosted MeshCentral almost always uses a private/self-signed cert.
+  // Default to NOT rejecting unauthorized certs so SOS works out of the box.
+  // Set MESHCENTRAL_REJECT_UNAUTHORIZED=true when you have a public CA cert.
+  const rejectUnauthorized = envFlag(
+    "MESHCENTRAL_REJECT_UNAUTHORIZED",
+    false,
+  );
 
   const connectPath = cleanEnv(process.env.MESHCENTRAL_CONNECT_PATH);
 
@@ -95,7 +109,6 @@ export function isMeshCentralApiConfigured(): boolean {
 function controlWsUrl(baseUrl: string): string {
   const u = new URL(baseUrl);
   u.protocol = u.protocol === "https:" ? "wss:" : "ws:";
-  // Preserve path prefix if MeshCentral is under a subpath
   const path = u.pathname.replace(/\/+$/, "");
   u.pathname = `${path}/control.ashx`.replace(/\/{2,}/g, "/");
   u.search = "";
@@ -108,6 +121,33 @@ function meshAuthHeader(username: string, password: string): string {
     Buffer.from(username, "utf8").toString("base64") +
     "," +
     Buffer.from(password, "utf8").toString("base64")
+  );
+}
+
+function formatTlsError(err: unknown): Error {
+  const msg = err instanceof Error ? err.message : String(err);
+  const code =
+    err && typeof err === "object" && "code" in err
+      ? String((err as { code?: unknown }).code ?? "")
+      : "";
+  const isTls =
+    /unable to verify the first certificate/i.test(msg) ||
+    /self[- ]signed certificate/i.test(msg) ||
+    /certificate has expired/i.test(msg) ||
+    code === "UNABLE_TO_VERIFY_LEAF_SIGNATURE" ||
+    code === "DEPTH_ZERO_SELF_SIGNED_CERT" ||
+    code === "CERT_HAS_EXPIRED" ||
+    code === "ERR_TLS_CERT_ALTNAME_INVALID";
+
+  if (!isTls) {
+    return err instanceof Error ? err : new Error(msg);
+  }
+
+  return new Error(
+    `MeshCentral TLS certificate error: ${msg}. ` +
+      `Self-hosted Mesh often uses a private cert. Set MESHCENTRAL_REJECT_UNAUTHORIZED=false ` +
+      `in /opt/akab-portal/.env then: docker compose up -d --force-recreate app. ` +
+      `For production, prefer a real public certificate on MeshCentral and set REJECT_UNAUTHORIZED=true.`,
   );
 }
 
@@ -140,7 +180,7 @@ function meshRpc(
       } catch {
         /* ignore */
       }
-      if (err) reject(err);
+      if (err) reject(formatTlsError(err));
       else resolve(data ?? {});
     };
 
@@ -158,7 +198,7 @@ function meshRpc(
       });
     } catch (e) {
       clearTimeout(timer);
-      reject(e instanceof Error ? e : new Error(String(e)));
+      reject(formatTlsError(e));
       return;
     }
 
@@ -182,7 +222,6 @@ function meshRpc(
       if (action === matchAction && (rid === responseid || !rid)) {
         if (data.result != null && data.url == null && data.urls == null) {
           const msg = String(data.result);
-          // Some successes use result: "ok"
           if (!/^ok$/i.test(msg)) {
             finish(new Error(`MeshCentral: ${msg}`));
             return;
@@ -218,7 +257,6 @@ function pickInviteUrl(data: WsJson, baseUrl: string): string | null {
       return `${baseUrl.replace(/\/+$/, "")}/${u.replace(/^\/+/, "")}`;
     }
   }
-  // Some builds return only a code → public invite page
   const code = data.code ?? data.invitecode ?? data.inviteCode;
   if (typeof code === "string" && code.trim()) {
     return `${baseUrl.replace(/\/+$/, "")}/invite?c=${encodeURIComponent(code.trim())}`;
@@ -284,8 +322,8 @@ export async function createTemporaryAgentInvite(opts?: {
         source: "api",
       };
     } catch (e) {
-      // Fall through to static invite if configured
-      if (!cfg.staticInviteUrl) throw e;
+      if (!cfg.staticInviteUrl) throw formatTlsError(e);
+      // Fall through to static invite
     }
   }
 
@@ -332,6 +370,7 @@ export async function probeMeshCentralAccess(): Promise<{
   meshId: string | null;
   meshName: string | null;
   staticInviteOnly: boolean;
+  tlsVerify: boolean;
 }> {
   const cfg = getMeshCentralConfigFromEnv();
   if (!cfg) {
@@ -345,6 +384,7 @@ export async function probeMeshCentralAccess(): Promise<{
       meshId: null,
       meshName: null,
       staticInviteOnly: false,
+      tlsVerify: true,
     };
   }
 
@@ -360,6 +400,7 @@ export async function probeMeshCentralAccess(): Promise<{
         meshId: cfg.meshId,
         meshName: cfg.meshName,
         staticInviteOnly: true,
+        tlsVerify: cfg.rejectUnauthorized,
       };
     }
     return {
@@ -372,11 +413,11 @@ export async function probeMeshCentralAccess(): Promise<{
       meshId: cfg.meshId,
       meshName: cfg.meshName,
       staticInviteOnly: false,
+      tlsVerify: cfg.rejectUnauthorized,
     };
   }
 
   try {
-    // Lightweight call: list meshes (device groups)
     const data = await meshRpc(
       cfg,
       { action: "meshes", responseid: `akab-probe-${Date.now()}` },
@@ -390,23 +431,26 @@ export async function probeMeshCentralAccess(): Promise<{
       authOk: true,
       message:
         count != null
-          ? `MeshCentral connected (${count} device group(s)). SOS uses interactive-only temp agent invites.`
-          : "MeshCentral connected. SOS uses interactive-only temp agent invites.",
+          ? `MeshCentral connected (${count} device group(s)). TLS verify=${cfg.rejectUnauthorized ? "on" : "off (self-signed OK)"}. SOS uses interactive-only temp agent invites.`
+          : `MeshCentral connected. TLS verify=${cfg.rejectUnauthorized ? "on" : "off (self-signed OK)"}.`,
       baseUrl: cfg.baseUrl,
       meshId: cfg.meshId,
       meshName: cfg.meshName,
       staticInviteOnly: false,
+      tlsVerify: cfg.rejectUnauthorized,
     };
   } catch (e) {
+    const err = formatTlsError(e);
     return {
       ok: false,
       configured: true,
       authOk: false,
-      message: e instanceof Error ? e.message : "MeshCentral probe failed",
+      message: err.message,
       baseUrl: cfg.baseUrl,
       meshId: cfg.meshId,
       meshName: cfg.meshName,
       staticInviteOnly: false,
+      tlsVerify: cfg.rejectUnauthorized,
     };
   }
 }
