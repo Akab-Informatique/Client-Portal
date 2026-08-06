@@ -117,14 +117,71 @@ function formatStError(data: unknown, fallback: string): string {
   return parts.length ? parts.join(" — ") : fallback;
 }
 
-/**
- * Resolve team id: env pin → cache → GET /api/open/v1/users/basic_info
- */
-export async function resolveTeamId(cfg: SplashtopConfig): Promise<string> {
-  if (cfg.teamId) return cfg.teamId;
-  const key = cfg.token.slice(0, 12);
-  if (cachedTeamId && cachedTeamKey === key) return cachedTeamId;
+export type SplashtopBasicInfo = {
+  teamId: string;
+  email: string | null;
+  name: string | null;
+  /** Scope names present on the token (e.g. psa, users, service_desk). */
+  scopes: string[];
+  /** Prefer team id nested under scopes.psa when present. */
+  psaTeamId: string | null;
+  raw: Record<string, unknown>;
+};
 
+function asRecord(v: unknown): Record<string, unknown> | null {
+  return v && typeof v === "object" && !Array.isArray(v)
+    ? (v as Record<string, unknown>)
+    : null;
+}
+
+/**
+ * Parse /users/basic_info — team id for PSA lives under data.scopes.psa.team_id
+ * in current Splashtop docs (not always top-level team_id).
+ */
+export function parseBasicInfo(data: unknown): SplashtopBasicInfo {
+  const root = asRecord(data) ?? {};
+  const payload = asRecord(root.data) ?? root;
+  const scopesObj = asRecord(payload.scopes) ?? {};
+  const scopeNames = Object.keys(scopesObj);
+  const psa = asRecord(scopesObj.psa);
+  const serviceDesk = asRecord(scopesObj.service_desk);
+  const psaTeam =
+    psa?.team_id != null
+      ? String(psa.team_id).trim()
+      : psa?.stb_team_id != null
+        ? String(psa.stb_team_id).trim()
+        : serviceDesk?.team_id != null
+          ? String(serviceDesk.team_id).trim()
+          : null;
+
+  const topTeam =
+    payload.team_id != null
+      ? String(payload.team_id).trim()
+      : payload.stb_team_id != null
+        ? String(payload.stb_team_id).trim()
+        : payload.teamId != null
+          ? String(payload.teamId).trim()
+          : null;
+
+  const teamId = (psaTeam || topTeam || "").trim();
+  return {
+    teamId,
+    email:
+      payload.email != null
+        ? String(payload.email)
+        : payload.user_email != null
+          ? String(payload.user_email)
+          : null,
+    name: payload.name != null ? String(payload.name) : null,
+    scopes: scopeNames,
+    psaTeamId: psaTeam,
+    raw: payload,
+  };
+}
+
+export async function fetchBasicInfo(
+  cfg: SplashtopConfig,
+): Promise<SplashtopBasicInfo> {
   const res = await stFetch(cfg, "/api/open/v1/users/basic_info");
   if (!res.ok) {
     throw new Error(
@@ -137,31 +194,112 @@ export async function resolveTeamId(cfg: SplashtopConfig): Promise<string> {
       `Splashtop basic_info error: ${formatStError(res.data, `code ${code}`)}`,
     );
   }
-
-  const root = res.data as {
-    data?: Record<string, unknown>;
-    stb_team_id?: unknown;
-    team_id?: unknown;
-  };
-  const payload =
-    root.data && typeof root.data === "object" ? root.data : (root as Record<string, unknown>);
-  const team =
-    payload.stb_team_id ??
-    payload.team_id ??
-    payload.teamId ??
-    (payload.team && typeof payload.team === "object"
-      ? (payload.team as { id?: unknown }).id
-      : null);
-
-  const teamId = team != null ? String(team).trim() : "";
-  if (!teamId) {
+  const info = parseBasicInfo(res.data);
+  if (!info.teamId) {
     throw new Error(
       "Splashtop basic_info did not return team id. Set SPLASHTOP_TEAM_ID in .env.",
     );
   }
-  cachedTeamId = teamId;
+  if (info.scopes.length > 0 && !info.scopes.includes("psa")) {
+    throw new Error(
+      `Splashtop token is missing the "psa" scope (has: ${info.scopes.join(", ") || "none"}). ` +
+        `Recreate the Web API token at my.splashtop.com → Account → Web API Tokens with scopes: psa, users.`,
+    );
+  }
+  return info;
+}
+
+/**
+ * Resolve team id: env pin → cache → GET /api/open/v1/users/basic_info
+ * Prefer scopes.psa.team_id from basic_info (Open API PDF §5.1).
+ */
+export async function resolveTeamId(cfg: SplashtopConfig): Promise<string> {
+  if (cfg.teamId) return cfg.teamId;
+  const key = cfg.token.slice(0, 12);
+  if (cachedTeamId && cachedTeamKey === key) return cachedTeamId;
+
+  const info = await fetchBasicInfo(cfg);
+  cachedTeamId = info.teamId;
   cachedTeamKey = key;
-  return teamId;
+  return info.teamId;
+}
+
+export type SplashtopChannel = {
+  id: string;
+  name: string;
+  isDefault: boolean;
+  isPrivate: boolean;
+};
+
+/**
+ * List Service Desk / PSA channels (private id is always 0).
+ * GET /api/open/v1/teams/{team_id}/psa/channel_list?mode=psa
+ */
+export async function listPsaChannels(
+  cfg?: SplashtopConfig | null,
+): Promise<SplashtopChannel[]> {
+  const c = cfg ?? getSplashtopConfigFromEnv();
+  if (!c) throw new Error("Splashtop is not configured");
+  const teamId = await resolveTeamId(c);
+  const path =
+    `/api/open/v1/teams/${encodeURIComponent(teamId)}/psa/channel_list?mode=psa`;
+  const res = await stFetch(c, path);
+  if (!res.ok) {
+    throw new Error(
+      `Splashtop channel_list failed (${res.status}): ${formatStError(res.data, res.text.slice(0, 200))}`,
+    );
+  }
+  const code = resultCode(res.data);
+  if (code != null && code !== 20200 && code !== 0) {
+    throw new Error(
+      `Splashtop channel_list error: ${formatStError(res.data, `code ${code}`)}`,
+    );
+  }
+  const root = asRecord(res.data) ?? {};
+  const data = asRecord(root.data) ?? root;
+  const out: SplashtopChannel[] = [];
+  const priv = asRecord(data.private);
+  if (priv) {
+    out.push({
+      id: priv.id != null ? String(priv.id) : "0",
+      name: priv.name != null ? String(priv.name) : "Private",
+      isDefault: Boolean(priv.default),
+      isPrivate: true,
+    });
+  } else {
+    out.push({ id: "0", name: "Private", isDefault: false, isPrivate: true });
+  }
+  const channels = Array.isArray(data.channels) ? data.channels : [];
+  for (const ch of channels) {
+    const row = asRecord(ch);
+    if (!row || row.id == null) continue;
+    out.push({
+      id: String(row.id),
+      name: String(row.name ?? row.Name ?? `Channel ${row.id}`),
+      isDefault: Boolean(row.default ?? row.Default),
+      isPrivate: false,
+    });
+  }
+  return out;
+}
+
+function explainCreateError(data: unknown, fallback: string): string {
+  const base = formatStError(data, fallback);
+  const code = resultCode(data);
+  if (code === 40403) {
+    return (
+      `${base}. Splashtop 40403 = not allowed (value/action/target). Common fixes: ` +
+      `(1) API token must include scope "psa" (and ideally "users") — recreate at my.splashtop.com → Web API Tokens; ` +
+      `(2) Enterprise plan with Attended Support / Service Desk enabled; ` +
+      `(3) Use a valid channel_id (0 = private) via SPLASHTOP_CHANNEL_ID; ` +
+      `(4) Confirm SPLASHTOP_BASE_URL region (US webapi.splashtop.com vs EU webapi.splashtop.eu); ` +
+      `(5) Token owner must be Team Owner or Super Admin.`
+    );
+  }
+  if (code === 40100 || code === 40101 || code === 40300) {
+    return `${base}. Check SPLASHTOP_API_TOKEN is valid and not expired.`;
+  }
+  return base;
 }
 
 export type SplashtopSupportSession = {
@@ -363,6 +501,10 @@ function extractSession(data: unknown): Record<string, unknown> | null {
 /**
  * Create a PSA attended support session (SOS).
  * Returns code + support_portal_link for the end user.
+ *
+ * Open API PDF §5.8.1.2 parameters (request):
+ *   channel_id, customer_name, customer_issue (optional)
+ * Do NOT send response-only fields like source_name — some stacks return 40403.
  */
 export async function createSupportSession(opts: {
   customerName: string;
@@ -372,47 +514,194 @@ export async function createSupportSession(opts: {
   const cfg = getSplashtopConfigFromEnv();
   if (!cfg) throw new Error("Splashtop is not configured (SPLASHTOP_API_TOKEN)");
 
-  const teamId = await resolveTeamId(cfg);
-  const channelId = String(opts.channelId ?? cfg.channelId ?? "0");
-  const body: Record<string, unknown> = {
-    channel_id: Number.isFinite(Number(channelId))
-      ? Number(channelId)
-      : channelId,
-    customer_name: opts.customerName.slice(0, 120),
+  // Validate token scopes early (throws if psa missing when scopes are listed)
+  const info = await fetchBasicInfo(cfg);
+  const teamId = cfg.teamId || info.psaTeamId || info.teamId;
+  if (!teamId) {
+    throw new Error(
+      "Splashtop team id missing. Set SPLASHTOP_TEAM_ID or use a token with psa scope.",
+    );
+  }
+  // Keep cache warm for later calls
+  cachedTeamId = teamId;
+  cachedTeamKey = cfg.token.slice(0, 12);
+
+  const preferred = String(opts.channelId ?? cfg.channelId ?? "0").trim() || "0";
+
+  // Build ordered channel candidates: preferred → default channel → private 0 → others
+  const channelIds: string[] = [];
+  const pushCh = (id: string) => {
+    const s = String(id).trim();
+    if (s && !channelIds.includes(s)) channelIds.push(s);
   };
-  if (opts.customerIssue?.trim()) {
-    body.customer_issue = opts.customerIssue.trim().slice(0, 500);
+  pushCh(preferred);
+  pushCh("0");
+  try {
+    const channels = await listPsaChannels(cfg);
+    const def = channels.find((c) => c.isDefault);
+    if (def) pushCh(def.id);
+    for (const c of channels) pushCh(c.id);
+  } catch {
+    // channel_list may fail without service_desk — still try preferred + 0
   }
-  // Identify sessions created by AKAB portal
-  body.source_name = "AKAB Portal";
 
-  const res = await stFetch(
-    cfg,
-    `/api/open/v1/teams/${encodeURIComponent(teamId)}/psa/support_sessions`,
-    { method: "POST", body: JSON.stringify(body) },
+  const customerName = opts.customerName.slice(0, 120);
+  const customerIssue = opts.customerIssue?.trim()
+    ? opts.customerIssue.trim().slice(0, 500)
+    : null;
+
+  const path = `/api/open/v1/teams/${encodeURIComponent(teamId)}/psa/support_sessions`;
+  const errors: string[] = [];
+
+  const tryCreate = async (
+    body: Record<string, unknown>,
+  ): Promise<SplashtopSupportSession | null> => {
+    const res = await stFetch(cfg, path, {
+      method: "POST",
+      body: JSON.stringify(body),
+    });
+    // HTTP-level failure
+    if (!res.ok) {
+      errors.push(
+        `HTTP ${res.status} body=${JSON.stringify(body)} → ${explainCreateError(res.data, res.text.slice(0, 200))}`,
+      );
+      return null;
+    }
+    const code = resultCode(res.data);
+    if (code != null && code !== 20200 && code !== 0) {
+      errors.push(
+        `result=${code} body=${JSON.stringify(body)} → ${explainCreateError(res.data, `code ${code}`)}`,
+      );
+      return null;
+    }
+    const sessionRaw = extractSession(res.data);
+    if (!sessionRaw) {
+      errors.push(
+        `empty support_session for body=${JSON.stringify(body)} raw=${JSON.stringify(res.data).slice(0, 240)}`,
+      );
+      return null;
+    }
+    const session = mapSession(sessionRaw, cfg);
+    if (!session.code && !session.supportPortalLink) {
+      errors.push("session missing code and support_portal_link");
+      return null;
+    }
+    return session;
+  };
+
+  const tryCreateForm = async (
+    fields: Record<string, string>,
+  ): Promise<SplashtopSupportSession | null> => {
+    const res = await stFetch(cfg, path, {
+      method: "POST",
+      headers: { "Content-Type": "application/x-www-form-urlencoded" },
+      body: new URLSearchParams(fields).toString(),
+    });
+    if (!res.ok) {
+      errors.push(
+        `FORM HTTP ${res.status} → ${explainCreateError(res.data, res.text.slice(0, 180))}`,
+      );
+      return null;
+    }
+    const code = resultCode(res.data);
+    if (code != null && code !== 20200 && code !== 0) {
+      errors.push(
+        `FORM result=${code} → ${explainCreateError(res.data, `code ${code}`)}`,
+      );
+      return null;
+    }
+    const sessionRaw = extractSession(res.data);
+    if (!sessionRaw) {
+      errors.push(`FORM empty session raw=${JSON.stringify(res.data).slice(0, 200)}`);
+      return null;
+    }
+    const session = mapSession(sessionRaw, cfg);
+    if (!session.code && !session.supportPortalLink) return null;
+    return session;
+  };
+
+  const tryCreateQuery = async (
+    fields: Record<string, string>,
+  ): Promise<SplashtopSupportSession | null> => {
+    const qs = new URLSearchParams(fields).toString();
+    const res = await stFetch(cfg, `${path}?${qs}`, { method: "POST", body: "" });
+    if (!res.ok) {
+      errors.push(
+        `QUERY HTTP ${res.status} → ${explainCreateError(res.data, res.text.slice(0, 180))}`,
+      );
+      return null;
+    }
+    const code = resultCode(res.data);
+    if (code != null && code !== 20200 && code !== 0) {
+      errors.push(
+        `QUERY result=${code} → ${explainCreateError(res.data, `code ${code}`)}`,
+      );
+      return null;
+    }
+    const sessionRaw = extractSession(res.data);
+    if (!sessionRaw) return null;
+    const session = mapSession(sessionRaw, cfg);
+    if (!session.code && !session.supportPortalLink) return null;
+    return session;
+  };
+
+  // For each channel, try documented body shapes (JSON → form → query)
+  for (const ch of channelIds) {
+    const chNum = Number(ch);
+    const channelValue = Number.isFinite(chNum) ? chNum : ch;
+
+    // Shape A — documented JSON fields only
+    const bodyA: Record<string, unknown> = {
+      channel_id: channelValue,
+      customer_name: customerName,
+    };
+    if (customerIssue) bodyA.customer_issue = customerIssue;
+    const a = await tryCreate(bodyA);
+    if (a) return a;
+
+    // Shape B — without issue (some tenants reject long/special issue text)
+    if (customerIssue) {
+      const bodyB: Record<string, unknown> = {
+        channel_id: channelValue,
+        customer_name: customerName,
+      };
+      const b = await tryCreate(bodyB);
+      if (b) return b;
+    }
+
+    // Shape C — channel_id as string
+    if (typeof channelValue === "number") {
+      const bodyC: Record<string, unknown> = {
+        channel_id: String(ch),
+        customer_name: customerName,
+      };
+      if (customerIssue) bodyC.customer_issue = customerIssue;
+      const c = await tryCreate(bodyC);
+      if (c) return c;
+    }
+
+    // Shape D — form-urlencoded (some Open API endpoints accept this)
+    const form: Record<string, string> = {
+      channel_id: String(ch),
+      customer_name: customerName,
+    };
+    if (customerIssue) form.customer_issue = customerIssue;
+    const d = await tryCreateForm(form);
+    if (d) return d;
+
+    // Shape E — query string on POST
+    const e = await tryCreateQuery(form);
+    if (e) return e;
+  }
+
+  const scopeHint =
+    info.scopes.length > 0
+      ? ` Token scopes: [${info.scopes.join(", ")}].`
+      : " Token scopes unknown (basic_info returned none) — ensure the Web API token includes psa.";
+  throw new Error(
+    `Splashtop create session failed after trying channel(s) ${channelIds.join(", ")}. ` +
+      `Last errors: ${errors.slice(-4).join(" | ")}.${scopeHint}`,
   );
-
-  if (!res.ok) {
-    throw new Error(
-      `Splashtop create session failed (${res.status}): ${formatStError(res.data, res.text.slice(0, 240))}`,
-    );
-  }
-  const code = resultCode(res.data);
-  if (code != null && code !== 20200 && code !== 0) {
-    throw new Error(
-      `Splashtop create session error: ${formatStError(res.data, `code ${code}`)}`,
-    );
-  }
-
-  const sessionRaw = extractSession(res.data);
-  if (!sessionRaw) {
-    throw new Error("Splashtop create session returned no support_session payload");
-  }
-  const session = mapSession(sessionRaw, cfg);
-  if (!session.code && !session.supportPortalLink) {
-    throw new Error("Splashtop session missing code and support_portal_link");
-  }
-  return session;
 }
 
 export async function getSupportSession(
@@ -512,6 +801,11 @@ export async function probeSplashtopAccess(): Promise<{
   teamId: string | null;
   message: string;
   baseUrl: string | null;
+  scopes?: string[];
+  hasPsaScope?: boolean;
+  channels?: Array<{ id: string; name: string; isDefault?: boolean }>;
+  channelId?: string;
+  email?: string | null;
 }> {
   const cfg = getSplashtopConfigFromEnv();
   if (!cfg) {
@@ -526,14 +820,58 @@ export async function probeSplashtopAccess(): Promise<{
     };
   }
   try {
-    const teamId = await resolveTeamId(cfg);
+    const info = await fetchBasicInfo(cfg);
+    const teamId = cfg.teamId || info.psaTeamId || info.teamId;
+    cachedTeamId = teamId;
+    cachedTeamKey = cfg.token.slice(0, 12);
+
+    let channels: SplashtopChannel[] = [];
+    let channelErr: string | null = null;
+    try {
+      channels = await listPsaChannels({ ...cfg, teamId });
+    } catch (e) {
+      channelErr = e instanceof Error ? e.message : String(e);
+    }
+
+    const hasPsa =
+      info.scopes.length === 0 || info.scopes.includes("psa");
+    const ok = Boolean(teamId) && hasPsa;
+    const chSummary =
+      channels.length > 0
+        ? channels
+            .slice(0, 8)
+            .map(
+              (c) =>
+                `${c.id}:${c.name}${c.isDefault ? "*" : ""}${c.isPrivate ? " (private)" : ""}`,
+            )
+            .join(", ")
+        : channelErr
+          ? `channel_list failed (${channelErr})`
+          : "none";
+
     return {
-      ok: true,
+      ok,
       configured: true,
       authOk: true,
       teamId,
       baseUrl: cfg.baseUrl,
-      message: `Connected to Splashtop (team ${teamId}).`,
+      scopes: info.scopes,
+      hasPsaScope: hasPsa,
+      channels: channels.map((c) => ({
+        id: c.id,
+        name: c.name,
+        isDefault: c.isDefault,
+      })),
+      channelId: cfg.channelId,
+      email: info.email,
+      message: ok
+        ? `Connected to Splashtop (team ${teamId}` +
+          `${info.email ? `, ${info.email}` : ""}). ` +
+          `Scopes: [${info.scopes.join(", ") || "unknown"}]. ` +
+          `Channels: ${chSummary}. ` +
+          `Create uses channel ${cfg.channelId || "0"}.`
+        : `Token authenticated but PSA may be unavailable. Scopes: [${info.scopes.join(", ") || "none"}]. ` +
+          `Recreate Web API token with scope "psa" (Owner/Super Admin).`,
     };
   } catch (e) {
     return {
@@ -542,6 +880,7 @@ export async function probeSplashtopAccess(): Promise<{
       authOk: false,
       teamId: cfg.teamId,
       baseUrl: cfg.baseUrl,
+      channelId: cfg.channelId,
       message: e instanceof Error ? e.message : "Splashtop probe failed",
     };
   }
