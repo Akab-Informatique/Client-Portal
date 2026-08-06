@@ -2,7 +2,7 @@ import type { VercelRequest, VercelResponse } from "@vercel/node";
 import {
   fetchInvoicePdf,
   isAutotaskConfigured,
-} from "../../_lib/autotask-client.js";
+} from "../../../_lib/autotask-client.js";
 
 /**
  * GET /api/autotask/invoices/:id/pdf

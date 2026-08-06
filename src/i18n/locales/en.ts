@@ -160,8 +160,7 @@ export const en = {
     invoicesLoadFailed: "Could not load invoices.",
     contractsLoadFailed: "Could not load contracts.",
     contractsEmptyTitle: "No contracts yet",
-    contractsEmptyDesc:
-      "When contracts are set up in Autotask for your company, they will appear here.",
+    contractsEmptyDesc: "No active contracts were found for this company in Autotask.",
     contractsDescSafe:
       "Your service agreements from Autotask. Financial details stay with your provider.",
     contractsPrivacyNote:
@@ -169,6 +168,20 @@ export const en = {
     clientDeniedTitle: "Billing not available",
     clientDeniedDesc:
       "Your account does not have billing access. Ask your provider administrator to enable it on your user profile.",
+    contractsDescActive: "Active Autotask contracts only. Click a row to view services and unit pricing.",
+    contractsClickHint: "Showing active contracts. Click a contract to open its services.",
+    colMonthly: "Monthly",
+    mo: "mo",
+    statusActive: "Active",
+    contractServicesTitle: "Contract services",
+    contractServicesHint: "Services and quantities on this contract (client unit prices).",
+    servicesEmptyTitle: "No services on this contract",
+    servicesEmptyDesc: "This contract has no recurring services in Autotask, or they could not be loaded.",
+    servicesLoadFailed: "Could not load contract services.",
+    colService: "Service",
+    colUnits: "Units",
+    colUnitPrice: "Unit price",
+    colLineTotal: "Line total",
   },
   settings: {
     title: "General settings",

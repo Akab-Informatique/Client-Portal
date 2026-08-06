@@ -1631,7 +1631,7 @@ export function primeMockTickets(
 
 
 // ---------------------------------------------------------------------------
-// Contracts — client-safe projection only (never cost/profit/internal)
+// Contracts — client-safe projection only (never internal cost/profit/margin)
 // ---------------------------------------------------------------------------
 
 /** Fields we may request from Autotask for client display. */
@@ -1645,19 +1645,21 @@ const CLIENT_SAFE_CONTRACT_FIELDS = [
   "endDate",
   "companyID",
   "description",
+  // Client-facing period price (what the customer pays) — NOT internal cost
+  "contractPeriodCost",
+  "contractPeriodType",
 ] as const;
 
 /**
  * Fields that must NEVER be requested or returned to clients.
  * Kept as documentation + runtime strip guard.
+ * Note: contractPeriodCost is intentionally ALLOWED (client billing amount).
  */
 export const CLIENT_FORBIDDEN_CONTRACT_FIELDS = [
   "estimatedCost",
   "estimatedRevenue",
   "estimatedHours",
   "setupFee",
-  "contractPeriodCost",
-  "contractPeriodType",
   "timeReportingRequiresStartAndStopTimes",
   "isDefaultContract",
   "opportunityID",
@@ -1668,6 +1670,9 @@ export const CLIENT_FORBIDDEN_CONTRACT_FIELDS = [
   "internalCurrencySetupFee",
   "internalCurrencyContractPeriodCost",
   "setupFeeBillingCodeID",
+  "unitCost",
+  "internalCurrencyUnitPrice",
+  "internalCurrencyAdjustedPrice",
 ] as const;
 
 export type ClientSafeContract = {
@@ -1675,10 +1680,33 @@ export type ClientSafeContract = {
   name: string;
   number: string | null;
   typeLabel: string | null;
+  status: number | null;
   statusLabel: string | null;
+  /** True when Autotask status label is Active (default list filter). */
+  isActive: boolean;
   startDate: string | null;
   endDate: string | null;
   description: string | null;
+  /**
+   * Client-facing recurring amount for the contract period (usually monthly).
+   * Sourced from contractPeriodCost when present.
+   */
+  monthlyAmount: number | null;
+  periodType: number | null;
+  periodTypeLabel: string | null;
+};
+
+export type ClientContractService = {
+  id: number;
+  serviceId: number | null;
+  name: string;
+  description: string | null;
+  /** Units currently on the contract (when available). */
+  units: number | null;
+  /** Client unit price (adjustedPrice preferred, else unitPrice). */
+  unitPrice: number | null;
+  /** units * unitPrice when both known. */
+  lineTotal: number | null;
 };
 
 function stripForbiddenContractFields(
@@ -1687,12 +1715,21 @@ function stripForbiddenContractFields(
   const out: Record<string, unknown> = {};
   for (const [k, v] of Object.entries(raw)) {
     const lower = k.toLowerCase();
+    // Allow contractPeriodCost through (client-facing amount)
+    if (lower === "contractperiodcost" || lower === "contractperiodtype") {
+      out[k] = v;
+      continue;
+    }
     if (
       CLIENT_FORBIDDEN_CONTRACT_FIELDS.some(
         (f) => f.toLowerCase() === lower,
       ) ||
-      /cost|profit|margin|revenue|internal|setupfee|estimated/i.test(k)
+      /profit|margin|revenue|internal|setupfee|estimated|unitcost/i.test(k)
     ) {
+      continue;
+    }
+    // Strip bare "cost" keys except contractPeriodCost handled above
+    if (/cost/i.test(k) && lower !== "contractperiodcost") {
       continue;
     }
     out[k] = v;
@@ -1700,15 +1737,47 @@ function stripForbiddenContractFields(
   return out;
 }
 
+function parseMoney(v: unknown): number | null {
+  if (v == null || v === "") return null;
+  const n = Number(v);
+  return Number.isFinite(n) ? n : null;
+}
+
+function isActiveContractStatus(statusLabel: string | null): boolean {
+  if (!statusLabel) return false;
+  const l = statusLabel.toLowerCase().trim();
+  // Exact-ish Active; exclude Inactive
+  if (l === "active") return true;
+  if (/\binactive\b/.test(l)) return false;
+  if (/\bactive\b/.test(l) && !/in-?active/.test(l)) return true;
+  return false;
+}
+
+/** Autotask contractPeriodType picklist — common defaults if entity fields fail. */
+const DEFAULT_PERIOD_TYPE_LABELS: Record<string, string> = {
+  "1": "Monthly",
+  "2": "Quarterly",
+  "3": "Semi-Annual",
+  "4": "Yearly",
+};
+
 function mapClientSafeContract(
   raw: Record<string, unknown>,
   statusLabels: Record<string, string>,
   typeLabels: Record<string, string>,
+  periodLabels: Record<string, string>,
 ): ClientSafeContract | null {
   const safe = stripForbiddenContractFields(raw);
   const id = Number(safe.id);
   if (!Number.isFinite(id)) return null;
-  const status = safe.status != null ? String(safe.status) : null;
+  const statusNum =
+    safe.status != null && Number.isFinite(Number(safe.status))
+      ? Number(safe.status)
+      : null;
+  const statusKey = statusNum != null ? String(statusNum) : null;
+  const statusLabel = statusKey
+    ? statusLabels[statusKey] || statusKey
+    : null;
   const ctype = safe.contractType != null ? String(safe.contractType) : null;
   const name = String(safe.contractName ?? "").trim() || `Contract #${id}`;
   const number =
@@ -1717,28 +1786,59 @@ function mapClientSafeContract(
       : null;
   let description: string | null = null;
   if (typeof safe.description === "string" && safe.description.trim()) {
-    // Cap length — still no financials
     description = safe.description.trim().slice(0, 500);
   }
+
+  const periodType =
+    safe.contractPeriodType != null &&
+    Number.isFinite(Number(safe.contractPeriodType))
+      ? Number(safe.contractPeriodType)
+      : null;
+  const periodKey = periodType != null ? String(periodType) : null;
+  const periodTypeLabel = periodKey
+    ? periodLabels[periodKey] ||
+      DEFAULT_PERIOD_TYPE_LABELS[periodKey] ||
+      null
+    : null;
+
+  // Prefer Autotask period amount; treat as "monthly" when period is monthly
+  const periodAmount = parseMoney(safe.contractPeriodCost);
+  let monthlyAmount: number | null = periodAmount;
+  if (periodAmount != null && periodTypeLabel) {
+    const pl = periodTypeLabel.toLowerCase();
+    if (pl.includes("month")) monthlyAmount = periodAmount;
+    else if (pl.includes("quarter")) monthlyAmount = periodAmount / 3;
+    else if (pl.includes("semi")) monthlyAmount = periodAmount / 6;
+    else if (pl.includes("year") || pl.includes("annual"))
+      monthlyAmount = periodAmount / 12;
+  }
+
   return {
     id,
     name,
     number,
     typeLabel: ctype ? typeLabels[ctype] || ctype : null,
-    statusLabel: status ? statusLabels[status] || status : null,
+    status: statusNum,
+    statusLabel,
+    isActive: isActiveContractStatus(statusLabel),
     startDate:
       safe.startDate != null ? String(safe.startDate).slice(0, 32) : null,
     endDate: safe.endDate != null ? String(safe.endDate).slice(0, 32) : null,
     description,
+    monthlyAmount,
+    periodType,
+    periodTypeLabel,
   };
 }
 
 /**
  * Contracts for one Autotask company — client-safe fields only.
- * Never returns cost, profit, margin, internal currency, or setup fees.
+ * Never returns internal cost, profit, margin, or setup fees.
+ * By default returns Active contracts only (opts.includeInactive to expand).
  */
 export async function fetchClientSafeContractsForCompany(
   autotaskCompanyId: string | number,
+  opts?: { includeInactive?: boolean },
 ): Promise<{
   contracts: ClientSafeContract[];
   zoneUrl: string;
@@ -1752,30 +1852,247 @@ export async function fetchClientSafeContractsForCompany(
     throw new Error("Invalid Autotask company ID");
   }
 
-  const [statusLabels, typeLabels] = await Promise.all([
+  const [statusLabels, typeLabels, periodLabels] = await Promise.all([
     getPicklistMap(base, cfg, "Contracts", "status"),
     getPicklistMap(base, cfg, "Contracts", "contractType"),
+    getPicklistMap(base, cfg, "Contracts", "contractPeriodType"),
   ]);
 
+  // Resolve Active status value(s) from picklist when possible
+  const activeStatusValues = Object.entries(statusLabels)
+    .filter(([, label]) => isActiveContractStatus(label))
+    .map(([value]) => Number(value))
+    .filter((n) => Number.isFinite(n));
+
+  const filterItems: Array<Record<string, unknown>> = [
+    { op: "eq", field: "companyID", value: companyIdNum },
+  ];
+  if (!opts?.includeInactive && activeStatusValues.length > 0) {
+    filterItems.push({
+      op: "in",
+      field: "status",
+      value: activeStatusValues,
+    });
+  }
+
   const body = {
-    MaxRecords: 100,
+    MaxRecords: 500,
     IncludeFields: [...CLIENT_SAFE_CONTRACT_FIELDS],
-    filter: [
-      {
-        op: "and",
-        items: [{ op: "eq", field: "companyID", value: companyIdNum }],
-      },
-    ],
+    filter: [{ op: "and", items: filterItems }],
   };
 
   type QueryRes = { items?: Array<Record<string, unknown>> };
   const data = await postQuery<QueryRes>(base, cfg, "Contracts/query", body);
-  const contracts = (data.items ?? [])
-    .map((item) => mapClientSafeContract(item, statusLabels, typeLabels))
-    .filter((c): c is ClientSafeContract => c != null)
-    .sort((a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: "base" }));
+  let contracts = (data.items ?? [])
+    .map((item) =>
+      mapClientSafeContract(item, statusLabels, typeLabels, periodLabels),
+    )
+    .filter((c): c is ClientSafeContract => c != null);
+
+  // Client-side Active filter when Autotask picklist had no Active values
+  // or filter was not applied
+  if (!opts?.includeInactive) {
+    contracts = contracts.filter((c) => c.isActive);
+  }
+
+  contracts.sort((a, b) =>
+    a.name.localeCompare(b.name, undefined, { sensitivity: "base" }),
+  );
 
   return { contracts, zoneUrl: base };
+}
+
+/**
+ * Services on one contract (ContractServices + optional unit counts).
+ * Client-facing prices only — never unitCost / internal currency.
+ */
+export async function fetchContractServicesForContract(
+  contractId: number,
+): Promise<{
+  services: ClientContractService[];
+  contractId: number;
+  zoneUrl: string;
+}> {
+  const cfg = getAutotaskConfigFromEnv();
+  if (!cfg) throw new Error("Autotask is not configured");
+  if (!Number.isFinite(contractId) || contractId <= 0) {
+    throw new Error("Invalid contract id");
+  }
+
+  const base = await resolveZoneBase(cfg);
+
+  type QueryRes = { items?: Array<Record<string, unknown>> };
+
+  // ContractServices on this contract
+  const csBody = {
+    MaxRecords: 500,
+    IncludeFields: [
+      "id",
+      "contractID",
+      "serviceID",
+      "unitPrice",
+      "adjustedPrice",
+      "invoiceDescription",
+    ],
+    filter: [
+      {
+        op: "and",
+        items: [{ op: "eq", field: "contractID", value: contractId }],
+      },
+    ],
+  };
+
+  let csItems: Array<Record<string, unknown>> = [];
+  try {
+    const csData = await postQuery<QueryRes>(
+      base,
+      cfg,
+      "ContractServices/query",
+      csBody,
+    );
+    csItems = csData.items ?? [];
+  } catch (e) {
+    // Retry with minimal fields if IncludeFields rejected adjustedPrice etc.
+    const msg = e instanceof Error ? e.message : String(e);
+    if (/field|include/i.test(msg)) {
+      const csData = await postQuery<QueryRes>(
+        base,
+        cfg,
+        "ContractServices/query",
+        {
+          MaxRecords: 500,
+          filter: [
+            {
+              op: "and",
+              items: [{ op: "eq", field: "contractID", value: contractId }],
+            },
+          ],
+        },
+      );
+      csItems = csData.items ?? [];
+    } else {
+      throw e;
+    }
+  }
+
+  // Current units per contractService (when entity is available)
+  const unitsByCsId = new Map<number, number>();
+  try {
+    const unitsData = await postQuery<QueryRes>(
+      base,
+      cfg,
+      "ContractServiceUnits/query",
+      {
+        MaxRecords: 500,
+        IncludeFields: [
+          "id",
+          "contractID",
+          "contractServiceID",
+          "serviceID",
+          "units",
+          "startDate",
+          "endDate",
+        ],
+        filter: [
+          {
+            op: "and",
+            items: [{ op: "eq", field: "contractID", value: contractId }],
+          },
+        ],
+      },
+    );
+    const today = new Date().toISOString().slice(0, 10);
+    for (const u of unitsData.items ?? []) {
+      const csId = Number(u.contractServiceID);
+      const units = Number(u.units);
+      if (!Number.isFinite(csId) || !Number.isFinite(units)) continue;
+      const start =
+        u.startDate != null ? String(u.startDate).slice(0, 10) : null;
+      const end = u.endDate != null ? String(u.endDate).slice(0, 10) : null;
+      // Prefer rows covering "today"; otherwise keep max units seen
+      const coversToday =
+        (!start || start <= today) && (!end || end >= today || /^0001/.test(end));
+      const prev = unitsByCsId.get(csId);
+      if (coversToday) {
+        unitsByCsId.set(csId, units);
+      } else if (prev == null) {
+        unitsByCsId.set(csId, units);
+      }
+    }
+  } catch {
+    // Units entity may be restricted — services still return without qty
+  }
+
+  // Resolve service names
+  const serviceIds = [
+    ...new Set(
+      csItems
+        .map((r) => Number(r.serviceID))
+        .filter((n) => Number.isFinite(n) && n > 0),
+    ),
+  ];
+  const serviceNameById = new Map<number, string>();
+  if (serviceIds.length > 0) {
+    try {
+      const svcData = await postQuery<QueryRes>(base, cfg, "Services/query", {
+        MaxRecords: 500,
+        IncludeFields: ["id", "name", "invoiceDescription"],
+        filter: [
+          {
+            op: "and",
+            items: [{ op: "in", field: "id", value: serviceIds }],
+          },
+        ],
+      });
+      for (const s of svcData.items ?? []) {
+        const sid = Number(s.id);
+        if (!Number.isFinite(sid)) continue;
+        const name = String(s.name ?? "").trim();
+        if (name) serviceNameById.set(sid, name);
+      }
+    } catch {
+      /* names optional */
+    }
+  }
+
+  const services: ClientContractService[] = csItems
+    .map((raw): ClientContractService | null => {
+      const id = Number(raw.id);
+      if (!Number.isFinite(id)) return null;
+      const serviceId =
+        raw.serviceID != null && Number.isFinite(Number(raw.serviceID))
+          ? Number(raw.serviceID)
+          : null;
+      const unitPrice =
+        parseMoney(raw.adjustedPrice) ?? parseMoney(raw.unitPrice);
+      const units = unitsByCsId.has(id) ? unitsByCsId.get(id)! : null;
+      const lineTotal =
+        unitPrice != null && units != null ? unitPrice * units : null;
+      const invDesc =
+        typeof raw.invoiceDescription === "string" &&
+        raw.invoiceDescription.trim()
+          ? raw.invoiceDescription.trim().slice(0, 500)
+          : null;
+      const name =
+        (serviceId != null ? serviceNameById.get(serviceId) : null) ||
+        invDesc ||
+        (serviceId != null ? `Service #${serviceId}` : `Line #${id}`);
+      return {
+        id,
+        serviceId,
+        name,
+        description: invDesc && invDesc !== name ? invDesc : null,
+        units,
+        unitPrice,
+        lineTotal,
+      };
+    })
+    .filter((s): s is ClientContractService => s != null)
+    .sort((a, b) =>
+      a.name.localeCompare(b.name, undefined, { sensitivity: "base" }),
+    );
+
+  return { services, contractId, zoneUrl: base };
 }
 
 // ---------------------------------------------------------------------------

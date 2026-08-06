@@ -24,7 +24,9 @@ import {
 } from "@/lib/invoices";
 import {
   fetchClientContracts,
+  fetchContractServices,
   formatContractDate,
+  type ClientContractService,
   type ClientSafeContract,
 } from "@/lib/contracts";
 import { BlurFade } from "@/components/ui/blur-fade";
@@ -74,13 +76,19 @@ export function BillingPlaceholderPage({ kind }: { kind: BillingKind }) {
   const [ctLoading, setCtLoading] = useState(false);
   const [contracts, setContracts] = useState<ClientSafeContract[]>([]);
   const [ctError, setCtError] = useState<string | null>(null);
+  const [svcContract, setSvcContract] = useState<ClientSafeContract | null>(
+    null,
+  );
+  const [svcLoading, setSvcLoading] = useState(false);
+  const [svcError, setSvcError] = useState<string | null>(null);
+  const [services, setServices] = useState<ClientContractService[]>([]);
 
   const title =
     kind === "invoices" ? t("billing.invoicesTitle") : t("billing.contractsTitle");
   const desc =
     kind === "invoices"
       ? t("billing.invoicesDescAt")
-      : t("billing.contractsDescSafe");
+      : t("billing.contractsDescActive");
   const Icon = kind === "invoices" ? Receipt : FileStack;
 
   const loadInvoices = useCallback(
@@ -123,7 +131,7 @@ export function BillingPlaceholderPage({ kind }: { kind: BillingKind }) {
         setCtError(t("billing.noAutotaskId"));
         return;
       }
-      const res = await fetchClientContracts(atId);
+      const res = await fetchClientContracts(atId, { includeInactive: false });
       setContracts(res.contracts);
       if (res.error) setCtError(res.error);
     } catch (e) {
@@ -135,6 +143,28 @@ export function BillingPlaceholderPage({ kind }: { kind: BillingKind }) {
       setCtLoading(false);
     }
   }, [selectedClient, t]);
+
+  const openContractServices = useCallback(
+    async (c: ClientSafeContract) => {
+      setSvcContract(c);
+      setSvcLoading(true);
+      setSvcError(null);
+      setServices([]);
+      try {
+        const res = await fetchContractServices(c.id);
+        setServices(res.services);
+        if (res.error) setSvcError(res.error);
+      } catch (e) {
+        setSvcError(
+          e instanceof Error ? e.message : t("billing.servicesLoadFailed"),
+        );
+        setServices([]);
+      } finally {
+        setSvcLoading(false);
+      }
+    },
+    [t],
+  );
 
   useEffect(() => {
     if (!selectedClient) return;
@@ -449,7 +479,7 @@ export function BillingPlaceholderPage({ kind }: { kind: BillingKind }) {
                   {t("billing.contractsTitle")}
                 </CardTitle>
                 <CardDescription>
-                  {t("billing.contractsDescSafe")}
+                  {t("billing.contractsDescActive")}
                 </CardDescription>
               </div>
               <Button
@@ -470,7 +500,7 @@ export function BillingPlaceholderPage({ kind }: { kind: BillingKind }) {
             </CardHeader>
             <CardContent className="space-y-3">
               <p className="rounded-lg border border-border bg-muted/30 px-3 py-2 text-xs text-muted-foreground">
-                {t("billing.contractsPrivacyNote")}
+                {t("billing.contractsClickHint")}
               </p>
               {ctError && (
                 <p className="rounded-lg border border-destructive/40 bg-destructive/10 px-3 py-2 text-sm text-destructive">
@@ -497,14 +527,30 @@ export function BillingPlaceholderPage({ kind }: { kind: BillingKind }) {
                         <TableHead>{t("billing.colNumber")}</TableHead>
                         <TableHead>{t("billing.colType")}</TableHead>
                         <TableHead>{t("billing.colStatus")}</TableHead>
+                        <TableHead className="text-right">
+                          {t("billing.colMonthly")}
+                        </TableHead>
                         <TableHead>{t("billing.colStart")}</TableHead>
                         <TableHead>{t("billing.colEnd")}</TableHead>
                       </TableRow>
                     </TableHeader>
                     <TableBody>
                       {contracts.map((c) => (
-                        <TableRow key={c.id}>
-                          <TableCell className="font-medium">{c.name}</TableCell>
+                        <TableRow
+                          key={c.id}
+                          className="cursor-pointer hover:bg-muted/50"
+                          tabIndex={0}
+                          onClick={() => void openContractServices(c)}
+                          onKeyDown={(e) => {
+                            if (e.key === "Enter" || e.key === " ") {
+                              e.preventDefault();
+                              void openContractServices(c);
+                            }
+                          }}
+                        >
+                          <TableCell className="font-medium text-primary">
+                            {c.name}
+                          </TableCell>
                           <TableCell className="tabular-nums text-muted-foreground">
                             {c.number || "—"}
                           </TableCell>
@@ -512,9 +558,20 @@ export function BillingPlaceholderPage({ kind }: { kind: BillingKind }) {
                             {c.typeLabel || "—"}
                           </TableCell>
                           <TableCell>
-                            <Badge variant="outline">
-                              {c.statusLabel || "—"}
+                            <Badge
+                              variant="outline"
+                              className="border-emerald-500/40 bg-emerald-500/10 text-emerald-700 dark:text-emerald-400"
+                            >
+                              {c.statusLabel || t("billing.statusActive")}
                             </Badge>
+                          </TableCell>
+                          <TableCell className="text-right tabular-nums font-medium">
+                            {formatMoney(c.monthlyAmount)}
+                            {c.monthlyAmount != null && (
+                              <span className="ml-1 text-xs font-normal text-muted-foreground">
+                                /{t("billing.mo")}
+                              </span>
+                            )}
                           </TableCell>
                           <TableCell className="tabular-nums text-muted-foreground">
                             {formatContractDate(c.startDate)}
@@ -532,6 +589,105 @@ export function BillingPlaceholderPage({ kind }: { kind: BillingKind }) {
           </Card>
         </BlurFade>
       )}
+
+      <Dialog
+        open={!!svcContract}
+        onOpenChange={(open) => {
+          if (!open) {
+            setSvcContract(null);
+            setServices([]);
+            setSvcError(null);
+          }
+        }}
+      >
+        <DialogContent className="flex max-h-[90vh] w-[min(96vw,48rem)] max-w-3xl flex-col gap-0 overflow-hidden p-0 sm:max-w-3xl">
+          <DialogHeader className="shrink-0 space-y-1 border-b border-border px-4 py-3 text-left sm:px-6">
+            <DialogTitle className="flex flex-wrap items-center gap-2">
+              {t("billing.contractServicesTitle")}
+              {svcContract && (
+                <span className="text-sm font-normal text-muted-foreground">
+                  {svcContract.name}
+                </span>
+              )}
+            </DialogTitle>
+            <DialogDescription>
+              {t("billing.contractServicesHint")}
+              {svcContract?.monthlyAmount != null && (
+                <span className="mt-1 block font-medium text-foreground">
+                  {t("billing.colMonthly")}:{" "}
+                  {formatMoney(svcContract.monthlyAmount)}
+                  {svcContract.periodTypeLabel
+                    ? ` (${svcContract.periodTypeLabel})`
+                    : ""}
+                </span>
+              )}
+            </DialogDescription>
+          </DialogHeader>
+          <div className="min-h-0 flex-1 overflow-y-auto px-4 py-3 sm:px-6">
+            {svcError && (
+              <p className="mb-3 rounded-lg border border-destructive/40 bg-destructive/10 px-3 py-2 text-sm text-destructive">
+                {svcError}
+              </p>
+            )}
+            {svcLoading ? (
+              <div className="flex items-center gap-2 text-sm text-muted-foreground">
+                <Loader2 className="size-4 animate-spin" />
+                {t("common.loading")}
+              </div>
+            ) : services.length === 0 ? (
+              <EmptyState
+                icon={<FileStack className="size-5" />}
+                title={t("billing.servicesEmptyTitle")}
+                description={t("billing.servicesEmptyDesc")}
+              />
+            ) : (
+              <div className="overflow-x-auto rounded-lg border border-border">
+                <Table>
+                  <TableHeader>
+                    <TableRow>
+                      <TableHead>{t("billing.colService")}</TableHead>
+                      <TableHead className="text-right">
+                        {t("billing.colUnits")}
+                      </TableHead>
+                      <TableHead className="text-right">
+                        {t("billing.colUnitPrice")}
+                      </TableHead>
+                      <TableHead className="text-right">
+                        {t("billing.colLineTotal")}
+                      </TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {services.map((s) => (
+                      <TableRow key={s.id}>
+                        <TableCell>
+                          <div className="min-w-0">
+                            <p className="font-medium">{s.name}</p>
+                            {s.description && (
+                              <p className="mt-0.5 line-clamp-2 text-xs text-muted-foreground">
+                                {s.description}
+                              </p>
+                            )}
+                          </div>
+                        </TableCell>
+                        <TableCell className="text-right tabular-nums text-muted-foreground">
+                          {s.units != null ? s.units : "—"}
+                        </TableCell>
+                        <TableCell className="text-right tabular-nums">
+                          {formatMoney(s.unitPrice)}
+                        </TableCell>
+                        <TableCell className="text-right tabular-nums font-medium">
+                          {formatMoney(s.lineTotal)}
+                        </TableCell>
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
+              </div>
+            )}
+          </div>
+        </DialogContent>
+      </Dialog>
 
       <Dialog
         open={!!pdfInvoice}

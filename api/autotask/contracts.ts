@@ -6,9 +6,11 @@ import {
 
 /**
  * GET /api/autotask/contracts?autotaskCompanyId=123
+ * Optional: includeInactive=1
  *
- * Returns CLIENT-SAFE contract fields only (name, dates, status, type, short description).
- * Cost, profit, margin, internal currency, and setup fees are never requested or returned.
+ * Returns CLIENT-SAFE contract fields (name, dates, status, type, monthly amount, description).
+ * Internal cost, profit, margin, and setup fees are never returned.
+ * Default: Active contracts only.
  */
 export default async function handler(req: VercelRequest, res: VercelResponse) {
   try {
@@ -39,25 +41,34 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       });
     }
 
-    const { contracts } =
-      await fetchClientSafeContractsForCompany(autotaskCompanyId);
+    const includeInactive =
+      String(req.query.includeInactive ?? "").toLowerCase() === "1" ||
+      String(req.query.includeInactive ?? "").toLowerCase() === "true";
+
+    const { contracts } = await fetchClientSafeContractsForCompany(
+      autotaskCompanyId,
+      { includeInactive },
+    );
 
     return res.status(200).json({
       configured: true,
       contracts,
-      /** Explicit allowlist for clients / admins reviewing the API */
+      activeOnly: !includeInactive,
       clientVisibleFields: [
         "id",
         "name",
         "number",
         "typeLabel",
         "statusLabel",
+        "isActive",
         "startDate",
         "endDate",
         "description",
+        "monthlyAmount",
+        "periodTypeLabel",
       ],
       clientHiddenNote:
-        "Cost, profit, margin, internal pricing, and setup fees are never exposed to clients.",
+        "Internal cost, profit, margin, and setup fees are never exposed to clients. Monthly amount is the client period price.",
     });
   } catch (err) {
     return res.status(500).json({

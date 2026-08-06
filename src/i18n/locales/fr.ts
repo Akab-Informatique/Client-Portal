@@ -161,8 +161,7 @@ export const fr: Dictionary = {
     invoicesLoadFailed: "Impossible de charger les factures.",
     contractsLoadFailed: "Impossible de charger les contrats.",
     contractsEmptyTitle: "Aucun contrat pour le moment",
-    contractsEmptyDesc:
-      "Lorsque des contrats sont configurés dans Autotask pour votre entreprise, ils apparaîtront ici.",
+    contractsEmptyDesc: "Aucun contrat actif trouvé pour cette société dans Autotask.",
     contractsDescSafe:
       "Vos ententes de service Autotask. Les détails financiers restent chez votre fournisseur.",
     contractsPrivacyNote:
@@ -170,6 +169,20 @@ export const fr: Dictionary = {
     clientDeniedTitle: "Facturation non disponible",
     clientDeniedDesc:
       "Votre compte n'a pas accès à la facturation. Demandez à votre fournisseur de l'activer sur votre profil.",
+    contractsDescActive: "Contrats Autotask actifs uniquement. Cliquez une ligne pour voir les services et prix unitaires.",
+    contractsClickHint: "Contrats actifs uniquement. Cliquez un contrat pour ouvrir ses services.",
+    colMonthly: "Mensuel",
+    mo: "mois",
+    statusActive: "Actif",
+    contractServicesTitle: "Services du contrat",
+    contractServicesHint: "Services et quantités sur ce contrat (prix unitaires client).",
+    servicesEmptyTitle: "Aucun service sur ce contrat",
+    servicesEmptyDesc: "Ce contrat n’a pas de services récurrents dans Autotask, ou ils n’ont pas pu être chargés.",
+    servicesLoadFailed: "Impossible de charger les services du contrat.",
+    colService: "Service",
+    colUnits: "Unités",
+    colUnitPrice: "Prix unitaire",
+    colLineTotal: "Total ligne",
   },
   settings: {
     title: "Paramètres généraux",
