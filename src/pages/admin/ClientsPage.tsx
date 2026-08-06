@@ -102,8 +102,6 @@ const emptyCompany = {
   documentation_title: "",
   documentation_enabled: true,
   itglue_organization_id: "",
-  connectbooster_customer_id: "",
-  connectbooster_portal_url: "",
   active: true,
 };
 
@@ -279,8 +277,6 @@ export function ClientsPage() {
       documentation_title: company.documentation_title ?? "",
       documentation_enabled: company.documentation_enabled !== false,
       itglue_organization_id: company.itglue_organization_id ?? "",
-      connectbooster_customer_id: company.connectbooster_customer_id ?? "",
-      connectbooster_portal_url: company.connectbooster_portal_url ?? "",
       active: company.active,
     });
     setError(null);
@@ -542,8 +538,6 @@ export function ClientsPage() {
       documentation_title: form.documentation_title.trim() || null,
       documentation_enabled: form.documentation_enabled,
       itglue_organization_id: form.itglue_organization_id.trim() || null,
-      connectbooster_customer_id: form.connectbooster_customer_id.trim() || null,
-      connectbooster_portal_url: form.connectbooster_portal_url.trim() || null,
     };
     if (editing) {
       await db
@@ -1262,38 +1256,6 @@ export function ClientsPage() {
                     setForm((f) => ({
                       ...f,
                       itglue_organization_id: e.target.value,
-                    }))
-                  }
-                />
-              </div>
-              <div className="space-y-2">
-                <Label htmlFor="ccb">ConnectBooster customer ID</Label>
-                <Input
-                  id="ccb"
-                  placeholder="Customer / org id in ConnectBooster"
-                  value={form.connectbooster_customer_id}
-                  onChange={(e) =>
-                    setForm((f) => ({
-                      ...f,
-                      connectbooster_customer_id: e.target.value,
-                    }))
-                  }
-                />
-                <p className="text-xs text-muted-foreground">
-                  Used for invoices and the client pay portal. Required for Billing contacts to open ConnectBooster.
-                </p>
-              </div>
-              <div className="space-y-2">
-                <Label htmlFor="ccbportal">ConnectBooster portal URL (optional)</Label>
-                <Input
-                  id="ccbportal"
-                  type="url"
-                  placeholder="https://pay.example.com — leave blank for global default"
-                  value={form.connectbooster_portal_url}
-                  onChange={(e) =>
-                    setForm((f) => ({
-                      ...f,
-                      connectbooster_portal_url: e.target.value,
                     }))
                   }
                 />

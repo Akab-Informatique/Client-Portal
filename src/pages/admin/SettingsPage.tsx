@@ -8,7 +8,6 @@ import {
   KeyRound,
   Loader2,
   Mail,
-  Receipt,
   Settings2,
   Shield,
   Wrench,
@@ -35,10 +34,6 @@ import {
 } from "@/lib/sharepoint";
 import { fetchItGlueStatus } from "@/lib/itglue";
 import { fetchSmtpStatus, type SmtpStatusResponse } from "@/lib/smtp";
-import {
-  fetchConnectBoosterStatus,
-  type ConnectBoosterStatusResponse,
-} from "@/lib/connectbooster";
 
 type ConnState = "unknown" | "ok" | "fail" | "off";
 
@@ -78,27 +73,6 @@ export function SettingsPage() {
   const [linkedClients, setLinkedClients] = useState<number | null>(null);
   const [totalClients, setTotalClients] = useState<number | null>(null);
   const [igLinked, setIgLinked] = useState<number | null>(null);
-  const [cbStatus, setCbStatus] = useState<ConnState>("unknown");
-  const [cbDetail, setCbDetail] = useState<ConnectBoosterStatusResponse | null>(
-    null,
-  );
-  const [cbChecking, setCbChecking] = useState(false);
-
-  const loadConnectBoosterStatus = async () => {
-    setCbChecking(true);
-    try {
-      const d = await fetchConnectBoosterStatus();
-      setCbDetail(d);
-      if (!d.configured && !d.ok) setCbStatus("off");
-      else if (d.ok || d.portalConfigured || d.apiConfigured) setCbStatus("ok");
-      else setCbStatus("fail");
-    } catch {
-      setCbStatus("fail");
-      setCbDetail({ message: "Could not reach /api/connectbooster/status" });
-    } finally {
-      setCbChecking(false);
-    }
-  };
 
   const loadAutotaskStatus = async (refresh: boolean) => {
     setAtChecking(true);
@@ -145,7 +119,6 @@ export function SettingsPage() {
 
   useEffect(() => {
     void loadAutotaskStatus(false);
-    void loadConnectBoosterStatus();
     fetchSharePointStatus(false)
       .then((s) => {
         if (!s.configured) setSpStatus("off");
@@ -447,70 +420,6 @@ export function SettingsPage() {
                     onClick={() => void loadAutotaskStatus(true)}
                   >
                     {atChecking ? (
-                      <Loader2 className="size-3.5 animate-spin" />
-                    ) : (
-                      t("settings.retest")
-                    )}
-                  </Button>
-                </div>
-              </div>
-            </div>
-
-            <div className="flex flex-col gap-3 rounded-xl border border-border p-4">
-              <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
-                <div className="flex items-start gap-3">
-                  <div className="flex size-10 shrink-0 items-center justify-center rounded-lg bg-muted">
-                    <Receipt className="size-5 text-foreground" />
-                  </div>
-                  <div className="min-w-0 space-y-1">
-                    <p className="font-semibold">ConnectBooster</p>
-                    <p className="text-xs text-muted-foreground">
-                      {t("settings.connectBoosterHint")}
-                    </p>
-                    {cbDetail?.message && cbStatus !== "unknown" && (
-                      <p className="text-xs text-muted-foreground">
-                        {cbDetail.message}
-                      </p>
-                    )}
-                    {cbDetail?.issues && cbDetail.issues.length > 0 && (
-                      <ul className="list-disc space-y-0.5 pl-4 text-xs text-amber-700 dark:text-amber-400">
-                        {cbDetail.issues.map((w) => (
-                          <li key={w}>{w}</li>
-                        ))}
-                      </ul>
-                    )}
-                    {cbDetail?.fix &&
-                      cbDetail.fix.length > 0 &&
-                      cbStatus !== "ok" && (
-                        <ol className="list-decimal space-y-0.5 pl-4 text-xs text-muted-foreground">
-                          {cbDetail.fix.map((step) => (
-                            <li
-                              key={step}
-                              className="break-all font-mono text-[11px]"
-                            >
-                              {step}
-                            </li>
-                          ))}
-                        </ol>
-                      )}
-                  </div>
-                </div>
-                <div className="flex flex-wrap items-center gap-2">
-                  {statusBadge(
-                    cbStatus,
-                    cbDetail?.portalConfigured && !cbDetail?.apiConfigured
-                      ? t("settings.connectBoosterPartial")
-                      : t("settings.statusConnected"),
-                    t("settings.statusNotConfigured"),
-                  )}
-                  <Button
-                    type="button"
-                    variant="outline"
-                    size="sm"
-                    disabled={cbChecking}
-                    onClick={() => void loadConnectBoosterStatus()}
-                  >
-                    {cbChecking ? (
                       <Loader2 className="size-3.5 animate-spin" />
                     ) : (
                       t("settings.retest")

@@ -104,18 +104,15 @@ export const fr: Dictionary = {
   },
   billing: {
     invoicesTitle: "Factures",
-    invoicesDesc:
-      "Factures Autotask pour le client sélectionné dans le menu. Intégration à venir.",
+    invoicesDesc: "Factures Autotask pour le client sélectionné.",
     contractsTitle: "Contrats",
     contractsDesc:
-      "Contrats Autotask pour le client sélectionné dans le menu. Intégration à venir.",
-    comingSoonTitle: "Bientôt lié à Autotask",
+      "Contrats Autotask (vue client sécurisée, sans coûts ni profits).",
+    comingSoonTitle: "Lié à Autotask",
     comingSoonDesc:
-      "Cette section est prête dans le menu. Les données se chargeront depuis Autotask pour le client actif.",
-    invoicesSoonDetail:
-      "La liste des factures, soldes et liens PDF apparaîtront ici une fois l'API de facturation Autotask connectée.",
-    contractsSoonDetail:
-      "La liste des contrats, dates de couverture et statuts apparaîtront ici une fois les contrats Autotask connectés.",
+      "Cette section charge les données Autotask pour le client actif.",
+    invoicesSoonDetail: "",
+    contractsSoonDetail: "",
     noAutotaskId:
       "Ce client n'a pas encore d'ID d'entreprise Autotask. Configurez-le sous Clients → Modifier.",
     noClientsDesc:
@@ -125,41 +122,40 @@ export const fr: Dictionary = {
     manageClients: "Gérer les clients",
     clientTitle: "Facturation",
     clientDesc:
-      "Factures et contrats de votre entreprise. Seuls les contacts avec accès facturation voient cette section.",
-    clientDeniedTitle: "Facturation non disponible",
-    clientDeniedDesc:
-      "Votre compte n'a pas accès à la facturation. Demandez à votre fournisseur de l'activer sur votre profil.",
-    invoicesDescCb:
-      "Factures ConnectBooster. Payez les soldes ouverts dans le portail de paiement sécurisé.",
-    contractsDescSafe:
-      "Vos ententes de service. Coûts, profits et tarification interne ne sont jamais affichés.",
-    contractsPrivacyNote:
-      "Seuls les champs clients sont affichés (nom, type, statut, dates, courte description). Les données financières restent chez votre fournisseur.",
-    openCbPortal: "Ouvrir le portail ConnectBooster",
-    payInCb: "Payer dans ConnectBooster",
-    pay: "Payer",
-    view: "Voir",
-    noConnectBoosterTitle: "Portail de facturation non lié",
-    noConnectBoosterId:
-      "Cette entreprise n'a pas encore d'ID client ConnectBooster. Demandez à votre fournisseur de le définir sous Clients → Modifier.",
-    invoicesPortalOnly:
-      "Les détails des factures s'ouvrent dans votre portail de paiement ConnectBooster. Utilisez le bouton ci-dessous pour voir et payer.",
-    invoicesEmpty: "Aucune facture pour ce compte.",
-    invoicesLoadFailed: "Impossible de charger les factures.",
-    contractsLoadFailed: "Impossible de charger les contrats.",
-    contractsEmptyTitle: "Aucun contrat pour le moment",
-    contractsEmptyDesc: "Aucun contrat visible n'a été renvoyé pour votre entreprise.",
-    invoicesFootnote:
-      "Les paiements sont traités de façon sécurisée dans ConnectBooster. Ce portail ne stocke jamais de données de carte ou de compte bancaire.",
-    colInvoice: "Facture",
-    colStatus: "Statut",
-    colIssued: "Émise",
+      "Factures Autotask et lien pour payer en ligne. Seuls les contacts avec accès facturation peuvent ouvrir cette section.",
+    invoicesDescAt:
+      "Factures Autotask de votre entreprise. Utilisez le bouton portail de paiement pour payer en ligne.",
+    openPaymentPortal: "Ouvrir le portail de paiement",
+    paymentPortalTitle: "Payer en ligne",
+    paymentPortalHint:
+      "Ouvre le portail de paiement SOLU TI pour régler vos factures en toute sécurité.",
+    invoicesEmptyTitle: "Aucune facture",
+    invoicesEmptyDesc:
+      "Lorsque des factures sont publiées dans Autotask pour votre entreprise, elles apparaîtront ici.",
+    statusOpen: "Ouverte",
+    statusPaid: "Payée",
+    statusVoided: "Annulée",
+    colNumber: "Numéro",
+    colDate: "Date",
     colDue: "Échéance",
-    colBalance: "Solde",
-    colContract: "Contrat",
+    colAmount: "Montant",
+    colStatus: "Statut",
+    colName: "Nom",
     colType: "Type",
     colStart: "Début",
     colEnd: "Fin",
+    invoicesLoadFailed: "Impossible de charger les factures.",
+    contractsLoadFailed: "Impossible de charger les contrats.",
+    contractsEmptyTitle: "Aucun contrat",
+    contractsEmptyDesc:
+      "Lorsque des contrats sont configurés dans Autotask pour votre entreprise, ils apparaîtront ici.",
+    contractsDescSafe:
+      "Vos ententes de service Autotask. Les détails financiers restent chez votre fournisseur.",
+    contractsPrivacyNote:
+      "Seule une vue restreinte est affichée (nom, statut, dates, courte description). Coûts et marges ne sont jamais partagés ici.",
+    clientDeniedTitle: "Facturation non disponible",
+    clientDeniedDesc:
+      "Votre compte n'a pas accès à la facturation. Demandez à votre fournisseur de l'activer sur votre profil.",
   },
   settings: {
     title: "Paramètres généraux",
@@ -197,9 +193,6 @@ export const fr: Dictionary = {
     autotaskContactsWarn:
       "Les billets clients nécessitent la permission Contacts sur l'utilisateur API Autotask (CRM → Contacts → Afficher).",
     retest: "Retester",
-    connectBoosterHint:
-      "Portail de paiement des factures clients. Définissez CONNECTBOOSTER_PORTAL_BASE_URL et l'ID client par entreprise.",
-    connectBoosterPartial: "Portail seulement (pas d'API factures)",
     statusConnected: "Connecté",
     statusNotConfigured: "Non configuré",
     statusIssue: "Problème",

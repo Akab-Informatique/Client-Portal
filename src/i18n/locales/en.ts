@@ -103,18 +103,15 @@ export const en = {
   },
   billing: {
     invoicesTitle: "Invoices",
-    invoicesDesc:
-      "ConnectBooster invoices for the client selected in the sidebar.",
+    invoicesDesc: "Autotask invoices for the selected client.",
     contractsTitle: "Contracts",
     contractsDesc:
       "Client-safe Autotask contracts for the selected client (no cost or profit).",
-    comingSoonTitle: "Linked to Autotask soon",
+    comingSoonTitle: "Linked to Autotask",
     comingSoonDesc:
-      "This section is ready in the menu. Data will load from Autotask for the active client.",
-    invoicesSoonDetail:
-      "Invoice list, balances, and PDF links will appear here once the Autotask billing API is connected.",
-    contractsSoonDetail:
-      "Contract list, coverage dates, and status will appear here once Autotask contracts are connected.",
+      "This section loads live data from Autotask for the active client.",
+    invoicesSoonDetail: "",
+    contractsSoonDetail: "",
     noAutotaskId:
       "This client has no Autotask company ID yet. Set it under Clients → Edit.",
     noClientsDesc: "Add a client company before using billing views.",
@@ -122,41 +119,40 @@ export const en = {
     manageClients: "Manage clients",
     clientTitle: "Billing",
     clientDesc:
-      "Invoices and contracts for your company. Only contacts with billing access can open this section.",
-    clientDeniedTitle: "Billing not available",
-    clientDeniedDesc:
-      "Your account does not have billing access. Ask your provider administrator to enable it on your user profile.",
-    invoicesDescCb:
-      "Invoices from ConnectBooster. Pay open balances in the secure payment portal.",
-    contractsDescSafe:
-      "Your service agreements. Cost, profit, and internal pricing are never shown.",
-    contractsPrivacyNote:
-      "Only client-safe fields are shown (name, type, status, dates, short description). Financial internals stay with your provider.",
-    openCbPortal: "Open ConnectBooster portal",
-    payInCb: "Pay in ConnectBooster",
-    pay: "Pay",
-    view: "View",
-    noConnectBoosterTitle: "Billing portal not linked",
-    noConnectBoosterId:
-      "This company has no ConnectBooster customer ID yet. Ask your provider to set it under Clients → Edit.",
-    invoicesPortalOnly:
-      "Invoice details open in your ConnectBooster payment portal. Use the button below to view invoices and pay.",
-    invoicesEmpty: "No invoices found for this account.",
-    invoicesLoadFailed: "Could not load invoices.",
-    contractsLoadFailed: "Could not load contracts.",
-    contractsEmptyTitle: "No contracts yet",
-    contractsEmptyDesc: "No client-visible contracts were returned for your company.",
-    invoicesFootnote:
-      "Payments are processed securely in ConnectBooster. This portal never stores card or bank details.",
-    colInvoice: "Invoice",
-    colStatus: "Status",
-    colIssued: "Issued",
+      "Invoices from Autotask and a link to pay online. Only contacts with billing access can open this section.",
+    invoicesDescAt:
+      "Invoices from Autotask for your company. Use the payment portal button to pay online.",
+    openPaymentPortal: "Open payment portal",
+    paymentPortalTitle: "Pay online",
+    paymentPortalHint:
+      "Opens the SOLU TI payment portal so you can pay open invoices securely.",
+    invoicesEmptyTitle: "No invoices yet",
+    invoicesEmptyDesc:
+      "When invoices are posted in Autotask for your company, they will appear here.",
+    statusOpen: "Open",
+    statusPaid: "Paid",
+    statusVoided: "Voided",
+    colNumber: "Number",
+    colDate: "Date",
     colDue: "Due",
-    colBalance: "Balance",
-    colContract: "Contract",
+    colAmount: "Amount",
+    colStatus: "Status",
+    colName: "Name",
     colType: "Type",
     colStart: "Start",
     colEnd: "End",
+    invoicesLoadFailed: "Could not load invoices.",
+    contractsLoadFailed: "Could not load contracts.",
+    contractsEmptyTitle: "No contracts yet",
+    contractsEmptyDesc:
+      "When contracts are set up in Autotask for your company, they will appear here.",
+    contractsDescSafe:
+      "Your service agreements from Autotask. Financial details stay with your provider.",
+    contractsPrivacyNote:
+      "Only a restricted view is shown (name, status, dates, short description). Costs and margins are never shared here.",
+    clientDeniedTitle: "Billing not available",
+    clientDeniedDesc:
+      "Your account does not have billing access. Ask your provider administrator to enable it on your user profile.",
   },
   settings: {
     title: "General settings",
@@ -193,9 +189,6 @@ export const en = {
     autotaskContactsWarn:
       "Client tickets need Contacts permission on the Autotask API user (CRM → Contacts → View).",
     retest: "Retest",
-    connectBoosterHint:
-      "Client invoice pay portal. Set CONNECTBOOSTER_PORTAL_BASE_URL and map each client customer ID.",
-    connectBoosterPartial: "Portal only (no invoice API)",
     statusConnected: "Connected",
     statusNotConfigured: "Not configured",
     statusIssue: "Issue",

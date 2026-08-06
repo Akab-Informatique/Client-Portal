@@ -10,10 +10,12 @@ import { Link, useNavigate } from "react-router-dom";
 import { useSelectedClient } from "@/context/SelectedClientContext";
 import { useLocale } from "@/hooks/use-locale";
 import {
-  fetchConnectBoosterInvoices,
+  PAYMENT_PORTAL_URL,
+  fetchClientInvoices,
+  formatInvoiceDate,
   formatMoney,
-  type ConnectBoosterInvoice,
-} from "@/lib/connectbooster";
+  type ClientInvoice,
+} from "@/lib/invoices";
 import {
   fetchClientContracts,
   formatContractDate,
@@ -47,10 +49,8 @@ export function BillingPlaceholderPage({ kind }: { kind: BillingKind }) {
   const { selectedClient, clients, loading } = useSelectedClient();
 
   const [invLoading, setInvLoading] = useState(false);
-  const [invoices, setInvoices] = useState<ConnectBoosterInvoice[]>([]);
+  const [invoices, setInvoices] = useState<ClientInvoice[]>([]);
   const [invError, setInvError] = useState<string | null>(null);
-  const [portalUrl, setPortalUrl] = useState<string | null>(null);
-  const [payUrl, setPayUrl] = useState<string | null>(null);
 
   const [ctLoading, setCtLoading] = useState(false);
   const [contracts, setContracts] = useState<ClientSafeContract[]>([]);
@@ -59,30 +59,30 @@ export function BillingPlaceholderPage({ kind }: { kind: BillingKind }) {
   const title =
     kind === "invoices" ? t("billing.invoicesTitle") : t("billing.contractsTitle");
   const desc =
-    kind === "invoices" ? t("billing.invoicesDescCb") : t("billing.contractsDescSafe");
+    kind === "invoices"
+      ? t("billing.invoicesDescAt")
+      : t("billing.contractsDescSafe");
   const Icon = kind === "invoices" ? Receipt : FileStack;
 
   const loadInvoices = useCallback(async () => {
     if (!selectedClient) return;
-    const customerId = (selectedClient.connectbooster_customer_id || "").trim();
-    const override = (selectedClient.connectbooster_portal_url || "").trim();
+    const atId = (selectedClient.autotask_company_id || "").trim();
     setInvLoading(true);
     setInvError(null);
     try {
-      if (!customerId) {
+      if (!atId) {
         setInvoices([]);
-        setPortalUrl(override || null);
-        setPayUrl(override || null);
-        setInvError(t("billing.noConnectBoosterId"));
+        setInvError(t("billing.noAutotaskId"));
         return;
       }
-      const res = await fetchConnectBoosterInvoices(customerId);
+      const res = await fetchClientInvoices(atId);
       setInvoices(res.invoices);
-      setPortalUrl(override || res.portalUrl);
-      setPayUrl(res.payUrl || override || res.portalUrl);
       if (res.error && res.invoices.length === 0) setInvError(res.error);
     } catch (e) {
-      setInvError(e instanceof Error ? e.message : t("billing.invoicesLoadFailed"));
+      setInvError(
+        e instanceof Error ? e.message : t("billing.invoicesLoadFailed"),
+      );
+      setInvoices([]);
     } finally {
       setInvLoading(false);
     }
@@ -103,7 +103,10 @@ export function BillingPlaceholderPage({ kind }: { kind: BillingKind }) {
       setContracts(res.contracts);
       if (res.error) setCtError(res.error);
     } catch (e) {
-      setCtError(e instanceof Error ? e.message : t("billing.contractsLoadFailed"));
+      setCtError(
+        e instanceof Error ? e.message : t("billing.contractsLoadFailed"),
+      );
+      setContracts([]);
     } finally {
       setCtLoading(false);
     }
@@ -137,9 +140,32 @@ export function BillingPlaceholderPage({ kind }: { kind: BillingKind }) {
     );
   }
 
-  const openExternal = (url: string | null | undefined) => {
-    if (!url) return;
-    window.open(url, "_blank", "noopener,noreferrer");
+  const statusBadge = (status: ClientInvoice["status"]) => {
+    if (status === "paid") {
+      return (
+        <Badge
+          variant="outline"
+          className="border-emerald-500/40 bg-emerald-500/10 text-emerald-700 dark:text-emerald-400"
+        >
+          {t("billing.statusPaid")}
+        </Badge>
+      );
+    }
+    if (status === "voided") {
+      return (
+        <Badge variant="outline" className="text-muted-foreground">
+          {t("billing.statusVoided")}
+        </Badge>
+      );
+    }
+    return (
+      <Badge
+        variant="outline"
+        className="border-amber-500/40 bg-amber-500/10 text-amber-800 dark:text-amber-400"
+      >
+        {t("billing.statusOpen")}
+      </Badge>
+    );
   };
 
   return (
@@ -161,34 +187,18 @@ export function BillingPlaceholderPage({ kind }: { kind: BillingKind }) {
             <p className="mt-1 max-w-2xl text-sm text-muted-foreground">{desc}</p>
           </div>
           <div className="flex flex-wrap gap-2">
-            {kind === "invoices" && portalUrl && (
-              <Button
-                type="button"
-                size="sm"
-                className="gap-1.5"
-                onClick={() => openExternal(portalUrl)}
-              >
-                <ExternalLink className="size-3.5" />
-                {t("billing.openCbPortal")}
+            {kind === "invoices" && (
+              <Button asChild size="sm" className="gap-1.5">
+                <a
+                  href={PAYMENT_PORTAL_URL}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                >
+                  <ExternalLink className="size-3.5" />
+                  {t("billing.openPaymentPortal")}
+                </a>
               </Button>
             )}
-            <Button
-              type="button"
-              variant="outline"
-              size="sm"
-              className="gap-1.5"
-              disabled={kind === "invoices" ? invLoading : ctLoading}
-              onClick={() =>
-                void (kind === "invoices" ? loadInvoices() : loadContracts())
-              }
-            >
-              {(kind === "invoices" ? invLoading : ctLoading) ? (
-                <Loader2 className="size-3.5 animate-spin" />
-              ) : (
-                <RefreshCw className="size-3.5" />
-              )}
-              {t("common.refresh")}
-            </Button>
             <Button asChild variant="outline" size="sm">
               <Link to="/admin/clients">{t("billing.manageClients")}</Link>
             </Button>
@@ -196,170 +206,182 @@ export function BillingPlaceholderPage({ kind }: { kind: BillingKind }) {
         </div>
       </BlurFade>
 
-      <BlurFade delay={0.08}>
-        <Card>
-          <CardHeader>
-            <CardTitle className="flex items-center gap-2 text-base">
-              <Icon className="size-5 text-primary" />
-              {title}
-            </CardTitle>
-            <CardDescription>
-              {kind === "contracts"
-                ? t("billing.contractsPrivacyNote")
-                : t("billing.invoicesFootnote")}
-            </CardDescription>
-          </CardHeader>
-          <CardContent className="space-y-4">
-            {kind === "invoices" && (
-              <>
-                {invError && (
-                  <p className="rounded-lg border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-sm">
-                    {invError}
-                  </p>
-                )}
-                {selectedClient && (
-                  <p className="font-mono text-xs text-muted-foreground">
-                    CB customer:{" "}
-                    {selectedClient.connectbooster_customer_id || "—"} · AT company:{" "}
-                    {selectedClient.autotask_company_id || "—"}
-                  </p>
-                )}
-                {invLoading && invoices.length === 0 ? (
-                  <div className="flex items-center gap-2 text-sm text-muted-foreground">
-                    <Loader2 className="size-4 animate-spin" />
-                    {t("common.loading")}
-                  </div>
-                ) : invoices.length === 0 ? (
-                  <div className="space-y-3 rounded-lg border border-dashed p-6 text-center text-sm text-muted-foreground">
-                    <p>{t("billing.invoicesPortalOnly")}</p>
-                    {portalUrl && (
-                      <Button
-                        type="button"
-                        className="gap-1.5"
-                        onClick={() => openExternal(portalUrl)}
-                      >
-                        <ExternalLink className="size-3.5" />
-                        {t("billing.openCbPortal")}
-                      </Button>
-                    )}
-                  </div>
+      {kind === "invoices" ? (
+        <BlurFade delay={0.08}>
+          <Card>
+            <CardHeader className="flex flex-row items-start justify-between gap-3 space-y-0">
+              <div>
+                <CardTitle className="flex items-center gap-2 text-base">
+                  <Receipt className="size-5 text-primary" />
+                  {t("billing.invoicesTitle")}
+                </CardTitle>
+                <CardDescription>{t("billing.invoicesDescAt")}</CardDescription>
+              </div>
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                className="gap-1.5"
+                disabled={invLoading}
+                onClick={() => void loadInvoices()}
+              >
+                {invLoading ? (
+                  <Loader2 className="size-3.5 animate-spin" />
                 ) : (
-                  <div className="overflow-x-auto rounded-lg border">
-                    <Table>
-                      <TableHeader>
-                        <TableRow>
-                          <TableHead>{t("billing.colInvoice")}</TableHead>
-                          <TableHead>{t("billing.colStatus")}</TableHead>
-                          <TableHead>{t("billing.colDue")}</TableHead>
-                          <TableHead className="text-right">
-                            {t("billing.colBalance")}
-                          </TableHead>
-                          <TableHead className="text-right">
-                            {t("common.actions")}
-                          </TableHead>
+                  <RefreshCw className="size-3.5" />
+                )}
+                {t("common.refresh")}
+              </Button>
+            </CardHeader>
+            <CardContent className="space-y-3">
+              {invError && (
+                <p className="rounded-lg border border-destructive/40 bg-destructive/10 px-3 py-2 text-sm text-destructive">
+                  {invError}
+                </p>
+              )}
+              {invLoading && invoices.length === 0 ? (
+                <div className="flex items-center gap-2 text-sm text-muted-foreground">
+                  <Loader2 className="size-4 animate-spin" />
+                  {t("common.loading")}
+                </div>
+              ) : invoices.length === 0 ? (
+                <EmptyState
+                  icon={<Receipt className="size-5" />}
+                  title={t("billing.invoicesEmptyTitle")}
+                  description={t("billing.invoicesEmptyDesc")}
+                />
+              ) : (
+                <div className="overflow-x-auto rounded-lg border border-border">
+                  <Table>
+                    <TableHeader>
+                      <TableRow>
+                        <TableHead>{t("billing.colNumber")}</TableHead>
+                        <TableHead>{t("billing.colDate")}</TableHead>
+                        <TableHead>{t("billing.colDue")}</TableHead>
+                        <TableHead className="text-right">
+                          {t("billing.colAmount")}
+                        </TableHead>
+                        <TableHead>{t("billing.colStatus")}</TableHead>
+                      </TableRow>
+                    </TableHeader>
+                    <TableBody>
+                      {invoices.map((inv) => (
+                        <TableRow key={inv.id}>
+                          <TableCell className="font-medium tabular-nums">
+                            {inv.number || `#${inv.id}`}
+                          </TableCell>
+                          <TableCell className="tabular-nums text-muted-foreground">
+                            {formatInvoiceDate(inv.invoiceDate)}
+                          </TableCell>
+                          <TableCell className="tabular-nums text-muted-foreground">
+                            {formatInvoiceDate(inv.dueDate)}
+                          </TableCell>
+                          <TableCell className="text-right font-medium tabular-nums">
+                            {formatMoney(inv.total)}
+                          </TableCell>
+                          <TableCell>{statusBadge(inv.status)}</TableCell>
                         </TableRow>
-                      </TableHeader>
-                      <TableBody>
-                        {invoices.map((inv) => (
-                          <TableRow key={inv.id}>
-                            <TableCell className="font-medium">
-                              {inv.number || inv.id}
-                            </TableCell>
-                            <TableCell>
-                              <Badge variant="outline">
-                                {inv.status || inv.statusKind}
-                              </Badge>
-                            </TableCell>
-                            <TableCell>
-                              {formatContractDate(inv.dueDate)}
-                            </TableCell>
-                            <TableCell className="text-right tabular-nums">
-                              {formatMoney(inv.balance, inv.currency || "USD")}
-                            </TableCell>
-                            <TableCell className="text-right">
-                              {(inv.payUrl || payUrl) && (
-                                <Button
-                                  type="button"
-                                  size="sm"
-                                  onClick={() =>
-                                    openExternal(inv.payUrl || payUrl)
-                                  }
-                                >
-                                  {t("billing.pay")}
-                                </Button>
-                              )}
-                            </TableCell>
-                          </TableRow>
-                        ))}
-                      </TableBody>
-                    </Table>
-                  </div>
-                )}
-              </>
-            )}
-
-            {kind === "contracts" && (
-              <>
-                {ctError && (
-                  <p className="rounded-lg border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-sm">
-                    {ctError}
-                  </p>
-                )}
-                {ctLoading && contracts.length === 0 ? (
-                  <div className="flex items-center gap-2 text-sm text-muted-foreground">
-                    <Loader2 className="size-4 animate-spin" />
-                    {t("common.loading")}
-                  </div>
-                ) : contracts.length === 0 ? (
-                  <p className="text-sm text-muted-foreground">
-                    {t("billing.contractsEmptyDesc")}
-                  </p>
+                      ))}
+                    </TableBody>
+                  </Table>
+                </div>
+              )}
+            </CardContent>
+          </Card>
+        </BlurFade>
+      ) : (
+        <BlurFade delay={0.08}>
+          <Card>
+            <CardHeader className="flex flex-row items-start justify-between gap-3 space-y-0">
+              <div>
+                <CardTitle className="flex items-center gap-2 text-base">
+                  <FileStack className="size-5 text-primary" />
+                  {t("billing.contractsTitle")}
+                </CardTitle>
+                <CardDescription>
+                  {t("billing.contractsDescSafe")}
+                </CardDescription>
+              </div>
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                className="gap-1.5"
+                disabled={ctLoading}
+                onClick={() => void loadContracts()}
+              >
+                {ctLoading ? (
+                  <Loader2 className="size-3.5 animate-spin" />
                 ) : (
-                  <div className="overflow-x-auto rounded-lg border">
-                    <Table>
-                      <TableHeader>
-                        <TableRow>
-                          <TableHead>{t("billing.colContract")}</TableHead>
-                          <TableHead>{t("billing.colType")}</TableHead>
-                          <TableHead>{t("billing.colStatus")}</TableHead>
-                          <TableHead>{t("billing.colStart")}</TableHead>
-                          <TableHead>{t("billing.colEnd")}</TableHead>
-                        </TableRow>
-                      </TableHeader>
-                      <TableBody>
-                        {contracts.map((c) => (
-                          <TableRow key={c.id}>
-                            <TableCell className="font-medium">
-                              {c.name}
-                              {c.number ? (
-                                <span className="ml-1 text-xs text-muted-foreground">
-                                  #{c.number}
-                                </span>
-                              ) : null}
-                            </TableCell>
-                            <TableCell>{c.typeLabel || "—"}</TableCell>
-                            <TableCell>
-                              <Badge variant="outline">
-                                {c.statusLabel || "—"}
-                              </Badge>
-                            </TableCell>
-                            <TableCell>
-                              {formatContractDate(c.startDate)}
-                            </TableCell>
-                            <TableCell>
-                              {formatContractDate(c.endDate)}
-                            </TableCell>
-                          </TableRow>
-                        ))}
-                      </TableBody>
-                    </Table>
-                  </div>
+                  <RefreshCw className="size-3.5" />
                 )}
-              </>
-            )}
-          </CardContent>
-        </Card>
-      </BlurFade>
+                {t("common.refresh")}
+              </Button>
+            </CardHeader>
+            <CardContent className="space-y-3">
+              <p className="rounded-lg border border-border bg-muted/30 px-3 py-2 text-xs text-muted-foreground">
+                {t("billing.contractsPrivacyNote")}
+              </p>
+              {ctError && (
+                <p className="rounded-lg border border-destructive/40 bg-destructive/10 px-3 py-2 text-sm text-destructive">
+                  {ctError}
+                </p>
+              )}
+              {ctLoading && contracts.length === 0 ? (
+                <div className="flex items-center gap-2 text-sm text-muted-foreground">
+                  <Loader2 className="size-4 animate-spin" />
+                  {t("common.loading")}
+                </div>
+              ) : contracts.length === 0 ? (
+                <EmptyState
+                  icon={<FileStack className="size-5" />}
+                  title={t("billing.contractsEmptyTitle")}
+                  description={t("billing.contractsEmptyDesc")}
+                />
+              ) : (
+                <div className="overflow-x-auto rounded-lg border border-border">
+                  <Table>
+                    <TableHeader>
+                      <TableRow>
+                        <TableHead>{t("billing.colName")}</TableHead>
+                        <TableHead>{t("billing.colNumber")}</TableHead>
+                        <TableHead>{t("billing.colType")}</TableHead>
+                        <TableHead>{t("billing.colStatus")}</TableHead>
+                        <TableHead>{t("billing.colStart")}</TableHead>
+                        <TableHead>{t("billing.colEnd")}</TableHead>
+                      </TableRow>
+                    </TableHeader>
+                    <TableBody>
+                      {contracts.map((c) => (
+                        <TableRow key={c.id}>
+                          <TableCell className="font-medium">{c.name}</TableCell>
+                          <TableCell className="tabular-nums text-muted-foreground">
+                            {c.number || "—"}
+                          </TableCell>
+                          <TableCell className="text-muted-foreground">
+                            {c.typeLabel || "—"}
+                          </TableCell>
+                          <TableCell>
+                            <Badge variant="outline">
+                              {c.statusLabel || "—"}
+                            </Badge>
+                          </TableCell>
+                          <TableCell className="tabular-nums text-muted-foreground">
+                            {formatContractDate(c.startDate)}
+                          </TableCell>
+                          <TableCell className="tabular-nums text-muted-foreground">
+                            {formatContractDate(c.endDate)}
+                          </TableCell>
+                        </TableRow>
+                      ))}
+                    </TableBody>
+                  </Table>
+                </div>
+              )}
+            </CardContent>
+          </Card>
+        </BlurFade>
+      )}
     </div>
   );
 }

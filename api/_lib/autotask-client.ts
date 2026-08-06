@@ -1777,3 +1777,122 @@ export async function fetchClientSafeContractsForCompany(
 
   return { contracts, zoneUrl: base };
 }
+
+// ---------------------------------------------------------------------------
+// Invoices — client-facing list from Autotask (no internal cost fields)
+// ---------------------------------------------------------------------------
+
+const CLIENT_INVOICE_FIELDS = [
+  "id",
+  "companyID",
+  "invoiceNumber",
+  "invoiceDateTime",
+  "invoiceTotal",
+  "dueDate",
+  "paidDate",
+  "isVoided",
+  "totalTaxValue",
+  "fromDate",
+  "toDate",
+] as const;
+
+export type ClientInvoice = {
+  id: number;
+  number: string | null;
+  invoiceDate: string | null;
+  dueDate: string | null;
+  paidDate: string | null;
+  total: number | null;
+  tax: number | null;
+  isVoided: boolean;
+  /** open | paid | voided */
+  status: "open" | "paid" | "voided";
+  fromDate: string | null;
+  toDate: string | null;
+};
+
+function mapClientInvoice(raw: Record<string, unknown>): ClientInvoice | null {
+  const id = Number(raw.id);
+  if (!Number.isFinite(id)) return null;
+  const isVoided = raw.isVoided === true || raw.isVoided === 1 || raw.isVoided === "true";
+  const paidRaw = raw.paidDate != null ? String(raw.paidDate).trim() : "";
+  const paidDate = paidRaw && !/^0001/.test(paidRaw) ? paidRaw.slice(0, 32) : null;
+  let status: ClientInvoice["status"] = "open";
+  if (isVoided) status = "voided";
+  else if (paidDate) status = "paid";
+
+  const total =
+    raw.invoiceTotal != null && raw.invoiceTotal !== ""
+      ? Number(raw.invoiceTotal)
+      : null;
+  const tax =
+    raw.totalTaxValue != null && raw.totalTaxValue !== ""
+      ? Number(raw.totalTaxValue)
+      : null;
+
+  const number =
+    raw.invoiceNumber != null && String(raw.invoiceNumber).trim()
+      ? String(raw.invoiceNumber).trim()
+      : null;
+
+  return {
+    id,
+    number,
+    invoiceDate:
+      raw.invoiceDateTime != null
+        ? String(raw.invoiceDateTime).slice(0, 32)
+        : null,
+    dueDate: raw.dueDate != null ? String(raw.dueDate).slice(0, 32) : null,
+    paidDate,
+    total: Number.isFinite(total as number) ? (total as number) : null,
+    tax: Number.isFinite(tax as number) ? (tax as number) : null,
+    isVoided,
+    status,
+    fromDate: raw.fromDate != null ? String(raw.fromDate).slice(0, 32) : null,
+    toDate: raw.toDate != null ? String(raw.toDate).slice(0, 32) : null,
+  };
+}
+
+/**
+ * Invoices for one Autotask company (client + staff billing views).
+ * Uses company Autotask ID only — never ConnectBooster.
+ */
+export async function fetchClientInvoicesForCompany(
+  autotaskCompanyId: string | number,
+): Promise<{
+  invoices: ClientInvoice[];
+  zoneUrl: string;
+}> {
+  const cfg = getAutotaskConfigFromEnv();
+  if (!cfg) throw new Error("Autotask is not configured");
+
+  const base = await resolveZoneBase(cfg);
+  const companyIdNum = Number(autotaskCompanyId);
+  if (!Number.isFinite(companyIdNum)) {
+    throw new Error("Invalid Autotask company ID");
+  }
+
+  const body = {
+    MaxRecords: 100,
+    IncludeFields: [...CLIENT_INVOICE_FIELDS],
+    filter: [
+      {
+        op: "and",
+        items: [{ op: "eq", field: "companyID", value: companyIdNum }],
+      },
+    ],
+  };
+
+  type QueryRes = { items?: Array<Record<string, unknown>> };
+  const data = await postQuery<QueryRes>(base, cfg, "Invoices/query", body);
+  const invoices = (data.items ?? [])
+    .map((item) => mapClientInvoice(item))
+    .filter((inv): inv is ClientInvoice => inv != null)
+    .sort((a, b) => {
+      const da = a.invoiceDate || "";
+      const db = b.invoiceDate || "";
+      return db.localeCompare(da);
+    });
+
+  return { invoices, zoneUrl: base };
+}
