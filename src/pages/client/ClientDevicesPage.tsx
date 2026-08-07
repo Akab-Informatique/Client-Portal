@@ -137,7 +137,16 @@ export function ClientDevicesPage() {
     try {
       const res = await fetchDattoRmmDevices(siteUid);
       setConfigured(res.configured);
-      setDevices(res.devices);
+      // Never expose Web Remote links for devices this user is not granted
+      const grants = parseWebRemoteDeviceUids(user?.datto_web_remote_device_uids);
+      setDevices(
+        res.devices.map((d) => ({
+          ...d,
+          webRemoteUrl: clientCanWebRemoteDevice(grants, d.uid)
+            ? d.webRemoteUrl
+            : null,
+        })),
+      );
       setOnlineCount(res.onlineCount);
       setOfflineCount(res.offlineCount);
       if (res.error) setError(res.error);
@@ -148,7 +157,7 @@ export function ClientDevicesPage() {
     } finally {
       setLoading(false);
     }
-  }, [siteUid, t]);
+  }, [siteUid, t, user?.datto_web_remote_device_uids]);
 
   useEffect(() => {
     void loadDevices();
