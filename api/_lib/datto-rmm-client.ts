@@ -80,8 +80,31 @@ export function isDattoRmmConfigured(): boolean {
 }
 
 /**
- * Derive the Datto RMM web portal base from the API URL.
- *   merlot-api.centrastage.net  → https://merlot.centrastage.net
+ * Platform slug from API URL, e.g. merlot-api.centrastage.net → merlot
+ */
+export function getDattoRmmPlatformSlug(
+  cfg?: DattoRmmConfig | null,
+): string | null {
+  const apiUrl = (cfg ?? getDattoRmmConfigFromEnv())?.apiUrl;
+  if (!apiUrl) return null;
+  try {
+    const host = new URL(apiUrl).hostname.toLowerCase();
+    // merlot-api.centrastage.net | merlot.rmm.datto.com | merlot.centrastage.net
+    const m =
+      host.match(/^([a-z0-9-]+)-api\./i) ||
+      host.match(/^([a-z0-9-]+)\.rmm\.datto\.com$/i) ||
+      host.match(/^([a-z0-9-]+)\.centrastage\.net$/i);
+    if (m?.[1]) return m[1].replace(/-api$/i, "");
+    const first = host.split(".")[0];
+    return first && first !== "api" ? first.replace(/-api$/i, "") : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Web portal base for deep links.
+ * Prefer modern https://{platform}.rmm.datto.com
  * Override with DATTO_RMM_PORTAL_URL when needed.
  */
 export function getDattoRmmPortalBaseUrl(
@@ -93,11 +116,13 @@ export function getDattoRmmPortalBaseUrl(
   );
   if (override) return override;
 
+  const platform = getDattoRmmPlatformSlug(cfg);
+  if (platform) return `https://${platform}.rmm.datto.com`;
+
   const apiUrl = (cfg ?? getDattoRmmConfigFromEnv())?.apiUrl;
   if (!apiUrl) return null;
   try {
     const u = new URL(apiUrl);
-    // merlot-api.centrastage.net → merlot.centrastage.net
     const host = u.hostname.replace(/-api(?=\.)/i, "").replace(/^api\./i, "");
     return `${u.protocol}//${host}`;
   } catch {
@@ -107,8 +132,9 @@ export function getDattoRmmPortalBaseUrl(
 
 /**
  * Web Remote deep link for a device UID.
- * Classic path used by Datto UI / integrations:
- *   https://{platform}.centrastage.net/csm/remote/rto/{deviceUid}
+ * Modern (default):  https://{platform}.rmm.datto.com/web-remote/{deviceUid}
+ * Classic:           https://{platform}.centrastage.net/csm/remote/rto/{deviceUid}
+ * Set DATTO_RMM_WEB_REMOTE_STYLE=classic to force the legacy path.
  */
 export function buildDattoWebRemoteUrl(
   deviceUid: string,
@@ -116,9 +142,23 @@ export function buildDattoWebRemoteUrl(
 ): string | null {
   const uid = String(deviceUid || "").trim();
   if (!uid) return null;
+
+  const style = cleanEnv(process.env.DATTO_RMM_WEB_REMOTE_STYLE).toLowerCase();
+  const classic = style === "classic" || style === "legacy" || style === "csm";
+
+  if (classic) {
+    const platform = getDattoRmmPlatformSlug(cfg);
+    const base =
+      cleanEnv(process.env.DATTO_RMM_PORTAL_URL).replace(/\/+$/, "") ||
+      (platform ? `https://${platform}.centrastage.net` : null) ||
+      getDattoRmmPortalBaseUrl(cfg);
+    if (!base) return null;
+    return `${base}/csm/remote/rto/${encodeURIComponent(uid)}`;
+  }
+
   const portal = getDattoRmmPortalBaseUrl(cfg);
   if (!portal) return null;
-  return `${portal}/csm/remote/rto/${encodeURIComponent(uid)}`;
+  return `${portal}/web-remote/${encodeURIComponent(uid)}`;
 }
 
 /** Cached bearer token (expires ~100h; we refresh earlier). */

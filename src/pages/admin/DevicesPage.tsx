@@ -9,16 +9,15 @@ import {
   AlertCircle,
   Laptop,
   Server,
-  ScreenShare,
 } from "lucide-react";
 import { useSelectedClient } from "@/context/SelectedClientContext";
 import {
   fetchDattoRmmDevices,
   fetchDattoRmmStatus,
   formatDeviceLastSeen,
-  openDattoWebRemote,
   type DattoRmmDevice,
 } from "@/lib/datto-rmm";
+import { WebRemoteButton } from "@/components/WebRemoteButton";
 import { EmptyState } from "@/components/EmptyState";
 import { BlurFade } from "@/components/ui/blur-fade";
 import { Badge } from "@/components/ui/badge";
@@ -364,7 +363,6 @@ export function DevicesPage() {
                       <TableBody>
                         {filtered.map((d) => {
                           const Icon = deviceIcon(d);
-                          const canRemote = Boolean(d.webRemoteUrl);
                           return (
                             <TableRow key={d.uid}>
                               <TableCell>
@@ -424,30 +422,10 @@ export function DevicesPage() {
                                 {formatDeviceLastSeen(d.lastSeen, locale)}
                               </TableCell>
                               <TableCell className="text-right">
-                                <Button
-                                  type="button"
-                                  size="sm"
-                                  variant={d.online ? "default" : "outline"}
-                                  className="h-8 gap-1.5"
-                                  disabled={!canRemote}
-                                  title={
-                                    canRemote
-                                      ? t("devices.webRemoteHint")
-                                      : t("devices.webRemoteUnavailable")
-                                  }
-                                  onClick={() => {
-                                    if (!openDattoWebRemote(d.webRemoteUrl)) {
-                                      window.alert(
-                                        t("devices.webRemoteBlocked"),
-                                      );
-                                    }
-                                  }}
-                                >
-                                  <ScreenShare className="size-3.5" />
-                                  <span className="hidden sm:inline">
-                                    {t("devices.webRemote")}
-                                  </span>
-                                </Button>
+                                <WebRemoteButton
+                                  url={d.webRemoteUrl}
+                                  online={d.online}
+                                />
                               </TableCell>
                             </TableRow>
                           );

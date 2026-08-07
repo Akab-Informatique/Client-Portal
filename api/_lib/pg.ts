@@ -380,6 +380,7 @@ const ADDITIVE_COLUMNS: Array<{ table: string; column: string; def: string }> =
     // app backfill assigns company_id per client.
     { table: "client_roles", column: "company_id", def: "INTEGER" },
     { table: "users", column: "itglue_user_id", def: "TEXT" },
+    { table: "users", column: "datto_web_remote_device_uids", def: "TEXT" },
     { table: "users", column: "board_email_opt_in", def: "BOOLEAN" },
     { table: "users", column: "mfa_enabled", def: "BOOLEAN" },
     { table: "users", column: "mfa_totp_secret", def: "TEXT" },

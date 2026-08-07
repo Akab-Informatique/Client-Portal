@@ -39,10 +39,24 @@ export type DattoRmmDevice = {
   webRemoteUrl: string | null;
 };
 
-/** Open Datto Web Remote for a device in a new tab. */
+/** Open Datto Web Remote for a device in a new tab (user-gesture safe). */
 export function openDattoWebRemote(url: string | null | undefined): boolean {
   const href = String(url ?? "").trim();
   if (!href) return false;
+  try {
+    // Prefer window.open from the click handler so popup blockers allow it.
+    const win = window.open(href, "_blank", "noopener,noreferrer");
+    if (win) {
+      try {
+        win.opener = null;
+      } catch {
+        /* ignore */
+      }
+      return true;
+    }
+  } catch {
+    /* fall through to anchor */
+  }
   try {
     const a = document.createElement("a");
     a.href = href;
@@ -60,13 +74,57 @@ export function openDattoWebRemote(url: string | null | undefined): boolean {
     }, 0);
     return true;
   } catch {
-    try {
-      window.open(href, "_blank", "noopener,noreferrer");
-      return true;
-    } catch {
-      return false;
-    }
+    return false;
   }
+}
+
+/** Parse JSON list of Datto device UIDs a client user may Web Remote. */
+export function parseWebRemoteDeviceUids(
+  raw: string | null | undefined,
+): string[] {
+  if (!raw || !String(raw).trim()) return [];
+  try {
+    const parsed = JSON.parse(String(raw)) as unknown;
+    if (!Array.isArray(parsed)) return [];
+    const out: string[] = [];
+    const seen = new Set<string>();
+    for (const item of parsed) {
+      const uid = String(item ?? "").trim();
+      if (!uid || seen.has(uid)) continue;
+      seen.add(uid);
+      out.push(uid);
+    }
+    return out;
+  } catch {
+    // Comma / whitespace separated fallback
+    return String(raw)
+      .split(/[\s,;]+/)
+      .map((s) => s.trim())
+      .filter(Boolean);
+  }
+}
+
+export function serializeWebRemoteDeviceUids(uids: string[]): string | null {
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const u of uids) {
+    const uid = String(u ?? "").trim();
+    if (!uid || seen.has(uid)) continue;
+    seen.add(uid);
+    out.push(uid);
+  }
+  return out.length ? JSON.stringify(out) : null;
+}
+
+/** Client user may Web Remote this device only if UID is in their grant list. */
+export function clientCanWebRemoteDevice(
+  grantedUids: string[] | null | undefined,
+  deviceUid: string | null | undefined,
+): boolean {
+  const uid = String(deviceUid ?? "").trim();
+  if (!uid) return false;
+  const list = grantedUids ?? [];
+  return list.includes(uid);
 }
 
 export type DattoRmmStatusResponse = {

@@ -148,6 +148,12 @@ export const users = pgTable("users", {
    */
   itglue_user_id: text("itglue_user_id"),
   /**
+   * JSON array of Datto RMM device UIDs this client user may Web Remote.
+   * Staff ignore this (full remote on Operations → Devices).
+   * Empty/null = no Web Remote for client users.
+   */
+  datto_web_remote_device_uids: text("datto_web_remote_device_uids"),
+  /**
    * When true, this user receives board message emails (if staff checks
    * “Also send by email” when posting). Default true for new users.
    */

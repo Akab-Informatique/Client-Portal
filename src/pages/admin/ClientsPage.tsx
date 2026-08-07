@@ -88,7 +88,11 @@ import {
   resolveSharePointSite,
 } from "@/lib/sharepoint";
 import {
+  fetchDattoRmmDevices,
   fetchDattoRmmSites,
+  parseWebRemoteDeviceUids,
+  serializeWebRemoteDeviceUids,
+  type DattoRmmDevice,
   type DattoRmmSite,
 } from "@/lib/datto-rmm";
 
@@ -124,6 +128,8 @@ const emptyUser = {
    * Standard is never listed here — it is forced on save.
    */
   additional_role_ids: [] as number[],
+  /** Datto device UIDs this user may Web Remote (client only). */
+  web_remote_device_uids: [] as string[],
   active: true,
 };
 
@@ -172,6 +178,10 @@ export function ClientsPage() {
   const [rmmHits, setRmmHits] = useState<DattoRmmSite[]>([]);
   const [rmmSearching, setRmmSearching] = useState(false);
   const [rmmError, setRmmError] = useState<string | null>(null);
+  const [userRemoteDevices, setUserRemoteDevices] = useState<DattoRmmDevice[]>([]);
+  const [userRemoteLoading, setUserRemoteLoading] = useState(false);
+  const [userRemoteError, setUserRemoteError] = useState<string | null>(null);
+  const [userRemoteQuery, setUserRemoteQuery] = useState("");
   /** Expanded company row showing that company's portal users */
   const [usersExpandedId, setUsersExpandedId] = useState<number | null>(null);
   const [userQuery, setUserQuery] = useState("");
@@ -351,7 +361,46 @@ export function ClientsPage() {
     }
   };
 
-  const openAddUser = async (companyId: number) => {
+  
+  const loadUserRemoteDevices = async (companyId: number | null) => {
+    setUserRemoteError(null);
+    setUserRemoteDevices([]);
+    if (companyId == null) return;
+    const company = companies.find((c) => c.id === companyId);
+    const siteUid = (company?.datto_rmm_site_uid || "").trim();
+    if (!siteUid) {
+      setUserRemoteError("no-site");
+      return;
+    }
+    setUserRemoteLoading(true);
+    try {
+      const res = await fetchDattoRmmDevices(siteUid);
+      setUserRemoteDevices(res.devices);
+      if (res.error) setUserRemoteError(res.error);
+    } catch (e) {
+      setUserRemoteError(
+        e instanceof Error ? e.message : "Could not load devices",
+      );
+    } finally {
+      setUserRemoteLoading(false);
+    }
+  };
+
+  const toggleUserRemoteDevice = (uid: string) => {
+    const id = uid.trim();
+    if (!id) return;
+    setUserForm((f) => {
+      const has = f.web_remote_device_uids.includes(id);
+      return {
+        ...f,
+        web_remote_device_uids: has
+          ? f.web_remote_device_uids.filter((x) => x !== id)
+          : [...f.web_remote_device_uids, id],
+      };
+    });
+  };
+
+const openAddUser = async (companyId: number) => {
     setSelectedCompanyId(companyId);
     setEditingUser(null);
     setError(null);
@@ -398,10 +447,15 @@ export function ClientsPage() {
       board_email_opt_in: user.board_email_opt_in !== false,
       billing_access: billing,
       additional_role_ids: additional,
+      web_remote_device_uids: parseWebRemoteDeviceUids(
+        user.datto_web_remote_device_uids,
+      ),
       active: user.active,
     });
+    setUserRemoteQuery("");
     setUserTab("profile");
     setUserOpen(true);
+    void loadUserRemoteDevices(companyId);
   };
 
   const openLayoutEditor = (company: Company) => {
@@ -671,6 +725,9 @@ export function ClientsPage() {
           : userForm.billing_access === "off"
             ? false
             : null;
+      const webRemoteUids = serializeWebRemoteDeviceUids(
+        userForm.web_remote_device_uids,
+      );
 
       // Standard is always core; additional roles stack on top
       const { standard } = await ensureClientUserRolesForCompany(companyId);
@@ -691,6 +748,7 @@ export function ClientsPage() {
             board_email_opt_in: boardOptIn,
             client_role_id: standard.id,
             billing_access: billingAccess,
+            datto_web_remote_device_uids: webRemoteUids,
             ...(userForm.password.trim()
               ? { password: userForm.password }
               : {}),
@@ -708,6 +766,7 @@ export function ClientsPage() {
           board_email_opt_in: boardOptIn,
           client_role_id: standard.id,
           billing_access: billingAccess,
+          datto_web_remote_device_uids: webRemoteUids,
         });
         const created = (
           (await db.select().from(schema.users)) as User[]
@@ -2012,6 +2071,122 @@ export function ClientsPage() {
                       {t("admin.clientUserItglueHint")}
                     </p>
                   </div>
+
+                  <div className="space-y-2 rounded-lg border border-border bg-muted/20 p-3">
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                      <div>
+                        <p className="text-sm font-semibold">
+                          {t("devices.userRemoteTitle")}
+                        </p>
+                        <p className="text-xs text-muted-foreground">
+                          {t("devices.userRemoteHint")}
+                        </p>
+                      </div>
+                      <Badge variant="outline" className="tabular-nums">
+                        {userForm.web_remote_device_uids.length}{" "}
+                        {t("devices.userRemoteGranted")}
+                      </Badge>
+                    </div>
+                    {userRemoteError === "no-site" ? (
+                      <p className="text-xs text-muted-foreground">
+                        {t("devices.userRemoteNoSite")}
+                      </p>
+                    ) : (
+                      <>
+                        <div className="relative">
+                          <Search className="pointer-events-none absolute left-2.5 top-1/2 size-3.5 -translate-y-1/2 text-muted-foreground" />
+                          <Input
+                            value={userRemoteQuery}
+                            onChange={(e) => setUserRemoteQuery(e.target.value)}
+                            placeholder={t("devices.searchPh")}
+                            className="h-9 pl-8"
+                          />
+                        </div>
+                        {userRemoteLoading ? (
+                          <div className="flex items-center gap-2 py-3 text-xs text-muted-foreground">
+                            <Loader2 className="size-3.5 animate-spin" />
+                            {t("common.loading")}
+                          </div>
+                        ) : userRemoteError ? (
+                          <p className="text-xs text-destructive">
+                            {userRemoteError}
+                          </p>
+                        ) : (
+                          <div className="max-h-48 space-y-1 overflow-y-auto rounded-md border border-border bg-card p-1">
+                            {userRemoteDevices
+                              .filter((d) => {
+                                const q = userRemoteQuery.trim().toLowerCase();
+                                if (!q) return true;
+                                return (
+                                  d.hostname.toLowerCase().includes(q) ||
+                                  (d.internalIp || "").toLowerCase().includes(q) ||
+                                  (d.operatingSystem || "")
+                                    .toLowerCase()
+                                    .includes(q) ||
+                                  d.uid.toLowerCase().includes(q)
+                                );
+                              })
+                              .slice(0, 80)
+                              .map((d) => {
+                                const checked =
+                                  userForm.web_remote_device_uids.includes(d.uid);
+                                return (
+                                  <label
+                                    key={d.uid}
+                                    className="flex cursor-pointer items-start gap-2.5 rounded-md px-2 py-1.5 text-sm hover:bg-muted/60"
+                                  >
+                                    <Checkbox
+                                      checked={checked}
+                                      onCheckedChange={() =>
+                                        toggleUserRemoteDevice(d.uid)
+                                      }
+                                      className="mt-0.5"
+                                    />
+                                    <span className="min-w-0">
+                                      <span className="block truncate font-medium">
+                                        {d.hostname}
+                                      </span>
+                                      <span className="block truncate text-[11px] text-muted-foreground">
+                                        {[d.operatingSystem, d.internalIp]
+                                          .filter(Boolean)
+                                          .join(" · ") || d.uid.slice(0, 12)}
+                                        {d.online === true
+                                          ? ` · ${t("devices.online")}`
+                                          : d.online === false
+                                            ? ` · ${t("devices.offline")}`
+                                            : ""}
+                                      </span>
+                                    </span>
+                                  </label>
+                                );
+                              })}
+                            {userRemoteDevices.length === 0 && (
+                              <p className="px-2 py-3 text-xs text-muted-foreground">
+                                {t("devices.emptyDesc")}
+                              </p>
+                            )}
+                          </div>
+                        )}
+                        {userForm.web_remote_device_uids.length > 0 && (
+                          <Button
+                            type="button"
+                            variant="ghost"
+                            size="sm"
+                            className="h-8 px-2 text-xs"
+                            onClick={() =>
+                              setUserForm((f) => ({
+                                ...f,
+                                web_remote_device_uids: [],
+                              }))
+                            }
+                          >
+                            {t("devices.userRemoteClear")}
+                          </Button>
+                        )}
+                      </>
+                    )}
+                  </div>
+
                   <label className="flex items-start gap-3 rounded-lg border border-border bg-muted/20 p-3 text-sm">
                     <Checkbox
                       checked={userForm.board_email_opt_in}

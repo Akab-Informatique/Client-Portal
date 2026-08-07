@@ -153,6 +153,7 @@ async function toSessionUser(row: UserRow): Promise<SessionUser> {
     bio: row.bio ?? null,
     locale: row.locale ?? null,
     itglue_user_id: row.itglue_user_id ?? null,
+    datto_web_remote_device_uids: row.datto_web_remote_device_uids ?? null,
     board_email_opt_in: row.board_email_opt_in === false ? false : true,
     mfa_enabled: isMfaEnabled(row),
     created_at: row.created_at,

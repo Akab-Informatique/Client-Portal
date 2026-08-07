@@ -858,6 +858,15 @@ graphHint:
     clientNoSiteTitle: "Aucun appareil lié pour le moment",
     clientNoSiteDesc:
       "Votre entreprise n'est pas encore liée à un site de supervision. Demandez à votre fournisseur de le lier sous Clients.",
+    userRemoteTitle: "Accès Web Remote",
+    userRemoteHint:
+      "Choisissez les ordinateurs que cet utilisateur portail peut ouvrir avec Datto Web Remote. Laissez vide pour l'inventaire seulement (pas de bouton remote).",
+    userRemoteGranted: "autorisés",
+    userRemoteNoSite:
+      "Liez d'abord un site Datto RMM à cette entreprise (Clients → Modifier), puis choisissez les appareils ici.",
+    userRemoteClear: "Effacer toutes les autorisations remote",
+    userRemoteStaffNote:
+      "Le personnel a toujours Web Remote sous Opérations → Appareils. Ces autorisations s'appliquent uniquement aux utilisateurs portail clients.",
   },
   passwords: {
     title: "Mots de passe",

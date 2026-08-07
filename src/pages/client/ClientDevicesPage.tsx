@@ -14,11 +14,14 @@ import { db, dbReady, schema } from "@/db";
 import { useAuth } from "@/lib/auth";
 import type { Company } from "@/lib/types";
 import {
+  clientCanWebRemoteDevice,
   fetchDattoRmmDevices,
   fetchDattoRmmStatus,
   formatDeviceLastSeen,
+  parseWebRemoteDeviceUids,
   type DattoRmmDevice,
 } from "@/lib/datto-rmm";
+import { WebRemoteButton } from "@/components/WebRemoteButton";
 import { EmptyState } from "@/components/EmptyState";
 import { BlurFade } from "@/components/ui/blur-fade";
 import { Badge } from "@/components/ui/badge";
@@ -51,7 +54,8 @@ function deviceIcon(d: DattoRmmDevice) {
 
 /**
  * Client portal — Devices inventory for the signed-in user's company.
- * Gated by client role module "devices". No Web Remote (requires Datto login).
+ * Gated by client role module "devices".
+ * Web Remote only for device UIDs granted on the user account.
  */
 export function ClientDevicesPage() {
   const { t, locale } = useLocale();
@@ -70,6 +74,12 @@ export function ClientDevicesPage() {
     "unknown",
   );
   const [query, setQuery] = useState("");
+
+  const webRemoteGrants = useMemo(
+    () => parseWebRemoteDeviceUids(user?.datto_web_remote_device_uids),
+    [user?.datto_web_remote_device_uids],
+  );
+  const anyWebRemote = webRemoteGrants.length > 0;
 
   useEffect(() => {
     let cancelled = false;
@@ -363,6 +373,11 @@ export function ClientDevicesPage() {
                           <TableHead className="hidden sm:table-cell">
                             {t("devices.colLastSeen")}
                           </TableHead>
+                          {anyWebRemote ? (
+                            <TableHead className="text-right">
+                              {t("devices.colActions")}
+                            </TableHead>
+                          ) : null}
                         </TableRow>
                       </TableHeader>
                       <TableBody>
@@ -426,6 +441,20 @@ export function ClientDevicesPage() {
                               <TableCell className="hidden whitespace-nowrap text-xs text-muted-foreground sm:table-cell">
                                 {formatDeviceLastSeen(d.lastSeen, locale)}
                               </TableCell>
+                              {anyWebRemote ? (
+                                <TableCell className="text-right">
+                                  {clientCanWebRemoteDevice(webRemoteGrants, d.uid) ? (
+                                    <WebRemoteButton
+                                      url={d.webRemoteUrl}
+                                      online={d.online}
+                                    />
+                                  ) : (
+                                    <span className="text-xs text-muted-foreground">
+                                      —
+                                    </span>
+                                  )}
+                                </TableCell>
+                              ) : null}
                             </TableRow>
                           );
                         })}

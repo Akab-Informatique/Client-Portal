@@ -134,6 +134,11 @@ export interface User {
   /** Linked IT Glue / MyGlue user id (for password ACL) */
   itglue_user_id: string | null;
   /**
+   * JSON array of Datto device UIDs this client user may Web Remote.
+   * null/empty = none. Staff do not use this field.
+   */
+  datto_web_remote_device_uids: string | null;
+  /**
    * Receive message-board emails when staff posts with “send by email”.
    * null/undefined treated as true for legacy rows.
    */

@@ -98,6 +98,7 @@ CREATE TABLE IF NOT EXISTS sos_requests (
     ["users", "billing_access BOOLEAN"],
     ["client_roles", "company_id INTEGER"],
     ["users", "itglue_user_id TEXT"],
+    ["users", "datto_web_remote_device_uids TEXT"],
     ["users", "board_email_opt_in BOOLEAN"],
     ["users", "mfa_enabled BOOLEAN"],
     ["users", "mfa_totp_secret TEXT"],

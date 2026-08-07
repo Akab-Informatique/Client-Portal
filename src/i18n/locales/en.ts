@@ -847,6 +847,15 @@ graphHint:
     clientNoSiteTitle: "No devices linked yet",
     clientNoSiteDesc:
       "Your company is not linked to a monitoring site yet. Ask your provider to link it under Clients.",
+    userRemoteTitle: "Web Remote access",
+    userRemoteHint:
+      "Choose which computers this portal user may open with Datto Web Remote. Leave empty for inventory only (no remote button).",
+    userRemoteGranted: "granted",
+    userRemoteNoSite:
+      "Link a Datto RMM site on this company first (Clients → Edit), then pick devices here.",
+    userRemoteClear: "Clear all remote grants",
+    userRemoteStaffNote:
+      "Staff always have Web Remote on Operations → Devices. These grants apply to client portal users only.",
   },
   passwords: {
     title: "Passwords",
