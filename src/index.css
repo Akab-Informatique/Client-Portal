@@ -213,39 +213,96 @@
   }
 }
 
-/* ── AKAB animated loader (speed mark) ───────────────────────── */
-@keyframes akab-loader-dash {
+/* ── AKAB bee loader (logo flies with trail) ─────────────────── */
+
+/* Organic figure-8 / loop path — like a bee buzzing around */
+@keyframes akab-bee-fly {
   0% {
-    transform: translateX(-10%) scale(0.96);
-    opacity: 0.75;
+    transform: translate(-50%, -50%) translate(-42%, -8%) rotate(-12deg);
   }
-  40% {
-    transform: translateX(4%) scale(1.04);
-    opacity: 1;
+  12% {
+    transform: translate(-50%, -50%) translate(-18%, -38%) rotate(8deg);
   }
-  70% {
-    transform: translateX(0%) scale(1);
-    opacity: 1;
+  25% {
+    transform: translate(-50%, -50%) translate(38%, -28%) rotate(18deg);
+  }
+  38% {
+    transform: translate(-50%, -50%) translate(48%, 10%) rotate(6deg);
+  }
+  50% {
+    transform: translate(-50%, -50%) translate(22%, 36%) rotate(-14deg);
+  }
+  62% {
+    transform: translate(-50%, -50%) translate(-28%, 32%) rotate(-20deg);
+  }
+  75% {
+    transform: translate(-50%, -50%) translate(-50%, 4%) rotate(-8deg);
+  }
+  88% {
+    transform: translate(-50%, -50%) translate(-30%, -22%) rotate(10deg);
   }
   100% {
-    transform: translateX(-10%) scale(0.96);
-    opacity: 0.75;
+    transform: translate(-50%, -50%) translate(-42%, -8%) rotate(-12deg);
   }
 }
 
-@keyframes akab-loader-glow {
+/* Fast wing-like micro wobble on top of the flight path */
+@keyframes akab-bee-wiggle {
+  0%,
+  100% {
+    transform: translateY(0) rotate(-3deg) scale(1);
+  }
+  25% {
+    transform: translateY(-2px) rotate(4deg) scale(1.03);
+  }
+  50% {
+    transform: translateY(1px) rotate(-2deg) scale(0.98);
+  }
+  75% {
+    transform: translateY(-1px) rotate(3deg) scale(1.02);
+  }
+}
+
+/* Soft pulse on the logo itself */
+@keyframes akab-bee-mark-glow {
+  0%,
+  100% {
+    filter: drop-shadow(0 0 10px rgba(245, 197, 24, 0.3));
+  }
+  50% {
+    filter: drop-shadow(0 0 20px rgba(245, 197, 24, 0.55));
+  }
+}
+
+/* Ambient glow under the stage */
+@keyframes akab-bee-ambient {
   0%,
   100% {
     opacity: 0.35;
-    transform: scale(0.85);
+    transform: scale(0.9);
   }
   50% {
-    opacity: 0.75;
-    transform: scale(1.15);
+    opacity: 0.7;
+    transform: scale(1.1);
   }
 }
 
-@keyframes akab-loader-label {
+/* Motion streak dashes behind the bee */
+@keyframes akab-bee-streak {
+  0% {
+    opacity: 0;
+    transform: translateX(6px) scaleX(0.4);
+  }
+  30% {
+    opacity: 0.85;
+  }
+  100% {
+    opacity: 0;
+    transform: translateX(-28px) scaleX(1.1);
+  }
+}
+
+@keyframes akab-bee-label {
   0%,
   100% {
     opacity: 0.55;
@@ -255,32 +312,117 @@
   }
 }
 
-.akab-loader-mark {
-  animation: akab-loader-dash 1.15s ease-in-out infinite;
+.akab-bee-stage {
+  overflow: visible;
+}
+
+.akab-bee-ambient {
+  animation: akab-bee-ambient 2.4s ease-in-out infinite;
   will-change: transform, opacity;
 }
 
-.akab-loader-glow {
-  animation: akab-loader-glow 1.15s ease-in-out infinite;
-  will-change: transform, opacity;
-  filter: blur(10px);
+/* Main bee + ghost trail copies share the same flight path with delay */
+.akab-bee,
+.akab-bee-trail,
+.akab-bee-streaks {
+  animation: akab-bee-fly 2.8s cubic-bezier(0.45, 0.05, 0.55, 0.95) infinite;
+  will-change: transform;
 }
 
-.akab-loader-label {
-  animation: akab-loader-label 1.4s ease-in-out infinite;
+.akab-bee-trail-1 {
+  animation-delay: -0.12s;
+  filter: blur(0.6px);
+}
+
+.akab-bee-trail-2 {
+  animation-delay: -0.24s;
+  filter: blur(1.2px);
+}
+
+.akab-bee-trail-3 {
+  animation-delay: -0.38s;
+  filter: blur(2px);
+}
+
+.akab-bee-wiggle {
+  animation: akab-bee-wiggle 0.28s ease-in-out infinite;
+  will-change: transform;
+}
+
+.akab-bee-mark {
+  animation: akab-bee-mark-glow 1.6s ease-in-out infinite;
+  will-change: filter;
+}
+
+/* Streak container rides the path; dashes stream backward */
+.akab-bee-streaks {
+  width: 0;
+  height: 0;
+  z-index: 5;
+}
+
+.akab-bee-streak {
+  position: absolute;
+  top: 50%;
+  right: 10px;
+  height: 3px;
+  border-radius: 999px;
+  background: linear-gradient(
+    90deg,
+    transparent 0%,
+    hsl(var(--primary) / 0.15) 20%,
+    hsl(var(--primary) / 0.75) 100%
+  );
+  transform-origin: right center;
+  animation: akab-bee-streak 0.55s ease-out infinite;
+}
+
+.akab-bee-streak-a {
+  width: 22px;
+  margin-top: -6px;
+  animation-delay: 0s;
+}
+
+.akab-bee-streak-b {
+  width: 16px;
+  margin-top: 0px;
+  opacity: 0.7;
+  animation-delay: 0.12s;
+}
+
+.akab-bee-streak-c {
+  width: 12px;
+  margin-top: 5px;
+  opacity: 0.5;
+  animation-delay: 0.24s;
+}
+
+.akab-bee-label {
+  animation: akab-bee-label 1.4s ease-in-out infinite;
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .akab-loader-mark,
-  .akab-loader-glow,
-  .akab-loader-label {
-    animation: none;
+  .akab-bee,
+  .akab-bee-trail,
+  .akab-bee-streaks,
+  .akab-bee-wiggle,
+  .akab-bee-mark,
+  .akab-bee-ambient,
+  .akab-bee-streak,
+  .akab-bee-label {
+    animation: none !important;
   }
-  .akab-loader-mark {
-    opacity: 1;
-    transform: none;
+
+  .akab-bee {
+    transform: translate(-50%, -50%);
   }
-  .akab-loader-glow {
+
+  .akab-bee-trail,
+  .akab-bee-streaks {
+    display: none;
+  }
+
+  .akab-bee-ambient {
     opacity: 0.4;
   }
 }
