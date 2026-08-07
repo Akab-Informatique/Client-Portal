@@ -236,7 +236,7 @@ export const fr: Dictionary = {
       "Cette session n’est plus disponible (fermée ou expirée). Cliquez Démarrer SOS à nouveau.",
     noLink:
       "Impossible d’obtenir le fichier de l’appli. Demandez au personnel de vérifier Splashtop, ou relancez SOS.",
-    openBlocked:
+    openBlocked: "Le téléchargement ne s\u2019est pas lancé automatiquement. Cliquez sur Télécharger de nouveau — le navigateur enregistrera le fichier SOS.",
       "Votre navigateur a bloqué le téléchargement. Autorisez les téléchargements pour ce site, puis cliquez Télécharger à nouveau.",
     copyFailed: "Impossible de copier le lien.",
     step1: "Cliquez Démarrer SOS — l’installateur Windows ou Mac se télécharge automatiquement.",

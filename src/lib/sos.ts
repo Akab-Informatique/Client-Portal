@@ -292,6 +292,22 @@ export function detectClientOs(): "windows" | "mac" | "linux" | "android" | "oth
 }
 
 /**
+ * Build same-origin SOS installer stream URL (Content-Disposition: attachment).
+ * Never points at Splashtop HTML.
+ */
+export function sosInstallerFileUrl(
+  requestId: number,
+  platform: "auto" | "win" | "mac" = "auto",
+): string {
+  const q = new URLSearchParams({
+    id: String(requestId),
+    platform,
+    file: "1",
+  });
+  return `/api/sos/download?${q.toString()}`;
+}
+
+/**
  * Resolve the session-bound SOS installer via our same-origin proxy.
  * Returns `/api/sos/download?...&file=1` — never a Splashtop HTML portal page.
  */
@@ -304,6 +320,7 @@ export async function fetchSosInstallerDownload(
   fileName: string | null;
   platform?: string;
   error: string | null;
+  building?: boolean;
 }> {
   if (!requestId || requestId <= 0) {
     return {
@@ -314,49 +331,54 @@ export async function fetchSosInstallerDownload(
     };
   }
   try {
+    // Metadata probe (JSON). The actual file is always sosInstallerFileUrl().
     const q = new URLSearchParams({
       id: String(requestId),
       platform,
     });
     const r = await fetch(`/api/sos/download?${q}`, {
       headers: { Accept: "application/json" },
+      credentials: "same-origin",
     });
-    const d = (await r.json()) as {
+    const d = (await r.json().catch(() => ({}))) as {
       ok?: boolean;
       downloadUrl?: string;
       fileName?: string;
       platform?: string;
       error?: string;
     };
-    if (!r.ok || !d.downloadUrl) {
+    const fileUrl = sosInstallerFileUrl(
+      requestId,
+      (d.platform === "mac" || d.platform === "win" ? d.platform : platform) as
+        | "auto"
+        | "win"
+        | "mac",
+    );
+    if (!r.ok) {
+      const msg = errMsg(d, `Download failed (${r.status})`);
+      const building = /still building|try Download again/i.test(msg);
       return {
         ok: false,
-        downloadUrl: null,
-        fileName: null,
+        downloadUrl: fileUrl,
+        fileName: d.fileName ?? null,
         platform: d.platform,
-        error: errMsg(d, `Download failed (${r.status})`),
+        error: msg,
+        building,
       };
-    }
-    // Always prefer same-origin stream URL (file=1)
-    let downloadUrl = String(d.downloadUrl).trim();
-    if (downloadUrl && !downloadUrl.includes("file=1")) {
-      const u = downloadUrl.startsWith("http")
-        ? new URL(downloadUrl)
-        : new URL(downloadUrl, window.location.origin);
-      u.searchParams.set("file", "1");
-      downloadUrl = u.pathname + u.search;
     }
     return {
       ok: true,
-      downloadUrl,
-      fileName: d.fileName ?? null,
+      downloadUrl: fileUrl,
+      fileName:
+        d.fileName ??
+        (d.platform === "mac" ? "SplashtopSOS.dmg" : "SplashtopSOS.exe"),
       platform: d.platform,
       error: null,
     };
   } catch (e) {
     return {
       ok: false,
-      downloadUrl: null,
+      downloadUrl: sosInstallerFileUrl(requestId, platform),
       fileName: null,
       error: e instanceof Error ? e.message : "Download failed",
     };
@@ -364,47 +386,107 @@ export async function fetchSosInstallerDownload(
 }
 
 /**
- * Download the SOS installer file and stay on the portal page.
- * Uses blob + download attribute for same-origin proxy URLs.
+ * Start the SOS installer download WITHOUT leaving the portal.
+ *
+ * Prefer a hidden iframe pointed at our same-origin attachment proxy.
+ * That works after async session create (browsers often block blob/a.click
+ * once the original user gesture is gone). Manual retries should use a real
+ * <a href> click (see SosButton).
+ *
  * NEVER navigates to Splashtop HTML / support portal pages.
  */
-export async function triggerSosDownload(
+export function triggerSosDownload(
+  url: string | null | undefined,
+  fileName?: string | null,
+): boolean {
+  const href = String(url ?? "").trim();
+  if (!href) return false;
+
+  // Refuse known HTML portal hosts — installer only
+  if (
+    /^https?:\/\//i.test(href) &&
+    !href.startsWith(window.location.origin) &&
+    (/my\.splashtop\.com/i.test(href) ||
+      /support_portal|service_desk\/psa/i.test(href))
+  ) {
+    console.warn("[sos] refused external portal HTML link", href.slice(0, 80));
+    return false;
+  }
+
+  // Resolve to absolute same-origin when possible
+  let abs = href;
+  try {
+    abs = new URL(href, window.location.origin).toString();
+  } catch {
+    /* keep */
+  }
+
+  try {
+    // 1) Hidden iframe — Content-Disposition: attachment on the proxy
+    //    triggers a file save without navigating the app shell.
+    const iframe = document.createElement("iframe");
+    iframe.setAttribute("aria-hidden", "true");
+    iframe.tabIndex = -1;
+    iframe.style.cssText =
+      "position:fixed;width:0;height:0;border:0;left:-9999px;top:0;opacity:0;pointer-events:none";
+    iframe.src = abs;
+    document.body.appendChild(iframe);
+    window.setTimeout(() => {
+      try {
+        iframe.remove();
+      } catch {
+        /* ignore */
+      }
+    }, 120_000);
+
+    // 2) Also fire a same-origin <a download> as a backup (helps some browsers)
+    try {
+      const a = document.createElement("a");
+      a.href = abs;
+      a.download = (fileName || "").trim() || "SplashtopSOS.exe";
+      a.rel = "noopener";
+      a.style.display = "none";
+      document.body.appendChild(a);
+      a.click();
+      window.setTimeout(() => {
+        try {
+          a.remove();
+        } catch {
+          /* ignore */
+        }
+      }, 0);
+    } catch {
+      /* iframe is primary */
+    }
+
+    return true;
+  } catch (e) {
+    console.warn("[sos] download trigger failed", e);
+    return false;
+  }
+}
+
+/**
+ * Optional blob path — only call from a fresh user click if iframe failed.
+ * Kept for the manual "Download again" fallback path.
+ */
+export async function triggerSosDownloadBlob(
   url: string | null | undefined,
   fileName?: string | null,
 ): Promise<boolean> {
   const href = String(url ?? "").trim();
   if (!href) return false;
-
-  // Block known HTML portal hosts — installer only
-  if (
-    /my\.splashtop\.com\/(service_desk|sos|download_client)/i.test(href) ||
-    /support_portal|service_desk\/psa/i.test(href)
-  ) {
-    console.warn("[sos] refused portal HTML link", href.slice(0, 80));
-    return false;
-  }
-
   try {
-    // Same-origin proxy or any absolute URL we can fetch as blob
     const res = await fetch(href, {
       method: "GET",
       credentials: "same-origin",
       headers: { Accept: "application/octet-stream,*/*" },
     });
-    if (!res.ok) {
-      // If server returned JSON error, surface false
-      return false;
-    }
+    if (!res.ok) return false;
     const ct = (res.headers.get("content-type") || "").toLowerCase();
-    if (ct.includes("text/html") || ct.includes("application/json")) {
-      // Not a binary installer
-      return false;
-    }
+    if (ct.includes("text/html") || ct.includes("application/json")) return false;
     const blob = await res.blob();
-    if (!blob || blob.size < 1024) {
-      // Tiny payload is almost certainly an error page
-      return false;
-    }
+    if (!blob || blob.size < 1024) return false;
     let name = (fileName || "").trim();
     if (!name) {
       const cd = res.headers.get("content-disposition") || "";
@@ -417,8 +499,7 @@ export async function triggerSosDownload(
     const { downloadBlob } = await import("@/lib/download");
     downloadBlob(blob, name);
     return true;
-  } catch (e) {
-    console.warn("[sos] download failed", e);
+  } catch {
     return false;
   }
 }

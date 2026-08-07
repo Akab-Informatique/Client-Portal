@@ -15,7 +15,9 @@ import {
   fetchClientSosRequests,
   fetchSosInstallerDownload,
   fetchSosRequestById,
+  sosInstallerFileUrl,
   triggerSosDownload,
+  triggerSosDownloadBlob,
   type SosRequest,
 } from "@/lib/sos";
 import { Button } from "@/components/ui/button";
@@ -51,6 +53,7 @@ export function SosButton({ className }: { className?: string }) {
   const [active, setActive] = useState<SosRequest | null>(null);
   const [companyName, setCompanyName] = useState("");
   const [fileName, setFileName] = useState<string | null>(null);
+  const [downloadUrl, setDownloadUrl] = useState<string | null>(null);
   const [downloadStarted, setDownloadStarted] = useState(false);
 
   useEffect(() => {
@@ -113,6 +116,7 @@ export function SosButton({ className }: { className?: string }) {
     setDownloading(false);
     setDownloadStarted(false);
     setFileName(null);
+    setDownloadUrl(null);
     setBusy(false);
   };
 
@@ -146,21 +150,40 @@ export function SosButton({ className }: { className?: string }) {
     }
   };
 
-  const startInstallerDownload = async (requestId: number) => {
+  const startInstallerDownload = async (
+    requestId: number,
+    opts?: { fromUserClick?: boolean },
+  ) => {
     setDownloading(true);
     setError(null);
     try {
+      // Always have a same-origin attachment URL ready for <a href> retries
+      const fallbackUrl = sosInstallerFileUrl(requestId, "auto");
+      setDownloadUrl(fallbackUrl);
+
       const res = await fetchSosInstallerDownload(requestId, "auto");
-      if (!res.ok || !res.downloadUrl) {
-        setError(res.error || t("sos.noLink"));
-        setDownloadStarted(false);
-        return false;
+      const url = (res.downloadUrl || fallbackUrl).trim();
+      setDownloadUrl(url);
+      if (res.fileName) setFileName(res.fileName);
+
+      if (!res.ok && res.error && !res.building) {
+        // Still try the attachment URL — session may be ready even if metadata failed
+        setError(res.error);
       }
-      setFileName(res.fileName);
-      // Same-origin file proxy → browser saves .exe/.dmg; never opens Splashtop HTML
-      const ok = await triggerSosDownload(res.downloadUrl, res.fileName);
+
+      // Prefer iframe attachment (works after async create). On a fresh button
+      // click, also try blob as a second path.
+      let ok = triggerSosDownload(url, res.fileName || fileName);
+      if (!ok && opts?.fromUserClick) {
+        ok = await triggerSosDownloadBlob(url, res.fileName || fileName);
+      }
       setDownloadStarted(ok);
-      if (!ok) setError(t("sos.openBlocked"));
+      if (!ok) {
+        setError(t("sos.openBlocked"));
+      } else if (res.building) {
+        // Soft notice — file may still arrive; user can retry
+        setError(null);
+      }
       return ok;
     } catch (e) {
       setError(e instanceof Error ? e.message : t("sos.createFailed"));
@@ -181,6 +204,7 @@ export function SosButton({ className }: { className?: string }) {
     setPhase("starting");
     setDownloadStarted(false);
     setFileName(null);
+    setDownloadUrl(null);
 
     try {
       // Reuse open session if still active
@@ -209,6 +233,7 @@ export function SosButton({ className }: { className?: string }) {
       }
 
       setActive(res.request);
+      setDownloadUrl(sosInstallerFileUrl(res.request.id, "auto"));
       setPhase("waiting");
       if (res.error) setError(res.error);
       await startInstallerDownload(res.request.id);
@@ -413,22 +438,66 @@ export function SosButton({ className }: { className?: string }) {
               </div>
 
               <DialogFooter className="flex-col gap-2 sm:flex-row sm:justify-between">
-                <Button
-                  type="button"
-                  variant="outline"
-                  className="gap-1.5"
-                  disabled={downloading || busy || !active?.id}
-                  onClick={() =>
-                    active?.id && void startInstallerDownload(active.id)
-                  }
-                >
-                  {downloading ? (
-                    <Loader2 className="size-4 animate-spin" />
-                  ) : (
-                    <Download className="size-4" />
-                  )}
-                  {t("sos.downloadAgain")}
-                </Button>
+                {downloadUrl ? (
+                  <Button
+                    type="button"
+                    variant="outline"
+                    className="gap-1.5"
+                    disabled={downloading || busy}
+                    asChild
+                  >
+                    <a
+                      href={downloadUrl}
+                      download={fileName || "SplashtopSOS.exe"}
+                      onClick={() => {
+                        // User gesture: also kick iframe + mark success
+                        setError(null);
+                        const ok = triggerSosDownload(
+                          downloadUrl,
+                          fileName || "SplashtopSOS.exe",
+                        );
+                        setDownloadStarted(ok || true);
+                        // Refresh metadata in background (installer build may finish)
+                        if (active?.id) {
+                          void fetchSosInstallerDownload(active.id, "auto").then(
+                            (res) => {
+                              if (res.fileName) setFileName(res.fileName);
+                              if (res.downloadUrl) setDownloadUrl(res.downloadUrl);
+                              if (!res.ok && res.error) setError(res.error);
+                            },
+                          );
+                        }
+                      }}
+                    >
+                      {downloading ? (
+                        <Loader2 className="size-4 animate-spin" />
+                      ) : (
+                        <Download className="size-4" />
+                      )}
+                      {t("sos.downloadAgain")}
+                    </a>
+                  </Button>
+                ) : (
+                  <Button
+                    type="button"
+                    variant="outline"
+                    className="gap-1.5"
+                    disabled={downloading || busy || !active?.id}
+                    onClick={() =>
+                      active?.id &&
+                      void startInstallerDownload(active.id, {
+                        fromUserClick: true,
+                      })
+                    }
+                  >
+                    {downloading ? (
+                      <Loader2 className="size-4 animate-spin" />
+                    ) : (
+                      <Download className="size-4" />
+                    )}
+                    {t("sos.downloadAgain")}
+                  </Button>
+                )}
                 <Button
                   type="button"
                   className="gap-1.5"

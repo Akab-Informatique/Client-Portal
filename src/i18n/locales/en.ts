@@ -235,8 +235,7 @@ export const en = {
       "This support session is no longer available (closed or expired). Click Start SOS again.",
     noLink:
       "Could not get the support app file. Ask staff to check Splashtop, or try Start SOS again.",
-    openBlocked:
-      "Your browser blocked the download. Allow downloads for this site, then click Download again.",
+    openBlocked: "Download did not start automatically. Click Download again — your browser will save the SOS app file.",
     copyFailed: "Could not copy the link.",
     step1: "Click Start SOS — the Windows or Mac installer downloads automatically.",
     step2: "Open the downloaded file (Run / Keep if asked).",
