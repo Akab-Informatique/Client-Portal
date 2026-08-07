@@ -2,9 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { eq } from "drizzle-orm";
 import {
   AlertCircle,
-  ExternalLink,
   Laptop,
-  LogIn,
   Monitor,
   RefreshCw,
   Search,
@@ -16,16 +14,11 @@ import { db, dbReady, schema } from "@/db";
 import { useAuth } from "@/lib/auth";
 import type { Company } from "@/lib/types";
 import {
-  clientCanWebRemoteDevice,
   fetchDattoRmmDevices,
   fetchDattoRmmStatus,
   formatDeviceLastSeen,
-  parseWebRemoteDeviceUids,
-  resolveDattoPortalUrl,
-  resolveWebRemoteUrl,
   type DattoRmmDevice,
 } from "@/lib/datto-rmm";
-import { WebRemoteButton } from "@/components/WebRemoteButton";
 import { EmptyState } from "@/components/EmptyState";
 import { BlurFade } from "@/components/ui/blur-fade";
 import { Badge } from "@/components/ui/badge";
@@ -58,8 +51,7 @@ function deviceIcon(d: DattoRmmDevice) {
 
 /**
  * Client portal — Devices inventory for the signed-in user's company.
- * Gated by client role module "devices".
- * Web Remote only for device UIDs granted on the user account.
+ * Gated by client role module "devices". Inventory only (no Web Remote).
  */
 export function ClientDevicesPage() {
   const { t, locale } = useLocale();
@@ -77,15 +69,7 @@ export function ClientDevicesPage() {
   const [rmmOk, setRmmOk] = useState<"unknown" | "ok" | "fail" | "off">(
     "unknown",
   );
-  const [rmmApiUrl, setRmmApiUrl] = useState<string | null>(null);
-  const [portalUrl, setPortalUrl] = useState<string | null>(null);
   const [query, setQuery] = useState("");
-
-  const webRemoteGrants = useMemo(
-    () => parseWebRemoteDeviceUids(user?.datto_web_remote_device_uids),
-    [user?.datto_web_remote_device_uids],
-  );
-  const anyWebRemote = webRemoteGrants.length > 0;
 
   useEffect(() => {
     let cancelled = false;
@@ -125,8 +109,6 @@ export function ClientDevicesPage() {
         if (!s.configured) setRmmOk("off");
         else setRmmOk(s.ok ? "ok" : "fail");
         setConfigured(s.configured);
-        setRmmApiUrl(s.apiUrl ?? null);
-        setPortalUrl(resolveDattoPortalUrl(s));
       })
       .catch(() => setRmmOk("fail"));
   }, []);
@@ -145,16 +127,7 @@ export function ClientDevicesPage() {
     try {
       const res = await fetchDattoRmmDevices(siteUid);
       setConfigured(res.configured);
-      // Never expose Web Remote links for devices this user is not granted
-      const grants = parseWebRemoteDeviceUids(user?.datto_web_remote_device_uids);
-      setDevices(
-        res.devices.map((d) => ({
-          ...d,
-          webRemoteUrl: clientCanWebRemoteDevice(grants, d.uid)
-            ? resolveWebRemoteUrl(d, rmmApiUrl)
-            : null,
-        })),
-      );
+      setDevices(res.devices);
       setOnlineCount(res.onlineCount);
       setOfflineCount(res.offlineCount);
       if (res.error) setError(res.error);
@@ -165,7 +138,7 @@ export function ClientDevicesPage() {
     } finally {
       setLoading(false);
     }
-  }, [siteUid, t, user?.datto_web_remote_device_uids, rmmApiUrl]);
+  }, [siteUid, t]);
 
   useEffect(() => {
     void loadDevices();
@@ -248,20 +221,6 @@ export function ClientDevicesPage() {
               <RefreshCw className={cn("size-3.5", loading && "animate-spin")} />
               {t("common.refresh")}
             </Button>
-            {anyWebRemote && portalUrl ? (
-              <Button asChild variant="outline" size="sm" className="gap-1.5">
-                <a
-                  href={portalUrl}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  title={t("devices.webRemoteOpenPortalHint")}
-                >
-                  <LogIn className="size-3.5" />
-                  {t("devices.webRemoteOpenPortal")}
-                  <ExternalLink className="size-3 opacity-70" />
-                </a>
-              </Button>
-            ) : null}
           </div>
         </div>
       </BlurFade>
@@ -297,33 +256,6 @@ export function ClientDevicesPage() {
           </Card>
         ) : (
           <div className="space-y-4">
-            {anyWebRemote && portalUrl ? (
-              <Card className="border-amber-500/30 bg-amber-500/5 shadow-sm">
-                <CardContent className="flex flex-col gap-3 py-4 sm:flex-row sm:items-center sm:justify-between">
-                  <div className="min-w-0 space-y-1">
-                    <p className="flex items-center gap-2 text-sm font-semibold text-foreground">
-                      <LogIn className="size-4 shrink-0 text-amber-700 dark:text-amber-400" />
-                      {t("devices.webRemoteLoginBannerTitle")}
-                    </p>
-                    <p className="text-xs leading-relaxed text-muted-foreground sm:text-sm">
-                      {t("devices.webRemoteLoginBannerBody")}
-                    </p>
-                  </div>
-                  <Button asChild className="shrink-0 gap-1.5">
-                    <a
-                      href={portalUrl}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      title={t("devices.webRemoteOpenPortalHint")}
-                    >
-                      <LogIn className="size-3.5" />
-                      {t("devices.webRemoteOpenPortal")}
-                      <ExternalLink className="size-3 opacity-80" />
-                    </a>
-                  </Button>
-                </CardContent>
-              </Card>
-            ) : null}
             <div className="grid gap-3 sm:grid-cols-3">
               <Card>
                 <CardHeader className="pb-2">
@@ -431,11 +363,6 @@ export function ClientDevicesPage() {
                           <TableHead className="hidden sm:table-cell">
                             {t("devices.colLastSeen")}
                           </TableHead>
-                          {anyWebRemote ? (
-                            <TableHead className="text-right">
-                              {t("devices.colActions")}
-                            </TableHead>
-                          ) : null}
                         </TableRow>
                       </TableHeader>
                       <TableBody>
@@ -499,20 +426,6 @@ export function ClientDevicesPage() {
                               <TableCell className="hidden whitespace-nowrap text-xs text-muted-foreground sm:table-cell">
                                 {formatDeviceLastSeen(d.lastSeen, locale)}
                               </TableCell>
-                              {anyWebRemote ? (
-                                <TableCell className="text-right">
-                                  {clientCanWebRemoteDevice(webRemoteGrants, d.uid) ? (
-                                    <WebRemoteButton
-                                      url={d.webRemoteUrl}
-                                      online={d.online}
-                                    />
-                                  ) : (
-                                    <span className="text-xs text-muted-foreground">
-                                      —
-                                    </span>
-                                  )}
-                                </TableCell>
-                              ) : null}
                             </TableRow>
                           );
                         })}
