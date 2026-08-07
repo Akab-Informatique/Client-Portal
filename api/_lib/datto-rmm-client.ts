@@ -85,7 +85,11 @@ export function isDattoRmmConfigured(): boolean {
 export function getDattoRmmPlatformSlug(
   cfg?: DattoRmmConfig | null,
 ): string | null {
-  const apiUrl = (cfg ?? getDattoRmmConfigFromEnv())?.apiUrl;
+  const safeCfg =
+    cfg && typeof cfg === "object" && typeof (cfg as DattoRmmConfig).apiUrl === "string"
+      ? cfg
+      : getDattoRmmConfigFromEnv();
+  const apiUrl = safeCfg?.apiUrl;
   if (!apiUrl) return null;
   try {
     const host = new URL(apiUrl).hostname.toLowerCase();
@@ -116,10 +120,14 @@ export function getDattoRmmPortalBaseUrl(
   );
   if (override) return override;
 
-  const platform = getDattoRmmPlatformSlug(cfg);
+  const safeCfg =
+    cfg && typeof cfg === "object" && typeof (cfg as DattoRmmConfig).apiUrl === "string"
+      ? cfg
+      : null;
+  const platform = getDattoRmmPlatformSlug(safeCfg ?? cfg);
   if (platform) return `https://${platform}.rmm.datto.com`;
 
-  const apiUrl = (cfg ?? getDattoRmmConfigFromEnv())?.apiUrl;
+  const apiUrl = (safeCfg ?? getDattoRmmConfigFromEnv())?.apiUrl;
   if (!apiUrl) return null;
   try {
     const u = new URL(apiUrl);
@@ -552,7 +560,7 @@ export async function listDattoRmmDevicesForSite(
   const path = `/api/v2/site/${encodeURIComponent(uid)}/devices?max=250&page=0`;
   const items = await fetchAllPages(cfg, path);
   const devices = items
-    .map(mapDevice)
+    .map((item) => mapDevice(item, cfg))
     .filter((d): d is DattoRmmDevice => d != null);
   devices.sort((a, b) => {
     // Online first, then hostname

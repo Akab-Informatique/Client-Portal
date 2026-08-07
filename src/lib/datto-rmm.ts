@@ -39,6 +39,46 @@ export type DattoRmmDevice = {
   webRemoteUrl: string | null;
 };
 
+/**
+ * Build a Datto Web Remote URL in the browser when the API omitted it.
+ * Uses apiUrl from /api/datto-rmm/status (e.g. https://merlot-api.centrastage.net).
+ */
+export function buildClientWebRemoteUrl(
+  deviceUid: string | null | undefined,
+  apiUrl?: string | null,
+): string | null {
+  const uid = String(deviceUid ?? "").trim();
+  if (!uid) return null;
+  const raw = String(apiUrl ?? "").trim().replace(/\/+$/, "");
+  if (!raw) return null;
+  try {
+    const u = new URL(raw);
+    const host = u.hostname.toLowerCase();
+    const m =
+      host.match(/^([a-z0-9-]+)-api\./i) ||
+      host.match(/^([a-z0-9-]+)\.rmm\.datto\.com$/i) ||
+      host.match(/^([a-z0-9-]+)\.centrastage\.net$/i);
+    const platform =
+      m?.[1]?.replace(/-api$/i, "") ||
+      (host.split(".")[0] || "").replace(/-api$/i, "");
+    if (!platform || platform === "api") return null;
+    // Modern Datto UI path
+    return `https://${platform}.rmm.datto.com/web-remote/${encodeURIComponent(uid)}`;
+  } catch {
+    return null;
+  }
+}
+
+/** Prefer API webRemoteUrl; fall back to client-built URL from status apiUrl. */
+export function resolveWebRemoteUrl(
+  device: Pick<DattoRmmDevice, "uid" | "webRemoteUrl">,
+  apiUrl?: string | null,
+): string | null {
+  const fromApi = String(device.webRemoteUrl ?? "").trim();
+  if (fromApi) return fromApi;
+  return buildClientWebRemoteUrl(device.uid, apiUrl);
+}
+
 /** Open Datto Web Remote for a device in a new tab (user-gesture safe). */
 export function openDattoWebRemote(url: string | null | undefined): boolean {
   const href = String(url ?? "").trim();

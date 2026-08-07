@@ -65,6 +65,8 @@ export function DevicesPage() {
   const [rmmOk, setRmmOk] = useState<"unknown" | "ok" | "fail" | "off">(
     "unknown",
   );
+  /** From status — used to rebuild Web Remote URLs if API omitted them */
+  const [rmmApiUrl, setRmmApiUrl] = useState<string | null>(null);
   const [query, setQuery] = useState("");
 
   const siteUid = (selectedClient?.datto_rmm_site_uid || "").trim();
@@ -77,6 +79,7 @@ export function DevicesPage() {
         if (!s.configured) setRmmOk("off");
         else setRmmOk(s.ok ? "ok" : "fail");
         setConfigured(s.configured);
+        setRmmApiUrl(s.apiUrl ?? null);
       })
       .catch(() => setRmmOk("fail"));
   }, []);
@@ -95,7 +98,13 @@ export function DevicesPage() {
     try {
       const res = await fetchDattoRmmDevices(siteUid);
       setConfigured(res.configured);
-      setDevices(res.devices);
+      // Staff always get a Web Remote URL (API or client fallback from apiUrl)
+      setDevices(
+        res.devices.map((d) => ({
+          ...d,
+          webRemoteUrl: resolveWebRemoteUrl(d, rmmApiUrl),
+        })),
+      );
       setOnlineCount(res.onlineCount);
       setOfflineCount(res.offlineCount);
       if (res.error) setError(res.error);
@@ -106,7 +115,7 @@ export function DevicesPage() {
     } finally {
       setLoading(false);
     }
-  }, [siteUid, t]);
+  }, [siteUid, t, rmmApiUrl]);
 
   useEffect(() => {
     void loadDevices();
