@@ -15,6 +15,7 @@ import {
   fetchDattoRmmDevices,
   fetchDattoRmmStatus,
   formatDeviceLastSeen,
+  resolveWebRemoteUrl,
   type DattoRmmDevice,
 } from "@/lib/datto-rmm";
 import { WebRemoteButton } from "@/components/WebRemoteButton";
@@ -120,6 +121,22 @@ export function DevicesPage() {
   useEffect(() => {
     void loadDevices();
   }, [loadDevices]);
+
+  // If status apiUrl arrives after devices, fill any missing Web Remote links
+  useEffect(() => {
+    if (!rmmApiUrl) return;
+    setDevices((prev) => {
+      let changed = false;
+      const next = prev.map((d) => {
+        if (d.webRemoteUrl) return d;
+        const url = resolveWebRemoteUrl(d, rmmApiUrl);
+        if (!url) return d;
+        changed = true;
+        return { ...d, webRemoteUrl: url };
+      });
+      return changed ? next : prev;
+    });
+  }, [rmmApiUrl]);
 
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase();
