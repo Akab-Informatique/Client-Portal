@@ -157,7 +157,8 @@ export function SosButton({ className }: { className?: string }) {
         return false;
       }
       setFileName(res.fileName);
-      const ok = triggerSosDownload(res.downloadUrl);
+      // Same-origin file proxy → browser saves .exe/.dmg; never opens Splashtop HTML
+      const ok = await triggerSosDownload(res.downloadUrl, res.fileName);
       setDownloadStarted(ok);
       if (!ok) setError(t("sos.openBlocked"));
       return ok;

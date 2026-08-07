@@ -292,9 +292,8 @@ export function detectClientOs(): "windows" | "mac" | "linux" | "android" | "oth
 }
 
 /**
- * Resolve the real session-bound installer (.exe / .dmg) for a SOS request.
- * Server calls Splashtop cloud_build_file — client never opens the HTML page
- * that can show "App not available".
+ * Resolve the session-bound SOS installer via our same-origin proxy.
+ * Returns `/api/sos/download?...&file=1` — never a Splashtop HTML portal page.
  */
 export async function fetchSosInstallerDownload(
   requestId: number,
@@ -338,9 +337,18 @@ export async function fetchSosInstallerDownload(
         error: errMsg(d, `Download failed (${r.status})`),
       };
     }
+    // Always prefer same-origin stream URL (file=1)
+    let downloadUrl = String(d.downloadUrl).trim();
+    if (downloadUrl && !downloadUrl.includes("file=1")) {
+      const u = downloadUrl.startsWith("http")
+        ? new URL(downloadUrl)
+        : new URL(downloadUrl, window.location.origin);
+      u.searchParams.set("file", "1");
+      downloadUrl = u.pathname + u.search;
+    }
     return {
       ok: true,
-      downloadUrl: d.downloadUrl,
+      downloadUrl,
       fileName: d.fileName ?? null,
       platform: d.platform,
       error: null,
@@ -356,105 +364,87 @@ export async function fetchSosInstallerDownload(
 }
 
 /**
- * Trigger a file download without leaving the branded page.
- * Prefer direct .exe/.dmg (attachment). Never open Splashtop HTML as primary.
+ * Download the SOS installer file and stay on the portal page.
+ * Uses blob + download attribute for same-origin proxy URLs.
+ * NEVER navigates to Splashtop HTML / support portal pages.
  */
-export function triggerSosDownload(url: string | null | undefined): boolean {
+export async function triggerSosDownload(
+  url: string | null | undefined,
+  fileName?: string | null,
+): Promise<boolean> {
   const href = String(url ?? "").trim();
   if (!href) return false;
-  try {
-    const a = document.createElement("a");
-    a.href = href;
-    a.rel = "noopener noreferrer";
-    const isDirectFile =
-      /\.(exe|dmg|pkg|msi|apk|zip)(\?|#|$)/i.test(href) ||
-      /cloudbuild\.splashtop\.com|splashtop-cloudbuild\.s3/i.test(href);
-    if (isDirectFile) {
-      // Let the browser download the binary; stay on our page
-      a.setAttribute("download", "");
-      a.target = "_self";
-    } else {
-      a.target = "_blank";
-    }
-    a.style.display = "none";
-    document.body.appendChild(a);
-    a.click();
-    window.setTimeout(() => {
-      try {
-        document.body.removeChild(a);
-      } catch {
-        /* ignore */
-      }
-    }, 0);
-    return true;
-  } catch {
-    try {
-      window.open(href, "_blank", "noopener,noreferrer");
-      return true;
-    } catch {
-      return false;
-    }
-  }
-}
 
-/**
- * Open a blank tab/window synchronously (must run in the click handler).
- * After the async create-session call, navigate it to the portal link so the
- * download starts without being blocked as a late popup.
- */
-export function openPendingSosWindow(): Window | null {
-  try {
-    const w = window.open("about:blank", "_blank");
-    if (w) {
-      try {
-        w.document.title = "SOS…";
-        w.document.body.innerHTML =
-          '<p style="font-family:system-ui,sans-serif;padding:24px;color:#334">Starting remote support…</p>';
-      } catch {
-        /* cross-origin / opaque about:blank — fine */
-      }
-    }
-    return w;
-  } catch {
-    return null;
-  }
-}
-
-/** Navigate a window opened via openPendingSosWindow, or fall back to a link click. */
-export function navigatePendingSosWindow(
-  pending: Window | null,
-  url: string | null | undefined,
-): boolean {
-  const href = String(url ?? "").trim();
-  if (!href) {
-    try {
-      pending?.close();
-    } catch {
-      /* ignore */
-    }
+  // Block known HTML portal hosts — installer only
+  if (
+    /my\.splashtop\.com\/(service_desk|sos|download_client)/i.test(href) ||
+    /support_portal|service_desk\/psa/i.test(href)
+  ) {
+    console.warn("[sos] refused portal HTML link", href.slice(0, 80));
     return false;
   }
-  if (pending && !pending.closed) {
-    try {
-      pending.location.href = href;
-      try {
-        pending.focus();
-      } catch {
-        /* ignore */
-      }
-      return true;
-    } catch {
-      /* fall through */
+
+  try {
+    // Same-origin proxy or any absolute URL we can fetch as blob
+    const res = await fetch(href, {
+      method: "GET",
+      credentials: "same-origin",
+      headers: { Accept: "application/octet-stream,*/*" },
+    });
+    if (!res.ok) {
+      // If server returned JSON error, surface false
+      return false;
     }
+    const ct = (res.headers.get("content-type") || "").toLowerCase();
+    if (ct.includes("text/html") || ct.includes("application/json")) {
+      // Not a binary installer
+      return false;
+    }
+    const blob = await res.blob();
+    if (!blob || blob.size < 1024) {
+      // Tiny payload is almost certainly an error page
+      return false;
+    }
+    let name = (fileName || "").trim();
+    if (!name) {
+      const cd = res.headers.get("content-disposition") || "";
+      const m = /filename\*?=(?:UTF-8''|"?)([^";]+)/i.exec(cd);
+      if (m?.[1]) name = decodeURIComponent(m[1].replace(/"/g, ""));
+    }
+    if (!name) {
+      name = /mac|dmg/i.test(href) ? "SplashtopSOS.dmg" : "SplashtopSOS.exe";
+    }
+    const { downloadBlob } = await import("@/lib/download");
+    downloadBlob(blob, name);
+    return true;
+  } catch (e) {
+    console.warn("[sos] download failed", e);
+    return false;
   }
-  return openClientPortalLink(href);
 }
 
 /**
- * Open the end-user Splashtop session link.
- * Prefer a real <a> click over window.open — popup blockers and sandboxed
- * preview iframes often swallow window.open() after async work.
+ * @deprecated kept for type compat — SOS no longer opens blank windows.
  */
+export function openPendingSosWindow(): Window | null {
+  return null;
+}
+
+/**
+ * @deprecated — do not navigate to portal links for client SOS.
+ */
+export function navigatePendingSosWindow(
+  pending: Window | null,
+  _url?: string | null,
+): boolean {
+  try {
+    pending?.close();
+  } catch {
+    /* ignore */
+  }
+  return false;
+}
+
 export function openClientPortalLink(url: string | null | undefined): boolean {
   const href = String(url ?? "").trim();
   if (!href) return false;

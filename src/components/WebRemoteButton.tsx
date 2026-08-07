@@ -1,12 +1,13 @@
 import { ScreenShare } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { openDattoWebRemote } from "@/lib/datto-rmm";
 import { useLocale } from "@/hooks/use-locale";
 import { cn } from "@/lib/utils";
 
 /**
  * Opens Datto Web Remote in a new tab.
- * Prefer a real <a> so middle-click / open-in-new-tab work and popup blockers are kinder.
+ * Real <a target="_blank"> only — never replaces the portal page.
+ * Staff (admin/tech) always get this on Operations → Devices when a URL is present.
+ * Client users only receive a URL for devices they were explicitly granted.
  */
 export function WebRemoteButton({
   url,
@@ -50,23 +51,7 @@ export function WebRemoteButton({
       title={t("devices.webRemoteHint")}
       asChild
     >
-      <a
-        href={href}
-        target="_blank"
-        rel="noopener noreferrer"
-        onClick={(e) => {
-          // Keep a JS fallback if the browser blocks the default navigation
-          // inside nested layouts / sandboxes.
-          if (e.metaKey || e.ctrlKey || e.shiftKey || e.altKey || e.button !== 0) {
-            return;
-          }
-          e.preventDefault();
-          if (!openDattoWebRemote(href)) {
-            // Last resort: navigate current tab
-            window.location.assign(href);
-          }
-        }}
-      >
+      <a href={href} target="_blank" rel="noopener noreferrer">
         <ScreenShare className="size-3.5" />
         <span className="hidden sm:inline">{t("devices.webRemote")}</span>
       </a>
