@@ -822,10 +822,17 @@ graphHint:
     reboot: "Reboot",
     webRemote: "Web Remote",
     webRemoteHint:
-      "Open Datto RMM Web Remote in a new tab (you must be signed in to Datto RMM).",
+      "Opens the remote session in a new tab. Sign in to Datto RMM once in this browser first — Datto cannot start Web Remote without that session.",
     webRemoteUnavailable: "Web Remote link is not available for this device.",
     webRemoteBlocked:
       "Could not open Web Remote. Allow pop-ups for this site, or open Datto RMM manually.",
+    webRemoteLoginBannerTitle: "Sign in to Datto RMM once",
+    webRemoteLoginBannerBody:
+      "Web Remote is Datto's own HTML5 session. This portal cannot log you in automatically — Datto does not offer an API for that. Click “Open Datto RMM”, sign in (or use SSO), leave that tab open or stay signed in, then click Web Remote on a device. The connection should start immediately.",
+    webRemoteOpenPortal: "Open Datto RMM",
+    webRemoteOpenPortalHint: "Sign in here first, then use Web Remote on a device row.",
+    webRemoteAfterLogin:
+      "Already signed in? Web Remote opens the live session. If you still see Datto's login page, finish signing in there, then click Web Remote again.",
     siteField: "Datto RMM site",
     siteFieldHint:
       "Search and pick the Datto RMM site for this client. Devices under Operations use this link only.",

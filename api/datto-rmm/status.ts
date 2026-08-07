@@ -2,6 +2,7 @@ import type { VercelRequest, VercelResponse } from "@vercel/node";
 import {
   clearDattoRmmTokenCache,
   getDattoRmmConfigFromEnv,
+  getDattoRmmPortalBaseUrl,
   isDattoRmmConfigured,
   testDattoRmmConnection,
 } from "../_lib/datto-rmm-client.js";
@@ -33,10 +34,12 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
     const cfg = getDattoRmmConfigFromEnv()!;
     const result = await testDattoRmmConnection();
+    const portalUrl = getDattoRmmPortalBaseUrl(cfg);
     return res.status(200).json({
       configured: true,
       ok: result.ok,
       apiUrl: cfg.apiUrl,
+      portalUrl: portalUrl ?? null,
       siteCount: result.siteCount ?? null,
       accountName: result.accountName ?? null,
       error: result.error ?? null,

@@ -171,11 +171,46 @@ export type DattoRmmStatusResponse = {
   configured: boolean;
   ok: boolean;
   apiUrl?: string;
+  /** Datto RMM web portal (sign-in here once so Web Remote deep links work) */
+  portalUrl?: string | null;
   siteCount?: number | null;
   accountName?: string | null;
   error?: string | null;
   hint?: string;
 };
+
+/**
+ * Derive Datto portal base URL from API URL when status omits portalUrl.
+ * e.g. https://merlot-api.centrastage.net → https://merlot.rmm.datto.com
+ */
+export function buildDattoPortalUrl(apiUrl?: string | null): string | null {
+  const raw = String(apiUrl ?? "").trim().replace(/\/+$/, "");
+  if (!raw) return null;
+  try {
+    const u = new URL(raw);
+    const host = u.hostname.toLowerCase();
+    const m =
+      host.match(/^([a-z0-9-]+)-api\./i) ||
+      host.match(/^([a-z0-9-]+)\.rmm\.datto\.com$/i) ||
+      host.match(/^([a-z0-9-]+)\.centrastage\.net$/i);
+    const platform =
+      m?.[1]?.replace(/-api$/i, "") ||
+      (host.split(".")[0] || "").replace(/-api$/i, "");
+    if (!platform || platform === "api") return null;
+    return `https://${platform}.rmm.datto.com`;
+  } catch {
+    return null;
+  }
+}
+
+/** Prefer status.portalUrl, else derive from apiUrl. */
+export function resolveDattoPortalUrl(
+  status?: Pick<DattoRmmStatusResponse, "portalUrl" | "apiUrl"> | null,
+): string | null {
+  const fromStatus = String(status?.portalUrl ?? "").trim().replace(/\/+$/, "");
+  if (fromStatus) return fromStatus;
+  return buildDattoPortalUrl(status?.apiUrl);
+}
 
 function formatErr(err: unknown, fallback: string): string {
   if (typeof err === "string" && err.trim()) return err.trim();
@@ -200,6 +235,7 @@ export async function fetchDattoRmmStatus(
       configured: Boolean(data.configured),
       ok: Boolean(data.ok),
       apiUrl: data.apiUrl,
+      portalUrl: data.portalUrl ?? null,
       siteCount: data.siteCount ?? null,
       accountName: data.accountName ?? null,
       error: data.error ?? null,

@@ -7,7 +7,9 @@ import {
   Wifi,
   WifiOff,
   AlertCircle,
+  ExternalLink,
   Laptop,
+  LogIn,
   Server,
 } from "lucide-react";
 import { useSelectedClient } from "@/context/SelectedClientContext";
@@ -15,6 +17,7 @@ import {
   fetchDattoRmmDevices,
   fetchDattoRmmStatus,
   formatDeviceLastSeen,
+  resolveDattoPortalUrl,
   resolveWebRemoteUrl,
   type DattoRmmDevice,
 } from "@/lib/datto-rmm";
@@ -68,6 +71,8 @@ export function DevicesPage() {
   );
   /** From status — used to rebuild Web Remote URLs if API omitted them */
   const [rmmApiUrl, setRmmApiUrl] = useState<string | null>(null);
+  /** Datto web portal — tech must sign in once so Web Remote deep links work */
+  const [portalUrl, setPortalUrl] = useState<string | null>(null);
   const [query, setQuery] = useState("");
 
   const siteUid = (selectedClient?.datto_rmm_site_uid || "").trim();
@@ -81,6 +86,7 @@ export function DevicesPage() {
         else setRmmOk(s.ok ? "ok" : "fail");
         setConfigured(s.configured);
         setRmmApiUrl(s.apiUrl ?? null);
+        setPortalUrl(resolveDattoPortalUrl(s));
       })
       .catch(() => setRmmOk("fail"));
   }, []);
@@ -207,6 +213,20 @@ export function DevicesPage() {
                     ? t("devices.rmmFail")
                     : t("common.loading")}
             </Badge>
+            {portalUrl ? (
+              <Button asChild size="sm" className="gap-1.5">
+                <a
+                  href={portalUrl}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  title={t("devices.webRemoteOpenPortalHint")}
+                >
+                  <LogIn className="size-3.5" />
+                  {t("devices.webRemoteOpenPortal")}
+                  <ExternalLink className="size-3 opacity-70" />
+                </a>
+              </Button>
+            ) : null}
             <Button
               type="button"
               variant="outline"
@@ -274,6 +294,36 @@ export function DevicesPage() {
           </Card>
         ) : (
           <div className="space-y-4">
+            <Card className="border-amber-500/30 bg-amber-500/5 shadow-sm">
+              <CardContent className="flex flex-col gap-3 py-4 sm:flex-row sm:items-center sm:justify-between">
+                <div className="min-w-0 space-y-1">
+                  <p className="flex items-center gap-2 text-sm font-semibold text-foreground">
+                    <LogIn className="size-4 shrink-0 text-amber-700 dark:text-amber-400" />
+                    {t("devices.webRemoteLoginBannerTitle")}
+                  </p>
+                  <p className="text-xs leading-relaxed text-muted-foreground sm:text-sm">
+                    {t("devices.webRemoteLoginBannerBody")}
+                  </p>
+                  <p className="text-xs text-muted-foreground">
+                    {t("devices.webRemoteAfterLogin")}
+                  </p>
+                </div>
+                {portalUrl ? (
+                  <Button asChild className="shrink-0 gap-1.5">
+                    <a
+                      href={portalUrl}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      title={t("devices.webRemoteOpenPortalHint")}
+                    >
+                      <LogIn className="size-3.5" />
+                      {t("devices.webRemoteOpenPortal")}
+                      <ExternalLink className="size-3 opacity-80" />
+                    </a>
+                  </Button>
+                ) : null}
+              </CardContent>
+            </Card>
             <div className="grid gap-3 sm:grid-cols-3">
               <Card>
                 <CardHeader className="pb-2">
