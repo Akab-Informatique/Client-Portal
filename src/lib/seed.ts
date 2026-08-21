@@ -24,39 +24,13 @@ export async function seedIfNeeded() {
     throw new Error("Database client is not available");
   }
 
-  // Production Postgres: server already ran migrations + bootstrap via /api/db/status.
-  // Roles/backfill must never block portal open — staff page can repair later.
+  // Production Postgres: server already migrated + bootstrapped (prod-server.mjs).
+  // /api/db/query requires a full MFA session — NEVER touch the proxy before login.
   if (dbMode === "postgres") {
-    try {
-      const existing = await db.select().from(schema.users).limit(1);
-      if (existing.length > 0) {
-        try {
-          // Soft timeout so a slow/hung roles migrate cannot freeze boot
-          await Promise.race([
-            (async () => {
-              await backfillUserStaffRoles();
-              await ensureAllClientCompanyRoles();
-              })(),
-            new Promise<void>((_, reject) =>
-              window.setTimeout(
-                () => reject(new Error("role backfill timed out")),
-                8000,
-              ),
-            ),
-          ]);
-        } catch (e) {
-          console.warn("[akab] role backfill skipped:", e);
-        }
-        return;
-      }
-      // Empty despite server bootstrap attempt — try client seed once
-      console.warn(
-        "[akab] Postgres has zero users after server bootstrap — seeding from client",
-      );
-    } catch (err) {
-      console.error("[akab] Postgres pre-seed check failed", err);
-      throw err;
-    }
+    console.info(
+      "[akab] Postgres mode — client seed skipped (server bootstrap owns empty DB)",
+    );
+    return;
   }
 
   // Always ensure system roles exist (idempotent — safe on every boot/upgrade)
@@ -269,6 +243,11 @@ async function ensureDemoBrand() {
 /** Backfill Autotask IDs on demo clients if missing (existing local DBs). */
 export async function ensureDemoAutotaskIds() {
   await dbReady;
+  // Postgres SQL proxy is session-auth only — nothing to heal until after login.
+  if (dbMode === "postgres") {
+    return;
+  }
+
   await ensureDemoBrand();
 
   // Roles are already ensured in seedIfNeeded(); keep a cheap no-op call
@@ -277,7 +256,7 @@ export async function ensureDemoAutotaskIds() {
   await backfillUserStaffRoles();
   try {
     await ensureAllClientCompanyRoles();
-    } catch (e) {
+  } catch (e) {
     console.warn("[akab] client role heal skipped:", e);
   }
 

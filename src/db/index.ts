@@ -236,25 +236,10 @@ async function initPostgres(): Promise<void> {
     );
   }
 
-  const proxy = createProxyDb();
-  // Light smoke test — server already migrated on boot
-  try {
-    await withTimeout(
-      proxy.select().from(schema.users).limit(1) as unknown as Promise<unknown>,
-      8000,
-      "PostgreSQL query",
-    );
-  } catch (err) {
-    // Tables may not exist yet if boot migrate is still running — try once more
-    await new Promise((r) => setTimeout(r, 1500));
-    await withTimeout(
-      proxy.select().from(schema.users).limit(1) as unknown as Promise<unknown>,
-      8000,
-      "PostgreSQL query (retry)",
-    );
-  }
-
-  db = proxy;
+  // Do NOT smoke-test via /api/db/query here — that endpoint requires an
+  // authenticated MFA session. Public /api/db/ping (above) already proved
+  // Postgres is reachable. Real queries run after login with credentials: "same-origin".
+  db = createProxyDb();
   dbMode = "postgres";
   dbBootError = null;
   console.info(

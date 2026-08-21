@@ -67,7 +67,8 @@ bash scripts/restore-db.sh /var/backups/akab/akab-pg-….sql.gz
 |----------|---------|
 | `POSTGRES_DB` / `USER` / `PASSWORD` | Compose database service |
 | `DATABASE_URL` | Optional single URL (host installs) |
-| `SESSION_SECRET` | Required server-side HMAC secret for HttpOnly session cookies |
+| `SESSION_SECRET` | Required server-side HMAC secret for HttpOnly session cookies (`openssl rand -hex 32`) |
+| `COOKIE_SECURE=true` | Only behind HTTPS — default is off so `http://ip:3000` lab installs work |
 | `VITE_DATABASE_MODE=pglite` | Force browser-local DB (dev) |
 
 ---

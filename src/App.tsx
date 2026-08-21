@@ -212,23 +212,35 @@ export default function App() {
 
     (async () => {
       try {
-        // Production: server already migrated + seeded via /api/db/status.
-        // seedIfNeeded is a fast no-op when users already exist.
+        // Production Postgres: seed is a no-op (server bootstrap). PGlite still seeds.
+        // Never block the login screen on client SQL — proxy needs a session.
         await seedIfNeeded();
         try {
           await ensureDemoAutotaskIds();
         } catch (e) {
-          // Non-fatal branding backfill
           console.warn("[akab] ensureDemoAutotaskIds:", e);
         }
       } catch (err) {
-        console.error("[akab] Boot failed:", err);
-        if (!cancelled) {
-          setBootError(
-            err instanceof Error
-              ? err.message
-              : "Could not prepare the portal database.",
-          );
+        console.error("[akab] Boot seed failed:", err);
+        const msg = err instanceof Error ? err.message : String(err);
+        // Auth / empty-session errors must never brick the portal
+        if (
+          /authentication required|401|unauthorized|not authenticated/i.test(
+            msg,
+          )
+        ) {
+          console.info("[akab] Opening login despite deferred client DB work");
+        } else if (
+          /not configured|not ready|not reachable|timed out|Database boot/i.test(
+            msg,
+          )
+        ) {
+          if (!cancelled) {
+            setBootError(msg);
+          }
+        } else {
+          // Unknown seed error — still open UI so operators can log in / diagnose
+          console.warn("[akab] Non-fatal boot issue, opening UI:", msg);
         }
       } finally {
         window.clearTimeout(hardTimer);

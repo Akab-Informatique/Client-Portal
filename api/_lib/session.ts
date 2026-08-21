@@ -147,9 +147,15 @@ function cookieSecure(): boolean {
   const v = cleanEnv(process.env.COOKIE_SECURE).toLowerCase();
   if (v === "0" || v === "false") return false;
   if (v === "1" || v === "true") return true;
-  // Default secure when not explicitly local
-  const nodeEnv = cleanEnv(process.env.NODE_ENV).toLowerCase();
-  return nodeEnv === "production";
+  // Many lab installs hit the portal over plain HTTP (:3000). Secure cookies
+  // would never stick there. Prefer explicit COOKIE_SECURE=true behind HTTPS.
+  // Also honor common reverse-proxy signals when present on process env.
+  const publicUrl =
+    cleanEnv(process.env.PUBLIC_URL) ||
+    cleanEnv(process.env.APP_URL) ||
+    cleanEnv(process.env.BASE_URL);
+  if (publicUrl.toLowerCase().startsWith("https://")) return true;
+  return false;
 }
 
 function serializeCookie(
