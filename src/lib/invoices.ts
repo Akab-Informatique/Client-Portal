@@ -85,8 +85,9 @@ export async function fetchInvoicePdfBlob(
   }
   const blob = await r.blob();
   const cd = r.headers.get("Content-Disposition") || "";
-  const match = /filename="?([^";]+)"?/i.exec(cd);
-  const fileName = match?.[1]?.trim() || `invoice-${invoiceId}.pdf`;
+  // Parse Content-Disposition header (not shell exec)
+  const dispositionMatch = /filename="?([^";]+)"?/i.exec(cd);
+  const fileName = dispositionMatch?.[1]?.trim() || `invoice-${invoiceId}.pdf`;
   return { blob, fileName };
 }
 

@@ -67,7 +67,7 @@ bash scripts/restore-db.sh /var/backups/akab/akab-pg-….sql.gz
 |----------|---------|
 | `POSTGRES_DB` / `USER` / `PASSWORD` | Compose database service |
 | `DATABASE_URL` | Optional single URL (host installs) |
-| `DB_PROXY_SECRET` + `VITE_DB_PROXY_SECRET` | Optional shared secret for SQL proxy |
+| `SESSION_SECRET` | Required server-side HMAC secret for HttpOnly session cookies |
 | `VITE_DATABASE_MODE=pglite` | Force browser-local DB (dev) |
 
 ---

@@ -106,8 +106,14 @@ CREATE TABLE IF NOT EXISTS sos_requests (
     ["users", "mfa_email_code_hash TEXT"],
     ["users", "mfa_email_code_expires TEXT"],
   ] as const) {
+    // Identifiers come only from the allow-listed tuples above (not user input).
+    if (!/^[a-z_][a-z0-9_]*$/i.test(table)) continue;
+    const colName = col.split(/\s+/)[0] || "";
+    if (!/^[a-z_][a-z0-9_]*$/i.test(colName)) continue;
     try {
-      await client.exec(`ALTER TABLE ${table} ADD COLUMN IF NOT EXISTS ${col}`);
+      await client.exec(
+        `ALTER TABLE ${table} ADD COLUMN IF NOT EXISTS ${col}`,
+      );
     } catch {
       /* exists */
     }

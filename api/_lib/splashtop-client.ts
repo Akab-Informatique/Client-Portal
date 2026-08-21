@@ -521,7 +521,7 @@ export async function fetchServiceDeskCloudBuild(
       fileName = decodeURIComponent(last) || null;
       // backup_url often has filename in content-disposition query
       const disp = u.searchParams.get("response-content-disposition") || "";
-      const m = /filename\*?=(?:UTF-8''|")?([^\";]+)/i.exec(disp);
+      const m = /filename\*?=(?:UTF-8''|")?([^\";]+)/i.exec(disp); // Content-Disposition header parse (not shell)
       if (m?.[1]) fileName = decodeURIComponent(m[1].replace(/"/g, ""));
     } catch {
       /* ignore */

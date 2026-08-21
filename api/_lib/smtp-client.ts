@@ -75,7 +75,8 @@ export function getSmtpPublicStatus(): {
   secure: boolean | null;
   fromEmail: string | null;
   fromName: string | null;
-  hasAuth: boolean;
+  /** Whether SMTP_USER + SMTP_PASS are set (not app login auth). */
+  smtpUserConfigured: boolean;
 } {
   const cfg = getSmtpConfigFromEnv();
   if (!cfg) {
@@ -86,7 +87,7 @@ export function getSmtpPublicStatus(): {
       secure: null,
       fromEmail: null,
       fromName: null,
-      hasAuth: false,
+      smtpUserConfigured: false,
     };
   }
   return {
@@ -96,7 +97,7 @@ export function getSmtpPublicStatus(): {
     secure: cfg.secure,
     fromEmail: cfg.fromEmail,
     fromName: cfg.fromName,
-    hasAuth: Boolean(cfg.user && cfg.pass),
+    smtpUserConfigured: Boolean(cfg.user && cfg.pass),
   };
 }
 

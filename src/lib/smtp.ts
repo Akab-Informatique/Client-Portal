@@ -9,7 +9,8 @@ export type SmtpStatusResponse = {
   secure?: boolean | null;
   fromEmail?: string | null;
   fromName?: string | null;
-  hasAuth?: boolean;
+  /** SMTP_USER+SMTP_PASS set (not portal login). */
+  smtpUserConfigured?: boolean;
   error?: string | null;
   hint?: string;
 };
@@ -59,7 +60,9 @@ export async function fetchSmtpStatus(
       secure: data.secure ?? null,
       fromEmail: data.fromEmail ?? null,
       fromName: data.fromName ?? null,
-      hasAuth: data.hasAuth,
+      smtpUserConfigured: Boolean(
+        (data as { smtpUserConfigured?: boolean }).smtpUserConfigured,
+      ),
       error: data.error ?? null,
       hint: data.hint,
     };
