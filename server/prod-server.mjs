@@ -37,7 +37,7 @@ const HOST = process.env.HOST || "0.0.0.0";
 // For secret-like keys the file ALWAYS wins over whatever Compose injected.
 // ---------------------------------------------------------------------------
 const FILE_WINS_ENV =
-  /^(AUTOTASK_|MICROSOFT_|ITGLUE_|SMTP_|GITHUB_|SESSION_|OPENAI_|ANTHROPIC_|SPLASHTOP_)/i;
+  /^(AUTOTASK_|MICROSOFT_|ITGLUE_|SMTP_|GITHUB_|SESSION_|OPENAI_|ANTHROPIC_|SPLASHTOP_|COOKIE_|DATTO_)/i;
 
 function loadEnvFileNoExpand(filePath, { secretsWin = true } = {}) {
   if (!fs.existsSync(filePath)) return 0;
@@ -282,14 +282,11 @@ async function handleNativeApi(req, res, url) {
       url.searchParams.get("db") === "1" ||
       String(url.searchParams.get("db") || "").toLowerCase() === "true";
     const cfg = nativePgConfig();
+    // Public liveness — no host/user/password diagnostics
     const base = {
       ok: true,
       service: "akab-portal",
       postgresConfigured: Boolean(cfg),
-      postgresHost: cfg?.host ?? null,
-      postgresDb: cfg?.database ?? null,
-      postgresUser: cfg?.user ?? null,
-      passwordSet: cfg?.passwordSet ?? false,
       ts: new Date().toISOString(),
       native: true,
     };
@@ -302,10 +299,9 @@ async function handleNativeApi(req, res, url) {
       ...base,
       ok: ping.ok,
       postgresOk: ping.ok,
-      database: ping.database ?? null,
       userCount: ping.userCount ?? null,
       latencyMs: ping.latencyMs ?? null,
-      error: ping.error ?? null,
+      error: ping.ok ? null : "Database unavailable",
     });
     return true;
   }
@@ -327,35 +323,21 @@ async function handleNativeApi(req, res, url) {
           mode: "none",
           configured: false,
           ok: false,
-          host: null,
-          database: null,
-          userCount: null,
-          passwordSet: false,
-          error: "POSTGRES_* not set. Set POSTGRES_PASSWORD in .env",
-          hint: "Edit /opt/akab-portal/.env then: docker compose up -d --build",
+          error: "Database not configured",
           native: true,
         });
         return true;
       }
       const ping = await nativeDbPing(4000);
+      // Public boot payload — no host/user/passwordSet
       sendJson(res, 200, {
         mode: "postgres",
         configured: true,
         ok: Boolean(ping.ok),
-        host: cfg.host,
-        database: ping.database ?? cfg.database,
-        user: ping.user ?? cfg.user,
-        passwordSet: cfg.passwordSet,
         userCount: ping.userCount ?? null,
         latencyMs: ping.latencyMs ?? null,
-        migrated: false,
-        seeded: false,
-        error: ping.error ?? null,
-        hint: ping.ok
-          ? "PostgreSQL is ready."
-          : "docker compose logs --tail=80 app db — check POSTGRES_PASSWORD matches volume",
+        error: ping.ok ? null : "Database unavailable",
         native: true,
-        source: cfg.source,
       });
       return true;
     }

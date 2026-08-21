@@ -2,10 +2,24 @@ import type { VercelRequest, VercelResponse } from "@vercel/node";
 import {
   ensureBootstrap,
   getDbConfigSummary,
+  getPool,
   isPostgresConfigured,
   pingDatabase,
   runMigrations,
 } from "../_lib/pg.js";
+import { getRequestSessionUserId, readSession } from "../_lib/session.js";
+import { loadUserById } from "../_lib/auth-server.js";
+
+async function isStaffSession(req: VercelRequest): Promise<boolean> {
+  try {
+    const uid = getRequestSessionUserId(req);
+    if (uid == null || !readSession(req)) return false;
+    const user = await loadUserById(uid);
+    return Boolean(user && user.active && user.role !== "client");
+  } catch {
+    return false;
+  }
+}
 
 function withDeadline<T>(
   promise: Promise<T>,
@@ -32,13 +46,8 @@ function withDeadline<T>(
 
 /**
  * GET /api/db/status
- * Always time-bounded — never hangs curl or the browser.
- *
- * Default: fast ping only (~8s max).
- * ?migrate=1: migrations + bootstrap first (~25s max), then ping.
- *
- * Important: do NOT call getDbStatus() here — it could re-enter migrate
- * without a deadline and hang the HTTP response.
+ * Public: ok/configured/userCount only.
+ * Staff session or ?migrate=1 (ops): host/schema details for deploy scripts.
  */
 export default async function handler(req: VercelRequest, res: VercelResponse) {
   res.setHeader("Cache-Control", "no-store");
@@ -54,22 +63,17 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     const wantMigrate =
       String(req.query.migrate ?? "") === "1" ||
       String(req.query.migrate ?? "").toLowerCase() === "true";
+    const staff = await isStaffSession(req);
+    // migrate=1 kept for upgrade.sh on localhost; still avoid dumping secrets
+    const revealDiag = staff || wantMigrate;
 
     if (!summary.configured) {
       return res.status(200).json({
         mode: "none",
         configured: false,
         ok: false,
-        host: null,
-        database: null,
-        migrated: false,
-        seeded: false,
-        userCount: null,
-        passwordSet: false,
-        source: "none",
-        error:
-          "POSTGRES_* not set. In Docker Compose set POSTGRES_PASSWORD in .env",
-        hint: "Edit /opt/akab-portal/.env then: docker compose up -d --build",
+        error: "Database not configured",
+        hint: "Set POSTGRES_* in .env then: docker compose up -d --build",
       });
     }
 
@@ -84,31 +88,29 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
           "migrate+bootstrap",
         );
       } catch (err) {
+        console.error("[db/status migrate]", err);
         return res.status(200).json({
           mode: "postgres",
           configured: true,
           ok: false,
-          host: summary.host,
-          database: summary.database,
-          passwordSet: summary.passwordSet,
-          source: summary.source,
           migrated: false,
-          seeded: false,
-          userCount: null,
-          error:
-            err instanceof Error ? err.message : "Migration/bootstrap failed",
-          hint:
-            "Check: docker compose logs app db | Verify POSTGRES_PASSWORD matches the volume",
+          error: "Migration/bootstrap failed",
+          hint: "docker compose logs --tail=80 app db",
+          ...(revealDiag
+            ? {
+                host: summary.host,
+                database: summary.database,
+                passwordSet: summary.passwordSet,
+              }
+            : {}),
         });
       }
     }
 
-    // Single timed ping — includes user count when tables exist
     const ping = await withDeadline(pingDatabase(7000), 8000, "status ping");
 
-    // Lightweight schema probe so ops can confirm critical upgrades landed
     let schemaFlags: Record<string, boolean> | null = null;
-    if (ping.ok && isPostgresConfigured()) {
+    if (ping.ok && isPostgresConfigured() && revealDiag) {
       try {
         const pool = getPool();
         const r = await withDeadline(
@@ -154,17 +156,17 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         mode: "postgres",
         configured: true,
         ok: false,
-        host: summary.host,
-        database: summary.database,
-        passwordSet: summary.passwordSet,
-        source: summary.source,
-        migrated: false,
-        seeded: false,
         userCount: null,
-        schema: schemaFlags,
-        error: ping.error || "Database not reachable",
-        hint:
-          'docker compose ps && docker compose logs --tail=80 app db && curl -sS -m 8 "http://127.0.0.1:3000/api/health?db=1"',
+        error: "Database not reachable",
+        ...(revealDiag
+          ? {
+              host: summary.host,
+              database: summary.database,
+              passwordSet: summary.passwordSet,
+              schema: schemaFlags,
+              hint: "docker compose ps && docker compose logs --tail=80 app db",
+            }
+          : {}),
       });
     }
 
@@ -178,29 +180,33 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       mode: "postgres",
       configured: true,
       ok: schemaOk,
-      host: summary.host,
-      database: ping.database ?? summary.database,
-      passwordSet: summary.passwordSet,
-      source: summary.source,
-      migrated: wantMigrate,
-      seeded: true,
       userCount: ping.userCount ?? null,
-      schema: schemaFlags,
+      latencyMs: ping.latencyMs ?? null,
+      migrated: wantMigrate,
       error: schemaOk
         ? null
-        : "Database reachable but schema incomplete (need client_roles.company_id + client_user_roles). Rebuild app, then run ?migrate=1.",
-      latencyMs: ping.latencyMs ?? null,
-      hint: schemaOk
-        ? "PostgreSQL is ready. Portal data is shared and durable."
-        : 'curl -sS -m 45 "http://127.0.0.1:3000/api/db/status?migrate=1"',
+        : "Database reachable but schema incomplete. Rebuild app, then run ?migrate=1.",
+      ...(revealDiag
+        ? {
+            host: summary.host,
+            database: ping.database ?? summary.database,
+            passwordSet: summary.passwordSet,
+            source: summary.source,
+            schema: schemaFlags,
+            seeded: true,
+            hint: schemaOk
+              ? "PostgreSQL is ready."
+              : 'curl -sS -m 45 "http://127.0.0.1:3000/api/db/status?migrate=1"',
+          }
+        : {}),
     });
   } catch (err) {
+    console.error("[db/status]", err);
     return res.status(200).json({
       mode: "postgres",
       configured: isPostgresConfigured(),
       ok: false,
-      error: err instanceof Error ? err.message : "Server error",
-      hint: "docker compose logs --tail=100 app db",
+      error: "Server error",
     });
   }
 }

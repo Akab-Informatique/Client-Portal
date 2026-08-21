@@ -1,9 +1,12 @@
 import type { VercelRequest, VercelResponse } from "@vercel/node";
 import { getDbConfigSummary, pingDatabase } from "../_lib/pg.js";
+import { getRequestSessionUserId, readSession } from "../_lib/session.js";
+import { loadUserById } from "../_lib/auth-server.js";
 
 /**
- * GET /api/db/ping — fastest Postgres check (also implemented natively in
- * server/prod-server.mjs so production never depends on tsx for boot).
+ * GET /api/db/ping
+ * Public: only { ok, configured } for boot.
+ * Staff session: includes non-secret diagnostics (no password flags detail abuse).
  */
 export default async function handler(req: VercelRequest, res: VercelResponse) {
   res.setHeader("Cache-Control", "no-store");
@@ -18,21 +21,41 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       mode: "none",
       configured: false,
       ok: false,
-      error: "POSTGRES_* not set",
+      error: "Database not configured",
     });
   }
 
   const ping = await pingDatabase(4000);
-  return res.status(200).json({
-    mode: "postgres",
+
+  // Minimal public payload (browser boot)
+  const base = {
+    mode: "postgres" as const,
     configured: true,
     ok: ping.ok,
-    host: summary.host,
-    database: ping.database ?? summary.database,
-    user: ping.user ?? summary.user,
-    passwordSet: summary.passwordSet,
     userCount: ping.userCount ?? null,
     latencyMs: ping.latencyMs ?? null,
-    error: ping.error ?? null,
-  });
+    error: ping.ok ? null : "Database unavailable",
+    native: false,
+  };
+
+  // Extra diagnostics only for authenticated staff
+  const uid = getRequestSessionUserId(req);
+  if (uid != null && readSession(req)) {
+    try {
+      const user = await loadUserById(uid);
+      if (user && user.active && user.role !== "client") {
+        return res.status(200).json({
+          ...base,
+          host: summary.host,
+          database: ping.database ?? summary.database,
+          // Do not expose DB user name or passwordSet to clients
+          passwordSet: summary.passwordSet,
+        });
+      }
+    } catch {
+      /* fall through */
+    }
+  }
+
+  return res.status(200).json(base);
 }

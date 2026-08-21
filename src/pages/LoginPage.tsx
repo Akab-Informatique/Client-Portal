@@ -91,7 +91,7 @@ export function LoginPage() {
       })();
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [loading, mfaPending?.token, user]);
+  }, [loading, mfaPending?.kind, mfaPending?.email, user]);
 
   if (loading) {
     return <AkabLoader fullScreen size="xl" label={t("app.loading")} />;

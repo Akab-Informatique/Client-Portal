@@ -5,6 +5,7 @@ import { getDbConfigSummary, pingDatabase } from "./_lib/pg.js";
  * GET /api/health
  * Default: process liveness only (always fast — used by Docker HEALTHCHECK).
  * ?db=1 : also ping Postgres (still time-bounded).
+ * Does not expose host/user/password flags publicly.
  */
 export default async function handler(req: VercelRequest, res: VercelResponse) {
   res.setHeader("Cache-Control", "no-store");
@@ -23,10 +24,6 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     ok: true as boolean,
     service: "akab-portal",
     postgresConfigured: summary.configured,
-    postgresHost: summary.host,
-    postgresDb: summary.database,
-    postgresUser: summary.user,
-    passwordSet: summary.passwordSet,
     ts: new Date().toISOString(),
   };
 
@@ -48,9 +45,8 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     ...base,
     ok: ping.ok,
     postgresOk: ping.ok,
-    database: ping.database ?? null,
     userCount: ping.userCount ?? null,
     latencyMs: ping.latencyMs ?? null,
-    error: ping.error ?? null,
+    error: ping.ok ? null : "Database unavailable",
   });
 }

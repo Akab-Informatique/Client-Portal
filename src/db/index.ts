@@ -34,9 +34,6 @@ export let db: AppDb = null as unknown as AppDb;
 export let dbMode: DbMode = "none";
 export let dbBootError: string | null = null;
 
-const PROXY_SECRET =
-  (import.meta.env.VITE_DB_PROXY_SECRET as string | undefined)?.trim() || "";
-
 const IS_PROD_BUILD = import.meta.env.PROD === true;
 
 function withTimeout<T>(
@@ -175,19 +172,18 @@ async function fetchDbReady(): Promise<StatusPayload> {
 function createProxyDb(): AppDb {
   return drizzleProxy(
     async (sql, params, method) => {
+      // Auth is the HttpOnly session cookie only — never a VITE_ secret.
       const headers: Record<string, string> = {
         "Content-Type": "application/json",
         Accept: "application/json",
       };
-      if (PROXY_SECRET) {
-        headers["x-db-proxy-secret"] = PROXY_SECRET;
-      }
       const controller = new AbortController();
       const timer = window.setTimeout(() => controller.abort(), 15000);
       try {
         const res = await fetch("/api/db/query", {
           method: "POST",
           headers,
+          credentials: "same-origin",
           body: JSON.stringify({ sql, params, method }),
           signal: controller.signal,
         });
