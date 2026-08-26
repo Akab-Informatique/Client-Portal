@@ -11,6 +11,7 @@ export async function openPglite(dataDir?: string) {
   await client.waitReady;
   (window as unknown as { __devs_pglite?: PGlite }).__devs_pglite = client;
 
+  // Dev-only DDL via PGlite SQL API (fixed schema strings — not shell, not user input).
   await client.exec(`
 CREATE TABLE IF NOT EXISTS companies (
   id SERIAL PRIMARY KEY, name TEXT NOT NULL, type TEXT NOT NULL,

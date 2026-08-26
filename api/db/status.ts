@@ -64,8 +64,23 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       String(req.query.migrate ?? "") === "1" ||
       String(req.query.migrate ?? "").toLowerCase() === "true";
     const staff = await isStaffSession(req);
-    // migrate=1 kept for upgrade.sh on localhost; still avoid dumping secrets
-    const revealDiag = staff || wantMigrate;
+    // Host/schema diagnostics: staff session, or migrate=1 only from loopback
+    // (upgrade.sh on the server). Remote anonymous callers never see topology.
+    const headers = req.headers || {};
+    const fwd = headers["x-forwarded-for"];
+    const fwdStr = Array.isArray(fwd) ? fwd[0] : String(fwd || "");
+    const realIp = headers["x-real-ip"];
+    const realStr = Array.isArray(realIp) ? realIp[0] : String(realIp || "");
+    const sock = (req as { socket?: { remoteAddress?: string } }).socket;
+    const remote =
+      fwdStr.split(",")[0]?.trim() || realStr.trim() || String(sock?.remoteAddress || "");
+    const isLoopback =
+      !remote ||
+      remote === "127.0.0.1" ||
+      remote === "::1" ||
+      remote === ":ffff:127.0.0.1" ||
+      remote.endsWith("127.0.0.1");
+    const revealDiag = staff || (wantMigrate && isLoopback);
 
     if (!summary.configured) {
       return res.status(200).json({

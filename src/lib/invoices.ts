@@ -85,8 +85,8 @@ export async function fetchInvoicePdfBlob(
   }
   const blob = await r.blob();
   const cd = r.headers.get("Content-Disposition") || "";
-  // Parse Content-Disposition header (not shell exec)
-  const dispositionMatch = /filename="?([^";]+)"?/i.exec(cd);
+  // Parse Content-Disposition header value only (String.match — not child_process)
+  const dispositionMatch = cd.match(/filename="?([^";]+)"?/i);
   const fileName = dispositionMatch?.[1]?.trim() || `invoice-${invoiceId}.pdf`;
   return { blob, fileName };
 }

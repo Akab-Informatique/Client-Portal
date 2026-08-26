@@ -350,15 +350,43 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       if (paramErr) {
         return res.status(403).json({ error: paramErr });
       }
+    } else {
+      // Staff (non-admin): block privilege escalation and MFA tampering via SQL
+      if (user.role !== "admin") {
+        if (
+          /\bupdate\s+["']?users["']?/i.test(sql) &&
+          /\b(role|staff_role_id|mfa_enabled|active)\b/i.test(sql)
+        ) {
+          return res.status(403).json({ error: "Access denied." });
+        }
+        if (
+          /\b(insert\s+into|delete\s+from)\s+["']?users["']?/i.test(sql) &&
+          /\brole\b/i.test(sql)
+        ) {
+          return res.status(403).json({ error: "Access denied." });
+        }
+      }
+      // Nobody may clear MFA secrets or set mfa_enabled via proxy
+      if (
+        !isSelectLike(sql) &&
+        /\bmfa_enabled\b/i.test(sql) &&
+        mentionsTable(sql, "users")
+      ) {
+        return res.status(403).json({
+          error: "MFA fields can only be changed through auth APIs.",
+        });
+      }
+    }
+
+    // SharePoint client secret: never readable; writable only by admin staff
+    if (/\bsharepoint_client_secret\b/i.test(sql) && !isSelectLike(sql)) {
+      if (user.role !== "admin") {
+        return res.status(403).json({ error: "Access denied." });
+      }
     }
 
     if (isSelectLike(sql)) {
       sql = redactSecretsInSelect(sql);
-    } else if (
-      /\bsharepoint_client_secret\b/i.test(sql) &&
-      user.role === "client"
-    ) {
-      return res.status(403).json({ error: "Access denied." });
     }
 
     const rows = await proxyQuery({ sql, params, method });
