@@ -1,7 +1,7 @@
 import type { VercelRequest, VercelResponse } from "@vercel/node";
 import {
   isMfaEnabled,
-  loadUserById,
+  requireSessionUser,
   toSessionUserDto,
 } from "../_lib/auth-server.js";
 import {
@@ -15,6 +15,7 @@ import { isPostgresConfigured } from "../_lib/pg.js";
 /**
  * GET /api/auth/me
  * Returns current session user (no secrets) or MFA-pending state.
+ * Enforces session_epoch so logout / password / MFA revoke take effect immediately.
  */
 export default async function handler(req: VercelRequest, res: VercelResponse) {
   try {
@@ -23,18 +24,19 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       return res.status(405).json({ error: "Method not allowed" });
     }
     if (!isPostgresConfigured()) {
-      return res.status(503).json({ ok: false, error: "Database not configured" });
+      return res
+        .status(503)
+        .json({ ok: false, error: "Database not configured" });
     }
 
     const session = readSession(req);
     if (session) {
-      const user = await loadUserById(session.uid);
-      if (!user || !user.active) {
+      const user = await requireSessionUser(session);
+      if (!user) {
         clearSessionCookie(res, req);
         return res.status(401).json({ ok: false, user: null });
       }
       if (!isMfaEnabled(user)) {
-        // Force re-enroll — clear full session
         clearSessionCookie(res, req);
         setMfaPendingCookie(
           res,

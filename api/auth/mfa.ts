@@ -9,6 +9,7 @@ import {
   hashEmailOtp,
   hashRecoveryCodes,
   isEmailOtpExpired,
+  bumpSessionEpoch,
   isMfaEnabled,
   loadUserById,
   toSessionUserDto,
@@ -86,11 +87,12 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     async function finishLogin(userId: number) {
       const user = await loadUserById(userId);
       if (!user || !user.active) return null;
-      setSessionCookie(res, user.id, req);
+      setSessionCookie(res, user.id, req, user.session_epoch || 0);
       clearMfaPendingCookie(res, req);
       rateLimitReset(`mfa:uid:${userId}`);
       rateLimitReset(`mfa:ip:${ip}`);
       rateLimitReset(`mfa:email-send:${userId}`);
+      rateLimitReset(`mfa:email-verify:${userId}`);
       return toSessionUserDto(user);
     }
 
@@ -415,6 +417,8 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       if (!verifyTotp(found.mfa_totp_secret || "", code)) {
         return res.status(401).json({ ok: false, error: "invalid_code" });
       }
+      // New recovery codes → revoke any stolen session cookies
+      await bumpSessionEpoch(found.id);
       const recoveryCodes = generateRecoveryCodes(8);
       const hashed = hashRecoveryCodes(recoveryCodes);
       await p.query(`UPDATE users SET mfa_recovery_codes = $1 WHERE id = $2`, [

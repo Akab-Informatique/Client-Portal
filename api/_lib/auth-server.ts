@@ -277,8 +277,35 @@ function mapUser(row: Record<string, unknown>): DbUser {
       row.mfa_email_code_expires == null
         ? null
         : String(row.mfa_email_code_expires),
+    session_epoch:
+      row.session_epoch == null || row.session_epoch === ""
+        ? 0
+        : Number(row.session_epoch) || 0,
     created_at: (row.created_at as Date | string | null) ?? null,
   };
+}
+
+/**
+ * Invalidate all outstanding session cookies for this user.
+ * Call on logout, password change, MFA disable / re-enroll.
+ */
+export async function bumpSessionEpoch(userId: number): Promise<number> {
+  if (!Number.isFinite(userId) || userId <= 0) return 0;
+  const p = getPool();
+  try {
+    const r = await p.query(
+      `UPDATE users
+       SET session_epoch = COALESCE(session_epoch, 0) + 1
+       WHERE id = $1
+       RETURNING session_epoch`,
+      [userId],
+    );
+    return Number((r.rows[0] as { session_epoch?: number } | undefined)?.session_epoch ?? 0);
+  } catch (err) {
+    // Column may not exist until migrate runs — non-fatal
+    console.warn("[auth] bumpSessionEpoch failed", err);
+    return 0;
+  }
 }
 
 export async function loadUserById(id: number): Promise<DbUser | null> {

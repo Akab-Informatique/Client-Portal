@@ -3,9 +3,9 @@ import { getDbConfigSummary, pingDatabase } from "./_lib/pg.js";
 
 /**
  * GET /api/health
- * Default: process liveness only (always fast — used by Docker HEALTHCHECK).
- * ?db=1 : also ping Postgres (still time-bounded).
- * Does not expose host/user/password flags publicly.
+ * Default: process liveness only (Docker HEALTHCHECK).
+ * ?db=1 : also ping Postgres — public response is ok/configured only
+ * (no host, user, userCount, passwordSet, or raw error strings).
  */
 export default async function handler(req: VercelRequest, res: VercelResponse) {
   res.setHeader("Cache-Control", "no-store");
@@ -45,8 +45,8 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     ...base,
     ok: ping.ok,
     postgresOk: ping.ok,
-    userCount: ping.userCount ?? null,
     latencyMs: ping.latencyMs ?? null,
+    // Intentionally omit userCount / host / passwordSet on public health
     error: ping.ok ? null : "Database unavailable",
   });
 }

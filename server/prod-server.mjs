@@ -295,11 +295,11 @@ async function handleNativeApi(req, res, url) {
       return true;
     }
     const ping = await nativeDbPing(4000);
+    // Public: ok only — no userCount/host/passwordSet
     sendJson(res, ping.ok ? 200 : 503, {
       ...base,
       ok: ping.ok,
       postgresOk: ping.ok,
-      userCount: ping.userCount ?? null,
       latencyMs: ping.latencyMs ?? null,
       error: ping.ok ? null : "Database unavailable",
     });
@@ -329,12 +329,11 @@ async function handleNativeApi(req, res, url) {
         return true;
       }
       const ping = await nativeDbPing(4000);
-      // Public boot payload — no host/user/passwordSet
+      // Public boot payload — ok/configured only (no host/user/userCount/passwordSet)
       sendJson(res, 200, {
         mode: "postgres",
         configured: true,
         ok: Boolean(ping.ok),
-        userCount: ping.userCount ?? null,
         latencyMs: ping.latencyMs ?? null,
         error: ping.ok ? null : "Database unavailable",
         native: true,

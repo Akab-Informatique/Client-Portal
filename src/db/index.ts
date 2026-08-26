@@ -115,7 +115,7 @@ async function fetchDbReady(): Promise<StatusPayload> {
         continue;
       }
 
-      // Normalize health?db=1 shape → status shape
+      // Public health/ping only expose ok/configured — no topology.
       if (path.includes("/api/health")) {
         const configured = Boolean(data.postgresConfigured);
         const ok = Boolean(data.postgresOk ?? data.ok) && configured;
@@ -123,10 +123,6 @@ async function fetchDbReady(): Promise<StatusPayload> {
           mode: configured ? "postgres" : "none",
           configured,
           ok,
-          host: (data.postgresHost as string) ?? null,
-          database: (data.database as string) ?? (data.postgresDb as string) ?? null,
-          userCount: (data.userCount as number) ?? null,
-          passwordSet: Boolean(data.passwordSet),
           error: (data.error as string) ?? null,
           latencyMs: (data.latencyMs as number) ?? null,
           native: Boolean(data.native),
@@ -139,10 +135,6 @@ async function fetchDbReady(): Promise<StatusPayload> {
           mode: (data.mode as string) ?? "postgres",
           configured: data.configured !== false,
           ok: Boolean(data.ok),
-          host: (data.host as string) ?? null,
-          database: (data.database as string) ?? null,
-          userCount: (data.userCount as number) ?? null,
-          passwordSet: Boolean(data.passwordSet),
           error: (data.error as string) ?? null,
           hint: (data.hint as string) ?? null,
           latencyMs: (data.latencyMs as number) ?? null,

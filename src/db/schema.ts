@@ -159,6 +159,11 @@ export const users = pgTable("users", {
    */
   board_email_opt_in: boolean("board_email_opt_in"),
   /**
+   * Incremented on logout / password change / MFA change so HMAC session
+   * cookies issued earlier become invalid (server checks cookie.epoch).
+   */
+  session_epoch: integer("session_epoch"),
+  /**
    * Multi-factor authentication (required for all portal users).
    * Primary: TOTP authenticator app. Backup: emailed one-time code + recovery codes.
    */

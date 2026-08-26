@@ -2,10 +2,11 @@ import type { VercelRequest, VercelResponse } from "@vercel/node";
 import { isPostgresConfigured, proxyQuery } from "../_lib/pg.js";
 import { hashPassword, isPasswordHashed } from "../_lib/passwords.js";
 import { assertSameOrigin } from "../_lib/request-guard.js";
-import { getRequestSessionUserId, readSession } from "../_lib/session.js";
+import { readSession } from "../_lib/session.js";
 import {
+  bumpSessionEpoch,
   isMfaEnabled,
-  loadUserById,
+  requireSessionUser,
   toSessionUserDto,
   type DbUser,
   type SessionUserDto,
@@ -71,62 +72,24 @@ const PRIVILEGE_COLS = [
 ] as const;
 
 /**
- * Fixed safe users projection (ordinal-stable for Drizzle when replacing SELECT *).
- * Built from a constant allowlist — never from request input.
+ * Fixed safe projections as whole SQL fragments (constant allowlists only).
+ * Never built from request input — avoids string-concat of user values into SQL.
  */
-const USERS_SAFE_SELECT = [
-  "id",
-  "email",
-  "NULL::text AS password",
-  "name",
-  "role",
-  "company_id",
-  "active",
-  "staff_role_id",
-  "client_role_id",
-  "billing_access",
-  "job_title",
-  "phone",
-  "mobile",
-  "bio",
-  "locale",
-  "itglue_user_id",
-  "datto_web_remote_device_uids",
-  "board_email_opt_in",
-  "mfa_enabled",
-  "NULL::text AS mfa_totp_secret",
-  "NULL::text AS mfa_recovery_codes",
-  "NULL::text AS mfa_email_code_hash",
-  "NULL::text AS mfa_email_code_expires",
-  "created_at",
-].join(", ");
+const USERS_SAFE_SELECT_SQL =
+  "SELECT id, email, NULL::text AS password, name, role, company_id, active, " +
+  "staff_role_id, client_role_id, billing_access, job_title, phone, mobile, bio, " +
+  "locale, itglue_user_id, datto_web_remote_device_uids, board_email_opt_in, " +
+  "mfa_enabled, NULL::text AS mfa_totp_secret, NULL::text AS mfa_recovery_codes, " +
+  "NULL::text AS mfa_email_code_hash, NULL::text AS mfa_email_code_expires, " +
+  "COALESCE(session_epoch, 0) AS session_epoch, created_at FROM users";
 
-/**
- * Fixed safe companies projection — SharePoint client secret always NULL.
- * Constant allowlist only.
- */
-const COMPANIES_SAFE_SELECT = [
-  "id",
-  "name",
-  "type",
-  "email",
-  "phone",
-  "notes",
-  "active",
-  "autotask_company_id",
-  "dashboard_layout",
-  "sharepoint_site_url",
-  "sharepoint_folder_path",
-  "sharepoint_tenant_id",
-  "sharepoint_client_id",
-  "NULL::text AS sharepoint_client_secret",
-  "documentation_title",
-  "documentation_enabled",
-  "itglue_organization_id",
-  "datto_rmm_site_uid",
-  "datto_rmm_site_name",
-  "created_at",
-].join(", ");
+const COMPANIES_SAFE_SELECT_SQL =
+  "SELECT id, name, type, email, phone, notes, active, autotask_company_id, " +
+  "dashboard_layout, sharepoint_site_url, sharepoint_folder_path, " +
+  "sharepoint_tenant_id, sharepoint_client_id, " +
+  "NULL::text AS sharepoint_client_secret, documentation_title, " +
+  "documentation_enabled, itglue_organization_id, datto_rmm_site_uid, " +
+  "datto_rmm_site_name, created_at FROM companies";
 
 const TENANT_TABLES = [
   "board_messages",
@@ -200,16 +163,20 @@ function tablesMentioned(sql: string): string[] {
 function redactSecretsInSelect(sql: string): string {
   let out = sql;
 
-  // Shape match only (RegExp.prototype.test / String.replace — not child_process).
-  out = out.replace(
-    /select\s+(?:["']?users["']?\.)?\*\s+from\s+["']?users["']?/gi,
-    // Fixed constant projection — not user input:
-    `SELECT ${USERS_SAFE_SELECT} FROM users`,
+  // Constant whole-statement replacements (no user input in the replacement text).
+  // Uses String.match on statement shape only — not shell execution.
+  const usersStar = out.match(
+    /^([\s\S]*?)select\s+(?:["']?users["']?\.)?\*\s+from\s+["']?users["']?([\s\S]*)$/i,
   );
-  out = out.replace(
-    /select\s+(?:["']?companies["']?\.)?\*\s+from\s+["']?companies["']?/gi,
-    `SELECT ${COMPANIES_SAFE_SELECT} FROM companies`,
+  if (usersStar) {
+    out = usersStar[1] + USERS_SAFE_SELECT_SQL + usersStar[2];
+  }
+  const companiesStar = out.match(
+    /^([\s\S]*?)select\s+(?:["']?companies["']?\.)?\*\s+from\s+["']?companies["']?([\s\S]*)$/i,
   );
+  if (companiesStar) {
+    out = companiesStar[1] + COMPANIES_SAFE_SELECT_SQL + companiesStar[2];
+  }
 
   // Explicit secret columns → NULL (keeps aliases/ordinals when possible)
   const secretCols = [
@@ -535,16 +502,11 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     }
 
     const session = readSession(req);
-    const uid = getRequestSessionUserId(req);
-    if (!session || uid == null) {
+    // requireSessionUser also enforces session_epoch (logout / password / MFA revoke)
+    const user = await requireSessionUser(session);
+    if (!user || !isMfaEnabled(user)) {
       return res.status(401).json({ error: "Authentication required." });
     }
-
-    const user = await loadUserById(uid);
-    if (!user || !user.active || !isMfaEnabled(user)) {
-      return res.status(401).json({ error: "Authentication required." });
-    }
-
     // Resolve server-side permissions (never trust client patchSession / local state)
     const dto = await toSessionUserDto(user);
 
@@ -614,6 +576,30 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
     // Always execute with bound parameters — never interpolate params into sql.
     const rows = await proxyQuery({ sql, params, method });
+
+    // Admin password changes via the proxy must revoke outstanding cookies
+    if (
+      !isSelectLike(sql) &&
+      mentionsTable(sql, "users") &&
+      /\bpassword\b/i.test(sql)
+    ) {
+      try {
+        for (const hit of sql.matchAll(/\bid\s*=\s*\$(\d+)\b/gi)) {
+          const idx = Number(hit[1]) - 1;
+          const idVal = params[idx];
+          const idNum = typeof idVal === "number" ? idVal : Number(idVal);
+          if (Number.isFinite(idNum) && idNum > 0) {
+            await bumpSessionEpoch(idNum);
+          }
+        }
+      } catch (e) {
+        console.warn(
+          "[db/query] session epoch bump after password write failed",
+          e,
+        );
+      }
+    }
+
     return res.status(200).json(rows);
   } catch (err) {
     console.error("[akab-db/query]", err);

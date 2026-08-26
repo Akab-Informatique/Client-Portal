@@ -1,14 +1,15 @@
 import type { VercelRequest, VercelResponse } from "@vercel/node";
+import { bumpSessionEpoch, loadUserById } from "../_lib/auth-server.js";
 import { assertSameOrigin } from "../_lib/request-guard.js";
 import {
   clearMfaPendingCookie,
   clearSessionCookie,
+  readSession,
 } from "../_lib/session.js";
 
 /**
- * POST /api/auth/logout — clear HttpOnly session + MFA pending cookies.
- * Always drops both cookies so a half-finished MFA login cannot be resumed
- * on a shared browser after "cancel" / "sign out".
+ * POST /api/auth/logout — clear HttpOnly session + MFA pending cookies
+ * and bump users.session_epoch so a copied cookie cannot be reused.
  */
 export default async function handler(req: VercelRequest, res: VercelResponse) {
   if (req.method !== "POST") {
@@ -19,8 +20,17 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   if (originErr) {
     return res.status(403).json({ error: "Forbidden" });
   }
-  // Explicitly clear both — clearSessionCookie also clears MFA pending, but
-  // call both so the contract stays obvious and survives refactors.
+
+  const session = readSession(req);
+  if (session?.uid) {
+    try {
+      const user = await loadUserById(session.uid);
+      if (user) await bumpSessionEpoch(user.id);
+    } catch (err) {
+      console.warn("[auth/logout] epoch bump failed", err);
+    }
+  }
+
   clearSessionCookie(res, req);
   clearMfaPendingCookie(res, req);
   return res.status(200).json({ ok: true });

@@ -49,20 +49,16 @@ function cleanEnv(v: string | undefined): string {
 
 /**
  * Session HMAC key. MUST be set via SESSION_SECRET (or AKAB_SESSION_SECRET).
- * No fallbacks to POSTGRES_PASSWORD or hard-coded strings — those let anyone
- * who reads the repo mint admin cookies.
+ * Require ≥32 characters of entropy — short/human secrets are offline-bruteforceable
+ * against a stolen cookie. No POSTGRES_PASSWORD or hard-coded fallbacks.
  */
 export function getSessionSecret(): string {
   const explicit =
     cleanEnv(process.env.SESSION_SECRET) ||
     cleanEnv(process.env.AKAB_SESSION_SECRET);
   if (explicit && explicit.length >= 32) return explicit;
-  if (explicit && explicit.length >= 16) {
-    // Accept 16+ but warn via throw message preference for 32
-    return explicit;
-  }
   throw new Error(
-    "SESSION_SECRET is missing or too short (need ≥16 chars, prefer 32+). " +
+    "SESSION_SECRET is missing or too short (need ≥32 characters). " +
       "Generate with: openssl rand -hex 32  then add SESSION_SECRET=... to .env",
   );
 }
