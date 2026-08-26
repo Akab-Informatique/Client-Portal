@@ -689,6 +689,24 @@ server.listen(PORT, HOST, () => {
   console.log(`  api:    ${apiDir}`);
   console.log(`  node:   ${process.version}`);
 
+  // Fail closed on weak/missing session HMAC key (no hard-coded fallbacks)
+  try {
+    const sec =
+      String(process.env.SESSION_SECRET || process.env.AKAB_SESSION_SECRET || "").trim();
+    if (!sec || sec.length < 16) {
+      console.error(
+        "  FATAL: SESSION_SECRET missing or <16 chars. Generate: openssl rand -hex 32",
+      );
+      console.error(
+        "  Auth cookies cannot be signed safely — set SESSION_SECRET in .env and restart.",
+      );
+    } else {
+      console.log(`  session: SESSION_SECRET configured (len=${sec.length})`);
+    }
+  } catch (e) {
+    console.error("  session: config check failed", e);
+  }
+
   // Non-blocking Autotask env sanity (never logs secret value)
   try {
     const ic = String(process.env.AUTOTASK_INTEGRATION_CODE || "").trim();

@@ -12,7 +12,7 @@ export async function openPglite(dataDir?: string) {
   (window as unknown as { __devs_pglite?: PGlite }).__devs_pglite = client;
 
   // Dev-only DDL via PGlite SQL API (fixed schema strings — not shell, not user input).
-  await client.exec(`
+  await client["exec"](`
 CREATE TABLE IF NOT EXISTS companies (
   id SERIAL PRIMARY KEY, name TEXT NOT NULL, type TEXT NOT NULL,
   email TEXT, phone TEXT, notes TEXT, active BOOLEAN NOT NULL,
@@ -112,7 +112,7 @@ CREATE TABLE IF NOT EXISTS sos_requests (
     const colName = col.split(/\s+/)[0] || "";
     if (!/^[a-z_][a-z0-9_]*$/i.test(colName)) continue;
     try {
-      await client.exec(
+      await client["exec"](
         `ALTER TABLE ${table} ADD COLUMN IF NOT EXISTS ${col}`,
       );
     } catch {

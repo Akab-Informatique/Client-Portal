@@ -1,5 +1,7 @@
 import type { VercelRequest, VercelResponse } from "@vercel/node";
 import { isPostgresConfigured, proxyQuery } from "../_lib/pg.js";
+import { hashPassword, isPasswordHashed } from "../_lib/passwords.js";
+import { assertSameOrigin } from "../_lib/request-guard.js";
 import { getRequestSessionUserId, readSession } from "../_lib/session.js";
 import { isMfaEnabled, loadUserById, type DbUser } from "../_lib/auth-server.js";
 
@@ -241,10 +243,8 @@ function assertClientParams(
   const userId = Number(user.id);
   if (!Number.isFinite(companyId)) return "Client account has no company scope.";
 
-  const companyRe = /\bcompany_id\s*=\s*\$(\d+)\b/gi;
-  let m: RegExpExecArray | null;
-  while ((m = companyRe.exec(sql))) {
-    const idx = Number(m[1]) - 1;
+  for (const hit of sql.matchAll(/\bcompany_id\s*=\s*\$(\d+)\b/gi)) {
+    const idx = Number(hit[1]) - 1;
     const v = params[idx];
     const num = typeof v === "number" ? v : Number(v);
     if (!Number.isFinite(num) || num !== companyId) {
@@ -254,9 +254,8 @@ function assertClientParams(
 
   // companies.id = $n
   if (mentionsTable(sql, "companies")) {
-    const idRe = /\bid\s*=\s*\$(\d+)\b/gi;
-    while ((m = idRe.exec(sql))) {
-      const idx = Number(m[1]) - 1;
+    for (const hit of sql.matchAll(/\bid\s*=\s*\$(\d+)\b/gi)) {
+      const idx = Number(hit[1]) - 1;
       const v = params[idx];
       const num = typeof v === "number" ? v : Number(v);
       if (!Number.isFinite(num) || num !== companyId) {
@@ -266,9 +265,8 @@ function assertClientParams(
   }
 
   if (/\bupdate\s+["']?users["']?/i.test(sql)) {
-    const idRe = /\bid\s*=\s*\$(\d+)\b/gi;
-    while ((m = idRe.exec(sql))) {
-      const idx = Number(m[1]) - 1;
+    for (const hit of sql.matchAll(/\bid\s*=\s*\$(\d+)\b/gi)) {
+      const idx = Number(hit[1]) - 1;
       const v = params[idx];
       const num = typeof v === "number" ? v : Number(v);
       if (!Number.isFinite(num) || num !== userId) {
@@ -290,6 +288,51 @@ function assertMfaWriteRules(sql: string): string | null {
   return null;
 }
 
+
+/**
+ * Hash plaintext password bind params on users INSERT/UPDATE so admins
+ * setting passwords via the app never store cleartext.
+ */
+async function hashPasswordParamsInSql(
+  sql: string,
+  params: unknown[],
+): Promise<unknown[]> {
+  if (isSelectLike(sql)) return params;
+  if (!mentionsTable(sql, "users")) return params;
+  if (!/\bpassword\b/i.test(sql)) return params;
+  const out = params.slice();
+  const idxs = new Set<number>();
+  for (const hit of sql.matchAll(/\bpassword\s*=\s*\$(\d+)\b/gi)) {
+    const idx = Number(hit[1]) - 1;
+    if (Number.isFinite(idx) && idx >= 0) idxs.add(idx);
+  }
+  const insertCols = sql.match(
+    /insert\s+into\s+["']?users["']?\s*\(([^)]+)\)/i,
+  );
+  if (insertCols) {
+    const cols = insertCols[1].split(",").map((c) =>
+      c.trim().replace(/["']/g, "").toLowerCase(),
+    );
+    const pwCol = cols.indexOf("password");
+    if (pwCol >= 0) {
+      const valuesMatch = sql.match(/values\s*\(([^)]+)\)/i);
+      if (valuesMatch) {
+        const placeholders = valuesMatch[1].split(",").map((s) => s.trim());
+        const ph = placeholders[pwCol];
+        const pm = ph?.match(/^\$(\d+)$/);
+        if (pm) idxs.add(Number(pm[1]) - 1);
+      }
+    }
+  }
+  for (const idx of idxs) {
+    const v = out[idx];
+    if (typeof v === "string" && v.length > 0 && !isPasswordHashed(v)) {
+      out[idx] = await hashPassword(v);
+    }
+  }
+  return out;
+}
+
 export default async function handler(req: VercelRequest, res: VercelResponse) {
   try {
     if (req.method === "OPTIONS") {
@@ -299,6 +342,11 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     if (req.method !== "POST") {
       res.setHeader("Allow", "POST");
       return res.status(405).json({ error: "Method not allowed" });
+    }
+
+    const originErr = assertSameOrigin(req);
+    if (originErr) {
+      return res.status(403).json({ error: "Forbidden" });
     }
 
     if (!isPostgresConfigured()) {
@@ -318,7 +366,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
     const body = bodyIsObj(req.body) ? req.body : {};
     let sql = String(body.sql ?? "").trim();
-    const params = Array.isArray(body.params) ? body.params : [];
+    let params = Array.isArray(body.params) ? body.params : [];
     const method = String(body.method ?? "all");
 
     if (!sql) {
@@ -387,6 +435,8 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
     if (isSelectLike(sql)) {
       sql = redactSecretsInSelect(sql);
+    } else {
+      params = await hashPasswordParamsInSql(sql, params);
     }
 
     const rows = await proxyQuery({ sql, params, method });

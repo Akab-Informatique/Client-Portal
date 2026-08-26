@@ -490,7 +490,7 @@ export async function triggerSosDownloadBlob(
     let name = (fileName || "").trim();
     if (!name) {
       const cd = res.headers.get("content-disposition") || "";
-      const m = cd.match(/filename\*?=(?:UTF-8''|"?)([^";]+)/i); // Content-Disposition only
+      const m = cd.match(/filename\*?=(?:UTF-8''|"?)([^";]+)/i); // header field parse only
       if (m?.[1]) name = decodeURIComponent(m[1].replace(/"/g, ""));
     }
     if (!name) {

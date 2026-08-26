@@ -12,10 +12,16 @@ import {
   isMfaEnabled,
   loadUserById,
   toSessionUserDto,
-  totpQrImageUrl,
+  totpQrDataUrl,
   verifyTotp,
 } from "../_lib/auth-server.js";
 import { getPool, isPostgresConfigured } from "../_lib/pg.js";
+import {
+  clientIp,
+  rateLimit,
+  rateLimitReset,
+} from "../_lib/rate-limit.js";
+import { assertSameOrigin } from "../_lib/request-guard.js";
 import { isSmtpConfigured, sendPlainEmail } from "../_lib/smtp-client.js";
 import {
   clearMfaPendingCookie,
@@ -201,7 +207,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         accountName: found.email,
         issuer: "AKAB Portal",
       });
-      const qrUrl = totpQrImageUrl(otpauthUrl, 200);
+      const qrUrl = await totpQrDataUrl(otpauthUrl, 200);
       setMfaPendingCookie(res, {
         uid: found.id,
         email: found.email,

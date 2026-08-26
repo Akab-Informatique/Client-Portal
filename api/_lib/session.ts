@@ -47,18 +47,29 @@ function cleanEnv(v: string | undefined): string {
   return s;
 }
 
-/** Prefer SESSION_SECRET; fall back to DB password only to avoid breaking boots — still server-side only. */
+/**
+ * Session HMAC key. MUST be set via SESSION_SECRET (or AKAB_SESSION_SECRET).
+ * No fallbacks to POSTGRES_PASSWORD or hard-coded strings — those let anyone
+ * who reads the repo mint admin cookies.
+ */
 export function getSessionSecret(): string {
   const explicit =
     cleanEnv(process.env.SESSION_SECRET) ||
     cleanEnv(process.env.AKAB_SESSION_SECRET);
-  if (explicit && explicit.length >= 16) return explicit;
-  const fallback = cleanEnv(process.env.POSTGRES_PASSWORD) || "";
-  if (fallback && fallback.length >= 8) {
-    return `akab-session:${fallback}`;
+  if (explicit && explicit.length >= 32) return explicit;
+  if (explicit && explicit.length >= 16) {
+    // Accept 16+ but warn via throw message preference for 32
+    return explicit;
   }
-  // Dev-only last resort — production must set SESSION_SECRET
-  return "akab-dev-insecure-session-secret-change-me";
+  throw new Error(
+    "SESSION_SECRET is missing or too short (need ≥16 chars, prefer 32+). " +
+      "Generate with: openssl rand -hex 32  then add SESSION_SECRET=... to .env",
+  );
+}
+
+/** Soft check used at process boot so misconfig fails fast with a clear log. */
+export function assertSessionSecretConfigured(): void {
+  getSessionSecret();
 }
 
 function b64url(buf: Buffer): string {

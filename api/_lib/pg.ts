@@ -617,12 +617,17 @@ export async function ensureBootstrap(): Promise<{ seeded: boolean }> {
       const acmeId = (acme.rows[0] as { id: number }).id;
       const northId = (north.rows[0] as { id: number }).id;
 
+      const { hashPassword } = await import("./passwords.js");
+      const adminPw = await hashPassword("admin123");
+      const techPw = await hashPassword("tech123");
+      const clientPw = await hashPassword("client123");
+
       const adminUser = await client.query(
         `INSERT INTO users (email, password, name, role, company_id, active, staff_role_id, job_title, phone, bio, locale, board_email_opt_in)
          VALUES ($1,$2,$3,'admin',$4,TRUE,$5,$6,$7,$8,'en',TRUE) RETURNING id`,
         [
           "admin@akab.local",
-          "admin123",
+          adminPw,
           "Portal Admin",
           soluId,
           adminRoleId,
@@ -636,7 +641,7 @@ export async function ensureBootstrap(): Promise<{ seeded: boolean }> {
          VALUES ($1,$2,$3,'technician',$4,TRUE,$5,$6,$7,$8,'en',TRUE)`,
         [
           "tech@akab.local",
-          "tech123",
+          techPw,
           "Alex Technician",
           soluId,
           techRoleId,
@@ -650,7 +655,7 @@ export async function ensureBootstrap(): Promise<{ seeded: boolean }> {
          VALUES ($1,$2,$3,'client',$4,TRUE,$5,$6,$7,'en',TRUE)`,
         [
           "client@acme.example",
-          "client123",
+          clientPw,
           "Jordan Client",
           acmeId,
           "IT Coordinator",

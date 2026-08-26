@@ -165,23 +165,20 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       needsMfa?: boolean;
       kind?: MfaPendingKind;
       error?: string;
-      email?: string;
-      name?: string;
     }>("/api/auth/login", {
       method: "POST",
       body: JSON.stringify({ email, password }),
     });
     if (!res.ok || !data.ok) {
-      if (data.error === "deactivated") {
-        return { ok: false as const, error: "deactivated" as const };
-      }
+      // Server returns a single generic "invalid" (incl. deactivated / rate limit)
       return { ok: false as const, error: "invalid" as const };
     }
     const kind: MfaPendingKind = data.kind === "enroll" ? "enroll" : "challenge";
+    // Name is filled after MFA via /api/auth/me — do not trust login body
     setMfaPending({
       kind,
-      email: data.email || email,
-      name: data.name || "",
+      email: email.trim().toLowerCase(),
+      name: "",
     });
     return { ok: true as const, needsMfa: true as const, kind };
   }, []);

@@ -123,9 +123,27 @@ export function buildOtpAuthUri(opts: {
   return `otpauth://totp/${label}?${params.toString()}`;
 }
 
-export function totpQrImageUrl(otpauthUri: string, size = 200): string {
+/**
+ * Render TOTP QR locally as a data: URL — never send the secret to a third party.
+ */
+export async function totpQrDataUrl(
+  otpauthUri: string,
+  size = 200,
+): Promise<string> {
   const s = Math.min(Math.max(size, 120), 400);
-  return `https://api.qrserver.com/v1/create-qr-code/?size=${s}x${s}&data=${encodeURIComponent(otpauthUri)}`;
+  const QRCode = await import("qrcode");
+  return QRCode.toDataURL(otpauthUri, {
+    width: s,
+    margin: 2,
+    errorCorrectionLevel: "M",
+  });
+}
+
+/** @deprecated use totpQrDataUrl — kept name for call-site search; throws if misused */
+export function totpQrImageUrl(_otpauthUri: string, _size = 200): string {
+  throw new Error(
+    "totpQrImageUrl removed — use async totpQrDataUrl (local QR, no third party)",
+  );
 }
 
 function generateTotpCode(secretBase32: string, timeMs = Date.now()): string {
