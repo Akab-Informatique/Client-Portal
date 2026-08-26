@@ -84,14 +84,18 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     }
 
     rateLimitReset(`login:email:${email}`);
-    clearSessionCookie(res);
+    clearSessionCookie(res, req);
     const kind = isMfaEnabled(found) ? "challenge" : "enroll";
-    setMfaPendingCookie(res, {
-      uid: found.id,
-      email: found.email,
-      name: found.name,
-      kind,
-    });
+    setMfaPendingCookie(
+      res,
+      {
+        uid: found.id,
+        email: found.email,
+        name: found.name,
+        kind,
+      },
+      req,
+    );
 
     // Do not echo name/email until MFA completes (me endpoint after session).
     return res.status(200).json({

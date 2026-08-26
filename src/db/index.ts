@@ -173,6 +173,8 @@ function createProxyDb(): AppDb {
   return drizzleProxy(
     async (sql, params, method) => {
       // Auth is the HttpOnly session cookie only — never a VITE_ secret.
+      // Authorization (role, tenant company_id, permission map) is enforced
+      // server-side in /api/db/query from the cookie — not from this client.
       const headers: Record<string, string> = {
         "Content-Type": "application/json",
         Accept: "application/json",

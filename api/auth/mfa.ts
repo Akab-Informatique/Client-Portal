@@ -42,10 +42,20 @@ type Action =
   | "disable"
   | "regenerate_recovery";
 
+const VERIFY_ACTIONS = new Set<Action>([
+  "verify_totp",
+  "verify_recovery",
+  "verify_email",
+  "confirm_enroll",
+  "disable",
+  "regenerate_recovery",
+]);
+
 /**
  * POST /api/auth/mfa
  * Body: { action, code? }
  * All MFA verification and secret writes happen server-side only.
+ * Verification actions are rate-limited per user and per IP.
  */
 export default async function handler(req: VercelRequest, res: VercelResponse) {
   try {
@@ -53,6 +63,12 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       res.setHeader("Allow", "POST");
       return res.status(405).json({ error: "Method not allowed" });
     }
+
+    const originErr = assertSameOrigin(req);
+    if (originErr) {
+      return res.status(403).json({ ok: false, error: "forbidden" });
+    }
+
     if (!isPostgresConfigured()) {
       return res.status(503).json({ ok: false, error: "server_error" });
     }
@@ -65,13 +81,63 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     const action = String(body.action || "") as Action;
     const code = String(body.code ?? body.totpCode ?? "").trim();
     const p = getPool();
+    const ip = clientIp(req);
 
     async function finishLogin(userId: number) {
       const user = await loadUserById(userId);
       if (!user || !user.active) return null;
-      setSessionCookie(res, user.id);
-      clearMfaPendingCookie(res);
+      setSessionCookie(res, user.id, req);
+      clearMfaPendingCookie(res, req);
+      rateLimitReset(`mfa:uid:${userId}`);
+      rateLimitReset(`mfa:ip:${ip}`);
+      rateLimitReset(`mfa:email-send:${userId}`);
       return toSessionUserDto(user);
+    }
+
+    function checkVerifyLimits(userId: number): {
+      ok: true;
+    } | { ok: false; status: number; body: Record<string, unknown> } {
+      const uidLimit = rateLimit({
+        key: `mfa:uid:${userId}`,
+        limit: 8,
+        windowMs: 15 * 60_000,
+      });
+      const ipLimit = rateLimit({
+        key: `mfa:ip:${ip}`,
+        limit: 40,
+        windowMs: 15 * 60_000,
+      });
+      if (!uidLimit.allowed || !ipLimit.allowed) {
+        // Drop pending MFA cookie so lockout forces a fresh password login.
+        clearMfaPendingCookie(res, req);
+        return {
+          ok: false,
+          status: 429,
+          body: {
+            ok: false,
+            error: "rate_limited",
+            retryAfterSec: Math.max(
+              uidLimit.retryAfterSec,
+              ipLimit.retryAfterSec,
+            ),
+          },
+        };
+      }
+      return { ok: true };
+    }
+
+    // Pre-check rate limits when we already know the uid from pending/session
+    if (VERIFY_ACTIONS.has(action)) {
+      const pending = readMfaPending(req);
+      const session = readSession(req);
+      const uid = pending?.uid ?? session?.uid;
+      if (uid != null) {
+        const lim = checkVerifyLimits(uid);
+        if (!lim.ok) {
+          res.setHeader("Retry-After", String(lim.body.retryAfterSec ?? 60));
+          return res.status(lim.status).json(lim.body);
+        }
+      }
     }
 
     if (action === "verify_totp") {
@@ -124,6 +190,24 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       if (!found || !found.active) {
         return res.status(400).json({ ok: false, error: "no_pending" });
       }
+      // Cap resends: 5 per 15 minutes per user
+      const sendLimit = rateLimit({
+        key: `mfa:email-send:${found.id}`,
+        limit: 5,
+        windowMs: 15 * 60_000,
+      });
+      const ipSend = rateLimit({
+        key: `mfa:email-send-ip:${ip}`,
+        limit: 20,
+        windowMs: 15 * 60_000,
+      });
+      if (!sendLimit.allowed || !ipSend.allowed) {
+        res.setHeader(
+          "Retry-After",
+          String(Math.max(sendLimit.retryAfterSec, ipSend.retryAfterSec)),
+        );
+        return res.status(429).json({ ok: false, error: "rate_limited" });
+      }
       if (!isSmtpConfigured()) {
         return res.status(503).json({
           ok: false,
@@ -173,17 +257,35 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       if (!found || !found.active) {
         return res.status(400).json({ ok: false, error: "no_pending" });
       }
+      // Stricter email OTP attempts (5 / 15m) on top of general verify limits
+      const emailLimit = rateLimit({
+        key: `mfa:email-verify:${found.id}`,
+        limit: 5,
+        windowMs: 15 * 60_000,
+      });
+      if (!emailLimit.allowed) {
+        clearMfaPendingCookie(res, req);
+        res.setHeader("Retry-After", String(emailLimit.retryAfterSec));
+        return res.status(429).json({ ok: false, error: "rate_limited" });
+      }
       if (isEmailOtpExpired(found.mfa_email_code_expires)) {
         return res.status(401).json({ ok: false, error: "expired" });
       }
       const hash = hashEmailOtp(code);
       if (!found.mfa_email_code_hash || hash !== found.mfa_email_code_hash) {
+        // Invalidate email OTP after first wrong guess so codes cannot be
+        // brute-forced over the full 10-minute window.
+        await p.query(
+          `UPDATE users SET mfa_email_code_hash = NULL, mfa_email_code_expires = NULL WHERE id = $1`,
+          [found.id],
+        );
         return res.status(401).json({ ok: false, error: "invalid_code" });
       }
       await p.query(
         `UPDATE users SET mfa_email_code_hash = NULL, mfa_email_code_expires = NULL WHERE id = $1`,
         [found.id],
       );
+      rateLimitReset(`mfa:email-verify:${found.id}`);
       const dto = await finishLogin(found.id);
       return dto
         ? res.status(200).json({ ok: true, user: dto })
@@ -208,13 +310,17 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         issuer: "AKAB Portal",
       });
       const qrUrl = await totpQrDataUrl(otpauthUrl, 200);
-      setMfaPendingCookie(res, {
-        uid: found.id,
-        email: found.email,
-        name: found.name,
-        kind: "enroll",
-        setupSecret: secret,
-      });
+      setMfaPendingCookie(
+        res,
+        {
+          uid: found.id,
+          email: found.email,
+          name: found.name,
+          kind: "enroll",
+          setupSecret: secret,
+        },
+        req,
+      );
       return res.status(200).json({
         ok: true,
         secret,
@@ -278,13 +384,17 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
          WHERE id = $2`,
         [recoveryOk ? remainingJson : null, found.id],
       );
-      clearSessionCookie(res);
-      setMfaPendingCookie(res, {
-        uid: found.id,
-        email: found.email,
-        name: found.name,
-        kind: "enroll",
-      });
+      clearSessionCookie(res, req);
+      setMfaPendingCookie(
+        res,
+        {
+          uid: found.id,
+          email: found.email,
+          name: found.name,
+          kind: "enroll",
+        },
+        req,
+      );
       return res.status(200).json({
         ok: true,
         mfaPending: {

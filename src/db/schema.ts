@@ -36,8 +36,8 @@ export const companies = pgTable("companies", {
   sharepoint_client_id: text("sharepoint_client_id"),
   /**
    * Optional per-client Microsoft Graph app client secret.
-   * Server-side only: the browser SQL proxy always redacts this column.
-   * Prefer env-level secrets when possible; rotate if ever exposed.
+   * Server-side only: never returned to the browser (SQL proxy redacts +
+   * server authz blocks reads). Prefer env-level secrets; rotate if exposed.
    */
   sharepoint_client_secret: text("sharepoint_client_secret"),
   /** Optional label shown in the Documentation section */

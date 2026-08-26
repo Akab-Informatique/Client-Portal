@@ -154,39 +154,49 @@ export function parseCookies(
   return out;
 }
 
-function cookieSecure(): boolean {
+/**
+ * Secure cookies default ON. Plain-HTTP labs must set COOKIE_SECURE=false.
+ * Also treats https PUBLIC_URL / APP_URL / BASE_URL and X-Forwarded-Proto as HTTPS.
+ */
+function cookieSecure(req?: VercelRequest): boolean {
   const v = cleanEnv(process.env.COOKIE_SECURE).toLowerCase();
   if (v === "0" || v === "false") return false;
   if (v === "1" || v === "true") return true;
-  // Many lab installs hit the portal over plain HTTP (:3000). Secure cookies
-  // would never stick there. Prefer explicit COOKIE_SECURE=true behind HTTPS.
-  // Also honor common reverse-proxy signals when present on process env.
+
   const publicUrl =
     cleanEnv(process.env.PUBLIC_URL) ||
     cleanEnv(process.env.APP_URL) ||
     cleanEnv(process.env.BASE_URL);
   if (publicUrl.toLowerCase().startsWith("https://")) return true;
-  return false;
+
+  if (req) {
+    const xfRaw = req.headers?.["x-forwarded-proto"];
+    const xf = Array.isArray(xfRaw) ? xfRaw[0] : String(xfRaw || "");
+    if (xf.split(",")[0]?.trim().toLowerCase() === "https") return true;
+  }
+
+  // Default secure — session tokens must not travel in cleartext.
+  return true;
 }
 
 function serializeCookie(
   name: string,
   value: string,
-  opts: { maxAge: number; httpOnly?: boolean },
+  opts: { maxAge: number; httpOnly?: boolean; req?: VercelRequest },
 ): string {
   const parts = [
     `${name}=${encodeURIComponent(value)}`,
     "Path=/",
-    "SameSite=Lax",
+    "SameSite=Strict",
     `Max-Age=${Math.max(0, Math.floor(opts.maxAge))}`,
   ];
   if (opts.httpOnly !== false) parts.push("HttpOnly");
-  if (cookieSecure()) parts.push("Secure");
+  if (cookieSecure(opts.req)) parts.push("Secure");
   return parts.join("; ");
 }
 
-function clearCookie(name: string): string {
-  return serializeCookie(name, "", { maxAge: 0 });
+function clearCookie(name: string, req?: VercelRequest): string {
+  return serializeCookie(name, "", { maxAge: 0, req });
 }
 
 export function appendSetCookie(res: VercelResponse, cookie: string): void {
@@ -213,20 +223,29 @@ export function createSessionToken(userId: number): string {
   return encodeToken(payload, getSessionSecret());
 }
 
-export function setSessionCookie(res: VercelResponse, userId: number): void {
+export function setSessionCookie(
+  res: VercelResponse,
+  userId: number,
+  req?: VercelRequest,
+): void {
   const token = createSessionToken(userId);
   appendSetCookie(
     res,
     serializeCookie(SESSION_COOKIE, token, {
       maxAge: MAX_SESSION_AGE_SEC,
       httpOnly: true,
+      req,
     }),
   );
 }
 
-export function clearSessionCookie(res: VercelResponse): void {
-  appendSetCookie(res, clearCookie(SESSION_COOKIE));
-  appendSetCookie(res, clearCookie(MFA_PENDING_COOKIE));
+/** Clears the full session cookie AND any MFA-pending half-login state. */
+export function clearSessionCookie(
+  res: VercelResponse,
+  req?: VercelRequest,
+): void {
+  appendSetCookie(res, clearCookie(SESSION_COOKIE, req));
+  appendSetCookie(res, clearCookie(MFA_PENDING_COOKIE, req));
 }
 
 export function readSession(
@@ -255,6 +274,7 @@ export function createMfaPendingToken(
 export function setMfaPendingCookie(
   res: VercelResponse,
   payload: Omit<MfaPendingPayload, "iat" | "exp" | "jti">,
+  req?: VercelRequest,
 ): void {
   const token = createMfaPendingToken(payload);
   appendSetCookie(
@@ -262,12 +282,16 @@ export function setMfaPendingCookie(
     serializeCookie(MFA_PENDING_COOKIE, token, {
       maxAge: MAX_MFA_PENDING_AGE_SEC,
       httpOnly: true,
+      req,
     }),
   );
 }
 
-export function clearMfaPendingCookie(res: VercelResponse): void {
-  appendSetCookie(res, clearCookie(MFA_PENDING_COOKIE));
+export function clearMfaPendingCookie(
+  res: VercelResponse,
+  req?: VercelRequest,
+): void {
+  appendSetCookie(res, clearCookie(MFA_PENDING_COOKIE, req));
 }
 
 export function readMfaPending(

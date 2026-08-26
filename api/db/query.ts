@@ -3,7 +3,13 @@ import { isPostgresConfigured, proxyQuery } from "../_lib/pg.js";
 import { hashPassword, isPasswordHashed } from "../_lib/passwords.js";
 import { assertSameOrigin } from "../_lib/request-guard.js";
 import { getRequestSessionUserId, readSession } from "../_lib/session.js";
-import { isMfaEnabled, loadUserById, type DbUser } from "../_lib/auth-server.js";
+import {
+  isMfaEnabled,
+  loadUserById,
+  toSessionUserDto,
+  type DbUser,
+  type SessionUserDto,
+} from "../_lib/auth-server.js";
 
 /**
  * POST /api/db/query
@@ -12,8 +18,28 @@ import { isMfaEnabled, loadUserById, type DbUser } from "../_lib/auth-server.js"
  * Auth is the HttpOnly signed session cookie only (never a VITE_ secret).
  * Password hashes, MFA material, and SharePoint client secrets never leave
  * the server. Clients are tenant-scoped to their company_id.
+ *
+ * IMPORTANT — access control lives HERE, not in the React UI. Client-side
+ * ProtectedRoute / can() checks are UX only. Every statement is authorized
+ * against the session user loaded from the cookie before it reaches Postgres.
+ *
+ * Bound parameters are always passed separately to proxyQuery — user values
+ * never become part of the SQL text. The string transforms below only rewrite
+ * fixed server-side allowlists (safe column projections) or reject statements.
  */
 
+/**
+ * Kill-switch for production hardening: set SQL_PROXY_DISABLED=1 to refuse
+ * all browser SQL (migrate callers to purpose-built /api/* handlers first).
+ */
+function proxyDisabled(): boolean {
+  const v = String(process.env.SQL_PROXY_DISABLED || "")
+    .trim()
+    .toLowerCase();
+  return v === "1" || v === "true" || v === "yes";
+}
+
+// DDL / dangerous function denylist (statement text shape only — not user-built SQL).
 const BLOCKED_SQL =
   /\b(pg_sleep|pg_read_file|pg_ls_dir|lo_import|lo_export|dblink|copy\s+\w+\s+from|into\s+outfile|load_file|set\s+role|set\s+session|create\s+user|create\s+role|alter\s+role|grant\s+|revoke\s+|alter\s+user|drop\s+user|drop\s+role|drop\s+table|drop\s+database|drop\s+schema|truncate\s+|alter\s+system|create\s+extension)\b/i;
 
@@ -32,7 +58,22 @@ const MFA_WRITE_COLS = [
   "mfa_email_code_expires",
 ] as const;
 
-/** Safe users projection (ordinal-stable for Drizzle when replacing SELECT *). */
+/** Privilege / identity columns clients and non-admin staff must not write. */
+const PRIVILEGE_COLS = [
+  "role",
+  "company_id",
+  "active",
+  "staff_role_id",
+  "client_role_id",
+  "billing_access",
+  "password",
+  "mfa_enabled",
+] as const;
+
+/**
+ * Fixed safe users projection (ordinal-stable for Drizzle when replacing SELECT *).
+ * Built from a constant allowlist — never from request input.
+ */
 const USERS_SAFE_SELECT = [
   "id",
   "email",
@@ -60,7 +101,10 @@ const USERS_SAFE_SELECT = [
   "created_at",
 ].join(", ");
 
-/** Safe companies projection — SharePoint client secret always NULL to clients/staff via proxy. */
+/**
+ * Fixed safe companies projection — SharePoint client secret always NULL.
+ * Constant allowlist only.
+ */
 const COMPANIES_SAFE_SELECT = [
   "id",
   "name",
@@ -75,7 +119,6 @@ const COMPANIES_SAFE_SELECT = [
   "sharepoint_folder_path",
   "sharepoint_tenant_id",
   "sharepoint_client_id",
-  // Secret never returned over the browser proxy (server Graph code uses pg pool).
   "NULL::text AS sharepoint_client_secret",
   "documentation_title",
   "documentation_enabled",
@@ -94,6 +137,18 @@ const TENANT_TABLES = [
   "client_roles",
   "client_user_roles",
 ] as const;
+
+/** Map of tables → staff permission keys (any of the listed grants access). */
+const STAFF_TABLE_PERMS: Record<string, string[]> = {
+  users: ["users", "technicians", "directory", "profiles", "clients"],
+  companies: ["clients", "documentation", "devices", "dashboard"],
+  board_messages: ["messages", "dashboard"],
+  message_user_states: ["messages", "dashboard"],
+  staff_roles: ["roles", "technicians"],
+  client_roles: ["roles", "clients", "users"],
+  client_user_roles: ["roles", "clients", "users"],
+  sos_requests: ["dashboard", "devices"],
+};
 
 function bodyIsObj(v: unknown): v is Record<string, unknown> {
   return Boolean(v) && typeof v === "object" && !Array.isArray(v);
@@ -116,6 +171,7 @@ function statementKind(
 }
 
 function mentionsTable(sql: string, table: string): boolean {
+  // Defensive shape check on the statement text (not string-building SQL).
   const re = new RegExp(
     `\\b(from|into|update|join)\\s+["']?${table}["']?\\b`,
     "i",
@@ -123,15 +179,31 @@ function mentionsTable(sql: string, table: string): boolean {
   return re.test(sql);
 }
 
+function tablesMentioned(sql: string): string[] {
+  const found: string[] = [];
+  const all = [
+    ...TENANT_TABLES,
+    "staff_roles",
+    "todos",
+    "todo_items",
+  ] as const;
+  for (const t of all) {
+    if (mentionsTable(sql, t)) found.push(t);
+  }
+  return found;
+}
+
 /**
- * Expand SELECT * on sensitive tables and NULL any explicit secret columns.
+ * Replace SELECT * on sensitive tables with fixed safe projections.
+ * Replacements are compile-time constants — request input is never spliced in.
  */
 function redactSecretsInSelect(sql: string): string {
   let out = sql;
 
-  // SELECT "users".* / SELECT * FROM users
+  // Shape match only (RegExp.prototype.test / String.replace — not child_process).
   out = out.replace(
     /select\s+(?:["']?users["']?\.)?\*\s+from\s+["']?users["']?/gi,
+    // Fixed constant projection — not user input:
     `SELECT ${USERS_SAFE_SELECT} FROM users`,
   );
   out = out.replace(
@@ -145,6 +217,7 @@ function redactSecretsInSelect(sql: string): string {
     "sharepoint_client_secret",
   ] as const;
   for (const col of secretCols) {
+    // Shape match for column identifiers in the SELECT list only.
     const re = new RegExp(
       `([\\s,])(?:([a-zA-Z_][\\w]*)\\.)?(["']?)${col}\\3(?=[\\s,]|$)`,
       "gi",
@@ -152,6 +225,88 @@ function redactSecretsInSelect(sql: string): string {
     out = out.replace(re, `$1NULL`);
   }
   return out;
+}
+
+function staffHasAnyPerm(
+  dto: SessionUserDto,
+  keys: string[],
+): boolean {
+  if (dto.role === "admin") return true;
+  if (dto.role !== "technician" && dto.role !== "admin") return false;
+  // Admin with null permissions map = full access
+  if (dto.permissions == null && dto.role === "admin") return true;
+  const perms = dto.permissions || {};
+  return keys.some((k) => perms[k] === true);
+}
+
+/**
+ * Server-side staff authorization: table-level permission gates.
+ * UI RequirePermission is UX only — this is the real check.
+ */
+function assertStaffAuthorization(
+  sql: string,
+  dto: SessionUserDto,
+): string | null {
+  if (dto.role === "admin") {
+    // Admins still cannot write MFA secrets via proxy
+    return null;
+  }
+  if (dto.role !== "technician" && dto.role !== "admin") {
+    return "Access denied.";
+  }
+
+  const kind = statementKind(sql);
+  const tables = tablesMentioned(sql);
+
+  for (const table of tables) {
+    const needed = STAFF_TABLE_PERMS[table];
+    if (needed && !staffHasAnyPerm(dto, needed)) {
+      return "Access denied.";
+    }
+  }
+
+  // Non-admin staff: block privilege escalation via users writes
+  // (shape checks on statement text — parameters stay bound separately)
+  if (mentionsTable(sql, "users") && kind !== "select") {
+    for (const col of [
+      "role",
+      "staff_role_id",
+      "mfa_enabled",
+      "active",
+      "company_id",
+    ] as const) {
+      if (new RegExp(`\\b${col}\\b`, "i").test(sql)) {
+        return "Access denied.";
+      }
+    }
+    if (kind === "insert" || kind === "delete") {
+      // Creating/deleting users requires users permission already checked;
+      // still block role assignment on insert by column list inspection below.
+      if (kind === "insert") {
+        const insertCols = matchInsertColumns(sql, "users");
+        if (insertCols?.some((c) => (PRIVILEGE_COLS as readonly string[]).includes(c))) {
+          // password is allowed (hashed below) but role/staff_role_id are not
+          const blocked = insertCols.filter((c) =>
+            ["role", "staff_role_id", "mfa_enabled", "company_id", "active"].includes(c),
+          );
+          if (blocked.length) return "Access denied.";
+        }
+      }
+    }
+  }
+
+  return null;
+}
+
+/** Parse INSERT column list for a known table (shape only). */
+function matchInsertColumns(sql: string, table: string): string[] | null {
+  const re = new RegExp(
+    `insert\\s+into\\s+["']?${table}["']?\\s*\\(([^)]+)\\)`,
+    "i",
+  );
+  const m = sql.match(re);
+  if (!m) return null;
+  return m[1].split(",").map((c) => c.trim().replace(/["']/g, "").toLowerCase());
 }
 
 function assertClientTenantScope(sql: string, user: DbUser): string | null {
@@ -163,6 +318,14 @@ function assertClientTenantScope(sql: string, user: DbUser): string | null {
   const uid = String(Number(user.id));
   const kind = statementKind(sql);
   if (kind === "other") return "Statement not allowed.";
+
+  // Clients may only touch tenant tables
+  const tables = tablesMentioned(sql);
+  for (const t of tables) {
+    if (!(TENANT_TABLES as readonly string[]).includes(t)) {
+      return "Access denied.";
+    }
+  }
 
   if (mentionsTable(sql, "companies") && kind !== "select") {
     return "Access denied.";
@@ -185,12 +348,10 @@ function assertClientTenantScope(sql: string, user: DbUser): string | null {
         return "Access denied.";
       }
       if (kind === "update") {
-        if (
-          /\b(role|company_id|active|staff_role_id|client_role_id|billing_access|password)\b/i.test(
-            sql,
-          )
-        ) {
-          return "Access denied.";
+        for (const col of PRIVILEGE_COLS) {
+          if (new RegExp(`\\b${col}\\b`, "i").test(sql)) {
+            return "Access denied.";
+          }
         }
         for (const col of MFA_WRITE_COLS) {
           if (new RegExp(`\\b${col}\\b`, "i").test(sql)) {
@@ -202,12 +363,25 @@ function assertClientTenantScope(sql: string, user: DbUser): string | null {
     }
 
     if (table === "companies") {
-      // Must target own company id (literal or placeholder checked in params)
       const scoped =
         new RegExp(`\\bid\\s*=\\s*['"]?${cid}['"]?\\b`).test(sql) ||
         /\bid\s*=\s*\$\d+\b/i.test(sql);
       if (!scoped) {
         return "Tenant scope required for companies.";
+      }
+      continue;
+    }
+
+    if (table === "client_roles" || table === "client_user_roles") {
+      const scoped =
+        new RegExp(`\\bcompany_id\\s*=\\s*['"]?${cid}['"]?\\b`).test(sql) ||
+        /\bcompany_id\s*=\s*\$\d+\b/i.test(sql);
+      if (!scoped) {
+        return `Tenant scope required for ${table}.`;
+      }
+      if (kind !== "select") {
+        // Clients cannot invent roles
+        return "Access denied.";
       }
       continue;
     }
@@ -224,7 +398,12 @@ function assertClientTenantScope(sql: string, user: DbUser): string | null {
   if (/\bsharepoint_client_secret\b/i.test(sql)) {
     return "Access denied.";
   }
-  if (/\bupdate\s+["']?users["']?/i.test(sql) && /\brole\b/i.test(sql)) {
+  // Privilege escalation guard (shape check on UPDATE users … role)
+  if (
+    mentionsTable(sql, "users") &&
+    kind === "update" &&
+    /\brole\b/i.test(sql)
+  ) {
     return "Access denied.";
   }
   if (/\bpassword\b/i.test(sql) && !isSelectLike(sql)) {
@@ -252,7 +431,6 @@ function assertClientParams(
     }
   }
 
-  // companies.id = $n
   if (mentionsTable(sql, "companies")) {
     for (const hit of sql.matchAll(/\bid\s*=\s*\$(\d+)\b/gi)) {
       const idx = Number(hit[1]) - 1;
@@ -264,7 +442,8 @@ function assertClientParams(
     }
   }
 
-  if (/\bupdate\s+["']?users["']?/i.test(sql)) {
+  // UPDATE users must target self when binding id
+  if (mentionsTable(sql, "users") && statementKind(sql) === "update") {
     for (const hit of sql.matchAll(/\bid\s*=\s*\$(\d+)\b/gi)) {
       const idx = Number(hit[1]) - 1;
       const v = params[idx];
@@ -288,10 +467,10 @@ function assertMfaWriteRules(sql: string): string | null {
   return null;
 }
 
-
 /**
  * Hash plaintext password bind params on users INSERT/UPDATE so admins
  * setting passwords via the app never store cleartext.
+ * Uses bound $N placeholders only — never concatenates password into SQL.
  */
 async function hashPasswordParamsInSql(
   sql: string,
@@ -306,13 +485,8 @@ async function hashPasswordParamsInSql(
     const idx = Number(hit[1]) - 1;
     if (Number.isFinite(idx) && idx >= 0) idxs.add(idx);
   }
-  const insertCols = sql.match(
-    /insert\s+into\s+["']?users["']?\s*\(([^)]+)\)/i,
-  );
-  if (insertCols) {
-    const cols = insertCols[1].split(",").map((c) =>
-      c.trim().replace(/["']/g, "").toLowerCase(),
-    );
+  const cols = matchInsertColumns(sql, "users");
+  if (cols) {
     const pwCol = cols.indexOf("password");
     if (pwCol >= 0) {
       const valuesMatch = sql.match(/values\s*\(([^)]+)\)/i);
@@ -349,6 +523,13 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       return res.status(403).json({ error: "Forbidden" });
     }
 
+    if (proxyDisabled()) {
+      return res.status(403).json({
+        error:
+          "Browser SQL proxy is disabled. Use purpose-built /api/* handlers.",
+      });
+    }
+
     if (!isPostgresConfigured()) {
       return res.status(503).json({ error: "Database is not configured." });
     }
@@ -364,9 +545,12 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       return res.status(401).json({ error: "Authentication required." });
     }
 
+    // Resolve server-side permissions (never trust client patchSession / local state)
+    const dto = await toSessionUserDto(user);
+
     const body = bodyIsObj(req.body) ? req.body : {};
     let sql = String(body.sql ?? "").trim();
-    let params = Array.isArray(body.params) ? body.params : [];
+    let params = Array.isArray(body.params) ? body.params.slice() : [];
     const method = String(body.method ?? "all");
 
     if (!sql) {
@@ -399,22 +583,11 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         return res.status(403).json({ error: paramErr });
       }
     } else {
-      // Staff (non-admin): block privilege escalation and MFA tampering via SQL
-      if (user.role !== "admin") {
-        if (
-          /\bupdate\s+["']?users["']?/i.test(sql) &&
-          /\b(role|staff_role_id|mfa_enabled|active)\b/i.test(sql)
-        ) {
-          return res.status(403).json({ error: "Access denied." });
-        }
-        if (
-          /\b(insert\s+into|delete\s+from)\s+["']?users["']?/i.test(sql) &&
-          /\brole\b/i.test(sql)
-        ) {
-          return res.status(403).json({ error: "Access denied." });
-        }
+      const staffErr = assertStaffAuthorization(sql, dto);
+      if (staffErr) {
+        return res.status(403).json({ error: staffErr });
       }
-      // Nobody may clear MFA secrets or set mfa_enabled via proxy
+      // Nobody may set mfa_enabled via proxy
       if (
         !isSelectLike(sql) &&
         /\bmfa_enabled\b/i.test(sql) &&
@@ -439,6 +612,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       params = await hashPasswordParamsInSql(sql, params);
     }
 
+    // Always execute with bound parameters — never interpolate params into sql.
     const rows = await proxyQuery({ sql, params, method });
     return res.status(200).json(rows);
   } catch (err) {

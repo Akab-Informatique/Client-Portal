@@ -30,18 +30,22 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     if (session) {
       const user = await loadUserById(session.uid);
       if (!user || !user.active) {
-        clearSessionCookie(res);
+        clearSessionCookie(res, req);
         return res.status(401).json({ ok: false, user: null });
       }
       if (!isMfaEnabled(user)) {
         // Force re-enroll — clear full session
-        clearSessionCookie(res);
-        setMfaPendingCookie(res, {
-          uid: user.id,
-          email: user.email,
-          name: user.name,
-          kind: "enroll",
-        });
+        clearSessionCookie(res, req);
+        setMfaPendingCookie(
+          res,
+          {
+            uid: user.id,
+            email: user.email,
+            name: user.name,
+            kind: "enroll",
+          },
+          req,
+        );
         return res.status(200).json({
           ok: true,
           user: null,
