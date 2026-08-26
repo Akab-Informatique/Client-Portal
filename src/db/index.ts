@@ -11,6 +11,15 @@ import * as schema from "./schema";
 
 export { schema };
 
+/**
+ * DATA LAYER NOTE (security):
+ * This browser client POSTs Drizzle SQL to /api/db/query. That endpoint is a
+ * temporary bridge: it requires an MFA-complete session, enforces role /
+ * tenant / permission checks server-side, redacts secrets, and is DISABLED
+ * in production unless SQL_PROXY_ENABLED=1. Prefer purpose-built /api/*
+ * handlers. Client React guards (ProtectedRoute) are UX only.
+ */
+
 export type DbMode = "postgres" | "pglite" | "none";
 
 export type AppDb = {

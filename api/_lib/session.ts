@@ -19,8 +19,13 @@ export type SessionPayload = {
   iat: number;
   /** expires at (unix sec) */
   exp: number;
-  /** random jti */
+  /** random jti (unique per issuance; pair with session_epoch) */
   jti: string;
+  /**
+   * Snapshot of users.session_epoch at issue time.
+   * Logout / password change / MFA change bumps the DB epoch so older cookies fail.
+   */
+  epoch: number;
 };
 
 export type MfaPendingPayload = {
@@ -28,8 +33,11 @@ export type MfaPendingPayload = {
   email: string;
   name: string;
   kind: "challenge" | "enroll";
-  /** base32 secret while enrolling (not yet persisted) */
-  setupSecret?: string;
+  /**
+   * Opaque server-side handle only. TOTP setup material lives in
+   * users.mfa_enroll_secret — NEVER put the seed in this cookie.
+   */
+  enrollId?: string;
   iat: number;
   exp: number;
   jti: string;
@@ -208,13 +216,17 @@ export function appendSetCookie(res: VercelResponse, cookie: string): void {
   res.setHeader("Set-Cookie", [String(prev), cookie]);
 }
 
-export function createSessionToken(userId: number): string {
+export function createSessionToken(
+  userId: number,
+  sessionEpoch = 0,
+): string {
   const now = Math.floor(Date.now() / 1000);
   const payload: SessionPayload = {
     uid: userId,
     iat: now,
     exp: now + MAX_SESSION_AGE_SEC,
     jti: b64url(randomBytes(16)),
+    epoch: Number.isFinite(sessionEpoch) ? Math.floor(sessionEpoch) : 0,
   };
   return encodeToken(payload, getSessionSecret());
 }
@@ -223,8 +235,9 @@ export function setSessionCookie(
   res: VercelResponse,
   userId: number,
   req?: VercelRequest,
+  sessionEpoch = 0,
 ): void {
-  const token = createSessionToken(userId);
+  const token = createSessionToken(userId, sessionEpoch);
   appendSetCookie(
     res,
     serializeCookie(SESSION_COOKIE, token, {

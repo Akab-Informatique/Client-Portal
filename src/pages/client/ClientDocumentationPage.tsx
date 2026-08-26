@@ -67,12 +67,12 @@ export function ClientDocumentationPage() {
     <BlurFade delay={0.05}>
       <DocumentationBrowser
         companyName={company.name}
+        companyId={company.id}
         siteUrl={company.sharepoint_site_url!.trim()}
         folderPath={company.sharepoint_folder_path}
         auth={{
           tenantId: company.sharepoint_tenant_id,
           clientId: company.sharepoint_client_id,
-          clientSecret: company.sharepoint_client_secret,
         }}
         title={company.documentation_title}
         description={t("docs.clientIntro")}

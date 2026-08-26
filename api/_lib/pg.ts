@@ -389,6 +389,10 @@ const ADDITIVE_COLUMNS: Array<{ table: string; column: string; def: string }> =
     { table: "users", column: "mfa_email_code_expires", def: "TEXT" },
     // Bumped on logout / password / MFA change so old cookies stop working
     { table: "users", column: "session_epoch", def: "INTEGER DEFAULT 0" },
+    // TOTP seed during enrollment — server-only, never put in cookies
+    { table: "users", column: "mfa_enroll_secret", def: "TEXT" },
+    { table: "users", column: "mfa_enroll_id", def: "TEXT" },
+    { table: "users", column: "mfa_enroll_expires", def: "TEXT" },
   ];
 
 const ADMIN_PERMISSIONS_JSON = JSON.stringify({

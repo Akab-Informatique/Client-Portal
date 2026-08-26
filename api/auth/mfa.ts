@@ -1,4 +1,5 @@
 import type { VercelRequest, VercelResponse } from "@vercel/node";
+import { randomBytes } from "crypto";
 import {
   buildOtpAuthUri,
   consumeRecoveryCode,
@@ -306,6 +307,17 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         return res.status(400).json({ ok: false, error: "no_pending" });
       }
       const secret = generateTotpSecret();
+      // Opaque handle in cookie only — TOTP seed stays in DB (never in cookie body).
+      const enrollId = randomBytes(24).toString("base64url");
+      const enrollExpires = new Date(Date.now() + 15 * 60_000).toISOString();
+      await p.query(
+        `UPDATE users SET
+          mfa_enroll_secret = $1,
+          mfa_enroll_id = $2,
+          mfa_enroll_expires = $3
+         WHERE id = $4`,
+        [secret, enrollId, enrollExpires, found.id],
+      );
       const otpauthUrl = buildOtpAuthUri({
         secret,
         accountName: found.email,
@@ -319,7 +331,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
           email: found.email,
           name: found.name,
           kind: "enroll",
-          setupSecret: secret,
+          enrollId,
         },
         req,
       );
@@ -333,10 +345,39 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
     if (action === "confirm_enroll") {
       const pending = readMfaPending(req);
-      if (!pending?.setupSecret || pending.kind !== "enroll") {
+      if (!pending?.enrollId || pending.kind !== "enroll") {
         return res.status(400).json({ ok: false, error: "no_pending" });
       }
-      if (!verifyTotp(pending.setupSecret, code)) {
+      const lim = checkVerifyLimits(pending.uid);
+      if (!lim.ok) return res.status(lim.status).json(lim.body);
+
+      const row = await p.query(
+        `SELECT mfa_enroll_secret, mfa_enroll_id, mfa_enroll_expires
+         FROM users WHERE id = $1 LIMIT 1`,
+        [pending.uid],
+      );
+      const er = row.rows[0] as
+        | {
+            mfa_enroll_secret?: string | null;
+            mfa_enroll_id?: string | null;
+            mfa_enroll_expires?: string | null;
+          }
+        | undefined;
+      if (
+        !er?.mfa_enroll_secret ||
+        !er.mfa_enroll_id ||
+        er.mfa_enroll_id !== pending.enrollId
+      ) {
+        return res.status(400).json({ ok: false, error: "no_pending" });
+      }
+      if (isEmailOtpExpired(er.mfa_enroll_expires)) {
+        await p.query(
+          `UPDATE users SET mfa_enroll_secret = NULL, mfa_enroll_id = NULL, mfa_enroll_expires = NULL WHERE id = $1`,
+          [pending.uid],
+        );
+        return res.status(400).json({ ok: false, error: "enroll_expired" });
+      }
+      if (!verifyTotp(er.mfa_enroll_secret, code)) {
         return res.status(401).json({ ok: false, error: "invalid_code" });
       }
       const recoveryCodes = generateRecoveryCodes(8);
@@ -347,10 +388,14 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
           mfa_totp_secret = $1,
           mfa_recovery_codes = $2,
           mfa_email_code_hash = NULL,
-          mfa_email_code_expires = NULL
+          mfa_email_code_expires = NULL,
+          mfa_enroll_secret = NULL,
+          mfa_enroll_id = NULL,
+          mfa_enroll_expires = NULL
          WHERE id = $3`,
-        [pending.setupSecret, JSON.stringify(hashed), pending.uid],
+        [er.mfa_enroll_secret, JSON.stringify(hashed), pending.uid],
       );
+      await bumpSessionEpoch(pending.uid);
       const dto = await finishLogin(pending.uid);
       if (!dto) return res.status(500).json({ ok: false, error: "generic" });
       return res.status(200).json({ ok: true, user: dto, recoveryCodes });
@@ -382,10 +427,14 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
           mfa_totp_secret = NULL,
           mfa_recovery_codes = $1,
           mfa_email_code_hash = NULL,
-          mfa_email_code_expires = NULL
+          mfa_email_code_expires = NULL,
+          mfa_enroll_secret = NULL,
+          mfa_enroll_id = NULL,
+          mfa_enroll_expires = NULL
          WHERE id = $2`,
         [recoveryOk ? remainingJson : null, found.id],
       );
+      await bumpSessionEpoch(found.id);
       clearSessionCookie(res, req);
       setMfaPendingCookie(
         res,

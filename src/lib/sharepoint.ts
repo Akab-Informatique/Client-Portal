@@ -66,15 +66,18 @@ export function isCompanySharePointLinked(company: {
   );
 }
 
-/** True when the company has its own Graph app id + secret stored. */
+/**
+ * True when the company has its own Graph app id + secret stored.
+ * Secret value is never returned to the browser — the SQL proxy replaces it
+ * with the marker "configured" (or null). Treat any non-empty marker as set.
+ */
 export function companyHasOwnGraphApp(company: {
   sharepoint_client_id?: string | null;
   sharepoint_client_secret?: string | null;
 }): boolean {
-  return (
-    !!(company.sharepoint_client_id || "").trim() &&
-    !!(company.sharepoint_client_secret || "").trim()
-  );
+  const secret = (company.sharepoint_client_secret || "").trim();
+  const secretSet = secret.length > 0 && secret !== "null";
+  return !!(company.sharepoint_client_id || "").trim() && secretSet;
 }
 
 export function graphAuthFromCompany(company: {
@@ -103,6 +106,7 @@ export async function fetchSharePointStatus(probe = false): Promise<SharePointSt
 export async function resolveSharePointSite(
   siteUrl: string,
   auth?: GraphAuthOverride | string | null,
+  companyId?: number | null,
 ): Promise<SharePointResolveResponse> {
   const override: GraphAuthOverride =
     typeof auth === "string" ? { tenantId: auth } : auth || {};
@@ -110,11 +114,17 @@ export async function resolveSharePointSite(
   const res = await fetch(`/api/sharepoint/resolve`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
+    credentials: "same-origin",
     body: JSON.stringify({
       siteUrl,
+      companyId: companyId || undefined,
       tenantId: override.tenantId || undefined,
       clientId: override.clientId || undefined,
-      clientSecret: override.clientSecret || undefined,
+      // Only send a freshly typed secret — never the "configured" marker
+      clientSecret:
+        override.clientSecret && override.clientSecret !== "configured"
+          ? override.clientSecret
+          : undefined,
     }),
   });
   return (await res.json()) as SharePointResolveResponse;
@@ -124,6 +134,8 @@ export async function browseSharePoint(opts: {
   siteUrl: string;
   basePath?: string | null;
   path?: string | null;
+  /** Server loads sealed Graph secret for this company id. */
+  companyId?: number | null;
   /** Per-client Graph auth (tenant and/or client id + secret). */
   auth?: GraphAuthOverride | null;
   /** @deprecated use auth.tenantId */
@@ -134,18 +146,24 @@ export async function browseSharePoint(opts: {
     clientId: opts.auth?.clientId ?? null,
     clientSecret: opts.auth?.clientSecret ?? null,
   };
+  const clientSecret =
+    auth.clientSecret && auth.clientSecret !== "configured"
+      ? auth.clientSecret
+      : undefined;
 
   // POST keeps client secrets out of URL/query logs
   const res = await fetch(`/api/sharepoint/browse`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
+    credentials: "same-origin",
     body: JSON.stringify({
       siteUrl: opts.siteUrl,
       basePath: opts.basePath || undefined,
       path: opts.path || undefined,
+      companyId: opts.companyId || undefined,
       tenantId: auth.tenantId || undefined,
       clientId: auth.clientId || undefined,
-      clientSecret: auth.clientSecret || undefined,
+      clientSecret,
     }),
   });
   return (await res.json()) as SharePointBrowseResponse;

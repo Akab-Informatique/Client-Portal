@@ -13,11 +13,13 @@
  * Per-client auth (optional, stored on each company):
  *   sharepoint_tenant_id
  *   sharepoint_client_id
- *   sharepoint_client_secret
+ *   sharepoint_client_secret (AES-GCM sealed at rest via secret-box)
  * When clientId + clientSecret are both set on a company, THAT company's
  * Entra app is used for token requests. Otherwise portal defaults apply
  * (with optional tenant-only override).
  */
+
+import { openSecret } from "./secret-box.js";
 
 export type GraphConfig = {
   tenantId: string;
@@ -36,6 +38,15 @@ export type GraphAuthSource = "client_app" | "portal_app";
 
 function trimOrEmpty(v?: string | null): string {
   return (v || "").trim();
+}
+
+/** Open sealed-at-rest secrets; leave plain form-submit secrets as-is. */
+function resolveClientSecret(v?: string | null): string {
+  const raw = trimOrEmpty(v);
+  if (!raw) return "";
+  if (raw === "configured") return ""; // UI marker only — never a real secret
+  const opened = openSecret(raw);
+  return trimOrEmpty(opened);
 }
 
 function tokenCacheKey(cfg: GraphConfig): string {

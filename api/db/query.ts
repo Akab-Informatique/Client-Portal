@@ -1,6 +1,7 @@
 import type { VercelRequest, VercelResponse } from "@vercel/node";
 import { isPostgresConfigured, proxyQuery } from "../_lib/pg.js";
 import { hashPassword, isPasswordHashed } from "../_lib/passwords.js";
+import { sealSecret } from "../_lib/secret-box.js";
 import { assertSameOrigin } from "../_lib/request-guard.js";
 import { readSession } from "../_lib/session.js";
 import {
@@ -34,10 +35,23 @@ import {
  * all browser SQL (migrate callers to purpose-built /api/* handlers first).
  */
 function proxyDisabled(): boolean {
-  const v = String(process.env.SQL_PROXY_DISABLED || "")
+  const off = String(process.env.SQL_PROXY_DISABLED || "")
     .trim()
     .toLowerCase();
-  return v === "1" || v === "true" || v === "yes";
+  if (off === "1" || off === "true" || off === "yes") return true;
+  // Production: require explicit SQL_PROXY_ENABLED=1 to keep the browser proxy.
+  // Prefer purpose-built /api/* handlers; the proxy is a migration bridge only.
+  const nodeEnv = String(process.env.NODE_ENV || "").toLowerCase();
+  const isProd =
+    nodeEnv === "production" ||
+    String(process.env.AKAB_ENV || "").toLowerCase() === "production";
+  if (isProd) {
+    const on = String(process.env.SQL_PROXY_ENABLED || "")
+      .trim()
+      .toLowerCase();
+    if (!(on === "1" || on === "true" || on === "yes")) return true;
+  }
+  return false;
 }
 
 // DDL / dangerous function denylist (statement text shape only — not user-built SQL).
@@ -50,6 +64,8 @@ const AUTH_SECRET_COLS = [
   "mfa_recovery_codes",
   "mfa_email_code_hash",
   "mfa_email_code_expires",
+  "mfa_enroll_secret",
+  "mfa_enroll_id",
 ] as const;
 
 const MFA_WRITE_COLS = [
@@ -87,7 +103,8 @@ const COMPANIES_SAFE_SELECT_SQL =
   "SELECT id, name, type, email, phone, notes, active, autotask_company_id, " +
   "dashboard_layout, sharepoint_site_url, sharepoint_folder_path, " +
   "sharepoint_tenant_id, sharepoint_client_id, " +
-  "NULL::text AS sharepoint_client_secret, documentation_title, " +
+  "CASE WHEN sharepoint_client_secret IS NOT NULL AND length(btrim(sharepoint_client_secret)) > 0 " +
+  "THEN 'configured' ELSE NULL END AS sharepoint_client_secret, documentation_title, " +
   "documentation_enabled, itglue_organization_id, datto_rmm_site_uid, " +
   "datto_rmm_site_name, created_at FROM companies";
 
@@ -133,13 +150,110 @@ function statementKind(
   return "other";
 }
 
+
+function hasColumnIdent(sql: string, col: string): boolean {
+  if (!/^[a-z_][a-z0-9_]*$/i.test(col)) return false;
+  const lower = sql.toLowerCase();
+  const c = col.toLowerCase();
+  let from = 0;
+  while (true) {
+    const i = lower.indexOf(c, from);
+    if (i < 0) return false;
+    const before = i === 0 ? "" : lower[i - 1];
+    const after = lower[i + c.length] || "";
+    if ((!before || !/[a-z0-9_]/.test(before)) && (!after || !/[a-z0-9_]/.test(after))) {
+      return true;
+    }
+    from = i + c.length;
+  }
+}
+
+function nullOutColumnIdent(sql: string, col: string): string {
+  if (!/^[a-z_][a-z0-9_]*$/i.test(col)) return sql;
+  const lower = sql.toLowerCase();
+  const c = col.toLowerCase();
+  let out = "";
+  let i = 0;
+  while (i < sql.length) {
+    const j = lower.indexOf(c, i);
+    if (j < 0) {
+      out += sql.slice(i);
+      break;
+    }
+    const before = j === 0 ? "" : lower[j - 1];
+    const after = lower[j + c.length] || "";
+    const boundaryBefore = !before || !/[a-z0-9_.]/.test(before);
+    const boundaryAfter = !after || !/[a-z0-9_]/.test(after);
+    const prev = lower.slice(Math.max(0, j - 4), j);
+    if (boundaryBefore && boundaryAfter && !prev.endsWith(" as ")) {
+      out += sql.slice(i, j) + "NULL";
+      i = j + c.length;
+    } else {
+      out += sql.slice(i, j + c.length);
+      i = j + c.length;
+    }
+  }
+  return out;
+}
+
+function sqlMentionsIdEquals(sql: string, id: string): boolean {
+  if (!/^\d+$/.test(id)) return false;
+  if (/\bid\s*=\s*\$\d+\b/i.test(sql)) return true;
+  const compact = sql.toLowerCase().replace(/\s+/g, "");
+  for (const p of ["id=" + id, "id='" + id + "'", 'id="' + id + '"']) {
+    if (compact.includes(p)) return true;
+  }
+  return false;
+}
+
+function sqlMentionsCompanyIdEquals(sql: string, id: string): boolean {
+  if (!/^\d+$/.test(id)) return false;
+  if (/\bcompany_id\s*=\s*\$\d+\b/i.test(sql)) return true;
+  const compact = sql.toLowerCase().replace(/\s+/g, "");
+  for (const p of [
+    "company_id=" + id,
+    "company_id='" + id + "'",
+    'company_id="' + id + '"',
+  ]) {
+    if (compact.includes(p)) return true;
+  }
+  if (compact.includes("company_idin(") && compact.includes(id)) {
+    const idx = compact.indexOf(id);
+    if (idx >= 0) {
+      const b = compact[idx - 1] || ",";
+      const a = compact[idx + id.length] || ",";
+      if ((b < "0" || b > "9") && (a < "0" || a > "9")) return true;
+    }
+  }
+  return false;
+}
+
 function mentionsTable(sql: string, table: string): boolean {
-  // Defensive shape check on the statement text (not string-building SQL).
-  const re = new RegExp(
-    `\\b(from|into|update|join)\\s+["']?${table}["']?\\b`,
-    "i",
-  );
-  return re.test(sql);
+  // Defensive shape check — table is always a hard-coded allowlist identifier.
+  if (!/^[a-z_][a-z0-9_]*$/i.test(table)) return false;
+  const lower = sql.toLowerCase();
+  const tname = table.toLowerCase();
+  for (const kw of ["from", "into", "update", "join"]) {
+    let from = 0;
+    while (true) {
+      const i = lower.indexOf(kw, from);
+      if (i < 0) break;
+      const before = i === 0 ? " " : lower[i - 1];
+      const afterKw = lower[i + kw.length] || " ";
+      if (/[a-z0-9_]/.test(before) || !/\s/.test(afterKw)) {
+        from = i + kw.length;
+        continue;
+      }
+      let rest = lower.slice(i + kw.length).trimStart();
+      if (rest.startsWith('"') || rest.startsWith("'")) rest = rest.slice(1);
+      if (rest.startsWith(tname)) {
+        const endCh = rest[tname.length] || " ";
+        if (!/[a-z0-9_]/.test(endCh)) return true;
+      }
+      from = i + kw.length;
+    }
+  }
+  return false;
 }
 
 function tablesMentioned(sql: string): string[] {
@@ -184,12 +298,7 @@ function redactSecretsInSelect(sql: string): string {
     "sharepoint_client_secret",
   ] as const;
   for (const col of secretCols) {
-    // Shape match for column identifiers in the SELECT list only.
-    const re = new RegExp(
-      `([\\s,])(?:([a-zA-Z_][\\w]*)\\.)?(["']?)${col}\\3(?=[\\s,]|$)`,
-      "gi",
-    );
-    out = out.replace(re, `$1NULL`);
+    out = nullOutColumnIdent(out, col);
   }
   return out;
 }
@@ -242,7 +351,7 @@ function assertStaffAuthorization(
       "active",
       "company_id",
     ] as const) {
-      if (new RegExp(`\\b${col}\\b`, "i").test(sql)) {
+      if (hasColumnIdent(sql, col)) {
         return "Access denied.";
       }
     }
@@ -265,15 +374,32 @@ function assertStaffAuthorization(
   return null;
 }
 
-/** Parse INSERT column list for a known table (shape only). */
+/**
+ * Parse INSERT column list for a known allowlisted table name (shape only).
+ * `table` is always a hard-coded identifier from TENANT_TABLES / callers —
+ * never request input. No RegExp is built from user strings.
+ */
 function matchInsertColumns(sql: string, table: string): string[] | null {
-  const re = new RegExp(
-    `insert\\s+into\\s+["']?${table}["']?\\s*\\(([^)]+)\\)`,
-    "i",
-  );
-  const m = sql.match(re);
-  if (!m) return null;
-  return m[1].split(",").map((c) => c.trim().replace(/["']/g, "").toLowerCase());
+  if (!/^[a-z_][a-z0-9_]*$/i.test(table)) return null;
+  const lower = sql.toLowerCase();
+  const candidates = [`insert into ${table}`, `insert into "${table}"`, `insert into '${table}'`];
+  let start = -1;
+  let prefixLen = 0;
+  for (const needle of candidates) {
+    const i = lower.indexOf(needle);
+    if (i >= 0) {
+      start = i;
+      prefixLen = needle.length;
+      break;
+    }
+  }
+  if (start < 0) return null;
+  const after = sql.slice(start + prefixLen).trimStart();
+  if (!after.startsWith("(")) return null;
+  const end = after.indexOf(")");
+  if (end < 0) return null;
+  const cols = after.slice(1, end);
+  return cols.split(",").map((c) => c.trim().replace(/["']/g, "").toLowerCase());
 }
 
 function assertClientTenantScope(sql: string, user: DbUser): string | null {
@@ -303,11 +429,9 @@ function assertClientTenantScope(sql: string, user: DbUser): string | null {
 
     if (table === "users") {
       const selfId =
-        new RegExp(`\\bid\\s*=\\s*['"]?${uid}['"]?\\b`).test(sql) ||
-        /\bid\s*=\s*\$\d+\b/i.test(sql);
+        sqlMentionsIdEquals(sql, uid);
       const ownCompany =
-        new RegExp(`\\bcompany_id\\s*=\\s*['"]?${cid}['"]?\\b`).test(sql) ||
-        /\bcompany_id\s*=\s*\$\d+\b/i.test(sql);
+        sqlMentionsCompanyIdEquals(sql, cid);
       if (!selfId && !ownCompany) {
         return "Tenant scope required for users.";
       }
@@ -316,12 +440,12 @@ function assertClientTenantScope(sql: string, user: DbUser): string | null {
       }
       if (kind === "update") {
         for (const col of PRIVILEGE_COLS) {
-          if (new RegExp(`\\b${col}\\b`, "i").test(sql)) {
+          if (hasColumnIdent(sql, col)) {
             return "Access denied.";
           }
         }
         for (const col of MFA_WRITE_COLS) {
-          if (new RegExp(`\\b${col}\\b`, "i").test(sql)) {
+          if (hasColumnIdent(sql, col)) {
             return "MFA fields can only be changed through auth APIs.";
           }
         }
@@ -331,8 +455,7 @@ function assertClientTenantScope(sql: string, user: DbUser): string | null {
 
     if (table === "companies") {
       const scoped =
-        new RegExp(`\\bid\\s*=\\s*['"]?${cid}['"]?\\b`).test(sql) ||
-        /\bid\s*=\s*\$\d+\b/i.test(sql);
+        sqlMentionsIdEquals(sql, cid);
       if (!scoped) {
         return "Tenant scope required for companies.";
       }
@@ -341,8 +464,7 @@ function assertClientTenantScope(sql: string, user: DbUser): string | null {
 
     if (table === "client_roles" || table === "client_user_roles") {
       const scoped =
-        new RegExp(`\\bcompany_id\\s*=\\s*['"]?${cid}['"]?\\b`).test(sql) ||
-        /\bcompany_id\s*=\s*\$\d+\b/i.test(sql);
+        sqlMentionsCompanyIdEquals(sql, cid);
       if (!scoped) {
         return `Tenant scope required for ${table}.`;
       }
@@ -354,9 +476,7 @@ function assertClientTenantScope(sql: string, user: DbUser): string | null {
     }
 
     const scoped =
-      new RegExp(`\\bcompany_id\\s*=\\s*['"]?${cid}['"]?\\b`).test(sql) ||
-      /\bcompany_id\s*=\s*\$\d+\b/i.test(sql) ||
-      new RegExp(`\\bcompany_id\\s+in\\s*\\([^)]*\\b${cid}\\b`, "i").test(sql);
+      sqlMentionsCompanyIdEquals(sql, cid);
     if (!scoped) {
       return `Tenant scope required for ${table}.`;
     }
@@ -427,7 +547,7 @@ function assertClientParams(
 function assertMfaWriteRules(sql: string): string | null {
   if (isSelectLike(sql)) return null;
   for (const col of MFA_WRITE_COLS) {
-    if (new RegExp(`\\b${col}\\b`, "i").test(sql)) {
+    if (hasColumnIdent(sql, col)) {
       return "MFA fields can only be changed through auth APIs.";
     }
   }
@@ -474,6 +594,101 @@ async function hashPasswordParamsInSql(
   return out;
 }
 
+
+/** True when the statement tries to project/return raw secret material. */
+function selectTouchesSecretColumns(sql: string): boolean {
+  const secrets = [
+    "password",
+    "mfa_totp_secret",
+    "mfa_recovery_codes",
+    "mfa_email_code_hash",
+    "mfa_email_code_expires",
+    "mfa_enroll_secret",
+    "mfa_enroll_id",
+    "sharepoint_client_secret",
+  ] as const;
+  // Strip safe NULL AS aliases from our constant rewrite so they do not false-positive.
+  let probe = sql.replace(
+    /NULL::text\s+AS\s+(password|mfa_totp_secret|mfa_recovery_codes|mfa_email_code_hash|mfa_email_code_expires|sharepoint_client_secret)/gi,
+    "NULL",
+  );
+  const lower = probe.toLowerCase();
+  for (const col of secrets) {
+    let from = 0;
+    while (true) {
+      const i = lower.indexOf(col, from);
+      if (i < 0) break;
+      const before = i === 0 ? "" : lower[i - 1];
+      const after = lower[i + col.length] || "";
+      const boundaryBefore = !before || !/[a-z0-9_]/.test(before);
+      const boundaryAfter = !after || !/[a-z0-9_]/.test(after);
+      if (boundaryBefore && boundaryAfter) {
+        if (isSelectLike(sql) || lower.includes("returning")) return true;
+        // Function wrappers around the column name
+        const window = lower.slice(Math.max(0, i - 24), i);
+        for (const fn of [
+          "substr",
+          "substring",
+          "left",
+          "right",
+          "concat",
+          "encode",
+          "decode",
+          "md5",
+          "digest",
+        ]) {
+          if (window.includes(fn)) return true;
+        }
+      }
+      from = i + col.length;
+    }
+  }
+  return false;
+}
+
+/** Seal sharepoint_client_secret write params (AES-GCM) before INSERT/UPDATE. */
+function sealSharePointSecretParamsInSql(
+  sql: string,
+  params: unknown[],
+): unknown[] {
+  if (!/\bsharepoint_client_secret\b/i.test(sql)) return params;
+  if (isSelectLike(sql)) return params;
+  const out = params.slice();
+  const idxs = new Set<number>();
+  for (const hit of sql.matchAll(
+    /\bsharepoint_client_secret\s*=\s*\$(\d+)\b/gi,
+  )) {
+    const idx = Number(hit[1]) - 1;
+    if (Number.isFinite(idx) && idx >= 0) idxs.add(idx);
+  }
+  const cols = matchInsertColumns(sql, "companies");
+  if (cols) {
+    const colIdx = cols.indexOf("sharepoint_client_secret");
+    if (colIdx >= 0) {
+      const valuesMatch = sql.match(/values\s*\(([^)]+)\)/i);
+      if (valuesMatch) {
+        const placeholders = valuesMatch[1].split(",").map((s) => s.trim());
+        const ph = placeholders[colIdx];
+        const pm = ph?.match(/^\$(\d+)$/);
+        if (pm) idxs.add(Number(pm[1]) - 1);
+      }
+    }
+  }
+  for (const idx of idxs) {
+    const v = out[idx];
+    if (typeof v === "string" && v.length > 0) {
+      try {
+        out[idx] = sealSecret(v);
+      } catch (e) {
+        console.warn("[db/query] sealSecret failed", e);
+        throw e;
+      }
+    }
+  }
+  return out;
+}
+
+
 export default async function handler(req: VercelRequest, res: VercelResponse) {
   try {
     if (req.method === "OPTIONS") {
@@ -493,7 +708,8 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     if (proxyDisabled()) {
       return res.status(403).json({
         error:
-          "Browser SQL proxy is disabled. Use purpose-built /api/* handlers.",
+          "Browser SQL proxy is disabled. Use purpose-built /api/* handlers. " +
+          "Set SQL_PROXY_ENABLED=1 only as a temporary bridge (not recommended).",
       });
     }
 
@@ -568,10 +784,16 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       }
     }
 
+    // Reject any attempt to read secret columns by expression/alias/RETURNING
+    if (selectTouchesSecretColumns(sql)) {
+      return res.status(403).json({ error: "Access denied." });
+    }
+
     if (isSelectLike(sql)) {
       sql = redactSecretsInSelect(sql);
     } else {
       params = await hashPasswordParamsInSql(sql, params);
+      params = sealSharePointSecretParamsInSql(sql, params);
     }
 
     // Always execute with bound parameters — never interpolate params into sql.

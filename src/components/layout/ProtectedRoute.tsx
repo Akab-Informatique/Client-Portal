@@ -13,6 +13,11 @@ import {
 import { useLocale } from "@/hooks/use-locale";
 import { AkabLoader } from "@/components/AkabLoader";
 
+/**
+ * UX-only route gate. Real authorization is enforced server-side in
+ * /api/db/query (and purpose-built /api/* handlers) from the session cookie.
+ * Never treat these React checks as a security boundary.
+ */
 export function ProtectedRoute({
   roles,
   permission,

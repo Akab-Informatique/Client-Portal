@@ -296,7 +296,9 @@ export function ClientsPage() {
       sharepoint_folder_path: company.sharepoint_folder_path ?? "",
       sharepoint_tenant_id: company.sharepoint_tenant_id ?? "",
       sharepoint_client_id: company.sharepoint_client_id ?? "",
-      sharepoint_client_secret: company.sharepoint_client_secret ?? "",
+      // Secret is never returned from the API — only a "configured" marker.
+      // Keep the form field empty so we don't round-trip the marker as a secret.
+      sharepoint_client_secret: "",
       documentation_title: company.documentation_title ?? "",
       documentation_enabled: company.documentation_enabled !== false,
       itglue_organization_id: company.itglue_organization_id ?? "",
@@ -527,7 +529,8 @@ const openAddUser = async (companyId: number) => {
     }
     const clientId = form.sharepoint_client_id.trim();
     const clientSecret = form.sharepoint_client_secret.trim();
-    if ((clientId && !clientSecret) || (!clientId && clientSecret)) {
+    const hadSecret = !!(editing?.sharepoint_client_secret || "").trim();
+    if ((clientId && !clientSecret && !hadSecret) || (!clientId && clientSecret)) {
       setSpResolveOk(false);
       setSpResolveMsg(t("docs.errClientAppPair"));
       return;
@@ -541,7 +544,7 @@ const openAddUser = async (companyId: number) => {
         clientId: clientId || null,
         clientSecret: clientSecret || null,
       };
-      const res = await resolveSharePointSite(url, auth);
+      const res = await resolveSharePointSite(url, auth, editing?.id ?? null);
       if (!res.configured) {
         setSpResolveOk(false);
         setSpResolveMsg(res.error || t("docs.graphNotConfigured"));
@@ -624,25 +627,40 @@ const openAddUser = async (companyId: number) => {
     }
     const spClientId = form.sharepoint_client_id.trim();
     const spClientSecret = form.sharepoint_client_secret.trim();
-    if ((spClientId && !spClientSecret) || (!spClientId && spClientSecret)) {
+    const secretAlreadyConfigured =
+      !!editing &&
+      !!(editing.sharepoint_client_secret || "").trim() &&
+      !spClientSecret;
+    // Require a new secret only when setting client id without an existing sealed secret
+    if (spClientId && !spClientSecret && !secretAlreadyConfigured) {
+      setError(t("docs.errClientAppPair"));
+      return;
+    }
+    if (!spClientId && spClientSecret) {
       setError(t("docs.errClientAppPair"));
       return;
     }
     setSaving(true);
     await dbReady;
     const atId = form.autotask_company_id.trim() || null;
-    const docsPayload = {
+    const docsPayload: Record<string, unknown> = {
       sharepoint_site_url: form.sharepoint_site_url.trim() || null,
       sharepoint_folder_path: form.sharepoint_folder_path.trim() || null,
       sharepoint_tenant_id: form.sharepoint_tenant_id.trim() || null,
       sharepoint_client_id: spClientId || null,
-      sharepoint_client_secret: spClientSecret || null,
       documentation_title: form.documentation_title.trim() || null,
       documentation_enabled: form.documentation_enabled,
       itglue_organization_id: form.itglue_organization_id.trim() || null,
       datto_rmm_site_uid: form.datto_rmm_site_uid.trim() || null,
       datto_rmm_site_name: form.datto_rmm_site_name.trim() || null,
     };
+    // Only write secret when the admin typed a new value (empty = keep existing sealed secret)
+    if (spClientSecret) {
+      docsPayload.sharepoint_client_secret = spClientSecret;
+    } else if (!spClientId && editing) {
+      // Clearing client id also clears secret
+      docsPayload.sharepoint_client_secret = null;
+    }
     if (editing) {
       await db
         .update(schema.companies)
@@ -1456,7 +1474,8 @@ const openAddUser = async (companyId: number) => {
                     <Badge variant="outline">{t("docs.clientNotConnected")}</Badge>
                   )}
                   {form.sharepoint_client_id.trim() &&
-                  form.sharepoint_client_secret.trim() ? (
+                  (form.sharepoint_client_secret.trim() ||
+                    !!(editing?.sharepoint_client_secret || "").trim()) ? (
                     <Badge
                       variant="outline"
                       className="border-emerald-500/40 bg-emerald-500/10 text-emerald-700 dark:text-emerald-300"

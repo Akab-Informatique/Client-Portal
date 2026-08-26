@@ -34,6 +34,8 @@ import { formatDate } from "@/lib/format";
 
 export type DocumentationBrowserProps = {
   companyName: string;
+  /** Used server-side to open sealed Graph secrets — never send secrets from the browser. */
+  companyId?: number | null;
   siteUrl: string;
   folderPath?: string | null;
   /** @deprecated prefer auth.tenantId */
@@ -68,6 +70,7 @@ function ItemIcon({ item }: { item: SharePointItem }) {
 
 export function DocumentationBrowser({
   companyName,
+  companyId,
   siteUrl,
   folderPath,
   tenantId,
@@ -99,11 +102,12 @@ export function DocumentationBrowser({
   const authKey = useMemo(
     () =>
       [
+        String(companyId ?? ""),
         resolvedAuth.tenantId || "",
         resolvedAuth.clientId || "",
         resolvedAuth.clientSecret ? "sec" : "",
       ].join("|"),
-    [resolvedAuth.tenantId, resolvedAuth.clientId, resolvedAuth.clientSecret],
+    [companyId, resolvedAuth.tenantId, resolvedAuth.clientId, resolvedAuth.clientSecret],
   );
 
   const crumbs = useMemo(
@@ -119,6 +123,7 @@ export function DocumentationBrowser({
         siteUrl,
         basePath: folderPath || undefined,
         path: relPath || undefined,
+        companyId: companyId ?? undefined,
         auth: resolvedAuth,
       });
       setConfigured(data.configured !== false);

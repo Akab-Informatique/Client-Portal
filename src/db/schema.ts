@@ -36,8 +36,9 @@ export const companies = pgTable("companies", {
   sharepoint_client_id: text("sharepoint_client_id"),
   /**
    * Optional per-client Microsoft Graph app client secret.
-   * Server-side only: never returned to the browser (SQL proxy redacts +
-   * server authz blocks reads). Prefer env-level secrets; rotate if exposed.
+   * Stored AES-GCM sealed (enc:v1:…) via CREDENTIALS_ENCRYPTION_KEY.
+   * Never returned to the browser — proxy redacts; UI sees configured flag only.
+   * Prefer env-level secrets; rotate if a plaintext backup was exposed.
    */
   sharepoint_client_secret: text("sharepoint_client_secret"),
   /** Optional label shown in the Documentation section */
@@ -163,6 +164,10 @@ export const users = pgTable("users", {
    * cookies issued earlier become invalid (server checks cookie.epoch).
    */
   session_epoch: integer("session_epoch"),
+  /** Server-only TOTP seed while enrolling (never in cookies). */
+  mfa_enroll_secret: text("mfa_enroll_secret"),
+  mfa_enroll_id: text("mfa_enroll_id"),
+  mfa_enroll_expires: text("mfa_enroll_expires"),
   /**
    * Multi-factor authentication (required for all portal users).
    * Primary: TOTP authenticator app. Backup: emailed one-time code + recovery codes.

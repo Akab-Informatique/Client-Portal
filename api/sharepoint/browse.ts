@@ -9,6 +9,7 @@ import {
   type GraphCredentialOverride,
   type GraphDriveItem,
 } from "../_lib/graph-client.js";
+import { loadCompanyGraphAuth } from "../_lib/company-secrets.js";
 
 export type BrowseItem = {
   id: string;
@@ -94,7 +95,25 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       return res.status(405).json({ error: "Method not allowed" });
     }
 
-    const auth = readAuthFromRequest(req);
+    let auth = readAuthFromRequest(req);
+    // Prefer server-side sealed secret when companyId is provided (browser never has the real secret)
+    const companyIdRaw =
+      (req.body && typeof req.body === "object" && (req.body as { companyId?: unknown }).companyId) ??
+      req.query?.companyId;
+    const companyId = Number(
+      Array.isArray(companyIdRaw) ? companyIdRaw[0] : companyIdRaw,
+    );
+    if (Number.isFinite(companyId) && companyId > 0) {
+      const fromDb = await loadCompanyGraphAuth(companyId);
+      if (fromDb) {
+        auth = {
+          tenantId: auth.tenantId || fromDb.tenantId,
+          clientId: auth.clientId || fromDb.clientId,
+          // DB sealed secret wins unless the admin just typed a fresh secret in the form
+          clientSecret: auth.clientSecret || fromDb.clientSecret,
+        };
+      }
+    }
     const authInfo = describeGraphAuthSource(auth);
 
     if (!isGraphConfiguredFor(auth)) {

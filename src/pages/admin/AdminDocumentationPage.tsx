@@ -132,12 +132,12 @@ export function AdminDocumentationPage() {
         ) : (
           <DocumentationBrowser
             companyName={selected.name}
+            companyId={selected.id}
             siteUrl={selected.sharepoint_site_url!.trim()}
             folderPath={selected.sharepoint_folder_path}
             auth={{
               tenantId: selected.sharepoint_tenant_id,
               clientId: selected.sharepoint_client_id,
-              clientSecret: selected.sharepoint_client_secret,
             }}
             title={selected.documentation_title}
             showCompanyBadge

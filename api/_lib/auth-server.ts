@@ -31,6 +31,8 @@ export type DbUser = {
   mfa_recovery_codes: string | null;
   mfa_email_code_hash: string | null;
   mfa_email_code_expires: string | null;
+  /** Bumped to invalidate outstanding session cookies */
+  session_epoch: number;
   created_at: Date | string | null;
 };
 
@@ -469,6 +471,13 @@ export async function requireSessionUser(
   if (!session) return null;
   const user = await loadUserById(session.uid);
   if (!user || !user.active) return null;
+  // Reject cookies issued before logout / password / MFA change
+  const cookieEpoch =
+    typeof (session as { epoch?: number }).epoch === "number" &&
+    Number.isFinite((session as { epoch?: number }).epoch as number)
+      ? Number((session as { epoch?: number }).epoch)
+      : 0;
+  if (cookieEpoch !== (user.session_epoch || 0)) return null;
   return user;
 }
 
