@@ -40,6 +40,10 @@ COPY server ./server
 COPY vite-plugins ./vite-plugins
 COPY scripts ./scripts
 
+# Run unprivileged (uid/gid 1000 "node" from the base image). The app never
+# writes into /app; the mounted .env must be readable by gid 1000.
+USER node
+
 EXPOSE 3000
 
 # Liveness: process + HTTP (no DB). Compose also healthchecks this.

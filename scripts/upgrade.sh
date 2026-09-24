@@ -23,9 +23,27 @@ if [[ -n "$REF" ]]; then
   git reset --hard "$REF" 2>/dev/null || true
 else
   BRANCH="$(git rev-parse --abbrev-ref HEAD 2>/dev/null || echo master)"
+  # After a rollback (upgrade.sh vX.Y.Z) HEAD is detached — return to master
+  # instead of resolving "origin/HEAD".
+  if [[ "$BRANCH" == "HEAD" || -z "$BRANCH" ]]; then
+    BRANCH="master"
+    git checkout "$BRANCH"
+  fi
   git pull --ff-only origin "$BRANCH" 2>/dev/null || git reset --hard "origin/$BRANCH"
 fi
 echo "    HEAD: $(git rev-parse --short HEAD) — $(git log -1 --pretty=%s)"
+
+# The app container runs as uid/gid 1000 and re-reads the mounted .env
+if [[ -f .env ]]; then
+  if [[ "$(stat -c %g .env)" != "1000" ]] || [[ "$(stat -c %A .env | cut -c5)" != "r" ]]; then
+    if chgrp 1000 .env 2>/dev/null && chmod 640 .env 2>/dev/null; then
+      echo "==> .env: group 1000 read access set (app container runs unprivileged)"
+    else
+      echo "WARN: the app container (gid 1000) cannot read .env. Run once:"
+      echo "      sudo chgrp 1000 $ROOT/.env && sudo chmod 640 $ROOT/.env"
+    fi
+  fi
+fi
 
 # Soft-check Autotask secret quoting before rebuild (does not print secret)
 if [[ -f .env ]]; then
@@ -71,8 +89,16 @@ fi
 
 docker compose ps
 
+# Diagnostics run INSIDE the app container: status routes answer loopback
+# callers without a session, but never requests coming through the proxy.
+in_app() {
+  docker compose exec -T app sh -c \
+    "curl -sS -m ${2:-30} -H \"x-akab-probe: \$(cat /tmp/akab-probe-token 2>/dev/null)\" 'http://127.0.0.1:3000$1'" \
+    2>/dev/null || true
+}
+
 echo "==> Run DB migrations (additive)"
-migrate_json="$(curl -sS -m 45 "${BASE}/api/db/status?migrate=1" || true)"
+migrate_json="$(in_app "/api/db/status?migrate=1" 45)"
 echo "$migrate_json" | head -c 2000
 echo
 if echo "$migrate_json" | grep -q '"ok":true\|"ok": true'; then
@@ -86,7 +112,7 @@ if echo "$migrate_json" | grep -q 'client_roles_company_id'; then
 fi
 
 echo "==> Autotask status"
-at_json="$(curl -sS -m 30 "${BASE}/api/autotask/status?refresh=1" || true)"
+at_json="$(in_app "/api/autotask/status?refresh=1" 30)"
 echo "$at_json" | head -c 2500
 echo
 if echo "$at_json" | grep -qE '"ok"[[:space:]]*:[[:space:]]*true'; then
@@ -99,7 +125,24 @@ else
   echo "    2) Recreate app only (no rebuild needed for env):"
   echo "         docker compose up -d --force-recreate app"
   echo "    3) Retest:"
-  echo "         curl -sS '${BASE}/api/autotask/status?refresh=1'"
+  echo "         docker compose exec -T app curl -sS 'http://127.0.0.1:3000/api/autotask/status?refresh=1'"
+fi
+
+echo "==> Security checks"
+app_log="$(docker compose logs --no-color app 2>/dev/null | tail -n 400 || true)"
+if echo "$app_log" | grep -q "SQL proxy isolation: role + row-level security ready"; then
+  echo "    SQL proxy isolation: active"
+else
+  echo "WARN: SQL proxy row-level security is NOT active — see: docker compose logs app | grep -i isolation"
+fi
+if echo "$app_log" | grep -q "DEFAULT ADMIN PASSWORD"; then
+  echo "WARN: an account still uses the default password admin123 — change it in the portal now."
+fi
+if echo "$app_log" | grep -q "cannot read /app/.env"; then
+  echo "WARN: app cannot read .env — run: sudo chgrp 1000 $ROOT/.env && sudo chmod 640 $ROOT/.env"
+fi
+if grep -Eq '^[[:space:]]*COOKIE_SECURE=(false|0)' .env 2>/dev/null; then
+  echo "WARN: COOKIE_SECURE=false in .env — remove it (portal is served over HTTPS)."
 fi
 
 echo

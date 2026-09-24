@@ -15,6 +15,7 @@
  *   5. Cross-site mutating requests are refused (Origin/Referer check).
  */
 
+import { timingSafeEqual } from "crypto";
 import type { VercelRequest, VercelResponse } from "@vercel/node";
 import { getPool } from "./pg.js";
 import { readSession } from "./session.js";
@@ -82,6 +83,23 @@ const STATUS_SAFE_KEYS = new Set([
   "mode",
   "mock",
 ]);
+
+/**
+ * Loopback peer, no proxy headers, AND the per-boot token the server wrote to
+ * its temp dir (only readable with `docker compose exec`).
+ */
+function isInContainerProbe(req: VercelRequest): boolean {
+  const h = req.headers || {};
+  if (h["x-forwarded-for"] || h["x-real-ip"] || h["forwarded"]) return false;
+  const peer = String(
+    (req as unknown as { socket?: { remoteAddress?: string } }).socket?.remoteAddress || "",
+  );
+  if (!(peer === "127.0.0.1" || peer === "::1" || peer === "::ffff:127.0.0.1")) return false;
+  const expected = String(process.env.AKAB_PROBE_TOKEN || "");
+  const given = firstParam(h["x-akab-probe"]);
+  if (!expected || given.length !== expected.length) return false;
+  return timingSafeEqual(Buffer.from(given), Buffer.from(expected));
+}
 
 function denied(status: number, error: string): GateResult {
   return { ok: false, status, error };
@@ -260,6 +278,14 @@ export async function gateApiRequest(
     return denied(404, "API route not found");
   }
   if (isPublicRoute(rel)) return { ok: true, auth: null };
+
+  // Operator diagnostics from inside the container (scripts/upgrade.sh runs
+  // `docker compose exec app curl http://127.0.0.1:3000/api/<x>/status`).
+  // Only a TCP peer of 127.0.0.1 with no proxy headers qualifies — traffic via
+  // the reverse proxy or the published port never arrives from loopback.
+  if (method === "GET" && isInContainerProbe(req) && /^[a-z-]+\/status$/.test(rel)) {
+    return { ok: true, auth: null };
+  }
 
   const originErr = assertSameOrigin(req);
   if (originErr) return denied(403, originErr);

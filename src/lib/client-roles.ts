@@ -206,23 +206,7 @@ export async function listMembersForRole(
   // Core Standard: ensure every client user of this company is a member, then list them.
   if (isCore && role.company_id) {
     try {
-      const companyUsers = (
-        (await db
-          .select()
-          .from(schema.users)
-          .where(eq(schema.users.company_id, role.company_id))) as User[]
-      ).filter((u) => u.role === "client");
-      for (const u of companyUsers) {
-        try {
-          await ensureUserMemberships({
-            userId: u.id,
-            companyId: role.company_id,
-            legacyRoleId: u.client_role_id,
-          });
-        } catch {
-          /* continue */
-        }
-      }
+      await ensureAllClientCompanyRoles({ companyId: role.company_id });
     } catch {
       /* ignore ensure failures */
     }
@@ -422,55 +406,123 @@ export async function ensureUserMemberships(opts: {
  * Create default user roles for every active client company, migrate
  * legacy single-role users into memberships, ensure Standard for all.
  */
-export async function ensureAllClientCompanyRoles(): Promise<void> {
+export async function ensureAllClientCompanyRoles(opts?: {
+  /** Limit to one company (e.g. when listing its Default members). */
+  companyId?: number;
+}): Promise<void> {
   await dbReady;
-  const companies = (await db.select().from(schema.companies)) as Company[];
-  const clients = companies.filter((c) => c.type === "client");
+  // Set-based: read everything once, then write only what is missing.
+  // (Previously ~3 sequential round-trips per company + 1 per user.)
+  const [companies, roleRows, userRows] = await Promise.all([
+    db.select().from(schema.companies) as Promise<Company[]>,
+    db.select().from(schema.client_roles) as Promise<ClientRole[]>,
+    db
+      .select({
+        id: schema.users.id,
+        role: schema.users.role,
+        company_id: schema.users.company_id,
+        client_role_id: schema.users.client_role_id,
+      })
+      .from(schema.users) as Promise<
+      Array<{ id: number; role: string; company_id: number | null; client_role_id: number | null }>
+    >,
+  ]);
+  let memberships: ClientUserRole[] = [];
+  try {
+    memberships = (await db.select().from(schema.client_user_roles)) as ClientUserRole[];
+  } catch {
+    memberships = [];
+  }
 
+  const clients = companies.filter(
+    (c) => c.type === "client" && (opts?.companyId == null || c.id === opts.companyId),
+  );
+
+  // 1) System roles per company — only touch companies missing / with legacy names
+  const standardByCompany = new Map<number, ClientRole>();
   for (const c of clients) {
+    const own = roleRows.filter((r) => r.company_id === c.id);
+    const std = own.find((r) => r.slug === SYSTEM_CLIENT_ROLE_SLUGS.standard);
+    const bill = own.find((r) => r.slug === SYSTEM_CLIENT_ROLE_SLUGS.billing);
+    const legacyName =
+      std?.name === "Standard user" || std?.name === "Standard" || bill?.name === "Billing contact";
     try {
-      await ensureClientUserRolesForCompany(c.id);
-      const users = (await db
-        .select()
-        .from(schema.users)
-        .where(eq(schema.users.company_id, c.id))) as Array<{
-        id: number;
-        role: string;
-        client_role_id: number | null;
-      }>;
-      for (const u of users) {
-        if (u.role !== "client") continue;
-        await ensureUserMemberships({
-          userId: u.id,
-          companyId: c.id,
-          legacyRoleId: u.client_role_id,
-        });
+      if (!std || !bill || legacyName) {
+        const ensured = await ensureClientUserRolesForCompany(c.id);
+        standardByCompany.set(c.id, ensured.standard);
+        roleRows.push(ensured.standard, ensured.billing);
+      } else {
+        standardByCompany.set(c.id, std);
       }
     } catch (e) {
-      console.warn(
-        `[akab] client user roles for company #${c.id} failed:`,
-        e,
-      );
+      console.warn(`[akab] client user roles for company #${c.id} failed:`, e);
     }
   }
 
-  // Drop legacy global roles (company_id missing/0) if unused
+  // 2) Memberships: every client user has Default; legacy single role imported once
+  const roleById = new Map(roleRows.map((r) => [r.id, r]));
+  const have = new Set(memberships.map((m) => `${m.user_id}:${m.role_id}`));
+  const toInsert: Array<{ user_id: number; role_id: number; company_id: number }> = [];
+  const pinLegacyToStandard = new Map<number, number[]>(); // standardId → userIds
+  for (const u of userRows) {
+    if (u.role !== "client" || u.company_id == null) continue;
+    const standard = standardByCompany.get(u.company_id);
+    if (!standard) continue;
+    const mine = memberships.filter(
+      (m) => m.user_id === u.id && m.company_id === u.company_id,
+    );
+    const add = (roleId: number) => {
+      const key = `${u.id}:${roleId}`;
+      if (have.has(key)) return;
+      have.add(key);
+      toInsert.push({ user_id: u.id, role_id: roleId, company_id: u.company_id! });
+    };
+    if (mine.length === 0) {
+      add(standard.id);
+      const legacy = u.client_role_id != null ? roleById.get(u.client_role_id) : null;
+      if (legacy && legacy.id !== standard.id && legacy.company_id === u.company_id) {
+        add(legacy.id);
+      }
+      if (u.client_role_id !== standard.id) {
+        const list = pinLegacyToStandard.get(standard.id) ?? [];
+        list.push(u.id);
+        pinLegacyToStandard.set(standard.id, list);
+      }
+    } else if (!mine.some((m) => m.role_id === standard.id)) {
+      add(standard.id);
+    }
+  }
+  for (let i = 0; i < toInsert.length; i += 500) {
+    try {
+      await db
+        .insert(schema.client_user_roles)
+        .values(toInsert.slice(i, i + 500))
+        .onConflictDoNothing();
+    } catch (e) {
+      console.warn("[akab] client user role memberships insert failed:", e);
+    }
+  }
+  // Keep legacy client_role_id = Standard for back-compat displays
+  for (const [standardId, ids] of pinLegacyToStandard) {
+    try {
+      await db
+        .update(schema.users)
+        .set({ client_role_id: standardId })
+        .where(inArray(schema.users.id, ids));
+    } catch {
+      /* ignore */
+    }
+  }
+
+  // 3) Drop legacy global roles (company_id missing/0) if unused
+  if (opts?.companyId != null) return;
   try {
-    const allRoles = (await db
-      .select()
-      .from(schema.client_roles)) as ClientRole[];
-    for (const r of allRoles) {
-      const cid = Number((r as ClientRole).company_id);
+    const usedRoleIds = new Set(userRows.map((u) => u.client_role_id));
+    for (const r of roleRows) {
+      const cid = Number(r.company_id);
       if (Number.isFinite(cid) && cid > 0) continue;
-      const stillUsed = (
-        (await db.select().from(schema.users)) as Array<{
-          client_role_id: number | null;
-        }>
-      ).some((u) => u.client_role_id === r.id);
-      if (!stillUsed) {
-        await db
-          .delete(schema.client_roles)
-          .where(eq(schema.client_roles.id, r.id));
+      if (!usedRoleIds.has(r.id)) {
+        await db.delete(schema.client_roles).where(eq(schema.client_roles.id, r.id));
       }
     }
   } catch {

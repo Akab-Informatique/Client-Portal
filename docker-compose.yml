@@ -40,7 +40,10 @@ services:
       db:
         condition: service_healthy
     ports:
-      - "${PORT:-3000}:3000"
+      # Default publishes on every interface (unchanged). When the reverse proxy
+      # reaches the app via 127.0.0.1, set APP_PUBLISH=127.0.0.1:3000 in .env so
+      # the unencrypted port is not reachable from the network.
+      - "${APP_PUBLISH:-${PORT:-3000}}:3000"
     env_file:
       - .env
     # Mount raw .env so the Node server can re-read Autotask/Microsoft secrets

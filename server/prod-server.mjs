@@ -15,6 +15,8 @@ import fs from "fs";
 import http from "http";
 import path from "path";
 import zlib from "zlib";
+import os from "os";
+import crypto from "crypto";
 import { fileURLToPath, pathToFileURL } from "url";
 import { createRequire } from "module";
 
@@ -23,6 +25,17 @@ const __dirname = path.dirname(__filename);
 const root = path.resolve(__dirname, "..");
 const distDir = path.join(root, "dist");
 const apiDir = path.join(root, "api");
+
+// Per-boot token for operator diagnostics from inside the container
+// (scripts/upgrade.sh). Readable only via `docker compose exec`.
+const PROBE_TOKEN_FILE = path.join(os.tmpdir(), "akab-probe-token");
+try {
+  const token = crypto.randomBytes(24).toString("hex");
+  fs.writeFileSync(PROBE_TOKEN_FILE, token, { mode: 0o600 });
+  process.env.AKAB_PROBE_TOKEN = token;
+} catch (err) {
+  console.warn("[akab] probe token not written:", err instanceof Error ? err.message : err);
+}
 
 const PORT = Number(process.env.PORT || 3000);
 const HOST = process.env.HOST || "0.0.0.0";
@@ -43,7 +56,19 @@ const FILE_WINS_ENV =
 function loadEnvFileNoExpand(filePath, { secretsWin = true } = {}) {
   if (!fs.existsSync(filePath)) return 0;
   let loaded = 0;
-  const text = fs.readFileSync(filePath, "utf8");
+  let text;
+  try {
+    text = fs.readFileSync(filePath, "utf8");
+  } catch (err) {
+    // Container runs as a non-root user: the mounted .env must be readable by
+    // uid/gid 1000. Keep booting with the Compose-injected values instead.
+    console.warn(
+      `[akab-env] WARNING: cannot read ${filePath} (${err.code || err.message}). ` +
+        "Using environment from Docker Compose only; secrets containing $ may be altered. " +
+        "Fix on the host: sudo chgrp 1000 .env && sudo chmod 640 .env",
+    );
+    return 0;
+  }
   for (const rawLine of text.split(/\r?\n/)) {
     const line = rawLine.trim();
     if (!line || line.startsWith("#")) continue;
@@ -868,6 +893,16 @@ server.listen(PORT, HOST, () => {
             (status.userCount != null ? ` — users=${status.userCount}` : "") +
             (boot?.seeded ? " — seeded admin@akab.local" : ""),
         );
+        try {
+          const weak = await mod.findDefaultPasswordAccounts();
+          for (const email of weak) {
+            console.error(
+              `  SECURITY: DEFAULT ADMIN PASSWORD still set for ${email} — change it or deactivate the account`,
+            );
+          }
+        } catch {
+          /* non-fatal */
+        }
       } catch (err) {
         console.error(
           "  db:     FAILED:",

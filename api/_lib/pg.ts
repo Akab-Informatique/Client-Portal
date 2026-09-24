@@ -833,6 +833,32 @@ function redactSecretFields(result: pg.QueryResult, arrayMode: boolean): void {
   }
 }
 
+/** Accounts created by ensureBootstrap with well-known passwords. */
+const BOOTSTRAP_ACCOUNTS: Array<[string, string]> = [
+  ["admin@akab.local", "admin123"],
+  ["tech@akab.local", "tech123"],
+  ["client@acme.example", "client123"],
+];
+
+/**
+ * Emails of ACTIVE bootstrap accounts still using their default password.
+ * Logged loudly at boot (and surfaced by scripts/upgrade.sh).
+ */
+export async function findDefaultPasswordAccounts(): Promise<string[]> {
+  const { verifyPassword } = await import("./passwords.js");
+  const r = await getPool().query(
+    `SELECT lower(email) AS email, password FROM users
+      WHERE active = true AND lower(email) = ANY($1::text[])`,
+    [BOOTSTRAP_ACCOUNTS.map(([e]) => e)],
+  );
+  const out: string[] = [];
+  for (const row of r.rows as Array<{ email: string; password: string }>) {
+    const pw = BOOTSTRAP_ACCOUNTS.find(([e]) => e === row.email)?.[1];
+    if (pw && (await verifyPassword(pw, row.password)).ok) out.push(row.email);
+  }
+  return out;
+}
+
 export async function proxyQuery(opts: {
   sql: string;
   params?: unknown[];
