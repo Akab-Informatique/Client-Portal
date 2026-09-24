@@ -42,9 +42,21 @@ export default defineConfig(({ mode }) => {
               id.includes("drizzle-orm/pglite")
           : undefined,
         output: {
-          manualChunks: {
-            vendor: ["react", "react-dom", "react-router-dom"],
-            motion: ["motion"],
+          // Stable third-party chunks stay cached across deploys; only app
+          // code changes hash when we ship.
+          manualChunks(id) {
+            if (!id.includes("node_modules")) return undefined;
+            if (/node_modules[\\/](react|react-dom|scheduler|react-router|react-router-dom)[\\/]/.test(id)) {
+              return "vendor";
+            }
+            if (/node_modules[\\/](motion|framer-motion|motion-dom|motion-utils)[\\/]/.test(id)) {
+              return "motion";
+            }
+            if (/node_modules[\\/](@radix-ui|radix-ui|@floating-ui)[\\/]/.test(id)) {
+              return "ui";
+            }
+            if (/node_modules[\\/]drizzle-orm[\\/]/.test(id)) return "db";
+            return undefined;
           },
         },
       },

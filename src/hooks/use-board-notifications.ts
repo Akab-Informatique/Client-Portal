@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { desc, eq } from "drizzle-orm";
+import { and, desc, eq, gt } from "drizzle-orm";
 import { db, dbReady, schema } from "@/db";
 import { useAuth } from "@/lib/auth";
 import { countUnreadForUser } from "@/lib/message-state";
@@ -11,7 +11,8 @@ import {
   type NotifyPreference,
 } from "@/lib/notifications";
 
-const POLL_MS = 4000;
+// New posts are rare; a tab coming back into view polls immediately anyway.
+const POLL_MS = 30000;
 
 /**
  * While a client user is logged in, poll their company board and fire
@@ -82,6 +83,8 @@ export function useBoardNotifications() {
     let cancelled = false;
 
     const poll = async () => {
+      // Background tabs don't poll; onVis catches up when the tab is shown
+      if (baselinedRef.current && document.visibilityState === "hidden") return;
       try {
         await dbReady;
 
@@ -105,10 +108,16 @@ export function useBoardNotifications() {
         }
 
         const lastNotified = getLastSeenMessageId(userId, companyId);
+        // Only messages newer than the last one we notified about
         const rows = await db
           .select()
           .from(schema.board_messages)
-          .where(eq(schema.board_messages.company_id, companyId));
+          .where(
+            and(
+              eq(schema.board_messages.company_id, companyId),
+              gt(schema.board_messages.id, lastNotified),
+            ),
+          );
 
         const fresh = (rows as Array<{ id: number; title: string; body: string; author_name: string }>)
           .filter((m) => m.id > lastNotified)

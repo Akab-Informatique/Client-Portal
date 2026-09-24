@@ -70,6 +70,7 @@ export function ClientBoardPage() {
     if (!user?.company_id) return;
     let cancelled = false;
     const tick = async () => {
+      if (document.visibilityState === "hidden") return;
       const rows = await loadMessagesWithState(user.company_id!, user.id);
       if (cancelled) return;
       setMessages((prev) => {
@@ -83,7 +84,7 @@ export function ClientBoardPage() {
       });
       await refreshUnread();
     };
-    const id = window.setInterval(tick, 4000);
+    const id = window.setInterval(tick, 15000);
     return () => {
       cancelled = true;
       window.clearInterval(id);
