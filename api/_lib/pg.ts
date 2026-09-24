@@ -512,6 +512,9 @@ export async function runMigrations(): Promise<void> {
         );
       }
 
+      // Phase 5 — DB-level isolation for the browser SQL proxy (best effort)
+      await setupProxyIsolation(client);
+
       migrateDone = true;
       console.log("[akab-db] migrations OK (additive, phased)");
     } catch (err) {
@@ -701,10 +704,140 @@ export async function ensureBootstrap(): Promise<{ seeded: boolean }> {
   return bootstrapPromise;
 }
 
+// ---------------------------------------------------------------------------
+// Browser SQL proxy isolation
+//
+// Proxy statements run as a restricted NOLOGIN role with row-level security,
+// so tenant isolation is enforced by Postgres itself — not only by the SQL text
+// checks in api/db/query.ts. Internal server queries (auth, migrations, API
+// handlers) keep running as the owner and are unaffected.
+// ---------------------------------------------------------------------------
+const PROXY_ROLE = "akab_proxy";
+const PROXY_TABLES = [
+  "companies",
+  "users",
+  "staff_roles",
+  "client_roles",
+  "client_user_roles",
+  "board_messages",
+  "message_user_states",
+  "sos_requests",
+] as const;
+
+const RLS_STAFF = `current_setting('akab.role', true) IN ('admin','technician')`;
+const RLS_UID = `NULLIF(current_setting('akab.user_id', true), '')::int`;
+const RLS_COMPANIES = `string_to_array(NULLIF(current_setting('akab.company_ids', true), ''), ',')::int[]`;
+
+/** [table, policy, command, USING/WITH CHECK expression] */
+const PROXY_POLICIES: Array<[string, string, string, string]> = [
+  ["companies", "proxy_read", "SELECT", `${RLS_STAFF} OR id = ANY(${RLS_COMPANIES})`],
+  ["companies", "proxy_write", "ALL", RLS_STAFF],
+  ["users", "proxy_read", "SELECT", `${RLS_STAFF} OR id = ${RLS_UID} OR company_id = ANY(${RLS_COMPANIES})`],
+  ["users", "proxy_update", "UPDATE", `${RLS_STAFF} OR id = ${RLS_UID}`],
+  ["users", "proxy_write", "ALL", RLS_STAFF],
+  ["staff_roles", "proxy_all", "ALL", RLS_STAFF],
+  ["client_roles", "proxy_read", "SELECT", `${RLS_STAFF} OR company_id = ANY(${RLS_COMPANIES})`],
+  ["client_roles", "proxy_write", "ALL", RLS_STAFF],
+  ["client_user_roles", "proxy_read", "SELECT", `${RLS_STAFF} OR company_id = ANY(${RLS_COMPANIES})`],
+  ["client_user_roles", "proxy_write", "ALL", RLS_STAFF],
+  ["board_messages", "proxy_all", "ALL", `${RLS_STAFF} OR company_id = ANY(${RLS_COMPANIES})`],
+  ["message_user_states", "proxy_all", "ALL", `${RLS_STAFF} OR user_id = ${RLS_UID}`],
+  ["sos_requests", "proxy_all", "ALL", `${RLS_STAFF} OR (user_id = ${RLS_UID} AND company_id = ANY(${RLS_COMPANIES}))`],
+];
+
+/** Columns whose values never leave the server, whatever the SQL looked like. */
+const PROXY_SECRET_FIELDS = new Set([
+  "password",
+  "mfa_totp_secret",
+  "mfa_recovery_codes",
+  "mfa_email_code_hash",
+  "mfa_email_code_expires",
+  "mfa_enroll_secret",
+  "mfa_enroll_id",
+  "mfa_enroll_expires",
+  "sharepoint_client_secret",
+]);
+
+let proxyRoleReady = false;
+
+export function isProxyIsolationReady(): boolean {
+  return proxyRoleReady;
+}
+
+/**
+ * Idempotent: create the proxy role, grants and RLS policies.
+ * Best effort — on failure the proxy keeps working without DB-level isolation
+ * and logs a loud warning (never blocks boot).
+ */
+async function setupProxyIsolation(client: pg.PoolClient): Promise<void> {
+  const q = (sql: string) => withTimeout(client.query(sql), 15000, "proxy isolation");
+  try {
+    await q("BEGIN");
+    await q(`DO $$ BEGIN
+      IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = '${PROXY_ROLE}') THEN
+        CREATE ROLE ${PROXY_ROLE} NOLOGIN NOBYPASSRLS;
+      END IF;
+    END $$`);
+    await q(`DO $$ BEGIN
+      EXECUTE format('GRANT ${PROXY_ROLE} TO %I', current_user);
+    EXCEPTION WHEN OTHERS THEN NULL;
+    END $$`);
+    await q(`GRANT USAGE ON SCHEMA public TO ${PROXY_ROLE}`);
+    await q(`GRANT USAGE, SELECT, UPDATE ON ALL SEQUENCES IN SCHEMA public TO ${PROXY_ROLE}`);
+    for (const t of PROXY_TABLES) {
+      await q(`GRANT SELECT, INSERT, UPDATE, DELETE ON ${t} TO ${PROXY_ROLE}`);
+      await q(`ALTER TABLE ${t} ENABLE ROW LEVEL SECURITY`);
+    }
+    for (const [table, name, cmd, expr] of PROXY_POLICIES) {
+      await q(`DROP POLICY IF EXISTS ${name} ON ${table}`);
+      const check = cmd === "SELECT" || cmd === "DELETE" ? "" : ` WITH CHECK (${expr})`;
+      await q(
+        `CREATE POLICY ${name} ON ${table} AS PERMISSIVE FOR ${cmd} TO ${PROXY_ROLE} USING (${expr})${check}`,
+      );
+    }
+    await q("COMMIT");
+    proxyRoleReady = true;
+    console.log("[akab-db] SQL proxy isolation: role + row-level security ready");
+  } catch (err) {
+    await client.query("ROLLBACK").catch(() => undefined);
+    proxyRoleReady = false;
+    console.error(
+      "[akab-db] WARNING: SQL proxy isolation NOT active (row-level security setup failed):",
+      err instanceof Error ? err.message : err,
+    );
+  }
+}
+
+export type ProxyScope = {
+  role: "admin" | "technician" | "client";
+  userId: number;
+  companyIds: number[];
+};
+
+function redactSecretFields(result: pg.QueryResult, arrayMode: boolean): void {
+  const idx: number[] = [];
+  const names: string[] = [];
+  (result.fields || []).forEach((f, i) => {
+    if (PROXY_SECRET_FIELDS.has(String(f.name).toLowerCase())) {
+      idx.push(i);
+      names.push(f.name);
+    }
+  });
+  if (!idx.length) return;
+  for (const row of result.rows as unknown[]) {
+    if (arrayMode && Array.isArray(row)) {
+      for (const i of idx) row[i] = null;
+    } else if (row && typeof row === "object") {
+      for (const n of names) (row as Record<string, unknown>)[n] = null;
+    }
+  }
+}
+
 export async function proxyQuery(opts: {
   sql: string;
   params?: unknown[];
   method?: string;
+  scope?: ProxyScope;
 }): Promise<unknown[] | unknown[][]> {
   // Migrations run on server boot — do NOT re-run on every query
   const sql = String(opts.sql || "").trim();
@@ -728,21 +861,43 @@ export async function proxyQuery(opts: {
   const qTimeout =
     Number(cleanEnv(process.env.PG_QUERY_TIMEOUT_MS) || "12000") || 12000;
 
-  if (method === "all") {
-    const result = await withTimeout(
-      p.query({ text: sql, values: params, rowMode: "array" }),
-      qTimeout,
-      "SQL query",
-    );
-    return result.rows as unknown[][];
+  const arrayMode = method === "all";
+  const query = arrayMode
+    ? { text: sql, values: params, rowMode: "array" as const }
+    : { text: sql, values: params };
+
+  // Isolated path: restricted role + per-request RLS settings, one transaction
+  if (opts.scope && proxyRoleReady) {
+    const s = opts.scope;
+    const client = await withTimeout(p.connect(), 5000, "proxy connect");
+    try {
+      await client.query("BEGIN");
+      await client.query(`SET LOCAL ROLE ${PROXY_ROLE}`);
+      await client.query(
+        `SELECT set_config('akab.role', $1, true),
+                set_config('akab.user_id', $2, true),
+                set_config('akab.company_ids', $3, true)`,
+        [
+          s.role,
+          String(Math.floor(s.userId)),
+          s.companyIds.filter((n) => Number.isFinite(n)).map((n) => Math.floor(n)).join(","),
+        ],
+      );
+      const result = await withTimeout(client.query(query), qTimeout, "SQL query");
+      await client.query("COMMIT");
+      redactSecretFields(result, arrayMode);
+      return result.rows as unknown[] | unknown[][];
+    } catch (err) {
+      await client.query("ROLLBACK").catch(() => undefined);
+      throw err;
+    } finally {
+      client.release();
+    }
   }
 
-  const result = await withTimeout(
-    p.query({ text: sql, values: params }),
-    qTimeout,
-    "SQL query",
-  );
-  return result.rows as unknown[];
+  const result = await withTimeout(p.query(query), qTimeout, "SQL query");
+  redactSecretFields(result, arrayMode);
+  return result.rows as unknown[] | unknown[][];
 }
 
 /** Fast SELECT 1 — no migrations. Always finishes within ~6s. */

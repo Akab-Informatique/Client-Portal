@@ -1,8 +1,13 @@
 import type { VercelRequest, VercelResponse } from "@vercel/node";
-import { isPostgresConfigured, proxyQuery } from "../_lib/pg.js";
+import {
+  isPostgresConfigured,
+  isProxyIsolationReady,
+  proxyQuery,
+} from "../_lib/pg.js";
 import { hashPassword, isPasswordHashed } from "../_lib/passwords.js";
 import { sealSecret } from "../_lib/secret-box.js";
 import { assertSameOrigin } from "../_lib/request-guard.js";
+import { loadCompanyIds } from "../_lib/api-gate.js";
 import { readSession } from "../_lib/session.js";
 import {
   bumpSessionEpoch,
@@ -58,6 +63,15 @@ function proxyDisabled(): boolean {
 const BLOCKED_SQL =
   /\b(pg_sleep|pg_read_file|pg_ls_dir|lo_import|lo_export|dblink|copy\s+\w+\s+from|into\s+outfile|load_file|set\s+role|set\s+session|create\s+user|create\s+role|alter\s+role|grant\s+|revoke\s+|alter\s+user|drop\s+user|drop\s+role|drop\s+table|drop\s+database|drop\s+schema|truncate\s+|alter\s+system|create\s+extension)\b/i;
 
+/**
+ * Shapes the Drizzle query builder never produces. Rejecting them closes the
+ * tricks used to slip past the text checks below: comments, schema-qualified
+ * or catalog tables, whole-row / JSON / aggregate serialisation of rows, and
+ * changing the per-request RLS settings (set_config / current_setting).
+ */
+const NON_BUILDER_SQL =
+  /--|\/\*|\bpg_\w+|\binformation_schema\b|\bpublic"?\s*\.|\b(row_to_json|to_json|to_jsonb|json_agg|jsonb_agg|json_object_agg|jsonb_object_agg|json_build_object|jsonb_build_object|json_build_array|jsonb_build_array|array_agg|string_agg|xmlagg|query_to_xml|table_to_xml|set_config|current_setting|current_user|session_user|lo_\w+)\b|\bselect\s+\*/i;
+
 const AUTH_SECRET_COLS = [
   "password",
   "mfa_totp_secret",
@@ -86,27 +100,6 @@ const PRIVILEGE_COLS = [
   "password",
   "mfa_enabled",
 ] as const;
-
-/**
- * Fixed safe projections as whole SQL fragments (constant allowlists only).
- * Never built from request input — avoids string-concat of user values into SQL.
- */
-const USERS_SAFE_SELECT_SQL =
-  "SELECT id, email, NULL::text AS password, name, role, company_id, active, " +
-  "staff_role_id, client_role_id, billing_access, job_title, phone, mobile, bio, " +
-  "locale, itglue_user_id, datto_web_remote_device_uids, board_email_opt_in, " +
-  "mfa_enabled, NULL::text AS mfa_totp_secret, NULL::text AS mfa_recovery_codes, " +
-  "NULL::text AS mfa_email_code_hash, NULL::text AS mfa_email_code_expires, " +
-  "COALESCE(session_epoch, 0) AS session_epoch, created_at FROM users";
-
-const COMPANIES_SAFE_SELECT_SQL =
-  "SELECT id, name, type, email, phone, notes, active, autotask_company_id, " +
-  "dashboard_layout, sharepoint_site_url, sharepoint_folder_path, " +
-  "sharepoint_tenant_id, sharepoint_client_id, " +
-  "CASE WHEN sharepoint_client_secret IS NOT NULL AND length(btrim(sharepoint_client_secret)) > 0 " +
-  "THEN 'configured' ELSE NULL END AS sharepoint_client_secret, documentation_title, " +
-  "documentation_enabled, itglue_organization_id, datto_rmm_site_uid, " +
-  "datto_rmm_site_name, created_at FROM companies";
 
 const TENANT_TABLES = [
   "board_messages",
@@ -166,34 +159,6 @@ function hasColumnIdent(sql: string, col: string): boolean {
     }
     from = i + c.length;
   }
-}
-
-function nullOutColumnIdent(sql: string, col: string): string {
-  if (!/^[a-z_][a-z0-9_]*$/i.test(col)) return sql;
-  const lower = sql.toLowerCase();
-  const c = col.toLowerCase();
-  let out = "";
-  let i = 0;
-  while (i < sql.length) {
-    const j = lower.indexOf(c, i);
-    if (j < 0) {
-      out += sql.slice(i);
-      break;
-    }
-    const before = j === 0 ? "" : lower[j - 1];
-    const after = lower[j + c.length] || "";
-    const boundaryBefore = !before || !/[a-z0-9_.]/.test(before);
-    const boundaryAfter = !after || !/[a-z0-9_]/.test(after);
-    const prev = lower.slice(Math.max(0, j - 4), j);
-    if (boundaryBefore && boundaryAfter && !prev.endsWith(" as ")) {
-      out += sql.slice(i, j) + "NULL";
-      i = j + c.length;
-    } else {
-      out += sql.slice(i, j + c.length);
-      i = j + c.length;
-    }
-  }
-  return out;
 }
 
 function sqlMentionsIdEquals(sql: string, id: string): boolean {
@@ -268,39 +233,6 @@ function tablesMentioned(sql: string): string[] {
     if (mentionsTable(sql, t)) found.push(t);
   }
   return found;
-}
-
-/**
- * Replace SELECT * on sensitive tables with fixed safe projections.
- * Replacements are compile-time constants — request input is never spliced in.
- */
-function redactSecretsInSelect(sql: string): string {
-  let out = sql;
-
-  // Constant whole-statement replacements (no user input in the replacement text).
-  // Uses String.match on statement shape only — not shell execution.
-  const usersStar = out.match(
-    /^([\s\S]*?)select\s+(?:["']?users["']?\.)?\*\s+from\s+["']?users["']?([\s\S]*)$/i,
-  );
-  if (usersStar) {
-    out = usersStar[1] + USERS_SAFE_SELECT_SQL + usersStar[2];
-  }
-  const companiesStar = out.match(
-    /^([\s\S]*?)select\s+(?:["']?companies["']?\.)?\*\s+from\s+["']?companies["']?([\s\S]*)$/i,
-  );
-  if (companiesStar) {
-    out = companiesStar[1] + COMPANIES_SAFE_SELECT_SQL + companiesStar[2];
-  }
-
-  // Explicit secret columns → NULL (keeps aliases/ordinals when possible)
-  const secretCols = [
-    ...AUTH_SECRET_COLS,
-    "sharepoint_client_secret",
-  ] as const;
-  for (const col of secretCols) {
-    out = nullOutColumnIdent(out, col);
-  }
-  return out;
 }
 
 function staffHasAnyPerm(
@@ -475,8 +407,13 @@ function assertClientTenantScope(sql: string, user: DbUser): string | null {
       continue;
     }
 
+    // Per-user tables may be scoped by user_id (param verified in assertClientParams)
     const scoped =
-      sqlMentionsCompanyIdEquals(sql, cid);
+      sqlMentionsCompanyIdEquals(sql, cid) ||
+      ((table === "message_user_states" || table === "sos_requests") &&
+        (/\buser_id\s*=\s*\$\d+\b/i.test(sql) || /\bid\s*=\s*\$\d+\b/i.test(sql))) ||
+      // New read-state rows: RLS WITH CHECK pins user_id to the caller
+      (table === "message_user_states" && kind === "insert" && isProxyIsolationReady());
     if (!scoped) {
       return `Tenant scope required for ${table}.`;
     }
@@ -526,6 +463,16 @@ function assertClientParams(
       if (!Number.isFinite(num) || num !== companyId) {
         return "Tenant parameter mismatch.";
       }
+    }
+  }
+
+  // user_id filters must name the caller (RLS enforces this again in Postgres)
+  for (const hit of sql.matchAll(/\buser_id\s*=\s*\$(\d+)\b/gi)) {
+    const idx = Number(hit[1]) - 1;
+    const v = params[idx];
+    const num = typeof v === "number" ? v : Number(v);
+    if (!Number.isFinite(num) || num !== userId) {
+      return "Tenant parameter mismatch.";
     }
   }
 
@@ -595,55 +542,64 @@ async function hashPasswordParamsInSql(
 }
 
 
-/** True when the statement tries to project/return raw secret material. */
+const SECRET_COLUMNS = [
+  ...AUTH_SECRET_COLS,
+  "mfa_enroll_expires",
+  "sharepoint_client_secret",
+] as const;
+
+/** `"users"."password"`, `users.password`, `"password"` or `password`. */
+const SECRET_COLUMN_REF = new RegExp(
+  `(?:"?[a-z_][a-z0-9_]*"?\\s*\\.\\s*)?"?\\b(?:${SECRET_COLUMNS.join("|")})\\b"?`,
+  "gi",
+);
+
+/**
+ * Replace secret column references with NULL wherever the statement READS
+ * data: the whole statement for SELECT, only the RETURNING clause for writes
+ * (INSERT column lists / SET targets stay intact so admins can still set a
+ * password — it is hashed / sealed before execution).
+ */
+function nullSecretReads(sql: string): string {
+  const replace = (ref: string) =>
+    // The admin UI shows whether a SharePoint secret is set — keep that signal
+    /sharepoint_client_secret/i.test(ref)
+      ? `(CASE WHEN length(btrim(coalesce(${ref}, ''))) > 0 THEN 'configured' END)`
+      : "NULL";
+  if (isSelectLike(sql)) return sql.replace(SECRET_COLUMN_REF, replace);
+  const i = sql.toLowerCase().lastIndexOf("returning");
+  if (i < 0) return sql;
+  return sql.slice(0, i) + sql.slice(i).replace(SECRET_COLUMN_REF, replace);
+}
+
+/** The 'configured' marker produced by nullSecretReads — safe, never the value. */
+const CONFIGURED_MARKER =
+  /\(CASE WHEN length\(btrim\(coalesce\([^()]*, ''\)\)\) > 0 THEN 'configured' END\)/gi;
+
+/**
+ * `"table"."column"` → `table.column`, secret markers → NULL.
+ * For text checks only — the executed SQL keeps its quoting.
+ */
+function unquoteIdentifiers(sql: string): string {
+  return sql
+    .replace(CONFIGURED_MARKER, "NULL")
+    .replace(/"([a-z_][a-z0-9_]*)"/gi, "$1");
+}
+
+/**
+ * After nulling, a secret column may only appear as a write target that
+ * receives a bound parameter (`password = $3`, INSERT column list). Anything
+ * else — e.g. `SET bio = password`, `substr(password …)` — could copy secret
+ * material into a readable column and is refused.
+ */
 function selectTouchesSecretColumns(sql: string): boolean {
-  const secrets = [
-    "password",
-    "mfa_totp_secret",
-    "mfa_recovery_codes",
-    "mfa_email_code_hash",
-    "mfa_email_code_expires",
-    "mfa_enroll_secret",
-    "mfa_enroll_id",
-    "sharepoint_client_secret",
-  ] as const;
-  // Strip safe NULL AS aliases from our constant rewrite so they do not false-positive.
-  let probe = sql.replace(
-    /NULL::text\s+AS\s+(password|mfa_totp_secret|mfa_recovery_codes|mfa_email_code_hash|mfa_email_code_expires|sharepoint_client_secret)/gi,
-    "NULL",
-  );
-  const lower = probe.toLowerCase();
-  for (const col of secrets) {
-    let from = 0;
-    while (true) {
-      const i = lower.indexOf(col, from);
-      if (i < 0) break;
-      const before = i === 0 ? "" : lower[i - 1];
-      const after = lower[i + col.length] || "";
-      const boundaryBefore = !before || !/[a-z0-9_]/.test(before);
-      const boundaryAfter = !after || !/[a-z0-9_]/.test(after);
-      if (boundaryBefore && boundaryAfter) {
-        if (isSelectLike(sql) || lower.includes("returning")) return true;
-        // Function wrappers around the column name
-        const window = lower.slice(Math.max(0, i - 24), i);
-        for (const fn of [
-          "substr",
-          "substring",
-          "left",
-          "right",
-          "concat",
-          "encode",
-          "decode",
-          "md5",
-          "digest",
-        ]) {
-          if (window.includes(fn)) return true;
-        }
-      }
-      from = i + col.length;
-    }
+  let probe = sql.toLowerCase();
+  if (!isSelectLike(sql)) {
+    probe = probe
+      .replace(/\b(?:[a-z_][a-z0-9_]*\.)?(password|sharepoint_client_secret)\s*=\s*\$\d+/g, " ")
+      .replace(/^\s*insert\s+into\s+[a-z_][a-z0-9_.]*\s*\([^)]*\)/, "insert ");
   }
-  return false;
+  return SECRET_COLUMNS.some((col) => new RegExp(`\\b${col}\\b`).test(probe));
 }
 
 /** Seal sharepoint_client_secret write params (AES-GCM) before INSERT/UPDATE. */
@@ -723,9 +679,6 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     if (!user || !isMfaEnabled(user)) {
       return res.status(401).json({ error: "Authentication required." });
     }
-    // Resolve server-side permissions (never trust client patchSession / local state)
-    const dto = await toSessionUserDto(user);
-
     const body = bodyIsObj(req.body) ? req.body : {};
     let sql = String(body.sql ?? "").trim();
     let params = Array.isArray(body.params) ? body.params.slice() : [];
@@ -739,37 +692,47 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         .status(400)
         .json({ error: "Multiple statements are not allowed." });
     }
-    if (BLOCKED_SQL.test(sql)) {
+    if (BLOCKED_SQL.test(sql) || NON_BUILDER_SQL.test(sql)) {
       return res.status(400).json({ error: "Query not allowed." });
     }
     if (statementKind(sql) === "other") {
       return res.status(400).json({ error: "Query not allowed." });
     }
 
-    const mfaErr = assertMfaWriteRules(sql);
+    // Secret columns become NULL wherever they are read (SELECT, RETURNING) so
+    // they can neither be returned nor used as a WHERE oracle. proxyQuery also
+    // strips them from results and RLS enforces tenancy; the text checks below
+    // are an extra layer and run on an identifier-unquoted copy so they
+    // understand Drizzle's `"table"."column"` output.
+    sql = nullSecretReads(sql);
+    const check = unquoteIdentifiers(sql);
+
+    const mfaErr = assertMfaWriteRules(check);
     if (mfaErr) {
       return res.status(403).json({ error: mfaErr });
     }
 
     if (user.role === "client") {
-      const scopeErr = assertClientTenantScope(sql, user);
+      const scopeErr = assertClientTenantScope(check, user);
       if (scopeErr) {
         return res.status(403).json({ error: scopeErr });
       }
-      const paramErr = assertClientParams(sql, params, user);
+      const paramErr = assertClientParams(check, params, user);
       if (paramErr) {
         return res.status(403).json({ error: paramErr });
       }
     } else {
-      const staffErr = assertStaffAuthorization(sql, dto);
+      // Resolve server-side permissions (never trust client patchSession / local state)
+      const dto = await toSessionUserDto(user);
+      const staffErr = assertStaffAuthorization(check, dto);
       if (staffErr) {
         return res.status(403).json({ error: staffErr });
       }
       // Nobody may set mfa_enabled via proxy
       if (
-        !isSelectLike(sql) &&
-        /\bmfa_enabled\b/i.test(sql) &&
-        mentionsTable(sql, "users")
+        !isSelectLike(check) &&
+        /\bmfa_enabled\b/i.test(check) &&
+        mentionsTable(check, "users")
       ) {
         return res.status(403).json({
           error: "MFA fields can only be changed through auth APIs.",
@@ -784,29 +747,39 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       }
     }
 
-    // Reject any attempt to read secret columns by expression/alias/RETURNING
-    if (selectTouchesSecretColumns(sql)) {
+    // Anything still reading a secret column after nulling is an unusual shape
+    if (selectTouchesSecretColumns(check)) {
       return res.status(403).json({ error: "Access denied." });
     }
 
-    if (isSelectLike(sql)) {
-      sql = redactSecretsInSelect(sql);
-    } else {
-      params = await hashPasswordParamsInSql(sql, params);
-      params = sealSharePointSecretParamsInSql(sql, params);
+    if (!isSelectLike(check)) {
+      params = await hashPasswordParamsInSql(check, params);
+      params = sealSharePointSecretParamsInSql(check, params);
     }
 
     // Always execute with bound parameters — never interpolate params into sql.
-    const rows = await proxyQuery({ sql, params, method });
+    // Runs as the restricted proxy role with row-level security for this user.
+    const role =
+      user.role === "admin" || user.role === "technician" ? user.role : "client";
+    const rows = await proxyQuery({
+      sql,
+      params,
+      method,
+      scope: {
+        role,
+        userId: user.id,
+        companyIds: role === "client" ? await loadCompanyIds(user) : [],
+      },
+    });
 
     // Admin password changes via the proxy must revoke outstanding cookies
     if (
-      !isSelectLike(sql) &&
-      mentionsTable(sql, "users") &&
-      /\bpassword\b/i.test(sql)
+      !isSelectLike(check) &&
+      mentionsTable(check, "users") &&
+      /\bpassword\b/i.test(check)
     ) {
       try {
-        for (const hit of sql.matchAll(/\bid\s*=\s*\$(\d+)\b/gi)) {
+        for (const hit of check.matchAll(/\bid\s*=\s*\$(\d+)\b/gi)) {
           const idx = Number(hit[1]) - 1;
           const idVal = params[idx];
           const idNum = typeof idVal === "number" ? idVal : Number(idVal);
