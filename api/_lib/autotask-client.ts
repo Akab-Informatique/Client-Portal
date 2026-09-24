@@ -455,6 +455,34 @@ type FieldsResponse = {
   }>;
 };
 
+// Entity field metadata (picklists) changes rarely — cache it per entity for an
+// hour, including the in-flight request, so parallel lookups share one call.
+const FIELDS_TTL_MS = 60 * 60 * 1000;
+const fieldsCache = new Map<
+  string,
+  { at: number; data: Promise<FieldsResponse | null> }
+>();
+
+function getEntityFields(
+  base: string,
+  cfg: AutotaskConfig,
+  entity: string,
+): Promise<FieldsResponse | null> {
+  const key = `${base}|${entity}`;
+  const hit = fieldsCache.get(key);
+  if (hit && Date.now() - hit.at < FIELDS_TTL_MS) return hit.data;
+  const data = (async () => {
+    const res = await atFetch(`${base}v1.0/${entity}/entityInformation/fields`, cfg);
+    if (!res.ok) throw new Error(`fields ${res.status}`);
+    return (await res.json()) as FieldsResponse;
+  })().catch(() => {
+    fieldsCache.delete(key); // don't cache failures
+    return null;
+  });
+  fieldsCache.set(key, { at: Date.now(), data });
+  return data;
+}
+
 async function getPicklistMap(
   base: string,
   cfg: AutotaskConfig,
@@ -462,12 +490,8 @@ async function getPicklistMap(
   fieldName: string,
 ): Promise<Record<string, string>> {
   try {
-    const res = await atFetch(
-      `${base}v1.0/${entity}/entityInformation/fields`,
-      cfg,
-    );
-    if (!res.ok) return {};
-    const data = (await res.json()) as FieldsResponse;
+    const data = await getEntityFields(base, cfg, entity);
+    if (!data) return {};
     const field = data.fields?.find(
       (f) => f.name?.toLowerCase() === fieldName.toLowerCase(),
     );
@@ -1101,6 +1125,28 @@ export async function fetchTicketById(ticketId: number): Promise<{
 
   const mapped = mapTickets([raw], statusLabels, priorityLabels);
   return { ticket: mapped[0] ?? null, statusLabels, priorityLabels };
+}
+
+/**
+ * Owning Autotask company id of an Invoice / Contract (for ownership checks).
+ * Returns null when the record does not exist.
+ */
+export async function fetchEntityCompanyId(
+  entity: "Invoices" | "Contracts",
+  id: number,
+): Promise<number | null> {
+  const cfg = getAutotaskConfigFromEnv();
+  if (!cfg) throw new Error("Autotask is not configured");
+  const base = await resolveZoneBase(cfg);
+  const raw = await getEntityById<{ id?: number; companyID?: number }>(
+    base,
+    cfg,
+    entity,
+    id,
+  );
+  if (!raw || raw.id == null || raw.companyID == null) return null;
+  const n = Number(raw.companyID);
+  return Number.isFinite(n) ? n : null;
 }
 
 export async function fetchTicketNotes(ticketId: number): Promise<{

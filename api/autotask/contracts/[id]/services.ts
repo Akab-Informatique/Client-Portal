@@ -1,8 +1,10 @@
 import type { VercelRequest, VercelResponse } from "@vercel/node";
 import {
   fetchContractServicesForContract,
+  fetchEntityCompanyId,
   isAutotaskConfigured,
 } from "../../../_lib/autotask-client.js";
+import { clientOwnsAutotaskRecord } from "../../../_lib/api-gate.js";
 
 /**
  * GET /api/autotask/contracts/:id/services
@@ -27,6 +29,15 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         services: [],
         error:
           "Autotask is not configured. Add AUTOTASK_INTEGRATION_CODE, AUTOTASK_USERNAME, and AUTOTASK_SECRET.",
+      });
+    }
+
+    const ownerCompanyId = await fetchEntityCompanyId("Contracts", contractId);
+    if (!clientOwnsAutotaskRecord(req, ownerCompanyId)) {
+      return res.status(404).json({
+        configured: true,
+        services: [],
+        error: "Contract not found",
       });
     }
 

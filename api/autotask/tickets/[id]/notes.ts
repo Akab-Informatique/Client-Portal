@@ -9,6 +9,7 @@ import {
   mockGetTicketDetail,
   primeMockTickets,
 } from "../../../_lib/autotask-client.js";
+import { clientOwnsAutotaskRecord } from "../../../_lib/api-gate.js";
 
 /**
  * POST /api/autotask/tickets/:id/notes
@@ -103,6 +104,12 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     }
 
     const companyNum = Number(autotaskCompanyId);
+    if (!clientOwnsAutotaskRecord(req, ticket.companyID)) {
+      return res.status(403).json({
+        error: "This ticket does not belong to your company.",
+        configured: true,
+      });
+    }
     if (
       Number.isFinite(companyNum) &&
       ticket.companyID != null &&

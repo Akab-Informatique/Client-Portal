@@ -5,6 +5,7 @@ import {
   getAutotaskConfigFromEnv,
   isAutotaskConfigured,
   mockOpenTickets,
+  primeMockTickets,
 } from "../_lib/autotask-client.js";
 
 /**

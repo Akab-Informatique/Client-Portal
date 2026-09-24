@@ -7,6 +7,7 @@ import {
   mockGetTicketDetail,
   primeMockTickets,
 } from "../../_lib/autotask-client.js";
+import { clientOwnsAutotaskRecord } from "../../_lib/api-gate.js";
 
 /**
  * GET /api/autotask/tickets/:id
@@ -80,8 +81,15 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       });
     }
 
-    // Company ownership check
+    // Company ownership check (fail closed for client users)
     const companyNum = Number(autotaskCompanyId);
+    if (!clientOwnsAutotaskRecord(req, ticket.companyID)) {
+      return res.status(403).json({
+        error: "This ticket does not belong to your company.",
+        configured: true,
+        mock: false,
+      });
+    }
     if (
       Number.isFinite(companyNum) &&
       ticket.companyID != null &&

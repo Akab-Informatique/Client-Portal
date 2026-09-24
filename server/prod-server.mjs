@@ -14,6 +14,7 @@
 import fs from "fs";
 import http from "http";
 import path from "path";
+import zlib from "zlib";
 import { fileURLToPath, pathToFileURL } from "url";
 import { createRequire } from "module";
 
@@ -540,9 +541,21 @@ function safeJoin(base, reqPath) {
   return full;
 }
 
+// Largest accepted API request body (JSON). Protects memory from huge POSTs.
+const MAX_BODY_BYTES = 1024 * 1024;
+
+class BodyTooLargeError extends Error {}
+
 async function readBody(req) {
+  const declared = Number(req.headers["content-length"] || 0);
+  if (declared > MAX_BODY_BYTES) throw new BodyTooLargeError();
   const chunks = [];
-  for await (const chunk of req) chunks.push(chunk);
+  let size = 0;
+  for await (const chunk of req) {
+    size += chunk.length;
+    if (size > MAX_BODY_BYTES) throw new BodyTooLargeError();
+    chunks.push(chunk);
+  }
   const raw = Buffer.concat(chunks).toString("utf8");
   if (!raw) return undefined;
   try {
@@ -562,9 +575,18 @@ async function handleApi(req, res, url) {
     return;
   }
 
-  const body = ["GET", "HEAD"].includes(req.method || "GET")
-    ? undefined
-    : await readBody(req);
+  let body;
+  try {
+    body = ["GET", "HEAD"].includes(req.method || "GET")
+      ? undefined
+      : await readBody(req);
+  } catch (err) {
+    if (err instanceof BodyTooLargeError) {
+      sendJson(res, 413, { error: "Request body too large" });
+      return;
+    }
+    throw err;
+  }
 
   const query = {};
   url.searchParams.forEach((value, key) => {
@@ -585,6 +607,17 @@ async function handleApi(req, res, url) {
   const vercelRes = createVercelRes(res);
 
   try {
+    // Auth gate: session + MFA required, identity params rewritten from the
+    // session user, clients pinned to their company. See api/_lib/api-gate.ts.
+    const gate = await importTs(path.join(apiDir, "_lib", "api-gate.ts"));
+    const verdict = await gate.gateApiRequest(vercelReq, rel);
+    if (!verdict.ok) {
+      sendJson(res, verdict.status, { error: verdict.error });
+      return;
+    }
+    vercelReq.auth = verdict.auth;
+    gate.wrapStatusResponse(rel, verdict.auth, vercelRes);
+
     const mod = await importTs(resolved.file);
     const handler = mod.default;
     if (typeof handler !== "function") {
@@ -596,14 +629,11 @@ async function handleApi(req, res, url) {
     await handler(vercelReq, vercelRes);
   } catch (err) {
     if (res.headersSent) return;
+    // Details stay in the server log; the browser gets a generic message
     console.error("[api]", url.pathname, err);
     res.statusCode = 500;
     res.setHeader("Content-Type", "application/json");
-    res.end(
-      JSON.stringify({
-        error: err instanceof Error ? err.message : "API handler error",
-      }),
-    );
+    res.end(JSON.stringify({ error: "Internal server error" }));
   }
 }
 
@@ -633,20 +663,100 @@ function handleStatic(req, res, url) {
     return;
   }
 
-  const stat = fs.statSync(filePath);
+  const type = contentType(filePath);
   res.statusCode = 200;
-  res.setHeader("Content-Type", contentType(filePath));
-  res.setHeader("Content-Length", stat.size);
+  res.setHeader("Content-Type", type);
+  if (type.startsWith("text/html")) {
+    res.setHeader("Content-Security-Policy", CONTENT_SECURITY_POLICY);
+  }
   if (url.pathname.startsWith("/assets/")) {
     res.setHeader("Cache-Control", "public, max-age=31536000, immutable");
   } else if (filePath.endsWith("index.html")) {
     res.setHeader("Cache-Control", "no-cache");
   }
+
+  const encoding = COMPRESSIBLE.test(type) ? pickEncoding(req) : null;
+  if (encoding) {
+    const buf = compressedFile(filePath, encoding);
+    res.setHeader("Content-Encoding", encoding);
+    res.setHeader("Vary", "Accept-Encoding");
+    res.setHeader("Content-Length", buf.length);
+    res.end(req.method === "HEAD" ? undefined : buf);
+    return;
+  }
+  res.setHeader("Content-Length", fs.statSync(filePath).size);
+  if (req.method === "HEAD") {
+    res.end();
+    return;
+  }
   fs.createReadStream(filePath).pipe(res);
+}
+
+// ---------------------------------------------------------------------------
+// Compression — text assets are compressed once and kept in memory.
+// ---------------------------------------------------------------------------
+const COMPRESSIBLE = /^(text\/|application\/(javascript|json)|image\/svg)/;
+const compressedCache = new Map();
+
+function pickEncoding(req) {
+  const accept = String(req.headers["accept-encoding"] || "");
+  if (/\bbr\b/.test(accept)) return "br";
+  if (/\bgzip\b/.test(accept)) return "gzip";
+  return null;
+}
+
+function compressedFile(filePath, encoding) {
+  const mtime = fs.statSync(filePath).mtimeMs;
+  const key = `${encoding}:${filePath}`;
+  const hit = compressedCache.get(key);
+  if (hit && hit.mtime === mtime) return hit.buf;
+  const raw = fs.readFileSync(filePath);
+  const buf =
+    encoding === "br"
+      ? zlib.brotliCompressSync(raw, {
+          params: { [zlib.constants.BROTLI_PARAM_QUALITY]: 9 },
+        })
+      : zlib.gzipSync(raw, { level: 9 });
+  compressedCache.set(key, { mtime, buf });
+  return buf;
+}
+
+// ---------------------------------------------------------------------------
+// Security headers — sent on every response (CSP only on HTML documents).
+// ---------------------------------------------------------------------------
+const CONTENT_SECURITY_POLICY = [
+  "default-src 'self'",
+  "script-src 'self'",
+  "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com",
+  "font-src 'self' data: https://fonts.gstatic.com",
+  "img-src 'self' data: blob: https:",
+  "connect-src 'self'",
+  "frame-src 'self' blob:",
+  "frame-ancestors 'self'",
+  "object-src 'none'",
+  "base-uri 'self'",
+  "form-action 'self'",
+].join("; ");
+
+function setSecurityHeaders(res) {
+  res.setHeader("X-Content-Type-Options", "nosniff");
+  res.setHeader("X-Frame-Options", "SAMEORIGIN");
+  res.setHeader("Referrer-Policy", "strict-origin-when-cross-origin");
+  res.setHeader(
+    "Permissions-Policy",
+    "camera=(), microphone=(), geolocation=(), payment=(), usb=()",
+  );
+  res.setHeader("Cross-Origin-Opener-Policy", "same-origin");
+  // HSTS only matters over HTTPS; browsers ignore it on plain HTTP
+  res.setHeader(
+    "Strict-Transport-Security",
+    "max-age=31536000; includeSubDomains",
+  );
 }
 
 const server = http.createServer(async (req, res) => {
   try {
+    setSecurityHeaders(res);
     const url = new URL(req.url || "/", `http://${req.headers.host || "localhost"}`);
     if (url.pathname.startsWith("/api/")) {
       // Native health/ping first — never depends on tsx or migrations.

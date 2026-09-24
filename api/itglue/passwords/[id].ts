@@ -13,6 +13,8 @@ import {
   type ItGluePassword,
   type PasswordAccessScope,
 } from "../../_lib/itglue-client.js";
+import { requestAuth } from "../../_lib/api-gate.js";
+import { clientIp, rateLimit } from "../../_lib/rate-limit.js";
 
 /**
  * GET    /api/itglue/passwords/:id — reveal (includes secret)
@@ -23,6 +25,31 @@ import {
  * PATCH body also: name, username, password, url, notes, restricted
  */
 export default async function handler(req: VercelRequest, res: VercelResponse) {
+  // Audit trail for vault access (server log only — never the secret itself)
+  const auth = requestAuth(req);
+  console.info(
+    "[audit] itglue-password",
+    JSON.stringify({
+      at: new Date().toISOString(),
+      method: req.method,
+      passwordId: String(req.query.id ?? ""),
+      orgId: String(req.query.organizationId ?? ""),
+      userId: auth?.user.id ?? null,
+      email: auth?.user.email ?? null,
+      role: auth?.user.role ?? null,
+      ip: clientIp(req),
+    }),
+  );
+  // Slow down bulk scraping of the vault even by a valid account
+  const limit = rateLimit({
+    key: `itglue-pw:${auth?.user.id ?? clientIp(req)}`,
+    limit: 120,
+    windowMs: 10 * 60 * 1000,
+  });
+  if (!limit.allowed) {
+    res.setHeader("Retry-After", String(limit.retryAfterSec));
+    return res.status(429).json({ error: "Too many requests. Try again later." });
+  }
   try {
     if (req.method === "GET") return await handleGet(req, res);
     if (req.method === "PATCH" || req.method === "PUT")

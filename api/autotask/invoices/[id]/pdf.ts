@@ -1,8 +1,10 @@
 import type { VercelRequest, VercelResponse } from "@vercel/node";
 import {
+  fetchEntityCompanyId,
   fetchInvoicePdf,
   isAutotaskConfigured,
 } from "../../../_lib/autotask-client.js";
+import { clientOwnsAutotaskRecord } from "../../../_lib/api-gate.js";
 
 /**
  * GET /api/autotask/invoices/:id/pdf
@@ -36,6 +38,11 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       String(req.query.disposition ?? "inline").toLowerCase() === "attachment"
         ? "attachment"
         : "inline";
+
+    const ownerCompanyId = await fetchEntityCompanyId("Invoices", invoiceId);
+    if (!clientOwnsAutotaskRecord(req, ownerCompanyId)) {
+      return res.status(404).json({ error: "Invoice not found" });
+    }
 
     const { bytes, fileName, contentType } = await fetchInvoicePdf(invoiceId);
 

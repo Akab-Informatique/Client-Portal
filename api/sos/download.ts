@@ -5,6 +5,7 @@ import {
   type SosCloudBuildPlatform,
 } from "../_lib/splashtop-client.js";
 import { getSosRequestById } from "../_lib/sos-store.js";
+import { requestAuth } from "../_lib/api-gate.js";
 
 /**
  * GET /api/sos/download?id=<sos_request_id>&platform=win|mac|auto[&file=1]
@@ -29,7 +30,12 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     }
 
     const row = await getSosRequestById(id);
-    if (!row) {
+    const auth = requestAuth(req);
+    if (
+      !row ||
+      !auth ||
+      (!auth.isStaff && Number(row.user_id) !== Number(auth.user.id))
+    ) {
       return res.status(404).json({ ok: false, error: "SOS request not found" });
     }
 

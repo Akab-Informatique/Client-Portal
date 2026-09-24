@@ -4,6 +4,10 @@ import {
   sendBoardEmailsIndividually,
   type BoardEmailRecipient,
 } from "../_lib/smtp-client.js";
+import { getPool } from "../_lib/pg.js";
+
+/** One plain address — no lists, display names or header tricks. */
+const SINGLE_EMAIL = /^[^\s@,;<>"'()]+@[^\s@,;<>"'()]+\.[a-z]{2,}$/i;
 
 /**
  * POST /api/smtp/send-board
@@ -75,7 +79,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       const email = String(r?.email ?? "")
         .trim()
         .toLowerCase();
-      if (!email || seen.has(email)) continue;
+      if (!email || seen.has(email) || !SINGLE_EMAIL.test(email)) continue;
       seen.add(email);
       unique.push({
         email,
@@ -83,6 +87,22 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         companyName: r?.companyName ? String(r.companyName) : undefined,
       });
     }
+
+    // Only active portal users who opted in may receive board mail — never
+    // arbitrary addresses supplied by the browser.
+    const allowed = new Set<string>();
+    if (unique.length) {
+      const r = await getPool().query(
+        `SELECT lower(email) AS email FROM users
+          WHERE active = true AND board_email_opt_in IS NOT FALSE
+            AND lower(email) = ANY($1::text[])`,
+        [unique.map((u) => u.email)],
+      );
+      for (const row of r.rows as Array<{ email: string }>) allowed.add(row.email);
+    }
+    const permitted = unique.filter((u) => allowed.has(u.email));
+    unique.length = 0;
+    unique.push(...permitted);
 
     // Cap bulk sends to protect SMTP providers
     if (unique.length > 200) {

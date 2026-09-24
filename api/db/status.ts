@@ -66,20 +66,17 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     const staff = await isStaffSession(req);
     // Host/schema diagnostics: staff session, or migrate=1 only from loopback
     // (upgrade.sh on the server). Remote anonymous callers never see topology.
+    // Anything that came through the reverse proxy carries forwarding headers
+    // and is never "loopback" — those headers are client-controlled.
     const headers = req.headers || {};
-    const fwd = headers["x-forwarded-for"];
-    const fwdStr = Array.isArray(fwd) ? fwd[0] : String(fwd || "");
-    const realIp = headers["x-real-ip"];
-    const realStr = Array.isArray(realIp) ? realIp[0] : String(realIp || "");
+    const proxied = Boolean(headers["x-forwarded-for"] || headers["x-real-ip"]);
     const sock = (req as { socket?: { remoteAddress?: string } }).socket;
-    const remote =
-      fwdStr.split(",")[0]?.trim() || realStr.trim() || String(sock?.remoteAddress || "");
+    const remote = String(sock?.remoteAddress || "");
     const isLoopback =
-      !remote ||
-      remote === "127.0.0.1" ||
-      remote === "::1" ||
-      remote === ":ffff:127.0.0.1" ||
-      remote.endsWith("127.0.0.1");
+      !proxied &&
+      (remote === "127.0.0.1" ||
+        remote === "::1" ||
+        remote === "::ffff:127.0.0.1");
     const revealDiag = staff || (wantMigrate && isLoopback);
 
     if (!summary.configured) {

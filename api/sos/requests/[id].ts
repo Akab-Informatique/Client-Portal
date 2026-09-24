@@ -11,6 +11,7 @@ import {
   getSosRequestById,
   updateSosRequest,
 } from "../../_lib/sos-store.js";
+import { requestAuth } from "../../_lib/api-gate.js";
 
 /**
  * GET    /api/sos/requests/:id?role=staff|client
@@ -26,6 +27,12 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
     const row = await getSosRequestById(id);
     if (!row) return res.status(404).json({ error: "SOS request not found" });
+
+    // Clients may only see / close their own SOS requests
+    const auth = requestAuth(req);
+    if (!auth || (!auth.isStaff && Number(row.user_id) !== Number(auth.user.id))) {
+      return res.status(404).json({ error: "SOS request not found" });
+    }
 
     const role = String(req.query.role ?? req.body?.role ?? "staff").toLowerCase();
     const includeCode = role === "staff";

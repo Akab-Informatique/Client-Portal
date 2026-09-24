@@ -127,6 +127,20 @@ export function appbuilderApiDevServer(): Plugin {
 
           const vercelRes = createVercelRes(res);
 
+          // Same auth gate as production (server/prod-server.mjs)
+          const gate = await server.ssrLoadModule(
+            path.join(root, "api", "_lib", "api-gate.ts"),
+          );
+          const verdict = await gate.gateApiRequest(vercelReq, rel);
+          if (!verdict.ok) {
+            res.statusCode = verdict.status;
+            res.setHeader("Content-Type", "application/json");
+            res.end(JSON.stringify({ error: verdict.error }));
+            return;
+          }
+          (vercelReq as unknown as { auth: unknown }).auth = verdict.auth;
+          gate.wrapStatusResponse(rel, verdict.auth, vercelRes);
+
           // Bust cache so edits hot-reload
           const mod = await server.ssrLoadModule(file + "?t=" + Date.now());
           const handler = mod.default;
