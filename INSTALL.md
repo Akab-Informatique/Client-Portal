@@ -21,7 +21,7 @@ sudo apt-get install -y git curl ca-certificates
 # Clone
 sudo mkdir -p /opt && sudo chown "$USER":"$USER" /opt
 cd /opt
-git clone -b master https://github.com/solutidev/Client-Portal.git akab-portal
+git clone -b master https://github.com/Akab-Informatique/Client-Portal.git akab-portal
 cd akab-portal
 
 # Install Docker (if needed) + build + start Postgres + app
@@ -52,7 +52,7 @@ docker compose version
 ```bash
 sudo mkdir -p /opt && sudo chown "$USER":"$USER" /opt
 cd /opt
-git clone -b master https://github.com/solutidev/Client-Portal.git akab-portal
+git clone -b master https://github.com/Akab-Informatique/Client-Portal.git akab-portal
 cd akab-portal
 ```
 

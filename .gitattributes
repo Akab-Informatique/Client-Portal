@@ -1,0 +1,21 @@
+# Store text files with LF line endings in Git, whatever OS edits them.
+# Production runs on Linux: CRLF in shell scripts breaks `bash scripts/upgrade.sh`.
+* text=auto eol=lf
+
+# Windows-only scripts keep CRLF
+*.bat text eol=crlf
+*.cmd text eol=crlf
+*.ps1 text eol=crlf
+
+# Binary assets — never touch
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.ico binary
+*.webp binary
+*.woff binary
+*.woff2 binary
+*.wasm binary
+*.data binary
+*.gz binary
