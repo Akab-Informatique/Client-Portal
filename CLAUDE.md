@@ -41,6 +41,10 @@ Migrations must be **additive only**: `CREATE TABLE IF NOT EXISTS`, `ADD COLUMN 
 - Secrets only in `.env` (see `.env.example`). Never in `VITE_*` variables — those ship to the browser.
 - UI role checks are UX only; authorization must be enforced server-side in `api/`.
 - Autotask/Datto secrets in `.env` must be single-quoted (`$` and `#` break Docker Compose).
+- **Every `/api/*` route goes through `api/_lib/api-gate.ts`** (wired in `server/prod-server.mjs` and the Vite dev plugin): session + MFA required, identity params (`role`, `email`, `userId`, `companyId`, `autotaskCompanyId`, `organizationId`, `siteUid`, `siteUrl` …) are overwritten from the session user, clients are pinned to their companies and checked against their client-role permissions. New routes get this automatically — never read identity from the request in a handler; use `requestAuth(req)` instead. Public routes are listed in `isPublicRoute`.
+- Records fetched by id (tickets, invoices, contracts, SOS) must be ownership-checked (`clientOwnsAutotaskRecord`, `row.user_id`).
+- Browser SQL proxy (`/api/db/query`): runs as Postgres role `akab_proxy` with row-level security (`PROXY_POLICIES` in `api/_lib/pg.ts`), secret columns are nulled in SQL and stripped from results. When adding a table the browser queries, add it to `PROXY_TABLES` + a policy, or the proxy role cannot read it.
+- Security headers / CSP live in `server/prod-server.mjs` (`setSecurityHeaders`, `CONTENT_SECURITY_POLICY`). Loading a new external script/font/API from the browser requires updating the CSP.
 
 ## Layout
 

@@ -79,12 +79,6 @@ export function buildOtpAuthUri(opts: {
   return `otpauth://totp/${label}?${params.toString()}`;
 }
 
-/** QR image URL via free chart API (no extra dependency). */
-export function totpQrImageUrl(otpauthUri: string, size = 200): string {
-  const s = Math.min(Math.max(size, 120), 400);
-  return `https://api.qrserver.com/v1/create-qr-code/?size=${s}x${s}&data=${encodeURIComponent(otpauthUri)}`;
-}
-
 async function hmacSha1(
   keyBytes: Uint8Array,
   msg: ArrayBuffer,
