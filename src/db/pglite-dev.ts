@@ -106,6 +106,10 @@ CREATE TABLE IF NOT EXISTS sos_requests (
     ["users", "mfa_recovery_codes TEXT"],
     ["users", "mfa_email_code_hash TEXT"],
     ["users", "mfa_email_code_expires TEXT"],
+    ["users", "mfa_enroll_secret TEXT"],
+    ["users", "mfa_enroll_id TEXT"],
+    ["users", "mfa_enroll_expires TEXT"],
+    ["users", "session_epoch INTEGER DEFAULT 0"],
   ] as const) {
     // Identifiers come only from the allow-listed tuples above (not user input).
     if (!/^[a-z_][a-z0-9_]*$/i.test(table)) continue;
