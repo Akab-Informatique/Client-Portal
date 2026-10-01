@@ -375,6 +375,7 @@ graphHint:
     deactivated: "Ce compte a été désactivé.",
   },
   mfa: {
+    codeLabel: "Code de l'authentificateur",
     challengeTitle: "Authentification à deux facteurs",
     challengeDesc:
       "Entrez un code de votre application d'authentification, ou utilisez le courriel / un code de récupération.",

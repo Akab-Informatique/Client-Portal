@@ -372,6 +372,7 @@ graphHint:
     deactivated: "This account has been deactivated.",
   },
   mfa: {
+    codeLabel: "Authenticator code",
     challengeTitle: "Two-factor authentication",
     challengeDesc:
       "Enter a code from your authenticator app, or use email / a recovery code.",

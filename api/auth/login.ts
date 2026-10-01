@@ -16,6 +16,29 @@ import {
   setMfaPendingCookie,
 } from "../_lib/session.js";
 
+const LOCK_AFTER_FAILURES = 10;
+const LOCK_MINUTES = 15;
+
+/** Count a wrong password; the 10th in a row locks the account for 15 min. */
+async function recordFailedLogin(userId: number): Promise<void> {
+  try {
+    await getPool().query(
+      `UPDATE users SET
+         failed_login_count = CASE
+           WHEN COALESCE(failed_login_count, 0) + 1 >= $2 THEN 0
+           ELSE COALESCE(failed_login_count, 0) + 1 END,
+         locked_until = CASE
+           WHEN COALESCE(failed_login_count, 0) + 1 >= $2
+             THEN to_char((now() + make_interval(mins => $3)) AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"')
+           ELSE locked_until END
+       WHERE id = $1`,
+      [userId, LOCK_AFTER_FAILURES, LOCK_MINUTES],
+    );
+  } catch (e) {
+    console.warn("[auth/login] failed-login counter update failed", e);
+  }
+}
+
 /**
  * POST /api/auth/login
  * Body: { email, password }
@@ -64,11 +87,25 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     }
 
     const found = await loadUserByEmail(email);
+    // Persistent lockout (stored in Postgres, survives restarts / restarts
+    // of the in-memory limiter). Same response as the rate limiter.
+    if (found?.locked_until && Date.parse(found.locked_until) > Date.now()) {
+      const wait = Math.ceil((Date.parse(found.locked_until) - Date.now()) / 1000);
+      res.setHeader("Retry-After", String(wait));
+      return res.status(429).json({ ok: false, error: "rate_limited" });
+    }
     const check = await verifyPassword(password, found?.password);
     // Generic failure for wrong password, missing user, AND deactivated —
     // do not reveal which emails exist or which accounts are disabled.
     if (!found || !check.ok || !found.active) {
+      if (found && !check.ok) await recordFailedLogin(found.id);
       return res.status(401).json({ ok: false, error: "invalid" });
+    }
+    if (found.failed_login_count > 0 || found.locked_until) {
+      await getPool().query(
+        `UPDATE users SET failed_login_count = 0, locked_until = NULL WHERE id = $1`,
+        [found.id],
+      );
     }
 
     if (check.needsRehash) {

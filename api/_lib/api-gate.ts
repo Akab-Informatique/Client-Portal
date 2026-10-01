@@ -468,6 +468,14 @@ function publicPortalUrl(req: VercelRequest): string {
     const v = String(process.env[key] || "").trim().replace(/^['"]|['"]$/g, "");
     if (/^https?:\/\//i.test(v)) return v.replace(/\/+$/, "");
   }
+  // Production never trusts the Host header for links in outgoing mail
+  // (a forged Host would phish recipients). Set PUBLIC_URL instead.
+  if (
+    process.env.NODE_ENV === "production" ||
+    process.env.AKAB_ENV === "production"
+  ) {
+    return "";
+  }
   const host = firstParam(req.headers?.host);
   return host ? `https://${host}` : "";
 }
@@ -476,18 +484,60 @@ function publicPortalUrl(req: VercelRequest): string {
  * For client users on integration status routes, strip everything except booleans that
  * drive the UI (configured / connected …). Staff get the full diagnostic body.
  */
+/** Debug fields that may carry upstream responses, hosts, paths or IDs. */
+const CLIENT_DROP_KEYS = new Set([
+  "hint",
+  "hints",
+  "details",
+  "detail",
+  "raw",
+  "upstream",
+  "upstreamBody",
+  "response",
+  "stack",
+  "diagnostics",
+  "diag",
+  "debug",
+  "issues",
+  "criticalIssues",
+  "tenantId",
+  "clientId",
+  "zoneUrl",
+]);
+
+/**
+ * Error text a client may see: short, our own wording. Anything that looks
+ * like an upstream message (URLs, paths, .env names, JSON, long text) is
+ * replaced so integration internals never reach company users.
+ */
+function clientSafeError(v: unknown, status: number): unknown {
+  if (typeof v !== "string") return v;
+  const looksInternal =
+    v.length > 120 ||
+    /https?:|\/|\\|\.env|[A-Z_]{4,}=|[{}<>]|\b(sql|stack|ECONN|ETIMEDOUT|tenant|secret|token)\b/i.test(v);
+  if (!looksInternal) return v;
+  return status >= 500 ? "Service temporarily unavailable." : "Request failed.";
+}
+
 export function wrapStatusResponse(
   rel: string,
   auth: AuthContext | null,
   res: VercelResponse,
 ): void {
-  if (!auth || auth.isStaff || !isStatusRoute(rel)) return;
+  if (!auth || auth.isStaff) return;
+  const statusOnly = isStatusRoute(rel);
   const original = res.json.bind(res);
   (res as unknown as { json: (b: unknown) => unknown }).json = (b: unknown) => {
     if (b && typeof b === "object" && !Array.isArray(b)) {
       const safe: Record<string, unknown> = {};
+      const status = Number(res.statusCode) || 200;
       for (const [k, v] of Object.entries(b as Record<string, unknown>)) {
-        if (STATUS_SAFE_KEYS.has(k)) safe[k] = v;
+        if (statusOnly) {
+          if (STATUS_SAFE_KEYS.has(k)) safe[k] = v;
+          continue;
+        }
+        if (CLIENT_DROP_KEYS.has(k)) continue;
+        safe[k] = k === "error" || k === "message" || k === "warning" ? clientSafeError(v, status) : v;
       }
       return original(safe);
     }

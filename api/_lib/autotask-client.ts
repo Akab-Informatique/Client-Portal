@@ -1233,6 +1233,13 @@ function isClientConversationNote(n: MappedTicketNote): boolean {
 
   if (!body && !title) return false;
 
+  // Fail closed: when the publish (visibility) value could not be resolved to
+  // a picklist label — lookup failed, or the value is missing — we cannot tell
+  // internal from client-visible, so only the contact's own notes are shown.
+  const publishKnown =
+    n.publish != null && publishLabel !== "" && !/^publish \d+$/.test(publishLabel);
+  if (!publishKnown && !n.fromContact) return false;
+
   // Never show pure internal notes
   if (
     publishLabel.includes("internal") &&

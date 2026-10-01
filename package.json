@@ -9,10 +9,10 @@
   },
   "scripts": {
     "dev": "vite",
-    "build": "tsc -b && vite build",
+    "build": "tsc -b && tsc -p tsconfig.api.json && vite build",
     "preview": "vite preview",
     "start": "node --import tsx server/prod-server.mjs",
-    "typecheck": "tsc -b --pretty false",
+    "typecheck": "tsc -b --pretty false && tsc -p tsconfig.api.json --pretty false",
     "db:status": "curl -s http://127.0.0.1:${PORT:-3000}/api/db/status?migrate=1 | python3 -m json.tool || curl -s http://127.0.0.1:${PORT:-3000}/api/db/status?migrate=1",
     "backup": "bash scripts/backup-db.sh",
     "upgrade": "bash scripts/upgrade.sh"

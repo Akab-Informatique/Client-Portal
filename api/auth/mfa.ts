@@ -10,8 +10,10 @@ import {
   hashEmailOtp,
   hashRecoveryCodes,
   isEmailOtpExpired,
+  acceptUserTotp,
   bumpSessionEpoch,
   isMfaEnabled,
+  markTotpStepUsed,
   loadUserById,
   requireSessionUser,
   toSessionUserDto,
@@ -153,7 +155,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       if (!found || !found.active || !isMfaEnabled(found)) {
         return res.status(400).json({ ok: false, error: "no_pending" });
       }
-      if (!verifyTotp(found.mfa_totp_secret || "", code)) {
+      if (!(await acceptUserTotp(found, code))) {
         return res.status(401).json({ ok: false, error: "invalid_code" });
       }
       const dto = await finishLogin(found.id);
@@ -175,10 +177,14 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       if (!consumed.ok) {
         return res.status(401).json({ ok: false, error: "invalid_code" });
       }
-      await p.query(
-        `UPDATE users SET mfa_recovery_codes = $1 WHERE id = $2`,
-        [consumed.remainingJson, found.id],
+      const spent = await p.query(
+        `UPDATE users SET mfa_recovery_codes = $1
+          WHERE id = $2 AND mfa_recovery_codes IS NOT DISTINCT FROM $3`,
+        [consumed.remainingJson, found.id, found.mfa_recovery_codes],
       );
+      if ((spent.rowCount ?? 0) !== 1) {
+        return res.status(401).json({ ok: false, error: "invalid_code" });
+      }
       const dto = await finishLogin(found.id);
       return dto
         ? res.status(200).json({ ok: true, user: dto })
@@ -402,6 +408,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
          WHERE id = $3`,
         [er.mfa_enroll_secret, JSON.stringify(hashed), pending.uid],
       );
+      await markTotpStepUsed(pending.uid, er.mfa_enroll_secret, code);
       await bumpSessionEpoch(pending.uid);
       const dto = await finishLogin(pending.uid);
       if (!dto) return res.status(500).json({ ok: false, error: "generic" });
@@ -414,7 +421,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       if (!isMfaEnabled(found)) {
         return res.status(400).json({ ok: false, error: "not_enabled" });
       }
-      const totpOk = verifyTotp(found.mfa_totp_secret || "", code);
+      const totpOk = await acceptUserTotp(found, code);
       let recoveryOk = false;
       let remainingJson: string | null = found.mfa_recovery_codes;
       if (!totpOk) {
@@ -468,7 +475,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       if (!isMfaEnabled(found)) {
         return res.status(400).json({ ok: false, error: "not_enabled" });
       }
-      if (!verifyTotp(found.mfa_totp_secret || "", code)) {
+      if (!(await acceptUserTotp(found, code))) {
         return res.status(401).json({ ok: false, error: "invalid_code" });
       }
       // New recovery codes → revoke any stolen session cookies

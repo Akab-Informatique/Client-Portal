@@ -40,10 +40,13 @@ services:
       db:
         condition: service_healthy
     ports:
-      # Default publishes on every interface (unchanged). When the reverse proxy
-      # reaches the app via 127.0.0.1, set APP_PUBLISH=127.0.0.1:3000 in .env so
-      # the unencrypted port is not reachable from the network.
-      - "${APP_PUBLISH:-${PORT:-3000}}:3000"
+      # Localhost only by default. When the HTTPS reverse proxy (e.g. Nginx
+      # Proxy Manager) runs on ANOTHER server, set in .env:
+      #   APP_PUBLISH=<this server's LAN IP>:3000
+      #   TRUSTED_PROXY_IPS=<proxy server IP>
+      # and firewall port 3000 to the proxy IP only (debian-install.sh does
+      # this when NPM_PROXY_IP is given). Never expose it to the internet.
+      - "${APP_PUBLISH:-127.0.0.1:3000}:3000"
     env_file:
       - .env
     # Mount raw .env so the Node server can re-read Autotask/Microsoft secrets

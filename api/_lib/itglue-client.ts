@@ -411,7 +411,6 @@ export function mapPasswordResource(
       const a = extractAccessors(resource, included);
       return {
         authorizedUserIds: a.userIds,
-        myGlue: false,
         authorizedGroupIds: a.groupIds,
       };
     })(),

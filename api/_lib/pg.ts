@@ -394,6 +394,11 @@ const ADDITIVE_COLUMNS: Array<{ table: string; column: string; def: string }> =
     { table: "users", column: "mfa_enroll_secret", def: "TEXT" },
     { table: "users", column: "mfa_enroll_id", def: "TEXT" },
     { table: "users", column: "mfa_enroll_expires", def: "TEXT" },
+    // Last accepted TOTP time-step — a code can be used only once
+    { table: "users", column: "mfa_totp_last_step", def: "BIGINT" },
+    // Persistent brute-force lockout (survives restarts)
+    { table: "users", column: "failed_login_count", def: "INTEGER DEFAULT 0" },
+    { table: "users", column: "locked_until", def: "TEXT" },
   ];
 
 const ADMIN_PERMISSIONS_JSON = JSON.stringify({

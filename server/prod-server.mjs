@@ -779,8 +779,43 @@ function setSecurityHeaders(res) {
   );
 }
 
+// When TRUSTED_PROXY_IPS is set, only those reverse proxies (plus loopback for
+// the container healthcheck / docker compose exec) may connect. Docker's
+// published ports bypass ufw, so this is enforced here, not in the firewall.
+// ALLOW_DIRECT_ACCESS=1 disables the check (lab use).
+const TRUSTED_PROXY_SET = new Set(
+  String(process.env.TRUSTED_PROXY_IPS || "")
+    .split(",")
+    .map((s) => s.trim())
+    .filter(Boolean),
+);
+const ENFORCE_PROXY_ONLY =
+  TRUSTED_PROXY_SET.size > 0 &&
+  !/^(1|true|yes)$/i.test(String(process.env.ALLOW_DIRECT_ACCESS || ""));
+let lastRejectLog = 0;
+function peerAllowed(req) {
+  if (!ENFORCE_PROXY_ONLY) return true;
+  const peer = String(req.socket?.remoteAddress || "").replace(/^::ffff:/, "");
+  if (peer === "127.0.0.1" || peer === "::1") return true;
+  if (TRUSTED_PROXY_SET.has(peer)) return true;
+  const now = Date.now();
+  if (now - lastRejectLog > 60_000) {
+    lastRejectLog = now;
+    console.warn(
+      `[proxy-only] refused direct connection from ${peer} — not in TRUSTED_PROXY_IPS`,
+    );
+  }
+  return false;
+}
+
 const server = http.createServer(async (req, res) => {
   try {
+    if (!peerAllowed(req)) {
+      res.statusCode = 403;
+      res.setHeader("Content-Type", "text/plain; charset=utf-8");
+      res.end("Forbidden — use the portal address.");
+      return;
+    }
     setSecurityHeaders(res);
     const url = new URL(req.url || "/", `http://${req.headers.host || "localhost"}`);
     if (url.pathname.startsWith("/api/")) {
@@ -847,6 +882,28 @@ server.listen(PORT, HOST, () => {
     }
   } catch (e) {
     console.error("  session: config check failed", e);
+  }
+
+  // Reverse-proxy / public URL sanity (Nginx Proxy Manager on another host)
+  try {
+    const publish = String(process.env.APP_PUBLISH || "").trim();
+    const trusted = String(process.env.TRUSTED_PROXY_IPS || "").trim();
+    const exposed = publish && !/^127\.0\.0\.1:|^localhost:|^\[::1\]:/.test(publish);
+    if (exposed && !trusted) {
+      console.error(
+        "  SECURITY: APP_PUBLISH exposes port 3000 but TRUSTED_PROXY_IPS is empty —",
+      );
+      console.error(
+        "            set TRUSTED_PROXY_IPS=<reverse proxy IP> so client IPs cannot be spoofed.",
+      );
+    } else if (trusted) {
+      console.log(`  proxy:  trusted reverse proxy IPs: ${trusted}`);
+    }
+    if (!String(process.env.PUBLIC_URL || "").trim()) {
+      console.error("  WARN: PUBLIC_URL is not set — email links are omitted.");
+    }
+  } catch {
+    /* ignore */
   }
 
   // Non-blocking Autotask env sanity (never logs secret value)

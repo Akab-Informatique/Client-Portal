@@ -69,6 +69,20 @@ else
   echo "WARN: .env missing at $ROOT/.env"
 fi
 
+# Settings required since the security hardening (fresh values, never overwritten)
+if [[ -f .env ]]; then
+  if ! grep -Eq '^CREDENTIALS_ENCRYPTION_KEY=[0-9a-fA-F]{32,}' .env; then
+    echo "ERROR: CREDENTIALS_ENCRYPTION_KEY missing in .env (required in production)." >&2
+    echo "       Add: CREDENTIALS_ENCRYPTION_KEY=$(openssl rand -hex 32)   then re-run." >&2
+    exit 1
+  fi
+  if ! grep -Eq '^SESSION_SECRET=.{32,}' .env || grep -Eq '^SESSION_SECRET=["'"'"']?change-me' .env; then
+    echo "ERROR: SESSION_SECRET in .env is missing or still the example value." >&2
+    exit 1
+  fi
+  grep -Eq '^SQL_PROXY_ENABLED=1' .env || echo "WARN: SQL_PROXY_ENABLED=1 not set — the portal UI cannot load data in production"
+fi
+
 echo "==> Rebuild + recreate app (volume akab_pgdata is preserved)"
 # --force-recreate ensures new env mount + image are picked up
 docker compose up -d --build --force-recreate app
@@ -78,7 +92,8 @@ docker compose up -d db
 echo "==> Wait for app health (up to ~90s)"
 ok=0
 for i in $(seq 1 45); do
-  if curl -fsS -m 3 "${BASE}/api/health" >/dev/null 2>&1; then
+  # Inside the container: works whatever APP_PUBLISH / TRUSTED_PROXY_IPS say
+  if docker compose exec -T app curl -fsS -m 3 "http://127.0.0.1:3000/api/health" >/dev/null 2>&1; then
     ok=1
     echo "    health OK (attempt $i)"
     break

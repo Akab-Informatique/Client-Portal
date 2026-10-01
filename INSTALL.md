@@ -13,26 +13,60 @@ Also works on Debian 12 / Ubuntu 22.04+.
 
 ## One-command install (Ubuntu or Debian)
 
-```bash
-# As a sudo-capable user
-sudo apt-get update
-sudo apt-get install -y git curl ca-certificates
+Typical setup: **Nginx Proxy Manager (NPM) on another server** terminates HTTPS
+for `portail.akab.ca` and forwards to this server on port 3000.
 
-# Clone
+```bash
+# As a sudo-capable user on the portal server
+sudo apt-get update
+sudo apt-get install -y git curl ca-certificates openssl
+
 sudo mkdir -p /opt && sudo chown "$USER":"$USER" /opt
 cd /opt
 git clone -b master https://github.com/Akab-Informatique/Client-Portal.git akab-portal
 cd akab-portal
 
-# Install Docker (if needed) + build + start Postgres + app
-# (script name is historical — works on Ubuntu too)
-bash scripts/debian-install.sh
+# NPM_PROXY_IP = the Nginx Proxy Manager server's IP as seen from this server
+PUBLIC_URL=https://portail.akab.ca NPM_PROXY_IP=192.168.1.10   bash scripts/debian-install.sh
 ```
 
-Then open: `http://YOUR_SERVER_IP:3000`  
-Login: `admin@akab.local` with the one-time password printed in the app log
-(`docker compose logs app | grep one-time`) → **change it immediately**.
-The installer generates `POSTGRES_PASSWORD` and `SESSION_SECRET` for you.
+On a server without Docker the script installs Docker Engine from Docker's
+signed apt repository and stops; log out and back in, then run it again.
+
+The installer:
+
+- generates `POSTGRES_PASSWORD`, `SESSION_SECRET` and `CREDENTIALS_ENCRYPTION_KEY`
+  (never overwrites real values) — **back up `.env`**, it is the only copy
+- sets `PUBLIC_URL`, `SQL_PROXY_ENABLED=1` (required by the web app)
+- publishes the app on this server's LAN IP (`APP_PUBLISH=<LAN_IP>:3000`) and
+  sets `TRUSTED_PROXY_IPS=<NPM_PROXY_IP>`: **the app refuses every connection
+  that is not from NPM** (Docker ports bypass ufw, so this is enforced in the app)
+- runs migrations and creates one admin with a random one-time password
+
+### Nginx Proxy Manager (on the other server)
+
+Add a **Proxy Host**:
+
+| Field | Value |
+|-------|-------|
+| Domain Names | `portail.akab.ca` |
+| Scheme / Forward Hostname / Port | `http` / portal server LAN IP / `3000` |
+| Websockets Support | on |
+| Block Common Exploits | on |
+| SSL | Request a new Let's Encrypt certificate, **Force SSL**, **HTTP/2**, **HSTS** |
+
+NPM sends `X-Real-IP` / `X-Forwarded-For` by default — the portal uses them
+for rate limiting only because the request comes from `TRUSTED_PROXY_IPS`.
+
+### First sign-in
+
+```bash
+docker compose logs app | grep one-time
+```
+
+Sign in at `https://portail.akab.ca` as `admin@akab.local` with that
+password, set up MFA, then **change the password** (Profile → Change password).
+Create your real admin account, then deactivate `admin@akab.local` if you like.
 
 ---
 
@@ -73,7 +107,12 @@ POSTGRES_USER=akab
 POSTGRES_PASSWORD=UseLongPasswordWithoutSpecialChars123
 # openssl rand -hex 32 — the example value is refused at login
 SESSION_SECRET=<64 hex characters>
-PORT=3000
+CREDENTIALS_ENCRYPTION_KEY=<64 hex characters>   # openssl rand -hex 32
+SQL_PROXY_ENABLED=1
+PUBLIC_URL=https://portail.akab.ca
+# NPM on another server:
+APP_PUBLISH=<this server LAN IP>:3000
+TRUSTED_PROXY_IPS=<NPM server IP>
 ```
 
 Then restrict the file: `sudo chgrp 1000 .env && chmod 640 .env`.
@@ -95,10 +134,10 @@ docker compose ps
 ### 5) Verify (always quote URLs + use timeouts)
 
 ```bash
-curl -sS -m 5  "http://127.0.0.1:3000/api/health"
-curl -sS -m 8  "http://127.0.0.1:3000/api/health?db=1"
-curl -sS -m 10 "http://127.0.0.1:3000/api/db/status"
-curl -sS -m 30 "http://127.0.0.1:3000/api/db/status?migrate=1"
+docker compose exec -T app curl -sS -m 5 "http://127.0.0.1:3000/api/health"
+docker compose exec -T app curl -sS -m 8 "http://127.0.0.1:3000/api/health?db=1"
+docker compose exec -T app curl -sS -m 10 "http://127.0.0.1:3000/api/db/status"
+docker compose exec -T app curl -sS -m 30 "http://127.0.0.1:3000/api/db/status?migrate=1"
 docker compose logs --tail=60 app
 ```
 

@@ -53,6 +53,14 @@ export function rateLimit(opts: {
  */
 function isTrustedProxyPeer(addr: string): boolean {
   const a = addr.replace(/^::ffff:/, "");
+  // Explicit list wins (comma-separated exact IPs, e.g. "172.18.0.1,127.0.0.1")
+  const explicit = String(process.env.TRUSTED_PROXY_IPS || "")
+    .split(",")
+    .map((s) => s.trim())
+    .filter(Boolean);
+  if (explicit.length) return explicit.includes(a);
+  // Default: private peers. Safe only while the app port is not reachable
+  // from the internet — docker-compose publishes it on 127.0.0.1 by default.
   return (
     a === "127.0.0.1" ||
     a === "::1" ||

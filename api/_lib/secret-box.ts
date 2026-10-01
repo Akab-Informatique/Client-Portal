@@ -27,13 +27,21 @@ function cleanEnv(v: string | undefined): string {
 }
 
 function keyMaterial(): Buffer {
-  const raw =
-    cleanEnv(process.env.CREDENTIALS_ENCRYPTION_KEY) ||
-    cleanEnv(process.env.SESSION_SECRET) ||
-    cleanEnv(process.env.AKAB_SESSION_SECRET);
-  if (!raw || raw.length < 32) {
+  const production =
+    process.env.NODE_ENV === "production" ||
+    process.env.AKAB_ENV === "production";
+  // Production: a dedicated key, so rotating SESSION_SECRET (logging everyone
+  // out) never makes stored integration secrets unreadable.
+  const raw = production
+    ? cleanEnv(process.env.CREDENTIALS_ENCRYPTION_KEY)
+    : cleanEnv(process.env.CREDENTIALS_ENCRYPTION_KEY) ||
+      cleanEnv(process.env.SESSION_SECRET) ||
+      cleanEnv(process.env.AKAB_SESSION_SECRET);
+  if (!raw || raw.length < 32 || /^change-?me/i.test(raw)) {
     throw new Error(
-      "CREDENTIALS_ENCRYPTION_KEY or SESSION_SECRET (≥32 chars) required to seal secrets",
+      production
+        ? "CREDENTIALS_ENCRYPTION_KEY (≥32 chars, openssl rand -hex 32) is required to seal secrets"
+        : "CREDENTIALS_ENCRYPTION_KEY or SESSION_SECRET (≥32 chars) required to seal secrets",
     );
   }
   // Derive a stable 32-byte key (accept hex or arbitrary string)

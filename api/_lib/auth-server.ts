@@ -3,7 +3,7 @@
  * Never import from the browser bundle.
  */
 
-import { createHmac, createHash, randomBytes, timingSafeEqual } from "crypto";
+import { createHmac, createHash, randomBytes, scryptSync, timingSafeEqual } from "crypto";
 import { getPool } from "./pg.js";
 import type { SessionPayload } from "./session.js";
 
@@ -33,6 +33,10 @@ export type DbUser = {
   mfa_email_code_expires: string | null;
   /** Bumped to invalidate outstanding session cookies */
   session_epoch: number;
+  /** Last accepted TOTP step (replay protection) */
+  mfa_totp_last_step: number | null;
+  failed_login_count: number;
+  locked_until: string | null;
   created_at: Date | string | null;
 };
 
@@ -165,31 +169,85 @@ function generateTotpCode(secretBase32: string, timeMs = Date.now()): string {
   return String(bin % 1_000_000).padStart(6, "0");
 }
 
-export function verifyTotp(secretBase32: string, token: string): boolean {
+/** Matching 30-second time-step for a valid code (±1 step), else null. */
+export function verifyTotpStep(secretBase32: string, token: string): number | null {
   const cleaned = (token || "").replace(/\s+/g, "");
-  if (!/^\d{6}$/.test(cleaned)) return false;
-  if (!secretBase32?.trim()) return false;
+  if (!/^\d{6}$/.test(cleaned)) return null;
+  if (!secretBase32?.trim()) return null;
   const now = Date.now();
   for (let w = -1; w <= 1; w++) {
-    const code = generateTotpCode(secretBase32, now + w * 30_000);
+    const at = now + w * 30_000;
+    const code = generateTotpCode(secretBase32, at);
     const a = Buffer.from(code);
     const b = Buffer.from(cleaned);
-    if (a.length === b.length && timingSafeEqual(a, b)) return true;
+    if (a.length === b.length && timingSafeEqual(a, b)) {
+      return Math.floor(at / 30_000);
+    }
   }
-  return false;
+  return null;
 }
 
+export function verifyTotp(secretBase32: string, token: string): boolean {
+  return verifyTotpStep(secretBase32, token) != null;
+}
+
+/**
+ * Verify the user's TOTP code AND consume its time-step, so an observed or
+ * phished code cannot be replayed within its validity window. Atomic: two
+ * parallel requests with the same code cannot both succeed.
+ */
+export async function acceptUserTotp(user: DbUser, token: string): Promise<boolean> {
+  const step = verifyTotpStep(user.mfa_totp_secret || "", token);
+  if (step == null) return false;
+  const r = await getPool().query(
+    `UPDATE users SET mfa_totp_last_step = $1
+      WHERE id = $2 AND (mfa_totp_last_step IS NULL OR mfa_totp_last_step < $1)`,
+    [step, user.id],
+  );
+  return (r.rowCount ?? 0) === 1;
+}
+
+/** Record the step used to confirm enrollment so it cannot be reused. */
+export async function markTotpStepUsed(userId: number, secret: string, token: string): Promise<void> {
+  const step = verifyTotpStep(secret, token);
+  if (step == null) return;
+  await getPool().query(`UPDATE users SET mfa_totp_last_step = $1 WHERE id = $2`, [step, userId]);
+}
+
+/** 8 codes × 80 bits, shown once as XXXXX-XXXXX-XXXXX-XXXXX. */
 export function generateRecoveryCodes(count = 8): string[] {
   const codes: string[] = [];
   for (let i = 0; i < count; i++) {
-    const hex = randomBytes(5).toString("hex").slice(0, 10).toUpperCase();
-    codes.push(`${hex.slice(0, 5)}-${hex.slice(5)}`);
+    const hex = randomBytes(10).toString("hex").toUpperCase();
+    codes.push(hex.match(/.{5}/g)!.join("-"));
   }
   return codes;
 }
 
+function normalizeRecoveryCode(c: string): string {
+  return c.replace(/[\s-]+/g, "").toUpperCase();
+}
+
+/** Salted scrypt per code: "s1$<salt>$<hash>" (base64url). */
 export function hashRecoveryCodes(codes: string[]): string[] {
-  return codes.map((c) => sha256Hex(c.replace(/\s+/g, "").toUpperCase()));
+  return codes.map((c) => {
+    const salt = randomBytes(16);
+    const hash = scryptSync(normalizeRecoveryCode(c), salt, 32);
+    return `s1$${salt.toString("base64url")}$${hash.toString("base64url")}`;
+  });
+}
+
+function recoveryHashMatches(stored: string, code: string): boolean {
+  if (stored.startsWith("s1$")) {
+    const [, saltB64, hashB64] = stored.split("$");
+    if (!saltB64 || !hashB64) return false;
+    const expected = Buffer.from(hashB64, "base64url");
+    const actual = scryptSync(normalizeRecoveryCode(code), Buffer.from(saltB64, "base64url"), expected.length);
+    return actual.length === expected.length && timingSafeEqual(actual, expected);
+  }
+  // Legacy unsalted SHA-256 of "XXXXX-XXXXX" (pre-hardening rows)
+  const legacy = sha256Hex(code.replace(/\s+/g, "").toUpperCase());
+  return legacy.length === stored.length && timingSafeEqual(Buffer.from(legacy), Buffer.from(stored));
 }
 
 export function consumeRecoveryCode(
@@ -206,8 +264,7 @@ export function consumeRecoveryCode(
     return { ok: false };
   }
   if (!hashes.length) return { ok: false };
-  const target = sha256Hex(code.replace(/\s+/g, "").toUpperCase());
-  const idx = hashes.indexOf(target);
+  const idx = hashes.findIndex((h) => recoveryHashMatches(h, code));
   if (idx < 0) return { ok: false };
   const next = hashes.filter((_, i) => i !== idx);
   return { ok: true, remainingJson: JSON.stringify(next) };
@@ -283,6 +340,10 @@ function mapUser(row: Record<string, unknown>): DbUser {
       row.session_epoch == null || row.session_epoch === ""
         ? 0
         : Number(row.session_epoch) || 0,
+    mfa_totp_last_step:
+      row.mfa_totp_last_step == null ? null : Number(row.mfa_totp_last_step),
+    failed_login_count: Number(row.failed_login_count ?? 0) || 0,
+    locked_until: row.locked_until == null ? null : String(row.locked_until),
     created_at: (row.created_at as Date | string | null) ?? null,
   };
 }
