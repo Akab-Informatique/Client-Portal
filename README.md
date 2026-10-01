@@ -69,24 +69,16 @@ location / {
 }
 ```
 
-### Option B — Docker + PostgreSQL (Debian 13 / any Docker host)
+### Option B — Docker + PostgreSQL (recommended)
 
 ```bash
-# One-shot:
-bash scripts/debian-install.sh
-
-# Or manually:
-cp .env.example .env          # set POSTGRES_PASSWORD (letters/numbers)
-docker compose up -d --build
-curl -sS -m 8  "http://127.0.0.1:3000/api/health?db=1"
-curl -sS -m 30 "http://127.0.0.1:3000/api/db/status?migrate=1"
-# → http://localhost:3000
-# Login: admin@akab.local — one-time password: docker compose logs app | grep one-time
-# Data volume akab_pgdata survives upgrades — NEVER: docker compose down -v
-# Upgrade: bash scripts/upgrade.sh
+cp .env.example .env            # fill the REQUIRED block
+sudo chgrp 1000 .env && chmod 640 .env
+docker compose up -d --build    # app on port 3000 → put your HTTPS proxy in front
+docker compose logs app | grep one-time   # first admin password
 ```
 
-Full guide: **[INSTALL.md](./INSTALL.md)**.
+Full procedure and `.env` reference: **[INSTALL.md](./INSTALL.md)**.
 
 > **Vercel / serverless hosting is not supported.** The login and tenant
 > checks (`api/_lib/api-gate.ts`) run in `server/prod-server.mjs`; deploying

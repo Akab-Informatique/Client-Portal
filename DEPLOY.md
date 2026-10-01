@@ -26,14 +26,15 @@ Browser  →  HTTPS proxy  →  App container (:3000)
 ## First install (summary)
 
 ```bash
-git clone <your-repo> /opt/akab-portal
+git clone -b master https://github.com/Akab-Informatique/Client-Portal.git /opt/akab-portal
 cd /opt/akab-portal
-cp .env.example .env    # POSTGRES_PASSWORD + integration secrets
+cp .env.example .env     # fill the REQUIRED block (3 generated secrets + PUBLIC_URL)
+sudo chgrp 1000 .env && chmod 640 .env
 docker compose up -d --build
-curl -s http://127.0.0.1:3000/api/db/status?migrate=1
+docker compose logs app | grep one-time     # first admin password
 ```
 
-Details, HTTPS, and bootstrap logins: **INSTALL.md**.
+Step by step, the `.env` reference and troubleshooting: **[INSTALL.md](./INSTALL.md)**.
 
 ---
 
@@ -61,15 +62,10 @@ bash scripts/restore-db.sh /var/backups/akab/akab-pg-….sql.gz
 
 ---
 
-## Environment (Postgres)
+## Environment
 
-| Variable | Purpose |
-|----------|---------|
-| `POSTGRES_DB` / `USER` / `PASSWORD` | Compose database service |
-| `DATABASE_URL` | Optional single URL (host installs) |
-| `SESSION_SECRET` | Required server-side HMAC secret for HttpOnly session cookies (`openssl rand -hex 32`) |
-| `COOKIE_SECURE=false` | Secure cookies are ON by default; set false only for a plain-HTTP lab install |
-| `VITE_DATABASE_MODE=pglite` | Force browser-local DB (dev) |
+All variables are described in **INSTALL.md → `.env` reference** and in
+`.env.example` (REQUIRED / NETWORK / ADVANCED blocks, then integrations).
 
 ---
 

@@ -1,254 +1,185 @@
-# Install AKAB Portal on Debian 13 (production + PostgreSQL)
+# Install AKAB Portal (Docker)
 
-Tested target: **Debian 13 (Trixie)** with Docker Engine.  
-Also works on Debian 12 / Ubuntu 22.04+.
+One server running Docker. The portal listens on **port 3000** (plain HTTP).
+Put your own HTTPS reverse proxy (e.g. Nginx Proxy Manager) in front of it and
+forward `https://portail.akab.ca` → `http://<this server's IP>:3000`.
 
-| Component | Role |
+| Container | Role |
 |-----------|------|
-| **App** (Docker, Debian slim image) | UI + `/api/*` + DB proxy |
-| **PostgreSQL 16** (Docker) | Durable portal data |
-| **Volume `akab_pgdata`** | Survives every upgrade — **never delete it** |
+| `app` | Web UI + `/api/*` (Node 22) |
+| `db` | PostgreSQL 16 — data in Docker volume `akab_pgdata` (**never delete it**) |
+
+Works on Debian 12/13 and Ubuntu 22.04+.
 
 ---
 
-## One-command install (Ubuntu or Debian)
+## 1. Install Docker
 
-Typical setup: **Nginx Proxy Manager (NPM) on another server** terminates HTTPS
-for `portail.akab.ca` and forwards to this server on port 3000.
+Official Docker Engine from Docker's signed apt repository
+(on Ubuntu, replace `debian` with `ubuntu` in both URLs):
 
 ```bash
-# As a sudo-capable user on the portal server
 sudo apt-get update
-sudo apt-get install -y git curl ca-certificates openssl
+sudo apt-get install -y ca-certificates curl git openssl
+sudo install -m 0755 -d /etc/apt/keyrings
+sudo curl -fsSL https://download.docker.com/linux/debian/gpg -o /etc/apt/keyrings/docker.asc
+sudo chmod a+r /etc/apt/keyrings/docker.asc
+echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/debian $(. /etc/os-release && echo "$VERSION_CODENAME") stable" \
+  | sudo tee /etc/apt/sources.list.d/docker.list > /dev/null
+sudo apt-get update
+sudo apt-get install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
+sudo usermod -aG docker "$USER"
+```
 
+**Log out and back in**, then check: `docker compose version`
+
+## 2. Get the code
+
+```bash
 sudo mkdir -p /opt && sudo chown "$USER":"$USER" /opt
 cd /opt
 git clone -b master https://github.com/Akab-Informatique/Client-Portal.git akab-portal
 cd akab-portal
-
-# NPM_PROXY_IP = the Nginx Proxy Manager server's IP as seen from this server
-PUBLIC_URL=https://portail.akab.ca NPM_PROXY_IP=192.168.1.10   bash scripts/debian-install.sh
 ```
 
-On a server without Docker the script installs Docker Engine from Docker's
-signed apt repository and stops; log out and back in, then run it again.
+## 3. Create `.env`
 
-The installer:
+```bash
+cp .env.example .env
+```
 
-- generates `POSTGRES_PASSWORD`, `SESSION_SECRET` and `CREDENTIALS_ENCRYPTION_KEY`
-  (never overwrites real values) — **back up `.env`**, it is the only copy
-- sets `PUBLIC_URL`, `SQL_PROXY_ENABLED=1` (required by the web app)
-- publishes the app on this server's LAN IP (`APP_PUBLISH=<LAN_IP>:3000`) and
-  sets `TRUSTED_PROXY_IPS=<NPM_PROXY_IP>`: **the app refuses every connection
-  that is not from NPM** (Docker ports bypass ufw, so this is enforced in the app)
-- runs migrations and creates one admin with a random one-time password
+Generate the three secrets (copy each output into `.env`):
 
-### Nginx Proxy Manager (on the other server)
+```bash
+openssl rand -hex 16   # → POSTGRES_PASSWORD
+openssl rand -hex 32   # → SESSION_SECRET
+openssl rand -hex 32   # → CREDENTIALS_ENCRYPTION_KEY
+```
 
-Add a **Proxy Host**:
+```bash
+nano .env
+```
 
-| Field | Value |
-|-------|-------|
-| Domain Names | `portail.akab.ca` |
-| Scheme / Forward Hostname / Port | `http` / portal server LAN IP / `3000` |
-| Websockets Support | on |
-| Block Common Exploits | on |
-| SSL | Request a new Let's Encrypt certificate, **Force SSL**, **HTTP/2**, **HSTS** |
+Fill in the **REQUIRED** block at the top of the file (see the table below),
+save, then restrict the file (the app container runs as uid/gid 1000):
 
-NPM sends `X-Real-IP` / `X-Forwarded-For` by default — the portal uses them
-for rate limiting only because the request comes from `TRUSTED_PROXY_IPS`.
+```bash
+sudo chgrp 1000 .env && chmod 640 .env
+```
 
-### First sign-in
+### `.env` reference
+
+**Required**
+
+| Variable | Value |
+|----------|-------|
+| `POSTGRES_DB` | `akab` |
+| `POSTGRES_USER` | `akab` |
+| `POSTGRES_PASSWORD` | output of `openssl rand -hex 16` — **never change it after the first start** |
+| `SESSION_SECRET` | output of `openssl rand -hex 32` (the example value is refused) |
+| `CREDENTIALS_ENCRYPTION_KEY` | output of `openssl rand -hex 32` — encrypts stored integration secrets; losing it makes them unreadable |
+| `PUBLIC_URL` | `https://portail.akab.ca` — the public HTTPS address (email links, origin check) |
+| `SQL_PROXY_ENABLED` | `1` — required, the web app loads its data through it |
+
+**Network**
+
+| Variable | Default | Meaning |
+|----------|---------|---------|
+| `APP_PUBLISH` | `3000` | Host port (or `IP:port`) Docker publishes. `3000` = all interfaces |
+| `TRUSTED_PROXY_IPS` | *(empty)* | Optional, recommended: your reverse proxy's IP. When set, **only** that IP (and the server itself) may connect, and only its `X-Forwarded-For` is trusted |
+| `COOKIE_SECURE` | on | Keep on behind HTTPS. Only for plain-HTTP tests: `false` |
+
+**Integrations (optional — leave empty to disable)**
+
+| Integration | Variables |
+|-------------|-----------|
+| Autotask | `AUTOTASK_INTEGRATION_CODE`, `AUTOTASK_USERNAME`, `AUTOTASK_SECRET` (single-quote it) |
+| Microsoft 365 / SharePoint | `MICROSOFT_TENANT_ID`, `MICROSOFT_CLIENT_ID`, `MICROSOFT_CLIENT_SECRET` |
+| IT Glue / MyGlue | `ITGLUE_API_KEY`, `ITGLUE_REGION` (`us` / `eu` / `au`) |
+| Email (SMTP) | `SMTP_HOST`, `SMTP_PORT`, `SMTP_SECURE`, `SMTP_USER`, `SMTP_PASS`, `SMTP_FROM_EMAIL`, `SMTP_FROM_NAME` |
+| Datto RMM | `DATTO_RMM_API_URL`, `DATTO_RMM_API_KEY`, `DATTO_RMM_API_SECRET` |
+| Splashtop SOS | `SPLASHTOP_API_TOKEN` |
+
+Each one is documented in `.env.example`.
+`.env` rules: no spaces around `=`; a value containing `$` or `#` goes in single quotes.
+
+## 4. Start
+
+```bash
+docker compose up -d --build
+docker compose ps          # db and app should become "healthy" (≈1 min)
+```
+
+Check from the server itself:
+
+```bash
+docker compose exec -T app curl -sS "http://127.0.0.1:3000/api/health?db=1"
+```
+
+Healthy output contains `"ok":true`.
+
+## 5. Reverse proxy
+
+Point your proxy at `http://<this server's IP>:3000` (scheme **http**,
+websockets on, HTTPS certificate on the proxy). If you set `TRUSTED_PROXY_IPS`,
+use the proxy's IP exactly as this server sees it.
+
+## 6. First sign-in
 
 ```bash
 docker compose logs app | grep one-time
 ```
 
-Sign in at `https://portail.akab.ca` as `admin@akab.local` with that
-password, set up MFA, then **change the password** (Profile → Change password).
-Create your real admin account, then deactivate `admin@akab.local` if you like.
+Open `https://portail.akab.ca`, sign in as `admin@akab.local` with that
+password, set up MFA with your authenticator app, then change the password
+(Profile → Change password). Create your own admin account afterwards if you
+want and deactivate `admin@akab.local`.
+
+**Back up `.env`** somewhere safe — it is the only copy of the database
+password and the encryption key.
 
 ---
 
-## Manual install (step by step)
-
-### 1) Docker
-
-```bash
-sudo apt-get update
-sudo apt-get install -y ca-certificates curl git
-curl -fsSL https://get.docker.com | sudo sh
-sudo usermod -aG docker $USER
-# log out and back in
-docker compose version
-```
-
-### 2) Code
-
-```bash
-sudo mkdir -p /opt && sudo chown "$USER":"$USER" /opt
-cd /opt
-git clone -b master https://github.com/Akab-Informatique/Client-Portal.git akab-portal
-cd akab-portal
-```
-
-### 3) `.env`
-
-```bash
-cp .env.example .env
-nano .env
-```
-
-**Required:**
-
-```env
-POSTGRES_DB=akab
-POSTGRES_USER=akab
-POSTGRES_PASSWORD=UseLongPasswordWithoutSpecialChars123
-# openssl rand -hex 32 — the example value is refused at login
-SESSION_SECRET=<64 hex characters>
-CREDENTIALS_ENCRYPTION_KEY=<64 hex characters>   # openssl rand -hex 32
-SQL_PROXY_ENABLED=1
-PUBLIC_URL=https://portail.akab.ca
-# NPM on another server:
-APP_PUBLISH=<this server LAN IP>:3000
-TRUSTED_PROXY_IPS=<NPM server IP>
-```
-
-Then restrict the file: `sudo chgrp 1000 .env && chmod 640 .env`.
-
-Tips:
-- Prefer letters + numbers (no `@ # : / ? $` if possible)
-- If password contains `$`, write `$$` in `.env` (Docker Compose rule)
-- Do **not** set `DATABASE_URL` when using Compose — the app uses `POSTGRES_HOST=db`
-
-Optional integrations: `AUTOTASK_*`, `MICROSOFT_*`, `ITGLUE_*`, `SMTP_*` (see `.env.example`).
-
-### 4) Start
-
-```bash
-docker compose up -d --build
-docker compose ps
-```
-
-### 5) Verify (always quote URLs + use timeouts)
-
-```bash
-docker compose exec -T app curl -sS -m 5 "http://127.0.0.1:3000/api/health"
-docker compose exec -T app curl -sS -m 8 "http://127.0.0.1:3000/api/health?db=1"
-docker compose exec -T app curl -sS -m 10 "http://127.0.0.1:3000/api/db/status"
-docker compose exec -T app curl -sS -m 30 "http://127.0.0.1:3000/api/db/status?migrate=1"
-docker compose logs --tail=60 app
-```
-
-Healthy DB status:
-
-```json
-{"mode":"postgres","ok":true,"userCount":3,...}
-```
-
-App log line:
-
-```text
-db: PostgreSQL ok — akab @ db — users=3
-```
-
----
-
-## Upgrades (no data loss)
+## Upgrade (keeps all data)
 
 ```bash
 cd /opt/akab-portal
-bash scripts/upgrade.sh
+bash scripts/upgrade.sh          # backup → git pull → rebuild → health check → migrations
 ```
 
-Or:
+Roll back to a release: `bash scripts/upgrade.sh v1.3.0`
 
-```bash
-cd /opt/akab-portal
-bash scripts/backup-db.sh
-git pull origin master
-docker compose up -d --build
-```
-
-**Never:**
-
-```bash
-docker compose down -v
-docker volume rm akab_pgdata
-```
-
----
-
-## HTTPS (Caddy on Debian)
-
-```bash
-sudo apt-get install -y debian-keyring debian-archive-keyring apt-transport-https curl
-curl -1sLf 'https://dl.cloudsmith.io/public/caddy/stable/gpg.key' \
-  | sudo gpg --dearmor -o /usr/share/keyrings/caddy-stable-archive-keyring.gpg
-curl -1sLf 'https://dl.cloudsmith.io/public/caddy/stable/debian.deb.txt' \
-  | sudo tee /etc/apt/sources.list.d/caddy-stable.list
-sudo apt-get update
-sudo apt-get install -y caddy
-```
-
-`/etc/caddy/Caddyfile`:
-
-```caddy
-portal.yourdomain.com {
-  reverse_proxy 127.0.0.1:3000
-}
-```
-
-```bash
-sudo systemctl reload caddy
-```
-
----
-
-## Troubleshooting
-
-| Symptom | Fix |
-|---------|-----|
-| `curl` hangs | Use quotes + `-m`: `curl -sS -m 8 "http://127.0.0.1:3000/api/health"` |
-| `password authentication failed` | `POSTGRES_PASSWORD` changed after first boot. Restore original password **or** wipe volume (data loss): `docker compose down && docker volume rm akab_pgdata && docker compose up -d --build` |
-| `POSTGRES_* not set` | Create `.env` with `POSTGRES_PASSWORD=...` |
-| Port 3000 closed | `sudo ss -lntp \| grep 3000` · open firewall if needed |
-| App unhealthy | `docker compose logs --tail=100 app` |
-| Still broken after pull | `docker compose build --no-cache app && docker compose up -d` |
-
-### Nuclear rebuild (keeps DB volume)
-
-```bash
-cd /opt/akab-portal
-git fetch origin && git checkout master && git pull origin master
-docker compose build --no-cache
-docker compose up -d
-```
-
-### Nuclear rebuild (WIPES portal DB — demo only)
-
-```bash
-docker compose down
-docker volume rm akab_pgdata
-docker compose up -d --build
-```
-
----
+**Never** run `docker compose down -v` or `docker volume rm …akab_pgdata` — that deletes the database.
 
 ## Backups
 
 ```bash
 bash scripts/backup-db.sh /var/backups/akab
-# restore:
-# bash scripts/restore-db.sh /var/backups/akab/akab-pg-….sql.gz
+# restore: bash scripts/restore-db.sh /var/backups/akab/akab-pg-<date>.sql.gz
+```
+
+## Troubleshooting
+
+| Symptom | Fix |
+|---------|-----|
+| `required variable POSTGRES_PASSWORD is missing` | No `.env` in this folder, or the line is empty — see step 3 |
+| Proxy shows **502 Bad Gateway** | App not running (`docker compose ps`), wrong IP/port in the proxy, or scheme set to https |
+| Page says **Forbidden — use the portal address** | `TRUSTED_PROXY_IPS` doesn't match the proxy's IP — the app log shows the refused IP |
+| `password authentication failed` | `POSTGRES_PASSWORD` changed after the first start — put the original back |
+| App unhealthy | `docker compose logs --tail=100 app` |
+| `cannot read /app/.env` | `sudo chgrp 1000 .env && chmod 640 .env` |
+| Login refused / "placeholder" in log | `SESSION_SECRET` still the example value |
+
+### Rebuild without losing data
+
+```bash
+docker compose build --no-cache && docker compose up -d
 ```
 
 ---
 
 ## Develop → production
 
-1. Build features locally on a branch (`npm run dev`, then `npm run build`)  
-2. Merge to `master` and push to GitHub  
-3. On server: `bash scripts/upgrade.sh`  
-4. Data stays in Postgres volume `akab_pgdata`
+1. Work locally on a branch (`npm run dev`, then `npm run build`)
+2. Merge to `master`, push to GitHub, tag the release (`git tag -a v1.x.y`)
+3. On the server: `bash scripts/upgrade.sh`

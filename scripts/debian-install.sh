@@ -1,23 +1,15 @@
 #!/usr/bin/env bash
-# AKAB Portal — first install / repair on Ubuntu 22.04+ or Debian 12/13
+# AKAB Portal — optional helper: install Docker, create .env with generated
+# secrets, build and start. The manual procedure is in INSTALL.md.
 #
-# Usage (reverse proxy such as Nginx Proxy Manager on ANOTHER server):
-#   PUBLIC_URL=https://portail.akab.ca NPM_PROXY_IP=192.168.1.10 \
-#     bash scripts/debian-install.sh
-#
-# Optional:
-#   APP_DIR=/opt/akab-portal   LAN_IP=192.168.1.20 (auto-detected)
-#   BRANCH=master              REPO_URL=https://github.com/Akab-Informatique/Client-Portal.git
-#
-# Without NPM_PROXY_IP the app listens on 127.0.0.1:3000 only (proxy on this host).
+# Usage:  PUBLIC_URL=https://portail.akab.ca bash scripts/debian-install.sh
+# Optional: APP_DIR=/opt/akab-portal  BRANCH=master
 set -euo pipefail
 
 APP_DIR="${APP_DIR:-${1:-/opt/akab-portal}}"
 REPO_URL="${REPO_URL:-https://github.com/Akab-Informatique/Client-Portal.git}"
 BRANCH="${BRANCH:-master}"
 PUBLIC_URL="${PUBLIC_URL:-https://portail.akab.ca}"
-NPM_PROXY_IP="${NPM_PROXY_IP:-}"
-LAN_IP="${LAN_IP:-}"
 
 echo "==> AKAB Portal install (Ubuntu/Debian + Docker) → $APP_DIR"
 
@@ -108,26 +100,6 @@ grep -q '^POSTGRES_USER=' .env || set_env POSTGRES_USER akab
 set_env PUBLIC_URL "$PUBLIC_URL"
 set_env SQL_PROXY_ENABLED 1
 
-# ── Reverse proxy on another server (Nginx Proxy Manager) ───────────────────
-if [[ -n "$NPM_PROXY_IP" ]]; then
-  if [[ -z "$LAN_IP" ]]; then
-    LAN_IP="$(ip -4 route get "$NPM_PROXY_IP" 2>/dev/null | awk '{for (i=1;i<=NF;i++) if ($i=="src") print $(i+1)}' | head -n1)"
-  fi
-  if [[ -z "$LAN_IP" ]]; then
-    echo "ERROR: could not detect this server's LAN IP — re-run with LAN_IP=…" >&2
-    exit 1
-  fi
-  set_env APP_PUBLISH "${LAN_IP}:3000"
-  set_env TRUSTED_PROXY_IPS "$NPM_PROXY_IP"
-  echo "==> App published on ${LAN_IP}:3000; only ${NPM_PROXY_IP} may connect (enforced by the app)"
-  if command -v ufw >/dev/null 2>&1 && sudo ufw status | grep -q "Status: active"; then
-    # Note: Docker-published ports bypass ufw; the app-level allowlist is the real guard.
-    sudo ufw allow from "$NPM_PROXY_IP" to any port 3000 proto tcp comment "AKAB portal via NPM" >/dev/null || true
-  fi
-else
-  echo "==> No NPM_PROXY_IP — app listens on 127.0.0.1:3000 (reverse proxy must run on this host)"
-fi
-
 # Secrets: owner rw, app container group (gid 1000) read, nobody else.
 if chgrp 1000 .env 2>/dev/null || sudo chgrp 1000 .env; then
   chmod 640 .env
@@ -159,8 +131,9 @@ docker compose logs --tail=40 app | grep -v "one-time password" || true
 
 echo
 echo "Done."
-echo "  Portal URL : $PUBLIC_URL  (point Nginx Proxy Manager at http://${LAN_IP:-127.0.0.1}:3000)"
+echo "  Portal URL : $PUBLIC_URL  (point your reverse proxy at http://<this server IP>:3000)"
 echo "  First login: admin@akab.local"
 echo "  Password   : docker compose logs app | grep one-time   ← change it at first sign-in"
 echo "  Upgrade    : cd $APP_DIR && bash scripts/upgrade.sh"
+echo "  Recommended: set TRUSTED_PROXY_IPS=<proxy IP> in .env, then: docker compose up -d"
 echo "  Back up    : $APP_DIR/.env (holds the database password and encryption key)"

@@ -884,17 +884,26 @@ server.listen(PORT, HOST, () => {
     console.error("  session: config check failed", e);
   }
 
-  // Reverse-proxy / public URL sanity (Nginx Proxy Manager on another host)
+  // Reverse-proxy / public URL / placeholder sanity
   try {
+    if (/^change-?me/i.test(String(process.env.POSTGRES_PASSWORD || ""))) {
+      console.error("  SECURITY: POSTGRES_PASSWORD is still the .env.example value — generate one (openssl rand -hex 16).");
+    }
+    if (!/^[0-9a-f]{32,}$/i.test(String(process.env.CREDENTIALS_ENCRYPTION_KEY || "").trim())) {
+      console.error("  WARN: CREDENTIALS_ENCRYPTION_KEY missing or not hex (openssl rand -hex 32) — integration secrets cannot be saved.");
+    }
+    if (!/^(1|true|yes)$/i.test(String(process.env.SQL_PROXY_ENABLED || "").trim())) {
+      console.error("  WARN: SQL_PROXY_ENABLED is not 1 — the portal UI cannot load its data.");
+    }
     const publish = String(process.env.APP_PUBLISH || "").trim();
     const trusted = String(process.env.TRUSTED_PROXY_IPS || "").trim();
     const exposed = publish && !/^127\.0\.0\.1:|^localhost:|^\[::1\]:/.test(publish);
     if (exposed && !trusted) {
-      console.error(
-        "  SECURITY: APP_PUBLISH exposes port 3000 but TRUSTED_PROXY_IPS is empty —",
+      console.warn(
+        "  RECOMMENDED: set TRUSTED_PROXY_IPS=<reverse proxy IP> in .env — then only the proxy",
       );
-      console.error(
-        "            set TRUSTED_PROXY_IPS=<reverse proxy IP> so client IPs cannot be spoofed.",
+      console.warn(
+        "               can reach port 3000 and visitor IPs cannot be spoofed.",
       );
     } else if (trusted) {
       console.log(`  proxy:  trusted reverse proxy IPs: ${trusted}`);
