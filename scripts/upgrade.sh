@@ -29,7 +29,12 @@ else
     BRANCH="master"
     git checkout "$BRANCH"
   fi
-  git pull --ff-only origin "$BRANCH" 2>/dev/null || git reset --hard "origin/$BRANCH"
+  if ! git pull --ff-only origin "$BRANCH"; then
+    echo "ERROR: cannot fast-forward $BRANCH (local edits or rewritten history)." >&2
+    echo "       Inspect with: git status && git log --oneline -5 origin/$BRANCH" >&2
+    echo "       Nothing was changed; the running portal is untouched." >&2
+    exit 1
+  fi
 fi
 echo "    HEAD: $(git rev-parse --short HEAD) — $(git log -1 --pretty=%s)"
 

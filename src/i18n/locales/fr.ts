@@ -457,7 +457,8 @@ graphHint:
     confirmPassword: "Confirmer le nouveau mot de passe",
     passwordChanged: "Mot de passe mis à jour.",
     passwordMismatch: "Les nouveaux mots de passe ne correspondent pas.",
-    passwordTooShort: "Le mot de passe doit contenir au moins 6 caractères.",
+    passwordTooShort: "Le mot de passe doit contenir au moins 10 caractères.",
+    passwordChangeFailed: "Impossible de changer le mot de passe. Réessayez.",
     wrongPassword: "Le mot de passe actuel est incorrect.",
     preferredLanguage: "Langue préférée",
     preferredLanguageHint: "Utilisée pour l'interface du portail.",
@@ -466,7 +467,7 @@ graphHint:
       "Lorsque le personnel publie un message avec « Envoyer aussi par courriel », vous recevez un courriel privé. Les autres destinataires ne sont jamais visibles sur le même message.",
     myglueUserId: "ID utilisateur MyGlue",
     myglueUserIdHint:
-      "Lie votre connexion portail à votre utilisateur MyGlue. Les mots de passe n'affichent que les identifiants que MyGlue vous autorise (mots de passe d'organisation plus les entrées restreintes partagées avec vous). Laissez vide pour tenter une correspondance automatique par courriel.",
+      "Lie votre connexion portail à votre utilisateur MyGlue. Les mots de passe n'affichent que les identifiants que MyGlue vous autorise (mots de passe d'organisation plus les entrées restreintes partagées avec vous). Défini par le personnel AKAB — contactez le soutien pour le modifier.",
     itglueUserId: "ID utilisateur IT Glue",
     itglueUserIdHint:
       "Lie votre connexion portail à votre utilisateur IT Glue (personnel). Les mots de passe n'affichent que les identifiants autorisés pour cet utilisateur dans chaque organisation cliente. Laissez vide pour tenter une correspondance par courriel (ou vue non filtrée par clé API pour le personnel).",

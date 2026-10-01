@@ -372,7 +372,7 @@ async function handleNativeApi(req, res, url) {
 }
 
 // ---------------------------------------------------------------------------
-// API route resolution (mirrors vite-plugins/appbuilder-api-dev-server.ts)
+// API route resolution (mirrors vite-plugins/api-dev-server.ts)
 // ---------------------------------------------------------------------------
 function resolveApiHandler(rel) {
   const exact = [
@@ -827,9 +827,17 @@ server.listen(PORT, HOST, () => {
   try {
     const sec =
       String(process.env.SESSION_SECRET || process.env.AKAB_SESSION_SECRET || "").trim();
-    if (!sec || sec.length < 16) {
+    const lower = sec.toLowerCase();
+    if (/^(change-?me)|your-secret|replace-me|example/.test(lower)) {
       console.error(
-        "  FATAL: SESSION_SECRET missing or <16 chars. Generate: openssl rand -hex 32",
+        "  FATAL: SESSION_SECRET is still the .env.example placeholder — logins are refused.",
+      );
+      console.error(
+        "  Generate a real one: openssl rand -hex 32  → set SESSION_SECRET in .env and restart.",
+      );
+    } else if (!sec || sec.length < 32) {
+      console.error(
+        "  FATAL: SESSION_SECRET missing or <32 chars. Generate: openssl rand -hex 32",
       );
       console.error(
         "  Auth cookies cannot be signed safely — set SESSION_SECRET in .env and restart.",

@@ -68,15 +68,15 @@ bash scripts/restore-db.sh /var/backups/akab/akab-pg-….sql.gz
 | `POSTGRES_DB` / `USER` / `PASSWORD` | Compose database service |
 | `DATABASE_URL` | Optional single URL (host installs) |
 | `SESSION_SECRET` | Required server-side HMAC secret for HttpOnly session cookies (`openssl rand -hex 32`) |
-| `COOKIE_SECURE=true` | Only behind HTTPS — default is off so `http://ip:3000` lab installs work |
+| `COOKIE_SECURE=false` | Secure cookies are ON by default; set false only for a plain-HTTP lab install |
 | `VITE_DATABASE_MODE=pglite` | Force browser-local DB (dev) |
 
 ---
 
 ## Develop → publish loop
 
-1. Build features in Devs.ai / laptop  
-2. Commit & push GitHub  
+1. Build features locally on a branch (`npm run dev`, then `npm run build`)  
+2. Merge to `master` and push to GitHub  
 3. On server: `bash scripts/upgrade.sh`  
 4. Confirm Settings → Database → PostgreSQL ready  
 

@@ -63,12 +63,10 @@ function parseIdentity(req: VercelRequest) {
     .trim()
     .toLowerCase();
   let itglueUserId: number | null = (() => {
+    // Never fall back to userId: the gate sets it to the PORTAL user id,
+    // which would be mistaken for an unrelated IT Glue/MyGlue user.
     const raw = String(
-      req.query.itglueUserId ??
-        req.query.userId ??
-        body.itglueUserId ??
-        body.userId ??
-        "",
+      req.query.itglueUserId ?? body.itglueUserId ?? "",
     ).trim();
     if (!raw) return null;
     const n = Number(raw);

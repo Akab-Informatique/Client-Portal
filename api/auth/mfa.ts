@@ -13,6 +13,7 @@ import {
   bumpSessionEpoch,
   isMfaEnabled,
   loadUserById,
+  requireSessionUser,
   toSessionUserDto,
   totpQrDataUrl,
   verifyTotp,
@@ -296,14 +297,15 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     }
 
     if (action === "start_enroll") {
+      // Enrollment is only for a password-verified login of a user who has NO
+      // MFA yet. A "challenge" cookie (MFA already on) must never be able to
+      // swap the TOTP secret — that would bypass MFA with the password alone.
       const pending = readMfaPending(req);
-      const session = readSession(req);
-      let userId = pending?.uid ?? session?.uid ?? null;
-      if (userId == null) {
+      if (!pending || pending.kind !== "enroll") {
         return res.status(400).json({ ok: false, error: "no_pending" });
       }
-      const found = await loadUserById(userId);
-      if (!found || !found.active) {
+      const found = await loadUserById(pending.uid);
+      if (!found || !found.active || isMfaEnabled(found)) {
         return res.status(400).json({ ok: false, error: "no_pending" });
       }
       const secret = generateTotpSecret();
@@ -350,6 +352,11 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       }
       const lim = checkVerifyLimits(pending.uid);
       if (!lim.ok) return res.status(lim.status).json(lim.body);
+
+      const enrolling = await loadUserById(pending.uid);
+      if (!enrolling || !enrolling.active || isMfaEnabled(enrolling)) {
+        return res.status(400).json({ ok: false, error: "no_pending" });
+      }
 
       const row = await p.query(
         `SELECT mfa_enroll_secret, mfa_enroll_id, mfa_enroll_expires
@@ -402,10 +409,9 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     }
 
     if (action === "disable") {
-      const session = readSession(req);
-      if (!session) return res.status(401).json({ ok: false, error: "not_signed_in" });
-      const found = await loadUserById(session.uid);
-      if (!found || !isMfaEnabled(found)) {
+      const found = await requireSessionUser(readSession(req));
+      if (!found) return res.status(401).json({ ok: false, error: "not_signed_in" });
+      if (!isMfaEnabled(found)) {
         return res.status(400).json({ ok: false, error: "not_enabled" });
       }
       const totpOk = verifyTotp(found.mfa_totp_secret || "", code);
@@ -457,10 +463,9 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     }
 
     if (action === "regenerate_recovery") {
-      const session = readSession(req);
-      if (!session) return res.status(401).json({ ok: false, error: "not_signed_in" });
-      const found = await loadUserById(session.uid);
-      if (!found || !isMfaEnabled(found)) {
+      const found = await requireSessionUser(readSession(req));
+      if (!found) return res.status(401).json({ ok: false, error: "not_signed_in" });
+      if (!isMfaEnabled(found)) {
         return res.status(400).json({ ok: false, error: "not_enabled" });
       }
       if (!verifyTotp(found.mfa_totp_secret || "", code)) {

@@ -8,6 +8,7 @@
  * Never import this from the browser bundle.
  */
 
+import { randomBytes } from "crypto";
 import pg from "pg";
 
 const { Pool } = pg;
@@ -557,7 +558,16 @@ export async function ensureBootstrap(): Promise<{ seeded: boolean }> {
       return { seeded: false };
     }
 
-    console.log("[akab-db] empty DB — seeding admin + demo clients…");
+    // Production: one admin with a random one-time password, no demo
+    // technician/client accounts. Dev/lab keeps the well-known demo data.
+    const production =
+      process.env.NODE_ENV === "production" ||
+      process.env.AKAB_ENV === "production";
+    console.log(
+      production
+        ? "[akab-db] empty DB — seeding admin (production)…"
+        : "[akab-db] empty DB — seeding admin + demo clients…",
+    );
     const client = await withTimeout(p.connect(), 5000, "bootstrap connect");
     try {
       await client.query("BEGIN");
@@ -599,6 +609,43 @@ export async function ensureBootstrap(): Promise<{ seeded: boolean }> {
           "Internal management company",
         ],
       );
+      const soluId = (solu.rows[0] as { id: number }).id;
+      const { hashPassword } = await import("./passwords.js");
+
+      if (production) {
+        const initialPw =
+          String(process.env.BOOTSTRAP_ADMIN_PASSWORD || "").trim() ||
+          randomBytes(18).toString("base64url");
+        await client.query(
+          `INSERT INTO users (email, password, name, role, company_id, active, staff_role_id, job_title, locale, board_email_opt_in)
+           VALUES ($1,$2,$3,'admin',$4,TRUE,$5,$6,'en',TRUE)`,
+          [
+            "admin@akab.local",
+            await hashPassword(initialPw),
+            "Portal Admin",
+            soluId,
+            adminRoleId,
+            "Portal Administrator",
+          ],
+        );
+        await client.query("COMMIT");
+        bootstrapDone = true;
+        if (process.env.BOOTSTRAP_ADMIN_PASSWORD) {
+          console.log(
+            "[akab-db] bootstrap OK — admin@akab.local created with BOOTSTRAP_ADMIN_PASSWORD",
+          );
+        } else {
+          // Printed once, only to the server log (docker compose logs app).
+          console.log(
+            `[akab-db] bootstrap OK — admin@akab.local one-time password: ${initialPw}`,
+          );
+          console.log(
+            "[akab-db] sign in, change it, then remove it from your log history.",
+          );
+        }
+        return { seeded: true };
+      }
+
       const acme = await client.query(
         `INSERT INTO companies (name, type, email, phone, notes, autotask_company_id, active)
          VALUES ($1,'client',$2,$3,$4,$5,TRUE) RETURNING id`,
@@ -622,11 +669,9 @@ export async function ensureBootstrap(): Promise<{ seeded: boolean }> {
         ],
       );
 
-      const soluId = (solu.rows[0] as { id: number }).id;
       const acmeId = (acme.rows[0] as { id: number }).id;
       const northId = (north.rows[0] as { id: number }).id;
 
-      const { hashPassword } = await import("./passwords.js");
       const adminPw = await hashPassword("admin123");
       const techPw = await hashPassword("tech123");
       const clientPw = await hashPassword("client123");
@@ -713,6 +758,31 @@ export async function ensureBootstrap(): Promise<{ seeded: boolean }> {
 // handlers) keep running as the owner and are unaffected.
 // ---------------------------------------------------------------------------
 const PROXY_ROLE = "akab_proxy";
+/** Client-scope role: read-mostly, column-limited writes (see setup below). */
+const PROXY_CLIENT_ROLE = "akab_proxy_client";
+const PROXY_ROLES = `${PROXY_ROLE}, ${PROXY_CLIENT_ROLE}`;
+
+/** users columns a client may change on their own row — nothing privileged. */
+const CLIENT_USER_UPDATE_COLS = [
+  "name",
+  "job_title",
+  "phone",
+  "mobile",
+  "bio",
+  "locale",
+  "board_email_opt_in",
+] as const;
+
+/** Tables a client-scope query may read (RLS still limits rows). */
+const CLIENT_READ_TABLES = [
+  "companies",
+  "users",
+  "client_roles",
+  "client_user_roles",
+  "board_messages",
+  "message_user_states",
+  "sos_requests",
+] as const;
 const PROXY_TABLES = [
   "companies",
   "users",
@@ -740,7 +810,8 @@ const PROXY_POLICIES: Array<[string, string, string, string]> = [
   ["client_roles", "proxy_write", "ALL", RLS_STAFF],
   ["client_user_roles", "proxy_read", "SELECT", `${RLS_STAFF} OR company_id = ANY(${RLS_COMPANIES})`],
   ["client_user_roles", "proxy_write", "ALL", RLS_STAFF],
-  ["board_messages", "proxy_all", "ALL", `${RLS_STAFF} OR company_id = ANY(${RLS_COMPANIES})`],
+  ["board_messages", "proxy_read", "SELECT", `${RLS_STAFF} OR company_id = ANY(${RLS_COMPANIES})`],
+  ["board_messages", "proxy_write", "ALL", RLS_STAFF],
   ["message_user_states", "proxy_all", "ALL", `${RLS_STAFF} OR user_id = ${RLS_UID}`],
   ["sos_requests", "proxy_all", "ALL", `${RLS_STAFF} OR (user_id = ${RLS_UID} AND company_id = ANY(${RLS_COMPANIES}))`],
 ];
@@ -765,37 +836,67 @@ export function isProxyIsolationReady(): boolean {
 }
 
 /**
- * Idempotent: create the proxy role, grants and RLS policies.
- * Best effort — on failure the proxy keeps working without DB-level isolation
- * and logs a loud warning (never blocks boot).
+ * Idempotent: create the proxy roles, grants and RLS policies.
+ * Never blocks boot — but if this fails the SQL proxy refuses every query
+ * (fail closed) until the next successful migration.
  */
 async function setupProxyIsolation(client: pg.PoolClient): Promise<void> {
-  const q = (sql: string) => withTimeout(client.query(sql), 15000, "proxy isolation");
+  const q = (sql: string) =>
+    withTimeout(client.query(sql), 15000, "proxy isolation").catch((e: unknown) => {
+      // Name the failing statement in the boot log (no secrets in this SQL)
+      const msg = e instanceof Error ? e.message : String(e);
+      throw new Error(`${msg} — in: ${sql.replace(/s+/g, " ").slice(0, 120)}`);
+    });
   try {
     await q("BEGIN");
-    await q(`DO $$ BEGIN
-      IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = '${PROXY_ROLE}') THEN
-        CREATE ROLE ${PROXY_ROLE} NOLOGIN NOBYPASSRLS;
-      END IF;
-    END $$`);
-    await q(`DO $$ BEGIN
-      EXECUTE format('GRANT ${PROXY_ROLE} TO %I', current_user);
-    EXCEPTION WHEN OTHERS THEN NULL;
-    END $$`);
-    await q(`GRANT USAGE ON SCHEMA public TO ${PROXY_ROLE}`);
-    await q(`GRANT USAGE, SELECT, UPDATE ON ALL SEQUENCES IN SCHEMA public TO ${PROXY_ROLE}`);
+    for (const r of [PROXY_ROLE, PROXY_CLIENT_ROLE]) {
+      await q(`DO $$ BEGIN
+        IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = '${r}') THEN
+          CREATE ROLE ${r} NOLOGIN NOBYPASSRLS;
+        END IF;
+      END $$`);
+      await q(`DO $$ BEGIN
+        EXECUTE format('GRANT ${r} TO %I', current_user);
+      EXCEPTION WHEN OTHERS THEN NULL;
+      END $$`);
+    }
+    await q(`GRANT USAGE ON SCHEMA public TO ${PROXY_ROLES}`);
+    // nextval() for INSERT defaults only — no setval() / sequence rewinds
+    await q(`REVOKE ALL ON ALL SEQUENCES IN SCHEMA public FROM ${PROXY_ROLES}`);
+    await q(`GRANT USAGE ON ALL SEQUENCES IN SCHEMA public TO ${PROXY_ROLES}`);
     for (const t of PROXY_TABLES) {
       await q(`GRANT SELECT, INSERT, UPDATE, DELETE ON ${t} TO ${PROXY_ROLE}`);
+      await q(`REVOKE ALL ON ${t} FROM ${PROXY_CLIENT_ROLE}`);
       await q(`ALTER TABLE ${t} ENABLE ROW LEVEL SECURITY`);
     }
+    // Client scope: Postgres itself refuses privileged columns (role,
+    // company_id, active, password, itglue_user_id …) whatever the SQL text.
+    for (const t of CLIENT_READ_TABLES) {
+      await q(`GRANT SELECT ON ${t} TO ${PROXY_CLIENT_ROLE}`);
+    }
+    await q(
+      `GRANT UPDATE (${CLIENT_USER_UPDATE_COLS.join(", ")}) ON users TO ${PROXY_CLIENT_ROLE}`,
+    );
+    await q(`GRANT INSERT, UPDATE ON message_user_states TO ${PROXY_CLIENT_ROLE}`);
+    await q(`DROP POLICY IF EXISTS proxy_all ON board_messages`);
     for (const [table, name, cmd, expr] of PROXY_POLICIES) {
       await q(`DROP POLICY IF EXISTS ${name} ON ${table}`);
       const check = cmd === "SELECT" || cmd === "DELETE" ? "" : ` WITH CHECK (${expr})`;
       await q(
-        `CREATE POLICY ${name} ON ${table} AS PERMISSIVE FOR ${cmd} TO ${PROXY_ROLE} USING (${expr})${check}`,
+        `CREATE POLICY ${name} ON ${table} AS PERMISSIVE FOR ${cmd} TO ${PROXY_ROLES} USING (${expr})${check}`,
       );
     }
     await q("COMMIT");
+    // RLS settings (akab.*) are set by the server BEFORE switching role; stop
+    // proxied SQL from rewriting them. Needs superuser — best effort.
+    await client
+      .query(`REVOKE EXECUTE ON FUNCTION pg_catalog.set_config(text, text, boolean) FROM PUBLIC`)
+      .catch((e: unknown) =>
+        console.warn(
+          "[akab-db] could not revoke set_config from PUBLIC (needs superuser):",
+          e instanceof Error ? e.message : e,
+        ),
+      );
     proxyRoleReady = true;
     console.log("[akab-db] SQL proxy isolation: role + row-level security ready");
   } catch (err) {
@@ -805,6 +906,13 @@ async function setupProxyIsolation(client: pg.PoolClient): Promise<void> {
       "[akab-db] WARNING: SQL proxy isolation NOT active (row-level security setup failed):",
       err instanceof Error ? err.message : err,
     );
+  }
+}
+
+export class ProxyIsolationUnavailableError extends Error {
+  constructor() {
+    super("SQL proxy row-level security is not active");
+    this.name = "ProxyIsolationUnavailableError";
   }
 }
 
@@ -892,13 +1000,18 @@ export async function proxyQuery(opts: {
     ? { text: sql, values: params, rowMode: "array" as const }
     : { text: sql, values: params };
 
+  // Browser SQL must never run as the table owner (which bypasses RLS).
+  if (opts.scope && !proxyRoleReady) {
+    throw new ProxyIsolationUnavailableError();
+  }
+
   // Isolated path: restricted role + per-request RLS settings, one transaction
-  if (opts.scope && proxyRoleReady) {
+  if (opts.scope) {
     const s = opts.scope;
     const client = await withTimeout(p.connect(), 5000, "proxy connect");
     try {
       await client.query("BEGIN");
-      await client.query(`SET LOCAL ROLE ${PROXY_ROLE}`);
+      // Settings first (as owner), then drop to the restricted role.
       await client.query(
         `SELECT set_config('akab.role', $1, true),
                 set_config('akab.user_id', $2, true),
@@ -908,6 +1021,9 @@ export async function proxyQuery(opts: {
           String(Math.floor(s.userId)),
           s.companyIds.filter((n) => Number.isFinite(n)).map((n) => Math.floor(n)).join(","),
         ],
+      );
+      await client.query(
+        `SET LOCAL ROLE ${s.role === "client" ? PROXY_CLIENT_ROLE : PROXY_ROLE}`,
       );
       const result = await withTimeout(client.query(query), qTimeout, "SQL query");
       await client.query("COMMIT");

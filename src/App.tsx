@@ -291,7 +291,7 @@ curl -sS -m 30 "http://127.0.0.1:3000/api/db/status?migrate=1"
             </code>
             . Always quote URLs that contain{" "}
             <code className="text-foreground">?</code>. Then hard-refresh this
-            page. Login: admin@akab.local / admin123
+            page.
           </p>
           <button
             type="button"

@@ -24,6 +24,7 @@ import {
   isMfaEnabled,
   requireSessionUser,
   type DbUser,
+  toSessionUserDto,
 } from "./auth-server.js";
 
 export type AuthContext = {
@@ -327,6 +328,11 @@ export async function gateApiRequest(
     setParam(req, body, "role", isStaff ? "staff" : "client");
   }
   if (rel === "smtp/send-board") {
+    // Mass email to client users: admins, or technicians holding "messages"
+    if (!isAdmin) {
+      const dto = await toSessionUserDto(user);
+      if (dto.permissions?.messages !== true) return denied(403, "Forbidden");
+    }
     setParam(req, body, "authorName", user.name);
     // Never let the caller choose the link target in outbound mail
     setParam(req, body, "portalUrl", publicPortalUrl(req));

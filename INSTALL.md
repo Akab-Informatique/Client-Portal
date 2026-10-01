@@ -30,7 +30,9 @@ bash scripts/debian-install.sh
 ```
 
 Then open: `http://YOUR_SERVER_IP:3000`  
-Login: `admin@akab.local` / `admin123` → **change password immediately**.
+Login: `admin@akab.local` with the one-time password printed in the app log
+(`docker compose logs app | grep one-time`) → **change it immediately**.
+The installer generates `POSTGRES_PASSWORD` and `SESSION_SECRET` for you.
 
 ---
 
@@ -69,8 +71,12 @@ nano .env
 POSTGRES_DB=akab
 POSTGRES_USER=akab
 POSTGRES_PASSWORD=UseLongPasswordWithoutSpecialChars123
+# openssl rand -hex 32 — the example value is refused at login
+SESSION_SECRET=<64 hex characters>
 PORT=3000
 ```
+
+Then restrict the file: `sudo chgrp 1000 .env && chmod 640 .env`.
 
 Tips:
 - Prefer letters + numbers (no `@ # : / ? $` if possible)
@@ -203,7 +209,7 @@ bash scripts/backup-db.sh /var/backups/akab
 
 ## Develop → production
 
-1. Build features in Devs.ai / laptop  
-2. Push to GitHub `master`  
+1. Build features locally on a branch (`npm run dev`, then `npm run build`)  
+2. Merge to `master` and push to GitHub  
 3. On server: `bash scripts/upgrade.sh`  
 4. Data stays in Postgres volume `akab_pgdata`

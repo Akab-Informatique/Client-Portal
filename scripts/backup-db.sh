@@ -8,8 +8,11 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
 
+# Dumps contain password hashes and MFA secrets — owner-only files.
+umask 077
 OUT_DIR="${1:-./backups}"
 mkdir -p "$OUT_DIR"
+chmod 700 "$OUT_DIR" 2>/dev/null || true
 STAMP="$(date +%Y%m%d-%H%M%S)"
 FILE="$OUT_DIR/akab-pg-$STAMP.sql.gz"
 
@@ -35,8 +38,10 @@ if [[ -z "$CONTAINER" ]]; then
 fi
 
 echo "Backing up database '$DB_NAME' from container $CONTAINER …"
-docker exec -t "$CONTAINER" pg_dump -U "$DB_USER" -d "$DB_NAME" --no-owner --no-acl \
+# No -t: a TTY rewrites newlines and can corrupt the dump stream.
+docker exec -i "$CONTAINER" pg_dump -U "$DB_USER" -d "$DB_NAME" --no-owner --no-acl \
   | gzip > "$FILE"
+chmod 600 "$FILE"
 
 echo "OK → $FILE"
 ls -lh "$FILE"

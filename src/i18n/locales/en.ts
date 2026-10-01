@@ -452,7 +452,8 @@ graphHint:
     confirmPassword: "Confirm new password",
     passwordChanged: "Password updated.",
     passwordMismatch: "New passwords do not match.",
-    passwordTooShort: "Password must be at least 6 characters.",
+    passwordTooShort: "Password must be at least 10 characters.",
+    passwordChangeFailed: "Could not change the password. Try again.",
     wrongPassword: "Current password is incorrect.",
     preferredLanguage: "Preferred language",
     preferredLanguageHint: "Used for your portal interface.",
@@ -461,7 +462,7 @@ graphHint:
       "When staff posts a board message with “Also send by email”, you get a private email. Other recipients are never shown on the same message.",
     myglueUserId: "MyGlue user ID",
     myglueUserIdHint:
-      "Links your portal login to your MyGlue user. Passwords only shows credentials MyGlue would allow for you (organization passwords plus restricted entries shared with you). Leave blank to try auto-match by email.",
+      "Links your portal login to your MyGlue user. Passwords only shows credentials MyGlue would allow for you (organization passwords plus restricted entries shared with you). Set by AKAB staff — contact support to change it.",
     itglueUserId: "IT Glue user ID",
     itglueUserIdHint:
       "Links your portal login to your IT Glue staff user. Passwords only shows credentials that IT Glue would allow for that user in each client organization. Leave blank to try auto-match by email (or unscoped API-key view for staff).",

@@ -1,7 +1,9 @@
 import type { VercelRequest, VercelResponse } from "@vercel/node";
 import {
+  getPool,
   isPostgresConfigured,
   isProxyIsolationReady,
+  ProxyIsolationUnavailableError,
   proxyQuery,
 } from "../_lib/pg.js";
 import { hashPassword, isPasswordHashed } from "../_lib/passwords.js";
@@ -70,7 +72,7 @@ const BLOCKED_SQL =
  * changing the per-request RLS settings (set_config / current_setting).
  */
 const NON_BUILDER_SQL =
-  /--|\/\*|\bpg_\w+|\binformation_schema\b|\bpublic"?\s*\.|\b(row_to_json|to_json|to_jsonb|json_agg|jsonb_agg|json_object_agg|jsonb_object_agg|json_build_object|jsonb_build_object|json_build_array|jsonb_build_array|array_agg|string_agg|xmlagg|query_to_xml|table_to_xml|set_config|current_setting|current_user|session_user|lo_\w+)\b|\bselect\s+\*/i;
+  /--|\/\*|\bpg_\w+|\binformation_schema\b|\bpublic"?\s*\.|\b(row_to_json|to_json|to_jsonb|json_agg|jsonb_agg|json_object_agg|jsonb_object_agg|json_build_object|jsonb_build_object|json_build_array|jsonb_build_array|array_agg|string_agg|xmlagg|query_to_xml|table_to_xml|set_config|current_setting|current_user|session_user|lo_\w+|setval|merge|only)\b|\bu&["']|\bselect\s+\*/i;
 
 const AUTH_SECRET_COLS = [
   "password",
@@ -87,6 +89,14 @@ const MFA_WRITE_COLS = [
   "mfa_recovery_codes",
   "mfa_email_code_hash",
   "mfa_email_code_expires",
+] as const;
+
+/** users columns a client may never write (Postgres column grants agree). */
+const CLIENT_BLOCKED_USER_COLS = [
+  "email",
+  "itglue_user_id",
+  "datto_web_remote_device_uids",
+  "session_epoch",
 ] as const;
 
 /** Privilege / identity columns clients and non-admin staff must not write. */
@@ -127,8 +137,19 @@ function bodyIsObj(v: unknown): v is Record<string, unknown> {
   return Boolean(v) && typeof v === "object" && !Array.isArray(v);
 }
 
+/**
+ * A WITH statement may hide INSERT/UPDATE/DELETE inside a CTE. Drizzle's
+ * builder never emits one, so any WITH that mentions a write keyword is
+ * treated as "other" (refused) instead of as a harmless read.
+ */
+function isDataModifyingWith(sql: string): boolean {
+  const s = sql.trim().toLowerCase();
+  return s.startsWith("with") && /\b(insert|update|delete|merge)\b/.test(s);
+}
+
 function isSelectLike(sql: string): boolean {
   const s = sql.trim().toLowerCase();
+  if (isDataModifyingWith(s)) return false;
   return s.startsWith("select") || s.startsWith("with");
 }
 
@@ -136,6 +157,7 @@ function statementKind(
   sql: string,
 ): "select" | "insert" | "update" | "delete" | "other" {
   const s = sql.trim().toLowerCase();
+  if (isDataModifyingWith(s)) return "other";
   if (s.startsWith("select") || s.startsWith("with")) return "select";
   if (s.startsWith("insert")) return "insert";
   if (s.startsWith("update")) return "update";
@@ -143,6 +165,18 @@ function statementKind(
   return "other";
 }
 
+
+/**
+ * Statement text without its trailing RETURNING column list. Only a plain
+ * `returning col, col, NULL …` list running to the very end is removed, so a
+ * literal such as 'returning' can never hide a SET target from the checks.
+ */
+const TRAILING_RETURNING =
+  /\breturning\s+(?:[a-z_][a-z0-9_.]*|null)(?:\s*,\s*(?:[a-z_][a-z0-9_.]*|null))*\s*$/i;
+function stripReturning(sql: string): string {
+  const m = TRAILING_RETURNING.exec(sql);
+  return m ? sql.slice(0, m.index) : sql;
+}
 
 function hasColumnIdent(sql: string, col: string): boolean {
   if (!/^[a-z_][a-z0-9_]*$/i.test(col)) return false;
@@ -219,6 +253,30 @@ function mentionsTable(sql: string, table: string): boolean {
     }
   }
   return false;
+}
+
+const KNOWN_TABLES = [
+  ...TENANT_TABLES,
+  "staff_roles",
+  "todos",
+  "todo_items",
+] as const;
+
+/**
+ * INSERT/UPDATE/DELETE must name exactly one known table right after the
+ * keyword (optionally quoted, optional alias). Anything else — ONLY,
+ * schema-qualified, unknown tables — is refused so the per-table checks
+ * below can never be skipped by an unusual spelling.
+ */
+function writeTargetOk(sql: string): boolean {
+  const kind = statementKind(sql);
+  if (kind === "select") return true;
+  if (kind === "other") return false;
+  const m = sql
+    .trim()
+    .toLowerCase()
+    .match(/^(?:insert\s+into|update|delete\s+from)\s+"?([a-z_][a-z0-9_]*)"?(?=[\s(]|$)/);
+  return Boolean(m && (KNOWN_TABLES as readonly string[]).includes(m[1]));
 }
 
 function tablesMentioned(sql: string): string[] {
@@ -371,7 +429,7 @@ function assertClientTenantScope(sql: string, user: DbUser): string | null {
         return "Access denied.";
       }
       if (kind === "update") {
-        for (const col of PRIVILEGE_COLS) {
+        for (const col of [...PRIVILEGE_COLS, ...CLIENT_BLOCKED_USER_COLS]) {
           if (hasColumnIdent(sql, col)) {
             return "Access denied.";
           }
@@ -695,8 +753,12 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     if (BLOCKED_SQL.test(sql) || NON_BUILDER_SQL.test(sql)) {
       return res.status(400).json({ error: "Query not allowed." });
     }
-    if (statementKind(sql) === "other") {
+    if (statementKind(sql) === "other" || !writeTargetOk(unquoteIdentifiers(sql))) {
       return res.status(400).json({ error: "Query not allowed." });
+    }
+    // Never run browser SQL without Postgres row-level security in place.
+    if (!isProxyIsolationReady()) {
+      return res.status(503).json({ error: "Database is starting — try again shortly." });
     }
 
     // Secret columns become NULL wherever they are read (SELECT, RETURNING) so
@@ -706,33 +768,49 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     // understand Drizzle's `"table"."column"` output.
     sql = nullSecretReads(sql);
     const check = unquoteIdentifiers(sql);
+    // Write checks look at what the statement WRITES, not at its RETURNING
+    // list — Drizzle's .returning() names every column (role, email, …).
+    const shape = isSelectLike(check) ? check : stripReturning(check);
 
-    const mfaErr = assertMfaWriteRules(check);
+    const mfaErr = assertMfaWriteRules(shape);
     if (mfaErr) {
       return res.status(403).json({ error: mfaErr });
     }
 
     if (user.role === "client") {
-      const scopeErr = assertClientTenantScope(check, user);
+      const scopeErr = assertClientTenantScope(shape, user);
       if (scopeErr) {
         return res.status(403).json({ error: scopeErr });
       }
-      const paramErr = assertClientParams(check, params, user);
+      const paramErr = assertClientParams(shape, params, user);
       if (paramErr) {
         return res.status(403).json({ error: paramErr });
       }
     } else {
       // Resolve server-side permissions (never trust client patchSession / local state)
       const dto = await toSessionUserDto(user);
-      const staffErr = assertStaffAuthorization(check, dto);
+      const staffErr = assertStaffAuthorization(shape, dto);
       if (staffErr) {
         return res.status(403).json({ error: staffErr });
       }
+      // Non-admin staff may set password/email only on client accounts (or
+      // their own row) — never take over an admin or another technician.
+      if (
+        user.role !== "admin" &&
+        !isSelectLike(shape) &&
+        mentionsTable(shape, "users") &&
+        (hasColumnIdent(shape, "password") || hasColumnIdent(shape, "email"))
+      ) {
+        const targetErr = await assertTechUserTargets(shape, params, user);
+        if (targetErr) {
+          return res.status(403).json({ error: targetErr });
+        }
+      }
       // Nobody may set mfa_enabled via proxy
       if (
-        !isSelectLike(check) &&
-        /\bmfa_enabled\b/i.test(check) &&
-        mentionsTable(check, "users")
+        !isSelectLike(shape) &&
+        /\bmfa_enabled\b/i.test(shape) &&
+        mentionsTable(shape, "users")
       ) {
         return res.status(403).json({
           error: "MFA fields can only be changed through auth APIs.",
@@ -774,12 +852,12 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
     // Admin password changes via the proxy must revoke outstanding cookies
     if (
-      !isSelectLike(check) &&
-      mentionsTable(check, "users") &&
-      /\bpassword\b/i.test(check)
+      !isSelectLike(shape) &&
+      mentionsTable(shape, "users") &&
+      /\bpassword\b/i.test(shape)
     ) {
       try {
-        for (const hit of check.matchAll(/\bid\s*=\s*\$(\d+)\b/gi)) {
+        for (const hit of shape.matchAll(/\bid\s*=\s*\$(\d+)\b/gi)) {
           const idx = Number(hit[1]) - 1;
           const idVal = params[idx];
           const idNum = typeof idVal === "number" ? idVal : Number(idVal);
@@ -797,7 +875,41 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
     return res.status(200).json(rows);
   } catch (err) {
+    if (err instanceof ProxyIsolationUnavailableError) {
+      return res.status(503).json({ error: "Database is starting — try again shortly." });
+    }
     console.error("[akab-db/query]", err);
     return res.status(500).json({ error: "Database query failed" });
   }
+}
+
+/**
+ * Technician users writes touching password/email: INSERT creates a client
+ * (role columns are already refused), UPDATE must bind `id = $n` and every
+ * targeted row must be a client account or the caller's own row.
+ */
+async function assertTechUserTargets(
+  sql: string,
+  params: unknown[],
+  user: DbUser,
+): Promise<string | null> {
+  const kind = statementKind(sql);
+  if (kind === "insert") return null;
+  if (kind !== "update") return "Access denied.";
+  const ids: number[] = [];
+  for (const hit of sql.matchAll(/\bid\s*=\s*\$(\d+)\b/gi)) {
+    const v = params[Number(hit[1]) - 1];
+    const n = typeof v === "number" ? v : Number(v);
+    if (!Number.isFinite(n)) return "Access denied.";
+    ids.push(n);
+  }
+  if (!ids.length) return "Access denied.";
+  const r = await getPool().query(
+    `SELECT id, role FROM users WHERE id = ANY($1::int[])`,
+    [ids],
+  );
+  for (const row of r.rows as Array<{ id: number; role: string }>) {
+    if (row.id !== user.id && row.role !== "client") return "Access denied.";
+  }
+  return null;
 }

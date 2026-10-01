@@ -64,10 +64,29 @@ export function getSessionSecret(): string {
   const explicit =
     cleanEnv(process.env.SESSION_SECRET) ||
     cleanEnv(process.env.AKAB_SESSION_SECRET);
+  if (explicit && isPlaceholderSecret(explicit)) {
+    // The .env.example value is public on GitHub — anyone could forge cookies.
+    throw new Error(
+      "SESSION_SECRET is still the .env.example placeholder. " +
+        "Generate with: openssl rand -hex 32  then set SESSION_SECRET=... in .env",
+    );
+  }
   if (explicit && explicit.length >= 32) return explicit;
   throw new Error(
     "SESSION_SECRET is missing or too short (need ≥32 characters). " +
       "Generate with: openssl rand -hex 32  then add SESSION_SECRET=... to .env",
+  );
+}
+
+/** True for template values such as the ones shipped in .env.example. */
+export function isPlaceholderSecret(value: string): boolean {
+  const s = value.trim().toLowerCase();
+  return (
+    s.startsWith("change-me") ||
+    s.startsWith("changeme") ||
+    s.includes("your-secret") ||
+    s.includes("replace-me") ||
+    s.includes("example")
   );
 }
 

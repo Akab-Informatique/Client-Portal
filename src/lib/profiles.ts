@@ -1,5 +1,5 @@
 import { and, eq } from "drizzle-orm";
-import { db, dbReady, schema } from "@/db";
+import { db, dbMode, dbReady, schema } from "@/db";
 import type { PublicProfile, User } from "@/lib/types";
 
 function toPublic(row: User): PublicProfile {
@@ -118,11 +118,30 @@ export async function changeOwnPassword(
   userId: number,
   currentPassword: string,
   newPassword: string,
-): Promise<{ ok: true } | { ok: false; error: "wrong" | "short" }> {
-  if (newPassword.trim().length < 6) {
+): Promise<{ ok: true } | { ok: false; error: "wrong" | "short" | "failed" }> {
+  if (newPassword.trim().length < 10) {
     return { ok: false, error: "short" };
   }
   await dbReady;
+  if (dbMode === "postgres") {
+    // Verified, hashed and session-revoked on the server — never in the browser.
+    try {
+      const r = await fetch("/api/auth/password", {
+        method: "POST",
+        credentials: "same-origin",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ currentPassword, newPassword }),
+      });
+      const data = (await r.json().catch(() => ({}))) as { ok?: boolean; error?: string };
+      if (r.ok && data.ok) return { ok: true };
+      if (data.error === "short") return { ok: false, error: "short" };
+      if (data.error === "wrong_current") return { ok: false, error: "wrong" };
+      return { ok: false, error: "failed" };
+    } catch {
+      return { ok: false, error: "failed" };
+    }
+  }
+  // Local PGlite demo mode (dev only): data never leaves this browser.
   const rows = (await db
     .select()
     .from(schema.users)

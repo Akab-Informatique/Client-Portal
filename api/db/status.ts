@@ -89,6 +89,13 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       });
     }
 
+    // Running migrations/bootstrap is privileged: staff session, or loopback
+    // inside the container (upgrade.sh uses docker compose exec). Migrations
+    // also run automatically at every boot.
+    if (wantMigrate && !staff && !isLoopback) {
+      return res.status(403).json({ ok: false, error: "forbidden" });
+    }
+
     if (wantMigrate && isPostgresConfigured()) {
       try {
         await withDeadline(

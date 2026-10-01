@@ -81,19 +81,16 @@ docker compose up -d --build
 curl -sS -m 8  "http://127.0.0.1:3000/api/health?db=1"
 curl -sS -m 30 "http://127.0.0.1:3000/api/db/status?migrate=1"
 # → http://localhost:3000
-# Login: admin@akab.local / admin123
+# Login: admin@akab.local — one-time password: docker compose logs app | grep one-time
 # Data volume akab_pgdata survives upgrades — NEVER: docker compose down -v
 # Upgrade: bash scripts/upgrade.sh
 ```
 
 Full guide: **[INSTALL.md](./INSTALL.md)**.
 
-### Option C — Vercel
-
-1. Import the GitHub repo in Vercel.
-2. Framework preset: **Vite** (or leave auto).
-3. Add environment variables from `.env.example` in Project → Settings → Environment Variables.
-4. Deploy. `vercel.json` rewrites SPA routes and keeps `/api/*` as serverless functions.
+> **Vercel / serverless hosting is not supported.** The login and tenant
+> checks (`api/_lib/api-gate.ts`) run in `server/prod-server.mjs`; deploying
+> `api/*` as standalone functions would expose integration data without login.
 
 ---
 

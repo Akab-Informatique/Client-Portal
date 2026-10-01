@@ -220,7 +220,11 @@ export function ProfilePage() {
       mobile: form.mobile,
       bio: form.bio,
       locale: form.locale,
-      itglue_user_id: form.itglue_user_id,
+      // MyGlue/IT Glue link decides which vault entries are visible — only
+      // staff may change it (clients: Clients → Edit user).
+      ...(user.role === "client"
+        ? {}
+        : { itglue_user_id: form.itglue_user_id }),
       board_email_opt_in: form.board_email_opt_in,
     });
     setSaving(false);
@@ -255,7 +259,9 @@ export function ProfilePage() {
       setPwErr(
         res.error === "short"
           ? t("profile.passwordTooShort")
-          : t("profile.wrongPassword"),
+          : res.error === "wrong"
+            ? t("profile.wrongPassword")
+            : t("profile.passwordChangeFailed"),
       );
       return;
     }
@@ -561,6 +567,7 @@ export function ProfilePage() {
                     inputMode="numeric"
                     placeholder={t("profile.itglueUserIdPh")}
                     value={form.itglue_user_id}
+                    disabled={user?.role === "client"}
                     onChange={(e) =>
                       setForm((f) => ({
                         ...f,
