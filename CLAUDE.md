@@ -16,7 +16,7 @@ Integrations: Autotask, Microsoft Graph/SharePoint, IT Glue, SMTP, Datto RMM, Sp
 ## Session routine
 
 1. Start: `git pull` (on `master`), then `npm install` if `package-lock.json` changed.
-2. Run: `npm run dev` → http://localhost:5173. With no local Postgres, the app falls back to browser PGlite with seeded demo accounts (see `src/lib/seed.ts`).
+2. Run: `npm run dev` → http://localhost:5173. Sign-in always goes through `/api/auth/*`, which needs a Postgres reachable via `POSTGRES_*` (plus a real `SESSION_SECRET`) in a local `.env`; without it the UI loads but login returns 503. On an empty database the server seeds demo accounts (dev only) — then run `curl "http://127.0.0.1:5173/api/db/status?migrate=1"` once.
 3. Before committing: `npm run build` (typecheck + bundle) must pass.
 4. End: commit with a conventional message (`feat:`, `fix:`, `chore:` …) and `git push`.
 
