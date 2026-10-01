@@ -11,12 +11,12 @@ Integrations: Autotask, Microsoft Graph/SharePoint, IT Glue, SMTP, Datto RMM, Sp
 - Risky or multi-day work goes on a feature branch (`feat/...`, `fix/...`) and is merged into `master` when ready.
 - **Never force-push `master`.** `upgrade.sh` falls back to `git reset --hard origin/master`, so rewritten history lands on the server.
 - Tag releases before deploying them: `git tag -a v1.x.y -m "..." && git push origin v1.x.y`. Rollback on the server: `bash scripts/upgrade.sh v1.x.y`.
-- The app was originally built in Devs.ai, which may also push to `master`. Always `git pull` before starting work.
+- Development happens only in this local repo (Devs.ai is no longer used). Still `git pull` before starting work.
 
 ## Session routine
 
 1. Start: `git pull` (on `master`), then `npm install` if `package-lock.json` changed.
-2. Run: `npm run dev` → http://localhost:5173. With no local Postgres, the app falls back to browser PGlite with seeded demo accounts (listed on the login screen).
+2. Run: `npm run dev` → http://localhost:5173. With no local Postgres, the app falls back to browser PGlite with seeded demo accounts (see `src/lib/seed.ts`).
 3. Before committing: `npm run build` (typecheck + bundle) must pass.
 4. End: commit with a conventional message (`feat:`, `fix:`, `chore:` …) and `git push`.
 
@@ -53,4 +53,4 @@ Migrations must be **additive only**: `CREATE TABLE IF NOT EXISTS`, `ADD COLUMN 
 - `server/prod-server.mjs` production Node server (static `dist/` + `/api/*`)
 - `vite-plugins/` dev middleware mirroring the production API
 - `scripts/` server scripts: `upgrade.sh`, `backup-db.sh`, `restore-db.sh`, `debian-install.sh`
-- `dist/` is committed (Devs.ai habit); production rebuilds it in Docker anyway
+- `dist/` is build output and is git-ignored; Docker runs `npm run build`

@@ -64,9 +64,9 @@ function injectEnvFromFiles(root: string) {
  * matching Vercel serverless function shape (req, res).
  * Loads .env into process.env so API routes can read secrets.
  */
-export function appbuilderApiDevServer(): Plugin {
+export function apiDevServer(): Plugin {
   return {
-    name: "appbuilder-api-dev-server",
+    name: "akab-api-dev-server",
     configureServer(server) {
       const root = server.config.root || process.cwd();
       injectEnvFromFiles(root);

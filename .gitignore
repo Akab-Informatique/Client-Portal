@@ -1,8 +1,9 @@
 # Dependencies
 node_modules/
 
-# Build
+# Build (Docker runs npm run build — never commit output)
 build/
+dist/
 *.tsbuildinfo
 
 # Environment & secrets — never commit

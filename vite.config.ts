@@ -2,7 +2,7 @@ import { defineConfig, loadEnv } from "vite";
 import react from "@vitejs/plugin-react";
 import tailwindcss from "@tailwindcss/vite";
 import path from "path";
-import { appbuilderApiDevServer } from "./vite-plugins/appbuilder-api-dev-server";
+import { apiDevServer } from "./vite-plugins/api-dev-server";
 
 export default defineConfig(({ mode }) => {
   const env = loadEnv(mode, process.cwd(), "");
@@ -20,7 +20,7 @@ export default defineConfig(({ mode }) => {
       react(),
       tailwindcss(),
       // Dev-only: mount /api/* from api/ folder (same handlers as production)
-      !isProd && appbuilderApiDevServer(),
+      !isProd && apiDevServer(),
     ].filter(Boolean),
     resolve: {
       alias: { "@": path.resolve(__dirname, "./src") },
@@ -65,17 +65,14 @@ export default defineConfig(({ mode }) => {
       host: "0.0.0.0",
       port: 5173,
       strictPort: true,
-      // Dynamic preview hosts (sandbox) + any reverse-proxy hostname
-      allowedHosts: true,
-      // HMR over TLS proxy (sandbox). On bare localhost Vite falls back fine.
+      // Default Vite host check (localhost + IPs) — blocks DNS-rebinding
+      // access to the dev API. Behind a TLS dev proxy set VITE_HMR_CLIENT_PORT.
       hmr: process.env.VITE_HMR_CLIENT_PORT
         ? {
             clientPort: Number(process.env.VITE_HMR_CLIENT_PORT),
             protocol: process.env.VITE_HMR_PROTOCOL || "wss",
           }
-        : process.env.VERCEL || process.env.APPBUILDER
-          ? { clientPort: 443, protocol: "wss" }
-          : undefined,
+        : undefined,
     },
     preview: {
       host: "0.0.0.0",
