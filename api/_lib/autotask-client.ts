@@ -96,6 +96,7 @@ export function diagnoseAutotaskEnv(): {
   secretHasDollar: boolean;
   secretHasHash: boolean;
   secretLooksTruncated: boolean;
+  secretLooksExpanded: boolean;
   zonePinned: boolean;
 } {
   const integrationCode = cleanEnv(process.env.AUTOTASK_INTEGRATION_CODE);
@@ -166,6 +167,7 @@ export function diagnoseAutotaskEnv(): {
     secretHasDollar,
     secretHasHash,
     secretLooksTruncated,
+    secretLooksExpanded,
     zonePinned: Boolean(zone),
   };
 }
