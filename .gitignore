@@ -1,0 +1,56 @@
+# Dependencies
+node_modules/
+
+# Build (Docker runs npm run build — never commit output)
+build/
+dist/
+*.tsbuildinfo
+
+# Environment & secrets — never commit
+.env
+.env.local
+.env.*.local
+.env.development
+.env.production
+!.env.example
+
+# Logs & debug
+logs/
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# Editor / OS
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/*
+!.vscode/extensions.json
+
+# Claude Code — per-machine files (CLAUDE.md at repo root IS committed)
+.claude/launch.json
+.claude/settings.local.json
+*.swp
+*.swo
+
+# Test / coverage
+coverage/
+.nyc_output/
+
+# Vercel / local tooling
+.vercel
+.turbo
+
+# Sandbox / template internal
+.template-id
+user-uploads/
+
+# Optional local PGlite dumps if ever exported
+*.pglite
+data/
+workspace/
+sandbox/
+.codesandbox/
+.devcontainer/
