@@ -1,0 +1,86 @@
+import { Hono } from "hono";
+import { eq } from "drizzle-orm";
+import { z } from "zod";
+import { db, schema } from "../db/index.ts";
+import { auth, requireAuth, type AppEnv, type AuthContext } from "../lib/auth.ts";
+import { body, zName, zOptText } from "../lib/validate.ts";
+import { SYSTEM_ROLES } from "../../shared/permissions.ts";
+
+export type Me = Awaited<ReturnType<typeof loadMe>>;
+
+export async function loadMe(a: AuthContext) {
+  const u = a.user;
+  const d = db();
+  const [role] = u.roleId ? await d.select().from(schema.roles).where(eq(schema.roles.id, u.roleId)) : [];
+  const [client] = u.clientId ? await d.select().from(schema.clients).where(eq(schema.clients.id, u.clientId)) : [];
+  const [prefs] = await d.select().from(schema.userPreferences).where(eq(schema.userPreferences.userId, u.id));
+  const sys = role?.slug ? SYSTEM_ROLES.find((r) => r.slug === role.slug) : undefined;
+  return {
+    id: u.id,
+    email: u.email,
+    name: u.name,
+    kind: u.kind,
+    title: u.title,
+    phone: u.phone,
+    locale: u.locale,
+    notifyEmail: u.notifyEmail,
+    mfaEnabled: u.mfaEnabled,
+    role: role ? { id: role.id, slug: role.slug, name: role.name, nameEn: sys?.name.en ?? role.name } : null,
+    client: client ? { id: client.id, name: client.name } : null,
+    permissions: a.permissions,
+    isAdmin: a.isAdmin,
+    preferences: { dashboard: prefs?.dashboard ?? null, theme: prefs?.theme ?? "dark" },
+  };
+}
+
+const widget = z.object({
+  id: z.string().min(1).max(60),
+  type: z.string().min(1).max(60),
+  size: z.enum(["sm", "md", "lg"]),
+});
+
+export const meRoutes = new Hono<AppEnv>()
+  .use(requireAuth)
+  .get("/", async (c) => c.json(await loadMe(auth(c))))
+
+  .patch("/", async (c) => {
+    const a = auth(c);
+    const p = await body(
+      c,
+      z.object({
+        name: zName.optional(),
+        title: zOptText(120),
+        phone: zOptText(40),
+        locale: z.enum(["fr", "en"]).optional(),
+        notifyEmail: z.boolean().optional(),
+      }),
+    );
+    await db()
+      .update(schema.users)
+      .set({ ...p, updatedAt: new Date() })
+      .where(eq(schema.users.id, a.user.id));
+    return c.json({ ok: true });
+  })
+
+  .put("/preferences", async (c) => {
+    const a = auth(c);
+    const p = await body(
+      c,
+      z.object({
+        dashboard: z.array(widget).max(40).nullable().optional(),
+        theme: z.enum(["dark", "light", "system"]).optional(),
+      }),
+    );
+    await db()
+      .insert(schema.userPreferences)
+      .values({ userId: a.user.id, dashboard: p.dashboard ?? null, theme: p.theme ?? null })
+      .onConflictDoUpdate({
+        target: schema.userPreferences.userId,
+        set: {
+          ...(p.dashboard !== undefined ? { dashboard: p.dashboard } : {}),
+          ...(p.theme !== undefined ? { theme: p.theme } : {}),
+          updatedAt: new Date(),
+        },
+      });
+    return c.json({ ok: true });
+  });

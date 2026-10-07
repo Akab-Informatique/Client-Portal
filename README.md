@@ -1,9 +1,40 @@
-# AKAB Client Portal
+# AKAB Portal
 
-Fresh start (2026-10-05).
+Portal for the AKAB Informatique team and its clients: technician workspace,
+admin settings (technicians, clients, client users, roles and granular rights),
+customizable dashboard and a message board to clients. French / English.
 
-The previous version of the portal is preserved in this repository:
+The previous version is preserved in branch `backup/v1-original` and tag
+`backup-2026-10-05`.
 
-- Branch `backup/v1-original` and tag `backup-2026-10-05`: full code and history as of the restart
-- Branch `feat/modular-ui`: the modular UI redesign (module registry, Ctrl+K command palette, new login page)
-- Release tags `v1.x.y`: earlier releases
+## Stack
+
+| Part | Tech |
+|------|------|
+| Web | React 19, Vite, TypeScript, Tailwind 4, shadcn/ui, Motion, TanStack Query, i18next |
+| API | Hono on Node 22 (`server/`) — REST, server-side sessions, permission checks |
+| Data | PostgreSQL 16 + Drizzle ORM (migrations in `drizzle/`); PGlite locally |
+| Deploy | Docker Compose (`Dockerfile`, `docker-compose.yml`) — see [INSTALL.md](INSTALL.md) |
+
+## Develop
+
+```bash
+npm install
+npm run dev        # web http://localhost:5173 + API :3001 (embedded PGlite in .data/)
+npm test           # API tests (in-memory database)
+npm run build      # type-check + production bundle
+```
+
+Local demo accounts (development only): `admin@akab.local` and
+`tech@akab.local`, password `akab-dev-password`. MFA is required: scan the QR
+code with an authenticator app at first sign-in. Delete `.data/` to reset.
+
+## Layout
+
+```
+shared/permissions.ts   modules, rights, predefined roles (used by API and UI)
+server/                 API: routes/, lib/ (auth, crypto, mail), db/ (schema, seed)
+drizzle/                SQL migrations (npm run db:generate after schema changes)
+src/                    web app: layouts/, pages/, admin/, components/, i18n/
+tests/                  API tests (vitest)
+```

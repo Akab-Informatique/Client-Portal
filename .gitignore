@@ -54,3 +54,6 @@ workspace/
 sandbox/
 .codesandbox/
 .devcontainer/
+
+# Local dev database (PGlite) and generated dev secret
+.data/

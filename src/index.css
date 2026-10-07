@@ -1,0 +1,167 @@
+@import "tailwindcss";
+@import "tw-animate-css";
+@import "@fontsource-variable/bricolage-grotesque";
+@import "@fontsource/instrument-sans/400.css";
+@import "@fontsource/instrument-sans/500.css";
+@import "@fontsource/instrument-sans/600.css";
+@import "@fontsource-variable/jetbrains-mono";
+
+@custom-variant dark (&:is(.dark *));
+
+/*
+ * AKAB brand (akab.ca): ink #0a0a0b / #121317, paper #f4f4f1,
+ * gold gradient #ffe24a → #ffce1a → #f59410, display Bricolage Grotesque,
+ * body Instrument Sans. Dark is the default theme.
+ */
+:root {
+  --radius: 0.875rem;
+  --gold: #ffce1a;
+  --gold-2: #f59410;
+  --gold-light: #ffe24a;
+  --grad-gold: linear-gradient(160deg, #ffe24a 0%, #ffce1a 42%, #f59410 100%);
+  /* text on paper needs deeper amber for contrast */
+  --grad-gold-text: linear-gradient(160deg, #e0870a 0%, #c46a00 100%);
+
+  /* light theme (paper) */
+  --background: #f4f4f1;
+  --foreground: #16171b;
+  --card: #ffffff;
+  --card-foreground: #16171b;
+  --popover: #ffffff;
+  --popover-foreground: #16171b;
+  --primary: #f5a20f;
+  --primary-foreground: #1a1204;
+  --secondary: #ecece7;
+  --secondary-foreground: #16171b;
+  --muted: #ecece7;
+  --muted-foreground: #5a5c63;
+  --accent: #fff3c4;
+  --accent-foreground: #1a1204;
+  --destructive: #dc2626;
+  --border: rgba(12, 12, 14, 0.12);
+  --input: rgba(12, 12, 14, 0.16);
+  --ring: #f59410;
+  --success: #16a34a;
+  --sidebar: #ffffff;
+  --sidebar-foreground: #16171b;
+  --grid-line: rgba(12, 12, 14, 0.05);
+  --glow: rgba(245, 148, 16, 0.18);
+}
+
+.dark {
+  --background: #0a0a0b;
+  --foreground: #ededf0;
+  --card: #121317;
+  --card-foreground: #ededf0;
+  --popover: #15161b;
+  --popover-foreground: #ededf0;
+  --primary: #ffce1a;
+  --primary-foreground: #1a1204;
+  --secondary: #1a1b20;
+  --secondary-foreground: #ededf0;
+  --muted: #1a1b20;
+  --muted-foreground: #9a9ca4;
+  --accent: #23242b;
+  --accent-foreground: #ffe24a;
+  --destructive: #f05252;
+  --border: rgba(255, 255, 255, 0.09);
+  --input: rgba(255, 255, 255, 0.12);
+  --ring: #ffce1a;
+  --success: #34d399;
+  --sidebar: #0e0f12;
+  --sidebar-foreground: #ededf0;
+  --grid-line: rgba(255, 255, 255, 0.035);
+  --glow: rgba(255, 206, 26, 0.12);
+  --grad-gold-text: var(--grad-gold);
+}
+
+@theme inline {
+  --font-sans: "Instrument Sans", system-ui, sans-serif;
+  --font-display: "Bricolage Grotesque Variable", "Bricolage Grotesque", system-ui, sans-serif;
+  --font-mono: "JetBrains Mono Variable", ui-monospace, monospace;
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-destructive: var(--destructive);
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+  --color-success: var(--success);
+  --color-sidebar: var(--sidebar);
+  --color-sidebar-foreground: var(--sidebar-foreground);
+  --color-gold: var(--gold);
+  --color-gold-2: var(--gold-2);
+  --radius-sm: calc(var(--radius) - 6px);
+  --radius-md: calc(var(--radius) - 3px);
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) + 4px);
+}
+
+@layer base {
+  * {
+    @apply border-border outline-ring/50;
+  }
+  html {
+    color-scheme: dark;
+  }
+  html:not(.dark) {
+    color-scheme: light;
+  }
+  body {
+    @apply bg-background text-foreground font-sans antialiased;
+    font-feature-settings: "ss01";
+  }
+  h1, h2, h3, h4 {
+    @apply font-display tracking-tight;
+  }
+  ::selection {
+    background: color-mix(in oklab, var(--gold) 45%, transparent);
+  }
+}
+
+@layer utilities {
+  .bg-grad-gold {
+    background-image: var(--grad-gold);
+  }
+  .text-grad-gold {
+    background-image: var(--grad-gold-text);
+    -webkit-background-clip: text;
+    background-clip: text;
+    color: transparent;
+  }
+  /* Fine technical grid, like the akab.ca hero */
+  .bg-grid {
+    background-image:
+      linear-gradient(var(--grid-line) 1px, transparent 1px),
+      linear-gradient(90deg, var(--grid-line) 1px, transparent 1px);
+    background-size: 48px 48px;
+  }
+  .glow-gold {
+    box-shadow: 0 16px 34px -14px rgba(245, 148, 16, 0.55);
+  }
+  .ring-gold {
+    box-shadow: 0 0 0 1px color-mix(in oklab, var(--gold) 55%, transparent), 0 0 24px -6px var(--glow);
+  }
+  .scrollbar-thin {
+    scrollbar-width: thin;
+    scrollbar-color: color-mix(in oklab, var(--foreground) 18%, transparent) transparent;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    transition-duration: 0.01ms !important;
+  }
+}
