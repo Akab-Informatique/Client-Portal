@@ -315,6 +315,9 @@ const fr = {
   errors: {
     forbidden: "Vous n'avez pas accès à cette section.",
     notFound: "Page introuvable.",
+    serverDown: "Serveur du portail injoignable",
+    serverDownText: "Le serveur ne répond pas. Nouvel essai automatique toutes les 5 secondes. En développement, vérifiez la fenêtre « npm run dev ».",
+    retry: "Réessayer",
   },
 };
 

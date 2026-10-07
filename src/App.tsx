@@ -1,7 +1,8 @@
 import { lazy, Suspense } from "react";
 import { BrowserRouter, Navigate, Route, Routes } from "react-router-dom";
 import { useTranslation } from "react-i18next";
-import { Loader2, ShieldAlert } from "lucide-react";
+import { Loader2, RefreshCw, ShieldAlert } from "lucide-react";
+import { Button } from "@/components/ui/button";
 import { LoginPage } from "@/pages/LoginPage";
 import { LogoMark } from "@/components/brand/Logo";
 import { SessionProvider, useAuthState, useCan, useUnauthorizedListener } from "@/lib/session";
@@ -19,6 +20,23 @@ function Splash() {
     <div className="flex min-h-dvh flex-col items-center justify-center gap-4">
       <LogoMark className="h-12 animate-pulse" />
       <Loader2 className="size-5 animate-spin text-muted-foreground" />
+    </div>
+  );
+}
+
+/** Shown instead of an endless spinner when the API cannot be reached. */
+function ServerDown({ onRetry, retrying }: { onRetry: () => void; retrying: boolean }) {
+  const { t } = useTranslation();
+  return (
+    <div className="flex min-h-dvh flex-col items-center justify-center gap-5 px-6 text-center">
+      <LogoMark className="h-12" />
+      <div>
+        <h1 className="text-2xl font-bold">{t("errors.serverDown")}</h1>
+        <p className="mt-2 max-w-md text-sm text-muted-foreground">{t("errors.serverDownText")}</p>
+      </div>
+      <Button onClick={onRetry} disabled={retrying} variant="outline">
+        {retrying ? <Loader2 className="size-4 animate-spin" /> : <RefreshCw className="size-4" />} {t("errors.retry")}
+      </Button>
     </div>
   );
 }
@@ -63,7 +81,8 @@ function StaffApp() {
 
 function Root() {
   useUnauthorizedListener();
-  const { data, isLoading } = useAuthState();
+  const { data, isLoading, isError, refetch, isFetching } = useAuthState();
+  if (isError && !data) return <ServerDown onRetry={() => void refetch()} retrying={isFetching} />;
   if (isLoading || !data) return <Splash />;
   if (data.stage !== "ready") return <LoginPage stage={data.stage} email={data.me?.email} />;
   const me = data.me as Me;

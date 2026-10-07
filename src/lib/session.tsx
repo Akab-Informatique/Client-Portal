@@ -12,7 +12,10 @@ export function useAuthState() {
     queryKey: ["auth"],
     queryFn: () => api.get<AuthState>("/auth/me"),
     staleTime: 60_000,
-    retry: false,
+    retry: 2,
+    retryDelay: 800,
+    // While the server is unreachable, keep trying in the background
+    refetchInterval: (q) => (q.state.status === "error" ? 5000 : false),
   });
 }
 

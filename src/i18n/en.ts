@@ -317,6 +317,9 @@ const en: Dict = {
   errors: {
     forbidden: "You do not have access to this section.",
     notFound: "Page not found.",
+    serverDown: "Portal server unreachable",
+    serverDownText: "The server is not responding. Retrying automatically every 5 seconds. In development, check the “npm run dev” window.",
+    retry: "Retry",
   },
 };
 

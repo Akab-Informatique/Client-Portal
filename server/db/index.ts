@@ -35,6 +35,7 @@ export async function initDb(opts: { memory?: boolean } = {}): Promise<DB> {
       client = new PGlite();
     } else {
       fs.mkdirSync(config.db.pgliteDir, { recursive: true });
+      lockPglite(config.db.pgliteDir);
       client = new PGlite(config.db.pgliteDir);
     }
     const db = drizzlePglite(client, { schema });
@@ -43,6 +44,45 @@ export async function initDb(opts: { memory?: boolean } = {}): Promise<DB> {
     closeFn = () => client.close();
   }
   return current;
+}
+
+/**
+ * PGlite is single-process: two servers opening the same folder corrupt it.
+ * Refuse to start when another live process holds the lock.
+ */
+function lockPglite(dir: string) {
+  const lock = `${dir}.lock`;
+  try {
+    const pid = Number(fs.readFileSync(lock, "utf8").trim());
+    if (pid && pid !== process.pid && isAlive(pid)) {
+      console.error(
+        `\n[db] The local database (${dir}) is already used by another portal server (pid ${pid}).\n` +
+          `[db] Stop it first (close the other "npm run dev"), then start again.\n`,
+      );
+      process.exit(1);
+    }
+  } catch {
+    /* no lock yet */
+  }
+  fs.writeFileSync(lock, String(process.pid));
+  const release = () => {
+    try {
+      if (fs.readFileSync(lock, "utf8").trim() === String(process.pid)) fs.unlinkSync(lock);
+    } catch {
+      /* already gone */
+    }
+  };
+  process.once("exit", release);
+  for (const sig of ["SIGINT", "SIGTERM"] as const) process.once(sig, () => process.exit(0));
+}
+
+function isAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (e) {
+    return (e as NodeJS.ErrnoException).code === "EPERM";
+  }
 }
 
 export function db(): DB {
