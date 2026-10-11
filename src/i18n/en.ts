@@ -33,6 +33,7 @@ const en: Dict = {
     language: "Language",
   },
   login: {
+    brand: "Portal",
     tagline: "Outsourced IT department",
     heroTitle: "Your IT command center,",
     heroTitleAccent: "live.",

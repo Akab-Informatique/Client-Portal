@@ -8,6 +8,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { LogoMark } from "@/components/brand/Logo";
 import { InteractiveBackground } from "@/components/brand/InteractiveBackground";
+import { NocBackdrop } from "@/components/brand/NocBackdrop";
 import { LanguageToggle } from "@/components/LanguageToggle";
 import { api, ApiError } from "@/lib/api";
 import { signOut, useRefreshAuth } from "@/lib/session";
@@ -35,6 +36,9 @@ export function LoginPage({ stage, email }: { stage: Stage; email?: string }) {
       }}
     >
       <InteractiveBackground />
+      <NocBackdrop />
+      {/* keep the card the brightest thing on screen */}
+      <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(ellipse_520px_420px_at_center,rgba(10,10,11,0.75),transparent_70%)]" />
       <LanguageToggle className="absolute right-4 top-4 z-20 border-white/10 bg-white/5" />
 
       <motion.div
@@ -70,6 +74,7 @@ export function LoginPage({ stage, email }: { stage: Stage; email?: string }) {
 }
 
 function Brand() {
+  const { t } = useTranslation();
   return (
     <div className="flex flex-col items-center text-center">
       <motion.div
@@ -82,7 +87,7 @@ function Brand() {
         <LogoMark className="h-16 drop-shadow-[0_0_18px_rgba(255,206,26,0.45)]" />
       </motion.div>
       <h1 className="mt-5 font-display text-[2rem] font-extrabold leading-none tracking-tight">
-        <span className="text-grad-gold">AKAB</span> <span className="text-[#ededf0]">Portal</span>
+        <span className="text-grad-gold">AKAB</span> <span className="text-[#ededf0]">{t("login.brand")}</span>
       </h1>
     </div>
   );

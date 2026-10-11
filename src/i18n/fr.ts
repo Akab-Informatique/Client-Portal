@@ -31,6 +31,7 @@ const fr = {
     language: "Langue",
   },
   login: {
+    brand: "Portail",
     tagline: "Département TI externalisé",
     heroTitle: "Votre centre de commande",
     heroTitleAccent: "TI, en direct.",
