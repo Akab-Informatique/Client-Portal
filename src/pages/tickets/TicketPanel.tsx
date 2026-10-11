@@ -3,6 +3,7 @@ import { useTranslation } from "react-i18next";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { AnimatePresence, motion } from "motion/react";
 import { toast } from "sonner";
+import { Dialog as DialogPrimitive } from "radix-ui";
 import {
   Building2,
   CalendarClock,
@@ -12,6 +13,7 @@ import {
   Inbox,
   Lock,
   Mail,
+  Minus,
   MonitorCog,
   Phone,
   Send,
@@ -23,7 +25,6 @@ import {
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
-import { Sheet, SheetContent, SheetDescription, SheetTitle } from "@/components/ui/sheet";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Textarea } from "@/components/ui/textarea";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
@@ -35,11 +36,12 @@ import { dueState, longDateTime, PRIORITY_STYLE, STATUS_STYLE, usePresence, type
 const SOURCE_ICON: Record<TicketDetail["source"], LucideIcon> = { email: Mail, phone: Phone, portal: Inbox, monitoring: MonitorCog };
 
 /**
- * A ticket in a large side panel over the list. While it is open the portal
- * shows who else has it open: a popup when you arrive, then a light in the
- * corner (green = only you, orange = someone else too).
+ * A ticket over the whole screen. "Minimize" keeps it in the dock at the bottom
+ * (you stay on it: presence continues), "Close" leaves it. While it is open the
+ * portal shows who else has it open: a popup when you arrive, then a light in
+ * the top-right corner (green = only you, orange = someone else too).
  */
-export function TicketPanel({ id, onClose }: { id: number | null; onClose: () => void }) {
+export function TicketOverlay({ id, onClose, onMinimize }: { id: number | null; onClose: () => void; onMinimize: (tk: TicketDetail) => void }) {
   const { t } = useTranslation();
   const { data, isLoading } = useQuery({
     queryKey: ["tickets", "detail", id],
@@ -49,41 +51,65 @@ export function TicketPanel({ id, onClose }: { id: number | null; onClose: () =>
   const viewers = usePresence(id);
 
   return (
-    <Sheet open={Boolean(id)} onOpenChange={(o) => !o && onClose()}>
-      <SheetContent side="right" showCloseButton={false} className="w-full gap-0 overflow-y-auto p-0 sm:max-w-3xl">
-        {isLoading || !data ? (
-          <div className="space-y-4 p-6">
-            <SheetTitle className="sr-only">{t("tickets.title")}</SheetTitle>
-            <Skeleton className="h-6 w-40" />
-            <Skeleton className="h-9 w-3/4" />
-            <Skeleton className="h-64" />
-          </div>
-        ) : (
-          <TicketBody tk={data} viewers={viewers} onClose={onClose} />
+    <DialogPrimitive.Root open={Boolean(id)} onOpenChange={(o) => !o && onClose()}>
+      <AnimatePresence>
+        {id && (
+          <DialogPrimitive.Portal forceMount>
+            <DialogPrimitive.Content asChild forceMount aria-describedby={undefined}>
+              <motion.div
+                initial={{ opacity: 0, scale: 0.985, y: 12 }}
+                animate={{ opacity: 1, scale: 1, y: 0 }}
+                exit={{ opacity: 0, scale: 0.985, y: 24 }}
+                transition={{ duration: 0.22, ease: [0.22, 1, 0.36, 1] }}
+                className="fixed inset-0 z-50 flex flex-col overflow-hidden bg-background"
+              >
+                <div className="pointer-events-none absolute inset-x-0 top-0 h-72 bg-grid opacity-50 [mask-image:linear-gradient(to_bottom,black,transparent)]" />
+                {isLoading || !data ? (
+                  <div className="relative mx-auto w-full max-w-7xl space-y-4 p-8">
+                    <DialogPrimitive.Title className="sr-only">{t("tickets.title")}</DialogPrimitive.Title>
+                    <Skeleton className="h-6 w-40" />
+                    <Skeleton className="h-10 w-2/3" />
+                    <Skeleton className="h-96" />
+                  </div>
+                ) : (
+                  <TicketBody tk={data} viewers={viewers} onClose={onClose} onMinimize={() => onMinimize(data)} />
+                )}
+              </motion.div>
+            </DialogPrimitive.Content>
+          </DialogPrimitive.Portal>
         )}
-      </SheetContent>
-    </Sheet>
+      </AnimatePresence>
+    </DialogPrimitive.Root>
   );
 }
 
-function TicketBody({ tk, viewers, onClose }: { tk: TicketDetail; viewers: Viewer[] | null; onClose: () => void }) {
+function TicketBody({ tk, viewers, onClose, onMinimize }: { tk: TicketDetail; viewers: Viewer[] | null; onClose: () => void; onMinimize: () => void }) {
   const { t } = useTranslation();
   const due = dueState(tk.dueAt, tk.status);
   return (
     <>
       {/* Header */}
-      <div className="sticky top-0 z-10 border-b bg-background/85 px-6 pb-4 pt-5 backdrop-blur">
+      <div className="relative z-10 border-b bg-background/70 backdrop-blur-xl">
+        <div className="mx-auto w-full max-w-7xl px-6 pb-4 pt-4 lg:px-8">
         <div className="flex items-center gap-3">
-          <span className="font-mono text-xs text-muted-foreground">{tk.number}</span>
+          <span className="rounded-md border border-[color:var(--gold)]/30 bg-[color:var(--gold)]/10 px-2 py-0.5 font-mono text-xs text-primary">{tk.number}</span>
+          <span className="truncate text-xs text-muted-foreground">{tk.company.name}</span>
           <span className="ml-auto">
             <PresenceLight viewers={viewers} />
           </span>
-          <Button variant="ghost" size="icon" className="size-8" onClick={onClose} aria-label={t("common.close")}>
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <Button variant="outline" size="icon" className="size-9" onClick={onMinimize} aria-label={t("tickets.minimize")}>
+                <Minus className="size-4" />
+              </Button>
+            </TooltipTrigger>
+            <TooltipContent>{t("tickets.minimizeHint")}</TooltipContent>
+          </Tooltip>
+          <Button variant="outline" size="icon" className="size-9" onClick={onClose} aria-label={t("common.close")}>
             <X className="size-4" />
           </Button>
         </div>
-        <SheetTitle className="mt-1.5 text-xl font-bold leading-snug">{tk.title}</SheetTitle>
-        <SheetDescription className="sr-only">{tk.company.name}</SheetDescription>
+        <DialogPrimitive.Title className="mt-3 font-display text-2xl font-bold leading-snug sm:text-3xl">{tk.title}</DialogPrimitive.Title>
         <div className="mt-3 flex flex-wrap items-center gap-2">
           <span className={cn("inline-flex rounded-full border px-2.5 py-0.5 text-xs font-medium", STATUS_STYLE[tk.status])}>{t(`tickets.status.${tk.status}`)}</span>
           <span className={cn("inline-flex items-center gap-1.5 rounded-full border px-2.5 py-0.5 text-xs font-medium", PRIORITY_STYLE[tk.priority].text)}>
@@ -100,9 +126,11 @@ function TicketBody({ tk, viewers, onClose }: { tk: TicketDetail; viewers: Viewe
             {due === "overdue" ? t("tickets.overdue") : due === "today" ? t("tickets.today") : longDateTime(tk.dueAt)}
           </span>
         </div>
+        </div>
       </div>
 
-      <div className="grid gap-6 p-6 md:grid-cols-[minmax(0,1fr)_240px]">
+      <div className="relative flex-1 overflow-y-auto">
+      <div className="mx-auto grid w-full max-w-7xl gap-6 px-6 py-6 lg:grid-cols-[minmax(0,1fr)_320px] lg:px-8">
         {/* Conversation */}
         <div className="space-y-5">
           <section className="rounded-xl border bg-card/60 p-4">
@@ -160,6 +188,7 @@ function TicketBody({ tk, viewers, onClose }: { tk: TicketDetail; viewers: Viewe
           </dl>
           <StartDate tk={tk} />
         </aside>
+      </div>
       </div>
       <OpenedByOthers viewers={viewers} />
     </>

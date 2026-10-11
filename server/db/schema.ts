@@ -229,6 +229,21 @@ export const ticketMeta = pgTable("ticket_meta", {
   updatedAt: updated(),
 });
 
+/** A technician's saved ticket filters (the list's query string). */
+export const ticketFilters = pgTable(
+  "ticket_filters",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    userId: uuid("user_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    name: text("name").notNull(),
+    query: text("query").notNull(),
+    createdAt: created(),
+  },
+  (t) => [index("ticket_filters_user_idx").on(t.userId)],
+);
+
 /** One-time links to choose a password (forgotten password, welcome). Only the SHA-256 is stored. */
 export const passwordTokens = pgTable(
   "password_tokens",

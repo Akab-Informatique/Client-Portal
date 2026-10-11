@@ -824,3 +824,25 @@ describe("tickets: technicians added later", () => {
     expect(mine.items.every((t: any) => t.assignee?.id === created.json.user.id)).toBe(true);
   });
 });
+
+describe("tickets: metrics and saved filters", () => {
+  it("returns tile metrics and keeps each technician's filters private", async () => {
+    resetRateLimit("login:ip:unknown");
+    const tech = await signIn("tech@akab.local");
+    const list = (await tech.get("/api/tickets")).json;
+    expect(Object.keys(list.metrics).sort()).toEqual(["critical", "dueToday", "mine", "newToday", "overdue", "unassigned"]);
+    expect(list.metrics.mine).toBe(list.counts.mine);
+
+    const saved = await tech.post("/api/tickets/filters", { name: "Critiques réseau", query: "view=all&priority=critical&queue=R%C3%A9seau&evil=1" });
+    expect(saved.status).toBe(201);
+    expect(saved.json.query).toBe("view=all&priority=critical&queue=R%C3%A9seau");
+    expect((await tech.get("/api/tickets/filters")).json.map((f: any) => f.name)).toEqual(["Critiques réseau"]);
+
+    const admin = await signIn("admin@akab.local");
+    expect((await admin.get("/api/tickets/filters")).json).toEqual([]);
+    await admin.del(`/api/tickets/filters/${saved.json.id}`); // not theirs: no effect
+    expect((await tech.get("/api/tickets/filters")).json).toHaveLength(1);
+    await tech.del(`/api/tickets/filters/${saved.json.id}`);
+    expect((await tech.get("/api/tickets/filters")).json).toEqual([]);
+  });
+});

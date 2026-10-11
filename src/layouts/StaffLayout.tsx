@@ -42,6 +42,7 @@ import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip
 import { NAV_SECTIONS, STAFF_MODULES, type NavModule } from "@/modules/registry";
 import { signOut, useCan, useMe } from "@/lib/session";
 import { cn, initials } from "@/lib/utils";
+import { TicketWorkspaceProvider } from "@/pages/tickets/workspace";
 
 const AdminOverlay = lazy(() => import("@/admin/AdminOverlay").then((m) => ({ default: m.AdminOverlay })));
 
@@ -83,6 +84,7 @@ export function StaffLayout() {
   const adminSection = params.get("admin");
 
   return (
+    <TicketWorkspaceProvider enabled={me.permissions.includes("tickets.view")}>
     <div className="flex min-h-dvh bg-background">
       <motion.aside
         animate={{ width: collapsed ? 76 : 256 }}
@@ -127,6 +129,7 @@ export function StaffLayout() {
         </Suspense>
       )}
     </div>
+    </TicketWorkspaceProvider>
   );
 }
 

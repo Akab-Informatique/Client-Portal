@@ -16,6 +16,7 @@ import { body } from "../lib/validate.ts";
 const zDate = z.string().regex(/^\d{4}-\d{2}-\d{2}$/);
 const STATUSES = ["new", "inProgress", "waitingCustomer", "waitingVendor", "scheduled", "complete"] as const;
 const PRIORITIES = ["critical", "high", "medium", "low"] as const;
+const FILTER_PARAMS = ["view", "q", "due", "created", "status", "priority", "company", "queue", "dueFrom", "dueTo", "startFrom", "startTo", "sort"];
 
 // ── Presence: who has a ticket open right now (in memory, 30 s heartbeat) ─────
 const PRESENCE_TTL = 30_000;
@@ -106,6 +107,12 @@ export const ticketRoutes = new Hono<AppEnv>()
       .filter((t) => !company.length || company.includes(t.company.id))
       .filter((t) => !text || `${t.number} ${t.title} ${t.company.name} ${t.contact}`.toLowerCase().includes(text))
       .filter((t) => inRange(t.dueAt, q.dueFrom, q.dueTo))
+      // Tiles: "due=overdue|today" (to the minute) and "created=today"
+      .filter((t) => {
+        const d = new Date(t.dueAt).getTime();
+        return q.due === "overdue" ? d < Date.now() : q.due === "today" ? d >= Date.now() && d <= eod : true;
+      })
+      .filter((t) => q.created !== "today" || new Date(t.createdAt).toDateString() === new Date().toDateString())
       // Portal-only filter: Autotask has no start date
       .filter((t) => inRange(starts.get(t.id), q.startFrom, q.startTo))
       .map((t) => summary(t, starts.get(t.id), me));
@@ -122,12 +129,64 @@ export const ticketRoutes = new Hono<AppEnv>()
             : x.dueAt.localeCompare(y.dueAt),
     );
 
+    // Key figures for the tiles (whole set, not the current filters)
+    const mineOpen = all.filter(views.mine);
+    const startOfToday = new Date();
+    startOfToday.setHours(0, 0, 0, 0);
+    const metrics = {
+      mine: mineOpen.length,
+      overdue: mineOpen.filter((t) => new Date(t.dueAt).getTime() < Date.now()).length,
+      dueToday: mineOpen.filter((t) => {
+        const d = new Date(t.dueAt).getTime();
+        return d >= Date.now() && d <= eod;
+      }).length,
+      critical: all.filter((t) => open(t) && (t.priority === "critical" || t.priority === "high")).length,
+      unassigned: all.filter(views.unassigned).length,
+      newToday: all.filter((t) => new Date(t.createdAt) >= startOfToday).length,
+    };
+
     return c.json({
       demo: true,
+      metrics,
       items,
       counts: Object.fromEntries(Object.entries(views).map(([k, f]) => [k, all.filter(f).filter((t) => k === "all" || open(t)).length])),
       facets: { queues: QUEUES, companies: demoCompanies(), statuses: STATUSES, priorities: PRIORITIES, technicians: staff },
     });
+  })
+
+  // ── Saved filters (per technician) ──
+  .get("/filters", async (c) => {
+    const a = auth(c);
+    const rows = await db()
+      .select({ id: schema.ticketFilters.id, name: schema.ticketFilters.name, query: schema.ticketFilters.query })
+      .from(schema.ticketFilters)
+      .where(eq(schema.ticketFilters.userId, a.user.id))
+      .orderBy(asc(schema.ticketFilters.name));
+    return c.json(rows);
+  })
+  .post("/filters", async (c) => {
+    const a = auth(c);
+    const p = await body(c, z.object({ name: z.string().trim().min(1).max(60), query: z.string().max(1000) }));
+    // Keep only known list parameters
+    const src = new URLSearchParams(p.query);
+    const clean = new URLSearchParams();
+    for (const k of FILTER_PARAMS) {
+      const v = src.get(k);
+      if (v) clean.set(k, v.slice(0, 300));
+    }
+    const count = await db().select({ id: schema.ticketFilters.id }).from(schema.ticketFilters).where(eq(schema.ticketFilters.userId, a.user.id));
+    if (count.length >= 30) throw new HTTPException(409, { message: "too_many_filters" });
+    const [row] = await db()
+      .insert(schema.ticketFilters)
+      .values({ userId: a.user.id, name: p.name, query: clean.toString() })
+      .returning({ id: schema.ticketFilters.id, name: schema.ticketFilters.name, query: schema.ticketFilters.query });
+    return c.json(row, 201);
+  })
+  .delete("/filters/:fid", async (c) => {
+    const a = auth(c);
+    const fid = z.uuid().parse(c.req.param("fid"));
+    await db().delete(schema.ticketFilters).where(and(eq(schema.ticketFilters.id, fid), eq(schema.ticketFilters.userId, a.user.id)));
+    return c.json({ ok: true });
   })
 
   .get("/:id", async (c) => {

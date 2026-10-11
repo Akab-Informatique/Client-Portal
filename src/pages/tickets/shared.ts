@@ -30,6 +30,7 @@ export type TicketDetail = TicketSummary & {
 };
 export type TicketList = {
   demo: boolean;
+  metrics: { mine: number; overdue: number; dueToday: number; critical: number; unassigned: number; newToday: number };
   items: TicketSummary[];
   counts: Record<View, number>;
   facets: { queues: string[]; companies: { id: number; name: string }[]; statuses: Status[]; priorities: Priority[]; technicians: { id: string; name: string }[] };
@@ -38,7 +39,7 @@ export type View = "mine" | "unassigned" | "due" | "all";
 export const VIEWS: View[] = ["mine", "unassigned", "due", "all"];
 
 /** Filters kept in the address bar (shareable, survive a refresh). */
-export const FILTER_KEYS = ["q", "status", "priority", "company", "queue", "dueFrom", "dueTo", "startFrom", "startTo", "sort"] as const;
+export const FILTER_KEYS = ["q", "due", "created", "status", "priority", "company", "queue", "dueFrom", "dueTo", "startFrom", "startTo", "sort"] as const;
 
 export const PRIORITY_STYLE: Record<Priority, { bar: string; text: string; dot: string }> = {
   critical: { bar: "bg-red-500", text: "text-red-400", dot: "bg-red-500" },
