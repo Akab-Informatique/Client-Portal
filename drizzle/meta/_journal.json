@@ -50,6 +50,13 @@
       "when": 1791745451302,
       "tag": "0006_autotask",
       "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "7",
+      "when": 1791747903329,
+      "tag": "0007_email",
+      "breakpoints": true
     }
   ]
 }

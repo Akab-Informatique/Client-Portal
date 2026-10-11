@@ -9,6 +9,7 @@ const { initDb, db, schema } = await import("../server/db/index.ts");
 const { seed } = await import("../server/db/seed.ts");
 const { createApp } = await import("../server/app.ts");
 const { eq } = await import("drizzle-orm");
+const { resetRateLimit } = await import("../server/lib/http.ts");
 
 let app: ReturnType<typeof createApp>;
 const PASSWORD = "akab-dev-password";
@@ -59,6 +60,8 @@ function code(secret: string, offsetSteps = 0) {
 /** Full sign-in incl. MFA enrollment/challenge. Each call uses a fresh time-step. */
 async function signIn(email: string, password = PASSWORD): Promise<Agent> {
   const a = new Agent();
+  // The suite signs in more often than the per-IP login limit allows (tests share one IP)
+  resetRateLimit("login:ip:unknown");
   const r = await a.post("/api/auth/login", { email, password });
   expect(r.status).toBe(200);
   if (r.json.stage === "mfa-setup") {
@@ -635,5 +638,100 @@ describe("autotask integration", () => {
     expect((await admin.put(`/api/admin/integrations/autotask/links/${adminRow.id}`, { resourceId: 123 })).json.error).toBe("autotask_unknown_resource");
     expect((await admin.put(`/api/admin/integrations/autotask/links/${adminRow.id}`, { resourceId: 29682886 })).status).toBe(200);
     expect((await admin.put(`/api/admin/integrations/autotask/links/${adminRow.id}`, { resourceId: null })).status).toBe(200);
+  });
+});
+
+describe("forgotten password and email", () => {
+  const sessions = new Map<string, Agent>();
+  const session = async (email: string) => sessions.get(email) ?? sessions.set(email, await signIn(email)).get(email)!;
+  const outbox = async () => (await import("../server/lib/mail.ts")).devOutbox;
+  const lastLink = async (to: string) => {
+    const m = [...(await outbox())].reverse().find((x) => x.to === to);
+    return m?.text.match(/token=([A-Za-z0-9_-]+)/)?.[1] ?? null;
+  };
+  const wait = () => new Promise((r) => setTimeout(r, 50));
+
+  it("answers the same for unknown addresses and emails a single-use link", async () => {
+    const anon = new Agent();
+    const box = await outbox();
+    const before = box.length;
+    expect((await anon.post("/api/auth/forgot", { email: "nobody@nowhere.test" })).json).toEqual({ ok: true });
+    await wait();
+    expect(box.length).toBe(before);
+
+    expect((await anon.post("/api/auth/forgot", { email: "TECH@akab.local" })).json).toEqual({ ok: true });
+    await wait();
+    const mail = box[box.length - 1];
+    expect(mail.to).toBe("tech@akab.local");
+    expect(mail.subject).toBe("Réinitialisation de votre mot de passe");
+    expect(mail.html).toContain("Réinitialiser mon mot de passe");
+    const token = (await lastLink("tech@akab.local"))!;
+    expect(token).toBeTruthy();
+    // only the hash is stored
+    const rows = await db().select().from(schema.passwordTokens);
+    expect(JSON.stringify(rows)).not.toContain(token);
+
+    expect((await anon.post("/api/auth/reset/check", { token })).json).toEqual({ valid: true, purpose: "reset" });
+    expect((await anon.post("/api/auth/reset", { token, password: "court" })).json.error).toBe("password_short");
+    expect((await anon.post("/api/auth/reset", { token, password: "un-nouveau-mot-de-passe" })).status).toBe(200);
+    expect((await anon.post("/api/auth/reset", { token, password: "encore-un-autre-mdp" })).json.error).toBe("invalid_token");
+    expect((await anon.post("/api/auth/reset/check", { token })).json).toEqual({ valid: false });
+    await wait();
+    expect(box[box.length - 1].subject).toBe("Votre mot de passe a été modifié");
+
+    // the new password works (MFA still applies), then put the demo password back
+    const again = new Agent();
+    expect((await again.post("/api/auth/login", { email: "tech@akab.local", password: "un-nouveau-mot-de-passe" })).status).toBe(200);
+    await anon.post("/api/auth/forgot", { email: "tech@akab.local" });
+    await wait();
+    expect((await anon.post("/api/auth/reset", { token: await lastLink("tech@akab.local"), password: PASSWORD })).status).toBe(200);
+  });
+
+  it("sends a welcome link when creating an account, and admins can send a reset link", async () => {
+    const admin = await session("admin@akab.local");
+    const roles = (await admin.get("/api/admin/roles")).json;
+    const techRole = roles.find((r: any) => r.slug === "technician");
+    const r = await admin.post("/api/admin/staff", { email: "nouveau@akab.local", name: "Nouveau Tech", roleId: techRole.id, sendWelcome: true });
+    expect(r.json.welcomeSent).toBe(true);
+    await wait();
+    const box = await outbox();
+    expect(box[box.length - 1]).toMatchObject({ to: "nouveau@akab.local", subject: "Bienvenue sur le portail AKAB" });
+    const token = (await lastLink("nouveau@akab.local"))!;
+    expect((await new Agent().post("/api/auth/reset/check", { token })).json.purpose).toBe("welcome");
+
+    expect((await admin.post(`/api/admin/users/${r.json.user.id}/send-reset-link`)).status).toBe(200);
+    // the new link replaces the welcome link
+    expect((await new Agent().post("/api/auth/reset/check", { token })).json.valid).toBe(false);
+  });
+
+  it("email settings: admin.email only, password never returned, templates editable", async () => {
+    const tech = await session("tech@akab.local");
+    expect((await tech.get("/api/admin/email/smtp")).status).toBe(403);
+    const admin = await session("admin@akab.local");
+
+    const s = await admin.put("/api/admin/email/smtp", {
+      host: "smtp.example.com", port: 587, security: "starttls", user: "portail@akab.ca", pass: "smtp-secret-value", from: "portail@akab.ca", fromName: "AKAB",
+    });
+    expect(s.json).toMatchObject({ source: "database", host: "smtp.example.com", hasPassword: true });
+    expect(JSON.stringify(s.json)).not.toContain("smtp-secret-value");
+    const [row] = await db().select().from(schema.integrations).where(eq(schema.integrations.provider, "smtp"));
+    expect(JSON.stringify(row)).not.toContain("smtp-secret-value");
+    expect((await admin.del("/api/admin/email/smtp")).json.source).toBe("none");
+
+    const list = (await admin.get("/api/admin/email/templates")).json;
+    expect(list.map((x: any) => x.key)).toEqual(["welcome", "passwordReset", "passwordChanged", "boardMessage"]);
+
+    const edited = { subject: "Bonjour {{name}}", body: "Allo {{name}} <script>", action: "Go" };
+    const prev = (await admin.post("/api/admin/email/templates/passwordReset/fr/preview", edited)).json;
+    expect(prev.subject).toBe("Bonjour Marie Tremblay");
+    expect(prev.html).toContain("Allo Marie Tremblay &lt;script&gt;");
+    expect((await admin.put("/api/admin/email/templates/passwordReset/fr", edited)).status).toBe(200);
+    const one = (await admin.get("/api/admin/email/templates/passwordReset")).json;
+    expect(one.locales.fr.edited).toBe(true);
+    expect(one.locales.fr.current.subject).toBe("Bonjour {{name}}");
+    expect(one.locales.en.edited).toBe(false);
+    expect((await admin.del("/api/admin/email/templates/passwordReset/fr")).status).toBe(200);
+    expect((await admin.get("/api/admin/email/templates/passwordReset")).json.locales.fr.current.subject).toBe("Réinitialisation de votre mot de passe");
+    expect((await admin.get("/api/admin/email/templates/nope")).status).toBe(404);
   });
 });

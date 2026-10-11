@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState, type FormEvent } from "react";
 import { useTranslation } from "react-i18next";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
-import { Check, Copy, KeyRound, Loader2, LockOpen, ShieldCheck, ShieldOff, UserRoundX, UserRoundCheck } from "lucide-react";
+import { Check, Copy, KeyRound, Loader2, LockOpen, ShieldCheck, ShieldOff, UserRoundX, UserRoundCheck, MailCheck } from "lucide-react";
 import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from "@/components/ui/sheet";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
@@ -116,7 +116,7 @@ export function NewUserDialog({
   const errText = useAdminError();
   const { data: roles = [] } = useRoles();
   const defaultRole = roles.find((r) => r.slug === (kind === "staff" ? "technician" : "client-user"))?.id ?? null;
-  const empty = { email: "", name: "", title: "", phone: "", roleId: defaultRole, locale: "fr" as "fr" | "en", notifyEmail: true };
+  const empty = { email: "", name: "", title: "", phone: "", roleId: defaultRole, locale: "fr" as "fr" | "en", notifyEmail: true, sendWelcome: true };
   const [form, setForm] = useState(empty);
   const [temp, setTemp] = useState<{ password: string; email: string } | null>(null);
   useEffect(() => {
@@ -126,11 +126,19 @@ export function NewUserDialog({
 
   const create = useMutation({
     mutationFn: () =>
-      api.post<{ user: AdminUser; temporaryPassword: string }>(kind === "staff" ? "/admin/staff" : `/admin/clients/${clientId}/users`, form),
+      api.post<{ user: AdminUser; temporaryPassword: string; welcomeSent: boolean }>(
+        kind === "staff" ? "/admin/staff" : `/admin/clients/${clientId}/users`,
+        form,
+      ),
     onSuccess: (r) => {
       invalidateUsers(qc);
       onOpenChange(false);
-      setTemp({ password: r.temporaryPassword, email: r.user.email });
+      // With the welcome email the person chooses their own password; otherwise show the temporary one
+      if (r.welcomeSent) toast.success(t("admin.users.welcomeSent", { email: r.user.email }));
+      else {
+        if (form.sendWelcome) toast.error(t("admin.users.welcomeFailed"));
+        setTemp({ password: r.temporaryPassword, email: r.user.email });
+      }
     },
     onError: (e) => toast.error(errText(e)),
   });
@@ -187,6 +195,13 @@ export function NewUserDialog({
                 <Switch checked={form.notifyEmail} onCheckedChange={(v) => setForm({ ...form, notifyEmail: v })} />
               </label>
             )}
+            <label className="flex items-center justify-between gap-4 rounded-lg border p-3 text-sm">
+              <span>
+                <span className="block font-medium">{t("admin.users.sendWelcome")}</span>
+                <span className="block text-xs text-muted-foreground">{t("admin.users.sendWelcomeText")}</span>
+              </span>
+              <Switch checked={form.sendWelcome} onCheckedChange={(v) => setForm({ ...form, sendWelcome: v })} />
+            </label>
             <div className="flex justify-end gap-2">
               <Button type="button" variant="ghost" onClick={() => onOpenChange(false)}>{t("common.cancel")}</Button>
               <Button type="submit" disabled={create.isPending}>
@@ -396,6 +411,11 @@ function SecurityTab({ user }: { user: AdminUser }) {
     },
     onError: (e) => toast.error(errText(e)),
   });
+  const sendLink = useMutation({
+    mutationFn: () => api.post(`/admin/users/${user.id}/send-reset-link`),
+    onSuccess: () => toast.success(t("admin.users.resetLinkSent", { email: user.email })),
+    onError: (e) => toast.error(errText(e)),
+  });
   const resetMfa = useMutation({
     mutationFn: () => api.post(`/admin/users/${user.id}/reset-mfa`),
     onSuccess: () => {
@@ -424,6 +444,9 @@ function SecurityTab({ user }: { user: AdminUser }) {
         ))}
       </dl>
       <div className="grid gap-2">
+        <Button variant="outline" className="justify-start" disabled={!user.active || sendLink.isPending} onClick={() => sendLink.mutate()}>
+          {sendLink.isPending ? <Loader2 className="size-4 animate-spin" /> : <MailCheck className="size-4" />} {t("admin.users.sendResetLink")}
+        </Button>
         <Button variant="outline" className="justify-start" onClick={() => window.confirm(t("admin.users.resetPasswordConfirm")) && resetPw.mutate()}>
           <KeyRound className="size-4" /> {t("admin.users.resetPassword")}
         </Button>

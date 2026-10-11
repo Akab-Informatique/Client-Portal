@@ -6,7 +6,7 @@ import { db, schema } from "../db/index.ts";
 import { config } from "../config.ts";
 import { auth, requirePermission, type AppEnv } from "../lib/auth.ts";
 import { audit } from "../lib/audit.ts";
-import { escapeHtml, sendMail } from "../lib/mail.ts";
+import { sendTemplate } from "../lib/mail.ts";
 import { notifyMessagePosted } from "../lib/notify.ts";
 import { body, zUuid } from "../lib/validate.ts";
 
@@ -61,22 +61,9 @@ async function emailRecipients(audience: "all" | "selected", clientIds: string[]
 async function sendCopies(message: MessageRow, clientIds: string[]): Promise<number> {
   const recipients = await emailRecipients(message.audience, clientIds);
   let sent = 0;
-  const link = config.publicUrl ? `${config.publicUrl}/` : "";
+  const portal = config.publicUrl ? `${config.publicUrl}/` : "";
   for (const r of recipients) {
-    const fr = r.locale !== "en";
-    const intro = fr ? "Nouveau message d'AKAB Informatique" : "New message from AKAB Informatique";
-    const cta = fr ? "Ouvrir le portail" : "Open the portal";
-    const ok = await sendMail({
-      to: r.email,
-      subject: `[AKAB] ${message.title}`,
-      text: `${intro}\n\n${message.title}\n\n${message.body}\n\n${link ? `${cta}: ${link}` : ""}`,
-      html: `<div style="font-family:Arial,sans-serif;max-width:560px">
-  <p style="color:#5a5c63;font-size:13px">${escapeHtml(intro)}</p>
-  <h2 style="margin:8px 0 12px;color:#16171b">${escapeHtml(message.title)}</h2>
-  <div style="white-space:pre-wrap;color:#16171b;line-height:1.5">${escapeHtml(message.body)}</div>
-  ${link ? `<p style="margin-top:24px"><a href="${escapeHtml(link)}" style="background:#ffce1a;color:#1a1204;padding:10px 18px;border-radius:10px;text-decoration:none;font-weight:600">${escapeHtml(cta)}</a></p>` : ""}
-</div>`,
-    });
+    const ok = await sendTemplate("boardMessage", r, { name: r.name, title: message.title, body: message.body, portalUrl: portal });
     if (ok) sent++;
   }
   await db().update(schema.messages).set({ emailSent: sent }).where(eq(schema.messages.id, message.id));

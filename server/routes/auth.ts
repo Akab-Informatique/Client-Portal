@@ -21,6 +21,7 @@ import { body, zEmail } from "../lib/validate.ts";
 import { audit } from "../lib/audit.ts";
 import { loadMe } from "./me.ts";
 import { notifyUserLocked } from "../lib/notify.ts";
+import { consumePasswordLink, findPasswordLink, sendPasswordChanged, sendPasswordLink } from "../lib/passwordLinks.ts";
 
 const LOCK_AFTER = 10;
 const LOCK_MINUTES = 15;
@@ -139,7 +140,68 @@ export const authRoutes = new Hono<AppEnv>()
       .where(eq(schema.users.id, a.user.id));
     await revokeUserSessions(a.user.id, a.sessionId);
     await audit(a.user.id, "password.changed", a.user.id);
+    void sendPasswordChanged(a.user, c).catch(() => undefined);
     return c.json({ stage: "ready" });
+  })
+
+  /**
+   * Forgotten password: always the same answer, whether the address exists or
+   * not (no account discovery). The email goes out in the background.
+   */
+  .post("/forgot", async (c) => {
+    const { email } = await body(c, z.object({ email: zEmail }));
+    const byIp = rateLimit(`forgot:ip:${clientIp(c)}`, 10, 15 * 60_000);
+    if (!byIp.ok) {
+      c.header("Retry-After", String(byIp.retryAfter));
+      throw new HTTPException(429, { message: "rate_limited" });
+    }
+    // 3 emails per address per 15 min; above that, silently ignored
+    if (rateLimit(`forgot:email:${email}`, 3, 15 * 60_000).ok) {
+      const [user] = await db()
+        .select()
+        .from(schema.users)
+        .where(sql`lower(${schema.users.email}) = ${email}`);
+      if (user?.active) {
+        void sendPasswordLink(user, "reset", c)
+          .then(() => audit(null, "password.reset_requested", user.id))
+          .catch((e) => console.error("[auth] reset email failed", e instanceof Error ? e.message : e));
+      }
+    }
+    return c.json({ ok: true });
+  })
+
+  /** Is this password link still valid? (the page shows the form or an error) */
+  .post("/reset/check", async (c) => {
+    const { token } = await body(c, z.object({ token: z.string().max(200) }));
+    const lim = rateLimit(`reset:ip:${clientIp(c)}`, 30, 15 * 60_000);
+    if (!lim.ok) throw new HTTPException(429, { message: "rate_limited" });
+    const row = await findPasswordLink(token);
+    return c.json(row ? { valid: true, purpose: row.purpose } : { valid: false });
+  })
+
+  /**
+   * Choose a new password from an emailed link. Signs out every session; the
+   * person then signs in normally (MFA still applies).
+   */
+  .post("/reset", async (c) => {
+    const { token, password } = await body(c, z.object({ token: z.string().max(200), password: z.string().max(200) }));
+    const lim = rateLimit(`reset:ip:${clientIp(c)}`, 30, 15 * 60_000);
+    if (!lim.ok) throw new HTTPException(429, { message: "rate_limited" });
+    const row = await findPasswordLink(token);
+    if (!row) throw new HTTPException(400, { message: "invalid_token" });
+    const problem = passwordProblem(password);
+    if (problem) throw new HTTPException(400, { message: `password_${problem}` });
+    const [user] = await db().select().from(schema.users).where(eq(schema.users.id, row.userId));
+    if (!user?.active) throw new HTTPException(400, { message: "invalid_token" });
+    if (!(await consumePasswordLink(row.id))) throw new HTTPException(400, { message: "invalid_token" });
+    await db()
+      .update(schema.users)
+      .set({ passwordHash: await hashPassword(password), mustChangePassword: false, failedLogins: 0, lockedUntil: null, updatedAt: new Date() })
+      .where(eq(schema.users.id, user.id));
+    await revokeUserSessions(user.id);
+    await audit(user.id, row.purpose === "welcome" ? "password.set_from_welcome" : "password.reset", user.id);
+    void sendPasswordChanged(user, c).catch(() => undefined);
+    return c.json({ ok: true });
   })
 
   .post("/logout", async (c) => {

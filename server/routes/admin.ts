@@ -1,11 +1,14 @@
-import { Hono } from "hono";
+import { Hono, type Context } from "hono";
 import { HTTPException } from "hono/http-exception";
 import { and, asc, desc, eq, inArray, sql } from "drizzle-orm";
 import { z } from "zod";
 import { db, schema } from "../db/index.ts";
+import { config } from "../config.ts";
 import { auth, requirePermission, revokeUserSessions, type AppEnv } from "../lib/auth.ts";
 import { hashPassword, temporaryPassword } from "../lib/crypto.ts";
 import { audit } from "../lib/audit.ts";
+import { mailConfigured } from "../lib/mail.ts";
+import { sendPasswordLink } from "../lib/passwordLinks.ts";
 import { body, zEmail, zName, zOptText, zUuid } from "../lib/validate.ts";
 import {
   effectivePermissions,
@@ -124,13 +127,25 @@ const userInput = {
   roleId: zUuid.nullable().optional(),
   locale: z.enum(["fr", "en"]).optional(),
   notifyEmail: z.boolean().optional(),
+  /** Email a "choose your password" link (welcome template) */
+  sendWelcome: z.boolean().optional(),
 };
 
 async function createUser(
   actorId: string,
   kind: Audience,
   clientId: string | null,
-  p: { email: string; name: string; title?: string | null; phone?: string | null; roleId?: string | null; locale?: "fr" | "en"; notifyEmail?: boolean },
+  p: {
+    email: string;
+    name: string;
+    title?: string | null;
+    phone?: string | null;
+    roleId?: string | null;
+    locale?: "fr" | "en";
+    notifyEmail?: boolean;
+    sendWelcome?: boolean;
+  },
+  c?: Context,
 ) {
   if (await emailTaken(p.email)) throw new HTTPException(409, { message: "email_taken" });
   await assertRoleFor(p.roleId, kind);
@@ -152,7 +167,9 @@ async function createUser(
     })
     .returning();
   await audit(actorId, `${kind}.created`, u.id, { email: u.email, clientId });
-  return { user: publicUser(u), temporaryPassword: password };
+  const welcomeSent = p.sendWelcome ? await sendPasswordLink(u, "welcome", c) : false;
+  if (welcomeSent) await audit(actorId, "user.welcome_sent", u.id);
+  return { user: publicUser(u), temporaryPassword: password, welcomeSent };
 }
 
 // ── routes ───────────────────────────────────────────────────────────────────
@@ -164,7 +181,7 @@ export const adminRoutes = new Hono<AppEnv>()
   })
   .post("/staff", requirePermission("admin.staff"), async (c) => {
     const p = await body(c, z.object(userInput));
-    return c.json(await createUser(auth(c).user.id, "staff", null, p), 201);
+    return c.json(await createUser(auth(c).user.id, "staff", null, p, c), 201);
   })
 
   // Clients
@@ -231,7 +248,7 @@ export const adminRoutes = new Hono<AppEnv>()
     const [client] = await db().select().from(schema.clients).where(eq(schema.clients.id, id));
     if (!client) throw new HTTPException(404, { message: "not_found" });
     const p = await body(c, z.object(userInput));
-    return c.json(await createUser(auth(c).user.id, "client", id, p), 201);
+    return c.json(await createUser(auth(c).user.id, "client", id, p, c), 201);
   })
 
   // Any user (technician or client user)
@@ -281,6 +298,18 @@ export const adminRoutes = new Hono<AppEnv>()
     await revokeUserSessions(target.id);
     await audit(a.user.id, "user.password_reset", target.id);
     return c.json({ temporaryPassword: password });
+  })
+  /** Email a password reset link (the person chooses the new password). */
+  .post("/users/:id/send-reset-link", async (c) => {
+    const a = auth(c);
+    const target = await getUser(zUuid.parse(c.req.param("id")));
+    assertCanManage(a.permissions, target.kind);
+    if (!target.active) throw new HTTPException(409, { message: "user_inactive" });
+    // Development without a mail server prints the email to the console
+    if (config.production && !(await mailConfigured())) throw new HTTPException(409, { message: "mail_not_configured" });
+    if (!(await sendPasswordLink(target, "reset", c))) throw new HTTPException(502, { message: "mail_failed" });
+    await audit(a.user.id, "user.reset_link_sent", target.id);
+    return c.json({ ok: true });
   })
   .post("/users/:id/reset-mfa", async (c) => {
     const a = auth(c);
@@ -397,7 +426,7 @@ export const adminRoutes = new Hono<AppEnv>()
   })
 
   // Activity
-  .get("/audit", requirePermission("admin.roles", "admin.staff", "admin.clients", "admin.integrations"), async (c) => {
+  .get("/audit", requirePermission("admin.roles", "admin.staff", "admin.clients", "admin.integrations", "admin.email"), async (c) => {
     const rows = await db()
       .select({ log: schema.auditLog, actor: schema.users.name })
       .from(schema.auditLog)

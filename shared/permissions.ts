@@ -96,6 +96,14 @@ export const MODULES = [
         label: { fr: "Gérer les rôles et les accès", en: "Manage roles and access" },
       },
       {
+        key: "admin.email",
+        label: { fr: "Gérer les courriels (SMTP et modèles)", en: "Manage email (SMTP and templates)" },
+        description: {
+          fr: "Configurer le serveur d'envoi et modifier les modèles de courriels",
+          en: "Configure the outgoing mail server and edit the email templates",
+        },
+      },
+      {
         key: "admin.integrations",
         label: { fr: "Gérer les intégrations (Autotask)", en: "Manage integrations (Autotask)" },
         description: {
@@ -131,7 +139,7 @@ export function isPermissionKey(v: unknown): v is PermissionKey {
   return typeof v === "string" && (ALL_PERMISSIONS as readonly string[]).includes(v);
 }
 
-export const ADMIN_PERMISSIONS = ["admin.staff", "admin.clients", "admin.roles", "admin.integrations"] as const satisfies readonly PermissionKey[];
+export const ADMIN_PERMISSIONS = ["admin.staff", "admin.clients", "admin.roles", "admin.integrations", "admin.email"] as const satisfies readonly PermissionKey[];
 
 /** Predefined roles, created on first start. System roles cannot be deleted. */
 export const SYSTEM_ROLES: Array<{

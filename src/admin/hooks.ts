@@ -50,6 +50,12 @@ export function useAdminError() {
         return t("admin.roles.inUse");
       case "role_locked":
         return t("admin.roles.lockedText");
+      case "mail_not_configured":
+        return t("admin.users.mailNotConfigured");
+      case "mail_failed":
+        return t("admin.users.mailFailed");
+      case "user_inactive":
+        return t("admin.users.userInactive");
       default:
         return t("common.error");
     }

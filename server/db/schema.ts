@@ -201,7 +201,42 @@ export const dashboards = pgTable(
 );
 
 /**
- * External integrations, one row per provider (e.g. "autotask").
+ * Email templates edited in admin settings (only the edited ones; defaults
+ * live in server/lib/emailTemplates.ts).
+ */
+export const emailTemplates = pgTable(
+  "email_templates",
+  {
+    key: text("key").notNull(),
+    locale: text("locale", { enum: ["fr", "en"] }).notNull(),
+    subject: text("subject").notNull(),
+    body: text("body").notNull(),
+    action: text("action").notNull().default(""),
+    updatedBy: uuid("updated_by").references(() => users.id, { onDelete: "set null" }),
+    updatedAt: updated(),
+  },
+  (t) => [primaryKey({ columns: [t.key, t.locale] })],
+);
+
+/** One-time links to choose a password (forgotten password, welcome). Only the SHA-256 is stored. */
+export const passwordTokens = pgTable(
+  "password_tokens",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    userId: uuid("user_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    tokenHash: text("token_hash").notNull(),
+    purpose: text("purpose", { enum: ["reset", "welcome"] }).notNull(),
+    expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
+    usedAt: timestamp("used_at", { withTimezone: true }),
+    createdAt: created(),
+  },
+  (t) => [uniqueIndex("password_tokens_hash_unique").on(t.tokenHash), index("password_tokens_user_idx").on(t.userId)],
+);
+
+/**
+ * Settings of external services, one row per provider ("autotask", "smtp").
  * `config` holds non-secret settings; `secret` is a JSON blob sealed with APP_SECRET.
  */
 export const integrations = pgTable("integrations", {

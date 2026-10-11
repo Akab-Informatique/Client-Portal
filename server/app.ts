@@ -12,6 +12,7 @@ import { authRoutes } from "./routes/auth.ts";
 import { meRoutes } from "./routes/me.ts";
 import { adminRoutes } from "./routes/admin.ts";
 import { integrationRoutes } from "./routes/integrations.ts";
+import { emailRoutes } from "./routes/email.ts";
 import { boardRoutes, messageRoutes } from "./routes/messages.ts";
 import { dashboardRoutes } from "./routes/dashboard.ts";
 import { dashboardsRoutes } from "./routes/dashboards.ts";
@@ -58,6 +59,7 @@ export function createApp() {
   api.route("/notifications", notificationRoutes);
   api.use("/admin/*", requireStaff);
   api.route("/admin/integrations", integrationRoutes);
+  api.route("/admin/email", emailRoutes);
   api.route("/admin", adminRoutes);
   api.use("/messages/*", requireStaff);
   api.route("/messages", messageRoutes);

@@ -53,7 +53,7 @@ chmod 600 .env
 | `ADMIN_PASSWORD` | Leave empty → one-time password in the log |
 | `APP_PUBLISH` | `3000` (or `IP:3000`) |
 | `TRUSTED_PROXY_IPS` | Recommended: your reverse proxy's IP |
-| `SMTP_*` | Email copies of board messages (optional) |
+| `SMTP_*` | Optional — the mail server can also be set later in **Admin settings › Courriels** (that setting wins over `.env`) |
 
 ## 4. Start
 
@@ -93,3 +93,5 @@ chmod 600 akab-*.sql.gz
 | Login loops back to sign-in | Site must be served over HTTPS (secure cookies) |
 | `password authentication failed` | `POSTGRES_PASSWORD` changed after first start — restore the original |
 | Lost MFA device | Another admin: Admin settings → user → Security → Reset MFA |
+| Lost the first admin one-time password | `docker compose logs app | grep "one-time password"` (printed on the very first start only) |
+| Forgotten password | "Mot de passe oublié ?" on the sign-in page (needs a mail server), or another admin: user → Security |
