@@ -574,7 +574,39 @@ function TicketRow({ tk, index, active, onOpen }: { tk: TicketSummary; index: nu
 }
 
 // ── Filters ──────────────────────────────────────────────────────────────────────
-function FilterButton({ label, count, icon: Icon, children, wide }: { label: string; count: number; icon?: LucideIcon; children: ReactNode; wide?: boolean }) {
+/** Top of every filter panel: its name and "Clear" (active when something is selected). */
+function PanelHeader({ title, count, onClear }: { title: string; count: number; onClear: () => void }) {
+  const { t } = useTranslation();
+  return (
+    <div className="mb-1 flex items-center justify-between gap-2 border-b px-2 pb-1.5 pt-1">
+      <span className="font-mono text-[10px] uppercase tracking-[0.12em] text-muted-foreground">{title}</span>
+      <button
+        type="button"
+        onClick={onClear}
+        disabled={count === 0}
+        className="flex items-center gap-1 rounded-md px-1.5 py-0.5 text-xs text-muted-foreground transition-colors hover:bg-accent hover:text-foreground disabled:pointer-events-none disabled:opacity-40"
+      >
+        <X className="size-3" /> {t("tickets.clear")}
+      </button>
+    </div>
+  );
+}
+
+function FilterButton({
+  label,
+  count,
+  icon: Icon,
+  children,
+  wide,
+  onClear,
+}: {
+  label: string;
+  count: number;
+  icon?: LucideIcon;
+  children: ReactNode;
+  wide?: boolean;
+  onClear: () => void;
+}) {
   return (
     <Popover>
       <PopoverTrigger asChild>
@@ -590,6 +622,7 @@ function FilterButton({ label, count, icon: Icon, children, wide }: { label: str
         </Button>
       </PopoverTrigger>
       <PopoverContent align="start" className={cn("p-1.5", wide ? "w-[22rem]" : "w-64")}>
+        <PanelHeader title={label} count={count} onClear={onClear} />
         {children}
       </PopoverContent>
     </Popover>
@@ -625,38 +658,32 @@ function Checklist({ param, options, params, set, searchable, max = "max-h-72" }
 }
 
 function MultiFilter({ label, param, options, params, set, searchable }: { label: string; param: string; options: Option[]; params: URLSearchParams; set: SetFn; searchable?: boolean }) {
-  const { t } = useTranslation();
   const count = (params.get(param) ?? "").split(",").filter(Boolean).length;
   return (
-    <FilterButton label={label} count={count}>
+    <FilterButton label={label} count={count} onClear={() => set({ [param]: null })}>
       <Checklist param={param} options={options} params={params} set={set} searchable={searchable} />
-      {count > 0 && (
-        <Button variant="ghost" size="sm" className="mt-1 h-7 w-full text-xs text-muted-foreground" onClick={() => set({ [param]: null })}>
-          {t("tickets.clear")}
-        </Button>
-      )}
     </FilterButton>
   );
 }
 
-const MORE_KEYS = ["company", "queue", "dueFrom", "dueTo", "startFrom", "startTo"] as const;
+const MORE_KEYS = ["company", "dueFrom", "dueTo", "startFrom", "startTo"] as const;
 
 /** Less frequent filters in one panel: client, queue, start date, due date. */
 function MoreFilters({ data, params, set }: { data: TicketList; params: URLSearchParams; set: SetFn }) {
   const { t } = useTranslation();
   const count = MORE_KEYS.filter((k) => params.get(k)).length;
-  const [tab, setTab] = useState<"company" | "queue" | "dates">("dates");
+  const [tab, setTab] = useState<"company" | "dates">("dates");
   return (
-    <FilterButton label={t("tickets.more")} count={count} icon={SlidersHorizontal} wide>
-      <div className="mb-1 grid grid-cols-3 gap-1 rounded-lg bg-muted/50 p-0.5 text-xs">
-        {(["dates", "company", "queue"] as const).map((k) => (
+    <FilterButton label={t("tickets.more")} count={count} icon={SlidersHorizontal} wide onClear={() => set(Object.fromEntries(MORE_KEYS.map((k) => [k, null])))}>
+      <div className="mb-1 grid grid-cols-2 gap-1 rounded-lg bg-muted/50 p-0.5 text-xs">
+        {(["dates", "company"] as const).map((k) => (
           <button
             key={k}
             type="button"
             onClick={() => setTab(k)}
             className={cn("rounded-md px-2 py-1 font-medium", tab === k ? "bg-background text-foreground shadow-sm" : "text-muted-foreground hover:text-foreground")}
           >
-            {k === "dates" ? t("tickets.dates") : k === "company" ? t("tickets.fields.company") : t("tickets.fields.queue")}
+            {k === "dates" ? t("tickets.dates") : t("tickets.fields.company")}
             {(k === "dates" ? ["dueFrom", "dueTo", "startFrom", "startTo"].some((x) => params.get(x)) : params.get(k)) && (
               <span className="ml-1 inline-block size-1.5 rounded-full bg-[color:var(--gold)] align-middle" />
             )}
@@ -670,12 +697,6 @@ function MoreFilters({ data, params, set }: { data: TicketList; params: URLSearc
         </div>
       )}
       {tab === "company" && <Checklist param="company" options={data.facets.companies.map((c) => ({ value: String(c.id), label: c.name }))} params={params} set={set} searchable max="max-h-60" />}
-      {tab === "queue" && <Checklist param="queue" options={data.facets.queues.map((q) => ({ value: q, label: q }))} params={params} set={set} />}
-      {count > 0 && (
-        <Button variant="ghost" size="sm" className="mt-1 h-7 w-full text-xs text-muted-foreground" onClick={() => set(Object.fromEntries(MORE_KEYS.map((k) => [k, null])))}>
-          {t("tickets.clear")}
-        </Button>
-      )}
     </FilterButton>
   );
 }
@@ -769,7 +790,7 @@ function TeamFilter({ technicians, params, set }: { technicians: TicketList["fac
         </Button>
       </PopoverTrigger>
       <PopoverContent align="start" className="w-72 p-1.5">
-        <p className="px-2 pb-1.5 pt-1 font-mono text-[10px] uppercase tracking-[0.12em] text-muted-foreground">{t("tickets.teamTitle")}</p>
+        <PanelHeader title={t("tickets.teamTitle")} count={selected.length} onClear={() => set({ assignee: null })} />
         <div className="max-h-80 overflow-y-auto">
           {people.map((p) => (
             <button
@@ -811,11 +832,6 @@ function TeamFilter({ technicians, params, set }: { technicians: TicketList["fac
             {selected.includes("none") && <Check className="size-4 text-primary" />}
           </button>
         </div>
-        {selected.length > 0 && (
-          <Button variant="ghost" size="sm" className="mt-1 h-7 w-full text-xs text-muted-foreground" onClick={() => set({ assignee: null })}>
-            {t("tickets.clear")}
-          </Button>
-        )}
       </PopoverContent>
     </Popover>
   );
