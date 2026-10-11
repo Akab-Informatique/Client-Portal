@@ -92,14 +92,13 @@ function CountUp({ value }: { value: number }) {
 function WelcomeWidget() {
   const { t } = useTranslation();
   const me = useMe();
-  const { data } = useSummary();
   const h = new Date().getHours();
   const greet = h < 12 ? t("dashboard.greetingMorning") : h < 18 ? t("dashboard.greetingAfternoon") : t("dashboard.greetingEvening");
   return (
     <div className="relative h-full overflow-hidden rounded-2xl border bg-card p-6 sm:p-8">
       <div className="pointer-events-none absolute -right-24 -top-24 size-72 rounded-full blur-3xl" style={{ background: "radial-gradient(circle, var(--glow), transparent 70%)" }} />
       <div className="pointer-events-none absolute inset-0 bg-grid opacity-50 [mask-image:linear-gradient(to_left,black,transparent_70%)]" />
-      <div className="relative flex flex-wrap items-end justify-between gap-6">
+      <div className="relative">
         <div>
           <p className="flex items-center gap-2 text-xs font-medium uppercase tracking-[0.18em] text-muted-foreground">
             <LiveDot tone="gold" /> {longDate(new Date())}
@@ -109,18 +108,6 @@ function WelcomeWidget() {
           </h2>
           <p className="mt-2 text-muted-foreground">{t("dashboard.subtitle")}</p>
         </div>
-        {data && (
-          <div className="flex gap-6 font-mono text-sm">
-            <div>
-              <div className="text-2xl font-bold text-foreground"><CountUp value={data.counts.clients} /></div>
-              <div className="text-xs text-muted-foreground">{t("dashboard.stats.clients")}</div>
-            </div>
-            <div>
-              <div className="text-2xl font-bold text-foreground"><CountUp value={data.counts.pinned} /></div>
-              <div className="text-xs text-muted-foreground">{t("messages.pinned")}</div>
-            </div>
-          </div>
-        )}
       </div>
     </div>
   );
