@@ -292,7 +292,7 @@ function TicketBody({ tk, viewers, onClose, onMinimize }: { tk: TicketDetail; vi
 }
 
 /** A value you click to change (status, priority, queue, assignee). */
-function InlinePick({
+export function InlinePick({
   label,
   value,
   options,

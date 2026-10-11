@@ -51,9 +51,9 @@ import { relativeTime } from "@/lib/format";
 import { useCan, useMe } from "@/lib/session";
 import { cn, initials } from "@/lib/utils";
 import { NewTicketDialog } from "./NewTicketDialog";
-import { dueState, FILTER_KEYS, PRIORITY_STYLE, shortDate, STATUS_STYLE, useTickets, VIEWS, type TicketList, type TicketSummary, type View } from "./shared";
+import { dueState, FILTER_KEYS, PRIORITY_STYLE, type Priority, type Status, shortDate, STATUS_STYLE, useTickets, VIEWS, type TicketList, type TicketSummary, type View } from "./shared";
 import { useTicketWorkspace } from "./workspace";
-import { useAiError } from "./TicketPanel";
+import { InlinePick, useAiError } from "./TicketPanel";
 
 type Saved = { id: string; name: string; query: string };
 type SetFn = (patch: Record<string, string | null>) => void;
@@ -78,6 +78,17 @@ export function TicketsPage() {
   const view = (VIEWS.includes(params.get("view") as View) ? params.get("view") : "mine") as View;
   const { data, isLoading, dataUpdatedAt, isFetching, refetch } = useTickets(view, params);
   const [creating, setCreating] = useState(false);
+  const qc = useQueryClient();
+  // Inline change from the list (status, priority, assignee)
+  const patchTicket = useMutation({
+    mutationFn: (p: { id: number; patch: RowPatch }) => api.patch(`/tickets/${p.id}`, p.patch),
+    onSuccess: (_r, p) => {
+      void qc.invalidateQueries({ queryKey: ["tickets"] });
+      void qc.invalidateQueries({ queryKey: ["tickets", "detail", p.id] });
+      toast.success(t("common.saved"));
+    },
+    onError: () => toast.error(t("common.error")),
+  });
   const searchRef = useRef<HTMLInputElement>(null);
 
   const set: SetFn = (patch) =>
@@ -230,7 +241,16 @@ export function TicketsPage() {
         ) : (
           <ul className="divide-y divide-border/60">
             {data.items.map((tk, i) => (
-              <TicketRow key={tk.id} tk={tk} index={i} active={tk.id === ws.openId || ws.docked.some((d) => d.id === tk.id)} onOpen={() => ws.open(tk.id)} />
+              <TicketRow
+                key={tk.id}
+                tk={tk}
+                index={i}
+                active={tk.id === ws.openId || ws.docked.some((d) => d.id === tk.id)}
+                onOpen={() => ws.open(tk.id)}
+                facets={data.facets}
+                editable={can("tickets.edit")}
+                onPatch={(patch) => patchTicket.mutate({ id: tk.id, patch })}
+              />
             ))}
           </ul>
         )}
@@ -504,16 +524,49 @@ function slaUsed(tk: TicketSummary) {
   return Math.min(1, Math.max(0, (Date.now() - start) / (end - start)));
 }
 
-function TicketRow({ tk, index, active, onOpen }: { tk: TicketSummary; index: number; active: boolean; onOpen: () => void }) {
+type RowPatch = { status?: Status; priority?: Priority; assigneeId?: string | null };
+
+/** Keeps clicks inside an inline picker from opening the ticket (React events cross portals). */
+const Stop = ({ children }: { children: ReactNode }) => (
+  <span className="inline-flex max-w-full" onClick={(e) => e.stopPropagation()} onKeyDown={(e) => e.stopPropagation()}>
+    {children}
+  </span>
+);
+
+function TicketRow({
+  tk,
+  index,
+  active,
+  onOpen,
+  facets,
+  editable,
+  onPatch,
+}: {
+  tk: TicketSummary;
+  index: number;
+  active: boolean;
+  onOpen: () => void;
+  facets: TicketList["facets"];
+  editable: boolean;
+  onPatch: (patch: RowPatch) => void;
+}) {
   const { t } = useTranslation();
   const due = dueState(tk.dueAt, tk.status);
   const used = tk.status === "complete" ? 0 : slaUsed(tk);
   return (
     <motion.li initial={{ opacity: 0 }} animate={{ opacity: 1 }} transition={{ delay: Math.min(index, 12) * 0.015 }}>
-      <button
-        type="button"
+      <div
+        role="button"
+        tabIndex={0}
         onClick={onOpen}
+        onKeyDown={(e) => {
+          if (e.key === "Enter" || e.key === " ") {
+            e.preventDefault();
+            onOpen();
+          }
+        }}
         className={cn(
+          "cursor-pointer outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-[color:var(--gold)]/50",
           "group relative grid w-full grid-cols-1 gap-x-4 gap-y-1.5 px-5 py-2.5 text-left transition-colors lg:grid-cols-[minmax(0,1fr)_150px_110px_150px_90px_140px_28px] lg:items-center",
           "hover:bg-[linear-gradient(90deg,rgba(255,206,26,0.07),transparent_60%)]",
           active && "bg-[linear-gradient(90deg,rgba(255,206,26,0.1),transparent_70%)]",
@@ -532,24 +585,61 @@ function TicketRow({ tk, index, active, onOpen }: { tk: TicketSummary; index: nu
         </span>
         <span className="flex flex-wrap items-center gap-2 lg:contents">
           <span>
-            <span className={cn("inline-flex items-center gap-1.5 rounded-full border px-2 py-0.5 text-[11px] font-medium", STATUS_STYLE[tk.status])}>
-              <span className="size-1.5 rounded-full bg-current" />
-              {t(`tickets.status.${tk.status}`)}
-            </span>
+            <Stop>
+              <InlinePick
+                disabled={!editable}
+                label={t("tickets.fields.status")}
+                value={tk.status}
+                options={facets.statuses.map((s) => ({ value: s, label: t(`tickets.status.${s}`) }))}
+                onPick={(v) => onPatch({ status: v as Status })}
+                trigger={
+                  <span className={cn("inline-flex items-center gap-1.5 rounded-full border px-2 py-0.5 text-[11px] font-medium", STATUS_STYLE[tk.status])}>
+                    <span className="size-1.5 rounded-full bg-current" />
+                    {t(`tickets.status.${tk.status}`)}
+                  </span>
+                }
+              />
+            </Stop>
           </span>
-          <span className={cn("flex items-center gap-1.5 text-xs font-medium", PRIORITY_STYLE[tk.priority].text)}>
-            <span className={cn("size-2 rounded-full", PRIORITY_STYLE[tk.priority].dot, tk.priority === "critical" && "shadow-[0_0_8px] shadow-red-500")} />
-            {t(`tickets.priority.${tk.priority}`)}
+          <span>
+            <Stop>
+              <InlinePick
+                disabled={!editable}
+                label={t("tickets.fields.priority")}
+                value={tk.priority}
+                options={facets.priorities.map((p) => ({ value: p, label: t(`tickets.priority.${p}`), dot: PRIORITY_STYLE[p].dot }))}
+                onPick={(v) => onPatch({ priority: v as Priority })}
+                trigger={
+                  <span className={cn("flex items-center gap-1.5 px-1 text-xs font-medium", PRIORITY_STYLE[tk.priority].text)}>
+                    <span className={cn("size-2 rounded-full", PRIORITY_STYLE[tk.priority].dot, tk.priority === "critical" && "shadow-[0_0_8px] shadow-red-500")} />
+                    {t(`tickets.priority.${tk.priority}`)}
+                  </span>
+                }
+              />
+            </Stop>
           </span>
-          <span className="flex min-w-0 items-center gap-2 text-xs">
-            {tk.assignee ? (
-              <>
-                <span className="flex size-6 shrink-0 items-center justify-center rounded-full border bg-background/60 text-[10px] font-semibold">{initials(tk.assignee.name)}</span>
-                <span className="truncate">{tk.assignee.name}</span>
-              </>
-            ) : (
-              <span className="italic text-muted-foreground">{t("tickets.unassigned")}</span>
-            )}
+          <span className="min-w-0">
+            <Stop>
+              <InlinePick
+                disabled={!editable}
+                label={t("tickets.fields.assignee")}
+                value={tk.assignee?.id ?? "none"}
+                options={[{ value: "none", label: t("tickets.unassigned") }, ...facets.technicians.map((p) => ({ value: p.id, label: p.name }))]}
+                onPick={(v) => onPatch({ assigneeId: v === "none" ? null : v })}
+                trigger={
+                  <span className="flex min-w-0 max-w-36 items-center gap-2 pr-1 text-xs">
+                    {tk.assignee ? (
+                      <>
+                        <span className="flex size-6 shrink-0 items-center justify-center rounded-full border bg-background/60 text-[10px] font-semibold">{initials(tk.assignee.name)}</span>
+                        <span className="truncate">{tk.assignee.name}</span>
+                      </>
+                    ) : (
+                      <span className="pl-1 italic text-muted-foreground">{t("tickets.unassigned")}</span>
+                    )}
+                  </span>
+                }
+              />
+            </Stop>
           </span>
           <span className="font-mono text-xs tabular-nums text-muted-foreground">{tk.startDate ? shortDate(tk.startDate) : "—"}</span>
           <span className="min-w-0">
@@ -584,7 +674,7 @@ function TicketRow({ tk, index, active, onOpen }: { tk: TicketSummary; index: nu
             )}
           </span>
         </span>
-      </button>
+      </div>
     </motion.li>
   );
 }
