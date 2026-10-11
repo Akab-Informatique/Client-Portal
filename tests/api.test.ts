@@ -758,3 +758,51 @@ describe("forgotten password and email", () => {
     expect((await admin.get("/api/admin/email/templates/nope")).status).toBe(404);
   });
 });
+
+describe("tickets (sample data)", () => {
+  const sessions = new Map<string, Agent>();
+  const session = async (email: string) => sessions.get(email) ?? sessions.set(email, await signIn(email)).get(email)!;
+
+  it("lists by view and filters on the portal-only start date", async () => {
+    const tech = await session("tech@akab.local");
+    const all = (await tech.get("/api/tickets?view=all")).json;
+    expect(all.demo).toBe(true);
+    expect(all.items.length).toBeGreaterThan(10);
+    const mine = (await tech.get("/api/tickets?view=mine")).json.items;
+    const [techRow] = await db().select().from(schema.users).where(eq(schema.users.email, "tech@akab.local"));
+    expect(mine.every((t: any) => t.assignee?.id === techRow.id && t.status !== "complete")).toBe(true);
+
+    const target = all.items[0];
+    expect((await tech.put(`/api/tickets/${target.id}/start-date`, { startDate: "2026-11-02" })).status).toBe(200);
+    const filtered = (await tech.get("/api/tickets?view=all&startFrom=2026-11-01&startTo=2026-11-03")).json.items;
+    expect(filtered.map((t: any) => t.id)).toEqual([target.id]);
+    expect(filtered[0].startDate).toBe("2026-11-02");
+    expect((await tech.put(`/api/tickets/${target.id}/start-date`, { startDate: "02/11/2026" })).status).toBe(400);
+  });
+
+  it("tells who else has a ticket open", async () => {
+    const tech = await session("tech@akab.local");
+    const admin = await session("admin@akab.local");
+    const id = (await tech.get("/api/tickets?view=all")).json.items[1].id;
+    expect((await tech.post(`/api/tickets/${id}/presence`)).json.viewers).toEqual([]);
+    const seen = (await admin.post(`/api/tickets/${id}/presence`)).json.viewers;
+    expect(seen.map((v: any) => v.name)).toEqual(["Alex Tremblay"]);
+    expect((await admin.get(`/api/tickets/${id}`)).json.viewers.map((v: any) => v.name)).toEqual(["Alex Tremblay"]);
+    await tech.del(`/api/tickets/${id}/presence`);
+    expect((await admin.post(`/api/tickets/${id}/presence`)).json.viewers).toEqual([]);
+  });
+
+  it("is staff only and creating needs tickets.edit", async () => {
+    const client = new Agent();
+    resetRateLimit("login:ip:unknown");
+    const clientUser = (await db().select().from(schema.users).where(eq(schema.users.kind, "client")))[0];
+    await signIn(clientUser.email).then((a) => a.get("/api/tickets").then((r) => expect(r.status).toBe(403)));
+    void client;
+    const tech = await session("tech@akab.local");
+    const r = await tech.post("/api/tickets", {
+      title: "Test", description: "", companyId: 300, contact: "", priority: "medium", queue: "Support niveau 1", assigneeId: null, dueDate: "2026-12-01", startDate: "2026-11-30",
+    });
+    expect(r.status).toBe(201);
+    expect(r.json).toMatchObject({ title: "Test", status: "new", startDate: "2026-11-30" });
+  });
+});

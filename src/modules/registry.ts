@@ -26,7 +26,7 @@ export type NavModule = {
 export const STAFF_MODULES: NavModule[] = [
   { key: "dashboard", path: "/", labelKey: "nav.dashboard", icon: LayoutDashboard, section: "modules", permission: "dashboard.view" },
   { key: "messages", path: "/messages", labelKey: "nav.messages", icon: Megaphone, section: "modules", permission: "messages.view" },
-  { key: "tickets", path: "/tickets", labelKey: "nav.tickets", icon: Ticket, section: "command", upcoming: true },
+  { key: "tickets", path: "/tickets", labelKey: "nav.tickets", icon: Ticket, section: "command", permission: "tickets.view" },
   { key: "clients", path: "/clients", labelKey: "nav.clients", icon: Users, section: "modules", upcoming: true },
   { key: "documentation", path: "/documentation", labelKey: "nav.documentation", icon: BookOpen, section: "modules", upcoming: true },
   { key: "devices", path: "/devices", labelKey: "nav.devices", icon: MonitorSmartphone, section: "modules", upcoming: true },

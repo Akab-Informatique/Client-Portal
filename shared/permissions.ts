@@ -41,6 +41,19 @@ export const MODULES = [
     ],
   },
   {
+    key: "tickets",
+    audience: "staff",
+    label: { fr: "Billets", en: "Tickets" },
+    permissions: [
+      { key: "tickets.view", label: { fr: "Voir les billets", en: "View tickets" } },
+      {
+        key: "tickets.edit",
+        label: { fr: "Créer et modifier des billets", en: "Create and edit tickets" },
+        description: { fr: "Nouveau billet, notes, date de début", en: "New ticket, notes, start date" },
+      },
+    ],
+  },
+  {
     key: "messages",
     audience: "staff",
     label: { fr: "Babillard", en: "Message board" },
@@ -163,7 +176,7 @@ export const SYSTEM_ROLES: Array<{
     audience: "staff",
     name: { fr: "Technicien", en: "Technician" },
     description: { fr: "Travail quotidien : babillard et tableau de bord", en: "Day-to-day work: board and dashboard" },
-    permissions: ["dashboard.view", "messages.view", "messages.post", "messages.pin", "messages.email"],
+    permissions: ["dashboard.view", "tickets.view", "tickets.edit", "messages.view", "messages.post", "messages.pin", "messages.email"],
     locked: false,
   },
   {

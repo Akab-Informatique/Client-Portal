@@ -13,6 +13,7 @@ import type { PermissionKey } from "@shared/permissions";
 const StaffLayout = lazy(() => import("@/layouts/StaffLayout").then((m) => ({ default: m.StaffLayout })));
 const DashboardPage = lazy(() => import("@/pages/dashboard/DashboardPage").then((m) => ({ default: m.DashboardPage })));
 const MessagesPage = lazy(() => import("@/pages/messages/MessagesPage").then((m) => ({ default: m.MessagesPage })));
+const TicketsPage = lazy(() => import("@/pages/tickets/TicketsPage").then((m) => ({ default: m.TicketsPage })));
 const ClientHome = lazy(() => import("@/pages/client/ClientHome").then((m) => ({ default: m.ClientHome })));
 
 function Splash() {
@@ -73,6 +74,7 @@ function StaffApp() {
           }
         />
         <Route path="messages" element={<Guard permission="messages.view"><MessagesPage /></Guard>} />
+        <Route path="tickets" element={<Guard permission="tickets.view"><TicketsPage /></Guard>} />
         <Route path="*" element={<Navigate to="/" replace />} />
       </Route>
     </Routes>

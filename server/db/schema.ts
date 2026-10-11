@@ -218,6 +218,17 @@ export const emailTemplates = pgTable(
   (t) => [primaryKey({ columns: [t.key, t.locale] })],
 );
 
+/**
+ * Portal-only data about an Autotask ticket (fields Autotask does not have),
+ * keyed by the Autotask ticket id. E.g. the planned start date.
+ */
+export const ticketMeta = pgTable("ticket_meta", {
+  ticketId: bigint("ticket_id", { mode: "number" }).primaryKey(),
+  startDate: text("start_date"),
+  updatedBy: uuid("updated_by").references(() => users.id, { onDelete: "set null" }),
+  updatedAt: updated(),
+});
+
 /** One-time links to choose a password (forgotten password, welcome). Only the SHA-256 is stored. */
 export const passwordTokens = pgTable(
   "password_tokens",
