@@ -488,6 +488,13 @@ const fr = {
     },
   },
   tickets: {
+    notLinkedTitle: "Votre compte n'est pas lié à un utilisateur Autotask.",
+    notLinkedText: "« Mes billets » reste vide et vous ne pouvez pas modifier les billets. Un administrateur peut faire le lien dans Paramètres admin › Intégrations › Autotask.",
+    errors: {
+      notLinked: "Votre compte n'est pas lié à un utilisateur Autotask : demandez à un administrateur de faire le lien (Paramètres admin › Intégrations › Autotask).",
+      autotask: "Autotask a refusé : {{detail}}",
+      invalidContact: "Ce contact n'appartient pas au client du billet.",
+    },
     searchCompany: "Rechercher un client…",
     searchContact: "Rechercher un contact…",
     pickContact: "Choisir un contact…",
@@ -616,6 +623,7 @@ const fr = {
       hours: "Temps saisi",
     },
     filter: {
+      statusKind: "Statut",
       assignee: "Technicien",
       attention: "À surveiller",
       due: "Échéance",

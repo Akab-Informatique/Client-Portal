@@ -17,9 +17,11 @@ import {
   Eye,
   FlaskConical,
   Inbox,
+  Link2Off,
   Loader2,
   Layers,
   Plus,
+  PlugZap,
   RefreshCw,
   Search,
   Siren,
@@ -51,7 +53,7 @@ import { relativeTime } from "@/lib/format";
 import { useCan, useMe } from "@/lib/session";
 import { cn, initials } from "@/lib/utils";
 import { NewTicketDialog } from "./NewTicketDialog";
-import { dueState, FILTER_KEYS, PRIORITY_STYLE, type Priority, type Status, shortDate, STATUS_STYLE, useTickets, VIEWS, type TicketList, type TicketSummary, type View } from "./shared";
+import { dueState, FILTER_KEYS, PRIORITY_STYLE, useChoiceText, shortDate, STATUS_STYLE, useTickets, VIEWS, type TicketList, type TicketSummary, type View, ticketErrorText } from "./shared";
 import { useTicketWorkspace } from "./workspace";
 import { AiSetupHint, InlinePick, useAiError } from "./TicketPanel";
 
@@ -72,6 +74,7 @@ function canonical(p: URLSearchParams | string) {
  */
 export function TicketsPage() {
   const { t } = useTranslation();
+  const txt = useChoiceText();
   const can = useCan();
   const ws = useTicketWorkspace();
   const [params, setParams] = useSearchParams();
@@ -87,7 +90,7 @@ export function TicketsPage() {
       void qc.invalidateQueries({ queryKey: ["tickets", "detail", p.id] });
       toast.success(t("common.saved"));
     },
-    onError: () => toast.error(t("common.error")),
+    onError: (e) => toast.error(ticketErrorText(t, e)),
   });
   const searchRef = useRef<HTMLInputElement>(null);
 
@@ -139,6 +142,11 @@ export function TicketsPage() {
         <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1">
           <h1 className="text-2xl font-bold">{t("tickets.title")}</h1>
           <LiveBadge updatedAt={dataUpdatedAt} fetching={isFetching} onRefresh={() => void refetch()} />
+          {data && !data.demo && (
+            <span className="flex items-center gap-1 text-[11px] text-muted-foreground">
+              <PlugZap className="size-3 text-primary" /> Autotask
+            </span>
+          )}
           {data?.demo && (
             <Tooltip>
               <TooltipTrigger asChild>
@@ -161,6 +169,14 @@ export function TicketsPage() {
         </div>
       </div>
 
+      {data?.notLinked && (
+        <div className="flex items-start gap-3 rounded-xl border border-orange-500/40 bg-orange-500/10 px-4 py-3 text-sm">
+          <Link2Off className="mt-0.5 size-4 shrink-0 text-orange-300" />
+          <span>
+            <span className="font-medium text-orange-200">{t("tickets.notLinkedTitle")}</span> <span className="text-muted-foreground">{t("tickets.notLinkedText")}</span>
+          </span>
+        </div>
+      )}
       <MetricTiles data={data} params={params} apply={apply} />
 
       {/* Toolbar: view, search, team, the two frequent filters, the rest under "More" */}
@@ -180,7 +196,7 @@ export function TicketsPage() {
         {data && (
           <>
             <TeamFilter technicians={data.facets.technicians} params={params} set={set} />
-            <MultiFilter label={t("tickets.fields.status")} param="status" options={data.facets.statuses.map((s) => ({ value: s, label: t(`tickets.status.${s}`) }))} params={params} set={set} />
+            <MultiFilter label={t("tickets.fields.status")} param="status" options={data.facets.statuses.map((s) => ({ value: s.value, label: txt.status(s) }))} params={params} set={set} />
             <MultiFilter label={t("tickets.fields.company")} param="company" options={data.facets.companies.map((c) => ({ value: String(c.id), label: c.name }))} params={params} set={set} searchable />
             <MoreFilters data={data} params={params} set={set} />
           </>
@@ -315,7 +331,7 @@ const TILES: { key: TileKey; icon: LucideIcon; tone: string; glow: string; query
   { key: "mine", icon: UserRound, tone: "text-primary", glow: "rgba(255,206,26,0.35)", query: "view=mine" },
   { key: "unassigned", icon: UserX, tone: "text-sky-400", glow: "rgba(56,189,248,0.35)", query: "view=unassigned" },
   { key: "attention", icon: Siren, tone: "text-red-400", glow: "rgba(239,68,68,0.38)", query: "view=all&attention=1" },
-  { key: "statusAttention", icon: BellRing, tone: "text-amber-300", glow: "rgba(251,191,36,0.38)", query: "view=all&status=needsAttention" },
+  { key: "statusAttention", icon: BellRing, tone: "text-amber-300", glow: "rgba(251,191,36,0.38)", query: "view=all&statusKind=needsAttention" },
 ];
 
 function MetricTiles({ data, params, apply }: { data: TicketList | undefined; params: URLSearchParams; apply: (q: string) => void }) {
@@ -479,7 +495,7 @@ function SaveFilterDialog({ open, onClose, query, onSaved }: { open: boolean; on
       onSaved(s);
       onClose();
     },
-    onError: () => toast.error(t("common.error")),
+    onError: (e) => toast.error(ticketErrorText(t, e)),
   });
   return (
     <Dialog open={open} onOpenChange={(o) => !o && onClose()}>
@@ -520,7 +536,7 @@ function slaUsed(tk: TicketSummary) {
   return Math.min(1, Math.max(0, (Date.now() - start) / (end - start)));
 }
 
-type RowPatch = { status?: Status; priority?: Priority; assigneeId?: string | null };
+type RowPatch = { status?: string; priority?: string; assigneeId?: string | null };
 
 /** Keeps clicks inside an inline picker from opening the ticket (React events cross portals). */
 const Stop = ({ children }: { children: ReactNode }) => (
@@ -547,8 +563,9 @@ function TicketRow({
   onPatch: (patch: RowPatch) => void;
 }) {
   const { t } = useTranslation();
-  const due = dueState(tk.dueAt, tk.status);
-  const used = tk.status === "complete" ? 0 : slaUsed(tk);
+  const txt = useChoiceText();
+  const due = dueState(tk.dueAt, tk.statusKind);
+  const used = tk.statusKind === "complete" ? 0 : slaUsed(tk);
   return (
     <motion.li initial={{ opacity: 0 }} animate={{ opacity: 1 }} transition={{ delay: Math.min(index, 12) * 0.015 }}>
       <div
@@ -568,7 +585,7 @@ function TicketRow({
           active && "bg-[linear-gradient(90deg,rgba(255,206,26,0.1),transparent_70%)]",
         )}
       >
-        <span className={cn("absolute inset-y-2 left-0 w-1 rounded-r-full transition-all group-hover:inset-y-1", PRIORITY_STYLE[tk.priority].bar)} />
+        <span className={cn("absolute inset-y-2 left-0 w-1 rounded-r-full transition-all group-hover:inset-y-1", PRIORITY_STYLE[tk.priorityKind].bar)} />
         <span className="min-w-0">
           <span className="flex items-baseline gap-2">
             <span className="shrink-0 font-mono text-[11px] text-muted-foreground group-hover:text-primary">{tk.number}</span>
@@ -583,12 +600,12 @@ function TicketRow({
                 disabled={!editable}
                 label={t("tickets.fields.status")}
                 value={tk.status}
-                options={facets.statuses.map((s) => ({ value: s, label: t(`tickets.status.${s}`) }))}
-                onPick={(v) => onPatch({ status: v as Status })}
+                options={facets.statuses.map((s) => ({ value: s.value, label: txt.status(s) }))}
+                onPick={(v) => onPatch({ status: v })}
                 trigger={
-                  <span className={cn("inline-flex items-center gap-1.5 whitespace-nowrap rounded-full border px-2 py-0.5 text-[11px] font-medium", STATUS_STYLE[tk.status])}>
+                  <span className={cn("inline-flex items-center gap-1.5 whitespace-nowrap rounded-full border px-2 py-0.5 text-[11px] font-medium", STATUS_STYLE[tk.statusKind])}>
                     <span className="size-1.5 rounded-full bg-current" />
-                    {t(`tickets.status.${tk.status}`)}
+                    {txt.status({ label: tk.statusLabel, kind: tk.statusKind })}
                   </span>
                 }
               />
@@ -608,7 +625,7 @@ function TicketRow({
             >
               {due === "overdue" ? t("tickets.overdue") : due === "today" ? t("tickets.today") : shortDate(tk.dueAt)}
             </span>
-            {tk.status !== "complete" && (
+            {tk.statusKind !== "complete" && (
               <span className="mt-1 block h-1 w-full max-w-28 overflow-hidden rounded-full bg-muted" title={t("tickets.slaUsed", { pct: Math.round(used * 100) })}>
                 <span
                   className={cn("block h-full rounded-full", used >= 1 ? "bg-red-500" : used > 0.75 ? "bg-orange-400" : used > 0.5 ? "bg-[#ffce1a]" : "bg-emerald-400")}
@@ -623,12 +640,12 @@ function TicketRow({
                 disabled={!editable}
                 label={t("tickets.fields.priority")}
                 value={tk.priority}
-                options={facets.priorities.map((p) => ({ value: p, label: t(`tickets.priority.${p}`), dot: PRIORITY_STYLE[p].dot }))}
-                onPick={(v) => onPatch({ priority: v as Priority })}
+                options={facets.priorities.map((p) => ({ value: p.value, label: txt.priority(p), dot: PRIORITY_STYLE[p.kind].dot }))}
+                onPick={(v) => onPatch({ priority: v })}
                 trigger={
-                  <span className={cn("flex items-center gap-1.5 px-1 text-xs font-medium", PRIORITY_STYLE[tk.priority].text)}>
-                    <span className={cn("size-2 rounded-full", PRIORITY_STYLE[tk.priority].dot, tk.priority === "critical" && "shadow-[0_0_8px] shadow-red-500")} />
-                    {t(`tickets.priority.${tk.priority}`)}
+                  <span className={cn("flex items-center gap-1.5 px-1 text-xs font-medium", PRIORITY_STYLE[tk.priorityKind].text)}>
+                    <span className={cn("size-2 rounded-full", PRIORITY_STYLE[tk.priorityKind].dot, tk.priority === "critical" && "shadow-[0_0_8px] shadow-red-500")} />
+                    {txt.priority({ label: tk.priorityLabel, kind: tk.priorityKind })}
                   </span>
                 }
               />
@@ -792,6 +809,7 @@ const MORE_KEYS = ["priority", "dueFrom", "dueTo", "startFrom", "startTo"] as co
 /** Less frequent filters in one panel: client, queue, start date, due date. */
 function MoreFilters({ data, params, set }: { data: TicketList; params: URLSearchParams; set: SetFn }) {
   const { t } = useTranslation();
+  const txt = useChoiceText();
   const count = MORE_KEYS.filter((k) => params.get(k)).length;
   const [tab, setTab] = useState<"priority" | "dates">("priority");
   return (
@@ -818,7 +836,7 @@ function MoreFilters({ data, params, set }: { data: TicketList; params: URLSearc
         </div>
       )}
       {tab === "priority" && (
-        <Checklist param="priority" options={data.facets.priorities.map((p) => ({ value: p, label: t(`tickets.priority.${p}`), dot: PRIORITY_STYLE[p].dot }))} params={params} set={set} />
+        <Checklist param="priority" options={data.facets.priorities.map((p) => ({ value: p.value, label: txt.priority(p), dot: PRIORITY_STYLE[p.kind].dot }))} params={params} set={set} />
       )}
     </FilterButton>
   );
@@ -980,7 +998,7 @@ function AiPlanButton() {
       toast.success(t("tickets.ai.planApplied", { count: plan!.items.length }));
       setPlan(null);
     },
-    onError: () => toast.error(t("common.error")),
+    onError: (e) => toast.error(ticketErrorText(t, e)),
   });
   return (
     <>
@@ -1038,9 +1056,13 @@ function filterLabel(key: string, value: string, data: TicketList | undefined, t
     case "assignee":
       return parts.map((p) => (p === "none" ? t("tickets.unassigned") : (data?.facets.technicians.find((x) => x.id === p)?.name ?? p))).join(", ");
     case "status":
+      return parts.map((p) => data?.facets.statuses.find((s) => s.value === p)).map((c, i) => (c ? (c.label ?? t(`tickets.status.${c.kind}`)) : parts[i])).join(", ");
+    case "statusKind":
       return parts.map((p) => t(`tickets.status.${p}`)).join(", ");
     case "priority":
-      return parts.map((p) => t(`tickets.priority.${p}`)).join(", ");
+      return parts.map((p) => data?.facets.priorities.find((s) => s.value === p)).map((c, i) => (c ? (c.label ?? t(`tickets.priority.${c.kind}`)) : parts[i])).join(", ");
+    case "queue":
+      return parts.map((p) => data?.facets.queues.find((s) => s.value === p)?.label ?? p).join(", ");
     case "company":
       return parts.map((p) => data?.facets.companies.find((c) => String(c.id) === p)?.name ?? p).join(", ");
     case "due":

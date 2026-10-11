@@ -590,7 +590,11 @@ describe("autotask integration", () => {
       }),
     );
   });
-  afterAll(() => vi.unstubAllGlobals());
+  afterAll(async () => {
+    vi.unstubAllGlobals();
+    // Back to sample tickets for the next tests
+    await db().update(schema.integrations).set({ enabled: false }).where(eq(schema.integrations.provider, "autotask"));
+  });
 
   const sessions = new Map<string, Agent>();
   const session = async (email: string) => sessions.get(email) ?? sessions.set(email, await signIn(email)).get(email)!;
@@ -935,5 +939,167 @@ describe("tickets: client and contact", () => {
 
     const nt = await tech.post("/api/tickets", { title: "Avec contact", companyId: 301, contactId: created.json.id, priority: "low", queue: "Support niveau 1", assigneeId: null, dueDate: "2026-12-01" });
     expect(nt.json).toMatchObject({ contact: "Nadia Gélinas", contactId: created.json.id });
+  });
+});
+
+describe("tickets from Autotask", () => {
+  const base = "https://webservices99.autotask.net/ATServicesRest/V1.0/";
+  const sent: { method: string; url: string; headers: Record<string, string>; body: any }[] = [];
+  const json = (b: unknown, status = 200) => new Response(JSON.stringify(b), { status, headers: { "content-type": "application/json" } });
+  const pick = (values: [number, string][]) => values.map(([value, label]) => ({ value: String(value), label, isActive: true }));
+  const ticket = (over: Record<string, unknown>) => ({
+    id: 9001,
+    ticketNumber: "T20261012.0001",
+    title: "Serveur réel en panne",
+    description: "Le serveur ne répond plus.\nDepuis ce matin.",
+    status: 1,
+    priority: 4,
+    queueID: 29683,
+    companyID: 77,
+    contactID: 501,
+    assignedResourceID: 29682885,
+    dueDateTime: "2026-10-01T17:00:00Z",
+    createDate: "2026-09-30T12:00:00Z",
+    lastActivityDate: "2026-09-30T13:00:00Z",
+    source: 4,
+    ...over,
+  });
+
+  beforeAll(async () => {
+    const { clearTicketCache } = await import("../server/lib/ticketSource.ts");
+    clearTicketCache();
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: unknown, init: RequestInit = {}) => {
+        const url = String(input);
+        const method = init.method ?? "GET";
+        const headers = Object.fromEntries(Object.entries((init.headers ?? {}) as Record<string, string>).map(([k, v]) => [k.toLowerCase(), String(v)]));
+        sent.push({ method, url, headers, body: init.body ? JSON.parse(String(init.body)) : undefined });
+        if (url.includes("zoneInformation")) return json({ zoneName: "Zone 99", url: "https://webservices99.autotask.net/ATServicesRest/", webUrl: "https://ww99.autotask.net/" });
+        const path = url.slice(base.length);
+        if (path === "Resources/query") {
+          return json({
+            items: [
+              { id: 29682885, firstName: "Alex", lastName: "Tremblay", email: "tech@akab.local" },
+              { id: 29682999, firstName: "Autre", lastName: "Tech", email: "x@y.ca" },
+            ],
+            pageDetails: {},
+          });
+        }
+        if (path === "Tickets/entityInformation/fields") {
+          return json({
+            fields: [
+              { name: "status", isPickList: true, picklistValues: pick([[1, "New"], [8, "Needs Attention"], [2, "In Progress"], [5, "Complete"]]) },
+              { name: "priority", isPickList: true, picklistValues: pick([[1, "High"], [2, "Medium"], [3, "Low"], [4, "Critical"]]) },
+              { name: "queueID", isPickList: true, picklistValues: pick([[29683, "Triage"]]) },
+              { name: "source", isPickList: true, picklistValues: pick([[4, "Phone"]]) },
+            ],
+          });
+        }
+        if (path === "TicketNotes/entityInformation/fields") {
+          return json({
+            fields: [
+              { name: "noteType", picklistValues: pick([[1, "Task Detail"]]) },
+              { name: "publish", picklistValues: pick([[1, "All Autotask Users"], [2, "Internal Only"]]) },
+            ],
+          });
+        }
+        if (path === "Tickets/query") {
+          return json({
+            items: [ticket({}), ticket({ id: 9002, ticketNumber: "T20261012.0002", title: "Client a répondu", status: 8, priority: 2, assignedResourceID: null, contactID: null })],
+            pageDetails: {},
+          });
+        }
+        if (path === "TicketSecondaryResources/query") return json({ items: [{ ticketID: 9001, resourceID: 29682999 }], pageDetails: {} });
+        if (path === "Companies/query") return json({ items: [{ id: 77, companyName: "Client Réel inc." }], pageDetails: {} });
+        if (path === "Contacts/query") return json({ items: [{ id: 501, firstName: "Ann", lastName: "Réelle", emailAddress: "ann@reel.ca", phone: null }], pageDetails: {} });
+        if (path === "Tickets/9001" && method === "GET") return json({ item: ticket({}) });
+        if (path === "TicketNotes/query") {
+          return json({
+            items: [{ id: 1, title: "Appel", description: "Client rappelé", createDateTime: "2026-09-30T14:00:00Z", creatorResourceID: 29682885, creatorContactID: null, publish: 2 }],
+            pageDetails: {},
+          });
+        }
+        if (path === "TimeEntries/query") return json({ items: [{ hoursWorked: 1.5 }], pageDetails: {} });
+        if (path === "ResourceRoles/query") return json({ items: [{ roleID: 29683461 }], pageDetails: {} });
+        if (path === "Tickets" && method === "PATCH") return json({ itemId: 9001 });
+        if (path === "Tickets/9001/Notes" && method === "POST") return json({ itemId: 55 });
+        if (path === "Companies/77/Contacts" && method === "POST") return json({ itemId: 777 });
+        return json({ errors: [`unexpected ${method} ${path}`] }, 500);
+      }),
+    );
+    resetRateLimit("login:ip:unknown");
+    const admin = await signIn("admin@akab.local");
+    await admin.put("/api/admin/integrations/autotask", { username: "portal-api@akab.ca", secret: "good-secret", integrationCode: "TRACKING-ID", enabled: true });
+    const staff = (await admin.get("/api/admin/integrations/autotask/links")).json.staff;
+    const techId = staff.find((s: any) => s.email === "tech@akab.local").id;
+    const adminId = staff.find((s: any) => s.email === "admin@akab.local").id;
+    await admin.put(`/api/admin/integrations/autotask/links/${adminId}`, { resourceId: null });
+    expect((await admin.put(`/api/admin/integrations/autotask/links/${techId}`, { resourceId: 29682885 })).status).toBe(200);
+  });
+  afterAll(async () => {
+    vi.unstubAllGlobals();
+    await db().update(schema.integrations).set({ enabled: false }).where(eq(schema.integrations.provider, "autotask"));
+    (await import("../server/lib/ticketSource.ts")).clearTicketCache();
+  });
+
+  it("lists Autotask tickets with the Autotask statuses and the linked technician view", async () => {
+    resetRateLimit("login:ip:unknown");
+    const tech = await signIn("tech@akab.local");
+    const r = (await tech.get("/api/tickets")).json;
+    expect(r.demo).toBe(false);
+    expect(r.notLinked).toBe(false);
+    expect(r.facets.statuses.map((s: any) => [s.label, s.kind])).toEqual([
+      ["New", "new"],
+      ["Needs Attention", "needsAttention"],
+      ["In Progress", "inProgress"],
+      ["Complete", "complete"],
+    ]);
+    expect(r.items.map((t: any) => t.id)).toEqual([9001]); // mine = assigned to my Autotask user
+    expect(r.items[0]).toMatchObject({
+      company: { id: 77, name: "Client Réel inc." },
+      contact: "Ann Réelle",
+      statusLabel: "New",
+      statusKind: "new",
+      priorityLabel: "Critical",
+      priorityKind: "critical",
+      queueLabel: "Triage",
+      excerpt: "Le serveur ne répond plus.",
+      secondary: [{ id: "at-29682999", name: "Autre Tech" }],
+    });
+    expect(r.metrics).toMatchObject({ mine: 1, unassigned: 1, statusAttention: 1 });
+    expect((await tech.get("/api/tickets?view=all&statusKind=needsAttention")).json.items.map((t: any) => t.id)).toEqual([9002]);
+
+    const d = (await tech.get("/api/tickets/9001")).json;
+    expect(d.hours).toBe(1.5);
+    expect(d.notes).toEqual([{ id: "1", author: "Alex Tremblay", at: "2026-09-30T14:00:00Z", text: "Appel\nClient rappelé", internal: true }]);
+  });
+
+  it("writes to Autotask on behalf of the technician", async () => {
+    resetRateLimit("login:ip:unknown");
+    const tech = await signIn("tech@akab.local");
+    sent.length = 0;
+    expect((await tech.patch("/api/tickets/9001", { status: "2", priority: "1", assigneeId: "at-29682999" })).status).toBe(200);
+    const patch = sent.find((s) => s.method === "PATCH")!;
+    expect(patch.headers.impersonationresourceid).toBe("29682885");
+    expect(patch.body).toEqual({ id: 9001, status: 2, priority: 1, assignedResourceID: 29682999, assignedResourceRoleID: 29683461 });
+    expect((await tech.patch("/api/tickets/9001", { status: "999" })).json.error).toBe("invalid_value");
+
+    expect((await tech.post("/api/tickets/9001/notes", { text: "Rappel demain", internal: true })).status).toBe(201);
+    const note = sent.find((s) => s.url.endsWith("Tickets/9001/Notes"))!;
+    expect(note.body).toMatchObject({ ticketID: 9001, description: "Rappel demain", noteType: 1, publish: 2 });
+    expect(note.headers.impersonationresourceid).toBe("29682885");
+
+    const c = await tech.post("/api/tickets/companies/77/contacts", { firstName: "Bob", lastName: "Neuf", email: "bob@reel.ca" });
+    expect(c.json).toMatchObject({ id: "777", name: "Bob Neuf" });
+  });
+
+  it("refuses writes from an account not linked to Autotask", async () => {
+    resetRateLimit("login:ip:unknown");
+    const admin = await signIn("admin@akab.local");
+    const r = (await admin.get("/api/tickets")).json;
+    expect(r.notLinked).toBe(true);
+    expect(r.items).toEqual([]);
+    expect((await admin.patch("/api/tickets/9001", { status: "2" })).json.error).toBe("autotask_not_linked");
   });
 });

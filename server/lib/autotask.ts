@@ -29,7 +29,8 @@ export class AutotaskError extends Error {
   constructor(
     public code: AutotaskErrorCode,
     public status?: number,
-    detail?: string,
+    /** Autotask's own message (e.g. a required field), safe to show to staff */
+    public detail?: string,
   ) {
     super(detail ? `${code}: ${detail}` : code);
   }

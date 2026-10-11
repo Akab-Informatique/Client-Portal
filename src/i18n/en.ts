@@ -490,6 +490,13 @@ const en: Dict = {
     },
   },
   tickets: {
+    notLinkedTitle: "Your account is not linked to an Autotask user.",
+    notLinkedText: "“My tickets” stays empty and you cannot change tickets. An administrator can link it in Admin settings › Integrations › Autotask.",
+    errors: {
+      notLinked: "Your account is not linked to an Autotask user: ask an administrator to link it (Admin settings › Integrations › Autotask).",
+      autotask: "Autotask refused: {{detail}}",
+      invalidContact: "This contact does not belong to the ticket's client.",
+    },
     searchCompany: "Search a client…",
     searchContact: "Search a contact…",
     pickContact: "Choose a contact…",
@@ -618,6 +625,7 @@ const en: Dict = {
       hours: "Time logged",
     },
     filter: {
+      statusKind: "Status",
       assignee: "Technician",
       attention: "To watch",
       due: "Due",

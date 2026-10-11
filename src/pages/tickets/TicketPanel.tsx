@@ -53,9 +53,9 @@ import { api, ApiError } from "@/lib/api";
 import { useCan, useMe } from "@/lib/session";
 import { cn, initials } from "@/lib/utils";
 import { CompanyPicker, ContactPicker } from "./pickers";
-import { dueState, longDateTime, PRIORITY_STYLE, STATUS_STYLE, usePresence, type AiAnalysis, type Priority, type Status, type TicketDetail, type Viewer } from "./shared";
+import { dueState, longDateTime, PRIORITY_STYLE, STATUS_STYLE, useChoiceText, usePresence, type AiAnalysis, type TicketDetail, type Viewer, ticketErrorText } from "./shared";
 
-const SOURCE_ICON: Record<TicketDetail["source"], LucideIcon> = { email: Mail, phone: Phone, portal: Inbox, monitoring: MonitorCog };
+const SOURCE_ICON: Record<string, LucideIcon> = { email: Mail, phone: Phone, portal: Inbox, monitoring: MonitorCog };
 
 /** Friendly text for AI errors (not configured, provider down…). */
 export function useAiError() {
@@ -119,23 +119,24 @@ function useTicketUpdate(tk: TicketDetail) {
   const { t } = useTranslation();
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: (patch: { status?: Status; priority?: Priority; queue?: string; assigneeId?: string | null; dueDate?: string; companyId?: number; contactId?: string | null }) =>
+    mutationFn: (patch: { status?: string; priority?: string; queue?: string; assigneeId?: string | null; dueDate?: string; companyId?: number; contactId?: string | null }) =>
       api.patch<TicketDetail>(`/tickets/${tk.id}`, patch),
     onSuccess: (next) => {
       qc.setQueryData(["tickets", "detail", tk.id], next);
       void qc.invalidateQueries({ queryKey: ["tickets"] });
       toast.success(t("common.saved"));
     },
-    onError: () => toast.error(t("common.error")),
+    onError: (e) => toast.error(ticketErrorText(t, e)),
   });
 }
 
 function TicketBody({ tk, viewers, onClose, onMinimize }: { tk: TicketDetail; viewers: Viewer[] | null; onClose: () => void; onMinimize: () => void }) {
   const { t } = useTranslation();
+  const txt = useChoiceText();
   const can = useCan();
   const editable = can("tickets.edit");
   const update = useTicketUpdate(tk);
-  const due = dueState(tk.dueAt, tk.status);
+  const due = dueState(tk.dueAt, tk.statusKind);
   const [draft, setDraft] = useState<{ text: string; internal: boolean } | null>(null);
 
   return (
@@ -168,19 +169,19 @@ function TicketBody({ tk, viewers, onClose, onMinimize }: { tk: TicketDetail; vi
               disabled={!editable}
               label={t("tickets.fields.status")}
               value={tk.status}
-              options={tk.options.statuses.map((s) => ({ value: s, label: t(`tickets.status.${s}`) }))}
-              onPick={(v) => update.mutate({ status: v as Status })}
-              trigger={<span className={cn("inline-flex items-center gap-1.5 rounded-full border px-2.5 py-0.5 text-xs font-medium", STATUS_STYLE[tk.status])}>{t(`tickets.status.${tk.status}`)}</span>}
+              options={tk.options.statuses.map((s) => ({ value: s.value, label: txt.status(s) }))}
+              onPick={(v) => update.mutate({ status: v })}
+              trigger={<span className={cn("inline-flex items-center gap-1.5 rounded-full border px-2.5 py-0.5 text-xs font-medium", STATUS_STYLE[tk.statusKind])}>{txt.status({ label: tk.statusLabel, kind: tk.statusKind })}</span>}
             />
             <InlinePick
               disabled={!editable}
               label={t("tickets.fields.priority")}
               value={tk.priority}
-              options={tk.options.priorities.map((p) => ({ value: p, label: t(`tickets.priority.${p}`), dot: PRIORITY_STYLE[p].dot }))}
-              onPick={(v) => update.mutate({ priority: v as Priority })}
+              options={tk.options.priorities.map((p) => ({ value: p.value, label: txt.priority(p), dot: PRIORITY_STYLE[p.kind].dot }))}
+              onPick={(v) => update.mutate({ priority: v })}
               trigger={
-                <span className={cn("inline-flex items-center gap-1.5 rounded-full border px-2.5 py-0.5 text-xs font-medium", PRIORITY_STYLE[tk.priority].text)}>
-                  <span className={cn("size-2 rounded-full", PRIORITY_STYLE[tk.priority].dot)} /> {t(`tickets.priority.${tk.priority}`)}
+                <span className={cn("inline-flex items-center gap-1.5 rounded-full border px-2.5 py-0.5 text-xs font-medium", PRIORITY_STYLE[tk.priorityKind].text)}>
+                  <span className={cn("size-2 rounded-full", PRIORITY_STYLE[tk.priorityKind].dot)} /> {txt.priority({ label: tk.priorityLabel, kind: tk.priorityKind })}
                 </span>
               }
             />
@@ -188,9 +189,9 @@ function TicketBody({ tk, viewers, onClose, onMinimize }: { tk: TicketDetail; vi
               disabled={!editable}
               label={t("tickets.fields.queue")}
               value={tk.queue}
-              options={tk.options.queues.map((q) => ({ value: q, label: q }))}
+              options={tk.options.queues.map((q) => ({ value: q.value, label: q.label ?? q.value }))}
               onPick={(v) => update.mutate({ queue: v })}
-              trigger={<span className="rounded-full border px-2.5 py-0.5 text-xs text-muted-foreground">{tk.queue}</span>}
+              trigger={<span className="rounded-full border px-2.5 py-0.5 text-xs text-muted-foreground">{tk.queueLabel || "—"}</span>}
             />
             {update.isPending && <Loader2 className="size-4 animate-spin text-muted-foreground" />}
             <span
@@ -290,8 +291,8 @@ function TicketBody({ tk, viewers, onClose, onMinimize }: { tk: TicketDetail; vi
                   longDateTime(tk.dueAt)
                 )}
               </Detail>
-              <Detail icon={SOURCE_ICON[tk.source]} label={t("tickets.fields.source")}>
-                {t(`tickets.source.${tk.source}`)}
+              <Detail icon={SOURCE_ICON[tk.source] ?? Inbox} label={t("tickets.fields.source")}>
+                {tk.source ? t(`tickets.source.${tk.source}`, { defaultValue: tk.source }) : "—"}
               </Detail>
               <Detail icon={Clock3} label={t("tickets.fields.created")}>
                 {longDateTime(tk.createdAt)}
@@ -375,7 +376,7 @@ function StartDate({ tk }: { tk: TicketDetail }) {
       void qc.invalidateQueries({ queryKey: ["tickets"] });
       toast.success(t("common.saved"));
     },
-    onError: () => toast.error(t("common.error")),
+    onError: (e) => toast.error(ticketErrorText(t, e)),
   });
   return (
     <div className="rounded-xl border border-[color:var(--gold)]/30 bg-[color:var(--gold)]/[0.04] p-4">
@@ -421,7 +422,7 @@ function NoteComposer({ tk, draft, onDraftUsed }: { tk: TicketDetail; draft: { t
       void qc.invalidateQueries({ queryKey: ["tickets", "detail", tk.id] });
       toast.success(internal ? t("tickets.noteAdded") : t("tickets.replySent"));
     },
-    onError: () => toast.error(t("common.error")),
+    onError: (e) => toast.error(ticketErrorText(t, e)),
   });
   return (
     <div className={cn("rounded-xl border bg-card/60 p-3 transition-colors", internal && "border-violet-500/30")}>
@@ -574,7 +575,7 @@ function AiPanel({ tk, onToNote }: { tk: TicketDetail; onToNote: (text: string) 
               <ul className="list-disc space-y-1 pl-5 text-sm">{c.questions.map((s, i) => <li key={i}>{s}</li>)}</ul>
             </div>
           )}
-          {c.suggestedPriority && c.suggestedPriority !== tk.priority && (
+          {c.suggestedPriority && c.suggestedPriority !== tk.priorityKind && (
             <p className="text-xs text-muted-foreground">
               {t("tickets.ai.suggestedPriority")} :{" "}
               <span className={cn("font-medium", PRIORITY_STYLE[c.suggestedPriority].text)}>{t(`tickets.priority.${c.suggestedPriority}`)}</span>

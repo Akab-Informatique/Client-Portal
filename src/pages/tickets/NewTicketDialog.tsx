@@ -13,7 +13,7 @@ import { api } from "@/lib/api";
 import { useMe } from "@/lib/session";
 import { cn } from "@/lib/utils";
 import { CompanyPicker, ContactPicker } from "./pickers";
-import { PRIORITY_STYLE, type Priority, type TicketList, type TicketSummary } from "./shared";
+import { PRIORITY_STYLE, useChoiceText, type TicketList, type TicketSummary, ticketErrorText } from "./shared";
 
 const inDays = (n: number) => new Date(Date.now() + n * 86_400_000).toISOString().slice(0, 10);
 
@@ -30,6 +30,7 @@ export function NewTicketDialog({
   onCreated: (id: number) => void;
 }) {
   const { t } = useTranslation();
+  const txt = useChoiceText();
   const qc = useQueryClient();
   const me = useMe();
   const empty = () => ({
@@ -37,8 +38,8 @@ export function NewTicketDialog({
     contactId: null as string | null,
     title: "",
     description: "",
-    priority: "medium" as Priority,
-    queue: facets.queues[0] ?? "",
+    priority: (facets.priorities.find((p) => p.kind === "medium") ?? facets.priorities[0])?.value ?? "",
+    queue: facets.queues[0]?.value ?? "",
     assigneeId: me.id as string,
     dueDate: inDays(2),
     startDate: "",
@@ -63,7 +64,7 @@ export function NewTicketDialog({
       onOpenChange(false);
       onCreated(tk.id);
     },
-    onError: () => toast.error(t("common.error")),
+    onError: (e) => toast.error(ticketErrorText(t, e)),
   });
 
   return (
@@ -117,16 +118,16 @@ export function NewTicketDialog({
             <div className="grid grid-cols-4 gap-2">
               {facets.priorities.map((p) => (
                 <button
-                  key={p}
+                  key={p.value}
                   type="button"
-                  aria-pressed={f.priority === p}
-                  onClick={() => setF({ ...f, priority: p })}
+                  aria-pressed={f.priority === p.value}
+                  onClick={() => setF({ ...f, priority: p.value })}
                   className={cn(
                     "flex items-center justify-center gap-1.5 rounded-lg border py-2 text-sm transition-colors",
-                    f.priority === p ? "border-[color:var(--gold)]/60 bg-[color:var(--gold)]/10 font-medium" : "text-muted-foreground hover:bg-accent/50",
+                    f.priority === p.value ? "border-[color:var(--gold)]/60 bg-[color:var(--gold)]/10 font-medium" : "text-muted-foreground hover:bg-accent/50",
                   )}
                 >
-                  <span className={cn("size-2 rounded-full", PRIORITY_STYLE[p].dot)} /> {t(`tickets.priority.${p}`)}
+                  <span className={cn("size-2 rounded-full", PRIORITY_STYLE[p.kind].dot)} /> {txt.priority(p)}
                 </button>
               ))}
             </div>
@@ -141,8 +142,8 @@ export function NewTicketDialog({
                 </SelectTrigger>
                 <SelectContent>
                   {facets.queues.map((q) => (
-                    <SelectItem key={q} value={q}>
-                      {q}
+                    <SelectItem key={q.value} value={q.value}>
+                      {q.label ?? q.value}
                     </SelectItem>
                   ))}
                 </SelectContent>

@@ -5,7 +5,7 @@ import { Maximize2, Ticket, X } from "lucide-react";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { cn } from "@/lib/utils";
 import { TicketOverlay } from "./TicketPanel";
-import { PRIORITY_STYLE, usePresence, type Priority, type TicketDetail } from "./shared";
+import { PRIORITY_STYLE, usePresence, type PriorityKind as Priority, type TicketDetail } from "./shared";
 
 /**
  * Ticket workspace, shared by every staff page: the ticket open full screen and
@@ -47,7 +47,7 @@ export function TicketWorkspaceProvider({ enabled, children }: { enabled: boolea
   }, []);
   const close = useCallback(() => setOpenId(null), []);
   const minimize = useCallback((tk: TicketDetail) => {
-    setDocked((d) => [...d.filter((x) => x.id !== tk.id), { id: tk.id, number: tk.number, title: tk.title, priority: tk.priority }].slice(-6));
+    setDocked((d) => [...d.filter((x) => x.id !== tk.id), { id: tk.id, number: tk.number, title: tk.title, priority: tk.priorityKind }].slice(-6));
     setOpenId(null);
   }, []);
   const dismiss = (id: number) => setDocked((d) => d.filter((x) => x.id !== id));

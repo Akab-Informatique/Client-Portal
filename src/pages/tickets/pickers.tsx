@@ -8,6 +8,7 @@ import { Input } from "@/components/ui/input";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { api, ApiError } from "@/lib/api";
 import { cn } from "@/lib/utils";
+import { ticketErrorText } from "./shared";
 
 /**
  * Client and contact pickers (Autotask Companies / Contacts). Searchable, and
@@ -241,7 +242,7 @@ function NewContactForm({ companyId, onCancel, onCreated }: { companyId: number;
       toast.success(t("tickets.contactCreated", { name: c.name }));
       onCreated(c);
     },
-    onError: (e) => toast.error(e instanceof ApiError && e.status === 400 ? t("tickets.contactInvalid") : t("common.error")),
+    onError: (e) => toast.error(e instanceof ApiError && e.code === "Validation failed" ? t("tickets.contactInvalid") : ticketErrorText(t, e)),
   });
   return (
     <form
