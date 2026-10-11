@@ -15,6 +15,13 @@
       "when": 1791742191953,
       "tag": "0001_view_as_client",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1791743043155,
+      "tag": "0002_reset_dashboards",
+      "breakpoints": true
     }
   ]
 }

@@ -57,15 +57,11 @@ export const WIDGETS: WidgetDef[] = [
   { type: "systemStatus", icon: Server, defaultSize: "sm", render: () => <SystemStatusWidget /> },
 ];
 
-export const DEFAULT_LAYOUT = [
-  { id: "w-welcome", type: "welcome", size: "lg" as const },
-  { id: "w-stats", type: "stats", size: "lg" as const },
-  { id: "w-recent", type: "recentMessages", size: "md" as const },
-  { id: "w-actions", type: "quickActions", size: "sm" as const },
-  { id: "w-clock", type: "clock", size: "sm" as const },
-  { id: "w-status", type: "systemStatus", size: "sm" as const },
-  { id: "w-pinned", type: "pinned", size: "sm" as const },
-];
+/**
+ * Empty for now — the widgets to keep are not decided yet. They remain
+ * available under "Customize > Add widget"; list the chosen ones here later.
+ */
+export const DEFAULT_LAYOUT: { id: string; type: string; size: "sm" | "md" | "lg" }[] = [];
 
 // ── building blocks ──────────────────────────────────────────────────────────
 export function WidgetFrame({ title, icon: Icon, action, children, className }: { title: string; icon: LucideIcon; action?: ReactNode; children: ReactNode; className?: string }) {
