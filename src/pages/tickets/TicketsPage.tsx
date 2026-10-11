@@ -13,14 +13,12 @@ import {
   Check,
   ChevronDown,
   Eye,
-  Flame,
   FlaskConical,
-  Hourglass,
   Inbox,
   Layers,
   Plus,
   Search,
-  Sparkles,
+  Siren,
   Trash2,
   UserRound,
   UserX,
@@ -275,14 +273,11 @@ function PortalTag() {
 }
 
 // ── Metric tiles ───────────────────────────────────────────────────────────────
-const OPEN = "new,inProgress,waitingCustomer,waitingVendor,scheduled";
-const TILES: { key: keyof TicketList["metrics"]; icon: LucideIcon; tone: string; glow: string; query: string }[] = [
+type TileKey = "mine" | "unassigned" | "attention";
+const TILES: { key: TileKey; icon: LucideIcon; tone: string; glow: string; query: string }[] = [
   { key: "mine", icon: UserRound, tone: "text-primary", glow: "rgba(255,206,26,0.35)", query: "view=mine" },
-  { key: "overdue", icon: AlarmClock, tone: "text-red-400", glow: "rgba(239,68,68,0.35)", query: "view=mine&due=overdue" },
-  { key: "dueToday", icon: Hourglass, tone: "text-orange-400", glow: "rgba(249,115,22,0.35)", query: "view=mine&due=today" },
-  { key: "critical", icon: Flame, tone: "text-rose-400", glow: "rgba(244,63,94,0.35)", query: `view=all&priority=critical,high&status=${OPEN}` },
   { key: "unassigned", icon: UserX, tone: "text-sky-400", glow: "rgba(56,189,248,0.35)", query: "view=unassigned" },
-  { key: "newToday", icon: Sparkles, tone: "text-violet-400", glow: "rgba(167,139,250,0.35)", query: "view=all&created=today" },
+  { key: "attention", icon: Siren, tone: "text-red-400", glow: "rgba(239,68,68,0.38)", query: "view=all&attention=1" },
 ];
 
 function MetricTiles({ data, params, apply }: { data: TicketList | undefined; params: URLSearchParams; apply: (q: string) => void }) {
@@ -293,10 +288,11 @@ function MetricTiles({ data, params, apply }: { data: TicketList | undefined; pa
     return canonical(p);
   }, [params]);
   return (
-    <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 xl:grid-cols-6">
+    <div className="grid gap-3 sm:grid-cols-3">
       {TILES.map((tile, i) => {
         const active = canonical(tile.query) === current || (tile.key === "mine" && current === "");
         const value = data?.metrics[tile.key];
+        const b = data?.metrics.attentionBreakdown;
         return (
           <motion.button
             key={tile.key}
@@ -304,27 +300,36 @@ function MetricTiles({ data, params, apply }: { data: TicketList | undefined; pa
             onClick={() => apply(tile.query)}
             initial={{ opacity: 0, y: 8 }}
             animate={{ opacity: 1, y: 0 }}
-            transition={{ delay: i * 0.04 }}
+            transition={{ delay: i * 0.05 }}
             style={{ ["--tile-glow" as string]: tile.glow }}
             className={cn(
-              "group relative flex aspect-[5/4] flex-col justify-between overflow-hidden rounded-2xl border bg-card/70 p-4 text-left backdrop-blur transition-all hover:-translate-y-0.5 hover:border-[color:var(--gold)]/40 hover:shadow-[0_0_32px_-12px_var(--tile-glow)] sm:aspect-square xl:aspect-[1/0.95]",
-              active && "border-[color:var(--gold)]/60 shadow-[0_0_32px_-10px_var(--tile-glow)]",
+              "group relative flex min-h-36 flex-col justify-between overflow-hidden rounded-2xl border bg-card/70 p-5 text-left backdrop-blur transition-all hover:-translate-y-0.5 hover:border-[color:var(--gold)]/40 hover:shadow-[0_0_36px_-12px_var(--tile-glow)]",
+              active && "border-[color:var(--gold)]/60 shadow-[0_0_36px_-10px_var(--tile-glow)]",
             )}
           >
             <span className="pointer-events-none absolute inset-0 bg-grid opacity-[0.35] [mask-image:radial-gradient(circle_at_100%_0%,black,transparent_70%)]" />
-            <span className="pointer-events-none absolute -right-10 -top-10 size-28 rounded-full opacity-0 blur-2xl transition-opacity group-hover:opacity-100" style={{ background: tile.glow }} />
-            <span className="relative flex items-center justify-between">
-              <span className={cn("flex size-9 items-center justify-center rounded-xl border bg-background/60", tile.tone)}>
-                <tile.icon className="size-4" />
+            <span className="pointer-events-none absolute -right-12 -top-12 size-36 rounded-full opacity-0 blur-3xl transition-opacity group-hover:opacity-100" style={{ background: tile.glow }} />
+            <span className="relative flex items-start justify-between gap-3">
+              <span>
+                <span className="block text-sm font-semibold">{t(`tickets.metrics.${tile.key}`)}</span>
+                <span className="block text-xs text-muted-foreground">{t(`tickets.metricsHint.${tile.key}`)}</span>
               </span>
-              {active && <span className="size-1.5 rounded-full bg-[color:var(--gold)] shadow-[0_0_8px_var(--gold)]" />}
+              <span className={cn("flex size-10 shrink-0 items-center justify-center rounded-xl border bg-background/60", tile.tone)}>
+                <tile.icon className="size-5" />
+              </span>
             </span>
-            <span className="relative">
-              <span className={cn("block font-mono text-4xl font-semibold tabular-nums tracking-tight", value ? "text-foreground" : "text-muted-foreground/60")}>
+            <span className="relative flex items-end justify-between gap-3">
+              <span className={cn("font-mono text-5xl font-semibold tabular-nums tracking-tight", value ? "text-foreground" : "text-muted-foreground/60")}>
                 {value === undefined ? "–" : <CountUp value={value} />}
               </span>
-              <span className="mt-1 block text-xs font-medium leading-tight">{t(`tickets.metrics.${tile.key}`)}</span>
-              <span className="block text-[10px] text-muted-foreground">{t(`tickets.metricsHint.${tile.key}`)}</span>
+              {tile.key === "attention" && b && (
+                <span className="flex flex-col items-end gap-1 font-mono text-[11px]">
+                  <span className="text-red-400">{t("tickets.breakdown.overdue", { count: b.overdue })}</span>
+                  <span className="text-orange-400">{t("tickets.breakdown.dueToday", { count: b.dueToday })}</span>
+                  <span className="text-rose-300">{t("tickets.breakdown.critical", { count: b.critical })}</span>
+                </span>
+              )}
+              {active && tile.key !== "attention" && <span className="mb-2 size-2 rounded-full bg-[color:var(--gold)] shadow-[0_0_8px_var(--gold)]" />}
             </span>
           </motion.button>
         );
@@ -704,6 +709,8 @@ function filterLabel(key: string, value: string, data: TicketList | undefined, t
       return t(`tickets.dueFilter.${value}`);
     case "created":
       return t("tickets.quick.today");
+    case "attention":
+      return t("tickets.metricsHint.attention");
     case "dueFrom":
     case "dueTo":
     case "startFrom":

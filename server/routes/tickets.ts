@@ -16,7 +16,7 @@ import { body } from "../lib/validate.ts";
 const zDate = z.string().regex(/^\d{4}-\d{2}-\d{2}$/);
 const STATUSES = ["new", "inProgress", "waitingCustomer", "waitingVendor", "scheduled", "complete"] as const;
 const PRIORITIES = ["critical", "high", "medium", "low"] as const;
-const FILTER_PARAMS = ["view", "q", "due", "created", "status", "priority", "company", "queue", "dueFrom", "dueTo", "startFrom", "startTo", "sort"];
+const FILTER_PARAMS = ["view", "q", "due", "created", "attention", "status", "priority", "company", "queue", "dueFrom", "dueTo", "startFrom", "startTo", "sort"];
 
 // ── Presence: who has a ticket open right now (in memory, 30 s heartbeat) ─────
 const PRESENCE_TTL = 30_000;
@@ -82,6 +82,13 @@ export const ticketRoutes = new Hono<AppEnv>()
     const me = a.user.id;
     const eod = endOfToday();
     const open = (t: Ticket) => t.status !== "complete";
+    const isOverdue = (t: Ticket) => new Date(t.dueAt).getTime() < Date.now();
+    const isDueToday = (t: Ticket) => {
+      const d = new Date(t.dueAt).getTime();
+      return d >= Date.now() && d <= eod;
+    };
+    /** Needs attention: open and overdue, due today or critical */
+    const attention = (t: Ticket) => open(t) && (isOverdue(t) || isDueToday(t) || t.priority === "critical");
 
     const views = {
       mine: (t: Ticket) => t.assignee?.id === me && open(t),
@@ -113,6 +120,7 @@ export const ticketRoutes = new Hono<AppEnv>()
         return q.due === "overdue" ? d < Date.now() : q.due === "today" ? d >= Date.now() && d <= eod : true;
       })
       .filter((t) => q.created !== "today" || new Date(t.createdAt).toDateString() === new Date().toDateString())
+      .filter((t) => q.attention !== "1" || attention(t))
       // Portal-only filter: Autotask has no start date
       .filter((t) => inRange(starts.get(t.id), q.startFrom, q.startTo))
       .map((t) => summary(t, starts.get(t.id), me));
@@ -130,19 +138,16 @@ export const ticketRoutes = new Hono<AppEnv>()
     );
 
     // Key figures for the tiles (whole set, not the current filters)
-    const mineOpen = all.filter(views.mine);
-    const startOfToday = new Date();
-    startOfToday.setHours(0, 0, 0, 0);
+    const needs = all.filter(attention);
     const metrics = {
-      mine: mineOpen.length,
-      overdue: mineOpen.filter((t) => new Date(t.dueAt).getTime() < Date.now()).length,
-      dueToday: mineOpen.filter((t) => {
-        const d = new Date(t.dueAt).getTime();
-        return d >= Date.now() && d <= eod;
-      }).length,
-      critical: all.filter((t) => open(t) && (t.priority === "critical" || t.priority === "high")).length,
+      mine: all.filter(views.mine).length,
       unassigned: all.filter(views.unassigned).length,
-      newToday: all.filter((t) => new Date(t.createdAt) >= startOfToday).length,
+      attention: needs.length,
+      attentionBreakdown: {
+        overdue: needs.filter(isOverdue).length,
+        dueToday: needs.filter(isDueToday).length,
+        critical: needs.filter((t) => t.priority === "critical").length,
+      },
     };
 
     return c.json({

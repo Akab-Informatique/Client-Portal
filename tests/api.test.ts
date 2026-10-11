@@ -830,7 +830,10 @@ describe("tickets: metrics and saved filters", () => {
     resetRateLimit("login:ip:unknown");
     const tech = await signIn("tech@akab.local");
     const list = (await tech.get("/api/tickets")).json;
-    expect(Object.keys(list.metrics).sort()).toEqual(["critical", "dueToday", "mine", "newToday", "overdue", "unassigned"]);
+    expect(Object.keys(list.metrics).sort()).toEqual(["attention", "attentionBreakdown", "mine", "unassigned"]);
+    const attention = (await tech.get("/api/tickets?view=all&attention=1")).json.items;
+    expect(attention).toHaveLength(list.metrics.attention);
+    expect(attention.every((t: any) => t.status !== "complete" && (t.priority === "critical" || new Date(t.dueAt).getTime() <= new Date().setHours(23, 59, 59, 999)))).toBe(true);
     expect(list.metrics.mine).toBe(list.counts.mine);
 
     const saved = await tech.post("/api/tickets/filters", { name: "Critiques réseau", query: "view=all&priority=critical&queue=R%C3%A9seau&evil=1" });
