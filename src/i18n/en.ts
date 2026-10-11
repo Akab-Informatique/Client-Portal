@@ -309,6 +309,17 @@ const en: Dict = {
       system: "System",
     },
   },
+  viewAs: {
+    staff: "Technician",
+    client: "Client",
+    pickTitle: "View the portal as a client",
+    pickText: "Choose the client: you will see exactly their portal, read only.",
+    none: "No active clients.",
+    banner: "Client view: {{client}}",
+    readOnly: "Read only",
+    as: "Signed in as {{name}}",
+    back: "Back to technician view",
+  },
   client: {
     welcome: "Welcome, {{name}}",
     soon: "Your full client space is coming soon. Here are the messages from the AKAB team.",

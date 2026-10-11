@@ -18,6 +18,7 @@ import {
 import { Logo, LogoMark } from "@/components/brand/Logo";
 import { LanguageToggle } from "@/components/LanguageToggle";
 import { CommandPalette } from "@/components/CommandPalette";
+import { ViewSwitcher } from "@/components/ViewSwitcher";
 import { ProfileDialog } from "@/components/ProfileDialog";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import { Badge } from "@/components/ui/badge";
@@ -231,11 +232,13 @@ function SidebarContent({ collapsed, onToggle }: { collapsed: boolean; onToggle?
 }
 
 function TopBar({ onMenu }: { onMenu: () => void }) {
+  const can = useCan();
   return (
     <header className="sticky top-0 z-30 flex h-16 items-center gap-3 border-b bg-background/75 px-4 backdrop-blur-xl sm:px-6 lg:px-8">
       <Button variant="ghost" size="icon" className="lg:hidden" onClick={onMenu} aria-label="Menu">
         <Menu className="size-5" />
       </Button>
+      {can("clientview.use") && <ViewSwitcher />}
       <div className="ml-auto flex items-center gap-3">
         <LanguageToggle persist className="hidden sm:flex" />
         <UserMenu />

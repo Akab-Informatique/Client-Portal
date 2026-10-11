@@ -105,6 +105,8 @@ export const sessions = pgTable(
       .notNull()
       .references(() => users.id, { onDelete: "cascade" }),
     mfaVerified: boolean("mfa_verified").notNull().default(false),
+    /** Staff "view as client": this session shows the portal as that client (read only) */
+    viewAsClientId: uuid("view_as_client_id").references(() => clients.id, { onDelete: "set null" }),
     ip: text("ip"),
     userAgent: text("user_agent"),
     createdAt: created(),

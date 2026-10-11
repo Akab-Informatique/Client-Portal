@@ -10,6 +10,7 @@ import {
   effectivePermissions,
   isAdmin,
   isPermissionKey,
+  permissionsFor,
   type Override,
   type PermissionKey,
 } from "../../shared/permissions.ts";
@@ -21,11 +22,16 @@ const IDLE_HOURS = 4;
 export type User = typeof schema.users.$inferSelect;
 
 export type AuthContext = {
+  /** Effective identity. During "view as client" this is a read-only client identity. */
   user: User;
+  /** The person actually signed in (same as user unless viewing as a client). */
+  realUser: User;
   sessionId: string;
   mfaVerified: boolean;
   permissions: PermissionKey[];
   isAdmin: boolean;
+  /** Set while a technician views the portal as a client (read only). */
+  viewAs: { clientId: string; clientName: string } | null;
 };
 
 export type AppEnv = { Variables: { auth: AuthContext | null } };
@@ -98,18 +104,57 @@ export const loadAuth: MiddlewareHandler<AppEnv> = async (c, next) => {
     const idle = row && now.getTime() - row.session.lastSeenAt.getTime() > IDLE_HOURS * 3600_000;
     if (row && row.user.active && !idle) {
       const permissions = await permissionsOf(row.user);
-      c.set("auth", {
+      const base: AuthContext = {
         user: row.user,
+        realUser: row.user,
         sessionId: id,
         mfaVerified: row.session.mfaVerified,
         permissions,
         isAdmin: row.user.kind === "staff" && isAdmin(permissions),
-      });
+        viewAs: null,
+      };
+      c.set("auth", await applyViewAs(base, row.session.viewAsClientId));
       if (now.getTime() - row.session.lastSeenAt.getTime() > 60_000) {
         await db().update(schema.sessions).set({ lastSeenAt: now }).where(eq(schema.sessions.id, id));
       }
     } else if (row) {
       await db().delete(schema.sessions).where(eq(schema.sessions.id, id));
+    }
+  }
+  await next();
+};
+
+/**
+ * "View as client": a technician holding clientview.use sees the portal as the
+ * chosen client — client identity with every client right — and the request
+ * is read-only (see readOnlyViewAs). Re-checked on every request: losing the
+ * right or the client becoming inactive ends the client view.
+ */
+async function applyViewAs(a: AuthContext, clientId: string | null): Promise<AuthContext> {
+  if (!clientId) return a;
+  const allowed = a.realUser.kind === "staff" && a.permissions.includes("clientview.use");
+  const [client] = allowed ? await db().select().from(schema.clients).where(eq(schema.clients.id, clientId)) : [];
+  if (!client || !client.active) {
+    await db().update(schema.sessions).set({ viewAsClientId: null }).where(eq(schema.sessions.id, a.sessionId));
+    return a;
+  }
+  return {
+    ...a,
+    user: { ...a.realUser, kind: "client", clientId: client.id, roleId: null },
+    permissions: permissionsFor("client"),
+    isAdmin: false,
+    viewAs: { clientId: client.id, clientName: client.name },
+  };
+}
+
+/** Client view is read-only: only leaving it and signing out are allowed. */
+export const readOnlyViewAs: MiddlewareHandler<AppEnv> = async (c, next) => {
+  const a = c.var.auth;
+  const m = c.req.method;
+  if (a?.viewAs && m !== "GET" && m !== "HEAD") {
+    const p = c.req.path;
+    if (!p.startsWith("/api/view-as") && p !== "/api/auth/logout") {
+      throw new HTTPException(403, { message: "read_only_view" });
     }
   }
   await next();

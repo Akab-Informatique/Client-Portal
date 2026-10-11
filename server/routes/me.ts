@@ -29,6 +29,9 @@ export async function loadMe(a: AuthContext) {
     client: client ? { id: client.id, name: client.name } : null,
     permissions: a.permissions,
     isAdmin: a.isAdmin,
+    /** Set while a technician views the portal as a client (read only). */
+    viewAs: a.viewAs,
+    realUser: a.viewAs ? { name: a.realUser.name, email: a.realUser.email } : null,
     preferences: { dashboard: prefs?.dashboard ?? null, theme: prefs?.theme ?? "dark" },
   };
 }

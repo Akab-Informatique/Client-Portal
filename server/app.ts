@@ -6,13 +6,14 @@ import { secureHeaders } from "hono/secure-headers";
 import { bodyLimit } from "hono/body-limit";
 import { serveStatic } from "@hono/node-server/serve-static";
 import { config } from "./config.ts";
-import { loadAuth, requireStaff, type AppEnv } from "./lib/auth.ts";
+import { loadAuth, readOnlyViewAs, requireStaff, type AppEnv } from "./lib/auth.ts";
 import { sameOriginJson } from "./lib/http.ts";
 import { authRoutes } from "./routes/auth.ts";
 import { meRoutes } from "./routes/me.ts";
 import { adminRoutes } from "./routes/admin.ts";
 import { boardRoutes, messageRoutes } from "./routes/messages.ts";
 import { dashboardRoutes } from "./routes/dashboard.ts";
+import { viewAsRoutes } from "./routes/viewAs.ts";
 
 export function createApp() {
   const app = new Hono<AppEnv>();
@@ -42,6 +43,7 @@ export function createApp() {
   api.use("*", bodyLimit({ maxSize: 256 * 1024 }));
   api.use("*", sameOriginJson);
   api.use("*", loadAuth);
+  api.use("*", readOnlyViewAs);
   api.use("*", async (c, next) => {
     await next();
     c.header("Cache-Control", "no-store");
@@ -49,6 +51,7 @@ export function createApp() {
   api.get("/health", (c) => c.json({ ok: true }));
   api.route("/auth", authRoutes);
   api.route("/me", meRoutes);
+  api.route("/view-as", viewAsRoutes);
   api.use("/admin/*", requireStaff);
   api.route("/admin", adminRoutes);
   api.use("/messages/*", requireStaff);

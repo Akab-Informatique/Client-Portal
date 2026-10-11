@@ -284,3 +284,72 @@ describe("message board", () => {
     expect((await v.post("/api/messages", { title: "x", body: "y", audience: "all" })).status).toBe(403);
   });
 });
+
+describe("view as client", () => {
+  it("technicians need the clientview.use right (grantable per user)", async () => {
+    const tech = await signIn("tech@akab.local");
+    expect((await tech.get("/api/view-as/clients")).status).toBe(403);
+    const admin = await signIn("admin@akab.local");
+    const techUser = (await admin.get("/api/admin/staff")).json.find((u: any) => u.email === "tech@akab.local");
+    await admin.put(`/api/admin/users/${techUser.id}/permissions`, { overrides: [{ key: "clientview.use", effect: "allow" }] });
+    const tech2 = await signIn("tech@akab.local");
+    expect((await tech2.get("/api/view-as/clients")).status).toBe(200);
+    await admin.put(`/api/admin/users/${techUser.id}/permissions`, { overrides: [] });
+  });
+
+  it("shows exactly the chosen client's view, read-only, and switches back", async () => {
+    const admin = await signIn("admin@akab.local");
+    const clients = (await admin.get("/api/view-as/clients")).json;
+    const [c1, c2] = clients;
+    const only2 = await admin.post("/api/messages", { title: "Seulement client 2", body: "x", audience: "selected", clientIds: [c2.id] });
+    expect(only2.status).toBe(201);
+
+    expect((await admin.post("/api/view-as", { clientId: c1.id })).status).toBe(200);
+    const me = (await admin.get("/api/auth/me")).json;
+    expect(me.stage).toBe("ready");
+    expect(me.me.kind).toBe("client");
+    expect(me.me.client.id).toBe(c1.id);
+    expect(me.me.viewAs.clientName).toBe(c1.name);
+    expect(me.me.realUser.email).toBe("admin@akab.local");
+
+    const board = (await admin.get("/api/board")).json;
+    expect(board.some((m: any) => m.title === "Seulement client 2")).toBe(false);
+    // staff areas are closed while viewing as a client
+    expect((await admin.get("/api/admin/staff")).status).toBe(403);
+    expect((await admin.get("/api/messages")).status).toBe(403);
+    // read only: no writes on the client's behalf
+    expect((await admin.post(`/api/board/${board[0].id}/read`)).json.error).toBe("read_only_view");
+    expect((await admin.patch("/api/me", { name: "Hacked" })).json.error).toBe("read_only_view");
+
+    // switch to another client, then back to the technician view
+    expect((await admin.post("/api/view-as", { clientId: c2.id })).status).toBe(200);
+    const board2 = (await admin.get("/api/board")).json;
+    expect(board2.some((m: any) => m.title === "Seulement client 2")).toBe(true);
+    expect((await admin.del("/api/view-as")).status).toBe(200);
+    const back = (await admin.get("/api/auth/me")).json;
+    expect(back.me.kind).toBe("staff");
+    expect(back.me.viewAs).toBeNull();
+    expect((await admin.get("/api/admin/staff")).status).toBe(200);
+
+    const log = (await admin.get("/api/admin/audit")).json.map((e: any) => e.action);
+    expect(log).toContain("clientview.start");
+    expect(log).toContain("clientview.stop");
+  });
+
+  it("ends the client view if the right is removed or the client deactivated", async () => {
+    const admin = await signIn("admin@akab.local");
+    const techUser = (await admin.get("/api/admin/staff")).json.find((u: any) => u.email === "tech@akab.local");
+    await admin.put(`/api/admin/users/${techUser.id}/permissions`, { overrides: [{ key: "clientview.use", effect: "allow" }] });
+    const tech = await signIn("tech@akab.local");
+    const [c1] = (await tech.get("/api/view-as/clients")).json;
+    await tech.post("/api/view-as", { clientId: c1.id });
+    expect((await tech.get("/api/auth/me")).json.me.kind).toBe("client");
+    await admin.put(`/api/admin/users/${techUser.id}/permissions`, { overrides: [] });
+    expect((await tech.get("/api/auth/me")).json.me.kind).toBe("staff");
+
+    // inactive clients cannot be viewed
+    const created = await admin.post("/api/admin/clients", { name: "Client inactif" });
+    await admin.patch(`/api/admin/clients/${created.json.id}`, { active: false });
+    expect((await admin.post("/api/view-as", { clientId: created.json.id })).json.error).toBe("invalid_client");
+  });
+});

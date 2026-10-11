@@ -31,6 +31,7 @@ Brand follows akab.ca: ink `#0a0a0b`, paper `#f4f4f1`, gold gradient
 - Mutations: JSON only + same-origin check (`sameOriginJson`). Sessions are server-side (`sessions` table, cookie holds a random token; DB stores its SHA-256).
 - Passwords: scrypt (`server/lib/crypto.ts`), policy ≥ 12 chars. MFA (TOTP) required in production (off by default in dev, `REQUIRE_MFA=true` to test); codes are single-use. MFA secrets sealed with `APP_SECRET`.
 - Admin changes are written to `audit_log` via `audit()`. Never log secrets.
+- "View as client" (`clientview.use`): the session stores `view_as_client_id`; `loadAuth` swaps `auth.user` to a read-only client identity (`auth.realUser` is the technician). `readOnlyViewAs` blocks every write except `/api/view-as` and logout. Client endpoints must scope by `auth.user.clientId`.
 - No secrets in `VITE_*` variables or committed files; `.env` only.
 - CSP lives in `server/app.ts` (`secureHeaders`) — fonts are self-hosted (`@fontsource`), no external scripts.
 

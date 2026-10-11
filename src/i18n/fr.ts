@@ -307,6 +307,17 @@ const fr = {
       system: "Système",
     },
   },
+  viewAs: {
+    staff: "Technicien",
+    client: "Client",
+    pickTitle: "Voir le portail comme un client",
+    pickText: "Choisissez le client : vous verrez exactement son portail, en lecture seule.",
+    none: "Aucun client actif.",
+    banner: "Vue client : {{client}}",
+    readOnly: "Lecture seule",
+    as: "Connecté en tant que {{name}}",
+    back: "Revenir à la vue technicien",
+  },
   client: {
     welcome: "Bienvenue, {{name}}",
     soon: "Votre espace client complet arrive bientôt. Voici les messages de l'équipe AKAB.",

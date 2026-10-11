@@ -59,6 +59,21 @@ export const MODULES = [
     ],
   },
   {
+    key: "clientview",
+    audience: "staff",
+    label: { fr: "Vue client", en: "Client view" },
+    permissions: [
+      {
+        key: "clientview.use",
+        label: { fr: "Voir le portail comme un client", en: "View the portal as a client" },
+        description: {
+          fr: "Basculer vers la vue d'un client choisi (lecture seule)",
+          en: "Switch to a chosen client's view (read only)",
+        },
+      },
+    ],
+  },
+  {
     key: "admin",
     audience: "staff",
     label: { fr: "Paramètres admin", en: "Admin settings" },
