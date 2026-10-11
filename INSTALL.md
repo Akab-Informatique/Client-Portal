@@ -93,5 +93,5 @@ chmod 600 akab-*.sql.gz
 | Login loops back to sign-in | Site must be served over HTTPS (secure cookies) |
 | `password authentication failed` | `POSTGRES_PASSWORD` changed after first start — restore the original |
 | Lost MFA device | Another admin: Admin settings → user → Security → Reset MFA |
-| Lost the first admin one-time password | `docker compose logs app | grep "one-time password"` (printed on the very first start only) |
+| Lost the first admin one-time password | `docker compose logs app \| grep "one-time password"` (printed on the very first start only) |
 | Forgotten password | "Mot de passe oublié ?" on the sign-in page (needs a mail server), or another admin: user → Security |
