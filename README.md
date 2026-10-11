@@ -4,9 +4,6 @@ Portal for the AKAB Informatique team and its clients: technician workspace,
 admin settings (technicians, clients, client users, roles and granular rights),
 customizable dashboard and a message board to clients. French / English.
 
-The previous version is preserved in branch `backup/v1-original` and tag
-`backup-2026-10-05`.
-
 ## Stack
 
 | Part | Tech |

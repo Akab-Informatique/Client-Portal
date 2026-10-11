@@ -9,7 +9,7 @@ Brand follows akab.ca: ink `#0a0a0b`, paper `#f4f4f1`, gold gradient
 ## Branches
 
 - `master` is production. Work on `feat/...` / `fix/...` branches, merge when `npm run build` and `npm test` pass.
-- Old portal: `backup/v1-original` (do not merge it back).
+- `master` is the only branch on GitHub; no other branches or tags are kept.
 
 ## Commands
 
