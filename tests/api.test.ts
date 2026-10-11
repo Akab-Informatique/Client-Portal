@@ -1,4 +1,4 @@
-import { beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import * as OTPAuth from "otpauth";
 
 process.env.NODE_ENV = "test";
@@ -531,5 +531,109 @@ describe("dashboards", () => {
     await tech.del(`/api/dashboards/${mine.id}`);
     const after = (await tech.get("/api/dashboards")).json;
     expect(after.find((d: any) => d.isDefault).slug).toBe("akab");
+  });
+});
+
+describe("autotask integration", () => {
+  const calls: { url: string; headers: Record<string, string> }[] = [];
+  const json = (b: unknown, status = 200) => new Response(JSON.stringify(b), { status, headers: { "content-type": "application/json" } });
+  beforeAll(() => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: unknown, init: RequestInit = {}) => {
+        const url = String(input);
+        const headers = Object.fromEntries(Object.entries((init.headers ?? {}) as Record<string, string>).map(([k, v]) => [k.toLowerCase(), String(v)]));
+        calls.push({ url, headers });
+        if (url.startsWith("https://webservices.autotask.net/atservicesrest/v1.0/zoneInformation")) {
+          return json({ zoneName: "Zone 99", url: "https://webservices99.autotask.net/ATServicesRest/", webUrl: "https://ww99.autotask.net/" });
+        }
+        if (headers.secret !== "good-secret" || headers.apiintegrationcode !== "TRACKING-ID") return json({ errors: ["Unauthorized"] }, 401);
+        if (url === "https://webservices99.autotask.net/ATServicesRest/V1.0/ThresholdInformation") {
+          return json({ externalRequestThreshold: 10000, currentTimeframeRequestCount: 42 });
+        }
+        if (url === "https://webservices99.autotask.net/ATServicesRest/V1.0/Resources/query") {
+          return json({
+            items: [
+              { id: 29682885, firstName: "Alex", lastName: "Tremblay", email: "TECH@akab.local" },
+              { id: 29682886, firstName: "Autre", lastName: "Personne", email: "autre@example.com" },
+            ],
+            pageDetails: { nextPageUrl: null },
+          });
+        }
+        return json({ errors: ["not found"] }, 404);
+      }),
+    );
+  });
+  afterAll(() => vi.unstubAllGlobals());
+
+  const sessions = new Map<string, Agent>();
+  const session = async (email: string) => sessions.get(email) ?? sessions.set(email, await signIn(email)).get(email)!;
+
+  it("is reserved to admin.integrations", async () => {
+    const tech = await session("tech@akab.local");
+    expect((await tech.get("/api/admin/integrations/autotask")).status).toBe(403);
+    expect((await tech.put("/api/admin/integrations/autotask", { enabled: false })).status).toBe(403);
+  });
+
+  it("stores the credentials sealed and never returns or logs them", async () => {
+    const admin = await session("admin@akab.local");
+    expect((await admin.put("/api/admin/integrations/autotask", { enabled: true })).json.error).toBe("autotask_incomplete");
+
+    const r = await admin.put("/api/admin/integrations/autotask", {
+      username: "portal-api@akab.ca",
+      secret: "good-secret",
+      integrationCode: "TRACKING-ID",
+      enabled: true,
+    });
+    expect(r.status).toBe(200);
+    expect(r.json).toMatchObject({ enabled: true, configured: true, username: "portal-api@akab.ca", hasSecret: true, hasIntegrationCode: true });
+    expect(r.json.zone.url).toBe("https://webservices99.autotask.net/ATServicesRest/");
+    expect(JSON.stringify(r.json)).not.toContain("good-secret");
+    expect(JSON.stringify(r.json)).not.toContain("TRACKING-ID");
+
+    const [row] = await db().select().from(schema.integrations).where(eq(schema.integrations.provider, "autotask"));
+    expect(row.secret).toMatch(/^v1./);
+    expect(JSON.stringify(row)).not.toContain("good-secret");
+    expect(JSON.stringify(row)).not.toContain("TRACKING-ID");
+    const logs = await db().select().from(schema.auditLog).where(eq(schema.auditLog.action, "integration.autotask.updated"));
+    expect(JSON.stringify(logs)).not.toContain("good-secret");
+    expect(JSON.stringify(logs)).not.toContain("TRACKING-ID");
+
+    // Saving without the secret keeps the stored one
+    expect((await admin.put("/api/admin/integrations/autotask", { enabled: true })).json.hasSecret).toBe(true);
+  });
+
+  it("tests the connection with the saved or the typed credentials", async () => {
+    const admin = await session("admin@akab.local");
+    calls.length = 0;
+    const ok = await admin.post("/api/admin/integrations/autotask/test", {});
+    expect(ok.json).toEqual({ ok: true, zone: { name: "Zone 99", webUrl: "https://ww99.autotask.net/" }, usage: { used: 42, limit: 10000 } });
+    const sent = calls.find((x) => x.url.endsWith("/ThresholdInformation"))!;
+    expect(sent.headers).toMatchObject({ username: "portal-api@akab.ca", secret: "good-secret", apiintegrationcode: "TRACKING-ID" });
+    expect((await admin.get("/api/admin/integrations/autotask")).json.lastTest.ok).toBe(true);
+
+    const bad = await admin.post("/api/admin/integrations/autotask/test", { secret: "wrong" });
+    expect(bad.json).toEqual({ ok: false, error: "auth" });
+    // a draft test does not change the saved status
+    expect((await admin.get("/api/admin/integrations/autotask")).json.lastTest.ok).toBe(true);
+  });
+
+  it("links technicians to their Autotask user", async () => {
+    const admin = await session("admin@akab.local");
+    const links = (await admin.get("/api/admin/integrations/autotask/links")).json;
+    expect(links.error).toBeNull();
+    expect(links.resources).toHaveLength(2);
+    const tech = links.staff.find((s: any) => s.email === "tech@akab.local");
+    expect(tech.suggestedResourceId).toBe(29682885);
+
+    expect((await admin.post("/api/admin/integrations/autotask/links/auto", {})).json.linked).toBe(1);
+    const [row] = await db().select().from(schema.users).where(eq(schema.users.email, "tech@akab.local"));
+    expect(row.autotaskResourceId).toBe(29682885);
+
+    const adminRow = links.staff.find((s: any) => s.email === "admin@akab.local");
+    expect((await admin.put(`/api/admin/integrations/autotask/links/${adminRow.id}`, { resourceId: 29682885 })).status).toBe(409);
+    expect((await admin.put(`/api/admin/integrations/autotask/links/${adminRow.id}`, { resourceId: 123 })).json.error).toBe("autotask_unknown_resource");
+    expect((await admin.put(`/api/admin/integrations/autotask/links/${adminRow.id}`, { resourceId: 29682886 })).status).toBe(200);
+    expect((await admin.put(`/api/admin/integrations/autotask/links/${adminRow.id}`, { resourceId: null })).status).toBe(200);
   });
 });

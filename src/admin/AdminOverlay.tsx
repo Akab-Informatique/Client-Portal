@@ -2,13 +2,14 @@ import { useSearchParams } from "react-router-dom";
 import { useTranslation } from "react-i18next";
 import { AnimatePresence, motion } from "motion/react";
 import { Dialog as DialogPrimitive } from "radix-ui";
-import { History, ShieldCheck, Building2, Users, X, type LucideIcon } from "lucide-react";
+import { History, PlugZap, ShieldCheck, Building2, Users, X, type LucideIcon } from "lucide-react";
 import { LogoMark } from "@/components/brand/Logo";
 import { TechBackground } from "@/components/brand/TechBackground";
 import { useCan } from "@/lib/session";
 import { cn } from "@/lib/utils";
 import type { PermissionKey } from "@shared/permissions";
 import { ActivitySection, ClientsSection, RolesSection, StaffSection } from "./sections";
+import { IntegrationsSection } from "./IntegrationsSection";
 
 type Section = { key: string; labelKey: string; icon: LucideIcon; permission: PermissionKey[]; render: () => React.ReactNode };
 
@@ -16,11 +17,12 @@ const SECTIONS: Section[] = [
   { key: "staff", labelKey: "admin.sections.staff", icon: Users, permission: ["admin.staff"], render: () => <StaffSection /> },
   { key: "clients", labelKey: "admin.sections.clients", icon: Building2, permission: ["admin.clients"], render: () => <ClientsSection /> },
   { key: "roles", labelKey: "admin.sections.roles", icon: ShieldCheck, permission: ["admin.roles"], render: () => <RolesSection /> },
+  { key: "integrations", labelKey: "admin.sections.integrations", icon: PlugZap, permission: ["admin.integrations"], render: () => <IntegrationsSection /> },
   {
     key: "activity",
     labelKey: "admin.sections.activity",
     icon: History,
-    permission: ["admin.staff", "admin.clients", "admin.roles"],
+    permission: ["admin.staff", "admin.clients", "admin.roles", "admin.integrations"],
     render: () => <ActivitySection />,
   },
 ];

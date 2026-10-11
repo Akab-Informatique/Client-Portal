@@ -24,7 +24,7 @@ import { PermissionMatrix } from "./PermissionMatrix";
 import { NewUserDialog, UserSheet, UserStatusBadges } from "./UserPanels";
 import { useOneShotParam } from "@/lib/useDeepLink";
 
-function SectionHeader({ title, subtitle, action }: { title: string; subtitle: string; action?: ReactNode }) {
+export function SectionHeader({ title, subtitle, action }: { title: string; subtitle: string; action?: ReactNode }) {
   return (
     <div className="mb-6 flex flex-wrap items-end justify-between gap-3">
       <div>

@@ -397,7 +397,7 @@ export const adminRoutes = new Hono<AppEnv>()
   })
 
   // Activity
-  .get("/audit", requirePermission("admin.roles", "admin.staff", "admin.clients"), async (c) => {
+  .get("/audit", requirePermission("admin.roles", "admin.staff", "admin.clients", "admin.integrations"), async (c) => {
     const rows = await db()
       .select({ log: schema.auditLog, actor: schema.users.name })
       .from(schema.auditLog)

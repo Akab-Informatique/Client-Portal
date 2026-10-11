@@ -95,6 +95,14 @@ export const MODULES = [
         key: "admin.roles",
         label: { fr: "Gérer les rôles et les accès", en: "Manage roles and access" },
       },
+      {
+        key: "admin.integrations",
+        label: { fr: "Gérer les intégrations (Autotask)", en: "Manage integrations (Autotask)" },
+        description: {
+          fr: "Configurer la connexion Autotask et lier les techniciens à leur utilisateur Autotask",
+          en: "Configure the Autotask connection and link technicians to their Autotask user",
+        },
+      },
     ],
   },
   {
@@ -123,7 +131,7 @@ export function isPermissionKey(v: unknown): v is PermissionKey {
   return typeof v === "string" && (ALL_PERMISSIONS as readonly string[]).includes(v);
 }
 
-export const ADMIN_PERMISSIONS = ["admin.staff", "admin.clients", "admin.roles"] as const satisfies readonly PermissionKey[];
+export const ADMIN_PERMISSIONS = ["admin.staff", "admin.clients", "admin.roles", "admin.integrations"] as const satisfies readonly PermissionKey[];
 
 /** Predefined roles, created on first start. System roles cannot be deleted. */
 export const SYSTEM_ROLES: Array<{

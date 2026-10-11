@@ -75,12 +75,15 @@ export const users = pgTable(
     failedLogins: integer("failed_logins").notNull().default(0),
     lockedUntil: timestamp("locked_until", { withTimezone: true }),
     lastLoginAt: timestamp("last_login_at", { withTimezone: true }),
+    /** Staff only: the matching Autotask resource (actions are made on their behalf) */
+    autotaskResourceId: integer("autotask_resource_id"),
     createdAt: created(),
     updatedAt: updated(),
   },
   (t) => [
     uniqueIndex("users_email_unique").on(sql`lower(${t.email})`),
     index("users_client_idx").on(t.clientId),
+    uniqueIndex("users_autotask_resource_unique").on(t.autotaskResourceId),
   ],
 );
 
@@ -196,6 +199,19 @@ export const dashboards = pgTable(
   },
   (t) => [uniqueIndex("dashboards_slug_unique").on(t.slug), index("dashboards_owner_idx").on(t.ownerId)],
 );
+
+/**
+ * External integrations, one row per provider (e.g. "autotask").
+ * `config` holds non-secret settings; `secret` is a JSON blob sealed with APP_SECRET.
+ */
+export const integrations = pgTable("integrations", {
+  provider: text("provider").primaryKey(),
+  enabled: boolean("enabled").notNull().default(false),
+  config: jsonb("config").$type<Record<string, unknown>>().notNull().default(sql`'{}'::jsonb`),
+  secret: text("secret"),
+  updatedBy: uuid("updated_by").references(() => users.id, { onDelete: "set null" }),
+  updatedAt: updated(),
+});
 
 /** Access given to specific staff members on a dashboard, on top of its visibility. */
 export const dashboardMembers = pgTable(
