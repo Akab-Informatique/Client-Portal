@@ -3,7 +3,7 @@ import { useQuery } from "@tanstack/react-query";
 import { api } from "@/lib/api";
 import { currentLocale } from "@/i18n";
 
-export type Status = "new" | "inProgress" | "waitingCustomer" | "waitingVendor" | "scheduled" | "complete";
+export type Status = "new" | "inProgress" | "needsAttention" | "waitingCustomer" | "waitingVendor" | "scheduled" | "complete";
 export type Priority = "critical" | "high" | "medium" | "low";
 export type Viewer = { userId: string; name: string };
 export type TicketSummary = {
@@ -30,7 +30,7 @@ export type TicketDetail = TicketSummary & {
 };
 export type TicketList = {
   demo: boolean;
-  metrics: { mine: number; unassigned: number; attention: number; attentionBreakdown: { overdue: number; dueToday: number; critical: number } };
+  metrics: { mine: number; unassigned: number; attention: number; statusAttention: number; attentionBreakdown: { overdue: number; dueToday: number; critical: number } };
   items: TicketSummary[];
   counts: Record<View, number>;
   facets: { queues: string[]; companies: { id: number; name: string }[]; statuses: Status[]; priorities: Priority[]; technicians: { id: string; name: string }[] };
@@ -49,6 +49,7 @@ export const PRIORITY_STYLE: Record<Priority, { bar: string; text: string; dot: 
 };
 export const STATUS_STYLE: Record<Status, string> = {
   new: "border-sky-500/40 bg-sky-500/10 text-sky-300",
+  needsAttention: "border-red-500/50 bg-red-500/15 text-red-300",
   inProgress: "border-[color:var(--gold)]/40 bg-[color:var(--gold)]/10 text-primary",
   waitingCustomer: "border-violet-500/40 bg-violet-500/10 text-violet-300",
   waitingVendor: "border-fuchsia-500/40 bg-fuchsia-500/10 text-fuchsia-300",

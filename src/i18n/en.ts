@@ -493,11 +493,13 @@ const en: Dict = {
     dock: "Minimized tickets",
     dueFilter: { overdue: "Overdue", today: "Today" },
     metrics: {
+      statusAttention: "“Needs attention” status",
       mine: "My tickets",
       unassigned: "Unassigned",
-      attention: "Needs attention",
+      attention: "To watch",
     },
     metricsHint: {
+      statusAttention: "E.g. the client replied",
       mine: "Open and assigned to you",
       unassigned: "To pick up",
       attention: "Overdue, due today or critical",
@@ -544,7 +546,7 @@ const en: Dict = {
       hours: "Time logged",
     },
     filter: {
-      attention: "Needs attention",
+      attention: "To watch",
       due: "Due",
       created: "Created",
       status: "Status",
@@ -559,6 +561,7 @@ const en: Dict = {
     status: {
       new: "New",
       inProgress: "In progress",
+      needsAttention: "Needs attention",
       waitingCustomer: "Waiting customer",
       waitingVendor: "Waiting vendor",
       scheduled: "Scheduled",

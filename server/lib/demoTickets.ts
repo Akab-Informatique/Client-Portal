@@ -3,7 +3,7 @@
  * to Autotask. Same shape as what the Autotask connector will return, so the
  * UI does not change when the data becomes real. Kept in memory (lost on restart).
  */
-export type TicketStatus = "new" | "inProgress" | "waitingCustomer" | "waitingVendor" | "scheduled" | "complete";
+export type TicketStatus = "new" | "inProgress" | "needsAttention" | "waitingCustomer" | "waitingVendor" | "scheduled" | "complete";
 export type TicketPriority = "critical" | "high" | "medium" | "low";
 export type Person = { id: string; name: string };
 export type Note = { id: string; author: string; at: string; text: string; internal: boolean };
@@ -87,7 +87,7 @@ function generate(): Stored[] {
   const r = rng(42);
   const now = Date.now();
   const H = 3600_000;
-  const statuses: TicketStatus[] = ["new", "inProgress", "inProgress", "waitingCustomer", "waitingVendor", "scheduled", "complete"];
+  const statuses: TicketStatus[] = ["new", "inProgress", "inProgress", "needsAttention", "waitingCustomer", "waitingVendor", "scheduled", "complete"];
   const priorities: TicketPriority[] = ["critical", "high", "high", "medium", "medium", "medium", "low", "low"];
   const list: Stored[] = Array.from({ length: 36 }, (_, i) => {
     const [title, description] = SUBJECTS[i % SUBJECTS.length];

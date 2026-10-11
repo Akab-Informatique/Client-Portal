@@ -14,7 +14,7 @@ import { body } from "../lib/validate.ts";
  */
 
 const zDate = z.string().regex(/^\d{4}-\d{2}-\d{2}$/);
-const STATUSES = ["new", "inProgress", "waitingCustomer", "waitingVendor", "scheduled", "complete"] as const;
+const STATUSES = ["new", "inProgress", "needsAttention", "waitingCustomer", "waitingVendor", "scheduled", "complete"] as const;
 const PRIORITIES = ["critical", "high", "medium", "low"] as const;
 const FILTER_PARAMS = ["view", "q", "due", "created", "attention", "status", "priority", "company", "queue", "dueFrom", "dueTo", "startFrom", "startTo", "sort"];
 
@@ -143,6 +143,8 @@ export const ticketRoutes = new Hono<AppEnv>()
       mine: all.filter(views.mine).length,
       unassigned: all.filter(views.unassigned).length,
       attention: needs.length,
+      /** Tickets in the "Needs attention" status (e.g. the client replied) */
+      statusAttention: all.filter((t) => t.status === "needsAttention").length,
       attentionBreakdown: {
         overdue: needs.filter(isOverdue).length,
         dueToday: needs.filter(isDueToday).length,
