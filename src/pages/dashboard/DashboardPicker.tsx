@@ -38,6 +38,7 @@ import { api } from "@/lib/api";
 import { useMe } from "@/lib/session";
 import type { DashboardWidget } from "@/lib/types";
 import { cn } from "@/lib/utils";
+import { useConfirm } from "@/components/ConfirmDialog";
 
 export type Visibility = "private" | "team" | "admins";
 export type Access = "view" | "edit";
@@ -143,6 +144,7 @@ export function DashboardPicker({ current, onSelect }: { current: DashboardInfo 
 /** "Personnaliser" menu: widgets, default dashboard, and (when allowed) rename, access, delete. */
 export function DashboardMenu({ d, onEditWidgets, onDeleted }: { d: DashboardInfo; onEditWidgets: () => void; onDeleted: () => void }) {
   const { t } = useTranslation();
+  const confirm = useConfirm();
   const qc = useQueryClient();
   const [renaming, setRenaming] = useState(false);
   const [access, setAccess] = useState(false);
@@ -193,7 +195,7 @@ export function DashboardMenu({ d, onEditWidgets, onDeleted }: { d: DashboardInf
             </DropdownMenuItem>
           )}
           {d.personalLayout && (
-            <DropdownMenuItem onSelect={() => window.confirm(t("dashboards.backToDefaultConfirm")) && backToDefault.mutate()}>
+            <DropdownMenuItem onSelect={() => void confirm({ title: t("dashboards.backToDefaultConfirm") }).then((ok) => ok && backToDefault.mutate())}>
               <RotateCcw className="size-4" /> {t("dashboards.backToDefault")}
             </DropdownMenuItem>
           )}
@@ -227,7 +229,7 @@ export function DashboardMenu({ d, onEditWidgets, onDeleted }: { d: DashboardInf
             </DropdownMenuItem>
           )}
           {d.canDelete && (
-            <DropdownMenuItem variant="destructive" onSelect={() => window.confirm(t("dashboards.deleteConfirm")) && remove.mutate()}>
+            <DropdownMenuItem variant="destructive" onSelect={() => void confirm({ title: t("dashboards.deleteConfirm"), destructive: true }).then((ok) => ok && remove.mutate())}>
               <Trash2 className="size-4" /> {t("common.delete")}
             </DropdownMenuItem>
           )}

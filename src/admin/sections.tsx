@@ -23,6 +23,7 @@ import { useAdminError, useAudit, useClients, useClientUsers, useRoleDescription
 import { PermissionMatrix } from "./PermissionMatrix";
 import { NewUserDialog, UserSheet, UserStatusBadges } from "./UserPanels";
 import { useOneShotParam } from "@/lib/useDeepLink";
+import { useConfirm } from "@/components/ConfirmDialog";
 
 export function SectionHeader({ title, subtitle, action }: { title: string; subtitle: string; action?: ReactNode }) {
   return (
@@ -393,6 +394,7 @@ function RoleCard({ role, onEdit }: { role: Role; onEdit: () => void }) {
 
 function RoleDialog({ role, roles, onClose }: { role: Role | "new" | null; roles: Role[]; onClose: () => void }) {
   const { t } = useTranslation();
+  const confirm = useConfirm();
   const qc = useQueryClient();
   const errText = useAdminError();
   const roleName = useRoleName();
@@ -514,7 +516,7 @@ function RoleDialog({ role, roles, onClose }: { role: Role | "new" | null; roles
           </div>
           <div className="flex flex-wrap justify-between gap-2 border-t pt-4">
             {existing && !existing.isSystem ? (
-              <Button type="button" variant="ghost" className="text-destructive hover:text-destructive" onClick={() => window.confirm(t("admin.roles.deleteConfirm")) && remove.mutate()}>
+              <Button type="button" variant="ghost" className="text-destructive hover:text-destructive" onClick={() => void confirm({ title: t("admin.roles.deleteConfirm"), destructive: true }).then((ok) => ok && remove.mutate())}>
                 <Trash2 className="size-4" /> {t("common.delete")}
               </Button>
             ) : (

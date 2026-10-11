@@ -1,5 +1,6 @@
 const fr = {
   common: {
+    confirm: "Confirmer",
     save: "Enregistrer",
     cancel: "Annuler",
     close: "Fermer",
@@ -145,7 +146,8 @@ const fr = {
     done: "Terminé",
     addWidget: "Ajouter un widget",
     saveDefault: "Enregistrer par défaut",
-    saveDefaultConfirm: "Remplacer la disposition par défaut ? Toutes les personnes qui voient ce tableau l'auront (sauf celles qui ont leur propre disposition).",
+    saveDefaultConfirm: "Remplacer la disposition par défaut ?",
+    saveDefaultConfirmText: "Toutes les personnes qui voient ce tableau auront cette disposition, sauf celles qui ont leur propre disposition.",
     saveMine: "Pour moi seulement",
     savedDefault: "Nouvelle disposition par défaut enregistrée",
     savedMine: "Votre disposition est enregistrée",

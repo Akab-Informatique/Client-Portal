@@ -5,6 +5,7 @@ import { ThemeProvider } from "@/lib/theme";
 import { MotionConfig } from "motion/react";
 import { Toaster } from "@/components/ui/sonner";
 import { TooltipProvider } from "@/components/ui/tooltip";
+import { ConfirmProvider } from "@/components/ConfirmDialog";
 import "@/i18n";
 import "./index.css";
 import App from "./App";
@@ -21,7 +22,9 @@ createRoot(document.getElementById("root")!).render(
       <QueryClientProvider client={queryClient}>
         <MotionConfig reducedMotion="user">
           <TooltipProvider delayDuration={200}>
-            <App />
+            <ConfirmProvider>
+              <App />
+            </ConfirmProvider>
             <Toaster position="bottom-right" richColors closeButton />
           </TooltipProvider>
         </MotionConfig>

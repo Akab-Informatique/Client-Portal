@@ -2,6 +2,7 @@ import type { Dict } from "./fr";
 
 const en: Dict = {
   common: {
+    confirm: "Confirm",
     save: "Save",
     cancel: "Cancel",
     close: "Close",
@@ -147,7 +148,8 @@ const en: Dict = {
     done: "Done",
     addWidget: "Add widget",
     saveDefault: "Save as default",
-    saveDefaultConfirm: "Replace the default layout? Everyone who sees this dashboard will get it (except those with their own layout).",
+    saveDefaultConfirm: "Replace the default layout?",
+    saveDefaultConfirmText: "Everyone who sees this dashboard will get this layout, except those who have their own.",
     saveMine: "Just for me",
     savedDefault: "New default layout saved",
     savedMine: "Your layout is saved",

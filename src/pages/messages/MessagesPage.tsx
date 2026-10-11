@@ -23,6 +23,7 @@ import type { Message } from "@/lib/types";
 import { cn } from "@/lib/utils";
 import { Composer } from "./Composer";
 import { useDeepLink } from "@/lib/useDeepLink";
+import { useConfirm } from "@/components/ConfirmDialog";
 
 export function MessagesPage() {
   const { t } = useTranslation();
@@ -91,6 +92,7 @@ export function MessagesPage() {
 
 function MessageCard({ m, highlight }: { m: Message; highlight: boolean }) {
   const { t } = useTranslation();
+  const confirm = useConfirm();
   const can = useCan();
   const me = useMe();
   const qc = useQueryClient();
@@ -199,7 +201,7 @@ function MessageCard({ m, highlight }: { m: Message; highlight: boolean }) {
                   <DropdownMenuItem
                     variant="destructive"
                     onSelect={() => {
-                      if (window.confirm(t("messages.deleteConfirm"))) remove.mutate();
+                      void confirm({ title: t("messages.deleteConfirm"), destructive: true }).then((ok) => ok && remove.mutate());
                     }}
                   >
                     <Trash2 className="size-4" /> {t("common.delete")}

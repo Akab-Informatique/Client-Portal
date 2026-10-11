@@ -30,6 +30,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { api } from "@/lib/api";
 import { cn } from "@/lib/utils";
 import { SectionHeader } from "./sections";
+import { useConfirm } from "@/components/ConfirmDialog";
 
 type Smtp = {
   source: "database" | "env" | "none";
@@ -78,6 +79,7 @@ export function EmailSection() {
 // ── SMTP ───────────────────────────────────────────────────────────────────────
 function SmtpCard() {
   const { t } = useTranslation();
+  const confirm = useConfirm();
   const qc = useQueryClient();
   const { data: s, isLoading } = useQuery({ queryKey: ["admin", "email", "smtp"], queryFn: () => api.get<Smtp>("/admin/email/smtp") });
   const [form, setForm] = useState({ host: "", port: "587", security: "starttls" as Smtp["security"], user: "", pass: "", from: "", fromName: "AKAB Informatique" });
@@ -191,7 +193,7 @@ function SmtpCard() {
             {save.isPending && <Loader2 className="size-4 animate-spin" />} {t("common.save")}
           </Button>
           {s.source === "database" && (
-            <Button type="button" variant="ghost" className="text-muted-foreground" onClick={() => window.confirm(t("email.smtp.clearConfirm")) && clear.mutate()}>
+            <Button type="button" variant="ghost" className="text-muted-foreground" onClick={() => void confirm({ title: t("email.smtp.clearConfirm"), destructive: true }).then((ok) => ok && clear.mutate())}>
               <RotateCcw className="size-4" /> {t("email.smtp.clear")}
             </Button>
           )}
@@ -274,6 +276,7 @@ function TemplateList({ onOpen }: { onOpen: (key: string) => void }) {
 
 function TemplateEditor({ tkey, onBack }: { tkey: string; onBack: () => void }) {
   const { t, i18n } = useTranslation();
+  const confirm = useConfirm();
   const qc = useQueryClient();
   const key = ["admin", "email", "templates", tkey];
   const { data, isLoading, isError } = useQuery({ queryKey: key, queryFn: () => api.get<TemplateDetail>(`/admin/email/templates/${tkey}`) });
@@ -407,7 +410,7 @@ function TemplateEditor({ tkey, onBack }: { tkey: string; onBack: () => void }) 
                 {sendTest.isPending ? <Loader2 className="size-4 animate-spin" /> : <Send className="size-4" />} {t("email.templates.sendTest")}
               </Button>
               {data.locales[locale].edited && (
-                <Button variant="ghost" className="text-muted-foreground" onClick={() => window.confirm(t("email.templates.restoreConfirm")) && reset.mutate()}>
+                <Button variant="ghost" className="text-muted-foreground" onClick={() => void confirm({ title: t("email.templates.restoreConfirm") }).then((ok) => ok && reset.mutate())}>
                   <RotateCcw className="size-4" /> {t("email.templates.restore")}
                 </Button>
               )}

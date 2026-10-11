@@ -21,6 +21,7 @@ import { cn, initials } from "@/lib/utils";
 import type { Audience } from "@shared/permissions";
 import { useAdminError, useRoleName, useRoles } from "./hooks";
 import { OverridesEditor, type OverrideMap } from "./PermissionMatrix";
+import { useConfirm } from "@/components/ConfirmDialog";
 
 function invalidateUsers(qc: ReturnType<typeof useQueryClient>) {
   void qc.invalidateQueries({ queryKey: ["admin"] });
@@ -400,6 +401,7 @@ function AccessTab({ user, roles }: { user: AdminUser; roles: Role[] }) {
 
 function SecurityTab({ user }: { user: AdminUser }) {
   const { t } = useTranslation();
+  const confirm = useConfirm();
   const qc = useQueryClient();
   const errText = useAdminError();
   const [temp, setTemp] = useState<string | null>(null);
@@ -447,10 +449,10 @@ function SecurityTab({ user }: { user: AdminUser }) {
         <Button variant="outline" className="justify-start" disabled={!user.active || sendLink.isPending} onClick={() => sendLink.mutate()}>
           {sendLink.isPending ? <Loader2 className="size-4 animate-spin" /> : <MailCheck className="size-4" />} {t("admin.users.sendResetLink")}
         </Button>
-        <Button variant="outline" className="justify-start" onClick={() => window.confirm(t("admin.users.resetPasswordConfirm")) && resetPw.mutate()}>
+        <Button variant="outline" className="justify-start" onClick={() => void confirm({ title: t("admin.users.resetPasswordConfirm"), destructive: true }).then((ok) => ok && resetPw.mutate())}>
           <KeyRound className="size-4" /> {t("admin.users.resetPassword")}
         </Button>
-        <Button variant="outline" className="justify-start" disabled={!user.mfaEnabled} onClick={() => window.confirm(t("admin.users.resetMfaConfirm")) && resetMfa.mutate()}>
+        <Button variant="outline" className="justify-start" disabled={!user.mfaEnabled} onClick={() => void confirm({ title: t("admin.users.resetMfaConfirm"), destructive: true }).then((ok) => ok && resetMfa.mutate())}>
           <ShieldOff className="size-4" /> {t("admin.users.resetMfa")}
         </Button>
         {user.locked && (

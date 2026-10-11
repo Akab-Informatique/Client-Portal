@@ -23,6 +23,7 @@ import type { DashboardWidget } from "@/lib/types";
 import { cn } from "@/lib/utils";
 import { WIDGETS } from "./widgets";
 import { DashboardMenu, DashboardPicker, useDashboards, type DashboardInfo } from "./DashboardPicker";
+import { useConfirm } from "@/components/ConfirmDialog";
 
 const SPAN: Record<DashboardWidget["size"], string> = {
   sm: "md:col-span-3 xl:col-span-4",
@@ -76,6 +77,7 @@ function DashboardBoard({
   onSave: (layout: DashboardWidget[], scope: "default" | "mine") => Promise<void>;
 }) {
   const { t } = useTranslation();
+  const confirm = useConfirm();
   const can = useCan();
   const allowed = useMemo(() => WIDGETS.filter((w) => !w.permission || can(w.permission)), [can]);
   const sanitize = (l: DashboardWidget[]) => l.filter((w) => allowed.some((a) => a.type === w.type));
@@ -174,7 +176,11 @@ function DashboardBoard({
                 <Button
                   size="sm"
                   className="bg-grad-gold text-[#1a1204] glow-gold"
-                  onClick={() => window.confirm(t("dashboard.saveDefaultConfirm")) && void persist("default")}
+                  onClick={() =>
+                    void confirm({ title: t("dashboard.saveDefaultConfirm"), description: t("dashboard.saveDefaultConfirmText"), confirmLabel: t("dashboard.saveDefault") }).then((ok) => {
+                      if (ok) void persist("default");
+                    })
+                  }
                 >
                   <Check className="size-4" /> {t("dashboard.saveDefault")}
                 </Button>
