@@ -10,8 +10,8 @@ import {
   BellRing,
   Bookmark,
   BookmarkPlus,
+  SlidersHorizontal,
   CalendarCheck,
-  CalendarRange,
   Check,
   ChevronDown,
   Eye,
@@ -25,13 +25,11 @@ import {
   Sparkles,
   Trash2,
   UserRound,
-  Users,
   UserX,
   Wand2,
   X,
   type LucideIcon,
 } from "lucide-react";
-import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
@@ -123,18 +121,18 @@ export function TicketsPage() {
   }, [can]);
 
   return (
-    <div className="space-y-5">
+    <div className="space-y-4">
       {/* Header */}
       <div className="flex flex-wrap items-center justify-between gap-3">
-        <div className="flex flex-wrap items-center gap-3">
+        <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1">
           <h1 className="text-2xl font-bold">{t("tickets.title")}</h1>
           <LiveBadge updatedAt={dataUpdatedAt} fetching={isFetching} />
           {data?.demo && (
             <Tooltip>
               <TooltipTrigger asChild>
-                <Badge variant="outline" className="gap-1 border-dashed text-muted-foreground">
+                <span className="flex items-center gap-1 text-[11px] text-muted-foreground">
                   <FlaskConical className="size-3" /> {t("tickets.demo")}
-                </Badge>
+                </span>
               </TooltipTrigger>
               <TooltipContent>{t("tickets.demoHint")}</TooltipContent>
             </Tooltip>
@@ -143,78 +141,66 @@ export function TicketsPage() {
         <div className="flex items-center gap-2">
           {data?.ai && <AiPlanButton />}
           {can("tickets.edit") && (
-            <Button onClick={() => setCreating(true)} className="bg-grad-gold font-semibold text-[#1a1204] glow-gold hover:brightness-105">
+            <Button size="sm" onClick={() => setCreating(true)} className="h-9 bg-grad-gold font-semibold text-[#1a1204] glow-gold hover:brightness-105">
               <Plus className="size-4" /> {t("tickets.new")}
-              <kbd className="ml-1 rounded border border-black/20 px-1 font-mono text-[10px] opacity-70">N</kbd>
+              <kbd className="ml-1 hidden rounded border border-black/20 px-1 font-mono text-[10px] opacity-70 sm:inline">N</kbd>
             </Button>
           )}
         </div>
       </div>
 
       <MetricTiles data={data} params={params} apply={apply} />
-      {data && <TeamStrip technicians={data.facets.technicians} params={params} apply={apply} />}
 
-      {/* Toolbar */}
-      <div className="rounded-2xl border bg-card/60 p-2 backdrop-blur">
-        <div className="flex flex-wrap items-center gap-2">
-          <ViewMenu view={view} counts={data?.counts} params={params} apply={apply} />
-          <div className="relative min-w-52 flex-1 sm:max-w-sm">
-            <Search className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
-            <Input
-              ref={searchRef}
-              value={params.get("q") ?? ""}
-              onChange={(e) => set({ q: e.target.value || null })}
-              placeholder={t("tickets.search")}
-              className="h-9 border-transparent bg-background/60 pl-9 pr-8"
-            />
-            <kbd className="pointer-events-none absolute right-2.5 top-1/2 -translate-y-1/2 rounded border px-1 font-mono text-[10px] text-muted-foreground">/</kbd>
-          </div>
-          {data && (
-            <>
-              <MultiFilter label={t("tickets.fields.status")} param="status" options={data.facets.statuses.map((s) => ({ value: s, label: t(`tickets.status.${s}`) }))} params={params} set={set} />
-              <MultiFilter
-                label={t("tickets.fields.priority")}
-                param="priority"
-                options={data.facets.priorities.map((p) => ({ value: p, label: t(`tickets.priority.${p}`), dot: PRIORITY_STYLE[p].dot }))}
-                params={params}
-                set={set}
-              />
-              <MultiFilter label={t("tickets.fields.company")} param="company" options={data.facets.companies.map((c) => ({ value: String(c.id), label: c.name }))} params={params} set={set} searchable />
-              <MultiFilter label={t("tickets.fields.queue")} param="queue" options={data.facets.queues.map((q) => ({ value: q, label: q }))} params={params} set={set} />
-              <MultiFilter
-                label={t("tickets.fields.technician")}
-                param="assignee"
-                options={[{ value: "none", label: t("tickets.unassigned") }, ...data.facets.technicians.map((p) => ({ value: p.id, label: `${p.name} (${p.open})` }))]}
-                params={params}
-                set={set}
-                searchable
-              />
-              <DatesFilter params={params} set={set} />
-            </>
-          )}
-          <div className="ml-auto">
-            <SortMenu value={params.get("sort") ?? "due"} onChange={(v) => set({ sort: v === "due" ? null : v })} />
-          </div>
+      {/* Toolbar: view, search, team, the two frequent filters, the rest under "More" */}
+      <div className="flex flex-wrap items-center gap-1.5">
+        <ViewMenu view={view} counts={data?.counts} params={params} apply={apply} />
+        <div className="relative min-w-44 flex-1 sm:max-w-xs">
+          <Search className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
+          <Input
+            ref={searchRef}
+            value={params.get("q") ?? ""}
+            onChange={(e) => set({ q: e.target.value || null })}
+            placeholder={t("tickets.search")}
+            className="h-9 bg-card/60 pl-9 pr-8"
+          />
+          <kbd className="pointer-events-none absolute right-2.5 top-1/2 -translate-y-1/2 rounded border px-1 font-mono text-[10px] text-muted-foreground">/</kbd>
         </div>
-        {activeFilters.length > 0 && (
-          <div className="mt-2 flex flex-wrap items-center gap-1.5 border-t px-1 pt-2">
-            {activeFilters.map((k) => (
-              <button
-                key={k}
-                type="button"
-                onClick={() => set({ [k]: null })}
-                className="flex items-center gap-1 rounded-full border border-[color:var(--gold)]/30 bg-[color:var(--gold)]/[0.06] px-2.5 py-1 text-xs hover:border-destructive/50"
-              >
-                {t(`tickets.filter.${k}`)}: <span className="font-medium">{filterLabel(k, params.get(k)!, data, t)}</span>
-                <X className="size-3 text-muted-foreground" />
-              </button>
-            ))}
-            <Button variant="ghost" size="sm" className="h-7 text-xs text-muted-foreground" onClick={() => set(Object.fromEntries(activeFilters.map((k) => [k, null])))}>
-              {t("tickets.clearFilters")}
-            </Button>
-          </div>
+        {data && (
+          <>
+            <TeamFilter technicians={data.facets.technicians} params={params} set={set} />
+            <MultiFilter label={t("tickets.fields.status")} param="status" options={data.facets.statuses.map((s) => ({ value: s, label: t(`tickets.status.${s}`) }))} params={params} set={set} />
+            <MultiFilter
+              label={t("tickets.fields.priority")}
+              param="priority"
+              options={data.facets.priorities.map((p) => ({ value: p, label: t(`tickets.priority.${p}`), dot: PRIORITY_STYLE[p].dot }))}
+              params={params}
+              set={set}
+            />
+            <MoreFilters data={data} params={params} set={set} />
+          </>
         )}
+        <div className="ml-auto">
+          <SortMenu value={params.get("sort") ?? "due"} onChange={(v) => set({ sort: v === "due" ? null : v })} />
+        </div>
       </div>
+      {activeFilters.length > 0 && (
+        <div className="-mt-1 flex flex-wrap items-center gap-1.5">
+          {activeFilters.map((k) => (
+            <button
+              key={k}
+              type="button"
+              onClick={() => set({ [k]: null })}
+              className="flex items-center gap-1 rounded-full border border-[color:var(--gold)]/25 px-2 py-0.5 text-[11px] text-muted-foreground hover:border-destructive/50 hover:text-foreground"
+            >
+              {t(`tickets.filter.${k}`)}: <span className="font-medium text-foreground">{filterLabel(k, params.get(k)!, data, t)}</span>
+              <X className="size-3" />
+            </button>
+          ))}
+          <button type="button" className="px-1 text-[11px] text-muted-foreground hover:text-foreground" onClick={() => set(Object.fromEntries(activeFilters.map((k) => [k, null])))}>
+            {t("tickets.clearFilters")}
+          </button>
+        </div>
+      )}
 
       {/* List */}
       <div className="overflow-hidden rounded-2xl border bg-card/70 backdrop-blur">
@@ -269,7 +255,7 @@ function LiveBadge({ updatedAt, fetching }: { updatedAt: number; fetching: boole
   }, []);
   if (!updatedAt) return null;
   return (
-    <span className="flex items-center gap-2 rounded-full border border-emerald-500/25 bg-emerald-500/[0.07] px-2.5 py-0.5 font-mono text-[10px] uppercase tracking-wider text-emerald-300">
+    <span className="flex items-center gap-1.5 font-mono text-[10px] uppercase tracking-wider text-emerald-400/90">
       <span className="relative flex size-2">
         <span className={cn("absolute inline-flex size-full rounded-full bg-emerald-400 opacity-75", fetching && "animate-ping")} />
         <span className="relative inline-flex size-2 rounded-full bg-emerald-400" />
@@ -308,50 +294,55 @@ function MetricTiles({ data, params, apply }: { data: TicketList | undefined; pa
     return canonical(p);
   }, [params]);
   return (
-    <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+    <div className="grid grid-cols-2 gap-2 lg:grid-cols-4">
       {TILES.map((tile, i) => {
         const active = canonical(tile.query) === current || (tile.key === "mine" && current === "");
         const value = data?.metrics[tile.key];
         const b = data?.metrics.attentionBreakdown;
         return (
-          <motion.button
-            key={tile.key}
-            type="button"
-            onClick={() => apply(tile.query)}
-            initial={{ opacity: 0, y: 8 }}
-            animate={{ opacity: 1, y: 0 }}
-            transition={{ delay: i * 0.05 }}
-            style={{ ["--tile-glow" as string]: tile.glow }}
-            className={cn(
-              "group relative flex min-h-36 flex-col justify-between overflow-hidden rounded-2xl border bg-card/70 p-5 text-left backdrop-blur transition-all hover:-translate-y-0.5 hover:border-[color:var(--gold)]/40 hover:shadow-[0_0_36px_-12px_var(--tile-glow)]",
-              active && "border-[color:var(--gold)]/60 shadow-[0_0_36px_-10px_var(--tile-glow)]",
-            )}
-          >
-            <span className="pointer-events-none absolute inset-0 bg-grid opacity-[0.35] [mask-image:radial-gradient(circle_at_100%_0%,black,transparent_70%)]" />
-            <span className="pointer-events-none absolute -right-12 -top-12 size-36 rounded-full opacity-0 blur-3xl transition-opacity group-hover:opacity-100" style={{ background: tile.glow }} />
-            <span className="relative flex items-start justify-between gap-3">
-              <span>
-                <span className="block text-sm font-semibold">{t(`tickets.metrics.${tile.key}`)}</span>
-                <span className="block text-xs text-muted-foreground">{t(`tickets.metricsHint.${tile.key}`)}</span>
-              </span>
-              <span className={cn("flex size-10 shrink-0 items-center justify-center rounded-xl border bg-background/60", tile.tone)}>
-                <tile.icon className="size-5" />
-              </span>
-            </span>
-            <span className="relative flex items-end justify-between gap-3">
-              <span className={cn("font-mono text-5xl font-semibold tabular-nums tracking-tight", value ? "text-foreground" : "text-muted-foreground/60")}>
-                {value === undefined ? "–" : <CountUp value={value} />}
-              </span>
+          <Tooltip key={tile.key}>
+            <TooltipTrigger asChild>
+              <motion.button
+                type="button"
+                onClick={() => apply(tile.query)}
+                initial={{ opacity: 0, y: 6 }}
+                animate={{ opacity: 1, y: 0 }}
+                transition={{ delay: i * 0.04 }}
+                style={{ ["--tile-glow" as string]: tile.glow }}
+                className={cn(
+                  "group relative flex items-center gap-3 overflow-hidden rounded-xl border bg-card/60 px-3.5 py-2.5 text-left transition-all hover:border-[color:var(--gold)]/40 hover:shadow-[0_0_28px_-14px_var(--tile-glow)]",
+                  active && "border-[color:var(--gold)]/60 bg-[color:var(--gold)]/[0.05] shadow-[0_0_28px_-12px_var(--tile-glow)]",
+                )}
+              >
+                <span className={cn("flex size-8 shrink-0 items-center justify-center rounded-lg border bg-background/60", tile.tone)}>
+                  <tile.icon className="size-4" />
+                </span>
+                <span className="min-w-0 flex-1">
+                  <span className="block truncate text-xs font-medium text-muted-foreground group-hover:text-foreground">{t(`tickets.metrics.${tile.key}`)}</span>
+                  {tile.key === "attention" && b && (
+                    <span className="block truncate font-mono text-[10px]">
+                      <span className="text-red-400">{b.overdue}</span>
+                      <span className="text-muted-foreground"> · </span>
+                      <span className="text-orange-400">{b.dueToday}</span>
+                      <span className="text-muted-foreground"> · </span>
+                      <span className="text-rose-300">{b.critical}</span>
+                    </span>
+                  )}
+                </span>
+                <span className={cn("font-mono text-2xl font-semibold tabular-nums", value ? "text-foreground" : "text-muted-foreground/50")}>
+                  {value === undefined ? "–" : <CountUp value={value} />}
+                </span>
+              </motion.button>
+            </TooltipTrigger>
+            <TooltipContent>
+              {t(`tickets.metricsHint.${tile.key}`)}
               {tile.key === "attention" && b && (
-                <span className="flex flex-col items-end gap-1 font-mono text-[11px]">
-                  <span className="text-red-400">{t("tickets.breakdown.overdue", { count: b.overdue })}</span>
-                  <span className="text-orange-400">{t("tickets.breakdown.dueToday", { count: b.dueToday })}</span>
-                  <span className="text-rose-300">{t("tickets.breakdown.critical", { count: b.critical })}</span>
+                <span className="block opacity-80">
+                  {t("tickets.breakdown.overdue", { count: b.overdue })} · {t("tickets.breakdown.dueToday", { count: b.dueToday })} · {t("tickets.breakdown.critical", { count: b.critical })}
                 </span>
               )}
-              {active && tile.key !== "attention" && <span className="mb-2 size-2 rounded-full bg-[color:var(--gold)] shadow-[0_0_8px_var(--gold)]" />}
-            </span>
-          </motion.button>
+            </TooltipContent>
+          </Tooltip>
         );
       })}
     </div>
@@ -507,7 +498,7 @@ function TicketRow({ tk, index, active, onOpen }: { tk: TicketSummary; index: nu
         type="button"
         onClick={onOpen}
         className={cn(
-          "group relative grid w-full grid-cols-1 gap-x-4 gap-y-2 px-5 py-3 text-left transition-colors lg:grid-cols-[minmax(0,1fr)_150px_110px_150px_90px_140px_28px] lg:items-center",
+          "group relative grid w-full grid-cols-1 gap-x-4 gap-y-1.5 px-5 py-2.5 text-left transition-colors lg:grid-cols-[minmax(0,1fr)_150px_110px_150px_90px_140px_28px] lg:items-center",
           "hover:bg-[linear-gradient(90deg,rgba(255,206,26,0.07),transparent_60%)]",
           active && "bg-[linear-gradient(90deg,rgba(255,206,26,0.1),transparent_70%)]",
         )}
@@ -583,38 +574,32 @@ function TicketRow({ tk, index, active, onOpen }: { tk: TicketSummary; index: nu
 }
 
 // ── Filters ──────────────────────────────────────────────────────────────────────
-function FilterButton({ label, count, children }: { label: string; count: number; children: ReactNode }) {
+function FilterButton({ label, count, icon: Icon, children, wide }: { label: string; count: number; icon?: LucideIcon; children: ReactNode; wide?: boolean }) {
   return (
     <Popover>
       <PopoverTrigger asChild>
-        <Button variant="ghost" size="sm" className={cn("h-9 gap-1.5", count > 0 && "bg-[color:var(--gold)]/10 text-primary")}>
+        <Button
+          variant="ghost"
+          size="sm"
+          className={cn("h-9 gap-1.5 px-2.5 text-muted-foreground hover:text-foreground", count > 0 && "bg-[color:var(--gold)]/10 text-primary hover:text-primary")}
+        >
+          {Icon && <Icon className="size-4" />}
           {label}
           {count > 0 && <span className="rounded-full bg-grad-gold px-1.5 text-[10px] font-bold text-[#1a1204]">{count}</span>}
-          <ChevronDown className="size-3.5 opacity-60" />
+          <ChevronDown className="size-3.5 opacity-50" />
         </Button>
       </PopoverTrigger>
-      <PopoverContent align="start" className="w-64 p-1.5">
+      <PopoverContent align="start" className={cn("p-1.5", wide ? "w-[22rem]" : "w-64")}>
         {children}
       </PopoverContent>
     </Popover>
   );
 }
 
-function MultiFilter({
-  label,
-  param,
-  options,
-  params,
-  set,
-  searchable,
-}: {
-  label: string;
-  param: string;
-  options: { value: string; label: string; dot?: string }[];
-  params: URLSearchParams;
-  set: SetFn;
-  searchable?: boolean;
-}) {
+type Option = { value: string; label: string; dot?: string };
+
+/** Checkbox list for one URL parameter (comma-separated values). */
+function Checklist({ param, options, params, set, searchable, max = "max-h-72" }: { param: string; options: Option[]; params: URLSearchParams; set: SetFn; searchable?: boolean; max?: string }) {
   const { t } = useTranslation();
   const selected = useMemo(() => (params.get(param) ?? "").split(",").filter(Boolean), [params, param]);
   const [q, setQ] = useState("");
@@ -624,9 +609,9 @@ function MultiFilter({
     set({ [param]: next.join(",") || null });
   };
   return (
-    <FilterButton label={label} count={selected.length}>
+    <>
       {searchable && <Input value={q} onChange={(e) => setQ(e.target.value)} placeholder={t("common.search")} className="mb-1 h-8" />}
-      <div className="max-h-72 overflow-y-auto">
+      <div className={cn("overflow-y-auto", max)}>
         {shown.map((o) => (
           <label key={o.value} className="flex cursor-pointer items-center gap-2.5 rounded-md px-2 py-1.5 text-sm hover:bg-accent">
             <Checkbox checked={selected.includes(o.value)} onCheckedChange={() => toggle(o.value)} />
@@ -635,7 +620,17 @@ function MultiFilter({
           </label>
         ))}
       </div>
-      {selected.length > 0 && (
+    </>
+  );
+}
+
+function MultiFilter({ label, param, options, params, set, searchable }: { label: string; param: string; options: Option[]; params: URLSearchParams; set: SetFn; searchable?: boolean }) {
+  const { t } = useTranslation();
+  const count = (params.get(param) ?? "").split(",").filter(Boolean).length;
+  return (
+    <FilterButton label={label} count={count}>
+      <Checklist param={param} options={options} params={params} set={set} searchable={searchable} />
+      {count > 0 && (
         <Button variant="ghost" size="sm" className="mt-1 h-7 w-full text-xs text-muted-foreground" onClick={() => set({ [param]: null })}>
           {t("tickets.clear")}
         </Button>
@@ -644,13 +639,51 @@ function MultiFilter({
   );
 }
 
-/** Due date (Autotask) and start date (portal only) ranges. */
-function DatesFilter({ params, set }: { params: URLSearchParams; set: SetFn }) {
+const MORE_KEYS = ["company", "queue", "dueFrom", "dueTo", "startFrom", "startTo"] as const;
+
+/** Less frequent filters in one panel: client, queue, start date, due date. */
+function MoreFilters({ data, params, set }: { data: TicketList; params: URLSearchParams; set: SetFn }) {
   const { t } = useTranslation();
-  const keys = ["dueFrom", "dueTo", "startFrom", "startTo"] as const;
-  const count = keys.filter((k) => params.get(k)).length;
+  const count = MORE_KEYS.filter((k) => params.get(k)).length;
+  const [tab, setTab] = useState<"company" | "queue" | "dates">("dates");
+  return (
+    <FilterButton label={t("tickets.more")} count={count} icon={SlidersHorizontal} wide>
+      <div className="mb-1 grid grid-cols-3 gap-1 rounded-lg bg-muted/50 p-0.5 text-xs">
+        {(["dates", "company", "queue"] as const).map((k) => (
+          <button
+            key={k}
+            type="button"
+            onClick={() => setTab(k)}
+            className={cn("rounded-md px-2 py-1 font-medium", tab === k ? "bg-background text-foreground shadow-sm" : "text-muted-foreground hover:text-foreground")}
+          >
+            {k === "dates" ? t("tickets.dates") : k === "company" ? t("tickets.fields.company") : t("tickets.fields.queue")}
+            {(k === "dates" ? ["dueFrom", "dueTo", "startFrom", "startTo"].some((x) => params.get(x)) : params.get(k)) && (
+              <span className="ml-1 inline-block size-1.5 rounded-full bg-[color:var(--gold)] align-middle" />
+            )}
+          </button>
+        ))}
+      </div>
+      {tab === "dates" && (
+        <div className="divide-y">
+          <DateRange from="startFrom" to="startTo" title={t("tickets.fields.start")} tag params={params} set={set} />
+          <DateRange from="dueFrom" to="dueTo" title={t("tickets.fields.due")} params={params} set={set} />
+        </div>
+      )}
+      {tab === "company" && <Checklist param="company" options={data.facets.companies.map((c) => ({ value: String(c.id), label: c.name }))} params={params} set={set} searchable max="max-h-60" />}
+      {tab === "queue" && <Checklist param="queue" options={data.facets.queues.map((q) => ({ value: q, label: q }))} params={params} set={set} />}
+      {count > 0 && (
+        <Button variant="ghost" size="sm" className="mt-1 h-7 w-full text-xs text-muted-foreground" onClick={() => set(Object.fromEntries(MORE_KEYS.map((k) => [k, null])))}>
+          {t("tickets.clear")}
+        </Button>
+      )}
+    </FilterButton>
+  );
+}
+
+function DateRange({ from, to, title, tag, params, set }: { from: string; to: string; title: string; tag?: boolean; params: URLSearchParams; set: SetFn }) {
+  const { t } = useTranslation();
   const today = new Date().toISOString().slice(0, 10);
-  const Range = ({ from, to, title, tag }: { from: (typeof keys)[number]; to: (typeof keys)[number]; title: string; tag?: boolean }) => (
+  return (
     <div className="space-y-1.5 p-2">
       <p className="flex items-center gap-1.5 text-xs font-semibold">
         {title} {tag && <PortalTag />}
@@ -665,21 +698,6 @@ function DatesFilter({ params, set }: { params: URLSearchParams; set: SetFn }) {
         <QuickRange label={t("tickets.quick.clear")} onClick={() => set({ [from]: null, [to]: null })} />
       </div>
     </div>
-  );
-  return (
-    <Popover>
-      <PopoverTrigger asChild>
-        <Button variant="ghost" size="sm" className={cn("h-9 gap-1.5", count > 0 && "bg-[color:var(--gold)]/10 text-primary")}>
-          <CalendarRange className="size-4" /> {t("tickets.dates")}
-          {count > 0 && <span className="rounded-full bg-grad-gold px-1.5 text-[10px] font-bold text-[#1a1204]">{count}</span>}
-          <ChevronDown className="size-3.5 opacity-60" />
-        </Button>
-      </PopoverTrigger>
-      <PopoverContent align="start" className="w-80 divide-y p-1.5">
-        <Range from="startFrom" to="startTo" title={t("tickets.fields.start")} tag />
-        <Range from="dueFrom" to="dueTo" title={t("tickets.fields.due")} />
-      </PopoverContent>
-    </Popover>
   );
 }
 
@@ -696,8 +714,8 @@ function SortMenu({ value, onChange }: { value: string; onChange: (v: string) =>
   return (
     <Popover>
       <PopoverTrigger asChild>
-        <Button variant="ghost" size="sm" className="h-9 gap-1.5 text-muted-foreground">
-          <ArrowDownUp className="size-4" /> {t(`tickets.sort.${value}`)}
+        <Button variant="ghost" size="sm" className="h-9 gap-1.5 px-2.5 text-muted-foreground">
+          <ArrowDownUp className="size-4" /> <span className="hidden sm:inline">{t(`tickets.sort.${value}`)}</span>
         </Button>
       </PopoverTrigger>
       <PopoverContent align="end" className="w-48 p-1">
@@ -716,52 +734,90 @@ function SortMenu({ value, onChange }: { value: string; onChange: (v: string) =>
   );
 }
 
-// ── Team: each technician and their open tickets (one click = their list) ──────
-function TeamStrip({ technicians, params, apply }: { technicians: TicketList["facets"]["technicians"]; params: URLSearchParams; apply: (q: string) => void }) {
+// ── Team: compact avatar stack; the list (with load bars) opens on click ──────────
+function TeamFilter({ technicians, params, set }: { technicians: TicketList["facets"]["technicians"]; params: URLSearchParams; set: SetFn }) {
   const { t } = useTranslation();
   const me = useMe();
-  const selected = params.get("view") === "all" && params.get("assignee") && !params.get("assignee")!.includes(",") ? params.get("assignee") : null;
+  const selected = (params.get("assignee") ?? "").split(",").filter(Boolean);
   const max = Math.max(1, ...technicians.map((p) => p.open));
   const people = [...technicians].sort((a, b) => (a.id === me.id ? -1 : b.id === me.id ? 1 : b.open - a.open));
+  const pick = (id: string) => {
+    const next = selected.includes(id) ? selected.filter((x) => x !== id) : [...selected, id];
+    // Someone else's tickets are not in "My tickets": switch to all
+    set({ assignee: next.join(",") || null, ...(next.length ? { view: "all" } : {}) });
+  };
   return (
-    <div className="flex items-center gap-3 overflow-x-auto rounded-2xl border bg-card/50 px-3 py-2 scrollbar-thin">
-      <span className="flex shrink-0 items-center gap-1.5 font-mono text-[10px] uppercase tracking-[0.12em] text-muted-foreground">
-        <Users className="size-3.5" /> {t("tickets.team")}
-      </span>
-      {people.map((p) => {
-        const active = selected === p.id;
-        return (
-          <button
-            key={p.id}
-            type="button"
-            onClick={() => apply(active ? "view=all" : `view=all&assignee=${p.id}`)}
-            title={t("tickets.teamHint", { name: p.name, count: p.open })}
-            className={cn(
-              "group flex shrink-0 items-center gap-2 rounded-xl border px-2.5 py-1.5 text-left transition-colors",
-              active ? "border-[color:var(--gold)]/60 bg-[color:var(--gold)]/10" : "border-transparent hover:border-border hover:bg-accent/50",
-            )}
-          >
-            <span
-              className={cn(
-                "flex size-7 items-center justify-center rounded-full border text-[10px] font-semibold",
-                p.id === me.id ? "border-[color:var(--gold)]/50 bg-[color:var(--gold)]/15 text-primary" : "bg-background/60",
-              )}
+    <Popover>
+      <PopoverTrigger asChild>
+        <Button variant="ghost" size="sm" className={cn("h-9 gap-2 px-2", selected.length > 0 && "bg-[color:var(--gold)]/10 text-primary")}>
+          <span className="flex -space-x-2">
+            {people.slice(0, 4).map((p) => (
+              <span
+                key={p.id}
+                className={cn(
+                  "flex size-6 items-center justify-center rounded-full border-2 border-background text-[9px] font-semibold",
+                  selected.includes(p.id) ? "bg-grad-gold text-[#1a1204]" : "bg-muted text-foreground",
+                )}
+              >
+                {initials(p.name)}
+              </span>
+            ))}
+          </span>
+          <span className="hidden text-sm md:inline">{t("tickets.team")}</span>
+          {selected.length > 0 && <span className="rounded-full bg-grad-gold px-1.5 text-[10px] font-bold text-[#1a1204]">{selected.length}</span>}
+          <ChevronDown className="size-3.5 opacity-50" />
+        </Button>
+      </PopoverTrigger>
+      <PopoverContent align="start" className="w-72 p-1.5">
+        <p className="px-2 pb-1.5 pt-1 font-mono text-[10px] uppercase tracking-[0.12em] text-muted-foreground">{t("tickets.teamTitle")}</p>
+        <div className="max-h-80 overflow-y-auto">
+          {people.map((p) => (
+            <button
+              key={p.id}
+              type="button"
+              onClick={() => pick(p.id)}
+              className={cn("flex w-full items-center gap-2.5 rounded-md px-2 py-1.5 text-left hover:bg-accent", selected.includes(p.id) && "bg-[color:var(--gold)]/10")}
             >
-              {initials(p.name)}
-            </span>
-            <span className="min-w-0">
-              <span className="block max-w-32 truncate text-xs font-medium">{p.id === me.id ? t("tickets.me") : p.name.split(" ")[0]}</span>
-              <span className="mt-0.5 flex items-center gap-1.5">
-                <span className="h-1 w-12 overflow-hidden rounded-full bg-muted">
+              <span
+                className={cn(
+                  "flex size-7 shrink-0 items-center justify-center rounded-full border text-[10px] font-semibold",
+                  p.id === me.id ? "border-[color:var(--gold)]/50 bg-[color:var(--gold)]/15 text-primary" : "bg-background/60",
+                )}
+              >
+                {initials(p.name)}
+              </span>
+              <span className="min-w-0 flex-1">
+                <span className="block truncate text-sm">
+                  {p.name}
+                  {p.id === me.id && <span className="text-muted-foreground"> ({t("tickets.me")})</span>}
+                </span>
+                <span className="mt-1 block h-1 overflow-hidden rounded-full bg-muted">
                   <span className="block h-full rounded-full bg-grad-gold" style={{ width: `${(p.open / max) * 100}%` }} />
                 </span>
-                <span className="font-mono text-[10px] text-muted-foreground">{p.open}</span>
               </span>
+              <span className="w-6 text-right font-mono text-xs text-muted-foreground">{p.open}</span>
+              {selected.includes(p.id) && <Check className="size-4 text-primary" />}
+            </button>
+          ))}
+          <button
+            type="button"
+            onClick={() => pick("none")}
+            className={cn("flex w-full items-center gap-2.5 rounded-md px-2 py-1.5 text-left text-sm italic text-muted-foreground hover:bg-accent", selected.includes("none") && "bg-[color:var(--gold)]/10")}
+          >
+            <span className="flex size-7 items-center justify-center rounded-full border border-dashed">
+              <UserX className="size-3.5" />
             </span>
+            <span className="flex-1">{t("tickets.unassigned")}</span>
+            {selected.includes("none") && <Check className="size-4 text-primary" />}
           </button>
-        );
-      })}
-    </div>
+        </div>
+        {selected.length > 0 && (
+          <Button variant="ghost" size="sm" className="mt-1 h-7 w-full text-xs text-muted-foreground" onClick={() => set({ assignee: null })}>
+            {t("tickets.clear")}
+          </Button>
+        )}
+      </PopoverContent>
+    </Popover>
   );
 }
 

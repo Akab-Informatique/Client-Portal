@@ -488,6 +488,8 @@ const fr = {
     },
   },
   tickets: {
+    more: "Plus",
+    teamTitle: "Charge de l'équipe (billets ouverts)",
     team: "Équipe",
     teamHint: "{{name}} : {{count}} billets ouverts",
     noteAdded: "Note interne ajoutée",

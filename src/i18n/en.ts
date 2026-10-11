@@ -490,6 +490,8 @@ const en: Dict = {
     },
   },
   tickets: {
+    more: "More",
+    teamTitle: "Team load (open tickets)",
     team: "Team",
     teamHint: "{{name}}: {{count}} open tickets",
     noteAdded: "Internal note added",
