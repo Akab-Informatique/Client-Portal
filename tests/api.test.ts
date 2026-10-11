@@ -806,3 +806,21 @@ describe("tickets (sample data)", () => {
     expect(r.json).toMatchObject({ title: "Test", status: "new", startDate: "2026-11-30" });
   });
 });
+
+describe("tickets: technicians added later", () => {
+  it("get their share of the sample tickets", async () => {
+    const admin = await signIn("admin@akab.local");
+    const roles = (await admin.get("/api/admin/roles")).json;
+    const techRole = roles.find((r: any) => r.slug === "technician");
+    await admin.get("/api/tickets"); // sample tickets already generated
+    const created = await admin.post("/api/admin/staff", { email: "tard@akab.local", name: "Arrivé Tard", roleId: techRole.id });
+    await db()
+      .update(schema.users)
+      .set({ mustChangePassword: false, passwordHash: (await db().select().from(schema.users).where(eq(schema.users.email, "tech@akab.local")))[0].passwordHash })
+      .where(eq(schema.users.id, created.json.user.id));
+    const late = await signIn("tard@akab.local");
+    const mine = (await late.get("/api/tickets?view=mine")).json;
+    expect(mine.counts.mine).toBeGreaterThan(0);
+    expect(mine.items.every((t: any) => t.assignee?.id === created.json.user.id)).toBe(true);
+  });
+});

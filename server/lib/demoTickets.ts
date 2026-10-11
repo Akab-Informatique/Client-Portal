@@ -56,7 +56,14 @@ const SUBJECTS: [string, string][] = [
   ["Remplacement du serveur (fin de garantie)", "Évaluer et planifier le remplacement du serveur Dell arrivé en fin de garantie."],
 ];
 
-let store: Ticket[] | null = null;
+/**
+ * Generated tickets keep a "slot" instead of a fixed person: the assignee is
+ * resolved against the current technicians on every read, so accounts created
+ * later (or after a restart) get their share. Tickets created in the portal
+ * keep their chosen assignee (slot null).
+ */
+type Stored = Ticket & { slot: number | null };
+let store: Stored[] | null = null;
 let nextId = 41000;
 
 // Small deterministic generator: the same sample set on every start
@@ -70,22 +77,27 @@ function rng(seed: number) {
 const pick = <T>(r: () => number, a: readonly T[]) => a[Math.floor(r() * a.length)];
 const ymd = (d: Date) => `${d.getFullYear()}${String(d.getMonth() + 1).padStart(2, "0")}${String(d.getDate()).padStart(2, "0")}`;
 
-/** All sample tickets; assignees are the portal's technicians (round robin). */
+/** All sample tickets; assignees are the current technicians (round robin). */
 export function demoTickets(staff: Person[]): Ticket[] {
-  if (store) return store;
+  store ??= generate();
+  return store.map(({ slot, ...t }) => (slot === null ? t : { ...t, assignee: staff.length ? staff[slot % staff.length] : null }));
+}
+
+function generate(): Stored[] {
   const r = rng(42);
   const now = Date.now();
   const H = 3600_000;
   const statuses: TicketStatus[] = ["new", "inProgress", "inProgress", "waitingCustomer", "waitingVendor", "scheduled", "complete"];
   const priorities: TicketPriority[] = ["critical", "high", "high", "medium", "medium", "medium", "low", "low"];
-  store = Array.from({ length: 36 }, (_, i) => {
+  const list: Stored[] = Array.from({ length: 36 }, (_, i) => {
     const [title, description] = SUBJECTS[i % SUBJECTS.length];
     const created = new Date(now - Math.floor(r() * 12 * 24) * H);
     const status = i < 5 ? "new" : pick(r, statuses);
     const priority = /Alerte|Hameçonnage|Sauvegarde|Courriels/.test(title) ? (r() > 0.5 ? "critical" : "high") : pick(r, priorities);
     const due = new Date(now + (Math.floor(r() * 10 * 24) - 3 * 24) * H);
     const unassigned = status === "new" && r() > 0.3;
-    const assignee = unassigned || staff.length === 0 ? null : staff[i % staff.length];
+    const slot = unassigned ? null : i;
+    const author = "AKAB Informatique";
     const company = { id: 300 + (i % COMPANIES.length), name: COMPANIES[i % COMPANIES.length] };
     const contact = CONTACTS[(i * 3) % CONTACTS.length];
     const notes: Note[] = [];
@@ -93,7 +105,7 @@ export function demoTickets(staff: Person[]): Ticket[] {
     for (let k = 0; k < n; k++) {
       notes.push({
         id: `n${i}-${k}`,
-        author: k % 2 === 0 && assignee ? assignee.name : contact,
+        author: k % 2 === 0 ? author : contact,
         at: new Date(created.getTime() + (k + 1) * 3 * H).toISOString(),
         text:
           k % 2 === 0
@@ -113,15 +125,16 @@ export function demoTickets(staff: Person[]): Ticket[] {
       priority,
       queue: /Projet|Migration|Remplacement|Mise à jour/.test(title) ? "Projets" : /VPN|pare-feu|Wi-Fi|Hameçonnage/.test(title) ? "Réseau et sécurité" : pick(r, QUEUES.slice(0, 2)),
       source: /Alerte|Sauvegarde/.test(title) ? "monitoring" : pick(r, ["email", "phone", "portal"] as const),
-      assignee,
+      assignee: null,
+      slot,
       createdAt: created.toISOString(),
       dueAt: due.toISOString(),
       updatedAt: (notes.at(-1)?.at ?? created.toISOString()),
       hours: Math.round(r() * 60) / 10,
       notes,
-    } satisfies Ticket;
+    } satisfies Stored;
   });
-  return store;
+  return list;
 }
 
 export function addDemoTicket(t: Omit<Ticket, "id" | "number" | "createdAt" | "updatedAt" | "hours" | "notes">): Ticket {
@@ -135,7 +148,7 @@ export function addDemoTicket(t: Omit<Ticket, "id" | "number" | "createdAt" | "u
     hours: 0,
     notes: [],
   };
-  store?.unshift(ticket);
+  store?.unshift({ ...ticket, slot: null });
   return ticket;
 }
 

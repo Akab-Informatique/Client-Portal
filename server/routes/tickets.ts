@@ -1,6 +1,6 @@
 import { Hono } from "hono";
 import { HTTPException } from "hono/http-exception";
-import { asc, eq, inArray } from "drizzle-orm";
+import { and, asc, eq, inArray } from "drizzle-orm";
 import { z } from "zod";
 import { db, schema } from "../db/index.ts";
 import { auth, requirePermission, type AppEnv } from "../lib/auth.ts";
@@ -32,7 +32,7 @@ async function staffPeople() {
   const rows = await db()
     .select({ id: schema.users.id, name: schema.users.name })
     .from(schema.users)
-    .where(eq(schema.users.kind, "staff"))
+    .where(and(eq(schema.users.kind, "staff"), eq(schema.users.active, true)))
     .orderBy(asc(schema.users.name));
   return rows;
 }
