@@ -108,7 +108,6 @@ const fr = {
   palette: {
     placeholder: "Tapez une commande ou une recherche…",
     empty: "Aucun résultat.",
-    emptyReadOnly: "Ce tableau de bord est vide pour l'instant.",
     navigate: "Navigation",
     actions: "Actions",
     newMessage: "Nouveau message au babillard",
@@ -130,6 +129,8 @@ const fr = {
     size: { sm: "Petit", md: "Moyen", lg: "Large" },
     remove: "Retirer",
     empty: "Votre tableau de bord est vide. Ajoutez des widgets pour commencer.",
+    emptyReadOnly: "Ce tableau de bord est vide pour l'instant.",
+    metricSoon: "À venir",
     widgets: {
       welcome: "Bienvenue",
       stats: "Indicateurs",

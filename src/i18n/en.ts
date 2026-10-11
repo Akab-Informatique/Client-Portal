@@ -110,7 +110,6 @@ const en: Dict = {
   palette: {
     placeholder: "Type a command or search…",
     empty: "No results.",
-    emptyReadOnly: "This dashboard is empty for now.",
     navigate: "Navigation",
     actions: "Actions",
     newMessage: "New message board post",
@@ -132,6 +131,8 @@ const en: Dict = {
     size: { sm: "Small", md: "Medium", lg: "Wide" },
     remove: "Remove",
     empty: "Your dashboard is empty. Add widgets to get started.",
+    emptyReadOnly: "This dashboard is empty for now.",
+    metricSoon: "Coming soon",
     widgets: {
       welcome: "Welcome",
       stats: "Key figures",

@@ -103,7 +103,7 @@ function WelcomeWidget() {
     <div className="relative h-full overflow-hidden rounded-2xl border bg-card p-6 sm:p-8">
       <div className="pointer-events-none absolute -right-24 -top-24 size-72 rounded-full blur-3xl" style={{ background: "radial-gradient(circle, var(--glow), transparent 70%)" }} />
       <div className="pointer-events-none absolute inset-0 bg-grid opacity-50 [mask-image:linear-gradient(to_left,black,transparent_70%)]" />
-      <div className="relative">
+      <div className="relative flex flex-wrap items-center justify-between gap-6">
         <div>
           <p className="flex items-center gap-2 text-xs font-medium uppercase tracking-[0.18em] text-muted-foreground">
             <LiveDot tone="gold" /> {longDate(now)}
@@ -114,6 +114,18 @@ function WelcomeWidget() {
             {greet}, <span className="text-grad-gold">{me.name.split(" ")[0]}</span>
           </h2>
           <p className="mt-2 text-muted-foreground">{t("dashboard.subtitle")}</p>
+        </div>
+        {/* Four metric slots — content to be decided */}
+        <div className="grid grid-cols-4 gap-3">
+          {[0, 1, 2, 3].map((i) => (
+            <div
+              key={i}
+              className="flex size-20 flex-col items-center justify-center gap-1 rounded-xl border border-dashed border-[color:var(--gold)]/25 bg-background/40 backdrop-blur sm:size-24"
+            >
+              <span className="font-mono text-xl font-semibold text-muted-foreground/60">—</span>
+              <span className="text-[10px] uppercase tracking-wide text-muted-foreground/60">{t("dashboard.metricSoon")}</span>
+            </div>
+          ))}
         </div>
       </div>
     </div>
