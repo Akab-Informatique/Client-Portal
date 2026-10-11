@@ -29,7 +29,7 @@ Brand follows akab.ca: ink `#0a0a0b`, paper `#f4f4f1`, gold gradient
 
 - Authorization is enforced in the API, never only in the UI. Use `auth(c)` / `requirePermission`; never trust ids or roles sent by the browser.
 - Mutations: JSON only + same-origin check (`sameOriginJson`). Sessions are server-side (`sessions` table, cookie holds a random token; DB stores its SHA-256).
-- Passwords: scrypt (`server/lib/crypto.ts`), policy ≥ 12 chars. MFA (TOTP) required; codes are single-use. MFA secrets sealed with `APP_SECRET`.
+- Passwords: scrypt (`server/lib/crypto.ts`), policy ≥ 12 chars. MFA (TOTP) required in production (off by default in dev, `REQUIRE_MFA=true` to test); codes are single-use. MFA secrets sealed with `APP_SECRET`.
 - Admin changes are written to `audit_log` via `audit()`. Never log secrets.
 - No secrets in `VITE_*` variables or committed files; `.env` only.
 - CSP lives in `server/app.ts` (`secureHeaders`) — fonts are self-hosted (`@fontsource`), no external scripts.

@@ -26,8 +26,9 @@ npm run build      # type-check + production bundle
 ```
 
 Local demo accounts (development only): `admin@akab.local` and
-`tech@akab.local`, password `akab-dev-password`. MFA is required: scan the QR
-code with an authenticator app at first sign-in. Delete `.data/` to reset.
+`tech@akab.local`, password `akab-dev-password`. MFA is off in development
+(always on in production); set `REQUIRE_MFA=true` in `.env` to test it locally.
+Delete `.data/` to reset.
 
 ## Layout
 

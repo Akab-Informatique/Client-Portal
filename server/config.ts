@@ -79,7 +79,9 @@ export const config = {
   publicUrl: env("PUBLIC_URL").replace(/\/+$/, ""),
   appSecret: appSecret(),
   cookieSecure: bool("COOKIE_SECURE", production),
-  requireMfa: bool("REQUIRE_MFA", true),
+  // MFA: always on in production by default; off for local development
+  // (set REQUIRE_MFA=true locally to test the authenticator flow).
+  requireMfa: bool("REQUIRE_MFA", production),
   trustedProxies: env("TRUSTED_PROXY_IPS")
     .split(",")
     .map((s) => s.trim())
