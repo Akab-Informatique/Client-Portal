@@ -16,9 +16,12 @@ type Member = { dashboardId: string; userId: string; access: Access };
  * Who sees a dashboard:
  *  - its owner, and the people it is given to directly (members);
  *  - visibility "team" → every technician; "admins" → administrators.
- * Seeing is not editing: the visibility audience edits only when
- * `teamAccess` is "edit", a member only with "edit" access.
- * Holders of dashboard.manage edit and administer every shared dashboard.
+ * Seeing is not editing:
+ *  - the default layout is changed only by those who administer the dashboard
+ *    (its owner; holders of dashboard.manage for shared ones);
+ *  - others may personalize their own layout (the default stays) only when
+ *    allowed: `teamAccess` "edit" for the audience, or member access "edit".
+ * By default a technician therefore edits only their own dashboards.
  */
 const canManage = (a: AuthContext) => a.permissions.includes("dashboard.manage");
 const inAudience = (a: AuthContext, d: Dashboard) => d.visibility === "team" || (d.visibility === "admins" && a.isAdmin);
@@ -32,7 +35,8 @@ function canAdminister(a: AuthContext, d: Dashboard, ms: Member[]): boolean {
   if (d.ownerId === a.user.id) return true;
   return (Boolean(d.slug) || d.visibility !== "private") && canManage(a) && canSee(a, d, ms);
 }
-function canEdit(a: AuthContext, d: Dashboard, ms: Member[]): boolean {
+/** Save one's own layout of this dashboard. */
+function canCustomize(a: AuthContext, d: Dashboard, ms: Member[]): boolean {
   if (canAdminister(a, d, ms)) return true;
   if (memberOf(a, ms)?.access === "edit") return true;
   return inAudience(a, d) && d.teamAccess === "edit";
@@ -81,6 +85,12 @@ async function defaultIdOf(userId: string): Promise<string | null> {
 
 async function view(a: AuthContext, rows: Dashboard[], all: Member[], defaultId: string | null) {
   const users = await db().select({ id: schema.users.id, name: schema.users.name }).from(schema.users);
+  const own = rows.length
+    ? await db()
+        .select({ dashboardId: schema.dashboardUserLayouts.dashboardId, layout: schema.dashboardUserLayouts.layout })
+        .from(schema.dashboardUserLayouts)
+        .where(and(eq(schema.dashboardUserLayouts.userId, a.user.id), inArray(schema.dashboardUserLayouts.dashboardId, rows.map((d) => d.id))))
+    : [];
   const nameOf = (id: string | null) => users.find((u) => u.id === id)?.name ?? null;
   // The chosen default if still visible, otherwise the built-in "Akab" dashboard
   const fallback = rows.find((d) => d.slug === "akab")?.id ?? rows[0]?.id ?? null;
@@ -88,17 +98,25 @@ async function view(a: AuthContext, rows: Dashboard[], all: Member[], defaultId:
   return rows.map((d) => {
     const ms = all.filter((m) => m.dashboardId === d.id);
     const admin = canAdminister(a, d, ms);
+    const customize = canCustomize(a, d, ms);
+    // A personal layout counts only while personalizing is still allowed
+    const personal = customize ? own.find((o) => o.dashboardId === d.id)?.layout : undefined;
     return {
       id: d.id,
       slug: d.slug,
       name: d.name,
       visibility: d.visibility,
       teamAccess: d.teamAccess,
-      layout: d.layout,
+      layout: personal ?? d.layout,
+      defaultLayout: d.layout,
+      personalLayout: Boolean(personal),
       ownerName: nameOf(d.ownerId),
       mine: d.ownerId === a.user.id,
       isDefault: d.id === effectiveDefault,
-      canEdit: canEdit(a, d, ms),
+      /** Change the default layout (for everyone) */
+      canEdit: admin,
+      /** Save one's own layout */
+      canCustomize: customize,
       canAdminister: admin,
       canDelete: canDelete(a, d),
       visibilityOptions: allowedVisibility(a, d, ms),
@@ -171,7 +189,8 @@ export const dashboardsRoutes = new Hono<AppEnv>()
         layout: z.array(widget).max(40).optional(),
       }),
     );
-    if (p.layout !== undefined && !canEdit(a, d, ms)) throw new HTTPException(403, { message: "Forbidden" });
+    // The default layout is for those who administer the dashboard; others save their own (PUT /:id/my-layout)
+    if (p.layout !== undefined && !canAdminister(a, d, ms)) throw new HTTPException(403, { message: "Forbidden" });
     if ((p.name !== undefined || p.teamAccess !== undefined) && !canAdminister(a, d, ms)) {
       throw new HTTPException(403, { message: "Forbidden" });
     }
@@ -183,9 +202,42 @@ export const dashboardsRoutes = new Hono<AppEnv>()
       .update(schema.dashboards)
       .set({ ...p, updatedAt: new Date() })
       .where(eq(schema.dashboards.id, d.id));
+    if (p.layout !== undefined) {
+      // Saving the default replaces the saver's own layout
+      await db()
+        .delete(schema.dashboardUserLayouts)
+        .where(and(eq(schema.dashboardUserLayouts.dashboardId, d.id), eq(schema.dashboardUserLayouts.userId, a.user.id)));
+      await audit(a.user.id, "dashboard.default_layout", d.id, { widgets: p.layout.length });
+    }
     if (p.visibility !== undefined || p.name !== undefined || p.teamAccess !== undefined) {
       await audit(a.user.id, "dashboard.updated", d.id, { name: p.name, visibility: p.visibility, teamAccess: p.teamAccess });
     }
+    return c.json(await viewOne(a, d.id));
+  })
+
+  /** Save my own layout of this dashboard (the default stays). */
+  .put("/:id/my-layout", async (c) => {
+    const a = auth(c);
+    const { d, ms } = await load(a, zUuid.parse(c.req.param("id")));
+    if (!canCustomize(a, d, ms)) throw new HTTPException(403, { message: "Forbidden" });
+    const p = await body(c, z.object({ layout: z.array(widget).max(40) }));
+    await db()
+      .insert(schema.dashboardUserLayouts)
+      .values({ dashboardId: d.id, userId: a.user.id, layout: p.layout })
+      .onConflictDoUpdate({
+        target: [schema.dashboardUserLayouts.dashboardId, schema.dashboardUserLayouts.userId],
+        set: { layout: p.layout, updatedAt: new Date() },
+      });
+    return c.json(await viewOne(a, d.id));
+  })
+
+  /** Back to the default layout. */
+  .delete("/:id/my-layout", async (c) => {
+    const a = auth(c);
+    const { d } = await load(a, zUuid.parse(c.req.param("id")));
+    await db()
+      .delete(schema.dashboardUserLayouts)
+      .where(and(eq(schema.dashboardUserLayouts.dashboardId, d.id), eq(schema.dashboardUserLayouts.userId, a.user.id)));
     return c.json(await viewOne(a, d.id));
   })
 

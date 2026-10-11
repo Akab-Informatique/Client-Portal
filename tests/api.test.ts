@@ -475,16 +475,38 @@ describe("dashboards", () => {
     expect((await tech.del(`/api/dashboards/${team.json.id}`)).status).toBe(200);
   });
 
-  it("team rights: viewing does not imply editing unless granted", async () => {
+  it("team rights: technicians personalize only when allowed; the default is the admin's", async () => {
     const admin = await session("admin@akab.local");
     const tech = await session("tech@akab.local");
     const akab = (await admin.get("/api/dashboards")).json.find((d: any) => d.slug === "akab");
+    const clock = [{ id: "w1", type: "clock", size: "sm" }];
+    const mine = [{ id: "w2", type: "welcome", size: "lg" }];
     expect((await tech.patch(`/api/dashboards/${akab.id}`, { layout: [] })).status).toBe(403);
+    expect((await tech.put(`/api/dashboards/${akab.id}/my-layout`, { layout: mine })).status).toBe(403);
     expect((await tech.patch(`/api/dashboards/${akab.id}`, { teamAccess: "edit" })).status).toBe(403);
 
+    // admin saves a new default layout: everyone sees it
+    expect((await admin.patch(`/api/dashboards/${akab.id}`, { layout: clock })).status).toBe(200);
+    let seen = (await tech.get("/api/dashboards")).json.find((d: any) => d.slug === "akab");
+    expect(seen.layout).toEqual(clock);
+    expect(seen.canEdit).toBe(false);
+    expect(seen.canCustomize).toBe(false);
+
+    // allowed to personalize: own layout, the default does not change
     expect((await admin.patch(`/api/dashboards/${akab.id}`, { teamAccess: "edit" })).json.teamAccess).toBe("edit");
-    expect((await tech.get("/api/dashboards")).json.find((d: any) => d.slug === "akab").canEdit).toBe(true);
-    expect((await tech.patch(`/api/dashboards/${akab.id}`, { layout: [] })).status).toBe(200);
+    const saved = (await tech.put(`/api/dashboards/${akab.id}/my-layout`, { layout: mine })).json;
+    expect(saved).toMatchObject({ layout: mine, defaultLayout: clock, personalLayout: true, canCustomize: true, canEdit: false });
+    expect((await tech.patch(`/api/dashboards/${akab.id}`, { layout: mine })).status).toBe(403);
+    expect((await admin.get("/api/dashboards")).json.find((d: any) => d.slug === "akab").layout).toEqual(clock);
+
+    // personalizing switched off again: back to the default
+    await admin.patch(`/api/dashboards/${akab.id}`, { teamAccess: "view" });
+    seen = (await tech.get("/api/dashboards")).json.find((d: any) => d.slug === "akab");
+    expect(seen).toMatchObject({ layout: clock, personalLayout: false });
+    await admin.patch(`/api/dashboards/${akab.id}`, { teamAccess: "edit" });
+    // the personal layout was kept; resetting it shows the default again
+    expect((await tech.get("/api/dashboards")).json.find((d: any) => d.slug === "akab").layout).toEqual(mine);
+    expect((await tech.del(`/api/dashboards/${akab.id}/my-layout`)).json).toMatchObject({ layout: clock, personalLayout: false });
     // editing widgets is not administering: still no rename/visibility/members
     expect((await tech.patch(`/api/dashboards/${akab.id}`, { visibility: "admins" })).status).toBe(403);
     expect((await tech.put(`/api/dashboards/${akab.id}/members`, { members: [] })).status).toBe(403);
@@ -507,9 +529,10 @@ describe("dashboards", () => {
     expect(seen.members).toEqual([]); // only administrators see the list
     expect((await tech.patch(`/api/dashboards/${security.id}`, { layout: [] })).status).toBe(403);
 
-    // upgraded to edit
+    // upgraded to edit: may personalize, not change the default
     await admin.put(`/api/dashboards/${security.id}/members`, { members: [{ userId: techId, access: "edit" }] });
-    expect((await tech.patch(`/api/dashboards/${security.id}`, { layout: [] })).status).toBe(200);
+    expect((await tech.put(`/api/dashboards/${security.id}/my-layout`, { layout: [] })).status).toBe(200);
+    expect((await tech.patch(`/api/dashboards/${security.id}`, { layout: [] })).status).toBe(403);
 
     // client users or unknown ids cannot be added
     const client = (await db().select().from(schema.users).where(eq(schema.users.kind, "client")))[0];

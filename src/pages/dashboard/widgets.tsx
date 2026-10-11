@@ -57,12 +57,6 @@ export const WIDGETS: WidgetDef[] = [
   { type: "systemStatus", icon: Server, defaultSize: "sm", render: () => <SystemStatusWidget /> },
 ];
 
-/**
- * Empty for now — the widgets to keep are not decided yet. They remain
- * available under "Customize > Add widget"; list the chosen ones here later.
- */
-export const DEFAULT_LAYOUT: { id: string; type: string; size: "sm" | "md" | "lg" }[] = [];
-
 // ── building blocks ──────────────────────────────────────────────────────────
 export function WidgetFrame({ title, icon: Icon, action, children, className }: { title: string; icon: LucideIcon; action?: ReactNode; children: ReactNode; className?: string }) {
   return (

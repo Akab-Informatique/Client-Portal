@@ -190,7 +190,7 @@ export const dashboards = pgTable(
     slug: text("slug"),
     name: text("name").notNull(),
     visibility: text("visibility", { enum: ["private", "team", "admins"] }).notNull(),
-    /** What the audience of `visibility` (team or admins) may do: view only, or edit widgets. */
+    /** "edit": the technicians who see it may personalize their own layout (the default stays) */
     teamAccess: text("team_access", { enum: ["view", "edit"] }).notNull().default("view"),
     ownerId: uuid("owner_id").references(() => users.id, { onDelete: "cascade" }),
     layout: jsonb("layout").$type<DashboardWidget[]>().notNull().default(sql`'[]'::jsonb`),
@@ -247,6 +247,25 @@ export const integrations = pgTable("integrations", {
   updatedBy: uuid("updated_by").references(() => users.id, { onDelete: "set null" }),
   updatedAt: updated(),
 });
+
+/**
+ * A person's own layout of a shared dashboard (when they may personalize it).
+ * Without a row, they see the dashboard's default layout.
+ */
+export const dashboardUserLayouts = pgTable(
+  "dashboard_user_layouts",
+  {
+    dashboardId: uuid("dashboard_id")
+      .notNull()
+      .references(() => dashboards.id, { onDelete: "cascade" }),
+    userId: uuid("user_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    layout: jsonb("layout").$type<DashboardWidget[]>().notNull(),
+    updatedAt: updated(),
+  },
+  (t) => [primaryKey({ columns: [t.dashboardId, t.userId] })],
+);
 
 /** Access given to specific staff members on a dashboard, on top of its visibility. */
 export const dashboardMembers = pgTable(

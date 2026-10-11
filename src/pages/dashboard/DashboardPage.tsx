@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useQueryClient } from "@tanstack/react-query";
 import { AnimatePresence, motion } from "motion/react";
@@ -14,14 +14,14 @@ import {
 } from "@dnd-kit/core";
 import { SortableContext, arrayMove, rectSortingStrategy, sortableKeyboardCoordinates, useSortable } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
-import { Check, GripVertical, Plus, RotateCcw, X } from "lucide-react";
+import { Check, GripVertical, Plus, RotateCcw, UserRound, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { api } from "@/lib/api";
 import { useCan } from "@/lib/session";
 import type { DashboardWidget } from "@/lib/types";
 import { cn } from "@/lib/utils";
-import { DEFAULT_LAYOUT, WIDGETS } from "./widgets";
+import { WIDGETS } from "./widgets";
 import { DashboardMenu, DashboardPicker, useDashboards, type DashboardInfo } from "./DashboardPicker";
 
 const SPAN: Record<DashboardWidget["size"], string> = {
@@ -54,8 +54,10 @@ export function DashboardPage() {
       dashboard={selected}
       header={picker}
       onDeleted={() => setChosen(null)}
-      onSave={async (layout) => {
-        await api.patch(`/dashboards/${selected.id}`, { layout });
+      onSave={async (layout, scope) => {
+        // "default": the layout everyone sees · "mine": only my own view
+        if (scope === "default") await api.patch(`/dashboards/${selected.id}`, { layout });
+        else await api.put(`/dashboards/${selected.id}/my-layout`, { layout });
         await qc.invalidateQueries({ queryKey: ["dashboards"] });
       }}
     />
@@ -71,7 +73,7 @@ function DashboardBoard({
   dashboard: DashboardInfo;
   header: React.ReactNode;
   onDeleted: () => void;
-  onSave: (layout: DashboardWidget[]) => Promise<void>;
+  onSave: (layout: DashboardWidget[], scope: "default" | "mine") => Promise<void>;
 }) {
   const { t } = useTranslation();
   const can = useCan();
@@ -79,14 +81,24 @@ function DashboardBoard({
   const sanitize = (l: DashboardWidget[]) => l.filter((w) => allowed.some((a) => a.type === w.type));
   const [layout, setLayout] = useState<DashboardWidget[]>(() => sanitize(dashboard.layout));
   const [editing, setEditing] = useState(false);
+  // Follow the saved layout (e.g. after "back to default") while not editing
+  const saved = JSON.stringify(dashboard.layout);
+  useEffect(() => {
+    if (!editing) setLayout(sanitize(dashboard.layout));
+  }, [saved, editing]);
+  // My own private dashboard: there is only one layout. Shared ones: the
+  // administrator chooses default or "just for me"; others save their own.
+  const ownOnly = dashboard.mine && dashboard.visibility === "private";
   const sensors = useSensors(
     useSensor(PointerSensor, { activationConstraint: { distance: 6 } }),
     useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates }),
   );
 
-  async function persist(next: DashboardWidget[]) {
+  async function persist(scope: "default" | "mine") {
     try {
-      await onSave(next);
+      await onSave(layout, scope);
+      setEditing(false);
+      if (!ownOnly) toast.success(scope === "default" ? t("dashboard.savedDefault") : t("dashboard.savedMine"));
     } catch {
       toast.error(t("common.error"));
     }
@@ -139,29 +151,39 @@ function DashboardBoard({
                   ))}
                 </PopoverContent>
               </Popover>
-              <Button
-                variant="ghost"
-                size="sm"
-                onClick={() => {
-                  if (!window.confirm(t("dashboard.resetConfirm"))) return;
-                  setLayout(sanitize(DEFAULT_LAYOUT));
-                }}
-              >
-                <RotateCcw className="size-4" /> {t("dashboard.reset")}
+              {!ownOnly && (
+                <Button variant="ghost" size="sm" onClick={() => setLayout(sanitize(dashboard.defaultLayout))} title={t("dashboard.useDefaultHint")}>
+                  <RotateCcw className="size-4" /> {t("dashboard.useDefault")}
+                </Button>
+              )}
+              <Button variant="ghost" size="sm" onClick={() => setEditing(false)}>
+                <X className="size-4" /> {t("common.cancel")}
               </Button>
             </>
           )}
           {editing ? (
-            <Button
-              size="sm"
-              className="bg-grad-gold text-[#1a1204] glow-gold"
-              onClick={() => {
-                void persist(layout);
-                setEditing(false);
-              }}
-            >
-              <Check className="size-4" /> {t("dashboard.done")}
-            </Button>
+            ownOnly ? (
+              <Button size="sm" className="bg-grad-gold text-[#1a1204] glow-gold" onClick={() => void persist("default")}>
+                <Check className="size-4" /> {t("dashboard.done")}
+              </Button>
+            ) : dashboard.canEdit ? (
+              <>
+                <Button size="sm" variant="outline" onClick={() => void persist("mine")}>
+                  <UserRound className="size-4" /> {t("dashboard.saveMine")}
+                </Button>
+                <Button
+                  size="sm"
+                  className="bg-grad-gold text-[#1a1204] glow-gold"
+                  onClick={() => window.confirm(t("dashboard.saveDefaultConfirm")) && void persist("default")}
+                >
+                  <Check className="size-4" /> {t("dashboard.saveDefault")}
+                </Button>
+              </>
+            ) : (
+              <Button size="sm" className="bg-grad-gold text-[#1a1204] glow-gold" onClick={() => void persist("mine")}>
+                <Check className="size-4" /> {t("dashboard.saveMine")}
+              </Button>
+            )
           ) : (
             <DashboardMenu d={dashboard} onEditWidgets={() => setEditing(true)} onDeleted={onDeleted} />
           )}
@@ -169,7 +191,7 @@ function DashboardBoard({
       </div>
 
       {layout.length === 0 ? (
-        <div className="rounded-2xl border border-dashed p-12 text-center text-muted-foreground">{t(dashboard.canEdit ? "dashboard.empty" : "dashboard.emptyReadOnly")}</div>
+        <div className="rounded-2xl border border-dashed p-12 text-center text-muted-foreground">{t(dashboard.canEdit || dashboard.canCustomize ? "dashboard.empty" : "dashboard.emptyReadOnly")}</div>
       ) : (
         <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={onDragEnd}>
           <SortableContext items={layout.map((w) => w.id)} strategy={rectSortingStrategy}>

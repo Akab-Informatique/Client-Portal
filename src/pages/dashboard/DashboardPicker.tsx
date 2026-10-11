@@ -5,13 +5,13 @@ import { toast } from "sonner";
 import {
   Check,
   ChevronDown,
-  Eye,
   LayoutDashboard,
   LayoutGrid,
   Loader2,
   Lock,
   Pencil,
   Plus,
+  RotateCcw,
   ShieldCheck,
   Star,
   Trash2,
@@ -23,6 +23,7 @@ import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import {
   DropdownMenu,
+  DropdownMenuCheckboxItem,
   DropdownMenuContent,
   DropdownMenuItem,
   DropdownMenuLabel,
@@ -32,6 +33,7 @@ import {
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Switch } from "@/components/ui/switch";
 import { api } from "@/lib/api";
 import { useMe } from "@/lib/session";
 import type { DashboardWidget } from "@/lib/types";
@@ -45,11 +47,17 @@ export type DashboardInfo = {
   name: string;
   visibility: Visibility;
   teamAccess: Access;
+  /** What I see: my own layout if I personalized it, else the default */
   layout: DashboardWidget[];
+  defaultLayout: DashboardWidget[];
+  personalLayout: boolean;
   ownerName: string | null;
   mine: boolean;
   isDefault: boolean;
+  /** Change the default layout (for everyone) */
   canEdit: boolean;
+  /** Save my own layout */
+  canCustomize: boolean;
   canAdminister: boolean;
   canDelete: boolean;
   visibilityOptions: Visibility[];
@@ -147,6 +155,19 @@ export function DashboardMenu({ d, onEditWidgets, onDeleted }: { d: DashboardInf
     },
     onError: () => toast.error(t("common.error")),
   });
+  const backToDefault = useMutation({
+    mutationFn: () => api.del(`/dashboards/${d.id}/my-layout`),
+    onSuccess: () => {
+      toast.success(t("dashboards.backToDefaultDone"));
+      void qc.invalidateQueries({ queryKey: ["dashboards"] });
+    },
+    onError: () => toast.error(t("common.error")),
+  });
+  const teamCustomize = useMutation({
+    mutationFn: (on: boolean) => api.patch(`/dashboards/${d.id}`, { teamAccess: on ? "edit" : "view" }),
+    onSuccess: () => void qc.invalidateQueries({ queryKey: ["dashboards"] }),
+    onError: () => toast.error(t("common.error")),
+  });
   const remove = useMutation({
     mutationFn: () => api.del(`/dashboards/${d.id}`),
     onSuccess: () => {
@@ -166,9 +187,14 @@ export function DashboardMenu({ d, onEditWidgets, onDeleted }: { d: DashboardInf
           </Button>
         </DropdownMenuTrigger>
         <DropdownMenuContent align="end" className="w-72">
-          {d.canEdit && (
+          {(d.canEdit || d.canCustomize) && (
             <DropdownMenuItem onSelect={onEditWidgets}>
               <LayoutGrid className="size-4" /> {t("dashboards.editWidgets")}
+            </DropdownMenuItem>
+          )}
+          {d.personalLayout && (
+            <DropdownMenuItem onSelect={() => window.confirm(t("dashboards.backToDefaultConfirm")) && backToDefault.mutate()}>
+              <RotateCcw className="size-4" /> {t("dashboards.backToDefault")}
             </DropdownMenuItem>
           )}
           {d.isDefault ? (
@@ -181,6 +207,15 @@ export function DashboardMenu({ d, onEditWidgets, onDeleted }: { d: DashboardInf
             </DropdownMenuItem>
           )}
           {(d.canAdminister || d.canDelete) && <DropdownMenuSeparator />}
+          {d.canAdminister && d.visibility === "team" && (
+            <DropdownMenuCheckboxItem
+              checked={d.teamAccess === "edit"}
+              onCheckedChange={(on) => teamCustomize.mutate(Boolean(on))}
+              onSelect={(e) => e.preventDefault()}
+            >
+              {t("dashboards.teamCustomize")}
+            </DropdownMenuCheckboxItem>
+          )}
           {d.canAdminister && !d.slug && (
             <DropdownMenuItem onSelect={() => setRenaming(true)}>
               <Pencil className="size-4" /> {t("dashboards.rename")}
@@ -353,13 +388,6 @@ function AccessDialog({ d, open, onClose }: { d: DashboardInfo; open: boolean; o
     onError: () => toast.error(t("common.error")),
   });
 
-  const accessOptions = (["view", "edit"] as const).map((v) => ({
-    value: v,
-    icon: v === "view" ? Eye : Pencil,
-    title: t(`dashboards.accessLevel.${v}`),
-    text: t(`dashboards.accessText.${v}`),
-  }));
-
   return (
     <Dialog open={open} onOpenChange={(o) => !o && onClose()}>
       <DialogContent className="sm:max-w-lg">
@@ -384,12 +412,15 @@ function AccessDialog({ d, open, onClose }: { d: DashboardInfo; open: boolean; o
             )}
           </section>
 
-          {/* Administrators always edit (dashboard.manage), so the choice only matters for the team */}
+          {/* Administrators always change the default (dashboard.manage), so the switch only matters for the team */}
           {visibility === "team" && (
-            <section className="space-y-2">
-              <h3 className="text-sm font-semibold">{t("dashboards.teamCan")}</h3>
-              <ChoiceCards value={teamAccess} onChange={setTeamAccess} options={accessOptions} />
-            </section>
+            <label className="flex items-start justify-between gap-4 rounded-xl border p-3">
+              <span>
+                <span className="block text-sm font-semibold">{t("dashboards.teamCustomize")}</span>
+                <span className="mt-0.5 block text-xs text-muted-foreground">{t("dashboards.teamCustomizeText")}</span>
+              </span>
+              <Switch checked={teamAccess === "edit"} onCheckedChange={(on) => setTeamAccess(on ? "edit" : "view")} />
+            </label>
           )}
 
           <section className="space-y-2">
