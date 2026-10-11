@@ -14,6 +14,7 @@ export type Ticket = {
   description: string;
   company: { id: number; name: string };
   contact: string;
+  contactId: string | null;
   status: TicketStatus;
   priority: TicketPriority;
   queue: string;
@@ -129,6 +130,7 @@ function generate(): Stored[] {
       description,
       company,
       contact,
+      contactId: `c-${company.id}-0`,
       status,
       priority,
       queue: /Projet|Migration|Remplacement|Mise à jour/.test(title) ? "Projets" : /VPN|pare-feu|Wi-Fi|Hameçonnage/.test(title) ? "Réseau et sécurité" : pick(r, QUEUES.slice(0, 2)),
@@ -166,7 +168,7 @@ export function addDemoTicket(t: Omit<Ticket, "id" | "number" | "createdAt" | "u
 /** Change fields of a sample ticket (an explicit assignee replaces the round-robin slot). */
 export function updateDemoTicket(
   id: number,
-  p: Partial<Pick<Ticket, "status" | "priority" | "queue" | "dueAt">> & { assignee?: Person | null },
+  p: Partial<Pick<Ticket, "status" | "priority" | "queue" | "dueAt" | "company" | "contact" | "contactId">> & { assignee?: Person | null },
 ): boolean {
   const t = store?.find((x) => x.id === id);
   if (!t) return false;
@@ -185,3 +187,39 @@ export function addDemoNote(id: number, note: Omit<Note, "id" | "at">): Note | n
 }
 
 export const demoCompanies = () => COMPANIES.map((name, i) => ({ id: 300 + i, name }));
+
+// ── Contacts per client (Autotask "Contacts") ──
+export type Contact = { id: string; companyId: number; name: string; email: string | null; phone: string | null };
+let contacts: Contact[] | null = null;
+const slug = (s: string) =>
+  s
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase()
+    .replace(/[^a-z]+/g, ".");
+
+function allContacts(): Contact[] {
+  contacts ??= COMPANIES.flatMap((company, c) =>
+    [0, 1, 2].map((k) => {
+      const name = CONTACTS[(c * 3 + k) % CONTACTS.length];
+      return {
+        id: `c-${300 + c}-${k}`,
+        companyId: 300 + c,
+        name,
+        email: `${slug(name)}@${slug(company).replace(/\.+$/, "")}.ca`,
+        phone: `450-555-${String(1000 + c * 10 + k)}`,
+      };
+    }),
+  );
+  return contacts;
+}
+
+export const demoContacts = (companyId: number) => allContacts().filter((x) => x.companyId === companyId);
+export const demoContact = (id: string) => allContacts().find((x) => x.id === id) ?? null;
+
+export function addDemoContact(p: Omit<Contact, "id">): Contact {
+  const list = allContacts();
+  const c: Contact = { ...p, id: `c-${p.companyId}-${Date.now()}` };
+  list.push(c);
+  return c;
+}

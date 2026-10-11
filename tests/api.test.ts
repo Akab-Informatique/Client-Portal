@@ -911,3 +911,29 @@ describe("tickets: inline edit, notes, team filter and AI", () => {
     await admin.put("/api/admin/integrations/ai", { enabled: false });
   });
 });
+
+describe("tickets: client and contact", () => {
+  it("lists and creates contacts, and changes a ticket's client and contact", async () => {
+    resetRateLimit("login:ip:unknown");
+    const tech = await signIn("tech@akab.local");
+    const contacts = (await tech.get("/api/tickets/companies/301/contacts")).json;
+    expect(contacts.length).toBe(3);
+    expect(contacts.every((c: any) => c.companyId === 301)).toBe(true);
+
+    const created = await tech.post("/api/tickets/companies/301/contacts", { firstName: "Nadia", lastName: "Gélinas", email: "nadia@exemple.ca", phone: "450-555-0000" });
+    expect(created.status).toBe(201);
+    expect(created.json.name).toBe("Nadia Gélinas");
+    expect((await tech.post("/api/tickets/companies/301/contacts", { firstName: "X", lastName: "Y", email: "pas-un-courriel" })).status).toBe(400);
+
+    const tk = (await tech.get("/api/tickets?view=all")).json.items.find((t: any) => t.company.id !== 301);
+    let r = await tech.patch(`/api/tickets/${tk.id}`, { companyId: 301 });
+    expect(r.json).toMatchObject({ company: { id: 301 }, contact: "", contactId: null });
+    r = await tech.patch(`/api/tickets/${tk.id}`, { contactId: created.json.id });
+    expect(r.json).toMatchObject({ contact: "Nadia Gélinas", contactId: created.json.id });
+    // a contact of another client is refused
+    expect((await tech.patch(`/api/tickets/${tk.id}`, { contactId: "c-300-0" })).json.error).toBe("invalid_contact");
+
+    const nt = await tech.post("/api/tickets", { title: "Avec contact", companyId: 301, contactId: created.json.id, priority: "low", queue: "Support niveau 1", assigneeId: null, dueDate: "2026-12-01" });
+    expect(nt.json).toMatchObject({ contact: "Nadia Gélinas", contactId: created.json.id });
+  });
+});

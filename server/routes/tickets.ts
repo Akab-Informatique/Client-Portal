@@ -4,8 +4,8 @@ import { and, asc, desc, eq, inArray } from "drizzle-orm";
 import { z } from "zod";
 import { db, schema } from "../db/index.ts";
 import { auth, requirePermission, type AppEnv, type AuthContext } from "../lib/auth.ts";
-import { addDemoNote, addDemoTicket, demoCompanies, demoTickets, QUEUES, updateDemoTicket, type Ticket } from "../lib/demoTickets.ts";
-import { body } from "../lib/validate.ts";
+import { addDemoContact, addDemoNote, addDemoTicket, demoCompanies, demoContact, demoContacts, demoTickets, QUEUES, updateDemoTicket, type Ticket } from "../lib/demoTickets.ts";
+import { body, zEmail } from "../lib/validate.ts";
 import { audit } from "../lib/audit.ts";
 import { rateLimit } from "../lib/http.ts";
 import { AiError, aiSettings, askClaude, askClaudeJson } from "../lib/ai.ts";
@@ -74,7 +74,7 @@ async function detailOf(t: Ticket, start: string | undefined, a: AuthContext) {
     hours: t.hours,
     notes: t.notes,
     ai: Boolean(ai?.enabled && ai.apiKey),
-    options: { statuses: STATUSES, priorities: PRIORITIES, queues: QUEUES, technicians: staff },
+    options: { statuses: STATUSES, priorities: PRIORITIES, queues: QUEUES, technicians: staff, companies: demoCompanies() },
   };
 }
 
@@ -118,6 +118,7 @@ function summary(t: Ticket, start: string | undefined, me: string) {
     title: t.title,
     company: t.company,
     contact: t.contact,
+    contactId: t.contactId,
     status: t.status,
     priority: t.priority,
     queue: t.queue,
@@ -282,6 +283,28 @@ export const ticketRoutes = new Hono<AppEnv>()
     return c.json({ ok: true });
   })
 
+  // ── Clients and their contacts (Autotask Companies / Contacts) ──
+  .get("/companies/:cid/contacts", async (c) => {
+    return c.json(demoContacts(Number(c.req.param("cid"))));
+  })
+  .post("/companies/:cid/contacts", requirePermission("tickets.edit"), async (c) => {
+    const a = auth(c);
+    const companyId = Number(c.req.param("cid"));
+    if (!demoCompanies().some((x) => x.id === companyId)) throw new HTTPException(404, { message: "not_found" });
+    const p = await body(
+      c,
+      z.object({
+        firstName: z.string().trim().min(1).max(60),
+        lastName: z.string().trim().min(1).max(60),
+        email: z.union([zEmail, z.literal("")]).optional(),
+        phone: z.string().trim().max(40).optional(),
+      }),
+    );
+    const contact = addDemoContact({ companyId, name: `${p.firstName} ${p.lastName}`, email: p.email || null, phone: p.phone || null });
+    await audit(a.user.id, "ticket.contact_created", contact.id, { companyId });
+    return c.json(contact, 201);
+  })
+
   // ── Saved filters (per technician) ──
   .get("/filters", async (c) => {
     const a = auth(c);
@@ -406,6 +429,8 @@ export const ticketRoutes = new Hono<AppEnv>()
       c,
       z.object({
         status: z.enum(STATUSES).optional(),
+        companyId: z.number().int().optional(),
+        contactId: z.string().max(60).nullable().optional(),
         priority: z.enum(PRIORITIES).optional(),
         queue: z.string().refine((v) => QUEUES.includes(v)).optional(),
         assigneeId: z.uuid().nullable().optional(),
@@ -416,6 +441,23 @@ export const ticketRoutes = new Hono<AppEnv>()
     if (p.status) patch.status = p.status;
     if (p.priority) patch.priority = p.priority;
     if (p.queue) patch.queue = p.queue;
+    // Client and contact: a new client clears the contact unless one of its contacts is given
+    if (p.companyId !== undefined) {
+      const company = demoCompanies().find((x) => x.id === p.companyId);
+      if (!company) throw new HTTPException(400, { message: "invalid_company" });
+      patch.company = company;
+      if (p.contactId === undefined) {
+        patch.contact = "";
+        patch.contactId = null;
+      }
+    }
+    if (p.contactId !== undefined) {
+      const companyId = p.companyId ?? demoTickets(staff).find((x) => x.id === id)!.company.id;
+      const contact = p.contactId ? demoContact(p.contactId) : null;
+      if (p.contactId && contact?.companyId !== companyId) throw new HTTPException(400, { message: "invalid_contact" });
+      patch.contact = contact?.name ?? "";
+      patch.contactId = contact?.id ?? null;
+    }
     if (p.dueDate) patch.dueAt = new Date(`${p.dueDate}T17:00:00`).toISOString();
     if (p.assigneeId !== undefined) {
       const person = p.assigneeId ? staff.find((s) => s.id === p.assigneeId) : null;
@@ -459,7 +501,7 @@ export const ticketRoutes = new Hono<AppEnv>()
         title: z.string().trim().min(1).max(250),
         description: z.string().trim().max(8000).default(""),
         companyId: z.number().int(),
-        contact: z.string().trim().max(120).default(""),
+        contactId: z.string().max(60).nullable().optional(),
         priority: z.enum(PRIORITIES),
         queue: z.string().refine((v) => QUEUES.includes(v)),
         assigneeId: z.uuid().nullable(),
@@ -469,6 +511,8 @@ export const ticketRoutes = new Hono<AppEnv>()
     );
     const company = demoCompanies().find((x) => x.id === p.companyId);
     if (!company) throw new HTTPException(400, { message: "invalid_company" });
+    const contact = p.contactId ? demoContact(p.contactId) : null;
+    if (p.contactId && contact?.companyId !== company.id) throw new HTTPException(400, { message: "invalid_contact" });
     const staff = await staffPeople();
     demoTickets(staff);
     const assignee = p.assigneeId ? (staff.find((s) => s.id === p.assigneeId) ?? null) : null;
@@ -476,7 +520,8 @@ export const ticketRoutes = new Hono<AppEnv>()
       title: p.title,
       description: p.description,
       company,
-      contact: p.contact,
+      contact: contact?.name ?? "",
+      contactId: contact?.id ?? null,
       status: assignee ? "inProgress" : "new",
       priority: p.priority,
       queue: p.queue,

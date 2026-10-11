@@ -52,6 +52,7 @@ import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip
 import { api, ApiError } from "@/lib/api";
 import { useCan, useMe } from "@/lib/session";
 import { cn, initials } from "@/lib/utils";
+import { CompanyPicker, ContactPicker } from "./pickers";
 import { dueState, longDateTime, PRIORITY_STYLE, STATUS_STYLE, usePresence, type AiAnalysis, type Priority, type Status, type TicketDetail, type Viewer } from "./shared";
 
 const SOURCE_ICON: Record<TicketDetail["source"], LucideIcon> = { email: Mail, phone: Phone, portal: Inbox, monitoring: MonitorCog };
@@ -118,7 +119,7 @@ function useTicketUpdate(tk: TicketDetail) {
   const { t } = useTranslation();
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: (patch: { status?: Status; priority?: Priority; queue?: string; assigneeId?: string | null; dueDate?: string }) =>
+    mutationFn: (patch: { status?: Status; priority?: Priority; queue?: string; assigneeId?: string | null; dueDate?: string; companyId?: number; contactId?: string | null }) =>
       api.patch<TicketDetail>(`/tickets/${tk.id}`, patch),
     onSuccess: (next) => {
       qc.setQueryData(["tickets", "detail", tk.id], next);
@@ -245,10 +246,22 @@ function TicketBody({ tk, viewers, onClose, onMinimize }: { tk: TicketDetail; vi
           <aside className="space-y-4">
             <dl className="space-y-3 rounded-xl border bg-card/60 p-4 text-sm">
               <Detail icon={Building2} label={t("tickets.fields.company")}>
-                {tk.company.name}
+                <CompanyPicker
+                  disabled={!editable}
+                  value={tk.company}
+                  companies={tk.options.companies}
+                  onChange={(c) => c.id !== tk.company.id && update.mutate({ companyId: c.id })}
+                />
               </Detail>
               <Detail icon={UserRound} label={t("tickets.fields.contact")}>
-                {tk.contact || "—"}
+                <ContactPicker
+                  disabled={!editable}
+                  canCreate={editable}
+                  companyId={tk.company.id}
+                  value={tk.contactId}
+                  valueName={tk.contact || undefined}
+                  onChange={(c) => update.mutate({ contactId: c?.id ?? null })}
+                />
               </Detail>
               <Detail icon={Users} label={t("tickets.fields.assignee")}>
                 <InlinePick

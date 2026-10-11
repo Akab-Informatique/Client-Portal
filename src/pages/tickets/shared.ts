@@ -13,6 +13,7 @@ export type TicketSummary = {
   title: string;
   company: { id: number; name: string };
   contact: string;
+  contactId: string | null;
   status: Status;
   priority: Priority;
   queue: string;
@@ -32,7 +33,7 @@ export type TicketDetail = TicketSummary & {
   notes: { id: string; author: string; at: string; text: string; internal: boolean }[];
   /** AI assistant available to me */
   ai: boolean;
-  options: { statuses: Status[]; priorities: Priority[]; queues: string[]; technicians: { id: string; name: string }[] };
+  options: { statuses: Status[]; priorities: Priority[]; queues: string[]; technicians: { id: string; name: string }[]; companies: { id: number; name: string }[] };
 };
 export type AiAnalysis = {
   id: string;

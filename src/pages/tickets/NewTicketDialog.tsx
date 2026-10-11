@@ -12,6 +12,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { api } from "@/lib/api";
 import { useMe } from "@/lib/session";
 import { cn } from "@/lib/utils";
+import { CompanyPicker, ContactPicker } from "./pickers";
 import { PRIORITY_STYLE, type Priority, type TicketList, type TicketSummary } from "./shared";
 
 const inDays = (n: number) => new Date(Date.now() + n * 86_400_000).toISOString().slice(0, 10);
@@ -33,7 +34,7 @@ export function NewTicketDialog({
   const me = useMe();
   const empty = () => ({
     companyId: "",
-    contact: "",
+    contactId: null as string | null,
     title: "",
     description: "",
     priority: "medium" as Priority,
@@ -52,6 +53,7 @@ export function NewTicketDialog({
       api.post<TicketSummary>("/tickets", {
         ...f,
         companyId: Number(f.companyId),
+        contactId: f.contactId,
         assigneeId: f.assigneeId === "none" ? null : f.assigneeId,
         startDate: f.startDate || null,
       }),
@@ -83,22 +85,22 @@ export function NewTicketDialog({
           <div className="grid gap-4 sm:grid-cols-2">
             <div className="space-y-2">
               <Label htmlFor="nt-company">{t("tickets.fields.company")}</Label>
-              <Select value={f.companyId} onValueChange={(v) => setF({ ...f, companyId: v })} required>
-                <SelectTrigger id="nt-company" className="w-full">
-                  <SelectValue placeholder={t("tickets.pickCompany")} />
-                </SelectTrigger>
-                <SelectContent position="popper" className="max-h-72">
-                  {facets.companies.map((c) => (
-                    <SelectItem key={c.id} value={String(c.id)}>
-                      {c.name}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
+              <CompanyPicker
+                triggerClassName="h-9 rounded-md border bg-transparent px-3 text-sm dark:bg-input/30"
+                value={facets.companies.find((c) => String(c.id) === f.companyId) ?? null}
+                companies={facets.companies}
+                onChange={(c) => setF({ ...f, companyId: String(c.id), contactId: null })}
+              />
             </div>
             <div className="space-y-2">
               <Label htmlFor="nt-contact">{t("tickets.fields.contact")}</Label>
-              <Input id="nt-contact" value={f.contact} onChange={(e) => setF({ ...f, contact: e.target.value })} />
+              <ContactPicker
+                triggerClassName="h-9 rounded-md border bg-transparent px-3 text-sm dark:bg-input/30"
+                canCreate
+                companyId={f.companyId ? Number(f.companyId) : null}
+                value={f.contactId}
+                onChange={(c) => setF({ ...f, contactId: c?.id ?? null })}
+              />
             </div>
           </div>
           <div className="space-y-2">
