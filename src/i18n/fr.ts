@@ -543,13 +543,13 @@ const fr = {
     dock: "Billets réduits",
     dueFilter: { overdue: "En retard", today: "Aujourd'hui" },
     metrics: {
-      statusAttention: "Statut « Nécessite attention »",
+      statusAttention: "Nécessite attention",
       mine: "Mes billets",
       unassigned: "Non assignés",
       attention: "Billets à surveiller",
     },
     metricsHint: {
-      statusAttention: "Ex. : le client a répondu",
+      statusAttention: "Statut du billet · ex. : le client a répondu",
       mine: "Ouverts et assignés à vous",
       unassigned: "À prendre en charge",
       attention: "En retard, échéance aujourd'hui ou critiques",

@@ -310,26 +310,26 @@ function MetricTiles({ data, params, apply }: { data: TicketList | undefined; pa
                 transition={{ delay: i * 0.04 }}
                 style={{ ["--tile-glow" as string]: tile.glow }}
                 className={cn(
-                  "group relative flex items-center gap-3 overflow-hidden rounded-xl border bg-card/60 px-3.5 py-2.5 text-left transition-all hover:border-[color:var(--gold)]/40 hover:shadow-[0_0_28px_-14px_var(--tile-glow)]",
+                  "group relative flex items-center gap-3.5 overflow-hidden rounded-xl border bg-card/60 px-4 py-3.5 text-left transition-all hover:border-[color:var(--gold)]/40 hover:shadow-[0_0_28px_-14px_var(--tile-glow)]",
                   active && "border-[color:var(--gold)]/60 bg-[color:var(--gold)]/[0.05] shadow-[0_0_28px_-12px_var(--tile-glow)]",
                 )}
               >
-                <span className={cn("flex size-8 shrink-0 items-center justify-center rounded-lg border bg-background/60", tile.tone)}>
-                  <tile.icon className="size-4" />
+                <span className={cn("flex size-10 shrink-0 items-center justify-center rounded-xl border bg-background/60", tile.tone)}>
+                  <tile.icon className="size-5" />
                 </span>
                 <span className="min-w-0 flex-1">
-                  <span className="block truncate text-xs font-medium text-muted-foreground group-hover:text-foreground">{t(`tickets.metrics.${tile.key}`)}</span>
-                  {tile.key === "attention" && b && (
-                    <span className="block truncate font-mono text-[10px]">
-                      <span className="text-red-400">{b.overdue}</span>
-                      <span className="text-muted-foreground"> · </span>
-                      <span className="text-orange-400">{b.dueToday}</span>
-                      <span className="text-muted-foreground"> · </span>
-                      <span className="text-rose-300">{b.critical}</span>
+                  <span className="block truncate text-sm font-semibold">{t(`tickets.metrics.${tile.key}`)}</span>
+                  {tile.key === "attention" && b ? (
+                    <span className="mt-0.5 flex flex-wrap gap-x-2 text-[11px] leading-tight">
+                      <span className="text-red-400">{t("tickets.breakdown.overdue", { count: b.overdue })}</span>
+                      <span className="text-orange-400">{t("tickets.breakdown.dueToday", { count: b.dueToday })}</span>
+                      <span className="text-rose-300">{t("tickets.breakdown.critical", { count: b.critical })}</span>
                     </span>
+                  ) : (
+                    <span className="mt-0.5 block truncate text-[11px] text-muted-foreground">{t(`tickets.metricsHint.${tile.key}`)}</span>
                   )}
                 </span>
-                <span className={cn("font-mono text-2xl font-semibold tabular-nums", value ? "text-foreground" : "text-muted-foreground/50")}>
+                <span className={cn("font-mono text-3xl font-semibold tabular-nums", value ? "text-foreground" : "text-muted-foreground/50")}>
                   {value === undefined ? "–" : <CountUp value={value} />}
                 </span>
               </motion.button>

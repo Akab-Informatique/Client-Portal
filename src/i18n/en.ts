@@ -545,13 +545,13 @@ const en: Dict = {
     dock: "Minimized tickets",
     dueFilter: { overdue: "Overdue", today: "Today" },
     metrics: {
-      statusAttention: "“Needs attention” status",
+      statusAttention: "Needs attention",
       mine: "My tickets",
       unassigned: "Unassigned",
       attention: "To watch",
     },
     metricsHint: {
-      statusAttention: "E.g. the client replied",
+      statusAttention: "Ticket status · e.g. the client replied",
       mine: "Open and assigned to you",
       unassigned: "To pick up",
       attention: "Overdue, due today or critical",
