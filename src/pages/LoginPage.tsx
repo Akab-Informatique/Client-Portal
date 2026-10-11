@@ -1,162 +1,103 @@
 import { useEffect, useRef, useState, type FormEvent } from "react";
 import { useTranslation } from "react-i18next";
-import { AnimatePresence, motion } from "motion/react";
+import { AnimatePresence, motion, useMotionValue, useSpring, useTransform } from "motion/react";
 import { useQueryClient } from "@tanstack/react-query";
-import { ArrowRight, Copy, Eye, EyeOff, KeyRound, Loader2, Lock, ShieldCheck, Smartphone } from "lucide-react";
+import { ArrowRight, Copy, Eye, EyeOff, Loader2, Lock, Mail, ShieldCheck, Smartphone } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { Logo } from "@/components/brand/Logo";
-import { LiveDot, TechBackground } from "@/components/brand/TechBackground";
+import { LogoMark } from "@/components/brand/Logo";
+import { InteractiveBackground } from "@/components/brand/InteractiveBackground";
 import { LanguageToggle } from "@/components/LanguageToggle";
 import { api, ApiError } from "@/lib/api";
 import { signOut, useRefreshAuth } from "@/lib/session";
 import type { Stage } from "@/lib/types";
 import { cn } from "@/lib/utils";
 
+/** Centered sign-in on an interactive high-tech backdrop (always dark, like akab.ca). */
 export function LoginPage({ stage, email }: { stage: Stage; email?: string }) {
-  const { t } = useTranslation();
+  // subtle 3D tilt of the card following the mouse
+  const mx = useMotionValue(0);
+  const my = useMotionValue(0);
+  const rotateX = useSpring(useTransform(my, [-0.5, 0.5], [4, -4]), { stiffness: 120, damping: 18 });
+  const rotateY = useSpring(useTransform(mx, [-0.5, 0.5], [-5, 5]), { stiffness: 120, damping: 18 });
+
   return (
-    <div className="relative grid min-h-dvh lg:grid-cols-[1.15fr_1fr]">
-      <Hero />
-      <div className="relative flex flex-col bg-background">
-        <div className="flex items-center justify-between p-5 lg:justify-end">
-          <Logo className="lg:hidden" />
-          <LanguageToggle />
+    <div
+      className="dark relative flex min-h-dvh items-center justify-center overflow-hidden bg-[#0a0a0b] px-4 py-10 text-[#ededf0]"
+      onPointerMove={(e) => {
+        mx.set(e.clientX / window.innerWidth - 0.5);
+        my.set(e.clientY / window.innerHeight - 0.5);
+      }}
+      onPointerLeave={() => {
+        mx.set(0);
+        my.set(0);
+      }}
+    >
+      <InteractiveBackground />
+      <LanguageToggle className="absolute right-4 top-4 z-20 border-white/10 bg-white/5" />
+
+      <motion.div
+        style={{ rotateX, rotateY, transformPerspective: 1100 }}
+        initial={{ opacity: 0, y: 24, scale: 0.97 }}
+        animate={{ opacity: 1, y: 0, scale: 1 }}
+        transition={{ duration: 0.7, ease: [0.22, 1, 0.36, 1] }}
+        className="relative z-10 w-full max-w-[400px]"
+      >
+        {/* glowing gold edge */}
+        <div className="absolute -inset-px rounded-[28px] bg-[linear-gradient(140deg,rgba(255,226,74,0.55),rgba(255,206,26,0.05)_35%,rgba(245,148,16,0.0)_60%,rgba(245,148,16,0.45))]" />
+        <div className="relative rounded-[27px] border border-white/5 bg-[#101115]/80 p-8 shadow-[0_30px_80px_-20px_rgba(0,0,0,0.8),0_0_60px_-25px_rgba(255,206,26,0.35)] backdrop-blur-2xl sm:p-10">
+          <Brand />
+          <AnimatePresence mode="wait">
+            <motion.div
+              key={stage}
+              initial={{ opacity: 0, y: 10, filter: "blur(6px)" }}
+              animate={{ opacity: 1, y: 0, filter: "blur(0px)" }}
+              exit={{ opacity: 0, y: -8, filter: "blur(6px)" }}
+              transition={{ duration: 0.3, ease: [0.22, 1, 0.36, 1] }}
+              className="mt-8"
+            >
+              {stage === "anonymous" && <CredentialsStep />}
+              {stage === "mfa-setup" && <MfaSetupStep email={email} />}
+              {stage === "mfa" && <MfaChallengeStep email={email} />}
+              {stage === "password" && <PasswordStep />}
+            </motion.div>
+          </AnimatePresence>
         </div>
-        <div className="flex flex-1 items-center justify-center px-5 pb-12">
-          <div className="w-full max-w-sm">
-            <AnimatePresence mode="wait">
-              <motion.div
-                key={stage}
-                initial={{ opacity: 0, y: 14, filter: "blur(6px)" }}
-                animate={{ opacity: 1, y: 0, filter: "blur(0px)" }}
-                exit={{ opacity: 0, y: -10, filter: "blur(6px)" }}
-                transition={{ duration: 0.35, ease: [0.22, 1, 0.36, 1] }}
-              >
-                {stage === "anonymous" && <CredentialsStep />}
-                {stage === "mfa-setup" && <MfaSetupStep email={email} />}
-                {stage === "mfa" && <MfaChallengeStep email={email} />}
-                {stage === "password" && <PasswordStep />}
-              </motion.div>
-            </AnimatePresence>
-          </div>
-        </div>
-        <p className="flex items-center justify-center gap-2 pb-6 text-xs text-muted-foreground">
-          <Lock className="size-3.5" /> {t("login.secure")}
-        </p>
-      </div>
+      </motion.div>
     </div>
   );
 }
 
-// ── Left hero ────────────────────────────────────────────────────────────────
-function Hero() {
-  const { t } = useTranslation();
-  const rows = [
-    { label: t("login.statusNetwork"), value: t("login.operational") },
-    { label: t("login.statusBackups"), value: t("login.upToDate") },
-    { label: t("login.statusSecurity"), value: t("login.protected") },
-    { label: t("login.statusSupport"), value: t("login.available") },
-  ];
+function Brand() {
   return (
-    <div className="dark relative hidden overflow-hidden bg-[#0a0a0b] text-[#ededf0] lg:flex lg:flex-col">
-      <TechBackground />
-      <div className="relative z-10 p-10">
-        <Logo />
-      </div>
-      <div className="relative z-10 mt-auto max-w-xl px-10 pb-14 xl:px-16">
-        <motion.div
-          initial={{ opacity: 0, y: 10 }}
-          animate={{ opacity: 1, y: 0 }}
-          transition={{ delay: 0.1 }}
-          className="mb-6 inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/5 px-3 py-1 text-xs text-[#9a9ca4] backdrop-blur"
-        >
-          <LiveDot tone="gold" /> {t("login.tagline")} — Lanaudière
-        </motion.div>
-        <motion.h1
-          initial={{ opacity: 0, y: 18 }}
-          animate={{ opacity: 1, y: 0 }}
-          transition={{ delay: 0.18, duration: 0.6, ease: [0.22, 1, 0.36, 1] }}
-          className="text-5xl font-extrabold leading-[1.02] xl:text-6xl"
-        >
-          {t("login.heroTitle")} <span className="text-grad-gold">{t("login.heroTitleAccent")}</span>
-        </motion.h1>
-        <motion.p
-          initial={{ opacity: 0 }}
-          animate={{ opacity: 1 }}
-          transition={{ delay: 0.35 }}
-          className="mt-5 max-w-md text-lg text-[#9a9ca4]"
-        >
-          {t("login.heroText")}
-        </motion.p>
-
-        <motion.div
-          initial={{ opacity: 0, y: 24 }}
-          animate={{ opacity: 1, y: 0 }}
-          transition={{ delay: 0.45, duration: 0.6, ease: [0.22, 1, 0.36, 1] }}
-          className="mt-10 rounded-2xl border border-white/10 bg-[#121317]/80 p-5 shadow-2xl backdrop-blur-xl"
-        >
-          <div className="flex items-center justify-between">
-            <div className="flex items-center gap-2 text-sm text-[#9a9ca4]">
-              <LiveDot /> {t("login.live")}
-            </div>
-            <span className="font-mono text-xs text-[#9a9ca4]">24 / 7</span>
-          </div>
-          <div className="mt-3 flex items-baseline gap-3">
-            <span className="font-display text-4xl font-bold text-grad-gold">99,98%</span>
-            <span className="text-xs text-[#9a9ca4]">{t("login.uptime")}</span>
-          </div>
-          <UptimeBars />
-          <div className="mt-4 grid grid-cols-2 gap-2">
-            {rows.map((r, i) => (
-              <motion.div
-                key={r.label}
-                initial={{ opacity: 0, x: -8 }}
-                animate={{ opacity: 1, x: 0 }}
-                transition={{ delay: 0.7 + i * 0.08 }}
-                className="flex items-center justify-between rounded-lg border border-white/5 bg-white/[0.03] px-3 py-2 text-xs"
-              >
-                <span className="text-[#9a9ca4]">{r.label}</span>
-                <span className="flex items-center gap-1.5 text-emerald-400">
-                  <span className="size-1.5 rounded-full bg-emerald-400" /> {r.value}
-                </span>
-              </motion.div>
-            ))}
-          </div>
-        </motion.div>
-      </div>
-    </div>
-  );
-}
-
-function UptimeBars() {
-  const bars = Array.from({ length: 42 }, (_, i) => (i === 17 ? 0.55 : 0.75 + ((i * 37) % 25) / 100));
-  return (
-    <div className="mt-3 flex h-8 items-end gap-[3px]" aria-hidden="true">
-      {bars.map((h, i) => (
-        <motion.span
-          key={i}
-          className={cn("w-full rounded-sm", i === 17 ? "bg-amber-500/70" : "bg-grad-gold opacity-80")}
-          initial={{ scaleY: 0 }}
-          animate={{ scaleY: 1 }}
-          style={{ height: `${h * 100}%`, transformOrigin: "bottom" }}
-          transition={{ delay: 0.6 + i * 0.012, duration: 0.4 }}
-        />
-      ))}
+    <div className="flex flex-col items-center text-center">
+      <motion.div
+        initial={{ scale: 0.6, opacity: 0 }}
+        animate={{ scale: 1, opacity: 1 }}
+        transition={{ delay: 0.15, type: "spring", bounce: 0.35 }}
+        className="relative"
+      >
+        <div className="absolute inset-0 -z-10 scale-150 rounded-full bg-[radial-gradient(circle,rgba(255,206,26,0.35),transparent_65%)] blur-xl" />
+        <LogoMark className="h-16 drop-shadow-[0_0_18px_rgba(255,206,26,0.45)]" />
+      </motion.div>
+      <h1 className="mt-5 font-display text-[2rem] font-extrabold leading-none tracking-tight">
+        <span className="text-grad-gold">AKAB</span> <span className="text-[#ededf0]">Portal</span>
+      </h1>
     </div>
   );
 }
 
 // ── Steps ────────────────────────────────────────────────────────────────────
+/** Compact header for the MFA / password steps (they need a short instruction). */
 function StepHeader({ icon: Icon, title, text }: { icon: typeof Lock; title: string; text: string }) {
   return (
-    <div className="mb-7">
-      <div className="mb-5 inline-flex size-11 items-center justify-center rounded-xl bg-grad-gold text-[#1a1204] glow-gold">
-        <Icon className="size-5" />
+    <div className="mb-6 text-center">
+      <div className="mx-auto mb-3 inline-flex size-9 items-center justify-center rounded-lg bg-grad-gold text-[#1a1204]">
+        <Icon className="size-4" />
       </div>
-      <h2 className="text-3xl font-bold">{title}</h2>
-      <p className="mt-2 text-sm text-muted-foreground">{text}</p>
+      <h2 className="text-lg font-semibold">{title}</h2>
+      <p className="mt-1 text-xs text-[#9a9ca4]">{text}</p>
     </div>
   );
 }
@@ -214,10 +155,10 @@ function CredentialsStep() {
   }
 
   return (
-    <form onSubmit={submit} className="space-y-5">
-      <StepHeader icon={KeyRound} title={t("login.title")} text={t("login.subtitle")} />
-      <div className="space-y-2">
-        <Label htmlFor="email">{t("login.email")}</Label>
+    <form onSubmit={submit} className="space-y-3">
+      <Label htmlFor="email" className="sr-only">{t("login.email")}</Label>
+      <div className="relative">
+        <Mail className="pointer-events-none absolute left-3.5 top-1/2 size-4 -translate-y-1/2 text-[#9a9ca4]" />
         <Input
           id="email"
           type="email"
@@ -226,44 +167,50 @@ function CredentialsStep() {
           autoFocus
           value={email}
           onChange={(e) => setEmail(e.target.value)}
-          className="h-11"
-          placeholder="prenom@akab.ca"
+          className={FIELD}
+          placeholder={t("login.email")}
         />
       </div>
-      <div className="space-y-2">
-        <Label htmlFor="password">{t("login.password")}</Label>
-        <div className="relative">
-          <Input
-            id="password"
-            type={show ? "text" : "password"}
-            autoComplete="current-password"
-            required
-            value={password}
-            onChange={(e) => setPassword(e.target.value)}
-            className="h-11 pr-11"
-          />
-          <button
-            type="button"
-            onClick={() => setShow((s) => !s)}
-            className="absolute inset-y-0 right-0 flex w-11 items-center justify-center text-muted-foreground hover:text-foreground"
-            aria-label={show ? "Hide password" : "Show password"}
-          >
-            {show ? <EyeOff className="size-4" /> : <Eye className="size-4" />}
-          </button>
-        </div>
+      <Label htmlFor="password" className="sr-only">{t("login.password")}</Label>
+      <div className="relative">
+        <Lock className="pointer-events-none absolute left-3.5 top-1/2 size-4 -translate-y-1/2 text-[#9a9ca4]" />
+        <Input
+          id="password"
+          type={show ? "text" : "password"}
+          autoComplete="current-password"
+          required
+          value={password}
+          onChange={(e) => setPassword(e.target.value)}
+          className={cn(FIELD, "pr-11")}
+          placeholder={t("login.password")}
+        />
+        <button
+          type="button"
+          onClick={() => setShow((v) => !v)}
+          className="absolute inset-y-0 right-0 flex w-11 items-center justify-center text-[#9a9ca4] hover:text-[#ededf0]"
+          aria-label={show ? "Hide password" : "Show password"}
+        >
+          {show ? <EyeOff className="size-4" /> : <Eye className="size-4" />}
+        </button>
       </div>
       <FormError message={error} />
-      <GoldButton busy={busy}>{t("login.submit")}</GoldButton>
+      <div className="pt-2">
+        <GoldButton busy={busy}>{t("login.submit")}</GoldButton>
+      </div>
     </form>
   );
 }
+
+/** Dark glass input with a gold focus glow. */
+const FIELD =
+  "h-12 rounded-xl border-white/10 bg-white/[0.04] pl-10 text-[15px] text-[#ededf0] placeholder:text-[#6b6d75] transition-shadow focus-visible:border-[#ffce1a]/60 focus-visible:ring-[#ffce1a]/25 focus-visible:shadow-[0_0_24px_-6px_rgba(255,206,26,0.45)]";
 
 function GoldButton({ busy, children }: { busy?: boolean; children: React.ReactNode }) {
   return (
     <Button
       type="submit"
       disabled={busy}
-      className="group h-11 w-full bg-grad-gold font-semibold text-[#1a1204] glow-gold transition-transform hover:brightness-105 active:scale-[0.99]"
+      className="group h-12 w-full rounded-xl bg-grad-gold font-semibold text-[#1a1204] glow-gold transition-transform hover:brightness-105 active:scale-[0.99]"
     >
       {busy ? <Loader2 className="size-4 animate-spin" /> : children}
       {!busy && <ArrowRight className="size-4 transition-transform group-hover:translate-x-0.5" />}
@@ -306,7 +253,7 @@ function BackToLogin() {
     <button
       type="button"
       onClick={() => void signOut(qc)}
-      className="mt-6 text-sm text-muted-foreground underline-offset-4 hover:text-foreground hover:underline"
+      className="mt-6 block w-full text-center text-sm text-muted-foreground underline-offset-4 hover:text-foreground hover:underline"
     >
       {t("mfa.useOther")}
     </button>
@@ -338,7 +285,7 @@ function MfaChallengeStep({ email }: { email?: string }) {
   return (
     <div className="space-y-5">
       <StepHeader icon={ShieldCheck} title={t("mfa.challengeTitle")} text={t("mfa.challengeText")} />
-      {email && <p className="-mt-3 font-mono text-xs text-muted-foreground">{email}</p>}
+      {email && <p className="-mt-3 text-center font-mono text-xs text-muted-foreground">{email}</p>}
       <CodeInput key={error ?? "c"} onComplete={verify} busy={busy} />
       <FormError message={error} />
       <p className="text-xs text-muted-foreground">{t("mfa.lostDevice")}</p>
@@ -361,7 +308,7 @@ function MfaSetupStep({ email }: { email?: string }) {
   return (
     <div className="space-y-5">
       <StepHeader icon={Smartphone} title={t("mfa.setupTitle")} text={t("mfa.setupText")} />
-      {email && <p className="-mt-3 font-mono text-xs text-muted-foreground">{email}</p>}
+      {email && <p className="-mt-3 text-center font-mono text-xs text-muted-foreground">{email}</p>}
       <div className="flex items-center gap-4 rounded-xl border bg-card p-4">
         <div className="flex size-[132px] shrink-0 items-center justify-center rounded-lg bg-white p-1.5">
           {setup ? <img src={setup.qr} alt="QR code" className="size-full" /> : <Loader2 className="size-5 animate-spin text-neutral-500" />}

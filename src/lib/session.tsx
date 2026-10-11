@@ -55,6 +55,8 @@ export function useCan() {
 
 export async function signOut(qc: ReturnType<typeof useQueryClient>) {
   await api.post("/auth/logout").catch(() => undefined);
-  qc.clear();
-  await qc.invalidateQueries({ queryKey: ["auth"] });
+  // Drop every cached page of data, then switch the app to the sign-in screen
+  // right away (clearing + invalidating left nothing to refetch).
+  qc.removeQueries({ predicate: (q) => q.queryKey[0] !== "auth" });
+  qc.setQueryData(["auth"], { stage: "anonymous" });
 }
