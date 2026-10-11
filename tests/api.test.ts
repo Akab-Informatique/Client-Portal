@@ -852,3 +852,62 @@ describe("tickets: metrics and saved filters", () => {
     expect((await tech.get("/api/tickets/filters")).json).toEqual([]);
   });
 });
+
+describe("tickets: inline edit, notes, team filter and AI", () => {
+  const sessions = new Map<string, Agent>();
+  const session = async (email: string) => {
+    resetRateLimit("login:ip:unknown");
+    return sessions.get(email) ?? sessions.set(email, await signIn(email)).get(email)!;
+  };
+
+  it("edits a ticket inline and adds notes", async () => {
+    const tech = await session("tech@akab.local");
+    const list = (await tech.get("/api/tickets?view=all")).json;
+    const tk = list.items.find((t: any) => t.status !== "complete");
+    const admin = list.facets.technicians.find((p: any) => p.name === "Administrateur AKAB");
+    const r = await tech.patch(`/api/tickets/${tk.id}`, { status: "waitingCustomer", priority: "low", assigneeId: admin.id, dueDate: "2026-12-24" });
+    expect(r.json).toMatchObject({ status: "waitingCustomer", priority: "low", assignee: { id: admin.id } });
+    expect(r.json.dueAt.slice(0, 10)).toBe("2026-12-24");
+    expect((await tech.patch(`/api/tickets/${tk.id}`, { status: "nope" })).status).toBe(400);
+
+    const byAdmin = (await tech.get(`/api/tickets?view=all&assignee=${admin.id}`)).json.items;
+    expect(byAdmin.some((t: any) => t.id === tk.id)).toBe(true);
+    expect(byAdmin.every((t: any) => t.assignee?.id === admin.id)).toBe(true);
+
+    expect((await tech.post(`/api/tickets/${tk.id}/notes`, { text: "Rappel prévu demain", internal: true })).status).toBe(201);
+    const detail = (await tech.get(`/api/tickets/${tk.id}`)).json;
+    expect(detail.notes.at(-1)).toMatchObject({ author: "Alex Tremblay", text: "Rappel prévu demain", internal: true });
+  });
+
+  it("AI needs its right, a configured key, and never exposes the key", async () => {
+    const admin = await session("admin@akab.local");
+    const tech = await session("tech@akab.local");
+    const id = (await admin.get("/api/tickets?view=all")).json.items[0].id;
+    expect((await tech.post(`/api/tickets/${id}/ai/analyze`)).status).toBe(403); // technician role has no tickets.ai
+    expect((await admin.post(`/api/tickets/${id}/ai/analyze`)).json.error).toBe("ai_not_configured");
+
+    const s = await admin.put("/api/admin/integrations/ai", { apiKey: "sk-ant-test-secret", enabled: true, model: "claude-haiku-5-5" });
+    expect(s.json).toMatchObject({ enabled: true, hasKey: true, model: "claude-haiku-5-5" });
+    expect(JSON.stringify(s.json)).not.toContain("sk-ant-test-secret");
+    expect((await admin.get("/api/tickets")).json.ai).toBe(true);
+
+    const sent: any[] = [];
+    vi.stubGlobal("fetch", vi.fn(async (url: unknown, init: RequestInit = {}) => {
+      sent.push({ url: String(url), headers: init.headers, body: JSON.parse(String(init.body)) });
+      const text = JSON.stringify({ summary: "Imprimante hors ligne.", nextSteps: ["Vérifier le câble", "Redémarrer"], risks: [], questions: ["Depuis quand ?"], suggestedPriority: "medium" });
+      return new Response(JSON.stringify({ content: [{ type: "text", text: "```json\n" + text + "\n```" }] }), { status: 200 });
+    }));
+    try {
+      const a = await admin.post(`/api/tickets/${id}/ai/analyze`);
+      expect(a.status).toBe(201);
+      expect(a.json.content.nextSteps).toEqual(["Vérifier le câble", "Redémarrer"]);
+      expect(sent[0].url).toBe("https://api.anthropic.com/v1/messages");
+      expect(sent[0].headers["x-api-key"]).toBe("sk-ant-test-secret");
+      expect(sent[0].body.model).toBe("claude-haiku-5-5");
+      expect((await admin.get(`/api/tickets/${id}/ai`)).json[0].content.summary).toBe("Imprimante hors ligne.");
+    } finally {
+      vi.unstubAllGlobals();
+    }
+    await admin.put("/api/admin/integrations/ai", { enabled: false });
+  });
+});

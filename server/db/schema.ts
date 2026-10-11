@@ -229,6 +229,20 @@ export const ticketMeta = pgTable("ticket_meta", {
   updatedAt: updated(),
 });
 
+/** AI results kept in the portal for a ticket (summary, next steps…), visible to the team. */
+export const ticketAiNotes = pgTable(
+  "ticket_ai_notes",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    ticketId: bigint("ticket_id", { mode: "number" }).notNull(),
+    kind: text("kind", { enum: ["analysis"] }).notNull(),
+    content: jsonb("content").$type<Record<string, unknown>>().notNull(),
+    createdBy: uuid("created_by").references(() => users.id, { onDelete: "set null" }),
+    createdAt: created(),
+  },
+  (t) => [index("ticket_ai_notes_ticket_idx").on(t.ticketId)],
+);
+
 /** A technician's saved ticket filters (the list's query string). */
 export const ticketFilters = pgTable(
   "ticket_filters",

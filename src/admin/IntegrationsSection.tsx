@@ -65,6 +65,7 @@ const INTEGRATIONS: Integration[] = [
       </>
     ),
   },
+  { key: "ai", name: "Claude (Anthropic)", icon: Sparkles, Status: AiStatus, Page: AiPage },
 ];
 
 /** List of integrations; opening one shows its page (?integration=<key>). */
@@ -478,6 +479,132 @@ function AutotaskLinks() {
           </p>
         </>
       )}
+    </section>
+  );
+}
+
+// ── AI assistant (Anthropic Claude) ───────────────────────────────────────────
+type AiSettingsView = { enabled: boolean; model: string; models: string[]; hasKey: boolean; lastTest: { ok: boolean; at: string; error?: string } | null };
+const AI_KEY = ["admin", "integrations", "ai"];
+
+function AiStatus() {
+  const { t } = useTranslation();
+  const { data } = useQuery({ queryKey: AI_KEY, queryFn: () => api.get<AiSettingsView>("/admin/integrations/ai") });
+  if (!data) return null;
+  const [key, tone] = !data.hasKey ? ["notConfigured", "muted"] : !data.enabled ? ["disabled", "muted"] : data.lastTest?.ok === false ? ["error", "bad"] : ["connected", "good"];
+  return (
+    <Badge
+      variant="outline"
+      className={cn("gap-1.5", tone === "good" && "border-emerald-500/40 text-emerald-400", tone === "bad" && "border-destructive/50 text-destructive", tone === "muted" && "text-muted-foreground")}
+    >
+      <span className="size-1.5 rounded-full bg-current" />
+      {t(`integrations.status.${key}`)}
+    </Badge>
+  );
+}
+
+function AiPage() {
+  const { t } = useTranslation();
+  const qc = useQueryClient();
+  const { data: s, isLoading } = useQuery({ queryKey: AI_KEY, queryFn: () => api.get<AiSettingsView>("/admin/integrations/ai") });
+  const [apiKey, setApiKey] = useState("");
+  const [model, setModel] = useState("");
+  const [enabled, setEnabled] = useState(false);
+  const [test, setTest] = useState<{ ok: boolean; error?: string } | null>(null);
+  useEffect(() => {
+    if (!s) return;
+    setModel(s.model);
+    setEnabled(s.enabled);
+    setApiKey("");
+  }, [s]);
+  const save = useMutation({
+    mutationFn: () => api.put<AiSettingsView>("/admin/integrations/ai", { enabled, model: model || s?.model, ...(apiKey.trim() ? { apiKey: apiKey.trim() } : {}) }),
+    onSuccess: (next) => {
+      qc.setQueryData(AI_KEY, next);
+      void qc.invalidateQueries({ queryKey: ["tickets"] });
+      setTest(null);
+      toast.success(t("common.saved"));
+    },
+    onError: (e) => toast.error(e instanceof ApiError && e.code === "ai_incomplete" ? t("integrations.ai.needKey") : t("common.error")),
+  });
+  const runTest = useMutation({
+    mutationFn: () => api.post<{ ok: boolean; error?: string }>("/admin/integrations/ai/test", { model: model || s?.model, ...(apiKey.trim() ? { apiKey: apiKey.trim() } : {}) }),
+    onSuccess: (r) => {
+      setTest(r);
+      void qc.invalidateQueries({ queryKey: AI_KEY });
+    },
+  });
+  if (isLoading || !s) return <Skeleton className="h-72 rounded-2xl" />;
+  return (
+    <section className="overflow-hidden rounded-2xl border bg-card/80">
+      <div className="flex flex-wrap items-center gap-4 border-b px-6 py-5">
+        <span className="flex size-11 items-center justify-center rounded-xl bg-violet-500/20 text-violet-200">
+          <Sparkles className="size-5" />
+        </span>
+        <div className="min-w-0 flex-1">
+          <h3 className="font-display text-lg font-semibold">{t("integrations.connection")}</h3>
+          <div className="mt-1">
+            <AiStatus />
+          </div>
+        </div>
+        <label className="flex items-center gap-3 text-sm font-medium">
+          {t("integrations.enabled")}
+          <Switch checked={enabled} onCheckedChange={setEnabled} />
+        </label>
+      </div>
+      <form
+        className="space-y-4 px-6 py-6"
+        onSubmit={(e: FormEvent) => {
+          e.preventDefault();
+          save.mutate();
+        }}
+      >
+        <div className="grid gap-4 sm:grid-cols-[1fr_240px]">
+          <div className="space-y-2">
+            <Label htmlFor="ai-key" className="flex items-center gap-2">
+              {t("integrations.ai.apiKey")}
+              {s.hasKey && <span className="rounded-full bg-emerald-500/15 px-1.5 py-0.5 text-[10px] font-medium text-emerald-400">{t("integrations.savedValue")}</span>}
+            </Label>
+            <Input id="ai-key" type="password" autoComplete="new-password" value={apiKey} onChange={(e) => setApiKey(e.target.value)} placeholder={s.hasKey ? "••••••••••••" : "sk-ant-…"} />
+          </div>
+          <div className="space-y-2">
+            <Label htmlFor="ai-model">{t("integrations.ai.model")}</Label>
+            <Select value={model || s.model} onValueChange={setModel}>
+              <SelectTrigger id="ai-model" className="w-full">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {s.models.map((m) => (
+                  <SelectItem key={m} value={m}>
+                    {t(`integrations.ai.models.${m}`, { defaultValue: m })}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+        </div>
+        <p className="flex items-start gap-2 text-xs text-muted-foreground">
+          <KeyRound className="mt-0.5 size-3.5 shrink-0 text-primary" /> {t("integrations.ai.note")}
+        </p>
+        <div className="flex flex-wrap gap-2">
+          <Button type="button" variant="outline" onClick={() => runTest.mutate()} disabled={runTest.isPending}>
+            {runTest.isPending ? <Loader2 className="size-4 animate-spin" /> : <RefreshCw className="size-4" />} {t("integrations.test")}
+          </Button>
+          <Button type="submit" disabled={save.isPending} className="bg-grad-gold font-semibold text-[#1a1204] hover:brightness-105">
+            {save.isPending && <Loader2 className="size-4 animate-spin" />} {t("common.save")}
+          </Button>
+        </div>
+        {test &&
+          (test.ok ? (
+            <p className="flex items-center gap-2 rounded-xl border border-emerald-500/30 bg-emerald-500/10 p-3 text-sm text-emerald-300">
+              <CheckCircle2 className="size-4" /> {t("integrations.ai.testOk")}
+            </p>
+          ) : (
+            <p className="flex items-center gap-2 rounded-xl border border-destructive/40 bg-destructive/10 p-3 text-sm">
+              <XCircle className="size-4 text-destructive" /> {t(`tickets.ai.errors.${test.error}`, { defaultValue: t("tickets.ai.errors.api") })}
+            </p>
+          ))}
+      </form>
     </section>
   );
 }

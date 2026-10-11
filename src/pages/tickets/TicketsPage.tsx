@@ -10,19 +10,24 @@ import {
   BellRing,
   Bookmark,
   BookmarkPlus,
+  CalendarCheck,
   CalendarRange,
   Check,
   ChevronDown,
   Eye,
   FlaskConical,
   Inbox,
+  Loader2,
   Layers,
   Plus,
   Search,
   Siren,
+  Sparkles,
   Trash2,
   UserRound,
+  Users,
   UserX,
+  Wand2,
   X,
   type LucideIcon,
 } from "lucide-react";
@@ -44,11 +49,12 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { api } from "@/lib/api";
 import { relativeTime } from "@/lib/format";
-import { useCan } from "@/lib/session";
+import { useCan, useMe } from "@/lib/session";
 import { cn, initials } from "@/lib/utils";
 import { NewTicketDialog } from "./NewTicketDialog";
 import { dueState, FILTER_KEYS, PRIORITY_STYLE, shortDate, STATUS_STYLE, useTickets, VIEWS, type TicketList, type TicketSummary, type View } from "./shared";
 import { useTicketWorkspace } from "./workspace";
+import { useAiError } from "./TicketPanel";
 
 type Saved = { id: string; name: string; query: string };
 type SetFn = (patch: Record<string, string | null>) => void;
@@ -134,15 +140,19 @@ export function TicketsPage() {
             </Tooltip>
           )}
         </div>
-        {can("tickets.edit") && (
-          <Button onClick={() => setCreating(true)} className="bg-grad-gold font-semibold text-[#1a1204] glow-gold hover:brightness-105">
-            <Plus className="size-4" /> {t("tickets.new")}
-            <kbd className="ml-1 rounded border border-black/20 px-1 font-mono text-[10px] opacity-70">N</kbd>
-          </Button>
-        )}
+        <div className="flex items-center gap-2">
+          {data?.ai && <AiPlanButton />}
+          {can("tickets.edit") && (
+            <Button onClick={() => setCreating(true)} className="bg-grad-gold font-semibold text-[#1a1204] glow-gold hover:brightness-105">
+              <Plus className="size-4" /> {t("tickets.new")}
+              <kbd className="ml-1 rounded border border-black/20 px-1 font-mono text-[10px] opacity-70">N</kbd>
+            </Button>
+          )}
+        </div>
       </div>
 
       <MetricTiles data={data} params={params} apply={apply} />
+      {data && <TeamStrip technicians={data.facets.technicians} params={params} apply={apply} />}
 
       {/* Toolbar */}
       <div className="rounded-2xl border bg-card/60 p-2 backdrop-blur">
@@ -171,6 +181,14 @@ export function TicketsPage() {
               />
               <MultiFilter label={t("tickets.fields.company")} param="company" options={data.facets.companies.map((c) => ({ value: String(c.id), label: c.name }))} params={params} set={set} searchable />
               <MultiFilter label={t("tickets.fields.queue")} param="queue" options={data.facets.queues.map((q) => ({ value: q, label: q }))} params={params} set={set} />
+              <MultiFilter
+                label={t("tickets.fields.technician")}
+                param="assignee"
+                options={[{ value: "none", label: t("tickets.unassigned") }, ...data.facets.technicians.map((p) => ({ value: p.id, label: `${p.name} (${p.open})` }))]}
+                params={params}
+                set={set}
+                searchable
+              />
               <DatesFilter params={params} set={set} />
             </>
           )}
@@ -698,9 +716,132 @@ function SortMenu({ value, onChange }: { value: string; onChange: (v: string) =>
   );
 }
 
+// ── Team: each technician and their open tickets (one click = their list) ──────
+function TeamStrip({ technicians, params, apply }: { technicians: TicketList["facets"]["technicians"]; params: URLSearchParams; apply: (q: string) => void }) {
+  const { t } = useTranslation();
+  const me = useMe();
+  const selected = params.get("view") === "all" && params.get("assignee") && !params.get("assignee")!.includes(",") ? params.get("assignee") : null;
+  const max = Math.max(1, ...technicians.map((p) => p.open));
+  const people = [...technicians].sort((a, b) => (a.id === me.id ? -1 : b.id === me.id ? 1 : b.open - a.open));
+  return (
+    <div className="flex items-center gap-3 overflow-x-auto rounded-2xl border bg-card/50 px-3 py-2 scrollbar-thin">
+      <span className="flex shrink-0 items-center gap-1.5 font-mono text-[10px] uppercase tracking-[0.12em] text-muted-foreground">
+        <Users className="size-3.5" /> {t("tickets.team")}
+      </span>
+      {people.map((p) => {
+        const active = selected === p.id;
+        return (
+          <button
+            key={p.id}
+            type="button"
+            onClick={() => apply(active ? "view=all" : `view=all&assignee=${p.id}`)}
+            title={t("tickets.teamHint", { name: p.name, count: p.open })}
+            className={cn(
+              "group flex shrink-0 items-center gap-2 rounded-xl border px-2.5 py-1.5 text-left transition-colors",
+              active ? "border-[color:var(--gold)]/60 bg-[color:var(--gold)]/10" : "border-transparent hover:border-border hover:bg-accent/50",
+            )}
+          >
+            <span
+              className={cn(
+                "flex size-7 items-center justify-center rounded-full border text-[10px] font-semibold",
+                p.id === me.id ? "border-[color:var(--gold)]/50 bg-[color:var(--gold)]/15 text-primary" : "bg-background/60",
+              )}
+            >
+              {initials(p.name)}
+            </span>
+            <span className="min-w-0">
+              <span className="block max-w-32 truncate text-xs font-medium">{p.id === me.id ? t("tickets.me") : p.name.split(" ")[0]}</span>
+              <span className="mt-0.5 flex items-center gap-1.5">
+                <span className="h-1 w-12 overflow-hidden rounded-full bg-muted">
+                  <span className="block h-full rounded-full bg-grad-gold" style={{ width: `${(p.open / max) * 100}%` }} />
+                </span>
+                <span className="font-mono text-[10px] text-muted-foreground">{p.open}</span>
+              </span>
+            </span>
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
+// ── AI: plan my open tickets ─────────────────────────────────────────────────────
+type Plan = { overview: string; items: { id: number; number: string; title: string; order: number; startDate: string; reason: string }[] };
+
+function AiPlanButton() {
+  const { t } = useTranslation();
+  const qc = useQueryClient();
+  const aiError = useAiError();
+  const [plan, setPlan] = useState<Plan | null>(null);
+  const run = useMutation({
+    mutationFn: () => api.post<Plan>("/tickets/ai/plan"),
+    onSuccess: (p) => (p.items.length ? setPlan(p) : toast.info(t("tickets.ai.planEmpty"))),
+    onError: (e) => toast.error(aiError(e)),
+  });
+  const apply = useMutation({
+    mutationFn: () => api.post("/tickets/start-dates", { items: plan!.items.map((i) => ({ id: i.id, startDate: i.startDate })) }),
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: ["tickets"] });
+      toast.success(t("tickets.ai.planApplied", { count: plan!.items.length }));
+      setPlan(null);
+    },
+    onError: () => toast.error(t("common.error")),
+  });
+  return (
+    <>
+      <Button variant="outline" onClick={() => run.mutate()} disabled={run.isPending} className="gap-2 border-violet-500/40 bg-violet-500/10 text-violet-200 hover:bg-violet-500/20">
+        {run.isPending ? <Loader2 className="size-4 animate-spin" /> : <Wand2 className="size-4" />} {t("tickets.ai.plan")}
+      </Button>
+      <Dialog open={Boolean(plan)} onOpenChange={(o) => !o && setPlan(null)}>
+        <DialogContent className="sm:max-w-2xl">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <Sparkles className="size-5 text-violet-300" /> {t("tickets.ai.planTitle")}
+            </DialogTitle>
+          </DialogHeader>
+          {plan && (
+            <div className="space-y-4">
+              {plan.overview && <p className="rounded-xl border border-violet-500/30 bg-violet-500/10 p-3 text-sm">{plan.overview}</p>}
+              <ol className="max-h-[50vh] space-y-2 overflow-y-auto pr-1">
+                {plan.items.map((i, n) => (
+                  <li key={i.id} className="flex gap-3 rounded-xl border bg-card/60 p-3">
+                    <span className="flex size-7 shrink-0 items-center justify-center rounded-full bg-violet-500/20 font-mono text-xs text-violet-200">{n + 1}</span>
+                    <span className="min-w-0 flex-1">
+                      <span className="flex flex-wrap items-baseline gap-2">
+                        <span className="font-mono text-[11px] text-muted-foreground">{i.number}</span>
+                        <span className="truncate text-sm font-medium">{i.title}</span>
+                      </span>
+                      <span className="mt-0.5 block text-xs text-muted-foreground">{i.reason}</span>
+                    </span>
+                    <span className="shrink-0 text-right">
+                      <span className="block text-[10px] uppercase tracking-wide text-muted-foreground">{t("tickets.fields.start")}</span>
+                      <span className="font-mono text-sm text-primary">{shortDate(i.startDate)}</span>
+                    </span>
+                  </li>
+                ))}
+              </ol>
+              <p className="text-[11px] text-muted-foreground">{t("tickets.ai.planNote")}</p>
+              <div className="flex justify-end gap-2">
+                <Button variant="ghost" onClick={() => setPlan(null)}>
+                  {t("common.close")}
+                </Button>
+                <Button onClick={() => apply.mutate()} disabled={apply.isPending} className="bg-grad-gold font-semibold text-[#1a1204]">
+                  {apply.isPending ? <Loader2 className="size-4 animate-spin" /> : <CalendarCheck className="size-4" />} {t("tickets.ai.planApply")}
+                </Button>
+              </div>
+            </div>
+          )}
+        </DialogContent>
+      </Dialog>
+    </>
+  );
+}
+
 function filterLabel(key: string, value: string, data: TicketList | undefined, t: (k: string) => string) {
   const parts = value.split(",");
   switch (key) {
+    case "assignee":
+      return parts.map((p) => (p === "none" ? t("tickets.unassigned") : (data?.facets.technicians.find((x) => x.id === p)?.name ?? p))).join(", ");
     case "status":
       return parts.map((p) => t(`tickets.status.${p}`)).join(", ");
     case "priority":

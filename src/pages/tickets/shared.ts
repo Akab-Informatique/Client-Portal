@@ -4,6 +4,7 @@ import { api } from "@/lib/api";
 import { currentLocale } from "@/i18n";
 
 export type Status = "new" | "inProgress" | "needsAttention" | "waitingCustomer" | "waitingVendor" | "scheduled" | "complete";
+export const STATUS_LIST: Status[] = ["new", "inProgress", "needsAttention", "waitingCustomer", "waitingVendor", "scheduled", "complete"];
 export type Priority = "critical" | "high" | "medium" | "low";
 export type Viewer = { userId: string; name: string };
 export type TicketSummary = {
@@ -27,19 +28,29 @@ export type TicketDetail = TicketSummary & {
   source: "email" | "phone" | "portal" | "monitoring";
   hours: number;
   notes: { id: string; author: string; at: string; text: string; internal: boolean }[];
+  /** AI assistant available to me */
+  ai: boolean;
+  options: { statuses: Status[]; priorities: Priority[]; queues: string[]; technicians: { id: string; name: string }[] };
+};
+export type AiAnalysis = {
+  id: string;
+  author: string | null;
+  createdAt: string;
+  content: { summary: string; nextSteps: string[]; risks: string[]; questions: string[]; suggestedPriority?: Priority | null };
 };
 export type TicketList = {
   demo: boolean;
+  ai: boolean;
   metrics: { mine: number; unassigned: number; attention: number; statusAttention: number; attentionBreakdown: { overdue: number; dueToday: number; critical: number } };
   items: TicketSummary[];
   counts: Record<View, number>;
-  facets: { queues: string[]; companies: { id: number; name: string }[]; statuses: Status[]; priorities: Priority[]; technicians: { id: string; name: string }[] };
+  facets: { queues: string[]; companies: { id: number; name: string }[]; statuses: Status[]; priorities: Priority[]; technicians: { id: string; name: string; open: number }[] };
 };
 export type View = "mine" | "unassigned" | "due" | "all";
 export const VIEWS: View[] = ["mine", "unassigned", "due", "all"];
 
 /** Filters kept in the address bar (shareable, survive a refresh). */
-export const FILTER_KEYS = ["q", "attention", "due", "created", "status", "priority", "company", "queue", "dueFrom", "dueTo", "startFrom", "startTo", "sort"] as const;
+export const FILTER_KEYS = ["q", "assignee", "attention", "due", "created", "status", "priority", "company", "queue", "dueFrom", "dueTo", "startFrom", "startTo", "sort"] as const;
 
 export const PRIORITY_STYLE: Record<Priority, { bar: string; text: string; dot: string }> = {
   critical: { bar: "bg-red-500", text: "text-red-400", dot: "bg-red-500" },

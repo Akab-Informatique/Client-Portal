@@ -152,4 +152,25 @@ export function addDemoTicket(t: Omit<Ticket, "id" | "number" | "createdAt" | "u
   return ticket;
 }
 
+/** Change fields of a sample ticket (an explicit assignee replaces the round-robin slot). */
+export function updateDemoTicket(
+  id: number,
+  p: Partial<Pick<Ticket, "status" | "priority" | "queue" | "dueAt">> & { assignee?: Person | null },
+): boolean {
+  const t = store?.find((x) => x.id === id);
+  if (!t) return false;
+  Object.assign(t, p, { updatedAt: new Date().toISOString() });
+  if ("assignee" in p) t.slot = null;
+  return true;
+}
+
+export function addDemoNote(id: number, note: Omit<Note, "id" | "at">): Note | null {
+  const t = store?.find((x) => x.id === id);
+  if (!t) return null;
+  const n: Note = { ...note, id: `n${id}-${Date.now()}`, at: new Date().toISOString() };
+  t.notes.push(n);
+  t.updatedAt = n.at;
+  return n;
+}
+
 export const demoCompanies = () => COMPANIES.map((name, i) => ({ id: 300 + i, name }));

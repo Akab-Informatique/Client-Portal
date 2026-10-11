@@ -17,6 +17,7 @@ import {
   type Settings,
 } from "../lib/autotask.ts";
 import { body, zEmail, zUuid } from "../lib/validate.ts";
+import { AI_MODELS, AiError, aiSettings, askClaude, saveAiSettings, type AiErrorCode } from "../lib/ai.ts";
 
 const zCred = z.string().trim().min(1).max(300);
 
@@ -197,4 +198,36 @@ export const integrationRoutes = new Hono<AppEnv>()
     }
     await audit(a.user.id, "integration.autotask.autolink", null, { linked });
     return c.json({ linked });
+  })
+
+  // ── AI assistant (Anthropic Claude) ──
+  .get("/ai", async (c) => {
+    const s = await aiSettings();
+    return c.json({ enabled: s.enabled, model: s.model, models: AI_MODELS, hasKey: Boolean(s.apiKey), lastTest: s.lastTest ?? null });
+  })
+  .put("/ai", async (c) => {
+    const a = auth(c);
+    const p = await body(c, z.object({ enabled: z.boolean().optional(), model: z.enum(AI_MODELS).optional(), apiKey: zCred.optional() }));
+    const s = await aiSettings();
+    if (p.enabled && !(p.apiKey ?? s.apiKey)) throw new HTTPException(400, { message: "ai_incomplete" });
+    await saveAiSettings(a.user.id, p);
+    await audit(a.user.id, "integration.ai.updated", null, { enabled: p.enabled, model: p.model, keyChanged: p.apiKey !== undefined || undefined });
+    const n = await aiSettings();
+    return c.json({ enabled: n.enabled, model: n.model, models: AI_MODELS, hasKey: Boolean(n.apiKey), lastTest: n.lastTest ?? null });
+  })
+  .post("/ai/test", async (c) => {
+    const a = auth(c);
+    const p = await body(c, z.object({ apiKey: zCred.optional(), model: z.enum(AI_MODELS).optional() }));
+    const s = await aiSettings();
+    const apiKey = p.apiKey ?? s.apiKey;
+    if (!apiKey) return c.json({ ok: false, error: "not_configured" });
+    let result: { ok: true } | { ok: false; error: string };
+    try {
+      await askClaude({ system: "Test de connexion.", prompt: "Réponds OK.", maxTokens: 5 }, { apiKey, model: p.model ?? s.model });
+      result = { ok: true };
+    } catch (e) {
+      result = { ok: false, error: e instanceof AiError ? e.code : "api" };
+    }
+    if (!p.apiKey) await saveAiSettings(a.user.id, { lastTest: { ok: result.ok, at: new Date().toISOString(), ...(result.ok ? {} : { error: (result as { error: AiErrorCode }).error }) } });
+    return c.json(result);
   });

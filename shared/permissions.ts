@@ -51,6 +51,14 @@ export const MODULES = [
         label: { fr: "Créer et modifier des billets", en: "Create and edit tickets" },
         description: { fr: "Nouveau billet, notes, date de début", en: "New ticket, notes, start date" },
       },
+      {
+        key: "tickets.ai",
+        label: { fr: "Utiliser l'assistant IA", en: "Use the AI assistant" },
+        description: {
+          fr: "Analyse de billet, réponse suggérée, planification (le contenu des billets est envoyé au fournisseur d'IA)",
+          en: "Ticket analysis, suggested reply, planning (ticket content is sent to the AI provider)",
+        },
+      },
     ],
   },
   {
