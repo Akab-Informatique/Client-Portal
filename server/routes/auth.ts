@@ -20,6 +20,7 @@ import { clientIp, rateLimit, resetRateLimit } from "../lib/http.ts";
 import { body, zEmail } from "../lib/validate.ts";
 import { audit } from "../lib/audit.ts";
 import { loadMe } from "./me.ts";
+import { notifyUserLocked } from "../lib/notify.ts";
 
 const LOCK_AFTER = 10;
 const LOCK_MINUTES = 15;
@@ -68,6 +69,7 @@ export const authRoutes = new Hono<AppEnv>()
               : { failedLogins: fails },
           )
           .where(eq(schema.users.id, user.id));
+        if (fails >= LOCK_AFTER) await notifyUserLocked(user);
       }
       throw new HTTPException(401, { message: "invalid_credentials" });
     }

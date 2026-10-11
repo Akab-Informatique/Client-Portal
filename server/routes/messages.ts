@@ -7,6 +7,7 @@ import { config } from "../config.ts";
 import { auth, requirePermission, type AppEnv } from "../lib/auth.ts";
 import { audit } from "../lib/audit.ts";
 import { escapeHtml, sendMail } from "../lib/mail.ts";
+import { notifyMessagePosted } from "../lib/notify.ts";
 import { body, zUuid } from "../lib/validate.ts";
 
 type MessageRow = typeof schema.messages.$inferSelect;
@@ -138,6 +139,8 @@ export const messageRoutes = new Hono<AppEnv>()
     await audit(a.user.id, "message.posted", m.id, { audience: p.audience, clients: clientIds.length, emailCopy: p.emailCopy });
     // Email copies go out in the background; the count is stored on the message.
     if (p.emailCopy) void sendCopies(m, clientIds).catch((e) => console.error("[messages] email copies failed", e));
+    // Bell notifications for the targeted clients and the other technicians
+    await notifyMessagePosted(m, clientIds, a.user.id, a.user.name);
     return c.json((await decorate([m]))[0], 201);
   })
 
@@ -175,6 +178,10 @@ export const messageRoutes = new Hono<AppEnv>()
     const own = m.authorId === a.user.id;
     if (!own && !a.permissions.includes("messages.manage")) throw new HTTPException(403, { message: "Forbidden" });
     await db().delete(schema.messages).where(eq(schema.messages.id, id));
+    // Its bell notifications would point to nothing — remove them for everyone
+    await db()
+      .delete(schema.notifications)
+      .where(and(eq(schema.notifications.type, "message.new"), sql`${schema.notifications.data}->>'messageId' = ${id}`));
     await audit(a.user.id, "message.deleted", id, { title: m.title });
     return c.json({ ok: true });
   });

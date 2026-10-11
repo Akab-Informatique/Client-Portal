@@ -22,6 +22,7 @@ import { permissionsFor, type Audience } from "@shared/permissions";
 import { useAdminError, useAudit, useClients, useClientUsers, useRoleDescription, useRoleName, useRoles, useStaff } from "./hooks";
 import { PermissionMatrix } from "./PermissionMatrix";
 import { NewUserDialog, UserSheet, UserStatusBadges } from "./UserPanels";
+import { useOneShotParam } from "@/lib/useDeepLink";
 
 function SectionHeader({ title, subtitle, action }: { title: string; subtitle: string; action?: ReactNode }) {
   return (
@@ -79,7 +80,8 @@ export function StaffSection() {
   const { data, isLoading } = useStaff();
   const { data: roles = [] } = useRoles();
   const [q, setQ] = useState("");
-  const [openId, setOpenId] = useState<string | null>(null);
+  const linkedUser = useOneShotParam("user");
+  const [openId, setOpenId] = useState<string | null>(linkedUser);
   const [creating, setCreating] = useState(false);
   const list = (data ?? []).filter((u) => match(u, q));
   return (
@@ -110,7 +112,9 @@ export function ClientsSection() {
   const { t } = useTranslation();
   const { data, isLoading } = useClients();
   const [q, setQ] = useState("");
-  const [selectedId, setSelectedId] = useState<string | null>(null);
+  const linkedClient = useOneShotParam("client");
+  const linkedUser = useOneShotParam("user");
+  const [selectedId, setSelectedId] = useState<string | null>(linkedClient);
   const [creating, setCreating] = useState(false);
   const list = (data ?? []).filter((c) => `${c.name} ${c.code ?? ""}`.toLowerCase().includes(q.toLowerCase()));
   const selected = (data ?? []).find((c) => c.id === selectedId) ?? null;
@@ -156,7 +160,7 @@ export function ClientsSection() {
                 ))}
           </ul>
         </div>
-        <div>{selected ? <ClientDetail key={selected.id} client={selected} /> : <p className="rounded-xl border border-dashed p-10 text-center text-sm text-muted-foreground">{t("admin.clients.select")}</p>}</div>
+        <div>{selected ? <ClientDetail key={selected.id} client={selected} openUser={selected.id === linkedClient ? linkedUser : null} /> : <p className="rounded-xl border border-dashed p-10 text-center text-sm text-muted-foreground">{t("admin.clients.select")}</p>}</div>
       </div>
       <ClientFormDialog open={creating} onOpenChange={setCreating} onCreated={(c) => setSelectedId(c.id)} />
     </div>
@@ -246,14 +250,14 @@ function ClientFormDialog({ open, onOpenChange, onCreated }: { open: boolean; on
   );
 }
 
-function ClientDetail({ client }: { client: Client }) {
+function ClientDetail({ client, openUser }: { client: Client; openUser?: string | null }) {
   const { t } = useTranslation();
   const qc = useQueryClient();
   const errText = useAdminError();
   const { data: users, isLoading } = useClientUsers(client.id);
   const { data: roles = [] } = useRoles();
   const [form, setForm] = useState(clientForm(client));
-  const [openId, setOpenId] = useState<string | null>(null);
+  const [openId, setOpenId] = useState<string | null>(openUser ?? null);
   const [creating, setCreating] = useState(false);
   const save = useMutation({
     mutationFn: (patch: Record<string, unknown>) => api.patch<Client>(`/admin/clients/${client.id}`, patch),

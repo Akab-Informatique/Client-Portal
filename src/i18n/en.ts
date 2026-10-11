@@ -309,6 +309,15 @@ const en: Dict = {
       system: "System",
     },
   },
+  notifications: {
+    title: "Notifications",
+    titleCount_one: "Notifications ({{count}} unread)",
+    titleCount_other: "Notifications ({{count}} unread)",
+    markAll: "Mark all as read",
+    empty: "No notifications yet.",
+    messageNew: "New message board post",
+    userLocked: "Account locked (too many attempts)",
+  },
   viewAs: {
     staff: "Technician",
     client: "Client",

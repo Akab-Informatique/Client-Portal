@@ -307,6 +307,15 @@ const fr = {
       system: "Système",
     },
   },
+  notifications: {
+    title: "Notifications",
+    titleCount_one: "Notifications ({{count}} non lue)",
+    titleCount_other: "Notifications ({{count}} non lues)",
+    markAll: "Tout marquer comme lu",
+    empty: "Aucune notification pour le moment.",
+    messageNew: "Nouveau message au babillard",
+    userLocked: "Compte verrouillé (trop d'essais)",
+  },
   viewAs: {
     staff: "Technicien",
     client: "Client",

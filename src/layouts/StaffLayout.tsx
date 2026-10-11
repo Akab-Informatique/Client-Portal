@@ -19,6 +19,7 @@ import { Logo, LogoMark } from "@/components/brand/Logo";
 import { LanguageToggle } from "@/components/LanguageToggle";
 import { CommandPalette } from "@/components/CommandPalette";
 import { ViewSwitcher } from "@/components/ViewSwitcher";
+import { NotificationBell } from "@/components/NotificationBell";
 import { ProfileDialog } from "@/components/ProfileDialog";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import { Badge } from "@/components/ui/badge";
@@ -240,6 +241,7 @@ function TopBar({ onMenu }: { onMenu: () => void }) {
       </Button>
       {can("clientview.use") && <ViewSwitcher />}
       <div className="ml-auto flex items-center gap-3">
+        <NotificationBell />
         <LanguageToggle persist className="hidden sm:flex" />
         <UserMenu />
       </div>

@@ -22,6 +22,13 @@
       "when": 1791743043155,
       "tag": "0002_reset_dashboards",
       "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "7",
+      "when": 1791743129408,
+      "tag": "0003_notifications",
+      "breakpoints": true
     }
   ]
 }

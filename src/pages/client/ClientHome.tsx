@@ -6,6 +6,8 @@ import { Logo } from "@/components/brand/Logo";
 import { TechBackground } from "@/components/brand/TechBackground";
 import { LanguageToggle } from "@/components/LanguageToggle";
 import { ViewAsBanner, ViewSwitcher } from "@/components/ViewSwitcher";
+import { NotificationBell } from "@/components/NotificationBell";
+import { useDeepLink } from "@/lib/useDeepLink";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { api } from "@/lib/api";
@@ -21,6 +23,7 @@ export function ClientHome() {
   const me = useMe();
   const qc = useQueryClient();
   const { data = [] } = useQuery({ queryKey: ["board"], queryFn: () => api.get<BoardMessage[]>("/board") });
+  const highlight = useDeepLink("message", "msg-", data.length > 0);
   const markRead = useMutation({
     mutationFn: (id: string) => api.post(`/board/${id}/read`),
     onSuccess: () => qc.invalidateQueries({ queryKey: ["board"] }),
@@ -34,6 +37,7 @@ export function ClientHome() {
         <span className="ml-2 hidden text-sm text-muted-foreground sm:inline">{me.client?.name}</span>
         {me.viewAs && <ViewSwitcher className="ml-2" />}
         <div className="ml-auto flex items-center gap-2">
+          {!me.viewAs && <NotificationBell />}
           <LanguageToggle persist={!me.viewAs} />
           {!me.viewAs && (
             <Button variant="ghost" size="sm" onClick={() => void signOut(qc)}>
@@ -55,11 +59,16 @@ export function ClientHome() {
             {data.map((m, i) => (
               <motion.li
                 key={m.id}
+                id={`msg-${m.id}`}
                 initial={{ opacity: 0, y: 10 }}
                 animate={{ opacity: 1, y: 0 }}
                 transition={{ delay: i * 0.05 }}
                 onMouseEnter={() => !m.read && !me.viewAs && markRead.mutate(m.id)}
-                className={cn("rounded-2xl border bg-card p-5", m.pinned && "border-[color:var(--gold)]/40 ring-gold")}
+                className={cn(
+                  "rounded-2xl border bg-card p-5 transition-all duration-500",
+                  m.pinned && "border-[color:var(--gold)]/40 ring-gold",
+                  highlight === m.id && "border-[color:var(--gold)] shadow-[0_0_0_3px_rgba(255,206,26,0.35),0_0_40px_-8px_rgba(255,206,26,0.6)]",
+                )}
               >
                 <div className="flex flex-wrap items-center gap-2">
                   {m.pinned && <Pin className="size-4 text-primary" />}

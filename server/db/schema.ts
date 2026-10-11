@@ -172,6 +172,26 @@ export const messageReads = pgTable(
   (t) => [primaryKey({ columns: [t.messageId, t.userId] })],
 );
 
+/**
+ * Per-user notifications (bell). Text is rendered client-side from `type` +
+ * `data` so it follows the reader's language; `link` is an in-app path.
+ */
+export const notifications = pgTable(
+  "notifications",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    userId: uuid("user_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    type: text("type").notNull(),
+    data: jsonb("data").$type<Record<string, unknown>>().notNull().default(sql`'{}'::jsonb`),
+    link: text("link"),
+    readAt: timestamp("read_at", { withTimezone: true }),
+    createdAt: created(),
+  },
+  (t) => [index("notifications_user_idx").on(t.userId, t.createdAt)],
+);
+
 /** Who changed what in admin settings. */
 export const auditLog = pgTable("audit_log", {
   id: serial("id").primaryKey(),

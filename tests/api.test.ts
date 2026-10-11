@@ -353,3 +353,60 @@ describe("view as client", () => {
     expect((await admin.post("/api/view-as", { clientId: created.json.id })).json.error).toBe("invalid_client");
   });
 });
+
+describe("notifications", () => {
+  it("a new message notifies the targeted clients and the other technicians, not the author", async () => {
+    const admin = await signIn("admin@akab.local");
+    const clients = (await admin.get("/api/messages/client-options")).json;
+    const target = clients[0];
+    const post = await admin.post("/api/messages", { title: "Notif test", body: "x", audience: "selected", clientIds: [target.id] });
+    expect(post.status).toBe(201);
+
+    const users = await db().select().from(schema.users);
+    const inTarget = users.find((u) => u.clientId === target.id && u.email.startsWith("responsable"))!;
+    const elsewhere = users.find((u) => u.clientId && u.clientId !== target.id && u.email.startsWith("responsable"))!;
+
+    const c1 = await signIn(inTarget.email);
+    const n1 = (await c1.get("/api/notifications")).json;
+    const mine = n1.items.find((n: any) => n.data.title === "Notif test");
+    expect(mine.type).toBe("message.new");
+    expect(mine.link).toBe(`/?message=${post.json.id}`);
+    expect(n1.unread).toBeGreaterThan(0);
+
+    const c2 = await signIn(elsewhere.email);
+    expect((await c2.get("/api/notifications")).json.items.some((n: any) => n.data.title === "Notif test")).toBe(false);
+
+    const tech = await signIn("tech@akab.local");
+    const tn = (await tech.get("/api/notifications")).json.items.find((n: any) => n.data.title === "Notif test");
+    expect(tn.link).toBe(`/messages?message=${post.json.id}`);
+    expect((await admin.get("/api/notifications")).json.items.some((n: any) => n.data.title === "Notif test")).toBe(false);
+
+    // mark one read; nobody else can touch it; mark all read
+    expect((await c2.post(`/api/notifications/${mine.id}/read`)).status).toBe(404);
+    expect((await c1.post(`/api/notifications/${mine.id}/read`)).status).toBe(200);
+    expect((await c1.post("/api/notifications/read-all")).status).toBe(200);
+    expect((await c1.get("/api/notifications")).json.unread).toBe(0);
+  });
+
+  it("an account lockout notifies the admins with a link to that user", async () => {
+    const email = "employe2@client.example";
+    for (let i = 0; i < 10; i++) await new Agent().post("/api/auth/login", { email, password: `nope-${i}` });
+    const admin = await signIn("admin@akab.local");
+    const n = (await admin.get("/api/notifications")).json.items.find((x: any) => x.type === "user.locked" && x.data.email === email);
+    expect(n).toBeTruthy();
+    expect(n.link).toMatch(/^\/\?admin=clients&client=[0-9a-f-]+&user=[0-9a-f-]+$/);
+    await db().update(schema.users).set({ lockedUntil: null, failedLogins: 0 }).where(eq(schema.users.email, email));
+  });
+});
+
+describe("notifications cleanup", () => {
+  it("deleting a message removes its notifications for everyone", async () => {
+    const admin = await signIn("admin@akab.local");
+    const post = await admin.post("/api/messages", { title: "Bientôt supprimé", body: "x", audience: "all" });
+    const tech = await signIn("tech@akab.local");
+    const has = async () => (await tech.get("/api/notifications")).json.items.some((n: any) => n.data.messageId === post.json.id);
+    expect(await has()).toBe(true);
+    expect((await admin.del(`/api/messages/${post.json.id}`)).status).toBe(200);
+    expect(await has()).toBe(false);
+  });
+});

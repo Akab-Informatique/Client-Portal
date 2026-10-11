@@ -22,6 +22,7 @@ import { dateTime, relativeTime } from "@/lib/format";
 import type { Message } from "@/lib/types";
 import { cn } from "@/lib/utils";
 import { Composer } from "./Composer";
+import { useDeepLink } from "@/lib/useDeepLink";
 
 export function MessagesPage() {
   const { t } = useTranslation();
@@ -38,6 +39,7 @@ export function MessagesPage() {
 
   const { data, isLoading } = useQuery({ queryKey: ["messages"], queryFn: () => api.get<Message[]>("/messages") });
   const list = useMemo(() => (data ?? []).filter((m) => filter === "all" || m.pinned), [data, filter]);
+  const highlight = useDeepLink("message", "msg-", Boolean(data));
 
   return (
     <div className="space-y-6">
@@ -76,7 +78,7 @@ export function MessagesPage() {
         <motion.ul layout className="space-y-3">
           <AnimatePresence initial={false}>
             {list.map((m) => (
-              <MessageCard key={m.id} m={m} />
+              <MessageCard key={m.id} m={m} highlight={highlight === m.id} />
             ))}
           </AnimatePresence>
         </motion.ul>
@@ -87,7 +89,7 @@ export function MessagesPage() {
   );
 }
 
-function MessageCard({ m }: { m: Message }) {
+function MessageCard({ m, highlight }: { m: Message; highlight: boolean }) {
   const { t } = useTranslation();
   const can = useCan();
   const me = useMe();
@@ -120,6 +122,7 @@ function MessageCard({ m }: { m: Message }) {
 
   return (
     <motion.li
+      id={`msg-${m.id}`}
       layout
       initial={{ opacity: 0, y: 12 }}
       animate={{ opacity: 1, y: 0 }}
@@ -127,6 +130,7 @@ function MessageCard({ m }: { m: Message }) {
       className={cn(
         "group relative overflow-hidden rounded-2xl border bg-card/80 p-5 transition-colors",
         m.pinned ? "border-[color:var(--gold)]/40 ring-gold" : "hover:border-foreground/15",
+        highlight && "scale-[1.01] border-[color:var(--gold)] shadow-[0_0_0_3px_rgba(255,206,26,0.35),0_0_40px_-8px_rgba(255,206,26,0.6)] transition-all duration-500",
       )}
     >
       {m.pinned && <div className="absolute inset-y-0 left-0 w-1 bg-grad-gold" />}

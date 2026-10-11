@@ -14,6 +14,7 @@ import { adminRoutes } from "./routes/admin.ts";
 import { boardRoutes, messageRoutes } from "./routes/messages.ts";
 import { dashboardRoutes } from "./routes/dashboard.ts";
 import { viewAsRoutes } from "./routes/viewAs.ts";
+import { notificationRoutes } from "./routes/notifications.ts";
 
 export function createApp() {
   const app = new Hono<AppEnv>();
@@ -52,6 +53,7 @@ export function createApp() {
   api.route("/auth", authRoutes);
   api.route("/me", meRoutes);
   api.route("/view-as", viewAsRoutes);
+  api.route("/notifications", notificationRoutes);
   api.use("/admin/*", requireStaff);
   api.route("/admin", adminRoutes);
   api.use("/messages/*", requireStaff);
