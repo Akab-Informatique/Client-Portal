@@ -220,10 +220,10 @@ export function InteractiveBackground() {
           WebkitMaskImage: "radial-gradient(240px circle at var(--mx) var(--my), black, transparent 75%)",
         }}
       />
-      <div className="absolute -left-40 -top-40 size-[44rem] rounded-full bg-[radial-gradient(circle,rgba(255,206,26,0.08),transparent_65%)] blur-2xl" />
-      <div className="absolute -bottom-48 -right-40 size-[40rem] rounded-full bg-[radial-gradient(circle,rgba(245,148,16,0.10),transparent_65%)] blur-2xl" />
+      <div className="absolute -left-40 -top-40 size-[44rem] animate-[pulse_9s_ease-in-out_infinite] rounded-full bg-[radial-gradient(circle,rgba(255,206,26,0.10),transparent_65%)] blur-2xl" />
+      <div className="absolute -bottom-48 -right-40 size-[40rem] animate-[pulse_11s_ease-in-out_infinite] rounded-full bg-[radial-gradient(circle,rgba(245,148,16,0.12),transparent_65%)] blur-2xl" />
       <div className="absolute inset-0" style={{ background: "radial-gradient(520px circle at var(--mx) var(--my), rgba(255,206,26,0.09), transparent 60%)" }} />
-      <canvas ref={canvasRef} className="absolute inset-0 opacity-80" />
+      <canvas ref={canvasRef} className="absolute inset-0 opacity-60" />
       <div className="absolute inset-0 bg-[radial-gradient(ellipse_at_center,transparent_50%,rgba(10,10,11,0.8)_100%)]" />
     </div>
   );
