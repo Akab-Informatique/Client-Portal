@@ -587,6 +587,7 @@ const fr = {
     clearFilters: "Effacer les filtres",
     sort: { due: "Échéance", priority: "Priorité", start: "Date de début", updated: "Activité récente" },
     fields: {
+      secondary: "Assigné secondaire",
       technician: "Technicien",
       ticket: "Billet",
       title: "Titre",

@@ -19,6 +19,8 @@ export type Ticket = {
   queue: string;
   source: "email" | "phone" | "portal" | "monitoring";
   assignee: Person | null;
+  /** Secondary resources (Autotask) */
+  secondary: Person[];
   createdAt: string;
   dueAt: string;
   updatedAt: string;
@@ -62,7 +64,7 @@ const SUBJECTS: [string, string][] = [
  * later (or after a restart) get their share. Tickets created in the portal
  * keep their chosen assignee (slot null).
  */
-type Stored = Ticket & { slot: number | null };
+type Stored = Ticket & { slot: number | null; secondarySlots: number[] };
 let store: Stored[] | null = null;
 let nextId = 41000;
 
@@ -80,7 +82,13 @@ const ymd = (d: Date) => `${d.getFullYear()}${String(d.getMonth() + 1).padStart(
 /** All sample tickets; assignees are the current technicians (round robin). */
 export function demoTickets(staff: Person[]): Ticket[] {
   store ??= generate();
-  return store.map(({ slot, ...t }) => (slot === null ? t : { ...t, assignee: staff.length ? staff[slot % staff.length] : null }));
+  return store.map(({ slot, secondarySlots, ...t }) => {
+    const assignee = slot === null ? t.assignee : staff.length ? staff[slot % staff.length] : null;
+    const secondary = staff.length
+      ? [...new Map(secondarySlots.map((s) => staff[s % staff.length]).filter((p) => p.id !== assignee?.id).map((p) => [p.id, p])).values()]
+      : [];
+    return { ...t, assignee, secondary };
+  });
 }
 
 function generate(): Stored[] {
@@ -127,6 +135,8 @@ function generate(): Stored[] {
       source: /Alerte|Sauvegarde/.test(title) ? "monitoring" : pick(r, ["email", "phone", "portal"] as const),
       assignee: null,
       slot,
+      secondarySlots: unassigned ? [] : i % 5 === 0 ? [i + 1, i + 2] : i % 3 === 0 ? [i + 1] : [],
+      secondary: [],
       createdAt: created.toISOString(),
       dueAt: due.toISOString(),
       updatedAt: (notes.at(-1)?.at ?? created.toISOString()),
@@ -137,7 +147,7 @@ function generate(): Stored[] {
   return list;
 }
 
-export function addDemoTicket(t: Omit<Ticket, "id" | "number" | "createdAt" | "updatedAt" | "hours" | "notes">): Ticket {
+export function addDemoTicket(t: Omit<Ticket, "id" | "number" | "createdAt" | "updatedAt" | "hours" | "notes" | "secondary">): Ticket {
   const created = new Date();
   const ticket: Ticket = {
     ...t,
@@ -147,8 +157,9 @@ export function addDemoTicket(t: Omit<Ticket, "id" | "number" | "createdAt" | "u
     updatedAt: created.toISOString(),
     hours: 0,
     notes: [],
+    secondary: [],
   };
-  store?.unshift({ ...ticket, slot: null });
+  store?.unshift({ ...ticket, slot: null, secondarySlots: [] });
   return ticket;
 }
 

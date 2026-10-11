@@ -589,6 +589,7 @@ const en: Dict = {
     clearFilters: "Clear filters",
     sort: { due: "Due date", priority: "Priority", start: "Start date", updated: "Recent activity" },
     fields: {
+      secondary: "Secondary",
       technician: "Technician",
       ticket: "Ticket",
       title: "Title",

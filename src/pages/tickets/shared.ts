@@ -17,6 +17,8 @@ export type TicketSummary = {
   priority: Priority;
   queue: string;
   assignee: { id: string; name: string } | null;
+  secondary: { id: string; name: string }[];
+  excerpt: string;
   createdAt: string;
   dueAt: string;
   updatedAt: string;

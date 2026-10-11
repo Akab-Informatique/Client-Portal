@@ -166,7 +166,7 @@ export function TicketsPage() {
       {/* Toolbar: view, search, team, the two frequent filters, the rest under "More" */}
       <div className="flex flex-wrap items-center gap-1.5">
         <ViewMenu view={view} counts={data?.counts} params={params} apply={apply} />
-        <div className="relative min-w-44 flex-1 sm:max-w-xs">
+        <div className="relative w-full sm:w-56">
           <Search className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
           <Input
             ref={searchRef}
@@ -181,13 +181,7 @@ export function TicketsPage() {
           <>
             <TeamFilter technicians={data.facets.technicians} params={params} set={set} />
             <MultiFilter label={t("tickets.fields.status")} param="status" options={data.facets.statuses.map((s) => ({ value: s, label: t(`tickets.status.${s}`) }))} params={params} set={set} />
-            <MultiFilter
-              label={t("tickets.fields.priority")}
-              param="priority"
-              options={data.facets.priorities.map((p) => ({ value: p, label: t(`tickets.priority.${p}`), dot: PRIORITY_STYLE[p].dot }))}
-              params={params}
-              set={set}
-            />
+            <MultiFilter label={t("tickets.fields.company")} param="company" options={data.facets.companies.map((c) => ({ value: String(c.id), label: c.name }))} params={params} set={set} searchable />
             <MoreFilters data={data} params={params} set={set} />
           </>
         )}
@@ -216,15 +210,17 @@ export function TicketsPage() {
 
       {/* List */}
       <div className="overflow-hidden rounded-2xl border bg-card/70 backdrop-blur">
-        <div className="hidden grid-cols-[minmax(0,1fr)_150px_110px_150px_90px_140px_28px] gap-4 border-b bg-background/40 px-5 py-2.5 font-mono text-[10px] uppercase tracking-[0.12em] text-muted-foreground lg:grid">
+        <div className="hidden grid-cols-[minmax(0,1fr)_144px_86px_140px_64px_104px_132px_64px_20px] gap-3 border-b bg-background/40 px-5 py-2.5 font-mono text-[10px] uppercase tracking-[0.12em] text-muted-foreground xl:grid">
           <span>{t("tickets.fields.ticket")}</span>
           <span>{t("tickets.fields.status")}</span>
           <span>{t("tickets.fields.priority")}</span>
-          <span>{t("tickets.fields.assignee")}</span>
+          <span>{t("tickets.fields.company")}</span>
           <span className="flex items-center gap-1">
             {t("tickets.fields.start")} <PortalTag />
           </span>
           <span>{t("tickets.fields.due")}</span>
+          <span>{t("tickets.fields.assignee")}</span>
+          <span>{t("tickets.fields.secondary")}</span>
           <span />
         </div>
         {isLoading || !data ? (
@@ -567,7 +563,7 @@ function TicketRow({
         }}
         className={cn(
           "cursor-pointer outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-[color:var(--gold)]/50",
-          "group relative grid w-full grid-cols-1 gap-x-4 gap-y-1.5 px-5 py-2.5 text-left transition-colors lg:grid-cols-[minmax(0,1fr)_150px_110px_150px_90px_140px_28px] lg:items-center",
+          "group relative grid w-full grid-cols-1 gap-x-3 gap-y-1.5 px-5 py-2.5 text-left transition-colors xl:grid-cols-[minmax(0,1fr)_144px_86px_140px_64px_104px_132px_64px_20px] xl:items-center",
           "hover:bg-[linear-gradient(90deg,rgba(255,206,26,0.07),transparent_60%)]",
           active && "bg-[linear-gradient(90deg,rgba(255,206,26,0.1),transparent_70%)]",
         )}
@@ -578,12 +574,9 @@ function TicketRow({
             <span className="shrink-0 font-mono text-[11px] text-muted-foreground group-hover:text-primary">{tk.number}</span>
             <span className="truncate font-medium">{tk.title}</span>
           </span>
-          <span className="mt-0.5 block truncate text-xs text-muted-foreground">
-            {tk.company.name}
-            {tk.contact && ` · ${tk.contact}`}
-          </span>
+          <span className="mt-0.5 block truncate text-xs text-muted-foreground">{tk.excerpt || tk.company.name}</span>
         </span>
-        <span className="flex flex-wrap items-center gap-2 lg:contents">
+        <span className="flex flex-wrap items-center gap-2 xl:contents">
           <span>
             <Stop>
               <InlinePick
@@ -593,7 +586,7 @@ function TicketRow({
                 options={facets.statuses.map((s) => ({ value: s, label: t(`tickets.status.${s}`) }))}
                 onPick={(v) => onPatch({ status: v as Status })}
                 trigger={
-                  <span className={cn("inline-flex items-center gap-1.5 rounded-full border px-2 py-0.5 text-[11px] font-medium", STATUS_STYLE[tk.status])}>
+                  <span className={cn("inline-flex items-center gap-1.5 whitespace-nowrap rounded-full border px-2 py-0.5 text-[11px] font-medium", STATUS_STYLE[tk.status])}>
                     <span className="size-1.5 rounded-full bg-current" />
                     {t(`tickets.status.${tk.status}`)}
                   </span>
@@ -618,6 +611,29 @@ function TicketRow({
               />
             </Stop>
           </span>
+          <span className="min-w-0 text-xs" title={tk.contact ? `${tk.company.name} · ${tk.contact}` : tk.company.name}>
+            <span className="block truncate">{tk.company.name}</span>
+            {tk.contact && <span className="block truncate text-[11px] text-muted-foreground">{tk.contact}</span>}
+          </span>
+          <span className="font-mono text-xs tabular-nums text-muted-foreground">{tk.startDate ? shortDate(tk.startDate) : "—"}</span>
+          <span className="min-w-0">
+            <span
+              className={cn(
+                "block font-mono text-xs font-medium tabular-nums",
+                due === "overdue" ? "text-destructive" : due === "today" ? "text-orange-400" : due === "soon" ? "text-primary" : "text-muted-foreground",
+              )}
+            >
+              {due === "overdue" ? t("tickets.overdue") : due === "today" ? t("tickets.today") : shortDate(tk.dueAt)}
+            </span>
+            {tk.status !== "complete" && (
+              <span className="mt-1 block h-1 w-full max-w-28 overflow-hidden rounded-full bg-muted" title={t("tickets.slaUsed", { pct: Math.round(used * 100) })}>
+                <span
+                  className={cn("block h-full rounded-full", used >= 1 ? "bg-red-500" : used > 0.75 ? "bg-orange-400" : used > 0.5 ? "bg-[#ffce1a]" : "bg-emerald-400")}
+                  style={{ width: `${Math.max(4, used * 100)}%` }}
+                />
+              </span>
+            )}
+          </span>
           <span className="min-w-0">
             <Stop>
               <InlinePick
@@ -641,23 +657,22 @@ function TicketRow({
               />
             </Stop>
           </span>
-          <span className="font-mono text-xs tabular-nums text-muted-foreground">{tk.startDate ? shortDate(tk.startDate) : "—"}</span>
-          <span className="min-w-0">
-            <span
-              className={cn(
-                "block font-mono text-xs font-medium tabular-nums",
-                due === "overdue" ? "text-destructive" : due === "today" ? "text-orange-400" : due === "soon" ? "text-primary" : "text-muted-foreground",
-              )}
-            >
-              {due === "overdue" ? t("tickets.overdue") : due === "today" ? t("tickets.today") : shortDate(tk.dueAt)}
-            </span>
-            {tk.status !== "complete" && (
-              <span className="mt-1 block h-1 w-full max-w-28 overflow-hidden rounded-full bg-muted" title={t("tickets.slaUsed", { pct: Math.round(used * 100) })}>
-                <span
-                  className={cn("block h-full rounded-full", used >= 1 ? "bg-red-500" : used > 0.75 ? "bg-orange-400" : used > 0.5 ? "bg-[#ffce1a]" : "bg-emerald-400")}
-                  style={{ width: `${Math.max(4, used * 100)}%` }}
-                />
-              </span>
+          <span className="flex min-w-0 items-center">
+            {tk.secondary.length ? (
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <span className="flex -space-x-1.5">
+                    {tk.secondary.slice(0, 3).map((p) => (
+                      <span key={p.id} className="flex size-6 items-center justify-center rounded-full border-2 border-card bg-muted text-[9px] font-semibold">
+                        {initials(p.name)}
+                      </span>
+                    ))}
+                  </span>
+                </TooltipTrigger>
+                <TooltipContent>{tk.secondary.map((p) => p.name).join(", ")}</TooltipContent>
+              </Tooltip>
+            ) : (
+              <span className="text-xs text-muted-foreground/60">—</span>
             )}
           </span>
           <span className="flex justify-end">
@@ -772,24 +787,24 @@ function MultiFilter({ label, param, options, params, set, searchable }: { label
   );
 }
 
-const MORE_KEYS = ["company", "dueFrom", "dueTo", "startFrom", "startTo"] as const;
+const MORE_KEYS = ["priority", "dueFrom", "dueTo", "startFrom", "startTo"] as const;
 
 /** Less frequent filters in one panel: client, queue, start date, due date. */
 function MoreFilters({ data, params, set }: { data: TicketList; params: URLSearchParams; set: SetFn }) {
   const { t } = useTranslation();
   const count = MORE_KEYS.filter((k) => params.get(k)).length;
-  const [tab, setTab] = useState<"company" | "dates">("dates");
+  const [tab, setTab] = useState<"priority" | "dates">("priority");
   return (
     <FilterButton label={t("tickets.more")} count={count} icon={SlidersHorizontal} wide onClear={() => set(Object.fromEntries(MORE_KEYS.map((k) => [k, null])))}>
       <div className="mb-1 grid grid-cols-2 gap-1 rounded-lg bg-muted/50 p-0.5 text-xs">
-        {(["dates", "company"] as const).map((k) => (
+        {(["priority", "dates"] as const).map((k) => (
           <button
             key={k}
             type="button"
             onClick={() => setTab(k)}
             className={cn("rounded-md px-2 py-1 font-medium", tab === k ? "bg-background text-foreground shadow-sm" : "text-muted-foreground hover:text-foreground")}
           >
-            {k === "dates" ? t("tickets.dates") : t("tickets.fields.company")}
+            {k === "dates" ? t("tickets.dates") : t("tickets.fields.priority")}
             {(k === "dates" ? ["dueFrom", "dueTo", "startFrom", "startTo"].some((x) => params.get(x)) : params.get(k)) && (
               <span className="ml-1 inline-block size-1.5 rounded-full bg-[color:var(--gold)] align-middle" />
             )}
@@ -802,7 +817,9 @@ function MoreFilters({ data, params, set }: { data: TicketList; params: URLSearc
           <DateRange from="dueFrom" to="dueTo" title={t("tickets.fields.due")} params={params} set={set} />
         </div>
       )}
-      {tab === "company" && <Checklist param="company" options={data.facets.companies.map((c) => ({ value: String(c.id), label: c.name }))} params={params} set={set} searchable max="max-h-60" />}
+      {tab === "priority" && (
+        <Checklist param="priority" options={data.facets.priorities.map((p) => ({ value: p, label: t(`tickets.priority.${p}`), dot: PRIORITY_STYLE[p].dot }))} params={params} set={set} />
+      )}
     </FilterButton>
   );
 }

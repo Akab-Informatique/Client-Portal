@@ -260,6 +260,9 @@ function TicketBody({ tk, viewers, onClose, onMinimize }: { tk: TicketDetail; vi
                   trigger={<span className={cn(!tk.assignee && "italic text-muted-foreground")}>{tk.assignee?.name ?? t("tickets.unassigned")}</span>}
                 />
               </Detail>
+              <Detail icon={Users} label={t("tickets.fields.secondary")}>
+                {tk.secondary.length ? tk.secondary.map((p) => p.name).join(", ") : <span className="text-muted-foreground">—</span>}
+              </Detail>
               <Detail icon={CalendarClock} label={t("tickets.fields.due")}>
                 {editable ? (
                   <Input

@@ -122,6 +122,9 @@ function summary(t: Ticket, start: string | undefined, me: string) {
     priority: t.priority,
     queue: t.queue,
     assignee: t.assignee,
+    secondary: t.secondary,
+    /** First line of the description, for the list */
+    excerpt: t.description.split("\n")[0].slice(0, 180),
     createdAt: t.createdAt,
     dueAt: t.dueAt,
     updatedAt: t.updatedAt,
