@@ -1,8 +1,9 @@
-import { useEffect, useRef, useState, type FormEvent } from "react";
+import { useEffect, useRef, useState, type FormEvent, type ReactNode } from "react";
+import { useSearchParams } from "react-router-dom";
 import { useTranslation } from "react-i18next";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
-import { CheckCircle2, ChevronDown, ExternalLink, KeyRound, Link2, Loader2, PlugZap, RefreshCw, Sparkles, Unlink, XCircle } from "lucide-react";
+import { ArrowLeft, CheckCircle2, ChevronDown, ChevronRight, ExternalLink, KeyRound, Link2, Loader2, PlugZap, RefreshCw, Sparkles, Unlink, XCircle, type LucideIcon } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -46,15 +47,86 @@ function useIntegrationError() {
   };
 }
 
+/**
+ * Available integrations. To add one: an entry here, its page component,
+ * a Status component (badge on the card) and its texts under integrations.<key>.
+ */
+type Integration = { key: string; name: string; icon: LucideIcon; Status: () => ReactNode; Page: () => ReactNode };
+const INTEGRATIONS: Integration[] = [
+  {
+    key: "autotask",
+    name: "Autotask PSA",
+    icon: PlugZap,
+    Status: AutotaskStatus,
+    Page: () => (
+      <>
+        <AutotaskConnection />
+        <AutotaskLinks />
+      </>
+    ),
+  },
+];
+
+/** List of integrations; opening one shows its page (?integration=<key>). */
 export function IntegrationsSection() {
   const { t } = useTranslation();
+  const [params, setParams] = useSearchParams();
+  const open = INTEGRATIONS.find((i) => i.key === params.get("integration")) ?? null;
+  const go = (key: string | null) =>
+    setParams((p) => {
+      if (key) p.set("integration", key);
+      else p.delete("integration");
+      return p;
+    });
+
+  if (open) {
+    return (
+      <div className="space-y-8">
+        <div>
+          <Button variant="ghost" size="sm" className="-ml-2 mb-3 text-muted-foreground" onClick={() => go(null)}>
+            <ArrowLeft className="size-4" /> {t("integrations.title")}
+          </Button>
+          <SectionHeader title={open.name} subtitle={t(`integrations.${open.key}.description`)} />
+        </div>
+        <open.Page />
+      </div>
+    );
+  }
+
   return (
-    <div className="space-y-8">
+    <div>
       <SectionHeader title={t("integrations.title")} subtitle={t("integrations.subtitle")} />
-      <AutotaskConnection />
-      <AutotaskLinks />
+      <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
+        {INTEGRATIONS.map((i) => (
+          <button
+            key={i.key}
+            type="button"
+            onClick={() => go(i.key)}
+            className="group flex flex-col gap-4 rounded-2xl border bg-card/80 p-5 text-left transition-all hover:-translate-y-0.5 hover:border-[color:var(--gold)]/40 hover:shadow-lg"
+          >
+            <div className="flex items-start justify-between gap-3">
+              <span className="flex size-11 items-center justify-center rounded-xl bg-grad-gold text-[#1a1204] glow-gold">
+                <i.icon className="size-5" />
+              </span>
+              <i.Status />
+            </div>
+            <div>
+              <h3 className="font-display text-lg font-semibold">{i.name}</h3>
+              <p className="mt-1 text-sm text-muted-foreground">{t(`integrations.${i.key}.description`)}</p>
+            </div>
+            <span className="mt-auto flex items-center gap-1 text-sm font-medium text-primary">
+              {t("integrations.configure")} <ChevronRight className="size-4 transition-transform group-hover:translate-x-0.5" />
+            </span>
+          </button>
+        ))}
+      </div>
     </div>
   );
+}
+
+function AutotaskStatus() {
+  const { data } = useQuery({ queryKey: KEY, queryFn: () => api.get<Settings>("/admin/integrations/autotask") });
+  return data ? <StatusBadge s={data} /> : null;
 }
 
 function StatusBadge({ s }: { s: Settings }) {
@@ -141,11 +213,10 @@ function AutotaskConnection() {
           <PlugZap className="size-5" />
         </span>
         <div className="min-w-0 flex-1">
-          <div className="flex flex-wrap items-center gap-2">
-            <h3 className="font-display text-lg font-semibold">Autotask PSA</h3>
+          <h3 className="font-display text-lg font-semibold">{t("integrations.connection")}</h3>
+          <div className="mt-1">
             <StatusBadge s={s} />
           </div>
-          <p className="text-sm text-muted-foreground">{t("integrations.autotask.description")}</p>
         </div>
         <label className="flex items-center gap-3 text-sm font-medium">
           {t("integrations.enabled")}

@@ -316,6 +316,8 @@ const en: Dict = {
   integrations: {
     title: "Integrations",
     subtitle: "Connections to AKAB's external tools",
+    connection: "Connection",
+    configure: "Configure",
     enabled: "Enabled",
     test: "Test connection",
     lastTest: "Last test",

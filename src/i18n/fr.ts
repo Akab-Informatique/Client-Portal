@@ -314,6 +314,8 @@ const fr = {
   integrations: {
     title: "Intégrations",
     subtitle: "Connexions aux outils externes d'AKAB",
+    connection: "Connexion",
+    configure: "Configurer",
     enabled: "Activée",
     test: "Tester la connexion",
     lastTest: "Dernier test",

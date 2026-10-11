@@ -43,6 +43,7 @@ export function AdminOverlay({ section }: { section: string | null }) {
     setParams((p) => {
       if (key) p.set("admin", key);
       else p.delete("admin");
+      p.delete("integration");
       return p;
     });
 
