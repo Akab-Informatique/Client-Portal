@@ -20,6 +20,7 @@ import {
   Loader2,
   Layers,
   Plus,
+  RefreshCw,
   Search,
   Siren,
   Sparkles,
@@ -75,7 +76,7 @@ export function TicketsPage() {
   const ws = useTicketWorkspace();
   const [params, setParams] = useSearchParams();
   const view = (VIEWS.includes(params.get("view") as View) ? params.get("view") : "mine") as View;
-  const { data, isLoading, dataUpdatedAt, isFetching } = useTickets(view, params);
+  const { data, isLoading, dataUpdatedAt, isFetching, refetch } = useTickets(view, params);
   const [creating, setCreating] = useState(false);
   const searchRef = useRef<HTMLInputElement>(null);
 
@@ -126,7 +127,7 @@ export function TicketsPage() {
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1">
           <h1 className="text-2xl font-bold">{t("tickets.title")}</h1>
-          <LiveBadge updatedAt={dataUpdatedAt} fetching={isFetching} />
+          <LiveBadge updatedAt={dataUpdatedAt} fetching={isFetching} onRefresh={() => void refetch()} />
           {data?.demo && (
             <Tooltip>
               <TooltipTrigger asChild>
@@ -246,7 +247,8 @@ export function TicketsPage() {
 }
 
 // ── Header bits ─────────────────────────────────────────────────────────────────
-function LiveBadge({ updatedAt, fetching }: { updatedAt: number; fetching: boolean }) {
+/** "Updated 20 s ago" (the list refreshes by itself every 30 s) + a refresh button. */
+function LiveBadge({ updatedAt, fetching, onRefresh }: { updatedAt: number; fetching: boolean; onRefresh: () => void }) {
   const { t } = useTranslation();
   const [, tick] = useState(0);
   useEffect(() => {
@@ -255,12 +257,26 @@ function LiveBadge({ updatedAt, fetching }: { updatedAt: number; fetching: boole
   }, []);
   if (!updatedAt) return null;
   return (
-    <span className="flex items-center gap-1.5 font-mono text-[10px] uppercase tracking-wider text-emerald-400/90">
-      <span className="relative flex size-2">
+    <span className="flex items-center gap-1 text-[11px] text-muted-foreground">
+      <span className="relative flex size-1.5">
         <span className={cn("absolute inline-flex size-full rounded-full bg-emerald-400 opacity-75", fetching && "animate-ping")} />
-        <span className="relative inline-flex size-2 rounded-full bg-emerald-400" />
+        <span className="relative inline-flex size-1.5 rounded-full bg-emerald-400" />
       </span>
-      {t("tickets.live")} · {relativeTime(new Date(updatedAt))}
+      <span className="ml-0.5">{t("tickets.updated", { when: relativeTime(new Date(updatedAt)) })}</span>
+      <Tooltip>
+        <TooltipTrigger asChild>
+          <button
+            type="button"
+            onClick={onRefresh}
+            disabled={fetching}
+            aria-label={t("tickets.refresh")}
+            className="flex size-6 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-accent hover:text-foreground disabled:opacity-60"
+          >
+            <RefreshCw className={cn("size-3.5", fetching && "animate-spin")} />
+          </button>
+        </TooltipTrigger>
+        <TooltipContent>{t("tickets.refreshHint")}</TooltipContent>
+      </Tooltip>
     </span>
   );
 }
