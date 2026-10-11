@@ -252,9 +252,6 @@ function QuickActionsWidget() {
             <button key={a.label} type="button" onClick={a.onClick} className={cls}>{inner}</button>
           );
         })}
-        <div className="flex items-center justify-between rounded-xl border border-dashed p-2.5 text-xs text-muted-foreground">
-          {t("topbar.search")} <kbd className="rounded border bg-muted px-1.5 font-mono text-[10px]">Ctrl K</kbd>
-        </div>
       </div>
     </WidgetFrame>
   );

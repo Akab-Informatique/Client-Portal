@@ -11,7 +11,6 @@ import {
   Menu,
   Monitor,
   Moon,
-  Search,
   Settings2,
   Sun,
   UserRound,
@@ -99,7 +98,7 @@ export function StaffLayout() {
       </Sheet>
 
       <div className="flex min-w-0 flex-1 flex-col">
-        <TopBar onMenu={() => setMobileOpen(true)} onSearch={() => setPaletteOpen(true)} />
+        <TopBar onMenu={() => setMobileOpen(true)} />
         <main className="relative flex-1">
           <div className="pointer-events-none absolute inset-x-0 top-0 h-64 bg-grid opacity-60 [mask-image:linear-gradient(to_bottom,black,transparent)]" />
           <AnimatePresence mode="wait">
@@ -231,31 +230,16 @@ function SidebarContent({ collapsed, onToggle }: { collapsed: boolean; onToggle?
   );
 }
 
-function TopBar({ onMenu, onSearch }: { onMenu: () => void; onSearch: () => void }) {
-  const { t } = useTranslation();
-  const location = useLocation();
-  const current = STAFF_MODULES.find((m) => (m.path === "/" ? location.pathname === "/" : location.pathname.startsWith(m.path)));
+function TopBar({ onMenu }: { onMenu: () => void }) {
   return (
     <header className="sticky top-0 z-30 flex h-16 items-center gap-3 border-b bg-background/75 px-4 backdrop-blur-xl sm:px-6 lg:px-8">
       <Button variant="ghost" size="icon" className="lg:hidden" onClick={onMenu} aria-label="Menu">
         <Menu className="size-5" />
       </Button>
-      <div className="hidden min-w-0 items-center gap-2 text-sm sm:flex">
-        <span className="text-muted-foreground">AKAB</span>
-        <span className="text-muted-foreground/50">/</span>
-        <span className="truncate font-medium">{current ? t(current.labelKey) : ""}</span>
+      <div className="ml-auto flex items-center gap-3">
+        <LanguageToggle persist className="hidden sm:flex" />
+        <UserMenu />
       </div>
-      <button
-        type="button"
-        onClick={onSearch}
-        className="mx-auto flex h-9 w-full max-w-md items-center gap-2 rounded-lg border bg-card/60 px-3 text-sm text-muted-foreground transition-colors hover:border-[color:var(--gold)]/40 hover:text-foreground"
-      >
-        <Search className="size-4" />
-        <span className="truncate">{t("topbar.search")}</span>
-        <kbd className="ml-auto hidden rounded border bg-muted px-1.5 font-mono text-[10px] sm:inline">Ctrl K</kbd>
-      </button>
-      <LanguageToggle persist className="hidden sm:flex" />
-      <UserMenu />
     </header>
   );
 }
