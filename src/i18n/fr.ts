@@ -496,6 +496,10 @@ const fr = {
     replySent: "Réponse ajoutée",
     addNote: "Ajouter la note",
     ai: {
+      notReadyTitle: "Assistant IA pas encore activé",
+      notReadyAdmin: "Ajoutez une clé API Claude (Anthropic) et activez l'assistant dans Paramètres admin › Intégrations. Les boutons d'analyse, de réponse et de planification apparaîtront ici.",
+      notReadyUser: "Un administrateur doit d'abord activer l'assistant IA (Paramètres admin › Intégrations).",
+      configure: "Configurer l'assistant IA",
       button: "Assistant IA",
       analyze: "Analyser le billet",
       analyzeHint: "Résumé, prochaines étapes, points d'attention",

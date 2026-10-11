@@ -498,6 +498,10 @@ const en: Dict = {
     replySent: "Reply added",
     addNote: "Add note",
     ai: {
+      notReadyTitle: "AI assistant not enabled yet",
+      notReadyAdmin: "Add a Claude (Anthropic) API key and enable the assistant in Admin settings › Integrations. The analyze, reply and plan buttons will then appear here.",
+      notReadyUser: "An administrator must first enable the AI assistant (Admin settings › Integrations).",
+      configure: "Set up the AI assistant",
       button: "AI assistant",
       analyze: "Analyze ticket",
       analyzeHint: "Summary, next steps, points to watch",

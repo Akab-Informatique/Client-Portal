@@ -53,7 +53,7 @@ import { cn, initials } from "@/lib/utils";
 import { NewTicketDialog } from "./NewTicketDialog";
 import { dueState, FILTER_KEYS, PRIORITY_STYLE, type Priority, type Status, shortDate, STATUS_STYLE, useTickets, VIEWS, type TicketList, type TicketSummary, type View } from "./shared";
 import { useTicketWorkspace } from "./workspace";
-import { InlinePick, useAiError } from "./TicketPanel";
+import { AiSetupHint, InlinePick, useAiError } from "./TicketPanel";
 
 type Saved = { id: string; name: string; query: string };
 type SetFn = (patch: Record<string, string | null>) => void;
@@ -151,7 +151,7 @@ export function TicketsPage() {
           )}
         </div>
         <div className="flex items-center gap-2">
-          {data?.ai && <AiPlanButton />}
+          {can("tickets.ai") && data && (data.ai ? <AiPlanButton /> : <AiSetupHint label={t("tickets.ai.plan")} />)}
           {can("tickets.edit") && (
             <Button size="sm" onClick={() => setCreating(true)} className="h-9 bg-grad-gold font-semibold text-[#1a1204] glow-gold hover:brightness-105">
               <Plus className="size-4" /> {t("tickets.new")}

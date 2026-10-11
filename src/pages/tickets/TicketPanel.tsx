@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
+import { useSearchParams } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { AnimatePresence, motion } from "motion/react";
 import { toast } from "sonner";
@@ -44,6 +45,7 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { Input } from "@/components/ui/input";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Textarea } from "@/components/ui/textarea";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
@@ -146,7 +148,7 @@ function TicketBody({ tk, viewers, onClose, onMinimize }: { tk: TicketDetail; vi
             <span className="ml-auto">
               <PresenceLight viewers={viewers} />
             </span>
-            {tk.ai && <AiMenu tk={tk} onReply={(text) => setDraft({ text, internal: false })} />}
+            {can("tickets.ai") && (tk.ai ? <AiMenu tk={tk} onReply={(text) => setDraft({ text, internal: false })} /> : <AiSetupHint label={t("tickets.ai.button")} />)}
             <Tooltip>
               <TooltipTrigger asChild>
                 <Button variant="outline" size="icon" className="size-9" onClick={onMinimize} aria-label={t("tickets.minimize")}>
@@ -647,5 +649,45 @@ function OpenedByOthers({ viewers }: { viewers: Viewer[] | null }) {
         </div>
       </DialogContent>
     </Dialog>
+  );
+}
+
+/**
+ * Shown instead of the AI button while Claude is not set up or is switched off,
+ * so the feature can be found; administrators get a shortcut to the settings.
+ */
+export function AiSetupHint({ label }: { label: string }) {
+  const { t } = useTranslation();
+  const me = useMe();
+  const [, setParams] = useSearchParams();
+  return (
+    <Popover>
+      <PopoverTrigger asChild>
+        <Button variant="outline" className="h-9 gap-2 border-dashed border-violet-500/40 text-violet-200/80 hover:bg-violet-500/10">
+          <Sparkles className="size-4" /> {label}
+        </Button>
+      </PopoverTrigger>
+      <PopoverContent align="end" className="w-80">
+        <p className="flex items-center gap-2 text-sm font-semibold">
+          <Sparkles className="size-4 text-violet-300" /> {t("tickets.ai.notReadyTitle")}
+        </p>
+        <p className="mt-1.5 text-xs text-muted-foreground">{me.isAdmin ? t("tickets.ai.notReadyAdmin") : t("tickets.ai.notReadyUser")}</p>
+        {me.isAdmin && (
+          <Button
+            size="sm"
+            className="mt-3 w-full bg-grad-gold font-semibold text-[#1a1204]"
+            onClick={() =>
+              setParams((p) => {
+                p.set("admin", "integrations");
+                p.set("integration", "ai");
+                return p;
+              })
+            }
+          >
+            {t("tickets.ai.configure")}
+          </Button>
+        )}
+      </PopoverContent>
+    </Popover>
   );
 }
