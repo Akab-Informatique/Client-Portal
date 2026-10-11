@@ -92,7 +92,12 @@ function CountUp({ value }: { value: number }) {
 function WelcomeWidget() {
   const { t } = useTranslation();
   const me = useMe();
-  const h = new Date().getHours();
+  const [now, setNow] = useState(new Date());
+  useEffect(() => {
+    const i = setInterval(() => setNow(new Date()), 1000);
+    return () => clearInterval(i);
+  }, []);
+  const h = now.getHours();
   const greet = h < 12 ? t("dashboard.greetingMorning") : h < 18 ? t("dashboard.greetingAfternoon") : t("dashboard.greetingEvening");
   return (
     <div className="relative h-full overflow-hidden rounded-2xl border bg-card p-6 sm:p-8">
@@ -101,7 +106,9 @@ function WelcomeWidget() {
       <div className="relative">
         <div>
           <p className="flex items-center gap-2 text-xs font-medium uppercase tracking-[0.18em] text-muted-foreground">
-            <LiveDot tone="gold" /> {longDate(new Date())}
+            <LiveDot tone="gold" /> {longDate(now)}
+            <span className="text-muted-foreground/50">·</span>
+            <span className="font-mono tabular-nums tracking-normal text-foreground">{clock(now).slice(0, 5)}</span>
           </p>
           <h2 className="mt-3 text-3xl font-extrabold sm:text-4xl">
             {greet}, <span className="text-grad-gold">{me.name.split(" ")[0]}</span>
