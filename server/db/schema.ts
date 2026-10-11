@@ -173,6 +173,26 @@ export const messageReads = pgTable(
 );
 
 /**
+ * Extra dashboards (the personal one stays in user_preferences.dashboard).
+ * visibility: private = owner only · team = every technician with
+ * dashboard.view · admins = administrators only. Built-in ones have a slug.
+ */
+export const dashboards = pgTable(
+  "dashboards",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    slug: text("slug"),
+    name: text("name").notNull(),
+    visibility: text("visibility", { enum: ["private", "team", "admins"] }).notNull(),
+    ownerId: uuid("owner_id").references(() => users.id, { onDelete: "cascade" }),
+    layout: jsonb("layout").$type<DashboardWidget[]>().notNull().default(sql`'[]'::jsonb`),
+    createdAt: created(),
+    updatedAt: updated(),
+  },
+  (t) => [uniqueIndex("dashboards_slug_unique").on(t.slug), index("dashboards_owner_idx").on(t.ownerId)],
+);
+
+/**
  * Per-user notifications (bell). Text is rendered client-side from `type` +
  * `data` so it follows the reader's language; `link` is an in-app path.
  */

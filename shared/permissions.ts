@@ -30,6 +30,14 @@ export const MODULES = [
     label: { fr: "Tableau de bord", en: "Dashboard" },
     permissions: [
       { key: "dashboard.view", label: { fr: "Voir le tableau de bord", en: "View dashboard" } },
+      {
+        key: "dashboard.manage",
+        label: { fr: "Gérer les tableaux de bord partagés", en: "Manage shared dashboards" },
+        description: {
+          fr: "Modifier les tableaux partagés et choisir qui voit Sécurité, Clients, Finances",
+          en: "Edit shared dashboards and choose who sees Security, Clients, Finance",
+        },
+      },
     ],
   },
   {

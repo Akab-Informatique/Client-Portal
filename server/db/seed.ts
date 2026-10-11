@@ -12,6 +12,13 @@ import { SYSTEM_ROLES, permissionsFor } from "../../shared/permissions.ts";
  *   one-time password printed to the log)
  * - development only: demo clients, users and messages
  */
+/** Names shown in the UI come from i18n (dashboards.builtin.<slug>). */
+export const BUILTIN_DASHBOARDS = [
+  { slug: "security", name: "Sécurité" },
+  { slug: "clients", name: "Clients" },
+  { slug: "finance", name: "Finances" },
+] as const;
+
 export async function seed(): Promise<void> {
   const d = db();
   for (const r of SYSTEM_ROLES) {
@@ -32,6 +39,12 @@ export async function seed(): Promise<void> {
         .set({ permissions: permissionsFor("staff"), locked: true, updatedAt: new Date() })
         .where(eq(schema.roles.id, existing.id));
     }
+  }
+
+  // Built-in dashboards: empty, administrators only until an admin shares them
+  for (const b of BUILTIN_DASHBOARDS) {
+    const [existing] = await d.select({ id: schema.dashboards.id }).from(schema.dashboards).where(eq(schema.dashboards.slug, b.slug));
+    if (!existing) await d.insert(schema.dashboards).values({ slug: b.slug, name: b.name, visibility: "admins" });
   }
 
   const [{ count }] = await d

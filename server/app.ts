@@ -13,6 +13,7 @@ import { meRoutes } from "./routes/me.ts";
 import { adminRoutes } from "./routes/admin.ts";
 import { boardRoutes, messageRoutes } from "./routes/messages.ts";
 import { dashboardRoutes } from "./routes/dashboard.ts";
+import { dashboardsRoutes } from "./routes/dashboards.ts";
 import { viewAsRoutes } from "./routes/viewAs.ts";
 import { notificationRoutes } from "./routes/notifications.ts";
 
@@ -61,6 +62,9 @@ export function createApp() {
   api.route("/board", boardRoutes);
   api.use("/dashboard/*", requireStaff);
   api.route("/dashboard", dashboardRoutes);
+  api.use("/dashboards/*", requireStaff);
+  api.use("/dashboards", requireStaff);
+  api.route("/dashboards", dashboardsRoutes);
   api.all("*", (c) => c.json({ error: "not_found" }, 404));
 
   api.onError((err, c) => {

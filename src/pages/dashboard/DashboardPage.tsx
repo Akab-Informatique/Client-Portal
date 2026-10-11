@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useQueryClient } from "@tanstack/react-query";
 import { AnimatePresence, motion } from "motion/react";
@@ -22,6 +22,7 @@ import { useCan, useMe } from "@/lib/session";
 import type { DashboardWidget } from "@/lib/types";
 import { cn } from "@/lib/utils";
 import { DEFAULT_LAYOUT, WIDGETS } from "./widgets";
+import { DashboardPicker, useCurrentDashboard, useDashboards } from "./DashboardPicker";
 
 const SPAN: Record<DashboardWidget["size"], string> = {
   sm: "md:col-span-3 xl:col-span-4",
@@ -29,24 +30,72 @@ const SPAN: Record<DashboardWidget["size"], string> = {
   lg: "md:col-span-6 xl:col-span-12",
 };
 
+/** Personal dashboard ("me") or one of the shared / private dashboards. */
 export function DashboardPage() {
-  const { t } = useTranslation();
   const me = useMe();
-  const can = useCan();
   const qc = useQueryClient();
+  const { data: list, isFetching } = useDashboards();
+  const [current, setCurrent] = useCurrentDashboard();
+  const selected = current === "me" ? null : (list ?? []).find((d) => d.id === current) ?? null;
+  // Fall back to the personal dashboard if the chosen one is gone or no longer visible
+  useEffect(() => {
+    if (list && !isFetching && current !== "me" && !selected) setCurrent("me");
+  }, [list, isFetching, current, selected, setCurrent]);
+
+  const picker = <DashboardPicker current={current} onSelect={setCurrent} />;
+  if (selected) {
+    return (
+      <DashboardBoard
+        key={selected.id}
+        header={picker}
+        initial={selected.layout}
+        canEdit={selected.canEdit}
+        onSave={async (layout) => {
+          await api.patch(`/dashboards/${selected.id}`, { layout });
+          await qc.invalidateQueries({ queryKey: ["dashboards"] });
+        }}
+      />
+    );
+  }
+  return (
+    <DashboardBoard
+      key="me"
+      header={picker}
+      initial={me.preferences.dashboard ?? DEFAULT_LAYOUT}
+      canEdit
+      onSave={async (layout) => {
+        await api.put("/me/preferences", { dashboard: layout });
+        await qc.invalidateQueries({ queryKey: ["auth"] });
+      }}
+    />
+  );
+}
+
+function DashboardBoard({
+  header,
+  initial,
+  canEdit,
+  onSave,
+}: {
+  header: React.ReactNode;
+  initial: DashboardWidget[];
+  canEdit: boolean;
+  onSave: (layout: DashboardWidget[]) => Promise<void>;
+}) {
+  const { t } = useTranslation();
+  const can = useCan();
   const allowed = useMemo(() => WIDGETS.filter((w) => !w.permission || can(w.permission)), [can]);
   const sanitize = (l: DashboardWidget[]) => l.filter((w) => allowed.some((a) => a.type === w.type));
-  const [layout, setLayout] = useState<DashboardWidget[]>(() => sanitize(me.preferences.dashboard ?? DEFAULT_LAYOUT));
+  const [layout, setLayout] = useState<DashboardWidget[]>(() => sanitize(initial));
   const [editing, setEditing] = useState(false);
   const sensors = useSensors(
     useSensor(PointerSensor, { activationConstraint: { distance: 6 } }),
     useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates }),
   );
 
-  async function persist(next: DashboardWidget[] | null) {
+  async function persist(next: DashboardWidget[]) {
     try {
-      await api.put("/me/preferences", { dashboard: next });
-      await qc.invalidateQueries({ queryKey: ["auth"] });
+      await onSave(next);
     } catch {
       toast.error(t("common.error"));
     }
@@ -64,7 +113,7 @@ export function DashboardPage() {
     <div className="space-y-6">
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div>
-          <h1 className="text-2xl font-bold">{t("nav.dashboard")}</h1>
+          {header}
           <AnimatePresence>
             {editing && (
               <motion.p initial={{ opacity: 0, height: 0 }} animate={{ opacity: 1, height: "auto" }} exit={{ opacity: 0, height: 0 }} className="text-sm text-muted-foreground">
@@ -111,7 +160,7 @@ export function DashboardPage() {
               </Button>
             </>
           )}
-          <Button
+          {canEdit && <Button
             size="sm"
             variant={editing ? "default" : "outline"}
             className={cn(editing && "bg-grad-gold text-[#1a1204] glow-gold")}
@@ -122,7 +171,7 @@ export function DashboardPage() {
           >
             {editing ? <Check className="size-4" /> : <LayoutGrid className="size-4" />}
             {editing ? t("dashboard.done") : t("dashboard.customize")}
-          </Button>
+          </Button>}
         </div>
       </div>
 
