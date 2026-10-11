@@ -85,6 +85,7 @@ const en: Dict = {
   },
   nav: {
     modules: "Modules",
+    commandCenter: "Command center",
     tools: "Tools",
     dashboard: "Dashboard",
     messages: "Message board",

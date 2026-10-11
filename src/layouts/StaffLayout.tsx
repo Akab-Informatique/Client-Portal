@@ -39,7 +39,7 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { Sheet, SheetContent, SheetTitle } from "@/components/ui/sheet";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
-import { STAFF_MODULES } from "@/modules/registry";
+import { NAV_SECTIONS, STAFF_MODULES, type NavModule } from "@/modules/registry";
 import { signOut, useCan, useMe } from "@/lib/session";
 import { cn, initials } from "@/lib/utils";
 
@@ -130,13 +130,73 @@ export function StaffLayout() {
   );
 }
 
+function NavItem({ m, collapsed, active }: { m: NavModule; collapsed: boolean; active: boolean }) {
+  const { t } = useTranslation();
+  if (m.upcoming) {
+    return (
+      <div
+        className={cn("flex h-10 cursor-not-allowed items-center gap-3 rounded-lg px-3 text-sm text-muted-foreground/50", collapsed && "justify-center px-0")}
+        title={`${t(m.labelKey)} — ${t("common.comingSoon")}`}
+      >
+        <m.icon className="size-[18px] shrink-0" />
+        {!collapsed && (
+          <>
+            <span className="truncate">{t(m.labelKey)}</span>
+            <Badge variant="outline" className="ml-auto h-5 border-dashed px-1.5 text-[10px] font-normal text-muted-foreground/70">
+              {t("common.comingSoon")}
+            </Badge>
+          </>
+        )}
+      </div>
+    );
+  }
+  const link = (
+    <NavLink
+      to={m.path}
+      className={cn(
+        "group relative flex h-10 items-center gap-3 rounded-lg px-3 text-sm font-medium transition-colors",
+        collapsed && "justify-center px-0",
+        active ? "text-foreground" : "text-muted-foreground hover:bg-accent/60 hover:text-foreground",
+      )}
+    >
+      {active && (
+        <motion.span
+          layoutId="nav-active"
+          className="absolute inset-0 rounded-lg border border-[color:var(--gold)]/25 bg-[color:var(--gold)]/10"
+          transition={{ type: "spring", bounce: 0.15, duration: 0.4 }}
+        />
+      )}
+      {active && <motion.span layoutId="nav-bar" className="absolute -left-3 top-2 bottom-2 w-1 rounded-r-full bg-grad-gold" />}
+      <m.icon className={cn("relative size-[18px] shrink-0", active && "text-primary")} />
+      {!collapsed && <span className="relative truncate">{t(m.labelKey)}</span>}
+    </NavLink>
+  );
+  return collapsed ? (
+    <Tooltip>
+      <TooltipTrigger asChild>{link}</TooltipTrigger>
+      <TooltipContent side="right">{t(m.labelKey)}</TooltipContent>
+    </Tooltip>
+  ) : (
+    link
+  );
+}
+
 function SidebarContent({ collapsed, onToggle }: { collapsed: boolean; onToggle?: () => void }) {
   const { t } = useTranslation();
   const can = useCan();
   const location = useLocation();
-  const available = STAFF_MODULES.filter((m) => !m.upcoming && (!m.permission || can(m.permission)));
-  const upcoming = STAFF_MODULES.filter((m) => m.upcoming);
+  const visible = (m: NavModule) => m.upcoming || !m.permission || can(m.permission);
   const isActive = (path: string) => (path === "/" ? location.pathname === "/" : location.pathname.startsWith(path));
+  // Sections show their live modules (and upcoming ones, except in the main section,
+  // whose upcoming modules are listed under "À venir")
+  const groups = [
+    ...NAV_SECTIONS.map((s) => ({
+      key: s.key,
+      labelKey: s.labelKey,
+      items: STAFF_MODULES.filter((m) => m.section === s.key && visible(m) && !(s.key === "modules" && m.upcoming)),
+    })),
+    { key: "upcoming", labelKey: "nav.upcoming", items: STAFF_MODULES.filter((m) => m.section === "modules" && m.upcoming) },
+  ].filter((g) => g.items.length > 0);
 
   return (
     <div className="flex h-full flex-col">
@@ -144,75 +204,22 @@ function SidebarContent({ collapsed, onToggle }: { collapsed: boolean; onToggle?
         {collapsed ? <LogoMark className="h-7" /> : <Logo />}
       </div>
       <nav className="flex-1 space-y-6 overflow-y-auto p-3 scrollbar-thin">
-        <div>
-          {!collapsed && <p className="mb-2 px-3 text-[11px] font-semibold uppercase tracking-[0.14em] text-muted-foreground">{t("nav.modules")}</p>}
-          <ul className="space-y-1">
-            {available.map((m) => {
-              const active = isActive(m.path);
-              const link = (
-                <NavLink
-                  to={m.path}
-                  className={cn(
-                    "group relative flex h-10 items-center gap-3 rounded-lg px-3 text-sm font-medium transition-colors",
-                    collapsed && "justify-center px-0",
-                    active ? "text-foreground" : "text-muted-foreground hover:bg-accent/60 hover:text-foreground",
-                  )}
-                >
-                  {active && (
-                    <motion.span
-                      layoutId="nav-active"
-                      className="absolute inset-0 rounded-lg border border-[color:var(--gold)]/25 bg-[color:var(--gold)]/10"
-                      transition={{ type: "spring", bounce: 0.15, duration: 0.4 }}
-                    />
-                  )}
-                  {active && (
-                    <motion.span layoutId="nav-bar" className="absolute -left-3 top-2 bottom-2 w-1 rounded-r-full bg-grad-gold" />
-                  )}
-                  <m.icon className={cn("relative size-[18px] shrink-0", active && "text-primary")} />
-                  {!collapsed && <span className="relative truncate">{t(m.labelKey)}</span>}
-                </NavLink>
-              );
-              return (
+        {groups.map((g) => (
+          <div key={g.key}>
+            {collapsed ? (
+              <div className="mx-auto mb-2 h-px w-6 bg-border first:hidden" />
+            ) : (
+              <p className="mb-2 px-3 text-[11px] font-semibold uppercase tracking-[0.14em] text-muted-foreground">{t(g.labelKey)}</p>
+            )}
+            <ul className="space-y-1">
+              {g.items.map((m) => (
                 <li key={m.key}>
-                  {collapsed ? (
-                    <Tooltip>
-                      <TooltipTrigger asChild>{link}</TooltipTrigger>
-                      <TooltipContent side="right">{t(m.labelKey)}</TooltipContent>
-                    </Tooltip>
-                  ) : (
-                    link
-                  )}
+                  <NavItem m={m} collapsed={collapsed} active={!m.upcoming && isActive(m.path)} />
                 </li>
-              );
-            })}
-          </ul>
-        </div>
-        <div>
-          {!collapsed && <p className="mb-2 px-3 text-[11px] font-semibold uppercase tracking-[0.14em] text-muted-foreground">{t("nav.upcoming")}</p>}
-          <ul className="space-y-1">
-            {upcoming.map((m) => (
-              <li key={m.key}>
-                <div
-                  className={cn(
-                    "flex h-10 cursor-not-allowed items-center gap-3 rounded-lg px-3 text-sm text-muted-foreground/50",
-                    collapsed && "justify-center px-0",
-                  )}
-                  title={`${t(m.labelKey)} — ${t("common.comingSoon")}`}
-                >
-                  <m.icon className="size-[18px] shrink-0" />
-                  {!collapsed && (
-                    <>
-                      <span className="truncate">{t(m.labelKey)}</span>
-                      <Badge variant="outline" className="ml-auto h-5 border-dashed px-1.5 text-[10px] font-normal text-muted-foreground/70">
-                        {t("common.comingSoon")}
-                      </Badge>
-                    </>
-                  )}
-                </div>
-              </li>
-            ))}
-          </ul>
-        </div>
+              ))}
+            </ul>
+          </div>
+        ))}
       </nav>
       {onToggle && (
         <div className="border-t p-3">

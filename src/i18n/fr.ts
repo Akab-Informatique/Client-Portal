@@ -83,6 +83,7 @@ const fr = {
   },
   nav: {
     modules: "Modules",
+    commandCenter: "Centre de commande",
     tools: "Outils",
     dashboard: "Tableau de bord",
     messages: "Babillard",
