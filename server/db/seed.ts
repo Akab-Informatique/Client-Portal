@@ -13,10 +13,12 @@ import { SYSTEM_ROLES, permissionsFor } from "../../shared/permissions.ts";
  * - development only: demo clients, users and messages
  */
 /** Names shown in the UI come from i18n (dashboards.builtin.<slug>). */
+/** Built-in dashboards, in menu order. "akab" is everyone's default. */
 export const BUILTIN_DASHBOARDS = [
-  { slug: "security", name: "Sécurité" },
-  { slug: "clients", name: "Clients" },
-  { slug: "finance", name: "Finances" },
+  { slug: "akab", name: "Akab", visibility: "team" },
+  { slug: "security", name: "Sécurité", visibility: "admins" },
+  { slug: "clients", name: "Clients", visibility: "admins" },
+  { slug: "finance", name: "Finances", visibility: "admins" },
 ] as const;
 
 export async function seed(): Promise<void> {
@@ -44,7 +46,7 @@ export async function seed(): Promise<void> {
   // Built-in dashboards: empty, administrators only until an admin shares them
   for (const b of BUILTIN_DASHBOARDS) {
     const [existing] = await d.select({ id: schema.dashboards.id }).from(schema.dashboards).where(eq(schema.dashboards.slug, b.slug));
-    if (!existing) await d.insert(schema.dashboards).values({ slug: b.slug, name: b.name, visibility: "admins" });
+    if (!existing) await d.insert(schema.dashboards).values({ slug: b.slug, name: b.name, visibility: b.visibility });
   }
 
   const [{ count }] = await d

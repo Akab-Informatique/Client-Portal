@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useQueryClient } from "@tanstack/react-query";
 import { AnimatePresence, motion } from "motion/react";
@@ -14,15 +14,15 @@ import {
 } from "@dnd-kit/core";
 import { SortableContext, arrayMove, rectSortingStrategy, sortableKeyboardCoordinates, useSortable } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
-import { Check, GripVertical, LayoutGrid, Plus, RotateCcw, X } from "lucide-react";
+import { Check, GripVertical, Plus, RotateCcw, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { api } from "@/lib/api";
-import { useCan, useMe } from "@/lib/session";
+import { useCan } from "@/lib/session";
 import type { DashboardWidget } from "@/lib/types";
 import { cn } from "@/lib/utils";
 import { DEFAULT_LAYOUT, WIDGETS } from "./widgets";
-import { DashboardPicker, useCurrentDashboard, useDashboards } from "./DashboardPicker";
+import { DashboardMenu, DashboardPicker, useDashboards, type DashboardInfo } from "./DashboardPicker";
 
 const SPAN: Record<DashboardWidget["size"], string> = {
   sm: "md:col-span-3 xl:col-span-4",
@@ -30,63 +30,54 @@ const SPAN: Record<DashboardWidget["size"], string> = {
   lg: "md:col-span-6 xl:col-span-12",
 };
 
-/** Personal dashboard ("me") or one of the shared / private dashboards. */
+/** Opens the person's default dashboard (Akab unless they chose another one). */
 export function DashboardPage() {
-  const me = useMe();
+  const { t } = useTranslation();
   const qc = useQueryClient();
-  const { data: list, isFetching } = useDashboards();
-  const [current, setCurrent] = useCurrentDashboard();
-  const selected = current === "me" ? null : (list ?? []).find((d) => d.id === current) ?? null;
-  // Fall back to the personal dashboard if the chosen one is gone or no longer visible
-  useEffect(() => {
-    if (list && !isFetching && current !== "me" && !selected) setCurrent("me");
-  }, [list, isFetching, current, selected, setCurrent]);
+  const { data: list, isLoading } = useDashboards();
+  const [chosen, setChosen] = useState<string | null>(null);
+  const selected = list?.find((d) => d.id === chosen) ?? list?.find((d) => d.isDefault) ?? list?.[0] ?? null;
 
-  const picker = <DashboardPicker current={current} onSelect={setCurrent} />;
-  if (selected) {
+  if (isLoading) return null;
+  const picker = <DashboardPicker current={selected} onSelect={setChosen} />;
+  if (!selected) {
     return (
-      <DashboardBoard
-        key={selected.id}
-        header={picker}
-        initial={selected.layout}
-        canEdit={selected.canEdit}
-        onSave={async (layout) => {
-          await api.patch(`/dashboards/${selected.id}`, { layout });
-          await qc.invalidateQueries({ queryKey: ["dashboards"] });
-        }}
-      />
+      <div className="space-y-6">
+        {picker}
+        <div className="rounded-2xl border border-dashed p-12 text-center text-muted-foreground">{t("dashboards.none")}</div>
+      </div>
     );
   }
   return (
     <DashboardBoard
-      key="me"
+      key={selected.id}
+      dashboard={selected}
       header={picker}
-      initial={me.preferences.dashboard ?? DEFAULT_LAYOUT}
-      canEdit
+      onDeleted={() => setChosen(null)}
       onSave={async (layout) => {
-        await api.put("/me/preferences", { dashboard: layout });
-        await qc.invalidateQueries({ queryKey: ["auth"] });
+        await api.patch(`/dashboards/${selected.id}`, { layout });
+        await qc.invalidateQueries({ queryKey: ["dashboards"] });
       }}
     />
   );
 }
 
 function DashboardBoard({
+  dashboard,
   header,
-  initial,
-  canEdit,
+  onDeleted,
   onSave,
 }: {
+  dashboard: DashboardInfo;
   header: React.ReactNode;
-  initial: DashboardWidget[];
-  canEdit: boolean;
+  onDeleted: () => void;
   onSave: (layout: DashboardWidget[]) => Promise<void>;
 }) {
   const { t } = useTranslation();
   const can = useCan();
   const allowed = useMemo(() => WIDGETS.filter((w) => !w.permission || can(w.permission)), [can]);
   const sanitize = (l: DashboardWidget[]) => l.filter((w) => allowed.some((a) => a.type === w.type));
-  const [layout, setLayout] = useState<DashboardWidget[]>(() => sanitize(initial));
+  const [layout, setLayout] = useState<DashboardWidget[]>(() => sanitize(dashboard.layout));
   const [editing, setEditing] = useState(false);
   const sensors = useSensors(
     useSensor(PointerSensor, { activationConstraint: { distance: 6 } }),
@@ -160,23 +151,25 @@ function DashboardBoard({
               </Button>
             </>
           )}
-          {canEdit && <Button
-            size="sm"
-            variant={editing ? "default" : "outline"}
-            className={cn(editing && "bg-grad-gold text-[#1a1204] glow-gold")}
-            onClick={() => {
-              if (editing) void persist(layout);
-              setEditing((e) => !e);
-            }}
-          >
-            {editing ? <Check className="size-4" /> : <LayoutGrid className="size-4" />}
-            {editing ? t("dashboard.done") : t("dashboard.customize")}
-          </Button>}
+          {editing ? (
+            <Button
+              size="sm"
+              className="bg-grad-gold text-[#1a1204] glow-gold"
+              onClick={() => {
+                void persist(layout);
+                setEditing(false);
+              }}
+            >
+              <Check className="size-4" /> {t("dashboard.done")}
+            </Button>
+          ) : (
+            <DashboardMenu d={dashboard} onEditWidgets={() => setEditing(true)} onDeleted={onDeleted} />
+          )}
         </div>
       </div>
 
       {layout.length === 0 ? (
-        <div className="rounded-2xl border border-dashed p-12 text-center text-muted-foreground">{t("dashboard.empty")}</div>
+        <div className="rounded-2xl border border-dashed p-12 text-center text-muted-foreground">{t(dashboard.canEdit ? "dashboard.empty" : "dashboard.emptyReadOnly")}</div>
       ) : (
         <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={onDragEnd}>
           <SortableContext items={layout.map((w) => w.id)} strategy={rectSortingStrategy}>

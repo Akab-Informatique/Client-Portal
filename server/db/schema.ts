@@ -1,5 +1,6 @@
 import { sql } from "drizzle-orm";
 import {
+  type AnyPgColumn,
   bigint,
   boolean,
   index,
@@ -124,6 +125,8 @@ export const userPreferences = pgTable("user_preferences", {
     .references(() => users.id, { onDelete: "cascade" }),
   dashboard: jsonb("dashboard").$type<DashboardWidget[] | null>(),
   theme: text("theme", { enum: ["dark", "light", "system"] }),
+  /** Dashboard opened first; null = the built-in "Akab" dashboard. */
+  defaultDashboardId: uuid("default_dashboard_id").references((): AnyPgColumn => dashboards.id, { onDelete: "set null" }),
   updatedAt: updated(),
 });
 
@@ -184,12 +187,30 @@ export const dashboards = pgTable(
     slug: text("slug"),
     name: text("name").notNull(),
     visibility: text("visibility", { enum: ["private", "team", "admins"] }).notNull(),
+    /** What the audience of `visibility` (team or admins) may do: view only, or edit widgets. */
+    teamAccess: text("team_access", { enum: ["view", "edit"] }).notNull().default("view"),
     ownerId: uuid("owner_id").references(() => users.id, { onDelete: "cascade" }),
     layout: jsonb("layout").$type<DashboardWidget[]>().notNull().default(sql`'[]'::jsonb`),
     createdAt: created(),
     updatedAt: updated(),
   },
   (t) => [uniqueIndex("dashboards_slug_unique").on(t.slug), index("dashboards_owner_idx").on(t.ownerId)],
+);
+
+/** Access given to specific staff members on a dashboard, on top of its visibility. */
+export const dashboardMembers = pgTable(
+  "dashboard_members",
+  {
+    dashboardId: uuid("dashboard_id")
+      .notNull()
+      .references(() => dashboards.id, { onDelete: "cascade" }),
+    userId: uuid("user_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    access: text("access", { enum: ["view", "edit"] }).notNull(),
+    createdAt: created(),
+  },
+  (t) => [primaryKey({ columns: [t.dashboardId, t.userId] }), index("dashboard_members_user_idx").on(t.userId)],
 );
 
 /**

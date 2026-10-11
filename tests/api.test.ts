@@ -412,17 +412,24 @@ describe("notifications cleanup", () => {
 });
 
 describe("dashboards", () => {
+  // Reuse sessions: signing in again for every test would hit the login rate limit
+  const sessions = new Map<string, Agent>();
+  const session = async (email: string) => sessions.get(email) ?? sessions.set(email, await signIn(email)).get(email)!;
+
   it("built-in Security/Clients/Finance are admin-only until an admin shares them", async () => {
-    const admin = await signIn("admin@akab.local");
+    const admin = await session("admin@akab.local");
     const list = (await admin.get("/api/dashboards")).json;
-    const slugs = list.map((d: any) => d.slug).filter(Boolean).sort();
-    expect(slugs).toEqual(["clients", "finance", "security"]);
+    expect(list.map((d: any) => d.slug).filter(Boolean)).toEqual(["akab", "security", "clients", "finance"]);
+    expect(list[0].isDefault).toBe(true);
     const security = list.find((d: any) => d.slug === "security");
     expect(security.visibility).toBe("admins");
     expect(security.canDelete).toBe(false);
 
-    const tech = await signIn("tech@akab.local");
-    expect((await tech.get("/api/dashboards")).json.some((d: any) => d.slug)).toBe(false);
+    const tech = await session("tech@akab.local");
+    const techList = (await tech.get("/api/dashboards")).json;
+    expect(techList.map((d: any) => d.slug).filter(Boolean)).toEqual(["akab"]);
+    expect(techList[0].canEdit).toBe(false); // visible to the team, but read-only
+    expect(techList[0].canAdminister).toBe(false);
 
     expect((await admin.patch(`/api/dashboards/${security.id}`, { visibility: "team" })).status).toBe(200);
     const seen = (await tech.get("/api/dashboards")).json.find((d: any) => d.slug === "security");
@@ -436,8 +443,8 @@ describe("dashboards", () => {
   });
 
   it("private dashboards are owner-only; team dashboards are shared read-only", async () => {
-    const tech = await signIn("tech@akab.local");
-    const admin = await signIn("admin@akab.local");
+    const tech = await session("tech@akab.local");
+    const admin = await session("admin@akab.local");
     const priv = await tech.post("/api/dashboards", { name: "Mes suivis", visibility: "private" });
     expect(priv.status).toBe(201);
     expect((await admin.get("/api/dashboards")).json.some((d: any) => d.id === priv.json.id)).toBe(false);
@@ -463,5 +470,66 @@ describe("dashboards", () => {
 
     expect((await tech.del(`/api/dashboards/${priv.json.id}`)).status).toBe(200);
     expect((await tech.del(`/api/dashboards/${team.json.id}`)).status).toBe(200);
+  });
+
+  it("team rights: viewing does not imply editing unless granted", async () => {
+    const admin = await session("admin@akab.local");
+    const tech = await session("tech@akab.local");
+    const akab = (await admin.get("/api/dashboards")).json.find((d: any) => d.slug === "akab");
+    expect((await tech.patch(`/api/dashboards/${akab.id}`, { layout: [] })).status).toBe(403);
+    expect((await tech.patch(`/api/dashboards/${akab.id}`, { teamAccess: "edit" })).status).toBe(403);
+
+    expect((await admin.patch(`/api/dashboards/${akab.id}`, { teamAccess: "edit" })).json.teamAccess).toBe("edit");
+    expect((await tech.get("/api/dashboards")).json.find((d: any) => d.slug === "akab").canEdit).toBe(true);
+    expect((await tech.patch(`/api/dashboards/${akab.id}`, { layout: [] })).status).toBe(200);
+    // editing widgets is not administering: still no rename/visibility/members
+    expect((await tech.patch(`/api/dashboards/${akab.id}`, { visibility: "admins" })).status).toBe(403);
+    expect((await tech.put(`/api/dashboards/${akab.id}/members`, { members: [] })).status).toBe(403);
+    await admin.patch(`/api/dashboards/${akab.id}`, { teamAccess: "view" });
+  });
+
+  it("dashboards can be given to specific people, read-only or editable", async () => {
+    const admin = await session("admin@akab.local");
+    const tech = await session("tech@akab.local");
+    const people = (await tech.get("/api/dashboards/people")).json;
+    const techId = people.find((p: any) => p.email === "tech@akab.local").id;
+    const security = (await admin.get("/api/dashboards")).json.find((d: any) => d.slug === "security");
+
+    // admins-only dashboard shared with one technician, read-only
+    let r = await admin.put(`/api/dashboards/${security.id}/members`, { members: [{ userId: techId, access: "view" }] });
+    expect(r.status).toBe(200);
+    expect(r.json.members).toEqual([{ userId: techId, name: "Alex Tremblay", access: "view" }]);
+    let seen = (await tech.get("/api/dashboards")).json.find((d: any) => d.id === security.id);
+    expect(seen.canEdit).toBe(false);
+    expect(seen.members).toEqual([]); // only administrators see the list
+    expect((await tech.patch(`/api/dashboards/${security.id}`, { layout: [] })).status).toBe(403);
+
+    // upgraded to edit
+    await admin.put(`/api/dashboards/${security.id}/members`, { members: [{ userId: techId, access: "edit" }] });
+    expect((await tech.patch(`/api/dashboards/${security.id}`, { layout: [] })).status).toBe(200);
+
+    // client users or unknown ids cannot be added
+    const client = (await db().select().from(schema.users).where(eq(schema.users.kind, "client")))[0];
+    expect((await admin.put(`/api/dashboards/${security.id}/members`, { members: [{ userId: client.id, access: "view" }] })).status).toBe(400);
+
+    await admin.put(`/api/dashboards/${security.id}/members`, { members: [] });
+    expect((await tech.get("/api/dashboards")).json.some((d: any) => d.id === security.id)).toBe(false);
+  });
+
+  it("each person picks their default dashboard (Akab otherwise)", async () => {
+    const tech = await session("tech@akab.local");
+    const mine = (await tech.post("/api/dashboards", { name: "Mon défaut", visibility: "private" })).json;
+    expect((await tech.put("/api/dashboards/default", { id: mine.id })).status).toBe(200);
+    const list = (await tech.get("/api/dashboards")).json;
+    expect(list.filter((d: any) => d.isDefault).map((d: any) => d.id)).toEqual([mine.id]);
+
+    // someone else's private dashboard cannot be a default
+    const admin = await session("admin@akab.local");
+    expect((await admin.put("/api/dashboards/default", { id: mine.id })).status).toBe(404);
+
+    // deleted → back to Akab
+    await tech.del(`/api/dashboards/${mine.id}`);
+    const after = (await tech.get("/api/dashboards")).json;
+    expect(after.find((d: any) => d.isDefault).slug).toBe("akab");
   });
 });

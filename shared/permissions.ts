@@ -34,8 +34,8 @@ export const MODULES = [
         key: "dashboard.manage",
         label: { fr: "Gérer les tableaux de bord partagés", en: "Manage shared dashboards" },
         description: {
-          fr: "Modifier les tableaux partagés et choisir qui voit Sécurité, Clients, Finances",
-          en: "Edit shared dashboards and choose who sees Security, Clients, Finance",
+          fr: "Modifier tous les tableaux partagés (Akab, Sécurité, Clients, Finances…) et décider qui peut les voir ou les modifier",
+          en: "Edit every shared dashboard (Akab, Security, Clients, Finance…) and decide who can view or edit them",
         },
       },
     ],
