@@ -156,8 +156,8 @@ function useTimerUi() {
 
 /**
  * The ticket's timer follows the window: opening starts or resumes it,
- * closing stops it and asks for the time entry. Under a minute (a quick look),
- * the timer is simply dropped. Minimizing keeps it going.
+ * closing stops it and always asks for the time entry ("Supprimer" if it was
+ * only a look). Minimizing keeps it going.
  */
 export function useTicketTimerAuto() {
   const qc = useQueryClient();
@@ -185,16 +185,9 @@ export function useTicketTimerAuto() {
       if (!on) return;
       await starting.current.get(id);
       starting.current.delete(id);
-      const d = qc.getQueryData<Timers>(KEY);
-      const cur = d?.list.find((x) => x.ticketId === id);
-      if (!d || !cur || cur.state === "pending") return;
+      // Always ask the server (the list here may not be loaded yet); no timer → 404
       try {
-        if (liveMs(cur, d.at, Date.now()) < 60_000) {
-          await api.del(`/tickets/timers/${cur.id}`);
-          put(d.list.filter((x) => x.id !== cur.id));
-        } else {
-          put(await api.post<Timer[]>(`/tickets/${id}/timer/stop`));
-        }
+        put(await api.post<Timer[]>(`/tickets/${id}/timer/stop`));
       } catch {
         void qc.invalidateQueries({ queryKey: KEY });
       }
