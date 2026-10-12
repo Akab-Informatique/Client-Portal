@@ -56,6 +56,7 @@ import { cn, initials } from "@/lib/utils";
 import { GlassBackdrop } from "@/components/brand/GlassBackdrop";
 import { CompanyPicker, ContactPicker, useCompanies } from "./pickers";
 import { TimerControl } from "./timers";
+import { AssetCard } from "./AssetCard";
 import { dueState, longDateTime, PRIORITY_STYLE, STATUS_STYLE, useChoiceText, usePresence, type AiAnalysis, type TicketDetail, type TicketList, type Viewer, ticketErrorText } from "./shared";
 
 const SOURCE_ICON: Record<string, LucideIcon> = { email: Mail, phone: Phone, portal: Inbox, monitoring: MonitorCog };
@@ -81,7 +82,8 @@ export function useAiError() {
  */
 function fromLists(qc: QueryClient, id: number): TicketDetail | undefined {
   for (const [, d] of qc.getQueriesData<TicketList>({ queryKey: ["tickets"] })) {
-    if (!d || !Array.isArray(d.items)) continue;
+    // only real lists (search results have no facets)
+    if (!d || !Array.isArray(d.items) || !d.facets) continue;
     const tk = d.items.find((x) => x.id === id);
     if (!tk) continue;
     return {
@@ -183,6 +185,7 @@ function useTicketUpdate(tk: TicketDetail) {
       contactId?: string | null;
       title?: string;
       description?: string;
+      assetId?: string | null;
     }) =>
       api.patch<TicketDetail>(`/tickets/${tk.id}`, patch),
     onSuccess: (next) => {
@@ -437,6 +440,7 @@ function TicketBody({
                 {partial ? "…" : t("tickets.hoursValue", { hours: tk.hours.toLocaleString() })}
               </Detail>
             </dl>
+            <AssetCard tk={tk} editable={editable} partial={partial} onPick={(assetId) => update.mutate({ assetId })} />
             <StartDate tk={tk} />
           </aside>
         </div>

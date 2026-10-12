@@ -50,6 +50,9 @@ export type TicketDetail = TicketSummary & {
   ai: boolean;
   /** Parts Autotask could not give (notes, time) */
   warnings?: { part: "notes" | "time"; detail: string }[];
+  /** The ticket device (absent while the full ticket loads) */
+  assetId?: string | null;
+  asset?: AssetView | null;
   demo: boolean;
   options: {
     statuses: Choice<StatusKind>[];
@@ -57,6 +60,25 @@ export type TicketDetail = TicketSummary & {
     queues: Choice[];
     technicians: { id: string; name: string }[];
   };
+};
+/** A client device (Autotask configuration item) with its RMM links. */
+export type AssetView = {
+  id: string;
+  name: string;
+  type: string | null;
+  serial: string | null;
+  companyId: number;
+  contactId: string | null;
+  contactName: string | null;
+  hostname: string | null;
+  ip: string | null;
+  os: string | null;
+  lastUser: string | null;
+  lastSeen: string | null;
+  warrantyEnd: string | null;
+  rmm: { id: string | null; uid: string | null };
+  /** RMM name and links; null when the RMM is not set up or an id is missing */
+  links: { rmm: string | null; device: string | null; remote: string | null };
 };
 export type AiAnalysis = {
   id: string;

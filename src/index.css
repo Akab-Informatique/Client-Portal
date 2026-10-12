@@ -194,3 +194,25 @@
     transition-duration: 0.01ms !important;
   }
 }
+
+/*
+ * AKAB brand shape: hexagons (like the logo) instead of circles and pills.
+ * corner-shape: bevel cuts the rounded ends into points, borders, rings and
+ * shadows included: a pill becomes an elongated hexagon, a square item
+ * (avatar, dot, icon button) a small hexagon. Browsers without it keep
+ * slightly rounded corners for buttons and pills elsewhere.
+ * Outside any layer on purpose: it wins over the rounded-* utilities.
+ */
+.hex {
+  border-radius: 0.5rem;
+}
+@supports (corner-shape: bevel) {
+  .hex,
+  .rounded-full {
+    border-radius: 9999px;
+    corner-shape: bevel;
+  }
+  :is(.hex, .rounded-full):is([class^="size-"], [class*=" size-"], .aspect-square) {
+    border-radius: 25% / 50%;
+  }
+}

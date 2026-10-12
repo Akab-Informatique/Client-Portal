@@ -56,6 +56,7 @@ import { GlassBackdrop } from "@/components/brand/GlassBackdrop";
 import { NewTicketDialog } from "./NewTicketDialog";
 import { dueState, FILTER_KEYS, PRIORITY_STYLE, useChoiceText, shortDate, STATUS_STYLE, useTickets, VIEWS, type TicketList, type TicketSummary, type View, ticketErrorText } from "./shared";
 import { useTicketWorkspace } from "./workspace";
+import { GlobalSearch } from "./GlobalSearch";
 import { AiSetupHint, InlinePick, useAiError } from "./TicketPanel";
 
 type Saved = { id: string; name: string; query: string };
@@ -160,7 +161,8 @@ export function TicketsPage() {
             </Tooltip>
           )}
         </div>
-        <div className="flex items-center gap-2">
+        <div className="flex w-full flex-wrap items-center gap-2 sm:w-auto">
+          <GlobalSearch demo={Boolean(data?.demo)} />
           {can("tickets.ai") && data && (data.ai ? <AiPlanButton /> : <AiSetupHint label={t("tickets.ai.plan")} />)}
           {can("tickets.edit") && (
             <Button size="sm" onClick={() => setCreating(true)} className="h-9 bg-grad-gold font-semibold text-[#1a1204] glow-gold hover:brightness-105">

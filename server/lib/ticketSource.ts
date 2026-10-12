@@ -9,8 +9,10 @@ import {
   addDemoTimeEntry,
   demoCompanies,
   demoContact,
+  demoAssets,
   demoContacts,
   demoTickets,
+  type Asset,
   QUEUES,
   updateDemoTicket,
 } from "./demoTickets.ts";
@@ -42,6 +44,7 @@ export type Note = {
 };
 export type Company = { id: number; name: string };
 export type Contact = { id: string; companyId: number; name: string; email: string | null; phone: string | null };
+export type { Asset };
 export type NTicket = {
   id: number;
   number: string;
@@ -61,6 +64,8 @@ export type NTicket = {
   updatedAt: string;
   hours: number;
   notes: Note[];
+  /** Device of the ticket (Autotask configuration item); absent in copies made before it existed */
+  assetId?: string | null;
   /** Parts that could not be loaded (the rest of the ticket is shown) */
   warnings?: { part: "notes" | "time"; detail: string }[];
 };
@@ -74,6 +79,8 @@ export type TicketPatch = {
   contactId?: string | null;
   title?: string;
   description?: string;
+  /** Device (asset id), null to remove */
+  assetId?: string | null;
   /** Secondary technicians (person ids), replaces the list */
   secondaryIds?: string[];
 };
@@ -104,6 +111,10 @@ export interface TicketSource {
   companies(): Promise<Company[]>;
   contacts(companyId: number): Promise<Contact[]>;
   addContact(companyId: number, p: { firstName: string; lastName: string; email: string | null; phone: string | null }, a: AuthContext): Promise<Contact>;
+  /** The client's devices (active configuration items) */
+  assets(companyId: number): Promise<Asset[]>;
+  /** Older tickets (not in the local copy): by exact number, or title words */
+  searchArchive(q: string): Promise<NTicket[]>;
   /** Work types for time entries (Autotask billing codes); empty when not used */
   workTypes(): Promise<{ value: string; label: string }[]>;
   addTimeEntry(ticketId: number, p: NewTimeEntry, a: AuthContext): Promise<void>;
@@ -189,6 +200,10 @@ const demoSource: TicketSource = {
     }
     if (p.title !== undefined) patch.title = p.title;
     if (p.description !== undefined) patch.description = p.description;
+    if (p.assetId !== undefined) {
+      if (p.assetId && !demoAssets(patch.company?.id ?? t.company.id).some((x) => x.id === p.assetId)) throw new SourceError("invalid_value");
+      patch.assetId = p.assetId;
+    }
     if (p.secondaryIds) {
       const people = p.secondaryIds.map((sid) => staff.find((s) => s.id === sid));
       if (people.some((x) => !x)) throw new SourceError("invalid_assignee");
@@ -225,6 +240,12 @@ const demoSource: TicketSource = {
   async companies() {
     return demoCompanies();
   },
+  async assets(companyId) {
+    return demoAssets(companyId);
+  },
+  async searchArchive() {
+    return [];
+  },
   async contacts(companyId) {
     return demoContacts(companyId);
   },
@@ -260,10 +281,12 @@ type AtTicket = {
   dueDateTime: string | null;
   createDate: string;
   lastActivityDate: string | null;
+  configurationItemID?: number | null;
   source: number | null;
 };
 const TICKET_FIELDS = [
   "id",
+  "configurationItemID",
   "ticketNumber",
   "title",
   "description",
@@ -585,6 +608,7 @@ async function normalize(at: Client, rows: AtTicket[], withSecondary: boolean): 
       updatedAt: r.lastActivityDate ?? r.createDate,
       hours: 0,
       notes: [],
+      assetId: r.configurationItemID ? String(r.configurationItemID) : null,
     });
   }
   return out;
@@ -807,6 +831,13 @@ const autotaskSource: TicketSource = {
     }
     if (p.title !== undefined) patch.title = p.title;
     if (p.description !== undefined) patch.description = p.description;
+    if (p.assetId !== undefined) {
+      if (p.assetId) {
+        const companyId = p.companyId ?? (await this.get(id))?.company.id;
+        if (!companyId || !(await this.assets(companyId)).some((x) => x.id === p.assetId)) throw new SourceError("invalid_value");
+      }
+      patch.configurationItemID = p.assetId ? Number(p.assetId) : null;
+    }
     if (Object.keys(patch).length > 1) await at.call("PATCH", "Tickets", patch, { impersonate: actor });
     if (p.secondaryIds) await setSecondary(at, id, p.secondaryIds, actor);
     await refreshOne(at, id);
@@ -887,6 +918,80 @@ const autotaskSource: TicketSource = {
         .map((c) => ({ id: String(c.id), companyId, name: `${c.firstName ?? ""} ${c.lastName ?? ""}`.trim(), email: c.emailAddress || null, phone: c.phone || null }))
         .sort((x, y) => x.name.localeCompare(y.name)),
     );
+  },
+
+  async assets(companyId) {
+    const at = await autotask();
+    return cached(`assets:${companyId}`, 10 * 60_000, async () => {
+      type AtCi = Record<string, string | number | boolean | null | undefined> & { id: number };
+      const fields = await safeFields(at, "ConfigurationItems", [
+        "id",
+        "referenceTitle",
+        "referenceNumber",
+        "serialNumber",
+        "configurationItemType",
+        "contactID",
+        "warrantyExpirationDate",
+        "rmmDeviceID",
+        "rmmDeviceUID",
+        "rmmDeviceAuditHostname",
+        "rmmDeviceAuditIPAddress",
+        "rmmDeviceAuditOperatingSystem",
+        "rmmDeviceAuditLastUser",
+        "dattoHostname",
+        "dattoInternalIP",
+        "dattoSerialNumber",
+        "dattoLastCheckInDateTime",
+      ]);
+      const [rows, types, contacts] = await Promise.all([
+        at.query<AtCi>(
+          "ConfigurationItems",
+          [
+            { op: "eq", field: "companyID", value: companyId },
+            { op: "eq", field: "isActive", value: true },
+          ],
+          { fields, max: 2000 },
+        ),
+        fieldsOf(at, "ConfigurationItems")
+          .then((f) => picklist(f, "configurationItemType"))
+          .catch(() => [] as PicklistValue[]),
+        this.contacts(companyId).catch(() => [] as Contact[]),
+      ]);
+      const s = (v: unknown) => (v === null || v === undefined || v === "" ? null : String(v));
+      return rows
+        .map((r): Asset => {
+          const contactId = s(r.contactID);
+          const hostname = s(r.rmmDeviceAuditHostname) ?? s(r.dattoHostname);
+          return {
+            id: String(r.id),
+            name: s(r.referenceTitle) ?? hostname ?? s(r.referenceNumber) ?? `#${r.id}`,
+            type: types.find((x) => String(x.value) === s(r.configurationItemType))?.label ?? null,
+            serial: s(r.serialNumber) ?? s(r.dattoSerialNumber),
+            companyId,
+            contactId,
+            contactName: contactId ? (contacts.find((c) => c.id === contactId)?.name ?? null) : null,
+            hostname,
+            ip: s(r.rmmDeviceAuditIPAddress) ?? s(r.dattoInternalIP),
+            os: s(r.rmmDeviceAuditOperatingSystem),
+            lastUser: s(r.rmmDeviceAuditLastUser),
+            lastSeen: s(r.dattoLastCheckInDateTime),
+            warrantyEnd: s(r.warrantyExpirationDate),
+            rmm: { id: s(r.rmmDeviceID), uid: s(r.rmmDeviceUID) },
+          };
+        })
+        .sort((x, y) => x.name.localeCompare(y.name));
+    });
+  },
+
+  async searchArchive(q) {
+    const at = await autotask();
+    const text = q.trim();
+    const byNumber = /^T\d{8}\.\d{3,5}$/i.test(text);
+    const rows = await at.query<AtTicket>("Tickets", [byNumber ? { op: "eq", field: "ticketNumber", value: text.toUpperCase() } : { op: "contains", field: "title", value: text }], {
+      fields: TICKET_FIELDS,
+      max: 25,
+    });
+    return normalize(at, rows, false);
   },
 
   async workTypes() {

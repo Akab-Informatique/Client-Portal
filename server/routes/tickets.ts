@@ -10,7 +10,8 @@ import { rateLimit } from "../lib/http.ts";
 import { AiError, aiSettings, askClaude, askClaudeJson } from "../lib/ai.ts";
 import { AutotaskError } from "../lib/autotask.ts";
 import { sweepTimers, timerView, elapsedMs } from "../lib/timers.ts";
-import { SourceError, ticketSource, type NTicket, type Options, type TicketSource } from "../lib/ticketSource.ts";
+import { SourceError, ticketSource, type Asset, type NTicket, type Options, type TicketSource } from "../lib/ticketSource.ts";
+import { rmmLink, rmmSettings, type RmmSettings } from "../lib/rmm.ts";
 
 /**
  * Tickets (staff). Data come from the ticket source: Autotask when the
@@ -177,15 +178,44 @@ async function ownTimer(timerId: string, userId: string) {
   return t;
 }
 
+/** A device with its RMM links (device page, web remote control) when the RMM is set up. */
+function assetView(x: Asset, r: RmmSettings) {
+  const values = { uid: x.rmm.uid, id: x.rmm.id, hostname: x.hostname, serial: x.serial, ip: x.ip };
+  return {
+    ...x,
+    links: r.enabled
+      ? { rmm: r.name || null, device: rmmLink(r.deviceUrl, values), remote: rmmLink(r.remoteUrl, values) }
+      : { rmm: null, device: null, remote: null },
+  };
+}
+
+const L_OPEN = (o: Options, t: NTicket) => o.statuses.find((s) => s.value === t.status)?.kind !== "complete";
+
+/** Lower case, no accents: "Résumé" finds "resume". */
+const fold = (s: string) =>
+  s
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase();
+
 /** Full ticket for the ticket window, with the choices needed to edit it inline. */
 async function detailOf(src: TicketSource, id: number, a: AuthContext) {
   const t = await src.get(id);
   if (!t) throw new HTTPException(404, { message: "not_found" });
-  const [o, technicians, start, ai] = await Promise.all([
+  const [o, technicians, start, ai, asset] = await Promise.all([
     src.options(),
     src.technicians(),
     startDates([id]).then((m) => m.get(id)),
     a.permissions.includes("tickets.ai") ? aiSettings() : Promise.resolve(null),
+    // the device: from the client's (cached) list; a failure only hides it
+    t.assetId
+      ? Promise.all([src.assets(t.company.id), rmmSettings()])
+          .then(([list, r]) => {
+            const x = list.find((d) => d.id === t.assetId);
+            return x ? assetView(x, r) : null;
+          })
+          .catch(() => null)
+      : Promise.resolve(null),
   ]);
   return {
     ...summary(t, lookup(o), start, a.user.id),
@@ -194,6 +224,8 @@ async function detailOf(src: TicketSource, id: number, a: AuthContext) {
     hours: t.hours,
     notes: t.notes,
     warnings: t.warnings ?? [],
+    assetId: t.assetId ?? null,
+    asset,
     demo: src.demo,
     ai: Boolean(ai?.enabled && ai.apiKey),
     options: { statuses: o.statuses, priorities: o.priorities, queues: o.queues, technicians },
@@ -419,6 +451,52 @@ export const ticketRoutes = new Hono<AppEnv>()
     return c.json({ ok: true });
   })
 
+  /**
+   * Search every ticket (all views, all technicians, recently completed) in the
+   * local copy: number, title, client, contact, description. With deep=1 (or an
+   * exact ticket number not found), older tickets are asked to Autotask.
+   */
+  .get("/search", async (c) => {
+    const a = auth(c);
+    const q = (c.req.query("q") ?? "").trim().slice(0, 100);
+    if (q.length < 2) return c.json({ items: [], total: 0, archive: [] });
+    const src = await ticketSource();
+    const [all, o] = await run(() => Promise.all([src.list(), src.options()]));
+    const words = fold(q).split(/\s+/).filter(Boolean);
+    const scored = all
+      .map((t) => {
+        const num = fold(t.number);
+        const title = fold(t.title);
+        const hay = `${num} ${title} ${fold(t.company.name)} ${fold(t.contact)} ${fold(t.description)}`;
+        if (!words.every((w) => hay.includes(w))) return null;
+        const score = (num === fold(q) ? 100 : num.includes(fold(q)) ? 50 : 0) + words.filter((w) => title.includes(w)).length * 10 + (L_OPEN(o, t) ? 5 : 0);
+        return { t, score };
+      })
+      .filter((x): x is { t: NTicket; score: number } => Boolean(x))
+      .sort((x, y) => y.score - x.score || y.t.updatedAt.localeCompare(x.t.updatedAt));
+    const L = lookup(o);
+    const top = scored.slice(0, 20).map((x) => x.t);
+    const starts = await startDates(top.map((t) => t.id));
+    let archive: ReturnType<typeof summary>[] = [];
+    const exactNumber = /^T\d{8}\.\d{3,5}$/i.test(q) && !scored.length;
+    if (!src.demo && (c.req.query("deep") === "1" || exactNumber)) {
+      if (!rateLimit(`ticket-search:${a.user.id}`, 30, 60_000).ok) throw new HTTPException(429, { message: "rate_limited" });
+      const known = new Set(all.map((t) => t.id));
+      const older = await run(() => src.searchArchive(q));
+      archive = older.filter((t) => !known.has(t.id)).map((t) => summary(t, L, undefined, a.user.id));
+    }
+    return c.json({ items: top.map((t) => summary(t, L, starts.get(t.id), a.user.id)), total: scored.length, archive });
+  })
+
+  /** A client's devices, with RMM links. */
+  .get("/companies/:cid/assets", async (c) => {
+    const cid = Number(c.req.param("cid"));
+    if (!Number.isInteger(cid)) throw new HTTPException(400, { message: "invalid_id" });
+    const src = await ticketSource();
+    const [list, r] = await Promise.all([run(() => src.assets(cid)), rmmSettings()]);
+    return c.json(list.map((x) => assetView(x, r)));
+  })
+
   // ── Timers (work time → Autotask time entries) ──
   /** My timers: running / paused / waiting for validation (closed tab). */
   .get("/timers", requirePermission("tickets.edit"), async (c) => {
@@ -631,6 +709,7 @@ export const ticketRoutes = new Hono<AppEnv>()
         title: z.string().trim().min(1).max(250).optional(),
         description: z.string().max(8000).optional(),
         secondaryIds: z.array(z.string().max(60)).max(20).optional(),
+        assetId: z.string().max(60).nullable().optional(),
       }),
     );
     const src = await ticketSource();

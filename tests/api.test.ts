@@ -962,6 +962,55 @@ describe("tickets: client and contact", () => {
     expect((await tech.patch(`/api/tickets/${tk.id}`, { title: "  " })).status).toBe(400);
   });
 
+  it("global search: every ticket, accents ignored, ticket number first", async () => {
+    const tech = await session("tech@akab.local");
+    const all = (await tech.get("/api/tickets?view=all")).json.items;
+    const target = all[5];
+    const r = (await tech.get(`/api/tickets/search?q=${encodeURIComponent(target.number)}`)).json;
+    expect(r.items[0].id).toBe(target.id);
+    // words in any order, no accents needed
+    const word = target.title.split(" ").find((w: string) => w.length > 4)!;
+    const plain = word.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toUpperCase();
+    const found = (await tech.get(`/api/tickets/search?q=${encodeURIComponent(plain)}`)).json;
+    expect(found.items.some((x: any) => x.id === target.id)).toBe(true);
+    expect(found.archive).toEqual([]);
+    expect((await tech.get("/api/tickets/search?q=a")).json.items).toEqual([]);
+  });
+
+  it("devices: listed per client, linked to the ticket, with RMM links", async () => {
+    const tech = await session("tech@akab.local");
+    const admin = await session("admin@akab.local");
+    const tk = (await tech.get("/api/tickets?view=all")).json.items.find((x: any) => x.company.id === 300);
+    const assets = (await tech.get("/api/tickets/companies/300/assets")).json;
+    expect(assets).toHaveLength(3);
+    expect(assets[0].links).toEqual({ rmm: null, device: null, remote: null });
+    const laptop = assets.find((x: any) => x.id === "a-300-0");
+    expect(laptop.contactId).toBe("c-300-0");
+
+    // RMM: admin only, https templates with known placeholders
+    expect((await tech.get("/api/admin/integrations/rmm")).status).toBe(403);
+    expect((await admin.put("/api/admin/integrations/rmm", { enabled: true, name: "Datto RMM", deviceUrl: "http://rmm.example/{uid}", remoteUrl: "" })).status).toBe(400);
+    expect((await admin.put("/api/admin/integrations/rmm", { enabled: true, name: "Datto RMM", deviceUrl: "https://rmm.example/x/{nope}", remoteUrl: "" })).status).toBe(400);
+    const saved = await admin.put("/api/admin/integrations/rmm", {
+      enabled: true,
+      name: "Datto RMM",
+      deviceUrl: "https://rmm.example/device/{uid}",
+      remoteUrl: "https://rmm.example/remote/{uid}?host={hostname}",
+    });
+    expect(saved.status).toBe(200);
+
+    const r = await tech.patch(`/api/tickets/${tk.id}`, { assetId: "a-300-0" });
+    expect(r.json.asset).toMatchObject({
+      id: "a-300-0",
+      contactId: "c-300-0",
+      links: { rmm: "Datto RMM", device: `https://rmm.example/device/${laptop.rmm.uid}`, remote: `https://rmm.example/remote/${laptop.rmm.uid}?host=${laptop.hostname}` },
+    });
+    // a device of another client is refused; null removes it
+    expect((await tech.patch(`/api/tickets/${tk.id}`, { assetId: "a-301-0" })).json.error).toBe("invalid_value");
+    expect((await tech.patch(`/api/tickets/${tk.id}`, { assetId: null })).json.asset).toBeNull();
+    await admin.put("/api/admin/integrations/rmm", { enabled: false, name: "", deviceUrl: "", remoteUrl: "" });
+  });
+
   it("timers: one running at a time, closed tab becomes an entry to validate", async () => {
     const tech = await session("tech@akab.local");
     const other = await session("tech2@akab.local");
@@ -1103,9 +1152,26 @@ describe("tickets from Autotask", () => {
             ],
           });
         }
+        if (path === "Tickets/query" && String(init.body).includes('"field":"ticketNumber"')) {
+          return json({ items: [ticket({ id: 7001, ticketNumber: "T20250101.0001", title: "Ancien billet", status: 5 })], pageDetails: {} });
+        }
         if (path === "Tickets/query") {
           return json({
             items: [ticket({}), ticket({ id: 9002, ticketNumber: "T20261012.0002", title: "Client a répondu", status: 8, priority: 2, assignedResourceID: null, contactID: null })],
+            pageDetails: {},
+          });
+        }
+        if (path === "ConfigurationItems/entityInformation/fields") {
+          return json({
+            fields: [
+              ...["id", "referenceTitle", "serialNumber", "contactID", "rmmDeviceID", "rmmDeviceUID", "rmmDeviceAuditHostname", "rmmDeviceAuditIPAddress"].map((name) => ({ name })),
+              { name: "configurationItemType", picklistValues: pick([[2, "Workstation"]]) },
+            ],
+          });
+        }
+        if (path === "ConfigurationItems/query") {
+          return json({
+            items: [{ id: 3001, referenceTitle: "Poste d'Ann", serialNumber: "SN1", configurationItemType: 2, contactID: 501, rmmDeviceID: 77, rmmDeviceUID: "uid-77", rmmDeviceAuditHostname: "REEL-PT01", rmmDeviceAuditIPAddress: "10.0.0.5" }],
             pageDetails: {},
           });
         }
@@ -1283,6 +1349,22 @@ describe("tickets from Autotask", () => {
     expect(r.json.map((c: any) => c.name)).toEqual(["Client Réel inc."]);
     expect(autotaskUsage()).toMatchObject({ throttled: 1, limit: 10_000 });
     expect(autotaskUsage().lastHour).toBeGreaterThan(1);
+  });
+
+  it("devices from Autotask configuration items; older tickets by number", async () => {
+    resetRateLimit("login:ip:unknown");
+    const tech = await signIn("tech@akab.local");
+    const assets = (await tech.get("/api/tickets/companies/77/assets")).json;
+    expect(assets).toEqual([
+      expect.objectContaining({ id: "3001", name: "Poste d'Ann", type: "Workstation", contactId: "501", contactName: "Ann Réelle", hostname: "REEL-PT01", rmm: { id: "77", uid: "uid-77" } }),
+    ]);
+    sent.length = 0;
+    expect((await tech.patch("/api/tickets/9001", { assetId: "3001" })).status).toBe(200);
+    expect(sent.find((s) => s.method === "PATCH")!.body).toEqual({ id: 9001, configurationItemID: 3001 });
+
+    const r = (await tech.get("/api/tickets/search?q=T20250101.0001")).json;
+    expect(r.items).toEqual([]);
+    expect(r.archive.map((x: any) => [x.id, x.title])).toEqual([[7001, "Ancien billet"]]);
   });
 
   it("refuses writes from an account not linked to Autotask", async () => {

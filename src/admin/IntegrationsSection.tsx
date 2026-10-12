@@ -3,7 +3,7 @@ import { useSearchParams } from "react-router-dom";
 import { useTranslation } from "react-i18next";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
-import { ArrowLeft, CheckCircle2, ChevronDown, ChevronRight, ExternalLink, KeyRound, Link2, Loader2, PlugZap, RefreshCw, Sparkles, Unlink, XCircle, type LucideIcon } from "lucide-react";
+import { ArrowLeft, CheckCircle2, ChevronDown, ChevronRight, ExternalLink, KeyRound, Link2, Loader2, MonitorPlay, PlugZap, RefreshCw, Sparkles, Unlink, XCircle, type LucideIcon } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -67,6 +67,7 @@ const INTEGRATIONS: Integration[] = [
     ),
   },
   { key: "ai", name: "Claude (Anthropic)", icon: Sparkles, Status: AiStatus, Page: AiPage },
+  { key: "rmm", name: "RMM", icon: MonitorPlay, Status: RmmStatus, Page: RmmPage },
 ];
 
 /** List of integrations; opening one shows its page (?integration=<key>). */
@@ -611,6 +612,110 @@ function AiPage() {
               <XCircle className="size-4 text-destructive" /> {t(`tickets.ai.errors.${test.error}`, { defaultValue: t("tickets.ai.errors.api") })}
             </p>
           ))}
+      </form>
+    </section>
+  );
+}
+
+// ── RMM: links to the device page and the web remote control ──
+type RmmView = { enabled: boolean; name: string; deviceUrl: string; remoteUrl: string; placeholders: string[] };
+const RMM_KEY = ["admin", "integrations", "rmm"];
+
+function RmmStatus() {
+  const { t } = useTranslation();
+  const { data } = useQuery({ queryKey: RMM_KEY, queryFn: () => api.get<RmmView>("/admin/integrations/rmm") });
+  if (!data) return null;
+  const on = data.enabled && Boolean(data.deviceUrl || data.remoteUrl);
+  return (
+    <Badge variant="outline" className={cn("gap-1.5", on ? "border-emerald-500/40 text-emerald-400" : "text-muted-foreground")}>
+      <span className="size-1.5 rounded-full bg-current" />
+      {t(`integrations.status.${on ? "connected" : data.deviceUrl || data.remoteUrl ? "disabled" : "notConfigured"}`)}
+    </Badge>
+  );
+}
+
+/** Example values to preview the links. */
+const SAMPLE = { uid: "3f2a9c1e-7b4d-4e0a-9c55-1d2e3f4a5b6c", id: "884213", hostname: "CLIENT-PT01", serial: "5CD1234X7Q", ip: "10.0.0.25" } as Record<string, string>;
+const preview = (tpl: string) => tpl.replace(/\{(\w+)\}/g, (m, k: string) => SAMPLE[k] ?? m);
+
+function RmmPage() {
+  const { t } = useTranslation();
+  const qc = useQueryClient();
+  const { data: s, isLoading } = useQuery({ queryKey: RMM_KEY, queryFn: () => api.get<RmmView>("/admin/integrations/rmm") });
+  const [form, setForm] = useState({ enabled: false, name: "", deviceUrl: "", remoteUrl: "" });
+  useEffect(() => {
+    if (s) setForm({ enabled: s.enabled, name: s.name, deviceUrl: s.deviceUrl, remoteUrl: s.remoteUrl });
+  }, [s]);
+  const save = useMutation({
+    mutationFn: () => api.put<RmmView>("/admin/integrations/rmm", form),
+    onSuccess: (next) => {
+      qc.setQueryData(RMM_KEY, next);
+      void qc.invalidateQueries({ queryKey: ["tickets"] });
+      toast.success(t("common.saved"));
+    },
+    onError: (e) => toast.error(e instanceof ApiError && e.code === "rmm_incomplete" ? t("integrations.rmm.needUrl") : t("integrations.rmm.badUrl")),
+  });
+  if (isLoading || !s) return <Skeleton className="h-72 rounded-2xl" />;
+  const field = (key: "deviceUrl" | "remoteUrl") => (
+    <div className="space-y-2">
+      <Label htmlFor={`rmm-${key}`}>{t(`integrations.rmm.${key}`)}</Label>
+      <Input
+        id={`rmm-${key}`}
+        value={form[key]}
+        onChange={(e) => setForm((f) => ({ ...f, [key]: e.target.value }))}
+        placeholder="https://…/{uid}"
+        className="font-mono text-xs"
+      />
+      {form[key] && (
+        <p className="truncate font-mono text-[11px] text-muted-foreground" title={preview(form[key])}>
+          → {preview(form[key])}
+        </p>
+      )}
+    </div>
+  );
+  return (
+    <section className="overflow-hidden rounded-2xl border bg-card/80">
+      <div className="flex flex-wrap items-center gap-4 border-b px-6 py-5">
+        <span className="flex size-11 items-center justify-center rounded-xl bg-grad-gold text-[#1a1204]">
+          <MonitorPlay className="size-5" />
+        </span>
+        <div className="min-w-0 flex-1">
+          <h3 className="font-display text-lg font-semibold">{t("integrations.rmm.links")}</h3>
+          <div className="mt-1">
+            <RmmStatus />
+          </div>
+        </div>
+        <label className="flex items-center gap-3 text-sm font-medium">
+          {t("integrations.enabled")}
+          <Switch checked={form.enabled} onCheckedChange={(v) => setForm((f) => ({ ...f, enabled: v }))} />
+        </label>
+      </div>
+      <form
+        className="space-y-5 px-6 py-6"
+        onSubmit={(e: FormEvent) => {
+          e.preventDefault();
+          save.mutate();
+        }}
+      >
+        <div className="max-w-xs space-y-2">
+          <Label htmlFor="rmm-name">{t("integrations.rmm.name")}</Label>
+          <Input id="rmm-name" value={form.name} maxLength={60} onChange={(e) => setForm((f) => ({ ...f, name: e.target.value }))} placeholder="Datto RMM" />
+        </div>
+        {field("remoteUrl")}
+        {field("deviceUrl")}
+        <div className="rounded-xl border bg-background/40 p-4 text-xs text-muted-foreground">
+          <p className="mb-2">{t("integrations.rmm.help")}</p>
+          <ul className="grid gap-1 sm:grid-cols-2">
+            {s.placeholders.map((p) => (
+              <li key={p}>
+                <code className="rounded bg-muted px-1 py-0.5 font-mono text-[11px] text-primary">{`{${p}}`}</code> {t(`integrations.rmm.ph.${p}`)}
+              </li>
+            ))}
+          </ul>
+        </div>
+        <Button type="submit" disabled={save.isPending} className="bg-grad-gold font-semibold text-[#1a1204] hover:brightness-105">
+          {save.isPending && <Loader2 className="size-4 animate-spin" />} {t("common.save")}
+        </Button>
       </form>
     </section>
   );

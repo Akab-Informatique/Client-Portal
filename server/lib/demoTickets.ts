@@ -27,6 +27,8 @@ export type Ticket = {
   updatedAt: string;
   hours: number;
   notes: Note[];
+  /** Device (Autotask configuration item) */
+  assetId: string | null;
 };
 
 export const QUEUES = ["Support niveau 1", "Support niveau 2", "Réseau et sécurité", "Projets"];
@@ -144,12 +146,13 @@ function generate(): Stored[] {
       updatedAt: (notes.at(-1)?.at ?? created.toISOString()),
       hours: Math.round(r() * 60) / 10,
       notes,
+      assetId: i % 3 === 0 ? `a-${company.id}-0` : i % 3 === 1 ? `a-${company.id}-2` : null,
     } satisfies Stored;
   });
   return list;
 }
 
-export function addDemoTicket(t: Omit<Ticket, "id" | "number" | "createdAt" | "updatedAt" | "hours" | "notes" | "secondary">): Ticket {
+export function addDemoTicket(t: Omit<Ticket, "id" | "number" | "createdAt" | "updatedAt" | "hours" | "notes" | "secondary" | "assetId">): Ticket {
   const created = new Date();
   const ticket: Ticket = {
     ...t,
@@ -160,6 +163,7 @@ export function addDemoTicket(t: Omit<Ticket, "id" | "number" | "createdAt" | "u
     hours: 0,
     notes: [],
     secondary: [],
+    assetId: null,
   };
   store?.unshift({ ...ticket, slot: null, secondarySlots: [] });
   return ticket;
@@ -168,7 +172,7 @@ export function addDemoTicket(t: Omit<Ticket, "id" | "number" | "createdAt" | "u
 /** Change fields of a sample ticket (an explicit assignee replaces the round-robin slot). */
 export function updateDemoTicket(
   id: number,
-  p: Partial<Pick<Ticket, "status" | "priority" | "queue" | "dueAt" | "company" | "contact" | "contactId" | "title" | "description">> & {
+  p: Partial<Pick<Ticket, "status" | "priority" | "queue" | "dueAt" | "company" | "contact" | "contactId" | "title" | "description" | "assetId">> & {
     assignee?: Person | null;
     secondary?: Person[];
   },
@@ -240,3 +244,54 @@ export function addDemoContact(p: Omit<Contact, "id">): Contact {
   list.push(c);
   return c;
 }
+
+// ── Devices per client (Autotask "Configuration Items", with RMM data) ──
+export type Asset = {
+  id: string;
+  name: string;
+  type: string | null;
+  serial: string | null;
+  companyId: number;
+  contactId: string | null;
+  contactName: string | null;
+  hostname: string | null;
+  ip: string | null;
+  os: string | null;
+  lastUser: string | null;
+  lastSeen: string | null;
+  warrantyEnd: string | null;
+  /** Device ids in the RMM (Datto RMM fills them in Autotask) */
+  rmm: { id: string | null; uid: string | null };
+};
+let assets: Asset[] | null = null;
+
+function allAssets(): Asset[] {
+  assets ??= COMPANIES.flatMap((company, c) => {
+    const cid = 300 + c;
+    const code = slug(company).replace(/\./g, "").slice(0, 6).toUpperCase();
+    const people = demoContacts(cid);
+    const year = 2027 + (c % 3);
+    return [
+      { k: 0, type: "Ordinateur portable", host: `${code}-PORT01`, os: "Windows 11 Pro 24H2", who: people[0] },
+      { k: 1, type: "Poste de travail", host: `${code}-PT02`, os: "Windows 11 Pro 24H2", who: people[1] },
+      { k: 2, type: "Serveur", host: `${code}-SRV01`, os: "Windows Server 2022", who: undefined },
+    ].map(({ k, type, host, os, who }) => ({
+      id: `a-${cid}-${k}`,
+      name: host,
+      type,
+      serial: `5CD${cid}${k}X7Q`,
+      companyId: cid,
+      contactId: who?.id ?? null,
+      contactName: who?.name ?? null,
+      hostname: host,
+      ip: `10.${c}.0.${10 + k}`,
+      os,
+      lastUser: who ? `${code.toLowerCase()}\\${slug(who.name).split(".")[0]}` : null,
+      lastSeen: new Date(Date.now() - (k + 1) * 7 * 60_000).toISOString(),
+      warrantyEnd: `${year}-0${(k % 9) + 1}-15`,
+      rmm: { id: String(880000 + c * 10 + k), uid: `d3m0-${cid}-${k}-4f1c-9a2e` },
+    }));
+  });
+  return assets;
+}
+export const demoAssets = (companyId: number) => allAssets().filter((a) => a.companyId === companyId);

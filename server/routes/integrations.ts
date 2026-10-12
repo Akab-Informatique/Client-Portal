@@ -19,6 +19,7 @@ import {
 } from "../lib/autotask.ts";
 import { body, zEmail, zUuid } from "../lib/validate.ts";
 import { clearTicketCache } from "../lib/ticketSource.ts";
+import { RMM_PLACEHOLDERS, rmmSettings, saveRmmSettings, validTemplate } from "../lib/rmm.ts";
 import { AI_MODELS, AiError, aiSettings, askClaude, saveAiSettings, type AiErrorCode } from "../lib/ai.ts";
 
 const zCred = z.string().trim().min(1).max(300);
@@ -204,6 +205,22 @@ export const integrationRoutes = new Hono<AppEnv>()
     }
     await audit(a.user.id, "integration.autotask.autolink", null, { linked });
     return c.json({ linked });
+  })
+
+  // ── RMM (links to the device page and web remote control) ──
+  .get("/rmm", async (c) => c.json({ ...(await rmmSettings()), placeholders: RMM_PLACEHOLDERS }))
+  .put("/rmm", async (c) => {
+    const a = auth(c);
+    const zTemplate = z
+      .string()
+      .trim()
+      .max(500)
+      .refine(validTemplate, { message: "rmm_template" });
+    const p = await body(c, z.object({ enabled: z.boolean(), name: z.string().trim().max(60), deviceUrl: zTemplate, remoteUrl: zTemplate }));
+    if (p.enabled && !p.deviceUrl && !p.remoteUrl) throw new HTTPException(400, { message: "rmm_incomplete" });
+    await saveRmmSettings(a.user.id, p);
+    await audit(a.user.id, "integration.rmm.updated", null, { enabled: p.enabled, name: p.name });
+    return c.json({ ...(await rmmSettings()), placeholders: RMM_PLACEHOLDERS });
   })
 
   // ── AI assistant (Anthropic Claude) ──
