@@ -599,6 +599,9 @@ function TicketRow({
           "group relative isolate grid w-full grid-cols-1 gap-x-3 gap-y-1.5 px-5 py-2.5 text-left transition-colors xl:grid-cols-[minmax(0,1fr)_144px_140px_64px_104px_86px_132px_64px_20px] xl:items-center",
           "hover:bg-[linear-gradient(90deg,rgba(255,206,26,0.07),transparent_60%)]",
           active && "bg-[linear-gradient(90deg,rgba(255,206,26,0.1),transparent_70%)]",
+          // Critical pops and moves, high pops (open tickets only)
+          tk.statusKind !== "complete" && tk.priorityKind === "critical" && "ticket-critical",
+          tk.statusKind !== "complete" && tk.priorityKind === "high" && "ticket-high",
         )}
       >
         {/* Due date: a glowing hue fading out behind the number and title */}
@@ -660,7 +663,14 @@ function TicketRow({
                 options={facets.priorities.map((p) => ({ value: p.value, label: txt.priority(p), dot: PRIORITY_STYLE[p.kind].dot }))}
                 onPick={(v) => onPatch({ priority: v })}
                 trigger={
-                  <span className={cn("flex items-center gap-1.5 px-1 text-xs font-medium", PRIORITY_STYLE[tk.priorityKind].text)}>
+                  <span
+                    className={cn(
+                      "flex items-center gap-1.5 px-1 text-xs font-medium",
+                      PRIORITY_STYLE[tk.priorityKind].text,
+                      tk.statusKind !== "complete" && tk.priorityKind === "critical" && "priority-nudge font-semibold",
+                      tk.statusKind !== "complete" && tk.priorityKind === "high" && "font-semibold",
+                    )}
+                  >
                     <span className={cn("size-2 rounded-full", PRIORITY_STYLE[tk.priorityKind].dot, tk.priority === "critical" && "shadow-[0_0_8px] shadow-red-500")} />
                     {txt.priority({ label: tk.priorityLabel, kind: tk.priorityKind })}
                   </span>

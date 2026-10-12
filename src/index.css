@@ -216,3 +216,87 @@
     border-radius: 25% / 50%;
   }
 }
+
+/*
+ * Ticket priority emphasis in the list.
+ * Critical "pops and moves": a breathing red edge, a light sweep across the
+ * row and the priority badge nudges now and then. High "pops": a steady
+ * orange edge and glow. Without motion when the system asks for less.
+ */
+.ticket-critical::after,
+.ticket-high::after {
+  content: "";
+  position: absolute;
+  inset: 1px 0;
+  pointer-events: none;
+  border-radius: 0.75rem;
+}
+.ticket-high::after {
+  box-shadow:
+    inset 0 0 0 1px rgba(249, 115, 22, 0.35),
+    inset 0 0 22px -10px rgba(249, 115, 22, 0.55);
+}
+.ticket-critical::after {
+  box-shadow:
+    inset 0 0 0 1px rgba(239, 68, 68, 0.55),
+    inset 0 0 26px -8px rgba(239, 68, 68, 0.6);
+  animation: ticket-breathe 2.4s ease-in-out infinite;
+}
+.ticket-critical::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  pointer-events: none;
+  background: linear-gradient(100deg, transparent 30%, rgba(239, 68, 68, 0.14) 50%, transparent 70%);
+  background-size: 250% 100%;
+  animation: ticket-sweep 3.6s ease-in-out infinite;
+}
+.priority-nudge {
+  display: inline-flex;
+  animation: priority-nudge 4s ease-in-out infinite;
+}
+@keyframes ticket-breathe {
+  0%,
+  100% {
+    opacity: 0.45;
+  }
+  50% {
+    opacity: 1;
+  }
+}
+@keyframes ticket-sweep {
+  0% {
+    background-position: 120% 0;
+  }
+  60%,
+  100% {
+    background-position: -120% 0;
+  }
+}
+@keyframes priority-nudge {
+  0%,
+  86%,
+  100% {
+    transform: translateX(0) scale(1);
+  }
+  88% {
+    transform: translateX(-2px) scale(1.06);
+  }
+  90% {
+    transform: translateX(2px) scale(1.06);
+  }
+  92% {
+    transform: translateX(-2px) scale(1.06);
+  }
+  94% {
+    transform: translateX(1px) scale(1.03);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .ticket-critical::after,
+  .ticket-critical::before,
+  .priority-nudge {
+    animation: none;
+  }
+}
