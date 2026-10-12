@@ -417,6 +417,8 @@ export const storeProducts = pgTable(
     autotaskProductId: bigint("autotask_product_id", { mode: "number" }),
     autotaskProductName: text("autotask_product_name"),
     materialCodeId: text("material_code_id"),
+    /** Counted by serial number: each unit is a store_serials row */
+    serialized: boolean("serialized").notNull().default(false),
     active: boolean("active").notNull().default(true),
     createdAt: created(),
     updatedAt: updated(),
@@ -468,8 +470,59 @@ export const storeMovements = pgTable(
     note: text("note").notNull().default(""),
     ticketId: bigint("ticket_id", { mode: "number" }),
     ticketNumber: text("ticket_number"),
+    /** The purchase it came from (received stock) */
+    receiptId: uuid("receipt_id").references((): AnyPgColumn => storeReceipts.id, { onDelete: "set null" }),
+    /** Serial numbers moved (serialized products) */
+    serials: jsonb("serials").$type<string[]>().notNull().default(sql`'[]'::jsonb`),
     userId: uuid("user_id").references(() => users.id, { onDelete: "set null" }),
     createdAt: created(),
   },
   (t) => [index("store_movements_product_idx").on(t.productId, t.createdAt)],
+);
+
+/** A purchase received in stock: where it was bought, at what cost. */
+export const storeReceipts = pgTable(
+  "store_receipts",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    productId: uuid("product_id")
+      .notNull()
+      .references(() => storeProducts.id, { onDelete: "cascade" }),
+    locationId: uuid("location_id")
+      .notNull()
+      .references(() => storeLocations.id, { onDelete: "cascade" }),
+    quantity: integer("quantity").notNull(),
+    unitCostCents: integer("unit_cost_cents").notNull().default(0),
+    supplier: text("supplier"),
+    /** Supplier invoice or purchase order number */
+    reference: text("reference"),
+    purchasedAt: text("purchased_at"),
+    note: text("note").notNull().default(""),
+    userId: uuid("user_id").references(() => users.id, { onDelete: "set null" }),
+    createdAt: created(),
+  },
+  (t) => [index("store_receipts_product_idx").on(t.productId, t.createdAt), index("store_receipts_supplier_idx").on(t.supplier)],
+);
+
+/** One unit of a serialized product: where it is, or which ticket it went to. */
+export const storeSerials = pgTable(
+  "store_serials",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    productId: uuid("product_id")
+      .notNull()
+      .references(() => storeProducts.id, { onDelete: "cascade" }),
+    serial: text("serial").notNull(),
+    locationId: uuid("location_id")
+      .notNull()
+      .references(() => storeLocations.id, { onDelete: "cascade" }),
+    status: text("status", { enum: ["in_stock", "used", "removed"] }).notNull().default("in_stock"),
+    receiptId: uuid("receipt_id").references(() => storeReceipts.id, { onDelete: "set null" }),
+    ticketId: bigint("ticket_id", { mode: "number" }),
+    ticketNumber: text("ticket_number"),
+    note: text("note").notNull().default(""),
+    createdAt: created(),
+    updatedAt: updated(),
+  },
+  (t) => [uniqueIndex("store_serials_product_serial_unique").on(t.productId, t.serial), index("store_serials_stock_idx").on(t.productId, t.locationId, t.status)],
 );

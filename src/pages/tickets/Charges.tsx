@@ -16,6 +16,7 @@ import { api, ApiError } from "@/lib/api";
 import { currentLocale } from "@/i18n";
 import { cn } from "@/lib/utils";
 import { ticketErrorText, type TicketDetail } from "./shared";
+import { SerialChecklist } from "@/pages/store/SerialChecklist";
 
 export type Charge = {
   id: string;
@@ -44,6 +45,7 @@ type StoreProduct = {
   unitCost: number;
   materialCodeId: string | null;
   linked: boolean;
+  serialized: boolean;
   stock: { locationId: string; location: string; quantity: number }[];
   total: number;
 };
@@ -139,11 +141,13 @@ function ChargesDialog({ tk, editable, onClose }: { tk: TicketDetail; editable: 
   const [product, setProduct] = useState<StoreProduct | null>(null);
   const [from, setFrom] = useState(NO_STOCK);
   const [more, setMore] = useState(false);
+  const [serialIds, setSerialIds] = useState<string[]>([]);
   const [f, setF] = useState({ quantity: "1", unitPrice: "", unitCost: "", billable: true, description: "", typeId: "", statusId: "", materialCodeId: "", date: new Date().toISOString().slice(0, 10) });
   const set = (k: keyof typeof f) => (v: string | boolean) => setF((x) => ({ ...x, [k]: v }));
 
   const choose = (p: StoreProduct) => {
     setProduct(p);
+    setSerialIds([]);
     // where the units come from: the location with the most stock, else none taken
     const best = [...p.stock].sort((x, y) => y.quantity - x.quantity)[0];
     setFrom(best ? best.locationId : NO_STOCK);
@@ -155,7 +159,14 @@ function ChargesDialog({ tk, editable, onClose }: { tk: TicketDetail; editable: 
       materialCodeId: p.materialCodeId && o?.materialCodes.some((c) => c.value === p.materialCodeId) ? p.materialCodeId : x.materialCodeId,
     }));
   };
-  const qty = num(f.quantity);
+  // Serialized and taken from stock: the quantity is the number of serials ticked
+  const bySerial = Boolean(product?.serialized && from !== NO_STOCK);
+  const { data: serials } = useQuery({
+    queryKey: ["tickets", "store-products", product?.id, "serials", from],
+    queryFn: () => api.get<{ id: string; serial: string }[]>(`/tickets/store-products/${product!.id}/serials?locationId=${from}`),
+    enabled: bySerial,
+  });
+  const qty = bySerial ? serialIds.length : num(f.quantity);
   const price = num(f.unitPrice);
   const onHand = product?.stock.find((s) => s.locationId === from)?.quantity ?? null;
   const tooMany = onHand !== null && qty !== null && qty > onHand;
@@ -176,6 +187,7 @@ function ChargesDialog({ tk, editable, onClose }: { tk: TicketDetail; editable: 
         date: f.date || null,
         storeProductId: product!.id,
         locationId: from === NO_STOCK ? null : from,
+        serialIds: bySerial ? serialIds : [],
       }),
     onSuccess: (next) => {
       qc.setQueryData(["tickets", "charges", tk.id], next);
@@ -258,7 +270,13 @@ function ChargesDialog({ tk, editable, onClose }: { tk: TicketDetail; editable: 
               <>
                 <div className="space-y-1.5">
                   <Label>{t("tickets.charges.from")}</Label>
-                  <Select value={from} onValueChange={setFrom}>
+                  <Select
+                    value={from}
+                    onValueChange={(v) => {
+                      setFrom(v);
+                      setSerialIds([]);
+                    }}
+                  >
                     <SelectTrigger className="w-full">
                       <SelectValue />
                     </SelectTrigger>
@@ -272,10 +290,16 @@ function ChargesDialog({ tk, editable, onClose }: { tk: TicketDetail; editable: 
                     </SelectContent>
                   </Select>
                 </div>
+                {bySerial && (
+                  <div className="space-y-1.5">
+                    <Label>{t("tickets.charges.whichSerials")}</Label>
+                    {serials ? <SerialChecklist serials={serials} picked={serialIds} onChange={setSerialIds} empty={t("store.noSerialHere")} /> : <Skeleton className="h-20" />}
+                  </div>
+                )}
                 <div className="grid grid-cols-2 gap-3">
                   <div className="space-y-1.5">
                     <Label htmlFor="ch-qty">{t("tickets.charges.quantity")}</Label>
-                    <Input id="ch-qty" inputMode="decimal" value={f.quantity} onChange={(e) => set("quantity")(e.target.value)} />
+                    <Input id="ch-qty" inputMode="decimal" value={bySerial ? String(serialIds.length) : f.quantity} disabled={bySerial} onChange={(e) => set("quantity")(e.target.value)} />
                   </div>
                   <div className="space-y-1.5">
                     <Label htmlFor="ch-price">{t("tickets.charges.unitPrice")}</Label>

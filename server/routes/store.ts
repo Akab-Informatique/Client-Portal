@@ -6,7 +6,7 @@ import { db, schema } from "../db/index.ts";
 import { auth, requirePermission, requireStaff, type AppEnv } from "../lib/auth.ts";
 import { audit } from "../lib/audit.ts";
 import { body, zUuid } from "../lib/validate.ts";
-import { moveStock, productsWithStock } from "../lib/store.ts";
+import { adjustCount, productsWithStock, receiptsOf, receive, removeSerials, serialsOf, StoreError, suppliers } from "../lib/store.ts";
 
 const zCents = z.number().int().min(0).max(100_000_000);
 const zProduct = z.object({
@@ -21,6 +21,7 @@ const zProduct = z.object({
   autotaskProductId: z.number().int().positive().nullable().default(null),
   autotaskProductName: z.string().trim().max(200).nullable().default(null),
   materialCodeId: z.string().max(20).nullable().default(null),
+  serialized: z.boolean().default(false),
   active: z.boolean().default(true),
 });
 
@@ -33,6 +34,25 @@ async function skuTaken(sku: string | null, exceptId?: string) {
     .from(schema.storeProducts)
     .where(exceptId ? and(eq(schema.storeProducts.sku, sku), ne(schema.storeProducts.id, exceptId)) : eq(schema.storeProducts.sku, sku));
   return Boolean(row);
+}
+
+async function location(id: string) {
+  const [l] = await db().select({ id: schema.storeLocations.id }).from(schema.storeLocations).where(eq(schema.storeLocations.id, id));
+  if (!l) throw new HTTPException(404, { message: "not_found" });
+}
+
+/** Store errors → HTTP (the serial numbers in conflict are listed). */
+export function storeHttp(e: unknown): unknown {
+  if (!(e instanceof StoreError)) return e;
+  const status = e.code === "not_found" ? 404 : e.code === "serials_required" ? 400 : 409;
+  return new HTTPException(status, { message: e.code, cause: e.detail?.length ? e.detail.map((s) => ({ path: "serial", message: s })) : undefined });
+}
+async function store<T>(fn: () => Promise<T>): Promise<T> {
+  try {
+    return await fn();
+  } catch (e) {
+    throw storeHttp(e);
+  }
 }
 
 /** Store inventory (store.view to see, store.manage to change). */
@@ -75,6 +95,10 @@ export const storeRoutes = new Hono<AppEnv>()
     const p = await body(c, zProduct.partial());
     const sku = p.sku !== undefined ? blank(p.sku) : undefined;
     if (sku !== undefined && (await skuTaken(sku, id))) throw new HTTPException(409, { message: "sku_taken" });
+    if (p.serialized !== undefined) {
+      const cur = (await productsWithStock()).find((x) => x.id === id);
+      if (cur && cur.serialized !== p.serialized && cur.total > 0) throw new HTTPException(409, { message: "has_stock" });
+    }
     const [row] = await db()
       .update(schema.storeProducts)
       .set({
@@ -91,31 +115,61 @@ export const storeRoutes = new Hono<AppEnv>()
     return c.json(row);
   })
 
-  /** Receive (adds) or count (sets the quantity) at a location. */
-  .post("/products/:id/stock", requirePermission("store.manage"), async (c) => {
+  /** Receive a purchase: supplier, invoice, cost, and the serial numbers of serialized products. */
+  .post("/products/:id/receive", requirePermission("store.manage"), async (c) => {
     const a = auth(c);
     const id = zUuid.parse(c.req.param("id"));
     const p = await body(
       c,
-      z.object({ locationId: zUuid, kind: z.enum(["receive", "adjust"]), quantity: z.number().int().min(0).max(1_000_000), note: z.string().trim().max(500).default("") }),
+      z.object({
+        locationId: zUuid,
+        quantity: z.number().int().min(1).max(1_000_000).default(1),
+        serials: z.array(z.string().max(100)).max(1000).default([]),
+        unitCostCents: zCents,
+        supplier: z.string().trim().max(120).nullable().default(null),
+        reference: z.string().trim().max(120).nullable().default(null),
+        purchasedAt: z
+          .string()
+          .regex(/^\d{4}-\d{2}-\d{2}$/)
+          .nullable()
+          .default(null),
+        note: z.string().trim().max(500).default(""),
+        updateCost: z.boolean().default(true),
+      }),
     );
-    const [product] = await db().select({ id: schema.storeProducts.id }).from(schema.storeProducts).where(eq(schema.storeProducts.id, id));
-    const [location] = await db().select({ id: schema.storeLocations.id }).from(schema.storeLocations).where(eq(schema.storeLocations.id, p.locationId));
-    if (!product || !location) throw new HTTPException(404, { message: "not_found" });
-    let delta = p.quantity;
-    if (p.kind === "adjust") {
-      const [cur] = await db()
-        .select({ q: schema.storeStock.quantity })
-        .from(schema.storeStock)
-        .where(and(eq(schema.storeStock.productId, id), eq(schema.storeStock.locationId, p.locationId)));
-      delta = p.quantity - (cur?.q ?? 0);
-    } else if (p.quantity === 0) {
-      throw new HTTPException(400, { message: "Validation failed" });
-    }
-    const r = await moveStock({ productId: id, locationId: p.locationId, delta, kind: p.kind, note: p.note, userId: a.user.id });
-    await audit(a.user.id, `store.stock_${p.kind}`, id, { locationId: p.locationId, delta });
-    return c.json({ quantity: r?.quantity ?? 0 });
+    await location(p.locationId);
+    const r = await store(() => receive({ ...p, productId: id, supplier: p.supplier || null, reference: p.reference || null, userId: a.user.id }));
+    await audit(a.user.id, "store.stock_receive", id, { locationId: p.locationId, quantity: p.serials.length || p.quantity, supplier: p.supplier, reference: p.reference });
+    return c.json(r, 201);
   })
+
+  /** Count (sets the quantity) — or, for serialized products, take serial numbers out. */
+  .post("/products/:id/adjust", requirePermission("store.manage"), async (c) => {
+    const a = auth(c);
+    const id = zUuid.parse(c.req.param("id"));
+    const p = await body(
+      c,
+      z.object({
+        locationId: zUuid,
+        quantity: z.number().int().min(0).max(1_000_000).optional(),
+        removeSerialIds: z.array(zUuid).max(1000).optional(),
+        note: z.string().trim().max(500).default(""),
+      }),
+    );
+    await location(p.locationId);
+    const r = p.removeSerialIds?.length
+      ? await store(() => removeSerials({ productId: id, locationId: p.locationId, serialIds: p.removeSerialIds!, note: p.note, userId: a.user.id }))
+      : p.quantity !== undefined
+        ? await store(() => adjustCount({ productId: id, locationId: p.locationId, quantity: p.quantity!, note: p.note, userId: a.user.id }))
+        : null;
+    if (!r) throw new HTTPException(400, { message: "Validation failed" });
+    await audit(a.user.id, "store.stock_adjust", id, { locationId: p.locationId, quantity: p.quantity, removed: p.removeSerialIds?.length });
+    return c.json(r);
+  })
+
+  .get("/products/:id/serials", async (c) => c.json(await serialsOf(zUuid.parse(c.req.param("id")))))
+  .get("/products/:id/receipts", async (c) => c.json(await receiptsOf(zUuid.parse(c.req.param("id")))))
+  .get("/suppliers", async (c) => c.json(await suppliers()))
 
   .get("/products/:id/movements", async (c) => {
     const id = zUuid.parse(c.req.param("id"));
@@ -127,6 +181,10 @@ export const storeRoutes = new Hono<AppEnv>()
         note: schema.storeMovements.note,
         ticketId: schema.storeMovements.ticketId,
         ticketNumber: schema.storeMovements.ticketNumber,
+        serials: schema.storeMovements.serials,
+        supplier: schema.storeReceipts.supplier,
+        reference: schema.storeReceipts.reference,
+        unitCostCents: schema.storeReceipts.unitCostCents,
         createdAt: schema.storeMovements.createdAt,
         location: schema.storeLocations.name,
         user: schema.users.name,
@@ -134,6 +192,7 @@ export const storeRoutes = new Hono<AppEnv>()
       .from(schema.storeMovements)
       .innerJoin(schema.storeLocations, eq(schema.storeLocations.id, schema.storeMovements.locationId))
       .leftJoin(schema.users, eq(schema.users.id, schema.storeMovements.userId))
+      .leftJoin(schema.storeReceipts, eq(schema.storeReceipts.id, schema.storeMovements.receiptId))
       .where(eq(schema.storeMovements.productId, id))
       .orderBy(desc(schema.storeMovements.createdAt))
       .limit(200);

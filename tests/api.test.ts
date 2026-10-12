@@ -1049,11 +1049,15 @@ describe("tickets: client and contact", () => {
     expect((await admin.post("/api/store/locations", { name: "Entrepôt" })).json.error).toBe("location_taken");
     const ssd = (await admin.post("/api/store/products", { sku: "SSD-1T", name: "SSD 1 To", priceCents: 18999, costCents: 12950, minQuantity: 2 })).json;
     expect((await admin.post("/api/store/products", { sku: "SSD-1T", name: "Autre", priceCents: 1 })).json.error).toBe("sku_taken");
-    expect((await admin.post(`/api/store/products/${ssd.id}/stock`, { locationId: loc.id, kind: "receive", quantity: 5, note: "Facture 123" })).json.quantity).toBe(5);
-    expect((await admin.post(`/api/store/products/${ssd.id}/stock`, { locationId: loc.id, kind: "adjust", quantity: 4 })).json.quantity).toBe(4);
+    const rec = await admin.post(`/api/store/products/${ssd.id}/receive`, { locationId: loc.id, quantity: 5, unitCostCents: 12500, supplier: "Ingram Micro", reference: "F-123", purchasedAt: "2026-10-10" });
+    expect(rec.json.quantity).toBe(5);
+    expect((await admin.post(`/api/store/products/${ssd.id}/adjust`, { locationId: loc.id, quantity: 4, note: "Décompte" })).json.quantity).toBe(4);
+    // the purchase is kept: supplier, invoice, cost (and the product cost follows)
+    expect((await admin.get(`/api/store/products/${ssd.id}/receipts`)).json).toEqual([expect.objectContaining({ quantity: 5, unitCostCents: 12500, supplier: "Ingram Micro", reference: "F-123", purchasedAt: "2026-10-10", location: "Entrepôt" })]);
+    expect((await admin.get("/api/store/suppliers")).json).toEqual(["Ingram Micro"]);
     let store = (await admin.get("/api/store")).json;
     expect(store.products.find((p: any) => p.id === ssd.id)).toMatchObject({ total: 4, low: false, stock: [{ location: "Entrepôt", quantity: 4 }] });
-    expect(store.stats).toMatchObject({ active: 1, units: 4, valueCents: 4 * 12950 });
+    expect(store.stats).toMatchObject({ active: 1, units: 4, valueCents: 4 * 12500 });
 
     // the charge form searches the portal inventory; taking 3 lowers the stock and logs the ticket
     const found = (await tech.get("/api/tickets/store-products?q=ssd")).json;
@@ -1079,6 +1083,48 @@ describe("tickets: client and contact", () => {
       ["receive", 5, null],
     ]);
     expect(moves[0].user).toBe("Alex Tremblay");
+  });
+
+  it("serialized products: received by serial number, the ones taken are chosen on the ticket", async () => {
+    const admin = await session("admin@akab.local");
+    const tech = await session("tech@akab.local");
+    const [loc] = (await admin.get("/api/store")).json.locations;
+    const fw = (await admin.post("/api/store/products", { sku: "FG-40F", name: "Pare-feu FortiGate 40F", priceCents: 79900, costCents: 60000, serialized: true })).json;
+    const receive = (serials: string[]) => admin.post(`/api/store/products/${fw.id}/receive`, { locationId: loc.id, serials, unitCostCents: 61000, supplier: "Synnex", reference: "PO-77" });
+    expect((await receive([])).json.error).toBe("serials_required");
+    expect((await receive(["FGT40F-A", "fgt40f-a"])).json).toMatchObject({ error: "serial_exists", fields: [{ path: "serial", message: "fgt40f-a" }] });
+    expect((await receive(["FGT40F-A", "FGT40F-B", " FGT40F-C "])).json.quantity).toBe(3);
+    expect((await receive(["FGT40F-B"])).json).toMatchObject({ error: "serial_exists", fields: [{ message: "FGT40F-B" }] });
+    // cannot stop being serialized while units are in stock
+    expect((await admin.patch(`/api/store/products/${fw.id}`, { serialized: false })).json.error).toBe("has_stock");
+
+    // the charge form lists the serials in stock; the chosen ones go to the ticket
+    const inStock = (await tech.get(`/api/tickets/store-products/${fw.id}/serials?locationId=${loc.id}`)).json;
+    expect(inStock.map((s: any) => s.serial)).toEqual(["FGT40F-A", "FGT40F-B", "FGT40F-C"]);
+    const tk = (await tech.get("/api/tickets?view=all")).json.items[6];
+    const charge = (serialIds: string[], quantity = serialIds.length) =>
+      tech.post(`/api/tickets/${tk.id}/charges`, { name: fw.name, quantity, unitPrice: 799, storeProductId: fw.id, locationId: loc.id, serialIds });
+    expect((await charge([inStock[0].id], 2)).json.error).toBe("serials_required");
+    const r = await charge([inStock[1].id]);
+    expect(r.status).toBe(201);
+    expect(r.json.at(-1).description).toContain("N° de série : FGT40F-B");
+    expect((await charge([inStock[1].id])).json.error).toBe("serial_unavailable");
+
+    // a broken unit is taken out with a note
+    expect((await admin.post(`/api/store/products/${fw.id}/adjust`, { locationId: loc.id, removeSerialIds: [inStock[2].id], note: "Brisé à la réception" })).json.quantity).toBe(1);
+    const serials = (await admin.get(`/api/store/products/${fw.id}/serials`)).json;
+    expect(serials.map((s: any) => [s.serial, s.status, s.ticketNumber, s.supplier])).toEqual([
+      ["FGT40F-A", "in_stock", null, "Synnex"],
+      ["FGT40F-C", "removed", null, "Synnex"],
+      ["FGT40F-B", "used", tk.number, "Synnex"],
+    ]);
+    const moves = (await admin.get(`/api/store/products/${fw.id}/movements`)).json;
+    expect(moves.map((m: any) => [m.kind, m.delta, m.serials])).toEqual([
+      ["adjust", -1, ["FGT40F-C"]],
+      ["ticket", -1, ["FGT40F-B"]],
+      ["receive", 3, ["FGT40F-A", "FGT40F-B", "FGT40F-C"]],
+    ]);
+    expect(moves[2]).toMatchObject({ supplier: "Synnex", reference: "PO-77", unitCostCents: 61000 });
   });
 
   it("timers: one running at a time, closed tab becomes an entry to validate", async () => {
@@ -1512,7 +1558,7 @@ describe("tickets from Autotask", () => {
     const admin = await signIn("admin@akab.local");
     const loc = (await admin.post("/api/store/locations", { name: "Camion" })).json;
     const item = (await admin.post("/api/store/products", { name: "SSD lié", priceCents: 18999, autotaskProductId: 601, materialCodeId: "501" })).json;
-    await admin.post(`/api/store/products/${item.id}/stock`, { locationId: loc.id, kind: "receive", quantity: 2 });
+    await admin.post(`/api/store/products/${item.id}/receive`, { locationId: loc.id, quantity: 2, unitCostCents: 12000 });
     const from = { storeProductId: item.id, locationId: loc.id };
     sent.length = 0;
     expect((await tech.post("/api/tickets/9001/charges", { name: "SSD lié", quantity: 1, unitPrice: 189.99, materialCodeId: "501", ...from })).status).toBe(201);

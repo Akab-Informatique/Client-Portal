@@ -36,6 +36,7 @@ import { currentLocale } from "@/i18n";
 import { useCan } from "@/lib/session";
 import { cn } from "@/lib/utils";
 import { longDateTime } from "@/pages/tickets/shared";
+import { SerialChecklist } from "./SerialChecklist";
 
 type Location = { id: string; name: string; active: boolean };
 type Product = {
@@ -51,13 +52,26 @@ type Product = {
   autotaskProductId: number | null;
   autotaskProductName: string | null;
   materialCodeId: string | null;
+  serialized: boolean;
   active: boolean;
   stock: { locationId: string; location: string; quantity: number }[];
   total: number;
   low: boolean;
 };
 type StoreData = { products: Product[]; locations: Location[]; stats: { active: number; low: number; out: number; valueCents: number; units: number } };
-type Movement = { id: string; delta: number; kind: "receive" | "adjust" | "ticket"; note: string; ticketNumber: string | null; createdAt: string; location: string; user: string | null };
+type Movement = {
+  id: string;
+  delta: number;
+  kind: "receive" | "adjust" | "ticket";
+  note: string;
+  ticketNumber: string | null;
+  serials: string[];
+  supplier: string | null;
+  reference: string | null;
+  createdAt: string;
+  location: string;
+  user: string | null;
+};
 type Filter = "all" | "low" | "out" | "archived";
 
 const KEY = ["store"];
@@ -199,7 +213,10 @@ export function StorePage() {
       </div>
 
       {dialog?.kind === "product" && <ProductDialog product={dialog.product} onClose={() => setDialog(null)} />}
-      {dialog?.kind === "stock" && data && <StockDialog product={dialog.product} mode={dialog.mode} locations={data.locations} onClose={() => setDialog(null)} onLocations={() => setDialog({ kind: "locations" })} />}
+      {dialog?.kind === "stock" && data && dialog.mode === "receive" && (
+        <ReceiveDialog product={dialog.product} locations={data.locations} onClose={() => setDialog(null)} onLocations={() => setDialog({ kind: "locations" })} />
+      )}
+      {dialog?.kind === "stock" && data && dialog.mode === "adjust" && <AdjustDialog product={dialog.product} locations={data.locations} onClose={() => setDialog(null)} />}
       {dialog?.kind === "history" && <HistoryDialog product={dialog.product} onClose={() => setDialog(null)} />}
       {dialog?.kind === "locations" && data && <LocationsDialog locations={data.locations} onClose={() => setDialog(null)} />}
     </div>
@@ -235,6 +252,7 @@ function ProductRow({ p, manage, open }: { p: Product; manage: boolean; open: Op
       <span className="min-w-0">
         <span className="flex items-baseline gap-2">
           <span className="truncate font-medium">{p.name}</span>
+          {p.serialized && <span className="shrink-0 rounded border border-[color:var(--gold)]/40 px-1 text-[9px] font-semibold text-primary">{t("store.serializedTag")}</span>}
           {p.autotaskProductId && <span className="shrink-0 rounded border border-sky-500/40 px-1 text-[9px] font-semibold text-sky-300">AUTOTASK</span>}
         </span>
         <span className="block truncate text-xs text-muted-foreground">{[p.sku, p.manufacturer].filter(Boolean).join(" · ") || "—"}</span>
@@ -276,7 +294,7 @@ function ProductRow({ p, manage, open }: { p: Product; manage: boolean; open: Op
                   <PackagePlus className="size-4" /> {t("store.receive")}
                 </DropdownMenuItem>
                 <DropdownMenuItem onSelect={() => open({ kind: "stock", product: p, mode: "adjust" })}>
-                  <SlidersHorizontal className="size-4" /> {t("store.adjust")}
+                  <SlidersHorizontal className="size-4" /> {p.serialized ? t("store.removeSerials") : t("store.adjust")}
                 </DropdownMenuItem>
                 <DropdownMenuItem onSelect={() => open({ kind: "product", product: p })}>
                   <Pencil className="size-4" /> {t("store.edit")}
@@ -320,6 +338,7 @@ function ProductDialog({ product, onClose }: { product: Product | null; onClose:
     cost: product ? fromCents(product.costCents) : "",
     minQuantity: String(product?.minQuantity ?? 0),
     materialCodeId: product?.materialCodeId ?? "",
+    serialized: product?.serialized ?? false,
     active: product?.active ?? true,
   });
   const [link, setLink] = useState<{ id: number; name: string } | null>(product?.autotaskProductId ? { id: product.autotaskProductId, name: product.autotaskProductName ?? `#${product.autotaskProductId}` } : null);
@@ -348,6 +367,7 @@ function ProductDialog({ product, onClose }: { product: Product | null; onClose:
         materialCodeId: f.materialCodeId || null,
         autotaskProductId: link?.id ?? null,
         autotaskProductName: link?.name ?? null,
+        serialized: f.serialized,
         active: f.active,
       };
       return product ? api.patch(`/store/products/${product.id}`, payload) : api.post("/store/products", payload);
@@ -406,6 +426,13 @@ function ProductDialog({ product, onClose }: { product: Product | null; onClose:
               {t("store.cols.margin")} : <span className="text-foreground">{Math.round(((price - cost) / price) * 100)} %</span> · {money(price - cost)}
             </p>
           )}
+          <label className={cn("flex items-center justify-between gap-3 rounded-lg border px-3 py-2 text-sm", product && product.total > 0 && "opacity-60")}>
+            <span>
+              {t("store.fields.serialized")}
+              <span className="block text-[11px] text-muted-foreground">{product && product.total > 0 ? t("store.serializedLocked") : t("store.fields.serializedHint")}</span>
+            </span>
+            <Switch checked={f.serialized} disabled={Boolean(product && product.total > 0)} onCheckedChange={(v) => set("serialized")(v)} />
+          </label>
           <Field id="sp-desc" label={t("store.fields.description")}>
             <Textarea id="sp-desc" rows={2} maxLength={4000} value={f.description} onChange={(e) => set("description")(e.target.value)} />
           </Field>
@@ -509,47 +536,80 @@ function AutotaskProductPick({ value, onChange }: { value: { id: number; name: s
   );
 }
 
-/** Receive stock (adds) or count it (sets the quantity) at a location. */
-function StockDialog({ product, mode, locations, onClose, onLocations }: { product: Product; mode: "receive" | "adjust"; locations: Location[]; onClose: () => void; onLocations: () => void }) {
+/** Receive a purchase: where it was bought, at what cost; serial numbers for serialized products. */
+function ReceiveDialog({ product, locations, onClose, onLocations }: { product: Product; locations: Location[]; onClose: () => void; onLocations: () => void }) {
   const { t } = useTranslation();
   const qc = useQueryClient();
   const err = useStoreError();
   const active = locations.filter((l) => l.active);
-  const [locationId, setLocationId] = useState(active[0]?.id ?? "");
-  const current = product.stock.find((s) => s.locationId === locationId)?.quantity ?? 0;
-  const [qty, setQty] = useState(mode === "adjust" ? String(current) : "");
-  const [note, setNote] = useState("");
-  const n = Number(qty);
-  const valid = locationId && qty.trim() !== "" && Number.isInteger(n) && n >= 0 && (mode === "adjust" || n > 0);
+  const { data: knownSuppliers = [] } = useQuery({ queryKey: [...KEY, "suppliers"], queryFn: () => api.get<string[]>("/store/suppliers"), staleTime: 60_000 });
+  const [f, setF] = useState({
+    locationId: active[0]?.id ?? "",
+    quantity: "",
+    serials: "",
+    cost: fromCents(product.costCents),
+    supplier: "",
+    reference: "",
+    purchasedAt: new Date().toISOString().slice(0, 10),
+    note: "",
+    updateCost: true,
+  });
+  const [conflicts, setConflicts] = useState<string[]>([]);
+  const set = (k: keyof typeof f) => (v: string | boolean) => setF((x) => ({ ...x, [k]: v }));
+  // One serial per line (a scanner types one, then Enter)
+  const lines = f.serials
+    .split(/[\n,;\t]+/)
+    .map((s) => s.trim())
+    .filter(Boolean);
+  const dupes = lines.filter((s, i) => lines.findIndex((x) => x.toUpperCase() === s.toUpperCase()) !== i);
+  const qty = product.serialized ? lines.length : Number(f.quantity);
+  const cost = toCents(f.cost);
+  const valid = f.locationId && Number.isInteger(qty) && qty > 0 && cost !== null && !dupes.length;
+  const current = product.stock.find((s) => s.locationId === f.locationId)?.quantity ?? 0;
   const save = useMutation({
-    mutationFn: () => api.post(`/store/products/${product.id}/stock`, { locationId, kind: mode, quantity: n, note }),
+    mutationFn: () =>
+      api.post(`/store/products/${product.id}/receive`, {
+        locationId: f.locationId,
+        quantity: product.serialized ? 1 : qty,
+        serials: product.serialized ? lines : [],
+        unitCostCents: cost,
+        supplier: f.supplier.trim() || null,
+        reference: f.reference.trim() || null,
+        purchasedAt: f.purchasedAt || null,
+        note: f.note.trim(),
+        updateCost: f.updateCost,
+      }),
     onSuccess: () => {
       void qc.invalidateQueries({ queryKey: KEY });
-      void qc.invalidateQueries({ queryKey: ["tickets", "inventory"] });
-      toast.success(t("common.saved"));
+      void qc.invalidateQueries({ queryKey: ["tickets", "store-products"] });
+      toast.success(t("store.received", { count: qty }));
       onClose();
     },
-    onError: (e) => toast.error(err(e)),
+    onError: (e) => {
+      if (e instanceof ApiError && e.code === "serial_exists") setConflicts((e.fields ?? []).map((x) => x.message));
+      toast.error(err(e));
+    },
   });
   return (
     <Dialog open onOpenChange={(o) => !o && onClose()}>
       <DialogContent
-        className="sm:max-w-md"
+        className="max-h-[90dvh] overflow-y-auto sm:max-w-lg"
         onOpenAutoFocus={(e) => {
-          const el = (e.currentTarget as HTMLElement).querySelector<HTMLInputElement>("#st-qty");
+          const el = (e.currentTarget as HTMLElement).querySelector<HTMLElement>(product.serialized ? "#rc-serials" : "#rc-qty");
           if (el) {
             e.preventDefault();
             el.focus();
-            el.select();
           }
         }}
       >
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
-            {mode === "receive" ? <PackagePlus className="size-5 text-primary" /> : <SlidersHorizontal className="size-5 text-primary" />}
-            {mode === "receive" ? t("store.receive") : t("store.adjust")}
+            <PackagePlus className="size-5 text-primary" /> {t("store.receive")}
           </DialogTitle>
-          <DialogDescription>{product.name}</DialogDescription>
+          <DialogDescription>
+            {product.name}
+            {product.serialized && <span className="ml-2 rounded border border-sky-500/40 px-1 text-[9px] font-semibold text-sky-300">{t("store.serializedTag")}</span>}
+          </DialogDescription>
         </DialogHeader>
         {active.length === 0 ? (
           <div className="space-y-3 text-sm">
@@ -566,42 +626,89 @@ function StockDialog({ product, mode, locations, onClose, onLocations }: { produ
               if (valid) save.mutate();
             }}
           >
-            <Field label={t("store.location")}>
-              <Select
-                value={locationId}
-                onValueChange={(v) => {
-                  setLocationId(v);
-                  if (mode === "adjust") setQty(String(product.stock.find((s) => s.locationId === v)?.quantity ?? 0));
-                }}
-              >
-                <SelectTrigger className="w-full">
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent position="popper">
-                  {active.map((l) => (
-                    <SelectItem key={l.id} value={l.id}>
-                      {l.name}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </Field>
-            <Field
-              id="st-qty"
-              label={mode === "receive" ? t("store.qtyReceived") : t("store.qtyCounted")}
-              hint={mode === "receive" ? t("store.nowAt", { count: current, after: current + (Number.isInteger(n) ? n : 0) }) : t("store.wasAt", { count: current })}
-            >
-              <Input id="st-qty" autoFocus inputMode="numeric" value={qty} onChange={(e) => setQty(e.target.value)} />
-            </Field>
-            <Field id="st-note" label={t("store.note")}>
-              <Input id="st-note" maxLength={500} value={note} onChange={(e) => setNote(e.target.value)} placeholder={mode === "receive" ? t("store.noteReceive") : t("store.noteAdjust")} />
-            </Field>
+            {/* 1. What came in, where */}
+            <section className="space-y-3">
+              <p className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">{t("store.step.what")}</p>
+              <Field label={t("store.location")} hint={t("store.nowAt", { count: current, after: current + (qty > 0 ? qty : 0) })}>
+                <Select value={f.locationId} onValueChange={(v) => set("locationId")(v)}>
+                  <SelectTrigger className="w-full">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent position="popper">
+                    {active.map((l) => (
+                      <SelectItem key={l.id} value={l.id}>
+                        {l.name}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </Field>
+              {product.serialized ? (
+                <Field id="rc-serials" label={t("store.serials")} hint={t("store.serialsHint")}>
+                  <Textarea
+                    id="rc-serials"
+                    rows={5}
+                    value={f.serials}
+                    onChange={(e) => {
+                      set("serials")(e.target.value);
+                      setConflicts([]);
+                    }}
+                    className="font-mono text-sm"
+                    placeholder={"SN-0001\nSN-0002"}
+                  />
+                  <p className="flex flex-wrap items-center gap-2 text-xs">
+                    <span className="rounded-full bg-[color:var(--gold)]/15 px-2 py-0.5 font-medium text-primary">{t("store.serialCount", { count: lines.length })}</span>
+                    {dupes.length > 0 && <span className="text-destructive">{t("store.serialDupes", { list: [...new Set(dupes)].join(", ") })}</span>}
+                    {conflicts.length > 0 && <span className="text-destructive">{t("store.serialTaken", { list: conflicts.join(", ") })}</span>}
+                  </p>
+                </Field>
+              ) : (
+                <Field id="rc-qty" label={t("store.qtyReceived")}>
+                  <Input id="rc-qty" inputMode="numeric" value={f.quantity} onChange={(e) => set("quantity")(e.target.value)} />
+                </Field>
+              )}
+            </section>
+
+            {/* 2. Where it was bought */}
+            <section className="space-y-3 border-t pt-4">
+              <p className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">{t("store.step.purchase")}</p>
+              <div className="grid gap-3 sm:grid-cols-2">
+                <Field id="rc-supplier" label={t("store.supplier")}>
+                  <Input id="rc-supplier" list="store-suppliers" maxLength={120} value={f.supplier} onChange={(e) => set("supplier")(e.target.value)} placeholder={t("store.supplierHint")} />
+                  <datalist id="store-suppliers">
+                    {knownSuppliers.map((s) => (
+                      <option key={s} value={s} />
+                    ))}
+                  </datalist>
+                </Field>
+                <Field id="rc-ref" label={t("store.reference")}>
+                  <Input id="rc-ref" maxLength={120} value={f.reference} onChange={(e) => set("reference")(e.target.value)} placeholder={t("store.referenceHint")} />
+                </Field>
+                <Field id="rc-date" label={t("store.purchasedAt")}>
+                  <Input id="rc-date" type="date" value={f.purchasedAt} onChange={(e) => set("purchasedAt")(e.target.value)} />
+                </Field>
+                <Field id="rc-cost" label={t("store.unitCost")} hint={cost !== null && qty > 0 ? t("store.purchaseTotal", { total: money(cost * qty) }) : undefined}>
+                  <Input id="rc-cost" inputMode="decimal" value={f.cost} onChange={(e) => set("cost")(e.target.value)} />
+                </Field>
+              </div>
+              <label className="flex items-center justify-between gap-3 rounded-lg border px-3 py-2 text-sm">
+                <span>
+                  {t("store.updateCost")}
+                  <span className="block text-[11px] text-muted-foreground">{t("store.updateCostHint", { cost: money(product.costCents) })}</span>
+                </span>
+                <Switch checked={f.updateCost} onCheckedChange={(v) => set("updateCost")(v)} />
+              </label>
+              <Field id="rc-note" label={t("store.note")}>
+                <Input id="rc-note" maxLength={500} value={f.note} onChange={(e) => set("note")(e.target.value)} />
+              </Field>
+            </section>
+
             <div className="flex justify-end gap-2">
               <Button type="button" variant="ghost" onClick={onClose}>
                 {t("common.cancel")}
               </Button>
               <Button type="submit" disabled={!valid || save.isPending} className="bg-grad-gold font-semibold text-[#1a1204]">
-                {save.isPending && <Loader2 className="size-4 animate-spin" />} {t("common.save")}
+                {save.isPending && <Loader2 className="size-4 animate-spin" />} {t("store.receiveN", { count: qty > 0 ? qty : 0 })}
               </Button>
             </div>
           </form>
@@ -611,49 +718,234 @@ function StockDialog({ product, mode, locations, onClose, onLocations }: { produ
   );
 }
 
-function HistoryDialog({ product, onClose }: { product: Product; onClose: () => void }) {
+/** Count (sets the quantity) — or take serial numbers out (broken, lost, returned…). */
+function AdjustDialog({ product, locations, onClose }: { product: Product; locations: Location[]; onClose: () => void }) {
   const { t } = useTranslation();
-  const { data, isLoading } = useQuery({ queryKey: [...KEY, "movements", product.id], queryFn: () => api.get<Movement[]>(`/store/products/${product.id}/movements`) });
-  const icon = { receive: PackagePlus, adjust: SlidersHorizontal, ticket: PackageMinus } as const;
+  const qc = useQueryClient();
+  const err = useStoreError();
+  const active = locations.filter((l) => l.active);
+  const [locationId, setLocationId] = useState(product.stock.find((s) => s.quantity > 0)?.locationId ?? active[0]?.id ?? "");
+  const current = product.stock.find((s) => s.locationId === locationId)?.quantity ?? 0;
+  const [qty, setQty] = useState(String(current));
+  const [note, setNote] = useState("");
+  const [picked, setPicked] = useState<string[]>([]);
+  const { data: serials } = useQuery({
+    queryKey: [...KEY, "serials", product.id],
+    queryFn: () => api.get<SerialRow[]>(`/store/products/${product.id}/serials`),
+    enabled: product.serialized,
+  });
+  const here = (serials ?? []).filter((s) => s.status === "in_stock" && s.locationId === locationId);
+  const n = Number(qty);
+  const valid = product.serialized ? picked.length > 0 && note.trim().length > 0 : qty.trim() !== "" && Number.isInteger(n) && n >= 0;
+  const save = useMutation({
+    mutationFn: () =>
+      api.post(`/store/products/${product.id}/adjust`, product.serialized ? { locationId, removeSerialIds: picked, note: note.trim() } : { locationId, quantity: n, note: note.trim() }),
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: KEY });
+      void qc.invalidateQueries({ queryKey: ["tickets", "store-products"] });
+      toast.success(t("common.saved"));
+      onClose();
+    },
+    onError: (e) => toast.error(err(e)),
+  });
   return (
     <Dialog open onOpenChange={(o) => !o && onClose()}>
-      <DialogContent className="sm:max-w-lg">
+      <DialogContent className="sm:max-w-md">
+        <DialogHeader>
+          <DialogTitle className="flex items-center gap-2">
+            <SlidersHorizontal className="size-5 text-primary" /> {product.serialized ? t("store.removeSerials") : t("store.adjust")}
+          </DialogTitle>
+          <DialogDescription>{product.name}</DialogDescription>
+        </DialogHeader>
+        <form
+          className="space-y-4"
+          onSubmit={(e: FormEvent) => {
+            e.preventDefault();
+            if (valid) save.mutate();
+          }}
+        >
+          <Field label={t("store.location")}>
+            <Select
+              value={locationId}
+              onValueChange={(v) => {
+                setLocationId(v);
+                setPicked([]);
+                setQty(String(product.stock.find((s) => s.locationId === v)?.quantity ?? 0));
+              }}
+            >
+              <SelectTrigger className="w-full">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent position="popper">
+                {active.map((l) => (
+                  <SelectItem key={l.id} value={l.id}>
+                    {l.name}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </Field>
+          {product.serialized ? (
+            <Field label={t("store.pickToRemove")}>
+              <SerialChecklist serials={here} picked={picked} onChange={setPicked} empty={t("store.noSerialHere")} />
+            </Field>
+          ) : (
+            <Field id="st-qty" label={t("store.qtyCounted")} hint={t("store.wasAt", { count: current })}>
+              <Input id="st-qty" inputMode="numeric" value={qty} onChange={(e) => setQty(e.target.value)} />
+            </Field>
+          )}
+          <Field id="st-note" label={product.serialized ? t("store.reason") : t("store.note")}>
+            <Input id="st-note" maxLength={500} value={note} onChange={(e) => setNote(e.target.value)} placeholder={product.serialized ? t("store.reasonHint") : t("store.noteAdjust")} />
+          </Field>
+          <div className="flex justify-end gap-2">
+            <Button type="button" variant="ghost" onClick={onClose}>
+              {t("common.cancel")}
+            </Button>
+            <Button type="submit" disabled={!valid || save.isPending} className="bg-grad-gold font-semibold text-[#1a1204]">
+              {save.isPending && <Loader2 className="size-4 animate-spin" />} {product.serialized ? t("store.removeN", { count: picked.length }) : t("common.save")}
+            </Button>
+          </div>
+        </form>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+type SerialRow = { id: string; serial: string; status: "in_stock" | "used" | "removed"; location: string; locationId: string; ticketNumber: string | null; note: string; supplier: string | null; reference: string | null; updatedAt: string };
+type Receipt = { id: string; quantity: number; unitCostCents: number; supplier: string | null; reference: string | null; purchasedAt: string | null; note: string; location: string; user: string | null; createdAt: string };
+
+/** Everything about a product's stock, in three tabs: movements, purchases, serial numbers. */
+function HistoryDialog({ product, onClose }: { product: Product; onClose: () => void }) {
+  const { t } = useTranslation();
+  const [tab, setTab] = useState<"moves" | "receipts" | "serials">("moves");
+  const { data: moves, isLoading } = useQuery({ queryKey: [...KEY, "movements", product.id], queryFn: () => api.get<Movement[]>(`/store/products/${product.id}/movements`) });
+  const { data: receipts } = useQuery({ queryKey: [...KEY, "receipts", product.id], queryFn: () => api.get<Receipt[]>(`/store/products/${product.id}/receipts`), enabled: tab === "receipts" });
+  const { data: serials } = useQuery({ queryKey: [...KEY, "serials", product.id], queryFn: () => api.get<SerialRow[]>(`/store/products/${product.id}/serials`), enabled: tab === "serials" });
+  const icon = { receive: PackagePlus, adjust: SlidersHorizontal, ticket: PackageMinus } as const;
+  const tabs = (["moves", "receipts", ...(product.serialized ? (["serials"] as const) : [])] as const).map((k) => k);
+  return (
+    <Dialog open onOpenChange={(o) => !o && onClose()}>
+      <DialogContent className="sm:max-w-2xl">
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
             <History className="size-5 text-primary" /> {t("store.history")}
           </DialogTitle>
           <DialogDescription>{product.name}</DialogDescription>
         </DialogHeader>
-        {isLoading ? (
-          <Skeleton className="h-40" />
-        ) : !data?.length ? (
-          <p className="text-sm text-muted-foreground">{t("store.noHistory")}</p>
-        ) : (
-          <ul className="max-h-[60vh] space-y-2 overflow-y-auto">
-            {data.map((m) => {
-              const Icon = icon[m.kind];
-              return (
-                <li key={m.id} className="flex items-start gap-3 rounded-lg border px-3 py-2 text-sm">
-                  <Icon className="mt-0.5 size-4 shrink-0 text-muted-foreground" />
-                  <span className="min-w-0 flex-1">
-                    <span className="block">
-                      {t(`store.kind.${m.kind}`)} · {m.location}
-                      {m.ticketNumber && <span className="ml-1 font-mono text-xs text-primary">{m.ticketNumber}</span>}
+        <div className="flex gap-1 rounded-xl border p-1 text-xs">
+          {tabs.map((k) => (
+            <button
+              key={k}
+              type="button"
+              onClick={() => setTab(k)}
+              className={cn("flex-1 rounded-lg px-2 py-1.5 font-medium", tab === k ? "bg-grad-gold text-[#1a1204]" : "text-muted-foreground hover:text-foreground")}
+            >
+              {t(`store.tabs.${k}`)}
+            </button>
+          ))}
+        </div>
+        <div className="max-h-[60vh] overflow-y-auto">
+          {tab === "moves" &&
+            (isLoading ? (
+              <Skeleton className="h-40" />
+            ) : !moves?.length ? (
+              <p className="text-sm text-muted-foreground">{t("store.noHistory")}</p>
+            ) : (
+              <ul className="space-y-2">
+                {moves.map((m) => {
+                  const Icon = icon[m.kind];
+                  return (
+                    <li key={m.id} className="flex items-start gap-3 rounded-lg border px-3 py-2 text-sm">
+                      <Icon className="mt-0.5 size-4 shrink-0 text-muted-foreground" />
+                      <span className="min-w-0 flex-1">
+                        <span className="block">
+                          {t(`store.kind.${m.kind}`)} · {m.location}
+                          {m.ticketNumber && <span className="ml-1 font-mono text-xs text-primary">{m.ticketNumber}</span>}
+                          {m.supplier && <span className="text-muted-foreground"> · {m.supplier}</span>}
+                          {m.reference && <span className="text-muted-foreground"> · {m.reference}</span>}
+                        </span>
+                        {m.serials.length > 0 && (
+                          <span className="mt-1 flex flex-wrap gap-1">
+                            {m.serials.map((s) => (
+                              <span key={s} className="rounded bg-muted px-1.5 font-mono text-[10px]">
+                                {s}
+                              </span>
+                            ))}
+                          </span>
+                        )}
+                        <span className="block text-[11px] text-muted-foreground">
+                          {longDateTime(m.createdAt)}
+                          {m.user && ` · ${m.user}`}
+                          {m.note && ` · ${m.note}`}
+                        </span>
+                      </span>
+                      <span className={cn("shrink-0 font-mono font-semibold", m.delta > 0 ? "text-emerald-400" : m.delta < 0 ? "text-orange-300" : "text-muted-foreground")}>
+                        {m.delta > 0 ? `+${m.delta}` : m.delta}
+                      </span>
+                    </li>
+                  );
+                })}
+              </ul>
+            ))}
+
+          {tab === "receipts" &&
+            (!receipts ? (
+              <Skeleton className="h-40" />
+            ) : !receipts.length ? (
+              <p className="text-sm text-muted-foreground">{t("store.noReceipt")}</p>
+            ) : (
+              <table className="w-full text-sm">
+                <thead className="text-left text-[11px] uppercase tracking-wide text-muted-foreground">
+                  <tr>
+                    <th className="pb-2 font-medium">{t("store.purchasedAt")}</th>
+                    <th className="pb-2 font-medium">{t("store.supplier")}</th>
+                    <th className="pb-2 font-medium">{t("store.reference")}</th>
+                    <th className="pb-2 text-right font-medium">{t("store.qty")}</th>
+                    <th className="pb-2 text-right font-medium">{t("store.unitCost")}</th>
+                    <th className="pb-2 text-right font-medium">{t("store.total")}</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y">
+                  {receipts.map((r) => (
+                    <tr key={r.id} title={[r.location, r.user, r.note].filter(Boolean).join(" · ")}>
+                      <td className="py-1.5">{r.purchasedAt ?? longDateTime(r.createdAt).split(" ")[0]}</td>
+                      <td className="py-1.5">{r.supplier ?? "—"}</td>
+                      <td className="py-1.5 font-mono text-xs">{r.reference ?? "—"}</td>
+                      <td className="py-1.5 text-right">{r.quantity}</td>
+                      <td className="py-1.5 text-right">{money(r.unitCostCents)}</td>
+                      <td className="py-1.5 text-right font-medium">{money(r.unitCostCents * r.quantity)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            ))}
+
+          {tab === "serials" &&
+            (!serials ? (
+              <Skeleton className="h-40" />
+            ) : (
+              <ul className="divide-y rounded-lg border text-sm">
+                {serials.map((s) => (
+                  <li key={s.id} className="flex items-center gap-3 px-3 py-2">
+                    <span className="font-mono">{s.serial}</span>
+                    <span
+                      className={cn(
+                        "rounded-full px-2 py-0.5 text-[10px] font-medium",
+                        s.status === "in_stock" ? "bg-emerald-500/15 text-emerald-300" : s.status === "used" ? "bg-sky-500/15 text-sky-300" : "bg-muted text-muted-foreground",
+                      )}
+                    >
+                      {t(`store.serialStatus.${s.status}`)}
                     </span>
-                    <span className="block text-[11px] text-muted-foreground">
-                      {longDateTime(m.createdAt)}
-                      {m.user && ` · ${m.user}`}
-                      {m.note && ` · ${m.note}`}
+                    <span className="min-w-0 flex-1 truncate text-xs text-muted-foreground">
+                      {s.status === "used" && s.ticketNumber ? <span className="font-mono text-primary">{s.ticketNumber}</span> : s.location}
+                      {s.supplier && ` · ${s.supplier}`}
+                      {s.note && ` · ${s.note}`}
                     </span>
-                  </span>
-                  <span className={cn("shrink-0 font-mono font-semibold", m.delta > 0 ? "text-emerald-400" : m.delta < 0 ? "text-orange-300" : "text-muted-foreground")}>
-                    {m.delta > 0 ? `+${m.delta}` : m.delta}
-                  </span>
-                </li>
-              );
-            })}
-          </ul>
-        )}
+                  </li>
+                ))}
+              </ul>
+            ))}
+        </div>
       </DialogContent>
     </Dialog>
   );

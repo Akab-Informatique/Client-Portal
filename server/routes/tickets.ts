@@ -12,7 +12,8 @@ import { AutotaskError, PERMISSION_REFUSED } from "../lib/autotask.ts";
 import { sweepTimers, timerView, elapsedMs } from "../lib/timers.ts";
 import { SourceError, ticketSource, type Asset, type NTicket, type Options, type TicketSource } from "../lib/ticketSource.ts";
 import { rmmLink, rmmSettings, type RmmSettings } from "../lib/rmm.ts";
-import { moveStock, searchProducts, undoMovement } from "../lib/store.ts";
+import { searchProducts, serialsOf, StoreError, takeForTicket, undoTake } from "../lib/store.ts";
+import { storeHttp } from "./store.ts";
 
 /**
  * Tickets (staff). Data come from the ticket source: Autotask when the
@@ -533,6 +534,12 @@ export const ticketRoutes = new Hono<AppEnv>()
   })
   /** Portal inventory products to charge on a ticket (name, SKU, manufacturer, category). */
   .get("/store-products", requirePermission("tickets.edit"), async (c) => c.json(await searchProducts((c.req.query("q") ?? "").slice(0, 60))))
+  /** Serial numbers of a product in stock at a location (to pick for a charge). */
+  .get("/store-products/:pid/serials", requirePermission("tickets.edit"), async (c) => {
+    const pid = z.uuid().parse(c.req.param("pid"));
+    const locationId = z.uuid().parse(c.req.query("locationId"));
+    return c.json((await serialsOf(pid, { locationId, inStock: true })).map(({ id, serial }) => ({ id, serial })));
+  })
   /** Add a product to the portal inventory from a ticket, when it does not exist yet. */
   .post("/store-products", requirePermission("tickets.edit"), async (c) => {
     const a = auth(c);
@@ -811,11 +818,13 @@ export const ticketRoutes = new Hono<AppEnv>()
         /** Portal inventory product charged, and the location its units come out of (null: no stock taken) */
         storeProductId: zUuidOrNull,
         locationId: zUuidOrNull,
+        /** Serialized product: the units taken */
+        serialIds: z.array(z.uuid()).max(500).default([]),
       }),
     );
     const src = await ticketSource();
-    const { storeProductId, locationId, ...charge } = p;
-    let taken: { movementId: string } | null = null;
+    const { storeProductId, locationId, serialIds, ...charge } = p;
+    let taken: { movementId: string; serials: string[] } | null = null;
     if (storeProductId) {
       const [product] = await db().select().from(schema.storeProducts).where(eq(schema.storeProducts.id, storeProductId));
       if (!product || !product.active) throw new HTTPException(404, { message: "not_found" });
@@ -825,8 +834,16 @@ export const ticketRoutes = new Hono<AppEnv>()
         // Whole units only, never more than what is on hand
         if (!Number.isInteger(charge.quantity)) throw new HTTPException(400, { message: "Validation failed" });
         const number = (await run(() => src.list())).find((t) => t.id === id)?.number ?? null;
-        taken = await moveStock({ productId: storeProductId, locationId, delta: -charge.quantity, kind: "ticket", userId: a.user.id, ticket: { id, number }, mustHave: true });
-        if (!taken) throw new HTTPException(409, { message: "insufficient_stock" });
+        try {
+          taken = await takeForTicket({ productId: storeProductId, locationId, quantity: charge.quantity, serialIds, ticket: { id, number }, userId: a.user.id });
+        } catch (e) {
+          throw e instanceof StoreError ? storeHttp(e) : e;
+        }
+        // The serial numbers go on the Autotask charge too
+        if (taken.serials.length) {
+          const line = `N° de série : ${taken.serials.join(", ")}`;
+          charge.description = (charge.description ? `${charge.description}\n${line}` : line).slice(0, 2000);
+        }
       }
     } else if (locationId) {
       throw new HTTPException(400, { message: "Validation failed" });
@@ -835,7 +852,7 @@ export const ticketRoutes = new Hono<AppEnv>()
       await run(() => src.addCharge(id, charge, a));
     } catch (e) {
       // Not charged: the items go back in stock
-      if (taken) await undoMovement(taken.movementId);
+      if (taken) await undoTake(taken.movementId);
       throw e;
     }
     await audit(a.user.id, "ticket.charge_added", String(id), { name: p.name, quantity: p.quantity, unitPrice: p.unitPrice, billable: p.billable, productId: p.productId });
