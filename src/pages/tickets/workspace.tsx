@@ -5,7 +5,7 @@ import { Maximize2, Ticket, X } from "lucide-react";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { TicketOverlay } from "./TicketPanel";
 import { DockTimer, TimersProvider, useTicketTimerAuto, useTimers, type Timer } from "./timers";
-import { priorityGlow, usePresence, type PriorityKind as Priority, type TicketDetail } from "./shared";
+import { dueGlow, priorityGlow, usePresence, type PriorityKind as Priority, type StatusKind, type TicketDetail } from "./shared";
 
 /**
  * Ticket workspace, shared by every staff page: the ticket open full screen and
@@ -13,7 +13,7 @@ import { priorityGlow, usePresence, type PriorityKind as Priority, type TicketDe
  * going to another page). Minimized tickets keep their presence: the others
  * still see that you are on them. Kept for the browser tab (sessionStorage).
  */
-type Docked = { id: number; number: string; title: string; priority?: Priority };
+type Docked = { id: number; number: string; title: string; priority?: Priority; dueAt?: string; statusKind?: StatusKind };
 type Ws = {
   openId: number | null;
   docked: Docked[];
@@ -58,7 +58,7 @@ export function TicketWorkspaceProvider({ enabled, children }: { enabled: boolea
     setOpenId(null);
   }, [enabled, timer]);
   const minimize = useCallback((tk: TicketDetail) => {
-    setDocked((d) => [...d.filter((x) => x.id !== tk.id), { id: tk.id, number: tk.number, title: tk.title, priority: tk.priorityKind }].slice(-6));
+    setDocked((d) => [...d.filter((x) => x.id !== tk.id), { id: tk.id, number: tk.number, title: tk.title, priority: tk.priorityKind, dueAt: tk.dueAt, statusKind: tk.statusKind }].slice(-6));
     setOpenId(null);
   }, []);
   const dismiss = (id: number) => setDocked((d) => d.filter((x) => x.id !== id));
@@ -116,7 +116,7 @@ function DockItem({ d, timer, at, onRestore, onDismiss }: { d: Docked; timer?: T
       exit={{ opacity: 0, y: 16, scale: 0.95 }}
       className="group relative isolate flex w-72 items-center gap-2 overflow-hidden rounded-xl border border-[color:var(--gold)]/25 bg-popover/90 py-1.5 pl-1.5 pr-1 shadow-[0_12px_40px_-12px_rgba(0,0,0,0.6),0_0_24px_-12px_rgba(255,206,26,0.35)] backdrop-blur-xl"
     >
-      <span aria-hidden className="pointer-events-none absolute inset-y-0 left-0 -z-10 w-40" style={priorityGlow(d.priority ?? "medium", 0.9)} />
+      <span aria-hidden className="pointer-events-none absolute inset-y-0 left-0 -z-10 w-40" style={d.dueAt && d.statusKind ? dueGlow(d.dueAt, d.statusKind, 0.9) : priorityGlow(d.priority ?? "medium", 0.9)} />
       <button type="button" onClick={onRestore} className="flex min-w-0 flex-1 items-center gap-2 text-left">
         <Ticket className="size-4 shrink-0 text-primary" />
         <span className="min-w-0">

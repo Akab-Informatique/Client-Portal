@@ -124,7 +124,18 @@ const PRIORITY_RGB: Record<PriorityKind, string> = { critical: "239, 68, 68", hi
  * and title (instead of a hard coloured bar). strength 1 = list row.
  */
 export function priorityGlow(kind: PriorityKind, strength = 1): CSSProperties {
-  const c = PRIORITY_RGB[kind];
+  return glow(PRIORITY_RGB[kind], strength);
+}
+
+/** Due-date colour: overdue, due today, within 2 days, on time, done. */
+const DUE_RGB = { overdue: "239, 68, 68", today: "249, 115, 22", soon: "255, 206, 26", later: "16, 185, 129", done: "100, 116, 139" } as const;
+
+/** The glowing hue from the due date (how urgent the ticket is now). */
+export function dueGlow(dueAt: string, status: StatusKind, strength = 1): CSSProperties {
+  return glow(DUE_RGB[status === "complete" ? "done" : dueState(dueAt, status)], strength * (status === "complete" ? 0.6 : 1));
+}
+
+function glow(c: string, strength: number): CSSProperties {
   const a = (x: number) => Math.min(1, x * strength).toFixed(2);
   return {
     backgroundImage: `radial-gradient(120% 90% at 0% 50%, rgba(${c}, ${a(0.34)}) 0%, rgba(${c}, ${a(0.12)}) 38%, transparent 72%), linear-gradient(90deg, rgba(${c}, ${a(0.55)}) 0, rgba(${c}, 0) 3px)`,
