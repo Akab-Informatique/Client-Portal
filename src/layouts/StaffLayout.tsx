@@ -113,7 +113,7 @@ export function StaffLayout() {
             initial={{ opacity: 0, y: 6 }}
             animate={{ opacity: 1, y: 0 }}
             transition={{ duration: 0.18, ease: [0.22, 1, 0.36, 1] }}
-            className="relative mx-auto w-full max-w-[1400px] px-4 pb-24 pt-6 sm:px-6 lg:px-8"
+            className={cn("relative mx-auto w-full px-4 pb-24 pt-6 sm:px-6 lg:px-8", location.pathname === "/tickets" ? "max-w-[1960px]" : "max-w-[1400px]")}
           >
             <Suspense fallback={<div className="h-40 animate-pulse rounded-2xl bg-card/50" />}>
               <Outlet />

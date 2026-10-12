@@ -1127,6 +1127,57 @@ describe("tickets: client and contact", () => {
     expect(moves[2]).toMatchObject({ supplier: "Synnex", reference: "PO-77", unitCostCents: 61000 });
   });
 
+  it("priorities of the day / week: given by an admin, carried over until done, on the calendar", async () => {
+    const admin = await session("admin@akab.local");
+    const tech = await session("tech@akab.local");
+    const [techRow] = await db().select().from(schema.users).where(eq(schema.users.email, "tech@akab.local"));
+    const [a, b, c] = (await tech.get("/api/tickets?view=all")).json.items;
+    const today = new Intl.DateTimeFormat("en-CA", { timeZone: "America/Toronto" }).format(new Date());
+    const plus = (days: number) => new Date(new Date(`${today}T12:00:00Z`).getTime() + days * 86_400_000).toISOString().slice(0, 10);
+
+    // only planners give priorities; a technician only sees their own
+    expect((await tech.post("/api/planning/pins", { ticketId: a.id, technicianId: techRow.id })).status).toBe(403);
+    const [adminRow] = await db().select().from(schema.users).where(eq(schema.users.email, "admin@akab.local"));
+    expect((await tech.get(`/api/planning/pins?technicianId=${adminRow.id}`)).status).toBe(403);
+
+    expect((await admin.post("/api/planning/pins", { ticketId: a.id, technicianId: techRow.id, horizon: "day", note: "Rappeler le client avant midi" })).status).toBe(201);
+    expect((await admin.post("/api/planning/pins", { ticketId: b.id, technicianId: techRow.id, horizon: "week", note: "Finir la migration" })).status).toBe(201);
+    const mine = (await tech.get("/api/planning/pins")).json;
+    expect(mine.map((p: any) => [p.ticketId, p.bucket, p.note])).toEqual([
+      [a.id, "day", "Rappeler le client avant midi"],
+      [b.id, "week", "Finir la migration"],
+    ]);
+    expect(mine[0]).toMatchObject({ pinnedByName: "Administrateur AKAB", status: { kind: expect.any(String) } });
+    const bell = (await tech.get("/api/notifications")).json.items.find((n: any) => n.type === "ticket.pinned");
+    expect(bell).toMatchObject({ link: `/tickets?ticket=${b.id}`, data: { number: b.number, horizon: "week" } });
+    // marked in the list
+    const listed = (await tech.get("/api/tickets?view=all")).json.items;
+    expect(listed.find((x: any) => x.id === a.id).myPriority).toBe("day");
+
+    // next week: both carried over until done
+    const later = (await tech.get(`/api/planning/pins?date=${plus(8)}`)).json;
+    expect(later.map((p: any) => p.bucket)).toEqual(["carried", "carried"]);
+    expect((await tech.post(`/api/planning/pins/${mine[0].id}/done`, { done: true })).status).toBe(200);
+    expect((await tech.get(`/api/planning/pins?date=${plus(8)}`)).json.map((p: any) => p.ticketId)).toEqual([b.id]);
+    expect((await tech.get(`/api/planning/pins/ticket/${b.id}`)).json).toEqual([expect.objectContaining({ technician: "Alex Tremblay", note: "Finir la migration", horizon: "week" })]);
+
+    // calendar: reserving time for a ticket makes it a priority of that week
+    const start = new Date(`${plus(1)}T13:00:00Z`);
+    const block = (body: object) => admin.post("/api/planning/calendar", { technicianId: techRow.id, startsAt: start.toISOString(), endsAt: new Date(start.getTime() + 2 * 3_600_000).toISOString(), ...body });
+    expect((await tech.post("/api/planning/calendar", { technicianId: techRow.id, ticketId: c.id, startsAt: start.toISOString(), endsAt: start.toISOString() })).status).toBe(403);
+    expect((await admin.post("/api/planning/calendar", { technicianId: techRow.id, ticketId: c.id, startsAt: start.toISOString(), endsAt: start.toISOString() })).json.error).toBe("invalid_time");
+    const r = await block({ ticketId: c.id, note: "Sur place" });
+    expect(r.status).toBe(201);
+    expect(r.json).toMatchObject({ ticketNumber: c.number, title: c.title });
+    expect((await block({ title: "Formation interne" })).status).toBe(201);
+    const from = new Date(`${plus(-7)}T00:00:00Z`).toISOString();
+    const to = new Date(`${plus(14)}T00:00:00Z`).toISOString();
+    const cal = (await tech.get(`/api/planning/calendar?from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}`)).json;
+    expect(cal.map((x: any) => x.title)).toEqual([c.title, "Formation interne"]);
+    const nowPins = (await tech.get(`/api/planning/pins?date=${plus(1)}`)).json;
+    expect(nowPins.some((p: any) => p.ticketId === c.id)).toBe(true);
+  });
+
   it("timers: one running at a time, closed tab becomes an entry to validate", async () => {
     const tech = await session("tech@akab.local");
     const other = await session("tech2@akab.local");

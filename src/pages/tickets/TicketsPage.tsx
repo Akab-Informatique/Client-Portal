@@ -31,8 +31,7 @@ import {
   UserX,
   Wand2,
   X,
-  type LucideIcon,
-} from "lucide-react";
+  type LucideIcon, Star } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
@@ -57,6 +56,7 @@ import { NewTicketDialog } from "./NewTicketDialog";
 import { dueState, FILTER_KEYS, PRIORITY_STYLE, dueGlow, useChoiceText, shortDate, STATUS_STYLE, useTickets, VIEWS, type TicketList, type TicketSummary, type View, ticketErrorText } from "./shared";
 import { useTicketWorkspace } from "./workspace";
 import { GlobalSearch } from "./GlobalSearch";
+import { PlanningPanel } from "./Planning";
 import { AiSetupHint, InlinePick, useAiError } from "./TicketPanel";
 
 type Saved = { id: string; name: string; query: string };
@@ -84,6 +84,15 @@ export function TicketsPage() {
   const { data, isLoading, dataUpdatedAt, isFetching, refetch } = useTickets(view, params);
   const [creating, setCreating] = useState(false);
   const qc = useQueryClient();
+  // Link to a ticket (e.g. from a notification): /tickets?ticket=<id>
+  useEffect(() => {
+    const id = Number(params.get("ticket"));
+    if (!id) return;
+    ws.open(id);
+    const next = new URLSearchParams(params);
+    next.delete("ticket");
+    setParams(next, { replace: true });
+  }, [params, setParams, ws]);
   // Inline change from the list (status, priority, assignee)
   const patchTicket = useMutation({
     mutationFn: (p: { id: number; patch: RowPatch }) => api.patch(`/tickets/${p.id}`, p.patch),
@@ -138,7 +147,8 @@ export function TicketsPage() {
   }, [can]);
 
   return (
-    <div className="relative isolate space-y-4">
+    <div className="relative isolate flex items-start gap-4">
+    <div className="min-w-0 flex-1 space-y-4">
       <GlassBackdrop className="-inset-x-8 -top-6" />
       {/* Header */}
       <div className="flex flex-wrap items-center justify-between gap-3">
@@ -279,6 +289,9 @@ export function TicketsPage() {
       </div>
 
       {data && <NewTicketDialog open={creating} onOpenChange={setCreating} facets={data.facets} onCreated={(id) => ws.open(id)} />}
+    </div>
+    {/* Priorities and the weekly calendar (collapsible) */}
+    <PlanningPanel />
     </div>
   );
 }
@@ -610,6 +623,11 @@ function TicketRow({
           <span className="flex items-baseline gap-2">
             <span className="shrink-0 font-mono text-[11px] text-muted-foreground group-hover:text-primary">{tk.number}</span>
             <span className="truncate font-medium">{tk.title}</span>
+            {tk.myPriority && (
+              <span className="flex shrink-0 items-center gap-0.5 rounded-full border border-[color:var(--gold)]/50 bg-[color:var(--gold)]/10 px-1.5 text-[10px] font-semibold text-primary">
+                <Star className="size-2.5 fill-current" /> {t(`planning.badge.${tk.myPriority}`)}
+              </span>
+            )}
           </span>
           <span className="mt-0.5 block truncate text-xs text-muted-foreground">{tk.excerpt || tk.company.name}</span>
         </span>

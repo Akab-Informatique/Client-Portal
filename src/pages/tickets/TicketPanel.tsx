@@ -35,6 +35,7 @@ import {
   RefreshCw,
   Send,
   Sparkles,
+  Star,
   UserRound,
   Users,
   X,
@@ -63,6 +64,7 @@ import { CompanyPicker, ContactPicker, useCompanies } from "./pickers";
 import { TimerControl } from "./timers";
 import { AssetContent, AssetPicker } from "./AssetCard";
 import { ChargeButtons } from "./Charges";
+import { PriorityDialog, TicketPriorities } from "./Planning";
 import { useConfirm } from "@/components/ConfirmDialog";
 import { dueState, longDateTime, PRIORITY_STYLE, STATUS_STYLE, useChoiceText, usePresence, type AiAnalysis, type TicketDetail, type TicketList, type Viewer, ticketErrorText } from "./shared";
 
@@ -232,6 +234,7 @@ function TicketBody({
   const [draft, setDraft] = useState<{ text: string; internal: boolean } | null>(null);
   // Quick actions put the note box in a mode and bring it into view
   const [focusNote, setFocusNote] = useState<{ internal: boolean; at: number } | null>(null);
+  const [giving, setGiving] = useState(false);
   const done = tk.options.statuses.find((s) => s.kind === "complete");
   const remote = tk.asset?.links.remote ?? null;
   const phone = tk.contactInfo?.phone ?? null;
@@ -335,6 +338,7 @@ function TicketBody({
             {remote && <QuickAction icon={MonitorPlay} label={t("tickets.asset.remote")} href={remote} accent />}
             {phone && <QuickAction icon={Phone} label={t("tickets.quickAction.call", { name: tk.contact.split(" ")[0] })} href={`tel:${phone.replace(/[^\d+]/g, "")}`} title={phone} />}
             {email && <QuickAction icon={Mail} label={t("tickets.quickAction.email")} href={`mailto:${email}?subject=${encodeURIComponent(`[${tk.number}] ${tk.title}`)}`} title={email} />}
+            {can("tickets.plan") && <QuickAction icon={Star} label={t("planning.givePriority")} onClick={() => setGiving(true)} />}
             {editable && done && tk.statusKind !== "complete" && (
               <QuickAction
                 icon={CheckCircle2}
@@ -372,6 +376,7 @@ function TicketBody({
                 </span>
               </p>
             ))}
+            <TicketPriorities ticketId={tk.id} />
             <EditableDescription
               text={tk.description}
               disabled={!editable || partial}
@@ -505,6 +510,7 @@ function TicketBody({
         </aside>
       </div>
       <OpenedByOthers viewers={viewers} />
+      {giving && <PriorityDialog priority={null} ticket={{ id: tk.id, number: tk.number, title: tk.title }} onClose={() => setGiving(false)} />}
     </>
   );
 }

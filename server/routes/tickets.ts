@@ -1,6 +1,6 @@
 import { Hono } from "hono";
 import { HTTPException } from "hono/http-exception";
-import { and, asc, desc, eq, inArray } from "drizzle-orm";
+import { and, asc, desc, eq, inArray, isNull } from "drizzle-orm";
 import { z } from "zod";
 import { db, schema } from "../db/index.ts";
 import { auth, requirePermission, type AppEnv, type AuthContext } from "../lib/auth.ts";
@@ -311,6 +311,15 @@ export const ticketRoutes = new Hono<AppEnv>()
       // Portal-only filter: Autotask has no start date
       .filter((t) => inRange(starts.get(t.id), q.startFrom, q.startTo))
       .map((t) => summary(t, L, starts.get(t.id), a.user.id));
+    // My priorities (given by an admin), not done: marked in the list
+    const mine = await db()
+      .select({ ticketId: schema.ticketPins.ticketId, horizon: schema.ticketPins.horizon })
+      .from(schema.ticketPins)
+      .where(and(eq(schema.ticketPins.technicianId, a.user.id), isNull(schema.ticketPins.doneAt)));
+    for (const it of items as (ReturnType<typeof summary> & { myPriority?: "day" | "week" })[]) {
+      const p = mine.find((x) => x.ticketId === it.id);
+      if (p) it.myPriority = p.horizon;
+    }
 
     const sort = q.sort ?? "due";
     items.sort((x, y) =>

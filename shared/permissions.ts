@@ -52,6 +52,14 @@ export const MODULES = [
         description: { fr: "Nouveau billet, notes, date de début", en: "New ticket, notes, start date" },
       },
       {
+        key: "tickets.plan",
+        label: { fr: "Planifier et épingler les billets", en: "Plan and pin tickets" },
+        description: {
+          fr: "Épingler des billets à un technicien avec une directive et réserver du temps dans son calendrier",
+          en: "Pin tickets to a technician with a direction and reserve time on their calendar",
+        },
+      },
+      {
         key: "tickets.ai",
         label: { fr: "Utiliser l'assistant IA", en: "Use the AI assistant" },
         description: {

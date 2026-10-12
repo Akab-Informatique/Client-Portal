@@ -21,6 +21,7 @@ import { viewAsRoutes } from "./routes/viewAs.ts";
 import { notificationRoutes } from "./routes/notifications.ts";
 import { ticketRoutes } from "./routes/tickets.ts";
 import { storeRoutes } from "./routes/store.ts";
+import { planningRoutes } from "./routes/planning.ts";
 
 export function createApp() {
   const app = new Hono<AppEnv>();
@@ -68,6 +69,7 @@ export function createApp() {
   api.route("/admin", adminRoutes);
   api.use("/messages/*", requireStaff);
   api.route("/store", storeRoutes);
+  api.route("/planning", planningRoutes);
   api.route("/messages", messageRoutes);
   api.route("/board", boardRoutes);
   api.use("/dashboard/*", requireStaff);

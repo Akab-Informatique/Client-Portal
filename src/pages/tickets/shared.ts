@@ -39,6 +39,8 @@ export type TicketSummary = {
   updatedAt: string;
   startDate: string | null;
   viewers: Viewer[];
+  /** This ticket is one of my priorities (given by an admin) */
+  myPriority?: "day" | "week";
 };
 export type TicketDetail = TicketSummary & {
   description: string;

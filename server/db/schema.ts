@@ -543,3 +543,52 @@ export const autotaskAuthors = pgTable(
   },
   (t) => [primaryKey({ columns: [t.entity, t.autotaskId] }), index("autotask_authors_ticket_idx").on(t.ticketId)],
 );
+
+// ── Planning: tickets pinned to a technician, time reserved on their calendar ──
+/** A priority: a ticket an admin gives a technician for a day or a week, with a direction. */
+export const ticketPins = pgTable(
+  "ticket_pins",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    ticketId: bigint("ticket_id", { mode: "number" }).notNull(),
+    ticketNumber: text("ticket_number").notNull(),
+    ticketTitle: text("ticket_title").notNull(),
+    technicianId: uuid("technician_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    /** Direction for the technician (what to do, how, by when) */
+    note: text("note").notNull().default(""),
+    /** Daily or weekly priority, for that day / the week starting that Monday (YYYY-MM-DD) */
+    horizon: text("horizon", { enum: ["day", "week"] }).notNull().default("week"),
+    forDate: text("for_date").notNull(),
+    /** Marked done by the technician */
+    doneAt: timestamp("done_at", { withTimezone: true }),
+    /** Order in the technician's list (1 = first) */
+    rank: integer("rank").notNull().default(0),
+    pinnedBy: uuid("pinned_by").references(() => users.id, { onDelete: "set null" }),
+    createdAt: created(),
+    updatedAt: updated(),
+  },
+  (t) => [uniqueIndex("ticket_pins_ticket_tech_unique").on(t.ticketId, t.technicianId), index("ticket_pins_tech_idx").on(t.technicianId)],
+);
+
+/** Time reserved by an admin on a technician's calendar (for a pinned ticket, or a reserved slot). */
+export const calendarBlocks = pgTable(
+  "calendar_blocks",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    technicianId: uuid("technician_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    ticketId: bigint("ticket_id", { mode: "number" }),
+    ticketNumber: text("ticket_number"),
+    title: text("title").notNull(),
+    note: text("note").notNull().default(""),
+    startsAt: timestamp("starts_at", { withTimezone: true }).notNull(),
+    endsAt: timestamp("ends_at", { withTimezone: true }).notNull(),
+    createdBy: uuid("created_by").references(() => users.id, { onDelete: "set null" }),
+    createdAt: created(),
+    updatedAt: updated(),
+  },
+  (t) => [index("calendar_blocks_tech_time_idx").on(t.technicianId, t.startsAt)],
+);
