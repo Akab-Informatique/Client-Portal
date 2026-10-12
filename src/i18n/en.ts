@@ -360,6 +360,7 @@ const en: Dict = {
     o365Off: "Outlook calendar not synced. An administrator can turn it on for you.",
   },
   sms: {
+    tileOff: "Not set up · Admin › Integrations",
     inAutotask: "Every text (received, sent, automatic) is also copied as an internal note in the Autotask ticket.",
     scope: {
       pending: "No ticket",

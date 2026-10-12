@@ -64,7 +64,7 @@ export function useSmsSummary() {
 export function SmsTile({ onOpen }: { onOpen: () => void }) {
   const { t } = useTranslation();
   const { data } = useSmsSummary();
-  if (!data || (!data.ready && !data.open)) return null;
+  if (!data) return null;
   const left = minutesLeft(data.next);
   return (
     <button
@@ -82,7 +82,11 @@ export function SmsTile({ onOpen }: { onOpen: () => void }) {
       <span className="min-w-0 flex-1">
         <span className="block truncate text-sm font-semibold">{t("sms.tile")}</span>
         <span className="mt-0.5 block truncate text-[11px] text-muted-foreground">
-          {data.waiting ? t("sms.tileWaiting", { count: data.waiting, delay: delayText(left ?? 0) }) : t("sms.tileUnread", { count: data.unread })}
+          {data.waiting
+            ? t("sms.tileWaiting", { count: data.waiting, delay: delayText(left ?? 0) })
+            : !data.ready && !data.open
+              ? t("sms.tileOff")
+              : t("sms.tileUnread", { count: data.unread })}
         </span>
       </span>
       <span className={cn("font-mono text-3xl font-semibold tabular-nums", data.waiting || data.unread ? "text-foreground" : "text-muted-foreground/50")}>{data.waiting || data.unread}</span>
