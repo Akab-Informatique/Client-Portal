@@ -890,6 +890,7 @@ type VoipmsView = {
   autoTicketMinutes: number;
   autoReply: string;
   ticketOpened: string;
+  ticketTimeout: string;
   defaultCompanyId: number | null;
   defaultCompanyName: string | null;
   queue: string | null;
@@ -933,7 +934,7 @@ function VoipmsPage() {
     },
     staleTime: 5 * 60_000,
   });
-  const [f, setF] = useState({ username: "", password: "", did: "", enabled: false, minutes: "15", autoReply: "", ticketOpened: "", companyId: "", queue: "", priority: "", sendTo: "" });
+  const [f, setF] = useState({ username: "", password: "", did: "", enabled: false, minutes: "240", autoReply: "", ticketOpened: "", ticketTimeout: "", companyId: "", queue: "", priority: "", sendTo: "" });
   const [test, setTest] = useState<{ ok: boolean; error?: string; detail?: string } | null>(null);
   useEffect(() => {
     if (s)
@@ -946,6 +947,7 @@ function VoipmsPage() {
         minutes: String(s.autoTicketMinutes),
         autoReply: s.autoReply,
         ticketOpened: s.ticketOpened,
+        ticketTimeout: s.ticketTimeout,
         companyId: s.defaultCompanyId ? String(s.defaultCompanyId) : "",
         queue: s.queue ?? "",
         priority: s.priority ?? "",
@@ -963,6 +965,7 @@ function VoipmsPage() {
         autoTicketMinutes: Math.max(1, Number(f.minutes) || 15),
         autoReply: f.autoReply.trim(),
         ticketOpened: f.ticketOpened.trim(),
+        ticketTimeout: f.ticketTimeout.trim(),
         defaultCompanyId: company ? company.id : null,
         defaultCompanyName: company ? company.name : null,
         queue: f.queue || null,
@@ -1096,6 +1099,11 @@ function VoipmsPage() {
               <Textarea id="vm-opened" rows={2} maxLength={600} value={f.ticketOpened} onChange={(e) => set("ticketOpened")(e.target.value)} />
               <p className="text-[11px] text-muted-foreground">{t("integrations.voipms.ticketOpenedHint")}</p>
             </div>
+          </div>
+          <div className="space-y-2">
+            <Label htmlFor="vm-timeout">{t("integrations.voipms.ticketTimeout")}</Label>
+            <Textarea id="vm-timeout" rows={2} maxLength={600} value={f.ticketTimeout} onChange={(e) => set("ticketTimeout")(e.target.value)} />
+            <p className="text-[11px] text-muted-foreground">{t("integrations.voipms.ticketOpenedHint")}</p>
           </div>
           <div className="grid gap-4 sm:grid-cols-3">
             {pick(

@@ -57,7 +57,7 @@ import { dueState, FILTER_KEYS, PRIORITY_STYLE, dueGlow, useChoiceText, shortDat
 import { useTicketWorkspace } from "./workspace";
 import { GlobalSearch } from "./GlobalSearch";
 import { PlanningPanel } from "./Planning";
-import { SmsTile } from "@/pages/sms/SmsPage";
+import { SmsInboxDialog, SmsTile } from "@/pages/sms/SmsPage";
 import { AiSetupHint, InlinePick, useAiError } from "./TicketPanel";
 
 type Saved = { id: string; name: string; query: string };
@@ -85,6 +85,16 @@ export function TicketsPage() {
   const { data, isLoading, dataUpdatedAt, isFetching, refetch } = useTickets(view, params);
   const [creating, setCreating] = useState(false);
   const qc = useQueryClient();
+  // Texts pop-up: from the tile, or a notification (/tickets?sms=<conversation>)
+  const [smsInbox, setSmsInbox] = useState<string | null>(null);
+  useEffect(() => {
+    const c = params.get("sms");
+    if (c === null) return;
+    setSmsInbox(c);
+    const next = new URLSearchParams(params);
+    next.delete("sms");
+    setParams(next, { replace: true });
+  }, [params, setParams]);
   // Link to a ticket (e.g. from a notification): /tickets?ticket=<id>
   useEffect(() => {
     const id = Number(params.get("ticket"));
@@ -192,7 +202,7 @@ export function TicketsPage() {
           </span>
         </div>
       )}
-      <MetricTiles data={data} params={params} apply={apply} />
+      <MetricTiles data={data} params={params} apply={apply} onSms={() => setSmsInbox("")} />
 
       {/* Toolbar: view, search, team, the two frequent filters, the rest under "More" */}
       <div className="glass flex flex-wrap items-center gap-1.5 rounded-2xl border p-1.5">
@@ -291,6 +301,7 @@ export function TicketsPage() {
 
       {data && <NewTicketDialog open={creating} onOpenChange={setCreating} facets={data.facets} onCreated={(id) => ws.open(id)} />}
     </div>
+    {smsInbox !== null && <SmsInboxDialog initialId={smsInbox || null} onClose={() => setSmsInbox(null)} />}
     {/* Priorities and the weekly calendar (collapsible) */}
     <PlanningPanel />
     </div>
@@ -353,7 +364,7 @@ const TILES: { key: TileKey; icon: LucideIcon; tone: string; glow: string; query
   { key: "attention", icon: Siren, tone: "text-red-400", glow: "rgba(239,68,68,0.38)", query: "view=all&attention=1" },
 ];
 
-function MetricTiles({ data, params, apply }: { data: TicketList | undefined; params: URLSearchParams; apply: (q: string) => void }) {
+function MetricTiles({ data, params, apply, onSms }: { data: TicketList | undefined; params: URLSearchParams; apply: (q: string) => void; onSms: () => void }) {
   const { t } = useTranslation();
   const current = useMemo(() => {
     const p = new URLSearchParams(params);
@@ -412,7 +423,7 @@ function MetricTiles({ data, params, apply }: { data: TicketList | undefined; pa
           </Tooltip>
         );
       })}
-      <SmsTile />
+      <SmsTile onOpen={onSms} />
     </div>
   );
 }

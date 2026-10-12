@@ -29,6 +29,8 @@ export type SmsSettings = {
   autoTicketMinutes: number;
   autoReply: string;
   ticketOpened: string;
+  /** When it became a ticket because nobody answered in time */
+  ticketTimeout: string;
   /** Unknown numbers: the client used for their tickets */
   defaultCompanyId: number | null;
   defaultCompanyName: string | null;
@@ -38,7 +40,9 @@ export type SmsSettings = {
 };
 
 export const DEFAULT_AUTO_REPLY =
-  "AKAB Informatique : message bien reçu. Répondez 1 pour ouvrir un billet maintenant, ou un technicien vous répondra sous peu. Sans réponse d'ici {minutes} min, un billet sera ouvert automatiquement.";
+  "AKAB Informatique : message bien reçu. Répondez 1 pour en faire un billet maintenant, ou un technicien vous répondra sous peu. Sans réponse d'ici {delay}, un billet sera ouvert automatiquement.";
+export const DEFAULT_TICKET_TIMEOUT =
+  "AKAB Informatique : aucun technicien n'a pu prendre votre message à temps, nous avons donc ouvert le billet {number}. Nous vous contacterons dès que possible.";
 export const DEFAULT_TICKET_OPENED = "AKAB Informatique : votre demande est maintenant le billet {number}. Un technicien vous contactera. Merci!";
 
 export class SmsError extends Error {
@@ -55,6 +59,12 @@ export function normalizePhone(v: string | null | undefined): string | null {
   const d = (v ?? "").replace(/\D/g, "");
   const ten = d.length === 11 && d.startsWith("1") ? d.slice(1) : d;
   return /^[2-9]\d{9}$/.test(ten) ? ten : null;
+}
+/** "4 h", "1 h 30", "45 min" (for the messages to the client). */
+export function formatDelay(minutes: number): string {
+  const h = Math.floor(minutes / 60);
+  const m = minutes % 60;
+  return h ? `${h} h${m ? ` ${String(m).padStart(2, "0")}` : ""}` : `${m} min`;
 }
 export const formatPhone = (p: string) => `(${p.slice(0, 3)}) ${p.slice(3, 6)}-${p.slice(6)}`;
 
@@ -73,9 +83,10 @@ export async function smsSettings(): Promise<SmsSettings> {
     password: secrets.password ?? null,
     did: c.did ?? "",
     token: secrets.token ?? null,
-    autoTicketMinutes: c.autoTicketMinutes ?? 15,
+    autoTicketMinutes: c.autoTicketMinutes ?? 240,
     autoReply: c.autoReply ?? DEFAULT_AUTO_REPLY,
     ticketOpened: c.ticketOpened ?? DEFAULT_TICKET_OPENED,
+    ticketTimeout: c.ticketTimeout ?? DEFAULT_TICKET_TIMEOUT,
     defaultCompanyId: c.defaultCompanyId ?? null,
     defaultCompanyName: c.defaultCompanyName ?? null,
     queue: c.queue ?? null,

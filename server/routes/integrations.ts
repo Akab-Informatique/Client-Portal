@@ -273,6 +273,7 @@ export const integrationRoutes = new Hono<AppEnv>()
         autoTicketMinutes: z.number().int().min(1).max(24 * 60).optional(),
         autoReply: z.string().trim().min(1).max(600).optional(),
         ticketOpened: z.string().trim().min(1).max(600).optional(),
+        ticketTimeout: z.string().trim().min(1).max(600).optional(),
         defaultCompanyId: z.number().int().positive().nullable().optional(),
         defaultCompanyName: z.string().trim().max(200).nullable().optional(),
         queue: z.string().max(40).nullable().optional(),

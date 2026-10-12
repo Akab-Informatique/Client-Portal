@@ -4,7 +4,7 @@ import type { AuthContext } from "./auth.ts";
 import { audit } from "./audit.ts";
 import { notify, usersWith } from "./notify.ts";
 import { ticketSource } from "./ticketSource.ts";
-import { formatPhone, normalizePhone, sendSms, SmsError, smsSettings } from "./voipms.ts";
+import { formatDelay, formatPhone, normalizePhone, sendSms, SmsError, smsSettings } from "./voipms.ts";
 
 /**
  * Text conversations with clients (one VoIP.ms number), seen by every
@@ -55,7 +55,7 @@ async function tellTechnicians(conv: Conversation, body: string) {
   await notify(techs, {
     type: "sms.received",
     data: { from: who(conv), company: conv.companyName ?? "", preview: body.slice(0, 140), ticket: conv.ticketNumber ?? "" },
-    link: `/sms?c=${conv.id}`,
+    link: `/tickets?sms=${conv.id}`,
   });
 }
 
@@ -98,7 +98,7 @@ export async function receiveSms(p: { from: string; message: string; id?: string
 
   if (isNew) {
     // what happens next, for the client
-    await sendTo(conv, fill(s.autoReply, { minutes: String(s.autoTicketMinutes) }), { auto: true }).catch((e) => console.warn("[sms] auto reply:", e instanceof Error ? e.message : e));
+    await sendTo(conv, fill(s.autoReply, { minutes: String(s.autoTicketMinutes), delay: formatDelay(s.autoTicketMinutes) }), { auto: true }).catch((e) => console.warn("[sms] auto reply:", e instanceof Error ? e.message : e));
     return;
   }
   if (conv.status === "waiting" && WANTS_TICKET.test(body)) {
@@ -136,7 +136,7 @@ export class SmsTicketError extends Error {
  * The conversation becomes a ticket (asked by the client, by a technician, or
  * no reply in time). The client is told its number.
  */
-export async function openTicket(conv: Conversation, a: AuthContext | null): Promise<{ id: number; number: string }> {
+export async function openTicket(conv: Conversation, a: AuthContext | null, reason: "client" | "technician" | "timeout" = a ? "technician" : "client"): Promise<{ id: number; number: string }> {
   if (conv.ticketId && conv.ticketNumber) return { id: conv.ticketId, number: conv.ticketNumber };
   const s = await smsSettings();
   const companyId = conv.companyId ?? s.defaultCompanyId;
@@ -177,8 +177,9 @@ export async function openTicket(conv: Conversation, a: AuthContext | null): Pro
     .set({ status: "ticket", ticketId: ticket.id, ticketNumber: ticket.number, autoTicketAt: null, updatedAt: new Date() })
     .where(eq(schema.smsConversations.id, conv.id))
     .returning();
-  await sendTo(next, fill(s.ticketOpened, { number: ticket.number }), { auto: true }).catch((e) => console.warn("[sms] ticket message:", e instanceof Error ? e.message : e));
-  await audit(a?.realUser.id ?? null, "sms.ticket_opened", conv.id, { ticketId: ticket.id, by: a ? "technician" : "auto" });
+  // no technician in time: the client is told so; otherwise, the ticket number
+  await sendTo(next, fill(reason === "timeout" ? s.ticketTimeout : s.ticketOpened, { number: ticket.number }), { auto: true }).catch((e) => console.warn("[sms] ticket message:", e instanceof Error ? e.message : e));
+  await audit(a?.realUser.id ?? null, "sms.ticket_opened", conv.id, { ticketId: ticket.id, reason });
   return ticket;
 }
 
@@ -191,7 +192,7 @@ export async function autoTickets(now = new Date()): Promise<number> {
   let n = 0;
   for (const c of due) {
     try {
-      await openTicket(c, null);
+      await openTicket(c, null, "timeout");
       n++;
     } catch (e) {
       console.warn("[sms] automatic ticket:", e instanceof Error ? e.message : e);

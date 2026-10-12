@@ -64,7 +64,7 @@ import { TimerControl } from "./timers";
 import { AssetContent, AssetPicker } from "./AssetCard";
 import { ChargeButtons } from "./Charges";
 import { PriorityDialog, TicketPriorities } from "./Planning";
-import { TicketSmsDialog } from "@/pages/sms/SmsPage";
+import { TicketSmsPanel, useTicketSms } from "@/pages/sms/SmsPage";
 import { useConfirm } from "@/components/ConfirmDialog";
 import { dueState, longDateTime, PRIORITY_STYLE, STATUS_STYLE, useChoiceText, usePresence, type AiAnalysis, type TicketDetail, type TicketList, type Viewer, ticketErrorText } from "./shared";
 
@@ -235,7 +235,9 @@ function TicketBody({
   // Quick actions put the note box in a mode and bring it into view
   const [focusNote, setFocusNote] = useState<{ internal: boolean; at: number } | null>(null);
   const [giving, setGiving] = useState(false);
-  const [texting, setTexting] = useState(false);
+  // the exchange shown: the ticket activity, or the texts with the client
+  const [thread, setThread] = useState<"activity" | "sms">("activity");
+  const { data: texts } = useTicketSms(tk.id, can("sms.view") && !partial);
   const done = tk.options.statuses.find((s) => s.kind === "complete");
   const remote = tk.asset?.links.remote ?? null;
   const phone = tk.contactInfo?.phone ?? null;
@@ -338,7 +340,7 @@ function TicketBody({
             )}
             {remote && <QuickAction icon={MonitorPlay} label={t("tickets.asset.remote")} href={remote} accent />}
             {phone && <QuickAction icon={Phone} label={t("tickets.quickAction.call", { name: tk.contact.split(" ")[0] })} href={`tel:${phone.replace(/[^\d+]/g, "")}`} title={phone} />}
-            {can("sms.view") && <QuickAction icon={MessageSquareText} label={t("sms.quick")} onClick={() => setTexting(true)} />}
+            {can("sms.view") && <QuickAction icon={MessageSquareText} label={t("sms.quick")} onClick={() => setThread("sms")} />}
             {email && <QuickAction icon={Mail} label={t("tickets.quickAction.email")} href={`mailto:${email}?subject=${encodeURIComponent(`[${tk.number}] ${tk.title}`)}`} title={email} />}
             {can("tickets.plan") && <QuickAction icon={Star} label={t("planning.givePriority")} onClick={() => setGiving(true)} />}
             {editable && done && tk.statusKind !== "complete" && (
@@ -387,7 +389,26 @@ function TicketBody({
               onSave={(description) => update.mutate({ description })}
             />
             <AiPanel tk={tk} onToNote={(text) => setDraft({ text, internal: true })} />
-            <Activity tk={tk} partial={partial && !loadError} />
+            {can("sms.view") && (
+              <div className="flex items-center gap-1 rounded-xl border p-1 text-xs">
+                {(["activity", "sms"] as const).map((k) => (
+                  <button
+                    key={k}
+                    type="button"
+                    onClick={() => setThread(k)}
+                    className={cn(
+                      "flex flex-1 items-center justify-center gap-1.5 rounded-lg px-3 py-1.5 font-medium transition-colors",
+                      thread === k ? "bg-grad-gold text-[#1a1204]" : "text-muted-foreground hover:text-foreground",
+                    )}
+                  >
+                    {k === "activity" ? <Clock3 className="size-3.5" /> : <MessageSquareText className="size-3.5" />}
+                    {t(`sms.thread.${k}`)}
+                    {k === "sms" && (texts?.messages.length ?? 0) > 0 && <span className="rounded-full bg-black/15 px-1.5 font-mono text-[10px]">{texts!.messages.length}</span>}
+                  </button>
+                ))}
+              </div>
+            )}
+            {thread === "sms" && can("sms.view") ? <TicketSmsPanel ticketId={tk.id} phone={phone} /> : <Activity tk={tk} partial={partial && !loadError} />}
           </div>
           {/* Charges and expenses: small buttons right above the note box */}
           <div className="pb-2 lg:pr-2">
@@ -512,7 +533,6 @@ function TicketBody({
         </aside>
       </div>
       <OpenedByOthers viewers={viewers} />
-      {texting && <TicketSmsDialog ticketId={tk.id} ticketNumber={tk.number} phone={phone} contact={tk.contact} onClose={() => setTexting(false)} />}
       {giving && <PriorityDialog priority={null} ticket={{ id: tk.id, number: tk.number, title: tk.title }} onClose={() => setGiving(false)} />}
     </>
   );

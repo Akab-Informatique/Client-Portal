@@ -1862,8 +1862,9 @@ describe("text messages (VoIP.ms)", () => {
     // settings: the password never comes back; the callback address carries the token
     expect((await admin.put("/api/admin/integrations/voipms", { enabled: true })).json.error).toBe("sms_incomplete");
     expect((await admin.post("/api/admin/integrations/voipms/test", { username: "akab@akab.ca", password: "wrong" })).json).toMatchObject({ ok: false, error: "api", detail: "invalid_credentials" });
-    const saved = (await admin.put("/api/admin/integrations/voipms", { username: "akab@akab.ca", password: "api-secret", did: "+1 (450) 555-9000", enabled: true, defaultCompanyId: 301, defaultCompanyName: "Client par défaut", autoTicketMinutes: 15 })).json;
-    expect(saved).toMatchObject({ enabled: true, did: "4505559000", hasPassword: true, autoTicketMinutes: 15 });
+    const saved = (await admin.put("/api/admin/integrations/voipms", { username: "akab@akab.ca", password: "api-secret", did: "+1 (450) 555-9000", enabled: true, defaultCompanyId: 301, defaultCompanyName: "Client par défaut" })).json;
+    // 4 hours by default before a ticket opens by itself
+    expect(saved).toMatchObject({ enabled: true, did: "4505559000", hasPassword: true, autoTicketMinutes: 240 });
     expect(JSON.stringify(saved)).not.toContain("api-secret");
     const token = new URL(saved.callbackUrl.replace("{FROM}", "x"), "http://h").searchParams.get("token")!;
     expect(token.length).toBeGreaterThan(20);
@@ -1881,8 +1882,9 @@ describe("text messages (VoIP.ms)", () => {
     expect(convs).toEqual([expect.objectContaining({ phone: "5145550000", status: "waiting", contactName: null, unread: 1, lastPreview: "Mon imprimante ne marche plus" })]);
     expect(sms.every((s) => s.method === "sendSMS" && s.dst === "5145550000" && s.did === "4505559000" && s.message!.length <= 160)).toBe(true);
     expect(sms.map((s) => s.message).join(" ")).toContain("Répondez 1");
+    expect(sms.map((s) => s.message).join(" ")).toContain("d'ici 4 h");
     const bell = (await tech.get("/api/notifications")).json.items.find((n: any) => n.type === "sms.received");
-    expect(bell).toMatchObject({ link: `/sms?c=${convs[0].id}`, data: { preview: "Mon imprimante ne marche plus" } });
+    expect(bell).toMatchObject({ link: `/tickets?sms=${convs[0].id}`, data: { preview: "Mon imprimante ne marche plus" } });
     expect((await tech.get("/api/sms/summary")).json).toMatchObject({ waiting: 1, unread: 1, ready: true });
 
     // a technician answers: no automatic ticket for this one
@@ -1925,6 +1927,8 @@ describe("text messages (VoIP.ms)", () => {
     expect(auto.status).toBe("ticket");
     expect((await tech.get(`/api/tickets/${auto.ticketId}`)).json.company.id).toBe(301);
     expect(sms[0]).toMatchObject({ dst: "8195550123", message: expect.stringContaining(auto.ticketNumber) });
+    // the client is told nobody could answer in time (not the same as when they asked)
+    expect(sms.map((s) => s.message).join(" ")).toContain("aucun technicien");
 
     // from a ticket: a text to the contact, kept with the ticket
     const tk = (await tech.get("/api/tickets?view=all")).json.items[0];
