@@ -364,14 +364,20 @@ async function roleOf(at: Client, resourceId: number): Promise<number | null> {
   return roles[0]?.roleID ?? null;
 }
 
+/**
+ * Client names for these ids: from the cached full list when it is there,
+ * otherwise only the needed ids are asked (never the whole list just for this).
+ */
 async function companyNames(at: Client, ids: number[]): Promise<Map<number, string>> {
-  const all = await autotaskSource.companies().catch(() => [] as Company[]);
+  const all = (cache.get("companies")?.value as Company[] | undefined) ?? [];
   const map = new Map(all.map((c) => [c.id, c.name]));
   const missing = [...new Set(ids)].filter((id) => !map.has(id));
-  for (const part of chunks(missing, 200)) {
-    const rows = await at.query<{ id: number; companyName: string }>("Companies", [{ op: "in", field: "id", value: part }], { fields: ["id", "companyName"] });
-    for (const r of rows) map.set(r.id, r.companyName);
-  }
+  const parts = await Promise.all(
+    chunks(missing, 200).map((part) =>
+      at.query<{ id: number; companyName: string }>("Companies", [{ op: "in", field: "id", value: part }], { fields: ["id", "companyName"] }),
+    ),
+  );
+  for (const r of parts.flat()) map.set(r.id, r.companyName);
   return map;
 }
 async function contactNames(at: Client, ids: number[]): Promise<Map<number, string>> {

@@ -488,6 +488,7 @@ const fr = {
     },
   },
   tickets: {
+    loadingActivity: "Chargement des notes…",
     youAreSecondary: "Vous êtes technicien secondaire sur ce billet",
     notLinkedTitle: "Votre compte n'est pas lié à un utilisateur Autotask.",
     notLinkedText: "« Mes billets » reste vide et vous ne pouvez pas modifier les billets. Un administrateur peut faire le lien dans Paramètres admin › Intégrations › Autotask.",

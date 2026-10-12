@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useSearchParams } from "react-router-dom";
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient, type QueryClient } from "@tanstack/react-query";
 import { AnimatePresence, motion } from "motion/react";
 import { toast } from "sonner";
 import { Dialog as DialogPrimitive } from "radix-ui";
@@ -54,7 +54,7 @@ import { useCan, useMe } from "@/lib/session";
 import { cn, initials } from "@/lib/utils";
 import { GlassBackdrop } from "@/components/brand/GlassBackdrop";
 import { CompanyPicker, ContactPicker, useCompanies } from "./pickers";
-import { dueState, longDateTime, PRIORITY_STYLE, STATUS_STYLE, useChoiceText, usePresence, type AiAnalysis, type TicketDetail, type Viewer, ticketErrorText } from "./shared";
+import { dueState, longDateTime, PRIORITY_STYLE, STATUS_STYLE, useChoiceText, usePresence, type AiAnalysis, type TicketDetail, type TicketList, type Viewer, ticketErrorText } from "./shared";
 
 const SOURCE_ICON: Record<string, LucideIcon> = { email: Mail, phone: Phone, portal: Inbox, monitoring: MonitorCog };
 
@@ -73,12 +73,38 @@ export function useAiError() {
  * can be changed in place. "Minimize" keeps it in the dock (presence goes on),
  * "Close" leaves it. Presence: popup on arrival + light in the top-right corner.
  */
+/**
+ * The ticket as already known from a loaded list, so the window opens at once;
+ * description, notes and time arrive with the full ticket a moment later.
+ */
+function fromLists(qc: QueryClient, id: number): TicketDetail | undefined {
+  for (const [, d] of qc.getQueriesData<TicketList>({ queryKey: ["tickets"] })) {
+    if (!d || !Array.isArray(d.items)) continue;
+    const tk = d.items.find((x) => x.id === id);
+    if (!tk) continue;
+    return {
+      ...tk,
+      description: tk.excerpt,
+      source: "",
+      hours: 0,
+      notes: [],
+      demo: d.demo,
+      ai: d.ai,
+      options: { statuses: d.facets.statuses, priorities: d.facets.priorities, queues: d.facets.queues, technicians: d.facets.technicians },
+    };
+  }
+  return undefined;
+}
+
 export function TicketOverlay({ id, onClose, onMinimize }: { id: number | null; onClose: () => void; onMinimize: (tk: TicketDetail) => void }) {
   const { t } = useTranslation();
-  const { data, isLoading } = useQuery({
+  const qc = useQueryClient();
+  const { data, isLoading, isPlaceholderData } = useQuery({
     queryKey: ["tickets", "detail", id],
     queryFn: () => api.get<TicketDetail>(`/tickets/${id}`),
     enabled: Boolean(id),
+    staleTime: 15_000,
+    placeholderData: () => (id ? fromLists(qc, id) : undefined),
   });
   const viewers = usePresence(id);
 
@@ -105,7 +131,7 @@ export function TicketOverlay({ id, onClose, onMinimize }: { id: number | null; 
                     <Skeleton className="h-96" />
                   </div>
                 ) : (
-                  <TicketBody tk={data} viewers={viewers} onClose={onClose} onMinimize={() => onMinimize(data)} />
+                  <TicketBody tk={data} partial={isPlaceholderData} viewers={viewers} onClose={onClose} onMinimize={() => onMinimize(data)} />
                 )}
               </motion.div>
             </DialogPrimitive.Content>
@@ -132,7 +158,20 @@ function useTicketUpdate(tk: TicketDetail) {
   });
 }
 
-function TicketBody({ tk, viewers, onClose, onMinimize }: { tk: TicketDetail; viewers: Viewer[] | null; onClose: () => void; onMinimize: () => void }) {
+function TicketBody({
+  tk,
+  partial,
+  viewers,
+  onClose,
+  onMinimize,
+}: {
+  tk: TicketDetail;
+  /** Shown from the list while the full ticket (description, notes, time) loads */
+  partial: boolean;
+  viewers: Viewer[] | null;
+  onClose: () => void;
+  onMinimize: () => void;
+}) {
   const { t } = useTranslation();
   const txt = useChoiceText();
   const can = useCan();
@@ -218,10 +257,15 @@ function TicketBody({ tk, viewers, onClose, onMinimize }: { tk: TicketDetail; vi
             <section className="glass rounded-2xl border p-4">
               <p className="mb-2 text-[11px] font-medium uppercase tracking-wide text-muted-foreground">{t("tickets.description")}</p>
               <p className="whitespace-pre-wrap text-sm leading-relaxed">{tk.description || "—"}</p>
+              {partial && <Skeleton className="mt-2 h-4 w-2/3" />}
             </section>
             <section>
               <p className="mb-3 text-[11px] font-medium uppercase tracking-wide text-muted-foreground">{t("tickets.activity")}</p>
-              {tk.notes.length === 0 ? (
+              {partial ? (
+                <p className="flex items-center gap-2 text-sm text-muted-foreground">
+                  <Loader2 className="size-4 animate-spin" /> {t("tickets.loadingActivity")}
+                </p>
+              ) : tk.notes.length === 0 ? (
                 <p className="text-sm text-muted-foreground">{t("tickets.noActivity")}</p>
               ) : (
                 <ol className="relative space-y-4 border-l pl-5">
@@ -301,7 +345,7 @@ function TicketBody({ tk, viewers, onClose, onMinimize }: { tk: TicketDetail; vi
                 {longDateTime(tk.createdAt)}
               </Detail>
               <Detail icon={Clock3} label={t("tickets.fields.hours")}>
-                {t("tickets.hoursValue", { hours: tk.hours.toLocaleString() })}
+                {partial ? "…" : t("tickets.hoursValue", { hours: tk.hours.toLocaleString() })}
               </Detail>
             </dl>
             <StartDate tk={tk} />

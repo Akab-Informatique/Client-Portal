@@ -490,6 +490,7 @@ const en: Dict = {
     },
   },
   tickets: {
+    loadingActivity: "Loading notes…",
     youAreSecondary: "You are a secondary technician on this ticket",
     notLinkedTitle: "Your account is not linked to an Autotask user.",
     notLinkedText: "“My tickets” stays empty and you cannot change tickets. An administrator can link it in Admin settings › Integrations › Autotask.",
