@@ -15,6 +15,13 @@
  */
 :root {
   --radius: 0.875rem;
+  /* Glass panels (light theme) */
+  --glass-bg: rgba(255, 255, 255, 0.55);
+  --glass-bg-strong: rgba(255, 255, 255, 0.72);
+  --glass-border: rgba(10, 10, 11, 0.08);
+  --glass-highlight: rgba(255, 255, 255, 0.9);
+  --glass-shadow: 0 18px 40px -26px rgba(10, 10, 11, 0.25);
+  --glass-sheen: rgba(255, 255, 255, 0.5);
   --gold: #ffce1a;
   --gold-2: #f59410;
   --gold-light: #ffe24a;
@@ -49,6 +56,12 @@
 }
 
 .dark {
+  --glass-bg: rgba(255, 255, 255, 0.045);
+  --glass-sheen: rgba(255, 255, 255, 0.05);
+  --glass-bg-strong: rgba(18, 19, 23, 0.72);
+  --glass-border: rgba(255, 255, 255, 0.09);
+  --glass-highlight: rgba(255, 255, 255, 0.07);
+  --glass-shadow: 0 24px 48px -28px rgba(0, 0, 0, 0.7);
   --background: #0a0a0b;
   --foreground: #ededf0;
   --card: #121317;
@@ -149,6 +162,23 @@
   }
   .glow-gold {
     box-shadow: 0 16px 34px -14px rgba(245, 148, 16, 0.55);
+  }
+  /* Frosted glass panel: translucent, blurred, fine light edge */
+  .glass {
+    background-color: var(--glass-bg);
+    /* soft sheen from the top edge */
+    background-image: linear-gradient(180deg, var(--glass-sheen), transparent 55%);
+    border-color: var(--glass-border);
+    backdrop-filter: blur(18px) saturate(140%);
+    -webkit-backdrop-filter: blur(18px) saturate(140%);
+    box-shadow: inset 0 1px 0 0 var(--glass-highlight), var(--glass-shadow);
+  }
+  .glass-strong {
+    background-color: var(--glass-bg-strong);
+    border-color: var(--glass-border);
+    backdrop-filter: blur(28px) saturate(150%);
+    -webkit-backdrop-filter: blur(28px) saturate(150%);
+    box-shadow: inset 0 1px 0 0 var(--glass-highlight), var(--glass-shadow);
   }
   .ring-gold {
     box-shadow: 0 0 0 1px color-mix(in oklab, var(--gold) 55%, transparent), 0 0 24px -6px var(--glow);

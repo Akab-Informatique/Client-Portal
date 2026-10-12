@@ -52,6 +52,7 @@ import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip
 import { api, ApiError } from "@/lib/api";
 import { useCan, useMe } from "@/lib/session";
 import { cn, initials } from "@/lib/utils";
+import { GlassBackdrop } from "@/components/brand/GlassBackdrop";
 import { CompanyPicker, ContactPicker } from "./pickers";
 import { dueState, longDateTime, PRIORITY_STYLE, STATUS_STYLE, useChoiceText, usePresence, type AiAnalysis, type TicketDetail, type Viewer, ticketErrorText } from "./shared";
 
@@ -92,9 +93,10 @@ export function TicketOverlay({ id, onClose, onMinimize }: { id: number | null; 
                 animate={{ opacity: 1, scale: 1, y: 0 }}
                 exit={{ opacity: 0, scale: 0.985, y: 24 }}
                 transition={{ duration: 0.22, ease: [0.22, 1, 0.36, 1] }}
-                className="fixed inset-0 z-50 flex flex-col overflow-hidden bg-background"
+                className="fixed inset-0 z-50 isolate flex flex-col overflow-hidden bg-background/75 backdrop-blur-2xl"
               >
-                <div className="pointer-events-none absolute inset-x-0 top-0 h-72 bg-grid opacity-50 [mask-image:linear-gradient(to_bottom,black,transparent)]" />
+                <GlassBackdrop />
+                <div className="pointer-events-none absolute inset-x-0 top-0 -z-10 h-72 bg-grid opacity-40 [mask-image:linear-gradient(to_bottom,black,transparent)]" />
                 {isLoading || !data ? (
                   <div className="relative mx-auto w-full max-w-7xl space-y-4 p-8">
                     <DialogPrimitive.Title className="sr-only">{t("tickets.title")}</DialogPrimitive.Title>
@@ -142,7 +144,7 @@ function TicketBody({ tk, viewers, onClose, onMinimize }: { tk: TicketDetail; vi
   return (
     <>
       {/* Header */}
-      <div className="relative z-10 border-b bg-background/70 backdrop-blur-xl">
+      <div className="glass relative z-10 rounded-none border-x-0 border-t-0 border-b">
         <div className="mx-auto w-full max-w-7xl px-6 pb-4 pt-4 lg:px-8">
           <div className="flex items-center gap-3">
             <span className="rounded-md border border-[color:var(--gold)]/30 bg-[color:var(--gold)]/10 px-2 py-0.5 font-mono text-xs text-primary">{tk.number}</span>
@@ -212,7 +214,7 @@ function TicketBody({ tk, viewers, onClose, onMinimize }: { tk: TicketDetail; vi
           {/* Conversation */}
           <div className="min-w-0 space-y-5">
             <AiPanel tk={tk} onToNote={(text) => setDraft({ text, internal: true })} />
-            <section className="rounded-xl border bg-card/60 p-4">
+            <section className="glass rounded-2xl border p-4">
               <p className="mb-2 text-[11px] font-medium uppercase tracking-wide text-muted-foreground">{t("tickets.description")}</p>
               <p className="whitespace-pre-wrap text-sm leading-relaxed">{tk.description || "—"}</p>
             </section>
@@ -245,7 +247,7 @@ function TicketBody({ tk, viewers, onClose, onMinimize }: { tk: TicketDetail; vi
 
           {/* Details (editable) */}
           <aside className="space-y-4">
-            <dl className="space-y-3 rounded-xl border bg-card/60 p-4 text-sm">
+            <dl className="glass space-y-3 rounded-2xl border p-4 text-sm">
               <Detail icon={Building2} label={t("tickets.fields.company")}>
                 <CompanyPicker
                   disabled={!editable}
@@ -379,7 +381,7 @@ function StartDate({ tk }: { tk: TicketDetail }) {
     onError: (e) => toast.error(ticketErrorText(t, e)),
   });
   return (
-    <div className="rounded-xl border border-[color:var(--gold)]/30 bg-[color:var(--gold)]/[0.04] p-4">
+    <div className="glass rounded-2xl border border-[color:var(--gold)]/30 p-4">
       <label htmlFor="start-date" className="flex items-center gap-2 text-sm font-medium">
         <CalendarPlus className="size-4 text-primary" /> {t("tickets.fields.start")}
         <span className="rounded border border-[color:var(--gold)]/40 px-1 text-[9px] font-semibold text-primary">{t("tickets.portalTag")}</span>
@@ -425,7 +427,7 @@ function NoteComposer({ tk, draft, onDraftUsed }: { tk: TicketDetail; draft: { t
     onError: (e) => toast.error(ticketErrorText(t, e)),
   });
   return (
-    <div className={cn("rounded-xl border bg-card/60 p-3 transition-colors", internal && "border-violet-500/30")}>
+    <div className={cn("glass rounded-2xl border p-3 transition-colors", internal && "border-violet-500/30")}>
       <div className="mb-2 inline-flex rounded-lg border p-0.5 text-xs">
         {[false, true].map((v) => (
           <button

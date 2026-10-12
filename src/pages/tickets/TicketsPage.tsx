@@ -52,6 +52,7 @@ import { api } from "@/lib/api";
 import { relativeTime } from "@/lib/format";
 import { useCan, useMe } from "@/lib/session";
 import { cn, initials } from "@/lib/utils";
+import { GlassBackdrop } from "@/components/brand/GlassBackdrop";
 import { NewTicketDialog } from "./NewTicketDialog";
 import { dueState, FILTER_KEYS, PRIORITY_STYLE, useChoiceText, shortDate, STATUS_STYLE, useTickets, VIEWS, type TicketList, type TicketSummary, type View, ticketErrorText } from "./shared";
 import { useTicketWorkspace } from "./workspace";
@@ -136,7 +137,8 @@ export function TicketsPage() {
   }, [can]);
 
   return (
-    <div className="space-y-4">
+    <div className="relative isolate space-y-4">
+      <GlassBackdrop className="-inset-x-8 -top-6" />
       {/* Header */}
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1">
@@ -180,7 +182,7 @@ export function TicketsPage() {
       <MetricTiles data={data} params={params} apply={apply} />
 
       {/* Toolbar: view, search, team, the two frequent filters, the rest under "More" */}
-      <div className="flex flex-wrap items-center gap-1.5">
+      <div className="glass flex flex-wrap items-center gap-1.5 rounded-2xl border p-1.5">
         <ViewMenu view={view} counts={data?.counts} params={params} apply={apply} />
         <div className="relative w-full sm:w-56">
           <Search className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
@@ -189,7 +191,7 @@ export function TicketsPage() {
             value={params.get("q") ?? ""}
             onChange={(e) => set({ q: e.target.value || null })}
             placeholder={t("tickets.search")}
-            className="h-9 bg-card/60 pl-9 pr-8"
+            className="h-9 border-transparent bg-white/5 pl-9 pr-8 dark:bg-white/[0.04]"
           />
           <kbd className="pointer-events-none absolute right-2.5 top-1/2 -translate-y-1/2 rounded border px-1 font-mono text-[10px] text-muted-foreground">/</kbd>
         </div>
@@ -225,8 +227,8 @@ export function TicketsPage() {
       )}
 
       {/* List */}
-      <div className="overflow-hidden rounded-2xl border bg-card/70 backdrop-blur">
-        <div className="hidden grid-cols-[minmax(0,1fr)_144px_140px_64px_104px_86px_132px_64px_20px] gap-3 border-b bg-background/40 px-5 py-2.5 font-mono text-[10px] uppercase tracking-[0.12em] text-muted-foreground xl:grid">
+      <div className="glass overflow-hidden rounded-2xl border">
+        <div className="hidden grid-cols-[minmax(0,1fr)_144px_140px_64px_104px_86px_132px_64px_20px] gap-3 border-b border-[color:var(--glass-border)] bg-white/[0.02] px-5 py-2.5 font-mono text-[10px] uppercase tracking-[0.12em] text-muted-foreground xl:grid">
           <span>{t("tickets.fields.ticket")}</span>
           <span>{t("tickets.fields.status")}</span>
           <span>{t("tickets.fields.company")}</span>
@@ -251,7 +253,7 @@ export function TicketsPage() {
             {activeFilters.length || params.get("q") ? t("tickets.emptyFiltered") : t(`tickets.empty.${view}`)}
           </div>
         ) : (
-          <ul className="divide-y divide-border/60">
+          <ul className="divide-y divide-[color:var(--glass-border)]">
             {data.items.map((tk, i) => (
               <TicketRow
                 key={tk.id}
@@ -267,7 +269,7 @@ export function TicketsPage() {
           </ul>
         )}
         {data && data.items.length > 0 && (
-          <div className="border-t bg-background/40 px-5 py-2 font-mono text-[10px] uppercase tracking-[0.12em] text-muted-foreground">
+          <div className="border-t border-[color:var(--glass-border)] bg-white/[0.02] px-5 py-2 font-mono text-[10px] uppercase tracking-[0.12em] text-muted-foreground">
             {t("tickets.shown", { count: data.items.length })}
           </div>
         )}
@@ -358,7 +360,7 @@ function MetricTiles({ data, params, apply }: { data: TicketList | undefined; pa
                 transition={{ delay: i * 0.04 }}
                 style={{ ["--tile-glow" as string]: tile.glow }}
                 className={cn(
-                  "group relative flex items-center gap-3.5 overflow-hidden rounded-xl border bg-card/60 px-4 py-3.5 text-left transition-all hover:border-[color:var(--gold)]/40 hover:shadow-[0_0_28px_-14px_var(--tile-glow)]",
+                  "glass group relative flex items-center gap-3.5 overflow-hidden rounded-2xl border px-4 py-3.5 text-left transition-all hover:border-[color:var(--gold)]/40 hover:shadow-[0_0_28px_-14px_var(--tile-glow)]",
                   active && "border-[color:var(--gold)]/60 bg-[color:var(--gold)]/[0.05] shadow-[0_0_28px_-12px_var(--tile-glow)]",
                 )}
               >
