@@ -53,7 +53,7 @@ import { api, ApiError } from "@/lib/api";
 import { useCan, useMe } from "@/lib/session";
 import { cn, initials } from "@/lib/utils";
 import { GlassBackdrop } from "@/components/brand/GlassBackdrop";
-import { CompanyPicker, ContactPicker } from "./pickers";
+import { CompanyPicker, ContactPicker, useCompanies } from "./pickers";
 import { dueState, longDateTime, PRIORITY_STYLE, STATUS_STYLE, useChoiceText, usePresence, type AiAnalysis, type TicketDetail, type Viewer, ticketErrorText } from "./shared";
 
 const SOURCE_ICON: Record<string, LucideIcon> = { email: Mail, phone: Phone, portal: Inbox, monitoring: MonitorCog };
@@ -138,6 +138,7 @@ function TicketBody({ tk, viewers, onClose, onMinimize }: { tk: TicketDetail; vi
   const can = useCan();
   const editable = can("tickets.edit");
   const update = useTicketUpdate(tk);
+  const { data: companies = [tk.company] } = useCompanies();
   const due = dueState(tk.dueAt, tk.statusKind);
   const [draft, setDraft] = useState<{ text: string; internal: boolean } | null>(null);
 
@@ -252,7 +253,7 @@ function TicketBody({ tk, viewers, onClose, onMinimize }: { tk: TicketDetail; vi
                 <CompanyPicker
                   disabled={!editable}
                   value={tk.company}
-                  companies={tk.options.companies}
+                  companies={companies}
                   onChange={(c) => c.id !== tk.company.id && update.mutate({ companyId: c.id })}
                 />
               </Detail>

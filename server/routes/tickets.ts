@@ -164,10 +164,9 @@ function summary(t: NTicket, L: Lookup, start: string | undefined, me: string) {
 async function detailOf(src: TicketSource, id: number, a: AuthContext) {
   const t = await src.get(id);
   if (!t) throw new HTTPException(404, { message: "not_found" });
-  const [o, technicians, companies, start, ai] = await Promise.all([
+  const [o, technicians, start, ai] = await Promise.all([
     src.options(),
     src.technicians(),
-    src.companies(),
     startDates([id]).then((m) => m.get(id)),
     a.permissions.includes("tickets.ai") ? aiSettings() : Promise.resolve(null),
   ]);
@@ -179,7 +178,7 @@ async function detailOf(src: TicketSource, id: number, a: AuthContext) {
     notes: t.notes,
     demo: src.demo,
     ai: Boolean(ai?.enabled && ai.apiKey),
-    options: { statuses: o.statuses, priorities: o.priorities, queues: o.queues, technicians, companies },
+    options: { statuses: o.statuses, priorities: o.priorities, queues: o.queues, technicians },
   };
 }
 
@@ -190,7 +189,9 @@ export const ticketRoutes = new Hono<AppEnv>()
     const a = auth(c);
     const q = c.req.query();
     const src = await ticketSource();
-    const [all, o, technicians, companies, meId] = await run(() => Promise.all([src.list(), src.options(), src.technicians(), src.companies(), src.meId(a)]));
+    const [all, o, technicians, meId] = await run(() => Promise.all([src.list(), src.options(), src.technicians(), src.meId(a)]));
+    // Client filter: only the clients that have tickets (the full list is /companies)
+    const companies = [...new Map(all.map((t) => [t.company.id, t.company])).values()].sort((x, y) => x.name.localeCompare(y.name));
     const L = lookup(o);
     const starts = await startDates(all.map((t) => t.id));
     const eod = endOfToday();

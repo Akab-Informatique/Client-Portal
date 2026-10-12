@@ -264,6 +264,7 @@ export function TicketsPage() {
                 facets={data.facets}
                 editable={can("tickets.edit")}
                 onPatch={(patch) => patchTicket.mutate({ id: tk.id, patch })}
+                onHover={() => void qc.prefetchQuery({ queryKey: ["tickets", "detail", tk.id], queryFn: () => api.get(`/tickets/${tk.id}`), staleTime: 15_000 })}
               />
             ))}
           </ul>
@@ -555,6 +556,7 @@ function TicketRow({
   facets,
   editable,
   onPatch,
+  onHover,
 }: {
   tk: TicketSummary;
   index: number;
@@ -563,6 +565,7 @@ function TicketRow({
   facets: TicketList["facets"];
   editable: boolean;
   onPatch: (patch: RowPatch) => void;
+  onHover: () => void;
 }) {
   const { t } = useTranslation();
   const txt = useChoiceText();
@@ -575,6 +578,7 @@ function TicketRow({
         role="button"
         tabIndex={0}
         onClick={onOpen}
+        onMouseEnter={onHover}
         onKeyDown={(e) => {
           if (e.key === "Enter" || e.key === " ") {
             e.preventDefault();

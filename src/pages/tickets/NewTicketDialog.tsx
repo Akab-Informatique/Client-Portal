@@ -12,7 +12,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { api } from "@/lib/api";
 import { useMe } from "@/lib/session";
 import { cn } from "@/lib/utils";
-import { CompanyPicker, ContactPicker } from "./pickers";
+import { CompanyPicker, ContactPicker, useCompanies } from "./pickers";
 import { PRIORITY_STYLE, useChoiceText, type TicketList, type TicketSummary, ticketErrorText } from "./shared";
 
 const inDays = (n: number) => new Date(Date.now() + n * 86_400_000).toISOString().slice(0, 10);
@@ -31,6 +31,7 @@ export function NewTicketDialog({
 }) {
   const { t } = useTranslation();
   const txt = useChoiceText();
+  const { data: companies = [] } = useCompanies();
   const qc = useQueryClient();
   const me = useMe();
   const empty = () => ({
@@ -88,8 +89,8 @@ export function NewTicketDialog({
               <Label htmlFor="nt-company">{t("tickets.fields.company")}</Label>
               <CompanyPicker
                 triggerClassName="h-9 rounded-md border bg-transparent px-3 text-sm dark:bg-input/30"
-                value={facets.companies.find((c) => String(c.id) === f.companyId) ?? null}
-                companies={facets.companies}
+                value={companies.find((c) => String(c.id) === f.companyId) ?? null}
+                companies={companies}
                 onChange={(c) => setF({ ...f, companyId: String(c.id), contactId: null })}
               />
             </div>

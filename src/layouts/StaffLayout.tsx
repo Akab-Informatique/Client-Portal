@@ -1,7 +1,7 @@
 import { lazy, Suspense, useEffect, useState } from "react";
 import { NavLink, Outlet, useLocation, useNavigate, useSearchParams } from "react-router-dom";
 import { useTranslation } from "react-i18next";
-import { AnimatePresence, motion } from "motion/react";
+import { motion } from "motion/react";
 import { useQueryClient } from "@tanstack/react-query";
 import { useTheme } from "@/lib/theme";
 import {
@@ -43,6 +43,7 @@ import { NAV_SECTIONS, STAFF_MODULES, type NavModule } from "@/modules/registry"
 import { signOut, useCan, useMe } from "@/lib/session";
 import { cn, initials } from "@/lib/utils";
 import { TicketWorkspaceProvider } from "@/pages/tickets/workspace";
+import { preloadPagesWhenIdle, preloadRoute } from "@/lib/preload";
 
 const AdminOverlay = lazy(() => import("@/admin/AdminOverlay").then((m) => ({ default: m.AdminOverlay })));
 
@@ -70,6 +71,7 @@ export function StaffLayout() {
     }
   }, [collapsed]);
   useEffect(() => setMobileOpen(false), [location.pathname]);
+  useEffect(() => preloadPagesWhenIdle(), []);
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "k") {
@@ -105,20 +107,18 @@ export function StaffLayout() {
         <TopBar onMenu={() => setMobileOpen(true)} />
         <main className="relative flex-1">
           <div className="pointer-events-none absolute inset-x-0 top-0 h-64 bg-grid opacity-60 [mask-image:linear-gradient(to_bottom,black,transparent)]" />
-          <AnimatePresence mode="wait">
-            <motion.div
-              key={location.pathname}
-              initial={{ opacity: 0, y: 8 }}
-              animate={{ opacity: 1, y: 0 }}
-              exit={{ opacity: 0, y: -6 }}
-              transition={{ duration: 0.22, ease: [0.22, 1, 0.36, 1] }}
-              className="relative mx-auto w-full max-w-[1400px] px-4 py-6 sm:px-6 lg:px-8"
-            >
-              <Suspense fallback={<div className="h-40 animate-pulse rounded-2xl bg-card/50" />}>
-                <Outlet />
-              </Suspense>
-            </motion.div>
-          </AnimatePresence>
+          {/* The new page appears right away (no exit animation to wait for) */}
+          <motion.div
+            key={location.pathname}
+            initial={{ opacity: 0, y: 6 }}
+            animate={{ opacity: 1, y: 0 }}
+            transition={{ duration: 0.18, ease: [0.22, 1, 0.36, 1] }}
+            className="relative mx-auto w-full max-w-[1400px] px-4 py-6 sm:px-6 lg:px-8"
+          >
+            <Suspense fallback={<div className="h-40 animate-pulse rounded-2xl bg-card/50" />}>
+              <Outlet />
+            </Suspense>
+          </motion.div>
         </main>
       </div>
 
@@ -135,6 +135,7 @@ export function StaffLayout() {
 
 function NavItem({ m, collapsed, active }: { m: NavModule; collapsed: boolean; active: boolean }) {
   const { t } = useTranslation();
+  const qc = useQueryClient();
   if (m.upcoming) {
     return (
       <div
@@ -156,6 +157,8 @@ function NavItem({ m, collapsed, active }: { m: NavModule; collapsed: boolean; a
   const link = (
     <NavLink
       to={m.path}
+      onMouseEnter={() => preloadRoute(m.path, qc)}
+      onFocus={() => preloadRoute(m.path, qc)}
       className={cn(
         "group relative flex h-10 items-center gap-3 rounded-lg px-3 text-sm font-medium transition-colors",
         collapsed && "justify-center px-0",

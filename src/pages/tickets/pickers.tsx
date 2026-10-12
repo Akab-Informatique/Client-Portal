@@ -17,11 +17,17 @@ import { ticketErrorText } from "./shared";
 export type Company = { id: number; name: string };
 export type Contact = { id: string; companyId: number; name: string; email: string | null; phone: string | null };
 
+/** All clients (Autotask can have thousands): loaded once and kept 10 minutes. */
+export function useCompanies() {
+  return useQuery({ queryKey: ["tickets", "companies"], queryFn: () => api.get<Company[]>("/tickets/companies"), staleTime: 10 * 60_000 });
+}
+
 export function useContacts(companyId: number | null) {
   return useQuery({
     queryKey: ["tickets", "contacts", companyId],
     queryFn: () => api.get<Contact[]>(`/tickets/companies/${companyId}/contacts`),
     enabled: Boolean(companyId),
+    staleTime: 5 * 60_000,
   });
 }
 

@@ -4,6 +4,7 @@ import { Hono } from "hono";
 import { HTTPException } from "hono/http-exception";
 import { secureHeaders } from "hono/secure-headers";
 import { bodyLimit } from "hono/body-limit";
+import { compress } from "hono/compress";
 import { serveStatic } from "@hono/node-server/serve-static";
 import { config } from "./config.ts";
 import { loadAuth, readOnlyViewAs, requireStaff, type AppEnv } from "./lib/auth.ts";
@@ -22,6 +23,8 @@ import { ticketRoutes } from "./routes/tickets.ts";
 
 export function createApp() {
   const app = new Hono<AppEnv>();
+  // gzip/deflate responses (JSON lists, HTML, JS) when the browser accepts it
+  app.use("*", compress());
 
   app.use(
     "*",

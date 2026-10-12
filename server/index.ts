@@ -6,6 +6,7 @@ import { createApp } from "./app.ts";
 import { purgeExpiredSessions } from "./lib/auth.ts";
 import { purgeOldNotifications } from "./lib/notify.ts";
 import { smtpSettings } from "./lib/mail.ts";
+import { keepTicketsWarm } from "./lib/ticketSource.ts";
 
 await initDb();
 await seed();
@@ -13,6 +14,9 @@ await seed();
 const app = createApp();
 const smtp = await smtpSettings();
 const host = process.env.HOST || (config.production ? "0.0.0.0" : "127.0.0.1");
+// Autotask: load the ticket list now and keep it fresh while the portal is used
+keepTicketsWarm();
+
 serve({ fetch: app.fetch, port: config.port, hostname: host }, (info) => {
   console.log(`AKAB Portal API on http://${info.address}:${info.port}`);
   console.log(`  database : ${config.db.kind}${config.db.kind === "pglite" ? ` (${config.db.pgliteDir})` : ""}`);

@@ -8,12 +8,13 @@ import { LogoMark } from "@/components/brand/Logo";
 import { SessionProvider, useAuthState, useCan, useUnauthorizedListener } from "@/lib/session";
 import type { Me } from "@/lib/types";
 import type { PermissionKey } from "@shared/permissions";
+import { pageLoaders } from "@/lib/preload";
 
 // Code-split: the sign-in page loads first; the rest loads after sign-in.
 const StaffLayout = lazy(() => import("@/layouts/StaffLayout").then((m) => ({ default: m.StaffLayout })));
-const DashboardPage = lazy(() => import("@/pages/dashboard/DashboardPage").then((m) => ({ default: m.DashboardPage })));
-const MessagesPage = lazy(() => import("@/pages/messages/MessagesPage").then((m) => ({ default: m.MessagesPage })));
-const TicketsPage = lazy(() => import("@/pages/tickets/TicketsPage").then((m) => ({ default: m.TicketsPage })));
+const DashboardPage = lazy(() => pageLoaders.dashboard().then((m) => ({ default: m.DashboardPage })));
+const MessagesPage = lazy(() => pageLoaders.messages().then((m) => ({ default: m.MessagesPage })));
+const TicketsPage = lazy(() => pageLoaders.tickets().then((m) => ({ default: m.TicketsPage })));
 const ClientHome = lazy(() => import("@/pages/client/ClientHome").then((m) => ({ default: m.ClientHome })));
 
 function Splash() {

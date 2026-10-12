@@ -53,7 +53,6 @@ export type TicketDetail = TicketSummary & {
     priorities: Choice<PriorityKind>[];
     queues: Choice[];
     technicians: { id: string; name: string }[];
-    companies: { id: number; name: string }[];
   };
 };
 export type AiAnalysis = {

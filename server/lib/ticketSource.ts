@@ -261,18 +261,61 @@ export function priorityKind(label: string): PriorityKind {
   return "medium";
 }
 
+/**
+ * Small cache for Autotask reads. Concurrent callers share one load. With
+ * `stale`, an expired value is returned at once and refreshed in the
+ * background (nobody waits for Autotask once the data is there).
+ */
 const cache = new Map<string, { at: number; value: unknown }>();
-async function cached<T>(key: string, ttlMs: number, load: () => Promise<T>): Promise<T> {
+const loading = new Map<string, Promise<unknown>>();
+function load<T>(key: string, fn: () => Promise<T>): Promise<T> {
+  let p = loading.get(key) as Promise<T> | undefined;
+  if (!p) {
+    p = fn()
+      .then((value) => {
+        cache.set(key, { at: Date.now(), value });
+        return value;
+      })
+      .finally(() => loading.delete(key));
+    loading.set(key, p);
+  }
+  return p;
+}
+async function cached<T>(key: string, ttlMs: number, fn: () => Promise<T>, opts: { stale?: boolean } = {}): Promise<T> {
   const hit = cache.get(key);
   if (hit && Date.now() - hit.at < ttlMs) return hit.value as T;
-  const value = await load();
-  cache.set(key, { at: Date.now(), value });
-  return value;
+  if (hit && opts.stale) {
+    void load(key, fn).catch((e) => console.warn(`[autotask] refresh ${key} failed:`, e instanceof Error ? e.message : e));
+    return hit.value as T;
+  }
+  return load(key, fn);
 }
 const forget = (prefix: string) => {
   for (const k of cache.keys()) if (k.startsWith(prefix)) cache.delete(k);
 };
-export const clearTicketCache = () => cache.clear();
+export const clearTicketCache = () => {
+  cache.clear();
+  loading.clear();
+};
+
+/**
+ * Keep the Autotask ticket list warm: load it at start-up and refresh it in
+ * the background while the portal is being used (stops after 15 min idle).
+ */
+let lastUse = 0;
+let warmTimer: ReturnType<typeof setInterval> | null = null;
+export function keepTicketsWarm() {
+  if (warmTimer) return;
+  const tick = async () => {
+    if (Date.now() - lastUse > 15 * 60_000 && cache.has("list")) return;
+    const src = await ticketSource();
+    if (src.demo) return;
+    await load("list", () => loadList()).catch((e) => console.warn("[autotask] warm-up failed:", e instanceof Error ? e.message : e));
+  };
+  void tick();
+  warmTimer = setInterval(() => void tick(), 25_000);
+  warmTimer.unref?.();
+}
 
 const picklist = (fields: FieldInfo[], name: string) =>
   (fields.find((f) => f.name.toLowerCase() === name.toLowerCase())?.picklistValues ?? [])
@@ -333,17 +376,17 @@ async function companyNames(at: Client, ids: number[]): Promise<Map<number, stri
 }
 async function contactNames(at: Client, ids: number[]): Promise<Map<number, string>> {
   const map = new Map<number, string>();
-  for (const part of chunks([...new Set(ids)], 200)) {
-    const rows = await at.query<{ id: number; firstName: string; lastName: string }>("Contacts", [{ op: "in", field: "id", value: part }], {
-      fields: ["id", "firstName", "lastName"],
-    });
-    for (const r of rows) map.set(r.id, `${r.firstName ?? ""} ${r.lastName ?? ""}`.trim());
-  }
+  const parts = await Promise.all(
+    chunks([...new Set(ids)], 200).map((part) =>
+      at.query<{ id: number; firstName: string; lastName: string }>("Contacts", [{ op: "in", field: "id", value: part }], { fields: ["id", "firstName", "lastName"] }),
+    ),
+  );
+  for (const r of parts.flat()) map.set(r.id, `${r.firstName ?? ""} ${r.lastName ?? ""}`.trim());
   return map;
 }
 
 async function normalize(at: Client, rows: AtTicket[], withSecondary: boolean): Promise<NTicket[]> {
-  const [companies, contacts, opts, personOf] = await Promise.all([
+  const [companies, contacts, opts, personOf, secondaryRows] = await Promise.all([
     companyNames(
       at,
       rows.map((r) => r.companyID),
@@ -354,19 +397,21 @@ async function normalize(at: Client, rows: AtTicket[], withSecondary: boolean): 
     ),
     atOptions(),
     people(),
+    withSecondary
+      ? Promise.all(
+          chunks(
+            rows.map((r) => r.id),
+            200,
+          ).map((part) =>
+            at.query<{ ticketID: number; resourceID: number }>("TicketSecondaryResources", [{ op: "in", field: "ticketID", value: part }], {
+              fields: ["ticketID", "resourceID"],
+            }),
+          ),
+        ).then((x) => x.flat())
+      : Promise.resolve([] as { ticketID: number; resourceID: number }[]),
   ]);
   const secondary = new Map<number, number[]>();
-  if (withSecondary) {
-    for (const part of chunks(
-      rows.map((r) => r.id),
-      200,
-    )) {
-      const sec = await at.query<{ ticketID: number; resourceID: number }>("TicketSecondaryResources", [{ op: "in", field: "ticketID", value: part }], {
-        fields: ["ticketID", "resourceID"],
-      });
-      for (const s of sec) secondary.set(s.ticketID, [...(secondary.get(s.ticketID) ?? []), s.resourceID]);
-    }
-  }
+  for (const s of secondaryRows) secondary.set(s.ticketID, [...(secondary.get(s.ticketID) ?? []), s.resourceID]);
   const out: NTicket[] = [];
   for (const r of rows) {
     out.push({
@@ -392,6 +437,45 @@ async function normalize(at: Client, rows: AtTicket[], withSecondary: boolean): 
     });
   }
   return out;
+}
+
+/**
+ * After a change: reload just this ticket and put it in the cached list
+ * (instead of reloading the whole list from Autotask).
+ */
+async function refreshOne(at: Client, id: number): Promise<void> {
+  const hit = cache.get("list");
+  if (!hit) return;
+  try {
+    const item = (await at.call<{ item: AtTicket | null }>("GET", `Tickets/${id}`)).item;
+    const listNow = (cache.get("list")?.value as NTicket[] | undefined) ?? [];
+    const others = listNow.filter((x) => x.id !== id);
+    const next = item ? [...others, (await normalize(at, [item], true))[0]] : others;
+    cache.set("list", { at: hit.at, value: next });
+  } catch {
+    forget("list");
+  }
+}
+
+/** Open tickets + those completed in the last 14 days, normalized. */
+async function loadList(): Promise<NTicket[]> {
+  const at = await autotask();
+  const since = new Date(Date.now() - 14 * 86_400_000).toISOString();
+  const complete = (await atOptions()).statuses.filter((s) => s.kind === "complete").map((s) => Number(s.value));
+  const rows = await at.query<AtTicket>(
+    "Tickets",
+    [
+      {
+        op: "or",
+        items: [
+          { op: "notIn", field: "status", value: complete.length ? complete : [5] },
+          { op: "gte", field: "completedDate", value: since },
+        ],
+      },
+    ],
+    { fields: TICKET_FIELDS, max: 3000 },
+  );
+  return normalize(at, rows, true);
 }
 
 /** Autotask lists (cached 10 min): ticket picklists + note types/publish values. */
@@ -427,39 +511,26 @@ const autotaskSource: TicketSource = {
 
   /** Open tickets + those completed in the last 14 days (cached 30 s for everyone). */
   async list() {
-    const at = await autotask();
-    return cached("list", 30_000, async () => {
-      const since = new Date(Date.now() - 14 * 86_400_000).toISOString();
-      const complete = (await atOptions()).statuses.filter((s) => s.kind === "complete").map((s) => Number(s.value));
-      const rows = await at.query<AtTicket>(
-        "Tickets",
-        [
-          {
-            op: "or",
-            items: [
-              { op: "notIn", field: "status", value: complete.length ? complete : [5] },
-              { op: "gte", field: "completedDate", value: since },
-            ],
-          },
-        ],
-        { fields: TICKET_FIELDS, max: 3000 },
-      );
-      return normalize(at, rows, true);
-    });
+    lastUse = Date.now();
+    return cached("list", 30_000, loadList, { stale: true });
   },
 
   async get(id) {
     const at = await autotask();
-    let item: AtTicket | undefined;
-    try {
-      item = (await at.call<{ item: AtTicket | null }>("GET", `Tickets/${id}`)).item ?? undefined;
-    } catch (e) {
-      if (e instanceof AutotaskError && e.status === 404) return null;
-      throw e;
-    }
-    if (!item) return null;
-    const [t] = await normalize(at, [item], true);
-    const [notes, times, res] = await Promise.all([
+    const fromList = (cache.get("list")?.value as NTicket[] | undefined)?.find((x) => x.id === id);
+    const loadTicket = async (): Promise<NTicket | null> => {
+      if (fromList) return { ...fromList };
+      let item: AtTicket | undefined;
+      try {
+        item = (await at.call<{ item: AtTicket | null }>("GET", `Tickets/${id}`)).item ?? undefined;
+      } catch (e) {
+        if (e instanceof AutotaskError && e.status === 404) return null;
+        throw e;
+      }
+      return item ? (await normalize(at, [item], true))[0] : null;
+    };
+    const [t, notes, times, res] = await Promise.all([
+      loadTicket(),
       at.query<{ id: number; title: string; description: string; createDateTime: string; creatorResourceID: number | null; creatorContactID: number | null; publish: number }>(
         "TicketNotes",
         [{ op: "eq", field: "ticketID", value: id }],
@@ -468,6 +539,7 @@ const autotaskSource: TicketSource = {
       at.query<{ hoursWorked: number }>("TimeEntries", [{ op: "eq", field: "ticketID", value: id }], { fields: ["hoursWorked"], max: 500 }).catch(() => []),
       listResources(),
     ]);
+    if (!t) return null;
     const internalValues = new Set((await atOptions()).publish.filter((p) => /intern/i.test(p.label)).map((p) => String(p.value)));
     const contactIds = notes.map((n) => n.creatorContactID).filter((x): x is number => Boolean(x));
     const contactMap = contactIds.length ? await contactNames(at, contactIds) : new Map<number, string>();
@@ -530,7 +602,7 @@ const autotaskSource: TicketSource = {
       }
     }
     await at.call("PATCH", "Tickets", patch, { impersonate: actor });
-    forget("list");
+    await refreshOne(at, id);
   },
 
   async addNote(id, p, a) {
@@ -551,7 +623,7 @@ const autotaskSource: TicketSource = {
       },
       { impersonate: actor },
     );
-    forget("list");
+    // the list does not show notes: no reload
   },
 
   async create(p, a) {
@@ -577,7 +649,7 @@ const autotaskSource: TicketSource = {
       },
       { impersonate: actor },
     );
-    forget("list");
+    await refreshOne(at, res.itemId);
     return res.itemId;
   },
 
@@ -587,6 +659,7 @@ const autotaskSource: TicketSource = {
       (await at.query<{ id: number; companyName: string }>("Companies", [{ op: "eq", field: "isActive", value: true }], { fields: ["id", "companyName"], max: 10_000 }))
         .map((c) => ({ id: c.id, name: c.companyName }))
         .sort((x, y) => x.name.localeCompare(y.name)),
+      { stale: true },
     );
   },
 
