@@ -520,6 +520,20 @@ export const ticketRoutes = new Hono<AppEnv>()
     return c.json((await myTimers(a.user.id)).map(timerView));
   })
   /** Work types offered for time entries (empty when the source has none). */
+  /** Catalogue products to charge (search: 2 characters or more). */
+  .get("/products", requirePermission("tickets.edit"), async (c) => {
+    const a = auth(c);
+    const q = (c.req.query("q") ?? "").trim().slice(0, 60);
+    if (q.length < 2) return c.json([]);
+    if (!rateLimit(`products:${a.user.id}`, 60, 60_000).ok) throw new HTTPException(429, { message: "rate_limited" });
+    const src = await ticketSource();
+    return c.json(await run(() => src.products(q)));
+  })
+  /** Products in stock, with their location. */
+  .get("/inventory", requirePermission("tickets.edit"), async (c) => {
+    const src = await ticketSource();
+    return c.json(await run(() => src.inventory()));
+  })
   /** Choices for a new charge: types, statuses, material codes. */
   .get("/charge-options", requirePermission("tickets.edit"), async (c) => {
     const src = await ticketSource();
@@ -769,11 +783,12 @@ export const ticketRoutes = new Hono<AppEnv>()
         statusId: z.string().max(20).nullable().default(null),
         materialCodeId: z.string().max(20).nullable().default(null),
         date: zDate.nullable().default(null),
+        productId: z.string().max(20).nullable().default(null),
       }),
     );
     const src = await ticketSource();
     await run(() => src.addCharge(id, p, a));
-    await audit(a.user.id, "ticket.charge_added", String(id), { name: p.name, quantity: p.quantity, unitPrice: p.unitPrice, billable: p.billable });
+    await audit(a.user.id, "ticket.charge_added", String(id), { name: p.name, quantity: p.quantity, unitPrice: p.unitPrice, billable: p.billable, productId: p.productId });
     return c.json(await run(() => src.charges(id)), 201);
   })
 

@@ -1031,6 +1031,15 @@ describe("tickets: client and contact", () => {
     ]);
     expect((await tech.post(`/api/tickets/${tk.id}/charges`, { name: "x", quantity: 1, materialCodeId: "999" })).json.error).toBe("invalid_value");
     expect((await tech.post(`/api/tickets/${tk.id}/charges`, { name: "", quantity: 0 })).status).toBe(400);
+
+    // from the catalogue / the inventory
+    const found = (await tech.get("/api/tickets/products?q=ssd%20samsung")).json;
+    expect(found.map((p: any) => p.sku)).toEqual(["MZ-V9P1T0"]);
+    expect((await tech.get("/api/tickets/products?q=s")).json).toEqual([]);
+    const stock = (await tech.get("/api/tickets/inventory")).json;
+    expect(stock[0]).toMatchObject({ location: expect.any(String), onHand: expect.any(Number), product: { id: expect.any(String) } });
+    expect((await tech.post(`/api/tickets/${tk.id}/charges`, { name: found[0].name, quantity: 1, unitPrice: found[0].unitPrice, productId: found[0].id })).status).toBe(201);
+    expect((await tech.post(`/api/tickets/${tk.id}/charges`, { name: "x", quantity: 1, productId: "nope" })).json.error).toBe("invalid_value");
   });
 
   it("timers: one running at a time, closed tab becomes an entry to validate", async () => {
@@ -1183,6 +1192,14 @@ describe("tickets from Autotask", () => {
             pageDetails: {},
           });
         }
+        if (path === "Products/entityInformation/fields") {
+          return json({ fields: ["id", "name", "description", "sku", "manufacturerName", "manufacturerProductName", "unitPrice", "unitCost", "chargeBillingCodeID", "isActive"].map((name) => ({ name })) });
+        }
+        if (path === "Products/query") {
+          return json({ items: [{ id: 601, name: "SSD Samsung 1 To", description: "NVMe", sku: "MZ-V9P1T0", manufacturerName: "Samsung", unitPrice: 189.99, unitCost: 129.5, chargeBillingCodeID: 501 }], pageDetails: {} });
+        }
+        if (path === "InventoryItems/query") return json({ items: [{ id: 701, productID: 601, inventoryLocationID: 9, quantityOnHand: 4 }], pageDetails: {} });
+        if (path === "InventoryLocations/query") return json({ items: [{ id: 9, locationName: "Entrepôt" }], pageDetails: {} });
         if (path === "TicketCharges/entityInformation/fields") {
           return json({
             fields: [
@@ -1438,6 +1455,17 @@ describe("tickets from Autotask", () => {
     const post = sent.find((s) => s.method === "POST" && s.url.endsWith("Tickets/9001/Charges"))!;
     expect(post.headers.impersonationresourceid).toBe("29682885");
     expect(post.body).toMatchObject({ ticketID: 9001, name: "Câble réseau", unitQuantity: 3, unitPrice: 12.5, isBillableToCompany: false, chargeType: 1, status: 1, billingCodeID: 501, datePurchased: "2026-10-12T12:00:00Z" });
+
+    // catalogue search only on the fields this Autotask has; product linked on the charge
+    sent.length = 0;
+    const products = (await tech.get("/api/tickets/products?q=samsung")).json;
+    expect(products).toEqual([{ id: "601", name: "SSD Samsung 1 To", description: "NVMe", sku: "MZ-V9P1T0", manufacturer: "Samsung", unitPrice: 189.99, unitCost: 129.5, materialCodeId: "501" }]);
+    const search = sent.find((s) => s.url.endsWith("Products/query"))!;
+    expect(search.body.filter[1].items.map((x: any) => x.field)).toEqual(["name", "sku", "manufacturerProductName"]);
+    expect((await tech.get("/api/tickets/inventory")).json).toEqual([{ id: "701", product: products[0], location: "Entrepôt", onHand: 4 }]);
+    sent.length = 0;
+    await tech.post("/api/tickets/9001/charges", { name: products[0].name, quantity: 1, unitPrice: 189.99, materialCodeId: "501", productId: "601" });
+    expect(sent.find((s) => s.method === "POST" && s.url.endsWith("Tickets/9001/Charges"))!.body).toMatchObject({ productID: 601, billingCodeID: 501 });
   });
 
   it("refuses writes from an account not linked to Autotask", async () => {

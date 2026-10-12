@@ -110,7 +110,23 @@ export type NewCharge = {
   statusId: string | null;
   materialCodeId: string | null;
   date: string | null;
+  /** Catalogue product charged (links the charge to it in Autotask) */
+  productId: string | null;
 };
+/** A product of the Autotask catalogue (to charge on a ticket). */
+export type Product = {
+  id: string;
+  name: string;
+  description: string;
+  sku: string | null;
+  manufacturer: string | null;
+  unitPrice: number | null;
+  unitCost: number | null;
+  /** Material code to use for a charge of this product */
+  materialCodeId: string | null;
+};
+/** Stock of a product at an inventory location. */
+export type InventoryItem = { id: string; product: Product; location: string; onHand: number };
 export type ChargeOptions = { types: { value: string; label: string }[]; statuses: { value: string; label: string }[]; materialCodes: { value: string; label: string }[] };
 export type NewTimeEntry = { hours: number; summary: string; internal: string; workTypeId: string | null; startedAt: Date; endedAt: Date };
 export type NewTicket = {
@@ -146,6 +162,10 @@ export interface TicketSource {
   charges(ticketId: number): Promise<Charge[]>;
   chargeOptions(): Promise<ChargeOptions>;
   addCharge(ticketId: number, p: NewCharge, a: AuthContext): Promise<void>;
+  /** Catalogue products matching the words (name, SKU, manufacturer part) */
+  products(q: string): Promise<Product[]>;
+  /** Products in stock (quantity on hand > 0), with their location */
+  inventory(): Promise<InventoryItem[]>;
   /** Work types for time entries (Autotask billing codes); empty when not used */
   workTypes(): Promise<{ value: string; label: string }[]>;
   addTimeEntry(ticketId: number, p: NewTimeEntry, a: AuthContext): Promise<void>;
@@ -168,6 +188,19 @@ const DEMO_CHARGE_OPTIONS: ChargeOptions = {
     { value: "12", label: "Déplacement" },
   ],
 };
+
+const DEMO_PRODUCTS: Product[] = [
+  { id: "p1", name: "Disque SSD Samsung 990 PRO 1 To", description: "SSD NVMe M.2", sku: "MZ-V9P1T0", manufacturer: "Samsung", unitPrice: 189.99, unitCost: 129.5, materialCodeId: "10" },
+  { id: "p2", name: "Mémoire Kingston 16 Go DDR5", description: "SO-DIMM 5600", sku: "KVR56S46BS8-16", manufacturer: "Kingston", unitPrice: 89.99, unitCost: 54, materialCodeId: "10" },
+  { id: "p3", name: "Station d'accueil Dell WD22TB4", description: "Thunderbolt 4", sku: "WD22TB4", manufacturer: "Dell", unitPrice: 349, unitCost: 262, materialCodeId: "10" },
+  { id: "p4", name: "Microsoft 365 Affaires Standard (1 an)", description: "Licence annuelle", sku: "CFQ7TTC0LDPB", manufacturer: "Microsoft", unitPrice: 225, unitCost: 187.2, materialCodeId: "11" },
+  { id: "p5", name: "Câble réseau Cat6 3 m", description: "Bleu", sku: "C6-3M-BL", manufacturer: "Tripp Lite", unitPrice: 12.5, unitCost: 4.1, materialCodeId: "10" },
+];
+const DEMO_INVENTORY: InventoryItem[] = [
+  { id: "i1", product: DEMO_PRODUCTS[0], location: "Entrepôt Saint-Roch", onHand: 4 },
+  { id: "i2", product: DEMO_PRODUCTS[1], location: "Entrepôt Saint-Roch", onHand: 9 },
+  { id: "i3", product: DEMO_PRODUCTS[4], location: "Camion — Alex", onHand: 20 },
+];
 
 /** A due date picked in the portal: end of the working day in Québec. */
 export const dueIso = (date: string) => new Date(`${date}T17:00:00-04:00`).toISOString();
@@ -308,11 +341,19 @@ const demoSource: TicketSource = {
   async chargeOptions() {
     return DEMO_CHARGE_OPTIONS;
   },
+  async products(q) {
+    const words = q.toLowerCase().split(/\s+/).filter(Boolean);
+    return DEMO_PRODUCTS.filter((p) => words.every((w) => `${p.name} ${p.sku} ${p.manufacturer}`.toLowerCase().includes(w))).slice(0, 25);
+  },
+  async inventory() {
+    return DEMO_INVENTORY;
+  },
   async addCharge(ticketId, p, a) {
     if (!(await this.get(ticketId))) throw new SourceError("not_found");
     const o = DEMO_CHARGE_OPTIONS;
     const label = (list: { value: string; label: string }[], v: string | null) => (v ? (list.find((x) => x.value === v)?.label ?? null) : null);
     if (p.materialCodeId && !label(o.materialCodes, p.materialCodeId)) throw new SourceError("invalid_value");
+    if (p.productId && !DEMO_PRODUCTS.some((x) => x.id === p.productId)) throw new SourceError("invalid_value");
     const list = demoCharges.get(ticketId) ?? [];
     list.push({
       id: `ch-${ticketId}-${list.length + 1}`,
@@ -689,6 +730,22 @@ async function normalize(at: Client, rows: AtTicket[], withSecondary: boolean): 
     });
   }
   return out;
+}
+
+/** An Autotask product row → Product (its material code field name varies). */
+function productOf(r: Record<string, string | number | null | undefined> & { id: number }): Product {
+  const n = (v: unknown) => (typeof v === "number" ? v : v === null || v === undefined || v === "" ? null : Number(v));
+  const code = r.billingCodeID ?? r.chargeBillingCodeID ?? r.productBillingCodeID;
+  return {
+    id: String(r.id),
+    name: String(r.name ?? `#${r.id}`),
+    description: String(r.description ?? ""),
+    sku: r.sku ? String(r.sku) : null,
+    manufacturer: r.manufacturerName ? String(r.manufacturerName) : null,
+    unitPrice: n(r.unitPrice),
+    unitCost: n(r.unitCost),
+    materialCodeId: code ? String(code) : null,
+  };
 }
 
 /** Make the ticket's secondary technicians exactly this list (adds / removes). */
@@ -1130,6 +1187,69 @@ const autotaskSource: TicketSource = {
     });
   },
 
+  async products(q) {
+    const at = await autotask();
+    const text = q.trim();
+    return cached(`products:${text.toLowerCase()}`, 2 * 60_000, async () => {
+      const fields = await safeFields(at, "Products", [
+        "id",
+        "name",
+        "description",
+        "sku",
+        "manufacturerName",
+        "manufacturerProductName",
+        "unitPrice",
+        "unitCost",
+        "billingCodeID",
+        "chargeBillingCodeID",
+        "productBillingCodeID",
+      ]);
+      // Search only the fields this Autotask has (an unknown field fails the query)
+      const searchable = ["name", "sku", "manufacturerProductName"].filter((x) => fields.includes(x));
+      const rows = await at.query<Record<string, string | number | null> & { id: number }>(
+        "Products",
+        [
+          { op: "eq", field: "isActive", value: true },
+          { op: "or", items: searchable.map((field) => ({ op: "contains", field, value: text })) },
+        ],
+        { fields, max: 25 },
+      );
+      return rows.map(productOf);
+    });
+  },
+
+  async inventory() {
+    const at = await autotask();
+    return cached("inventory", 5 * 60_000, async () => {
+      type AtItem = { id: number; productID: number; inventoryLocationID: number; quantityOnHand: number };
+      const items = await at.query<AtItem>("InventoryItems", [{ op: "gt", field: "quantityOnHand", value: 0 }], {
+        fields: ["id", "productID", "inventoryLocationID", "quantityOnHand"],
+        max: 2000,
+      });
+      if (!items.length) return [];
+      const productFields = await safeFields(at, "Products", ["id", "name", "description", "sku", "manufacturerName", "unitPrice", "unitCost", "billingCodeID", "chargeBillingCodeID", "productBillingCodeID"]);
+      const productIds = [...new Set(items.map((x) => x.productID))];
+      const [products, locations] = await Promise.all([
+        Promise.all(
+          chunks(productIds, 200).map((part) =>
+            at.query<Record<string, string | number | null> & { id: number }>("Products", [{ op: "in", field: "id", value: part }], { fields: productFields }),
+          ),
+        ).then((x) => x.flat().map(productOf)),
+        cached("inventoryLocations", 60 * 60_000, () =>
+          at.query<{ id: number; locationName: string }>("InventoryLocations", [{ op: "exist", field: "id" }], { fields: ["id", "locationName"], max: 500 }),
+        ).catch(() => [] as { id: number; locationName: string }[]),
+      ]);
+      return items
+        .map((x): InventoryItem | null => {
+          const product = products.find((p) => p.id === String(x.productID));
+          if (!product) return null;
+          return { id: String(x.id), product, location: locations.find((l) => l.id === x.inventoryLocationID)?.locationName ?? `#${x.inventoryLocationID}`, onHand: x.quantityOnHand };
+        })
+        .filter((x): x is InventoryItem => Boolean(x))
+        .sort((x, y) => x.product.name.localeCompare(y.product.name));
+    });
+  },
+
   async addCharge(ticketId, p, a) {
     const at = await autotask();
     const actor = await actorResource(a);
@@ -1150,6 +1270,7 @@ const autotaskSource: TicketSource = {
         chargeType: Number(p.typeId ?? o.types[0]?.value ?? 1),
         ...(p.statusId ?? o.statuses[0]?.value ? { status: Number(p.statusId ?? o.statuses[0].value) } : {}),
         ...(p.materialCodeId ? { billingCodeID: Number(p.materialCodeId) } : {}),
+        ...(p.productId ? { productID: Number(p.productId) } : {}),
         datePurchased: p.date ? `${p.date}T12:00:00Z` : new Date().toISOString(),
       },
       { impersonate: actor },

@@ -1,8 +1,8 @@
-import { useState, type FormEvent } from "react";
+import { useEffect, useState, type FormEvent } from "react";
 import { useTranslation } from "react-i18next";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
-import { Loader2, Plus, Receipt } from "lucide-react";
+import { Boxes, Loader2, PackageSearch, PenLine, Plus, Receipt, Search, Warehouse, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
@@ -32,6 +32,9 @@ export type Charge = {
 };
 type Choice = { value: string; label: string };
 type ChargeOptions = { types: Choice[]; statuses: Choice[]; materialCodes: Choice[] };
+type Product = { id: string; name: string; description: string; sku: string | null; manufacturer: string | null; unitPrice: number | null; unitCost: number | null; materialCodeId: string | null };
+type InventoryItem = { id: string; product: Product; location: string; onHand: number };
+type Source = "product" | "inventory" | "manual";
 
 const money = (n: number) => new Intl.NumberFormat(currentLocale() === "en" ? "en-CA" : "fr-CA", { style: "currency", currency: "CAD" }).format(n);
 
@@ -60,7 +63,7 @@ export function ChargesContent({ tk, partial }: { tk: TicketDetail; partial: boo
   const total = list.filter((c) => c.billable).reduce((s, c) => s + c.quantity * (c.unitPrice ?? 0), 0);
   return (
     <div className="space-y-2 text-sm">
-      <ul className="space-y-1.5">
+      <ul className="charges-list space-y-1.5">
         {list.map((c) => (
           <li key={c.id} className="rounded-lg border bg-background/30 px-3 py-2">
             <div className="flex items-baseline gap-2">
@@ -108,6 +111,20 @@ function ChargeDialog({ tk, onClose }: { tk: TicketDetail; onClose: () => void }
   const qc = useQueryClient();
   const { data: o } = useQuery({ queryKey: ["tickets", "charge-options"], queryFn: () => api.get<ChargeOptions>("/tickets/charge-options"), staleTime: 10 * 60_000 });
   const [f, setF] = useState({ name: "", description: "", quantity: "1", unitPrice: "", unitCost: "", billable: true, typeId: "", statusId: "", materialCodeId: "", date: new Date().toISOString().slice(0, 10) });
+  const [source, setSource] = useState<Source>("product");
+  // The product picked (catalogue or stock): linked to the charge in Autotask
+  const [picked, setPicked] = useState<{ product: Product; stock?: { location: string; onHand: number } } | null>(null);
+  const choose = (product: Product, stock?: { location: string; onHand: number }) => {
+    setPicked({ product, stock });
+    setF((x) => ({
+      ...x,
+      name: product.name.slice(0, 100),
+      description: product.description.slice(0, 2000),
+      unitPrice: product.unitPrice !== null ? String(product.unitPrice) : "",
+      unitCost: product.unitCost !== null ? String(product.unitCost) : "",
+      materialCodeId: product.materialCodeId && o?.materialCodes.some((c) => c.value === product.materialCodeId) ? product.materialCodeId : x.materialCodeId,
+    }));
+  };
   const set = (k: keyof typeof f) => (v: string | boolean) => setF((x) => ({ ...x, [k]: v }));
   const num = (s: string) => (s.trim() === "" ? null : Number(s.replace(",", ".")));
   const qty = num(f.quantity);
@@ -126,6 +143,7 @@ function ChargeDialog({ tk, onClose }: { tk: TicketDetail; onClose: () => void }
         statusId: f.statusId || null,
         materialCodeId: f.materialCodeId || null,
         date: f.date || null,
+        productId: picked?.product.id ?? null,
       }),
     onSuccess: (list) => {
       qc.setQueryData(["tickets", "charges", tk.id], list);
@@ -156,7 +174,14 @@ function ChargeDialog({ tk, onClose }: { tk: TicketDetail; onClose: () => void }
 
   return (
     <Dialog open onOpenChange={(v) => !v && onClose()}>
-      <DialogContent className="sm:max-w-lg">
+      <DialogContent
+        className="sm:max-w-lg"
+        // straight into the product search (the first field)
+        onOpenAutoFocus={(e) => {
+          e.preventDefault();
+          (e.currentTarget as HTMLElement).querySelector<HTMLInputElement>("input")?.focus();
+        }}
+      >
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
             <Receipt className="size-5 text-primary" /> {t("tickets.charges.new")}
@@ -172,9 +197,48 @@ function ChargeDialog({ tk, onClose }: { tk: TicketDetail; onClose: () => void }
             if (valid) save.mutate();
           }}
         >
+          {/* Where the item comes from */}
+          <div className="grid grid-cols-3 gap-1 rounded-xl border p-1 text-xs">
+            {(
+              [
+                ["product", PackageSearch, t("tickets.charges.fromProduct")],
+                ["inventory", Warehouse, t("tickets.charges.fromInventory")],
+                ["manual", PenLine, t("tickets.charges.fromManual")],
+              ] as const
+            ).map(([k, Icon, label]) => (
+              <button
+                key={k}
+                type="button"
+                onClick={() => setSource(k)}
+                className={cn("flex items-center justify-center gap-1.5 rounded-lg px-2 py-1.5 font-medium transition-colors", source === k ? "bg-grad-gold text-[#1a1204]" : "text-muted-foreground hover:text-foreground")}
+              >
+                <Icon className="size-3.5" /> {label}
+              </button>
+            ))}
+          </div>
+          {picked ? (
+            <div className="flex items-center gap-3 rounded-xl border border-[color:var(--gold)]/40 bg-[color:var(--gold)]/5 px-3 py-2 text-sm">
+              {picked.stock ? <Warehouse className="size-4 shrink-0 text-primary" /> : <Boxes className="size-4 shrink-0 text-primary" />}
+              <span className="min-w-0 flex-1">
+                <span className="block truncate font-medium">{picked.product.name}</span>
+                <span className="block truncate text-[11px] text-muted-foreground">
+                  {[picked.product.sku, picked.product.manufacturer, picked.stock && t("tickets.charges.inStock", { count: picked.stock.onHand, location: picked.stock.location })].filter(Boolean).join(" · ")}
+                </span>
+              </span>
+              <button type="button" onClick={() => setPicked(null)} className="rounded p-1 text-muted-foreground hover:text-foreground" aria-label={t("tickets.charges.unpick")}>
+                <X className="size-4" />
+              </button>
+            </div>
+          ) : source === "product" ? (
+            <ProductSearch onPick={(p) => choose(p)} />
+          ) : source === "inventory" ? (
+            <InventoryPick onPick={(i) => choose(i.product, { location: i.location, onHand: i.onHand })} />
+          ) : null}
+          {picked?.stock && qty !== null && qty > picked.stock.onHand && <p className="-mt-2 text-xs text-orange-300">{t("tickets.charges.moreThanStock", { count: picked.stock.onHand })}</p>}
+
           <div className="space-y-1.5">
             <Label htmlFor="ch-name">{t("tickets.charges.name")}</Label>
-            <Input id="ch-name" autoFocus maxLength={100} value={f.name} onChange={(e) => set("name")(e.target.value)} placeholder={t("tickets.charges.namePlaceholder")} />
+            <Input id="ch-name" autoFocus={source === "manual"} maxLength={100} value={f.name} onChange={(e) => set("name")(e.target.value)} placeholder={t("tickets.charges.namePlaceholder")} />
           </div>
           <div className="grid grid-cols-3 gap-3">
             <div className="space-y-1.5">
@@ -223,5 +287,84 @@ function ChargeDialog({ tk, onClose }: { tk: TicketDetail; onClose: () => void }
         </form>
       </DialogContent>
     </Dialog>
+  );
+}
+
+/** Search the Autotask product catalogue. */
+function ProductSearch({ onPick }: { onPick: (p: Product) => void }) {
+  const { t } = useTranslation();
+  const [text, setText] = useState("");
+  const [q, setQ] = useState("");
+  useEffect(() => {
+    const id = setTimeout(() => setQ(text.trim()), 250);
+    return () => clearTimeout(id);
+  }, [text]);
+  const { data, isFetching } = useQuery({
+    queryKey: ["tickets", "products", q],
+    queryFn: () => api.get<Product[]>(`/tickets/products?q=${encodeURIComponent(q)}`),
+    enabled: q.length >= 2,
+    staleTime: 60_000,
+  });
+  return (
+    <div className="space-y-2">
+      <div className="relative">
+        <Search className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
+        <Input autoFocus value={text} onChange={(e) => setText(e.target.value)} placeholder={t("tickets.charges.searchProduct")} className="pl-9" />
+        {isFetching && <Loader2 className="absolute right-3 top-1/2 size-4 -translate-y-1/2 animate-spin text-muted-foreground" />}
+      </div>
+      {q.length >= 2 && data && (
+        <ul className="max-h-52 overflow-y-auto rounded-xl border">
+          {data.length === 0 && <li className="px-3 py-4 text-center text-sm text-muted-foreground">{t("tickets.charges.noProduct")}</li>}
+          {data.map((p) => (
+            <li key={p.id}>
+              <button type="button" onClick={() => onPick(p)} className="flex w-full items-center gap-3 px-3 py-2 text-left text-sm hover:bg-accent">
+                <Boxes className="size-4 shrink-0 text-muted-foreground" />
+                <span className="min-w-0 flex-1">
+                  <span className="block truncate">{p.name}</span>
+                  <span className="block truncate text-[11px] text-muted-foreground">{[p.sku, p.manufacturer].filter(Boolean).join(" · ")}</span>
+                </span>
+                {p.unitPrice !== null && <span className="shrink-0 font-mono text-xs">{money(p.unitPrice)}</span>}
+              </button>
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
+  );
+}
+
+/** Products in stock, filtered here (location + quantity on hand). */
+function InventoryPick({ onPick }: { onPick: (i: InventoryItem) => void }) {
+  const { t } = useTranslation();
+  const [text, setText] = useState("");
+  const { data, isLoading } = useQuery({ queryKey: ["tickets", "inventory"], queryFn: () => api.get<InventoryItem[]>("/tickets/inventory"), staleTime: 2 * 60_000 });
+  const words = text.toLowerCase().split(/\s+/).filter(Boolean);
+  const shown = (data ?? []).filter((i) => words.every((w) => `${i.product.name} ${i.product.sku ?? ""} ${i.location}`.toLowerCase().includes(w)));
+  return (
+    <div className="space-y-2">
+      <div className="relative">
+        <Search className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
+        <Input autoFocus value={text} onChange={(e) => setText(e.target.value)} placeholder={t("tickets.charges.searchInventory")} className="pl-9" />
+      </div>
+      {isLoading ? (
+        <Skeleton className="h-24" />
+      ) : (
+        <ul className="max-h-52 overflow-y-auto rounded-xl border">
+          {shown.length === 0 && <li className="px-3 py-4 text-center text-sm text-muted-foreground">{t("tickets.charges.noStock")}</li>}
+          {shown.map((i) => (
+            <li key={i.id}>
+              <button type="button" onClick={() => onPick(i)} className="flex w-full items-center gap-3 px-3 py-2 text-left text-sm hover:bg-accent">
+                <Warehouse className="size-4 shrink-0 text-muted-foreground" />
+                <span className="min-w-0 flex-1">
+                  <span className="block truncate">{i.product.name}</span>
+                  <span className="block truncate text-[11px] text-muted-foreground">{i.location}</span>
+                </span>
+                <span className="shrink-0 rounded-full bg-emerald-500/15 px-2 py-0.5 text-[11px] font-medium text-emerald-300">{t("tickets.charges.onHand", { count: i.onHand })}</span>
+              </button>
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
   );
 }

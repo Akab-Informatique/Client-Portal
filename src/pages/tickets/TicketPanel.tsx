@@ -384,16 +384,28 @@ function TicketBody({
             <AiPanel tk={tk} onToNote={(text) => setDraft({ text, internal: true })} />
             <Activity tk={tk} partial={partial && !loadError} />
           </div>
+          {/* Charges, right above the note box */}
+          <div className="pb-2 lg:pr-2 [&_.charges-list]:max-h-40 [&_.charges-list]:overflow-y-auto">
+            <Section
+              id="charges"
+              icon={Receipt}
+              title={t("tickets.charges.title")}
+              badge={chargesSummary(charges)}
+              defaultOpen={false}
+              action={editable && !partial ? <AddCharge tk={tk} /> : null}
+            >
+              <ChargesContent tk={tk} partial={partial} />
+            </Section>
+          </div>
           {editable && (
-            <div className="sticky bottom-0 z-10 -mx-2 bg-gradient-to-t from-background via-background/95 to-transparent px-2 pb-4 pt-3 lg:static lg:mx-0 lg:bg-none lg:px-0 lg:pr-2">
+            <div className="sticky bottom-0 z-10 -mx-2 bg-gradient-to-t from-background via-background/95 to-transparent px-2 pb-4 pt-1 lg:static lg:mx-0 lg:bg-none lg:px-0 lg:pr-2">
               <NoteComposer tk={tk} draft={draft} onDraftUsed={() => setDraft(null)} focusRequest={focusNote} />
             </div>
           )}
         </div>
 
-        {/* Tools and information, in the order they are needed; own scroll.
-            Very wide screens: two columns of sections. */}
-        <aside className="pb-4 lg:w-[380px] lg:shrink-0 lg:overflow-y-auto lg:pr-1 min-[1800px]:w-[740px] min-[1800px]:columns-2 min-[1800px]:gap-3 [&>section]:mb-3 [&>section]:break-inside-avoid">
+        {/* Tools and information, in the order they are needed; one column, own scroll */}
+        <aside className="space-y-3 pb-4 lg:w-[380px] lg:shrink-0 lg:overflow-y-auto lg:pr-1">
             <Section id="client" icon={Building2} title={t("tickets.sections.client")}>
               <dl className="space-y-3">
                 <Detail icon={Building2} label={t("tickets.fields.company")}>
@@ -439,16 +451,6 @@ function TicketBody({
               action={editable && !partial ? <AssetPicker tk={tk} onPick={(assetId) => update.mutate({ assetId })} /> : null}
             >
               <AssetContent tk={tk} editable={editable} partial={partial} onPick={(assetId) => update.mutate({ assetId })} />
-            </Section>
-
-            <Section
-              id="charges"
-              icon={Receipt}
-              title={t("tickets.charges.title")}
-              badge={chargesSummary(charges)}
-              action={editable && !partial ? <AddCharge tk={tk} /> : null}
-            >
-              <ChargesContent tk={tk} partial={partial} />
             </Section>
 
             <Section id="planning" icon={CalendarClock} title={t("tickets.sections.planning")}>
@@ -613,7 +615,7 @@ function Section({
           {!open && badge && <span className="truncate text-xs text-foreground/80">· {badge}</span>}
           <ChevronDown className={cn("ml-auto size-3.5 shrink-0 text-muted-foreground transition-transform", !open && "-rotate-90")} />
         </button>
-        {open && action}
+        {action}
       </div>
       <AnimatePresence initial={false}>
         {open && (
