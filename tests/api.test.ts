@@ -1002,6 +1002,14 @@ describe("tickets: client and contact", () => {
     expect(d.notes.at(-1)).toMatchObject({ kind: "time", hours: 0.25, text: "Diagnostic à distance", internalText: "Vérifier le RAID", author: "Alex Tremblay" });
     expect((await tech.get("/api/tickets/timers")).json.map((x: any) => x.ticketId)).toEqual([b.id]);
 
+    // stop → pending; "later" → paused again, then it resumes
+    await tech.post(`/api/tickets/${b.id}/timer/stop`);
+    const stopped = (await tech.get("/api/tickets/timers")).json[0];
+    expect(stopped.state).toBe("pending");
+    const back = (await tech.post(`/api/tickets/timers/${stopped.id}/later`)).json[0];
+    expect(back).toMatchObject({ state: "paused", elapsedMs: stopped.elapsedMs });
+    expect((await tech.post(`/api/tickets/${b.id}/timer/start`)).json[0].state).toBe("running");
+
     // stop → pending, discard → gone
     await tech.post(`/api/tickets/${b.id}/timer/stop`);
     const bt = (await tech.get("/api/tickets/timers")).json[0];

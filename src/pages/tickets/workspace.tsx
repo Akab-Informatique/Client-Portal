@@ -1,11 +1,11 @@
-import { createContext, useCallback, useContext, useEffect, useMemo, useState, type ReactNode } from "react";
+import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { useTranslation } from "react-i18next";
 import { AnimatePresence, motion } from "motion/react";
 import { Maximize2, Ticket, X } from "lucide-react";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { cn } from "@/lib/utils";
 import { TicketOverlay } from "./TicketPanel";
-import { DockTimer, TimersProvider, useTimers, type Timer } from "./timers";
+import { DockTimer, TimersProvider, useTicketTimerAuto, useTimers, type Timer } from "./timers";
 import { PRIORITY_STYLE, usePresence, type PriorityKind as Priority, type TicketDetail } from "./shared";
 
 /**
@@ -42,11 +42,22 @@ export function TicketWorkspaceProvider({ enabled, children }: { enabled: boolea
     }
   }, [docked]);
 
-  const open = useCallback((id: number) => {
-    setDocked((d) => d.filter((x) => x.id !== id));
-    setOpenId(id);
-  }, []);
-  const close = useCallback(() => setOpenId(null), []);
+  // The open ticket's timer: starts on open, asks for the time entry on close
+  const timer = useTicketTimerAuto();
+  const openRef = useRef<number | null>(null);
+  openRef.current = openId;
+  const open = useCallback(
+    (id: number) => {
+      setDocked((d) => d.filter((x) => x.id !== id));
+      setOpenId(id);
+      if (enabled) timer.opened(id);
+    },
+    [enabled, timer],
+  );
+  const close = useCallback(() => {
+    if (openRef.current !== null && enabled) void timer.closed(openRef.current);
+    setOpenId(null);
+  }, [enabled, timer]);
   const minimize = useCallback((tk: TicketDetail) => {
     setDocked((d) => [...d.filter((x) => x.id !== tk.id), { id: tk.id, number: tk.number, title: tk.title, priority: tk.priorityKind }].slice(-6));
     setOpenId(null);

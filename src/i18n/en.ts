@@ -509,6 +509,7 @@ const en: Dict = {
       internal: "Internal note (optional)",
       save: "Save time",
       later: "Later",
+        laterHint: "The timer is paused and resumes the next time the ticket is opened.",
       discard: "Delete",
       discardConfirm: "Delete this time without saving it?",
       saved: "Time added to the ticket.",

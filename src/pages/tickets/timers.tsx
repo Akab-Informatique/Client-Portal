@@ -1,4 +1,4 @@
-import { createContext, useCallback, useContext, useEffect, useMemo, useState, type ReactNode } from "react";
+import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { useTranslation } from "react-i18next";
 import { useSearchParams } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
@@ -18,7 +18,9 @@ import { cn } from "@/lib/utils";
 import { longDateTime, ticketErrorText } from "./shared";
 
 /**
- * Work timers on tickets. The server keeps them (one running at a time per
+ * Work timers on tickets. Opening a ticket starts (or resumes) its timer;
+ * closing it asks for the time entry ("Later" pauses it until the ticket is
+ * opened again). The server keeps them (one running at a time per
  * technician); this page beats every 30 s while one runs. If every page is
  * closed, the server stops the timer at its last beat and it waits here,
  * "to validate", with a bell notification. Validating = a time entry in
@@ -94,8 +96,6 @@ export function TimersProvider({ children }: { children: ReactNode }) {
   const { list } = useTimers();
   const running = list.some((x) => x.state === "running");
   const [params, setParams] = useSearchParams();
-  // "Later" hides a pending timer until the next visit (or a click on it)
-  const [later, setLater] = useState<Set<string>>(() => new Set());
 
   useEffect(() => {
     if (!running) return;
@@ -116,17 +116,24 @@ export function TimersProvider({ children }: { children: ReactNode }) {
   // From the bell: /tickets?timers=1 shows every timer to validate again
   useEffect(() => {
     if (params.get("timers") !== "1") return;
-    setLater(new Set());
     void qc.invalidateQueries({ queryKey: KEY });
     const next = new URLSearchParams(params);
     next.delete("timers");
     setParams(next, { replace: true });
   }, [params, setParams, qc]);
 
-  const pending = list.filter((x) => x.state === "pending" && !later.has(x.id));
+  const pending = list.filter((x) => x.state === "pending");
   const current = pending[0] ?? null;
-  const review = useCallback((id: string) => setLater((s) => new Set([...s].filter((x) => x !== id))), []);
-  const value = useMemo(() => ({ review }), [review]);
+  // Pending timers always show their dialog: nothing to bring back
+  const value = useMemo(() => ({ review: () => undefined }), []);
+  // "Later": back to paused (shown at once, confirmed by the server)
+  const later = (timer: Timer) => {
+    qc.setQueryData<Timers>(KEY, (d) => d && { ...d, list: d.list.map((x) => (x.id === timer.id ? { ...x, state: "paused" as const, endedAt: null } : x)) });
+    void api
+      .post<Timer[]>(`/tickets/timers/${timer.id}/later`)
+      .then((l) => qc.setQueryData<Timers>(KEY, { at: Date.now(), list: l }))
+      .catch(() => qc.invalidateQueries({ queryKey: KEY }));
+  };
 
   return (
     <UiCtx.Provider value={value}>
@@ -136,7 +143,7 @@ export function TimersProvider({ children }: { children: ReactNode }) {
           key={current.id}
           timer={current}
           position={{ n: 1, total: pending.length }}
-          onLater={() => setLater((s) => new Set(s).add(current.id))}
+          onLater={() => later(current)}
         />
       )}
     </UiCtx.Provider>
@@ -145,6 +152,57 @@ export function TimersProvider({ children }: { children: ReactNode }) {
 
 function useTimerUi() {
   return useContext(UiCtx) ?? { review: () => undefined };
+}
+
+/**
+ * The ticket's timer follows the window: opening starts or resumes it,
+ * closing stops it and asks for the time entry. Under a minute (a quick look),
+ * the timer is simply dropped. Minimizing keeps it going.
+ */
+export function useTicketTimerAuto() {
+  const qc = useQueryClient();
+  const can = useCan();
+  const on = can("tickets.edit");
+  const starting = useRef(new Map<number, Promise<unknown>>());
+  const put = useCallback((list: Timer[]) => qc.setQueryData<Timers>(KEY, { at: Date.now(), list }), [qc]);
+
+  const opened = useCallback(
+    (id: number) => {
+      if (!on) return;
+      const cur = qc.getQueryData<Timers>(KEY)?.list.find((x) => x.ticketId === id);
+      if (cur && cur.state !== "paused") return;
+      const p = api
+        .post<Timer[]>(`/tickets/${id}/timer/start`)
+        .then(put)
+        .catch(() => undefined);
+      starting.current.set(id, p);
+    },
+    [on, qc, put],
+  );
+
+  const closed = useCallback(
+    async (id: number) => {
+      if (!on) return;
+      await starting.current.get(id);
+      starting.current.delete(id);
+      const d = qc.getQueryData<Timers>(KEY);
+      const cur = d?.list.find((x) => x.ticketId === id);
+      if (!d || !cur || cur.state === "pending") return;
+      try {
+        if (liveMs(cur, d.at, Date.now()) < 60_000) {
+          await api.del(`/tickets/timers/${cur.id}`);
+          put(d.list.filter((x) => x.id !== cur.id));
+        } else {
+          put(await api.post<Timer[]>(`/tickets/${id}/timer/stop`));
+        }
+      } catch {
+        void qc.invalidateQueries({ queryKey: KEY });
+      }
+    },
+    [on, qc, put],
+  );
+
+  return useMemo(() => ({ opened, closed }), [opened, closed]);
 }
 
 /** In the ticket window header: ▶ / ⏸, h:mm:ss, ■ Terminer. */
@@ -363,7 +421,7 @@ function TimeEntryDialog({ timer, position, onLater }: { timer: Timer; position:
               {t("tickets.timer.discard")}
             </Button>
             <span className="flex-1" />
-            <Button type="button" variant="outline" onClick={onLater}>
+            <Button type="button" variant="outline" onClick={onLater} title={t("tickets.timer.laterHint")}>
               {t("tickets.timer.later")}
             </Button>
             <Button type="submit" disabled={!valid || submit.isPending} className="bg-grad-gold font-semibold text-[#1a1204]">

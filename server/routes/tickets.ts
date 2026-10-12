@@ -460,6 +460,18 @@ export const ticketRoutes = new Hono<AppEnv>()
     await audit(a.user.id, "ticket.time_entry", String(timer.ticketId), { hours: p.hours });
     return c.json({ ok: true }, 201);
   })
+  /** "Later": a stopped timer goes back to paused; it resumes when the ticket is opened again. */
+  .post("/timers/:timerId/later", requirePermission("tickets.edit"), async (c) => {
+    const a = auth(c);
+    const timer = await ownTimer(c.req.param("timerId"), a.user.id);
+    if (timer.state === "pending") {
+      await db()
+        .update(schema.ticketTimers)
+        .set({ state: "paused", runningSince: null, endedAt: null, updatedAt: new Date() })
+        .where(eq(schema.ticketTimers.id, timer.id));
+    }
+    return c.json((await myTimers(a.user.id)).map(timerView));
+  })
   /** Discard a timer (no time entry). */
   .delete("/timers/:timerId", requirePermission("tickets.edit"), async (c) => {
     const a = auth(c);

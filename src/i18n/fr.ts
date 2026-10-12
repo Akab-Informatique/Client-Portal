@@ -507,6 +507,7 @@ const fr = {
       internal: "Note interne (facultatif)",
       save: "Enregistrer le temps",
       later: "Plus tard",
+        laterHint: "Le chrono est mis en pause et reprend à la prochaine ouverture du billet.",
       discard: "Supprimer",
       discardConfirm: "Supprimer ce temps sans l'enregistrer ?",
       saved: "Temps ajouté au billet.",
