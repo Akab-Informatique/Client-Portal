@@ -52,6 +52,7 @@
   --sidebar: #ffffff;
   --sidebar-foreground: #16171b;
   --grid-line: rgba(12, 12, 14, 0.05);
+  --hive: url("data:image/svg+xml,%3Csvg xmlns=%27http://www.w3.org/2000/svg%27 width=%2742%27 height=%2772.75%27 viewBox=%270 0 42 72.75%27%3E%3Cg fill=%27none%27 stroke=%27%230a0a0b%27 stroke-opacity=%270.09%27 stroke-width=%271%27%3E%3Cpath d=%27M21 0L42 12.125V36.375L21 48.5L0 36.375V12.125Z%27/%3E%3Cpath d=%27M21 48.5V72.75M0 36.375L-21 48.5M42 36.375L63 48.5%27/%3E%3C/g%3E%3C/svg%3E");
   --glow: rgba(245, 148, 16, 0.18);
 }
 
@@ -84,6 +85,7 @@
   --sidebar: #0e0f12;
   --sidebar-foreground: #ededf0;
   --grid-line: rgba(255, 255, 255, 0.035);
+  --hive: url("data:image/svg+xml,%3Csvg xmlns=%27http://www.w3.org/2000/svg%27 width=%2742%27 height=%2772.75%27 viewBox=%270 0 42 72.75%27%3E%3Cg fill=%27none%27 stroke=%27%23ffce1a%27 stroke-opacity=%270.12%27 stroke-width=%271%27%3E%3Cpath d=%27M21 0L42 12.125V36.375L21 48.5L0 36.375V12.125Z%27/%3E%3Cpath d=%27M21 48.5V72.75M0 36.375L-21 48.5M42 36.375L63 48.5%27/%3E%3C/g%3E%3C/svg%3E");
   --glow: rgba(255, 206, 26, 0.12);
   --grad-gold-text: var(--grad-gold);
 }
@@ -153,12 +155,10 @@
     background-clip: text;
     color: transparent;
   }
-  /* Fine technical grid, like the akab.ca hero */
+  /* Fine honeycomb (the AKAB beehive) behind the page tops */
   .bg-grid {
-    background-image:
-      linear-gradient(var(--grid-line) 1px, transparent 1px),
-      linear-gradient(90deg, var(--grid-line) 1px, transparent 1px);
-    background-size: 48px 48px;
+    background-image: var(--hive);
+    background-size: 42px 72.75px;
   }
   .glow-gold {
     box-shadow: 0 16px 34px -14px rgba(245, 148, 16, 0.55);
@@ -196,24 +196,64 @@
 }
 
 /*
- * AKAB brand shape: hexagons (like the logo) instead of circles and pills.
- * corner-shape: bevel cuts the rounded ends into points, borders, rings and
- * shadows included: a pill becomes an elongated hexagon, a square item
- * (avatar, dot, icon button) a small hexagon. Browsers without it keep
- * slightly rounded corners for buttons and pills elsewhere.
+ * AKAB brand shape — the beehive. Hexagons (like the logo) instead of
+ * rounded shapes, everywhere. corner-shape: bevel cuts corners in straight
+ * lines, borders, rings and shadows included:
+ *  - pills and buttons become elongated hexagons;
+ *  - square items (icon tiles, avatars, dots, icon buttons, checkboxes)
+ *    become small hexagons — honeycomb cells;
+ *  - cards, panels, fields, menus and windows get cut corners.
+ * Browsers without corner-shape keep the rounded look.
  * Outside any layer on purpose: it wins over the rounded-* utilities.
  */
 .hex {
   border-radius: 0.5rem;
 }
 @supports (corner-shape: bevel) {
+  .rounded,
+  .rounded-xs,
+  .rounded-sm,
+  .rounded-md,
+  .rounded-lg,
+  .rounded-xl,
+  .rounded-2xl,
+  .rounded-3xl,
+  [class*="rounded-["],
+  [class*="rounded-t-"],
+  [class*="rounded-b-"],
+  [class*="rounded-l-"],
+  [class*="rounded-r-"] {
+    corner-shape: bevel;
+  }
+  /* cut size: noticeable but light */
+  .rounded-sm {
+    border-radius: 3px;
+  }
+  .rounded-md {
+    border-radius: 5px;
+  }
+  .rounded-lg {
+    border-radius: 7px;
+  }
+  .rounded-xl {
+    border-radius: 9px;
+  }
+  .rounded-2xl {
+    border-radius: 12px;
+  }
+  .rounded-3xl {
+    border-radius: 16px;
+  }
   .hex,
   .rounded-full {
     border-radius: 9999px;
     corner-shape: bevel;
   }
-  :is(.hex, .rounded-full):is([class^="size-"], [class*=" size-"], .aspect-square) {
+  /* square → hexagon cell */
+  :is(.hex, .rounded-full, .rounded-sm, .rounded-md, .rounded-lg, .rounded-xl, .rounded-2xl):is([class^="size-"], [class*=" size-"], .aspect-square),
+  [data-slot="checkbox"] {
     border-radius: 25% / 50%;
+    corner-shape: bevel;
   }
 }
 
