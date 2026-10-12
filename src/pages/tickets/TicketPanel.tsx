@@ -32,7 +32,6 @@ import {
   NotebookPen,
   Pencil,
   Phone,
-  Receipt,
   RefreshCw,
   Send,
   Sparkles,
@@ -63,7 +62,7 @@ import { GlassBackdrop } from "@/components/brand/GlassBackdrop";
 import { CompanyPicker, ContactPicker, useCompanies } from "./pickers";
 import { TimerControl } from "./timers";
 import { AssetContent, AssetPicker } from "./AssetCard";
-import { AddCharge, ChargesContent, chargesSummary, useCharges } from "./Charges";
+import { ChargeButtons } from "./Charges";
 import { useConfirm } from "@/components/ConfirmDialog";
 import { dueState, longDateTime, PRIORITY_STYLE, STATUS_STYLE, useChoiceText, usePresence, type AiAnalysis, type TicketDetail, type TicketList, type Viewer, ticketErrorText } from "./shared";
 
@@ -237,7 +236,6 @@ function TicketBody({
   const remote = tk.asset?.links.remote ?? null;
   const phone = tk.contactInfo?.phone ?? null;
   const email = tk.contactInfo?.email ?? null;
-  const { data: charges } = useCharges(tk.id, !partial);
 
   // R = reply, I = internal note (when not typing)
   useEffect(() => {
@@ -384,18 +382,9 @@ function TicketBody({
             <AiPanel tk={tk} onToNote={(text) => setDraft({ text, internal: true })} />
             <Activity tk={tk} partial={partial && !loadError} />
           </div>
-          {/* Charges, right above the note box */}
-          <div className="pb-2 lg:pr-2 [&_.charges-list]:max-h-40 [&_.charges-list]:overflow-y-auto">
-            <Section
-              id="charges"
-              icon={Receipt}
-              title={t("tickets.charges.title")}
-              badge={chargesSummary(charges)}
-              defaultOpen={false}
-              action={editable && !partial ? <AddCharge tk={tk} /> : null}
-            >
-              <ChargesContent tk={tk} partial={partial} />
-            </Section>
+          {/* Charges and expenses: small buttons right above the note box */}
+          <div className="pb-2 lg:pr-2">
+            <ChargeButtons tk={tk} editable={editable} partial={partial} />
           </div>
           {editable && (
             <div className="sticky bottom-0 z-10 -mx-2 bg-gradient-to-t from-background via-background/95 to-transparent px-2 pb-4 pt-1 lg:static lg:mx-0 lg:bg-none lg:px-0 lg:pr-2">

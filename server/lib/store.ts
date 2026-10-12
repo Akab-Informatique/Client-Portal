@@ -1,4 +1,4 @@
-import { and, asc, eq, gt, gte, sql } from "drizzle-orm";
+import { and, asc, eq, gte, sql } from "drizzle-orm";
 import { db, schema } from "../db/index.ts";
 
 /**
@@ -77,28 +77,25 @@ export async function undoMovement(movementId: string): Promise<void> {
   });
 }
 
-/** What can be taken for a ticket: active products in stock at active locations. */
-export async function inStock() {
-  const rows = await db()
-    .select({ product: schema.storeProducts, locationId: schema.storeLocations.id, location: schema.storeLocations.name, quantity: schema.storeStock.quantity })
-    .from(schema.storeStock)
-    .innerJoin(schema.storeProducts, eq(schema.storeProducts.id, schema.storeStock.productId))
-    .innerJoin(schema.storeLocations, eq(schema.storeLocations.id, schema.storeStock.locationId))
-    .where(and(gt(schema.storeStock.quantity, 0), eq(schema.storeProducts.active, true), eq(schema.storeLocations.active, true)))
-    .orderBy(asc(schema.storeProducts.name), asc(schema.storeLocations.name));
-  return rows.map((r) => ({
-    id: `${r.product.id}:${r.locationId}`,
-    product: {
-      id: r.product.id,
-      name: r.product.name,
-      description: r.product.description,
-      sku: r.product.sku,
-      manufacturer: r.product.manufacturer,
-      unitPrice: r.product.priceCents / 100,
-      unitCost: r.product.costCents / 100,
-      materialCodeId: r.product.materialCodeId,
-    },
-    location: r.location,
-    onHand: r.quantity,
-  }));
+/** Active products matching the words, with their stock per location (for a ticket charge). */
+export async function searchProducts(q: string) {
+  const words = q.toLowerCase().split(/\s+/).filter(Boolean);
+  const all = await productsWithStock();
+  return all
+    .filter((p) => p.active && words.every((w) => `${p.name} ${p.sku ?? ""} ${p.manufacturer ?? ""} ${p.category ?? ""}`.toLowerCase().includes(w)))
+    .sort((x, y) => Number(y.total > 0) - Number(x.total > 0) || x.name.localeCompare(y.name))
+    .slice(0, 25)
+    .map((p) => ({
+      id: p.id,
+      name: p.name,
+      description: p.description,
+      sku: p.sku,
+      manufacturer: p.manufacturer,
+      unitPrice: p.priceCents / 100,
+      unitCost: p.costCents / 100,
+      materialCodeId: p.materialCodeId,
+      linked: Boolean(p.autotaskProductId),
+      stock: p.stock.filter((s) => s.quantity > 0),
+      total: p.total,
+    }));
 }

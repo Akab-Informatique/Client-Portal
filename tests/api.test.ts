@@ -1055,12 +1055,21 @@ describe("tickets: client and contact", () => {
     expect(store.products.find((p: any) => p.id === ssd.id)).toMatchObject({ total: 4, low: false, stock: [{ location: "Entrepôt", quantity: 4 }] });
     expect(store.stats).toMatchObject({ active: 1, units: 4, valueCents: 4 * 12950 });
 
-    // the charge form sees it; taking 3 lowers the stock and logs the ticket
-    const stock = (await tech.get("/api/tickets/inventory")).json;
-    expect(stock).toEqual([expect.objectContaining({ id: `${ssd.id}:${loc.id}`, location: "Entrepôt", onHand: 4, product: expect.objectContaining({ unitPrice: 189.99 }) })]);
+    // the charge form searches the portal inventory; taking 3 lowers the stock and logs the ticket
+    const found = (await tech.get("/api/tickets/store-products?q=ssd")).json;
+    expect(found).toEqual([expect.objectContaining({ id: ssd.id, unitPrice: 189.99, total: 4, stock: [{ locationId: loc.id, location: "Entrepôt", quantity: 4 }] })]);
     const tk = (await tech.get("/api/tickets?view=all")).json.items[4];
-    expect((await tech.post(`/api/tickets/${tk.id}/charges`, { name: "SSD 1 To", quantity: 3, unitPrice: 189.99, stockId: stock[0].id })).status).toBe(201);
-    expect((await tech.post(`/api/tickets/${tk.id}/charges`, { name: "SSD 1 To", quantity: 2, unitPrice: 189.99, stockId: stock[0].id })).json.error).toBe("insufficient_stock");
+    const take = (quantity: number) => tech.post(`/api/tickets/${tk.id}/charges`, { name: "SSD 1 To", quantity, unitPrice: 189.99, storeProductId: ssd.id, locationId: loc.id });
+    expect((await take(3)).status).toBe(201);
+    expect((await take(2)).json.error).toBe("insufficient_stock");
+    expect((await take(0.5)).status).toBe(400);
+    // without taking stock (bought for this client)
+    expect((await tech.post(`/api/tickets/${tk.id}/charges`, { name: "SSD 1 To", quantity: 2, unitPrice: 189.99, storeProductId: ssd.id })).status).toBe(201);
+    // a technician adds a product that does not exist yet
+    const made = await tech.post("/api/tickets/store-products", { name: "Câble HDMI 2 m", sku: "HDMI-2M", priceCents: 1999, costCents: 600 });
+    expect(made.status).toBe(201);
+    expect(made.json).toMatchObject({ name: "Câble HDMI 2 m", unitPrice: 19.99, total: 0, stock: [] });
+    expect((await tech.post("/api/tickets/store-products", { name: "Autre", sku: "HDMI-2M", priceCents: 1 })).json.error).toBe("sku_taken");
     store = (await admin.get("/api/store")).json;
     expect(store.products.find((p: any) => p.id === ssd.id)).toMatchObject({ total: 1, low: true });
     const moves = (await admin.get(`/api/store/products/${ssd.id}/movements`)).json;
@@ -1504,11 +1513,11 @@ describe("tickets from Autotask", () => {
     const loc = (await admin.post("/api/store/locations", { name: "Camion" })).json;
     const item = (await admin.post("/api/store/products", { name: "SSD lié", priceCents: 18999, autotaskProductId: 601, materialCodeId: "501" })).json;
     await admin.post(`/api/store/products/${item.id}/stock`, { locationId: loc.id, kind: "receive", quantity: 2 });
-    const stockId = `${item.id}:${loc.id}`;
+    const from = { storeProductId: item.id, locationId: loc.id };
     sent.length = 0;
-    expect((await tech.post("/api/tickets/9001/charges", { name: "SSD lié", quantity: 1, unitPrice: 189.99, materialCodeId: "501", stockId })).status).toBe(201);
+    expect((await tech.post("/api/tickets/9001/charges", { name: "SSD lié", quantity: 1, unitPrice: 189.99, materialCodeId: "501", ...from })).status).toBe(201);
     expect(sent.find((s) => s.method === "POST" && s.url.endsWith("Tickets/9001/Charges"))!.body).toMatchObject({ productID: 601 });
-    expect((await tech.post("/api/tickets/9001/charges", { name: "REFUSE", quantity: 1, stockId })).status).toBe(502);
+    expect((await tech.post("/api/tickets/9001/charges", { name: "REFUSE", quantity: 1, ...from })).status).toBe(502);
     const left = (await admin.get("/api/store")).json.products.find((p: any) => p.id === item.id);
     expect(left.total).toBe(1);
   });

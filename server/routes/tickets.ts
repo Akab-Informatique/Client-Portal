@@ -12,7 +12,7 @@ import { AutotaskError, PERMISSION_REFUSED } from "../lib/autotask.ts";
 import { sweepTimers, timerView, elapsedMs } from "../lib/timers.ts";
 import { SourceError, ticketSource, type Asset, type NTicket, type Options, type TicketSource } from "../lib/ticketSource.ts";
 import { rmmLink, rmmSettings, type RmmSettings } from "../lib/rmm.ts";
-import { inStock, moveStock, undoMovement } from "../lib/store.ts";
+import { moveStock, searchProducts, undoMovement } from "../lib/store.ts";
 
 /**
  * Tickets (staff). Data come from the ticket source: Autotask when the
@@ -22,6 +22,7 @@ import { inStock, moveStock, undoMovement } from "../lib/store.ts";
  */
 
 const zDate = z.string().regex(/^\d{4}-\d{2}-\d{2}$/);
+const zUuidOrNull = z.uuid().nullable().default(null);
 const FILTER_PARAMS = ["view", "assignee", "q", "due", "created", "attention", "statusKind", "status", "priority", "company", "queue", "dueFrom", "dueTo", "startFrom", "startTo", "sort"];
 const PRIORITY_ORDER = { critical: 0, high: 1, medium: 2, low: 3 } as const;
 
@@ -530,8 +531,33 @@ export const ticketRoutes = new Hono<AppEnv>()
     const src = await ticketSource();
     return c.json(await run(() => src.products(q)));
   })
-  /** Store products in stock (portal inventory), per location. */
-  .get("/inventory", requirePermission("tickets.edit"), async (c) => c.json(await inStock()))
+  /** Portal inventory products to charge on a ticket (name, SKU, manufacturer, category). */
+  .get("/store-products", requirePermission("tickets.edit"), async (c) => c.json(await searchProducts((c.req.query("q") ?? "").slice(0, 60))))
+  /** Add a product to the portal inventory from a ticket, when it does not exist yet. */
+  .post("/store-products", requirePermission("tickets.edit"), async (c) => {
+    const a = auth(c);
+    const p = await body(
+      c,
+      z.object({
+        name: z.string().trim().min(1).max(200),
+        sku: z.string().trim().max(60).nullable().default(null),
+        manufacturer: z.string().trim().max(120).nullable().default(null),
+        priceCents: z.number().int().min(0).max(100_000_000),
+        costCents: z.number().int().min(0).max(100_000_000).default(0),
+      }),
+    );
+    const sku = p.sku || null;
+    if (sku) {
+      const [dup] = await db().select({ id: schema.storeProducts.id }).from(schema.storeProducts).where(eq(schema.storeProducts.sku, sku));
+      if (dup) throw new HTTPException(409, { message: "sku_taken" });
+    }
+    const [row] = await db()
+      .insert(schema.storeProducts)
+      .values({ name: p.name, sku, manufacturer: p.manufacturer || null, priceCents: p.priceCents, costCents: p.costCents })
+      .returning({ id: schema.storeProducts.id });
+    await audit(a.user.id, "store.product_created", row.id, { name: p.name, sku, from: "ticket" });
+    return c.json((await searchProducts(p.name)).find((x) => x.id === row.id), 201);
+  })
   /** Choices for a new charge: types, statuses, material codes. */
   .get("/charge-options", requirePermission("tickets.edit"), async (c) => {
     const src = await ticketSource();
@@ -782,28 +808,28 @@ export const ticketRoutes = new Hono<AppEnv>()
         materialCodeId: z.string().max(20).nullable().default(null),
         date: zDate.nullable().default(null),
         productId: z.string().max(20).nullable().default(null),
-        /** Taken from the portal inventory: "<product id>:<location id>" */
-        stockId: z
-          .string()
-          .regex(/^[0-9a-f-]{36}:[0-9a-f-]{36}$/)
-          .nullable()
-          .default(null),
+        /** Portal inventory product charged, and the location its units come out of (null: no stock taken) */
+        storeProductId: zUuidOrNull,
+        locationId: zUuidOrNull,
       }),
     );
     const src = await ticketSource();
-    const { stockId, ...charge } = p;
+    const { storeProductId, locationId, ...charge } = p;
     let taken: { movementId: string } | null = null;
-    if (stockId) {
-      // Whole units only, never more than what is on hand
-      if (!Number.isInteger(charge.quantity)) throw new HTTPException(400, { message: "Validation failed" });
-      const [productId, locationId] = stockId.split(":");
-      const [product] = await db().select().from(schema.storeProducts).where(eq(schema.storeProducts.id, productId));
-      if (!product) throw new HTTPException(404, { message: "not_found" });
-      const number = (await run(() => src.list())).find((t) => t.id === id)?.number ?? null;
-      taken = await moveStock({ productId, locationId, delta: -charge.quantity, kind: "ticket", userId: a.user.id, ticket: { id, number }, mustHave: true });
-      if (!taken) throw new HTTPException(409, { message: "insufficient_stock" });
+    if (storeProductId) {
+      const [product] = await db().select().from(schema.storeProducts).where(eq(schema.storeProducts.id, storeProductId));
+      if (!product || !product.active) throw new HTTPException(404, { message: "not_found" });
       // The Autotask product it is linked to (if any) goes on the charge
       charge.productId = product.autotaskProductId ? String(product.autotaskProductId) : null;
+      if (locationId) {
+        // Whole units only, never more than what is on hand
+        if (!Number.isInteger(charge.quantity)) throw new HTTPException(400, { message: "Validation failed" });
+        const number = (await run(() => src.list())).find((t) => t.id === id)?.number ?? null;
+        taken = await moveStock({ productId: storeProductId, locationId, delta: -charge.quantity, kind: "ticket", userId: a.user.id, ticket: { id, number }, mustHave: true });
+        if (!taken) throw new HTTPException(409, { message: "insufficient_stock" });
+      }
+    } else if (locationId) {
+      throw new HTTPException(400, { message: "Validation failed" });
     }
     try {
       await run(() => src.addCharge(id, charge, a));
