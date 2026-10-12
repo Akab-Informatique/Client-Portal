@@ -200,17 +200,20 @@ function ChargesDialog({ tk, editable, onClose }: { tk: TicketDetail; editable: 
     onError: (e) => toast.error(ticketErrorText(t, e)),
   });
 
+  // Default shown when nothing is chosen: the status "Approved", else the first value
+  const fallback = (k: "typeId" | "statusId" | "materialCodeId", options: Choice[]) =>
+    k === "statusId" ? (options.find((s) => /approu?v/i.test(s.label)) ?? options[0]).value : options[0].value;
   const pick = (k: "typeId" | "statusId" | "materialCodeId", label: string, options: Choice[] | undefined, none?: string) =>
     options && options.length > 0 ? (
       <div className="space-y-1.5">
         <Label>{label}</Label>
-        <Select value={f[k] || "_"} onValueChange={(v) => set(k)(v === "_" ? "" : v)}>
+        <Select value={f[k] || (none ? "_" : fallback(k, options))} onValueChange={(v) => set(k)(v === "_" ? "" : v)}>
           <SelectTrigger className="w-full">
             <SelectValue />
           </SelectTrigger>
           <SelectContent position="popper">
-            <SelectItem value="_">{none ?? options[0].label}</SelectItem>
-            {(none ? options : options.slice(1)).map((x) => (
+            {none && <SelectItem value="_">{none}</SelectItem>}
+            {options.map((x) => (
               <SelectItem key={x.value} value={x.value}>
                 {x.label}
               </SelectItem>

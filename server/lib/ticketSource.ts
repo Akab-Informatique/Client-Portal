@@ -167,6 +167,9 @@ export interface TicketSource {
   addTimeEntry(ticketId: number, p: NewTimeEntry, a: AuthContext): Promise<void>;
 }
 
+/** New charges are approved unless another status is chosen ("Approved" / "Approuvé"). */
+export const approvedStatus = (statuses: { value: string; label: string }[]) => statuses.find((s) => /approu?v/i.test(s.label)) ?? statuses[0];
+
 /** Sample charges, in memory. */
 const demoCharges = new Map<number, Charge[]>();
 const DEMO_CHARGE_OPTIONS: ChargeOptions = {
@@ -351,7 +354,7 @@ const demoSource: TicketSource = {
       unitCost: p.unitCost,
       billable: p.billable,
       type: label(o.types, p.typeId) ?? o.types[0].label,
-      status: label(o.statuses, p.statusId) ?? o.statuses[0].label,
+      status: label(o.statuses, p.statusId) ?? approvedStatus(o.statuses).label,
       materialCode: label(o.materialCodes, p.materialCodeId),
       date: p.date ?? new Date().toISOString().slice(0, 10),
       author: a.user.name,
@@ -1223,7 +1226,7 @@ const autotaskSource: TicketSource = {
         ...(p.unitCost !== null ? { unitCost: p.unitCost } : {}),
         isBillableToCompany: p.billable,
         chargeType: Number(p.typeId ?? o.types[0]?.value ?? 1),
-        ...(p.statusId ?? o.statuses[0]?.value ? { status: Number(p.statusId ?? o.statuses[0].value) } : {}),
+        ...((p.statusId ?? approvedStatus(o.statuses)?.value) ? { status: Number(p.statusId ?? approvedStatus(o.statuses).value) } : {}),
         ...(p.materialCodeId ? { billingCodeID: Number(p.materialCodeId) } : {}),
         ...(p.productId ? { productID: Number(p.productId) } : {}),
         datePurchased: p.date ? `${p.date}T12:00:00Z` : new Date().toISOString(),

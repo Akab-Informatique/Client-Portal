@@ -1027,7 +1027,7 @@ describe("tickets: client and contact", () => {
     });
     expect(r.status).toBe(201);
     expect(r.json).toEqual([
-      expect.objectContaining({ name: "Disque SSD 1 To", quantity: 2, unitPrice: 149.99, billable: true, materialCode: o.materialCodes[0].label, author: "Alex Tremblay" }),
+      expect.objectContaining({ name: "Disque SSD 1 To", quantity: 2, unitPrice: 149.99, billable: true, materialCode: o.materialCodes[0].label, author: "Alex Tremblay", status: "Approuvé" }),
     ]);
     expect((await tech.post(`/api/tickets/${tk.id}/charges`, { name: "x", quantity: 1, materialCodeId: "999" })).json.error).toBe("invalid_value");
     expect((await tech.post(`/api/tickets/${tk.id}/charges`, { name: "", quantity: 0 })).status).toBe(400);
@@ -1290,7 +1290,7 @@ describe("tickets from Autotask", () => {
             fields: [
               ...["id", "ticketID", "name", "description", "unitQuantity", "unitPrice", "unitCost", "isBillableToCompany", "billingCodeID", "datePurchased"].map((name) => ({ name })),
               { name: "chargeType", picklistValues: pick([[1, "Operational"], [2, "Capitalized"]]) },
-              { name: "status", picklistValues: pick([[1, "Pending"]]) },
+              { name: "status", picklistValues: pick([[1, "Pending"], [2, "Approved"]]) },
             ],
           });
         }
@@ -1533,14 +1533,14 @@ describe("tickets from Autotask", () => {
     resetRateLimit("login:ip:unknown");
     const tech = await signIn("tech@akab.local");
     const o = (await tech.get("/api/tickets/charge-options")).json;
-    expect(o).toEqual({ types: [{ value: "1", label: "Operational" }, { value: "2", label: "Capitalized" }], statuses: [{ value: "1", label: "Pending" }], materialCodes: [{ value: "501", label: "Hardware" }] });
+    expect(o).toEqual({ types: [{ value: "1", label: "Operational" }, { value: "2", label: "Capitalized" }], statuses: [{ value: "1", label: "Pending" }, { value: "2", label: "Approved" }], materialCodes: [{ value: "501", label: "Hardware" }] });
     expect((await tech.get("/api/tickets/9001/charges")).json).toEqual([expect.objectContaining({ id: "81", name: "SSD", materialCode: "Hardware", type: "Operational", status: "Pending" })]);
     sent.length = 0;
     const r = await tech.post("/api/tickets/9001/charges", { name: "Câble réseau", quantity: 3, unitPrice: 12.5, billable: false, materialCodeId: "501", date: "2026-10-12" });
     expect(r.status).toBe(201);
     const post = sent.find((s) => s.method === "POST" && s.url.endsWith("Tickets/9001/Charges"))!;
     expect(post.headers.impersonationresourceid).toBe("29682885");
-    expect(post.body).toMatchObject({ ticketID: 9001, name: "Câble réseau", unitQuantity: 3, unitPrice: 12.5, isBillableToCompany: false, chargeType: 1, status: 1, billingCodeID: 501, datePurchased: "2026-10-12T12:00:00Z" });
+    expect(post.body).toMatchObject({ ticketID: 9001, name: "Câble réseau", unitQuantity: 3, unitPrice: 12.5, isBillableToCompany: false, chargeType: 1, status: 2, billingCodeID: 501, datePurchased: "2026-10-12T12:00:00Z" }); // approved by default
 
     // catalogue search only on the fields this Autotask has; product linked on the charge
     sent.length = 0;
