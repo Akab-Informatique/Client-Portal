@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState, type FormEvent, type ReactNode } from "react";
+import { Fragment, useEffect, useMemo, useRef, useState, type FormEvent, type ReactNode } from "react";
 import { useSearchParams } from "react-router-dom";
 import { useTranslation } from "react-i18next";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
@@ -378,52 +378,55 @@ function MetricTiles({ data, params, apply, onSms }: { data: TicketList | undefi
         const value = data?.metrics[tile.key];
         const b = data?.metrics.attentionBreakdown;
         return (
-          <Tooltip key={tile.key}>
-            <TooltipTrigger asChild>
-              <motion.button
-                type="button"
-                onClick={() => apply(tile.query)}
-                initial={{ opacity: 0, y: 6 }}
-                animate={{ opacity: 1, y: 0 }}
-                transition={{ delay: i * 0.04 }}
-                style={{ ["--tile-glow" as string]: tile.glow }}
-                className={cn(
-                  "glass group relative flex items-center gap-3.5 overflow-hidden rounded-2xl border px-4 py-3.5 text-left transition-all hover:border-[color:var(--gold)]/40 hover:shadow-[0_0_28px_-14px_var(--tile-glow)]",
-                  active && "border-[color:var(--gold)]/60 bg-[color:var(--gold)]/[0.05] shadow-[0_0_28px_-12px_var(--tile-glow)]",
-                )}
-              >
-                <span className={cn("flex size-10 shrink-0 items-center justify-center rounded-xl border bg-background/60", tile.tone)}>
-                  <tile.icon className="size-5" />
-                </span>
-                <span className="min-w-0 flex-1">
-                  <span className="block truncate text-sm font-semibold">{t(`tickets.metrics.${tile.key}`)}</span>
-                  {tile.key === "attention" && b ? (
-                    <span className="mt-0.5 flex flex-wrap gap-x-2 text-[11px] leading-tight">
-                      <span className="text-red-400">{t("tickets.breakdown.overdue", { count: b.overdue })}</span>
-                      <span className="text-orange-400">{t("tickets.breakdown.dueToday", { count: b.dueToday })}</span>
-                      <span className="text-rose-300">{t("tickets.breakdown.critical", { count: b.critical })}</span>
-                    </span>
-                  ) : (
-                    <span className="mt-0.5 block truncate text-[11px] text-muted-foreground">{t(`tickets.metricsHint.${tile.key}`)}</span>
+          <Fragment key={tile.key}>
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <motion.button
+                  type="button"
+                  onClick={() => apply(tile.query)}
+                  initial={{ opacity: 0, y: 6 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  transition={{ delay: i * 0.04 }}
+                  style={{ ["--tile-glow" as string]: tile.glow }}
+                  className={cn(
+                    "glass group relative flex items-center gap-3.5 overflow-hidden rounded-2xl border px-4 py-3.5 text-left transition-all hover:border-[color:var(--gold)]/40 hover:shadow-[0_0_28px_-14px_var(--tile-glow)]",
+                    active && "border-[color:var(--gold)]/60 bg-[color:var(--gold)]/[0.05] shadow-[0_0_28px_-12px_var(--tile-glow)]",
                   )}
-                </span>
-                <span className={cn("font-mono text-3xl font-semibold tabular-nums", value ? "text-foreground" : "text-muted-foreground/50")}>
-                  {value === undefined ? "–" : <CountUp value={value} />}
-                </span>
-              </motion.button>
-            </TooltipTrigger>
-            <TooltipContent>
-              {t(`tickets.metricsHint.${tile.key}`)}
-              {tile.key === "attention" && b && (
-                <span className="block opacity-80">
-                  {t("tickets.breakdown.overdue", { count: b.overdue })} · {t("tickets.breakdown.dueToday", { count: b.dueToday })} · {t("tickets.breakdown.critical", { count: b.critical })}
-                </span>
-              )}
-            </TooltipContent>
-          </Tooltip>
+                >
+                  <span className={cn("flex size-10 shrink-0 items-center justify-center rounded-xl border bg-background/60", tile.tone)}>
+                    <tile.icon className="size-5" />
+                  </span>
+                  <span className="min-w-0 flex-1">
+                    <span className="block truncate text-sm font-semibold">{t(`tickets.metrics.${tile.key}`)}</span>
+                    {tile.key === "attention" && b ? (
+                      <span className="mt-0.5 flex flex-wrap gap-x-2 text-[11px] leading-tight">
+                        <span className="text-red-400">{t("tickets.breakdown.overdue", { count: b.overdue })}</span>
+                        <span className="text-orange-400">{t("tickets.breakdown.dueToday", { count: b.dueToday })}</span>
+                        <span className="text-rose-300">{t("tickets.breakdown.critical", { count: b.critical })}</span>
+                      </span>
+                    ) : (
+                      <span className="mt-0.5 block truncate text-[11px] text-muted-foreground">{t(`tickets.metricsHint.${tile.key}`)}</span>
+                    )}
+                  </span>
+                  <span className={cn("font-mono text-3xl font-semibold tabular-nums", value ? "text-foreground" : "text-muted-foreground/50")}>
+                    {value === undefined ? "–" : <CountUp value={value} />}
+                  </span>
+                </motion.button>
+              </TooltipTrigger>
+              <TooltipContent>
+                {t(`tickets.metricsHint.${tile.key}`)}
+                {tile.key === "attention" && b && (
+                  <span className="block opacity-80">
+                    {t("tickets.breakdown.overdue", { count: b.overdue })} · {t("tickets.breakdown.dueToday", { count: b.dueToday })} · {t("tickets.breakdown.critical", { count: b.critical })}
+                  </span>
+                )}
+              </TooltipContent>
+            </Tooltip>
+            {/* the texts right after my tickets */}
+            {tile.key === "mine" && <SmsTile onOpen={onSms} />}
+          </Fragment>
         );
       })}
-      <SmsTile onOpen={onSms} />
     </div>
   );
 }
