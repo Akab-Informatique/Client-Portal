@@ -163,21 +163,20 @@
   .glow-gold {
     box-shadow: 0 16px 34px -14px rgba(245, 148, 16, 0.55);
   }
-  /* Frosted glass panel: translucent, blurred, fine light edge */
+  /* Frosted glass panel: translucent, blurred, fine light edge.
+     Only the standard backdrop-filter: the build adds the -webkit- prefix for Safari. */
   .glass {
     background-color: var(--glass-bg);
     /* soft sheen from the top edge */
     background-image: linear-gradient(180deg, var(--glass-sheen), transparent 55%);
     border-color: var(--glass-border);
     backdrop-filter: blur(18px) saturate(140%);
-    -webkit-backdrop-filter: blur(18px) saturate(140%);
     box-shadow: inset 0 1px 0 0 var(--glass-highlight), var(--glass-shadow);
   }
   .glass-strong {
     background-color: var(--glass-bg-strong);
     border-color: var(--glass-border);
     backdrop-filter: blur(28px) saturate(150%);
-    -webkit-backdrop-filter: blur(28px) saturate(150%);
     box-shadow: inset 0 1px 0 0 var(--glass-highlight), var(--glass-shadow);
   }
   .ring-gold {

@@ -102,8 +102,21 @@ export function createApp() {
         },
       }),
     );
-    app.use("*", serveStatic({ root: path.relative(process.cwd(), dist) }));
-    app.get("*", (c) => c.html(indexHtml));
+    // Other files and the page itself: always revalidated, so an update shows
+    // up right away (the hashed /assets above stay cached for a year)
+    app.use(
+      "*",
+      serveStatic({
+        root: path.relative(process.cwd(), dist),
+        onFound: (_p, c) => {
+          c.header("Cache-Control", "no-cache");
+        },
+      }),
+    );
+    app.get("*", (c) => {
+      c.header("Cache-Control", "no-cache");
+      return c.html(indexHtml);
+    });
   }
 
   return app;
