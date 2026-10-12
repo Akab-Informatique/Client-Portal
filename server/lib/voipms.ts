@@ -132,8 +132,9 @@ async function call<T extends { status: string }>(s: Pick<SmsSettings, "username
   const q = new URLSearchParams({ api_username: s.username, api_password: s.password, method, ...params });
   let res: Response;
   try {
-    // POST: the password is not in an address (no logs, no history)
-    res = await fetch(API, { method: "POST", body: q, signal: AbortSignal.timeout(TIMEOUT_MS) });
+    // VoIP.ms REST only takes GET (a POST is read as SOAP: HTTP 500). The
+    // address carries the password: server to server over HTTPS, never logged.
+    res = await fetch(`${API}?${q}`, { signal: AbortSignal.timeout(TIMEOUT_MS) });
   } catch (e) {
     throw new SmsError("network", (e as Error).name);
   }

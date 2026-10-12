@@ -1839,9 +1839,9 @@ describe("text messages (VoIP.ms)", () => {
       vi.fn(async (input: unknown, init: RequestInit = {}) => {
         const url = String(input);
         if (!url.startsWith("https://voip.ms/api/v1/rest.php")) return new Response("{}", { status: 500 });
-        const p = new URLSearchParams(String(init.body));
-        // the password goes in the body, never in the address
-        expect(url).not.toContain("api_password");
+        // VoIP.ms REST: GET with the parameters in the address (POST is SOAP)
+        expect(init.method ?? "GET").toBe("GET");
+        const p = new URL(url).searchParams;
         if (p.get("api_password") !== "api-secret") return new Response(JSON.stringify({ status: "invalid_credentials" }), { headers: { "content-type": "application/json" } });
         sms.push({ method: p.get("method")!, dst: p.get("dst") ?? undefined, message: p.get("message") ?? undefined, did: p.get("did") ?? undefined });
         return new Response(JSON.stringify({ status: "success", sms: sms.length }), { headers: { "content-type": "application/json" } });
