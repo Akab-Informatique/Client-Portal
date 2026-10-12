@@ -53,6 +53,8 @@ export type TicketDetail = TicketSummary & {
   /** The ticket device (absent while the full ticket loads) */
   assetId?: string | null;
   asset?: AssetView | null;
+  /** The contact phone and email (absent while the full ticket loads) */
+  contactInfo?: { email: string | null; phone: string | null } | null;
   demo: boolean;
   options: {
     statuses: Choice<StatusKind>[];

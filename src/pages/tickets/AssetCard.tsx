@@ -26,7 +26,7 @@ export function useAssets(companyId: number, enabled = true) {
  * details, and the RMM links (device page, web remote control) in a new tab.
  * The picker shows the contact's devices first.
  */
-export function AssetCard({ tk, editable, partial, onPick }: { tk: TicketDetail; editable: boolean; partial: boolean; onPick: (assetId: string | null) => void }) {
+export function AssetContent({ tk, editable, partial, onPick }: { tk: TicketDetail; editable: boolean; partial: boolean; onPick: (assetId: string | null) => void }) {
   const { t } = useTranslation();
   const asset = tk.asset ?? null;
   // Without a device yet: the contact's devices are suggested
@@ -34,12 +34,7 @@ export function AssetCard({ tk, editable, partial, onPick }: { tk: TicketDetail;
   const suggested = (list ?? []).filter((a) => a.contactId === tk.contactId).slice(0, 3);
 
   return (
-    <section className="glass space-y-3 rounded-2xl border p-4 text-sm">
-      <div className="flex items-center gap-2">
-        <p className="flex-1 text-[11px] font-medium uppercase tracking-wide text-muted-foreground">{t("tickets.asset.title")}</p>
-        {editable && !partial && <AssetPicker tk={tk} onPick={onPick} />}
-      </div>
-
+    <div className="text-sm">
       {partial ? (
         <Skeleton className="h-16" />
       ) : asset ? (
@@ -69,7 +64,7 @@ export function AssetCard({ tk, editable, partial, onPick }: { tk: TicketDetail;
             })}
         </div>
       )}
-    </section>
+    </div>
   );
 }
 
@@ -154,7 +149,7 @@ function AssetDetails({ a, ticketContactId }: { a: AssetView; ticketContactId: s
   );
 }
 
-function AssetPicker({ tk, onPick }: { tk: TicketDetail; onPick: (assetId: string | null) => void }) {
+export function AssetPicker({ tk, onPick }: { tk: TicketDetail; onPick: (assetId: string | null) => void }) {
   const { t } = useTranslation();
   const [open, setOpen] = useState(false);
   const [q, setQ] = useState("");

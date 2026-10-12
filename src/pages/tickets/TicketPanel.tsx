@@ -7,14 +7,18 @@ import { toast } from "sonner";
 import { Dialog as DialogPrimitive } from "radix-ui";
 import {
   AlertTriangle,
+  ArrowDownUp,
   Bot,
   Building2,
   CalendarClock,
   CalendarPlus,
   Check,
+  CheckCircle2,
   ChevronDown,
   Clock3,
   Eye,
+  FileText,
+  HardDrive,
   HelpCircle,
   Inbox,
   ListChecks,
@@ -24,6 +28,7 @@ import {
   MessageSquareReply,
   Minus,
   MonitorCog,
+  MonitorPlay,
   NotebookPen,
   Pencil,
   Phone,
@@ -56,7 +61,8 @@ import { cn, initials } from "@/lib/utils";
 import { GlassBackdrop } from "@/components/brand/GlassBackdrop";
 import { CompanyPicker, ContactPicker, useCompanies } from "./pickers";
 import { TimerControl } from "./timers";
-import { AssetCard } from "./AssetCard";
+import { AssetContent, AssetPicker } from "./AssetCard";
+import { useConfirm } from "@/components/ConfirmDialog";
 import { dueState, longDateTime, PRIORITY_STYLE, STATUS_STYLE, useChoiceText, usePresence, type AiAnalysis, type TicketDetail, type TicketList, type Viewer, ticketErrorText } from "./shared";
 
 const SOURCE_ICON: Record<string, LucideIcon> = { email: Mail, phone: Phone, portal: Inbox, monitoring: MonitorCog };
@@ -217,20 +223,47 @@ function TicketBody({
   const { t } = useTranslation();
   const txt = useChoiceText();
   const can = useCan();
+  const confirm = useConfirm();
   const editable = can("tickets.edit");
   const update = useTicketUpdate(tk);
   const { data: companies = [tk.company] } = useCompanies();
   const due = dueState(tk.dueAt, tk.statusKind);
   const [draft, setDraft] = useState<{ text: string; internal: boolean } | null>(null);
+  // Quick actions put the note box in a mode and bring it into view
+  const [focusNote, setFocusNote] = useState<{ internal: boolean; at: number } | null>(null);
+  const done = tk.options.statuses.find((s) => s.kind === "complete");
+  const remote = tk.asset?.links.remote ?? null;
+  const phone = tk.contactInfo?.phone ?? null;
+  const email = tk.contactInfo?.email ?? null;
+
+  // R = reply, I = internal note (when not typing)
+  useEffect(() => {
+    if (!editable) return;
+    const onKey = (e: KeyboardEvent) => {
+      const el = e.target as HTMLElement;
+      if (e.ctrlKey || e.metaKey || e.altKey || el.closest("input, textarea, select, [contenteditable=true], [role=menu], [role=dialog] [role=listbox]")) return;
+      const k = e.key.toLowerCase();
+      if (k === "r" || k === "i") {
+        e.preventDefault();
+        e.stopPropagation();
+        setFocusNote({ internal: k === "i", at: Date.now() });
+      }
+    };
+    window.addEventListener("keydown", onKey, true);
+    return () => window.removeEventListener("keydown", onKey, true);
+  }, [editable]);
 
   return (
     <>
-      {/* Header */}
+      {/* Header: what the ticket is, where it stands, and the tools */}
       <div className="glass relative z-10 rounded-none border-x-0 border-t-0 border-b">
-        <div className="mx-auto w-full max-w-7xl px-6 pb-4 pt-4 lg:px-8">
+        <div className="mx-auto w-full max-w-7xl px-6 pb-3 pt-4 lg:px-8">
           <div className="flex items-center gap-3">
             <span className="rounded-md border border-[color:var(--gold)]/30 bg-[color:var(--gold)]/10 px-2 py-0.5 font-mono text-xs text-primary">{tk.number}</span>
-            <span className="truncate text-xs text-muted-foreground">{tk.company.name}</span>
+            <span className="truncate text-xs text-muted-foreground">
+              {tk.company.name}
+              {tk.contact && ` · ${tk.contact}`}
+            </span>
             <span className="ml-auto">
               <PresenceLight viewers={viewers} />
             </span>
@@ -289,13 +322,37 @@ function TicketBody({
               {due === "overdue" ? t("tickets.overdue") : due === "today" ? t("tickets.today") : longDateTime(tk.dueAt)}
             </span>
           </div>
+
+          {/* Quick actions: what a technician does next, one click away */}
+          <div className="mt-3 flex flex-wrap items-center gap-1.5 border-t pt-3">
+            {editable && (
+              <>
+                <QuickAction icon={MessageSquareReply} label={t("tickets.quickAction.reply")} kbd="R" onClick={() => setFocusNote({ internal: false, at: Date.now() })} />
+                <QuickAction icon={Lock} label={t("tickets.quickAction.note")} kbd="I" onClick={() => setFocusNote({ internal: true, at: Date.now() })} />
+              </>
+            )}
+            {remote && <QuickAction icon={MonitorPlay} label={t("tickets.asset.remote")} href={remote} accent />}
+            {phone && <QuickAction icon={Phone} label={t("tickets.quickAction.call", { name: tk.contact.split(" ")[0] })} href={`tel:${phone.replace(/[^\d+]/g, "")}`} title={phone} />}
+            {email && <QuickAction icon={Mail} label={t("tickets.quickAction.email")} href={`mailto:${email}?subject=${encodeURIComponent(`[${tk.number}] ${tk.title}`)}`} title={email} />}
+            {editable && done && tk.statusKind !== "complete" && (
+              <span className="ml-auto">
+                <QuickAction
+                  icon={CheckCircle2}
+                  label={t("tickets.quickAction.resolve")}
+                  onClick={() =>
+                    void confirm({ title: t("tickets.quickAction.resolveConfirm", { status: txt.status(done) }) }).then((ok) => ok && update.mutate({ status: done.value }))
+                  }
+                />
+              </span>
+            )}
+          </div>
         </div>
       </div>
 
       <div className="relative flex-1 overflow-y-auto">
-        <div className="mx-auto grid w-full max-w-7xl gap-6 px-6 py-6 lg:grid-cols-[minmax(0,1fr)_320px] lg:px-8">
-          {/* Conversation */}
-          <div className="min-w-0 space-y-5">
+        <div className="mx-auto grid w-full max-w-7xl gap-6 px-6 pt-6 lg:grid-cols-[minmax(0,1fr)_340px] lg:px-8">
+          {/* The work: what is asked, what was done, the next note */}
+          <div className="flex min-w-0 flex-col gap-4">
             {loadError && (
               <div className="flex flex-wrap items-center gap-3 rounded-xl border border-destructive/40 bg-destructive/10 px-4 py-3 text-sm">
                 <AlertTriangle className="size-4 shrink-0 text-destructive" />
@@ -315,138 +372,344 @@ function TicketBody({
                 </span>
               </p>
             ))}
+            <EditableDescription
+              text={tk.description}
+              disabled={!editable || partial}
+              saving={update.isPending}
+              partial={partial}
+              onSave={(description) => update.mutate({ description })}
+            />
             <AiPanel tk={tk} onToNote={(text) => setDraft({ text, internal: true })} />
-            <section className="glass rounded-2xl border p-4">
-              <EditableDescription
-                text={tk.description}
-                disabled={!editable || partial}
-                saving={update.isPending}
-                onSave={(description) => update.mutate({ description })}
-              />
-              {partial && <Skeleton className="mt-2 h-4 w-2/3" />}
-            </section>
-            <section>
-              <p className="mb-3 text-[11px] font-medium uppercase tracking-wide text-muted-foreground">{t("tickets.activity")}</p>
-              {partial && !loadError ? (
-                <p className="flex items-center gap-2 text-sm text-muted-foreground">
-                  <Loader2 className="size-4 animate-spin" /> {t("tickets.loadingActivity")}
-                </p>
-              ) : tk.notes.length === 0 ? (
-                <p className="text-sm text-muted-foreground">{t("tickets.noActivity")}</p>
-              ) : (
-                <ol className="relative space-y-4 border-l pl-5">
-                  {tk.notes.map((n) => (
-                    <li key={n.id} className="relative">
-                      <span
-                        className={cn(
-                          "absolute -left-[27px] top-1 flex size-3.5 items-center justify-center rounded-full border-2 border-background",
-                          n.kind === "time" ? "bg-sky-400" : n.internal ? "bg-violet-400" : "bg-grad-gold",
-                        )}
-                      />
-                      <div className="flex flex-wrap items-baseline gap-x-2 text-sm">
-                        <span className="font-medium">{n.author}</span>
-                        <span className="text-xs text-muted-foreground">{longDateTime(n.at)}</span>
-                        {n.kind === "time" && (
-                          <span className="flex items-center gap-1 rounded-full bg-sky-500/15 px-1.5 text-[10px] font-medium text-sky-300">
-                            <Clock3 className="size-2.5" /> {t("tickets.timeEntry", { hours: (n.hours ?? 0).toLocaleString() })}
-                          </span>
-                        )}
-                        {n.internal && (
-                          <span className="flex items-center gap-1 rounded-full bg-violet-500/15 px-1.5 text-[10px] font-medium text-violet-300">
-                            <Lock className="size-2.5" /> {t("tickets.internal")}
-                          </span>
-                        )}
-                      </div>
-                      {n.text && (
-                        <p className={cn("mt-1 whitespace-pre-wrap rounded-lg px-3 py-2 text-sm", n.internal ? "bg-violet-500/5" : n.kind === "time" ? "bg-sky-500/5" : "bg-muted/50")}>{n.text}</p>
-                      )}
-                      {n.internalText && (
-                        <p className="mt-1 whitespace-pre-wrap rounded-lg bg-violet-500/5 px-3 py-2 text-sm">
-                          <span className="mb-0.5 flex items-center gap-1 text-[10px] font-medium uppercase tracking-wide text-violet-300">
-                            <Lock className="size-2.5" /> {t("tickets.internal")}
-                          </span>
-                          {n.internalText}
-                        </p>
-                      )}
-                    </li>
-                  ))}
-                </ol>
-              )}
-            </section>
-            {editable && <NoteComposer tk={tk} draft={draft} onDraftUsed={() => setDraft(null)} />}
+            <Activity tk={tk} partial={partial && !loadError} />
+            {/* Note box pinned at the bottom while scrolling the activity */}
+            {editable && (
+              <div className="sticky bottom-0 z-10 -mx-2 mt-auto bg-gradient-to-t from-background via-background/90 to-transparent px-2 pb-4 pt-6">
+                <NoteComposer tk={tk} draft={draft} onDraftUsed={() => setDraft(null)} focusRequest={focusNote} />
+              </div>
+            )}
+            {!editable && <div className="pb-6" />}
           </div>
 
-          {/* Details (editable) */}
-          <aside className="space-y-4">
-            <dl className="glass space-y-3 rounded-2xl border p-4 text-sm">
-              <Detail icon={Building2} label={t("tickets.fields.company")}>
-                <CompanyPicker
-                  disabled={!editable}
-                  value={tk.company}
-                  companies={companies}
-                  onChange={(c) => c.id !== tk.company.id && update.mutate({ companyId: c.id })}
-                />
-              </Detail>
-              <Detail icon={UserRound} label={t("tickets.fields.contact")}>
-                <ContactPicker
-                  disabled={!editable}
-                  canCreate={editable}
-                  companyId={tk.company.id}
-                  value={tk.contactId}
-                  valueName={tk.contact || undefined}
-                  onChange={(c) => update.mutate({ contactId: c?.id ?? null })}
-                />
-              </Detail>
-              <Detail icon={Users} label={t("tickets.fields.assignee")}>
-                <InlinePick
-                  disabled={!editable}
-                  label={t("tickets.fields.assignee")}
-                  value={tk.assignee?.id ?? "none"}
-                  options={[{ value: "none", label: t("tickets.unassigned") }, ...tk.options.technicians.map((p) => ({ value: p.id, label: p.name }))]}
-                  onPick={(v) => update.mutate({ assigneeId: v === "none" ? null : v })}
-                  trigger={<span className={cn(!tk.assignee && "italic text-muted-foreground")}>{tk.assignee?.name ?? t("tickets.unassigned")}</span>}
-                />
-              </Detail>
-              <Detail icon={Users} label={t("tickets.fields.secondary")}>
-                <SecondaryPick
-                  disabled={!editable}
-                  value={tk.secondary.map((p) => p.id)}
-                  names={tk.secondary.map((p) => p.name)}
-                  options={tk.options.technicians.filter((p) => p.id !== tk.assignee?.id)}
-                  onSave={(secondaryIds) => update.mutate({ secondaryIds })}
-                />
-              </Detail>
-              <Detail icon={CalendarClock} label={t("tickets.fields.due")}>
-                {editable ? (
-                  <Input
-                    type="date"
-                    className="mt-0.5 h-8"
-                    key={tk.dueAt}
-                    defaultValue={tk.dueAt.slice(0, 10)}
-                    onChange={(e) => e.target.value && update.mutate({ dueDate: e.target.value })}
-                    aria-label={t("tickets.fields.due")}
+          {/* Tools and information, in the order they are needed; stays in view */}
+          <aside className="space-y-3 pb-6 lg:sticky lg:top-6 lg:max-h-[calc(100dvh-15rem)] lg:self-start lg:overflow-y-auto lg:pr-1">
+            <Section id="client" icon={Building2} title={t("tickets.sections.client")}>
+              <dl className="space-y-3">
+                <Detail icon={Building2} label={t("tickets.fields.company")}>
+                  <CompanyPicker
+                    disabled={!editable}
+                    value={tk.company}
+                    companies={companies}
+                    onChange={(c) => c.id !== tk.company.id && update.mutate({ companyId: c.id })}
                   />
-                ) : (
-                  longDateTime(tk.dueAt)
+                </Detail>
+                <Detail icon={UserRound} label={t("tickets.fields.contact")}>
+                  <ContactPicker
+                    disabled={!editable}
+                    canCreate={editable}
+                    companyId={tk.company.id}
+                    value={tk.contactId}
+                    valueName={tk.contact || undefined}
+                    onChange={(c) => update.mutate({ contactId: c?.id ?? null })}
+                  />
+                </Detail>
+                {(phone || email) && (
+                  <div className="flex flex-wrap gap-x-3 gap-y-1 pl-7 text-xs">
+                    {phone && (
+                      <a href={`tel:${phone.replace(/[^\d+]/g, "")}`} className="flex items-center gap-1 text-primary hover:underline">
+                        <Phone className="size-3" /> {phone}
+                      </a>
+                    )}
+                    {email && (
+                      <a href={`mailto:${email}`} className="flex min-w-0 items-center gap-1 truncate text-primary hover:underline">
+                        <Mail className="size-3 shrink-0" /> <span className="truncate">{email}</span>
+                      </a>
+                    )}
+                  </div>
                 )}
-              </Detail>
-              <Detail icon={SOURCE_ICON[tk.source] ?? Inbox} label={t("tickets.fields.source")}>
-                {tk.source ? t(`tickets.source.${tk.source}`, { defaultValue: tk.source }) : "—"}
-              </Detail>
-              <Detail icon={Clock3} label={t("tickets.fields.created")}>
-                {longDateTime(tk.createdAt)}
-              </Detail>
-              <Detail icon={Clock3} label={t("tickets.fields.hours")}>
-                {partial ? "…" : t("tickets.hoursValue", { hours: tk.hours.toLocaleString() })}
-              </Detail>
-            </dl>
-            <AssetCard tk={tk} editable={editable} partial={partial} onPick={(assetId) => update.mutate({ assetId })} />
-            <StartDate tk={tk} />
+              </dl>
+            </Section>
+
+            <Section
+              id="device"
+              icon={HardDrive}
+              title={t("tickets.asset.title")}
+              badge={tk.asset?.name}
+              action={editable && !partial ? <AssetPicker tk={tk} onPick={(assetId) => update.mutate({ assetId })} /> : null}
+            >
+              <AssetContent tk={tk} editable={editable} partial={partial} onPick={(assetId) => update.mutate({ assetId })} />
+            </Section>
+
+            <Section id="planning" icon={CalendarClock} title={t("tickets.sections.planning")}>
+              <dl className="space-y-3">
+                <StartDate tk={tk} />
+                <Detail icon={CalendarClock} label={t("tickets.fields.due")}>
+                  {editable ? (
+                    <Input
+                      type="date"
+                      className="mt-0.5 h-8"
+                      key={tk.dueAt}
+                      defaultValue={tk.dueAt.slice(0, 10)}
+                      onChange={(e) => e.target.value && update.mutate({ dueDate: e.target.value })}
+                      aria-label={t("tickets.fields.due")}
+                    />
+                  ) : (
+                    longDateTime(tk.dueAt)
+                  )}
+                </Detail>
+                <Detail icon={Clock3} label={t("tickets.fields.hours")}>
+                  {partial ? "…" : t("tickets.hoursValue", { hours: tk.hours.toLocaleString() })}
+                </Detail>
+              </dl>
+            </Section>
+
+            <Section id="team" icon={Users} title={t("tickets.sections.team")} badge={tk.assignee?.name}>
+              <dl className="space-y-3">
+                <Detail icon={UserRound} label={t("tickets.fields.assignee")}>
+                  <InlinePick
+                    disabled={!editable}
+                    label={t("tickets.fields.assignee")}
+                    value={tk.assignee?.id ?? "none"}
+                    options={[{ value: "none", label: t("tickets.unassigned") }, ...tk.options.technicians.map((p) => ({ value: p.id, label: p.name }))]}
+                    onPick={(v) => update.mutate({ assigneeId: v === "none" ? null : v })}
+                    trigger={<span className={cn(!tk.assignee && "italic text-muted-foreground")}>{tk.assignee?.name ?? t("tickets.unassigned")}</span>}
+                  />
+                </Detail>
+                <Detail icon={Users} label={t("tickets.fields.secondary")}>
+                  <SecondaryPick
+                    disabled={!editable}
+                    value={tk.secondary.map((p) => p.id)}
+                    names={tk.secondary.map((p) => p.name)}
+                    options={tk.options.technicians.filter((p) => p.id !== tk.assignee?.id)}
+                    onSave={(secondaryIds) => update.mutate({ secondaryIds })}
+                  />
+                </Detail>
+              </dl>
+            </Section>
+
+            <Section id="details" icon={Inbox} title={t("tickets.sections.details")} defaultOpen={false}>
+              <dl className="space-y-3">
+                <Detail icon={SOURCE_ICON[tk.source] ?? Inbox} label={t("tickets.fields.source")}>
+                  {tk.source ? t(`tickets.source.${tk.source}`, { defaultValue: tk.source }) : "—"}
+                </Detail>
+                <Detail icon={Clock3} label={t("tickets.fields.created")}>
+                  {longDateTime(tk.createdAt)}
+                </Detail>
+                <Detail icon={RefreshCw} label={t("tickets.sections.lastActivity")}>
+                  {longDateTime(tk.updatedAt)}
+                </Detail>
+              </dl>
+            </Section>
           </aside>
         </div>
       </div>
       <OpenedByOthers viewers={viewers} />
     </>
+  );
+}
+
+/** A tool in the quick-action bar: a button, or a link (new tab for web pages). */
+function QuickAction({
+  icon: Icon,
+  label,
+  onClick,
+  href,
+  kbd,
+  title,
+  accent,
+}: {
+  icon: LucideIcon;
+  label: string;
+  onClick?: () => void;
+  href?: string;
+  kbd?: string;
+  title?: string;
+  accent?: boolean;
+}) {
+  const cls = cn("h-8 gap-1.5 text-xs", accent && "border-[color:var(--gold)]/50 bg-[color:var(--gold)]/10 text-primary hover:bg-[color:var(--gold)]/20");
+  const inner = (
+    <>
+      <Icon className="size-3.5" /> {label}
+      {kbd && <kbd className="ml-0.5 hidden rounded border px-1 font-mono text-[9px] text-muted-foreground sm:inline">{kbd}</kbd>}
+    </>
+  );
+  if (href) {
+    const web = href.startsWith("http");
+    return (
+      <Button asChild variant="outline" size="sm" className={cls} title={title}>
+        <a href={href} {...(web ? { target: "_blank", rel: "noopener noreferrer" } : {})}>
+          {inner}
+        </a>
+      </Button>
+    );
+  }
+  return (
+    <Button variant="outline" size="sm" className={cls} onClick={onClick} title={title}>
+      {inner}
+    </Button>
+  );
+}
+
+/** Open / closed state of the ticket sections, remembered for the next tickets. */
+const SECTIONS_KEY = "akab.ticket.sections";
+function useSectionOpen(id: string, defaultOpen: boolean) {
+  const [open, setOpen] = useState<boolean>(() => {
+    try {
+      const v = (JSON.parse(localStorage.getItem(SECTIONS_KEY) ?? "{}") as Record<string, boolean>)[id];
+      return typeof v === "boolean" ? v : defaultOpen;
+    } catch {
+      return defaultOpen;
+    }
+  });
+  const toggle = () =>
+    setOpen((o) => {
+      try {
+        const all = JSON.parse(localStorage.getItem(SECTIONS_KEY) ?? "{}") as Record<string, boolean>;
+        localStorage.setItem(SECTIONS_KEY, JSON.stringify({ ...all, [id]: !o }));
+      } catch {
+        /* not saved: still works for this ticket */
+      }
+      return !o;
+    });
+  return [open, toggle] as const;
+}
+
+/** A collapsible section; closed, its title (and a short summary) stays visible. */
+function Section({
+  id,
+  icon: Icon,
+  title,
+  badge,
+  action,
+  defaultOpen = true,
+  children,
+}: {
+  id: string;
+  icon: LucideIcon;
+  title: string;
+  /** Shown next to the title when the section is closed */
+  badge?: string | null;
+  action?: React.ReactNode;
+  defaultOpen?: boolean;
+  children: React.ReactNode;
+}) {
+  const [open, toggle] = useSectionOpen(id, defaultOpen);
+  return (
+    <section className="glass rounded-2xl border text-sm">
+      <div className="flex items-center gap-2 px-4 py-2.5">
+        <button type="button" onClick={toggle} aria-expanded={open} className="flex min-w-0 flex-1 items-center gap-2 text-left">
+          <Icon className="size-3.5 shrink-0 text-primary" />
+          <span className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">{title}</span>
+          {!open && badge && <span className="truncate text-xs text-foreground/80">· {badge}</span>}
+          <ChevronDown className={cn("ml-auto size-3.5 shrink-0 text-muted-foreground transition-transform", !open && "-rotate-90")} />
+        </button>
+        {open && action}
+      </div>
+      <AnimatePresence initial={false}>
+        {open && (
+          <motion.div initial={{ height: 0, opacity: 0 }} animate={{ height: "auto", opacity: 1 }} exit={{ height: 0, opacity: 0 }} transition={{ duration: 0.18 }} className="overflow-hidden">
+            <div className="px-4 pb-4">{children}</div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+    </section>
+  );
+}
+
+type ActivityFilter = "all" | "reply" | "internal" | "time";
+
+/** What was said and done: replies, internal notes and time entries, filterable. */
+function Activity({ tk, partial }: { tk: TicketDetail; partial: boolean }) {
+  const { t } = useTranslation();
+  const [filter, setFilter] = useState<ActivityFilter>("all");
+  const [newestFirst, setNewestFirst] = useState(() => {
+    try {
+      return localStorage.getItem("akab.ticket.newestFirst") === "1";
+    } catch {
+      return false;
+    }
+  });
+  const flip = () =>
+    setNewestFirst((v) => {
+      try {
+        localStorage.setItem("akab.ticket.newestFirst", v ? "0" : "1");
+      } catch {
+        /* ignore */
+      }
+      return !v;
+    });
+  const kindOf = (n: TicketDetail["notes"][number]): Exclude<ActivityFilter, "all"> => (n.kind === "time" ? "time" : n.internal ? "internal" : "reply");
+  const counts = { all: tk.notes.length, reply: 0, internal: 0, time: 0 };
+  for (const n of tk.notes) counts[kindOf(n)]++;
+  const shown = tk.notes.filter((n) => filter === "all" || kindOf(n) === filter);
+  if (newestFirst) shown.reverse();
+
+  return (
+    <section className="glass rounded-2xl border p-4">
+      <div className="mb-3 flex flex-wrap items-center gap-1.5">
+        <p className="mr-2 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">{t("tickets.activity")}</p>
+        {(["all", "reply", "internal", "time"] as const).map((f) => (
+          <button
+            key={f}
+            type="button"
+            onClick={() => setFilter(f)}
+            className={cn(
+              "rounded-full border px-2.5 py-0.5 text-[11px] font-medium transition-colors",
+              filter === f ? "border-[color:var(--gold)]/50 bg-[color:var(--gold)]/15 text-primary" : "border-transparent text-muted-foreground hover:text-foreground",
+            )}
+          >
+            {t(`tickets.activityFilter.${f}`)} {counts[f] > 0 && <span className="opacity-60">{counts[f]}</span>}
+          </button>
+        ))}
+        <button type="button" onClick={flip} className="ml-auto flex items-center gap-1 text-[11px] text-muted-foreground hover:text-foreground">
+          <ArrowDownUp className="size-3" /> {newestFirst ? t("tickets.activityOrder.newest") : t("tickets.activityOrder.oldest")}
+        </button>
+      </div>
+      {partial ? (
+        <p className="flex items-center gap-2 text-sm text-muted-foreground">
+          <Loader2 className="size-4 animate-spin" /> {t("tickets.loadingActivity")}
+        </p>
+      ) : shown.length === 0 ? (
+        <p className="text-sm text-muted-foreground">{t("tickets.noActivity")}</p>
+      ) : (
+        <ol className="relative space-y-4 border-l pl-5">
+          {shown.map((n) => (
+            <li key={n.id} className="relative">
+              <span
+                className={cn(
+                  "absolute -left-[27px] top-1 flex size-3.5 items-center justify-center rounded-full border-2 border-background",
+                  n.kind === "time" ? "bg-sky-400" : n.internal ? "bg-violet-400" : "bg-grad-gold",
+                )}
+              />
+              <div className="flex flex-wrap items-baseline gap-x-2 text-sm">
+                <span className="font-medium">{n.author}</span>
+                <span className="text-xs text-muted-foreground">{longDateTime(n.at)}</span>
+                {n.kind === "time" && (
+                  <span className="flex items-center gap-1 rounded-full bg-sky-500/15 px-1.5 text-[10px] font-medium text-sky-300">
+                    <Clock3 className="size-2.5" /> {t("tickets.timeEntry", { hours: (n.hours ?? 0).toLocaleString() })}
+                  </span>
+                )}
+                {n.internal && (
+                  <span className="flex items-center gap-1 rounded-full bg-violet-500/15 px-1.5 text-[10px] font-medium text-violet-300">
+                    <Lock className="size-2.5" /> {t("tickets.internal")}
+                  </span>
+                )}
+              </div>
+              {n.text && (
+                <p className={cn("mt-1 whitespace-pre-wrap rounded-lg px-3 py-2 text-sm", n.internal ? "bg-violet-500/5" : n.kind === "time" ? "bg-sky-500/5" : "bg-muted/50")}>{n.text}</p>
+              )}
+              {n.internalText && (
+                <p className="mt-1 whitespace-pre-wrap rounded-lg bg-violet-500/5 px-3 py-2 text-sm">
+                  <span className="mb-0.5 flex items-center gap-1 text-[10px] font-medium uppercase tracking-wide text-violet-300">
+                    <Lock className="size-2.5" /> {t("tickets.internal")}
+                  </span>
+                  {n.internalText}
+                </p>
+              )}
+            </li>
+          ))}
+        </ol>
+      )}
+    </section>
   );
 }
 
@@ -541,21 +804,40 @@ function EditableTitle({ value, disabled, onSave }: { value: string; disabled: b
 }
 
 /** Description with an edit button (saved to Autotask). */
-function EditableDescription({ text, disabled, saving, onSave }: { text: string; disabled: boolean; saving: boolean; onSave: (v: string) => void }) {
+function EditableDescription({
+  text,
+  disabled,
+  saving,
+  partial,
+  onSave,
+}: {
+  text: string;
+  disabled: boolean;
+  saving: boolean;
+  partial: boolean;
+  onSave: (v: string) => void;
+}) {
   const { t } = useTranslation();
   const [draft, setDraft] = useState<string | null>(null);
   return (
-    <>
-      <div className="mb-2 flex items-center gap-2">
-        <p className="flex-1 text-[11px] font-medium uppercase tracking-wide text-muted-foreground">{t("tickets.description")}</p>
-        {!disabled && draft === null && (
+    <Section
+      id="description"
+      icon={FileText}
+      title={t("tickets.description")}
+      badge={text.split("\n").find((l) => l.trim())?.slice(0, 70)}
+      action={
+        !disabled && draft === null ? (
           <button type="button" onClick={() => setDraft(text)} className="flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground">
             <Pencil className="size-3" /> {t("common.edit")}
           </button>
-        )}
-      </div>
+        ) : null
+      }
+    >
       {draft === null ? (
-        <Description text={text || "—"} />
+        <>
+          <Description text={text || "—"} />
+          {partial && <Skeleton className="mt-2 h-4 w-2/3" />}
+        </>
       ) : (
         <div className="space-y-2">
           <Textarea autoFocus rows={8} value={draft} maxLength={8000} onChange={(e) => setDraft(e.target.value)} aria-label={t("tickets.description")} />
@@ -577,7 +859,7 @@ function EditableDescription({ text, disabled, saving, onSave }: { text: string;
           </div>
         </div>
       )}
-    </>
+    </Section>
   );
 }
 
@@ -681,7 +963,7 @@ function Detail({ icon: Icon, label, children }: { icon: LucideIcon; label: stri
   );
 }
 
-/** Portal-only planned start date, saved right away. */
+/** Portal-only planned start date (Planning section, above the due date), saved right away. */
 function StartDate({ tk }: { tk: TicketDetail }) {
   const { t } = useTranslation();
   const can = useCan();
@@ -695,27 +977,47 @@ function StartDate({ tk }: { tk: TicketDetail }) {
     onError: (e) => toast.error(ticketErrorText(t, e)),
   });
   return (
-    <div className="glass rounded-2xl border border-[color:var(--gold)]/30 p-4">
-      <label htmlFor="start-date" className="flex items-center gap-2 text-sm font-medium">
-        <CalendarPlus className="size-4 text-primary" /> {t("tickets.fields.start")}
-        <span className="rounded border border-[color:var(--gold)]/40 px-1 text-[9px] font-semibold text-primary">{t("tickets.portalTag")}</span>
-      </label>
-      <Input
-        id="start-date"
-        type="date"
-        className="mt-2 h-9"
-        disabled={!can("tickets.edit") || save.isPending}
-        defaultValue={tk.startDate ?? ""}
-        key={tk.startDate ?? ""}
-        onChange={(e) => save.mutate(e.target.value || null)}
-      />
-      <p className="mt-2 text-[11px] text-muted-foreground">{t("tickets.portalHint")}</p>
+    <div className="flex gap-3">
+      <CalendarPlus className="mt-0.5 size-4 shrink-0 text-primary" />
+      <div className="min-w-0 flex-1">
+        <dt className="flex items-center gap-1.5 text-[11px] text-muted-foreground">
+          <label htmlFor="start-date">{t("tickets.fields.start")}</label>
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <span className="rounded border border-[color:var(--gold)]/40 px-1 text-[9px] font-semibold text-primary">{t("tickets.portalTag")}</span>
+            </TooltipTrigger>
+            <TooltipContent className="max-w-60">{t("tickets.portalHint")}</TooltipContent>
+          </Tooltip>
+        </dt>
+        <dd>
+          <Input
+            id="start-date"
+            type="date"
+            className="mt-0.5 h-8"
+            disabled={!can("tickets.edit") || save.isPending}
+            defaultValue={tk.startDate ?? ""}
+            key={tk.startDate ?? ""}
+            onChange={(e) => save.mutate(e.target.value || null)}
+          />
+        </dd>
+      </div>
     </div>
   );
 }
 
 /** Reply to the client or internal note. An AI draft can be dropped in. */
-function NoteComposer({ tk, draft, onDraftUsed }: { tk: TicketDetail; draft: { text: string; internal: boolean } | null; onDraftUsed: () => void }) {
+function NoteComposer({
+  tk,
+  draft,
+  onDraftUsed,
+  focusRequest,
+}: {
+  tk: TicketDetail;
+  draft: { text: string; internal: boolean } | null;
+  onDraftUsed: () => void;
+  /** From the quick actions (Reply / Internal note): mode + focus */
+  focusRequest?: { internal: boolean; at: number } | null;
+}) {
   const { t } = useTranslation();
   const qc = useQueryClient();
   const [internal, setInternal] = useState(false);
@@ -731,6 +1033,12 @@ function NoteComposer({ tk, draft, onDraftUsed }: { tk: TicketDetail; draft: { t
       ref.current?.scrollIntoView({ behavior: "smooth", block: "center" });
     });
   }, [draft, onDraftUsed]);
+  useEffect(() => {
+    if (!focusRequest) return;
+    setInternal(focusRequest.internal);
+    requestAnimationFrame(() => ref.current?.focus());
+  }, [focusRequest]);
+  const [focused, setFocused] = useState(false);
   const send = useMutation({
     mutationFn: () => api.post(`/tickets/${tk.id}/notes`, { text, internal }),
     onSuccess: () => {
@@ -754,9 +1062,22 @@ function NoteComposer({ tk, draft, onDraftUsed }: { tk: TicketDetail; draft: { t
           </button>
         ))}
       </div>
-      <Textarea ref={ref} rows={4} value={text} onChange={(e) => setText(e.target.value)} placeholder={t("tickets.notePlaceholder")} className="resize-y" />
+      <Textarea
+        ref={ref}
+        rows={focused || text ? 5 : 2}
+        value={text}
+        onChange={(e) => setText(e.target.value)}
+        onFocus={() => setFocused(true)}
+        onBlur={() => setFocused(false)}
+        onKeyDown={(e) => {
+          // Ctrl+Enter sends
+          if (e.key === "Enter" && (e.ctrlKey || e.metaKey) && text.trim() && !send.isPending) send.mutate();
+        }}
+        placeholder={internal ? t("tickets.notePlaceholderInternal") : t("tickets.notePlaceholder")}
+        className="resize-y transition-[height]"
+      />
       <div className="mt-2 flex items-center justify-between gap-3">
-        <span className="text-[11px] text-muted-foreground">{t("tickets.noteSoon")}</span>
+        <span className="text-[11px] text-muted-foreground">{t("tickets.noteSendHint")}</span>
         <Button size="sm" disabled={!text.trim() || send.isPending} onClick={() => send.mutate()} className={cn(!internal && "bg-grad-gold text-[#1a1204]")}>
           {send.isPending ? <Loader2 className="size-3.5 animate-spin" /> : <Send className="size-3.5" />} {internal ? t("tickets.addNote") : t("tickets.send")}
         </Button>

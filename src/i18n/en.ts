@@ -511,6 +511,33 @@ const en: Dict = {
     },
   },
   tickets: {
+    sections: {
+      client: "Client and contact",
+      planning: "Planning",
+      team: "Team",
+      details: "Details",
+      lastActivity: "Last activity",
+    },
+    quickAction: {
+      reply: "Reply",
+      note: "Internal note",
+      call: "Call {{name}}",
+      email: "Email",
+      resolve: "Resolve",
+      resolveConfirm: "Set the ticket to “{{status}}”?",
+    },
+    activityFilter: {
+      all: "All",
+      reply: "Replies",
+      internal: "Internal notes",
+      time: "Time",
+    },
+    activityOrder: {
+      newest: "Newest first",
+      oldest: "Oldest first",
+    },
+    notePlaceholderInternal: "Internal note (only the team sees it)…",
+    noteSendHint: "Ctrl + Enter to send",
     global: {
       label: "Global ticket search",
       placeholder: "Search all tickets…",

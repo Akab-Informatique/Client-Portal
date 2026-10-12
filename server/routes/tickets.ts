@@ -202,7 +202,7 @@ const fold = (s: string) =>
 async function detailOf(src: TicketSource, id: number, a: AuthContext) {
   const t = await src.get(id);
   if (!t) throw new HTTPException(404, { message: "not_found" });
-  const [o, technicians, start, ai, asset] = await Promise.all([
+  const [o, technicians, start, ai, asset, contactInfo] = await Promise.all([
     src.options(),
     src.technicians(),
     startDates([id]).then((m) => m.get(id)),
@@ -216,6 +216,16 @@ async function detailOf(src: TicketSource, id: number, a: AuthContext) {
           })
           .catch(() => null)
       : Promise.resolve(null),
+    // the contact phone / email, for one-click call or email (cached list)
+    t.contactId
+      ? src
+          .contacts(t.company.id)
+          .then((list) => {
+            const x = list.find((c) => c.id === t.contactId);
+            return x ? { email: x.email, phone: x.phone } : null;
+          })
+          .catch(() => null)
+      : Promise.resolve(null),
   ]);
   return {
     ...summary(t, lookup(o), start, a.user.id),
@@ -226,6 +236,7 @@ async function detailOf(src: TicketSource, id: number, a: AuthContext) {
     warnings: t.warnings ?? [],
     assetId: t.assetId ?? null,
     asset,
+    contactInfo,
     demo: src.demo,
     ai: Boolean(ai?.enabled && ai.apiKey),
     options: { statuses: o.statuses, priorities: o.priorities, queues: o.queues, technicians },

@@ -509,6 +509,33 @@ const fr = {
     },
   },
   tickets: {
+    sections: {
+      client: "Client et contact",
+      planning: "Planification",
+      team: "Équipe",
+      details: "Détails",
+      lastActivity: "Dernière activité",
+    },
+    quickAction: {
+      reply: "Répondre",
+      note: "Note interne",
+      call: "Appeler {{name}}",
+      email: "Courriel",
+      resolve: "Résoudre",
+      resolveConfirm: "Passer le billet à « {{status}} » ?",
+    },
+    activityFilter: {
+      all: "Tout",
+      reply: "Réponses",
+      internal: "Notes internes",
+      time: "Temps",
+    },
+    activityOrder: {
+      newest: "Plus récent d'abord",
+      oldest: "Plus ancien d'abord",
+    },
+    notePlaceholderInternal: "Note interne (visible seulement par l'équipe)…",
+    noteSendHint: "Ctrl + Entrée pour envoyer",
     global: {
       label: "Recherche globale dans les billets",
       placeholder: "Rechercher dans tous les billets…",
