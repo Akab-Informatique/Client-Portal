@@ -490,6 +490,7 @@ const en: Dict = {
     },
   },
   tickets: {
+    youAreSecondary: "You are a secondary technician on this ticket",
     notLinkedTitle: "Your account is not linked to an Autotask user.",
     notLinkedText: "“My tickets” stays empty and you cannot change tickets. An administrator can link it in Admin settings › Integrations › Autotask.",
     errors: {
@@ -577,7 +578,7 @@ const en: Dict = {
     },
     metricsHint: {
       statusAttention: "Ticket status · e.g. the client replied",
-      mine: "Open and assigned to you",
+      mine: "Open, assigned to you or as secondary",
       unassigned: "To pick up",
       attention: "Overdue, due today or critical",
     },

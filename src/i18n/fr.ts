@@ -488,6 +488,7 @@ const fr = {
     },
   },
   tickets: {
+    youAreSecondary: "Vous êtes technicien secondaire sur ce billet",
     notLinkedTitle: "Votre compte n'est pas lié à un utilisateur Autotask.",
     notLinkedText: "« Mes billets » reste vide et vous ne pouvez pas modifier les billets. Un administrateur peut faire le lien dans Paramètres admin › Intégrations › Autotask.",
     errors: {
@@ -575,7 +576,7 @@ const fr = {
     },
     metricsHint: {
       statusAttention: "Statut du billet · ex. : le client a répondu",
-      mine: "Ouverts et assignés à vous",
+      mine: "Ouverts, assignés à vous ou en secondaire",
       unassigned: "À prendre en charge",
       attention: "En retard, échéance aujourd'hui ou critiques",
     },

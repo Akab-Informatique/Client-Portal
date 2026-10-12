@@ -204,8 +204,10 @@ export const ticketRoutes = new Hono<AppEnv>()
     /** Needs attention: open and overdue, due today or critical */
     const attention = (t: NTicket) => open(t) && (isOverdue(t) || isDueToday(t) || isCritical(t));
 
+    const isMine = (t: NTicket) => Boolean(meId) && (t.assignee?.id === meId || t.secondary.some((p) => p.id === meId));
     const views = {
-      mine: (t: NTicket) => Boolean(meId) && t.assignee?.id === meId && open(t),
+      // Mine: assigned to me, or I am one of the secondary technicians
+      mine: (t: NTicket) => isMine(t) && open(t),
       unassigned: (t: NTicket) => !t.assignee && open(t),
       due: (t: NTicket) => open(t) && new Date(t.dueAt).getTime() <= eod,
       all: (_t: NTicket) => true,
@@ -295,7 +297,7 @@ export const ticketRoutes = new Hono<AppEnv>()
     const src = await ticketSource();
     const [all, o, meId] = await run(() => Promise.all([src.list(), src.options(), src.meId(a)]));
     const L = lookup(o);
-    const mine = all.filter((x) => meId && x.assignee?.id === meId && L.statusKind(x.status) !== "complete");
+    const mine = all.filter((x) => meId && (x.assignee?.id === meId || x.secondary.some((p) => p.id === meId)) && L.statusKind(x.status) !== "complete");
     if (!mine.length) return c.json({ overview: "", items: [] });
     const starts = await startDates(mine.map((x) => x.id));
     const today = new Date().toISOString().slice(0, 10);

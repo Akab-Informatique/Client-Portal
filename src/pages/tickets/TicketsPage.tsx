@@ -564,6 +564,7 @@ function TicketRow({
 }) {
   const { t } = useTranslation();
   const txt = useChoiceText();
+  const me = useMe();
   const due = dueState(tk.dueAt, tk.statusKind);
   const used = tk.statusKind === "complete" ? 0 : slaUsed(tk);
   return (
@@ -680,13 +681,22 @@ function TicketRow({
                 <TooltipTrigger asChild>
                   <span className="flex -space-x-1.5">
                     {tk.secondary.slice(0, 3).map((p) => (
-                      <span key={p.id} className="flex size-6 items-center justify-center rounded-full border-2 border-card bg-muted text-[9px] font-semibold">
+                      <span
+                        key={p.id}
+                        className={cn(
+                          "flex size-6 items-center justify-center rounded-full border-2 border-card text-[9px] font-semibold",
+                          p.id === me.id ? "bg-grad-gold text-[#1a1204]" : "bg-muted",
+                        )}
+                      >
                         {initials(p.name)}
                       </span>
                     ))}
                   </span>
                 </TooltipTrigger>
-                <TooltipContent>{tk.secondary.map((p) => p.name).join(", ")}</TooltipContent>
+                <TooltipContent>
+                  {tk.secondary.map((p) => p.name).join(", ")}
+                  {tk.secondary.some((p) => p.id === me.id) && <span className="block opacity-80">{t("tickets.youAreSecondary")}</span>}
+                </TooltipContent>
               </Tooltip>
             ) : (
               <span className="text-xs text-muted-foreground/60">—</span>

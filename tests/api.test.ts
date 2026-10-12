@@ -774,7 +774,10 @@ describe("tickets (sample data)", () => {
     expect(all.items.length).toBeGreaterThan(10);
     const mine = (await tech.get("/api/tickets?view=mine")).json.items;
     const [techRow] = await db().select().from(schema.users).where(eq(schema.users.email, "tech@akab.local"));
-    expect(mine.every((t: any) => t.assignee?.id === techRow.id && t.status !== "complete")).toBe(true);
+    const isMine = (t: any) => t.assignee?.id === techRow.id || t.secondary.some((p: any) => p.id === techRow.id);
+    expect(mine.every((t: any) => isMine(t) && t.statusKind !== "complete")).toBe(true);
+    // secondary tickets count as mine too
+    expect(mine.some((t: any) => t.assignee?.id !== techRow.id)).toBe(true);
 
     const target = all.items[0];
     expect((await tech.put(`/api/tickets/${target.id}/start-date`, { startDate: "2026-11-02" })).status).toBe(200);
@@ -825,7 +828,8 @@ describe("tickets: technicians added later", () => {
     const late = await signIn("tard@akab.local");
     const mine = (await late.get("/api/tickets?view=mine")).json;
     expect(mine.counts.mine).toBeGreaterThan(0);
-    expect(mine.items.every((t: any) => t.assignee?.id === created.json.user.id)).toBe(true);
+    const uid = created.json.user.id;
+    expect(mine.items.every((t: any) => t.assignee?.id === uid || t.secondary.some((p: any) => p.id === uid))).toBe(true);
   });
 });
 
@@ -1010,7 +1014,7 @@ describe("tickets from Autotask", () => {
             pageDetails: {},
           });
         }
-        if (path === "TicketSecondaryResources/query") return json({ items: [{ ticketID: 9001, resourceID: 29682999 }], pageDetails: {} });
+        if (path === "TicketSecondaryResources/query") return json({ items: [{ ticketID: 9001, resourceID: 29682999 }, { ticketID: 9002, resourceID: 29682885 }], pageDetails: {} });
         if (path === "Companies/query") return json({ items: [{ id: 77, companyName: "Client Réel inc." }], pageDetails: {} });
         if (path === "Contacts/query") return json({ items: [{ id: 501, firstName: "Ann", lastName: "Réelle", emailAddress: "ann@reel.ca", phone: null }], pageDetails: {} });
         if (path === "Tickets/9001" && method === "GET") return json({ item: ticket({}) });
@@ -1055,7 +1059,7 @@ describe("tickets from Autotask", () => {
       ["In Progress", "inProgress"],
       ["Complete", "complete"],
     ]);
-    expect(r.items.map((t: any) => t.id)).toEqual([9001]); // mine = assigned to my Autotask user
+    expect(r.items.map((t: any) => t.id)).toEqual([9001, 9002]); // mine = assigned to me, or I am secondary (9002)
     expect(r.items[0]).toMatchObject({
       company: { id: 77, name: "Client Réel inc." },
       contact: "Ann Réelle",
@@ -1067,7 +1071,7 @@ describe("tickets from Autotask", () => {
       excerpt: "Le serveur ne répond plus.",
       secondary: [{ id: "at-29682999", name: "Autre Tech" }],
     });
-    expect(r.metrics).toMatchObject({ mine: 1, unassigned: 1, statusAttention: 1 });
+    expect(r.metrics).toMatchObject({ mine: 2, unassigned: 1, statusAttention: 1 });
     expect((await tech.get("/api/tickets?view=all&statusKind=needsAttention")).json.items.map((t: any) => t.id)).toEqual([9002]);
 
     const d = (await tech.get("/api/tickets/9001")).json;
