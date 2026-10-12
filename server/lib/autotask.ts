@@ -136,7 +136,16 @@ export const PERMISSION_REFUSED = /adequate permission|not have permission|imper
 export function createClient(creds: Credentials, zone: Zone, opts: { fallbackToApiUser?: boolean } = {}) {
   const base = new URL("V1.0/", zone.url);
 
-  async function call<T>(method: string, path: string, body?: unknown, o: { impersonate?: number | null } = {}): Promise<T> {
+  async function call<T>(
+    method: string,
+    path: string,
+    body?: unknown,
+    o: {
+      impersonate?: number | null;
+      /** When it falls back to the API user: the body to send instead (e.g. text signed with the technician's name) */
+      asApiUser?: (body: unknown) => unknown;
+    } = {},
+  ): Promise<T> {
     // Absolute URLs are only accepted on the zone host (pagination links)
     const url = path.startsWith("https://") ? new URL(path) : new URL(path, base);
     if (url.host !== base.host) throw new AutotaskError("api", undefined, "unexpected host");
@@ -159,7 +168,7 @@ export function createClient(creds: Credentials, zone: Zone, opts: { fallbackToA
       const detail = j?.errors?.join("; ").slice(0, 300);
       if (o.impersonate && opts.fallbackToApiUser && detail && PERMISSION_REFUSED.test(detail)) {
         console.warn(`[autotask] ${method} ${url.pathname}: refused in resource ${o.impersonate}'s name, saved as the API user`);
-        return call<T>(method, path, body);
+        return call<T>(method, path, o.asApiUser ? o.asApiUser(body) : body);
       }
       throw new AutotaskError("api", res.status, detail);
     }

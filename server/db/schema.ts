@@ -526,3 +526,20 @@ export const storeSerials = pgTable(
   },
   (t) => [uniqueIndex("store_serials_product_serial_unique").on(t.productId, t.serial), index("store_serials_stock_idx").on(t.productId, t.locationId, t.status)],
 );
+
+/**
+ * Who wrote what in Autotask from the portal (notes, time entries): the
+ * activity shows the technician even when Autotask records the portal's API
+ * user as the author (impersonation refused).
+ */
+export const autotaskAuthors = pgTable(
+  "autotask_authors",
+  {
+    entity: text("entity", { enum: ["note", "time"] }).notNull(),
+    autotaskId: bigint("autotask_id", { mode: "number" }).notNull(),
+    ticketId: bigint("ticket_id", { mode: "number" }).notNull(),
+    userId: uuid("user_id").references(() => users.id, { onDelete: "set null" }),
+    createdAt: created(),
+  },
+  (t) => [primaryKey({ columns: [t.entity, t.autotaskId] }), index("autotask_authors_ticket_idx").on(t.ticketId)],
+);

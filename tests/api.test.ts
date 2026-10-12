@@ -1351,6 +1351,9 @@ describe("tickets from Autotask", () => {
           return json({ errors: ["The logged in Resource does not have the adequate permissions to update this entity type."] }, 500);
         }
         if (path === "Tickets" && method === "PATCH") return json({ itemId: 9001 });
+        if (path === "Tickets/9001/Notes" && method === "POST" && headers.impersonationresourceid && String(init.body).includes("REFUSED-AS-TECH")) {
+          return json({ errors: ["The logged in Resource does not have the adequate permissions to create this entity type."] }, 500);
+        }
         if (path === "Tickets/9001/Notes" && method === "POST") return json({ itemId: 55 });
         if (path === "Companies/77/Contacts" && method === "POST") return json({ itemId: 777 });
         return json({ errors: [`unexpected ${method} ${path}`] }, 500);
@@ -1432,6 +1435,17 @@ describe("tickets from Autotask", () => {
     expect((await tech.patch("/api/tickets/9001", { priority: "3" })).status).toBe(200);
     const patches = sent.filter((s) => s.method === "PATCH");
     expect(patches.map((p) => p.headers.impersonationresourceid ?? null)).toEqual(["29682885", null]);
+
+    // saved as the API user: the text says which technician wrote it, and the portal remembers it
+    sent.length = 0;
+    expect((await tech.post("/api/tickets/9001/notes", { text: "REFUSED-AS-TECH réponse", internal: false })).status).toBe(201);
+    const posts = sent.filter((s) => s.url.endsWith("Tickets/9001/Notes"));
+    expect(posts.map((p) => p.headers.impersonationresourceid ?? null)).toEqual(["29682885", null]);
+    expect(posts[1].body.description).toBe("REFUSED-AS-TECH réponse\n\n— Alex Tremblay (via le portail AKAB)");
+    const [author] = await db().select().from(schema.autotaskAuthors).where(eq(schema.autotaskAuthors.autotaskId, 55));
+    const [techRow] = await db().select().from(schema.users).where(eq(schema.users.email, "tech@akab.local"));
+    expect(author).toMatchObject({ entity: "note", ticketId: 9001, userId: techRow.id });
+    sent.length = 0;
     await admin.put("/api/admin/integrations/autotask", { fallbackToApiUser: false });
 
     expect((await tech.post("/api/tickets/9001/notes", { text: "Rappel demain", internal: true })).status).toBe(201);

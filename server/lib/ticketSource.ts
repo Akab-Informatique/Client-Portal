@@ -738,6 +738,23 @@ function productOf(r: Record<string, string | number | null | undefined> & { id:
   };
 }
 
+/**
+ * When Autotask records the portal's API user (the technician's name was
+ * refused), the text says who really wrote it.
+ */
+const byline = (a: AuthContext) => `— ${a.user.name} (via le portail AKAB)`;
+const signText = (a: AuthContext, field: string) => (body: unknown) => {
+  const b = body as Record<string, unknown>;
+  const text = typeof b[field] === "string" && b[field] ? `${b[field]}\n\n` : "";
+  return { ...b, [field]: `${text}${byline(a)}`.slice(0, 8000) };
+};
+
+/** Remember which technician wrote a note / time entry (shown in the activity). */
+async function rememberAuthor(entity: "note" | "time", autotaskId: number | undefined, ticketId: number, a: AuthContext) {
+  if (!autotaskId) return;
+  await db().insert(schema.autotaskAuthors).values({ entity, autotaskId, ticketId, userId: a.realUser.id }).onConflictDoNothing();
+}
+
 /** Make the ticket's secondary technicians exactly this list (adds / removes). */
 async function setSecondary(at: Client, ticketId: number, personIds: string[], actor: number): Promise<void> {
   const wanted = new Set<number>();
@@ -888,9 +905,16 @@ const autotaskSource: TicketSource = {
     const contactIds = notes.map(contactOf).filter((x): x is number => Boolean(x));
     const contactMap = contactIds.length ? await contactNames(at, contactIds).catch(() => new Map<number, string>()) : new Map<number, string>();
     const resourceName = (rid?: number | null) => (rid ? (res.find((r) => r.id === rid)?.name ?? `#${rid}`) : null);
+    // Written from the portal: the technician (even if Autotask shows the API user)
+    const authors = await db()
+      .select({ entity: schema.autotaskAuthors.entity, autotaskId: schema.autotaskAuthors.autotaskId, name: schema.users.name })
+      .from(schema.autotaskAuthors)
+      .innerJoin(schema.users, eq(schema.users.id, schema.autotaskAuthors.userId))
+      .where(eq(schema.autotaskAuthors.ticketId, id));
+    const portalAuthor = (entity: "note" | "time", aid: number) => authors.find((x) => x.entity === entity && x.autotaskId === aid)?.name ?? null;
     const noteItems: Note[] = notes.map((n) => ({
       id: `n${n.id}`,
-      author: resourceName(n.creatorResourceID) ?? (contactOf(n) ? (contactMap.get(contactOf(n)!) ?? "") : "Autotask"),
+      author: portalAuthor("note", n.id) ?? resourceName(n.creatorResourceID) ?? (contactOf(n) ? (contactMap.get(contactOf(n)!) ?? "") : "Autotask"),
       at: n.createDateTime,
       text: [n.title, n.description].filter(Boolean).join("\n").trim(),
       internal: internalValues.has(String(n.publish)),
@@ -899,7 +923,7 @@ const autotaskSource: TicketSource = {
     // Time entries = the work done on the ticket (summary for the client, internal note for the team)
     const timeItems: Note[] = times.map((x) => ({
       id: `t${x.id}`,
-      author: resourceName(x.resourceID) ?? "Autotask",
+      author: portalAuthor("time", x.id) ?? resourceName(x.resourceID) ?? "Autotask",
       at: x.startDateTime ?? x.dateWorked ?? x.createDateTime ?? "",
       text: (x.summaryNotes ?? "").trim(),
       internal: false,
@@ -973,7 +997,7 @@ const autotaskSource: TicketSource = {
     const opts = await atOptions();
     const noteType = opts.noteTypes.find((n) => /task|tâche|detail|détail/i.test(n.label)) ?? opts.noteTypes[0];
     const publish = opts.publish.find((x) => (p.internal ? /intern/i : /all|tous|client|customer/i).test(x.label)) ?? opts.publish[0];
-    await at.call(
+    const res = await at.call<{ itemId: number }>(
       "POST",
       `Tickets/${id}/Notes`,
       {
@@ -983,8 +1007,9 @@ const autotaskSource: TicketSource = {
         noteType: noteType ? Number(noteType.value) : 1,
         publish: publish ? Number(publish.value) : p.internal ? 2 : 1,
       },
-      { impersonate: actor },
+      { impersonate: actor, asApiUser: signText(a, "description") },
     );
+    await rememberAuthor("note", res?.itemId, id, a);
     forget(`detail:${id}:`);
     // the list does not show notes: no reload
   },
@@ -1010,7 +1035,7 @@ const autotaskSource: TicketSource = {
         dueDateTime: dueIso(p.dueDate),
         ...(rid ? { assignedResourceID: rid, assignedResourceRoleID: await roleOf(at, rid) } : {}),
       },
-      { impersonate: actor },
+      { impersonate: actor, asApiUser: signText(a, "description") },
     );
     await refreshOne(at, res.itemId);
     return res.itemId;
@@ -1231,7 +1256,7 @@ const autotaskSource: TicketSource = {
         ...(p.productId ? { productID: Number(p.productId) } : {}),
         datePurchased: p.date ? `${p.date}T12:00:00Z` : new Date().toISOString(),
       },
-      { impersonate: actor },
+      { impersonate: actor, asApiUser: signText(a, "description") },
     );
     forget(`charges:${ticketId}`);
   },
@@ -1259,7 +1284,7 @@ const autotaskSource: TicketSource = {
     const actor = await actorResource(a);
     const end = p.endedAt;
     const start = new Date(end.getTime() - Math.round(p.hours * 3_600_000));
-    await at.call(
+    const res = await at.call<{ itemId: number }>(
       "POST",
       "TimeEntries",
       {
@@ -1276,6 +1301,7 @@ const autotaskSource: TicketSource = {
       },
       { impersonate: actor },
     );
+    await rememberAuthor("time", res?.itemId, ticketId, a);
     forget(`detail:${ticketId}:`);
   },
 
