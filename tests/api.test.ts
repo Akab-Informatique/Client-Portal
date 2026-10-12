@@ -1003,6 +1003,7 @@ describe("tickets from Autotask", () => {
         if (path === "TicketNotes/entityInformation/fields") {
           return json({
             fields: [
+              ...["id", "ticketID", "title", "description", "createDateTime", "creatorResourceID", "createdByContactID"].map((name) => ({ name })),
               { name: "noteType", picklistValues: pick([[1, "Task Detail"]]) },
               { name: "publish", picklistValues: pick([[1, "All Autotask Users"], [2, "Internal Only"]]) },
             ],
@@ -1025,7 +1026,15 @@ describe("tickets from Autotask", () => {
             pageDetails: {},
           });
         }
-        if (path === "TimeEntries/query") return json({ items: [{ hoursWorked: 1.5 }], pageDetails: {} });
+        if (path === "TimeEntries/entityInformation/fields") {
+          return json({ fields: ["id", "ticketID", "resourceID", "dateWorked", "startDateTime", "hoursWorked", "summaryNotes", "internalNotes"].map((name) => ({ name })) });
+        }
+        if (path === "TimeEntries/query") {
+          return json({
+            items: [{ id: 70, resourceID: 29682885, dateWorked: "2026-09-30T00:00:00Z", startDateTime: "2026-09-30T15:00:00Z", hoursWorked: 1.5, summaryNotes: "Serveur redémarré", internalNotes: "RAID à surveiller" }],
+            pageDetails: {},
+          });
+        }
         if (path === "ResourceRoles/query") return json({ items: [{ roleID: 29683461 }], pageDetails: {} });
         if (path === "Tickets" && method === "PATCH") return json({ itemId: 9001 });
         if (path === "Tickets/9001/Notes" && method === "POST") return json({ itemId: 55 });
@@ -1077,7 +1086,14 @@ describe("tickets from Autotask", () => {
 
     const d = (await tech.get("/api/tickets/9001")).json;
     expect(d.hours).toBe(1.5);
-    expect(d.notes).toEqual([{ id: "1", author: "Alex Tremblay", at: "2026-09-30T14:00:00Z", text: "Appel\nClient rappelé", internal: true }]);
+    expect(d.notes).toEqual([
+      { id: "n1", author: "Alex Tremblay", at: "2026-09-30T14:00:00Z", text: "Appel\nClient rappelé", internal: true, kind: "note" },
+      { id: "t70", author: "Alex Tremblay", at: "2026-09-30T15:00:00Z", text: "Serveur redémarré", internal: false, kind: "time", hours: 1.5, internalText: "RAID à surveiller" },
+    ]);
+    // the note query only asks for fields TicketNotes really has (no creatorContactID)
+    const noteQuery = sent.find((s) => s.url.endsWith("TicketNotes/query"))!;
+    expect(noteQuery.body.IncludeFields).not.toContain("creatorContactID");
+    expect(noteQuery.body.IncludeFields).toContain("createdByContactID");
   });
 
   it("writes to Autotask on behalf of the technician", async () => {
@@ -1106,7 +1122,8 @@ describe("tickets from Autotask", () => {
     const d = await tech.get("/api/tickets/9002");
     expect(d.status).toBe(200);
     expect(d.json.title).toBe("Client a répondu");
-    expect(d.json.notes).toEqual([]);
+    // notes failed, but the work done (time entries) is still shown
+    expect(d.json.notes.map((n: any) => n.kind)).toEqual(["time"]);
     expect(d.json.warnings).toEqual([{ part: "notes", detail: "Notes indisponibles" }]);
   });
 

@@ -488,6 +488,9 @@ const fr = {
     },
   },
   tickets: {
+    showMore: "Afficher plus",
+    showLess: "Afficher moins",
+    timeEntry: "Temps · {{hours}} h",
     loadFailed: "Impossible de charger le billet.",
     retry: "Réessayer",
     partFailed: { notes: "Les notes n'ont pas pu être chargées depuis Autotask :", time: "Le temps saisi n'a pas pu être chargé depuis Autotask :" },

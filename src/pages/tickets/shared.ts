@@ -44,7 +44,8 @@ export type TicketDetail = TicketSummary & {
   description: string;
   source: string;
   hours: number;
-  notes: { id: string; author: string; at: string; text: string; internal: boolean }[];
+  /** Notes and time entries (work done), oldest first */
+  notes: { id: string; author: string; at: string; text: string; internal: boolean; kind?: "note" | "time"; hours?: number; internalText?: string }[];
   /** AI assistant available to me */
   ai: boolean;
   /** Parts Autotask could not give (notes, time) */

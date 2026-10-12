@@ -301,7 +301,7 @@ function TicketBody({
             <AiPanel tk={tk} onToNote={(text) => setDraft({ text, internal: true })} />
             <section className="glass rounded-2xl border p-4">
               <p className="mb-2 text-[11px] font-medium uppercase tracking-wide text-muted-foreground">{t("tickets.description")}</p>
-              <p className="whitespace-pre-wrap text-sm leading-relaxed">{tk.description || "—"}</p>
+              <Description text={tk.description || "—"} />
               {partial && <Skeleton className="mt-2 h-4 w-2/3" />}
             </section>
             <section>
@@ -316,17 +316,37 @@ function TicketBody({
                 <ol className="relative space-y-4 border-l pl-5">
                   {tk.notes.map((n) => (
                     <li key={n.id} className="relative">
-                      <span className={cn("absolute -left-[27px] top-1 flex size-3.5 items-center justify-center rounded-full border-2 border-background", n.internal ? "bg-violet-400" : "bg-grad-gold")} />
+                      <span
+                        className={cn(
+                          "absolute -left-[27px] top-1 flex size-3.5 items-center justify-center rounded-full border-2 border-background",
+                          n.kind === "time" ? "bg-sky-400" : n.internal ? "bg-violet-400" : "bg-grad-gold",
+                        )}
+                      />
                       <div className="flex flex-wrap items-baseline gap-x-2 text-sm">
                         <span className="font-medium">{n.author}</span>
                         <span className="text-xs text-muted-foreground">{longDateTime(n.at)}</span>
+                        {n.kind === "time" && (
+                          <span className="flex items-center gap-1 rounded-full bg-sky-500/15 px-1.5 text-[10px] font-medium text-sky-300">
+                            <Clock3 className="size-2.5" /> {t("tickets.timeEntry", { hours: (n.hours ?? 0).toLocaleString() })}
+                          </span>
+                        )}
                         {n.internal && (
                           <span className="flex items-center gap-1 rounded-full bg-violet-500/15 px-1.5 text-[10px] font-medium text-violet-300">
                             <Lock className="size-2.5" /> {t("tickets.internal")}
                           </span>
                         )}
                       </div>
-                      <p className={cn("mt-1 whitespace-pre-wrap rounded-lg px-3 py-2 text-sm", n.internal ? "bg-violet-500/5" : "bg-muted/50")}>{n.text}</p>
+                      {n.text && (
+                        <p className={cn("mt-1 whitespace-pre-wrap rounded-lg px-3 py-2 text-sm", n.internal ? "bg-violet-500/5" : n.kind === "time" ? "bg-sky-500/5" : "bg-muted/50")}>{n.text}</p>
+                      )}
+                      {n.internalText && (
+                        <p className="mt-1 whitespace-pre-wrap rounded-lg bg-violet-500/5 px-3 py-2 text-sm">
+                          <span className="mb-0.5 flex items-center gap-1 text-[10px] font-medium uppercase tracking-wide text-violet-300">
+                            <Lock className="size-2.5" /> {t("tickets.internal")}
+                          </span>
+                          {n.internalText}
+                        </p>
+                      )}
                     </li>
                   ))}
                 </ol>
@@ -442,6 +462,30 @@ export function InlinePick({
         ))}
       </DropdownMenuContent>
     </DropdownMenu>
+  );
+}
+
+/** Long descriptions: 5 lines, then "Show more" / "Show less". */
+function Description({ text }: { text: string }) {
+  const { t } = useTranslation();
+  const ref = useRef<HTMLParagraphElement>(null);
+  const [open, setOpen] = useState(false);
+  const [long, setLong] = useState(false);
+  useEffect(() => {
+    const el = ref.current;
+    if (el && !open) setLong(el.scrollHeight > el.clientHeight + 2);
+  }, [text, open]);
+  return (
+    <>
+      <p ref={ref} className={cn("whitespace-pre-wrap text-sm leading-relaxed", !open && "line-clamp-5")}>
+        {text}
+      </p>
+      {(long || open) && (
+        <button type="button" onClick={() => setOpen((o) => !o)} className="mt-1.5 flex items-center gap-1 text-xs font-medium text-primary hover:underline">
+          <ChevronDown className={cn("size-3.5 transition-transform", open && "rotate-180")} /> {open ? t("tickets.showLess") : t("tickets.showMore")}
+        </button>
+      )}
+    </>
   );
 }
 

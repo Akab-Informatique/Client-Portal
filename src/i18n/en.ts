@@ -490,6 +490,9 @@ const en: Dict = {
     },
   },
   tickets: {
+    showMore: "Show more",
+    showLess: "Show less",
+    timeEntry: "Time · {{hours}} h",
     loadFailed: "The ticket could not be loaded.",
     retry: "Retry",
     partFailed: { notes: "Notes could not be loaded from Autotask:", time: "Logged time could not be loaded from Autotask:" },

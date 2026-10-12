@@ -28,7 +28,17 @@ export type PriorityKind = "critical" | "high" | "medium" | "low";
 export type Choice<K extends string = string> = { value: string; label: string | null; kind: K };
 export type Options = { statuses: Choice<StatusKind>[]; priorities: Choice<PriorityKind>[]; queues: Choice<"">[] };
 export type Person = { id: string; name: string };
-export type Note = { id: string; author: string; at: string; text: string; internal: boolean };
+export type Note = {
+  id: string;
+  author: string;
+  at: string;
+  text: string;
+  internal: boolean;
+  /** "time": a time entry (work done), with its hours and its internal note */
+  kind?: "note" | "time";
+  hours?: number;
+  internalText?: string;
+};
 export type Company = { id: number; name: string };
 export type Contact = { id: string; companyId: number; name: string; email: string | null; phone: string | null };
 export type NTicket = {
@@ -328,6 +338,17 @@ async function fieldsOf(at: Client, entity: string): Promise<FieldInfo[]> {
   return cached(`fields:${entity}`, 10 * 60_000, async () => (await at.call<{ fields: FieldInfo[] }>("GET", `${entity}/entityInformation/fields`)).fields ?? []);
 }
 
+/**
+ * Only ask Autotask for fields its entity really has (names differ between
+ * versions, e.g. createdByContactID): asking for an unknown field fails the
+ * whole query.
+ */
+async function safeFields(at: Client, entity: string, wanted: string[]): Promise<string[]> {
+  const known = new Set((await fieldsOf(at, entity).catch(() => [] as FieldInfo[])).map((x) => x.name.toLowerCase()));
+  if (!known.size) return wanted;
+  return wanted.filter((w) => known.has(w.toLowerCase()));
+}
+
 const chunks = <T>(a: T[], n: number) => Array.from({ length: Math.ceil(a.length / n) }, (_, i) => a.slice(i * n, i * n + n));
 
 /** Portal accounts linked to an Autotask resource: resource id → portal user id. */
@@ -544,37 +565,46 @@ const autotaskSource: TicketSource = {
       warnings.push({ part, detail });
       return fallback;
     };
+    type AtNote = { id: number; title?: string; description?: string; createDateTime: string; creatorResourceID?: number | null; createdByContactID?: number | null; creatorContactID?: number | null; publish?: number };
+    type AtTime = { id: number; resourceID?: number | null; dateWorked?: string; startDateTime?: string | null; createDateTime?: string; hoursWorked?: number; summaryNotes?: string | null; internalNotes?: string | null };
+    const [noteFields, timeFields] = await Promise.all([
+      safeFields(at, "TicketNotes", ["id", "title", "description", "createDateTime", "creatorResourceID", "createdByContactID", "creatorContactID", "publish"]),
+      safeFields(at, "TimeEntries", ["id", "resourceID", "dateWorked", "startDateTime", "createDateTime", "hoursWorked", "summaryNotes", "internalNotes"]),
+    ]);
     const [t, notes, times, res] = await Promise.all([
       loadTicket(),
-      at
-        .query<{ id: number; title: string; description: string; createDateTime: string; creatorResourceID: number | null; creatorContactID: number | null; publish: number }>(
-          "TicketNotes",
-          [{ op: "eq", field: "ticketID", value: id }],
-          { fields: ["id", "title", "description", "createDateTime", "creatorResourceID", "creatorContactID", "publish"], max: 200 },
-        )
-        .catch(soft("notes", [] as { id: number; title: string; description: string; createDateTime: string; creatorResourceID: number | null; creatorContactID: number | null; publish: number }[])),
-      at.query<{ hoursWorked: number }>("TimeEntries", [{ op: "eq", field: "ticketID", value: id }], { fields: ["hoursWorked"], max: 500 }).catch(soft("time", [] as { hoursWorked: number }[])),
+      at.query<AtNote>("TicketNotes", [{ op: "eq", field: "ticketID", value: id }], { fields: noteFields, max: 300 }).catch(soft("notes", [] as AtNote[])),
+      at.query<AtTime>("TimeEntries", [{ op: "eq", field: "ticketID", value: id }], { fields: timeFields, max: 500 }).catch(soft("time", [] as AtTime[])),
       listResources(),
     ]);
     if (!t) return null;
     t.warnings = warnings;
     const internalValues = new Set((await atOptions()).publish.filter((p) => /intern/i.test(p.label)).map((p) => String(p.value)));
-    const contactIds = notes.map((n) => n.creatorContactID).filter((x): x is number => Boolean(x));
+    const contactOf = (n: AtNote) => n.createdByContactID ?? n.creatorContactID ?? null;
+    const contactIds = notes.map(contactOf).filter((x): x is number => Boolean(x));
     const contactMap = contactIds.length ? await contactNames(at, contactIds).catch(() => new Map<number, string>()) : new Map<number, string>();
-    t.notes = notes
-      .map((n) => ({
-        id: String(n.id),
-        author: n.creatorResourceID
-          ? (res.find((r) => r.id === n.creatorResourceID)?.name ?? `#${n.creatorResourceID}`)
-          : n.creatorContactID
-            ? (contactMap.get(n.creatorContactID) ?? "")
-            : "Autotask",
-        at: n.createDateTime,
-        text: [n.title, n.description].filter(Boolean).join("\n").trim(),
-        internal: internalValues.has(String(n.publish)),
-      }))
-      .sort((x, y) => x.at.localeCompare(y.at));
-    t.hours = Math.round(times.reduce((s, x) => s + (x.hoursWorked ?? 0), 0) * 100) / 100;
+    const resourceName = (rid?: number | null) => (rid ? (res.find((r) => r.id === rid)?.name ?? `#${rid}`) : null);
+    const noteItems: Note[] = notes.map((n) => ({
+      id: `n${n.id}`,
+      author: resourceName(n.creatorResourceID) ?? (contactOf(n) ? (contactMap.get(contactOf(n)!) ?? "") : "Autotask"),
+      at: n.createDateTime,
+      text: [n.title, n.description].filter(Boolean).join("\n").trim(),
+      internal: internalValues.has(String(n.publish)),
+      kind: "note",
+    }));
+    // Time entries = the work done on the ticket (summary for the client, internal note for the team)
+    const timeItems: Note[] = times.map((x) => ({
+      id: `t${x.id}`,
+      author: resourceName(x.resourceID) ?? "Autotask",
+      at: x.startDateTime ?? x.dateWorked ?? x.createDateTime ?? "",
+      text: (x.summaryNotes ?? "").trim(),
+      internal: false,
+      kind: "time",
+      hours: x.hoursWorked ?? 0,
+      internalText: (x.internalNotes ?? "").trim() || undefined,
+    }));
+    t.notes = [...noteItems, ...timeItems].sort((a, b) => a.at.localeCompare(b.at));
+    t.hours = Math.round(times.reduce((sum, x) => sum + (x.hoursWorked ?? 0), 0) * 100) / 100;
     return t;
   },
 
