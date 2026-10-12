@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useState, type CSSProperties } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
 import { api, ApiError } from "@/lib/api";
@@ -114,6 +114,21 @@ export const PRIORITY_STYLE: Record<PriorityKind, { bar: string; text: string; d
   medium: { bar: "bg-[#ffce1a]", text: "text-primary", dot: "bg-[#ffce1a]" },
   low: { bar: "bg-slate-500", text: "text-muted-foreground", dot: "bg-slate-500" },
 };
+/** Priority colour (r, g, b) for the glowing hue at the start of a ticket. */
+const PRIORITY_RGB: Record<PriorityKind, string> = { critical: "239, 68, 68", high: "249, 115, 22", medium: "255, 206, 26", low: "100, 116, 139" };
+
+/**
+ * A hue that glows from the left edge and fades out behind the ticket number
+ * and title (instead of a hard coloured bar). strength 1 = list row.
+ */
+export function priorityGlow(kind: PriorityKind, strength = 1): CSSProperties {
+  const c = PRIORITY_RGB[kind];
+  const a = (x: number) => Math.min(1, x * strength).toFixed(2);
+  return {
+    backgroundImage: `radial-gradient(120% 90% at 0% 50%, rgba(${c}, ${a(0.34)}) 0%, rgba(${c}, ${a(0.12)}) 38%, transparent 72%), linear-gradient(90deg, rgba(${c}, ${a(0.55)}) 0, rgba(${c}, 0) 3px)`,
+  };
+}
+
 export const STATUS_STYLE: Record<StatusKind, string> = {
   new: "border-sky-500/40 bg-sky-500/10 text-sky-300",
   needsAttention: "border-red-500/50 bg-red-500/15 text-red-300",

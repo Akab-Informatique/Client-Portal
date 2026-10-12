@@ -54,7 +54,7 @@ import { useCan, useMe } from "@/lib/session";
 import { cn, initials } from "@/lib/utils";
 import { GlassBackdrop } from "@/components/brand/GlassBackdrop";
 import { NewTicketDialog } from "./NewTicketDialog";
-import { dueState, FILTER_KEYS, PRIORITY_STYLE, useChoiceText, shortDate, STATUS_STYLE, useTickets, VIEWS, type TicketList, type TicketSummary, type View, ticketErrorText } from "./shared";
+import { dueState, FILTER_KEYS, PRIORITY_STYLE, priorityGlow, useChoiceText, shortDate, STATUS_STYLE, useTickets, VIEWS, type TicketList, type TicketSummary, type View, ticketErrorText } from "./shared";
 import { useTicketWorkspace } from "./workspace";
 import { GlobalSearch } from "./GlobalSearch";
 import { AiSetupHint, InlinePick, useAiError } from "./TicketPanel";
@@ -596,12 +596,13 @@ function TicketRow({
         }}
         className={cn(
           "cursor-pointer outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-[color:var(--gold)]/50",
-          "group relative grid w-full grid-cols-1 gap-x-3 gap-y-1.5 px-5 py-2.5 text-left transition-colors xl:grid-cols-[minmax(0,1fr)_144px_140px_64px_104px_86px_132px_64px_20px] xl:items-center",
+          "group relative isolate grid w-full grid-cols-1 gap-x-3 gap-y-1.5 px-5 py-2.5 text-left transition-colors xl:grid-cols-[minmax(0,1fr)_144px_140px_64px_104px_86px_132px_64px_20px] xl:items-center",
           "hover:bg-[linear-gradient(90deg,rgba(255,206,26,0.07),transparent_60%)]",
           active && "bg-[linear-gradient(90deg,rgba(255,206,26,0.1),transparent_70%)]",
         )}
       >
-        <span className={cn("absolute inset-y-2 left-0 w-1 rounded-r-full transition-all group-hover:inset-y-1", PRIORITY_STYLE[tk.priorityKind].bar)} />
+        {/* Priority: a glowing hue fading out behind the number and title */}
+        <span aria-hidden className="pointer-events-none absolute inset-y-0 left-0 -z-10 w-72 opacity-80 transition-opacity group-hover:opacity-100" style={priorityGlow(tk.priorityKind)} />
         <span className="min-w-0">
           <span className="flex items-baseline gap-2">
             <span className="shrink-0 font-mono text-[11px] text-muted-foreground group-hover:text-primary">{tk.number}</span>

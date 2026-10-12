@@ -4,7 +4,7 @@ import { keepPreviousData, useQuery } from "@tanstack/react-query";
 import { Archive, Loader2, Search, X } from "lucide-react";
 import { api } from "@/lib/api";
 import { cn } from "@/lib/utils";
-import { PRIORITY_STYLE, STATUS_STYLE, useChoiceText, type TicketSummary } from "./shared";
+import { priorityGlow, STATUS_STYLE, useChoiceText, type TicketSummary } from "./shared";
 import { useTicketWorkspace } from "./workspace";
 
 type Result = { items: TicketSummary[]; total: number; archive: TicketSummary[] };
@@ -147,9 +147,9 @@ function Row({ tk, active, onHover, onPick, statusText }: { tk: TicketSummary; a
         type="button"
         onMouseEnter={onHover}
         onClick={onPick}
-        className={cn("flex w-full items-start gap-3 px-4 py-2 text-left", active && "bg-[linear-gradient(90deg,rgba(255,206,26,0.1),transparent_70%)]")}
+        className={cn("relative isolate flex w-full items-start gap-3 px-4 py-2 text-left", active && "bg-[linear-gradient(90deg,rgba(255,206,26,0.1),transparent_70%)]")}
       >
-        <span className={cn("mt-1.5 h-6 w-1 shrink-0 rounded-full", PRIORITY_STYLE[tk.priorityKind].bar)} />
+        <span aria-hidden className="pointer-events-none absolute inset-y-0 left-0 -z-10 w-56" style={priorityGlow(tk.priorityKind, 0.85)} />
         <span className="min-w-0 flex-1">
           <span className="flex items-baseline gap-2">
             <span className="shrink-0 font-mono text-[11px] text-muted-foreground">{tk.number}</span>

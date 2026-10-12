@@ -3,10 +3,9 @@ import { useTranslation } from "react-i18next";
 import { AnimatePresence, motion } from "motion/react";
 import { Maximize2, Ticket, X } from "lucide-react";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
-import { cn } from "@/lib/utils";
 import { TicketOverlay } from "./TicketPanel";
 import { DockTimer, TimersProvider, useTicketTimerAuto, useTimers, type Timer } from "./timers";
-import { PRIORITY_STYLE, usePresence, type PriorityKind as Priority, type TicketDetail } from "./shared";
+import { priorityGlow, usePresence, type PriorityKind as Priority, type TicketDetail } from "./shared";
 
 /**
  * Ticket workspace, shared by every staff page: the ticket open full screen and
@@ -115,9 +114,9 @@ function DockItem({ d, timer, at, onRestore, onDismiss }: { d: Docked; timer?: T
       initial={{ opacity: 0, y: 16, scale: 0.95 }}
       animate={{ opacity: 1, y: 0, scale: 1 }}
       exit={{ opacity: 0, y: 16, scale: 0.95 }}
-      className="group flex w-72 items-center gap-2 overflow-hidden rounded-xl border border-[color:var(--gold)]/25 bg-popover/90 py-1.5 pl-1.5 pr-1 shadow-[0_12px_40px_-12px_rgba(0,0,0,0.6),0_0_24px_-12px_rgba(255,206,26,0.35)] backdrop-blur-xl"
+      className="group relative isolate flex w-72 items-center gap-2 overflow-hidden rounded-xl border border-[color:var(--gold)]/25 bg-popover/90 py-1.5 pl-1.5 pr-1 shadow-[0_12px_40px_-12px_rgba(0,0,0,0.6),0_0_24px_-12px_rgba(255,206,26,0.35)] backdrop-blur-xl"
     >
-      <span className={cn("h-8 w-1 shrink-0 rounded-full", d.priority ? PRIORITY_STYLE[d.priority].bar : "bg-[color:var(--gold)]/60")} />
+      <span aria-hidden className="pointer-events-none absolute inset-y-0 left-0 -z-10 w-40" style={priorityGlow(d.priority ?? "medium", 0.9)} />
       <button type="button" onClick={onRestore} className="flex min-w-0 flex-1 items-center gap-2 text-left">
         <Ticket className="size-4 shrink-0 text-primary" />
         <span className="min-w-0">
