@@ -22,6 +22,12 @@ export type AutotaskConfig = {
   username?: string;
   zone?: Zone;
   lastTest?: { ok: boolean; at: string; error?: AutotaskErrorCode };
+  /**
+   * When Autotask refuses a change in the technician's name (their security
+   * level does not allow it or cannot be impersonated), save it as the API user
+   * instead. Off by default: Autotask then shows the API user as the author.
+   */
+  fallbackToApiUser?: boolean;
 };
 export type AutotaskErrorCode = "not_configured" | "disabled" | "zone" | "auth" | "rate_limit" | "network" | "api";
 
@@ -124,10 +130,13 @@ export async function detectZone(username: string): Promise<Zone> {
 
 export type Client = ReturnType<typeof createClient>;
 
-export function createClient(creds: Credentials, zone: Zone) {
+/** Autotask's answer when the (impersonated) resource may not do this. */
+export const PERMISSION_REFUSED = /adequate permission|not have permission|impersonat/i;
+
+export function createClient(creds: Credentials, zone: Zone, opts: { fallbackToApiUser?: boolean } = {}) {
   const base = new URL("V1.0/", zone.url);
 
-  async function call<T>(method: string, path: string, body?: unknown, opts: { impersonate?: number | null } = {}): Promise<T> {
+  async function call<T>(method: string, path: string, body?: unknown, o: { impersonate?: number | null } = {}): Promise<T> {
     // Absolute URLs are only accepted on the zone host (pagination links)
     const url = path.startsWith("https://") ? new URL(path) : new URL(path, base);
     if (url.host !== base.host) throw new AutotaskError("api", undefined, "unexpected host");
@@ -139,7 +148,7 @@ export function createClient(creds: Credentials, zone: Zone) {
         ApiIntegrationCode: creds.integrationCode,
         UserName: creds.username,
         Secret: creds.secret,
-        ...(opts.impersonate ? { ImpersonationResourceId: String(opts.impersonate) } : {}),
+        ...(o.impersonate ? { ImpersonationResourceId: String(o.impersonate) } : {}),
       },
       body: body === undefined ? undefined : JSON.stringify(body),
     });
@@ -147,7 +156,12 @@ export function createClient(creds: Credentials, zone: Zone) {
     if (res.status === 429) throw new AutotaskError("rate_limit", res.status);
     if (!res.ok) {
       const j = (await res.json().catch(() => null)) as { errors?: string[] } | null;
-      throw new AutotaskError("api", res.status, j?.errors?.join("; ").slice(0, 300));
+      const detail = j?.errors?.join("; ").slice(0, 300);
+      if (o.impersonate && opts.fallbackToApiUser && detail && PERMISSION_REFUSED.test(detail)) {
+        console.warn(`[autotask] ${method} ${url.pathname}: refused in resource ${o.impersonate}'s name, saved as the API user`);
+        return call<T>(method, path, body);
+      }
+      throw new AutotaskError("api", res.status, detail);
     }
     return (await res.json()) as T;
   }
@@ -244,7 +258,7 @@ export async function autotask(opts: { allowDisabled?: boolean } = {}): Promise<
   const s = await loadSettings();
   if (!s.credentials || !s.config.zone) throw new AutotaskError("not_configured");
   if (!s.enabled && !opts.allowDisabled) throw new AutotaskError("disabled");
-  return createClient(s.credentials, s.config.zone);
+  return createClient(s.credentials, s.config.zone, { fallbackToApiUser: s.config.fallbackToApiUser });
 }
 
 // ── Resources (Autotask users), cached ───────────────────────────────────────────

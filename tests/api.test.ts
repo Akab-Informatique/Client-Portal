@@ -1202,7 +1202,8 @@ describe("tickets from Autotask", () => {
           });
         }
         if (path === "ResourceRoles/query") return json({ items: [{ roleID: 29683461 }], pageDetails: {} });
-        if (path === "Tickets" && method === "PATCH" && JSON.parse(String(init.body)).priority === 3) {
+        // refused only in a technician's name (impersonation), accepted for the API user itself
+        if (path === "Tickets" && method === "PATCH" && JSON.parse(String(init.body)).priority === 3 && headers.impersonationresourceid) {
           return json({ errors: ["The logged in Resource does not have the adequate permissions to update this entity type."] }, 500);
         }
         if (path === "Tickets" && method === "PATCH") return json({ itemId: 9001 });
@@ -1278,6 +1279,16 @@ describe("tickets from Autotask", () => {
     const refused = await tech.patch("/api/tickets/9001", { priority: "3" });
     expect(refused.status).toBe(403);
     expect(refused.json.error).toBe("autotask_permission");
+
+    // admin switch: then saved as the API user (no impersonation)
+    resetRateLimit("login:ip:unknown");
+    const admin = await signIn("admin@akab.local");
+    expect((await admin.put("/api/admin/integrations/autotask", { fallbackToApiUser: true })).json.fallbackToApiUser).toBe(true);
+    sent.length = 0;
+    expect((await tech.patch("/api/tickets/9001", { priority: "3" })).status).toBe(200);
+    const patches = sent.filter((s) => s.method === "PATCH");
+    expect(patches.map((p) => p.headers.impersonationresourceid ?? null)).toEqual(["29682885", null]);
+    await admin.put("/api/admin/integrations/autotask", { fallbackToApiUser: false });
 
     expect((await tech.post("/api/tickets/9001/notes", { text: "Rappel demain", internal: true })).status).toBe(201);
     const note = sent.find((s) => s.url.endsWith("Tickets/9001/Notes"))!;

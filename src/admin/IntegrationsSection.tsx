@@ -26,6 +26,7 @@ type Settings = {
   zone: { name: string; url: string; webUrl: string | null } | null;
   lastTest: { ok: boolean; at: string; error?: ErrorCode } | null;
   usage: { lastHour: number; throttled: number; limit: number; waiting: number };
+  fallbackToApiUser: boolean;
   updatedAt: string | null;
   updatedByName: string | null;
 };
@@ -304,7 +305,32 @@ function AutotaskConnection() {
           </ol>
         )}
       </div>
+      <FallbackToggle value={s.fallbackToApiUser} />
     </section>
+  );
+}
+
+/** If Autotask refuses a change in the technician's name: save it as the API user (saved at once). */
+function FallbackToggle({ value }: { value: boolean }) {
+  const { t } = useTranslation();
+  const qc = useQueryClient();
+  const errorText = useIntegrationError();
+  const save = useMutation({
+    mutationFn: (fallbackToApiUser: boolean) => api.put<Settings>("/admin/integrations/autotask", { fallbackToApiUser }),
+    onSuccess: (next) => {
+      qc.setQueryData(KEY, next);
+      toast.success(t("common.saved"));
+    },
+    onError: (e) => toast.error(errorText(e)),
+  });
+  return (
+    <label className="flex items-start gap-4 border-t px-6 py-5">
+      <span className="min-w-0 flex-1">
+        <span className="block text-sm font-medium">{t("integrations.autotask.fallback")}</span>
+        <span className="mt-1 block text-xs text-muted-foreground">{t("integrations.autotask.fallbackHint")}</span>
+      </span>
+      <Switch checked={value} disabled={save.isPending} onCheckedChange={(v) => save.mutate(v)} />
+    </label>
   );
 }
 

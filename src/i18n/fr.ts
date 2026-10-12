@@ -476,6 +476,8 @@ const fr = {
       resource_taken: "Cet utilisateur Autotask est déjà lié à un autre technicien.",
     },
     autotask: {
+      fallback: "Si Autotask refuse au nom du technicien, enregistrer avec l’utilisateur API",
+      fallbackHint: "Utile si le niveau de sécurité d’un technicien ne permet pas l’emprunt d’identité (ex. Administrator). La modification passe, mais Autotask affiche l’utilisateur API comme auteur ; le journal du portail garde le nom du technicien. Le temps saisi reste au nom du technicien.",
       usage: "Appels API (dernière heure)",
       usageValue: "{{calls}} / {{limit}}",
       usageThrottled_one: "{{count}} ralenti par Autotask",

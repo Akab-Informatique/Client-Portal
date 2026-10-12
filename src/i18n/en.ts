@@ -478,6 +478,8 @@ const en: Dict = {
       resource_taken: "This Autotask user is already linked to another technician.",
     },
     autotask: {
+      fallback: "If Autotask refuses in the technician’s name, save as the API user",
+      fallbackHint: "Useful when a technician’s security level cannot be impersonated (e.g. Administrator). The change goes through, but Autotask shows the API user as the author; the portal’s log keeps the technician’s name. Time entries stay under the technician.",
       usage: "API calls (last hour)",
       usageValue: "{{calls}} / {{limit}}",
       usageThrottled_one: "{{count}} slowed down by Autotask",

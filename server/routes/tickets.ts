@@ -8,7 +8,7 @@ import { body, zEmail } from "../lib/validate.ts";
 import { audit } from "../lib/audit.ts";
 import { rateLimit } from "../lib/http.ts";
 import { AiError, aiSettings, askClaude, askClaudeJson } from "../lib/ai.ts";
-import { AutotaskError } from "../lib/autotask.ts";
+import { AutotaskError, PERMISSION_REFUSED } from "../lib/autotask.ts";
 import { sweepTimers, timerView, elapsedMs } from "../lib/timers.ts";
 import { SourceError, ticketSource, type Asset, type NTicket, type Options, type TicketSource } from "../lib/ticketSource.ts";
 import { rmmLink, rmmSettings, type RmmSettings } from "../lib/rmm.ts";
@@ -35,7 +35,7 @@ function sourceError(e: unknown): HTTPException {
     // In the server log too (docker compose logs app), with Autotask's own message
     console.warn(`[autotask] ${e.code}${e.status ? ` (HTTP ${e.status})` : ""}${e.detail ? `: ${e.detail}` : ""}`);
     // The technician's own Autotask user may not do this (changes are made in their name)
-    if (e.detail && /adequate permission|not have permission|impersonat/i.test(e.detail)) {
+    if (e.detail && PERMISSION_REFUSED.test(e.detail)) {
       return new HTTPException(403, { message: "autotask_permission", cause: [{ path: "autotask", message: e.detail }] });
     }
     const status = e.code === "not_configured" || e.code === "disabled" ? 409 : e.code === "rate_limit" ? 429 : 502;

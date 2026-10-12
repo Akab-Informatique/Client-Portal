@@ -33,6 +33,7 @@ function view(s: Settings, updatedByName: string | null) {
     configured: Boolean(s.credentials && s.config.zone),
     zone: s.config.zone ?? null,
     lastTest: s.config.lastTest ?? null,
+    fallbackToApiUser: Boolean(s.config.fallbackToApiUser),
     /** API calls made by the portal in the last hour (Autotask allows 10,000 per hour) */
     usage: autotaskUsage(),
     updatedAt: s.updatedAt,
@@ -71,10 +72,12 @@ export const integrationRoutes = new Hono<AppEnv>()
         username: zEmail.optional(),
         secret: zCred.optional(),
         integrationCode: zCred.optional(),
+        fallbackToApiUser: z.boolean().optional(),
       }),
     );
     const s = await loadSettings();
     const config: AutotaskConfig = { ...s.config };
+    if (p.fallbackToApiUser !== undefined) config.fallbackToApiUser = p.fallbackToApiUser;
     if (p.username !== undefined && p.username !== s.config.username) {
       try {
         config.zone = await detectZone(p.username);
@@ -97,6 +100,7 @@ export const integrationRoutes = new Hono<AppEnv>()
       username: p.username,
       secretChanged: p.secret !== undefined || undefined,
       integrationCodeChanged: p.integrationCode !== undefined || undefined,
+      fallbackToApiUser: p.fallbackToApiUser,
     });
     return c.json(await current());
   })
