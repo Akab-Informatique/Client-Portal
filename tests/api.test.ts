@@ -1169,13 +1169,56 @@ describe("tickets: client and contact", () => {
     const r = await block({ ticketId: c.id, note: "Sur place" });
     expect(r.status).toBe(201);
     expect(r.json).toMatchObject({ ticketNumber: c.number, title: c.title });
-    expect((await block({ title: "Formation interne" })).status).toBe(201);
+    expect((await block({ kind: "slot", title: "Formation interne" })).status).toBe(201);
     const from = new Date(`${plus(-7)}T00:00:00Z`).toISOString();
     const to = new Date(`${plus(14)}T00:00:00Z`).toISOString();
     const cal = (await tech.get(`/api/planning/calendar?from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}`)).json;
     expect(cal.map((x: any) => x.title)).toEqual([c.title, "Formation interne"]);
     const nowPins = (await tech.get(`/api/planning/pins?date=${plus(1)}`)).json;
     expect(nowPins.some((p: any) => p.ticketId === c.id)).toBe(true);
+  });
+
+  it("own planning (planSelf), service calls on site, alerts before an event", async () => {
+    const admin = await session("admin@akab.local");
+    const tech = await session("tech@akab.local");
+    const [techRow] = await db().select().from(schema.users).where(eq(schema.users.email, "tech@akab.local"));
+    const [adminRow] = await db().select().from(schema.users).where(eq(schema.users.email, "admin@akab.local"));
+    const items = (await tech.get("/api/tickets?view=all")).json.items;
+    const tk = items[8];
+    const soon = (min: number) => new Date(Date.now() + min * 60_000).toISOString();
+
+    // admins plan their own time by default; a technician only once allowed
+    expect((await admin.post("/api/planning/pins", { ticketId: tk.id, technicianId: adminRow.id, horizon: "day" })).status).toBe(201);
+    expect((await tech.post("/api/planning/pins", { ticketId: tk.id, technicianId: techRow.id, horizon: "day" })).status).toBe(403);
+    expect((await tech.get("/api/planning/technicians")).json).toEqual([{ id: techRow.id, name: "Alex Tremblay" }]);
+    await admin.put(`/api/admin/users/${techRow.id}/permissions`, { overrides: [{ key: "tickets.planSelf", effect: "allow" }] });
+    expect((await tech.post("/api/planning/pins", { ticketId: tk.id, technicianId: techRow.id, horizon: "day", note: "Moi-même" })).status).toBe(201);
+    expect((await tech.post("/api/planning/pins", { ticketId: tk.id, technicianId: adminRow.id })).status).toBe(403);
+
+    // block kinds: on site needs a ticket; reserved slot does not
+    const block = (body: object) => tech.post("/api/planning/calendar", { technicianId: techRow.id, startsAt: soon(10), endsAt: soon(70), ...body });
+    expect((await block({ kind: "onsite", title: "Visite" })).status).toBe(400);
+    const onsite = await block({ kind: "onsite", ticketId: tk.id, reminderMinutes: 15 });
+    expect(onsite.status).toBe(201);
+    expect(onsite.json).toMatchObject({ kind: "onsite", companyName: tk.company.name, reminderMinutes: 15, autotaskServiceCallId: null, warnings: [] });
+    expect((await block({ kind: "slot", title: "Route", reminderMinutes: 0 })).json.kind).toBe("slot");
+
+    // the alert: once, when the start is within the reminder delay
+    const { sendReminders } = await import("../server/lib/planning.ts");
+    await sendReminders();
+    await sendReminders();
+    const alerts = (await tech.get("/api/notifications")).json.items.filter((n: any) => n.type === "calendar.reminder");
+    expect(alerts).toHaveLength(1);
+    expect(alerts[0]).toMatchObject({ link: `/tickets?ticket=${tk.id}`, data: { kind: "onsite", number: tk.number, company: tk.company.name } });
+    // moved later: the alert is due again then
+    await tech.patch(`/api/planning/calendar/${onsite.json.id}`, { startsAt: soon(120), endsAt: soon(180) });
+    const [moved] = await db().select().from(schema.calendarBlocks).where(eq(schema.calendarBlocks.id, onsite.json.id));
+    expect(moved.reminderSentAt).toBeNull();
+    // without Microsoft 365, nothing from Outlook
+    const from = new Date(Date.now() - 86_400_000).toISOString();
+    const to = new Date(Date.now() + 7 * 86_400_000).toISOString();
+    expect((await tech.get(`/api/planning/calendar/outlook?from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}`)).json).toEqual({ synced: false, events: [] });
+    await admin.put(`/api/admin/users/${techRow.id}/permissions`, { overrides: [] });
   });
 
   it("timers: one running at a time, closed tab becomes an entry to validate", async () => {
@@ -1328,6 +1371,11 @@ describe("tickets from Autotask", () => {
             pageDetails: {},
           });
         }
+        if (path === "ServiceCalls/entityInformation/fields") return json({ fields: [{ name: "status", picklistValues: pick([[1, "New"]]) }] });
+        if (path === "ServiceCalls" && method === "POST") return json({ itemId: 901 });
+        if (path === "ServiceCalls/901/Tickets" && method === "POST") return json({ itemId: 902 });
+        if (path === "ServiceCallTickets/902/Resources" && method === "POST") return json({ itemId: 903 });
+        if (path === "ServiceCalls/901" && method === "DELETE") return json({ itemId: 901 });
         if (path === "Products/entityInformation/fields") {
           return json({ fields: ["id", "name", "description", "sku", "manufacturerName", "manufacturerProductName", "unitPrice", "unitCost", "chargeBillingCodeID", "isActive"].map((name) => ({ name })) });
         }
@@ -1633,6 +1681,28 @@ describe("tickets from Autotask", () => {
     expect(left.total).toBe(1);
   });
 
+  it("an on-site visit creates the Autotask service call for the ticket and the technician", async () => {
+    resetRateLimit("login:ip:unknown");
+    const admin = await signIn("admin@akab.local");
+    const [techRow] = await db().select().from(schema.users).where(eq(schema.users.email, "tech@akab.local"));
+    // the admin acts as the linked technician here (impersonation)
+    const tech = await signIn("tech@akab.local");
+    await admin.put(`/api/admin/users/${techRow.id}/permissions`, { overrides: [{ key: "tickets.planSelf", effect: "allow" }] });
+    sent.length = 0;
+    const start = new Date(Date.now() + 3 * 86_400_000);
+    const r = await tech.post("/api/planning/calendar", { technicianId: techRow.id, kind: "onsite", ticketId: 9001, startsAt: start.toISOString(), endsAt: new Date(start.getTime() + 7_200_000).toISOString() });
+    expect(r.status).toBe(201);
+    expect(r.json).toMatchObject({ autotaskServiceCallId: 901, companyName: "Client Réel inc.", warnings: [] });
+    const posts = sent.filter((s) => s.method === "POST" && /ServiceCall/.test(s.url));
+    expect(posts.map((s) => s.url.split("V1.0/")[1])).toEqual(["ServiceCalls", "ServiceCalls/901/Tickets", "ServiceCallTickets/902/Resources"]);
+    expect(posts[0].body).toMatchObject({ companyID: 77, status: 1, startDateTime: start.toISOString() });
+    expect(posts[2].body).toMatchObject({ serviceCallTicketID: 902, resourceID: 29682885, roleID: 29683461 });
+    sent.length = 0;
+    await tech.del(`/api/planning/calendar/${r.json.id}`);
+    expect(sent.some((s) => s.method === "DELETE" && s.url.endsWith("ServiceCalls/901"))).toBe(true);
+    await admin.put(`/api/admin/users/${techRow.id}/permissions`, { overrides: [] });
+  });
+
   it("refuses writes from an account not linked to Autotask", async () => {
     resetRateLimit("login:ip:unknown");
     const admin = await signIn("admin@akab.local");
@@ -1640,5 +1710,92 @@ describe("tickets from Autotask", () => {
     expect(r.notLinked).toBe(true);
     expect(r.items).toEqual([]);
     expect((await admin.patch("/api/tickets/9001", { status: "2" })).json.error).toBe("autotask_not_linked");
+  });
+});
+
+describe("Microsoft 365 calendar", () => {
+  const graphSent: { method: string; url: string; body: any }[] = [];
+  const json = (b: unknown, status = 200) => new Response(JSON.stringify(b), { status, headers: { "content-type": "application/json" } });
+  beforeAll(() => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: unknown, init: RequestInit = {}) => {
+        const url = String(input);
+        const method = init.method ?? "GET";
+        if (url.includes("login.microsoftonline.com")) {
+          const form = new URLSearchParams(String(init.body));
+          return form.get("client_secret") === "good-secret" ? json({ access_token: "tok", expires_in: 3600 }) : json({ error_description: "AADSTS7000215: Invalid client secret" }, 401);
+        }
+        graphSent.push({ method, url, body: init.body ? JSON.parse(String(init.body)) : undefined });
+        if (url.includes("/calendarView")) {
+          return json({
+            value: [
+              { id: "ev1", subject: "Rencontre fournisseur", isAllDay: false, start: { dateTime: "2026-10-14T09:00:00.0000000" }, end: { dateTime: "2026-10-14T10:00:00.0000000" }, categories: [] },
+              { id: "ev2", subject: "[T1] déjà dans le portail", start: { dateTime: "2026-10-14T11:00:00" }, end: { dateTime: "2026-10-14T12:00:00" }, categories: ["Portail AKAB"] },
+            ],
+          });
+        }
+        if (url.endsWith("/calendar?$select=id,name")) return json({ id: "cal", name: "Calendrier" });
+        if (url.endsWith("/events") && method === "POST") return json({ id: `new-${graphSent.length}` }, 201);
+        if (method === "PATCH" || method === "DELETE") return new Response(null, { status: 204 });
+        return json({ error: { message: "unexpected" } }, 500);
+      }),
+    );
+  });
+  afterAll(async () => {
+    vi.unstubAllGlobals();
+    await db().update(schema.integrations).set({ enabled: false }).where(eq(schema.integrations.provider, "o365"));
+  });
+
+  it("admin connects it; technicians with the right see Outlook and get the portal blocks in it", async () => {
+    resetRateLimit("login:ip:unknown");
+    const admin = await signIn("admin@akab.local");
+    const [techRow] = await db().select().from(schema.users).where(eq(schema.users.email, "tech@akab.local"));
+    expect((await admin.put("/api/admin/integrations/o365", { enabled: true })).json.error).toBe("o365_incomplete");
+    expect((await admin.post("/api/admin/integrations/o365/test", { tenantId: "akab.onmicrosoft.com", clientId: "abc-123", secret: "bad" })).json).toMatchObject({ ok: false, error: "auth" });
+    const saved = await admin.put("/api/admin/integrations/o365", { tenantId: "akab.onmicrosoft.com", clientId: "abc-123", secret: "good-secret", enabled: true });
+    expect(saved.json).toEqual({ enabled: true, tenantId: "akab.onmicrosoft.com", clientId: "abc-123", hasSecret: true, lastTest: null });
+    expect(JSON.stringify(saved.json)).not.toContain("good-secret");
+    expect((await admin.post("/api/admin/integrations/o365/test", {})).json).toEqual({ ok: true });
+
+    // a technician without the right: nothing synced
+    resetRateLimit("login:ip:unknown");
+    const tech = await signIn("tech@akab.local");
+    const from = "2026-10-12T04:00:00.000Z";
+    const to = "2026-10-19T04:00:00.000Z";
+    const outlook = () => tech.get(`/api/planning/calendar/outlook?from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}`);
+    expect((await outlook()).json).toEqual({ synced: false, events: [] });
+
+    await admin.put(`/api/admin/users/${techRow.id}/permissions`, { overrides: [{ key: "tickets.o365", effect: "allow" }] });
+    const r = (await outlook()).json;
+    expect(r.synced).toBe(true);
+    // its own events are not shown twice; Québec time is kept
+    expect(r.events).toEqual([expect.objectContaining({ id: "ev1", title: "Rencontre fournisseur", startsAt: "2026-10-14T13:00:00.000Z", allDay: false })]);
+
+    // a reserved block goes to Outlook, moves with it, and leaves with it
+    graphSent.length = 0;
+    const start = new Date("2026-10-15T14:00:00.000Z");
+    const b = await admin.post("/api/planning/calendar", { technicianId: techRow.id, kind: "slot", title: "Formation Veeam", startsAt: start.toISOString(), endsAt: new Date(start.getTime() + 3_600_000).toISOString(), reminderMinutes: 30 });
+    expect(b.json.warnings).toEqual([]);
+    const created = graphSent.find((s) => s.method === "POST" && s.url.endsWith("/events"))!;
+    expect(created.url).toContain("users/tech%40akab.local/events");
+    expect(created.body).toMatchObject({ subject: "Formation Veeam", categories: ["Portail AKAB"], start: { dateTime: "2026-10-15T10:00:00", timeZone: "America/Toronto" }, reminderMinutesBeforeStart: 30 });
+    const [row] = await db().select().from(schema.calendarBlocks).where(eq(schema.calendarBlocks.id, b.json.id));
+    expect(row.o365EventId).toMatch(/^new-/);
+    await admin.patch(`/api/planning/calendar/${b.json.id}`, { startsAt: new Date(start.getTime() + 3_600_000).toISOString(), endsAt: new Date(start.getTime() + 7_200_000).toISOString() });
+    expect(graphSent.some((s) => s.method === "PATCH" && s.url.includes(encodeURIComponent(row.o365EventId!)))).toBe(true);
+    await admin.del(`/api/planning/calendar/${b.json.id}`);
+    expect(graphSent.some((s) => s.method === "DELETE" && s.url.includes(encodeURIComponent(row.o365EventId!)))).toBe(true);
+
+    // a priority of the day: an all-day event, removed when done
+    graphSent.length = 0;
+    const tk = (await tech.get("/api/tickets?view=all")).json.items[9];
+    const pin = await admin.post("/api/planning/pins", { ticketId: tk.id, technicianId: techRow.id, horizon: "day", forDate: "2026-10-16", note: "Urgent" });
+    const allDay = graphSent.find((s) => s.method === "POST")!;
+    expect(allDay.body).toMatchObject({ isAllDay: true, start: { dateTime: "2026-10-16T00:00:00" }, end: { dateTime: "2026-10-17T00:00:00" } });
+    expect(allDay.body.subject).toContain(tk.number);
+    await tech.post(`/api/planning/pins/${pin.json.id}/done`, { done: true });
+    expect(graphSent.some((s) => s.method === "DELETE")).toBe(true);
+    await admin.put(`/api/admin/users/${techRow.id}/permissions`, { overrides: [] });
   });
 });

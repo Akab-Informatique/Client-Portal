@@ -563,6 +563,8 @@ export const ticketPins = pgTable(
     forDate: text("for_date").notNull(),
     /** Marked done by the technician */
     doneAt: timestamp("done_at", { withTimezone: true }),
+    /** All-day event in the technician's Microsoft 365 calendar (priority of the day) */
+    o365EventId: text("o365_event_id"),
     /** Order in the technician's list (1 = first) */
     rank: integer("rank").notNull().default(0),
     pinnedBy: uuid("pinned_by").references(() => users.id, { onDelete: "set null" }),
@@ -584,6 +586,17 @@ export const calendarBlocks = pgTable(
     ticketNumber: text("ticket_number"),
     title: text("title").notNull(),
     note: text("note").notNull().default(""),
+    /** work: on a ticket (remote / workshop); onsite: service call at the client; slot: reserved time */
+    kind: text("kind", { enum: ["work", "onsite", "slot"] }).notNull().default("work"),
+    /** Client, for on-site service calls */
+    companyName: text("company_name"),
+    /** Alert this many minutes before (0 = none) */
+    reminderMinutes: integer("reminder_minutes").notNull().default(15),
+    reminderSentAt: timestamp("reminder_sent_at", { withTimezone: true }),
+    /** The Autotask service call created for an on-site visit */
+    autotaskServiceCallId: bigint("autotask_service_call_id", { mode: "number" }),
+    /** The event created in the technician's Microsoft 365 calendar */
+    o365EventId: text("o365_event_id"),
     startsAt: timestamp("starts_at", { withTimezone: true }).notNull(),
     endsAt: timestamp("ends_at", { withTimezone: true }).notNull(),
     createdBy: uuid("created_by").references(() => users.id, { onDelete: "set null" }),

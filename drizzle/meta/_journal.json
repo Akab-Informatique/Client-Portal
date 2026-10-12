@@ -127,6 +127,13 @@
       "when": 1791839428734,
       "tag": "0017_planning",
       "breakpoints": true
+    },
+    {
+      "idx": 18,
+      "version": "7",
+      "when": 1791840713692,
+      "tag": "0018_calendar_kinds_o365",
+      "breakpoints": true
     }
   ]
 }

@@ -7,7 +7,10 @@ import { auth, requirePermission, requireStaff, type AppEnv, type AuthContext } 
 import { audit } from "../lib/audit.ts";
 import { notify } from "../lib/notify.ts";
 import { body, zUuid } from "../lib/validate.ts";
-import { ticketSource } from "../lib/ticketSource.ts";
+import { SourceError, ticketSource } from "../lib/ticketSource.ts";
+import { AutotaskError } from "../lib/autotask.ts";
+import { o365MailboxOf, syncBlock, syncPin, unsyncBlock, unsyncPin } from "../lib/planning.ts";
+import { O365Error, outlookEvents } from "../lib/o365.ts";
 
 /**
  * Planning: an admin (tickets.plan) gives a technician priorities — tickets
@@ -15,7 +18,10 @@ import { ticketSource } from "../lib/ticketSource.ts";
  * with a direction — and reserves time on the technician's weekly calendar.
  * Only priorities go on a calendar. Unfinished priorities of earlier days /
  * weeks stay shown (carried over) until marked done. Technicians see their
- * own; tickets.plan sees everyone's.
+ * own; tickets.plan sees and plans everyone's; tickets.planSelf plans one's
+ * own. Blocks are work on a ticket, an on-site service call (also created in
+ * Autotask) or reserved time; each can alert its technician beforehand.
+ * Technicians with tickets.o365 have it all in their Outlook calendar.
  */
 const zDay = z.string().regex(/^\d{4}-\d{2}-\d{2}$/);
 /** Today in Québec, YYYY-MM-DD. */
@@ -28,6 +34,17 @@ function monday(day: string): string {
 }
 const dayOf = (d: Date) => new Intl.DateTimeFormat("en-CA", { timeZone: "America/Toronto" }).format(d);
 const canPlan = (a: AuthContext) => a.permissions.includes("tickets.plan");
+/** May change this technician's priorities / calendar: planners, or oneself with tickets.planSelf. */
+const canEditFor = (a: AuthContext, technicianId: string) => canPlan(a) || (technicianId === a.user.id && a.permissions.includes("tickets.planSelf"));
+function mustEdit(a: AuthContext, technicianId: string) {
+  if (!canEditFor(a, technicianId)) throw new HTTPException(403, { message: "forbidden" });
+}
+/** A side sync that failed (Autotask, Outlook): the change is kept, the reason is told. */
+function warningOf(e: unknown, prefix: string): string {
+  const code = e instanceof AutotaskError ? e.code : e instanceof SourceError ? e.code : e instanceof O365Error ? e.code : "api";
+  console.warn(`[planning] ${prefix}:`, e instanceof Error ? e.message : e);
+  return `${prefix}_${code}`;
+}
 
 /** Whose pins / calendar: me by default; someone else needs tickets.plan. */
 function whose(c: Context<AppEnv>, a: AuthContext): string {
@@ -73,6 +90,7 @@ async function pin(a: AuthContext, p: { ticketId: number; technicianId: string; 
       .set({ ...(p.note !== undefined ? { note: p.note } : {}), ...(p.horizon ? { horizon, forDate } : {}), doneAt: null, updatedAt: new Date() })
       .where(eq(schema.ticketPins.id, existing.id))
       .returning();
+    await syncPin(row);
     return row;
   }
   const [{ last }] = await db()
@@ -91,6 +109,7 @@ async function pin(a: AuthContext, p: { ticketId: number; technicianId: string; 
     });
   }
   await audit(a.user.id, "planning.pinned", String(p.ticketId), { technicianId: tech.id });
+  await syncPin(row);
   return row;
 }
 
@@ -100,16 +119,18 @@ export const planningRoutes = new Hono<AppEnv>()
   .use(requireStaff)
   .use(requirePermission("tickets.view"))
 
-  /** Technicians to plan for. */
-  .get("/technicians", requirePermission("tickets.plan"), async (c) =>
-    c.json(
+  /** Technicians one may plan for (everyone for planners, oneself otherwise). */
+  .get("/technicians", async (c) => {
+    const a = auth(c);
+    if (!canPlan(a)) return c.json([{ id: a.user.id, name: a.user.name }]);
+    return c.json(
       await db()
         .select({ id: schema.users.id, name: schema.users.name })
         .from(schema.users)
         .where(and(eq(schema.users.kind, "staff"), eq(schema.users.active, true)))
         .orderBy(asc(schema.users.name)),
-    ),
-  )
+    );
+  })
 
   // ── Pins ──
   /**
@@ -182,7 +203,7 @@ export const planningRoutes = new Hono<AppEnv>()
     );
   })
 
-  .post("/pins", requirePermission("tickets.plan"), async (c) => {
+  .post("/pins", async (c) => {
     const a = auth(c);
     const p = await body(
       c,
@@ -194,6 +215,7 @@ export const planningRoutes = new Hono<AppEnv>()
         forDate: zDay.optional(),
       }),
     );
+    mustEdit(a, p.technicianId);
     return c.json(await pin(a, p), 201);
   })
 
@@ -206,16 +228,18 @@ export const planningRoutes = new Hono<AppEnv>()
     if (!row) throw new HTTPException(404, { message: "not_found" });
     if (row.technicianId !== a.user.id && !canPlan(a)) throw new HTTPException(403, { message: "forbidden" });
     const [next] = await db().update(schema.ticketPins).set({ doneAt: p.done ? new Date() : null, updatedAt: new Date() }).where(eq(schema.ticketPins.id, id)).returning();
+    await syncPin(next);
     await audit(a.user.id, p.done ? "planning.priority_done" : "planning.priority_reopened", String(row.ticketId), { technicianId: row.technicianId });
     return c.json(next);
   })
 
-  .patch("/pins/:id", requirePermission("tickets.plan"), async (c) => {
+  .patch("/pins/:id", async (c) => {
     const a = auth(c);
     const id = zUuid.parse(c.req.param("id"));
     const p = await body(c, z.object({ note: z.string().trim().max(2000).optional(), horizon: z.enum(["day", "week"]).optional(), forDate: zDay.optional() }));
     const [cur] = await db().select().from(schema.ticketPins).where(eq(schema.ticketPins.id, id));
     if (!cur) throw new HTTPException(404, { message: "not_found" });
+    mustEdit(a, cur.technicianId);
     const horizon = p.horizon ?? cur.horizon;
     const day = p.forDate ?? cur.forDate;
     const [row] = await db()
@@ -225,15 +249,18 @@ export const planningRoutes = new Hono<AppEnv>()
       .returning();
     if (!row) throw new HTTPException(404, { message: "not_found" });
     await audit(a.user.id, "planning.pin_updated", String(row.ticketId), { technicianId: row.technicianId });
+    await syncPin(row);
     return c.json(row);
   })
 
   /** Move a pin up or down in the technician's order. */
-  .post("/pins/:id/move", requirePermission("tickets.plan"), async (c) => {
+  .post("/pins/:id/move", async (c) => {
+    const a = auth(c);
     const id = zUuid.parse(c.req.param("id"));
     const p = await body(c, z.object({ dir: z.enum(["up", "down"]) }));
     const [row] = await db().select().from(schema.ticketPins).where(eq(schema.ticketPins.id, id));
     if (!row) throw new HTTPException(404, { message: "not_found" });
+    mustEdit(a, row.technicianId);
     const list = await db()
       .select()
       .from(schema.ticketPins)
@@ -250,11 +277,17 @@ export const planningRoutes = new Hono<AppEnv>()
     return c.json({ ok: true });
   })
 
-  .delete("/pins/:id", requirePermission("tickets.plan"), async (c) => {
+  .delete("/pins/:id", async (c) => {
     const a = auth(c);
     const id = zUuid.parse(c.req.param("id"));
+    const [cur] = await db().select().from(schema.ticketPins).where(eq(schema.ticketPins.id, id));
+    if (!cur) return c.json({ ok: true });
+    mustEdit(a, cur.technicianId);
     const [row] = await db().delete(schema.ticketPins).where(eq(schema.ticketPins.id, id)).returning();
-    if (row) await audit(a.user.id, "planning.unpinned", String(row.ticketId), { technicianId: row.technicianId });
+    if (row) {
+      await unsyncPin(row);
+      await audit(a.user.id, "planning.unpinned", String(row.ticketId), { technicianId: row.technicianId });
+    }
     return c.json({ ok: true });
   })
 
@@ -275,62 +308,157 @@ export const planningRoutes = new Hono<AppEnv>()
     );
   })
 
-  /** Reserve time. For a ticket, it is pinned to the technician if it was not. */
-  .post("/calendar", requirePermission("tickets.plan"), async (c) => {
+  /** The technician's own Outlook events (read only), when they sync with Microsoft 365. */
+  .get("/calendar/outlook", async (c) => {
+    const a = auth(c);
+    const techId = whose(c, a);
+    const from = new Date(zIso.parse(c.req.query("from")));
+    const to = new Date(zIso.parse(c.req.query("to")));
+    if (!(to > from) || to.getTime() - from.getTime() > 62 * 86_400_000) throw new HTTPException(400, { message: "Validation failed" });
+    const email = await o365MailboxOf(techId);
+    if (!email) return c.json({ synced: false, events: [] });
+    try {
+      return c.json({ synced: true, events: await outlookEvents(email, from, to) });
+    } catch (e) {
+      return c.json({ synced: true, events: [], error: warningOf(e, "o365") });
+    }
+  })
+
+  /**
+   * Reserve time: work on a ticket, an on-site service call (also created in
+   * Autotask) or a reserved slot. A ticket becomes a priority of that week.
+   */
+  .post("/calendar", async (c) => {
     const a = auth(c);
     const p = await body(
       c,
       z.object({
         technicianId: zUuid,
+        kind: z.enum(["work", "onsite", "slot"]).default("work"),
         ticketId: z.number().int().positive().nullable().default(null),
         title: z.string().trim().max(200).default(""),
         note: z.string().trim().max(2000).default(""),
+        reminderMinutes: z.number().int().min(0).max(1440).default(15),
         startsAt: zIso,
         endsAt: zIso,
       }),
     );
+    mustEdit(a, p.technicianId);
+    if (p.kind !== "slot" && !p.ticketId) throw new HTTPException(400, { message: "Validation failed" });
     const startsAt = new Date(p.startsAt);
     const endsAt = new Date(p.endsAt);
     if (!(endsAt > startsAt) || endsAt.getTime() - startsAt.getTime() > 14 * 3_600_000) throw new HTTPException(400, { message: "invalid_time" });
     const tech = await technician(p.technicianId);
     let number: string | null = null;
     let title = p.title;
-    if (p.ticketId) {
-      const pinned = await pin(a, { ticketId: p.ticketId, technicianId: tech.id, forDate: dayOf(startsAt) });
+    let companyName: string | null = null;
+    const ticketId = p.kind === "slot" ? null : p.ticketId;
+    if (ticketId) {
+      const pinned = await pin(a, { ticketId, technicianId: tech.id, forDate: dayOf(startsAt) });
       number = pinned.ticketNumber;
       title ||= pinned.ticketTitle;
+      companyName = (await ticketInfo(ticketId)).company.name;
     }
     if (!title) throw new HTTPException(400, { message: "Validation failed" });
+    const warnings: string[] = [];
+    // On site: the service call in Autotask (the block stays even if Autotask refuses)
+    let serviceCallId: number | null = null;
+    if (p.kind === "onsite" && ticketId) {
+      try {
+        const src = await ticketSource();
+        serviceCallId = await src.createServiceCall({ ticketId, technicianId: tech.id, startsAt, endsAt, description: [title, p.note].filter(Boolean).join("\n") }, a);
+      } catch (e) {
+        warnings.push(warningOf(e, "autotask"));
+      }
+    }
     const [row] = await db()
       .insert(schema.calendarBlocks)
-      .values({ technicianId: tech.id, ticketId: p.ticketId, ticketNumber: number, title, note: p.note, startsAt, endsAt, createdBy: a.user.id })
+      .values({
+        technicianId: tech.id,
+        kind: p.kind,
+        ticketId,
+        ticketNumber: number,
+        title,
+        note: p.note,
+        companyName,
+        reminderMinutes: p.reminderMinutes,
+        autotaskServiceCallId: serviceCallId,
+        startsAt,
+        endsAt,
+        createdBy: a.user.id,
+      })
       .returning();
-    await audit(a.user.id, "planning.block_created", row.id, { technicianId: tech.id, ticketId: p.ticketId });
-    return c.json(row, 201);
+    const o365 = await syncBlock(row);
+    if (o365) warnings.push(o365);
+    await audit(a.user.id, "planning.block_created", row.id, { technicianId: tech.id, ticketId, kind: p.kind, serviceCallId });
+    return c.json({ ...row, warnings }, 201);
   })
 
-  .patch("/calendar/:id", requirePermission("tickets.plan"), async (c) => {
+  .patch("/calendar/:id", async (c) => {
     const a = auth(c);
     const id = zUuid.parse(c.req.param("id"));
-    const p = await body(c, z.object({ startsAt: zIso.optional(), endsAt: zIso.optional(), note: z.string().trim().max(2000).optional(), title: z.string().trim().min(1).max(200).optional() }));
+    const p = await body(
+      c,
+      z.object({
+        startsAt: zIso.optional(),
+        endsAt: zIso.optional(),
+        note: z.string().trim().max(2000).optional(),
+        title: z.string().trim().min(1).max(200).optional(),
+        reminderMinutes: z.number().int().min(0).max(1440).optional(),
+      }),
+    );
     const [cur] = await db().select().from(schema.calendarBlocks).where(eq(schema.calendarBlocks.id, id));
     if (!cur) throw new HTTPException(404, { message: "not_found" });
+    mustEdit(a, cur.technicianId);
     const startsAt = p.startsAt ? new Date(p.startsAt) : cur.startsAt;
     const endsAt = p.endsAt ? new Date(p.endsAt) : cur.endsAt;
     if (!(endsAt > startsAt) || endsAt.getTime() - startsAt.getTime() > 14 * 3_600_000) throw new HTTPException(400, { message: "invalid_time" });
     const [row] = await db()
       .update(schema.calendarBlocks)
-      .set({ startsAt, endsAt, ...(p.note !== undefined ? { note: p.note } : {}), ...(p.title ? { title: p.title } : {}), updatedAt: new Date() })
+      .set({
+        startsAt,
+        endsAt,
+        ...(p.note !== undefined ? { note: p.note } : {}),
+        ...(p.title ? { title: p.title } : {}),
+        ...(p.reminderMinutes !== undefined ? { reminderMinutes: p.reminderMinutes } : {}),
+        // new time or delay: the alert is sent again
+        ...(startsAt.getTime() !== cur.startsAt.getTime() || p.reminderMinutes !== undefined ? { reminderSentAt: null } : {}),
+        updatedAt: new Date(),
+      })
       .where(eq(schema.calendarBlocks.id, id))
       .returning();
+    const warnings: string[] = [];
+    const moved = startsAt.getTime() !== cur.startsAt.getTime() || endsAt.getTime() !== cur.endsAt.getTime();
+    if (moved && row.autotaskServiceCallId) {
+      try {
+        await (await ticketSource()).updateServiceCall(row.autotaskServiceCallId, { startsAt, endsAt }, a);
+      } catch (e) {
+        warnings.push(warningOf(e, "autotask"));
+      }
+    }
+    const o365 = await syncBlock(row);
+    if (o365) warnings.push(o365);
     await audit(a.user.id, "planning.block_updated", id, {});
-    return c.json(row);
+    return c.json({ ...row, warnings });
   })
 
-  .delete("/calendar/:id", requirePermission("tickets.plan"), async (c) => {
+  .delete("/calendar/:id", async (c) => {
     const a = auth(c);
     const id = zUuid.parse(c.req.param("id"));
+    const [cur] = await db().select().from(schema.calendarBlocks).where(eq(schema.calendarBlocks.id, id));
+    if (!cur) return c.json({ ok: true, warnings: [] });
+    mustEdit(a, cur.technicianId);
+    const warnings: string[] = [];
+    if (cur.autotaskServiceCallId) {
+      try {
+        await (await ticketSource()).deleteServiceCall(cur.autotaskServiceCallId, a);
+      } catch (e) {
+        warnings.push(warningOf(e, "autotask"));
+      }
+    }
+    const o365 = await unsyncBlock(cur);
+    if (o365) warnings.push(o365);
     await db().delete(schema.calendarBlocks).where(eq(schema.calendarBlocks.id, id));
     await audit(a.user.id, "planning.block_deleted", id, {});
-    return c.json({ ok: true });
+    return c.json({ ok: true, warnings });
   });

@@ -3,7 +3,7 @@ import { useNavigate } from "react-router-dom";
 import { useTranslation } from "react-i18next";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { AnimatePresence, motion } from "motion/react";
-import { Bell, BellOff, CheckCheck, Megaphone, ShieldAlert, Star, Timer, type LucideIcon } from "lucide-react";
+import { Bell, BellOff, CalendarClock, CheckCheck, MapPin, Megaphone, ShieldAlert, Star, Timer, type LucideIcon } from "lucide-react";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Button } from "@/components/ui/button";
 import { api } from "@/lib/api";
@@ -30,6 +30,13 @@ function useView(n: Notification): { icon: LucideIcon; title: string; body: stri
       return { icon: Megaphone, title: t("notifications.messageNew"), body: n.data.title ?? "", tone: "gold" };
     case "user.locked":
       return { icon: ShieldAlert, title: t("notifications.userLocked"), body: `${n.data.name ?? ""} · ${n.data.email ?? ""}`, tone: "alert" };
+    case "calendar.reminder":
+      return {
+        icon: n.data.kind === "onsite" ? MapPin : CalendarClock,
+        title: t(n.data.kind === "onsite" ? "notifications.reminderOnsite" : "notifications.reminder", { minutes: n.data.minutes ?? "" }),
+        body: [n.data.number, n.data.title, n.data.company].filter(Boolean).join(" · "),
+        tone: "gold",
+      };
     case "ticket.pinned":
       return {
         icon: Star,

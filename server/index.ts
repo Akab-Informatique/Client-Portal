@@ -8,6 +8,7 @@ import { purgeOldNotifications } from "./lib/notify.ts";
 import { smtpSettings } from "./lib/mail.ts";
 import { keepTicketsWarm } from "./lib/ticketSource.ts";
 import { sweepTimers } from "./lib/timers.ts";
+import { sendReminders } from "./lib/planning.ts";
 
 await initDb();
 await seed();
@@ -25,6 +26,9 @@ serve({ fetch: app.fetch, port: config.port, hostname: host }, (info) => {
   console.log(`  MFA      : ${config.requireMfa ? "required" : "optional"}`);
   if (config.production && !config.publicUrl) console.warn("  WARN: PUBLIC_URL is not set — email links use the request address");
 });
+
+// Alerts before calendar events
+setInterval(() => void sendReminders().catch((e) => console.warn("[planning] reminders:", e instanceof Error ? e.message : e)), 60_000).unref();
 
 // Timers whose page was closed become entries to validate
 setInterval(() => void sweepTimers().catch(() => undefined), 30_000).unref();

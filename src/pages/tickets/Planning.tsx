@@ -11,6 +11,9 @@ import {
   ChevronLeft,
   ChevronRight,
   Loader2,
+  MapPin,
+  BellRing,
+  CalendarClock,
   PanelRightClose,
   PanelRightOpen,
   Pencil,
@@ -60,7 +63,29 @@ export type Priority = {
   dueAt: string | null;
   status: { label: string | null; kind: StatusKind } | null;
 };
-type Block = { id: string; technicianId: string; ticketId: number | null; ticketNumber: string | null; title: string; note: string; startsAt: string; endsAt: string };
+type BlockKind = "work" | "onsite" | "slot";
+type Block = {
+  id: string;
+  technicianId: string;
+  kind: BlockKind;
+  ticketId: number | null;
+  ticketNumber: string | null;
+  title: string;
+  note: string;
+  companyName: string | null;
+  reminderMinutes: number;
+  autotaskServiceCallId: number | null;
+  startsAt: string;
+  endsAt: string;
+};
+type OutlookEvent = { id: string; title: string; startsAt: string; endsAt: string; allDay: boolean; location: string | null };
+/** How each kind of block looks: work on a ticket, on-site service call, reserved time. */
+const KIND_STYLE: Record<BlockKind, string> = {
+  work: "border-[color:var(--gold)]/50 bg-[color:var(--gold)]/20 text-foreground",
+  onsite: "border-orange-400/70 bg-orange-500/25 text-orange-50 shadow-[0_0_12px_-4px_rgba(249,115,22,0.7)]",
+  slot: "border-sky-500/40 bg-sky-500/15 text-sky-100",
+};
+const REMINDERS = [0, 5, 10, 15, 30, 60];
 type Person = { id: string; name: string };
 
 const OPEN_KEY = "akab.planning.open";
@@ -123,7 +148,6 @@ export function PlanningPanel() {
   const { t } = useTranslation();
   const me = useMe();
   const can = useCan();
-  const planner = can("tickets.plan");
   const wide = useWide();
   // open by default only where it fits beside the list
   const [open, setOpen] = useState(() => readBool(OPEN_KEY, window.matchMedia("(min-width: 1536px)").matches));
@@ -131,9 +155,10 @@ export function PlanningPanel() {
   const { data: techs = [{ id: me.id, name: me.name }] } = useQuery({
     queryKey: ["planning", "technicians"],
     queryFn: () => api.get<Person[]>("/planning/technicians"),
-    enabled: planner,
     staleTime: 5 * 60_000,
   });
+  // May plan for this technician: planners, or oneself with tickets.planSelf
+  const planner = can("tickets.plan") || (techId === me.id && can("tickets.planSelf"));
   const { data: pins } = usePriorities(techId);
   const toDo = (pins ?? []).filter((p) => !p.doneAt).length;
   const toggle = (v: boolean) => {
@@ -168,7 +193,8 @@ export function PlanningPanel() {
       <div className="flex items-center gap-2 border-b px-3 py-2.5">
         <CalendarRange className="size-4 text-primary" />
         <p className="flex-1 text-sm font-semibold">{t("planning.title")}</p>
-        {planner && techs.length > 1 && (
+        <BrowserAlerts />
+        {techs.length > 1 && (
           <Select value={techId} onValueChange={setTechId}>
             <SelectTrigger className="h-8 w-44 text-xs">
               <SelectValue />
@@ -488,6 +514,13 @@ function WeekCalendar({ technicianId, technicianName, planner }: { technicianId:
     queryFn: () => api.get<Block[]>(`/planning/calendar?technicianId=${technicianId}&from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}`),
     placeholderData: keepPreviousData,
   });
+  const { data: outlook } = useQuery({
+    queryKey: ["planning", "outlook", technicianId, from],
+    queryFn: () => api.get<{ synced: boolean; events: OutlookEvent[]; error?: string }>(`/planning/calendar/outlook?technicianId=${technicianId}&from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}`),
+    placeholderData: keepPreviousData,
+    staleTime: 60_000,
+  });
+  const external = outlook?.events ?? [];
   const [now, setNow] = useState(() => new Date());
   useEffect(() => {
     const id = setInterval(() => setNow(new Date()), 60_000);
@@ -542,6 +575,14 @@ function WeekCalendar({ technicianId, technicianName, planner }: { technicianId:
                   {new Intl.DateTimeFormat(loc(), { weekday: "short" }).format(d).replace(".", "")} {d.getDate()}
                 </span>
                 <span className={cn("block font-mono text-[9px]", h > 8 ? "text-destructive" : h > 0 ? "text-foreground/70" : "text-muted-foreground/50")}>{h ? `${h.toLocaleString(undefined, { maximumFractionDigits: 1 })} h` : "—"}</span>
+                {/* all-day Outlook events */}
+                {external
+                  .filter((e) => e.allDay && ymd(new Date(e.startsAt)) <= ymd(d) && ymd(new Date(new Date(e.endsAt).getTime() - 1)) >= ymd(d))
+                  .map((e) => (
+                    <span key={e.id} className="mt-0.5 block truncate rounded-sm border border-dashed border-slate-400/40 px-0.5 text-[9px] text-slate-300" title={e.title}>
+                      {e.title}
+                    </span>
+                  ))}
               </span>
             );
           })}
@@ -557,6 +598,7 @@ function WeekCalendar({ technicianId, technicianName, planner }: { technicianId:
           </div>
           {days.map((d) => {
             const dayBlocks = blocks.filter((b) => ymd(new Date(b.startsAt)) === ymd(d));
+            const dayEvents = external.filter((e) => !e.allDay && ymd(new Date(e.startsAt)) === ymd(d));
             const today = ymd(d) === ymd(now);
             return (
               <div
@@ -577,6 +619,22 @@ function WeekCalendar({ technicianId, technicianName, planner }: { technicianId:
                 {today && now.getHours() >= DAY_START && now.getHours() < DAY_END && (
                   <span className="pointer-events-none absolute inset-x-0 z-10 h-px bg-destructive" style={{ top: top(now) }} />
                 )}
+                {/* Outlook events: read only, under the portal blocks */}
+                {dayEvents.map((e) => {
+                  const s = new Date(e.startsAt);
+                  const en = new Date(e.endsAt);
+                  return (
+                    <span
+                      key={e.id}
+                      onClick={(ev) => ev.stopPropagation()}
+                      title={`${hm(s)}–${hm(en)} · ${e.title}${e.location ? ` · ${e.location}` : ""} (Outlook)`}
+                      className="absolute inset-x-1 z-[4] overflow-hidden rounded-sm border border-dashed border-slate-400/50 bg-slate-500/15 px-1 text-[9px] leading-tight text-slate-300"
+                      style={{ top: top(s), height: Math.max(12, top(en) - top(s) - 1) }}
+                    >
+                      {e.title}
+                    </span>
+                  );
+                })}
                 {dayBlocks.map((b) => {
                   const s = new Date(b.startsAt);
                   const e = new Date(b.endsAt);
@@ -592,18 +650,27 @@ function WeekCalendar({ technicianId, technicianName, planner }: { technicianId:
                           }}
                           className={cn(
                             "absolute inset-x-0.5 z-[5] overflow-hidden rounded-md border px-1 py-0.5 text-left text-[10px] leading-tight shadow-sm transition hover:brightness-110",
-                            b.ticketId ? "border-[color:var(--gold)]/50 bg-[color:var(--gold)]/20 text-foreground" : "border-sky-500/40 bg-sky-500/15 text-sky-100",
+                            KIND_STYLE[b.kind],
                           )}
                           style={{ top: top(s), height: Math.max(14, top(e) - top(s) - 1) }}
                         >
-                          {b.ticketNumber && <span className="block font-mono text-[9px] text-primary">{b.ticketNumber.slice(-4)}</span>}
-                          <span className="line-clamp-2">{b.title}</span>
+                          <span className="flex items-center gap-0.5 font-mono text-[9px]">
+                            {b.kind === "onsite" && <MapPin className="size-2.5 shrink-0 text-orange-300" />}
+                            {b.ticketNumber && <span className={b.kind === "onsite" ? "text-orange-200" : "text-primary"}>{b.ticketNumber.slice(-4)}</span>}
+                          </span>
+                          <span className="line-clamp-2">{b.kind === "onsite" && b.companyName ? b.companyName : b.title}</span>
                         </button>
                       </TooltipTrigger>
                       <TooltipContent side="left" className="max-w-64">
+                        <p className="text-[10px] uppercase tracking-wide opacity-70">{t(`planning.kind.${b.kind}`)}</p>
                         <p className="font-medium">
                           {hm(s)}–{hm(e)} · {b.title}
                         </p>
+                        {b.companyName && b.kind === "onsite" && (
+                          <p className="flex items-center gap-1">
+                            <MapPin className="size-3" /> {b.companyName}
+                          </p>
+                        )}
                         {b.ticketNumber && <p className="font-mono text-[10px] opacity-80">{b.ticketNumber}</p>}
                         {b.note && <p className="mt-1 opacity-80">{b.note}</p>}
                       </TooltipContent>
@@ -616,6 +683,24 @@ function WeekCalendar({ technicianId, technicianName, planner }: { technicianId:
           {isLoading && <div className="absolute inset-0 animate-pulse bg-background/30" />}
         </div>
       </div>
+      {/* legend */}
+      <p className="flex flex-wrap items-center gap-x-3 gap-y-1 text-[10px] text-muted-foreground">
+        <span className="flex items-center gap-1">
+          <span className={cn("size-2.5 rounded-sm border", KIND_STYLE.work)} /> {t("planning.kind.work")}
+        </span>
+        <span className="flex items-center gap-1">
+          <MapPin className="size-3 text-orange-300" /> {t("planning.kind.onsite")}
+        </span>
+        <span className="flex items-center gap-1">
+          <span className={cn("size-2.5 rounded-sm border", KIND_STYLE.slot)} /> {t("planning.kind.slot")}
+        </span>
+        {outlook?.synced && (
+          <span className="flex items-center gap-1">
+            <span className="size-2.5 rounded-sm border border-dashed border-slate-400/60" /> Outlook
+          </span>
+        )}
+      </p>
+      {outlook?.error && <p className="text-[10px] text-orange-300">{t("planning.outlookError")}</p>}
       {planner && <p className="text-[10px] text-muted-foreground">{t("planning.clickToReserve")}</p>}
       {slot && <BlockDialog technicianId={technicianId} technicianName={technicianName} block={slot.block} start={slot.start} onClose={() => setSlot(null)} onOpenTicket={(id) => ws.open(id)} />}
     </section>
@@ -642,7 +727,8 @@ function BlockDialog({
   const qc = useQueryClient();
   const confirm = useConfirm();
   const { data: pins = [] } = usePriorities(technicianId, ymd(start));
-  const [kind, setKind] = useState<"ticket" | "slot">(block ? (block.ticketId ? "ticket" : "slot") : "ticket");
+  const [kind, setKind] = useState<BlockKind>(block?.kind ?? "work");
+  const [reminder, setReminder] = useState(block?.reminderMinutes ?? 15);
   const [picked, setPicked] = useState<{ id: number; number: string; title: string } | null>(block?.ticketId ? { id: block.ticketId, number: block.ticketNumber ?? "", title: block.title } : null);
   const [title, setTitle] = useState(block && !block.ticketId ? block.title : "");
   const [date, setDate] = useState(ymd(start));
@@ -657,23 +743,33 @@ function BlockDialog({
   const save = useMutation({
     mutationFn: () =>
       block
-        ? api.patch(`/planning/calendar/${block.id}`, { startsAt: at(date, from), endsAt: at(date, until), note: note.trim(), ...(kind === "slot" && title.trim() ? { title: title.trim() } : {}) })
-        : api.post("/planning/calendar", {
+        ? api.patch<{ warnings: string[] }>(`/planning/calendar/${block.id}`, {
+            startsAt: at(date, from),
+            endsAt: at(date, until),
+            note: note.trim(),
+            reminderMinutes: reminder,
+            ...(kind === "slot" && title.trim() ? { title: title.trim() } : {}),
+          })
+        : api.post<{ warnings: string[] }>("/planning/calendar", {
             technicianId,
-            ticketId: kind === "ticket" ? picked?.id : null,
+            kind,
+            ticketId: kind === "slot" ? null : picked?.id,
             title: kind === "slot" ? title.trim() : "",
             note: note.trim(),
+            reminderMinutes: reminder,
             startsAt: at(date, from),
             endsAt: at(date, until),
           }),
-    onSuccess: () => {
+    onSuccess: (r) => {
       toast.success(t("planning.saved"));
+      // saved, but Autotask or Outlook did not follow
+      for (const w of r?.warnings ?? []) toast.warning(t(`planning.warnings.${w.split("_")[0]}`, { code: w }));
       done();
     },
     onError: (e) => toast.error(ticketErrorText(t, e)),
   });
   const remove = useMutation({ mutationFn: () => api.del(`/planning/calendar/${block!.id}`), onSuccess: done });
-  const valid = until > from && (kind === "ticket" ? Boolean(picked) : title.trim().length > 0);
+  const valid = until > from && (kind === "slot" ? title.trim().length > 0 : Boolean(picked));
   const open = pins.filter((p) => !p.doneAt);
   return (
     <Dialog open onOpenChange={(o) => !o && onClose()}>
@@ -692,15 +788,24 @@ function BlockDialog({
           }}
         >
           {!block && (
-            <div className="grid grid-cols-2 gap-1 rounded-xl border p-1 text-xs">
-              {(["ticket", "slot"] as const).map((k) => (
-                <button key={k} type="button" onClick={() => setKind(k)} className={cn("rounded-lg px-2 py-1.5 font-medium", kind === k ? "bg-grad-gold text-[#1a1204]" : "text-muted-foreground hover:text-foreground")}>
+            <div className="grid grid-cols-3 gap-1 rounded-xl border p-1 text-xs">
+              {(["work", "onsite", "slot"] as const).map((k) => (
+                <button
+                  key={k}
+                  type="button"
+                  onClick={() => setKind(k)}
+                  className={cn(
+                    "flex items-center justify-center gap-1 rounded-lg px-2 py-1.5 font-medium",
+                    kind === k ? (k === "onsite" ? "bg-orange-500 text-white" : "bg-grad-gold text-[#1a1204]") : "text-muted-foreground hover:text-foreground",
+                  )}
+                >
+                  {k === "onsite" && <MapPin className="size-3.5" />}
                   {t(`planning.kind.${k}`)}
                 </button>
               ))}
             </div>
           )}
-          {kind === "ticket" ? (
+          {kind !== "slot" ? (
             <div className="space-y-1.5">
               <Label>{t("planning.ticket")}</Label>
               {picked ? (
@@ -758,6 +863,24 @@ function BlockDialog({
               <Input id="bl-to" type="time" step={900} value={until} onChange={(e) => setUntil(e.target.value)} />
             </div>
           </div>
+          {kind === "onsite" && <p className="-mt-2 flex items-start gap-1.5 rounded-lg bg-orange-500/10 px-3 py-2 text-[11px] text-orange-200"><MapPin className="mt-0.5 size-3 shrink-0" /> {block?.autotaskServiceCallId ? t("planning.serviceCallLinked", { id: block.autotaskServiceCallId }) : t("planning.serviceCallHint")}</p>}
+          <div className="space-y-1.5">
+            <Label className="flex items-center gap-1.5">
+              <BellRing className="size-3.5 text-primary" /> {t("planning.reminder")}
+            </Label>
+            <Select value={String(reminder)} onValueChange={(v) => setReminder(Number(v))}>
+              <SelectTrigger className="w-full">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent position="popper">
+                {REMINDERS.map((m) => (
+                  <SelectItem key={m} value={String(m)}>
+                    {m ? t("planning.reminderBefore", { count: m }) : t("planning.noReminder")}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
           <div className="space-y-1.5">
             <Label htmlFor="bl-note">{t("planning.blockNote")}</Label>
             <Textarea id="bl-note" rows={2} maxLength={2000} value={note} onChange={(e) => setNote(e.target.value)} />
@@ -813,4 +936,81 @@ export function TicketPriorities({ ticketId }: { ticketId: number }) {
       ))}
     </div>
   );
+}
+
+/** Allow browser notifications (alerts even when the tab is in the background). */
+function BrowserAlerts() {
+  const { t } = useTranslation();
+  const [state, setState] = useState(() => ("Notification" in window ? Notification.permission : "denied"));
+  if (state !== "default") return null;
+  return (
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <Button variant="ghost" size="icon" className="size-8 text-primary" onClick={() => void Notification.requestPermission().then(setState)} aria-label={t("planning.allowAlerts")}>
+          <BellRing className="size-4" />
+        </Button>
+      </TooltipTrigger>
+      <TooltipContent>{t("planning.allowAlerts")}</TooltipContent>
+    </Tooltip>
+  );
+}
+
+type Note = { id: string; type: string; data: Record<string, string>; link: string | null; readAt: string | null; createdAt: string };
+const SEEN_KEY = "akab.reminders.seen";
+
+/**
+ * Alerts before an event: when a reminder arrives (bell feed, every 30 s), a
+ * pop-up stays on screen with "Open", and the browser shows a notification
+ * if allowed. Each alert pops once.
+ */
+export function ReminderWatcher() {
+  const { t } = useTranslation();
+  const ws = useTicketWorkspace();
+  const { data } = useQuery({
+    queryKey: ["notifications"],
+    queryFn: () => api.get<{ items: Note[]; unread: number }>("/notifications"),
+    refetchInterval: 30_000,
+    refetchIntervalInBackground: true,
+  });
+  useEffect(() => {
+    const items = (data?.items ?? []).filter((n) => n.type === "calendar.reminder" && !n.readAt && Date.now() - new Date(n.createdAt).getTime() < 2 * 3_600_000);
+    if (!items.length) return;
+    let seen: string[] = [];
+    try {
+      seen = JSON.parse(sessionStorage.getItem(SEEN_KEY) ?? "[]") as string[];
+    } catch {
+      seen = [];
+    }
+    const fresh = items.filter((n) => !seen.includes(n.id));
+    if (!fresh.length) return;
+    for (const n of fresh) {
+      const when = new Date(n.data.startsAt);
+      const title = t(n.data.kind === "onsite" ? "planning.alert.onsite" : "planning.alert.event", { minutes: n.data.minutes, time: hm(when) });
+      const body = [n.data.number, n.data.title, n.data.company].filter(Boolean).join(" · ");
+      const ticketId = Number(n.link?.match(/ticket=(\d+)/)?.[1]);
+      toast(title, {
+        description: body,
+        icon: n.data.kind === "onsite" ? <MapPin className="size-4 text-orange-400" /> : <CalendarClock className="size-4 text-primary" />,
+        duration: 5 * 60_000,
+        action: ticketId ? { label: t("planning.openTicket"), onClick: () => ws.open(ticketId) } : undefined,
+      });
+      if ("Notification" in window && Notification.permission === "granted") {
+        try {
+          const note = new Notification(title, { body, tag: n.id, icon: "/akab-icon.png" });
+          note.onclick = () => {
+            window.focus();
+            if (ticketId) ws.open(ticketId);
+          };
+        } catch {
+          /* not supported here */
+        }
+      }
+    }
+    try {
+      sessionStorage.setItem(SEEN_KEY, JSON.stringify([...seen, ...fresh.map((n) => n.id)].slice(-100)));
+    } catch {
+      /* ignore */
+    }
+  }, [data, t, ws]);
+  return null;
 }

@@ -162,6 +162,10 @@ export interface TicketSource {
   addCharge(ticketId: number, p: NewCharge, a: AuthContext): Promise<void>;
   /** Catalogue products matching the words (name, SKU, manufacturer part) */
   products(q: string): Promise<Product[]>;
+  /** On-site visit: an Autotask service call for the ticket and the technician (null for sample data) */
+  createServiceCall(p: { ticketId: number; technicianId: string; startsAt: Date; endsAt: Date; description: string }, a: AuthContext): Promise<number | null>;
+  updateServiceCall(id: number, p: { startsAt: Date; endsAt: Date }, a: AuthContext): Promise<void>;
+  deleteServiceCall(id: number, a: AuthContext): Promise<void>;
   /** Work types for time entries (Autotask billing codes); empty when not used */
   workTypes(): Promise<{ value: string; label: string }[]>;
   addTimeEntry(ticketId: number, p: NewTimeEntry, a: AuthContext): Promise<void>;
@@ -364,6 +368,11 @@ const demoSource: TicketSource = {
   async workTypes() {
     return [];
   },
+  async createServiceCall() {
+    return null;
+  },
+  async updateServiceCall() {},
+  async deleteServiceCall() {},
   async addTimeEntry(ticketId, p, a) {
     await this.list();
     if (!addDemoTimeEntry(ticketId, { author: a.user.name, hours: p.hours, text: p.summary, internalText: p.internal || undefined, at: p.startedAt.toISOString() })) {
@@ -1259,6 +1268,46 @@ const autotaskSource: TicketSource = {
       { impersonate: actor, asApiUser: signText(a, "description") },
     );
     forget(`charges:${ticketId}`);
+  },
+
+  async createServiceCall(p, a) {
+    const at = await autotask();
+    const actor = await actorResource(a);
+    const t = await this.get(p.ticketId);
+    if (!t) throw new SourceError("not_found");
+    const status = picklist(await fieldsOf(at, "ServiceCalls").catch(() => [] as FieldInfo[]), "status")[0];
+    const sc = await at.call<{ itemId: number }>(
+      "POST",
+      "ServiceCalls",
+      {
+        companyID: t.company.id,
+        description: p.description.slice(0, 2000),
+        startDateTime: p.startsAt.toISOString(),
+        endDateTime: p.endsAt.toISOString(),
+        ...(status ? { status: Number(status.value) } : {}),
+      },
+      { impersonate: actor },
+    );
+    // the ticket on the call, and the technician on that ticket
+    const sct = await at.call<{ itemId: number }>("POST", `ServiceCalls/${sc.itemId}/Tickets`, { serviceCallID: sc.itemId, ticketID: p.ticketId }, { impersonate: actor });
+    const rid = await resourceIdOf(p.technicianId);
+    if (rid) {
+      await at.call(
+        "POST",
+        `ServiceCallTickets/${sct.itemId}/Resources`,
+        { serviceCallTicketID: sct.itemId, resourceID: rid, roleID: await roleOf(at, rid) },
+        { impersonate: actor },
+      );
+    }
+    return sc.itemId;
+  },
+  async updateServiceCall(id, p, a) {
+    const at = await autotask();
+    await at.call("PATCH", "ServiceCalls", { id, startDateTime: p.startsAt.toISOString(), endDateTime: p.endsAt.toISOString() }, { impersonate: await actorResource(a) });
+  },
+  async deleteServiceCall(id, a) {
+    const at = await autotask();
+    await at.call("DELETE", `ServiceCalls/${id}`, undefined, { impersonate: await actorResource(a) });
   },
 
   async workTypes() {

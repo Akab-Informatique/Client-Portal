@@ -5,6 +5,7 @@ import { Maximize2, Ticket, X } from "lucide-react";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { TicketOverlay } from "./TicketPanel";
 import { DockTimer, TimersProvider, useTicketTimerAuto, useTimers, type Timer } from "./timers";
+import { ReminderWatcher } from "./Planning";
 import { dueGlow, priorityGlow, usePresence, type PriorityKind as Priority, type StatusKind, type TicketDetail } from "./shared";
 
 /**
@@ -69,6 +70,7 @@ export function TicketWorkspaceProvider({ enabled, children }: { enabled: boolea
       {children}
       {enabled && (
         <TimersProvider>
+          <ReminderWatcher />
           <TicketOverlay id={openId} onClose={close} onMinimize={minimize} />
           <Dock docked={docked} hidden={openId !== null} onRestore={open} onDismiss={dismiss} />
         </TimersProvider>

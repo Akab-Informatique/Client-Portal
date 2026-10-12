@@ -60,6 +60,22 @@ export const MODULES = [
         },
       },
       {
+        key: "tickets.planSelf",
+        label: { fr: "Planifier ses propres priorités et son calendrier", en: "Plan one's own priorities and calendar" },
+        description: {
+          fr: "Se donner des priorités du jour / de la semaine et réserver son propre temps",
+          en: "Give oneself priorities of the day / week and reserve one's own time",
+        },
+      },
+      {
+        key: "tickets.o365",
+        label: { fr: "Synchroniser son calendrier Microsoft 365", en: "Sync one's Microsoft 365 calendar" },
+        description: {
+          fr: "Voir ses événements Outlook dans le calendrier du portail et y envoyer le temps réservé et ses priorités",
+          en: "See one's Outlook events in the portal calendar and send reserved time and priorities to it",
+        },
+      },
+      {
         key: "tickets.ai",
         label: { fr: "Utiliser l'assistant IA", en: "Use the AI assistant" },
         description: {

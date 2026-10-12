@@ -3,7 +3,7 @@ import { useSearchParams } from "react-router-dom";
 import { useTranslation } from "react-i18next";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
-import { ArrowLeft, CheckCircle2, ChevronDown, ChevronRight, ExternalLink, KeyRound, Link2, Loader2, MonitorPlay, PlugZap, RefreshCw, Sparkles, Unlink, XCircle, type LucideIcon } from "lucide-react";
+import { ArrowLeft, CalendarDays, CheckCircle2, ChevronDown, ChevronRight, ExternalLink, KeyRound, Link2, Loader2, MonitorPlay, PlugZap, RefreshCw, Sparkles, Unlink, XCircle, type LucideIcon } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -68,6 +68,7 @@ const INTEGRATIONS: Integration[] = [
     ),
   },
   { key: "ai", name: "Claude (Anthropic)", icon: Sparkles, Status: AiStatus, Page: AiPage },
+  { key: "o365", name: "Microsoft 365", icon: CalendarDays, Status: O365Status, Page: O365Page },
   { key: "rmm", name: "RMM", icon: MonitorPlay, Status: RmmStatus, Page: RmmPage },
 ];
 
@@ -742,6 +743,136 @@ function RmmPage() {
         <Button type="submit" disabled={save.isPending} className="bg-grad-gold font-semibold text-[#1a1204] hover:brightness-105">
           {save.isPending && <Loader2 className="size-4 animate-spin" />} {t("common.save")}
         </Button>
+      </form>
+    </section>
+  );
+}
+
+// ── Microsoft 365: technicians' Outlook calendars (Microsoft Graph) ──
+type O365View = { enabled: boolean; tenantId: string; clientId: string; hasSecret: boolean; lastTest: { ok: boolean; at: string; error?: string } | null };
+const O365_KEY = ["admin", "integrations", "o365"];
+
+function O365Status() {
+  const { t } = useTranslation();
+  const { data } = useQuery({ queryKey: O365_KEY, queryFn: () => api.get<O365View>("/admin/integrations/o365") });
+  if (!data) return null;
+  const complete = data.tenantId && data.clientId && data.hasSecret;
+  const [key, tone] = !complete ? ["notConfigured", "muted"] : !data.enabled ? ["disabled", "muted"] : data.lastTest?.ok === false ? ["error", "bad"] : ["connected", "good"];
+  return (
+    <Badge
+      variant="outline"
+      className={cn("gap-1.5", tone === "good" && "border-emerald-500/40 text-emerald-400", tone === "bad" && "border-destructive/50 text-destructive", tone === "muted" && "text-muted-foreground")}
+    >
+      <span className="size-1.5 rounded-full bg-current" />
+      {t(`integrations.status.${key}`)}
+    </Badge>
+  );
+}
+
+function O365Page() {
+  const { t } = useTranslation();
+  const qc = useQueryClient();
+  const { data: s, isLoading } = useQuery({ queryKey: O365_KEY, queryFn: () => api.get<O365View>("/admin/integrations/o365") });
+  const [form, setForm] = useState({ tenantId: "", clientId: "", secret: "", enabled: false, email: "" });
+  const [test, setTest] = useState<{ ok: boolean; error?: string; detail?: string } | null>(null);
+  useEffect(() => {
+    if (s) setForm((f) => ({ ...f, tenantId: s.tenantId, clientId: s.clientId, secret: "", enabled: s.enabled }));
+  }, [s]);
+  const changed = () => ({
+    ...(form.tenantId.trim() && form.tenantId.trim() !== s?.tenantId ? { tenantId: form.tenantId.trim() } : {}),
+    ...(form.clientId.trim() && form.clientId.trim() !== s?.clientId ? { clientId: form.clientId.trim() } : {}),
+    ...(form.secret.trim() ? { secret: form.secret.trim() } : {}),
+  });
+  const save = useMutation({
+    mutationFn: () => api.put<O365View>("/admin/integrations/o365", { ...changed(), enabled: form.enabled }),
+    onSuccess: (next) => {
+      qc.setQueryData(O365_KEY, next);
+      void qc.invalidateQueries({ queryKey: ["planning"] });
+      setTest(null);
+      toast.success(t("common.saved"));
+    },
+    onError: (e) => toast.error(e instanceof ApiError && e.code === "o365_incomplete" ? t("integrations.o365.needAll") : t("common.error")),
+  });
+  const runTest = useMutation({
+    mutationFn: () => api.post<{ ok: boolean; error?: string; detail?: string }>("/admin/integrations/o365/test", { ...changed(), ...(form.email.trim() ? { email: form.email.trim() } : {}) }),
+    onSuccess: (r) => {
+      setTest(r);
+      void qc.invalidateQueries({ queryKey: O365_KEY });
+    },
+  });
+  if (isLoading || !s) return <Skeleton className="h-72 rounded-2xl" />;
+  return (
+    <section className="overflow-hidden rounded-2xl border bg-card/80">
+      <div className="flex flex-wrap items-center gap-4 border-b px-6 py-5">
+        <span className="flex size-11 items-center justify-center rounded-xl bg-sky-500/20 text-sky-200">
+          <CalendarDays className="size-5" />
+        </span>
+        <div className="min-w-0 flex-1">
+          <h3 className="font-display text-lg font-semibold">{t("integrations.connection")}</h3>
+          <div className="mt-1">
+            <O365Status />
+          </div>
+        </div>
+        <label className="flex items-center gap-3 text-sm font-medium">
+          {t("integrations.enabled")}
+          <Switch checked={form.enabled} onCheckedChange={(v) => setForm((f) => ({ ...f, enabled: v }))} />
+        </label>
+      </div>
+      <form
+        className="space-y-4 px-6 py-6"
+        onSubmit={(e: FormEvent) => {
+          e.preventDefault();
+          save.mutate();
+        }}
+      >
+        <div className="grid gap-4 sm:grid-cols-2">
+          <div className="space-y-2">
+            <Label htmlFor="o365-tenant">{t("integrations.o365.tenantId")}</Label>
+            <Input id="o365-tenant" value={form.tenantId} onChange={(e) => setForm((f) => ({ ...f, tenantId: e.target.value }))} placeholder="akab.onmicrosoft.com" className="font-mono text-xs" />
+          </div>
+          <div className="space-y-2">
+            <Label htmlFor="o365-client">{t("integrations.o365.clientId")}</Label>
+            <Input id="o365-client" value={form.clientId} onChange={(e) => setForm((f) => ({ ...f, clientId: e.target.value }))} placeholder="00000000-0000-0000-0000-000000000000" className="font-mono text-xs" />
+          </div>
+        </div>
+        <SecretField id="o365-secret" label={t("integrations.o365.secret")} value={form.secret} onChange={(v) => setForm((f) => ({ ...f, secret: v }))} saved={s.hasSecret} />
+        <div className="rounded-xl border bg-background/40 p-4 text-xs text-muted-foreground">
+          <p className="mb-2 font-medium text-foreground">{t("integrations.o365.howTitle")}</p>
+          <ol className="list-decimal space-y-1 pl-4">
+            {(t("integrations.o365.how", { returnObjects: true }) as string[]).map((line) => (
+              <li key={line}>{line}</li>
+            ))}
+          </ol>
+        </div>
+        <div className="flex flex-wrap items-end gap-2">
+          <div className="min-w-56 flex-1 space-y-2">
+            <Label htmlFor="o365-email">{t("integrations.o365.testMailbox")}</Label>
+            <Input id="o365-email" type="email" value={form.email} onChange={(e) => setForm((f) => ({ ...f, email: e.target.value }))} placeholder={t("integrations.o365.testMailboxHint")} />
+          </div>
+          <Button type="button" variant="outline" onClick={() => runTest.mutate()} disabled={runTest.isPending}>
+            {runTest.isPending ? <Loader2 className="size-4 animate-spin" /> : <RefreshCw className="size-4" />} {t("integrations.test")}
+          </Button>
+          <Button type="submit" disabled={save.isPending} className="bg-grad-gold font-semibold text-[#1a1204] hover:brightness-105">
+            {save.isPending && <Loader2 className="size-4 animate-spin" />} {t("common.save")}
+          </Button>
+        </div>
+        {test &&
+          (test.ok ? (
+            <p className="flex items-center gap-2 rounded-xl border border-emerald-500/30 bg-emerald-500/10 p-3 text-sm text-emerald-300">
+              <CheckCircle2 className="size-4" /> {t("integrations.o365.testOk")}
+            </p>
+          ) : (
+            <p className="flex items-start gap-2 rounded-xl border border-destructive/40 bg-destructive/10 p-3 text-sm">
+              <XCircle className="mt-0.5 size-4 shrink-0 text-destructive" />
+              <span>
+                {t(`integrations.o365.errors.${test.error}`, { defaultValue: t("integrations.o365.errors.api") })}
+                {test.detail && <span className="block text-xs text-muted-foreground">{test.detail}</span>}
+              </span>
+            </p>
+          ))}
+        <p className="flex items-start gap-2 text-xs text-muted-foreground">
+          <KeyRound className="mt-0.5 size-3.5 shrink-0 text-primary" /> {t("integrations.o365.rightsNote")}
+        </p>
       </form>
     </section>
   );

@@ -3,7 +3,7 @@ import { db, schema } from "../db/index.ts";
 import { permissionsOf } from "./auth.ts";
 import type { PermissionKey } from "../../shared/permissions.ts";
 
-export type NotificationType = "message.new" | "user.locked" | "timer.pending" | "ticket.pinned";
+export type NotificationType = "message.new" | "user.locked" | "timer.pending" | "ticket.pinned" | "calendar.reminder";
 
 type Notice = { type: NotificationType; data: Record<string, unknown>; link: string };
 

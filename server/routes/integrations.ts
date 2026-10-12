@@ -20,6 +20,7 @@ import {
 import { body, zEmail, zUuid } from "../lib/validate.ts";
 import { clearTicketCache } from "../lib/ticketSource.ts";
 import { RMM_PLACEHOLDERS, rmmSettings, saveRmmSettings, validTemplate } from "../lib/rmm.ts";
+import { O365Error, o365Settings, saveO365Settings, testO365 } from "../lib/o365.ts";
 import { AI_MODELS, AiError, aiSettings, askClaude, saveAiSettings, type AiErrorCode } from "../lib/ai.ts";
 
 const zCred = z.string().trim().min(1).max(300);
@@ -46,6 +47,9 @@ async function current() {
   const [u] = s.updatedBy ? await db().select({ name: schema.users.name }).from(schema.users).where(eq(schema.users.id, s.updatedBy)) : [];
   return view(s, u?.name ?? null);
 }
+
+/** Microsoft 365 settings as shown to the admin (never the secret). */
+const o365View = (s: Awaited<ReturnType<typeof o365Settings>>) => ({ enabled: s.enabled, tenantId: s.tenantId, clientId: s.clientId, hasSecret: Boolean(s.secret), lastTest: s.lastTest ?? null });
 
 const codeOf = (e: unknown): AutotaskErrorCode => (e instanceof AutotaskError ? e.code : "api");
 
@@ -209,6 +213,36 @@ export const integrationRoutes = new Hono<AppEnv>()
     }
     await audit(a.user.id, "integration.autotask.autolink", null, { linked });
     return c.json({ linked });
+  })
+
+  // ── Microsoft 365 calendars (Azure app registration, Calendars.ReadWrite) ──
+  .get("/o365", async (c) => c.json(o365View(await o365Settings())))
+  .put("/o365", async (c) => {
+    const a = auth(c);
+    const zId = z.string().trim().regex(/^[0-9a-z][0-9a-z.-]{1,100}$/i);
+    const p = await body(c, z.object({ enabled: z.boolean().optional(), tenantId: zId.optional(), clientId: zId.optional(), secret: zCred.optional() }));
+    const s = await o365Settings();
+    const complete = (p.tenantId ?? s.tenantId) && (p.clientId ?? s.clientId) && (p.secret ?? s.secret);
+    if (p.enabled && !complete) throw new HTTPException(400, { message: "o365_incomplete" });
+    await saveO365Settings(a.user.id, p);
+    await audit(a.user.id, "integration.o365.updated", null, { enabled: p.enabled, tenantId: p.tenantId, clientId: p.clientId, secretChanged: p.secret !== undefined || undefined });
+    return c.json(o365View(await o365Settings()));
+  })
+  /** Test: read a mailbox calendar (the admin's by default) with the typed or saved values. */
+  .post("/o365/test", async (c) => {
+    const a = auth(c);
+    const p = await body(c, z.object({ email: zEmail.optional(), tenantId: z.string().trim().max(100).optional(), clientId: z.string().trim().max(100).optional(), secret: zCred.optional() }));
+    const s = await o365Settings();
+    const settings = { tenantId: p.tenantId || s.tenantId, clientId: p.clientId || s.clientId, secret: p.secret ?? s.secret };
+    let result: { ok: true } | { ok: false; error: string; detail?: string };
+    try {
+      await testO365(p.email ?? a.user.email, settings);
+      result = { ok: true };
+    } catch (e) {
+      result = { ok: false, error: e instanceof O365Error ? e.code : "api", detail: e instanceof O365Error ? e.detail : undefined };
+    }
+    if (!p.secret && !p.tenantId && !p.clientId) await saveO365Settings(a.user.id, { lastTest: { ok: result.ok, at: new Date().toISOString(), ...(result.ok ? {} : { error: result.error }) } });
+    return c.json(result);
   })
 
   // ── RMM (links to the device page and web remote control) ──
