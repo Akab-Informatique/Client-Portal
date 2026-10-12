@@ -65,7 +65,7 @@ const SUBJECTS: [string, string][] = [
  * later (or after a restart) get their share. Tickets created in the portal
  * keep their chosen assignee (slot null).
  */
-type Stored = Ticket & { slot: number | null; secondarySlots: number[] };
+type Stored = Ticket & { slot: number | null; secondarySlots: number[]; secondaryFixed?: Person[] };
 let store: Stored[] | null = null;
 let nextId = 41000;
 
@@ -83,12 +83,12 @@ const ymd = (d: Date) => `${d.getFullYear()}${String(d.getMonth() + 1).padStart(
 /** All sample tickets; assignees are the current technicians (round robin). */
 export function demoTickets(staff: Person[]): Ticket[] {
   store ??= generate();
-  return store.map(({ slot, secondarySlots, ...t }) => {
+  return store.map(({ slot, secondarySlots, secondaryFixed, ...t }) => {
     const assignee = slot === null ? t.assignee : staff.length ? staff[slot % staff.length] : null;
     const secondary = staff.length
       ? [...new Map(secondarySlots.map((s) => staff[s % staff.length]).filter((p) => p.id !== assignee?.id).map((p) => [p.id, p])).values()]
       : [];
-    return { ...t, assignee, secondary };
+    return { ...t, assignee, secondary: secondaryFixed ?? secondary };
   });
 }
 
@@ -168,12 +168,19 @@ export function addDemoTicket(t: Omit<Ticket, "id" | "number" | "createdAt" | "u
 /** Change fields of a sample ticket (an explicit assignee replaces the round-robin slot). */
 export function updateDemoTicket(
   id: number,
-  p: Partial<Pick<Ticket, "status" | "priority" | "queue" | "dueAt" | "company" | "contact" | "contactId">> & { assignee?: Person | null },
+  p: Partial<Pick<Ticket, "status" | "priority" | "queue" | "dueAt" | "company" | "contact" | "contactId" | "title" | "description">> & {
+    assignee?: Person | null;
+    secondary?: Person[];
+  },
 ): boolean {
   const t = store?.find((x) => x.id === id);
   if (!t) return false;
   Object.assign(t, p, { updatedAt: new Date().toISOString() });
   if ("assignee" in p) t.slot = null;
+  if (p.secondary) {
+    t.secondaryFixed = p.secondary;
+    delete (t as Partial<Ticket>).secondary;
+  }
   return true;
 }
 
@@ -184,6 +191,16 @@ export function addDemoNote(id: number, note: Omit<Note, "id" | "at">): Note | n
   t.notes.push(n);
   t.updatedAt = n.at;
   return n;
+}
+
+/** A time entry shown in the sample ticket's activity. */
+export function addDemoTimeEntry(id: number, p: { author: string; hours: number; text: string; internalText?: string; at: string }): boolean {
+  const t = store?.find((x) => x.id === id);
+  if (!t) return false;
+  t.notes.push({ id: `t${id}-${Date.now()}`, author: p.author, at: p.at, text: p.text, internal: false, ...({ kind: "time", hours: p.hours, internalText: p.internalText } as object) });
+  t.hours = Math.round((t.hours + p.hours) * 100) / 100;
+  t.updatedAt = new Date().toISOString();
+  return true;
 }
 
 export const demoCompanies = () => COMPANIES.map((name, i) => ({ id: 300 + i, name }));

@@ -7,6 +7,7 @@ import { purgeExpiredSessions } from "./lib/auth.ts";
 import { purgeOldNotifications } from "./lib/notify.ts";
 import { smtpSettings } from "./lib/mail.ts";
 import { keepTicketsWarm } from "./lib/ticketSource.ts";
+import { sweepTimers } from "./lib/timers.ts";
 
 await initDb();
 await seed();
@@ -24,6 +25,9 @@ serve({ fetch: app.fetch, port: config.port, hostname: host }, (info) => {
   console.log(`  MFA      : ${config.requireMfa ? "required" : "optional"}`);
   if (config.production && !config.publicUrl) console.warn("  WARN: PUBLIC_URL is not set — email links use the request address");
 });
+
+// Timers whose page was closed become entries to validate
+setInterval(() => void sweepTimers().catch(() => undefined), 30_000).unref();
 
 setInterval(() => {
   void purgeExpiredSessions().catch(() => undefined);

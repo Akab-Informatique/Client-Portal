@@ -9,6 +9,7 @@ import { audit } from "../lib/audit.ts";
 import { rateLimit } from "../lib/http.ts";
 import { AiError, aiSettings, askClaude, askClaudeJson } from "../lib/ai.ts";
 import { AutotaskError } from "../lib/autotask.ts";
+import { sweepTimers, timerView, elapsedMs } from "../lib/timers.ts";
 import { SourceError, ticketSource, type NTicket, type Options, type TicketSource } from "../lib/ticketSource.ts";
 
 /**
@@ -160,6 +161,20 @@ function summary(t: NTicket, L: Lookup, start: string | undefined, me: string) {
     startDate: start ?? null,
     viewers: viewersOf(t.id, me),
   };
+}
+
+const myTimers = (userId: string) =>
+  db().select().from(schema.ticketTimers).where(eq(schema.ticketTimers.userId, userId)).orderBy(asc(schema.ticketTimers.startedAt));
+
+async function ownTimer(timerId: string, userId: string) {
+  const id = z.uuid().safeParse(timerId);
+  if (!id.success) throw new HTTPException(404, { message: "not_found" });
+  const [t] = await db()
+    .select()
+    .from(schema.ticketTimers)
+    .where(and(eq(schema.ticketTimers.id, id.data), eq(schema.ticketTimers.userId, userId)));
+  if (!t) throw new HTTPException(404, { message: "not_found" });
+  return t;
 }
 
 /** Full ticket for the ticket window, with the choices needed to edit it inline. */
@@ -404,6 +419,113 @@ export const ticketRoutes = new Hono<AppEnv>()
     return c.json({ ok: true });
   })
 
+  // ── Timers (work time → Autotask time entries) ──
+  /** My timers: running / paused / waiting for validation (closed tab). */
+  .get("/timers", requirePermission("tickets.edit"), async (c) => {
+    const a = auth(c);
+    await sweepTimers(a.user.id);
+    return c.json((await myTimers(a.user.id)).map(timerView));
+  })
+  /** Work types offered for time entries (empty when the source has none). */
+  .get("/work-types", requirePermission("tickets.edit"), async (c) => {
+    const src = await ticketSource();
+    return c.json(await run(() => src.workTypes()));
+  })
+  /** The page is alive: keeps my running timers going. */
+  .post("/timers/beat", requirePermission("tickets.edit"), async (c) => {
+    const a = auth(c);
+    await db()
+      .update(schema.ticketTimers)
+      .set({ lastBeatAt: new Date() })
+      .where(and(eq(schema.ticketTimers.userId, a.user.id), eq(schema.ticketTimers.state, "running")));
+    return c.json((await myTimers(a.user.id)).map(timerView));
+  })
+  /** Validate a timer: becomes a time entry under my Autotask resource. */
+  .post("/timers/:timerId/submit", requirePermission("tickets.edit"), async (c) => {
+    const a = auth(c);
+    const timer = await ownTimer(c.req.param("timerId"), a.user.id);
+    const p = await body(
+      c,
+      z.object({
+        hours: z.number().positive().max(24),
+        summary: z.string().trim().min(1).max(8000),
+        internal: z.string().trim().max(8000).default(""),
+        workTypeId: z.string().max(40).nullable().default(null),
+      }),
+    );
+    const endedAt = timer.endedAt ?? new Date();
+    const src = await ticketSource();
+    await run(() => src.addTimeEntry(timer.ticketId, { ...p, startedAt: new Date(endedAt.getTime() - p.hours * 3_600_000), endedAt }, a));
+    await db().delete(schema.ticketTimers).where(eq(schema.ticketTimers.id, timer.id));
+    await audit(a.user.id, "ticket.time_entry", String(timer.ticketId), { hours: p.hours });
+    return c.json({ ok: true }, 201);
+  })
+  /** Discard a timer (no time entry). */
+  .delete("/timers/:timerId", requirePermission("tickets.edit"), async (c) => {
+    const a = auth(c);
+    const timer = await ownTimer(c.req.param("timerId"), a.user.id);
+    await db().delete(schema.ticketTimers).where(eq(schema.ticketTimers.id, timer.id));
+    return c.json({ ok: true });
+  })
+  /** Start (or resume) my timer on this ticket; my other running timers pause. */
+  .post("/:id/timer/start", requirePermission("tickets.edit"), async (c) => {
+    const a = auth(c);
+    const id = Number(c.req.param("id"));
+    if (!Number.isInteger(id)) throw new HTTPException(400, { message: "invalid_id" });
+    const now = new Date();
+    const mine = await myTimers(a.user.id);
+    for (const other of mine.filter((x) => x.state === "running" && x.ticketId !== id)) {
+      await db()
+        .update(schema.ticketTimers)
+        .set({ state: "paused", accumulatedMs: elapsedMs(other, now.getTime()), runningSince: null, updatedAt: now })
+        .where(eq(schema.ticketTimers.id, other.id));
+    }
+    const existing = mine.find((x) => x.ticketId === id);
+    if (existing?.state === "pending") throw new HTTPException(409, { message: "timer_pending" });
+    if (existing) {
+      if (existing.state !== "running") {
+        await db()
+          .update(schema.ticketTimers)
+          .set({ state: "running", runningSince: now, lastBeatAt: now, updatedAt: now })
+          .where(eq(schema.ticketTimers.id, existing.id));
+      }
+    } else {
+      const src = await ticketSource();
+      const tk = (await run(() => src.list())).find((x) => x.id === id) ?? (await run(() => src.get(id)));
+      if (!tk) throw new HTTPException(404, { message: "not_found" });
+      await db()
+        .insert(schema.ticketTimers)
+        .values({ userId: a.user.id, ticketId: id, ticketNumber: tk.number, ticketTitle: tk.title.slice(0, 250), state: "running", runningSince: now, lastBeatAt: now, startedAt: now });
+    }
+    return c.json((await myTimers(a.user.id)).map(timerView));
+  })
+  .post("/:id/timer/pause", requirePermission("tickets.edit"), async (c) => {
+    const a = auth(c);
+    const id = Number(c.req.param("id"));
+    const t = (await myTimers(a.user.id)).find((x) => x.ticketId === id && x.state === "running");
+    if (t) {
+      const now = new Date();
+      await db()
+        .update(schema.ticketTimers)
+        .set({ state: "paused", accumulatedMs: elapsedMs(t, now.getTime()), runningSince: null, updatedAt: now })
+        .where(eq(schema.ticketTimers.id, t.id));
+    }
+    return c.json((await myTimers(a.user.id)).map(timerView));
+  })
+  /** Stop: the timer waits for its time entry (summary, hours) to be validated. */
+  .post("/:id/timer/stop", requirePermission("tickets.edit"), async (c) => {
+    const a = auth(c);
+    const id = Number(c.req.param("id"));
+    const t = (await myTimers(a.user.id)).find((x) => x.ticketId === id && x.state !== "pending");
+    if (!t) throw new HTTPException(404, { message: "not_found" });
+    const now = new Date();
+    await db()
+      .update(schema.ticketTimers)
+      .set({ state: "pending", accumulatedMs: elapsedMs(t, now.getTime()), runningSince: null, endedAt: now, updatedAt: now })
+      .where(eq(schema.ticketTimers.id, t.id));
+    return c.json((await myTimers(a.user.id)).map(timerView));
+  })
+
   .get("/:id", async (c) => {
     const a = auth(c);
     const src = await ticketSource();
@@ -480,7 +602,7 @@ export const ticketRoutes = new Hono<AppEnv>()
     return c.json({ ok: true });
   })
 
-  /** Change status, priority, queue, assignee, due date, client or contact. */
+  /** Change status, priority, queue, assignees, due date, client, contact, title or description. */
   .patch("/:id", requirePermission("tickets.edit"), async (c) => {
     const a = auth(c);
     const id = Number(c.req.param("id"));
@@ -494,6 +616,9 @@ export const ticketRoutes = new Hono<AppEnv>()
         contactId: z.string().max(60).nullable().optional(),
         assigneeId: z.string().max(60).nullable().optional(),
         dueDate: zDate.optional(),
+        title: z.string().trim().min(1).max(250).optional(),
+        description: z.string().max(8000).optional(),
+        secondaryIds: z.array(z.string().max(60)).max(20).optional(),
       }),
     );
     const src = await ticketSource();

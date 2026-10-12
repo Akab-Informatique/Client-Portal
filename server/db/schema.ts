@@ -229,6 +229,35 @@ export const ticketMeta = pgTable("ticket_meta", {
   updatedAt: updated(),
 });
 
+/**
+ * Ticket timers (like Autotask's). Kept on the server so they survive a
+ * refresh; a running timer whose page stops answering (tab closed) becomes
+ * "pending": a time entry the technician validates before it goes to Autotask.
+ */
+export const ticketTimers = pgTable(
+  "ticket_timers",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    userId: uuid("user_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    ticketId: bigint("ticket_id", { mode: "number" }).notNull(),
+    ticketNumber: text("ticket_number").notNull(),
+    ticketTitle: text("ticket_title").notNull(),
+    state: text("state", { enum: ["running", "paused", "pending"] }).notNull(),
+    /** Time counted before the current running stretch */
+    accumulatedMs: bigint("accumulated_ms", { mode: "number" }).notNull().default(0),
+    runningSince: timestamp("running_since", { withTimezone: true }),
+    /** Last sign of life from a page showing this running timer */
+    lastBeatAt: timestamp("last_beat_at", { withTimezone: true }),
+    startedAt: timestamp("started_at", { withTimezone: true }).notNull().defaultNow(),
+    endedAt: timestamp("ended_at", { withTimezone: true }),
+    createdAt: created(),
+    updatedAt: updated(),
+  },
+  (t) => [uniqueIndex("ticket_timers_user_ticket_unique").on(t.userId, t.ticketId), index("ticket_timers_state_idx").on(t.state)],
+);
+
 /** AI results kept in the portal for a ticket (summary, next steps…), visible to the team. */
 export const ticketAiNotes = pgTable(
   "ticket_ai_notes",

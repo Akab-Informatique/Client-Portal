@@ -6,6 +6,7 @@ import {
   addDemoContact,
   addDemoNote,
   addDemoTicket,
+  addDemoTimeEntry,
   demoCompanies,
   demoContact,
   demoContacts,
@@ -71,7 +72,12 @@ export type TicketPatch = {
   dueDate?: string;
   companyId?: number;
   contactId?: string | null;
+  title?: string;
+  description?: string;
+  /** Secondary technicians (person ids), replaces the list */
+  secondaryIds?: string[];
 };
+export type NewTimeEntry = { hours: number; summary: string; internal: string; workTypeId: string | null; startedAt: Date; endedAt: Date };
 export type NewTicket = {
   title: string;
   description: string;
@@ -98,6 +104,9 @@ export interface TicketSource {
   companies(): Promise<Company[]>;
   contacts(companyId: number): Promise<Contact[]>;
   addContact(companyId: number, p: { firstName: string; lastName: string; email: string | null; phone: string | null }, a: AuthContext): Promise<Contact>;
+  /** Work types for time entries (Autotask billing codes); empty when not used */
+  workTypes(): Promise<{ value: string; label: string }[]>;
+  addTimeEntry(ticketId: number, p: NewTimeEntry, a: AuthContext): Promise<void>;
 }
 
 /** A due date picked in the portal: end of the working day in Québec. */
@@ -178,6 +187,13 @@ const demoSource: TicketSource = {
       if (p.assigneeId && !person) throw new SourceError("invalid_assignee");
       patch.assignee = person ?? null;
     }
+    if (p.title !== undefined) patch.title = p.title;
+    if (p.description !== undefined) patch.description = p.description;
+    if (p.secondaryIds) {
+      const people = p.secondaryIds.map((sid) => staff.find((s) => s.id === sid));
+      if (people.some((x) => !x)) throw new SourceError("invalid_assignee");
+      patch.secondary = people as Person[];
+    }
     updateDemoTicket(id, patch);
   },
   async addNote(id, p, a) {
@@ -215,6 +231,15 @@ const demoSource: TicketSource = {
   async addContact(companyId, p) {
     if (!demoCompanies().some((x) => x.id === companyId)) throw new SourceError("invalid_company");
     return addDemoContact({ companyId, name: `${p.firstName} ${p.lastName}`, email: p.email, phone: p.phone });
+  },
+  async workTypes() {
+    return [];
+  },
+  async addTimeEntry(ticketId, p, a) {
+    await this.list();
+    if (!addDemoTimeEntry(ticketId, { author: a.user.name, hours: p.hours, text: p.summary, internalText: p.internal || undefined, at: p.startedAt.toISOString() })) {
+      throw new SourceError("not_found");
+    }
   },
 };
 
@@ -468,6 +493,25 @@ async function normalize(at: Client, rows: AtTicket[], withSecondary: boolean): 
   return out;
 }
 
+/** Make the ticket's secondary technicians exactly this list (adds / removes). */
+async function setSecondary(at: Client, ticketId: number, personIds: string[], actor: number): Promise<void> {
+  const wanted = new Set<number>();
+  for (const pid of personIds) {
+    const rid = await resourceIdOf(pid);
+    if (!rid) throw new SourceError("invalid_assignee");
+    wanted.add(rid);
+  }
+  const current = await at.query<{ id: number; resourceID: number }>("TicketSecondaryResources", [{ op: "eq", field: "ticketID", value: ticketId }], {
+    fields: ["id", "resourceID"],
+  });
+  for (const row of current.filter((r) => !wanted.has(r.resourceID))) {
+    await at.call("DELETE", `Tickets/${ticketId}/SecondaryResources/${row.id}`, undefined, { impersonate: actor });
+  }
+  for (const rid of [...wanted].filter((r) => !current.some((c) => c.resourceID === r))) {
+    await at.call("POST", `Tickets/${ticketId}/SecondaryResources`, { ticketID: ticketId, resourceID: rid, roleID: await roleOf(at, rid) }, { impersonate: actor });
+  }
+}
+
 /**
  * After a change: reload just this ticket and put it in the cached list
  * (instead of reloading the whole list from Autotask).
@@ -649,7 +693,10 @@ const autotaskSource: TicketSource = {
         patch.assignedResourceRoleID = null;
       }
     }
-    await at.call("PATCH", "Tickets", patch, { impersonate: actor });
+    if (p.title !== undefined) patch.title = p.title;
+    if (p.description !== undefined) patch.description = p.description;
+    if (Object.keys(patch).length > 1) await at.call("PATCH", "Tickets", patch, { impersonate: actor });
+    if (p.secondaryIds) await setSecondary(at, id, p.secondaryIds, actor);
     await refreshOne(at, id);
   },
 
@@ -726,6 +773,48 @@ const autotaskSource: TicketSource = {
       )
         .map((c) => ({ id: String(c.id), companyId, name: `${c.firstName ?? ""} ${c.lastName ?? ""}`.trim(), email: c.emailAddress || null, phone: c.phone || null }))
         .sort((x, y) => x.name.localeCompare(y.name)),
+    );
+  },
+
+  async workTypes() {
+    const at = await autotask();
+    return cached("workTypes", 30 * 60_000, async () => {
+      // Billing codes of type "work type" (useType 1), active
+      const rows = await at
+        .query<{ id: number; name: string }>(
+          "BillingCodes",
+          [
+            { op: "eq", field: "useType", value: 1 },
+            { op: "eq", field: "isActive", value: true },
+          ],
+          { fields: ["id", "name"], max: 500 },
+        )
+        .catch(() => [] as { id: number; name: string }[]);
+      return rows.map((r) => ({ value: String(r.id), label: r.name })).sort((x, y) => x.label.localeCompare(y.label));
+    });
+  },
+
+  async addTimeEntry(ticketId, p, a) {
+    const at = await autotask();
+    const actor = await actorResource(a);
+    const end = p.endedAt;
+    const start = new Date(end.getTime() - Math.round(p.hours * 3_600_000));
+    await at.call(
+      "POST",
+      "TimeEntries",
+      {
+        ticketID: ticketId,
+        resourceID: actor,
+        roleID: await roleOf(at, actor),
+        dateWorked: start.toISOString(),
+        startDateTime: start.toISOString(),
+        endDateTime: end.toISOString(),
+        hoursWorked: Math.round(p.hours * 100) / 100,
+        summaryNotes: p.summary,
+        ...(p.internal ? { internalNotes: p.internal } : {}),
+        ...(p.workTypeId ? { billingCodeID: Number(p.workTypeId) } : {}),
+      },
+      { impersonate: actor },
     );
   },
 

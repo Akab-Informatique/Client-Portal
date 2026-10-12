@@ -5,6 +5,7 @@ import { Maximize2, Ticket, X } from "lucide-react";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { cn } from "@/lib/utils";
 import { TicketOverlay } from "./TicketPanel";
+import { DockTimer, TimersProvider, useTimers, type Timer } from "./timers";
 import { PRIORITY_STYLE, usePresence, type PriorityKind as Priority, type TicketDetail } from "./shared";
 
 /**
@@ -13,7 +14,7 @@ import { PRIORITY_STYLE, usePresence, type PriorityKind as Priority, type Ticket
  * going to another page). Minimized tickets keep their presence: the others
  * still see that you are on them. Kept for the browser tab (sessionStorage).
  */
-type Docked = { id: number; number: string; title: string; priority: Priority };
+type Docked = { id: number; number: string; title: string; priority?: Priority };
 type Ws = {
   openId: number | null;
   docked: Docked[];
@@ -57,10 +58,10 @@ export function TicketWorkspaceProvider({ enabled, children }: { enabled: boolea
     <WsCtx.Provider value={value}>
       {children}
       {enabled && (
-        <>
+        <TimersProvider>
           <TicketOverlay id={openId} onClose={close} onMinimize={minimize} />
           <Dock docked={docked} hidden={openId !== null} onRestore={open} onDismiss={dismiss} />
-        </>
+        </TimersProvider>
       )}
     </WsCtx.Provider>
   );
@@ -74,19 +75,26 @@ export function useTicketWorkspace() {
 
 function Dock({ docked, hidden, onRestore, onDismiss }: { docked: Docked[]; hidden: boolean; onRestore: (id: number) => void; onDismiss: (id: number) => void }) {
   const { t } = useTranslation();
-  if (hidden || docked.length === 0) return null;
+  // Tickets with a timer stay in the dock, even when they were not minimized
+  const { at, list } = useTimers();
+  const items: Docked[] = [
+    ...docked,
+    ...list.filter((x) => x.state !== "pending" && !docked.some((d) => d.id === x.ticketId)).map((x) => ({ id: x.ticketId, number: x.ticketNumber, title: x.ticketTitle })),
+  ];
+  if (hidden || items.length === 0) return null;
   return (
     <div className="fixed bottom-4 right-4 z-40 flex max-w-[calc(100vw-2rem)] flex-wrap-reverse justify-end gap-2" aria-label={t("tickets.dock")}>
       <AnimatePresence>
-        {docked.map((d) => (
-          <DockItem key={d.id} d={d} onRestore={() => onRestore(d.id)} onDismiss={() => onDismiss(d.id)} />
+        {items.map((d) => (
+          <DockItem key={d.id} d={d} timer={list.find((x) => x.ticketId === d.id)} at={at} onRestore={() => onRestore(d.id)} onDismiss={() => onDismiss(d.id)} />
         ))}
       </AnimatePresence>
     </div>
   );
 }
 
-function DockItem({ d, onRestore, onDismiss }: { d: Docked; onRestore: () => void; onDismiss: () => void }) {
+function DockItem({ d, timer, at, onRestore, onDismiss }: { d: Docked; timer?: Timer; at: number; onRestore: () => void; onDismiss: () => void }) {
+  const active = timer && timer.state !== "pending";
   const { t } = useTranslation();
   const viewers = usePresence(d.id);
   const busy = Boolean(viewers?.length);
@@ -96,9 +104,9 @@ function DockItem({ d, onRestore, onDismiss }: { d: Docked; onRestore: () => voi
       initial={{ opacity: 0, y: 16, scale: 0.95 }}
       animate={{ opacity: 1, y: 0, scale: 1 }}
       exit={{ opacity: 0, y: 16, scale: 0.95 }}
-      className="group flex w-64 items-center gap-2 overflow-hidden rounded-xl border border-[color:var(--gold)]/25 bg-popover/90 py-1.5 pl-1.5 pr-1 shadow-[0_12px_40px_-12px_rgba(0,0,0,0.6),0_0_24px_-12px_rgba(255,206,26,0.35)] backdrop-blur-xl"
+      className="group flex w-72 items-center gap-2 overflow-hidden rounded-xl border border-[color:var(--gold)]/25 bg-popover/90 py-1.5 pl-1.5 pr-1 shadow-[0_12px_40px_-12px_rgba(0,0,0,0.6),0_0_24px_-12px_rgba(255,206,26,0.35)] backdrop-blur-xl"
     >
-      <span className={cn("h-8 w-1 shrink-0 rounded-full", PRIORITY_STYLE[d.priority].bar)} />
+      <span className={cn("h-8 w-1 shrink-0 rounded-full", d.priority ? PRIORITY_STYLE[d.priority].bar : "bg-[color:var(--gold)]/60")} />
       <button type="button" onClick={onRestore} className="flex min-w-0 flex-1 items-center gap-2 text-left">
         <Ticket className="size-4 shrink-0 text-primary" />
         <span className="min-w-0">
@@ -117,12 +125,15 @@ function DockItem({ d, onRestore, onDismiss }: { d: Docked; onRestore: () => voi
           <TooltipContent>{t("tickets.openBy", { names: viewers!.map((v) => v.name).join(", ") })}</TooltipContent>
         </Tooltip>
       )}
+      {timer && <DockTimer timer={timer} at={at} />}
       <button type="button" onClick={onRestore} className="rounded-md p-1 text-muted-foreground hover:bg-accent hover:text-foreground" aria-label={t("tickets.restore")}>
         <Maximize2 className="size-3.5" />
       </button>
-      <button type="button" onClick={onDismiss} className="rounded-md p-1 text-muted-foreground hover:bg-accent hover:text-foreground" aria-label={t("common.close")}>
-        <X className="size-3.5" />
-      </button>
+      {!active && (
+        <button type="button" onClick={onDismiss} className="rounded-md p-1 text-muted-foreground hover:bg-accent hover:text-foreground" aria-label={t("common.close")}>
+          <X className="size-3.5" />
+        </button>
+      )}
     </motion.div>
   );
 }

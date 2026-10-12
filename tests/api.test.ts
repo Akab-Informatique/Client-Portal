@@ -921,6 +921,11 @@ describe("tickets: inline edit, notes, team filter and AI", () => {
 });
 
 describe("tickets: client and contact", () => {
+  const sessions = new Map<string, Agent>();
+  const session = async (email: string) => {
+    resetRateLimit("login:ip:unknown");
+    return sessions.get(email) ?? sessions.set(email, await signIn(email)).get(email)!;
+  };
   it("lists and creates contacts, and changes a ticket's client and contact", async () => {
     resetRateLimit("login:ip:unknown");
     const tech = await signIn("tech@akab.local");
@@ -944,9 +949,71 @@ describe("tickets: client and contact", () => {
     const nt = await tech.post("/api/tickets", { title: "Avec contact", companyId: 301, contactId: created.json.id, priority: "low", queue: "Support niveau 1", assigneeId: null, dueDate: "2026-12-01" });
     expect(nt.json).toMatchObject({ contact: "Nadia Gélinas", contactId: created.json.id });
   });
+
+  it("edits title, description and secondary technicians", async () => {
+    const tech = await session("tech@akab.local");
+    const tk = (await tech.get("/api/tickets?view=all")).json.items[3];
+    const [admin] = await db().select().from(schema.users).where(eq(schema.users.email, "admin@akab.local"));
+    const r = await tech.patch(`/api/tickets/${tk.id}`, { title: "Nouveau titre", description: "Nouvelle description", secondaryIds: [admin.id] });
+    expect(r.status).toBe(200);
+    expect(r.json).toMatchObject({ title: "Nouveau titre", description: "Nouvelle description", secondary: [{ id: admin.id }] });
+    expect((await tech.patch(`/api/tickets/${tk.id}`, { secondaryIds: [] })).json.secondary).toEqual([]);
+    expect((await tech.patch(`/api/tickets/${tk.id}`, { secondaryIds: ["nobody"] })).json.error).toBe("invalid_assignee");
+    expect((await tech.patch(`/api/tickets/${tk.id}`, { title: "  " })).status).toBe(400);
+  });
+
+  it("timers: one running at a time, closed tab becomes an entry to validate", async () => {
+    const tech = await session("tech@akab.local");
+    const other = await session("tech2@akab.local");
+    const [a, b] = (await tech.get("/api/tickets?view=all")).json.items;
+    let timers = (await tech.post(`/api/tickets/${a.id}/timer/start`)).json;
+    expect(timers).toMatchObject([{ ticketId: a.id, ticketNumber: a.number, state: "running" }]);
+    // starting another one pauses the first
+    timers = (await tech.post(`/api/tickets/${b.id}/timer/start`)).json;
+    expect(timers.map((x: any) => [x.ticketId, x.state])).toEqual([
+      [a.id, "paused"],
+      [b.id, "running"],
+    ]);
+    expect((await tech.post(`/api/tickets/${b.id}/timer/pause`)).json.every((x: any) => x.state === "paused")).toBe(true);
+    // timers are personal
+    expect((await other.get("/api/tickets/timers")).json).toEqual([]);
+    expect((await other.del(`/api/tickets/timers/${timers[0].id}`)).status).toBe(404);
+
+    // the page stopped beating two minutes ago (tab closed): pending + bell
+    await tech.post(`/api/tickets/${a.id}/timer/start`);
+    const old = new Date(Date.now() - 120_000);
+    await db()
+      .update(schema.ticketTimers)
+      .set({ runningSince: new Date(old.getTime() - 600_000), lastBeatAt: old })
+      .where(eq(schema.ticketTimers.ticketId, a.id));
+    const { sweepTimers } = await import("../server/lib/timers.ts");
+    expect(await sweepTimers()).toBe(1);
+    const pending = (await tech.get("/api/tickets/timers")).json.find((x: any) => x.ticketId === a.id);
+    expect(pending.state).toBe("pending");
+    expect(pending.elapsedMs).toBeGreaterThanOrEqual(600_000);
+    expect(pending.elapsedMs).toBeLessThan(660_000); // stops at the last beat, not now
+    const bell = (await tech.get("/api/notifications")).json.items.find((n: any) => n.type === "timer.pending");
+    expect(bell).toMatchObject({ link: "/tickets?timers=1", data: { number: a.number } });
+    expect((await tech.post(`/api/tickets/${a.id}/timer/start`)).json.error).toBe("timer_pending");
+
+    // validating creates the time entry in the ticket
+    expect((await tech.post(`/api/tickets/timers/${pending.id}/submit`, { hours: 0.25, summary: "Diagnostic à distance", internal: "Vérifier le RAID" })).status).toBe(201);
+    const d = (await tech.get(`/api/tickets/${a.id}`)).json;
+    expect(d.notes.at(-1)).toMatchObject({ kind: "time", hours: 0.25, text: "Diagnostic à distance", internalText: "Vérifier le RAID", author: "Alex Tremblay" });
+    expect((await tech.get("/api/tickets/timers")).json.map((x: any) => x.ticketId)).toEqual([b.id]);
+
+    // stop → pending, discard → gone
+    await tech.post(`/api/tickets/${b.id}/timer/stop`);
+    const bt = (await tech.get("/api/tickets/timers")).json[0];
+    expect(bt.state).toBe("pending");
+    expect((await tech.post(`/api/tickets/timers/${bt.id}/submit`, { hours: 0, summary: "x" })).status).toBe(400);
+    expect((await tech.del(`/api/tickets/timers/${bt.id}`)).status).toBe(200);
+    expect((await tech.get("/api/tickets/timers")).json).toEqual([]);
+  });
 });
 
 describe("tickets from Autotask", () => {
+  let linkedTech = "";
   const base = "https://webservices99.autotask.net/ATServicesRest/V1.0/";
   const sent: { method: string; url: string; headers: Record<string, string>; body: any }[] = [];
   const json = (b: unknown, status = 200) => new Response(JSON.stringify(b), { status, headers: { "content-type": "application/json" } });
@@ -1015,6 +1082,12 @@ describe("tickets from Autotask", () => {
             pageDetails: {},
           });
         }
+        if (path === "TicketSecondaryResources/query" && String(init.body).includes('"op":"eq"')) {
+          return json({ items: [{ id: 401, ticketID: 9001, resourceID: 29682999 }], pageDetails: {} });
+        }
+        if (path === "Tickets/9001/SecondaryResources/401" && method === "DELETE") return json({ itemId: 401 });
+        if (path === "Tickets/9001/SecondaryResources" && method === "POST") return json({ itemId: 402 });
+        if (path === "TimeEntries" && method === "POST") return json({ itemId: 71 });
         if (path === "TicketSecondaryResources/query") return json({ items: [{ ticketID: 9001, resourceID: 29682999 }, { ticketID: 9002, resourceID: 29682885 }], pageDetails: {} });
         if (path === "Companies/query") return json({ items: [{ id: 77, companyName: "Client Réel inc." }], pageDetails: {} });
         if (path === "Contacts/query") return json({ items: [{ id: 501, firstName: "Ann", lastName: "Réelle", emailAddress: "ann@reel.ca", phone: null }], pageDetails: {} });
@@ -1047,6 +1120,7 @@ describe("tickets from Autotask", () => {
     await admin.put("/api/admin/integrations/autotask", { username: "portal-api@akab.ca", secret: "good-secret", integrationCode: "TRACKING-ID", enabled: true });
     const staff = (await admin.get("/api/admin/integrations/autotask/links")).json.staff;
     const techId = staff.find((s: any) => s.email === "tech@akab.local").id;
+    linkedTech = techId;
     const adminId = staff.find((s: any) => s.email === "admin@akab.local").id;
     await admin.put(`/api/admin/integrations/autotask/links/${adminId}`, { resourceId: null });
     expect((await admin.put(`/api/admin/integrations/autotask/links/${techId}`, { resourceId: 29682885 })).status).toBe(200);
@@ -1113,6 +1187,24 @@ describe("tickets from Autotask", () => {
 
     const c = await tech.post("/api/tickets/companies/77/contacts", { firstName: "Bob", lastName: "Neuf", email: "bob@reel.ca" });
     expect(c.json).toMatchObject({ id: "777", name: "Bob Neuf" });
+
+    // secondary technicians: removes the old one, adds the new one
+    sent.length = 0;
+    expect((await tech.patch("/api/tickets/9001", { secondaryIds: [linkedTech] })).status).toBe(200);
+    expect(sent.some((s) => s.method === "PATCH")).toBe(false); // nothing else changed
+    expect(sent.find((s) => s.method === "DELETE")!.url).toMatch(/Tickets\/9001\/SecondaryResources\/401$/);
+    expect(sent.find((s) => s.method === "POST" && s.url.endsWith("Tickets/9001/SecondaryResources"))!.body).toEqual({ ticketID: 9001, resourceID: 29682885, roleID: 29683461 });
+
+    // a validated timer becomes a time entry under the technician
+    sent.length = 0;
+    await tech.post("/api/tickets/9001/timer/start");
+    await tech.post("/api/tickets/9001/timer/stop");
+    const timer = (await tech.get("/api/tickets/timers")).json[0];
+    expect((await tech.post(`/api/tickets/timers/${timer.id}/submit`, { hours: 1.25, summary: "Remplacement du disque", internal: "Garantie Dell", workTypeId: "12" })).status).toBe(201);
+    const entry = sent.find((s) => s.method === "POST" && s.url.endsWith("TimeEntries"))!;
+    expect(entry.headers.impersonationresourceid).toBe("29682885");
+    expect(entry.body).toMatchObject({ ticketID: 9001, resourceID: 29682885, roleID: 29683461, hoursWorked: 1.25, summaryNotes: "Remplacement du disque", internalNotes: "Garantie Dell", billingCodeID: 12 });
+    expect(new Date(entry.body.endDateTime).getTime() - new Date(entry.body.startDateTime).getTime()).toBe(4_500_000);
   });
 
   it("opens a ticket even when its notes cannot be loaded, with a warning", async () => {

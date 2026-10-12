@@ -25,6 +25,7 @@ import {
   Minus,
   MonitorCog,
   NotebookPen,
+  Pencil,
   Phone,
   RefreshCw,
   Send,
@@ -54,6 +55,7 @@ import { useCan, useMe } from "@/lib/session";
 import { cn, initials } from "@/lib/utils";
 import { GlassBackdrop } from "@/components/brand/GlassBackdrop";
 import { CompanyPicker, ContactPicker, useCompanies } from "./pickers";
+import { TimerControl } from "./timers";
 import { dueState, longDateTime, PRIORITY_STYLE, STATUS_STYLE, useChoiceText, usePresence, type AiAnalysis, type TicketDetail, type TicketList, type Viewer, ticketErrorText } from "./shared";
 
 const SOURCE_ICON: Record<string, LucideIcon> = { email: Mail, phone: Phone, portal: Inbox, monitoring: MonitorCog };
@@ -170,7 +172,18 @@ function useTicketUpdate(tk: TicketDetail) {
   const { t } = useTranslation();
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: (patch: { status?: string; priority?: string; queue?: string; assigneeId?: string | null; dueDate?: string; companyId?: number; contactId?: string | null }) =>
+    mutationFn: (patch: {
+      status?: string;
+      priority?: string;
+      queue?: string;
+      assigneeId?: string | null;
+      secondaryIds?: string[];
+      dueDate?: string;
+      companyId?: number;
+      contactId?: string | null;
+      title?: string;
+      description?: string;
+    }) =>
       api.patch<TicketDetail>(`/tickets/${tk.id}`, patch),
     onSuccess: (next) => {
       qc.setQueryData(["tickets", "detail", tk.id], next);
@@ -218,6 +231,7 @@ function TicketBody({
             <span className="ml-auto">
               <PresenceLight viewers={viewers} />
             </span>
+            <TimerControl ticketId={tk.id} />
             {can("tickets.ai") && (tk.ai ? <AiMenu tk={tk} onReply={(text) => setDraft({ text, internal: false })} /> : <AiSetupHint label={t("tickets.ai.button")} />)}
             <Tooltip>
               <TooltipTrigger asChild>
@@ -231,7 +245,7 @@ function TicketBody({
               <X className="size-4" />
             </Button>
           </div>
-          <DialogPrimitive.Title className="mt-3 font-display text-2xl font-bold leading-snug sm:text-3xl">{tk.title}</DialogPrimitive.Title>
+          <EditableTitle value={tk.title} disabled={!editable || partial} onSave={(title) => update.mutate({ title })} />
           <div className="mt-3 flex flex-wrap items-center gap-2">
             <InlinePick
               disabled={!editable}
@@ -300,8 +314,12 @@ function TicketBody({
             ))}
             <AiPanel tk={tk} onToNote={(text) => setDraft({ text, internal: true })} />
             <section className="glass rounded-2xl border p-4">
-              <p className="mb-2 text-[11px] font-medium uppercase tracking-wide text-muted-foreground">{t("tickets.description")}</p>
-              <Description text={tk.description || "—"} />
+              <EditableDescription
+                text={tk.description}
+                disabled={!editable || partial}
+                saving={update.isPending}
+                onSave={(description) => update.mutate({ description })}
+              />
               {partial && <Skeleton className="mt-2 h-4 w-2/3" />}
             </section>
             <section>
@@ -387,7 +405,13 @@ function TicketBody({
                 />
               </Detail>
               <Detail icon={Users} label={t("tickets.fields.secondary")}>
-                {tk.secondary.length ? tk.secondary.map((p) => p.name).join(", ") : <span className="text-muted-foreground">—</span>}
+                <SecondaryPick
+                  disabled={!editable}
+                  value={tk.secondary.map((p) => p.id)}
+                  names={tk.secondary.map((p) => p.name)}
+                  options={tk.options.technicians.filter((p) => p.id !== tk.assignee?.id)}
+                  onSave={(secondaryIds) => update.mutate({ secondaryIds })}
+                />
               </Detail>
               <Detail icon={CalendarClock} label={t("tickets.fields.due")}>
                 {editable ? (
@@ -448,7 +472,7 @@ export function InlinePick({
           className="group inline-flex items-center gap-1 rounded-full outline-none ring-[color:var(--gold)]/40 transition hover:ring-2 focus-visible:ring-2 data-[state=open]:ring-2"
         >
           {trigger}
-          <ChevronDown className="size-3 text-muted-foreground opacity-0 transition-opacity group-hover:opacity-100 group-data-[state=open]:opacity-100" />
+          <ChevronDown className="size-3 text-muted-foreground opacity-60 transition-opacity group-hover:opacity-100 group-data-[state=open]:opacity-100" />
         </button>
       </DropdownMenuTrigger>
       <DropdownMenuContent align="start" className="max-h-80 w-56 overflow-y-auto">
@@ -460,6 +484,158 @@ export function InlinePick({
             {o.value === value && <Check className="size-4 text-primary" />}
           </DropdownMenuItem>
         ))}
+      </DropdownMenuContent>
+    </DropdownMenu>
+  );
+}
+
+/** The ticket title; click to change it (Enter saves, Escape cancels). */
+function EditableTitle({ value, disabled, onSave }: { value: string; disabled: boolean; onSave: (v: string) => void }) {
+  const { t } = useTranslation();
+  const [draft, setDraft] = useState<string | null>(null);
+  const cls = "mt-3 font-display text-2xl font-bold leading-snug sm:text-3xl";
+  if (draft === null || disabled) {
+    return (
+      <DialogPrimitive.Title className={cls}>
+        {disabled ? (
+          value
+        ) : (
+          <button type="button" onClick={() => setDraft(value)} className="group text-left" title={t("tickets.editTitle")}>
+            {value}
+            <Pencil className="ml-2 inline size-4 align-middle text-muted-foreground opacity-40 transition-opacity group-hover:opacity-100" />
+          </button>
+        )}
+      </DialogPrimitive.Title>
+    );
+  }
+  const save = () => {
+    const v = draft.trim();
+    setDraft(null);
+    if (v && v !== value) onSave(v);
+  };
+  return (
+    <>
+      <DialogPrimitive.Title className="sr-only">{value}</DialogPrimitive.Title>
+      <Input
+        autoFocus
+        value={draft}
+        maxLength={250}
+        aria-label={t("tickets.fields.title")}
+        onChange={(e) => setDraft(e.target.value)}
+        onBlur={save}
+        onKeyDown={(e) => {
+          if (e.key === "Enter") save();
+          if (e.key === "Escape") {
+            e.stopPropagation();
+            setDraft(null);
+          }
+        }}
+        className={cn(cls, "h-auto py-1")}
+      />
+    </>
+  );
+}
+
+/** Description with an edit button (saved to Autotask). */
+function EditableDescription({ text, disabled, saving, onSave }: { text: string; disabled: boolean; saving: boolean; onSave: (v: string) => void }) {
+  const { t } = useTranslation();
+  const [draft, setDraft] = useState<string | null>(null);
+  return (
+    <>
+      <div className="mb-2 flex items-center gap-2">
+        <p className="flex-1 text-[11px] font-medium uppercase tracking-wide text-muted-foreground">{t("tickets.description")}</p>
+        {!disabled && draft === null && (
+          <button type="button" onClick={() => setDraft(text)} className="flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground">
+            <Pencil className="size-3" /> {t("common.edit")}
+          </button>
+        )}
+      </div>
+      {draft === null ? (
+        <Description text={text || "—"} />
+      ) : (
+        <div className="space-y-2">
+          <Textarea autoFocus rows={8} value={draft} maxLength={8000} onChange={(e) => setDraft(e.target.value)} aria-label={t("tickets.description")} />
+          <div className="flex justify-end gap-2">
+            <Button size="sm" variant="ghost" onClick={() => setDraft(null)}>
+              {t("common.cancel")}
+            </Button>
+            <Button
+              size="sm"
+              disabled={saving}
+              className="bg-grad-gold font-semibold text-[#1a1204]"
+              onClick={() => {
+                if (draft !== text) onSave(draft);
+                setDraft(null);
+              }}
+            >
+              {t("common.save")}
+            </Button>
+          </div>
+        </div>
+      )}
+    </>
+  );
+}
+
+/** Secondary technicians: tick several, saved when the menu closes. */
+function SecondaryPick({
+  value,
+  names,
+  options,
+  disabled,
+  onSave,
+}: {
+  value: string[];
+  names: string[];
+  options: { id: string; name: string }[];
+  disabled?: boolean;
+  onSave: (ids: string[]) => void;
+}) {
+  const { t } = useTranslation();
+  const [picked, setPicked] = useState<string[] | null>(null);
+  const shown = names.length ? names.join(", ") : <span className="text-muted-foreground">—</span>;
+  if (disabled) return <>{shown}</>;
+  return (
+    <DropdownMenu
+      onOpenChange={(o) => {
+        if (o) return setPicked(value);
+        if (picked && (picked.length !== value.length || picked.some((x) => !value.includes(x)))) onSave(picked);
+        setPicked(null);
+      }}
+    >
+      <DropdownMenuTrigger asChild>
+        <button
+          type="button"
+          aria-label={t("tickets.fields.secondary")}
+          className="group inline-flex items-center gap-1 rounded-full text-left outline-none ring-[color:var(--gold)]/40 transition hover:ring-2 focus-visible:ring-2 data-[state=open]:ring-2"
+        >
+          <span>{shown}</span>
+          <ChevronDown className="size-3 shrink-0 text-muted-foreground opacity-60 transition-opacity group-hover:opacity-100" />
+        </button>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="start" className="max-h-80 w-60 overflow-y-auto">
+        <DropdownMenuLabel className="text-[11px] uppercase tracking-wide text-muted-foreground">{t("tickets.fields.secondary")}</DropdownMenuLabel>
+        {options.map((o) => {
+          const on = (picked ?? value).includes(o.id);
+          return (
+            <DropdownMenuItem
+              key={o.id}
+              className="gap-2"
+              onSelect={(e) => {
+                e.preventDefault();
+                setPicked((p) => {
+                  const cur = p ?? value;
+                  return on ? cur.filter((x) => x !== o.id) : [...cur, o.id];
+                });
+              }}
+            >
+              <span className={cn("flex size-4 items-center justify-center rounded border", on ? "border-primary bg-primary text-primary-foreground" : "border-muted-foreground/40")}>
+                {on && <Check className="size-3" />}
+              </span>
+              <span className="flex-1 truncate">{o.name}</span>
+            </DropdownMenuItem>
+          );
+        })}
       </DropdownMenuContent>
     </DropdownMenu>
   );

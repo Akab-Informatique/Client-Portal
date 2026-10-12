@@ -3,7 +3,7 @@ import { useNavigate } from "react-router-dom";
 import { useTranslation } from "react-i18next";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { AnimatePresence, motion } from "motion/react";
-import { Bell, BellOff, CheckCheck, Megaphone, ShieldAlert, type LucideIcon } from "lucide-react";
+import { Bell, BellOff, CheckCheck, Megaphone, ShieldAlert, Timer, type LucideIcon } from "lucide-react";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Button } from "@/components/ui/button";
 import { api } from "@/lib/api";
@@ -30,6 +30,8 @@ function useView(n: Notification): { icon: LucideIcon; title: string; body: stri
       return { icon: Megaphone, title: t("notifications.messageNew"), body: n.data.title ?? "", tone: "gold" };
     case "user.locked":
       return { icon: ShieldAlert, title: t("notifications.userLocked"), body: `${n.data.name ?? ""} · ${n.data.email ?? ""}`, tone: "alert" };
+    case "timer.pending":
+      return { icon: Timer, title: t("notifications.timerPending"), body: t("notifications.timerPendingBody", { number: n.data.number ?? "", minutes: n.data.minutes ?? "", title: n.data.title ?? "" }), tone: "alert" };
     default:
       return { icon: Bell, title: n.type, body: "", tone: "gold" };
   }
