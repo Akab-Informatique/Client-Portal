@@ -1,0 +1,186 @@
+import { Hono } from "hono";
+import { HTTPException } from "hono/http-exception";
+import { and, asc, desc, eq, inArray, ne, sql } from "drizzle-orm";
+import { z } from "zod";
+import { db, schema } from "../db/index.ts";
+import { auth, requirePermission, requireStaff, type AppEnv } from "../lib/auth.ts";
+import { audit } from "../lib/audit.ts";
+import { clientIp, rateLimit } from "../lib/http.ts";
+import { body, zUuid } from "../lib/validate.ts";
+import { conversationForTicket, openTicket, receiveSms, replyAsTechnician, SmsTicketError } from "../lib/sms.ts";
+import { normalizePhone, SmsError, smsReady, SMS_MAX, tokenMatches } from "../lib/voipms.ts";
+import { AutotaskError } from "../lib/autotask.ts";
+import { SourceError, ticketSource } from "../lib/ticketSource.ts";
+
+/**
+ * VoIP.ms "SMS URL Callback": called for each text received, with our secret
+ * token. Answers "ok" (what VoIP.ms expects), and never says why a call was
+ * refused.
+ */
+export const smsHookRoutes = new Hono<AppEnv>().get("/voipms", async (c) => {
+  if (!rateLimit(`sms-hook:${clientIp(c)}`, 120, 60_000).ok) return c.text("ok");
+  const q = c.req.query();
+  if (!(await tokenMatches(q.token))) {
+    console.warn("[sms] callback refused (bad token)");
+    return c.text("ok");
+  }
+  try {
+    await receiveSms({ from: q.from ?? "", message: q.message ?? "", id: q.id || null });
+  } catch (e) {
+    console.error("[sms] callback:", e);
+  }
+  return c.text("ok");
+});
+
+/** Errors of sending / ticket creation → HTTP. */
+export function smsHttp(e: unknown): HTTPException {
+  if (e instanceof HTTPException) return e;
+  if (e instanceof SmsError) return new HTTPException(e.code === "not_configured" || e.code === "disabled" ? 409 : 502, { message: `sms_${e.code}`, cause: e.detail ? [{ path: "sms", message: e.detail }] : undefined });
+  if (e instanceof SmsTicketError) return new HTTPException(409, { message: `sms_${e.code}` });
+  if (e instanceof AutotaskError) return new HTTPException(502, { message: `autotask_${e.code}`, cause: e.detail ? [{ path: "autotask", message: e.detail }] : undefined });
+  if (e instanceof SourceError) return new HTTPException(400, { message: e.code });
+  console.error("[sms]", e);
+  return new HTTPException(500, { message: "Internal error" });
+}
+async function run<T>(fn: () => Promise<T>): Promise<T> {
+  try {
+    return await fn();
+  } catch (e) {
+    throw smsHttp(e);
+  }
+}
+
+async function conversation(id: string) {
+  const [c] = await db().select().from(schema.smsConversations).where(eq(schema.smsConversations.id, id));
+  if (!c) throw new HTTPException(404, { message: "not_found" });
+  return c;
+}
+
+/** Text conversations: every technician with sms.view sees and answers them. */
+export const smsRoutes = new Hono<AppEnv>()
+  .use(requireStaff)
+  .use(requirePermission("sms.view"))
+
+  /** For the tile: conversations waiting for a reply, unread texts. */
+  .get("/summary", async (c) => {
+    const [r] = await db()
+      .select({
+        waiting: sql<number>`count(*) filter (where ${schema.smsConversations.status} = 'waiting')`.mapWith(Number),
+        unread: sql<number>`coalesce(sum(${schema.smsConversations.unread}) filter (where ${schema.smsConversations.status} <> 'closed'), 0)`.mapWith(Number),
+        open: sql<number>`count(*) filter (where ${schema.smsConversations.status} in ('waiting', 'open'))`.mapWith(Number),
+        next: sql<string | null>`min(${schema.smsConversations.autoTicketAt}) filter (where ${schema.smsConversations.status} = 'waiting')`,
+      })
+      .from(schema.smsConversations);
+    return c.json({ ...r, ready: await smsReady() });
+  })
+
+  /** Conversations, newest first (closed ones on demand). */
+  .get("/conversations", async (c) => {
+    const all = c.req.query("all") === "1";
+    return c.json(
+      await db()
+        .select()
+        .from(schema.smsConversations)
+        .where(all ? undefined : ne(schema.smsConversations.status, "closed"))
+        .orderBy(desc(schema.smsConversations.lastMessageAt))
+        .limit(200),
+    );
+  })
+
+  /** One conversation with its texts (reading it marks it read). */
+  .get("/conversations/:id", async (c) => {
+    const conv = await conversation(zUuid.parse(c.req.param("id")));
+    const messages = await db()
+      .select({
+        id: schema.smsMessages.id,
+        direction: schema.smsMessages.direction,
+        body: schema.smsMessages.body,
+        auto: schema.smsMessages.auto,
+        status: schema.smsMessages.status,
+        error: schema.smsMessages.error,
+        createdAt: schema.smsMessages.createdAt,
+        author: schema.users.name,
+      })
+      .from(schema.smsMessages)
+      .leftJoin(schema.users, eq(schema.users.id, schema.smsMessages.userId))
+      .where(eq(schema.smsMessages.conversationId, conv.id))
+      .orderBy(asc(schema.smsMessages.createdAt));
+    if (conv.unread) await db().update(schema.smsConversations).set({ unread: 0 }).where(eq(schema.smsConversations.id, conv.id));
+    return c.json({ ...conv, unread: 0, messages, max: SMS_MAX });
+  })
+
+  /** A technician's reply (stops the automatic ticket). */
+  .post("/conversations/:id/messages", async (c) => {
+    const a = auth(c);
+    const conv = await conversation(zUuid.parse(c.req.param("id")));
+    if (!rateLimit(`sms-send:${a.realUser.id}`, 60, 60_000).ok) throw new HTTPException(429, { message: "rate_limited" });
+    const p = await body(c, z.object({ body: z.string().trim().min(1).max(1000) }));
+    await run(() => replyAsTechnician(conv, p.body, a));
+    return c.json({ ok: true }, 201);
+  })
+
+  /** Open a ticket now (the client is told its number), or link to an existing ticket. */
+  .post("/conversations/:id/ticket", requirePermission("tickets.edit"), async (c) => {
+    const a = auth(c);
+    const conv = await conversation(zUuid.parse(c.req.param("id")));
+    const p = await body(c, z.object({ ticketId: z.number().int().positive().optional(), ticketNumber: z.string().max(40).optional() }));
+    if (p.ticketId) {
+      await db()
+        .update(schema.smsConversations)
+        .set({ status: "ticket", ticketId: p.ticketId, ticketNumber: p.ticketNumber ?? String(p.ticketId), autoTicketAt: null, updatedAt: new Date() })
+        .where(eq(schema.smsConversations.id, conv.id));
+      await audit(a.realUser.id, "sms.linked", conv.id, { ticketId: p.ticketId });
+      return c.json({ id: p.ticketId, number: p.ticketNumber ?? String(p.ticketId) });
+    }
+    return c.json(await run(() => openTicket(conv, a)), 201);
+  })
+
+  /** Done: the next text from this number starts a new conversation. */
+  .post("/conversations/:id/close", async (c) => {
+    const a = auth(c);
+    const conv = await conversation(zUuid.parse(c.req.param("id")));
+    await db().update(schema.smsConversations).set({ status: "closed", autoTicketAt: null, unread: 0, updatedAt: new Date() }).where(eq(schema.smsConversations.id, conv.id));
+    await audit(a.realUser.id, "sms.closed", conv.id, {});
+    return c.json({ ok: true });
+  })
+
+  /** A text to the client from a ticket (to the contact's number, or the one typed). */
+  .post("/ticket/:ticketId", async (c) => {
+    const a = auth(c);
+    const ticketId = Number(c.req.param("ticketId"));
+    if (!Number.isInteger(ticketId)) throw new HTTPException(400, { message: "invalid_id" });
+    if (!rateLimit(`sms-send:${a.realUser.id}`, 60, 60_000).ok) throw new HTTPException(429, { message: "rate_limited" });
+    const p = await body(c, z.object({ phone: z.string().max(30), body: z.string().trim().min(1).max(1000) }));
+    const phone = normalizePhone(p.phone);
+    if (!phone) throw new HTTPException(400, { message: "invalid_phone" });
+    const src = await ticketSource();
+    const t = await run(() => src.get(ticketId));
+    if (!t) throw new HTTPException(404, { message: "not_found" });
+    const conv = await conversationForTicket({ id: t.id, number: t.number, phone, contactName: t.contact || null, contactId: t.contactId, companyId: t.company.id, companyName: t.company.name });
+    await run(() => replyAsTechnician(conv, p.body, a));
+    return c.json({ ok: true, conversationId: conv.id }, 201);
+  })
+
+  /** Texts of the conversations linked to a ticket. */
+  .get("/ticket/:ticketId", async (c) => {
+    const ticketId = Number(c.req.param("ticketId"));
+    if (!Number.isInteger(ticketId)) throw new HTTPException(400, { message: "invalid_id" });
+    const convs = await db().select().from(schema.smsConversations).where(eq(schema.smsConversations.ticketId, ticketId));
+    if (!convs.length) return c.json({ conversations: [], messages: [] });
+    const messages = await db()
+      .select({
+        id: schema.smsMessages.id,
+        conversationId: schema.smsMessages.conversationId,
+        direction: schema.smsMessages.direction,
+        body: schema.smsMessages.body,
+        auto: schema.smsMessages.auto,
+        status: schema.smsMessages.status,
+        createdAt: schema.smsMessages.createdAt,
+        author: schema.users.name,
+      })
+      .from(schema.smsMessages)
+      .leftJoin(schema.users, eq(schema.users.id, schema.smsMessages.userId))
+      .where(and(inArray(schema.smsMessages.conversationId, convs.map((x) => x.id))))
+      .orderBy(asc(schema.smsMessages.createdAt));
+    return c.json({ conversations: convs, messages });
+  });

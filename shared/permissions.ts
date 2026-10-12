@@ -112,6 +112,21 @@ export const MODULES = [
     ],
   },
   {
+    key: "sms",
+    audience: "staff",
+    label: { fr: "Textos (SMS)", en: "Text messages (SMS)" },
+    permissions: [
+      {
+        key: "sms.view",
+        label: { fr: "Voir et répondre aux textos", en: "View and answer text messages" },
+        description: {
+          fr: "Conversations par texto avec les clients (numéro VoIP.ms), et envoi de textos depuis un billet",
+          en: "Text conversations with clients (VoIP.ms number), and texts sent from a ticket",
+        },
+      },
+    ],
+  },
+  {
     key: "store",
     audience: "staff",
     label: { fr: "Inventaire boutique", en: "Store inventory" },
@@ -228,7 +243,7 @@ export const SYSTEM_ROLES: Array<{
     audience: "staff",
     name: { fr: "Technicien", en: "Technician" },
     description: { fr: "Travail quotidien : babillard et tableau de bord", en: "Day-to-day work: board and dashboard" },
-    permissions: ["dashboard.view", "tickets.view", "tickets.edit", "messages.view", "messages.post", "messages.pin", "messages.email"],
+    permissions: ["dashboard.view", "tickets.view", "tickets.edit", "sms.view", "messages.view", "messages.post", "messages.pin", "messages.email"],
     locked: false,
   },
   {

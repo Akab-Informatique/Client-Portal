@@ -1830,3 +1830,119 @@ describe("Microsoft 365 calendar", () => {
     await admin.put(`/api/admin/users/${techRow.id}/permissions`, { overrides: [] });
   });
 });
+
+describe("text messages (VoIP.ms)", () => {
+  const sms: { method: string; dst?: string; message?: string; did?: string }[] = [];
+  beforeAll(() => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: unknown, init: RequestInit = {}) => {
+        const url = String(input);
+        if (!url.startsWith("https://voip.ms/api/v1/rest.php")) return new Response("{}", { status: 500 });
+        const p = new URLSearchParams(String(init.body));
+        // the password goes in the body, never in the address
+        expect(url).not.toContain("api_password");
+        if (p.get("api_password") !== "api-secret") return new Response(JSON.stringify({ status: "invalid_credentials" }), { headers: { "content-type": "application/json" } });
+        sms.push({ method: p.get("method")!, dst: p.get("dst") ?? undefined, message: p.get("message") ?? undefined, did: p.get("did") ?? undefined });
+        return new Response(JSON.stringify({ status: "success", sms: sms.length }), { headers: { "content-type": "application/json" } });
+      }),
+    );
+  });
+  afterAll(async () => {
+    vi.unstubAllGlobals();
+    await db().update(schema.integrations).set({ enabled: false }).where(eq(schema.integrations.provider, "voipms"));
+  });
+
+  it("receives texts, answers automatically, opens tickets on request or when nobody replies", async () => {
+    resetRateLimit("login:ip:unknown");
+    const admin = await signIn("admin@akab.local");
+    resetRateLimit("login:ip:unknown");
+    const tech = await signIn("tech@akab.local");
+
+    // settings: the password never comes back; the callback address carries the token
+    expect((await admin.put("/api/admin/integrations/voipms", { enabled: true })).json.error).toBe("sms_incomplete");
+    expect((await admin.post("/api/admin/integrations/voipms/test", { username: "akab@akab.ca", password: "wrong" })).json).toMatchObject({ ok: false, error: "api", detail: "invalid_credentials" });
+    const saved = (await admin.put("/api/admin/integrations/voipms", { username: "akab@akab.ca", password: "api-secret", did: "+1 (450) 555-9000", enabled: true, defaultCompanyId: 301, defaultCompanyName: "Client par défaut", autoTicketMinutes: 15 })).json;
+    expect(saved).toMatchObject({ enabled: true, did: "4505559000", hasPassword: true, autoTicketMinutes: 15 });
+    expect(JSON.stringify(saved)).not.toContain("api-secret");
+    const token = new URL(saved.callbackUrl.replace("{FROM}", "x"), "http://h").searchParams.get("token")!;
+    expect(token.length).toBeGreaterThan(20);
+    const hook = (q: Record<string, string>) => admin.get(`/api/sms/hook/voipms?${new URLSearchParams(q)}`);
+
+    // wrong token: "ok", nothing kept
+    expect((await hook({ token: "nope", from: "5145550000", message: "x", id: "z" })).status).toBe(200);
+    expect((await tech.get("/api/sms/conversations")).json).toEqual([]);
+
+    // an unknown number: a conversation waiting, the automatic reply (in two parts, it is long)
+    sms.length = 0;
+    await hook({ token, from: "15145550000", message: "Mon imprimante ne marche plus", id: "m1" });
+    await hook({ token, from: "15145550000", message: "Mon imprimante ne marche plus", id: "m1" }); // twice: kept once
+    let convs = (await tech.get("/api/sms/conversations")).json;
+    expect(convs).toEqual([expect.objectContaining({ phone: "5145550000", status: "waiting", contactName: null, unread: 1, lastPreview: "Mon imprimante ne marche plus" })]);
+    expect(sms.every((s) => s.method === "sendSMS" && s.dst === "5145550000" && s.did === "4505559000" && s.message!.length <= 160)).toBe(true);
+    expect(sms.map((s) => s.message).join(" ")).toContain("Répondez 1");
+    const bell = (await tech.get("/api/notifications")).json.items.find((n: any) => n.type === "sms.received");
+    expect(bell).toMatchObject({ link: `/sms?c=${convs[0].id}`, data: { preview: "Mon imprimante ne marche plus" } });
+    expect((await tech.get("/api/sms/summary")).json).toMatchObject({ waiting: 1, unread: 1, ready: true });
+
+    // a technician answers: no automatic ticket for this one
+    sms.length = 0;
+    expect((await tech.post(`/api/sms/conversations/${convs[0].id}/messages`, { body: "Bonjour, je regarde ça." })).status).toBe(201);
+    expect(sms).toEqual([expect.objectContaining({ dst: "5145550000", message: "Bonjour, je regarde ça." })]);
+    const thread = (await tech.get(`/api/sms/conversations/${convs[0].id}`)).json;
+    expect(thread).toMatchObject({ status: "open", autoTicketAt: null, unread: 0 });
+    expect(thread.messages.map((m: any) => [m.direction, m.auto, m.author])).toEqual([
+      ["in", false, null],
+      ["out", true, null], // the automatic reply (sent in two parts, kept once)
+      ["out", false, "Alex Tremblay"],
+    ]);
+
+    // a known contact answers 1: a ticket at once for their client, and its number by text
+    await hook({ token, from: "450-555-1000", message: "Le serveur est lent", id: "m2" });
+    convs = (await tech.get("/api/sms/conversations")).json;
+    const known = convs.find((c: any) => c.phone === "4505551000");
+    expect(known).toMatchObject({ contactId: "c-300-0", companyId: 300, status: "waiting" });
+    sms.length = 0;
+    await hook({ token, from: "4505551000", message: " 1 ", id: "m3" });
+    const opened = (await tech.get(`/api/sms/conversations/${known.id}`)).json;
+    expect(opened.status).toBe("ticket");
+    expect(sms[0].message).toContain(opened.ticketNumber);
+    const ticket = (await tech.get(`/api/tickets/${opened.ticketId}`)).json;
+    expect(ticket).toMatchObject({ company: { id: 300 }, contactId: "c-300-0" });
+    expect(ticket.description).toContain("Le serveur est lent");
+    // later texts go in the ticket
+    await hook({ token, from: "4505551000", message: "Merci!", id: "m4" });
+    expect((await tech.get(`/api/tickets/${opened.ticketId}`)).json.notes.at(-1).text).toContain("Merci!");
+
+    // nobody answers in time: a ticket by itself (default client for an unknown number), and the client is told
+    await hook({ token, from: "8195550123", message: "Besoin d'aide urgente", id: "m5" });
+    const late = (await tech.get("/api/sms/conversations")).json.find((c: any) => c.phone === "8195550123");
+    await db().update(schema.smsConversations).set({ autoTicketAt: new Date(Date.now() - 1000) }).where(eq(schema.smsConversations.id, late.id));
+    sms.length = 0;
+    const { autoTickets } = await import("../server/lib/sms.ts");
+    expect(await autoTickets()).toBe(1);
+    const auto = (await tech.get(`/api/sms/conversations/${late.id}`)).json;
+    expect(auto.status).toBe("ticket");
+    expect((await tech.get(`/api/tickets/${auto.ticketId}`)).json.company.id).toBe(301);
+    expect(sms[0]).toMatchObject({ dst: "8195550123", message: expect.stringContaining(auto.ticketNumber) });
+
+    // from a ticket: a text to the contact, kept with the ticket
+    const tk = (await tech.get("/api/tickets?view=all")).json.items[0];
+    expect((await tech.post(`/api/sms/ticket/${tk.id}`, { phone: "nope", body: "x" })).json.error).toBe("invalid_phone");
+    expect((await tech.post(`/api/sms/ticket/${tk.id}`, { phone: "514 555 7777", body: "Je passe à 14 h." })).status).toBe(201);
+    const forTicket = (await tech.get(`/api/sms/ticket/${tk.id}`)).json;
+    expect(forTicket.messages.map((m: any) => m.body)).toEqual(["Je passe à 14 h."]);
+
+    // closed: the next text starts a new conversation
+    const first = (await tech.get("/api/sms/conversations")).json.find((c: any) => c.phone === "5145550000");
+    await tech.post(`/api/sms/conversations/${first.id}/close`);
+    await hook({ token, from: "5145550000", message: "Encore moi", id: "m6" });
+    expect((await tech.get("/api/sms/conversations")).json.filter((c: any) => c.phone === "5145550000").map((c: any) => c.status)).toEqual(["waiting"]);
+  });
+
+  it("is for technicians only", async () => {
+    resetRateLimit("login:ip:unknown");
+    const client = await signIn("responsable1@client.example");
+    expect((await client.get("/api/sms/conversations")).status).toBe(403);
+  });
+});

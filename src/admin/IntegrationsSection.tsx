@@ -3,7 +3,7 @@ import { useSearchParams } from "react-router-dom";
 import { useTranslation } from "react-i18next";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
-import { ArrowLeft, CalendarDays, CheckCircle2, ChevronDown, ChevronRight, ExternalLink, KeyRound, Link2, Loader2, MonitorPlay, PlugZap, RefreshCw, Sparkles, Unlink, XCircle, type LucideIcon } from "lucide-react";
+import { ArrowLeft, CalendarDays, CheckCircle2, ChevronDown, ChevronRight, ExternalLink, KeyRound, Link2, Loader2, MonitorPlay, PlugZap, RefreshCw, Sparkles, Unlink, XCircle, type LucideIcon, MessageSquareText } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -11,7 +11,9 @@ import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Switch } from "@/components/ui/switch";
+import { Textarea } from "@/components/ui/textarea";
 import { api, ApiError } from "@/lib/api";
+import { useConfirm } from "@/components/ConfirmDialog";
 import { dateTime } from "@/lib/format";
 import { cn } from "@/lib/utils";
 import { SectionHeader } from "./sections";
@@ -69,6 +71,7 @@ const INTEGRATIONS: Integration[] = [
   },
   { key: "ai", name: "Claude (Anthropic)", icon: Sparkles, Status: AiStatus, Page: AiPage },
   { key: "o365", name: "Microsoft 365", icon: CalendarDays, Status: O365Status, Page: O365Page },
+  { key: "voipms", name: "VoIP.ms (SMS)", icon: MessageSquareText, Status: VoipmsStatus, Page: VoipmsPage },
   { key: "rmm", name: "RMM", icon: MonitorPlay, Status: RmmStatus, Page: RmmPage },
 ];
 
@@ -873,6 +876,266 @@ function O365Page() {
         <p className="flex items-start gap-2 text-xs text-muted-foreground">
           <KeyRound className="mt-0.5 size-3.5 shrink-0 text-primary" /> {t("integrations.o365.rightsNote")}
         </p>
+      </form>
+    </section>
+  );
+}
+
+// ── VoIP.ms: text messages with clients ──
+type VoipmsView = {
+  enabled: boolean;
+  username: string;
+  hasPassword: boolean;
+  did: string;
+  autoTicketMinutes: number;
+  autoReply: string;
+  ticketOpened: string;
+  defaultCompanyId: number | null;
+  defaultCompanyName: string | null;
+  queue: string | null;
+  priority: string | null;
+  lastTest?: { ok: boolean; at: string; error?: string } | null;
+  callbackUrl: string | null;
+  publicUrlSet: boolean;
+};
+const VOIPMS_KEY = ["admin", "integrations", "voipms"];
+
+function VoipmsStatus() {
+  const { t } = useTranslation();
+  const { data } = useQuery({ queryKey: VOIPMS_KEY, queryFn: () => api.get<VoipmsView>("/admin/integrations/voipms") });
+  if (!data) return null;
+  const complete = data.username && data.hasPassword && data.did;
+  const [key, tone] = !complete ? ["notConfigured", "muted"] : !data.enabled ? ["disabled", "muted"] : data.lastTest?.ok === false ? ["error", "bad"] : ["connected", "good"];
+  return (
+    <Badge
+      variant="outline"
+      className={cn("gap-1.5", tone === "good" && "border-emerald-500/40 text-emerald-400", tone === "bad" && "border-destructive/50 text-destructive", tone === "muted" && "text-muted-foreground")}
+    >
+      <span className="size-1.5 rounded-full bg-current" />
+      {t(`integrations.status.${key}`)}
+    </Badge>
+  );
+}
+
+function VoipmsPage() {
+  const { t } = useTranslation();
+  const qc = useQueryClient();
+  const confirm = useConfirm();
+  const { data: s, isLoading } = useQuery({ queryKey: VOIPMS_KEY, queryFn: () => api.get<VoipmsView>("/admin/integrations/voipms") });
+  const { data: options } = useQuery({
+    queryKey: ["admin", "voipms", "options"],
+    queryFn: async () => {
+      const [companies, list] = await Promise.all([
+        api.get<{ id: number; name: string }[]>("/tickets/companies"),
+        api.get<{ facets: { priorities: { value: string; label: string | null; kind: string }[]; queues: { value: string; label: string | null }[] } }>("/tickets?view=unassigned"),
+      ]);
+      return { companies, priorities: list.facets.priorities, queues: list.facets.queues };
+    },
+    staleTime: 5 * 60_000,
+  });
+  const [f, setF] = useState({ username: "", password: "", did: "", enabled: false, minutes: "15", autoReply: "", ticketOpened: "", companyId: "", queue: "", priority: "", sendTo: "" });
+  const [test, setTest] = useState<{ ok: boolean; error?: string; detail?: string } | null>(null);
+  useEffect(() => {
+    if (s)
+      setF((x) => ({
+        ...x,
+        username: s.username,
+        password: "",
+        did: s.did,
+        enabled: s.enabled,
+        minutes: String(s.autoTicketMinutes),
+        autoReply: s.autoReply,
+        ticketOpened: s.ticketOpened,
+        companyId: s.defaultCompanyId ? String(s.defaultCompanyId) : "",
+        queue: s.queue ?? "",
+        priority: s.priority ?? "",
+      }));
+  }, [s]);
+  const set = (k: keyof typeof f) => (v: string | boolean) => setF((x) => ({ ...x, [k]: v }));
+  const save = useMutation({
+    mutationFn: (extra: { newToken?: boolean } = {}) => {
+      const company = options?.companies.find((c) => String(c.id) === f.companyId);
+      return api.put<VoipmsView>("/admin/integrations/voipms", {
+        enabled: f.enabled,
+        ...(f.username.trim() ? { username: f.username.trim() } : {}),
+        ...(f.password.trim() ? { password: f.password.trim() } : {}),
+        did: f.did,
+        autoTicketMinutes: Math.max(1, Number(f.minutes) || 15),
+        autoReply: f.autoReply.trim(),
+        ticketOpened: f.ticketOpened.trim(),
+        defaultCompanyId: company ? company.id : null,
+        defaultCompanyName: company ? company.name : null,
+        queue: f.queue || null,
+        priority: f.priority || null,
+        ...extra,
+      });
+    },
+    onSuccess: (next) => {
+      qc.setQueryData(VOIPMS_KEY, next);
+      void qc.invalidateQueries({ queryKey: ["sms"] });
+      toast.success(t("common.saved"));
+    },
+    onError: (e) => toast.error(e instanceof ApiError ? t(`integrations.voipms.errors.${e.code}`, { defaultValue: t("common.error") }) : t("common.error")),
+  });
+  const runTest = useMutation({
+    mutationFn: () =>
+      api.post<{ ok: boolean; error?: string; detail?: string }>("/admin/integrations/voipms/test", {
+        ...(f.username.trim() && f.username.trim() !== s?.username ? { username: f.username.trim() } : {}),
+        ...(f.password.trim() ? { password: f.password.trim() } : {}),
+        ...(f.sendTo.trim() ? { sendTo: f.sendTo.trim() } : {}),
+      }),
+    onSuccess: (r) => {
+      setTest(r);
+      void qc.invalidateQueries({ queryKey: VOIPMS_KEY });
+    },
+    onError: () => setTest({ ok: false, error: "api" }),
+  });
+  if (isLoading || !s) return <Skeleton className="h-96 rounded-2xl" />;
+  const pick = (k: "companyId" | "queue" | "priority", label: string, list: { value: string; label: string }[], none: string) => (
+    <div className="space-y-2">
+      <Label>{label}</Label>
+      <Select value={f[k] || "_"} onValueChange={(v) => set(k)(v === "_" ? "" : v)}>
+        <SelectTrigger className="w-full">
+          <SelectValue />
+        </SelectTrigger>
+        <SelectContent position="popper" className="max-h-72">
+          <SelectItem value="_">{none}</SelectItem>
+          {list.map((x) => (
+            <SelectItem key={x.value} value={x.value}>
+              {x.label}
+            </SelectItem>
+          ))}
+        </SelectContent>
+      </Select>
+    </div>
+  );
+  return (
+    <section className="overflow-hidden rounded-2xl border bg-card/80">
+      <div className="flex flex-wrap items-center gap-4 border-b px-6 py-5">
+        <span className="flex size-11 items-center justify-center rounded-xl bg-grad-gold text-[#1a1204]">
+          <MessageSquareText className="size-5" />
+        </span>
+        <div className="min-w-0 flex-1">
+          <h3 className="font-display text-lg font-semibold">{t("integrations.connection")}</h3>
+          <div className="mt-1">
+            <VoipmsStatus />
+          </div>
+        </div>
+        <label className="flex items-center gap-3 text-sm font-medium">
+          {t("integrations.enabled")}
+          <Switch checked={f.enabled} onCheckedChange={(v) => set("enabled")(v)} />
+        </label>
+      </div>
+      <form
+        className="space-y-6 px-6 py-6"
+        onSubmit={(e: FormEvent) => {
+          e.preventDefault();
+          save.mutate({});
+        }}
+      >
+        {/* 1. The account */}
+        <div className="space-y-4">
+          <p className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">{t("integrations.voipms.account")}</p>
+          <div className="grid gap-4 sm:grid-cols-3">
+            <div className="space-y-2">
+              <Label htmlFor="vm-user">{t("integrations.voipms.username")}</Label>
+              <Input id="vm-user" type="email" value={f.username} onChange={(e) => set("username")(e.target.value)} placeholder="vous@akab.ca" />
+            </div>
+            <SecretField id="vm-pass" label={t("integrations.voipms.password")} value={f.password} onChange={(v) => set("password")(v)} saved={s.hasPassword} />
+            <div className="space-y-2">
+              <Label htmlFor="vm-did">{t("integrations.voipms.did")}</Label>
+              <Input id="vm-did" type="tel" value={f.did} onChange={(e) => set("did")(e.target.value)} placeholder="450 555-0100" />
+            </div>
+          </div>
+          <div className="rounded-xl border bg-background/40 p-4 text-xs text-muted-foreground">
+            <p className="mb-2 font-medium text-foreground">{t("integrations.voipms.howTitle")}</p>
+            <ol className="list-decimal space-y-1 pl-4">
+              {(t("integrations.voipms.how", { returnObjects: true }) as string[]).map((line) => (
+                <li key={line}>{line}</li>
+              ))}
+            </ol>
+          </div>
+          <div className="space-y-2">
+            <Label>{t("integrations.voipms.callback")}</Label>
+            {s.callbackUrl ? (
+              <div className="flex gap-2">
+                <Input readOnly value={s.callbackUrl} className="font-mono text-[11px]" onFocus={(e) => e.currentTarget.select()} />
+                <Button type="button" variant="outline" onClick={() => void navigator.clipboard.writeText(s.callbackUrl!).then(() => toast.success(t("integrations.voipms.copied")))}>
+                  {t("integrations.voipms.copy")}
+                </Button>
+                <Button
+                  type="button"
+                  variant="ghost"
+                  onClick={() => void confirm({ title: t("integrations.voipms.newTokenConfirm"), destructive: true }).then((ok) => ok && save.mutate({ newToken: true }))}
+                >
+                  {t("integrations.voipms.newToken")}
+                </Button>
+              </div>
+            ) : (
+              <p className="text-xs text-muted-foreground">{t("integrations.voipms.saveFirst")}</p>
+            )}
+            {!s.publicUrlSet && <p className="text-xs text-orange-300">{t("integrations.voipms.publicUrl")}</p>}
+          </div>
+        </div>
+
+        {/* 2. What the client receives, and when it becomes a ticket */}
+        <div className="space-y-4 border-t pt-5">
+          <p className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">{t("integrations.voipms.flow")}</p>
+          <div className="space-y-2">
+            <Label htmlFor="vm-auto">{t("integrations.voipms.autoReply")}</Label>
+            <Textarea id="vm-auto" rows={3} maxLength={600} value={f.autoReply} onChange={(e) => set("autoReply")(e.target.value)} />
+            <p className="text-[11px] text-muted-foreground">{t("integrations.voipms.autoReplyHint")}</p>
+          </div>
+          <div className="grid gap-4 sm:grid-cols-[180px_1fr]">
+            <div className="space-y-2">
+              <Label htmlFor="vm-min">{t("integrations.voipms.minutes")}</Label>
+              <Input id="vm-min" inputMode="numeric" value={f.minutes} onChange={(e) => set("minutes")(e.target.value)} />
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="vm-opened">{t("integrations.voipms.ticketOpened")}</Label>
+              <Textarea id="vm-opened" rows={2} maxLength={600} value={f.ticketOpened} onChange={(e) => set("ticketOpened")(e.target.value)} />
+              <p className="text-[11px] text-muted-foreground">{t("integrations.voipms.ticketOpenedHint")}</p>
+            </div>
+          </div>
+          <div className="grid gap-4 sm:grid-cols-3">
+            {pick(
+              "companyId",
+              t("integrations.voipms.defaultCompany"),
+              (options?.companies ?? []).map((c) => ({ value: String(c.id), label: c.name })),
+              t("integrations.voipms.noDefault"),
+            )}
+            {pick("queue", t("tickets.fields.queue"), (options?.queues ?? []).map((q) => ({ value: q.value, label: q.label ?? q.value })), t("integrations.voipms.firstQueue"))}
+            {pick("priority", t("tickets.fields.priority"), (options?.priorities ?? []).map((p) => ({ value: p.value, label: p.label ?? t(`tickets.priority.${p.kind}`) })), t("integrations.voipms.mediumPriority"))}
+          </div>
+          <p className="text-[11px] text-muted-foreground">{t("integrations.voipms.defaultCompanyHint")}</p>
+        </div>
+
+        <div className="flex flex-wrap items-end gap-2 border-t pt-5">
+          <div className="min-w-48 flex-1 space-y-2">
+            <Label htmlFor="vm-test">{t("integrations.voipms.testTo")}</Label>
+            <Input id="vm-test" type="tel" value={f.sendTo} onChange={(e) => set("sendTo")(e.target.value)} placeholder={t("integrations.voipms.testToHint")} />
+          </div>
+          <Button type="button" variant="outline" onClick={() => runTest.mutate()} disabled={runTest.isPending}>
+            {runTest.isPending ? <Loader2 className="size-4 animate-spin" /> : <RefreshCw className="size-4" />} {t("integrations.test")}
+          </Button>
+          <Button type="submit" disabled={save.isPending} className="bg-grad-gold font-semibold text-[#1a1204] hover:brightness-105">
+            {save.isPending && <Loader2 className="size-4 animate-spin" />} {t("common.save")}
+          </Button>
+        </div>
+        {test &&
+          (test.ok ? (
+            <p className="flex items-center gap-2 rounded-xl border border-emerald-500/30 bg-emerald-500/10 p-3 text-sm text-emerald-300">
+              <CheckCircle2 className="size-4" /> {f.sendTo ? t("integrations.voipms.testSent") : t("integrations.voipms.testOk")}
+            </p>
+          ) : (
+            <p className="flex items-start gap-2 rounded-xl border border-destructive/40 bg-destructive/10 p-3 text-sm">
+              <XCircle className="mt-0.5 size-4 shrink-0 text-destructive" />
+              <span>
+                {t("integrations.voipms.testFailed")}
+                {test.detail && <span className="block font-mono text-xs text-muted-foreground">{test.detail}</span>}
+              </span>
+            </p>
+          ))}
       </form>
     </section>
   );

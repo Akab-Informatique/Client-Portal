@@ -3,7 +3,7 @@ import { db, schema } from "../db/index.ts";
 import { permissionsOf } from "./auth.ts";
 import type { PermissionKey } from "../../shared/permissions.ts";
 
-export type NotificationType = "message.new" | "user.locked" | "timer.pending" | "ticket.pinned" | "calendar.reminder";
+export type NotificationType = "message.new" | "user.locked" | "timer.pending" | "ticket.pinned" | "calendar.reminder" | "sms.received";
 
 type Notice = { type: NotificationType; data: Record<string, unknown>; link: string };
 
@@ -23,7 +23,7 @@ export async function notify(userIds: string[], n: Notice): Promise<void> {
 }
 
 /** Active users of a kind whose effective rights include `perm`. */
-async function usersWith(kind: "staff" | "client", perm: PermissionKey, clientIds?: string[]): Promise<string[]> {
+export async function usersWith(kind: "staff" | "client", perm: PermissionKey, clientIds?: string[]): Promise<string[]> {
   const conds = [eq(schema.users.kind, kind), eq(schema.users.active, true)];
   if (clientIds) {
     if (!clientIds.length) return [];

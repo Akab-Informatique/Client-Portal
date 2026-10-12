@@ -22,6 +22,7 @@ import { notificationRoutes } from "./routes/notifications.ts";
 import { ticketRoutes } from "./routes/tickets.ts";
 import { storeRoutes } from "./routes/store.ts";
 import { planningRoutes } from "./routes/planning.ts";
+import { smsHookRoutes, smsRoutes } from "./routes/sms.ts";
 
 export function createApp() {
   const app = new Hono<AppEnv>();
@@ -70,6 +71,9 @@ export function createApp() {
   api.use("/messages/*", requireStaff);
   api.route("/store", storeRoutes);
   api.route("/planning", planningRoutes);
+  // VoIP.ms calls this one (secret token, no session); the rest is for technicians
+  api.route("/sms/hook", smsHookRoutes);
+  api.route("/sms", smsRoutes);
   api.route("/messages", messageRoutes);
   api.route("/board", boardRoutes);
   api.use("/dashboard/*", requireStaff);

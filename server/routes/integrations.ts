@@ -21,6 +21,8 @@ import { body, zEmail, zUuid } from "../lib/validate.ts";
 import { clearTicketCache } from "../lib/ticketSource.ts";
 import { RMM_PLACEHOLDERS, rmmSettings, saveRmmSettings, validTemplate } from "../lib/rmm.ts";
 import { O365Error, o365Settings, saveO365Settings, testO365 } from "../lib/o365.ts";
+import { normalizePhone, saveSmsSettings, sendSms, SmsError, smsSettings, testVoipms, type SmsSettings } from "../lib/voipms.ts";
+import { config } from "../config.ts";
 import { AI_MODELS, AiError, aiSettings, askClaude, saveAiSettings, type AiErrorCode } from "../lib/ai.ts";
 
 const zCred = z.string().trim().min(1).max(300);
@@ -50,6 +52,18 @@ async function current() {
 
 /** Microsoft 365 settings as shown to the admin (never the secret). */
 const o365View = (s: Awaited<ReturnType<typeof o365Settings>>) => ({ enabled: s.enabled, tenantId: s.tenantId, clientId: s.clientId, hasSecret: Boolean(s.secret), lastTest: s.lastTest ?? null });
+
+/** VoIP.ms settings as shown to the admin: never the API password; the callback address to paste in VoIP.ms. */
+function voipmsView(s: SmsSettings) {
+  const { password, token, ...rest } = s;
+  const base = config.publicUrl || "";
+  return {
+    ...rest,
+    hasPassword: Boolean(password),
+    callbackUrl: token ? `${base}/api/sms/hook/voipms?token=${token}&from={FROM}&message={MESSAGE}&id={ID}` : null,
+    publicUrlSet: Boolean(config.publicUrl),
+  };
+}
 
 const codeOf = (e: unknown): AutotaskErrorCode => (e instanceof AutotaskError ? e.code : "api");
 
@@ -242,6 +256,56 @@ export const integrationRoutes = new Hono<AppEnv>()
       result = { ok: false, error: e instanceof O365Error ? e.code : "api", detail: e instanceof O365Error ? e.detail : undefined };
     }
     if (!p.secret && !p.tenantId && !p.clientId) await saveO365Settings(a.user.id, { lastTest: { ok: result.ok, at: new Date().toISOString(), ...(result.ok ? {} : { error: result.error }) } });
+    return c.json(result);
+  })
+
+  // ── VoIP.ms text messages ──
+  .get("/voipms", async (c) => c.json(voipmsView(await smsSettings())))
+  .put("/voipms", async (c) => {
+    const a = auth(c);
+    const p = await body(
+      c,
+      z.object({
+        enabled: z.boolean().optional(),
+        username: zEmail.optional(),
+        password: zCred.optional(),
+        did: z.string().max(30).optional(),
+        autoTicketMinutes: z.number().int().min(1).max(24 * 60).optional(),
+        autoReply: z.string().trim().min(1).max(600).optional(),
+        ticketOpened: z.string().trim().min(1).max(600).optional(),
+        defaultCompanyId: z.number().int().positive().nullable().optional(),
+        defaultCompanyName: z.string().trim().max(200).nullable().optional(),
+        queue: z.string().max(40).nullable().optional(),
+        priority: z.string().max(40).nullable().optional(),
+        newToken: z.boolean().optional(),
+      }),
+    );
+    if (p.did !== undefined && p.did !== "" && !normalizePhone(p.did)) throw new HTTPException(400, { message: "sms_invalid_did" });
+    const s = await smsSettings();
+    const next = { ...s, ...p, did: p.did !== undefined ? (normalizePhone(p.did) ?? "") : s.did };
+    if (p.enabled && !(next.username && (p.password ?? s.password) && next.did)) throw new HTTPException(400, { message: "sms_incomplete" });
+    await saveSmsSettings(a.user.id, { ...p, did: next.did } as Partial<SmsSettings> & { newToken?: boolean });
+    await audit(a.user.id, "integration.voipms.updated", null, { enabled: p.enabled, username: p.username, did: next.did, passwordChanged: p.password !== undefined || undefined, newToken: p.newToken });
+    return c.json(voipmsView(await smsSettings()));
+  })
+  /** Test the account (and optionally send a text to a number). */
+  .post("/voipms/test", async (c) => {
+    const a = auth(c);
+    const p = await body(c, z.object({ username: zEmail.optional(), password: zCred.optional(), sendTo: z.string().max(30).optional() }));
+    const s = await smsSettings();
+    let result: { ok: true } | { ok: false; error: string; detail?: string };
+    try {
+      await testVoipms({ username: p.username ?? s.username, password: p.password ?? s.password });
+      if (p.sendTo) {
+        if (!normalizePhone(p.sendTo)) throw new HTTPException(400, { message: "invalid_phone" });
+        await sendSms(p.sendTo, "Test du portail AKAB : les textos fonctionnent.");
+      }
+      result = { ok: true };
+    } catch (e) {
+      if (e instanceof HTTPException) throw e;
+      result = { ok: false, error: e instanceof SmsError ? e.code : "api", detail: e instanceof SmsError ? e.detail : undefined };
+    }
+    if (!p.username && !p.password) await saveSmsSettings(a.user.id, { lastTest: { ok: result.ok, at: new Date().toISOString(), ...(result.ok ? {} : { error: result.error }) } });
     return c.json(result);
   })
 

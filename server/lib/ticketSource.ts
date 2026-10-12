@@ -166,6 +166,12 @@ export interface TicketSource {
   createServiceCall(p: { ticketId: number; technicianId: string; startsAt: Date; endsAt: Date; description: string }, a: AuthContext): Promise<number | null>;
   updateServiceCall(id: number, p: { startsAt: Date; endsAt: Date }, a: AuthContext): Promise<void>;
   deleteServiceCall(id: number, a: AuthContext): Promise<void>;
+  /** The contact with this phone or mobile number (10 digits), with their client */
+  contactByPhone(phone: string): Promise<{ contactId: string; contactName: string; companyId: number; companyName: string } | null>;
+  /** A ticket opened by the portal itself (texts with no reply): no technician behind it */
+  createSystem(p: NewTicket): Promise<{ id: number; number: string }>;
+  /** A note written by the portal itself (e.g. a text from the client), internal */
+  addSystemNote(ticketId: number, text: string): Promise<void>;
   /** Work types for time entries (Autotask billing codes); empty when not used */
   workTypes(): Promise<{ value: string; label: string }[]>;
   addTimeEntry(ticketId: number, p: NewTimeEntry, a: AuthContext): Promise<void>;
@@ -370,6 +376,22 @@ const demoSource: TicketSource = {
   },
   async createServiceCall() {
     return null;
+  },
+  async contactByPhone(phone) {
+    for (const c of demoCompanies()) {
+      const hit = demoContacts(c.id).find((x) => (x.phone ?? "").replace(/\D/g, "").endsWith(phone.slice(-10)));
+      if (hit) return { contactId: hit.id, contactName: hit.name, companyId: c.id, companyName: c.name };
+    }
+    return null;
+  },
+  async addSystemNote(ticketId, text) {
+    await this.list();
+    addDemoNote(ticketId, { author: "Texto", text, internal: true });
+  },
+  async createSystem(p) {
+    const id = await this.create(p, undefined as never);
+    const t = (await this.list()).find((x) => x.id === id)!;
+    return { id, number: t.number };
   },
   async updateServiceCall() {},
   async deleteServiceCall() {},
@@ -1268,6 +1290,72 @@ const autotaskSource: TicketSource = {
       { impersonate: actor, asApiUser: signText(a, "description") },
     );
     forget(`charges:${ticketId}`);
+  },
+
+  async contactByPhone(phone) {
+    const at = await autotask();
+    return cached(`contactByPhone:${phone}`, 10 * 60_000, async () => {
+      type AtContact = { id: number; companyID: number; firstName?: string; lastName?: string; phone?: string | null; mobilePhone?: string | null; alternatePhone?: string | null };
+      const fields = await safeFields(at, "Contacts", ["id", "companyID", "firstName", "lastName", "phone", "mobilePhone", "alternatePhone"]);
+      const searchable = ["phone", "mobilePhone", "alternatePhone"].filter((x) => fields.includes(x));
+      // numbers are stored in many formats: look for the last 4 digits, then compare all 10
+      const rows = await at.query<AtContact>(
+        "Contacts",
+        [
+          { op: "eq", field: "isActive", value: 1 },
+          { op: "or", items: searchable.map((field) => ({ op: "contains", field, value: phone.slice(-4) })) },
+        ],
+        { fields, max: 500 },
+      );
+      const same = (v?: string | null) => (v ?? "").replace(/\D/g, "").replace(/^1(?=\d{10}$)/, "") === phone;
+      const hit = rows.find((r) => same(r.mobilePhone) || same(r.phone) || same(r.alternatePhone));
+      if (!hit) return null;
+      const names = await companyNames(at, [hit.companyID]);
+      return {
+        contactId: String(hit.id),
+        contactName: `${hit.firstName ?? ""} ${hit.lastName ?? ""}`.trim(),
+        companyId: hit.companyID,
+        companyName: names.get(hit.companyID) ?? `#${hit.companyID}`,
+      };
+    });
+  },
+
+  async addSystemNote(ticketId, text) {
+    const at = await autotask();
+    const opts = await atOptions();
+    const noteType = opts.noteTypes.find((n) => /task|tâche|detail|détail/i.test(n.label)) ?? opts.noteTypes[0];
+    const publish = opts.publish.find((x) => /intern/i.test(x.label)) ?? opts.publish[0];
+    await at.call("POST", `Tickets/${ticketId}/Notes`, {
+      ticketID: ticketId,
+      title: text.split("\n")[0].slice(0, 120) || "Texto",
+      description: text,
+      noteType: noteType ? Number(noteType.value) : 1,
+      publish: publish ? Number(publish.value) : 2,
+    });
+    forget(`detail:${ticketId}:`);
+  },
+
+  async createSystem(p) {
+    const at = await autotask();
+    const opts = await atOptions();
+    const fields = await fieldsOf(at, "Tickets").catch(() => [] as FieldInfo[]);
+    const source = picklist(fields, "source").find((s) => /sms|text/i.test(s.label));
+    const newStatus = opts.statuses.find((s) => s.kind === "new") ?? opts.statuses[0];
+    // the portal's own API user: no technician to act for
+    const res = await at.call<{ itemId: number }>("POST", "Tickets", {
+      companyID: p.companyId,
+      contactID: p.contactId ? Number(p.contactId) : null,
+      title: p.title,
+      description: p.description || undefined,
+      status: Number(newStatus.value),
+      priority: Number(p.priority),
+      queueID: p.queue ? Number(p.queue) : undefined,
+      dueDateTime: dueIso(p.dueDate),
+      ...(source ? { source: Number(source.value) } : {}),
+    });
+    await refreshOne(at, res.itemId);
+    const t = (await mirrorMap()).get(res.itemId) ?? (await this.get(res.itemId));
+    return { id: res.itemId, number: t?.number ?? String(res.itemId) };
   },
 
   async createServiceCall(p, a) {

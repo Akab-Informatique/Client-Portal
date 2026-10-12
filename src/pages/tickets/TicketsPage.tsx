@@ -57,6 +57,7 @@ import { dueState, FILTER_KEYS, PRIORITY_STYLE, dueGlow, useChoiceText, shortDat
 import { useTicketWorkspace } from "./workspace";
 import { GlobalSearch } from "./GlobalSearch";
 import { PlanningPanel } from "./Planning";
+import { SmsTile } from "@/pages/sms/SmsPage";
 import { AiSetupHint, InlinePick, useAiError } from "./TicketPanel";
 
 type Saved = { id: string; name: string; query: string };
@@ -360,7 +361,7 @@ function MetricTiles({ data, params, apply }: { data: TicketList | undefined; pa
     return canonical(p);
   }, [params]);
   return (
-    <div className="grid grid-cols-2 gap-2 lg:grid-cols-4">
+    <div className="grid grid-cols-2 gap-2 lg:grid-cols-[repeat(auto-fit,minmax(210px,1fr))]">
       {TILES.map((tile, i) => {
         const active = canonical(tile.query) === current || (tile.key === "mine" && current === "");
         const value = data?.metrics[tile.key];
@@ -411,6 +412,7 @@ function MetricTiles({ data, params, apply }: { data: TicketList | undefined; pa
           </Tooltip>
         );
       })}
+      <SmsTile />
     </div>
   );
 }

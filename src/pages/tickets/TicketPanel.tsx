@@ -39,8 +39,7 @@ import {
   UserRound,
   Users,
   X,
-  type LucideIcon,
-} from "lucide-react";
+  type LucideIcon, MessageSquareText } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import {
@@ -65,6 +64,7 @@ import { TimerControl } from "./timers";
 import { AssetContent, AssetPicker } from "./AssetCard";
 import { ChargeButtons } from "./Charges";
 import { PriorityDialog, TicketPriorities } from "./Planning";
+import { TicketSmsDialog } from "@/pages/sms/SmsPage";
 import { useConfirm } from "@/components/ConfirmDialog";
 import { dueState, longDateTime, PRIORITY_STYLE, STATUS_STYLE, useChoiceText, usePresence, type AiAnalysis, type TicketDetail, type TicketList, type Viewer, ticketErrorText } from "./shared";
 
@@ -235,6 +235,7 @@ function TicketBody({
   // Quick actions put the note box in a mode and bring it into view
   const [focusNote, setFocusNote] = useState<{ internal: boolean; at: number } | null>(null);
   const [giving, setGiving] = useState(false);
+  const [texting, setTexting] = useState(false);
   const done = tk.options.statuses.find((s) => s.kind === "complete");
   const remote = tk.asset?.links.remote ?? null;
   const phone = tk.contactInfo?.phone ?? null;
@@ -337,6 +338,7 @@ function TicketBody({
             )}
             {remote && <QuickAction icon={MonitorPlay} label={t("tickets.asset.remote")} href={remote} accent />}
             {phone && <QuickAction icon={Phone} label={t("tickets.quickAction.call", { name: tk.contact.split(" ")[0] })} href={`tel:${phone.replace(/[^\d+]/g, "")}`} title={phone} />}
+            {can("sms.view") && <QuickAction icon={MessageSquareText} label={t("sms.quick")} onClick={() => setTexting(true)} />}
             {email && <QuickAction icon={Mail} label={t("tickets.quickAction.email")} href={`mailto:${email}?subject=${encodeURIComponent(`[${tk.number}] ${tk.title}`)}`} title={email} />}
             {can("tickets.plan") && <QuickAction icon={Star} label={t("planning.givePriority")} onClick={() => setGiving(true)} />}
             {editable && done && tk.statusKind !== "complete" && (
@@ -510,6 +512,7 @@ function TicketBody({
         </aside>
       </div>
       <OpenedByOthers viewers={viewers} />
+      {texting && <TicketSmsDialog ticketId={tk.id} ticketNumber={tk.number} phone={phone} contact={tk.contact} onClose={() => setTexting(false)} />}
       {giving && <PriorityDialog priority={null} ticket={{ id: tk.id, number: tk.number, title: tk.title }} onClose={() => setGiving(false)} />}
     </>
   );

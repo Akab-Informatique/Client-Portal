@@ -609,3 +609,52 @@ export const calendarBlocks = pgTable(
   },
   (t) => [index("calendar_blocks_tech_time_idx").on(t.technicianId, t.startsAt)],
 );
+
+// ── SMS (VoIP.ms): conversations with clients, seen by every technician ──
+/** One conversation per client number (a new one after it is closed). */
+export const smsConversations = pgTable(
+  "sms_conversations",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    /** Client number, 10 digits (North America) */
+    phone: text("phone").notNull(),
+    /** Who it is, when the number matches a contact */
+    contactName: text("contact_name"),
+    contactId: text("contact_id"),
+    companyId: bigint("company_id", { mode: "number" }),
+    companyName: text("company_name"),
+    /** waiting: the client waits for a technician (auto ticket at the deadline); open: being handled; ticket: linked to a ticket; closed */
+    status: text("status", { enum: ["waiting", "open", "ticket", "closed"] }).notNull().default("waiting"),
+    ticketId: bigint("ticket_id", { mode: "number" }),
+    ticketNumber: text("ticket_number"),
+    /** When it becomes a ticket if no technician replies */
+    autoTicketAt: timestamp("auto_ticket_at", { withTimezone: true }),
+    unread: integer("unread").notNull().default(0),
+    lastMessageAt: timestamp("last_message_at", { withTimezone: true }).notNull().defaultNow(),
+    lastPreview: text("last_preview").notNull().default(""),
+    createdAt: created(),
+    updatedAt: updated(),
+  },
+  (t) => [index("sms_conversations_phone_idx").on(t.phone, t.status), index("sms_conversations_last_idx").on(t.lastMessageAt)],
+);
+
+export const smsMessages = pgTable(
+  "sms_messages",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    conversationId: uuid("conversation_id")
+      .notNull()
+      .references(() => smsConversations.id, { onDelete: "cascade" }),
+    direction: text("direction", { enum: ["in", "out"] }).notNull(),
+    body: text("body").notNull(),
+    /** VoIP.ms message id (received) — a callback sent twice is kept once */
+    providerId: text("provider_id"),
+    /** Sent by a technician (null: the client, or an automatic message) */
+    userId: uuid("user_id").references(() => users.id, { onDelete: "set null" }),
+    auto: boolean("auto").notNull().default(false),
+    status: text("status", { enum: ["received", "sent", "failed"] }).notNull(),
+    error: text("error"),
+    createdAt: created(),
+  },
+  (t) => [index("sms_messages_conv_idx").on(t.conversationId, t.createdAt), uniqueIndex("sms_messages_provider_unique").on(t.providerId)],
+);

@@ -11,6 +11,7 @@ export const pageLoaders = {
   messages: () => import("@/pages/messages/MessagesPage"),
   tickets: () => import("@/pages/tickets/TicketsPage"),
   store: () => import("@/pages/store/StorePage"),
+  sms: () => import("@/pages/sms/SmsPage"),
 };
 
 const byPath: Record<string, () => Promise<unknown>> = {
@@ -18,6 +19,7 @@ const byPath: Record<string, () => Promise<unknown>> = {
   "/messages": pageLoaders.messages,
   "/tickets": pageLoaders.tickets,
   "/store": pageLoaders.store,
+  "/sms": pageLoaders.sms,
 };
 
 /** Load every page's code in the background once the portal is shown. */

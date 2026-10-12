@@ -141,6 +141,13 @@
       "when": 1791843054870,
       "tag": "0019_user_mobile_o365",
       "breakpoints": true
+    },
+    {
+      "idx": 20,
+      "version": "7",
+      "when": 1791843711581,
+      "tag": "0020_sms",
+      "breakpoints": true
     }
   ]
 }
