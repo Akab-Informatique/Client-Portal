@@ -32,14 +32,26 @@ export async function seed(): Promise<void> {
         name: r.name.fr,
         description: r.description.fr,
         permissions: r.permissions,
+        defaultsApplied: r.permissions,
         isSystem: true,
         locked: r.locked,
       });
     } else if (r.slug === "administrator") {
       await d
         .update(schema.roles)
-        .set({ permissions: permissionsFor("staff"), locked: true, updatedAt: new Date() })
+        .set({ permissions: permissionsFor("staff"), defaultsApplied: permissionsFor("staff"), locked: true, updatedAt: new Date() })
         .where(eq(schema.roles.id, existing.id));
+    } else {
+      // A right added to this role's defaults (e.g. texts for technicians) is
+      // given once; a right an admin removed is not given back.
+      const applied = new Set(existing.defaultsApplied ?? []);
+      const added = r.permissions.filter((p) => !applied.has(p) && !existing.permissions.includes(p));
+      if (added.length || !existing.defaultsApplied) {
+        await d
+          .update(schema.roles)
+          .set({ permissions: [...existing.permissions, ...added], defaultsApplied: r.permissions, updatedAt: new Date() })
+          .where(eq(schema.roles.id, existing.id));
+      }
     }
   }
 

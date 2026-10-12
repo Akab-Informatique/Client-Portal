@@ -35,11 +35,19 @@ async function addMessage(conv: Conversation, m: { direction: "in" | "out"; body
     .where(eq(schema.smsConversations.id, conv.id));
 }
 
+/** A text of a conversation linked to a ticket, copied as an internal note (Autotask). */
+async function noteInTicket(conv: Conversation, title: string, body: string) {
+  if (!conv.ticketId) return;
+  const src = await ticketSource();
+  await src.addSmsNote(conv.ticketId, title, body).catch((e) => console.warn("[sms] note:", e instanceof Error ? e.message : e));
+}
+
 /** A text from the portal to the client, kept in the conversation (failed ones too). */
-async function sendTo(conv: Conversation, body: string, by: { userId?: string | null; auto?: boolean }) {
+async function sendTo(conv: Conversation, body: string, by: { userId?: string | null; auto?: boolean; author?: string }) {
   try {
     await sendSms(conv.phone, body);
     await addMessage(conv, { direction: "out", body, userId: by.userId, auto: by.auto, status: "sent" });
+    await noteInTicket(conv, by.auto ? `Texto automatique envoyé à ${formatPhone(conv.phone)}` : `Texto envoyé par ${by.author ?? "AKAB"} à ${formatPhone(conv.phone)}`, body);
   } catch (e) {
     const error = e instanceof SmsError ? e.code + (e.detail ? `: ${e.detail}` : "") : String(e);
     await addMessage(conv, { direction: "out", body, userId: by.userId, auto: by.auto, status: "failed", error });
@@ -106,23 +114,16 @@ export async function receiveSms(p: { from: string; message: string; id?: string
     return;
   }
   // linked to a ticket: the client's text goes in it
-  if (conv.status === "ticket" && conv.ticketId) {
-    const src = await ticketSource();
-    await src.addSystemNote(conv.ticketId, `Texto de ${who(conv)} (${formatPhone(conv.phone)}) :\n${body}`).catch((e) => console.warn("[sms] note:", e instanceof Error ? e.message : e));
-  }
+  if (conv.status === "ticket" && conv.ticketId) await noteInTicket(conv, `Texto reçu de ${who(conv)} (${formatPhone(conv.phone)})`, body);
 }
 
 /** A technician answers: the client no longer waits (no automatic ticket). */
 export async function replyAsTechnician(conv: Conversation, body: string, a: AuthContext): Promise<void> {
-  await sendTo(conv, body, { userId: a.realUser.id });
+  await sendTo(conv, body, { userId: a.realUser.id, author: a.realUser.name });
   await db()
     .update(schema.smsConversations)
     .set({ status: conv.status === "waiting" ? "open" : conv.status, autoTicketAt: null, unread: 0, updatedAt: new Date() })
     .where(eq(schema.smsConversations.id, conv.id));
-  if (conv.ticketId) {
-    const src = await ticketSource();
-    await src.addSystemNote(conv.ticketId, `Texto envoyé par ${a.realUser.name} à ${formatPhone(conv.phone)} :\n${body}`).catch(() => undefined);
-  }
   await audit(a.realUser.id, "sms.sent", conv.id, { phone: conv.phone, ticketId: conv.ticketId });
 }
 

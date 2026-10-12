@@ -148,6 +148,13 @@
       "when": 1791843711581,
       "tag": "0020_sms",
       "breakpoints": true
+    },
+    {
+      "idx": 21,
+      "version": "7",
+      "when": 1791846865691,
+      "tag": "0021_role_defaults_applied",
+      "breakpoints": true
     }
   ]
 }

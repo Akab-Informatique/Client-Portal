@@ -31,6 +31,14 @@ export type PriorityKind = "critical" | "high" | "medium" | "low";
 export type Choice<K extends string = string> = { value: string; label: string | null; kind: K };
 export type Options = { statuses: Choice<StatusKind>[]; priorities: Choice<PriorityKind>[]; queues: Choice<"">[] };
 export type Person = { id: string; name: string };
+/**
+ * Texts with the client are copied into the ticket as internal notes, so the
+ * exchange is in Autotask too. Their title starts with this tag; the portal
+ * does not list them in the activity (it shows the texts themselves).
+ */
+export const SMS_NOTE_TAG = "[Texto]";
+export const isSmsNote = (titleOrText: string | null | undefined) => (titleOrText ?? "").startsWith(SMS_NOTE_TAG);
+
 export type Note = {
   id: string;
   author: string;
@@ -171,7 +179,8 @@ export interface TicketSource {
   /** A ticket opened by the portal itself (texts with no reply): no technician behind it */
   createSystem(p: NewTicket): Promise<{ id: number; number: string }>;
   /** A note written by the portal itself (e.g. a text from the client), internal */
-  addSystemNote(ticketId: number, text: string): Promise<void>;
+  /** An internal note for a text with the client (title starts with SMS_NOTE_TAG) */
+  addSmsNote(ticketId: number, title: string, text: string): Promise<void>;
   /** Work types for time entries (Autotask billing codes); empty when not used */
   workTypes(): Promise<{ value: string; label: string }[]>;
   addTimeEntry(ticketId: number, p: NewTimeEntry, a: AuthContext): Promise<void>;
@@ -252,7 +261,8 @@ const demoSource: TicketSource = {
     return demoTickets(await staffPeople());
   },
   async get(id) {
-    return demoTickets(await staffPeople()).find((t) => t.id === id) ?? null;
+    const t = demoTickets(await staffPeople()).find((x) => x.id === id);
+    return t ? { ...t, notes: t.notes.filter((n) => !isSmsNote(n.text)) } : null;
   },
   async update(id, p) {
     const staff = await staffPeople();
@@ -384,9 +394,9 @@ const demoSource: TicketSource = {
     }
     return null;
   },
-  async addSystemNote(ticketId, text) {
+  async addSmsNote(ticketId, title, text) {
     await this.list();
-    addDemoNote(ticketId, { author: "Texto", text, internal: true });
+    addDemoNote(ticketId, { author: "Texto", text: `${SMS_NOTE_TAG} ${title}\n${text}`, internal: true });
   },
   async createSystem(p) {
     const id = await this.create(p, undefined as never);
@@ -943,7 +953,7 @@ const autotaskSource: TicketSource = {
       .innerJoin(schema.users, eq(schema.users.id, schema.autotaskAuthors.userId))
       .where(eq(schema.autotaskAuthors.ticketId, id));
     const portalAuthor = (entity: "note" | "time", aid: number) => authors.find((x) => x.entity === entity && x.autotaskId === aid)?.name ?? null;
-    const noteItems: Note[] = notes.map((n) => ({
+    const noteItems: Note[] = notes.filter((n) => !isSmsNote(n.title)).map((n) => ({
       id: `n${n.id}`,
       author: portalAuthor("note", n.id) ?? resourceName(n.creatorResourceID) ?? (contactOf(n) ? (contactMap.get(contactOf(n)!) ?? "") : "Autotask"),
       at: n.createDateTime,
@@ -1320,14 +1330,15 @@ const autotaskSource: TicketSource = {
     });
   },
 
-  async addSystemNote(ticketId, text) {
+  async addSmsNote(ticketId, title, text) {
     const at = await autotask();
     const opts = await atOptions();
     const noteType = opts.noteTypes.find((n) => /task|tâche|detail|détail/i.test(n.label)) ?? opts.noteTypes[0];
+    // internal: the team sees the exchange in Autotask, the client does not
     const publish = opts.publish.find((x) => /intern/i.test(x.label)) ?? opts.publish[0];
     await at.call("POST", `Tickets/${ticketId}/Notes`, {
       ticketID: ticketId,
-      title: text.split("\n")[0].slice(0, 120) || "Texto",
+      title: `${SMS_NOTE_TAG} ${title}`.slice(0, 250),
       description: text,
       noteType: noteType ? Number(noteType.value) : 1,
       publish: publish ? Number(publish.value) : 2,

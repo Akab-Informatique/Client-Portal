@@ -358,6 +358,7 @@ const fr = {
     o365Off: "Calendrier Outlook non synchronisé. Un administrateur peut l'activer pour vous.",
   },
   sms: {
+    inAutotask: "Chaque texto (reçu, envoyé, automatique) est aussi copié en note interne dans le billet Autotask.",
     scope: {
       pending: "Sans billet",
       all: "Toutes",

@@ -411,10 +411,22 @@ function TicketBody({
             {thread === "sms" && can("sms.view") ? <TicketSmsPanel ticketId={tk.id} phone={phone} /> : <Activity tk={tk} partial={partial && !loadError} />}
           </div>
           {/* Charges and expenses: small buttons right above the note box */}
-          <div className="pb-2 lg:pr-2">
+          <div className="flex flex-wrap items-center gap-1.5 pb-2 lg:pr-2">
             <ChargeButtons tk={tk} editable={editable} partial={partial} />
+            {can("sms.view") && (
+              <Button
+                type="button"
+                size="sm"
+                variant={thread === "sms" ? "default" : "outline"}
+                className={cn("h-8 gap-1.5 text-xs", thread === "sms" && "bg-grad-gold text-[#1a1204]")}
+                onClick={() => setThread(thread === "sms" ? "activity" : "sms")}
+              >
+                <MessageSquareText className="size-3.5" /> {t("sms.quick")}
+                {(texts?.messages.length ?? 0) > 0 && <span className="font-mono text-[10px] opacity-70">{texts!.messages.length}</span>}
+              </Button>
+            )}
           </div>
-          {editable && (
+          {editable && thread !== "sms" && (
             <div className="sticky bottom-0 z-10 -mx-2 bg-gradient-to-t from-background via-background/95 to-transparent px-2 pb-4 pt-1 lg:static lg:mx-0 lg:bg-none lg:px-0 lg:pr-2">
               <NoteComposer tk={tk} draft={draft} onDraftUsed={() => setDraft(null)} focusRequest={focusNote} />
             </div>

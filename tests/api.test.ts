@@ -1869,6 +1869,9 @@ describe("text messages (VoIP.ms)", () => {
     const token = new URL(saved.callbackUrl.replace("{FROM}", "x"), "http://h").searchParams.get("token")!;
     expect(token.length).toBeGreaterThan(20);
     const hook = (q: Record<string, string>) => admin.get(`/api/sms/hook/voipms?${new URLSearchParams(q)}`);
+    // texts of a ticket are copied as internal notes (Autotask)
+    const { ticketSource } = await import("../server/lib/ticketSource.ts");
+    const notes = vi.spyOn(await ticketSource(), "addSmsNote");
 
     // wrong token: "ok", nothing kept
     expect((await hook({ token: "nope", from: "5145550000", message: "x", id: "z" })).status).toBe(200);
@@ -1912,9 +1915,12 @@ describe("text messages (VoIP.ms)", () => {
     const ticket = (await tech.get(`/api/tickets/${opened.ticketId}`)).json;
     expect(ticket).toMatchObject({ company: { id: 300 }, contactId: "c-300-0" });
     expect(ticket.description).toContain("Le serveur est lent");
-    // later texts go in the ticket
+    // the ticket number sent to the client, and later texts, go in the ticket as internal notes…
+    expect(notes).toHaveBeenCalledWith(opened.ticketId, expect.stringContaining("Texto automatique"), expect.stringContaining(opened.ticketNumber));
     await hook({ token, from: "4505551000", message: "Merci!", id: "m4" });
-    expect((await tech.get(`/api/tickets/${opened.ticketId}`)).json.notes.at(-1).text).toContain("Merci!");
+    expect(notes).toHaveBeenLastCalledWith(opened.ticketId, expect.stringContaining("Texto reçu"), "Merci!");
+    // …that the portal does not list (it shows the texts themselves)
+    expect(JSON.stringify((await tech.get(`/api/tickets/${opened.ticketId}`)).json.notes)).not.toContain("Merci!");
 
     // nobody answers in time: a ticket by itself (default client for an unknown number), and the client is told
     await hook({ token, from: "8195550123", message: "Besoin d'aide urgente", id: "m5" });
@@ -1936,6 +1942,8 @@ describe("text messages (VoIP.ms)", () => {
     expect((await tech.post(`/api/sms/ticket/${tk.id}`, { phone: "514 555 7777", body: "Je passe à 14 h." })).status).toBe(201);
     const forTicket = (await tech.get(`/api/sms/ticket/${tk.id}`)).json;
     expect(forTicket.messages.map((m: any) => m.body)).toEqual(["Je passe à 14 h."]);
+    expect(notes).toHaveBeenLastCalledWith(tk.id, expect.stringContaining("Texto envoyé par Alex Tremblay"), "Je passe à 14 h.");
+    notes.mockRestore();
 
     // closed: the next text starts a new conversation
     const first = (await tech.get("/api/sms/conversations")).json.find((c: any) => c.phone === "5145550000");
@@ -1948,5 +1956,20 @@ describe("text messages (VoIP.ms)", () => {
     resetRateLimit("login:ip:unknown");
     const client = await signIn("responsable1@client.example");
     expect((await client.get("/api/sms/conversations")).status).toBe(403);
+  });
+
+  it("gives a right added to a built-in role's defaults to existing installs, once", async () => {
+    const { seed } = await import("../server/db/seed.ts");
+    const tech = () => db().select().from(schema.roles).where(eq(schema.roles.slug, "technician")).then((r) => r[0]);
+    const before = await tech();
+    // an install made before texts existed
+    await db().update(schema.roles).set({ permissions: before.permissions.filter((p) => p !== "sms.view"), defaultsApplied: before.permissions.filter((p) => p !== "sms.view") }).where(eq(schema.roles.id, before.id));
+    await seed();
+    expect((await tech()).permissions).toContain("sms.view");
+    // an admin removes it: not given back
+    await db().update(schema.roles).set({ permissions: before.permissions.filter((p) => p !== "sms.view") }).where(eq(schema.roles.id, before.id));
+    await seed();
+    expect((await tech()).permissions).not.toContain("sms.view");
+    await db().update(schema.roles).set({ permissions: before.permissions }).where(eq(schema.roles.id, before.id));
   });
 });

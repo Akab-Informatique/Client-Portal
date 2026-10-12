@@ -443,7 +443,9 @@ export function TicketSmsPanel({ ticketId, phone }: { ticketId: number; phone: s
           placeholder={t("sms.replyPlaceholder")}
         />
         <div className="flex items-center justify-between text-[11px] text-muted-foreground">
-          <span>{t("sms.counter", { count: text.length, parts: Math.max(1, Math.ceil(text.length / 160)) })}</span>
+          <span>
+            {t("sms.counter", { count: text.length, parts: Math.max(1, Math.ceil(text.length / 160)) })} · {t("sms.inAutotask")}
+          </span>
           <Button type="submit" size="sm" disabled={!to || !text.trim() || send.isPending} className="bg-grad-gold font-semibold text-[#1a1204]">
             {send.isPending ? <Loader2 className="size-3.5 animate-spin" /> : <Send className="size-3.5" />} {t("sms.send")}
           </Button>

@@ -1,0 +1,1 @@
+ALTER TABLE "roles" ADD COLUMN "defaults_applied" jsonb;

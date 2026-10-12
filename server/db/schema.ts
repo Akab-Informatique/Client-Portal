@@ -44,6 +44,8 @@ export const roles = pgTable(
     permissions: jsonb("permissions").$type<string[]>().notNull().default(sql`'[]'::jsonb`),
     isSystem: boolean("is_system").notNull().default(false),
     locked: boolean("locked").notNull().default(false),
+    /** Built-in roles: the default rights already given (new defaults are added once, removals kept) */
+    defaultsApplied: jsonb("defaults_applied").$type<string[]>(),
     createdAt: created(),
     updatedAt: updated(),
   },
