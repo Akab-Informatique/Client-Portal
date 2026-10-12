@@ -12,6 +12,7 @@ import { AutotaskError, PERMISSION_REFUSED } from "../lib/autotask.ts";
 import { sweepTimers, timerView, elapsedMs } from "../lib/timers.ts";
 import { SourceError, ticketSource, type Asset, type NTicket, type Options, type TicketSource } from "../lib/ticketSource.ts";
 import { rmmLink, rmmSettings, type RmmSettings } from "../lib/rmm.ts";
+import { inStock, moveStock, undoMovement } from "../lib/store.ts";
 
 /**
  * Tickets (staff). Data come from the ticket source: Autotask when the
@@ -529,11 +530,8 @@ export const ticketRoutes = new Hono<AppEnv>()
     const src = await ticketSource();
     return c.json(await run(() => src.products(q)));
   })
-  /** Products in stock, with their location. */
-  .get("/inventory", requirePermission("tickets.edit"), async (c) => {
-    const src = await ticketSource();
-    return c.json(await run(() => src.inventory()));
-  })
+  /** Store products in stock (portal inventory), per location. */
+  .get("/inventory", requirePermission("tickets.edit"), async (c) => c.json(await inStock()))
   /** Choices for a new charge: types, statuses, material codes. */
   .get("/charge-options", requirePermission("tickets.edit"), async (c) => {
     const src = await ticketSource();
@@ -784,10 +782,36 @@ export const ticketRoutes = new Hono<AppEnv>()
         materialCodeId: z.string().max(20).nullable().default(null),
         date: zDate.nullable().default(null),
         productId: z.string().max(20).nullable().default(null),
+        /** Taken from the portal inventory: "<product id>:<location id>" */
+        stockId: z
+          .string()
+          .regex(/^[0-9a-f-]{36}:[0-9a-f-]{36}$/)
+          .nullable()
+          .default(null),
       }),
     );
     const src = await ticketSource();
-    await run(() => src.addCharge(id, p, a));
+    const { stockId, ...charge } = p;
+    let taken: { movementId: string } | null = null;
+    if (stockId) {
+      // Whole units only, never more than what is on hand
+      if (!Number.isInteger(charge.quantity)) throw new HTTPException(400, { message: "Validation failed" });
+      const [productId, locationId] = stockId.split(":");
+      const [product] = await db().select().from(schema.storeProducts).where(eq(schema.storeProducts.id, productId));
+      if (!product) throw new HTTPException(404, { message: "not_found" });
+      const number = (await run(() => src.list())).find((t) => t.id === id)?.number ?? null;
+      taken = await moveStock({ productId, locationId, delta: -charge.quantity, kind: "ticket", userId: a.user.id, ticket: { id, number }, mustHave: true });
+      if (!taken) throw new HTTPException(409, { message: "insufficient_stock" });
+      // The Autotask product it is linked to (if any) goes on the charge
+      charge.productId = product.autotaskProductId ? String(product.autotaskProductId) : null;
+    }
+    try {
+      await run(() => src.addCharge(id, charge, a));
+    } catch (e) {
+      // Not charged: the items go back in stock
+      if (taken) await undoMovement(taken.movementId);
+      throw e;
+    }
     await audit(a.user.id, "ticket.charge_added", String(id), { name: p.name, quantity: p.quantity, unitPrice: p.unitPrice, billable: p.billable, productId: p.productId });
     return c.json(await run(() => src.charges(id)), 201);
   })

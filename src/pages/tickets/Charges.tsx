@@ -113,8 +113,8 @@ function ChargeDialog({ tk, onClose }: { tk: TicketDetail; onClose: () => void }
   const [f, setF] = useState({ name: "", description: "", quantity: "1", unitPrice: "", unitCost: "", billable: true, typeId: "", statusId: "", materialCodeId: "", date: new Date().toISOString().slice(0, 10) });
   const [source, setSource] = useState<Source>("product");
   // The product picked (catalogue or stock): linked to the charge in Autotask
-  const [picked, setPicked] = useState<{ product: Product; stock?: { location: string; onHand: number } } | null>(null);
-  const choose = (product: Product, stock?: { location: string; onHand: number }) => {
+  const [picked, setPicked] = useState<{ product: Product; stock?: { id: string; location: string; onHand: number } } | null>(null);
+  const choose = (product: Product, stock?: { id: string; location: string; onHand: number }) => {
     setPicked({ product, stock });
     setF((x) => ({
       ...x,
@@ -129,7 +129,7 @@ function ChargeDialog({ tk, onClose }: { tk: TicketDetail; onClose: () => void }
   const num = (s: string) => (s.trim() === "" ? null : Number(s.replace(",", ".")));
   const qty = num(f.quantity);
   const price = num(f.unitPrice);
-  const valid = f.name.trim() && qty !== null && qty > 0 && (price === null || price >= 0);
+  const valid = f.name.trim() && qty !== null && qty > 0 && (price === null || price >= 0) && (!picked?.stock || (Number.isInteger(qty) && qty <= picked.stock.onHand));
   const save = useMutation({
     mutationFn: () =>
       api.post<Charge[]>(`/tickets/${tk.id}/charges`, {
@@ -143,10 +143,16 @@ function ChargeDialog({ tk, onClose }: { tk: TicketDetail; onClose: () => void }
         statusId: f.statusId || null,
         materialCodeId: f.materialCodeId || null,
         date: f.date || null,
-        productId: picked?.product.id ?? null,
+        // from the portal inventory: taken out of stock; from the catalogue: linked to the product
+        productId: picked && !picked.stock ? picked.product.id : null,
+        stockId: picked?.stock?.id ?? null,
       }),
     onSuccess: (list) => {
       qc.setQueryData(["tickets", "charges", tk.id], list);
+      if (picked?.stock) {
+        void qc.invalidateQueries({ queryKey: ["tickets", "inventory"] });
+        void qc.invalidateQueries({ queryKey: ["store"] });
+      }
       toast.success(t("tickets.charges.added"));
       onClose();
     },
@@ -232,7 +238,7 @@ function ChargeDialog({ tk, onClose }: { tk: TicketDetail; onClose: () => void }
           ) : source === "product" ? (
             <ProductSearch onPick={(p) => choose(p)} />
           ) : source === "inventory" ? (
-            <InventoryPick onPick={(i) => choose(i.product, { location: i.location, onHand: i.onHand })} />
+            <InventoryPick onPick={(i) => choose(i.product, { id: i.id, location: i.location, onHand: i.onHand })} />
           ) : null}
           {picked?.stock && qty !== null && qty > picked.stock.onHand && <p className="-mt-2 text-xs text-orange-300">{t("tickets.charges.moreThanStock", { count: picked.stock.onHand })}</p>}
 

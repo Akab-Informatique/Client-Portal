@@ -125,8 +125,6 @@ export type Product = {
   /** Material code to use for a charge of this product */
   materialCodeId: string | null;
 };
-/** Stock of a product at an inventory location. */
-export type InventoryItem = { id: string; product: Product; location: string; onHand: number };
 export type ChargeOptions = { types: { value: string; label: string }[]; statuses: { value: string; label: string }[]; materialCodes: { value: string; label: string }[] };
 export type NewTimeEntry = { hours: number; summary: string; internal: string; workTypeId: string | null; startedAt: Date; endedAt: Date };
 export type NewTicket = {
@@ -164,8 +162,6 @@ export interface TicketSource {
   addCharge(ticketId: number, p: NewCharge, a: AuthContext): Promise<void>;
   /** Catalogue products matching the words (name, SKU, manufacturer part) */
   products(q: string): Promise<Product[]>;
-  /** Products in stock (quantity on hand > 0), with their location */
-  inventory(): Promise<InventoryItem[]>;
   /** Work types for time entries (Autotask billing codes); empty when not used */
   workTypes(): Promise<{ value: string; label: string }[]>;
   addTimeEntry(ticketId: number, p: NewTimeEntry, a: AuthContext): Promise<void>;
@@ -196,12 +192,6 @@ const DEMO_PRODUCTS: Product[] = [
   { id: "p4", name: "Microsoft 365 Affaires Standard (1 an)", description: "Licence annuelle", sku: "CFQ7TTC0LDPB", manufacturer: "Microsoft", unitPrice: 225, unitCost: 187.2, materialCodeId: "11" },
   { id: "p5", name: "Câble réseau Cat6 3 m", description: "Bleu", sku: "C6-3M-BL", manufacturer: "Tripp Lite", unitPrice: 12.5, unitCost: 4.1, materialCodeId: "10" },
 ];
-const DEMO_INVENTORY: InventoryItem[] = [
-  { id: "i1", product: DEMO_PRODUCTS[0], location: "Entrepôt Saint-Roch", onHand: 4 },
-  { id: "i2", product: DEMO_PRODUCTS[1], location: "Entrepôt Saint-Roch", onHand: 9 },
-  { id: "i3", product: DEMO_PRODUCTS[4], location: "Camion — Alex", onHand: 20 },
-];
-
 /** A due date picked in the portal: end of the working day in Québec. */
 export const dueIso = (date: string) => new Date(`${date}T17:00:00-04:00`).toISOString();
 
@@ -344,9 +334,6 @@ const demoSource: TicketSource = {
   async products(q) {
     const words = q.toLowerCase().split(/\s+/).filter(Boolean);
     return DEMO_PRODUCTS.filter((p) => words.every((w) => `${p.name} ${p.sku} ${p.manufacturer}`.toLowerCase().includes(w))).slice(0, 25);
-  },
-  async inventory() {
-    return DEMO_INVENTORY;
   },
   async addCharge(ticketId, p, a) {
     if (!(await this.get(ticketId))) throw new SourceError("not_found");
@@ -1215,38 +1202,6 @@ const autotaskSource: TicketSource = {
         { fields, max: 25 },
       );
       return rows.map(productOf);
-    });
-  },
-
-  async inventory() {
-    const at = await autotask();
-    return cached("inventory", 5 * 60_000, async () => {
-      type AtItem = { id: number; productID: number; inventoryLocationID: number; quantityOnHand: number };
-      const items = await at.query<AtItem>("InventoryItems", [{ op: "gt", field: "quantityOnHand", value: 0 }], {
-        fields: ["id", "productID", "inventoryLocationID", "quantityOnHand"],
-        max: 2000,
-      });
-      if (!items.length) return [];
-      const productFields = await safeFields(at, "Products", ["id", "name", "description", "sku", "manufacturerName", "unitPrice", "unitCost", "billingCodeID", "chargeBillingCodeID", "productBillingCodeID"]);
-      const productIds = [...new Set(items.map((x) => x.productID))];
-      const [products, locations] = await Promise.all([
-        Promise.all(
-          chunks(productIds, 200).map((part) =>
-            at.query<Record<string, string | number | null> & { id: number }>("Products", [{ op: "in", field: "id", value: part }], { fields: productFields }),
-          ),
-        ).then((x) => x.flat().map(productOf)),
-        cached("inventoryLocations", 60 * 60_000, () =>
-          at.query<{ id: number; locationName: string }>("InventoryLocations", [{ op: "exist", field: "id" }], { fields: ["id", "locationName"], max: 500 }),
-        ).catch(() => [] as { id: number; locationName: string }[]),
-      ]);
-      return items
-        .map((x): InventoryItem | null => {
-          const product = products.find((p) => p.id === String(x.productID));
-          if (!product) return null;
-          return { id: String(x.id), product, location: locations.find((l) => l.id === x.inventoryLocationID)?.locationName ?? `#${x.inventoryLocationID}`, onHand: x.quantityOnHand };
-        })
-        .filter((x): x is InventoryItem => Boolean(x))
-        .sort((x, y) => x.product.name.localeCompare(y.product.name));
     });
   },
 

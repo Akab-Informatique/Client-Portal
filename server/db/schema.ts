@@ -397,3 +397,79 @@ export const autotaskTickets = pgTable(
   },
   (t) => [index("autotask_tickets_activity_idx").on(t.lastActivity)],
 );
+
+// ── Store inventory (products sold by AKAB, kept in the portal) ──────────────────
+/** A product for sale. Money in cents. Optionally linked to an Autotask product. */
+export const storeProducts = pgTable(
+  "store_products",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    sku: text("sku"),
+    name: text("name").notNull(),
+    description: text("description").notNull().default(""),
+    manufacturer: text("manufacturer"),
+    category: text("category"),
+    priceCents: integer("price_cents").notNull().default(0),
+    costCents: integer("cost_cents").notNull().default(0),
+    /** Reorder point: total stock at or under it shows as low */
+    minQuantity: integer("min_quantity").notNull().default(0),
+    /** Autotask product and material code used when it is charged on a ticket */
+    autotaskProductId: bigint("autotask_product_id", { mode: "number" }),
+    autotaskProductName: text("autotask_product_name"),
+    materialCodeId: text("material_code_id"),
+    active: boolean("active").notNull().default(true),
+    createdAt: created(),
+    updatedAt: updated(),
+  },
+  (t) => [uniqueIndex("store_products_sku_unique").on(t.sku), index("store_products_name_idx").on(t.name)],
+);
+
+/** Where stock is kept (warehouse, a technician's truck…). */
+export const storeLocations = pgTable(
+  "store_locations",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    name: text("name").notNull(),
+    active: boolean("active").notNull().default(true),
+    createdAt: created(),
+  },
+  (t) => [uniqueIndex("store_locations_name_unique").on(t.name)],
+);
+
+/** Quantity on hand of a product at a location. */
+export const storeStock = pgTable(
+  "store_stock",
+  {
+    productId: uuid("product_id")
+      .notNull()
+      .references(() => storeProducts.id, { onDelete: "cascade" }),
+    locationId: uuid("location_id")
+      .notNull()
+      .references(() => storeLocations.id, { onDelete: "cascade" }),
+    quantity: integer("quantity").notNull().default(0),
+    updatedAt: updated(),
+  },
+  (t) => [primaryKey({ columns: [t.productId, t.locationId] })],
+);
+
+/** Every stock change: received, adjusted (count), used on a ticket. */
+export const storeMovements = pgTable(
+  "store_movements",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    productId: uuid("product_id")
+      .notNull()
+      .references(() => storeProducts.id, { onDelete: "cascade" }),
+    locationId: uuid("location_id")
+      .notNull()
+      .references(() => storeLocations.id, { onDelete: "cascade" }),
+    delta: integer("delta").notNull(),
+    kind: text("kind", { enum: ["receive", "adjust", "ticket"] }).notNull(),
+    note: text("note").notNull().default(""),
+    ticketId: bigint("ticket_id", { mode: "number" }),
+    ticketNumber: text("ticket_number"),
+    userId: uuid("user_id").references(() => users.id, { onDelete: "set null" }),
+    createdAt: created(),
+  },
+  (t) => [index("store_movements_product_idx").on(t.productId, t.createdAt)],
+);

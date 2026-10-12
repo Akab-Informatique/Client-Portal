@@ -10,12 +10,14 @@ export const pageLoaders = {
   dashboard: () => import("@/pages/dashboard/DashboardPage"),
   messages: () => import("@/pages/messages/MessagesPage"),
   tickets: () => import("@/pages/tickets/TicketsPage"),
+  store: () => import("@/pages/store/StorePage"),
 };
 
 const byPath: Record<string, () => Promise<unknown>> = {
   "/": pageLoaders.dashboard,
   "/messages": pageLoaders.messages,
   "/tickets": pageLoaders.tickets,
+  "/store": pageLoaders.store,
 };
 
 /** Load every page's code in the background once the portal is shown. */

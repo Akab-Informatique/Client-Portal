@@ -88,6 +88,26 @@ export const MODULES = [
     ],
   },
   {
+    key: "store",
+    audience: "staff",
+    label: { fr: "Inventaire boutique", en: "Store inventory" },
+    permissions: [
+      {
+        key: "store.view",
+        label: { fr: "Voir l'inventaire", en: "View the inventory" },
+        description: { fr: "Produits, prix, stock par emplacement et historique", en: "Products, prices, stock per location and history" },
+      },
+      {
+        key: "store.manage",
+        label: { fr: "Gérer l'inventaire", en: "Manage the inventory" },
+        description: {
+          fr: "Créer et modifier les produits et emplacements, recevoir et ajuster le stock",
+          en: "Create and edit products and locations, receive and adjust stock",
+        },
+      },
+    ],
+  },
+  {
     key: "clientview",
     audience: "staff",
     label: { fr: "Vue client", en: "Client view" },

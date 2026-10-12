@@ -99,6 +99,13 @@
       "when": 1791821948706,
       "tag": "0013_autotask_ticket_mirror",
       "breakpoints": true
+    },
+    {
+      "idx": 14,
+      "version": "7",
+      "when": 1791827299251,
+      "tag": "0014_store_inventory",
+      "breakpoints": true
     }
   ]
 }

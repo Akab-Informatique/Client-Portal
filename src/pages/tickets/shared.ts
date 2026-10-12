@@ -230,6 +230,7 @@ export function ticketErrorText(t: (k: string, o?: Record<string, unknown>) => s
   if (e instanceof ApiError) {
     if (e.code === "autotask_not_linked") return t("tickets.errors.notLinked");
     if (e.code === "autotask_permission") return t("tickets.errors.permission");
+    if (e.code === "insufficient_stock") return t("tickets.errors.insufficient_stock");
     const detail = e.fields?.find((f) => f.path === "autotask")?.message;
     if (detail) return t("tickets.errors.autotask", { detail });
     if (e.code === "invalid_contact") return t("tickets.errors.invalidContact");

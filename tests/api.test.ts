@@ -1036,10 +1036,40 @@ describe("tickets: client and contact", () => {
     const found = (await tech.get("/api/tickets/products?q=ssd%20samsung")).json;
     expect(found.map((p: any) => p.sku)).toEqual(["MZ-V9P1T0"]);
     expect((await tech.get("/api/tickets/products?q=s")).json).toEqual([]);
-    const stock = (await tech.get("/api/tickets/inventory")).json;
-    expect(stock[0]).toMatchObject({ location: expect.any(String), onHand: expect.any(Number), product: { id: expect.any(String) } });
     expect((await tech.post(`/api/tickets/${tk.id}/charges`, { name: found[0].name, quantity: 1, unitPrice: found[0].unitPrice, productId: found[0].id })).status).toBe(201);
     expect((await tech.post(`/api/tickets/${tk.id}/charges`, { name: "x", quantity: 1, productId: "nope" })).json.error).toBe("invalid_value");
+  });
+
+  it("store inventory: admins manage it; technicians take stock on a ticket charge", async () => {
+    const admin = await session("admin@akab.local");
+    const tech = await session("tech@akab.local");
+    // reserved to store.view / store.manage (technicians have neither by default)
+    expect((await tech.get("/api/store")).status).toBe(403);
+    const loc = (await admin.post("/api/store/locations", { name: "Entrepôt" })).json;
+    expect((await admin.post("/api/store/locations", { name: "Entrepôt" })).json.error).toBe("location_taken");
+    const ssd = (await admin.post("/api/store/products", { sku: "SSD-1T", name: "SSD 1 To", priceCents: 18999, costCents: 12950, minQuantity: 2 })).json;
+    expect((await admin.post("/api/store/products", { sku: "SSD-1T", name: "Autre", priceCents: 1 })).json.error).toBe("sku_taken");
+    expect((await admin.post(`/api/store/products/${ssd.id}/stock`, { locationId: loc.id, kind: "receive", quantity: 5, note: "Facture 123" })).json.quantity).toBe(5);
+    expect((await admin.post(`/api/store/products/${ssd.id}/stock`, { locationId: loc.id, kind: "adjust", quantity: 4 })).json.quantity).toBe(4);
+    let store = (await admin.get("/api/store")).json;
+    expect(store.products.find((p: any) => p.id === ssd.id)).toMatchObject({ total: 4, low: false, stock: [{ location: "Entrepôt", quantity: 4 }] });
+    expect(store.stats).toMatchObject({ active: 1, units: 4, valueCents: 4 * 12950 });
+
+    // the charge form sees it; taking 3 lowers the stock and logs the ticket
+    const stock = (await tech.get("/api/tickets/inventory")).json;
+    expect(stock).toEqual([expect.objectContaining({ id: `${ssd.id}:${loc.id}`, location: "Entrepôt", onHand: 4, product: expect.objectContaining({ unitPrice: 189.99 }) })]);
+    const tk = (await tech.get("/api/tickets?view=all")).json.items[4];
+    expect((await tech.post(`/api/tickets/${tk.id}/charges`, { name: "SSD 1 To", quantity: 3, unitPrice: 189.99, stockId: stock[0].id })).status).toBe(201);
+    expect((await tech.post(`/api/tickets/${tk.id}/charges`, { name: "SSD 1 To", quantity: 2, unitPrice: 189.99, stockId: stock[0].id })).json.error).toBe("insufficient_stock");
+    store = (await admin.get("/api/store")).json;
+    expect(store.products.find((p: any) => p.id === ssd.id)).toMatchObject({ total: 1, low: true });
+    const moves = (await admin.get(`/api/store/products/${ssd.id}/movements`)).json;
+    expect(moves.map((m: any) => [m.kind, m.delta, m.ticketNumber])).toEqual([
+      ["ticket", -3, tk.number],
+      ["adjust", -1, null],
+      ["receive", 5, null],
+    ]);
+    expect(moves[0].user).toBe("Alex Tremblay");
   });
 
   it("timers: one running at a time, closed tab becomes an entry to validate", async () => {
@@ -1218,6 +1248,7 @@ describe("tickets from Autotask", () => {
         if (path === "TicketCharges/query") {
           return json({ items: [{ id: 81, name: "SSD", unitQuantity: 1, unitPrice: 120, isBillableToCompany: true, chargeType: 1, status: 1, billingCodeID: 501 }], pageDetails: {} });
         }
+        if (path === "Tickets/9001/Charges" && method === "POST" && JSON.parse(String(init.body)).name === "REFUSE") return json({ errors: ["Material code required"] }, 500);
         if (path === "Tickets/9001/Charges" && method === "POST") return json({ itemId: 82 });
         if (path === "ConfigurationItems/entityInformation/fields") {
           return json({
@@ -1462,10 +1493,24 @@ describe("tickets from Autotask", () => {
     expect(products).toEqual([{ id: "601", name: "SSD Samsung 1 To", description: "NVMe", sku: "MZ-V9P1T0", manufacturer: "Samsung", unitPrice: 189.99, unitCost: 129.5, materialCodeId: "501" }]);
     const search = sent.find((s) => s.url.endsWith("Products/query"))!;
     expect(search.body.filter[1].items.map((x: any) => x.field)).toEqual(["name", "sku", "manufacturerProductName"]);
-    expect((await tech.get("/api/tickets/inventory")).json).toEqual([{ id: "701", product: products[0], location: "Entrepôt", onHand: 4 }]);
     sent.length = 0;
     await tech.post("/api/tickets/9001/charges", { name: products[0].name, quantity: 1, unitPrice: 189.99, materialCodeId: "501", productId: "601" });
     expect(sent.find((s) => s.method === "POST" && s.url.endsWith("Tickets/9001/Charges"))!.body).toMatchObject({ productID: 601, billingCodeID: 501 });
+
+    // from the portal inventory: the linked Autotask product goes on the charge;
+    // if Autotask refuses, the items go back in stock
+    resetRateLimit("login:ip:unknown");
+    const admin = await signIn("admin@akab.local");
+    const loc = (await admin.post("/api/store/locations", { name: "Camion" })).json;
+    const item = (await admin.post("/api/store/products", { name: "SSD lié", priceCents: 18999, autotaskProductId: 601, materialCodeId: "501" })).json;
+    await admin.post(`/api/store/products/${item.id}/stock`, { locationId: loc.id, kind: "receive", quantity: 2 });
+    const stockId = `${item.id}:${loc.id}`;
+    sent.length = 0;
+    expect((await tech.post("/api/tickets/9001/charges", { name: "SSD lié", quantity: 1, unitPrice: 189.99, materialCodeId: "501", stockId })).status).toBe(201);
+    expect(sent.find((s) => s.method === "POST" && s.url.endsWith("Tickets/9001/Charges"))!.body).toMatchObject({ productID: 601 });
+    expect((await tech.post("/api/tickets/9001/charges", { name: "REFUSE", quantity: 1, stockId })).status).toBe(502);
+    const left = (await admin.get("/api/store")).json.products.find((p: any) => p.id === item.id);
+    expect(left.total).toBe(1);
   });
 
   it("refuses writes from an account not linked to Autotask", async () => {
