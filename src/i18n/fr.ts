@@ -606,6 +606,7 @@ const fr = {
     notLinkedTitle: "Votre compte n'est pas lié à un utilisateur Autotask.",
     notLinkedText: "« Mes billets » reste vide et vous ne pouvez pas modifier les billets. Un administrateur peut faire le lien dans Paramètres admin › Intégrations › Autotask.",
     errors: {
+      permission: "Autotask refuse cette modification au nom de votre utilisateur Autotask (le portail agit en votre nom). Dans Autotask, le niveau de sécurité de votre utilisateur doit permettre de modifier les billets et avoir l’option « Allow impersonation of resources with this security level » (section Web Services API). Un administrateur Autotask peut l’activer.",
       notLinked: "Votre compte n'est pas lié à un utilisateur Autotask : demandez à un administrateur de faire le lien (Paramètres admin › Intégrations › Autotask).",
       autotask: "Autotask a refusé : {{detail}}",
       invalidContact: "Ce contact n'appartient pas au client du billet.",

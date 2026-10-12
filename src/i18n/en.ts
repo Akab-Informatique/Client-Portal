@@ -608,6 +608,7 @@ const en: Dict = {
     notLinkedTitle: "Your account is not linked to an Autotask user.",
     notLinkedText: "“My tickets” stays empty and you cannot change tickets. An administrator can link it in Admin settings › Integrations › Autotask.",
     errors: {
+      permission: "Autotask refuses this change on behalf of your Autotask user (the portal acts in your name). In Autotask, your user’s security level must allow editing tickets and have “Allow impersonation of resources with this security level” (Web Services API section). An Autotask administrator can turn it on.",
       notLinked: "Your account is not linked to an Autotask user: ask an administrator to link it (Admin settings › Integrations › Autotask).",
       autotask: "Autotask refused: {{detail}}",
       invalidContact: "This contact does not belong to the ticket's client.",

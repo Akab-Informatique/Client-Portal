@@ -1202,6 +1202,9 @@ describe("tickets from Autotask", () => {
           });
         }
         if (path === "ResourceRoles/query") return json({ items: [{ roleID: 29683461 }], pageDetails: {} });
+        if (path === "Tickets" && method === "PATCH" && JSON.parse(String(init.body)).priority === 3) {
+          return json({ errors: ["The logged in Resource does not have the adequate permissions to update this entity type."] }, 500);
+        }
         if (path === "Tickets" && method === "PATCH") return json({ itemId: 9001 });
         if (path === "Tickets/9001/Notes" && method === "POST") return json({ itemId: 55 });
         if (path === "Companies/77/Contacts" && method === "POST") return json({ itemId: 777 });
@@ -1271,6 +1274,10 @@ describe("tickets from Autotask", () => {
     expect(patch.headers.impersonationresourceid).toBe("29682885");
     expect(patch.body).toEqual({ id: 9001, status: 2, priority: 1, assignedResourceID: 29682999, assignedResourceRoleID: 29683461 });
     expect((await tech.patch("/api/tickets/9001", { status: "999" })).json.error).toBe("invalid_value");
+    // Autotask refuses in the technician's name: a clear code, Autotask's text kept
+    const refused = await tech.patch("/api/tickets/9001", { priority: "3" });
+    expect(refused.status).toBe(403);
+    expect(refused.json.error).toBe("autotask_permission");
 
     expect((await tech.post("/api/tickets/9001/notes", { text: "Rappel demain", internal: true })).status).toBe(201);
     const note = sent.find((s) => s.url.endsWith("Tickets/9001/Notes"))!;

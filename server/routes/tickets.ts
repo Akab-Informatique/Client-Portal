@@ -34,6 +34,10 @@ function sourceError(e: unknown): HTTPException {
   if (e instanceof AutotaskError) {
     // In the server log too (docker compose logs app), with Autotask's own message
     console.warn(`[autotask] ${e.code}${e.status ? ` (HTTP ${e.status})` : ""}${e.detail ? `: ${e.detail}` : ""}`);
+    // The technician's own Autotask user may not do this (changes are made in their name)
+    if (e.detail && /adequate permission|not have permission|impersonat/i.test(e.detail)) {
+      return new HTTPException(403, { message: "autotask_permission", cause: [{ path: "autotask", message: e.detail }] });
+    }
     const status = e.code === "not_configured" || e.code === "disabled" ? 409 : e.code === "rate_limit" ? 429 : 502;
     // Autotask's own message (e.g. a required field) helps the technician
     return new HTTPException(status, { message: `autotask_${e.code}`, cause: e.detail ? [{ path: "autotask", message: e.detail }] : undefined });

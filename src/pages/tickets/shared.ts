@@ -218,6 +218,7 @@ export function usePresence(ticketId: number | null) {
 export function ticketErrorText(t: (k: string, o?: Record<string, unknown>) => string, e: unknown): string {
   if (e instanceof ApiError) {
     if (e.code === "autotask_not_linked") return t("tickets.errors.notLinked");
+    if (e.code === "autotask_permission") return t("tickets.errors.permission");
     const detail = e.fields?.find((f) => f.path === "autotask")?.message;
     if (detail) return t("tickets.errors.autotask", { detail });
     if (e.code === "invalid_contact") return t("tickets.errors.invalidContact");
