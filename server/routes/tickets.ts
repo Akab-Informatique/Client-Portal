@@ -520,6 +520,11 @@ export const ticketRoutes = new Hono<AppEnv>()
     return c.json((await myTimers(a.user.id)).map(timerView));
   })
   /** Work types offered for time entries (empty when the source has none). */
+  /** Choices for a new charge: types, statuses, material codes. */
+  .get("/charge-options", requirePermission("tickets.edit"), async (c) => {
+    const src = await ticketSource();
+    return c.json(await run(() => src.chargeOptions()));
+  })
   .get("/work-types", requirePermission("tickets.edit"), async (c) => {
     const src = await ticketSource();
     return c.json(await run(() => src.workTypes()));
@@ -738,6 +743,38 @@ export const ticketRoutes = new Hono<AppEnv>()
     await run(() => src.update(id, p, a));
     await audit(a.user.id, "ticket.updated", String(id), { fields: Object.keys(p) });
     return c.json(await run(() => detailOf(src, id, a)));
+  })
+
+  /** Charges on the ticket (material, expenses…). */
+  .get("/:id/charges", async (c) => {
+    const id = Number(c.req.param("id"));
+    if (!Number.isInteger(id)) throw new HTTPException(400, { message: "invalid_id" });
+    const src = await ticketSource();
+    return c.json(await run(() => src.charges(id)));
+  })
+  .post("/:id/charges", requirePermission("tickets.edit"), async (c) => {
+    const a = auth(c);
+    const id = Number(c.req.param("id"));
+    if (!Number.isInteger(id)) throw new HTTPException(400, { message: "invalid_id" });
+    const p = await body(
+      c,
+      z.object({
+        name: z.string().trim().min(1).max(100),
+        description: z.string().trim().max(2000).default(""),
+        quantity: z.number().positive().max(100_000),
+        unitPrice: z.number().min(0).max(1_000_000).nullable().default(null),
+        unitCost: z.number().min(0).max(1_000_000).nullable().default(null),
+        billable: z.boolean().default(true),
+        typeId: z.string().max(20).nullable().default(null),
+        statusId: z.string().max(20).nullable().default(null),
+        materialCodeId: z.string().max(20).nullable().default(null),
+        date: zDate.nullable().default(null),
+      }),
+    );
+    const src = await ticketSource();
+    await run(() => src.addCharge(id, p, a));
+    await audit(a.user.id, "ticket.charge_added", String(id), { name: p.name, quantity: p.quantity, unitPrice: p.unitPrice, billable: p.billable });
+    return c.json(await run(() => src.charges(id)), 201);
   })
 
   /** Reply to the client or internal note (the technician is the author). */

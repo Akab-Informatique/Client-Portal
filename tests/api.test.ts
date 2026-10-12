@@ -1011,6 +1011,28 @@ describe("tickets: client and contact", () => {
     await admin.put("/api/admin/integrations/rmm", { enabled: false, name: "", deviceUrl: "", remoteUrl: "" });
   });
 
+  it("charges: listed per ticket, added by technicians with tickets.edit", async () => {
+    const tech = await session("tech@akab.local");
+    const tk = (await tech.get("/api/tickets?view=all")).json.items[2];
+    expect((await tech.get(`/api/tickets/${tk.id}/charges`)).json).toEqual([]);
+    const o = (await tech.get("/api/tickets/charge-options")).json;
+    expect(o.materialCodes.length).toBeGreaterThan(0);
+    const r = await tech.post(`/api/tickets/${tk.id}/charges`, {
+      name: "Disque SSD 1 To",
+      quantity: 2,
+      unitPrice: 149.99,
+      unitCost: 95,
+      billable: true,
+      materialCodeId: o.materialCodes[0].value,
+    });
+    expect(r.status).toBe(201);
+    expect(r.json).toEqual([
+      expect.objectContaining({ name: "Disque SSD 1 To", quantity: 2, unitPrice: 149.99, billable: true, materialCode: o.materialCodes[0].label, author: "Alex Tremblay" }),
+    ]);
+    expect((await tech.post(`/api/tickets/${tk.id}/charges`, { name: "x", quantity: 1, materialCodeId: "999" })).json.error).toBe("invalid_value");
+    expect((await tech.post(`/api/tickets/${tk.id}/charges`, { name: "", quantity: 0 })).status).toBe(400);
+  });
+
   it("timers: one running at a time, closed tab becomes an entry to validate", async () => {
     const tech = await session("tech@akab.local");
     const other = await session("tech2@akab.local");
@@ -1161,6 +1183,25 @@ describe("tickets from Autotask", () => {
             pageDetails: {},
           });
         }
+        if (path === "TicketCharges/entityInformation/fields") {
+          return json({
+            fields: [
+              ...["id", "ticketID", "name", "description", "unitQuantity", "unitPrice", "unitCost", "isBillableToCompany", "billingCodeID", "datePurchased"].map((name) => ({ name })),
+              { name: "chargeType", picklistValues: pick([[1, "Operational"], [2, "Capitalized"]]) },
+              { name: "status", picklistValues: pick([[1, "Pending"]]) },
+            ],
+          });
+        }
+        if (path === "BillingCodes/entityInformation/fields") {
+          return json({ fields: [{ name: "useType", picklistValues: pick([[1, "Work Type"], [4, "Material Cost Code"]]) }] });
+        }
+        if (path === "BillingCodes/query" && String(init.body).includes('"field":"useType","value":[4]')) {
+          return json({ items: [{ id: 501, name: "Hardware" }], pageDetails: {} });
+        }
+        if (path === "TicketCharges/query") {
+          return json({ items: [{ id: 81, name: "SSD", unitQuantity: 1, unitPrice: 120, isBillableToCompany: true, chargeType: 1, status: 1, billingCodeID: 501 }], pageDetails: {} });
+        }
+        if (path === "Tickets/9001/Charges" && method === "POST") return json({ itemId: 82 });
         if (path === "ConfigurationItems/entityInformation/fields") {
           return json({
             fields: [
@@ -1383,6 +1424,20 @@ describe("tickets from Autotask", () => {
     const r = (await tech.get("/api/tickets/search?q=T20250101.0001")).json;
     expect(r.items).toEqual([]);
     expect(r.archive.map((x: any) => [x.id, x.title])).toEqual([[7001, "Ancien billet"]]);
+  });
+
+  it("charges from Autotask TicketCharges; a new one is posted in the technician's name", async () => {
+    resetRateLimit("login:ip:unknown");
+    const tech = await signIn("tech@akab.local");
+    const o = (await tech.get("/api/tickets/charge-options")).json;
+    expect(o).toEqual({ types: [{ value: "1", label: "Operational" }, { value: "2", label: "Capitalized" }], statuses: [{ value: "1", label: "Pending" }], materialCodes: [{ value: "501", label: "Hardware" }] });
+    expect((await tech.get("/api/tickets/9001/charges")).json).toEqual([expect.objectContaining({ id: "81", name: "SSD", materialCode: "Hardware", type: "Operational", status: "Pending" })]);
+    sent.length = 0;
+    const r = await tech.post("/api/tickets/9001/charges", { name: "Câble réseau", quantity: 3, unitPrice: 12.5, billable: false, materialCodeId: "501", date: "2026-10-12" });
+    expect(r.status).toBe(201);
+    const post = sent.find((s) => s.method === "POST" && s.url.endsWith("Tickets/9001/Charges"))!;
+    expect(post.headers.impersonationresourceid).toBe("29682885");
+    expect(post.body).toMatchObject({ ticketID: 9001, name: "Câble réseau", unitQuantity: 3, unitPrice: 12.5, isBillableToCompany: false, chargeType: 1, status: 1, billingCodeID: 501, datePurchased: "2026-10-12T12:00:00Z" });
   });
 
   it("refuses writes from an account not linked to Autotask", async () => {

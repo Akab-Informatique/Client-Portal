@@ -32,6 +32,7 @@ import {
   NotebookPen,
   Pencil,
   Phone,
+  Receipt,
   RefreshCw,
   Send,
   Sparkles,
@@ -62,6 +63,7 @@ import { GlassBackdrop } from "@/components/brand/GlassBackdrop";
 import { CompanyPicker, ContactPicker, useCompanies } from "./pickers";
 import { TimerControl } from "./timers";
 import { AssetContent, AssetPicker } from "./AssetCard";
+import { AddCharge, ChargesContent, chargesSummary, useCharges } from "./Charges";
 import { useConfirm } from "@/components/ConfirmDialog";
 import { dueState, longDateTime, PRIORITY_STYLE, STATUS_STYLE, useChoiceText, usePresence, type AiAnalysis, type TicketDetail, type TicketList, type Viewer, ticketErrorText } from "./shared";
 
@@ -235,6 +237,7 @@ function TicketBody({
   const remote = tk.asset?.links.remote ?? null;
   const phone = tk.contactInfo?.phone ?? null;
   const email = tk.contactInfo?.email ?? null;
+  const { data: charges } = useCharges(tk.id, !partial);
 
   // R = reply, I = internal note (when not typing)
   useEffect(() => {
@@ -257,7 +260,7 @@ function TicketBody({
     <>
       {/* Header: what the ticket is, where it stands, and the tools */}
       <div className="glass relative z-10 rounded-none border-x-0 border-t-0 border-b">
-        <div className="mx-auto w-full max-w-7xl px-6 pb-3 pt-4 lg:px-8">
+        <div className="w-full px-4 pb-3 pt-3 lg:px-6">
           <div className="flex items-center gap-3">
             <span className="rounded-md border border-[color:var(--gold)]/30 bg-[color:var(--gold)]/10 px-2 py-0.5 font-mono text-xs text-primary">{tk.number}</span>
             <span className="truncate text-xs text-muted-foreground">
@@ -314,17 +317,17 @@ function TicketBody({
             {update.isPending && <Loader2 className="size-4 animate-spin text-muted-foreground" />}
             <span
               className={cn(
-                "ml-auto flex items-center gap-1 text-xs font-medium",
-                due === "overdue" ? "text-destructive" : due === "today" ? "text-orange-400" : "text-muted-foreground",
+                "flex items-center gap-1 rounded-full border px-2.5 py-0.5 text-xs font-medium",
+                due === "overdue" ? "border-destructive/50 text-destructive" : due === "today" ? "border-orange-500/50 text-orange-400" : "text-muted-foreground",
               )}
             >
               <CalendarClock className="size-3.5" />
               {due === "overdue" ? t("tickets.overdue") : due === "today" ? t("tickets.today") : longDateTime(tk.dueAt)}
             </span>
-          </div>
 
-          {/* Quick actions: what a technician does next, one click away */}
-          <div className="mt-3 flex flex-wrap items-center gap-1.5 border-t pt-3">
+            {/* Quick actions: what a technician does next, one click away */}
+            <span className="hidden h-5 w-px bg-border lg:mx-1 lg:block" />
+            <div className="flex flex-wrap items-center gap-1.5 lg:ml-auto">
             {editable && (
               <>
                 <QuickAction icon={MessageSquareReply} label={t("tickets.quickAction.reply")} kbd="R" onClick={() => setFocusNote({ internal: false, at: Date.now() })} />
@@ -335,24 +338,23 @@ function TicketBody({
             {phone && <QuickAction icon={Phone} label={t("tickets.quickAction.call", { name: tk.contact.split(" ")[0] })} href={`tel:${phone.replace(/[^\d+]/g, "")}`} title={phone} />}
             {email && <QuickAction icon={Mail} label={t("tickets.quickAction.email")} href={`mailto:${email}?subject=${encodeURIComponent(`[${tk.number}] ${tk.title}`)}`} title={email} />}
             {editable && done && tk.statusKind !== "complete" && (
-              <span className="ml-auto">
-                <QuickAction
-                  icon={CheckCircle2}
-                  label={t("tickets.quickAction.resolve")}
-                  onClick={() =>
-                    void confirm({ title: t("tickets.quickAction.resolveConfirm", { status: txt.status(done) }) }).then((ok) => ok && update.mutate({ status: done.value }))
-                  }
-                />
-              </span>
+              <QuickAction
+                icon={CheckCircle2}
+                label={t("tickets.quickAction.resolve")}
+                onClick={() =>
+                  void confirm({ title: t("tickets.quickAction.resolveConfirm", { status: txt.status(done) }) }).then((ok) => ok && update.mutate({ status: done.value }))
+                }
+              />
             )}
+            </div>
           </div>
         </div>
       </div>
 
-      <div className="relative flex-1 overflow-y-auto">
-        <div className="mx-auto grid w-full max-w-7xl gap-6 px-6 pt-6 lg:grid-cols-[minmax(0,1fr)_340px] lg:px-8">
-          {/* The work: what is asked, what was done, the next note */}
-          <div className="flex min-w-0 flex-col gap-4">
+      <div className="relative min-h-0 flex-1 overflow-y-auto px-4 pt-4 lg:flex lg:gap-5 lg:overflow-hidden lg:px-6">
+        {/* The work: what is asked, what was done, the next note (always at the bottom) */}
+        <div className="flex min-w-0 flex-col lg:min-h-0 lg:flex-1">
+          <div className="flex flex-col gap-4 pb-4 lg:min-h-0 lg:flex-1 lg:overflow-y-auto lg:pr-2">
             {loadError && (
               <div className="flex flex-wrap items-center gap-3 rounded-xl border border-destructive/40 bg-destructive/10 px-4 py-3 text-sm">
                 <AlertTriangle className="size-4 shrink-0 text-destructive" />
@@ -381,17 +383,17 @@ function TicketBody({
             />
             <AiPanel tk={tk} onToNote={(text) => setDraft({ text, internal: true })} />
             <Activity tk={tk} partial={partial && !loadError} />
-            {/* Note box pinned at the bottom while scrolling the activity */}
-            {editable && (
-              <div className="sticky bottom-0 z-10 -mx-2 mt-auto bg-gradient-to-t from-background via-background/90 to-transparent px-2 pb-4 pt-6">
-                <NoteComposer tk={tk} draft={draft} onDraftUsed={() => setDraft(null)} focusRequest={focusNote} />
-              </div>
-            )}
-            {!editable && <div className="pb-6" />}
           </div>
+          {editable && (
+            <div className="sticky bottom-0 z-10 -mx-2 bg-gradient-to-t from-background via-background/95 to-transparent px-2 pb-4 pt-3 lg:static lg:mx-0 lg:bg-none lg:px-0 lg:pr-2">
+              <NoteComposer tk={tk} draft={draft} onDraftUsed={() => setDraft(null)} focusRequest={focusNote} />
+            </div>
+          )}
+        </div>
 
-          {/* Tools and information, in the order they are needed; stays in view */}
-          <aside className="space-y-3 pb-6 lg:sticky lg:top-6 lg:max-h-[calc(100dvh-15rem)] lg:self-start lg:overflow-y-auto lg:pr-1">
+        {/* Tools and information, in the order they are needed; own scroll.
+            Very wide screens: two columns of sections. */}
+        <aside className="pb-4 lg:w-[380px] lg:shrink-0 lg:overflow-y-auto lg:pr-1 min-[1800px]:w-[740px] min-[1800px]:columns-2 min-[1800px]:gap-3 [&>section]:mb-3 [&>section]:break-inside-avoid">
             <Section id="client" icon={Building2} title={t("tickets.sections.client")}>
               <dl className="space-y-3">
                 <Detail icon={Building2} label={t("tickets.fields.company")}>
@@ -437,6 +439,16 @@ function TicketBody({
               action={editable && !partial ? <AssetPicker tk={tk} onPick={(assetId) => update.mutate({ assetId })} /> : null}
             >
               <AssetContent tk={tk} editable={editable} partial={partial} onPick={(assetId) => update.mutate({ assetId })} />
+            </Section>
+
+            <Section
+              id="charges"
+              icon={Receipt}
+              title={t("tickets.charges.title")}
+              badge={chargesSummary(charges)}
+              action={editable && !partial ? <AddCharge tk={tk} /> : null}
+            >
+              <ChargesContent tk={tk} partial={partial} />
             </Section>
 
             <Section id="planning" icon={CalendarClock} title={t("tickets.sections.planning")}>
@@ -499,8 +511,7 @@ function TicketBody({
                 </Detail>
               </dl>
             </Section>
-          </aside>
-        </div>
+        </aside>
       </div>
       <OpenedByOthers viewers={viewers} />
     </>

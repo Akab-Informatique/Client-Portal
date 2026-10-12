@@ -84,6 +84,34 @@ export type TicketPatch = {
   /** Secondary technicians (person ids), replaces the list */
   secondaryIds?: string[];
 };
+/** A charge on a ticket (Autotask TicketCharges): material, expense, service… */
+export type Charge = {
+  id: string;
+  name: string;
+  description: string;
+  quantity: number;
+  unitPrice: number | null;
+  unitCost: number | null;
+  billable: boolean;
+  type: string | null;
+  status: string | null;
+  materialCode: string | null;
+  date: string | null;
+  author: string | null;
+};
+export type NewCharge = {
+  name: string;
+  description: string;
+  quantity: number;
+  unitPrice: number | null;
+  unitCost: number | null;
+  billable: boolean;
+  typeId: string | null;
+  statusId: string | null;
+  materialCodeId: string | null;
+  date: string | null;
+};
+export type ChargeOptions = { types: { value: string; label: string }[]; statuses: { value: string; label: string }[]; materialCodes: { value: string; label: string }[] };
 export type NewTimeEntry = { hours: number; summary: string; internal: string; workTypeId: string | null; startedAt: Date; endedAt: Date };
 export type NewTicket = {
   title: string;
@@ -115,10 +143,31 @@ export interface TicketSource {
   assets(companyId: number): Promise<Asset[]>;
   /** Older tickets (not in the local copy): by exact number, or title words */
   searchArchive(q: string): Promise<NTicket[]>;
+  charges(ticketId: number): Promise<Charge[]>;
+  chargeOptions(): Promise<ChargeOptions>;
+  addCharge(ticketId: number, p: NewCharge, a: AuthContext): Promise<void>;
   /** Work types for time entries (Autotask billing codes); empty when not used */
   workTypes(): Promise<{ value: string; label: string }[]>;
   addTimeEntry(ticketId: number, p: NewTimeEntry, a: AuthContext): Promise<void>;
 }
+
+/** Sample charges, in memory. */
+const demoCharges = new Map<number, Charge[]>();
+const DEMO_CHARGE_OPTIONS: ChargeOptions = {
+  types: [
+    { value: "1", label: "Opérationnel" },
+    { value: "2", label: "Capitalisé" },
+  ],
+  statuses: [
+    { value: "1", label: "En attente" },
+    { value: "2", label: "Approuvé" },
+  ],
+  materialCodes: [
+    { value: "10", label: "Matériel informatique" },
+    { value: "11", label: "Licences logicielles" },
+    { value: "12", label: "Déplacement" },
+  ],
+};
 
 /** A due date picked in the portal: end of the working day in Québec. */
 export const dueIso = (date: string) => new Date(`${date}T17:00:00-04:00`).toISOString();
@@ -252,6 +301,34 @@ const demoSource: TicketSource = {
   async addContact(companyId, p) {
     if (!demoCompanies().some((x) => x.id === companyId)) throw new SourceError("invalid_company");
     return addDemoContact({ companyId, name: `${p.firstName} ${p.lastName}`, email: p.email, phone: p.phone });
+  },
+  async charges(ticketId) {
+    return demoCharges.get(ticketId) ?? [];
+  },
+  async chargeOptions() {
+    return DEMO_CHARGE_OPTIONS;
+  },
+  async addCharge(ticketId, p, a) {
+    if (!(await this.get(ticketId))) throw new SourceError("not_found");
+    const o = DEMO_CHARGE_OPTIONS;
+    const label = (list: { value: string; label: string }[], v: string | null) => (v ? (list.find((x) => x.value === v)?.label ?? null) : null);
+    if (p.materialCodeId && !label(o.materialCodes, p.materialCodeId)) throw new SourceError("invalid_value");
+    const list = demoCharges.get(ticketId) ?? [];
+    list.push({
+      id: `ch-${ticketId}-${list.length + 1}`,
+      name: p.name,
+      description: p.description,
+      quantity: p.quantity,
+      unitPrice: p.unitPrice,
+      unitCost: p.unitCost,
+      billable: p.billable,
+      type: label(o.types, p.typeId) ?? o.types[0].label,
+      status: label(o.statuses, p.statusId) ?? o.statuses[0].label,
+      materialCode: label(o.materialCodes, p.materialCodeId),
+      date: p.date ?? new Date().toISOString().slice(0, 10),
+      author: a.user.name,
+    });
+    demoCharges.set(ticketId, list);
   },
   async workTypes() {
     return [];
@@ -992,6 +1069,92 @@ const autotaskSource: TicketSource = {
       max: 25,
     });
     return normalize(at, rows, false);
+  },
+
+  async charges(ticketId) {
+    const at = await autotask();
+    return cached(`charges:${ticketId}`, 5 * 60_000, async () => {
+      type AtCharge = { id: number; name?: string; description?: string | null; unitQuantity?: number; unitPrice?: number | null; unitCost?: number | null; isBillableToCompany?: boolean; chargeType?: number; status?: number; billingCodeID?: number | null; datePurchased?: string | null; creatorResourceID?: number | null };
+      const fields = await safeFields(at, "TicketCharges", ["id", "name", "description", "unitQuantity", "unitPrice", "unitCost", "isBillableToCompany", "chargeType", "status", "billingCodeID", "datePurchased", "creatorResourceID"]);
+      const [rows, o, res] = await Promise.all([
+        at.query<AtCharge>("TicketCharges", [{ op: "eq", field: "ticketID", value: ticketId }], { fields, max: 500 }),
+        this.chargeOptions(),
+        listResources().catch(() => []),
+      ]);
+      const label = (list: { value: string; label: string }[], v: unknown) => (v === null || v === undefined ? null : (list.find((x) => x.value === String(v))?.label ?? null));
+      return rows.map(
+        (r): Charge => ({
+          id: String(r.id),
+          name: r.name ?? "",
+          description: r.description ?? "",
+          quantity: r.unitQuantity ?? 0,
+          unitPrice: r.unitPrice ?? null,
+          unitCost: r.unitCost ?? null,
+          billable: r.isBillableToCompany !== false,
+          type: label(o.types, r.chargeType),
+          status: label(o.statuses, r.status),
+          materialCode: label(o.materialCodes, r.billingCodeID),
+          date: r.datePurchased ?? null,
+          author: r.creatorResourceID ? (res.find((x) => x.id === r.creatorResourceID)?.name ?? null) : null,
+        }),
+      );
+    });
+  },
+
+  async chargeOptions() {
+    const at = await autotask();
+    return cached("chargeOptions", 60 * 60_000, async () => {
+      const [fields, codeFields] = await Promise.all([fieldsOf(at, "TicketCharges"), fieldsOf(at, "BillingCodes").catch(() => [] as FieldInfo[])]);
+      const list = (name: string) => picklist(fields, name).map((v) => ({ value: String(v.value), label: v.label }));
+      // Material codes: billing codes whose use type is "Material…"
+      const materialUse = picklist(codeFields, "useType")
+        .filter((v) => /mat/i.test(v.label))
+        .map((v) => Number(v.value));
+      const codes = materialUse.length
+        ? await at
+            .query<{ id: number; name: string }>(
+              "BillingCodes",
+              [
+                { op: "in", field: "useType", value: materialUse },
+                { op: "eq", field: "isActive", value: true },
+              ],
+              { fields: ["id", "name"], max: 500 },
+            )
+            .catch(() => [] as { id: number; name: string }[])
+        : [];
+      return {
+        types: list("chargeType"),
+        statuses: list("status"),
+        materialCodes: codes.map((c) => ({ value: String(c.id), label: c.name })).sort((x, y) => x.label.localeCompare(y.label)),
+      };
+    });
+  },
+
+  async addCharge(ticketId, p, a) {
+    const at = await autotask();
+    const actor = await actorResource(a);
+    const o = await this.chargeOptions();
+    const known = (list: { value: string }[], v: string | null) => !v || list.some((x) => x.value === v);
+    if (!known(o.types, p.typeId) || !known(o.statuses, p.statusId) || !known(o.materialCodes, p.materialCodeId)) throw new SourceError("invalid_value");
+    await at.call(
+      "POST",
+      `Tickets/${ticketId}/Charges`,
+      {
+        ticketID: ticketId,
+        name: p.name,
+        ...(p.description ? { description: p.description } : {}),
+        unitQuantity: p.quantity,
+        ...(p.unitPrice !== null ? { unitPrice: p.unitPrice } : {}),
+        ...(p.unitCost !== null ? { unitCost: p.unitCost } : {}),
+        isBillableToCompany: p.billable,
+        chargeType: Number(p.typeId ?? o.types[0]?.value ?? 1),
+        ...(p.statusId ?? o.statuses[0]?.value ? { status: Number(p.statusId ?? o.statuses[0].value) } : {}),
+        ...(p.materialCodeId ? { billingCodeID: Number(p.materialCodeId) } : {}),
+        datePurchased: p.date ? `${p.date}T12:00:00Z` : new Date().toISOString(),
+      },
+      { impersonate: actor },
+    );
+    forget(`charges:${ticketId}`);
   },
 
   async workTypes() {
