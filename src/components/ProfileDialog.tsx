@@ -1,8 +1,9 @@
 import { useEffect, useState, type FormEvent } from "react";
 import { useTranslation } from "react-i18next";
+import { cn } from "@/lib/utils";
 import { useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
-import { Loader2 } from "lucide-react";
+import { Loader2, CalendarDays, Smartphone } from "lucide-react";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -16,13 +17,13 @@ export function ProfileDialog({ open, onOpenChange }: { open: boolean; onOpenCha
   const { t } = useTranslation();
   const me = useMe();
   const qc = useQueryClient();
-  const [form, setForm] = useState({ name: me.name, title: me.title ?? "", phone: me.phone ?? "", notifyEmail: me.notifyEmail });
+  const [form, setForm] = useState({ name: me.name, title: me.title ?? "", phone: me.phone ?? "", mobile: me.mobile ?? "", notifyEmail: me.notifyEmail });
   const [pw, setPw] = useState({ current: "", next: "", confirm: "" });
   const [busy, setBusy] = useState(false);
   const [pwBusy, setPwBusy] = useState(false);
 
   useEffect(() => {
-    if (open) setForm({ name: me.name, title: me.title ?? "", phone: me.phone ?? "", notifyEmail: me.notifyEmail });
+    if (open) setForm({ name: me.name, title: me.title ?? "", phone: me.phone ?? "", mobile: me.mobile ?? "", notifyEmail: me.notifyEmail });
   }, [open, me]);
 
   async function saveProfile(e: FormEvent) {
@@ -32,8 +33,8 @@ export function ProfileDialog({ open, onOpenChange }: { open: boolean; onOpenCha
       await api.patch("/me", form);
       await qc.invalidateQueries({ queryKey: ["auth"] });
       toast.success(t("common.saved"));
-    } catch {
-      toast.error(t("common.error"));
+    } catch (err) {
+      toast.error(err instanceof ApiError && err.fields?.some((f) => f.path === "mobile") ? t("profile.mobileInvalid") : t("common.error"));
     } finally {
       setBusy(false);
     }
@@ -78,6 +79,21 @@ export function ProfileDialog({ open, onOpenChange }: { open: boolean; onOpenCha
               <Input id="p-phone" value={form.phone} onChange={(e) => setForm({ ...form, phone: e.target.value })} />
             </div>
           </div>
+          {me.kind === "staff" && (
+            <div className="space-y-2">
+              <Label htmlFor="p-mobile" className="flex items-center gap-2">
+                <Smartphone className="size-3.5 text-primary" /> {t("profile.mobile")}
+              </Label>
+              <Input id="p-mobile" type="tel" inputMode="tel" autoComplete="tel" value={form.mobile} onChange={(e) => setForm({ ...form, mobile: e.target.value })} placeholder="+1 450 555-0123" />
+              <p className="text-[11px] text-muted-foreground">{t("profile.mobileHint")}</p>
+            </div>
+          )}
+          {me.kind === "staff" && (
+            <p className={cn("flex items-start gap-2 rounded-lg border px-3 py-2 text-xs", me.o365?.active ? "border-emerald-500/30 text-emerald-300" : "text-muted-foreground")}>
+              <CalendarDays className="mt-0.5 size-3.5 shrink-0" />
+              {me.o365 ? (me.o365.active ? t("profile.o365On", { mailbox: me.o365.mailbox }) : t("profile.o365Pending")) : t("profile.o365Off")}
+            </p>
+          )}
           {me.kind === "client" && (
             <label className="flex items-center justify-between gap-4 rounded-lg border p-3 text-sm">
               {t("admin.users.notify")}

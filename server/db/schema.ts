@@ -63,6 +63,10 @@ export const users = pgTable(
     active: boolean("active").notNull().default(true),
     title: text("title"),
     phone: text("phone"),
+    /** Mobile number (SMS alerts, later) */
+    mobile: text("mobile"),
+    /** Microsoft 365 mailbox for calendar sync, when different from the email (set by an admin only) */
+    o365Email: text("o365_email"),
     locale: text("locale", { enum: ["fr", "en"] }).notNull().default("fr"),
     /** Receives email copies of board messages */
     notifyEmail: boolean("notify_email").notNull().default(true),

@@ -4,12 +4,13 @@ import { and, asc, desc, eq, inArray, sql } from "drizzle-orm";
 import { z } from "zod";
 import { db, schema } from "../db/index.ts";
 import { config } from "../config.ts";
-import { auth, requirePermission, revokeUserSessions, type AppEnv } from "../lib/auth.ts";
+import { auth, permissionsOf, requirePermission, revokeUserSessions, type AppEnv } from "../lib/auth.ts";
+import { o365Ready } from "../lib/o365.ts";
 import { hashPassword, temporaryPassword } from "../lib/crypto.ts";
 import { audit } from "../lib/audit.ts";
 import { mailConfigured } from "../lib/mail.ts";
 import { sendPasswordLink } from "../lib/passwordLinks.ts";
-import { body, zEmail, zName, zOptText, zUuid } from "../lib/validate.ts";
+import { body, zEmail, zName, zOptText, zPhone, zUuid } from "../lib/validate.ts";
 import {
   effectivePermissions,
   isPermissionKey,
@@ -33,6 +34,8 @@ function publicUser(u: UserRow, overrides: { permission: string; effect: "allow"
     active: u.active,
     title: u.title,
     phone: u.phone,
+    mobile: u.mobile,
+    o365Email: u.o365Email,
     locale: u.locale,
     notifyEmail: u.notifyEmail,
     mfaEnabled: u.mfaEnabled,
@@ -263,6 +266,7 @@ export const adminRoutes = new Hono<AppEnv>()
         name: zName.optional(),
         title: zOptText(120),
         phone: zOptText(40),
+        mobile: zPhone,
         roleId: zUuid.nullable().optional(),
         locale: z.enum(["fr", "en"]).optional(),
         notifyEmail: z.boolean().optional(),
@@ -323,6 +327,34 @@ export const adminRoutes = new Hono<AppEnv>()
     await audit(a.user.id, "user.mfa_reset", target.id);
     return c.json({ ok: true });
   })
+  /**
+   * Microsoft 365 calendar sync for a technician: on / off (the right
+   * tickets.o365, given or taken on top of the role) and the mailbox when it
+   * differs from the email. Only admins choose the mailbox: the portal can
+   * read any calendar of the organization.
+   */
+  .get("/users/:id/o365", async (c) => {
+    const a = auth(c);
+    const target = await getUser(zUuid.parse(c.req.param("id")));
+    assertCanManage(a.permissions, target.kind);
+    if (target.kind !== "staff") throw new HTTPException(400, { message: "staff_only" });
+    return c.json({ enabled: (await permissionsOf(target)).includes("tickets.o365"), mailbox: target.o365Email, integrationReady: await o365Ready() });
+  })
+  .put("/users/:id/o365", async (c) => {
+    const a = auth(c);
+    const target = await getUser(zUuid.parse(c.req.param("id")));
+    assertCanManage(a.permissions, target.kind);
+    if (target.kind !== "staff") throw new HTTPException(400, { message: "staff_only" });
+    const p = await body(c, z.object({ enabled: z.boolean(), mailbox: zEmail.nullable().optional() }));
+    // the role decides by default; the switch adds or removes the right for this person only
+    await db().delete(schema.userPermissions).where(and(eq(schema.userPermissions.userId, target.id), eq(schema.userPermissions.permission, "tickets.o365")));
+    const byRole = (await permissionsOf(target)).includes("tickets.o365");
+    if (p.enabled !== byRole) await db().insert(schema.userPermissions).values({ userId: target.id, permission: "tickets.o365", effect: p.enabled ? "allow" : "deny" });
+    if (p.mailbox !== undefined) await db().update(schema.users).set({ o365Email: p.mailbox, updatedAt: new Date() }).where(eq(schema.users.id, target.id));
+    await audit(a.user.id, "user.o365", target.id, { enabled: p.enabled, mailbox: p.mailbox });
+    return c.json({ enabled: p.enabled, mailbox: p.mailbox === undefined ? target.o365Email : p.mailbox, integrationReady: await o365Ready() });
+  })
+
   /** Rights granted or denied directly to this user (on top of the role). */
   .put("/users/:id/permissions", requirePermission("admin.roles"), async (c) => {
     const a = auth(c);

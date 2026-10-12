@@ -351,6 +351,14 @@ const en: Dict = {
     removeBlock: "Delete",
     removeBlockConfirm: "Delete this reserved time?",
   },
+  profile: {
+    mobile: "Mobile",
+    mobileHint: "For text alerts (coming soon).",
+    mobileInvalid: "Invalid mobile number.",
+    o365On: "Outlook calendar synced ({{mailbox}}).",
+    o365Pending: "Outlook sync allowed: it starts as soon as the Microsoft 365 integration is on.",
+    o365Off: "Outlook calendar not synced. An administrator can turn it on for you.",
+  },
   topbar: {
     search: "Search or run an action",
     adminSettings: "Admin settings",
@@ -500,6 +508,10 @@ const en: Dict = {
       select: "Select a client to see its details and users.",
     },
     users: {
+      o365: "Sync the Microsoft 365 calendar",
+      o365Hint: "Their Outlook events in the planning; their reserved time and priorities of the day in Outlook.",
+      o365NotReady: "Available once the Microsoft 365 integration is set up (Integrations).",
+      o365Mailbox: "Microsoft 365 address (if not the email)",
       sendWelcome: "Send the welcome email",
       sendWelcomeText: "The person receives a link to choose their own password (valid 72 hours).",
       welcomeSent: "Welcome email sent to {{email}}",

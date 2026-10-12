@@ -35,3 +35,11 @@ export const zOptText = (max = 500) =>
     .nullable()
     .optional();
 export const zUuid = z.uuid();
+/** A phone number as people type it (+1 450 555-1234, (450) 555 1234…); empty clears it. */
+export const zPhone = z
+  .string()
+  .trim()
+  .max(25)
+  .refine((v) => v === "" || (/^[+()\d\s.-]{7,25}$/.test(v) && (v.match(/\d/g) ?? []).length >= 7), { message: "invalid_phone" })
+  .transform((v) => v || null)
+  .optional();

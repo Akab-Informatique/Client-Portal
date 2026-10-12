@@ -11,6 +11,9 @@ export type Me = {
   kind: Audience;
   title: string | null;
   phone: string | null;
+  mobile: string | null;
+  /** Outlook calendar sync (allowed by an admin): the mailbox, and whether the integration is on */
+  o365: { mailbox: string; active: boolean } | null;
   locale: "fr" | "en";
   notifyEmail: boolean;
   mfaEnabled: boolean;
@@ -36,6 +39,8 @@ export type AdminUser = {
   active: boolean;
   title: string | null;
   phone: string | null;
+  mobile: string | null;
+  o365Email: string | null;
   locale: "fr" | "en";
   notifyEmail: boolean;
   mfaEnabled: boolean;

@@ -16,7 +16,7 @@ export async function o365MailboxOf(userId: string): Promise<string | null> {
   if (!(await o365Ready())) return null;
   const [u] = await db().select().from(schema.users).where(eq(schema.users.id, userId));
   if (!u || !u.active || u.kind !== "staff") return null;
-  return (await permissionsOf(u)).includes("tickets.o365") ? u.email : null;
+  return (await permissionsOf(u)).includes("tickets.o365") ? (u.o365Email ?? u.email) : null;
 }
 
 const KIND_LABEL = { work: "Billet", onsite: "Appel de service sur place", slot: "Temps réservé" } as const;

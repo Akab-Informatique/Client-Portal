@@ -3,7 +3,8 @@ import { eq } from "drizzle-orm";
 import { z } from "zod";
 import { db, schema } from "../db/index.ts";
 import { auth, requireAuth, type AppEnv, type AuthContext } from "../lib/auth.ts";
-import { body, zName, zOptText } from "../lib/validate.ts";
+import { body, zName, zOptText, zPhone } from "../lib/validate.ts";
+import { o365Ready } from "../lib/o365.ts";
 import { SYSTEM_ROLES } from "../../shared/permissions.ts";
 
 export type Me = Awaited<ReturnType<typeof loadMe>>;
@@ -22,6 +23,9 @@ export async function loadMe(a: AuthContext) {
     kind: u.kind,
     title: u.title,
     phone: u.phone,
+    mobile: u.mobile,
+    /** Outlook calendar: allowed by an admin, and the integration on */
+    o365: a.permissions.includes("tickets.o365") ? { mailbox: u.o365Email ?? u.email, active: u.kind === "staff" && (await o365Ready()) } : null,
     locale: u.locale,
     notifyEmail: u.notifyEmail,
     mfaEnabled: u.mfaEnabled,
@@ -54,6 +58,7 @@ export const meRoutes = new Hono<AppEnv>()
         name: zName.optional(),
         title: zOptText(120),
         phone: zOptText(40),
+        mobile: zPhone,
         locale: z.enum(["fr", "en"]).optional(),
         notifyEmail: z.boolean().optional(),
       }),

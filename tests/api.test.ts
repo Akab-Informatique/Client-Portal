@@ -1221,6 +1221,30 @@ describe("tickets: client and contact", () => {
     await admin.put(`/api/admin/users/${techRow.id}/permissions`, { overrides: [] });
   });
 
+  it("technicians enter their mobile; only admins switch Microsoft 365 sync and its mailbox", async () => {
+    const admin = await session("admin@akab.local");
+    const tech = await session("tech@akab.local");
+    const [techRow] = await db().select().from(schema.users).where(eq(schema.users.email, "tech@akab.local"));
+    expect((await tech.patch("/api/me", { mobile: "+1 (450) 555-0199" })).status).toBe(200);
+    expect((await tech.get("/api/me")).json).toMatchObject({ mobile: "+1 (450) 555-0199", o365: null });
+    expect((await tech.patch("/api/me", { mobile: "appelle-moi" })).status).toBe(400);
+    expect((await tech.patch("/api/me", { mobile: "" })).status).toBe(200);
+    expect((await tech.get("/api/me")).json.mobile).toBeNull();
+    // a technician cannot switch sync or choose a mailbox
+    expect((await tech.put(`/api/admin/users/${techRow.id}/o365`, { enabled: true })).status).toBe(403);
+    expect((await admin.get(`/api/admin/users/${techRow.id}/o365`)).json).toEqual({ enabled: false, mailbox: null, integrationReady: false });
+    expect((await admin.put(`/api/admin/users/${techRow.id}/o365`, { enabled: true, mailbox: "alex@akab.ca" })).json).toMatchObject({ enabled: true, mailbox: "alex@akab.ca" });
+    expect((await tech.get("/api/me")).json.o365).toEqual({ mailbox: "alex@akab.ca", active: false });
+    await admin.put(`/api/admin/users/${techRow.id}/o365`, { enabled: false, mailbox: null });
+    expect((await tech.get("/api/me")).json.permissions).not.toContain("tickets.o365");
+    // admins have it by role; switching it off is a deny for that admin only
+    const [adminRow] = await db().select().from(schema.users).where(eq(schema.users.email, "admin@akab.local"));
+    await admin.put(`/api/admin/users/${adminRow.id}/o365`, { enabled: false });
+    expect((await admin.get("/api/me")).json.permissions).not.toContain("tickets.o365");
+    await admin.put(`/api/admin/users/${adminRow.id}/o365`, { enabled: true });
+    expect((await admin.get("/api/me")).json.permissions).toContain("tickets.o365");
+  });
+
   it("timers: one running at a time, closed tab becomes an entry to validate", async () => {
     const tech = await session("tech@akab.local");
     const other = await session("tech2@akab.local");
@@ -1766,7 +1790,7 @@ describe("Microsoft 365 calendar", () => {
     const outlook = () => tech.get(`/api/planning/calendar/outlook?from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}`);
     expect((await outlook()).json).toEqual({ synced: false, events: [] });
 
-    await admin.put(`/api/admin/users/${techRow.id}/permissions`, { overrides: [{ key: "tickets.o365", effect: "allow" }] });
+    await admin.put(`/api/admin/users/${techRow.id}/o365`, { enabled: true });
     const r = (await outlook()).json;
     expect(r.synced).toBe(true);
     // its own events are not shown twice; Québec time is kept
@@ -1796,6 +1820,13 @@ describe("Microsoft 365 calendar", () => {
     expect(allDay.body.subject).toContain(tk.number);
     await tech.post(`/api/planning/pins/${pin.json.id}/done`, { done: true });
     expect(graphSent.some((s) => s.method === "DELETE")).toBe(true);
+
+    // another mailbox chosen by the admin is the one read
+    await admin.put(`/api/admin/users/${techRow.id}/o365`, { enabled: true, mailbox: "alex.tremblay@akab.ca" });
+    graphSent.length = 0;
+    await outlook();
+    expect(graphSent[0].url).toContain("users/alex.tremblay%40akab.ca/calendarView");
+    await admin.put(`/api/admin/users/${techRow.id}/o365`, { enabled: false, mailbox: null });
     await admin.put(`/api/admin/users/${techRow.id}/permissions`, { overrides: [] });
   });
 });

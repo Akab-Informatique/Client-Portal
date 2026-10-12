@@ -349,6 +349,14 @@ const fr = {
     removeBlock: "Supprimer",
     removeBlockConfirm: "Supprimer ce temps réservé ?",
   },
+  profile: {
+    mobile: "Cellulaire",
+    mobileHint: "Pour les alertes par texto (bientôt).",
+    mobileInvalid: "Numéro de cellulaire invalide.",
+    o365On: "Calendrier Outlook synchronisé ({{mailbox}}).",
+    o365Pending: "Synchronisation Outlook autorisée : elle démarre dès que l'intégration Microsoft 365 est activée.",
+    o365Off: "Calendrier Outlook non synchronisé. Un administrateur peut l'activer pour vous.",
+  },
   topbar: {
     search: "Rechercher ou lancer une action",
     adminSettings: "Paramètres admin",
@@ -498,6 +506,10 @@ const fr = {
       select: "Sélectionnez un client pour voir sa fiche et ses usagers.",
     },
     users: {
+      o365: "Synchroniser le calendrier Microsoft 365",
+      o365Hint: "Ses événements Outlook dans la planification ; son temps réservé et ses priorités du jour dans Outlook.",
+      o365NotReady: "Disponible quand l'intégration Microsoft 365 est configurée (Intégrations).",
+      o365Mailbox: "Adresse Microsoft 365 (si différente du courriel)",
       sendWelcome: "Envoyer le courriel de bienvenue",
       sendWelcomeText: "La personne reçoit un lien pour choisir elle-même son mot de passe (valide 72 heures).",
       welcomeSent: "Courriel de bienvenue envoyé à {{email}}",
