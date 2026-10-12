@@ -459,6 +459,10 @@ const fr = {
       resource_taken: "Cet utilisateur Autotask est déjà lié à un autre technicien.",
     },
     autotask: {
+      usage: "Appels API (dernière heure)",
+      usageValue: "{{calls}} / {{limit}}",
+      usageThrottled_one: "{{count}} ralenti par Autotask",
+      usageThrottled_other: "{{count}} ralentis par Autotask",
       description: "Billets, clients et temps : les actions sont faites au nom du technicien lié.",
       username: "Nom d'utilisateur API",
       secret: "Secret",

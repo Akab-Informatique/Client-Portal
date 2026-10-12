@@ -36,6 +36,75 @@ export class AutotaskError extends Error {
   }
 }
 
+/**
+ * Autotask limits each integration: a few requests at the same time (more =
+ * HTTP 429) and 10,000 per hour for the whole database. Every call goes
+ * through this gate: at most MAX_PARALLEL in flight, the others wait their
+ * turn; a 429 is retried after a pause instead of failing the page.
+ */
+const MAX_PARALLEL = 3;
+const RETRIES = 4;
+let active = 0;
+const waiting: (() => void)[] = [];
+function acquire(): Promise<void> {
+  if (active < MAX_PARALLEL) {
+    active++;
+    return Promise.resolve();
+  }
+  return new Promise((resolve) => waiting.push(resolve));
+}
+function release() {
+  const next = waiting.shift();
+  if (next) next(); // the slot goes straight to the next caller
+  else active--;
+}
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+/** Calls in the last hour (per-minute buckets), to watch the hourly limit. */
+const minutes = new Map<number, { calls: number; throttled: number }>();
+function count(throttled: boolean) {
+  const m = Math.floor(Date.now() / 60_000);
+  const b = minutes.get(m) ?? { calls: 0, throttled: 0 };
+  b.calls++;
+  if (throttled) b.throttled++;
+  minutes.set(m, b);
+  for (const k of minutes.keys()) if (k < m - 60) minutes.delete(k);
+}
+export const HOURLY_LIMIT = 10_000;
+export function autotaskUsage() {
+  const from = Math.floor(Date.now() / 60_000) - 59;
+  let calls = 0;
+  let throttled = 0;
+  for (const [k, b] of minutes) {
+    if (k < from) continue;
+    calls += b.calls;
+    throttled += b.throttled;
+  }
+  return { lastHour: calls, throttled, limit: HOURLY_LIMIT, waiting: waiting.length };
+}
+export function resetAutotaskUsage() {
+  minutes.clear();
+}
+
+/** One request through the gate, retried on 429 (Retry-After, else 1 s, 2 s, 4 s…). */
+async function governed(url: string, init: RequestInit): Promise<Response> {
+  for (let attempt = 0; ; attempt++) {
+    await acquire();
+    let res: Response;
+    try {
+      res = await send(url, init);
+    } finally {
+      release();
+    }
+    count(res.status === 429);
+    if (res.status !== 429 || attempt >= RETRIES) return res;
+    const after = Number(res.headers.get("retry-after"));
+    const wait = Number.isFinite(after) && after > 0 ? Math.min(after * 1000, 15_000) : 1000 * 2 ** attempt + Math.random() * 250;
+    console.warn(`[autotask] rate limited (429), retry ${attempt + 1}/${RETRIES} in ${Math.round(wait)} ms`);
+    await sleep(wait);
+  }
+}
+
 async function send(url: string, init: RequestInit): Promise<Response> {
   try {
     return await fetch(url, { ...init, signal: AbortSignal.timeout(TIMEOUT_MS) });
@@ -62,7 +131,7 @@ export function createClient(creds: Credentials, zone: Zone) {
     // Absolute URLs are only accepted on the zone host (pagination links)
     const url = path.startsWith("https://") ? new URL(path) : new URL(path, base);
     if (url.host !== base.host) throw new AutotaskError("api", undefined, "unexpected host");
-    const res = await send(url.toString(), {
+    const res = await governed(url.toString(), {
       method,
       headers: {
         accept: "application/json",

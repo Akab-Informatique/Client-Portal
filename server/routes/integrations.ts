@@ -7,6 +7,7 @@ import { auth, requirePermission, type AppEnv } from "../lib/auth.ts";
 import { audit } from "../lib/audit.ts";
 import {
   AutotaskError,
+  autotaskUsage,
   createClient,
   detectZone,
   listResources,
@@ -17,6 +18,7 @@ import {
   type Settings,
 } from "../lib/autotask.ts";
 import { body, zEmail, zUuid } from "../lib/validate.ts";
+import { clearTicketCache } from "../lib/ticketSource.ts";
 import { AI_MODELS, AiError, aiSettings, askClaude, saveAiSettings, type AiErrorCode } from "../lib/ai.ts";
 
 const zCred = z.string().trim().min(1).max(300);
@@ -30,6 +32,8 @@ function view(s: Settings, updatedByName: string | null) {
     configured: Boolean(s.credentials && s.config.zone),
     zone: s.config.zone ?? null,
     lastTest: s.config.lastTest ?? null,
+    /** API calls made by the portal in the last hour (Autotask allows 10,000 per hour) */
+    usage: autotaskUsage(),
     updatedAt: s.updatedAt,
     updatedByName,
   };
@@ -84,6 +88,8 @@ export const integrationRoutes = new Hono<AppEnv>()
     if (p.enabled && !complete) throw new HTTPException(400, { message: "autotask_incomplete" });
 
     await saveSettings(a.user.id, { enabled: p.enabled, config, secret: p.secret, integrationCode: p.integrationCode });
+    // Another Autotask account: its tickets are not ours, start the local copy again
+    if (p.username !== undefined && p.username !== s.config.username) await clearTicketCache();
     // Never log the secret or the integration code, only that they changed
     await audit(a.user.id, "integration.autotask.updated", null, {
       enabled: p.enabled,

@@ -25,6 +25,7 @@ type Settings = {
   configured: boolean;
   zone: { name: string; url: string; webUrl: string | null } | null;
   lastTest: { ok: boolean; at: string; error?: ErrorCode } | null;
+  usage: { lastHour: number; throttled: number; limit: number; waiting: number };
   updatedAt: string | null;
   updatedByName: string | null;
 };
@@ -280,6 +281,12 @@ function AutotaskConnection() {
             )}
           </Info>
           {s.lastTest?.ok === false && s.lastTest.error && <p className="text-xs text-destructive">{errorText(s.lastTest.error)}</p>}
+          <Info label={t("integrations.autotask.usage")}>
+            <span className={cn(s.usage.throttled ? "text-orange-300" : undefined)}>
+              {t("integrations.autotask.usageValue", { calls: s.usage.lastHour.toLocaleString(), limit: s.usage.limit.toLocaleString() })}
+              {s.usage.throttled > 0 && ` · ${t("integrations.autotask.usageThrottled", { count: s.usage.throttled })}`}
+            </span>
+          </Info>
           <Info label={t("integrations.updated")}>{s.updatedAt ? `${dateTime(s.updatedAt)}${s.updatedByName ? ` · ${s.updatedByName}` : ""}` : "—"}</Info>
         </dl>
       </form>

@@ -381,3 +381,19 @@ export const auditLog = pgTable("audit_log", {
   details: jsonb("details"),
   createdAt: created(),
 });
+
+/**
+ * Local copy of the Autotask tickets (open + recently completed), as shown in
+ * the portal. Kept in sync in the background (only what changed), so lists and
+ * searches never wait for Autotask nor use its hourly quota.
+ */
+export const autotaskTickets = pgTable(
+  "autotask_tickets",
+  {
+    id: bigint("id", { mode: "number" }).primaryKey(),
+    data: jsonb("data").$type<Record<string, unknown>>().notNull(),
+    lastActivity: timestamp("last_activity", { withTimezone: true }).notNull(),
+    syncedAt: timestamp("synced_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [index("autotask_tickets_activity_idx").on(t.lastActivity)],
+);

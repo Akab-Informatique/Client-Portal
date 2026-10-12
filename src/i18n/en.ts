@@ -461,6 +461,10 @@ const en: Dict = {
       resource_taken: "This Autotask user is already linked to another technician.",
     },
     autotask: {
+      usage: "API calls (last hour)",
+      usageValue: "{{calls}} / {{limit}}",
+      usageThrottled_one: "{{count}} slowed down by Autotask",
+      usageThrottled_other: "{{count}} slowed down by Autotask",
       description: "Tickets, clients and time: actions are made on behalf of the linked technician.",
       username: "API username",
       secret: "Secret",

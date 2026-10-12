@@ -572,13 +572,20 @@ function TicketRow({
   const me = useMe();
   const due = dueState(tk.dueAt, tk.statusKind);
   const used = tk.statusKind === "complete" ? 0 : slaUsed(tk);
+  // Load the ticket ahead only when the pointer rests on it (not when it just passes over)
+  const hoverTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  useEffect(() => () => clearTimeout(hoverTimer.current ?? undefined), []);
   return (
     <motion.li initial={{ opacity: 0 }} animate={{ opacity: 1 }} transition={{ delay: Math.min(index, 12) * 0.015 }}>
       <div
         role="button"
         tabIndex={0}
         onClick={onOpen}
-        onMouseEnter={onHover}
+        onMouseEnter={() => {
+          clearTimeout(hoverTimer.current ?? undefined);
+          hoverTimer.current = setTimeout(onHover, 400);
+        }}
+        onMouseLeave={() => clearTimeout(hoverTimer.current ?? undefined)}
         onKeyDown={(e) => {
           if (e.key === "Enter" || e.key === " ") {
             e.preventDefault();

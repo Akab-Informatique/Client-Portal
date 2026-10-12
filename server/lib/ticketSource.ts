@@ -1,4 +1,4 @@
-import { and, asc, eq, isNotNull } from "drizzle-orm";
+import { and, asc, eq, isNotNull, sql } from "drizzle-orm";
 import { db, schema } from "../db/index.ts";
 import type { AuthContext } from "./auth.ts";
 import { autotask, AutotaskError, listResources, loadSettings, type Client } from "./autotask.ts";
@@ -330,27 +330,124 @@ async function cached<T>(key: string, ttlMs: number, fn: () => Promise<T>, opts:
 const forget = (prefix: string) => {
   for (const k of cache.keys()) if (k.startsWith(prefix)) cache.delete(k);
 };
-export const clearTicketCache = () => {
+export async function clearTicketCache() {
   cache.clear();
   loading.clear();
-};
+  generation++;
+  mirror = null;
+  lastFull = 0;
+  lastInc = 0;
+  await db().delete(schema.autotaskTickets);
+}
 
 /**
- * Keep the Autotask ticket list warm: load it at start-up and refresh it in
- * the background while the portal is being used (stops after 15 min idle).
+ * Local copy of the Autotask tickets (table autotask_tickets + memory).
+ * Lists, filters and searches read it: they never wait for Autotask and do not
+ * use its hourly quota. Kept up to date in the background:
+ *  - incremental: only tickets with activity since the last pass (usually one
+ *    small request, nothing to normalize);
+ *  - full: every 30 min (and when the copy is empty), which also drops deleted
+ *    tickets and old completed ones.
+ * Our own changes are written to the copy at once (refreshOne).
  */
+const FULL_EVERY = 30 * 60_000;
+const INCREMENTAL_EVERY = 30_000;
+let mirror: Map<number, NTicket> | null = null;
+let lastFull = 0;
+let lastInc = 0;
+let generation = 0;
+let syncing: Promise<void> | null = null;
+
+async function mirrorMap(): Promise<Map<number, NTicket>> {
+  if (!mirror) {
+    const rows = await db().select({ id: schema.autotaskTickets.id, data: schema.autotaskTickets.data }).from(schema.autotaskTickets);
+    mirror ??= new Map(rows.map((r) => [r.id, r.data as unknown as NTicket]));
+  }
+  return mirror;
+}
+
+const activityOf = (x: NTicket) => {
+  const d = new Date(x.updatedAt);
+  return Number.isNaN(d.getTime()) ? new Date(0) : d;
+};
+
+async function store(list: NTicket[], replace: boolean) {
+  await db().transaction(async (tx) => {
+    if (replace) await tx.delete(schema.autotaskTickets);
+    for (const part of chunks(list, 200)) {
+      await tx
+        .insert(schema.autotaskTickets)
+        .values(part.map((x) => ({ id: x.id, data: x as unknown as Record<string, unknown>, lastActivity: activityOf(x), syncedAt: new Date() })))
+        .onConflictDoUpdate({
+          target: schema.autotaskTickets.id,
+          set: { data: sql`excluded.data`, lastActivity: sql`excluded.last_activity`, syncedAt: sql`excluded.synced_at` },
+        });
+    }
+  });
+}
+
+/** One sync at a time; callers share it. */
+export function syncTickets(): Promise<void> {
+  syncing ??= runSync().finally(() => {
+    syncing = null;
+  });
+  return syncing;
+}
+
+async function runSync() {
+  const gen = generation;
+  const m = await mirrorMap();
+  if (!m.size || Date.now() - lastFull > FULL_EVERY) {
+    const started = Date.now();
+    const list = await loadList();
+    if (gen !== generation) return;
+    await store(list, true);
+    mirror = new Map(list.map((x) => [x.id, x]));
+    lastFull = lastInc = started;
+    return;
+  }
+  const at = await autotask();
+  const started = Date.now();
+  // Since the last pass (or the newest activity we know, after a restart), with an overlap
+  const newest = lastInc || Math.max(0, ...[...m.values()].map((x) => activityOf(x).getTime()));
+  const since = new Date(newest - 2 * 60_000).toISOString();
+  const rows = await at.query<AtTicket>(
+    "Tickets",
+    [
+      {
+        op: "or",
+        items: [
+          { op: "gte", field: "lastActivityDate", value: since },
+          { op: "gte", field: "createDate", value: since },
+        ],
+      },
+    ],
+    { fields: TICKET_FIELDS, max: 3000 },
+  );
+  // Seen in the overlap and unchanged: nothing to do
+  const changed = rows.filter((r) => m.get(r.id)?.updatedAt !== (r.lastActivityDate ?? r.createDate));
+  if (changed.length) {
+    const list = await normalize(at, changed, true);
+    if (gen !== generation) return;
+    await store(list, false);
+    for (const x of list) m.set(x.id, x);
+  }
+  lastInc = started;
+}
+
+/** Background sync while the portal is used (stops after 15 min idle). */
 let lastUse = 0;
 let warmTimer: ReturnType<typeof setInterval> | null = null;
 export function keepTicketsWarm() {
   if (warmTimer) return;
   const tick = async () => {
-    if (Date.now() - lastUse > 15 * 60_000 && cache.has("list")) return;
+    if (lastUse && Date.now() - lastUse > 15 * 60_000) return;
     const src = await ticketSource();
     if (src.demo) return;
-    await load("list", () => loadList()).catch((e) => console.warn("[autotask] warm-up failed:", e instanceof Error ? e.message : e));
+    await syncTickets().catch((e) => console.warn("[autotask] sync failed:", e instanceof Error ? e.message : e));
   };
   void tick();
-  warmTimer = setInterval(() => void tick(), 25_000);
+  warmTimer = setInterval(() => void tick(), INCREMENTAL_EVERY);
   warmTimer.unref?.();
 }
 
@@ -360,7 +457,7 @@ const picklist = (fields: FieldInfo[], name: string) =>
     .sort((a, b) => (a.sortOrder ?? 0) - (b.sortOrder ?? 0));
 
 async function fieldsOf(at: Client, entity: string): Promise<FieldInfo[]> {
-  return cached(`fields:${entity}`, 10 * 60_000, async () => (await at.call<{ fields: FieldInfo[] }>("GET", `${entity}/entityInformation/fields`)).fields ?? []);
+  return cached(`fields:${entity}`, 6 * 60 * 60_000, async () => (await at.call<{ fields: FieldInfo[] }>("GET", `${entity}/entityInformation/fields`)).fields ?? []);
 }
 
 /**
@@ -517,16 +614,21 @@ async function setSecondary(at: Client, ticketId: number, personIds: string[], a
  * (instead of reloading the whole list from Autotask).
  */
 async function refreshOne(at: Client, id: number): Promise<void> {
-  const hit = cache.get("list");
-  if (!hit) return;
+  forget(`detail:${id}:`);
   try {
+    const m = await mirrorMap();
     const item = (await at.call<{ item: AtTicket | null }>("GET", `Tickets/${id}`)).item;
-    const listNow = (cache.get("list")?.value as NTicket[] | undefined) ?? [];
-    const others = listNow.filter((x) => x.id !== id);
-    const next = item ? [...others, (await normalize(at, [item], true))[0]] : others;
-    cache.set("list", { at: hit.at, value: next });
-  } catch {
-    forget("list");
+    if (item) {
+      const [x] = await normalize(at, [item], true);
+      m.set(id, x);
+      await store([x], false);
+    } else {
+      m.delete(id);
+      await db().delete(schema.autotaskTickets).where(eq(schema.autotaskTickets.id, id));
+    }
+  } catch (e) {
+    // the next sync brings it
+    console.warn(`[autotask] ticket ${id} reload failed:`, e instanceof Error ? e.message : e);
   }
 }
 
@@ -554,7 +656,7 @@ async function loadList(): Promise<NTicket[]> {
 /** Autotask lists (cached 10 min): ticket picklists + note types/publish values. */
 async function atOptions() {
   const at = await autotask();
-  return cached("options", 10 * 60_000, async () => {
+  return cached("options", 60 * 60_000, async () => {
       const [fields, noteFields] = await Promise.all([fieldsOf(at, "Tickets"), fieldsOf(at, "TicketNotes").catch(() => [] as FieldInfo[])]);
       return {
         statuses: picklist(fields, "status").map((v) => ({ value: String(v.value), label: v.label, kind: statusKind(v.label, String(v.value)) })),
@@ -582,15 +684,18 @@ const autotaskSource: TicketSource = {
     return u?.r ? a.user.id : null;
   },
 
-  /** Open tickets + those completed in the last 14 days (cached 30 s for everyone). */
+  /** Open tickets + those completed in the last 14 days, from the local copy. */
   async list() {
     lastUse = Date.now();
-    return cached("list", 30_000, loadList, { stale: true });
+    const m = await mirrorMap();
+    if (!m.size) await syncTickets();
+    else if (Date.now() - lastInc > INCREMENTAL_EVERY) void syncTickets().catch((e) => console.warn("[autotask] sync failed:", e instanceof Error ? e.message : e));
+    return [...(mirror ?? m).values()];
   },
 
   async get(id) {
     const at = await autotask();
-    const fromList = (cache.get("list")?.value as NTicket[] | undefined)?.find((x) => x.id === id);
+    const fromList = (await mirrorMap()).get(id);
     const loadTicket = async (): Promise<NTicket | null> => {
       if (fromList) return { ...fromList };
       let item: AtTicket | undefined;
@@ -611,18 +716,25 @@ const autotaskSource: TicketSource = {
     };
     type AtNote = { id: number; title?: string; description?: string; createDateTime: string; creatorResourceID?: number | null; createdByContactID?: number | null; creatorContactID?: number | null; publish?: number };
     type AtTime = { id: number; resourceID?: number | null; dateWorked?: string; startDateTime?: string | null; createDateTime?: string; hoursWorked?: number; summaryNotes?: string | null; internalNotes?: string | null };
-    const [noteFields, timeFields] = await Promise.all([
-      safeFields(at, "TicketNotes", ["id", "title", "description", "createDateTime", "creatorResourceID", "createdByContactID", "creatorContactID", "publish"]),
-      safeFields(at, "TimeEntries", ["id", "resourceID", "dateWorked", "startDateTime", "createDateTime", "hoursWorked", "summaryNotes", "internalNotes"]),
-    ]);
-    const [t, notes, times, res] = await Promise.all([
-      loadTicket(),
-      at.query<AtNote>("TicketNotes", [{ op: "eq", field: "ticketID", value: id }], { fields: noteFields, max: 300 }).catch(soft("notes", [] as AtNote[])),
-      at.query<AtTime>("TimeEntries", [{ op: "eq", field: "ticketID", value: id }], { fields: timeFields, max: 500 }).catch(soft("time", [] as AtTime[])),
-      listResources(),
-    ]);
+    // Notes and time: kept until the ticket has new activity (or we change it)
+    const extrasKey = `detail:${id}:${fromList?.updatedAt ?? "?"}`;
+    const loadExtras = async () => {
+      const [noteFields, timeFields] = await Promise.all([
+        safeFields(at, "TicketNotes", ["id", "title", "description", "createDateTime", "creatorResourceID", "createdByContactID", "creatorContactID", "publish"]),
+        safeFields(at, "TimeEntries", ["id", "resourceID", "dateWorked", "startDateTime", "createDateTime", "hoursWorked", "summaryNotes", "internalNotes"]),
+      ]);
+      const [notes, times] = await Promise.all([
+        at.query<AtNote>("TicketNotes", [{ op: "eq", field: "ticketID", value: id }], { fields: noteFields, max: 300 }).catch(soft("notes", [] as AtNote[])),
+        at.query<AtTime>("TimeEntries", [{ op: "eq", field: "ticketID", value: id }], { fields: timeFields, max: 500 }).catch(soft("time", [] as AtTime[])),
+      ]);
+      return { notes, times, warnings: [...warnings] };
+    };
+    const [t, extras, res] = await Promise.all([loadTicket(), cached(extrasKey, fromList ? 10 * 60_000 : 30_000, loadExtras), listResources()]);
+    // a part failed: shown with a warning, asked again next time
+    if (extras.warnings.length) forget(extrasKey);
+    const { notes, times } = extras;
     if (!t) return null;
-    t.warnings = warnings;
+    t.warnings = extras.warnings;
     const internalValues = new Set((await atOptions()).publish.filter((p) => /intern/i.test(p.label)).map((p) => String(p.value)));
     const contactOf = (n: AtNote) => n.createdByContactID ?? n.creatorContactID ?? null;
     const contactIds = notes.map(contactOf).filter((x): x is number => Boolean(x));
@@ -718,6 +830,7 @@ const autotaskSource: TicketSource = {
       },
       { impersonate: actor },
     );
+    forget(`detail:${id}:`);
     // the list does not show notes: no reload
   },
 
@@ -750,7 +863,7 @@ const autotaskSource: TicketSource = {
 
   async companies() {
     const at = await autotask();
-    return cached("companies", 10 * 60_000, async () =>
+    return cached("companies", 60 * 60_000, async () =>
       (await at.query<{ id: number; companyName: string }>("Companies", [{ op: "eq", field: "isActive", value: true }], { fields: ["id", "companyName"], max: 10_000 }))
         .map((c) => ({ id: c.id, name: c.companyName }))
         .sort((x, y) => x.name.localeCompare(y.name)),
@@ -816,6 +929,7 @@ const autotaskSource: TicketSource = {
       },
       { impersonate: actor },
     );
+    forget(`detail:${ticketId}:`);
   },
 
   async addContact(companyId, p, a) {

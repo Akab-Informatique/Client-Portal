@@ -1022,6 +1022,9 @@ describe("tickets: client and contact", () => {
 
 describe("tickets from Autotask", () => {
   let linkedTech = "";
+  let inFlight = 0;
+  let peak = 0;
+  let throttleNext = 0;
   const base = "https://webservices99.autotask.net/ATServicesRest/V1.0/";
   const sent: { method: string; url: string; headers: Record<string, string>; body: any }[] = [];
   const json = (b: unknown, status = 200) => new Response(JSON.stringify(b), { status, headers: { "content-type": "application/json" } });
@@ -1046,10 +1049,26 @@ describe("tickets from Autotask", () => {
 
   beforeAll(async () => {
     const { clearTicketCache } = await import("../server/lib/ticketSource.ts");
-    clearTicketCache();
+    await clearTicketCache();
     vi.stubGlobal(
       "fetch",
       vi.fn(async (input: unknown, init: RequestInit = {}) => {
+        inFlight++;
+        peak = Math.max(peak, inFlight);
+        try {
+          await new Promise((r) => setTimeout(r, 3));
+          if (throttleNext > 0) {
+            throttleNext--;
+            sent.push({ method: init.method ?? "GET", url: String(input), headers: {}, body: "429" });
+            return new Response("{}", { status: 429, headers: { "retry-after": "1" } });
+          }
+          return await answer(input, init);
+        } finally {
+          inFlight--;
+        }
+      }),
+    );
+    async function answer(input: unknown, init: RequestInit) {
         const url = String(input);
         const method = init.method ?? "GET";
         const headers = Object.fromEntries(Object.entries((init.headers ?? {}) as Record<string, string>).map(([k, v]) => [k.toLowerCase(), String(v)]));
@@ -1121,8 +1140,7 @@ describe("tickets from Autotask", () => {
         if (path === "Tickets/9001/Notes" && method === "POST") return json({ itemId: 55 });
         if (path === "Companies/77/Contacts" && method === "POST") return json({ itemId: 777 });
         return json({ errors: [`unexpected ${method} ${path}`] }, 500);
-      }),
-    );
+    }
     resetRateLimit("login:ip:unknown");
     const admin = await signIn("admin@akab.local");
     await admin.put("/api/admin/integrations/autotask", { username: "portal-api@akab.ca", secret: "good-secret", integrationCode: "TRACKING-ID", enabled: true });
@@ -1136,7 +1154,7 @@ describe("tickets from Autotask", () => {
   afterAll(async () => {
     vi.unstubAllGlobals();
     await db().update(schema.integrations).set({ enabled: false }).where(eq(schema.integrations.provider, "autotask"));
-    (await import("../server/lib/ticketSource.ts")).clearTicketCache();
+    await (await import("../server/lib/ticketSource.ts")).clearTicketCache();
   });
 
   it("lists Autotask tickets with the Autotask statuses and the linked technician view", async () => {
@@ -1225,6 +1243,46 @@ describe("tickets from Autotask", () => {
     // notes failed, but the work done (time entries) is still shown
     expect(d.json.notes.map((n: any) => n.kind)).toEqual(["time"]);
     expect(d.json.warnings).toEqual([{ part: "notes", detail: "Notes indisponibles" }]);
+  });
+
+  it("keeps a local copy: lists read it, syncs only ask what changed", async () => {
+    resetRateLimit("login:ip:unknown");
+    const tech = await signIn("tech@akab.local");
+    await tech.get("/api/tickets?view=all");
+    const rows = await db().select().from(schema.autotaskTickets);
+    expect(rows.map((r) => r.id).sort()).toEqual([9001, 9002]);
+
+    // a list read does not call Autotask (copy is fresh)
+    sent.length = 0;
+    expect((await tech.get("/api/tickets?view=all&q=serveur")).json.items.map((x: any) => x.id)).toEqual([9001]);
+    expect(sent.filter((s) => s.url.endsWith("Tickets/query"))).toEqual([]);
+
+    // incremental pass: only tickets with recent activity; unchanged ones are not re-read
+    const { syncTickets } = await import("../server/lib/ticketSource.ts");
+    sent.length = 0;
+    await syncTickets();
+    const q = sent.filter((s) => s.url.endsWith("Tickets/query"));
+    expect(q).toHaveLength(1);
+    expect(JSON.stringify(q[0].body.filter)).toContain("lastActivityDate");
+    expect(sent.some((s) => s.url.endsWith("Contacts/query") || s.url.endsWith("TicketSecondaryResources/query"))).toBe(false);
+  });
+
+  it("never sends more than 3 requests at once and retries when Autotask says 429", async () => {
+    resetRateLimit("login:ip:unknown");
+    const tech = await signIn("tech@akab.local");
+    const { resetAutotaskUsage, autotaskUsage } = await import("../server/lib/autotask.ts");
+    resetAutotaskUsage();
+    peak = 0;
+    // many tickets opened at once
+    await Promise.all([9001, 9002, 9001, 9002].map((id) => tech.get(`/api/tickets/${id}`)));
+    expect(peak).toBeLessThanOrEqual(3);
+
+    throttleNext = 1;
+    const r = await tech.get("/api/tickets/companies");
+    expect(r.status).toBe(200);
+    expect(r.json.map((c: any) => c.name)).toEqual(["Client Réel inc."]);
+    expect(autotaskUsage()).toMatchObject({ throttled: 1, limit: 10_000 });
+    expect(autotaskUsage().lastHour).toBeGreaterThan(1);
   });
 
   it("refuses writes from an account not linked to Autotask", async () => {
