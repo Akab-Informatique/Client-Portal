@@ -30,6 +30,8 @@ function sourceError(e: unknown): HTTPException {
     return new HTTPException(status, { message: e.code === "not_linked" ? "autotask_not_linked" : e.code });
   }
   if (e instanceof AutotaskError) {
+    // In the server log too (docker compose logs app), with Autotask's own message
+    console.warn(`[autotask] ${e.code}${e.status ? ` (HTTP ${e.status})` : ""}${e.detail ? `: ${e.detail}` : ""}`);
     const status = e.code === "not_configured" || e.code === "disabled" ? 409 : e.code === "rate_limit" ? 429 : 502;
     // Autotask's own message (e.g. a required field) helps the technician
     return new HTTPException(status, { message: `autotask_${e.code}`, cause: e.detail ? [{ path: "autotask", message: e.detail }] : undefined });
@@ -176,6 +178,7 @@ async function detailOf(src: TicketSource, id: number, a: AuthContext) {
     source: t.source,
     hours: t.hours,
     notes: t.notes,
+    warnings: t.warnings ?? [],
     demo: src.demo,
     ai: Boolean(ai?.enabled && ai.apiKey),
     options: { statuses: o.statuses, priorities: o.priorities, queues: o.queues, technicians },

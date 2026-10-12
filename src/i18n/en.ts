@@ -490,6 +490,9 @@ const en: Dict = {
     },
   },
   tickets: {
+    loadFailed: "The ticket could not be loaded.",
+    retry: "Retry",
+    partFailed: { notes: "Notes could not be loaded from Autotask:", time: "Logged time could not be loaded from Autotask:" },
     loadingActivity: "Loading notes…",
     youAreSecondary: "You are a secondary technician on this ticket",
     notLinkedTitle: "Your account is not linked to an Autotask user.",

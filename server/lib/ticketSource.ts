@@ -50,6 +50,8 @@ export type NTicket = {
   updatedAt: string;
   hours: number;
   notes: Note[];
+  /** Parts that could not be loaded (the rest of the ticket is shown) */
+  warnings?: { part: "notes" | "time"; detail: string }[];
 };
 export type TicketPatch = {
   status?: string;
@@ -535,20 +537,30 @@ const autotaskSource: TicketSource = {
       }
       return item ? (await normalize(at, [item], true))[0] : null;
     };
+    const warnings: NonNullable<NTicket["warnings"]> = [];
+    const soft = <T>(part: "notes" | "time", fallback: T) => (e: unknown) => {
+      const detail = e instanceof AutotaskError ? (e.detail ?? e.code) : e instanceof Error ? e.message : String(e);
+      console.warn(`[autotask] ticket ${id}: ${part} could not be loaded: ${detail}`);
+      warnings.push({ part, detail });
+      return fallback;
+    };
     const [t, notes, times, res] = await Promise.all([
       loadTicket(),
-      at.query<{ id: number; title: string; description: string; createDateTime: string; creatorResourceID: number | null; creatorContactID: number | null; publish: number }>(
-        "TicketNotes",
-        [{ op: "eq", field: "ticketID", value: id }],
-        { fields: ["id", "title", "description", "createDateTime", "creatorResourceID", "creatorContactID", "publish"], max: 200 },
-      ),
-      at.query<{ hoursWorked: number }>("TimeEntries", [{ op: "eq", field: "ticketID", value: id }], { fields: ["hoursWorked"], max: 500 }).catch(() => []),
+      at
+        .query<{ id: number; title: string; description: string; createDateTime: string; creatorResourceID: number | null; creatorContactID: number | null; publish: number }>(
+          "TicketNotes",
+          [{ op: "eq", field: "ticketID", value: id }],
+          { fields: ["id", "title", "description", "createDateTime", "creatorResourceID", "creatorContactID", "publish"], max: 200 },
+        )
+        .catch(soft("notes", [] as { id: number; title: string; description: string; createDateTime: string; creatorResourceID: number | null; creatorContactID: number | null; publish: number }[])),
+      at.query<{ hoursWorked: number }>("TimeEntries", [{ op: "eq", field: "ticketID", value: id }], { fields: ["hoursWorked"], max: 500 }).catch(soft("time", [] as { hoursWorked: number }[])),
       listResources(),
     ]);
     if (!t) return null;
+    t.warnings = warnings;
     const internalValues = new Set((await atOptions()).publish.filter((p) => /intern/i.test(p.label)).map((p) => String(p.value)));
     const contactIds = notes.map((n) => n.creatorContactID).filter((x): x is number => Boolean(x));
-    const contactMap = contactIds.length ? await contactNames(at, contactIds) : new Map<number, string>();
+    const contactMap = contactIds.length ? await contactNames(at, contactIds).catch(() => new Map<number, string>()) : new Map<number, string>();
     t.notes = notes
       .map((n) => ({
         id: String(n.id),

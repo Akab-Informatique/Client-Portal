@@ -99,13 +99,16 @@ function fromLists(qc: QueryClient, id: number): TicketDetail | undefined {
 export function TicketOverlay({ id, onClose, onMinimize }: { id: number | null; onClose: () => void; onMinimize: (tk: TicketDetail) => void }) {
   const { t } = useTranslation();
   const qc = useQueryClient();
-  const { data, isLoading, isPlaceholderData } = useQuery({
+  const { data, isLoading, isPlaceholderData, isError, error, refetch, isFetching } = useQuery({
     queryKey: ["tickets", "detail", id],
     queryFn: () => api.get<TicketDetail>(`/tickets/${id}`),
     enabled: Boolean(id),
     staleTime: 15_000,
     placeholderData: () => (id ? fromLists(qc, id) : undefined),
+    retry: 1,
   });
+  // On error, keep showing what the list knows about the ticket
+  const shown = data ?? (isError && id ? fromLists(qc, id) : undefined);
   const viewers = usePresence(id);
 
   return (
@@ -123,7 +126,20 @@ export function TicketOverlay({ id, onClose, onMinimize }: { id: number | null; 
               >
                 <GlassBackdrop />
                 <div className="pointer-events-none absolute inset-x-0 top-0 -z-10 h-72 bg-grid opacity-40 [mask-image:linear-gradient(to_bottom,black,transparent)]" />
-                {isLoading || !data ? (
+                {isError && !shown ? (
+                  <div className="relative mx-auto w-full max-w-xl space-y-4 p-8 pt-24 text-center">
+                    <DialogPrimitive.Title className="text-xl font-semibold">{t("tickets.loadFailed")}</DialogPrimitive.Title>
+                    <p className="text-sm text-muted-foreground">{ticketErrorText(t, error)}</p>
+                    <div className="flex justify-center gap-2">
+                      <Button variant="ghost" onClick={onClose}>
+                        {t("common.close")}
+                      </Button>
+                      <Button onClick={() => void refetch()} disabled={isFetching} className="bg-grad-gold font-semibold text-[#1a1204]">
+                        {isFetching ? <Loader2 className="size-4 animate-spin" /> : <RefreshCw className="size-4" />} {t("tickets.retry")}
+                      </Button>
+                    </div>
+                  </div>
+                ) : (isLoading && !shown) || !shown ? (
                   <div className="relative mx-auto w-full max-w-7xl space-y-4 p-8">
                     <DialogPrimitive.Title className="sr-only">{t("tickets.title")}</DialogPrimitive.Title>
                     <Skeleton className="h-6 w-40" />
@@ -131,7 +147,14 @@ export function TicketOverlay({ id, onClose, onMinimize }: { id: number | null; 
                     <Skeleton className="h-96" />
                   </div>
                 ) : (
-                  <TicketBody tk={data} partial={isPlaceholderData} viewers={viewers} onClose={onClose} onMinimize={() => onMinimize(data)} />
+                  <TicketBody
+                    tk={shown}
+                    partial={isPlaceholderData || (isError && !data)}
+                    loadError={isError && !data ? { text: ticketErrorText(t, error), retry: () => void refetch(), retrying: isFetching } : null}
+                    viewers={viewers}
+                    onClose={onClose}
+                    onMinimize={() => onMinimize(shown)}
+                  />
                 )}
               </motion.div>
             </DialogPrimitive.Content>
@@ -161,6 +184,7 @@ function useTicketUpdate(tk: TicketDetail) {
 function TicketBody({
   tk,
   partial,
+  loadError,
   viewers,
   onClose,
   onMinimize,
@@ -168,6 +192,8 @@ function TicketBody({
   tk: TicketDetail;
   /** Shown from the list while the full ticket (description, notes, time) loads */
   partial: boolean;
+  /** The full ticket could not be loaded: what the list knows is shown, with the reason */
+  loadError?: { text: string; retry: () => void; retrying: boolean } | null;
   viewers: Viewer[] | null;
   onClose: () => void;
   onMinimize: () => void;
@@ -253,6 +279,25 @@ function TicketBody({
         <div className="mx-auto grid w-full max-w-7xl gap-6 px-6 py-6 lg:grid-cols-[minmax(0,1fr)_320px] lg:px-8">
           {/* Conversation */}
           <div className="min-w-0 space-y-5">
+            {loadError && (
+              <div className="flex flex-wrap items-center gap-3 rounded-xl border border-destructive/40 bg-destructive/10 px-4 py-3 text-sm">
+                <AlertTriangle className="size-4 shrink-0 text-destructive" />
+                <span className="min-w-0 flex-1">
+                  <span className="font-medium">{t("tickets.loadFailed")}</span> <span className="text-muted-foreground">{loadError.text}</span>
+                </span>
+                <Button size="sm" variant="outline" onClick={loadError.retry} disabled={loadError.retrying}>
+                  {loadError.retrying ? <Loader2 className="size-3.5 animate-spin" /> : <RefreshCw className="size-3.5" />} {t("tickets.retry")}
+                </Button>
+              </div>
+            )}
+            {(tk.warnings ?? []).map((w) => (
+              <p key={w.part} className="flex items-start gap-2 rounded-xl border border-orange-500/40 bg-orange-500/10 px-4 py-2.5 text-xs">
+                <AlertTriangle className="mt-0.5 size-3.5 shrink-0 text-orange-300" />
+                <span>
+                  {t(`tickets.partFailed.${w.part}`)} <span className="text-muted-foreground">{w.detail}</span>
+                </span>
+              </p>
+            ))}
             <AiPanel tk={tk} onToNote={(text) => setDraft({ text, internal: true })} />
             <section className="glass rounded-2xl border p-4">
               <p className="mb-2 text-[11px] font-medium uppercase tracking-wide text-muted-foreground">{t("tickets.description")}</p>
@@ -261,7 +306,7 @@ function TicketBody({
             </section>
             <section>
               <p className="mb-3 text-[11px] font-medium uppercase tracking-wide text-muted-foreground">{t("tickets.activity")}</p>
-              {partial ? (
+              {partial && !loadError ? (
                 <p className="flex items-center gap-2 text-sm text-muted-foreground">
                   <Loader2 className="size-4 animate-spin" /> {t("tickets.loadingActivity")}
                 </p>

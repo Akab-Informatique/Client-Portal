@@ -488,6 +488,9 @@ const fr = {
     },
   },
   tickets: {
+    loadFailed: "Impossible de charger le billet.",
+    retry: "Réessayer",
+    partFailed: { notes: "Les notes n'ont pas pu être chargées depuis Autotask :", time: "Le temps saisi n'a pas pu être chargé depuis Autotask :" },
     loadingActivity: "Chargement des notes…",
     youAreSecondary: "Vous êtes technicien secondaire sur ce billet",
     notLinkedTitle: "Votre compte n'est pas lié à un utilisateur Autotask.",

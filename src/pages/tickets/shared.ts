@@ -47,6 +47,8 @@ export type TicketDetail = TicketSummary & {
   notes: { id: string; author: string; at: string; text: string; internal: boolean }[];
   /** AI assistant available to me */
   ai: boolean;
+  /** Parts Autotask could not give (notes, time) */
+  warnings?: { part: "notes" | "time"; detail: string }[];
   demo: boolean;
   options: {
     statuses: Choice<StatusKind>[];

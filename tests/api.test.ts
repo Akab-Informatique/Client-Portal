@@ -1018,6 +1018,7 @@ describe("tickets from Autotask", () => {
         if (path === "Companies/query") return json({ items: [{ id: 77, companyName: "Client Réel inc." }], pageDetails: {} });
         if (path === "Contacts/query") return json({ items: [{ id: 501, firstName: "Ann", lastName: "Réelle", emailAddress: "ann@reel.ca", phone: null }], pageDetails: {} });
         if (path === "Tickets/9001" && method === "GET") return json({ item: ticket({}) });
+        if (path === "TicketNotes/query" && JSON.stringify(init.body ?? "").includes("9002")) return json({ errors: ["Notes indisponibles"] }, 500);
         if (path === "TicketNotes/query") {
           return json({
             items: [{ id: 1, title: "Appel", description: "Client rappelé", createDateTime: "2026-09-30T14:00:00Z", creatorResourceID: 29682885, creatorContactID: null, publish: 2 }],
@@ -1096,6 +1097,17 @@ describe("tickets from Autotask", () => {
 
     const c = await tech.post("/api/tickets/companies/77/contacts", { firstName: "Bob", lastName: "Neuf", email: "bob@reel.ca" });
     expect(c.json).toMatchObject({ id: "777", name: "Bob Neuf" });
+  });
+
+  it("opens a ticket even when its notes cannot be loaded, with a warning", async () => {
+    resetRateLimit("login:ip:unknown");
+    const tech = await signIn("tech@akab.local");
+    await tech.get("/api/tickets?view=all");
+    const d = await tech.get("/api/tickets/9002");
+    expect(d.status).toBe(200);
+    expect(d.json.title).toBe("Client a répondu");
+    expect(d.json.notes).toEqual([]);
+    expect(d.json.warnings).toEqual([{ part: "notes", detail: "Notes indisponibles" }]);
   });
 
   it("refuses writes from an account not linked to Autotask", async () => {
