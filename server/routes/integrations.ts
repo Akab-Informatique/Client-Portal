@@ -285,7 +285,9 @@ export const integrationRoutes = new Hono<AppEnv>()
     const s = await smsSettings();
     const next = { ...s, ...p, did: p.did !== undefined ? (normalizePhone(p.did) ?? "") : s.did };
     if (p.enabled && !(next.username && (p.password ?? s.password) && next.did)) throw new HTTPException(400, { message: "sms_incomplete" });
-    await saveSmsSettings(a.user.id, { ...p, did: next.did } as Partial<SmsSettings> & { newToken?: boolean });
+    // new account details: the last test no longer says anything about them
+    const changed = (p.username !== undefined && p.username !== s.username) || (p.password !== undefined && p.password !== s.password) || next.did !== s.did;
+    await saveSmsSettings(a.user.id, { ...p, did: next.did, ...(changed ? { lastTest: null } : {}) } as Partial<SmsSettings> & { newToken?: boolean });
     await audit(a.user.id, "integration.voipms.updated", null, { enabled: p.enabled, username: p.username, did: next.did, passwordChanged: p.password !== undefined || undefined, newToken: p.newToken });
     return c.json(voipmsView(await smsSettings()));
   })
@@ -306,7 +308,9 @@ export const integrationRoutes = new Hono<AppEnv>()
       if (e instanceof HTTPException) throw e;
       result = { ok: false, error: e instanceof SmsError ? e.code : "api", detail: e instanceof SmsError ? e.detail : undefined };
     }
-    if (!p.username && !p.password) await saveSmsSettings(a.user.id, { lastTest: { ok: result.ok, at: new Date().toISOString(), ...(result.ok ? {} : { error: result.error }) } });
+    // kept when it tested the saved account (typed values equal to the saved ones included)
+    const savedAccount = (p.username ?? s.username) === s.username && (p.password ?? s.password) === s.password;
+    if (savedAccount) await saveSmsSettings(a.user.id, { lastTest: { ok: result.ok, at: new Date().toISOString(), ...(result.ok ? {} : { error: result.error }) } });
     return c.json(result);
   })
 

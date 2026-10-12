@@ -1868,6 +1868,14 @@ describe("text messages (VoIP.ms)", () => {
     expect(JSON.stringify(saved)).not.toContain("api-secret");
     const token = new URL(saved.callbackUrl.replace("{FROM}", "x"), "http://h").searchParams.get("token")!;
     expect(token.length).toBeGreaterThan(20);
+    // the status follows the saved account: a test of the typed (same) values counts; a text sent clears an old failure
+    expect((await admin.get("/api/admin/integrations/voipms")).json.lastTest ?? null).toBeNull();
+    expect((await admin.post("/api/admin/integrations/voipms/test", { username: "akab@akab.ca", password: "api-secret" })).json).toEqual({ ok: true });
+    expect((await admin.get("/api/admin/integrations/voipms")).json.lastTest).toMatchObject({ ok: true });
+    const { saveSmsSettings, sendSms } = await import("../server/lib/voipms.ts");
+    await saveSmsSettings(null, { lastTest: { ok: false, at: new Date().toISOString(), error: "api" } });
+    await sendSms("5145559999", "test");
+    expect((await admin.get("/api/admin/integrations/voipms")).json.lastTest).toMatchObject({ ok: true });
     const hook = (q: Record<string, string>) => admin.get(`/api/sms/hook/voipms?${new URLSearchParams(q)}`);
     // texts of a ticket are copied as internal notes (Autotask)
     const { ticketSource } = await import("../server/lib/ticketSource.ts");

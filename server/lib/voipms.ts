@@ -36,7 +36,7 @@ export type SmsSettings = {
   defaultCompanyName: string | null;
   queue: string | null;
   priority: string | null;
-  lastTest?: { ok: boolean; at: string; error?: string };
+  lastTest?: { ok: boolean; at: string; error?: string } | null;
 };
 
 export const DEFAULT_AUTO_REPLY =
@@ -95,7 +95,7 @@ export async function smsSettings(): Promise<SmsSettings> {
   };
 }
 
-export async function saveSmsSettings(actorId: string, p: Partial<Omit<SmsSettings, "token">> & { newToken?: boolean }) {
+export async function saveSmsSettings(actorId: string | null, p: Partial<Omit<SmsSettings, "token">> & { newToken?: boolean }) {
   const cur = await smsSettings();
   const next = { ...cur, ...Object.fromEntries(Object.entries(p).filter(([, v]) => v !== undefined)) } as SmsSettings;
   const token = p.newToken || !cur.token ? randomBytes(24).toString("base64url") : cur.token;
@@ -171,4 +171,6 @@ export async function sendSms(dst: string, text: string): Promise<void> {
   const to = normalizePhone(dst);
   if (!did || !to) throw new SmsError("not_configured");
   for (const part of splitSms(text)) await call(s, "sendSMS", { did, dst: to, message: part });
+  // a text went out: the connection works (an old failed test no longer shows)
+  if (!s.lastTest?.ok) await saveSmsSettings(null, { lastTest: { ok: true, at: new Date().toISOString() } }).catch(() => undefined);
 }
