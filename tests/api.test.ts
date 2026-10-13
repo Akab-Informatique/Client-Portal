@@ -1981,3 +1981,173 @@ describe("text messages (VoIP.ms)", () => {
     await db().update(schema.roles).set({ permissions: before.permissions }).where(eq(schema.roles.id, before.id));
   });
 });
+
+describe("Outlook (Microsoft 365 mail)", () => {
+  const sent: { method: string; url: string; body: any }[] = [];
+  const json = (b: unknown, status = 200) => new Response(JSON.stringify(b), { status, headers: { "content-type": "application/json" } });
+  const G = "https://graph.microsoft.com/v1.0/";
+  beforeAll(() => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: unknown, init: RequestInit = {}) => {
+        const url = decodeURIComponent(String(input));
+        const method = init.method ?? "GET";
+        if (url.includes("login.microsoftonline.com")) return json({ access_token: "tok", expires_in: 3600 });
+        sent.push({ method, url, body: init.body ? JSON.parse(String(init.body)) : undefined });
+        if (url.includes("users/ghost@akab.local")) return json({ error: { message: "mailbox not found" } }, 404);
+        if (/users\/[^/]+\?\$select=displayName$/.test(url)) return json({ displayName: "Boîte" });
+        if (url.includes("/mailFolders/inbox?$select=id")) return json({ id: "inbox-id" });
+        if (/mailFolders\/(drafts|sentitems|deleteditems|archive|junkemail)\?/.test(url)) return json({ error: { message: "nope" } }, 404);
+        if (url.includes("/mailFolders?$top=100")) {
+          return json({
+            value: [
+              { id: "f2", displayName: "Clients", unreadItemCount: 0, totalItemCount: 4, childFolderCount: 1 },
+              { id: "inbox-id", displayName: "Boîte de réception", unreadItemCount: 2, totalItemCount: 10, childFolderCount: 0 },
+            ],
+          });
+        }
+        if (url.includes("/messages?") && method === "GET") {
+          return json({
+            value: [{ id: "m1", subject: "Imprimante", from: { emailAddress: { name: "Marie", address: "marie@client.example" } }, receivedDateTime: "2026-10-13T12:00:00Z", bodyPreview: "Bonjour", isRead: false, flag: { flagStatus: "notFlagged" }, hasAttachments: true }],
+            "@odata.nextLink": `${G}users/tech%40akab.local/mailFolders/inbox-id/messages?$skiptoken=abc`,
+          });
+        }
+        if (url.includes("/messages/m1/attachments/a1")) return json({ "@odata.type": "#microsoft.graph.fileAttachment", name: "photo.png", contentType: "image/png", contentId: "<img1>", contentBytes: "aGk=" });
+        if (url.includes("/messages/m1/attachments/a2")) return json({ "@odata.type": "#microsoft.graph.fileAttachment", name: "facture é.pdf", contentType: "application/pdf", contentBytes: "JVBERg==" });
+        if (url.includes("/messages/m1/attachments?")) {
+          return json({
+            value: [
+              { id: "a1", name: "photo.png", contentType: "image/png", size: 2, isInline: true },
+              { id: "a2", name: "facture é.pdf", contentType: "application/pdf", size: 4, isInline: false },
+            ],
+          });
+        }
+        if (url.includes("/messages/m1?$select=") && url.includes("parentFolderId")) {
+          return json({ id: "m1", subject: "Imprimante", from: { emailAddress: { name: "Marie", address: "marie@client.example" } }, isRead: false, hasAttachments: true, toRecipients: [{ emailAddress: { address: "tech@akab.local" } }], body: { contentType: "html", content: '<p>Bonjour</p><img src="cid:img1">' }, parentFolderId: "inbox-id" });
+        }
+        if (url.includes("/messages/m1?$select=")) {
+          return json({ id: "m1", subject: "Imprimante", from: { emailAddress: { name: "Marie", address: "marie@client.example" } }, receivedDateTime: "2026-10-13T12:00:00Z", toRecipients: [{ emailAddress: { address: "tech@akab.local" } }], body: { contentType: "text", content: "Bonjour\r\nL'imprimante est brisée." } });
+        }
+        if (url.endsWith("/messages/m1/move")) return json({ id: "m1-moved" }, 201);
+        if (url.endsWith("/messages/m1/createReply")) return json({ id: "d1", toRecipients: [{ emailAddress: { address: "marie@client.example" } }] }, 201);
+        if (url.endsWith("/messages/d1/attachments")) return json({ id: "x" }, 201);
+        if (url.endsWith("/messages/d1/send") || url.endsWith("/sendMail")) return new Response(null, { status: 202 });
+        if (method === "PATCH" || method === "DELETE") return json({});
+        return json({ error: { message: `unexpected ${method} ${url}` } }, 500);
+      }),
+    );
+  });
+  afterAll(async () => {
+    vi.unstubAllGlobals();
+    await db().update(schema.integrations).set({ enabled: false }).where(eq(schema.integrations.provider, "o365"));
+  });
+
+  it("links only one's own mailbox (others need a right), and only the owner can open it", async () => {
+    resetRateLimit("login:ip:unknown");
+    const admin = await signIn("admin@akab.local");
+    const tech = await signIn("tech@akab.local");
+    await admin.put("/api/admin/integrations/o365", { enabled: false });
+    expect((await tech.post("/api/outlook/accounts", { address: "tech@akab.local" })).json.error).toBe("outlook_not_configured");
+    await admin.put("/api/admin/integrations/o365", { tenantId: "akab.onmicrosoft.com", clientId: "abc-123", secret: "good-secret", enabled: true });
+
+    const status = (await tech.get("/api/outlook/status")).json;
+    expect(status).toMatchObject({ ready: true, accounts: [], ownAddresses: ["tech@akab.local"], canLinkAny: false, canSend: true });
+    expect((await tech.post("/api/outlook/accounts", { address: "support@akab.local" })).json.error).toBe("outlook_not_own_mailbox");
+    const linked = await tech.post("/api/outlook/accounts", { address: "Tech@AKAB.local" });
+    expect(linked.status).toBe(201);
+    expect(linked.json).toMatchObject({ address: "tech@akab.local", displayName: "Boîte" });
+    expect((await tech.post("/api/outlook/accounts", { address: "tech@akab.local" })).json.error).toBe("outlook_already_linked");
+
+    // admins may link shared mailboxes; a mailbox that does not exist is refused
+    expect((await admin.post("/api/outlook/accounts", { address: "support@akab.local" })).status).toBe(201);
+    expect((await admin.post("/api/outlook/accounts", { address: "ghost@akab.local" })).status).toBe(404);
+    // nobody else can open the technician's mailbox, not even an admin
+    expect((await admin.get(`/api/outlook/accounts/${linked.json.id}/folders`)).status).toBe(404);
+    expect((await admin.get(`/api/outlook/accounts/${linked.json.id}/messages?folder=inbox`)).status).toBe(404);
+    // client users have no Outlook
+    const client = await signIn("responsable1@client.example");
+    expect((await client.get("/api/outlook/status")).status).toBe(403);
+  });
+
+  it("reads folders, pages and messages; inline images embedded, files downloaded safely", async () => {
+    resetRateLimit("login:ip:unknown");
+    const tech = await signIn("tech@akab.local");
+    const acc = (await tech.get("/api/outlook/status")).json.accounts[0];
+    const folders = (await tech.get(`/api/outlook/accounts/${acc.id}/folders`)).json;
+    expect(folders[0]).toMatchObject({ id: "inbox-id", wellKnown: "inbox", unread: 2 });
+    const page = (await tech.get(`/api/outlook/accounts/${acc.id}/messages?folder=inbox-id`)).json;
+    expect(page.items[0]).toMatchObject({ id: "m1", subject: "Imprimante", isRead: false, from: { address: "marie@client.example" } });
+    expect(page.next).toBe("users/tech%40akab.local/mailFolders/inbox-id/messages?$skiptoken=abc");
+    // a page cursor cannot point at another mailbox
+    const other = encodeURIComponent("users/ceo%40akab.local/messages");
+    expect((await tech.get(`/api/outlook/accounts/${acc.id}/messages?folder=inbox-id&cursor=${other}`)).json.error).toBe("outlook_not_found");
+
+    sent.length = 0;
+    const m = (await tech.get(`/api/outlook/accounts/${acc.id}/messages/m1`)).json;
+    expect(m.html).toContain("data:image/png;base64,aGk=");
+    expect(m.html).not.toContain("cid:");
+    expect(m.attachments).toEqual([{ id: "a2", name: "facture é.pdf", contentType: "application/pdf", size: 4, isInline: false }]);
+    expect(sent.some((s) => s.method === "PATCH" && s.body?.isRead === true)).toBe(true);
+
+    const res = await app.request(`/api/outlook/accounts/${acc.id}/messages/m1/attachments/a2`, { headers: { host: "localhost", cookie: tech.cookie } });
+    expect(res.headers.get("content-type")).toBe("application/octet-stream");
+    expect(res.headers.get("content-disposition")).toContain("attachment;");
+    expect(res.headers.get("content-disposition")).toContain("filename*=UTF-8''facture%20%C3%A9.pdf");
+    expect(Buffer.from(await res.arrayBuffer()).toString()).toBe("%PDF");
+
+    expect((await tech.patch(`/api/outlook/accounts/${acc.id}/messages/m1`, { flagged: true })).status).toBe(200);
+    expect(sent.at(-1)?.body).toEqual({ flag: { flagStatus: "flagged" } });
+    expect((await tech.post(`/api/outlook/accounts/${acc.id}/messages/m1/move`, { destination: "archive" })).json).toEqual({ ok: true, id: "m1-moved" });
+    expect((await tech.del(`/api/outlook/accounts/${acc.id}/messages/m1`)).status).toBe(200);
+    expect(sent.at(-1)?.body).toEqual({ destinationId: "deleteditems" });
+  });
+
+  it("sends and replies with files; sending needs its right; too-large files are refused", async () => {
+    resetRateLimit("login:ip:unknown");
+    const admin = await signIn("admin@akab.local");
+    const tech = await signIn("tech@akab.local");
+    const acc = (await tech.get("/api/outlook/status")).json.accounts[0];
+    sent.length = 0;
+    const file = { name: "note.txt", contentType: "text/plain", data: Buffer.from("allo").toString("base64") };
+    expect((await tech.post(`/api/outlook/accounts/${acc.id}/send`, { to: ["marie@client.example"], subject: "Suivi", text: "Bonjour <Marie>\nC'est réglé.", attachments: [file] })).status).toBe(201);
+    const mail = sent.find((s) => s.url.endsWith("/sendMail"))!;
+    expect(mail.url).toContain("users/tech@akab.local/sendMail");
+    expect(mail.body.message.toRecipients).toEqual([{ emailAddress: { address: "marie@client.example" } }]);
+    // the technician's text is escaped, line breaks kept
+    expect(mail.body.message.body.content).toContain("Bonjour &lt;Marie&gt;<br>C'est réglé.");
+    expect(mail.body.message.attachments[0]).toMatchObject({ name: "note.txt", contentBytes: file.data });
+
+    const big = { name: "big.bin", contentType: "application/octet-stream", data: "A".repeat(4_200_000) };
+    expect((await tech.post(`/api/outlook/accounts/${acc.id}/send`, { to: ["marie@client.example"], attachments: [big] })).json.error).toBe("outlook_attachments_too_large");
+    expect((await tech.post(`/api/outlook/accounts/${acc.id}/messages/m1/respond`, { mode: "forward", text: "voir" })).json.error).toBe("outlook_no_recipient");
+
+    sent.length = 0;
+    expect((await tech.post(`/api/outlook/accounts/${acc.id}/messages/m1/respond`, { mode: "reply", text: "Merci", attachments: [file] })).status).toBe(201);
+    expect(sent.map((s) => `${s.method} ${s.url.split("/messages/")[1]}`)).toEqual(["POST m1/createReply", "POST d1/attachments", "POST d1/send"]);
+
+    const techUser = (await admin.get("/api/admin/staff")).json.find((u: any) => u.email === "tech@akab.local");
+    await admin.put(`/api/admin/users/${techUser.id}/permissions`, { overrides: [{ key: "outlook.send", effect: "deny" }] });
+    expect((await tech.post(`/api/outlook/accounts/${acc.id}/send`, { to: ["marie@client.example"] })).status).toBe(403);
+    expect((await tech.get(`/api/outlook/accounts/${acc.id}/folders`)).status).toBe(200);
+    await admin.put(`/api/admin/users/${techUser.id}/permissions`, { overrides: [] });
+  });
+
+  it("copies an email into a ticket as an internal note, and unlinking ends access", async () => {
+    resetRateLimit("login:ip:unknown");
+    const tech = await signIn("tech@akab.local");
+    const acc = (await tech.get("/api/outlook/status")).json.accounts[0];
+    const ticketId = (await tech.get("/api/tickets?view=all")).json.items[0].id;
+    expect((await tech.post(`/api/outlook/accounts/${acc.id}/messages/m1/to-ticket`, { ticketId })).status).toBe(201);
+    const note = (await tech.get(`/api/tickets/${ticketId}`)).json.notes.at(-1);
+    expect(note).toMatchObject({ internal: true });
+    expect(note.text).toContain("De : Marie <marie@client.example>");
+    expect(note.text).toContain("L'imprimante est brisée.");
+    expect((await tech.get(`/api/outlook/accounts/${acc.id}/messages/m1/text`)).json).toMatchObject({ subject: "Imprimante" });
+
+    expect((await tech.del(`/api/outlook/accounts/${acc.id}`)).status).toBe(200);
+    expect((await tech.get(`/api/outlook/accounts/${acc.id}/folders`)).status).toBe(404);
+    const [u] = await db().select().from(schema.users).where(eq(schema.users.email, "tech@akab.local"));
+    const log = await db().select().from(schema.auditLog).where(eq(schema.auditLog.actorId, u.id));
+    expect(log.map((l) => l.action)).toEqual(expect.arrayContaining(["outlook.linked", "outlook.sent", "outlook.reply", "outlook.to_ticket", "outlook.unlinked"]));
+  });
+});

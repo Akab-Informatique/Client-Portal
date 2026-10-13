@@ -1,4 +1,4 @@
-import { BookOpen, LayoutDashboard, Megaphone, MonitorSmartphone, Store, Ticket, Users, type LucideIcon } from "lucide-react";
+import { BookOpen, LayoutDashboard, Mail, Megaphone, MonitorSmartphone, Store, Ticket, Users, type LucideIcon } from "lucide-react";
 import type { PermissionKey } from "@shared/permissions";
 
 /**
@@ -27,6 +27,7 @@ export type NavModule = {
 export const STAFF_MODULES: NavModule[] = [
   { key: "dashboard", path: "/", labelKey: "nav.dashboard", icon: LayoutDashboard, section: "modules", permission: "dashboard.view" },
   { key: "messages", path: "/messages", labelKey: "nav.messages", icon: Megaphone, section: "modules", permission: "messages.view" },
+  { key: "outlook", path: "/outlook", labelKey: "nav.outlook", icon: Mail, section: "modules", permission: "outlook.view" },
   { key: "tickets", path: "/tickets", labelKey: "nav.tickets", icon: Ticket, section: "command", permission: "tickets.view" },
   { key: "store", path: "/store", labelKey: "nav.store", icon: Store, section: "administration", permission: "store.view" },
   { key: "clients", path: "/clients", labelKey: "nav.clients", icon: Users, section: "modules", upcoming: true },

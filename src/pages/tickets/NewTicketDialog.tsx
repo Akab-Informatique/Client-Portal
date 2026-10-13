@@ -23,11 +23,14 @@ export function NewTicketDialog({
   onOpenChange,
   facets,
   onCreated,
+  initial,
 }: {
   open: boolean;
   onOpenChange: (o: boolean) => void;
   facets: TicketList["facets"];
   onCreated: (id: number) => void;
+  /** Pre-filled title / description (e.g. a ticket made from an email). */
+  initial?: { title?: string; description?: string };
 }) {
   const { t } = useTranslation();
   const txt = useChoiceText();
@@ -37,8 +40,8 @@ export function NewTicketDialog({
   const empty = () => ({
     companyId: "",
     contactId: null as string | null,
-    title: "",
-    description: "",
+    title: (initial?.title ?? "").slice(0, 250),
+    description: (initial?.description ?? "").slice(0, 8000),
     priority: (facets.priorities.find((p) => p.kind === "medium") ?? facets.priorities[0])?.value ?? "",
     queue: facets.queues[0]?.value ?? "",
     assigneeId: me.id as string,

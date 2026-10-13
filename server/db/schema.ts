@@ -660,3 +660,18 @@ export const smsMessages = pgTable(
   },
   (t) => [index("sms_messages_conv_idx").on(t.conversationId, t.createdAt), uniqueIndex("sms_messages_provider_unique").on(t.providerId)],
 );
+
+/** Outlook module: AKAB Microsoft 365 mailboxes a technician linked (only they see them). */
+export const mailAccounts = pgTable(
+  "mail_accounts",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    userId: uuid("user_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    address: text("address").notNull(),
+    displayName: text("display_name"),
+    createdAt: created(),
+  },
+  (t) => [uniqueIndex("mail_accounts_user_address_unique").on(t.userId, sql`lower(${t.address})`)],
+);

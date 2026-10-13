@@ -86,21 +86,35 @@ async function accessToken(s: Pick<O365Settings, "tenantId" | "clientId" | "secr
   return token.value;
 }
 
-async function graph<T>(method: string, path: string, body?: unknown, settings?: Pick<O365Settings, "tenantId" | "clientId" | "secret">): Promise<T> {
+/**
+ * One Graph call. `path` is relative to GRAPH (e.g. "users/x/messages").
+ * `prefer` adds Prefer options (e.g. outlook.body-content-type="html").
+ */
+export async function graph<T>(
+  method: string,
+  path: string,
+  body?: unknown,
+  settings?: Pick<O365Settings, "tenantId" | "clientId" | "secret">,
+  prefer: string[] = [],
+): Promise<T> {
   const s = settings ?? (await o365Settings());
   const bearer = await accessToken(s);
   let res: Response;
   try {
     res = await fetch(GRAPH + path, {
       method,
-      headers: { authorization: `Bearer ${bearer}`, "content-type": "application/json", prefer: `outlook.timezone="${TZ}"` },
+      headers: {
+        authorization: `Bearer ${bearer}`,
+        "content-type": "application/json",
+        prefer: [`outlook.timezone="${TZ}"`, ...prefer].join(", "),
+      },
       body: body === undefined ? undefined : JSON.stringify(body),
       signal: AbortSignal.timeout(TIMEOUT_MS),
     });
   } catch (e) {
     throw new O365Error("network", (e as Error).name);
   }
-  if (res.status === 204) return undefined as T;
+  if (res.status === 204 || res.status === 202) return undefined as T;
   const j = (await res.json().catch(() => null)) as ({ error?: { message?: string } } & T) | null;
   if (!res.ok) {
     const detail = j?.error?.message?.slice(0, 200);
@@ -109,7 +123,8 @@ async function graph<T>(method: string, path: string, body?: unknown, settings?:
   return j as T;
 }
 
-const user = (email: string) => `users/${encodeURIComponent(email)}`;
+export const GRAPH_BASE = GRAPH;
+export const user = (email: string) => `users/${encodeURIComponent(email)}`;
 
 /** Test: read the calendar of this mailbox with the given (or saved) settings. */
 export async function testO365(email: string, settings?: Pick<O365Settings, "tenantId" | "clientId" | "secret">) {

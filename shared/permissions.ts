@@ -127,6 +127,37 @@ export const MODULES = [
     ],
   },
   {
+    key: "outlook",
+    audience: "staff",
+    label: { fr: "Outlook (courriels)", en: "Outlook (email)" },
+    permissions: [
+      {
+        key: "outlook.view",
+        label: { fr: "Utiliser Outlook", en: "Use Outlook" },
+        description: {
+          fr: "Lier sa propre boîte Microsoft 365 d'AKAB, lire et classer ses courriels",
+          en: "Link one's own AKAB Microsoft 365 mailbox, read and organise email",
+        },
+      },
+      {
+        key: "outlook.send",
+        label: { fr: "Envoyer des courriels", en: "Send email" },
+        description: {
+          fr: "Répondre, transférer et écrire depuis ses boîtes liées",
+          en: "Reply, forward and write from one's linked mailboxes",
+        },
+      },
+      {
+        key: "outlook.anyMailbox",
+        label: { fr: "Lier d'autres boîtes AKAB", en: "Link other AKAB mailboxes" },
+        description: {
+          fr: "Boîtes partagées ou d'autres personnes (support@, facturation@…) — donne accès à leurs courriels",
+          en: "Shared mailboxes or other people's (support@, billing@…) — gives access to their email",
+        },
+      },
+    ],
+  },
+  {
     key: "store",
     audience: "staff",
     label: { fr: "Inventaire boutique", en: "Store inventory" },
@@ -243,7 +274,7 @@ export const SYSTEM_ROLES: Array<{
     audience: "staff",
     name: { fr: "Technicien", en: "Technician" },
     description: { fr: "Travail quotidien : babillard et tableau de bord", en: "Day-to-day work: board and dashboard" },
-    permissions: ["dashboard.view", "tickets.view", "tickets.edit", "sms.view", "messages.view", "messages.post", "messages.pin", "messages.email"],
+    permissions: ["dashboard.view", "tickets.view", "tickets.edit", "sms.view", "outlook.view", "outlook.send", "messages.view", "messages.post", "messages.pin", "messages.email"],
     locked: false,
   },
   {

@@ -23,6 +23,7 @@ import { ticketRoutes } from "./routes/tickets.ts";
 import { storeRoutes } from "./routes/store.ts";
 import { planningRoutes } from "./routes/planning.ts";
 import { smsHookRoutes, smsRoutes } from "./routes/sms.ts";
+import { outlookRoutes } from "./routes/outlook.ts";
 
 export function createApp() {
   const app = new Hono<AppEnv>();
@@ -51,7 +52,10 @@ export function createApp() {
   );
 
   const api = new Hono<AppEnv>();
-  api.use("*", bodyLimit({ maxSize: 256 * 1024 }));
+  // Small JSON everywhere; Outlook sends carry attachments (Graph allows ~4 MB)
+  const smallBody = bodyLimit({ maxSize: 256 * 1024 });
+  const mailBody = bodyLimit({ maxSize: 6 * 1024 * 1024 });
+  api.use("*", (c, next) => (c.req.path.startsWith("/api/outlook/") ? mailBody(c, next) : smallBody(c, next)));
   api.use("*", sameOriginJson);
   api.use("*", loadAuth);
   api.use("*", readOnlyViewAs);
@@ -74,6 +78,7 @@ export function createApp() {
   // VoIP.ms calls this one (secret token, no session); the rest is for technicians
   api.route("/sms/hook", smsHookRoutes);
   api.route("/sms", smsRoutes);
+  api.route("/outlook", outlookRoutes);
   api.route("/messages", messageRoutes);
   api.route("/board", boardRoutes);
   api.use("/dashboard/*", requireStaff);

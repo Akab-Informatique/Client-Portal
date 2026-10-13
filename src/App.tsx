@@ -16,6 +16,7 @@ const DashboardPage = lazy(() => pageLoaders.dashboard().then((m) => ({ default:
 const MessagesPage = lazy(() => pageLoaders.messages().then((m) => ({ default: m.MessagesPage })));
 const TicketsPage = lazy(() => pageLoaders.tickets().then((m) => ({ default: m.TicketsPage })));
 const StorePage = lazy(() => pageLoaders.store().then((m) => ({ default: m.StorePage })));
+const OutlookPage = lazy(() => pageLoaders.outlook().then((m) => ({ default: m.OutlookPage })));
 const ClientHome = lazy(() => import("@/pages/client/ClientHome").then((m) => ({ default: m.ClientHome })));
 
 function Splash() {
@@ -78,6 +79,7 @@ function StaffApp() {
         <Route path="messages" element={<Guard permission="messages.view"><MessagesPage /></Guard>} />
         <Route path="tickets" element={<Guard permission="tickets.view"><TicketsPage /></Guard>} />
         <Route path="store" element={<Guard permission="store.view"><StorePage /></Guard>} />
+        <Route path="outlook" element={<Guard permission="outlook.view"><OutlookPage /></Guard>} />
         <Route path="*" element={<Navigate to="/" replace />} />
       </Route>
     </Routes>
