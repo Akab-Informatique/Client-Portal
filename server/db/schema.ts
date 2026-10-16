@@ -675,3 +675,76 @@ export const mailAccounts = pgTable(
   },
   (t) => [uniqueIndex("mail_accounts_user_address_unique").on(t.userId, sql`lower(${t.address})`)],
 );
+
+/** Weekly meeting: projects in progress (e.g. a camera installation at a client). */
+export const meetingProjects = pgTable("meeting_projects", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  title: text("title").notNull(),
+  /** Client or place, free text */
+  client: text("client"),
+  /** YYYY-MM-DD */
+  dueDate: text("due_date"),
+  doneAt: timestamp("done_at", { withTimezone: true }),
+  createdBy: uuid("created_by").references(() => users.id, { onDelete: "set null" }),
+  createdAt: created(),
+  updatedAt: updated(),
+});
+
+/** Notes taken on a project during the meetings, newest first. */
+export const meetingProjectNotes = pgTable(
+  "meeting_project_notes",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    projectId: uuid("project_id")
+      .notNull()
+      .references(() => meetingProjects.id, { onDelete: "cascade" }),
+    text: text("text").notNull(),
+    authorId: uuid("author_id").references(() => users.id, { onDelete: "set null" }),
+    authorName: text("author_name").notNull(),
+    createdAt: created(),
+  },
+  (t) => [index("meeting_project_notes_project_idx").on(t.projectId)],
+);
+
+/** Team members assigned to a meeting project. */
+export const meetingProjectMembers = pgTable(
+  "meeting_project_members",
+  {
+    projectId: uuid("project_id")
+      .notNull()
+      .references(() => meetingProjects.id, { onDelete: "cascade" }),
+    userId: uuid("user_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+  },
+  (t) => [primaryKey({ columns: [t.projectId, t.userId] })],
+);
+
+/** Points to discuss with the team at the weekly meeting (pay due Tuesday, someone away…). */
+export const meetingPoints = pgTable("meeting_points", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  text: text("text").notNull(),
+  doneAt: timestamp("done_at", { withTimezone: true }),
+  authorId: uuid("author_id").references(() => users.id, { onDelete: "set null" }),
+  authorName: text("author_name").notNull(),
+  createdAt: created(),
+});
+
+/** Team absences (vacation, sick day…), shown on the weekly meeting calendar. */
+export const meetingAbsences = pgTable(
+  "meeting_absences",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    userId: uuid("user_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    /** YYYY-MM-DD, both days included */
+    startDate: text("start_date").notNull(),
+    endDate: text("end_date").notNull(),
+    kind: text("kind", { enum: ["vacation", "sick", "training", "personal", "other"] }).notNull().default("vacation"),
+    note: text("note"),
+    createdBy: uuid("created_by").references(() => users.id, { onDelete: "set null" }),
+    createdAt: created(),
+  },
+  (t) => [index("meeting_absences_dates_idx").on(t.startDate, t.endDate)],
+);

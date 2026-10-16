@@ -165,15 +165,137 @@ describe("permissions", () => {
     const r = await admin.get("/api/meetings/overdue");
     expect(r.status).toBe(200);
     const all = (await admin.get("/api/tickets?view=all")).json.items;
-    const expected = all.filter((t: any) => t.statusKind !== "complete" && new Date(t.dueAt).getTime() < Date.now());
+    const until = new Date(r.json.until).getTime();
+    const expected = all.filter((t: any) => t.statusKind !== "complete" && new Date(t.dueAt).getTime() <= until);
     const listed = [...r.json.technicians.flatMap((p: any) => p.tickets), ...r.json.unassigned];
-    expect(r.json.total).toBe(expected.length);
+    const late = expected.filter((t: any) => new Date(t.dueAt).getTime() < Date.now());
+    expect(r.json.total).toBe(late.length);
+    expect(r.json.dueThisWeek).toBe(expected.length - late.length);
+    expect(new Set(listed.filter((t: any) => t.overdue).map((t: any) => t.id))).toEqual(new Set(late.map((t: any) => t.id)));
     expect(listed.map((t: any) => t.id).sort()).toEqual(expected.map((t: any) => t.id).sort());
     // every technician is listed, even with nothing overdue
     expect(r.json.technicians.length).toBeGreaterThan(1);
     for (const p of r.json.technicians) for (const t of p.tickets) expect(expected.find((e: any) => e.id === t.id).assignee.id).toBe(p.id);
     const client = await signIn("responsable1@client.example");
     expect((await client.get("/api/meetings/overdue")).status).toBe(403);
+  });
+
+  it("weekly meeting: absences calendar", async () => {
+    const admin = await signIn("admin@akab.local");
+    const team = (await admin.get("/api/meetings/team")).json;
+    const alex = team.find((u: any) => u.name === "Alex Tremblay");
+    const r = await admin.post("/api/meetings/absences", { userId: alex.id, startDate: "2026-11-02", endDate: "2026-11-06", kind: "vacation", note: "Floride" });
+    expect(r.status).toBe(201);
+    // end before start, impossible day, unknown person
+    expect((await admin.post("/api/meetings/absences", { userId: alex.id, startDate: "2026-11-06", endDate: "2026-11-02" })).status).toBe(400);
+    expect((await admin.post("/api/meetings/absences", { userId: alex.id, startDate: "2026-02-30", endDate: "2026-03-01" })).status).toBe(400);
+    const client = (await signIn("responsable1@client.example").then((c) => c.get("/api/me"))).json;
+    expect((await admin.post("/api/meetings/absences", { userId: client.id, startDate: "2026-11-02", endDate: "2026-11-02" })).status).toBe(400);
+
+    // the range returns absences that overlap it
+    const inRange = (from: string, to: string) => admin.get(`/api/meetings/absences?from=${from}&to=${to}`).then((x) => x.json.map((a: any) => a.id));
+    expect(await inRange("2026-10-26", "2026-11-02")).toContain(r.json.id);
+    expect(await inRange("2026-11-06", "2026-11-30")).toContain(r.json.id);
+    expect(await inRange("2026-11-07", "2026-11-30")).not.toContain(r.json.id);
+    const [a] = (await admin.get("/api/meetings/absences?from=2026-11-01&to=2026-11-30")).json;
+    expect(a).toMatchObject({ name: "Alex Tremblay", kind: "vacation", note: "Floride" });
+    expect((await admin.get("/api/meetings/absences?from=2026-11-30&to=2026-11-01")).status).toBe(400);
+
+    // the Tickets planning calendar shows the same absences, and warns when time is booked on one
+    const plan = (await admin.get(`/api/planning/absences?technicianId=${alex.id}&from=2026-11-02T05:00:00.000Z&to=2026-11-09T05:00:00.000Z`)).json;
+    expect(plan.map((x: any) => x.id)).toEqual([r.json.id]);
+    const booked = await admin.post("/api/planning/calendar", { technicianId: alex.id, kind: "slot", title: "Inventaire", startsAt: "2026-11-04T14:00:00.000Z", endsAt: "2026-11-04T15:00:00.000Z" });
+    expect(booked.status).toBe(201);
+    expect(booked.json.warnings).toContain("absent");
+    const free = await admin.post("/api/planning/calendar", { technicianId: alex.id, kind: "slot", title: "Inventaire", startsAt: "2026-11-09T14:00:00.000Z", endsAt: "2026-11-09T15:00:00.000Z" });
+    expect(free.json.warnings).not.toContain("absent");
+    await admin.del(`/api/planning/calendar/${booked.json.id}`);
+    await admin.del(`/api/planning/calendar/${free.json.id}`);
+
+    expect((await admin.put(`/api/meetings/absences/${r.json.id}`, { userId: alex.id, startDate: "2026-11-03", endDate: "2026-11-03", kind: "sick" })).status).toBe(200);
+    expect(await inRange("2026-11-04", "2026-11-30")).not.toContain(r.json.id);
+
+    const tech = await signIn("tech@akab.local");
+    expect((await tech.get("/api/meetings/absences?from=2026-11-01&to=2026-11-30")).status).toBe(403);
+    expect((await admin.del(`/api/meetings/absences/${r.json.id}`)).status).toBe(200);
+    expect((await admin.del(`/api/meetings/absences/${r.json.id}`)).status).toBe(404);
+  });
+
+  it("weekly meeting: points to discuss", async () => {
+    const admin = await signIn("admin@akab.local");
+    const a = await admin.post("/api/meetings/points", { text: "Les paies doivent être envoyées avant mardi" });
+    const b = await admin.post("/api/meetings/points", { text: "Camille sera absente" });
+    expect([a.status, b.status]).toEqual([201, 201]);
+    expect((await admin.post("/api/meetings/points", { text: " " })).status).toBe(400);
+    let list = (await admin.get("/api/meetings/points")).json;
+    expect(list.map((p: any) => p.text)).toEqual(["Les paies doivent être envoyées avant mardi", "Camille sera absente"]);
+    expect(list[0].authorName).toBe("Administrateur AKAB");
+    expect((await admin.patch(`/api/meetings/points/${a.json.id}`, { done: true })).status).toBe(200);
+    list = (await admin.get("/api/meetings/points")).json;
+    expect(list.find((p: any) => p.id === a.json.id).doneAt).toBeTruthy();
+    const tech = await signIn("tech@akab.local");
+    expect((await tech.get("/api/meetings/points")).status).toBe(403);
+    expect((await tech.post("/api/meetings/points", { text: "x" })).status).toBe(403);
+    expect((await admin.del(`/api/meetings/points/${b.json.id}`)).status).toBe(200);
+    expect((await admin.del(`/api/meetings/points/${b.json.id}`)).status).toBe(404);
+    await admin.del(`/api/meetings/points/${a.json.id}`);
+  });
+
+  it("weekly meeting: projects in progress with due dates and notes", async () => {
+    const admin = await signIn("admin@akab.local");
+    const created = await admin.post("/api/meetings/projects", { title: "Installation de caméras", client: "AKAB Informatique", dueDate: "2026-11-15" });
+    expect(created.status).toBe(201);
+    const id = created.json.id;
+    expect((await admin.post("/api/meetings/projects", { title: "Sans date", client: "", dueDate: "" })).status).toBe(201);
+    expect((await admin.post("/api/meetings/projects", { title: "x", dueDate: "15/11/2026" })).status).toBe(400);
+    expect((await admin.post("/api/meetings/projects", { title: "  " })).status).toBe(400);
+
+    expect((await admin.post(`/api/meetings/projects/${id}/notes`, { text: "Caméras commandées" })).status).toBe(201);
+    let list = (await admin.get("/api/meetings/projects")).json;
+    const p = list.items.find((x: any) => x.id === id);
+    expect(p).toMatchObject({ title: "Installation de caméras", client: "AKAB Informatique", dueDate: "2026-11-15" });
+    expect(p.notes.map((n: any) => [n.text, n.authorName])).toEqual([["Caméras commandées", "Administrateur AKAB"]]);
+    // a dated project comes before one without a date
+    expect(list.items.findIndex((x: any) => x.id === id)).toBeLessThan(list.items.findIndex((x: any) => x.title === "Sans date"));
+
+    expect((await admin.patch(`/api/meetings/projects/${id}`, { dueDate: "2026-11-20", done: true })).status).toBe(200);
+    list = (await admin.get("/api/meetings/projects")).json;
+    expect(list.items.some((x: any) => x.id === id)).toBe(false);
+    expect(list.doneCount).toBe(1);
+    const done = (await admin.get("/api/meetings/projects?done=1")).json.items;
+    expect(done.find((x: any) => x.id === id).dueDate).toBe("2026-11-20");
+
+    // technicians: no access by default; viewing alone cannot change anything
+    const tech = await signIn("tech@akab.local");
+    expect((await tech.get("/api/meetings/projects")).status).toBe(403);
+    const staff = (await admin.get("/api/admin/staff")).json;
+    const techUser = staff.find((u: any) => u.email === "tech@akab.local");
+    await admin.put(`/api/admin/users/${techUser.id}/permissions`, { overrides: [{ key: "meetings.view", effect: "allow" }] });
+    const viewer = await signIn("tech@akab.local");
+    expect((await viewer.get("/api/meetings/projects")).status).toBe(200);
+    expect((await viewer.post("/api/meetings/projects", { title: "x" })).status).toBe(403);
+    expect((await viewer.post(`/api/meetings/projects/${id}/notes`, { text: "x" })).status).toBe(403);
+    expect((await viewer.del(`/api/meetings/projects/${id}`)).status).toBe(403);
+    await admin.put(`/api/admin/users/${techUser.id}/permissions`, { overrides: [] });
+
+    // team members: active staff only
+    const team = (await admin.get("/api/meetings/team")).json;
+    expect(team.map((u: any) => u.name)).toEqual(expect.arrayContaining(["Administrateur AKAB", "Alex Tremblay"]));
+    const withTeam = await admin.post("/api/meetings/projects", { title: "Migration", memberIds: [techUser.id] });
+    expect(withTeam.status).toBe(201);
+    const members = () => admin.get("/api/meetings/projects").then((r) => r.json.items.find((x: any) => x.id === withTeam.json.id).members.map((m: any) => m.name));
+    expect(await members()).toEqual(["Alex Tremblay"]);
+    const adminUser = staff.find((u: any) => u.email === "admin@akab.local");
+    expect((await admin.patch(`/api/meetings/projects/${withTeam.json.id}`, { memberIds: [techUser.id, adminUser.id] })).status).toBe(200);
+    expect(await members()).toEqual(["Administrateur AKAB", "Alex Tremblay"]);
+    const clientUser = (await signIn("responsable1@client.example").then((c) => c.get("/api/me"))).json;
+    expect((await admin.patch(`/api/meetings/projects/${withTeam.json.id}`, { memberIds: [clientUser.id] })).status).toBe(400);
+    expect((await admin.patch(`/api/meetings/projects/${withTeam.json.id}`, { memberIds: [] })).status).toBe(200);
+    expect(await members()).toEqual([]);
+
+    expect((await admin.del(`/api/meetings/projects/${id}`)).status).toBe(200);
+    expect((await admin.del(`/api/meetings/projects/${id}`)).status).toBe(404);
+    expect((await admin.patch("/api/meetings/projects/not-a-uuid", { title: "x" })).status).toBe(404);
   });
 
   it("client users cannot reach staff APIs", async () => {

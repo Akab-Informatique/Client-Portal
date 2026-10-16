@@ -5,7 +5,11 @@ import { AlarmClock, CalendarCheck, CheckCircle2, UserX } from "lucide-react";
 import { GlassBackdrop } from "@/components/brand/GlassBackdrop";
 import { Skeleton } from "@/components/ui/skeleton";
 import { api } from "@/lib/api";
+import { currentLocale } from "@/i18n";
 import { cn } from "@/lib/utils";
+import { AbsencesSection } from "./Absences";
+import { PointsSection } from "./Points";
+import { ProjectsSection } from "./Projects";
 import { PRIORITY_STYLE, STATUS_STYLE, shortDate, useChoiceText, type PriorityKind, type StatusKind } from "@/pages/tickets/shared";
 
 type OverdueTicket = {
@@ -18,14 +22,22 @@ type OverdueTicket = {
   priorityLabel: string | null;
   priorityKind: PriorityKind;
   dueAt: string;
+  overdue: boolean;
   secondary: string[];
 };
 type Overdue = {
   demo: boolean;
   total: number;
+  dueThisWeek: number;
+  until: string;
+  untilDate: string;
   technicians: { id: string; name: string; tickets: OverdueTicket[] }[];
   unassigned: OverdueTicket[];
 };
+
+/** "ven. 17 oct." / "Fri, Oct 17" */
+const dayDate = (iso: string) =>
+  new Intl.DateTimeFormat(currentLocale() === "en" ? "en-CA" : "fr-CA", { weekday: "short", day: "numeric", month: "short" }).format(new Date(iso));
 
 const initials = (name: string) =>
   name
@@ -54,14 +66,18 @@ export function MeetingsPage() {
         <p className="text-sm text-muted-foreground">{t("meetings.subtitle")}</p>
       </div>
 
+      <PointsSection />
+
       <section className="space-y-3">
         <div className="flex flex-wrap items-baseline justify-between gap-2">
           <h2 className="flex items-center gap-2 text-lg font-semibold">
             <AlarmClock className="size-5 text-red-400" /> {t("meetings.overdue.title")}
           </h2>
           {data && (
-            <span className={cn("text-sm", data.total ? "text-red-400" : "text-emerald-400")}>
-              {data.total ? t("meetings.overdue.total", { count: data.total }) : t("meetings.overdue.none")}
+            <span className={cn("text-sm", data.total ? "text-red-400" : data.dueThisWeek ? "text-orange-300" : "text-emerald-400")}>
+              {data.total || data.dueThisWeek
+                ? [data.total && t("meetings.overdue.total", { count: data.total }), data.dueThisWeek && t("meetings.overdue.weekTotal", { count: data.dueThisWeek, date: dayDate(`${data.untilDate}T12:00:00`) })].filter(Boolean).join(" · ")
+                : t("meetings.overdue.none")}
             </span>
           )}
         </div>
@@ -83,12 +99,17 @@ export function MeetingsPage() {
           </div>
         )}
       </section>
+
+      <ProjectsSection />
+
+      <AbsencesSection />
     </div>
   );
 }
 
 function TechCard({ name, tickets, unassigned }: { name: string; tickets: OverdueTicket[]; unassigned?: boolean }) {
   const { t } = useTranslation();
+  const late = tickets.filter((x) => x.overdue).length;
   return (
     <div className="overflow-hidden rounded-2xl border bg-card/80">
       <div className="flex items-center gap-3 border-b px-4 py-3">
@@ -97,8 +118,17 @@ function TechCard({ name, tickets, unassigned }: { name: string; tickets: Overdu
         </span>
         <span className="min-w-0 flex-1 truncate font-semibold">{name}</span>
         {tickets.length ? (
-          <span className="rounded-full border border-red-500/50 bg-red-500/15 px-2.5 py-0.5 text-xs font-semibold text-red-300">
-            {t("meetings.overdue.count", { count: tickets.length })}
+          <span className="flex shrink-0 gap-1.5">
+            {late > 0 && (
+              <span className="rounded-full border border-red-500/50 bg-red-500/15 px-2.5 py-0.5 text-xs font-semibold text-red-300">
+                {t("meetings.overdue.count", { count: late })}
+              </span>
+            )}
+            {tickets.length - late > 0 && (
+              <span className="rounded-full border border-orange-500/40 bg-orange-500/10 px-2.5 py-0.5 text-xs font-semibold text-orange-300">
+                {t("meetings.overdue.weekCount", { count: tickets.length - late })}
+              </span>
+            )}
           </span>
         ) : (
           <span className="inline-flex items-center gap-1 text-xs text-emerald-400">
@@ -127,9 +157,13 @@ function TicketRow({ ticket: x }: { ticket: OverdueTicket }) {
         <div className="flex items-center gap-2 text-xs">
           <span className={cn("size-2 shrink-0 rounded-full", PRIORITY_STYLE[x.priorityKind].dot)} title={txt.priority({ label: x.priorityLabel, kind: x.priorityKind })} />
           <span className="font-mono text-muted-foreground">{x.number}</span>
-          <span className="ml-auto shrink-0 font-semibold text-red-400" title={shortDate(x.dueAt)}>
-            {t("meetings.overdue.late", { count: days })}
-          </span>
+          {x.overdue ? (
+            <span className="ml-auto shrink-0 font-semibold text-red-400" title={shortDate(x.dueAt)}>
+              {t("meetings.overdue.late", { count: days })}
+            </span>
+          ) : (
+            <span className="ml-auto shrink-0 font-semibold text-orange-300">{t("meetings.overdue.dueOn", { date: dayDate(x.dueAt) })}</span>
+          )}
         </div>
         <p className="mt-0.5 truncate text-sm font-medium">{x.title}</p>
         <div className="mt-1 flex items-center gap-2 text-xs text-muted-foreground">

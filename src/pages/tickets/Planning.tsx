@@ -80,6 +80,15 @@ type Block = {
 };
 type OutlookEvent = { id: string; title: string; startsAt: string; endsAt: string; allDay: boolean; location: string | null };
 /** How each kind of block looks: work on a ticket, on-site service call, reserved time. */
+type PlanAbsence = { id: string; startDate: string; endDate: string; kind: "vacation" | "sick" | "training" | "personal" | "other"; note: string | null };
+const ABSENCE_STYLE: Record<PlanAbsence["kind"], string> = {
+  vacation: "border-sky-500/40 bg-sky-500/15 text-sky-200",
+  sick: "border-red-500/40 bg-red-500/15 text-red-200",
+  training: "border-violet-500/40 bg-violet-500/15 text-violet-200",
+  personal: "border-amber-500/40 bg-amber-500/15 text-amber-200",
+  other: "border-slate-500/40 bg-slate-500/15 text-slate-200",
+};
+
 const KIND_STYLE: Record<BlockKind, string> = {
   work: "border-[color:var(--gold)]/50 bg-[color:var(--gold)]/20 text-foreground",
   onsite: "border-orange-400/70 bg-orange-500/25 text-orange-50 shadow-[0_0_12px_-4px_rgba(249,115,22,0.7)]",
@@ -521,6 +530,13 @@ function WeekCalendar({ technicianId, technicianName, planner }: { technicianId:
     staleTime: 60_000,
   });
   const external = outlook?.events ?? [];
+  // Absences from the weekly meeting calendar (same data)
+  const { data: absences = [] } = useQuery({
+    queryKey: ["meetings", "absences", "planning", technicianId, from],
+    queryFn: () => api.get<PlanAbsence[]>(`/planning/absences?technicianId=${technicianId}&from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}`),
+    placeholderData: keepPreviousData,
+  });
+  const absentOn = (day: Date) => absences.find((x) => x.startDate <= ymd(day) && x.endDate >= ymd(day));
   const [now, setNow] = useState(() => new Date());
   useEffect(() => {
     const id = setInterval(() => setNow(new Date()), 60_000);
@@ -575,6 +591,14 @@ function WeekCalendar({ technicianId, technicianName, planner }: { technicianId:
                   {new Intl.DateTimeFormat(loc(), { weekday: "short" }).format(d).replace(".", "")} {d.getDate()}
                 </span>
                 <span className={cn("block font-mono text-[9px]", h > 8 ? "text-destructive" : h > 0 ? "text-foreground/70" : "text-muted-foreground/50")}>{h ? `${h.toLocaleString(undefined, { maximumFractionDigits: 1 })} h` : "—"}</span>
+                {(() => {
+                  const ab = absentOn(d);
+                  return ab ? (
+                    <span className={cn("mt-0.5 block truncate rounded-sm border px-0.5 text-[9px]", ABSENCE_STYLE[ab.kind])} title={[t(`meetings.absences.kind.${ab.kind}`), ab.note].filter(Boolean).join(" · ")}>
+                      {t("planning.absent")} · {t(`meetings.absences.kind.${ab.kind}`)}
+                    </span>
+                  ) : null;
+                })()}
                 {/* all-day Outlook events */}
                 {external
                   .filter((e) => e.allDay && ymd(new Date(e.startsAt)) <= ymd(d) && ymd(new Date(new Date(e.endsAt).getTime() - 1)) >= ymd(d))
@@ -616,6 +640,12 @@ function WeekCalendar({ technicianId, technicianName, planner }: { technicianId:
                 {Array.from({ length: DAY_END - DAY_START }, (_, i) => (
                   <span key={i} className="pointer-events-none absolute inset-x-0 border-t border-border/40" style={{ top: i * HOUR_PX }} />
                 ))}
+                {absentOn(d) && (
+                  <span
+                    className="pointer-events-none absolute inset-0 z-[3]"
+                    style={{ backgroundImage: "repeating-linear-gradient(135deg, rgba(148,163,184,0.10) 0 6px, transparent 6px 12px)" }}
+                  />
+                )}
                 {today && now.getHours() >= DAY_START && now.getHours() < DAY_END && (
                   <span className="pointer-events-none absolute inset-x-0 z-10 h-px bg-destructive" style={{ top: top(now) }} />
                 )}
@@ -694,6 +724,11 @@ function WeekCalendar({ technicianId, technicianName, planner }: { technicianId:
         <span className="flex items-center gap-1">
           <span className={cn("size-2.5 rounded-sm border", KIND_STYLE.slot)} /> {t("planning.kind.slot")}
         </span>
+        {absences.length > 0 && (
+          <span className="flex items-center gap-1">
+            <span className="size-2.5 rounded-sm border border-slate-400/40" style={{ backgroundImage: "repeating-linear-gradient(135deg, rgba(148,163,184,0.35) 0 2px, transparent 2px 4px)" }} /> {t("planning.absent")}
+          </span>
+        )}
         {outlook?.synced && (
           <span className="flex items-center gap-1">
             <span className="size-2.5 rounded-sm border border-dashed border-slate-400/60" /> Outlook

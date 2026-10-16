@@ -162,6 +162,34 @@
       "when": 1791864092485,
       "tag": "0022_outlook",
       "breakpoints": true
+    },
+    {
+      "idx": 23,
+      "version": "7",
+      "when": 1792168191370,
+      "tag": "0023_meeting_projects",
+      "breakpoints": true
+    },
+    {
+      "idx": 24,
+      "version": "7",
+      "when": 1792168405795,
+      "tag": "0024_meeting_project_members",
+      "breakpoints": true
+    },
+    {
+      "idx": 25,
+      "version": "7",
+      "when": 1792168607424,
+      "tag": "0025_meeting_points",
+      "breakpoints": true
+    },
+    {
+      "idx": 26,
+      "version": "7",
+      "when": 1792168779955,
+      "tag": "0026_meeting_absences",
+      "breakpoints": true
     }
   ]
 }

@@ -1,6 +1,6 @@
 import { Hono, type Context } from "hono";
 import { HTTPException } from "hono/http-exception";
-import { and, asc, eq, gt, lt, max, sql } from "drizzle-orm";
+import { and, asc, eq, gt, gte, lt, lte, max, sql } from "drizzle-orm";
 import { z } from "zod";
 import { db, schema } from "../db/index.ts";
 import { auth, requirePermission, requireStaff, type AppEnv, type AuthContext } from "../lib/auth.ts";
@@ -34,6 +34,16 @@ function monday(day: string): string {
 }
 const dayOf = (d: Date) => new Intl.DateTimeFormat("en-CA", { timeZone: "America/Toronto" }).format(d);
 const canPlan = (a: AuthContext) => a.permissions.includes("tickets.plan");
+
+/** The technician's absences (weekly meeting calendar) overlapping these days (YYYY-MM-DD). */
+function absencesOf(technicianId: string, from: string, to: string) {
+  const ab = schema.meetingAbsences;
+  return db()
+    .select({ id: ab.id, startDate: ab.startDate, endDate: ab.endDate, kind: ab.kind, note: ab.note })
+    .from(ab)
+    .where(and(eq(ab.userId, technicianId), lte(ab.startDate, to), gte(ab.endDate, from)))
+    .orderBy(asc(ab.startDate));
+}
 /** May change this technician's priorities / calendar: planners, or oneself with tickets.planSelf. */
 const canEditFor = (a: AuthContext, technicianId: string) => canPlan(a) || (technicianId === a.user.id && a.permissions.includes("tickets.planSelf"));
 function mustEdit(a: AuthContext, technicianId: string) {
@@ -308,6 +318,16 @@ export const planningRoutes = new Hono<AppEnv>()
     );
   })
 
+  /** The technician's absences (from the weekly meeting calendar), read only. */
+  .get("/absences", async (c) => {
+    const a = auth(c);
+    const techId = whose(c, a);
+    const from = new Date(zIso.parse(c.req.query("from")));
+    const to = new Date(zIso.parse(c.req.query("to")));
+    if (!(to > from) || to.getTime() - from.getTime() > 62 * 86_400_000) throw new HTTPException(400, { message: "Validation failed" });
+    return c.json(await absencesOf(techId, dayOf(from), dayOf(new Date(to.getTime() - 1))));
+  })
+
   /** The technician's own Outlook events (read only), when they sync with Microsoft 365. */
   .get("/calendar/outlook", async (c) => {
     const a = auth(c);
@@ -390,6 +410,8 @@ export const planningRoutes = new Hono<AppEnv>()
       .returning();
     const o365 = await syncBlock(row);
     if (o365) warnings.push(o365);
+    // Booked on a day the technician is away: saved, but say so
+    if ((await absencesOf(tech.id, dayOf(startsAt), dayOf(startsAt))).length) warnings.push("absent");
     await audit(a.user.id, "planning.block_created", row.id, { technicianId: tech.id, ticketId, kind: p.kind, serviceCallId });
     return c.json({ ...row, warnings }, 201);
   })
@@ -438,6 +460,7 @@ export const planningRoutes = new Hono<AppEnv>()
     }
     const o365 = await syncBlock(row);
     if (o365) warnings.push(o365);
+    if (moved && (await absencesOf(row.technicianId, dayOf(startsAt), dayOf(startsAt))).length) warnings.push("absent");
     await audit(a.user.id, "planning.block_updated", id, {});
     return c.json({ ...row, warnings });
   })

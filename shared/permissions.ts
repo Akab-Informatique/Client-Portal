@@ -186,6 +186,14 @@ export const MODULES = [
         key: "meetings.view",
         label: { fr: "Voir le tableau de bord de la rencontre hebdomadaire", en: "View the weekly meeting dashboard" },
       },
+      {
+        key: "meetings.manage",
+        label: { fr: "Gérer les projets en cours", en: "Manage projects in progress" },
+        description: {
+          fr: "Ajouter, modifier et terminer des projets, et y prendre des notes",
+          en: "Add, edit and complete projects, and take notes on them",
+        },
+      },
     ],
   },
   {
