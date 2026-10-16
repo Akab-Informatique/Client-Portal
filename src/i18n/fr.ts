@@ -118,6 +118,23 @@ const fr = {
     clients: "Clients",
     documentation: "Documentation",
     devices: "Appareils",
+    meetings: "Rencontre hebdomadaire",
+  },
+  meetings: {
+    title: "Rencontre hebdomadaire",
+    subtitle: "Le tableau de bord de la rencontre d'équipe de la semaine.",
+    overdue: {
+      title: "Billets en retard",
+      total_one: "{{count}} billet en retard",
+      total_other: "{{count}} billets en retard",
+      none: "Aucun billet en retard",
+      count_one: "{{count}} en retard",
+      count_other: "{{count}} en retard",
+      upToDate: "À jour",
+      unassigned: "Non assignés",
+      late_one: "{{count}} jour de retard",
+      late_other: "{{count}} jours de retard",
+    },
   },
   outlook: {
     title: "Outlook",

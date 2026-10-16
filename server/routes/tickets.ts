@@ -48,7 +48,7 @@ function sourceError(e: unknown): HTTPException {
   console.error("[tickets]", e);
   return new HTTPException(500, { message: "Internal error" });
 }
-async function run<T>(fn: () => Promise<T>): Promise<T> {
+export async function run<T>(fn: () => Promise<T>): Promise<T> {
   try {
     return await fn();
   } catch (e) {
@@ -85,7 +85,7 @@ const aiLimit = (userId: string) => {
 
 // ── Labels and kinds from the source's lists ──
 type Lookup = ReturnType<typeof lookup>;
-function lookup(o: Options) {
+export function lookup(o: Options) {
   const st = new Map(o.statuses.map((s) => [s.value, s]));
   const pr = new Map(o.priorities.map((s) => [s.value, s]));
   const qu = new Map(o.queues.map((s) => [s.value, s]));

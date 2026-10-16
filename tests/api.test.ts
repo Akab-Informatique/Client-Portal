@@ -152,6 +152,30 @@ describe("permissions", () => {
     expect((await admin.get("/api/admin/staff")).status).toBe(200);
   });
 
+  it("weekly meeting dashboard: administrators get it, technicians do not by default", async () => {
+    const admin = await signIn("admin@akab.local");
+    expect((await admin.get("/api/me")).json.permissions).toContain("meetings.view");
+    const tech = await signIn("tech@akab.local");
+    expect((await tech.get("/api/me")).json.permissions).not.toContain("meetings.view");
+    expect((await tech.get("/api/meetings/overdue")).status).toBe(403);
+  });
+
+  it("weekly meeting: overdue open tickets, grouped by technician", async () => {
+    const admin = await signIn("admin@akab.local");
+    const r = await admin.get("/api/meetings/overdue");
+    expect(r.status).toBe(200);
+    const all = (await admin.get("/api/tickets?view=all")).json.items;
+    const expected = all.filter((t: any) => t.statusKind !== "complete" && new Date(t.dueAt).getTime() < Date.now());
+    const listed = [...r.json.technicians.flatMap((p: any) => p.tickets), ...r.json.unassigned];
+    expect(r.json.total).toBe(expected.length);
+    expect(listed.map((t: any) => t.id).sort()).toEqual(expected.map((t: any) => t.id).sort());
+    // every technician is listed, even with nothing overdue
+    expect(r.json.technicians.length).toBeGreaterThan(1);
+    for (const p of r.json.technicians) for (const t of p.tickets) expect(expected.find((e: any) => e.id === t.id).assignee.id).toBe(p.id);
+    const client = await signIn("responsable1@client.example");
+    expect((await client.get("/api/meetings/overdue")).status).toBe(403);
+  });
+
   it("client users cannot reach staff APIs", async () => {
     const client = await signIn("responsable1@client.example");
     expect((await client.get("/api/messages")).status).toBe(403);

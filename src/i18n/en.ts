@@ -120,6 +120,23 @@ const en: Dict = {
     clients: "Clients",
     documentation: "Documentation",
     devices: "Devices",
+    meetings: "Weekly meeting",
+  },
+  meetings: {
+    title: "Weekly meeting",
+    subtitle: "The dashboard for this week's team meeting.",
+    overdue: {
+      title: "Overdue tickets",
+      total_one: "{{count}} overdue ticket",
+      total_other: "{{count}} overdue tickets",
+      none: "No overdue tickets",
+      count_one: "{{count}} overdue",
+      count_other: "{{count}} overdue",
+      upToDate: "Up to date",
+      unassigned: "Unassigned",
+      late_one: "{{count}} day late",
+      late_other: "{{count}} days late",
+    },
   },
   outlook: {
     title: "Outlook",

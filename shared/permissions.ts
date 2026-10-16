@@ -178,6 +178,17 @@ export const MODULES = [
     ],
   },
   {
+    key: "meetings",
+    audience: "staff",
+    label: { fr: "Rencontre hebdomadaire", en: "Weekly meeting" },
+    permissions: [
+      {
+        key: "meetings.view",
+        label: { fr: "Voir le tableau de bord de la rencontre hebdomadaire", en: "View the weekly meeting dashboard" },
+      },
+    ],
+  },
+  {
     key: "clientview",
     audience: "staff",
     label: { fr: "Vue client", en: "Client view" },
