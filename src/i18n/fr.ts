@@ -33,7 +33,8 @@ const fr = {
   },
   login: {
     forgot: "Mot de passe oublié ?",
-    brand: "Portail",
+    /** {{brand}}: the AKAB logo lettering */
+    brand: "Portail {{brand}}",
     tagline: "Département TI externalisé",
     heroTitle: "Votre centre de commande",
     heroTitleAccent: "TI, en direct.",

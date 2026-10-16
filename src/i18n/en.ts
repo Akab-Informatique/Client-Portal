@@ -35,7 +35,8 @@ const en: Dict = {
   },
   login: {
     forgot: "Forgot password?",
-    brand: "Portal",
+    /** {{brand}}: the AKAB logo lettering */
+    brand: "{{brand}} Portal",
     tagline: "Outsourced IT department",
     heroTitle: "Your IT command center,",
     heroTitleAccent: "live.",

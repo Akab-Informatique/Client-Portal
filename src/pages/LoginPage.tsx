@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type FormEvent } from "react";
+import { Fragment, useEffect, useRef, useState, type FormEvent } from "react";
 import { useTranslation } from "react-i18next";
 import { AnimatePresence, motion, useMotionValue, useSpring, useTransform } from "motion/react";
 import { useQueryClient } from "@tanstack/react-query";
@@ -6,7 +6,7 @@ import { ArrowLeft, ArrowRight, CheckCircle2, Copy, Eye, EyeOff, KeyRound, Loade
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { LogoMark } from "@/components/brand/Logo";
+import { BrandWord, LogoMark, Wordmark } from "@/components/brand/Logo";
 import { InteractiveBackground } from "@/components/brand/InteractiveBackground";
 import { FloatingHexagons } from "@/components/brand/FloatingHexagons";
 import { LanguageToggle } from "@/components/LanguageToggle";
@@ -105,8 +105,16 @@ function Brand() {
         <div className="absolute inset-0 -z-10 scale-150 rounded-full bg-[radial-gradient(circle,rgba(255,206,26,0.35),transparent_65%)] blur-xl" />
         <LogoMark className="h-16 drop-shadow-[0_0_18px_rgba(255,206,26,0.45)]" />
       </motion.div>
-      <h1 className="mt-5 font-display text-[2rem] font-extrabold leading-none tracking-tight">
-        <span className="text-grad-gold">AKAB</span> <span className="text-[#ededf0]">{t("login.brand")}</span>
+      <h1 className="mt-5 flex items-center gap-3" aria-label={t("login.brand", { brand: "AKAB" })}>
+        {/* Word order per language: "Portail AKAB" / "AKAB Portal" */}
+        {t("login.brand", { brand: "|" })
+          .split("|")
+          .map((part, i) => (
+            <Fragment key={i}>
+              {i > 0 && <Wordmark className="h-7" />}
+              {part.trim() && <BrandWord word={part.trim()} className="h-7 text-[#ededf0]" />}
+            </Fragment>
+          ))}
       </h1>
     </div>
   );

@@ -3,7 +3,11 @@
 Portal for AKAB Informatique (MSP, Lanaudière): internal team first, clients next.
 Brand follows akab.ca: ink `#0a0a0b`, paper `#f4f4f1`, gold gradient
 `#ffe24a → #ffce1a → #f59410`, Bricolage Grotesque (display) + Instrument Sans
-(body). Dark theme by default. French by default, every text in `src/i18n/fr.ts`
+(body). Logo: `src/assets/akab-logo.webp` through `src/components/brand/Logo.tsx`
+(`Logo` full, `LogoMark` bars + cursor, `Wordmark` lettering). The word AKAB as a
+brand mark is always the `Wordmark` image, never typed in a font. Dark theme by default.
+Any UI or design work (new page, section, component, restyle): load the
+`design-taste-frontend` skill first and follow it. French by default, every text in `src/i18n/fr.ts`
 **and** `src/i18n/en.ts`.
 
 ## Branches
