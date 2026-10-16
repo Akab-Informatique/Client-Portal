@@ -25,6 +25,20 @@ Brand follows akab.ca: ink `#0a0a0b`, paper `#f4f4f1`, gold gradient
 3. UI: page in `src/pages/`, entry in `src/modules/registry.ts` (remove `upcoming`), route in `src/App.tsx`.
 4. Tests in `tests/`.
 
+## Weekly meeting (Rencontre hebdomadaire)
+
+Administration tab `/meetings`, used live during the Monday team meeting (lists refresh every 10–30 s).
+
+- Rights: `meetings.view` (see the page) and `meetings.manage` (change anything on it). Administrators only by default.
+- API: `server/routes/meetings.ts`, mounted at `/api/meetings`. UI: `src/pages/meetings/` (`MeetingsPage`, `Points`, `Projects`, `Absences`).
+- Sections, top to bottom:
+  - **Points à discuter** (`meeting_points`): checked off when settled; settled ones stay visible 7 days.
+  - **Billets en retard et à échéance cette semaine** (`GET /overdue`): open tickets from the ticket source (Autotask, or sample data locally) past due, or due by the end of Friday in Québec time (`fridayEnd` / `fridayDate`; on a weekend, the coming Friday). Every technician gets a card, even with nothing due; unassigned tickets get their own card.
+  - **Projets en cours** (`meeting_projects`, `meeting_project_members`, `meeting_project_notes`): client (free text), due date (YYYY-MM-DD), team members (active staff only), notes newest first. Done projects are hidden behind "Terminés".
+  - **Calendrier des absences** (`meeting_absences`): one row per person and date range (both days included), kind `vacation | sick | training | personal | other`.
+- Absences are shared with the Tickets planning calendar: `GET /api/planning/absences` (same access rules as `/planning/calendar`) hatches absent days in `WeekCalendar`, and creating or moving a block on an absent day returns the `absent` warning (still saved).
+- Migrations `0023`–`0026`. Tests: `tests/api.test.ts` ("weekly meeting: …") and `tests/meetings.test.ts` (Friday cut-off).
+
 ## Security rules
 
 - Authorization is enforced in the API, never only in the UI. Use `auth(c)` / `requirePermission`; never trust ids or roles sent by the browser.
