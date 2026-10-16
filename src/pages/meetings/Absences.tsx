@@ -13,6 +13,7 @@ import { api, ApiError } from "@/lib/api";
 import { currentLocale } from "@/i18n";
 import { useCan } from "@/lib/session";
 import { cn } from "@/lib/utils";
+import { holidaysBetween } from "@shared/holidays";
 
 const KINDS = ["vacation", "sick", "training", "personal", "other"] as const;
 type Kind = (typeof KINDS)[number];
@@ -26,6 +27,10 @@ const KIND_STYLE: Record<Kind, string> = {
   personal: "bg-amber-500/20 text-amber-200 border-amber-500/40",
   other: "bg-slate-500/20 text-slate-200 border-slate-500/40",
 };
+/** Weekends: their own cool tint (teal is not used by any absence kind) */
+const WEEKEND_CELL = "bg-teal-400/[0.07]";
+const WEEKEND_HEAD = "bg-teal-400/[0.07] text-teal-300/90";
+
 const KIND_DOT: Record<Kind, string> = { vacation: "bg-sky-400", sick: "bg-red-400", training: "bg-violet-400", personal: "bg-amber-400", other: "bg-slate-400" };
 
 /** Local calendar day as YYYY-MM-DD */
@@ -33,12 +38,12 @@ const ymd = (d: Date) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart
 const addDays = (d: Date, n: number) => new Date(d.getFullYear(), d.getMonth(), d.getDate() + n);
 const loc = () => (currentLocale() === "en" ? "en-CA" : "fr-CA");
 
-/** Weeks (Monday first) covering the month */
+/** Weeks (Sunday first, Saturday last) covering the month */
 function monthGrid(month: Date) {
   const first = new Date(month.getFullYear(), month.getMonth(), 1);
-  const start = addDays(first, -((first.getDay() + 6) % 7));
+  const start = addDays(first, -first.getDay());
   const last = new Date(month.getFullYear(), month.getMonth() + 1, 0);
-  const end = addDays(last, 6 - ((last.getDay() + 6) % 7));
+  const end = addDays(last, 6 - last.getDay());
   const days: Date[] = [];
   for (let d = start; d <= end; d = addDays(d, 1)) days.push(d);
   return { days, from: ymd(start), to: ymd(end) };
@@ -59,6 +64,7 @@ export function AbsencesSection() {
     refetchInterval: 30_000,
   });
   const absences = data ?? [];
+  const holidays = useMemo(() => holidaysBetween(grid.from, grid.to), [grid]);
   const weekdays = useMemo(() => grid.days.slice(0, 7).map((d) => new Intl.DateTimeFormat(loc(), { weekday: "short" }).format(d)), [grid]);
   const title = new Intl.DateTimeFormat(loc(), { month: "long", year: "numeric" }).format(month);
 
@@ -92,8 +98,8 @@ export function AbsencesSection() {
 
       <div className="overflow-hidden rounded-2xl border bg-card/80">
         <div className="grid grid-cols-7 border-b text-center text-xs font-medium uppercase text-muted-foreground">
-          {weekdays.map((w) => (
-            <div key={w} className="py-2">
+          {weekdays.map((w, i) => (
+            <div key={w} className={cn("py-2", (i === 0 || i === 6) && WEEKEND_HEAD)}>
               {w}
             </div>
           ))}
@@ -104,6 +110,7 @@ export function AbsencesSection() {
             const inMonth = d.getMonth() === month.getMonth();
             const weekend = d.getDay() === 0 || d.getDay() === 6;
             const here = absences.filter((a) => a.startDate <= day && a.endDate >= day);
+            const holiday = holidays.get(day);
             return (
               <div
                 key={day}
@@ -111,7 +118,8 @@ export function AbsencesSection() {
                   "min-h-24 border-b border-r p-1 sm:p-1.5",
                   (i + 1) % 7 === 0 && "border-r-0",
                   i >= grid.days.length - 7 && "border-b-0",
-                  (!inMonth || weekend) && "bg-muted/20",
+                  weekend ? WEEKEND_CELL : !inMonth && "bg-muted/20",
+                  holiday && "bg-[color:var(--gold)]/[0.06]",
                   manage && "cursor-pointer hover:bg-accent/30",
                 )}
                 onClick={() => manage && setDraft(blank(day))}
@@ -119,13 +127,21 @@ export function AbsencesSection() {
                 <div
                   className={cn(
                     "mb-1 flex size-6 items-center justify-center rounded-full text-xs",
-                    !inMonth && "text-muted-foreground/50",
+                    !inMonth ? "text-muted-foreground/50" : weekend && "text-teal-200/90",
                     day === today && "bg-primary font-semibold text-primary-foreground",
                   )}
                 >
                   {d.getDate()}
                 </div>
                 <div className="space-y-0.5">
+                  {holiday && (
+                    <span
+                      title={t(`meetings.absences.holiday.${holiday}`)}
+                      className={cn("block truncate rounded border border-[color:var(--gold)]/40 bg-[color:var(--gold)]/15 px-1 py-px text-[11px] leading-4 text-primary", !inMonth && "opacity-50")}
+                    >
+                      {t(`meetings.absences.holiday.${holiday}`)}
+                    </span>
+                  )}
                   {here.map((a) => (
                     <button
                       key={a.id}
@@ -147,6 +163,12 @@ export function AbsencesSection() {
         </div>
       </div>
       <div className="flex flex-wrap gap-x-4 gap-y-1 text-xs text-muted-foreground">
+        <span className="inline-flex items-center gap-1.5">
+          <span className="size-2 rounded-full bg-[color:var(--gold)]" /> {t("meetings.absences.holidayLegend")}
+        </span>
+        <span className="inline-flex items-center gap-1.5">
+          <span className="size-2 rounded-full bg-teal-400/70" /> {t("meetings.absences.weekend")}
+        </span>
         {KINDS.map((k) => (
           <span key={k} className="inline-flex items-center gap-1.5">
             <span className={cn("size-2 rounded-full", KIND_DOT[k])} /> {t(`meetings.absences.kind.${k}`)}

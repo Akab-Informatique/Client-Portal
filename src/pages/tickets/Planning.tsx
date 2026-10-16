@@ -38,6 +38,7 @@ import { useCan, useMe } from "@/lib/session";
 import { cn } from "@/lib/utils";
 import { STATUS_STYLE, ticketErrorText, useChoiceText, type StatusKind, type TicketSummary } from "./shared";
 import { useTicketWorkspace } from "./workspace";
+import { holidaysBetween } from "@shared/holidays";
 
 /**
  * Planning beside the ticket list: the technician's priorities (of the day,
@@ -537,6 +538,8 @@ function WeekCalendar({ technicianId, technicianName, planner }: { technicianId:
     placeholderData: keepPreviousData,
   });
   const absentOn = (day: Date) => absences.find((x) => x.startDate <= ymd(day) && x.endDate >= ymd(day));
+  // Quebec holidays (same as the weekly meeting calendar)
+  const holidays = useMemo(() => holidaysBetween(ymd(week), ymd(addDays(week, 6))), [week]);
   const [now, setNow] = useState(() => new Date());
   useEffect(() => {
     const id = setInterval(() => setNow(new Date()), 60_000);
@@ -591,6 +594,11 @@ function WeekCalendar({ technicianId, technicianName, planner }: { technicianId:
                   {new Intl.DateTimeFormat(loc(), { weekday: "short" }).format(d).replace(".", "")} {d.getDate()}
                 </span>
                 <span className={cn("block font-mono text-[9px]", h > 8 ? "text-destructive" : h > 0 ? "text-foreground/70" : "text-muted-foreground/50")}>{h ? `${h.toLocaleString(undefined, { maximumFractionDigits: 1 })} h` : "—"}</span>
+                {holidays.get(ymd(d)) && (
+                  <span className="mt-0.5 block truncate rounded-sm border border-[color:var(--gold)]/40 bg-[color:var(--gold)]/15 px-0.5 text-[9px] text-primary">
+                    {t(`meetings.absences.holiday.${holidays.get(ymd(d))}`)}
+                  </span>
+                )}
                 {(() => {
                   const ab = absentOn(d);
                   return ab ? (
@@ -640,6 +648,7 @@ function WeekCalendar({ technicianId, technicianName, planner }: { technicianId:
                 {Array.from({ length: DAY_END - DAY_START }, (_, i) => (
                   <span key={i} className="pointer-events-none absolute inset-x-0 border-t border-border/40" style={{ top: i * HOUR_PX }} />
                 ))}
+                {holidays.has(ymd(d)) && <span className="pointer-events-none absolute inset-0 z-[3] bg-[color:var(--gold)]/[0.06]" />}
                 {absentOn(d) && (
                   <span
                     className="pointer-events-none absolute inset-0 z-[3]"

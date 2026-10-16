@@ -209,6 +209,11 @@ describe("permissions", () => {
     expect(booked.json.warnings).toContain("absent");
     const free = await admin.post("/api/planning/calendar", { technicianId: alex.id, kind: "slot", title: "Inventaire", startsAt: "2026-11-09T14:00:00.000Z", endsAt: "2026-11-09T15:00:00.000Z" });
     expect(free.json.warnings).not.toContain("absent");
+    // Thanksgiving 2026 (Monday 12 Oct): a Quebec holiday
+    const onHoliday = await admin.post("/api/planning/calendar", { technicianId: alex.id, kind: "slot", title: "Inventaire", startsAt: "2026-10-12T14:00:00.000Z", endsAt: "2026-10-12T15:00:00.000Z" });
+    expect(onHoliday.json.warnings).toContain("holiday");
+    expect(free.json.warnings).not.toContain("holiday");
+    await admin.del(`/api/planning/calendar/${onHoliday.json.id}`);
     await admin.del(`/api/planning/calendar/${booked.json.id}`);
     await admin.del(`/api/planning/calendar/${free.json.id}`);
 

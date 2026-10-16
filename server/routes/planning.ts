@@ -11,6 +11,7 @@ import { SourceError, ticketSource } from "../lib/ticketSource.ts";
 import { AutotaskError } from "../lib/autotask.ts";
 import { o365MailboxOf, syncBlock, syncPin, unsyncBlock, unsyncPin } from "../lib/planning.ts";
 import { O365Error, outlookEvents } from "../lib/o365.ts";
+import { holidaysBetween } from "../../shared/holidays.ts";
 
 /**
  * Planning: an admin (tickets.plan) gives a technician priorities — tickets
@@ -412,6 +413,7 @@ export const planningRoutes = new Hono<AppEnv>()
     if (o365) warnings.push(o365);
     // Booked on a day the technician is away: saved, but say so
     if ((await absencesOf(tech.id, dayOf(startsAt), dayOf(startsAt))).length) warnings.push("absent");
+    if (holidaysBetween(dayOf(startsAt), dayOf(startsAt)).size) warnings.push("holiday");
     await audit(a.user.id, "planning.block_created", row.id, { technicianId: tech.id, ticketId, kind: p.kind, serviceCallId });
     return c.json({ ...row, warnings }, 201);
   })
@@ -461,6 +463,7 @@ export const planningRoutes = new Hono<AppEnv>()
     const o365 = await syncBlock(row);
     if (o365) warnings.push(o365);
     if (moved && (await absencesOf(row.technicianId, dayOf(startsAt), dayOf(startsAt))).length) warnings.push("absent");
+    if (moved && holidaysBetween(dayOf(startsAt), dayOf(startsAt)).size) warnings.push("holiday");
     await audit(a.user.id, "planning.block_updated", id, {});
     return c.json({ ...row, warnings });
   })
