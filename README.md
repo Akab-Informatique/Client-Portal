@@ -9,6 +9,21 @@ messages, and a **weekly meeting** page (points to discuss, overdue tickets
 and those due by Friday per technician, projects in progress with notes and
 assignees, absence calendar shared with the ticket planning).
 
+**Profile**: wide two-column window; technicians keep only their cell phone.
+Its **Microsoft 365** section is where each technician signs in with their own
+Microsoft account (their mailbox joins the Outlook module, which they turn on
+there; it is off by default) and sees their calendar sync.
+
+**Microsoft 365**: one Entra app, used two ways — each technician's own
+sign-in (delegated), and the organisation access for master administrators.
+A master administrator chooses the calendars shown in each technician's
+planning (anyone's, a chosen calendar, "details" or "busy only") and which
+one receives the portal's blocks. Setup: INSTALL.md › Microsoft 365.
+
+**Roles**: Administrateur principal (every right, locked), Administrateur
+global (people and work, not roles, integrations or others' calendars),
+Technicien, Lecture seule.
+
 ## Stack
 
 | Part | Tech |

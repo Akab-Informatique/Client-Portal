@@ -66,6 +66,27 @@ docker compose logs app | grep "one-time password"  # first admin password
 Open `https://portail.akab.ca`, sign in with `ADMIN_EMAIL` and that password,
 set up MFA with your authenticator app, then choose your own password.
 
+## 5. Microsoft 365 (Outlook and calendars) — optional
+
+One app registration in AKAB's Microsoft Entra, then **Admin settings ›
+Intégrations › Microsoft 365** (tenant ID, application ID, client secret).
+`PUBLIC_URL` must be set: the sign-in comes back to it.
+
+1. Entra ID › App registrations › New registration ("Portail AKAB"), accounts
+   in this directory only.
+2. Authentication › Add a platform › **Web** › redirect URI: the address shown
+   on the portal's Microsoft 365 page (`https://portail.akab.ca/api/microsoft/callback`).
+3. API permissions › Microsoft Graph:
+   - **Delegated** (each technician signs in themselves, profile › Microsoft 365):
+     `User.Read`, `offline_access`, `Mail.ReadWrite`, `Mail.Send`, `Calendars.ReadWrite`.
+   - **Application** (organisation access, master administrators only: anyone's
+     calendar, shared mailboxes): `Calendars.ReadWrite`, `Mail.ReadWrite`, `Mail.Send`.
+   - **Grant admin consent**.
+4. Certificates & secrets › New client secret → paste it in the portal.
+
+The application permissions reach every mailbox of the tenant. To limit them,
+use an Exchange application access policy (`New-ApplicationAccessPolicy`).
+
 ## Upgrade (keeps all data)
 
 ```bash
