@@ -240,7 +240,8 @@ function DockItem({
     }
     onRestore();
   };
-  const compact = Boolean(place.compact);
+  // a honeycomb cell by default; a tab when asked
+  const compact = place.compact !== false;
   const pos = live ?? (place.x !== undefined && place.y !== undefined ? place : null);
   const size = compact ? { w: 104, h: 116 } : { w: 288, h: 52 };
   const at2 = pos ? clamp(pos.x!, pos.y!, size.w, size.h) : null;
