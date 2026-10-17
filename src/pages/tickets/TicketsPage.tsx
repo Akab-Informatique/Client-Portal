@@ -237,7 +237,11 @@ export function TicketsPage() {
           <SortMenu value={params.get("sort") ?? "due"} onChange={(v) => set({ sort: v === "due" ? null : v })} />
         </div>
       </div>
-      <AgendaCard />
+      <AgendaCard filterTech={(() => {
+        // one technician filtered (a portal account): the card shows their priorities
+        const a = (params.get("assignee") ?? "").split(",").filter(Boolean);
+        return a.length === 1 && a[0] !== "none" && !a[0].startsWith("at-") ? a[0] : null;
+      })()} />
       </div>
       {activeFilters.length > 0 && (
         <div className="-mt-3 flex flex-wrap items-center gap-1.5">

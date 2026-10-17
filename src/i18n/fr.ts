@@ -472,6 +472,12 @@ const fr = {
     },
   },
   planning: {
+    weekOfName: "Semaine de {{name}}",
+    monthView: "Vue du mois",
+    weekView: "Vue de la semaine",
+    prevMonth: "Mois précédent",
+    nextMonth: "Mois suivant",
+    prioritiesOn: "Priorités · {{date}}",
     myWeek: "Ma semaine",
     weekOf: "du {{date}}",
     openCalendar: "Ouvrir",

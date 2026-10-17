@@ -162,65 +162,175 @@ function useTeam() {
  * Beside the filters: today at a glance (my calendar by default). A click
  * opens the full planning, where any technician's calendar can be shown.
  */
-export function AgendaCard() {
+/** Monday on or before the 1st, for a 6-week month grid. */
+function monthGridStart(month: Date) {
+  return mondayOf(new Date(month.getFullYear(), month.getMonth(), 1));
+}
+
+export function AgendaCard({ filterTech }: { filterTech?: string | null }) {
   const { t } = useTranslation();
   const me = useMe();
+  const can = useCan();
   const ws = useTicketWorkspace();
+  const team = useTeam();
+  const planner = can("tickets.plan");
   const [open, setOpen] = useState(false);
-  const week = mondayOf(new Date());
-  const from = week.toISOString();
-  const to = addDays(week, 7).toISOString();
+  // whose priorities: mine by default; the technician filtered in the list (or picked here) for planners
+  const [techId, setTechId] = useState(me.id);
+  useEffect(() => {
+    if (!planner) return;
+    setTechId(filterTech && team.some((p) => p.id === filterTech) ? filterTech : me.id);
+  }, [filterTech, planner, me.id, team.length]); // eslint-disable-line react-hooks/exhaustive-deps
+  const who = team.find((p) => p.id === techId) ?? { id: me.id, name: me.name, full: true };
+  const mine = techId === me.id;
+  // the day shown (its priorities), the week or the month around it
+  const [day, setDay] = useState(() => ymd(new Date()));
+  const [monthView, setMonthView] = useState(false);
+  const [month, setMonth] = useState(() => new Date(new Date().getFullYear(), new Date().getMonth(), 1));
+  const dayDate = new Date(`${day}T12:00:00`);
+  const week = mondayOf(dayDate);
+  const gridStart = monthView ? monthGridStart(month) : week;
+  const gridDays = monthView ? 42 : 5;
+  const from = gridStart.toISOString();
+  const to = addDays(gridStart, monthView ? 42 : 7).toISOString();
+  const tq = mine ? "" : `technicianId=${techId}&`;
   const { data: blocks = [] } = useQuery({
-    queryKey: ["planning", "calendar", me.id, from],
-    queryFn: () => api.get<Block[]>(`/planning/calendar?from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}`),
+    queryKey: ["planning", "calendar", techId, "card", from, to],
+    queryFn: () => api.get<Block[]>(`/planning/calendar?${tq}from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}`),
     refetchInterval: 60_000,
   });
   const { data: outlook } = useQuery({
-    queryKey: ["planning", "outlook", me.id, from],
-    queryFn: () => api.get<{ synced: boolean; events: OutlookEvent[] }>(`/planning/calendar/outlook?from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}`),
+    queryKey: ["planning", "outlook", techId, "card", from, to],
+    queryFn: () => api.get<{ synced: boolean; events: OutlookEvent[] }>(`/planning/calendar/outlook?${tq}from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}`),
     staleTime: 60_000,
   });
-  const { data: pins } = usePriorities(me.id);
+  const { data: pins } = usePriorities(techId, day);
   const toDo = (pins ?? []).filter((p) => !p.doneAt);
-  const days = Array.from({ length: 5 }, (_, i) => addDays(week, i));
+  const days = Array.from({ length: gridDays }, (_, i) => addDays(gridStart, i));
   const today = ymd(new Date());
   const loc = currentLocale() === "en" ? "en-CA" : "fr-CA";
   const countOn = (d: Date) => blocks.filter((b) => ymd(new Date(b.startsAt)) === ymd(d)).length + (outlook?.events ?? []).filter((x) => !x.allDay && ymd(new Date(x.startsAt)) === ymd(d)).length;
+  const pick = (d: Date) => {
+    setDay(ymd(d));
+    if (monthView && d.getMonth() !== month.getMonth()) setMonth(new Date(d.getFullYear(), d.getMonth(), 1));
+  };
   return (
     <>
       <div className="glass flex min-w-0 flex-col gap-2 rounded-2xl border border-[color:var(--gold)]/35 p-2.5 shadow-[0_0_30px_-16px_rgba(255,206,26,0.5)]">
-        {/* the week: a click opens the full planning */}
-        <div className="flex items-center gap-2 px-1">
+        <div className="flex flex-wrap items-center gap-2 px-1">
           <CalendarRange className="size-4 shrink-0 text-primary" />
-          <span className="text-sm font-semibold">{t("planning.myWeek")}</span>
-          <span className="text-[11px] text-muted-foreground">{t("planning.weekOf", { date: week.toLocaleDateString(loc, { day: "numeric", month: "long" }) })}</span>
-          <Button type="button" size="sm" variant="outline" className="ml-auto h-7 gap-1.5 border-[color:var(--gold)]/40 px-2 text-xs" onClick={() => setOpen(true)}>
-            <Maximize2 className="size-3.5" /> {t("planning.openCalendar")}
-          </Button>
+          <span className="text-sm font-semibold">{monthView ? month.toLocaleDateString(loc, { month: "long", year: "numeric" }) : mine ? t("planning.myWeek") : t("planning.weekOfName", { name: who.name.split(" ")[0] })}</span>
+          {monthView && (
+            <span className="flex items-center">
+              <Button type="button" variant="ghost" size="icon" className="size-6" onClick={() => setMonth((m) => new Date(m.getFullYear(), m.getMonth() - 1, 1))} aria-label={t("planning.prevMonth")}>
+                <ChevronLeft className="size-3.5" />
+              </Button>
+              <Button type="button" variant="ghost" size="icon" className="size-6" onClick={() => setMonth((m) => new Date(m.getFullYear(), m.getMonth() + 1, 1))} aria-label={t("planning.nextMonth")}>
+                <ChevronRight className="size-3.5" />
+              </Button>
+            </span>
+          )}
+          <span className="ml-auto flex items-center gap-1">
+            {/* whose: planners pick anyone (the list's technician filter does it too) */}
+            {planner && team.length > 1 && (
+              <Select value={techId} onValueChange={setTechId}>
+                <SelectTrigger className="h-7 w-36 text-xs" aria-label={t("planning.whose")}>
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent position="popper">
+                  {team.map((p) => (
+                    <SelectItem key={p.id} value={p.id} className="text-xs">
+                      {p.id === me.id ? t("planning.me", { name: p.name }) : p.name}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            )}
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <Button
+                  type="button"
+                  size="icon"
+                  variant={monthView ? "default" : "outline"}
+                  className={cn("size-7", monthView && "bg-grad-gold text-[#1a1204]")}
+                  onClick={() => {
+                    setMonthView((v) => !v);
+                    setMonth(new Date(dayDate.getFullYear(), dayDate.getMonth(), 1));
+                  }}
+                  aria-label={monthView ? t("planning.weekView") : t("planning.monthView")}
+                >
+                  <CalendarDays className="size-3.5" />
+                </Button>
+              </TooltipTrigger>
+              <TooltipContent>{monthView ? t("planning.weekView") : t("planning.monthView")}</TooltipContent>
+            </Tooltip>
+            <Button type="button" size="sm" variant="outline" className="h-7 gap-1.5 border-[color:var(--gold)]/40 px-2 text-xs" onClick={() => setOpen(true)}>
+              <Maximize2 className="size-3.5" /> {t("planning.openCalendar")}
+            </Button>
+          </span>
         </div>
-        <button type="button" onClick={() => setOpen(true)} className="grid grid-cols-5 gap-1.5" aria-label={t("planning.openBig")}>
-          {days.map((d) => {
-            const n = countOn(d);
-            const isToday = ymd(d) === today;
-            return (
-              <span
-                key={ymd(d)}
-                className={cn(
-                  "flex flex-col items-center gap-0.5 rounded-xl border py-1.5 transition hover:border-[color:var(--gold)]/50",
-                  isToday ? "border-[color:var(--gold)]/70 bg-[color:var(--gold)]/12" : "bg-background/40",
-                )}
-              >
-                <span className={cn("text-[10px] font-medium uppercase", isToday ? "text-primary" : "text-muted-foreground")}>{d.toLocaleDateString(loc, { weekday: "short" }).replace(".", "")}</span>
-                <span className={cn("font-mono text-lg font-semibold leading-none", isToday && "text-primary")}>{d.getDate()}</span>
-                <span className={cn("text-[10px] leading-none", n ? "text-foreground" : "text-muted-foreground/50")}>{n ? t("planning.items", { count: n }) : "—"}</span>
+
+        {/* a click on a day: its priorities below */}
+        {monthView ? (
+          <div className="grid grid-cols-7 gap-0.5 text-center">
+            {Array.from({ length: 7 }, (_, i) => addDays(gridStart, i)).map((d) => (
+              <span key={`h${d.getDay()}`} className="text-[9px] uppercase text-muted-foreground">
+                {d.toLocaleDateString(loc, { weekday: "narrow" })}
               </span>
-            );
-          })}
-        </button>
-        {/* my priority tickets: one click opens the ticket */}
+            ))}
+            {days.map((d) => {
+              const n = countOn(d);
+              const out = d.getMonth() !== month.getMonth();
+              return (
+                <button
+                  key={ymd(d)}
+                  type="button"
+                  onClick={() => pick(d)}
+                  className={cn(
+                    "relative flex h-7 flex-col items-center justify-center rounded-md text-[11px] transition hover:bg-accent/50",
+                    out && "text-muted-foreground/40",
+                    ymd(d) === today && "font-semibold text-primary",
+                    ymd(d) === day && "bg-[color:var(--gold)]/15 ring-1 ring-[color:var(--gold)]/60",
+                  )}
+                >
+                  {d.getDate()}
+                  {n > 0 && <span className="absolute bottom-0.5 size-1 rounded-full bg-[color:var(--gold)]" />}
+                </button>
+              );
+            })}
+          </div>
+        ) : (
+          <div className="grid grid-cols-5 gap-1.5">
+            {days.map((d) => {
+              const n = countOn(d);
+              const isToday = ymd(d) === today;
+              const chosen = ymd(d) === day;
+              return (
+                <button
+                  key={ymd(d)}
+                  type="button"
+                  onClick={() => pick(d)}
+                  className={cn(
+                    "flex flex-col items-center gap-0.5 rounded-xl border py-1.5 transition hover:border-[color:var(--gold)]/50",
+                    chosen ? "border-[color:var(--gold)]/70 bg-[color:var(--gold)]/12" : "bg-background/40",
+                  )}
+                  aria-pressed={chosen}
+                >
+                  <span className={cn("text-[10px] font-medium uppercase", isToday ? "text-primary" : "text-muted-foreground")}>{d.toLocaleDateString(loc, { weekday: "short" }).replace(".", "")}</span>
+                  <span className={cn("font-mono text-lg font-semibold leading-none", isToday && "text-primary")}>{d.getDate()}</span>
+                  <span className={cn("text-[10px] leading-none", n ? "text-foreground" : "text-muted-foreground/50")}>{n ? t("planning.items", { count: n }) : "—"}</span>
+                </button>
+              );
+            })}
+          </div>
+        )}
+
+        {/* the priorities of the day chosen */}
         <div className="border-t pt-1.5">
           <p className="flex items-center gap-1 px-1 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
-            <Star className="size-3 fill-[color:var(--gold)] text-[color:var(--gold)]" /> {t("planning.myPriorities")}
+            <Star className="size-3 fill-[color:var(--gold)] text-[color:var(--gold)]" />
+            {t("planning.prioritiesOn", { date: dayDate.toLocaleDateString(loc, { weekday: "short", day: "numeric", month: "short" }) })}
+            {!mine && <span className="normal-case">· {who.name}</span>}
             <span className="ml-auto font-mono normal-case">{toDo.length}</span>
           </p>
           {toDo.length === 0 ? (
@@ -242,18 +352,18 @@ export function AgendaCard() {
           )}
         </div>
       </div>
-      {open && <PlanningDialog onClose={() => setOpen(false)} />}
+      {open && <PlanningDialog initialTechId={techId} onClose={() => setOpen(false)} />}
     </>
   );
 }
 
 /** The full planning: whose calendar (discreet faces at the top), their priorities and the week. */
-function PlanningDialog({ onClose }: { onClose: () => void }) {
+function PlanningDialog({ onClose, initialTechId }: { onClose: () => void; initialTechId?: string }) {
   const { t } = useTranslation();
   const me = useMe();
   const can = useCan();
   const team = useTeam();
-  const [techId, setTechId] = useState(me.id);
+  const [techId, setTechId] = useState(initialTechId ?? me.id);
   const who = team.find((x) => x.id === techId) ?? { id: me.id, name: me.name, full: true };
   // May plan for this technician: planners, or oneself with tickets.planSelf
   const planner = can("tickets.plan") || (techId === me.id && can("tickets.planSelf"));

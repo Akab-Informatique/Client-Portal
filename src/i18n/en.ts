@@ -474,6 +474,12 @@ const en: Dict = {
     },
   },
   planning: {
+    weekOfName: "{{name}}'s week",
+    monthView: "Month view",
+    weekView: "Week view",
+    prevMonth: "Previous month",
+    nextMonth: "Next month",
+    prioritiesOn: "Priorities · {{date}}",
     myWeek: "My week",
     weekOf: "of {{date}}",
     openCalendar: "Open",
