@@ -48,6 +48,7 @@ import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover
 import { Skeleton } from "@/components/ui/skeleton";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { api } from "@/lib/api";
+import { AiModelButton, useAiModel } from "@/components/AiModelPicker";
 import { relativeTime } from "@/lib/format";
 import { useCan, useMe } from "@/lib/session";
 import { cn, initials } from "@/lib/utils";
@@ -1056,9 +1057,14 @@ function AiPlanButton() {
   const qc = useQueryClient();
   const aiError = useAiError();
   const [plan, setPlan] = useState<Plan | null>(null);
+  const planModel = useAiModel("tickets.plan");
   const run = useMutation({
-    mutationFn: () => api.post<Plan>("/tickets/ai/plan"),
-    onSuccess: (p) => (p.items.length ? setPlan(p) : toast.info(t("tickets.ai.planEmpty"))),
+    mutationFn: () => api.post<Plan>("/tickets/ai/plan", planModel.body),
+    onSuccess: (p) => {
+      void qc.invalidateQueries({ queryKey: ["ai", "options"] });
+      if (p.items.length) setPlan(p);
+      else toast.info(t("tickets.ai.planEmpty"));
+    },
     onError: (e) => toast.error(aiError(e)),
   });
   const apply = useMutation({
@@ -1072,9 +1078,12 @@ function AiPlanButton() {
   });
   return (
     <>
-      <Button variant="outline" onClick={() => run.mutate()} disabled={run.isPending} className="gap-2 border-violet-500/40 bg-violet-500/10 text-violet-200 hover:bg-violet-500/20">
-        {run.isPending ? <Loader2 className="size-4 animate-spin" /> : <Wand2 className="size-4" />} {t("tickets.ai.plan")}
-      </Button>
+      <span className="inline-flex items-center">
+        <Button variant="outline" onClick={() => run.mutate()} disabled={run.isPending} className="gap-2 border-violet-500/40 bg-violet-500/10 text-violet-200 hover:bg-violet-500/20">
+          {run.isPending ? <Loader2 className="size-4 animate-spin" /> : <Wand2 className="size-4" />} {t("tickets.ai.plan")}
+        </Button>
+        <AiModelButton feature="tickets.plan" m={planModel} />
+      </span>
       <Dialog open={Boolean(plan)} onOpenChange={(o) => !o && setPlan(null)}>
         <DialogContent className="sm:max-w-2xl">
           <DialogHeader>

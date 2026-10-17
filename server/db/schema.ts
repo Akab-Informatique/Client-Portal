@@ -809,3 +809,21 @@ export const calendarLinks = pgTable(
   },
   (t) => [index("calendar_links_technician").on(t.technicianId)],
 );
+
+/** Each request to Claude: who, for which part of the portal, which model, tokens and cost. */
+export const aiUsage = pgTable(
+  "ai_usage",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    userId: uuid("user_id").references(() => users.id, { onDelete: "set null" }),
+    /** e.g. "ticket.analyze" (see AI_FEATURES) */
+    feature: text("feature").notNull(),
+    model: text("model").notNull(),
+    inputTokens: integer("input_tokens").notNull().default(0),
+    outputTokens: integer("output_tokens").notNull().default(0),
+    /** Cost in millionths of a US dollar */
+    costMicros: integer("cost_micros").notNull().default(0),
+    createdAt: created(),
+  },
+  (t) => [index("ai_usage_user_time").on(t.userId, t.createdAt), index("ai_usage_time").on(t.createdAt)],
+);

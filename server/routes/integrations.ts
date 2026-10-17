@@ -1,9 +1,9 @@
 import { Hono } from "hono";
 import { HTTPException } from "hono/http-exception";
-import { and, asc, eq, isNull } from "drizzle-orm";
+import { and, asc, eq, isNull, gte } from "drizzle-orm";
 import { z } from "zod";
 import { db, schema } from "../db/index.ts";
-import { auth, requirePermission, type AppEnv } from "../lib/auth.ts";
+import { auth, permissionsOf, requirePermission, type AppEnv } from "../lib/auth.ts";
 import { audit } from "../lib/audit.ts";
 import {
   AutotaskError,
@@ -24,7 +24,7 @@ import { O365Error, o365Settings, saveO365Settings, testO365 } from "../lib/o365
 import { normalizePhone, saveSmsSettings, sendSms, SmsError, smsSettings, testVoipms, type SmsSettings } from "../lib/voipms.ts";
 import { config } from "../config.ts";
 import { microsoftRedirectUri } from "./microsoft.ts";
-import { AI_MODELS, AiError, aiSettings, askClaude, saveAiSettings, type AiErrorCode } from "../lib/ai.ts";
+import { AI_FEATURE_KEYS, AI_MODELS, AI_PRICES, AiError, aiSettings, askClaude, saveAiSettings, startOfToday, type AiErrorCode, type AiSettings } from "../lib/ai.ts";
 
 const zCred = z.string().trim().min(1).max(300);
 
@@ -52,6 +52,19 @@ async function current() {
 }
 
 /** Microsoft 365 settings as shown to the admin (never the secret). */
+/** The Claude settings for the admin page (never the key). */
+const aiView = (s: AiSettings) => ({
+  enabled: s.enabled,
+  model: s.model,
+  models: AI_MODELS,
+  hasKey: Boolean(s.apiKey),
+  lastTest: s.lastTest ?? null,
+  /** Per part: its own model, or null (the general one) */
+  features: AI_FEATURE_KEYS.map((k) => ({ key: k, model: s.featureModels[k] ?? null })),
+  allowChoice: s.allowChoice,
+  dailyLimitUsd: s.dailyLimitUsd,
+  prices: AI_PRICES,
+});
 const o365View = (s: Awaited<ReturnType<typeof o365Settings>>) => ({ enabled: s.enabled, tenantId: s.tenantId, clientId: s.clientId, hasSecret: Boolean(s.secret), lastTest: s.lastTest ?? null });
 
 /** VoIP.ms settings as shown to the admin: never the API password; the callback address to paste in VoIP.ms. */
@@ -338,20 +351,120 @@ export const integrationRoutes = new Hono<AppEnv>()
   })
 
   // ── AI assistant (Anthropic Claude) ──
-  .get("/ai", async (c) => {
-    const s = await aiSettings();
-    return c.json({ enabled: s.enabled, model: s.model, models: AI_MODELS, hasKey: Boolean(s.apiKey), lastTest: s.lastTest ?? null });
-  })
+  .get("/ai", async (c) => c.json(aiView(await aiSettings())))
   .put("/ai", async (c) => {
     const a = auth(c);
-    const p = await body(c, z.object({ enabled: z.boolean().optional(), model: z.enum(AI_MODELS).optional(), apiKey: zCred.optional() }));
+    const p = await body(
+      c,
+      z.object({
+        enabled: z.boolean().optional(),
+        model: z.enum(AI_MODELS).optional(),
+        apiKey: zCred.optional(),
+        featureModels: z.partialRecord(z.enum(AI_FEATURE_KEYS), z.enum(AI_MODELS)).optional(),
+        allowChoice: z.boolean().optional(),
+        dailyLimitUsd: z.number().min(0).max(1000).nullable().optional(),
+      }),
+    );
     const s = await aiSettings();
     if (p.enabled && !(p.apiKey ?? s.apiKey)) throw new HTTPException(400, { message: "ai_incomplete" });
-    await saveAiSettings(a.user.id, p);
-    await audit(a.user.id, "integration.ai.updated", null, { enabled: p.enabled, model: p.model, keyChanged: p.apiKey !== undefined || undefined });
-    const n = await aiSettings();
-    return c.json({ enabled: n.enabled, model: n.model, models: AI_MODELS, hasKey: Boolean(n.apiKey), lastTest: n.lastTest ?? null });
+    await saveAiSettings(a.user.id, p as Partial<AiSettings> & { apiKey?: string });
+    await audit(a.user.id, "integration.ai.updated", null, {
+      enabled: p.enabled,
+      model: p.model,
+      keyChanged: p.apiKey !== undefined || undefined,
+      featureModels: p.featureModels,
+      allowChoice: p.allowChoice,
+      dailyLimitUsd: p.dailyLimitUsd,
+    });
+    return c.json(aiView(await aiSettings()));
   })
+  /** One person's daily limit (null: the general one). */
+  .put("/ai/limits/:userId", async (c) => {
+    const a = auth(c);
+    const userId = zUuid.parse(c.req.param("userId"));
+    const p = await body(c, z.object({ limitUsd: z.number().min(0).max(1000).nullable() }));
+    const s = await aiSettings();
+    const userLimits = { ...s.userLimits };
+    if (p.limitUsd === null) delete userLimits[userId];
+    else userLimits[userId] = p.limitUsd;
+    await saveAiSettings(a.user.id, { userLimits });
+    await audit(a.user.id, "integration.ai.user_limit", userId, { limitUsd: p.limitUsd });
+    return c.json({ ok: true });
+  })
+
+  /** Usage summary: today and the last days, per day, person, part of the portal and model. */
+  .get("/ai/usage", async (c) => {
+    const days = Math.min(90, Math.max(1, Number(c.req.query("days")) || 30));
+    const since = new Date(startOfToday().getTime() - (days - 1) * 86_400_000);
+    const today = startOfToday();
+    const s = await aiSettings();
+    const rows = await db()
+      .select({ userId: schema.aiUsage.userId, feature: schema.aiUsage.feature, model: schema.aiUsage.model, input: schema.aiUsage.inputTokens, output: schema.aiUsage.outputTokens, micros: schema.aiUsage.costMicros, at: schema.aiUsage.createdAt })
+      .from(schema.aiUsage)
+      .where(gte(schema.aiUsage.createdAt, since));
+    const staff = await db().select({ id: schema.users.id, name: schema.users.name }).from(schema.users).where(eq(schema.users.kind, "staff"));
+    const name = (id: string | null) => (id ? (staff.find((u) => u.id === id)?.name ?? "—") : null);
+    const dayOf = (d: Date) => new Intl.DateTimeFormat("sv-SE", { timeZone: "America/Toronto" }).format(d);
+    const add = <K extends string>(m: Map<K, { requests: number; micros: number; input: number; output: number }>, k: K, r: (typeof rows)[number]) => {
+      const v = m.get(k) ?? { requests: 0, micros: 0, input: 0, output: 0 };
+      v.requests++;
+      v.micros += r.micros;
+      v.input += r.input;
+      v.output += r.output;
+      m.set(k, v);
+    };
+    const byDay = new Map<string, { requests: number; micros: number; input: number; output: number }>();
+    const byUser = new Map<string, { requests: number; micros: number; input: number; output: number }>();
+    const byUserToday = new Map<string, { requests: number; micros: number; input: number; output: number }>();
+    const byFeature = new Map<string, { requests: number; micros: number; input: number; output: number }>();
+    const byModel = new Map<string, { requests: number; micros: number; input: number; output: number }>();
+    const total = new Map<"all" | "today", { requests: number; micros: number; input: number; output: number }>();
+    for (const r of rows) {
+      add(byDay, dayOf(r.at), r);
+      add(byUser, r.userId ?? "", r);
+      add(byFeature, r.feature, r);
+      add(byModel, r.model, r);
+      add(total, "all", r);
+      if (r.at >= today) {
+        add(total, "today", r);
+        add(byUserToday, r.userId ?? "", r);
+      }
+    }
+    const usd = (v?: { micros: number }) => (v?.micros ?? 0) / 1_000_000;
+    const list = (days2: number) =>
+      Array.from({ length: days2 }, (_, i) => {
+        const d = dayOf(new Date(today.getTime() - (days2 - 1 - i) * 86_400_000 + 43_200_000));
+        const v = byDay.get(d);
+        return { day: d, costUsd: usd(v), requests: v?.requests ?? 0 };
+      });
+    // every technician with the AI right shows, with their limit, even without use
+    const people = await db().select().from(schema.users).where(eq(schema.users.kind, "staff"));
+    const withAi: { id: string; name: string }[] = [];
+    for (const u of people) if (u.active && (await permissionsOf(u)).includes("tickets.ai")) withAi.push({ id: u.id, name: u.name });
+    const ids = new Set([...withAi.map((u) => u.id), ...[...byUser.keys()].filter(Boolean)]);
+    return c.json({
+      days,
+      prices: AI_PRICES,
+      dailyLimitUsd: s.dailyLimitUsd,
+      total: { costUsd: usd(total.get("all")), requests: total.get("all")?.requests ?? 0, inputTokens: total.get("all")?.input ?? 0, outputTokens: total.get("all")?.output ?? 0 },
+      today: { costUsd: usd(total.get("today")), requests: total.get("today")?.requests ?? 0 },
+      byDay: list(days),
+      byUser: [...ids]
+        .map((id) => ({
+          userId: id,
+          name: name(id) ?? withAi.find((u) => u.id === id)?.name ?? "—",
+          todayUsd: usd(byUserToday.get(id)),
+          periodUsd: usd(byUser.get(id)),
+          requests: byUser.get(id)?.requests ?? 0,
+          limitUsd: id in s.userLimits ? s.userLimits[id] : null,
+        }))
+        .sort((x, y) => y.periodUsd - x.periodUsd || x.name.localeCompare(y.name)),
+      admin: { costUsd: usd(byUser.get("")), requests: byUser.get("")?.requests ?? 0 },
+      byFeature: [...byFeature].map(([feature, v]) => ({ feature, costUsd: usd(v), requests: v.requests })).sort((x, y) => y.costUsd - x.costUsd),
+      byModel: [...byModel].map(([model, v]) => ({ model, costUsd: usd(v), requests: v.requests, inputTokens: v.input, outputTokens: v.output })).sort((x, y) => y.costUsd - x.costUsd),
+    });
+  })
+
   .post("/ai/test", async (c) => {
     const a = auth(c);
     const p = await body(c, z.object({ apiKey: zCred.optional(), model: z.enum(AI_MODELS).optional() }));

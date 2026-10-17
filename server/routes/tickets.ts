@@ -1,4 +1,4 @@
-import { Hono } from "hono";
+import { Hono, type Context } from "hono";
 import { HTTPException } from "hono/http-exception";
 import { and, asc, desc, eq, inArray, isNull } from "drizzle-orm";
 import { z } from "zod";
@@ -7,7 +7,7 @@ import { auth, requirePermission, type AppEnv, type AuthContext } from "../lib/a
 import { body, zEmail } from "../lib/validate.ts";
 import { audit } from "../lib/audit.ts";
 import { rateLimit } from "../lib/http.ts";
-import { AiError, aiSettings, askClaude, askClaudeJson } from "../lib/ai.ts";
+import { AI_FEATURE_KEYS, AI_MODELS, AiError, aiSettings, askClaude, askClaudeJson, modelFor, todayOf, type AiModel } from "../lib/ai.ts";
 import { AutotaskError, PERMISSION_REFUSED } from "../lib/autotask.ts";
 import { sweepTimers, timerView, elapsedMs } from "../lib/timers.ts";
 import { SourceError, ticketSource, type Asset, type NTicket, type Options, type TicketSource } from "../lib/ticketSource.ts";
@@ -74,11 +74,16 @@ const zPlan = z.object({
 });
 function aiHttpError(e: unknown) {
   if (e instanceof AiError) {
-    const status = e.code === "not_configured" || e.code === "disabled" || e.code === "billing" ? 409 : e.code === "rate_limit" ? 429 : 502;
+    const status = e.code === "not_configured" || e.code === "disabled" || e.code === "billing" ? 409 : e.code === "rate_limit" || e.code === "daily_limit" ? 429 : 502;
     console.warn("[ai]", e.message);
     return new HTTPException(status, { message: `ai_${e.code}` });
   }
   return sourceError(e);
+}
+/** A model picked next to an AI button (optional). */
+async function askedModel(c: Context<AppEnv>): Promise<AiModel | null> {
+  const raw = (await c.req.json().catch(() => ({}))) as { model?: unknown };
+  return AI_MODELS.includes(raw?.model as AiModel) ? (raw.model as AiModel) : null;
 }
 const aiLimit = (userId: string) => {
   if (!rateLimit(`ai:${userId}`, 30, 60 * 60_000).ok) throw new HTTPException(429, { message: "rate_limited" });
@@ -370,9 +375,22 @@ export const ticketRoutes = new Hono<AppEnv>()
   })
 
   // ── AI: plan my open tickets (order + suggested start dates) ──
+  /** For the AI buttons: the model of each part, whether another may be picked, and today's spending. */
+  .get("/ai/options", requirePermission("tickets.ai"), async (c) => {
+    const a = auth(c);
+    const s = await aiSettings();
+    return c.json({
+      models: AI_MODELS,
+      allowChoice: s.allowChoice,
+      features: Object.fromEntries(AI_FEATURE_KEYS.map((k) => [k, modelFor(s, k)])),
+      today: await todayOf(s, a.user.id),
+    });
+  })
+
   .post("/ai/plan", requirePermission("tickets.ai"), async (c) => {
     const a = auth(c);
     aiLimit(a.user.id);
+    const model = await askedModel(c);
     const src = await ticketSource();
     const [all, o, meId] = await run(() => Promise.all([src.list(), src.options(), src.meId(a)]));
     const L = lookup(o);
@@ -387,6 +405,9 @@ export const ticketRoutes = new Hono<AppEnv>()
     try {
       const out = await askClaudeJson<unknown>({
         system: `${aiRole(a.user.locale)} Tu aides un technicien à planifier ses billets. Aujourd'hui : ${today}, journée de travail 8 h à 17 h, lundi au vendredi.`,
+        feature: "tickets.plan",
+        userId: a.user.id,
+        model,
         prompt: `Voici mes billets ouverts :\n${lines.join("\n")}\n\nPropose un ordre de traitement et une date de début (AAAA-MM-JJ, au plus tôt aujourd'hui, jours ouvrables) pour chacun, en tenant compte des échéances, des priorités et d'une charge réaliste (environ 4 à 6 billets par jour). Format : {"overview": "2 ou 3 phrases", "items": [{"id": nombre, "order": nombre, "startDate": "AAAA-MM-JJ", "reason": "courte justification"}]}`,
         maxTokens: 6000,
       });
@@ -714,11 +735,15 @@ export const ticketRoutes = new Hono<AppEnv>()
   .post("/:id/ai/analyze", requirePermission("tickets.ai"), async (c) => {
     const a = auth(c);
     aiLimit(a.user.id);
+    const model = await askedModel(c);
     const id = Number(c.req.param("id"));
     try {
       const tk = await ticketForAi(await ticketSource(), id);
       const out = await askClaudeJson<unknown>({
         system: `${aiRole(a.user.locale)} Tu analyses un billet de support pour le technicien.`,
+        feature: "ticket.analyze",
+        userId: a.user.id,
+        model,
         prompt: `${tk}\n\nAnalyse ce billet. Format : {"summary": "résumé en 2 à 4 phrases", "nextSteps": ["étapes concrètes, dans l'ordre"], "risks": ["points d'attention, s'il y en a"], "questions": ["questions à poser au client, s'il en manque"], "suggestedPriority": "critical|high|medium|low"}`,
         maxTokens: 4000,
       });
@@ -736,10 +761,14 @@ export const ticketRoutes = new Hono<AppEnv>()
   .post("/:id/ai/reply", requirePermission("tickets.ai"), async (c) => {
     const a = auth(c);
     aiLimit(a.user.id);
+    const model = await askedModel(c);
     try {
       const tk = await ticketForAi(await ticketSource(), Number(c.req.param("id")));
       const text = await askClaude({
         system: `${aiRole(a.user.locale)} Tu rédiges des réponses aux clients : courtoises, claires, sans jargon, sans promettre de délai précis.`,
+        feature: "ticket.reply",
+        userId: a.user.id,
+        model,
         prompt: `${tk}\n\nRédige la prochaine réponse au client (texte seul, sans objet), signée « ${a.user.name.split(" ")[0]} – AKAB Informatique ».`,
         maxTokens: 2000,
       });

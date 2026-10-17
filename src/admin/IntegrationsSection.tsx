@@ -17,6 +17,8 @@ import { useConfirm } from "@/components/ConfirmDialog";
 import { dateTime } from "@/lib/format";
 import { cn } from "@/lib/utils";
 import { SectionHeader } from "./sections";
+import { AI_USAGE_KEY, AiUsagePanel } from "./AiUsage";
+import { shortModel } from "@/components/AiModelPicker";
 
 type ErrorCode = "not_configured" | "disabled" | "zone" | "auth" | "rate_limit" | "network" | "api";
 type Settings = {
@@ -522,7 +524,18 @@ function AutotaskLinks() {
 }
 
 // ── AI assistant (Anthropic Claude) ───────────────────────────────────────────
-type AiSettingsView = { enabled: boolean; model: string; models: string[]; hasKey: boolean; lastTest: { ok: boolean; at: string; error?: string } | null };
+type AiSettingsView = {
+  enabled: boolean;
+  model: string;
+  models: string[];
+  hasKey: boolean;
+  lastTest: { ok: boolean; at: string; error?: string } | null;
+  /** Per part of the portal: its own model, or null (the general one) */
+  features: { key: string; model: string | null }[];
+  allowChoice: boolean;
+  dailyLimitUsd: number | null;
+  prices: Record<string, { input: number; output: number }>;
+};
 const AI_KEY = ["admin", "integrations", "ai"];
 
 function AiStatus() {
@@ -548,18 +561,35 @@ function AiPage() {
   const [apiKey, setApiKey] = useState("");
   const [model, setModel] = useState("");
   const [enabled, setEnabled] = useState(false);
+  const [featureModels, setFeatureModels] = useState<Record<string, string>>({});
+  const [allowChoice, setAllowChoice] = useState(true);
+  const [limit, setLimit] = useState("");
   const [test, setTest] = useState<{ ok: boolean; error?: string; detail?: string } | null>(null);
   useEffect(() => {
     if (!s) return;
     setModel(s.model);
     setEnabled(s.enabled);
     setApiKey("");
+    setFeatureModels(Object.fromEntries(s.features.filter((x) => x.model).map((x) => [x.key, x.model!])));
+    setAllowChoice(s.allowChoice);
+    setLimit(s.dailyLimitUsd === null ? "" : String(s.dailyLimitUsd));
   }, [s]);
+  const limitValue = limit.trim() === "" ? null : Number(limit.replace(",", "."));
   const save = useMutation({
-    mutationFn: () => api.put<AiSettingsView>("/admin/integrations/ai", { enabled, model: model || s?.model, ...(apiKey.trim() ? { apiKey: apiKey.trim() } : {}) }),
+    mutationFn: () =>
+      api.put<AiSettingsView>("/admin/integrations/ai", {
+        enabled,
+        model: model || s?.model,
+        ...(apiKey.trim() ? { apiKey: apiKey.trim() } : {}),
+        featureModels,
+        allowChoice,
+        dailyLimitUsd: limitValue,
+      }),
     onSuccess: (next) => {
       qc.setQueryData(AI_KEY, next);
       void qc.invalidateQueries({ queryKey: ["tickets"] });
+      void qc.invalidateQueries({ queryKey: ["ai", "options"] });
+      void qc.invalidateQueries({ queryKey: AI_USAGE_KEY });
       setTest(null);
       toast.success(t("common.saved"));
     },
@@ -574,6 +604,7 @@ function AiPage() {
   });
   if (isLoading || !s) return <Skeleton className="h-72 rounded-2xl" />;
   return (
+    <div className="space-y-5">
     <section className="overflow-hidden rounded-2xl border bg-card/80">
       <div className="flex flex-wrap items-center gap-4 border-b px-6 py-5">
         <span className="flex size-11 items-center justify-center rounded-xl bg-violet-500/20 text-violet-200">
@@ -624,11 +655,58 @@ function AiPage() {
         <p className="flex items-start gap-2 text-xs text-muted-foreground">
           <KeyRound className="mt-0.5 size-3.5 shrink-0 text-primary" /> {t("integrations.ai.note")}
         </p>
+
+        {/* A model per part of the portal */}
+        <div className="space-y-3 rounded-xl border bg-background/40 p-4">
+          <div>
+            <p className="text-sm font-medium">{t("integrations.ai.perFeature")}</p>
+            <p className="text-xs text-muted-foreground">{t("integrations.ai.perFeatureHint")}</p>
+          </div>
+          <ul className="divide-y rounded-lg border">
+            {s.features.map((fe) => (
+              <li key={fe.key} className="flex flex-wrap items-center gap-3 px-3 py-2">
+                <span className="min-w-40 flex-1 text-sm">{t(`integrations.ai.features.${fe.key.replace(/\./g, "_")}`, { defaultValue: fe.key })}</span>
+                <Select value={featureModels[fe.key] ?? "general"} onValueChange={(v) => setFeatureModels((m) => (v === "general" ? Object.fromEntries(Object.entries(m).filter(([k]) => k !== fe.key)) : { ...m, [fe.key]: v }))}>
+                  <SelectTrigger className="h-8 w-60 text-xs">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="general">{t("integrations.ai.generalModel", { model: shortModel(model || s.model) })}</SelectItem>
+                    {s.models.map((m) => (
+                      <SelectItem key={m} value={m}>
+                        {shortModel(m)} · {t("integrations.ai.price", { input: s.prices[m]?.input, output: s.prices[m]?.output })}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </li>
+            ))}
+          </ul>
+          <label className="flex items-center justify-between gap-4 text-sm">
+            <span>
+              {t("integrations.ai.allowChoice")}
+              <span className="block text-xs text-muted-foreground">{t("integrations.ai.allowChoiceHint")}</span>
+            </span>
+            <Switch checked={allowChoice} onCheckedChange={setAllowChoice} />
+          </label>
+        </div>
+
+        {/* Spending per person per day */}
+        <div className="flex flex-wrap items-end gap-3 rounded-xl border bg-background/40 p-4">
+          <div className="min-w-56 flex-1 space-y-1">
+            <Label htmlFor="ai-limit">{t("integrations.ai.dailyLimit")}</Label>
+            <p className="text-xs text-muted-foreground">{t("integrations.ai.dailyLimitHint")}</p>
+          </div>
+          <div className="relative w-36">
+            <Input id="ai-limit" inputMode="decimal" value={limit} onChange={(e) => setLimit(e.target.value)} placeholder={t("integrations.ai.usage.noLimit")} className="pr-8" />
+            <span className="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 text-xs text-muted-foreground">$</span>
+          </div>
+        </div>
         <div className="flex flex-wrap gap-2">
           <Button type="button" variant="outline" onClick={() => runTest.mutate()} disabled={runTest.isPending}>
             {runTest.isPending ? <Loader2 className="size-4 animate-spin" /> : <RefreshCw className="size-4" />} {t("integrations.test")}
           </Button>
-          <Button type="submit" disabled={save.isPending} className="bg-grad-gold font-semibold text-[#1a1204] hover:brightness-105">
+          <Button type="submit" disabled={save.isPending || (limitValue !== null && !(limitValue >= 0))} className="bg-grad-gold font-semibold text-[#1a1204] hover:brightness-105">
             {save.isPending && <Loader2 className="size-4 animate-spin" />} {t("common.save")}
           </Button>
         </div>
@@ -648,6 +726,8 @@ function AiPage() {
           ))}
       </form>
     </section>
+    {s.hasKey && <AiUsagePanel />}
+    </div>
   );
 }
 

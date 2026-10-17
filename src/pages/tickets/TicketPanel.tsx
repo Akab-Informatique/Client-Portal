@@ -56,6 +56,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { Textarea } from "@/components/ui/textarea";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { api, ApiError } from "@/lib/api";
+import { AiModelSub, AiTodayLine, useAiModel } from "@/components/AiModelPicker";
 import { useCan, useMe } from "@/lib/session";
 import { cn, initials } from "@/lib/utils";
 import { GlassBackdrop } from "@/components/brand/GlassBackdrop";
@@ -75,6 +76,7 @@ export function useAiError() {
   const { t } = useTranslation();
   return (e: unknown) => {
     const code = e instanceof ApiError ? e.code : "";
+    if (code === "ai_daily_limit") return t("tickets.ai.errors.daily_limit");
     if (e instanceof ApiError && e.status === 429) return t("tickets.ai.errors.rate_limit");
     return t(`tickets.ai.errors.${code.replace(/^ai_/, "")}`, { defaultValue: t("tickets.ai.errors.api") });
   };
@@ -1134,14 +1136,23 @@ function AiMenu({ tk, onReply }: { tk: TicketDetail; onReply: (text: string) => 
   const { t } = useTranslation();
   const qc = useQueryClient();
   const aiError = useAiError();
+  const analyzeModel = useAiModel("ticket.analyze");
+  const replyModel = useAiModel("ticket.reply");
+  const done = () => void qc.invalidateQueries({ queryKey: ["ai", "options"] });
   const analyze = useMutation({
-    mutationFn: () => api.post<AiAnalysis>(`/tickets/${tk.id}/ai/analyze`),
-    onSuccess: () => void qc.invalidateQueries({ queryKey: ["tickets", "ai", tk.id] }),
+    mutationFn: () => api.post<AiAnalysis>(`/tickets/${tk.id}/ai/analyze`, analyzeModel.body),
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: ["tickets", "ai", tk.id] });
+      done();
+    },
     onError: (e) => toast.error(aiError(e)),
   });
   const reply = useMutation({
-    mutationFn: () => api.post<{ text: string }>(`/tickets/${tk.id}/ai/reply`),
-    onSuccess: (r) => onReply(r.text),
+    mutationFn: () => api.post<{ text: string }>(`/tickets/${tk.id}/ai/reply`, replyModel.body),
+    onSuccess: (r) => {
+      onReply(r.text);
+      done();
+    },
     onError: (e) => toast.error(aiError(e)),
   });
   const busy = analyze.isPending || reply.isPending;
@@ -1168,6 +1179,15 @@ function AiMenu({ tk, onReply }: { tk: TicketDetail; onReply: (text: string) => 
             <span className="block text-xs text-muted-foreground">{t("tickets.ai.replyHint")}</span>
           </span>
         </DropdownMenuItem>
+        {analyzeModel.options?.allowChoice && (
+          <>
+            <DropdownMenuSeparator />
+            <DropdownMenuLabel className="text-[11px] font-medium text-muted-foreground">{t("ai.picker.title")}</DropdownMenuLabel>
+            <AiModelSub feature="ticket.analyze" label={t("tickets.ai.analyze")} m={analyzeModel} />
+            <AiModelSub feature="ticket.reply" label={t("tickets.ai.reply")} m={replyModel} />
+          </>
+        )}
+        <AiTodayLine />
         <DropdownMenuSeparator />
         <p className="px-2 py-1.5 text-[11px] text-muted-foreground">{t("tickets.ai.privacy")}</p>
       </DropdownMenuContent>
@@ -1181,8 +1201,9 @@ function AiPanel({ tk, onToNote }: { tk: TicketDetail; onToNote: (text: string) 
   const qc = useQueryClient();
   const aiError = useAiError();
   const { data: list = [] } = useQuery({ queryKey: ["tickets", "ai", tk.id], queryFn: () => api.get<AiAnalysis[]>(`/tickets/${tk.id}/ai`) });
+  const analyzeModel = useAiModel("ticket.analyze");
   const again = useMutation({
-    mutationFn: () => api.post<AiAnalysis>(`/tickets/${tk.id}/ai/analyze`),
+    mutationFn: () => api.post<AiAnalysis>(`/tickets/${tk.id}/ai/analyze`, analyzeModel.body),
     onSuccess: () => void qc.invalidateQueries({ queryKey: ["tickets", "ai", tk.id] }),
     onError: (e) => toast.error(aiError(e)),
   });

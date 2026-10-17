@@ -1082,6 +1082,52 @@ describe("tickets: inline edit, notes, team filter and AI", () => {
     } finally {
       vi.unstubAllGlobals();
     }
+
+    // a model per part of the portal, another one picked next to the button, usage and cost, daily limits
+    await db().delete(schema.aiUsage);
+    await admin.put("/api/admin/integrations/ai", { enabled: true, featureModels: { "ticket.reply": "claude-haiku-5-5" }, dailyLimitUsd: null });
+    const models: string[] = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (_u: unknown, init: RequestInit = {}) => {
+        models.push(JSON.parse(String(init.body)).model);
+        return new Response(JSON.stringify({ content: [{ type: "text", text: "Bonjour, c'est réglé." }], usage: { input_tokens: 1_000_000, output_tokens: 100_000 } }), { status: 200 });
+      }),
+    );
+    try {
+      expect((await admin.get("/api/tickets/ai/options")).json).toMatchObject({ allowChoice: true, features: { "ticket.reply": "claude-haiku-5-5", "ticket.analyze": "claude-haiku-5-5" }, today: { spentUsd: 0, limitUsd: null } });
+      await admin.post(`/api/tickets/${id}/ai/reply`);
+      await admin.post(`/api/tickets/${id}/ai/reply`, { model: "claude-opus-5-5" });
+      expect(models).toEqual(["claude-haiku-5-5", "claude-opus-5-5"]);
+      // the choice can be turned off: the part's model is used
+      await admin.put("/api/admin/integrations/ai", { allowChoice: false });
+      await admin.post(`/api/tickets/${id}/ai/reply`, { model: "claude-opus-5-5" });
+      expect(models.at(-1)).toBe("claude-haiku-5-5");
+      // cost: Haiku $0.10 + $0.05, Opus $4 + $2 (1 M in, 0.1 M out)
+      const u = (await admin.get("/api/admin/integrations/ai/usage?days=7")).json;
+      expect(u.today.requests).toBe(3);
+      expect(u.today.costUsd).toBeCloseTo(0.15 + 6 + 0.15, 5);
+      expect(u.byFeature).toEqual([{ feature: "ticket.reply", costUsd: expect.closeTo(6.3, 5), requests: 3 }]);
+      expect(u.byModel.map((m: any) => m.model)).toEqual(["claude-opus-5-5", "claude-haiku-5-5"]);
+      expect(u.byDay).toHaveLength(7);
+      const [adminRow] = await db().select().from(schema.users).where(eq(schema.users.email, "admin@akab.local"));
+      expect(u.byUser.find((x: any) => x.userId === adminRow.id)).toMatchObject({ name: "Administrateur AKAB", todayUsd: expect.closeTo(6.3, 5), requests: 3 });
+      // a daily limit per person: reached, no more AI today
+      await admin.put("/api/admin/integrations/ai", { dailyLimitUsd: 5 });
+      expect((await admin.post(`/api/tickets/${id}/ai/reply`)).json.error).toBe("ai_daily_limit");
+      // one person may get more (or nothing: 0)
+      await admin.put(`/api/admin/integrations/ai/limits/${adminRow.id}`, { limitUsd: 20 });
+      expect((await admin.post(`/api/tickets/${id}/ai/reply`)).status).toBe(200);
+      await admin.put(`/api/admin/integrations/ai/limits/${adminRow.id}`, { limitUsd: 0 });
+      expect((await admin.post(`/api/tickets/${id}/ai/reply`)).json.error).toBe("ai_daily_limit");
+      await admin.put(`/api/admin/integrations/ai/limits/${adminRow.id}`, { limitUsd: null });
+      expect((await admin.get("/api/tickets/ai/options")).json.today).toMatchObject({ limitUsd: 5 });
+      // the settings and the summary are for admins
+      expect((await tech.get("/api/admin/integrations/ai/usage")).status).toBe(403);
+    } finally {
+      vi.unstubAllGlobals();
+      await admin.put("/api/admin/integrations/ai", { allowChoice: true, dailyLimitUsd: null, featureModels: {} });
+    }
     await admin.put("/api/admin/integrations/ai", { enabled: false });
   });
 });
