@@ -354,15 +354,21 @@ export const ticketRoutes = new Hono<AppEnv>()
     }
 
     const sort = q.sort ?? "due";
+    // in "my tickets", my priorities come first (of the day, then of the week), then the chosen order
+    const rankOf = (x: object) => {
+      const p = (x as { myPriority?: "day" | "week" }).myPriority;
+      return (q.view ?? "mine") === "mine" ? (p === "day" ? 0 : p === "week" ? 1 : 2) : 2;
+    };
     items.sort((x, y) =>
-      sort === "priority"
+      rankOf(x) - rankOf(y) ||
+      (sort === "priority"
         ? PRIORITY_ORDER[x.priorityKind] - PRIORITY_ORDER[y.priorityKind] || x.dueAt.localeCompare(y.dueAt)
         : sort === "updated"
           ? y.updatedAt.localeCompare(x.updatedAt)
           : sort === "start"
             ? (x.startDate ?? "9999").localeCompare(y.startDate ?? "9999") || x.dueAt.localeCompare(y.dueAt)
             : // default: due date, then start date
-              x.dueAt.localeCompare(y.dueAt) || (x.startDate ?? "9999").localeCompare(y.startDate ?? "9999"),
+              x.dueAt.localeCompare(y.dueAt) || (x.startDate ?? "9999").localeCompare(y.startDate ?? "9999")),
     );
 
     // Key figures for the tiles (whole set, not the current filters)

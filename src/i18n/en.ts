@@ -474,6 +474,9 @@ const en: Dict = {
     },
   },
   planning: {
+    clickOpensTicket: "Click: open the ticket · ✏️: change the slot",
+    clickOpensTicketRead: "Click: open the ticket",
+    noPrioritiesShort: "No priority for now.",
     busy: "Busy",
     openBig: "Open the planning",
     myDay: "My day",

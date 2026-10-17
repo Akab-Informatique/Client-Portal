@@ -1438,6 +1438,22 @@ describe("tickets: client and contact", () => {
     await admin.del(`/api/planning/calendar/${theirs.json.id}`);
     await admin.put(`/api/admin/users/${techRow.id}/permissions`, { overrides: [{ key: "tickets.planSelf", effect: "allow" }] });
     expect((await tech.post("/api/planning/pins", { ticketId: tk.id, technicianId: techRow.id, horizon: "day", note: "Moi-même" })).status).toBe(201);
+    // in "my tickets", my priorities come first (whatever the order chosen); other views keep their order
+    const myList = (await tech.get("/api/tickets")).json.items;
+    const last = myList.at(-1);
+    const lastPin = await tech.post("/api/planning/pins", { ticketId: last.id, technicianId: techRow.id, horizon: "day" });
+    expect(lastPin.status).toBe(201);
+    const rank = (x: any) => (x.myPriority === "day" ? 0 : x.myPriority === "week" ? 1 : 2);
+    for (const q of ["", "?sort=updated", "?sort=priority"]) {
+      const list = (await tech.get(`/api/tickets${q}`)).json.items;
+      // of the day, then of the week, then the others
+      expect(list.map(rank)).toEqual([...list.map(rank)].sort((a: number, b: number) => a - b));
+      expect(list.find((x: any) => x.id === last.id)).toMatchObject({ myPriority: "day" });
+      expect(rank(list[0])).toBe(0);
+    }
+    const all = (await tech.get("/api/tickets?view=all")).json.items;
+    expect(all.findIndex((x: any) => x.id === last.id)).toBeGreaterThan(1);
+    await tech.del(`/api/planning/pins/${lastPin.json.id}`);
     expect((await tech.post("/api/planning/pins", { ticketId: tk.id, technicianId: adminRow.id })).status).toBe(403);
 
     // block kinds: on site needs a ticket; reserved slot does not

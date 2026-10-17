@@ -1,21 +1,21 @@
-import { useEffect, useMemo, useState, type FormEvent, type ReactNode } from "react";
+import { useEffect, useMemo, useState, type FormEvent, type ReactNode, createContext, useContext } from "react";
 import { useTranslation } from "react-i18next";
 import { keepPreviousData, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import {
   ArrowDown,
   ArrowUp,
+  BellRing,
+  CalendarClock,
   CalendarDays,
   CalendarRange,
   Check,
   ChevronLeft,
   ChevronRight,
+  EyeOff,
   Loader2,
   MapPin,
-  BellRing,
-  CalendarClock,
   Maximize2,
-  EyeOff,
   Pencil,
   Pin,
   Plus,
@@ -144,6 +144,8 @@ export function usePriorities(technicianId: string, date = ymd(new Date())) {
 }
 
 type TeamMember = Person & { full?: boolean };
+/** How a ticket opens from the planning (the big view closes first). */
+const OpenTicketCtx = createContext<((id: number) => void) | null>(null);
 
 /** The team for the calendar: me first; whether I see each one in full or only busy. */
 function useTeam() {
@@ -163,64 +165,77 @@ function useTeam() {
 export function AgendaCard() {
   const { t } = useTranslation();
   const me = useMe();
+  const ws = useTicketWorkspace();
   const [open, setOpen] = useState(false);
-  const start = new Date();
-  start.setHours(0, 0, 0, 0);
-  const from = start.toISOString();
-  const to = addDays(start, 1).toISOString();
+  const week = mondayOf(new Date());
+  const from = week.toISOString();
+  const to = addDays(week, 7).toISOString();
   const { data: blocks = [] } = useQuery({
-    queryKey: ["planning", "calendar", me.id, "today", from],
+    queryKey: ["planning", "calendar", me.id, from],
     queryFn: () => api.get<Block[]>(`/planning/calendar?from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}`),
     refetchInterval: 60_000,
   });
   const { data: outlook } = useQuery({
-    queryKey: ["planning", "outlook", me.id, "today", from],
+    queryKey: ["planning", "outlook", me.id, from],
     queryFn: () => api.get<{ synced: boolean; events: OutlookEvent[] }>(`/planning/calendar/outlook?from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}`),
     staleTime: 60_000,
   });
   const { data: pins } = usePriorities(me.id);
-  const toDo = (pins ?? []).filter((p) => !p.doneAt).length;
-  const now = Date.now();
-  const items = [
-    ...blocks.map((b) => ({ id: b.id, at: b.startsAt, end: b.endsAt, label: b.ticketNumber ? `${b.ticketNumber.slice(-4)} · ${b.title}` : b.title, onsite: b.kind === "onsite" })),
-    ...(outlook?.events ?? []).filter((x) => !x.allDay).map((x) => ({ id: x.id, at: x.startsAt, end: x.endsAt, label: x.title, onsite: false })),
-  ]
-    .filter((x) => new Date(x.end).getTime() > now)
-    .sort((x, y) => x.at.localeCompare(y.at));
+  const toDo = (pins ?? []).filter((p) => !p.doneAt);
+  const days = Array.from({ length: 5 }, (_, i) => addDays(week, i));
+  const today = ymd(new Date());
+  const loc = currentLocale() === "en" ? "en-CA" : "fr-CA";
+  const countOn = (d: Date) => blocks.filter((b) => ymd(new Date(b.startsAt)) === ymd(d)).length + (outlook?.events ?? []).filter((x) => !x.allDay && ymd(new Date(x.startsAt)) === ymd(d)).length;
   return (
     <>
-      <button
-        type="button"
-        onClick={() => setOpen(true)}
-        className="glass group flex min-w-0 flex-col gap-1 rounded-2xl border px-3 py-2 text-left transition hover:border-[color:var(--gold)]/40 lg:w-[340px] lg:shrink-0"
-        aria-label={t("planning.openBig")}
-      >
-        <span className="flex items-center gap-2 text-xs">
-          <CalendarRange className="size-4 text-primary" />
-          <span className="font-semibold">{t("planning.myDay")}</span>
-          <span className="text-muted-foreground">{start.toLocaleDateString(currentLocale() === "en" ? "en-CA" : "fr-CA", { weekday: "long", day: "numeric", month: "short" })}</span>
-          {toDo > 0 && (
-            <span className="ml-auto flex items-center gap-1 rounded-full border border-[color:var(--gold)]/40 px-1.5 text-[10px] text-primary">
-              <Star className="size-2.5 fill-current" /> {toDo}
-            </span>
-          )}
-          <Maximize2 className={cn("size-3.5 text-muted-foreground opacity-0 transition group-hover:opacity-100", toDo === 0 && "ml-auto")} />
-        </span>
-        {items.length === 0 ? (
-          <span className="text-[11px] text-muted-foreground">{t("planning.nothingToday")}</span>
-        ) : (
-          <span className="space-y-0.5">
-            {items.slice(0, 2).map((x) => (
-              <span key={x.id} className="flex items-center gap-2 text-[11px]">
-                <span className="w-10 shrink-0 font-mono tabular-nums text-muted-foreground">{hm(new Date(x.at))}</span>
-                {x.onsite && <MapPin className="size-3 shrink-0 text-orange-300" />}
-                <span className="truncate">{x.label}</span>
-              </span>
-            ))}
-            {items.length > 2 && <span className="block text-[10px] text-muted-foreground">{t("planning.andMore", { count: items.length - 2 })}</span>}
+      <div className="glass flex min-w-0 flex-col gap-2 rounded-2xl border p-2 lg:w-[400px] lg:shrink-0">
+        {/* the week: a click opens the full planning */}
+        <button type="button" onClick={() => setOpen(true)} className="group flex items-center gap-1.5 rounded-xl px-1 text-left" aria-label={t("planning.openBig")}>
+          <CalendarRange className="size-4 shrink-0 text-primary" />
+          <span className="grid flex-1 grid-cols-5 gap-1">
+            {days.map((d) => {
+              const n = countOn(d);
+              const isToday = ymd(d) === today;
+              return (
+                <span key={ymd(d)} className={cn("flex flex-col items-center rounded-lg border py-0.5 leading-none", isToday ? "border-[color:var(--gold)]/60 bg-[color:var(--gold)]/10" : "border-transparent")}>
+                  <span className="text-[9px] uppercase text-muted-foreground">{d.toLocaleDateString(loc, { weekday: "short" }).slice(0, 3)}</span>
+                  <span className={cn("font-mono text-xs font-semibold", isToday && "text-primary")}>{d.getDate()}</span>
+                  <span className="mt-0.5 flex h-1.5 items-center gap-0.5">
+                    {Array.from({ length: Math.min(3, n) }, (_, i) => (
+                      <span key={i} className="size-1 rounded-full bg-[color:var(--gold)]" />
+                    ))}
+                  </span>
+                </span>
+              );
+            })}
           </span>
-        )}
-      </button>
+          <Maximize2 className="size-3.5 shrink-0 text-muted-foreground opacity-60 transition group-hover:opacity-100" />
+        </button>
+        {/* my priority tickets: one click opens the ticket */}
+        <div className="border-t pt-1.5">
+          <p className="flex items-center gap-1 px-1 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
+            <Star className="size-3 fill-[color:var(--gold)] text-[color:var(--gold)]" /> {t("planning.myPriorities")}
+            <span className="ml-auto font-mono normal-case">{toDo.length}</span>
+          </p>
+          {toDo.length === 0 ? (
+            <p className="px-1 py-1 text-[11px] text-muted-foreground">{t("planning.noPrioritiesShort")}</p>
+          ) : (
+            <ul className="mt-0.5 max-h-24 space-y-0.5 overflow-y-auto">
+              {toDo.map((p) => (
+                <li key={p.id}>
+                  <button type="button" onClick={() => ws.open(p.ticketId)} className="flex w-full items-center gap-2 rounded-lg px-1 py-0.5 text-left text-[11px] hover:bg-accent/40" title={p.note || p.ticketTitle}>
+                    <span className={cn("shrink-0 rounded px-1 text-[9px] font-semibold uppercase", p.bucket === "day" ? "bg-grad-gold text-[#1a1204]" : "border border-[color:var(--gold)]/40 text-primary")}>
+                      {t(`planning.badge.${p.bucket === "carried" ? p.horizon : p.bucket}`)}
+                    </span>
+                    <span className="shrink-0 font-mono text-[10px] text-muted-foreground">{p.ticketNumber.slice(-4)}</span>
+                    <span className="truncate">{p.ticketTitle}</span>
+                  </button>
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
+      </div>
       {open && <PlanningDialog onClose={() => setOpen(false)} />}
     </>
   );
@@ -237,7 +252,13 @@ function PlanningDialog({ onClose }: { onClose: () => void }) {
   // May plan for this technician: planners, or oneself with tickets.planSelf
   const planner = can("tickets.plan") || (techId === me.id && can("tickets.planSelf"));
   const full = who.full !== false;
+  const ws = useTicketWorkspace();
+  const openTicket = (id: number) => {
+    onClose();
+    ws.open(id);
+  };
   return (
+    <OpenTicketCtx.Provider value={openTicket}>
     <Dialog open onOpenChange={(o) => !o && onClose()}>
       <DialogContent className="flex h-[min(900px,92dvh)] max-w-[min(1320px,96vw)] flex-col gap-3 p-4 sm:max-w-[min(1320px,96vw)]">
         <DialogHeader className="flex-row flex-wrap items-center gap-3 space-y-0 pr-8">
@@ -288,6 +309,7 @@ function PlanningDialog({ onClose }: { onClose: () => void }) {
         </div>
       </DialogContent>
     </Dialog>
+    </OpenTicketCtx.Provider>
   );
 }
 
@@ -298,6 +320,8 @@ function PrioritiesList({ technicianId, technicianName, planner }: { technicianI
   const qc = useQueryClient();
   const confirm = useConfirm();
   const ws = useTicketWorkspace();
+  // from the big view: it closes, the ticket shows
+  const openTicket = useContext(OpenTicketCtx) ?? ws.open;
   const txt = useChoiceText();
   const { data: pins, isLoading } = usePriorities(technicianId);
   const [editing, setEditing] = useState<Priority | "new" | null>(null);
@@ -352,7 +376,7 @@ function PrioritiesList({ technicianId, technicianName, planner }: { technicianI
                           {p.doneAt && <Check className="size-3" />}
                         </button>
                       )}
-                      <button type="button" onClick={() => ws.open(p.ticketId)} className="min-w-0 flex-1 text-left">
+                      <button type="button" onClick={() => openTicket(p.ticketId)} className="min-w-0 flex-1 text-left">
                         <span className="flex items-baseline gap-2">
                           <span className="shrink-0 font-mono text-[10px] text-muted-foreground">{p.ticketNumber}</span>
                           <span className={cn("truncate font-medium", p.doneAt && "line-through")}>{p.ticketTitle}</span>
@@ -573,6 +597,8 @@ function TicketSearch({ onPick }: { onPick: (t: { id: number; number: string; ti
 function WeekCalendar({ technicianId, technicianName, planner }: { technicianId: string; technicianName: string; planner: boolean }) {
   const { t } = useTranslation();
   const ws = useTicketWorkspace();
+  // from the big view: it closes, the ticket shows
+  const openTicket = useContext(OpenTicketCtx) ?? ws.open;
   const [week, setWeek] = useState(() => mondayOf(new Date()));
   const [weekend, setWeekend] = useState(() => readBool(WEEKEND_KEY, false));
   const [slot, setSlot] = useState<{ block: Block | null; start: Date } | null>(null);
@@ -760,15 +786,36 @@ function WeekCalendar({ technicianId, technicianName, planner }: { technicianId:
                           type="button"
                           onClick={(ev) => {
                             ev.stopPropagation();
-                            if (planner) setSlot({ block: b, start: s });
-                            else if (b.ticketId) ws.open(b.ticketId);
+                            if (b.ticketId) openTicket(b.ticketId);
+                            else if (planner) setSlot({ block: b, start: s });
                           }}
                           className={cn(
-                            "absolute inset-x-0.5 z-[5] overflow-hidden rounded-md border px-1 py-0.5 text-left text-[10px] leading-tight shadow-sm transition hover:brightness-110",
+                            "group/block absolute inset-x-0.5 z-[5] overflow-hidden rounded-md border px-1 py-0.5 text-left text-[10px] leading-tight shadow-sm transition hover:brightness-110",
                             KIND_STYLE[b.kind],
                           )}
                           style={{ top: top(s), height: Math.max(14, top(e) - top(s) - 1) }}
                         >
+                          {planner && b.ticketId && (
+                            <span
+                              role="button"
+                              tabIndex={0}
+                              aria-label={t("planning.editBlock")}
+                              title={t("planning.editBlock")}
+                              onClick={(ev) => {
+                                ev.stopPropagation();
+                                setSlot({ block: b, start: s });
+                              }}
+                              onKeyDown={(ev) => {
+                                if (ev.key === "Enter") {
+                                  ev.stopPropagation();
+                                  setSlot({ block: b, start: s });
+                                }
+                              }}
+                              className="absolute right-0.5 top-0.5 z-10 hidden rounded bg-background/80 p-0.5 text-foreground hover:bg-background group-hover/block:block"
+                            >
+                              <Pencil className="size-2.5" />
+                            </span>
+                          )}
                           <span className="flex items-center gap-0.5 font-mono text-[9px]">
                             {b.kind === "onsite" && <MapPin className="size-2.5 shrink-0 text-orange-300" />}
                             {b.ticketNumber && <span className={b.kind === "onsite" ? "text-orange-200" : "text-primary"}>{b.ticketNumber.slice(-4)}</span>}
@@ -788,6 +835,7 @@ function WeekCalendar({ technicianId, technicianName, planner }: { technicianId:
                         )}
                         {b.ticketNumber && <p className="font-mono text-[10px] opacity-80">{b.ticketNumber}</p>}
                         {b.note && <p className="mt-1 opacity-80">{b.note}</p>}
+                        {b.ticketId && <p className="mt-1 text-[10px] opacity-70">{planner ? t("planning.clickOpensTicket") : t("planning.clickOpensTicketRead")}</p>}
                       </TooltipContent>
                     </Tooltip>
                   );
@@ -822,7 +870,7 @@ function WeekCalendar({ technicianId, technicianName, planner }: { technicianId:
       </p>
       {outlook?.error && <p className="text-[10px] text-orange-300">{outlook.error === "o365_not_signed_in" ? t("planning.outlookNotSignedIn") : t("planning.outlookError")}</p>}
       {planner && <p className="text-[10px] text-muted-foreground">{t("planning.clickToReserve")}</p>}
-      {slot && <BlockDialog technicianId={technicianId} technicianName={technicianName} block={slot.block} start={slot.start} onClose={() => setSlot(null)} onOpenTicket={(id) => ws.open(id)} />}
+      {slot && <BlockDialog technicianId={technicianId} technicianName={technicianName} block={slot.block} start={slot.start} onClose={() => setSlot(null)} onOpenTicket={(id) => openTicket(id)} />}
     </section>
   );
 }

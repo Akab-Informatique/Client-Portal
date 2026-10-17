@@ -472,6 +472,9 @@ const fr = {
     },
   },
   planning: {
+    clickOpensTicket: "Clic : ouvrir le billet · ✏️ : modifier la plage",
+    clickOpensTicketRead: "Clic : ouvrir le billet",
+    noPrioritiesShort: "Aucune priorité pour l'instant.",
     busy: "Occupé",
     openBig: "Ouvrir la planification",
     myDay: "Ma journée",
