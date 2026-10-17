@@ -434,7 +434,7 @@ function MetricTiles({ data, params, apply, onSms }: { data: TicketList | undefi
     return {};
   };
   return (
-    <div className="grid grid-cols-2 gap-3 lg:grid-cols-[repeat(auto-fit,minmax(210px,1fr))]">
+    <div className="flex flex-wrap items-center gap-2">
       {TILES.map((tile, i) => {
         const active = canonical(tile.query) === current || (tile.key === "mine" && current === "");
         const value = data?.metrics[tile.key];
@@ -451,28 +451,17 @@ function MetricTiles({ data, params, apply, onSms }: { data: TicketList | undefi
                   transition={{ delay: i * 0.04 }}
                   style={{ ["--tile-glow" as string]: tile.glow }}
                   className={cn(
-                    "glass group relative flex items-center gap-3.5 overflow-hidden rounded-2xl border px-4 py-3.5 text-left transition-all hover:border-[color:var(--gold)]/40 hover:shadow-[0_0_28px_-14px_var(--tile-glow)]",
-                    active && "border-[color:var(--gold)]/60 bg-[color:var(--gold)]/[0.05] shadow-[0_0_28px_-12px_var(--tile-glow)]",
+                    "glass group flex h-10 items-center gap-2 rounded-xl border px-3 text-left transition-all hover:border-[color:var(--gold)]/40 hover:shadow-[0_0_20px_-12px_var(--tile-glow)]",
+                    active && "border-[color:var(--gold)]/60 bg-[color:var(--gold)]/[0.06] shadow-[0_0_20px_-10px_var(--tile-glow)]",
                   )}
                 >
-                  <span className={cn("flex size-10 shrink-0 items-center justify-center rounded-xl border bg-background/60", tile.tone)}>
-                    <tile.icon className="size-5" />
-                  </span>
-                  <span className="min-w-0 flex-1">
-                    <span className="block truncate text-sm font-semibold">{t(`tickets.metrics.${tile.key}`)}</span>
-                    {tile.key === "attention" && b ? (
-                      <span className="mt-0.5 flex flex-wrap gap-x-2 text-[11px] leading-tight">
-                        <span className="text-red-400">{t("tickets.breakdown.overdue", { count: b.overdue })}</span>
-                        <span className="text-orange-400">{t("tickets.breakdown.dueToday", { count: b.dueToday })}</span>
-                        <span className="text-rose-300">{t("tickets.breakdown.critical", { count: b.critical })}</span>
-                      </span>
-                    ) : (
-                      <span className="mt-0.5 block truncate text-[11px] text-muted-foreground">{t(`tickets.metricsHint.${tile.key}`)}</span>
-                    )}
-                  </span>
-                  <span className={cn("font-mono text-3xl font-semibold tabular-nums", value ? "text-foreground" : "text-muted-foreground/50")}>
+                  <tile.icon className={cn("size-4 shrink-0", tile.tone)} />
+                  <span className="whitespace-nowrap text-xs font-medium">{t(`tickets.metrics.${tile.key}`)}</span>
+                  <span className={cn("font-mono text-base font-semibold tabular-nums", value ? "text-foreground" : "text-muted-foreground/50")}>
                     {value === undefined ? "–" : <CountUp value={value} />}
                   </span>
+                  {/* to watch: the overdue ones in red, the rest in the details */}
+                  {tile.key === "attention" && b && b.overdue > 0 && <span className="rounded-full bg-red-500/15 px-1.5 font-mono text-[10px] text-red-400">{t("tickets.breakdown.overdue", { count: b.overdue })}</span>}
                 </motion.button>
               </TooltipTrigger>
               <TooltipContent side="bottom">
@@ -480,7 +469,7 @@ function MetricTiles({ data, params, apply, onSms }: { data: TicketList | undefi
               </TooltipContent>
             </Tooltip>
             {/* the texts right after my tickets */}
-            {tile.key === "mine" && <SmsTile onOpen={onSms} />}
+            {tile.key === "mine" && <SmsTile onOpen={onSms} compact />}
           </Fragment>
         );
       })}
@@ -501,16 +490,14 @@ function SavedFilterTile({ b, rows, active, onApply, onUnpin }: { b: NonNullable
           type="button"
           onClick={onApply}
           className={cn(
-            "glass group relative flex items-center gap-3.5 overflow-hidden rounded-2xl border px-4 py-3.5 text-left transition-all hover:border-[color:var(--gold)]/40",
-            active && "border-[color:var(--gold)]/60 bg-[color:var(--gold)]/[0.05]",
+            "glass group flex h-10 items-center gap-2 rounded-xl border px-3 text-left transition-all hover:border-[color:var(--gold)]/40",
+            active && "border-[color:var(--gold)]/60 bg-[color:var(--gold)]/[0.06]",
           )}
         >
-          <span className="flex size-10 shrink-0 items-center justify-center rounded-xl border bg-background/60 text-violet-300">
-            <Bookmark className="size-5" />
-          </span>
-          <span className="min-w-0 flex-1">
-            <span className="block truncate text-sm font-semibold">{b.name}</span>
-            <span className="mt-0.5 block truncate text-[11px] text-muted-foreground">{t("tickets.tiles.myFilter")}</span>
+          <Bookmark className="size-4 shrink-0 text-violet-300" />
+          <span className="max-w-48 truncate text-xs font-medium">{b.name}</span>
+          <span className={cn("font-mono text-base font-semibold tabular-nums", b.count ? "text-foreground" : "text-muted-foreground/50")}>
+            <CountUp value={b.count} />
           </span>
           <span
             role="button"
@@ -527,12 +514,9 @@ function SavedFilterTile({ b, rows, active, onApply, onUnpin }: { b: NonNullable
                 onUnpin();
               }
             }}
-            className="absolute right-2 top-2 rounded p-0.5 text-muted-foreground opacity-0 hover:text-foreground group-hover:opacity-100 group-focus-visible:opacity-100"
+            className="-mr-1 hidden rounded p-0.5 text-muted-foreground hover:text-foreground group-hover:block group-focus-visible:block"
           >
             <PinOff className="size-3.5" />
-          </span>
-          <span className={cn("font-mono text-3xl font-semibold tabular-nums", b.count ? "text-foreground" : "text-muted-foreground/50")}>
-            <CountUp value={b.count} />
           </span>
         </button>
       </TooltipTrigger>
