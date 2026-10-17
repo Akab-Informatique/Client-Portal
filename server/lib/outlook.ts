@@ -288,12 +288,25 @@ export async function createFolder(mailbox: string, name: string, parentId?: str
 export async function renameFolder(mailbox: string, id: string, name: string): Promise<void> {
   await graph("PATCH", `${user(mailbox)}/mailFolders/${enc(id)}`, { displayName: name });
 }
-/** Deleting a folder moves it (and its messages) to Deleted Items, like Outlook. Outlook's own folders stay. */
-export async function deleteFolder(mailbox: string, id: string): Promise<void> {
-  const own = await Promise.all(
+/** Outlook's own folders (ids), which cannot be deleted nor moved. */
+async function ownFolderIds(mailbox: string): Promise<(string | null)[]> {
+  return Promise.all(
     [...WELL_KNOWN, "outbox"].map((w) => graph<{ id: string }>("GET", `${user(mailbox)}/mailFolders/${w}?$select=id`).then((f) => f.id).catch(() => null)),
   );
-  if (own.includes(id) || [...WELL_KNOWN, "outbox"].includes(id.toLowerCase())) throw new O365Error("forbidden", "protected_folder");
+}
+const isOwnFolder = (own: (string | null)[], id: string) => own.includes(id) || ([...WELL_KNOWN, "outbox"] as string[]).includes(id.toLowerCase());
+
+/** Move a folder inside another one, or back to the top of the mailbox ("root"). */
+export async function moveFolder(mailbox: string, id: string, destination: string | "root"): Promise<string> {
+  if (destination === id) throw new O365Error("forbidden", "same_folder");
+  if (isOwnFolder(await ownFolderIds(mailbox), id)) throw new O365Error("forbidden", "protected_folder");
+  const r = await graph<{ id: string }>("POST", `${user(mailbox)}/mailFolders/${enc(id)}/move`, { destinationId: destination === "root" ? "msgfolderroot" : destination });
+  return r.id;
+}
+
+/** Deleting a folder moves it (and its messages) to Deleted Items, like Outlook. Outlook's own folders stay. */
+export async function deleteFolder(mailbox: string, id: string): Promise<void> {
+  if (isOwnFolder(await ownFolderIds(mailbox), id)) throw new O365Error("forbidden", "protected_folder");
   await graph("DELETE", `${user(mailbox)}/mailFolders/${enc(id)}`);
 }
 

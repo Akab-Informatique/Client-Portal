@@ -218,6 +218,8 @@ const en: Dict = {
   outlook: {
     deleteKbd: "Del",
     folder: {
+      moved: "Folder moved.",
+      ownCannotMove: "Outlook's own folders (Inbox, Sent Items…) cannot go inside another folder: only change place.",
       empty: "Empty folder",
       emptyConfirm_one: "Empty “{{name}}”? Its email goes to Deleted Items.",
       emptyConfirm_other: "Empty “{{name}}”? Its {{count}} emails go to Deleted Items.",
@@ -242,7 +244,7 @@ const en: Dict = {
     accountMenu: "Mailbox options",
     layout: {
       edit: "Customise folders",
-      hint: "↑ ↓ to change the order, ★ favourite (on top), 👁 show / hide. Also in each folder's ⋯ menu.",
+      hint: "Drag a folder: above / below another for the order, onto a folder to put it inside, onto the mailbox name to bring it back to the top. Also ↑ ↓, ★ favourite, 👁 show / hide.",
       done: "Done",
       favourites: "Favourites",
       pin: "Add to favourites",

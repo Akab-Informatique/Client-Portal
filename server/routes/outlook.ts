@@ -17,6 +17,7 @@ import {
   listFolders,
   listMessages,
   markFolderRead,
+  moveFolder,
   MAX_ATTACHMENT_BYTES,
   messageText,
   moveMessage,
@@ -217,6 +218,16 @@ export const outlookRoutes = new Hono<AppEnv>()
     const n = await run(() => emptyFolder(acc.address, fid));
     await audit(a.realUser.id, "outlook.folder_emptied", acc.id, { folderId: fid, count: n });
     return c.json({ ok: true, removed: n });
+  })
+  /** Drag and drop: a folder inside another one, or back to the top ("root"). */
+  .post("/accounts/:id/folders/:fid/move", async (c) => {
+    const a = auth(c);
+    const acc = await account(a, c.req.param("id"));
+    const fid = zMessageId.parse(c.req.param("fid"));
+    const p = await body(c, z.object({ destination: zMessageId }));
+    const id = await run(() => moveFolder(acc.address, fid, p.destination));
+    await audit(a.realUser.id, "outlook.folder_moved", acc.id, { folderId: fid, destination: p.destination });
+    return c.json({ ok: true, id });
   })
   .post("/accounts/:id/folders/:fid/read", async (c) => {
     const acc = await account(auth(c), c.req.param("id"));

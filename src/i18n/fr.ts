@@ -216,6 +216,8 @@ const fr = {
   outlook: {
     deleteKbd: "Suppr",
     folder: {
+      moved: "Dossier déplacé.",
+      ownCannotMove: "Les dossiers d'Outlook (Boîte de réception, Éléments envoyés…) ne peuvent pas être mis dans un autre dossier : seulement changés de place.",
       empty: "Vider le dossier",
       emptyConfirm_one: "Vider « {{name}} » ? Son courriel va dans Éléments supprimés.",
       emptyConfirm_other: "Vider « {{name}} » ? Ses {{count}} courriels vont dans Éléments supprimés.",
@@ -240,7 +242,7 @@ const fr = {
     accountMenu: "Options de la boîte",
     layout: {
       edit: "Personnaliser les dossiers",
-      hint: "↑ ↓ pour changer l'ordre, ★ en favori (en haut), 👁 afficher / masquer. Aussi dans le menu ⋯ de chaque dossier.",
+      hint: "Glissez un dossier : au-dessus / en dessous d'un autre pour l'ordre, sur un dossier pour le mettre dedans, sur le nom de la boîte pour le remettre en haut. Aussi ↑ ↓, ★ favori, 👁 afficher / masquer.",
       done: "Terminé",
       favourites: "Favoris",
       pin: "Ajouter aux favoris",

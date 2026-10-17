@@ -273,6 +273,15 @@ function useFolderActions(accountId: string) {
       onSuccess: refresh,
       onError: fail,
     }),
+    moveTo: useMutation({
+      mutationFn: (p: { id: string; destination: string }) => api.post(`${base(accountId)}/folders/${encodeURIComponent(p.id)}/move`, { destination: p.destination }),
+      onSuccess: () => {
+        toast.success(t("outlook.folder.moved"));
+        // every level may have changed
+        void qc.invalidateQueries({ queryKey: [...KEY, "folders", accountId] });
+      },
+      onError: fail,
+    }),
     empty: useMutation({
       mutationFn: (folderId: string) => api.post<{ removed: number }>(`${base(accountId)}/folders/${encodeURIComponent(folderId)}/empty`, {}),
       onSuccess: (r) => {
@@ -328,6 +337,11 @@ function FolderNameDialog({ title, initial, onSave, onClose }: { title: string; 
 }
 
 type FolderPrefs = { pinned: { id: string; name: string }[]; hidden: string[]; order?: string[] };
+
+/** The folder being dragged, and where it may go. */
+type Dragged = { accountId: string; id: string; parentId: string | null; own: boolean };
+let dragged: Dragged | null = null;
+type DropZone = "before" | "after" | "inside";
 type Layout = {
   editing: boolean;
   pinned: (id: string) => boolean;
@@ -338,6 +352,10 @@ type Layout = {
   sort: (list: MailFolder[]) => MailFolder[];
   /** Move a folder up / down among its siblings (shown in this order) */
   move: (siblings: string[], id: string, d: -1 | 1) => void;
+  /** Drag and drop: before / after a folder (order, and its parent if different), or inside it */
+  drop: (d: Dragged, target: MailFolder, zone: DropZone, siblings: string[], parentId: string | null) => void;
+  /** Drag and drop on the mailbox: back to the top level */
+  dropRoot: (d: Dragged) => void;
 };
 
 function AccountTree({ account, defaultOpen, selected, onSelect }: { account: MailAccount; defaultOpen: boolean; selected: { account: string; folder: string } | null; onSelect: (folder: string) => void }) {
@@ -356,6 +374,8 @@ function AccountTree({ account, defaultOpen, selected, onSelect }: { account: Ma
     },
     onError: (e) => toast.error(outlookErrorText(t, e)),
   });
+  const actions = useFolderActions(account.id);
+  const [rootOver, setRootOver] = useState(false);
   // the layout is saved at once (and shown before the answer)
   const prefs: FolderPrefs = account.folderPrefs ?? { pinned: [], hidden: [] };
   const savePrefs = useMutation({
@@ -383,6 +403,30 @@ function AccountTree({ account, defaultOpen, selected, onSelect }: { account: Ma
       };
       return list.map((x, i) => ({ x, i })).sort((a, b) => at(a.x.id) - at(b.x.id) || a.i - b.i).map(({ x }) => x);
     },
+    drop: (d, target, zone, siblings, parentId) => {
+      if (d.accountId !== account.id || d.id === target.id) return;
+      if (zone === "inside") {
+        if (d.own) return toast.error(t("outlook.folder.ownCannotMove"));
+        actions.moveTo.mutate({ id: d.id, destination: target.id });
+        return;
+      }
+      // the new order of that level: the dragged folder before / after the target
+      const rest = siblings.filter((x) => x !== d.id);
+      const at = rest.indexOf(target.id) + (zone === "after" ? 1 : 0);
+      const next = [...rest.slice(0, at), d.id, ...rest.slice(at)];
+      const order = [...next, ...(prefs.order ?? []).filter((x) => !next.includes(x))];
+      savePrefs.mutate({ ...prefs, order });
+      // from another level: also moved in Outlook
+      if (d.parentId !== parentId) {
+        if (d.own) return toast.error(t("outlook.folder.ownCannotMove"));
+        actions.moveTo.mutate({ id: d.id, destination: parentId ?? "root" });
+      }
+    },
+    dropRoot: (d) => {
+      if (d.accountId !== account.id || d.parentId === null) return;
+      if (d.own) return toast.error(t("outlook.folder.ownCannotMove"));
+      actions.moveTo.mutate({ id: d.id, destination: "root" });
+    },
     move: (siblings, id, d) => {
       const i = siblings.indexOf(id);
       const j = i + d;
@@ -400,7 +444,6 @@ function AccountTree({ account, defaultOpen, selected, onSelect }: { account: Ma
     [next[i], next[j]] = [next[j], next[i]];
     savePrefs.mutate({ ...prefs, pinned: next });
   };
-  const actions = useFolderActions(account.id);
   const [naming, setNaming] = useState(false);
   const root = layout.sort(folders.data ?? []);
   const shown = root.filter((fo) => editing || !layout.hidden(fo.id));
@@ -408,7 +451,20 @@ function AccountTree({ account, defaultOpen, selected, onSelect }: { account: Ma
   const hiddenCount = root.filter((fo) => layout.hidden(fo.id)).length;
   return (
     <div className="mb-1">
-      <div className="group flex items-center gap-1 rounded-lg px-1 py-1 hover:bg-accent/40">
+      <div
+        className={cn("group flex items-center gap-1 rounded-lg px-1 py-1 hover:bg-accent/40", rootOver && "ring-1 ring-[color:var(--gold)] bg-[color:var(--gold)]/10")}
+        onDragOver={(e) => {
+          if (!dragged || dragged.accountId !== account.id || dragged.parentId === null) return;
+          e.preventDefault();
+          setRootOver(true);
+        }}
+        onDragLeave={() => setRootOver(false)}
+        onDrop={(e) => {
+          e.preventDefault();
+          setRootOver(false);
+          if (dragged) layout.dropRoot(dragged);
+        }}
+      >
         <button type="button" onClick={() => setOpen((o) => !o)} className="flex min-w-0 flex-1 items-center gap-1.5 text-left text-sm font-semibold" aria-expanded={open}>
           {open ? <ChevronDown className="size-4 shrink-0" /> : <ChevronRight className="size-4 shrink-0" />}
           <span className="min-w-0">
@@ -491,7 +547,7 @@ function AccountTree({ account, defaultOpen, selected, onSelect }: { account: Ma
           {folders.isLoading && <Loader2 className="m-2 size-4 animate-spin text-muted-foreground" />}
           {folders.isError && <p className="px-2 py-1 text-xs text-destructive">{outlookErrorText(t, folders.error)}</p>}
           {shown.map((fo) => (
-            <FolderNode key={fo.id} accountId={account.id} folder={fo} selected={selected} onSelect={onSelect} layout={layout} siblings={shownIds} />
+            <FolderNode key={fo.id} accountId={account.id} folder={fo} parentId={null} selected={selected} onSelect={onSelect} layout={layout} siblings={shownIds} />
           ))}
           {naming && <FolderNameDialog title={t("outlook.folder.new")} initial="" onSave={(name) => actions.create.mutate({ name })} onClose={() => setNaming(false)} />}
           {!editing && hiddenCount > 0 && (
@@ -530,10 +586,13 @@ function FolderNode({
   onSelect,
   layout,
   siblings,
+  parentId,
   depth = 0,
 }: {
   accountId: string;
   folder: MailFolder;
+  /** Its parent folder (null: the top of the mailbox) */
+  parentId: string | null;
   selected: { account: string; folder: string } | null;
   onSelect: (folder: string) => void;
   layout: Layout;
@@ -551,10 +610,45 @@ function FolderNode({
   const actions = useFolderActions(accountId);
   const confirm = useConfirm();
   const [naming, setNaming] = useState<"rename" | "child" | null>(null);
+  const [zone, setZone] = useState<DropZone | null>(null);
   return (
     <>
       <div
-        className={cn("group/folder flex items-center rounded-lg text-sm", active ? "bg-[color:var(--gold)]/10 text-foreground" : "text-muted-foreground hover:bg-accent/40 hover:text-foreground", hidden && "opacity-45")}
+        draggable
+        onDragStart={(e) => {
+          dragged = { accountId, id: folder.id, parentId, own: Boolean(folder.wellKnown) };
+          e.dataTransfer.effectAllowed = "move";
+          e.dataTransfer.setData("text/plain", folder.name);
+        }}
+        onDragEnd={() => {
+          dragged = null;
+        }}
+        onDragOver={(e) => {
+          if (!dragged || dragged.accountId !== accountId || dragged.id === folder.id) return;
+          e.preventDefault();
+          e.dataTransfer.dropEffect = "move";
+          const r = e.currentTarget.getBoundingClientRect();
+          const y = (e.clientY - r.top) / r.height;
+          // edges: before / after; middle: inside (Outlook's own folders only change place)
+          setZone(y < 0.28 ? "before" : y > 0.72 ? "after" : dragged.own ? (y < 0.5 ? "before" : "after") : "inside");
+        }}
+        onDragLeave={() => setZone(null)}
+        onDrop={(e) => {
+          e.preventDefault();
+          const z = zone;
+          setZone(null);
+          if (!dragged || !z) return;
+          layout.drop(dragged, folder, z, siblings, parentId);
+          if (z === "inside") setOpen(true);
+        }}
+        className={cn(
+          "group/folder relative flex cursor-grab items-center rounded-lg text-sm active:cursor-grabbing",
+          active ? "bg-[color:var(--gold)]/10 text-foreground" : "text-muted-foreground hover:bg-accent/40 hover:text-foreground",
+          hidden && "opacity-45",
+          zone === "inside" && "bg-[color:var(--gold)]/15 ring-1 ring-[color:var(--gold)]",
+          zone === "before" && "before:absolute before:inset-x-1 before:-top-px before:h-0.5 before:rounded before:bg-[color:var(--gold)]",
+          zone === "after" && "after:absolute after:inset-x-1 after:-bottom-px after:h-0.5 after:rounded after:bg-[color:var(--gold)]",
+        )}
         style={{ paddingLeft: depth * 12 }}
       >
         <button type="button" className={cn("p-1", !folder.childCount && "invisible")} onClick={() => setOpen((o) => !o)} aria-label={folder.name}>
@@ -661,7 +755,7 @@ function FolderNode({
         (() => {
           const shownKids = layout.sort(kids.data ?? []).filter((k) => layout.editing || !layout.hidden(k.id));
           const ids = shownKids.map((k) => k.id);
-          return shownKids.map((k) => <FolderNode key={k.id} accountId={accountId} folder={k} selected={selected} onSelect={onSelect} layout={layout} siblings={ids} depth={depth + 1} />);
+          return shownKids.map((k) => <FolderNode key={k.id} accountId={accountId} folder={k} parentId={folder.id} selected={selected} onSelect={onSelect} layout={layout} siblings={ids} depth={depth + 1} />);
         })()}
     </>
   );

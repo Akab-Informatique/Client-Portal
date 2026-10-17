@@ -2284,6 +2284,7 @@ describe("Outlook (Microsoft 365 mail)", () => {
         if (url.includes("/messages?$select=id&$top=100")) return json({ value: inFolder.splice(0) });
         if (url.endsWith("/$batch") && method === "POST") return json({ responses: (init.body ? JSON.parse(String(init.body)).requests : []).map((r: any) => ({ id: r.id, status: 200 })) });
         if (url.endsWith("/mailFolders") && method === "POST") return json({ id: "new-folder", displayName: "Clients 2026" }, 201);
+        if (/mailFolders\/[^/]+\/move$/.test(url) && method === "POST") return json({ id: "f2" }, 201);
         if (url.includes("/messages?") && method === "GET") {
           return json({
             value: [{ id: "m1", subject: "Imprimante", from: { emailAddress: { name: "Marie", address: "marie@client.example" } }, receivedDateTime: "2026-10-13T12:00:00Z", bodyPreview: "Bonjour", isRead: false, flag: { flagStatus: "notFlagged" }, hasAttachments: true }],
@@ -2436,6 +2437,15 @@ describe("Outlook (Microsoft 365 mail)", () => {
     sent.length = 0;
     expect((await tech.post(`/api/outlook/accounts/${acc.id}/folders/deleteditems/empty`)).json).toEqual({ ok: true, removed: 1 });
     expect(sent.find((s) => s.url.endsWith("/$batch"))!.body.requests[0]).toMatchObject({ method: "DELETE", url: "/me/messages/e3" });
+
+    // drag and drop: a folder inside another one, or back to the top; Outlook's own folders stay
+    sent.length = 0;
+    expect((await tech.post(`/api/outlook/accounts/${acc.id}/folders/f2/move`, { destination: "new-folder" })).json).toEqual({ ok: true, id: "f2" });
+    expect(sent.at(-1)).toMatchObject({ method: "POST", body: { destinationId: "new-folder" } });
+    await tech.post(`/api/outlook/accounts/${acc.id}/folders/f2/move`, { destination: "root" });
+    expect(sent.at(-1)).toMatchObject({ body: { destinationId: "msgfolderroot" } });
+    expect((await tech.post(`/api/outlook/accounts/${acc.id}/folders/inbox-id/move`, { destination: "f2" })).json.error).toBe("outlook_forbidden");
+    expect((await tech.post(`/api/outlook/accounts/${acc.id}/folders/f2/move`, { destination: "f2" })).json.error).toBe("outlook_forbidden");
 
     // the folder order is kept
     expect((await tech.put(`/api/outlook/accounts/${acc.id}/folder-prefs`, { pinned: [], hidden: [], order: ["f2", "inbox-id", "f2"] })).json.order).toEqual(["f2", "inbox-id"]);
