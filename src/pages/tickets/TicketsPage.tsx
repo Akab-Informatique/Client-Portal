@@ -61,7 +61,7 @@ import { NewTicketDialog } from "./NewTicketDialog";
 import { dueState, FILTER_KEYS, PRIORITY_STYLE, dueGlow, useChoiceText, shortDate, STATUS_STYLE, useTickets, VIEWS, type Tally, type TicketList, type TicketSummary, type View, ticketErrorText } from "./shared";
 import { useTicketWorkspace } from "./workspace";
 import { GlobalSearch } from "./GlobalSearch";
-import { PlanningPanel } from "./Planning";
+import { AgendaCard } from "./Planning";
 import { SmsInboxDialog, SmsTile } from "@/pages/sms/SmsPage";
 import { AiSetupHint, InlinePick, useAiError } from "./TicketPanel";
 
@@ -210,10 +210,11 @@ export function TicketsPage() {
       )}
       <MetricTiles data={data} params={params} apply={apply} onSms={() => setSmsInbox("")} />
 
-      {/* Toolbar: view, search, team, the two frequent filters, the rest under "More" */}
-      <div className="glass flex flex-wrap items-center gap-1.5 rounded-2xl border p-1.5">
+      {/* Toolbar (view, search, team, frequent filters, the rest under "More") and, beside it, today's agenda */}
+      <div className="flex flex-col gap-3 lg:flex-row lg:items-stretch">
+      <div className="glass flex min-w-0 flex-1 flex-wrap items-center gap-1.5 rounded-2xl border p-1.5">
         <ViewMenu view={view} counts={data?.counts} params={params} apply={apply} />
-        <div className="relative w-full sm:w-56">
+        <div className="relative w-full sm:w-48">
           <Search className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
           <Input
             ref={searchRef}
@@ -235,6 +236,8 @@ export function TicketsPage() {
         <div className="ml-auto">
           <SortMenu value={params.get("sort") ?? "due"} onChange={(v) => set({ sort: v === "due" ? null : v })} />
         </div>
+      </div>
+      <AgendaCard />
       </div>
       {activeFilters.length > 0 && (
         <div className="-mt-3 flex flex-wrap items-center gap-1.5">
@@ -312,8 +315,6 @@ export function TicketsPage() {
       {data && <NewTicketDialog open={creating} onOpenChange={setCreating} facets={data.facets} onCreated={(id) => ws.open(id)} />}
     </div>
     {smsInbox !== null && <SmsInboxDialog initialId={smsInbox || null} onClose={() => setSmsInbox(null)} />}
-    {/* Priorities and the weekly calendar (collapsible) */}
-    <PlanningPanel />
     </div>
   );
 }

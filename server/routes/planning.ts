@@ -57,6 +57,16 @@ function warningOf(e: unknown, prefix: string): string {
   return `${prefix}_${code}`;
 }
 
+/**
+ * Whose calendar to show: anyone's. In full for oneself and for planners;
+ * a technician looking at a colleague's sees only when they are busy.
+ */
+function whoseCalendar(c: Context<AppEnv>, a: AuthContext): { techId: string; full: boolean } {
+  const asked = c.req.query("technicianId");
+  if (!asked || asked === a.user.id) return { techId: a.user.id, full: true };
+  return { techId: zUuid.parse(asked), full: canPlan(a) };
+}
+
 /** Whose pins / calendar: me by default; someone else needs tickets.plan. */
 function whose(c: Context<AppEnv>, a: AuthContext): string {
   const asked = c.req.query("technicianId");
@@ -130,17 +140,20 @@ export const planningRoutes = new Hono<AppEnv>()
   .use(requireStaff)
   .use(requirePermission("tickets.view"))
 
-  /** Technicians one may plan for (everyone for planners, oneself otherwise). */
+  /**
+   * The team, for the calendar: everyone's calendar can be looked at; "full"
+   * says whether this viewer sees the details (themselves, or a planner) or
+   * only when the person is busy.
+   */
   .get("/technicians", async (c) => {
     const a = auth(c);
-    if (!canPlan(a)) return c.json([{ id: a.user.id, name: a.user.name }]);
-    return c.json(
-      await db()
-        .select({ id: schema.users.id, name: schema.users.name })
-        .from(schema.users)
-        .where(and(eq(schema.users.kind, "staff"), eq(schema.users.active, true)))
-        .orderBy(asc(schema.users.name)),
-    );
+    const plan = canPlan(a);
+    const rows = await db()
+      .select({ id: schema.users.id, name: schema.users.name })
+      .from(schema.users)
+      .where(and(eq(schema.users.kind, "staff"), eq(schema.users.active, true)))
+      .orderBy(asc(schema.users.name));
+    return c.json(rows.map((u) => ({ ...u, full: plan || u.id === a.user.id })));
   })
 
   // ── Pins ──
@@ -306,27 +319,46 @@ export const planningRoutes = new Hono<AppEnv>()
   /** A technician's reserved time between two dates. */
   .get("/calendar", async (c) => {
     const a = auth(c);
-    const techId = whose(c, a);
+    const { techId, full } = whoseCalendar(c, a);
     const from = new Date(zIso.parse(c.req.query("from")));
     const to = new Date(zIso.parse(c.req.query("to")));
     if (!(to > from) || to.getTime() - from.getTime() > 62 * 86_400_000) throw new HTTPException(400, { message: "Validation failed" });
+    const rows = await db()
+      .select()
+      .from(schema.calendarBlocks)
+      .where(and(eq(schema.calendarBlocks.technicianId, techId), lt(schema.calendarBlocks.startsAt, to), gt(schema.calendarBlocks.endsAt, from)))
+      .orderBy(asc(schema.calendarBlocks.startsAt));
+    if (full) return c.json(rows);
+    // a colleague's: only when they are busy (no ticket, client, note)
     return c.json(
-      await db()
-        .select()
-        .from(schema.calendarBlocks)
-        .where(and(eq(schema.calendarBlocks.technicianId, techId), lt(schema.calendarBlocks.startsAt, to), gt(schema.calendarBlocks.endsAt, from)))
-        .orderBy(asc(schema.calendarBlocks.startsAt)),
+      rows.map((b) => ({
+        id: b.id,
+        technicianId: b.technicianId,
+        kind: "slot",
+        ticketId: null,
+        ticketNumber: null,
+        title: "",
+        note: "",
+        companyName: null,
+        reminderMinutes: 0,
+        autotaskServiceCallId: null,
+        startsAt: b.startsAt,
+        endsAt: b.endsAt,
+        busy: true,
+      })),
     );
   })
 
   /** The technician's absences (from the weekly meeting calendar), read only. */
   .get("/absences", async (c) => {
     const a = auth(c);
-    const techId = whose(c, a);
+    const { techId, full } = whoseCalendar(c, a);
     const from = new Date(zIso.parse(c.req.query("from")));
     const to = new Date(zIso.parse(c.req.query("to")));
     if (!(to > from) || to.getTime() - from.getTime() > 62 * 86_400_000) throw new HTTPException(400, { message: "Validation failed" });
-    return c.json(await absencesOf(techId, dayOf(from), dayOf(new Date(to.getTime() - 1))));
+    const list = await absencesOf(techId, dayOf(from), dayOf(new Date(to.getTime() - 1)));
+    // a colleague's: away, without the reason
+    return c.json(full ? list : list.map((x) => ({ ...x, kind: "other", note: null })));
   })
 
   /**
@@ -336,7 +368,7 @@ export const planningRoutes = new Hono<AppEnv>()
    */
   .get("/calendar/outlook", async (c) => {
     const a = auth(c);
-    const techId = whose(c, a);
+    const { techId, full } = whoseCalendar(c, a);
     const from = new Date(zIso.parse(c.req.query("from")));
     const to = new Date(zIso.parse(c.req.query("to")));
     if (!(to > from) || to.getTime() - from.getTime() > 62 * 86_400_000) throw new HTTPException(400, { message: "Validation failed" });
@@ -356,7 +388,7 @@ export const planningRoutes = new Hono<AppEnv>()
       try {
         const list = await onCalendar(t, () => outlookEvents(t.mailbox!, from, to, t.calendarId));
         for (const e of list) {
-          const hide = !mine && (t.display === "busy" || e.private);
+          const hide = !mine && (!full || t.display === "busy" || e.private);
           events.push(hide ? { ...e, title: `Occupé — ${t.label}`, location: null, calendar: t.label, masked: true } : { ...e, calendar: t.label, masked: false });
         }
         calendars.push({ label: t.label, display: t.display });

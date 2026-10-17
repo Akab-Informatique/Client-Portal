@@ -14,8 +14,8 @@ import {
   MapPin,
   BellRing,
   CalendarClock,
-  PanelRightClose,
-  PanelRightOpen,
+  Maximize2,
+  EyeOff,
   Pencil,
   Pin,
   Plus,
@@ -35,7 +35,7 @@ import { useConfirm } from "@/components/ConfirmDialog";
 import { api } from "@/lib/api";
 import { currentLocale } from "@/i18n";
 import { useCan, useMe } from "@/lib/session";
-import { cn } from "@/lib/utils";
+import { cn, initials } from "@/lib/utils";
 import { STATUS_STYLE, ticketErrorText, useChoiceText, type StatusKind, type TicketSummary } from "./shared";
 import { useTicketWorkspace } from "./workspace";
 import { holidaysBetween } from "@shared/holidays";
@@ -78,6 +78,8 @@ type Block = {
   autotaskServiceCallId: number | null;
   startsAt: string;
   endsAt: string;
+  /** A colleague's time: only that they are busy (no details) */
+  busy?: boolean;
 };
 /** An Outlook event of a calendar in this planning; masked: only "busy" may be shown to this viewer */
 type OutlookEvent = { id: string; title: string; startsAt: string; endsAt: string; allDay: boolean; location: string | null; calendar?: string; masked?: boolean };
@@ -99,7 +101,6 @@ const KIND_STYLE: Record<BlockKind, string> = {
 const REMINDERS = [0, 5, 10, 15, 30, 60];
 type Person = { id: string; name: string };
 
-const OPEN_KEY = "akab.planning.open";
 const WEEKEND_KEY = "akab.planning.weekend";
 const DAY_START = 7;
 const DAY_END = 18;
@@ -134,18 +135,6 @@ const saveBool = (k: string, v: boolean) => {
   }
 };
 
-function useWide() {
-  const q = "(min-width: 1536px)";
-  const [wide, setWide] = useState(() => window.matchMedia(q).matches);
-  useEffect(() => {
-    const m = window.matchMedia(q);
-    const on = () => setWide(m.matches);
-    m.addEventListener("change", on);
-    return () => m.removeEventListener("change", on);
-  }, []);
-  return wide;
-}
-
 export function usePriorities(technicianId: string, date = ymd(new Date())) {
   return useQuery({
     queryKey: ["planning", "pins", technicianId, date],
@@ -154,82 +143,152 @@ export function usePriorities(technicianId: string, date = ymd(new Date())) {
   });
 }
 
-/** The panel at the right of the ticket list: open inline on wide screens, as a drawer otherwise. */
-export function PlanningPanel() {
+type TeamMember = Person & { full?: boolean };
+
+/** The team for the calendar: me first; whether I see each one in full or only busy. */
+function useTeam() {
+  const me = useMe();
+  const { data = [{ id: me.id, name: me.name, full: true }] } = useQuery({
+    queryKey: ["planning", "technicians"],
+    queryFn: () => api.get<TeamMember[]>("/planning/technicians"),
+    staleTime: 5 * 60_000,
+  });
+  return [...data.filter((p) => p.id === me.id), ...data.filter((p) => p.id !== me.id)];
+}
+
+/**
+ * Beside the filters: today at a glance (my calendar by default). A click
+ * opens the full planning, where any technician's calendar can be shown.
+ */
+export function AgendaCard() {
+  const { t } = useTranslation();
+  const me = useMe();
+  const [open, setOpen] = useState(false);
+  const start = new Date();
+  start.setHours(0, 0, 0, 0);
+  const from = start.toISOString();
+  const to = addDays(start, 1).toISOString();
+  const { data: blocks = [] } = useQuery({
+    queryKey: ["planning", "calendar", me.id, "today", from],
+    queryFn: () => api.get<Block[]>(`/planning/calendar?from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}`),
+    refetchInterval: 60_000,
+  });
+  const { data: outlook } = useQuery({
+    queryKey: ["planning", "outlook", me.id, "today", from],
+    queryFn: () => api.get<{ synced: boolean; events: OutlookEvent[] }>(`/planning/calendar/outlook?from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}`),
+    staleTime: 60_000,
+  });
+  const { data: pins } = usePriorities(me.id);
+  const toDo = (pins ?? []).filter((p) => !p.doneAt).length;
+  const now = Date.now();
+  const items = [
+    ...blocks.map((b) => ({ id: b.id, at: b.startsAt, end: b.endsAt, label: b.ticketNumber ? `${b.ticketNumber.slice(-4)} · ${b.title}` : b.title, onsite: b.kind === "onsite" })),
+    ...(outlook?.events ?? []).filter((x) => !x.allDay).map((x) => ({ id: x.id, at: x.startsAt, end: x.endsAt, label: x.title, onsite: false })),
+  ]
+    .filter((x) => new Date(x.end).getTime() > now)
+    .sort((x, y) => x.at.localeCompare(y.at));
+  return (
+    <>
+      <button
+        type="button"
+        onClick={() => setOpen(true)}
+        className="glass group flex min-w-0 flex-col gap-1 rounded-2xl border px-3 py-2 text-left transition hover:border-[color:var(--gold)]/40 lg:w-[340px] lg:shrink-0"
+        aria-label={t("planning.openBig")}
+      >
+        <span className="flex items-center gap-2 text-xs">
+          <CalendarRange className="size-4 text-primary" />
+          <span className="font-semibold">{t("planning.myDay")}</span>
+          <span className="text-muted-foreground">{start.toLocaleDateString(currentLocale() === "en" ? "en-CA" : "fr-CA", { weekday: "long", day: "numeric", month: "short" })}</span>
+          {toDo > 0 && (
+            <span className="ml-auto flex items-center gap-1 rounded-full border border-[color:var(--gold)]/40 px-1.5 text-[10px] text-primary">
+              <Star className="size-2.5 fill-current" /> {toDo}
+            </span>
+          )}
+          <Maximize2 className={cn("size-3.5 text-muted-foreground opacity-0 transition group-hover:opacity-100", toDo === 0 && "ml-auto")} />
+        </span>
+        {items.length === 0 ? (
+          <span className="text-[11px] text-muted-foreground">{t("planning.nothingToday")}</span>
+        ) : (
+          <span className="space-y-0.5">
+            {items.slice(0, 2).map((x) => (
+              <span key={x.id} className="flex items-center gap-2 text-[11px]">
+                <span className="w-10 shrink-0 font-mono tabular-nums text-muted-foreground">{hm(new Date(x.at))}</span>
+                {x.onsite && <MapPin className="size-3 shrink-0 text-orange-300" />}
+                <span className="truncate">{x.label}</span>
+              </span>
+            ))}
+            {items.length > 2 && <span className="block text-[10px] text-muted-foreground">{t("planning.andMore", { count: items.length - 2 })}</span>}
+          </span>
+        )}
+      </button>
+      {open && <PlanningDialog onClose={() => setOpen(false)} />}
+    </>
+  );
+}
+
+/** The full planning: whose calendar (discreet faces at the top), their priorities and the week. */
+function PlanningDialog({ onClose }: { onClose: () => void }) {
   const { t } = useTranslation();
   const me = useMe();
   const can = useCan();
-  const wide = useWide();
-  // open by default only where it fits beside the list
-  const [open, setOpen] = useState(() => readBool(OPEN_KEY, window.matchMedia("(min-width: 1536px)").matches));
+  const team = useTeam();
   const [techId, setTechId] = useState(me.id);
-  const { data: techs = [{ id: me.id, name: me.name }] } = useQuery({
-    queryKey: ["planning", "technicians"],
-    queryFn: () => api.get<Person[]>("/planning/technicians"),
-    staleTime: 5 * 60_000,
-  });
+  const who = team.find((x) => x.id === techId) ?? { id: me.id, name: me.name, full: true };
   // May plan for this technician: planners, or oneself with tickets.planSelf
   const planner = can("tickets.plan") || (techId === me.id && can("tickets.planSelf"));
-  const { data: pins } = usePriorities(techId);
-  const toDo = (pins ?? []).filter((p) => !p.doneAt).length;
-  const toggle = (v: boolean) => {
-    setOpen(v);
-    saveBool(OPEN_KEY, v);
-  };
-
-  if (!open) {
-    return (
-      <div className={cn("shrink-0", wide ? "sticky top-4 self-start" : "fixed right-3 top-1/2 z-30 -translate-y-1/2")}>
-        <Tooltip>
-          <TooltipTrigger asChild>
-            <button
-              type="button"
-              onClick={() => toggle(true)}
-              className="glass relative flex flex-col items-center gap-2 rounded-2xl border px-2 py-3 text-muted-foreground transition hover:text-foreground"
-              aria-label={t("planning.open")}
-            >
-              <PanelRightOpen className="size-4" />
-              <CalendarRange className="size-4 text-primary" />
-              {toDo > 0 && <span className="hex flex size-5 items-center justify-center bg-grad-gold text-[10px] font-bold text-[#1a1204]">{toDo}</span>}
-            </button>
-          </TooltipTrigger>
-          <TooltipContent side="left">{t("planning.open")}</TooltipContent>
-        </Tooltip>
-      </div>
-    );
-  }
-
-  const body = (
-    <aside className={cn("glass flex flex-col overflow-hidden rounded-2xl border", wide ? "sticky top-4 max-h-[calc(100dvh-6rem)] w-[400px] shrink-0 self-start" : "fixed bottom-3 right-3 top-20 z-40 w-[min(400px,calc(100vw-1.5rem))] shadow-2xl")}>
-      <div className="flex items-center gap-2 border-b px-3 py-2.5">
-        <CalendarRange className="size-4 text-primary" />
-        <p className="flex-1 text-sm font-semibold">{t("planning.title")}</p>
-        <BrowserAlerts />
-        {techs.length > 1 && (
-          <Select value={techId} onValueChange={setTechId}>
-            <SelectTrigger className="h-8 w-44 text-xs">
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent position="popper">
-              {techs.map((p) => (
-                <SelectItem key={p.id} value={p.id}>
-                  {p.name}
-                </SelectItem>
+  const full = who.full !== false;
+  return (
+    <Dialog open onOpenChange={(o) => !o && onClose()}>
+      <DialogContent className="flex h-[min(900px,92dvh)] max-w-[min(1320px,96vw)] flex-col gap-3 p-4 sm:max-w-[min(1320px,96vw)]">
+        <DialogHeader className="flex-row flex-wrap items-center gap-3 space-y-0 pr-8">
+          <CalendarRange className="size-5 text-primary" />
+          <div className="min-w-0">
+            <DialogTitle>{techId === me.id ? t("planning.myPlanning") : t("planning.planningOf", { name: who.name })}</DialogTitle>
+            <DialogDescription className="text-xs">{full ? t("planning.fullView") : t("planning.busyView")}</DialogDescription>
+          </div>
+          {/* whose calendar: faces, discreet */}
+          {team.length > 1 && (
+            <div className="ml-auto flex flex-wrap items-center gap-1" role="radiogroup" aria-label={t("planning.whose")}>
+              {team.map((p) => (
+                <Tooltip key={p.id}>
+                  <TooltipTrigger asChild>
+                    <button
+                      type="button"
+                      role="radio"
+                      aria-checked={p.id === techId}
+                      onClick={() => setTechId(p.id)}
+                      className={cn(
+                        "relative flex size-8 items-center justify-center rounded-full border text-[10px] font-semibold transition",
+                        p.id === techId ? "bg-grad-gold text-[#1a1204] ring-2 ring-[color:var(--gold)]/40" : "bg-background/60 text-muted-foreground hover:text-foreground",
+                      )}
+                    >
+                      {initials(p.name)}
+                      {p.full === false && <EyeOff className="absolute -bottom-0.5 -right-0.5 size-3 rounded-full bg-background p-px text-muted-foreground" />}
+                    </button>
+                  </TooltipTrigger>
+                  <TooltipContent>
+                    {p.id === me.id ? t("planning.me", { name: p.name }) : p.name}
+                    {p.full === false && <span className="block opacity-80">{t("planning.busyOnly")}</span>}
+                  </TooltipContent>
+                </Tooltip>
               ))}
-            </SelectContent>
-          </Select>
-        )}
-        <Button variant="ghost" size="icon" className="size-8" onClick={() => toggle(false)} aria-label={t("planning.close")}>
-          <PanelRightClose className="size-4" />
-        </Button>
-      </div>
-      <div className="min-h-0 flex-1 space-y-4 overflow-y-auto p-3">
-        <PrioritiesList technicianId={techId} technicianName={techs.find((x) => x.id === techId)?.name ?? me.name} planner={planner} />
-        <WeekCalendar technicianId={techId} technicianName={techs.find((x) => x.id === techId)?.name ?? me.name} planner={planner} />
-      </div>
-    </aside>
+            </div>
+          )}
+          <BrowserAlerts />
+        </DialogHeader>
+        <div className={cn("grid min-h-0 flex-1 gap-4", full && "lg:grid-cols-[320px_minmax(0,1fr)]")}>
+          {full && (
+            <div className="min-h-0 overflow-y-auto pr-1">
+              <PrioritiesList technicianId={techId} technicianName={who.name} planner={planner} />
+            </div>
+          )}
+          <div className="min-h-0 overflow-y-auto pr-1">
+            <WeekCalendar key={techId} technicianId={techId} technicianName={who.name} planner={planner} />
+          </div>
+        </div>
+      </DialogContent>
+    </Dialog>
   );
-  return body;
 }
 
 // ── Priorities ────────────────────────────────────────────────────────────────
@@ -681,6 +740,19 @@ function WeekCalendar({ technicianId, technicianName, planner }: { technicianId:
                 {dayBlocks.map((b) => {
                   const s = new Date(b.startsAt);
                   const e = new Date(b.endsAt);
+                  if (b.busy) {
+                    return (
+                      <span
+                        key={b.id}
+                        title={`${hm(s)}–${hm(e)} · ${t("planning.busy")}`}
+                        onClick={(ev) => ev.stopPropagation()}
+                        className="absolute inset-x-0.5 z-[5] overflow-hidden rounded-md border border-slate-400/40 bg-[repeating-linear-gradient(135deg,rgba(148,163,184,0.22)_0_4px,transparent_4px_8px)] px-1 py-0.5 text-[10px] italic leading-tight text-slate-300"
+                        style={{ top: top(s), height: Math.max(14, top(e) - top(s) - 1) }}
+                      >
+                        {t("planning.busy")}
+                      </span>
+                    );
+                  }
                   return (
                     <Tooltip key={b.id}>
                       <TooltipTrigger asChild>
