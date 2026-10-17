@@ -26,11 +26,18 @@ void i18n.use(initReactI18next).init({
   returnNull: false,
 });
 
-document.documentElement.lang = i18n.language;
+/** The page language and the browser tab title follow the portal language. */
+const TITLE: Record<Locale, string> = { fr: "Portail Akab", en: "Akab Portal" };
+function applyLocale(lng: string) {
+  const l: Locale = lng === "en" ? "en" : "fr";
+  document.documentElement.lang = l;
+  document.title = TITLE[l];
+}
+applyLocale(i18n.language);
+i18n.on("languageChanged", applyLocale);
 
 export function setLocale(l: Locale) {
   void i18n.changeLanguage(l);
-  document.documentElement.lang = l;
   try {
     localStorage.setItem(KEY, l);
   } catch {
