@@ -1232,6 +1232,12 @@ const en: Dict = {
     },
   },
   tickets: {
+    dockTab: {
+      compact: "Shrink to a cell",
+      normal: "Show as a tab",
+      back: "Back to the bar",
+      closeTimer: "Close (stops the timer and asks for the time entry)",
+    },
     expenses: { button: "Expense", soon: "Coming soon: expenses (mileage, meals, purchases…)." },
     charges: {
       whichSerials: "Which serial numbers?",

@@ -275,8 +275,8 @@ function TimerButton({ label, onClick, disabled, children }: { label: string; on
   );
 }
 
-/** Small timer in a dock item: time + play / pause. */
-export function DockTimer({ timer, at }: { timer: Timer; at: number }) {
+/** Small timer in a dock item: time + play / pause (compact: for the honeycomb cell). */
+export function DockTimer({ timer, at, compact }: { timer: Timer; at: number; compact?: boolean }) {
   const { t } = useTranslation();
   const now = useNow(timer.state === "running");
   const act = useTimerAction();
@@ -289,6 +289,9 @@ export function DockTimer({ timer, at }: { timer: Timer; at: number }) {
     );
   }
   const run = timer.state === "running";
+  if (compact) {
+    return <span className={cn("font-mono text-[10px] leading-none tabular-nums", run ? "text-primary" : "text-muted-foreground")}>{clock(liveMs(timer, at, now))}</span>;
+  }
   return (
     <span className={cn("flex items-center gap-0.5 rounded-full py-0.5 pl-2", run ? "bg-[color:var(--gold)]/15 text-primary" : "bg-muted text-muted-foreground")}>
       <span className="font-mono text-[11px] tabular-nums">{clock(liveMs(timer, at, now))}</span>

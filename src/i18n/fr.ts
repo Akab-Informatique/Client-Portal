@@ -1230,6 +1230,12 @@ const fr = {
     },
   },
   tickets: {
+    dockTab: {
+      compact: "Réduire en alvéole",
+      normal: "Afficher en onglet",
+      back: "Remettre dans la barre",
+      closeTimer: "Fermer (arrête le chrono et demande l'entrée de temps)",
+    },
     expenses: { button: "Dépense", soon: "Bientôt : les dépenses (kilométrage, repas, achats…)." },
     charges: {
       whichSerials: "Quels numéros de série ?",
