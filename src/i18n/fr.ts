@@ -1231,8 +1231,9 @@ const fr = {
   },
   tickets: {
     columns: {
-      resize: "Glisser pour élargir ou rétrécir la colonne (double-clic : largeur habituelle)",
-      reset: "Largeurs des colonnes par défaut",
+      move: "Glisser le titre pour déplacer la colonne",
+      resize: "Glisser pour élargir ou rétrécir (double-clic : largeur habituelle)",
+      reset: "Colonnes par défaut (ordre et largeurs)",
     },
     dockTab: {
       compact: "Réduire en alvéole",

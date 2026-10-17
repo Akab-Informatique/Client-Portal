@@ -82,7 +82,7 @@ export function TicketsPage() {
   const txt = useChoiceText();
   const can = useCan();
   const ws = useTicketWorkspace();
-  const cols = useColumnWidths();
+  const cols = useColumns();
   const [params, setParams] = useSearchParams();
   const view = (VIEWS.includes(params.get("view") as View) ? params.get("view") : "mine") as View;
   const { data, isLoading, dataUpdatedAt, isFetching, refetch } = useTickets(view, params);
@@ -253,38 +253,24 @@ export function TicketsPage() {
       )}
 
       {/* List */}
-      <div className="glass overflow-hidden rounded-2xl border" style={{ ["--tk-cols" as string]: cols.template }}>
-        <div className="hidden grid-cols-[var(--tk-cols)] gap-3 border-b border-[color:var(--glass-border)] bg-white/[0.02] px-5 py-2.5 font-mono text-[10px] uppercase tracking-[0.12em] text-muted-foreground xl:grid">
-          <span>{t("tickets.fields.ticket")}</span>
-          {[
-            <span key="s">{t("tickets.fields.status")}</span>,
-            <span key="c">{t("tickets.fields.company")}</span>,
-            <span key="st" className="flex items-center gap-1">
-              {t("tickets.fields.start")} <PortalTag />
-            </span>,
-            <span key="d">{t("tickets.fields.due")}</span>,
-            <span key="p">{t("tickets.fields.priority")}</span>,
-            <span key="a">{t("tickets.fields.assignee")}</span>,
-            <span key="se">{t("tickets.fields.secondary")}</span>,
-          ].map((label, i) => (
-            <span key={i} className="relative flex min-w-0 items-center">
-              <span className="min-w-0 truncate">{label}</span>
-              <ColumnHandle onDrag={(dx) => cols.resize(i, dx)} onDone={cols.save} onReset={() => cols.reset(i)} />
-            </span>
-          ))}
-          {cols.changed ? (
-            <Tooltip>
-              <TooltipTrigger asChild>
-                <button type="button" onClick={cols.resetAll} className="flex items-center justify-center text-muted-foreground hover:text-foreground" aria-label={t("tickets.columns.reset")}>
-                  <RotateCcw className="size-3" />
-                </button>
-              </TooltipTrigger>
-              <TooltipContent>{t("tickets.columns.reset")}</TooltipContent>
-            </Tooltip>
-          ) : (
-            <span />
-          )}
-        </div>
+      <div className="glass overflow-hidden rounded-2xl border" style={cols.vars as React.CSSProperties}>
+        <ColumnHeader
+          cols={cols}
+          labels={{
+            ticket: t("tickets.fields.ticket"),
+            status: t("tickets.fields.status"),
+            company: t("tickets.fields.company"),
+            start: (
+              <span className="inline-flex flex-wrap items-center gap-1">
+                {t("tickets.fields.start")} <PortalTag />
+              </span>
+            ),
+            due: t("tickets.fields.due"),
+            priority: t("tickets.fields.priority"),
+            assignee: t("tickets.fields.assignee"),
+            secondary: t("tickets.fields.secondary"),
+          }}
+        />
         {isLoading || !data ? (
           <div className="space-y-2 p-4">
             {[0, 1, 2, 3, 4].map((i) => (
@@ -656,20 +642,20 @@ function TicketRow({
       >
         {/* Due date: a glowing hue fading out behind the number and title */}
         <span aria-hidden className="pointer-events-none absolute inset-y-0 left-0 -z-10 w-72 opacity-80 transition-opacity group-hover:opacity-100" style={dueGlow(tk.dueAt, tk.statusKind)} />
-        <span className="min-w-0">
-          <span className="flex items-baseline gap-2">
+        <span className="min-w-0 xl:[order:var(--o-ticket)]">
+          <span className="flex flex-wrap items-baseline gap-x-2">
             <span className="shrink-0 font-mono text-[11px] text-muted-foreground group-hover:text-primary">{tk.number}</span>
-            <span className="truncate font-medium">{tk.title}</span>
+            <span className="min-w-0 break-words font-medium">{tk.title}</span>
             {tk.myPriority && (
               <span className="flex shrink-0 items-center gap-0.5 rounded-full border border-[color:var(--gold)]/50 bg-[color:var(--gold)]/10 px-1.5 text-[10px] font-semibold text-primary">
                 <Star className="size-2.5 fill-current" /> {t(`planning.badge.${tk.myPriority}`)}
               </span>
             )}
           </span>
-          <span className="mt-0.5 block truncate text-xs text-muted-foreground">{tk.excerpt || tk.company.name}</span>
+          <span className="mt-0.5 line-clamp-2 break-words text-xs text-muted-foreground">{tk.excerpt || tk.company.name}</span>
         </span>
         <span className="flex flex-wrap items-center gap-2 xl:contents">
-          <span>
+          <span className="min-w-0 xl:[order:var(--o-status)]">
             <Stop>
               <InlinePick
                 disabled={!editable}
@@ -678,7 +664,7 @@ function TicketRow({
                 options={facets.statuses.map((s) => ({ value: s.value, label: txt.status(s) }))}
                 onPick={(v) => onPatch({ status: v })}
                 trigger={
-                  <span className={cn("inline-flex items-center gap-1.5 whitespace-nowrap rounded-full border px-2 py-0.5 text-[11px] font-medium", STATUS_STYLE[tk.statusKind])}>
+                  <span className={cn("inline-flex max-w-full items-center gap-1.5 rounded-full border px-2 py-0.5 text-left text-[11px] font-medium leading-tight", STATUS_STYLE[tk.statusKind])}>
                     <span className="size-1.5 rounded-full bg-current" />
                     {txt.status({ label: tk.statusLabel, kind: tk.statusKind })}
                   </span>
@@ -686,12 +672,12 @@ function TicketRow({
               />
             </Stop>
           </span>
-          <span className="min-w-0 text-xs" title={tk.contact ? `${tk.company.name} · ${tk.contact}` : tk.company.name}>
-            <span className="block truncate">{tk.company.name}</span>
-            {tk.contact && <span className="block truncate text-[11px] text-muted-foreground">{tk.contact}</span>}
+          <span className="min-w-0 text-xs xl:[order:var(--o-company)]" title={tk.contact ? `${tk.company.name} · ${tk.contact}` : tk.company.name}>
+            <span className="block break-words leading-snug">{tk.company.name}</span>
+            {tk.contact && <span className="block break-words text-[11px] leading-snug text-muted-foreground">{tk.contact}</span>}
           </span>
-          <span className="font-mono text-xs tabular-nums text-muted-foreground">{tk.startDate ? shortDate(tk.startDate) : "—"}</span>
-          <span className="min-w-0">
+          <span className="font-mono text-xs tabular-nums text-muted-foreground xl:[order:var(--o-start)]">{tk.startDate ? shortDate(tk.startDate) : "—"}</span>
+          <span className="min-w-0 xl:[order:var(--o-due)]">
             <span
               className={cn(
                 "block font-mono text-xs font-medium tabular-nums",
@@ -709,7 +695,7 @@ function TicketRow({
               </span>
             )}
           </span>
-          <span>
+          <span className="min-w-0 xl:[order:var(--o-priority)]">
             <Stop>
               <InlinePick
                 disabled={!editable}
@@ -733,7 +719,7 @@ function TicketRow({
               />
             </Stop>
           </span>
-          <span className="min-w-0">
+          <span className="min-w-0 xl:[order:var(--o-assignee)]">
             <Stop>
               <InlinePick
                 disabled={!editable}
@@ -742,11 +728,11 @@ function TicketRow({
                 options={[{ value: "none", label: t("tickets.unassigned") }, ...facets.technicians.map((p) => ({ value: p.id, label: p.name }))]}
                 onPick={(v) => onPatch({ assigneeId: v === "none" ? null : v })}
                 trigger={
-                  <span className="flex min-w-0 max-w-36 items-center gap-2 pr-1 text-xs">
+                  <span className="flex min-w-0 items-center gap-2 pr-1 text-left text-xs">
                     {tk.assignee ? (
                       <>
                         <span className="flex size-6 shrink-0 items-center justify-center rounded-full border bg-background/60 text-[10px] font-semibold">{initials(tk.assignee.name)}</span>
-                        <span className="truncate">{tk.assignee.name}</span>
+                        <span className="min-w-0 break-words leading-snug">{tk.assignee.name}</span>
                       </>
                     ) : (
                       <span className="pl-1 italic text-muted-foreground">{t("tickets.unassigned")}</span>
@@ -756,7 +742,7 @@ function TicketRow({
               />
             </Stop>
           </span>
-          <span className="flex min-w-0 items-center">
+          <span className="flex min-w-0 items-center xl:[order:var(--o-secondary)]">
             {tk.secondary.length ? (
               <Tooltip>
                 <TooltipTrigger asChild>
@@ -783,7 +769,7 @@ function TicketRow({
               <span className="text-xs text-muted-foreground/60">—</span>
             )}
           </span>
-          <span className="flex justify-end">
+          <span className="flex justify-end xl:[order:99]">
             {tk.viewers.length > 0 && (
               <Tooltip>
                 <TooltipTrigger asChild>
@@ -1069,51 +1055,75 @@ function TeamFilter({ technicians, params, set }: { technicians: TicketList["fac
   );
 }
 
-// ── Column widths of the list: dragged by each technician (kept on this computer) ──
-const COLS_KEY = "akab.tickets.columns";
-/** Status, client, start, due, priority, assignee, secondary (the ticket column takes the rest) */
-const DEFAULT_COLS = [144, 140, 64, 104, 86, 132, 64];
-const COL_MIN = 48;
-const COL_MAX = 420;
-function useColumnWidths() {
-  const [widths, setWidths] = useState<number[]>(() => {
+// ── Columns of the list: each technician resizes and moves them (kept on this computer) ──
+const TICKET_COLUMNS = ["ticket", "status", "company", "start", "due", "priority", "assignee", "secondary"] as const;
+type ColumnId = (typeof TICKET_COLUMNS)[number];
+const COLS_KEY = "akab.tickets.columns.v2";
+/** Usual widths (px); the ticket column is elastic (at least this, takes the rest) */
+const DEFAULT_WIDTHS: Record<ColumnId, number> = { ticket: 220, status: 144, company: 140, start: 64, due: 104, priority: 86, assignee: 132, secondary: 64 };
+const COL_MIN = 56;
+const COL_MAX = 480;
+type ColumnPrefs = { order: ColumnId[]; widths: Partial<Record<ColumnId, number>> };
+
+function readColumns(): ColumnPrefs {
+  try {
+    const v = JSON.parse(localStorage.getItem(COLS_KEY) ?? "null") as ColumnPrefs | null;
+    if (v && Array.isArray(v.order) && v.order.length === TICKET_COLUMNS.length && TICKET_COLUMNS.every((c) => v.order.includes(c))) return { order: v.order, widths: v.widths ?? {} };
+  } catch {
+    /* defaults */
+  }
+  return { order: [...TICKET_COLUMNS], widths: {} };
+}
+
+function useColumns() {
+  const [prefs, setPrefs] = useState<ColumnPrefs>(readColumns);
+  const keep = (p: ColumnPrefs) => {
     try {
-      const v = JSON.parse(localStorage.getItem(COLS_KEY) ?? "null") as unknown;
-      if (Array.isArray(v) && v.length === DEFAULT_COLS.length && v.every((x) => typeof x === "number")) return v as number[];
-    } catch {
-      /* default widths */
-    }
-    return DEFAULT_COLS;
-  });
-  const start = useRef<number[] | null>(null);
-  const store = (w: number[]) => {
-    try {
-      localStorage.setItem(COLS_KEY, JSON.stringify(w));
+      localStorage.setItem(COLS_KEY, JSON.stringify(p));
     } catch {
       /* private window: for this page only */
     }
   };
+  const width = (c: ColumnId) => prefs.widths[c] ?? DEFAULT_WIDTHS[c];
+  const start = useRef<number | null>(null);
+  // grid tracks in display order; each cell finds its place through --o-<column>
+  const template = `${prefs.order.map((c) => (c === "ticket" ? `minmax(${width(c)}px,1fr)` : `${width(c)}px`)).join(" ")} 20px`;
+  const vars: Record<string, string | number> = { "--tk-cols": template };
+  prefs.order.forEach((c, i) => (vars[`--o-${c}`] = i));
   return {
-    template: `minmax(160px,1fr) ${widths.map((w) => `${w}px`).join(" ")} 20px`,
-    changed: widths.some((w, i) => w !== DEFAULT_COLS[i]),
+    order: prefs.order,
+    vars,
+    width,
+    changed: prefs.order.some((c, i) => c !== TICKET_COLUMNS[i]) || Object.keys(prefs.widths).length > 0,
     /** dx: pixels since the drag started */
-    resize: (i: number, dx: number) => {
-      start.current ??= widths;
-      const base = start.current;
-      setWidths(base.map((w, j) => (j === i ? Math.min(COL_MAX, Math.max(COL_MIN, Math.round(w + dx))) : w)));
+    resize: (c: ColumnId, dx: number) => {
+      start.current ??= width(c);
+      const w = Math.min(COL_MAX, Math.max(COL_MIN, Math.round(start.current + dx)));
+      setPrefs((p) => ({ ...p, widths: { ...p.widths, [c]: w } }));
     },
-    save: () => {
+    resized: () => {
       start.current = null;
-      setWidths((w) => (store(w), w));
+      setPrefs((p) => (keep(p), p));
     },
-    reset: (i: number) =>
-      setWidths((w) => {
-        const next = w.map((x, j) => (j === i ? DEFAULT_COLS[j] : x));
-        store(next);
+    resetWidth: (c: ColumnId) =>
+      setPrefs((p) => {
+        const widths = { ...p.widths };
+        delete widths[c];
+        const next = { ...p, widths };
+        keep(next);
+        return next;
+      }),
+    /** Put a column at another place */
+    move: (c: ColumnId, to: number) =>
+      setPrefs((p) => {
+        const rest = p.order.filter((x) => x !== c);
+        const order = [...rest.slice(0, to), c, ...rest.slice(to)];
+        const next = { ...p, order };
+        keep(next);
         return next;
       }),
     resetAll: () => {
-      setWidths(DEFAULT_COLS);
+      setPrefs({ order: [...TICKET_COLUMNS], widths: {} });
       try {
         localStorage.removeItem(COLS_KEY);
       } catch {
@@ -1123,35 +1133,111 @@ function useColumnWidths() {
   };
 }
 
-/** The edge of a column title: drag to widen / narrow it, double-click for its usual width. */
-function ColumnHandle({ onDrag, onDone, onReset }: { onDrag: (dx: number) => void; onDone: () => void; onReset: () => void }) {
+/**
+ * The column titles: drag a title left / right to move the column (a gold
+ * line shows where), drag the line between two titles to resize (double-click:
+ * the usual width).
+ */
+function ColumnHeader({ cols, labels }: { cols: ReturnType<typeof useColumns>; labels: Record<ColumnId, ReactNode> }) {
   const { t } = useTranslation();
-  const x0 = useRef<number | null>(null);
+  const row = useRef<HTMLDivElement>(null);
+  const [moving, setMoving] = useState<{ id: ColumnId; to: number; x: number } | null>(null);
+  const press = useRef<{ id: ColumnId; x: number; moved: boolean } | null>(null);
+  const resizing = useRef<{ id: ColumnId; x: number } | null>(null);
+
+  /** Where a column dropped at this x would go (index among the others), and the x of that edge. */
+  const target = (id: ColumnId, clientX: number) => {
+    const cells = [...(row.current?.querySelectorAll<HTMLElement>("[data-col]") ?? [])].filter((el) => el.dataset.col !== id);
+    let to = cells.length;
+    for (let i = 0; i < cells.length; i++) {
+      const r = cells[i].getBoundingClientRect();
+      if (clientX < r.left + r.width / 2) {
+        to = i;
+        break;
+      }
+    }
+    const box = row.current!.getBoundingClientRect();
+    const edge = to < cells.length ? cells[to].getBoundingClientRect().left - 6 : cells.at(-1)!.getBoundingClientRect().right + 6;
+    return { to, x: edge - box.left };
+  };
+
   return (
-    <span
-      role="separator"
-      aria-orientation="vertical"
-      aria-label={t("tickets.columns.resize")}
-      title={t("tickets.columns.resize")}
-      onPointerDown={(e) => {
-        e.preventDefault();
-        e.stopPropagation();
-        x0.current = e.clientX;
-        e.currentTarget.setPointerCapture(e.pointerId);
-      }}
-      onPointerMove={(e) => {
-        if (x0.current !== null) onDrag(e.clientX - x0.current);
-      }}
-      onPointerUp={() => {
-        if (x0.current === null) return;
-        x0.current = null;
-        onDone();
-      }}
-      onDoubleClick={onReset}
-      className="group/handle absolute -right-2.5 top-1/2 z-10 flex h-6 w-3 -translate-y-1/2 cursor-col-resize touch-none items-center justify-center"
+    <div
+      ref={row}
+      className="relative hidden select-none grid-cols-[var(--tk-cols)] gap-3 border-b border-[color:var(--glass-border)] bg-white/[0.02] px-5 font-mono text-[10px] uppercase tracking-[0.12em] text-muted-foreground xl:grid"
     >
-      <span className="h-4 w-px bg-border transition-colors group-hover/handle:w-0.5 group-hover/handle:bg-[color:var(--gold)]" />
-    </span>
+      {cols.order.map((id, i) => (
+        <div
+          key={id}
+          data-col={id}
+          className={cn("relative flex min-w-0 cursor-grab items-center py-2.5 active:cursor-grabbing", moving?.id === id && "opacity-50")}
+          title={t("tickets.columns.move")}
+          onPointerDown={(e) => {
+            if (e.button !== 0 || (e.target as HTMLElement).closest("[data-resize]")) return;
+            press.current = { id, x: e.clientX, moved: false };
+            e.currentTarget.setPointerCapture(e.pointerId);
+          }}
+          onPointerMove={(e) => {
+            const p = press.current;
+            if (!p) return;
+            if (!p.moved && Math.abs(e.clientX - p.x) < 6) return;
+            p.moved = true;
+            setMoving({ id, ...target(id, e.clientX) });
+          }}
+          onPointerUp={(e) => {
+            const p = press.current;
+            press.current = null;
+            if (p?.moved) cols.move(id, target(id, e.clientX).to);
+            setMoving(null);
+          }}
+          onPointerCancel={() => ((press.current = null), setMoving(null))}
+        >
+          {/* long titles wrap rather than being cut */}
+          <span className="min-w-0 break-words leading-tight">{labels[id]}</span>
+          {i < cols.order.length - 1 && (
+            <span
+              data-resize
+              role="separator"
+              aria-orientation="vertical"
+              aria-label={t("tickets.columns.resize")}
+              title={t("tickets.columns.resize")}
+              onPointerDown={(e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                resizing.current = { id, x: e.clientX };
+                e.currentTarget.setPointerCapture(e.pointerId);
+              }}
+              onPointerMove={(e) => {
+                const r = resizing.current;
+                if (r) cols.resize(r.id, e.clientX - r.x);
+              }}
+              onPointerUp={() => {
+                if (!resizing.current) return;
+                resizing.current = null;
+                cols.resized();
+              }}
+              onDoubleClick={() => cols.resetWidth(id)}
+              className="group/rs absolute -right-[11px] inset-y-0 z-10 flex w-[10px] cursor-col-resize touch-none justify-center"
+            >
+              <span className="my-1.5 w-px bg-border/70 transition-all group-hover/rs:w-[3px] group-hover/rs:bg-[color:var(--gold)]" />
+            </span>
+          )}
+        </div>
+      ))}
+      <span className="flex items-center justify-center">
+        {cols.changed && (
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <button type="button" onClick={cols.resetAll} className="text-muted-foreground hover:text-foreground" aria-label={t("tickets.columns.reset")}>
+                <RotateCcw className="size-3" />
+              </button>
+            </TooltipTrigger>
+            <TooltipContent>{t("tickets.columns.reset")}</TooltipContent>
+          </Tooltip>
+        )}
+      </span>
+      {moving && <span className="pointer-events-none absolute inset-y-1 z-20 w-0.5 rounded bg-[color:var(--gold)]" style={{ left: moving.x }} />}
+    </div>
   );
 }
 
