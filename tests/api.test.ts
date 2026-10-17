@@ -2245,6 +2245,8 @@ describe("Outlook (Microsoft 365 mail)", () => {
   const sent: { method: string; url: string; body: any; bearer?: string }[] = [];
   /** Unread ids the next "unread messages" query returns (then none) */
   const unread: { id: string }[] = [];
+  /** Ids the next "messages of the folder" query returns (then none) */
+  const inFolder: { id: string }[] = [];
   const json = (b: unknown, status = 200) => new Response(JSON.stringify(b), { status, headers: { "content-type": "application/json" } });
   const G = "https://graph.microsoft.com/v1.0/";
   beforeAll(() => {
@@ -2279,6 +2281,7 @@ describe("Outlook (Microsoft 365 mail)", () => {
         }
         // folder options
         if (url.includes("$filter=isRead eq false")) return json({ value: unread.splice(0) });
+        if (url.includes("/messages?$select=id&$top=100")) return json({ value: inFolder.splice(0) });
         if (url.endsWith("/$batch") && method === "POST") return json({ responses: (init.body ? JSON.parse(String(init.body)).requests : []).map((r: any) => ({ id: r.id, status: 200 })) });
         if (url.endsWith("/mailFolders") && method === "POST") return json({ id: "new-folder", displayName: "Clients 2026" }, 201);
         if (url.includes("/messages?") && method === "GET") {
@@ -2423,6 +2426,19 @@ describe("Outlook (Microsoft 365 mail)", () => {
     expect(sent.at(-1)).toMatchObject({ method: "PATCH", body: { displayName: "Clients actifs" } });
     expect((await tech.del(`/api/outlook/accounts/${acc.id}/folders/inbox-id`)).json.error).toBe("outlook_forbidden");
     expect((await tech.del(`/api/outlook/accounts/${acc.id}/folders/f2`)).status).toBe(200);
+
+    // empty a folder: to Deleted Items; in Deleted Items, deleted
+    inFolder.push({ id: "e1" }, { id: "e2" });
+    sent.length = 0;
+    expect((await tech.post(`/api/outlook/accounts/${acc.id}/folders/f2/empty`)).json).toEqual({ ok: true, removed: 2 });
+    expect(sent.find((s) => s.url.endsWith("/$batch"))!.body.requests[0]).toMatchObject({ method: "POST", url: "/me/messages/e1/move", body: { destinationId: "deleteditems" } });
+    inFolder.push({ id: "e3" });
+    sent.length = 0;
+    expect((await tech.post(`/api/outlook/accounts/${acc.id}/folders/deleteditems/empty`)).json).toEqual({ ok: true, removed: 1 });
+    expect(sent.find((s) => s.url.endsWith("/$batch"))!.body.requests[0]).toMatchObject({ method: "DELETE", url: "/me/messages/e3" });
+
+    // the folder order is kept
+    expect((await tech.put(`/api/outlook/accounts/${acc.id}/folder-prefs`, { pinned: [], hidden: [], order: ["f2", "inbox-id", "f2"] })).json.order).toEqual(["f2", "inbox-id"]);
   });
 
   it("sends and replies with files; sending needs its right; too-large files are refused", async () => {
@@ -2475,8 +2491,8 @@ describe("Outlook (Microsoft 365 mail)", () => {
 
     // the folder layout: favourites in order, hidden folders; the owner's only
     const prefs = { pinned: [{ id: "f2", name: "Clients" }, { id: "inbox-id", name: "Boîte de réception" }], hidden: ["junk-id", "junk-id"] };
-    expect((await tech.put(`/api/outlook/accounts/${acc.id}/folder-prefs`, prefs)).json).toEqual({ pinned: prefs.pinned, hidden: ["junk-id"] });
-    expect((await tech.get("/api/outlook/status")).json.accounts.find((x: any) => x.id === acc.id).folderPrefs).toEqual({ pinned: prefs.pinned, hidden: ["junk-id"] });
+    expect((await tech.put(`/api/outlook/accounts/${acc.id}/folder-prefs`, prefs)).json).toEqual({ pinned: prefs.pinned, hidden: ["junk-id"], order: [] });
+    expect((await tech.get("/api/outlook/status")).json.accounts.find((x: any) => x.id === acc.id).folderPrefs).toEqual({ pinned: prefs.pinned, hidden: ["junk-id"], order: [] });
     resetRateLimit("login:ip:unknown");
     const other = await signIn("admin@akab.local");
     expect((await other.put(`/api/outlook/accounts/${acc.id}/folder-prefs`, prefs)).status).toBe(404);

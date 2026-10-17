@@ -1,9 +1,9 @@
 import { useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { useTranslation } from "react-i18next";
-import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useInfiniteQuery, useMutation, useQuery, useQueryClient, type InfiniteData } from "@tanstack/react-query";
 import { toast } from "sonner";
-import { Archive, ArrowDown, ArrowLeft, ArrowUp, CheckCheck, ChevronDown, ChevronRight, Download, Eye, EyeOff, Flag, Folder, FolderInput, FolderPlus, Forward, Inbox, Loader2, Mail, MailOpen, MoreHorizontal, Paperclip, Pencil, Plus, Reply, ReplyAll, Search, Send, ShieldAlert, SlidersHorizontal, Star, StarOff, Ticket, TicketPlus, Trash2, Unlink } from "lucide-react";
+import { Archive, ArrowDown, ArrowLeft, ArrowUp, CheckCheck, ChevronDown, ChevronRight, Download, Eye, EyeOff, Flag, Folder, FolderInput, FolderPlus, FolderX, Forward, Inbox, Loader2, Mail, MailOpen, MoreHorizontal, Paperclip, Pencil, Plus, Reply, ReplyAll, Search, Send, ShieldAlert, SlidersHorizontal, Star, StarOff, Ticket, TicketPlus, Trash2, Unlink } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import {
@@ -199,6 +199,7 @@ function OutlookMail() {
                     messageId={messageId}
                     canSend={s.canSend}
                     onClose={() => setMessageId(null)}
+                    onGone={(next) => setMessageId(next)}
                     onCompose={(mode, message) => setCompose({ mode, message })}
                   />
                 ) : (
@@ -272,6 +273,14 @@ function useFolderActions(accountId: string) {
       onSuccess: refresh,
       onError: fail,
     }),
+    empty: useMutation({
+      mutationFn: (folderId: string) => api.post<{ removed: number }>(`${base(accountId)}/folders/${encodeURIComponent(folderId)}/empty`, {}),
+      onSuccess: (r) => {
+        toast.success(t("outlook.folder.emptied", { count: r.removed }));
+        refresh();
+      },
+      onError: fail,
+    }),
     remove: useMutation({
       mutationFn: (id: string) => api.del(`${base(accountId)}/folders/${encodeURIComponent(id)}`),
       onSuccess: () => {
@@ -318,13 +327,17 @@ function FolderNameDialog({ title, initial, onSave, onClose }: { title: string; 
   );
 }
 
-type FolderPrefs = { pinned: { id: string; name: string }[]; hidden: string[] };
+type FolderPrefs = { pinned: { id: string; name: string }[]; hidden: string[]; order?: string[] };
 type Layout = {
   editing: boolean;
   pinned: (id: string) => boolean;
   hidden: (id: string) => boolean;
   togglePin: (f: MailFolder) => void;
   toggleHide: (id: string) => void;
+  /** Folders in the technician's order (the others keep Outlook's order, after) */
+  sort: (list: MailFolder[]) => MailFolder[];
+  /** Move a folder up / down among its siblings (shown in this order) */
+  move: (siblings: string[], id: string, d: -1 | 1) => void;
 };
 
 function AccountTree({ account, defaultOpen, selected, onSelect }: { account: MailAccount; defaultOpen: boolean; selected: { account: string; folder: string } | null; onSelect: (folder: string) => void }) {
@@ -362,6 +375,23 @@ function AccountTree({ account, defaultOpen, selected, onSelect }: { account: Ma
     togglePin: (fo) =>
       savePrefs.mutate({ ...prefs, pinned: prefs.pinned.some((p) => p.id === fo.id) ? prefs.pinned.filter((p) => p.id !== fo.id) : [...prefs.pinned, { id: fo.id, name: fo.name }] }),
     toggleHide: (id) => savePrefs.mutate({ ...prefs, hidden: prefs.hidden.includes(id) ? prefs.hidden.filter((x) => x !== id) : [...prefs.hidden, id] }),
+    sort: (list) => {
+      const order = prefs.order ?? [];
+      const at = (id: string) => {
+        const i = order.indexOf(id);
+        return i < 0 ? Number.MAX_SAFE_INTEGER : i;
+      };
+      return list.map((x, i) => ({ x, i })).sort((a, b) => at(a.x.id) - at(b.x.id) || a.i - b.i).map(({ x }) => x);
+    },
+    move: (siblings, id, d) => {
+      const i = siblings.indexOf(id);
+      const j = i + d;
+      if (i < 0 || j < 0 || j >= siblings.length) return;
+      const next = [...siblings];
+      [next[i], next[j]] = [next[j], next[i]];
+      // these siblings first, in their new order; the rest of the saved order after
+      savePrefs.mutate({ ...prefs, order: [...next, ...(prefs.order ?? []).filter((x) => !next.includes(x))] });
+    },
   };
   const moveFav = (i: number, d: -1 | 1) => {
     const next = [...prefs.pinned];
@@ -372,8 +402,9 @@ function AccountTree({ account, defaultOpen, selected, onSelect }: { account: Ma
   };
   const actions = useFolderActions(account.id);
   const [naming, setNaming] = useState(false);
-  const root = folders.data ?? [];
+  const root = layout.sort(folders.data ?? []);
   const shown = root.filter((fo) => editing || !layout.hidden(fo.id));
+  const shownIds = shown.map((fo) => fo.id);
   const hiddenCount = root.filter((fo) => layout.hidden(fo.id)).length;
   return (
     <div className="mb-1">
@@ -460,7 +491,7 @@ function AccountTree({ account, defaultOpen, selected, onSelect }: { account: Ma
           {folders.isLoading && <Loader2 className="m-2 size-4 animate-spin text-muted-foreground" />}
           {folders.isError && <p className="px-2 py-1 text-xs text-destructive">{outlookErrorText(t, folders.error)}</p>}
           {shown.map((fo) => (
-            <FolderNode key={fo.id} accountId={account.id} folder={fo} selected={selected} onSelect={onSelect} layout={layout} />
+            <FolderNode key={fo.id} accountId={account.id} folder={fo} selected={selected} onSelect={onSelect} layout={layout} siblings={shownIds} />
           ))}
           {naming && <FolderNameDialog title={t("outlook.folder.new")} initial="" onSave={(name) => actions.create.mutate({ name })} onClose={() => setNaming(false)} />}
           {!editing && hiddenCount > 0 && (
@@ -492,7 +523,24 @@ function IconToggle({ label, onClick, disabled, active, children }: { label: str
   );
 }
 
-function FolderNode({ accountId, folder, selected, onSelect, layout, depth = 0 }: { accountId: string; folder: MailFolder; selected: { account: string; folder: string } | null; onSelect: (folder: string) => void; layout: Layout; depth?: number }) {
+function FolderNode({
+  accountId,
+  folder,
+  selected,
+  onSelect,
+  layout,
+  siblings,
+  depth = 0,
+}: {
+  accountId: string;
+  folder: MailFolder;
+  selected: { account: string; folder: string } | null;
+  onSelect: (folder: string) => void;
+  layout: Layout;
+  /** The folders at this level, in the order shown (to move this one among them) */
+  siblings: string[];
+  depth?: number;
+}) {
   const { t } = useTranslation();
   const [open, setOpen] = useState(false);
   const kids = useQuery({ queryKey: foldersKey(accountId, folder.id), queryFn: () => api.get<MailFolder[]>(`${base(accountId)}/folders?parent=${encodeURIComponent(folder.id)}`), enabled: open, staleTime: 30_000 });
@@ -533,6 +581,22 @@ function FolderNode({ accountId, folder, selected, onSelect, layout, depth = 0 }
               <DropdownMenuSeparator />
               <DropdownMenuItem disabled={!folder.unread || actions.readAll.isPending} onSelect={() => actions.readAll.mutate(folder.id)}>
                 <CheckCheck className="size-4" /> {t("outlook.folder.readAll")}
+              </DropdownMenuItem>
+              <DropdownMenuItem
+                disabled={!folder.total || actions.empty.isPending}
+                onSelect={async () => {
+                  const trash = folder.wellKnown === "deleteditems";
+                  if (await confirm({ title: t(trash ? "outlook.folder.emptyTrashConfirm" : "outlook.folder.emptyConfirm", { name: folder.name, count: folder.total }), destructive: true })) actions.empty.mutate(folder.id);
+                }}
+              >
+                <FolderX className="size-4" /> {t("outlook.folder.empty")}
+              </DropdownMenuItem>
+              <DropdownMenuSeparator />
+              <DropdownMenuItem disabled={siblings.indexOf(folder.id) <= 0} onSelect={() => layout.move(siblings, folder.id, -1)}>
+                <ArrowUp className="size-4" /> {t("outlook.layout.up")}
+              </DropdownMenuItem>
+              <DropdownMenuItem disabled={siblings.indexOf(folder.id) === siblings.length - 1} onSelect={() => layout.move(siblings, folder.id, 1)}>
+                <ArrowDown className="size-4" /> {t("outlook.layout.down")}
               </DropdownMenuItem>
               <DropdownMenuItem onSelect={() => layout.togglePin(folder)}>
                 {pinned ? <StarOff className="size-4" /> : <Star className="size-4" />} {pinned ? t("outlook.layout.unpin") : t("outlook.layout.pin")}
@@ -578,6 +642,12 @@ function FolderNode({ accountId, folder, selected, onSelect, layout, depth = 0 }
         )}
         {layout.editing && (
           <span className="flex shrink-0 items-center pr-1">
+            <IconToggle label={t("outlook.layout.up")} onClick={() => layout.move(siblings, folder.id, -1)} disabled={siblings.indexOf(folder.id) <= 0}>
+              <ArrowUp className="size-3.5" />
+            </IconToggle>
+            <IconToggle label={t("outlook.layout.down")} onClick={() => layout.move(siblings, folder.id, 1)} disabled={siblings.indexOf(folder.id) === siblings.length - 1}>
+              <ArrowDown className="size-3.5" />
+            </IconToggle>
             <IconToggle label={pinned ? t("outlook.layout.unpin") : t("outlook.layout.pin")} onClick={() => layout.togglePin(folder)} active={pinned}>
               <Star className={cn("size-3.5", pinned && "fill-current")} />
             </IconToggle>
@@ -588,9 +658,11 @@ function FolderNode({ accountId, folder, selected, onSelect, layout, depth = 0 }
         )}
       </div>
       {open &&
-        (kids.data ?? [])
-          .filter((k) => layout.editing || !layout.hidden(k.id))
-          .map((k) => <FolderNode key={k.id} accountId={accountId} folder={k} selected={selected} onSelect={onSelect} layout={layout} depth={depth + 1} />)}
+        (() => {
+          const shownKids = layout.sort(kids.data ?? []).filter((k) => layout.editing || !layout.hidden(k.id));
+          const ids = shownKids.map((k) => k.id);
+          return shownKids.map((k) => <FolderNode key={k.id} accountId={accountId} folder={k} selected={selected} onSelect={onSelect} layout={layout} siblings={ids} depth={depth + 1} />);
+        })()}
     </>
   );
 }
@@ -730,17 +802,30 @@ function MessageList({
   );
 }
 
+/** The email after this one in the list shown (or the one before, at the end). */
+function nextInList(qc: ReturnType<typeof useQueryClient>, accountId: string, id: string): string | null {
+  for (const [, d] of qc.getQueriesData<InfiniteData<MailPage>>({ queryKey: [...KEY, "messages", accountId] })) {
+    const items = (d?.pages ?? []).flatMap((p) => p.items);
+    const i = items.findIndex((m) => m.id === id);
+    if (i >= 0) return items[i + 1]?.id ?? items[i - 1]?.id ?? null;
+  }
+  return null;
+}
+
 function MessageView({
   account,
   messageId,
   canSend,
   onClose,
+  onGone,
   onCompose,
 }: {
   account: MailAccount;
   messageId: string;
   canSend: boolean;
   onClose: () => void;
+  /** Moved or deleted: open the next email of the list (or none) */
+  onGone: (next: string | null) => void;
   onCompose: (mode: ComposeMode, m: MailMessage) => void;
 }) {
   const { t } = useTranslation();
@@ -786,12 +871,27 @@ function MessageView({
     mutationFn: (destination: string) => (destination === "deleteditems" ? api.del(path) : api.post(`${path}/move`, { destination })).then(() => destination),
     onSuccess: (destination) => {
       toast.success(destination === "deleteditems" ? t("outlook.deleted") : destination === "archive" ? t("outlook.archived") : t("outlook.moved"));
+      const next = nextInList(qc, account.id, messageId);
       removeListItem(qc, account.id, messageId);
       void qc.invalidateQueries({ queryKey: [...KEY, "folders", account.id] });
-      onClose();
+      onGone(next);
     },
     onError: (e) => toast.error(outlookErrorText(t, e)),
   });
+  // Delete key: the open email goes to Deleted Items (not while typing, nor with a window open)
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== "Delete" || e.ctrlKey || e.altKey || e.metaKey) return;
+      const el = e.target as HTMLElement | null;
+      if (el?.closest("input, textarea, select, [contenteditable], [role=dialog], [role=menu]")) return;
+      if (document.querySelector("[role=dialog]") || move.isPending) return;
+      e.preventDefault();
+      move.mutate("deleteditems");
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [move]);
+
   const prefill = useMutation({
     mutationFn: () =>
       api.get<{ subject: string; from: { name: string | null; address: string } | null; receivedAt: string; text: string; contact: { contactId: string; companyId: number; contactName: string; companyName: string } | null }>(`${path}/text`),
@@ -874,7 +974,7 @@ function MessageView({
             ))}
           </DropdownMenuContent>
         </DropdownMenu>
-        <Action icon={Trash2} label={t("outlook.delete")} onClick={() => move.mutate("deleteditems")} disabled={busy} />
+        <Action icon={Trash2} label={`${t("outlook.delete")} (${t("outlook.deleteKbd")})`} onClick={() => move.mutate("deleteditems")} disabled={busy} />
         {canTicket && (
           <span className="ml-auto flex items-center gap-1.5">
             <Button type="button" size="sm" variant="outline" className="h-8 gap-1.5 text-xs" onClick={() => setToTicket(true)}>

@@ -248,6 +248,37 @@ export async function markFolderRead(mailbox: string, folderId: string, max = 20
   return done;
 }
 
+/**
+ * Empty a folder: its messages go to Deleted Items; in Deleted Items itself
+ * they are deleted. Pages of ids, 20 per $batch. Returns how many; stops
+ * after `max`.
+ */
+export async function emptyFolder(mailbox: string, folderId: string, max = 5000): Promise<number> {
+  const root = user(mailbox);
+  const trash = await graph<{ id: string }>("GET", `${root}/mailFolders/deleteditems?$select=id`).then((f) => f.id).catch(() => null);
+  const inTrash = folderId.toLowerCase() === "deleteditems" || folderId === trash;
+  let done = 0;
+  while (done < max) {
+    const page = await graph<{ value: { id: string }[] }>("GET", `${root}/mailFolders/${enc(folderId)}/messages?$select=id&$top=100`);
+    const ids = (page.value ?? []).map((m) => m.id);
+    if (!ids.length) break;
+    let ok = 0;
+    for (let i = 0; i < ids.length; i += 20) {
+      const requests = ids.slice(i, i + 20).map((id, n) =>
+        inTrash
+          ? { id: String(n + 1), method: "DELETE", url: `/${root}/messages/${enc(id)}` }
+          : { id: String(n + 1), method: "POST", url: `/${root}/messages/${enc(id)}/move`, headers: { "Content-Type": "application/json" }, body: { destinationId: "deleteditems" } },
+      );
+      const r = await graph<{ responses?: { status: number }[] }>("POST", "$batch", { requests });
+      ok += (r.responses ?? []).filter((x) => x.status >= 200 && x.status < 300).length;
+    }
+    done += ok;
+    // nothing went (no right to write…): stop rather than loop
+    if (!ok) break;
+  }
+  return done;
+}
+
 /** A new folder (top level, or inside another one). */
 export async function createFolder(mailbox: string, name: string, parentId?: string): Promise<MailFolder> {
   const path = parentId ? `${user(mailbox)}/mailFolders/${enc(parentId)}/childFolders` : `${user(mailbox)}/mailFolders`;

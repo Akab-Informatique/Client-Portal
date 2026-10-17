@@ -676,7 +676,7 @@ export const mailAccounts = pgTable(
     /** "user": through the technician's own Microsoft sign-in; "app": the organisation access (admins, shared mailboxes) */
     via: text("via", { enum: ["user", "app"] }).notNull().default("app"),
     /** The technician's folder layout: favourites on top (in order) and hidden folders */
-    folderPrefs: jsonb("folder_prefs").$type<{ pinned: { id: string; name: string }[]; hidden: string[] }>(),
+    folderPrefs: jsonb("folder_prefs").$type<{ pinned: { id: string; name: string }[]; hidden: string[]; order?: string[] }>(),
     createdAt: created(),
   },
   (t) => [uniqueIndex("mail_accounts_user_address_unique").on(t.userId, sql`lower(${t.address})`)],

@@ -216,7 +216,15 @@ const en: Dict = {
     },
   },
   outlook: {
+    deleteKbd: "Del",
     folder: {
+      empty: "Empty folder",
+      emptyConfirm_one: "Empty “{{name}}”? Its email goes to Deleted Items.",
+      emptyConfirm_other: "Empty “{{name}}”? Its {{count}} emails go to Deleted Items.",
+      emptyTrashConfirm_one: "Empty “{{name}}”? Its email will be deleted for good.",
+      emptyTrashConfirm_other: "Empty “{{name}}”? Its {{count}} emails will be deleted for good.",
+      emptied_one: "{{count}} email removed from the folder.",
+      emptied_other: "{{count}} emails removed from the folder.",
       options: "Options of folder {{name}}",
       readAll: "Mark all as read",
       readDone_one: "{{count}} email marked as read.",
@@ -234,7 +242,7 @@ const en: Dict = {
     accountMenu: "Mailbox options",
     layout: {
       edit: "Customise folders",
-      hint: "★ favourite (on top), 👁 show / hide.",
+      hint: "↑ ↓ to change the order, ★ favourite (on top), 👁 show / hide. Also in each folder's ⋯ menu.",
       done: "Done",
       favourites: "Favourites",
       pin: "Add to favourites",

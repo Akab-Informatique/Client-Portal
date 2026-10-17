@@ -214,7 +214,15 @@ const fr = {
     },
   },
   outlook: {
+    deleteKbd: "Suppr",
     folder: {
+      empty: "Vider le dossier",
+      emptyConfirm_one: "Vider « {{name}} » ? Son courriel va dans Éléments supprimés.",
+      emptyConfirm_other: "Vider « {{name}} » ? Ses {{count}} courriels vont dans Éléments supprimés.",
+      emptyTrashConfirm_one: "Vider « {{name}} » ? Son courriel sera supprimé définitivement.",
+      emptyTrashConfirm_other: "Vider « {{name}} » ? Ses {{count}} courriels seront supprimés définitivement.",
+      emptied_one: "{{count}} courriel retiré du dossier.",
+      emptied_other: "{{count}} courriels retirés du dossier.",
       options: "Options du dossier {{name}}",
       readAll: "Tout marquer comme lu",
       readDone_one: "{{count}} courriel marqué comme lu.",
@@ -232,7 +240,7 @@ const fr = {
     accountMenu: "Options de la boîte",
     layout: {
       edit: "Personnaliser les dossiers",
-      hint: "★ en favori (en haut), 👁 afficher / masquer.",
+      hint: "↑ ↓ pour changer l'ordre, ★ en favori (en haut), 👁 afficher / masquer. Aussi dans le menu ⋯ de chaque dossier.",
       done: "Terminé",
       favourites: "Favoris",
       pin: "Ajouter aux favoris",

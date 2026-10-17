@@ -12,6 +12,7 @@ import {
   attachment,
   createFolder,
   deleteFolder,
+  emptyFolder,
   getMessage,
   listFolders,
   listMessages,
@@ -174,8 +175,16 @@ export const outlookRoutes = new Hono<AppEnv>()
   .put("/accounts/:id/folder-prefs", async (c) => {
     const acc = await account(auth(c), c.req.param("id"));
     const zId = z.string().min(1).max(400);
-    const p = await body(c, z.object({ pinned: z.array(z.object({ id: zId, name: z.string().trim().min(1).max(200) })).max(50), hidden: z.array(zId).max(300) }));
-    const prefs = { pinned: p.pinned.filter((x, i, all) => all.findIndex((y) => y.id === x.id) === i), hidden: [...new Set(p.hidden)] };
+    const p = await body(
+      c,
+      z.object({
+        pinned: z.array(z.object({ id: zId, name: z.string().trim().min(1).max(200) })).max(50),
+        hidden: z.array(zId).max(300),
+        /** The technician's folder order (ids; folders not listed keep Outlook's order, after) */
+        order: z.array(zId).max(500).default([]),
+      }),
+    );
+    const prefs = { pinned: p.pinned.filter((x, i, all) => all.findIndex((y) => y.id === x.id) === i), hidden: [...new Set(p.hidden)], order: [...new Set(p.order)] };
     await db().update(schema.mailAccounts).set({ folderPrefs: prefs }).where(eq(schema.mailAccounts.id, acc.id));
     return c.json(prefs);
   })
@@ -199,6 +208,15 @@ export const outlookRoutes = new Hono<AppEnv>()
     await run(() => deleteFolder(acc.address, fid));
     await audit(a.realUser.id, "outlook.folder_deleted", acc.id, { folderId: fid });
     return c.json({ ok: true });
+  })
+  .post("/accounts/:id/folders/:fid/empty", async (c) => {
+    const a = auth(c);
+    const acc = await account(a, c.req.param("id"));
+    if (!rateLimit(`outlook-empty:${acc.id}`, 10, 60_000).ok) throw new HTTPException(429, { message: "rate_limited" });
+    const fid = zMessageId.parse(c.req.param("fid"));
+    const n = await run(() => emptyFolder(acc.address, fid));
+    await audit(a.realUser.id, "outlook.folder_emptied", acc.id, { folderId: fid, count: n });
+    return c.json({ ok: true, removed: n });
   })
   .post("/accounts/:id/folders/:fid/read", async (c) => {
     const acc = await account(auth(c), c.req.param("id"));
