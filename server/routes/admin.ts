@@ -4,8 +4,8 @@ import { and, asc, desc, eq, inArray, sql } from "drizzle-orm";
 import { z } from "zod";
 import { db, schema } from "../db/index.ts";
 import { config } from "../config.ts";
-import { auth, permissionsOf, requirePermission, revokeUserSessions, type AppEnv } from "../lib/auth.ts";
-import { o365Ready } from "../lib/o365.ts";
+import { auth, permissionsOf, requirePermission, revokeUserSessions, type AppEnv, type AuthContext } from "../lib/auth.ts";
+import { asConnection, listCalendars, O365Error, o365Ready } from "../lib/o365.ts";
 import { hashPassword, temporaryPassword } from "../lib/crypto.ts";
 import { audit } from "../lib/audit.ts";
 import { mailConfigured } from "../lib/mail.ts";
@@ -14,6 +14,7 @@ import { body, zEmail, zName, zOptText, zPhone, zUuid } from "../lib/validate.ts
 import {
   effectivePermissions,
   isPermissionKey,
+  MASTER_ROLE,
   permissionsFor,
   type Audience,
   type Override,
@@ -65,6 +66,63 @@ async function getUser(id: string): Promise<UserRow> {
   const [u] = await db().select().from(schema.users).where(eq(schema.users.id, id));
   if (!u) throw new HTTPException(404, { message: "not_found" });
   return u;
+}
+
+/** The master administrator role's id. */
+async function masterRoleId(): Promise<string | null> {
+  const [r] = await db().select({ id: schema.roles.id }).from(schema.roles).where(eq(schema.roles.slug, MASTER_ROLE));
+  return r?.id ?? null;
+}
+/**
+ * A global admin manages technicians but cannot make anyone master
+ * administrator (themselves included), nor change, reset or disable one.
+ */
+async function assertMasterGuard(a: AuthContext, p: { target?: UserRow; roleId?: string | null }) {
+  const master = await masterRoleId();
+  if (!master || a.realUser.roleId === master) return;
+  if (p.target?.roleId === master || (p.roleId !== undefined && p.roleId === master)) throw new HTTPException(403, { message: "master_only" });
+}
+
+async function staffTarget(id: string | undefined): Promise<UserRow> {
+  const target = await getUser(zUuid.parse(id));
+  if (target.kind !== "staff") throw new HTTPException(400, { message: "staff_only" });
+  return target;
+}
+async function signInOf(userId: string) {
+  if (!zUuid.safeParse(userId).success) return null;
+  const [conn] = await db().select().from(schema.msConnections).where(eq(schema.msConnections.userId, userId));
+  return conn ?? null;
+}
+async function calendarLink(id: string | undefined) {
+  const [l] = await db().select().from(schema.calendarLinks).where(eq(schema.calendarLinks.id, zUuid.parse(id)));
+  if (!l) throw new HTTPException(404, { message: "not_found" });
+  return l;
+}
+/** What the admin panel shows for a technician's Microsoft 365. */
+async function o365View(target: UserRow) {
+  const links = await db().select().from(schema.calendarLinks).where(eq(schema.calendarLinks.technicianId, target.id)).orderBy(asc(schema.calendarLinks.createdAt));
+  const conns = await db().select({ userId: schema.msConnections.userId, email: schema.msConnections.email, lastError: schema.msConnections.lastError }).from(schema.msConnections);
+  const staff = await db().select({ id: schema.users.id, name: schema.users.name, email: schema.users.email }).from(schema.users).where(and(eq(schema.users.kind, "staff"), eq(schema.users.active, true))).orderBy(asc(schema.users.name));
+  const signIn = (id: string | null) => conns.find((x) => x.userId === id) ?? null;
+  return {
+    enabled: (await permissionsOf(target)).includes("tickets.o365"),
+    mailbox: target.o365Email,
+    integrationReady: await o365Ready(),
+    signIn: signIn(target.id) ? { email: signIn(target.id)!.email, needsReconnect: signIn(target.id)!.lastError === "reconnect" } : null,
+    links: links.map((l) => ({
+      id: l.id,
+      source: l.source,
+      ownerId: l.ownerId,
+      mailbox: l.source === "user" ? (signIn(l.ownerId)?.email ?? null) : l.mailbox,
+      calendarName: l.calendarName,
+      label: l.label,
+      display: l.display,
+      push: l.push,
+      signedIn: l.source === "app" || Boolean(signIn(l.ownerId)),
+    })),
+    /** Technicians whose own sign-in can lend their calendar */
+    people: staff.map((u) => ({ id: u.id, name: u.name, email: u.email, signedIn: Boolean(signIn(u.id)) })),
+  };
 }
 
 /** Managing a user needs admin.staff (technicians) or admin.clients (client users). */
@@ -184,6 +242,7 @@ export const adminRoutes = new Hono<AppEnv>()
   })
   .post("/staff", requirePermission("admin.staff"), async (c) => {
     const p = await body(c, z.object(userInput));
+    await assertMasterGuard(auth(c), { roleId: p.roleId });
     return c.json(await createUser(auth(c).user.id, "staff", null, p, c), 201);
   })
 
@@ -259,6 +318,7 @@ export const adminRoutes = new Hono<AppEnv>()
     const a = auth(c);
     const target = await getUser(zUuid.parse(c.req.param("id")));
     assertCanManage(a.permissions, target.kind);
+    await assertMasterGuard(a, { target });
     const p = await body(
       c,
       z.object({
@@ -276,6 +336,7 @@ export const adminRoutes = new Hono<AppEnv>()
     );
     if (p.email && (await emailTaken(p.email, target.id))) throw new HTTPException(409, { message: "email_taken" });
     if (p.roleId !== undefined) await assertRoleFor(p.roleId, target.kind);
+    await assertMasterGuard(a, { roleId: p.roleId });
     if (target.id === a.user.id && p.active === false) throw new HTTPException(409, { message: "cannot_disable_self" });
     if (target.kind === "staff" && (p.active !== undefined || p.roleId !== undefined)) {
       await assertAdminRemains({ userId: target.id, active: p.active, roleId: p.roleId });
@@ -294,6 +355,7 @@ export const adminRoutes = new Hono<AppEnv>()
     const a = auth(c);
     const target = await getUser(zUuid.parse(c.req.param("id")));
     assertCanManage(a.permissions, target.kind);
+    await assertMasterGuard(a, { target });
     const password = temporaryPassword();
     await db()
       .update(schema.users)
@@ -308,6 +370,7 @@ export const adminRoutes = new Hono<AppEnv>()
     const a = auth(c);
     const target = await getUser(zUuid.parse(c.req.param("id")));
     assertCanManage(a.permissions, target.kind);
+    await assertMasterGuard(a, { target });
     if (!target.active) throw new HTTPException(409, { message: "user_inactive" });
     // Development without a mail server prints the email to the console
     if (config.production && !(await mailConfigured())) throw new HTTPException(409, { message: "mail_not_configured" });
@@ -319,6 +382,7 @@ export const adminRoutes = new Hono<AppEnv>()
     const a = auth(c);
     const target = await getUser(zUuid.parse(c.req.param("id")));
     assertCanManage(a.permissions, target.kind);
+    await assertMasterGuard(a, { target });
     await db()
       .update(schema.users)
       .set({ mfaEnabled: false, mfaSecret: null, mfaLastStep: null, updatedAt: new Date() })
@@ -328,23 +392,18 @@ export const adminRoutes = new Hono<AppEnv>()
     return c.json({ ok: true });
   })
   /**
-   * Microsoft 365 calendar sync for a technician: on / off (the right
-   * tickets.o365, given or taken on top of the role) and the mailbox when it
-   * differs from the email. Only admins choose the mailbox: the portal can
-   * read any calendar of the organization.
+   * Microsoft 365 for a technician (master administrators: the organisation
+   * access reads any calendar of AKAB): sync on / off (the right
+   * tickets.o365 on top of the role), and the calendars shown in their
+   * planning with what each shows.
    */
-  .get("/users/:id/o365", async (c) => {
-    const a = auth(c);
-    const target = await getUser(zUuid.parse(c.req.param("id")));
-    assertCanManage(a.permissions, target.kind);
-    if (target.kind !== "staff") throw new HTTPException(400, { message: "staff_only" });
-    return c.json({ enabled: (await permissionsOf(target)).includes("tickets.o365"), mailbox: target.o365Email, integrationReady: await o365Ready() });
+  .get("/users/:id/o365", requirePermission("admin.o365"), async (c) => {
+    const target = await staffTarget(c.req.param("id"));
+    return c.json(await o365View(target));
   })
-  .put("/users/:id/o365", async (c) => {
+  .put("/users/:id/o365", requirePermission("admin.o365"), async (c) => {
     const a = auth(c);
-    const target = await getUser(zUuid.parse(c.req.param("id")));
-    assertCanManage(a.permissions, target.kind);
-    if (target.kind !== "staff") throw new HTTPException(400, { message: "staff_only" });
+    const target = await staffTarget(c.req.param("id"));
     const p = await body(c, z.object({ enabled: z.boolean(), mailbox: zEmail.nullable().optional() }));
     // the role decides by default; the switch adds or removes the right for this person only
     await db().delete(schema.userPermissions).where(and(eq(schema.userPermissions.userId, target.id), eq(schema.userPermissions.permission, "tickets.o365")));
@@ -352,7 +411,91 @@ export const adminRoutes = new Hono<AppEnv>()
     if (p.enabled !== byRole) await db().insert(schema.userPermissions).values({ userId: target.id, permission: "tickets.o365", effect: p.enabled ? "allow" : "deny" });
     if (p.mailbox !== undefined) await db().update(schema.users).set({ o365Email: p.mailbox, updatedAt: new Date() }).where(eq(schema.users.id, target.id));
     await audit(a.user.id, "user.o365", target.id, { enabled: p.enabled, mailbox: p.mailbox });
-    return c.json({ enabled: p.enabled, mailbox: p.mailbox === undefined ? target.o365Email : p.mailbox, integrationReady: await o365Ready() });
+    return c.json(await o365View(await getUser(target.id)));
+  })
+  /** The calendars of a mailbox, to choose one: through its owner's sign-in, or the organisation access. */
+  .get("/users/:id/o365/calendars", requirePermission("admin.o365"), async (c) => {
+    await staffTarget(c.req.param("id"));
+    const q = z.object({ source: z.enum(["user", "app"]), ownerId: zUuid.optional(), mailbox: zEmail.optional() }).parse(c.req.query());
+    try {
+      if (q.source === "user") {
+        const conn = await signInOf(q.ownerId ?? "");
+        if (!conn) throw new HTTPException(409, { message: "o365_not_signed_in" });
+        return c.json(await asConnection(q.ownerId!, () => listCalendars(conn.email)));
+      }
+      if (!q.mailbox) throw new HTTPException(400, { message: "Validation failed" });
+      return c.json(await listCalendars(q.mailbox));
+    } catch (err) {
+      if (err instanceof O365Error) throw new HTTPException(err.code === "not_found" ? 404 : 502, { message: `o365_${err.code}` });
+      throw err;
+    }
+  })
+  /** Show a calendar in this technician's planning. */
+  .post("/users/:id/calendar-links", requirePermission("admin.o365"), async (c) => {
+    const a = auth(c);
+    const target = await staffTarget(c.req.param("id"));
+    const p = await body(
+      c,
+      z.object({
+        source: z.enum(["user", "app"]),
+        ownerId: zUuid.optional(),
+        mailbox: zEmail.optional(),
+        calendarId: z.string().min(1).max(400).nullable().optional(),
+        calendarName: z.string().trim().max(200).nullable().optional(),
+        display: z.enum(["details", "busy"]),
+        push: z.boolean().default(false),
+      }),
+    );
+    let label: string;
+    if (p.source === "user") {
+      const owner = p.ownerId ? await getUser(p.ownerId).catch(() => null) : null;
+      if (!owner || owner.kind !== "staff") throw new HTTPException(400, { message: "Validation failed" });
+      if (!(await signInOf(owner.id))) throw new HTTPException(409, { message: "o365_not_signed_in" });
+      label = owner.name;
+    } else {
+      if (!p.mailbox) throw new HTTPException(400, { message: "Validation failed" });
+      if (!(await o365Ready())) throw new HTTPException(409, { message: "o365_not_configured" });
+      const [owner] = await db().select().from(schema.users).where(sql`lower(${schema.users.email}) = ${p.mailbox.toLowerCase()} or lower(${schema.users.o365Email}) = ${p.mailbox.toLowerCase()}`);
+      label = owner?.name ?? p.mailbox;
+      p.ownerId = owner?.id;
+    }
+    const [{ n }] = await db().select({ n: sql<number>`count(*)::int` }).from(schema.calendarLinks).where(eq(schema.calendarLinks.technicianId, target.id));
+    if (n >= 20) throw new HTTPException(409, { message: "too_many" });
+    // one calendar receives the technician's blocks
+    if (p.push) await db().update(schema.calendarLinks).set({ push: false }).where(eq(schema.calendarLinks.technicianId, target.id));
+    const [row] = await db()
+      .insert(schema.calendarLinks)
+      .values({
+        technicianId: target.id,
+        source: p.source,
+        ownerId: p.ownerId ?? null,
+        mailbox: p.source === "app" ? p.mailbox!.toLowerCase() : null,
+        calendarId: p.calendarId ?? null,
+        calendarName: p.calendarName ?? null,
+        label,
+        display: p.display,
+        push: p.push,
+        createdBy: a.user.id,
+      })
+      .returning();
+    await audit(a.user.id, "calendar.linked", target.id, { linkId: row.id, source: row.source, ownerId: row.ownerId, mailbox: row.mailbox, display: row.display, push: row.push });
+    return c.json(await o365View(target), 201);
+  })
+  .patch("/calendar-links/:linkId", requirePermission("admin.o365"), async (c) => {
+    const a = auth(c);
+    const link = await calendarLink(c.req.param("linkId"));
+    const p = await body(c, z.object({ display: z.enum(["details", "busy"]).optional(), push: z.boolean().optional() }));
+    if (p.push) await db().update(schema.calendarLinks).set({ push: false }).where(eq(schema.calendarLinks.technicianId, link.technicianId));
+    await db().update(schema.calendarLinks).set({ ...p, updatedAt: new Date() }).where(eq(schema.calendarLinks.id, link.id));
+    await audit(a.user.id, "calendar.link_updated", link.technicianId, { linkId: link.id, ...p });
+    return c.json(await o365View(await getUser(link.technicianId)));
+  })
+  .delete("/calendar-links/:linkId", requirePermission("admin.o365"), async (c) => {
+    const a = auth(c);
+    const link = await calendarLink(c.req.param("linkId"));
+    await db().delete(schema.calendarLinks).where(eq(schema.calendarLinks.id, link.id));
+    await audit(a.user.id, "calendar.unlinked", link.technicianId, { linkId: link.id });
+    return c.json(await o365View(await getUser(link.technicianId)));
   })
 
   /** Rights granted or denied directly to this user (on top of the role). */
@@ -360,6 +503,7 @@ export const adminRoutes = new Hono<AppEnv>()
     const a = auth(c);
     const target = await getUser(zUuid.parse(c.req.param("id")));
     assertCanManage(a.permissions, target.kind);
+    await assertMasterGuard(a, { target });
     const { overrides } = await body(
       c,
       z.object({

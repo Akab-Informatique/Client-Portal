@@ -9,8 +9,8 @@ import { notify } from "../lib/notify.ts";
 import { body, zUuid } from "../lib/validate.ts";
 import { SourceError, ticketSource } from "../lib/ticketSource.ts";
 import { AutotaskError } from "../lib/autotask.ts";
-import { o365MailboxOf, syncBlock, syncPin, unsyncBlock, unsyncPin } from "../lib/planning.ts";
-import { O365Error, outlookEvents } from "../lib/o365.ts";
+import { calendarsOf, onCalendar, syncBlock, syncPin, unsyncBlock, unsyncPin } from "../lib/planning.ts";
+import { O365Error, outlookEvents, type OutlookEvent } from "../lib/o365.ts";
 import { holidaysBetween } from "../../shared/holidays.ts";
 
 /**
@@ -329,20 +329,44 @@ export const planningRoutes = new Hono<AppEnv>()
     return c.json(await absencesOf(techId, dayOf(from), dayOf(new Date(to.getTime() - 1))));
   })
 
-  /** The technician's own Outlook events (read only), when they sync with Microsoft 365. */
+  /**
+   * The Outlook events of the calendars in this technician's planning (read
+   * only). A calendar set to "busy" shows only "Occupé — <name>" to anyone
+   * but its owner; private events never show their subject to others.
+   */
   .get("/calendar/outlook", async (c) => {
     const a = auth(c);
     const techId = whose(c, a);
     const from = new Date(zIso.parse(c.req.query("from")));
     const to = new Date(zIso.parse(c.req.query("to")));
     if (!(to > from) || to.getTime() - from.getTime() > 62 * 86_400_000) throw new HTTPException(400, { message: "Validation failed" });
-    const email = await o365MailboxOf(techId);
-    if (!email) return c.json({ synced: false, events: [] });
-    try {
-      return c.json({ synced: true, events: await outlookEvents(email, from, to) });
-    } catch (e) {
-      return c.json({ synced: true, events: [], error: warningOf(e, "o365") });
+    const targets = await calendarsOf(techId);
+    if (!targets.length) return c.json({ synced: false, events: [] });
+    const viewer = [a.user.email, a.user.o365Email].filter(Boolean).map((x) => x!.toLowerCase());
+    const events: (OutlookEvent & { calendar: string; masked: boolean })[] = [];
+    const calendars: { label: string; display: "details" | "busy"; error?: string }[] = [];
+    let error: string | undefined;
+    for (const t of targets) {
+      if (!t.mailbox) {
+        calendars.push({ label: t.label, display: t.display, error: "o365_not_signed_in" });
+        error ??= "o365_not_signed_in";
+        continue;
+      }
+      const mine = t.ownerId === a.user.id || viewer.includes(t.mailbox.toLowerCase());
+      try {
+        const list = await onCalendar(t, () => outlookEvents(t.mailbox!, from, to, t.calendarId));
+        for (const e of list) {
+          const hide = !mine && (t.display === "busy" || e.private);
+          events.push(hide ? { ...e, title: `Occupé — ${t.label}`, location: null, calendar: t.label, masked: true } : { ...e, calendar: t.label, masked: false });
+        }
+        calendars.push({ label: t.label, display: t.display });
+      } catch (e) {
+        const w = warningOf(e, "o365");
+        calendars.push({ label: t.label, display: t.display, error: w });
+        error ??= w;
+      }
     }
+    return c.json({ synced: true, events, calendars, ...(error ? { error } : {}) });
   })
 
   /**

@@ -56,6 +56,14 @@ export function useAdminError() {
         return t("admin.users.mailFailed");
       case "user_inactive":
         return t("admin.users.userInactive");
+      case "master_only":
+        return t("admin.users.masterOnly");
+      case "o365_not_signed_in":
+      case "o365_not_configured":
+      case "o365_not_found":
+      case "o365_forbidden":
+      case "o365_auth":
+        return t(`admin.o365.errors.${code.slice(5)}`);
       default:
         return t("common.error");
     }

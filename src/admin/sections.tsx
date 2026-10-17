@@ -25,12 +25,12 @@ import { NewUserDialog, UserSheet, UserStatusBadges } from "./UserPanels";
 import { useOneShotParam } from "@/lib/useDeepLink";
 import { useConfirm } from "@/components/ConfirmDialog";
 
-export function SectionHeader({ title, subtitle, action }: { title: string; subtitle: string; action?: ReactNode }) {
+export function SectionHeader({ title, subtitle, action }: { title: string; subtitle?: string; action?: ReactNode }) {
   return (
     <div className="mb-6 flex flex-wrap items-end justify-between gap-3">
       <div>
         <h2 className="text-2xl font-bold">{title}</h2>
-        <p className="text-sm text-muted-foreground">{subtitle}</p>
+        {subtitle && <p className="text-sm text-muted-foreground">{subtitle}</p>}
       </div>
       {action}
     </div>

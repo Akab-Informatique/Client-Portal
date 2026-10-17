@@ -1,8 +1,8 @@
 import { useEffect, useMemo, useState, type FormEvent } from "react";
 import { useTranslation } from "react-i18next";
-import { useMutation, useQueryClient, useQuery } from "@tanstack/react-query";
+import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
-import { Check, Copy, KeyRound, Loader2, LockOpen, ShieldCheck, ShieldOff, UserRoundX, UserRoundCheck, MailCheck, CalendarDays } from "lucide-react";
+import { Check, Copy, KeyRound, Loader2, LockOpen, ShieldCheck, ShieldOff, UserRoundX, UserRoundCheck, MailCheck } from "lucide-react";
 import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from "@/components/ui/sheet";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
@@ -22,6 +22,7 @@ import type { Audience } from "@shared/permissions";
 import { useAdminError, useRoleName, useRoles } from "./hooks";
 import { OverridesEditor, type OverrideMap } from "./PermissionMatrix";
 import { useConfirm } from "@/components/ConfirmDialog";
+import { O365Panel } from "./CalendarLinks";
 
 function invalidateUsers(qc: ReturnType<typeof useQueryClient>) {
   void qc.invalidateQueries({ queryKey: ["admin"] });
@@ -268,6 +269,7 @@ export function UserSheet({ user, onClose }: { user: AdminUser | null; onClose: 
 
 function ProfileTab({ user }: { user: AdminUser }) {
   const { t } = useTranslation();
+  const can = useCan();
   const qc = useQueryClient();
   const errText = useAdminError();
   const me = useMe();
@@ -309,10 +311,13 @@ function ProfileTab({ user }: { user: AdminUser }) {
           <Label>{t("common.title")}</Label>
           <Input value={form.title} onChange={(e) => setForm({ ...form, title: e.target.value })} />
         </div>
-        <div className="space-y-2">
-          <Label>{t("common.phone")}</Label>
-          <Input value={form.phone} onChange={(e) => setForm({ ...form, phone: e.target.value })} />
-        </div>
+        {/* technicians: the cell phone only */}
+        {user.kind === "client" && (
+          <div className="space-y-2">
+            <Label>{t("common.phone")}</Label>
+            <Input value={form.phone} onChange={(e) => setForm({ ...form, phone: e.target.value })} />
+          </div>
+        )}
         {user.kind === "staff" && (
           <div className="space-y-2">
             <Label>{t("profile.mobile")}</Label>
@@ -330,7 +335,7 @@ function ProfileTab({ user }: { user: AdminUser }) {
           </Select>
         </div>
       </div>
-      {user.kind === "staff" && <O365Switch userId={user.id} />}
+      {user.kind === "staff" && can("admin.o365") && <O365Panel userId={user.id} />}
       {user.kind === "client" && (
         <label className="flex items-center justify-between gap-4 rounded-lg border p-3 text-sm">
           {t("admin.users.notify")}
@@ -356,49 +361,6 @@ function ProfileTab({ user }: { user: AdminUser }) {
         </Button>
       </div>
     </form>
-  );
-}
-
-/** Microsoft 365 calendar sync for this technician, and the mailbox if it is not their email. */
-function O365Switch({ userId }: { userId: string }) {
-  const { t } = useTranslation();
-  const qc = useQueryClient();
-  const errText = useAdminError();
-  const key = ["admin", "users", userId, "o365"];
-  const { data } = useQuery({ queryKey: key, queryFn: () => api.get<{ enabled: boolean; mailbox: string | null; integrationReady: boolean }>(`/admin/users/${userId}/o365`) });
-  const [mailbox, setMailbox] = useState<string | null>(null);
-  const save = useMutation({
-    mutationFn: (p: { enabled: boolean; mailbox?: string | null }) => api.put<{ enabled: boolean; mailbox: string | null; integrationReady: boolean }>(`/admin/users/${userId}/o365`, p),
-    onSuccess: (next) => {
-      qc.setQueryData(key, next);
-      invalidateUsers(qc);
-      setMailbox(null);
-      toast.success(t("common.saved"));
-    },
-    onError: (e) => toast.error(errText(e)),
-  });
-  if (!data) return null;
-  const typed = mailbox ?? data.mailbox ?? "";
-  return (
-    <div className="space-y-3 rounded-lg border p-3 text-sm">
-      <label className="flex items-center justify-between gap-4">
-        <span>
-          <span className="flex items-center gap-2 font-medium">
-            <CalendarDays className="size-4 text-primary" /> {t("admin.users.o365")}
-          </span>
-          <span className="mt-0.5 block text-xs text-muted-foreground">{data.integrationReady ? t("admin.users.o365Hint") : t("admin.users.o365NotReady")}</span>
-        </span>
-        <Switch checked={data.enabled} disabled={save.isPending} onCheckedChange={(v) => save.mutate({ enabled: v })} />
-      </label>
-      {data.enabled && (
-        <div className="flex gap-2">
-          <Input type="email" value={typed} onChange={(e) => setMailbox(e.target.value)} placeholder={t("admin.users.o365Mailbox")} className="h-8 text-xs" />
-          <Button type="button" size="sm" variant="outline" className="h-8" disabled={save.isPending || mailbox === null} onClick={() => save.mutate({ enabled: true, mailbox: typed.trim() || null })}>
-            {t("common.save")}
-          </Button>
-        </div>
-      )}
-    </div>
   );
 }
 

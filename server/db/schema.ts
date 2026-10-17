@@ -673,6 +673,8 @@ export const mailAccounts = pgTable(
       .references(() => users.id, { onDelete: "cascade" }),
     address: text("address").notNull(),
     displayName: text("display_name"),
+    /** "user": through the technician's own Microsoft sign-in; "app": the organisation access (admins, shared mailboxes) */
+    via: text("via", { enum: ["user", "app"] }).notNull().default("app"),
     createdAt: created(),
   },
   (t) => [uniqueIndex("mail_accounts_user_address_unique").on(t.userId, sql`lower(${t.address})`)],
@@ -749,4 +751,59 @@ export const meetingAbsences = pgTable(
     createdAt: created(),
   },
   (t) => [index("meeting_absences_dates_idx").on(t.startDate, t.endDate)],
+);
+
+/**
+ * A technician's own Microsoft 365 sign-in (delegated access): what they
+ * linked themselves (Outlook mail, calendar, later To Do). The refresh token
+ * is sealed with APP_SECRET and never leaves the server.
+ */
+export const msConnections = pgTable("ms_connections", {
+  userId: uuid("user_id")
+    .primaryKey()
+    .references(() => users.id, { onDelete: "cascade" }),
+  /** Microsoft account (object id) and its address */
+  msUserId: text("ms_user_id").notNull(),
+  email: text("email").notNull(),
+  displayName: text("display_name"),
+  refreshToken: text("refresh_token").notNull(),
+  scopes: text("scopes").notNull().default(""),
+  /** Set when Microsoft refused the token (sign in again) */
+  lastError: text("last_error"),
+  connectedAt: created(),
+  updatedAt: updated(),
+});
+
+/**
+ * Calendars shown in a technician's planning (tickets page), chosen by a
+ * master admin: the technician's own, or anyone's, each with what it shows.
+ * No row for a technician with the right: their own calendar, in detail.
+ */
+export const calendarLinks = pgTable(
+  "calendar_links",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    /** The planning it appears in */
+    technicianId: uuid("technician_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    /** "user": the owner's Microsoft sign-in; "app": the organisation access to the mailbox */
+    source: text("source", { enum: ["user", "app"] }).notNull(),
+    /** Whose calendar (source "user"; also the name shown when busy) */
+    ownerId: uuid("owner_id").references(() => users.id, { onDelete: "cascade" }),
+    /** Source "app": the mailbox */
+    mailbox: text("mailbox"),
+    /** A calendar of that mailbox; null = the main one */
+    calendarId: text("calendar_id"),
+    calendarName: text("calendar_name"),
+    /** Name shown on its events when only busy times are shown */
+    label: text("label").notNull(),
+    display: text("display", { enum: ["details", "busy"] }).notNull().default("details"),
+    /** Receives the portal's blocks and priorities of the day (one per technician) */
+    push: boolean("push").notNull().default(false),
+    createdBy: uuid("created_by").references(() => users.id, { onDelete: "set null" }),
+    createdAt: created(),
+    updatedAt: updated(),
+  },
+  (t) => [index("calendar_links_technician").on(t.technicianId)],
 );

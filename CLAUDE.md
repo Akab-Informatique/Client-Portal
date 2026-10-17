@@ -43,6 +43,13 @@ Administration tab `/meetings`, used live during the Monday team meeting (lists 
 - Absences are shared with the Tickets planning calendar: `GET /api/planning/absences` (same access rules as `/planning/calendar`) hatches absent days in `WeekCalendar`, and creating or moving a block on an absent day returns the `absent` warning (still saved).
 - Migrations `0023`–`0026`. Tests: `tests/api.test.ts` ("weekly meeting: …") and `tests/meetings.test.ts` (Friday cut-off).
 
+## Roles and Microsoft 365
+
+- Built-in roles (`shared/permissions.ts` SYSTEM_ROLES): **Administrateur principal** (`administrator`, MASTER_ROLE, every right, locked), **Administrateur global** (`global-admin`: everything except MASTER_ONLY — roles, integrations, mail server, `admin.o365`, `outlook.anyMailbox`), **Technicien**, **Lecture seule**. Only a master admin gives the master role or edits / resets / disables a master admin (`assertMasterGuard` in `server/routes/admin.ts`).
+- One Entra app registration, two ways: the **organisation access** (application permissions, any mailbox — master admins only) and each technician's **own sign-in** (delegated, OAuth code + PKCE, `server/lib/msauth.ts`, routes `/api/microsoft`, refresh token sealed in `ms_connections`). Graph calls inside `asUser` / `asConnection` (`server/lib/o365.ts`) go out as that person; `user(email)` becomes `me` for their own mailbox.
+- Outlook module: own mailbox only through the technician's sign-in (`mail_accounts.via = "user"`, linked automatically on sign-in); other mailboxes need `outlook.anyMailbox` (`via = "app"`).
+- Tickets planning calendars: `calendar_links` per technician, chosen by a master admin (`admin.o365`), each `details` or `busy` ("Occupé — name" to anyone but its owner; private events always masked); the one with `push` receives the portal's blocks and day priorities. No link: their own calendar, in detail.
+
 ## Security rules
 
 - Authorization is enforced in the API, never only in the UI. Use `auth(c)` / `requirePermission`; never trust ids or roles sent by the browser.

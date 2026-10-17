@@ -2,7 +2,7 @@ import { eq, sql } from "drizzle-orm";
 import { db, schema } from "./index.ts";
 import { config } from "../config.ts";
 import { hashPassword, temporaryPassword } from "../lib/crypto.ts";
-import { SYSTEM_ROLES, permissionsFor } from "../../shared/permissions.ts";
+import { MASTER_ROLE, SYSTEM_ROLES, permissionsFor } from "../../shared/permissions.ts";
 
 /**
  * Idempotent startup tasks:
@@ -36,10 +36,11 @@ export async function seed(): Promise<void> {
         isSystem: true,
         locked: r.locked,
       });
-    } else if (r.slug === "administrator") {
+    } else if (r.slug === MASTER_ROLE) {
       await d
         .update(schema.roles)
-        .set({ permissions: permissionsFor("staff"), defaultsApplied: permissionsFor("staff"), locked: true, updatedAt: new Date() })
+        // every right, and its name (it cannot be edited)
+        .set({ name: r.name.fr, description: r.description.fr, permissions: permissionsFor("staff"), defaultsApplied: permissionsFor("staff"), locked: true, updatedAt: new Date() })
         .where(eq(schema.roles.id, existing.id));
     } else {
       // A right added to this role's defaults (e.g. texts for technicians) is
@@ -67,7 +68,7 @@ export async function seed(): Promise<void> {
     .where(eq(schema.users.kind, "staff"));
   if (count > 0) return;
 
-  const adminRole = await roleBySlug("administrator");
+  const adminRole = await roleBySlug(MASTER_ROLE);
   const demo = config.seedDemo && !config.production;
   const email = config.bootstrap.email || "admin@akab.local";
   const password = config.bootstrap.password || (demo ? "akab-dev-password" : temporaryPassword());

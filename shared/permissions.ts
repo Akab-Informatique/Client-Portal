@@ -234,6 +234,14 @@ export const MODULES = [
         },
       },
       {
+        key: "admin.o365",
+        label: { fr: "Gérer les calendriers Microsoft 365 de tous", en: "Manage everyone's Microsoft 365 calendars" },
+        description: {
+          fr: "Choisir les calendriers affichés dans la planification de chaque technicien et ce qu'ils montrent (l'accès organisation lit toute boîte d'AKAB)",
+          en: "Choose the calendars shown in each technician's planning and what they show (the organisation access reads any AKAB mailbox)",
+        },
+      },
+      {
         key: "admin.integrations",
         label: { fr: "Gérer les intégrations (Autotask)", en: "Manage integrations (Autotask)" },
         description: {
@@ -269,7 +277,17 @@ export function isPermissionKey(v: unknown): v is PermissionKey {
   return typeof v === "string" && (ALL_PERMISSIONS as readonly string[]).includes(v);
 }
 
-export const ADMIN_PERMISSIONS = ["admin.staff", "admin.clients", "admin.roles", "admin.integrations", "admin.email"] as const satisfies readonly PermissionKey[];
+export const ADMIN_PERMISSIONS = ["admin.staff", "admin.clients", "admin.roles", "admin.integrations", "admin.email", "admin.o365"] as const satisfies readonly PermissionKey[];
+
+/** The master administrator role: every right, locked; only its holders give it or act on its holders. */
+export const MASTER_ROLE = "administrator";
+
+/**
+ * Rights kept for master administrators: whoever holds them can take over
+ * the portal (roles and rights, secrets of the integrations and mail server,
+ * anyone's mailbox or calendar).
+ */
+export const MASTER_ONLY: readonly PermissionKey[] = ["admin.roles", "admin.integrations", "admin.email", "admin.o365", "outlook.anyMailbox"];
 
 /** Predefined roles, created on first start. System roles cannot be deleted. */
 export const SYSTEM_ROLES: Array<{
@@ -281,19 +299,41 @@ export const SYSTEM_ROLES: Array<{
   locked: boolean;
 }> = [
   {
-    slug: "administrator",
+    slug: MASTER_ROLE,
     audience: "staff",
-    name: { fr: "Administrateur", en: "Administrator" },
-    description: { fr: "Accès complet, incluant les paramètres admin", en: "Full access, including admin settings" },
+    name: { fr: "Administrateur principal", en: "Master administrator" },
+    description: { fr: "Tous les droits, sans exception : rôles, intégrations, connexions Microsoft 365", en: "Every right, no exception: roles, integrations, Microsoft 365 connections" },
     permissions: permissionsFor("staff"),
     locked: true,
+  },
+  {
+    slug: "global-admin",
+    audience: "staff",
+    name: { fr: "Administrateur global", en: "Global administrator" },
+    description: {
+      fr: "Gère les techniciens, les clients et leurs usagers, et tout le travail ; pas les rôles, les intégrations ni les calendriers des autres",
+      en: "Manages technicians, clients and their users, and all the work; not roles, integrations or other people's calendars",
+    },
+    permissions: permissionsFor("staff").filter((p) => !MASTER_ONLY.includes(p)),
+    locked: false,
   },
   {
     slug: "technician",
     audience: "staff",
     name: { fr: "Technicien", en: "Technician" },
-    description: { fr: "Travail quotidien : babillard et tableau de bord", en: "Day-to-day work: board and dashboard" },
-    permissions: ["dashboard.view", "tickets.view", "tickets.edit", "sms.view", "outlook.view", "outlook.send", "messages.view", "messages.post", "messages.pin", "messages.email"],
+    description: { fr: "Gère ses billets et ses clients", en: "Manages their tickets and clients" },
+    permissions: [
+      "dashboard.view",
+      "tickets.view",
+      "tickets.edit",
+      "sms.view",
+      "outlook.view",
+      "outlook.send",
+      "messages.view",
+      "messages.post",
+      "messages.pin",
+      "messages.email",
+    ],
     locked: false,
   },
   {

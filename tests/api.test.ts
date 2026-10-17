@@ -41,7 +41,7 @@ class Agent {
     } catch {
       json = text;
     }
-    return { status: res.status, json };
+    return { status: res.status, json, location: res.headers.get("location") };
   }
   get = (p: string) => this.req("GET", p);
   post = (p: string, b: unknown = {}) => this.req("POST", p, b);
@@ -1383,7 +1383,7 @@ describe("tickets: client and contact", () => {
     expect((await tech.get("/api/me")).json.mobile).toBeNull();
     // a technician cannot switch sync or choose a mailbox
     expect((await tech.put(`/api/admin/users/${techRow.id}/o365`, { enabled: true })).status).toBe(403);
-    expect((await admin.get(`/api/admin/users/${techRow.id}/o365`)).json).toEqual({ enabled: false, mailbox: null, integrationReady: false });
+    expect((await admin.get(`/api/admin/users/${techRow.id}/o365`)).json).toMatchObject({ enabled: false, mailbox: null, integrationReady: false, signIn: null, links: [] });
     expect((await admin.put(`/api/admin/users/${techRow.id}/o365`, { enabled: true, mailbox: "alex@akab.ca" })).json).toMatchObject({ enabled: true, mailbox: "alex@akab.ca" });
     expect((await tech.get("/api/me")).json.o365).toEqual({ mailbox: "alex@akab.ca", active: false });
     await admin.put(`/api/admin/users/${techRow.id}/o365`, { enabled: false, mailbox: null });
@@ -1911,6 +1911,7 @@ describe("Microsoft 365 calendar", () => {
           });
         }
         if (url.endsWith("/calendar?$select=id,name")) return json({ id: "cal", name: "Calendrier" });
+        if (url.includes("/calendars?$select=")) return json({ value: [{ id: "cal-main", name: "Calendrier", isDefaultCalendar: true, canEdit: true, owner: { address: "admin@akab.local" } }, { id: "cal-team", name: "Équipe", canEdit: true }] });
         if (url.endsWith("/events") && method === "POST") return json({ id: `new-${graphSent.length}` }, 201);
         if (method === "PATCH" || method === "DELETE") return new Response(null, { status: 204 });
         return json({ error: { message: "unexpected" } }, 500);
@@ -1979,6 +1980,98 @@ describe("Microsoft 365 calendar", () => {
     expect(graphSent[0].url).toContain("users/alex.tremblay%40akab.ca/calendarView");
     await admin.put(`/api/admin/users/${techRow.id}/o365`, { enabled: false, mailbox: null });
     await admin.put(`/api/admin/users/${techRow.id}/permissions`, { overrides: [] });
+  });
+
+  it("a master admin chooses the calendars of each planning, and what each shows", async () => {
+    resetRateLimit("login:ip:unknown");
+    const admin = await signIn("admin@akab.local");
+    const tech = await signIn("tech@akab.local");
+    const [techRow] = await db().select().from(schema.users).where(eq(schema.users.email, "tech@akab.local"));
+    const [adminRow] = await db().select().from(schema.users).where(eq(schema.users.email, "admin@akab.local"));
+    await admin.put(`/api/admin/users/${techRow.id}/o365`, { enabled: true });
+
+    // a calendar of a mailbox is picked from its list (organisation access)
+    const cals = (await admin.get(`/api/admin/users/${techRow.id}/o365/calendars?source=app&mailbox=admin%40akab.local`)).json;
+    expect(cals.map((x: any) => x.name)).toEqual(["Calendrier", "Équipe"]);
+    // the admin's own calendar in the technician's planning: busy times only, with the admin's name
+    let view = (await admin.post(`/api/admin/users/${techRow.id}/calendar-links`, { source: "app", mailbox: "admin@akab.local", display: "busy" })).json;
+    expect(view.links).toEqual([expect.objectContaining({ label: "Administrateur AKAB", display: "busy", push: false })]);
+    // the technician's own, in detail, in its "Équipe" calendar, receiving the portal's blocks
+    view = (await admin.post(`/api/admin/users/${techRow.id}/calendar-links`, { source: "app", mailbox: "tech@akab.local", calendarId: "cal-team", calendarName: "Équipe", display: "details", push: true })).json;
+    expect(view.links.map((l: any) => [l.label, l.display, l.push])).toEqual([
+      ["Administrateur AKAB", "busy", false],
+      ["Alex Tremblay", "details", true],
+    ]);
+    // through someone's own sign-in: only once they signed in
+    expect((await admin.post(`/api/admin/users/${techRow.id}/calendar-links`, { source: "user", ownerId: adminRow.id, display: "details" })).json.error).toBe("o365_not_signed_in");
+
+    const from = "2026-10-12T04:00:00.000Z";
+    const to = "2026-10-19T04:00:00.000Z";
+    const q = `from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}`;
+    // the technician sees the admin as busy, and their own events in detail
+    const mine = (await tech.get(`/api/planning/calendar/outlook?${q}`)).json;
+    expect(mine.events.map((e: any) => [e.calendar, e.title])).toEqual([
+      ["Administrateur AKAB", "Occupé — Administrateur AKAB"],
+      ["Alex Tremblay", "Rencontre fournisseur"],
+    ]);
+    expect(mine.events[0]).toMatchObject({ masked: true, location: null });
+    // the admin looking at that planning sees their own calendar in detail
+    const asOwner = (await admin.get(`/api/planning/calendar/outlook?${q}&technicianId=${techRow.id}`)).json;
+    expect(asOwner.events[0]).toMatchObject({ title: "Rencontre fournisseur", masked: false });
+
+    // a block goes to the calendar chosen to receive them
+    graphSent.length = 0;
+    const start = new Date("2026-10-15T14:00:00.000Z");
+    await admin.post("/api/planning/calendar", { technicianId: techRow.id, kind: "slot", title: "Formation", startsAt: start.toISOString(), endsAt: new Date(start.getTime() + 3_600_000).toISOString() });
+    expect(graphSent.find((s) => s.method === "POST")!.url).toContain("users/tech%40akab.local/calendars/cal-team/events");
+
+    // a global admin cannot do any of it
+    const roles = (await admin.get("/api/admin/roles")).json;
+    const global = roles.find((r: any) => r.slug === "global-admin");
+    await db().update(schema.users).set({ roleId: global.id }).where(eq(schema.users.id, techRow.id));
+    expect((await tech.get(`/api/admin/users/${techRow.id}/o365`)).status).toBe(403);
+    expect((await tech.post(`/api/admin/users/${techRow.id}/calendar-links`, { source: "app", mailbox: "ceo@akab.local", display: "details" })).status).toBe(403);
+    expect((await tech.del(`/api/admin/calendar-links/${view.links[0].id}`)).status).toBe(403);
+    await db().update(schema.users).set({ roleId: roles.find((r: any) => r.slug === "technician").id }).where(eq(schema.users.id, techRow.id));
+
+    for (const l of view.links) await admin.del(`/api/admin/calendar-links/${l.id}`);
+    expect((await admin.get(`/api/admin/users/${techRow.id}/o365`)).json.links).toEqual([]);
+    await admin.put(`/api/admin/users/${techRow.id}/o365`, { enabled: false });
+    await admin.put(`/api/admin/users/${techRow.id}/permissions`, { overrides: [] });
+  });
+});
+
+describe("built-in roles", () => {
+  it("master admin, global admin and technician; a global admin cannot take over a master admin", async () => {
+    resetRateLimit("login:ip:unknown");
+    const admin = await signIn("admin@akab.local");
+    const roles = (await admin.get("/api/admin/roles")).json;
+    const by = (slug: string) => roles.find((r: any) => r.slug === slug);
+    expect(by("administrator")).toMatchObject({ name: "Administrateur principal", locked: true });
+    expect(by("global-admin")).toMatchObject({ name: "Administrateur global", locked: false });
+    expect(by("technician")).toMatchObject({ name: "Technicien" });
+    // the global admin manages people and work, not the keys of the portal
+    expect(by("global-admin").permissions).toEqual(expect.arrayContaining(["admin.staff", "admin.clients", "tickets.plan", "meetings.manage"]));
+    for (const p of ["admin.roles", "admin.integrations", "admin.email", "admin.o365", "outlook.anyMailbox"]) expect(by("global-admin").permissions).not.toContain(p);
+    expect(by("administrator").permissions).toEqual(expect.arrayContaining(["admin.roles", "admin.o365"]));
+
+    const [techRow] = await db().select().from(schema.users).where(eq(schema.users.email, "tech@akab.local"));
+    const [adminRow] = await db().select().from(schema.users).where(eq(schema.users.email, "admin@akab.local"));
+    await db().update(schema.users).set({ roleId: by("global-admin").id }).where(eq(schema.users.id, techRow.id));
+    resetRateLimit("login:ip:unknown");
+    const global = await signIn("tech@akab.local");
+    // manages technicians…
+    expect((await global.get("/api/admin/staff")).status).toBe(200);
+    // …but not master administrators, nor becomes one
+    expect((await global.patch(`/api/admin/users/${adminRow.id}`, { title: "x" })).json.error).toBe("master_only");
+    expect((await global.post(`/api/admin/users/${adminRow.id}/reset-password`)).json.error).toBe("master_only");
+    expect((await global.post(`/api/admin/users/${adminRow.id}/reset-mfa`)).json.error).toBe("master_only");
+    expect((await global.patch(`/api/admin/users/${techRow.id}`, { roleId: by("administrator").id })).json.error).toBe("master_only");
+    expect((await global.post("/api/admin/staff", { email: "nouveau@akab.local", name: "Nouveau", roleId: by("administrator").id })).json.error).toBe("master_only");
+    expect((await global.put(`/api/admin/users/${techRow.id}/permissions`, { overrides: [{ key: "admin.roles", effect: "allow" }] })).status).toBe(403);
+    expect((await global.get("/api/admin/integrations/o365")).status).toBe(403);
+    // a master admin can
+    expect((await admin.patch(`/api/admin/users/${techRow.id}`, { roleId: by("technician").id })).status).toBe(200);
   });
 });
 
@@ -2134,7 +2227,7 @@ describe("text messages (VoIP.ms)", () => {
 });
 
 describe("Outlook (Microsoft 365 mail)", () => {
-  const sent: { method: string; url: string; body: any }[] = [];
+  const sent: { method: string; url: string; body: any; bearer?: string }[] = [];
   const json = (b: unknown, status = 200) => new Response(JSON.stringify(b), { status, headers: { "content-type": "application/json" } });
   const G = "https://graph.microsoft.com/v1.0/";
   beforeAll(() => {
@@ -2143,8 +2236,18 @@ describe("Outlook (Microsoft 365 mail)", () => {
       vi.fn(async (input: unknown, init: RequestInit = {}) => {
         const url = decodeURIComponent(String(input));
         const method = init.method ?? "GET";
-        if (url.includes("login.microsoftonline.com")) return json({ access_token: "tok", expires_in: 3600 });
-        sent.push({ method, url, body: init.body ? JSON.parse(String(init.body)) : undefined });
+        if (url.includes("login.microsoftonline.com")) {
+          const form = new URLSearchParams(String(init.body));
+          if (form.get("grant_type") === "authorization_code") {
+            expect(form.get("code_verifier")?.length).toBeGreaterThan(40);
+            return form.get("code") === "good-code" ? json({ access_token: "user-tok", refresh_token: "r1", expires_in: 3600, scope: "User.Read Mail.ReadWrite Mail.Send Calendars.ReadWrite" }) : json({ error: "invalid_grant" }, 400);
+          }
+          if (form.get("grant_type") === "refresh_token") return json({ access_token: "user-tok", refresh_token: "r2", expires_in: 3600 });
+          return json({ access_token: "tok", expires_in: 3600 });
+        }
+        const bearer = String((init.headers as Record<string, string> | undefined)?.authorization ?? "");
+        sent.push({ method, url, body: init.body ? JSON.parse(String(init.body)) : undefined, bearer });
+        if (url.endsWith("/me?$select=id,displayName,mail,userPrincipalName")) return json({ id: "oid-tech", displayName: "Alex Tremblay", mail: "Tech@akab.local" });
         if (url.includes("users/ghost@akab.local")) return json({ error: { message: "mailbox not found" } }, 404);
         if (/users\/[^/]+\?\$select=displayName$/.test(url)) return json({ displayName: "Boîte" });
         if (url.includes("/mailFolders/inbox?$select=id")) return json({ id: "inbox-id" });
@@ -2160,7 +2263,7 @@ describe("Outlook (Microsoft 365 mail)", () => {
         if (url.includes("/messages?") && method === "GET") {
           return json({
             value: [{ id: "m1", subject: "Imprimante", from: { emailAddress: { name: "Marie", address: "marie@client.example" } }, receivedDateTime: "2026-10-13T12:00:00Z", bodyPreview: "Bonjour", isRead: false, flag: { flagStatus: "notFlagged" }, hasAttachments: true }],
-            "@odata.nextLink": `${G}users/tech%40akab.local/mailFolders/inbox-id/messages?$skiptoken=abc`,
+            "@odata.nextLink": `${G}${url.startsWith(`${G}me/`) ? "me" : "users/tech%40akab.local"}/mailFolders/inbox-id/messages?$skiptoken=abc`,
           });
         }
         if (url.includes("/messages/m1/attachments/a1")) return json({ "@odata.type": "#microsoft.graph.fileAttachment", name: "photo.png", contentType: "image/png", contentId: "<img1>", contentBytes: "aGk=" });
@@ -2204,19 +2307,48 @@ describe("Outlook (Microsoft 365 mail)", () => {
     expect((await tech.get("/api/me")).json.preferences.outlook).toBe(true);
     await admin.put("/api/me/preferences", { outlook: true });
     await admin.put("/api/admin/integrations/o365", { enabled: false });
-    expect((await tech.post("/api/outlook/accounts", { address: "tech@akab.local" })).json.error).toBe("outlook_not_configured");
+    expect((await tech.post("/api/microsoft/connect", {})).json.error).toBe("microsoft_not_configured");
     await admin.put("/api/admin/integrations/o365", { tenantId: "akab.onmicrosoft.com", clientId: "abc-123", secret: "good-secret", enabled: true });
+    // the address to register in Entra for the sign-in
+    expect((await admin.get("/api/admin/integrations/o365")).json.redirectUri).toBe("http://localhost/api/microsoft/callback");
 
-    const status = (await tech.get("/api/outlook/status")).json;
-    expect(status).toMatchObject({ ready: true, accounts: [], ownAddresses: ["tech@akab.local"], canLinkAny: false, canSend: true });
-    expect((await tech.post("/api/outlook/accounts", { address: "support@akab.local" })).json.error).toBe("outlook_not_own_mailbox");
-    const linked = await tech.post("/api/outlook/accounts", { address: "Tech@AKAB.local" });
-    expect(linked.status).toBe(201);
-    expect(linked.json).toMatchObject({ address: "tech@akab.local", displayName: "Boîte" });
+    // one's own mailbox: the technician signs in to Microsoft first (on their side)
+    let status = (await tech.get("/api/outlook/status")).json;
+    expect(status).toMatchObject({ ready: true, signedIn: null, accounts: [], ownAddresses: ["tech@akab.local"], canLinkAny: false, canSend: true });
+    expect((await tech.post("/api/outlook/accounts", { address: "tech@akab.local" })).json.error).toBe("outlook_sign_in_first");
+    const start = (await tech.post("/api/microsoft/connect", {})).json.url as string;
+    const auth = new URL(start);
+    expect(auth.origin + auth.pathname).toBe("https://login.microsoftonline.com/akab.onmicrosoft.com/oauth2/v2.0/authorize");
+    expect(auth.searchParams.get("code_challenge_method")).toBe("S256");
+    expect(auth.searchParams.get("redirect_uri")).toBe("http://localhost/api/microsoft/callback");
+    expect(auth.searchParams.get("scope")).toContain("Mail.Send");
+    const state = auth.searchParams.get("state")!;
+    // the answer only counts for the person who started it, once
+    expect((await admin.get(`/api/microsoft/callback?state=${state}&code=good-code`)).location).toBe("/?microsoft=error");
+    const state2 = new URL((await tech.post("/api/microsoft/connect", {})).json.url).searchParams.get("state")!;
+    const back = await tech.get(`/api/microsoft/callback?state=${state2}&code=good-code`);
+    expect(back).toMatchObject({ status: 302, location: "/?microsoft=connected" });
+    expect((await tech.get(`/api/microsoft/callback?state=${state2}&code=good-code`)).location).toBe("/?microsoft=error");
+    expect((await tech.get("/api/microsoft")).json).toMatchObject({ available: true, connection: { email: "tech@akab.local", displayName: "Alex Tremblay" } });
+    const [conn] = await db().select().from(schema.msConnections);
+    expect(conn.refreshToken).not.toContain("r1"); // sealed
+    // signing in linked their mailbox, through their own access
+    status = (await tech.get("/api/outlook/status")).json;
+    expect(status.signedIn).toMatchObject({ email: "tech@akab.local" });
+    expect(status.accounts).toEqual([expect.objectContaining({ address: "tech@akab.local", via: "user" })]);
+    const linked = { json: status.accounts[0] };
     expect((await tech.post("/api/outlook/accounts", { address: "tech@akab.local" })).json.error).toBe("outlook_already_linked");
+    expect((await tech.post("/api/outlook/accounts", { address: "support@akab.local" })).json.error).toBe("outlook_not_own_mailbox");
+    sent.length = 0;
+    await tech.get(`/api/outlook/accounts/${linked.json.id}/folders`);
+    expect(sent.every((s) => s.bearer === "Bearer user-tok" && s.url.startsWith(`${G}me/`))).toBe(true);
 
-    // admins may link shared mailboxes; a mailbox that does not exist is refused
-    expect((await admin.post("/api/outlook/accounts", { address: "support@akab.local" })).status).toBe(201);
+    // admins may link shared mailboxes (organisation access); a mailbox that does not exist is refused
+    const shared = await admin.post("/api/outlook/accounts", { address: "support@akab.local" });
+    expect(shared.json).toMatchObject({ via: "app" });
+    sent.length = 0;
+    await admin.get(`/api/outlook/accounts/${shared.json.id}/folders`);
+    expect(sent.every((s) => s.bearer === "Bearer tok" && s.url.includes("users/support@akab.local/"))).toBe(true);
     expect((await admin.post("/api/outlook/accounts", { address: "ghost@akab.local" })).status).toBe(404);
     // nobody else can open the technician's mailbox, not even an admin
     expect((await admin.get(`/api/outlook/accounts/${linked.json.id}/folders`)).status).toBe(404);
@@ -2234,7 +2366,7 @@ describe("Outlook (Microsoft 365 mail)", () => {
     expect(folders[0]).toMatchObject({ id: "inbox-id", wellKnown: "inbox", unread: 2 });
     const page = (await tech.get(`/api/outlook/accounts/${acc.id}/messages?folder=inbox-id`)).json;
     expect(page.items[0]).toMatchObject({ id: "m1", subject: "Imprimante", isRead: false, from: { address: "marie@client.example" } });
-    expect(page.next).toBe("users/tech%40akab.local/mailFolders/inbox-id/messages?$skiptoken=abc");
+    expect(page.next).toBe("me/mailFolders/inbox-id/messages?$skiptoken=abc");
     // a page cursor cannot point at another mailbox
     const other = encodeURIComponent("users/ceo%40akab.local/messages");
     expect((await tech.get(`/api/outlook/accounts/${acc.id}/messages?folder=inbox-id&cursor=${other}`)).json.error).toBe("outlook_not_found");
@@ -2268,7 +2400,7 @@ describe("Outlook (Microsoft 365 mail)", () => {
     const file = { name: "note.txt", contentType: "text/plain", data: Buffer.from("allo").toString("base64") };
     expect((await tech.post(`/api/outlook/accounts/${acc.id}/send`, { to: ["marie@client.example"], subject: "Suivi", text: "Bonjour <Marie>\nC'est réglé.", attachments: [file] })).status).toBe(201);
     const mail = sent.find((s) => s.url.endsWith("/sendMail"))!;
-    expect(mail.url).toContain("users/tech@akab.local/sendMail");
+    expect(mail.url).toBe("https://graph.microsoft.com/v1.0/me/sendMail"); // as the technician
     expect(mail.body.message.toRecipients).toEqual([{ emailAddress: { address: "marie@client.example" } }]);
     // the technician's text is escaped, line breaks kept
     expect(mail.body.message.body.content).toContain("Bonjour &lt;Marie&gt;<br>C'est réglé.");

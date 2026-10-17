@@ -94,7 +94,7 @@ export function IntegrationsSection() {
           <Button variant="ghost" size="sm" className="-ml-2 mb-3 text-muted-foreground" onClick={() => go(null)}>
             <ArrowLeft className="size-4" /> {t("integrations.title")}
           </Button>
-          <SectionHeader title={open.name} subtitle={t(`integrations.${open.key}.description`)} />
+          <SectionHeader title={open.name} subtitle={t(`integrations.${open.key}.description`) || undefined} />
         </div>
         <open.Page />
       </div>
@@ -120,7 +120,7 @@ export function IntegrationsSection() {
             </div>
             <div>
               <h3 className="font-display text-lg font-semibold">{i.name}</h3>
-              <p className="mt-1 text-sm text-muted-foreground">{t(`integrations.${i.key}.description`)}</p>
+              {t(`integrations.${i.key}.description`) && <p className="mt-1 text-sm text-muted-foreground">{t(`integrations.${i.key}.description`)}</p>}
             </div>
             <span className="mt-auto flex items-center gap-1 text-sm font-medium text-primary">
               {t("integrations.configure")} <ChevronRight className="size-4 transition-transform group-hover:translate-x-0.5" />
@@ -752,7 +752,7 @@ function RmmPage() {
 }
 
 // ── Microsoft 365: technicians' Outlook calendars (Microsoft Graph) ──
-type O365View = { enabled: boolean; tenantId: string; clientId: string; hasSecret: boolean; lastTest: { ok: boolean; at: string; error?: string } | null };
+type O365View = { enabled: boolean; tenantId: string; clientId: string; hasSecret: boolean; lastTest: { ok: boolean; at: string; error?: string } | null; redirectUri?: string | null };
 const O365_KEY = ["admin", "integrations", "o365"];
 
 function O365Status() {
@@ -839,6 +839,18 @@ function O365Page() {
           </div>
         </div>
         <SecretField id="o365-secret" label={t("integrations.o365.secret")} value={form.secret} onChange={(v) => setForm((f) => ({ ...f, secret: v }))} saved={s.hasSecret} />
+        {s.redirectUri && (
+          <div className="space-y-2">
+            <Label>{t("integrations.o365.redirectUri")}</Label>
+            <div className="flex gap-2">
+              <Input readOnly value={s.redirectUri} className="font-mono text-xs" onFocus={(e) => e.currentTarget.select()} />
+              <Button type="button" variant="outline" onClick={() => void navigator.clipboard.writeText(s.redirectUri!).then(() => toast.success(t("integrations.voipms.copied")))}>
+                {t("integrations.voipms.copy")}
+              </Button>
+            </div>
+            <p className="text-[11px] text-muted-foreground">{t("integrations.o365.redirectHint")}</p>
+          </div>
+        )}
         <div className="rounded-xl border bg-background/40 p-4 text-xs text-muted-foreground">
           <p className="mb-2 font-medium text-foreground">{t("integrations.o365.howTitle")}</p>
           <ol className="list-decimal space-y-1 pl-4">

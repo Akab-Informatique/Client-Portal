@@ -23,6 +23,7 @@ import { RMM_PLACEHOLDERS, rmmSettings, saveRmmSettings, validTemplate } from ".
 import { O365Error, o365Settings, saveO365Settings, testO365 } from "../lib/o365.ts";
 import { normalizePhone, saveSmsSettings, sendSms, SmsError, smsSettings, testVoipms, type SmsSettings } from "../lib/voipms.ts";
 import { config } from "../config.ts";
+import { microsoftRedirectUri } from "./microsoft.ts";
 import { AI_MODELS, AiError, aiSettings, askClaude, saveAiSettings, type AiErrorCode } from "../lib/ai.ts";
 
 const zCred = z.string().trim().min(1).max(300);
@@ -230,7 +231,11 @@ export const integrationRoutes = new Hono<AppEnv>()
   })
 
   // ── Microsoft 365 calendars (Azure app registration, Calendars.ReadWrite) ──
-  .get("/o365", async (c) => c.json(o365View(await o365Settings())))
+  // with the address to register in Entra for the technicians' own sign-in
+  .get("/o365", async (c) => {
+    const origin = `${c.req.header("x-forwarded-proto") ?? "http"}://${c.req.header("x-forwarded-host") ?? c.req.header("host") ?? ""}`;
+    return c.json({ ...o365View(await o365Settings()), redirectUri: microsoftRedirectUri(origin) });
+  })
   .put("/o365", async (c) => {
     const a = auth(c);
     const zId = z.string().trim().regex(/^[0-9a-z][0-9a-z.-]{1,100}$/i);
@@ -255,7 +260,9 @@ export const integrationRoutes = new Hono<AppEnv>()
     } catch (e) {
       result = { ok: false, error: e instanceof O365Error ? e.code : "api", detail: e instanceof O365Error ? e.detail : undefined };
     }
-    if (!p.secret && !p.tenantId && !p.clientId) await saveO365Settings(a.user.id, { lastTest: { ok: result.ok, at: new Date().toISOString(), ...(result.ok ? {} : { error: result.error }) } });
+    // kept when it tested the saved values (typed values equal to them included)
+    const saved = settings.tenantId === s.tenantId && settings.clientId === s.clientId && settings.secret === s.secret;
+    if (saved) await saveO365Settings(a.user.id, { lastTest: { ok: result.ok, at: new Date().toISOString(), ...(result.ok ? {} : { error: result.error }) } });
     return c.json(result);
   })
 

@@ -7,7 +7,7 @@ import { auth, requirePermission, requireStaff, type AppEnv, type AuthContext } 
 import { audit } from "../lib/audit.ts";
 import { rateLimit } from "../lib/http.ts";
 import { body, zEmail, zUuid } from "../lib/validate.ts";
-import { O365Error, o365Ready } from "../lib/o365.ts";
+import { asConnection, O365Error, o365Ready } from "../lib/o365.ts";
 import {
   attachment,
   getMessage,
@@ -52,6 +52,12 @@ function ownAddresses(a: AuthContext): string[] {
   return [...new Set([a.user.email, a.user.o365Email].filter((x): x is string => Boolean(x)).map((x) => x.toLowerCase()))];
 }
 
+/** The technician's own Microsoft sign-in, if any. */
+async function signInOf(userId: string) {
+  const [conn] = await db().select({ email: schema.msConnections.email, lastError: schema.msConnections.lastError }).from(schema.msConnections).where(eq(schema.msConnections.userId, userId));
+  return conn ?? null;
+}
+
 /** A mailbox linked by this technician (nobody else can open it). */
 async function account(a: AuthContext, id: string) {
   const [acc] = await db()
@@ -84,17 +90,28 @@ export const outlookRoutes = new Hono<AppEnv>()
     if (!p?.on) throw new HTTPException(403, { message: "outlook_off" });
     await next();
   })
+  // a mailbox reached through the technician's own sign-in: Graph calls go out as them
+  .use("/accounts/:id/*", async (c, next) => {
+    const acc = await account(auth(c), c.req.param("id") ?? "");
+    try {
+      await asConnection(acc.via === "user" ? acc.userId : null, () => next());
+    } catch (e) {
+      throw outlookHttp(e);
+    }
+  })
 
   /** Is Microsoft 365 set up, which mailboxes are linked, what may be linked. */
   .get("/status", async (c) => {
     const a = auth(c);
     const accounts = await db()
-      .select({ id: schema.mailAccounts.id, address: schema.mailAccounts.address, displayName: schema.mailAccounts.displayName })
+      .select({ id: schema.mailAccounts.id, address: schema.mailAccounts.address, displayName: schema.mailAccounts.displayName, via: schema.mailAccounts.via })
       .from(schema.mailAccounts)
       .where(eq(schema.mailAccounts.userId, a.user.id))
       .orderBy(asc(schema.mailAccounts.createdAt));
+    const conn = await signInOf(a.user.id);
     return c.json({
       ready: await o365Ready(),
+      signedIn: conn ? { email: conn.email, needsReconnect: conn.lastError === "reconnect" } : null,
       accounts,
       ownAddresses: ownAddresses(a),
       canLinkAny: a.permissions.includes("outlook.anyMailbox"),
@@ -103,13 +120,19 @@ export const outlookRoutes = new Hono<AppEnv>()
     });
   })
 
-  /** Link an AKAB mailbox: one's own, or any with outlook.anyMailbox. */
+  /**
+   * Link an AKAB mailbox: one's own through one's Microsoft sign-in (the
+   * technician sets it up on their side), or any mailbox with
+   * outlook.anyMailbox (the organisation access).
+   */
   .post("/accounts", async (c) => {
     const a = auth(c);
     const p = await body(c, z.object({ address: zEmail }));
     const address = p.address.toLowerCase();
-    if (!ownAddresses(a).includes(address) && !a.permissions.includes("outlook.anyMailbox")) {
-      throw new HTTPException(403, { message: "outlook_not_own_mailbox" });
+    const conn = await signInOf(a.user.id);
+    const mine = conn?.email.toLowerCase() === address;
+    if (!mine && !a.permissions.includes("outlook.anyMailbox")) {
+      throw new HTTPException(403, { message: ownAddresses(a).includes(address) || !conn ? "outlook_sign_in_first" : "outlook_not_own_mailbox" });
     }
     if (!(await o365Ready())) throw new HTTPException(409, { message: "outlook_not_configured" });
     if (!rateLimit(`outlook-link:${a.user.id}`, 20, 60_000).ok) throw new HTTPException(429, { message: "rate_limited" });
@@ -118,15 +141,20 @@ export const outlookRoutes = new Hono<AppEnv>()
       .from(schema.mailAccounts)
       .where(eq(schema.mailAccounts.userId, a.user.id));
     if (n >= MAX_ACCOUNTS) throw new HTTPException(409, { message: "outlook_too_many" });
-    const { displayName } = await run(() => testMailbox(address));
+    const [dup] = await db()
+      .select({ id: schema.mailAccounts.id })
+      .from(schema.mailAccounts)
+      .where(and(eq(schema.mailAccounts.userId, a.user.id), sql`lower(${schema.mailAccounts.address}) = ${address}`));
+    if (dup) throw new HTTPException(409, { message: "outlook_already_linked" });
+    const { displayName } = await run(() => asConnection(mine ? a.user.id : null, () => testMailbox(address)));
     const [row] = await db()
       .insert(schema.mailAccounts)
-      .values({ userId: a.user.id, address, displayName })
+      .values({ userId: a.user.id, address, displayName, via: mine ? "user" : "app" })
       .onConflictDoNothing()
       .returning();
     if (!row) throw new HTTPException(409, { message: "outlook_already_linked" });
-    await audit(a.realUser.id, "outlook.linked", row.id, { address, own: ownAddresses(a).includes(address) });
-    return c.json({ id: row.id, address: row.address, displayName: row.displayName }, 201);
+    await audit(a.realUser.id, "outlook.linked", row.id, { address, via: row.via });
+    return c.json({ id: row.id, address: row.address, displayName: row.displayName, via: row.via }, 201);
   })
 
   .delete("/accounts/:id", async (c) => {

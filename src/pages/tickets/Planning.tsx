@@ -79,7 +79,8 @@ type Block = {
   startsAt: string;
   endsAt: string;
 };
-type OutlookEvent = { id: string; title: string; startsAt: string; endsAt: string; allDay: boolean; location: string | null };
+/** An Outlook event of a calendar in this planning; masked: only "busy" may be shown to this viewer */
+type OutlookEvent = { id: string; title: string; startsAt: string; endsAt: string; allDay: boolean; location: string | null; calendar?: string; masked?: boolean };
 /** How each kind of block looks: work on a ticket, on-site service call, reserved time. */
 type PlanAbsence = { id: string; startDate: string; endDate: string; kind: "vacation" | "sick" | "training" | "personal" | "other"; note: string | null };
 const ABSENCE_STYLE: Record<PlanAbsence["kind"], string> = {
@@ -611,7 +612,7 @@ function WeekCalendar({ technicianId, technicianName, planner }: { technicianId:
                 {external
                   .filter((e) => e.allDay && ymd(new Date(e.startsAt)) <= ymd(d) && ymd(new Date(new Date(e.endsAt).getTime() - 1)) >= ymd(d))
                   .map((e) => (
-                    <span key={e.id} className="mt-0.5 block truncate rounded-sm border border-dashed border-slate-400/40 px-0.5 text-[9px] text-slate-300" title={e.title}>
+                    <span key={`${e.calendar}-${e.id}`} className={cn("mt-0.5 block truncate rounded-sm border border-dashed border-slate-400/40 px-0.5 text-[9px] text-slate-300", e.masked && "italic opacity-80")} title={e.calendar ? `${e.title} · ${e.calendar}` : e.title}>
                       {e.title}
                     </span>
                   ))}
@@ -664,10 +665,13 @@ function WeekCalendar({ technicianId, technicianName, planner }: { technicianId:
                   const en = new Date(e.endsAt);
                   return (
                     <span
-                      key={e.id}
+                      key={`${e.calendar}-${e.id}`}
                       onClick={(ev) => ev.stopPropagation()}
-                      title={`${hm(s)}–${hm(en)} · ${e.title}${e.location ? ` · ${e.location}` : ""} (Outlook)`}
-                      className="absolute inset-x-1 z-[4] overflow-hidden rounded-sm border border-dashed border-slate-400/50 bg-slate-500/15 px-1 text-[9px] leading-tight text-slate-300"
+                      title={`${hm(s)}–${hm(en)} · ${e.title}${e.location ? ` · ${e.location}` : ""} (Outlook${e.calendar ? ` · ${e.calendar}` : ""})`}
+                      className={cn(
+                        "absolute inset-x-1 z-[4] overflow-hidden rounded-sm border border-dashed border-slate-400/50 bg-slate-500/15 px-1 text-[9px] leading-tight text-slate-300",
+                        e.masked && "bg-[repeating-linear-gradient(135deg,rgba(148,163,184,0.18)_0_4px,transparent_4px_8px)] italic",
+                      )}
                       style={{ top: top(s), height: Math.max(12, top(en) - top(s) - 1) }}
                     >
                       {e.title}
@@ -744,7 +748,7 @@ function WeekCalendar({ technicianId, technicianName, planner }: { technicianId:
           </span>
         )}
       </p>
-      {outlook?.error && <p className="text-[10px] text-orange-300">{t("planning.outlookError")}</p>}
+      {outlook?.error && <p className="text-[10px] text-orange-300">{outlook.error === "o365_not_signed_in" ? t("planning.outlookNotSignedIn") : t("planning.outlookError")}</p>}
       {planner && <p className="text-[10px] text-muted-foreground">{t("planning.clickToReserve")}</p>}
       {slot && <BlockDialog technicianId={technicianId} technicianName={technicianName} block={slot.block} start={slot.start} onClose={() => setSlot(null)} onOpenTicket={(id) => ws.open(id)} />}
     </section>

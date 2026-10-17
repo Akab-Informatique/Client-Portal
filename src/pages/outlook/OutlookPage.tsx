@@ -114,6 +114,11 @@ function OutlookOff() {
 
 function OutlookMail() {
   const { t } = useTranslation();
+  const msSignIn = useMutation({
+    mutationFn: () => api.post<{ url: string }>("/microsoft/connect", {}),
+    onSuccess: ({ url }) => window.location.assign(url),
+    onError: () => toast.error(t("common.error")),
+  });
   const status = useQuery({ queryKey: statusKey, queryFn: () => api.get<OutlookStatus>("/outlook/status") });
   const [linkOpen, setLinkOpen] = useState(false);
   const [sel, setSel] = useState<{ account: string; folder: string } | null>(null);
@@ -169,6 +174,17 @@ function OutlookMail() {
 
       {!s.ready ? (
         <EmptyCard icon={ShieldAlert} title={t("outlook.notReady")} text={t("outlook.notReadyText")} />
+      ) : !accounts.length && !s.signedIn && !s.canLinkAny ? (
+        <EmptyCard
+          icon={Inbox}
+          title={t("outlook.noAccounts")}
+          text={t("profile.ms.signInForMail")}
+          action={
+            <Button className="bg-grad-gold font-semibold text-[#1a1204] hover:brightness-105" disabled={msSignIn.isPending} onClick={() => msSignIn.mutate()}>
+              {msSignIn.isPending ? <Loader2 className="size-4 animate-spin" /> : <Mail className="size-4" />} {t("profile.ms.signIn")}
+            </Button>
+          }
+        />
       ) : !accounts.length ? (
         <EmptyCard
           icon={Inbox}

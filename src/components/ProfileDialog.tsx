@@ -4,7 +4,7 @@ import { Link } from "react-router-dom";
 import { cn } from "@/lib/utils";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
-import { CalendarDays, ChevronDown, ExternalLink, Inbox, KeyRound, Loader2, Mail, Plus, Smartphone, Trash2, UserRound } from "lucide-react";
+import { AlertTriangle, CalendarDays, ChevronDown, ExternalLink, Inbox, KeyRound, LogIn, LogOut, Loader2, Mail, Plus, Smartphone, Trash2, UserRound } from "lucide-react";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -165,6 +165,9 @@ function Microsoft365Card({ onNavigate }: { onNavigate: () => void }) {
     <Card icon={Mail} title={t("profile.o365Title")} className="space-y-3">
       <p className="text-xs text-muted-foreground">{t("profile.o365Intro")}</p>
 
+      {/* The technician's own Microsoft account: they link their things themselves */}
+      <MicrosoftAccount />
+
       {/* Calendar: allowed by an admin */}
       <div className="rounded-xl border p-3">
         <p className="flex items-center gap-2 text-sm font-medium">
@@ -201,6 +204,84 @@ function Microsoft365Card({ onNavigate }: { onNavigate: () => void }) {
   );
 }
 
+type MsStatus = { available: boolean; connection: { email: string; displayName: string | null; connectedAt: string; needsReconnect: boolean } | null };
+export const MS_KEY = ["microsoft"] as const;
+
+/** Sign in with Microsoft (AKAB account): Microsoft's own page, then back here. */
+function useMicrosoftSignIn() {
+  const { t } = useTranslation();
+  return useMutation({
+    mutationFn: () => api.post<{ url: string }>("/microsoft/connect", {}),
+    onSuccess: ({ url }) => window.location.assign(url),
+    onError: (e) => toast.error(e instanceof ApiError && e.code.startsWith("microsoft_") ? t(`profile.ms.${e.code.slice(10)}`) : t("common.error")),
+  });
+}
+
+function MicrosoftAccount() {
+  const { t } = useTranslation();
+  const qc = useQueryClient();
+  const confirm = useConfirm();
+  const { data } = useQuery({ queryKey: MS_KEY, queryFn: () => api.get<MsStatus>("/microsoft") });
+  const signIn = useMicrosoftSignIn();
+  const signOut = useMutation({
+    mutationFn: () => api.del("/microsoft"),
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: MS_KEY });
+      void qc.invalidateQueries({ queryKey: KEY });
+      toast.success(t("profile.ms.signedOut"));
+    },
+    onError: () => toast.error(t("common.error")),
+  });
+  if (!data) return <Loader2 className="mx-auto size-4 animate-spin text-muted-foreground" />;
+  const c = data.connection;
+  return (
+    <div className={cn("rounded-xl border p-3", c && !c.needsReconnect && "border-emerald-500/30")}>
+      <p className="flex items-center gap-2 text-sm font-medium">
+        <UserRound className="size-4 text-primary" /> {t("profile.ms.account")}
+      </p>
+      {!data.available ? (
+        <p className="mt-1.5 text-xs text-muted-foreground">{t("profile.ms.notAvailable")}</p>
+      ) : c ? (
+        <div className="mt-2 space-y-2">
+          <p className="text-xs">
+            <span className="block font-medium">{c.displayName ?? c.email}</span>
+            <span className="text-muted-foreground">{c.email}</span>
+          </p>
+          {c.needsReconnect && (
+            <p className="flex items-start gap-1.5 rounded-lg border border-orange-500/40 bg-orange-500/10 p-2 text-xs text-orange-200">
+              <AlertTriangle className="mt-0.5 size-3.5 shrink-0" /> {t("profile.ms.reconnect")}
+            </p>
+          )}
+          <div className="flex flex-wrap gap-2">
+            {c.needsReconnect && (
+              <Button type="button" size="sm" className="h-8 gap-1.5 bg-grad-gold font-semibold text-[#1a1204]" disabled={signIn.isPending} onClick={() => signIn.mutate()}>
+                <LogIn className="size-3.5" /> {t("profile.ms.signInAgain")}
+              </Button>
+            )}
+            <Button
+              type="button"
+              size="sm"
+              variant="ghost"
+              className="h-8 gap-1.5 text-muted-foreground"
+              disabled={signOut.isPending}
+              onClick={() => void confirm({ title: t("profile.ms.signOutConfirm"), destructive: true }).then((ok) => ok && signOut.mutate())}
+            >
+              <LogOut className="size-3.5" /> {t("profile.ms.signOut")}
+            </Button>
+          </div>
+        </div>
+      ) : (
+        <div className="mt-2 space-y-2">
+          <p className="text-xs text-muted-foreground">{t("profile.ms.why")}</p>
+          <Button type="button" size="sm" className="h-8 gap-1.5 bg-grad-gold font-semibold text-[#1a1204]" disabled={signIn.isPending} onClick={() => signIn.mutate()}>
+            {signIn.isPending ? <Loader2 className="size-3.5 animate-spin" /> : <LogIn className="size-3.5" />} {t("profile.ms.signIn")}
+          </Button>
+        </div>
+      )}
+    </div>
+  );
+}
+
 function Mailboxes({ onNavigate }: { onNavigate: () => void }) {
   const { t } = useTranslation();
   const qc = useQueryClient();
@@ -229,7 +310,9 @@ function Mailboxes({ onNavigate }: { onNavigate: () => void }) {
       {s?.ready && (
         <>
           <p className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">{t("profile.mailboxes")}</p>
-          {s.accounts.length === 0 ? (
+          {!s.signedIn && s.accounts.length === 0 ? (
+            <p className="text-xs text-muted-foreground">{t("profile.ms.signInForMail")}</p>
+          ) : s.accounts.length === 0 ? (
             <p className="text-xs text-muted-foreground">{t("outlook.noAccountsText")}</p>
           ) : (
             <ul className="divide-y rounded-lg border">
@@ -256,9 +339,11 @@ function Mailboxes({ onNavigate }: { onNavigate: () => void }) {
             </ul>
           )}
           <div className="flex flex-wrap gap-2">
-            <Button type="button" size="sm" variant="outline" className="h-8 gap-1.5" onClick={() => setLinkOpen(true)}>
-              <Plus className="size-3.5" /> {t("outlook.linkMailbox")}
-            </Button>
+            {(s.canLinkAny || (s.signedIn && !s.accounts.some((a) => a.address === s.signedIn!.email))) && (
+              <Button type="button" size="sm" variant="outline" className="h-8 gap-1.5" onClick={() => setLinkOpen(true)}>
+                <Plus className="size-3.5" /> {t("outlook.linkMailbox")}
+              </Button>
+            )}
             {s.accounts.length > 0 && (
               <Button asChild size="sm" variant="ghost" className="h-8 gap-1.5">
                 <Link to="/outlook" onClick={onNavigate}>

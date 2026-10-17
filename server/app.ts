@@ -24,6 +24,7 @@ import { storeRoutes } from "./routes/store.ts";
 import { planningRoutes } from "./routes/planning.ts";
 import { smsHookRoutes, smsRoutes } from "./routes/sms.ts";
 import { outlookRoutes } from "./routes/outlook.ts";
+import { microsoftRoutes } from "./routes/microsoft.ts";
 import { meetingRoutes } from "./routes/meetings.ts";
 
 export function createApp() {
@@ -80,6 +81,7 @@ export function createApp() {
   api.route("/sms/hook", smsHookRoutes);
   api.route("/sms", smsRoutes);
   api.route("/outlook", outlookRoutes);
+  api.route("/microsoft", microsoftRoutes);
   api.route("/meetings", meetingRoutes);
   api.route("/messages", messageRoutes);
   api.route("/board", boardRoutes);

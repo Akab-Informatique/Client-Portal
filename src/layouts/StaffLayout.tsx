@@ -2,6 +2,7 @@ import { lazy, Suspense, useEffect, useState } from "react";
 import { NavLink, Outlet, useLocation, useNavigate, useSearchParams } from "react-router-dom";
 import { useTranslation } from "react-i18next";
 import { motion } from "motion/react";
+import { toast } from "sonner";
 import { useQueryClient } from "@tanstack/react-query";
 import { useTheme } from "@/lib/theme";
 import {
@@ -268,9 +269,22 @@ function UserMenu() {
   const me = useMe();
   const qc = useQueryClient();
   const navigate = useNavigate();
-  const [, setParams] = useSearchParams();
+  const [params, setParams] = useSearchParams();
   const { theme, setTheme } = useTheme();
   const [profileOpen, setProfileOpen] = useState(false);
+  // back from the Microsoft sign-in (/?microsoft=connected|cancelled|error): the profile, where it is
+  useEffect(() => {
+    const r = params.get("microsoft");
+    if (!r) return;
+    if (r === "connected") toast.success(t("profile.ms.connected"));
+    else toast.error(t(`profile.ms.${r === "cancelled" ? "cancelled" : "failed"}`));
+    void qc.invalidateQueries({ queryKey: ["microsoft"] });
+    void qc.invalidateQueries({ queryKey: ["outlook"] });
+    setProfileOpen(true);
+    const next = new URLSearchParams(params);
+    next.delete("microsoft");
+    setParams(next, { replace: true });
+  }, [params, setParams, qc, t]);
   const roleName = me.role ? (i18n.language === "en" ? me.role.nameEn : me.role.name) : null;
 
   return (
