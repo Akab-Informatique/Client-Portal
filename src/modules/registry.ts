@@ -21,13 +21,15 @@ export type NavModule = {
   icon: LucideIcon;
   section: NavSection;
   permission?: PermissionKey;
+  /** Shown only once the user turned it on (profile › Microsoft 365) */
+  optIn?: "outlook";
   upcoming?: boolean;
 };
 
 export const STAFF_MODULES: NavModule[] = [
   { key: "dashboard", path: "/", labelKey: "nav.dashboard", icon: LayoutDashboard, section: "modules", permission: "dashboard.view" },
   { key: "messages", path: "/messages", labelKey: "nav.messages", icon: Megaphone, section: "modules", permission: "messages.view" },
-  { key: "outlook", path: "/outlook", labelKey: "nav.outlook", icon: Mail, section: "modules", permission: "outlook.view" },
+  { key: "outlook", path: "/outlook", labelKey: "nav.outlook", icon: Mail, section: "modules", permission: "outlook.view", optIn: "outlook" },
   { key: "tickets", path: "/tickets", labelKey: "nav.tickets", icon: Ticket, section: "command", permission: "tickets.view" },
   { key: "store", path: "/store", labelKey: "nav.store", icon: Store, section: "administration", permission: "store.view" },
   { key: "meetings", path: "/meetings", labelKey: "nav.meetings", icon: CalendarCheck, section: "administration", permission: "meetings.view" },

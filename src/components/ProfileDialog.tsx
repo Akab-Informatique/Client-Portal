@@ -1,22 +1,26 @@
 import { useEffect, useState, type FormEvent } from "react";
 import { useTranslation } from "react-i18next";
+import { Link } from "react-router-dom";
 import { cn } from "@/lib/utils";
-import { useQueryClient } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
-import { Loader2, CalendarDays, Smartphone } from "lucide-react";
+import { CalendarDays, ChevronDown, ExternalLink, Inbox, KeyRound, Loader2, Mail, Plus, Smartphone, Trash2, UserRound } from "lucide-react";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { Separator } from "@/components/ui/separator";
 import { Switch } from "@/components/ui/switch";
+import { useConfirm } from "@/components/ConfirmDialog";
 import { api, ApiError } from "@/lib/api";
-import { useMe } from "@/lib/session";
+import { useCan, useMe } from "@/lib/session";
+import { LinkMailboxDialog } from "@/pages/outlook/dialogs";
+import { KEY, outlookErrorText, statusKey, type MailAccount, type OutlookStatus } from "@/pages/outlook/shared";
 
 export function ProfileDialog({ open, onOpenChange }: { open: boolean; onOpenChange: (o: boolean) => void }) {
   const { t } = useTranslation();
   const me = useMe();
   const qc = useQueryClient();
+  const staff = me.kind === "staff";
   const [form, setForm] = useState({ name: me.name, title: me.title ?? "", phone: me.phone ?? "", mobile: me.mobile ?? "", notifyEmail: me.notifyEmail });
   const [pw, setPw] = useState({ current: "", next: "", confirm: "" });
   const [busy, setBusy] = useState(false);
@@ -30,7 +34,9 @@ export function ProfileDialog({ open, onOpenChange }: { open: boolean; onOpenCha
     e.preventDefault();
     setBusy(true);
     try {
-      await api.patch("/me", form);
+      // technicians: the cell phone only; clients: their phone
+      const { phone, mobile, ...rest } = form;
+      await api.patch("/me", staff ? { ...rest, mobile } : { ...rest, phone });
       await qc.invalidateQueries({ queryKey: ["auth"] });
       toast.success(t("common.saved"));
     } catch (err) {
@@ -59,69 +65,211 @@ export function ProfileDialog({ open, onOpenChange }: { open: boolean; onOpenCha
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-h-[90dvh] overflow-y-auto sm:max-w-lg">
+      <DialogContent className={cn("max-h-[92dvh] overflow-y-auto", staff ? "sm:max-w-[min(1100px,94vw)]" : "sm:max-w-2xl")}>
         <DialogHeader>
           <DialogTitle>{t("topbar.profile")}</DialogTitle>
           <DialogDescription>{me.email}</DialogDescription>
         </DialogHeader>
-        <form onSubmit={saveProfile} className="space-y-4">
-          <div className="space-y-2">
-            <Label htmlFor="p-name">{t("common.name")}</Label>
-            <Input id="p-name" required value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} />
+        <div className={cn("grid gap-4", staff && "lg:grid-cols-2")}>
+          <div className="space-y-4">
+            <Card icon={UserRound} title={t("profile.identity")}>
+              <form onSubmit={saveProfile} className="space-y-4">
+                <div className="grid gap-4 sm:grid-cols-2">
+                  <div className="space-y-2">
+                    <Label htmlFor="p-name">{t("common.name")}</Label>
+                    <Input id="p-name" required value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} />
+                  </div>
+                  <div className="space-y-2">
+                    <Label htmlFor="p-title">{t("common.title")}</Label>
+                    <Input id="p-title" value={form.title} onChange={(e) => setForm({ ...form, title: e.target.value })} />
+                  </div>
+                </div>
+                {staff ? (
+                  <div className="space-y-2">
+                    <Label htmlFor="p-mobile" className="flex items-center gap-2">
+                      <Smartphone className="size-3.5 text-primary" /> {t("profile.mobile")}
+                    </Label>
+                    <Input id="p-mobile" type="tel" inputMode="tel" autoComplete="tel" value={form.mobile} onChange={(e) => setForm({ ...form, mobile: e.target.value })} placeholder="+1 450 555-0123" />
+                    <p className="text-[11px] text-muted-foreground">{t("profile.mobileHint")}</p>
+                  </div>
+                ) : (
+                  <div className="space-y-2">
+                    <Label htmlFor="p-phone">{t("common.phone")}</Label>
+                    <Input id="p-phone" type="tel" value={form.phone} onChange={(e) => setForm({ ...form, phone: e.target.value })} />
+                  </div>
+                )}
+                {!staff && (
+                  <label className="flex items-center justify-between gap-4 rounded-lg border p-3 text-sm">
+                    {t("admin.users.notify")}
+                    <Switch checked={form.notifyEmail} onCheckedChange={(v) => setForm({ ...form, notifyEmail: v })} />
+                  </label>
+                )}
+                <div className="flex justify-end">
+                  <Button type="submit" disabled={busy}>
+                    {busy && <Loader2 className="size-4 animate-spin" />} {t("common.save")}
+                  </Button>
+                </div>
+              </form>
+            </Card>
+            <Card icon={KeyRound} title={t("password.next")}>
+              <form onSubmit={changePassword} className="space-y-3">
+                <Input type="password" autoComplete="current-password" placeholder={t("password.current")} required value={pw.current} onChange={(e) => setPw({ ...pw, current: e.target.value })} />
+                <div className="grid gap-3 sm:grid-cols-2">
+                  <Input type="password" autoComplete="new-password" placeholder={t("password.next")} required value={pw.next} onChange={(e) => setPw({ ...pw, next: e.target.value })} />
+                  <Input type="password" autoComplete="new-password" placeholder={t("password.confirm")} required value={pw.confirm} onChange={(e) => setPw({ ...pw, confirm: e.target.value })} />
+                </div>
+                <p className="text-xs text-muted-foreground">{t("password.rule")}</p>
+                <div className="flex justify-end">
+                  <Button type="submit" variant="outline" disabled={pwBusy}>
+                    {pwBusy && <Loader2 className="size-4 animate-spin" />} {t("password.submit")}
+                  </Button>
+                </div>
+              </form>
+            </Card>
           </div>
-          <div className="grid gap-4 sm:grid-cols-2">
-            <div className="space-y-2">
-              <Label htmlFor="p-title">{t("common.title")}</Label>
-              <Input id="p-title" value={form.title} onChange={(e) => setForm({ ...form, title: e.target.value })} />
-            </div>
-            <div className="space-y-2">
-              <Label htmlFor="p-phone">{t("common.phone")}</Label>
-              <Input id="p-phone" value={form.phone} onChange={(e) => setForm({ ...form, phone: e.target.value })} />
-            </div>
-          </div>
-          {me.kind === "staff" && (
-            <div className="space-y-2">
-              <Label htmlFor="p-mobile" className="flex items-center gap-2">
-                <Smartphone className="size-3.5 text-primary" /> {t("profile.mobile")}
-              </Label>
-              <Input id="p-mobile" type="tel" inputMode="tel" autoComplete="tel" value={form.mobile} onChange={(e) => setForm({ ...form, mobile: e.target.value })} placeholder="+1 450 555-0123" />
-              <p className="text-[11px] text-muted-foreground">{t("profile.mobileHint")}</p>
-            </div>
-          )}
-          {me.kind === "staff" && (
-            <p className={cn("flex items-start gap-2 rounded-lg border px-3 py-2 text-xs", me.o365?.active ? "border-emerald-500/30 text-emerald-300" : "text-muted-foreground")}>
-              <CalendarDays className="mt-0.5 size-3.5 shrink-0" />
-              {me.o365 ? (me.o365.active ? t("profile.o365On", { mailbox: me.o365.mailbox }) : t("profile.o365Pending")) : t("profile.o365Off")}
-            </p>
-          )}
-          {me.kind === "client" && (
-            <label className="flex items-center justify-between gap-4 rounded-lg border p-3 text-sm">
-              {t("admin.users.notify")}
-              <Switch checked={form.notifyEmail} onCheckedChange={(v) => setForm({ ...form, notifyEmail: v })} />
-            </label>
-          )}
-          <div className="flex justify-end">
-            <Button type="submit" disabled={busy}>
-              {busy && <Loader2 className="size-4 animate-spin" />} {t("common.save")}
-            </Button>
-          </div>
-        </form>
-        <Separator />
-        <form onSubmit={changePassword} className="space-y-3">
-          <p className="font-display text-sm font-semibold">{t("password.next")}</p>
-          <Input type="password" autoComplete="current-password" placeholder={t("password.current")} required value={pw.current} onChange={(e) => setPw({ ...pw, current: e.target.value })} />
-          <div className="grid gap-3 sm:grid-cols-2">
-            <Input type="password" autoComplete="new-password" placeholder={t("password.next")} required value={pw.next} onChange={(e) => setPw({ ...pw, next: e.target.value })} />
-            <Input type="password" autoComplete="new-password" placeholder={t("password.confirm")} required value={pw.confirm} onChange={(e) => setPw({ ...pw, confirm: e.target.value })} />
-          </div>
-          <p className="text-xs text-muted-foreground">{t("password.rule")}</p>
-          <div className="flex justify-end">
-            <Button type="submit" variant="outline" disabled={pwBusy}>
-              {pwBusy && <Loader2 className="size-4 animate-spin" />} {t("password.submit")}
-            </Button>
-          </div>
-        </form>
+          {staff && <Microsoft365Card onNavigate={() => onOpenChange(false)} />}
+        </div>
       </DialogContent>
     </Dialog>
+  );
+}
+
+function Card({ icon: Icon, title, children, className }: { icon: typeof Mail; title: string; children: React.ReactNode; className?: string }) {
+  return (
+    <section className={cn("rounded-2xl border bg-background/40 p-4", className)}>
+      <h3 className="mb-3 flex items-center gap-2 font-display text-sm font-semibold">
+        <Icon className="size-4 text-primary" /> {title}
+      </h3>
+      {children}
+    </section>
+  );
+}
+
+/** Everything Microsoft 365 for this technician: the Outlook calendar, and the Outlook module with its mailboxes. */
+function Microsoft365Card({ onNavigate }: { onNavigate: () => void }) {
+  const { t } = useTranslation();
+  const me = useMe();
+  const can = useCan();
+  const qc = useQueryClient();
+  const on = me.preferences.outlook;
+  const toggle = useMutation({
+    mutationFn: (outlook: boolean) => api.put("/me/preferences", { outlook }),
+    onSuccess: (_r, outlook) => {
+      void qc.invalidateQueries({ queryKey: ["auth"] });
+      void qc.invalidateQueries({ queryKey: KEY });
+      toast.success(outlook ? t("profile.outlookOn") : t("profile.outlookOff"));
+    },
+    onError: () => toast.error(t("common.error")),
+  });
+  return (
+    <Card icon={Mail} title={t("profile.o365Title")} className="space-y-3">
+      <p className="text-xs text-muted-foreground">{t("profile.o365Intro")}</p>
+
+      {/* Calendar: allowed by an admin */}
+      <div className="rounded-xl border p-3">
+        <p className="flex items-center gap-2 text-sm font-medium">
+          <CalendarDays className="size-4 text-primary" /> {t("profile.calendar")}
+          <span
+            className={cn(
+              "ml-auto rounded-full border px-2 py-px text-[10px] font-medium",
+              me.o365?.active ? "border-emerald-500/40 text-emerald-300" : me.o365 ? "border-orange-500/40 text-orange-300" : "text-muted-foreground",
+            )}
+          >
+            {me.o365?.active ? t("profile.stateOn") : me.o365 ? t("profile.statePending") : t("profile.stateOff")}
+          </span>
+        </p>
+        <p className="mt-1.5 text-xs text-muted-foreground">{me.o365 ? (me.o365.active ? t("profile.o365On", { mailbox: me.o365.mailbox }) : t("profile.o365Pending")) : t("profile.o365Off")}</p>
+      </div>
+
+      {/* Outlook module: turned on by the technician, with their mailboxes */}
+      {can("outlook.view") && (
+        <div className={cn("rounded-xl border transition-colors", on && "border-[color:var(--gold)]/40")}>
+          <label className="flex cursor-pointer items-center gap-2 p-3 text-sm font-medium">
+            <Inbox className="size-4 text-primary" />
+            <span className="flex-1">
+              {t("profile.outlookModule")}
+              <span className="block text-xs font-normal text-muted-foreground">{t("profile.outlookHint")}</span>
+            </span>
+            {toggle.isPending && <Loader2 className="size-4 animate-spin text-muted-foreground" />}
+            <Switch checked={on} disabled={toggle.isPending} onCheckedChange={(v) => toggle.mutate(v)} aria-label={t("profile.outlookModule")} />
+            <ChevronDown className={cn("size-4 text-muted-foreground transition-transform", on && "rotate-180")} />
+          </label>
+          {on && <Mailboxes onNavigate={onNavigate} />}
+        </div>
+      )}
+    </Card>
+  );
+}
+
+function Mailboxes({ onNavigate }: { onNavigate: () => void }) {
+  const { t } = useTranslation();
+  const qc = useQueryClient();
+  const confirm = useConfirm();
+  const [linkOpen, setLinkOpen] = useState(false);
+  const status = useQuery({ queryKey: statusKey, queryFn: () => api.get<OutlookStatus>("/outlook/status") });
+  const unlink = useMutation({
+    mutationFn: (a: MailAccount) => api.del(`/outlook/accounts/${a.id}`),
+    onSuccess: (_r, a) => {
+      toast.success(t("outlook.unlinked"));
+      void qc.invalidateQueries({ queryKey: statusKey });
+      qc.removeQueries({ queryKey: [...KEY, "folders", a.id] });
+    },
+    onError: (e) => toast.error(outlookErrorText(t, e)),
+  });
+  const s = status.data;
+  return (
+    <div className="space-y-3 border-t p-3">
+      {status.isLoading && <Loader2 className="mx-auto size-4 animate-spin text-muted-foreground" />}
+      {s && !s.ready && (
+        <p className="rounded-lg border border-orange-500/40 bg-orange-500/10 p-2.5 text-xs text-orange-200">
+          <span className="block font-medium">{t("outlook.notReady")}</span>
+          {t("outlook.notReadyText")}
+        </p>
+      )}
+      {s?.ready && (
+        <>
+          <p className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">{t("profile.mailboxes")}</p>
+          {s.accounts.length === 0 ? (
+            <p className="text-xs text-muted-foreground">{t("outlook.noAccountsText")}</p>
+          ) : (
+            <ul className="divide-y rounded-lg border">
+              {s.accounts.map((a) => (
+                <li key={a.id} className="flex items-center gap-2 px-3 py-2 text-sm">
+                  <Mail className="size-3.5 shrink-0 text-muted-foreground" />
+                  <span className="min-w-0 flex-1">
+                    <span className="block truncate font-medium">{a.displayName || a.address}</span>
+                    {a.displayName && <span className="block truncate text-xs text-muted-foreground">{a.address}</span>}
+                  </span>
+                  <Button
+                    type="button"
+                    size="icon"
+                    variant="ghost"
+                    className="size-7 text-muted-foreground hover:text-destructive"
+                    title={t("outlook.unlink")}
+                    disabled={unlink.isPending}
+                    onClick={() => void confirm({ title: t("outlook.unlinkConfirm", { address: a.address }), destructive: true }).then((ok) => ok && unlink.mutate(a))}
+                  >
+                    <Trash2 className="size-3.5" />
+                  </Button>
+                </li>
+              ))}
+            </ul>
+          )}
+          <div className="flex flex-wrap gap-2">
+            <Button type="button" size="sm" variant="outline" className="h-8 gap-1.5" onClick={() => setLinkOpen(true)}>
+              <Plus className="size-3.5" /> {t("outlook.linkMailbox")}
+            </Button>
+            {s.accounts.length > 0 && (
+              <Button asChild size="sm" variant="ghost" className="h-8 gap-1.5">
+                <Link to="/outlook" onClick={onNavigate}>
+                  <ExternalLink className="size-3.5" /> {t("profile.openOutlook")}
+                </Link>
+              </Button>
+            )}
+          </div>
+          <LinkMailboxDialog open={linkOpen} onOpenChange={setLinkOpen} status={s} onLinked={() => undefined} />
+        </>
+      )}
+    </div>
   );
 }

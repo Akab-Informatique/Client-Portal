@@ -2197,6 +2197,12 @@ describe("Outlook (Microsoft 365 mail)", () => {
     resetRateLimit("login:ip:unknown");
     const admin = await signIn("admin@akab.local");
     const tech = await signIn("tech@akab.local");
+    // off until the technician turns it on in their profile
+    expect((await tech.get("/api/me")).json.preferences.outlook).toBe(false);
+    expect((await tech.get("/api/outlook/status")).json.error).toBe("outlook_off");
+    expect((await tech.put("/api/me/preferences", { outlook: true })).status).toBe(200);
+    expect((await tech.get("/api/me")).json.preferences.outlook).toBe(true);
+    await admin.put("/api/me/preferences", { outlook: true });
     await admin.put("/api/admin/integrations/o365", { enabled: false });
     expect((await tech.post("/api/outlook/accounts", { address: "tech@akab.local" })).json.error).toBe("outlook_not_configured");
     await admin.put("/api/admin/integrations/o365", { tenantId: "akab.onmicrosoft.com", clientId: "abc-123", secret: "good-secret", enabled: true });

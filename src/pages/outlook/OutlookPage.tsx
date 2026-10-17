@@ -44,7 +44,7 @@ import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip
 import { GlassBackdrop } from "@/components/brand/GlassBackdrop";
 import { useConfirm } from "@/components/ConfirmDialog";
 import { api } from "@/lib/api";
-import { useCan } from "@/lib/session";
+import { useCan, useMe } from "@/lib/session";
 import { dateTime } from "@/lib/format";
 import { currentLocale } from "@/i18n";
 import { cn } from "@/lib/utils";
@@ -85,6 +85,34 @@ function listDate(iso: string): string {
 }
 
 export function OutlookPage() {
+  const me = useMe();
+  return me.preferences.outlook ? <OutlookMail /> : <OutlookOff />;
+}
+
+/** The module is off: one click turns it on (or from the profile). */
+function OutlookOff() {
+  const { t } = useTranslation();
+  const qc = useQueryClient();
+  const on = useMutation({
+    mutationFn: () => api.put("/me/preferences", { outlook: true }),
+    onSuccess: () => void qc.invalidateQueries({ queryKey: ["auth"] }),
+    onError: () => toast.error(t("common.error")),
+  });
+  return (
+    <EmptyCard
+      icon={Mail}
+      title={t("profile.outlookOffTitle")}
+      text={t("profile.outlookOffText")}
+      action={
+        <Button className="bg-grad-gold font-semibold text-[#1a1204]" disabled={on.isPending} onClick={() => on.mutate()}>
+          {on.isPending ? <Loader2 className="size-4 animate-spin" /> : <Mail className="size-4" />} {t("profile.outlookTurnOn")}
+        </Button>
+      }
+    />
+  );
+}
+
+function OutlookMail() {
   const { t } = useTranslation();
   const status = useQuery({ queryKey: statusKey, queryFn: () => api.get<OutlookStatus>("/outlook/status") });
   const [linkOpen, setLinkOpen] = useState(false);

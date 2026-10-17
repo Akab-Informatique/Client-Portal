@@ -191,7 +191,8 @@ function SidebarContent({ collapsed, onToggle }: { collapsed: boolean; onToggle?
   const { t } = useTranslation();
   const can = useCan();
   const location = useLocation();
-  const visible = (m: NavModule) => m.upcoming || !m.permission || can(m.permission);
+  const me = useMe();
+  const visible = (m: NavModule) => m.upcoming || ((!m.permission || can(m.permission)) && (!m.optIn || me.preferences[m.optIn]));
   const isActive = (path: string) => (path === "/" ? location.pathname === "/" : location.pathname.startsWith(path));
   // Sections show their live modules (and upcoming ones, except in the main section,
   // whose upcoming modules are listed under "À venir")

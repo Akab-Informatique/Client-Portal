@@ -24,7 +24,7 @@ export type Me = {
   /** Set while a technician views the portal as a client (read only). */
   viewAs: { clientId: string; clientName: string } | null;
   realUser: { name: string; email: string } | null;
-  preferences: { dashboard: DashboardWidget[] | null; theme: "dark" | "light" | "system" };
+  preferences: { dashboard: DashboardWidget[] | null; theme: "dark" | "light" | "system"; outlook: boolean };
 };
 
 export type AuthState = { stage: Stage; me?: Me | { name: string; email: string; locale: "fr" | "en" } };

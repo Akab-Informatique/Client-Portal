@@ -1,4 +1,5 @@
 import { Hono } from "hono";
+import { HTTPException } from "hono/http-exception";
 import { eq } from "drizzle-orm";
 import { z } from "zod";
 import { db, schema } from "../db/index.ts";
@@ -36,7 +37,7 @@ export async function loadMe(a: AuthContext) {
     /** Set while a technician views the portal as a client (read only). */
     viewAs: a.viewAs,
     realUser: a.viewAs ? { name: a.realUser.name, email: a.realUser.email } : null,
-    preferences: { dashboard: prefs?.dashboard ?? null, theme: prefs?.theme ?? "dark" },
+    preferences: { dashboard: prefs?.dashboard ?? null, theme: prefs?.theme ?? "dark", outlook: prefs?.outlook ?? false },
   };
 }
 
@@ -77,16 +78,19 @@ export const meRoutes = new Hono<AppEnv>()
       z.object({
         dashboard: z.array(widget).max(40).nullable().optional(),
         theme: z.enum(["dark", "light", "system"]).optional(),
+        outlook: z.boolean().optional(),
       }),
     );
+    if (p.outlook && !a.permissions.includes("outlook.view")) throw new HTTPException(403, { message: "forbidden" });
     await db()
       .insert(schema.userPreferences)
-      .values({ userId: a.user.id, dashboard: p.dashboard ?? null, theme: p.theme ?? null })
+      .values({ userId: a.user.id, dashboard: p.dashboard ?? null, theme: p.theme ?? null, outlook: p.outlook ?? false })
       .onConflictDoUpdate({
         target: schema.userPreferences.userId,
         set: {
           ...(p.dashboard !== undefined ? { dashboard: p.dashboard } : {}),
           ...(p.theme !== undefined ? { theme: p.theme } : {}),
+          ...(p.outlook !== undefined ? { outlook: p.outlook } : {}),
           updatedAt: new Date(),
         },
       });

@@ -27,7 +27,7 @@ export function CommandPalette({ open, onOpenChange }: { open: boolean; onOpenCh
     onOpenChange(false);
     fn();
   };
-  const modules = STAFF_MODULES.filter((m) => !m.upcoming && (!m.permission || can(m.permission)));
+  const modules = STAFF_MODULES.filter((m) => !m.upcoming && (!m.permission || can(m.permission)) && (!m.optIn || me.preferences[m.optIn]));
 
   return (
     <CommandDialog open={open} onOpenChange={onOpenChange} title={t("topbar.search")} description={t("palette.placeholder")}>

@@ -78,6 +78,12 @@ function checkAttachments(list: OutgoingAttachment[]) {
 export const outlookRoutes = new Hono<AppEnv>()
   .use(requireStaff)
   .use(requirePermission("outlook.view"))
+  // the module is turned on by the technician (profile › Microsoft 365)
+  .use(async (c, next) => {
+    const [p] = await db().select({ on: schema.userPreferences.outlook }).from(schema.userPreferences).where(eq(schema.userPreferences.userId, auth(c).user.id));
+    if (!p?.on) throw new HTTPException(403, { message: "outlook_off" });
+    await next();
+  })
 
   /** Is Microsoft 365 set up, which mailboxes are linked, what may be linked. */
   .get("/status", async (c) => {

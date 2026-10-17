@@ -136,6 +136,8 @@ export const userPreferences = pgTable("user_preferences", {
   theme: text("theme", { enum: ["dark", "light", "system"] }),
   /** Dashboard opened first; null = the built-in "Akab" dashboard. */
   defaultDashboardId: uuid("default_dashboard_id").references((): AnyPgColumn => dashboards.id, { onDelete: "set null" }),
+  /** The Outlook module, turned on by the technician in their profile (off by default) */
+  outlook: boolean("outlook").notNull().default(false),
   updatedAt: updated(),
 });
 
