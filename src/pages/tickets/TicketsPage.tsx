@@ -6,6 +6,7 @@ import { animate, motion, useMotionValue, useTransform } from "motion/react";
 import { toast } from "sonner";
 import {
   AlarmClock,
+  RotateCcw,
   ArrowDownUp,
   BellRing,
   Bookmark,
@@ -81,6 +82,7 @@ export function TicketsPage() {
   const txt = useChoiceText();
   const can = useCan();
   const ws = useTicketWorkspace();
+  const cols = useColumnWidths();
   const [params, setParams] = useSearchParams();
   const view = (VIEWS.includes(params.get("view") as View) ? params.get("view") : "mine") as View;
   const { data, isLoading, dataUpdatedAt, isFetching, refetch } = useTickets(view, params);
@@ -251,19 +253,37 @@ export function TicketsPage() {
       )}
 
       {/* List */}
-      <div className="glass overflow-hidden rounded-2xl border">
-        <div className="hidden grid-cols-[minmax(0,1fr)_144px_140px_64px_104px_86px_132px_64px_20px] gap-3 border-b border-[color:var(--glass-border)] bg-white/[0.02] px-5 py-2.5 font-mono text-[10px] uppercase tracking-[0.12em] text-muted-foreground xl:grid">
+      <div className="glass overflow-hidden rounded-2xl border" style={{ ["--tk-cols" as string]: cols.template }}>
+        <div className="hidden grid-cols-[var(--tk-cols)] gap-3 border-b border-[color:var(--glass-border)] bg-white/[0.02] px-5 py-2.5 font-mono text-[10px] uppercase tracking-[0.12em] text-muted-foreground xl:grid">
           <span>{t("tickets.fields.ticket")}</span>
-          <span>{t("tickets.fields.status")}</span>
-          <span>{t("tickets.fields.company")}</span>
-          <span className="flex items-center gap-1">
-            {t("tickets.fields.start")} <PortalTag />
-          </span>
-          <span>{t("tickets.fields.due")}</span>
-          <span>{t("tickets.fields.priority")}</span>
-          <span>{t("tickets.fields.assignee")}</span>
-          <span>{t("tickets.fields.secondary")}</span>
-          <span />
+          {[
+            <span key="s">{t("tickets.fields.status")}</span>,
+            <span key="c">{t("tickets.fields.company")}</span>,
+            <span key="st" className="flex items-center gap-1">
+              {t("tickets.fields.start")} <PortalTag />
+            </span>,
+            <span key="d">{t("tickets.fields.due")}</span>,
+            <span key="p">{t("tickets.fields.priority")}</span>,
+            <span key="a">{t("tickets.fields.assignee")}</span>,
+            <span key="se">{t("tickets.fields.secondary")}</span>,
+          ].map((label, i) => (
+            <span key={i} className="relative flex min-w-0 items-center">
+              <span className="min-w-0 truncate">{label}</span>
+              <ColumnHandle onDrag={(dx) => cols.resize(i, dx)} onDone={cols.save} onReset={() => cols.reset(i)} />
+            </span>
+          ))}
+          {cols.changed ? (
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <button type="button" onClick={cols.resetAll} className="flex items-center justify-center text-muted-foreground hover:text-foreground" aria-label={t("tickets.columns.reset")}>
+                  <RotateCcw className="size-3" />
+                </button>
+              </TooltipTrigger>
+              <TooltipContent>{t("tickets.columns.reset")}</TooltipContent>
+            </Tooltip>
+          ) : (
+            <span />
+          )}
         </div>
         {isLoading || !data ? (
           <div className="space-y-2 p-4">
@@ -626,7 +646,7 @@ function TicketRow({
         }}
         className={cn(
           "cursor-pointer outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-[color:var(--gold)]/50",
-          "group relative isolate grid w-full grid-cols-1 gap-x-3 gap-y-1.5 px-5 py-2.5 text-left transition-colors xl:grid-cols-[minmax(0,1fr)_144px_140px_64px_104px_86px_132px_64px_20px] xl:items-center",
+          "group relative isolate grid w-full grid-cols-1 gap-x-3 gap-y-1.5 px-5 py-2.5 text-left transition-colors xl:grid-cols-[var(--tk-cols)] xl:items-center",
           "hover:bg-[linear-gradient(90deg,rgba(255,206,26,0.07),transparent_60%)]",
           active && "bg-[linear-gradient(90deg,rgba(255,206,26,0.1),transparent_70%)]",
           // Critical pops and moves, high pops (open tickets only)
@@ -1046,6 +1066,92 @@ function TeamFilter({ technicians, params, set }: { technicians: TicketList["fac
         </div>
       </PopoverContent>
     </Popover>
+  );
+}
+
+// ── Column widths of the list: dragged by each technician (kept on this computer) ──
+const COLS_KEY = "akab.tickets.columns";
+/** Status, client, start, due, priority, assignee, secondary (the ticket column takes the rest) */
+const DEFAULT_COLS = [144, 140, 64, 104, 86, 132, 64];
+const COL_MIN = 48;
+const COL_MAX = 420;
+function useColumnWidths() {
+  const [widths, setWidths] = useState<number[]>(() => {
+    try {
+      const v = JSON.parse(localStorage.getItem(COLS_KEY) ?? "null") as unknown;
+      if (Array.isArray(v) && v.length === DEFAULT_COLS.length && v.every((x) => typeof x === "number")) return v as number[];
+    } catch {
+      /* default widths */
+    }
+    return DEFAULT_COLS;
+  });
+  const start = useRef<number[] | null>(null);
+  const store = (w: number[]) => {
+    try {
+      localStorage.setItem(COLS_KEY, JSON.stringify(w));
+    } catch {
+      /* private window: for this page only */
+    }
+  };
+  return {
+    template: `minmax(160px,1fr) ${widths.map((w) => `${w}px`).join(" ")} 20px`,
+    changed: widths.some((w, i) => w !== DEFAULT_COLS[i]),
+    /** dx: pixels since the drag started */
+    resize: (i: number, dx: number) => {
+      start.current ??= widths;
+      const base = start.current;
+      setWidths(base.map((w, j) => (j === i ? Math.min(COL_MAX, Math.max(COL_MIN, Math.round(w + dx))) : w)));
+    },
+    save: () => {
+      start.current = null;
+      setWidths((w) => (store(w), w));
+    },
+    reset: (i: number) =>
+      setWidths((w) => {
+        const next = w.map((x, j) => (j === i ? DEFAULT_COLS[j] : x));
+        store(next);
+        return next;
+      }),
+    resetAll: () => {
+      setWidths(DEFAULT_COLS);
+      try {
+        localStorage.removeItem(COLS_KEY);
+      } catch {
+        /* ignore */
+      }
+    },
+  };
+}
+
+/** The edge of a column title: drag to widen / narrow it, double-click for its usual width. */
+function ColumnHandle({ onDrag, onDone, onReset }: { onDrag: (dx: number) => void; onDone: () => void; onReset: () => void }) {
+  const { t } = useTranslation();
+  const x0 = useRef<number | null>(null);
+  return (
+    <span
+      role="separator"
+      aria-orientation="vertical"
+      aria-label={t("tickets.columns.resize")}
+      title={t("tickets.columns.resize")}
+      onPointerDown={(e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        x0.current = e.clientX;
+        e.currentTarget.setPointerCapture(e.pointerId);
+      }}
+      onPointerMove={(e) => {
+        if (x0.current !== null) onDrag(e.clientX - x0.current);
+      }}
+      onPointerUp={() => {
+        if (x0.current === null) return;
+        x0.current = null;
+        onDone();
+      }}
+      onDoubleClick={onReset}
+      className="group/handle absolute -right-2.5 top-1/2 z-10 flex h-6 w-3 -translate-y-1/2 cursor-col-resize touch-none items-center justify-center"
+    >
+      <span className="h-4 w-px bg-border transition-colors group-hover/handle:w-0.5 group-hover/handle:bg-[color:var(--gold)]" />
+    </span>
   );
 }
 

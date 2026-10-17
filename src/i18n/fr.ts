@@ -1230,6 +1230,10 @@ const fr = {
     },
   },
   tickets: {
+    columns: {
+      resize: "Glisser pour élargir ou rétrécir la colonne (double-clic : largeur habituelle)",
+      reset: "Largeurs des colonnes par défaut",
+    },
     dockTab: {
       compact: "Réduire en alvéole",
       normal: "Afficher en onglet",

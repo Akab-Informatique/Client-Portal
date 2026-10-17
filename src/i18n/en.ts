@@ -1232,6 +1232,10 @@ const en: Dict = {
     },
   },
   tickets: {
+    columns: {
+      resize: "Drag to widen or narrow the column (double-click: usual width)",
+      reset: "Default column widths",
+    },
     dockTab: {
       compact: "Shrink to a cell",
       normal: "Show as a tab",
