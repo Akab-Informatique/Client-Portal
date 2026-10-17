@@ -176,6 +176,8 @@ export interface TicketSource {
   deleteServiceCall(id: number, a: AuthContext): Promise<void>;
   /** The contact with this phone or mobile number (10 digits), with their client */
   contactByPhone(phone: string): Promise<{ contactId: string; contactName: string; companyId: number; companyName: string } | null>;
+  /** The active contact with this email address (e.g. the sender of an email) */
+  contactByEmail(email: string): Promise<{ contactId: string; contactName: string; companyId: number; companyName: string } | null>;
   /** A ticket opened by the portal itself (texts with no reply): no technician behind it */
   createSystem(p: NewTicket): Promise<{ id: number; number: string }>;
   /** A note written by the portal itself (e.g. a text from the client), internal */
@@ -385,6 +387,14 @@ const demoSource: TicketSource = {
     return [];
   },
   async createServiceCall() {
+    return null;
+  },
+  async contactByEmail(email) {
+    const e = email.toLowerCase();
+    for (const c of demoCompanies()) {
+      const hit = demoContacts(c.id).find((x) => (x.email ?? "").toLowerCase() === e);
+      if (hit) return { contactId: hit.id, contactName: hit.name, companyId: c.id, companyName: c.name };
+    }
     return null;
   },
   async contactByPhone(phone) {
@@ -1300,6 +1310,33 @@ const autotaskSource: TicketSource = {
       { impersonate: actor, asApiUser: signText(a, "description") },
     );
     forget(`charges:${ticketId}`);
+  },
+
+  async contactByEmail(email) {
+    const at = await autotask();
+    const e = email.toLowerCase();
+    return cached(`contactByEmail:${e}`, 10 * 60_000, async () => {
+      type AtContact = { id: number; companyID: number; firstName?: string; lastName?: string };
+      const fields = await safeFields(at, "Contacts", ["id", "companyID", "firstName", "lastName", "emailAddress", "emailAddress2", "emailAddress3"]);
+      const searchable = ["emailAddress", "emailAddress2", "emailAddress3"].filter((x) => fields.includes(x));
+      const rows = await at.query<AtContact>(
+        "Contacts",
+        [
+          { op: "eq", field: "isActive", value: 1 },
+          { op: "or", items: searchable.map((field) => ({ op: "eq", field, value: e })) },
+        ],
+        { fields: ["id", "companyID", "firstName", "lastName"], max: 5 },
+      );
+      const hit = rows[0];
+      if (!hit) return null;
+      const names = await companyNames(at, [hit.companyID]);
+      return {
+        contactId: String(hit.id),
+        contactName: `${hit.firstName ?? ""} ${hit.lastName ?? ""}`.trim(),
+        companyId: hit.companyID,
+        companyName: names.get(hit.companyID) ?? `#${hit.companyID}`,
+      };
+    });
   },
 
   async contactByPhone(phone) {

@@ -104,7 +104,7 @@ export const outlookRoutes = new Hono<AppEnv>()
   .get("/status", async (c) => {
     const a = auth(c);
     const accounts = await db()
-      .select({ id: schema.mailAccounts.id, address: schema.mailAccounts.address, displayName: schema.mailAccounts.displayName, via: schema.mailAccounts.via })
+      .select({ id: schema.mailAccounts.id, address: schema.mailAccounts.address, displayName: schema.mailAccounts.displayName, via: schema.mailAccounts.via, folderPrefs: schema.mailAccounts.folderPrefs })
       .from(schema.mailAccounts)
       .where(eq(schema.mailAccounts.userId, a.user.id))
       .orderBy(asc(schema.mailAccounts.createdAt));
@@ -163,6 +163,16 @@ export const outlookRoutes = new Hono<AppEnv>()
     await db().delete(schema.mailAccounts).where(eq(schema.mailAccounts.id, acc.id));
     await audit(a.realUser.id, "outlook.unlinked", acc.id, { address: acc.address });
     return c.json({ ok: true });
+  })
+
+  /** The technician's folder layout for this mailbox (favourites in order, hidden folders). */
+  .put("/accounts/:id/folder-prefs", async (c) => {
+    const acc = await account(auth(c), c.req.param("id"));
+    const zId = z.string().min(1).max(400);
+    const p = await body(c, z.object({ pinned: z.array(z.object({ id: zId, name: z.string().trim().min(1).max(200) })).max(50), hidden: z.array(zId).max(300) }));
+    const prefs = { pinned: p.pinned.filter((x, i, all) => all.findIndex((y) => y.id === x.id) === i), hidden: [...new Set(p.hidden)] };
+    await db().update(schema.mailAccounts).set({ folderPrefs: prefs }).where(eq(schema.mailAccounts.id, acc.id));
+    return c.json(prefs);
   })
 
   .get("/accounts/:id/folders", async (c) => {
@@ -291,5 +301,8 @@ export const outlookRoutes = new Hono<AppEnv>()
   .get("/accounts/:id/messages/:mid/text", requirePermission("tickets.edit"), async (c) => {
     const acc = await account(auth(c), c.req.param("id"));
     const m = await run(() => messageText(acc.address, zMessageId.parse(c.req.param("mid"))));
-    return c.json({ subject: m.subject, from: m.from, receivedAt: m.receivedAt, text: m.text.slice(0, 7000) });
+    // the sender, when they are a contact of a client: the ticket is opened for them
+    const src = await ticketSource();
+    const contact = m.from?.address ? await src.contactByEmail(m.from.address).catch(() => null) : null;
+    return c.json({ subject: m.subject, from: m.from, receivedAt: m.receivedAt, text: m.text.slice(0, 7000), contact });
   });

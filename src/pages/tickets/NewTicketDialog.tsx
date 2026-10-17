@@ -30,7 +30,7 @@ export function NewTicketDialog({
   facets: TicketList["facets"];
   onCreated: (id: number) => void;
   /** Pre-filled title / description (e.g. a ticket made from an email). */
-  initial?: { title?: string; description?: string };
+  initial?: { title?: string; description?: string; companyId?: number | null; contactId?: string | null };
 }) {
   const { t } = useTranslation();
   const txt = useChoiceText();
@@ -38,8 +38,8 @@ export function NewTicketDialog({
   const qc = useQueryClient();
   const me = useMe();
   const empty = () => ({
-    companyId: "",
-    contactId: null as string | null,
+    companyId: initial?.companyId ? String(initial.companyId) : "",
+    contactId: (initial?.contactId ?? null) as string | null,
     title: (initial?.title ?? "").slice(0, 250),
     description: (initial?.description ?? "").slice(0, 8000),
     priority: (facets.priorities.find((p) => p.kind === "medium") ?? facets.priorities[0])?.value ?? "",

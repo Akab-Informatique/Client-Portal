@@ -2432,6 +2432,20 @@ describe("Outlook (Microsoft 365 mail)", () => {
     expect(note.text).toContain("De : Marie <marie@client.example>");
     expect(note.text).toContain("L'imprimante est brisée.");
     expect((await tech.get(`/api/outlook/accounts/${acc.id}/messages/m1/text`)).json).toMatchObject({ subject: "Imprimante" });
+    // an unknown sender: no contact; a client's contact: the ticket opens for them
+    expect((await tech.get(`/api/outlook/accounts/${acc.id}/messages/m1/text`)).json.contact).toBeNull();
+    const { demoContacts } = await import("../server/lib/demoTickets.ts");
+    const { ticketSource } = await import("../server/lib/ticketSource.ts");
+    const known = demoContacts(300)[0];
+    expect(await (await ticketSource()).contactByEmail(known.email!.toUpperCase())).toMatchObject({ contactId: known.id, companyId: 300 });
+
+    // the folder layout: favourites in order, hidden folders; the owner's only
+    const prefs = { pinned: [{ id: "f2", name: "Clients" }, { id: "inbox-id", name: "Boîte de réception" }], hidden: ["junk-id", "junk-id"] };
+    expect((await tech.put(`/api/outlook/accounts/${acc.id}/folder-prefs`, prefs)).json).toEqual({ pinned: prefs.pinned, hidden: ["junk-id"] });
+    expect((await tech.get("/api/outlook/status")).json.accounts.find((x: any) => x.id === acc.id).folderPrefs).toEqual({ pinned: prefs.pinned, hidden: ["junk-id"] });
+    resetRateLimit("login:ip:unknown");
+    const other = await signIn("admin@akab.local");
+    expect((await other.put(`/api/outlook/accounts/${acc.id}/folder-prefs`, prefs)).status).toBe(404);
 
     expect((await tech.del(`/api/outlook/accounts/${acc.id}`)).status).toBe(200);
     expect((await tech.get(`/api/outlook/accounts/${acc.id}/folders`)).status).toBe(404);

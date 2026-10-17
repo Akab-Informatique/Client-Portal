@@ -2,7 +2,7 @@ import type { InfiniteData, QueryClient } from "@tanstack/react-query";
 import { ApiError } from "@/lib/api";
 import { currentLocale } from "@/i18n";
 
-export type MailAccount = { id: string; address: string; displayName: string | null; via?: "user" | "app" };
+export type MailAccount = { id: string; address: string; displayName: string | null; via?: "user" | "app"; folderPrefs?: { pinned: { id: string; name: string }[]; hidden: string[] } | null };
 export type OutlookStatus = {
   ready: boolean;
   signedIn: { email: string; needsReconnect: boolean } | null;
