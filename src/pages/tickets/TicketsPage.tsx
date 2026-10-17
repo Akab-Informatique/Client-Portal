@@ -211,10 +211,10 @@ export function TicketsPage() {
       <MetricTiles data={data} params={params} apply={apply} onSms={() => setSmsInbox("")} />
 
       {/* Toolbar (view, search, team, frequent filters, the rest under "More") and, beside it, today's agenda */}
-      <div className="flex flex-col gap-3 lg:flex-row lg:items-stretch">
-      <div className="glass flex min-w-0 flex-1 flex-wrap items-center gap-1.5 rounded-2xl border p-1.5">
+      <div className="grid gap-3 lg:grid-cols-[minmax(0,1fr)_minmax(420px,0.9fr)] lg:items-stretch">
+      <div className="glass flex min-w-0 flex-wrap content-center items-center gap-1 rounded-2xl border p-1.5">
         <ViewMenu view={view} counts={data?.counts} params={params} apply={apply} />
-        <div className="relative w-full sm:w-48">
+        <div className="relative w-full sm:w-40">
           <Search className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
           <Input
             ref={searchRef}

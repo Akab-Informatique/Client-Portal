@@ -472,6 +472,11 @@ const fr = {
     },
   },
   planning: {
+    myWeek: "Ma semaine",
+    weekOf: "du {{date}}",
+    openCalendar: "Ouvrir",
+    items_one: "{{count}} élément",
+    items_other: "{{count}} éléments",
     clickOpensTicket: "Clic : ouvrir le billet · ✏️ : modifier la plage",
     clickOpensTicketRead: "Clic : ouvrir le billet",
     noPrioritiesShort: "Aucune priorité pour l'instant.",

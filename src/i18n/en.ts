@@ -474,6 +474,11 @@ const en: Dict = {
     },
   },
   planning: {
+    myWeek: "My week",
+    weekOf: "of {{date}}",
+    openCalendar: "Open",
+    items_one: "{{count}} item",
+    items_other: "{{count}} items",
     clickOpensTicket: "Click: open the ticket · ✏️: change the slot",
     clickOpensTicketRead: "Click: open the ticket",
     noPrioritiesShort: "No priority for now.",

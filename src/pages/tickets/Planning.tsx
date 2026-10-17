@@ -188,28 +188,34 @@ export function AgendaCard() {
   const countOn = (d: Date) => blocks.filter((b) => ymd(new Date(b.startsAt)) === ymd(d)).length + (outlook?.events ?? []).filter((x) => !x.allDay && ymd(new Date(x.startsAt)) === ymd(d)).length;
   return (
     <>
-      <div className="glass flex min-w-0 flex-col gap-2 rounded-2xl border p-2 lg:w-[400px] lg:shrink-0">
+      <div className="glass flex min-w-0 flex-col gap-2 rounded-2xl border border-[color:var(--gold)]/35 p-2.5 shadow-[0_0_30px_-16px_rgba(255,206,26,0.5)]">
         {/* the week: a click opens the full planning */}
-        <button type="button" onClick={() => setOpen(true)} className="group flex items-center gap-1.5 rounded-xl px-1 text-left" aria-label={t("planning.openBig")}>
+        <div className="flex items-center gap-2 px-1">
           <CalendarRange className="size-4 shrink-0 text-primary" />
-          <span className="grid flex-1 grid-cols-5 gap-1">
-            {days.map((d) => {
-              const n = countOn(d);
-              const isToday = ymd(d) === today;
-              return (
-                <span key={ymd(d)} className={cn("flex flex-col items-center rounded-lg border py-0.5 leading-none", isToday ? "border-[color:var(--gold)]/60 bg-[color:var(--gold)]/10" : "border-transparent")}>
-                  <span className="text-[9px] uppercase text-muted-foreground">{d.toLocaleDateString(loc, { weekday: "short" }).slice(0, 3)}</span>
-                  <span className={cn("font-mono text-xs font-semibold", isToday && "text-primary")}>{d.getDate()}</span>
-                  <span className="mt-0.5 flex h-1.5 items-center gap-0.5">
-                    {Array.from({ length: Math.min(3, n) }, (_, i) => (
-                      <span key={i} className="size-1 rounded-full bg-[color:var(--gold)]" />
-                    ))}
-                  </span>
-                </span>
-              );
-            })}
-          </span>
-          <Maximize2 className="size-3.5 shrink-0 text-muted-foreground opacity-60 transition group-hover:opacity-100" />
+          <span className="text-sm font-semibold">{t("planning.myWeek")}</span>
+          <span className="text-[11px] text-muted-foreground">{t("planning.weekOf", { date: week.toLocaleDateString(loc, { day: "numeric", month: "long" }) })}</span>
+          <Button type="button" size="sm" variant="outline" className="ml-auto h-7 gap-1.5 border-[color:var(--gold)]/40 px-2 text-xs" onClick={() => setOpen(true)}>
+            <Maximize2 className="size-3.5" /> {t("planning.openCalendar")}
+          </Button>
+        </div>
+        <button type="button" onClick={() => setOpen(true)} className="grid grid-cols-5 gap-1.5" aria-label={t("planning.openBig")}>
+          {days.map((d) => {
+            const n = countOn(d);
+            const isToday = ymd(d) === today;
+            return (
+              <span
+                key={ymd(d)}
+                className={cn(
+                  "flex flex-col items-center gap-0.5 rounded-xl border py-1.5 transition hover:border-[color:var(--gold)]/50",
+                  isToday ? "border-[color:var(--gold)]/70 bg-[color:var(--gold)]/12" : "bg-background/40",
+                )}
+              >
+                <span className={cn("text-[10px] font-medium uppercase", isToday ? "text-primary" : "text-muted-foreground")}>{d.toLocaleDateString(loc, { weekday: "short" }).replace(".", "")}</span>
+                <span className={cn("font-mono text-lg font-semibold leading-none", isToday && "text-primary")}>{d.getDate()}</span>
+                <span className={cn("text-[10px] leading-none", n ? "text-foreground" : "text-muted-foreground/50")}>{n ? t("planning.items", { count: n }) : "—"}</span>
+              </span>
+            );
+          })}
         </button>
         {/* my priority tickets: one click opens the ticket */}
         <div className="border-t pt-1.5">
