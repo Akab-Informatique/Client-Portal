@@ -61,25 +61,11 @@ export function useSmsSummary() {
 }
 
 /** Tile on the ticket page: texts waiting for a technician. */
-export function SmsTile({ onOpen, compact }: { onOpen: () => void; compact?: boolean }) {
+export function SmsTile({ onOpen }: { onOpen: () => void }) {
   const { t } = useTranslation();
   const { data } = useSmsSummary();
   if (!data) return null;
   const left = minutesLeft(data.next);
-  if (compact) {
-    return (
-      <button
-        type="button"
-        onClick={onOpen}
-        title={data.waiting ? t("sms.tileWaiting", { count: data.waiting, delay: delayText(left ?? 0) }) : t("sms.tileUnread", { count: data.unread })}
-        className={cn("glass flex h-9 items-center gap-2 rounded-xl border px-3 text-left transition-colors hover:border-[color:var(--gold)]/40", data.waiting > 0 && "border-orange-500/50")}
-      >
-        <MessageSquareText className={cn("size-4", data.waiting ? "text-orange-300" : "text-sky-300")} />
-        <span className="text-xs font-medium">{t("sms.tile")}</span>
-        <span className={cn("font-mono text-sm font-semibold tabular-nums", data.waiting || data.unread ? "text-foreground" : "text-muted-foreground/50")}>{data.waiting || data.unread}</span>
-      </button>
-    );
-  }
   return (
     <button
       type="button"

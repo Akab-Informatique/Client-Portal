@@ -5,8 +5,6 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { animate, motion, useMotionValue, useTransform } from "motion/react";
 import { toast } from "sonner";
 import {
-  ChevronsDown,
-  ChevronsUp,
   Pin,
   PinOff,
   AlarmClock,
@@ -60,7 +58,7 @@ import { useCan, useMe } from "@/lib/session";
 import { cn, initials } from "@/lib/utils";
 import { GlassBackdrop } from "@/components/brand/GlassBackdrop";
 import { NewTicketDialog } from "./NewTicketDialog";
-import { dueState, FILTER_KEYS, PRIORITY_STYLE, dueGlow, useChoiceText, shortDate, STATUS_STYLE, useTickets, VIEWS, type TicketList, type TicketSummary, type View, ticketErrorText } from "./shared";
+import { dueState, FILTER_KEYS, PRIORITY_STYLE, dueGlow, useChoiceText, shortDate, STATUS_STYLE, useTickets, VIEWS, type Tally, type TicketList, type TicketSummary, type View, ticketErrorText } from "./shared";
 import { useTicketWorkspace } from "./workspace";
 import { GlobalSearch } from "./GlobalSearch";
 import { PlanningPanel } from "./Planning";
@@ -376,13 +374,29 @@ const TILES: { key: TileKey; icon: LucideIcon; tone: string; glow: string; query
   { key: "attention", icon: Siren, tone: "text-red-400", glow: "rgba(239,68,68,0.38)", query: "view=all&attention=1" },
 ];
 
-const COMPACT_KEY = "akab.tickets.tiles.compact";
-function readCompact() {
-  try {
-    return localStorage.getItem(COMPACT_KEY) === "1";
-  } catch {
-    return false;
-  }
+type Row = { label: string; count: number }[];
+
+/** On a tile, when the pointer rests on it: what is counted, and how many in each category. */
+function TileDetails({ title, hint, rows, note }: { title: string; hint: string; rows?: Row; note?: string }) {
+  const { t } = useTranslation();
+  return (
+    <div className="max-w-72 space-y-1.5 py-0.5">
+      <p className="font-semibold">{title}</p>
+      <p className="opacity-80">{hint}</p>
+      {rows && rows.length > 0 && (
+        <ul className="space-y-0.5 border-t border-current/15 pt-1.5">
+          {rows.map((r) => (
+            <li key={r.label} className="flex items-center justify-between gap-4">
+              <span className="truncate">{r.label || t("tickets.unassigned")}</span>
+              <span className="font-mono tabular-nums">{r.count}</span>
+            </li>
+          ))}
+        </ul>
+      )}
+      {rows && rows.length === 0 && <p className="opacity-70">{t("tickets.tiles.none")}</p>}
+      {note && <p className="text-[10px] opacity-70">{note}</p>}
+    </div>
+  );
 }
 
 function MetricTiles({ data, params, apply, onSms }: { data: TicketList | undefined; params: URLSearchParams; apply: (q: string) => void; onSms: () => void }) {
@@ -393,67 +407,38 @@ function MetricTiles({ data, params, apply, onSms }: { data: TicketList | undefi
     p.delete("sort");
     return canonical(p);
   }, [params]);
-  // small buttons (one line each) to save room, the counts always shown
-  const [compact, setCompact] = useState(readCompact);
-  const toggle = () =>
-    setCompact((v) => {
-      try {
-        localStorage.setItem(COMPACT_KEY, v ? "0" : "1");
-      } catch {
-        /* this page only */
-      }
-      return !v;
-    });
   const unpin = useMutation({
     mutationFn: (id: string) => api.patch(`/tickets/filters/${id}`, { pinned: false }),
-    onSuccess: () => {
-      void qc.invalidateQueries({ queryKey: ["tickets"] });
-    },
+    onSuccess: () => void qc.invalidateQueries({ queryKey: ["tickets"] }),
   });
   const buttons = data?.buttons ?? [];
-  if (compact) {
-    return (
-      <div className="flex flex-wrap items-center gap-2">
-        {TILES.map((tile) => {
-          const active = canonical(tile.query) === current || (tile.key === "mine" && current === "");
-          const value = data?.metrics[tile.key];
-          return (
-            <Fragment key={tile.key}>
-              <Tooltip>
-                <TooltipTrigger asChild>
-                  <button
-                    type="button"
-                    onClick={() => apply(tile.query)}
-                    className={cn("glass flex h-9 items-center gap-2 rounded-xl border px-3 text-left transition-colors hover:border-[color:var(--gold)]/40", active && "border-[color:var(--gold)]/60 bg-[color:var(--gold)]/[0.06]")}
-                  >
-                    <tile.icon className={cn("size-4", tile.tone)} />
-                    <span className="text-xs font-medium">{t(`tickets.metrics.${tile.key}`)}</span>
-                    <span className={cn("font-mono text-sm font-semibold tabular-nums", value ? "text-foreground" : "text-muted-foreground/50")}>{value ?? "–"}</span>
-                  </button>
-                </TooltipTrigger>
-                <TooltipContent>{t(`tickets.metricsHint.${tile.key}`)}</TooltipContent>
-              </Tooltip>
-              {tile.key === "mine" && <SmsTile onOpen={onSms} compact />}
-            </Fragment>
-          );
-        })}
-        {buttons.map((b) => (
-          <SavedFilterTile key={b.id} b={b} active={canonical(b.query) === current} compact onApply={() => apply(b.query)} onUnpin={() => unpin.mutate(b.id)} />
-        ))}
-        <TilesToggle compact onToggle={toggle} />
-      </div>
-    );
-  }
+  const b = data?.metrics.attentionBreakdown;
+  const by = data?.metrics.breakdown;
+  /** What each tile counts, by category */
+  const txt = useChoiceText();
+  // the portal's wording for statuses / priorities, like in the list
+  const statusRows = (r?: Tally): Row | undefined => r?.map((x) => ({ label: txt.status({ label: x.label, kind: x.kind as never }), count: x.count }));
+  const details = (key: TileKey): { rows?: Row; note?: string } => {
+    if (key === "attention" && b)
+      return {
+        rows: [
+          { label: t("tickets.tiles.overdue"), count: b.overdue },
+          { label: t("tickets.tiles.dueToday"), count: b.dueToday },
+          { label: t("tickets.tiles.critical"), count: b.critical },
+        ],
+        note: t("tickets.tiles.overlap"),
+      };
+    if (key === "mine") return { rows: statusRows(by?.mine) };
+    if (key === "unassigned") return { rows: by?.unassigned.map((x) => ({ label: txt.priority({ label: x.label, kind: x.kind as never }), count: x.count })) };
+    if (key === "statusAttention") return { rows: by?.statusAttention.map((x) => ({ label: x.label ?? "", count: x.count })) };
+    return {};
+  };
   return (
-    <div className="relative">
-      <div className="absolute -top-5 right-0">
-        <TilesToggle compact={false} onToggle={toggle} />
-      </div>
     <div className="grid grid-cols-2 gap-3 lg:grid-cols-[repeat(auto-fit,minmax(210px,1fr))]">
       {TILES.map((tile, i) => {
         const active = canonical(tile.query) === current || (tile.key === "mine" && current === "");
         const value = data?.metrics[tile.key];
-        const b = data?.metrics.attentionBreakdown;
+        const d = details(tile.key);
         return (
           <Fragment key={tile.key}>
             <Tooltip>
@@ -490,13 +475,8 @@ function MetricTiles({ data, params, apply, onSms }: { data: TicketList | undefi
                   </span>
                 </motion.button>
               </TooltipTrigger>
-              <TooltipContent>
-                {t(`tickets.metricsHint.${tile.key}`)}
-                {tile.key === "attention" && b && (
-                  <span className="block opacity-80">
-                    {t("tickets.breakdown.overdue", { count: b.overdue })} · {t("tickets.breakdown.dueToday", { count: b.dueToday })} · {t("tickets.breakdown.critical", { count: b.critical })}
-                  </span>
-                )}
+              <TooltipContent side="bottom">
+                <TileDetails title={t(`tickets.metrics.${tile.key}`)} hint={t(`tickets.tiles.what.${tile.key}`)} rows={d.rows} note={d.note} />
               </TooltipContent>
             </Tooltip>
             {/* the texts right after my tickets */}
@@ -504,89 +484,62 @@ function MetricTiles({ data, params, apply, onSms }: { data: TicketList | undefi
           </Fragment>
         );
       })}
-      {buttons.map((b) => (
-        <SavedFilterTile key={b.id} b={b} active={canonical(b.query) === current} onApply={() => apply(b.query)} onUnpin={() => unpin.mutate(b.id)} />
+      {buttons.map((x) => (
+        <SavedFilterTile key={x.id} b={x} rows={statusRows(x.breakdown)} active={canonical(x.query) === current} onApply={() => apply(x.query)} onUnpin={() => unpin.mutate(x.id)} />
       ))}
-    </div>
     </div>
   );
 }
 
-/** Small / large buttons. */
-function TilesToggle({ compact, onToggle }: { compact: boolean; onToggle: () => void }) {
+/** A saved filter shown as a button: its name and how many tickets it shows (by status on hover). */
+function SavedFilterTile({ b, rows, active, onApply, onUnpin }: { b: NonNullable<TicketList["buttons"]>[number]; rows?: Row; active: boolean; onApply: () => void; onUnpin: () => void }) {
   const { t } = useTranslation();
   return (
     <Tooltip>
       <TooltipTrigger asChild>
-        <button type="button" onClick={onToggle} className="flex h-6 items-center gap-1 rounded-md px-1.5 text-[11px] text-muted-foreground hover:bg-accent/50 hover:text-foreground" aria-label={compact ? t("tickets.tiles.expand") : t("tickets.tiles.compact")}>
-          {compact ? <ChevronsDown className="size-3.5" /> : <ChevronsUp className="size-3.5" />}
-          <span className="hidden sm:inline">{compact ? t("tickets.tiles.expand") : t("tickets.tiles.compact")}</span>
+        <button
+          type="button"
+          onClick={onApply}
+          className={cn(
+            "glass group relative flex items-center gap-3.5 overflow-hidden rounded-2xl border px-4 py-3.5 text-left transition-all hover:border-[color:var(--gold)]/40",
+            active && "border-[color:var(--gold)]/60 bg-[color:var(--gold)]/[0.05]",
+          )}
+        >
+          <span className="flex size-10 shrink-0 items-center justify-center rounded-xl border bg-background/60 text-violet-300">
+            <Bookmark className="size-5" />
+          </span>
+          <span className="min-w-0 flex-1">
+            <span className="block truncate text-sm font-semibold">{b.name}</span>
+            <span className="mt-0.5 block truncate text-[11px] text-muted-foreground">{t("tickets.tiles.myFilter")}</span>
+          </span>
+          <span
+            role="button"
+            tabIndex={0}
+            aria-label={t("tickets.tiles.unpin")}
+            title={t("tickets.tiles.unpin")}
+            onClick={(e) => {
+              e.stopPropagation();
+              onUnpin();
+            }}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") {
+                e.stopPropagation();
+                onUnpin();
+              }
+            }}
+            className="absolute right-2 top-2 rounded p-0.5 text-muted-foreground opacity-0 hover:text-foreground group-hover:opacity-100 group-focus-visible:opacity-100"
+          >
+            <PinOff className="size-3.5" />
+          </span>
+          <span className={cn("font-mono text-3xl font-semibold tabular-nums", b.count ? "text-foreground" : "text-muted-foreground/50")}>
+            <CountUp value={b.count} />
+          </span>
         </button>
       </TooltipTrigger>
-      <TooltipContent>{compact ? t("tickets.tiles.expandHint") : t("tickets.tiles.compactHint")}</TooltipContent>
+      <TooltipContent side="bottom">
+        <TileDetails title={b.name} hint={t("tickets.tiles.what.filter")} rows={rows} />
+      </TooltipContent>
     </Tooltip>
-  );
-}
-
-/** A saved filter shown as a button: its name and how many tickets it shows. */
-function SavedFilterTile({ b, active, compact, onApply, onUnpin }: { b: NonNullable<TicketList["buttons"]>[number]; active: boolean; compact?: boolean; onApply: () => void; onUnpin: () => void }) {
-  const { t } = useTranslation();
-  const unpin = (
-    <span
-      role="button"
-      tabIndex={0}
-      aria-label={t("tickets.tiles.unpin")}
-      title={t("tickets.tiles.unpin")}
-      onClick={(e) => {
-        e.stopPropagation();
-        onUnpin();
-      }}
-      onKeyDown={(e) => {
-        if (e.key === "Enter") {
-          e.stopPropagation();
-          onUnpin();
-        }
-      }}
-      className="rounded p-0.5 text-muted-foreground opacity-0 hover:text-foreground group-hover:opacity-100 group-focus-visible:opacity-100"
-    >
-      <PinOff className="size-3.5" />
-    </span>
-  );
-  if (compact) {
-    return (
-      <button
-        type="button"
-        onClick={onApply}
-        className={cn("glass group flex h-9 items-center gap-2 rounded-xl border px-3 text-left transition-colors hover:border-[color:var(--gold)]/40", active && "border-[color:var(--gold)]/60 bg-[color:var(--gold)]/[0.06]")}
-      >
-        <Bookmark className="size-4 text-violet-300" />
-        <span className="max-w-48 truncate text-xs font-medium">{b.name}</span>
-        <span className={cn("font-mono text-sm font-semibold tabular-nums", b.count ? "text-foreground" : "text-muted-foreground/50")}>{b.count}</span>
-        {unpin}
-      </button>
-    );
-  }
-  return (
-    <button
-      type="button"
-      onClick={onApply}
-      className={cn(
-        "glass group relative flex items-center gap-3.5 overflow-hidden rounded-2xl border px-4 py-3.5 text-left transition-all hover:border-[color:var(--gold)]/40",
-        active && "border-[color:var(--gold)]/60 bg-[color:var(--gold)]/[0.05]",
-      )}
-    >
-      <span className="flex size-10 shrink-0 items-center justify-center rounded-xl border bg-background/60 text-violet-300">
-        <Bookmark className="size-5" />
-      </span>
-      <span className="min-w-0 flex-1">
-        <span className="block truncate text-sm font-semibold">{b.name}</span>
-        <span className="mt-0.5 block truncate text-[11px] text-muted-foreground">{t("tickets.tiles.myFilter")}</span>
-      </span>
-      <span className="absolute right-2 top-2">{unpin}</span>
-      <span className={cn("font-mono text-3xl font-semibold tabular-nums", b.count ? "text-foreground" : "text-muted-foreground/50")}>
-        <CountUp value={b.count} />
-      </span>
-    </button>
   );
 }
 

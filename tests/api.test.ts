@@ -989,7 +989,7 @@ describe("tickets: metrics and saved filters", () => {
     resetRateLimit("login:ip:unknown");
     const tech = await signIn("tech@akab.local");
     const list = (await tech.get("/api/tickets")).json;
-    expect(Object.keys(list.metrics).sort()).toEqual(["attention", "attentionBreakdown", "mine", "statusAttention", "unassigned"]);
+    expect(Object.keys(list.metrics).sort()).toEqual(["attention", "attentionBreakdown", "breakdown", "mine", "statusAttention", "unassigned"]);
     const needs = (await tech.get("/api/tickets?view=all&status=needsAttention")).json.items;
     expect(needs).toHaveLength(list.metrics.statusAttention);
     expect(needs.every((t: any) => t.status === "needsAttention")).toBe(true);
@@ -997,6 +997,12 @@ describe("tickets: metrics and saved filters", () => {
     expect(attention).toHaveLength(list.metrics.attention);
     expect(attention.every((t: any) => t.status !== "complete" && (t.priority === "critical" || new Date(t.dueAt).getTime() <= new Date().setHours(23, 59, 59, 999)))).toBe(true);
     expect(list.metrics.mine).toBe(list.counts.mine);
+    // each tile's details add up to its number (by status, priority, technician)
+    const sum = (rows: { count: number }[]) => rows.reduce((n, r) => n + r.count, 0);
+    expect(sum(list.metrics.breakdown.mine)).toBe(list.metrics.mine);
+    expect(sum(list.metrics.breakdown.unassigned)).toBe(list.metrics.unassigned);
+    expect(sum(list.metrics.breakdown.statusAttention)).toBe(list.metrics.statusAttention);
+    expect(list.metrics.breakdown.unassigned.every((r: any) => typeof r.kind === "string" && r.count > 0)).toBe(true);
 
     const saved = await tech.post("/api/tickets/filters", { name: "Critiques réseau", query: "view=all&priority=critical&queue=R%C3%A9seau&evil=1" });
     expect(saved.status).toBe(201);

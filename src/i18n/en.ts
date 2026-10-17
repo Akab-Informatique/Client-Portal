@@ -1233,6 +1233,18 @@ const en: Dict = {
   },
   tickets: {
     tiles: {
+      overdue: "Overdue",
+      dueToday: "Due today",
+      critical: "Critical",
+      overlap: "A ticket can be in more than one category (e.g. critical and overdue): it counts once in the total.",
+      none: "No ticket for now.",
+      what: {
+        mine: "Open tickets assigned to you, or where you are a secondary technician. By status:",
+        unassigned: "Open tickets with no technician assigned. By priority:",
+        statusAttention: "Tickets in a “Needs attention” status (e.g. the client replied). By technician:",
+        attention: "Open tickets overdue, due today or critical:",
+        filter: "Your saved filter. By status:",
+      },
       compact: "Shrink",
       expand: "Expand",
       compactHint: "Smaller buttons (the numbers stay shown)",

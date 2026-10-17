@@ -90,14 +90,25 @@ export type AiAnalysis = {
   createdAt: string;
   content: { summary: string; nextSteps: string[]; risks: string[]; questions: string[]; suggestedPriority?: Priority | null };
 };
+/** A tile's details: per category, the source's label (or the portal's wording for the kind) and how many */
+export type Tally = { label: string | null; kind?: string; count: number }[];
+
 export type TicketList = {
   demo: boolean;
   /** Autotask mode, and my portal account is not linked to an Autotask user */
   notLinked: boolean;
   ai: boolean;
-  metrics: { mine: number; unassigned: number; attention: number; statusAttention: number; attentionBreakdown: { overdue: number; dueToday: number; critical: number } };
-  /** My saved filters shown as buttons, with their counts */
-  buttons?: { id: string; name: string; query: string; count: number }[];
+  metrics: {
+    mine: number;
+    unassigned: number;
+    attention: number;
+    statusAttention: number;
+    attentionBreakdown: { overdue: number; dueToday: number; critical: number };
+    /** By category, for the tiles' details: mine by status, unassigned by priority, "needs attention" by technician */
+    breakdown?: Record<"mine" | "unassigned" | "statusAttention", Tally>;
+  };
+  /** My saved filters shown as buttons, with their counts (by status) */
+  buttons?: { id: string; name: string; query: string; count: number; breakdown?: Tally }[];
   items: TicketSummary[];
   counts: Record<View, number>;
   facets: {

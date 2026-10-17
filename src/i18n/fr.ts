@@ -1231,6 +1231,18 @@ const fr = {
   },
   tickets: {
     tiles: {
+      overdue: "En retard",
+      dueToday: "À échéance aujourd'hui",
+      critical: "Critiques",
+      overlap: "Un billet peut être dans plus d'une catégorie (ex. critique et en retard) : il ne compte qu'une fois dans le total.",
+      none: "Aucun billet pour l'instant.",
+      what: {
+        mine: "Billets ouverts qui vous sont assignés, ou où vous êtes technicien secondaire. Par statut :",
+        unassigned: "Billets ouverts sans technicien assigné. Par priorité :",
+        statusAttention: "Billets dans un statut « Nécessite attention » (ex. le client a répondu). Par technicien :",
+        attention: "Billets ouverts en retard, à échéance aujourd'hui ou critiques :",
+        filter: "Votre filtre enregistré. Par statut :",
+      },
       compact: "Réduire",
       expand: "Agrandir",
       compactHint: "Boutons plus petits (les nombres restent affichés)",

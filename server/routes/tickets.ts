@@ -325,7 +325,24 @@ export const ticketRoutes = new Hono<AppEnv>()
       .from(schema.ticketFilters)
       .where(and(eq(schema.ticketFilters.userId, a.user.id), eq(schema.ticketFilters.pinned, true)))
       .orderBy(asc(schema.ticketFilters.createdAt));
-    const buttons = pinnedFilters.map((f) => ({ ...f, count: select(Object.fromEntries(new URLSearchParams(f.query))).length }));
+    /** What a tile counts, by category (shown when the pointer rests on it): most first */
+    // label: the source's own (Autotask), kind: for the portal's wording when there is none
+    const tally = (list: NTicket[], key: (t: NTicket) => { label: string | null; kind?: string }) => {
+      const m = new Map<string, { label: string | null; kind?: string; count: number }>();
+      for (const x of list) {
+        const k = key(x);
+        const id = `${k.kind ?? ""}|${k.label ?? ""}`;
+        const v = m.get(id) ?? { ...k, count: 0 };
+        v.count++;
+        m.set(id, v);
+      }
+      return [...m.values()].sort((x, y) => y.count - x.count || (x.label ?? x.kind ?? "").localeCompare(y.label ?? y.kind ?? ""));
+    };
+    const byStatus = (list: NTicket[]) => tally(list, (x) => ({ label: L.statusLabel(x.status), kind: L.statusKind(x.status) }));
+    const buttons = pinnedFilters.map((f) => {
+      const found = select(Object.fromEntries(new URLSearchParams(f.query)));
+      return { ...f, count: found.length, breakdown: byStatus(found) };
+    });
     // My priorities (given by an admin), not done: marked in the list
     const mine = await db()
       .select({ ticketId: schema.ticketPins.ticketId, horizon: schema.ticketPins.horizon })
@@ -360,6 +377,15 @@ export const ticketRoutes = new Hono<AppEnv>()
         overdue: needs.filter(isOverdue).length,
         dueToday: needs.filter(isDueToday).length,
         critical: needs.filter(isCritical).length,
+      },
+      /** Per tile, by category: mine by status, unassigned by priority, "needs attention" by technician */
+      breakdown: {
+        mine: byStatus(all.filter(views.mine)),
+        unassigned: tally(all.filter(views.unassigned), (x) => ({ label: L.priorityLabel(x.priority), kind: L.priorityKind(x.priority) })),
+        statusAttention: tally(
+          all.filter((x) => open(x) && L.statusKind(x.status) === "needsAttention"),
+          (x) => ({ label: x.assignee?.name ?? null }),
+        ),
       },
     };
 
