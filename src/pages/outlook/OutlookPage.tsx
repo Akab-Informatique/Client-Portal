@@ -346,7 +346,7 @@ function AccountTree({ account, defaultOpen, selected, onSelect }: { account: Ma
   const confirm = useConfirm();
   const [open, setOpen] = useState(defaultOpen);
   const [editing, setEditing] = useState(false);
-  const folders = useQuery({ queryKey: foldersKey(account.id), queryFn: () => api.get<MailFolder[]>(`${base(account.id)}/folders`), enabled: open, staleTime: 30_000 });
+  const folders = useQuery({ queryKey: foldersKey(account.id), queryFn: () => api.get<MailFolder[]>(`${base(account.id)}/folders`), enabled: open, staleTime: 30_000, refetchInterval: REFRESH_MS });
   const unlink = useMutation({
     mutationFn: () => api.del(`/outlook/accounts/${account.id}`),
     onSuccess: () => {
@@ -543,7 +543,7 @@ function FolderNode({
 }) {
   const { t } = useTranslation();
   const [open, setOpen] = useState(false);
-  const kids = useQuery({ queryKey: foldersKey(accountId, folder.id), queryFn: () => api.get<MailFolder[]>(`${base(accountId)}/folders?parent=${encodeURIComponent(folder.id)}`), enabled: open, staleTime: 30_000 });
+  const kids = useQuery({ queryKey: foldersKey(accountId, folder.id), queryFn: () => api.get<MailFolder[]>(`${base(accountId)}/folders?parent=${encodeURIComponent(folder.id)}`), enabled: open, staleTime: 30_000, refetchInterval: REFRESH_MS });
   const active = selected?.account === accountId && (selected.folder === folder.id || (selected.folder === "inbox" && folder.wellKnown === "inbox"));
   const Icon = (folder.wellKnown && FOLDER_ICON[folder.wellKnown]) || Folder;
   const hidden = layout.hidden(folder.id);
@@ -702,7 +702,7 @@ function MessageList({
     },
     initialPageParam: "",
     getNextPageParam: (last) => last.next ?? undefined,
-    refetchInterval: 60_000,
+    refetchInterval: REFRESH_MS,
   });
   const folders = useQuery({ queryKey: foldersKey(account.id), queryFn: () => api.get<MailFolder[]>(`${base(account.id)}/folders`), staleTime: 30_000 });
   const items = useMemo(() => (list.data?.pages ?? []).flatMap((p) => p.items), [list.data]);
@@ -812,6 +812,9 @@ function nextInList(qc: ReturnType<typeof useQueryClient>, accountId: string, id
   return null;
 }
 
+/** Folders and the message list refresh in the background (new emails, unread counts). */
+const REFRESH_MS = 30_000;
+
 function MessageView({
   account,
   messageId,
@@ -835,7 +838,14 @@ function MessageView({
   const canTicket = can("tickets.edit");
   const [toTicket, setToTicket] = useState(false);
   const [newTicket, setNewTicket] = useState<{ title: string; description: string; companyId?: number | null; contactId?: string | null } | null>(null);
-  const msg = useQuery({ queryKey: messageKey(account.id, messageId), queryFn: () => api.get<MailMessage>(`${base(account.id)}/messages/${encodeURIComponent(messageId)}`) });
+  const msg = useQuery({
+    queryKey: messageKey(account.id, messageId),
+    queryFn: () => api.get<MailMessage>(`${base(account.id)}/messages/${encodeURIComponent(messageId)}`),
+    // the open email never reloads by itself: reading stays where it is
+    staleTime: Infinity,
+    refetchOnWindowFocus: false,
+    refetchOnReconnect: false,
+  });
   const folders = useQuery({ queryKey: foldersKey(account.id), queryFn: () => api.get<MailFolder[]>(`${base(account.id)}/folders`), staleTime: 30_000 });
   // Facets (priorities, queues, technicians) for the new-ticket form
   // the new-ticket form's lists (queues, priorities…), loaded with the message so the button answers at once
