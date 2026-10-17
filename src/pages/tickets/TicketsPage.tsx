@@ -253,7 +253,7 @@ export function TicketsPage() {
       )}
 
       {/* List */}
-      <div className="glass overflow-hidden rounded-2xl border" style={cols.vars as React.CSSProperties}>
+      <div className="glass overflow-hidden rounded-2xl border xl:overflow-x-auto" style={cols.vars as React.CSSProperties}>
         <ColumnHeader
           cols={cols}
           labels={{
@@ -632,7 +632,7 @@ function TicketRow({
         }}
         className={cn(
           "cursor-pointer outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-[color:var(--gold)]/50",
-          "group relative isolate grid w-full grid-cols-1 gap-x-3 gap-y-1.5 px-5 py-2.5 text-left transition-colors xl:grid-cols-[var(--tk-cols)] xl:items-center",
+          "group relative isolate grid w-full grid-cols-1 gap-x-3 gap-y-1.5 px-5 py-2.5 text-left transition-colors xl:min-w-[var(--tk-min)] xl:grid-cols-[var(--tk-cols)] xl:items-center",
           "hover:bg-[linear-gradient(90deg,rgba(255,206,26,0.07),transparent_60%)]",
           active && "bg-[linear-gradient(90deg,rgba(255,206,26,0.1),transparent_70%)]",
           // Critical pops and moves, high pops (open tickets only)
@@ -1085,26 +1085,24 @@ function useColumns() {
     }
   };
   const width = (c: ColumnId) => prefs.widths[c] ?? DEFAULT_WIDTHS[c];
-  const start = useRef<number | null>(null);
-  // grid tracks in display order; each cell finds its place through --o-<column>
-  const template = `${prefs.order.map((c) => (c === "ticket" ? `minmax(${width(c)}px,1fr)` : `${width(c)}px`)).join(" ")} 20px`;
-  const vars: Record<string, string | number> = { "--tk-cols": template };
+  // the ticket column takes the rest, until a width is chosen for it: then the end of the row does
+  const ticketFixed = prefs.widths.ticket !== undefined;
+  const template = `${prefs.order.map((c) => (c === "ticket" && !ticketFixed ? `minmax(${width(c)}px,1fr)` : `${width(c)}px`)).join(" ")} ${ticketFixed ? "minmax(20px,1fr)" : "20px"}`;
+  // the same minimum width for the header and every row (the list scrolls sideways beyond): columns + gaps + padding
+  const minWidth = prefs.order.reduce((n, c) => n + width(c), 0) + 20 + 12 * prefs.order.length + 40;
+  const vars: Record<string, string | number> = { "--tk-cols": template, "--tk-min": `${minWidth}px` };
   prefs.order.forEach((c, i) => (vars[`--o-${c}`] = i));
   return {
     order: prefs.order,
     vars,
     width,
     changed: prefs.order.some((c, i) => c !== TICKET_COLUMNS[i]) || Object.keys(prefs.widths).length > 0,
-    /** dx: pixels since the drag started */
-    resize: (c: ColumnId, dx: number) => {
-      start.current ??= width(c);
-      const w = Math.min(COL_MAX, Math.max(COL_MIN, Math.round(start.current + dx)));
-      setPrefs((p) => ({ ...p, widths: { ...p.widths, [c]: w } }));
+    /** The width while dragging: from the column's width on screen when the drag started */
+    resize: (c: ColumnId, w: number) => {
+      const max = c === "ticket" ? 1200 : COL_MAX;
+      setPrefs((p) => ({ ...p, widths: { ...p.widths, [c]: Math.min(max, Math.max(COL_MIN, Math.round(w))) } }));
     },
-    resized: () => {
-      start.current = null;
-      setPrefs((p) => (keep(p), p));
-    },
+    resized: () => setPrefs((p) => (keep(p), p)),
     resetWidth: (c: ColumnId) =>
       setPrefs((p) => {
         const widths = { ...p.widths };
@@ -1143,7 +1141,7 @@ function ColumnHeader({ cols, labels }: { cols: ReturnType<typeof useColumns>; l
   const row = useRef<HTMLDivElement>(null);
   const [moving, setMoving] = useState<{ id: ColumnId; to: number; x: number } | null>(null);
   const press = useRef<{ id: ColumnId; x: number; moved: boolean } | null>(null);
-  const resizing = useRef<{ id: ColumnId; x: number } | null>(null);
+  const resizing = useRef<{ id: ColumnId; x: number; w: number } | null>(null);
 
   /** Where a column dropped at this x would go (index among the others), and the x of that edge. */
   const target = (id: ColumnId, clientX: number) => {
@@ -1164,7 +1162,7 @@ function ColumnHeader({ cols, labels }: { cols: ReturnType<typeof useColumns>; l
   return (
     <div
       ref={row}
-      className="relative hidden select-none grid-cols-[var(--tk-cols)] gap-3 border-b border-[color:var(--glass-border)] bg-white/[0.02] px-5 font-mono text-[10px] uppercase tracking-[0.12em] text-muted-foreground xl:grid"
+      className="relative hidden select-none grid-cols-[var(--tk-cols)] gap-3 xl:min-w-[var(--tk-min)] border-b border-[color:var(--glass-border)] bg-white/[0.02] px-5 font-mono text-[10px] uppercase tracking-[0.12em] text-muted-foreground xl:grid"
     >
       {cols.order.map((id, i) => (
         <div
@@ -1204,12 +1202,12 @@ function ColumnHeader({ cols, labels }: { cols: ReturnType<typeof useColumns>; l
               onPointerDown={(e) => {
                 e.preventDefault();
                 e.stopPropagation();
-                resizing.current = { id, x: e.clientX };
+                resizing.current = { id, x: e.clientX, w: (e.currentTarget.closest("[data-col]") as HTMLElement).getBoundingClientRect().width };
                 e.currentTarget.setPointerCapture(e.pointerId);
               }}
               onPointerMove={(e) => {
                 const r = resizing.current;
-                if (r) cols.resize(r.id, e.clientX - r.x);
+                if (r) cols.resize(r.id, r.w + e.clientX - r.x);
               }}
               onPointerUp={() => {
                 if (!resizing.current) return;
