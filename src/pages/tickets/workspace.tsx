@@ -242,7 +242,7 @@ function DockItem({
   };
   const compact = Boolean(place.compact);
   const pos = live ?? (place.x !== undefined && place.y !== undefined ? place : null);
-  const size = compact ? { w: 64, h: 72 } : { w: 288, h: 52 };
+  const size = compact ? { w: 104, h: 116 } : { w: 288, h: 52 };
   const at2 = pos ? clamp(pos.x!, pos.y!, size.w, size.h) : null;
   const glow = d.dueAt && d.statusKind ? dueGlow(d.dueAt, d.statusKind, 0.9) : priorityGlow(d.priority ?? "medium", 0.9);
   const running = timer?.state === "running";
@@ -289,14 +289,16 @@ function DockItem({
             onClick={restore}
             title={`${d.number} — ${d.title}`}
             className={cn(
-              "relative flex h-[72px] w-16 flex-col items-center justify-center gap-0.5 bg-[color:var(--gold)]/40 p-[1.5px] [clip-path:polygon(50%_0,100%_25%,100%_75%,50%_100%,0_75%,0_25%)]",
+              "relative flex h-[116px] w-[104px] flex-col items-center justify-center gap-0.5 bg-[color:var(--gold)]/40 p-[1.5px] [clip-path:polygon(50%_0,100%_25%,100%_75%,50%_100%,0_75%,0_25%)]",
               running && "bg-grad-gold",
             )}
           >
-            <span className="absolute inset-[1.5px] flex flex-col items-center justify-center gap-0.5 bg-popover/95 [clip-path:polygon(50%_0,100%_25%,100%_75%,50%_100%,0_75%,0_25%)]">
+            <span className="absolute inset-[1.5px] flex flex-col items-center justify-center gap-1 bg-popover/95 px-3 [clip-path:polygon(50%_0,100%_25%,100%_75%,50%_100%,0_75%,0_25%)]">
               <span aria-hidden className="pointer-events-none absolute inset-0 opacity-70" style={glow} />
-              <Ticket className="relative size-3.5 text-primary" />
-              <span className="relative font-mono text-[10px] font-semibold leading-none">{d.number.slice(-4)}</span>
+              <Ticket className="relative size-3 text-primary" />
+              <span className="relative font-mono text-[9px] leading-none text-muted-foreground">{d.number.slice(-4)}</span>
+              {/* the ticket name, on two short lines */}
+              <span className="relative line-clamp-2 max-w-[72px] break-words text-center text-[10px] font-semibold leading-tight">{d.title}</span>
               {timer && (
                 <span className="relative">
                   <DockTimer timer={timer} at={at} compact />
