@@ -3,7 +3,7 @@ import { useNavigate } from "react-router-dom";
 import { useTranslation } from "react-i18next";
 import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
-import { Archive, ArrowDown, ArrowLeft, ArrowUp, ChevronDown, ChevronRight, Download, Eye, EyeOff, Flag, Folder, FolderInput, Forward, Inbox, Loader2, Mail, MailOpen, MoreHorizontal, Paperclip, Plus, Reply, ReplyAll, Search, Send, ShieldAlert, SlidersHorizontal, Star, StarOff, Ticket, TicketPlus, Trash2, Unlink } from "lucide-react";
+import { Archive, ArrowDown, ArrowLeft, ArrowUp, CheckCheck, ChevronDown, ChevronRight, Download, Eye, EyeOff, Flag, Folder, FolderInput, FolderPlus, Forward, Inbox, Loader2, Mail, MailOpen, MoreHorizontal, Paperclip, Pencil, Plus, Reply, ReplyAll, Search, Send, ShieldAlert, SlidersHorizontal, Star, StarOff, Ticket, TicketPlus, Trash2, Unlink } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import {
@@ -14,6 +14,7 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
+import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { GlassBackdrop } from "@/components/brand/GlassBackdrop";
 import { useConfirm } from "@/components/ConfirmDialog";
@@ -240,6 +241,83 @@ function EmptyCard({ icon: Icon, title, text, action }: { icon: typeof Inbox; ti
 }
 
 /** One linked mailbox: expandable, with its folders (sub-folders on demand). */
+/** Folder options: mark all read, create, rename, delete (then the lists refresh). */
+function useFolderActions(accountId: string) {
+  const { t } = useTranslation();
+  const qc = useQueryClient();
+  const refresh = () => {
+    void qc.invalidateQueries({ queryKey: [...KEY, "folders", accountId] });
+    void qc.invalidateQueries({ queryKey: [...KEY, "messages", accountId] });
+  };
+  const fail = (e: unknown) => toast.error(outlookErrorText(t, e));
+  return {
+    readAll: useMutation({
+      mutationFn: (folderId: string) => api.post<{ marked: number }>(`${base(accountId)}/folders/${encodeURIComponent(folderId)}/read`, {}),
+      onSuccess: (r) => {
+        toast.success(t("outlook.folder.readDone", { count: r.marked }));
+        refresh();
+      },
+      onError: fail,
+    }),
+    create: useMutation({
+      mutationFn: (p: { name: string; parentId?: string }) => api.post<MailFolder>(`${base(accountId)}/folders`, p),
+      onSuccess: () => {
+        toast.success(t("outlook.folder.created"));
+        refresh();
+      },
+      onError: fail,
+    }),
+    rename: useMutation({
+      mutationFn: (p: { id: string; name: string }) => api.patch(`${base(accountId)}/folders/${encodeURIComponent(p.id)}`, { name: p.name }),
+      onSuccess: refresh,
+      onError: fail,
+    }),
+    remove: useMutation({
+      mutationFn: (id: string) => api.del(`${base(accountId)}/folders/${encodeURIComponent(id)}`),
+      onSuccess: () => {
+        toast.success(t("outlook.folder.deleted"));
+        refresh();
+      },
+      onError: fail,
+    }),
+  };
+}
+
+/** Ask for a folder name (new folder, rename). */
+function FolderNameDialog({ title, initial, onSave, onClose }: { title: string; initial: string; onSave: (name: string) => void; onClose: () => void }) {
+  const { t } = useTranslation();
+  const [name, setName] = useState(initial);
+  return (
+    <Dialog open onOpenChange={(o) => !o && onClose()}>
+      <DialogContent className="sm:max-w-sm" onOpenAutoFocus={(e) => (e.preventDefault(), document.getElementById("folder-name")?.focus())}>
+        <DialogHeader>
+          <DialogTitle>{title}</DialogTitle>
+        </DialogHeader>
+        <form
+          className="space-y-3"
+          onSubmit={(e) => {
+            e.preventDefault();
+            if (name.trim()) {
+              onSave(name.trim());
+              onClose();
+            }
+          }}
+        >
+          <Input id="folder-name" value={name} maxLength={200} onChange={(e) => setName(e.target.value)} placeholder={t("outlook.folder.namePlaceholder")} />
+          <div className="flex justify-end gap-2">
+            <Button type="button" variant="ghost" onClick={onClose}>
+              {t("common.cancel")}
+            </Button>
+            <Button type="submit" disabled={!name.trim()} className="bg-grad-gold font-semibold text-[#1a1204]">
+              {t("common.save")}
+            </Button>
+          </div>
+        </form>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
 type FolderPrefs = { pinned: { id: string; name: string }[]; hidden: string[] };
 type Layout = {
   editing: boolean;
@@ -292,6 +370,8 @@ function AccountTree({ account, defaultOpen, selected, onSelect }: { account: Ma
     [next[i], next[j]] = [next[j], next[i]];
     savePrefs.mutate({ ...prefs, pinned: next });
   };
+  const actions = useFolderActions(account.id);
+  const [naming, setNaming] = useState(false);
   const root = folders.data ?? [];
   const shown = root.filter((fo) => editing || !layout.hidden(fo.id));
   const hiddenCount = root.filter((fo) => layout.hidden(fo.id)).length;
@@ -319,6 +399,9 @@ function AccountTree({ account, defaultOpen, selected, onSelect }: { account: Ma
               }}
             >
               <SlidersHorizontal className="size-4" /> {t("outlook.layout.edit")}
+            </DropdownMenuItem>
+            <DropdownMenuItem onSelect={() => setNaming(true)}>
+              <FolderPlus className="size-4" /> {t("outlook.folder.new")}
             </DropdownMenuItem>
             <DropdownMenuSeparator />
             <DropdownMenuItem
@@ -379,6 +462,7 @@ function AccountTree({ account, defaultOpen, selected, onSelect }: { account: Ma
           {shown.map((fo) => (
             <FolderNode key={fo.id} accountId={account.id} folder={fo} selected={selected} onSelect={onSelect} layout={layout} />
           ))}
+          {naming && <FolderNameDialog title={t("outlook.folder.new")} initial="" onSave={(name) => actions.create.mutate({ name })} onClose={() => setNaming(false)} />}
           {!editing && hiddenCount > 0 && (
             <button type="button" onClick={() => setEditing(true)} className="px-2 py-1 text-[11px] text-muted-foreground hover:text-foreground">
               {t("outlook.layout.hiddenCount", { count: hiddenCount })}
@@ -416,10 +500,13 @@ function FolderNode({ accountId, folder, selected, onSelect, layout, depth = 0 }
   const Icon = (folder.wellKnown && FOLDER_ICON[folder.wellKnown]) || Folder;
   const hidden = layout.hidden(folder.id);
   const pinned = layout.pinned(folder.id);
+  const actions = useFolderActions(accountId);
+  const confirm = useConfirm();
+  const [naming, setNaming] = useState<"rename" | "child" | null>(null);
   return (
     <>
       <div
-        className={cn("flex items-center rounded-lg text-sm", active ? "bg-[color:var(--gold)]/10 text-foreground" : "text-muted-foreground hover:bg-accent/40 hover:text-foreground", hidden && "opacity-45")}
+        className={cn("group/folder flex items-center rounded-lg text-sm", active ? "bg-[color:var(--gold)]/10 text-foreground" : "text-muted-foreground hover:bg-accent/40 hover:text-foreground", hidden && "opacity-45")}
         style={{ paddingLeft: depth * 12 }}
       >
         <button type="button" className={cn("p-1", !folder.childCount && "invisible")} onClick={() => setOpen((o) => !o)} aria-label={folder.name}>
@@ -430,6 +517,65 @@ function FolderNode({ accountId, folder, selected, onSelect, layout, depth = 0 }
           <span className={cn("truncate", folder.unread > 0 && "font-semibold text-foreground", hidden && "line-through")}>{folder.name}</span>
           {!layout.editing && folder.unread > 0 && <span className="ml-auto rounded-full bg-grad-gold px-1.5 text-[10px] font-bold text-[#1a1204]">{folder.unread}</span>}
         </button>
+        {!layout.editing && (
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <button
+                type="button"
+                className="mr-1 rounded p-0.5 text-muted-foreground opacity-0 hover:text-foreground group-hover/folder:opacity-100 data-[state=open]:opacity-100"
+                aria-label={t("outlook.folder.options", { name: folder.name })}
+              >
+                <MoreHorizontal className="size-3.5" />
+              </button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="start">
+              <DropdownMenuLabel className="max-w-56 truncate">{folder.name}</DropdownMenuLabel>
+              <DropdownMenuSeparator />
+              <DropdownMenuItem disabled={!folder.unread || actions.readAll.isPending} onSelect={() => actions.readAll.mutate(folder.id)}>
+                <CheckCheck className="size-4" /> {t("outlook.folder.readAll")}
+              </DropdownMenuItem>
+              <DropdownMenuItem onSelect={() => layout.togglePin(folder)}>
+                {pinned ? <StarOff className="size-4" /> : <Star className="size-4" />} {pinned ? t("outlook.layout.unpin") : t("outlook.layout.pin")}
+              </DropdownMenuItem>
+              <DropdownMenuItem onSelect={() => layout.toggleHide(folder.id)}>
+                {hidden ? <Eye className="size-4" /> : <EyeOff className="size-4" />} {hidden ? t("outlook.layout.show") : t("outlook.layout.hide")}
+              </DropdownMenuItem>
+              <DropdownMenuSeparator />
+              <DropdownMenuItem onSelect={() => setNaming("child")}>
+                <FolderPlus className="size-4" /> {t("outlook.folder.newChild")}
+              </DropdownMenuItem>
+              {!folder.wellKnown && (
+                <>
+                  <DropdownMenuItem onSelect={() => setNaming("rename")}>
+                    <Pencil className="size-4" /> {t("outlook.folder.rename")}
+                  </DropdownMenuItem>
+                  <DropdownMenuItem
+                    className="text-destructive focus:text-destructive"
+                    onSelect={async () => {
+                      if (await confirm({ title: t("outlook.folder.deleteConfirm", { name: folder.name }), destructive: true })) actions.remove.mutate(folder.id);
+                    }}
+                  >
+                    <Trash2 className="size-4" /> {t("outlook.folder.delete")}
+                  </DropdownMenuItem>
+                </>
+              )}
+            </DropdownMenuContent>
+          </DropdownMenu>
+        )}
+        {naming && (
+          <FolderNameDialog
+            title={naming === "rename" ? t("outlook.folder.rename") : t("outlook.folder.newChild")}
+            initial={naming === "rename" ? folder.name : ""}
+            onSave={(name) => {
+              if (naming === "rename") actions.rename.mutate({ id: folder.id, name });
+              else {
+                actions.create.mutate({ name, parentId: folder.id });
+                setOpen(true);
+              }
+            }}
+            onClose={() => setNaming(null)}
+          />
+        )}
         {layout.editing && (
           <span className="flex shrink-0 items-center pr-1">
             <IconToggle label={pinned ? t("outlook.layout.unpin") : t("outlook.layout.pin")} onClick={() => layout.togglePin(folder)} active={pinned}>
@@ -488,6 +634,7 @@ function MessageList({
   });
   const folders = useQuery({ queryKey: foldersKey(account.id), queryFn: () => api.get<MailFolder[]>(`${base(account.id)}/folders`), staleTime: 30_000 });
   const items = useMemo(() => (list.data?.pages ?? []).flatMap((p) => p.items), [list.data]);
+  const { readAll } = useFolderActions(account.id);
 
   return (
     <section className={cn("glass min-h-0 flex-col overflow-hidden rounded-2xl border", className)}>
@@ -518,9 +665,27 @@ function MessageList({
             ))}
           </select>
         </div>
-        <div className="relative">
-          <Search className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
-          <Input className="h-9 pl-9" value={q} onChange={(e) => setQ(e.target.value)} placeholder={t("outlook.search")} />
+        <div className="flex gap-1.5">
+          <div className="relative min-w-0 flex-1">
+            <Search className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
+            <Input className="h-9 pl-9" value={q} onChange={(e) => setQ(e.target.value)} placeholder={t("outlook.search")} />
+          </div>
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <Button
+                type="button"
+                size="icon"
+                variant="outline"
+                className="size-9 shrink-0"
+                aria-label={t("outlook.folder.readAll")}
+                disabled={readAll.isPending || !items.some((m) => !m.isRead)}
+                onClick={() => readAll.mutate(folder)}
+              >
+                {readAll.isPending ? <Loader2 className="size-4 animate-spin" /> : <CheckCheck className="size-4" />}
+              </Button>
+            </TooltipTrigger>
+            <TooltipContent>{t("outlook.folder.readAll")}</TooltipContent>
+          </Tooltip>
         </div>
       </div>
       <ul className="min-h-0 flex-1 overflow-y-auto scrollbar-thin">
@@ -588,7 +753,14 @@ function MessageView({
   const msg = useQuery({ queryKey: messageKey(account.id, messageId), queryFn: () => api.get<MailMessage>(`${base(account.id)}/messages/${encodeURIComponent(messageId)}`) });
   const folders = useQuery({ queryKey: foldersKey(account.id), queryFn: () => api.get<MailFolder[]>(`${base(account.id)}/folders`), staleTime: 30_000 });
   // Facets (priorities, queues, technicians) for the new-ticket form
-  const facets = useQuery({ queryKey: ["tickets", "view=mine"], queryFn: () => api.get<TicketList>("/tickets?view=mine"), enabled: Boolean(newTicket), staleTime: 15_000 });
+  // the new-ticket form's lists (queues, priorities…), loaded with the message so the button answers at once
+  const facets = useQuery({ queryKey: ["tickets", "view=mine"], queryFn: () => api.get<TicketList>("/tickets?view=mine"), enabled: canTicket, staleTime: 60_000 });
+  useEffect(() => {
+    if (newTicket && facets.isError) {
+      toast.error(t("outlook.ticketFormError"));
+      setNewTicket(null);
+    }
+  }, [newTicket, facets.isError, t]);
 
   // Opening marks it as read: reflect it in the list and the folder counts
   useEffect(() => {
@@ -708,8 +880,8 @@ function MessageView({
             <Button type="button" size="sm" variant="outline" className="h-8 gap-1.5 text-xs" onClick={() => setToTicket(true)}>
               <Ticket className="size-3.5" /> {t("outlook.toTicket")}
             </Button>
-            <Button type="button" size="sm" className="h-8 gap-1.5 bg-grad-gold text-xs font-semibold text-[#1a1204] hover:brightness-105" onClick={() => prefill.mutate()} disabled={prefill.isPending}>
-              {prefill.isPending ? <Loader2 className="size-3.5 animate-spin" /> : <TicketPlus className="size-3.5" />} {t("outlook.newTicket")}
+            <Button type="button" size="sm" className="h-8 gap-1.5 bg-grad-gold text-xs font-semibold text-[#1a1204] hover:brightness-105" onClick={() => prefill.mutate()} disabled={prefill.isPending || (Boolean(newTicket) && !facets.data)}>
+              {prefill.isPending || (newTicket && !facets.data) ? <Loader2 className="size-3.5 animate-spin" /> : <TicketPlus className="size-3.5" />} {t("outlook.newTicket")}
             </Button>
           </span>
         )}

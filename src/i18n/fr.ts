@@ -214,6 +214,21 @@ const fr = {
     },
   },
   outlook: {
+    folder: {
+      options: "Options du dossier {{name}}",
+      readAll: "Tout marquer comme lu",
+      readDone_one: "{{count}} courriel marqué comme lu.",
+      readDone_other: "{{count}} courriels marqués comme lus.",
+      new: "Nouveau dossier",
+      newChild: "Nouveau sous-dossier",
+      rename: "Renommer",
+      delete: "Supprimer le dossier",
+      deleteConfirm: "Supprimer le dossier « {{name}} » ? Il va dans Éléments supprimés avec ses courriels, comme dans Outlook.",
+      deleted: "Dossier supprimé.",
+      created: "Dossier créé.",
+      namePlaceholder: "Nom du dossier",
+    },
+    ticketFormError: "Impossible de charger le formulaire de billet (Autotask). Réessayez.",
     accountMenu: "Options de la boîte",
     layout: {
       edit: "Personnaliser les dossiers",
@@ -290,9 +305,9 @@ const fr = {
     added: "Courriel ajouté au billet {{number}}",
     fromEmail: "Créé à partir du courriel de {{from}} ({{date}})",
     errors: {
+      forbidden: "Action refusée par Microsoft 365 : les dossiers d'Outlook (Boîte de réception, Éléments envoyés…) ne peuvent pas être supprimés, ou une permission manque (Mail.ReadWrite, Mail.Send).",
       sign_in_first: "Connectez d'abord votre compte Microsoft (profil › Microsoft 365).",
       not_configured: "Microsoft 365 n'est pas configuré.",
-      forbidden: "Microsoft 365 refuse l'accès à cette boîte : l'application doit avoir Mail.ReadWrite et Mail.Send (application, consentement administrateur).",
       not_found: "Boîte ou courriel introuvable.",
       not_own_mailbox: "Vous pouvez seulement lier votre propre boîte. Les autres boîtes demandent le droit « Lier d'autres boîtes AKAB ».",
       already_linked: "Cette boîte est déjà liée.",

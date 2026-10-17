@@ -2243,6 +2243,8 @@ describe("text messages (VoIP.ms)", () => {
 
 describe("Outlook (Microsoft 365 mail)", () => {
   const sent: { method: string; url: string; body: any; bearer?: string }[] = [];
+  /** Unread ids the next "unread messages" query returns (then none) */
+  const unread: { id: string }[] = [];
   const json = (b: unknown, status = 200) => new Response(JSON.stringify(b), { status, headers: { "content-type": "application/json" } });
   const G = "https://graph.microsoft.com/v1.0/";
   beforeAll(() => {
@@ -2275,6 +2277,10 @@ describe("Outlook (Microsoft 365 mail)", () => {
             ],
           });
         }
+        // folder options
+        if (url.includes("$filter=isRead eq false")) return json({ value: unread.splice(0) });
+        if (url.endsWith("/$batch") && method === "POST") return json({ responses: (init.body ? JSON.parse(String(init.body)).requests : []).map((r: any) => ({ id: r.id, status: 200 })) });
+        if (url.endsWith("/mailFolders") && method === "POST") return json({ id: "new-folder", displayName: "Clients 2026" }, 201);
         if (url.includes("/messages?") && method === "GET") {
           return json({
             value: [{ id: "m1", subject: "Imprimante", from: { emailAddress: { name: "Marie", address: "marie@client.example" } }, receivedDateTime: "2026-10-13T12:00:00Z", bodyPreview: "Bonjour", isRead: false, flag: { flagStatus: "notFlagged" }, hasAttachments: true }],
@@ -2404,6 +2410,19 @@ describe("Outlook (Microsoft 365 mail)", () => {
     expect((await tech.post(`/api/outlook/accounts/${acc.id}/messages/m1/move`, { destination: "archive" })).json).toEqual({ ok: true, id: "m1-moved" });
     expect((await tech.del(`/api/outlook/accounts/${acc.id}/messages/m1`)).status).toBe(200);
     expect(sent.at(-1)?.body).toEqual({ destinationId: "deleteditems" });
+
+    // folder options: mark all read (patched by batches of 20), create, rename, delete — Outlook's own folders stay
+    unread.push(...Array.from({ length: 25 }, (_, i) => ({ id: `u${i}` })));
+    sent.length = 0;
+    expect((await tech.post(`/api/outlook/accounts/${acc.id}/folders/inbox-id/read`)).json).toEqual({ ok: true, marked: 25 });
+    const batches = sent.filter((s) => s.url.endsWith("/$batch"));
+    expect(batches.map((b) => b.body.requests.length)).toEqual([20, 5]);
+    expect(batches[0].body.requests[0]).toMatchObject({ method: "PATCH", url: "/me/messages/u0", body: { isRead: true } });
+    expect((await tech.post(`/api/outlook/accounts/${acc.id}/folders`, { name: "Clients 2026" })).json).toMatchObject({ id: "new-folder", name: "Clients 2026" });
+    expect((await tech.patch(`/api/outlook/accounts/${acc.id}/folders/f2`, { name: "Clients actifs" })).status).toBe(200);
+    expect(sent.at(-1)).toMatchObject({ method: "PATCH", body: { displayName: "Clients actifs" } });
+    expect((await tech.del(`/api/outlook/accounts/${acc.id}/folders/inbox-id`)).json.error).toBe("outlook_forbidden");
+    expect((await tech.del(`/api/outlook/accounts/${acc.id}/folders/f2`)).status).toBe(200);
   });
 
   it("sends and replies with files; sending needs its right; too-large files are refused", async () => {

@@ -10,12 +10,16 @@ import { body, zEmail, zUuid } from "../lib/validate.ts";
 import { asConnection, O365Error, o365Ready } from "../lib/o365.ts";
 import {
   attachment,
+  createFolder,
+  deleteFolder,
   getMessage,
   listFolders,
   listMessages,
+  markFolderRead,
   MAX_ATTACHMENT_BYTES,
   messageText,
   moveMessage,
+  renameFolder,
   respond,
   sendMail,
   testMailbox,
@@ -69,6 +73,7 @@ async function account(a: AuthContext, id: string) {
 }
 
 const zMessageId = z.string().min(1).max(400);
+const zFolderName = z.string().trim().min(1).max(200);
 const zAddressList = z.array(zEmail).max(100).default([]);
 const zAttachments = z
   .array(z.object({ name: z.string().trim().min(1).max(200), contentType: z.string().max(120).default("application/octet-stream"), data: z.string().max(5_000_000) }))
@@ -173,6 +178,33 @@ export const outlookRoutes = new Hono<AppEnv>()
     const prefs = { pinned: p.pinned.filter((x, i, all) => all.findIndex((y) => y.id === x.id) === i), hidden: [...new Set(p.hidden)] };
     await db().update(schema.mailAccounts).set({ folderPrefs: prefs }).where(eq(schema.mailAccounts.id, acc.id));
     return c.json(prefs);
+  })
+
+  /** Folder options: create (top level or inside a folder), rename, delete, mark all read. */
+  .post("/accounts/:id/folders", async (c) => {
+    const acc = await account(auth(c), c.req.param("id"));
+    const p = await body(c, z.object({ name: zFolderName, parentId: zMessageId.optional() }));
+    return c.json(await run(() => createFolder(acc.address, p.name, p.parentId)), 201);
+  })
+  .patch("/accounts/:id/folders/:fid", async (c) => {
+    const acc = await account(auth(c), c.req.param("id"));
+    const p = await body(c, z.object({ name: zFolderName }));
+    await run(() => renameFolder(acc.address, zMessageId.parse(c.req.param("fid")), p.name));
+    return c.json({ ok: true });
+  })
+  .delete("/accounts/:id/folders/:fid", async (c) => {
+    const a = auth(c);
+    const acc = await account(a, c.req.param("id"));
+    const fid = zMessageId.parse(c.req.param("fid"));
+    await run(() => deleteFolder(acc.address, fid));
+    await audit(a.realUser.id, "outlook.folder_deleted", acc.id, { folderId: fid });
+    return c.json({ ok: true });
+  })
+  .post("/accounts/:id/folders/:fid/read", async (c) => {
+    const acc = await account(auth(c), c.req.param("id"));
+    if (!rateLimit(`outlook-readall:${acc.id}`, 10, 60_000).ok) throw new HTTPException(429, { message: "rate_limited" });
+    const n = await run(() => markFolderRead(acc.address, zMessageId.parse(c.req.param("fid"))));
+    return c.json({ ok: true, marked: n });
   })
 
   .get("/accounts/:id/folders", async (c) => {

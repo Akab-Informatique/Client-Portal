@@ -216,6 +216,21 @@ const en: Dict = {
     },
   },
   outlook: {
+    folder: {
+      options: "Options of folder {{name}}",
+      readAll: "Mark all as read",
+      readDone_one: "{{count}} email marked as read.",
+      readDone_other: "{{count}} emails marked as read.",
+      new: "New folder",
+      newChild: "New subfolder",
+      rename: "Rename",
+      delete: "Delete folder",
+      deleteConfirm: "Delete folder “{{name}}”? It goes to Deleted Items with its emails, like in Outlook.",
+      deleted: "Folder deleted.",
+      created: "Folder created.",
+      namePlaceholder: "Folder name",
+    },
+    ticketFormError: "Could not load the ticket form (Autotask). Try again.",
     accountMenu: "Mailbox options",
     layout: {
       edit: "Customise folders",
@@ -292,9 +307,9 @@ const en: Dict = {
     added: "Email added to ticket {{number}}",
     fromEmail: "Created from the email of {{from}} ({{date}})",
     errors: {
+      forbidden: "Refused by Microsoft 365: Outlook's own folders (Inbox, Sent Items…) cannot be deleted, or a permission is missing (Mail.ReadWrite, Mail.Send).",
       sign_in_first: "Connect your Microsoft account first (profile › Microsoft 365).",
       not_configured: "Microsoft 365 is not set up.",
-      forbidden: "Microsoft 365 refuses access to this mailbox: the app needs Mail.ReadWrite and Mail.Send (application, admin consent).",
       not_found: "Mailbox or email not found.",
       not_own_mailbox: "You can only link your own mailbox. Other mailboxes need the right “Link other AKAB mailboxes”.",
       already_linked: "This mailbox is already linked.",

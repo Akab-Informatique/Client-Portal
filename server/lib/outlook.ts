@@ -218,6 +218,54 @@ export async function messageText(mailbox: string, id: string): Promise<MailMess
   };
 }
 
+/**
+ * Mark every unread message of a folder as read (Graph has no single call
+ * for it: pages of unread ids, patched 20 at a time with $batch). Returns how
+ * many were marked; stops after `max`.
+ */
+export async function markFolderRead(mailbox: string, folderId: string, max = 2000): Promise<number> {
+  const root = user(mailbox);
+  let done = 0;
+  while (done < max) {
+    const page = await graph<{ value: { id: string }[] }>("GET", `${root}/mailFolders/${enc(folderId)}/messages?$filter=isRead eq false&$select=id&$top=100`);
+    const ids = (page.value ?? []).map((m) => m.id);
+    if (!ids.length) break;
+    for (let i = 0; i < ids.length; i += 20) {
+      const requests = ids.slice(i, i + 20).map((id, n) => ({
+        id: String(n + 1),
+        method: "PATCH",
+        url: `/${root}/messages/${enc(id)}`,
+        headers: { "Content-Type": "application/json" },
+        body: { isRead: true },
+      }));
+      const r = await graph<{ responses?: { status: number }[] }>("POST", "$batch", { requests });
+      const ok = (r.responses ?? []).filter((x) => x.status >= 200 && x.status < 300).length;
+      done += ok;
+      // nothing changes (e.g. no right to write): stop rather than loop
+      if (!ok) return done;
+    }
+  }
+  return done;
+}
+
+/** A new folder (top level, or inside another one). */
+export async function createFolder(mailbox: string, name: string, parentId?: string): Promise<MailFolder> {
+  const path = parentId ? `${user(mailbox)}/mailFolders/${enc(parentId)}/childFolders` : `${user(mailbox)}/mailFolders`;
+  const f = await graph<{ id: string; displayName?: string }>("POST", path, { displayName: name });
+  return { id: f.id, name: f.displayName ?? name, unread: 0, total: 0, childCount: 0, wellKnown: null };
+}
+export async function renameFolder(mailbox: string, id: string, name: string): Promise<void> {
+  await graph("PATCH", `${user(mailbox)}/mailFolders/${enc(id)}`, { displayName: name });
+}
+/** Deleting a folder moves it (and its messages) to Deleted Items, like Outlook. Outlook's own folders stay. */
+export async function deleteFolder(mailbox: string, id: string): Promise<void> {
+  const own = await Promise.all(
+    [...WELL_KNOWN, "outbox"].map((w) => graph<{ id: string }>("GET", `${user(mailbox)}/mailFolders/${w}?$select=id`).then((f) => f.id).catch(() => null)),
+  );
+  if (own.includes(id) || [...WELL_KNOWN, "outbox"].includes(id.toLowerCase())) throw new O365Error("forbidden", "protected_folder");
+  await graph("DELETE", `${user(mailbox)}/mailFolders/${enc(id)}`);
+}
+
 export async function updateMessage(mailbox: string, id: string, p: { isRead?: boolean; flagged?: boolean }): Promise<void> {
   const patch: Record<string, unknown> = {};
   if (p.isRead !== undefined) patch.isRead = p.isRead;
