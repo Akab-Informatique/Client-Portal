@@ -74,7 +74,8 @@ const zPlan = z.object({
 });
 function aiHttpError(e: unknown) {
   if (e instanceof AiError) {
-    const status = e.code === "not_configured" || e.code === "disabled" ? 409 : e.code === "rate_limit" ? 429 : 502;
+    const status = e.code === "not_configured" || e.code === "disabled" || e.code === "billing" ? 409 : e.code === "rate_limit" ? 429 : 502;
+    console.warn("[ai]", e.message);
     return new HTTPException(status, { message: `ai_${e.code}` });
   }
   return sourceError(e);
@@ -387,7 +388,7 @@ export const ticketRoutes = new Hono<AppEnv>()
       const out = await askClaudeJson<unknown>({
         system: `${aiRole(a.user.locale)} Tu aides un technicien à planifier ses billets. Aujourd'hui : ${today}, journée de travail 8 h à 17 h, lundi au vendredi.`,
         prompt: `Voici mes billets ouverts :\n${lines.join("\n")}\n\nPropose un ordre de traitement et une date de début (AAAA-MM-JJ, au plus tôt aujourd'hui, jours ouvrables) pour chacun, en tenant compte des échéances, des priorités et d'une charge réaliste (environ 4 à 6 billets par jour). Format : {"overview": "2 ou 3 phrases", "items": [{"id": nombre, "order": nombre, "startDate": "AAAA-MM-JJ", "reason": "courte justification"}]}`,
-        maxTokens: 2500,
+        maxTokens: 6000,
       });
       const parsed = zPlan.safeParse(out);
       if (!parsed.success) throw new AiError("bad_output");
@@ -719,7 +720,7 @@ export const ticketRoutes = new Hono<AppEnv>()
       const out = await askClaudeJson<unknown>({
         system: `${aiRole(a.user.locale)} Tu analyses un billet de support pour le technicien.`,
         prompt: `${tk}\n\nAnalyse ce billet. Format : {"summary": "résumé en 2 à 4 phrases", "nextSteps": ["étapes concrètes, dans l'ordre"], "risks": ["points d'attention, s'il y en a"], "questions": ["questions à poser au client, s'il en manque"], "suggestedPriority": "critical|high|medium|low"}`,
-        maxTokens: 1500,
+        maxTokens: 4000,
       });
       const parsed = zAnalysis.safeParse(out);
       if (!parsed.success) throw new AiError("bad_output");
@@ -740,7 +741,7 @@ export const ticketRoutes = new Hono<AppEnv>()
       const text = await askClaude({
         system: `${aiRole(a.user.locale)} Tu rédiges des réponses aux clients : courtoises, claires, sans jargon, sans promettre de délai précis.`,
         prompt: `${tk}\n\nRédige la prochaine réponse au client (texte seul, sans objet), signée « ${a.user.name.split(" ")[0]} – AKAB Informatique ».`,
-        maxTokens: 800,
+        maxTokens: 2000,
       });
       await audit(a.user.id, "ai.ticket_reply", c.req.param("id"));
       return c.json({ text });

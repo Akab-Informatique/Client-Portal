@@ -548,7 +548,7 @@ function AiPage() {
   const [apiKey, setApiKey] = useState("");
   const [model, setModel] = useState("");
   const [enabled, setEnabled] = useState(false);
-  const [test, setTest] = useState<{ ok: boolean; error?: string } | null>(null);
+  const [test, setTest] = useState<{ ok: boolean; error?: string; detail?: string } | null>(null);
   useEffect(() => {
     if (!s) return;
     setModel(s.model);
@@ -566,7 +566,7 @@ function AiPage() {
     onError: (e) => toast.error(e instanceof ApiError && e.code === "ai_incomplete" ? t("integrations.ai.needKey") : t("common.error")),
   });
   const runTest = useMutation({
-    mutationFn: () => api.post<{ ok: boolean; error?: string }>("/admin/integrations/ai/test", { model: model || s?.model, ...(apiKey.trim() ? { apiKey: apiKey.trim() } : {}) }),
+    mutationFn: () => api.post<{ ok: boolean; error?: string; detail?: string }>("/admin/integrations/ai/test", { model: model || s?.model, ...(apiKey.trim() ? { apiKey: apiKey.trim() } : {}) }),
     onSuccess: (r) => {
       setTest(r);
       void qc.invalidateQueries({ queryKey: AI_KEY });
@@ -639,7 +639,11 @@ function AiPage() {
             </p>
           ) : (
             <p className="flex items-center gap-2 rounded-xl border border-destructive/40 bg-destructive/10 p-3 text-sm">
-              <XCircle className="size-4 text-destructive" /> {t(`tickets.ai.errors.${test.error}`, { defaultValue: t("tickets.ai.errors.api") })}
+              <XCircle className="size-4 shrink-0 text-destructive" />
+              <span>
+                {t(`tickets.ai.errors.${test.error}`, { defaultValue: t("tickets.ai.errors.api") })}
+                {test.detail && <span className="block font-mono text-xs text-muted-foreground">{test.detail}</span>}
+              </span>
             </p>
           ))}
       </form>

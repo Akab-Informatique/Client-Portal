@@ -358,12 +358,12 @@ export const integrationRoutes = new Hono<AppEnv>()
     const s = await aiSettings();
     const apiKey = p.apiKey ?? s.apiKey;
     if (!apiKey) return c.json({ ok: false, error: "not_configured" });
-    let result: { ok: true } | { ok: false; error: string };
+    let result: { ok: true } | { ok: false; error: string; detail?: string };
     try {
-      await askClaude({ system: "Test de connexion.", prompt: "Réponds OK.", maxTokens: 5 }, { apiKey, model: p.model ?? s.model });
+      await askClaude({ system: "Test de connexion.", prompt: "Réponds OK.", maxTokens: 200 }, { apiKey, model: p.model ?? s.model });
       result = { ok: true };
     } catch (e) {
-      result = { ok: false, error: e instanceof AiError ? e.code : "api" };
+      result = { ok: false, error: e instanceof AiError ? e.code : "api", detail: e instanceof AiError ? e.detail : undefined };
     }
     if (!p.apiKey) await saveAiSettings(a.user.id, { lastTest: { ok: result.ok, at: new Date().toISOString(), ...(result.ok ? {} : { error: (result as { error: AiErrorCode }).error }) } });
     return c.json(result);

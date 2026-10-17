@@ -1063,7 +1063,22 @@ describe("tickets: inline edit, notes, team filter and AI", () => {
       expect(sent[0].url).toBe("https://api.anthropic.com/v1/messages");
       expect(sent[0].headers["x-api-key"]).toBe("sk-ant-test-secret");
       expect(sent[0].body.model).toBe("claude-haiku-5-5");
+      // routine tasks think little, with room for the reasoning
+      expect(sent[0].body.output_config).toEqual({ effort: "low" });
+      expect(sent[0].body.max_tokens).toBeGreaterThanOrEqual(4000);
       expect((await admin.get(`/api/tickets/${id}/ai`)).json[0].content.summary).toBe("Imprimante hors ligne.");
+    } finally {
+      vi.unstubAllGlobals();
+    }
+
+    // Anthropic's reason is kept: a new account without credit says so
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => new Response(JSON.stringify({ type: "error", error: { type: "invalid_request_error", message: "Your credit balance is too low to access the Anthropic API." } }), { status: 400 })),
+    );
+    try {
+      expect((await admin.post("/api/admin/integrations/ai/test", {})).json).toEqual({ ok: false, error: "billing", detail: "Your credit balance is too low to access the Anthropic API." });
+      expect((await admin.post(`/api/tickets/${id}/ai/analyze`)).json.error).toBe("ai_billing");
     } finally {
       vi.unstubAllGlobals();
     }

@@ -12,14 +12,29 @@ export const AI_MODELS = ["claude-sonnet-5-5", "claude-opus-5-5", "claude-haiku-
 export type AiModel = (typeof AI_MODELS)[number];
 const API = "https://api.anthropic.com/v1/messages";
 
-export type AiErrorCode = "not_configured" | "disabled" | "auth" | "rate_limit" | "network" | "api" | "bad_output";
+export type AiErrorCode = "not_configured" | "disabled" | "auth" | "rate_limit" | "network" | "api" | "bad_output" | "billing" | "model" | "overloaded" | "refusal";
 export class AiError extends Error {
   constructor(
     public code: AiErrorCode,
     public status?: number,
+    /** Anthropic's own explanation (never contains the key) */
+    public detail?: string,
   ) {
-    super(code);
+    super(detail ? `${code}: ${detail}` : code);
   }
+}
+
+/** Anthropic's error answer → a code the portal can explain. */
+function apiError(status: number, body: { error?: { type?: string; message?: string } } | null): AiError {
+  const type = body?.error?.type ?? "";
+  const message = (body?.error?.message ?? "").slice(0, 300);
+  if (status === 401 || status === 403 || type === "authentication_error" || type === "permission_error") return new AiError("auth", status, message);
+  if (status === 429 || type === "rate_limit_error") return new AiError("rate_limit", status, message);
+  // a new account without credits, or a spending limit reached
+  if (/credit balance|billing|spend(ing)? limit|purchase credits/i.test(message)) return new AiError("billing", status, message);
+  if (status === 404 || type === "not_found_error" || /model/i.test(message) && status === 400 && /not (found|available|supported)/i.test(message)) return new AiError("model", status, message);
+  if (status === 529 || type === "overloaded_error") return new AiError("overloaded", status, message);
+  return new AiError("api", status, message || `HTTP ${status}`);
 }
 
 export type AiSettings = { enabled: boolean; model: AiModel; apiKey: string | null; lastTest?: { ok: boolean; at: string; error?: AiErrorCode } };
@@ -56,7 +71,11 @@ export async function saveAiSettings(actorId: string, p: { enabled?: boolean; mo
     .onConflictDoUpdate({ target: schema.integrations.provider, set: values });
 }
 
-/** One request to Claude; returns the text answer. */
+/**
+ * One request to Claude; returns the text answer. Routine portal tasks
+ * think little (effort "low": faster and cheaper); the answer room covers
+ * the model's reasoning, which counts in max_tokens.
+ */
 export async function askClaude(
   opts: { system: string; prompt: string; maxTokens?: number },
   settings?: Pick<AiSettings, "apiKey" | "model">,
@@ -71,7 +90,8 @@ export async function askClaude(
       headers: { "content-type": "application/json", "x-api-key": s.apiKey, "anthropic-version": "2023-06-01" },
       body: JSON.stringify({
         model: s.model,
-        max_tokens: opts.maxTokens ?? 1500,
+        max_tokens: opts.maxTokens ?? 4000,
+        output_config: { effort: "low" },
         system: opts.system,
         messages: [{ role: "user", content: opts.prompt }],
       }),
@@ -80,10 +100,9 @@ export async function askClaude(
   } catch {
     throw new AiError("network");
   }
-  if (res.status === 401 || res.status === 403) throw new AiError("auth", res.status);
-  if (res.status === 429) throw new AiError("rate_limit", res.status);
-  if (!res.ok) throw new AiError("api", res.status);
-  const j = (await res.json()) as { content?: { type: string; text?: string }[] };
+  if (!res.ok) throw apiError(res.status, (await res.json().catch(() => null)) as { error?: { type?: string; message?: string } } | null);
+  const j = (await res.json()) as { content?: { type: string; text?: string }[]; stop_reason?: string };
+  if (j.stop_reason === "refusal") throw new AiError("refusal");
   return (j.content ?? [])
     .filter((b) => b.type === "text")
     .map((b) => b.text ?? "")
