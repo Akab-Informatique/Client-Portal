@@ -1232,6 +1232,17 @@ const en: Dict = {
     },
   },
   tickets: {
+    tiles: {
+      compact: "Shrink",
+      expand: "Expand",
+      compactHint: "Smaller buttons (the numbers stay shown)",
+      expandHint: "Full buttons",
+      myFilter: "My filter",
+      pin: "Show as a button",
+      unpin: "Remove from the buttons",
+      asButton: "Show as a button",
+      asButtonHint: "A button above the tickets, with its number of tickets.",
+    },
     columns: {
       move: "Drag the title to move the column",
       resize: "Drag to widen or narrow (double-click: usual width)",

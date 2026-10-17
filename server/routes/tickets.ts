@@ -287,18 +287,19 @@ export const ticketRoutes = new Hono<AppEnv>()
       due: (t: NTicket) => open(t) && new Date(t.dueAt).getTime() <= eod,
       all: (_t: NTicket) => true,
     };
-    const view = (q.view in views ? q.view : "mine") as keyof typeof views;
-    const status = list(q.status);
-    const statusKinds = list(q.statusKind);
-    const priority = list(q.priority);
-    const queue = list(q.queue);
-    const company = list(q.company).map(Number);
-    const assignee = list(q.assignee);
-    const text = (q.q ?? "").trim().toLowerCase();
     const inRange = (v: string | undefined, from?: string, to?: string) =>
       (!from && !to) || (v !== undefined && (!from || v.slice(0, 10) >= from) && (!to || v.slice(0, 10) <= to));
-
-    const items = all
+    /** The tickets a set of list parameters selects (the list, and the saved filters' buttons). */
+    const select = (q: Record<string, string | undefined>) => {
+      const view = ((q.view ?? "") in views ? q.view : "mine") as keyof typeof views;
+      const status = list(q.status);
+      const statusKinds = list(q.statusKind);
+      const priority = list(q.priority);
+      const queue = list(q.queue);
+      const company = list(q.company).map(Number);
+      const assignee = list(q.assignee);
+      const text = (q.q ?? "").trim().toLowerCase();
+      return all
       .filter(views[view])
       // Completed tickets only when asked for (status filter) or in "all"
       .filter((t) => (status.length || statusKinds.length ? true : view === "all" || open(t)))
@@ -315,8 +316,16 @@ export const ticketRoutes = new Hono<AppEnv>()
       .filter((t) => q.created !== "today" || new Date(t.createdAt).toDateString() === new Date().toDateString())
       .filter((t) => q.attention !== "1" || attention(t))
       // Portal-only filter: Autotask has no start date
-      .filter((t) => inRange(starts.get(t.id), q.startFrom, q.startTo))
-      .map((t) => summary(t, L, starts.get(t.id), a.user.id));
+      .filter((t) => inRange(starts.get(t.id), q.startFrom, q.startTo));
+    };
+    const items = select(q).map((t) => summary(t, L, starts.get(t.id), a.user.id));
+    // the saved filters shown as buttons, with their counts
+    const pinnedFilters = await db()
+      .select({ id: schema.ticketFilters.id, name: schema.ticketFilters.name, query: schema.ticketFilters.query })
+      .from(schema.ticketFilters)
+      .where(and(eq(schema.ticketFilters.userId, a.user.id), eq(schema.ticketFilters.pinned, true)))
+      .orderBy(asc(schema.ticketFilters.createdAt));
+    const buttons = pinnedFilters.map((f) => ({ ...f, count: select(Object.fromEntries(new URLSearchParams(f.query))).length }));
     // My priorities (given by an admin), not done: marked in the list
     const mine = await db()
       .select({ ticketId: schema.ticketPins.ticketId, horizon: schema.ticketPins.horizon })
@@ -368,6 +377,7 @@ export const ticketRoutes = new Hono<AppEnv>()
       notLinked: !src.demo && !meId,
       ai: Boolean(ai?.enabled && ai.apiKey),
       metrics,
+      buttons,
       items,
       counts: Object.fromEntries(Object.entries(views).map(([k, f]) => [k, all.filter(f).filter((t) => k === "all" || open(t)).length])),
       facets: { queues: o.queues, companies, statuses: o.statuses, priorities: o.priorities, technicians: team },
@@ -469,15 +479,28 @@ export const ticketRoutes = new Hono<AppEnv>()
   .get("/filters", async (c) => {
     const a = auth(c);
     const rows = await db()
-      .select({ id: schema.ticketFilters.id, name: schema.ticketFilters.name, query: schema.ticketFilters.query })
+      .select({ id: schema.ticketFilters.id, name: schema.ticketFilters.name, query: schema.ticketFilters.query, pinned: schema.ticketFilters.pinned })
       .from(schema.ticketFilters)
       .where(eq(schema.ticketFilters.userId, a.user.id))
       .orderBy(asc(schema.ticketFilters.name));
     return c.json(rows);
   })
+  /** Show a saved filter as a button above the list (or not). */
+  .patch("/filters/:fid", async (c) => {
+    const a = auth(c);
+    const fid = z.uuid().parse(c.req.param("fid"));
+    const p = await body(c, z.object({ pinned: z.boolean().optional(), name: z.string().trim().min(1).max(60).optional() }));
+    const [row] = await db()
+      .update(schema.ticketFilters)
+      .set(p)
+      .where(and(eq(schema.ticketFilters.id, fid), eq(schema.ticketFilters.userId, a.user.id)))
+      .returning({ id: schema.ticketFilters.id, name: schema.ticketFilters.name, query: schema.ticketFilters.query, pinned: schema.ticketFilters.pinned });
+    if (!row) throw new HTTPException(404, { message: "not_found" });
+    return c.json(row);
+  })
   .post("/filters", async (c) => {
     const a = auth(c);
-    const p = await body(c, z.object({ name: z.string().trim().min(1).max(60), query: z.string().max(1000) }));
+    const p = await body(c, z.object({ name: z.string().trim().min(1).max(60), query: z.string().max(1000), pinned: z.boolean().default(false) }));
     // Keep only known list parameters
     const src = new URLSearchParams(p.query);
     const clean = new URLSearchParams();
@@ -489,8 +512,8 @@ export const ticketRoutes = new Hono<AppEnv>()
     if (count.length >= 30) throw new HTTPException(409, { message: "too_many_filters" });
     const [row] = await db()
       .insert(schema.ticketFilters)
-      .values({ userId: a.user.id, name: p.name, query: clean.toString() })
-      .returning({ id: schema.ticketFilters.id, name: schema.ticketFilters.name, query: schema.ticketFilters.query });
+      .values({ userId: a.user.id, name: p.name, query: clean.toString(), pinned: p.pinned })
+      .returning({ id: schema.ticketFilters.id, name: schema.ticketFilters.name, query: schema.ticketFilters.query, pinned: schema.ticketFilters.pinned });
     return c.json(row, 201);
   })
   .delete("/filters/:fid", async (c) => {

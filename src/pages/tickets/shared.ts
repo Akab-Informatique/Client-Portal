@@ -96,6 +96,8 @@ export type TicketList = {
   notLinked: boolean;
   ai: boolean;
   metrics: { mine: number; unassigned: number; attention: number; statusAttention: number; attentionBreakdown: { overdue: number; dueToday: number; critical: number } };
+  /** My saved filters shown as buttons, with their counts */
+  buttons?: { id: string; name: string; query: string; count: number }[];
   items: TicketSummary[];
   counts: Record<View, number>;
   facets: {

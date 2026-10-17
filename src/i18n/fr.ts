@@ -1230,6 +1230,17 @@ const fr = {
     },
   },
   tickets: {
+    tiles: {
+      compact: "Réduire",
+      expand: "Agrandir",
+      compactHint: "Boutons plus petits (les nombres restent affichés)",
+      expandHint: "Boutons complets",
+      myFilter: "Mon filtre",
+      pin: "Afficher comme bouton",
+      unpin: "Retirer des boutons",
+      asButton: "Afficher comme bouton",
+      asButtonHint: "Un bouton au-dessus des billets, avec son nombre de billets.",
+    },
     columns: {
       move: "Glisser le titre pour déplacer la colonne",
       resize: "Glisser pour élargir ou rétrécir (double-clic : largeur habituelle)",

@@ -290,6 +290,8 @@ export const ticketFilters = pgTable(
       .references(() => users.id, { onDelete: "cascade" }),
     name: text("name").notNull(),
     query: text("query").notNull(),
+    /** Shown as a button (a tile with its count) above the list */
+    pinned: boolean("pinned").notNull().default(false),
     createdAt: created(),
   },
   (t) => [index("ticket_filters_user_idx").on(t.userId)],

@@ -5,6 +5,10 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { animate, motion, useMotionValue, useTransform } from "motion/react";
 import { toast } from "sonner";
 import {
+  ChevronsDown,
+  ChevronsUp,
+  Pin,
+  PinOff,
   AlarmClock,
   RotateCcw,
   ArrowDownUp,
@@ -48,6 +52,7 @@ import { Input } from "@/components/ui/input";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { Switch } from "@/components/ui/switch";
 import { api } from "@/lib/api";
 import { AiModelButton, useAiModel } from "@/components/AiModelPicker";
 import { relativeTime } from "@/lib/format";
@@ -62,7 +67,7 @@ import { PlanningPanel } from "./Planning";
 import { SmsInboxDialog, SmsTile } from "@/pages/sms/SmsPage";
 import { AiSetupHint, InlinePick, useAiError } from "./TicketPanel";
 
-type Saved = { id: string; name: string; query: string };
+type Saved = { id: string; name: string; query: string; pinned?: boolean };
 type SetFn = (patch: Record<string, string | null>) => void;
 
 /** Same filters = same string: query string with sorted keys, without the open ticket. */
@@ -162,7 +167,7 @@ export function TicketsPage() {
 
   return (
     <div className="relative isolate flex items-start gap-4">
-    <div className="min-w-0 flex-1 space-y-4">
+    <div className="min-w-0 flex-1 space-y-6">
       <GlassBackdrop className="-inset-x-8 -top-6" />
       {/* Header */}
       <div className="flex flex-wrap items-center justify-between gap-3">
@@ -234,7 +239,7 @@ export function TicketsPage() {
         </div>
       </div>
       {activeFilters.length > 0 && (
-        <div className="-mt-1 flex flex-wrap items-center gap-1.5">
+        <div className="-mt-3 flex flex-wrap items-center gap-1.5">
           {activeFilters.map((k) => (
             <button
               key={k}
@@ -371,15 +376,80 @@ const TILES: { key: TileKey; icon: LucideIcon; tone: string; glow: string; query
   { key: "attention", icon: Siren, tone: "text-red-400", glow: "rgba(239,68,68,0.38)", query: "view=all&attention=1" },
 ];
 
+const COMPACT_KEY = "akab.tickets.tiles.compact";
+function readCompact() {
+  try {
+    return localStorage.getItem(COMPACT_KEY) === "1";
+  } catch {
+    return false;
+  }
+}
+
 function MetricTiles({ data, params, apply, onSms }: { data: TicketList | undefined; params: URLSearchParams; apply: (q: string) => void; onSms: () => void }) {
   const { t } = useTranslation();
+  const qc = useQueryClient();
   const current = useMemo(() => {
     const p = new URLSearchParams(params);
     p.delete("sort");
     return canonical(p);
   }, [params]);
+  // small buttons (one line each) to save room, the counts always shown
+  const [compact, setCompact] = useState(readCompact);
+  const toggle = () =>
+    setCompact((v) => {
+      try {
+        localStorage.setItem(COMPACT_KEY, v ? "0" : "1");
+      } catch {
+        /* this page only */
+      }
+      return !v;
+    });
+  const unpin = useMutation({
+    mutationFn: (id: string) => api.patch(`/tickets/filters/${id}`, { pinned: false }),
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: ["tickets"] });
+    },
+  });
+  const buttons = data?.buttons ?? [];
+  if (compact) {
+    return (
+      <div className="flex flex-wrap items-center gap-2">
+        {TILES.map((tile) => {
+          const active = canonical(tile.query) === current || (tile.key === "mine" && current === "");
+          const value = data?.metrics[tile.key];
+          return (
+            <Fragment key={tile.key}>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <button
+                    type="button"
+                    onClick={() => apply(tile.query)}
+                    className={cn("glass flex h-9 items-center gap-2 rounded-xl border px-3 text-left transition-colors hover:border-[color:var(--gold)]/40", active && "border-[color:var(--gold)]/60 bg-[color:var(--gold)]/[0.06]")}
+                  >
+                    <tile.icon className={cn("size-4", tile.tone)} />
+                    <span className="text-xs font-medium">{t(`tickets.metrics.${tile.key}`)}</span>
+                    <span className={cn("font-mono text-sm font-semibold tabular-nums", value ? "text-foreground" : "text-muted-foreground/50")}>{value ?? "–"}</span>
+                  </button>
+                </TooltipTrigger>
+                <TooltipContent>{t(`tickets.metricsHint.${tile.key}`)}</TooltipContent>
+              </Tooltip>
+              {tile.key === "mine" && <SmsTile onOpen={onSms} compact />}
+            </Fragment>
+          );
+        })}
+        {buttons.map((b) => (
+          <SavedFilterTile key={b.id} b={b} active={canonical(b.query) === current} compact onApply={() => apply(b.query)} onUnpin={() => unpin.mutate(b.id)} />
+        ))}
+        <TilesToggle compact onToggle={toggle} />
+      </div>
+    );
+  }
   return (
-    <div className="grid grid-cols-2 gap-2 lg:grid-cols-[repeat(auto-fit,minmax(210px,1fr))]">
+    <div className="relative">
+      <div className="absolute -top-5 right-0">
+        <TilesToggle compact={false} onToggle={toggle} />
+      </div>
+    <div className="grid grid-cols-2 gap-3 lg:grid-cols-[repeat(auto-fit,minmax(210px,1fr))]">
       {TILES.map((tile, i) => {
         const active = canonical(tile.query) === current || (tile.key === "mine" && current === "");
         const value = data?.metrics[tile.key];
@@ -434,7 +504,89 @@ function MetricTiles({ data, params, apply, onSms }: { data: TicketList | undefi
           </Fragment>
         );
       })}
+      {buttons.map((b) => (
+        <SavedFilterTile key={b.id} b={b} active={canonical(b.query) === current} onApply={() => apply(b.query)} onUnpin={() => unpin.mutate(b.id)} />
+      ))}
     </div>
+    </div>
+  );
+}
+
+/** Small / large buttons. */
+function TilesToggle({ compact, onToggle }: { compact: boolean; onToggle: () => void }) {
+  const { t } = useTranslation();
+  return (
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <button type="button" onClick={onToggle} className="flex h-6 items-center gap-1 rounded-md px-1.5 text-[11px] text-muted-foreground hover:bg-accent/50 hover:text-foreground" aria-label={compact ? t("tickets.tiles.expand") : t("tickets.tiles.compact")}>
+          {compact ? <ChevronsDown className="size-3.5" /> : <ChevronsUp className="size-3.5" />}
+          <span className="hidden sm:inline">{compact ? t("tickets.tiles.expand") : t("tickets.tiles.compact")}</span>
+        </button>
+      </TooltipTrigger>
+      <TooltipContent>{compact ? t("tickets.tiles.expandHint") : t("tickets.tiles.compactHint")}</TooltipContent>
+    </Tooltip>
+  );
+}
+
+/** A saved filter shown as a button: its name and how many tickets it shows. */
+function SavedFilterTile({ b, active, compact, onApply, onUnpin }: { b: NonNullable<TicketList["buttons"]>[number]; active: boolean; compact?: boolean; onApply: () => void; onUnpin: () => void }) {
+  const { t } = useTranslation();
+  const unpin = (
+    <span
+      role="button"
+      tabIndex={0}
+      aria-label={t("tickets.tiles.unpin")}
+      title={t("tickets.tiles.unpin")}
+      onClick={(e) => {
+        e.stopPropagation();
+        onUnpin();
+      }}
+      onKeyDown={(e) => {
+        if (e.key === "Enter") {
+          e.stopPropagation();
+          onUnpin();
+        }
+      }}
+      className="rounded p-0.5 text-muted-foreground opacity-0 hover:text-foreground group-hover:opacity-100 group-focus-visible:opacity-100"
+    >
+      <PinOff className="size-3.5" />
+    </span>
+  );
+  if (compact) {
+    return (
+      <button
+        type="button"
+        onClick={onApply}
+        className={cn("glass group flex h-9 items-center gap-2 rounded-xl border px-3 text-left transition-colors hover:border-[color:var(--gold)]/40", active && "border-[color:var(--gold)]/60 bg-[color:var(--gold)]/[0.06]")}
+      >
+        <Bookmark className="size-4 text-violet-300" />
+        <span className="max-w-48 truncate text-xs font-medium">{b.name}</span>
+        <span className={cn("font-mono text-sm font-semibold tabular-nums", b.count ? "text-foreground" : "text-muted-foreground/50")}>{b.count}</span>
+        {unpin}
+      </button>
+    );
+  }
+  return (
+    <button
+      type="button"
+      onClick={onApply}
+      className={cn(
+        "glass group relative flex items-center gap-3.5 overflow-hidden rounded-2xl border px-4 py-3.5 text-left transition-all hover:border-[color:var(--gold)]/40",
+        active && "border-[color:var(--gold)]/60 bg-[color:var(--gold)]/[0.05]",
+      )}
+    >
+      <span className="flex size-10 shrink-0 items-center justify-center rounded-xl border bg-background/60 text-violet-300">
+        <Bookmark className="size-5" />
+      </span>
+      <span className="min-w-0 flex-1">
+        <span className="block truncate text-sm font-semibold">{b.name}</span>
+        <span className="mt-0.5 block truncate text-[11px] text-muted-foreground">{t("tickets.tiles.myFilter")}</span>
+      </span>
+      <span className="absolute right-2 top-2">{unpin}</span>
+      <span className={cn("font-mono text-3xl font-semibold tabular-nums", b.count ? "text-foreground" : "text-muted-foreground/50")}>
+        <CountUp value={b.count} />
+      </span>
+    </button>
   );
 }
 
@@ -460,7 +612,11 @@ function ViewMenu({ view, counts, params, apply }: { view: View; counts?: Ticket
   const activeSaved = saved.find((s) => canonical(s.query) === currentQuery);
   const remove = useMutation({
     mutationFn: (id: string) => api.del(`/tickets/filters/${id}`),
-    onSuccess: () => void qc.invalidateQueries({ queryKey: ["tickets", "filters"] }),
+    onSuccess: () => void qc.invalidateQueries({ queryKey: ["tickets"] }),
+  });
+  const pin = useMutation({
+    mutationFn: (s: Saved) => api.patch(`/tickets/filters/${s.id}`, { pinned: !s.pinned }),
+    onSuccess: () => void qc.invalidateQueries({ queryKey: ["tickets"] }),
   });
   const Icon = activeSaved ? Bookmark : VIEW_ICON[view];
 
@@ -498,6 +654,19 @@ function ViewMenu({ view, counts, params, apply }: { view: View; counts?: Ticket
               {activeSaved?.id === s.id && <Check className="size-4 text-primary" />}
               <button
                 type="button"
+                aria-label={s.pinned ? t("tickets.tiles.unpin") : t("tickets.tiles.pin")}
+                title={s.pinned ? t("tickets.tiles.unpin") : t("tickets.tiles.pin")}
+                onClick={(e) => {
+                  e.preventDefault();
+                  e.stopPropagation();
+                  pin.mutate(s);
+                }}
+                className={cn("rounded p-0.5 hover:text-foreground", s.pinned ? "text-primary" : "text-muted-foreground opacity-0 group-hover:opacity-100 group-focus:opacity-100")}
+              >
+                {s.pinned ? <Pin className="size-3.5 fill-current" /> : <Pin className="size-3.5" />}
+              </button>
+              <button
+                type="button"
                 aria-label={t("common.delete")}
                 onClick={(e) => {
                   e.preventDefault();
@@ -525,13 +694,17 @@ function SaveFilterDialog({ open, onClose, query, onSaved }: { open: boolean; on
   const { t } = useTranslation();
   const qc = useQueryClient();
   const [name, setName] = useState("");
+  const [asButton, setAsButton] = useState(true);
   useEffect(() => {
-    if (open) setName("");
+    if (open) {
+      setName("");
+      setAsButton(true);
+    }
   }, [open]);
   const save = useMutation({
-    mutationFn: () => api.post<Saved>("/tickets/filters", { name, query }),
+    mutationFn: () => api.post<Saved>("/tickets/filters", { name, query, pinned: asButton }),
     onSuccess: (s) => {
-      void qc.invalidateQueries({ queryKey: ["tickets", "filters"] });
+      void qc.invalidateQueries({ queryKey: ["tickets"] });
       toast.success(t("tickets.filterSaved", { name: s.name }));
       onSaved(s);
       onClose();
@@ -554,6 +727,13 @@ function SaveFilterDialog({ open, onClose, query, onSaved }: { open: boolean; on
           }}
         >
           <Input autoFocus required maxLength={60} value={name} onChange={(e) => setName(e.target.value)} placeholder={t("tickets.filterNamePlaceholder")} />
+          <label className="flex items-center justify-between gap-3 text-sm">
+            <span>
+              {t("tickets.tiles.asButton")}
+              <span className="block text-xs text-muted-foreground">{t("tickets.tiles.asButtonHint")}</span>
+            </span>
+            <Switch checked={asButton} onCheckedChange={setAsButton} />
+          </label>
           <div className="flex justify-end gap-2">
             <Button type="button" variant="ghost" onClick={onClose}>
               {t("common.cancel")}

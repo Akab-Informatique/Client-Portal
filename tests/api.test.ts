@@ -1003,8 +1003,19 @@ describe("tickets: metrics and saved filters", () => {
     expect(saved.json.query).toBe("view=all&priority=critical&queue=R%C3%A9seau");
     expect((await tech.get("/api/tickets/filters")).json.map((f: any) => f.name)).toEqual(["Critiques réseau"]);
 
+    // a saved filter as a button above the list: its count is the list it opens
+    expect((await tech.get("/api/tickets")).json.buttons).toEqual([]);
+    expect((await tech.patch(`/api/tickets/filters/${saved.json.id}`, { pinned: true })).json).toMatchObject({ pinned: true });
+    const button = (await tech.get("/api/tickets")).json.buttons[0];
+    expect(button).toMatchObject({ id: saved.json.id, name: "Critiques réseau", query: saved.json.query });
+    expect(button.count).toBe((await tech.get(`/api/tickets?${saved.json.query}`)).json.items.length);
+    const quick = await tech.post("/api/tickets/filters", { name: "Non assignés critiques", query: "view=unassigned&priority=critical", pinned: true });
+    expect((await tech.get("/api/tickets")).json.buttons.map((b: any) => b.name)).toEqual(["Critiques réseau", "Non assignés critiques"]);
+    await tech.del(`/api/tickets/filters/${quick.json.id}`);
+
     const admin = await signIn("admin@akab.local");
     expect((await admin.get("/api/tickets/filters")).json).toEqual([]);
+    expect((await admin.patch(`/api/tickets/filters/${saved.json.id}`, { pinned: false })).status).toBe(404); // not theirs
     await admin.del(`/api/tickets/filters/${saved.json.id}`); // not theirs: no effect
     expect((await tech.get("/api/tickets/filters")).json).toHaveLength(1);
     await tech.del(`/api/tickets/filters/${saved.json.id}`);
