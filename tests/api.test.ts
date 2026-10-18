@@ -2786,3 +2786,107 @@ describe("crm: the portal's own copy of the clients", () => {
     expect((await admin.get(`/api/crm/clients/${late.id}/invoices?children=1`)).json.items.length).toBe(20);
   });
 });
+
+describe("billing: settings, chart of accounts, QuickBooks, Stripe, payments", () => {
+  const sessions = new Map<string, Agent>();
+  const session = async (email: string) => {
+    resetRateLimit("login:ip:unknown");
+    return sessions.get(email) ?? sessions.set(email, await signIn(email)).get(email)!;
+  };
+  afterAll(() => vi.unstubAllGlobals());
+
+  it("numbering, taxes and the chart of accounts (admins only)", async () => {
+    const tech = await session("tech@akab.local");
+    const admin = await session("admin@akab.local");
+    expect((await tech.get("/api/billing/settings")).status).toBe(403);
+    expect((await admin.get("/api/billing/settings")).json).toMatchObject({ preview: "F01001", taxes: { gstRate: 5, qstRate: 9.975 } });
+    const s = await admin.put("/api/billing/settings", { numbering: { prefix: "AK-", next: 42, digits: 4 }, taxes: { gstNumber: "123456789 RT0001" } });
+    expect(s.json).toMatchObject({ preview: "AK-0042", taxes: { gstNumber: "123456789 RT0001", qstRate: 9.975 } });
+    expect((await admin.put("/api/billing/settings", { numbering: { prefix: "A B" } })).status).toBe(400);
+
+    // a starter chart the first time, with the default accounts pointed at it
+    const ledger = (await admin.get("/api/billing/ledger")).json;
+    expect(ledger.find((x: any) => x.number === "1200")).toMatchObject({ type: "asset" });
+    const settings = (await admin.get("/api/billing/settings")).json;
+    expect(settings.accounts.receivable).toBe(ledger.find((x: any) => x.number === "1200").id);
+    expect((await admin.post("/api/billing/ledger", { number: "1200", name: "Doublon", type: "asset" })).json.error).toBe("billing_account_exists");
+    const added = await admin.post("/api/billing/ledger", { number: "4300", name: "Revenus — projets", type: "revenue" });
+    expect(added.status).toBe(201);
+    expect((await admin.patch(`/api/billing/ledger/${settings.accounts.receivable}`, { active: false })).json.error).toBe("billing_account_in_use");
+    expect((await admin.patch(`/api/billing/ledger/${added.json.id}`, { active: false })).json.active).toBe(false);
+    expect((await admin.put("/api/billing/settings", { accounts: { labour: crypto.randomUUID() } })).json.error).toBe("billing_unknown_account");
+  });
+
+  it("Stripe keys stay sealed; test and live are not mixed", async () => {
+    const admin = await session("admin@akab.local");
+    expect((await admin.put("/api/billing/stripe", { enabled: true })).json.error).toBe("stripe_incomplete");
+    expect((await admin.put("/api/billing/stripe", { secretKey: "sk_test_abc123", publishableKey: "pk_live_xyz" })).json.error).toBe("stripe_mode_mismatch");
+    const s = await admin.put("/api/billing/stripe", { secretKey: "sk_test_abc123", publishableKey: "pk_test_xyz", webhookSecret: "whsec_789", enabled: true });
+    expect(s.json).toMatchObject({ enabled: true, hasSecretKey: true, hasWebhookSecret: true, mode: "test" });
+    expect(JSON.stringify(s.json)).not.toContain("sk_test_abc123");
+    const [row] = await db().select().from(schema.integrations).where(eq(schema.integrations.provider, "stripe"));
+    expect(row.secret).not.toContain("sk_test");
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: unknown, init: RequestInit = {}) => {
+        expect(String(url)).toBe("https://api.stripe.com/v1/balance");
+        return new Response(JSON.stringify({ object: "balance" }), { status: (init.headers as any).authorization === "Bearer sk_test_abc123" ? 200 : 401 });
+      }),
+    );
+    expect((await admin.post("/api/billing/stripe/test")).json).toEqual({ ok: true, mode: "test" });
+    vi.unstubAllGlobals();
+  });
+
+  it("QuickBooks: connects with the Intuit sign-in, keeps the token sealed", async () => {
+    const admin = await session("admin@akab.local");
+    expect((await admin.post("/api/billing/quickbooks/connect")).json.error).toBe("quickbooks_incomplete");
+    const q = await admin.put("/api/billing/quickbooks", { clientId: "ABqb", clientSecret: "qb-secret", environment: "sandbox" });
+    expect(q.json).toMatchObject({ clientId: "ABqb", hasSecret: true, connected: false, redirectUri: "http://localhost/api/billing/quickbooks/callback" });
+    const url = new URL((await admin.post("/api/billing/quickbooks/connect")).json.url);
+    expect(url.origin + url.pathname).toBe("https://appcenter.intuit.com/connect/oauth2");
+    expect(url.searchParams.get("scope")).toBe("com.intuit.quickbooks.accounting");
+    const state = url.searchParams.get("state")!;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (u: unknown) => {
+        const s = String(u);
+        if (s.startsWith("https://oauth.platform.intuit.com/")) return new Response(JSON.stringify({ access_token: "qb-access", refresh_token: "qb-refresh-1" }), { status: 200 });
+        if (s.includes("/v3/company/9130/companyinfo/9130")) return new Response(JSON.stringify({ CompanyInfo: { CompanyName: "AKAB Informatique inc." } }), { status: 200 });
+        return new Response("{}", { status: 500 });
+      }),
+    );
+    // someone else cannot use the answer
+    const tech = await session("tech@akab.local");
+    expect((await tech.get(`/api/billing/quickbooks/callback?state=${state}&code=c1&realmId=9130`)).status).toBe(403);
+    const back = await admin.get(`/api/billing/quickbooks/callback?state=${state}&code=c1&realmId=9130`);
+    expect(back.location).toBe("/?admin=billing&tab=quickbooks&quickbooks=connected");
+    expect((await admin.get(`/api/billing/quickbooks/callback?state=${state}&code=c1&realmId=9130`)).location).toContain("quickbooks=error");
+    expect((await admin.get("/api/billing/quickbooks")).json).toMatchObject({ connected: true, realmId: "9130", companyName: "AKAB Informatique inc." });
+    expect((await admin.post("/api/billing/quickbooks/test")).json).toMatchObject({ ok: true });
+    const [row] = await db().select().from(schema.integrations).where(eq(schema.integrations.provider, "quickbooks"));
+    expect(row.secret).not.toContain("qb-refresh");
+    vi.unstubAllGlobals();
+    expect((await admin.del("/api/billing/quickbooks/connection")).json).toMatchObject({ connected: false });
+  });
+
+  it("partial payments on an invoice", async () => {
+    const tech = await session("tech@akab.local");
+    const admin = await session("admin@akab.local");
+    const client = (await admin.get("/api/crm/clients")).json.find((c: any) => c.autotaskId === 303);
+    const inv = (await admin.get(`/api/crm/clients/${client.id}/invoices`)).json.items.find((v: any) => v.status === "due" || v.status === "overdue");
+    const half = Math.round(inv.totalCents / 2);
+    const pay = { amountCents: half, paidOn: "2026-10-15", method: "cheque", reference: "Chèque 1043", note: "" };
+    expect((await tech.post(`/api/crm/invoices/${inv.id}/payments`, pay)).status).toBe(403);
+    expect((await admin.post(`/api/crm/invoices/${inv.id}/payments`, pay)).status).toBe(201);
+    let v = (await admin.get(`/api/crm/clients/${client.id}/invoices`)).json.items.find((x: any) => x.id === inv.id);
+    expect(v).toMatchObject({ status: "partial", paidCents: half, balanceCents: inv.totalCents - half, payments: [{ amountCents: half, method: "cheque", reference: "Chèque 1043", source: "portal" }] });
+    // never more than the balance
+    expect((await admin.post(`/api/crm/invoices/${inv.id}/payments`, { ...pay, amountCents: inv.totalCents })).json.error).toBe("payment_too_much");
+    expect((await admin.post(`/api/crm/invoices/${inv.id}/payments`, { ...pay, amountCents: inv.totalCents - half, method: "transfer" })).status).toBe(201);
+    v = (await admin.get(`/api/crm/clients/${client.id}/invoices`)).json.items.find((x: any) => x.id === inv.id);
+    expect(v).toMatchObject({ status: "paid", balanceCents: 0, paidOn: "2026-10-15" });
+    // a payment can be removed (the invoice is partly paid again)
+    expect((await admin.del(`/api/crm/invoices/${inv.id}/payments/${v.payments[1].id}`)).status).toBe(200);
+    expect((await admin.get(`/api/crm/clients/${client.id}/invoices`)).json.items.find((x: any) => x.id === inv.id).status).toBe("partial");
+  });
+});

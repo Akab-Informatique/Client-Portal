@@ -108,7 +108,14 @@ export const MODULES = [
     key: "accounting",
     audience: "staff",
     label: { fr: "Comptabilité", en: "Accounting" },
-    permissions: [{ key: "accounting.view", label: { fr: "Voir la comptabilité", en: "View accounting" }, description: { fr: "Factures et soumissions", en: "Invoices and quotes" } }],
+    permissions: [
+      { key: "accounting.view", label: { fr: "Voir la comptabilité", en: "View accounting" }, description: { fr: "Factures et soumissions", en: "Invoices and quotes" } },
+      {
+        key: "accounting.manage",
+        label: { fr: "Gérer la facturation", en: "Manage invoicing" },
+        description: { fr: "Enregistrer les paiements, approuver et publier (main-d'œuvre, frais, contrats, feuilles de temps, dépenses)", en: "Record payments, approve and post (labour, charges, contracts, timesheets, expenses)" },
+      },
+    ],
   },
   {
     key: "messages",
@@ -247,6 +254,14 @@ export const MODULES = [
         label: { fr: "Gérer les clients et leurs usagers", en: "Manage clients and their users" },
       },
       {
+        key: "admin.billing",
+        label: { fr: "Configurer la facturation", en: "Configure invoicing" },
+        description: {
+          fr: "Numérotation, taxes, modèle de facture, plan comptable (QuickBooks et Stripe : administrateurs principaux)",
+          en: "Numbering, taxes, invoice template, chart of accounts (QuickBooks and Stripe: master administrators)",
+        },
+      },
+      {
         key: "admin.roles",
         label: { fr: "Gérer les rôles et les accès", en: "Manage roles and access" },
       },
@@ -302,7 +317,7 @@ export function isPermissionKey(v: unknown): v is PermissionKey {
   return typeof v === "string" && (ALL_PERMISSIONS as readonly string[]).includes(v);
 }
 
-export const ADMIN_PERMISSIONS = ["admin.staff", "admin.clients", "admin.roles", "admin.integrations", "admin.email", "admin.o365"] as const satisfies readonly PermissionKey[];
+export const ADMIN_PERMISSIONS = ["admin.staff", "admin.clients", "admin.billing", "admin.roles", "admin.integrations", "admin.email", "admin.o365"] as const satisfies readonly PermissionKey[];
 
 /** The master administrator role: every right, locked; only its holders give it or act on its holders. */
 export const MASTER_ROLE = "administrator";

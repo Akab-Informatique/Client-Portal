@@ -266,31 +266,89 @@ export const crmRoutes = new Hono<AppEnv>()
     const d = db();
     const names = new Map((await d.select({ id: schema.clients.id, name: schema.clients.name }).from(schema.clients).where(inArray(schema.clients.id, ids))).map((r) => [r.id, r.name]));
     const rows = await d.select().from(schema.clientInvoices).where(inArray(schema.clientInvoices.clientId, ids)).orderBy(desc(schema.clientInvoices.issuedOn), desc(schema.clientInvoices.number));
+    const payments = rows.length
+      ? await d
+          .select({ p: schema.invoicePayments, by: schema.users.name })
+          .from(schema.invoicePayments)
+          .leftJoin(schema.users, eq(schema.users.id, schema.invoicePayments.createdBy))
+          .where(inArray(schema.invoicePayments.invoiceId, rows.map((r) => r.id)))
+          .orderBy(asc(schema.invoicePayments.paidOn), asc(schema.invoicePayments.createdAt))
+      : [];
     const today = new Date().toLocaleDateString("en-CA", { timeZone: "America/Toronto" });
     const yearAgo = new Date(Date.now() - 365 * 86_400_000).toISOString().slice(0, 10);
-    const statusOf = (v: (typeof rows)[number]) => (v.voided ? "voided" : v.paidOn ? "paid" : v.dueOn && v.dueOn < today ? "overdue" : "due");
-    const items = rows.map((v) => ({
-      id: v.id,
-      number: v.number,
-      company: names.get(v.clientId) ?? "",
-      issuedOn: v.issuedOn,
-      dueOn: v.dueOn,
-      totalCents: v.totalCents,
-      taxCents: v.taxCents,
-      paidOn: v.paidOn,
-      status: statusOf(v),
-      daysLate: statusOf(v) === "overdue" ? Math.round((Date.parse(today) - Date.parse(v.dueOn!)) / 86_400_000) : 0,
-    }));
-    const sum = (f: (x: (typeof items)[number]) => boolean) => items.filter(f).reduce((s, x) => s + x.totalCents, 0);
+    const items = rows.map((v) => {
+      const mine = payments.filter((x) => x.p.invoiceId === v.id);
+      const received = mine.reduce((s, x) => s + x.p.amountCents, 0);
+      // marked paid in the source with no payment here: paid in full
+      const paidCents = v.paidOn && received < v.totalCents ? v.totalCents : received;
+      const balanceCents = v.voided ? 0 : Math.max(0, v.totalCents - paidCents);
+      const late = !v.voided && balanceCents > 0 && Boolean(v.dueOn && v.dueOn < today);
+      const status = v.voided ? "voided" : balanceCents === 0 ? "paid" : paidCents > 0 ? "partial" : late ? "overdue" : "due";
+      return {
+        id: v.id,
+        number: v.number,
+        company: names.get(v.clientId) ?? "",
+        issuedOn: v.issuedOn,
+        dueOn: v.dueOn,
+        totalCents: v.totalCents,
+        taxCents: v.taxCents,
+        paidCents,
+        balanceCents,
+        paidOn: v.paidOn ?? (balanceCents === 0 && mine.length ? mine[mine.length - 1].p.paidOn : null),
+        status,
+        late,
+        daysLate: late ? Math.round((Date.parse(today) - Date.parse(v.dueOn!)) / 86_400_000) : 0,
+        payments: mine.map((x) => ({ id: x.p.id, amountCents: x.p.amountCents, paidOn: x.p.paidOn, method: x.p.method, reference: x.p.reference, note: x.p.note, source: x.p.source, by: x.by })),
+      };
+    });
+    const sum = (f: (x: (typeof items)[number]) => boolean, k: "balanceCents" | "paidCents") => items.filter(f).reduce((s, x) => s + x[k], 0);
     return c.json({
       summary: {
-        dueCents: sum((x) => x.status === "due" || x.status === "overdue"),
-        overdueCents: sum((x) => x.status === "overdue"),
-        overdueCount: items.filter((x) => x.status === "overdue").length,
-        paidYearCents: sum((x) => x.status === "paid" && x.issuedOn >= yearAgo),
+        dueCents: sum((x) => x.balanceCents > 0, "balanceCents"),
+        overdueCents: sum((x) => x.late, "balanceCents"),
+        overdueCount: items.filter((x) => x.late).length,
+        partialCount: items.filter((x) => x.status === "partial").length,
+        paidYearCents: sum((x) => x.issuedOn >= yearAgo, "paidCents"),
       },
       items,
     });
+  })
+
+  /** A payment received (all or part of the balance): accounting.manage. */
+  .post("/invoices/:iid/payments", requirePermission("accounting.manage"), async (c) => {
+    const a = auth(c);
+    const [inv] = await db().select().from(schema.clientInvoices).where(eq(schema.clientInvoices.id, zUuid.parse(c.req.param("iid"))));
+    if (!inv) throw new HTTPException(404, { message: "not_found" });
+    if (inv.voided) throw new HTTPException(409, { message: "invoice_voided" });
+    const p = await body(
+      c,
+      z.object({
+        amountCents: z.number().int().min(1).max(100_000_000),
+        paidOn: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+        method: z.enum(["cheque", "transfer", "card", "cash", "stripe", "other"]),
+        reference: zText(100),
+        note: zText(500),
+      }),
+    );
+    const received = (await db().select({ a: schema.invoicePayments.amountCents }).from(schema.invoicePayments).where(eq(schema.invoicePayments.invoiceId, inv.id))).reduce((s, x) => s + x.a, 0);
+    // never more than what is left to pay
+    if (received + p.amountCents > inv.totalCents) throw new HTTPException(400, { message: "payment_too_much" });
+    const [row] = await db()
+      .insert(schema.invoicePayments)
+      .values({ invoiceId: inv.id, amountCents: p.amountCents, paidOn: p.paidOn, method: p.method, reference: p.reference ?? null, note: p.note ?? null, createdBy: a.user.id })
+      .returning();
+    await audit(a.user.id, "billing.payment_recorded", inv.id, { number: inv.number, amountCents: p.amountCents, method: p.method });
+    return c.json(row, 201);
+  })
+  .delete("/invoices/:iid/payments/:pid", requirePermission("accounting.manage"), async (c) => {
+    const a = auth(c);
+    const [row] = await db()
+      .delete(schema.invoicePayments)
+      .where(and(eq(schema.invoicePayments.id, zUuid.parse(c.req.param("pid"))), eq(schema.invoicePayments.invoiceId, zUuid.parse(c.req.param("iid"))), eq(schema.invoicePayments.source, "portal")))
+      .returning();
+    if (!row) throw new HTTPException(404, { message: "not_found" });
+    await audit(a.user.id, "billing.payment_removed", row.invoiceId, { amountCents: row.amountCents });
+    return c.json({ ok: true });
   })
 
   // ── tickets of the client (and of its child companies, on demand)

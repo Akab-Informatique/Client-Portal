@@ -136,6 +136,47 @@ export const clientInvoices = pgTable(
   (t) => [uniqueIndex("client_invoices_autotask_idx").on(t.autotaskId), index("client_invoices_client_idx").on(t.clientId, t.issuedOn)],
 );
 
+/** A payment received on an invoice (several make a partial payment). Money in cents. */
+export const invoicePayments = pgTable(
+  "invoice_payments",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    invoiceId: uuid("invoice_id")
+      .notNull()
+      .references(() => clientInvoices.id, { onDelete: "cascade" }),
+    amountCents: bigint("amount_cents", { mode: "number" }).notNull(),
+    /** YYYY-MM-DD */
+    paidOn: text("paid_on").notNull(),
+    /** cheque | transfer | card | cash | stripe | other */
+    method: text("method").notNull().default("other"),
+    reference: text("reference"),
+    note: text("note"),
+    /** Where it was recorded: portal | quickbooks | stripe */
+    source: text("source").notNull().default("portal"),
+    createdBy: uuid("created_by").references(() => users.id, { onDelete: "set null" }),
+    createdAt: created(),
+  },
+  (t) => [index("invoice_payments_invoice_idx").on(t.invoiceId)],
+);
+
+/** The chart of accounts (plan comptable), for invoices and the QuickBooks sync. */
+export const ledgerAccounts = pgTable(
+  "ledger_accounts",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    number: text("number").notNull(),
+    name: text("name").notNull(),
+    /** asset | liability | equity | revenue | expense */
+    type: text("type").notNull(),
+    active: boolean("active").notNull().default(true),
+    /** The matching QuickBooks account, once linked */
+    quickbooksId: text("quickbooks_id"),
+    createdAt: created(),
+    updatedAt: updated(),
+  },
+  (t) => [uniqueIndex("ledger_accounts_number_idx").on(t.number)],
+);
+
 /** Where a sync stands (e.g. "autotask.crm"): last run, result, counts. */
 export const syncState = pgTable("sync_state", {
   key: text("key").primaryKey(),

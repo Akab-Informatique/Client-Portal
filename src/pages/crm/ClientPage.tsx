@@ -38,11 +38,11 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Switch } from "@/components/ui/switch";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Textarea } from "@/components/ui/textarea";
-import { api } from "@/lib/api";
+import { api, ApiError } from "@/lib/api";
 import { useCan } from "@/lib/session";
 import { cn } from "@/lib/utils";
 import { PRIORITY_STYLE, STATUS_STYLE, shortDate, ticketErrorText } from "@/pages/tickets/shared";
-import { crmErrorText, money, useCrmClients, type CrmInvoices, type InvoiceStatus, type CrmClient, type CrmContact, type CrmContract, type CrmDetail, type CrmTicket, type InvoiceSettings } from "./shared";
+import { crmErrorText, money, useCrmClients, type CrmInvoice, type CrmInvoices, type InvoiceStatus, type CrmClient, type CrmContact, type CrmContract, type CrmDetail, type CrmTicket, type InvoiceSettings } from "./shared";
 
 const TABS = ["info", "tickets", "invoices", "contacts", "contracts", "invoice"] as const;
 type Tab = (typeof TABS)[number];
@@ -412,31 +412,35 @@ function TicketsTab({ client }: { client: CrmDetail }) {
 type InvoiceFilter = "all" | "unpaid" | "overdue" | "paid";
 const INVOICE_STYLE: Record<InvoiceStatus, string> = {
   paid: "border-emerald-500/40 bg-emerald-500/10 text-emerald-300",
+  partial: "border-amber-500/40 bg-amber-500/10 text-amber-300",
   due: "border-sky-500/40 bg-sky-500/10 text-sky-300",
   overdue: "border-red-500/50 bg-red-500/15 text-red-300",
   voided: "border-slate-500/40 bg-slate-500/10 text-slate-400",
 };
-const INVOICE_ICON = { paid: CircleCheck, due: Clock, overdue: AlertTriangle, voided: FileX } as const;
+const INVOICE_ICON = { paid: CircleCheck, partial: CircleDashed, due: Clock, overdue: AlertTriangle, voided: FileX } as const;
+const inFilter = (v: CrmInvoice, f: InvoiceFilter) => (f === "all" ? true : f === "unpaid" ? v.balanceCents > 0 : f === "overdue" ? v.late : v.status === "paid");
 
 function InvoicesTab({ client }: { client: CrmDetail }) {
   const { t, i18n } = useTranslation();
   const [withChildren, setWithChildren] = useState(false);
   const [filter, setFilter] = useState<InvoiceFilter>("all");
+  const [open, setOpen] = useState<string | null>(null);
   const { data, isLoading } = useQuery({
     queryKey: ["crm", "client", client.id, "invoices", withChildren],
     queryFn: () => api.get<CrmInvoices>(`/crm/clients/${client.id}/invoices${withChildren ? "?children=1" : ""}`),
   });
   const m = (c: number) => money(c, i18n.language);
-  const items = (data?.items ?? []).filter((v) =>
-    filter === "all" ? true : filter === "unpaid" ? v.status === "due" || v.status === "overdue" : filter === "overdue" ? v.status === "overdue" : v.status === "paid",
-  );
-  const count = (f: InvoiceFilter) =>
-    (data?.items ?? []).filter((v) => (f === "all" ? true : f === "unpaid" ? v.status === "due" || v.status === "overdue" : f === "overdue" ? v.status === "overdue" : v.status === "paid")).length;
+  const items = (data?.items ?? []).filter((v) => inFilter(v, filter));
   return (
     <div className="space-y-4">
       {data && (
         <div className="grid gap-3 sm:grid-cols-3">
-          <Stat label={t("crm.invoices.balance")} value={m(data.summary.dueCents)} icon={<CircleDashed className="size-4" />} />
+          <Stat
+            label={t("crm.invoices.balance")}
+            value={m(data.summary.dueCents)}
+            hint={data.summary.partialCount ? t("crm.invoices.partialCount", { count: data.summary.partialCount }) : undefined}
+            icon={<CircleDashed className="size-4" />}
+          />
           <Stat
             label={t("crm.invoices.overdue")}
             value={m(data.summary.overdueCents)}
@@ -471,7 +475,7 @@ function InvoicesTab({ client }: { client: CrmDetail }) {
               )}
             >
               {t(`crm.invoices.filter.${f}`)}
-              <span className="font-mono text-[10px] text-muted-foreground">{count(f)}</span>
+              <span className="font-mono text-[10px] text-muted-foreground">{(data?.items ?? []).filter((v) => inFilter(v, f)).length}</span>
             </button>
           ))}
         </div>
@@ -479,37 +483,48 @@ function InvoicesTab({ client }: { client: CrmDetail }) {
         {data && items.length === 0 && <p className="py-6 text-center text-sm text-muted-foreground">{t("crm.invoices.none")}</p>}
         {items.length > 0 && (
           <div className="overflow-hidden rounded-xl border">
-            <div className="hidden grid-cols-[minmax(0,1.2fr)_110px_minmax(0,1.4fr)_130px_minmax(0,1.3fr)] gap-3 border-b bg-background/30 px-3 py-2 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground md:grid">
+            <div className="hidden grid-cols-[minmax(0,1.1fr)_100px_minmax(0,1.3fr)_120px_120px_minmax(0,1.3fr)] gap-3 border-b bg-background/30 px-3 py-2 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground md:grid">
               <span>{t("crm.invoices.number")}</span>
               <span>{t("crm.invoices.issued")}</span>
               <span>{t("crm.invoices.due")}</span>
               <span className="text-right">{t("crm.invoices.amount")}</span>
+              <span className="text-right">{t("crm.invoices.balanceCol")}</span>
               <span>{t("crm.invoices.status")}</span>
             </div>
             <ul className="divide-y divide-border/60">
               {items.map((v) => {
                 const Icon = INVOICE_ICON[v.status];
+                const expanded = open === v.id;
                 return (
-                  <li
-                    key={v.id}
-                    className={cn("grid grid-cols-2 gap-x-3 gap-y-1 px-3 py-2.5 text-sm md:grid-cols-[minmax(0,1.2fr)_110px_minmax(0,1.4fr)_130px_minmax(0,1.3fr)] md:items-center", v.status === "voided" && "opacity-60")}
-                  >
-                    <span className="min-w-0">
-                      <span className="block truncate font-mono text-xs">{v.number}</span>
-                      {withChildren && v.company !== client.name && <span className="block truncate text-[11px] text-muted-foreground">{v.company}</span>}
-                    </span>
-                    <span className="text-xs text-muted-foreground">{shortDate(v.issuedOn)}</span>
-                    <span className={cn("text-xs", v.status === "overdue" ? "font-medium text-red-300" : "text-muted-foreground")}>
-                      {v.dueOn ? shortDate(v.dueOn) : "—"}
-                      {v.status === "overdue" && <span className="ml-1.5">· {t("crm.invoices.late", { count: v.daysLate })}</span>}
-                    </span>
-                    <span className={cn("font-mono md:text-right", v.status === "voided" && "line-through")}>{m(v.totalCents)}</span>
-                    <span>
-                      <span className={cn("inline-flex items-center gap-1 rounded-md border px-1.5 py-0.5 text-[11px]", INVOICE_STYLE[v.status])}>
-                        <Icon className="size-3" />
-                        {v.status === "paid" && v.paidOn ? t("crm.invoices.paidOn", { date: shortDate(v.paidOn) }) : t(`crm.invoices.state.${v.status}`)}
+                  <li key={v.id} className={cn(v.status === "voided" && "opacity-60")}>
+                    <button
+                      type="button"
+                      onClick={() => setOpen(expanded ? null : v.id)}
+                      aria-expanded={expanded}
+                      className="grid w-full grid-cols-2 gap-x-3 gap-y-1 px-3 py-2.5 text-left text-sm transition-colors hover:bg-accent/30 md:grid-cols-[minmax(0,1.1fr)_100px_minmax(0,1.3fr)_120px_120px_minmax(0,1.3fr)] md:items-center"
+                    >
+                      <span className="flex min-w-0 items-center gap-1.5">
+                        <ChevronDown className={cn("size-3.5 shrink-0 text-muted-foreground transition-transform", !expanded && "-rotate-90")} />
+                        <span className="min-w-0">
+                          <span className="block truncate font-mono text-xs">{v.number}</span>
+                          {withChildren && v.company !== client.name && <span className="block truncate text-[11px] text-muted-foreground">{v.company}</span>}
+                        </span>
                       </span>
-                    </span>
+                      <span className="text-xs text-muted-foreground">{shortDate(v.issuedOn)}</span>
+                      <span className={cn("text-xs", v.late ? "font-medium text-red-300" : "text-muted-foreground")}>
+                        {v.dueOn ? shortDate(v.dueOn) : "—"}
+                        {v.late && <span className="ml-1.5">· {t("crm.invoices.late", { count: v.daysLate })}</span>}
+                      </span>
+                      <span className={cn("font-mono md:text-right", v.status === "voided" && "line-through")}>{m(v.totalCents)}</span>
+                      <span className={cn("font-mono md:text-right", v.balanceCents > 0 ? "text-foreground" : "text-muted-foreground")}>{v.status === "voided" ? "—" : m(v.balanceCents)}</span>
+                      <span>
+                        <span className={cn("inline-flex items-center gap-1 rounded-md border px-1.5 py-0.5 text-[11px]", INVOICE_STYLE[v.status])}>
+                          <Icon className="size-3" />
+                          {v.status === "paid" && v.paidOn ? t("crm.invoices.paidOn", { date: shortDate(v.paidOn) }) : t(`crm.invoices.state.${v.status}`)}
+                        </span>
+                      </span>
+                    </button>
+                    {expanded && <Payments invoice={v} clientId={client.id} />}
                   </li>
                 );
               })}
@@ -518,6 +533,91 @@ function InvoicesTab({ client }: { client: CrmDetail }) {
         )}
         <p className="text-[11px] text-muted-foreground">{t("crm.invoices.fromAutotask")}</p>
       </Card>
+    </div>
+  );
+}
+
+const METHODS = ["transfer", "cheque", "card", "cash", "stripe", "other"] as const;
+
+/** The payments of one invoice; a new one (all or part of the balance). */
+function Payments({ invoice: v, clientId }: { invoice: CrmInvoice; clientId: string }) {
+  const { t, i18n } = useTranslation();
+  const can = useCan();
+  const qc = useQueryClient();
+  const m = (c: number) => money(c, i18n.language);
+  const today = new Date().toLocaleDateString("en-CA");
+  const [f, setF] = useState({ amount: (v.balanceCents / 100).toFixed(2), paidOn: today, method: "transfer" as (typeof METHODS)[number], reference: "", note: "" });
+  // what is left to pay, once a payment is in
+  useEffect(() => setF((x) => ({ ...x, amount: (v.balanceCents / 100).toFixed(2), reference: "" })), [v.balanceCents]);
+  const refresh = () => void qc.invalidateQueries({ queryKey: ["crm", "client", clientId, "invoices"] });
+  const add = useMutation({
+    mutationFn: () => api.post(`/crm/invoices/${v.id}/payments`, { amountCents: Math.round(Number(f.amount.replace(",", ".")) * 100), paidOn: f.paidOn, method: f.method, reference: f.reference, note: f.note }),
+    onSuccess: () => {
+      toast.success(t("crm.invoices.payment.added"));
+      refresh();
+    },
+    onError: (e) => toast.error(e instanceof ApiError && e.code === "payment_too_much" ? t("crm.invoices.payment.tooMuch") : t("common.error")),
+  });
+  const remove = useMutation({ mutationFn: (pid: string) => api.del(`/crm/invoices/${v.id}/payments/${pid}`), onSuccess: refresh });
+  return (
+    <div className="space-y-3 border-t border-dashed bg-background/30 px-4 py-3">
+      {v.payments.length > 0 ? (
+        <ul className="space-y-1">
+          {v.payments.map((p) => (
+            <li key={p.id} className="flex flex-wrap items-center gap-x-3 gap-y-0.5 text-xs">
+              <CircleCheck className="size-3.5 text-emerald-400" />
+              <span className="font-mono">{m(p.amountCents)}</span>
+              <span className="text-muted-foreground">{shortDate(p.paidOn)}</span>
+              <span className="text-muted-foreground">{t(`crm.invoices.payment.methods.${p.method}`)}</span>
+              {p.reference && <span className="text-muted-foreground">· {p.reference}</span>}
+              {p.by && <span className="text-[11px] text-muted-foreground/70">· {p.by}</span>}
+              {can("accounting.manage") && p.source === "portal" && (
+                <button type="button" onClick={() => remove.mutate(p.id)} className="ml-auto rounded p-0.5 text-muted-foreground hover:text-destructive" aria-label={t("crm.invoices.payment.remove")} title={t("crm.invoices.payment.remove")}>
+                  <X className="size-3.5" />
+                </button>
+              )}
+            </li>
+          ))}
+        </ul>
+      ) : (
+        <p className="text-xs text-muted-foreground">{v.paidOn ? t("crm.invoices.payment.paidInSource", { date: shortDate(v.paidOn) }) : t("crm.invoices.payment.none")}</p>
+      )}
+      {can("accounting.manage") && v.balanceCents > 0 && v.status !== "voided" && (
+        <form
+          className="grid gap-2 sm:grid-cols-[120px_140px_140px_minmax(0,1fr)_auto] sm:items-end"
+          onSubmit={(e: FormEvent) => {
+            e.preventDefault();
+            add.mutate();
+          }}
+        >
+          <Field label={t("crm.invoices.payment.amount")}>
+            <Input required inputMode="decimal" value={f.amount} onChange={(e) => setF({ ...f, amount: e.target.value })} className="h-8 font-mono" />
+          </Field>
+          <Field label={t("crm.invoices.payment.date")}>
+            <Input required type="date" value={f.paidOn} onChange={(e) => setF({ ...f, paidOn: e.target.value })} className="h-8" />
+          </Field>
+          <Field label={t("crm.invoices.payment.method")}>
+            <Select value={f.method} onValueChange={(x) => setF({ ...f, method: x as (typeof METHODS)[number] })}>
+              <SelectTrigger className="h-8 w-full">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {METHODS.map((x) => (
+                  <SelectItem key={x} value={x}>
+                    {t(`crm.invoices.payment.methods.${x}`)}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </Field>
+          <Field label={t("crm.invoices.payment.reference")}>
+            <Input value={f.reference} maxLength={100} onChange={(e) => setF({ ...f, reference: e.target.value })} className="h-8" />
+          </Field>
+          <Button type="submit" size="sm" disabled={add.isPending} className="bg-grad-gold font-semibold text-[#1a1204]">
+            {add.isPending && <Loader2 className="size-3.5 animate-spin" />} {t("crm.invoices.payment.add")}
+          </Button>
+        </form>
+      )}
     </div>
   );
 }

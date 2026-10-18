@@ -239,6 +239,13 @@
       "when": 1792344695059,
       "tag": "0033_client_invoices",
       "breakpoints": true
+    },
+    {
+      "idx": 34,
+      "version": "7",
+      "when": 1792345344335,
+      "tag": "0034_billing",
+      "breakpoints": true
     }
   ]
 }

@@ -49,9 +49,25 @@ export type CrmContact = {
   title: string | null;
   active: boolean;
 };
-export type InvoiceStatus = "paid" | "due" | "overdue" | "voided";
-export type CrmInvoice = { id: string; number: string; company: string; issuedOn: string; dueOn: string | null; totalCents: number; taxCents: number; paidOn: string | null; status: InvoiceStatus; daysLate: number };
-export type CrmInvoices = { summary: { dueCents: number; overdueCents: number; overdueCount: number; paidYearCents: number }; items: CrmInvoice[] };
+export type InvoiceStatus = "paid" | "partial" | "due" | "overdue" | "voided";
+export type InvoicePayment = { id: string; amountCents: number; paidOn: string; method: string; reference: string | null; note: string | null; source: string; by: string | null };
+export type CrmInvoice = {
+  id: string;
+  number: string;
+  company: string;
+  issuedOn: string;
+  dueOn: string | null;
+  totalCents: number;
+  taxCents: number;
+  paidCents: number;
+  balanceCents: number;
+  paidOn: string | null;
+  status: InvoiceStatus;
+  late: boolean;
+  daysLate: number;
+  payments: InvoicePayment[];
+};
+export type CrmInvoices = { summary: { dueCents: number; overdueCents: number; overdueCount: number; partialCount: number; paidYearCents: number }; items: CrmInvoice[] };
 /** 1 234,56 $ */
 export const money = (cents: number, lang: string) => new Intl.NumberFormat(lang === "en" ? "en-CA" : "fr-CA", { style: "currency", currency: "CAD" }).format(cents / 100);
 
