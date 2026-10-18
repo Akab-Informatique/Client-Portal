@@ -1,4 +1,4 @@
-import { BookOpen, Building2, CalendarCheck, FileSignature, LayoutDashboard, Mail, Megaphone, MonitorSmartphone, Receipt, Store, Ticket, type LucideIcon } from "lucide-react";
+import { BarChart3, BookOpen, Building2, CalendarCheck, FileSignature, LayoutDashboard, Mail, Megaphone, MonitorSmartphone, Receipt, Store, Ticket, type LucideIcon } from "lucide-react";
 import type { PermissionKey } from "@shared/permissions";
 
 /**
@@ -13,7 +13,7 @@ export const NAV_SECTIONS = [
   { key: "command", labelKey: "nav.commandCenter" },
   { key: "crm", labelKey: "nav.crm" },
   { key: "accounting", labelKey: "nav.accounting" },
-  { key: "operations", labelKey: "nav.operations" },
+  { key: "management", labelKey: "nav.management" },
 ] as const;
 export type NavSection = (typeof NAV_SECTIONS)[number]["key"];
 
@@ -37,7 +37,8 @@ export const STAFF_MODULES: NavModule[] = [
   { key: "crm", path: "/crm", labelKey: "nav.crmClients", icon: Building2, section: "crm", permission: "crm.view" },
   { key: "invoices", path: "/accounting/invoices", labelKey: "nav.invoices", icon: Receipt, section: "accounting", permission: "accounting.view" },
   { key: "quotes", path: "/accounting/quotes", labelKey: "nav.quotes", icon: FileSignature, section: "accounting", permission: "accounting.view" },
-  { key: "store", path: "/store", labelKey: "nav.store", icon: Store, section: "operations", permission: "store.view" },
+  { key: "store", path: "/store", labelKey: "nav.store", icon: Store, section: "management", permission: "store.view" },
+  { key: "reports", path: "/reports", labelKey: "nav.reports", icon: BarChart3, section: "management", upcoming: true },
   { key: "meetings", path: "/meetings", labelKey: "nav.meetings", icon: CalendarCheck, section: "team", permission: "meetings.view" },
   { key: "devices", path: "/devices", labelKey: "nav.devices", icon: MonitorSmartphone, section: "command", upcoming: true },
   { key: "documentation", path: "/documentation", labelKey: "nav.documentation", icon: BookOpen, section: "command", upcoming: true },
