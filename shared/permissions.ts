@@ -93,7 +93,7 @@ export const MODULES = [
   {
     key: "crm",
     audience: "staff",
-    label: { fr: "CRM (clients)", en: "CRM (clients)" },
+    label: { fr: "Clients", en: "Clients" },
     permissions: [
       { key: "crm.view", label: { fr: "Voir les clients", en: "View clients" }, description: { fr: "Fiches, contacts, contrats et billets des clients", en: "Client records, contacts, contracts and tickets" } },
       {
@@ -107,7 +107,7 @@ export const MODULES = [
   {
     key: "accounting",
     audience: "staff",
-    label: { fr: "Comptabilité", en: "Accounting" },
+    label: { fr: "Factures, soumissions et approbation", en: "Invoices, quotes and approvals" },
     permissions: [
       { key: "accounting.view", label: { fr: "Voir la comptabilité", en: "View accounting" }, description: { fr: "Factures et soumissions", en: "Invoices and quotes" } },
       {
@@ -192,7 +192,7 @@ export const MODULES = [
   {
     key: "store",
     audience: "staff",
-    label: { fr: "Inventaire boutique", en: "Store inventory" },
+    label: { fr: "Inventaire", en: "Inventory" },
     permissions: [
       {
         key: "store.view",
@@ -302,6 +302,22 @@ export const MODULES = [
 ] as const satisfies readonly ModuleDef[];
 
 export type PermissionKey = (typeof MODULES)[number]["permissions"][number]["key"];
+export type ModuleKey = (typeof MODULES)[number]["key"];
+
+/**
+ * How rights are shown in Roles and access: the sidebar's sections, each
+ * with its pages (modules). A whole section can be given at once, or page by
+ * page, or right by right. Every module appears exactly once (tested).
+ */
+export const ACCESS_LAYOUT: { key: string; audience: Audience; label: Localized; modules: ModuleKey[] }[] = [
+  { key: "team", audience: "staff", label: { fr: "Équipe", en: "Team" }, modules: ["dashboard", "meetings"] },
+  { key: "tools", audience: "staff", label: { fr: "Mes outils", en: "My tools" }, modules: ["outlook"] },
+  { key: "command", audience: "staff", label: { fr: "Centre de commande", en: "Command center" }, modules: ["messages", "tickets", "sms"] },
+  { key: "management", audience: "staff", label: { fr: "Gestion", en: "Management" }, modules: ["crm", "clientview", "store"] },
+  { key: "accounting", audience: "staff", label: { fr: "Comptabilité", en: "Accounting" }, modules: ["accounting"] },
+  { key: "admin", audience: "staff", label: { fr: "Paramètres admin", en: "Admin settings" }, modules: ["admin"] },
+  { key: "portal", audience: "client", label: { fr: "Portail client", en: "Client portal" }, modules: ["board"] },
+];
 
 export const ALL_PERMISSIONS: readonly PermissionKey[] = MODULES.flatMap((m) =>
   m.permissions.map((p) => p.key as PermissionKey),

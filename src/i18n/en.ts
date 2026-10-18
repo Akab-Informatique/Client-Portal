@@ -1437,6 +1437,7 @@ const en: Dict = {
     },
     access: {
       fromRole: "From role",
+      wholeSection: "The whole {{name}} section",
       inherit: "Role",
       allow: "Grant",
       deny: "Remove",

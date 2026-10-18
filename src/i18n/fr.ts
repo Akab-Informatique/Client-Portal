@@ -1435,6 +1435,7 @@ const fr = {
     },
     access: {
       fromRole: "Hérité du rôle",
+      wholeSection: "Toute la section {{name}}",
       inherit: "Rôle",
       allow: "Accorder",
       deny: "Retirer",
