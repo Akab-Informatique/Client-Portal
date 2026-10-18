@@ -339,7 +339,7 @@ function Mailboxes({ onNavigate }: { onNavigate: () => void }) {
             </ul>
           )}
           <div className="flex flex-wrap gap-2">
-            {(s.canLinkAny || (s.signedIn && !s.accounts.some((a) => a.address === s.signedIn!.email))) && (
+            {(s.canLinkAny || s.signedIn) && (
               <Button type="button" size="sm" variant="outline" className="h-8 gap-1.5" onClick={() => setLinkOpen(true)}>
                 <Plus className="size-3.5" /> {t("outlook.linkMailbox")}
               </Button>

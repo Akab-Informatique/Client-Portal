@@ -78,7 +78,9 @@ Intégrations › Microsoft 365** (tenant ID, application ID, client secret).
    on the portal's Microsoft 365 page (`https://portail.akab.ca/api/microsoft/callback`).
 3. API permissions › Microsoft Graph:
    - **Delegated** (each technician signs in themselves, profile › Microsoft 365):
-     `User.Read`, `offline_access`, `Mail.ReadWrite`, `Mail.Send`, `Calendars.ReadWrite`.
+     `User.Read`, `offline_access`, `Mail.ReadWrite`, `Mail.Send`, `Mail.ReadWrite.Shared`, `Mail.Send.Shared`, `Calendars.ReadWrite`
+     (the two `.Shared` ones let a technician link a mailbox shared with them in Exchange, e.g. support@;
+     Microsoft refuses any mailbox they have no access to).
    - **Application** (organisation access, master administrators only: anyone's
      calendar, shared mailboxes): `Calendars.ReadWrite`, `Mail.ReadWrite`, `Mail.Send`.
    - **Grant admin consent**.

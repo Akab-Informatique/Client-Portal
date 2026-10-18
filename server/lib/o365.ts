@@ -121,7 +121,9 @@ async function userAccessToken(userId: string): Promise<string> {
 }
 
 /** What a technician's sign-in asks for (delegated permissions). */
-export const DELEGATED_SCOPES = ["openid", "profile", "email", "offline_access", "User.Read", "Mail.ReadWrite", "Mail.Send", "Calendars.ReadWrite"];
+export const DELEGATED_SCOPES = ["openid", "profile", "email", "offline_access", "User.Read", "Mail.ReadWrite", "Mail.Send", "Mail.ReadWrite.Shared", "Mail.Send.Shared", "Calendars.ReadWrite"];
+/** Delegated scope needed to open a mailbox shared with the technician */
+export const SHARED_MAIL_SCOPE = "Mail.ReadWrite.Shared";
 
 export type TokenAnswer = { access_token?: string; refresh_token?: string; id_token?: string; expires_in?: number; scope?: string; error?: string; error_description?: string };
 export async function tokenRequest(s: Pick<O365Settings, "tenantId" | "clientId" | "secret">, params: Record<string, string>): Promise<TokenAnswer> {

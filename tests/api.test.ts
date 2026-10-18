@@ -2416,6 +2416,8 @@ describe("Outlook (Microsoft 365 mail)", () => {
         sent.push({ method, url, body: init.body ? JSON.parse(String(init.body)) : undefined, bearer });
         if (url.endsWith("/me?$select=id,displayName,mail,userPrincipalName")) return json({ id: "oid-tech", displayName: "Alex Tremblay", mail: "Tech@akab.local" });
         if (url.includes("users/ghost@akab.local")) return json({ error: { message: "mailbox not found" } }, 404);
+        // a mailbox the technician has no access to in Exchange (e.g. accounting)
+        if (url.includes("users/compta@akab.local") && bearer === "Bearer user-tok") return json({ error: { code: "ErrorAccessDenied", message: "Access is denied." } }, 403);
         if (/users\/[^/]+\?\$select=displayName$/.test(url)) return json({ displayName: "Boîte" });
         if (url.includes("/mailFolders/inbox?$select=id")) return json({ id: "inbox-id" });
         if (/mailFolders\/(drafts|sentitems|deleteditems|archive|junkemail)\?/.test(url)) return json({ error: { message: "nope" } }, 404);
@@ -2511,7 +2513,20 @@ describe("Outlook (Microsoft 365 mail)", () => {
     expect(status.accounts).toEqual([expect.objectContaining({ address: "tech@akab.local", via: "user" })]);
     const linked = { json: status.accounts[0] };
     expect((await tech.post("/api/outlook/accounts", { address: "tech@akab.local" })).json.error).toBe("outlook_already_linked");
-    expect((await tech.post("/api/outlook/accounts", { address: "support@akab.local" })).json.error).toBe("outlook_not_own_mailbox");
+    // signed in before shared mailboxes: one more sign-in is asked
+    expect((await tech.post("/api/outlook/accounts", { address: "support@akab.local" })).json.error).toBe("outlook_reconnect_shared");
+    await db().update(schema.msConnections).set({ scopes: "User.Read Mail.ReadWrite Mail.Send Mail.ReadWrite.Shared Mail.Send.Shared Calendars.ReadWrite offline_access" });
+    // a mailbox shared with them: linked through their own access (Exchange checks it on every call)
+    const sharedMine = await tech.post("/api/outlook/accounts", { address: "support@akab.local" });
+    expect(sharedMine.json).toMatchObject({ via: "user", address: "support@akab.local" });
+    sent.length = 0;
+    await tech.get(`/api/outlook/accounts/${sharedMine.json.id}/folders`);
+    expect(sent.length).toBeGreaterThan(0);
+    expect(sent.every((s) => s.bearer === "Bearer user-tok" && s.url.includes("users/support@akab.local/"))).toBe(true);
+    // a mailbox they cannot open in Outlook (accounting, an admin) is refused, and noted
+    expect((await tech.post("/api/outlook/accounts", { address: "compta@akab.local" })).json.error).toBe("outlook_no_access");
+    expect((await db().select().from(schema.auditLog).where(eq(schema.auditLog.action, "outlook.link_refused"))).length).toBe(1);
+    expect((await tech.del(`/api/outlook/accounts/${sharedMine.json.id}`)).status).toBe(200);
     sent.length = 0;
     await tech.get(`/api/outlook/accounts/${linked.json.id}/folders`);
     expect(sent.every((s) => s.bearer === "Bearer user-tok" && s.url.startsWith(`${G}me/`))).toBe(true);

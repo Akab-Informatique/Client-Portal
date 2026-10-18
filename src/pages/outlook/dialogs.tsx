@@ -57,7 +57,7 @@ export function LinkMailboxDialog({ open, onOpenChange, status, onLinked }: { op
           <DialogTitle className="flex items-center gap-2">
             <Inbox className="size-5 text-primary" /> {t("outlook.linkTitle")}
           </DialogTitle>
-          <DialogDescription>{status.canLinkAny ? t("outlook.linkTextAny") : t("outlook.linkText")}</DialogDescription>
+          <DialogDescription>{status.canLinkAny ? t("outlook.linkTextAny") : status.signedIn ? t("outlook.linkTextShared") : t("outlook.linkText")}</DialogDescription>
         </DialogHeader>
         <form
           className="space-y-4"
@@ -66,7 +66,8 @@ export function LinkMailboxDialog({ open, onOpenChange, status, onLinked }: { op
             link.mutate();
           }}
         >
-          {status.canLinkAny ? (
+          {/* signed in: their address or a mailbox shared with them (Microsoft checks the access) */}
+          {status.canLinkAny || status.signedIn ? (
             <div className="space-y-2">
               <Label htmlFor="ol-address">{t("outlook.address")}</Label>
               <Input id="ol-address" type="email" required autoFocus value={address} onChange={(e) => setAddress(e.target.value)} placeholder="support@akab.ca" />

@@ -7,7 +7,7 @@ import { auth, requirePermission, requireStaff, type AppEnv, type AuthContext } 
 import { audit } from "../lib/audit.ts";
 import { rateLimit } from "../lib/http.ts";
 import { body, zEmail, zUuid } from "../lib/validate.ts";
-import { asConnection, O365Error, o365Ready } from "../lib/o365.ts";
+import { asConnection, O365Error, o365Ready, SHARED_MAIL_SCOPE } from "../lib/o365.ts";
 import {
   attachment,
   createFolder,
@@ -60,7 +60,7 @@ function ownAddresses(a: AuthContext): string[] {
 
 /** The technician's own Microsoft sign-in, if any. */
 async function signInOf(userId: string) {
-  const [conn] = await db().select({ email: schema.msConnections.email, lastError: schema.msConnections.lastError }).from(schema.msConnections).where(eq(schema.msConnections.userId, userId));
+  const [conn] = await db().select({ email: schema.msConnections.email, lastError: schema.msConnections.lastError, scopes: schema.msConnections.scopes }).from(schema.msConnections).where(eq(schema.msConnections.userId, userId));
   return conn ?? null;
 }
 
@@ -128,9 +128,12 @@ export const outlookRoutes = new Hono<AppEnv>()
   })
 
   /**
-   * Link an AKAB mailbox: one's own through one's Microsoft sign-in (the
-   * technician sets it up on their side), or any mailbox with
-   * outlook.anyMailbox (the organisation access).
+   * Link an AKAB mailbox:
+   * - one's own, through one's Microsoft sign-in (set up on their side);
+   * - a mailbox shared with them in Exchange (e.g. support@), also through
+   *   their own sign-in: Microsoft checks their access, now and on every
+   *   call — a mailbox they cannot open in Outlook is refused here too;
+   * - any mailbox with outlook.anyMailbox (the organisation access, master admins).
    */
   .post("/accounts", async (c) => {
     const a = auth(c);
@@ -138,9 +141,8 @@ export const outlookRoutes = new Hono<AppEnv>()
     const address = p.address.toLowerCase();
     const conn = await signInOf(a.user.id);
     const mine = conn?.email.toLowerCase() === address;
-    if (!mine && !a.permissions.includes("outlook.anyMailbox")) {
-      throw new HTTPException(403, { message: ownAddresses(a).includes(address) || !conn ? "outlook_sign_in_first" : "outlook_not_own_mailbox" });
-    }
+    const anyMailbox = a.permissions.includes("outlook.anyMailbox");
+    if (!conn && !anyMailbox) throw new HTTPException(403, { message: "outlook_sign_in_first" });
     if (!(await o365Ready())) throw new HTTPException(409, { message: "outlook_not_configured" });
     if (!rateLimit(`outlook-link:${a.user.id}`, 20, 60_000).ok) throw new HTTPException(429, { message: "rate_limited" });
     const [{ n }] = await db()
@@ -153,10 +155,31 @@ export const outlookRoutes = new Hono<AppEnv>()
       .from(schema.mailAccounts)
       .where(and(eq(schema.mailAccounts.userId, a.user.id), sql`lower(${schema.mailAccounts.address}) = ${address}`));
     if (dup) throw new HTTPException(409, { message: "outlook_already_linked" });
-    const { displayName } = await run(() => asConnection(mine ? a.user.id : null, () => testMailbox(address)));
+    let via: "user" | "app" = "user";
+    let displayName: string | null = null;
+    if (conn && (mine || conn.scopes.split(" ").includes(SHARED_MAIL_SCOPE))) {
+      // as the technician: Exchange says whether they may open this mailbox
+      try {
+        ({ displayName } = await asConnection(a.user.id, () => testMailbox(address)));
+      } catch (e) {
+        const denied = e instanceof O365Error && (e.code === "forbidden" || e.code === "not_found");
+        if (!denied || mine) throw outlookHttp(e);
+        if (!anyMailbox) {
+          await audit(a.realUser.id, "outlook.link_refused", null, { address });
+          throw new HTTPException(403, { message: "outlook_no_access" });
+        }
+        via = "app";
+      }
+    } else if (anyMailbox) {
+      via = "app";
+    } else {
+      // signed in before shared mailboxes existed: one more sign-in grants it
+      throw new HTTPException(403, { message: "outlook_reconnect_shared" });
+    }
+    if (via === "app") ({ displayName } = await run(() => asConnection(null, () => testMailbox(address))));
     const [row] = await db()
       .insert(schema.mailAccounts)
-      .values({ userId: a.user.id, address, displayName, via: mine ? "user" : "app" })
+      .values({ userId: a.user.id, address, displayName, via })
       .onConflictDoNothing()
       .returning();
     if (!row) throw new HTTPException(409, { message: "outlook_already_linked" });
