@@ -6,6 +6,7 @@ import { toast } from "sonner";
 import { useQueryClient } from "@tanstack/react-query";
 import { useTheme } from "@/lib/theme";
 import {
+  ChevronDown,
   ChevronsLeft,
   ChevronsRight,
   LogOut,
@@ -50,6 +51,27 @@ import { preloadPagesWhenIdle, preloadRoute } from "@/lib/preload";
 const AdminOverlay = lazy(() => import("@/admin/AdminOverlay").then((m) => ({ default: m.AdminOverlay })));
 
 const COLLAPSE_KEY = "akab.sidebar.collapsed";
+/** Sidebar sections the viewer opened (all closed by default) */
+const SECTIONS_KEY = "akab.sidebar.sections";
+
+function useOpenSections() {
+  const [open, setOpen] = useState<Set<string>>(() => {
+    try {
+      return new Set(JSON.parse(localStorage.getItem(SECTIONS_KEY) ?? "[]") as string[]);
+    } catch {
+      return new Set();
+    }
+  });
+  const update = (next: Set<string>) => {
+    setOpen(next);
+    try {
+      localStorage.setItem(SECTIONS_KEY, JSON.stringify([...next]));
+    } catch {
+      /* ignore */
+    }
+  };
+  return [open, update] as const;
+}
 
 export function StaffLayout() {
   const [collapsed, setCollapsed] = useState(() => {
@@ -204,29 +226,58 @@ function SidebarContent({ collapsed, onToggle }: { collapsed: boolean; onToggle?
       items: STAFF_MODULES.filter((m) => m.section === s.key && visible(m)),
     })),
   ].filter((g) => g.items.length > 0);
+  const [open, setOpen] = useOpenSections();
+  // the section of the page shown opens by itself (it can be closed again)
+  const current = groups.find((g) => g.items.some((m) => !m.upcoming && isActive(m.path)))?.key;
+  useEffect(() => {
+    if (current && !open.has(current)) setOpen(new Set([...open, current]));
+  }, [current]); // eslint-disable-line react-hooks/exhaustive-deps
+  const toggle = (key: string) => {
+    const next = new Set(open);
+    if (next.has(key)) next.delete(key);
+    else next.add(key);
+    setOpen(next);
+  };
 
   return (
     <div className="flex h-full flex-col">
       <div className={cn("flex h-16 items-center border-b", collapsed ? "justify-center px-2" : "px-5")}>
         {collapsed ? <LogoMark className="h-7" /> : <Logo />}
       </div>
-      <nav className="flex-1 space-y-6 overflow-y-auto p-3 scrollbar-thin">
-        {groups.map((g) => (
-          <div key={g.key}>
-            {collapsed ? (
-              <div className="mx-auto mb-2 h-px w-6 bg-border first:hidden" />
-            ) : (
-              <p className="mb-2 px-3 text-[11px] font-semibold uppercase tracking-[0.14em] text-muted-foreground">{t(g.labelKey)}</p>
-            )}
-            <ul className="space-y-1">
-              {g.items.map((m) => (
-                <li key={m.key}>
-                  <NavItem m={m} collapsed={collapsed} active={!m.upcoming && isActive(m.path)} />
-                </li>
-              ))}
-            </ul>
-          </div>
-        ))}
+      <nav className={cn("flex-1 overflow-y-auto p-3 scrollbar-thin", collapsed ? "space-y-6" : "space-y-1")}>
+        {groups.map((g) => {
+          // icons only: every section shown, separated by a line
+          const shown = collapsed || open.has(g.key);
+          const hasActive = g.key === current;
+          return (
+            <div key={g.key}>
+              {collapsed ? (
+                <div className="mx-auto mb-2 h-px w-6 bg-border first:hidden" />
+              ) : (
+                <button
+                  type="button"
+                  onClick={() => toggle(g.key)}
+                  aria-expanded={shown}
+                  className="group flex w-full items-center gap-2 rounded-md px-3 py-2 text-left text-[11px] font-semibold uppercase tracking-[0.14em] text-muted-foreground transition-colors hover:bg-accent/40 hover:text-foreground"
+                >
+                  <span className="flex-1 truncate">{t(g.labelKey)}</span>
+                  {!shown && hasActive && <span className="size-1.5 rounded-full bg-grad-gold" />}
+                  {!shown && <span className="font-mono text-[10px] font-normal tracking-normal opacity-60">{g.items.filter((m) => !m.upcoming).length}</span>}
+                  <ChevronDown className={cn("size-3.5 shrink-0 transition-transform duration-200", !shown && "-rotate-90")} />
+                </button>
+              )}
+              <div className={cn("grid transition-[grid-template-rows] duration-200 ease-out", shown ? "grid-rows-[1fr]" : "grid-rows-[0fr]")}>
+                <ul className={cn("space-y-1 overflow-hidden", !collapsed && shown && "pb-2")} inert={!shown}>
+                  {g.items.map((m) => (
+                    <li key={m.key}>
+                      <NavItem m={m} collapsed={collapsed} active={!m.upcoming && isActive(m.path)} />
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            </div>
+          );
+        })}
       </nav>
       {onToggle && (
         <div className="border-t p-3">
