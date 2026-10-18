@@ -122,8 +122,11 @@ export const timeRoutes = new Hono<AppEnv>()
     const weekStart = weekStartOf(c.req.query("start") ? zDay.parse(c.req.query("start")) : todayQc());
     const sheet = await sheetOf(a.user.id, weekStart);
     const rows = await weekEntries(a.user.id, weekStart);
+    const [me] = await db().select({ required: schema.users.timesheetRequired }).from(schema.users).where(eq(schema.users.id, a.user.id));
     return c.json({
       weekStart,
+      /** This person submits weekly timesheets for approval (set by an admin) */
+      required: me?.required ?? true,
       weekEnd: addDays(weekStart, 6),
       status: sheet.status,
       comment: sheet.comment,
@@ -162,6 +165,8 @@ export const timeRoutes = new Hono<AppEnv>()
     const p = await body(c, z.object({ weekStart: zDay }));
     const sheet = await sheetOf(a.user.id, weekStartOf(p.weekStart));
     if (!editable(sheet.status)) throw new HTTPException(409, { message: "timesheet_locked" });
+    const [me] = await db().select({ required: schema.users.timesheetRequired }).from(schema.users).where(eq(schema.users.id, a.user.id));
+    if (me && !me.required) throw new HTTPException(409, { message: "timesheet_not_required" });
     const [row] = await db().update(schema.timesheets).set({ status: "submitted", submittedAt: new Date(), updatedAt: new Date() }).where(eq(schema.timesheets.id, sheet.id)).returning();
     await audit(a.user.id, "timesheet.submitted", row.id, { weekStart: row.weekStart });
     return c.json(row);

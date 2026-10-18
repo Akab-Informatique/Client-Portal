@@ -69,6 +69,14 @@ export function ExpensesPage() {
           <Plus className="size-4" /> {t("expense.new")}
         </Button>
       </div>
+      {drafts.length > 0 && (
+        <div className="flex flex-wrap items-center gap-3 rounded-xl border border-amber-500/40 bg-amber-500/10 p-3 text-sm text-amber-200">
+          <span className="flex-1">{t("expense.notSubmitted", { count: drafts.length })}</span>
+          <Button size="sm" onClick={() => drafts.forEach((x) => submit.mutate(x.id))} className="bg-grad-gold font-semibold text-[#1a1204]">
+            <Send className="size-3.5" /> {t("expense.submitAll", { count: drafts.length })}
+          </Button>
+        </div>
+      )}
       {isLoading && <Loader2 className="mx-auto my-10 size-6 animate-spin text-muted-foreground" />}
       {!isLoading && !list.length && <p className="glass rounded-2xl border border-dashed py-14 text-center text-sm text-muted-foreground">{t("expense.none")}</p>}
       {list.length > 0 && (
@@ -115,11 +123,6 @@ export function ExpensesPage() {
             })}
           </ul>
         </div>
-      )}
-      {drafts.length > 1 && (
-        <Button variant="outline" onClick={() => drafts.forEach((x) => submit.mutate(x.id))}>
-          <Send className="size-4" /> {t("expense.submitAll", { count: drafts.length })}
-        </Button>
       )}
       {editing && <ExpenseDialog expense={editing === "new" ? null : editing} onClose={() => setEditing(null)} onSaved={refresh} />}
     </div>

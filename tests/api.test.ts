@@ -3370,3 +3370,28 @@ describe("timesheets and expenses, approved and sent to QuickBooks", () => {
     expect(inv.quickbooks).toMatchObject({ id: "700" });
   });
 });
+
+describe("submitting: timesheets (when required) and expenses", () => {
+  it("only submitted weeks and expenses reach the approver; an admin can say a technician has no timesheet to submit", async () => {
+    resetRateLimit("login:ip:unknown");
+    const admin = await signIn("admin@akab.local");
+    const tech2 = await signIn("tech2@akab.local");
+    const [u] = await db().select().from(schema.users).where(eq(schema.users.email, "tech2@akab.local"));
+    // by default, a timesheet is to submit
+    expect((await tech2.get("/api/time/week")).json.required).toBe(true);
+    // a draft expense is not in the approver's list
+    const types = (await tech2.get("/api/time/types")).json.expense;
+    const x = (await tech2.post("/api/time/expenses", { date: "2026-10-17", typeId: types.find((t: any) => t.name === "Stationnement").id, description: "Stationnement centre-ville", amountCents: 1200 })).json;
+    expect((await admin.get("/api/time/approvals/expenses")).json.some((e: any) => e.id === x.id)).toBe(false);
+    await tech2.post(`/api/time/expenses/${x.id}/submit`);
+    expect((await admin.get("/api/time/approvals/expenses")).json.some((e: any) => e.id === x.id)).toBe(true);
+
+    // the admin says this technician has no timesheet to submit
+    expect((await tech2.patch(`/api/admin/users/${u.id}`, { timesheetRequired: false })).status).toBe(403);
+    expect((await admin.patch(`/api/admin/users/${u.id}`, { timesheetRequired: false })).json.timesheetRequired).toBe(false);
+    const week = (await tech2.get("/api/time/week")).json;
+    expect(week.required).toBe(false);
+    expect((await tech2.post("/api/time/week/submit", { weekStart: week.weekStart })).json.error).toBe("timesheet_not_required");
+    await admin.patch(`/api/admin/users/${u.id}`, { timesheetRequired: true });
+  });
+});

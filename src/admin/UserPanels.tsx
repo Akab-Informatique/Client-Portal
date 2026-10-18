@@ -281,6 +281,7 @@ function ProfileTab({ user }: { user: AdminUser }) {
     mobile: user.mobile ?? "",
     locale: user.locale,
     notifyEmail: user.notifyEmail,
+    timesheetRequired: user.timesheetRequired,
   });
   const save = useMutation({
     mutationFn: (patch: Record<string, unknown>) => api.patch<AdminUser>(`/admin/users/${user.id}`, patch),
@@ -335,6 +336,15 @@ function ProfileTab({ user }: { user: AdminUser }) {
           </Select>
         </div>
       </div>
+      {user.kind === "staff" && (
+        <label className="flex items-center justify-between gap-4 rounded-lg border p-3 text-sm">
+          <span>
+            <span className="block">{t("admin.users.timesheetRequired")}</span>
+            <span className="block text-xs text-muted-foreground">{t("admin.users.timesheetRequiredHint")}</span>
+          </span>
+          <Switch checked={form.timesheetRequired} onCheckedChange={(v) => setForm({ ...form, timesheetRequired: v })} />
+        </label>
+      )}
       {user.kind === "staff" && can("admin.o365") && <O365Panel userId={user.id} />}
       {user.kind === "client" && (
         <label className="flex items-center justify-between gap-4 rounded-lg border p-3 text-sm">

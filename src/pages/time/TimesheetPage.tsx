@@ -12,7 +12,7 @@ import { cn } from "@/lib/utils";
 
 export type TimeType = { id: string; name: string; kind: "labour" | "other"; active: boolean };
 type Entry = { id: string; date: string; typeId: string; type: string; kind: string; hours: number; note: string | null; ticketId: number | null; ticketNumber: string | null; ticketTitle: string | null; source: "ticket" | "manual" };
-type Week = { weekStart: string; weekEnd: string; status: "draft" | "submitted" | "approved" | "rejected"; comment: string | null; entries: Entry[]; types: { type: string; kind: string; hours: number }[]; labourHours: number; totalHours: number };
+type Week = { required: boolean; weekStart: string; weekEnd: string; status: "draft" | "submitted" | "approved" | "rejected"; comment: string | null; entries: Entry[]; types: { type: string; kind: string; hours: number }[]; labourHours: number; totalHours: number };
 
 const STATUS_STYLE: Record<Week["status"], string> = {
   draft: "border-slate-500/40 bg-slate-500/10 text-slate-300",
@@ -151,7 +151,9 @@ export function TimesheetPage() {
                 <span>{t("timesheet.total")}</span>
                 <span className="font-mono">{hours(week.totalHours)} h</span>
               </div>
-              {editable && (
+              {!week.required && <p className="rounded-lg border bg-background/40 p-2 text-xs text-muted-foreground">{t("timesheet.notRequired")}</p>}
+              {editable && week.required && week.entries.length > 0 && <p className="text-[11px] text-amber-300">{t("timesheet.toSubmit")}</p>}
+              {editable && week.required && (
                 <Button className="w-full bg-grad-gold font-semibold text-[#1a1204] hover:brightness-105" disabled={submit.isPending || !week.entries.length} onClick={() => submit.mutate()}>
                   {submit.isPending ? <Loader2 className="size-4 animate-spin" /> : <Send className="size-4" />} {t("timesheet.submit")}
                 </Button>

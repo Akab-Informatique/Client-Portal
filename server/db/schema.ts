@@ -344,6 +344,8 @@ export const users = pgTable(
     lastLoginAt: timestamp("last_login_at", { withTimezone: true }),
     /** The matching QuickBooks employee (timesheets, expenses) */
     quickbooksEmployeeId: text("quickbooks_employee_id"),
+    /** Must submit a weekly timesheet for approval (set by an admin) */
+    timesheetRequired: boolean("timesheet_required").notNull().default(true),
     /** Staff only: the matching Autotask resource (actions are made on their behalf) */
     autotaskResourceId: integer("autotask_resource_id"),
     createdAt: created(),

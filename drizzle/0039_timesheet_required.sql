@@ -1,0 +1,1 @@
+ALTER TABLE "users" ADD COLUMN "timesheet_required" boolean DEFAULT true NOT NULL;

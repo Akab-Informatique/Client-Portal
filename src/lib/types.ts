@@ -43,6 +43,7 @@ export type AdminUser = {
   o365Email: string | null;
   locale: "fr" | "en";
   notifyEmail: boolean;
+  timesheetRequired: boolean;
   mfaEnabled: boolean;
   mustChangePassword: boolean;
   locked: boolean;
