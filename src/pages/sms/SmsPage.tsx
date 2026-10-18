@@ -72,7 +72,7 @@ export function SmsTile({ onOpen, compact }: { onOpen: () => void; compact?: boo
         type="button"
         onClick={onOpen}
         title={data.waiting ? t("sms.tileWaiting", { count: data.waiting, delay: delayText(left ?? 0) }) : !data.ready && !data.open ? t("sms.tileOff") : t("sms.tileUnread", { count: data.unread })}
-        className={cn("glass flex h-10 items-center gap-2 rounded-xl border px-3 text-left transition-colors hover:border-[color:var(--gold)]/40", data.waiting > 0 && "border-orange-500/50")}
+        className={cn("glass flex h-10 shrink-0 items-center gap-1.5 rounded-xl border px-2.5 text-left transition-colors hover:border-[color:var(--gold)]/40", data.waiting > 0 && "border-orange-500/50")}
       >
         <span className="relative">
           <MessageSquareText className={cn("size-4", data.waiting ? "text-orange-300" : "text-sky-300")} />

@@ -457,7 +457,9 @@ function MetricTiles({ data, params, apply, onSms }: { data: TicketList | undefi
     return {};
   };
   return (
-    <div className="flex flex-wrap items-center gap-2">
+    <div className="flex flex-col gap-2">
+    {/* line 1: the built-in buttons, on one line */}
+    <div className="flex items-center gap-1.5 overflow-x-auto scrollbar-thin">
       {TILES.map((tile, i) => {
         const active = canonical(tile.query) === current || (tile.key === "mine" && current === "");
         const value = data?.metrics[tile.key];
@@ -474,7 +476,7 @@ function MetricTiles({ data, params, apply, onSms }: { data: TicketList | undefi
                   transition={{ delay: i * 0.04 }}
                   style={{ ["--tile-glow" as string]: tile.glow }}
                   className={cn(
-                    "glass group flex h-10 items-center gap-2 rounded-xl border px-3 text-left transition-all hover:border-[color:var(--gold)]/40 hover:shadow-[0_0_20px_-12px_var(--tile-glow)]",
+                    "glass group flex h-10 shrink-0 items-center gap-1.5 rounded-xl border px-2.5 text-left transition-all hover:border-[color:var(--gold)]/40 hover:shadow-[0_0_20px_-12px_var(--tile-glow)]",
                     active && "border-[color:var(--gold)]/60 bg-[color:var(--gold)]/[0.06] shadow-[0_0_20px_-10px_var(--tile-glow)]",
                   )}
                 >
@@ -484,7 +486,12 @@ function MetricTiles({ data, params, apply, onSms }: { data: TicketList | undefi
                     {value === undefined ? "–" : <CountUp value={value} />}
                   </span>
                   {/* to watch: the overdue ones in red, the rest in the details */}
-                  {tile.key === "attention" && b && b.overdue > 0 && <span className="rounded-full bg-red-500/15 px-1.5 font-mono text-[10px] text-red-400">{t("tickets.breakdown.overdue", { count: b.overdue })}</span>}
+                  {/* to watch: how many are overdue, in red (the words on hover) */}
+                  {tile.key === "attention" && b && b.overdue > 0 && (
+                    <span className="rounded-full bg-red-500/15 px-1.5 font-mono text-[10px] text-red-400" title={t("tickets.breakdown.overdue", { count: b.overdue })}>
+                      {b.overdue}
+                    </span>
+                  )}
                 </motion.button>
               </TooltipTrigger>
               <TooltipContent side="bottom">
@@ -496,9 +503,15 @@ function MetricTiles({ data, params, apply, onSms }: { data: TicketList | undefi
           </Fragment>
         );
       })}
-      {buttons.map((x) => (
-        <SavedFilterTile key={x.id} b={x} rows={statusRows(x.breakdown)} active={canonical(x.query) === current} onApply={() => apply(x.query)} onUnpin={() => unpin.mutate(x.id)} />
-      ))}
+    </div>
+    {/* line 2: my saved filters */}
+    {buttons.length > 0 && (
+      <div className="flex flex-wrap items-center gap-1.5">
+        {buttons.map((x) => (
+          <SavedFilterTile key={x.id} b={x} rows={statusRows(x.breakdown)} active={canonical(x.query) === current} onApply={() => apply(x.query)} onUnpin={() => unpin.mutate(x.id)} />
+        ))}
+      </div>
+    )}
     </div>
   );
 }
@@ -513,7 +526,7 @@ function SavedFilterTile({ b, rows, active, onApply, onUnpin }: { b: NonNullable
           type="button"
           onClick={onApply}
           className={cn(
-            "glass group flex h-10 items-center gap-2 rounded-xl border px-3 text-left transition-all hover:border-[color:var(--gold)]/40",
+            "glass group flex h-10 items-center gap-1.5 rounded-xl border px-2.5 text-left transition-all hover:border-[color:var(--gold)]/40",
             active && "border-[color:var(--gold)]/60 bg-[color:var(--gold)]/[0.06]",
           )}
         >
