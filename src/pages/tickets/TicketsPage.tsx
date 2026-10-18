@@ -208,10 +208,11 @@ export function TicketsPage() {
           </span>
         </div>
       )}
-      <MetricTiles data={data} params={params} apply={apply} onSms={() => setSmsInbox("")} />
 
-      {/* The filters (a card matching "My week") and, beside them, the week */}
-      <div className="grid gap-3 lg:grid-cols-[minmax(0,1fr)_minmax(420px,0.9fr)] lg:items-start">
+      {/* Left: the buttons, then the filters; right: the week, as tall as both (more room for the priorities) */}
+      <div className="grid gap-3 lg:grid-cols-[minmax(0,1fr)_minmax(420px,0.9fr)] lg:items-stretch">
+      <div className="flex min-w-0 flex-col gap-3">
+      <MetricTiles data={data} params={params} apply={apply} onSms={() => setSmsInbox("")} />
       <section className="glass flex min-w-0 flex-col gap-2 rounded-2xl border p-2.5">
         {/* 1. what is shown, and in which order */}
         <div className="flex flex-wrap items-center gap-2 px-1">
@@ -271,6 +272,7 @@ export function TicketsPage() {
           </div>
         )}
       </section>
+      </div>
       <AgendaCard filterTech={(() => {
         // one technician filtered (a portal account): the card shows their priorities
         const a = (params.get("assignee") ?? "").split(",").filter(Boolean);

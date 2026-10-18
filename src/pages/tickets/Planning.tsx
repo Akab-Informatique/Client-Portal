@@ -222,7 +222,7 @@ export function AgendaCard({ filterTech }: { filterTech?: string | null }) {
   const shiftWeek = (n: number) => setDay(ymd(addDays(dayDate, n * 7)));
   return (
     <>
-      <div className="glass flex min-w-0 flex-col gap-2 rounded-2xl border border-[color:var(--gold)]/35 p-2.5 shadow-[0_0_30px_-16px_rgba(255,206,26,0.5)]">
+      <div className="glass flex min-w-0 flex-col gap-2 overflow-hidden rounded-2xl border border-[color:var(--gold)]/35 p-2.5 shadow-[0_0_30px_-16px_rgba(255,206,26,0.5)] lg:h-0 lg:min-h-full">
         <div className="flex flex-wrap items-center gap-2 px-1">
           <CalendarRange className="size-4 shrink-0 text-primary" />
           <span className="text-sm font-semibold">{monthView ? month.toLocaleDateString(loc, { month: "long", year: "numeric" }) : mine ? t("planning.myWeek") : t("planning.weekOfName", { name: who.name.split(" ")[0] })}</span>
@@ -365,8 +365,8 @@ export function AgendaCard({ filterTech }: { filterTech?: string | null }) {
           </div>
         )}
 
-        {/* the priorities of the day chosen */}
-        <div className="border-t pt-1.5">
+        {/* the priorities of the day chosen: the rest of the height */}
+        <div className="flex min-h-24 flex-1 flex-col border-t pt-1.5">
           <p className="flex items-center gap-1 px-1 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
             <Star className="size-3 fill-[color:var(--gold)] text-[color:var(--gold)]" />
             {t("planning.prioritiesOn", { date: dayDate.toLocaleDateString(loc, { weekday: "short", day: "numeric", month: "short" }) })}
@@ -376,7 +376,7 @@ export function AgendaCard({ filterTech }: { filterTech?: string | null }) {
           {toDo.length === 0 ? (
             <p className="px-1 py-1 text-[11px] text-muted-foreground">{t("planning.noPrioritiesShort")}</p>
           ) : (
-            <ul className="mt-0.5 max-h-24 space-y-0.5 overflow-y-auto">
+            <ul className="mt-0.5 max-h-56 min-h-0 flex-1 space-y-0.5 overflow-y-auto lg:max-h-none">
               {toDo.map((p) => (
                 <li key={p.id}>
                   <button type="button" onClick={() => ws.open(p.ticketId)} className="flex w-full items-center gap-2 rounded-lg px-1 py-0.5 text-left text-[11px] hover:bg-accent/40" title={p.note || p.ticketTitle}>
