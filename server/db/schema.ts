@@ -111,6 +111,31 @@ export const clientContracts = pgTable(
   (t) => [uniqueIndex("client_contracts_autotask_idx").on(t.autotaskId), index("client_contracts_client_idx").on(t.clientId)],
 );
 
+/** A client's invoices (Autotask Invoices while linked). Money in cents. */
+export const clientInvoices = pgTable(
+  "client_invoices",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    clientId: uuid("client_id")
+      .notNull()
+      .references(() => clients.id, { onDelete: "cascade" }),
+    autotaskId: text("autotask_id"),
+    number: text("number").notNull(),
+    /** YYYY-MM-DD */
+    issuedOn: text("issued_on").notNull(),
+    dueOn: text("due_on"),
+    totalCents: bigint("total_cents", { mode: "number" }).notNull().default(0),
+    taxCents: bigint("tax_cents", { mode: "number" }).notNull().default(0),
+    /** Set once paid (YYYY-MM-DD) */
+    paidOn: text("paid_on"),
+    voided: boolean("voided").notNull().default(false),
+    syncedAt: timestamp("synced_at", { withTimezone: true }),
+    createdAt: created(),
+    updatedAt: updated(),
+  },
+  (t) => [uniqueIndex("client_invoices_autotask_idx").on(t.autotaskId), index("client_invoices_client_idx").on(t.clientId, t.issuedOn)],
+);
+
 /** Where a sync stands (e.g. "autotask.crm"): last run, result, counts. */
 export const syncState = pgTable("sync_state", {
   key: text("key").primaryKey(),

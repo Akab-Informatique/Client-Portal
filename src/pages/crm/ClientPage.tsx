@@ -5,8 +5,13 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import {
   ArrowLeft,
+  AlertTriangle,
   Building2,
   Check,
+  CircleCheck,
+  CircleDashed,
+  Clock,
+  FileX,
   ChevronDown,
   CornerDownRight,
   FileText,
@@ -37,14 +42,15 @@ import { api } from "@/lib/api";
 import { useCan } from "@/lib/session";
 import { cn } from "@/lib/utils";
 import { PRIORITY_STYLE, STATUS_STYLE, shortDate, ticketErrorText } from "@/pages/tickets/shared";
-import { crmErrorText, useCrmClients, type CrmClient, type CrmContact, type CrmContract, type CrmDetail, type CrmTicket, type InvoiceSettings } from "./shared";
+import { crmErrorText, money, useCrmClients, type CrmInvoices, type InvoiceStatus, type CrmClient, type CrmContact, type CrmContract, type CrmDetail, type CrmTicket, type InvoiceSettings } from "./shared";
 
-const TABS = ["info", "tickets", "contacts", "contracts", "invoice"] as const;
+const TABS = ["info", "tickets", "invoices", "contacts", "contracts", "invoice"] as const;
 type Tab = (typeof TABS)[number];
 
 /** One client: info (with its group of companies), tickets, contacts, contracts, invoicing. */
 export function ClientPage() {
   const { t } = useTranslation();
+  const can = useCan();
   const { id = "" } = useParams();
   const [params, setParams] = useSearchParams();
   const tab = (TABS as readonly string[]).includes(params.get("tab") ?? "") ? (params.get("tab") as Tab) : "info";
@@ -113,6 +119,11 @@ export function ClientPage() {
           <TabsTrigger value="tickets">
             <Ticket className="size-4" /> {t("crm.tabs.tickets")}
           </TabsTrigger>
+          {can("accounting.view") && (
+            <TabsTrigger value="invoices">
+              <Receipt className="size-4" /> {t("crm.tabs.invoices")}
+            </TabsTrigger>
+          )}
           <TabsTrigger value="contacts">
             <UsersRound className="size-4" /> {t("crm.tabs.contacts")}
           </TabsTrigger>
@@ -129,6 +140,11 @@ export function ClientPage() {
         <TabsContent value="tickets" className="mt-4">
           <TicketsTab client={client} />
         </TabsContent>
+        {can("accounting.view") && (
+          <TabsContent value="invoices" className="mt-4">
+            <InvoicesTab client={client} />
+          </TabsContent>
+        )}
         <TabsContent value="contacts" className="mt-4">
           <ContactsTab client={client} />
         </TabsContent>
@@ -389,6 +405,132 @@ function TicketsTab({ client }: { client: CrmDetail }) {
       )}
       {data && data.closed > 0 && <p className="text-[11px] text-muted-foreground">{t("crm.tickets.closed", { count: data.closed })}</p>}
     </Card>
+  );
+}
+
+// ── Invoices ──
+type InvoiceFilter = "all" | "unpaid" | "overdue" | "paid";
+const INVOICE_STYLE: Record<InvoiceStatus, string> = {
+  paid: "border-emerald-500/40 bg-emerald-500/10 text-emerald-300",
+  due: "border-sky-500/40 bg-sky-500/10 text-sky-300",
+  overdue: "border-red-500/50 bg-red-500/15 text-red-300",
+  voided: "border-slate-500/40 bg-slate-500/10 text-slate-400",
+};
+const INVOICE_ICON = { paid: CircleCheck, due: Clock, overdue: AlertTriangle, voided: FileX } as const;
+
+function InvoicesTab({ client }: { client: CrmDetail }) {
+  const { t, i18n } = useTranslation();
+  const [withChildren, setWithChildren] = useState(false);
+  const [filter, setFilter] = useState<InvoiceFilter>("all");
+  const { data, isLoading } = useQuery({
+    queryKey: ["crm", "client", client.id, "invoices", withChildren],
+    queryFn: () => api.get<CrmInvoices>(`/crm/clients/${client.id}/invoices${withChildren ? "?children=1" : ""}`),
+  });
+  const m = (c: number) => money(c, i18n.language);
+  const items = (data?.items ?? []).filter((v) =>
+    filter === "all" ? true : filter === "unpaid" ? v.status === "due" || v.status === "overdue" : filter === "overdue" ? v.status === "overdue" : v.status === "paid",
+  );
+  const count = (f: InvoiceFilter) =>
+    (data?.items ?? []).filter((v) => (f === "all" ? true : f === "unpaid" ? v.status === "due" || v.status === "overdue" : f === "overdue" ? v.status === "overdue" : v.status === "paid")).length;
+  return (
+    <div className="space-y-4">
+      {data && (
+        <div className="grid gap-3 sm:grid-cols-3">
+          <Stat label={t("crm.invoices.balance")} value={m(data.summary.dueCents)} icon={<CircleDashed className="size-4" />} />
+          <Stat
+            label={t("crm.invoices.overdue")}
+            value={m(data.summary.overdueCents)}
+            hint={data.summary.overdueCount ? t("crm.invoices.overdueCount", { count: data.summary.overdueCount }) : undefined}
+            icon={<AlertTriangle className="size-4" />}
+            alert={data.summary.overdueCount > 0}
+          />
+          <Stat label={t("crm.invoices.paidYear")} value={m(data.summary.paidYearCents)} icon={<CircleCheck className="size-4" />} />
+        </div>
+      )}
+      <Card
+        title={t("crm.tabs.invoices")}
+        icon={<Receipt className="size-4" />}
+        aside={
+          client.children.length > 0 && (
+            <label className="flex items-center gap-2 text-xs text-muted-foreground">
+              <Switch checked={withChildren} onCheckedChange={setWithChildren} /> {t("crm.tickets.withChildren")}
+            </label>
+          )
+        }
+      >
+        <div className="flex flex-wrap gap-1">
+          {(["all", "unpaid", "overdue", "paid"] as InvoiceFilter[]).map((f) => (
+            <button
+              key={f}
+              type="button"
+              aria-pressed={filter === f}
+              onClick={() => setFilter(f)}
+              className={cn(
+                "flex h-8 items-center gap-1.5 rounded-lg border px-2.5 text-xs transition-colors",
+                filter === f ? "border-[color:var(--gold)]/50 bg-[color:var(--gold)]/10 font-medium text-foreground" : "text-muted-foreground hover:bg-accent/50 hover:text-foreground",
+              )}
+            >
+              {t(`crm.invoices.filter.${f}`)}
+              <span className="font-mono text-[10px] text-muted-foreground">{count(f)}</span>
+            </button>
+          ))}
+        </div>
+        {isLoading && <Loader2 className="mx-auto size-5 animate-spin text-muted-foreground" />}
+        {data && items.length === 0 && <p className="py-6 text-center text-sm text-muted-foreground">{t("crm.invoices.none")}</p>}
+        {items.length > 0 && (
+          <div className="overflow-hidden rounded-xl border">
+            <div className="hidden grid-cols-[minmax(0,1.2fr)_110px_minmax(0,1.4fr)_130px_minmax(0,1.3fr)] gap-3 border-b bg-background/30 px-3 py-2 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground md:grid">
+              <span>{t("crm.invoices.number")}</span>
+              <span>{t("crm.invoices.issued")}</span>
+              <span>{t("crm.invoices.due")}</span>
+              <span className="text-right">{t("crm.invoices.amount")}</span>
+              <span>{t("crm.invoices.status")}</span>
+            </div>
+            <ul className="divide-y divide-border/60">
+              {items.map((v) => {
+                const Icon = INVOICE_ICON[v.status];
+                return (
+                  <li
+                    key={v.id}
+                    className={cn("grid grid-cols-2 gap-x-3 gap-y-1 px-3 py-2.5 text-sm md:grid-cols-[minmax(0,1.2fr)_110px_minmax(0,1.4fr)_130px_minmax(0,1.3fr)] md:items-center", v.status === "voided" && "opacity-60")}
+                  >
+                    <span className="min-w-0">
+                      <span className="block truncate font-mono text-xs">{v.number}</span>
+                      {withChildren && v.company !== client.name && <span className="block truncate text-[11px] text-muted-foreground">{v.company}</span>}
+                    </span>
+                    <span className="text-xs text-muted-foreground">{shortDate(v.issuedOn)}</span>
+                    <span className={cn("text-xs", v.status === "overdue" ? "font-medium text-red-300" : "text-muted-foreground")}>
+                      {v.dueOn ? shortDate(v.dueOn) : "—"}
+                      {v.status === "overdue" && <span className="ml-1.5">· {t("crm.invoices.late", { count: v.daysLate })}</span>}
+                    </span>
+                    <span className={cn("font-mono md:text-right", v.status === "voided" && "line-through")}>{m(v.totalCents)}</span>
+                    <span>
+                      <span className={cn("inline-flex items-center gap-1 rounded-md border px-1.5 py-0.5 text-[11px]", INVOICE_STYLE[v.status])}>
+                        <Icon className="size-3" />
+                        {v.status === "paid" && v.paidOn ? t("crm.invoices.paidOn", { date: shortDate(v.paidOn) }) : t(`crm.invoices.state.${v.status}`)}
+                      </span>
+                    </span>
+                  </li>
+                );
+              })}
+            </ul>
+          </div>
+        )}
+        <p className="text-[11px] text-muted-foreground">{t("crm.invoices.fromAutotask")}</p>
+      </Card>
+    </div>
+  );
+}
+
+function Stat({ label, value, hint, icon, alert }: { label: string; value: string; hint?: string; icon: ReactNode; alert?: boolean }) {
+  return (
+    <div className={cn("glass rounded-2xl border p-4", alert && "border-red-500/40")}>
+      <p className={cn("flex items-center gap-1.5 text-xs text-muted-foreground", alert && "text-red-300")}>
+        {icon} {label}
+      </p>
+      <p className="mt-1 font-mono text-xl font-semibold">{value}</p>
+      {hint && <p className={cn("text-[11px]", alert ? "text-red-300" : "text-muted-foreground")}>{hint}</p>}
+    </div>
   );
 }
 

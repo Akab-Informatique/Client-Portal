@@ -52,9 +52,9 @@ Administration tab `/meetings`, used live during the Monday team meeting (lists 
 
 ## CRM and the portal's own data (goal: replace Autotask)
 
-- The portal keeps its own copy of everything; Autotask is the reference only while it is linked. Clients (`clients`, + `autotask_id`, `parent_id`, `invoice` jsonb), `client_contacts`, `client_contracts` (Autotask ids as text), `sync_state`. Migration `0032`.
+- The portal keeps its own copy of everything; Autotask is the reference only while it is linked. Clients (`clients`, + `autotask_id`, `parent_id`, `invoice` jsonb), `client_contacts`, `client_contracts` (Autotask ids as text), `client_invoices` (last 3 years, cents, `paid_on`, `voided`; never deleted), `sync_state`. Migrations `0032`–`0033`. Sample data keeps portal edits (`demoCompanyPatches` / `demoContactPatches`) so a sync does not undo them.
 - `server/lib/crm.ts`: `syncCrm()` at startup and every 15 min (full copy via `TicketSource.crmExport()`; never overwrites portal-only fields: notes, code, email, invoice). Writes from the portal go to Autotask first (`updateCompany` / `updateContact` / `addContact` / `addCompany`), then into the copy (`rememberCompany` / `rememberContact`). The Autotask ticket source reads clients, contacts and contracts from the copy once it exists.
-- API `/api/crm` (`server/routes/crm.ts`): rights `crm.view` (technicians), `crm.edit`, `crm.billing`; `/status` drives the top-bar `SyncBadge`. UI `src/pages/crm/` (list, client page with tabs Info / Tickets / Contacts / Contracts / Invoicing). Accounting (`accounting.view`): `src/pages/accounting/`, empty for now.
+- API `/api/crm` (`server/routes/crm.ts`): rights `crm.view` (technicians), `crm.edit`, `crm.billing`; `/status` drives the top-bar `SyncBadge`. UI `src/pages/crm/` (list, client page with tabs Info / Tickets / Invoices (`accounting.view`) / Contacts / Contracts / Invoice settings). Accounting (`accounting.view`): `src/pages/accounting/`, empty for now.
 - Still to bring local: tickets' notes, time entries, charges and attachments (tickets themselves are mirrored in `autotask_tickets`).
 
 ## Security rules

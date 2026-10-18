@@ -20,7 +20,7 @@ export type CrmState = {
   at: string | null;
   ok: boolean;
   error: string | null;
-  counts: { clients: number; contacts: number; contracts: number };
+  counts: { clients: number; contacts: number; contracts: number; invoices?: number };
 };
 
 export async function crmState(): Promise<CrmState | null> {
@@ -140,7 +140,23 @@ async function apply(data: CrmExport) {
   const goneContracts = [...contracts.values()].filter((k) => k.active && !seenContracts.has(k.autotaskId!)).map((k) => k.id);
   if (goneContracts.length) await d.update(schema.clientContracts).set({ active: false, updatedAt: now }).where(inArray(schema.clientContracts.id, goneContracts));
 
-  return { clients: data.companies.length, contacts: nContacts, contracts: nContracts };
+  // ── invoices (never removed: a voided invoice says so)
+  let nInvoices = 0;
+  if (data.invoicesRead !== false) {
+    const invoices = new Map((await d.select().from(schema.clientInvoices).where(isNotNull(schema.clientInvoices.autotaskId))).map((v) => [v.autotaskId!, v]));
+    for (const v of data.invoices) {
+      const clientId = idOf.get(v.companyId);
+      if (!clientId) continue;
+      nInvoices++;
+      const fields = { clientId, number: v.number, issuedOn: v.issuedOn, dueOn: v.dueOn, totalCents: v.totalCents, taxCents: v.taxCents, paidOn: v.paidOn, voided: v.voided };
+      const hit = invoices.get(v.id);
+      if (!hit) await d.insert(schema.clientInvoices).values({ ...fields, autotaskId: v.id, syncedAt: now });
+      else if ((Object.keys(fields) as (keyof typeof fields)[]).some((k) => !same(hit[k], fields[k])))
+        await d.update(schema.clientInvoices).set({ ...fields, syncedAt: now, updatedAt: now }).where(eq(schema.clientInvoices.id, hit.id));
+    }
+  }
+
+  return { clients: data.companies.length, contacts: nContacts, contracts: nContracts, invoices: nInvoices };
 }
 
 // ── Portal writes, kept in the copy right away (no wait for the next sync) ──

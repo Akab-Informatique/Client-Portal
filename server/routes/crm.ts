@@ -1,6 +1,6 @@
 import { Hono } from "hono";
 import { HTTPException } from "hono/http-exception";
-import { and, asc, eq, inArray } from "drizzle-orm";
+import { and, asc, desc, eq, inArray } from "drizzle-orm";
 import { z } from "zod";
 import { db, schema } from "../db/index.ts";
 import { auth, requirePermission, requireStaff, type AppEnv } from "../lib/auth.ts";
@@ -256,6 +256,41 @@ export const crmRoutes = new Hono<AppEnv>()
     const client = await clientOr404(c.req.param("id"));
     const rows = await db().select().from(schema.clientContracts).where(eq(schema.clientContracts.clientId, client.id)).orderBy(asc(schema.clientContracts.name));
     return c.json(rows.sort((x, y) => Number(y.active) - Number(x.active) || Number(y.isDefault) - Number(x.isDefault)));
+  })
+
+  // ── invoices of the client (and of its child companies, on demand): accounting.view
+  .get("/clients/:id/invoices", requirePermission("accounting.view"), async (c) => {
+    const client = await clientOr404(c.req.param("id"));
+    const ids = [client.id];
+    if (c.req.query("children") === "1") ids.push(...(await descendantsOf(client.id)));
+    const d = db();
+    const names = new Map((await d.select({ id: schema.clients.id, name: schema.clients.name }).from(schema.clients).where(inArray(schema.clients.id, ids))).map((r) => [r.id, r.name]));
+    const rows = await d.select().from(schema.clientInvoices).where(inArray(schema.clientInvoices.clientId, ids)).orderBy(desc(schema.clientInvoices.issuedOn), desc(schema.clientInvoices.number));
+    const today = new Date().toLocaleDateString("en-CA", { timeZone: "America/Toronto" });
+    const yearAgo = new Date(Date.now() - 365 * 86_400_000).toISOString().slice(0, 10);
+    const statusOf = (v: (typeof rows)[number]) => (v.voided ? "voided" : v.paidOn ? "paid" : v.dueOn && v.dueOn < today ? "overdue" : "due");
+    const items = rows.map((v) => ({
+      id: v.id,
+      number: v.number,
+      company: names.get(v.clientId) ?? "",
+      issuedOn: v.issuedOn,
+      dueOn: v.dueOn,
+      totalCents: v.totalCents,
+      taxCents: v.taxCents,
+      paidOn: v.paidOn,
+      status: statusOf(v),
+      daysLate: statusOf(v) === "overdue" ? Math.round((Date.parse(today) - Date.parse(v.dueOn!)) / 86_400_000) : 0,
+    }));
+    const sum = (f: (x: (typeof items)[number]) => boolean) => items.filter(f).reduce((s, x) => s + x.totalCents, 0);
+    return c.json({
+      summary: {
+        dueCents: sum((x) => x.status === "due" || x.status === "overdue"),
+        overdueCents: sum((x) => x.status === "overdue"),
+        overdueCount: items.filter((x) => x.status === "overdue").length,
+        paidYearCents: sum((x) => x.status === "paid" && x.issuedOn >= yearAgo),
+      },
+      items,
+    });
   })
 
   // ── tickets of the client (and of its child companies, on demand)

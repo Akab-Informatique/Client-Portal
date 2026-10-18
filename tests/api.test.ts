@@ -2506,7 +2506,9 @@ describe("Outlook (Microsoft 365 mail)", () => {
     expect((await tech.get(`/api/microsoft/callback?state=${state2}&code=good-code`)).location).toBe("/?microsoft=error");
     expect((await tech.get("/api/microsoft")).json).toMatchObject({ available: true, connection: { email: "tech@akab.local", displayName: "Alex Tremblay" } });
     const [conn] = await db().select().from(schema.msConnections);
-    expect(conn.refreshToken).not.toContain("r1"); // sealed
+    // sealed (random ciphertext: checking for "r1" inside it would fail by chance)
+    expect(conn.refreshToken).not.toBe("r1");
+    expect(conn.refreshToken).toMatch(/^v1\./);
     // signing in linked their mailbox, through their own access
     status = (await tech.get("/api/outlook/status")).json;
     expect(status.signedIn).toMatchObject({ email: "tech@akab.local" });
@@ -2732,6 +2734,8 @@ describe("crm: the portal's own copy of the clients", () => {
     // a sync keeps portal-only fields
     await admin.post("/api/crm/sync");
     expect((await admin.get(`/api/crm/clients/${child.id}`)).json.notes).toBe("Filiale");
+    // and the parent company chosen in the portal (sent to the source, so the sync keeps it)
+    expect((await admin.get(`/api/crm/clients/${child.id}`)).json.parent).toMatchObject({ id: parent.id });
     expect((await admin.patch(`/api/crm/clients/${child.id}`, { name: parent.name })).json.error).toBe("company_exists");
 
     // invoice settings: their own right
@@ -2754,5 +2758,31 @@ describe("crm: the portal's own copy of the clients", () => {
     expect(co.json.autotaskId).toEqual(expect.any(Number));
     expect((await admin.post("/api/crm/clients", { name: "érablière du nord", phone: "450-555-3030" })).json.error).toBe("company_exists");
     expect((await tech.post("/api/crm/clients", { name: "Autre", phone: "450-555-3030" })).status).toBe(403);
+  });
+
+  it("invoices of a client: due dates, paid or not (accounting right)", async () => {
+    const tech = await session("tech@akab.local");
+    const admin = await session("admin@akab.local");
+    const list = (await admin.get("/api/crm/clients")).json;
+    const late = list.find((c: any) => c.autotaskId === 301);
+    // money: not for technicians
+    expect((await tech.get(`/api/crm/clients/${late.id}/invoices`)).status).toBe(403);
+    const r = (await admin.get(`/api/crm/clients/${late.id}/invoices`)).json;
+    expect(r.items.length).toBe(10);
+    const today = new Date().toLocaleDateString("en-CA", { timeZone: "America/Toronto" });
+    for (const v of r.items) {
+      const expected = v.paidOn ? "paid" : v.dueOn < today ? "overdue" : "due";
+      if (v.status !== "voided") expect(v.status).toBe(expected);
+    }
+    expect(r.items.filter((v: any) => v.status === "paid").length).toBeGreaterThan(5);
+    const unpaid = r.items.filter((v: any) => v.status === "due" || v.status === "overdue");
+    expect(r.summary.dueCents).toBe(unpaid.reduce((s: number, v: any) => s + v.totalCents, 0));
+    expect(r.summary.overdueCount).toBe(r.items.filter((v: any) => v.status === "overdue").length);
+    // newest first; a second sync adds nothing
+    expect(r.items[0].issuedOn >= r.items[1].issuedOn).toBe(true);
+    await admin.post("/api/crm/sync");
+    expect((await admin.get(`/api/crm/clients/${late.id}/invoices`)).json.items.length).toBe(10);
+    // a parent company can include its subsidiaries (302 was made a subsidiary of 301 above)
+    expect((await admin.get(`/api/crm/clients/${late.id}/invoices?children=1`)).json.items.length).toBe(20);
   });
 });

@@ -63,7 +63,19 @@ export type CrmExport = {
   companies: { id: number; name: string; phone: string | null; address: string | null; city: string | null; province: string | null; postalCode: string | null; website: string | null; parentId: number | null }[];
   contacts: { id: string; companyId: number; firstName: string; lastName: string; email: string | null; phone: string | null; mobile: string | null; title: string | null }[];
   contracts: { id: string; companyId: number; name: string; type: string | null; isDefault: boolean; startDate: string | null; endDate: string | null }[];
+  /** Invoices of the last 3 years (money in cents) */
+  invoices: { id: string; companyId: number; number: string; issuedOn: string; dueOn: string | null; totalCents: number; taxCents: number; paidOn: string | null; voided: boolean }[];
+  /** false: Autotask refused the invoices (the copies already made are kept) */
+  invoicesRead?: boolean;
 };
+/** How far back the invoices are copied */
+export const INVOICE_YEARS = 3;
+const invoicesSince = () => {
+  const d = new Date();
+  d.setFullYear(d.getFullYear() - INVOICE_YEARS);
+  return d.toISOString().slice(0, 10);
+};
+const cents = (v: number | null | undefined) => Math.round((v ?? 0) * 100);
 export type CompanyPatch = Partial<{ name: string; phone: string | null; address: string | null; city: string | null; province: string | null; postalCode: string | null; website: string | null; parentId: number | null }>;
 export type ContactPatch = Partial<{ firstName: string; lastName: string; email: string | null; phone: string | null; mobile: string | null; title: string | null; active: boolean }>;
 /** A file attached to a ticket (base64 data) */
@@ -226,6 +238,9 @@ export const approvedStatus = (statuses: { value: string; label: string }[]) => 
 
 /** Sample charges, in memory. */
 const demoCharges = new Map<number, Charge[]>();
+/** Sample data: changes made in the portal, kept like Autotask would (the next sync brings them back) */
+const demoCompanyPatches = new Map<number, CompanyPatch>();
+const demoContactPatches = new Map<string, ContactPatch>();
 const DEMO_CHARGE_OPTIONS: ChargeOptions = {
   types: [
     { value: "1", label: "Opérationnel" },
@@ -388,19 +403,46 @@ const demoSource: TicketSource = {
     const companies = demoCompanies();
     const towns = ["Joliette", "Repentigny", "Terrebonne", "Saint-Lin–Laurentides", "Mascouche", "Rawdon"];
     return {
-      companies: companies.map((c, i) => ({ id: c.id, name: c.name, phone: `450-555-${String(2000 + i * 7)}`, address: `${100 + i * 15}, rue Principale`, city: towns[i % towns.length], province: "QC", postalCode: null, website: null, parentId: null })),
+      companies: companies.map((c, i) => ({ id: c.id, name: c.name, phone: `450-555-${String(2000 + i * 7)}`, address: `${100 + i * 15}, rue Principale`, city: towns[i % towns.length], province: "QC", postalCode: null, website: null, parentId: null, ...demoCompanyPatches.get(c.id) })),
       contacts: companies.flatMap((c) =>
         demoContacts(c.id).map((x) => {
           const [firstName, ...rest] = x.name.split(" ");
-          return { id: x.id, companyId: c.id, firstName, lastName: rest.join(" "), email: x.email, phone: x.phone, mobile: null, title: null };
+          const { active, ...patch } = demoContactPatches.get(x.id) ?? {};
+          return active === false ? null : { id: x.id, companyId: c.id, firstName, lastName: rest.join(" "), email: x.email, phone: x.phone, mobile: null, title: null, ...patch };
         }),
-      ),
+      ).filter((x) => x !== null),
+      invoices: companies.flatMap((c, i) => {
+        const day = (d: Date) => d.toISOString().slice(0, 10);
+        const now = new Date();
+        return Array.from({ length: 10 }, (_, n) => {
+          const issued = new Date(now.getFullYear(), now.getMonth() - n, 1, 12);
+          const due = new Date(issued.getTime() + 30 * 86_400_000);
+          // the latest is not paid yet; every third client is late on the one before
+          const unpaid = n === 0 || (i % 3 === 1 && n === 1);
+          const subtotal = 450 + ((i * 137 + n * 61) % 900) + (n % 4 === 0 ? 1200 : 0);
+          const tax = Math.round(subtotal * 0.14975 * 100) / 100;
+          return {
+            id: `inv-${c.id}-${n}`,
+            companyId: c.id,
+            number: `F${issued.getFullYear()}${String(issued.getMonth() + 1).padStart(2, "0")}-${String(c.id).slice(-2)}`,
+            issuedOn: day(issued),
+            dueOn: day(due),
+            totalCents: cents(subtotal + tax),
+            taxCents: cents(tax),
+            paidOn: unpaid ? null : day(new Date(due.getTime() - ((i + n) % 20) * 86_400_000)),
+            voided: i % 4 === 2 && n === 5,
+          };
+        });
+      }),
       contracts: companies.flatMap((c) => demoContracts(c.id).map((k) => ({ id: k.id, companyId: c.id, name: k.name, type: k.name.startsWith("Banque") ? "Blocs d'heures" : k.name.startsWith("Projet") ? "Prix fixe" : "Récurrent", isDefault: k.isDefault, startDate: null, endDate: k.endDate }))),
     };
   },
-  // sample data: the portal's copy is the record
-  async updateCompany() {},
-  async updateContact() {},
+  async updateCompany(id, p) {
+    demoCompanyPatches.set(id, { ...demoCompanyPatches.get(id), ...p });
+  },
+  async updateContact(id, p) {
+    demoContactPatches.set(id, { ...demoContactPatches.get(id), ...p });
+  },
   async contracts(companyId) {
     return demoContracts(companyId);
   },
@@ -411,7 +453,9 @@ const demoSource: TicketSource = {
   },
   async addContact(companyId, p) {
     if (!demoCompanies().some((x) => x.id === companyId)) throw new SourceError("invalid_company");
-    return addDemoContact({ companyId, name: `${p.firstName} ${p.lastName}`, email: p.email, phone: p.phone });
+    const c = addDemoContact({ companyId, name: `${p.firstName} ${p.lastName}`, email: p.email, phone: p.phone });
+    if (p.mobile || p.title) demoContactPatches.set(c.id, { mobile: p.mobile ?? null, title: p.title ?? null });
+    return c;
   },
   async charges(ticketId) {
     return demoCharges.get(ticketId) ?? [];
@@ -1563,6 +1607,13 @@ const autotaskSource: TicketSource = {
     type AtCompany = { id: number; companyName: string; phone?: string | null; address1?: string | null; address2?: string | null; city?: string | null; state?: string | null; postalCode?: string | null; webAddress?: string | null; parentCompanyID?: number | null };
     type AtContact = { id: number; companyID: number; firstName?: string; lastName?: string; emailAddress?: string | null; phone?: string | null; mobilePhone?: string | null; title?: string | null };
     type AtContract = { id: number; companyID: number; contractName?: string; contractType?: number | null; isDefaultContract?: boolean; startDate?: string | null; endDate?: string | null };
+    type AtInvoice = { id: number; companyID: number; invoiceNumber?: string | null; invoiceDateTime?: string | null; dueDate?: string | null; invoiceTotal?: number | null; totalTaxValue?: number | null; paidDate?: string | null; isVoided?: boolean | null };
+    const vf = await safeFields(at, "Invoices", ["id", "companyID", "invoiceNumber", "invoiceDateTime", "dueDate", "invoiceTotal", "totalTaxValue", "paidDate", "isVoided"]);
+    // invoices are kept even if this part fails (e.g. an API user without access to billing)
+    const invoices = await at.query<AtInvoice>("Invoices", [{ op: "gte", field: "invoiceDateTime", value: invoicesSince() }], { fields: vf, max: 50_000 }).catch((e) => {
+      console.warn("[crm] invoices not read:", e instanceof Error ? e.message : e);
+      return null;
+    });
     const [cf, pf, kf, kinfo] = await Promise.all([
       safeFields(at, "Companies", ["id", "companyName", "phone", "address1", "address2", "city", "state", "postalCode", "webAddress", "parentCompanyID"]),
       safeFields(at, "Contacts", ["id", "companyID", "firstName", "lastName", "emailAddress", "phone", "mobilePhone", "title"]),
@@ -1589,6 +1640,18 @@ const autotaskSource: TicketSource = {
         parentId: c.parentCompanyID ?? null,
       })),
       contacts: contacts.map((c) => ({ id: String(c.id), companyId: c.companyID, firstName: c.firstName ?? "", lastName: c.lastName ?? "", email: c.emailAddress || null, phone: c.phone || null, mobile: c.mobilePhone || null, title: c.title || null })),
+      invoices: (invoices ?? []).map((v) => ({
+        id: String(v.id),
+        companyId: v.companyID,
+        number: v.invoiceNumber || String(v.id),
+        issuedOn: day(v.invoiceDateTime) ?? "",
+        dueOn: day(v.dueDate),
+        totalCents: cents(v.invoiceTotal),
+        taxCents: cents(v.totalTaxValue),
+        paidOn: day(v.paidDate),
+        voided: Boolean(v.isVoided),
+      })).filter((v) => v.issuedOn),
+      invoicesRead: invoices !== null,
       contracts: contracts.map((k) => ({ id: String(k.id), companyId: k.companyID, name: k.contractName || `#${k.id}`, type: k.contractType != null ? (types.get(String(k.contractType)) ?? null) : null, isDefault: Boolean(k.isDefaultContract), startDate: day(k.startDate), endDate: day(k.endDate) })),
     };
   },
