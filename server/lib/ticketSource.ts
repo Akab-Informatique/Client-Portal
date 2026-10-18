@@ -70,7 +70,8 @@ export type CrmExport = {
   invoicesRead?: boolean;
 };
 /** Work to bill not yet posted in the source (Accounting › Approbation). Money in cents. */
-export type BillableKind = "labour" | "charge" | "expense" | "contract" | "milestone";
+/** project: project work, not imported yet */
+export type BillableKind = "labour" | "charge" | "expense" | "contract" | "milestone" | "project";
 export type Billable = {
   /** Unique in the source, e.g. "time:123" */
   id: string;
@@ -81,6 +82,8 @@ export type Billable = {
   description: string;
   ticketNumber?: string | null;
   contractName?: string | null;
+  /** The contract's id in the source (for automatic approval) */
+  contractSourceId?: string | null;
   resourceName?: string | null;
   /** Hours or units */
   quantity: number;
@@ -489,9 +492,9 @@ const demoSource: TicketSource = {
         if (k.isDefault) {
           const start = new Date(now.getFullYear(), now.getMonth(), 1, 12);
           const end = new Date(now.getFullYear(), now.getMonth() + 1, 0, 12);
-          items.push({ id: `demo-contract-${k.id}-${day(start).slice(0, 7)}`, kind: "contract", companyId: c.id, date: day(start), dateEnd: day(end), description: `${k.name} — ${day(start).slice(0, 7)}`, contractName: k.name, quantity: 1, unitPriceCents: (450 + i * 50) * 100, taxable: true });
+          items.push({ id: `demo-contract-${k.id}-${day(start).slice(0, 7)}`, kind: "contract", companyId: c.id, date: day(start), dateEnd: day(end), description: `${k.name} — ${day(start).slice(0, 7)}`, contractName: k.name, contractSourceId: k.id, quantity: 1, unitPriceCents: (450 + i * 50) * 100, taxable: true });
         }
-        if (k.name.startsWith("Projet")) items.push({ id: `demo-milestone-${k.id}`, kind: "milestone", companyId: c.id, date: ago(1), description: "Étape 2 — migration des boîtes courriel", contractName: k.name, quantity: 1, unitPriceCents: 150000, taxable: true });
+        if (k.name.startsWith("Projet")) items.push({ id: `demo-milestone-${k.id}`, kind: "milestone", companyId: c.id, date: ago(1), description: "Étape 2 — migration des boîtes courriel", contractName: k.name, contractSourceId: k.id, quantity: 1, unitPriceCents: 150000, taxable: true });
       }
     }
     return { items: items.filter((x) => x.date >= since), errors: {} };
@@ -1769,6 +1772,7 @@ const autotaskSource: TicketSource = {
           description: (r.summaryNotes ?? "").trim().slice(0, 2000) || `Billet ${tk.number}`,
           ticketNumber: tk.number,
           contractName: r.contractID ? (contractInfo.get(r.contractID)?.name ?? null) : null,
+          contractSourceId: r.contractID ? String(r.contractID) : null,
           resourceName: r.resourceID ? (people.get(r.resourceID) ?? null) : null,
           quantity: r.hoursToBill ?? r.hoursWorked ?? 0,
           unitPriceCents: rate != null ? cents(rate) : null,
@@ -1788,7 +1792,7 @@ const autotaskSource: TicketSource = {
       for (const r of rows) {
         const tk = ticketInfo.get(r.ticketID);
         if (!tk) continue;
-        items.push({ id: `charge:${r.id}`, kind: "charge", companyId: tk.companyId, date: day(r.datePurchased) ?? since, description: [r.name, r.description].filter(Boolean).join(" — ").slice(0, 2000), ticketNumber: tk.number, quantity: r.unitQuantity ?? 1, unitPriceCents: r.unitPrice != null ? cents(r.unitPrice) : null, taxable: true });
+        items.push({ id: `charge:${r.id}`, kind: "charge", companyId: tk.companyId, date: day(r.datePurchased) ?? since, description: [r.name, r.description].filter(Boolean).join(" — ").slice(0, 2000), ticketNumber: tk.number, contractSourceId: r.contractID ? String(r.contractID) : null, quantity: r.unitQuantity ?? 1, unitPriceCents: r.unitPrice != null ? cents(r.unitPrice) : null, taxable: true });
       }
     } catch (e) {
       errors.charge = msg(e);
@@ -1833,6 +1837,7 @@ const autotaskSource: TicketSource = {
           dateEnd: day(r.endDate),
           description: [service ?? k.name, `${day(r.startDate)} → ${day(r.endDate)}`].join(" — "),
           contractName: k.name,
+          contractSourceId: String(r.contractID),
           quantity: units,
           unitPriceCents: r.price != null ? cents(r.price) : null,
           taxable: true,
@@ -1853,7 +1858,7 @@ const autotaskSource: TicketSource = {
       for (const r of rows) {
         const k = contractInfo.get(r.contractID);
         if (!k) continue;
-        items.push({ id: `milestone:${r.id}`, kind: "milestone", companyId: k.companyId, date: day(r.dateDue) ?? since, description: [r.title, r.description].filter(Boolean).join(" — ").slice(0, 2000), contractName: k.name, quantity: 1, unitPriceCents: cents(r.amount ?? 0), taxable: true });
+        items.push({ id: `milestone:${r.id}`, kind: "milestone", companyId: k.companyId, date: day(r.dateDue) ?? since, description: [r.title, r.description].filter(Boolean).join(" — ").slice(0, 2000), contractName: k.name, contractSourceId: String(r.contractID), quantity: 1, unitPriceCents: cents(r.amount ?? 0), taxable: true });
       }
     } catch (e) {
       errors.milestone = msg(e);

@@ -29,6 +29,8 @@ export type ClientInvoiceSettings = {
   taxNumber?: string;
   poRequired?: boolean;
   hourlyRate?: number | null;
+  /** Kinds of work approved automatically when imported (labour, charge, contract, milestone, project) */
+  autoApprove?: string[];
   notes?: string;
 };
 
@@ -105,6 +107,8 @@ export const clientContracts = pgTable(
     type: text("type"),
     active: boolean("active").notNull().default(true),
     isDefault: boolean("is_default").notNull().default(false),
+    /** Work done under this contract is approved automatically when imported */
+    autoApprove: boolean("auto_approve").notNull().default(false),
     /** YYYY-MM-DD */
     startDate: text("start_date"),
     endDate: text("end_date"),
@@ -139,6 +143,9 @@ export const clientInvoices = pgTable(
     quickbooksError: text("quickbooks_error"),
     /** autotask: copied from Autotask · portal: made here from posted items */
     source: text("source").notNull().default("autotask"),
+    /** Shown on the invoice (made in the portal) */
+    notes: text("notes"),
+    poNumber: text("po_number"),
     syncedAt: timestamp("synced_at", { withTimezone: true }),
     createdAt: created(),
     updatedAt: updated(),
@@ -172,6 +179,8 @@ export const billingItems = pgTable(
     description: text("description").notNull().default(""),
     ticketNumber: text("ticket_number"),
     contractName: text("contract_name"),
+    /** The contract it was done under (for automatic approval) */
+    contractId: uuid("contract_id").references(() => clientContracts.id, { onDelete: "set null" }),
     resourceName: text("resource_name"),
     /** Hours, units… ×100 */
     quantityX100: integer("quantity_x100").notNull().default(100),

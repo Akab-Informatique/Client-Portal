@@ -12,6 +12,7 @@ import { ticketSource, type NTicket } from "../lib/ticketSource.ts";
 import { crmState, descendantsOf, ensureCrm, rememberCompany, rememberContact, syncCrm } from "../lib/crm.ts";
 import { lookup, run } from "./tickets.ts";
 import { pushInvoice } from "../lib/quickbooks.ts";
+import { applyAutoApprove } from "../lib/billables.ts";
 import { quickbooksHttp } from "./billing.ts";
 
 /**
@@ -184,10 +185,13 @@ export const crmRoutes = new Hono<AppEnv>()
         poRequired: z.boolean().optional(),
         hourlyRate: z.number().min(0).max(10_000).nullable().optional(),
         notes: z.string().trim().max(2000).optional(),
+        autoApprove: z.array(z.enum(["labour", "charge", "contract", "milestone", "project"])).optional(),
       }),
     );
     const [row] = await db().update(schema.clients).set({ invoice: p, updatedAt: new Date() }).where(eq(schema.clients.id, client.id)).returning();
-    await audit(a.user.id, "crm.invoice_updated", client.id);
+    // what waits already follows the new rule
+    const approved = p.autoApprove?.length ? await applyAutoApprove(client.id) : 0;
+    await audit(a.user.id, "crm.invoice_updated", client.id, { autoApprove: p.autoApprove, approved });
     return c.json(row.invoice);
   })
 
@@ -393,6 +397,8 @@ export const crmRoutes = new Hono<AppEnv>()
         late,
         daysLate: late ? Math.round((Date.parse(today) - Date.parse(v.dueOn!)) / 86_400_000) : 0,
         source: v.source,
+        notes: v.notes,
+        poNumber: v.poNumber,
         lines: (lines.get(v.id) ?? []).map((l) => ({ id: l.id, kind: l.kind, description: l.description, quantity: l.quantityX100 / 100, unitPriceCents: l.unitPriceCents, amountCents: l.amountCents, taxable: l.taxable })),
         quickbooks: v.quickbooksId || v.quickbooksError ? { id: v.quickbooksId, syncedAt: v.quickbooksSyncedAt, error: v.quickbooksError } : null,
         payments: mine.map((x) => ({ id: x.p.id, amountCents: x.p.amountCents, paidOn: x.p.paidOn, method: x.p.method, reference: x.p.reference, note: x.p.note, source: x.p.source, by: x.by })),
@@ -458,6 +464,22 @@ export const crmRoutes = new Hono<AppEnv>()
     if (!row) throw new HTTPException(404, { message: "not_found" });
     await audit(a.user.id, "billing.payment_removed", row.invoiceId, { amountCents: row.amountCents });
     return c.json({ ok: true });
+  })
+
+  /** A contract's work approved automatically when imported (crm.billing). */
+  .patch("/clients/:id/contracts/:kid", requirePermission("crm.billing"), async (c) => {
+    const a = auth(c);
+    const client = await clientOr404(c.req.param("id"));
+    const p = await body(c, z.object({ autoApprove: z.boolean() }));
+    const [row] = await db()
+      .update(schema.clientContracts)
+      .set({ autoApprove: p.autoApprove, updatedAt: new Date() })
+      .where(and(eq(schema.clientContracts.id, zUuid.parse(c.req.param("kid"))), eq(schema.clientContracts.clientId, client.id)))
+      .returning();
+    if (!row) throw new HTTPException(404, { message: "not_found" });
+    const approved = p.autoApprove ? await applyAutoApprove(client.id) : 0;
+    await audit(a.user.id, "crm.contract_auto_approve", row.id, { autoApprove: p.autoApprove, approved });
+    return c.json({ ...row, approved });
   })
 
   // ── tickets of the client (and of its child companies, on demand)

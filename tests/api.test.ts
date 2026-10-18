@@ -3179,3 +3179,65 @@ describe("work to bill: copied from Autotask, approved, posted as invoices", () 
     expect(Number(second[0].number)).toBe(Number(made[0].number) + 1);
   });
 });
+
+describe("billing rules and the invoice editor", () => {
+  it("approves automatically by client (kinds) or by contract; makes an invoice from chosen kinds with dates, terms, PO and notes", async () => {
+    resetRateLimit("login:ip:unknown");
+    const admin = await signIn("admin@akab.local");
+    const tech = await signIn("tech@akab.local");
+    await admin.post("/api/billables/import");
+    const clients = (await admin.get("/api/crm/clients")).json;
+    const garage = clients.find((c: any) => c.autotaskId === 306);
+    const items = () => admin.get(`/api/billables?clientId=${garage.id}`).then((r) => r.json);
+    expect((await items()).every((i: any) => i.status === "pending")).toBe(true);
+
+    // per contract: everything under it, right away (what waits already, and what comes next)
+    const contracts = (await admin.get(`/api/crm/clients/${garage.id}/contracts`)).json;
+    const managed = contracts.find((k: any) => k.isDefault);
+    expect((await tech.patch(`/api/crm/clients/${garage.id}/contracts/${managed.id}`, { autoApprove: true })).status).toBe(403);
+    expect((await admin.patch(`/api/crm/clients/${garage.id}/contracts/${managed.id}`, { autoApprove: true })).json).toMatchObject({ autoApprove: true, approved: 1 });
+    let all = await items();
+    expect(all.find((i: any) => i.kind === "contract")).toMatchObject({ status: "approved", autoApproved: true });
+    expect(all.find((i: any) => i.kind === "labour").status).toBe("pending");
+
+    // per client: the labour
+    const inv = (await admin.get(`/api/crm/clients/${garage.id}`)).json.invoice;
+    await admin.put(`/api/crm/clients/${garage.id}/invoice`, { ...inv, termsDays: 15, autoApprove: ["labour"] });
+    all = await items();
+    expect(all.filter((i: any) => i.kind === "labour").every((i: any) => i.status === "approved")).toBe(true);
+    expect(all.find((i: any) => i.kind === "charge").status).toBe("pending");
+    // new imports follow the rules too
+    await db().delete(schema.billingItems).where(eq(schema.billingItems.clientId, garage.id));
+    await admin.post("/api/billables/import");
+    all = await items();
+    expect(all.filter((i: any) => i.kind === "labour" || i.kind === "contract").every((i: any) => i.status === "approved")).toBe(true);
+    expect(all.find((i: any) => i.kind === "charge").status).toBe("pending");
+
+    // the editor: what can be invoiced, by kind
+    const ready = (await admin.get("/api/billables/clients")).json.find((g: any) => g.client.id === garage.id);
+    expect(ready.kinds.map((k: any) => k.kind).sort()).toEqual(["contract", "labour"]);
+    // a preview of only the labour: client terms (15 days), a due date, a PO, notes; nothing saved
+    const pv = (await admin.post("/api/billables/invoice/preview", { clientId: garage.id, kinds: ["labour"], issuedOn: "2026-10-20", poNumber: "PO-778", notes: "Merci !" })).json;
+    const labour = all.filter((i: any) => i.kind === "labour");
+    expect(pv).toMatchObject({ issuedOn: "2026-10-20", dueOn: "2026-11-04", termsDays: 15, poNumber: "PO-778", notes: "Merci !", subtotalCents: labour.reduce((x: number, i: any) => x + i.amountCents, 0) });
+    expect(pv.lines).toHaveLength(labour.length);
+    expect((await items()).filter((i: any) => i.status === "posted")).toHaveLength(0);
+    // an exact due date instead of terms; an item of another client or not approved: refused
+    expect((await admin.post("/api/billables/invoice/preview", { clientId: garage.id, kinds: ["labour"], issuedOn: "2026-10-20", dueOn: "2026-12-01" })).json).toMatchObject({ dueOn: "2026-12-01", termsDays: null });
+    const charge = all.find((i: any) => i.kind === "charge");
+    expect((await admin.post("/api/billables/invoice/preview", { clientId: garage.id, itemIds: [charge.id] })).json.error).toBe("billing_items_invalid");
+    expect((await admin.post("/api/billables/invoice/preview", { clientId: garage.id, kinds: ["milestone"] })).json.error).toBe("billing_nothing");
+
+    // made: only the labour; the contract waits for another invoice
+    expect((await tech.post("/api/billables/invoice", { clientId: garage.id, kinds: ["labour"] })).status).toBe(403);
+    const made = (await admin.post("/api/billables/invoice", { clientId: garage.id, kinds: ["labour"], issuedOn: "2026-10-20", poNumber: "PO-778", notes: "Merci !" })).json;
+    expect(made.number).toBe(pv.number);
+    const invoice = (await admin.get(`/api/crm/clients/${garage.id}/invoices`)).json.items.find((v: any) => v.id === made.id);
+    expect(invoice).toMatchObject({ source: "portal", issuedOn: "2026-10-20", dueOn: "2026-11-04", poNumber: "PO-778", notes: "Merci !" });
+    expect(invoice.lines).toHaveLength(labour.length);
+    const after = await items();
+    expect(after.filter((i: any) => i.kind === "labour").every((i: any) => i.status === "posted")).toBe(true);
+    expect(after.find((i: any) => i.kind === "contract").status).toBe("approved");
+    expect((await admin.get("/api/billables/clients")).json.find((g: any) => g.client.id === garage.id).kinds.map((k: any) => k.kind)).toEqual(["contract"]);
+  });
+});

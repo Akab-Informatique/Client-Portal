@@ -38,6 +38,7 @@ import { Label } from "@/components/ui/label";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Switch } from "@/components/ui/switch";
+import { Checkbox } from "@/components/ui/checkbox";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuSeparator, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { useConfirm } from "@/components/ConfirmDialog";
 import { relativeTime } from "@/lib/format";
@@ -607,6 +608,12 @@ function Payments({ invoice: v, clientId }: { invoice: CrmInvoice; clientId: str
   const remove = useMutation({ mutationFn: (pid: string) => api.del(`/crm/invoices/${v.id}/payments/${pid}`), onSuccess: refresh });
   return (
     <div className="space-y-3 border-t border-dashed bg-background/30 px-4 py-3">
+      {(v.poNumber || v.notes) && (
+        <p className="text-xs text-muted-foreground">
+          {v.poNumber && <span className="mr-3">PO : <span className="font-mono text-foreground">{v.poNumber}</span></span>}
+          {v.notes && <span className="whitespace-pre-line">{v.notes}</span>}
+        </p>
+      )}
       {v.lines.length > 0 && (
         <table className="w-full text-xs">
           <thead className="text-[10px] uppercase tracking-wider text-muted-foreground">
@@ -949,7 +956,18 @@ function ContactForm({ clientId, contact, onDone }: { clientId: string; contact?
 // ── Contracts ──
 function ContractsTab({ client }: { client: CrmDetail }) {
   const { t } = useTranslation();
+  const can = useCan();
+  const qc = useQueryClient();
   const { data: contracts = [], isLoading } = useQuery({ queryKey: ["crm", "client", client.id, "contracts"], queryFn: () => api.get<CrmContract[]>(`/crm/clients/${client.id}/contracts`) });
+  const auto = useMutation({
+    mutationFn: (p: { id: string; autoApprove: boolean }) => api.patch<{ approved: number }>(`/crm/clients/${client.id}/contracts/${p.id}`, { autoApprove: p.autoApprove }),
+    onSuccess: (r, p) => {
+      void qc.invalidateQueries({ queryKey: ["crm", "client", client.id, "contracts"] });
+      void qc.invalidateQueries({ queryKey: ["billables"] });
+      toast.success(p.autoApprove ? t("crm.contracts.autoOn", { count: r.approved }) : t("crm.contracts.autoOff"));
+    },
+    onError: () => toast.error(t("common.error")),
+  });
   return (
     <Card title={t("crm.tabs.contracts")} icon={<FileText className="size-4" />}>
       {isLoading && <Loader2 className="mx-auto size-5 animate-spin text-muted-foreground" />}
@@ -966,6 +984,9 @@ function ContractsTab({ client }: { client: CrmDetail }) {
               <span className="w-44 text-xs text-muted-foreground">
                 {k.startDate ? shortDate(k.startDate) : "…"} → {k.endDate ? shortDate(k.endDate) : t("crm.contracts.noEnd")}
               </span>
+              <label className="flex items-center gap-2 text-xs text-muted-foreground" title={t("crm.contracts.autoHint")}>
+                <Switch checked={k.autoApprove} disabled={!can("crm.billing") || auto.isPending} onCheckedChange={(v) => auto.mutate({ id: k.id, autoApprove: v })} /> {t("crm.contracts.auto")}
+              </label>
             </li>
           ))}
         </ul>
@@ -988,6 +1009,7 @@ function InvoiceTab({ client }: { client: CrmDetail }) {
     poRequired: s?.poRequired ?? false,
     hourlyRate: s?.hourlyRate ?? null,
     notes: s?.notes ?? "",
+    autoApprove: s?.autoApprove ?? [],
   });
   const [f, setF] = useState(() => pick(client.invoice));
   useEffect(() => setF(pick(client.invoice)), [client.invoice]);
@@ -1069,6 +1091,17 @@ function InvoiceTab({ client }: { client: CrmDetail }) {
               <Switch checked={f.poRequired} onCheckedChange={(v) => setF({ ...f, poRequired: v })} /> {t("crm.invoice.po")}
             </label>
           </div>
+          <Field label={t("crm.invoice.autoApprove")} className="sm:col-span-2 lg:col-span-3">
+            <div className="flex flex-wrap gap-2">
+              {(["labour", "charge", "contract", "milestone", "project"] as const).map((k) => (
+                <label key={k} className={cn("flex cursor-pointer items-center gap-2 rounded-lg border px-2.5 py-1.5 text-xs", f.autoApprove.includes(k) && "border-[color:var(--gold)]/50 bg-[color:var(--gold)]/10")}>
+                  <Checkbox checked={f.autoApprove.includes(k)} onCheckedChange={(v) => setF({ ...f, autoApprove: v ? [...f.autoApprove, k] : f.autoApprove.filter((x) => x !== k) })} />
+                  {t(`approvals.tabs.${k}`)}
+                </label>
+              ))}
+            </div>
+            <p className="text-[11px] text-muted-foreground">{t("crm.invoice.autoApproveHint")}</p>
+          </Field>
           <Field label={t("crm.invoice.notes")} className="sm:col-span-2 lg:col-span-3">
             <Textarea rows={3} value={f.notes} onChange={(e) => setF({ ...f, notes: e.target.value })} />
           </Field>

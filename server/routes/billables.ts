@@ -4,7 +4,7 @@ import { z } from "zod";
 import { auth, requirePermission, requireStaff, type AppEnv } from "../lib/auth.ts";
 import { audit } from "../lib/audit.ts";
 import { body, zUuid } from "../lib/validate.ts";
-import { BILLABLE_KINDS, billableCounts, billablesState, editBillable, listBillables, postInvoices, postPreview, setBillableStatus, syncBillables } from "../lib/billables.ts";
+import { BILLABLE_KINDS, billableCounts, billablesState, createInvoice, DraftError, draftInvoice, editBillable, invoiceableClients, listBillables, postInvoices, postPreview, setBillableStatus, syncBillables } from "../lib/billables.ts";
 import type { BillableKind } from "../lib/ticketSource.ts";
 import { AutotaskError } from "../lib/autotask.ts";
 
@@ -14,6 +14,25 @@ import { AutotaskError } from "../lib/autotask.ts";
  */
 const zKind = z.enum(BILLABLE_KINDS as [BillableKind, ...BillableKind[]]);
 const zStatus = z.enum(["pending", "approved", "posted", "excluded"]);
+const zDay = z.string().regex(/^\d{4}-\d{2}-\d{2}$/);
+const zDraft = z.object({
+  clientId: zUuid,
+  itemIds: z.array(zUuid).min(1).max(5000).optional(),
+  kinds: z.array(zKind).min(1).optional(),
+  issuedOn: zDay.optional(),
+  termsDays: z.number().int().min(0).max(365).optional(),
+  dueOn: zDay.optional(),
+  notes: z.string().trim().max(2000).nullable().optional(),
+  poNumber: z.string().trim().max(60).nullable().optional(),
+});
+async function drafted<T>(fn: () => Promise<T>): Promise<T> {
+  try {
+    return await fn();
+  } catch (e) {
+    if (e instanceof DraftError) throw new HTTPException(e.message === "not_found" ? 404 : 400, { message: e.message });
+    throw e;
+  }
+}
 
 export const billablesRoutes = new Hono<AppEnv>()
   .use(requireStaff)
@@ -22,7 +41,8 @@ export const billablesRoutes = new Hono<AppEnv>()
   .get("/", async (c) => {
     const kind = c.req.query("kind") ? zKind.parse(c.req.query("kind")) : null;
     const status = c.req.query("status") ? zStatus.parse(c.req.query("status")) : null;
-    return c.json(await listBillables(kind, status));
+    const clientId = c.req.query("clientId") ? zUuid.parse(c.req.query("clientId")) : null;
+    return c.json(await listBillables(kind, status, clientId));
   })
   .get("/summary", async (c) => c.json({ state: await billablesState(), counts: await billableCounts() }))
 
@@ -61,6 +81,20 @@ export const billablesRoutes = new Hono<AppEnv>()
     if (!row) throw new HTTPException(409, { message: "billing_item_posted" });
     await audit(a.user.id, "billing.item_edited", id, { fields: Object.keys(p) });
     return c.json(row);
+  })
+
+  // ── Créer des factures: a client, the kinds or lines, dates, terms, notes ──
+  .get("/clients", async (c) => c.json(await invoiceableClients()))
+  .post("/invoice/preview", async (c) => {
+    const p = await body(c, zDraft);
+    return c.json(await drafted(() => draftInvoice(p)));
+  })
+  .post("/invoice", requirePermission("accounting.manage"), async (c) => {
+    const a = auth(c);
+    const p = await body(c, zDraft);
+    const made = await drafted(() => createInvoice(a.user.id, p));
+    await audit(a.user.id, "billing.invoice_created", made.id, { number: made.number, totalCents: made.totalCents });
+    return c.json(made, 201);
   })
 
   /** What posting the approved items would make (per client). */

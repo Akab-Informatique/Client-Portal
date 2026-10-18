@@ -30,6 +30,8 @@ export type InvoiceSettings = {
   poRequired?: boolean;
   hourlyRate?: number | null;
   notes?: string;
+  /** Kinds of work approved automatically when imported */
+  autoApprove?: string[];
 };
 export type CrmDetail = CrmClient & {
   parent: { id: string; name: string } | null;
@@ -71,6 +73,8 @@ export type CrmInvoice = {
   payments: InvoicePayment[];
   /** autotask: copied from Autotask · portal: made here (with its lines) */
   source: "autotask" | "portal";
+  notes: string | null;
+  poNumber: string | null;
   lines: { id: string; kind: string; description: string; quantity: number; unitPriceCents: number; amountCents: number; taxable: boolean }[];
   /** In QuickBooks: its id once sent, the last send, its error */
   quickbooks: { id: string | null; syncedAt: string | null; error: string | null } | null;
@@ -79,7 +83,7 @@ export type CrmInvoices = { summary: { dueCents: number; overdueCents: number; o
 /** 1 234,56 $ */
 export const money = (cents: number, lang: string) => new Intl.NumberFormat(lang === "en" ? "en-CA" : "fr-CA", { style: "currency", currency: "CAD" }).format(cents / 100);
 
-export type CrmContract = { id: string; name: string; type: string | null; active: boolean; isDefault: boolean; startDate: string | null; endDate: string | null };
+export type CrmContract = { id: string; name: string; type: string | null; active: boolean; isDefault: boolean; autoApprove: boolean; startDate: string | null; endDate: string | null };
 export type CrmTicket = {
   id: number;
   number: string;

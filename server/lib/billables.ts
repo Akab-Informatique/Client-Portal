@@ -1,4 +1,4 @@
-import { and, asc, eq, inArray, sql } from "drizzle-orm";
+import { and, asc, eq, inArray, isNotNull, sql } from "drizzle-orm";
 import { db, schema } from "../db/index.ts";
 import { billingSettings, formatInvoiceNumber, saveBillingSettings, type BillingSettings } from "./billing.ts";
 import { ensureCrm } from "./crm.ts";
@@ -7,12 +7,15 @@ import { ticketSource, type BillableKind } from "./ticketSource.ts";
 /**
  * Work to bill (Accounting › Approbation): copied from Autotask while it is
  * linked — only what is not posted there yet, so nothing is billed twice —
- * then approved (or excluded) in the portal, then posted: one new invoice per
- * client, its lines, GST and QST, the next invoice number.
+ * approved by hand or by rules (per client: kinds; per contract: everything
+ * under it), then invoiced: a client, the kinds or lines to bill, dates,
+ * terms, notes; or every client at once.
  */
-export const BILLABLE_KINDS: BillableKind[] = ["labour", "charge", "expense", "contract", "milestone"];
+export const BILLABLE_KINDS: BillableKind[] = ["labour", "charge", "expense", "contract", "milestone", "project"];
 const STATE_KEY = "autotask.billables";
 export type BillablesState = { at: string | null; counts: Partial<Record<BillableKind, number>>; errors: Partial<Record<BillableKind, string>>; skipped: number };
+type Item = typeof schema.billingItems.$inferSelect;
+type Client = typeof schema.clients.$inferSelect;
 
 export async function billablesState(): Promise<BillablesState> {
   const [row] = await db().select().from(schema.syncState).where(eq(schema.syncState.key, STATE_KEY));
@@ -20,6 +23,28 @@ export async function billablesState(): Promise<BillablesState> {
 }
 
 const amountOf = (quantityX100: number, unitPriceCents: number) => Math.round((quantityX100 * unitPriceCents) / 100);
+
+/** Approved by a rule: the client approves this kind, or the contract approves everything under it. */
+const ruled = (item: { kind: string; contractId: string | null }, client: { invoice: Client["invoice"] | null }, autoContracts: Set<string>) =>
+  Boolean(client.invoice?.autoApprove?.includes(item.kind)) || Boolean(item.contractId && autoContracts.has(item.contractId));
+
+async function autoContracts() {
+  return new Set((await db().select({ id: schema.clientContracts.id }).from(schema.clientContracts).where(eq(schema.clientContracts.autoApprove, true))).map((r) => r.id));
+}
+
+/** Apply the rules to the items waiting (after a rule is set). Returns how many were approved. */
+export async function applyAutoApprove(clientId?: string) {
+  const d = db();
+  const contracts = await autoContracts();
+  const clients = new Map((await d.select({ id: schema.clients.id, invoice: schema.clients.invoice }).from(schema.clients)).map((c) => [c.id, c]));
+  const pending = await d
+    .select()
+    .from(schema.billingItems)
+    .where(and(eq(schema.billingItems.status, "pending"), clientId ? eq(schema.billingItems.clientId, clientId) : undefined));
+  const ids = pending.filter((i) => ruled(i, clients.get(i.clientId) ?? { invoice: null }, contracts)).map((i) => i.id);
+  if (ids.length) await d.update(schema.billingItems).set({ status: "approved", approvedAt: new Date(), approvedBy: null, updatedAt: new Date() }).where(inArray(schema.billingItems.id, ids));
+  return ids.length;
+}
 
 let running: Promise<BillablesState> | null = null;
 
@@ -35,6 +60,10 @@ export function syncBillables(): Promise<BillablesState> {
     const clients = new Map(
       (await d.select({ id: schema.clients.id, at: schema.clients.autotaskId, invoice: schema.clients.invoice }).from(schema.clients)).filter((c) => c.at != null).map((c) => [c.at!, c]),
     );
+    const contractIds = new Map(
+      (await d.select({ id: schema.clientContracts.id, at: schema.clientContracts.autotaskId }).from(schema.clientContracts).where(isNotNull(schema.clientContracts.autotaskId))).map((k) => [k.at!, k.id]),
+    );
+    const autoK = await autoContracts();
     const existing = new Map((await d.select().from(schema.billingItems).where(eq(schema.billingItems.source, "autotask"))).map((x) => [x.sourceId!, x]));
     const counts: BillablesState["counts"] = {};
     let skipped = 0;
@@ -58,6 +87,7 @@ export function syncBillables(): Promise<BillablesState> {
         description: it.description,
         ticketNumber: it.ticketNumber ?? null,
         contractName: it.contractName ?? null,
+        contractId: it.contractSourceId ? (contractIds.get(it.contractSourceId) ?? null) : null,
         resourceName: it.resourceName ?? null,
         quantityX100,
         unitPriceCents: rate,
@@ -66,11 +96,16 @@ export function syncBillables(): Promise<BillablesState> {
         syncedAt: now,
       };
       const hit = existing.get(it.id);
-      if (!hit) await d.insert(schema.billingItems).values({ ...values, source: "autotask", sourceId: it.id });
-      else if (hit.status === "pending" && !hit.edited) await d.update(schema.billingItems).set({ ...values, updatedAt: now }).where(eq(schema.billingItems.id, hit.id));
+      if (!hit) {
+        // new: approved right away when a rule says so
+        const auto = ruled(values, client, autoK);
+        await d.insert(schema.billingItems).values({ ...values, source: "autotask", sourceId: it.id, status: auto ? "approved" : "pending", approvedAt: auto ? now : null });
+      } else if (hit.status === "pending" && !hit.edited) await d.update(schema.billingItems).set({ ...values, updatedAt: now }).where(eq(schema.billingItems.id, hit.id));
     }
-    // gone from the source (posted or removed in Autotask): pending, untouched ones go too — only for kinds read without error
-    const gone = [...existing.values()].filter((x) => !seen.has(x.sourceId!) && x.status === "pending" && !x.edited && !data.errors[x.kind as BillableKind]).map((x) => x.id);
+    // gone from the source (posted or removed in Autotask): untouched ones go too — only for kinds read without error
+    const gone = [...existing.values()]
+      .filter((x) => !seen.has(x.sourceId!) && (x.status === "pending" || (x.status === "approved" && !x.approvedBy)) && !x.edited && !data.errors[x.kind as BillableKind])
+      .map((x) => x.id);
     if (gone.length) await d.delete(schema.billingItems).where(inArray(schema.billingItems.id, gone));
     const state: BillablesState = { at: now.toISOString(), counts, errors: data.errors, skipped };
     await d
@@ -85,15 +120,16 @@ export function syncBillables(): Promise<BillablesState> {
 }
 
 /** The items of a kind (and status), with their client. */
-export async function listBillables(kind: BillableKind | null, status: string | null) {
+export async function listBillables(kind: BillableKind | null, status: string | null, clientId?: string | null) {
   const rows = await db()
-    .select({ b: schema.billingItems, client: schema.clients.name, invoice: schema.clientInvoices.number })
+    .select({ b: schema.billingItems, client: schema.clients.name, invoice: schema.clientInvoices.number, auto: schema.clientContracts.autoApprove })
     .from(schema.billingItems)
     .innerJoin(schema.clients, eq(schema.clients.id, schema.billingItems.clientId))
     .leftJoin(schema.clientInvoices, eq(schema.clientInvoices.id, schema.billingItems.invoiceId))
-    .where(and(kind ? eq(schema.billingItems.kind, kind) : undefined, status ? eq(schema.billingItems.status, status) : undefined))
+    .leftJoin(schema.clientContracts, eq(schema.clientContracts.id, schema.billingItems.contractId))
+    .where(and(kind ? eq(schema.billingItems.kind, kind) : undefined, status ? eq(schema.billingItems.status, status) : undefined, clientId ? eq(schema.billingItems.clientId, clientId) : undefined))
     .orderBy(asc(schema.clients.name), asc(schema.billingItems.date));
-  return rows.map(({ b, client, invoice }) => ({ ...b, clientName: client, invoiceNumber: invoice }));
+  return rows.map(({ b, client, invoice }) => ({ ...b, clientName: client, invoiceNumber: invoice, autoApproved: b.status !== "pending" && b.approvedAt != null && !b.approvedBy && b.status !== "excluded" }));
 }
 
 /** How many items wait, by kind and status (for the tab counts). */
@@ -130,52 +166,114 @@ export async function editBillable(id: string, p: { quantity?: number; unitPrice
   return row;
 }
 
-// ── posting: approved items → one invoice per client ──
-const ACCOUNT_OF: Record<BillableKind, keyof BillingSettings["accounts"]> = { labour: "labour", charge: "charges", expense: "charges", contract: "contracts", milestone: "contracts" };
+// ── invoicing: approved items → an invoice ──
+const ACCOUNT_OF: Record<BillableKind, keyof BillingSettings["accounts"]> = { labour: "labour", charge: "charges", expense: "charges", contract: "contracts", milestone: "contracts", project: "labour" };
 
 function taxesOf(s: BillingSettings, taxableCents: number, exempt: boolean) {
   if (exempt) return { gst: 0, qst: 0 };
   return { gst: Math.round((taxableCents * s.taxes.gstRate) / 100), qst: Math.round((taxableCents * s.taxes.qstRate) / 100) };
 }
 
-/** What posting would make: per client, the lines, subtotal, taxes and total. */
-export async function postPreview(clientIds?: string[]) {
-  const s = await billingSettings();
+/** Per client: the approved items, by kind (what can be invoiced). */
+export async function invoiceableClients() {
   const rows = await db()
-    .select({ b: schema.billingItems, client: schema.clients })
+    .select({ clientId: schema.billingItems.clientId, name: schema.clients.name, kind: schema.billingItems.kind, n: sql<number>`count(*)::int`, cents: sql<number>`sum(${schema.billingItems.amountCents})::bigint` })
     .from(schema.billingItems)
     .innerJoin(schema.clients, eq(schema.clients.id, schema.billingItems.clientId))
-    .where(and(eq(schema.billingItems.status, "approved"), clientIds?.length ? inArray(schema.billingItems.clientId, clientIds) : undefined))
-    .orderBy(asc(schema.clients.name), asc(schema.billingItems.date));
-  const groups = new Map<string, { client: typeof schema.clients.$inferSelect; items: (typeof schema.billingItems.$inferSelect)[] }>();
+    .where(eq(schema.billingItems.status, "approved"))
+    .groupBy(schema.billingItems.clientId, schema.clients.name, schema.billingItems.kind);
+  const m = new Map<string, { client: { id: string; name: string }; kinds: { kind: string; count: number; cents: number }[]; cents: number }>();
   for (const r of rows) {
-    const g = groups.get(r.client.id) ?? { client: r.client, items: [] };
-    g.items.push(r.b);
-    groups.set(r.client.id, g);
+    const g = m.get(r.clientId) ?? { client: { id: r.clientId, name: r.name }, kinds: [], cents: 0 };
+    g.kinds.push({ kind: r.kind, count: r.n, cents: Number(r.cents) });
+    g.cents += Number(r.cents);
+    m.set(r.clientId, g);
   }
-  return [...groups.values()].map((g) => {
-    const subtotal = g.items.reduce((x, i) => x + i.amountCents, 0);
-    const taxable = g.items.filter((i) => i.taxable).reduce((x, i) => x + i.amountCents, 0);
-    const exempt = g.client.invoice?.taxes === false;
-    const { gst, qst } = taxesOf(s, taxable, exempt);
-    return {
-      client: { id: g.client.id, name: g.client.name },
-      items: g.items,
-      count: g.items.length,
-      subtotalCents: subtotal,
-      gstCents: gst,
-      qstCents: qst,
-      totalCents: subtotal + gst + qst,
-      exempt,
-      termsDays: g.client.invoice?.termsDays ?? s.template.termsDays,
-    };
-  });
+  return [...m.values()].sort((x, y) => x.client.name.localeCompare(y.client.name));
+}
+
+export type InvoiceDraft = {
+  clientId: string;
+  /** The items to bill (approved, of this client); none: every approved item of the kinds given */
+  itemIds?: string[];
+  kinds?: BillableKind[];
+  issuedOn?: string;
+  /** Terms in days, or an exact due date */
+  termsDays?: number;
+  dueOn?: string;
+  notes?: string | null;
+  poNumber?: string | null;
+};
+
+export class DraftError extends Error {}
+
+const todayQc = () => new Date().toLocaleDateString("en-CA", { timeZone: "America/Toronto" });
+
+/** The invoice the draft would make (nothing saved): its lines, taxes, dates, the number it would get. */
+export async function draftInvoice(p: InvoiceDraft) {
+  const s = await billingSettings();
+  const d = db();
+  const [client] = await d.select().from(schema.clients).where(eq(schema.clients.id, p.clientId));
+  if (!client) throw new DraftError("not_found");
+  const approved = await d
+    .select()
+    .from(schema.billingItems)
+    .where(and(eq(schema.billingItems.clientId, client.id), eq(schema.billingItems.status, "approved")))
+    .orderBy(asc(schema.billingItems.kind), asc(schema.billingItems.date));
+  let items: Item[];
+  if (p.itemIds) {
+    const wanted = new Set(p.itemIds);
+    items = approved.filter((i) => wanted.has(i.id));
+    // only this client's approved items
+    if (items.length !== wanted.size) throw new DraftError("billing_items_invalid");
+  } else items = approved.filter((i) => !p.kinds || p.kinds.includes(i.kind as BillableKind));
+  if (!items.length) throw new DraftError("billing_nothing");
+  const issuedOn = p.issuedOn ?? todayQc();
+  const termsDays = p.termsDays ?? client.invoice?.termsDays ?? s.template.termsDays;
+  let dueOn = p.dueOn;
+  if (!dueOn) {
+    const due = new Date(`${issuedOn}T12:00:00`);
+    due.setDate(due.getDate() + termsDays);
+    dueOn = due.toISOString().slice(0, 10);
+  }
+  const subtotal = items.reduce((x, i) => x + i.amountCents, 0);
+  const taxable = items.filter((i) => i.taxable).reduce((x, i) => x + i.amountCents, 0);
+  const exempt = client.invoice?.taxes === false;
+  const { gst, qst } = taxesOf(s, taxable, exempt);
+  return {
+    client: { id: client.id, name: client.name, address: client.address, city: client.city, province: client.province, postalCode: client.postalCode, email: client.invoice?.billingEmail || client.email },
+    number: await peekNumber(),
+    issuedOn,
+    dueOn,
+    termsDays: p.dueOn ? null : termsDays,
+    poNumber: p.poNumber ?? null,
+    notes: p.notes ?? null,
+    poRequired: Boolean(client.invoice?.poRequired),
+    exempt,
+    items,
+    lines: items.map((i) => ({
+      itemId: i.id,
+      kind: i.kind,
+      description: [i.ticketNumber && `[${i.ticketNumber}]`, i.description, i.resourceName && `(${i.resourceName})`].filter(Boolean).join(" "),
+      quantity: i.quantityX100 / 100,
+      unitPriceCents: i.unitPriceCents,
+      amountCents: i.amountCents,
+      taxable: i.taxable,
+    })),
+    subtotalCents: subtotal,
+    gstCents: gst,
+    qstCents: qst,
+    totalCents: subtotal + gst + qst,
+    company: s.company,
+    taxes: s.taxes,
+    template: s.template,
+  };
 }
 
 let numbering: Promise<unknown> = Promise.resolve();
 
-/** The next invoice number: the setting, after the highest number already used (the Autotask ones included). */
-async function nextNumber(actorId: string): Promise<string> {
+/** The number the next invoice would get: the setting, after the highest one used (the Autotask ones included). */
+async function peekNumber(): Promise<string> {
   const s = await billingSettings();
   const all = await db().select({ number: schema.clientInvoices.number }).from(schema.clientInvoices);
   const used = new Set(all.map((x) => x.number));
@@ -185,61 +283,71 @@ async function nextNumber(actorId: string): Promise<string> {
   }, 0);
   let value = Math.max(s.numbering.next, highest + 1);
   while (used.has(formatInvoiceNumber(s.numbering, value))) value++;
-  await saveBillingSettings(actorId, { numbering: { next: value + 1 } });
   return formatInvoiceNumber(s.numbering, value);
 }
 
-/** Post the approved items: one invoice per client (all clients, or the ones given). */
-export async function postInvoices(actorId: string, clientIds?: string[]) {
+/** Make the invoice of a draft: the number, the lines; the items are posted. One at a time (numbers never repeat). */
+export function createInvoice(actorId: string, p: InvoiceDraft) {
   const run = numbering.then(async () => {
+    const draft = await draftInvoice(p);
     const s = await billingSettings();
-    const groups = await postPreview(clientIds);
     const d = db();
-    const today = new Date().toLocaleDateString("en-CA", { timeZone: "America/Toronto" });
-    const made: { id: string; number: string; client: string; totalCents: number }[] = [];
-    for (const g of groups) {
-      const number = await nextNumber(actorId);
-      const due = new Date(`${today}T12:00:00`);
-      due.setDate(due.getDate() + g.termsDays);
-      const [inv] = await d
-        .insert(schema.clientInvoices)
-        .values({
-          clientId: g.client.id,
-          number,
-          issuedOn: today,
-          dueOn: due.toISOString().slice(0, 10),
-          totalCents: g.totalCents,
-          taxCents: g.gstCents + g.qstCents,
-          source: "portal",
-        })
-        .returning();
-      await d.insert(schema.invoiceLines).values(
-        g.items.map((i, n) => ({
-          invoiceId: inv.id,
-          billingItemId: i.id,
-          kind: i.kind,
-          description: [i.ticketNumber && `[${i.ticketNumber}]`, i.description, i.resourceName && `(${i.resourceName})`].filter(Boolean).join(" "),
-          quantityX100: i.quantityX100,
-          unitPriceCents: i.unitPriceCents,
-          amountCents: i.amountCents,
-          taxable: i.taxable,
-          ledgerAccountId: s.accounts[ACCOUNT_OF[i.kind as BillableKind]] ?? null,
-          position: n,
-        })),
-      );
-      await d
-        .update(schema.billingItems)
-        .set({ status: "posted", invoiceId: inv.id, postedAt: new Date(), updatedAt: new Date() })
-        .where(inArray(schema.billingItems.id, g.items.map((i) => i.id)));
-      made.push({ id: inv.id, number, client: g.client.name, totalCents: g.totalCents });
-    }
-    return made;
+    const number = draft.number;
+    const digits = number.slice(s.numbering.prefix.length);
+    if (/^\d+$/.test(digits)) await saveBillingSettings(actorId, { numbering: { next: Number(digits) + 1 } });
+    const [inv] = await d
+      .insert(schema.clientInvoices)
+      .values({
+        clientId: draft.client.id,
+        number,
+        issuedOn: draft.issuedOn,
+        dueOn: draft.dueOn,
+        totalCents: draft.totalCents,
+        taxCents: draft.gstCents + draft.qstCents,
+        source: "portal",
+        notes: draft.notes,
+        poNumber: draft.poNumber,
+      })
+      .returning();
+    await d.insert(schema.invoiceLines).values(
+      draft.lines.map((l, n) => ({
+        invoiceId: inv.id,
+        billingItemId: l.itemId,
+        kind: l.kind,
+        description: l.description,
+        quantityX100: Math.round(l.quantity * 100),
+        unitPriceCents: l.unitPriceCents,
+        amountCents: l.amountCents,
+        taxable: l.taxable,
+        ledgerAccountId: s.accounts[ACCOUNT_OF[l.kind as BillableKind] ?? "labour"] ?? null,
+        position: n,
+      })),
+    );
+    await d
+      .update(schema.billingItems)
+      .set({ status: "posted", invoiceId: inv.id, postedAt: new Date(), updatedAt: new Date() })
+      .where(inArray(schema.billingItems.id, draft.items.map((i) => i.id)));
+    return { id: inv.id, number, client: draft.client.name, totalCents: draft.totalCents };
   });
   numbering = run.catch(() => undefined);
   return run;
 }
 
-/** The lines of an invoice made in the portal. */
-export async function linesOf(invoiceId: string) {
-  return db().select().from(schema.invoiceLines).where(eq(schema.invoiceLines.invoiceId, invoiceId)).orderBy(asc(schema.invoiceLines.position));
+/** What invoicing every client at once would make (their defaults). */
+export async function postPreview(clientIds?: string[]) {
+  const groups = await invoiceableClients();
+  const out = [];
+  for (const g of groups.filter((x) => !clientIds?.length || clientIds.includes(x.client.id))) {
+    const dr = await draftInvoice({ clientId: g.client.id });
+    out.push({ client: g.client, items: dr.items, count: dr.items.length, subtotalCents: dr.subtotalCents, gstCents: dr.gstCents, qstCents: dr.qstCents, totalCents: dr.totalCents, exempt: dr.exempt, termsDays: dr.termsDays ?? 0 });
+  }
+  return out;
+}
+
+/** Invoice every approved item: one invoice per client (all clients, or the ones given), their defaults. */
+export async function postInvoices(actorId: string, clientIds?: string[]) {
+  const groups = await invoiceableClients();
+  const made = [];
+  for (const g of groups.filter((x) => !clientIds?.length || clientIds.includes(x.client.id))) made.push(await createInvoice(actorId, { clientId: g.client.id }));
+  return made;
 }

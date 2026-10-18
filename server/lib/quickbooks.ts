@@ -375,6 +375,8 @@ export async function pushInvoice(invoiceId: string): Promise<{ quickbooksId: st
       ...(inv.dueOn ? { DueDate: inv.dueOn } : {}),
       CustomerRef: { value: client.quickbooksId },
       GlobalTaxCalculation: "TaxExcluded",
+      ...(inv.notes ? { CustomerMemo: { value: inv.notes.slice(0, 1000) } } : {}),
+      ...(inv.poNumber ? { PrivateNote: `PO ${inv.poNumber}` } : {}),
       ...(client.invoice?.billingEmail ? { BillEmail: { Address: client.invoice.billingEmail } } : {}),
       Line: own.length
         ? own.map((l) => lineOf(l.description, dollars(l.amountCents), l.quantityX100 / 100, dollars(l.unitPriceCents), l.taxable))
