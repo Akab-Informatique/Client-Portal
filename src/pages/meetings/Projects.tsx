@@ -2,7 +2,7 @@ import { useState, type FormEvent } from "react";
 import { useTranslation } from "react-i18next";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
-import { CalendarClock, Check, ChevronDown, FolderKanban, MoreHorizontal, Pencil, Plus, RotateCcw, Send, Trash2, Users, X } from "lucide-react";
+import { CalendarClock, Check, ChevronDown, FolderKanban, MoreHorizontal, Pencil, RotateCcw, Send, Trash2, Users, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -31,7 +31,6 @@ export function ProjectsSection() {
   const can = useCan();
   const manage = can("meetings.manage");
   const [showDone, setShowDone] = useState(false);
-  const [adding, setAdding] = useState(false);
   const qc = useQueryClient();
   const key = ["meetings", "projects", showDone ? "done" : "open"];
   const { data, isLoading, isError } = useQuery({
@@ -41,15 +40,6 @@ export function ProjectsSection() {
     refetchInterval: 10_000,
   });
   const refresh = () => qc.invalidateQueries({ queryKey: ["meetings", "projects"] });
-
-  const create = useMutation({
-    mutationFn: (d: Draft) => api.post("/meetings/projects", d),
-    onSuccess: () => {
-      setAdding(false);
-      void refresh();
-    },
-    onError: () => toast.error(t("common.error")),
-  });
 
   return (
     <section className="space-y-3">
@@ -64,22 +54,8 @@ export function ProjectsSection() {
               {showDone ? t("meetings.projects.showOpen") : t("meetings.projects.showDone", { count: data.doneCount })}
             </Button>
           )}
-          {manage && !showDone && (
-            <Button size="sm" onClick={() => setAdding(true)} disabled={adding}>
-              <Plus className="size-4" /> {t("meetings.projects.add")}
-            </Button>
-          )}
         </div>
       </div>
-
-      {adding && (
-        <ProjectForm
-          initial={{ title: "", client: "", dueDate: "", memberIds: [] }}
-          busy={create.isPending}
-          onCancel={() => setAdding(false)}
-          onSave={(d) => create.mutate(d)}
-        />
-      )}
 
       {isLoading ? (
         <div className="grid gap-4 lg:grid-cols-2">
@@ -90,11 +66,9 @@ export function ProjectsSection() {
       ) : isError || !data ? (
         <p className="py-10 text-center text-muted-foreground">{t("common.error")}</p>
       ) : data.items.length === 0 ? (
-        !adding && (
-          <div className="rounded-2xl border border-dashed p-10 text-center text-muted-foreground">
-            {t(showDone ? "meetings.projects.noneDone" : manage ? "meetings.projects.empty" : "meetings.projects.emptyReadOnly")}
-          </div>
-        )
+        <div className="rounded-2xl border border-dashed p-10 text-center text-muted-foreground">
+          {t(showDone ? "meetings.projects.noneDone" : "meetings.projects.emptyReadOnly")}
+        </div>
       ) : (
         <div className="grid items-start gap-4 lg:grid-cols-2">
           {data.items.map((p) => (
