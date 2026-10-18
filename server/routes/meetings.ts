@@ -20,8 +20,11 @@ export const meetingRoutes = new Hono<AppEnv>()
 
   .get("/overdue", async (c) => {
     const src = await ticketSource();
-    const [all, o, technicians] = await run(() => Promise.all([src.list(), src.options(), src.technicians()]));
+    const [everything, o, technicians] = await run(() => Promise.all([src.list(), src.options(), src.technicians()]));
     const L = lookup(o);
+    // Only the queues the gauges count (support work; monitoring alerts left out by default)
+    const queues = await gaugeQueues(o.queues);
+    const all = everything.filter((t) => queues.counted.includes(t.queue));
     const now = Date.now();
     const friday = fridayEnd(new Date(now));
     const open = (t: NTicket) => L.statusKind(t.status) !== "complete";
@@ -77,7 +80,28 @@ export const meetingRoutes = new Hono<AppEnv>()
       unassigned: listed.filter((t) => !t.assignee).map(item),
       // Open tickets nobody has, past "new": someone moved them on, then nobody took them (not to lose)
       stray: stray(),
+      queues,
     });
+  })
+
+  /** Which ticket queues the gauges count (null: the default, every queue but alerts). */
+  .put("/gauge-queues", requirePermission("meetings.manage"), async (c) => {
+    const a = auth(c);
+    const v = await body(c, z.object({ queues: z.array(z.string().min(1).max(100)).max(200).nullable() }));
+    if (v.queues) {
+      const src = await ticketSource();
+      const o = await run(() => src.options());
+      const known = new Set(o.queues.map((q) => q.value));
+      if (!v.queues.length || v.queues.some((q) => !known.has(q))) throw new HTTPException(400, { message: "invalid_queue" });
+    }
+    const [cur] = await db().select().from(schema.integrations).where(eq(schema.integrations.provider, "meetings"));
+    const config = { ...(cur?.config ?? {}), gaugeQueues: v.queues ? [...new Set(v.queues)] : null };
+    await db()
+      .insert(schema.integrations)
+      .values({ provider: "meetings", enabled: true, config, updatedBy: a.user.id })
+      .onConflictDoUpdate({ target: schema.integrations.provider, set: { config, updatedBy: a.user.id, updatedAt: new Date() } });
+    await audit(a.user.id, "meeting.gauge_queues", null, { queues: v.queues });
+    return c.json({ ok: true });
   })
 
   // ── Points to discuss (meetings.manage to change): open ones, and those settled in the last 7 days ──
@@ -539,6 +563,20 @@ const zProject = z.object({
     .optional()
     .or(z.literal("").transform(() => null)),
 });
+
+/** Monitoring alert queues ("Alertes", "Alerts"…): not counted unless chosen */
+const ALERT_QUEUE = /alert/i;
+
+/** The queues the meeting gauges count: the ones chosen, or every queue but the alert ones. */
+async function gaugeQueues(all: { value: string; label: string | null }[]) {
+  const [row] = await db().select({ config: schema.integrations.config }).from(schema.integrations).where(eq(schema.integrations.provider, "meetings"));
+  const chosen = (row?.config as { gaugeQueues?: string[] | null } | undefined)?.gaugeQueues;
+  const custom = Array.isArray(chosen) && chosen.some((q) => all.some((x) => x.value === q));
+  const counted = custom
+    ? all.filter((q) => chosen!.includes(q.value)).map((q) => q.value)
+    : all.filter((q) => !ALERT_QUEUE.test(q.label ?? q.value)).map((q) => q.value);
+  return { all: all.map((q) => ({ value: q.value, label: q.label ?? q.value })), counted, custom };
+}
 
 /** YYYY-MM-DD plus n days */
 function addDay(day: string, n: number) {

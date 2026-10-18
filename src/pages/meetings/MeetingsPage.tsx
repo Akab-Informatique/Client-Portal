@@ -1,10 +1,14 @@
 import { useState } from "react";
 import { useTranslation } from "react-i18next";
-import { useQuery } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { toast } from "sonner";
 import { Link, useNavigate } from "react-router-dom";
-import { AlarmClock, ArrowRight, CalendarCheck } from "lucide-react";
+import { AlarmClock, ArrowRight, CalendarCheck, Filter } from "lucide-react";
 import { GlassBackdrop } from "@/components/brand/GlassBackdrop";
 import { Button } from "@/components/ui/button";
+import { Checkbox } from "@/components/ui/checkbox";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
+import { useCan } from "@/lib/session";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Skeleton } from "@/components/ui/skeleton";
 import { api } from "@/lib/api";
@@ -40,13 +44,17 @@ type Overdue = {
   unassigned: OverdueTicket[];
   /** Open, nobody assigned, status past "new" */
   stray: { total: number; byStatus: { label: string; kind: string; count: number }[]; tickets: OverdueTicket[] };
+  /** The queues the gauges count (custom: chosen; otherwise every queue but alerts) */
+  queues: { all: { value: string; label: string }[]; counted: string[]; custom: boolean };
 };
 
 /** Every open status but "complete" (the tickets list shows completed ones in "all" otherwise) */
 const OPEN_KINDS = ["new", "inProgress", "needsAttention", "waitingCustomer", "waitingVendor", "scheduled", "other"];
 /** The tickets page with a filter; a person picked under a gauge narrows it to them */
-const ticketsUrl = (q: Record<string, string>, who: string | null) => {
+const ticketsUrl = (q: Record<string, string>, who: string | null, queues: Overdue["queues"]) => {
   const p = new URLSearchParams(q);
+  // the same queues as the gauges (none named when they all count)
+  if (queues.counted.length < queues.all.length) p.set("queue", queues.counted.join(","));
   if (who) p.set("assignee", who === "unassigned" ? "none" : who);
   return `/tickets?${p.toString()}`;
 };
@@ -105,9 +113,12 @@ export function MeetingsPage() {
       </div>
 
       <section className="space-y-3">
-        <h2 className="flex items-center gap-2 text-lg font-semibold">
-          <AlarmClock className="size-5 text-red-400" /> {t("meetings.overdue.title")}
-        </h2>
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <h2 className="flex items-center gap-2 text-lg font-semibold">
+            <AlarmClock className="size-5 text-red-400" /> {t("meetings.overdue.title")}
+          </h2>
+          {data && <QueuesPicker queues={data.queues} />}
+        </div>
         {isLoading ? (
           <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
             {[0, 1, 2].map((i) => (
@@ -122,15 +133,15 @@ export function MeetingsPage() {
               title={t("meetings.overdue.gaugeLate")}
               total={data.total}
               people={late}
-              url={(who) => ticketsUrl({ view: "due", due: "overdue" }, who)}
+              url={(who) => ticketsUrl({ view: "due", due: "overdue" }, who, data.queues)}
             />
             <GaugeCard
               title={t("meetings.overdue.gaugeWeek", { date: dayDate(`${data.untilDate}T12:00:00`) })}
               total={data.dueThisWeek}
               people={week}
-              url={(who) => ticketsUrl({ view: "all", statusKind: OPEN_KINDS.join(","), due: "week" }, who)}
+              url={(who) => ticketsUrl({ view: "all", statusKind: OPEN_KINDS.join(","), due: "week" }, who, data.queues)}
             />
-            <StrayCard stray={data.stray} />
+            <StrayCard stray={data.stray} queues={data.queues} />
           </div>
         )}
       </section>
@@ -289,11 +300,11 @@ function Chip({ label, count, active, onClick, scale }: { label: string; count: 
 }
 
 /** Open tickets nobody has, past "new": moved on, then left without a technician. */
-function StrayCard({ stray }: { stray: Overdue["stray"] }) {
+function StrayCard({ stray, queues }: { stray: Overdue["stray"]; queues: Overdue["queues"] }) {
   const { t } = useTranslation();
   const txt = useChoiceText();
   const [listOpen, setListOpen] = useState(false);
-  const to = ticketsUrl({ view: "unassigned", statusKind: OPEN_KINDS.filter((k) => k !== "new").join(",") }, null);
+  const to = ticketsUrl({ view: "unassigned", statusKind: OPEN_KINDS.filter((k) => k !== "new").join(",") }, null, queues);
   return (
     <div className="space-y-4 rounded-2xl border bg-card/80 p-5">
       <div className="flex items-baseline justify-between gap-2">
@@ -428,5 +439,72 @@ function TicketsDialog({
         </div>
       </DialogContent>
     </Dialog>
+  );
+}
+
+/** Which ticket queues the gauges count: shown to all, changed with meetings.manage. */
+function QueuesPicker({ queues }: { queues: Overdue["queues"] }) {
+  const { t } = useTranslation();
+  const manage = useCan()("meetings.manage");
+  const qc = useQueryClient();
+  const [open, setOpen] = useState(false);
+  const [picked, setPicked] = useState<string[]>(queues.counted);
+  const save = useMutation({
+    mutationFn: (q: string[] | null) => api.put("/meetings/gauge-queues", { queues: q }),
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: ["meetings", "overdue"] });
+      setOpen(false);
+    },
+    onError: () => toast.error(t("common.error")),
+  });
+  const names = queues.all.filter((q) => queues.counted.includes(q.value)).map((q) => q.label);
+  const label = queues.counted.length === queues.all.length ? t("meetings.overdue.allQueues") : names.join(", ");
+  const summary = (
+    <span className="inline-flex max-w-full items-center gap-1.5 text-sm text-muted-foreground">
+      <Filter className="size-3.5 shrink-0" /> <span className="truncate">{label}</span>
+    </span>
+  );
+  if (!manage || !queues.all.length) return <span title={names.join(", ")}>{summary}</span>;
+  return (
+    <Popover
+      open={open}
+      onOpenChange={(o) => {
+        setOpen(o);
+        if (o) setPicked(queues.counted);
+      }}
+    >
+      <PopoverTrigger asChild>
+        <Button variant="ghost" size="sm" className="max-w-full sm:max-w-md" title={t("meetings.overdue.queuesHint")}>
+          {summary}
+        </Button>
+      </PopoverTrigger>
+      <PopoverContent align="end" className="w-72 space-y-3">
+        <div>
+          <p className="text-sm font-semibold">{t("meetings.overdue.queuesTitle")}</p>
+          <p className="text-xs text-muted-foreground">{t("meetings.overdue.queuesHint")}</p>
+        </div>
+        <ul className="max-h-60 space-y-1.5 overflow-y-auto">
+          {queues.all.map((q) => (
+            <li key={q.value}>
+              <label className="flex cursor-pointer items-center gap-2 text-sm">
+                <Checkbox
+                  checked={picked.includes(q.value)}
+                  onCheckedChange={(v) => setPicked(v ? [...picked, q.value] : picked.filter((x) => x !== q.value))}
+                />
+                {q.label}
+              </label>
+            </li>
+          ))}
+        </ul>
+        <div className="flex items-center gap-2">
+          <Button variant="ghost" size="sm" disabled={save.isPending} onClick={() => save.mutate(null)}>
+            {t("meetings.overdue.queuesDefault")}
+          </Button>
+          <Button size="sm" className="ml-auto" disabled={!picked.length || save.isPending} onClick={() => save.mutate(picked)}>
+            {t("common.save")}
+          </Button>
+        </div>
+      </PopoverContent>
+    </Popover>
   );
 }

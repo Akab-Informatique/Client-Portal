@@ -187,6 +187,19 @@ describe("permissions", () => {
     expect(ids((await admin.get("/api/tickets?view=due&due=overdue")).json.items)).toEqual(ids(listed.filter((t: any) => t.overdue)));
     expect(ids((await admin.get(`/api/tickets?view=all&statusKind=${open}&due=week`)).json.items)).toEqual(ids(listed.filter((t: any) => !t.overdue)));
     expect(ids((await admin.get(`/api/tickets?view=unassigned&statusKind=${open.replace("new,", "")}`)).json.items)).toEqual(ids(stray));
+    // the gauges count only the chosen queues (default: every queue but alerts)
+    expect(r.json.queues.custom).toBe(false);
+    expect(r.json.queues.counted.length).toBe(r.json.queues.all.filter((q: any) => !/alert/i.test(q.label)).length);
+    const q1 = r.json.queues.all[0].value;
+    expect((await admin.put("/api/meetings/gauge-queues", { queues: [q1] })).status).toBe(200);
+    const only = (await admin.get("/api/meetings/overdue")).json;
+    expect(only.queues).toMatchObject({ custom: true, counted: [q1] });
+    expect(only.total).toBe(late.filter((t: any) => t.queue === q1).length);
+    expect(only.stray.total).toBe(stray.filter((t: any) => t.queue === q1).length);
+    expect((await admin.put("/api/meetings/gauge-queues", { queues: ["no-such-queue"] })).status).toBe(400);
+    expect((await admin.put("/api/meetings/gauge-queues", { queues: [] })).status).toBe(400);
+    expect((await admin.put("/api/meetings/gauge-queues", { queues: null })).status).toBe(200);
+    expect((await admin.get("/api/meetings/overdue")).json.total).toBe(late.length);
     const client = await signIn("responsable1@client.example");
     expect((await client.get("/api/meetings/overdue")).status).toBe(403);
   });
