@@ -32,7 +32,7 @@ async function row(provider: string) {
   const [r] = await db().select().from(schema.integrations).where(eq(schema.integrations.provider, provider));
   return r ?? null;
 }
-async function save(provider: string, actorId: string, values: { enabled?: boolean; config: Record<string, unknown>; secret?: string | null }) {
+async function save(provider: string, actorId: string | null, values: { enabled?: boolean; config: Record<string, unknown>; secret?: string | null }) {
   const set = { ...values, updatedBy: actorId, updatedAt: new Date() };
   await db()
     .insert(schema.integrations)
@@ -157,6 +157,12 @@ export type QuickBooksSettings = {
   companyName: string | null;
   connectedAt: string | null;
   sync: { invoices: boolean; payments: boolean; customers: boolean };
+  /** QuickBooks item and tax codes used for the invoices sent */
+  invoice: { itemId: string | null; taxCodeId: string | null; exemptTaxCodeId: string | null };
+  /** Payments brought back from QuickBooks up to this time */
+  paymentsPulledAt: string | null;
+  /** Last imports from QuickBooks (accounts, items) */
+  imports: { accounts?: { at: string; matched: number; created: number }; items?: { at: string; items: number; categories: number; products: number } };
   clientSecret: string | null;
   refreshToken: string | null;
   lastTest?: { ok: boolean; at: string; error?: string };
@@ -179,27 +185,41 @@ export async function quickbooksSettings(): Promise<QuickBooksSettings> {
     companyName: c.companyName ?? null,
     connectedAt: c.connectedAt ?? null,
     sync: { invoices: true, payments: true, customers: true, ...c.sync },
+    invoice: { itemId: null, taxCodeId: null, exemptTaxCodeId: null, ...c.invoice },
+    paymentsPulledAt: c.paymentsPulledAt ?? null,
+    imports: c.imports ?? {},
     clientSecret: secrets.clientSecret ?? null,
     refreshToken: secrets.refreshToken ?? null,
     lastTest: c.lastTest,
   };
 }
 
-export async function saveQuickBooksSettings(actorId: string, p: Partial<QuickBooksSettings>) {
+export async function saveQuickBooksSettings(actorId: string | null, p: Partial<QuickBooksSettings>) {
   const cur = await quickbooksSettings();
   // another app or company: the connection made with the old one no longer counts
   const reset = (p.clientId !== undefined && p.clientId !== cur.clientId) || (p.environment !== undefined && p.environment !== cur.environment);
   const n = { ...cur, ...p, ...(reset ? { realmId: null, companyName: null, connectedAt: null, refreshToken: null, lastTest: undefined } : {}) };
   await save("quickbooks", actorId, {
     enabled: n.enabled,
-    config: { environment: n.environment, clientId: n.clientId, realmId: n.realmId, companyName: n.companyName, connectedAt: n.connectedAt, sync: n.sync, lastTest: n.lastTest },
+    config: {
+      environment: n.environment,
+      clientId: n.clientId,
+      realmId: n.realmId,
+      companyName: n.companyName,
+      connectedAt: n.connectedAt,
+      sync: n.sync,
+      lastTest: n.lastTest,
+      invoice: n.invoice,
+      paymentsPulledAt: n.paymentsPulledAt,
+      imports: n.imports,
+    },
     secret: seal(JSON.stringify({ clientSecret: n.clientSecret ?? undefined, refreshToken: n.refreshToken ?? undefined })),
   });
 }
 
 const QB_AUTH = "https://appcenter.intuit.com/connect/oauth2";
 const QB_TOKEN = "https://oauth.platform.intuit.com/oauth2/v1/tokens/bearer";
-const qbApi = (env: QuickBooksSettings["environment"]) => (env === "production" ? "https://quickbooks.api.intuit.com" : "https://sandbox-quickbooks.api.intuit.com");
+export const qbApi = (env: QuickBooksSettings["environment"]) => (env === "production" ? "https://quickbooks.api.intuit.com" : "https://sandbox-quickbooks.api.intuit.com");
 
 const pending = new Map<string, { userId: string; redirectUri: string; until: number }>();
 
@@ -217,7 +237,7 @@ export async function quickbooksConnectUrl(userId: string, redirectUri: string):
   return `${QB_AUTH}?${q}`;
 }
 
-async function qbToken(s: QuickBooksSettings, params: Record<string, string>) {
+export async function qbToken(s: QuickBooksSettings, params: Record<string, string>) {
   const res = await fetch(QB_TOKEN, {
     method: "POST",
     headers: { authorization: `Basic ${Buffer.from(`${s.clientId}:${s.clientSecret}`).toString("base64")}`, "content-type": "application/x-www-form-urlencoded", accept: "application/json" },

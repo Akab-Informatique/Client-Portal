@@ -1,9 +1,9 @@
-import { useEffect, useState, type FormEvent, type ReactNode } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 import { useTranslation } from "react-i18next";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { motion } from "motion/react";
 import { toast } from "sonner";
-import { Building2, ChevronRight, Loader2, Lock, Pencil, Plus, Search, ShieldCheck, Trash2, UserPlus, Users } from "lucide-react";
+import { ChevronRight, Loader2, Lock, Pencil, Plus, Search, ShieldCheck, Trash2, UserPlus } from "lucide-react";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -12,14 +12,12 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Skeleton } from "@/components/ui/skeleton";
-import { Switch } from "@/components/ui/switch";
-import { Textarea } from "@/components/ui/textarea";
 import { api } from "@/lib/api";
 import { dateTime, relativeTime } from "@/lib/format";
-import type { AdminUser, Client, Role } from "@/lib/types";
+import type { AdminUser, Role } from "@/lib/types";
 import { cn, initials } from "@/lib/utils";
 import { permissionsFor, type Audience } from "@shared/permissions";
-import { useAdminError, useAudit, useClients, useClientUsers, useRoleDescription, useRoleName, useRoles, useStaff } from "./hooks";
+import { useAdminError, useAudit, useRoleDescription, useRoleName, useRoles, useStaff } from "./hooks";
 import { PermissionMatrix } from "./PermissionMatrix";
 import { NewUserDialog, UserSheet, UserStatusBadges } from "./UserPanels";
 import { useOneShotParam } from "@/lib/useDeepLink";
@@ -109,223 +107,6 @@ export function StaffSection() {
 }
 
 // ── Clients ──────────────────────────────────────────────────────────────────
-export function ClientsSection() {
-  const { t } = useTranslation();
-  const { data, isLoading } = useClients();
-  const [q, setQ] = useState("");
-  const linkedClient = useOneShotParam("client");
-  const linkedUser = useOneShotParam("user");
-  const [selectedId, setSelectedId] = useState<string | null>(linkedClient);
-  const [creating, setCreating] = useState(false);
-  const list = (data ?? []).filter((c) => `${c.name} ${c.code ?? ""}`.toLowerCase().includes(q.toLowerCase()));
-  const selected = (data ?? []).find((c) => c.id === selectedId) ?? null;
-  useEffect(() => {
-    if (!selectedId && data?.length) setSelectedId(data[0].id);
-  }, [data, selectedId]);
-
-  return (
-    <div>
-      <SectionHeader
-        title={t("admin.clients.title")}
-        subtitle={t("admin.clients.subtitle")}
-        action={
-          <Button onClick={() => setCreating(true)} className="bg-grad-gold font-semibold text-[#1a1204] glow-gold hover:brightness-105">
-            <Plus className="size-4" /> {t("admin.clients.add")}
-          </Button>
-        }
-      />
-      <div className="grid gap-6 lg:grid-cols-[300px_1fr]">
-        <div className="space-y-3">
-          <SearchBox value={q} onChange={setQ} />
-          <ul className="space-y-1.5">
-            {isLoading
-              ? [0, 1, 2].map((i) => <Skeleton key={i} className="h-14 rounded-xl" />)
-              : list.map((c) => (
-                  <li key={c.id}>
-                    <button
-                      type="button"
-                      onClick={() => setSelectedId(c.id)}
-                      className={cn(
-                        "flex w-full items-center gap-3 rounded-xl border p-3 text-left transition-colors",
-                        selectedId === c.id ? "border-[color:var(--gold)]/50 bg-[color:var(--gold)]/10" : "bg-card/60 hover:bg-accent/50",
-                        !c.active && "opacity-60",
-                      )}
-                    >
-                      <span className="flex size-9 items-center justify-center rounded-lg bg-muted font-mono text-[11px] font-semibold">{c.code?.slice(0, 4) || <Building2 className="size-4" />}</span>
-                      <span className="min-w-0 flex-1">
-                        <span className="block truncate text-sm font-medium">{c.name}</span>
-                        <span className="block text-xs text-muted-foreground">{t("admin.clients.usersCount", { count: c.userCount })}</span>
-                      </span>
-                    </button>
-                  </li>
-                ))}
-          </ul>
-        </div>
-        <div>{selected ? <ClientDetail key={selected.id} client={selected} openUser={selected.id === linkedClient ? linkedUser : null} /> : <p className="rounded-xl border border-dashed p-10 text-center text-sm text-muted-foreground">{t("admin.clients.select")}</p>}</div>
-      </div>
-      <ClientFormDialog open={creating} onOpenChange={setCreating} onCreated={(c) => setSelectedId(c.id)} />
-    </div>
-  );
-}
-
-type ClientForm = { name: string; code: string; email: string; phone: string; address: string; notes: string };
-const clientForm = (c?: Client): ClientForm => ({
-  name: c?.name ?? "",
-  code: c?.code ?? "",
-  email: c?.email ?? "",
-  phone: c?.phone ?? "",
-  address: c?.address ?? "",
-  notes: c?.notes ?? "",
-});
-
-function ClientFields({ form, setForm }: { form: ClientForm; setForm: (f: ClientForm) => void }) {
-  const { t } = useTranslation();
-  return (
-    <div className="grid gap-4 sm:grid-cols-2">
-      <div className="space-y-2">
-        <Label>{t("common.name")}</Label>
-        <Input required value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} />
-      </div>
-      <div className="space-y-2">
-        <Label>{t("admin.clients.code")}</Label>
-        <Input value={form.code} maxLength={20} onChange={(e) => setForm({ ...form, code: e.target.value.toUpperCase() })} className="font-mono" />
-      </div>
-      <div className="space-y-2">
-        <Label>{t("common.email")}</Label>
-        <Input type="email" value={form.email} onChange={(e) => setForm({ ...form, email: e.target.value })} />
-      </div>
-      <div className="space-y-2">
-        <Label>{t("common.phone")}</Label>
-        <Input value={form.phone} onChange={(e) => setForm({ ...form, phone: e.target.value })} />
-      </div>
-      <div className="space-y-2 sm:col-span-2">
-        <Label>{t("admin.clients.address")}</Label>
-        <Input value={form.address} onChange={(e) => setForm({ ...form, address: e.target.value })} />
-      </div>
-      <div className="space-y-2 sm:col-span-2">
-        <Label>{t("admin.clients.notes")}</Label>
-        <Textarea rows={3} value={form.notes} onChange={(e) => setForm({ ...form, notes: e.target.value })} />
-      </div>
-    </div>
-  );
-}
-
-function ClientFormDialog({ open, onOpenChange, onCreated }: { open: boolean; onOpenChange: (o: boolean) => void; onCreated: (c: Client) => void }) {
-  const { t } = useTranslation();
-  const qc = useQueryClient();
-  const errText = useAdminError();
-  const [form, setForm] = useState(clientForm());
-  useEffect(() => {
-    if (open) setForm(clientForm());
-  }, [open]);
-  const create = useMutation({
-    mutationFn: () => api.post<Client>("/admin/clients", form),
-    onSuccess: (c) => {
-      void qc.invalidateQueries({ queryKey: ["admin"] });
-      onCreated(c);
-      onOpenChange(false);
-    },
-    onError: (e) => toast.error(errText(e)),
-  });
-  return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="sm:max-w-xl">
-        <DialogHeader>
-          <DialogTitle>{t("admin.clients.add")}</DialogTitle>
-        </DialogHeader>
-        <form
-          onSubmit={(e: FormEvent) => {
-            e.preventDefault();
-            create.mutate();
-          }}
-          className="space-y-4"
-        >
-          <ClientFields form={form} setForm={setForm} />
-          <div className="flex justify-end gap-2">
-            <Button type="button" variant="ghost" onClick={() => onOpenChange(false)}>{t("common.cancel")}</Button>
-            <Button type="submit" disabled={create.isPending}>{create.isPending && <Loader2 className="size-4 animate-spin" />} {t("common.create")}</Button>
-          </div>
-        </form>
-      </DialogContent>
-    </Dialog>
-  );
-}
-
-function ClientDetail({ client, openUser }: { client: Client; openUser?: string | null }) {
-  const { t } = useTranslation();
-  const qc = useQueryClient();
-  const errText = useAdminError();
-  const { data: users, isLoading } = useClientUsers(client.id);
-  const { data: roles = [] } = useRoles();
-  const [form, setForm] = useState(clientForm(client));
-  const [openId, setOpenId] = useState<string | null>(openUser ?? null);
-  const [creating, setCreating] = useState(false);
-  const save = useMutation({
-    mutationFn: (patch: Record<string, unknown>) => api.patch<Client>(`/admin/clients/${client.id}`, patch),
-    onSuccess: () => {
-      void qc.invalidateQueries({ queryKey: ["admin"] });
-      toast.success(t("common.saved"));
-    },
-    onError: (e) => toast.error(errText(e)),
-  });
-  return (
-    <motion.div initial={{ opacity: 0, x: 10 }} animate={{ opacity: 1, x: 0 }} className="space-y-6">
-      <div className="rounded-2xl border bg-card/60 p-5">
-        <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
-          <div className="flex items-center gap-3">
-            <span className="flex size-11 items-center justify-center rounded-xl bg-grad-gold text-[#1a1204]">
-              <Building2 className="size-5" />
-            </span>
-            <div>
-              <h3 className="text-lg font-semibold">{client.name}</h3>
-              <p className="text-xs text-muted-foreground">{t("admin.clients.details")}</p>
-            </div>
-          </div>
-          <label className="flex items-center gap-2 text-sm" title={t("admin.clients.deactivateHint")}>
-            <span className={client.active ? "text-success" : "text-muted-foreground"}>{client.active ? t("common.active") : t("common.inactive")}</span>
-            <Switch checked={client.active} onCheckedChange={(v) => save.mutate({ active: v })} />
-          </label>
-        </div>
-        <form
-          onSubmit={(e) => {
-            e.preventDefault();
-            save.mutate(form);
-          }}
-          className="space-y-4"
-        >
-          <ClientFields form={form} setForm={setForm} />
-          <div className="flex justify-end">
-            <Button type="submit" disabled={save.isPending}>{save.isPending && <Loader2 className="size-4 animate-spin" />} {t("common.save")}</Button>
-          </div>
-        </form>
-      </div>
-
-      <div>
-        <div className="mb-3 flex items-center justify-between">
-          <h4 className="flex items-center gap-2 font-display font-semibold">
-            <Users className="size-4 text-primary" /> {t("admin.clients.users")}
-          </h4>
-          <Button size="sm" variant="outline" onClick={() => setCreating(true)}>
-            <UserPlus className="size-4" /> {t("admin.clients.addUser")}
-          </Button>
-        </div>
-        <div className="space-y-2">
-          {isLoading ? (
-            <Skeleton className="h-16 rounded-xl" />
-          ) : users?.length ? (
-            users.map((u) => <UserRow key={u.id} u={u} roles={roles} onClick={() => setOpenId(u.id)} />)
-          ) : (
-            <p className="rounded-xl border border-dashed p-6 text-center text-sm text-muted-foreground">{t("admin.clients.noUsers")}</p>
-          )}
-        </div>
-      </div>
-      <NewUserDialog open={creating} onOpenChange={setCreating} kind="client" clientId={client.id} />
-      <UserSheet user={(users ?? []).find((u) => u.id === openId) ?? null} onClose={() => setOpenId(null)} />
-    </motion.div>
-  );
-}
-
-// ── Roles ────────────────────────────────────────────────────────────────────
 export function RolesSection() {
   const { t } = useTranslation();
   const { data: roles = [], isLoading } = useRoles();

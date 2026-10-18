@@ -56,11 +56,13 @@ export const clients = pgTable(
     autotaskId: integer("autotask_id"),
     parentId: uuid("parent_id").references((): AnyPgColumn => clients.id, { onDelete: "set null" }),
     invoice: jsonb("invoice").$type<ClientInvoiceSettings>().notNull().default({}),
+    /** The matching QuickBooks customer (never two clients on the same one) */
+    quickbooksId: text("quickbooks_id"),
     syncedAt: timestamp("synced_at", { withTimezone: true }),
     createdAt: created(),
     updatedAt: updated(),
   },
-  (t) => [uniqueIndex("clients_autotask_idx").on(t.autotaskId), index("clients_parent_idx").on(t.parentId)],
+  (t) => [uniqueIndex("clients_autotask_idx").on(t.autotaskId), index("clients_parent_idx").on(t.parentId), uniqueIndex("clients_quickbooks_idx").on(t.quickbooksId)],
 );
 
 /** People at a client (Autotask Contacts). */
@@ -80,11 +82,13 @@ export const clientContacts = pgTable(
     mobile: text("mobile"),
     title: text("title"),
     active: boolean("active").notNull().default(true),
+    /** Their client portal account, once access was given */
+    userId: uuid("user_id").references(() => users.id, { onDelete: "set null" }),
     syncedAt: timestamp("synced_at", { withTimezone: true }),
     createdAt: created(),
     updatedAt: updated(),
   },
-  (t) => [uniqueIndex("client_contacts_autotask_idx").on(t.autotaskId), index("client_contacts_client_idx").on(t.clientId)],
+  (t) => [uniqueIndex("client_contacts_autotask_idx").on(t.autotaskId), index("client_contacts_client_idx").on(t.clientId), uniqueIndex("client_contacts_user_idx").on(t.userId)],
 );
 
 /** A client's contracts (Autotask Contracts). */
@@ -129,11 +133,15 @@ export const clientInvoices = pgTable(
     /** Set once paid (YYYY-MM-DD) */
     paidOn: text("paid_on"),
     voided: boolean("voided").notNull().default(false),
+    /** The invoice in QuickBooks, once sent; the last send and its error */
+    quickbooksId: text("quickbooks_id"),
+    quickbooksSyncedAt: timestamp("quickbooks_synced_at", { withTimezone: true }),
+    quickbooksError: text("quickbooks_error"),
     syncedAt: timestamp("synced_at", { withTimezone: true }),
     createdAt: created(),
     updatedAt: updated(),
   },
-  (t) => [uniqueIndex("client_invoices_autotask_idx").on(t.autotaskId), index("client_invoices_client_idx").on(t.clientId, t.issuedOn)],
+  (t) => [uniqueIndex("client_invoices_autotask_idx").on(t.autotaskId), uniqueIndex("client_invoices_quickbooks_idx").on(t.quickbooksId), index("client_invoices_client_idx").on(t.clientId, t.issuedOn)],
 );
 
 /** A payment received on an invoice (several make a partial payment). Money in cents. */
@@ -153,10 +161,12 @@ export const invoicePayments = pgTable(
     note: text("note"),
     /** Where it was recorded: portal | quickbooks | stripe */
     source: text("source").notNull().default("portal"),
+    /** Id in the source (QuickBooks: payment id + invoice id) */
+    externalId: text("external_id"),
     createdBy: uuid("created_by").references(() => users.id, { onDelete: "set null" }),
     createdAt: created(),
   },
-  (t) => [index("invoice_payments_invoice_idx").on(t.invoiceId)],
+  (t) => [index("invoice_payments_invoice_idx").on(t.invoiceId), uniqueIndex("invoice_payments_external_idx").on(t.externalId)],
 );
 
 /** The chart of accounts (plan comptable), for invoices and the QuickBooks sync. */
@@ -175,6 +185,26 @@ export const ledgerAccounts = pgTable(
     updatedAt: updated(),
   },
   (t) => [uniqueIndex("ledger_accounts_number_idx").on(t.number)],
+);
+
+/** QuickBooks products, services and categories (copied from QuickBooks, to match SKUs and invoice lines). */
+export const quickbooksItems = pgTable(
+  "quickbooks_items",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    quickbooksId: text("quickbooks_id").notNull(),
+    name: text("name").notNull(),
+    sku: text("sku"),
+    /** Service | Inventory | NonInventory | Category | Group */
+    type: text("type").notNull(),
+    /** Its category (QuickBooks id) */
+    parentId: text("parent_id"),
+    incomeAccountId: text("income_account_id"),
+    unitPriceCents: bigint("unit_price_cents", { mode: "number" }),
+    active: boolean("active").notNull().default(true),
+    syncedAt: timestamp("synced_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [uniqueIndex("quickbooks_items_qb_idx").on(t.quickbooksId), index("quickbooks_items_sku_idx").on(t.sku)],
 );
 
 /** Where a sync stands (e.g. "autotask.crm"): last run, result, counts. */
@@ -579,6 +609,8 @@ export const storeProducts = pgTable(
     autotaskProductId: bigint("autotask_product_id", { mode: "number" }),
     autotaskProductName: text("autotask_product_name"),
     materialCodeId: text("material_code_id"),
+    /** The QuickBooks item with the same SKU */
+    quickbooksItemId: text("quickbooks_item_id"),
     /** Counted by serial number: each unit is a store_serials row */
     serialized: boolean("serialized").notNull().default(false),
     active: boolean("active").notNull().default(true),

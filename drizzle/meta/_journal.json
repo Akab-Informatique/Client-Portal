@@ -246,6 +246,13 @@
       "when": 1792345344335,
       "tag": "0034_billing",
       "breakpoints": true
+    },
+    {
+      "idx": 35,
+      "version": "7",
+      "when": 1792346582397,
+      "tag": "0035_quickbooks_portal_access",
+      "breakpoints": true
     }
   ]
 }

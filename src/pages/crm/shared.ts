@@ -48,6 +48,9 @@ export type CrmContact = {
   mobile: string | null;
   title: string | null;
   active: boolean;
+  userId: string | null;
+  /** Client portal access (null: none) */
+  portal: { lastLoginAt: string | null; pending: boolean; role: string | null } | null;
 };
 export type InvoiceStatus = "paid" | "partial" | "due" | "overdue" | "voided";
 export type InvoicePayment = { id: string; amountCents: number; paidOn: string; method: string; reference: string | null; note: string | null; source: string; by: string | null };
@@ -66,6 +69,8 @@ export type CrmInvoice = {
   late: boolean;
   daysLate: number;
   payments: InvoicePayment[];
+  /** In QuickBooks: its id once sent, the last send, its error */
+  quickbooks: { id: string | null; syncedAt: string | null; error: string | null } | null;
 };
 export type CrmInvoices = { summary: { dueCents: number; overdueCents: number; overdueCount: number; partialCount: number; paidYearCents: number }; items: CrmInvoice[] };
 /** 1 234,56 $ */

@@ -1,14 +1,18 @@
 import { Hono } from "hono";
 import { HTTPException } from "hono/http-exception";
-import { and, asc, desc, eq, inArray } from "drizzle-orm";
+import { and, asc, desc, eq, inArray, sql } from "drizzle-orm";
 import { z } from "zod";
 import { db, schema } from "../db/index.ts";
-import { auth, requirePermission, requireStaff, type AppEnv } from "../lib/auth.ts";
+import { auth, requirePermission, requireStaff, revokeUserSessions, type AppEnv } from "../lib/auth.ts";
+import { hashPassword, temporaryPassword } from "../lib/crypto.ts";
+import { sendPasswordLink } from "../lib/passwordLinks.ts";
 import { audit } from "../lib/audit.ts";
 import { body, zEmail, zOptText, zUuid } from "../lib/validate.ts";
 import { ticketSource, type NTicket } from "../lib/ticketSource.ts";
 import { crmState, descendantsOf, ensureCrm, rememberCompany, rememberContact, syncCrm } from "../lib/crm.ts";
 import { lookup, run } from "./tickets.ts";
+import { pushInvoice } from "../lib/quickbooks.ts";
+import { quickbooksHttp } from "./billing.ts";
 
 /**
  * CRM (crm.view): the clients, from the portal's own copy kept in step with
@@ -190,8 +194,18 @@ export const crmRoutes = new Hono<AppEnv>()
   // ── contacts
   .get("/clients/:id/contacts", async (c) => {
     const client = await clientOr404(c.req.param("id"));
-    const rows = await db().select().from(schema.clientContacts).where(eq(schema.clientContacts.clientId, client.id)).orderBy(asc(schema.clientContacts.lastName), asc(schema.clientContacts.firstName));
-    return c.json(rows.sort((x, y) => Number(y.active) - Number(x.active)));
+    const rows = await db()
+      .select({ c: schema.clientContacts, u: { active: schema.users.active, lastLoginAt: schema.users.lastLoginAt, mustChangePassword: schema.users.mustChangePassword, roleSlug: schema.roles.slug } })
+      .from(schema.clientContacts)
+      .leftJoin(schema.users, eq(schema.users.id, schema.clientContacts.userId))
+      .leftJoin(schema.roles, eq(schema.roles.id, schema.users.roleId))
+      .where(eq(schema.clientContacts.clientId, client.id))
+      .orderBy(asc(schema.clientContacts.lastName), asc(schema.clientContacts.firstName));
+    return c.json(
+      rows
+        .map(({ c: x, u }) => ({ ...x, portal: u?.active ? { lastLoginAt: u.lastLoginAt, pending: u.mustChangePassword, role: u.roleSlug } : null }))
+        .sort((x, y) => Number(y.active) - Number(x.active)),
+    );
   })
   .post("/clients/:id/contacts", requirePermission("crm.edit"), async (c) => {
     const a = auth(c);
@@ -242,13 +256,86 @@ export const crmRoutes = new Hono<AppEnv>()
         active: z.boolean().optional(),
       }),
     );
+    if (contact.userId && p.email && p.email.toLowerCase() !== (contact.email ?? "").toLowerCase()) {
+      const [taken] = await db().select({ id: schema.users.id }).from(schema.users).where(sql`lower(${schema.users.email}) = ${p.email.toLowerCase()}`);
+      if (taken && taken.id !== contact.userId) throw new HTTPException(409, { message: "email_taken" });
+    }
     if (contact.autotaskId) {
       const src = await ticketSource();
       await run(() => src.updateContact(contact.autotaskId!, p, a));
     }
+    if (contact.userId) {
+      if (p.email) await db().update(schema.users).set({ email: p.email, updatedAt: new Date() }).where(eq(schema.users.id, contact.userId));
+      if (p.active === false) {
+        await db().update(schema.users).set({ active: false, updatedAt: new Date() }).where(eq(schema.users.id, contact.userId));
+        await revokeUserSessions(contact.userId);
+      }
+    }
     const [row] = await db().update(schema.clientContacts).set({ ...p, updatedAt: new Date() }).where(eq(schema.clientContacts.id, contact.id)).returning();
     await audit(a.user.id, "crm.contact_updated", client.id, { contact: contact.id, fields: Object.keys(p) });
     return c.json(row);
+  })
+
+  /**
+   * Client portal access for a contact (none by default). Given: an account
+   * with their email and a random password to change at first sign-in; they
+   * get the welcome email (a link to choose their password — the password
+   * itself is never emailed). Removed: the account is turned off, its
+   * sessions end.
+   */
+  .put("/clients/:id/contacts/:cid/portal", requirePermission("admin.clients"), async (c) => {
+    const a = auth(c);
+    const client = await clientOr404(c.req.param("id"));
+    const d = db();
+    const [contact] = await d
+      .select()
+      .from(schema.clientContacts)
+      .where(and(eq(schema.clientContacts.id, zUuid.parse(c.req.param("cid"))), eq(schema.clientContacts.clientId, client.id)));
+    if (!contact) throw new HTTPException(404, { message: "not_found" });
+    const p = await body(c, z.object({ enabled: z.boolean(), role: z.enum(["client-user", "client-admin"]).default("client-user") }));
+
+    if (!p.enabled) {
+      if (contact.userId) {
+        await d.update(schema.users).set({ active: false, updatedAt: new Date() }).where(eq(schema.users.id, contact.userId));
+        await revokeUserSessions(contact.userId);
+        await audit(a.user.id, "crm.portal_access_removed", contact.userId, { contact: contact.id, clientId: client.id });
+      }
+      return c.json({ enabled: false });
+    }
+
+    if (!client.active || !contact.active) throw new HTTPException(409, { message: "portal_inactive" });
+    const email = contact.email?.trim().toLowerCase();
+    if (!email) throw new HTTPException(400, { message: "portal_no_email" });
+    const [role] = await d.select({ id: schema.roles.id }).from(schema.roles).where(eq(schema.roles.slug, p.role));
+    let [user] = contact.userId ? await d.select().from(schema.users).where(eq(schema.users.id, contact.userId)) : [];
+    if (!user) {
+      const [same] = await d.select().from(schema.users).where(sql`lower(${schema.users.email}) = ${email}`);
+      if (same) {
+        // an account of this same client that no contact holds yet: theirs; anything else is someone else's
+        const [held] = await d.select({ id: schema.clientContacts.id }).from(schema.clientContacts).where(eq(schema.clientContacts.userId, same.id));
+        if (same.kind !== "client" || same.clientId !== client.id || held) throw new HTTPException(409, { message: "email_taken" });
+        user = same;
+      }
+    }
+    const name = `${contact.firstName} ${contact.lastName}`.trim() || email;
+    const passwordHash = await hashPassword(temporaryPassword());
+    if (user) {
+      [user] = await d
+        .update(schema.users)
+        .set({ active: true, name, roleId: role?.id ?? user.roleId, passwordHash, mustChangePassword: true, failedLogins: 0, lockedUntil: null, updatedAt: new Date() })
+        .where(eq(schema.users.id, user.id))
+        .returning();
+      await revokeUserSessions(user.id);
+    } else {
+      [user] = await d
+        .insert(schema.users)
+        .values({ email, name, kind: "client", clientId: client.id, roleId: role?.id ?? null, title: contact.title, phone: contact.mobile ?? contact.phone, passwordHash, mustChangePassword: true })
+        .returning();
+    }
+    await d.update(schema.clientContacts).set({ userId: user.id, updatedAt: new Date() }).where(eq(schema.clientContacts.id, contact.id));
+    const welcomeSent = await sendPasswordLink(user, "welcome", c);
+    await audit(a.user.id, "crm.portal_access_given", user.id, { contact: contact.id, clientId: client.id, role: p.role, welcomeSent });
+    return c.json({ enabled: true, welcomeSent });
   })
 
   // ── contracts (from Autotask, read only for now)
@@ -298,6 +385,7 @@ export const crmRoutes = new Hono<AppEnv>()
         status,
         late,
         daysLate: late ? Math.round((Date.parse(today) - Date.parse(v.dueOn!)) / 86_400_000) : 0,
+        quickbooks: v.quickbooksId || v.quickbooksError ? { id: v.quickbooksId, syncedAt: v.quickbooksSyncedAt, error: v.quickbooksError } : null,
         payments: mine.map((x) => ({ id: x.p.id, amountCents: x.p.amountCents, paidOn: x.p.paidOn, method: x.p.method, reference: x.p.reference, note: x.p.note, source: x.p.source, by: x.by })),
       };
     });
@@ -339,6 +427,18 @@ export const crmRoutes = new Hono<AppEnv>()
       .returning();
     await audit(a.user.id, "billing.payment_recorded", inv.id, { number: inv.number, amountCents: p.amountCents, method: p.method });
     return c.json(row, 201);
+  })
+  /** Send the invoice to QuickBooks (or its changes): by hand for now. */
+  .post("/invoices/:iid/quickbooks", requirePermission("accounting.manage"), async (c) => {
+    const a = auth(c);
+    const id = zUuid.parse(c.req.param("iid"));
+    try {
+      const r = await pushInvoice(id);
+      await audit(a.user.id, "billing.quickbooks.invoice_sent", id, r);
+      return c.json(r);
+    } catch (e) {
+      return quickbooksHttp(e);
+    }
   })
   .delete("/invoices/:iid/payments/:pid", requirePermission("accounting.manage"), async (c) => {
     const a = auth(c);

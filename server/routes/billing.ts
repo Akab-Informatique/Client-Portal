@@ -1,6 +1,6 @@
 import { Hono } from "hono";
 import { HTTPException } from "hono/http-exception";
-import { eq } from "drizzle-orm";
+import { and, asc, eq, ne } from "drizzle-orm";
 import { z } from "zod";
 import { db, schema } from "../db/index.ts";
 import { auth, requirePermission, requireStaff, type AppEnv } from "../lib/auth.ts";
@@ -25,6 +25,23 @@ import {
   testQuickBooks,
   testStripe,
 } from "../lib/billing.ts";
+import { createCustomer, forgetQuickBooksToken, importAccounts, importItems, invoiceChoices, pullPayments, quickbooksCustomers, QuickBooksError, suggestions } from "../lib/quickbooks.ts";
+
+/** QuickBooks errors as API errors (quickbooks_not_mapped, quickbooks_api…). */
+export function quickbooksHttp(e: unknown): never {
+  if (e instanceof QuickBooksError) {
+    const status = e.code === "api" ? 502 : 409;
+    throw new HTTPException(status, { message: `quickbooks_${e.code}`, cause: e.detail ? [{ path: "quickbooks", message: e.detail }] : undefined });
+  }
+  throw e;
+}
+const qbRun = async <T>(fn: () => Promise<T>) => {
+  try {
+    return await fn();
+  } catch (e) {
+    return quickbooksHttp(e);
+  }
+};
 
 /**
  * Admin › Facturation. Numbering, taxes, template and chart of accounts:
@@ -49,6 +66,9 @@ const quickbooksView = async (origin?: string | null) => {
     sync: s.sync,
     lastTest: s.lastTest ?? null,
     redirectUri: base ? quickbooksRedirectUri(base) : null,
+    invoice: s.invoice,
+    imports: s.imports,
+    paymentsPulledAt: s.paymentsPulledAt,
   };
 };
 const stripeView = async () => {
@@ -66,6 +86,7 @@ export const billingRoutes = new Hono<AppEnv>()
     if (error || !state || !code || !realmId) return c.redirect("/?admin=billing&tab=quickbooks&quickbooks=cancelled");
     try {
       await completeQuickBooks(a.realUser.id, state, code, realmId);
+      forgetQuickBooksToken();
       await audit(a.realUser.id, "billing.quickbooks.connected", null, { realmId });
       return c.redirect("/?admin=billing&tab=quickbooks&quickbooks=connected");
     } catch (e) {
@@ -208,9 +229,86 @@ export const billingRoutes = new Hono<AppEnv>()
     if (!rateLimit(`quickbooks-test:${a.user.id}`, 10, 60_000).ok) throw new HTTPException(429, { message: "rate_limited" });
     return c.json(await testQuickBooks(a.user.id));
   })
+  // ── QuickBooks data (admin.billing, through the saved connection) ──
+  /** Portal clients and QuickBooks customers, with the likely match of each unmapped client. */
+  .get("/quickbooks/mapping", requirePermission("admin.billing"), async (c) => {
+    const customers = await qbRun(() => quickbooksCustomers());
+    const clients = await db()
+      .select({ id: schema.clients.id, name: schema.clients.name, email: schema.clients.email, city: schema.clients.city, quickbooksId: schema.clients.quickbooksId })
+      .from(schema.clients)
+      .where(eq(schema.clients.active, true))
+      .orderBy(asc(schema.clients.name));
+    const suggested = suggestions(clients, customers);
+    return c.json({ customers, clients: clients.map((x) => ({ ...x, suggestion: suggested.get(x.id) ?? null })) });
+  })
+  .put("/quickbooks/mapping/:clientId", requirePermission("admin.billing"), async (c) => {
+    const a = auth(c);
+    const clientId = zUuid.parse(c.req.param("clientId"));
+    const p = await body(c, z.object({ quickbooksId: z.string().trim().min(1).max(40).nullable() }));
+    if (p.quickbooksId) {
+      // one customer, one client: no doubles
+      const [other] = await db().select({ name: schema.clients.name }).from(schema.clients).where(and(eq(schema.clients.quickbooksId, p.quickbooksId), ne(schema.clients.id, clientId)));
+      if (other) throw new HTTPException(409, { message: "quickbooks_customer_taken", cause: [{ path: "quickbooks", message: other.name }] });
+    }
+    const [row] = await db().update(schema.clients).set({ quickbooksId: p.quickbooksId, updatedAt: new Date() }).where(eq(schema.clients.id, clientId)).returning({ id: schema.clients.id });
+    if (!row) throw new HTTPException(404, { message: "not_found" });
+    await audit(a.user.id, "billing.quickbooks.mapped", clientId, { quickbooksId: p.quickbooksId });
+    return c.json({ ok: true });
+  })
+  /** Apply every sure match (same name or email, only one). */
+  .post("/quickbooks/mapping/auto", requirePermission("admin.billing"), async (c) => {
+    const a = auth(c);
+    const customers = await qbRun(() => quickbooksCustomers());
+    const clients = await db().select({ id: schema.clients.id, name: schema.clients.name, email: schema.clients.email, quickbooksId: schema.clients.quickbooksId }).from(schema.clients).where(eq(schema.clients.active, true));
+    const found = suggestions(clients, customers);
+    for (const [id, qbId] of found) await db().update(schema.clients).set({ quickbooksId: qbId, updatedAt: new Date() }).where(eq(schema.clients.id, id));
+    await audit(a.user.id, "billing.quickbooks.auto_mapped", null, { count: found.size });
+    return c.json({ mapped: found.size });
+  })
+  .post("/quickbooks/mapping/:clientId/create", requirePermission("admin.billing"), async (c) => {
+    const a = auth(c);
+    const clientId = zUuid.parse(c.req.param("clientId"));
+    const customer = await qbRun(() => createCustomer(clientId));
+    await audit(a.user.id, "billing.quickbooks.customer_created", clientId, { quickbooksId: customer.id });
+    return c.json(customer, 201);
+  })
+  .post("/quickbooks/import/accounts", requirePermission("admin.billing"), async (c) => {
+    const a = auth(c);
+    const r = await qbRun(() => importAccounts(a.user.id));
+    await audit(a.user.id, "billing.quickbooks.accounts_imported", null, r);
+    return c.json(r);
+  })
+  .post("/quickbooks/import/items", requirePermission("admin.billing"), async (c) => {
+    const a = auth(c);
+    const r = await qbRun(() => importItems(a.user.id));
+    await audit(a.user.id, "billing.quickbooks.items_imported", null, r);
+    return c.json(r);
+  })
+  /** Items and tax codes for the invoices sent, and the ones chosen. */
+  .get("/quickbooks/invoice-defaults", requirePermission("admin.billing"), async (c) => {
+    const choices = await qbRun(() => invoiceChoices());
+    return c.json({ ...choices, chosen: (await quickbooksSettings()).invoice });
+  })
+  .put("/quickbooks/invoice-defaults", requirePermission("admin.billing"), async (c) => {
+    const a = auth(c);
+    const p = await body(c, z.object({ itemId: z.string().max(40).nullable(), taxCodeId: z.string().max(40).nullable(), exemptTaxCodeId: z.string().max(40).nullable() }).partial());
+    const s = await quickbooksSettings();
+    await saveQuickBooksSettings(a.user.id, { invoice: { ...s.invoice, ...p } });
+    await audit(a.user.id, "billing.quickbooks.invoice_defaults", null, p);
+    return c.json((await quickbooksSettings()).invoice);
+  })
+  /** Payments made in QuickBooks, now (they also come every 15 minutes while the sync is on). */
+  .post("/quickbooks/payments/pull", requirePermission("accounting.manage"), async (c) => {
+    const a = auth(c);
+    const r = await qbRun(() => pullPayments(a.user.id));
+    await audit(a.user.id, "billing.quickbooks.payments_pulled", null, { added: r.added, updated: r.updated });
+    return c.json(r);
+  })
+
   .delete("/quickbooks/connection", requirePermission("admin.billing"), requirePermission("admin.integrations"), async (c) => {
     const a = auth(c);
     await saveQuickBooksSettings(a.user.id, { realmId: null, companyName: null, connectedAt: null, refreshToken: null, lastTest: undefined, enabled: false });
+    forgetQuickBooksToken();
     await audit(a.user.id, "billing.quickbooks.disconnected", null);
     return c.json(await quickbooksView(c.req.header("origin") ?? new URL(c.req.url).origin));
   });

@@ -22,8 +22,10 @@ import {
   Phone,
   Plus,
   Receipt,
+  RefreshCw,
   Search,
   Smartphone,
+  KeyRound,
   Ticket,
   UserRound,
   UsersRound,
@@ -36,6 +38,9 @@ import { Label } from "@/components/ui/label";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Switch } from "@/components/ui/switch";
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuSeparator, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
+import { useConfirm } from "@/components/ConfirmDialog";
+import { relativeTime } from "@/lib/format";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Textarea } from "@/components/ui/textarea";
 import { api, ApiError } from "@/lib/api";
@@ -539,6 +544,47 @@ function InvoicesTab({ client }: { client: CrmDetail }) {
 
 const METHODS = ["transfer", "cheque", "card", "cash", "stripe", "other"] as const;
 
+/** Where the invoice is in QuickBooks; send it (or its changes) by hand. */
+function QuickBooksLine({ invoice: v, clientId }: { invoice: CrmInvoice; clientId: string }) {
+  const { t } = useTranslation();
+  const can = useCan();
+  const qc = useQueryClient();
+  const send = useMutation({
+    mutationFn: () => api.post<{ quickbooksId: string }>(`/crm/invoices/${v.id}/quickbooks`),
+    onSuccess: () => toast.success(t("crm.invoices.qb.sent")),
+    onError: (e) => {
+      const code = e instanceof ApiError ? e.code : "";
+      toast.error(t(`crm.invoices.qb.errors.${code}`, { defaultValue: t("crm.invoices.qb.failed") }));
+    },
+    onSettled: () => void qc.invalidateQueries({ queryKey: ["crm", "client", clientId, "invoices"] }),
+  });
+  if (!v.quickbooks && !can("accounting.manage")) return null;
+  const qb = v.quickbooks;
+  return (
+    <div className="flex flex-wrap items-center gap-2 text-xs">
+      <span className="font-medium">QuickBooks</span>
+      {qb?.id ? (
+        <span className="flex items-center gap-1 text-emerald-300">
+          <CircleCheck className="size-3.5" /> {t("crm.invoices.qb.inQb", { id: qb.id })}
+          {qb.syncedAt && <span className="text-muted-foreground">· {t("crm.invoices.qb.syncedAt", { when: relativeTime(qb.syncedAt) })}</span>}
+        </span>
+      ) : (
+        <span className="text-muted-foreground">{t("crm.invoices.qb.notSent")}</span>
+      )}
+      {qb?.error && (
+        <span className="flex items-center gap-1 text-red-300" title={qb.error}>
+          <AlertTriangle className="size-3.5" /> {t(`crm.invoices.qb.errors.quickbooks_${qb.error.split(":")[0]}`, { defaultValue: qb.error })}
+        </span>
+      )}
+      {can("accounting.manage") && v.status !== "voided" && (
+        <Button size="sm" variant="outline" className="ml-auto h-7 text-xs" disabled={send.isPending} onClick={() => send.mutate()}>
+          {send.isPending ? <Loader2 className="size-3.5 animate-spin" /> : <RefreshCw className="size-3.5" />} {qb?.id ? t("crm.invoices.qb.resend") : t("crm.invoices.qb.send")}
+        </Button>
+      )}
+    </div>
+  );
+}
+
 /** The payments of one invoice; a new one (all or part of the balance). */
 function Payments({ invoice: v, clientId }: { invoice: CrmInvoice; clientId: string }) {
   const { t, i18n } = useTranslation();
@@ -570,6 +616,7 @@ function Payments({ invoice: v, clientId }: { invoice: CrmInvoice; clientId: str
               <span className="text-muted-foreground">{shortDate(p.paidOn)}</span>
               <span className="text-muted-foreground">{t(`crm.invoices.payment.methods.${p.method}`)}</span>
               {p.reference && <span className="text-muted-foreground">· {p.reference}</span>}
+              {p.source === "quickbooks" && <span className="rounded border border-emerald-500/30 px-1 text-[10px] text-emerald-300">QuickBooks</span>}
               {p.by && <span className="text-[11px] text-muted-foreground/70">· {p.by}</span>}
               {can("accounting.manage") && p.source === "portal" && (
                 <button type="button" onClick={() => remove.mutate(p.id)} className="ml-auto rounded p-0.5 text-muted-foreground hover:text-destructive" aria-label={t("crm.invoices.payment.remove")} title={t("crm.invoices.payment.remove")}>
@@ -582,6 +629,7 @@ function Payments({ invoice: v, clientId }: { invoice: CrmInvoice; clientId: str
       ) : (
         <p className="text-xs text-muted-foreground">{v.paidOn ? t("crm.invoices.payment.paidInSource", { date: shortDate(v.paidOn) }) : t("crm.invoices.payment.none")}</p>
       )}
+      <QuickBooksLine invoice={v} clientId={clientId} />
       {can("accounting.manage") && v.balanceCents > 0 && v.status !== "voided" && (
         <form
           className="grid gap-2 sm:grid-cols-[120px_140px_140px_minmax(0,1fr)_auto] sm:items-end"
@@ -729,6 +777,7 @@ function ContactsTab({ client }: { client: CrmDetail }) {
                       </a>
                     )}
                   </div>
+                  <PortalAccess clientId={client.id} contact={c} onChange={refresh} />
                 </div>
                 {editable && (
                   <div className="flex shrink-0 flex-col items-end gap-1 opacity-0 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100">
@@ -751,6 +800,75 @@ function ContactsTab({ client }: { client: CrmDetail }) {
         </button>
       )}
     </Card>
+  );
+}
+
+/** Client portal access: none by default; given by an admin (account + welcome email), or removed. */
+function PortalAccess({ clientId, contact: c, onChange }: { clientId: string; contact: CrmContact; onChange: () => void }) {
+  const { t, i18n } = useTranslation();
+  const can = useCan();
+  const confirm = useConfirm();
+  const set = useMutation({
+    mutationFn: (p: { enabled: boolean; role?: string }) => api.put<{ enabled: boolean; welcomeSent?: boolean }>(`/crm/clients/${clientId}/contacts/${c.id}/portal`, p),
+    onSuccess: (r) => {
+      onChange();
+      if (!r.enabled) toast.success(t("crm.portal.removed"));
+      else if (r.welcomeSent) toast.success(t("crm.portal.given", { email: c.email }));
+      else toast.warning(t("crm.portal.givenNoEmail"));
+    },
+    onError: (e) => toast.error(e instanceof ApiError && ["portal_no_email", "email_taken", "portal_inactive"].includes(e.code) ? t(`crm.portal.errors.${e.code}`) : t("common.error")),
+  });
+  const manage = can("admin.clients") && c.active;
+  const give = async (role: string) => {
+    if (await confirm({ title: t("crm.portal.giveTitle", { name: `${c.firstName} ${c.lastName}` }), description: t("crm.portal.giveText", { email: c.email ?? "—" }), confirmLabel: t("crm.portal.give") }))
+      set.mutate({ enabled: true, role });
+  };
+  if (!c.portal && !manage) return null;
+  return (
+    <div className="mt-2 flex flex-wrap items-center gap-1.5">
+      {c.portal ? (
+        <span
+          className={cn(
+            "inline-flex items-center gap-1 rounded-md border px-1.5 py-0.5 text-[10px]",
+            c.portal.pending ? "border-amber-500/40 bg-amber-500/10 text-amber-300" : "border-emerald-500/40 bg-emerald-500/10 text-emerald-300",
+          )}
+          title={c.portal.lastLoginAt ? t("crm.portal.lastLogin", { when: relativeTime(c.portal.lastLoginAt) }) : undefined}
+        >
+          <KeyRound className="size-3" />
+          {c.portal.pending ? t("crm.portal.pending") : t("crm.portal.on")}
+          {c.portal.role === "client-admin" && <span className="opacity-80">· {t("crm.portal.admin")}</span>}
+        </span>
+      ) : (
+        <span className="text-[10px] text-muted-foreground/70">{t("crm.portal.none")}</span>
+      )}
+      {manage && (
+        <DropdownMenu>
+          <DropdownMenuTrigger asChild>
+            <button type="button" disabled={set.isPending} className="rounded px-1 text-[10px] text-primary hover:bg-accent">
+              {set.isPending ? <Loader2 className="size-3 animate-spin" /> : c.portal ? t("crm.portal.manage") : t("crm.portal.give")}
+            </button>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align="start" className="w-64" lang={i18n.language}>
+            <DropdownMenuLabel className="text-xs">{t("crm.portal.title")}</DropdownMenuLabel>
+            <DropdownMenuItem onSelect={() => void give("client-user")}>{c.portal ? t("crm.portal.resendUser") : t("crm.portal.asUser")}</DropdownMenuItem>
+            <DropdownMenuItem onSelect={() => void give("client-admin")}>{c.portal ? t("crm.portal.resendAdmin") : t("crm.portal.asAdmin")}</DropdownMenuItem>
+            {c.portal && (
+              <>
+                <DropdownMenuSeparator />
+                <DropdownMenuItem
+                  className="text-destructive"
+                  onSelect={async () => {
+                    if (await confirm({ title: t("crm.portal.removeTitle"), description: t("crm.portal.removeText"), confirmLabel: t("crm.portal.remove"), destructive: true })) set.mutate({ enabled: false });
+                  }}
+                >
+                  {t("crm.portal.remove")}
+                </DropdownMenuItem>
+              </>
+            )}
+          </DropdownMenuContent>
+        </DropdownMenu>
+      )}
+    </div>
   );
 }
 

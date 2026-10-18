@@ -3,7 +3,7 @@ import { useSearchParams } from "react-router-dom";
 import { useTranslation } from "react-i18next";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
-import { BookOpenText, CheckCircle2, Copy, CreditCard, FileText, Hash, Link2, Loader2, Plus, RefreshCw, Unlink, XCircle } from "lucide-react";
+import { ArrowDownToLine, BookOpenText, CheckCircle2, Copy, CreditCard, FileText, Hash, Link2, Loader2, Plus, RefreshCw, Search, Sparkles, Unlink, Users, Wallet, XCircle } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -43,7 +43,13 @@ type QuickBooks = {
   sync: { invoices: boolean; payments: boolean; customers: boolean };
   lastTest: { ok: boolean; at: string; error?: string } | null;
   redirectUri: string | null;
+  invoice: { itemId: string | null; taxCodeId: string | null; exemptTaxCodeId: string | null };
+  imports: { accounts?: { at: string; matched: number; created: number }; items?: { at: string; items: number; categories: number; products: number } };
+  paymentsPulledAt: string | null;
 };
+type QbCustomer = { id: string; name: string; email: string | null; phone: string | null; active: boolean };
+type Mapping = { customers: QbCustomer[]; clients: { id: string; name: string; email: string | null; city: string | null; quickbooksId: string | null; suggestion: string | null }[] };
+type InvoiceDefaults = { items: { id: string; name: string; sku: string | null; type: string }[]; taxCodes: { id: string; name: string; description: string | null }[]; chosen: QuickBooks["invoice"] };
 type Stripe = { enabled: boolean; publishableKey: string; paymentLinks: boolean; hasSecretKey: boolean; hasWebhookSecret: boolean; mode: "test" | "live" | null; lastTest: { ok: boolean; at: string; error?: string } | null };
 
 const KEY = ["admin", "billing"];
@@ -55,7 +61,8 @@ function useBillingError() {
   const { t } = useTranslation();
   return (e: unknown) => {
     const code = e instanceof ApiError ? e.code : "";
-    return t(`billing.errors.${code}`, { defaultValue: t("common.error") });
+    const detail = e instanceof ApiError ? e.fields?.find((f) => f.path === "quickbooks")?.message : undefined;
+    return t(`billing.errors.${code}`, { defaultValue: t("common.error"), detail: detail ?? "" });
   };
 }
 
@@ -648,6 +655,8 @@ function QuickBooksTab() {
         </form>
       </Card>
 
+      {q.connected && <QuickBooksData q={q} />}
+
       <Card title={t("billing.qb.sync")} text={t("billing.qb.syncText")} aside={<Switch checked={q.enabled} disabled={!q.connected} onCheckedChange={(v) => toggle.mutate({ enabled: v })} aria-label={t("billing.enabled")} />}>
         <div className="grid gap-2 sm:grid-cols-3">
           {(["customers", "invoices", "payments"] as const).map((k) => (
@@ -660,9 +669,234 @@ function QuickBooksTab() {
             </label>
           ))}
         </div>
-        <p className="text-[11px] text-muted-foreground">{t("billing.qb.syncSoon")}</p>
+        <p className="text-[11px] text-muted-foreground">{t("billing.qb.syncNow")}</p>
       </Card>
     </div>
+  );
+}
+
+/** Once connected: invoice defaults, imports (chart, items), clients ↔ customers, payments. */
+function QuickBooksData({ q }: { q: QuickBooks }) {
+  const { t } = useTranslation();
+  const qc = useQueryClient();
+  const err = useBillingError();
+  const refresh = () => void qc.invalidateQueries({ queryKey: KEY });
+  const accounts = useMutation({
+    mutationFn: () => api.post<{ matched: number; created: number }>("/billing/quickbooks/import/accounts"),
+    onSuccess: (r) => {
+      refresh();
+      toast.success(t("billing.qb.accountsDone", r));
+    },
+    onError: (e) => toast.error(err(e)),
+  });
+  const items = useMutation({
+    mutationFn: () => api.post<{ items: number; categories: number; products: number }>("/billing/quickbooks/import/items"),
+    onSuccess: (r) => {
+      refresh();
+      toast.success(t("billing.qb.itemsDone", r));
+    },
+    onError: (e) => toast.error(err(e)),
+  });
+  const pull = useMutation({
+    mutationFn: () => api.post<{ added: number; updated: number }>("/billing/quickbooks/payments/pull"),
+    onSuccess: (r) => {
+      refresh();
+      void qc.invalidateQueries({ queryKey: ["crm"] });
+      toast.success(t("billing.qb.paymentsDone", r));
+    },
+    onError: (e) => toast.error(err(e)),
+  });
+  return (
+    <>
+      <Card title={t("billing.qb.importTitle")} text={t("billing.qb.importText")}>
+        <div className="grid gap-3 sm:grid-cols-2">
+          <div className="space-y-2 rounded-xl border p-3">
+            <p className="flex items-center gap-2 text-sm font-medium">
+              <BookOpenText className="size-4 text-primary" /> {t("billing.qb.importAccounts")}
+            </p>
+            <p className="text-[11px] text-muted-foreground">{t("billing.qb.importAccountsText")}</p>
+            {q.imports.accounts && <p className="text-[11px] text-emerald-400">{t("billing.qb.accountsLast", { ...q.imports.accounts, at: dateTime(q.imports.accounts.at) })}</p>}
+            <Button size="sm" variant="outline" disabled={accounts.isPending} onClick={() => accounts.mutate()}>
+              {accounts.isPending ? <Loader2 className="size-3.5 animate-spin" /> : <ArrowDownToLine className="size-3.5" />} {t("billing.qb.import")}
+            </Button>
+          </div>
+          <div className="space-y-2 rounded-xl border p-3">
+            <p className="flex items-center gap-2 text-sm font-medium">
+              <FileText className="size-4 text-primary" /> {t("billing.qb.importItems")}
+            </p>
+            <p className="text-[11px] text-muted-foreground">{t("billing.qb.importItemsText")}</p>
+            {q.imports.items && <p className="text-[11px] text-emerald-400">{t("billing.qb.itemsLast", { ...q.imports.items, at: dateTime(q.imports.items.at) })}</p>}
+            <Button size="sm" variant="outline" disabled={items.isPending} onClick={() => items.mutate()}>
+              {items.isPending ? <Loader2 className="size-3.5 animate-spin" /> : <ArrowDownToLine className="size-3.5" />} {t("billing.qb.import")}
+            </Button>
+          </div>
+        </div>
+      </Card>
+      <InvoiceDefaultsCard />
+      <MappingCard />
+      <Card
+        title={t("billing.qb.paymentsTitle")}
+        text={t("billing.qb.paymentsText")}
+        aside={
+          <Button size="sm" variant="outline" disabled={pull.isPending} onClick={() => pull.mutate()}>
+            {pull.isPending ? <Loader2 className="size-3.5 animate-spin" /> : <Wallet className="size-3.5" />} {t("billing.qb.pullNow")}
+          </Button>
+        }
+      >
+        <p className="text-xs text-muted-foreground">{q.paymentsPulledAt ? t("billing.qb.pulledAt", { at: dateTime(q.paymentsPulledAt) }) : t("billing.qb.neverPulled")}</p>
+      </Card>
+    </>
+  );
+}
+
+function InvoiceDefaultsCard() {
+  const { t } = useTranslation();
+  const qc = useQueryClient();
+  const err = useBillingError();
+  const { data, isLoading, error } = useQuery({ queryKey: [...KEY, "qb-defaults"], queryFn: () => api.get<InvoiceDefaults>("/billing/quickbooks/invoice-defaults"), retry: false });
+  const save = useMutation({
+    mutationFn: (p: Partial<QuickBooks["invoice"]>) => api.put<QuickBooks["invoice"]>("/billing/quickbooks/invoice-defaults", p),
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: [...KEY, "qb-defaults"] });
+      toast.success(t("billing.saved"));
+    },
+    onError: (e) => toast.error(err(e)),
+  });
+  const pick = (k: keyof QuickBooks["invoice"], label: string, list: { id: string; name: string }[], hint?: string) => (
+    <Field label={label} hint={hint}>
+      <Select value={data?.chosen[k] ?? "none"} onValueChange={(v) => save.mutate({ [k]: v === "none" ? null : v })}>
+        <SelectTrigger className="w-full">
+          <SelectValue />
+        </SelectTrigger>
+        <SelectContent position="popper" className="max-h-72">
+          <SelectItem value="none">—</SelectItem>
+          {list.map((x) => (
+            <SelectItem key={x.id} value={x.id}>
+              {x.name}
+            </SelectItem>
+          ))}
+        </SelectContent>
+      </Select>
+    </Field>
+  );
+  return (
+    <Card title={t("billing.qb.defaultsTitle")} text={t("billing.qb.defaultsText")}>
+      {isLoading && <Loader2 className="size-4 animate-spin text-muted-foreground" />}
+      {error && <p className="text-xs text-destructive">{err(error)}</p>}
+      {data && (
+        <div className="grid gap-3 sm:grid-cols-3">
+          {pick("itemId", t("billing.qb.item"), data.items.map((i) => ({ id: i.id, name: i.sku ? `${i.name} (${i.sku})` : i.name })), data.items.length ? undefined : t("billing.qb.importItemsFirst"))}
+          {pick("taxCodeId", t("billing.qb.taxCode"), data.taxCodes)}
+          {pick("exemptTaxCodeId", t("billing.qb.exemptTaxCode"), data.taxCodes)}
+        </div>
+      )}
+    </Card>
+  );
+}
+
+function MappingCard() {
+  const { t } = useTranslation();
+  const qc = useQueryClient();
+  const err = useBillingError();
+  const [q, setQ] = useState("");
+  const [onlyOpen, setOnlyOpen] = useState(true);
+  const { data, isLoading, error } = useQuery({ queryKey: [...KEY, "qb-mapping"], queryFn: () => api.get<Mapping>("/billing/quickbooks/mapping"), retry: false });
+  const refresh = () => void qc.invalidateQueries({ queryKey: [...KEY, "qb-mapping"] });
+  const map = useMutation({
+    mutationFn: ({ clientId, quickbooksId }: { clientId: string; quickbooksId: string | null }) => api.put(`/billing/quickbooks/mapping/${clientId}`, { quickbooksId }),
+    onSuccess: refresh,
+    onError: (e) => toast.error(err(e)),
+  });
+  const auto = useMutation({
+    mutationFn: () => api.post<{ mapped: number }>("/billing/quickbooks/mapping/auto"),
+    onSuccess: (r) => {
+      refresh();
+      toast.success(t("billing.qb.autoDone", { count: r.mapped }));
+    },
+    onError: (e) => toast.error(err(e)),
+  });
+  const create = useMutation({
+    mutationFn: (clientId: string) => api.post<QbCustomer>(`/billing/quickbooks/mapping/${clientId}/create`),
+    onSuccess: (c) => {
+      refresh();
+      toast.success(t("billing.qb.created", { name: c.name }));
+    },
+    onError: (e) => toast.error(err(e)),
+  });
+  const byId = new Map((data?.customers ?? []).map((c) => [c.id, c]));
+  const used = new Set((data?.clients ?? []).map((c) => c.quickbooksId).filter(Boolean));
+  const shown = (data?.clients ?? []).filter((c) => (!onlyOpen || !c.quickbooksId) && c.name.toLowerCase().includes(q.toLowerCase()));
+  const mapped = (data?.clients ?? []).filter((c) => c.quickbooksId).length;
+  const sure = (data?.clients ?? []).filter((c) => c.suggestion).length;
+  return (
+    <Card
+      title={t("billing.qb.mappingTitle")}
+      text={t("billing.qb.mappingText")}
+      aside={
+        <Button size="sm" disabled={!sure || auto.isPending} onClick={() => auto.mutate()} className={GOLD}>
+          {auto.isPending ? <Loader2 className="size-3.5 animate-spin" /> : <Sparkles className="size-3.5" />} {t("billing.qb.auto", { count: sure })}
+        </Button>
+      }
+    >
+      {isLoading && <Loader2 className="size-4 animate-spin text-muted-foreground" />}
+      {error && <p className="text-xs text-destructive">{err(error)}</p>}
+      {data && (
+        <>
+          <div className="flex flex-wrap items-center gap-2">
+            <span className="flex items-center gap-1.5 text-xs text-muted-foreground">
+              <Users className="size-3.5" /> {t("billing.qb.mappedCount", { mapped, total: data.clients.length, customers: data.customers.length })}
+            </span>
+            <div className="relative ml-auto w-56">
+              <Search className="pointer-events-none absolute left-2.5 top-1/2 size-3.5 -translate-y-1/2 text-muted-foreground" />
+              <Input value={q} onChange={(e) => setQ(e.target.value)} placeholder={t("common.search")} className="h-8 pl-8" />
+            </div>
+            <label className="flex items-center gap-1.5 text-xs text-muted-foreground">
+              <Switch checked={onlyOpen} onCheckedChange={setOnlyOpen} /> {t("billing.qb.onlyUnmapped")}
+            </label>
+          </div>
+          <ul className="max-h-[28rem] divide-y divide-border/60 overflow-y-auto rounded-xl border scrollbar-thin">
+            {shown.map((c) => (
+              <li key={c.id} className="grid items-center gap-2 px-3 py-2 sm:grid-cols-[minmax(0,1fr)_minmax(0,1.2fr)_auto]">
+                <span className="min-w-0">
+                  <span className="block truncate text-sm">{c.name}</span>
+                  {c.city && <span className="block truncate text-[11px] text-muted-foreground">{c.city}</span>}
+                </span>
+                <Select value={c.quickbooksId ?? "none"} onValueChange={(v) => map.mutate({ clientId: c.id, quickbooksId: v === "none" ? null : v })}>
+                  <SelectTrigger className="h-8 w-full">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent position="popper" className="max-h-72">
+                    <SelectItem value="none">{t("billing.qb.notMapped")}</SelectItem>
+                    {data.customers
+                      .filter((x) => x.id === c.quickbooksId || !used.has(x.id))
+                      .map((x) => (
+                        <SelectItem key={x.id} value={x.id}>
+                          {x.name}
+                          {x.id === c.suggestion ? ` — ${t("billing.qb.suggested")}` : ""}
+                        </SelectItem>
+                      ))}
+                  </SelectContent>
+                </Select>
+                <span className="flex justify-end gap-1">
+                  {!c.quickbooksId && c.suggestion && (
+                    <Button size="sm" variant="ghost" className="h-8 text-xs text-primary" onClick={() => map.mutate({ clientId: c.id, quickbooksId: c.suggestion })} title={byId.get(c.suggestion)?.name}>
+                      <Sparkles className="size-3.5" /> {t("billing.qb.useSuggestion")}
+                    </Button>
+                  )}
+                  {!c.quickbooksId && !c.suggestion && (
+                    <Button size="sm" variant="ghost" className="h-8 text-xs" disabled={create.isPending} onClick={() => create.mutate(c.id)}>
+                      <Plus className="size-3.5" /> {t("billing.qb.createCustomer")}
+                    </Button>
+                  )}
+                  {c.quickbooksId && <CheckCircle2 className="size-4 text-emerald-400" />}
+                </span>
+              </li>
+            ))}
+            {shown.length === 0 && <li className="px-3 py-6 text-center text-xs text-muted-foreground">{t("billing.qb.allMapped")}</li>}
+          </ul>
+        </>
+      )}
+    </Card>
   );
 }
 

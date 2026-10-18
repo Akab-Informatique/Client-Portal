@@ -8,6 +8,7 @@ import { purgeOldNotifications } from "./lib/notify.ts";
 import { smtpSettings } from "./lib/mail.ts";
 import { keepTicketsWarm } from "./lib/ticketSource.ts";
 import { CRM_SYNC_EVERY, syncCrm } from "./lib/crm.ts";
+import { quickbooksTick } from "./lib/quickbooks.ts";
 import { sweepTimers } from "./lib/timers.ts";
 import { sendReminders } from "./lib/planning.ts";
 import { autoTickets } from "./lib/sms.ts";
@@ -24,6 +25,8 @@ keepTicketsWarm();
 // CRM: the portal keeps its own copy of the clients, contacts and contracts (Autotask is the reference while linked)
 void syncCrm();
 setInterval(() => void syncCrm(), CRM_SYNC_EVERY).unref();
+// QuickBooks: payments made there brought onto the portal's invoices
+setInterval(() => void quickbooksTick(), 15 * 60_000).unref();
 
 // CRM: the portal keeps its own copy of the clients, contacts and contracts (Autotask is the reference while linked)
 void syncCrm();

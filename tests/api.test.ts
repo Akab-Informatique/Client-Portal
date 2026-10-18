@@ -8,7 +8,7 @@ process.env.REQUIRE_MFA = "true";
 const { initDb, db, schema } = await import("../server/db/index.ts");
 const { seed } = await import("../server/db/seed.ts");
 const { createApp } = await import("../server/app.ts");
-const { eq } = await import("drizzle-orm");
+const { eq, sql } = await import("drizzle-orm");
 const { resetRateLimit } = await import("../server/lib/http.ts");
 
 let app: ReturnType<typeof createApp>;
@@ -2888,5 +2888,187 @@ describe("billing: settings, chart of accounts, QuickBooks, Stripe, payments", (
     // a payment can be removed (the invoice is partly paid again)
     expect((await admin.del(`/api/crm/invoices/${inv.id}/payments/${v.payments[1].id}`)).status).toBe(200);
     expect((await admin.get(`/api/crm/clients/${client.id}/invoices`)).json.items.find((x: any) => x.id === inv.id).status).toBe("partial");
+  });
+});
+
+describe("client portal access for contacts", () => {
+  it("none by default; given: an account to set up at first sign-in; removed: turned off", async () => {
+    resetRateLimit("login:ip:unknown");
+    const admin = await signIn("admin@akab.local");
+    const tech = await signIn("tech@akab.local");
+    const client = (await admin.get("/api/crm/clients")).json.find((c: any) => c.autotaskId === 304);
+    const contacts = (await admin.get(`/api/crm/clients/${client.id}/contacts`)).json;
+    expect(contacts.every((x: any) => x.portal === null)).toBe(true);
+    const ct = contacts[0];
+    // giving access is an admin right (it creates a sign-in)
+    expect((await tech.put(`/api/crm/clients/${client.id}/contacts/${ct.id}/portal`, { enabled: true })).status).toBe(403);
+    const r = await admin.put(`/api/crm/clients/${client.id}/contacts/${ct.id}/portal`, { enabled: true });
+    expect(r.status).toBe(200);
+    expect(r.json.enabled).toBe(true);
+    const [u] = await db().select().from(schema.users).where(sql`lower(${schema.users.email}) = ${ct.email.toLowerCase()}`);
+    expect(u).toMatchObject({ kind: "client", clientId: client.id, active: true, mustChangePassword: true });
+    expect(u.passwordHash).toBeTruthy();
+    const [link] = await db().select().from(schema.passwordTokens).where(eq(schema.passwordTokens.userId, u.id));
+    expect(link).toBeTruthy(); // the welcome email's "choose your password" link
+    expect((await admin.get(`/api/crm/clients/${client.id}/contacts`)).json.find((x: any) => x.id === ct.id).portal).toMatchObject({ pending: true, role: "client-user" });
+
+    // no email, or an address already used by someone else: refused
+    const noMail = await admin.post(`/api/crm/clients/${client.id}/contacts`, { firstName: "Sans", lastName: "Courriel" });
+    expect((await admin.put(`/api/crm/clients/${client.id}/contacts/${noMail.json.id}/portal`, { enabled: true })).json.error).toBe("portal_no_email");
+    const staffMail = await admin.post(`/api/crm/clients/${client.id}/contacts`, { firstName: "Faux", lastName: "Tech", email: "tech@akab.local" });
+    expect((await admin.put(`/api/crm/clients/${client.id}/contacts/${staffMail.json.id}/portal`, { enabled: true })).json.error).toBe("email_taken");
+
+    // removed: the account is off
+    expect((await admin.put(`/api/crm/clients/${client.id}/contacts/${ct.id}/portal`, { enabled: false })).json.enabled).toBe(false);
+    const [off] = await db().select().from(schema.users).where(eq(schema.users.id, u.id));
+    expect(off.active).toBe(false);
+    expect((await admin.get(`/api/crm/clients/${client.id}/contacts`)).json.find((x: any) => x.id === ct.id).portal).toBeNull();
+  });
+});
+
+describe("QuickBooks through its API: customers, chart, items, invoices, payments", () => {
+  const sent: { method: string; url: string; body: any }[] = [];
+  let payments: any[] = [];
+  const json = (b: unknown, status = 200) => new Response(JSON.stringify(b), { status, headers: { "content-type": "application/json" } });
+  beforeAll(async () => {
+    const { saveQuickBooksSettings } = await import("../server/lib/billing.ts");
+    await saveQuickBooksSettings(null, { clientId: "ABqb", clientSecret: "qb-secret", environment: "sandbox", realmId: "9130", refreshToken: "qb-refresh", connectedAt: new Date().toISOString(), enabled: true });
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: unknown, init: RequestInit = {}) => {
+        const url = decodeURIComponent(String(input));
+        const method = init.method ?? "GET";
+        if (url.startsWith("https://oauth.platform.intuit.com/")) return json({ access_token: "qb-access", refresh_token: "qb-refresh-2" });
+        expect(url.startsWith("https://sandbox-quickbooks.api.intuit.com/v3/company/9130/")).toBe(true);
+        sent.push({ method, url, body: init.body ? JSON.parse(String(init.body)) : undefined });
+        if (url.includes("select * from Customer")) {
+          return json({
+            QueryResponse: {
+              Customer: [
+                { Id: "58", DisplayName: "Clinique dentaire Joliette inc." },
+                { Id: "59", DisplayName: "Transport Lanaudière" },
+                { Id: "60", DisplayName: "Autre compagnie" },
+              ],
+            },
+          });
+        }
+        if (url.includes("select * from Account")) {
+          return json({
+            QueryResponse: {
+              Account: [
+                { Id: "1", Name: "Accounts Receivable (A/R)", AcctNum: "1200", Classification: "Asset" },
+                { Id: "2", Name: "Ventes de services", AcctNum: "4050", Classification: "Revenue" },
+                { Id: "3", Name: "TPS à payer", Classification: "Liability" },
+              ],
+            },
+          });
+        }
+        if (url.includes("select * from Item")) {
+          return json({
+            QueryResponse: {
+              Item: [
+                { Id: "10", Name: "Services", Type: "Category" },
+                { Id: "11", Name: "Support TI", FullyQualifiedName: "Services:Support TI", Type: "Service", ParentRef: { value: "10" }, UnitPrice: 125 },
+                { Id: "12", Name: "Disque SSD", Sku: "MZ-V9P1T0", Type: "Inventory", UnitPrice: 189.99 },
+              ],
+            },
+          });
+        }
+        if (url.includes("select * from TaxCode")) return json({ QueryResponse: { TaxCode: [{ Id: "5", Name: "TPS/TVQ QC - 9,975" }, { Id: "6", Name: "Exonéré" }] } });
+        if (url.includes("select * from Invoice")) return json({ QueryResponse: {} });
+        if (url.includes("select * from Payment")) return json({ QueryResponse: { Payment: payments } });
+        if (url.includes("/customer?") && method === "POST") return json({ Customer: { Id: "61", DisplayName: JSON.parse(String(init.body)).DisplayName } });
+        if (url.includes("/invoice/500?")) return json({ Invoice: { Id: "500", SyncToken: "0" } });
+        if (url.includes("/invoice?") && method === "POST") return json({ Invoice: { Id: "500" } });
+        return json({ Fault: { Error: [{ Message: `unexpected ${method} ${url}` }] } }, 400);
+      }),
+    );
+  });
+  afterAll(() => vi.unstubAllGlobals());
+
+  it("maps clients to customers without doubles, creates the missing ones", async () => {
+    resetRateLimit("login:ip:unknown");
+    const admin = await signIn("admin@akab.local");
+    const m = (await admin.get("/api/billing/quickbooks/mapping")).json;
+    const clinique = m.clients.find((c: any) => c.name === "Clinique dentaire Joliette");
+    // "inc." and accents do not stop the match
+    expect(clinique.suggestion).toBe("58");
+    expect((await admin.post("/api/billing/quickbooks/mapping/auto")).json.mapped).toBeGreaterThanOrEqual(2);
+    const after = (await admin.get("/api/billing/quickbooks/mapping")).json.clients;
+    expect(after.find((c: any) => c.name === "Transport Lanaudière").quickbooksId).toBe("59");
+    // a customer already used: refused for another client
+    const other = after.find((c: any) => !c.quickbooksId);
+    expect((await admin.put(`/api/billing/quickbooks/mapping/${other.id}`, { quickbooksId: "58" })).json.error).toBe("quickbooks_customer_taken");
+    // a client missing in QuickBooks: created there and mapped
+    const made = await admin.post(`/api/billing/quickbooks/mapping/${other.id}/create`);
+    expect(made.status).toBe(201);
+    expect(sent.find((s) => s.method === "POST" && s.url.includes("/customer?"))!.body.DisplayName).toBe(other.name);
+    expect((await admin.get("/api/billing/quickbooks/mapping")).json.clients.find((c: any) => c.id === other.id).quickbooksId).toBe("61");
+    // one with the same name as a QuickBooks customer is not created twice
+    const clin = after.find((c: any) => c.name === "Clinique dentaire Joliette");
+    await admin.put(`/api/billing/quickbooks/mapping/${clin.id}`, { quickbooksId: null });
+    expect((await admin.post(`/api/billing/quickbooks/mapping/${clin.id}/create`)).json.error).toBe("quickbooks_customer_exists");
+    await admin.put(`/api/billing/quickbooks/mapping/${clin.id}`, { quickbooksId: "58" });
+  });
+
+  it("imports the chart of accounts and the items, matching what exists", async () => {
+    resetRateLimit("login:ip:unknown");
+    const admin = await signIn("admin@akab.local");
+    const before = (await admin.get("/api/billing/ledger")).json.length;
+    const r = (await admin.post("/api/billing/quickbooks/import/accounts")).json;
+    // 1200 and "TPS à payer" exist already: matched; 4050 is new
+    expect(r).toMatchObject({ matched: 2, created: 1 });
+    const ledger = (await admin.get("/api/billing/ledger")).json;
+    expect(ledger.length).toBe(before + 1);
+    expect(ledger.find((a: any) => a.number === "1200").quickbooksId).toBe("1");
+    expect(ledger.find((a: any) => a.number === "4050")).toMatchObject({ type: "revenue", quickbooksId: "2" });
+    // a second import adds nothing
+    expect((await admin.post("/api/billing/quickbooks/import/accounts")).json).toMatchObject({ matched: 3, created: 0 });
+    expect((await admin.post("/api/billing/quickbooks/import/items")).json).toMatchObject({ items: 2, categories: 1 });
+    const d = (await admin.get("/api/billing/quickbooks/invoice-defaults")).json;
+    expect(d.items.map((i: any) => i.id).sort()).toEqual(["11", "12"]);
+    expect(d.taxCodes).toHaveLength(2);
+    expect((await admin.put("/api/billing/quickbooks/invoice-defaults", { itemId: "11", taxCodeId: "5", exemptTaxCodeId: "6" })).json).toMatchObject({ itemId: "11", taxCodeId: "5" });
+  });
+
+  it("sends an invoice by hand, and brings back its payment from QuickBooks", async () => {
+    resetRateLimit("login:ip:unknown");
+    const admin = await signIn("admin@akab.local");
+    const tech = await signIn("tech@akab.local");
+    const client = (await admin.get("/api/crm/clients")).json.find((c: any) => c.name === "Clinique dentaire Joliette");
+    const inv = (await admin.get(`/api/crm/clients/${client.id}/invoices`)).json.items.find((v: any) => v.status === "due" || v.status === "overdue");
+    expect((await tech.post(`/api/crm/invoices/${inv.id}/quickbooks`)).status).toBe(403);
+    sent.length = 0;
+    expect((await admin.post(`/api/crm/invoices/${inv.id}/quickbooks`)).json).toEqual({ quickbooksId: "500" });
+    const body = sent.find((s) => s.method === "POST" && s.url.includes("/invoice?"))!.body;
+    expect(body).toMatchObject({ DocNumber: inv.number, CustomerRef: { value: "58" }, TxnDate: inv.issuedOn });
+    expect(body.Line[0]).toMatchObject({ Amount: (inv.totalCents - inv.taxCents) / 100, SalesItemLineDetail: { ItemRef: { value: "11" }, TaxCodeRef: { value: "5" } } });
+    let v = (await admin.get(`/api/crm/clients/${client.id}/invoices`)).json.items.find((x: any) => x.id === inv.id);
+    expect(v.quickbooks).toMatchObject({ id: "500", error: null });
+    // sent again: the same QuickBooks invoice is changed, not doubled
+    sent.length = 0;
+    await admin.post(`/api/crm/invoices/${inv.id}/quickbooks`);
+    expect(sent.find((s) => s.method === "POST" && s.url.includes("/invoice?"))!.body).toMatchObject({ Id: "500", SyncToken: "0", sparse: true });
+
+    // a client not mapped: a clear error, kept on the invoice
+    const unmapped = (await admin.get("/api/billing/quickbooks/mapping")).json.clients.find((c: any) => !c.quickbooksId);
+    const inv2 = (await admin.get(`/api/crm/clients/${unmapped.id}/invoices`)).json.items.find((x: any) => x.status !== "voided");
+    if (inv2) {
+      expect((await admin.post(`/api/crm/invoices/${inv2.id}/quickbooks`)).json.error).toBe("quickbooks_not_mapped");
+      expect((await admin.get(`/api/crm/clients/${unmapped.id}/invoices`)).json.items.find((x: any) => x.id === inv2.id).quickbooks.error).toContain("not_mapped");
+    }
+
+    // part paid in QuickBooks: comes back on the invoice, once
+    payments = [{ Id: "900", TxnDate: "2026-10-16", PaymentRefNum: "1055", PaymentMethodRef: { name: "Chèque" }, Line: [{ Amount: 100, LinkedTxn: [{ TxnId: "500", TxnType: "Invoice" }] }] }];
+    expect((await admin.post("/api/billing/quickbooks/payments/pull")).json).toMatchObject({ added: 1, updated: 0 });
+    expect((await admin.post("/api/billing/quickbooks/payments/pull")).json).toMatchObject({ added: 0, updated: 0 });
+    v = (await admin.get(`/api/crm/clients/${client.id}/invoices`)).json.items.find((x: any) => x.id === inv.id);
+    expect(v).toMatchObject({ status: "partial", paidCents: 10000 });
+    expect(v.payments[0]).toMatchObject({ source: "quickbooks", method: "cheque", reference: "1055", paidOn: "2026-10-16" });
+    // a payment from QuickBooks cannot be removed in the portal
+    expect((await admin.del(`/api/crm/invoices/${inv.id}/payments/${v.payments[0].id}`)).status).toBe(404);
+    // changed in QuickBooks: changed here
+    payments[0].Line[0].Amount = 150;
+    expect((await admin.post("/api/billing/quickbooks/payments/pull")).json).toMatchObject({ added: 0, updated: 1 });
   });
 });
