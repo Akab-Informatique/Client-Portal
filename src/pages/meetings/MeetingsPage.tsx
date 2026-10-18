@@ -3,7 +3,7 @@ import { useTranslation } from "react-i18next";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { Link, useNavigate } from "react-router-dom";
-import { AlarmClock, ArrowRight, CalendarCheck, Filter } from "lucide-react";
+import { AlarmClock, ArrowRight, BellRing, CalendarCheck, CheckCircle2, Filter, Loader2 } from "lucide-react";
 import { GlassBackdrop } from "@/components/brand/GlassBackdrop";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -46,6 +46,10 @@ type Overdue = {
   stray: { total: number; byStatus: { label: string; kind: string; count: number }[]; tickets: OverdueTicket[] };
   /** The queues the gauges count (custom: chosen; otherwise every queue but alerts) */
   queues: { all: { value: string; label: string }[]; counted: string[]; custom: boolean };
+  /** Open monitoring alerts (alert queue or monitoring source), the newest first */
+  alerts: (OverdueTicket & { createdAt: string })[];
+  /** The status given when an alert is marked resolved (null: none known) */
+  completeStatus: string | null;
 };
 
 /** Every open status but "complete" (the tickets list shows completed ones in "all" otherwise) */
@@ -53,6 +57,8 @@ const OPEN_KINDS = ["new", "inProgress", "needsAttention", "waitingCustomer", "w
 /** The tickets page with a filter; a person picked under a gauge narrows it to them */
 const ticketsUrl = (q: Record<string, string>, who: string | null, queues: Overdue["queues"]) => {
   const p = new URLSearchParams(q);
+  // no monitoring alerts (they have their own gauge)
+  p.set("alerts", "0");
   // the same queues as the gauges (none named when they all count)
   if (queues.counted.length < queues.all.length) p.set("queue", queues.counted.join(","));
   if (who) p.set("assignee", who === "unassigned" ? "none" : who);
@@ -69,6 +75,8 @@ type Scale = { red: number; critical: number };
 const WORKLOAD: Scale = { red: 25, critical: 35 };
 /** Unassigned tickets past "new": every one is a ticket nobody follows */
 const STRAY: Scale = { red: 5, critical: 10 };
+/** Monitoring alerts still open */
+const ALERTS: Scale = { red: 10, critical: 20 };
 /** Green (0) → yellow → red */
 const heat = (n: number, s: Scale, alpha = 1) =>
   n >= s.critical ? `hsl(0 85% 45% / ${alpha})` : `hsl(${Math.round(142 * (1 - Math.min(n, s.red) / s.red))} 75% 52% / ${alpha})`;
@@ -120,15 +128,15 @@ export function MeetingsPage() {
           {data && <QueuesPicker queues={data.queues} />}
         </div>
         {isLoading ? (
-          <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
-            {[0, 1, 2].map((i) => (
+          <div className="grid gap-4 md:grid-cols-2 2xl:grid-cols-4">
+            {[0, 1, 2, 3].map((i) => (
               <Skeleton key={i} className="h-72 rounded-2xl" />
             ))}
           </div>
         ) : isError || !data ? (
           <p className="py-16 text-center text-muted-foreground">{t("common.error")}</p>
         ) : (
-          <div className="grid items-start gap-4 md:grid-cols-2 xl:grid-cols-3">
+          <div className="grid items-start gap-4 md:grid-cols-2 2xl:grid-cols-4">
             <GaugeCard
               title={t("meetings.overdue.gaugeLate")}
               total={data.total}
@@ -142,6 +150,7 @@ export function MeetingsPage() {
               url={(who) => ticketsUrl({ view: "all", statusKind: OPEN_KINDS.join(","), due: "week" }, who, data.queues)}
             />
             <StrayCard stray={data.stray} queues={data.queues} />
+            <AlertsCard alerts={data.alerts} completeStatus={data.completeStatus} />
           </div>
         )}
       </section>
@@ -506,5 +515,114 @@ function QueuesPicker({ queues }: { queues: Overdue["queues"] }) {
         </div>
       </PopoverContent>
     </Popover>
+  );
+}
+
+/** Open monitoring alerts: a gauge, then the list to open or resolve them. */
+function AlertsCard({ alerts, completeStatus }: { alerts: Overdue["alerts"]; completeStatus: string | null }) {
+  const { t } = useTranslation();
+  const [listOpen, setListOpen] = useState(false);
+  const newest = alerts[0];
+  return (
+    <div className="space-y-4 rounded-2xl border bg-card/80 p-5">
+      <div className="flex items-baseline justify-between gap-2">
+        <h3 className="flex items-center gap-1.5 font-semibold">
+          <BellRing className="size-4 text-amber-300" /> {t("meetings.overdue.gaugeAlerts")}
+        </h3>
+      </div>
+      <GaugeButton onClick={() => setListOpen(true)}>
+        <Gauge value={alerts.length} scale={ALERTS} />
+      </GaugeButton>
+      <p className="truncate text-center text-xs text-muted-foreground">
+        {newest ? t("meetings.overdue.latestAlert", { title: newest.title }) : <span className="text-emerald-400">{t("meetings.overdue.noAlerts")}</span>}
+      </p>
+      {listOpen && <AlertsDialog alerts={alerts} completeStatus={completeStatus} onClose={() => setListOpen(false)} />}
+    </div>
+  );
+}
+
+/** Every open alert: a click opens the ticket; "Résolu" closes it (tickets.edit). */
+function AlertsDialog({ alerts, completeStatus, onClose }: { alerts: Overdue["alerts"]; completeStatus: string | null; onClose: () => void }) {
+  const { t } = useTranslation();
+  const txt = useChoiceText();
+  const navigate = useNavigate();
+  const qc = useQueryClient();
+  const canResolve = useCan()("tickets.edit") && completeStatus !== null;
+  const [busy, setBusy] = useState<number | null>(null);
+  const resolve = useMutation({
+    mutationFn: (id: number) => {
+      setBusy(id);
+      return api.patch(`/tickets/${id}`, { status: completeStatus });
+    },
+    onSuccess: () => {
+      toast.success(t("meetings.overdue.resolved"));
+      void qc.invalidateQueries({ queryKey: ["meetings", "overdue"] });
+      void qc.invalidateQueries({ queryKey: ["tickets"] });
+    },
+    onError: () => toast.error(t("common.error")),
+    onSettled: () => setBusy(null),
+  });
+  const open = (id: number) => {
+    onClose();
+    navigate(`/tickets?ticket=${id}`);
+  };
+  const when = (iso: string) =>
+    new Intl.DateTimeFormat(currentLocale() === "en" ? "en-CA" : "fr-CA", { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" }).format(
+      new Date(iso),
+    );
+  return (
+    <Dialog open onOpenChange={(o) => !o && onClose()}>
+      <DialogContent className="sm:max-w-2xl">
+        <DialogHeader>
+          <DialogTitle>
+            {t("meetings.overdue.gaugeAlerts")} <span className="font-normal text-muted-foreground">({alerts.length})</span>
+          </DialogTitle>
+          <DialogDescription>{t("meetings.overdue.alertsHint")}</DialogDescription>
+        </DialogHeader>
+        <div className="flex justify-end">
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => {
+              onClose();
+              navigate("/tickets?view=all&statusKind=new,inProgress,needsAttention,waitingCustomer,waitingVendor,scheduled,other&alerts=1");
+            }}
+          >
+            {t("meetings.overdue.openFiltered")} <ArrowRight className="size-4" />
+          </Button>
+        </div>
+        {alerts.length === 0 ? (
+          <p className="py-6 text-center text-sm text-emerald-400">{t("meetings.overdue.noAlerts")}</p>
+        ) : (
+          <ul className="max-h-[60vh] divide-y overflow-y-auto rounded-xl border">
+            {alerts.map((x) => (
+              <li key={x.id} className="flex items-center gap-3 px-3 py-2 transition-colors hover:bg-accent/40">
+                <button type="button" onClick={() => open(x.id)} className="min-w-0 flex-1 text-left" title={t("meetings.overdue.openTicket")}>
+                  <div className="flex items-center gap-2 text-xs">
+                    <span
+                      className={cn("size-2 shrink-0 rounded-full", PRIORITY_STYLE[x.priorityKind].dot)}
+                      title={txt.priority({ label: x.priorityLabel, kind: x.priorityKind })}
+                    />
+                    <span className="font-mono text-muted-foreground">{x.number}</span>
+                    <span className={cn("rounded-full border px-2 py-px text-[11px]", STATUS_STYLE[x.statusKind])}>
+                      {txt.status({ label: x.statusLabel, kind: x.statusKind })}
+                    </span>
+                    <span className="ml-auto shrink-0 text-muted-foreground">{when(x.createdAt)}</span>
+                  </div>
+                  <p className="mt-0.5 truncate text-sm font-medium">{x.title}</p>
+                  <p className="truncate text-xs text-muted-foreground">{x.company}</p>
+                </button>
+                {canResolve && (
+                  <Button size="sm" variant="outline" className="shrink-0" disabled={resolve.isPending} onClick={() => resolve.mutate(x.id)}>
+                    {busy === x.id ? <Loader2 className="size-4 animate-spin" /> : <CheckCircle2 className="size-4 text-emerald-400" />}{" "}
+                    {t("meetings.overdue.resolve")}
+                  </Button>
+                )}
+              </li>
+            ))}
+          </ul>
+        )}
+      </DialogContent>
+    </Dialog>
   );
 }

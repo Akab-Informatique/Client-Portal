@@ -7,7 +7,7 @@ import { auth, requirePermission, requireStaff, type AppEnv } from "../lib/auth.
 import { audit } from "../lib/audit.ts";
 import { body, zOptText, zUuid } from "../lib/validate.ts";
 import { ticketSource, type NTicket } from "../lib/ticketSource.ts";
-import { lookup, run } from "./tickets.ts";
+import { ALERT_QUEUE, isAlert, lookup, run } from "./tickets.ts";
 import { asSeen, seesFull, team as planningTeam } from "./planning.ts";
 
 /**
@@ -22,9 +22,10 @@ export const meetingRoutes = new Hono<AppEnv>()
     const src = await ticketSource();
     const [everything, o, technicians] = await run(() => Promise.all([src.list(), src.options(), src.technicians()]));
     const L = lookup(o);
-    // Only the queues the gauges count (support work; monitoring alerts left out by default)
+    // Only the queues the gauges count (support work); monitoring alerts have their own gauge
     const queues = await gaugeQueues(o.queues);
-    const all = everything.filter((t) => queues.counted.includes(t.queue));
+    const alert = isAlert(L);
+    const all = everything.filter((t) => queues.counted.includes(t.queue) && !alert(t));
     const now = Date.now();
     const friday = fridayEnd(new Date(now));
     const open = (t: NTicket) => L.statusKind(t.status) !== "complete";
@@ -81,6 +82,13 @@ export const meetingRoutes = new Hono<AppEnv>()
       // Open tickets nobody has, past "new": someone moved them on, then nobody took them (not to lose)
       stray: stray(),
       queues,
+      // Open monitoring alerts, the newest first
+      alerts: everything
+        .filter((t) => open(t) && alert(t))
+        .sort((x, y) => y.createdAt.localeCompare(x.createdAt))
+        .map((t) => ({ ...item(t), createdAt: t.createdAt })),
+      /** The status a ticket gets when marked resolved from the meeting */
+      completeStatus: o.statuses.find((s) => s.kind === "complete")?.value ?? null,
     });
   })
 
@@ -211,7 +219,11 @@ export const meetingRoutes = new Hono<AppEnv>()
       const src = await ticketSource();
       const [all, o] = await Promise.all([src.list(), src.options()]);
       const L = lookup(o);
+      // the support tickets, as the gauges count them (no monitoring alerts)
+      const queues = await gaugeQueues(o.queues);
+      const alert = isAlert(L);
       tickets = all
+        .filter((x) => queues.counted.includes(x.queue) && !alert(x))
         .filter((x) => L.statusKind(x.status) !== "complete" && x.dueAt && new Date(x.dueAt) >= start && new Date(x.dueAt) < end)
         .sort((x, y) => x.dueAt.localeCompare(y.dueAt))
         .slice(0, 500)
@@ -563,9 +575,6 @@ const zProject = z.object({
     .optional()
     .or(z.literal("").transform(() => null)),
 });
-
-/** Monitoring alert queues ("Alertes", "Alerts"…): not counted unless chosen */
-const ALERT_QUEUE = /alert/i;
 
 /** The queues the meeting gauges count: the ones chosen, or every queue but the alert ones. */
 async function gaugeQueues(all: { value: string; label: string | null }[]) {

@@ -27,7 +27,7 @@ import { addTicketTime } from "../lib/timesheets.ts";
 
 const zDate = z.string().regex(/^\d{4}-\d{2}-\d{2}$/);
 const zUuidOrNull = z.uuid().nullable().default(null);
-const FILTER_PARAMS = ["view", "assignee", "q", "due", "created", "attention", "statusKind", "status", "priority", "company", "queue", "dueFrom", "dueTo", "startFrom", "startTo", "sort"];
+const FILTER_PARAMS = ["view", "assignee", "q", "due", "created", "attention", "statusKind", "status", "priority", "company", "queue", "dueFrom", "dueTo", "startFrom", "startTo", "alerts", "sort"];
 const PRIORITY_ORDER = { critical: 0, high: 1, medium: 2, low: 3 } as const;
 
 // ── Errors from the source (Autotask) → HTTP ──
@@ -150,6 +150,13 @@ const endOfToday = () => {
   d.setHours(23, 59, 59, 999);
   return d.getTime();
 };
+/** Monitoring alert queues ("Alertes", "Alerts"…) */
+export const ALERT_QUEUE = /alert/i;
+/** Ticket sources of monitoring ("Monitoring Alert", "monitoring"…) */
+const ALERT_SOURCE = /alert|monitor/i;
+/** A monitoring alert: in an alert queue, or created by monitoring */
+export const isAlert = (L: Lookup) => (t: NTicket) => ALERT_QUEUE.test(L.queueLabel(t.queue)) || ALERT_SOURCE.test(t.source ?? "");
+
 const list = (v: string | undefined) => (v ? v.split(",").filter(Boolean) : []);
 
 function summary(t: NTicket, L: Lookup, start: string | undefined, me: string) {
@@ -168,6 +175,7 @@ function summary(t: NTicket, L: Lookup, start: string | undefined, me: string) {
     priorityKind: L.priorityKind(t.priority),
     queue: t.queue,
     queueLabel: L.queueLabel(t.queue),
+    source: t.source,
     assignee: t.assignee,
     secondary: t.secondary,
     /** First line of the description, for the list */
@@ -298,6 +306,7 @@ export const ticketRoutes = new Hono<AppEnv>()
     };
     const inRange = (v: string | undefined, from?: string, to?: string) =>
       (!from && !to) || (v !== undefined && (!from || v.slice(0, 10) >= from) && (!to || v.slice(0, 10) <= to));
+    const alert = isAlert(L);
     /** The tickets a set of list parameters selects (the list, and the saved filters' buttons). */
     const select = (q: Record<string, string | undefined>) => {
       const view = ((q.view ?? "") in views ? q.view : "mine") as keyof typeof views;
@@ -324,6 +333,8 @@ export const ticketRoutes = new Hono<AppEnv>()
       .filter((t) => (q.due === "overdue" ? isOverdue(t) : q.due === "today" ? isDueToday(t) : q.due === "week" ? isDueThisWeek(t) : true))
       .filter((t) => q.created !== "today" || new Date(t.createdAt).toDateString() === new Date().toDateString())
       .filter((t) => q.attention !== "1" || attention(t))
+      // Weekly meeting: "alerts=0" leaves monitoring alerts out, "alerts=1" keeps only them
+      .filter((t) => (q.alerts === "0" ? !alert(t) : q.alerts === "1" ? alert(t) : true))
       // Portal-only filter: Autotask has no start date
       .filter((t) => inRange(starts.get(t.id), q.startFrom, q.startTo));
     };
