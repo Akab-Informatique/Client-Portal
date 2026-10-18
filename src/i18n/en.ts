@@ -127,7 +127,7 @@ const en: Dict = {
     tickets: "Tickets",
     clients: "Clients",
     documentation: "Documentation",
-    devices: "Devices",
+    devices: "RMM",
     meetings: "Weekly meeting",
   },
   sync: {

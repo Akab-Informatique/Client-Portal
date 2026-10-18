@@ -125,7 +125,7 @@ const fr = {
     tickets: "Billets",
     clients: "Clients",
     documentation: "Documentation",
-    devices: "Appareils",
+    devices: "RMM",
     meetings: "Rencontre hebdomadaire",
   },
   sync: {
