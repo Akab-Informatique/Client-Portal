@@ -118,6 +118,8 @@ const en: Dict = {
     store: "Inventory",
     management: "Management",
     reports: "Reports",
+    timesheets: "Timesheets",
+    expenses: "Expenses",
     modules: "Modules",
     commandCenter: "Command center",
     tools: "Tools",

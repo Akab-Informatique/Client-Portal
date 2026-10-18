@@ -116,6 +116,8 @@ const fr = {
     store: "Inventaire",
     management: "Gestion",
     reports: "Rapports",
+    timesheets: "Feuilles de temps",
+    expenses: "Dépenses",
     modules: "Modules",
     commandCenter: "Centre de commande",
     tools: "Outils",

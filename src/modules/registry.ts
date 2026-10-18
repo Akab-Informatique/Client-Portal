@@ -1,4 +1,4 @@
-import { BarChart3, BookOpen, Building2, CalendarCheck, FileSignature, LayoutDashboard, Mail, Megaphone, MonitorSmartphone, Receipt, Store, Ticket, type LucideIcon } from "lucide-react";
+import { BarChart3, BookOpen, Building2, CalendarCheck, Clock, FileSignature, LayoutDashboard, Mail, Megaphone, MonitorSmartphone, Receipt, Store, Ticket, Wallet, type LucideIcon } from "lucide-react";
 import type { PermissionKey } from "@shared/permissions";
 
 /**
@@ -33,6 +33,8 @@ export const STAFF_MODULES: NavModule[] = [
   { key: "dashboard", path: "/", labelKey: "nav.dashboard", icon: LayoutDashboard, section: "team", permission: "dashboard.view" },
   { key: "messages", path: "/messages", labelKey: "nav.messages", icon: Megaphone, section: "command", permission: "messages.view" },
   { key: "outlook", path: "/outlook", labelKey: "nav.outlook", icon: Mail, section: "tools", permission: "outlook.view", optIn: "outlook" },
+  { key: "timesheets", path: "/timesheets", labelKey: "nav.timesheets", icon: Clock, section: "tools", upcoming: true },
+  { key: "expenses", path: "/expenses", labelKey: "nav.expenses", icon: Wallet, section: "tools", upcoming: true },
   { key: "tickets", path: "/tickets", labelKey: "nav.tickets", icon: Ticket, section: "command", permission: "tickets.view" },
   { key: "crm", path: "/crm", labelKey: "nav.crmClients", icon: Building2, section: "crm", permission: "crm.view" },
   { key: "invoices", path: "/accounting/invoices", labelKey: "nav.invoices", icon: Receipt, section: "accounting", permission: "accounting.view" },
