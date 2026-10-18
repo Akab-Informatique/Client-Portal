@@ -924,6 +924,12 @@ const en: Dict = {
       empty: "No points to discuss this week.",
       markDone: "Mark as discussed",
       reopen: "Back to discuss",
+      detailed: "Detailed point",
+      editTitle: "Edit the point",
+      detailedHint: "A title and detail bullet points.",
+      titleLabel: "Title",
+      bullets: "Detail bullets",
+      addBullet: "Add a bullet",
     },
     projects: {
       title: "Projects in progress",

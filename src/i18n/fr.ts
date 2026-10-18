@@ -922,6 +922,12 @@ const fr = {
       empty: "Aucun point à discuter cette semaine.",
       markDone: "Marquer comme discuté",
       reopen: "Remettre à discuter",
+      detailed: "Point détaillé",
+      editTitle: "Modifier le point",
+      detailedHint: "Un titre et des points de détail.",
+      titleLabel: "Titre",
+      bullets: "Points de détail",
+      addBullet: "Ajouter un point",
     },
     projects: {
       title: "Projets en cours",

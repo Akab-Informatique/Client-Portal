@@ -66,7 +66,7 @@ export const meetingRoutes = new Hono<AppEnv>()
   .get("/points", async (c) => {
     const p = schema.meetingPoints;
     const rows = await db()
-      .select({ id: p.id, text: p.text, doneAt: p.doneAt, authorName: p.authorName, createdAt: p.createdAt })
+      .select({ id: p.id, text: p.text, details: p.details, doneAt: p.doneAt, authorName: p.authorName, createdAt: p.createdAt })
       .from(p)
       .where(or(isNull(p.doneAt), gt(p.doneAt, new Date(Date.now() - 7 * 86_400_000))))
       .orderBy(asc(p.createdAt))
@@ -76,16 +76,20 @@ export const meetingRoutes = new Hono<AppEnv>()
 
   .post("/points", requirePermission("meetings.manage"), async (c) => {
     const a = auth(c);
-    const v = await body(c, z.object({ text: z.string().trim().min(1).max(2000) }));
-    const [row] = await db().insert(schema.meetingPoints).values({ text: v.text, authorId: a.user.id, authorName: a.user.name }).returning({ id: schema.meetingPoints.id });
+    const v = await body(c, z.object({ text: z.string().trim().min(1).max(2000), details: z.string().trim().max(8000).nullable().optional() }));
+    const [row] = await db()
+      .insert(schema.meetingPoints)
+      .values({ text: v.text, details: v.details || null, authorId: a.user.id, authorName: a.user.name })
+      .returning({ id: schema.meetingPoints.id });
     return c.json({ id: row.id }, 201);
   })
 
   .patch("/points/:id", requirePermission("meetings.manage"), async (c) => {
     const id = projectId(c.req.param("id"));
-    const v = await body(c, z.object({ text: z.string().trim().min(1).max(2000).optional(), done: z.boolean().optional() }));
+    const v = await body(c, z.object({ text: z.string().trim().min(1).max(2000).optional(), details: z.string().trim().max(8000).nullable().optional(), done: z.boolean().optional() }));
     const set: Partial<typeof schema.meetingPoints.$inferInsert> = {};
     if (v.text !== undefined) set.text = v.text;
+    if (v.details !== undefined) set.details = v.details || null;
     if (v.done !== undefined) set.doneAt = v.done ? new Date() : null;
     if (!Object.keys(set).length) return c.json({ ok: true });
     const rows = await db().update(schema.meetingPoints).set(set).where(eq(schema.meetingPoints.id, id)).returning({ id: schema.meetingPoints.id });

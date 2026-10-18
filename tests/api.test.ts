@@ -241,6 +241,17 @@ describe("permissions", () => {
     const tech = await signIn("tech@akab.local");
     expect((await tech.get("/api/meetings/points")).status).toBe(403);
     expect((await tech.post("/api/meetings/points", { text: "x" })).status).toBe(403);
+    // a detailed point: a title and bullet points, then edited
+    const c = await admin.post("/api/meetings/points", { text: "Nouveau client", details: "- Contrat signé\n- Installation lundi" });
+    expect(c.status).toBe(201);
+    list = (await admin.get("/api/meetings/points")).json;
+    expect(list.find((p: any) => p.id === c.json.id).details).toBe("- Contrat signé\n- Installation lundi");
+    expect((await admin.patch(`/api/meetings/points/${c.json.id}`, { details: "Tout est prêt" })).status).toBe(200);
+    expect((await admin.patch(`/api/meetings/points/${c.json.id}`, { details: "x".repeat(8001) })).status).toBe(400);
+    list = (await admin.get("/api/meetings/points")).json;
+    expect(list.find((p: any) => p.id === c.json.id)).toMatchObject({ text: "Nouveau client", details: "Tout est prêt" });
+    expect((await tech.patch(`/api/meetings/points/${c.json.id}`, { details: "x" })).status).toBe(403);
+    await admin.del(`/api/meetings/points/${c.json.id}`);
     expect((await admin.del(`/api/meetings/points/${b.json.id}`)).status).toBe(200);
     expect((await admin.del(`/api/meetings/points/${b.json.id}`)).status).toBe(404);
     await admin.del(`/api/meetings/points/${a.json.id}`);

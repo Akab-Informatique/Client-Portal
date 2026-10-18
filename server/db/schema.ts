@@ -998,7 +998,10 @@ export const meetingProjectMembers = pgTable(
 /** Points to discuss with the team at the weekly meeting (pay due Tuesday, someone awayâ€¦). */
 export const meetingPoints = pgTable("meeting_points", {
   id: uuid("id").primaryKey().defaultRandom(),
+  /** The point itself (its title) */
   text: text("text").notNull(),
+  /** Optional details: a description, or bullet points (lines starting with "- ") */
+  details: text("details"),
   doneAt: timestamp("done_at", { withTimezone: true }),
   authorId: uuid("author_id").references(() => users.id, { onDelete: "set null" }),
   authorName: text("author_name").notNull(),
