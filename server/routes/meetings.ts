@@ -179,7 +179,56 @@ export const meetingRoutes = new Hono<AppEnv>()
       console.warn("[meetings] week tickets:", e instanceof Error ? e.message : e);
       ticketsError = true;
     }
-    return c.json({ from, to, blocks, absences, projects, tickets, ticketsError });
+    const ev = schema.meetingEvents;
+    const events = await db()
+      .select({
+        id: ev.id,
+        date: ev.date,
+        startTime: ev.startTime,
+        endTime: ev.endTime,
+        title: ev.title,
+        note: ev.note,
+        userId: ev.userId,
+        name: schema.users.name,
+      })
+      .from(ev)
+      .leftJoin(schema.users, eq(schema.users.id, ev.userId))
+      .where(and(gte(ev.date, from), lte(ev.date, to)))
+      .orderBy(asc(ev.date), asc(ev.startTime));
+    return c.json({ from, to, events, blocks, absences, projects, tickets, ticketsError });
+  })
+
+  // ── Things on the team week (meetings.manage) ──
+  .post("/events", requirePermission("meetings.manage"), async (c) => {
+    const a = auth(c);
+    const v = await body(c, zEvent);
+    if (v.userId) await checkMember(v.userId);
+    const [row] = await db()
+      .insert(schema.meetingEvents)
+      .values({ ...eventValues(v), createdBy: a.user.id })
+      .returning({ id: schema.meetingEvents.id });
+    await audit(a.user.id, "meeting.event.created", row.id, { date: v.date });
+    return c.json({ id: row.id }, 201);
+  })
+
+  .put("/events/:id", requirePermission("meetings.manage"), async (c) => {
+    const a = auth(c);
+    const id = projectId(c.req.param("id"));
+    const v = await body(c, zEvent);
+    if (v.userId) await checkMember(v.userId);
+    const rows = await db().update(schema.meetingEvents).set(eventValues(v)).where(eq(schema.meetingEvents.id, id)).returning({ id: schema.meetingEvents.id });
+    if (!rows.length) throw new HTTPException(404, { message: "not_found" });
+    await audit(a.user.id, "meeting.event.updated", id, { date: v.date });
+    return c.json({ ok: true });
+  })
+
+  .delete("/events/:id", requirePermission("meetings.manage"), async (c) => {
+    const a = auth(c);
+    const id = projectId(c.req.param("id"));
+    const rows = await db().delete(schema.meetingEvents).where(eq(schema.meetingEvents.id, id)).returning({ id: schema.meetingEvents.id });
+    if (!rows.length) throw new HTTPException(404, { message: "not_found" });
+    await audit(a.user.id, "meeting.event.deleted", id);
+    return c.json({ ok: true });
   })
 
   // ── Absences calendar (meetings.manage to change) ──
@@ -397,6 +446,35 @@ const zAbsence = z
   })
   .refine((v) => v.endDate >= v.startDate, { message: "end_before_start", path: ["endDate"] })
   .refine((v) => new Date(v.endDate).getTime() - new Date(v.startDate).getTime() <= 366 * 86_400_000, { message: "too_long", path: ["endDate"] });
+
+const zTime = z
+  .string()
+  .regex(/^([01]\d|2[0-3]):[0-5]\d$/)
+  .nullable()
+  .optional()
+  .or(z.literal("").transform(() => null));
+const zEvent = z
+  .object({
+    date: zDay,
+    startTime: zTime,
+    endTime: zTime,
+    title: z.string().trim().min(1).max(200),
+    note: zOptText(1000),
+    userId: zUuid
+      .nullable()
+      .optional()
+      .or(z.literal("").transform(() => null)),
+  })
+  .refine((v) => !v.startTime || !v.endTime || v.endTime > v.startTime, { message: "end_before_start", path: ["endTime"] });
+const eventValues = (v: z.infer<typeof zEvent>) => ({
+  date: v.date,
+  startTime: v.startTime || null,
+  // an end time only with a start time
+  endTime: v.startTime ? v.endTime || null : null,
+  title: v.title,
+  note: v.note || null,
+  userId: v.userId || null,
+});
 
 async function checkMember(userId: string) {
   if (!(await team()).some((u) => u.id === userId)) throw new HTTPException(400, { message: "invalid_member" });

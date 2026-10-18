@@ -1027,6 +1027,26 @@ export const meetingAbsences = pgTable(
   (t) => [index("meeting_absences_dates_idx").on(t.startDate, t.endDate)],
 );
 
+/** Weekly meeting: something on the team week (a team lunch, a client visit, a deadline…) */
+export const meetingEvents = pgTable(
+  "meeting_events",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    /** YYYY-MM-DD */
+    date: text("date").notNull(),
+    /** HH:MM, both empty for the whole day */
+    startTime: text("start_time"),
+    endTime: text("end_time"),
+    title: text("title").notNull(),
+    note: text("note"),
+    /** Who it is for (none: the whole team) */
+    userId: uuid("user_id").references(() => users.id, { onDelete: "set null" }),
+    createdBy: uuid("created_by").references(() => users.id, { onDelete: "set null" }),
+    createdAt: created(),
+  },
+  (t) => [index("meeting_events_date_idx").on(t.date)],
+);
+
 /**
  * A technician's own Microsoft 365 sign-in (delegated access): what they
  * linked themselves (Outlook mail, calendar, later To Do). The refresh token

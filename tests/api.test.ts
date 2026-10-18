@@ -272,6 +272,26 @@ describe("permissions", () => {
     expect(Array.isArray(week.json.blocks) && Array.isArray(week.json.tickets)).toBe(true);
     expect((await admin.get("/api/meetings/week?from=2026-13-01")).status).toBe(400);
     expect((await (await signIn("tech@akab.local")).get("/api/meetings/week?from=2026-11-09")).status).toBe(403);
+    // things added to the week: whole day or with hours, for the team or one person
+    const ev = await admin.post("/api/meetings/events", { date: "2026-11-11", title: "Dîner d'équipe", startTime: "12:00", endTime: "13:00", userId: null });
+    expect(ev.status).toBe(201);
+    const ev2 = await admin.post("/api/meetings/events", { date: "2026-11-13", title: "Visite client", startTime: "", endTime: "", userId: team[0].id });
+    expect(ev2.status).toBe(201);
+    expect((await admin.post("/api/meetings/events", { date: "2026-11-11", title: "x", startTime: "14:00", endTime: "13:00" })).status).toBe(400);
+    expect((await admin.post("/api/meetings/events", { date: "2026-11-11", title: "x", startTime: "25:00" })).status).toBe(400);
+    expect((await admin.post("/api/meetings/events", { date: "2026-11-11", title: " " })).status).toBe(400);
+    let events = (await admin.get("/api/meetings/week?from=2026-11-09")).json.events;
+    expect(events.map((x: any) => [x.title, x.startTime, x.endTime, x.name])).toEqual([
+      ["Dîner d'équipe", "12:00", "13:00", null],
+      ["Visite client", null, null, team[0].name],
+    ]);
+    expect((await admin.put(`/api/meetings/events/${ev.json.id}`, { date: "2026-11-20", title: "Dîner reporté" })).status).toBe(200);
+    events = (await admin.get("/api/meetings/week?from=2026-11-09")).json.events;
+    expect(events.map((x: any) => x.title)).toEqual(["Visite client"]);
+    expect((await (await signIn("tech@akab.local")).post("/api/meetings/events", { date: "2026-11-11", title: "x" })).status).toBe(403);
+    expect((await admin.del(`/api/meetings/events/${ev.json.id}`)).status).toBe(200);
+    expect((await admin.del(`/api/meetings/events/${ev.json.id}`)).status).toBe(404);
+    await admin.del(`/api/meetings/events/${ev2.json.id}`);
     await admin.del(`/api/meetings/absences/${ab.json.id}`);
     await admin.del(`/api/meetings/projects/${pr.json.id}`);
     await admin.del(`/api/meetings/projects/${late.json.id}`);

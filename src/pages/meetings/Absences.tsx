@@ -18,7 +18,7 @@ import { holidaysBetween } from "@shared/holidays";
 const KINDS = ["vacation", "sick", "training", "personal", "other"] as const;
 type Kind = (typeof KINDS)[number];
 type Absence = { id: string; userId: string; name: string; startDate: string; endDate: string; kind: Kind; note: string | null };
-type Draft = { id?: string; userId: string; startDate: string; endDate: string; kind: Kind; note: string };
+export type AbsenceDraft = { id?: string; userId: string; startDate: string; endDate: string; kind: Kind; note: string };
 
 const KIND_STYLE: Record<Kind, string> = {
   vacation: "bg-sky-500/20 text-sky-200 border-sky-500/40",
@@ -54,7 +54,7 @@ export function AbsencesSection() {
   const { t } = useTranslation();
   const manage = useCan()("meetings.manage");
   const [month, setMonth] = useState(() => new Date(new Date().getFullYear(), new Date().getMonth(), 1));
-  const [draft, setDraft] = useState<Draft | null>(null);
+  const [draft, setDraft] = useState<AbsenceDraft | null>(null);
   const grid = useMemo(() => monthGrid(month), [month]);
   const today = ymd(new Date());
   const { data } = useQuery({
@@ -68,7 +68,7 @@ export function AbsencesSection() {
   const weekdays = useMemo(() => grid.days.slice(0, 7).map((d) => new Intl.DateTimeFormat(loc(), { weekday: "short" }).format(d)), [grid]);
   const title = new Intl.DateTimeFormat(loc(), { month: "long", year: "numeric" }).format(month);
 
-  const blank = (day: string): Draft => ({ userId: "", startDate: day, endDate: day, kind: "vacation", note: "" });
+  const blank = (day: string): AbsenceDraft => ({ userId: "", startDate: day, endDate: day, kind: "vacation", note: "" });
   const open = (a: Absence) => setDraft({ id: a.id, userId: a.userId, startDate: a.startDate, endDate: a.endDate, kind: a.kind, note: a.note ?? "" });
 
   return (
@@ -181,7 +181,7 @@ export function AbsencesSection() {
   );
 }
 
-function AbsenceDialog({ draft, onClose }: { draft: Draft; onClose: () => void }) {
+export function AbsenceDialog({ draft, onClose }: { draft: AbsenceDraft; onClose: () => void }) {
   const { t } = useTranslation();
   const confirm = useConfirm();
   const qc = useQueryClient();
@@ -189,6 +189,7 @@ function AbsenceDialog({ draft, onClose }: { draft: Draft; onClose: () => void }
   const team = useQuery({ queryKey: ["meetings", "team"], queryFn: () => api.get<{ id: string; name: string }[]>("/meetings/team"), staleTime: 5 * 60_000 });
   const done = () => {
     void qc.invalidateQueries({ queryKey: ["meetings", "absences"] });
+    void qc.invalidateQueries({ queryKey: ["meetings", "week"] });
     onClose();
   };
   const onError = (e: unknown) => toast.error(e instanceof ApiError && e.fields?.some((f) => f.message === "end_before_start") ? t("meetings.absences.endBeforeStart") : t("common.error"));

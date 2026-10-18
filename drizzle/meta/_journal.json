@@ -288,6 +288,13 @@
       "when": 1792354857746,
       "tag": "0040_meeting_point_details",
       "breakpoints": true
+    },
+    {
+      "idx": 41,
+      "version": "7",
+      "when": 1792355612496,
+      "tag": "0041_meeting_events",
+      "breakpoints": true
     }
   ]
 }
