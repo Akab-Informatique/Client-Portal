@@ -1,6 +1,6 @@
 import { Hono, type Context } from "hono";
 import { HTTPException } from "hono/http-exception";
-import { and, asc, eq, gt, gte, lt, lte, max, sql } from "drizzle-orm";
+import { and, asc, eq, gt, gte, lt, lte, max, sql, inArray } from "drizzle-orm";
 import { z } from "zod";
 import { db, schema } from "../db/index.ts";
 import { auth, requirePermission, requireStaff, type AppEnv, type AuthContext, permissionsOf } from "../lib/auth.ts";
@@ -109,14 +109,6 @@ function asSeen(b: typeof schema.calendarBlocks.$inferSelect, full: boolean) {
   };
 }
 
-/** Whose pins / calendar: me by default; someone else needs tickets.plan. */
-function whose(c: Context<AppEnv>, a: AuthContext): string {
-  const asked = c.req.query("technicianId");
-  if (!asked || asked === a.user.id) return a.user.id;
-  if (!canPlan(a)) throw new HTTPException(403, { message: "forbidden" });
-  return zUuid.parse(asked);
-}
-
 async function technician(id: string) {
   const [u] = await db()
     .select({ id: schema.users.id, name: schema.users.name })
@@ -198,16 +190,21 @@ export const planningRoutes = new Hono<AppEnv>()
    * A technician's priorities for a date (today by default): of the day, of
    * the week, and the unfinished ones carried over — with the live status.
    */
+  /**
+   * Priorities for a date: mine by default, anyone's (everyone sees everyone's
+   * priorities, read only), or the whole team with technicianId=all.
+   */
   .get("/pins", async (c) => {
     const a = auth(c);
-    const techId = whose(c, a);
+    const asked = c.req.query("technicianId");
+    const ids = asked === "all" ? (await team()).map((p) => p.id) : [asked ? zUuid.parse(asked) : a.user.id];
     const day = zDay.parse(c.req.query("date") ?? today());
     const week = monday(day);
     const rows = await db()
       .select({ pin: schema.ticketPins, by: schema.users.name })
       .from(schema.ticketPins)
       .leftJoin(schema.users, eq(schema.users.id, schema.ticketPins.pinnedBy))
-      .where(eq(schema.ticketPins.technicianId, techId))
+      .where(inArray(schema.ticketPins.technicianId, ids))
       .orderBy(asc(schema.ticketPins.rank), asc(schema.ticketPins.createdAt));
     const src = await ticketSource();
     const [list, o] = await Promise.all([src.list().catch(() => []), src.options().catch(() => null)]);

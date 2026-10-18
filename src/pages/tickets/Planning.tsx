@@ -181,9 +181,8 @@ export function AgendaCard({ filterTech }: { filterTech?: string | null }) {
   // whose priorities: mine by default; the technician filtered in the list (or picked here) for planners
   const [techId, setTechId] = useState(me.id);
   useEffect(() => {
-    if (!planner) return;
     setTechId(filterTech && team.some((p) => p.id === filterTech) ? filterTech : me.id);
-  }, [filterTech, planner, me.id, team.length]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [filterTech, me.id, team.length]); // eslint-disable-line react-hooks/exhaustive-deps
   const who = team.find((p) => p.id === techId) ?? { id: me.id, name: me.name, full: true };
   const mine = techId === me.id;
   // the day shown (its priorities), the week or the month around it
@@ -252,7 +251,7 @@ export function AgendaCard({ filterTech }: { filterTech?: string | null }) {
           )}
           <span className="ml-auto flex items-center gap-1">
             {/* whose: planners pick anyone (the list's technician filter does it too) */}
-            {planner && team.length > 1 && (
+            {team.length > 1 && (
               <Select value={techId} onValueChange={setTechId}>
                 <SelectTrigger className="h-7 w-36 text-xs" aria-label={t("planning.whose")}>
                   <SelectValue />
@@ -467,16 +466,20 @@ function PlanningDialog({ onClose, initialTechId }: { onClose: () => void; initi
           <BrowserAlerts />
         </DialogHeader>
         {everyone ? (
-          <div className="min-h-0 flex-1 overflow-y-auto pr-1">
-            <TeamWeek team={team} onPick={setTechId} />
+          <div className="grid min-h-0 flex-1 gap-4 lg:grid-cols-[300px_minmax(0,1fr)]">
+            <div className="min-h-0 overflow-y-auto pr-1">
+              <TeamPriorities team={team} onPick={setTechId} />
+            </div>
+            <div className="min-h-0 overflow-y-auto pr-1">
+              <TeamWeek team={team} onPick={setTechId} />
+            </div>
           </div>
         ) : (
-        <div className={cn("grid min-h-0 flex-1 gap-4", full && "lg:grid-cols-[320px_minmax(0,1fr)]")}>
-          {full && (
-            <div className="min-h-0 overflow-y-auto pr-1">
-              <PrioritiesList technicianId={techId} technicianName={who.name} planner={planner} />
-            </div>
-          )}
+        <div className="grid min-h-0 flex-1 gap-4 lg:grid-cols-[320px_minmax(0,1fr)]">
+          {/* everyone sees everyone's priorities (changes: planners, or oneself) */}
+          <div className="min-h-0 overflow-y-auto pr-1">
+            <PrioritiesList technicianId={techId} technicianName={who.name} planner={planner} />
+          </div>
           <div className="min-h-0 overflow-y-auto pr-1">
             <WeekCalendar key={techId} technicianId={techId} technicianName={who.name} planner={planner} />
           </div>
@@ -606,6 +609,55 @@ function TeamWeek({ team, onPick }: { team: TeamMember[]; onPick: (id: string) =
       </div>
       <p className="text-[10px] text-muted-foreground">{t("planning.teamHint")}</p>
       {adding && <BlockDialog technicianId={me.id} technicianName={me.name} block={null} start={adding} onClose={() => setAdding(null)} onOpenTicket={openTicket} />}
+    </section>
+  );
+}
+
+/** Everyone's priorities for today, by person (their color), each opening its ticket. */
+function TeamPriorities({ team, onPick }: { team: TeamMember[]; onPick: (id: string) => void }) {
+  const { t } = useTranslation();
+  const me = useMe();
+  const openTicket = useContext(OpenTicketCtx) ?? (() => undefined);
+  const { data: pins = [], isLoading } = useQuery({
+    queryKey: ["planning", "pins", "all", ymd(new Date())],
+    queryFn: () => api.get<Priority[]>(`/planning/pins?technicianId=all&date=${ymd(new Date())}`),
+    refetchInterval: 60_000,
+  });
+  const open = pins.filter((p) => !p.doneAt);
+  const people = team.filter((p) => open.some((x) => x.technicianId === p.id));
+  return (
+    <section className="space-y-3">
+      <p className="flex items-center gap-1.5 text-sm font-semibold">
+        <Star className="size-4 fill-[color:var(--gold)] text-[color:var(--gold)]" /> {t("planning.teamPriorities")}
+        <span className="ml-auto font-mono text-xs text-muted-foreground">{open.length}</span>
+      </p>
+      {isLoading && <Loader2 className="size-4 animate-spin text-muted-foreground" />}
+      {!isLoading && people.length === 0 && <p className="text-xs text-muted-foreground">{t("planning.noPrioritiesShort")}</p>}
+      {people.map((p) => {
+        const list = open.filter((x) => x.technicianId === p.id);
+        return (
+          <div key={p.id} className="space-y-1">
+            <button type="button" onClick={() => onPick(p.id)} className="flex w-full items-center gap-2 text-left text-xs font-semibold hover:text-primary">
+              <span className="size-2.5 rounded-sm" style={{ background: colorOf(p) }} />
+              {p.id === me.id ? t("planning.me", { name: p.name }) : p.name}
+              <span className="ml-auto font-mono text-[10px] text-muted-foreground">{list.length}</span>
+            </button>
+            <ul className="space-y-0.5 border-l-2 pl-2" style={{ borderColor: colorOf(p) }}>
+              {list.map((x) => (
+                <li key={x.id}>
+                  <button type="button" onClick={() => openTicket(x.ticketId)} className="flex w-full items-center gap-2 rounded-md px-1 py-0.5 text-left text-[11px] hover:bg-accent/40" title={x.note || x.ticketTitle}>
+                    <span className={cn("shrink-0 rounded px-1 text-[9px] font-semibold uppercase", x.bucket === "day" ? "bg-grad-gold text-[#1a1204]" : "border border-[color:var(--gold)]/40 text-primary")}>
+                      {t(`planning.badge.${x.bucket === "carried" ? x.horizon : x.bucket}`)}
+                    </span>
+                    <span className="shrink-0 font-mono text-[10px] text-muted-foreground">{x.ticketNumber.slice(-4)}</span>
+                    <span className="truncate">{x.ticketTitle}</span>
+                  </button>
+                </li>
+              ))}
+            </ul>
+          </div>
+        );
+      })}
     </section>
   );
 }

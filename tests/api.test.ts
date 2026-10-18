@@ -1367,7 +1367,7 @@ describe("tickets: client and contact", () => {
     // only planners give priorities to others; a technician only sees their own
     const [adminRow] = await db().select().from(schema.users).where(eq(schema.users.email, "admin@akab.local"));
     expect((await tech.post("/api/planning/pins", { ticketId: a.id, technicianId: adminRow.id })).status).toBe(403);
-    expect((await tech.get(`/api/planning/pins?technicianId=${adminRow.id}`)).status).toBe(403);
+    expect((await tech.get(`/api/planning/pins?technicianId=${adminRow.id}`)).status).toBe(200); // everyone sees everyone's priorities (read only)
 
     expect((await admin.post("/api/planning/pins", { ticketId: a.id, technicianId: techRow.id, horizon: "day", note: "Rappeler le client avant midi" })).status).toBe(201);
     expect((await admin.post("/api/planning/pins", { ticketId: b.id, technicianId: techRow.id, horizon: "week", note: "Finir la migration" })).status).toBe(201);
@@ -1447,8 +1447,12 @@ describe("tickets: client and contact", () => {
     expect(noPin.status).toBe(201);
     expect((await admin.get(`/api/planning/pins/ticket/${other.id}`)).json).toEqual([]);
     await admin.del(`/api/planning/calendar/${noPin.json.id}`);
-    // their priorities stay for planners
-    expect((await tech.get(`/api/planning/pins?technicianId=${adminRow.id}`)).status).toBe(403);
+    // the whole team's priorities (big view, Everyone)
+    const teamPins = (await tech.get("/api/planning/pins?technicianId=all")).json;
+    expect(teamPins.some((p: any) => p.technicianId === adminRow.id)).toBe(true);
+    // giving one to someone else stays for planners
+    expect((await tech.post("/api/planning/pins", { ticketId: tk.id, technicianId: adminRow.id })).status).toBe(403);
+    expect((await tech.get(`/api/planning/pins?technicianId=${adminRow.id}`)).status).toBe(200); // everyone sees everyone's priorities (read only)
     await admin.del(`/api/planning/calendar/${theirs.json.id}`);
     await admin.put(`/api/admin/users/${techRow.id}/permissions`, { overrides: [{ key: "tickets.planSelf", effect: "allow" }] });
     expect((await tech.post("/api/planning/pins", { ticketId: tk.id, technicianId: techRow.id, horizon: "day", note: "Moi-même" })).status).toBe(201);

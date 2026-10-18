@@ -472,6 +472,7 @@ const fr = {
     },
   },
   planning: {
+    teamPriorities: "Priorités de l'équipe",
     backToToday: "Revenir à aujourd'hui",
     addAppointment: "Ajouter un rendez-vous",
     addOn: "Ajouter un rendez-vous le {{date}}",

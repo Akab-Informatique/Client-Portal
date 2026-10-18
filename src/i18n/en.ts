@@ -474,6 +474,7 @@ const en: Dict = {
     },
   },
   planning: {
+    teamPriorities: "Team priorities",
     backToToday: "Back to today",
     addAppointment: "Add an appointment",
     addOn: "Add an appointment on {{date}}",
