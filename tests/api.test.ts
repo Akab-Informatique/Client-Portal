@@ -2969,7 +2969,7 @@ describe("QuickBooks through its API: customers, chart, items, invoices, payment
               Item: [
                 { Id: "10", Name: "Services", Type: "Category" },
                 { Id: "11", Name: "Support TI", FullyQualifiedName: "Services:Support TI", Type: "Service", ParentRef: { value: "10" }, UnitPrice: 125 },
-                { Id: "12", Name: "Disque SSD", Sku: "MZ-V9P1T0", Type: "Inventory", UnitPrice: 189.99 },
+                { Id: "12", Name: "Disque SSD", FullyQualifiedName: "Services:Disque SSD", Sku: "MZ-V9P1T0", Type: "Inventory", ParentRef: { value: "10" }, UnitPrice: 189.99 },
               ],
             },
           });
@@ -2992,10 +2992,18 @@ describe("QuickBooks through its API: customers, chart, items, invoices, payment
     const m = (await admin.get("/api/billing/quickbooks/mapping")).json;
     const clinique = m.clients.find((c: any) => c.name === "Clinique dentaire Joliette");
     // "inc." and accents do not stop the match
-    expect(clinique.suggestion).toBe("58");
-    expect((await admin.post("/api/billing/quickbooks/mapping/auto")).json.mapped).toBeGreaterThanOrEqual(2);
-    const after = (await admin.get("/api/billing/quickbooks/mapping")).json.clients;
+    expect(clinique).toMatchObject({ suggestion: "58", reason: "name", quickbooksId: null });
+    // proposals are only applied once accepted: the admin keeps one, leaves the other
+    const transport = m.clients.find((c: any) => c.name === "Transport Lanaudière");
+    expect(transport.suggestion).toBe("59");
+    expect((await admin.post("/api/billing/quickbooks/mapping/accept", { accept: [{ clientId: transport.id, quickbooksId: "59" }] })).json).toEqual({ mapped: 1, skipped: [] });
+    let after = (await admin.get("/api/billing/quickbooks/mapping")).json.clients;
     expect(after.find((c: any) => c.name === "Transport Lanaudière").quickbooksId).toBe("59");
+    expect(after.find((c: any) => c.name === "Clinique dentaire Joliette").quickbooksId).toBeNull();
+    // accepting a customer already used by another client: skipped, not doubled
+    expect((await admin.post("/api/billing/quickbooks/mapping/accept", { accept: [{ clientId: clinique.id, quickbooksId: "59" }] })).json.skipped).toEqual([clinique.id]);
+    await admin.post("/api/billing/quickbooks/mapping/accept", { accept: [{ clientId: clinique.id, quickbooksId: "58" }] });
+    after = (await admin.get("/api/billing/quickbooks/mapping")).json.clients;
     // a customer already used: refused for another client
     const other = after.find((c: any) => !c.quickbooksId);
     expect((await admin.put(`/api/billing/quickbooks/mapping/${other.id}`, { quickbooksId: "58" })).json.error).toBe("quickbooks_customer_taken");
@@ -3011,20 +3019,53 @@ describe("QuickBooks through its API: customers, chart, items, invoices, payment
     await admin.put(`/api/billing/quickbooks/mapping/${clin.id}`, { quickbooksId: "58" });
   });
 
-  it("imports the chart of accounts and the items, matching what exists", async () => {
+  it("syncs the chart of accounts and the categories only as reviewed and accepted", async () => {
     resetRateLimit("login:ip:unknown");
     const admin = await signIn("admin@akab.local");
-    const before = (await admin.get("/api/billing/ledger")).json.length;
-    const r = (await admin.post("/api/billing/quickbooks/import/accounts")).json;
-    // 1200 and "TPS à payer" exist already: matched; 4050 is new
-    expect(r).toMatchObject({ matched: 2, created: 1 });
+    const before = (await admin.get("/api/billing/ledger")).json;
+    // proposals first: nothing changes yet
+    const plan = (await admin.get("/api/billing/quickbooks/plan/accounts")).json;
+    const by = (k: string) => plan.find((p: any) => p.key === k);
+    // 1200 by its number (renamed like QuickBooks), "TPS à payer" by its name, 4050 only in QuickBooks
+    expect(by("qb:1")).toMatchObject({ action: "link", reason: "number", local: { number: "1200" }, changes: { name: { from: "Comptes clients", to: "Accounts Receivable (A/R)" } } });
+    expect(by("qb:3")).toMatchObject({ action: "link", reason: "name", local: { number: "2310" } });
+    expect(by("qb:2")).toMatchObject({ action: "create", changes: { number: { to: "4050" } } });
+    // only in the portal: to turn off, except the ones used by default
+    const inv = before.find((a: any) => a.number === "1300");
+    const bank = before.find((a: any) => a.number === "1000");
+    expect(by(`local:${inv.id}`)).toMatchObject({ action: "deactivate" });
+    expect(by(`local:${bank.id}`)).toMatchObject({ action: "deactivate", blocked: "in_use" });
+    expect((await admin.get("/api/billing/ledger")).json).toEqual(before);
+
+    // accepted: 1200, 4050, 1300 (not "TPS à payer"); a blocked one is ignored
+    const r = (await admin.post("/api/billing/quickbooks/plan/accounts", { accept: ["qb:1", "qb:2", `local:${inv.id}`, `local:${bank.id}`] })).json;
+    expect(r).toEqual({ linked: 1, updated: 0, created: 1, deactivated: 1 });
     const ledger = (await admin.get("/api/billing/ledger")).json;
-    expect(ledger.length).toBe(before + 1);
-    expect(ledger.find((a: any) => a.number === "1200").quickbooksId).toBe("1");
+    expect(ledger.length).toBe(before.length + 1);
+    expect(ledger.find((a: any) => a.number === "1200")).toMatchObject({ quickbooksId: "1", name: "Accounts Receivable (A/R)" });
     expect(ledger.find((a: any) => a.number === "4050")).toMatchObject({ type: "revenue", quickbooksId: "2" });
-    // a second import adds nothing
-    expect((await admin.post("/api/billing/quickbooks/import/accounts")).json).toMatchObject({ matched: 3, created: 0 });
-    expect((await admin.post("/api/billing/quickbooks/import/items")).json).toMatchObject({ items: 2, categories: 1 });
+    expect(ledger.find((a: any) => a.number === "1300").active).toBe(false);
+    expect(ledger.find((a: any) => a.number === "1000").active).toBe(true);
+    expect(ledger.find((a: any) => a.number === "2310").quickbooksId).toBeNull();
+    // the next proposals: done ones are "same", the one left still proposed — never a double
+    const again = (await admin.get("/api/billing/quickbooks/plan/accounts")).json;
+    expect(again.find((p: any) => p.key === "qb:1").action).toBe("same");
+    expect(again.find((p: any) => p.key === "qb:2").action).toBe("same");
+    expect(again.find((p: any) => p.key === "qb:3").action).toBe("link");
+    await admin.post("/api/billing/quickbooks/plan/accounts", { accept: ["qb:3"] });
+    expect((await admin.get("/api/billing/ledger")).json.length).toBe(before.length + 1);
+
+    // categories and products: an inventory product with the same SKU gets QuickBooks' category once accepted
+    const [prod] = await db().insert(schema.storeProducts).values({ sku: "mz-v9p1t0", name: "SSD 1 To" }).returning();
+    const items = (await admin.get("/api/billing/quickbooks/plan/items")).json;
+    expect(items.categories).toEqual([{ id: "10", name: "Services", isNew: true, products: 2 }]);
+    expect(items.products).toEqual([expect.objectContaining({ key: `product:${prod.id}`, action: "link", changes: { link: { from: null, to: "12" }, category: { from: null, to: "Services" } } })]);
+    expect((await admin.post("/api/billing/quickbooks/plan/items", { accept: [] })).json).toMatchObject({ items: 2, categories: 1, products: 0 });
+    expect((await db().select().from(schema.storeProducts).where(eq(schema.storeProducts.id, prod.id)))[0].quickbooksItemId).toBeNull();
+    expect((await admin.post("/api/billing/quickbooks/plan/items", { accept: [`product:${prod.id}`] })).json.products).toBe(1);
+    expect((await db().select().from(schema.storeProducts).where(eq(schema.storeProducts.id, prod.id)))[0]).toMatchObject({ quickbooksItemId: "12", category: "Services" });
+    // copied by their QuickBooks id: never twice
+    expect((await db().select().from(schema.quickbooksItems)).length).toBe(3);
     const d = (await admin.get("/api/billing/quickbooks/invoice-defaults")).json;
     expect(d.items.map((i: any) => i.id).sort()).toEqual(["11", "12"]);
     expect(d.taxCodes).toHaveLength(2);

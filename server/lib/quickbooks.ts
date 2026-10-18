@@ -1,6 +1,6 @@
 import { and, eq, inArray, isNotNull, isNull } from "drizzle-orm";
 import { db, schema } from "../db/index.ts";
-import { ledger, qbApi, qbToken, quickbooksSettings, saveQuickBooksSettings, type LedgerType, type QuickBooksSettings } from "./billing.ts";
+import { billingSettings, ledger, qbApi, qbToken, quickbooksSettings, saveQuickBooksSettings, type LedgerType, type QuickBooksSettings } from "./billing.ts";
 
 /**
  * QuickBooks Online, through its API: clients ↔ customers (no doubles),
@@ -106,6 +106,9 @@ export function suggestions(clients: { id: string; name: string; email: string |
   return out;
 }
 
+/** Why a customer is proposed for a client: the same name, or the same email. */
+export const matchReason = (c: { name: string; email: string | null }, q: QbCustomer): "name" | "email" => (norm(q.name) === norm(c.name) ? "name" : "email");
+
 /** The client as a new QuickBooks customer (refused if one has the same name). */
 export async function createCustomer(clientId: string): Promise<QbCustomer> {
   const [c] = await db().select().from(schema.clients).where(eq(schema.clients.id, clientId));
@@ -124,56 +127,174 @@ export async function createCustomer(clientId: string): Promise<QbCustomer> {
   return customerOf(r.Customer);
 }
 
-// ── chart of accounts ──
+// ── chart of accounts: proposed, reviewed, then applied ──
 type RawAccount = { Id: string; Name: string; AcctNum?: string; Classification?: string; Active?: boolean };
 const TYPE_OF: Record<string, LedgerType> = { Asset: "asset", Liability: "liability", Equity: "equity", Revenue: "revenue", Expense: "expense" };
 
-/** QuickBooks accounts into the chart: matched by number, then by name; the others added. */
-export async function importAccounts(actorId: string) {
-  const accounts = await query<RawAccount>("Account");
-  const d = db();
+type Change<T> = { from: T; to: T };
+export type AccountProposal = {
+  /** "qb:<QuickBooks id>" or "local:<portal id>" */
+  key: string;
+  /** same: nothing to do · link: same account, to tie together · update: tied, but differs · create: only in QuickBooks · deactivate: only in the portal */
+  action: "same" | "link" | "update" | "create" | "deactivate";
+  reason?: "linked" | "number" | "name";
+  qb?: { id: string; number: string | null; name: string; type: LedgerType };
+  local?: { id: string; number: string; name: string; type: string; active: boolean };
+  changes: { name?: Change<string>; number?: Change<string>; type?: Change<string>; active?: Change<boolean> };
+  /** Cannot be applied: an account used by default cannot be turned off */
+  blocked?: "in_use";
+};
+
+/** What would make the portal's chart the same as QuickBooks' (nothing is changed here). */
+export async function planAccounts(actorId: string): Promise<AccountProposal[]> {
+  const qbAccounts = (await query<RawAccount>("Account")).filter((a) => a.Active !== false);
   const local = await ledger(actorId);
-  let matched = 0;
-  let created = 0;
-  const used = new Set(local.map((a) => a.quickbooksId).filter(Boolean));
-  for (const a of accounts) {
-    if (a.Active === false) continue;
-    const hit = local.find((l) => l.quickbooksId === a.Id) ?? local.find((l) => !l.quickbooksId && a.AcctNum && l.number === a.AcctNum) ?? local.find((l) => !l.quickbooksId && norm(l.name) === norm(a.Name));
-    if (hit) {
-      if (hit.quickbooksId !== a.Id) {
-        await d.update(schema.ledgerAccounts).set({ quickbooksId: a.Id, updatedAt: new Date() }).where(eq(schema.ledgerAccounts.id, hit.id));
-        hit.quickbooksId = a.Id;
-      }
-      matched++;
+  const defaults = new Set(Object.values((await billingSettings()).accounts).filter(Boolean));
+  const pool = new Set(local.map((l) => l.id));
+  const take = (f: (l: (typeof local)[number]) => boolean) => {
+    const hit = local.find((l) => pool.has(l.id) && f(l));
+    if (hit) pool.delete(hit.id);
+    return hit;
+  };
+  const out: AccountProposal[] = [];
+  // first the ones already tied, so a number or a name never steals them
+  const tied = new Map(qbAccounts.map((a) => [a.Id, take((l) => l.quickbooksId === a.Id)]));
+  for (const a of qbAccounts) {
+    const type = TYPE_OF[a.Classification ?? ""] ?? "expense";
+    const qb = { id: a.Id, number: a.AcctNum ?? null, name: a.Name, type };
+    let reason: AccountProposal["reason"] = "linked";
+    let hit = tied.get(a.Id);
+    if (!hit && a.AcctNum) ((hit = take((l) => !l.quickbooksId && l.number === a.AcctNum)), (reason = "number"));
+    if (!hit) ((hit = take((l) => !l.quickbooksId && norm(l.name) === norm(a.Name))), (reason = "name"));
+    if (!hit) {
+      const number = a.AcctNum && !local.some((l) => l.number === a.AcctNum) ? a.AcctNum : `QB-${a.Id}`;
+      out.push({ key: `qb:${a.Id}`, action: "create", qb, changes: { number: { from: "", to: number } } });
       continue;
     }
-    if (used.has(a.Id)) continue;
-    const number = a.AcctNum || `QB-${a.Id}`;
-    const [row] = await d
-      .insert(schema.ledgerAccounts)
-      .values({ number, name: a.Name, type: TYPE_OF[a.Classification ?? ""] ?? "expense", quickbooksId: a.Id })
-      .onConflictDoNothing()
-      .returning();
-    if (row) {
-      created++;
-      local.push(row);
-    }
+    const changes: AccountProposal["changes"] = {};
+    if (hit.name !== a.Name) changes.name = { from: hit.name, to: a.Name };
+    // QuickBooks' number, unless another account here already has it
+    if (a.AcctNum && hit.number !== a.AcctNum && !local.some((l) => l.id !== hit!.id && l.number === a.AcctNum)) changes.number = { from: hit.number, to: a.AcctNum };
+    if (hit.type !== type) changes.type = { from: hit.type, to: type };
+    if (!hit.active) changes.active = { from: false, to: true };
+    const local1 = { id: hit.id, number: hit.number, name: hit.name, type: hit.type, active: hit.active };
+    const action = hit.quickbooksId !== a.Id ? "link" : Object.keys(changes).length ? "update" : "same";
+    out.push({ key: `qb:${a.Id}`, action, reason, qb, local: local1, changes });
   }
-  const result = { at: new Date().toISOString(), matched, created };
-  const s = await quickbooksSettings();
-  await saveQuickBooksSettings(actorId, { imports: { ...s.imports, accounts: result } });
-  return result;
+  // only in the portal: turned off (never deleted), unless used by default
+  for (const l of local) {
+    if (!pool.has(l.id) || !l.active) continue;
+    out.push({
+      key: `local:${l.id}`,
+      action: "deactivate",
+      local: { id: l.id, number: l.number, name: l.name, type: l.type, active: l.active },
+      changes: { active: { from: true, to: false } },
+      ...(defaults.has(l.id) ? { blocked: "in_use" as const } : {}),
+    });
+  }
+  return out;
 }
 
-// ── items: products, services, categories (SKU) ──
-type RawItem = { Id: string; Name: string; FullyQualifiedName?: string; Sku?: string; Type: string; ParentRef?: { value: string }; IncomeAccountRef?: { value: string }; UnitPrice?: number; Active?: boolean };
+/** Apply the accepted proposals (worked out again now, so nothing stale is applied). */
+export async function applyAccounts(actorId: string, accept: string[]) {
+  const plan = await planAccounts(actorId);
+  const wanted = new Set(accept);
+  const d = db();
+  const now = new Date();
+  const done = { linked: 0, updated: 0, created: 0, deactivated: 0 };
+  for (const p of plan) {
+    if (!wanted.has(p.key) || p.blocked || p.action === "same") continue;
+    if (p.action === "create" && p.qb) {
+      const [row] = await d
+        .insert(schema.ledgerAccounts)
+        .values({ number: p.changes.number!.to, name: p.qb.name, type: p.qb.type, quickbooksId: p.qb.id })
+        .onConflictDoNothing()
+        .returning({ id: schema.ledgerAccounts.id });
+      if (row) done.created++;
+    } else if ((p.action === "link" || p.action === "update") && p.qb && p.local) {
+      await d
+        .update(schema.ledgerAccounts)
+        .set({
+          quickbooksId: p.qb.id,
+          ...(p.changes.name ? { name: p.changes.name.to } : {}),
+          ...(p.changes.number ? { number: p.changes.number.to } : {}),
+          ...(p.changes.type ? { type: p.changes.type.to } : {}),
+          active: true,
+          updatedAt: now,
+        })
+        .where(eq(schema.ledgerAccounts.id, p.local.id));
+      if (p.action === "link") done.linked++;
+      else done.updated++;
+    } else if (p.action === "deactivate" && p.local) {
+      await d.update(schema.ledgerAccounts).set({ active: false, updatedAt: now }).where(eq(schema.ledgerAccounts.id, p.local.id));
+      done.deactivated++;
+    }
+  }
+  const s = await quickbooksSettings();
+  const result = { at: now.toISOString(), matched: plan.filter((p) => p.qb && p.local).length, ...done };
+  await saveQuickBooksSettings(actorId, { imports: { ...s.imports, accounts: result } });
+  return done;
+}
 
-/** QuickBooks items into the portal; inventory products with the same SKU are linked to them. */
-export async function importItems(actorId: string) {
+// ── items: categories, products and services (SKU) ──
+type RawItem = { Id: string; Name: string; FullyQualifiedName?: string; Sku?: string; Type: string; ParentRef?: { value: string }; IncomeAccountRef?: { value: string }; UnitPrice?: number; Active?: boolean };
+const skuKey = (s: string | null | undefined) => (s ?? "").toLowerCase().replace(/[^a-z0-9]/g, "");
+
+export type ItemProposal = {
+  /** "product:<inventory product id>" */
+  key: string;
+  action: "same" | "link" | "update";
+  product: { id: string; sku: string; name: string; category: string | null };
+  item: { id: string; name: string; sku: string; category: string | null };
+  changes: { category?: Change<string | null>; link?: Change<string | null> };
+};
+export type ItemsPlan = {
+  categories: { id: string; name: string; isNew: boolean; products: number }[];
+  items: { total: number; isNew: number };
+  products: ItemProposal[];
+};
+
+/** QuickBooks categories and items, and the inventory products to tie to them by SKU (nothing changed here). */
+export async function planItems(): Promise<ItemsPlan> {
+  const items = (await query<RawItem>("Item")).filter((i) => i.Active !== false);
+  const known = new Set((await db().select({ id: schema.quickbooksItems.quickbooksId }).from(schema.quickbooksItems)).map((x) => x.id));
+  const cats = items.filter((i) => i.Type === "Category");
+  const catName = new Map(cats.map((c) => [c.Id, c.FullyQualifiedName || c.Name]));
+  const bySku = new Map(items.filter((i) => i.Sku && i.Type !== "Category").map((i) => [skuKey(i.Sku), i]));
+  const products = await db()
+    .select({ id: schema.storeProducts.id, sku: schema.storeProducts.sku, name: schema.storeProducts.name, category: schema.storeProducts.category, qb: schema.storeProducts.quickbooksItemId })
+    .from(schema.storeProducts)
+    .where(isNotNull(schema.storeProducts.sku));
+  const out: ItemProposal[] = [];
+  for (const p of products) {
+    const i = bySku.get(skuKey(p.sku));
+    if (!i) continue;
+    const category = i.ParentRef ? (catName.get(i.ParentRef.value) ?? null) : null;
+    const changes: ItemProposal["changes"] = {};
+    if (p.qb !== i.Id) changes.link = { from: p.qb, to: i.Id };
+    if (category && category !== p.category) changes.category = { from: p.category, to: category };
+    out.push({
+      key: `product:${p.id}`,
+      action: changes.link ? "link" : changes.category ? "update" : "same",
+      product: { id: p.id, sku: p.sku!, name: p.name, category: p.category },
+      item: { id: i.Id, name: i.FullyQualifiedName || i.Name, sku: i.Sku!, category },
+      changes,
+    });
+  }
+  const noncat = items.filter((i) => i.Type !== "Category");
+  return {
+    categories: cats.map((c) => ({ id: c.Id, name: catName.get(c.Id)!, isNew: !known.has(c.Id), products: noncat.filter((i) => i.ParentRef?.value === c.Id).length })),
+    items: { total: noncat.length, isNew: noncat.filter((i) => !known.has(i.Id)).length },
+    products: out,
+  };
+}
+
+/** Copy QuickBooks' categories and items (by their QuickBooks id: never twice), then apply the accepted product changes. */
+export async function applyItems(actorId: string, accept: string[]) {
   const items = await query<RawItem>("Item");
   const d = db();
   const now = new Date();
-  const known = new Map((await d.select().from(schema.quickbooksItems)).map((x) => [x.quickbooksId, x]));
+  const known = new Set((await d.select({ id: schema.quickbooksItems.quickbooksId }).from(schema.quickbooksItems)).map((x) => x.id));
   for (const i of items) {
     const values = {
       name: i.FullyQualifiedName || i.Name,
@@ -188,19 +309,18 @@ export async function importItems(actorId: string) {
     if (known.has(i.Id)) await d.update(schema.quickbooksItems).set(values).where(eq(schema.quickbooksItems.quickbooksId, i.Id));
     else await d.insert(schema.quickbooksItems).values({ quickbooksId: i.Id, ...values });
   }
-  // same SKU (letters and digits only, any case): the same product
-  const key = (s: string | null) => (s ?? "").toLowerCase().replace(/[^a-z0-9]/g, "");
-  const bySku = new Map(items.filter((i) => i.Sku && i.Type !== "Category").map((i) => [key(i.Sku!), i.Id]));
-  const products = await d.select({ id: schema.storeProducts.id, sku: schema.storeProducts.sku, qb: schema.storeProducts.quickbooksItemId }).from(schema.storeProducts).where(isNotNull(schema.storeProducts.sku));
-  let linked = 0;
-  for (const p of products) {
-    const qbId = bySku.get(key(p.sku));
-    if (qbId) {
-      linked++;
-      if (p.qb !== qbId) await d.update(schema.storeProducts).set({ quickbooksItemId: qbId, updatedAt: now }).where(eq(schema.storeProducts.id, p.id));
-    }
+  const wanted = new Set(accept);
+  const plan = await planItems();
+  let products = 0;
+  for (const p of plan.products) {
+    if (!wanted.has(p.key) || p.action === "same") continue;
+    await d
+      .update(schema.storeProducts)
+      .set({ quickbooksItemId: p.item.id, ...(p.changes.category ? { category: p.changes.category.to } : {}), updatedAt: now })
+      .where(eq(schema.storeProducts.id, p.product.id));
+    products++;
   }
-  const result = { at: now.toISOString(), items: items.filter((i) => i.Type !== "Category").length, categories: items.filter((i) => i.Type === "Category").length, products: linked };
+  const result = { at: now.toISOString(), items: items.filter((i) => i.Type !== "Category").length, categories: items.filter((i) => i.Type === "Category").length, products };
   const s = await quickbooksSettings();
   await saveQuickBooksSettings(actorId, { imports: { ...s.imports, items: result } });
   return result;

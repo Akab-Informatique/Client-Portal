@@ -5,6 +5,8 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { ArrowDownToLine, BookOpenText, CheckCircle2, Copy, CreditCard, FileText, Hash, Link2, Loader2, Plus, RefreshCw, Search, Sparkles, Unlink, Users, Wallet, XCircle } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { Checkbox } from "@/components/ui/checkbox";
+import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
@@ -48,7 +50,7 @@ type QuickBooks = {
   paymentsPulledAt: string | null;
 };
 type QbCustomer = { id: string; name: string; email: string | null; phone: string | null; active: boolean };
-type Mapping = { customers: QbCustomer[]; clients: { id: string; name: string; email: string | null; city: string | null; quickbooksId: string | null; suggestion: string | null }[] };
+type Mapping = { customers: QbCustomer[]; clients: { id: string; name: string; email: string | null; city: string | null; quickbooksId: string | null; suggestion: string | null; reason: "name" | "email" | null }[] };
 type InvoiceDefaults = { items: { id: string; name: string; sku: string | null; type: string }[]; taxCodes: { id: string; name: string; description: string | null }[]; chosen: QuickBooks["invoice"] };
 type Stripe = { enabled: boolean; publishableKey: string; paymentLinks: boolean; hasSecretKey: boolean; hasWebhookSecret: boolean; mode: "test" | "live" | null; lastTest: { ok: boolean; at: string; error?: string } | null };
 
@@ -681,22 +683,7 @@ function QuickBooksData({ q }: { q: QuickBooks }) {
   const qc = useQueryClient();
   const err = useBillingError();
   const refresh = () => void qc.invalidateQueries({ queryKey: KEY });
-  const accounts = useMutation({
-    mutationFn: () => api.post<{ matched: number; created: number }>("/billing/quickbooks/import/accounts"),
-    onSuccess: (r) => {
-      refresh();
-      toast.success(t("billing.qb.accountsDone", r));
-    },
-    onError: (e) => toast.error(err(e)),
-  });
-  const items = useMutation({
-    mutationFn: () => api.post<{ items: number; categories: number; products: number }>("/billing/quickbooks/import/items"),
-    onSuccess: (r) => {
-      refresh();
-      toast.success(t("billing.qb.itemsDone", r));
-    },
-    onError: (e) => toast.error(err(e)),
-  });
+  const [review, setReview] = useState<"accounts" | "items" | null>(null);
   const pull = useMutation({
     mutationFn: () => api.post<{ added: number; updated: number }>("/billing/quickbooks/payments/pull"),
     onSuccess: (r) => {
@@ -716,8 +703,8 @@ function QuickBooksData({ q }: { q: QuickBooks }) {
             </p>
             <p className="text-[11px] text-muted-foreground">{t("billing.qb.importAccountsText")}</p>
             {q.imports.accounts && <p className="text-[11px] text-emerald-400">{t("billing.qb.accountsLast", { ...q.imports.accounts, at: dateTime(q.imports.accounts.at) })}</p>}
-            <Button size="sm" variant="outline" disabled={accounts.isPending} onClick={() => accounts.mutate()}>
-              {accounts.isPending ? <Loader2 className="size-3.5 animate-spin" /> : <ArrowDownToLine className="size-3.5" />} {t("billing.qb.import")}
+            <Button size="sm" variant="outline" onClick={() => setReview("accounts")}>
+              <ArrowDownToLine className="size-3.5" /> {t("billing.qb.review")}
             </Button>
           </div>
           <div className="space-y-2 rounded-xl border p-3">
@@ -726,12 +713,14 @@ function QuickBooksData({ q }: { q: QuickBooks }) {
             </p>
             <p className="text-[11px] text-muted-foreground">{t("billing.qb.importItemsText")}</p>
             {q.imports.items && <p className="text-[11px] text-emerald-400">{t("billing.qb.itemsLast", { ...q.imports.items, at: dateTime(q.imports.items.at) })}</p>}
-            <Button size="sm" variant="outline" disabled={items.isPending} onClick={() => items.mutate()}>
-              {items.isPending ? <Loader2 className="size-3.5 animate-spin" /> : <ArrowDownToLine className="size-3.5" />} {t("billing.qb.import")}
+            <Button size="sm" variant="outline" onClick={() => setReview("items")}>
+              <ArrowDownToLine className="size-3.5" /> {t("billing.qb.review")}
             </Button>
           </div>
         </div>
       </Card>
+      {review === "accounts" && <AccountsReview onClose={() => setReview(null)} />}
+      {review === "items" && <ItemsReview onClose={() => setReview(null)} />}
       <InvoiceDefaultsCard />
       <MappingCard />
       <Card
@@ -746,6 +735,311 @@ function QuickBooksData({ q }: { q: QuickBooks }) {
         <p className="text-xs text-muted-foreground">{q.paymentsPulledAt ? t("billing.qb.pulledAt", { at: dateTime(q.paymentsPulledAt) }) : t("billing.qb.neverPulled")}</p>
       </Card>
     </>
+  );
+}
+
+type AccountProposal = {
+  key: string;
+  action: "same" | "link" | "update" | "create" | "deactivate";
+  reason?: "linked" | "number" | "name";
+  qb?: { id: string; number: string | null; name: string; type: LedgerType };
+  local?: { id: string; number: string; name: string; type: string; active: boolean };
+  changes: { name?: { from: string; to: string }; number?: { from: string; to: string }; type?: { from: string; to: string }; active?: { from: boolean; to: boolean } };
+  blocked?: "in_use";
+};
+type ItemsPlan = {
+  categories: { id: string; name: string; isNew: boolean; products: number }[];
+  items: { total: number; isNew: number };
+  products: { key: string; action: "same" | "link" | "update"; product: { id: string; sku: string; name: string; category: string | null }; item: { id: string; name: string; sku: string; category: string | null }; changes: { category?: { from: string | null; to: string | null }; link?: { from: string | null; to: string | null } } }[];
+};
+
+/** A window listing proposed changes, each one to accept or not. */
+function ReviewDialog({ title, text, loading, error, children, footer, onClose }: { title: string; text: string; loading: boolean; error: unknown; children: ReactNode; footer: ReactNode; onClose: () => void }) {
+  const err = useBillingError();
+  return (
+    <Dialog open onOpenChange={(o) => !o && onClose()}>
+      <DialogContent className="flex max-h-[88vh] flex-col sm:max-w-3xl">
+        <DialogHeader>
+          <DialogTitle>{title}</DialogTitle>
+          <DialogDescription>{text}</DialogDescription>
+        </DialogHeader>
+        <div className="min-h-0 flex-1 space-y-4 overflow-y-auto pr-1 scrollbar-thin">
+          {loading && <Loader2 className="mx-auto my-8 size-5 animate-spin text-muted-foreground" />}
+          {error ? <p className="text-sm text-destructive">{err(error)}</p> : null}
+          {children}
+        </div>
+        <div className="flex flex-wrap items-center justify-end gap-2 border-t pt-3">{footer}</div>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+function useChecked(initial: string[] | null) {
+  const [sel, setSel] = useState<Set<string>>(new Set());
+  const [ready, setReady] = useState(false);
+  useEffect(() => {
+    if (initial && !ready) {
+      setSel(new Set(initial));
+      setReady(true);
+    }
+  }, [initial, ready]);
+  const toggle = (k: string, on: boolean) => setSel((s) => (on ? new Set([...s, k]) : new Set([...s].filter((x) => x !== k))));
+  const setMany = (keys: string[], on: boolean) => setSel((s) => (on ? new Set([...s, ...keys]) : new Set([...s].filter((x) => !keys.includes(x)))));
+  return { sel, toggle, setMany };
+}
+
+const ACTION_STYLE: Record<string, string> = {
+  link: "border-sky-500/40 bg-sky-500/10 text-sky-300",
+  update: "border-amber-500/40 bg-amber-500/10 text-amber-300",
+  create: "border-emerald-500/40 bg-emerald-500/10 text-emerald-300",
+  deactivate: "border-red-500/40 bg-red-500/10 text-red-300",
+};
+
+function AccountsReview({ onClose }: { onClose: () => void }) {
+  const { t } = useTranslation();
+  const qc = useQueryClient();
+  const err = useBillingError();
+  const { data, isLoading, error } = useQuery({ queryKey: [...KEY, "plan-accounts"], queryFn: () => api.get<AccountProposal[]>("/billing/quickbooks/plan/accounts"), retry: false, gcTime: 0 });
+  // proposed by default: tie, update and add; turning off is chosen by hand
+  const { sel, toggle, setMany } = useChecked(data ? data.filter((p) => ["link", "update", "create"].includes(p.action)).map((p) => p.key) : null);
+  const apply = useMutation({
+    mutationFn: () => api.post<{ linked: number; updated: number; created: number; deactivated: number }>("/billing/quickbooks/plan/accounts", { accept: [...sel] }),
+    onSuccess: (r) => {
+      void qc.invalidateQueries({ queryKey: KEY });
+      toast.success(t("billing.qb.accountsApplied", r));
+      onClose();
+    },
+    onError: (e) => toast.error(err(e)),
+  });
+  const groups = (["link", "update", "create", "deactivate"] as const).map((a) => ({ a, rows: (data ?? []).filter((p) => p.action === a) })).filter((g) => g.rows.length);
+  const same = (data ?? []).filter((p) => p.action === "same").length;
+  const typeName = (x: string) => t(`billing.ledger.types.${x}`, { defaultValue: x });
+  return (
+    <ReviewDialog
+      title={t("billing.qb.reviewAccountsTitle")}
+      text={t("billing.qb.reviewAccountsText")}
+      loading={isLoading}
+      error={error}
+      onClose={onClose}
+      footer={
+        <>
+          <span className="mr-auto text-xs text-muted-foreground">{t("billing.qb.selected", { count: sel.size })}</span>
+          <Button variant="ghost" onClick={onClose}>
+            {t("common.cancel")}
+          </Button>
+          <Button disabled={!sel.size || apply.isPending} onClick={() => apply.mutate()} className={GOLD}>
+            {apply.isPending && <Loader2 className="size-4 animate-spin" />} {t("billing.qb.accept")}
+          </Button>
+        </>
+      }
+    >
+      {data && (
+        <p className="flex items-center gap-1.5 text-xs text-emerald-400">
+          <CheckCircle2 className="size-3.5" /> {t("billing.qb.sameCount", { count: same })}
+        </p>
+      )}
+      {data && !groups.length && <p className="py-6 text-center text-sm text-muted-foreground">{t("billing.qb.nothingToDo")}</p>}
+      {groups.map((g) => {
+        const keys = g.rows.filter((r) => !r.blocked).map((r) => r.key);
+        const all = keys.length > 0 && keys.every((k) => sel.has(k));
+        return (
+          <section key={g.a} className="space-y-1.5">
+            <div className="flex items-center gap-2">
+              <Checkbox checked={all ? true : keys.some((k) => sel.has(k)) ? "indeterminate" : false} disabled={!keys.length} onCheckedChange={(v) => setMany(keys, Boolean(v))} />
+              <span className={cn("rounded-md border px-1.5 py-0.5 text-[11px] font-semibold", ACTION_STYLE[g.a])}>{t(`billing.qb.actions.${g.a}`)}</span>
+              <span className="text-xs text-muted-foreground">{t(`billing.qb.actionsText.${g.a}`)}</span>
+              <span className="ml-auto font-mono text-[11px] text-muted-foreground">{g.rows.length}</span>
+            </div>
+            <ul className="divide-y divide-border/60 overflow-hidden rounded-xl border">
+              {g.rows.map((p) => (
+                <li key={p.key}>
+                  <label className={cn("flex items-start gap-3 px-3 py-2 text-sm", p.blocked ? "opacity-60" : "cursor-pointer hover:bg-accent/30")}>
+                    <Checkbox className="mt-0.5" disabled={Boolean(p.blocked)} checked={sel.has(p.key)} onCheckedChange={(v) => toggle(p.key, Boolean(v))} />
+                    <span className="min-w-0 flex-1 space-y-0.5">
+                      <span className="flex flex-wrap items-center gap-x-2">
+                        {p.local && (
+                          <span>
+                            <span className="font-mono text-xs">{p.local.number}</span> {p.local.name}
+                          </span>
+                        )}
+                        {p.local && p.qb && <span className="text-muted-foreground">↔</span>}
+                        {p.qb && (
+                          <span className="text-emerald-300">
+                            QuickBooks : {p.qb.number && <span className="font-mono text-xs">{p.qb.number} </span>}
+                            {p.qb.name} <span className="text-[11px] text-muted-foreground">({typeName(p.qb.type)})</span>
+                          </span>
+                        )}
+                        {p.reason && p.reason !== "linked" && <span className="rounded border px-1 text-[10px] text-muted-foreground">{t(`billing.qb.reasons.${p.reason}`)}</span>}
+                      </span>
+                      {(p.changes.name || p.changes.number || p.changes.type) && (
+                        <span className="block text-[11px] text-amber-300">
+                          {[
+                            p.changes.number && p.action !== "create" && t("billing.qb.changeNumber", p.changes.number),
+                            p.changes.name && t("billing.qb.changeName", p.changes.name),
+                            p.changes.type && t("billing.qb.changeType", { from: typeName(p.changes.type.from), to: typeName(p.changes.type.to) }),
+                            p.action === "create" && p.changes.number && t("billing.qb.createAs", { number: p.changes.number.to }),
+                          ]
+                            .filter(Boolean)
+                            .join(" · ")}
+                        </span>
+                      )}
+                      {p.blocked && <span className="block text-[11px] text-muted-foreground">{t("billing.qb.blockedInUse")}</span>}
+                    </span>
+                  </label>
+                </li>
+              ))}
+            </ul>
+          </section>
+        );
+      })}
+    </ReviewDialog>
+  );
+}
+
+function ItemsReview({ onClose }: { onClose: () => void }) {
+  const { t } = useTranslation();
+  const qc = useQueryClient();
+  const err = useBillingError();
+  const { data, isLoading, error } = useQuery({ queryKey: [...KEY, "plan-items"], queryFn: () => api.get<ItemsPlan>("/billing/quickbooks/plan/items"), retry: false, gcTime: 0 });
+  const todo = (data?.products ?? []).filter((p) => p.action !== "same");
+  const { sel, toggle, setMany } = useChecked(data ? todo.map((p) => p.key) : null);
+  const apply = useMutation({
+    mutationFn: () => api.post<{ items: number; categories: number; products: number }>("/billing/quickbooks/plan/items", { accept: [...sel] }),
+    onSuccess: (r) => {
+      void qc.invalidateQueries({ queryKey: KEY });
+      toast.success(t("billing.qb.itemsDone", r));
+      onClose();
+    },
+    onError: (e) => toast.error(err(e)),
+  });
+  const keys = todo.map((p) => p.key);
+  return (
+    <ReviewDialog
+      title={t("billing.qb.reviewItemsTitle")}
+      text={t("billing.qb.reviewItemsText")}
+      loading={isLoading}
+      error={error}
+      onClose={onClose}
+      footer={
+        <>
+          <span className="mr-auto text-xs text-muted-foreground">{t("billing.qb.selected", { count: sel.size })}</span>
+          <Button variant="ghost" onClick={onClose}>
+            {t("common.cancel")}
+          </Button>
+          <Button disabled={!data || apply.isPending} onClick={() => apply.mutate()} className={GOLD}>
+            {apply.isPending && <Loader2 className="size-4 animate-spin" />} {t("billing.qb.accept")}
+          </Button>
+        </>
+      }
+    >
+      {data && (
+        <>
+          <section className="space-y-1.5">
+            <p className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">{t("billing.qb.categories", { count: data.categories.length })}</p>
+            <div className="flex flex-wrap gap-1.5">
+              {data.categories.map((c) => (
+                <span key={c.id} className={cn("rounded-md border px-2 py-0.5 text-xs", c.isNew && "border-emerald-500/40 text-emerald-300")}>
+                  {c.name} <span className="text-[10px] text-muted-foreground">· {c.products}</span>
+                  {c.isNew && <span className="ml-1 text-[10px]">{t("billing.qb.new")}</span>}
+                </span>
+              ))}
+              {!data.categories.length && <span className="text-xs text-muted-foreground">—</span>}
+            </div>
+            <p className="text-[11px] text-muted-foreground">{t("billing.qb.itemsCount", data.items)}</p>
+          </section>
+          <section className="space-y-1.5">
+            <div className="flex items-center gap-2">
+              <Checkbox checked={keys.length > 0 && keys.every((k) => sel.has(k)) ? true : keys.some((k) => sel.has(k)) ? "indeterminate" : false} disabled={!keys.length} onCheckedChange={(v) => setMany(keys, Boolean(v))} />
+              <span className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">{t("billing.qb.productsTitle", { count: todo.length })}</span>
+            </div>
+            {!todo.length && <p className="text-xs text-muted-foreground">{t("billing.qb.productsNone")}</p>}
+            {todo.length > 0 && (
+              <ul className="divide-y divide-border/60 overflow-hidden rounded-xl border">
+                {todo.map((p) => (
+                  <li key={p.key}>
+                    <label className="flex cursor-pointer items-start gap-3 px-3 py-2 text-sm hover:bg-accent/30">
+                      <Checkbox className="mt-0.5" checked={sel.has(p.key)} onCheckedChange={(v) => toggle(p.key, Boolean(v))} />
+                      <span className="min-w-0 flex-1">
+                        <span className="block">
+                          <span className="font-mono text-xs">{p.product.sku}</span> {p.product.name} <span className="text-muted-foreground">↔</span> <span className="text-emerald-300">QuickBooks : {p.item.name}</span>
+                        </span>
+                        {p.changes.category && <span className="block text-[11px] text-amber-300">{t("billing.qb.changeCategory", { from: p.changes.category.from ?? "—", to: p.changes.category.to ?? "—" })}</span>}
+                      </span>
+                    </label>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </section>
+        </>
+      )}
+    </ReviewDialog>
+  );
+}
+
+function MappingReview({ data, onClose }: { data: Mapping; onClose: () => void }) {
+  const { t } = useTranslation();
+  const qc = useQueryClient();
+  const err = useBillingError();
+  const rows = data.clients.filter((c) => !c.quickbooksId && c.suggestion);
+  const byId = new Map(data.customers.map((c) => [c.id, c]));
+  const { sel, toggle, setMany } = useChecked(rows.map((r) => r.id));
+  const apply = useMutation({
+    mutationFn: () => api.post<{ mapped: number; skipped: string[] }>("/billing/quickbooks/mapping/accept", { accept: rows.filter((r) => sel.has(r.id)).map((r) => ({ clientId: r.id, quickbooksId: r.suggestion! })) }),
+    onSuccess: (r) => {
+      void qc.invalidateQueries({ queryKey: [...KEY, "qb-mapping"] });
+      toast.success(t("billing.qb.autoDone", { count: r.mapped }));
+      onClose();
+    },
+    onError: (e) => toast.error(err(e)),
+  });
+  const keys = rows.map((r) => r.id);
+  return (
+    <ReviewDialog
+      title={t("billing.qb.reviewMappingTitle")}
+      text={t("billing.qb.reviewMappingText")}
+      loading={false}
+      error={null}
+      onClose={onClose}
+      footer={
+        <>
+          <span className="mr-auto text-xs text-muted-foreground">{t("billing.qb.selected", { count: sel.size })}</span>
+          <Button variant="ghost" onClick={onClose}>
+            {t("common.cancel")}
+          </Button>
+          <Button disabled={!sel.size || apply.isPending} onClick={() => apply.mutate()} className={GOLD}>
+            {apply.isPending && <Loader2 className="size-4 animate-spin" />} {t("billing.qb.accept")}
+          </Button>
+        </>
+      }
+    >
+      <div className="flex items-center gap-2">
+        <Checkbox checked={keys.length > 0 && keys.every((k) => sel.has(k)) ? true : keys.some((k) => sel.has(k)) ? "indeterminate" : false} onCheckedChange={(v) => setMany(keys, Boolean(v))} />
+        <span className="text-xs text-muted-foreground">{t("billing.qb.selectAll")}</span>
+      </div>
+      <ul className="divide-y divide-border/60 overflow-hidden rounded-xl border">
+        {rows.map((r) => {
+          const q = byId.get(r.suggestion!);
+          return (
+            <li key={r.id}>
+              <label className="grid cursor-pointer grid-cols-[auto_minmax(0,1fr)_auto_minmax(0,1fr)_auto] items-center gap-3 px-3 py-2 text-sm hover:bg-accent/30">
+                <Checkbox checked={sel.has(r.id)} onCheckedChange={(v) => toggle(r.id, Boolean(v))} />
+                <span className="min-w-0">
+                  <span className="block truncate">{r.name}</span>
+                  <span className="block truncate text-[11px] text-muted-foreground">{r.email ?? r.city ?? ""}</span>
+                </span>
+                <span className="text-muted-foreground">↔</span>
+                <span className="min-w-0">
+                  <span className="block truncate text-emerald-300">{q?.name}</span>
+                  <span className="block truncate text-[11px] text-muted-foreground">{q?.email ?? ""}</span>
+                </span>
+                <span className="rounded border px-1 text-[10px] text-muted-foreground">{t(`billing.qb.reasons.${r.reason ?? "name"}`)}</span>
+              </label>
+            </li>
+          );
+        })}
+      </ul>
+    </ReviewDialog>
   );
 }
 
@@ -807,14 +1101,7 @@ function MappingCard() {
     onSuccess: refresh,
     onError: (e) => toast.error(err(e)),
   });
-  const auto = useMutation({
-    mutationFn: () => api.post<{ mapped: number }>("/billing/quickbooks/mapping/auto"),
-    onSuccess: (r) => {
-      refresh();
-      toast.success(t("billing.qb.autoDone", { count: r.mapped }));
-    },
-    onError: (e) => toast.error(err(e)),
-  });
+  const [reviewing, setReviewing] = useState(false);
   const create = useMutation({
     mutationFn: (clientId: string) => api.post<QbCustomer>(`/billing/quickbooks/mapping/${clientId}/create`),
     onSuccess: (c) => {
@@ -833,8 +1120,8 @@ function MappingCard() {
       title={t("billing.qb.mappingTitle")}
       text={t("billing.qb.mappingText")}
       aside={
-        <Button size="sm" disabled={!sure || auto.isPending} onClick={() => auto.mutate()} className={GOLD}>
-          {auto.isPending ? <Loader2 className="size-3.5 animate-spin" /> : <Sparkles className="size-3.5" />} {t("billing.qb.auto", { count: sure })}
+        <Button size="sm" disabled={!sure} onClick={() => setReviewing(true)} className={GOLD}>
+          <Sparkles className="size-3.5" /> {t("billing.qb.auto", { count: sure })}
         </Button>
       }
     >
@@ -894,6 +1181,7 @@ function MappingCard() {
             ))}
             {shown.length === 0 && <li className="px-3 py-6 text-center text-xs text-muted-foreground">{t("billing.qb.allMapped")}</li>}
           </ul>
+          {reviewing && <MappingReview data={data} onClose={() => setReviewing(false)} />}
         </>
       )}
     </Card>

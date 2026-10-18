@@ -25,7 +25,7 @@ import {
   testQuickBooks,
   testStripe,
 } from "../lib/billing.ts";
-import { createCustomer, forgetQuickBooksToken, importAccounts, importItems, invoiceChoices, pullPayments, quickbooksCustomers, QuickBooksError, suggestions } from "../lib/quickbooks.ts";
+import { applyAccounts, applyItems, createCustomer, forgetQuickBooksToken, invoiceChoices, matchReason, planAccounts, planItems, pullPayments, quickbooksCustomers, QuickBooksError, suggestions } from "../lib/quickbooks.ts";
 
 /** QuickBooks errors as API errors (quickbooks_not_mapped, quickbooks_api…). */
 export function quickbooksHttp(e: unknown): never {
@@ -239,7 +239,14 @@ export const billingRoutes = new Hono<AppEnv>()
       .where(eq(schema.clients.active, true))
       .orderBy(asc(schema.clients.name));
     const suggested = suggestions(clients, customers);
-    return c.json({ customers, clients: clients.map((x) => ({ ...x, suggestion: suggested.get(x.id) ?? null })) });
+    const byId = new Map(customers.map((q) => [q.id, q]));
+    return c.json({
+      customers,
+      clients: clients.map((x) => {
+        const s = suggested.get(x.id);
+        return { ...x, suggestion: s ?? null, reason: s ? matchReason(x, byId.get(s)!) : null };
+      }),
+    });
   })
   .put("/quickbooks/mapping/:clientId", requirePermission("admin.billing"), async (c) => {
     const a = auth(c);
@@ -255,15 +262,28 @@ export const billingRoutes = new Hono<AppEnv>()
     await audit(a.user.id, "billing.quickbooks.mapped", clientId, { quickbooksId: p.quickbooksId });
     return c.json({ ok: true });
   })
-  /** Apply every sure match (same name or email, only one). */
-  .post("/quickbooks/mapping/auto", requirePermission("admin.billing"), async (c) => {
+  /** The proposed matches the admin reviewed and accepted (still checked: never two clients on one customer). */
+  .post("/quickbooks/mapping/accept", requirePermission("admin.billing"), async (c) => {
     const a = auth(c);
-    const customers = await qbRun(() => quickbooksCustomers());
-    const clients = await db().select({ id: schema.clients.id, name: schema.clients.name, email: schema.clients.email, quickbooksId: schema.clients.quickbooksId }).from(schema.clients).where(eq(schema.clients.active, true));
-    const found = suggestions(clients, customers);
-    for (const [id, qbId] of found) await db().update(schema.clients).set({ quickbooksId: qbId, updatedAt: new Date() }).where(eq(schema.clients.id, id));
-    await audit(a.user.id, "billing.quickbooks.auto_mapped", null, { count: found.size });
-    return c.json({ mapped: found.size });
+    const p = await body(c, z.object({ accept: z.array(z.object({ clientId: zUuid, quickbooksId: z.string().trim().min(1).max(40) })).max(5000) }));
+    const customers = new Set((await qbRun(() => quickbooksCustomers())).map((x) => x.id));
+    const rows = await db().select({ id: schema.clients.id, qb: schema.clients.quickbooksId }).from(schema.clients);
+    const taken = new Map(rows.filter((r) => r.qb).map((r) => [r.qb!, r.id]));
+    let mapped = 0;
+    const skipped: string[] = [];
+    for (const m of p.accept) {
+      const holder = taken.get(m.quickbooksId);
+      if (!customers.has(m.quickbooksId) || (holder && holder !== m.clientId)) {
+        skipped.push(m.clientId);
+        continue;
+      }
+      const [row] = await db().update(schema.clients).set({ quickbooksId: m.quickbooksId, updatedAt: new Date() }).where(eq(schema.clients.id, m.clientId)).returning({ id: schema.clients.id });
+      if (!row) continue;
+      taken.set(m.quickbooksId, m.clientId);
+      mapped++;
+    }
+    await audit(a.user.id, "billing.quickbooks.mapping_accepted", null, { mapped, skipped: skipped.length });
+    return c.json({ mapped, skipped });
   })
   .post("/quickbooks/mapping/:clientId/create", requirePermission("admin.billing"), async (c) => {
     const a = auth(c);
@@ -272,16 +292,22 @@ export const billingRoutes = new Hono<AppEnv>()
     await audit(a.user.id, "billing.quickbooks.customer_created", clientId, { quickbooksId: customer.id });
     return c.json(customer, 201);
   })
-  .post("/quickbooks/import/accounts", requirePermission("admin.billing"), async (c) => {
+  /** Chart of accounts: what would make it the same as QuickBooks' (nothing changed until accepted). */
+  .get("/quickbooks/plan/accounts", requirePermission("admin.billing"), async (c) => c.json(await qbRun(() => planAccounts(auth(c).user.id))))
+  .post("/quickbooks/plan/accounts", requirePermission("admin.billing"), async (c) => {
     const a = auth(c);
-    const r = await qbRun(() => importAccounts(a.user.id));
-    await audit(a.user.id, "billing.quickbooks.accounts_imported", null, r);
+    const p = await body(c, z.object({ accept: z.array(z.string().max(80)).max(10_000) }));
+    const r = await qbRun(() => applyAccounts(a.user.id, p.accept));
+    await audit(a.user.id, "billing.quickbooks.accounts_synced", null, r);
     return c.json(r);
   })
-  .post("/quickbooks/import/items", requirePermission("admin.billing"), async (c) => {
+  /** Categories and items, and the inventory products to tie by SKU (nothing changed until accepted). */
+  .get("/quickbooks/plan/items", requirePermission("admin.billing"), async (c) => c.json(await qbRun(() => planItems())))
+  .post("/quickbooks/plan/items", requirePermission("admin.billing"), async (c) => {
     const a = auth(c);
-    const r = await qbRun(() => importItems(a.user.id));
-    await audit(a.user.id, "billing.quickbooks.items_imported", null, r);
+    const p = await body(c, z.object({ accept: z.array(z.string().max(80)).max(10_000) }));
+    const r = await qbRun(() => applyItems(a.user.id, p.accept));
+    await audit(a.user.id, "billing.quickbooks.items_synced", null, r);
     return c.json(r);
   })
   /** Items and tax codes for the invoices sent, and the ones chosen. */
