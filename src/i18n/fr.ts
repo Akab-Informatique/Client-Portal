@@ -1273,6 +1273,7 @@ const fr = {
     },
   },
   tickets: {
+    filtersTitle: "Filtres",
     tiles: {
       overdue: "En retard",
       dueToday: "À échéance aujourd'hui",

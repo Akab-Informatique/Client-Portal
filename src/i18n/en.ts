@@ -1275,6 +1275,7 @@ const en: Dict = {
     },
   },
   tickets: {
+    filtersTitle: "Filters",
     tiles: {
       overdue: "Overdue",
       dueToday: "Due today",

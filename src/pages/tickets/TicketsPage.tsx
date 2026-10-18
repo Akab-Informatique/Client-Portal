@@ -210,57 +210,73 @@ export function TicketsPage() {
       )}
       <MetricTiles data={data} params={params} apply={apply} onSms={() => setSmsInbox("")} />
 
-      {/* Toolbar (view, search, team, frequent filters, the rest under "More") and, beside it, today's agenda */}
+      {/* The filters (a card matching "My week") and, beside them, the week */}
       <div className="grid gap-3 lg:grid-cols-[minmax(0,1fr)_minmax(420px,0.9fr)] lg:items-start">
-      <div className="glass flex min-w-0 flex-wrap items-center gap-1 rounded-2xl border p-1">
-        <ViewMenu view={view} counts={data?.counts} params={params} apply={apply} />
-        <div className="relative w-full sm:w-40">
+      <section className="glass flex min-w-0 flex-col gap-2 rounded-2xl border p-2.5">
+        {/* 1. what is shown, and in which order */}
+        <div className="flex flex-wrap items-center gap-2 px-1">
+          <SlidersHorizontal className="size-4 shrink-0 text-primary" />
+          <span className="text-sm font-semibold">{t("tickets.filtersTitle")}</span>
+          <ViewMenu view={view} counts={data?.counts} params={params} apply={apply} />
+          <div className="ml-auto">
+            <SortMenu value={params.get("sort") ?? "due"} onChange={(v) => set({ sort: v === "due" ? null : v })} />
+          </div>
+        </div>
+        {/* 2. search */}
+        <div className="relative">
           <Search className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
           <Input
             ref={searchRef}
             value={params.get("q") ?? ""}
             onChange={(e) => set({ q: e.target.value || null })}
             placeholder={t("tickets.search")}
-            className="h-8 border-transparent bg-white/5 pl-8 pr-7 text-xs dark:bg-white/[0.04]"
+            className="h-9 rounded-xl border-[color:var(--glass-border)] bg-background/40 pl-9 pr-8 text-sm"
           />
           <kbd className="pointer-events-none absolute right-2.5 top-1/2 -translate-y-1/2 rounded border px-1 font-mono text-[10px] text-muted-foreground">/</kbd>
         </div>
+        {/* 3. the filters, side by side */}
         {data && (
-          <>
-            <TeamFilter technicians={data.facets.technicians} params={params} set={set} />
-            <MultiFilter label={t("tickets.fields.status")} param="status" options={data.facets.statuses.map((s) => ({ value: s.value, label: txt.status(s) }))} params={params} set={set} />
-            <MultiFilter label={t("tickets.fields.company")} param="company" options={data.facets.companies.map((c) => ({ value: String(c.id), label: c.name }))} params={params} set={set} searchable />
-            <MoreFilters data={data} params={params} set={set} />
-          </>
+          <div className="grid grid-cols-2 gap-1.5 sm:grid-cols-4 [&>*]:min-w-0 [&>*]:rounded-xl [&>*]:border [&>*]:bg-background/40 [&>*]:transition-colors hover:[&>*]:border-[color:var(--gold)]/30 [&_button]:w-full [&_button]:justify-center">
+            <div>
+              <TeamFilter technicians={data.facets.technicians} params={params} set={set} />
+            </div>
+            <div>
+              <MultiFilter label={t("tickets.fields.status")} param="status" options={data.facets.statuses.map((s) => ({ value: s.value, label: txt.status(s) }))} params={params} set={set} />
+            </div>
+            <div>
+              <MultiFilter label={t("tickets.fields.company")} param="company" options={data.facets.companies.map((c) => ({ value: String(c.id), label: c.name }))} params={params} set={set} searchable />
+            </div>
+            <div>
+              <MoreFilters data={data} params={params} set={set} />
+            </div>
+          </div>
         )}
-        <div className="ml-auto">
-          <SortMenu value={params.get("sort") ?? "due"} onChange={(v) => set({ sort: v === "due" ? null : v })} />
-        </div>
-      </div>
+        {/* what is filtered, removable one by one */}
+        {activeFilters.length > 0 && (
+          <div className="flex flex-wrap items-center gap-1.5 border-t pt-2">
+            {activeFilters.map((k) => (
+              <button
+                key={k}
+                type="button"
+                onClick={() => set({ [k]: null })}
+                className="flex items-center gap-1 rounded-full border border-[color:var(--gold)]/30 bg-[color:var(--gold)]/[0.06] px-2 py-0.5 text-[11px] text-muted-foreground hover:border-destructive/50 hover:text-foreground"
+              >
+                {t(`tickets.filter.${k}`)}: <span className="font-medium text-foreground">{filterLabel(k, params.get(k)!, data, t)}</span>
+                <X className="size-3" />
+              </button>
+            ))}
+            <button type="button" className="ml-auto px-1 text-[11px] text-muted-foreground hover:text-foreground" onClick={() => set(Object.fromEntries(activeFilters.map((k) => [k, null])))}>
+              {t("tickets.clearFilters")}
+            </button>
+          </div>
+        )}
+      </section>
       <AgendaCard filterTech={(() => {
         // one technician filtered (a portal account): the card shows their priorities
         const a = (params.get("assignee") ?? "").split(",").filter(Boolean);
         return a.length === 1 && a[0] !== "none" && !a[0].startsWith("at-") ? a[0] : null;
       })()} />
       </div>
-      {activeFilters.length > 0 && (
-        <div className="-mt-3 flex flex-wrap items-center gap-1.5">
-          {activeFilters.map((k) => (
-            <button
-              key={k}
-              type="button"
-              onClick={() => set({ [k]: null })}
-              className="flex items-center gap-1 rounded-full border border-[color:var(--gold)]/25 px-2 py-0.5 text-[11px] text-muted-foreground hover:border-destructive/50 hover:text-foreground"
-            >
-              {t(`tickets.filter.${k}`)}: <span className="font-medium text-foreground">{filterLabel(k, params.get(k)!, data, t)}</span>
-              <X className="size-3" />
-            </button>
-          ))}
-          <button type="button" className="px-1 text-[11px] text-muted-foreground hover:text-foreground" onClick={() => set(Object.fromEntries(activeFilters.map((k) => [k, null])))}>
-            {t("tickets.clearFilters")}
-          </button>
-        </div>
-      )}
 
       {/* List */}
       <div className="glass overflow-hidden rounded-2xl border xl:overflow-x-auto" style={cols.vars as React.CSSProperties}>
