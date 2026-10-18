@@ -956,6 +956,9 @@ const fr = {
       allDay: "Toute la journée",
       deleteEvent: "Supprimer cet élément?",
       endBeforeStart: "L'heure de fin doit être après le début.",
+      ticket: "Billet lié (optionnel)",
+      unlinkTicket: "Retirer le billet",
+      invalidTicket: "Ce billet est introuvable.",
     },
     points: {
       title: "Points à discuter",

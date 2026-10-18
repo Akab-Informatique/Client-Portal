@@ -3,7 +3,7 @@ import { useTranslation } from "react-i18next";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { Link } from "react-router-dom";
-import { CalendarClock, CalendarDays, CalendarPlus, ChevronLeft, ChevronRight, FolderKanban, PartyPopper, Star, Ticket, Trash2, UserX } from "lucide-react";
+import { CalendarClock, CalendarDays, CalendarPlus, ChevronLeft, ChevronRight, FolderKanban, PartyPopper, Star, Ticket, Trash2, UserX, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
@@ -14,6 +14,7 @@ import { useConfirm } from "@/components/ConfirmDialog";
 import { api, ApiError } from "@/lib/api";
 import { useCan } from "@/lib/session";
 import { AbsenceDialog, type AbsenceDraft } from "./Absences";
+import { TicketSearch } from "@/pages/tickets/TicketSearch";
 import { currentLocale } from "@/i18n";
 import { cn } from "@/lib/utils";
 import { holidaysBetween } from "@shared/holidays";
@@ -41,8 +42,12 @@ type Event = {
   note: string | null;
   userId: string | null;
   name: string | null;
+  ticketId: number | null;
+  ticketNumber: string | null;
+  ticketTitle: string | null;
 };
-type EventDraft = { id?: string; date: string; startTime: string; endTime: string; title: string; note: string; userId: string };
+type LinkedTicket = { id: number; number: string; title: string };
+type EventDraft = { id?: string; date: string; startTime: string; endTime: string; title: string; note: string; userId: string; ticket: LinkedTicket | null };
 type Week = {
   from: string;
   to: string;
@@ -201,7 +206,7 @@ export function WeekSection() {
                   size="sm"
                   variant="outline"
                   className="h-8"
-                  onClick={() => setEvent({ date: selected, startTime: "", endTime: "", title: "", note: "", userId: EVERYONE })}
+                  onClick={() => setEvent({ date: selected, startTime: "", endTime: "", title: "", note: "", userId: EVERYONE, ticket: null })}
                 >
                   <CalendarPlus className="size-4" /> {t("meetings.week.addEvent")}
                 </Button>
@@ -248,6 +253,7 @@ export function WeekSection() {
                             title: x.title,
                             note: x.note ?? "",
                             userId: x.userId ?? EVERYONE,
+                            ticket: x.ticketId ? { id: x.ticketId, number: x.ticketNumber ?? "", title: x.ticketTitle ?? "" } : null,
                           })
                         }
                       >
@@ -259,6 +265,16 @@ export function WeekSection() {
                         <span className="block font-medium">{x.title}</span>
                         {x.note && <span className="block text-muted-foreground">{x.note}</span>}
                       </Row>
+                      {x.ticketId && (
+                        <Link
+                          to={`/tickets?ticket=${x.ticketId}`}
+                          className="mt-0.5 flex items-center gap-1.5 text-xs text-muted-foreground hover:text-foreground hover:underline"
+                        >
+                          <Ticket className="size-3.5 shrink-0 text-orange-300" />
+                          <span className="shrink-0 font-mono">{x.ticketNumber}</span>
+                          <span className="truncate">{x.ticketTitle}</span>
+                        </Link>
+                      )}
                     </li>
                   ))}
                 </Group>
@@ -396,7 +412,13 @@ function EventDialog({ draft, onClose }: { draft: EventDraft; onClose: () => voi
     onClose();
   };
   const onError = (e: unknown) =>
-    toast.error(e instanceof ApiError && e.fields?.some((f) => f.message === "end_before_start") ? t("meetings.week.endBeforeStart") : t("common.error"));
+    toast.error(
+      e instanceof ApiError && e.fields?.some((f) => f.message === "end_before_start")
+        ? t("meetings.week.endBeforeStart")
+        : e instanceof ApiError && e.code === "invalid_ticket"
+          ? t("meetings.week.invalidTicket")
+          : t("common.error"),
+    );
   const save = useMutation({
     mutationFn: () => {
       const payload = {
@@ -406,6 +428,7 @@ function EventDialog({ draft, onClose }: { draft: EventDraft; onClose: () => voi
         title: d.title,
         note: d.note,
         userId: d.userId === EVERYONE ? null : d.userId,
+        ticketId: d.ticket?.id ?? null,
       };
       return d.id ? api.put(`/meetings/events/${d.id}`, payload) : api.post("/meetings/events", payload);
     },
@@ -471,6 +494,26 @@ function EventDialog({ draft, onClose }: { draft: EventDraft; onClose: () => voi
           <div className="space-y-1.5">
             <Label htmlFor="ev-note">{t("meetings.absences.note")}</Label>
             <Input id="ev-note" maxLength={1000} value={d.note} onChange={(e) => setD({ ...d, note: e.target.value })} />
+          </div>
+          <div className="space-y-1.5">
+            <Label>{t("meetings.week.ticket")}</Label>
+            {d.ticket ? (
+              <div className="flex items-center gap-2 rounded-lg border px-3 py-2 text-sm">
+                <Ticket className="size-4 shrink-0 text-orange-300" />
+                <span className="shrink-0 font-mono text-xs text-muted-foreground">{d.ticket.number}</span>
+                <span className="min-w-0 flex-1 truncate">{d.ticket.title}</span>
+                <button
+                  type="button"
+                  className="text-muted-foreground hover:text-red-400"
+                  aria-label={t("meetings.week.unlinkTicket")}
+                  onClick={() => setD({ ...d, ticket: null })}
+                >
+                  <X className="size-4" />
+                </button>
+              </div>
+            ) : (
+              <TicketSearch autoFocus={false} onPick={(ticket) => setD({ ...d, ticket, title: d.title || ticket.title })} />
+            )}
           </div>
           <div className="flex items-center gap-2 pt-2">
             {d.id && (

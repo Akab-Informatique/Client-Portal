@@ -1041,6 +1041,10 @@ export const meetingEvents = pgTable(
     note: text("note"),
     /** Who it is for (none: the whole team) */
     userId: uuid("user_id").references(() => users.id, { onDelete: "set null" }),
+    /** The ticket it is about (optional; number and title as read from the ticket source) */
+    ticketId: bigint("ticket_id", { mode: "number" }),
+    ticketNumber: text("ticket_number"),
+    ticketTitle: text("ticket_title"),
     createdBy: uuid("created_by").references(() => users.id, { onDelete: "set null" }),
     createdAt: created(),
   },

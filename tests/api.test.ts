@@ -296,6 +296,17 @@ describe("permissions", () => {
       ["Dîner d'équipe", "12:00", "13:00", null],
       ["Visite client", null, null, team[0].name],
     ]);
+    // linked to a ticket: number and title come from the ticket source, not the browser
+    const tk = (await admin.get("/api/tickets?view=all")).json.items[0];
+    expect((await admin.put(`/api/meetings/events/${ev2.json.id}`, { date: "2026-11-13", title: "Visite client", ticketId: tk.id, ticketNumber: "faux" })).status).toBe(200);
+    expect((await admin.get("/api/meetings/week?from=2026-11-09")).json.events.find((x: any) => x.id === ev2.json.id)).toMatchObject({
+      ticketId: tk.id,
+      ticketNumber: tk.number,
+      ticketTitle: tk.title,
+      userId: null,
+    });
+    expect((await admin.put(`/api/meetings/events/${ev2.json.id}`, { date: "2026-11-13", title: "Visite client", ticketId: 987654321 })).status).toBe(400);
+    expect((await admin.put(`/api/meetings/events/${ev2.json.id}`, { date: "2026-11-13", title: "Visite client", userId: team[0].id })).status).toBe(200);
     expect((await admin.put(`/api/meetings/events/${ev.json.id}`, { date: "2026-11-20", title: "Dîner reporté" })).status).toBe(200);
     events = (await admin.get("/api/meetings/week?from=2026-11-09")).json.events;
     expect(events.map((x: any) => x.title)).toEqual(["Visite client"]);

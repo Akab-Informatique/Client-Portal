@@ -207,6 +207,9 @@ export const meetingRoutes = new Hono<AppEnv>()
         note: ev.note,
         userId: ev.userId,
         name: schema.users.name,
+        ticketId: ev.ticketId,
+        ticketNumber: ev.ticketNumber,
+        ticketTitle: ev.ticketTitle,
       })
       .from(ev)
       .leftJoin(schema.users, eq(schema.users.id, ev.userId))
@@ -220,9 +223,10 @@ export const meetingRoutes = new Hono<AppEnv>()
     const a = auth(c);
     const v = await body(c, zEvent);
     if (v.userId) await checkMember(v.userId);
+    const ticket = await eventTicket(v.ticketId);
     const [row] = await db()
       .insert(schema.meetingEvents)
-      .values({ ...eventValues(v), createdBy: a.user.id })
+      .values({ ...eventValues(v), ...ticket, createdBy: a.user.id })
       .returning({ id: schema.meetingEvents.id });
     await audit(a.user.id, "meeting.event.created", row.id, { date: v.date });
     return c.json({ id: row.id }, 201);
@@ -233,7 +237,12 @@ export const meetingRoutes = new Hono<AppEnv>()
     const id = projectId(c.req.param("id"));
     const v = await body(c, zEvent);
     if (v.userId) await checkMember(v.userId);
-    const rows = await db().update(schema.meetingEvents).set(eventValues(v)).where(eq(schema.meetingEvents.id, id)).returning({ id: schema.meetingEvents.id });
+    const ticket = await eventTicket(v.ticketId);
+    const rows = await db()
+      .update(schema.meetingEvents)
+      .set({ ...eventValues(v), ...ticket })
+      .where(eq(schema.meetingEvents.id, id))
+      .returning({ id: schema.meetingEvents.id });
     if (!rows.length) throw new HTTPException(404, { message: "not_found" });
     await audit(a.user.id, "meeting.event.updated", id, { date: v.date });
     return c.json({ ok: true });
@@ -481,6 +490,7 @@ const zEvent = z
       .nullable()
       .optional()
       .or(z.literal("").transform(() => null)),
+    ticketId: z.number().int().positive().nullable().optional(),
   })
   .refine((v) => !v.startTime || !v.endTime || v.endTime > v.startTime, { message: "end_before_start", path: ["endTime"] });
 const eventValues = (v: z.infer<typeof zEvent>) => ({
@@ -492,6 +502,15 @@ const eventValues = (v: z.infer<typeof zEvent>) => ({
   note: v.note || null,
   userId: v.userId || null,
 });
+
+/** The ticket an event is about, read from the ticket source (never the number/title the browser sends) */
+async function eventTicket(id: number | null | undefined) {
+  if (!id) return { ticketId: null, ticketNumber: null, ticketTitle: null };
+  const src = await ticketSource();
+  const tk = await run(() => src.get(id));
+  if (!tk) throw new HTTPException(400, { message: "invalid_ticket" });
+  return { ticketId: tk.id, ticketNumber: tk.number, ticketTitle: tk.title };
+}
 
 async function checkMember(userId: string) {
   if (!(await team()).some((u) => u.id === userId)) throw new HTTPException(400, { message: "invalid_member" });

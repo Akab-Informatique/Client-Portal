@@ -958,6 +958,9 @@ const en: Dict = {
       allDay: "All day",
       deleteEvent: "Delete this item?",
       endBeforeStart: "The end time must be after the start.",
+      ticket: "Linked ticket (optional)",
+      unlinkTicket: "Remove the ticket",
+      invalidTicket: "This ticket cannot be found.",
     },
     points: {
       title: "Points to discuss",
