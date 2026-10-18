@@ -7,6 +7,7 @@ import { purgeExpiredSessions } from "./lib/auth.ts";
 import { purgeOldNotifications } from "./lib/notify.ts";
 import { smtpSettings } from "./lib/mail.ts";
 import { keepTicketsWarm } from "./lib/ticketSource.ts";
+import { CRM_SYNC_EVERY, syncCrm } from "./lib/crm.ts";
 import { sweepTimers } from "./lib/timers.ts";
 import { sendReminders } from "./lib/planning.ts";
 import { autoTickets } from "./lib/sms.ts";
@@ -19,6 +20,14 @@ const smtp = await smtpSettings();
 const host = process.env.HOST || (config.production ? "0.0.0.0" : "127.0.0.1");
 // Autotask: load the ticket list now and keep it fresh while the portal is used
 keepTicketsWarm();
+
+// CRM: the portal keeps its own copy of the clients, contacts and contracts (Autotask is the reference while linked)
+void syncCrm();
+setInterval(() => void syncCrm(), CRM_SYNC_EVERY).unref();
+
+// CRM: the portal keeps its own copy of the clients, contacts and contracts (Autotask is the reference while linked)
+void syncCrm();
+setInterval(() => void syncCrm(), CRM_SYNC_EVERY).unref();
 
 serve({ fetch: app.fetch, port: config.port, hostname: host }, (info) => {
   console.log(`AKAB Portal API on http://${info.address}:${info.port}`);

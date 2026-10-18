@@ -13,6 +13,9 @@ export const pageLoaders = {
   store: () => import("@/pages/store/StorePage"),
   outlook: () => import("@/pages/outlook/OutlookPage"),
   meetings: () => import("@/pages/meetings/MeetingsPage"),
+  crm: () => import("@/pages/crm/ClientsPage"),
+  client: () => import("@/pages/crm/ClientPage"),
+  accounting: () => import("@/pages/accounting/AccountingPage"),
 };
 
 const byPath: Record<string, () => Promise<unknown>> = {
@@ -22,6 +25,9 @@ const byPath: Record<string, () => Promise<unknown>> = {
   "/store": pageLoaders.store,
   "/outlook": pageLoaders.outlook,
   "/meetings": pageLoaders.meetings,
+  "/crm": pageLoaders.crm,
+  "/accounting/invoices": pageLoaders.accounting,
+  "/accounting/quotes": pageLoaders.accounting,
 };
 
 /** Load every page's code in the background once the portal is shown. */
@@ -35,6 +41,7 @@ export function preloadPagesWhenIdle() {
 /** On hover / focus of a menu link: the page's code and its first data. */
 export function preloadRoute(path: string, qc: QueryClient) {
   void byPath[path]?.().catch(() => undefined);
+  if (path === "/crm") void qc.prefetchQuery({ queryKey: ["crm", "clients"], queryFn: () => api.get("/crm/clients"), staleTime: 30_000 });
   if (path === "/tickets") {
     // same key as useTickets("mine", no filters)
     void qc.prefetchQuery({ queryKey: ["tickets", "view=mine"], queryFn: () => api.get("/tickets?view=mine"), staleTime: 15_000 });

@@ -2662,3 +2662,82 @@ describe("Outlook (Microsoft 365 mail)", () => {
     expect(log.map((l) => l.action)).toEqual(expect.arrayContaining(["outlook.linked", "outlook.sent", "outlook.reply", "outlook.to_ticket", "outlook.unlinked"]));
   });
 });
+
+describe("crm: the portal's own copy of the clients", () => {
+  const sessions = new Map<string, Agent>();
+  const session = async (email: string) => {
+    resetRateLimit("login:ip:unknown");
+    return sessions.get(email) ?? sessions.set(email, await signIn(email)).get(email)!;
+  };
+
+  it("copies clients, contacts and contracts from the source, once per sync", async () => {
+    const tech = await session("tech@akab.local");
+    expect((await tech.get("/api/crm/status")).json).toMatchObject({ mode: "sample" });
+    const list = (await tech.get("/api/crm/clients")).json;
+    const clinique = list.find((c: any) => c.autotaskId === 300);
+    expect(clinique).toMatchObject({ name: "Clinique dentaire Joliette", contacts: 3, active: true });
+    expect(clinique.openTickets).toBeGreaterThan(0);
+    // portal clients that are not in the source are kept as they are
+    expect(list.find((c: any) => c.name === "Clinique Rawdon")).toMatchObject({ autotaskId: null });
+    const status = (await tech.get("/api/crm/status")).json;
+    expect(status).toMatchObject({ ok: true, counts: { contacts: expect.any(Number), contracts: expect.any(Number) } });
+    expect(status.lastSync).toBeTruthy();
+
+    // a technician may look, not sync or change
+    expect((await tech.post("/api/crm/sync")).status).toBe(403);
+    expect((await tech.patch(`/api/crm/clients/${clinique.id}`, { phone: "450-555-9999" })).status).toBe(403);
+    const admin = await session("admin@akab.local");
+    expect((await admin.post("/api/crm/sync")).json.ok).toBe(true);
+    // a second sync adds nothing
+    expect((await tech.get("/api/crm/clients")).json.length).toBe(list.length);
+
+    expect((await tech.get(`/api/crm/clients/${clinique.id}/contracts`)).json[0]).toMatchObject({ isDefault: true, active: true });
+    const tickets = (await tech.get(`/api/crm/clients/${clinique.id}/tickets`)).json;
+    expect(tickets.items.length).toBeGreaterThan(0);
+    expect(tickets.items.every((t: any) => t.company === "Clinique dentaire Joliette")).toBe(true);
+  });
+
+  it("parent companies, details, invoice settings and contacts", async () => {
+    const tech = await session("tech@akab.local");
+    const admin = await session("admin@akab.local");
+    const list = (await admin.get("/api/crm/clients")).json;
+    const parent = list.find((c: any) => c.autotaskId === 301);
+    const child = list.find((c: any) => c.autotaskId === 302);
+    expect((await admin.patch(`/api/crm/clients/${child.id}`, { parentId: parent.id, notes: "Filiale" })).status).toBe(200);
+    // no loop: the parent cannot become its child's child
+    expect((await admin.patch(`/api/crm/clients/${parent.id}`, { parentId: child.id })).json.error).toBe("parent_loop");
+    expect((await admin.patch(`/api/crm/clients/${parent.id}`, { parentId: parent.id })).json.error).toBe("parent_loop");
+    const p = (await admin.get(`/api/crm/clients/${parent.id}`)).json;
+    expect(p.children.map((x: any) => x.id)).toEqual([child.id]);
+    const ch = (await admin.get(`/api/crm/clients/${child.id}`)).json;
+    expect(ch).toMatchObject({ parent: { id: parent.id }, notes: "Filiale" });
+    // the parent's tickets can include its child companies'
+    const own = (await tech.get(`/api/crm/clients/${parent.id}/tickets`)).json.items.length;
+    expect((await tech.get(`/api/crm/clients/${parent.id}/tickets?children=1`)).json.items.length).toBeGreaterThan(own);
+    // a sync keeps portal-only fields
+    await admin.post("/api/crm/sync");
+    expect((await admin.get(`/api/crm/clients/${child.id}`)).json.notes).toBe("Filiale");
+    expect((await admin.patch(`/api/crm/clients/${child.id}`, { name: parent.name })).json.error).toBe("company_exists");
+
+    // invoice settings: their own right
+    expect((await tech.get(`/api/crm/clients/${parent.id}`)).json.invoice).toBeNull();
+    expect((await tech.put(`/api/crm/clients/${parent.id}/invoice`, { termsDays: 30 })).status).toBe(403);
+    expect((await admin.put(`/api/crm/clients/${parent.id}/invoice`, { billingEmail: "compta@client.example", termsDays: 30, taxes: true, delivery: "email" })).status).toBe(200);
+    expect((await admin.get(`/api/crm/clients/${parent.id}`)).json.invoice).toMatchObject({ billingEmail: "compta@client.example", termsDays: 30 });
+
+    // contacts: added in the source and in the copy, deactivated
+    const made = await admin.post(`/api/crm/clients/${parent.id}/contacts`, { firstName: "Hélène", lastName: "Dubé", email: "helene@client.example", mobile: "450-555-4444", title: "Directrice" });
+    expect(made.status).toBe(201);
+    expect(made.json).toMatchObject({ firstName: "Hélène", mobile: "450-555-4444", active: true });
+    expect((await tech.get("/api/tickets/companies/301/contacts")).json.some((x: any) => x.name === "Hélène Dubé")).toBe(true);
+    expect((await admin.patch(`/api/crm/clients/${parent.id}/contacts/${made.json.id}`, { active: false })).json.active).toBe(false);
+    expect((await admin.patch(`/api/crm/clients/${child.id}/contacts/${made.json.id}`, { active: true })).status).toBe(404);
+
+    // a new client from the CRM
+    const co = await admin.post("/api/crm/clients", { name: "Érablière du Nord", phone: "450-555-3030" });
+    expect(co.status).toBe(201);
+    expect(co.json.autotaskId).toEqual(expect.any(Number));
+    expect((await admin.post("/api/crm/clients", { name: "érablière du nord", phone: "450-555-3030" })).json.error).toBe("company_exists");
+    expect((await tech.post("/api/crm/clients", { name: "Autre", phone: "450-555-3030" })).status).toBe(403);
+  });
+});

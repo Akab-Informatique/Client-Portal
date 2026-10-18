@@ -1,4 +1,4 @@
-import { BookOpen, CalendarCheck, LayoutDashboard, Mail, Megaphone, MonitorSmartphone, Store, Ticket, Users, type LucideIcon } from "lucide-react";
+import { BookOpen, Building2, CalendarCheck, FileSignature, LayoutDashboard, Mail, Megaphone, MonitorSmartphone, Receipt, Store, Ticket, type LucideIcon } from "lucide-react";
 import type { PermissionKey } from "@shared/permissions";
 
 /**
@@ -10,6 +10,8 @@ import type { PermissionKey } from "@shared/permissions";
 export const NAV_SECTIONS = [
   { key: "modules", labelKey: "nav.modules" },
   { key: "command", labelKey: "nav.commandCenter" },
+  { key: "crm", labelKey: "nav.crm" },
+  { key: "accounting", labelKey: "nav.accounting" },
   { key: "administration", labelKey: "nav.administration" },
 ] as const;
 export type NavSection = (typeof NAV_SECTIONS)[number]["key"];
@@ -31,9 +33,11 @@ export const STAFF_MODULES: NavModule[] = [
   { key: "messages", path: "/messages", labelKey: "nav.messages", icon: Megaphone, section: "modules", permission: "messages.view" },
   { key: "outlook", path: "/outlook", labelKey: "nav.outlook", icon: Mail, section: "modules", permission: "outlook.view", optIn: "outlook" },
   { key: "tickets", path: "/tickets", labelKey: "nav.tickets", icon: Ticket, section: "command", permission: "tickets.view" },
+  { key: "crm", path: "/crm", labelKey: "nav.crmClients", icon: Building2, section: "crm", permission: "crm.view" },
+  { key: "invoices", path: "/accounting/invoices", labelKey: "nav.invoices", icon: Receipt, section: "accounting", permission: "accounting.view" },
+  { key: "quotes", path: "/accounting/quotes", labelKey: "nav.quotes", icon: FileSignature, section: "accounting", permission: "accounting.view" },
   { key: "store", path: "/store", labelKey: "nav.store", icon: Store, section: "administration", permission: "store.view" },
   { key: "meetings", path: "/meetings", labelKey: "nav.meetings", icon: CalendarCheck, section: "administration", permission: "meetings.view" },
-  { key: "clients", path: "/clients", labelKey: "nav.clients", icon: Users, section: "modules", upcoming: true },
   { key: "documentation", path: "/documentation", labelKey: "nav.documentation", icon: BookOpen, section: "modules", upcoming: true },
   { key: "devices", path: "/devices", labelKey: "nav.devices", icon: MonitorSmartphone, section: "modules", upcoming: true },
 ];

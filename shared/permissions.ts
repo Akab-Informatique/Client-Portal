@@ -91,6 +91,26 @@ export const MODULES = [
     ],
   },
   {
+    key: "crm",
+    audience: "staff",
+    label: { fr: "CRM (clients)", en: "CRM (clients)" },
+    permissions: [
+      { key: "crm.view", label: { fr: "Voir les clients", en: "View clients" }, description: { fr: "Fiches, contacts, contrats et billets des clients", en: "Client records, contacts, contracts and tickets" } },
+      {
+        key: "crm.edit",
+        label: { fr: "Modifier les clients", en: "Edit clients" },
+        description: { fr: "Nouveau client, coordonnées, compagnie mère, contacts (aussi dans Autotask tant qu'il est lié)", en: "New client, details, parent company, contacts (in Autotask too while it is linked)" },
+      },
+      { key: "crm.billing", label: { fr: "Paramètres de facturation", en: "Invoice settings" }, description: { fr: "Courriel de facturation, modalités, taxes, taux", en: "Billing email, terms, taxes, rate" } },
+    ],
+  },
+  {
+    key: "accounting",
+    audience: "staff",
+    label: { fr: "Comptabilité", en: "Accounting" },
+    permissions: [{ key: "accounting.view", label: { fr: "Voir la comptabilité", en: "View accounting" }, description: { fr: "Factures et soumissions", en: "Invoices and quotes" } }],
+  },
+  {
     key: "messages",
     audience: "staff",
     label: { fr: "Babillard", en: "Message board" },
@@ -332,6 +352,7 @@ export const SYSTEM_ROLES: Array<{
       "tickets.view",
       "tickets.edit",
       "tickets.planSelf",
+      "crm.view",
       "sms.view",
       "outlook.view",
       "outlook.send",

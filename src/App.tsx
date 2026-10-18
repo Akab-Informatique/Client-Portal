@@ -18,6 +18,9 @@ const TicketsPage = lazy(() => pageLoaders.tickets().then((m) => ({ default: m.T
 const StorePage = lazy(() => pageLoaders.store().then((m) => ({ default: m.StorePage })));
 const OutlookPage = lazy(() => pageLoaders.outlook().then((m) => ({ default: m.OutlookPage })));
 const MeetingsPage = lazy(() => pageLoaders.meetings().then((m) => ({ default: m.MeetingsPage })));
+const ClientsPage = lazy(() => pageLoaders.crm().then((m) => ({ default: m.ClientsPage })));
+const ClientPage = lazy(() => pageLoaders.client().then((m) => ({ default: m.ClientPage })));
+const AccountingPage = lazy(() => pageLoaders.accounting().then((m) => ({ default: m.AccountingPage })));
 const ClientHome = lazy(() => import("@/pages/client/ClientHome").then((m) => ({ default: m.ClientHome })));
 
 function Splash() {
@@ -82,6 +85,10 @@ function StaffApp() {
         <Route path="store" element={<Guard permission="store.view"><StorePage /></Guard>} />
         <Route path="outlook" element={<Guard permission="outlook.view"><OutlookPage /></Guard>} />
         <Route path="meetings" element={<Guard permission="meetings.view"><MeetingsPage /></Guard>} />
+        <Route path="crm" element={<Guard permission="crm.view"><ClientsPage /></Guard>} />
+        <Route path="crm/:id" element={<Guard permission="crm.view"><ClientPage /></Guard>} />
+        <Route path="accounting/invoices" element={<Guard permission="accounting.view"><AccountingPage kind="invoices" /></Guard>} />
+        <Route path="accounting/quotes" element={<Guard permission="accounting.view"><AccountingPage kind="quotes" /></Guard>} />
         <Route path="*" element={<Navigate to="/" replace />} />
       </Route>
     </Routes>

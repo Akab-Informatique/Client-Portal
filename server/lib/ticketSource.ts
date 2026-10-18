@@ -1,6 +1,7 @@
 import { and, asc, eq, isNotNull, sql } from "drizzle-orm";
 import { db, schema } from "../db/index.ts";
 import type { AuthContext } from "./auth.ts";
+import { localCompanies, localContacts, localContracts } from "./crm.ts";
 import { autotask, AutotaskError, listResources, loadSettings, type Client } from "./autotask.ts";
 import {
   addDemoAttachment,
@@ -57,6 +58,14 @@ export type Note = {
 export type Company = { id: number; name: string };
 export type Contact = { id: string; companyId: number; name: string; email: string | null; phone: string | null };
 export type { Asset, Contract };
+/** What the CRM copies from the source: every active client, contact and contract */
+export type CrmExport = {
+  companies: { id: number; name: string; phone: string | null; address: string | null; city: string | null; province: string | null; postalCode: string | null; website: string | null; parentId: number | null }[];
+  contacts: { id: string; companyId: number; firstName: string; lastName: string; email: string | null; phone: string | null; mobile: string | null; title: string | null }[];
+  contracts: { id: string; companyId: number; name: string; type: string | null; isDefault: boolean; startDate: string | null; endDate: string | null }[];
+};
+export type CompanyPatch = Partial<{ name: string; phone: string | null; address: string | null; city: string | null; province: string | null; postalCode: string | null; website: string | null; parentId: number | null }>;
+export type ContactPatch = Partial<{ firstName: string; lastName: string; email: string | null; phone: string | null; mobile: string | null; title: string | null; active: boolean }>;
 /** A file attached to a ticket (base64 data) */
 export type NewAttachment = { name: string; contentType: string; data: string };
 /** Autotask accepts attachments up to a few megabytes; the portal stops at 5 MB a file. */
@@ -174,7 +183,11 @@ export interface TicketSource {
   create(p: NewTicket, a: AuthContext): Promise<number>;
   companies(): Promise<Company[]>;
   contacts(companyId: number): Promise<Contact[]>;
-  addContact(companyId: number, p: { firstName: string; lastName: string; email: string | null; phone: string | null }, a: AuthContext): Promise<Contact>;
+  addContact(companyId: number, p: { firstName: string; lastName: string; email: string | null; phone: string | null; mobile?: string | null; title?: string | null }, a: AuthContext): Promise<Contact>;
+  /** Every active client, contact and contract (the CRM's copy) */
+  crmExport(): Promise<CrmExport>;
+  updateCompany(id: number, p: CompanyPatch, a: AuthContext): Promise<void>;
+  updateContact(id: string, p: ContactPatch, a: AuthContext): Promise<void>;
   /** A new client (Autotask company of type client) */
   addCompany(p: { name: string; phone: string }, a: AuthContext): Promise<Company>;
   /** The client's active contracts */
@@ -371,6 +384,23 @@ const demoSource: TicketSource = {
   async addCompany(p) {
     return addDemoCompany(p.name);
   },
+  async crmExport() {
+    const companies = demoCompanies();
+    const towns = ["Joliette", "Repentigny", "Terrebonne", "Saint-Lin–Laurentides", "Mascouche", "Rawdon"];
+    return {
+      companies: companies.map((c, i) => ({ id: c.id, name: c.name, phone: `450-555-${String(2000 + i * 7)}`, address: `${100 + i * 15}, rue Principale`, city: towns[i % towns.length], province: "QC", postalCode: null, website: null, parentId: null })),
+      contacts: companies.flatMap((c) =>
+        demoContacts(c.id).map((x) => {
+          const [firstName, ...rest] = x.name.split(" ");
+          return { id: x.id, companyId: c.id, firstName, lastName: rest.join(" "), email: x.email, phone: x.phone, mobile: null, title: null };
+        }),
+      ),
+      contracts: companies.flatMap((c) => demoContracts(c.id).map((k) => ({ id: k.id, companyId: c.id, name: k.name, type: k.name.startsWith("Banque") ? "Blocs d'heures" : k.name.startsWith("Projet") ? "Prix fixe" : "Récurrent", isDefault: k.isDefault, startDate: null, endDate: k.endDate }))),
+    };
+  },
+  // sample data: the portal's copy is the record
+  async updateCompany() {},
+  async updateContact() {},
   async contracts(companyId) {
     return demoContracts(companyId);
   },
@@ -1127,6 +1157,8 @@ const autotaskSource: TicketSource = {
   },
 
   async companies() {
+    const local = await localCompanies();
+    if (local?.length) return local;
     const at = await autotask();
     return cached("companies", 60 * 60_000, async () =>
       (await at.query<{ id: number; companyName: string }>("Companies", [{ op: "eq", field: "isActive", value: true }], { fields: ["id", "companyName"], max: 10_000 }))
@@ -1137,6 +1169,8 @@ const autotaskSource: TicketSource = {
   },
 
   async contacts(companyId) {
+    const local = await localContacts(companyId);
+    if (local) return local;
     const at = await autotask();
     return cached(`contacts:${companyId}`, 5 * 60_000, async () =>
       (
@@ -1524,6 +1558,72 @@ const autotaskSource: TicketSource = {
     forget(`detail:${ticketId}:`);
   },
 
+  async crmExport() {
+    const at = await autotask();
+    type AtCompany = { id: number; companyName: string; phone?: string | null; address1?: string | null; address2?: string | null; city?: string | null; state?: string | null; postalCode?: string | null; webAddress?: string | null; parentCompanyID?: number | null };
+    type AtContact = { id: number; companyID: number; firstName?: string; lastName?: string; emailAddress?: string | null; phone?: string | null; mobilePhone?: string | null; title?: string | null };
+    type AtContract = { id: number; companyID: number; contractName?: string; contractType?: number | null; isDefaultContract?: boolean; startDate?: string | null; endDate?: string | null };
+    const [cf, pf, kf, kinfo] = await Promise.all([
+      safeFields(at, "Companies", ["id", "companyName", "phone", "address1", "address2", "city", "state", "postalCode", "webAddress", "parentCompanyID"]),
+      safeFields(at, "Contacts", ["id", "companyID", "firstName", "lastName", "emailAddress", "phone", "mobilePhone", "title"]),
+      safeFields(at, "Contracts", ["id", "companyID", "contractName", "contractType", "isDefaultContract", "startDate", "endDate"]),
+      fieldsOf(at, "Contracts").catch(() => [] as FieldInfo[]),
+    ]);
+    const [companies, contacts, contracts] = await Promise.all([
+      at.query<AtCompany>("Companies", [{ op: "eq", field: "isActive", value: true }], { fields: cf, max: 20_000 }),
+      at.query<AtContact>("Contacts", [{ op: "eq", field: "isActive", value: 1 }], { fields: pf, max: 100_000 }),
+      at.query<AtContract>("Contracts", [{ op: "eq", field: "status", value: 1 }], { fields: kf, max: 20_000 }),
+    ]);
+    const types = new Map(picklist(kinfo, "contractType").map((v) => [String(v.value), v.label]));
+    const day = (s?: string | null) => (s ? s.slice(0, 10) : null);
+    return {
+      companies: companies.map((c) => ({
+        id: c.id,
+        name: c.companyName,
+        phone: c.phone || null,
+        address: [c.address1, c.address2].filter(Boolean).join(", ") || null,
+        city: c.city || null,
+        province: c.state || null,
+        postalCode: c.postalCode || null,
+        website: c.webAddress || null,
+        parentId: c.parentCompanyID ?? null,
+      })),
+      contacts: contacts.map((c) => ({ id: String(c.id), companyId: c.companyID, firstName: c.firstName ?? "", lastName: c.lastName ?? "", email: c.emailAddress || null, phone: c.phone || null, mobile: c.mobilePhone || null, title: c.title || null })),
+      contracts: contracts.map((k) => ({ id: String(k.id), companyId: k.companyID, name: k.contractName || `#${k.id}`, type: k.contractType != null ? (types.get(String(k.contractType)) ?? null) : null, isDefault: Boolean(k.isDefaultContract), startDate: day(k.startDate), endDate: day(k.endDate) })),
+    };
+  },
+
+  async updateCompany(id, p, a) {
+    const at = await autotask();
+    const patch: Record<string, unknown> = { id };
+    if (p.name !== undefined) patch.companyName = p.name;
+    if (p.phone !== undefined) patch.phone = p.phone ?? "";
+    if (p.address !== undefined) patch.address1 = p.address ?? "";
+    if (p.city !== undefined) patch.city = p.city ?? "";
+    if (p.province !== undefined) patch.state = p.province ?? "";
+    if (p.postalCode !== undefined) patch.postalCode = p.postalCode ?? "";
+    if (p.website !== undefined) patch.webAddress = p.website ?? "";
+    if (p.parentId !== undefined) patch.parentCompanyID = p.parentId;
+    await at.call("PATCH", "Companies", patch, { impersonate: await actorResource(a) });
+    forget("companies");
+  },
+
+  async updateContact(id, p, a) {
+    const at = await autotask();
+    const [row] = await at.query<{ id: number; companyID: number }>("Contacts", [{ op: "eq", field: "id", value: Number(id) }], { fields: ["id", "companyID"], max: 1 });
+    if (!row) throw new SourceError("not_found");
+    const patch: Record<string, unknown> = { id: row.id };
+    if (p.firstName !== undefined) patch.firstName = p.firstName;
+    if (p.lastName !== undefined) patch.lastName = p.lastName;
+    if (p.email !== undefined) patch.emailAddress = p.email ?? "";
+    if (p.phone !== undefined) patch.phone = p.phone ?? "";
+    if (p.mobile !== undefined) patch.mobilePhone = p.mobile ?? "";
+    if (p.title !== undefined) patch.title = p.title ?? "";
+    if (p.active !== undefined) patch.isActive = p.active ? 1 : 0;
+    await at.call("PATCH", `Companies/${row.companyID}/Contacts`, patch, { impersonate: await actorResource(a) });
+    forget(`contacts:${row.companyID}`);
+  },
+
   async addCompany(p, a) {
     const at = await autotask();
     const actor = await actorResource(a);
@@ -1541,6 +1641,8 @@ const autotaskSource: TicketSource = {
   },
 
   async contracts(companyId) {
+    const local = await localContracts(companyId);
+    if (local) return local;
     const at = await autotask();
     return cached(`contracts:${companyId}`, 10 * 60_000, async () => {
       type AtContract = { id: number; contractName?: string; isDefaultContract?: boolean; endDate?: string | null };
@@ -1577,7 +1679,7 @@ const autotaskSource: TicketSource = {
     const res = await at.call<{ itemId: number }>(
       "POST",
       `Companies/${companyId}/Contacts`,
-      { companyID: companyId, firstName: p.firstName, lastName: p.lastName, emailAddress: p.email || undefined, phone: p.phone || undefined, isActive: 1 },
+      { companyID: companyId, firstName: p.firstName, lastName: p.lastName, emailAddress: p.email || undefined, phone: p.phone || undefined, mobilePhone: p.mobile || undefined, title: p.title || undefined, isActive: 1 },
       { impersonate: actor },
     );
     forget(`contacts:${companyId}`);

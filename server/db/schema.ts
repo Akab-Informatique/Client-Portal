@@ -18,17 +18,103 @@ import {
 const created = () => timestamp("created_at", { withTimezone: true }).notNull().defaultNow();
 const updated = () => timestamp("updated_at", { withTimezone: true }).notNull().defaultNow();
 
-/** Client companies served by AKAB. */
-export const clients = pgTable("clients", {
-  id: uuid("id").primaryKey().defaultRandom(),
-  name: text("name").notNull(),
-  code: text("code"),
-  email: text("email"),
-  phone: text("phone"),
-  address: text("address"),
-  notes: text("notes"),
-  active: boolean("active").notNull().default(true),
-  createdAt: created(),
+/** Invoice settings of a client (portal only, used by Accounting). */
+export type ClientInvoiceSettings = {
+  billingEmail?: string;
+  /** Payment terms, in days (0: on receipt) */
+  termsDays?: number;
+  delivery?: "email" | "mail";
+  /** GST / QST charged (false: exempt) */
+  taxes?: boolean;
+  taxNumber?: string;
+  poRequired?: boolean;
+  hourlyRate?: number | null;
+  notes?: string;
+};
+
+/**
+ * Client companies served by AKAB â€” the CRM. The portal's own copy, kept in
+ * step with Autotask (autotask_id) while it is linked; the portal keeps
+ * everything when it is unlinked. A client can belong to a parent company.
+ */
+export const clients = pgTable(
+  "clients",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    name: text("name").notNull(),
+    code: text("code"),
+    email: text("email"),
+    phone: text("phone"),
+    address: text("address"),
+    city: text("city"),
+    province: text("province"),
+    postalCode: text("postal_code"),
+    website: text("website"),
+    notes: text("notes"),
+    active: boolean("active").notNull().default(true),
+    /** Autotask company id (null: only in the portal) */
+    autotaskId: integer("autotask_id"),
+    parentId: uuid("parent_id").references((): AnyPgColumn => clients.id, { onDelete: "set null" }),
+    invoice: jsonb("invoice").$type<ClientInvoiceSettings>().notNull().default({}),
+    syncedAt: timestamp("synced_at", { withTimezone: true }),
+    createdAt: created(),
+    updatedAt: updated(),
+  },
+  (t) => [uniqueIndex("clients_autotask_idx").on(t.autotaskId), index("clients_parent_idx").on(t.parentId)],
+);
+
+/** People at a client (Autotask Contacts). */
+export const clientContacts = pgTable(
+  "client_contacts",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    clientId: uuid("client_id")
+      .notNull()
+      .references(() => clients.id, { onDelete: "cascade" }),
+    /** Autotask id, as text (like contact ids elsewhere in the portal) */
+    autotaskId: text("autotask_id"),
+    firstName: text("first_name").notNull().default(""),
+    lastName: text("last_name").notNull().default(""),
+    email: text("email"),
+    phone: text("phone"),
+    mobile: text("mobile"),
+    title: text("title"),
+    active: boolean("active").notNull().default(true),
+    syncedAt: timestamp("synced_at", { withTimezone: true }),
+    createdAt: created(),
+    updatedAt: updated(),
+  },
+  (t) => [uniqueIndex("client_contacts_autotask_idx").on(t.autotaskId), index("client_contacts_client_idx").on(t.clientId)],
+);
+
+/** A client's contracts (Autotask Contracts). */
+export const clientContracts = pgTable(
+  "client_contracts",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    clientId: uuid("client_id")
+      .notNull()
+      .references(() => clients.id, { onDelete: "cascade" }),
+    /** Autotask id, as text (like contact ids elsewhere in the portal) */
+    autotaskId: text("autotask_id"),
+    name: text("name").notNull(),
+    type: text("type"),
+    active: boolean("active").notNull().default(true),
+    isDefault: boolean("is_default").notNull().default(false),
+    /** YYYY-MM-DD */
+    startDate: text("start_date"),
+    endDate: text("end_date"),
+    syncedAt: timestamp("synced_at", { withTimezone: true }),
+    createdAt: created(),
+    updatedAt: updated(),
+  },
+  (t) => [uniqueIndex("client_contracts_autotask_idx").on(t.autotaskId), index("client_contracts_client_idx").on(t.clientId)],
+);
+
+/** Where a sync stands (e.g. "autotask.crm"): last run, result, counts. */
+export const syncState = pgTable("sync_state", {
+  key: text("key").primaryKey(),
+  data: jsonb("data").$type<Record<string, unknown>>().notNull(),
   updatedAt: updated(),
 });
 
@@ -188,8 +274,8 @@ export const messageReads = pgTable(
 
 /**
  * Extra dashboards (the personal one stays in user_preferences.dashboard).
- * visibility: private = owner only · team = every technician with
- * dashboard.view · admins = administrators only. Built-in ones have a slug.
+ * visibility: private = owner only Â· team = every technician with
+ * dashboard.view Â· admins = administrators only. Built-in ones have a slug.
  */
 export const dashboards = pgTable(
   "dashboards",
@@ -266,7 +352,7 @@ export const ticketTimers = pgTable(
   (t) => [uniqueIndex("ticket_timers_user_ticket_unique").on(t.userId, t.ticketId), index("ticket_timers_state_idx").on(t.state)],
 );
 
-/** AI results kept in the portal for a ticket (summary, next steps…), visible to the team. */
+/** AI results kept in the portal for a ticket (summary, next stepsâ€¦), visible to the team. */
 export const ticketAiNotes = pgTable(
   "ticket_ai_notes",
   {
@@ -408,7 +494,7 @@ export const autotaskTickets = pgTable(
   (t) => [index("autotask_tickets_activity_idx").on(t.lastActivity)],
 );
 
-// ── Store inventory (products sold by AKAB, kept in the portal) ──────────────────
+// â”€â”€ Store inventory (products sold by AKAB, kept in the portal) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 /** A product for sale. Money in cents. Optionally linked to an Autotask product. */
 export const storeProducts = pgTable(
   "store_products",
@@ -436,7 +522,7 @@ export const storeProducts = pgTable(
   (t) => [uniqueIndex("store_products_sku_unique").on(t.sku), index("store_products_name_idx").on(t.name)],
 );
 
-/** Where stock is kept (warehouse, a technician's truck…). */
+/** Where stock is kept (warehouse, a technician's truckâ€¦). */
 export const storeLocations = pgTable(
   "store_locations",
   {
@@ -554,7 +640,7 @@ export const autotaskAuthors = pgTable(
   (t) => [primaryKey({ columns: [t.entity, t.autotaskId] }), index("autotask_authors_ticket_idx").on(t.ticketId)],
 );
 
-// ── Planning: tickets pinned to a technician, time reserved on their calendar ──
+// â”€â”€ Planning: tickets pinned to a technician, time reserved on their calendar â”€â”€
 /** A priority: a ticket an admin gives a technician for a day or a week, with a direction. */
 export const ticketPins = pgTable(
   "ticket_pins",
@@ -616,7 +702,7 @@ export const calendarBlocks = pgTable(
   (t) => [index("calendar_blocks_tech_time_idx").on(t.technicianId, t.startsAt)],
 );
 
-// ── SMS (VoIP.ms): conversations with clients, seen by every technician ──
+// â”€â”€ SMS (VoIP.ms): conversations with clients, seen by every technician â”€â”€
 /** One conversation per client number (a new one after it is closed). */
 export const smsConversations = pgTable(
   "sms_conversations",
@@ -653,7 +739,7 @@ export const smsMessages = pgTable(
       .references(() => smsConversations.id, { onDelete: "cascade" }),
     direction: text("direction", { enum: ["in", "out"] }).notNull(),
     body: text("body").notNull(),
-    /** VoIP.ms message id (received) — a callback sent twice is kept once */
+    /** VoIP.ms message id (received) â€” a callback sent twice is kept once */
     providerId: text("provider_id"),
     /** Sent by a technician (null: the client, or an automatic message) */
     userId: uuid("user_id").references(() => users.id, { onDelete: "set null" }),
@@ -728,7 +814,7 @@ export const meetingProjectMembers = pgTable(
   (t) => [primaryKey({ columns: [t.projectId, t.userId] })],
 );
 
-/** Points to discuss with the team at the weekly meeting (pay due Tuesday, someone away…). */
+/** Points to discuss with the team at the weekly meeting (pay due Tuesday, someone awayâ€¦). */
 export const meetingPoints = pgTable("meeting_points", {
   id: uuid("id").primaryKey().defaultRandom(),
   text: text("text").notNull(),
@@ -738,7 +824,7 @@ export const meetingPoints = pgTable("meeting_points", {
   createdAt: created(),
 });
 
-/** Team absences (vacation, sick day…), shown on the weekly meeting calendar. */
+/** Team absences (vacation, sick dayâ€¦), shown on the weekly meeting calendar. */
 export const meetingAbsences = pgTable(
   "meeting_absences",
   {

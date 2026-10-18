@@ -1,0 +1,697 @@
+import { useEffect, useState, type FormEvent, type ReactNode } from "react";
+import { useTranslation } from "react-i18next";
+import { Link, useParams, useSearchParams } from "react-router-dom";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { toast } from "sonner";
+import {
+  ArrowLeft,
+  Building2,
+  Check,
+  ChevronDown,
+  CornerDownRight,
+  FileText,
+  Loader2,
+  Mail,
+  Network,
+  Pencil,
+  Phone,
+  Plus,
+  Receipt,
+  Search,
+  Smartphone,
+  Ticket,
+  UserRound,
+  UsersRound,
+  X,
+} from "lucide-react";
+import { GlassBackdrop } from "@/components/brand/GlassBackdrop";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Switch } from "@/components/ui/switch";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { Textarea } from "@/components/ui/textarea";
+import { api } from "@/lib/api";
+import { useCan } from "@/lib/session";
+import { cn } from "@/lib/utils";
+import { PRIORITY_STYLE, STATUS_STYLE, shortDate, ticketErrorText } from "@/pages/tickets/shared";
+import { crmErrorText, useCrmClients, type CrmClient, type CrmContact, type CrmContract, type CrmDetail, type CrmTicket, type InvoiceSettings } from "./shared";
+
+const TABS = ["info", "tickets", "contacts", "contracts", "invoice"] as const;
+type Tab = (typeof TABS)[number];
+
+/** One client: info (with its group of companies), tickets, contacts, contracts, invoicing. */
+export function ClientPage() {
+  const { t } = useTranslation();
+  const { id = "" } = useParams();
+  const [params, setParams] = useSearchParams();
+  const tab = (TABS as readonly string[]).includes(params.get("tab") ?? "") ? (params.get("tab") as Tab) : "info";
+  const { data: client, isLoading, isError } = useQuery({ queryKey: ["crm", "client", id], queryFn: () => api.get<CrmDetail>(`/crm/clients/${id}`) });
+
+  if (isLoading) return <Loader2 className="mx-auto mt-16 size-6 animate-spin text-muted-foreground" />;
+  if (isError || !client)
+    return (
+      <div className="space-y-4">
+        <BackLink />
+        <p className="text-sm text-muted-foreground">{t("crm.notFound")}</p>
+      </div>
+    );
+
+  return (
+    <div className="relative isolate space-y-5">
+      <GlassBackdrop className="-inset-x-8 -top-6" />
+      <BackLink />
+      <div className="flex flex-wrap items-start gap-4">
+        <span className="grid size-12 shrink-0 place-items-center rounded-2xl border border-[color:var(--gold)]/30 bg-[color:var(--gold)]/10">
+          <Building2 className="size-6 text-primary" />
+        </span>
+        <div className="min-w-0 flex-1">
+          <h1 className="truncate text-2xl font-bold">{client.name}</h1>
+          <div className="mt-1 flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
+            {client.autotaskId != null ? (
+              <span className="rounded-md border px-1.5 py-0.5 font-mono">{t("crm.inAutotask", { id: client.autotaskId })}</span>
+            ) : (
+              <span className="rounded-md border border-dashed px-1.5 py-0.5" title={t("crm.portalOnlyHint")}>
+                {t("crm.portalOnly")}
+              </span>
+            )}
+            {!client.active && <span className="rounded-md border border-red-500/40 bg-red-500/10 px-1.5 py-0.5 text-red-300">{t("crm.inactiveTag")}</span>}
+            {client.parent && (
+              <Link to={`/crm/${client.parent.id}`} className="flex items-center gap-1 hover:text-primary">
+                <CornerDownRight className="size-3" /> {t("crm.childOf", { name: client.parent.name })}
+              </Link>
+            )}
+            {client.children.length > 0 && (
+              <span className="flex items-center gap-1 text-primary">
+                <Network className="size-3" /> {t("crm.children", { count: client.children.length })}
+              </span>
+            )}
+            {client.phone && (
+              <a href={`tel:${client.phone}`} className="flex items-center gap-1 hover:text-foreground">
+                <Phone className="size-3" /> {client.phone}
+              </a>
+            )}
+          </div>
+        </div>
+      </div>
+
+      <Tabs
+        value={tab}
+        onValueChange={(v) => {
+          const next = new URLSearchParams(params);
+          if (v === "info") next.delete("tab");
+          else next.set("tab", v);
+          setParams(next, { replace: true });
+        }}
+      >
+        <TabsList className="h-auto flex-wrap justify-start">
+          <TabsTrigger value="info">
+            <Building2 className="size-4" /> {t("crm.tabs.info")}
+          </TabsTrigger>
+          <TabsTrigger value="tickets">
+            <Ticket className="size-4" /> {t("crm.tabs.tickets")}
+          </TabsTrigger>
+          <TabsTrigger value="contacts">
+            <UsersRound className="size-4" /> {t("crm.tabs.contacts")}
+          </TabsTrigger>
+          <TabsTrigger value="contracts">
+            <FileText className="size-4" /> {t("crm.tabs.contracts")}
+          </TabsTrigger>
+          <TabsTrigger value="invoice">
+            <Receipt className="size-4" /> {t("crm.tabs.invoice")}
+          </TabsTrigger>
+        </TabsList>
+        <TabsContent value="info" className="mt-4">
+          <InfoTab client={client} />
+        </TabsContent>
+        <TabsContent value="tickets" className="mt-4">
+          <TicketsTab client={client} />
+        </TabsContent>
+        <TabsContent value="contacts" className="mt-4">
+          <ContactsTab client={client} />
+        </TabsContent>
+        <TabsContent value="contracts" className="mt-4">
+          <ContractsTab client={client} />
+        </TabsContent>
+        <TabsContent value="invoice" className="mt-4">
+          <InvoiceTab client={client} />
+        </TabsContent>
+      </Tabs>
+    </div>
+  );
+}
+
+function BackLink() {
+  const { t } = useTranslation();
+  return (
+    <Link to="/crm" className="inline-flex items-center gap-1.5 text-sm text-muted-foreground hover:text-foreground">
+      <ArrowLeft className="size-4" /> {t("crm.back")}
+    </Link>
+  );
+}
+
+function Card({ title, icon, children, aside }: { title: string; icon: ReactNode; children: ReactNode; aside?: ReactNode }) {
+  return (
+    <section className="glass space-y-4 rounded-2xl border p-4">
+      <div className="flex items-center gap-2">
+        <span className="text-primary">{icon}</span>
+        <h2 className="text-sm font-semibold">{title}</h2>
+        <div className="ml-auto">{aside}</div>
+      </div>
+      {children}
+    </section>
+  );
+}
+
+function Field({ label, children, className }: { label: string; children: ReactNode; className?: string }) {
+  return (
+    <div className={cn("space-y-1.5", className)}>
+      <Label className="text-xs text-muted-foreground">{label}</Label>
+      {children}
+    </div>
+  );
+}
+
+const useSaved = (clientId: string) => {
+  const qc = useQueryClient();
+  return () => {
+    void qc.invalidateQueries({ queryKey: ["crm", "client", clientId] });
+    void qc.invalidateQueries({ queryKey: ["crm", "clients"] });
+  };
+};
+
+// ── Info ──
+function InfoTab({ client }: { client: CrmDetail }) {
+  const { t } = useTranslation();
+  const can = useCan();
+  const editable = can("crm.edit");
+  const saved = useSaved(client.id);
+  const pick = (c: CrmClient) => ({
+    name: c.name,
+    phone: c.phone ?? "",
+    email: c.email ?? "",
+    website: c.website ?? "",
+    address: c.address ?? "",
+    city: c.city ?? "",
+    province: c.province ?? "",
+    postalCode: c.postalCode ?? "",
+    code: c.code ?? "",
+    notes: c.notes ?? "",
+  });
+  const [f, setF] = useState(() => pick(client));
+  useEffect(() => setF(pick(client)), [client]);
+  const dirty = JSON.stringify(f) !== JSON.stringify(pick(client));
+  const save = useMutation({
+    mutationFn: (p: Record<string, unknown>) => api.patch<CrmClient>(`/crm/clients/${client.id}`, p),
+    onSuccess: () => {
+      saved();
+      toast.success(t("crm.info.saved"));
+    },
+    onError: (e) => toast.error(crmErrorText(t, e) ?? ticketErrorText(t, e)),
+  });
+  const input = (k: keyof typeof f, type = "text") => <Input type={type} value={f[k]} disabled={!editable} onChange={(e) => setF({ ...f, [k]: e.target.value })} className="h-9" />;
+
+  return (
+    <div className="grid gap-4 lg:grid-cols-[minmax(0,1.6fr)_minmax(0,1fr)]">
+      <Card title={t("crm.info.details")} icon={<Building2 className="size-4" />}>
+        <form
+          className="space-y-4"
+          onSubmit={(e: FormEvent) => {
+            e.preventDefault();
+            save.mutate(f);
+          }}
+        >
+          <div className="grid gap-3 sm:grid-cols-2">
+            <Field label={t("crm.name")} className="sm:col-span-2">
+              <Input required minLength={2} value={f.name} disabled={!editable} onChange={(e) => setF({ ...f, name: e.target.value })} className="h-9" />
+            </Field>
+            <Field label={t("crm.phone")}>{input("phone", "tel")}</Field>
+            <Field label={t("crm.info.email")}>{input("email", "email")}</Field>
+            <Field label={t("crm.info.address")} className="sm:col-span-2">
+              {input("address")}
+            </Field>
+            <Field label={t("crm.info.city")}>{input("city")}</Field>
+            <div className="grid grid-cols-2 gap-3">
+              <Field label={t("crm.info.province")}>{input("province")}</Field>
+              <Field label={t("crm.info.postalCode")}>{input("postalCode")}</Field>
+            </div>
+            <Field label={t("crm.info.website")}>{input("website")}</Field>
+            <Field label={t("crm.info.code")}>{input("code")}</Field>
+            <Field label={t("crm.info.notes")} className="sm:col-span-2">
+              <Textarea rows={3} value={f.notes} disabled={!editable} onChange={(e) => setF({ ...f, notes: e.target.value })} />
+              <p className="text-[11px] text-muted-foreground">{t("crm.info.notesHint")}</p>
+            </Field>
+          </div>
+          <div className="flex flex-wrap items-center gap-3">
+            <p className="flex-1 text-[11px] text-muted-foreground">{editable ? (client.autotaskId != null ? t("crm.info.synced") : "") : t("crm.info.readOnly")}</p>
+            {editable && (
+              <Button type="submit" disabled={!dirty || save.isPending} className="bg-grad-gold font-semibold text-[#1a1204] hover:brightness-105">
+                {save.isPending && <Loader2 className="size-4 animate-spin" />} {t("crm.info.save")}
+              </Button>
+            )}
+          </div>
+        </form>
+      </Card>
+
+      <Card title={t("crm.info.group")} icon={<Network className="size-4" />}>
+        <Field label={t("crm.info.parent")}>
+          <ParentPicker client={client} disabled={!editable || save.isPending} onChange={(parentId) => save.mutate({ parentId })} />
+        </Field>
+        <div className="space-y-1.5">
+          <Label className="text-xs text-muted-foreground">{t("crm.info.children")}</Label>
+          {client.children.length === 0 ? (
+            <p className="text-xs text-muted-foreground">{t("crm.info.noChildren")}</p>
+          ) : (
+            <ul className="space-y-1">
+              {client.children.map((c) => (
+                <li key={c.id}>
+                  <Link to={`/crm/${c.id}`} className={cn("flex items-center gap-2 rounded-lg border px-2.5 py-1.5 text-sm hover:border-[color:var(--gold)]/40 hover:bg-accent/40", !c.active && "opacity-60")}>
+                    <CornerDownRight className="size-3.5 text-muted-foreground" /> {c.name}
+                  </Link>
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
+      </Card>
+    </div>
+  );
+}
+
+/** The parent company: any other client, not one of its own subsidiaries. */
+function ParentPicker({ client, disabled, onChange }: { client: CrmDetail; disabled: boolean; onChange: (id: string | null) => void }) {
+  const { t } = useTranslation();
+  const { data: all = [] } = useCrmClients();
+  const [open, setOpen] = useState(false);
+  const [q, setQ] = useState("");
+  // its own subsidiaries (any depth) cannot become its parent
+  const below = new Set<string>();
+  const walk = (id: string) => all.filter((c) => c.parentId === id && !below.has(c.id)).forEach((c) => (below.add(c.id), walk(c.id)));
+  walk(client.id);
+  const shown = all.filter((c) => c.id !== client.id && !below.has(c.id) && c.active && c.name.toLowerCase().includes(q.toLowerCase())).slice(0, 200);
+  return (
+    <Popover
+      modal
+      open={open}
+      onOpenChange={(o) => {
+        setOpen(o);
+        if (!o) setQ("");
+      }}
+    >
+      <PopoverTrigger asChild disabled={disabled}>
+        <button type="button" className="flex h-9 w-full items-center gap-2 rounded-md border bg-transparent px-3 text-left text-sm outline-none ring-[color:var(--gold)]/40 hover:ring-2 disabled:opacity-60 disabled:hover:ring-0 dark:bg-input/30">
+          <span className={cn("min-w-0 flex-1 truncate", !client.parent && "text-muted-foreground")}>{client.parent?.name ?? t("crm.info.noParent")}</span>
+          <ChevronDown className="size-3.5 text-muted-foreground" />
+        </button>
+      </PopoverTrigger>
+      <PopoverContent align="start" className="w-80 p-1.5">
+        <div className="relative mb-1">
+          <Search className="pointer-events-none absolute left-2.5 top-1/2 size-3.5 -translate-y-1/2 text-muted-foreground" />
+          <Input autoFocus value={q} onChange={(e) => setQ(e.target.value)} placeholder={t("crm.info.pickParent")} className="h-8 pl-8" />
+        </div>
+        <div className="max-h-64 overflow-y-auto">
+          {client.parent && (
+            <button
+              type="button"
+              onClick={() => {
+                onChange(null);
+                setOpen(false);
+              }}
+              className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-sm text-muted-foreground hover:bg-accent"
+            >
+              <X className="size-4" /> {t("crm.info.noParent")}
+            </button>
+          )}
+          {shown.map((c) => (
+            <button
+              key={c.id}
+              type="button"
+              onClick={() => {
+                onChange(c.id);
+                setOpen(false);
+              }}
+              className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-sm hover:bg-accent"
+            >
+              <Building2 className="size-4 text-muted-foreground" />
+              <span className="flex-1 truncate">{c.name}</span>
+              {client.parentId === c.id && <Check className="size-4 text-primary" />}
+            </button>
+          ))}
+        </div>
+      </PopoverContent>
+    </Popover>
+  );
+}
+
+// ── Tickets ──
+function TicketsTab({ client }: { client: CrmDetail }) {
+  const { t } = useTranslation();
+  const can = useCan();
+  const [withChildren, setWithChildren] = useState(false);
+  const { data, isLoading } = useQuery({
+    queryKey: ["crm", "client", client.id, "tickets", withChildren],
+    queryFn: () => api.get<{ open: number; closed: number; items: CrmTicket[] }>(`/crm/clients/${client.id}/tickets${withChildren ? "?children=1" : ""}`),
+    enabled: can("tickets.view"),
+    refetchInterval: 60_000,
+  });
+  return (
+    <Card
+      title={data ? `${t("crm.tickets.open", { count: data.open })}` : t("crm.tabs.tickets")}
+      icon={<Ticket className="size-4" />}
+      aside={
+        client.children.length > 0 && (
+          <label className="flex items-center gap-2 text-xs text-muted-foreground">
+            <Switch checked={withChildren} onCheckedChange={setWithChildren} /> {t("crm.tickets.withChildren")}
+          </label>
+        )
+      }
+    >
+      {isLoading && <Loader2 className="mx-auto size-5 animate-spin text-muted-foreground" />}
+      {data && data.items.length === 0 && <p className="py-6 text-center text-sm text-muted-foreground">{t("crm.tickets.none")}</p>}
+      {data && data.items.length > 0 && (
+        <ul className="divide-y divide-border/60 overflow-hidden rounded-xl border">
+          {data.items.map((x) => (
+            <li key={x.id}>
+              <Link to={`/tickets?ticket=${x.id}`} className={cn("flex flex-wrap items-center gap-x-3 gap-y-1 px-3 py-2 hover:bg-accent/40", x.statusKind === "complete" && "opacity-60")}>
+                <span className={cn("size-2 shrink-0 rounded-full", PRIORITY_STYLE[x.priorityKind].dot)} title={x.priorityLabel ?? undefined} />
+                <span className="shrink-0 font-mono text-xs text-muted-foreground">{x.number}</span>
+                <span className="min-w-0 flex-1 truncate text-sm">{x.title}</span>
+                {withChildren && x.company !== client.name && <span className="truncate text-xs text-muted-foreground">{x.company}</span>}
+                <span className={cn("shrink-0 rounded-md border px-1.5 py-0.5 text-[11px]", STATUS_STYLE[x.statusKind])}>{x.statusLabel ?? t(`tickets.status.${x.statusKind}`)}</span>
+                <span className="w-28 shrink-0 truncate text-xs text-muted-foreground">{x.assignee ?? t("crm.tickets.unassigned")}</span>
+                <span className="w-16 shrink-0 text-right text-xs text-muted-foreground">{shortDate(x.dueAt)}</span>
+              </Link>
+            </li>
+          ))}
+        </ul>
+      )}
+      {data && data.closed > 0 && <p className="text-[11px] text-muted-foreground">{t("crm.tickets.closed", { count: data.closed })}</p>}
+    </Card>
+  );
+}
+
+// ── Contacts ──
+const emptyContact = { firstName: "", lastName: "", email: "", phone: "", mobile: "", title: "" };
+
+function ContactsTab({ client }: { client: CrmDetail }) {
+  const { t } = useTranslation();
+  const can = useCan();
+  const qc = useQueryClient();
+  const editable = can("crm.edit");
+  const key = ["crm", "client", client.id, "contacts"];
+  const { data: contacts = [], isLoading } = useQuery({ queryKey: key, queryFn: () => api.get<CrmContact[]>(`/crm/clients/${client.id}/contacts`) });
+  const [adding, setAdding] = useState(false);
+  const [editing, setEditing] = useState<string | null>(null);
+  const [showInactive, setShowInactive] = useState(false);
+  const refresh = () => {
+    void qc.invalidateQueries({ queryKey: key });
+    void qc.invalidateQueries({ queryKey: ["crm", "clients"] });
+    void qc.invalidateQueries({ queryKey: ["tickets", "contacts"] });
+  };
+  const inactive = contacts.filter((c) => !c.active);
+  const shown = contacts.filter((c) => c.active || showInactive);
+  const toggle = useMutation({
+    mutationFn: (c: CrmContact) => api.patch(`/crm/clients/${client.id}/contacts/${c.id}`, { active: !c.active }),
+    onSuccess: () => {
+      refresh();
+      toast.success(t("crm.contacts.saved"));
+    },
+    onError: (e) => toast.error(ticketErrorText(t, e)),
+  });
+
+  return (
+    <Card
+      title={t("crm.tabs.contacts")}
+      icon={<UsersRound className="size-4" />}
+      aside={
+        editable &&
+        !adding && (
+          <Button size="sm" variant="outline" onClick={() => setAdding(true)}>
+            <Plus className="size-3.5" /> {t("crm.contacts.new")}
+          </Button>
+        )
+      }
+    >
+      {adding && (
+        <ContactForm
+          clientId={client.id}
+          onDone={() => {
+            setAdding(false);
+            refresh();
+          }}
+        />
+      )}
+      {isLoading && <Loader2 className="mx-auto size-5 animate-spin text-muted-foreground" />}
+      {!isLoading && shown.length === 0 && !adding && <p className="py-6 text-center text-sm text-muted-foreground">{t("crm.contacts.none")}</p>}
+      <ul className="grid gap-2 md:grid-cols-2 xl:grid-cols-3">
+        {shown.map((c) =>
+          editing === c.id ? (
+            <li key={c.id} className="md:col-span-2 xl:col-span-3">
+              <ContactForm
+                clientId={client.id}
+                contact={c}
+                onDone={() => {
+                  setEditing(null);
+                  refresh();
+                }}
+              />
+            </li>
+          ) : (
+            <li key={c.id} className={cn("group rounded-xl border bg-background/30 p-3", !c.active && "opacity-60")}>
+              <div className="flex items-start gap-2.5">
+                <span className="grid size-8 shrink-0 place-items-center rounded-full border bg-card">
+                  <UserRound className="size-4 text-muted-foreground" />
+                </span>
+                <div className="min-w-0 flex-1">
+                  <p className="truncate text-sm font-medium">
+                    {c.firstName} {c.lastName}
+                    {!c.active && <span className="ml-2 text-[10px] font-normal text-muted-foreground">{t("crm.contacts.inactive")}</span>}
+                  </p>
+                  {c.title && <p className="truncate text-xs text-muted-foreground">{c.title}</p>}
+                  <div className="mt-1.5 space-y-0.5 text-xs text-muted-foreground">
+                    {c.email && (
+                      <a href={`mailto:${c.email}`} className="flex items-center gap-1.5 truncate hover:text-foreground">
+                        <Mail className="size-3 shrink-0" /> {c.email}
+                      </a>
+                    )}
+                    {c.phone && (
+                      <a href={`tel:${c.phone}`} className="flex items-center gap-1.5 hover:text-foreground">
+                        <Phone className="size-3 shrink-0" /> {c.phone}
+                      </a>
+                    )}
+                    {c.mobile && (
+                      <a href={`tel:${c.mobile}`} className="flex items-center gap-1.5 hover:text-foreground">
+                        <Smartphone className="size-3 shrink-0" /> {c.mobile}
+                      </a>
+                    )}
+                  </div>
+                </div>
+                {editable && (
+                  <div className="flex shrink-0 flex-col items-end gap-1 opacity-0 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100">
+                    <button type="button" onClick={() => setEditing(c.id)} className="rounded p-1 text-muted-foreground hover:bg-accent hover:text-foreground" aria-label={t("crm.contacts.edit")} title={t("crm.contacts.edit")}>
+                      <Pencil className="size-3.5" />
+                    </button>
+                    <button type="button" onClick={() => toggle.mutate(c)} className="rounded px-1 text-[10px] text-muted-foreground hover:bg-accent hover:text-foreground">
+                      {c.active ? t("crm.contacts.deactivate") : t("crm.contacts.reactivate")}
+                    </button>
+                  </div>
+                )}
+              </div>
+            </li>
+          ),
+        )}
+      </ul>
+      {inactive.length > 0 && !showInactive && (
+        <button type="button" onClick={() => setShowInactive(true)} className="text-xs text-muted-foreground hover:text-foreground">
+          {t("crm.contacts.showInactive", { count: inactive.length })}
+        </button>
+      )}
+    </Card>
+  );
+}
+
+function ContactForm({ clientId, contact, onDone }: { clientId: string; contact?: CrmContact; onDone: () => void }) {
+  const { t } = useTranslation();
+  const [f, setF] = useState(() =>
+    contact ? { firstName: contact.firstName, lastName: contact.lastName, email: contact.email ?? "", phone: contact.phone ?? "", mobile: contact.mobile ?? "", title: contact.title ?? "" } : emptyContact,
+  );
+  const save = useMutation({
+    mutationFn: () => (contact ? api.patch(`/crm/clients/${clientId}/contacts/${contact.id}`, f) : api.post(`/crm/clients/${clientId}/contacts`, f)),
+    onSuccess: () => {
+      toast.success(t(contact ? "crm.contacts.saved" : "crm.contacts.added"));
+      onDone();
+    },
+    onError: (e) => toast.error(ticketErrorText(t, e)),
+  });
+  const box = (k: keyof typeof f, label: string, type = "text", required = false) => (
+    <Field label={label}>
+      <Input type={type} required={required} value={f[k]} onChange={(e) => setF({ ...f, [k]: e.target.value })} className="h-8" />
+    </Field>
+  );
+  return (
+    <form
+      className="space-y-3 rounded-xl border border-[color:var(--gold)]/30 bg-[color:var(--gold)]/[0.04] p-3"
+      onSubmit={(e: FormEvent) => {
+        e.preventDefault();
+        save.mutate();
+      }}
+    >
+      <div className="grid gap-2 sm:grid-cols-3">
+        {box("firstName", t("crm.contacts.firstName"), "text", true)}
+        {box("lastName", t("crm.contacts.lastName"), "text", true)}
+        {box("title", t("crm.contacts.title"))}
+        {box("email", t("crm.contacts.email"), "email")}
+        {box("phone", t("crm.contacts.phone"), "tel")}
+        {box("mobile", t("crm.contacts.mobile"), "tel")}
+      </div>
+      <div className="flex justify-end gap-2">
+        <Button type="button" size="sm" variant="ghost" onClick={onDone}>
+          {t("common.cancel")}
+        </Button>
+        <Button type="submit" size="sm" disabled={save.isPending} className="bg-grad-gold font-semibold text-[#1a1204]">
+          {save.isPending && <Loader2 className="size-3.5 animate-spin" />} {contact ? t("crm.info.save") : t("crm.contacts.add")}
+        </Button>
+      </div>
+    </form>
+  );
+}
+
+// ── Contracts ──
+function ContractsTab({ client }: { client: CrmDetail }) {
+  const { t } = useTranslation();
+  const { data: contracts = [], isLoading } = useQuery({ queryKey: ["crm", "client", client.id, "contracts"], queryFn: () => api.get<CrmContract[]>(`/crm/clients/${client.id}/contracts`) });
+  return (
+    <Card title={t("crm.tabs.contracts")} icon={<FileText className="size-4" />}>
+      {isLoading && <Loader2 className="mx-auto size-5 animate-spin text-muted-foreground" />}
+      {!isLoading && contracts.length === 0 && <p className="py-6 text-center text-sm text-muted-foreground">{t("crm.contracts.none")}</p>}
+      {contracts.length > 0 && (
+        <ul className="divide-y divide-border/60 overflow-hidden rounded-xl border">
+          {contracts.map((k) => (
+            <li key={k.id} className={cn("flex flex-wrap items-center gap-x-4 gap-y-1 px-3 py-2.5", !k.active && "opacity-60")}>
+              <FileText className="size-4 shrink-0 text-muted-foreground" />
+              <span className="min-w-0 flex-1 truncate text-sm font-medium">{k.name}</span>
+              {k.isDefault && <span className="rounded-md border border-[color:var(--gold)]/40 bg-[color:var(--gold)]/10 px-1.5 py-0.5 text-[10px] font-semibold text-primary">{t("crm.contracts.default")}</span>}
+              {!k.active && <span className="text-[11px] text-muted-foreground">{t("crm.contracts.inactive")}</span>}
+              <span className="w-32 truncate text-xs text-muted-foreground">{k.type ?? "—"}</span>
+              <span className="w-44 text-xs text-muted-foreground">
+                {k.startDate ? shortDate(k.startDate) : "…"} → {k.endDate ? shortDate(k.endDate) : t("crm.contracts.noEnd")}
+              </span>
+            </li>
+          ))}
+        </ul>
+      )}
+      <p className="text-[11px] text-muted-foreground">{t("crm.contracts.fromAutotask")}</p>
+    </Card>
+  );
+}
+
+// ── Invoicing ──
+function InvoiceTab({ client }: { client: CrmDetail }) {
+  const { t } = useTranslation();
+  const saved = useSaved(client.id);
+  const pick = (s: InvoiceSettings | null) => ({
+    billingEmail: s?.billingEmail ?? "",
+    termsDays: s?.termsDays ?? 30,
+    delivery: s?.delivery ?? ("email" as const),
+    taxes: s?.taxes ?? true,
+    taxNumber: s?.taxNumber ?? "",
+    poRequired: s?.poRequired ?? false,
+    hourlyRate: s?.hourlyRate ?? null,
+    notes: s?.notes ?? "",
+  });
+  const [f, setF] = useState(() => pick(client.invoice));
+  useEffect(() => setF(pick(client.invoice)), [client.invoice]);
+  const save = useMutation({
+    mutationFn: () => api.put(`/crm/clients/${client.id}/invoice`, f),
+    onSuccess: () => {
+      saved();
+      toast.success(t("crm.invoice.saved"));
+    },
+    onError: (e) => toast.error(ticketErrorText(t, e)),
+  });
+  if (client.invoice === null)
+    return (
+      <Card title={t("crm.invoice.title")} icon={<Receipt className="size-4" />}>
+        <p className="text-sm text-muted-foreground">{t("crm.invoice.noRight")}</p>
+      </Card>
+    );
+  return (
+    <Card title={t("crm.invoice.title")} icon={<Receipt className="size-4" />}>
+      <p className="-mt-2 text-xs text-muted-foreground">{t("crm.invoice.text")}</p>
+      <form
+        className="space-y-4"
+        onSubmit={(e: FormEvent) => {
+          e.preventDefault();
+          save.mutate();
+        }}
+      >
+        <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+          <Field label={t("crm.invoice.billingEmail")}>
+            <div className="relative">
+              <Mail className="pointer-events-none absolute left-2.5 top-1/2 size-3.5 -translate-y-1/2 text-muted-foreground" />
+              <Input type="email" value={f.billingEmail} onChange={(e) => setF({ ...f, billingEmail: e.target.value })} placeholder={client.email ?? ""} className="h-9 pl-8" />
+            </div>
+          </Field>
+          <Field label={t("crm.invoice.terms")}>
+            <Select value={String(f.termsDays)} onValueChange={(v) => setF({ ...f, termsDays: Number(v) })}>
+              <SelectTrigger className="w-full">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {[0, 15, 30, 45, 60].map((d) => (
+                  <SelectItem key={d} value={String(d)}>
+                    {d === 0 ? t("crm.invoice.onReceipt") : t("crm.invoice.days", { days: d })}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </Field>
+          <Field label={t("crm.invoice.delivery")}>
+            <Select value={f.delivery} onValueChange={(v) => setF({ ...f, delivery: v as "email" | "mail" })}>
+              <SelectTrigger className="w-full">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="email">{t("crm.invoice.byEmail")}</SelectItem>
+                <SelectItem value="mail">{t("crm.invoice.byMail")}</SelectItem>
+              </SelectContent>
+            </Select>
+          </Field>
+          <Field label={t("crm.invoice.rate")}>
+            <Input
+              type="number"
+              min={0}
+              step="0.01"
+              value={f.hourlyRate ?? ""}
+              placeholder={t("crm.invoice.rateHint")}
+              onChange={(e) => setF({ ...f, hourlyRate: e.target.value === "" ? null : Number(e.target.value) })}
+              className="h-9"
+            />
+          </Field>
+          <Field label={t("crm.invoice.taxNumber")}>
+            <Input value={f.taxNumber} onChange={(e) => setF({ ...f, taxNumber: e.target.value })} className="h-9" />
+          </Field>
+          <div className="flex flex-col justify-end gap-2.5 pb-1">
+            <label className="flex items-center gap-2 text-sm">
+              <Switch checked={f.taxes} onCheckedChange={(v) => setF({ ...f, taxes: v })} /> {f.taxes ? t("crm.invoice.taxes") : t("crm.invoice.taxesOff")}
+            </label>
+            <label className="flex items-center gap-2 text-sm">
+              <Switch checked={f.poRequired} onCheckedChange={(v) => setF({ ...f, poRequired: v })} /> {t("crm.invoice.po")}
+            </label>
+          </div>
+          <Field label={t("crm.invoice.notes")} className="sm:col-span-2 lg:col-span-3">
+            <Textarea rows={3} value={f.notes} onChange={(e) => setF({ ...f, notes: e.target.value })} />
+          </Field>
+        </div>
+        <div className="flex justify-end">
+          <Button type="submit" disabled={save.isPending} className="bg-grad-gold font-semibold text-[#1a1204] hover:brightness-105">
+            {save.isPending && <Loader2 className="size-4 animate-spin" />} {t("crm.invoice.save")}
+          </Button>
+        </div>
+      </form>
+    </Card>
+  );
+}
+

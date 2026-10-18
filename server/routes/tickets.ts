@@ -14,6 +14,7 @@ import { MAX_TICKET_ATTACHMENT_BYTES, SourceError, ticketSource, type Asset, typ
 import { rmmLink, rmmSettings, type RmmSettings } from "../lib/rmm.ts";
 import { searchProducts, serialsOf, StoreError, takeForTicket, undoTake } from "../lib/store.ts";
 import { storeHttp } from "./store.ts";
+import { rememberCompany, rememberContact } from "../lib/crm.ts";
 
 /**
  * Tickets (staff). Data come from the ticket source: Autotask when the
@@ -493,6 +494,7 @@ export const ticketRoutes = new Hono<AppEnv>()
     const same = (await run(() => src.companies())).find((x) => x.name.trim().toLowerCase() === p.name.toLowerCase());
     if (same) throw new HTTPException(409, { message: "company_exists" });
     const company = await run(() => src.addCompany(p, a));
+    await rememberCompany({ ...company, phone: p.phone });
     await audit(a.user.id, "ticket.company_created", String(company.id), { name: company.name });
     return c.json(company, 201);
   })
@@ -518,6 +520,7 @@ export const ticketRoutes = new Hono<AppEnv>()
     );
     const src = await ticketSource();
     const contact = await run(() => src.addContact(companyId, { firstName: p.firstName, lastName: p.lastName, email: p.email || null, phone: p.phone || null }, a));
+    await rememberContact(companyId, { id: contact.id, firstName: p.firstName, lastName: p.lastName, email: contact.email, phone: contact.phone });
     await audit(a.user.id, "ticket.contact_created", contact.id, { companyId });
     return c.json(contact, 201);
   })

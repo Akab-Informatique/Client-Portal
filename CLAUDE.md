@@ -50,6 +50,13 @@ Administration tab `/meetings`, used live during the Monday team meeting (lists 
 - Outlook module: own mailbox only through the technician's sign-in (`mail_accounts.via = "user"`, linked automatically on sign-in); other mailboxes need `outlook.anyMailbox` (`via = "app"`).
 - Tickets planning calendars: `calendar_links` per technician, chosen by a master admin (`admin.o365`), each `details` or `busy` ("Occupé — name" to anyone but its owner; private events always masked); the one with `push` receives the portal's blocks and day priorities. No link: their own calendar, in detail.
 
+## CRM and the portal's own data (goal: replace Autotask)
+
+- The portal keeps its own copy of everything; Autotask is the reference only while it is linked. Clients (`clients`, + `autotask_id`, `parent_id`, `invoice` jsonb), `client_contacts`, `client_contracts` (Autotask ids as text), `sync_state`. Migration `0032`.
+- `server/lib/crm.ts`: `syncCrm()` at startup and every 15 min (full copy via `TicketSource.crmExport()`; never overwrites portal-only fields: notes, code, email, invoice). Writes from the portal go to Autotask first (`updateCompany` / `updateContact` / `addContact` / `addCompany`), then into the copy (`rememberCompany` / `rememberContact`). The Autotask ticket source reads clients, contacts and contracts from the copy once it exists.
+- API `/api/crm` (`server/routes/crm.ts`): rights `crm.view` (technicians), `crm.edit`, `crm.billing`; `/status` drives the top-bar `SyncBadge`. UI `src/pages/crm/` (list, client page with tabs Info / Tickets / Contacts / Contracts / Invoicing). Accounting (`accounting.view`): `src/pages/accounting/`, empty for now.
+- Still to bring local: tickets' notes, time entries, charges and attachments (tickets themselves are mirrored in `autotask_tickets`).
+
 ## Security rules
 
 - Authorization is enforced in the API, never only in the UI. Use `auth(c)` / `requirePermission`; never trust ids or roles sent by the browser.
