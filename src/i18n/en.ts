@@ -123,6 +123,8 @@ const en: Dict = {
     expenses: "Expenses",
     modules: "Modules",
     commandCenter: "Command center",
+    projectsSection: "Projects",
+    projects: "Projects",
     tools: "Tools",
     dashboard: "Dashboard",
     messages: "Message board",

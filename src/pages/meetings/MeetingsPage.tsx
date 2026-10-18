@@ -7,7 +7,6 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { api } from "@/lib/api";
 import { currentLocale } from "@/i18n";
 import { cn } from "@/lib/utils";
-import { AbsencesSection } from "./Absences";
 import { PointsSection } from "./Points";
 import { ProjectsSection } from "./Projects";
 import { WeekSection } from "./Week";
@@ -105,8 +104,6 @@ export function MeetingsPage() {
       </section>
 
       <ProjectsSection />
-
-      <AbsencesSection />
     </div>
   );
 }

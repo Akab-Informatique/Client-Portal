@@ -1,4 +1,4 @@
-import { BarChart3, BookOpen, ClipboardCheck, Building2, CalendarCheck, Clock, FileSignature, LayoutDashboard, Mail, Megaphone, MonitorSmartphone, Receipt, Store, Ticket, Wallet, type LucideIcon } from "lucide-react";
+import { BarChart3, BookOpen, FolderKanban, ClipboardCheck, Building2, CalendarCheck, Clock, FileSignature, LayoutDashboard, Mail, Megaphone, MonitorSmartphone, Receipt, Store, Ticket, Wallet, type LucideIcon } from "lucide-react";
 import type { PermissionKey } from "@shared/permissions";
 
 /**
@@ -11,6 +11,7 @@ export const NAV_SECTIONS = [
   { key: "team", labelKey: "nav.team" },
   { key: "tools", labelKey: "nav.myTools" },
   { key: "command", labelKey: "nav.commandCenter" },
+  { key: "projects", labelKey: "nav.projectsSection" },
   { key: "management", labelKey: "nav.management" },
   { key: "accounting", labelKey: "nav.accounting" },
 ] as const;
@@ -40,6 +41,7 @@ export const STAFF_MODULES: NavModule[] = [
   { key: "approvals", path: "/accounting/approvals", labelKey: "nav.approvals", icon: ClipboardCheck, section: "accounting", permission: "accounting.view" },
   { key: "quotes", path: "/accounting/quotes", labelKey: "nav.quotes", icon: FileSignature, section: "accounting", permission: "accounting.view" },
   { key: "store", path: "/store", labelKey: "nav.store", icon: Store, section: "management", permission: "store.view" },
+  { key: "projects", path: "/projects", labelKey: "nav.projects", icon: FolderKanban, section: "projects", upcoming: true },
   { key: "reports", path: "/reports", labelKey: "nav.reports", icon: BarChart3, section: "management", upcoming: true },
   { key: "meetings", path: "/meetings", labelKey: "nav.meetings", icon: CalendarCheck, section: "team", permission: "meetings.view" },
   { key: "devices", path: "/devices", labelKey: "nav.devices", icon: MonitorSmartphone, section: "command", upcoming: true },

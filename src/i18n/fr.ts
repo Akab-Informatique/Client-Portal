@@ -121,6 +121,8 @@ const fr = {
     expenses: "Dépenses",
     modules: "Modules",
     commandCenter: "Centre de commande",
+    projectsSection: "Projets",
+    projects: "Projets",
     tools: "Outils",
     dashboard: "Tableau de bord",
     messages: "Babillard",
