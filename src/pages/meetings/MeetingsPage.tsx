@@ -1,9 +1,11 @@
 import { useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useQuery } from "@tanstack/react-query";
-import { Link } from "react-router-dom";
+import { Link, useNavigate } from "react-router-dom";
 import { AlarmClock, ArrowRight, CalendarCheck } from "lucide-react";
 import { GlassBackdrop } from "@/components/brand/GlassBackdrop";
+import { Button } from "@/components/ui/button";
+import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Skeleton } from "@/components/ui/skeleton";
 import { api } from "@/lib/api";
 import { currentLocale } from "@/i18n";
@@ -11,9 +13,23 @@ import { cn } from "@/lib/utils";
 import { PointsSection } from "./Points";
 import { ProjectsSection } from "./Projects";
 import { WeekSection } from "./Week";
-import { STATUS_STYLE, useChoiceText, type StatusKind } from "@/pages/tickets/shared";
+import { PRIORITY_STYLE, STATUS_STYLE, useChoiceText, type PriorityKind, type StatusKind } from "@/pages/tickets/shared";
 
-type OverdueTicket = { id: number; overdue: boolean };
+type OverdueTicket = {
+  id: number;
+  number: string;
+  title: string;
+  company: string;
+  statusLabel: string | null;
+  statusKind: StatusKind;
+  priorityLabel: string | null;
+  priorityKind: PriorityKind;
+  dueAt: string;
+  overdue: boolean;
+};
+/** A ticket with whose it is (the team lists) */
+type Row = OverdueTicket & { who?: string };
+type Person = { id: string; name: string; count: number; tickets: Row[] };
 type Overdue = {
   demo: boolean;
   total: number;
@@ -23,7 +39,16 @@ type Overdue = {
   technicians: { id: string; name: string; tickets: OverdueTicket[] }[];
   unassigned: OverdueTicket[];
   /** Open, nobody assigned, status past "new" */
-  stray: { total: number; byStatus: { label: string; kind: string; count: number }[] };
+  stray: { total: number; byStatus: { label: string; kind: string; count: number }[]; tickets: OverdueTicket[] };
+};
+
+/** Every open status but "complete" (the tickets list shows completed ones in "all" otherwise) */
+const OPEN_KINDS = ["new", "inProgress", "needsAttention", "waitingCustomer", "waitingVendor", "scheduled", "other"];
+/** The tickets page with a filter; a person picked under a gauge narrows it to them */
+const ticketsUrl = (q: Record<string, string>, who: string | null) => {
+  const p = new URLSearchParams(q);
+  if (who) p.set("assignee", who === "unassigned" ? "none" : who);
+  return `/tickets?${p.toString()}`;
 };
 
 /** "ven. 17 oct." / "Fri, Oct 17" */
@@ -56,8 +81,13 @@ export function MeetingsPage() {
         ...(data.unassigned.length ? [{ id: "unassigned", name: t("meetings.overdue.unassigned"), tickets: data.unassigned }] : []),
       ]
     : [];
-  const late = people.map((p) => ({ id: p.id, name: p.name, count: p.tickets.filter((x) => x.overdue).length }));
-  const week = people.map((p) => ({ id: p.id, name: p.name, count: p.tickets.filter((x) => !x.overdue).length }));
+  const pick = (keep: (x: OverdueTicket) => boolean): Person[] =>
+    people.map((p) => {
+      const tickets = p.tickets.filter(keep).map((x) => ({ ...x, who: p.name }));
+      return { id: p.id, name: p.name, count: tickets.length, tickets };
+    });
+  const late = pick((x) => x.overdue);
+  const week = pick((x) => !x.overdue);
 
   return (
     <div className="relative isolate space-y-6">
@@ -88,8 +118,18 @@ export function MeetingsPage() {
           <p className="py-16 text-center text-muted-foreground">{t("common.error")}</p>
         ) : (
           <div className="grid items-start gap-4 md:grid-cols-2 xl:grid-cols-3">
-            <GaugeCard title={t("meetings.overdue.gaugeLate")} total={data.total} people={late} />
-            <GaugeCard title={t("meetings.overdue.gaugeWeek", { date: dayDate(`${data.untilDate}T12:00:00`) })} total={data.dueThisWeek} people={week} />
+            <GaugeCard
+              title={t("meetings.overdue.gaugeLate")}
+              total={data.total}
+              people={late}
+              url={(who) => ticketsUrl({ view: "due", due: "overdue" }, who)}
+            />
+            <GaugeCard
+              title={t("meetings.overdue.gaugeWeek", { date: dayDate(`${data.untilDate}T12:00:00`) })}
+              total={data.dueThisWeek}
+              people={week}
+              url={(who) => ticketsUrl({ view: "all", statusKind: OPEN_KINDS.join(","), due: "week" }, who)}
+            />
             <StrayCard stray={data.stray} />
           </div>
         )}
@@ -101,18 +141,32 @@ export function MeetingsPage() {
 }
 
 /** A gauge for the whole team, or the person picked under it. */
-function GaugeCard({ title, total, people }: { title: string; total: number; people: { id: string; name: string; count: number }[] }) {
+function GaugeCard({ title, total, people, url }: { title: string; total: number; people: Person[]; url: (who: string | null) => string }) {
   const { t } = useTranslation();
   const [who, setWho] = useState<string | null>(null);
+  const [listOpen, setListOpen] = useState(false);
   const picked = people.find((p) => p.id === who);
   const value = picked ? picked.count : total;
+  const tickets = (picked ? picked.tickets : people.flatMap((p) => p.tickets)).sort((a, b) => a.dueAt.localeCompare(b.dueAt));
   return (
     <div className="space-y-4 rounded-2xl border bg-card/80 p-5">
       <div className="flex items-baseline justify-between gap-2">
         <h3 className="font-semibold">{title}</h3>
         <span className="truncate text-sm text-muted-foreground">{picked ? picked.name : t("meetings.overdue.everyone")}</span>
       </div>
-      <Gauge value={value} scale={WORKLOAD} />
+      <GaugeButton onClick={() => setListOpen(true)}>
+        <Gauge value={value} scale={WORKLOAD} />
+      </GaugeButton>
+      {listOpen && (
+        <TicketsDialog
+          title={title}
+          subtitle={picked ? picked.name : t("meetings.overdue.everyone")}
+          tickets={tickets}
+          showWho={!picked}
+          to={url(who)}
+          onClose={() => setListOpen(false)}
+        />
+      )}
       <div className="flex flex-wrap justify-center gap-1.5">
         <Chip active={who === null} onClick={() => setWho(null)} label={t("meetings.overdue.everyone")} count={total} scale={WORKLOAD} />
         {[...people]
@@ -238,15 +292,28 @@ function Chip({ label, count, active, onClick, scale }: { label: string; count: 
 function StrayCard({ stray }: { stray: Overdue["stray"] }) {
   const { t } = useTranslation();
   const txt = useChoiceText();
+  const [listOpen, setListOpen] = useState(false);
+  const to = ticketsUrl({ view: "unassigned", statusKind: OPEN_KINDS.filter((k) => k !== "new").join(",") }, null);
   return (
     <div className="space-y-4 rounded-2xl border bg-card/80 p-5">
       <div className="flex items-baseline justify-between gap-2">
         <h3 className="font-semibold">{t("meetings.overdue.gaugeStray")}</h3>
-        <Link to="/tickets?view=unassigned" className="inline-flex shrink-0 items-center gap-1 text-sm text-muted-foreground hover:text-foreground">
+        <Link to={to} className="inline-flex shrink-0 items-center gap-1 text-sm text-muted-foreground hover:text-foreground">
           {t("meetings.overdue.seeTickets")} <ArrowRight className="size-3.5" />
         </Link>
       </div>
-      <Gauge value={stray.total} scale={STRAY} />
+      <GaugeButton onClick={() => setListOpen(true)}>
+        <Gauge value={stray.total} scale={STRAY} />
+      </GaugeButton>
+      {listOpen && (
+        <TicketsDialog
+          title={t("meetings.overdue.gaugeStray")}
+          subtitle={t("meetings.overdue.unassigned")}
+          tickets={stray.tickets}
+          to={to}
+          onClose={() => setListOpen(false)}
+        />
+      )}
       <div className="flex flex-wrap justify-center gap-1.5">
         {stray.byStatus.length ? (
           stray.byStatus.map((s) => (
@@ -263,5 +330,103 @@ function StrayCard({ stray }: { stray: Overdue["stray"] }) {
         )}
       </div>
     </div>
+  );
+}
+
+/** The gauge, clickable: opens the list of its tickets */
+function GaugeButton({ onClick, children }: { onClick: () => void; children: React.ReactNode }) {
+  const { t } = useTranslation();
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      title={t("meetings.overdue.openList")}
+      className="block w-full rounded-xl transition-colors hover:bg-accent/30 focus-visible:outline-2"
+    >
+      {children}
+    </button>
+  );
+}
+
+const SHOWN = 12;
+
+/** A short list of a gauge's tickets; clicking it opens the tickets page with the same filter. */
+function TicketsDialog({
+  title,
+  subtitle,
+  tickets,
+  showWho,
+  to,
+  onClose,
+}: {
+  title: string;
+  subtitle: string;
+  tickets: Row[];
+  showWho?: boolean;
+  to: string;
+  onClose: () => void;
+}) {
+  const { t } = useTranslation();
+  const txt = useChoiceText();
+  const navigate = useNavigate();
+  const go = () => {
+    onClose();
+    navigate(to);
+  };
+  const days = (iso: string) => Math.max(1, Math.floor((Date.now() - new Date(iso).getTime()) / 86_400_000));
+  return (
+    <Dialog open onOpenChange={(o) => !o && onClose()}>
+      <DialogContent className="sm:max-w-xl">
+        <DialogHeader>
+          <DialogTitle>
+            {title} <span className="font-normal text-muted-foreground">({tickets.length})</span>
+          </DialogTitle>
+          <DialogDescription>{subtitle}</DialogDescription>
+        </DialogHeader>
+        {tickets.length === 0 ? (
+          <p className="py-6 text-center text-sm text-emerald-400">{t("meetings.overdue.emptyList")}</p>
+        ) : (
+          <button
+            type="button"
+            onClick={go}
+            title={t("meetings.overdue.openFiltered")}
+            className="block w-full overflow-hidden rounded-xl border text-left transition-colors hover:border-primary/60"
+          >
+            <ul className="max-h-[55vh] divide-y overflow-y-auto">
+              {tickets.slice(0, SHOWN).map((x) => (
+                <li key={x.id} className="px-3 py-2 transition-colors hover:bg-accent/40">
+                  <div className="flex items-center gap-2 text-xs">
+                    <span
+                      className={cn("size-2 shrink-0 rounded-full", PRIORITY_STYLE[x.priorityKind].dot)}
+                      title={txt.priority({ label: x.priorityLabel, kind: x.priorityKind })}
+                    />
+                    <span className="font-mono text-muted-foreground">{x.number}</span>
+                    <span className={cn("rounded-full border px-2 py-px text-[11px]", STATUS_STYLE[x.statusKind])}>
+                      {txt.status({ label: x.statusLabel, kind: x.statusKind })}
+                    </span>
+                    <span className={cn("ml-auto shrink-0 font-semibold", x.overdue ? "text-red-400" : "text-orange-300")}>
+                      {x.overdue ? t("meetings.overdue.late", { count: days(x.dueAt) }) : t("meetings.overdue.dueOn", { date: dayDate(x.dueAt) })}
+                    </span>
+                  </div>
+                  <p className="mt-0.5 truncate text-sm font-medium">{x.title}</p>
+                  <p className="truncate text-xs text-muted-foreground">
+                    {x.company}
+                    {showWho && x.who && <> · {x.who}</>}
+                  </p>
+                </li>
+              ))}
+            </ul>
+            {tickets.length > SHOWN && (
+              <p className="border-t px-3 py-2 text-center text-xs text-muted-foreground">{t("meetings.overdue.more", { count: tickets.length - SHOWN })}</p>
+            )}
+          </button>
+        )}
+        <div className="flex justify-end">
+          <Button onClick={go}>
+            {t("meetings.overdue.openFiltered")} <ArrowRight className="size-4" />
+          </Button>
+        </div>
+      </DialogContent>
+    </Dialog>
   );
 }

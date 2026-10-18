@@ -15,6 +15,7 @@ import { rmmLink, rmmSettings, type RmmSettings } from "../lib/rmm.ts";
 import { searchProducts, serialsOf, StoreError, takeForTicket, undoTake } from "../lib/store.ts";
 import { storeHttp } from "./store.ts";
 import { rememberCompany, rememberContact } from "../lib/crm.ts";
+import { fridayEnd } from "./meetings.ts";
 import { addTicketTime } from "../lib/timesheets.ts";
 
 /**
@@ -276,6 +277,9 @@ export const ticketRoutes = new Hono<AppEnv>()
     const eod = endOfToday();
     const open = (t: NTicket) => L.statusKind(t.status) !== "complete";
     const isOverdue = (t: NTicket) => new Date(t.dueAt).getTime() < Date.now();
+    // The weekly meeting gauge: not overdue yet, due by the end of this Friday (Québec)
+    const friday = fridayEnd(new Date()).getTime();
+    const isDueThisWeek = (t: NTicket) => !isOverdue(t) && new Date(t.dueAt).getTime() <= friday;
     const isDueToday = (t: NTicket) => {
       const d = new Date(t.dueAt).getTime();
       return d >= Date.now() && d <= eod;
@@ -317,7 +321,7 @@ export const ticketRoutes = new Hono<AppEnv>()
       .filter((t) => !text || `${t.number} ${t.title} ${t.company.name} ${t.contact}`.toLowerCase().includes(text))
       .filter((t) => inRange(t.dueAt, q.dueFrom, q.dueTo))
       // Tiles: "due=overdue|today" (to the minute) and "created=today"
-      .filter((t) => (q.due === "overdue" ? isOverdue(t) : q.due === "today" ? isDueToday(t) : true))
+      .filter((t) => (q.due === "overdue" ? isOverdue(t) : q.due === "today" ? isDueToday(t) : q.due === "week" ? isDueThisWeek(t) : true))
       .filter((t) => q.created !== "today" || new Date(t.createdAt).toDateString() === new Date().toDateString())
       .filter((t) => q.attention !== "1" || attention(t))
       // Portal-only filter: Autotask has no start date

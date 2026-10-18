@@ -55,7 +55,11 @@ export const meetingRoutes = new Hono<AppEnv>()
         cur.count++;
         by.set(key, cur);
       }
-      return { total: rows.length, byStatus: [...by.values()].sort((p, q) => q.count - p.count) };
+      return {
+        total: rows.length,
+        byStatus: [...by.values()].sort((p, q) => q.count - p.count),
+        tickets: [...rows].sort((p, q) => p.dueAt.localeCompare(q.dueAt)).map(item),
+      };
     };
     const byTech = [...people].map(([id, name]) => ({ id, name, tickets: listed.filter((t) => t.assignee?.id === id).map(item) }));
     const late = (x: { tickets: { overdue: boolean }[] }) => x.tickets.filter((t) => t.overdue).length;

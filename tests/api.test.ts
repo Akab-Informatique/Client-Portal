@@ -180,6 +180,13 @@ describe("permissions", () => {
     const stray = all.filter((t: any) => t.statusKind !== "complete" && t.statusKind !== "new" && !t.assignee);
     expect(r.json.stray.total).toBe(stray.length);
     expect(r.json.stray.byStatus.reduce((s: number, x: any) => s + x.count, 0)).toBe(stray.length);
+    expect(r.json.stray.tickets.map((x: any) => x.id).sort()).toEqual(stray.map((x: any) => x.id).sort());
+    // each gauge's "Open in Tickets" filter gives the same tickets
+    const ids = (items: any[]) => items.map((x: any) => x.id).sort();
+    const open = "new,inProgress,needsAttention,waitingCustomer,waitingVendor,scheduled,other";
+    expect(ids((await admin.get("/api/tickets?view=due&due=overdue")).json.items)).toEqual(ids(listed.filter((t: any) => t.overdue)));
+    expect(ids((await admin.get(`/api/tickets?view=all&statusKind=${open}&due=week`)).json.items)).toEqual(ids(listed.filter((t: any) => !t.overdue)));
+    expect(ids((await admin.get(`/api/tickets?view=unassigned&statusKind=${open.replace("new,", "")}`)).json.items)).toEqual(ids(stray));
     const client = await signIn("responsable1@client.example");
     expect((await client.get("/api/meetings/overdue")).status).toBe(403);
   });
