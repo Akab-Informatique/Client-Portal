@@ -8,7 +8,8 @@ import type { PermissionKey } from "@shared/permissions";
  * `section` groups them in the sidebar (in the order of NAV_SECTIONS).
  */
 export const NAV_SECTIONS = [
-  { key: "modules", labelKey: "nav.modules" },
+  { key: "team", labelKey: "nav.team" },
+  { key: "tools", labelKey: "nav.myTools" },
   { key: "command", labelKey: "nav.commandCenter" },
   { key: "crm", labelKey: "nav.crm" },
   { key: "accounting", labelKey: "nav.accounting" },
@@ -29,15 +30,15 @@ export type NavModule = {
 };
 
 export const STAFF_MODULES: NavModule[] = [
-  { key: "dashboard", path: "/", labelKey: "nav.dashboard", icon: LayoutDashboard, section: "modules", permission: "dashboard.view" },
-  { key: "messages", path: "/messages", labelKey: "nav.messages", icon: Megaphone, section: "modules", permission: "messages.view" },
-  { key: "outlook", path: "/outlook", labelKey: "nav.outlook", icon: Mail, section: "modules", permission: "outlook.view", optIn: "outlook" },
+  { key: "dashboard", path: "/", labelKey: "nav.dashboard", icon: LayoutDashboard, section: "team", permission: "dashboard.view" },
+  { key: "messages", path: "/messages", labelKey: "nav.messages", icon: Megaphone, section: "team", permission: "messages.view" },
+  { key: "outlook", path: "/outlook", labelKey: "nav.outlook", icon: Mail, section: "tools", permission: "outlook.view", optIn: "outlook" },
   { key: "tickets", path: "/tickets", labelKey: "nav.tickets", icon: Ticket, section: "command", permission: "tickets.view" },
   { key: "crm", path: "/crm", labelKey: "nav.crmClients", icon: Building2, section: "crm", permission: "crm.view" },
   { key: "invoices", path: "/accounting/invoices", labelKey: "nav.invoices", icon: Receipt, section: "accounting", permission: "accounting.view" },
   { key: "quotes", path: "/accounting/quotes", labelKey: "nav.quotes", icon: FileSignature, section: "accounting", permission: "accounting.view" },
   { key: "store", path: "/store", labelKey: "nav.store", icon: Store, section: "administration", permission: "store.view" },
-  { key: "meetings", path: "/meetings", labelKey: "nav.meetings", icon: CalendarCheck, section: "administration", permission: "meetings.view" },
-  { key: "documentation", path: "/documentation", labelKey: "nav.documentation", icon: BookOpen, section: "modules", upcoming: true },
-  { key: "devices", path: "/devices", labelKey: "nav.devices", icon: MonitorSmartphone, section: "modules", upcoming: true },
+  { key: "meetings", path: "/meetings", labelKey: "nav.meetings", icon: CalendarCheck, section: "team", permission: "meetings.view" },
+  { key: "documentation", path: "/documentation", labelKey: "nav.documentation", icon: BookOpen, section: "team", upcoming: true },
+  { key: "devices", path: "/devices", labelKey: "nav.devices", icon: MonitorSmartphone, section: "team", upcoming: true },
 ];

@@ -104,6 +104,8 @@ const fr = {
     changed: "Mot de passe modifié. Vos autres sessions ont été fermées.",
   },
   nav: {
+    team: "Équipe",
+    myTools: "Mes outils",
     crm: "CRM",
     accounting: "Comptabilité",
     crmClients: "Clients",

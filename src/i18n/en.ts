@@ -106,6 +106,8 @@ const en: Dict = {
     changed: "Password changed. Your other sessions were signed out.",
   },
   nav: {
+    team: "Team",
+    myTools: "My tools",
     crm: "CRM",
     accounting: "Accounting",
     crmClients: "Clients",

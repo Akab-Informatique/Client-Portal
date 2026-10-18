@@ -196,15 +196,14 @@ function SidebarContent({ collapsed, onToggle }: { collapsed: boolean; onToggle?
   const me = useMe();
   const visible = (m: NavModule) => m.upcoming || ((!m.permission || can(m.permission)) && (!m.optIn || me.preferences[m.optIn]));
   const isActive = (path: string) => (path === "/" ? location.pathname === "/" : location.pathname.startsWith(path));
-  // Sections show their live modules (and upcoming ones, except in the main section,
-  // whose upcoming modules are listed under "À venir")
+  // Sections show their live modules; upcoming ones are listed together under "À venir"
   const groups = [
     ...NAV_SECTIONS.map((s) => ({
       key: s.key,
       labelKey: s.labelKey,
-      items: STAFF_MODULES.filter((m) => m.section === s.key && visible(m) && !(s.key === "modules" && m.upcoming)),
+      items: STAFF_MODULES.filter((m) => m.section === s.key && visible(m) && !m.upcoming),
     })),
-    { key: "upcoming", labelKey: "nav.upcoming", items: STAFF_MODULES.filter((m) => m.section === "modules" && m.upcoming) },
+    { key: "upcoming", labelKey: "nav.upcoming", items: STAFF_MODULES.filter((m) => m.upcoming) },
   ].filter((g) => g.items.length > 0);
 
   return (
