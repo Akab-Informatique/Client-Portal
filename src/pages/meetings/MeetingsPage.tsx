@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
@@ -9,6 +9,7 @@ import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { useCan } from "@/lib/session";
+import { useTicketWorkspace } from "@/pages/tickets/workspace";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Skeleton } from "@/components/ui/skeleton";
 import { api } from "@/lib/api";
@@ -523,6 +524,22 @@ function AlertsCard({ alerts, completeStatus }: { alerts: Overdue["alerts"]; com
   const { t } = useTranslation();
   const [listOpen, setListOpen] = useState(false);
   const newest = alerts[0];
+  const ws = useTicketWorkspace();
+  const qc = useQueryClient();
+  // An alert opened from the list: the ticket shows over the meeting; once it is closed,
+  // the meeting is back, refreshed
+  const reopen = useRef(false);
+  useEffect(() => {
+    if (ws.openId === null && reopen.current) {
+      reopen.current = false;
+      void qc.invalidateQueries({ queryKey: ["meetings"] });
+    }
+  }, [ws.openId, qc]);
+  const openTicket = (id: number) => {
+    reopen.current = true;
+    setListOpen(false);
+    ws.open(id);
+  };
   return (
     <div className="space-y-4 rounded-2xl border bg-card/80 p-5">
       <div className="flex items-baseline justify-between gap-2">
@@ -536,13 +553,23 @@ function AlertsCard({ alerts, completeStatus }: { alerts: Overdue["alerts"]; com
       <p className="truncate text-center text-xs text-muted-foreground">
         {newest ? t("meetings.overdue.latestAlert", { title: newest.title }) : <span className="text-emerald-400">{t("meetings.overdue.noAlerts")}</span>}
       </p>
-      {listOpen && <AlertsDialog alerts={alerts} completeStatus={completeStatus} onClose={() => setListOpen(false)} />}
+      {listOpen && <AlertsDialog alerts={alerts} completeStatus={completeStatus} onOpen={openTicket} onClose={() => setListOpen(false)} />}
     </div>
   );
 }
 
 /** Every open alert: a click opens the ticket; "Résolu" closes it (tickets.edit). */
-function AlertsDialog({ alerts, completeStatus, onClose }: { alerts: Overdue["alerts"]; completeStatus: string | null; onClose: () => void }) {
+function AlertsDialog({
+  alerts,
+  completeStatus,
+  onOpen,
+  onClose,
+}: {
+  alerts: Overdue["alerts"];
+  completeStatus: string | null;
+  onOpen: (id: number) => void;
+  onClose: () => void;
+}) {
   const { t } = useTranslation();
   const txt = useChoiceText();
   const navigate = useNavigate();
@@ -562,10 +589,7 @@ function AlertsDialog({ alerts, completeStatus, onClose }: { alerts: Overdue["al
     onError: () => toast.error(t("common.error")),
     onSettled: () => setBusy(null),
   });
-  const open = (id: number) => {
-    onClose();
-    navigate(`/tickets?ticket=${id}`);
-  };
+  const open = onOpen;
   const when = (iso: string) =>
     new Intl.DateTimeFormat(currentLocale() === "en" ? "en-CA" : "fr-CA", { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" }).format(
       new Date(iso),

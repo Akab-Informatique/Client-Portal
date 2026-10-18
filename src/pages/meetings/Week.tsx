@@ -2,7 +2,6 @@ import { useMemo, useState, type FormEvent } from "react";
 import { useTranslation } from "react-i18next";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
-import { Link } from "react-router-dom";
 import { CalendarClock, CalendarDays, CalendarPlus, ChevronLeft, ChevronRight, FolderKanban, PartyPopper, Star, Ticket, Trash2, UserX, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
@@ -15,6 +14,7 @@ import { api, ApiError } from "@/lib/api";
 import { useCan } from "@/lib/session";
 import { AbsenceDialog, type AbsenceDraft } from "./Absences";
 import { TicketSearch } from "@/pages/tickets/TicketSearch";
+import { useTicketWorkspace } from "@/pages/tickets/workspace";
 import { currentLocale } from "@/i18n";
 import { cn } from "@/lib/utils";
 import { holidaysBetween } from "@shared/holidays";
@@ -266,14 +266,14 @@ export function WeekSection() {
                         {x.note && <span className="block text-muted-foreground">{x.note}</span>}
                       </Row>
                       {x.ticketId && (
-                        <Link
-                          to={`/tickets?ticket=${x.ticketId}`}
+                        <TicketLink
+                          id={x.ticketId!}
                           className="mt-0.5 flex items-center gap-1.5 text-xs text-muted-foreground hover:text-foreground hover:underline"
                         >
                           <Ticket className="size-3.5 shrink-0 text-orange-300" />
                           <span className="shrink-0 font-mono">{x.ticketNumber}</span>
                           <span className="truncate">{x.ticketTitle}</span>
-                        </Link>
+                        </TicketLink>
                       )}
                     </li>
                   ))}
@@ -318,10 +318,10 @@ export function WeekSection() {
                         <p className="truncate">
                           <span className="text-muted-foreground">{t(`planning.kind.${b.kind}`)} · </span>
                           {b.ticketId ? (
-                            <Link to={`/tickets?ticket=${b.ticketId}`} className="hover:underline">
+                            <TicketLink id={b.ticketId!} className="hover:underline">
                               {b.ticketNumber && <span className="font-mono text-xs">{b.ticketNumber} </span>}
                               {b.title}
-                            </Link>
+                            </TicketLink>
                           ) : (
                             b.title
                           )}
@@ -337,11 +337,11 @@ export function WeekSection() {
                   {data.ticketsError && <li className="text-sm text-muted-foreground">{t("meetings.week.ticketsError")}</li>}
                   {day.tickets.map((x) => (
                     <li key={x.id} className="text-sm">
-                      <Link to={`/tickets?ticket=${x.id}`} className="flex items-baseline gap-2 hover:underline">
+                      <TicketLink id={x.id!} className="flex w-full items-baseline gap-2 hover:underline">
                         <span className="shrink-0 font-mono text-xs text-muted-foreground">{x.number}</span>
                         <span className="min-w-0 truncate">{x.title}</span>
                         <span className="ml-auto shrink-0 text-xs text-muted-foreground">{x.assignee ?? t("meetings.overdue.unassigned")}</span>
-                      </Link>
+                      </TicketLink>
                     </li>
                   ))}
                 </Group>
@@ -536,5 +536,15 @@ function EventDialog({ draft, onClose }: { draft: EventDraft; onClose: () => voi
         </form>
       </DialogContent>
     </Dialog>
+  );
+}
+
+/** A ticket opened over the meeting (closing it comes back here). */
+function TicketLink({ id, className, children }: { id: number; className?: string; children: React.ReactNode }) {
+  const ws = useTicketWorkspace();
+  return (
+    <button type="button" onClick={() => ws.open(id)} className={cn("text-left", className)}>
+      {children}
+    </button>
   );
 }
