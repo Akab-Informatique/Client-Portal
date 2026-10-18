@@ -15,10 +15,22 @@ const TTL_MINUTES: Record<Purpose, number> = { reset: 60, welcome: 72 * 60 };
 
 type UserLike = { id: string; email: string; name: string; locale: string };
 
-/** Public address of the portal (PUBLIC_URL, else the request's own origin). */
+/**
+ * Public address of the portal: PUBLIC_URL. Only in development, the request's
+ * own origin — in production a link built from the Host header could point
+ * anywhere (an attacker sending "Host: evil.tld" would receive the token).
+ */
 export function portalUrl(c?: Context): string {
   if (config.publicUrl) return config.publicUrl;
+  if (config.production) return "";
   return c ? new URL(c.req.url).origin : "";
+}
+
+/** The person's unused links stop working (password, email or status changed). */
+export async function forgetPasswordLinks(userId: string) {
+  await db()
+    .delete(schema.passwordTokens)
+    .where(and(eq(schema.passwordTokens.userId, userId), isNull(schema.passwordTokens.usedAt)));
 }
 
 const expiresText = (p: Purpose, locale: string) =>
@@ -37,8 +49,12 @@ export async function issuePasswordLink(user: UserLike, purpose: Purpose): Promi
 
 /** Create a link and email it (welcome or reset template). */
 export async function sendPasswordLink(user: UserLike, purpose: Purpose, c?: Context): Promise<boolean> {
-  const token = await issuePasswordLink(user, purpose);
   const base = portalUrl(c);
+  if (!base) {
+    console.error("[mail] PUBLIC_URL is not set: password links are not sent");
+    return false;
+  }
+  const token = await issuePasswordLink(user, purpose);
   return sendTemplate(purpose === "reset" ? "passwordReset" : "welcome", user, {
     name: user.name,
     email: user.email,

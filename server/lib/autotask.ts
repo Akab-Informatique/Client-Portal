@@ -178,7 +178,7 @@ export function createClient(creds: Credentials, zone: Zone, opts: { fallbackToA
   type Page<T> = { items: T[]; pageDetails?: { nextPageUrl?: string | null } };
 
   /** Entity query with paging (Autotask returns up to 500 items per page). */
-  async function query<T>(entity: string, filter: unknown[], opts: { fields?: string[]; max?: number } = {}): Promise<T[]> {
+  async function query<T>(entity: string, filter: unknown[], opts: { fields?: string[]; max?: number; complete?: boolean } = {}): Promise<T[]> {
     const max = opts.max ?? 5000;
     const out: T[] = [];
     let page = await call<Page<T>>("POST", `${entity}/query`, {
@@ -189,7 +189,12 @@ export function createClient(creds: Credentials, zone: Zone, opts: { fallbackToA
     for (;;) {
       out.push(...page.items);
       const next = page.pageDetails?.nextPageUrl;
-      if (!next || out.length >= max) break;
+      if (!next) break;
+      // a whole copy (CRM, work to bill) must not be cut short: what is missing would look deleted
+      if (out.length >= max) {
+        if (opts.complete) throw new AutotaskError("api", undefined, `${entity}: more than ${max} rows, copy stopped`);
+        break;
+      }
       page = await call<Page<T>>("GET", next);
     }
     return out.slice(0, max);

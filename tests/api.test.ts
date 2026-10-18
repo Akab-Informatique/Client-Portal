@@ -3395,3 +3395,105 @@ describe("submitting: timesheets (when required) and expenses", () => {
     await admin.patch(`/api/admin/users/${u.id}`, { timesheetRequired: true });
   });
 });
+
+describe("security review fixes", () => {
+  it("a Graph path never climbs out of its mailbox (%2e%2e, %2f, backslash)", async () => {
+    const { safeGraphPath } = await import("../server/lib/o365.ts");
+    expect(safeGraphPath("users/tech%40akab.local/mailFolders/inbox/messages?$top=25")).toBe(true);
+    expect(safeGraphPath("me/messages/AAMkAD%3D%3D/attachments")).toBe(true);
+    expect(safeGraphPath("users/tech%40akab.local/%2e%2e/ceo%40akab.local/messages")).toBe(false);
+    expect(safeGraphPath("users/tech%40akab.local/.%2E/ceo%40akab.local/messages")).toBe(false);
+    expect(safeGraphPath("me/%2e%2e/%2e%2e/beta/users")).toBe(false);
+    expect(safeGraphPath("users/x/mailFolders/..")).toBe(false);
+    expect(safeGraphPath("users/x/mailFolders/a%2Fb")).toBe(false);
+    expect(safeGraphPath("users/x/mailFolders/a%5Cb")).toBe(false);
+    // the URL parser drops tabs and newlines: ".\t." would become ".."
+    expect(safeGraphPath("users/tech%40akab.local/.\t./ceo%40akab.local/messages")).toBe(false);
+    expect(safeGraphPath("users/tech%40akab.local/..\n/ceo%40akab.local/messages")).toBe(false);
+    expect(safeGraphPath("users/tech%40akab.local/%09../ceo%40akab.local/messages")).toBe(false);
+    expect(safeGraphPath("$batch")).toBe(true);
+    expect(safeGraphPath("users/x/messages/AAA%3D/attachments/BBB/$value")).toBe(true);
+  });
+
+  it("a mailbox linked through the organisation access needs the right every time", async () => {
+    resetRateLimit("login:ip:unknown");
+    const tech = await signIn("tech@akab.local");
+    const [u] = await db().select().from(schema.users).where(eq(schema.users.email, "tech@akab.local"));
+    await db().insert(schema.userPreferences).values({ userId: u.id, outlook: true }).onConflictDoUpdate({ target: schema.userPreferences.userId, set: { outlook: true } });
+    const [acc] = await db().insert(schema.mailAccounts).values({ userId: u.id, address: "compta@akab.local", via: "app" }).returning();
+    expect((await tech.get(`/api/outlook/accounts/${acc.id}/folders`)).json.error).toBe("outlook_no_access");
+    // it can still be unlinked
+    expect((await tech.del(`/api/outlook/accounts/${acc.id}`)).status).toBe(200);
+    expect((await db().select().from(schema.mailAccounts).where(eq(schema.mailAccounts.id, acc.id))).length).toBe(0);
+  });
+
+  it("a global admin cannot give or take over master-only rights", async () => {
+    resetRateLimit("login:ip:unknown");
+    const admin = await signIn("admin@akab.local");
+    const roles = (await admin.get("/api/admin/roles")).json;
+    const by = (slug: string) => roles.find((r: any) => r.slug === slug);
+    const [lead] = await db().insert(schema.roles).values({ slug: "it-lead-test", audience: "staff", name: "IT Lead", permissions: ["tickets.view", "admin.integrations"] }).returning();
+    const [techRow] = await db().select().from(schema.users).where(eq(schema.users.email, "tech@akab.local"));
+    const [tech2Row] = await db().select().from(schema.users).where(eq(schema.users.email, "tech2@akab.local"));
+    await db().update(schema.users).set({ roleId: by("global-admin").id }).where(eq(schema.users.id, techRow.id));
+    resetRateLimit("login:ip:unknown");
+    const global = await signIn("tech@akab.local");
+    // a role carrying a master-only right: not given by a global admin (not even to themselves)
+    expect((await global.patch(`/api/admin/users/${techRow.id}`, { roleId: lead.id })).json.error).toBe("master_only");
+    expect((await global.patch(`/api/admin/users/${tech2Row.id}`, { roleId: lead.id })).json.error).toBe("master_only");
+    // someone holding one (here through their own rights) is not reset nor changed by a global admin
+    await admin.put(`/api/admin/users/${tech2Row.id}/permissions`, { overrides: [{ key: "outlook.anyMailbox", effect: "allow" }] });
+    expect((await global.post(`/api/admin/users/${tech2Row.id}/reset-password`)).json.error).toBe("master_only");
+    expect((await global.post(`/api/admin/users/${tech2Row.id}/reset-mfa`)).json.error).toBe("master_only");
+    expect((await global.patch(`/api/admin/users/${tech2Row.id}`, { active: false })).json.error).toBe("master_only");
+    await admin.put(`/api/admin/users/${tech2Row.id}/permissions`, { overrides: [] });
+    expect((await global.patch(`/api/admin/users/${tech2Row.id}`, { title: "Technicien" })).status).toBe(200);
+    await db().update(schema.users).set({ roleId: by("technician").id }).where(eq(schema.users.id, techRow.id));
+    await db().delete(schema.roles).where(eq(schema.roles.id, lead.id));
+  });
+
+  it("users of a client turned off cannot sign in; old password links die with a password or email change", async () => {
+    resetRateLimit("login:ip:unknown");
+    const admin = await signIn("admin@akab.local");
+    const [cu] = await db().select().from(schema.users).where(eq(schema.users.email, "responsable2@client.example"));
+    // still works while the client is active
+    resetRateLimit("login:ip:unknown");
+    expect((await new Agent().post("/api/auth/login", { email: cu.email, password: PASSWORD })).status).toBe(200);
+    await db().update(schema.clients).set({ active: false }).where(eq(schema.clients.id, cu.clientId!));
+    resetRateLimit("login:ip:unknown");
+    expect((await new Agent().post("/api/auth/login", { email: cu.email, password: PASSWORD })).json.error).toBe("invalid_credentials");
+    await db().update(schema.clients).set({ active: true }).where(eq(schema.clients.id, cu.clientId!));
+
+    // a reset link sent to the old address stops working when an admin changes the email
+    const { issuePasswordLink } = await import("../server/lib/passwordLinks.ts");
+    const token = await issuePasswordLink(cu, "reset");
+    expect((await new Agent().post("/api/auth/reset/check", { token })).json.valid).toBe(true);
+    await admin.patch(`/api/admin/users/${cu.id}`, { email: "nouveau.responsable@client.example" });
+    expect((await new Agent().post("/api/auth/reset/check", { token })).json.valid).toBe(false);
+    await admin.patch(`/api/admin/users/${cu.id}`, { email: cu.email });
+  });
+
+  it("a successful login does not count against the shared IP; an approver cannot approve their own expense", async () => {
+    resetRateLimit("login:ip:unknown");
+    for (let i = 0; i < 70; i++) {
+      const r = await new Agent().post("/api/auth/login", { email: "tech2@akab.local", password: PASSWORD });
+      expect(r.status).toBe(200);
+    }
+    resetRateLimit("login:ip:unknown");
+    const admin = await signIn("admin@akab.local");
+    const types = (await admin.get("/api/time/types")).json.expense;
+    const mine = (await admin.post("/api/time/expenses", { date: "2026-10-17", typeId: types[1].id, description: "Moi-même", amountCents: 500000 })).json;
+    await admin.post(`/api/time/expenses/${mine.id}/submit`);
+    expect((await admin.post("/api/time/approvals/expenses", { ids: [mine.id], decision: "approve" })).json.changed).toBe(0);
+    // a client to bill must exist
+    expect((await admin.post("/api/time/expenses", { date: "2026-10-17", typeId: types[1].id, description: "x", amountCents: 100, clientId: crypto.randomUUID() })).json.error).toBe("client_unknown");
+  });
+
+  it("a partial product change keeps the fields not sent", async () => {
+    resetRateLimit("login:ip:unknown");
+    const admin = await signIn("admin@akab.local");
+    const made = (await admin.post("/api/store/products", { name: "Souris sans fil", sku: "MOUSE-SEC-1", priceCents: 2999, costCents: 1500, active: false })).json;
+    const r = (await admin.patch(`/api/store/products/${made.id}`, { priceCents: 3499 })).json;
+    expect(r).toMatchObject({ priceCents: 3499, costCents: 1500, active: false, sku: "MOUSE-SEC-1" });
+  });
+});

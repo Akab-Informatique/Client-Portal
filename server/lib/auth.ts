@@ -102,7 +102,7 @@ export const loadAuth: MiddlewareHandler<AppEnv> = async (c, next) => {
       .innerJoin(schema.users, eq(schema.users.id, schema.sessions.userId))
       .where(and(eq(schema.sessions.id, id), gt(schema.sessions.expiresAt, now)));
     const idle = row && now.getTime() - row.session.lastSeenAt.getTime() > IDLE_HOURS * 3600_000;
-    if (row && row.user.active && !idle) {
+    if (row && row.user.active && !idle && (await accountUsable(row.user))) {
       const permissions = await permissionsOf(row.user);
       const base: AuthContext = {
         user: row.user,
@@ -123,6 +123,15 @@ export const loadAuth: MiddlewareHandler<AppEnv> = async (c, next) => {
   }
   await next();
 };
+
+/** An active account — and, for a client user, an active client (a client turned off closes its users' access). */
+export async function accountUsable(u: { active: boolean; kind: string; clientId: string | null }) {
+  if (!u.active) return false;
+  if (u.kind !== "client") return true;
+  if (!u.clientId) return false;
+  const [cl] = await db().select({ active: schema.clients.active }).from(schema.clients).where(eq(schema.clients.id, u.clientId));
+  return Boolean(cl?.active);
+}
 
 /**
  * "View as client": a technician holding clientview.use sees the portal as the

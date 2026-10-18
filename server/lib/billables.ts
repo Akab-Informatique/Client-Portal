@@ -291,42 +291,48 @@ export function createInvoice(actorId: string, p: InvoiceDraft) {
   const run = numbering.then(async () => {
     const draft = await draftInvoice(p);
     const s = await billingSettings();
-    const d = db();
     const number = draft.number;
+    // all or nothing: the invoice, its lines and the items posted (a crash never leaves items to bill twice)
+    const inv = await db().transaction(async (tx) => {
+      const [row] = await tx
+        .insert(schema.clientInvoices)
+        .values({
+          clientId: draft.client.id,
+          number,
+          issuedOn: draft.issuedOn,
+          dueOn: draft.dueOn,
+          totalCents: draft.totalCents,
+          taxCents: draft.gstCents + draft.qstCents,
+          source: "portal",
+          notes: draft.notes,
+          poNumber: draft.poNumber,
+        })
+        .returning();
+      await tx.insert(schema.invoiceLines).values(
+        draft.lines.map((l, n) => ({
+          invoiceId: row.id,
+          billingItemId: l.itemId,
+          kind: l.kind,
+          description: l.description,
+          quantityX100: Math.round(l.quantity * 100),
+          unitPriceCents: l.unitPriceCents,
+          amountCents: l.amountCents,
+          taxable: l.taxable,
+          ledgerAccountId: s.accounts[ACCOUNT_OF[l.kind as BillableKind] ?? "labour"] ?? null,
+          position: n,
+        })),
+      );
+      // only items still approved (one sent back meanwhile stops the invoice)
+      const posted = await tx
+        .update(schema.billingItems)
+        .set({ status: "posted", invoiceId: row.id, postedAt: new Date(), updatedAt: new Date() })
+        .where(and(inArray(schema.billingItems.id, draft.items.map((i) => i.id)), eq(schema.billingItems.status, "approved")))
+        .returning({ id: schema.billingItems.id });
+      if (posted.length !== draft.items.length) throw new DraftError("billing_items_changed");
+      return row;
+    });
     const digits = number.slice(s.numbering.prefix.length);
     if (/^\d+$/.test(digits)) await saveBillingSettings(actorId, { numbering: { next: Number(digits) + 1 } });
-    const [inv] = await d
-      .insert(schema.clientInvoices)
-      .values({
-        clientId: draft.client.id,
-        number,
-        issuedOn: draft.issuedOn,
-        dueOn: draft.dueOn,
-        totalCents: draft.totalCents,
-        taxCents: draft.gstCents + draft.qstCents,
-        source: "portal",
-        notes: draft.notes,
-        poNumber: draft.poNumber,
-      })
-      .returning();
-    await d.insert(schema.invoiceLines).values(
-      draft.lines.map((l, n) => ({
-        invoiceId: inv.id,
-        billingItemId: l.itemId,
-        kind: l.kind,
-        description: l.description,
-        quantityX100: Math.round(l.quantity * 100),
-        unitPriceCents: l.unitPriceCents,
-        amountCents: l.amountCents,
-        taxable: l.taxable,
-        ledgerAccountId: s.accounts[ACCOUNT_OF[l.kind as BillableKind] ?? "labour"] ?? null,
-        position: n,
-      })),
-    );
-    await d
-      .update(schema.billingItems)
-      .set({ status: "posted", invoiceId: inv.id, postedAt: new Date(), updatedAt: new Date() })
-      .where(inArray(schema.billingItems.id, draft.items.map((i) => i.id)));
     return { id: inv.id, number, client: draft.client.name, totalCents: draft.totalCents };
   });
   numbering = run.catch(() => undefined);

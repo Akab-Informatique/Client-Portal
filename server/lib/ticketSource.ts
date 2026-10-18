@@ -1672,7 +1672,7 @@ const autotaskSource: TicketSource = {
     type AtInvoice = { id: number; companyID: number; invoiceNumber?: string | null; invoiceDateTime?: string | null; dueDate?: string | null; invoiceTotal?: number | null; totalTaxValue?: number | null; paidDate?: string | null; isVoided?: boolean | null };
     const vf = await safeFields(at, "Invoices", ["id", "companyID", "invoiceNumber", "invoiceDateTime", "dueDate", "invoiceTotal", "totalTaxValue", "paidDate", "isVoided"]);
     // invoices are kept even if this part fails (e.g. an API user without access to billing)
-    const invoices = await at.query<AtInvoice>("Invoices", [{ op: "gte", field: "invoiceDateTime", value: await invoicesSince() }], { fields: vf, max: 50_000 }).catch((e) => {
+    const invoices = await at.query<AtInvoice>("Invoices", [{ op: "gte", field: "invoiceDateTime", value: await invoicesSince() }], { fields: vf, max: 50_000, complete: true }).catch((e) => {
       console.warn("[crm] invoices not read:", e instanceof Error ? e.message : e);
       return null;
     });
@@ -1683,9 +1683,9 @@ const autotaskSource: TicketSource = {
       fieldsOf(at, "Contracts").catch(() => [] as FieldInfo[]),
     ]);
     const [companies, contacts, contracts] = await Promise.all([
-      at.query<AtCompany>("Companies", [{ op: "eq", field: "isActive", value: true }], { fields: cf, max: 20_000 }),
-      at.query<AtContact>("Contacts", [{ op: "eq", field: "isActive", value: 1 }], { fields: pf, max: 100_000 }),
-      at.query<AtContract>("Contracts", [{ op: "eq", field: "status", value: 1 }], { fields: kf, max: 20_000 }),
+      at.query<AtCompany>("Companies", [{ op: "eq", field: "isActive", value: true }], { fields: cf, max: 20_000, complete: true }),
+      at.query<AtContact>("Contacts", [{ op: "eq", field: "isActive", value: 1 }], { fields: pf, max: 100_000, complete: true }),
+      at.query<AtContract>("Contracts", [{ op: "eq", field: "status", value: 1 }], { fields: kf, max: 20_000, complete: true }),
     ]);
     const types = new Map(picklist(kinfo, "contractType").map((v) => [String(v.value), v.label]));
     const day = (s?: string | null) => (s ? s.slice(0, 10) : null);
@@ -1754,7 +1754,7 @@ const autotaskSource: TicketSource = {
     try {
       type AtTime = { id: number; ticketID?: number | null; resourceID?: number | null; roleID?: number | null; dateWorked?: string; hoursWorked?: number; hoursToBill?: number | null; summaryNotes?: string | null; isNonBillable?: boolean; billingApprovalDateTime?: string | null; contractID?: number | null };
       const fields = await safeFields(at, "TimeEntries", ["id", "ticketID", "resourceID", "roleID", "dateWorked", "hoursWorked", "hoursToBill", "summaryNotes", "isNonBillable", "billingApprovalDateTime", "contractID"]);
-      const rows = (await at.query<AtTime>("TimeEntries", [{ op: "gte", field: "dateWorked", value: since }], { fields, max: 50_000 })).filter((r) => !r.isNonBillable && !r.billingApprovalDateTime && r.ticketID);
+      const rows = (await at.query<AtTime>("TimeEntries", [{ op: "gte", field: "dateWorked", value: since }], { fields, max: 50_000, complete: true })).filter((r) => !r.isNonBillable && !r.billingApprovalDateTime && r.ticketID);
       await ticketsOf(rows.map((r) => r.ticketID!));
       const roles = new Map(
         (await at.query<{ id: number; hourlyRate?: number | null }>("Roles", [{ op: "eq", field: "isActive", value: true }], { fields: ["id", "hourlyRate"], max: 500 }).catch(() => [])).map((r) => [r.id, r.hourlyRate ?? null]),
@@ -1787,7 +1787,7 @@ const autotaskSource: TicketSource = {
     try {
       type AtCharge = { id: number; ticketID: number; name?: string; description?: string | null; unitQuantity?: number; unitPrice?: number | null; datePurchased?: string | null; isBillableToCompany?: boolean; isBilled?: boolean | null; contractID?: number | null };
       const fields = await safeFields(at, "TicketCharges", ["id", "ticketID", "name", "description", "unitQuantity", "unitPrice", "datePurchased", "isBillableToCompany", "isBilled", "contractID"]);
-      const rows = (await at.query<AtCharge>("TicketCharges", [{ op: "gte", field: "datePurchased", value: since }], { fields, max: 50_000 })).filter((r) => r.isBillableToCompany !== false && r.isBilled !== true);
+      const rows = (await at.query<AtCharge>("TicketCharges", [{ op: "gte", field: "datePurchased", value: since }], { fields, max: 50_000, complete: true })).filter((r) => r.isBillableToCompany !== false && r.isBilled !== true);
       await ticketsOf(rows.map((r) => r.ticketID));
       for (const r of rows) {
         const tk = ticketInfo.get(r.ticketID);
@@ -1802,7 +1802,7 @@ const autotaskSource: TicketSource = {
     try {
       type AtExpense = { id: number; companyID?: number | null; ticketID?: number | null; expenseDate?: string; description?: string | null; expenseCurrencyExpenseAmount?: number | null; receiptAmount?: number | null; isBillableToCompany?: boolean; expenseReportID?: number };
       const fields = await safeFields(at, "ExpenseItems", ["id", "companyID", "ticketID", "expenseDate", "description", "expenseCurrencyExpenseAmount", "receiptAmount", "isBillableToCompany", "expenseReportID"]);
-      const rows = (await at.query<AtExpense>("ExpenseItems", [{ op: "gte", field: "expenseDate", value: since }], { fields, max: 50_000 })).filter((r) => r.isBillableToCompany && (r.companyID || r.ticketID));
+      const rows = (await at.query<AtExpense>("ExpenseItems", [{ op: "gte", field: "expenseDate", value: since }], { fields, max: 50_000, complete: true })).filter((r) => r.isBillableToCompany && (r.companyID || r.ticketID));
       await ticketsOf(rows.map((r) => r.ticketID).filter((x): x is number => Boolean(x)));
       for (const r of rows) {
         const tk = r.ticketID ? ticketInfo.get(r.ticketID) : null;
@@ -1819,7 +1819,7 @@ const autotaskSource: TicketSource = {
       type AtUnit = { id: number; contractID: number; serviceID?: number | null; startDate?: string; endDate?: string; units?: number | null; price?: number | null; approveAndPostDate?: string | null };
       const fields = await safeFields(at, "ContractServiceUnits", ["id", "contractID", "serviceID", "startDate", "endDate", "units", "price", "approveAndPostDate"]);
       const today = new Date().toISOString().slice(0, 10);
-      const rows = (await at.query<AtUnit>("ContractServiceUnits", [{ op: "gte", field: "endDate", value: since }, { op: "lte", field: "startDate", value: today }], { fields, max: 50_000 })).filter((r) => !r.approveAndPostDate);
+      const rows = (await at.query<AtUnit>("ContractServiceUnits", [{ op: "gte", field: "endDate", value: since }, { op: "lte", field: "startDate", value: today }], { fields, max: 50_000, complete: true })).filter((r) => !r.approveAndPostDate);
       await contractsOf(rows.map((r) => r.contractID));
       const services = new Map(
         (await at.query<{ id: number; name: string }>("Services", [{ op: "in", field: "id", value: [...new Set(rows.map((r) => r.serviceID).filter(Boolean))].slice(0, 500) }], { fields: ["id", "name"], max: 500 }).catch(() => [])).map((s) => [s.id, s.name]),
@@ -1853,7 +1853,7 @@ const autotaskSource: TicketSource = {
       const fields = await safeFields(at, "ContractMilestones", ["id", "contractID", "title", "description", "amount", "dateDue", "status"]);
       const statuses = picklist(await fieldsOf(at, "ContractMilestones").catch(() => [] as FieldInfo[]), "status");
       const ready = new Set(statuses.filter((s) => /ready|pr[eê]t|factur/i.test(s.label) && !/billed|factur[ée]e?$/i.test(s.label)).map((s) => Number(s.value)));
-      const rows = (await at.query<AtMilestone>("ContractMilestones", [{ op: "gte", field: "dateDue", value: since }], { fields, max: 20_000 })).filter((r) => r.status != null && ready.has(r.status));
+      const rows = (await at.query<AtMilestone>("ContractMilestones", [{ op: "gte", field: "dateDue", value: since }], { fields, max: 20_000, complete: true })).filter((r) => r.status != null && ready.has(r.status));
       await contractsOf(rows.map((r) => r.contractID));
       for (const r of rows) {
         const k = contractInfo.get(r.contractID);

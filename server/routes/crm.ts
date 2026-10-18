@@ -5,7 +5,7 @@ import { z } from "zod";
 import { db, schema } from "../db/index.ts";
 import { auth, requirePermission, requireStaff, revokeUserSessions, type AppEnv } from "../lib/auth.ts";
 import { hashPassword, temporaryPassword } from "../lib/crypto.ts";
-import { sendPasswordLink } from "../lib/passwordLinks.ts";
+import { forgetPasswordLinks, sendPasswordLink } from "../lib/passwordLinks.ts";
 import { audit } from "../lib/audit.ts";
 import { body, zEmail, zOptText, zUuid } from "../lib/validate.ts";
 import { ticketSource, type NTicket } from "../lib/ticketSource.ts";
@@ -188,7 +188,9 @@ export const crmRoutes = new Hono<AppEnv>()
         autoApprove: z.array(z.enum(["labour", "charge", "contract", "milestone", "project"])).optional(),
       }),
     );
-    const [row] = await db().update(schema.clients).set({ invoice: p, updatedAt: new Date() }).where(eq(schema.clients.id, client.id)).returning();
+    const before = client.invoice?.autoApprove ?? [];
+    if ((p.autoApprove ?? []).some((k) => !before.includes(k)) && !a.permissions.includes("accounting.manage")) throw new HTTPException(403, { message: "accounting_manage_only" });
+    const [row] = await db().update(schema.clients).set({ invoice: { ...client.invoice, ...p }, updatedAt: new Date() }).where(eq(schema.clients.id, client.id)).returning();
     // what waits already follows the new rule
     const approved = p.autoApprove?.length ? await applyAutoApprove(client.id) : 0;
     await audit(a.user.id, "crm.invoice_updated", client.id, { autoApprove: p.autoApprove, approved });
@@ -260,6 +262,8 @@ export const crmRoutes = new Hono<AppEnv>()
         active: z.boolean().optional(),
       }),
     );
+    const loginChange = Boolean(contact.userId) && ((p.email !== undefined && (p.email ?? "").toLowerCase() !== (contact.email ?? "").toLowerCase()) || p.active === false);
+    if (loginChange && !a.permissions.includes("admin.clients")) throw new HTTPException(403, { message: "portal_admin_only" });
     if (contact.userId && p.email && p.email.toLowerCase() !== (contact.email ?? "").toLowerCase()) {
       const [taken] = await db().select({ id: schema.users.id }).from(schema.users).where(sql`lower(${schema.users.email}) = ${p.email.toLowerCase()}`);
       if (taken && taken.id !== contact.userId) throw new HTTPException(409, { message: "email_taken" });
@@ -269,7 +273,11 @@ export const crmRoutes = new Hono<AppEnv>()
       await run(() => src.updateContact(contact.autotaskId!, p, a));
     }
     if (contact.userId) {
-      if (p.email) await db().update(schema.users).set({ email: p.email, updatedAt: new Date() }).where(eq(schema.users.id, contact.userId));
+      if (p.email && p.email.toLowerCase() !== (contact.email ?? "").toLowerCase()) {
+        await db().update(schema.users).set({ email: p.email, updatedAt: new Date() }).where(eq(schema.users.id, contact.userId));
+        await forgetPasswordLinks(contact.userId);
+        await revokeUserSessions(contact.userId);
+      }
       if (p.active === false) {
         await db().update(schema.users).set({ active: false, updatedAt: new Date() }).where(eq(schema.users.id, contact.userId));
         await revokeUserSessions(contact.userId);
@@ -471,6 +479,7 @@ export const crmRoutes = new Hono<AppEnv>()
     const a = auth(c);
     const client = await clientOr404(c.req.param("id"));
     const p = await body(c, z.object({ autoApprove: z.boolean() }));
+    if (p.autoApprove && !a.permissions.includes("accounting.manage")) throw new HTTPException(403, { message: "accounting_manage_only" });
     const [row] = await db()
       .update(schema.clientContracts)
       .set({ autoApprove: p.autoApprove, updatedAt: new Date() })

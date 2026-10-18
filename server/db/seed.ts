@@ -1,7 +1,7 @@
 import { eq, sql } from "drizzle-orm";
 import { db, schema } from "./index.ts";
 import { config } from "../config.ts";
-import { hashPassword, temporaryPassword } from "../lib/crypto.ts";
+import { hashPassword, temporaryPassword, passwordProblem } from "../lib/crypto.ts";
 import { MASTER_ROLE, SYSTEM_ROLES, permissionsFor } from "../../shared/permissions.ts";
 
 /**
@@ -71,6 +71,9 @@ export async function seed(): Promise<void> {
   const adminRole = await roleBySlug(MASTER_ROLE);
   const demo = config.seedDemo && !config.production;
   const email = config.bootstrap.email || "admin@akab.local";
+  if (config.bootstrap.password && config.production && passwordProblem(config.bootstrap.password)) {
+    throw new Error("ADMIN_PASSWORD is too short (12 characters minimum): leave it empty to get a one-time password in the log");
+  }
   const password = config.bootstrap.password || (demo ? "akab-dev-password" : temporaryPassword());
   await d.insert(schema.users).values({
     email,
@@ -78,7 +81,8 @@ export async function seed(): Promise<void> {
     kind: "staff",
     roleId: adminRole,
     passwordHash: await hashPassword(password),
-    mustChangePassword: !config.bootstrap.password && !demo,
+    // ADMIN_PASSWORD stays in .env: it is only a first password, changed at the first sign-in
+    mustChangePassword: !demo,
     title: "Administrateur",
   });
   if (config.bootstrap.password) {

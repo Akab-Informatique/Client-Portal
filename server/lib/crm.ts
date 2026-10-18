@@ -2,6 +2,8 @@ import { and, asc, eq, inArray, isNotNull } from "drizzle-orm";
 import { db, schema } from "../db/index.ts";
 import { ticketSource, type CrmExport } from "./ticketSource.ts";
 import { billingSettings } from "./billing.ts";
+import { revokeUserSessions } from "./auth.ts";
+import { forgetPasswordLinks } from "./passwordLinks.ts";
 
 /**
  * The CRM: the portal's own copy of the clients, their contacts and their
@@ -121,8 +123,15 @@ async function apply(data: CrmExport) {
       await d.update(schema.clientContacts).set({ ...fields, active: true, syncedAt: now, updatedAt: now }).where(eq(schema.clientContacts.id, hit.id));
   }
   const seenContacts = new Set(data.contacts.map((c) => c.id));
-  const goneContacts = [...contacts.values()].filter((c) => c.active && !seenContacts.has(c.autotaskId!)).map((c) => c.id);
+  const goneRows = [...contacts.values()].filter((c) => c.active && !seenContacts.has(c.autotaskId!));
+  const goneContacts = goneRows.map((c) => c.id);
   if (goneContacts.length) await d.update(schema.clientContacts).set({ active: false, updatedAt: now }).where(inArray(schema.clientContacts.id, goneContacts));
+  // their client portal account goes too (someone who left the client company)
+  for (const c of goneRows.filter((x) => x.userId)) {
+    await d.update(schema.users).set({ active: false, updatedAt: now }).where(eq(schema.users.id, c.userId!));
+    await revokeUserSessions(c.userId!);
+    await forgetPasswordLinks(c.userId!);
+  }
 
   // ── contracts
   const contracts = new Map((await d.select().from(schema.clientContracts).where(isNotNull(schema.clientContracts.autotaskId))).map((k) => [k.autotaskId!, k]));

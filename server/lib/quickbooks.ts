@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { and, asc, eq, inArray, isNotNull, isNull } from "drizzle-orm";
 import { db, schema } from "../db/index.ts";
 import { addDays, linkDefaultAccounts, typesById, weekByDayAndType } from "./timesheets.ts";
@@ -61,6 +62,25 @@ async function qb<T>(method: "GET" | "POST", path: string, body?: unknown): Prom
   return j;
 }
 
+/** QuickBooks idempotency key: the same creation sent twice (a retry after a timeout) is made once. */
+const requestId = (key: string, body?: unknown) =>
+  createHash("sha256")
+    .update(key + (body === undefined ? "" : JSON.stringify(body)))
+    .digest("hex")
+    .slice(0, 36);
+
+/** One push per record at a time (the approval and the background job never send the same thing together). */
+const inFlight = new Set<string>();
+async function once<T>(key: string, fn: () => Promise<T>): Promise<T | undefined> {
+  if (inFlight.has(key)) return undefined;
+  inFlight.add(key);
+  try {
+    return await fn();
+  } finally {
+    inFlight.delete(key);
+  }
+}
+
 /** Every row of a query, 1000 at a time. */
 async function query<T>(entity: string, where = ""): Promise<T[]> {
   const out: T[] = [];
@@ -117,7 +137,7 @@ export async function createCustomer(clientId: string): Promise<QbCustomer> {
   const same = (await quickbooksCustomers()).find((q) => norm(q.name) === norm(c.name));
   if (same) throw new QuickBooksError("customer_exists", same.id);
   const email = c.invoice?.billingEmail || c.email;
-  const r = await qb<{ Customer: RawCustomer }>("POST", "customer", {
+  const r = await qb<{ Customer: RawCustomer }>("POST", `customer?requestid=${requestId(`customer:${clientId}`)}`, {
     DisplayName: c.name.slice(0, 100),
     CompanyName: c.name.slice(0, 100),
     ...(email ? { PrimaryEmailAddr: { Address: email } } : {}),
@@ -345,6 +365,11 @@ const dollars = (cents: number) => Math.round(cents) / 100;
 
 /** Send one invoice (or its changes) to QuickBooks. The client must be mapped to a customer. */
 export async function pushInvoice(invoiceId: string): Promise<{ quickbooksId: string }> {
+  const r = await once(`invoice:${invoiceId}`, () => pushInvoiceNow(invoiceId));
+  if (!r) throw new QuickBooksError("api", "busy");
+  return r;
+}
+async function pushInvoiceNow(invoiceId: string): Promise<{ quickbooksId: string }> {
   const d = db();
   const [inv] = await d.select().from(schema.clientInvoices).where(eq(schema.clientInvoices.id, invoiceId));
   if (!inv) throw new QuickBooksError("api", "invoice");
@@ -391,13 +416,14 @@ export async function pushInvoice(invoiceId: string): Promise<{ quickbooksId: st
       id = r.Invoice.Id;
     } else {
       // already in QuickBooks under the same number (sent by hand before): linked, not doubled
-      const same = await query<{ Id: string; CustomerRef?: { value: string } }>("Invoice", `DocNumber = '${inv.number.replace(/'/g, "\\'").slice(0, 21)}'`);
+      const docNumber = inv.number.slice(0, 21).replace(/[^A-Za-z0-9.-]/g, "");
+      const same = docNumber ? await query<{ Id: string; CustomerRef?: { value: string } }>("Invoice", `DocNumber = '${docNumber}'`) : [];
       const mine = same.find((x) => x.CustomerRef?.value === client.quickbooksId);
       if (mine) {
         const cur = await qb<{ Invoice: { Id: string; SyncToken: string } }>("GET", `invoice/${encodeURIComponent(mine.Id)}`);
         id = (await qb<{ Invoice: { Id: string } }>("POST", "invoice", { ...body, Id: cur.Invoice.Id, SyncToken: cur.Invoice.SyncToken, sparse: true })).Invoice.Id;
       } else {
-        id = (await qb<{ Invoice: { Id: string } }>("POST", "invoice", body)).Invoice.Id;
+        id = (await qb<{ Invoice: { Id: string } }>("POST", `invoice?requestid=${requestId(`invoice:${inv.id}`, body)}`, body)).Invoice.Id;
       }
     }
     await d.update(schema.clientInvoices).set({ quickbooksId: id, quickbooksSyncedAt: new Date(), quickbooksError: null }).where(eq(schema.clientInvoices.id, inv.id));
@@ -474,6 +500,9 @@ async function employeeOf(userId: string): Promise<string> {
 
 /** An approved week as QuickBooks time activities (one per day and type). Sent once. */
 export async function pushTimesheet(id: string) {
+  await once(`timesheet:${id}`, () => pushTimesheetNow(id));
+}
+async function pushTimesheetNow(id: string) {
   const d = db();
   const [sheet] = await d.select().from(schema.timesheets).where(eq(schema.timesheets.id, id));
   if (!sheet || sheet.status !== "approved" || sheet.quickbooksSyncedAt) return;
@@ -485,7 +514,8 @@ export async function pushTimesheet(id: string) {
     for (const r of rows) {
       const minutes = Math.round(r.hoursX100 * 0.6);
       const item = types.get(r.typeId)?.quickbooksItemId ?? s.invoice.itemId;
-      await qb("POST", "timeactivity", {
+      // the same day and kind is never sent twice, even after a partial failure
+      await qb("POST", `timeactivity?requestid=${requestId(`timesheet:${id}:${r.date}:${r.typeId}`)}`, {
         NameOf: "Employee",
         EmployeeRef: { value: employee },
         TxnDate: r.date,
@@ -505,6 +535,9 @@ export async function pushTimesheet(id: string) {
 
 /** An approved expense as a QuickBooks purchase (its type's account; the client when billable). */
 export async function pushExpense(id: string) {
+  await once(`expense:${id}`, () => pushExpenseNow(id));
+}
+async function pushExpenseNow(id: string) {
   const d = db();
   const [x] = await d.select().from(schema.expenses).where(eq(schema.expenses.id, id));
   if (!x || x.status !== "approved" || x.quickbooksId) return;
@@ -519,7 +552,7 @@ export async function pushExpense(id: string) {
     const [u] = await d.select({ name: schema.users.name }).from(schema.users).where(eq(schema.users.id, x.userId));
     const [client] = x.clientId ? await d.select({ qb: schema.clients.quickbooksId }).from(schema.clients).where(eq(schema.clients.id, x.clientId)) : [];
     const employee = await employeeOf(x.userId).catch(() => null);
-    const r = await qb<{ Purchase: { Id: string } }>("POST", "purchase", {
+    const r = await qb<{ Purchase: { Id: string } }>("POST", `purchase?requestid=${requestId(`expense:${id}`)}`, {
       PaymentType: "Cash",
       AccountRef: { value: bank },
       TxnDate: x.date,
@@ -560,7 +593,17 @@ export async function autoSync(part: "invoices" | "timesheets" | "expenses", id:
 }
 
 /** Every 15 minutes while the sync is on: payments back, and what was not sent yet. */
+let ticking = false;
 export async function quickbooksTick() {
+  if (ticking) return;
+  ticking = true;
+  try {
+    await tickNow();
+  } finally {
+    ticking = false;
+  }
+}
+async function tickNow() {
   const s = await quickbooksSettings();
   if (!s.enabled || !s.refreshToken || !s.realmId) return;
   const warn = (what: string) => (e: unknown) => console.warn(`[quickbooks] ${what}:`, errText(e));

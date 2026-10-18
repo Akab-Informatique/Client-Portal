@@ -1,6 +1,6 @@
 import { serve } from "@hono/node-server";
 import { config } from "./config.ts";
-import { initDb } from "./db/index.ts";
+import { initDb, closeDb } from "./db/index.ts";
 import { seed } from "./db/seed.ts";
 import { createApp } from "./app.ts";
 import { purgeExpiredSessions } from "./lib/auth.ts";
@@ -34,16 +34,17 @@ setInterval(() => void syncAll(), CRM_SYNC_EVERY).unref();
 // QuickBooks: payments made there brought onto the portal's invoices
 setInterval(() => void quickbooksTick(), 15 * 60_000).unref();
 
-// CRM: the portal keeps its own copy of the clients, contacts and contracts (Autotask is the reference while linked)
-void syncCrm();
-setInterval(() => void syncCrm(), CRM_SYNC_EVERY).unref();
 
-serve({ fetch: app.fetch, port: config.port, hostname: host }, (info) => {
+const server = serve({ fetch: app.fetch, port: config.port, hostname: host }, (info) => {
   console.log(`AKAB Portal API on http://${info.address}:${info.port}`);
   console.log(`  database : ${config.db.kind}${config.db.kind === "pglite" ? ` (${config.db.pgliteDir})` : ""}`);
   console.log(`  email    : ${smtp.source === "none" ? (config.production ? "not configured" : "not configured (printed to console)") : `SMTP ${smtp.host} (${smtp.source})`}`);
   console.log(`  MFA      : ${config.requireMfa ? "required" : "optional"}`);
-  if (config.production && !config.publicUrl) console.warn("  WARN: PUBLIC_URL is not set — email links use the request address");
+  if (config.production && !config.publicUrl) console.error("  ERROR: PUBLIC_URL is not set — password and welcome emails are not sent (set it to https://your-portal)");
+  if (config.production && config.publicUrl && !config.publicUrl.startsWith("https://")) console.warn("  WARN: PUBLIC_URL should start with https://");
+  if (config.production && !config.requireMfa) console.warn("  WARN: REQUIRE_MFA is off in production");
+  if (config.production && !config.cookieSecure) console.warn("  WARN: COOKIE_SECURE is off in production (session cookie sent over plain HTTP)");
+  if (config.production && !config.trustedProxies.length) console.warn("  WARN: TRUSTED_PROXY_IPS is not set — behind Nginx Proxy Manager every visitor shares its IP (rate limits, audit)");
 });
 
 // Texts with no technician reply in time become tickets
@@ -59,3 +60,18 @@ setInterval(() => {
   void purgeExpiredSessions().catch(() => undefined);
   void purgeOldNotifications().catch(() => undefined);
 }, 60 * 60_000).unref();
+
+// Docker stops the container with SIGTERM: stop taking requests, let the ones in progress end, close the database
+let stopping = false;
+for (const sig of ["SIGTERM", "SIGINT"] as const) {
+  process.on(sig, () => {
+    if (stopping) return;
+    stopping = true;
+    console.log(`[server] ${sig}: stopping`);
+    const force = setTimeout(() => process.exit(0), 8000);
+    force.unref();
+    server.close(() => {
+      void closeDb().finally(() => process.exit(0));
+    });
+  });
+}

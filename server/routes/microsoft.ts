@@ -58,6 +58,7 @@ export const microsoftRoutes = new Hono<AppEnv>()
   /** Start: the Microsoft sign-in address to open. */
   .post("/connect", async (c) => {
     const a = auth(c);
+    if (!a.permissions.some((p) => p === "outlook.view" || p === "tickets.o365")) throw new HTTPException(403, { message: "forbidden" });
     if (!rateLimit(`ms-connect:${a.realUser.id}`, 10, 60_000).ok) throw new HTTPException(429, { message: "rate_limited" });
     const redirectUri = microsoftRedirectUri(c.req.header("origin"));
     if (!redirectUri) throw new HTTPException(409, { message: "microsoft_no_public_url" });

@@ -14,14 +14,15 @@ import {
   revokeUserSessions,
   type AppEnv,
   type AuthContext,
+  accountUsable,
 } from "../lib/auth.ts";
 import { hashPassword, newTotpSecret, passwordProblem, seal, totpStep, totpUri, unseal, verifyPassword } from "../lib/crypto.ts";
-import { clientIp, rateLimit, resetRateLimit } from "../lib/http.ts";
+import { clientIp, rateLimit, resetRateLimit, refundRateLimit } from "../lib/http.ts";
 import { body, zEmail } from "../lib/validate.ts";
 import { audit } from "../lib/audit.ts";
 import { loadMe } from "./me.ts";
 import { notifyUserLocked } from "../lib/notify.ts";
-import { consumePasswordLink, findPasswordLink, sendPasswordChanged, sendPasswordLink } from "../lib/passwordLinks.ts";
+import { consumePasswordLink, findPasswordLink, forgetPasswordLinks, sendPasswordChanged, sendPasswordLink } from "../lib/passwordLinks.ts";
 
 const LOCK_AFTER = 10;
 const LOCK_MINUTES = 15;
@@ -59,7 +60,7 @@ export const authRoutes = new Hono<AppEnv>()
       throw new HTTPException(429, { message: "rate_limited" });
     }
     const ok = await verifyPassword(password, user?.passwordHash);
-    if (!user || !ok || !user.active) {
+    if (!user || !ok || !(await accountUsable(user))) {
       if (user && !ok) {
         const fails = user.failedLogins + 1;
         await db()
@@ -75,6 +76,7 @@ export const authRoutes = new Hono<AppEnv>()
       throw new HTTPException(401, { message: "invalid_credentials" });
     }
     resetRateLimit(`login:email:${email}`);
+    refundRateLimit(`login:ip:${ip}`);
     await db()
       .update(schema.users)
       .set({ failedLogins: 0, lockedUntil: null, lastLoginAt: new Date() })
@@ -139,6 +141,7 @@ export const authRoutes = new Hono<AppEnv>()
       .set({ passwordHash: await hashPassword(next), mustChangePassword: false, updatedAt: new Date() })
       .where(eq(schema.users.id, a.user.id));
     await revokeUserSessions(a.user.id, a.sessionId);
+    await forgetPasswordLinks(a.user.id);
     await audit(a.user.id, "password.changed", a.user.id);
     void sendPasswordChanged(a.user, c).catch(() => undefined);
     return c.json({ stage: "ready" });
@@ -161,7 +164,7 @@ export const authRoutes = new Hono<AppEnv>()
         .select()
         .from(schema.users)
         .where(sql`lower(${schema.users.email}) = ${email}`);
-      if (user?.active) {
+      if (user && (await accountUsable(user))) {
         void sendPasswordLink(user, "reset", c)
           .then(() => audit(null, "password.reset_requested", user.id))
           .catch((e) => console.error("[auth] reset email failed", e instanceof Error ? e.message : e));
@@ -192,7 +195,7 @@ export const authRoutes = new Hono<AppEnv>()
     const problem = passwordProblem(password);
     if (problem) throw new HTTPException(400, { message: `password_${problem}` });
     const [user] = await db().select().from(schema.users).where(eq(schema.users.id, row.userId));
-    if (!user?.active) throw new HTTPException(400, { message: "invalid_token" });
+    if (!user || !(await accountUsable(user))) throw new HTTPException(400, { message: "invalid_token" });
     if (!(await consumePasswordLink(row.id))) throw new HTTPException(400, { message: "invalid_token" });
     await db()
       .update(schema.users)

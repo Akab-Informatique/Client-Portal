@@ -137,7 +137,21 @@ export class SmsTicketError extends Error {
  * The conversation becomes a ticket (asked by the client, by a technician, or
  * no reply in time). The client is told its number.
  */
-export async function openTicket(conv: Conversation, a: AuthContext | null, reason: "client" | "technician" | "timeout" = a ? "technician" : "client"): Promise<{ id: number; number: string }> {
+const opening = new Map<string, Promise<{ id: number; number: string }>>();
+
+export function openTicket(conv: Conversation, a: AuthContext | null, reason: "client" | "technician" | "timeout" = a ? "technician" : "client"): Promise<{ id: number; number: string }> {
+  // a ticket being opened for this conversation: the same one
+  const busy = opening.get(conv.id);
+  if (busy) return busy;
+  const run = openTicketNow(conv, a, reason).finally(() => opening.delete(conv.id));
+  opening.set(conv.id, run);
+  return run;
+}
+
+async function openTicketNow(conv: Conversation, a: AuthContext | null, reason: "client" | "technician" | "timeout"): Promise<{ id: number; number: string }> {
+  // read again: it may have become a ticket since this copy was taken
+  const [fresh] = await db().select().from(schema.smsConversations).where(eq(schema.smsConversations.id, conv.id));
+  if (fresh?.ticketId && fresh.ticketNumber) return { id: fresh.ticketId, number: fresh.ticketNumber };
   if (conv.ticketId && conv.ticketNumber) return { id: conv.ticketId, number: conv.ticketNumber };
   const s = await smsSettings();
   const companyId = conv.companyId ?? s.defaultCompanyId;
@@ -184,8 +198,18 @@ export async function openTicket(conv: Conversation, a: AuthContext | null, reas
   return ticket;
 }
 
-/** No technician reply in time: those conversations become tickets. */
+/** No technician reply in time: those conversations become tickets (one run at a time). */
+let autoRunning = false;
 export async function autoTickets(now = new Date()): Promise<number> {
+  if (autoRunning) return 0;
+  autoRunning = true;
+  try {
+    return await autoTicketsNow(now);
+  } finally {
+    autoRunning = false;
+  }
+}
+async function autoTicketsNow(now: Date): Promise<number> {
   const due = await db()
     .select()
     .from(schema.smsConversations)

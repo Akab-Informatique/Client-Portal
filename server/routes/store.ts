@@ -92,7 +92,10 @@ export const storeRoutes = new Hono<AppEnv>()
   .patch("/products/:id", requirePermission("store.manage"), async (c) => {
     const a = auth(c);
     const id = zUuid.parse(c.req.param("id"));
-    const p = await body(c, zProduct.partial());
+    const sent = (await c.req.raw.clone().json().catch(() => ({}))) as Record<string, unknown>;
+    const parsed = await body(c, zProduct.partial());
+    // only the fields actually sent
+    const p = Object.fromEntries(Object.entries(parsed).filter(([k]) => k in sent)) as typeof parsed;
     const sku = p.sku !== undefined ? blank(p.sku) : undefined;
     if (sku !== undefined && (await skuTaken(sku, id))) throw new HTTPException(409, { message: "sku_taken" });
     if (p.serialized !== undefined) {

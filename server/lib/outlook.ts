@@ -141,7 +141,10 @@ export async function listMessages(
   let path: string;
   if (opts.cursor) {
     // Only a page of this same mailbox, as returned by Graph
-    if (!opts.cursor.toLowerCase().startsWith(own.toLowerCase()) || opts.cursor.includes("..")) throw new O365Error("not_found");
+    const resolved = (p: string) => new URL(GRAPH_BASE + p).pathname.toLowerCase();
+    if (!opts.cursor.toLowerCase().startsWith(own.toLowerCase()) || opts.cursor.includes("..") || /[\x00-\x20\x7f]/.test(opts.cursor) || !resolved(opts.cursor).startsWith(resolved(own))) {
+      throw new O365Error("not_found");
+    }
     path = opts.cursor;
   } else {
     const q = new URLSearchParams({ $top: String(PAGE), $select: LIST_FIELDS });

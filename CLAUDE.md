@@ -73,6 +73,11 @@ Administration tab `/meetings`, used live during the Monday team meeting (lists 
 - "View as client" (`clientview.use`): the session stores `view_as_client_id`; `loadAuth` swaps `auth.user` to a read-only client identity (`auth.realUser` is the technician). `readOnlyViewAs` blocks every write except `/api/view-as` and logout. Client endpoints must scope by `auth.user.clientId`.
 - No secrets in `VITE_*` variables or committed files; `.env` only.
 - CSP lives in `server/app.ts` (`secureHeaders`) — fonts are self-hosted (`@fontsource`), no external scripts.
+- Graph paths built from browser input go through `safeGraphPath` (in `graph()`): no `.`/`..` segment once decoded, no `%2f`/`%5c`/whitespace. Organisation-access mailboxes (`via = "app"`) need `outlook.anyMailbox` on every request.
+- `assertMasterGuard` also protects MASTER_ONLY rights: a non-master cannot give a role carrying one, nor edit/reset/disable someone holding one.
+- Password links: built from `PUBLIC_URL` only in production (never the Host header); cleared on password, email or status change (`forgetPasswordLinks`). Client users of an inactive client cannot sign in (`accountUsable`).
+- Nobody approves their own timesheet or expense. Invoice creation is one transaction. QuickBooks creations carry a `requestid` (idempotent) and run one at a time. Full Autotask copies use `complete: true` (fail instead of truncating, so nothing looks deleted).
+- One app instance only (in-process locks, numbering, background jobs).
 
 ## Production
 

@@ -143,6 +143,30 @@ export async function tokenRequest(s: Pick<O365Settings, "tenantId" | "clientId"
 }
 
 /**
+ * A Graph path from pieces that may come from the browser (ids, page cursors):
+ * no segment may be "." or ".." once decoded, nor hide a "/" or "\", so a
+ * call never leaves the mailbox it was meant for (the URL parser would
+ * resolve "%2e%2e").
+ */
+export function safeGraphPath(path: string): boolean {
+  // whitespace and control characters are dropped by the URL parser (".\t." would become ".."): never accepted
+  const [route] = path.split("?");
+  if (/[\x00-\x20\x7f]/.test(route)) return false;
+  if (route.includes("\\") || /%5c/i.test(route)) return false;
+  if (/%(0[0-9a-f]|1[0-9a-f]|20|7f)/i.test(route)) return false;
+  for (const seg of route.split("/")) {
+    let d: string;
+    try {
+      d = decodeURIComponent(seg);
+    } catch {
+      return false;
+    }
+    if (d === "." || d === ".." || d.includes("/") || d.includes("\\")) return false;
+  }
+  return new URL(GRAPH + path).pathname.startsWith(new URL(GRAPH).pathname);
+}
+
+/**
  * One Graph call. `path` is relative to GRAPH (e.g. "users/x/messages").
  * `prefer` adds Prefer options (e.g. outlook.body-content-type="html").
  */
@@ -153,6 +177,7 @@ export async function graph<T>(
   settings?: Pick<O365Settings, "tenantId" | "clientId" | "secret">,
   prefer: string[] = [],
 ): Promise<T> {
+  if (!safeGraphPath(path)) throw new O365Error("not_found");
   const as = settings ? null : graphAs.getStore();
   const bearer = as ? await userAccessToken(as.userId) : await accessToken(settings ?? (await o365Settings()));
   let res: Response;

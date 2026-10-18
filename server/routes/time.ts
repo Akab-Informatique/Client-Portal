@@ -1,6 +1,6 @@
 import { Hono } from "hono";
 import { HTTPException } from "hono/http-exception";
-import { and, asc, desc, eq, inArray } from "drizzle-orm";
+import { and, asc, desc, eq, getTableColumns, inArray, ne, sql } from "drizzle-orm";
 import { z } from "zod";
 import { db, schema } from "../db/index.ts";
 import { auth, requirePermission, requireStaff, type AppEnv } from "../lib/auth.ts";
@@ -22,15 +22,23 @@ const zReceipt = z
   .optional();
 
 type Expense = typeof schema.expenses.$inferSelect;
-const expenseView = (x: Expense, extra: Record<string, unknown> = {}) => {
-  const { receiptData, ...rest } = x;
-  return { ...rest, hasReceipt: Boolean(receiptData), ...extra };
+const expenseView = (x: Omit<Expense, "receiptData"> & { receiptData?: string | null; hasReceipt?: boolean }, extra: Record<string, unknown> = {}) => {
+  const { receiptData, hasReceipt, ...rest } = x;
+  return { ...rest, hasReceipt: hasReceipt ?? Boolean(receiptData), ...extra };
 };
+/** The expense columns, without the receipt file (lists stay small). */
+const { receiptData: _receipt, ...EXPENSE_COLUMNS } = getTableColumns(schema.expenses);
+const listColumns = { ...EXPENSE_COLUMNS, hasReceipt: sql<boolean>`(${schema.expenses.receiptData} is not null)` };
 
 async function ownExpense(id: string, userId: string) {
   const [x] = await db().select().from(schema.expenses).where(and(eq(schema.expenses.id, zUuid.parse(id)), eq(schema.expenses.userId, userId)));
   if (!x) throw new HTTPException(404, { message: "not_found" });
   return x;
+}
+
+async function activeClient(id: string) {
+  const [cl] = await db().select({ active: schema.clients.active }).from(schema.clients).where(eq(schema.clients.id, id));
+  if (!cl?.active) throw new HTTPException(400, { message: "client_unknown" });
 }
 
 /** Amount from quantity × the type's rate (km…), or the amount typed. */
@@ -176,7 +184,7 @@ export const timeRoutes = new Hono<AppEnv>()
   .get("/expenses", requirePermission("timesheets.use"), async (c) => {
     const a = auth(c);
     const rows = await db()
-      .select({ x: schema.expenses, type: schema.expenseTypes.name, client: schema.clients.name })
+      .select({ x: listColumns, type: schema.expenseTypes.name, client: schema.clients.name })
       .from(schema.expenses)
       .innerJoin(schema.expenseTypes, eq(schema.expenseTypes.id, schema.expenses.typeId))
       .leftJoin(schema.clients, eq(schema.clients.id, schema.expenses.clientId))
@@ -200,6 +208,7 @@ export const timeRoutes = new Hono<AppEnv>()
       }),
     );
     const pr = await priced(p.typeId, p);
+    if (p.clientId) await activeClient(p.clientId);
     const [row] = await db()
       .insert(schema.expenses)
       .values({
@@ -238,6 +247,7 @@ export const timeRoutes = new Hono<AppEnv>()
     );
     const pr = p.typeId || p.quantity !== undefined || p.amountCents !== undefined ? await priced(p.typeId ?? cur.typeId, { quantity: p.quantity ?? cur.quantityX100 / 100, amountCents: p.amountCents ?? cur.amountCents }) : null;
     const clientId = p.clientId !== undefined ? p.clientId : cur.clientId;
+    if (p.clientId) await activeClient(p.clientId);
     const [row] = await db()
       .update(schema.expenses)
       .set({
@@ -319,11 +329,13 @@ export const timeRoutes = new Hono<AppEnv>()
     const [cur] = await db().select().from(schema.timesheets).where(eq(schema.timesheets.id, zUuid.parse(c.req.param("id"))));
     if (!cur) throw new HTTPException(404, { message: "not_found" });
     if (cur.status !== "submitted") throw new HTTPException(409, { message: "timesheet_not_submitted" });
+    if (cur.userId === a.realUser.id) throw new HTTPException(403, { message: "approve_own" });
     const [row] = await db()
       .update(schema.timesheets)
       .set({ status: p.decision === "approve" ? "approved" : "rejected", decidedBy: a.user.id, decidedAt: new Date(), comment: p.comment || null, updatedAt: new Date() })
-      .where(eq(schema.timesheets.id, cur.id))
+      .where(and(eq(schema.timesheets.id, cur.id), eq(schema.timesheets.status, "submitted")))
       .returning();
+    if (!row) throw new HTTPException(409, { message: "timesheet_not_submitted" });
     await audit(a.user.id, `timesheet.${p.decision === "approve" ? "approved" : "rejected"}`, row.id, { weekStart: row.weekStart });
     if (row.status === "approved") await autoSync("timesheets", row.id);
     return c.json({ id: row.id, status: row.status });
@@ -331,7 +343,7 @@ export const timeRoutes = new Hono<AppEnv>()
   .get("/approvals/expenses", requirePermission("timesheets.approve"), async (c) => {
     const status = z.enum(["submitted", "approved", "rejected"]).parse(c.req.query("status") ?? "submitted");
     const rows = await db()
-      .select({ x: schema.expenses, type: schema.expenseTypes.name, unit: schema.expenseTypes.unit, user: schema.users.name, client: schema.clients.name })
+      .select({ x: listColumns, type: schema.expenseTypes.name, unit: schema.expenseTypes.unit, user: schema.users.name, client: schema.clients.name })
       .from(schema.expenses)
       .innerJoin(schema.expenseTypes, eq(schema.expenseTypes.id, schema.expenses.typeId))
       .innerJoin(schema.users, eq(schema.users.id, schema.expenses.userId))
@@ -345,14 +357,25 @@ export const timeRoutes = new Hono<AppEnv>()
     const a = auth(c);
     const p = await body(c, z.object({ ids: z.array(zUuid).min(1).max(500), decision: z.enum(["approve", "reject"]), comment: z.string().trim().max(500).optional() }));
     const d = db();
-    const rows = await d.select().from(schema.expenses).where(and(inArray(schema.expenses.id, p.ids), eq(schema.expenses.status, "submitted")));
+    // never one's own expenses
+    const rows = await d.select().from(schema.expenses).where(and(inArray(schema.expenses.id, p.ids), eq(schema.expenses.status, "submitted"), ne(schema.expenses.userId, a.realUser.id)));
+    const decided: typeof rows = [];
     for (const x of rows) {
+      await d.transaction(async (tx) => {
+      // decided once: a concurrent decision wins, this one does nothing
+      const [won] = await tx
+        .update(schema.expenses)
+        .set({ status: p.decision === "approve" ? "approved" : "rejected", decidedBy: a.user.id, decidedAt: new Date(), comment: p.comment || null, updatedAt: new Date() })
+        .where(and(eq(schema.expenses.id, x.id), eq(schema.expenses.status, "submitted")))
+        .returning({ id: schema.expenses.id });
+      if (!won) return;
+      decided.push(x);
       let billingItemId: string | null = null;
       // billable to a client: it becomes work to invoice, already approved
       if (p.decision === "approve" && x.billable && x.clientId) {
-        const [type] = await d.select({ name: schema.expenseTypes.name }).from(schema.expenseTypes).where(eq(schema.expenseTypes.id, x.typeId));
-        const [u] = await d.select({ name: schema.users.name }).from(schema.users).where(eq(schema.users.id, x.userId));
-        const [item] = await d
+        const [type] = await tx.select({ name: schema.expenseTypes.name }).from(schema.expenseTypes).where(eq(schema.expenseTypes.id, x.typeId));
+        const [u] = await tx.select({ name: schema.users.name }).from(schema.users).where(eq(schema.users.id, x.userId));
+        const [item] = await tx
           .insert(schema.billingItems)
           .values({
             clientId: x.clientId,
@@ -373,12 +396,10 @@ export const timeRoutes = new Hono<AppEnv>()
           .returning({ id: schema.billingItems.id });
         billingItemId = item?.id ?? null;
       }
-      await d
-        .update(schema.expenses)
-        .set({ status: p.decision === "approve" ? "approved" : "rejected", decidedBy: a.user.id, decidedAt: new Date(), comment: p.comment || null, billingItemId, updatedAt: new Date() })
-        .where(eq(schema.expenses.id, x.id));
-      if (p.decision === "approve") await autoSync("expenses", x.id);
+      if (billingItemId) await tx.update(schema.expenses).set({ billingItemId }).where(eq(schema.expenses.id, x.id));
+      });
     }
-    await audit(a.user.id, `expense.${p.decision === "approve" ? "approved" : "rejected"}`, null, { count: rows.length });
-    return c.json({ changed: rows.length });
+    if (p.decision === "approve" && decided.length <= 5) for (const x of decided) await autoSync("expenses", x.id);
+    await audit(a.user.id, `expense.${p.decision === "approve" ? "approved" : "rejected"}`, null, { count: decided.length });
+    return c.json({ changed: decided.length });
   });

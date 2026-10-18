@@ -5,6 +5,7 @@ import { config } from "../config.ts";
 
 /** Visitor IP. Forwarded headers count only when the peer is a trusted proxy. */
 export function clientIp(c: Context): string {
+  warnUntrustedProxy(c);
   let peer = "unknown";
   try {
     peer = (getConnInfo(c).remote.address || "unknown").replace(/^::ffff:/, "");
@@ -65,6 +66,20 @@ export function rateLimit(key: string, limit: number, windowMs: number): { ok: b
 
 export function resetRateLimit(key: string) {
   buckets.delete(key);
+}
+
+/** Give back one try (e.g. a login that succeeded). */
+export function refundRateLimit(key: string) {
+  const b = buckets.get(key);
+  if (b && b.count > 0) b.count--;
+}
+
+let proxyWarned = false;
+/** Behind a proxy that is not trusted, everyone looks like the proxy: said once in the log. */
+export function warnUntrustedProxy(c: Context) {
+  if (proxyWarned || config.trustedProxies.length || !c.req.header("x-forwarded-for")) return;
+  proxyWarned = true;
+  console.warn("[security] requests come through a proxy that is not in TRUSTED_PROXY_IPS: every visitor shares its IP for rate limits and audit — set TRUSTED_PROXY_IPS to the proxy's address");
 }
 
 export function badRequest(message: string, details?: unknown): never {

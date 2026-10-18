@@ -47,12 +47,12 @@ chmod 600 .env
 | Variable | Value |
 |----------|-------|
 | `POSTGRES_PASSWORD` | 1st generated value — never change it after the first start |
-| `APP_SECRET` | 2nd generated value — encrypts MFA secrets |
-| `PUBLIC_URL` | `https://portail.akab.ca` |
+| `APP_SECRET` | 2nd generated value — encrypts MFA secrets **and every integration key** (Autotask, Microsoft, QuickBooks, Stripe, VoIP.ms, Claude). Never change it, and back it up with the database (see Backup) |
+| `PUBLIC_URL` | **Required**: `https://portail.akab.ca`. Without it, password and welcome emails are not sent |
 | `ADMIN_EMAIL` / `ADMIN_NAME` | First administrator (created once) |
-| `ADMIN_PASSWORD` | Leave empty → one-time password in the log |
-| `APP_PUBLISH` | `3000` (or `IP:3000`) |
-| `TRUSTED_PROXY_IPS` | Recommended: your reverse proxy's IP |
+| `ADMIN_PASSWORD` | Leave empty → one-time password in the log (if set: 12 characters minimum, changed at the first sign-in) |
+| `APP_PUBLISH` | `<this server's LAN IP>:3000` — so port 3000 is not open on every interface (see Firewall) |
+| `TRUSTED_PROXY_IPS` | **Required behind Nginx Proxy Manager**: the proxy server's IP. Without it every visitor looks like the proxy: one person failing logins can block everyone, and the audit log shows the proxy's IP |
 | `SMTP_*` | Optional — the mail server can also be set later in **Admin settings › Courriels** (that setting wins over `.env`) |
 
 ## 4. Start
@@ -99,12 +99,48 @@ docker compose up -d --build
 
 Database migrations run automatically when the app starts.
 
+## Firewall
+
+Port 3000 is plain HTTP: only Nginx Proxy Manager should reach it. Docker's
+published ports bypass `ufw`, so filter in Docker's own chain (replace
+`192.168.1.20` with the proxy server's IP):
+
+```bash
+sudo iptables -I DOCKER-USER -p tcp --dport 3000 ! -s 192.168.1.20 -j DROP
+sudo apt install -y iptables-persistent && sudo netfilter-persistent save
+```
+
+In Nginx Proxy Manager, turn off the access log (or query strings) for
+`/api/sms/hook`: VoIP.ms sends its secret token in the address. If that log
+was ever shared, make a new token in **Admin settings › Intégrations › VoIP.ms**.
+
 ## Backup
+
+The database **and** `.env` (its `APP_SECRET` decrypts every saved key and
+MFA secret: a database restored with another `APP_SECRET` loses them all).
 
 ```bash
 docker compose exec -T db pg_dump -U akab akab | gzip > akab-$(date +%F).sql.gz
 chmod 600 akab-*.sql.gz
 ```
+
+Every night, keeping 30 days, then copy `/opt/akab-backups` off this server
+(another machine, a NAS, cloud storage):
+
+```bash
+sudo mkdir -p /opt/akab-backups && sudo chmod 700 /opt/akab-backups
+sudo cp /opt/akab-portal/.env /opt/akab-backups/env.backup && sudo chmod 600 /opt/akab-backups/env.backup
+( sudo crontab -l 2>/dev/null; echo '30 2 * * * cd /opt/akab-portal && docker compose exec -T db pg_dump -U akab akab | gzip > /opt/akab-backups/akab-$(date +\%F).sql.gz && find /opt/akab-backups -name "akab-*.sql.gz" -mtime +30 -delete' ) | sudo crontab -
+```
+
+Restore (test it once, on another machine):
+
+```bash
+gunzip -c akab-YYYY-MM-DD.sql.gz | docker compose exec -T db psql -U akab akab
+```
+
+Run a single copy of the app (one `app` container): its background jobs and
+invoice numbering assume one instance.
 
 ## Troubleshooting
 

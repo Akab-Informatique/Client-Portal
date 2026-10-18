@@ -9,7 +9,7 @@ import { asConnection, listCalendars, O365Error, o365Ready } from "../lib/o365.t
 import { hashPassword, temporaryPassword } from "../lib/crypto.ts";
 import { audit } from "../lib/audit.ts";
 import { mailConfigured } from "../lib/mail.ts";
-import { sendPasswordLink } from "../lib/passwordLinks.ts";
+import { forgetPasswordLinks, sendPasswordLink } from "../lib/passwordLinks.ts";
 import { body, zEmail, zName, zOptText, zPhone, zUuid } from "../lib/validate.ts";
 import {
   effectivePermissions,
@@ -19,6 +19,7 @@ import {
   type Audience,
   type Override,
   type PermissionKey,
+  MASTER_ONLY,
 } from "../../shared/permissions.ts";
 
 type UserRow = typeof schema.users.$inferSelect;
@@ -77,11 +78,21 @@ async function masterRoleId(): Promise<string | null> {
 /**
  * A global admin manages technicians but cannot make anyone master
  * administrator (themselves included), nor change, reset or disable one.
+ * Same for the master-only rights themselves (roles, integrations, mail
+ * server, Microsoft 365, any mailbox): a role carrying one is given only by a
+ * master, and whoever holds one — through a custom role or their own rights —
+ * is changed, reset or disabled only by a master.
  */
 async function assertMasterGuard(a: AuthContext, p: { target?: UserRow; roleId?: string | null }) {
   const master = await masterRoleId();
   if (!master || a.realUser.roleId === master) return;
   if (p.target?.roleId === master || (p.roleId !== undefined && p.roleId === master)) throw new HTTPException(403, { message: "master_only" });
+  const masterOnly = (keys: readonly string[]) => keys.some((k) => (MASTER_ONLY as readonly string[]).includes(k));
+  if (p.roleId) {
+    const [role] = await db().select({ permissions: schema.roles.permissions }).from(schema.roles).where(eq(schema.roles.id, p.roleId));
+    if (role && masterOnly(role.permissions)) throw new HTTPException(403, { message: "master_only" });
+  }
+  if (p.target && masterOnly(await permissionsOf(p.target))) throw new HTTPException(403, { message: "master_only" });
 }
 
 async function staffTarget(id: string | undefined): Promise<UserRow> {
@@ -296,7 +307,10 @@ export const adminRoutes = new Hono<AppEnv>()
     if (!row) throw new HTTPException(404, { message: "not_found" });
     if (p.active === false) {
       const members = await db().select({ id: schema.users.id }).from(schema.users).where(eq(schema.users.clientId, id));
-      for (const m of members) await revokeUserSessions(m.id);
+      for (const m of members) {
+        await revokeUserSessions(m.id);
+        await forgetPasswordLinks(m.id);
+      }
     }
     await audit(auth(c).user.id, "client.updated", id, p);
     return c.json(row);
@@ -350,6 +364,8 @@ export const adminRoutes = new Hono<AppEnv>()
       .where(eq(schema.users.id, target.id))
       .returning();
     if (p.active === false) await revokeUserSessions(target.id);
+    // a link sent to the old address, or to someone turned off, no longer works
+    if (p.active === false || (p.email && p.email.toLowerCase() !== target.email.toLowerCase())) await forgetPasswordLinks(target.id);
     await audit(a.user.id, "user.updated", target.id, { ...fields, unlock });
     return c.json((await withOverrides([u]))[0]);
   })
@@ -364,6 +380,7 @@ export const adminRoutes = new Hono<AppEnv>()
       .set({ passwordHash: await hashPassword(password), mustChangePassword: true, lockedUntil: null, failedLogins: 0, updatedAt: new Date() })
       .where(eq(schema.users.id, target.id));
     await revokeUserSessions(target.id);
+    await forgetPasswordLinks(target.id);
     await audit(a.user.id, "user.password_reset", target.id);
     return c.json({ temporaryPassword: password });
   })

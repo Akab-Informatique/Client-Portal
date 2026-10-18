@@ -65,12 +65,14 @@ async function signInOf(userId: string) {
 }
 
 /** A mailbox linked by this technician (nobody else can open it). */
-async function account(a: AuthContext, id: string) {
+async function account(a: AuthContext, id: string, opts: { unlinking?: boolean } = {}) {
   const [acc] = await db()
     .select()
     .from(schema.mailAccounts)
     .where(and(eq(schema.mailAccounts.id, zUuid.parse(id)), eq(schema.mailAccounts.userId, a.user.id)));
   if (!acc) throw new HTTPException(404, { message: "not_found" });
+  // a mailbox reached through the organisation access needs the right now, not only when it was linked
+  if (acc.via === "app" && !opts.unlinking && !a.permissions.includes("outlook.anyMailbox")) throw new HTTPException(403, { message: "outlook_no_access" });
   return acc;
 }
 
@@ -99,6 +101,8 @@ export const outlookRoutes = new Hono<AppEnv>()
   })
   // a mailbox reached through the technician's own sign-in: Graph calls go out as them
   .use("/accounts/:id/*", async (c, next) => {
+    // unlinking calls nothing at Microsoft
+    if (c.req.method === "DELETE" && /^\/api\/outlook\/accounts\/[^/]+\/?$/.test(c.req.path)) return next();
     const acc = await account(auth(c), c.req.param("id") ?? "");
     try {
       await asConnection(acc.via === "user" ? acc.userId : null, () => next());
@@ -189,7 +193,7 @@ export const outlookRoutes = new Hono<AppEnv>()
 
   .delete("/accounts/:id", async (c) => {
     const a = auth(c);
-    const acc = await account(a, c.req.param("id"));
+    const acc = await account(a, c.req.param("id"), { unlinking: true });
     await db().delete(schema.mailAccounts).where(eq(schema.mailAccounts.id, acc.id));
     await audit(a.realUser.id, "outlook.unlinked", acc.id, { address: acc.address });
     return c.json({ ok: true });

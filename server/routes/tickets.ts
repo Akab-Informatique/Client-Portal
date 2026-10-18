@@ -258,6 +258,9 @@ async function detailOf(src: TicketSource, id: number, a: AuthContext) {
   };
 }
 
+/** Timers being validated (a double click makes one time entry) */
+const submitting = new Set<string>();
+
 export const ticketRoutes = new Hono<AppEnv>()
   .use(requirePermission("tickets.view"))
 
@@ -701,6 +704,9 @@ export const ticketRoutes = new Hono<AppEnv>()
         workTypeId: z.string().max(40).nullable().default(null),
       }),
     );
+    if (submitting.has(timer.id)) throw new HTTPException(409, { message: "timer_busy" });
+    submitting.add(timer.id);
+    try {
     const endedAt = timer.endedAt ?? new Date();
     const src = await ticketSource();
     await run(() => src.addTimeEntry(timer.ticketId, { ...p, startedAt: new Date(endedAt.getTime() - p.hours * 3_600_000), endedAt }, a));
@@ -717,6 +723,9 @@ export const ticketRoutes = new Hono<AppEnv>()
     await db().delete(schema.ticketTimers).where(eq(schema.ticketTimers.id, timer.id));
     await audit(a.user.id, "ticket.time_entry", String(timer.ticketId), { hours: p.hours });
     return c.json({ ok: true }, 201);
+    } finally {
+      submitting.delete(timer.id);
+    }
   })
   /** "Later": a stopped timer goes back to paused; it resumes when the ticket is opened again. */
   .post("/timers/:timerId/later", requirePermission("tickets.edit"), async (c) => {
