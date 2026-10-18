@@ -11,9 +11,8 @@ export const NAV_SECTIONS = [
   { key: "team", labelKey: "nav.team" },
   { key: "tools", labelKey: "nav.myTools" },
   { key: "command", labelKey: "nav.commandCenter" },
-  { key: "crm", labelKey: "nav.crm" },
-  { key: "accounting", labelKey: "nav.accounting" },
   { key: "management", labelKey: "nav.management" },
+  { key: "accounting", labelKey: "nav.accounting" },
 ] as const;
 export type NavSection = (typeof NAV_SECTIONS)[number]["key"];
 
@@ -36,7 +35,7 @@ export const STAFF_MODULES: NavModule[] = [
   { key: "timesheets", path: "/timesheets", labelKey: "nav.timesheets", icon: Clock, section: "tools", upcoming: true },
   { key: "expenses", path: "/expenses", labelKey: "nav.expenses", icon: Wallet, section: "tools", upcoming: true },
   { key: "tickets", path: "/tickets", labelKey: "nav.tickets", icon: Ticket, section: "command", permission: "tickets.view" },
-  { key: "crm", path: "/crm", labelKey: "nav.crmClients", icon: Building2, section: "crm", permission: "crm.view" },
+  { key: "crm", path: "/crm", labelKey: "nav.crmClients", icon: Building2, section: "management", permission: "crm.view" },
   { key: "invoices", path: "/accounting/invoices", labelKey: "nav.invoices", icon: Receipt, section: "accounting", permission: "accounting.view" },
   { key: "quotes", path: "/accounting/quotes", labelKey: "nav.quotes", icon: FileSignature, section: "accounting", permission: "accounting.view" },
   { key: "store", path: "/store", labelKey: "nav.store", icon: Store, section: "management", permission: "store.view" },
