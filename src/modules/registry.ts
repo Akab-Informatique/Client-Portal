@@ -39,6 +39,6 @@ export const STAFF_MODULES: NavModule[] = [
   { key: "quotes", path: "/accounting/quotes", labelKey: "nav.quotes", icon: FileSignature, section: "accounting", permission: "accounting.view" },
   { key: "store", path: "/store", labelKey: "nav.store", icon: Store, section: "operations", permission: "store.view" },
   { key: "meetings", path: "/meetings", labelKey: "nav.meetings", icon: CalendarCheck, section: "team", permission: "meetings.view" },
-  { key: "documentation", path: "/documentation", labelKey: "nav.documentation", icon: BookOpen, section: "command", upcoming: true },
   { key: "devices", path: "/devices", labelKey: "nav.devices", icon: MonitorSmartphone, section: "command", upcoming: true },
+  { key: "documentation", path: "/documentation", labelKey: "nav.documentation", icon: BookOpen, section: "command", upcoming: true },
 ];
