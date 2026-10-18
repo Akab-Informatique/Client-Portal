@@ -29,7 +29,7 @@ export type Expense = {
   clientId: string | null;
   clientName: string | null;
   billable: boolean;
-  status: "draft" | "submitted" | "approved" | "rejected";
+  status: "draft" | "submitted" | "approved" | "rejected" | "paid";
   comment: string | null;
   hasReceipt: boolean;
   receiptName: string | null;
@@ -41,6 +41,7 @@ export const EXPENSE_STATUS_STYLE: Record<Expense["status"], string> = {
   submitted: "border-sky-500/40 bg-sky-500/10 text-sky-300",
   approved: "border-emerald-500/40 bg-emerald-500/10 text-emerald-300",
   rejected: "border-red-500/40 bg-red-500/10 text-red-300",
+  paid: "border-[color:var(--gold)]/40 bg-[color:var(--gold)]/10 text-primary",
 };
 const MAX_FILE = 5 * 1024 * 1024;
 

@@ -12,13 +12,14 @@ import { cn } from "@/lib/utils";
 
 export type TimeType = { id: string; name: string; kind: "labour" | "other"; active: boolean };
 type Entry = { id: string; date: string; typeId: string; type: string; kind: string; hours: number; note: string | null; ticketId: number | null; ticketNumber: string | null; ticketTitle: string | null; source: "ticket" | "manual" };
-type Week = { required: boolean; weekStart: string; weekEnd: string; status: "draft" | "submitted" | "approved" | "rejected"; comment: string | null; entries: Entry[]; types: { type: string; kind: string; hours: number }[]; labourHours: number; totalHours: number };
+type Week = { required: boolean; weekStart: string; weekEnd: string; status: "draft" | "submitted" | "approved" | "rejected" | "paid"; comment: string | null; entries: Entry[]; types: { type: string; kind: string; hours: number }[]; labourHours: number; totalHours: number };
 
 const STATUS_STYLE: Record<Week["status"], string> = {
   draft: "border-slate-500/40 bg-slate-500/10 text-slate-300",
   submitted: "border-sky-500/40 bg-sky-500/10 text-sky-300",
   approved: "border-emerald-500/40 bg-emerald-500/10 text-emerald-300",
   rejected: "border-red-500/40 bg-red-500/10 text-red-300",
+  paid: "border-[color:var(--gold)]/40 bg-[color:var(--gold)]/10 text-primary",
 };
 const addDays = (day: string, n: number) => {
   const d = new Date(`${day}T12:00:00Z`);

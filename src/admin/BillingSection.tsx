@@ -682,7 +682,12 @@ function QuickBooksTab() {
         <div className="grid gap-2 sm:grid-cols-3">
           {(["customers", "invoices", "payments", "timesheets", "expenses"] as const).map((k) => (
             <label key={k} className="flex items-start gap-2 rounded-xl border p-3 text-sm">
-              <Switch checked={q.sync[k]} onCheckedChange={(v) => toggle.mutate({ sync: { [k]: v } })} />
+              {/* timesheets and expenses are paused (accounting marks them paid in the portal) */}
+              <Switch
+                checked={k === "timesheets" || k === "expenses" ? false : q.sync[k]}
+                disabled={k === "timesheets" || k === "expenses"}
+                onCheckedChange={(v) => toggle.mutate({ sync: { [k]: v } })}
+              />
               <span>
                 <span className="block font-medium">{t(`billing.qb.syncItems.${k}`)}</span>
                 <span className="block text-[11px] text-muted-foreground">{t(`billing.qb.syncItems.${k}Text`)}</span>

@@ -3,7 +3,29 @@ import { useTranslation } from "react-i18next";
 import { useSearchParams } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
-import { AlertTriangle, Ban, Check, ClipboardCheck, Clock, DownloadCloud, FileText, Flag, FolderKanban, Hammer, Loader2, Package, Pencil, Receipt, Send, Sparkles, Undo2, Wallet, X, type LucideIcon } from "lucide-react";
+import {
+  AlertTriangle,
+  Ban,
+  BadgeDollarSign,
+  Check,
+  ClipboardCheck,
+  Clock,
+  DownloadCloud,
+  FileText,
+  Flag,
+  FolderKanban,
+  Hammer,
+  Loader2,
+  Package,
+  Pencil,
+  Receipt,
+  Send,
+  Sparkles,
+  Undo2,
+  Wallet,
+  X,
+  type LucideIcon,
+} from "lucide-react";
 import { GlassBackdrop } from "@/components/brand/GlassBackdrop";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -40,8 +62,21 @@ type Item = {
   invoiceNumber: string | null;
   autoApproved: boolean;
 };
-type Summary = { state: { at: string | null; counts: Partial<Record<Kind, number>>; errors: Partial<Record<Kind, string>>; skipped: number }; counts: { kind: Kind; status: Status; n: number; cents: number }[] };
-type Group = { client: { id: string; name: string }; count: number; subtotalCents: number; gstCents: number; qstCents: number; totalCents: number; exempt: boolean; termsDays: number; kinds: Kind[] };
+type Summary = {
+  state: { at: string | null; counts: Partial<Record<Kind, number>>; errors: Partial<Record<Kind, string>>; skipped: number };
+  counts: { kind: Kind; status: Status; n: number; cents: number }[];
+};
+type Group = {
+  client: { id: string; name: string };
+  count: number;
+  subtotalCents: number;
+  gstCents: number;
+  qstCents: number;
+  totalCents: number;
+  exempt: boolean;
+  termsDays: number;
+  kinds: Kind[];
+};
 
 type Folder = "work" | "staff" | "invoice";
 const FOLDERS: { key: Folder; icon: LucideIcon; tabs: (Kind | "timesheets")[] }[] = [
@@ -49,7 +84,15 @@ const FOLDERS: { key: Folder; icon: LucideIcon; tabs: (Kind | "timesheets")[] }[
   { key: "staff", icon: Wallet, tabs: ["expense", "timesheets"] },
   { key: "invoice", icon: Receipt, tabs: [] },
 ];
-const TAB_ICON: Record<Kind | "timesheets", LucideIcon> = { labour: Hammer, charge: Package, expense: Wallet, contract: FileText, milestone: Flag, project: FolderKanban, timesheets: Clock };
+const TAB_ICON: Record<Kind | "timesheets", LucideIcon> = {
+  labour: Hammer,
+  charge: Package,
+  expense: Wallet,
+  contract: FileText,
+  milestone: Flag,
+  project: FolderKanban,
+  timesheets: Clock,
+};
 const STATUSES: Status[] = ["pending", "approved", "posted", "excluded"];
 const STATUS_STYLE: Record<Status, string> = {
   pending: "border-sky-500/40 bg-sky-500/10 text-sky-300",
@@ -100,7 +143,9 @@ export function ApprovalsPage() {
           <p className="text-sm text-muted-foreground">{t("approvals.subtitle")}</p>
         </div>
         <div className="flex flex-wrap items-center gap-2">
-          <span className="text-xs text-muted-foreground">{summary?.state.at ? t("approvals.lastImport", { when: relativeTime(summary.state.at) }) : t("approvals.neverImported")}</span>
+          <span className="text-xs text-muted-foreground">
+            {summary?.state.at ? t("approvals.lastImport", { when: relativeTime(summary.state.at) }) : t("approvals.neverImported")}
+          </span>
           {can("accounting.manage") && (
             <Button variant="outline" disabled={importNow.isPending} onClick={() => importNow.mutate()}>
               {importNow.isPending ? <Loader2 className="size-4 animate-spin" /> : <DownloadCloud className="size-4" />} {t("approvals.import")}
@@ -133,13 +178,22 @@ export function ApprovalsPage() {
                 onClick={() => go(f.key)}
                 className={cn(
                   "relative -mb-px flex items-center gap-2 rounded-t-xl border border-b-0 px-4 py-2.5 text-sm font-medium transition-colors",
-                  active ? "z-10 border-[color:var(--gold)]/40 bg-card text-foreground" : "border-transparent bg-background/40 text-muted-foreground hover:bg-card/60 hover:text-foreground",
+                  active
+                    ? "z-10 border-[color:var(--gold)]/40 bg-card text-foreground"
+                    : "border-transparent bg-background/40 text-muted-foreground hover:bg-card/60 hover:text-foreground",
                 )}
               >
                 {active && <span className="absolute inset-x-3 top-0 h-0.5 rounded-full bg-grad-gold" />}
                 <f.icon className={cn("size-4", active && "text-primary")} /> {t(`approvals.folders.${f.key}`)}
                 {n > 0 && (
-                  <span className={cn("rounded-full px-1.5 font-mono text-[10px]", f.key === "invoice" ? "bg-emerald-500/20 text-emerald-300" : "bg-sky-500/20 text-sky-300")}>{n}</span>
+                  <span
+                    className={cn(
+                      "rounded-full px-1.5 font-mono text-[10px]",
+                      f.key === "invoice" ? "bg-emerald-500/20 text-emerald-300" : "bg-sky-500/20 text-sky-300",
+                    )}
+                  >
+                    {n}
+                  </span>
                 )}
               </button>
             );
@@ -157,7 +211,9 @@ export function ApprovalsPage() {
                   return (
                     <TabsTrigger key={k} value={k} className={soon ? "opacity-70" : undefined}>
                       <Icon className="size-4" /> {t(`approvals.tabs.${k}`)}
-                      {!soon && count(k as Kind, "pending") > 0 && <span className="rounded-full bg-sky-500/20 px-1.5 font-mono text-[10px] text-sky-300">{count(k as Kind, "pending")}</span>}
+                      {!soon && count(k as Kind, "pending") > 0 && (
+                        <span className="rounded-full bg-sky-500/20 px-1.5 font-mono text-[10px] text-sky-300">{count(k as Kind, "pending")}</span>
+                      )}
                       {soon && <span className="rounded-full border border-dashed px-1.5 text-[9px] text-muted-foreground">{t("common.comingSoon")}</span>}
                     </TabsTrigger>
                   );
@@ -204,21 +260,53 @@ function Placeholder({ kind }: { kind: "timesheets" | "project" }) {
 }
 
 // ── Expenses and timesheets of the team (timesheets.approve) ──
-type TeamExpense = { id: string; userName: string; date: string; type: string; unit: string | null; description: string; quantityX100: number; amountCents: number; clientName: string | null; billable: boolean; hasReceipt: boolean; status: string; quickbooksId: string | null; quickbooksError: string | null };
-type TeamWeek = { id: string; userName: string; weekStart: string; weekEnd: string; status: string; submittedAt: string | null; comment: string | null; types: { type: string; kind: string; hours: number }[]; labourHours: number; totalHours: number; quickbooks: { syncedAt: string | null; error: string | null } | null };
-type Decision = "submitted" | "approved" | "rejected";
+type TeamExpense = {
+  id: string;
+  userName: string;
+  date: string;
+  type: string;
+  unit: string | null;
+  description: string;
+  quantityX100: number;
+  amountCents: number;
+  clientName: string | null;
+  billable: boolean;
+  hasReceipt: boolean;
+  status: string;
+  paidAt: string | null;
+  quickbooksId: string | null;
+  quickbooksError: string | null;
+};
+type TeamWeek = {
+  id: string;
+  userName: string;
+  weekStart: string;
+  weekEnd: string;
+  status: string;
+  submittedAt: string | null;
+  comment: string | null;
+  paidAt: string | null;
+  types: { type: string; kind: string; hours: number }[];
+  labourHours: number;
+  totalHours: number;
+  quickbooks: { syncedAt: string | null; error: string | null } | null;
+};
+type Decision = "submitted" | "approved" | "rejected" | "paid";
 
 function DecisionFilter({ value, onChange }: { value: Decision; onChange: (v: Decision) => void }) {
   const { t } = useTranslation();
   return (
     <div className="flex gap-1">
-      {(["submitted", "approved", "rejected"] as Decision[]).map((s) => (
+      {(["submitted", "approved", "paid", "rejected"] as Decision[]).map((s) => (
         <button
           key={s}
           type="button"
           aria-pressed={value === s}
           onClick={() => onChange(s)}
-          className={cn("h-8 rounded-lg border px-2.5 text-xs", value === s ? "border-[color:var(--gold)]/50 bg-[color:var(--gold)]/10 font-medium" : "text-muted-foreground hover:bg-accent/50")}
+          className={cn(
+            "h-8 rounded-lg border px-2.5 text-xs",
+            value === s ? "border-[color:var(--gold)]/50 bg-[color:var(--gold)]/10 font-medium" : "text-muted-foreground hover:bg-accent/50",
+          )}
         >
           {t(`approvals.team.${s}`)}
         </button>
@@ -230,8 +318,25 @@ function DecisionFilter({ value, onChange }: { value: Decision; onChange: (v: De
 function QbMark({ id, error }: { id?: string | null; error?: string | null }) {
   const { t } = useTranslation();
   if (id) return <span className="rounded border border-emerald-500/30 px-1 text-[10px] text-emerald-300">QuickBooks</span>;
-  if (error) return <span className="rounded border border-red-500/30 px-1 text-[10px] text-red-300" title={error}>{t("approvals.team.qbError")}</span>;
+  if (error)
+    return (
+      <span className="rounded border border-red-500/30 px-1 text-[10px] text-red-300" title={error}>
+        {t("approvals.team.qbError")}
+      </span>
+    );
   return null;
+}
+
+const GOLD_BTN = "bg-grad-gold font-semibold text-[#1a1204] hover:brightness-105";
+
+/** Paid by accounting, on that day */
+function PaidMark({ at }: { at: string }) {
+  const { t } = useTranslation();
+  return (
+    <span className="inline-flex items-center gap-1 rounded border border-[color:var(--gold)]/40 px-1.5 text-[11px] text-primary">
+      <BadgeDollarSign className="size-3" /> {t("approvals.team.paidOn", { date: shortDate(at) })}
+    </span>
+  );
 }
 
 function ExpenseApprovals({ lang }: { lang: string }) {
@@ -240,8 +345,25 @@ function ExpenseApprovals({ lang }: { lang: string }) {
   const qc = useQueryClient();
   const [status, setStatus] = useState<Decision>("submitted");
   const [sel, setSel] = useState<Set<string>>(new Set());
-  const allowed = can("timesheets.approve");
-  const { data: rows = [], isLoading } = useQuery({ queryKey: ["time", "approvals", "expenses", status], queryFn: () => api.get<TeamExpense[]>(`/time/approvals/expenses?status=${status}`), enabled: allowed });
+  const approver = can("timesheets.approve");
+  const accounting = can("accounting.manage");
+  const allowed = approver || accounting;
+  const { data: rows = [], isLoading } = useQuery({
+    queryKey: ["time", "approvals", "expenses", status],
+    queryFn: () => api.get<TeamExpense[]>(`/time/approvals/expenses?status=${status}`),
+    enabled: allowed,
+  });
+  // approved → paid (accounting), or back to approved
+  const pay = useMutation({
+    mutationFn: (paid: boolean) => api.post<{ changed: number }>("/time/approvals/expenses/paid", { ids: [...sel], paid }),
+    onSuccess: (r, paid) => {
+      setSel(new Set());
+      void qc.invalidateQueries({ queryKey: ["time"] });
+      toast.success(t(paid ? "approvals.team.expenses_paid" : "approvals.team.expenses_unpaid", { count: r.changed }));
+    },
+    onError: () => toast.error(t("common.error")),
+  });
+  const selectable = (status === "submitted" && approver) || ((status === "approved" || status === "paid") && accounting);
   const decide = useMutation({
     mutationFn: (decision: "approve" | "reject") => api.post<{ changed: number }>("/time/approvals/expenses", { ids: [...sel], decision }),
     onSuccess: (r, decision) => {
@@ -265,7 +387,21 @@ function ExpenseApprovals({ lang }: { lang: string }) {
           }}
         />
       </div>
-      {status === "submitted" && sel.size > 0 && (
+      {selectable && sel.size > 0 && status !== "submitted" && (
+        <div className="flex flex-wrap items-center gap-2 rounded-xl border border-[color:var(--gold)]/40 p-2">
+          <span className="px-1 text-xs">{t("approvals.selected", { count: sel.size })}</span>
+          {status === "approved" ? (
+            <Button size="sm" disabled={pay.isPending} onClick={() => pay.mutate(true)} className={GOLD_BTN}>
+              <BadgeDollarSign className="size-3.5" /> {t("approvals.team.markPaid")}
+            </Button>
+          ) : (
+            <Button size="sm" variant="outline" disabled={pay.isPending} onClick={() => pay.mutate(false)}>
+              <Undo2 className="size-3.5" /> {t("approvals.team.markUnpaid")}
+            </Button>
+          )}
+        </div>
+      )}
+      {status === "submitted" && approver && sel.size > 0 && (
         <div className="flex flex-wrap items-center gap-2 rounded-xl border border-[color:var(--gold)]/40 p-2">
           <span className="px-1 text-xs">{t("approvals.selected", { count: sel.size })}</span>
           <Button size="sm" disabled={decide.isPending} onClick={() => decide.mutate("approve")} className="bg-emerald-600 text-white hover:bg-emerald-500">
@@ -277,12 +413,24 @@ function ExpenseApprovals({ lang }: { lang: string }) {
         </div>
       )}
       {isLoading && <Loader2 className="mx-auto size-5 animate-spin text-muted-foreground" />}
-      {!isLoading && !rows.length && <p className="rounded-xl border border-dashed py-8 text-center text-sm text-muted-foreground">{t("approvals.team.noExpenses")}</p>}
+      {!isLoading && !rows.length && (
+        <p className="rounded-xl border border-dashed py-8 text-center text-sm text-muted-foreground">{t("approvals.team.noExpenses")}</p>
+      )}
       {rows.length > 0 && (
         <ul className="divide-y divide-border/60 overflow-hidden rounded-xl border">
           {rows.map((x) => (
-            <li key={x.id} className="grid grid-cols-[auto_minmax(0,1fr)_auto] items-center gap-3 px-3 py-2 text-sm md:grid-cols-[auto_140px_minmax(0,1fr)_110px_auto]">
-              {status === "submitted" ? <Checkbox checked={sel.has(x.id)} onCheckedChange={(v) => setSel((s) => (v ? new Set([...s, x.id]) : new Set([...s].filter((y) => y !== x.id))))} /> : <span />}
+            <li
+              key={x.id}
+              className="grid grid-cols-[auto_minmax(0,1fr)_auto] items-center gap-3 px-3 py-2 text-sm md:grid-cols-[auto_140px_minmax(0,1fr)_110px_auto]"
+            >
+              {selectable ? (
+                <Checkbox
+                  checked={sel.has(x.id)}
+                  onCheckedChange={(v) => setSel((s) => (v ? new Set([...s, x.id]) : new Set([...s].filter((y) => y !== x.id))))}
+                />
+              ) : (
+                <span />
+              )}
               <span className="hidden min-w-0 md:block">
                 <span className="block truncate font-medium">{x.userName}</span>
                 <span className="block text-[11px] text-muted-foreground">{shortDate(x.date)}</span>
@@ -292,7 +440,11 @@ function ExpenseApprovals({ lang }: { lang: string }) {
                   {x.type} — {x.description}
                 </span>
                 <span className="flex flex-wrap items-center gap-1.5 text-[11px] text-muted-foreground">
-                  {x.unit && <span>{(x.quantityX100 / 100).toLocaleString()} {x.unit}</span>}
+                  {x.unit && (
+                    <span>
+                      {(x.quantityX100 / 100).toLocaleString()} {x.unit}
+                    </span>
+                  )}
                   {x.clientName && <span>{x.billable ? t("expense.billedTo", { name: x.clientName }) : x.clientName}</span>}
                   {x.hasReceipt && (
                     <a href={`/api/time/expenses/${x.id}/receipt`} target="_blank" rel="noreferrer" className="text-primary hover:underline">
@@ -300,6 +452,7 @@ function ExpenseApprovals({ lang }: { lang: string }) {
                     </a>
                   )}
                   <QbMark id={x.quickbooksId} error={x.quickbooksError} />
+                  {x.paidAt && <PaidMark at={x.paidAt} />}
                 </span>
               </span>
               <span className="text-right font-mono">{m(x.amountCents)}</span>
@@ -318,12 +471,27 @@ function TimesheetApprovals({ lang }: { lang: string }) {
   const can = useCan();
   const qc = useQueryClient();
   const [status, setStatus] = useState<Decision>("submitted");
-  const allowed = can("timesheets.approve");
-  const { data: rows = [], isLoading } = useQuery({ queryKey: ["time", "approvals", "weeks", status], queryFn: () => api.get<TeamWeek[]>(`/time/approvals/timesheets?status=${status}`), enabled: allowed });
+  const approver = can("timesheets.approve");
+  const accounting = can("accounting.manage");
+  const allowed = approver || accounting;
+  const pay = useMutation({
+    mutationFn: (p: { id: string; paid: boolean }) => api.post<{ changed: number }>("/time/approvals/timesheets/paid", { ids: [p.id], paid: p.paid }),
+    onSuccess: (_r, p) => {
+      void qc.invalidateQueries({ queryKey: ["time"] });
+      toast.success(t(p.paid ? "approvals.team.week_paid" : "approvals.team.week_unpaid"));
+    },
+    onError: () => toast.error(t("common.error")),
+  });
+  const { data: rows = [], isLoading } = useQuery({
+    queryKey: ["time", "approvals", "weeks", status],
+    queryFn: () => api.get<TeamWeek[]>(`/time/approvals/timesheets?status=${status}`),
+    enabled: allowed,
+  });
   const [rejecting, setRejecting] = useState<string | null>(null);
   const [comment, setComment] = useState("");
   const decide = useMutation({
-    mutationFn: (p: { id: string; decision: "approve" | "reject"; comment?: string }) => api.post(`/time/approvals/timesheets/${p.id}`, { decision: p.decision, comment: p.comment }),
+    mutationFn: (p: { id: string; decision: "approve" | "reject"; comment?: string }) =>
+      api.post(`/time/approvals/timesheets/${p.id}`, { decision: p.decision, comment: p.comment }),
     onSuccess: (_r, p) => {
       setRejecting(null);
       setComment("");
@@ -341,7 +509,9 @@ function TimesheetApprovals({ lang }: { lang: string }) {
         <DecisionFilter value={status} onChange={setStatus} />
       </div>
       {isLoading && <Loader2 className="mx-auto size-5 animate-spin text-muted-foreground" />}
-      {!isLoading && !rows.length && <p className="rounded-xl border border-dashed py-8 text-center text-sm text-muted-foreground">{t("approvals.team.noWeeks")}</p>}
+      {!isLoading && !rows.length && (
+        <p className="rounded-xl border border-dashed py-8 text-center text-sm text-muted-foreground">{t("approvals.team.noWeeks")}</p>
+      )}
       <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
         {rows.map((w) => (
           <article key={w.id} className="space-y-3 rounded-2xl border bg-background/30 p-4">
@@ -375,7 +545,23 @@ function TimesheetApprovals({ lang }: { lang: string }) {
               <span className="font-mono">{h(w.totalHours)}</span>
             </p>
             {w.status === "rejected" && w.comment && <p className="text-xs text-red-300">{w.comment}</p>}
+            {w.status === "approved" && accounting && (
+              <Button size="sm" disabled={pay.isPending} onClick={() => pay.mutate({ id: w.id, paid: true })} className={`w-full ${GOLD_BTN}`}>
+                <BadgeDollarSign className="size-3.5" /> {t("approvals.team.markPaid")}
+              </Button>
+            )}
+            {w.status === "paid" && (
+              <div className="flex items-center justify-between gap-2">
+                {w.paidAt && <PaidMark at={w.paidAt} />}
+                {accounting && (
+                  <Button size="sm" variant="ghost" disabled={pay.isPending} onClick={() => pay.mutate({ id: w.id, paid: false })}>
+                    <Undo2 className="size-3.5" /> {t("approvals.team.markUnpaid")}
+                  </Button>
+                )}
+              </div>
+            )}
             {w.status === "submitted" &&
+              approver &&
               (rejecting === w.id ? (
                 <div className="space-y-2">
                   <Input autoFocus placeholder={t("approvals.team.why")} value={comment} onChange={(e) => setComment(e.target.value)} />
@@ -390,7 +576,12 @@ function TimesheetApprovals({ lang }: { lang: string }) {
                 </div>
               ) : (
                 <div className="flex gap-2">
-                  <Button size="sm" disabled={decide.isPending} onClick={() => decide.mutate({ id: w.id, decision: "approve" })} className="flex-1 bg-emerald-600 text-white hover:bg-emerald-500">
+                  <Button
+                    size="sm"
+                    disabled={decide.isPending}
+                    onClick={() => decide.mutate({ id: w.id, decision: "approve" })}
+                    className="flex-1 bg-emerald-600 text-white hover:bg-emerald-500"
+                  >
                     <Check className="size-3.5" /> {t("approvals.approve")}
                   </Button>
                   <Button size="sm" variant="outline" onClick={() => setRejecting(w.id)}>
@@ -455,13 +646,18 @@ function InvoiceFolder({ lang }: { lang: string }) {
               <button
                 type="button"
                 onClick={() => setClientId(r.client.id)}
-                className={cn("w-full rounded-xl border px-3 py-2 text-left transition-colors", current?.client.id === r.client.id ? "border-[color:var(--gold)]/50 bg-[color:var(--gold)]/10" : "hover:bg-accent/40")}
+                className={cn(
+                  "w-full rounded-xl border px-3 py-2 text-left transition-colors",
+                  current?.client.id === r.client.id ? "border-[color:var(--gold)]/50 bg-[color:var(--gold)]/10" : "hover:bg-accent/40",
+                )}
               >
                 <span className="flex items-center justify-between gap-2">
                   <span className="truncate text-sm font-medium">{r.client.name}</span>
                   <span className="font-mono text-xs">{m(r.cents)}</span>
                 </span>
-                <span className="block truncate text-[11px] text-muted-foreground">{r.kinds.map((k) => `${t(`approvals.tabs.${k.kind}`)} (${k.count})`).join(" · ")}</span>
+                <span className="block truncate text-[11px] text-muted-foreground">
+                  {r.kinds.map((k) => `${t(`approvals.tabs.${k.kind}`)} (${k.count})`).join(" · ")}
+                </span>
               </button>
             </li>
           ))}
@@ -479,7 +675,10 @@ function InvoiceEditor({ ready, lang }: { ready: Ready; lang: string }) {
   const qc = useQueryClient();
   const m = (c: number) => money(c, lang);
   const today = new Date().toLocaleDateString("en-CA");
-  const { data: items = [] } = useQuery({ queryKey: [...KEY, "approved", ready.client.id], queryFn: () => api.get<Item[]>(`/billables?status=approved&clientId=${ready.client.id}`) });
+  const { data: items = [] } = useQuery({
+    queryKey: [...KEY, "approved", ready.client.id],
+    queryFn: () => api.get<Item[]>(`/billables?status=approved&clientId=${ready.client.id}`),
+  });
   const [kinds, setKinds] = useState<Set<Kind>>(new Set(ready.kinds.map((k) => k.kind)));
   const [left, setLeft] = useState<Set<string>>(new Set());
   const [open, setOpen] = useState<Kind | null>(null);
@@ -527,7 +726,9 @@ function InvoiceEditor({ ready, lang }: { ready: Ready; lang: string }) {
                     <Checkbox disabled={!list.length} checked={list.length > 0 && kinds.has(k)} onCheckedChange={(v) => toggleKind(k, Boolean(v))} />
                     <Icon className="size-4 text-muted-foreground" />
                     <span className="flex-1">{t(`approvals.tabs.${k}`)}</span>
-                    <span className="text-xs text-muted-foreground">{list.length ? t("approvals.items", { count: list.length }) : k === "project" ? t("common.comingSoon") : t("approvals.invoice.nothing")}</span>
+                    <span className="text-xs text-muted-foreground">
+                      {list.length ? t("approvals.items", { count: list.length }) : k === "project" ? t("common.comingSoon") : t("approvals.invoice.nothing")}
+                    </span>
                     <span className="w-24 text-right font-mono text-xs">{list.length ? m(chosen.reduce((x, i) => x + i.amountCents, 0)) : ""}</span>
                     {list.length > 0 && (
                       <button type="button" onClick={() => setOpen(open === k ? null : k)} className="text-[11px] text-primary hover:underline">
@@ -540,10 +741,17 @@ function InvoiceEditor({ ready, lang }: { ready: Ready; lang: string }) {
                       {list.map((i) => (
                         <li key={i.id}>
                           <label className="flex cursor-pointer items-start gap-2 text-xs">
-                            <Checkbox className="mt-0.5" disabled={!kinds.has(k)} checked={kinds.has(k) && !left.has(i.id)} onCheckedChange={(v) => setLeft((s) => (v ? new Set([...s].filter((x) => x !== i.id)) : new Set([...s, i.id])))} />
+                            <Checkbox
+                              className="mt-0.5"
+                              disabled={!kinds.has(k)}
+                              checked={kinds.has(k) && !left.has(i.id)}
+                              onCheckedChange={(v) => setLeft((s) => (v ? new Set([...s].filter((x) => x !== i.id)) : new Set([...s, i.id])))}
+                            />
                             <span className="min-w-0 flex-1">
                               {i.description}
-                              <span className="block text-[10px] text-muted-foreground">{[shortDate(i.date), i.ticketNumber, i.resourceName].filter(Boolean).join(" · ")}</span>
+                              <span className="block text-[10px] text-muted-foreground">
+                                {[shortDate(i.date), i.ticketNumber, i.resourceName].filter(Boolean).join(" · ")}
+                              </span>
                             </span>
                             <span className="font-mono">{m(i.amountCents)}</span>
                           </label>
@@ -566,12 +774,19 @@ function InvoiceEditor({ ready, lang }: { ready: Ready; lang: string }) {
             <span className="flex gap-3 text-muted-foreground">
               {(["terms", "date"] as const).map((x) => (
                 <label key={x} className="flex cursor-pointer items-center gap-1">
-                  <input type="radio" name="due" checked={f.due === x} onChange={() => setF({ ...f, due: x })} className="accent-[color:var(--gold)]" /> {t(`approvals.invoice.due_${x}`)}
+                  <input type="radio" name="due" checked={f.due === x} onChange={() => setF({ ...f, due: x })} className="accent-[color:var(--gold)]" />{" "}
+                  {t(`approvals.invoice.due_${x}`)}
                 </label>
               ))}
             </span>
             {f.due === "terms" ? (
-              <Input type="number" min={0} placeholder={pv?.termsDays != null ? String(pv.termsDays) : ""} value={f.termsDays} onChange={(e) => setF({ ...f, termsDays: e.target.value })} />
+              <Input
+                type="number"
+                min={0}
+                placeholder={pv?.termsDays != null ? String(pv.termsDays) : ""}
+                value={f.termsDays}
+                onChange={(e) => setF({ ...f, termsDays: e.target.value })}
+              />
             ) : (
               <Input type="date" value={f.dueOn} onChange={(e) => setF({ ...f, dueOn: e.target.value })} />
             )}
@@ -589,8 +804,13 @@ function InvoiceEditor({ ready, lang }: { ready: Ready; lang: string }) {
           </label>
         </section>
         {can("accounting.manage") && (
-          <Button disabled={!itemIds.length || create.isPending || (pv?.poRequired && !f.poNumber)} onClick={() => create.mutate()} className="w-full bg-grad-gold font-semibold text-[#1a1204] hover:brightness-105">
-            {create.isPending ? <Loader2 className="size-4 animate-spin" /> : <Send className="size-4" />} {t("approvals.invoice.create", { total: pv ? m(pv.totalCents) : "" })}
+          <Button
+            disabled={!itemIds.length || create.isPending || (pv?.poRequired && !f.poNumber)}
+            onClick={() => create.mutate()}
+            className="w-full bg-grad-gold font-semibold text-[#1a1204] hover:brightness-105"
+          >
+            {create.isPending ? <Loader2 className="size-4 animate-spin" /> : <Send className="size-4" />}{" "}
+            {t("approvals.invoice.create", { total: pv ? m(pv.totalCents) : "" })}
           </Button>
         )}
       </div>
@@ -618,7 +838,9 @@ function InvoicePaper({ d }: { d: Draft }) {
       <div className="flex items-start justify-between gap-4">
         <div>
           <p className="text-base font-bold">{d.company.legalName || "—"}</p>
-          <p className="whitespace-pre-line text-[11px] text-black/60">{[d.company.address, d.company.phone, d.company.email, d.company.website].filter(Boolean).join("\n")}</p>
+          <p className="whitespace-pre-line text-[11px] text-black/60">
+            {[d.company.address, d.company.phone, d.company.email, d.company.website].filter(Boolean).join("\n")}
+          </p>
         </div>
         <div className="text-right">
           <p className="text-lg font-bold tracking-wide">{L("invoice")}</p>
@@ -635,7 +857,9 @@ function InvoicePaper({ d }: { d: Draft }) {
       <div className="mt-4">
         <p className="text-[10px] uppercase tracking-wider text-black/50">{L("billTo")}</p>
         <p className="font-semibold">{d.client.name}</p>
-        <p className="whitespace-pre-line text-[11px] text-black/60">{[d.client.address, [d.client.city, d.client.province, d.client.postalCode].filter(Boolean).join(" "), d.client.email].filter(Boolean).join("\n")}</p>
+        <p className="whitespace-pre-line text-[11px] text-black/60">
+          {[d.client.address, [d.client.city, d.client.province, d.client.postalCode].filter(Boolean).join(" "), d.client.email].filter(Boolean).join("\n")}
+        </p>
       </div>
       <table className="mt-4 w-full">
         <thead>
@@ -687,7 +911,9 @@ function InvoicePaper({ d }: { d: Draft }) {
         {(d.taxes.gstNumber || d.taxes.qstNumber) && ` · TPS ${d.taxes.gstNumber || "—"} · TVQ ${d.taxes.qstNumber || "—"}`}
       </p>
       {d.template.paymentInstructions && <p className="mt-2 whitespace-pre-line text-[11px]">{d.template.paymentInstructions}</p>}
-      {d.template.showPaymentLink && <p className="mt-3 inline-block rounded-md bg-[#0a0a0b] px-3 py-1.5 text-[11px] font-semibold text-[#ffce1a]">{L("payOnline")}</p>}
+      {d.template.showPaymentLink && (
+        <p className="mt-3 inline-block rounded-md bg-[#0a0a0b] px-3 py-1.5 text-[11px] font-semibold text-[#ffce1a]">{L("payOnline")}</p>
+      )}
       {d.template.footer && <p className="mt-4 border-t border-black/10 pt-2 text-center text-[11px] text-black/60">{d.template.footer}</p>}
     </div>
   );
@@ -700,7 +926,10 @@ function KindTab({ kind, counts, lang }: { kind: Kind; counts: (s: Status) => nu
   const [status, setStatus] = useState<Status>("pending");
   const [sel, setSel] = useState<Set<string>>(new Set());
   const [editing, setEditing] = useState<string | null>(null);
-  const { data: items = [], isLoading } = useQuery({ queryKey: [...KEY, kind, status], queryFn: () => api.get<Item[]>(`/billables?kind=${kind}&status=${status}`) });
+  const { data: items = [], isLoading } = useQuery({
+    queryKey: [...KEY, kind, status],
+    queryFn: () => api.get<Item[]>(`/billables?kind=${kind}&status=${status}`),
+  });
   const groups = useMemo(() => {
     const m = new Map<string, { name: string; items: Item[] }>();
     for (const i of items) m.set(i.clientId, { name: i.clientName, items: [...(m.get(i.clientId)?.items ?? []), i] });
@@ -732,7 +961,9 @@ function KindTab({ kind, counts, lang }: { kind: Kind; counts: (s: Status) => nu
             }}
             className={cn(
               "flex h-8 items-center gap-1.5 rounded-lg border px-2.5 text-xs transition-colors",
-              status === s ? "border-[color:var(--gold)]/50 bg-[color:var(--gold)]/10 font-medium text-foreground" : "text-muted-foreground hover:bg-accent/50 hover:text-foreground",
+              status === s
+                ? "border-[color:var(--gold)]/50 bg-[color:var(--gold)]/10 font-medium text-foreground"
+                : "text-muted-foreground hover:bg-accent/50 hover:text-foreground",
             )}
           >
             {t(`approvals.status.${s}`)} <span className="font-mono text-[10px] text-muted-foreground">{counts(s)}</span>
@@ -766,14 +997,21 @@ function KindTab({ kind, counts, lang }: { kind: Kind; counts: (s: Status) => nu
       )}
 
       {isLoading && <Loader2 className="mx-auto my-8 size-5 animate-spin text-muted-foreground" />}
-      {!isLoading && items.length === 0 && <p className="glass rounded-2xl border border-dashed py-12 text-center text-sm text-muted-foreground">{t(`approvals.none.${status}`)}</p>}
+      {!isLoading && items.length === 0 && (
+        <p className="glass rounded-2xl border border-dashed py-12 text-center text-sm text-muted-foreground">{t(`approvals.none.${status}`)}</p>
+      )}
       {groups.map(([clientId, g]) => {
         const ids = g.items.map((i) => i.id);
         const sub = g.items.reduce((x, i) => x + i.amountCents, 0);
         return (
           <section key={clientId} className="glass overflow-hidden rounded-2xl border">
             <div className="flex items-center gap-3 border-b bg-background/30 px-3 py-2">
-              {manage && <Checkbox checked={ids.every((x) => sel.has(x)) ? true : ids.some((x) => sel.has(x)) ? "indeterminate" : false} onCheckedChange={(v) => setMany(ids, Boolean(v))} />}
+              {manage && (
+                <Checkbox
+                  checked={ids.every((x) => sel.has(x)) ? true : ids.some((x) => sel.has(x)) ? "indeterminate" : false}
+                  onCheckedChange={(v) => setMany(ids, Boolean(v))}
+                />
+              )}
               <span className="flex-1 text-sm font-semibold">{g.name}</span>
               <span className="text-xs text-muted-foreground">{t("approvals.items", { count: g.items.length })}</span>
               <span className="font-mono text-sm">{m(sub)}</span>
@@ -785,7 +1023,10 @@ function KindTab({ kind, counts, lang }: { kind: Kind; counts: (s: Status) => nu
                     <EditRow item={i} onDone={() => setEditing(null)} lang={lang} />
                   </li>
                 ) : (
-                  <li key={i.id} className="group grid grid-cols-[auto_minmax(0,1fr)_auto] items-start gap-3 px-3 py-2 text-sm md:grid-cols-[auto_90px_minmax(0,1fr)_80px_100px_110px_auto]">
+                  <li
+                    key={i.id}
+                    className="group grid grid-cols-[auto_minmax(0,1fr)_auto] items-start gap-3 px-3 py-2 text-sm md:grid-cols-[auto_90px_minmax(0,1fr)_80px_100px_110px_auto]"
+                  >
                     {manage ? <Checkbox className="mt-0.5" checked={sel.has(i.id)} onCheckedChange={(v) => setMany([i.id], Boolean(v))} /> : <span />}
                     <span className="hidden text-xs text-muted-foreground md:block">
                       {shortDate(i.date)}
@@ -794,21 +1035,39 @@ function KindTab({ kind, counts, lang }: { kind: Kind; counts: (s: Status) => nu
                     <span className="min-w-0">
                       <span className="block break-words">{i.description}</span>
                       <span className="block text-[11px] text-muted-foreground">
-                        {[i.ticketNumber && `${t("approvals.ticket")} ${i.ticketNumber}`, i.contractName, i.resourceName, i.edited && t("approvals.edited"), i.invoiceNumber && t("approvals.onInvoice", { number: i.invoiceNumber })].filter(Boolean).join(" · ")}
+                        {[
+                          i.ticketNumber && `${t("approvals.ticket")} ${i.ticketNumber}`,
+                          i.contractName,
+                          i.resourceName,
+                          i.edited && t("approvals.edited"),
+                          i.invoiceNumber && t("approvals.onInvoice", { number: i.invoiceNumber }),
+                        ]
+                          .filter(Boolean)
+                          .join(" · ")}
                       </span>
                     </span>
-                    <span className="hidden text-right font-mono text-xs md:block">{(i.quantityX100 / 100).toLocaleString(lang === "en" ? "en-CA" : "fr-CA")}</span>
+                    <span className="hidden text-right font-mono text-xs md:block">
+                      {(i.quantityX100 / 100).toLocaleString(lang === "en" ? "en-CA" : "fr-CA")}
+                    </span>
                     <span className="hidden text-right font-mono text-xs text-muted-foreground md:block">{m(i.unitPriceCents)}</span>
                     <span className="text-right font-mono">{m(i.amountCents)}</span>
                     <span className="flex items-center justify-end gap-1">
                       {i.autoApproved && i.status === "approved" && (
-                        <span className="flex items-center gap-0.5 rounded-md border border-violet-500/40 bg-violet-500/10 px-1 py-0.5 text-[10px] text-violet-300" title={t("approvals.autoHint")}>
+                        <span
+                          className="flex items-center gap-0.5 rounded-md border border-violet-500/40 bg-violet-500/10 px-1 py-0.5 text-[10px] text-violet-300"
+                          title={t("approvals.autoHint")}
+                        >
                           <Sparkles className="size-2.5" /> {t("approvals.auto")}
                         </span>
                       )}
                       <span className={cn("rounded-md border px-1.5 py-0.5 text-[10px]", STATUS_STYLE[i.status])}>{t(`approvals.status.${i.status}`)}</span>
                       {manage && (
-                        <button type="button" onClick={() => setEditing(i.id)} className="rounded p-1 text-muted-foreground opacity-0 transition-opacity hover:bg-accent hover:text-foreground group-hover:opacity-100" aria-label={t("approvals.edit")}>
+                        <button
+                          type="button"
+                          onClick={() => setEditing(i.id)}
+                          className="rounded p-1 text-muted-foreground opacity-0 transition-opacity hover:bg-accent hover:text-foreground group-hover:opacity-100"
+                          aria-label={t("approvals.edit")}
+                        >
                           <Pencil className="size-3.5" />
                         </button>
                       )}
@@ -847,8 +1106,21 @@ function EditRow({ item: i, onDone, lang }: { item: Item; onDone: () => void; la
       }}
     >
       <Input value={f.description} onChange={(e) => setF({ ...f, description: e.target.value })} className="h-8" aria-label={t("approvals.description")} />
-      <Input value={f.quantity} inputMode="decimal" onChange={(e) => setF({ ...f, quantity: e.target.value })} className="h-8 font-mono" aria-label={t(i.kind === "labour" ? "approvals.hours" : "approvals.quantity")} placeholder={t(i.kind === "labour" ? "approvals.hours" : "approvals.quantity")} />
-      <Input value={f.rate} inputMode="decimal" onChange={(e) => setF({ ...f, rate: e.target.value })} className="h-8 font-mono" aria-label={t("approvals.rate")} />
+      <Input
+        value={f.quantity}
+        inputMode="decimal"
+        onChange={(e) => setF({ ...f, quantity: e.target.value })}
+        className="h-8 font-mono"
+        aria-label={t(i.kind === "labour" ? "approvals.hours" : "approvals.quantity")}
+        placeholder={t(i.kind === "labour" ? "approvals.hours" : "approvals.quantity")}
+      />
+      <Input
+        value={f.rate}
+        inputMode="decimal"
+        onChange={(e) => setF({ ...f, rate: e.target.value })}
+        className="h-8 font-mono"
+        aria-label={t("approvals.rate")}
+      />
       <div className="flex items-center gap-1">
         <span className="px-1 font-mono text-xs text-muted-foreground">{money(Math.round(num(f.quantity) * num(f.rate) * 100), lang)}</span>
         <Button type="submit" size="sm" disabled={save.isPending} className="bg-grad-gold font-semibold text-[#1a1204]">
@@ -902,7 +1174,8 @@ function PostDialog({ onClose }: { onClose: () => void }) {
                   <span className="min-w-0">
                     <span className="block font-medium">{g.client.name}</span>
                     <span className="block text-[11px] text-muted-foreground">
-                      {t("approvals.lines", { count: g.count })} · {g.kinds.map((k) => t(`approvals.tabs.${k}`)).join(", ")} · {g.exempt ? t("approvals.exempt") : `TPS ${m(g.gstCents)} · TVQ ${m(g.qstCents)}`} · {t("approvals.terms", { days: g.termsDays })}
+                      {t("approvals.lines", { count: g.count })} · {g.kinds.map((k) => t(`approvals.tabs.${k}`)).join(", ")} ·{" "}
+                      {g.exempt ? t("approvals.exempt") : `TPS ${m(g.gstCents)} · TVQ ${m(g.qstCents)}`} · {t("approvals.terms", { days: g.termsDays })}
                     </span>
                   </span>
                   <span className="text-right">
@@ -921,7 +1194,11 @@ function PostDialog({ onClose }: { onClose: () => void }) {
           <Button variant="ghost" onClick={onClose}>
             {t("common.cancel")}
           </Button>
-          <Button disabled={!chosen.size || post.isPending} onClick={() => post.mutate()} className="bg-grad-gold font-semibold text-[#1a1204] hover:brightness-105">
+          <Button
+            disabled={!chosen.size || post.isPending}
+            onClick={() => post.mutate()}
+            className="bg-grad-gold font-semibold text-[#1a1204] hover:brightness-105"
+          >
             {post.isPending ? <Loader2 className="size-4 animate-spin" /> : <Send className="size-4" />} {t("approvals.postConfirm")}
           </Button>
         </div>

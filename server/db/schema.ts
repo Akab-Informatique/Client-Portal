@@ -1189,12 +1189,15 @@ export const timesheets = pgTable(
       .references(() => users.id, { onDelete: "cascade" }),
     /** Monday, YYYY-MM-DD */
     weekStart: text("week_start").notNull(),
-    /** draft | submitted | approved | rejected */
+    /** draft | submitted | approved | rejected | paid */
     status: text("status").notNull().default("draft"),
     submittedAt: timestamp("submitted_at", { withTimezone: true }),
     decidedBy: uuid("decided_by").references(() => users.id, { onDelete: "set null" }),
     decidedAt: timestamp("decided_at", { withTimezone: true }),
     comment: text("comment"),
+    /** Paid by accounting (status "paid") */
+    paidAt: timestamp("paid_at", { withTimezone: true }),
+    paidBy: uuid("paid_by").references(() => users.id, { onDelete: "set null" }),
     quickbooksSyncedAt: timestamp("quickbooks_synced_at", { withTimezone: true }),
     quickbooksError: text("quickbooks_error"),
     createdAt: created(),
@@ -1252,6 +1255,9 @@ export const expenses = pgTable(
     decidedBy: uuid("decided_by").references(() => users.id, { onDelete: "set null" }),
     decidedAt: timestamp("decided_at", { withTimezone: true }),
     comment: text("comment"),
+    /** Paid by accounting (status "paid") */
+    paidAt: timestamp("paid_at", { withTimezone: true }),
+    paidBy: uuid("paid_by").references(() => users.id, { onDelete: "set null" }),
     /** The work to bill made from it (billable ones) */
     billingItemId: uuid("billing_item_id").references(() => billingItems.id, { onDelete: "set null" }),
     receiptName: text("receipt_name"),

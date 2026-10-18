@@ -579,8 +579,12 @@ async function pushExpenseNow(id: string) {
 
 const errText = (e: unknown) => (e instanceof QuickBooksError ? (e.detail ? `${e.code}: ${e.detail}` : e.code) : e instanceof Error ? e.message : String(e)).slice(0, 300);
 
+/** Timesheets and expenses are not sent to QuickBooks for now: accounting pays them and marks them paid in the portal. */
+export const QUICKBOOKS_PAUSED = new Set<string>(["timesheets", "expenses"]);
+
 /** Is QuickBooks on for this part (connected, sync on, the part checked)? */
 async function syncOn(part: "invoices" | "timesheets" | "expenses" | "payments") {
+  if (QUICKBOOKS_PAUSED.has(part)) return false;
   const s = await quickbooksSettings();
   return Boolean(s.enabled && s.refreshToken && s.realmId && s.sync[part]);
 }
@@ -613,11 +617,11 @@ async function tickNow() {
     const rows = await d.select({ id: schema.clientInvoices.id }).from(schema.clientInvoices).where(and(eq(schema.clientInvoices.source, "portal"), isNull(schema.clientInvoices.quickbooksId), eq(schema.clientInvoices.voided, false)));
     for (const r of rows) await pushInvoice(r.id).catch(warn("invoice"));
   }
-  if (s.sync.timesheets) {
+  if (s.sync.timesheets && !QUICKBOOKS_PAUSED.has("timesheets")) {
     const rows = await d.select({ id: schema.timesheets.id }).from(schema.timesheets).where(and(eq(schema.timesheets.status, "approved"), isNull(schema.timesheets.quickbooksSyncedAt)));
     for (const r of rows) await pushTimesheet(r.id).catch(warn("timesheet"));
   }
-  if (s.sync.expenses) {
+  if (s.sync.expenses && !QUICKBOOKS_PAUSED.has("expenses")) {
     const rows = await d.select({ id: schema.expenses.id }).from(schema.expenses).where(and(eq(schema.expenses.status, "approved"), isNull(schema.expenses.quickbooksId)));
     for (const r of rows) await pushExpense(r.id).catch(warn("expense"));
   }

@@ -3505,22 +3505,31 @@ describe("timesheets and expenses, approved and sent to QuickBooks", () => {
       }),
     );
 
-    // the week approved: time activities for the employee (per day and type)
+    // for now, approved weeks and expenses are not sent to QuickBooks (even with the sync on)
     expect((await admin.post(`/api/time/approvals/timesheets/${globalThis.__sheet}`, { decision: "approve" })).json.status).toBe("approved");
-    const acts = sent.filter((s) => s.url.includes("/timeactivity?")).map((s) => s.body);
-    expect(acts.length).toBeGreaterThanOrEqual(2);
-    expect(acts.every((x) => x.EmployeeRef.value === "77" && x.NameOf === "Employee")).toBe(true);
-    expect(acts.some((x) => x.Hours === 2 && x.Minutes === 0 && x.Description.includes("Formation"))).toBe(true);
-
-    // the expenses approved: purchases in QuickBooks; the billable one is work to invoice
+    expect(sent.filter((s) => s.url.includes("/timeactivity?"))).toHaveLength(0);
     expect((await tech.post("/api/time/approvals/expenses", { ids: [a1.id], decision: "approve" })).status).toBe(403);
     expect((await admin.post("/api/time/approvals/expenses", { ids: [a1.id, a2.id], decision: "approve" })).json.changed).toBe(2);
-    const purchases = sent.filter((s) => s.url.includes("/purchase?")).map((s) => s.body);
-    expect(purchases).toHaveLength(2);
-    expect(purchases.find((p) => p.Line[0].Amount === 28.56).Line[0].AccountBasedExpenseLineDetail.AccountRef.value).toBe("Q5100");
-    expect(purchases.find((p) => p.Line[0].Amount === 45.99).Line[0].AccountBasedExpenseLineDetail).toMatchObject({ BillableStatus: "Billable", CustomerRef: { value: "60" } });
+    expect(sent.filter((s) => s.url.includes("/purchase?") || s.url.includes("/timeactivity?"))).toHaveLength(0);
     const mineNow = (await tech.get("/api/time/expenses")).json;
-    expect(mineNow.find((x: any) => x.id === a1.id)).toMatchObject({ status: "approved", quickbooksId: expect.any(String) });
+    expect(mineNow.find((x: any) => x.id === a1.id)).toMatchObject({ status: "approved", quickbooksId: null });
+
+    // accounting marks them paid once paid (only approved ones; only with accounting.manage)
+    expect((await tech.post("/api/time/approvals/timesheets/paid", { ids: [globalThis.__sheet], paid: true })).status).toBe(403);
+    expect((await admin.post("/api/time/approvals/timesheets/paid", { ids: [globalThis.__sheet], paid: true })).json.changed).toBe(1);
+    expect((await admin.post("/api/time/approvals/timesheets/paid", { ids: [globalThis.__sheet], paid: true })).json.changed).toBe(0);
+    const paidWeeks = (await admin.get("/api/time/approvals/timesheets?status=paid")).json;
+    expect(paidWeeks.find((w: any) => w.id === globalThis.__sheet)).toMatchObject({ status: "paid", paidAt: expect.any(String) });
+    expect((await admin.get("/api/time/approvals/timesheets?status=approved")).json.some((w: any) => w.id === globalThis.__sheet)).toBe(false);
+    expect((await tech.post("/api/time/approvals/expenses/paid", { ids: [a1.id], paid: true })).status).toBe(403);
+    expect((await admin.post("/api/time/approvals/expenses/paid", { ids: [a1.id, a2.id], paid: true })).json.changed).toBe(2);
+    expect((await tech.get("/api/time/expenses")).json.find((x: any) => x.id === a1.id)).toMatchObject({ status: "paid", paidAt: expect.any(String) });
+    // a paid expense is locked for its owner
+    expect((await tech.del(`/api/time/expenses/${a1.id}`)).status).toBe(409);
+    // a mistake: back to approved
+    expect((await admin.post("/api/time/approvals/expenses/paid", { ids: [a2.id], paid: false })).json.changed).toBe(1);
+    expect((await admin.get("/api/time/approvals/expenses?status=approved")).json.find((x: any) => x.id === a2.id)).toMatchObject({ status: "approved", paidAt: null });
+    expect((await db().select().from(schema.auditLog).where(eq(schema.auditLog.action, "expense.paid"))).length).toBeGreaterThan(0);
     const item = (await admin.get(`/api/billables?clientId=${client.id}&status=approved`)).json.find((i: any) => i.kind === "expense" && i.description.includes("Câble HDMI"));
     expect(item).toMatchObject({ amountCents: 4599, source: "portal" });
 
