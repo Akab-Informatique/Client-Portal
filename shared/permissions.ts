@@ -105,6 +105,23 @@ export const MODULES = [
     ],
   },
   {
+    key: "timesheets",
+    audience: "staff",
+    label: { fr: "Feuilles de temps et dépenses", en: "Timesheets and expenses" },
+    permissions: [
+      {
+        key: "timesheets.use",
+        label: { fr: "Remplir sa feuille de temps et ses dépenses", en: "Fill in one's timesheet and expenses" },
+        description: { fr: "Le temps des billets s'y ajoute seul ; les autres heures et les dépenses s'entrent à la main", en: "Ticket time adds itself; other hours and expenses are entered by hand" },
+      },
+      {
+        key: "timesheets.approve",
+        label: { fr: "Approuver les feuilles de temps et dépenses", en: "Approve timesheets and expenses" },
+        description: { fr: "Les heures par catégorie seulement (pas le détail) ; les dépenses avec leur reçu", en: "Hours per category only (not the details); expenses with their receipt" },
+      },
+    ],
+  },
+  {
     key: "accounting",
     audience: "staff",
     label: { fr: "Factures, soumissions et approbation", en: "Invoices, quotes and approvals" },
@@ -311,7 +328,7 @@ export type ModuleKey = (typeof MODULES)[number]["key"];
  */
 export const ACCESS_LAYOUT: { key: string; audience: Audience; label: Localized; modules: ModuleKey[] }[] = [
   { key: "team", audience: "staff", label: { fr: "Équipe", en: "Team" }, modules: ["dashboard", "meetings"] },
-  { key: "tools", audience: "staff", label: { fr: "Mes outils", en: "My tools" }, modules: ["outlook"] },
+  { key: "tools", audience: "staff", label: { fr: "Mes outils", en: "My tools" }, modules: ["outlook", "timesheets"] },
   { key: "command", audience: "staff", label: { fr: "Centre de commande", en: "Command center" }, modules: ["messages", "tickets", "sms"] },
   { key: "management", audience: "staff", label: { fr: "Gestion", en: "Management" }, modules: ["crm", "clientview", "store"] },
   { key: "accounting", audience: "staff", label: { fr: "Comptabilité", en: "Accounting" }, modules: ["accounting"] },
@@ -384,6 +401,7 @@ export const SYSTEM_ROLES: Array<{
       "tickets.edit",
       "tickets.planSelf",
       "crm.view",
+      "timesheets.use",
       "sms.view",
       "outlook.view",
       "outlook.send",

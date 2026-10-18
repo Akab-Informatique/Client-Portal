@@ -7,6 +7,7 @@ import { body, zUuid } from "../lib/validate.ts";
 import { BILLABLE_KINDS, billableCounts, billablesState, createInvoice, DraftError, draftInvoice, editBillable, invoiceableClients, listBillables, postInvoices, postPreview, setBillableStatus, syncBillables } from "../lib/billables.ts";
 import type { BillableKind } from "../lib/ticketSource.ts";
 import { AutotaskError } from "../lib/autotask.ts";
+import { autoSync } from "../lib/quickbooks.ts";
 
 /**
  * Accounting › Approbation: the work to bill (accounting.view), approved,
@@ -94,6 +95,7 @@ export const billablesRoutes = new Hono<AppEnv>()
     const p = await body(c, zDraft);
     const made = await drafted(() => createInvoice(a.user.id, p));
     await audit(a.user.id, "billing.invoice_created", made.id, { number: made.number, totalCents: made.totalCents });
+    await autoSync("invoices", made.id);
     return c.json(made, 201);
   })
 
@@ -107,5 +109,6 @@ export const billablesRoutes = new Hono<AppEnv>()
     const p = await body(c, z.object({ clientIds: z.array(zUuid).max(5000).optional() }));
     const made = await postInvoices(a.user.id, p.clientIds);
     await audit(a.user.id, "billing.invoices_posted", null, { count: made.length, numbers: made.map((m) => m.number) });
+    for (const m of made) await autoSync("invoices", m.id);
     return c.json(made, 201);
   });

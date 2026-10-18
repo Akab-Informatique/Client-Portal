@@ -3241,3 +3241,132 @@ describe("billing rules and the invoice editor", () => {
     expect((await admin.get("/api/billables/clients")).json.find((g: any) => g.client.id === garage.id).kinds.map((k: any) => k.kind)).toEqual(["contract"]);
   });
 });
+
+describe("timesheets and expenses, approved and sent to QuickBooks", () => {
+  const sent: { url: string; body: any }[] = [];
+  afterAll(async () => {
+    vi.unstubAllGlobals();
+    const { saveQuickBooksSettings } = await import("../server/lib/billing.ts");
+    await saveQuickBooksSettings(null, { enabled: false });
+  });
+
+  it("ticket time lands on the timesheet; other hours by hand; the approver sees totals only", async () => {
+    resetRateLimit("login:ip:unknown");
+    const admin = await signIn("admin@akab.local");
+    const tech = await signIn("tech@akab.local");
+    // types: the built-in ticket time and the others; set in Admin
+    const types = (await tech.get("/api/time/types")).json;
+    const labour = types.time.find((x: any) => x.kind === "labour");
+    const training = types.time.find((x: any) => x.name === "Formation");
+    expect(labour && training).toBeTruthy();
+    expect(types.expense.find((x: any) => x.name === "Kilométrage")).toMatchObject({ unit: "km", unitPriceCents: 68 });
+    expect((await tech.get("/api/time/admin/types")).status).toBe(403);
+    expect((await admin.post("/api/time/admin/timesheet-types", { name: "Garde" })).status).toBe(201);
+    expect((await admin.patch(`/api/time/admin/timesheet-types/${labour.id}`, { active: false })).json.error).toBe("time_type_builtin");
+
+    // a timer validated on a ticket: on the timesheet, with the ticket
+    const tk = (await tech.get("/api/tickets?view=all")).json.items[5];
+    await tech.post(`/api/tickets/${tk.id}/timer/start`);
+    await tech.post(`/api/tickets/${tk.id}/timer/stop`);
+    const timer = (await tech.get("/api/tickets/timers")).json.find((x: any) => x.ticketId === tk.id);
+    expect((await tech.post(`/api/tickets/timers/${timer.id}/submit`, { hours: 1.5, summary: "Remplacement du disque" })).status).toBe(201);
+    let week = (await tech.get("/api/time/week")).json;
+    expect(week.entries.find((e: any) => e.ticketId === tk.id)).toMatchObject({ source: "ticket", kind: "labour", hours: 1.5, ticketNumber: tk.number, ticketTitle: tk.title });
+    // hours by hand: not as ticket time
+    expect((await tech.post("/api/time/entries", { date: week.weekStart, typeId: labour.id, hours: 2 })).json.error).toBe("time_type_unknown");
+    expect((await tech.post("/api/time/entries", { date: week.weekStart, typeId: training.id, hours: 2, note: "Cours Intune" })).status).toBe(201);
+    week = (await tech.get("/api/time/week")).json;
+    expect(week.types.find((x: any) => x.kind === "labour").hours).toBeGreaterThanOrEqual(1.5);
+    expect(week.types.find((x: any) => x.type === "Formation").hours).toBe(2);
+
+    // submitted: locked
+    expect((await tech.post("/api/time/week/submit", { weekStart: week.weekStart })).json.status).toBe("submitted");
+    expect((await tech.post("/api/time/entries", { date: week.weekStart, typeId: training.id, hours: 1 })).json.error).toBe("timesheet_locked");
+
+    // the approver: hours per type only, no ticket nor note
+    expect((await tech.get("/api/time/approvals/timesheets")).status).toBe(403);
+    const list = (await admin.get("/api/time/approvals/timesheets")).json;
+    const mine = list.find((x: any) => x.userName === "Alex Tremblay" && x.weekStart === week.weekStart);
+    expect(mine).toMatchObject({ status: "submitted", labourHours: week.labourHours, totalHours: week.totalHours });
+    expect(mine.types.map((x: any) => x.type)).toEqual(expect.arrayContaining(["Formation"]));
+    const raw = JSON.stringify(mine);
+    expect(raw).not.toContain(tk.number);
+    expect(raw).not.toContain("Cours Intune");
+    expect(raw).not.toContain("Remplacement du disque");
+    globalThis.__sheet = mine.id;
+  });
+
+  it("expenses with receipts; approved: billable ones go on the client's invoice; all sent to QuickBooks", async () => {
+    resetRateLimit("login:ip:unknown");
+    const admin = await signIn("admin@akab.local");
+    const tech = await signIn("tech@akab.local");
+    const other = await signIn("tech2@akab.local");
+    const types = (await tech.get("/api/time/types")).json.expense;
+    const km = types.find((x: any) => x.name === "Kilométrage");
+    const material = types.find((x: any) => x.name === "Matériel pour un client");
+    const client = (await admin.get("/api/crm/clients")).json.find((c: any) => c.autotaskId === 307);
+    const receipt = { name: "reçu.png", contentType: "image/png", data: Buffer.from("png").toString("base64") };
+    const a1 = (await tech.post("/api/time/expenses", { date: "2026-10-15", typeId: km.id, description: "Aller-retour Joliette", quantity: 42, receipt })).json;
+    expect(a1).toMatchObject({ amountCents: 2856, hasReceipt: true, status: "draft", billable: false });
+    expect(a1.receiptData).toBeUndefined();
+    const a2 = (await tech.post("/api/time/expenses", { date: "2026-10-16", typeId: material.id, description: "Câble HDMI", amountCents: 4599, clientId: client.id })).json;
+    expect(a2).toMatchObject({ billable: true, amountCents: 4599 });
+    // the receipt: its owner and the approver, nobody else
+    expect((await tech.get(`/api/time/expenses/${a1.id}/receipt`)).status).toBe(200);
+    expect((await other.get(`/api/time/expenses/${a1.id}/receipt`)).status).toBe(404);
+    expect((await admin.get(`/api/time/expenses/${a1.id}/receipt`)).status).toBe(200);
+    for (const x of [a1, a2]) await tech.post(`/api/time/expenses/${x.id}/submit`);
+    expect((await tech.patch(`/api/time/expenses/${a1.id}`, { description: "x" })).json.error).toBe("expense_locked");
+
+    // QuickBooks on: what is approved goes there by itself
+    const { saveQuickBooksSettings } = await import("../server/lib/billing.ts");
+    const { forgetQuickBooksToken } = await import("../server/lib/quickbooks.ts");
+    forgetQuickBooksToken();
+    await saveQuickBooksSettings(null, { clientId: "ABqb", clientSecret: "qb-secret", environment: "sandbox", realmId: "9130", refreshToken: "qb-refresh", enabled: true, sync: { invoices: true, payments: false, customers: true, timesheets: true, expenses: true }, invoice: { itemId: "11", taxCodeId: "5", exemptTaxCodeId: "6" } });
+    await db().update(schema.ledgerAccounts).set({ quickbooksId: "Q5100" }).where(eq(schema.ledgerAccounts.number, "5100"));
+    await db().update(schema.ledgerAccounts).set({ quickbooksId: "Q5000" }).where(eq(schema.ledgerAccounts.number, "5000"));
+    await db().update(schema.ledgerAccounts).set({ quickbooksId: "Q1000" }).where(eq(schema.ledgerAccounts.number, "1000"));
+    await db().update(schema.clients).set({ quickbooksId: "60" }).where(eq(schema.clients.id, client.id));
+    const json = (b: unknown) => new Response(JSON.stringify(b), { status: 200, headers: { "content-type": "application/json" } });
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: unknown, init: RequestInit = {}) => {
+        const url = decodeURIComponent(String(input));
+        if (url.startsWith("https://oauth.platform.intuit.com/")) return json({ access_token: "qb-access", refresh_token: "qb-refresh" });
+        sent.push({ url, body: init.body ? JSON.parse(String(init.body)) : undefined });
+        if (url.includes("select * from Employee")) return json({ QueryResponse: { Employee: [{ Id: "77", DisplayName: "Alex Tremblay", PrimaryEmailAddr: { Address: "tech@akab.local" } }] } });
+        if (url.includes("select * from Invoice")) return json({ QueryResponse: {} });
+        if (url.includes("/timeactivity?")) return json({ TimeActivity: { Id: "T1" } });
+        if (url.includes("/purchase?")) return json({ Purchase: { Id: `P${sent.length}` } });
+        if (url.includes("/invoice?")) return json({ Invoice: { Id: "700" } });
+        return new Response(JSON.stringify({ Fault: { Error: [{ Message: `unexpected ${url}` }] } }), { status: 400 });
+      }),
+    );
+
+    // the week approved: time activities for the employee (per day and type)
+    expect((await admin.post(`/api/time/approvals/timesheets/${globalThis.__sheet}`, { decision: "approve" })).json.status).toBe("approved");
+    const acts = sent.filter((s) => s.url.includes("/timeactivity?")).map((s) => s.body);
+    expect(acts.length).toBeGreaterThanOrEqual(2);
+    expect(acts.every((x) => x.EmployeeRef.value === "77" && x.NameOf === "Employee")).toBe(true);
+    expect(acts.some((x) => x.Hours === 2 && x.Minutes === 0 && x.Description.includes("Formation"))).toBe(true);
+
+    // the expenses approved: purchases in QuickBooks; the billable one is work to invoice
+    expect((await tech.post("/api/time/approvals/expenses", { ids: [a1.id], decision: "approve" })).status).toBe(403);
+    expect((await admin.post("/api/time/approvals/expenses", { ids: [a1.id, a2.id], decision: "approve" })).json.changed).toBe(2);
+    const purchases = sent.filter((s) => s.url.includes("/purchase?")).map((s) => s.body);
+    expect(purchases).toHaveLength(2);
+    expect(purchases.find((p) => p.Line[0].Amount === 28.56).Line[0].AccountBasedExpenseLineDetail.AccountRef.value).toBe("Q5100");
+    expect(purchases.find((p) => p.Line[0].Amount === 45.99).Line[0].AccountBasedExpenseLineDetail).toMatchObject({ BillableStatus: "Billable", CustomerRef: { value: "60" } });
+    const mineNow = (await tech.get("/api/time/expenses")).json;
+    expect(mineNow.find((x: any) => x.id === a1.id)).toMatchObject({ status: "approved", quickbooksId: expect.any(String) });
+    const item = (await admin.get(`/api/billables?clientId=${client.id}&status=approved`)).json.find((i: any) => i.kind === "expense" && i.description.includes("Câble HDMI"));
+    expect(item).toMatchObject({ amountCents: 4599, source: "portal" });
+
+    // an invoice made in the portal: sent to QuickBooks right away
+    sent.length = 0;
+    const made = (await admin.post("/api/billables/invoice", { clientId: client.id, itemIds: [item.id] })).json;
+    expect(sent.find((s) => s.url.includes("/invoice?"))!.body).toMatchObject({ DocNumber: made.number, CustomerRef: { value: "60" } });
+    const inv = (await admin.get(`/api/crm/clients/${client.id}/invoices`)).json.items.find((v: any) => v.id === made.id);
+    expect(inv.quickbooks).toMatchObject({ id: "700" });
+  });
+});

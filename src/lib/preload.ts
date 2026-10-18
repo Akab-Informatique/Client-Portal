@@ -17,6 +17,8 @@ export const pageLoaders = {
   client: () => import("@/pages/crm/ClientPage"),
   accounting: () => import("@/pages/accounting/AccountingPage"),
   approvals: () => import("@/pages/accounting/ApprovalsPage"),
+  timesheet: () => import("@/pages/time/TimesheetPage"),
+  expenses: () => import("@/pages/time/ExpensesPage"),
 };
 
 const byPath: Record<string, () => Promise<unknown>> = {
@@ -30,6 +32,8 @@ const byPath: Record<string, () => Promise<unknown>> = {
   "/accounting/invoices": pageLoaders.accounting,
   "/accounting/quotes": pageLoaders.accounting,
   "/accounting/approvals": pageLoaders.approvals,
+  "/timesheets": pageLoaders.timesheet,
+  "/expenses": pageLoaders.expenses,
 };
 
 /** Load every page's code in the background once the portal is shown. */

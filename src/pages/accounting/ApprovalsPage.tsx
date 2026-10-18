@@ -165,7 +165,21 @@ export function ApprovalsPage() {
               </TabsList>
               {tabs.map((k) => (
                 <TabsContent key={k} value={k} className="mt-4">
-                  {k === "timesheets" || k === "project" ? <Placeholder kind={k} /> : <KindTab kind={k} counts={(s) => count(k, s)} lang={i18n.language} />}
+                  {k === "project" ? (
+                    <Placeholder kind={k} />
+                  ) : k === "timesheets" ? (
+                    <TimesheetApprovals lang={i18n.language} />
+                  ) : k === "expense" ? (
+                    <div className="space-y-6">
+                      <ExpenseApprovals lang={i18n.language} />
+                      <section className="space-y-2">
+                        <p className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">{t("approvals.fromAutotask")}</p>
+                        <KindTab kind="expense" counts={(s) => count("expense", s)} lang={i18n.language} />
+                      </section>
+                    </div>
+                  ) : (
+                    <KindTab kind={k} counts={(s) => count(k, s)} lang={i18n.language} />
+                  )}
                 </TabsContent>
               ))}
             </Tabs>
@@ -186,6 +200,208 @@ function Placeholder({ kind }: { kind: "timesheets" | "project" }) {
       <p className="max-w-lg text-sm text-muted-foreground">{t(`approvals.empty.${kind}.text`)}</p>
       <span className="rounded-full border border-dashed px-2.5 py-0.5 text-[11px] text-muted-foreground">{t("common.comingSoon")}</span>
     </div>
+  );
+}
+
+// ── Expenses and timesheets of the team (timesheets.approve) ──
+type TeamExpense = { id: string; userName: string; date: string; type: string; unit: string | null; description: string; quantityX100: number; amountCents: number; clientName: string | null; billable: boolean; hasReceipt: boolean; status: string; quickbooksId: string | null; quickbooksError: string | null };
+type TeamWeek = { id: string; userName: string; weekStart: string; weekEnd: string; status: string; submittedAt: string | null; comment: string | null; types: { type: string; kind: string; hours: number }[]; labourHours: number; totalHours: number; quickbooks: { syncedAt: string | null; error: string | null } | null };
+type Decision = "submitted" | "approved" | "rejected";
+
+function DecisionFilter({ value, onChange }: { value: Decision; onChange: (v: Decision) => void }) {
+  const { t } = useTranslation();
+  return (
+    <div className="flex gap-1">
+      {(["submitted", "approved", "rejected"] as Decision[]).map((s) => (
+        <button
+          key={s}
+          type="button"
+          aria-pressed={value === s}
+          onClick={() => onChange(s)}
+          className={cn("h-8 rounded-lg border px-2.5 text-xs", value === s ? "border-[color:var(--gold)]/50 bg-[color:var(--gold)]/10 font-medium" : "text-muted-foreground hover:bg-accent/50")}
+        >
+          {t(`approvals.team.${s}`)}
+        </button>
+      ))}
+    </div>
+  );
+}
+
+function QbMark({ id, error }: { id?: string | null; error?: string | null }) {
+  const { t } = useTranslation();
+  if (id) return <span className="rounded border border-emerald-500/30 px-1 text-[10px] text-emerald-300">QuickBooks</span>;
+  if (error) return <span className="rounded border border-red-500/30 px-1 text-[10px] text-red-300" title={error}>{t("approvals.team.qbError")}</span>;
+  return null;
+}
+
+function ExpenseApprovals({ lang }: { lang: string }) {
+  const { t } = useTranslation();
+  const can = useCan();
+  const qc = useQueryClient();
+  const [status, setStatus] = useState<Decision>("submitted");
+  const [sel, setSel] = useState<Set<string>>(new Set());
+  const allowed = can("timesheets.approve");
+  const { data: rows = [], isLoading } = useQuery({ queryKey: ["time", "approvals", "expenses", status], queryFn: () => api.get<TeamExpense[]>(`/time/approvals/expenses?status=${status}`), enabled: allowed });
+  const decide = useMutation({
+    mutationFn: (decision: "approve" | "reject") => api.post<{ changed: number }>("/time/approvals/expenses", { ids: [...sel], decision }),
+    onSuccess: (r, decision) => {
+      setSel(new Set());
+      void qc.invalidateQueries({ queryKey: ["time"] });
+      void qc.invalidateQueries({ queryKey: KEY });
+      toast.success(t(`approvals.team.expenses_${decision}`, { count: r.changed }));
+    },
+  });
+  if (!allowed) return <p className="text-sm text-muted-foreground">{t("approvals.team.noRight")}</p>;
+  const m = (c: number) => money(c, lang);
+  return (
+    <section className="space-y-3">
+      <div className="flex flex-wrap items-center gap-2">
+        <p className="mr-auto text-sm font-semibold">{t("approvals.team.expensesTitle")}</p>
+        <DecisionFilter
+          value={status}
+          onChange={(v) => {
+            setStatus(v);
+            setSel(new Set());
+          }}
+        />
+      </div>
+      {status === "submitted" && sel.size > 0 && (
+        <div className="flex flex-wrap items-center gap-2 rounded-xl border border-[color:var(--gold)]/40 p-2">
+          <span className="px-1 text-xs">{t("approvals.selected", { count: sel.size })}</span>
+          <Button size="sm" disabled={decide.isPending} onClick={() => decide.mutate("approve")} className="bg-emerald-600 text-white hover:bg-emerald-500">
+            <Check className="size-3.5" /> {t("approvals.approve")}
+          </Button>
+          <Button size="sm" variant="outline" disabled={decide.isPending} onClick={() => decide.mutate("reject")}>
+            <Ban className="size-3.5" /> {t("approvals.team.reject")}
+          </Button>
+        </div>
+      )}
+      {isLoading && <Loader2 className="mx-auto size-5 animate-spin text-muted-foreground" />}
+      {!isLoading && !rows.length && <p className="rounded-xl border border-dashed py-8 text-center text-sm text-muted-foreground">{t("approvals.team.noExpenses")}</p>}
+      {rows.length > 0 && (
+        <ul className="divide-y divide-border/60 overflow-hidden rounded-xl border">
+          {rows.map((x) => (
+            <li key={x.id} className="grid grid-cols-[auto_minmax(0,1fr)_auto] items-center gap-3 px-3 py-2 text-sm md:grid-cols-[auto_140px_minmax(0,1fr)_110px_auto]">
+              {status === "submitted" ? <Checkbox checked={sel.has(x.id)} onCheckedChange={(v) => setSel((s) => (v ? new Set([...s, x.id]) : new Set([...s].filter((y) => y !== x.id))))} /> : <span />}
+              <span className="hidden min-w-0 md:block">
+                <span className="block truncate font-medium">{x.userName}</span>
+                <span className="block text-[11px] text-muted-foreground">{shortDate(x.date)}</span>
+              </span>
+              <span className="min-w-0">
+                <span className="block truncate">
+                  {x.type} — {x.description}
+                </span>
+                <span className="flex flex-wrap items-center gap-1.5 text-[11px] text-muted-foreground">
+                  {x.unit && <span>{(x.quantityX100 / 100).toLocaleString()} {x.unit}</span>}
+                  {x.clientName && <span>{x.billable ? t("expense.billedTo", { name: x.clientName }) : x.clientName}</span>}
+                  {x.hasReceipt && (
+                    <a href={`/api/time/expenses/${x.id}/receipt`} target="_blank" rel="noreferrer" className="text-primary hover:underline">
+                      {t("expense.receipt")}
+                    </a>
+                  )}
+                  <QbMark id={x.quickbooksId} error={x.quickbooksError} />
+                </span>
+              </span>
+              <span className="text-right font-mono">{m(x.amountCents)}</span>
+              <span />
+            </li>
+          ))}
+        </ul>
+      )}
+    </section>
+  );
+}
+
+/** Weeks to approve: the hours per type only — no tickets, no notes. */
+function TimesheetApprovals({ lang }: { lang: string }) {
+  const { t } = useTranslation();
+  const can = useCan();
+  const qc = useQueryClient();
+  const [status, setStatus] = useState<Decision>("submitted");
+  const allowed = can("timesheets.approve");
+  const { data: rows = [], isLoading } = useQuery({ queryKey: ["time", "approvals", "weeks", status], queryFn: () => api.get<TeamWeek[]>(`/time/approvals/timesheets?status=${status}`), enabled: allowed });
+  const [rejecting, setRejecting] = useState<string | null>(null);
+  const [comment, setComment] = useState("");
+  const decide = useMutation({
+    mutationFn: (p: { id: string; decision: "approve" | "reject"; comment?: string }) => api.post(`/time/approvals/timesheets/${p.id}`, { decision: p.decision, comment: p.comment }),
+    onSuccess: (_r, p) => {
+      setRejecting(null);
+      setComment("");
+      void qc.invalidateQueries({ queryKey: ["time"] });
+      toast.success(t(`approvals.team.week_${p.decision}`));
+    },
+  });
+  if (!allowed) return <p className="text-sm text-muted-foreground">{t("approvals.team.noRight")}</p>;
+  const loc = lang === "en" ? "en-CA" : "fr-CA";
+  const h = (n: number) => `${n.toLocaleString(loc, { maximumFractionDigits: 2 })} h`;
+  return (
+    <section className="space-y-3">
+      <div className="flex flex-wrap items-center gap-2">
+        <p className="mr-auto text-xs text-muted-foreground">{t("approvals.team.weeksHint")}</p>
+        <DecisionFilter value={status} onChange={setStatus} />
+      </div>
+      {isLoading && <Loader2 className="mx-auto size-5 animate-spin text-muted-foreground" />}
+      {!isLoading && !rows.length && <p className="rounded-xl border border-dashed py-8 text-center text-sm text-muted-foreground">{t("approvals.team.noWeeks")}</p>}
+      <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
+        {rows.map((w) => (
+          <article key={w.id} className="space-y-3 rounded-2xl border bg-background/30 p-4">
+            <div className="flex items-start justify-between gap-2">
+              <div>
+                <p className="font-semibold">{w.userName}</p>
+                <p className="text-xs text-muted-foreground">
+                  {shortDate(w.weekStart)} → {shortDate(w.weekEnd)}
+                </p>
+              </div>
+              <QbMark id={w.quickbooks?.syncedAt ? "ok" : null} error={w.quickbooks?.error} />
+            </div>
+            <ul className="space-y-1 text-sm">
+              <li className="flex justify-between font-medium">
+                <span className="flex items-center gap-1.5">
+                  <Hammer className="size-3.5 text-primary" /> {t("approvals.team.labour")}
+                </span>
+                <span className="font-mono">{h(w.labourHours)}</span>
+              </li>
+              {w.types
+                .filter((x) => x.kind !== "labour")
+                .map((x) => (
+                  <li key={x.type} className="flex justify-between text-muted-foreground">
+                    <span>{x.type}</span>
+                    <span className="font-mono">{h(x.hours)}</span>
+                  </li>
+                ))}
+            </ul>
+            <p className="flex justify-between border-t pt-2 text-sm font-semibold">
+              <span>{t("timesheet.total")}</span>
+              <span className="font-mono">{h(w.totalHours)}</span>
+            </p>
+            {w.status === "rejected" && w.comment && <p className="text-xs text-red-300">{w.comment}</p>}
+            {w.status === "submitted" &&
+              (rejecting === w.id ? (
+                <div className="space-y-2">
+                  <Input autoFocus placeholder={t("approvals.team.why")} value={comment} onChange={(e) => setComment(e.target.value)} />
+                  <div className="flex gap-2">
+                    <Button size="sm" variant="outline" disabled={decide.isPending} onClick={() => decide.mutate({ id: w.id, decision: "reject", comment })}>
+                      {t("approvals.team.sendBack")}
+                    </Button>
+                    <Button size="sm" variant="ghost" onClick={() => setRejecting(null)}>
+                      {t("common.cancel")}
+                    </Button>
+                  </div>
+                </div>
+              ) : (
+                <div className="flex gap-2">
+                  <Button size="sm" disabled={decide.isPending} onClick={() => decide.mutate({ id: w.id, decision: "approve" })} className="flex-1 bg-emerald-600 text-white hover:bg-emerald-500">
+                    <Check className="size-3.5" /> {t("approvals.approve")}
+                  </Button>
+                  <Button size="sm" variant="outline" onClick={() => setRejecting(w.id)}>
+                    <Undo2 className="size-3.5" /> {t("approvals.team.sendBack")}
+                  </Button>
+                </div>
+              ))}
+          </article>
+        ))}
+      </div>
+    </section>
   );
 }
 

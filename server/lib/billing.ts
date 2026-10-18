@@ -167,7 +167,7 @@ export type QuickBooksSettings = {
   realmId: string | null;
   companyName: string | null;
   connectedAt: string | null;
-  sync: { invoices: boolean; payments: boolean; customers: boolean };
+  sync: { invoices: boolean; payments: boolean; customers: boolean; timesheets: boolean; expenses: boolean };
   /** QuickBooks item and tax codes used for the invoices sent */
   invoice: { itemId: string | null; taxCodeId: string | null; exemptTaxCodeId: string | null };
   /** Payments brought back from QuickBooks up to this time */
@@ -195,7 +195,7 @@ export async function quickbooksSettings(): Promise<QuickBooksSettings> {
     realmId: c.realmId ?? null,
     companyName: c.companyName ?? null,
     connectedAt: c.connectedAt ?? null,
-    sync: { invoices: true, payments: true, customers: true, ...c.sync },
+    sync: { invoices: true, payments: true, customers: true, timesheets: true, expenses: true, ...c.sync },
     invoice: { itemId: null, taxCodeId: null, exemptTaxCodeId: null, ...c.invoice },
     paymentsPulledAt: c.paymentsPulledAt ?? null,
     imports: c.imports ?? {},

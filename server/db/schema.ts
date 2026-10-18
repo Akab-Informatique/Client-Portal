@@ -342,6 +342,8 @@ export const users = pgTable(
     failedLogins: integer("failed_logins").notNull().default(0),
     lockedUntil: timestamp("locked_until", { withTimezone: true }),
     lastLoginAt: timestamp("last_login_at", { withTimezone: true }),
+    /** The matching QuickBooks employee (timesheets, expenses) */
+    quickbooksEmployeeId: text("quickbooks_employee_id"),
     /** Staff only: the matching Autotask resource (actions are made on their behalf) */
     autotaskResourceId: integer("autotask_resource_id"),
     createdAt: created(),
@@ -1091,4 +1093,124 @@ export const aiUsage = pgTable(
     createdAt: created(),
   },
   (t) => [index("ai_usage_user_time").on(t.userId, t.createdAt), index("ai_usage_time").on(t.createdAt)],
+);
+
+// ── Timesheets and expenses (My tools; approved in Accounting) ──────────────────
+
+/** Kinds of time on a timesheet. "labour" is the built-in one: time logged on tickets. */
+export const timesheetTypes = pgTable("timesheet_types", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  name: text("name").notNull(),
+  /** labour (built in, from tickets) | other (entered by hand) */
+  kind: text("kind").notNull().default("other"),
+  active: boolean("active").notNull().default(true),
+  position: integer("position").notNull().default(0),
+  /** QuickBooks service item for its time activities */
+  quickbooksItemId: text("quickbooks_item_id"),
+  createdAt: created(),
+  updatedAt: updated(),
+});
+
+/** Kinds of expenses, with their account (and a rate for those counted by unit, e.g. km). */
+export const expenseTypes = pgTable("expense_types", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  name: text("name").notNull(),
+  ledgerAccountId: uuid("ledger_account_id").references(() => ledgerAccounts.id, { onDelete: "set null" }),
+  /** e.g. "km": counted by unit at the rate below */
+  unit: text("unit"),
+  unitPriceCents: bigint("unit_price_cents", { mode: "number" }),
+  /** Billed to the client by default */
+  billable: boolean("billable").notNull().default(false),
+  active: boolean("active").notNull().default(true),
+  position: integer("position").notNull().default(0),
+  createdAt: created(),
+  updatedAt: updated(),
+});
+
+/** A technician's week (Monday), submitted then approved. */
+export const timesheets = pgTable(
+  "timesheets",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    userId: uuid("user_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    /** Monday, YYYY-MM-DD */
+    weekStart: text("week_start").notNull(),
+    /** draft | submitted | approved | rejected */
+    status: text("status").notNull().default("draft"),
+    submittedAt: timestamp("submitted_at", { withTimezone: true }),
+    decidedBy: uuid("decided_by").references(() => users.id, { onDelete: "set null" }),
+    decidedAt: timestamp("decided_at", { withTimezone: true }),
+    comment: text("comment"),
+    quickbooksSyncedAt: timestamp("quickbooks_synced_at", { withTimezone: true }),
+    quickbooksError: text("quickbooks_error"),
+    createdAt: created(),
+    updatedAt: updated(),
+  },
+  (t) => [uniqueIndex("timesheets_user_week_idx").on(t.userId, t.weekStart)],
+);
+
+/** Time on a timesheet: from a ticket's time entry, or entered by hand. Hours ×100. */
+export const timesheetEntries = pgTable(
+  "timesheet_entries",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    userId: uuid("user_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    /** YYYY-MM-DD */
+    date: text("date").notNull(),
+    typeId: uuid("type_id")
+      .notNull()
+      .references(() => timesheetTypes.id, { onDelete: "restrict" }),
+    hoursX100: integer("hours_x100").notNull(),
+    note: text("note"),
+    ticketId: bigint("ticket_id", { mode: "number" }),
+    ticketNumber: text("ticket_number"),
+    ticketTitle: text("ticket_title"),
+    /** ticket | manual */
+    source: text("source").notNull().default("manual"),
+    createdAt: created(),
+  },
+  (t) => [index("timesheet_entries_user_date_idx").on(t.userId, t.date)],
+);
+
+/** An expense claim (with its receipt), approved then reimbursed; billable ones go on the client's invoice. */
+export const expenses = pgTable(
+  "expenses",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    userId: uuid("user_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    date: text("date").notNull(),
+    typeId: uuid("type_id")
+      .notNull()
+      .references(() => expenseTypes.id, { onDelete: "restrict" }),
+    description: text("description").notNull().default(""),
+    quantityX100: integer("quantity_x100").notNull().default(100),
+    unitPriceCents: bigint("unit_price_cents", { mode: "number" }).notNull().default(0),
+    amountCents: bigint("amount_cents", { mode: "number" }).notNull().default(0),
+    clientId: uuid("client_id").references(() => clients.id, { onDelete: "set null" }),
+    billable: boolean("billable").notNull().default(false),
+    /** draft | submitted | approved | rejected */
+    status: text("status").notNull().default("draft"),
+    submittedAt: timestamp("submitted_at", { withTimezone: true }),
+    decidedBy: uuid("decided_by").references(() => users.id, { onDelete: "set null" }),
+    decidedAt: timestamp("decided_at", { withTimezone: true }),
+    comment: text("comment"),
+    /** The work to bill made from it (billable ones) */
+    billingItemId: uuid("billing_item_id").references(() => billingItems.id, { onDelete: "set null" }),
+    receiptName: text("receipt_name"),
+    receiptType: text("receipt_type"),
+    /** The receipt file, base64 */
+    receiptData: text("receipt_data"),
+    quickbooksId: text("quickbooks_id"),
+    quickbooksSyncedAt: timestamp("quickbooks_synced_at", { withTimezone: true }),
+    quickbooksError: text("quickbooks_error"),
+    createdAt: created(),
+    updatedAt: updated(),
+  },
+  (t) => [index("expenses_user_idx").on(t.userId, t.date), index("expenses_status_idx").on(t.status)],
 );

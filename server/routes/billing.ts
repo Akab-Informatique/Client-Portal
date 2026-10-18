@@ -211,7 +211,7 @@ export const billingRoutes = new Hono<AppEnv>()
         environment: z.enum(["sandbox", "production"]).optional(),
         clientId: z.string().trim().max(200).optional(),
         clientSecret: z.string().trim().min(1).max(200).optional(),
-        sync: z.object({ invoices: z.boolean(), payments: z.boolean(), customers: z.boolean() }).partial().optional(),
+        sync: z.object({ invoices: z.boolean(), payments: z.boolean(), customers: z.boolean(), timesheets: z.boolean(), expenses: z.boolean() }).partial().optional(),
       }),
     );
     const s = await quickbooksSettings();

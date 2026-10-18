@@ -15,6 +15,7 @@ import { rmmLink, rmmSettings, type RmmSettings } from "../lib/rmm.ts";
 import { searchProducts, serialsOf, StoreError, takeForTicket, undoTake } from "../lib/store.ts";
 import { storeHttp } from "./store.ts";
 import { rememberCompany, rememberContact } from "../lib/crm.ts";
+import { addTicketTime } from "../lib/timesheets.ts";
 
 /**
  * Tickets (staff). Data come from the ticket source: Autotask when the
@@ -703,6 +704,16 @@ export const ticketRoutes = new Hono<AppEnv>()
     const endedAt = timer.endedAt ?? new Date();
     const src = await ticketSource();
     await run(() => src.addTimeEntry(timer.ticketId, { ...p, startedAt: new Date(endedAt.getTime() - p.hours * 3_600_000), endedAt }, a));
+    // on the technician's timesheet too, with the ticket
+    const tk = await src.get(timer.ticketId).catch(() => null);
+    await addTicketTime(a.realUser.id, {
+      ticketId: timer.ticketId,
+      ticketNumber: tk?.number ?? null,
+      ticketTitle: tk?.title ?? null,
+      hours: p.hours,
+      date: endedAt.toLocaleDateString("en-CA", { timeZone: "America/Toronto" }),
+      note: p.summary,
+    });
     await db().delete(schema.ticketTimers).where(eq(schema.ticketTimers.id, timer.id));
     await audit(a.user.id, "ticket.time_entry", String(timer.ticketId), { hours: p.hours });
     return c.json({ ok: true }, 201);

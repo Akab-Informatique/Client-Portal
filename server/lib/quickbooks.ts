@@ -1,5 +1,6 @@
 import { and, asc, eq, inArray, isNotNull, isNull } from "drizzle-orm";
 import { db, schema } from "../db/index.ts";
+import { addDays, linkDefaultAccounts, typesById, weekByDayAndType } from "./timesheets.ts";
 import { billingSettings, ledger, qbApi, qbToken, quickbooksSettings, saveQuickBooksSettings, type LedgerType, type QuickBooksSettings } from "./billing.ts";
 
 /**
@@ -9,7 +10,7 @@ import { billingSettings, ledger, qbApi, qbToken, quickbooksSettings, saveQuickB
  */
 export class QuickBooksError extends Error {
   constructor(
-    public code: "not_connected" | "not_mapped" | "no_item" | "customer_exists" | "voided" | "api",
+    public code: "not_connected" | "not_mapped" | "no_item" | "customer_exists" | "voided" | "api" | "no_employee" | "no_account",
     public detail?: string,
   ) {
     super(detail ? `${code}: ${detail}` : code);
@@ -452,11 +453,131 @@ export async function pullPayments(actorId: string | null) {
   return { added, updated, at: started };
 }
 
-/** Every 15 minutes while the sync is on (and payments are part of it). */
+// ── employees (timesheets, expenses) ──
+type RawEmployee = { Id: string; DisplayName?: string; GivenName?: string; FamilyName?: string; PrimaryEmailAddr?: { Address?: string }; Active?: boolean };
+
+/** The QuickBooks employee of a portal user: kept once found (same email, else same name). */
+async function employeeOf(userId: string): Promise<string> {
+  const d = db();
+  const [u] = await d.select().from(schema.users).where(eq(schema.users.id, userId));
+  if (!u) throw new QuickBooksError("no_employee");
+  if (u.quickbooksEmployeeId) return u.quickbooksEmployeeId;
+  const all = (await query<RawEmployee>("Employee")).filter((e) => e.Active !== false);
+  const emails = [u.email, u.o365Email].filter(Boolean).map((x) => x!.toLowerCase());
+  const hit =
+    all.find((e) => e.PrimaryEmailAddr?.Address && emails.includes(e.PrimaryEmailAddr.Address.toLowerCase())) ??
+    all.filter((e) => norm(e.DisplayName ?? `${e.GivenName ?? ""} ${e.FamilyName ?? ""}`) === norm(u.name)).at(0);
+  if (!hit) throw new QuickBooksError("no_employee", u.name);
+  await d.update(schema.users).set({ quickbooksEmployeeId: hit.Id }).where(eq(schema.users.id, u.id));
+  return hit.Id;
+}
+
+/** An approved week as QuickBooks time activities (one per day and type). Sent once. */
+export async function pushTimesheet(id: string) {
+  const d = db();
+  const [sheet] = await d.select().from(schema.timesheets).where(eq(schema.timesheets.id, id));
+  if (!sheet || sheet.status !== "approved" || sheet.quickbooksSyncedAt) return;
+  try {
+    const employee = await employeeOf(sheet.userId);
+    const s = await quickbooksSettings();
+    const rows = await weekByDayAndType(sheet.userId, sheet.weekStart);
+    const types = await typesById([...new Set(rows.map((r) => r.typeId))]);
+    for (const r of rows) {
+      const minutes = Math.round(r.hoursX100 * 0.6);
+      const item = types.get(r.typeId)?.quickbooksItemId ?? s.invoice.itemId;
+      await qb("POST", "timeactivity", {
+        NameOf: "Employee",
+        EmployeeRef: { value: employee },
+        TxnDate: r.date,
+        Hours: Math.floor(minutes / 60),
+        Minutes: minutes % 60,
+        BillableStatus: "NotBillable",
+        Description: `Feuille de temps ${sheet.weekStart} → ${addDays(sheet.weekStart, 6)} — ${r.type}`,
+        ...(item ? { ItemRef: { value: item } } : {}),
+      });
+    }
+    await d.update(schema.timesheets).set({ quickbooksSyncedAt: new Date(), quickbooksError: null }).where(eq(schema.timesheets.id, id));
+  } catch (e) {
+    await d.update(schema.timesheets).set({ quickbooksError: errText(e) }).where(eq(schema.timesheets.id, id));
+    throw e;
+  }
+}
+
+/** An approved expense as a QuickBooks purchase (its type's account; the client when billable). */
+export async function pushExpense(id: string) {
+  const d = db();
+  const [x] = await d.select().from(schema.expenses).where(eq(schema.expenses.id, id));
+  if (!x || x.status !== "approved" || x.quickbooksId) return;
+  try {
+    await linkDefaultAccounts();
+    const [type] = await d.select().from(schema.expenseTypes).where(eq(schema.expenseTypes.id, x.typeId));
+    const accounts = await d.select().from(schema.ledgerAccounts);
+    const qbAccount = (id: string | null | undefined) => accounts.find((a) => a.id === id)?.quickbooksId ?? null;
+    const expenseAccount = qbAccount(type?.ledgerAccountId);
+    const bank = qbAccount((await billingSettings()).accounts.bank);
+    if (!expenseAccount || !bank) throw new QuickBooksError("no_account", !expenseAccount ? type?.name : "bank");
+    const [u] = await d.select({ name: schema.users.name }).from(schema.users).where(eq(schema.users.id, x.userId));
+    const [client] = x.clientId ? await d.select({ qb: schema.clients.quickbooksId }).from(schema.clients).where(eq(schema.clients.id, x.clientId)) : [];
+    const employee = await employeeOf(x.userId).catch(() => null);
+    const r = await qb<{ Purchase: { Id: string } }>("POST", "purchase", {
+      PaymentType: "Cash",
+      AccountRef: { value: bank },
+      TxnDate: x.date,
+      ...(employee ? { EntityRef: { value: employee, type: "Employee" } } : {}),
+      PrivateNote: `Dépense de ${u?.name ?? ""} — ${type?.name ?? ""}`.slice(0, 4000),
+      Line: [
+        {
+          DetailType: "AccountBasedExpenseLineDetail",
+          Amount: x.amountCents / 100,
+          Description: x.description.slice(0, 4000),
+          AccountBasedExpenseLineDetail: {
+            AccountRef: { value: expenseAccount },
+            ...(x.billable && client?.qb ? { BillableStatus: "Billable", CustomerRef: { value: client.qb } } : { BillableStatus: "NotBillable" }),
+          },
+        },
+      ],
+    });
+    await d.update(schema.expenses).set({ quickbooksId: r.Purchase.Id, quickbooksSyncedAt: new Date(), quickbooksError: null }).where(eq(schema.expenses.id, id));
+  } catch (e) {
+    await d.update(schema.expenses).set({ quickbooksError: errText(e) }).where(eq(schema.expenses.id, id));
+    throw e;
+  }
+}
+
+const errText = (e: unknown) => (e instanceof QuickBooksError ? (e.detail ? `${e.code}: ${e.detail}` : e.code) : e instanceof Error ? e.message : String(e)).slice(0, 300);
+
+/** Is QuickBooks on for this part (connected, sync on, the part checked)? */
+async function syncOn(part: "invoices" | "timesheets" | "expenses" | "payments") {
+  const s = await quickbooksSettings();
+  return Boolean(s.enabled && s.refreshToken && s.realmId && s.sync[part]);
+}
+
+/** Send now, when the sync is on; a failure stays on the record and is tried again later. */
+export async function autoSync(part: "invoices" | "timesheets" | "expenses", id: string) {
+  if (!(await syncOn(part))) return;
+  const push = part === "invoices" ? pushInvoice : part === "timesheets" ? pushTimesheet : pushExpense;
+  await push(id).catch((e) => console.warn(`[quickbooks] ${part} ${id}:`, errText(e)));
+}
+
+/** Every 15 minutes while the sync is on: payments back, and what was not sent yet. */
 export async function quickbooksTick() {
   const s = await quickbooksSettings();
-  if (!s.enabled || !s.sync.payments || !s.refreshToken || !s.realmId) return;
-  await pullPayments(null).catch((e) => console.warn("[quickbooks] payments:", e instanceof Error ? e.message : e));
+  if (!s.enabled || !s.refreshToken || !s.realmId) return;
+  const warn = (what: string) => (e: unknown) => console.warn(`[quickbooks] ${what}:`, errText(e));
+  if (s.sync.payments) await pullPayments(null).catch(warn("payments"));
+  const d = db();
+  if (s.sync.invoices) {
+    const rows = await d.select({ id: schema.clientInvoices.id }).from(schema.clientInvoices).where(and(eq(schema.clientInvoices.source, "portal"), isNull(schema.clientInvoices.quickbooksId), eq(schema.clientInvoices.voided, false)));
+    for (const r of rows) await pushInvoice(r.id).catch(warn("invoice"));
+  }
+  if (s.sync.timesheets) {
+    const rows = await d.select({ id: schema.timesheets.id }).from(schema.timesheets).where(and(eq(schema.timesheets.status, "approved"), isNull(schema.timesheets.quickbooksSyncedAt)));
+    for (const r of rows) await pushTimesheet(r.id).catch(warn("timesheet"));
+  }
+  if (s.sync.expenses) {
+    const rows = await d.select({ id: schema.expenses.id }).from(schema.expenses).where(and(eq(schema.expenses.status, "approved"), isNull(schema.expenses.quickbooksId)));
+    for (const r of rows) await pushExpense(r.id).catch(warn("expense"));
+  }
 }
 
 /** Clients not mapped yet (for the count on the QuickBooks tab). */

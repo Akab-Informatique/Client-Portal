@@ -2,7 +2,7 @@ import { useSearchParams } from "react-router-dom";
 import { useTranslation } from "react-i18next";
 import { AnimatePresence, motion } from "motion/react";
 import { Dialog as DialogPrimitive } from "radix-ui";
-import { History, Mail, PlugZap, Receipt, ShieldCheck, Users, X, type LucideIcon } from "lucide-react";
+import { Clock, History, Mail, PlugZap, Receipt, ShieldCheck, Users, X, type LucideIcon } from "lucide-react";
 import { LogoMark } from "@/components/brand/Logo";
 import { TechBackground } from "@/components/brand/TechBackground";
 import { useCan } from "@/lib/session";
@@ -12,12 +12,14 @@ import { ActivitySection, RolesSection, StaffSection } from "./sections";
 import { IntegrationsSection } from "./IntegrationsSection";
 import { EmailSection } from "./EmailSection";
 import { BillingSection } from "./BillingSection";
+import { TimeExpenseSection } from "./TimeExpenseSection";
 
 type Section = { key: string; labelKey: string; icon: LucideIcon; permission: PermissionKey[]; render: () => React.ReactNode };
 
 const SECTIONS: Section[] = [
   { key: "staff", labelKey: "admin.sections.staff", icon: Users, permission: ["admin.staff"], render: () => <StaffSection /> },
   { key: "billing", labelKey: "admin.sections.billing", icon: Receipt, permission: ["admin.billing"], render: () => <BillingSection /> },
+  { key: "time", labelKey: "admin.sections.time", icon: Clock, permission: ["admin.billing"], render: () => <TimeExpenseSection /> },
   { key: "roles", labelKey: "admin.sections.roles", icon: ShieldCheck, permission: ["admin.roles"], render: () => <RolesSection /> },
   { key: "email", labelKey: "admin.sections.email", icon: Mail, permission: ["admin.email"], render: () => <EmailSection /> },
   { key: "integrations", labelKey: "admin.sections.integrations", icon: PlugZap, permission: ["admin.integrations"], render: () => <IntegrationsSection /> },

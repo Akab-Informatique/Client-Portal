@@ -44,7 +44,7 @@ type QuickBooks = {
   realmId: string | null;
   companyName: string | null;
   connectedAt: string | null;
-  sync: { invoices: boolean; payments: boolean; customers: boolean };
+  sync: { invoices: boolean; payments: boolean; customers: boolean; timesheets: boolean; expenses: boolean };
   lastTest: { ok: boolean; at: string; error?: string } | null;
   redirectUri: string | null;
   invoice: { itemId: string | null; taxCodeId: string | null; exemptTaxCodeId: string | null };
@@ -680,7 +680,7 @@ function QuickBooksTab() {
 
       <Card title={t("billing.qb.sync")} text={t("billing.qb.syncText")} aside={<Switch checked={q.enabled} disabled={!q.connected} onCheckedChange={(v) => toggle.mutate({ enabled: v })} aria-label={t("billing.enabled")} />}>
         <div className="grid gap-2 sm:grid-cols-3">
-          {(["customers", "invoices", "payments"] as const).map((k) => (
+          {(["customers", "invoices", "payments", "timesheets", "expenses"] as const).map((k) => (
             <label key={k} className="flex items-start gap-2 rounded-xl border p-3 text-sm">
               <Switch checked={q.sync[k]} onCheckedChange={(v) => toggle.mutate({ sync: { [k]: v } })} />
               <span>

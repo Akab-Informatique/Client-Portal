@@ -20,6 +20,8 @@ const OutlookPage = lazy(() => pageLoaders.outlook().then((m) => ({ default: m.O
 const MeetingsPage = lazy(() => pageLoaders.meetings().then((m) => ({ default: m.MeetingsPage })));
 const ClientsPage = lazy(() => pageLoaders.crm().then((m) => ({ default: m.ClientsPage })));
 const ClientPage = lazy(() => pageLoaders.client().then((m) => ({ default: m.ClientPage })));
+const TimesheetPage = lazy(() => pageLoaders.timesheet().then((m) => ({ default: m.TimesheetPage })));
+const ExpensesPage = lazy(() => pageLoaders.expenses().then((m) => ({ default: m.ExpensesPage })));
 const ApprovalsPage = lazy(() => pageLoaders.approvals().then((m) => ({ default: m.ApprovalsPage })));
 const AccountingPage = lazy(() => pageLoaders.accounting().then((m) => ({ default: m.AccountingPage })));
 const ClientHome = lazy(() => import("@/pages/client/ClientHome").then((m) => ({ default: m.ClientHome })));
@@ -89,6 +91,8 @@ function StaffApp() {
         <Route path="crm" element={<Guard permission="crm.view"><ClientsPage /></Guard>} />
         <Route path="crm/:id" element={<Guard permission="crm.view"><ClientPage /></Guard>} />
         <Route path="accounting/invoices" element={<Guard permission="accounting.view"><AccountingPage kind="invoices" /></Guard>} />
+        <Route path="timesheets" element={<Guard permission="timesheets.use"><TimesheetPage /></Guard>} />
+        <Route path="expenses" element={<Guard permission="timesheets.use"><ExpensesPage /></Guard>} />
         <Route path="accounting/approvals" element={<Guard permission="accounting.view"><ApprovalsPage /></Guard>} />
         <Route path="accounting/quotes" element={<Guard permission="accounting.view"><AccountingPage kind="quotes" /></Guard>} />
         <Route path="*" element={<Navigate to="/" replace />} />
