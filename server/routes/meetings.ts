@@ -46,6 +46,17 @@ export const meetingRoutes = new Hono<AppEnv>()
     const openBy = new Set(all.filter(open).flatMap((t) => (t.assignee ? [t.assignee.id] : [])));
     const people = new Map(technicians.filter((p) => src.demo || !p.id.startsWith("at-") || openBy.has(p.id)).map((p) => [p.id, p.name]));
     for (const t of listed) if (t.assignee && !people.has(t.assignee.id)) people.set(t.assignee.id, t.assignee.name);
+    const stray = () => {
+      const rows = all.filter((x) => open(x) && !x.assignee && L.statusKind(x.status) !== "new");
+      const by = new Map<string, { label: string; kind: string; count: number }>();
+      for (const x of rows) {
+        const key = String(x.status);
+        const cur = by.get(key) ?? { label: L.statusLabel(x.status) ?? "", kind: L.statusKind(x.status), count: 0 };
+        cur.count++;
+        by.set(key, cur);
+      }
+      return { total: rows.length, byStatus: [...by.values()].sort((p, q) => q.count - p.count) };
+    };
     const byTech = [...people].map(([id, name]) => ({ id, name, tickets: listed.filter((t) => t.assignee?.id === id).map(item) }));
     const late = (x: { tickets: { overdue: boolean }[] }) => x.tickets.filter((t) => t.overdue).length;
     byTech.sort((x, y) => late(y) - late(x) || y.tickets.length - x.tickets.length || x.name.localeCompare(y.name));
@@ -60,6 +71,8 @@ export const meetingRoutes = new Hono<AppEnv>()
       untilDate: fridayDate(new Date(now)),
       technicians: byTech,
       unassigned: listed.filter((t) => !t.assignee).map(item),
+      // Open tickets nobody has, past "new": someone moved them on, then nobody took them (not to lose)
+      stray: stray(),
     });
   })
 

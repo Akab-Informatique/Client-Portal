@@ -176,6 +176,10 @@ describe("permissions", () => {
     // every technician is listed, even with nothing overdue
     expect(r.json.technicians.length).toBeGreaterThan(1);
     for (const p of r.json.technicians) for (const t of p.tickets) expect(expected.find((e: any) => e.id === t.id).assignee.id).toBe(p.id);
+    // open tickets nobody has, past "new" (whatever their due date)
+    const stray = all.filter((t: any) => t.statusKind !== "complete" && t.statusKind !== "new" && !t.assignee);
+    expect(r.json.stray.total).toBe(stray.length);
+    expect(r.json.stray.byStatus.reduce((s: number, x: any) => s + x.count, 0)).toBe(stray.length);
     const client = await signIn("responsable1@client.example");
     expect((await client.get("/api/meetings/overdue")).status).toBe(403);
   });
