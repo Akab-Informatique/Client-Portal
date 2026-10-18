@@ -16,16 +16,23 @@ export type BillingSettings = {
   taxes: { gstNumber: string; qstNumber: string; gstRate: number; qstRate: number };
   company: { legalName: string; address: string; phone: string; email: string; website: string };
   template: { language: "fr" | "en"; termsDays: number; footer: string; paymentInstructions: string; showPaymentLink: boolean };
+  /** The usual hourly rate when neither the source nor the client gives one ($) */
+  rates: { hourly: number };
+  /** What is copied from Autotask: invoices from this date and number on, work to bill from this date */
+  autotask: { invoicesSince: string; invoiceMinNumber: number | null; itemsSince: string };
   /** Default accounts (ledger account ids) used for invoice lines and payments */
   accounts: { receivable: string | null; bank: string | null; labour: string | null; charges: string | null; contracts: string | null; gst: string | null; qst: string | null };
 };
 
 export const DEFAULT_BILLING: BillingSettings = {
-  numbering: { prefix: "F", next: 1001, digits: 5 },
+  // the Autotask invoices start at 10000: the portal carries on after the highest one
+  numbering: { prefix: "", next: 10000, digits: 5 },
   taxes: { gstNumber: "", qstNumber: "", gstRate: 5, qstRate: 9.975 },
   company: { legalName: "AKAB Informatique", address: "", phone: "", email: "", website: "akab.ca" },
   template: { language: "fr", termsDays: 30, footer: "Merci de votre confiance !", paymentInstructions: "", showPaymentLink: true },
   accounts: { receivable: null, bank: null, labour: null, charges: null, contracts: null, gst: null, qst: null },
+  autotask: { invoicesSince: "2026-09-01", invoiceMinNumber: 10000, itemsSince: "2026-09-01" },
+  rates: { hourly: 115 },
 };
 
 async function row(provider: string) {
@@ -48,6 +55,8 @@ export async function billingSettings(): Promise<BillingSettings> {
     company: { ...DEFAULT_BILLING.company, ...c.company },
     template: { ...DEFAULT_BILLING.template, ...c.template },
     accounts: { ...DEFAULT_BILLING.accounts, ...c.accounts },
+    autotask: { ...DEFAULT_BILLING.autotask, ...c.autotask },
+    rates: { ...DEFAULT_BILLING.rates, ...c.rates },
   };
 }
 
@@ -62,6 +71,8 @@ export async function saveBillingSettings(actorId: string, p: BillingPatch) {
     company: { ...cur.company, ...p.company },
     template: { ...cur.template, ...p.template },
     accounts: { ...cur.accounts, ...p.accounts },
+    autotask: { ...cur.autotask, ...p.autotask },
+    rates: { ...cur.rates, ...p.rates },
   };
   await save("billing", actorId, { enabled: true, config: next as unknown as Record<string, unknown> });
   return next;

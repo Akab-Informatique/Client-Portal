@@ -2,6 +2,7 @@ import { and, asc, eq, isNotNull, sql } from "drizzle-orm";
 import { db, schema } from "../db/index.ts";
 import type { AuthContext } from "./auth.ts";
 import { localCompanies, localContacts, localContracts } from "./crm.ts";
+import { billingSettings } from "./billing.ts";
 import { autotask, AutotaskError, listResources, loadSettings, type Client } from "./autotask.ts";
 import {
   addDemoAttachment,
@@ -63,18 +64,34 @@ export type CrmExport = {
   companies: { id: number; name: string; phone: string | null; address: string | null; city: string | null; province: string | null; postalCode: string | null; website: string | null; parentId: number | null }[];
   contacts: { id: string; companyId: number; firstName: string; lastName: string; email: string | null; phone: string | null; mobile: string | null; title: string | null }[];
   contracts: { id: string; companyId: number; name: string; type: string | null; isDefault: boolean; startDate: string | null; endDate: string | null }[];
-  /** Invoices of the last 3 years (money in cents) */
+  /** Invoices from the date set in Admin › Facturation (money in cents) */
   invoices: { id: string; companyId: number; number: string; issuedOn: string; dueOn: string | null; totalCents: number; taxCents: number; paidOn: string | null; voided: boolean }[];
   /** false: Autotask refused the invoices (the copies already made are kept) */
   invoicesRead?: boolean;
 };
-/** How far back the invoices are copied */
-export const INVOICE_YEARS = 3;
-const invoicesSince = () => {
-  const d = new Date();
-  d.setFullYear(d.getFullYear() - INVOICE_YEARS);
-  return d.toISOString().slice(0, 10);
+/** Work to bill not yet posted in the source (Accounting › Approbation). Money in cents. */
+export type BillableKind = "labour" | "charge" | "expense" | "contract" | "milestone";
+export type Billable = {
+  /** Unique in the source, e.g. "time:123" */
+  id: string;
+  kind: BillableKind;
+  companyId: number;
+  date: string;
+  dateEnd?: string | null;
+  description: string;
+  ticketNumber?: string | null;
+  contractName?: string | null;
+  resourceName?: string | null;
+  /** Hours or units */
+  quantity: number;
+  /** null: no rate known (the client's or the usual one is used) */
+  unitPriceCents: number | null;
+  taxable: boolean;
 };
+export type BillableExport = { items: Billable[]; errors: Partial<Record<BillableKind, string>> };
+
+/** The invoices to copy: from the date set in Admin › Facturation */
+const invoicesSince = async () => (await billingSettings()).autotask.invoicesSince;
 const cents = (v: number | null | undefined) => Math.round((v ?? 0) * 100);
 export type CompanyPatch = Partial<{ name: string; phone: string | null; address: string | null; city: string | null; province: string | null; postalCode: string | null; website: string | null; parentId: number | null }>;
 export type ContactPatch = Partial<{ firstName: string; lastName: string; email: string | null; phone: string | null; mobile: string | null; title: string | null; active: boolean }>;
@@ -198,6 +215,8 @@ export interface TicketSource {
   addContact(companyId: number, p: { firstName: string; lastName: string; email: string | null; phone: string | null; mobile?: string | null; title?: string | null }, a: AuthContext): Promise<Contact>;
   /** Every active client, contact and contract (the CRM's copy) */
   crmExport(): Promise<CrmExport>;
+  /** Work to bill since a date, not yet posted in the source */
+  billables(since: string): Promise<BillableExport>;
   updateCompany(id: number, p: CompanyPatch, a: AuthContext): Promise<void>;
   updateContact(id: string, p: ContactPatch, a: AuthContext): Promise<void>;
   /** A new client (Autotask company of type client) */
@@ -424,7 +443,7 @@ const demoSource: TicketSource = {
           return {
             id: `inv-${c.id}-${n}`,
             companyId: c.id,
-            number: `F${issued.getFullYear()}${String(issued.getMonth() + 1).padStart(2, "0")}-${String(c.id).slice(-2)}`,
+            number: String(10000 + ((issued.getFullYear() - 2026) * 12 + issued.getMonth() - 8) * 16 + i),
             issuedOn: day(issued),
             dueOn: day(due),
             totalCents: cents(subtotal + tax),
@@ -436,6 +455,46 @@ const demoSource: TicketSource = {
       }),
       contracts: companies.flatMap((c) => demoContracts(c.id).map((k) => ({ id: k.id, companyId: c.id, name: k.name, type: k.name.startsWith("Banque") ? "Blocs d'heures" : k.name.startsWith("Projet") ? "Prix fixe" : "Récurrent", isDefault: k.isDefault, startDate: null, endDate: k.endDate }))),
     };
+  },
+  async billables(since) {
+    const day = (d: Date) => d.toISOString().slice(0, 10);
+    const now = new Date();
+    const ago = (n: number) => day(new Date(now.getTime() - n * 86_400_000));
+    const staff = await staffPeople();
+    const tickets = demoTickets(staff);
+    const items: Billable[] = [];
+    for (const [i, c] of demoCompanies().slice(0, 8).entries()) {
+      const mine = tickets.filter((x) => x.company.id === c.id).slice(0, 3);
+      // labour on its tickets
+      for (const [n, tk] of mine.entries()) {
+        items.push({
+          id: `demo-time-${c.id}-${n}`,
+          kind: "labour",
+          companyId: c.id,
+          date: ago(2 + n * 4 + i),
+          description: `${tk.title} — diagnostic et correction`,
+          ticketNumber: tk.number,
+          resourceName: tk.assignee?.name ?? staff[n % Math.max(1, staff.length)]?.name ?? null,
+          quantity: [1.5, 0.75, 2][n],
+          unitPriceCents: null,
+          taxable: true,
+        });
+      }
+      // material charged on a ticket
+      if (mine[0]) items.push({ id: `demo-charge-${c.id}`, kind: "charge", companyId: c.id, date: ago(3 + i), description: "Câble réseau Cat6 3 m", ticketNumber: mine[0].number, quantity: 2, unitPriceCents: 1250, taxable: true });
+      // travel expenses
+      if (i % 2 === 0) items.push({ id: `demo-expense-${c.id}`, kind: "expense", companyId: c.id, date: ago(5 + i), description: "Kilométrage — 42 km", resourceName: staff[0]?.name ?? null, quantity: 42, unitPriceCents: 68, taxable: true });
+      // this month of the managed services contract, and a project milestone
+      for (const k of demoContracts(c.id)) {
+        if (k.isDefault) {
+          const start = new Date(now.getFullYear(), now.getMonth(), 1, 12);
+          const end = new Date(now.getFullYear(), now.getMonth() + 1, 0, 12);
+          items.push({ id: `demo-contract-${k.id}-${day(start).slice(0, 7)}`, kind: "contract", companyId: c.id, date: day(start), dateEnd: day(end), description: `${k.name} — ${day(start).slice(0, 7)}`, contractName: k.name, quantity: 1, unitPriceCents: (450 + i * 50) * 100, taxable: true });
+        }
+        if (k.name.startsWith("Projet")) items.push({ id: `demo-milestone-${k.id}`, kind: "milestone", companyId: c.id, date: ago(1), description: "Étape 2 — migration des boîtes courriel", contractName: k.name, quantity: 1, unitPriceCents: 150000, taxable: true });
+      }
+    }
+    return { items: items.filter((x) => x.date >= since), errors: {} };
   },
   async updateCompany(id, p) {
     demoCompanyPatches.set(id, { ...demoCompanyPatches.get(id), ...p });
@@ -1610,7 +1669,7 @@ const autotaskSource: TicketSource = {
     type AtInvoice = { id: number; companyID: number; invoiceNumber?: string | null; invoiceDateTime?: string | null; dueDate?: string | null; invoiceTotal?: number | null; totalTaxValue?: number | null; paidDate?: string | null; isVoided?: boolean | null };
     const vf = await safeFields(at, "Invoices", ["id", "companyID", "invoiceNumber", "invoiceDateTime", "dueDate", "invoiceTotal", "totalTaxValue", "paidDate", "isVoided"]);
     // invoices are kept even if this part fails (e.g. an API user without access to billing)
-    const invoices = await at.query<AtInvoice>("Invoices", [{ op: "gte", field: "invoiceDateTime", value: invoicesSince() }], { fields: vf, max: 50_000 }).catch((e) => {
+    const invoices = await at.query<AtInvoice>("Invoices", [{ op: "gte", field: "invoiceDateTime", value: await invoicesSince() }], { fields: vf, max: 50_000 }).catch((e) => {
       console.warn("[crm] invoices not read:", e instanceof Error ? e.message : e);
       return null;
     });
@@ -1654,6 +1713,152 @@ const autotaskSource: TicketSource = {
       invoicesRead: invoices !== null,
       contracts: contracts.map((k) => ({ id: String(k.id), companyId: k.companyID, name: k.contractName || `#${k.id}`, type: k.contractType != null ? (types.get(String(k.contractType)) ?? null) : null, isDefault: Boolean(k.isDefaultContract), startDate: day(k.startDate), endDate: day(k.endDate) })),
     };
+  },
+
+  async billables(since) {
+    const at = await autotask();
+    const items: Billable[] = [];
+    const errors: BillableExport["errors"] = {};
+    const day = (s?: string | null) => (s ? s.slice(0, 10) : null);
+    const msg = (e: unknown) => (e instanceof Error ? e.message : String(e)).slice(0, 300);
+    const people = new Map((await listResources().catch(() => [])).map((r) => [r.id, r.name]));
+    // tickets: number and client, from the portal's copy first, then Autotask
+    const mirrored = await mirrorMap();
+    const ticketInfo = new Map<number, { number: string; companyId: number }>();
+    const ticketsOf = async (ids: number[]) => {
+      const missing = [...new Set(ids)].filter((id) => !ticketInfo.has(id));
+      for (const id of missing) {
+        const m = mirrored.get(id);
+        if (m) ticketInfo.set(id, { number: m.number, companyId: m.company.id });
+      }
+      const rest = missing.filter((id) => !ticketInfo.has(id));
+      for (const part of chunks(rest, 400)) {
+        const rows = await at.query<{ id: number; ticketNumber: string; companyID: number }>("Tickets", [{ op: "in", field: "id", value: part }], { fields: ["id", "ticketNumber", "companyID"], max: 500 });
+        for (const r of rows) ticketInfo.set(r.id, { number: r.ticketNumber, companyId: r.companyID });
+      }
+    };
+    // contracts: name and client
+    const contractInfo = new Map<number, { name: string; companyId: number }>();
+    const contractsOf = async (ids: number[]) => {
+      const missing = [...new Set(ids)].filter((id) => !contractInfo.has(id));
+      for (const part of chunks(missing, 400)) {
+        const rows = await at.query<{ id: number; contractName: string; companyID: number }>("Contracts", [{ op: "in", field: "id", value: part }], { fields: ["id", "contractName", "companyID"], max: 500 });
+        for (const r of rows) contractInfo.set(r.id, { name: r.contractName, companyId: r.companyID });
+      }
+    };
+
+    // labour: billable time not yet approved and posted
+    try {
+      type AtTime = { id: number; ticketID?: number | null; resourceID?: number | null; roleID?: number | null; dateWorked?: string; hoursWorked?: number; hoursToBill?: number | null; summaryNotes?: string | null; isNonBillable?: boolean; billingApprovalDateTime?: string | null; contractID?: number | null };
+      const fields = await safeFields(at, "TimeEntries", ["id", "ticketID", "resourceID", "roleID", "dateWorked", "hoursWorked", "hoursToBill", "summaryNotes", "isNonBillable", "billingApprovalDateTime", "contractID"]);
+      const rows = (await at.query<AtTime>("TimeEntries", [{ op: "gte", field: "dateWorked", value: since }], { fields, max: 50_000 })).filter((r) => !r.isNonBillable && !r.billingApprovalDateTime && r.ticketID);
+      await ticketsOf(rows.map((r) => r.ticketID!));
+      const roles = new Map(
+        (await at.query<{ id: number; hourlyRate?: number | null }>("Roles", [{ op: "eq", field: "isActive", value: true }], { fields: ["id", "hourlyRate"], max: 500 }).catch(() => [])).map((r) => [r.id, r.hourlyRate ?? null]),
+      );
+      await contractsOf(rows.map((r) => r.contractID).filter((x): x is number => Boolean(x)));
+      for (const r of rows) {
+        const tk = ticketInfo.get(r.ticketID!);
+        if (!tk) continue;
+        const rate = r.roleID ? roles.get(r.roleID) : null;
+        items.push({
+          id: `time:${r.id}`,
+          kind: "labour",
+          companyId: tk.companyId,
+          date: day(r.dateWorked) ?? since,
+          description: (r.summaryNotes ?? "").trim().slice(0, 2000) || `Billet ${tk.number}`,
+          ticketNumber: tk.number,
+          contractName: r.contractID ? (contractInfo.get(r.contractID)?.name ?? null) : null,
+          resourceName: r.resourceID ? (people.get(r.resourceID) ?? null) : null,
+          quantity: r.hoursToBill ?? r.hoursWorked ?? 0,
+          unitPriceCents: rate != null ? cents(rate) : null,
+          taxable: true,
+        });
+      }
+    } catch (e) {
+      errors.labour = msg(e);
+    }
+
+    // charges on tickets, billable and not billed
+    try {
+      type AtCharge = { id: number; ticketID: number; name?: string; description?: string | null; unitQuantity?: number; unitPrice?: number | null; datePurchased?: string | null; isBillableToCompany?: boolean; isBilled?: boolean | null; contractID?: number | null };
+      const fields = await safeFields(at, "TicketCharges", ["id", "ticketID", "name", "description", "unitQuantity", "unitPrice", "datePurchased", "isBillableToCompany", "isBilled", "contractID"]);
+      const rows = (await at.query<AtCharge>("TicketCharges", [{ op: "gte", field: "datePurchased", value: since }], { fields, max: 50_000 })).filter((r) => r.isBillableToCompany !== false && r.isBilled !== true);
+      await ticketsOf(rows.map((r) => r.ticketID));
+      for (const r of rows) {
+        const tk = ticketInfo.get(r.ticketID);
+        if (!tk) continue;
+        items.push({ id: `charge:${r.id}`, kind: "charge", companyId: tk.companyId, date: day(r.datePurchased) ?? since, description: [r.name, r.description].filter(Boolean).join(" — ").slice(0, 2000), ticketNumber: tk.number, quantity: r.unitQuantity ?? 1, unitPriceCents: r.unitPrice != null ? cents(r.unitPrice) : null, taxable: true });
+      }
+    } catch (e) {
+      errors.charge = msg(e);
+    }
+
+    // expenses billable to the client
+    try {
+      type AtExpense = { id: number; companyID?: number | null; ticketID?: number | null; expenseDate?: string; description?: string | null; expenseCurrencyExpenseAmount?: number | null; receiptAmount?: number | null; isBillableToCompany?: boolean; expenseReportID?: number };
+      const fields = await safeFields(at, "ExpenseItems", ["id", "companyID", "ticketID", "expenseDate", "description", "expenseCurrencyExpenseAmount", "receiptAmount", "isBillableToCompany", "expenseReportID"]);
+      const rows = (await at.query<AtExpense>("ExpenseItems", [{ op: "gte", field: "expenseDate", value: since }], { fields, max: 50_000 })).filter((r) => r.isBillableToCompany && (r.companyID || r.ticketID));
+      await ticketsOf(rows.map((r) => r.ticketID).filter((x): x is number => Boolean(x)));
+      for (const r of rows) {
+        const tk = r.ticketID ? ticketInfo.get(r.ticketID) : null;
+        const companyId = r.companyID || tk?.companyId;
+        if (!companyId) continue;
+        items.push({ id: `expense:${r.id}`, kind: "expense", companyId, date: day(r.expenseDate) ?? since, description: (r.description ?? "").slice(0, 2000) || "Dépense", ticketNumber: tk?.number ?? null, quantity: 1, unitPriceCents: cents(r.expenseCurrencyExpenseAmount ?? r.receiptAmount ?? 0), taxable: true });
+      }
+    } catch (e) {
+      errors.expense = msg(e);
+    }
+
+    // recurring contract periods not yet posted
+    try {
+      type AtUnit = { id: number; contractID: number; serviceID?: number | null; startDate?: string; endDate?: string; units?: number | null; price?: number | null; approveAndPostDate?: string | null };
+      const fields = await safeFields(at, "ContractServiceUnits", ["id", "contractID", "serviceID", "startDate", "endDate", "units", "price", "approveAndPostDate"]);
+      const today = new Date().toISOString().slice(0, 10);
+      const rows = (await at.query<AtUnit>("ContractServiceUnits", [{ op: "gte", field: "endDate", value: since }, { op: "lte", field: "startDate", value: today }], { fields, max: 50_000 })).filter((r) => !r.approveAndPostDate);
+      await contractsOf(rows.map((r) => r.contractID));
+      const services = new Map(
+        (await at.query<{ id: number; name: string }>("Services", [{ op: "in", field: "id", value: [...new Set(rows.map((r) => r.serviceID).filter(Boolean))].slice(0, 500) }], { fields: ["id", "name"], max: 500 }).catch(() => [])).map((s) => [s.id, s.name]),
+      );
+      for (const r of rows) {
+        const k = contractInfo.get(r.contractID);
+        if (!k) continue;
+        const units = r.units ?? 1;
+        const service = r.serviceID ? services.get(r.serviceID) : null;
+        items.push({
+          id: `contract-unit:${r.id}`,
+          kind: "contract",
+          companyId: k.companyId,
+          date: day(r.startDate) ?? since,
+          dateEnd: day(r.endDate),
+          description: [service ?? k.name, `${day(r.startDate)} → ${day(r.endDate)}`].join(" — "),
+          contractName: k.name,
+          quantity: units,
+          unitPriceCents: r.price != null ? cents(r.price) : null,
+          taxable: true,
+        });
+      }
+    } catch (e) {
+      errors.contract = msg(e);
+    }
+
+    // milestones ready to bill
+    try {
+      type AtMilestone = { id: number; contractID: number; title?: string; description?: string | null; amount?: number | null; dateDue?: string | null; status?: number | null };
+      const fields = await safeFields(at, "ContractMilestones", ["id", "contractID", "title", "description", "amount", "dateDue", "status"]);
+      const statuses = picklist(await fieldsOf(at, "ContractMilestones").catch(() => [] as FieldInfo[]), "status");
+      const ready = new Set(statuses.filter((s) => /ready|pr[eê]t|factur/i.test(s.label) && !/billed|factur[ée]e?$/i.test(s.label)).map((s) => Number(s.value)));
+      const rows = (await at.query<AtMilestone>("ContractMilestones", [{ op: "gte", field: "dateDue", value: since }], { fields, max: 20_000 })).filter((r) => r.status != null && ready.has(r.status));
+      await contractsOf(rows.map((r) => r.contractID));
+      for (const r of rows) {
+        const k = contractInfo.get(r.contractID);
+        if (!k) continue;
+        items.push({ id: `milestone:${r.id}`, kind: "milestone", companyId: k.companyId, date: day(r.dateDue) ?? since, description: [r.title, r.description].filter(Boolean).join(" — ").slice(0, 2000), contractName: k.name, quantity: 1, unitPriceCents: cents(r.amount ?? 0), taxable: true });
+      }
+    } catch (e) {
+      errors.milestone = msg(e);
+    }
+    return { items, errors };
   },
 
   async updateCompany(id, p, a) {

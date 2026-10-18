@@ -361,6 +361,13 @@ export const crmRoutes = new Hono<AppEnv>()
           .where(inArray(schema.invoicePayments.invoiceId, rows.map((r) => r.id)))
           .orderBy(asc(schema.invoicePayments.paidOn), asc(schema.invoicePayments.createdAt))
       : [];
+    const lines = new Map<string, (typeof schema.invoiceLines.$inferSelect)[]>();
+    const portal = rows.filter((r) => r.source === "portal").map((r) => r.id);
+    if (portal.length) {
+      for (const l of await d.select().from(schema.invoiceLines).where(inArray(schema.invoiceLines.invoiceId, portal)).orderBy(asc(schema.invoiceLines.position))) {
+        lines.set(l.invoiceId, [...(lines.get(l.invoiceId) ?? []), l]);
+      }
+    }
     const today = new Date().toLocaleDateString("en-CA", { timeZone: "America/Toronto" });
     const yearAgo = new Date(Date.now() - 365 * 86_400_000).toISOString().slice(0, 10);
     const items = rows.map((v) => {
@@ -385,6 +392,8 @@ export const crmRoutes = new Hono<AppEnv>()
         status,
         late,
         daysLate: late ? Math.round((Date.parse(today) - Date.parse(v.dueOn!)) / 86_400_000) : 0,
+        source: v.source,
+        lines: (lines.get(v.id) ?? []).map((l) => ({ id: l.id, kind: l.kind, description: l.description, quantity: l.quantityX100 / 100, unitPriceCents: l.unitPriceCents, amountCents: l.amountCents, taxable: l.taxable })),
         quickbooks: v.quickbooksId || v.quickbooksError ? { id: v.quickbooksId, syncedAt: v.quickbooksSyncedAt, error: v.quickbooksError } : null,
         payments: mine.map((x) => ({ id: x.p.id, amountCents: x.p.amountCents, paidOn: x.p.paidOn, method: x.p.method, reference: x.p.reference, note: x.p.note, source: x.p.source, by: x.by })),
       };

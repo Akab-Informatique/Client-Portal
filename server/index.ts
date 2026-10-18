@@ -9,6 +9,7 @@ import { smtpSettings } from "./lib/mail.ts";
 import { keepTicketsWarm } from "./lib/ticketSource.ts";
 import { CRM_SYNC_EVERY, syncCrm } from "./lib/crm.ts";
 import { quickbooksTick } from "./lib/quickbooks.ts";
+import { syncBillables } from "./lib/billables.ts";
 import { sweepTimers } from "./lib/timers.ts";
 import { sendReminders } from "./lib/planning.ts";
 import { autoTickets } from "./lib/sms.ts";
@@ -23,8 +24,13 @@ const host = process.env.HOST || (config.production ? "0.0.0.0" : "127.0.0.1");
 keepTicketsWarm();
 
 // CRM: the portal keeps its own copy of the clients, contacts and contracts (Autotask is the reference while linked)
-void syncCrm();
-setInterval(() => void syncCrm(), CRM_SYNC_EVERY).unref();
+// then the work to bill (time, charges, expenses, contracts, milestones) not posted in Autotask yet
+const syncAll = () =>
+  syncCrm()
+    .then(() => syncBillables())
+    .catch((e) => console.warn("[billing] work to bill not copied:", e instanceof Error ? e.message : e));
+void syncAll();
+setInterval(() => void syncAll(), CRM_SYNC_EVERY).unref();
 // QuickBooks: payments made there brought onto the portal's invoices
 setInterval(() => void quickbooksTick(), 15 * 60_000).unref();
 

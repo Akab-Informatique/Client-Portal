@@ -69,6 +69,9 @@ export type CrmInvoice = {
   late: boolean;
   daysLate: number;
   payments: InvoicePayment[];
+  /** autotask: copied from Autotask · portal: made here (with its lines) */
+  source: "autotask" | "portal";
+  lines: { id: string; kind: string; description: string; quantity: number; unitPriceCents: number; amountCents: number; taxable: boolean }[];
   /** In QuickBooks: its id once sent, the last send, its error */
   quickbooks: { id: string | null; syncedAt: string | null; error: string | null } | null;
 };

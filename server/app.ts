@@ -28,6 +28,7 @@ import { microsoftRoutes } from "./routes/microsoft.ts";
 import { meetingRoutes } from "./routes/meetings.ts";
 import { crmRoutes } from "./routes/crm.ts";
 import { billingRoutes } from "./routes/billing.ts";
+import { billablesRoutes } from "./routes/billables.ts";
 
 export function createApp() {
   const app = new Hono<AppEnv>();
@@ -87,6 +88,7 @@ export function createApp() {
   api.route("/meetings", meetingRoutes);
   api.route("/crm", crmRoutes);
   api.route("/billing", billingRoutes);
+  api.route("/billables", billablesRoutes);
   api.route("/messages", messageRoutes);
   api.route("/board", boardRoutes);
   api.use("/dashboard/*", requireStaff);

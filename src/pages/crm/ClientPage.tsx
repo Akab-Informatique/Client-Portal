@@ -607,6 +607,34 @@ function Payments({ invoice: v, clientId }: { invoice: CrmInvoice; clientId: str
   const remove = useMutation({ mutationFn: (pid: string) => api.del(`/crm/invoices/${v.id}/payments/${pid}`), onSuccess: refresh });
   return (
     <div className="space-y-3 border-t border-dashed bg-background/30 px-4 py-3">
+      {v.lines.length > 0 && (
+        <table className="w-full text-xs">
+          <thead className="text-[10px] uppercase tracking-wider text-muted-foreground">
+            <tr>
+              <th className="pb-1 text-left font-medium">{t("crm.invoices.lines.description")}</th>
+              <th className="pb-1 text-right font-medium">{t("crm.invoices.lines.qty")}</th>
+              <th className="pb-1 text-right font-medium">{t("crm.invoices.lines.rate")}</th>
+              <th className="pb-1 text-right font-medium">{t("crm.invoices.lines.amount")}</th>
+            </tr>
+          </thead>
+          <tbody className="divide-y divide-border/40">
+            {v.lines.map((l) => (
+              <tr key={l.id}>
+                <td className="py-1 pr-2">{l.description}</td>
+                <td className="py-1 text-right font-mono">{l.quantity}</td>
+                <td className="py-1 text-right font-mono text-muted-foreground">{m(l.unitPriceCents)}</td>
+                <td className="py-1 text-right font-mono">{m(l.amountCents)}</td>
+              </tr>
+            ))}
+            <tr>
+              <td colSpan={3} className="pt-1.5 text-right text-muted-foreground">
+                {t("crm.invoices.lines.taxes")}
+              </td>
+              <td className="pt-1.5 text-right font-mono text-muted-foreground">{m(v.taxCents)}</td>
+            </tr>
+          </tbody>
+        </table>
+      )}
       {v.payments.length > 0 ? (
         <ul className="space-y-1">
           {v.payments.map((p) => (

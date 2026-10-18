@@ -1,6 +1,7 @@
 import { and, asc, eq, inArray, isNotNull } from "drizzle-orm";
 import { db, schema } from "../db/index.ts";
 import { ticketSource, type CrmExport } from "./ticketSource.ts";
+import { billingSettings } from "./billing.ts";
 
 /**
  * The CRM: the portal's own copy of the clients, their contacts and their
@@ -143,8 +144,25 @@ async function apply(data: CrmExport) {
   // ── invoices (never removed: a voided invoice says so)
   let nInvoices = 0;
   if (data.invoicesRead !== false) {
+    // only the invoices from the date and number set in Admin › Facturation
+    const w = (await billingSettings()).autotask;
+    const inWindow = (v: { issuedOn: string; number: string }) => {
+      if (v.issuedOn < w.invoicesSince) return false;
+      if (w.invoiceMinNumber == null) return true;
+      const n = Number(v.number.replace(/\D/g, ""));
+      return Number.isFinite(n) && v.number.replace(/\D/g, "") !== "" && n >= w.invoiceMinNumber;
+    };
+    const wanted = data.invoices.filter(inWindow);
     const invoices = new Map((await d.select().from(schema.clientInvoices).where(isNotNull(schema.clientInvoices.autotaskId))).map((v) => [v.autotaskId!, v]));
-    for (const v of data.invoices) {
+    // copies made before (outside the window): removed, unless they carry payments or went to QuickBooks
+    const keep = new Set(wanted.map((v) => v.id));
+    const outside = [...invoices.values()].filter((v) => v.source === "autotask" && !keep.has(v.autotaskId!) && !v.quickbooksId);
+    if (outside.length) {
+      const paid = new Set((await d.select({ id: schema.invoicePayments.invoiceId }).from(schema.invoicePayments).where(inArray(schema.invoicePayments.invoiceId, outside.map((v) => v.id)))).map((x) => x.id));
+      const drop = outside.filter((v) => !paid.has(v.id)).map((v) => v.id);
+      if (drop.length) await d.delete(schema.clientInvoices).where(inArray(schema.clientInvoices.id, drop));
+    }
+    for (const v of wanted) {
       const clientId = idOf.get(v.companyId);
       if (!clientId) continue;
       nInvoices++;

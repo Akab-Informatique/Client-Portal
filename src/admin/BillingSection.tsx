@@ -26,6 +26,8 @@ type Settings = {
   company: { legalName: string; address: string; phone: string; email: string; website: string };
   template: { language: "fr" | "en"; termsDays: number; footer: string; paymentInstructions: string; showPaymentLink: boolean };
   accounts: Record<AccountUse, string | null>;
+  autotask: { invoicesSince: string; invoiceMinNumber: number | null; itemsSince: string };
+  rates: { hourly: number };
   preview: string;
 };
 type AccountUse = "receivable" | "bank" | "labour" | "charges" | "contracts" | "gst" | "qst";
@@ -199,9 +201,9 @@ function GeneralTab() {
   const { t } = useTranslation();
   const { data } = useSettings();
   const save = useSaveSettings();
-  const [f, setF] = useState<Pick<Settings, "numbering" | "taxes" | "company"> | null>(null);
+  const [f, setF] = useState<Pick<Settings, "numbering" | "taxes" | "company" | "autotask" | "rates"> | null>(null);
   useEffect(() => {
-    if (data) setF({ numbering: data.numbering, taxes: data.taxes, company: data.company });
+    if (data) setF({ numbering: data.numbering, taxes: data.taxes, company: data.company, autotask: data.autotask, rates: data.rates });
   }, [data]);
   if (!f) return <Loader2 className="size-5 animate-spin text-muted-foreground" />;
   const preview = `${f.numbering.prefix}${String(f.numbering.next || 0).padStart(f.numbering.digits || 1, "0")}`;
@@ -241,6 +243,23 @@ function GeneralTab() {
           </Field>
           <Field label={t("billing.taxes.qstRate")}>
             <Input type="number" step="0.001" min={0} max={30} value={f.taxes.qstRate} onChange={(e) => set("taxes", { qstRate: Number(e.target.value) })} />
+          </Field>
+        </div>
+      </Card>
+
+      <Card title={t("billing.import.title")} text={t("billing.import.text")}>
+        <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+          <Field label={t("billing.import.invoicesSince")}>
+            <Input type="date" value={f.autotask.invoicesSince} onChange={(e) => set("autotask", { invoicesSince: e.target.value })} />
+          </Field>
+          <Field label={t("billing.import.minNumber")} hint={t("billing.import.minNumberHint")}>
+            <Input type="number" min={0} value={f.autotask.invoiceMinNumber ?? ""} onChange={(e) => set("autotask", { invoiceMinNumber: e.target.value === "" ? null : Number(e.target.value) })} />
+          </Field>
+          <Field label={t("billing.import.itemsSince")} hint={t("billing.import.itemsSinceHint")}>
+            <Input type="date" value={f.autotask.itemsSince} onChange={(e) => set("autotask", { itemsSince: e.target.value })} />
+          </Field>
+          <Field label={t("billing.import.hourly")} hint={t("billing.import.hourlyHint")}>
+            <Input type="number" min={0} step="0.01" value={f.rates.hourly} onChange={(e) => set("rates", { hourly: Number(e.target.value) })} />
           </Field>
         </div>
       </Card>

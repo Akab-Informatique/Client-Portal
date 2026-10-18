@@ -1,4 +1,4 @@
-import { and, eq, inArray, isNotNull, isNull } from "drizzle-orm";
+import { and, asc, eq, inArray, isNotNull, isNull } from "drizzle-orm";
 import { db, schema } from "../db/index.ts";
 import { billingSettings, ledger, qbApi, qbToken, quickbooksSettings, saveQuickBooksSettings, type LedgerType, type QuickBooksSettings } from "./billing.ts";
 
@@ -362,6 +362,13 @@ export async function pushInvoice(invoiceId: string): Promise<{ quickbooksId: st
     const exempt = client.invoice?.taxes === false;
     const taxCode = exempt ? s.invoice.exemptTaxCodeId : s.invoice.taxCodeId;
     const subtotal = dollars(inv.totalCents - inv.taxCents);
+    const own = await d.select().from(schema.invoiceLines).where(eq(schema.invoiceLines.invoiceId, inv.id)).orderBy(asc(schema.invoiceLines.position));
+    const lineOf = (description: string, amount: number, qty: number, unit: number, taxed: boolean) => ({
+      DetailType: "SalesItemLineDetail",
+      Amount: amount,
+      Description: description.slice(0, 4000),
+      SalesItemLineDetail: { ItemRef: { value: s.invoice.itemId! }, Qty: qty, UnitPrice: unit, ...((taxed ? taxCode : s.invoice.exemptTaxCodeId) ? { TaxCodeRef: { value: (taxed ? taxCode : s.invoice.exemptTaxCodeId)! } } : {}) },
+    });
     const body = {
       DocNumber: inv.number.slice(0, 21),
       TxnDate: inv.issuedOn,
@@ -369,14 +376,9 @@ export async function pushInvoice(invoiceId: string): Promise<{ quickbooksId: st
       CustomerRef: { value: client.quickbooksId },
       GlobalTaxCalculation: "TaxExcluded",
       ...(client.invoice?.billingEmail ? { BillEmail: { Address: client.invoice.billingEmail } } : {}),
-      Line: [
-        {
-          DetailType: "SalesItemLineDetail",
-          Amount: subtotal,
-          Description: `Facture ${inv.number}`,
-          SalesItemLineDetail: { ItemRef: { value: s.invoice.itemId }, Qty: 1, UnitPrice: subtotal, ...(taxCode ? { TaxCodeRef: { value: taxCode } } : {}) },
-        },
-      ],
+      Line: own.length
+        ? own.map((l) => lineOf(l.description, dollars(l.amountCents), l.quantityX100 / 100, dollars(l.unitPriceCents), l.taxable))
+        : [lineOf(`Facture ${inv.number}`, subtotal, 1, subtotal, true)],
     };
     let id = inv.quickbooksId;
     if (id) {

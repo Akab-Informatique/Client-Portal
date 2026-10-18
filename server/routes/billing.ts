@@ -118,6 +118,11 @@ export const billingRoutes = new Hono<AppEnv>()
           .object({ language: z.enum(["fr", "en"]), termsDays: z.number().int().min(0).max(120), footer: zText(1000), paymentInstructions: zText(1000), showPaymentLink: z.boolean() })
           .partial()
           .optional(),
+        rates: z.object({ hourly: z.number().min(0).max(10_000) }).partial().optional(),
+        autotask: z
+          .object({ invoicesSince: z.string().regex(/^\d{4}-\d{2}-\d{2}$/), invoiceMinNumber: z.number().int().min(0).max(999_999_999).nullable(), itemsSince: z.string().regex(/^\d{4}-\d{2}-\d{2}$/) })
+          .partial()
+          .optional(),
         accounts: z
           .object({ receivable: zAccount, bank: zAccount, labour: zAccount, charges: zAccount, contracts: zAccount, gst: zAccount, qst: zAccount })
           .partial()

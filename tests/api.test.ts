@@ -2768,22 +2768,23 @@ describe("crm: the portal's own copy of the clients", () => {
     // money: not for technicians
     expect((await tech.get(`/api/crm/clients/${late.id}/invoices`)).status).toBe(403);
     const r = (await admin.get(`/api/crm/clients/${late.id}/invoices`)).json;
-    expect(r.items.length).toBe(10);
+    // only the invoices from September 2026 on, numbered 10000 and up (Admin › Facturation)
+    expect(r.items.length).toBe(2);
+    expect(r.items.every((v: any) => v.issuedOn >= "2026-09-01" && Number(v.number) >= 10000)).toBe(true);
     const today = new Date().toLocaleDateString("en-CA", { timeZone: "America/Toronto" });
     for (const v of r.items) {
       const expected = v.paidOn ? "paid" : v.dueOn < today ? "overdue" : "due";
       if (v.status !== "voided") expect(v.status).toBe(expected);
     }
-    expect(r.items.filter((v: any) => v.status === "paid").length).toBeGreaterThan(5);
     const unpaid = r.items.filter((v: any) => v.status === "due" || v.status === "overdue");
     expect(r.summary.dueCents).toBe(unpaid.reduce((s: number, v: any) => s + v.totalCents, 0));
     expect(r.summary.overdueCount).toBe(r.items.filter((v: any) => v.status === "overdue").length);
     // newest first; a second sync adds nothing
     expect(r.items[0].issuedOn >= r.items[1].issuedOn).toBe(true);
     await admin.post("/api/crm/sync");
-    expect((await admin.get(`/api/crm/clients/${late.id}/invoices`)).json.items.length).toBe(10);
+    expect((await admin.get(`/api/crm/clients/${late.id}/invoices`)).json.items.length).toBe(2);
     // a parent company can include its subsidiaries (302 was made a subsidiary of 301 above)
-    expect((await admin.get(`/api/crm/clients/${late.id}/invoices?children=1`)).json.items.length).toBe(20);
+    expect((await admin.get(`/api/crm/clients/${late.id}/invoices?children=1`)).json.items.length).toBe(4);
   });
 });
 
@@ -2799,7 +2800,7 @@ describe("billing: settings, chart of accounts, QuickBooks, Stripe, payments", (
     const tech = await session("tech@akab.local");
     const admin = await session("admin@akab.local");
     expect((await tech.get("/api/billing/settings")).status).toBe(403);
-    expect((await admin.get("/api/billing/settings")).json).toMatchObject({ preview: "F01001", taxes: { gstRate: 5, qstRate: 9.975 } });
+    expect((await admin.get("/api/billing/settings")).json).toMatchObject({ preview: "10000", taxes: { gstRate: 5, qstRate: 9.975 } });
     const s = await admin.put("/api/billing/settings", { numbering: { prefix: "AK-", next: 42, digits: 4 }, taxes: { gstNumber: "123456789 RT0001" } });
     expect(s.json).toMatchObject({ preview: "AK-0042", taxes: { gstNumber: "123456789 RT0001", qstRate: 9.975 } });
     expect((await admin.put("/api/billing/settings", { numbering: { prefix: "A B" } })).status).toBe(400);
@@ -3111,5 +3112,70 @@ describe("QuickBooks through its API: customers, chart, items, invoices, payment
     // changed in QuickBooks: changed here
     payments[0].Line[0].Amount = 150;
     expect((await admin.post("/api/billing/quickbooks/payments/pull")).json).toMatchObject({ added: 0, updated: 1 });
+  });
+});
+
+describe("work to bill: copied from Autotask, approved, posted as invoices", () => {
+  it("copies labour, charges, expenses, contracts and milestones not posted yet; approves; posts one invoice per client", async () => {
+    resetRateLimit("login:ip:unknown");
+    const admin = await signIn("admin@akab.local");
+    const tech = await signIn("tech@akab.local");
+    expect((await tech.get("/api/billables")).status).toBe(403);
+    // numbers like the Autotask ones (an earlier test set a prefix)
+    await admin.put("/api/billing/settings", { numbering: { prefix: "", next: 10000, digits: 5 } });
+    const s = (await admin.post("/api/billables/import")).json;
+    expect(s.counts).toMatchObject({ labour: expect.any(Number), charge: expect.any(Number), expense: expect.any(Number), contract: expect.any(Number), milestone: expect.any(Number) });
+    expect(s.errors).toEqual({});
+    // copied once: a second import adds nothing
+    const before = (await admin.get("/api/billables")).json.length;
+    await admin.post("/api/billables/import");
+    expect((await admin.get("/api/billables")).json.length).toBe(before);
+
+    const clients = (await admin.get("/api/crm/clients")).json;
+    const clinique = clients.find((c: any) => c.autotaskId === 300);
+    const mine = (await admin.get("/api/billables")).json.filter((i: any) => i.clientId === clinique.id);
+    expect(new Set(mine.map((i: any) => i.kind))).toEqual(new Set(["labour", "charge", "expense", "contract", "milestone"]));
+    // labour with no rate in the source: the usual rate (115 $/h)
+    const labour = mine.find((i: any) => i.kind === "labour");
+    expect(labour).toMatchObject({ status: "pending", unitPriceCents: 11500, amountCents: Math.round((labour.quantityX100 * 11500) / 100) });
+
+    // a change made here survives the next import
+    expect((await tech.patch(`/api/billables/${labour.id}`, { quantity: 1 })).status).toBe(403);
+    expect((await admin.patch(`/api/billables/${labour.id}`, { quantity: 1.25, description: "Diagnostic imprimante" })).json).toMatchObject({ quantityX100: 125, amountCents: 14375, edited: true });
+    await admin.post("/api/billables/import");
+    expect((await admin.get("/api/billables?kind=labour")).json.find((i: any) => i.id === labour.id)).toMatchObject({ quantityX100: 125, description: "Diagnostic imprimante" });
+
+    // approve all of this client except the expense (excluded: not billed)
+    const expense = mine.find((i: any) => i.kind === "expense");
+    expect((await admin.post("/api/billables/status", { ids: mine.filter((i: any) => i.id !== expense.id).map((i: any) => i.id), status: "approved" })).json.changed).toBe(mine.length - 1);
+    await admin.post("/api/billables/status", { ids: [expense.id], status: "excluded" });
+
+    const preview = (await admin.get("/api/billables/post")).json;
+    const g = preview.find((x: any) => x.client.id === clinique.id);
+    const approved = mine.filter((i: any) => i.id !== expense.id);
+    const subtotal = (await admin.get("/api/billables?status=approved")).json.filter((i: any) => i.clientId === clinique.id).reduce((x: number, i: any) => x + i.amountCents, 0);
+    expect(g).toMatchObject({ count: approved.length, subtotalCents: subtotal, gstCents: Math.round(subtotal * 0.05), qstCents: Math.round(subtotal * 0.09975) });
+
+    // posted: one invoice, its lines, the next number after the Autotask ones
+    const numbers = (await admin.get(`/api/crm/clients/${clinique.id}/invoices`)).json.items.map((v: any) => Number(v.number));
+    const made = (await admin.post("/api/billables/post", { clientIds: [clinique.id] })).json;
+    expect(made).toHaveLength(1);
+    expect(Number(made[0].number)).toBeGreaterThan(Math.max(...numbers));
+    const inv = (await admin.get(`/api/crm/clients/${clinique.id}/invoices`)).json.items.find((v: any) => v.id === made[0].id);
+    expect(inv).toMatchObject({ source: "portal", totalCents: g.totalCents, taxCents: g.gstCents + g.qstCents, status: "due" });
+    expect(inv.lines).toHaveLength(approved.length);
+    expect(inv.lines.find((l: any) => l.kind === "labour" && l.description.includes("Diagnostic imprimante"))).toMatchObject({ quantity: 1.25, amountCents: 14375 });
+    // the items are posted (and stay so through the next import); a posted item cannot be changed
+    const after = (await admin.get("/api/billables")).json.filter((i: any) => i.clientId === clinique.id);
+    expect(after.filter((i: any) => i.status === "posted").every((i: any) => i.invoiceNumber === made[0].number)).toBe(true);
+    await admin.post("/api/billables/import");
+    expect((await admin.get("/api/billables?status=posted")).json.filter((i: any) => i.clientId === clinique.id)).toHaveLength(approved.length);
+    expect((await admin.patch(`/api/billables/${labour.id}`, { quantity: 9 })).json.error).toBe("billing_item_posted");
+    // nothing left to post for this client; the next posting takes the next number
+    expect((await admin.get("/api/billables/post")).json.find((x: any) => x.client.id === clinique.id)).toBeUndefined();
+    const other = (await admin.get("/api/billables?status=pending")).json.find((i: any) => i.clientId !== clinique.id);
+    await admin.post("/api/billables/status", { ids: [other.id], status: "approved" });
+    const second = (await admin.post("/api/billables/post", {})).json;
+    expect(Number(second[0].number)).toBe(Number(made[0].number) + 1);
   });
 });

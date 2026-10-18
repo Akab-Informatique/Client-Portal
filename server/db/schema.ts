@@ -137,11 +137,81 @@ export const clientInvoices = pgTable(
     quickbooksId: text("quickbooks_id"),
     quickbooksSyncedAt: timestamp("quickbooks_synced_at", { withTimezone: true }),
     quickbooksError: text("quickbooks_error"),
+    /** autotask: copied from Autotask · portal: made here from posted items */
+    source: text("source").notNull().default("autotask"),
     syncedAt: timestamp("synced_at", { withTimezone: true }),
     createdAt: created(),
     updatedAt: updated(),
   },
   (t) => [uniqueIndex("client_invoices_autotask_idx").on(t.autotaskId), uniqueIndex("client_invoices_quickbooks_idx").on(t.quickbooksId), index("client_invoices_client_idx").on(t.clientId, t.issuedOn)],
+);
+
+/**
+ * Work to bill, waiting for approval and posting (Accounting › Approbation):
+ * labour, charges, expenses, recurring contract periods, milestones. Copied
+ * from Autotask (not yet posted there) or made in the portal. Posted items
+ * become the lines of a new invoice. Money in cents, quantities ×100.
+ */
+export const billingItems = pgTable(
+  "billing_items",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    clientId: uuid("client_id")
+      .notNull()
+      .references(() => clients.id, { onDelete: "cascade" }),
+    /** labour | charge | expense | contract | milestone */
+    kind: text("kind").notNull(),
+    /** autotask | portal */
+    source: text("source").notNull().default("autotask"),
+    /** Id in the source (e.g. "time:123"): copied once */
+    sourceId: text("source_id"),
+    /** YYYY-MM-DD (work date, purchase date, period start…) */
+    date: text("date").notNull(),
+    /** End of a contract period (YYYY-MM-DD) */
+    dateEnd: text("date_end"),
+    description: text("description").notNull().default(""),
+    ticketNumber: text("ticket_number"),
+    contractName: text("contract_name"),
+    resourceName: text("resource_name"),
+    /** Hours, units… ×100 */
+    quantityX100: integer("quantity_x100").notNull().default(100),
+    unitPriceCents: bigint("unit_price_cents", { mode: "number" }).notNull().default(0),
+    amountCents: bigint("amount_cents", { mode: "number" }).notNull().default(0),
+    taxable: boolean("taxable").notNull().default(true),
+    /** pending | approved | posted | excluded */
+    status: text("status").notNull().default("pending"),
+    /** Changed in the portal: a sync does not overwrite it */
+    edited: boolean("edited").notNull().default(false),
+    invoiceId: uuid("invoice_id").references(() => clientInvoices.id, { onDelete: "set null" }),
+    approvedBy: uuid("approved_by").references(() => users.id, { onDelete: "set null" }),
+    approvedAt: timestamp("approved_at", { withTimezone: true }),
+    postedAt: timestamp("posted_at", { withTimezone: true }),
+    syncedAt: timestamp("synced_at", { withTimezone: true }),
+    createdAt: created(),
+    updatedAt: updated(),
+  },
+  (t) => [uniqueIndex("billing_items_source_idx").on(t.sourceId), index("billing_items_status_idx").on(t.status, t.kind), index("billing_items_client_idx").on(t.clientId)],
+);
+
+/** The lines of an invoice made in the portal. Money in cents, quantities ×100. */
+export const invoiceLines = pgTable(
+  "invoice_lines",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    invoiceId: uuid("invoice_id")
+      .notNull()
+      .references(() => clientInvoices.id, { onDelete: "cascade" }),
+    billingItemId: uuid("billing_item_id").references(() => billingItems.id, { onDelete: "set null" }),
+    kind: text("kind").notNull(),
+    description: text("description").notNull(),
+    quantityX100: integer("quantity_x100").notNull(),
+    unitPriceCents: bigint("unit_price_cents", { mode: "number" }).notNull(),
+    amountCents: bigint("amount_cents", { mode: "number" }).notNull(),
+    taxable: boolean("taxable").notNull().default(true),
+    ledgerAccountId: uuid("ledger_account_id").references(() => ledgerAccounts.id, { onDelete: "set null" }),
+    position: integer("position").notNull().default(0),
+  },
+  (t) => [index("invoice_lines_invoice_idx").on(t.invoiceId, t.position)],
 );
 
 /** A payment received on an invoice (several make a partial payment). Money in cents. */
