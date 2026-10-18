@@ -257,6 +257,26 @@ describe("permissions", () => {
     await admin.del(`/api/meetings/points/${a.json.id}`);
   });
 
+  it("weekly meeting: the week calendar, day by day", async () => {
+    const admin = await signIn("admin@akab.local");
+    const team = (await admin.get("/api/meetings/team")).json;
+    const ab = await admin.post("/api/meetings/absences", { userId: team[0].id, startDate: "2026-11-09", endDate: "2026-11-10", kind: "training" });
+    const pr = await admin.post("/api/meetings/projects", { title: "Livraison serveur", dueDate: "2026-11-12" });
+    const late = await admin.post("/api/meetings/projects", { title: "Plus tard", dueDate: "2026-11-30" });
+    const week = await admin.get("/api/meetings/week?from=2026-11-09");
+    expect(week.status).toBe(200);
+    expect(week.json).toMatchObject({ from: "2026-11-09", to: "2026-11-15", ticketsError: false });
+    expect(week.json.absences.map((x: any) => x.id)).toContain(ab.json.id);
+    expect(week.json.projects.map((x: any) => x.title)).toContain("Livraison serveur");
+    expect(week.json.projects.map((x: any) => x.title)).not.toContain("Plus tard");
+    expect(Array.isArray(week.json.blocks) && Array.isArray(week.json.tickets)).toBe(true);
+    expect((await admin.get("/api/meetings/week?from=2026-13-01")).status).toBe(400);
+    expect((await (await signIn("tech@akab.local")).get("/api/meetings/week?from=2026-11-09")).status).toBe(403);
+    await admin.del(`/api/meetings/absences/${ab.json.id}`);
+    await admin.del(`/api/meetings/projects/${pr.json.id}`);
+    await admin.del(`/api/meetings/projects/${late.json.id}`);
+  });
+
   it("weekly meeting: projects in progress with due dates and notes", async () => {
     const admin = await signIn("admin@akab.local");
     const created = await admin.post("/api/meetings/projects", { title: "Installation de caméras", client: "AKAB Informatique", dueDate: "2026-11-15" });

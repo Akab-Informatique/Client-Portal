@@ -10,6 +10,7 @@ import { cn } from "@/lib/utils";
 import { AbsencesSection } from "./Absences";
 import { PointsSection } from "./Points";
 import { ProjectsSection } from "./Projects";
+import { WeekSection } from "./Week";
 import { PRIORITY_STYLE, STATUS_STYLE, shortDate, useChoiceText, type PriorityKind, type StatusKind } from "@/pages/tickets/shared";
 
 type OverdueTicket = {
@@ -66,7 +67,10 @@ export function MeetingsPage() {
         <p className="text-sm text-muted-foreground">{t("meetings.subtitle")}</p>
       </div>
 
-      <PointsSection />
+      <div className="grid items-start gap-6 xl:grid-cols-2">
+        <PointsSection />
+        <WeekSection />
+      </div>
 
       <section className="space-y-3">
         <div className="flex flex-wrap items-baseline justify-between gap-2">

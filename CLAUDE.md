@@ -36,7 +36,7 @@ Administration tab `/meetings`, used live during the Monday team meeting (lists 
 - Rights: `meetings.view` (see the page) and `meetings.manage` (change anything on it). Administrators only by default.
 - API: `server/routes/meetings.ts`, mounted at `/api/meetings`. UI: `src/pages/meetings/` (`MeetingsPage`, `Points`, `Projects`, `Absences`).
 - Sections, top to bottom:
-  - **Points à discuter** (`meeting_points`): checked off when settled; settled ones stay visible 7 days.
+  - **Points à discuter** (`meeting_points`, half width): a fast text field; checked off when settled; settled ones stay visible 7 days. Beside it, **La semaine** (`GET /week?from=YYYY-MM-DD`, `Week.tsx`): Monday–Sunday; a day shows the team planning blocks (as `asSeen`/`seesFull` allow), absences, open tickets due and projects due that day, and Québec holidays.
   - **Billets en retard et à échéance cette semaine** (`GET /overdue`): open tickets from the ticket source (Autotask, or sample data locally) past due, or due by the end of Friday in Québec time (`fridayEnd` / `fridayDate`; on a weekend, the coming Friday). Every technician gets a card, even with nothing due; unassigned tickets get their own card.
   - **Projets en cours** (`meeting_projects`, `meeting_project_members`, `meeting_project_notes`): client (free text), due date (YYYY-MM-DD), team members (active staff only), notes newest first. Done projects are hidden behind "Terminés".
   - **Calendrier des absences** (`meeting_absences`): one row per person and date range (both days included), kind `vacation | sick | training | personal | other`.

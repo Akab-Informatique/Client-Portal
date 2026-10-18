@@ -59,7 +59,7 @@ function warningOf(e: unknown, prefix: string): string {
 }
 
 /** The team for the calendar, with who counts as an admin (their time is private to technicians). */
-async function team() {
+export async function team() {
   const rows = await db()
     .select()
     .from(schema.users)
@@ -74,7 +74,7 @@ async function team() {
   return out;
 }
 /** Seeing someone's calendar in full: oneself, a planner, or a technician looking at a technician (not an admin). */
-const seesFull = (a: AuthContext, target: { id: string; admin: boolean }) => target.id === a.user.id || canPlan(a) || !target.admin;
+export const seesFull = (a: AuthContext, target: { id: string; admin: boolean }) => target.id === a.user.id || canPlan(a) || !target.admin;
 
 /**
  * Whose calendar to show: anyone's. In full for oneself, for planners, and
@@ -90,7 +90,7 @@ async function whoseCalendar(c: Context<AppEnv>, a: AuthContext): Promise<{ tech
 }
 
 /** Someone's block as a viewer may see it: in full, or only that they are busy. */
-function asSeen(b: typeof schema.calendarBlocks.$inferSelect, full: boolean) {
+export function asSeen(b: typeof schema.calendarBlocks.$inferSelect, full: boolean) {
   if (full) return b;
   return {
     id: b.id,

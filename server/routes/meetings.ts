@@ -1,6 +1,6 @@
 import { Hono } from "hono";
 import { HTTPException } from "hono/http-exception";
-import { and, asc, desc, eq, gt, gte, inArray, isNotNull, isNull, lte, or } from "drizzle-orm";
+import { and, asc, desc, eq, gt, gte, inArray, isNotNull, isNull, lt, lte, or } from "drizzle-orm";
 import { z } from "zod";
 import { db, schema } from "../db/index.ts";
 import { auth, requirePermission, requireStaff, type AppEnv } from "../lib/auth.ts";
@@ -8,6 +8,7 @@ import { audit } from "../lib/audit.ts";
 import { body, zOptText, zUuid } from "../lib/validate.ts";
 import { ticketSource, type NTicket } from "../lib/ticketSource.ts";
 import { lookup, run } from "./tickets.ts";
+import { asSeen, seesFull, team as planningTeam } from "./planning.ts";
 
 /**
  * Weekly team meeting dashboard (meetings.view). Tickets: every technician
@@ -86,7 +87,14 @@ export const meetingRoutes = new Hono<AppEnv>()
 
   .patch("/points/:id", requirePermission("meetings.manage"), async (c) => {
     const id = projectId(c.req.param("id"));
-    const v = await body(c, z.object({ text: z.string().trim().min(1).max(2000).optional(), details: z.string().trim().max(8000).nullable().optional(), done: z.boolean().optional() }));
+    const v = await body(
+      c,
+      z.object({
+        text: z.string().trim().min(1).max(2000).optional(),
+        details: z.string().trim().max(8000).nullable().optional(),
+        done: z.boolean().optional(),
+      }),
+    );
     const set: Partial<typeof schema.meetingPoints.$inferInsert> = {};
     if (v.text !== undefined) set.text = v.text;
     if (v.details !== undefined) set.details = v.details || null;
@@ -102,6 +110,76 @@ export const meetingRoutes = new Hono<AppEnv>()
     const rows = await db().delete(schema.meetingPoints).where(eq(schema.meetingPoints.id, id)).returning({ id: schema.meetingPoints.id });
     if (!rows.length) throw new HTTPException(404, { message: "not_found" });
     return c.json({ ok: true });
+  })
+
+  // ── The week at a glance: everything planned, day by day ──
+  .get("/week", async (c) => {
+    const a = auth(c);
+    const q = z.object({ from: zDay }).safeParse(c.req.query());
+    if (!q.success) throw new HTTPException(400, { message: "invalid_range" });
+    const from = q.data.from;
+    const to = addDay(from, 6);
+    // Québec days: from midnight of the first to midnight after the last (a margin for the offset, filtered by day client side)
+    const start = new Date(`${from}T00:00:00-04:00`);
+    const end = new Date(`${addDay(to, 1)}T00:00:00-05:00`);
+    const people = await planningTeam();
+    const byId = new Map(people.map((p) => [p.id, p]));
+    const names = new Map((await db().select({ id: schema.users.id, name: schema.users.name }).from(schema.users)).map((u) => [u.id, u.name]));
+    const cb = schema.calendarBlocks;
+    const blocks = (
+      await db()
+        .select()
+        .from(cb)
+        .where(and(lt(cb.startsAt, end), gt(cb.endsAt, start)))
+        .orderBy(asc(cb.startsAt))
+    )
+      .filter((b) => byId.has(b.technicianId))
+      .map((b) => {
+        const s = asSeen(b, seesFull(a, byId.get(b.technicianId)!));
+        return {
+          id: s.id,
+          technicianId: s.technicianId,
+          technicianName: names.get(s.technicianId) ?? "",
+          kind: s.kind,
+          title: s.title,
+          ticketId: s.ticketId,
+          ticketNumber: s.ticketNumber,
+          companyName: s.companyName,
+          startsAt: s.startsAt,
+          endsAt: s.endsAt,
+          busy: "busy" in s,
+        };
+      });
+    const ab = schema.meetingAbsences;
+    const absences = await db()
+      .select({ id: ab.id, userId: ab.userId, name: schema.users.name, startDate: ab.startDate, endDate: ab.endDate, kind: ab.kind, note: ab.note })
+      .from(ab)
+      .innerJoin(schema.users, eq(schema.users.id, ab.userId))
+      .where(and(lte(ab.startDate, to), gte(ab.endDate, from)))
+      .orderBy(asc(schema.users.name));
+    const p = schema.meetingProjects;
+    const projects = await db()
+      .select({ id: p.id, title: p.title, client: p.client, dueDate: p.dueDate })
+      .from(p)
+      .where(and(isNull(p.doneAt), gte(p.dueDate, from), lte(p.dueDate, to)))
+      .orderBy(asc(p.dueDate));
+    // Tickets due that week: the ticket source may be unreachable, the rest still shows
+    let tickets: { id: number; number: string; title: string; company: string; dueAt: string; assignee: string | null }[] = [];
+    let ticketsError = false;
+    try {
+      const src = await ticketSource();
+      const [all, o] = await Promise.all([src.list(), src.options()]);
+      const L = lookup(o);
+      tickets = all
+        .filter((x) => L.statusKind(x.status) !== "complete" && x.dueAt && new Date(x.dueAt) >= start && new Date(x.dueAt) < end)
+        .sort((x, y) => x.dueAt.localeCompare(y.dueAt))
+        .slice(0, 500)
+        .map((x) => ({ id: x.id, number: x.number, title: x.title, company: x.company.name, dueAt: x.dueAt, assignee: x.assignee?.name ?? null }));
+    } catch (e) {
+      console.warn("[meetings] week tickets:", e instanceof Error ? e.message : e);
+      ticketsError = true;
+    }
+    return c.json({ from, to, blocks, absences, projects, tickets, ticketsError });
   })
 
   // ── Absences calendar (meetings.manage to change) ──
@@ -173,7 +251,12 @@ export const meetingRoutes = new Hono<AppEnv>()
       ? await db()
           .select()
           .from(schema.meetingProjectNotes)
-          .where(inArray(schema.meetingProjectNotes.projectId, projects.map((x) => x.id)))
+          .where(
+            inArray(
+              schema.meetingProjectNotes.projectId,
+              projects.map((x) => x.id),
+            ),
+          )
           .orderBy(desc(schema.meetingProjectNotes.createdAt))
       : [];
     const members = projects.length
@@ -181,7 +264,12 @@ export const meetingRoutes = new Hono<AppEnv>()
           .select({ projectId: schema.meetingProjectMembers.projectId, id: schema.users.id, name: schema.users.name })
           .from(schema.meetingProjectMembers)
           .innerJoin(schema.users, eq(schema.users.id, schema.meetingProjectMembers.userId))
-          .where(inArray(schema.meetingProjectMembers.projectId, projects.map((x) => x.id)))
+          .where(
+            inArray(
+              schema.meetingProjectMembers.projectId,
+              projects.map((x) => x.id),
+            ),
+          )
           .orderBy(asc(schema.users.name))
       : [];
     const doneCount = done ? projects.length : (await db().select({ id: p.id }).from(p).where(isNotNull(p.doneAt))).length;
@@ -195,9 +283,7 @@ export const meetingRoutes = new Hono<AppEnv>()
         doneAt: x.doneAt,
         createdAt: x.createdAt,
         members: members.filter((m) => m.projectId === x.id).map((m) => ({ id: m.id, name: m.name })),
-        notes: notes
-          .filter((n) => n.projectId === x.id)
-          .map((n) => ({ id: n.id, text: n.text, authorName: n.authorName, createdAt: n.createdAt })),
+        notes: notes.filter((n) => n.projectId === x.id).map((n) => ({ id: n.id, text: n.text, authorName: n.authorName, createdAt: n.createdAt })),
       })),
     });
   })
@@ -257,7 +343,10 @@ export const meetingRoutes = new Hono<AppEnv>()
     const id = projectId(c.req.param("id"));
     const noteId = projectId(c.req.param("noteId"));
     const n = schema.meetingProjectNotes;
-    const rows = await db().delete(n).where(and(eq(n.id, noteId), eq(n.projectId, id))).returning({ id: n.id });
+    const rows = await db()
+      .delete(n)
+      .where(and(eq(n.id, noteId), eq(n.projectId, id)))
+      .returning({ id: n.id });
     if (!rows.length) throw new HTTPException(404, { message: "not_found" });
     return c.json({ ok: true });
   });
@@ -291,7 +380,13 @@ const team = () =>
 const zDay = z
   .string()
   .regex(/^\d{4}-\d{2}-\d{2}$/)
-  .refine((v) => new Date(`${v}T12:00:00Z`).toISOString().startsWith(v), { message: "invalid_date" });
+  .refine(
+    (v) => {
+      const d = new Date(`${v}T12:00:00Z`);
+      return !Number.isNaN(d.getTime()) && d.toISOString().startsWith(v);
+    },
+    { message: "invalid_date" },
+  );
 const zAbsence = z
   .object({
     userId: zUuid,
@@ -313,7 +408,10 @@ async function setMembers(projectId: string, ids: string[]) {
   const allowed = new Set((await team()).map((u) => u.id));
   if (wanted.some((id) => !allowed.has(id))) throw new HTTPException(400, { message: "invalid_member" });
   await db().delete(schema.meetingProjectMembers).where(eq(schema.meetingProjectMembers.projectId, projectId));
-  if (wanted.length) await db().insert(schema.meetingProjectMembers).values(wanted.map((userId) => ({ projectId, userId })));
+  if (wanted.length)
+    await db()
+      .insert(schema.meetingProjectMembers)
+      .values(wanted.map((userId) => ({ projectId, userId })));
 }
 
 const zProject = z.object({
@@ -327,6 +425,13 @@ const zProject = z.object({
     .optional()
     .or(z.literal("").transform(() => null)),
 });
+
+/** YYYY-MM-DD plus n days */
+function addDay(day: string, n: number) {
+  const d = new Date(`${day}T12:00:00Z`);
+  d.setUTCDate(d.getUTCDate() + n);
+  return d.toISOString().slice(0, 10);
+}
 
 function projectId(v: string) {
   const r = zUuid.safeParse(v);
