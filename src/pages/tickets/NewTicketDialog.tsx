@@ -1,8 +1,8 @@
-import { useEffect, useState, type FormEvent } from "react";
+import { useEffect, useRef, useState, type FormEvent } from "react";
 import { useTranslation } from "react-i18next";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
-import { Loader2, Ticket } from "lucide-react";
+import { FileText, Loader2, Paperclip, Ticket, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
@@ -10,12 +10,16 @@ import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
 import { api } from "@/lib/api";
-import { useMe } from "@/lib/session";
+import { useCan, useMe } from "@/lib/session";
 import { cn } from "@/lib/utils";
-import { CompanyPicker, ContactPicker, useCompanies } from "./pickers";
+import { fileToBase64 } from "../outlook/shared";
+import { CompanyPicker, ContactPicker, useCompanies, useContracts } from "./pickers";
 import { PRIORITY_STYLE, useChoiceText, type TicketList, type TicketSummary, ticketErrorText } from "./shared";
 
 const inDays = (n: number) => new Date(Date.now() + n * 86_400_000).toISOString().slice(0, 10);
+/** Same limit as the API (Autotask takes a few megabytes per attachment) */
+const MAX_FILE = 5 * 1024 * 1024;
+const sizeText = (b: number) => (b < 1024 * 1024 ? `${Math.max(1, Math.round(b / 1024))} Ko` : `${(b / 1024 / 1024).toFixed(1)} Mo`);
 
 /** Quick ticket creation: the essentials first, assigned to me by default. */
 export function NewTicketDialog({
@@ -37,21 +41,42 @@ export function NewTicketDialog({
   const { data: companies = [] } = useCompanies();
   const qc = useQueryClient();
   const me = useMe();
+  const can = useCan();
   const empty = () => ({
     companyId: initial?.companyId ? String(initial.companyId) : "",
     contactId: (initial?.contactId ?? null) as string | null,
     title: (initial?.title ?? "").slice(0, 250),
     description: (initial?.description ?? "").slice(0, 8000),
     priority: (facets.priorities.find((p) => p.kind === "medium") ?? facets.priorities[0])?.value ?? "",
-    queue: facets.queues[0]?.value ?? "",
+    // null: not chosen yet (the client's default contract is picked once loaded); "": none
+    contractId: null as string | null,
     assigneeId: me.id as string,
     dueDate: inDays(2),
     startDate: "",
   });
   const [f, setF] = useState(empty);
+  const [files, setFiles] = useState<File[]>([]);
+  const [dragging, setDragging] = useState(false);
+  const [uploading, setUploading] = useState(false);
+  const fileInput = useRef<HTMLInputElement>(null);
   useEffect(() => {
-    if (open) setF(empty());
+    if (open) {
+      setF(empty());
+      setFiles([]);
+    }
   }, [open]);
+
+  // the client's contracts: its default one is picked (still changeable)
+  const { data: contracts, isFetching: loadingContracts } = useContracts(f.companyId ? Number(f.companyId) : null);
+  useEffect(() => {
+    if (f.contractId === null && contracts) setF((x) => ({ ...x, contractId: contracts.find((k) => k.isDefault)?.id ?? "" }));
+  }, [contracts, f.contractId]);
+
+  const addFiles = (list: FileList | null) => {
+    const picked = Array.from(list ?? []);
+    for (const x of picked.filter((x) => x.size > MAX_FILE)) toast.error(t("tickets.attachTooBig", { name: x.name }));
+    setFiles((old) => [...old, ...picked.filter((x) => x.size <= MAX_FILE && !old.some((o) => o.name === x.name && o.size === x.size))]);
+  };
 
   const create = useMutation({
     mutationFn: () =>
@@ -59,10 +84,23 @@ export function NewTicketDialog({
         ...f,
         companyId: Number(f.companyId),
         contactId: f.contactId,
+        contractId: f.contractId || null,
         assigneeId: f.assigneeId === "none" ? null : f.assigneeId,
         startDate: f.startDate || null,
       }),
-    onSuccess: (tk) => {
+    onSuccess: async (tk) => {
+      // the files, one at a time, once the ticket exists
+      if (files.length) {
+        setUploading(true);
+        for (const x of files) {
+          try {
+            await api.post(`/tickets/${tk.id}/attachments`, { name: x.name, contentType: x.type || "application/octet-stream", data: await fileToBase64(x) });
+          } catch {
+            toast.error(t("tickets.attachFailed", { name: x.name }));
+          }
+        }
+        setUploading(false);
+      }
       void qc.invalidateQueries({ queryKey: ["tickets"] });
       toast.success(t("tickets.created", { number: tk.number }));
       onOpenChange(false);
@@ -70,6 +108,7 @@ export function NewTicketDialog({
     },
     onError: (e) => toast.error(ticketErrorText(t, e)),
   });
+  const busy = create.isPending || uploading;
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -94,7 +133,8 @@ export function NewTicketDialog({
                 triggerClassName="h-9 rounded-md border bg-transparent px-3 text-sm dark:bg-input/30"
                 value={companies.find((c) => String(c.id) === f.companyId) ?? null}
                 companies={companies}
-                onChange={(c) => setF({ ...f, companyId: String(c.id), contactId: null })}
+                canCreate={can("tickets.clients")}
+                onChange={(c) => setF({ ...f, companyId: String(c.id), contactId: null, contractId: null })}
               />
             </div>
             <div className="space-y-2">
@@ -115,6 +155,61 @@ export function NewTicketDialog({
           <div className="space-y-2">
             <Label htmlFor="nt-desc">{t("tickets.description")}</Label>
             <Textarea id="nt-desc" rows={4} value={f.description} onChange={(e) => setF({ ...f, description: e.target.value })} />
+          </div>
+
+          <div className="space-y-2">
+            <Label>{t("tickets.attachments")}</Label>
+            <button
+              type="button"
+              onClick={() => fileInput.current?.click()}
+              onDragOver={(e) => {
+                e.preventDefault();
+                setDragging(true);
+              }}
+              onDragLeave={() => setDragging(false)}
+              onDrop={(e) => {
+                e.preventDefault();
+                setDragging(false);
+                addFiles(e.dataTransfer.files);
+              }}
+              className={cn(
+                "flex w-full items-center gap-3 rounded-lg border border-dashed px-3 py-2.5 text-left text-sm text-muted-foreground transition-colors hover:border-[color:var(--gold)]/50 hover:text-foreground",
+                dragging && "border-[color:var(--gold)]/70 bg-[color:var(--gold)]/[0.06] text-foreground",
+              )}
+            >
+              <Paperclip className="size-4 shrink-0 text-primary" />
+              <span className="flex-1">{t("tickets.attachHint")}</span>
+              <span className="text-[11px]">{t("tickets.attachLimit")}</span>
+            </button>
+            <input
+              ref={fileInput}
+              type="file"
+              multiple
+              hidden
+              onChange={(e) => {
+                addFiles(e.target.files);
+                e.target.value = "";
+              }}
+            />
+            {files.length > 0 && (
+              <ul className="flex flex-wrap gap-1.5">
+                {files.map((x) => (
+                  <li key={`${x.name}-${x.size}`} className="flex max-w-full items-center gap-1.5 rounded-md border bg-background/40 py-1 pl-2 pr-1 text-xs">
+                    <FileText className="size-3.5 shrink-0 text-muted-foreground" />
+                    <span className="truncate">{x.name}</span>
+                    <span className="shrink-0 font-mono text-[10px] text-muted-foreground">{sizeText(x.size)}</span>
+                    <button
+                      type="button"
+                      aria-label={t("tickets.attachRemove", { name: x.name })}
+                      onClick={() => setFiles((old) => old.filter((o) => o !== x))}
+                      className="rounded p-0.5 text-muted-foreground hover:bg-accent hover:text-foreground"
+                    >
+                      <X className="size-3" />
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            )}
           </div>
 
           <div className="space-y-2">
@@ -139,15 +234,31 @@ export function NewTicketDialog({
 
           <div className="grid gap-4 sm:grid-cols-2">
             <div className="space-y-2">
-              <Label htmlFor="nt-queue">{t("tickets.fields.queue")}</Label>
-              <Select value={f.queue} onValueChange={(v) => setF({ ...f, queue: v })}>
-                <SelectTrigger id="nt-queue" className="w-full">
-                  <SelectValue />
+              <Label htmlFor="nt-contract" className="flex items-center gap-1.5">
+                {t("tickets.contract")}
+                {loadingContracts && <Loader2 className="size-3 animate-spin text-muted-foreground" />}
+              </Label>
+              <Select value={f.contractId || "none"} onValueChange={(v) => setF({ ...f, contractId: v === "none" ? "" : v })} disabled={!f.companyId}>
+                <SelectTrigger id="nt-contract" className="w-full">
+                  <SelectValue>
+                    {/* the name only (the list also shows "default" and the end date) */}
+                    {!f.companyId ? (
+                      <span className="text-muted-foreground">{t("tickets.pickCompanyFirst")}</span>
+                    ) : (
+                      (contracts?.find((k) => k.id === f.contractId)?.name ?? (contracts?.length ? t("tickets.noContract") : t("tickets.noContracts")))
+                    )}
+                  </SelectValue>
                 </SelectTrigger>
-                <SelectContent>
-                  {facets.queues.map((q) => (
-                    <SelectItem key={q.value} value={q.value}>
-                      {q.label ?? q.value}
+                <SelectContent position="popper" className="max-h-72">
+                  <SelectItem value="none">{contracts?.length ? t("tickets.noContract") : t("tickets.noContracts")}</SelectItem>
+                  {(contracts ?? []).map((k) => (
+                    <SelectItem key={k.id} value={k.id}>
+                      {k.name}
+                      {(k.isDefault || k.endDate) && (
+                        <span className="ml-1.5 text-xs text-muted-foreground">
+                          {[k.isDefault && t("tickets.contractDefault"), k.endDate && t("tickets.contractEnds", { date: k.endDate })].filter(Boolean).join(" · ")}
+                        </span>
+                      )}
                     </SelectItem>
                   ))}
                 </SelectContent>
@@ -187,8 +298,8 @@ export function NewTicketDialog({
             <Button type="button" variant="ghost" onClick={() => onOpenChange(false)}>
               {t("common.cancel")}
             </Button>
-            <Button type="submit" disabled={create.isPending || !f.companyId || !f.title.trim()} className="bg-grad-gold font-semibold text-[#1a1204] hover:brightness-105">
-              {create.isPending && <Loader2 className="size-4 animate-spin" />} {t("tickets.create")}
+            <Button type="submit" disabled={busy || !f.companyId || !f.title.trim()} className="bg-grad-gold font-semibold text-[#1a1204] hover:brightness-105">
+              {busy && <Loader2 className="size-4 animate-spin" />} {uploading ? t("tickets.attaching") : t("tickets.create")}
             </Button>
           </div>
         </form>

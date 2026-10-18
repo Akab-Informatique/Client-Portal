@@ -29,6 +29,10 @@ export type Ticket = {
   notes: Note[];
   /** Device (Autotask configuration item) */
   assetId: string | null;
+  /** Contract the work is billed on (Autotask contract) */
+  contractId?: string | null;
+  /** Files attached in the portal */
+  attachments?: { id: string; name: string; size: number; at: string; author: string }[];
 };
 
 export const QUEUES = ["Support niveau 1", "Support niveau 2", "Réseau et sécurité", "Projets"];
@@ -170,6 +174,13 @@ export function addDemoTicket(t: Omit<Ticket, "id" | "number" | "createdAt" | "u
 }
 
 /** Change fields of a sample ticket (an explicit assignee replaces the round-robin slot). */
+export function addDemoAttachment(id: number, p: { name: string; size: number; author: string }): boolean {
+  const t = store?.find((x) => x.id === id);
+  if (!t) return false;
+  (t.attachments ??= []).push({ id: `f-${id}-${t.attachments.length + 1}`, ...p, at: new Date().toISOString() });
+  return true;
+}
+
 export function updateDemoTicket(
   id: number,
   p: Partial<Pick<Ticket, "status" | "priority" | "queue" | "dueAt" | "company" | "contact" | "contactId" | "title" | "description" | "assetId">> & {
@@ -207,7 +218,26 @@ export function addDemoTimeEntry(id: number, p: { author: string; hours: number;
   return true;
 }
 
-export const demoCompanies = () => COMPANIES.map((name, i) => ({ id: 300 + i, name }));
+/** Clients created in the portal (sample data, in memory) */
+const addedCompanies: { id: number; name: string }[] = [];
+export const demoCompanies = () => [...COMPANIES.map((name, i) => ({ id: 300 + i, name })), ...addedCompanies];
+export function addDemoCompany(name: string) {
+  const c = { id: 300 + COMPANIES.length + addedCompanies.length, name };
+  addedCompanies.push(c);
+  return c;
+}
+
+// ── Contracts per client (Autotask "Contracts"); new clients have none ──
+export type Contract = { id: string; name: string; isDefault: boolean; endDate: string | null };
+export function demoContracts(companyId: number): Contract[] {
+  const c = companyId - 300;
+  if (c < 0 || c >= COMPANIES.length) return [];
+  return [
+    { id: `k-${companyId}-1`, name: "Services gérés — forfait mensuel", isDefault: true, endDate: `${2027 + (c % 2)}-12-31` },
+    { id: `k-${companyId}-2`, name: "Banque d'heures 20 h", isDefault: false, endDate: null },
+    ...(c % 3 === 0 ? [{ id: `k-${companyId}-3`, name: "Projet — migration Microsoft 365", isDefault: false, endDate: "2027-03-31" }] : []),
+  ];
+}
 
 // ── Contacts per client (Autotask "Contacts") ──
 export type Contact = { id: string; companyId: number; name: string; email: string | null; phone: string | null };

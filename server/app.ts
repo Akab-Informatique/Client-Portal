@@ -54,10 +54,10 @@ export function createApp() {
   );
 
   const api = new Hono<AppEnv>();
-  // Small JSON everywhere; Outlook sends carry attachments (Graph allows ~4 MB)
+  // Small JSON everywhere; Outlook sends and ticket attachments carry files
   const smallBody = bodyLimit({ maxSize: 256 * 1024 });
-  const mailBody = bodyLimit({ maxSize: 6 * 1024 * 1024 });
-  api.use("*", (c, next) => (c.req.path.startsWith("/api/outlook/") ? mailBody(c, next) : smallBody(c, next)));
+  const mailBody = bodyLimit({ maxSize: 7 * 1024 * 1024 });
+  api.use("*", (c, next) => (c.req.path.startsWith("/api/outlook/") || /^\/api\/tickets\/\d+\/attachments$/.test(c.req.path) ? mailBody(c, next) : smallBody(c, next)));
   api.use("*", sameOriginJson);
   api.use("*", loadAuth);
   api.use("*", readOnlyViewAs);

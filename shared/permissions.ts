@@ -52,6 +52,11 @@ export const MODULES = [
         description: { fr: "Nouveau billet, notes, date de début", en: "New ticket, notes, start date" },
       },
       {
+        key: "tickets.clients",
+        label: { fr: "Créer des clients", en: "Create clients" },
+        description: { fr: "Ajouter un nouveau client dans Autotask en créant un billet", en: "Add a new client in Autotask while creating a ticket" },
+      },
+      {
         key: "tickets.plan",
         label: { fr: "Planifier et épingler les billets", en: "Plan and pin tickets" },
         description: {

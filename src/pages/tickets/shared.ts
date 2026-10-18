@@ -250,6 +250,8 @@ export function ticketErrorText(t: (k: string, o?: Record<string, unknown>) => s
     const detail = e.fields?.find((f) => f.path === "autotask")?.message;
     if (detail) return t("tickets.errors.autotask", { detail });
     if (e.code === "invalid_contact") return t("tickets.errors.invalidContact");
+    if (e.code === "invalid_contract") return t("tickets.errors.invalidContract");
+    if (e.code === "company_exists") return t("tickets.errors.companyExists");
     if (e.code.startsWith("autotask_")) return t(`integrations.errors.${e.code.slice(9)}`, { defaultValue: t("common.error") });
   }
   return t("common.error");

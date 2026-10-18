@@ -2,7 +2,7 @@ import { useState, type FormEvent, type ReactNode } from "react";
 import { useTranslation } from "react-i18next";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
-import { Building2, Check, ChevronDown, Loader2, Mail, Phone, Search, UserPlus, UserRound } from "lucide-react";
+import { Building, Building2, Check, ChevronDown, Loader2, Mail, Phone, Search, UserPlus, UserRound } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
@@ -17,9 +17,20 @@ import { ticketErrorText } from "./shared";
 export type Company = { id: number; name: string };
 export type Contact = { id: string; companyId: number; name: string; email: string | null; phone: string | null };
 
+export type Contract = { id: string; name: string; isDefault: boolean; endDate: string | null };
+
 /** All clients (Autotask can have thousands): loaded once and kept 10 minutes. */
 export function useCompanies() {
   return useQuery({ queryKey: ["tickets", "companies"], queryFn: () => api.get<Company[]>("/tickets/companies"), staleTime: 10 * 60_000 });
+}
+
+export function useContracts(companyId: number | null) {
+  return useQuery({
+    queryKey: ["tickets", "contracts", companyId],
+    queryFn: () => api.get<Contract[]>(`/tickets/companies/${companyId}/contracts`),
+    enabled: Boolean(companyId),
+    staleTime: 10 * 60_000,
+  });
 }
 
 export function useContacts(companyId: number | null) {
@@ -88,6 +99,7 @@ export function CompanyPicker({
   disabled,
   triggerClassName,
   placeholder,
+  canCreate,
 }: {
   value: Company | null;
   companies: Company[];
@@ -95,23 +107,41 @@ export function CompanyPicker({
   disabled?: boolean;
   triggerClassName?: string;
   placeholder?: string;
+  /** Offer "New client" (Autotask company) at the bottom */
+  canCreate?: boolean;
 }) {
   const { t } = useTranslation();
   const [open, setOpen] = useState(false);
   const [q, setQ] = useState("");
+  const [creating, setCreating] = useState(false);
   const shown = companies.filter((c) => !q || c.name.toLowerCase().includes(q.toLowerCase()));
   return (
     <PickerShell
       open={open}
       onOpenChange={(o) => {
         setOpen(o);
-        if (!o) setQ("");
+        if (!o) {
+          setQ("");
+          setCreating(false);
+        }
       }}
       disabled={disabled}
       triggerClassName={triggerClassName}
       ariaLabel={t("tickets.fields.company")}
       trigger={value ? value.name : <span className="text-muted-foreground">{placeholder ?? t("tickets.pickCompany")}</span>}
     >
+      {creating ? (
+        <NewCompanyForm
+          initialName={q}
+          onCancel={() => setCreating(false)}
+          onCreated={(c) => {
+            onChange(c);
+            setCreating(false);
+            setOpen(false);
+          }}
+        />
+      ) : (
+      <>
       <SearchBox value={q} onChange={setQ} placeholder={t("tickets.searchCompany")} />
       <div className="max-h-64 overflow-y-auto">
         {shown.map((c) => (
@@ -131,7 +161,61 @@ export function CompanyPicker({
         ))}
         {shown.length === 0 && <p className="px-2 py-3 text-center text-xs text-muted-foreground">{t("tickets.noMatch")}</p>}
       </div>
+      {canCreate && (
+        <div className="mt-1 border-t pt-1">
+          <Button type="button" variant="ghost" size="sm" className="h-8 w-full text-xs text-primary" onClick={() => setCreating(true)}>
+            <Building className="size-3.5" /> {t("tickets.newCompany")}
+          </Button>
+        </div>
+      )}
+      </>
+      )}
     </PickerShell>
+  );
+}
+
+function NewCompanyForm({ initialName, onCancel, onCreated }: { initialName: string; onCancel: () => void; onCreated: (c: Company) => void }) {
+  const { t } = useTranslation();
+  const qc = useQueryClient();
+  const [f, setF] = useState({ name: initialName.trim(), phone: "" });
+  const create = useMutation({
+    mutationFn: () => api.post<Company>("/tickets/companies", f),
+    onSuccess: (c) => {
+      // the new client in the list right away (Autotask's list is cached)
+      qc.setQueryData<Company[]>(["tickets", "companies"], (old) => [...(old ?? []), c].sort((x, y) => x.name.localeCompare(y.name)));
+      void qc.invalidateQueries({ queryKey: ["tickets", "companies"] });
+      toast.success(t("tickets.companyCreated", { name: c.name }));
+      onCreated(c);
+    },
+    onError: (e) => toast.error(e instanceof ApiError && e.code === "Validation failed" ? t("tickets.companyInvalid") : ticketErrorText(t, e)),
+  });
+  return (
+    <form
+      className="space-y-2 p-1"
+      onSubmit={(e: FormEvent) => {
+        e.preventDefault();
+        e.stopPropagation();
+        create.mutate();
+      }}
+    >
+      <p className="flex items-center gap-2 text-sm font-semibold">
+        <Building className="size-4 text-primary" /> {t("tickets.newCompany")}
+      </p>
+      <Input autoFocus required minLength={2} maxLength={100} placeholder={t("tickets.companyName")} value={f.name} onChange={(e) => setF({ ...f, name: e.target.value })} className="h-8" />
+      <div className="relative">
+        <Phone className="pointer-events-none absolute left-2.5 top-1/2 size-3.5 -translate-y-1/2 text-muted-foreground" />
+        <Input required minLength={7} maxLength={40} type="tel" placeholder={t("tickets.companyPhone")} value={f.phone} onChange={(e) => setF({ ...f, phone: e.target.value })} className="h-8 pl-8" />
+      </div>
+      <p className="text-[11px] text-muted-foreground">{t("tickets.companySync")}</p>
+      <div className="flex justify-end gap-2">
+        <Button type="button" variant="ghost" size="sm" onClick={onCancel}>
+          {t("common.cancel")}
+        </Button>
+        <Button type="submit" size="sm" disabled={create.isPending} className="bg-grad-gold font-semibold text-[#1a1204]">
+          {create.isPending && <Loader2 className="size-3.5 animate-spin" />} {t("common.create")}
+        </Button>
+      </div>
+    </form>
   );
 }
 

@@ -1179,6 +1179,41 @@ describe("tickets: client and contact", () => {
     expect(nt.json).toMatchObject({ contact: "Nadia Gélinas", contactId: created.json.id });
   });
 
+  it("new ticket: a new client (with the right), its contract, no queue, and attachments", async () => {
+    const tech = await session("tech@akab.local");
+    const admin = await session("admin@akab.local");
+    // creating a client is a right of its own (not a technician's by default)
+    expect((await tech.post("/api/tickets/companies", { name: "Quincaillerie Berthier", phone: "450-555-7777" })).status).toBe(403);
+    const co = await admin.post("/api/tickets/companies", { name: "Quincaillerie Berthier", phone: "450-555-7777" });
+    expect(co.status).toBe(201);
+    expect((await admin.get("/api/tickets/companies")).json.some((c: any) => c.id === co.json.id)).toBe(true);
+    expect((await admin.post("/api/tickets/companies", { name: "quincaillerie berthier", phone: "450-555-7777" })).json.error).toBe("company_exists");
+    expect((await admin.post("/api/tickets/companies", { name: "Sans téléphone", phone: "" })).status).toBe(400);
+    expect((await admin.get(`/api/tickets/companies/${co.json.id}/contracts`)).json).toEqual([]);
+
+    // the client's contracts, the default one first
+    const contracts = (await tech.get("/api/tickets/companies/302/contracts")).json;
+    expect(contracts[0]).toMatchObject({ isDefault: true });
+    const base = { title: "Avec contrat", companyId: 302, priority: "medium", assigneeId: null, dueDate: "2026-12-01" };
+    // no queue any more; a contract of another client is refused
+    expect((await tech.post("/api/tickets", { ...base, contractId: "k-300-1" })).json.error).toBe("invalid_contract");
+    const nt = await tech.post("/api/tickets", { ...base, contractId: contracts[1].id });
+    expect(nt.status).toBe(201);
+    const { ticketSource } = await import("../server/lib/ticketSource.ts");
+    const src = await ticketSource();
+    expect((await src.get(nt.json.id))?.contractId).toBe(contracts[1].id);
+    // a ticket for the new client, with no contract
+    expect((await admin.post("/api/tickets", { ...base, companyId: co.json.id, contractId: null })).status).toBe(201);
+
+    // files, one per request
+    const file = { name: "capture écran.png", contentType: "image/png", data: Buffer.from("png-data").toString("base64") };
+    expect((await tech.post(`/api/tickets/${nt.json.id}/attachments`, file)).status).toBe(201);
+    expect((await src.get(nt.json.id))?.attachments).toMatchObject([{ name: "capture écran.png", size: 8 }]);
+    expect((await tech.post(`/api/tickets/${nt.json.id}/attachments`, { ...file, data: "pas du base64 !" })).status).toBe(400);
+    expect((await tech.post(`/api/tickets/${nt.json.id}/attachments`, { ...file, data: "A".repeat(7_000_000) })).status).toBe(400);
+    expect((await tech.post(`/api/tickets/999999/attachments`, file)).status).toBe(404);
+  });
+
   it("edits title, description and secondary technicians", async () => {
     const tech = await session("tech@akab.local");
     const tk = (await tech.get("/api/tickets?view=all")).json.items[3];

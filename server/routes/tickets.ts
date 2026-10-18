@@ -10,7 +10,7 @@ import { rateLimit } from "../lib/http.ts";
 import { AI_FEATURE_KEYS, AI_MODELS, AiError, aiSettings, askClaude, askClaudeJson, modelFor, todayOf, type AiModel } from "../lib/ai.ts";
 import { AutotaskError, PERMISSION_REFUSED } from "../lib/autotask.ts";
 import { sweepTimers, timerView, elapsedMs } from "../lib/timers.ts";
-import { SourceError, ticketSource, type Asset, type NTicket, type Options, type TicketSource } from "../lib/ticketSource.ts";
+import { MAX_TICKET_ATTACHMENT_BYTES, SourceError, ticketSource, type Asset, type NTicket, type Options, type TicketSource } from "../lib/ticketSource.ts";
 import { rmmLink, rmmSettings, type RmmSettings } from "../lib/rmm.ts";
 import { searchProducts, serialsOf, StoreError, takeForTicket, undoTake } from "../lib/store.ts";
 import { storeHttp } from "./store.ts";
@@ -484,6 +484,21 @@ export const ticketRoutes = new Hono<AppEnv>()
   .get("/companies", async (c) => {
     const src = await ticketSource();
     return c.json(await run(() => src.companies()));
+  })
+  /** A new client, when the ticket is for someone not yet in Autotask. */
+  .post("/companies", requirePermission("tickets.clients"), async (c) => {
+    const a = auth(c);
+    const p = await body(c, z.object({ name: z.string().trim().min(2).max(100), phone: z.string().trim().min(7).max(40) }));
+    const src = await ticketSource();
+    const same = (await run(() => src.companies())).find((x) => x.name.trim().toLowerCase() === p.name.toLowerCase());
+    if (same) throw new HTTPException(409, { message: "company_exists" });
+    const company = await run(() => src.addCompany(p, a));
+    await audit(a.user.id, "ticket.company_created", String(company.id), { name: company.name });
+    return c.json(company, 201);
+  })
+  .get("/companies/:cid/contracts", async (c) => {
+    const src = await ticketSource();
+    return c.json(await run(() => src.contracts(Number(c.req.param("cid")))));
   })
   .get("/companies/:cid/contacts", async (c) => {
     const src = await ticketSource();
@@ -963,6 +978,26 @@ export const ticketRoutes = new Hono<AppEnv>()
     return c.json({ ok: true }, 201);
   })
 
+  /** Attach a file (one per request, base64). */
+  .post("/:id/attachments", requirePermission("tickets.edit"), async (c) => {
+    const a = auth(c);
+    const id = Number(c.req.param("id"));
+    if (!Number.isInteger(id) || id <= 0) throw new HTTPException(400, { message: "invalid_id" });
+    const p = await body(
+      c,
+      z.object({
+        name: z.string().trim().min(1).max(200),
+        contentType: z.string().max(120).default("application/octet-stream"),
+        data: z.string().regex(/^[A-Za-z0-9+/]*={0,2}$/).max(Math.ceil(MAX_TICKET_ATTACHMENT_BYTES / 3) * 4),
+      }),
+    );
+    if (!p.data) throw new HTTPException(400, { message: "Validation failed" });
+    const src = await ticketSource();
+    await run(() => src.addAttachment(id, p, a));
+    await audit(a.user.id, "ticket.attachment_added", String(id), { name: p.name, bytes: Math.floor((p.data.length * 3) / 4) });
+    return c.json({ ok: true }, 201);
+  })
+
   .put("/:id/start-date", requirePermission("tickets.edit"), async (c) => {
     const a = auth(c);
     const id = Number(c.req.param("id"));
@@ -985,17 +1020,20 @@ export const ticketRoutes = new Hono<AppEnv>()
         companyId: z.number().int(),
         contactId: z.string().max(60).nullable().optional(),
         priority: z.string().min(1).max(40),
+        /** Not asked in the portal any more: Autotask's workflow rules route the ticket */
         queue: z.string().max(120).default(""),
         assigneeId: z.string().max(60).nullable(),
         dueDate: zDate,
         startDate: zDate.nullable().optional(),
+        contractId: z.string().max(60).nullable().optional(),
       }),
     );
     const src = await ticketSource();
     const o = await run(() => src.options());
     if (!o.priorities.some((x) => x.value === p.priority)) throw new HTTPException(400, { message: "Validation failed" });
-    if (src.demo && !o.queues.some((x) => x.value === p.queue)) throw new HTTPException(400, { message: "Validation failed" });
-    const id = await run(() => src.create({ ...p, contactId: p.contactId ?? null }, a));
+    if (p.queue && !o.queues.some((x) => x.value === p.queue)) throw new HTTPException(400, { message: "Validation failed" });
+    if (p.contractId && !(await run(() => src.contracts(p.companyId))).some((x) => x.id === p.contractId)) throw new HTTPException(400, { message: "invalid_contract" });
+    const id = await run(() => src.create({ ...p, contactId: p.contactId ?? null, contractId: p.contractId ?? null }, a));
     if (p.startDate) {
       await db()
         .insert(schema.ticketMeta)

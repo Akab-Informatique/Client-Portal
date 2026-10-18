@@ -3,6 +3,8 @@ import { db, schema } from "../db/index.ts";
 import type { AuthContext } from "./auth.ts";
 import { autotask, AutotaskError, listResources, loadSettings, type Client } from "./autotask.ts";
 import {
+  addDemoAttachment,
+  addDemoCompany,
   addDemoContact,
   addDemoNote,
   addDemoTicket,
@@ -11,8 +13,10 @@ import {
   demoContact,
   demoAssets,
   demoContacts,
+  demoContracts,
   demoTickets,
   type Asset,
+  type Contract,
   QUEUES,
   updateDemoTicket,
 } from "./demoTickets.ts";
@@ -52,7 +56,11 @@ export type Note = {
 };
 export type Company = { id: number; name: string };
 export type Contact = { id: string; companyId: number; name: string; email: string | null; phone: string | null };
-export type { Asset };
+export type { Asset, Contract };
+/** A file attached to a ticket (base64 data) */
+export type NewAttachment = { name: string; contentType: string; data: string };
+/** Autotask accepts attachments up to a few megabytes; the portal stops at 5 MB a file. */
+export const MAX_TICKET_ATTACHMENT_BYTES = 5 * 1024 * 1024;
 export type NTicket = {
   id: number;
   number: string;
@@ -74,6 +82,10 @@ export type NTicket = {
   notes: Note[];
   /** Device of the ticket (Autotask configuration item); absent in copies made before it existed */
   assetId?: string | null;
+  /** Contract the work is billed on (sample data only; Autotask keeps it on its side) */
+  contractId?: string | null;
+  /** Files attached in the portal (sample data only) */
+  attachments?: { id: string; name: string; size: number; at: string; author: string }[];
   /** Parts that could not be loaded (the rest of the ticket is shown) */
   warnings?: { part: "notes" | "time"; detail: string }[];
 };
@@ -144,6 +156,8 @@ export type NewTicket = {
   queue: string;
   assigneeId: string | null;
   dueDate: string;
+  /** Contract the work is billed on (null: none) */
+  contractId?: string | null;
 };
 
 export interface TicketSource {
@@ -161,6 +175,12 @@ export interface TicketSource {
   companies(): Promise<Company[]>;
   contacts(companyId: number): Promise<Contact[]>;
   addContact(companyId: number, p: { firstName: string; lastName: string; email: string | null; phone: string | null }, a: AuthContext): Promise<Contact>;
+  /** A new client (Autotask company of type client) */
+  addCompany(p: { name: string; phone: string }, a: AuthContext): Promise<Company>;
+  /** The client's active contracts */
+  contracts(companyId: number): Promise<Contract[]>;
+  /** Attach a file to the ticket */
+  addAttachment(ticketId: number, p: NewAttachment, a: AuthContext): Promise<void>;
   /** The client's devices (active configuration items) */
   assets(companyId: number): Promise<Asset[]>;
   /** Older tickets (not in the local copy): by exact number, or title words */
@@ -317,10 +337,12 @@ const demoSource: TicketSource = {
     if (!company) throw new SourceError("invalid_company");
     const contact = p.contactId ? demoContact(p.contactId) : null;
     if (p.contactId && contact?.companyId !== company.id) throw new SourceError("invalid_contact");
+    if (p.contractId && !demoContracts(company.id).some((x) => x.id === p.contractId)) throw new SourceError("invalid_value");
     const staff = await staffPeople();
     demoTickets(staff);
     const assignee = p.assigneeId ? (staff.find((s) => s.id === p.assigneeId) ?? null) : null;
     return addDemoTicket({
+      contractId: p.contractId ?? null,
       title: p.title,
       description: p.description,
       company,
@@ -345,6 +367,17 @@ const demoSource: TicketSource = {
   },
   async contacts(companyId) {
     return demoContacts(companyId);
+  },
+  async addCompany(p) {
+    return addDemoCompany(p.name);
+  },
+  async contracts(companyId) {
+    return demoContracts(companyId);
+  },
+  async addAttachment(ticketId, p, a) {
+    await this.list();
+    const size = Math.floor((p.data.length * 3) / 4) - (p.data.endsWith("==") ? 2 : p.data.endsWith("=") ? 1 : 0);
+    if (!addDemoAttachment(ticketId, { name: p.name, size, author: a.user.name })) throw new SourceError("not_found");
   },
   async addContact(companyId, p) {
     if (!demoCompanies().some((x) => x.id === companyId)) throw new SourceError("invalid_company");
@@ -1084,6 +1117,7 @@ const autotaskSource: TicketSource = {
         priority: Number(p.priority),
         queueID: p.queue ? Number(p.queue) : undefined,
         dueDateTime: dueIso(p.dueDate),
+        ...(p.contractId ? { contractID: Number(p.contractId) } : {}),
         ...(rid ? { assignedResourceID: rid, assignedResourceRoleID: await roleOf(at, rid) } : {}),
       },
       { impersonate: actor, asApiUser: signText(a, "description") },
@@ -1487,6 +1521,53 @@ const autotaskSource: TicketSource = {
       { impersonate: actor },
     );
     await rememberAuthor("time", res?.itemId, ticketId, a);
+    forget(`detail:${ticketId}:`);
+  },
+
+  async addCompany(p, a) {
+    const at = await autotask();
+    const actor = await actorResource(a);
+    // type "Client" (Customer) from the company types, whatever they are named
+    const types = picklist(await fieldsOf(at, "Companies").catch(() => [] as FieldInfo[]), "companyType");
+    const type = types.find((x) => /client|customer/i.test(x.label)) ?? types.find((x) => x.value === "1");
+    const res = await at.call<{ itemId: number }>(
+      "POST",
+      "Companies",
+      { companyName: p.name, phone: p.phone, companyType: type ? Number(type.value) : 1, ownerResourceID: actor, isActive: true },
+      { impersonate: actor },
+    );
+    forget("companies");
+    return { id: res.itemId, name: p.name };
+  },
+
+  async contracts(companyId) {
+    const at = await autotask();
+    return cached(`contracts:${companyId}`, 10 * 60_000, async () => {
+      type AtContract = { id: number; contractName?: string; isDefaultContract?: boolean; endDate?: string | null };
+      const fields = await safeFields(at, "Contracts", ["id", "contractName", "isDefaultContract", "endDate"]);
+      const rows = await at.query<AtContract>(
+        "Contracts",
+        [
+          { op: "eq", field: "companyID", value: companyId },
+          { op: "eq", field: "status", value: 1 },
+        ],
+        { fields, max: 500 },
+      );
+      return rows
+        .map((r) => ({ id: String(r.id), name: r.contractName || `#${r.id}`, isDefault: Boolean(r.isDefaultContract), endDate: r.endDate ? r.endDate.slice(0, 10) : null }))
+        .sort((x, y) => Number(y.isDefault) - Number(x.isDefault) || x.name.localeCompare(y.name));
+    });
+  },
+
+  async addAttachment(ticketId, p, a) {
+    const at = await autotask();
+    const actor = await actorResource(a);
+    await at.call(
+      "POST",
+      `Tickets/${ticketId}/Attachments`,
+      { parentID: ticketId, title: p.name.slice(0, 255), fullPath: p.name.slice(0, 255), attachmentType: "FILE_ATTACHMENT", publish: 1, contentType: p.contentType || undefined, data: p.data },
+      { impersonate: actor },
+    );
     forget(`detail:${ticketId}:`);
   },
 
