@@ -2714,28 +2714,92 @@ describe("Outlook (Microsoft 365 mail)", () => {
     expect((await tech.put(`/api/outlook/accounts/${acc.id}/folder-prefs`, { pinned: [], hidden: [], order: ["f2", "inbox-id", "f2"] })).json.order).toEqual(["f2", "inbox-id"]);
   });
 
-  it("sends and replies with files; sending needs its right; too-large files are refused", async () => {
+  it("sends and replies with files, cc/bcc and options; signature and address book; sending needs its right", async () => {
     resetRateLimit("login:ip:unknown");
     const admin = await signIn("admin@akab.local");
     const tech = await signIn("tech@akab.local");
     const acc = (await tech.get("/api/outlook/status")).json.accounts[0];
     sent.length = 0;
     const file = { name: "note.txt", contentType: "text/plain", data: Buffer.from("allo").toString("base64") };
-    expect((await tech.post(`/api/outlook/accounts/${acc.id}/send`, { to: ["marie@client.example"], subject: "Suivi", text: "Bonjour <Marie>\nC'est réglé.", attachments: [file] })).status).toBe(201);
+    const html = '<p>Bonjour <b>Marie</b></p><script>alert(1)</script><img src="x" onerror="alert(1)"><a href="javascript:alert(1)">lien</a>';
+    expect(
+      (
+        await tech.post(`/api/outlook/accounts/${acc.id}/send`, {
+          to: ["Marie@client.example"],
+          cc: ["paul@client.example"],
+          bcc: ["archive@akab.local"],
+          subject: "Suivi",
+          html,
+          importance: "high",
+          readReceipt: true,
+          attachments: [file],
+        })
+      ).status,
+    ).toBe(201);
     const mail = sent.find((s) => s.url.endsWith("/sendMail"))!;
     expect(mail.url).toBe("https://graph.microsoft.com/v1.0/me/sendMail"); // as the technician
-    expect(mail.body.message.toRecipients).toEqual([{ emailAddress: { address: "marie@client.example" } }]);
-    // the technician's text is escaped, line breaks kept
-    expect(mail.body.message.body.content).toContain("Bonjour &lt;Marie&gt;<br>C'est réglé.");
+    expect(mail.body.message).toMatchObject({
+      toRecipients: [{ emailAddress: { address: "marie@client.example" } }],
+      ccRecipients: [{ emailAddress: { address: "paul@client.example" } }],
+      bccRecipients: [{ emailAddress: { address: "archive@akab.local" } }],
+      importance: "high",
+      isReadReceiptRequested: true,
+    });
+    // formatting kept, anything active removed
+    const content = mail.body.message.body.content as string;
+    expect(content).toContain("<p>Bonjour <b>Marie</b></p>");
+    expect(content).not.toMatch(/script|onerror|javascript:/i);
     expect(mail.body.message.attachments[0]).toMatchObject({ name: "note.txt", contentBytes: file.data });
+    // everyone written to is in the address book, the most used first
+    const contacts = (await tech.get("/api/outlook/contacts")).json;
+    expect(contacts.map((x: any) => x.address).sort()).toEqual(["archive@akab.local", "marie@client.example", "paul@client.example"]);
+    expect(contacts.every((x: any) => x.source === "sent" && x.timesUsed === 1)).toBe(true);
 
     const big = { name: "big.bin", contentType: "application/octet-stream", data: "A".repeat(4_200_000) };
     expect((await tech.post(`/api/outlook/accounts/${acc.id}/send`, { to: ["marie@client.example"], attachments: [big] })).json.error).toBe("outlook_attachments_too_large");
-    expect((await tech.post(`/api/outlook/accounts/${acc.id}/messages/m1/respond`, { mode: "forward", text: "voir" })).json.error).toBe("outlook_no_recipient");
+    expect((await tech.post(`/api/outlook/accounts/${acc.id}/messages/m1/respond`, { mode: "forward", html: "voir" })).json.error).toBe("outlook_no_recipient");
 
+    // a reply: the recipients, subject and options chosen in the window are set on Outlook's draft
     sent.length = 0;
-    expect((await tech.post(`/api/outlook/accounts/${acc.id}/messages/m1/respond`, { mode: "reply", text: "Merci", attachments: [file] })).status).toBe(201);
-    expect(sent.map((s) => `${s.method} ${s.url.split("/messages/")[1]}`)).toEqual(["POST m1/createReply", "POST d1/attachments", "POST d1/send"]);
+    expect(
+      (
+        await tech.post(`/api/outlook/accounts/${acc.id}/messages/m1/respond`, {
+          mode: "reply",
+          to: ["marie@client.example"],
+          bcc: ["boss@akab.local"],
+          subject: "RE: Imprimante (réglé)",
+          html: "<p>Merci</p>",
+          attachments: [file],
+        })
+      ).status,
+    ).toBe(201);
+    expect(sent.map((s) => `${s.method} ${s.url.split("/messages/")[1]}`)).toEqual(["POST m1/createReply", "PATCH d1", "POST d1/attachments", "POST d1/send"]);
+    expect(sent[1].body).toMatchObject({
+      toRecipients: [{ emailAddress: { address: "marie@client.example" } }],
+      bccRecipients: [{ emailAddress: { address: "boss@akab.local" } }],
+      subject: "RE: Imprimante (réglé)",
+      importance: "normal",
+    });
+    expect(sent[1].body.body.content).toContain("<p>Merci</p>");
+    const again = (await tech.get("/api/outlook/contacts?q=marie")).json;
+    expect(again).toEqual([expect.objectContaining({ address: "marie@client.example", timesUsed: 2 })]);
+
+    // the address book: added and named by hand, only for its owner
+    const added = await tech.post("/api/outlook/contacts", { address: "Luc@Fournisseur.ca", name: "Luc Gagnon" });
+    expect(added.status).toBe(201);
+    expect((await tech.get("/api/outlook/contacts?q=gagnon")).json).toEqual([expect.objectContaining({ address: "luc@fournisseur.ca", name: "Luc Gagnon", source: "manual" })]);
+    expect((await tech.patch(`/api/outlook/contacts/${added.json.id}`, { name: "Luc G." })).status).toBe(200);
+    expect((await admin.patch(`/api/outlook/contacts/${added.json.id}`, { name: "x" })).status).toBe(404);
+    expect((await admin.del(`/api/outlook/contacts/${added.json.id}`)).status).toBe(404);
+    expect((await admin.get("/api/outlook/contacts")).json.some((x: any) => x.address === "luc@fournisseur.ca")).toBe(false);
+    expect((await tech.del(`/api/outlook/contacts/${added.json.id}`)).status).toBe(200);
+    expect((await tech.post("/api/outlook/contacts", { address: "pas-une-adresse" })).status).toBe(400);
+
+    // the signature: sanitized, given to the compose window
+    const sig = await tech.put("/api/outlook/signature", { html: '<p><b>Alex Tremblay</b><br>AKAB Informatique</p><img src="javascript:alert(1)"><iframe src="x"></iframe>' });
+    expect(sig.json.html).toBe("<p><b>Alex Tremblay</b><br />AKAB Informatique</p>");
+    expect((await tech.get("/api/outlook/status")).json.signature).toBe(sig.json.html);
+    expect((await tech.put("/api/outlook/signature", { html: "<p> </p>" })).json.html).toBe("");
 
     const techUser = (await admin.get("/api/admin/staff")).json.find((u: any) => u.email === "tech@akab.local");
     await admin.put(`/api/admin/users/${techUser.id}/permissions`, { overrides: [{ key: "outlook.send", effect: "deny" }] });

@@ -302,6 +302,13 @@
       "when": 1792358072810,
       "tag": "0042_meeting_event_ticket",
       "breakpoints": true
+    },
+    {
+      "idx": 43,
+      "version": "7",
+      "when": 1792360722646,
+      "tag": "0043_outlook_contacts_signature",
+      "breakpoints": true
     }
   ]
 }

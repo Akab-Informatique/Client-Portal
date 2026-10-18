@@ -1,10 +1,26 @@
-import { useEffect, useState, type FormEvent } from "react";
+import { useEffect, useRef, useState, type FormEvent } from "react";
 import { useTranslation } from "react-i18next";
 import { Link } from "react-router-dom";
 import { cn } from "@/lib/utils";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
-import { AlertTriangle, CalendarDays, ChevronDown, ExternalLink, Inbox, KeyRound, LogIn, LogOut, Loader2, Mail, Plus, Smartphone, Trash2, UserRound } from "lucide-react";
+import {
+  AlertTriangle,
+  CalendarDays,
+  ChevronDown,
+  ExternalLink,
+  Inbox,
+  KeyRound,
+  LogIn,
+  LogOut,
+  Loader2,
+  Mail,
+  PenLine,
+  Plus,
+  Smartphone,
+  Trash2,
+  UserRound,
+} from "lucide-react";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -14,6 +30,7 @@ import { useConfirm } from "@/components/ConfirmDialog";
 import { api, ApiError } from "@/lib/api";
 import { useCan, useMe } from "@/lib/session";
 import { LinkMailboxDialog } from "@/pages/outlook/dialogs";
+import { RichEditor, type RichEditorHandle } from "@/pages/outlook/RichEditor";
 import { KEY, outlookErrorText, statusKey, type MailAccount, type OutlookStatus } from "@/pages/outlook/shared";
 
 export function ProfileDialog({ open, onOpenChange }: { open: boolean; onOpenChange: (o: boolean) => void }) {
@@ -89,7 +106,15 @@ export function ProfileDialog({ open, onOpenChange }: { open: boolean; onOpenCha
                     <Label htmlFor="p-mobile" className="flex items-center gap-2">
                       <Smartphone className="size-3.5 text-primary" /> {t("profile.mobile")}
                     </Label>
-                    <Input id="p-mobile" type="tel" inputMode="tel" autoComplete="tel" value={form.mobile} onChange={(e) => setForm({ ...form, mobile: e.target.value })} placeholder="+1 450 555-0123" />
+                    <Input
+                      id="p-mobile"
+                      type="tel"
+                      inputMode="tel"
+                      autoComplete="tel"
+                      value={form.mobile}
+                      onChange={(e) => setForm({ ...form, mobile: e.target.value })}
+                      placeholder="+1 450 555-0123"
+                    />
                     <p className="text-[11px] text-muted-foreground">{t("profile.mobileHint")}</p>
                   </div>
                 ) : (
@@ -113,10 +138,31 @@ export function ProfileDialog({ open, onOpenChange }: { open: boolean; onOpenCha
             </Card>
             <Card icon={KeyRound} title={t("password.next")}>
               <form onSubmit={changePassword} className="space-y-3">
-                <Input type="password" autoComplete="current-password" placeholder={t("password.current")} required value={pw.current} onChange={(e) => setPw({ ...pw, current: e.target.value })} />
+                <Input
+                  type="password"
+                  autoComplete="current-password"
+                  placeholder={t("password.current")}
+                  required
+                  value={pw.current}
+                  onChange={(e) => setPw({ ...pw, current: e.target.value })}
+                />
                 <div className="grid gap-3 sm:grid-cols-2">
-                  <Input type="password" autoComplete="new-password" placeholder={t("password.next")} required value={pw.next} onChange={(e) => setPw({ ...pw, next: e.target.value })} />
-                  <Input type="password" autoComplete="new-password" placeholder={t("password.confirm")} required value={pw.confirm} onChange={(e) => setPw({ ...pw, confirm: e.target.value })} />
+                  <Input
+                    type="password"
+                    autoComplete="new-password"
+                    placeholder={t("password.next")}
+                    required
+                    value={pw.next}
+                    onChange={(e) => setPw({ ...pw, next: e.target.value })}
+                  />
+                  <Input
+                    type="password"
+                    autoComplete="new-password"
+                    placeholder={t("password.confirm")}
+                    required
+                    value={pw.confirm}
+                    onChange={(e) => setPw({ ...pw, confirm: e.target.value })}
+                  />
                 </div>
                 <p className="text-xs text-muted-foreground">{t("password.rule")}</p>
                 <div className="flex justify-end">
@@ -181,7 +227,9 @@ function Microsoft365Card({ onNavigate }: { onNavigate: () => void }) {
             {me.o365?.active ? t("profile.stateOn") : me.o365 ? t("profile.statePending") : t("profile.stateOff")}
           </span>
         </p>
-        <p className="mt-1.5 text-xs text-muted-foreground">{me.o365 ? (me.o365.active ? t("profile.o365On", { mailbox: me.o365.mailbox }) : t("profile.o365Pending")) : t("profile.o365Off")}</p>
+        <p className="mt-1.5 text-xs text-muted-foreground">
+          {me.o365 ? (me.o365.active ? t("profile.o365On", { mailbox: me.o365.mailbox }) : t("profile.o365Pending")) : t("profile.o365Off")}
+        </p>
       </div>
 
       {/* Outlook module: turned on by the technician, with their mailboxes */}
@@ -198,9 +246,41 @@ function Microsoft365Card({ onNavigate }: { onNavigate: () => void }) {
             <ChevronDown className={cn("size-4 text-muted-foreground transition-transform", on && "rotate-180")} />
           </label>
           {on && <Mailboxes onNavigate={onNavigate} />}
+          {on && <SignatureEditor />}
         </div>
       )}
     </Card>
+  );
+}
+
+/** The email signature, added at the bottom of the emails written in the Outlook module. */
+function SignatureEditor() {
+  const { t } = useTranslation();
+  const qc = useQueryClient();
+  const editor = useRef<RichEditorHandle>(null);
+  const status = useQuery({ queryKey: statusKey, queryFn: () => api.get<OutlookStatus>("/outlook/status") });
+  const save = useMutation({
+    mutationFn: () => api.put<{ html: string }>("/outlook/signature", { html: editor.current?.html() ?? "" }),
+    onSuccess: () => {
+      toast.success(t("profile.signatureSaved"));
+      void qc.invalidateQueries({ queryKey: statusKey });
+    },
+    onError: () => toast.error(t("common.error")),
+  });
+  if (!status.data) return null;
+  return (
+    <div className="space-y-2 border-t p-3">
+      <p className="flex items-center gap-2 text-sm font-medium">
+        <PenLine className="size-4 text-primary" /> {t("profile.signature")}
+      </p>
+      <p className="text-xs text-muted-foreground">{t("profile.signatureHint")}</p>
+      <RichEditor ref={editor} initialHtml={status.data.signature ?? ""} allowImages label={t("profile.signature")} minHeight="7rem" className="max-h-72" />
+      <div className="flex justify-end">
+        <Button size="sm" disabled={save.isPending} onClick={() => save.mutate()}>
+          {save.isPending && <Loader2 className="size-4 animate-spin" />} {t("common.save")}
+        </Button>
+      </div>
+    </div>
   );
 }
 
@@ -254,7 +334,13 @@ function MicrosoftAccount() {
           )}
           <div className="flex flex-wrap gap-2">
             {c.needsReconnect && (
-              <Button type="button" size="sm" className="h-8 gap-1.5 bg-grad-gold font-semibold text-[#1a1204]" disabled={signIn.isPending} onClick={() => signIn.mutate()}>
+              <Button
+                type="button"
+                size="sm"
+                className="h-8 gap-1.5 bg-grad-gold font-semibold text-[#1a1204]"
+                disabled={signIn.isPending}
+                onClick={() => signIn.mutate()}
+              >
                 <LogIn className="size-3.5" /> {t("profile.ms.signInAgain")}
               </Button>
             )}
@@ -273,7 +359,13 @@ function MicrosoftAccount() {
       ) : (
         <div className="mt-2 space-y-2">
           <p className="text-xs text-muted-foreground">{t("profile.ms.why")}</p>
-          <Button type="button" size="sm" className="h-8 gap-1.5 bg-grad-gold font-semibold text-[#1a1204]" disabled={signIn.isPending} onClick={() => signIn.mutate()}>
+          <Button
+            type="button"
+            size="sm"
+            className="h-8 gap-1.5 bg-grad-gold font-semibold text-[#1a1204]"
+            disabled={signIn.isPending}
+            onClick={() => signIn.mutate()}
+          >
             {signIn.isPending ? <Loader2 className="size-3.5 animate-spin" /> : <LogIn className="size-3.5" />} {t("profile.ms.signIn")}
           </Button>
         </div>
@@ -330,7 +422,9 @@ function Mailboxes({ onNavigate }: { onNavigate: () => void }) {
                     className="size-7 text-muted-foreground hover:text-destructive"
                     title={t("outlook.unlink")}
                     disabled={unlink.isPending}
-                    onClick={() => void confirm({ title: t("outlook.unlinkConfirm", { address: a.address }), destructive: true }).then((ok) => ok && unlink.mutate(a))}
+                    onClick={() =>
+                      void confirm({ title: t("outlook.unlinkConfirm", { address: a.address }), destructive: true }).then((ok) => ok && unlink.mutate(a))
+                    }
                   >
                     <Trash2 className="size-3.5" />
                   </Button>

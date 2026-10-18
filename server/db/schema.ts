@@ -403,6 +403,8 @@ export const userPreferences = pgTable("user_preferences", {
   defaultDashboardId: uuid("default_dashboard_id").references((): AnyPgColumn => dashboards.id, { onDelete: "set null" }),
   /** The Outlook module, turned on by the technician in their profile (off by default) */
   outlook: boolean("outlook").notNull().default(false),
+  /** Email signature (sanitized HTML), added to the emails they write in the Outlook module */
+  emailSignature: text("email_signature"),
   updatedAt: updated(),
 });
 
@@ -930,6 +932,27 @@ export const smsMessages = pgTable(
     createdAt: created(),
   },
   (t) => [index("sms_messages_conv_idx").on(t.conversationId, t.createdAt), uniqueIndex("sms_messages_provider_unique").on(t.providerId)],
+);
+
+/** Outlook module: a technician's own address book; everyone they write to is added automatically. */
+export const mailContacts = pgTable(
+  "mail_contacts",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    userId: uuid("user_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    /** Lower case */
+    address: text("address").notNull(),
+    name: text("name"),
+    note: text("note"),
+    /** Added by hand, or from a sent email */
+    source: text("source", { enum: ["manual", "sent"] }).notNull().default("sent"),
+    timesUsed: integer("times_used").notNull().default(0),
+    lastUsedAt: timestamp("last_used_at", { withTimezone: true }),
+    createdAt: created(),
+  },
+  (t) => [uniqueIndex("mail_contacts_user_address_idx").on(t.userId, t.address)],
 );
 
 /** Outlook module: AKAB Microsoft 365 mailboxes a technician linked (only they see them). */

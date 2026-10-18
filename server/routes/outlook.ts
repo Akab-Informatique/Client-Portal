@@ -1,6 +1,6 @@
 import { Hono } from "hono";
 import { HTTPException } from "hono/http-exception";
-import { and, asc, eq, sql } from "drizzle-orm";
+import { and, asc, desc, eq, ilike, or, sql } from "drizzle-orm";
 import { z } from "zod";
 import { db, schema } from "../db/index.ts";
 import { auth, requirePermission, requireStaff, type AppEnv, type AuthContext } from "../lib/auth.ts";
@@ -29,6 +29,7 @@ import {
   type OutgoingAttachment,
 } from "../lib/outlook.ts";
 import { AutotaskError } from "../lib/autotask.ts";
+import { htmlText, sanitizeMailHtml } from "../lib/mailHtml.ts";
 import { SourceError, ticketSource } from "../lib/ticketSource.ts";
 
 const MAX_ACCOUNTS = 20;
@@ -40,7 +41,8 @@ function outlookHttp(e: unknown): HTTPException {
     const status = e.code === "not_configured" ? 409 : e.code === "not_found" ? 404 : 502;
     return new HTTPException(status, { message: `outlook_${e.code}`, cause: e.detail ? [{ path: "outlook", message: e.detail }] : undefined });
   }
-  if (e instanceof AutotaskError) return new HTTPException(502, { message: `autotask_${e.code}`, cause: e.detail ? [{ path: "autotask", message: e.detail }] : undefined });
+  if (e instanceof AutotaskError)
+    return new HTTPException(502, { message: `autotask_${e.code}`, cause: e.detail ? [{ path: "autotask", message: e.detail }] : undefined });
   if (e instanceof SourceError) return new HTTPException(400, { message: e.code });
   console.error("[outlook]", e);
   return new HTTPException(500, { message: "Internal error" });
@@ -60,7 +62,10 @@ function ownAddresses(a: AuthContext): string[] {
 
 /** The technician's own Microsoft sign-in, if any. */
 async function signInOf(userId: string) {
-  const [conn] = await db().select({ email: schema.msConnections.email, lastError: schema.msConnections.lastError, scopes: schema.msConnections.scopes }).from(schema.msConnections).where(eq(schema.msConnections.userId, userId));
+  const [conn] = await db()
+    .select({ email: schema.msConnections.email, lastError: schema.msConnections.lastError, scopes: schema.msConnections.scopes })
+    .from(schema.msConnections)
+    .where(eq(schema.msConnections.userId, userId));
   return conn ?? null;
 }
 
@@ -80,9 +85,43 @@ const zMessageId = z.string().min(1).max(400);
 const zFolderName = z.string().trim().min(1).max(200);
 const zAddressList = z.array(zEmail).max(100).default([]);
 const zAttachments = z
-  .array(z.object({ name: z.string().trim().min(1).max(200), contentType: z.string().max(120).default("application/octet-stream"), data: z.string().max(5_000_000) }))
+  .array(
+    z.object({
+      name: z.string().trim().min(1).max(200),
+      contentType: z.string().max(120).default("application/octet-stream"),
+      data: z.string().max(5_000_000),
+    }),
+  )
   .max(10)
   .default([]);
+
+/** What the compose window sends (new email, reply, reply all, forward). */
+const zOutgoing = {
+  to: zAddressList,
+  cc: zAddressList,
+  bcc: zAddressList,
+  subject: z.string().trim().max(250).default(""),
+  /** HTML from the editor (sanitized here), signature included */
+  html: z.string().max(2_000_000).default(""),
+  attachments: zAttachments,
+  importance: z.enum(["low", "normal", "high"]).default("normal"),
+  readReceipt: z.boolean().default(false),
+};
+const MAX_SIGNATURE = 200_000;
+
+/** Everyone written to joins the technician's address book (or is used once more). */
+async function rememberRecipients(userId: string, list: string[]) {
+  const now = new Date();
+  for (const address of [...new Set(list.map((x) => x.toLowerCase()))].slice(0, 100)) {
+    await db()
+      .insert(schema.mailContacts)
+      .values({ userId, address, source: "sent", timesUsed: 1, lastUsedAt: now })
+      .onConflictDoUpdate({
+        target: [schema.mailContacts.userId, schema.mailContacts.address],
+        set: { timesUsed: sql`${schema.mailContacts.timesUsed} + 1`, lastUsedAt: now },
+      });
+  }
+}
 
 /** Decoded size of the files; Graph refuses one request above ~4 MB. */
 function checkAttachments(list: OutgoingAttachment[]) {
@@ -95,7 +134,10 @@ export const outlookRoutes = new Hono<AppEnv>()
   .use(requirePermission("outlook.view"))
   // the module is turned on by the technician (profile › Microsoft 365)
   .use(async (c, next) => {
-    const [p] = await db().select({ on: schema.userPreferences.outlook }).from(schema.userPreferences).where(eq(schema.userPreferences.userId, auth(c).user.id));
+    const [p] = await db()
+      .select({ on: schema.userPreferences.outlook })
+      .from(schema.userPreferences)
+      .where(eq(schema.userPreferences.userId, auth(c).user.id));
     if (!p?.on) throw new HTTPException(403, { message: "outlook_off" });
     await next();
   })
@@ -115,7 +157,13 @@ export const outlookRoutes = new Hono<AppEnv>()
   .get("/status", async (c) => {
     const a = auth(c);
     const accounts = await db()
-      .select({ id: schema.mailAccounts.id, address: schema.mailAccounts.address, displayName: schema.mailAccounts.displayName, via: schema.mailAccounts.via, folderPrefs: schema.mailAccounts.folderPrefs })
+      .select({
+        id: schema.mailAccounts.id,
+        address: schema.mailAccounts.address,
+        displayName: schema.mailAccounts.displayName,
+        via: schema.mailAccounts.via,
+        folderPrefs: schema.mailAccounts.folderPrefs,
+      })
       .from(schema.mailAccounts)
       .where(eq(schema.mailAccounts.userId, a.user.id))
       .orderBy(asc(schema.mailAccounts.createdAt));
@@ -128,7 +176,75 @@ export const outlookRoutes = new Hono<AppEnv>()
       canLinkAny: a.permissions.includes("outlook.anyMailbox"),
       canSend: a.permissions.includes("outlook.send"),
       maxAttachmentBytes: MAX_ATTACHMENT_BYTES,
+      signature: (await signatureOf(a.user.id)) ?? "",
     });
+  })
+
+  // ── Signature (profile) ──
+  .put("/signature", async (c) => {
+    const a = auth(c);
+    const p = await body(c, z.object({ html: z.string().max(MAX_SIGNATURE) }));
+    const html = sanitizeMailHtml(p.html);
+    const value = htmlText(html) || /<img/i.test(html) ? html : null;
+    await db()
+      .insert(schema.userPreferences)
+      .values({ userId: a.user.id, outlook: true, emailSignature: value })
+      .onConflictDoUpdate({ target: schema.userPreferences.userId, set: { emailSignature: value, updatedAt: new Date() } });
+    return c.json({ html: value ?? "" });
+  })
+
+  // ── Address book: everyone written to, plus the ones added by hand ──
+  .get("/contacts", async (c) => {
+    const a = auth(c);
+    const q = (c.req.query("q") ?? "").trim().slice(0, 100);
+    const limit = Math.min(Number(c.req.query("limit")) || 500, 1000);
+    const mc = schema.mailContacts;
+    const like = `%${q.replace(/[%_\\]/g, (m) => "\\" + m)}%`;
+    const rows = await db()
+      .select({ id: mc.id, address: mc.address, name: mc.name, note: mc.note, source: mc.source, timesUsed: mc.timesUsed, lastUsedAt: mc.lastUsedAt })
+      .from(mc)
+      .where(and(eq(mc.userId, a.user.id), q ? or(ilike(mc.address, like), ilike(mc.name, like)) : undefined))
+      // the people written to most often first
+      .orderBy(desc(mc.timesUsed), desc(mc.lastUsedAt), asc(mc.address))
+      .limit(limit);
+    return c.json(rows);
+  })
+
+  .post("/contacts", async (c) => {
+    const a = auth(c);
+    const p = await body(c, z.object({ address: zEmail, name: z.string().trim().max(200).optional(), note: z.string().trim().max(1000).optional() }));
+    const address = p.address.toLowerCase();
+    const [row] = await db()
+      .insert(schema.mailContacts)
+      .values({ userId: a.user.id, address, name: p.name || null, note: p.note || null, source: "manual" })
+      .onConflictDoUpdate({
+        target: [schema.mailContacts.userId, schema.mailContacts.address],
+        set: { ...(p.name ? { name: p.name } : {}), ...(p.note ? { note: p.note } : {}) },
+      })
+      .returning({ id: schema.mailContacts.id });
+    return c.json({ id: row.id }, 201);
+  })
+
+  .patch("/contacts/:cid", async (c) => {
+    const a = auth(c);
+    const p = await body(c, z.object({ name: z.string().trim().max(200).nullable().optional(), note: z.string().trim().max(1000).nullable().optional() }));
+    const rows = await db()
+      .update(schema.mailContacts)
+      .set({ ...(p.name !== undefined ? { name: p.name || null } : {}), ...(p.note !== undefined ? { note: p.note || null } : {}) })
+      .where(and(eq(schema.mailContacts.id, zUuid.parse(c.req.param("cid"))), eq(schema.mailContacts.userId, a.user.id)))
+      .returning({ id: schema.mailContacts.id });
+    if (!rows.length) throw new HTTPException(404, { message: "not_found" });
+    return c.json({ ok: true });
+  })
+
+  .delete("/contacts/:cid", async (c) => {
+    const a = auth(c);
+    const rows = await db()
+      .delete(schema.mailContacts)
+      .where(and(eq(schema.mailContacts.id, zUuid.parse(c.req.param("cid"))), eq(schema.mailContacts.userId, a.user.id)))
+      .returning({ id: schema.mailContacts.id });
+    if (!rows.length) throw new HTTPException(404, { message: "not_found" });
+    return c.json({ ok: true });
   })
 
   /**
@@ -181,11 +297,7 @@ export const outlookRoutes = new Hono<AppEnv>()
       throw new HTTPException(403, { message: "outlook_reconnect_shared" });
     }
     if (via === "app") ({ displayName } = await run(() => asConnection(null, () => testMailbox(address))));
-    const [row] = await db()
-      .insert(schema.mailAccounts)
-      .values({ userId: a.user.id, address, displayName, via })
-      .onConflictDoNothing()
-      .returning();
+    const [row] = await db().insert(schema.mailAccounts).values({ userId: a.user.id, address, displayName, via }).onConflictDoNothing().returning();
     if (!row) throw new HTTPException(409, { message: "outlook_already_linked" });
     await audit(a.realUser.id, "outlook.linked", row.id, { address, via: row.via });
     return c.json({ id: row.id, address: row.address, displayName: row.displayName, via: row.via }, 201);
@@ -212,7 +324,11 @@ export const outlookRoutes = new Hono<AppEnv>()
         order: z.array(zId).max(500).default([]),
       }),
     );
-    const prefs = { pinned: p.pinned.filter((x, i, all) => all.findIndex((y) => y.id === x.id) === i), hidden: [...new Set(p.hidden)], order: [...new Set(p.order)] };
+    const prefs = {
+      pinned: p.pinned.filter((x, i, all) => all.findIndex((y) => y.id === x.id) === i),
+      hidden: [...new Set(p.hidden)],
+      order: [...new Set(p.order)],
+    };
     await db().update(schema.mailAccounts).set({ folderPrefs: prefs }).where(eq(schema.mailAccounts.id, acc.id));
     return c.json(prefs);
   })
@@ -273,7 +389,9 @@ export const outlookRoutes = new Hono<AppEnv>()
     const acc = await account(auth(c), c.req.param("id"));
     const folder = zMessageId.parse(c.req.query("folder") || "inbox");
     const cursor = c.req.query("cursor");
-    return c.json(await run(() => listMessages(acc.address, folder, { search: c.req.query("q") ?? "", cursor: cursor ? z.string().max(4000).parse(cursor) : undefined })));
+    return c.json(
+      await run(() => listMessages(acc.address, folder, { search: c.req.query("q") ?? "", cursor: cursor ? z.string().max(4000).parse(cursor) : undefined })),
+    );
   })
 
   /** Opening a message marks it as read, like Outlook. */
@@ -324,20 +442,11 @@ export const outlookRoutes = new Hono<AppEnv>()
   .post("/accounts/:id/send", requirePermission("outlook.send"), async (c) => {
     const a = auth(c);
     const acc = await account(a, c.req.param("id"));
-    const p = await body(
-      c,
-      z.object({
-        to: z.array(zEmail).min(1).max(100),
-        cc: zAddressList,
-        bcc: zAddressList,
-        subject: z.string().trim().max(250).default(""),
-        text: z.string().max(100_000).default(""),
-        attachments: zAttachments,
-      }),
-    );
+    const p = await body(c, z.object({ ...zOutgoing, to: z.array(zEmail).min(1).max(100) }));
     checkAttachments(p.attachments);
     if (!rateLimit(`outlook-send:${a.user.id}`, 30, 60_000).ok) throw new HTTPException(429, { message: "rate_limited" });
-    await run(() => sendMail(acc.address, p));
+    await run(() => sendMail(acc.address, { ...p, html: sanitizeMailHtml(p.html) }));
+    await rememberRecipients(a.user.id, [...p.to, ...p.cc, ...p.bcc]);
     await audit(a.realUser.id, "outlook.sent", acc.id, { from: acc.address, to: p.to.length + p.cc.length + p.bcc.length, files: p.attachments.length });
     return c.json({ ok: true }, 201);
   })
@@ -345,20 +454,12 @@ export const outlookRoutes = new Hono<AppEnv>()
   .post("/accounts/:id/messages/:mid/respond", requirePermission("outlook.send"), async (c) => {
     const a = auth(c);
     const acc = await account(a, c.req.param("id"));
-    const p = await body(
-      c,
-      z.object({
-        mode: z.enum(["reply", "replyAll", "forward"]),
-        text: z.string().max(100_000).default(""),
-        to: zAddressList,
-        cc: zAddressList,
-        attachments: zAttachments,
-      }),
-    );
-    if (p.mode === "forward" && !p.to.length) throw new HTTPException(400, { message: "outlook_no_recipient" });
+    const p = await body(c, z.object({ ...zOutgoing, mode: z.enum(["reply", "replyAll", "forward"]) }));
+    if (!p.to.length) throw new HTTPException(400, { message: "outlook_no_recipient" });
     checkAttachments(p.attachments);
     if (!rateLimit(`outlook-send:${a.user.id}`, 30, 60_000).ok) throw new HTTPException(429, { message: "rate_limited" });
-    await run(() => respond(acc.address, zMessageId.parse(c.req.param("mid")), p.mode, p));
+    await run(() => respond(acc.address, zMessageId.parse(c.req.param("mid")), p.mode, { ...p, html: sanitizeMailHtml(p.html) }));
+    await rememberRecipients(a.user.id, [...p.to, ...p.cc, ...p.bcc]);
     await audit(a.realUser.id, `outlook.${p.mode}`, acc.id, { from: acc.address, files: p.attachments.length });
     return c.json({ ok: true }, 201);
   })
@@ -394,3 +495,9 @@ export const outlookRoutes = new Hono<AppEnv>()
     const contact = m.from?.address ? await src.contactByEmail(m.from.address).catch(() => null) : null;
     return c.json({ subject: m.subject, from: m.from, receivedAt: m.receivedAt, text: m.text.slice(0, 7000), contact });
   });
+
+/** The technician's email signature (sanitized HTML), if any. */
+async function signatureOf(userId: string) {
+  const [p] = await db().select({ s: schema.userPreferences.emailSignature }).from(schema.userPreferences).where(eq(schema.userPreferences.userId, userId));
+  return p?.s ?? null;
+}

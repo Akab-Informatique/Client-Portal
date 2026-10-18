@@ -904,7 +904,7 @@ export function PriorityDialog({
 }
 
 // ── Weekly calendar ───────────────────────────────────────────────────────────
-function WeekCalendar({ technicianId, technicianName, planner }: { technicianId: string; technicianName: string; planner: boolean }) {
+export function WeekCalendar({ technicianId, technicianName, planner }: { technicianId: string; technicianName: string; planner: boolean }) {
   const { t } = useTranslation();
   const ws = useTicketWorkspace();
   // from the big view: it closes, the ticket shows

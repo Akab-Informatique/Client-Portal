@@ -2,23 +2,24 @@ import { useEffect, useMemo, useRef, useState, type FormEvent } from "react";
 import { useTranslation } from "react-i18next";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
-import { Inbox, Loader2, Paperclip, Search, Send, Ticket, X } from "lucide-react";
+import { AlertTriangle, ChevronDown, Inbox, Loader2, Paperclip, Search, Send, Ticket, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { Checkbox } from "@/components/ui/checkbox";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { Textarea } from "@/components/ui/textarea";
 import { api } from "@/lib/api";
 import { cn } from "@/lib/utils";
 import type { TicketSummary } from "@/pages/tickets/shared";
+import { RichEditor, type RichEditorHandle } from "./RichEditor";
+import { isAddress, RecipientInput } from "./RecipientInput";
 import {
   base,
   bytes,
   fileToBase64,
   KEY,
   outlookErrorText,
-  parseAddresses,
   statusKey,
   who,
   type ComposeMode,
@@ -30,7 +31,17 @@ import {
 const GOLD = "bg-grad-gold font-semibold text-[#1a1204] hover:brightness-105";
 
 /** Link one of my AKAB mailboxes (or any, with the right). */
-export function LinkMailboxDialog({ open, onOpenChange, status, onLinked }: { open: boolean; onOpenChange: (o: boolean) => void; status: OutlookStatus; onLinked: (a: MailAccount) => void }) {
+export function LinkMailboxDialog({
+  open,
+  onOpenChange,
+  status,
+  onLinked,
+}: {
+  open: boolean;
+  onOpenChange: (o: boolean) => void;
+  status: OutlookStatus;
+  onLinked: (a: MailAccount) => void;
+}) {
   const { t } = useTranslation();
   const qc = useQueryClient();
   const linkedSet = new Set(status.accounts.map((a) => a.address.toLowerCase()));
@@ -57,7 +68,9 @@ export function LinkMailboxDialog({ open, onOpenChange, status, onLinked }: { op
           <DialogTitle className="flex items-center gap-2">
             <Inbox className="size-5 text-primary" /> {t("outlook.linkTitle")}
           </DialogTitle>
-          <DialogDescription>{status.canLinkAny ? t("outlook.linkTextAny") : status.signedIn ? t("outlook.linkTextShared") : t("outlook.linkText")}</DialogDescription>
+          <DialogDescription>
+            {status.canLinkAny ? t("outlook.linkTextAny") : status.signedIn ? t("outlook.linkTextShared") : t("outlook.linkText")}
+          </DialogDescription>
         </DialogHeader>
         <form
           className="space-y-4"
@@ -70,11 +83,24 @@ export function LinkMailboxDialog({ open, onOpenChange, status, onLinked }: { op
           {status.canLinkAny || status.signedIn ? (
             <div className="space-y-2">
               <Label htmlFor="ol-address">{t("outlook.address")}</Label>
-              <Input id="ol-address" type="email" required autoFocus value={address} onChange={(e) => setAddress(e.target.value)} placeholder="support@akab.ca" />
+              <Input
+                id="ol-address"
+                type="email"
+                required
+                autoFocus
+                value={address}
+                onChange={(e) => setAddress(e.target.value)}
+                placeholder="support@akab.ca"
+              />
               {own.length > 0 && (
                 <div className="flex flex-wrap gap-1.5">
                   {own.map((a) => (
-                    <button key={a} type="button" onClick={() => setAddress(a)} className="rounded-full border px-2.5 py-0.5 text-xs text-muted-foreground hover:border-[color:var(--gold)]/50 hover:text-foreground">
+                    <button
+                      key={a}
+                      type="button"
+                      onClick={() => setAddress(a)}
+                      className="rounded-full border px-2.5 py-0.5 text-xs text-muted-foreground hover:border-[color:var(--gold)]/50 hover:text-foreground"
+                    >
                       {a}
                     </button>
                   ))}
@@ -116,9 +142,34 @@ export function LinkMailboxDialog({ open, onOpenChange, status, onLinked }: { op
   );
 }
 
-type Draft = { accountId: string; to: string; cc: string; bcc: string; subject: string; text: string; files: File[] };
+type Draft = {
+  accountId: string;
+  to: string[];
+  cc: string[];
+  bcc: string[];
+  subject: string;
+  files: File[];
+  importance: "normal" | "high";
+  readReceipt: boolean;
+  withSignature: boolean;
+};
 
-/** New email, reply, reply all or forward — with files. */
+const SIGNATURE_CLASS = "akab-signature";
+/** "RE: " / "TR: " once, not "RE: RE: " */
+const prefixed = (prefix: string, subject: string) => (/^\s*(re|tr|fw|fwd)\s*:/i.test(subject) ? subject : `${prefix} ${subject}`.trim());
+
+/** Who a reply / reply all goes to, without our own addresses. */
+function replyRecipients(mode: ComposeMode, m: MailMessage | null, mine: string[]) {
+  if (!m || mode === "new" || mode === "forward") return { to: [] as string[], cc: [] as string[] };
+  const own = new Set(mine.map((x) => x.toLowerCase()));
+  const list = (l: { address: string }[]) => [...new Set(l.map((x) => x.address.toLowerCase()))].filter((x) => !own.has(x));
+  const first = m.replyTo.length ? m.replyTo : m.from ? [m.from] : [];
+  if (mode === "reply") return { to: list(first), cc: [] };
+  const to = list([...first, ...m.to]);
+  return { to, cc: list(m.cc).filter((x) => !to.includes(x)) };
+}
+
+/** New email, reply, reply all or forward: recipients with suggestions, formatting, signature, files, options. */
 export function ComposeDialog({
   open,
   onOpenChange,
@@ -127,6 +178,8 @@ export function ComposeDialog({
   accountId,
   message,
   maxBytes,
+  signature,
+  initialTo = [],
 }: {
   open: boolean;
   onOpenChange: (o: boolean) => void;
@@ -135,63 +188,139 @@ export function ComposeDialog({
   accountId: string;
   message: MailMessage | null;
   maxBytes: number;
+  signature: string;
+  initialTo?: string[];
 }) {
   const { t } = useTranslation();
   const qc = useQueryClient();
   const fileInput = useRef<HTMLInputElement>(null);
-  const [d, setD] = useState<Draft>({ accountId, to: "", cc: "", bcc: "", subject: "", text: "", files: [] });
+  const editor = useRef<RichEditorHandle>(null);
+  const blank = (): Draft => {
+    const r = replyRecipients(
+      mode,
+      message,
+      accounts.map((a) => a.address),
+    );
+    const subject = !message || mode === "new" ? "" : prefixed(mode === "forward" ? t("outlook.fwPrefix") : t("outlook.rePrefix"), message.subject ?? "");
+    return {
+      accountId,
+      to: mode === "new" ? initialTo : r.to,
+      cc: r.cc,
+      bcc: [],
+      subject,
+      files: [],
+      importance: "normal",
+      readReceipt: false,
+      withSignature: Boolean(signature),
+    };
+  };
+  const [d, setD] = useState<Draft>(blank);
+  const [showCc, setShowCc] = useState(false);
+  const [showBcc, setShowBcc] = useState(false);
+  const [showQuote, setShowQuote] = useState(false);
+  const [dragging, setDragging] = useState(false);
+  // a new window each time it opens (the editor is mounted again with its key)
+  const [round, setRound] = useState(0);
   useEffect(() => {
-    if (open) setD({ accountId, to: "", cc: "", bcc: "", subject: "", text: "", files: [] });
+    if (!open) return;
+    const b = blank();
+    setD(b);
+    setShowCc(b.cc.length > 0);
+    setShowBcc(false);
+    setShowQuote(false);
+    setRound((n) => n + 1);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open, accountId, mode, message?.id]);
   const total = useMemo(() => d.files.reduce((n, f) => n + f.size, 0), [d.files]);
   const tooBig = total > maxBytes;
+  const initialHtml = useMemo(() => `<p><br></p>${signature ? `<p><br></p><div class="${SIGNATURE_CLASS}">${signature}</div>` : ""}`, [signature, round]);
+
+  /** The signature block in the editor, on or off */
+  const toggleSignature = (on: boolean) => {
+    const el = editor.current?.element();
+    if (!el) return;
+    el.querySelectorAll(`.${SIGNATURE_CLASS}`).forEach((n) => n.remove());
+    if (on && signature) {
+      const div = document.createElement("div");
+      div.className = SIGNATURE_CLASS;
+      div.innerHTML = signature;
+      el.appendChild(div);
+    }
+    setD((x) => ({ ...x, withSignature: on }));
+  };
+  const addFiles = (list: FileList | File[]) => setD((x) => ({ ...x, files: [...x.files, ...Array.from(list)].slice(0, 10) }));
 
   const send = useMutation({
     mutationFn: async () => {
-      const to = parseAddresses(d.to);
-      const cc = parseAddresses(d.cc);
-      const bcc = parseAddresses(d.bcc);
-      const bad = to.bad ?? cc.bad ?? bcc.bad;
+      const bad = [...d.to, ...d.cc, ...d.bcc].find((a) => !isAddress(a));
       if (bad) throw new Error(t("outlook.errors.invalid_address", { address: bad }));
-      if ((mode === "new" || mode === "forward") && !to.ok.length) throw new Error(t("outlook.errors.no_recipient"));
-      const attachments = await Promise.all(d.files.map(async (f) => ({ name: f.name, contentType: f.type || "application/octet-stream", data: await fileToBase64(f) })));
-      if (mode === "new") {
-        return api.post(`${base(d.accountId)}/send`, { to: to.ok, cc: cc.ok, bcc: bcc.ok, subject: d.subject, text: d.text, attachments });
-      }
-      return api.post(`${base(d.accountId)}/messages/${encodeURIComponent(message!.id)}/respond`, { mode, text: d.text, to: to.ok, cc: cc.ok, attachments });
+      if (!d.to.length) throw new Error(t("outlook.errors.no_recipient"));
+      const attachments = await Promise.all(
+        d.files.map(async (f) => ({ name: f.name, contentType: f.type || "application/octet-stream", data: await fileToBase64(f) })),
+      );
+      const payload = {
+        to: d.to,
+        cc: d.cc,
+        bcc: d.bcc,
+        subject: d.subject,
+        html: editor.current?.html() ?? "",
+        attachments,
+        importance: d.importance,
+        readReceipt: d.readReceipt,
+      };
+      if (mode === "new") return api.post(`${base(d.accountId)}/send`, payload);
+      return api.post(`${base(d.accountId)}/messages/${encodeURIComponent(message!.id)}/respond`, { ...payload, mode });
     },
     onSuccess: () => {
       toast.success(t("outlook.sentOk"));
       void qc.invalidateQueries({ queryKey: [...KEY, "folders", d.accountId] });
+      void qc.invalidateQueries({ queryKey: [...KEY, "contacts"] });
       onOpenChange(false);
     },
     onError: (e) => toast.error(e instanceof Error && !("code" in e) ? e.message : outlookErrorText(t, e)),
   });
 
-  const title = mode === "new" ? t("outlook.newMail") : mode === "forward" ? t("outlook.forward") : mode === "replyAll" ? t("outlook.replyAll") : t("outlook.reply");
-  const showTo = mode === "new" || mode === "forward";
+  const title =
+    mode === "new" ? t("outlook.newMail") : mode === "forward" ? t("outlook.forward") : mode === "replyAll" ? t("outlook.replyAll") : t("outlook.reply");
+  const quoteDoc = message
+    ? `<!doctype html><html><head><meta charset="utf-8"><base target="_blank"><style>body{margin:0;padding:12px;background:#fff;color:#111;font-family:Calibri,Arial,sans-serif;font-size:13px}img{max-width:100%;height:auto}</style></head><body>${message.html}</body></html>`
+    : "";
+  const originalFiles = mode === "forward" ? (message?.attachments ?? []).filter((a) => !a.isInline) : [];
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="sm:max-w-2xl">
+      <DialogContent
+        className="flex max-h-[92dvh] flex-col gap-3 sm:max-w-4xl"
+        onDragOver={(e) => {
+          if (e.dataTransfer.types.includes("Files")) {
+            e.preventDefault();
+            setDragging(true);
+          }
+        }}
+        onDragLeave={(e) => {
+          if (e.currentTarget === e.target) setDragging(false);
+        }}
+        onDrop={(e) => {
+          if (!e.dataTransfer.files.length) return;
+          e.preventDefault();
+          setDragging(false);
+          addFiles(e.dataTransfer.files);
+        }}
+      >
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
             <Send className="size-5 text-primary" /> {title}
           </DialogTitle>
           <DialogDescription>
-            {message && mode !== "new" ? (
-              <>
-                {mode === "forward" ? `${t("outlook.subject")} : ${message.subject || t("outlook.noSubject")}` : t("outlook.replyTo", { name: who(message.from) })}
-                {" · "}
-                {t("outlook.quotedNote")}
-              </>
-            ) : (
-              t("outlook.recipientsHint")
-            )}
+            {message && mode !== "new"
+              ? mode === "forward"
+                ? t("outlook.forwardOf", { subject: message.subject || t("outlook.noSubject") })
+                : t("outlook.replyTo", { name: who(message.from) })
+              : t("outlook.recipientsHint")}
           </DialogDescription>
         </DialogHeader>
         <form
-          className="space-y-3"
+          className="flex min-h-0 flex-1 flex-col gap-2.5"
           onSubmit={(e: FormEvent) => {
             e.preventDefault();
             send.mutate();
@@ -213,32 +342,117 @@ export function ComposeDialog({
               </Select>
             </Row>
           )}
-          {showTo && (
-            <Row label={t("outlook.to")}>
-              <Input autoFocus value={d.to} onChange={(e) => setD({ ...d, to: e.target.value })} placeholder="nom@exemple.ca" />
+          <Row label={t("outlook.to")}>
+            <div className="flex items-start gap-2">
+              <div className="min-w-0 flex-1">
+                <RecipientInput
+                  key={`to-${round}`}
+                  label={t("outlook.to")}
+                  autoFocus={!d.to.length}
+                  value={d.to}
+                  onChange={(to) => setD((x) => ({ ...x, to }))}
+                />
+              </div>
+              <div className="flex shrink-0 gap-1 pt-1.5 text-xs">
+                {!showCc && (
+                  <button
+                    type="button"
+                    className="rounded px-1.5 py-0.5 text-muted-foreground hover:bg-accent hover:text-foreground"
+                    onClick={() => setShowCc(true)}
+                  >
+                    {t("outlook.cc")}
+                  </button>
+                )}
+                {!showBcc && (
+                  <button
+                    type="button"
+                    className="rounded px-1.5 py-0.5 text-muted-foreground hover:bg-accent hover:text-foreground"
+                    onClick={() => setShowBcc(true)}
+                  >
+                    {t("outlook.bcc")}
+                  </button>
+                )}
+              </div>
+            </div>
+          </Row>
+          {showCc && (
+            <Row label={t("outlook.cc")}>
+              <RecipientInput key={`cc-${round}`} label={t("outlook.cc")} value={d.cc} onChange={(cc) => setD((x) => ({ ...x, cc }))} />
             </Row>
           )}
-          <Row label={t("outlook.cc")}>
-            <Input value={d.cc} onChange={(e) => setD({ ...d, cc: e.target.value })} />
-          </Row>
-          {mode === "new" && (
-            <>
-              <Row label={t("outlook.bcc")}>
-                <Input value={d.bcc} onChange={(e) => setD({ ...d, bcc: e.target.value })} />
-              </Row>
-              <Row label={t("outlook.subject")}>
-                <Input maxLength={250} value={d.subject} onChange={(e) => setD({ ...d, subject: e.target.value })} />
-              </Row>
-            </>
+          {showBcc && (
+            <Row label={t("outlook.bcc")}>
+              <RecipientInput key={`bcc-${round}`} label={t("outlook.bcc")} autoFocus value={d.bcc} onChange={(bcc) => setD((x) => ({ ...x, bcc }))} />
+            </Row>
           )}
-          <Textarea autoFocus={!showTo} rows={10} value={d.text} onChange={(e) => setD({ ...d, text: e.target.value })} aria-label={t("outlook.body")} className="min-h-48" />
+          <Row label={t("outlook.subject")}>
+            <Input maxLength={250} value={d.subject} onChange={(e) => setD({ ...d, subject: e.target.value })} />
+          </Row>
+
+          <RichEditor
+            key={`ed-${round}`}
+            ref={editor}
+            initialHtml={initialHtml}
+            label={t("outlook.body")}
+            autoFocus={d.to.length > 0}
+            minHeight="14rem"
+            className={cn("min-h-[16rem] flex-1", dragging && "border-[color:var(--gold)] bg-[color:var(--gold)]/5")}
+            onKeyDown={(e) => {
+              if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) {
+                e.preventDefault();
+                send.mutate();
+              }
+            }}
+          />
+
+          {message && mode !== "new" && (
+            <div className="rounded-lg border">
+              <button
+                type="button"
+                onClick={() => setShowQuote((v) => !v)}
+                className="flex w-full items-center gap-2 px-3 py-1.5 text-left text-xs text-muted-foreground hover:text-foreground"
+              >
+                <ChevronDown className={cn("size-3.5 transition-transform", showQuote && "rotate-180")} />
+                {t("outlook.original", { from: who(message.from) })}
+              </button>
+              {showQuote && (
+                <iframe
+                  title={t("outlook.originalTitle")}
+                  sandbox=""
+                  srcDoc={quoteDoc}
+                  className="h-56 w-full rounded-b-lg bg-white"
+                  referrerPolicy="no-referrer"
+                />
+              )}
+            </div>
+          )}
 
           <div className="space-y-2">
             <div className="flex flex-wrap items-center gap-2">
               <Button type="button" variant="outline" size="sm" onClick={() => fileInput.current?.click()}>
                 <Paperclip className="size-4" /> {t("outlook.attach")}
               </Button>
-              <span className={cn("text-xs", tooBig ? "text-destructive" : "text-muted-foreground")}>
+              <Button
+                type="button"
+                variant={d.importance === "high" ? "default" : "outline"}
+                size="sm"
+                aria-pressed={d.importance === "high"}
+                className={cn(d.importance === "high" && "bg-red-500/80 text-white hover:bg-red-500")}
+                onClick={() => setD({ ...d, importance: d.importance === "high" ? "normal" : "high" })}
+              >
+                <AlertTriangle className="size-4" /> {t("outlook.important")}
+              </Button>
+              <label className="flex cursor-pointer items-center gap-1.5 text-xs text-muted-foreground">
+                <Checkbox checked={d.readReceipt} onCheckedChange={(v) => setD({ ...d, readReceipt: v === true })} /> {t("outlook.readReceipt")}
+              </label>
+              {signature ? (
+                <label className="flex cursor-pointer items-center gap-1.5 text-xs text-muted-foreground">
+                  <Checkbox checked={d.withSignature} onCheckedChange={(v) => toggleSignature(v === true)} /> {t("outlook.withSignature")}
+                </label>
+              ) : (
+                <span className="text-xs text-muted-foreground">{t("outlook.noSignature")}</span>
+              )}
+              <span className={cn("ml-auto text-xs", tooBig ? "text-destructive" : "text-muted-foreground")}>
                 {d.files.length ? `${bytes(total)} / ` : ""}
                 {t("outlook.attachLimit", { size: bytes(maxBytes) })}
               </span>
@@ -248,14 +462,24 @@ export function ComposeDialog({
                 multiple
                 hidden
                 onChange={(e) => {
-                  const picked = Array.from(e.target.files ?? []);
-                  setD((x) => ({ ...x, files: [...x.files, ...picked].slice(0, 10) }));
+                  addFiles(e.target.files ?? []);
                   e.target.value = "";
                 }}
               />
             </div>
-            {d.files.length > 0 && (
+            {(d.files.length > 0 || originalFiles.length > 0) && (
               <ul className="flex flex-wrap gap-1.5">
+                {originalFiles.map((a) => (
+                  <li
+                    key={a.id}
+                    className="flex items-center gap-1.5 rounded-lg border border-dashed px-2 py-1 text-xs text-muted-foreground"
+                    title={t("outlook.originalFile")}
+                  >
+                    <Paperclip className="size-3" />
+                    <span className="max-w-48 truncate">{a.name}</span>
+                    <span>{bytes(a.size)}</span>
+                  </li>
+                ))}
                 {d.files.map((f, i) => (
                   <li key={`${f.name}-${i}`} className="flex items-center gap-1.5 rounded-lg border bg-card/60 px-2 py-1 text-xs">
                     <Paperclip className="size-3 text-muted-foreground" />
@@ -270,7 +494,8 @@ export function ComposeDialog({
             )}
           </div>
 
-          <div className="flex justify-end gap-2 pt-1">
+          <div className="flex items-center justify-end gap-2 pt-1">
+            <span className="mr-auto hidden text-xs text-muted-foreground sm:inline">{t("outlook.sendShortcut")}</span>
             <Button type="button" variant="ghost" onClick={() => onOpenChange(false)}>
               {t("common.cancel")}
             </Button>
@@ -294,7 +519,17 @@ function Row({ label, children }: { label: string; children: React.ReactNode }) 
 }
 
 /** Pick a ticket; the email is copied into it as an internal note. */
-export function AddToTicketDialog({ open, onOpenChange, accountId, message }: { open: boolean; onOpenChange: (o: boolean) => void; accountId: string; message: MailMessage | null }) {
+export function AddToTicketDialog({
+  open,
+  onOpenChange,
+  accountId,
+  message,
+}: {
+  open: boolean;
+  onOpenChange: (o: boolean) => void;
+  accountId: string;
+  message: MailMessage | null;
+}) {
   const { t } = useTranslation();
   const [q, setQ] = useState("");
   const [debounced, setDebounced] = useState("");

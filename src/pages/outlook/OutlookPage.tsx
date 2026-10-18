@@ -3,7 +3,46 @@ import { useNavigate } from "react-router-dom";
 import { useTranslation } from "react-i18next";
 import { useInfiniteQuery, useMutation, useQuery, useQueryClient, type InfiniteData } from "@tanstack/react-query";
 import { toast } from "sonner";
-import { Archive, ArrowDown, ArrowLeft, ArrowUp, CheckCheck, ChevronDown, ChevronRight, Download, Eye, EyeOff, Flag, Folder, FolderInput, FolderPlus, FolderX, Forward, Inbox, Loader2, Mail, MailOpen, MoreHorizontal, Paperclip, Pencil, Plus, Reply, ReplyAll, Search, Send, ShieldAlert, SlidersHorizontal, Star, StarOff, Ticket, TicketPlus, Trash2, Unlink } from "lucide-react";
+import {
+  Archive,
+  ArrowDown,
+  ArrowLeft,
+  ArrowUp,
+  CalendarDays,
+  CheckCheck,
+  ChevronDown,
+  ChevronRight,
+  Download,
+  Eye,
+  EyeOff,
+  Flag,
+  Folder,
+  FolderInput,
+  FolderPlus,
+  FolderX,
+  Forward,
+  Inbox,
+  Loader2,
+  Mail,
+  MailOpen,
+  MoreHorizontal,
+  Paperclip,
+  Pencil,
+  Plus,
+  Reply,
+  ReplyAll,
+  Search,
+  Send,
+  ShieldAlert,
+  SlidersHorizontal,
+  Star,
+  StarOff,
+  Ticket,
+  TicketPlus,
+  Trash2,
+  Unlink,
+  Users,
+} from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import {
@@ -26,6 +65,8 @@ import { cn } from "@/lib/utils";
 import { NewTicketDialog } from "@/pages/tickets/NewTicketDialog";
 import type { TicketList } from "@/pages/tickets/shared";
 import { AddToTicketDialog, ComposeDialog, LinkMailboxDialog } from "./dialogs";
+import { ContactsView } from "./ContactsView";
+import { WeekCalendar } from "@/pages/tickets/Planning";
 import {
   base,
   bytes,
@@ -46,7 +87,14 @@ import {
   type OutlookStatus,
 } from "./shared";
 
-const FOLDER_ICON: Record<string, typeof Inbox> = { inbox: Inbox, sentitems: Send, deleteditems: Trash2, archive: Archive, drafts: Mail, junkemail: ShieldAlert };
+const FOLDER_ICON: Record<string, typeof Inbox> = {
+  inbox: Inbox,
+  sentitems: Send,
+  deleteditems: Trash2,
+  archive: Archive,
+  drafts: Mail,
+  junkemail: ShieldAlert,
+};
 
 /** Today: the time; this year: day and month; older: the date. */
 function listDate(iso: string): string {
@@ -87,8 +135,31 @@ function OutlookOff() {
   );
 }
 
+type View = "mail" | "calendar" | "contacts";
+const VIEW_KEY = "akab.outlook.view";
+
 function OutlookMail() {
   const { t } = useTranslation();
+  const me = useMe();
+  const can = useCan();
+  // mail, my calendar (the planning week, with Outlook events) or my address book
+  const [view, setViewState] = useState<View>(() => {
+    try {
+      const v = sessionStorage.getItem(VIEW_KEY);
+      return v === "calendar" || v === "contacts" ? v : "mail";
+    } catch {
+      return "mail";
+    }
+  });
+  const setView = (v: View) => {
+    setViewState(v);
+    try {
+      sessionStorage.setItem(VIEW_KEY, v);
+    } catch {
+      /* private window */
+    }
+  };
+  const canCalendar = can("tickets.view");
   const msSignIn = useMutation({
     mutationFn: () => api.post<{ url: string }>("/microsoft/connect", {}),
     onSuccess: ({ url }) => window.location.assign(url),
@@ -98,7 +169,7 @@ function OutlookMail() {
   const [linkOpen, setLinkOpen] = useState(false);
   const [sel, setSel] = useState<{ account: string; folder: string } | null>(null);
   const [messageId, setMessageId] = useState<string | null>(null);
-  const [compose, setCompose] = useState<{ mode: ComposeMode; message: MailMessage | null } | null>(null);
+  const [compose, setCompose] = useState<{ mode: ComposeMode; message: MailMessage | null; to?: string[] } | null>(null);
 
   const accounts = status.data?.accounts ?? [];
   // First mailbox's inbox by default; forget a mailbox that was removed
@@ -133,21 +204,56 @@ function OutlookMail() {
           </h1>
           <p className="text-sm text-muted-foreground">{t("outlook.subtitle")}</p>
         </div>
-        {s.ready && accounts.length > 0 && (
-          <div className="flex gap-2">
+        <div className="flex flex-wrap items-center gap-2">
+          <div className="flex rounded-lg border bg-card/60 p-0.5" role="tablist" aria-label={t("outlook.views.label")}>
+            {(
+              [
+                ["mail", Mail, t("outlook.views.mail")],
+                ...(canCalendar ? [["calendar", CalendarDays, t("outlook.views.calendar")] as const] : []),
+                ["contacts", Users, t("outlook.views.contacts")],
+              ] as const
+            ).map(([v, Icon, label]) => (
+              <button
+                key={v}
+                type="button"
+                role="tab"
+                aria-selected={view === v}
+                title={label}
+                onClick={() => setView(v as View)}
+                className={cn(
+                  "flex items-center gap-1.5 rounded-md px-2.5 py-1.5 text-sm transition-colors",
+                  view === v ? "bg-[color:var(--gold)]/15 text-foreground" : "text-muted-foreground hover:text-foreground",
+                )}
+              >
+                <Icon className={cn("size-4", view === v && "text-primary")} />
+                <span className="hidden sm:inline">{label}</span>
+              </button>
+            ))}
+          </div>
+          {s.ready && accounts.length > 0 && (
             <Button variant="outline" size="sm" className="h-9" onClick={() => setLinkOpen(true)}>
               <Plus className="size-4" /> {t("outlook.linkMailbox")}
             </Button>
-            {s.canSend && (
-              <Button size="sm" className="h-9 bg-grad-gold font-semibold text-[#1a1204] glow-gold hover:brightness-105" onClick={() => setCompose({ mode: "new", message: null })}>
-                <Send className="size-4" /> {t("outlook.newMail")}
-              </Button>
-            )}
-          </div>
-        )}
+          )}
+          {s.ready && accounts.length > 0 && s.canSend && (
+            <Button
+              size="sm"
+              className="h-9 bg-grad-gold font-semibold text-[#1a1204] glow-gold hover:brightness-105"
+              onClick={() => setCompose({ mode: "new", message: null })}
+            >
+              <Send className="size-4" /> {t("outlook.newMail")}
+            </Button>
+          )}
+        </div>
       </div>
 
-      {!s.ready ? (
+      {view === "calendar" && canCalendar ? (
+        <div className="glass rounded-2xl border p-3">
+          <WeekCalendar technicianId={me.id} technicianName={me.name} planner={can("tickets.plan") || can("tickets.planSelf")} />
+        </div>
+      ) : view === "contacts" ? (
+        <ContactsView canSend={s.canSend && accounts.length > 0} onWrite={(address) => setCompose({ mode: "new", message: null, to: [address] })} />
+      ) : !s.ready ? (
         <EmptyCard icon={ShieldAlert} title={t("outlook.notReady")} text={t("outlook.notReadyText")} />
       ) : !accounts.length && !s.signedIn && !s.canLinkAny ? (
         <EmptyCard
@@ -224,6 +330,8 @@ function OutlookMail() {
           accountId={account.id}
           message={compose?.message ?? null}
           maxBytes={s.maxAttachmentBytes}
+          signature={s.signature ?? ""}
+          initialTo={compose?.to}
         />
       )}
     </div>
@@ -274,7 +382,8 @@ function useFolderActions(accountId: string) {
       onError: fail,
     }),
     moveTo: useMutation({
-      mutationFn: (p: { id: string; destination: string }) => api.post(`${base(accountId)}/folders/${encodeURIComponent(p.id)}/move`, { destination: p.destination }),
+      mutationFn: (p: { id: string; destination: string }) =>
+        api.post(`${base(accountId)}/folders/${encodeURIComponent(p.id)}/move`, { destination: p.destination }),
       onSuccess: () => {
         toast.success(t("outlook.folder.moved"));
         // every level may have changed
@@ -358,13 +467,29 @@ type Layout = {
   dropRoot: (d: Dragged) => void;
 };
 
-function AccountTree({ account, defaultOpen, selected, onSelect }: { account: MailAccount; defaultOpen: boolean; selected: { account: string; folder: string } | null; onSelect: (folder: string) => void }) {
+function AccountTree({
+  account,
+  defaultOpen,
+  selected,
+  onSelect,
+}: {
+  account: MailAccount;
+  defaultOpen: boolean;
+  selected: { account: string; folder: string } | null;
+  onSelect: (folder: string) => void;
+}) {
   const { t } = useTranslation();
   const qc = useQueryClient();
   const confirm = useConfirm();
   const [open, setOpen] = useState(defaultOpen);
   const [editing, setEditing] = useState(false);
-  const folders = useQuery({ queryKey: foldersKey(account.id), queryFn: () => api.get<MailFolder[]>(`${base(account.id)}/folders`), enabled: open, staleTime: 30_000, refetchInterval: REFRESH_MS });
+  const folders = useQuery({
+    queryKey: foldersKey(account.id),
+    queryFn: () => api.get<MailFolder[]>(`${base(account.id)}/folders`),
+    enabled: open,
+    staleTime: 30_000,
+    refetchInterval: REFRESH_MS,
+  });
   const unlink = useMutation({
     mutationFn: () => api.del(`/outlook/accounts/${account.id}`),
     onSuccess: () => {
@@ -381,7 +506,9 @@ function AccountTree({ account, defaultOpen, selected, onSelect }: { account: Ma
   const savePrefs = useMutation({
     mutationFn: (p: FolderPrefs) => api.put<FolderPrefs>(`${base(account.id)}/folder-prefs`, p),
     onMutate: (p) => {
-      qc.setQueryData<OutlookStatus>(statusKey, (s) => (s ? { ...s, accounts: s.accounts.map((a) => (a.id === account.id ? { ...a, folderPrefs: p } : a)) } : s));
+      qc.setQueryData<OutlookStatus>(statusKey, (s) =>
+        s ? { ...s, accounts: s.accounts.map((a) => (a.id === account.id ? { ...a, folderPrefs: p } : a)) } : s,
+      );
     },
     onError: (e) => {
       toast.error(outlookErrorText(t, e));
@@ -393,7 +520,10 @@ function AccountTree({ account, defaultOpen, selected, onSelect }: { account: Ma
     pinned: (id) => prefs.pinned.some((p) => p.id === id),
     hidden: (id) => prefs.hidden.includes(id),
     togglePin: (fo) =>
-      savePrefs.mutate({ ...prefs, pinned: prefs.pinned.some((p) => p.id === fo.id) ? prefs.pinned.filter((p) => p.id !== fo.id) : [...prefs.pinned, { id: fo.id, name: fo.name }] }),
+      savePrefs.mutate({
+        ...prefs,
+        pinned: prefs.pinned.some((p) => p.id === fo.id) ? prefs.pinned.filter((p) => p.id !== fo.id) : [...prefs.pinned, { id: fo.id, name: fo.name }],
+      }),
     toggleHide: (id) => savePrefs.mutate({ ...prefs, hidden: prefs.hidden.includes(id) ? prefs.hidden.filter((x) => x !== id) : [...prefs.hidden, id] }),
     sort: (list) => {
       const order = prefs.order ?? [];
@@ -401,7 +531,10 @@ function AccountTree({ account, defaultOpen, selected, onSelect }: { account: Ma
         const i = order.indexOf(id);
         return i < 0 ? Number.MAX_SAFE_INTEGER : i;
       };
-      return list.map((x, i) => ({ x, i })).sort((a, b) => at(a.x.id) - at(b.x.id) || a.i - b.i).map(({ x }) => x);
+      return list
+        .map((x, i) => ({ x, i }))
+        .sort((a, b) => at(a.x.id) - at(b.x.id) || a.i - b.i)
+        .map(({ x }) => x);
     },
     drop: (d, target, zone, siblings, parentId) => {
       if (d.accountId !== account.id || d.id === target.id) return;
@@ -452,7 +585,10 @@ function AccountTree({ account, defaultOpen, selected, onSelect }: { account: Ma
   return (
     <div className="mb-1">
       <div
-        className={cn("group flex items-center gap-1 rounded-lg px-1 py-1 hover:bg-accent/40", rootOver && "ring-1 ring-[color:var(--gold)] bg-[color:var(--gold)]/10")}
+        className={cn(
+          "group flex items-center gap-1 rounded-lg px-1 py-1 hover:bg-accent/40",
+          rootOver && "ring-1 ring-[color:var(--gold)] bg-[color:var(--gold)]/10",
+        )}
         onDragOver={(e) => {
           if (!dragged || dragged.accountId !== account.id || dragged.parentId === null) return;
           e.preventDefault();
@@ -465,7 +601,12 @@ function AccountTree({ account, defaultOpen, selected, onSelect }: { account: Ma
           if (dragged) layout.dropRoot(dragged);
         }}
       >
-        <button type="button" onClick={() => setOpen((o) => !o)} className="flex min-w-0 flex-1 items-center gap-1.5 text-left text-sm font-semibold" aria-expanded={open}>
+        <button
+          type="button"
+          onClick={() => setOpen((o) => !o)}
+          className="flex min-w-0 flex-1 items-center gap-1.5 text-left text-sm font-semibold"
+          aria-expanded={open}
+        >
           {open ? <ChevronDown className="size-4 shrink-0" /> : <ChevronRight className="size-4 shrink-0" />}
           <span className="min-w-0">
             <span className="block truncate">{account.displayName || account.address}</span>
@@ -474,7 +615,11 @@ function AccountTree({ account, defaultOpen, selected, onSelect }: { account: Ma
         </button>
         <DropdownMenu>
           <DropdownMenuTrigger asChild>
-            <button type="button" className="rounded p-1 text-muted-foreground opacity-0 hover:text-foreground group-hover:opacity-100 data-[state=open]:opacity-100" aria-label={t("outlook.accountMenu")}>
+            <button
+              type="button"
+              className="rounded p-1 text-muted-foreground opacity-0 hover:text-foreground group-hover:opacity-100 data-[state=open]:opacity-100"
+              aria-label={t("outlook.accountMenu")}
+            >
               <MoreHorizontal className="size-4" />
             </button>
           </DropdownMenuTrigger>
@@ -520,11 +665,19 @@ function AccountTree({ account, defaultOpen, selected, onSelect }: { account: Ma
                 const live = root.find((fo) => fo.id === p.id);
                 const active = selected?.account === account.id && selected.folder === p.id;
                 return (
-                  <div key={p.id} className={cn("flex items-center rounded-lg text-sm", active ? "bg-[color:var(--gold)]/10 text-foreground" : "text-muted-foreground hover:bg-accent/40 hover:text-foreground")}>
+                  <div
+                    key={p.id}
+                    className={cn(
+                      "flex items-center rounded-lg text-sm",
+                      active ? "bg-[color:var(--gold)]/10 text-foreground" : "text-muted-foreground hover:bg-accent/40 hover:text-foreground",
+                    )}
+                  >
                     <button type="button" onClick={() => onSelect(p.id)} className="flex min-w-0 flex-1 items-center gap-2 py-1.5 pl-2 pr-2 text-left">
                       <Star className="size-3.5 shrink-0 fill-[color:var(--gold)] text-[color:var(--gold)]" />
                       <span className={cn("truncate", (live?.unread ?? 0) > 0 && "font-semibold text-foreground")}>{live?.name ?? p.name}</span>
-                      {!editing && (live?.unread ?? 0) > 0 && <span className="ml-auto rounded-full bg-grad-gold px-1.5 text-[10px] font-bold text-[#1a1204]">{live!.unread}</span>}
+                      {!editing && (live?.unread ?? 0) > 0 && (
+                        <span className="ml-auto rounded-full bg-grad-gold px-1.5 text-[10px] font-bold text-[#1a1204]">{live!.unread}</span>
+                      )}
                     </button>
                     {editing && (
                       <span className="flex shrink-0 items-center pr-1">
@@ -547,9 +700,20 @@ function AccountTree({ account, defaultOpen, selected, onSelect }: { account: Ma
           {folders.isLoading && <Loader2 className="m-2 size-4 animate-spin text-muted-foreground" />}
           {folders.isError && <p className="px-2 py-1 text-xs text-destructive">{outlookErrorText(t, folders.error)}</p>}
           {shown.map((fo) => (
-            <FolderNode key={fo.id} accountId={account.id} folder={fo} parentId={null} selected={selected} onSelect={onSelect} layout={layout} siblings={shownIds} />
+            <FolderNode
+              key={fo.id}
+              accountId={account.id}
+              folder={fo}
+              parentId={null}
+              selected={selected}
+              onSelect={onSelect}
+              layout={layout}
+              siblings={shownIds}
+            />
           ))}
-          {naming && <FolderNameDialog title={t("outlook.folder.new")} initial="" onSave={(name) => actions.create.mutate({ name })} onClose={() => setNaming(false)} />}
+          {naming && (
+            <FolderNameDialog title={t("outlook.folder.new")} initial="" onSave={(name) => actions.create.mutate({ name })} onClose={() => setNaming(false)} />
+          )}
           {!editing && hiddenCount > 0 && (
             <button type="button" onClick={() => setEditing(true)} className="px-2 py-1 text-[11px] text-muted-foreground hover:text-foreground">
               {t("outlook.layout.hiddenCount", { count: hiddenCount })}
@@ -561,7 +725,19 @@ function AccountTree({ account, defaultOpen, selected, onSelect }: { account: Ma
   );
 }
 
-function IconToggle({ label, onClick, disabled, active, children }: { label: string; onClick: () => void; disabled?: boolean; active?: boolean; children: React.ReactNode }) {
+function IconToggle({
+  label,
+  onClick,
+  disabled,
+  active,
+  children,
+}: {
+  label: string;
+  onClick: () => void;
+  disabled?: boolean;
+  active?: boolean;
+  children: React.ReactNode;
+}) {
   return (
     <button
       type="button"
@@ -602,7 +778,13 @@ function FolderNode({
 }) {
   const { t } = useTranslation();
   const [open, setOpen] = useState(false);
-  const kids = useQuery({ queryKey: foldersKey(accountId, folder.id), queryFn: () => api.get<MailFolder[]>(`${base(accountId)}/folders?parent=${encodeURIComponent(folder.id)}`), enabled: open, staleTime: 30_000, refetchInterval: REFRESH_MS });
+  const kids = useQuery({
+    queryKey: foldersKey(accountId, folder.id),
+    queryFn: () => api.get<MailFolder[]>(`${base(accountId)}/folders?parent=${encodeURIComponent(folder.id)}`),
+    enabled: open,
+    staleTime: 30_000,
+    refetchInterval: REFRESH_MS,
+  });
   const active = selected?.account === accountId && (selected.folder === folder.id || (selected.folder === "inbox" && folder.wellKnown === "inbox"));
   const Icon = (folder.wellKnown && FOLDER_ICON[folder.wellKnown]) || Folder;
   const hidden = layout.hidden(folder.id);
@@ -657,7 +839,9 @@ function FolderNode({
         <button type="button" onClick={() => onSelect(folder.id)} className="flex min-w-0 flex-1 items-center gap-2 py-1.5 pr-2 text-left">
           <Icon className={cn("size-4 shrink-0", active && "text-primary")} />
           <span className={cn("truncate", folder.unread > 0 && "font-semibold text-foreground", hidden && "line-through")}>{folder.name}</span>
-          {!layout.editing && folder.unread > 0 && <span className="ml-auto rounded-full bg-grad-gold px-1.5 text-[10px] font-bold text-[#1a1204]">{folder.unread}</span>}
+          {!layout.editing && folder.unread > 0 && (
+            <span className="ml-auto rounded-full bg-grad-gold px-1.5 text-[10px] font-bold text-[#1a1204]">{folder.unread}</span>
+          )}
         </button>
         {!layout.editing && (
           <DropdownMenu>
@@ -680,7 +864,13 @@ function FolderNode({
                 disabled={!folder.total || actions.empty.isPending}
                 onSelect={async () => {
                   const trash = folder.wellKnown === "deleteditems";
-                  if (await confirm({ title: t(trash ? "outlook.folder.emptyTrashConfirm" : "outlook.folder.emptyConfirm", { name: folder.name, count: folder.total }), destructive: true })) actions.empty.mutate(folder.id);
+                  if (
+                    await confirm({
+                      title: t(trash ? "outlook.folder.emptyTrashConfirm" : "outlook.folder.emptyConfirm", { name: folder.name, count: folder.total }),
+                      destructive: true,
+                    })
+                  )
+                    actions.empty.mutate(folder.id);
                 }}
               >
                 <FolderX className="size-4" /> {t("outlook.folder.empty")}
@@ -710,7 +900,8 @@ function FolderNode({
                   <DropdownMenuItem
                     className="text-destructive focus:text-destructive"
                     onSelect={async () => {
-                      if (await confirm({ title: t("outlook.folder.deleteConfirm", { name: folder.name }), destructive: true })) actions.remove.mutate(folder.id);
+                      if (await confirm({ title: t("outlook.folder.deleteConfirm", { name: folder.name }), destructive: true }))
+                        actions.remove.mutate(folder.id);
                     }}
                   >
                     <Trash2 className="size-4" /> {t("outlook.folder.delete")}
@@ -739,7 +930,11 @@ function FolderNode({
             <IconToggle label={t("outlook.layout.up")} onClick={() => layout.move(siblings, folder.id, -1)} disabled={siblings.indexOf(folder.id) <= 0}>
               <ArrowUp className="size-3.5" />
             </IconToggle>
-            <IconToggle label={t("outlook.layout.down")} onClick={() => layout.move(siblings, folder.id, 1)} disabled={siblings.indexOf(folder.id) === siblings.length - 1}>
+            <IconToggle
+              label={t("outlook.layout.down")}
+              onClick={() => layout.move(siblings, folder.id, 1)}
+              disabled={siblings.indexOf(folder.id) === siblings.length - 1}
+            >
               <ArrowDown className="size-3.5" />
             </IconToggle>
             <IconToggle label={pinned ? t("outlook.layout.unpin") : t("outlook.layout.pin")} onClick={() => layout.togglePin(folder)} active={pinned}>
@@ -755,7 +950,19 @@ function FolderNode({
         (() => {
           const shownKids = layout.sort(kids.data ?? []).filter((k) => layout.editing || !layout.hidden(k.id));
           const ids = shownKids.map((k) => k.id);
-          return shownKids.map((k) => <FolderNode key={k.id} accountId={accountId} folder={k} parentId={folder.id} selected={selected} onSelect={onSelect} layout={layout} siblings={ids} depth={depth + 1} />);
+          return shownKids.map((k) => (
+            <FolderNode
+              key={k.id}
+              accountId={accountId}
+              folder={k}
+              parentId={folder.id}
+              selected={selected}
+              onSelect={onSelect}
+              layout={layout}
+              siblings={ids}
+              depth={depth + 1}
+            />
+          ));
         })()}
     </>
   );
@@ -825,7 +1032,9 @@ function MessageList({
                     </option>
                   ))
                 ) : (
-                  <option value={`${a.id}|inbox`}>{t("outlook.title")} — {a.address}</option>
+                  <option value={`${a.id}|inbox`}>
+                    {t("outlook.title")} — {a.address}
+                  </option>
                 )}
               </optgroup>
             ))}
@@ -879,7 +1088,9 @@ function MessageList({
                 {m.flagged && <Flag className="size-3.5 shrink-0 fill-red-500 text-red-500" />}
                 <span className="shrink-0 text-[11px] text-muted-foreground">{listDate(m.receivedAt)}</span>
               </span>
-              <span className={cn("truncate text-sm", !m.isRead ? "font-medium text-primary" : "text-foreground/80")}>{m.subject || t("outlook.noSubject")}</span>
+              <span className={cn("truncate text-sm", !m.isRead ? "font-medium text-primary" : "text-foreground/80")}>
+                {m.subject || t("outlook.noSubject")}
+              </span>
               <span className="line-clamp-2 text-xs text-muted-foreground">{m.preview}</span>
             </button>
           </li>
@@ -943,7 +1154,12 @@ function MessageView({
   const folders = useQuery({ queryKey: foldersKey(account.id), queryFn: () => api.get<MailFolder[]>(`${base(account.id)}/folders`), staleTime: 30_000 });
   // Facets (priorities, queues, technicians) for the new-ticket form
   // the new-ticket form's lists (queues, priorities…), loaded with the message so the button answers at once
-  const facets = useQuery({ queryKey: ["tickets", "view=mine"], queryFn: () => api.get<TicketList>("/tickets?view=mine"), enabled: canTicket, staleTime: 60_000 });
+  const facets = useQuery({
+    queryKey: ["tickets", "view=mine"],
+    queryFn: () => api.get<TicketList>("/tickets?view=mine"),
+    enabled: canTicket,
+    staleTime: 60_000,
+  });
   useEffect(() => {
     if (newTicket && facets.isError) {
       toast.error(t("outlook.ticketFormError"));
@@ -998,7 +1214,13 @@ function MessageView({
 
   const prefill = useMutation({
     mutationFn: () =>
-      api.get<{ subject: string; from: { name: string | null; address: string } | null; receivedAt: string; text: string; contact: { contactId: string; companyId: number; contactName: string; companyName: string } | null }>(`${path}/text`),
+      api.get<{
+        subject: string;
+        from: { name: string | null; address: string } | null;
+        receivedAt: string;
+        text: string;
+        contact: { contactId: string; companyId: number; contactName: string; companyName: string } | null;
+      }>(`${path}/text`),
     onSuccess: (x) =>
       setNewTicket({
         companyId: x.contact?.companyId ?? null,
@@ -1084,8 +1306,15 @@ function MessageView({
             <Button type="button" size="sm" variant="outline" className="h-8 gap-1.5 text-xs" onClick={() => setToTicket(true)}>
               <Ticket className="size-3.5" /> {t("outlook.toTicket")}
             </Button>
-            <Button type="button" size="sm" className="h-8 gap-1.5 bg-grad-gold text-xs font-semibold text-[#1a1204] hover:brightness-105" onClick={() => prefill.mutate()} disabled={prefill.isPending || (Boolean(newTicket) && !facets.data)}>
-              {prefill.isPending || (newTicket && !facets.data) ? <Loader2 className="size-3.5 animate-spin" /> : <TicketPlus className="size-3.5" />} {t("outlook.newTicket")}
+            <Button
+              type="button"
+              size="sm"
+              className="h-8 gap-1.5 bg-grad-gold text-xs font-semibold text-[#1a1204] hover:brightness-105"
+              onClick={() => prefill.mutate()}
+              disabled={prefill.isPending || (Boolean(newTicket) && !facets.data)}
+            >
+              {prefill.isPending || (newTicket && !facets.data) ? <Loader2 className="size-3.5 animate-spin" /> : <TicketPlus className="size-3.5" />}{" "}
+              {t("outlook.newTicket")}
             </Button>
           </span>
         )}
@@ -1124,7 +1353,13 @@ function MessageView({
       </div>
 
       {/* Untrusted HTML: sandboxed frame (no scripts, no access to the portal), links open in a new tab */}
-      <iframe title={m.subject || "email"} sandbox="allow-popups allow-popups-to-escape-sandbox" srcDoc={srcDoc} className="min-h-0 w-full flex-1 bg-white" referrerPolicy="no-referrer" />
+      <iframe
+        title={m.subject || "email"}
+        sandbox="allow-popups allow-popups-to-escape-sandbox"
+        srcDoc={srcDoc}
+        className="min-h-0 w-full flex-1 bg-white"
+        referrerPolicy="no-referrer"
+      />
 
       <AddToTicketDialog open={toTicket} onOpenChange={setToTicket} accountId={account.id} message={m} />
       {newTicket && facets.data && (

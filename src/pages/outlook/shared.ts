@@ -11,6 +11,8 @@ export type OutlookStatus = {
   canLinkAny: boolean;
   canSend: boolean;
   maxAttachmentBytes: number;
+  /** The technician's signature (sanitized HTML; "" = none) */
+  signature: string;
 };
 export type MailAddress = { name: string | null; address: string };
 export type MailFolder = { id: string; name: string; unread: number; total: number; childCount: number; wellKnown: string | null };

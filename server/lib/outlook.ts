@@ -58,8 +58,7 @@ type GMsg = {
   parentFolderId?: string;
 };
 
-const addr = (a?: GAddr): MailAddress | null =>
-  a?.emailAddress?.address ? { name: a.emailAddress.name || null, address: a.emailAddress.address } : null;
+const addr = (a?: GAddr): MailAddress | null => (a?.emailAddress?.address ? { name: a.emailAddress.name || null, address: a.emailAddress.address } : null);
 const addrs = (l?: GAddr[]) => (l ?? []).map(addr).filter((x): x is MailAddress => Boolean(x));
 const recipients = (l: string[]) => l.map((address) => ({ emailAddress: { address } }));
 const enc = encodeURIComponent;
@@ -142,7 +141,12 @@ export async function listMessages(
   if (opts.cursor) {
     // Only a page of this same mailbox, as returned by Graph
     const resolved = (p: string) => new URL(GRAPH_BASE + p).pathname.toLowerCase();
-    if (!opts.cursor.toLowerCase().startsWith(own.toLowerCase()) || opts.cursor.includes("..") || /[\x00-\x20\x7f]/.test(opts.cursor) || !resolved(opts.cursor).startsWith(resolved(own))) {
+    if (
+      !opts.cursor.toLowerCase().startsWith(own.toLowerCase()) ||
+      opts.cursor.includes("..") ||
+      /[\x00-\x20\x7f]/.test(opts.cursor) ||
+      !resolved(opts.cursor).startsWith(resolved(own))
+    ) {
       throw new O365Error("not_found");
     }
     path = opts.cursor;
@@ -170,9 +174,10 @@ export async function getMessage(mailbox: string, id: string): Promise<MailMessa
     ['outlook.body-content-type="html"'],
   );
   type A = { "@odata.type"?: string; id: string; name?: string; contentType?: string; size?: number; isInline?: boolean; contentId?: string };
-  const list = m.hasAttachments || /cid:/i.test(m.body?.content ?? "")
-    ? ((await graph<{ value: A[] }>("GET", `${base}/attachments?$select=id,name,contentType,size,isInline`)).value ?? [])
-    : [];
+  const list =
+    m.hasAttachments || /cid:/i.test(m.body?.content ?? "")
+      ? ((await graph<{ value: A[] }>("GET", `${base}/attachments?$select=id,name,contentType,size,isInline`)).value ?? [])
+      : [];
   let html = m.body?.contentType === "text" ? textToHtml(m.body?.content ?? "") : (m.body?.content ?? "");
   // cid: images → data: URLs (the reading pane is a sandboxed frame without cookies)
   let budget = MAX_INLINE_TOTAL;
@@ -195,19 +200,21 @@ export async function getMessage(mailbox: string, id: string): Promise<MailMessa
     // Inline images are shown in the body; the rest are listed as files
     attachments: list
       .filter((a) => !(a.isInline && (a.contentType ?? "").startsWith("image/")))
-      .map((a) => ({ id: a.id, name: a.name || "attachment", contentType: a.contentType || "application/octet-stream", size: a.size ?? 0, isInline: Boolean(a.isInline) })),
+      .map((a) => ({
+        id: a.id,
+        name: a.name || "attachment",
+        contentType: a.contentType || "application/octet-stream",
+        size: a.size ?? 0,
+        isInline: Boolean(a.isInline),
+      })),
   };
 }
 
 /** Plain-text version of a message, for a ticket note. */
 export async function messageText(mailbox: string, id: string): Promise<MailMessage & { text: string }> {
-  const m = await graph<GMsg>(
-    "GET",
-    `${user(mailbox)}/messages/${enc(id)}?$select=${LIST_FIELDS},toRecipients,ccRecipients,body`,
-    undefined,
-    undefined,
-    ['outlook.body-content-type="text"'],
-  );
+  const m = await graph<GMsg>("GET", `${user(mailbox)}/messages/${enc(id)}?$select=${LIST_FIELDS},toRecipients,ccRecipients,body`, undefined, undefined, [
+    'outlook.body-content-type="text"',
+  ]);
   return {
     ...listItem(m),
     to: addrs(m.toRecipients),
@@ -217,7 +224,10 @@ export async function messageText(mailbox: string, id: string): Promise<MailMess
     html: "",
     attachments: [],
     folderId: "",
-    text: (m.body?.content ?? "").replace(/\r\n/g, "\n").replace(/\n{3,}/g, "\n\n").trim(),
+    text: (m.body?.content ?? "")
+      .replace(/\r\n/g, "\n")
+      .replace(/\n{3,}/g, "\n\n")
+      .trim(),
   };
 }
 
@@ -258,7 +268,9 @@ export async function markFolderRead(mailbox: string, folderId: string, max = 20
  */
 export async function emptyFolder(mailbox: string, folderId: string, max = 5000): Promise<number> {
   const root = user(mailbox);
-  const trash = await graph<{ id: string }>("GET", `${root}/mailFolders/deleteditems?$select=id`).then((f) => f.id).catch(() => null);
+  const trash = await graph<{ id: string }>("GET", `${root}/mailFolders/deleteditems?$select=id`)
+    .then((f) => f.id)
+    .catch(() => null);
   const inTrash = folderId.toLowerCase() === "deleteditems" || folderId === trash;
   let done = 0;
   while (done < max) {
@@ -267,11 +279,19 @@ export async function emptyFolder(mailbox: string, folderId: string, max = 5000)
     if (!ids.length) break;
     let ok = 0;
     for (let i = 0; i < ids.length; i += 20) {
-      const requests = ids.slice(i, i + 20).map((id, n) =>
-        inTrash
-          ? { id: String(n + 1), method: "DELETE", url: `/${root}/messages/${enc(id)}` }
-          : { id: String(n + 1), method: "POST", url: `/${root}/messages/${enc(id)}/move`, headers: { "Content-Type": "application/json" }, body: { destinationId: "deleteditems" } },
-      );
+      const requests = ids
+        .slice(i, i + 20)
+        .map((id, n) =>
+          inTrash
+            ? { id: String(n + 1), method: "DELETE", url: `/${root}/messages/${enc(id)}` }
+            : {
+                id: String(n + 1),
+                method: "POST",
+                url: `/${root}/messages/${enc(id)}/move`,
+                headers: { "Content-Type": "application/json" },
+                body: { destinationId: "deleteditems" },
+              },
+        );
       const r = await graph<{ responses?: { status: number }[] }>("POST", "$batch", { requests });
       ok += (r.responses ?? []).filter((x) => x.status >= 200 && x.status < 300).length;
     }
@@ -294,7 +314,11 @@ export async function renameFolder(mailbox: string, id: string, name: string): P
 /** Outlook's own folders (ids), which cannot be deleted nor moved. */
 async function ownFolderIds(mailbox: string): Promise<(string | null)[]> {
   return Promise.all(
-    [...WELL_KNOWN, "outbox"].map((w) => graph<{ id: string }>("GET", `${user(mailbox)}/mailFolders/${w}?$select=id`).then((f) => f.id).catch(() => null)),
+    [...WELL_KNOWN, "outbox"].map((w) =>
+      graph<{ id: string }>("GET", `${user(mailbox)}/mailFolders/${w}?$select=id`)
+        .then((f) => f.id)
+        .catch(() => null),
+    ),
   );
 }
 const isOwnFolder = (own: (string | null)[], id: string) => own.includes(id) || ([...WELL_KNOWN, "outbox"] as string[]).includes(id.toLowerCase());
@@ -303,7 +327,9 @@ const isOwnFolder = (own: (string | null)[], id: string) => own.includes(id) || 
 export async function moveFolder(mailbox: string, id: string, destination: string | "root"): Promise<string> {
   if (destination === id) throw new O365Error("forbidden", "same_folder");
   if (isOwnFolder(await ownFolderIds(mailbox), id)) throw new O365Error("forbidden", "protected_folder");
-  const r = await graph<{ id: string }>("POST", `${user(mailbox)}/mailFolders/${enc(id)}/move`, { destinationId: destination === "root" ? "msgfolderroot" : destination });
+  const r = await graph<{ id: string }>("POST", `${user(mailbox)}/mailFolders/${enc(id)}/move`, {
+    destinationId: destination === "root" ? "msgfolderroot" : destination,
+  });
   return r.id;
 }
 
@@ -343,17 +369,29 @@ const fileAttachment = (a: OutgoingAttachment) => ({
   contentBytes: a.data,
 });
 
-export type Outgoing = { to: string[]; cc: string[]; bcc: string[]; subject: string; text: string; attachments: OutgoingAttachment[] };
+export type Outgoing = {
+  to: string[];
+  cc: string[];
+  bcc: string[];
+  subject: string;
+  /** Sanitized HTML (our text, signature included) */
+  html: string;
+  attachments: OutgoingAttachment[];
+  importance: "low" | "normal" | "high";
+  readReceipt: boolean;
+};
 
 /** New message, saved in Sent Items. */
 export async function sendMail(mailbox: string, m: Outgoing): Promise<void> {
   await graph("POST", `${user(mailbox)}/sendMail`, {
     message: {
       subject: m.subject,
-      body: { contentType: "HTML", content: textToHtml(m.text) },
+      body: { contentType: "HTML", content: wrap(m.html) },
       toRecipients: recipients(m.to),
       ccRecipients: recipients(m.cc),
       bccRecipients: recipients(m.bcc),
+      importance: m.importance,
+      isReadReceiptRequested: m.readReceipt,
       attachments: m.attachments.map(fileAttachment),
     },
     saveToSentItems: true,
@@ -361,31 +399,28 @@ export async function sendMail(mailbox: string, m: Outgoing): Promise<void> {
 }
 
 /**
- * Reply / reply all / forward: Outlook builds the draft (quoted original,
- * subject, recipients), we add our text, extra recipients and files, then send.
+ * Reply / reply all / forward: Outlook builds the draft (quoted original and,
+ * for a forward, its files); we put our text above the quote, set the
+ * recipients, subject and options chosen in the window, add files, then send.
  */
-export async function respond(
-  mailbox: string,
-  id: string,
-  mode: "reply" | "replyAll" | "forward",
-  m: Pick<Outgoing, "text" | "to" | "cc" | "attachments">,
-): Promise<void> {
+export async function respond(mailbox: string, id: string, mode: "reply" | "replyAll" | "forward", m: Outgoing): Promise<void> {
   const action = mode === "reply" ? "createReply" : mode === "replyAll" ? "createReplyAll" : "createForward";
-  const draft = await graph<{ id: string; toRecipients?: GAddr[]; ccRecipients?: GAddr[] }>(
+  const draft = await graph<{ id: string; subject?: string; body?: { contentType?: string; content?: string } }>(
     "POST",
     `${user(mailbox)}/messages/${enc(id)}/${action}`,
-    { comment: textToHtml(m.text) },
+    {},
   );
   const draftPath = `${user(mailbox)}/messages/${enc(draft.id)}`;
   try {
-    const to = mode === "forward" ? m.to : [];
-    if (to.length || m.cc.length) {
-      const keep = (l: GAddr[] | undefined) => addrs(l).map((x) => x.address);
-      await graph("PATCH", draftPath, {
-        ...(to.length ? { toRecipients: recipients([...new Set([...keep(draft.toRecipients), ...to])]) } : {}),
-        ...(m.cc.length ? { ccRecipients: recipients([...new Set([...keep(draft.ccRecipients), ...m.cc])]) } : {}),
-      });
-    }
+    await graph("PATCH", draftPath, {
+      toRecipients: recipients(m.to),
+      ccRecipients: recipients(m.cc),
+      bccRecipients: recipients(m.bcc),
+      ...(m.subject.trim() ? { subject: m.subject } : {}),
+      importance: m.importance,
+      isReadReceiptRequested: m.readReceipt,
+      body: { contentType: "HTML", content: abovequote(wrap(m.html), draft.body) },
+    });
     for (const a of m.attachments) await graph("POST", `${draftPath}/attachments`, fileAttachment(a));
     await graph("POST", `${draftPath}/send`);
   } catch (e) {
@@ -393,6 +428,20 @@ export async function respond(
     await graph("DELETE", draftPath).catch(() => undefined);
     throw e;
   }
+}
+
+/** Our part in the default Outlook font. */
+const wrap = (html: string) => `<div style="font-family:Calibri,Arial,sans-serif;font-size:11pt">${html}</div>`;
+
+/** Our part placed above the quoted original in the draft Outlook made. */
+function abovequote(ours: string, body?: { contentType?: string; content?: string }): string {
+  const quoted = body?.content ?? "";
+  if (!quoted) return ours;
+  const html = body?.contentType?.toLowerCase() === "text" ? `<pre>${esc(quoted)}</pre>` : quoted;
+  const at = html.search(/<body[^>]*>/i);
+  if (at < 0) return `${ours}<br>${html}`;
+  const close = html.indexOf(">", at) + 1;
+  return `${html.slice(0, close)}${ours}<br>${html.slice(close)}`;
 }
 
 const esc = (s: string) => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
