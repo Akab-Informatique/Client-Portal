@@ -326,6 +326,7 @@ export const SYSTEM_ROLES: Array<{
       "dashboard.view",
       "tickets.view",
       "tickets.edit",
+      "tickets.planSelf",
       "sms.view",
       "outlook.view",
       "outlook.send",

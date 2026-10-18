@@ -1364,9 +1364,9 @@ describe("tickets: client and contact", () => {
     const today = new Intl.DateTimeFormat("en-CA", { timeZone: "America/Toronto" }).format(new Date());
     const plus = (days: number) => new Date(new Date(`${today}T12:00:00Z`).getTime() + days * 86_400_000).toISOString().slice(0, 10);
 
-    // only planners give priorities; a technician only sees their own
-    expect((await tech.post("/api/planning/pins", { ticketId: a.id, technicianId: techRow.id })).status).toBe(403);
+    // only planners give priorities to others; a technician only sees their own
     const [adminRow] = await db().select().from(schema.users).where(eq(schema.users.email, "admin@akab.local"));
+    expect((await tech.post("/api/planning/pins", { ticketId: a.id, technicianId: adminRow.id })).status).toBe(403);
     expect((await tech.get(`/api/planning/pins?technicianId=${adminRow.id}`)).status).toBe(403);
 
     expect((await admin.post("/api/planning/pins", { ticketId: a.id, technicianId: techRow.id, horizon: "day", note: "Rappeler le client avant midi" })).status).toBe(201);
@@ -1393,7 +1393,8 @@ describe("tickets: client and contact", () => {
     // calendar: reserving time for a ticket makes it a priority of that week
     const start = new Date(`${plus(1)}T13:00:00Z`);
     const block = (body: object) => admin.post("/api/planning/calendar", { technicianId: techRow.id, startsAt: start.toISOString(), endsAt: new Date(start.getTime() + 2 * 3_600_000).toISOString(), ...body });
-    expect((await tech.post("/api/planning/calendar", { technicianId: techRow.id, ticketId: c.id, startsAt: start.toISOString(), endsAt: start.toISOString() })).status).toBe(403);
+    // a technician reserves time for themselves only
+    expect((await tech.post("/api/planning/calendar", { technicianId: adminRow.id, ticketId: c.id, startsAt: start.toISOString(), endsAt: new Date(start.getTime() + 3_600_000).toISOString() })).status).toBe(403);
     expect((await admin.post("/api/planning/calendar", { technicianId: techRow.id, ticketId: c.id, startsAt: start.toISOString(), endsAt: start.toISOString() })).json.error).toBe("invalid_time");
     const r = await block({ ticketId: c.id, note: "Sur place" });
     expect(r.status).toBe(201);
@@ -1416,12 +1417,14 @@ describe("tickets: client and contact", () => {
     const tk = items[8];
     const soon = (min: number) => new Date(Date.now() + min * 60_000).toISOString();
 
-    // admins plan their own time by default; a technician only once allowed
+    // admins and technicians plan their own time by default (a technician: only their own)
     expect((await admin.post("/api/planning/pins", { ticketId: tk.id, technicianId: adminRow.id, horizon: "day" })).status).toBe(201);
-    expect((await tech.post("/api/planning/pins", { ticketId: tk.id, technicianId: techRow.id, horizon: "day" })).status).toBe(403);
+    await admin.put(`/api/admin/users/${techRow.id}/permissions`, { overrides: [{ key: "tickets.planSelf", effect: "deny" }] });
+    expect((await tech.post("/api/planning/pins", { ticketId: tk.id, technicianId: techRow.id, horizon: "day" })).status).toBe(403); // when an admin takes the right away
     // everyone's calendar can be looked at; in full only one's own (or as a planner)
     const team = (await tech.get("/api/planning/technicians")).json;
-    expect(team).toEqual(expect.arrayContaining([{ id: techRow.id, name: "Alex Tremblay", full: true }, { id: adminRow.id, name: "Administrateur AKAB", full: false }]));
+    expect(team).toEqual(expect.arrayContaining([expect.objectContaining({ id: techRow.id, name: "Alex Tremblay", full: true, admin: false }), expect.objectContaining({ id: adminRow.id, name: "Administrateur AKAB", full: false, admin: true })]));
+    expect(new Set(team.map((p: any) => p.slot)).size).toBe(team.length); // a color each
     expect((await admin.get("/api/planning/technicians")).json.every((p: any) => p.full)).toBe(true);
     // a colleague's calendar: only when they are busy
     const at = soon(24 * 60);
@@ -1433,6 +1436,17 @@ describe("tickets: client and contact", () => {
     expect(JSON.stringify(seen)).not.toContain("Confidentiel");
     const asPlanner = (await admin.get(`/api/planning/calendar?technicianId=${adminRow.id}&${range}`)).json.find((b: any) => b.id === theirs.json.id);
     expect(asPlanner).toMatchObject({ note: "Confidentiel", ticketId: tk.id });
+    // the team calendar: an admin's time is busy for a technician, in full for an admin
+    const teamTech = (await tech.get(`/api/planning/calendar/team?${range}`)).json.find((b: any) => b.id === theirs.json.id);
+    expect(teamTech).toMatchObject({ busy: true, title: "", technicianId: adminRow.id });
+    const teamAdmin = (await admin.get(`/api/planning/calendar/team?${range}`)).json.find((b: any) => b.id === theirs.json.id);
+    expect(teamAdmin).toMatchObject({ note: "Confidentiel", ticketId: tk.id });
+    // an appointment can leave the ticket out of the priorities
+    const other = items[3];
+    const noPin = await admin.post("/api/planning/calendar", { technicianId: adminRow.id, kind: "work", ticketId: other.id, priority: "none", startsAt: at, endsAt: new Date(new Date(at).getTime() + 1_800_000).toISOString() });
+    expect(noPin.status).toBe(201);
+    expect((await admin.get(`/api/planning/pins/ticket/${other.id}`)).json).toEqual([]);
+    await admin.del(`/api/planning/calendar/${noPin.json.id}`);
     // their priorities stay for planners
     expect((await tech.get(`/api/planning/pins?technicianId=${adminRow.id}`)).status).toBe(403);
     await admin.del(`/api/planning/calendar/${theirs.json.id}`);

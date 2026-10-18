@@ -3,7 +3,8 @@ import { HTTPException } from "hono/http-exception";
 import { and, asc, eq, gt, gte, lt, lte, max, sql } from "drizzle-orm";
 import { z } from "zod";
 import { db, schema } from "../db/index.ts";
-import { auth, requirePermission, requireStaff, type AppEnv, type AuthContext } from "../lib/auth.ts";
+import { auth, requirePermission, requireStaff, type AppEnv, type AuthContext, permissionsOf } from "../lib/auth.ts";
+import { isAdmin } from "../../shared/permissions.ts";
 import { audit } from "../lib/audit.ts";
 import { notify } from "../lib/notify.ts";
 import { body, zUuid } from "../lib/validate.ts";
@@ -57,14 +58,55 @@ function warningOf(e: unknown, prefix: string): string {
   return `${prefix}_${code}`;
 }
 
+/** The team for the calendar, with who counts as an admin (their time is private to technicians). */
+async function team() {
+  const rows = await db()
+    .select()
+    .from(schema.users)
+    .where(and(eq(schema.users.kind, "staff"), eq(schema.users.active, true)))
+    .orderBy(asc(schema.users.createdAt));
+  const out: { id: string; name: string; admin: boolean; slot: number }[] = [];
+  for (const [i, u] of rows.entries()) {
+    const perms = await permissionsOf(u);
+    // a color per person that does not change when someone joins (account order)
+    out.push({ id: u.id, name: u.name, admin: isAdmin(perms) || perms.includes("tickets.plan"), slot: i % 8 });
+  }
+  return out;
+}
+/** Seeing someone's calendar in full: oneself, a planner, or a technician looking at a technician (not an admin). */
+const seesFull = (a: AuthContext, target: { id: string; admin: boolean }) => target.id === a.user.id || canPlan(a) || !target.admin;
+
 /**
- * Whose calendar to show: anyone's. In full for oneself and for planners;
- * a technician looking at a colleague's sees only when they are busy.
+ * Whose calendar to show: anyone's. In full for oneself, for planners, and
+ * between technicians; a technician sees an admin's time only as busy.
  */
-function whoseCalendar(c: Context<AppEnv>, a: AuthContext): { techId: string; full: boolean } {
+async function whoseCalendar(c: Context<AppEnv>, a: AuthContext): Promise<{ techId: string; full: boolean }> {
   const asked = c.req.query("technicianId");
   if (!asked || asked === a.user.id) return { techId: a.user.id, full: true };
-  return { techId: zUuid.parse(asked), full: canPlan(a) };
+  const techId = zUuid.parse(asked);
+  if (canPlan(a)) return { techId, full: true };
+  const target = (await team()).find((p) => p.id === techId);
+  return { techId, full: target ? seesFull(a, target) : false };
+}
+
+/** Someone's block as a viewer may see it: in full, or only that they are busy. */
+function asSeen(b: typeof schema.calendarBlocks.$inferSelect, full: boolean) {
+  if (full) return b;
+  return {
+    id: b.id,
+    technicianId: b.technicianId,
+    kind: "slot",
+    ticketId: null,
+    ticketNumber: null,
+    title: "",
+    note: "",
+    companyName: null,
+    reminderMinutes: 0,
+    autotaskServiceCallId: null,
+    startsAt: b.startsAt,
+    endsAt: b.endsAt,
+    busy: true,
+  };
 }
 
 /** Whose pins / calendar: me by default; someone else needs tickets.plan. */
@@ -147,13 +189,8 @@ export const planningRoutes = new Hono<AppEnv>()
    */
   .get("/technicians", async (c) => {
     const a = auth(c);
-    const plan = canPlan(a);
-    const rows = await db()
-      .select({ id: schema.users.id, name: schema.users.name })
-      .from(schema.users)
-      .where(and(eq(schema.users.kind, "staff"), eq(schema.users.active, true)))
-      .orderBy(asc(schema.users.name));
-    return c.json(rows.map((u) => ({ ...u, full: plan || u.id === a.user.id })));
+    const people = (await team()).sort((x, y) => x.name.localeCompare(y.name));
+    return c.json(people.map((p) => ({ id: p.id, name: p.name, admin: p.admin, slot: p.slot, full: seesFull(a, p) })));
   })
 
   // ── Pins ──
@@ -319,7 +356,7 @@ export const planningRoutes = new Hono<AppEnv>()
   /** A technician's reserved time between two dates. */
   .get("/calendar", async (c) => {
     const a = auth(c);
-    const { techId, full } = whoseCalendar(c, a);
+    const { techId, full } = await whoseCalendar(c, a);
     const from = new Date(zIso.parse(c.req.query("from")));
     const to = new Date(zIso.parse(c.req.query("to")));
     if (!(to > from) || to.getTime() - from.getTime() > 62 * 86_400_000) throw new HTTPException(400, { message: "Validation failed" });
@@ -328,31 +365,29 @@ export const planningRoutes = new Hono<AppEnv>()
       .from(schema.calendarBlocks)
       .where(and(eq(schema.calendarBlocks.technicianId, techId), lt(schema.calendarBlocks.startsAt, to), gt(schema.calendarBlocks.endsAt, from)))
       .orderBy(asc(schema.calendarBlocks.startsAt));
-    if (full) return c.json(rows);
-    // a colleague's: only when they are busy (no ticket, client, note)
-    return c.json(
-      rows.map((b) => ({
-        id: b.id,
-        technicianId: b.technicianId,
-        kind: "slot",
-        ticketId: null,
-        ticketNumber: null,
-        title: "",
-        note: "",
-        companyName: null,
-        reminderMinutes: 0,
-        autotaskServiceCallId: null,
-        startsAt: b.startsAt,
-        endsAt: b.endsAt,
-        busy: true,
-      })),
-    );
+    return c.json(rows.map((b) => asSeen(b, full)));
+  })
+
+  /** Everyone's reserved time for a week (the team calendar), each as this viewer may see it. */
+  .get("/calendar/team", async (c) => {
+    const a = auth(c);
+    const from = new Date(zIso.parse(c.req.query("from")));
+    const to = new Date(zIso.parse(c.req.query("to")));
+    if (!(to > from) || to.getTime() - from.getTime() > 62 * 86_400_000) throw new HTTPException(400, { message: "Validation failed" });
+    const people = await team();
+    const rows = await db()
+      .select()
+      .from(schema.calendarBlocks)
+      .where(and(lt(schema.calendarBlocks.startsAt, to), gt(schema.calendarBlocks.endsAt, from)))
+      .orderBy(asc(schema.calendarBlocks.startsAt));
+    const byId = new Map(people.map((p) => [p.id, p]));
+    return c.json(rows.filter((b) => byId.has(b.technicianId)).map((b) => asSeen(b, seesFull(a, byId.get(b.technicianId)!))));
   })
 
   /** The technician's absences (from the weekly meeting calendar), read only. */
   .get("/absences", async (c) => {
     const a = auth(c);
-    const { techId, full } = whoseCalendar(c, a);
+    const { techId, full } = await whoseCalendar(c, a);
     const from = new Date(zIso.parse(c.req.query("from")));
     const to = new Date(zIso.parse(c.req.query("to")));
     if (!(to > from) || to.getTime() - from.getTime() > 62 * 86_400_000) throw new HTTPException(400, { message: "Validation failed" });
@@ -368,7 +403,7 @@ export const planningRoutes = new Hono<AppEnv>()
    */
   .get("/calendar/outlook", async (c) => {
     const a = auth(c);
-    const { techId, full } = whoseCalendar(c, a);
+    const { techId, full } = await whoseCalendar(c, a);
     const from = new Date(zIso.parse(c.req.query("from")));
     const to = new Date(zIso.parse(c.req.query("to")));
     if (!(to > from) || to.getTime() - from.getTime() > 62 * 86_400_000) throw new HTTPException(400, { message: "Validation failed" });
@@ -418,6 +453,8 @@ export const planningRoutes = new Hono<AppEnv>()
         reminderMinutes: z.number().int().min(0).max(1440).default(15),
         startsAt: zIso,
         endsAt: zIso,
+        /** The ticket becomes a priority of that day or week (the week by default), or not */
+        priority: z.enum(["day", "week", "none"]).default("week"),
       }),
     );
     mustEdit(a, p.technicianId);
@@ -431,10 +468,11 @@ export const planningRoutes = new Hono<AppEnv>()
     let companyName: string | null = null;
     const ticketId = p.kind === "slot" ? null : p.ticketId;
     if (ticketId) {
-      const pinned = await pin(a, { ticketId, technicianId: tech.id, forDate: dayOf(startsAt) });
-      number = pinned.ticketNumber;
-      title ||= pinned.ticketTitle;
-      companyName = (await ticketInfo(ticketId)).company.name;
+      const info = await ticketInfo(ticketId);
+      if (p.priority !== "none") await pin(a, { ticketId, technicianId: tech.id, forDate: dayOf(startsAt), ...(p.priority === "day" ? { horizon: "day" as const } : {}) });
+      number = info.number;
+      title ||= info.title;
+      companyName = info.company.name;
     }
     if (!title) throw new HTTPException(400, { message: "Validation failed" });
     const warnings: string[] = [];

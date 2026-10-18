@@ -143,7 +143,10 @@ export function usePriorities(technicianId: string, date = ymd(new Date())) {
   });
 }
 
-type TeamMember = Person & { full?: boolean };
+type TeamMember = Person & { full?: boolean; admin?: boolean; slot?: number };
+/** One color per person, in a fixed order (it follows the person, not their rank). */
+const PERSON_COLORS = ["#3987e5", "#d95926", "#199e70", "#c98500", "#d55181", "#008300", "#9085e9", "#e66767"];
+const colorOf = (p?: { slot?: number }) => PERSON_COLORS[(p?.slot ?? 0) % PERSON_COLORS.length];
 /** How a ticket opens from the planning (the big view closes first). */
 const OpenTicketCtx = createContext<((id: number) => void) | null>(null);
 
@@ -214,12 +217,29 @@ export function AgendaCard({ filterTech }: { filterTech?: string | null }) {
     setDay(ymd(d));
     if (monthView && d.getMonth() !== month.getMonth()) setMonth(new Date(d.getFullYear(), d.getMonth(), 1));
   };
+  // an appointment for this day: planners for anyone, a technician for themselves
+  const canAdd = planner || (mine && can("tickets.planSelf"));
+  const [adding, setAdding] = useState<Date | null>(null);
+  const shiftWeek = (n: number) => setDay(ymd(addDays(dayDate, n * 7)));
   return (
     <>
       <div className="glass flex min-w-0 flex-col gap-2 rounded-2xl border border-[color:var(--gold)]/35 p-2.5 shadow-[0_0_30px_-16px_rgba(255,206,26,0.5)]">
         <div className="flex flex-wrap items-center gap-2 px-1">
           <CalendarRange className="size-4 shrink-0 text-primary" />
           <span className="text-sm font-semibold">{monthView ? month.toLocaleDateString(loc, { month: "long", year: "numeric" }) : mine ? t("planning.myWeek") : t("planning.weekOfName", { name: who.name.split(" ")[0] })}</span>
+          {!monthView && (
+            <span className="flex items-center">
+              <Button type="button" variant="ghost" size="icon" className="size-6" onClick={() => shiftWeek(-1)} aria-label={t("planning.prevWeek")}>
+                <ChevronLeft className="size-3.5" />
+              </Button>
+              <button type="button" className="rounded px-1 text-[11px] text-muted-foreground hover:text-foreground" onClick={() => setDay(today)} title={t("planning.backToToday")}>
+                {week.toLocaleDateString(loc, { day: "numeric", month: "short" })}
+              </button>
+              <Button type="button" variant="ghost" size="icon" className="size-6" onClick={() => shiftWeek(1)} aria-label={t("planning.nextWeek")}>
+                <ChevronRight className="size-3.5" />
+              </Button>
+            </span>
+          )}
           {monthView && (
             <span className="flex items-center">
               <Button type="button" variant="ghost" size="icon" className="size-6" onClick={() => setMonth((m) => new Date(m.getFullYear(), m.getMonth() - 1, 1))} aria-label={t("planning.prevMonth")}>
@@ -311,11 +331,32 @@ export function AgendaCard({ filterTech }: { filterTech?: string | null }) {
                   type="button"
                   onClick={() => pick(d)}
                   className={cn(
-                    "flex flex-col items-center gap-0.5 rounded-xl border py-1.5 transition hover:border-[color:var(--gold)]/50",
+                    "group/day relative flex flex-col items-center gap-0.5 rounded-xl border py-1.5 transition hover:border-[color:var(--gold)]/50",
                     chosen ? "border-[color:var(--gold)]/70 bg-[color:var(--gold)]/12" : "bg-background/40",
                   )}
                   aria-pressed={chosen}
                 >
+                  {canAdd && (
+                    <span
+                      role="button"
+                      tabIndex={0}
+                      aria-label={t("planning.addOn", { date: d.toLocaleDateString(loc, { weekday: "long", day: "numeric" }) })}
+                      title={t("planning.addAppointment")}
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        setAdding(new Date(`${ymd(d)}T09:00:00`));
+                      }}
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter") {
+                          e.stopPropagation();
+                          setAdding(new Date(`${ymd(d)}T09:00:00`));
+                        }
+                      }}
+                      className="absolute right-0.5 top-0.5 flex size-4 items-center justify-center rounded-full text-muted-foreground opacity-50 transition hover:bg-[color:var(--gold)]/20 hover:text-primary group-hover/day:opacity-100"
+                    >
+                      <Plus className="size-3" />
+                    </span>
+                  )}
                   <span className={cn("text-[10px] font-medium uppercase", isToday ? "text-primary" : "text-muted-foreground")}>{d.toLocaleDateString(loc, { weekday: "short" }).replace(".", "")}</span>
                   <span className={cn("font-mono text-lg font-semibold leading-none", isToday && "text-primary")}>{d.getDate()}</span>
                   <span className={cn("text-[10px] leading-none", n ? "text-foreground" : "text-muted-foreground/50")}>{n ? t("planning.items", { count: n }) : "—"}</span>
@@ -352,7 +393,8 @@ export function AgendaCard({ filterTech }: { filterTech?: string | null }) {
           )}
         </div>
       </div>
-      {open && <PlanningDialog initialTechId={techId} onClose={() => setOpen(false)} />}
+      {open && <PlanningDialog initialTechId={mine ? undefined : techId} onClose={() => setOpen(false)} />}
+      {adding && <BlockDialog technicianId={techId} technicianName={who.name} block={null} start={adding} onClose={() => setAdding(null)} onOpenTicket={(id) => ws.open(id)} />}
     </>
   );
 }
@@ -363,7 +405,8 @@ function PlanningDialog({ onClose, initialTechId }: { onClose: () => void; initi
   const me = useMe();
   const can = useCan();
   const team = useTeam();
-  const [techId, setTechId] = useState(initialTechId ?? me.id);
+  const [techId, setTechId] = useState(initialTechId ?? "all");
+  const everyone = techId === "all";
   const who = team.find((x) => x.id === techId) ?? { id: me.id, name: me.name, full: true };
   // May plan for this technician: planners, or oneself with tickets.planSelf
   const planner = can("tickets.plan") || (techId === me.id && can("tickets.planSelf"));
@@ -380,12 +423,21 @@ function PlanningDialog({ onClose, initialTechId }: { onClose: () => void; initi
         <DialogHeader className="flex-row flex-wrap items-center gap-3 space-y-0 pr-8">
           <CalendarRange className="size-5 text-primary" />
           <div className="min-w-0">
-            <DialogTitle>{techId === me.id ? t("planning.myPlanning") : t("planning.planningOf", { name: who.name })}</DialogTitle>
-            <DialogDescription className="text-xs">{full ? t("planning.fullView") : t("planning.busyView")}</DialogDescription>
+            <DialogTitle>{everyone ? t("planning.teamPlanning") : techId === me.id ? t("planning.myPlanning") : t("planning.planningOf", { name: who.name })}</DialogTitle>
+            <DialogDescription className="text-xs">{everyone ? t("planning.teamView") : full ? t("planning.fullView") : t("planning.busyView")}</DialogDescription>
           </div>
           {/* whose calendar: faces, discreet */}
           {team.length > 1 && (
             <div className="ml-auto flex flex-wrap items-center gap-1" role="radiogroup" aria-label={t("planning.whose")}>
+              <button
+                type="button"
+                role="radio"
+                aria-checked={everyone}
+                onClick={() => setTechId("all")}
+                className={cn("h-8 rounded-full border px-3 text-xs font-semibold transition", everyone ? "bg-grad-gold text-[#1a1204]" : "bg-background/60 text-muted-foreground hover:text-foreground")}
+              >
+                {t("planning.everyone")}
+              </button>
               {team.map((p) => (
                 <Tooltip key={p.id}>
                   <TooltipTrigger asChild>
@@ -395,9 +447,10 @@ function PlanningDialog({ onClose, initialTechId }: { onClose: () => void; initi
                       aria-checked={p.id === techId}
                       onClick={() => setTechId(p.id)}
                       className={cn(
-                        "relative flex size-8 items-center justify-center rounded-full border text-[10px] font-semibold transition",
+                        "relative flex size-8 items-center justify-center rounded-full border-2 text-[10px] font-semibold transition",
                         p.id === techId ? "bg-grad-gold text-[#1a1204] ring-2 ring-[color:var(--gold)]/40" : "bg-background/60 text-muted-foreground hover:text-foreground",
                       )}
+                      style={{ borderColor: colorOf(p) }}
                     >
                       {initials(p.name)}
                       {p.full === false && <EyeOff className="absolute -bottom-0.5 -right-0.5 size-3 rounded-full bg-background p-px text-muted-foreground" />}
@@ -413,6 +466,11 @@ function PlanningDialog({ onClose, initialTechId }: { onClose: () => void; initi
           )}
           <BrowserAlerts />
         </DialogHeader>
+        {everyone ? (
+          <div className="min-h-0 flex-1 overflow-y-auto pr-1">
+            <TeamWeek team={team} onPick={setTechId} />
+          </div>
+        ) : (
         <div className={cn("grid min-h-0 flex-1 gap-4", full && "lg:grid-cols-[320px_minmax(0,1fr)]")}>
           {full && (
             <div className="min-h-0 overflow-y-auto pr-1">
@@ -423,9 +481,132 @@ function PlanningDialog({ onClose, initialTechId }: { onClose: () => void; initi
             <WeekCalendar key={techId} technicianId={techId} technicianName={who.name} planner={planner} />
           </div>
         </div>
+        )}
       </DialogContent>
     </Dialog>
     </OpenTicketCtx.Provider>
+  );
+}
+
+/**
+ * Everyone's week: each person's appointments side by side in the day, in
+ * their color (a technician sees an admin's time only as busy). A click on
+ * an appointment opens its ticket; + on a day adds one.
+ */
+function TeamWeek({ team, onPick }: { team: TeamMember[]; onPick: (id: string) => void }) {
+  const { t } = useTranslation();
+  const me = useMe();
+  const can = useCan();
+  const openTicket = useContext(OpenTicketCtx) ?? (() => undefined);
+  const [week, setWeek] = useState(() => mondayOf(new Date()));
+  const [adding, setAdding] = useState<Date | null>(null);
+  const days = Array.from({ length: 5 }, (_, i) => addDays(week, i));
+  const from = week.toISOString();
+  const to = addDays(week, 7).toISOString();
+  const { data: blocks = [], isLoading } = useQuery({
+    queryKey: ["planning", "calendar", "team", from],
+    queryFn: () => api.get<Block[]>(`/planning/calendar/team?from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}`),
+    placeholderData: keepPreviousData,
+    refetchInterval: 60_000,
+  });
+  const byId = new Map(team.map((p) => [p.id, p]));
+  // lanes: the people who have time this week, in the team's order
+  const lanes = team.filter((p) => blocks.some((b) => b.technicianId === p.id));
+  const height = (DAY_END - DAY_START) * HOUR_PX;
+  const top = (d: Date) => Math.max(0, Math.min(height, (d.getHours() + d.getMinutes() / 60 - DAY_START) * HOUR_PX));
+  const loc = currentLocale() === "en" ? "en-CA" : "fr-CA";
+  const canAdd = can("tickets.plan") || can("tickets.planSelf");
+  return (
+    <section className="space-y-2">
+      <div className="flex flex-wrap items-center gap-2">
+        <p className="text-sm font-semibold">{t("planning.weekOf", { date: week.toLocaleDateString(loc, { day: "numeric", month: "long" }) })}</p>
+        <Button type="button" variant="ghost" size="icon" className="size-7" onClick={() => setWeek((w) => addDays(w, -7))} aria-label={t("planning.prevWeek")}>
+          <ChevronLeft className="size-4" />
+        </Button>
+        <Button type="button" variant="outline" size="sm" className="h-7 px-2 text-xs" onClick={() => setWeek(mondayOf(new Date()))}>
+          {t("planning.today")}
+        </Button>
+        <Button type="button" variant="ghost" size="icon" className="size-7" onClick={() => setWeek((w) => addDays(w, 7))} aria-label={t("planning.nextWeek")}>
+          <ChevronRight className="size-4" />
+        </Button>
+        {/* who is who: a color each; a click opens that person's calendar */}
+        <span className="ml-auto flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px]">
+          {team.map((p) => (
+            <button key={p.id} type="button" onClick={() => onPick(p.id)} className="flex items-center gap-1.5 text-muted-foreground hover:text-foreground">
+              <span className="size-2.5 rounded-sm" style={{ background: colorOf(p) }} />
+              {p.id === me.id ? t("planning.me", { name: p.name.split(" ")[0] }) : p.name}
+              {p.admin && <span className="rounded border px-1 text-[9px] uppercase">{t("planning.adminTag")}</span>}
+            </button>
+          ))}
+        </span>
+      </div>
+      <div className="relative grid grid-cols-[40px_repeat(5,minmax(0,1fr))] rounded-xl border">
+        <span />
+        {days.map((d) => (
+          <div key={ymd(d)} className={cn("flex items-center justify-center gap-1 border-b border-l py-1.5 text-xs", ymd(d) === ymd(new Date()) && "text-primary")}>
+            <span className="uppercase text-muted-foreground">{d.toLocaleDateString(loc, { weekday: "short" }).replace(".", "")}</span>
+            <span className="font-mono font-semibold">{d.getDate()}</span>
+            {canAdd && (
+              <button type="button" onClick={() => setAdding(new Date(`${ymd(d)}T09:00:00`))} className="ml-1 rounded-full p-0.5 text-muted-foreground hover:bg-[color:var(--gold)]/20 hover:text-primary" aria-label={t("planning.addAppointment")} title={t("planning.addAppointment")}>
+                <Plus className="size-3.5" />
+              </button>
+            )}
+          </div>
+        ))}
+        {/* hours */}
+        <div className="relative" style={{ height }}>
+          {Array.from({ length: DAY_END - DAY_START }, (_, i) => (
+            <span key={i} className="absolute right-1 -translate-y-1/2 font-mono text-[9px] text-muted-foreground" style={{ top: i * HOUR_PX }}>
+              {i ? DAY_START + i : ""}
+            </span>
+          ))}
+        </div>
+        {days.map((d) => (
+          <div key={ymd(d)} className="relative border-l" style={{ height }}>
+            {Array.from({ length: DAY_END - DAY_START }, (_, i) => (
+              <span key={i} className="pointer-events-none absolute inset-x-0 border-t border-border/40" style={{ top: i * HOUR_PX }} />
+            ))}
+            {blocks
+              .filter((b) => ymd(new Date(b.startsAt)) === ymd(d))
+              .map((b) => {
+                const s = new Date(b.startsAt);
+                const e = new Date(b.endsAt);
+                const p = byId.get(b.technicianId);
+                const lane = Math.max(0, lanes.findIndex((x) => x.id === b.technicianId));
+                const w = 100 / Math.max(1, lanes.length);
+                const color = colorOf(p);
+                return (
+                  <button
+                    key={b.id}
+                    type="button"
+                    onClick={() => (b.ticketId ? openTicket(b.ticketId) : p && onPick(p.id))}
+                    title={`${p?.name ?? ""} · ${hm(s)}–${hm(e)} · ${b.busy ? t("planning.busy") : b.title}`}
+                    className={cn("absolute z-[5] overflow-hidden rounded-md border px-1 py-0.5 text-left text-[10px] leading-tight transition hover:brightness-125", b.busy && "italic")}
+                    style={{
+                      top: top(s),
+                      height: Math.max(14, top(e) - top(s) - 1),
+                      left: `calc(${lane * w}% + 1px)`,
+                      width: `calc(${w}% - 2px)`,
+                      borderColor: color,
+                      background: b.busy ? `repeating-linear-gradient(135deg, ${color}33 0 4px, transparent 4px 8px)` : `${color}2e`,
+                    }}
+                  >
+                    <span className="block truncate font-semibold" style={{ color }}>
+                      {p?.name.split(" ")[0]}
+                    </span>
+                    <span className="line-clamp-2 text-foreground/90">
+                      {b.busy ? t("planning.busy") : (b.ticketNumber ? `${b.ticketNumber.slice(-4)} · ` : "") + (b.kind === "onsite" && b.companyName ? b.companyName : b.title)}
+                    </span>
+                  </button>
+                );
+              })}
+          </div>
+        ))}
+        {isLoading && <div className="absolute inset-0 animate-pulse bg-background/30" />}
+      </div>
+      <p className="text-[10px] text-muted-foreground">{t("planning.teamHint")}</p>
+      {adding && <BlockDialog technicianId={me.id} technicianName={me.name} block={null} start={adding} onClose={() => setAdding(null)} onOpenTicket={openTicket} />}
+    </section>
   );
 }
 
@@ -1010,7 +1191,13 @@ function BlockDialog({
   const { t } = useTranslation();
   const qc = useQueryClient();
   const confirm = useConfirm();
-  const { data: pins = [] } = usePriorities(technicianId, ymd(start));
+  const can = useCan();
+  const team = useTeam();
+  // for whom: planners choose anyone; a technician books for themselves
+  const [tech, setTech] = useState(technicianId);
+  const forName = team.find((p) => p.id === tech)?.name ?? technicianName;
+  const [priority, setPriority] = useState<"week" | "day" | "none">("week");
+  const { data: pins = [] } = usePriorities(tech, ymd(start));
   const [kind, setKind] = useState<BlockKind>(block?.kind ?? "work");
   const [reminder, setReminder] = useState(block?.reminderMinutes ?? 15);
   const [picked, setPicked] = useState<{ id: number; number: string; title: string } | null>(block?.ticketId ? { id: block.ticketId, number: block.ticketNumber ?? "", title: block.title } : null);
@@ -1035,7 +1222,8 @@ function BlockDialog({
             ...(kind === "slot" && title.trim() ? { title: title.trim() } : {}),
           })
         : api.post<{ warnings: string[] }>("/planning/calendar", {
-            technicianId,
+            technicianId: tech,
+            priority: kind === "slot" ? "none" : priority,
             kind,
             ticketId: kind === "slot" ? null : picked?.id,
             title: kind === "slot" ? title.trim() : "",
@@ -1062,7 +1250,7 @@ function BlockDialog({
           <DialogTitle className="flex items-center gap-2">
             <CalendarDays className="size-5 text-primary" /> {block ? t("planning.editBlock") : t("planning.reserve")}
           </DialogTitle>
-          <DialogDescription>{t("planning.for", { name: technicianName })}</DialogDescription>
+          <DialogDescription>{t("planning.for", { name: forName })}</DialogDescription>
         </DialogHeader>
         <form
           className="space-y-4"
@@ -1071,6 +1259,23 @@ function BlockDialog({
             if (valid) save.mutate();
           }}
         >
+          {!block && can("tickets.plan") && team.length > 1 && (
+            <div className="space-y-1.5">
+              <Label>{t("planning.forWhom")}</Label>
+              <Select value={tech} onValueChange={setTech}>
+                <SelectTrigger className="w-full">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent position="popper">
+                  {team.map((p) => (
+                    <SelectItem key={p.id} value={p.id}>
+                      {p.name}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+          )}
           {!block && (
             <div className="grid grid-cols-3 gap-1 rounded-xl border p-1 text-xs">
               {(["work", "onsite", "slot"] as const).map((k) => (
@@ -1123,7 +1328,6 @@ function BlockDialog({
                     </div>
                   )}
                   <TicketSearch onPick={setPicked} />
-                  <p className="text-[11px] text-muted-foreground">{t("planning.becomesPriority")}</p>
                 </>
               )}
             </div>
@@ -1131,6 +1335,25 @@ function BlockDialog({
             <div className="space-y-1.5">
               <Label htmlFor="bl-title">{t("planning.slotTitle")}</Label>
               <Input id="bl-title" autoFocus maxLength={200} value={title} onChange={(e) => setTitle(e.target.value)} placeholder={t("planning.slotHint")} />
+            </div>
+          )}
+          {!block && kind !== "slot" && (
+            <div className="space-y-1.5">
+              <Label className="flex items-center gap-1.5">
+                <Star className="size-3.5 text-primary" /> {t("planning.asPriority")}
+              </Label>
+              <div className="grid grid-cols-3 gap-1 rounded-xl border p-1 text-xs">
+                {(["day", "week", "none"] as const).map((k) => (
+                  <button
+                    key={k}
+                    type="button"
+                    onClick={() => setPriority(k)}
+                    className={cn("rounded-lg px-2 py-1.5 font-medium", priority === k ? "bg-grad-gold text-[#1a1204]" : "text-muted-foreground hover:text-foreground")}
+                  >
+                    {t(`planning.priorityChoice.${k}`)}
+                  </button>
+                ))}
+              </div>
             </div>
           )}
           <div className="grid grid-cols-3 gap-3">

@@ -221,7 +221,7 @@ export function TicketsPage() {
             value={params.get("q") ?? ""}
             onChange={(e) => set({ q: e.target.value || null })}
             placeholder={t("tickets.search")}
-            className="h-9 border-transparent bg-white/5 pl-9 pr-8 dark:bg-white/[0.04]"
+            className="h-8 border-transparent bg-white/5 pl-8 pr-7 text-xs dark:bg-white/[0.04]"
           />
           <kbd className="pointer-events-none absolute right-2.5 top-1/2 -translate-y-1/2 rounded border px-1 font-mono text-[10px] text-muted-foreground">/</kbd>
         </div>
@@ -566,7 +566,7 @@ function ViewMenu({ view, counts, params, apply }: { view: View; counts?: Ticket
     <>
       <DropdownMenu>
         <DropdownMenuTrigger asChild>
-          <Button variant="outline" className="h-9 gap-2 border-[color:var(--gold)]/30 bg-[color:var(--gold)]/[0.06] font-semibold">
+          <Button variant="outline" className="h-8 gap-1.5 border-[color:var(--gold)]/30 bg-[color:var(--gold)]/[0.06] px-2.5 text-xs font-semibold">
             <Icon className="size-4 text-primary" />
             <span className="max-w-40 truncate">{activeSaved ? activeSaved.name : t(`tickets.views.${view}`)}</span>
             {!activeSaved && counts && <span className="rounded-full bg-muted px-1.5 font-mono text-[10px]">{counts[view]}</span>}
@@ -950,7 +950,7 @@ function FilterButton({
         <Button
           variant="ghost"
           size="sm"
-          className={cn("h-9 gap-1.5 px-2.5 text-muted-foreground hover:text-foreground", count > 0 && "bg-[color:var(--gold)]/10 text-primary hover:text-primary")}
+          className={cn("h-8 gap-1 px-2 text-xs text-muted-foreground hover:text-foreground", count > 0 && "bg-[color:var(--gold)]/10 text-primary hover:text-primary")}
         >
           {Icon && <Icon className="size-4" />}
           {label}
@@ -1075,7 +1075,7 @@ function SortMenu({ value, onChange }: { value: string; onChange: (v: string) =>
   return (
     <Popover>
       <PopoverTrigger asChild>
-        <Button variant="ghost" size="sm" className="h-9 gap-1.5 px-2.5 text-muted-foreground">
+        <Button variant="ghost" size="sm" className="h-8 gap-1 px-2 text-xs text-muted-foreground">
           <ArrowDownUp className="size-4" /> <span className="hidden sm:inline">{t(`tickets.sort.${value}`)}</span>
         </Button>
       </PopoverTrigger>
@@ -1110,7 +1110,7 @@ function TeamFilter({ technicians, params, set }: { technicians: TicketList["fac
   return (
     <Popover>
       <PopoverTrigger asChild>
-        <Button variant="ghost" size="sm" className={cn("h-9 gap-2 px-2", selected.length > 0 && "bg-[color:var(--gold)]/10 text-primary")}>
+        <Button variant="ghost" size="sm" className={cn("h-8 gap-1.5 px-2 text-xs", selected.length > 0 && "bg-[color:var(--gold)]/10 text-primary")}>
           <span className="flex -space-x-2">
             {people.slice(0, 4).map((p) => (
               <span
