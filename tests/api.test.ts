@@ -1773,7 +1773,7 @@ describe("tickets: client and contact", () => {
     // validating creates the time entry in the ticket
     expect((await tech.post(`/api/tickets/timers/${pending.id}/submit`, { hours: 0.25, summary: "Diagnostic à distance", internal: "Vérifier le RAID" })).status).toBe(201);
     const d = (await tech.get(`/api/tickets/${a.id}`)).json;
-    expect(d.notes.at(-1)).toMatchObject({ kind: "time", hours: 0.25, text: "Diagnostic à distance", internalText: "Vérifier le RAID", author: "Alex Tremblay" });
+    expect(d.notes.at(-1)).toMatchObject({ kind: "time", hours: 0.25, text: "Diagnostic à distance", internalText: "Vérifier le RAID", author: "Alex Tremblay", billable: true });
     expect((await tech.get("/api/tickets/timers")).json.map((x: any) => x.ticketId)).toEqual([b.id]);
 
     // stop → pending; "later" → paused again, then it resumes
@@ -2085,8 +2085,31 @@ describe("tickets from Autotask", () => {
     expect((await tech.post(`/api/tickets/timers/${timer.id}/submit`, { hours: 1.25, summary: "Remplacement du disque", internal: "Garantie Dell", workTypeId: "12" })).status).toBe(201);
     const entry = sent.find((s) => s.method === "POST" && s.url.endsWith("TimeEntries"))!;
     expect(entry.headers.impersonationresourceid).toBe("29682885");
-    expect(entry.body).toMatchObject({ ticketID: 9001, resourceID: 29682885, roleID: 29683461, hoursWorked: 1.25, summaryNotes: "Remplacement du disque", internalNotes: "Garantie Dell", billingCodeID: 12 });
+    expect(entry.body).toMatchObject({ ticketID: 9001, resourceID: 29682885, roleID: 29683461, hoursWorked: 1.25, summaryNotes: "Remplacement du disque", internalNotes: "Garantie Dell", billingCodeID: 12, isNonBillable: false });
+    expect(entry.body.offsetHours).toBeUndefined();
     expect(new Date(entry.body.endDateTime).getTime() - new Date(entry.body.startDateTime).getTime()).toBe(4_500_000);
+
+    // 4 h worked with an offset of 2: Autotask bills 2 h
+    const timeEntry = async (p: Record<string, unknown>) => {
+      sent.length = 0;
+      await tech.post("/api/tickets/9001/timer/start");
+      await tech.post("/api/tickets/9001/timer/stop");
+      const tm = (await tech.get("/api/tickets/timers")).json[0];
+      const r = await tech.post(`/api/tickets/timers/${tm.id}/submit`, { summary: "Migration", ...p });
+      if (r.status !== 201) await tech.del(`/api/tickets/timers/${tm.id}`);
+      return { r, body: sent.find((s) => s.method === "POST" && s.url.endsWith("TimeEntries"))?.body };
+    };
+    let te = await timeEntry({ hours: 4, offsetHours: 2 });
+    expect(te.r.status).toBe(201);
+    expect(te.body).toMatchObject({ hoursWorked: 4, offsetHours: 2, isNonBillable: false });
+    // non billable: no offset sent
+    te = await timeEntry({ hours: 1, billable: false, offsetHours: 0.5 });
+    expect(te.body).toMatchObject({ hoursWorked: 1, isNonBillable: true });
+    expect(te.body.offsetHours).toBeUndefined();
+    // an offset larger than the time worked is refused (nothing sent)
+    te = await timeEntry({ hours: 1, offsetHours: 3 });
+    expect(te.r.json.error).toBe("offset_too_large");
+    expect(te.body).toBeUndefined();
   });
 
   it("opens a ticket even when its notes cannot be loaded, with a warning", async () => {

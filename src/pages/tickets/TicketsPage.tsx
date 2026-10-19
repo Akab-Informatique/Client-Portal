@@ -101,15 +101,24 @@ export function TicketsPage() {
     next.delete("sms");
     setParams(next, { replace: true });
   }, [params, setParams]);
-  // Link to a ticket (e.g. from a notification): /tickets?ticket=<id>
+  // Link to a ticket (e.g. from a notification): /tickets?ticket=<id> — opened once per link
+  // (not again each time the workspace changes, which reopened a ticket just closed)
+  const linked = params.get("ticket");
+  const wsRef = useRef(ws);
+  wsRef.current = ws;
   useEffect(() => {
-    const id = Number(params.get("ticket"));
+    const id = Number(linked);
     if (!id) return;
-    ws.open(id);
-    const next = new URLSearchParams(params);
-    next.delete("ticket");
-    setParams(next, { replace: true });
-  }, [params, setParams, ws]);
+    wsRef.current.open(id);
+    setParams(
+      (p) => {
+        const next = new URLSearchParams(p);
+        next.delete("ticket");
+        return next;
+      },
+      { replace: true },
+    );
+  }, [linked, setParams]);
   // Inline change from the list (status, priority, assignee)
   const patchTicket = useMutation({
     mutationFn: (p: { id: number; patch: RowPatch }) => api.patch(`/tickets/${p.id}`, p.patch),
@@ -136,15 +145,6 @@ export function TicketsPage() {
   /** Replace the whole query (view + filters), e.g. from a tile or a saved filter. */
   const apply = (query: string) => setParams(new URLSearchParams(query), { replace: true });
   const activeFilters = FILTER_KEYS.filter((k) => k !== "sort" && k !== "q" && params.get(k));
-
-  // Deep link from elsewhere (?ticket=<id>): open it full screen
-  useEffect(() => {
-    const id = Number(params.get("ticket"));
-    if (id) {
-      ws.open(id);
-      set({ ticket: null });
-    }
-  }, [params]);
 
   // Shortcuts: "/" search, "n" new ticket (not while typing)
   useEffect(() => {

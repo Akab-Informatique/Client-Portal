@@ -34,7 +34,8 @@ export function DueEditor({ dueAt, onSave, saving, quick, autoFocus }: { dueAt: 
   const save = (date: string, time: string) => {
     if (!date) return;
     const iso = join(date, time);
-    if (new Date(iso).getTime() !== new Date(dueAt).getTime()) onSave(iso);
+    // compared to the minute: the fields have no seconds, so leaving them unchanged saves nothing
+    if (Math.floor(new Date(iso).getTime() / 60_000) !== Math.floor(new Date(dueAt).getTime() / 60_000)) onSave(iso);
   };
   const picks: [string, Date][] = [
     [t("tickets.due.today"), new Date()],
@@ -59,7 +60,6 @@ export function DueEditor({ dueAt, onSave, saving, quick, autoFocus }: { dueAt: 
         />
         <Input
           type="time"
-          step={300}
           className="h-8 w-32 shrink-0"
           value={v.time}
           disabled={saving}

@@ -3,8 +3,9 @@ import { useTranslation } from "react-i18next";
 import { useSearchParams } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
-import { AlertTriangle, Clock3, Loader2, Pause, Play, Square, Timer as TimerIcon } from "lucide-react";
+import { AlertTriangle, Clock3, Loader2, Pause, Play, Receipt, Square, Timer as TimerIcon, XCircle } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { Checkbox } from "@/components/ui/checkbox";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -138,14 +139,7 @@ export function TimersProvider({ children }: { children: ReactNode }) {
   return (
     <UiCtx.Provider value={value}>
       {children}
-      {current && (
-        <TimeEntryDialog
-          key={current.id}
-          timer={current}
-          position={{ n: 1, total: pending.length }}
-          onLater={() => later(current)}
-        />
-      )}
+      {current && <TimeEntryDialog key={current.id} timer={current} position={{ n: 1, total: pending.length }} onLater={() => later(current)} />}
     </UiCtx.Provider>
   );
 }
@@ -290,10 +284,16 @@ export function DockTimer({ timer, at, compact }: { timer: Timer; at: number; co
   }
   const run = timer.state === "running";
   if (compact) {
-    return <span className={cn("font-mono text-[10px] leading-none tabular-nums", run ? "text-primary" : "text-muted-foreground")}>{clock(liveMs(timer, at, now))}</span>;
+    return (
+      <span className={cn("font-mono text-[10px] leading-none tabular-nums", run ? "text-primary" : "text-muted-foreground")}>
+        {clock(liveMs(timer, at, now))}
+      </span>
+    );
   }
   return (
-    <span className={cn("flex items-center gap-0.5 rounded-full py-0.5 pl-2", run ? "bg-[color:var(--gold)]/15 text-primary" : "bg-muted text-muted-foreground")}>
+    <span
+      className={cn("flex items-center gap-0.5 rounded-full py-0.5 pl-2", run ? "bg-[color:var(--gold)]/15 text-primary" : "bg-muted text-muted-foreground")}
+    >
       <span className="font-mono text-[11px] tabular-nums">{clock(liveMs(timer, at, now))}</span>
       <TimerButton
         label={run ? t("tickets.timer.pause") : t("tickets.timer.resume")}
@@ -306,6 +306,9 @@ export function DockTimer({ timer, at, compact }: { timer: Timer; at: number; co
   );
 }
 
+/** Asks the ticket workspace to close a ticket (detail: its id), without the time prompt. */
+export const CLOSE_TICKET_EVENT = "akab:close-ticket";
+
 /** Validate a stopped timer: hours, summary, internal note, work type → time entry. */
 function TimeEntryDialog({ timer, position, onLater }: { timer: Timer; position: { n: number; total: number }; onLater: () => void }) {
   const { t } = useTranslation();
@@ -316,6 +319,9 @@ function TimeEntryDialog({ timer, position, onLater }: { timer: Timer; position:
   const [summary, setSummary] = useState("");
   const [internal, setInternal] = useState("");
   const [workType, setWorkType] = useState("");
+  // billed to the client, and the hours worked but not billed
+  const [billable, setBillable] = useState(true);
+  const [offset, setOffset] = useState("");
   const { data: workTypes = [] } = useQuery({
     queryKey: ["tickets", "work-types"],
     queryFn: () => api.get<{ value: string; label: string }[]>("/tickets/work-types"),
@@ -331,7 +337,14 @@ function TimeEntryDialog({ timer, position, onLater }: { timer: Timer; position:
   };
   const submit = useMutation({
     mutationFn: () =>
-      api.post(`/tickets/timers/${timer.id}/submit`, { hours: Number(hours.replace(",", ".")), summary, internal, workTypeId: workType || null }),
+      api.post(`/tickets/timers/${timer.id}/submit`, {
+        hours: Number(hours.replace(",", ".")),
+        summary,
+        internal,
+        workTypeId: workType || null,
+        billable,
+        offsetHours: billable ? off : 0,
+      }),
     onSuccess: () => {
       toast.success(t("tickets.timer.saved"));
       done();
@@ -340,11 +353,21 @@ function TimeEntryDialog({ timer, position, onLater }: { timer: Timer; position:
   });
   const discard = useMutation({
     mutationFn: () => api.del(`/tickets/timers/${timer.id}`),
-    onSuccess: done,
+    onSuccess: () => {
+      done();
+      // "close with no time": the ticket closes too when it is still open (no new timer starts)
+      window.dispatchEvent(new CustomEvent(CLOSE_TICKET_EVENT, { detail: timer.ticketId }));
+    },
     onError: (e) => toast.error(ticketErrorText(t, e)),
   });
   const h = Number(hours.replace(",", "."));
-  const valid = h > 0 && h <= 24 && summary.trim().length > 0;
+  const off = offset.trim() ? Number(offset.replace(",", ".")) : 0;
+  const offsetOk = !billable || (Number.isFinite(off) && off >= 0 && off <= h);
+  const billed = Math.max(0, Math.round((h - (billable ? off : h)) * 100) / 100);
+  const valid = h > 0 && h <= 24 && summary.trim().length > 0 && offsetOk;
+  // a short timer is closed without asking; a longer one is confirmed first
+  const closeWithoutTime = () =>
+    minutes <= 5 ? discard.mutate() : void confirm({ title: t("tickets.timer.discardConfirm"), destructive: true }).then((ok) => ok && discard.mutate());
 
   return (
     <Dialog open onOpenChange={(o) => !o && onLater()}>
@@ -352,7 +375,9 @@ function TimeEntryDialog({ timer, position, onLater }: { timer: Timer; position:
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
             <TimerIcon className="size-5 text-primary" /> {t("tickets.timer.entryTitle")}
-            {position.total > 1 && <span className="text-xs font-normal text-muted-foreground">{t("tickets.timer.counter", { n: position.n, total: position.total })}</span>}
+            {position.total > 1 && (
+              <span className="text-xs font-normal text-muted-foreground">{t("tickets.timer.counter", { n: position.n, total: position.total })}</span>
+            )}
           </DialogTitle>
           <DialogDescription>
             <span className="font-mono text-primary">{timer.ticketNumber}</span> · {timer.ticketTitle}
@@ -398,9 +423,48 @@ function TimeEntryDialog({ timer, position, onLater }: { timer: Timer; position:
               </div>
             )}
           </div>
+          {/* billing: billed or not, and an offset (hours worked but not billed) */}
+          <div className="space-y-2 rounded-xl border p-3">
+            <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
+              <label className="flex cursor-pointer items-center gap-2 text-sm font-medium">
+                <Checkbox checked={billable} onCheckedChange={(v) => setBillable(v === true)} />
+                <Receipt className="size-4 text-primary" /> {t("tickets.timer.billable")}
+              </label>
+              {billable && (
+                <div className="flex items-center gap-2">
+                  <Label htmlFor="te-offset" className="text-sm text-muted-foreground">
+                    {t("tickets.timer.offset")}
+                  </Label>
+                  <Input
+                    id="te-offset"
+                    inputMode="decimal"
+                    className={cn("h-8 w-20", !offsetOk && "border-destructive")}
+                    placeholder="0"
+                    value={offset}
+                    onChange={(e) => setOffset(e.target.value)}
+                  />
+                  <span className="text-sm text-muted-foreground">h</span>
+                </div>
+              )}
+            </div>
+            <p className={cn("text-xs", !offsetOk ? "text-destructive" : billable ? "text-muted-foreground" : "text-slate-400")}>
+              {!offsetOk
+                ? t("tickets.timer.offsetTooLarge")
+                : billable
+                  ? t("tickets.timer.billedHours", { worked: (h || 0).toLocaleString(), billed: billed.toLocaleString() })
+                  : t("tickets.timer.notBilled")}
+            </p>
+          </div>
           <div className="space-y-1.5">
             <Label htmlFor="te-summary">{t("tickets.timer.summary")}</Label>
-            <Textarea id="te-summary" rows={4} value={summary} onChange={(e) => setSummary(e.target.value)} placeholder={t("tickets.timer.summaryHint")} autoFocus />
+            <Textarea
+              id="te-summary"
+              rows={4}
+              value={summary}
+              onChange={(e) => setSummary(e.target.value)}
+              placeholder={t("tickets.timer.summaryHint")}
+              autoFocus
+            />
           </div>
           <div className="space-y-1.5">
             <Label htmlFor="te-internal">{t("tickets.timer.internal")}</Label>
@@ -412,9 +476,10 @@ function TimeEntryDialog({ timer, position, onLater }: { timer: Timer; position:
               variant="ghost"
               className="text-destructive hover:text-destructive"
               disabled={discard.isPending || submit.isPending}
-              onClick={() => void confirm({ title: t("tickets.timer.discardConfirm"), destructive: true }).then((ok) => ok && discard.mutate())}
+              onClick={closeWithoutTime}
+              title={t("tickets.timer.noTimeHint")}
             >
-              {t("tickets.timer.discard")}
+              {discard.isPending ? <Loader2 className="size-4 animate-spin" /> : <XCircle className="size-4" />} {t("tickets.timer.noTime")}
             </Button>
             <span className="flex-1" />
             <Button type="button" variant="outline" onClick={onLater} title={t("tickets.timer.laterHint")}>

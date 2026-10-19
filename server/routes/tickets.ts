@@ -719,8 +719,13 @@ export const ticketRoutes = new Hono<AppEnv>()
         summary: z.string().trim().min(1).max(8000),
         internal: z.string().trim().max(8000).default(""),
         workTypeId: z.string().max(40).nullable().default(null),
+        billable: z.boolean().default(true),
+        offsetHours: z.number().min(0).max(24).default(0),
       }),
     );
+    // the offset cannot exceed the hours worked; it means nothing when nothing is billed
+    if (p.offsetHours > p.hours) throw new HTTPException(400, { message: "offset_too_large" });
+    if (!p.billable) p.offsetHours = 0;
     if (submitting.has(timer.id)) throw new HTTPException(409, { message: "timer_busy" });
     submitting.add(timer.id);
     try {
@@ -738,7 +743,7 @@ export const ticketRoutes = new Hono<AppEnv>()
       note: p.summary,
     });
     await db().delete(schema.ticketTimers).where(eq(schema.ticketTimers.id, timer.id));
-    await audit(a.user.id, "ticket.time_entry", String(timer.ticketId), { hours: p.hours });
+    await audit(a.user.id, "ticket.time_entry", String(timer.ticketId), { hours: p.hours, billable: p.billable, offsetHours: p.offsetHours });
     return c.json({ ok: true }, 201);
     } finally {
       submitting.delete(timer.id);

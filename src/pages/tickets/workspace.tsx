@@ -5,7 +5,7 @@ import { Hexagon, Maximize2, PanelBottom, RectangleHorizontal, Ticket, X } from 
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { cn } from "@/lib/utils";
 import { TicketOverlay } from "./TicketPanel";
-import { DockTimer, TimersProvider, useTicketTimerAuto, useTimers, type Timer } from "./timers";
+import { CLOSE_TICKET_EVENT, DockTimer, TimersProvider, useTicketTimerAuto, useTimers, type Timer } from "./timers";
 import { ReminderWatcher } from "./Planning";
 import { dueGlow, priorityGlow, usePresence, type PriorityKind as Priority, type StatusKind, type TicketDetail } from "./shared";
 
@@ -59,6 +59,15 @@ export function TicketWorkspaceProvider({ enabled, children }: { enabled: boolea
     if (openRef.current !== null && enabled) void timer.closed(openRef.current);
     setOpenId(null);
   }, [enabled, timer]);
+  // a timer closed with no time: its ticket closes if it is the one open (nothing left to ask)
+  useEffect(() => {
+    const on = (e: Event) => {
+      const id = (e as CustomEvent<number>).detail;
+      if (openRef.current === id) setOpenId(null);
+    };
+    window.addEventListener(CLOSE_TICKET_EVENT, on);
+    return () => window.removeEventListener(CLOSE_TICKET_EVENT, on);
+  }, []);
   const minimize = useCallback((tk: TicketDetail) => {
     setDocked((d) => [...d.filter((x) => x.id !== tk.id), { id: tk.id, number: tk.number, title: tk.title, priority: tk.priorityKind, dueAt: tk.dueAt, statusKind: tk.statusKind }].slice(-6));
     setOpenId(null);

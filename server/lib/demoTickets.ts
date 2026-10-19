@@ -218,10 +218,20 @@ export function addDemoNote(id: number, note: Omit<Note, "id" | "at">): Note | n
 }
 
 /** A time entry shown in the sample ticket's activity. */
-export function addDemoTimeEntry(id: number, p: { author: string; hours: number; text: string; internalText?: string; at: string }): boolean {
+export function addDemoTimeEntry(
+  id: number,
+  p: { author: string; hours: number; text: string; internalText?: string; at: string; billable?: boolean; offsetHours?: number },
+): boolean {
   const t = store?.find((x) => x.id === id);
   if (!t) return false;
-  t.notes.push({ id: `t${id}-${Date.now()}`, author: p.author, at: p.at, text: p.text, internal: false, ...({ kind: "time", hours: p.hours, internalText: p.internalText } as object) });
+  t.notes.push({
+    id: `t${id}-${Date.now()}`,
+    author: p.author,
+    at: p.at,
+    text: p.text,
+    internal: false,
+    ...({ kind: "time", hours: p.hours, internalText: p.internalText, billable: p.billable ?? true, offsetHours: p.billable === false ? undefined : p.offsetHours || undefined } as object),
+  });
   t.hours = Math.round((t.hours + p.hours) * 100) / 100;
   t.updatedAt = new Date().toISOString();
   return true;

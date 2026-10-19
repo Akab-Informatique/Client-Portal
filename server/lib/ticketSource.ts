@@ -55,6 +55,9 @@ export type Note = {
   kind?: "note" | "time";
   hours?: number;
   internalText?: string;
+  /** A time entry: billed to the client or not, and the hours not billed (offset) */
+  billable?: boolean;
+  offsetHours?: number;
 };
 export type Company = { id: number; name: string };
 export type Contact = { id: string; companyId: number; name: string; email: string | null; phone: string | null };
@@ -191,7 +194,18 @@ export type Product = {
   materialCodeId: string | null;
 };
 export type ChargeOptions = { types: { value: string; label: string }[]; statuses: { value: string; label: string }[]; materialCodes: { value: string; label: string }[] };
-export type NewTimeEntry = { hours: number; summary: string; internal: string; workTypeId: string | null; startedAt: Date; endedAt: Date };
+export type NewTimeEntry = {
+  hours: number;
+  summary: string;
+  internal: string;
+  workTypeId: string | null;
+  startedAt: Date;
+  endedAt: Date;
+  /** Billed to the client (false: non billable) */
+  billable: boolean;
+  /** Hours worked but not billed: 4 h worked with an offset of 2 bills 2 h */
+  offsetHours: number;
+};
 export type NewTicket = {
   title: string;
   description: string;
@@ -644,7 +658,7 @@ const demoSource: TicketSource = {
   async deleteServiceCall() {},
   async addTimeEntry(ticketId, p, a) {
     await this.list();
-    if (!addDemoTimeEntry(ticketId, { author: a.user.name, hours: p.hours, text: p.summary, internalText: p.internal || undefined, at: p.startedAt.toISOString() })) {
+    if (!addDemoTimeEntry(ticketId, { author: a.user.name, hours: p.hours, text: p.summary, internalText: p.internal || undefined, at: p.startedAt.toISOString(), billable: p.billable, offsetHours: p.offsetHours })) {
       throw new SourceError("not_found");
     }
   },
@@ -1158,14 +1172,14 @@ const autotaskSource: TicketSource = {
       return fallback;
     };
     type AtNote = { id: number; title?: string; description?: string; createDateTime: string; creatorResourceID?: number | null; createdByContactID?: number | null; creatorContactID?: number | null; publish?: number };
-    type AtTime = { id: number; resourceID?: number | null; dateWorked?: string; startDateTime?: string | null; createDateTime?: string; hoursWorked?: number; summaryNotes?: string | null; internalNotes?: string | null };
+    type AtTime = { id: number; resourceID?: number | null; dateWorked?: string; startDateTime?: string | null; createDateTime?: string; hoursWorked?: number; summaryNotes?: string | null; internalNotes?: string | null; isNonBillable?: boolean | null; offsetHours?: number | null };
     type AtFile = { id: number; title?: string; fullPath?: string; fileSize?: number; attachDate?: string; publish?: number; attachedByResourceID?: number | null; attachedByContactID?: number | null };
     // Notes and time: kept until the ticket has new activity (or we change it)
     const extrasKey = `detail:${id}:${fromList?.updatedAt ?? "?"}`;
     const loadExtras = async () => {
       const [noteFields, timeFields] = await Promise.all([
         safeFields(at, "TicketNotes", ["id", "title", "description", "createDateTime", "creatorResourceID", "createdByContactID", "creatorContactID", "publish"]),
-        safeFields(at, "TimeEntries", ["id", "resourceID", "dateWorked", "startDateTime", "createDateTime", "hoursWorked", "summaryNotes", "internalNotes"]),
+        safeFields(at, "TimeEntries", ["id", "resourceID", "dateWorked", "startDateTime", "createDateTime", "hoursWorked", "summaryNotes", "internalNotes", "isNonBillable", "offsetHours"]),
       ]);
       const [notes, times] = await Promise.all([
         at.query<AtNote>("TicketNotes", [{ op: "eq", field: "ticketID", value: id }], { fields: noteFields, max: 300 }).catch(soft("notes", [] as AtNote[])),
@@ -1216,6 +1230,8 @@ const autotaskSource: TicketSource = {
       kind: "time",
       hours: x.hoursWorked ?? 0,
       internalText: (x.internalNotes ?? "").trim() || undefined,
+      billable: x.isNonBillable == null ? undefined : !x.isNonBillable,
+      offsetHours: x.offsetHours || undefined,
     }));
     t.notes = [...noteItems, ...timeItems].sort((a, b) => a.at.localeCompare(b.at));
     t.hours = Math.round(times.reduce((sum, x) => sum + (x.hoursWorked ?? 0), 0) * 100) / 100;
@@ -1733,6 +1749,9 @@ const autotaskSource: TicketSource = {
         startDateTime: start.toISOString(),
         endDateTime: end.toISOString(),
         hoursWorked: Math.round(p.hours * 100) / 100,
+        // billed or not; the offset is worked time not billed (Autotask bills hours worked - offset)
+        isNonBillable: !p.billable,
+        ...(p.billable && p.offsetHours > 0 ? { offsetHours: Math.round(p.offsetHours * 100) / 100 } : {}),
         summaryNotes: p.summary,
         ...(p.internal ? { internalNotes: p.internal } : {}),
         ...(p.workTypeId ? { billingCodeID: Number(p.workTypeId) } : {}),

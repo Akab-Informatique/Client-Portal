@@ -752,6 +752,14 @@ function Activity({ tk, partial }: { tk: TicketDetail; partial: boolean }) {
                     <Clock3 className="size-2.5" /> {t("tickets.timeEntry", { hours: (n.hours ?? 0).toLocaleString() })}
                   </span>
                 )}
+                {n.kind === "time" && n.billable === false && (
+                  <span className="rounded-full bg-slate-500/20 px-1.5 text-[10px] font-medium text-slate-300">{t("tickets.timer.nonBillable")}</span>
+                )}
+                {n.kind === "time" && n.billable !== false && (n.offsetHours ?? 0) > 0 && (
+                  <span className="rounded-full bg-amber-500/15 px-1.5 text-[10px] font-medium text-amber-300">
+                    {t("tickets.timer.billedAfterOffset", { billed: Math.max(0, (n.hours ?? 0) - (n.offsetHours ?? 0)).toLocaleString(), offset: (n.offsetHours ?? 0).toLocaleString() })}
+                  </span>
+                )}
                 {n.internal && (
                   <span className="flex items-center gap-1 rounded-full bg-violet-500/15 px-1.5 text-[10px] font-medium text-violet-300">
                     <Lock className="size-2.5" /> {t("tickets.internal")}
