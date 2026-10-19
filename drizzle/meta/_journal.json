@@ -316,6 +316,34 @@
       "when": 1792363605779,
       "tag": "0044_paid_status",
       "breakpoints": true
+    },
+    {
+      "idx": 45,
+      "version": "7",
+      "when": 1792377307397,
+      "tag": "0045_meeting_point_notes",
+      "breakpoints": true
+    },
+    {
+      "idx": 46,
+      "version": "7",
+      "when": 1792378548892,
+      "tag": "0046_expense_reports",
+      "breakpoints": true
+    },
+    {
+      "idx": 47,
+      "version": "7",
+      "when": 1792378824306,
+      "tag": "0047_expense_report_period",
+      "breakpoints": true
+    },
+    {
+      "idx": 48,
+      "version": "7",
+      "when": 1792379999285,
+      "tag": "0048_invoice_emailed",
+      "breakpoints": true
     }
   ]
 }

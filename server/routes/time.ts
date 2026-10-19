@@ -1,6 +1,6 @@
 import { Hono } from "hono";
 import { HTTPException } from "hono/http-exception";
-import { and, asc, desc, eq, getTableColumns, inArray, ne, sql } from "drizzle-orm";
+import { and, asc, desc, eq, getTableColumns, gte, inArray, lte, ne, sql } from "drizzle-orm";
 import { z } from "zod";
 import { db, schema } from "../db/index.ts";
 import { auth, requirePermission, requireStaff, type AppEnv } from "../lib/auth.ts";
@@ -43,6 +43,64 @@ async function ownExpense(id: string, userId: string) {
     .where(and(eq(schema.expenses.id, zUuid.parse(id)), eq(schema.expenses.userId, userId)));
   if (!x) throw new HTTPException(404, { message: "not_found" });
   return x;
+}
+
+/** One of my expense reports; `open`: refused once it was submitted (items are locked then). */
+async function ownReport(id: string, userId: string, opts: { open?: boolean } = {}) {
+  const r = zUuid.safeParse(id);
+  if (!r.success) throw new HTTPException(404, { message: "not_found" });
+  const [rep] = await db()
+    .select()
+    .from(schema.expenseReports)
+    .where(and(eq(schema.expenseReports.id, r.data), eq(schema.expenseReports.userId, userId)));
+  if (!rep) throw new HTTPException(404, { message: "not_found" });
+  if (opts.open && rep.submittedAt) throw new HTTPException(409, { message: "report_submitted" });
+  return rep;
+}
+
+/**
+ * Send a report: its items not sent yet (draft, or refused and fixed) go to
+ * approval together. Nothing to send: report_empty.
+ */
+async function submitReport(reportId: string, userId: string) {
+  const x = schema.expenses;
+  return db().transaction(async (tx) => {
+    const sent = await tx
+      .update(x)
+      .set({ status: "submitted", submittedAt: new Date(), updatedAt: new Date() })
+      .where(and(eq(x.reportId, reportId), eq(x.userId, userId), inArray(x.status, ["draft", "rejected"])))
+      .returning({ id: x.id, amountCents: x.amountCents });
+    if (!sent.length) throw new HTTPException(409, { message: "report_empty" });
+    await tx.update(schema.expenseReports).set({ submittedAt: new Date(), updatedAt: new Date() }).where(eq(schema.expenseReports.id, reportId));
+    return sent;
+  });
+}
+
+/** The days a report covers: both given, the end not before the start, a year at most */
+const zPeriod = z
+  .object({ periodStart: zDay, periodEnd: zDay })
+  .refine((v) => v.periodEnd >= v.periodStart, { message: "end_before_start", path: ["periodEnd"] })
+  .refine((v) => Date.parse(v.periodEnd) - Date.parse(v.periodStart) <= 366 * 86_400_000, { message: "too_long", path: ["periodEnd"] });
+
+/** An item's date must be within its report's period (reports made before periods have none). */
+function inPeriod(rep: { periodStart: string | null; periodEnd: string | null }, date: string) {
+  if (rep.periodStart && date < rep.periodStart) throw new HTTPException(400, { message: "expense_out_of_period" });
+  if (rep.periodEnd && date > rep.periodEnd) throw new HTTPException(400, { message: "expense_out_of_period" });
+}
+
+/** Where a report stands, from its items: open (not sent), submitted, approved (all), paid (all). */
+function reportStatus(submittedAt: Date | null, items: { status: string }[]) {
+  if (!submittedAt || !items.length) return "open";
+  if (items.every((i) => i.status === "paid")) return "paid";
+  if (items.every((i) => i.status === "approved" || i.status === "paid")) return "approved";
+  return "submitted";
+}
+
+/** ?from=&to= (YYYY-MM-DD): the time frame asked for, or everything */
+function periodOf(q: (k: string) => string | undefined) {
+  const v = z.object({ from: zDay.optional(), to: zDay.optional() }).safeParse({ from: q("from") || undefined, to: q("to") || undefined });
+  if (!v.success || (v.data.from && v.data.to && v.data.to < v.data.from)) throw new HTTPException(400, { message: "invalid_period" });
+  return v.data;
 }
 
 async function activeClient(id: string) {
@@ -232,7 +290,98 @@ export const timeRoutes = new Hono<AppEnv>()
     return c.json(row);
   })
 
-  // ── my expenses ──
+  // ── my expense reports: items added while open, then sent together ──
+  .get("/expense-reports", requirePermission("timesheets.use"), async (c) => {
+    const a = auth(c);
+    const [reports, rows] = await Promise.all([
+      db().select().from(schema.expenseReports).where(eq(schema.expenseReports.userId, a.user.id)).orderBy(desc(schema.expenseReports.createdAt)),
+      db()
+        .select({ x: listColumns, type: schema.expenseTypes.name, client: schema.clients.name })
+        .from(schema.expenses)
+        .innerJoin(schema.expenseTypes, eq(schema.expenseTypes.id, schema.expenses.typeId))
+        .leftJoin(schema.clients, eq(schema.clients.id, schema.expenses.clientId))
+        .where(eq(schema.expenses.userId, a.user.id))
+        .orderBy(asc(schema.expenses.date), asc(schema.expenses.createdAt)),
+    ]);
+    const out = reports.map((r) => {
+      const items = rows.filter((x) => x.x.reportId === r.id).map((x) => expenseView(x.x, { type: x.type, clientName: x.client }));
+      const dates = items.map((i) => i.date).sort();
+      return {
+        id: r.id,
+        title: r.title,
+        periodStart: r.periodStart,
+        periodEnd: r.periodEnd,
+        submittedAt: r.submittedAt,
+        createdAt: r.createdAt,
+        status: reportStatus(r.submittedAt, items),
+        // refused items to fix (the report is open again)
+        rejected: items.filter((i) => i.status === "rejected").length,
+        totalCents: items.reduce((s, i) => s + i.amountCents, 0),
+        from: dates[0] ?? null,
+        to: dates.at(-1) ?? null,
+        items,
+      };
+    });
+    // open ones first, then the latest
+    out.sort((p, q) => Number(q.status === "open") - Number(p.status === "open"));
+    return c.json(out);
+  })
+  .post("/expense-reports", requirePermission("timesheets.use"), async (c) => {
+    const a = auth(c);
+    const p = await body(c, z.object({ title: z.string().trim().min(1).max(120) }).and(zPeriod));
+    const [row] = await db()
+      .insert(schema.expenseReports)
+      .values({ userId: a.user.id, title: p.title, periodStart: p.periodStart, periodEnd: p.periodEnd })
+      .returning();
+    return c.json(row, 201);
+  })
+  /** Rename, or change the days covered (its items must stay within). */
+  .patch("/expense-reports/:id", requirePermission("timesheets.use"), async (c) => {
+    const a = auth(c);
+    const rep = await ownReport(c.req.param("id"), a.user.id, { open: true });
+    const p = await body(
+      c,
+      z
+        .object({ title: z.string().trim().min(1).max(120).optional(), periodStart: zDay.optional(), periodEnd: zDay.optional() })
+        .refine((v) => !v.periodStart === !v.periodEnd, { message: "period_incomplete" })
+        .refine((v) => !v.periodStart || zPeriod.safeParse(v).success, { message: "invalid_period", path: ["periodEnd"] }),
+    );
+    if (p.periodStart && p.periodEnd) {
+      const dates = await db().select({ date: schema.expenses.date }).from(schema.expenses).where(eq(schema.expenses.reportId, rep.id));
+      if (dates.some((d) => d.date < p.periodStart! || d.date > p.periodEnd!)) throw new HTTPException(409, { message: "report_period_items" });
+    }
+    await db()
+      .update(schema.expenseReports)
+      .set({
+        ...(p.title ? { title: p.title } : {}),
+        ...(p.periodStart && p.periodEnd ? { periodStart: p.periodStart, periodEnd: p.periodEnd } : {}),
+        updatedAt: new Date(),
+      })
+      .where(eq(schema.expenseReports.id, rep.id));
+    return c.json({ ok: true });
+  })
+  /** An open report goes with its items, unless one of them was already approved or paid. */
+  .delete("/expense-reports/:id", requirePermission("timesheets.use"), async (c) => {
+    const a = auth(c);
+    const rep = await ownReport(c.req.param("id"), a.user.id, { open: true });
+    const [locked] = await db()
+      .select({ id: schema.expenses.id })
+      .from(schema.expenses)
+      .where(and(eq(schema.expenses.reportId, rep.id), inArray(schema.expenses.status, ["submitted", "approved", "paid"])))
+      .limit(1);
+    if (locked) throw new HTTPException(409, { message: "expense_locked" });
+    await db().delete(schema.expenseReports).where(eq(schema.expenseReports.id, rep.id));
+    return c.json({ ok: true });
+  })
+  .post("/expense-reports/:id/submit", requirePermission("timesheets.use"), async (c) => {
+    const a = auth(c);
+    const rep = await ownReport(c.req.param("id"), a.user.id, { open: true });
+    const sent = await submitReport(rep.id, a.user.id);
+    await audit(a.user.id, "expense.submitted", rep.id, { count: sent.length, amountCents: sent.reduce((s, x) => s + x.amountCents, 0) });
+    return c.json({ submitted: sent.length });
+  })
+
+  // ── my expenses (the items) ──
   .get("/expenses", requirePermission("timesheets.use"), async (c) => {
     const a = auth(c);
     const rows = await db()
@@ -257,14 +406,29 @@ export const timeRoutes = new Hono<AppEnv>()
         clientId: zUuid.nullable().optional(),
         billable: z.boolean().optional(),
         receipt: zReceipt,
+        // the open report it goes in; none: a report of its own
+        reportId: zUuid.optional(),
       }),
     );
     const pr = await priced(p.typeId, p);
     if (p.clientId) await activeClient(p.clientId);
+    let reportId: string;
+    if (p.reportId) {
+      const rep = await ownReport(p.reportId, a.user.id, { open: true });
+      inPeriod(rep, p.date);
+      reportId = rep.id;
+    } else {
+      const [rep] = await db()
+        .insert(schema.expenseReports)
+        .values({ userId: a.user.id, title: p.description.slice(0, 120), periodStart: p.date, periodEnd: p.date })
+        .returning();
+      reportId = rep.id;
+    }
     const [row] = await db()
       .insert(schema.expenses)
       .values({
         userId: a.user.id,
+        reportId,
         date: p.date,
         typeId: pr.type.id,
         description: p.description,
@@ -297,6 +461,7 @@ export const timeRoutes = new Hono<AppEnv>()
         receipt: zReceipt,
       }),
     );
+    if (p.date && cur.reportId) inPeriod(await ownReport(cur.reportId, a.user.id), p.date);
     const pr =
       p.typeId || p.quantity !== undefined || p.amountCents !== undefined
         ? await priced(p.typeId ?? cur.typeId, { quantity: p.quantity ?? cur.quantityX100 / 100, amountCents: p.amountCents ?? cur.amountCents })
@@ -328,16 +493,14 @@ export const timeRoutes = new Hono<AppEnv>()
     await db().delete(schema.expenses).where(eq(schema.expenses.id, cur.id));
     return c.json({ ok: true });
   })
+  /** Sends the item's whole report (items go to approval together). */
   .post("/expenses/:id/submit", requirePermission("timesheets.use"), async (c) => {
     const a = auth(c);
     const cur = await ownExpense(c.req.param("id"), a.user.id);
-    if (!editable(cur.status)) throw new HTTPException(409, { message: "expense_locked" });
-    const [row] = await db()
-      .update(schema.expenses)
-      .set({ status: "submitted", submittedAt: new Date(), updatedAt: new Date() })
-      .where(eq(schema.expenses.id, cur.id))
-      .returning();
-    await audit(a.user.id, "expense.submitted", row.id, { amountCents: row.amountCents });
+    if (!editable(cur.status) || !cur.reportId) throw new HTTPException(409, { message: "expense_locked" });
+    const sent = await submitReport(cur.reportId, a.user.id);
+    await audit(a.user.id, "expense.submitted", cur.reportId, { count: sent.length, amountCents: sent.reduce((s, x) => s + x.amountCents, 0) });
+    const [row] = await db().select().from(schema.expenses).where(eq(schema.expenses.id, cur.id));
     return c.json(expenseView(row));
   })
   /** The receipt: its owner, or whoever approves. */
@@ -365,11 +528,19 @@ export const timeRoutes = new Hono<AppEnv>()
   /** Weeks to approve: per person, the hours per type only. */
   .get("/approvals/timesheets", requirePermission("timesheets.approve", "accounting.manage"), async (c) => {
     const status = z.enum(["submitted", "approved", "rejected", "paid"]).parse(c.req.query("status") ?? "submitted");
+    const { from, to } = periodOf((k) => c.req.query(k));
     const rows = await db()
       .select({ s: schema.timesheets, name: schema.users.name })
       .from(schema.timesheets)
       .innerJoin(schema.users, eq(schema.users.id, schema.timesheets.userId))
-      .where(eq(schema.timesheets.status, status))
+      // weeks that touch the time frame (a week starts at most 6 days before it)
+      .where(
+        and(
+          eq(schema.timesheets.status, status),
+          from ? gte(schema.timesheets.weekStart, addDays(from, -6)) : undefined,
+          to ? lte(schema.timesheets.weekStart, to) : undefined,
+        ),
+      )
       .orderBy(desc(schema.timesheets.weekStart), asc(schema.users.name))
       .limit(200);
     const out = [];
@@ -433,16 +604,25 @@ export const timeRoutes = new Hono<AppEnv>()
   })
   .get("/approvals/expenses", requirePermission("timesheets.approve", "accounting.manage"), async (c) => {
     const status = z.enum(["submitted", "approved", "rejected", "paid"]).parse(c.req.query("status") ?? "submitted");
+    const { from, to } = periodOf((k) => c.req.query(k));
     const rows = await db()
-      .select({ x: listColumns, type: schema.expenseTypes.name, unit: schema.expenseTypes.unit, user: schema.users.name, client: schema.clients.name })
+      .select({
+        x: listColumns,
+        type: schema.expenseTypes.name,
+        unit: schema.expenseTypes.unit,
+        user: schema.users.name,
+        client: schema.clients.name,
+        report: schema.expenseReports.title,
+      })
       .from(schema.expenses)
       .innerJoin(schema.expenseTypes, eq(schema.expenseTypes.id, schema.expenses.typeId))
       .innerJoin(schema.users, eq(schema.users.id, schema.expenses.userId))
       .leftJoin(schema.clients, eq(schema.clients.id, schema.expenses.clientId))
-      .where(eq(schema.expenses.status, status))
+      .leftJoin(schema.expenseReports, eq(schema.expenseReports.id, schema.expenses.reportId))
+      .where(and(eq(schema.expenses.status, status), from ? gte(schema.expenses.date, from) : undefined, to ? lte(schema.expenses.date, to) : undefined))
       .orderBy(asc(schema.users.name), desc(schema.expenses.date))
       .limit(500);
-    return c.json(rows.map((r) => expenseView(r.x, { type: r.type, unit: r.unit, userName: r.user, clientName: r.client })));
+    return c.json(rows.map((r) => expenseView(r.x, { type: r.type, unit: r.unit, userName: r.user, clientName: r.client, reportTitle: r.report })));
   })
   .post("/approvals/expenses/paid", requirePermission("accounting.manage"), async (c) => {
     const a = auth(c);
@@ -518,6 +698,10 @@ export const timeRoutes = new Hono<AppEnv>()
         if (billingItemId) await tx.update(schema.expenses).set({ billingItemId }).where(eq(schema.expenses.id, x.id));
       });
     }
+    // a refused item opens its report again: fixed (or removed), then sent anew
+    const reopen = [...new Set(decided.map((x) => x.reportId).filter((id): id is string => Boolean(id)))];
+    if (p.decision === "reject" && reopen.length)
+      await d.update(schema.expenseReports).set({ submittedAt: null, updatedAt: new Date() }).where(and(inArray(schema.expenseReports.id, reopen)));
     await audit(a.user.id, `expense.${p.decision === "approve" ? "approved" : "rejected"}`, null, { count: decided.length });
     return c.json({ changed: decided.length });
   });

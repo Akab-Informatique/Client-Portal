@@ -25,7 +25,16 @@ const zDraft = z.object({
   dueOn: zDay.optional(),
   notes: z.string().trim().max(2000).nullable().optional(),
   poNumber: z.string().trim().max(60).nullable().optional(),
+  // the time frame: only its work goes on the invoice
+  from: zDay.nullable().optional(),
+  to: zDay.nullable().optional(),
 });
+/** ?from=&to= (YYYY-MM-DD): the time frame asked for, or everything */
+function periodOf(q: (k: string) => string | undefined) {
+  const v = z.object({ from: zDay.optional(), to: zDay.optional() }).safeParse({ from: q("from") || undefined, to: q("to") || undefined });
+  if (!v.success || (v.data.from && v.data.to && v.data.to < v.data.from)) throw new HTTPException(400, { message: "invalid_period" });
+  return v.data;
+}
 async function drafted<T>(fn: () => Promise<T>): Promise<T> {
   try {
     return await fn();
@@ -43,9 +52,9 @@ export const billablesRoutes = new Hono<AppEnv>()
     const kind = c.req.query("kind") ? zKind.parse(c.req.query("kind")) : null;
     const status = c.req.query("status") ? zStatus.parse(c.req.query("status")) : null;
     const clientId = c.req.query("clientId") ? zUuid.parse(c.req.query("clientId")) : null;
-    return c.json(await listBillables(kind, status, clientId));
+    return c.json(await listBillables(kind, status, clientId, periodOf((k) => c.req.query(k))));
   })
-  .get("/summary", async (c) => c.json({ state: await billablesState(), counts: await billableCounts() }))
+  .get("/summary", async (c) => c.json({ state: await billablesState(), counts: await billableCounts(periodOf((k) => c.req.query(k))) }))
 
   /** Copy the work to bill from Autotask now (it also comes with each CRM sync). */
   .post("/import", requirePermission("accounting.manage"), async (c) => {
@@ -85,7 +94,7 @@ export const billablesRoutes = new Hono<AppEnv>()
   })
 
   // ── Créer des factures: a client, the kinds or lines, dates, terms, notes ──
-  .get("/clients", async (c) => c.json(await invoiceableClients()))
+  .get("/clients", async (c) => c.json(await invoiceableClients(periodOf((k) => c.req.query(k)))))
   .post("/invoice/preview", async (c) => {
     const p = await body(c, zDraft);
     return c.json(await drafted(() => draftInvoice(p)));
@@ -101,13 +110,13 @@ export const billablesRoutes = new Hono<AppEnv>()
 
   /** What posting the approved items would make (per client). */
   .get("/post", async (c) => {
-    const groups = await postPreview();
+    const groups = await postPreview(undefined, periodOf((k) => c.req.query(k)));
     return c.json(groups.map(({ items, ...g }) => ({ ...g, kinds: [...new Set(items.map((i) => i.kind))] })));
   })
   .post("/post", requirePermission("accounting.manage"), async (c) => {
     const a = auth(c);
-    const p = await body(c, z.object({ clientIds: z.array(zUuid).max(5000).optional() }));
-    const made = await postInvoices(a.user.id, p.clientIds);
+    const p = await body(c, z.object({ clientIds: z.array(zUuid).max(5000).optional(), from: zDay.nullable().optional(), to: zDay.nullable().optional() }));
+    const made = await postInvoices(a.user.id, p.clientIds, { from: p.from, to: p.to });
     await audit(a.user.id, "billing.invoices_posted", null, { count: made.length, numbers: made.map((m) => m.number) });
     for (const m of made) await autoSync("invoices", m.id);
     return c.json(made, 201);

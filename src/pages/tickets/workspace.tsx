@@ -308,11 +308,13 @@ function DockItem({
             </span>
           </button>
           {busy && <span className="absolute right-1 top-2 size-2 rounded-full bg-orange-400" title={t("tickets.openBy", { names: viewers!.map((v) => v.name).join(", ") })} />}
+          {/* the action bar: shows on hover; the padding below it bridges the gap to the cell,
+              and it stays a moment after the mouse leaves, so it can be reached without a click */}
           <div
             data-nodrag
-            className="pointer-events-none absolute bottom-full left-1/2 z-10 mb-1 flex -translate-x-1/2 items-center gap-0.5 rounded-full border bg-popover/95 px-1 py-0.5 opacity-0 shadow-lg backdrop-blur-xl transition-opacity group-focus-within:pointer-events-auto group-focus-within:opacity-100 group-hover:pointer-events-auto group-hover:opacity-100"
+            className="invisible absolute bottom-full left-1/2 z-10 -translate-x-1/2 pb-2 opacity-0 transition-[opacity,visibility] delay-300 duration-150 group-focus-within:visible group-focus-within:opacity-100 group-focus-within:delay-0 group-hover:visible group-hover:opacity-100 group-hover:delay-0"
           >
-            {controls}
+            <div className="flex items-center gap-0.5 rounded-full border bg-popover/95 px-1 py-0.5 shadow-lg backdrop-blur-xl">{controls}</div>
           </div>
         </>
       ) : (

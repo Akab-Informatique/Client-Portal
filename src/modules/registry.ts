@@ -47,3 +47,25 @@ export const STAFF_MODULES: NavModule[] = [
   { key: "devices", path: "/devices", labelKey: "nav.devices", icon: MonitorSmartphone, section: "command", upcoming: true },
   { key: "documentation", path: "/documentation", labelKey: "nav.documentation", icon: BookOpen, section: "command", upcoming: true },
 ];
+
+/**
+ * Client portal sidebar (client users, and technicians in client view).
+ * Laid out like the client rights (ACCESS_LAYOUT): a page shows only to whom
+ * has its right, even while it is `upcoming` (greyed out, not linked yet).
+ */
+export const CLIENT_NAV_SECTIONS = [
+  { key: "board", labelKey: "client.nav.boardSection" },
+  { key: "operations", labelKey: "client.nav.operationsSection" },
+  { key: "accounting", labelKey: "client.nav.accountingSection" },
+] as const;
+export type ClientNavSection = (typeof CLIENT_NAV_SECTIONS)[number]["key"];
+export type ClientNavModule = Omit<NavModule, "section" | "optIn"> & { section: ClientNavSection };
+
+export const CLIENT_MODULES: ClientNavModule[] = [
+  { key: "board", path: "/", labelKey: "client.nav.board", icon: Megaphone, section: "board", permission: "board.view" },
+  { key: "tickets", path: "/tickets", labelKey: "client.nav.tickets", icon: Ticket, section: "operations", permission: "clientTickets.view" },
+  { key: "devices", path: "/devices", labelKey: "client.nav.devices", icon: MonitorSmartphone, section: "operations", permission: "clientDevices.view", upcoming: true },
+  { key: "documentation", path: "/documentation", labelKey: "client.nav.documentation", icon: BookOpen, section: "operations", permission: "clientDocs.view", upcoming: true },
+  { key: "invoices", path: "/invoices", labelKey: "client.nav.invoices", icon: Receipt, section: "accounting", permission: "clientInvoices.view", upcoming: true },
+  { key: "quotes", path: "/quotes", labelKey: "client.nav.quotes", icon: FileSignature, section: "accounting", permission: "clientQuotes.view", upcoming: true },
+];

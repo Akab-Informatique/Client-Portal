@@ -127,6 +127,8 @@ async function ticketForAi(src: TicketSource, id: number): Promise<string> {
 // ── Presence: who has a ticket open right now (in memory, 30 s heartbeat) ─────
 const PRESENCE_TTL = 30_000;
 const presence = new Map<number, Map<string, { name: string; at: number }>>();
+/** Technicians who have this ticket open right now (first names), for the client portal. */
+export const techniciansViewing = (ticketId: number) => viewersOf(ticketId).map((v) => v.name);
 function viewersOf(ticketId: number, exceptUserId?: string) {
   const m = presence.get(ticketId);
   if (!m) return [];

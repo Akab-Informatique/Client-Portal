@@ -1,6 +1,6 @@
 import { Hono } from "hono";
 import { HTTPException } from "hono/http-exception";
-import { and, asc, desc, eq, inArray, sql } from "drizzle-orm";
+import { and, asc, desc, eq, gte, ilike, inArray, isNotNull, isNull, lte, or, sql } from "drizzle-orm";
 import { z } from "zod";
 import { db, schema } from "../db/index.ts";
 import { auth, requirePermission, requireStaff, revokeUserSessions, type AppEnv } from "../lib/auth.ts";
@@ -365,53 +365,8 @@ export const crmRoutes = new Hono<AppEnv>()
     const d = db();
     const names = new Map((await d.select({ id: schema.clients.id, name: schema.clients.name }).from(schema.clients).where(inArray(schema.clients.id, ids))).map((r) => [r.id, r.name]));
     const rows = await d.select().from(schema.clientInvoices).where(inArray(schema.clientInvoices.clientId, ids)).orderBy(desc(schema.clientInvoices.issuedOn), desc(schema.clientInvoices.number));
-    const payments = rows.length
-      ? await d
-          .select({ p: schema.invoicePayments, by: schema.users.name })
-          .from(schema.invoicePayments)
-          .leftJoin(schema.users, eq(schema.users.id, schema.invoicePayments.createdBy))
-          .where(inArray(schema.invoicePayments.invoiceId, rows.map((r) => r.id)))
-          .orderBy(asc(schema.invoicePayments.paidOn), asc(schema.invoicePayments.createdAt))
-      : [];
-    const lines = new Map<string, (typeof schema.invoiceLines.$inferSelect)[]>();
-    const portal = rows.filter((r) => r.source === "portal").map((r) => r.id);
-    if (portal.length) {
-      for (const l of await d.select().from(schema.invoiceLines).where(inArray(schema.invoiceLines.invoiceId, portal)).orderBy(asc(schema.invoiceLines.position))) {
-        lines.set(l.invoiceId, [...(lines.get(l.invoiceId) ?? []), l]);
-      }
-    }
-    const today = new Date().toLocaleDateString("en-CA", { timeZone: "America/Toronto" });
     const yearAgo = new Date(Date.now() - 365 * 86_400_000).toISOString().slice(0, 10);
-    const items = rows.map((v) => {
-      const mine = payments.filter((x) => x.p.invoiceId === v.id);
-      const received = mine.reduce((s, x) => s + x.p.amountCents, 0);
-      // marked paid in the source with no payment here: paid in full
-      const paidCents = v.paidOn && received < v.totalCents ? v.totalCents : received;
-      const balanceCents = v.voided ? 0 : Math.max(0, v.totalCents - paidCents);
-      const late = !v.voided && balanceCents > 0 && Boolean(v.dueOn && v.dueOn < today);
-      const status = v.voided ? "voided" : balanceCents === 0 ? "paid" : paidCents > 0 ? "partial" : late ? "overdue" : "due";
-      return {
-        id: v.id,
-        number: v.number,
-        company: names.get(v.clientId) ?? "",
-        issuedOn: v.issuedOn,
-        dueOn: v.dueOn,
-        totalCents: v.totalCents,
-        taxCents: v.taxCents,
-        paidCents,
-        balanceCents,
-        paidOn: v.paidOn ?? (balanceCents === 0 && mine.length ? mine[mine.length - 1].p.paidOn : null),
-        status,
-        late,
-        daysLate: late ? Math.round((Date.parse(today) - Date.parse(v.dueOn!)) / 86_400_000) : 0,
-        source: v.source,
-        notes: v.notes,
-        poNumber: v.poNumber,
-        lines: (lines.get(v.id) ?? []).map((l) => ({ id: l.id, kind: l.kind, description: l.description, quantity: l.quantityX100 / 100, unitPriceCents: l.unitPriceCents, amountCents: l.amountCents, taxable: l.taxable })),
-        quickbooks: v.quickbooksId || v.quickbooksError ? { id: v.quickbooksId, syncedAt: v.quickbooksSyncedAt, error: v.quickbooksError } : null,
-        payments: mine.map((x) => ({ id: x.p.id, amountCents: x.p.amountCents, paidOn: x.p.paidOn, method: x.p.method, reference: x.p.reference, note: x.p.note, source: x.p.source, by: x.by })),
-      };
-    });
+    const items = await invoiceViews(rows, names, { lines: true });
     const sum = (f: (x: (typeof items)[number]) => boolean, k: "balanceCents" | "paidCents") => items.filter(f).reduce((s, x) => s + x[k], 0);
     return c.json({
       summary: {
@@ -423,6 +378,81 @@ export const crmRoutes = new Hono<AppEnv>()
       },
       items,
     });
+  })
+
+  /**
+   * Every invoice (Accounting › Factures › Toutes les factures), newest first,
+   * with filters: status (due, overdue, partial, paid, voided; "open" = still
+   * to pay), client, issue dates, number or PO, sent by email or not,
+   * QuickBooks (synced, not synced, error), source.
+   */
+  .get("/invoices", requirePermission("accounting.view"), async (c) => {
+    const zDay = z.string().regex(/^\d{4}-\d{2}-\d{2}$/);
+    const q = z
+      .object({
+        status: z.enum(["open", "due", "overdue", "partial", "paid", "voided"]).optional(),
+        clientId: zUuid.optional(),
+        from: zDay.optional(),
+        to: zDay.optional(),
+        q: z.string().trim().max(100).optional(),
+        emailed: z.enum(["yes", "no"]).optional(),
+        quickbooks: z.enum(["synced", "unsynced", "error"]).optional(),
+        source: z.enum(["portal", "autotask"]).optional(),
+      })
+      .safeParse(Object.fromEntries(Object.entries(c.req.queries()).map(([k, v]) => [k, v[0] || undefined])));
+    if (!q.success) throw new HTTPException(400, { message: "invalid_filter" });
+    const f = q.data;
+    const v = schema.clientInvoices;
+    // the number or PO contains the text (% and _ taken literally)
+    const words = (f.q ?? "").replace(/[\\%_]/g, "\\$&");
+    const rows = await db()
+      .select()
+      .from(v)
+      .where(
+        and(
+          f.clientId ? eq(v.clientId, f.clientId) : undefined,
+          f.from ? gte(v.issuedOn, f.from) : undefined,
+          f.to ? lte(v.issuedOn, f.to) : undefined,
+          words ? or(ilike(v.number, `%${words}%`), ilike(v.poNumber, `%${words}%`)) : undefined,
+          f.emailed === "yes" ? isNotNull(v.emailedAt) : f.emailed === "no" ? isNull(v.emailedAt) : undefined,
+          f.quickbooks === "synced" ? isNotNull(v.quickbooksId) : f.quickbooks === "unsynced" ? isNull(v.quickbooksId) : f.quickbooks === "error" ? isNotNull(v.quickbooksError) : undefined,
+          f.source ? eq(v.source, f.source) : undefined,
+        ),
+      )
+      .orderBy(desc(v.issuedOn), desc(v.number))
+      .limit(2000);
+    const clients = await db().select({ id: schema.clients.id, name: schema.clients.name }).from(schema.clients).orderBy(asc(schema.clients.name));
+    const names = new Map(clients.map((x) => [x.id, x.name]));
+    const all = await invoiceViews(rows, names, { lines: false });
+    // the status needs the payments: filtered once known
+    const items = all.filter((x) => !f.status || (f.status === "open" ? x.balanceCents > 0 : x.status === f.status));
+    const sum = (k: "totalCents" | "balanceCents" | "paidCents", w: (x: (typeof items)[number]) => boolean = () => true) => items.filter(w).reduce((t, x) => t + x[k], 0);
+    return c.json({
+      summary: {
+        count: items.length,
+        totalCents: sum("totalCents", (x) => x.status !== "voided"),
+        paidCents: sum("paidCents"),
+        dueCents: sum("balanceCents"),
+        overdueCents: sum("balanceCents", (x) => x.late),
+        overdueCount: items.filter((x) => x.late).length,
+      },
+      // the clients that have invoices (for the client filter)
+      clients: [...new Set((await db().selectDistinct({ id: v.clientId }).from(v)).map((r) => r.id))].map((id) => ({ id, name: names.get(id) ?? "" })).sort((a, b) => a.name.localeCompare(b.name)),
+      items: items.map((x) => ({ ...x, clientId: rows.find((r) => r.id === x.id)!.clientId })),
+    });
+  })
+  /** Sent to the client by email, or not (marked by hand for now): accounting.manage. */
+  .post("/invoices/:iid/emailed", requirePermission("accounting.manage"), async (c) => {
+    const a = auth(c);
+    const p = await body(c, z.object({ emailed: z.boolean() }));
+    const [row] = await db()
+      .update(schema.clientInvoices)
+      .set({ emailedAt: p.emailed ? new Date() : null, updatedAt: new Date() })
+      .where(eq(schema.clientInvoices.id, zUuid.parse(c.req.param("iid"))))
+      .returning({ id: schema.clientInvoices.id, number: schema.clientInvoices.number, emailedAt: schema.clientInvoices.emailedAt });
+    if (!row) throw new HTTPException(404, { message: "not_found" });
+    await audit(a.user.id, p.emailed ? "billing.invoice_emailed" : "billing.invoice_not_emailed", row.id, { number: row.number });
+    return c.json(row);
   })
 
   /** A payment received (all or part of the balance): accounting.manage. */
@@ -524,3 +554,60 @@ export const crmRoutes = new Hono<AppEnv>()
       })),
     });
   });
+
+/**
+ * Invoices as the screens show them: what was paid (payments here, or marked
+ * paid in the source), the balance, the status (voided, paid, partial,
+ * overdue, due), QuickBooks, sent by email; their lines on demand.
+ */
+async function invoiceViews(rows: (typeof schema.clientInvoices.$inferSelect)[], names: Map<string, string>, opts: { lines: boolean }) {
+  const d = db();
+  const ids = rows.map((r) => r.id);
+  const payments = ids.length
+    ? await d
+        .select({ p: schema.invoicePayments, by: schema.users.name })
+        .from(schema.invoicePayments)
+        .leftJoin(schema.users, eq(schema.users.id, schema.invoicePayments.createdBy))
+        .where(inArray(schema.invoicePayments.invoiceId, ids))
+        .orderBy(asc(schema.invoicePayments.paidOn), asc(schema.invoicePayments.createdAt))
+    : [];
+  const lines = new Map<string, (typeof schema.invoiceLines.$inferSelect)[]>();
+  const portal = opts.lines ? rows.filter((r) => r.source === "portal").map((r) => r.id) : [];
+  if (portal.length) {
+    for (const l of await d.select().from(schema.invoiceLines).where(inArray(schema.invoiceLines.invoiceId, portal)).orderBy(asc(schema.invoiceLines.position))) {
+      lines.set(l.invoiceId, [...(lines.get(l.invoiceId) ?? []), l]);
+    }
+  }
+  const today = new Date().toLocaleDateString("en-CA", { timeZone: "America/Toronto" });
+  return rows.map((v) => {
+    const mine = payments.filter((x) => x.p.invoiceId === v.id);
+    const received = mine.reduce((s, x) => s + x.p.amountCents, 0);
+    // marked paid in the source with no payment here: paid in full
+    const paidCents = v.paidOn && received < v.totalCents ? v.totalCents : received;
+    const balanceCents = v.voided ? 0 : Math.max(0, v.totalCents - paidCents);
+    const late = !v.voided && balanceCents > 0 && Boolean(v.dueOn && v.dueOn < today);
+    const status = v.voided ? "voided" : balanceCents === 0 ? "paid" : paidCents > 0 ? "partial" : late ? "overdue" : "due";
+    return {
+      id: v.id,
+      number: v.number,
+      company: names.get(v.clientId) ?? "",
+      issuedOn: v.issuedOn,
+      dueOn: v.dueOn,
+      totalCents: v.totalCents,
+      taxCents: v.taxCents,
+      paidCents,
+      balanceCents,
+      paidOn: v.paidOn ?? (balanceCents === 0 && mine.length ? mine[mine.length - 1].p.paidOn : null),
+      status,
+      late,
+      daysLate: late ? Math.round((Date.parse(today) - Date.parse(v.dueOn!)) / 86_400_000) : 0,
+      source: v.source,
+      notes: v.notes,
+      poNumber: v.poNumber,
+      emailedAt: v.emailedAt,
+      lines: (lines.get(v.id) ?? []).map((l) => ({ id: l.id, kind: l.kind, description: l.description, quantity: l.quantityX100 / 100, unitPriceCents: l.unitPriceCents, amountCents: l.amountCents, taxable: l.taxable })),
+      quickbooks: v.quickbooksId || v.quickbooksError ? { id: v.quickbooksId, syncedAt: v.quickbooksSyncedAt, error: v.quickbooksError } : null,
+      payments: mine.map((x) => ({ id: x.p.id, amountCents: x.p.amountCents, paidOn: x.p.paidOn, method: x.p.method, reference: x.p.reference, note: x.p.note, source: x.p.source, by: x.by })),
+    };
+  });
+}

@@ -4,7 +4,7 @@ import type { AuthContext } from "./auth.ts";
 import { localCompanies, localContacts, localContracts } from "./crm.ts";
 import { billingSettings } from "./billing.ts";
 import { autotask, AutotaskError, listResources, loadSettings, type Client } from "./autotask.ts";
-import {
+import { demoHistory, ensureClientSamples, demoTicketsWithOtherContact,
   addDemoAttachment,
   addDemoCompany,
   addDemoContact,
@@ -126,10 +126,12 @@ export type NTicket = {
   /** Contract the work is billed on (sample data only; Autotask keeps it on its side) */
   contractId?: string | null;
   /** Files attached in the portal (sample data only) */
-  attachments?: { id: string; name: string; size: number; at: string; author: string }[];
+  attachments?: { id: string; name: string; size: number; at: string; author: string; internal?: boolean }[];
   /** Parts that could not be loaded (the rest of the ticket is shown) */
   warnings?: { part: "notes" | "time"; detail: string }[];
 };
+/** A ticket as the meeting trends need it: when it came in and when it was resolved */
+export type HistoryTicket = { id: number; createdAt: string; completedAt: string | null; queue: string; source: string; priority: string };
 export type TicketPatch = {
   status?: string;
   priority?: string;
@@ -228,6 +230,12 @@ export interface TicketSource {
   contracts(companyId: number): Promise<Contract[]>;
   /** Attach a file to the ticket */
   addAttachment(ticketId: number, p: NewAttachment, a: AuthContext): Promise<void>;
+  /** Tickets where this contact is one of the other contacts (not the main one) */
+  ticketsWithOtherContact(contactId: string): Promise<number[]>;
+  /** Every resolved ticket of a company, however old (the client portal's history; the list keeps recent ones only) */
+  companyHistory(companyId: number): Promise<NTicket[]>;
+  /** Tickets created or resolved since that time (ISO), light: for the meeting trends */
+  history(since: string): Promise<HistoryTicket[]>;
   /** The client's devices (active configuration items) */
   assets(companyId: number): Promise<Asset[]>;
   /** Older tickets (not in the local copy): by exact number, or title words */
@@ -312,6 +320,28 @@ async function staffPeople(): Promise<Person[]> {
 }
 
 // ── Sample data ───────────────────────────────────────────────────────────────────
+/**
+ * Local demo: sample tickets for the portal's own client companies, so the
+ * client portal has data (checked at most once a minute; not in tests).
+ */
+let samplesCheckedAt = 0;
+async function portalClientSamples() {
+  if (process.env.NODE_ENV === "test" || Date.now() - samplesCheckedAt < 60_000) return;
+  samplesCheckedAt = Date.now();
+  // every client with portal users, active or not: the sample companies must exist
+  // before the CRM copy runs, or it would take the clients for gone
+  const rows = await db()
+    .select({ client: schema.clients.name, phone: schema.clients.phone, autotaskId: schema.clients.autotaskId, name: schema.users.name, email: schema.users.email })
+    .from(schema.clients)
+    .innerJoin(schema.users, and(eq(schema.users.clientId, schema.clients.id), eq(schema.users.kind, "client")));
+  const byClient = new Map<string, { name: string; phone: string | null; autotaskId: number | null; users: { name: string; email: string }[] }>();
+  for (const r of rows) {
+    const c = byClient.get(r.client) ?? { name: r.client, phone: r.phone, autotaskId: r.autotaskId, users: [] };
+    c.users.push({ name: r.name, email: r.email });
+    byClient.set(r.client, c);
+  }
+  ensureClientSamples([...byClient.values()]);
+}
 const DEMO_STATUSES: StatusKind[] = ["new", "inProgress", "needsAttention", "waitingCustomer", "waitingVendor", "scheduled", "complete"];
 const DEMO_PRIORITIES: PriorityKind[] = ["critical", "high", "medium", "low"];
 
@@ -330,9 +360,11 @@ const demoSource: TicketSource = {
     return a.user.id;
   },
   async list() {
+    await portalClientSamples();
     return demoTickets(await staffPeople());
   },
   async get(id) {
+    await portalClientSamples();
     const t = demoTickets(await staffPeople()).find((x) => x.id === id);
     return t ? { ...t, notes: t.notes.filter((n) => !isSmsNote(n.text)) } : null;
   },
@@ -407,6 +439,7 @@ const demoSource: TicketSource = {
     }).id;
   },
   async companies() {
+    await portalClientSamples();
     return demoCompanies();
   },
   async assets(companyId) {
@@ -416,12 +449,14 @@ const demoSource: TicketSource = {
     return [];
   },
   async contacts(companyId) {
+    await portalClientSamples();
     return demoContacts(companyId);
   },
   async addCompany(p) {
     return addDemoCompany(p.name);
   },
   async crmExport() {
+    await portalClientSamples();
     const companies = demoCompanies();
     const towns = ["Joliette", "Repentigny", "Terrebonne", "Saint-Lin–Laurentides", "Mascouche", "Rawdon"];
     return {
@@ -507,6 +542,16 @@ const demoSource: TicketSource = {
   },
   async contracts(companyId) {
     return demoContracts(companyId);
+  },
+  async ticketsWithOtherContact(contactId) {
+    return demoTicketsWithOtherContact(contactId);
+  },
+  async companyHistory() {
+    // the sample list already holds every ticket
+    return [];
+  },
+  async history(since) {
+    return demoHistory(Date.parse(since));
   },
   async addAttachment(ticketId, p, a) {
     await this.list();
@@ -1101,6 +1146,7 @@ const autotaskSource: TicketSource = {
     };
     type AtNote = { id: number; title?: string; description?: string; createDateTime: string; creatorResourceID?: number | null; createdByContactID?: number | null; creatorContactID?: number | null; publish?: number };
     type AtTime = { id: number; resourceID?: number | null; dateWorked?: string; startDateTime?: string | null; createDateTime?: string; hoursWorked?: number; summaryNotes?: string | null; internalNotes?: string | null };
+    type AtFile = { id: number; title?: string; fullPath?: string; fileSize?: number; attachDate?: string; publish?: number; attachedByResourceID?: number | null; attachedByContactID?: number | null };
     // Notes and time: kept until the ticket has new activity (or we change it)
     const extrasKey = `detail:${id}:${fromList?.updatedAt ?? "?"}`;
     const loadExtras = async () => {
@@ -1112,7 +1158,14 @@ const autotaskSource: TicketSource = {
         at.query<AtNote>("TicketNotes", [{ op: "eq", field: "ticketID", value: id }], { fields: noteFields, max: 300 }).catch(soft("notes", [] as AtNote[])),
         at.query<AtTime>("TimeEntries", [{ op: "eq", field: "ticketID", value: id }], { fields: timeFields, max: 500 }).catch(soft("time", [] as AtTime[])),
       ]);
-      return { notes, times, warnings: [...warnings] };
+      // Documents: listed with the rest; a refusal only leaves the list empty
+      const files = await safeFields(at, "TicketAttachments", ["id", "title", "fullPath", "fileSize", "attachDate", "publish", "attachedByResourceID", "attachedByContactID"])
+        .then((fields) => at.query<AtFile>("TicketAttachments", [{ op: "eq", field: "parentID", value: id }], { fields, max: 200 }))
+        .catch((e) => {
+          console.warn(`[autotask] ticket ${id}: documents could not be loaded:`, e instanceof Error ? e.message : e);
+          return [] as AtFile[];
+        });
+      return { notes, times, files, warnings: [...warnings] };
     };
     const [t, extras, res] = await Promise.all([loadTicket(), cached(extrasKey, fromList ? 10 * 60_000 : 30_000, loadExtras), listResources()]);
     // a part failed: shown with a warning, asked again next time
@@ -1122,7 +1175,7 @@ const autotaskSource: TicketSource = {
     t.warnings = extras.warnings;
     const internalValues = new Set((await atOptions()).publish.filter((p) => /intern/i.test(p.label)).map((p) => String(p.value)));
     const contactOf = (n: AtNote) => n.createdByContactID ?? n.creatorContactID ?? null;
-    const contactIds = notes.map(contactOf).filter((x): x is number => Boolean(x));
+    const contactIds = [...notes.map(contactOf), ...(extras.files ?? []).map((f) => f.attachedByContactID)].filter((x): x is number => Boolean(x));
     const contactMap = contactIds.length ? await contactNames(at, contactIds).catch(() => new Map<number, string>()) : new Map<number, string>();
     const resourceName = (rid?: number | null) => (rid ? (res.find((r) => r.id === rid)?.name ?? `#${rid}`) : null);
     // Written from the portal: the technician (even if Autotask shows the API user)
@@ -1153,6 +1206,14 @@ const autotaskSource: TicketSource = {
     }));
     t.notes = [...noteItems, ...timeItems].sort((a, b) => a.at.localeCompare(b.at));
     t.hours = Math.round(times.reduce((sum, x) => sum + (x.hoursWorked ?? 0), 0) * 100) / 100;
+    t.attachments = (extras.files ?? []).map((f) => ({
+      id: `a${f.id}`,
+      name: f.title || f.fullPath || "document",
+      size: f.fileSize ?? 0,
+      at: f.attachDate ?? "",
+      author: resourceName(f.attachedByResourceID) ?? (f.attachedByContactID ? (contactMap.get(f.attachedByContactID) ?? "") : ""),
+      internal: internalValues.has(String(f.publish)),
+    }));
     return t;
   },
 
@@ -1213,7 +1274,10 @@ const autotaskSource: TicketSource = {
 
   async addNote(id, p, a) {
     const at = await autotask();
-    const actor = await actorResource(a);
+    // A client's reply (client portal): saved by the API user, signed with their name
+    const client = a.realUser.kind === "client";
+    const actor = client ? null : await actorResource(a);
+    if (client) p = { ...p, text: `${p.text}\n\n— ${a.user.name} (client, via le portail AKAB)`.slice(0, 8000) };
     const opts = await atOptions();
     const noteType = opts.noteTypes.find((n) => /task|tâche|detail|détail/i.test(n.label)) ?? opts.noteTypes[0];
     const publish = opts.publish.find((x) => (p.internal ? /intern/i : /all|tous|client|customer/i).test(x.label)) ?? opts.publish[0];
@@ -1236,7 +1300,8 @@ const autotaskSource: TicketSource = {
 
   async create(p, a) {
     const at = await autotask();
-    const actor = await actorResource(a);
+    // A client's question (message board) is saved by the API user: clients are not Autotask resources
+    const actor = a.realUser.kind === "client" ? null : await actorResource(a);
     const opts = await atOptions();
     const rid = p.assigneeId ? await resourceIdOf(p.assigneeId) : null;
     if (p.assigneeId && !rid) throw new SourceError("invalid_assignee");
@@ -1934,9 +1999,81 @@ const autotaskSource: TicketSource = {
     });
   },
 
+  async ticketsWithOtherContact(contactId) {
+    const id = Number(contactId);
+    if (!Number.isInteger(id) || id <= 0) return [];
+    try {
+      const at = await autotask();
+      const rows = await cached(`other-contact:${id}`, 60_000, () =>
+        at.query<{ ticketID: number }>("TicketAdditionalContacts", [{ op: "eq", field: "contactID", value: id }], { fields: ["ticketID"], max: 500 }),
+      );
+      return rows.map((r) => r.ticketID);
+    } catch (e) {
+      console.warn("[autotask] additional contacts:", e instanceof Error ? e.message : e);
+      return [];
+    }
+  },
+
+  async history(since) {
+    const at = await autotask();
+    // by the day, so the cache is shared through the day; stale-while-refresh: nobody waits twice
+    const day = since.slice(0, 10);
+    return cached(
+      `trend-history:${day}`,
+      30 * 60_000,
+      async () => {
+        const o = await atOptions();
+        type Row = { id: number; createDate: string; completedDate: string | null; queueID: number | null; source: number | null; priority: number };
+        const rows = await at.query<Row>(
+          "Tickets",
+          [
+            {
+              op: "or",
+              items: [
+                { op: "gte", field: "createDate", value: `${day}T00:00:00Z` },
+                { op: "gte", field: "completedDate", value: `${day}T00:00:00Z` },
+              ],
+            },
+          ],
+          { fields: ["id", "createDate", "completedDate", "queueID", "source", "priority"], max: 40000 },
+        );
+        return rows.map((r) => ({
+          id: r.id,
+          createdAt: r.createDate,
+          completedAt: r.completedDate ?? null,
+          queue: r.queueID ? String(r.queueID) : "",
+          source: r.source ? (o.sources.get(String(r.source)) ?? "") : "",
+          priority: String(r.priority),
+        }));
+      },
+      { stale: true },
+    );
+  },
+
+  async companyHistory(companyId) {
+    try {
+      const at = await autotask();
+      return await cached(`history:${companyId}`, 10 * 60_000, async () => {
+        const complete = (await atOptions()).statuses.filter((s) => s.kind === "complete").map((s) => Number(s.value));
+        const rows = await at.query<AtTicket>(
+          "Tickets",
+          [
+            { op: "eq", field: "companyID", value: companyId },
+            { op: "in", field: "status", value: complete.length ? complete : [5] },
+          ],
+          { fields: TICKET_FIELDS, max: 2000 },
+        );
+        return normalize(at, rows, true);
+      });
+    } catch (e) {
+      console.warn("[autotask] company history:", e instanceof Error ? e.message : e);
+      return [];
+    }
+  },
+
   async addAttachment(ticketId, p, a) {
     const at = await autotask();
-    const actor = await actorResource(a);
+    const actor = a.realUser.kind === "client" ? null : await actorResource(a);
     await at.call(
       "POST",
       `Tickets/${ticketId}/Attachments`,
@@ -1948,7 +2085,8 @@ const autotaskSource: TicketSource = {
 
   async addContact(companyId, p, a) {
     const at = await autotask();
-    const actor = await actorResource(a);
+    // A client becoming the contact of their own question: saved by the API user
+    const actor = a.realUser.kind === "client" ? null : await actorResource(a);
     const res = await at.call<{ itemId: number }>(
       "POST",
       `Companies/${companyId}/Contacts`,
