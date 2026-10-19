@@ -174,6 +174,15 @@ export function addDemoTicket(t: Omit<Ticket, "id" | "number" | "createdAt" | "u
 }
 
 /** Change fields of a sample ticket (an explicit assignee replaces the round-robin slot). */
+/** Other contacts of the sample tickets (Autotask "additional contacts"): ticket id → contact ids */
+const otherContacts = new Map<number, Set<string>>();
+export function setDemoOtherContacts(ticketId: number, contactIds: string[]) {
+  otherContacts.set(ticketId, new Set(contactIds));
+}
+export function demoTicketsWithOtherContact(contactId: string): number[] {
+  return [...otherContacts].filter(([, ids]) => ids.has(contactId)).map(([id]) => id);
+}
+
 export function addDemoAttachment(id: number, p: { name: string; size: number; author: string }): boolean {
   const t = store?.find((x) => x.id === id);
   if (!t) return false;
@@ -221,10 +230,160 @@ export function addDemoTimeEntry(id: number, p: { author: string; hours: number;
 /** Clients created in the portal (sample data, in memory) */
 const addedCompanies: { id: number; name: string }[] = [];
 export const demoCompanies = () => [...COMPANIES.map((name, i) => ({ id: 300 + i, name })), ...addedCompanies];
-export function addDemoCompany(name: string) {
-  const c = { id: 300 + COMPANIES.length + addedCompanies.length, name };
+/**
+ * A year of ticket history for the meeting trends (sample data): each day's
+ * tickets and when they were resolved. Seeded by the day, so the same day
+ * always gives the same tickets, after a restart too.
+ */
+export function demoHistory(sinceMs: number): { id: number; createdAt: string; completedAt: string | null; queue: string; source: string; priority: string }[] {
+  const DAY = 86_400_000;
+  const H = 3_600_000;
+  const now = Date.now();
+  const out: ReturnType<typeof demoHistory> = [];
+  const first = Math.floor(sinceMs / DAY) - 30; // tickets created a little before still get resolved in the range
+  const last = Math.floor(now / DAY);
+  for (let day = first; day <= last; day++) {
+    // small seeded generator (mulberry32)
+    let a = (day * 2654435761) >>> 0;
+    const rand = () => {
+      a = (a + 0x6d2b79f5) >>> 0;
+      let t = a;
+      t = Math.imul(t ^ (t >>> 15), t | 1);
+      t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+      return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+    };
+    const dow = new Date(day * DAY).getUTCDay();
+    const weekend = dow === 0 || dow === 6;
+    // a slow seasonal swing, busier on Mondays, few tickets on weekends
+    const season = 1 + 0.25 * Math.sin((day / 365) * 2 * Math.PI);
+    const n = weekend ? Math.floor(rand() * 3) : Math.round((7 + rand() * 6) * season * (dow === 1 ? 1.3 : 1));
+    for (let i = 0; i < n; i++) {
+      const created = day * DAY + (weekend ? 10 : 13) * H + Math.floor(rand() * 9 * H);
+      // resolution: most within a day or two, a long tail of waiting ones
+      const r = rand();
+      const hours = r < 0.35 ? 0.5 + rand() * 6 : r < 0.75 ? 6 + rand() * 42 : r < 0.93 ? 48 + rand() * 120 : 168 + rand() * 500;
+      const done = created + hours * H;
+      out.push({
+        id: 900000 + (day % 100000) * 40 + i,
+        createdAt: new Date(created).toISOString(),
+        completedAt: done <= now ? new Date(done).toISOString() : null,
+        queue: QUEUES[Math.floor(rand() * QUEUES.length)],
+        source: rand() < 0.5 ? "Courriel" : "Téléphone",
+        priority: ["critical", "high", "medium", "low"][Math.min(3, Math.floor(rand() * 4.4))],
+      });
+    }
+  }
+  return out.filter((t) => Date.parse(t.createdAt) >= sinceMs || (t.completedAt && Date.parse(t.completedAt) >= sinceMs));
+}
+
+export function addDemoCompany(name: string, id?: number) {
+  // a given id (the portal client's link) is kept when free, so it survives restarts
+  const free = id != null && id > 0 && !demoCompanies().some((x) => x.id === id);
+  const c = { id: free ? id : Math.max(300 + COMPANIES.length, ...demoCompanies().map((x) => x.id + 1)), name };
   addedCompanies.push(c);
   return c;
+}
+
+/**
+ * Sample tickets for the portal's own client companies (local demo only):
+ * each one gets a ticket company of the same name, its client users as
+ * contacts (matched by email, so their tickets are "theirs"), and a few
+ * tickets in every state. Built the same way after every restart.
+ */
+const seededClients = new Set<string>();
+const hash = (s: string) => [...s].reduce((h, c) => (h * 31 + c.charCodeAt(0)) >>> 0, 7);
+let clientTicketNo = 0;
+export function ensureClientSamples(clients: { name: string; phone: string | null; autotaskId: number | null; users: { name: string; email: string }[] }[]) {
+  store ??= generate();
+  const H = 3600_000;
+  const now = Date.now();
+  // subjects a client would write (no monitoring alerts)
+  const subjects = SUBJECTS.filter(([t]) => !/Alerte|Sauvegarde/.test(t));
+  for (const cl of clients) {
+    const key = cl.name.trim().toLowerCase();
+    if (seededClients.has(key) || !cl.users.length) continue;
+    seededClients.add(key);
+    const company = demoCompanies().find((x) => x.name.trim().toLowerCase() === key) ?? addDemoCompany(cl.name, cl.autotaskId ?? undefined);
+    const people = cl.users.map(
+      (u) =>
+        allContacts().find((c) => c.companyId === company.id && c.email?.toLowerCase() === u.email.toLowerCase()) ??
+        // same id after every restart, so the CRM copy does not see them leave
+        addDemoContact({ companyId: company.id, name: u.name, email: u.email, phone: cl.phone }, `c-${company.id}-p${hash(u.email.toLowerCase())}`),
+    );
+    const h = hash(key);
+    const plans: { status: TicketStatus; priority: TicketPriority; ageH: number; dueH: number; talk: number; unassigned?: boolean; question?: boolean; secondary?: boolean }[] = [
+      { status: "new", priority: "medium", ageH: 3, dueH: 45, talk: 0, unassigned: true },
+      { status: "inProgress", priority: "high", ageH: 30, dueH: 18, talk: 3, secondary: true },
+      { status: "waitingCustomer", priority: "medium", ageH: 52, dueH: 30, talk: 2, question: true },
+      { status: "scheduled", priority: "low", ageH: 70, dueH: 96, talk: 1 },
+      { status: "inProgress", priority: "critical", ageH: 100, dueH: -6, talk: 2 },
+      { status: "waitingVendor", priority: "medium", ageH: 140, dueH: 72, talk: 2 },
+      { status: "complete", priority: "medium", ageH: 220, dueH: -120, talk: 3 },
+      // older history (the portal shows every resolved ticket)
+      { status: "complete", priority: "low", ageH: 24 * 64, dueH: -24 * 60, talk: 3 },
+      { status: "complete", priority: "high", ageH: 24 * 210, dueH: -24 * 208, talk: 3 },
+    ];
+    plans.forEach((p, k) => {
+      const [title, description] = subjects[(h + k * 5) % subjects.length];
+      const contact = people[k % people.length];
+      const created = new Date(now - p.ageH * H);
+      const notes: Note[] = [];
+      const tech = [
+        "Prise en charge. Je regarde à distance dès que possible.",
+        "Diagnostic fait : le pilote réseau était corrompu, réinstallé. À surveiller.",
+        "Pièce commandée chez le fournisseur, livraison prévue en début de semaine.",
+        "Intervention terminée, tout fonctionne. Merci de votre patience !",
+      ];
+      const client = ["Merci, c'est noté.", "Le problème est revenu ce matin vers 9 h.", "Parfait, merci beaucoup !"];
+      for (let i = 0; i < p.talk; i++) {
+        const fromTech = i % 2 === 0;
+        notes.push({
+          id: `cn${h}-${k}-${i}`,
+          author: fromTech ? "Équipe AKAB" : contact.name,
+          at: new Date(created.getTime() + (i + 1) * 4 * H).toISOString(),
+          text: fromTech ? tech[(i / 2 + k) % (p.status === "complete" ? 4 : 3)] : client[(i + k) % client.length],
+          internal: false,
+        });
+      }
+      if (p.talk > 1) notes.push({ id: `cn${h}-${k}-int`, author: "Équipe AKAB", at: new Date(created.getTime() + H).toISOString(), text: "Note interne : vérifier la garantie avant de commander.", internal: true });
+      if (p.question) {
+        notes.push({
+          id: `cn${h}-${k}-q`,
+          author: "Équipe AKAB",
+          at: new Date(now - 5 * H).toISOString(),
+          text: "Bonjour, pouvez-vous nous indiquer à quelle heure le poste est disponible pour une intervention à distance ?",
+          internal: false,
+        });
+      }
+      notes.sort((a, b) => a.at.localeCompare(b.at));
+      const n = clientTicketNo++;
+      // one ticket also lists the next person as an "other contact" (theirs too)
+      if (k === 4 && people.length > 1) setDemoOtherContacts(42000 + n, [people[(k + 1) % people.length].id]);
+      store!.push({
+        id: 42000 + n,
+        number: `T${ymd(created)}.${String(500 + n).padStart(4, "0")}`,
+        title,
+        description: `${description}\n\n— ${contact.name}`,
+        company,
+        contact: contact.name,
+        contactId: contact.id,
+        status: p.status,
+        priority: p.priority,
+        queue: QUEUES[k % 2],
+        source: k % 2 ? "email" : "portal",
+        assignee: null,
+        slot: p.unassigned ? null : h + k,
+        secondarySlots: p.secondary ? [h + k + 1] : [],
+        secondary: [],
+        createdAt: created.toISOString(),
+        dueAt: new Date(now + p.dueH * H).toISOString(),
+        updatedAt: notes.at(-1)?.at ?? created.toISOString(),
+        hours: p.talk * 0.5,
+        notes,
+        assetId: null,
+      });
+    });
+  }
 }
 
 // ── Contracts per client (Autotask "Contracts"); new clients have none ──
@@ -268,9 +427,9 @@ function allContacts(): Contact[] {
 export const demoContacts = (companyId: number) => allContacts().filter((x) => x.companyId === companyId);
 export const demoContact = (id: string) => allContacts().find((x) => x.id === id) ?? null;
 
-export function addDemoContact(p: Omit<Contact, "id">): Contact {
+export function addDemoContact(p: Omit<Contact, "id">, id?: string): Contact {
   const list = allContacts();
-  const c: Contact = { ...p, id: `c-${p.companyId}-${Date.now()}` };
+  const c: Contact = { ...p, id: id && !list.some((x) => x.id === id) ? id : `c-${p.companyId}-${Date.now()}-${list.length}` };
   list.push(c);
   return c;
 }

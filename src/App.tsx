@@ -25,6 +25,9 @@ const ExpensesPage = lazy(() => pageLoaders.expenses().then((m) => ({ default: m
 const ApprovalsPage = lazy(() => pageLoaders.approvals().then((m) => ({ default: m.ApprovalsPage })));
 const AccountingPage = lazy(() => pageLoaders.accounting().then((m) => ({ default: m.AccountingPage })));
 const ClientHome = lazy(() => import("@/pages/client/ClientHome").then((m) => ({ default: m.ClientHome })));
+const ClientLayout = lazy(() => import("@/layouts/ClientLayout").then((m) => ({ default: m.ClientLayout })));
+const ClientTicketsPage = lazy(() => import("@/pages/client/ClientTicketsPage").then((m) => ({ default: m.ClientTicketsPage })));
+const ClientSettingsPage = lazy(() => import("@/pages/client/ClientSettingsPage").then((m) => ({ default: m.ClientSettingsPage })));
 
 function Splash() {
   return (
@@ -115,7 +118,12 @@ function Root() {
           <StaffApp />
         ) : (
           <Routes>
-            <Route path="*" element={<ClientHome />} />
+            <Route element={<ClientLayout />}>
+              <Route index element={<ClientHome />} />
+              <Route path="settings" element={<ClientSettingsPage />} />
+              <Route path="tickets" element={<Guard permission="clientTickets.view"><ClientTicketsPage /></Guard>} />
+              <Route path="*" element={<Navigate to="/" replace />} />
+            </Route>
           </Routes>
         )}
       </Suspense>

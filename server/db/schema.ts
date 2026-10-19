@@ -146,6 +146,8 @@ export const clientInvoices = pgTable(
     /** Shown on the invoice (made in the portal) */
     notes: text("notes"),
     poNumber: text("po_number"),
+    /** Sent to the client by email (marked by hand until the portal emails invoices) */
+    emailedAt: timestamp("emailed_at", { withTimezone: true }),
     syncedAt: timestamp("synced_at", { withTimezone: true }),
     createdAt: created(),
     updatedAt: updated(),
@@ -1026,10 +1028,30 @@ export const meetingPoints = pgTable("meeting_points", {
   /** Optional details: a description, or bullet points (lines starting with "- ") */
   details: text("details"),
   doneAt: timestamp("done_at", { withTimezone: true }),
+  /** Archived: gone from the list, kept in the archive at the bottom of the page */
+  archivedAt: timestamp("archived_at", { withTimezone: true }),
+  /** Put off to a later meeting: hidden until this day (YYYY-MM-DD, Québec) */
+  snoozeUntil: text("snooze_until"),
   authorId: uuid("author_id").references(() => users.id, { onDelete: "set null" }),
   authorName: text("author_name").notNull(),
   createdAt: created(),
 });
+
+/** Notes taken on a point to discuss, oldest first. */
+export const meetingPointNotes = pgTable(
+  "meeting_point_notes",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    pointId: uuid("point_id")
+      .notNull()
+      .references(() => meetingPoints.id, { onDelete: "cascade" }),
+    text: text("text").notNull(),
+    authorId: uuid("author_id").references(() => users.id, { onDelete: "set null" }),
+    authorName: text("author_name").notNull(),
+    createdAt: created(),
+  },
+  (t) => [index("meeting_point_notes_point_idx").on(t.pointId)],
+);
 
 /** Team absences (vacation, sick dayâ€¦), shown on the weekly meeting calendar. */
 export const meetingAbsences = pgTable(
@@ -1232,6 +1254,30 @@ export const timesheetEntries = pgTable(
 );
 
 /** An expense claim (with its receipt), approved then reimbursed; billable ones go on the client's invoice. */
+/**
+ * An expense report: items added one by one while it is open, then submitted
+ * together. Each item is still approved (or refused) on its own; a refused
+ * item opens the report again (submitted_at back to null).
+ */
+export const expenseReports = pgTable(
+  "expense_reports",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    userId: uuid("user_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    title: text("title").notNull(),
+    /** The days it covers (YYYY-MM-DD, both included); every item's date is within */
+    periodStart: text("period_start"),
+    periodEnd: text("period_end"),
+    /** null: open (items can be added, changed, removed) */
+    submittedAt: timestamp("submitted_at", { withTimezone: true }),
+    createdAt: created(),
+    updatedAt: updated(),
+  },
+  (t) => [index("expense_reports_user_idx").on(t.userId)],
+);
+
 export const expenses = pgTable(
   "expenses",
   {
@@ -1239,6 +1285,8 @@ export const expenses = pgTable(
     userId: uuid("user_id")
       .notNull()
       .references(() => users.id, { onDelete: "cascade" }),
+    /** The report it is part of (every expense has one; older ones got their own) */
+    reportId: uuid("report_id").references(() => expenseReports.id, { onDelete: "cascade" }),
     date: text("date").notNull(),
     typeId: uuid("type_id")
       .notNull()

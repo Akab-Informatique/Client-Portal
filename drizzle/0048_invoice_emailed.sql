@@ -1,0 +1,1 @@
+ALTER TABLE "client_invoices" ADD COLUMN "emailed_at" timestamp with time zone;

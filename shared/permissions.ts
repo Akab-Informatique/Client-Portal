@@ -319,6 +319,74 @@ export const MODULES = [
     label: { fr: "Babillard", en: "Message board" },
     permissions: [
       { key: "board.view", label: { fr: "Recevoir les messages d'AKAB", en: "Receive AKAB messages" } },
+      {
+        key: "board.ticket",
+        label: { fr: "Poser une question sur un message", en: "Ask a question about a message" },
+        description: {
+          fr: "Ouvrir un billet de support depuis un message du babillard",
+          en: "Open a support ticket from a message board post",
+        },
+      },
+    ],
+  },
+  // Client portal › Operations
+  {
+    key: "clientTickets",
+    audience: "client",
+    label: { fr: "Billets", en: "Tickets" },
+    permissions: [
+      { key: "clientTickets.view", label: { fr: "Voir ses billets", en: "See one's tickets" }, description: { fr: "Les billets où la personne est le contact", en: "Tickets where the person is the contact" } },
+      {
+        key: "clientTickets.all",
+        label: { fr: "Voir tous les billets de l'entreprise", en: "See all the company's tickets" },
+        description: { fr: "Barre de filtres : les billets de tous les usagers de l'entreprise", en: "Filter bar: the tickets of every user of the company" },
+      },
+      {
+        key: "clientTickets.comment",
+        label: { fr: "Répondre dans un billet", en: "Reply in a ticket" },
+        description: { fr: "Commentaires de suivi, réponses aux questions du technicien", en: "Follow-up comments, answers to the technician's questions" },
+      },
+      { key: "clientTickets.attach", label: { fr: "Joindre des documents", en: "Attach documents" } },
+      {
+        key: "clientTickets.escalate",
+        label: { fr: "Demander une escalade de priorité", en: "Ask for a priority escalation" },
+        description: { fr: "L'équipe AKAB reçoit la demande et décide", en: "The AKAB team receives the request and decides" },
+      },
+    ],
+  },
+  {
+    key: "clientDevices",
+    audience: "client",
+    label: { fr: "Appareils", en: "Devices" },
+    permissions: [{ key: "clientDevices.view", label: { fr: "Voir les appareils de l'entreprise", en: "See the company's devices" } }],
+  },
+  {
+    key: "clientDocs",
+    audience: "client",
+    label: { fr: "Documentation", en: "Documentation" },
+    permissions: [{ key: "clientDocs.view", label: { fr: "Voir la documentation de l'entreprise", en: "See the company's documentation" } }],
+  },
+  // Client portal › Accounting
+  {
+    key: "clientInvoices",
+    audience: "client",
+    label: { fr: "Factures", en: "Invoices" },
+    permissions: [{ key: "clientInvoices.view", label: { fr: "Voir les factures de l'entreprise", en: "See the company's invoices" } }],
+  },
+  {
+    key: "clientQuotes",
+    audience: "client",
+    label: { fr: "Soumissions", en: "Quotes" },
+    permissions: [{ key: "clientQuotes.view", label: { fr: "Voir les soumissions de l'entreprise", en: "See the company's quotes" } }],
+  },
+  // Client portal › Admin settings (name menu, not the sidebar)
+  {
+    key: "clientAdmin",
+    audience: "client",
+    label: { fr: "Paramètres admin", en: "Admin settings" },
+    permissions: [
+      { key: "clientAdmin.company", label: { fr: "Voir les informations de l'entreprise", en: "See the company information" } },
+      { key: "clientAdmin.users", label: { fr: "Voir la liste des usagers de l'entreprise", en: "See the company's user list" } },
     ],
   },
 ] as const satisfies readonly ModuleDef[];
@@ -338,7 +406,10 @@ export const ACCESS_LAYOUT: { key: string; audience: Audience; label: Localized;
   { key: "management", audience: "staff", label: { fr: "Gestion", en: "Management" }, modules: ["crm", "clientview", "store"] },
   { key: "accounting", audience: "staff", label: { fr: "Comptabilité", en: "Accounting" }, modules: ["accounting"] },
   { key: "admin", audience: "staff", label: { fr: "Paramètres admin", en: "Admin settings" }, modules: ["admin"] },
-  { key: "portal", audience: "client", label: { fr: "Portail client", en: "Client portal" }, modules: ["board"] },
+  { key: "clientBoard", audience: "client", label: { fr: "Babillard", en: "Message board" }, modules: ["board"] },
+  { key: "clientOperations", audience: "client", label: { fr: "Opérations", en: "Operations" }, modules: ["clientTickets", "clientDevices", "clientDocs"] },
+  { key: "clientAccounting", audience: "client", label: { fr: "Comptabilité", en: "Accounting" }, modules: ["clientInvoices", "clientQuotes"] },
+  { key: "clientSettings", audience: "client", label: { fr: "Paramètres admin", en: "Admin settings" }, modules: ["clientAdmin"] },
 ];
 
 export const ALL_PERMISSIONS: readonly PermissionKey[] = MODULES.flatMap((m) =>
@@ -429,16 +500,40 @@ export const SYSTEM_ROLES: Array<{
     slug: "client-admin",
     audience: "client",
     name: { fr: "Administrateur client", en: "Client administrator" },
-    description: { fr: "Responsable TI chez le client", en: "IT contact at the client" },
-    permissions: ["board.view"],
+    description: { fr: "Responsable chez le client : tout le portail client", en: "Person in charge at the client: the whole client portal" },
+    permissions: permissionsFor("client"),
+    locked: false,
+  },
+  {
+    slug: "client-accounting",
+    audience: "client",
+    name: { fr: "Comptabilité client", en: "Client accounting" },
+    description: { fr: "Babillard, factures et soumissions", en: "Message board, invoices and quotes" },
+    permissions: ["board.view", "board.ticket", "clientTickets.view", "clientTickets.comment", "clientTickets.attach", "clientTickets.escalate", "clientInvoices.view", "clientQuotes.view"],
+    locked: false,
+  },
+  {
+    slug: "client-tech",
+    audience: "client",
+    name: { fr: "Technique client", en: "Client technical" },
+    description: { fr: "Babillard, billets, appareils et documentation", en: "Message board, tickets, devices and documentation" },
+    permissions: ["board.view", "board.ticket", "clientTickets.view", "clientTickets.comment", "clientTickets.attach", "clientTickets.escalate", "clientTickets.all", "clientDevices.view", "clientDocs.view"],
+    locked: false,
+  },
+  {
+    slug: "client-config",
+    audience: "client",
+    name: { fr: "Configuration admin", en: "Admin configuration" },
+    description: { fr: "Paramètres admin du portail : informations de l'entreprise et liste des usagers", en: "Portal admin settings: company information and user list" },
+    permissions: ["board.view", "board.ticket", "clientTickets.view", "clientTickets.comment", "clientTickets.attach", "clientTickets.escalate", "clientAdmin.company", "clientAdmin.users"],
     locked: false,
   },
   {
     slug: "client-user",
     audience: "client",
     name: { fr: "Usager client", en: "Client user" },
-    description: { fr: "Employé du client", en: "Client employee" },
-    permissions: ["board.view"],
+    description: { fr: "Employé du client : le babillard et ses billets", en: "Client employee: the message board and their tickets" },
+    permissions: ["board.view", "board.ticket", "clientTickets.view", "clientTickets.comment", "clientTickets.attach", "clientTickets.escalate"],
     locked: false,
   },
 ];

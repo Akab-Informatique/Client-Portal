@@ -3,7 +3,7 @@ import { useTranslation } from "react-i18next";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { Link, useNavigate } from "react-router-dom";
-import { AlarmClock, ArrowRight, BellRing, CalendarCheck, CheckCircle2, Filter, Loader2 } from "lucide-react";
+import { AlarmClock, ArrowRight, BellRing, CalendarCheck, CheckCircle2, Clock3, Filter, Loader2, Lock, MessageSquareText, MousePointer2 } from "lucide-react";
 import { GlassBackdrop } from "@/components/brand/GlassBackdrop";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -12,13 +12,15 @@ import { useCan } from "@/lib/session";
 import { useTicketWorkspace } from "@/pages/tickets/workspace";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Skeleton } from "@/components/ui/skeleton";
-import { api } from "@/lib/api";
+import { api, ApiError } from "@/lib/api";
+import { relativeTime } from "@/lib/format";
 import { currentLocale } from "@/i18n";
 import { cn } from "@/lib/utils";
 import { PointsSection } from "./Points";
 import { ProjectsSection } from "./Projects";
+import { TrendsSection } from "./Trends";
 import { WeekSection } from "./Week";
-import { PRIORITY_STYLE, STATUS_STYLE, useChoiceText, type PriorityKind, type StatusKind } from "@/pages/tickets/shared";
+import { PRIORITY_STYLE, STATUS_STYLE, useChoiceText, type PriorityKind, type StatusKind, type TicketDetail } from "@/pages/tickets/shared";
 
 type OverdueTicket = {
   id: number;
@@ -131,13 +133,13 @@ export function MeetingsPage() {
         {isLoading ? (
           <div className="grid gap-4 md:grid-cols-2 2xl:grid-cols-4">
             {[0, 1, 2, 3].map((i) => (
-              <Skeleton key={i} className="h-72 rounded-2xl" />
+              <Skeleton key={i} className="h-[22rem] rounded-2xl" />
             ))}
           </div>
         ) : isError || !data ? (
           <p className="py-16 text-center text-muted-foreground">{t("common.error")}</p>
         ) : (
-          <div className="grid items-start gap-4 md:grid-cols-2 2xl:grid-cols-4">
+          <div className="grid gap-4 md:grid-cols-2 2xl:grid-cols-4">
             <GaugeCard
               title={t("meetings.overdue.gaugeLate")}
               total={data.total}
@@ -157,6 +159,7 @@ export function MeetingsPage() {
       </section>
 
       <ProjectsSection />
+      <TrendsSection />
     </div>
   );
 }
@@ -170,11 +173,7 @@ function GaugeCard({ title, total, people, url }: { title: string; total: number
   const value = picked ? picked.count : total;
   const tickets = (picked ? picked.tickets : people.flatMap((p) => p.tickets)).sort((a, b) => a.dueAt.localeCompare(b.dueAt));
   return (
-    <div className="space-y-4 rounded-2xl border bg-card/80 p-5">
-      <div className="flex items-baseline justify-between gap-2">
-        <h3 className="font-semibold">{title}</h3>
-        <span className="truncate text-sm text-muted-foreground">{picked ? picked.name : t("meetings.overdue.everyone")}</span>
-      </div>
+    <GaugePanel glow={heat(value, WORKLOAD, 0.28)} title={title} aside={<span className="truncate text-sm text-muted-foreground">{picked ? picked.name : t("meetings.overdue.everyone")}</span>}>
       <GaugeButton onClick={() => setListOpen(true)}>
         <Gauge value={value} scale={WORKLOAD} />
       </GaugeButton>
@@ -188,7 +187,7 @@ function GaugeCard({ title, total, people, url }: { title: string; total: number
           onClose={() => setListOpen(false)}
         />
       )}
-      <div className="flex flex-wrap justify-center gap-1.5">
+      <div className="flex max-h-28 flex-wrap content-start justify-center gap-1.5 overflow-y-auto scrollbar-thin">
         <Chip active={who === null} onClick={() => setWho(null)} label={t("meetings.overdue.everyone")} count={total} scale={WORKLOAD} />
         {[...people]
           .sort((a, b) => b.count - a.count || a.name.localeCompare(b.name))
@@ -196,6 +195,25 @@ function GaugeCard({ title, total, people, url }: { title: string; total: number
             <Chip key={p.id} active={who === p.id} onClick={() => setWho(who === p.id ? null : p.id)} label={p.name} count={p.count} scale={WORKLOAD} />
           ))}
       </div>
+    </GaugePanel>
+  );
+}
+
+/**
+ * The frame of every gauge: a glass panel with a soft light in the gauge's
+ * color behind it; all four stretch to the same height.
+ */
+function GaugePanel({ title, aside, glow, children }: { title: React.ReactNode; aside?: React.ReactNode; glow: string; children: React.ReactNode }) {
+  return (
+    <div className="glass group/gauge relative flex h-full min-h-[22rem] flex-col gap-4 overflow-hidden rounded-2xl border p-5 transition-shadow duration-500 hover:shadow-[0_24px_60px_-30px_rgba(255,206,26,0.35)]">
+      {/* the gauge's color, as a light behind the glass */}
+      <div aria-hidden className="pointer-events-none absolute -top-24 left-1/2 -z-10 size-64 -translate-x-1/2 rounded-full blur-3xl transition-colors duration-700" style={{ background: glow }} />
+      <span aria-hidden className="pointer-events-none absolute inset-x-[15%] top-0 h-px bg-gradient-to-r from-transparent via-white/40 to-transparent" />
+      <div className="flex h-6 items-center justify-between gap-2">
+        <h3 className="flex min-w-0 items-center gap-1.5 truncate font-semibold">{title}</h3>
+        {aside}
+      </div>
+      {children}
     </div>
   );
 }
@@ -316,13 +334,15 @@ function StrayCard({ stray, queues }: { stray: Overdue["stray"]; queues: Overdue
   const [listOpen, setListOpen] = useState(false);
   const to = ticketsUrl({ view: "unassigned", statusKind: OPEN_KINDS.filter((k) => k !== "new").join(",") }, null, queues);
   return (
-    <div className="space-y-4 rounded-2xl border bg-card/80 p-5">
-      <div className="flex items-baseline justify-between gap-2">
-        <h3 className="font-semibold">{t("meetings.overdue.gaugeStray")}</h3>
+    <GaugePanel
+      glow={heat(stray.total, STRAY, 0.28)}
+      title={t("meetings.overdue.gaugeStray")}
+      aside={
         <Link to={to} className="inline-flex shrink-0 items-center gap-1 text-sm text-muted-foreground hover:text-foreground">
           {t("meetings.overdue.seeTickets")} <ArrowRight className="size-3.5" />
         </Link>
-      </div>
+      }
+    >
       <GaugeButton onClick={() => setListOpen(true)}>
         <Gauge value={stray.total} scale={STRAY} />
       </GaugeButton>
@@ -335,7 +355,7 @@ function StrayCard({ stray, queues }: { stray: Overdue["stray"]; queues: Overdue
           onClose={() => setListOpen(false)}
         />
       )}
-      <div className="flex flex-wrap justify-center gap-1.5">
+      <div className="flex max-h-28 flex-wrap content-start justify-center gap-1.5 overflow-y-auto scrollbar-thin">
         {stray.byStatus.length ? (
           stray.byStatus.map((s) => (
             <span
@@ -350,7 +370,7 @@ function StrayCard({ stray, queues }: { stray: Overdue["stray"]; queues: Overdue
           <span className="text-sm text-emerald-400">{t("meetings.overdue.noStray")}</span>
         )}
       </div>
-    </div>
+    </GaugePanel>
   );
 }
 
@@ -362,7 +382,7 @@ function GaugeButton({ onClick, children }: { onClick: () => void; children: Rea
       type="button"
       onClick={onClick}
       title={t("meetings.overdue.openList")}
-      className="block w-full rounded-xl transition-colors hover:bg-accent/30 focus-visible:outline-2"
+      className="block w-full rounded-xl transition-colors hover:bg-foreground/[0.04] focus-visible:outline-2"
     >
       {children}
     </button>
@@ -370,6 +390,74 @@ function GaugeButton({ onClick, children }: { onClick: () => void; children: Rea
 }
 
 const SHOWN = 12;
+
+/** Beside a gauge's list: the hovered ticket's last two replies or notes (its rights: tickets.view). */
+function LatestNotes({ ticket }: { ticket: Row | null }) {
+  const { t } = useTranslation();
+  const { data, isLoading, error } = useQuery({
+    queryKey: ["tickets", "detail", ticket?.id],
+    queryFn: () => api.get<TicketDetail>(`/tickets/${ticket!.id}`),
+    enabled: Boolean(ticket),
+    staleTime: 60_000,
+    retry: false,
+  });
+  const latest = (data?.notes ?? [])
+    .filter((n) => (n.kind === "time" ? n.text || n.internalText : n.text))
+    .sort((a, b) => b.at.localeCompare(a.at))
+    .slice(0, 2);
+  return (
+    <aside className="glass flex max-h-[55vh] min-h-48 flex-col overflow-hidden rounded-xl border">
+      {!ticket ? (
+        <p className="m-auto flex max-w-56 flex-col items-center gap-2 p-6 text-center text-sm text-muted-foreground">
+          <MousePointer2 className="size-5 text-primary/70" /> {t("meetings.overdue.hoverHint")}
+        </p>
+      ) : (
+        <>
+          <div className="border-b px-4 py-2.5">
+            <p className="font-mono text-[11px] text-muted-foreground">{ticket.number}</p>
+            <p className="line-clamp-2 text-sm font-semibold">{ticket.title}</p>
+          </div>
+          <div className="min-h-0 flex-1 space-y-3 overflow-y-auto p-4 scrollbar-thin">
+            <p className="flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
+              <MessageSquareText className="size-3.5 text-primary" /> {t("meetings.overdue.latestNotes")}
+            </p>
+            {isLoading ? (
+              <>
+                <Skeleton className="h-16" />
+                <Skeleton className="h-16" />
+              </>
+            ) : error ? (
+              <p className="text-sm text-muted-foreground">{error instanceof ApiError && error.status === 403 ? t("meetings.overdue.notesNoAccess") : t("common.error")}</p>
+            ) : latest.length === 0 ? (
+              <p className="text-sm text-muted-foreground">{t("meetings.overdue.noNotes")}</p>
+            ) : (
+              latest.map((n) => (
+                <div key={n.id} className={cn("rounded-lg border p-3", n.internal && "border-amber-500/30 bg-amber-500/5")}>
+                  <p className="flex flex-wrap items-center gap-x-2 text-xs">
+                    <span className="font-medium">{n.author}</span>
+                    <span className="text-muted-foreground">{relativeTime(n.at)}</span>
+                    {n.kind === "time" ? (
+                      <span className="inline-flex items-center gap-1 text-sky-400">
+                        <Clock3 className="size-3" /> {t("meetings.overdue.noteTime", { hours: n.hours ?? 0 })}
+                      </span>
+                    ) : (
+                      n.internal && (
+                        <span className="inline-flex items-center gap-1 text-amber-400">
+                          <Lock className="size-3" /> {t("meetings.overdue.noteInternal")}
+                        </span>
+                      )
+                    )}
+                  </p>
+                  <p className="mt-1 line-clamp-6 whitespace-pre-wrap text-sm text-foreground/90">{n.kind === "time" ? n.text || n.internalText : n.text}</p>
+                </div>
+              ))
+            )}
+          </div>
+        </>
+      )}
+    </aside>
+  );
+}
 
 /** A short list of a gauge's tickets; clicking it opens the tickets page with the same filter. */
 function TicketsDialog({
@@ -395,9 +483,17 @@ function TicketsDialog({
     navigate(to);
   };
   const days = (iso: string) => Math.max(1, Math.floor((Date.now() - new Date(iso).getTime()) / 86_400_000));
+  // the ticket under the mouse (after a short pause, so sweeping the list does not load every ticket)
+  const [hovered, setHovered] = useState<Row | null>(null);
+  const pause = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+  const hover = (x: Row) => {
+    clearTimeout(pause.current);
+    pause.current = setTimeout(() => setHovered(x), 140);
+  };
+  useEffect(() => () => clearTimeout(pause.current), []);
   return (
     <Dialog open onOpenChange={(o) => !o && onClose()}>
-      <DialogContent className="sm:max-w-xl">
+      <DialogContent className="sm:max-w-5xl">
         <DialogHeader>
           <DialogTitle>
             {title} <span className="font-normal text-muted-foreground">({tickets.length})</span>
@@ -407,6 +503,7 @@ function TicketsDialog({
         {tickets.length === 0 ? (
           <p className="py-6 text-center text-sm text-emerald-400">{t("meetings.overdue.emptyList")}</p>
         ) : (
+          <div className="grid gap-4 md:grid-cols-[minmax(0,1fr)_minmax(0,22rem)]">
           <button
             type="button"
             onClick={go}
@@ -415,7 +512,11 @@ function TicketsDialog({
           >
             <ul className="max-h-[55vh] divide-y overflow-y-auto">
               {tickets.slice(0, SHOWN).map((x) => (
-                <li key={x.id} className="px-3 py-2 transition-colors hover:bg-accent/40">
+                <li
+                  key={x.id}
+                  onMouseEnter={() => hover(x)}
+                  className={cn("px-3 py-2 transition-colors hover:bg-accent/40", hovered?.id === x.id && "bg-accent/40")}
+                >
                   <div className="flex items-center gap-2 text-xs">
                     <span
                       className={cn("size-2 shrink-0 rounded-full", PRIORITY_STYLE[x.priorityKind].dot)}
@@ -441,6 +542,8 @@ function TicketsDialog({
               <p className="border-t px-3 py-2 text-center text-xs text-muted-foreground">{t("meetings.overdue.more", { count: tickets.length - SHOWN })}</p>
             )}
           </button>
+          <LatestNotes ticket={hovered} />
+          </div>
         )}
         <div className="flex justify-end">
           <Button onClick={go}>
@@ -541,12 +644,14 @@ function AlertsCard({ alerts, completeStatus }: { alerts: Overdue["alerts"]; com
     ws.open(id);
   };
   return (
-    <div className="space-y-4 rounded-2xl border bg-card/80 p-5">
-      <div className="flex items-baseline justify-between gap-2">
-        <h3 className="flex items-center gap-1.5 font-semibold">
+    <GaugePanel
+      glow={heat(alerts.length, ALERTS, 0.28)}
+      title={
+        <>
           <BellRing className="size-4 text-amber-300" /> {t("meetings.overdue.gaugeAlerts")}
-        </h3>
-      </div>
+        </>
+      }
+    >
       <GaugeButton onClick={() => setListOpen(true)}>
         <Gauge value={alerts.length} scale={ALERTS} />
       </GaugeButton>
@@ -554,7 +659,7 @@ function AlertsCard({ alerts, completeStatus }: { alerts: Overdue["alerts"]; com
         {newest ? t("meetings.overdue.latestAlert", { title: newest.title }) : <span className="text-emerald-400">{t("meetings.overdue.noAlerts")}</span>}
       </p>
       {listOpen && <AlertsDialog alerts={alerts} completeStatus={completeStatus} onOpen={openTicket} onClose={() => setListOpen(false)} />}
-    </div>
+    </GaugePanel>
   );
 }
 

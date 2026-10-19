@@ -112,16 +112,44 @@ export const meetingRoutes = new Hono<AppEnv>()
     return c.json({ ok: true });
   })
 
-  // ── Points to discuss (meetings.manage to change): open ones, and those settled in the last 7 days ──
+  // ── Points to discuss (meetings.manage to change) ──
+  // The list: open ones and those settled in the last 7 days; never archived ones,
+  // nor those put off to a later day (back on the list that day).
   .get("/points", async (c) => {
     const p = schema.meetingPoints;
+    const today = todayQc();
     const rows = await db()
-      .select({ id: p.id, text: p.text, details: p.details, doneAt: p.doneAt, authorName: p.authorName, createdAt: p.createdAt })
+      .select(pointFields)
       .from(p)
-      .where(or(isNull(p.doneAt), gt(p.doneAt, new Date(Date.now() - 7 * 86_400_000))))
+      .where(
+        and(
+          isNull(p.archivedAt),
+          or(isNull(p.snoozeUntil), lte(p.snoozeUntil, today)),
+          or(isNull(p.doneAt), gt(p.doneAt, new Date(Date.now() - 7 * 86_400_000))),
+        ),
+      )
       .orderBy(asc(p.createdAt))
       .limit(300);
-    return c.json(rows);
+    return c.json(await withNotes(rows));
+  })
+
+  /** Points put off to a later day, the soonest first. */
+  .get("/points/later", async (c) => {
+    const p = schema.meetingPoints;
+    const rows = await db()
+      .select(pointFields)
+      .from(p)
+      .where(and(isNull(p.archivedAt), gt(p.snoozeUntil, todayQc())))
+      .orderBy(asc(p.snoozeUntil), asc(p.createdAt))
+      .limit(300);
+    return c.json(await withNotes(rows));
+  })
+
+  /** Archived points, the latest archived first. */
+  .get("/points/archive", async (c) => {
+    const p = schema.meetingPoints;
+    const rows = await db().select(pointFields).from(p).where(isNotNull(p.archivedAt)).orderBy(desc(p.archivedAt)).limit(200);
+    return c.json(await withNotes(rows));
   })
 
   .post("/points", requirePermission("meetings.manage"), async (c) => {
@@ -142,12 +170,20 @@ export const meetingRoutes = new Hono<AppEnv>()
         text: z.string().trim().min(1).max(2000).optional(),
         details: z.string().trim().max(8000).nullable().optional(),
         done: z.boolean().optional(),
+        archived: z.boolean().optional(),
+        // put off to that day (after today), or null: back on the list now
+        snoozeUntil: zDay.nullable().optional(),
       }),
     );
+    if (v.snoozeUntil && v.snoozeUntil <= todayQc()) throw new HTTPException(400, { message: "snooze_not_future" });
     const set: Partial<typeof schema.meetingPoints.$inferInsert> = {};
     if (v.text !== undefined) set.text = v.text;
     if (v.details !== undefined) set.details = v.details || null;
     if (v.done !== undefined) set.doneAt = v.done ? new Date() : null;
+    if (v.archived !== undefined) set.archivedAt = v.archived ? new Date() : null;
+    if (v.snoozeUntil !== undefined) set.snoozeUntil = v.snoozeUntil;
+    // restored from the archive: on the list again, not put off
+    if (v.archived === false) set.snoozeUntil = null;
     if (!Object.keys(set).length) return c.json({ ok: true });
     const rows = await db().update(schema.meetingPoints).set(set).where(eq(schema.meetingPoints.id, id)).returning({ id: schema.meetingPoints.id });
     if (!rows.length) throw new HTTPException(404, { message: "not_found" });
@@ -159,6 +195,96 @@ export const meetingRoutes = new Hono<AppEnv>()
     const rows = await db().delete(schema.meetingPoints).where(eq(schema.meetingPoints.id, id)).returning({ id: schema.meetingPoints.id });
     if (!rows.length) throw new HTTPException(404, { message: "not_found" });
     return c.json({ ok: true });
+  })
+
+  .post("/points/:id/notes", requirePermission("meetings.manage"), async (c) => {
+    const a = auth(c);
+    const id = projectId(c.req.param("id"));
+    const v = await body(c, z.object({ text: z.string().trim().min(1).max(4000) }));
+    const [p] = await db().select({ id: schema.meetingPoints.id }).from(schema.meetingPoints).where(eq(schema.meetingPoints.id, id));
+    if (!p) throw new HTTPException(404, { message: "not_found" });
+    const [n] = await db()
+      .insert(schema.meetingPointNotes)
+      .values({ pointId: id, text: v.text, authorId: a.user.id, authorName: a.user.name })
+      .returning({ id: schema.meetingPointNotes.id });
+    return c.json({ id: n.id }, 201);
+  })
+
+  .delete("/points/:id/notes/:noteId", requirePermission("meetings.manage"), async (c) => {
+    const id = projectId(c.req.param("id"));
+    const noteId = projectId(c.req.param("noteId"));
+    const n = schema.meetingPointNotes;
+    const rows = await db()
+      .delete(n)
+      .where(and(eq(n.id, noteId), eq(n.pointId, id)))
+      .returning({ id: n.id });
+    if (!rows.length) throw new HTTPException(404, { message: "not_found" });
+    return c.json({ ok: true });
+  })
+
+  // ── Ticket trends: week by week, and the last 7 days against any earlier week ──
+  .get("/trends", async (c) => {
+    const q = z.object({ weeks: z.coerce.number().int().min(4).max(52).default(12) }).safeParse(c.req.query());
+    if (!q.success) throw new HTTPException(400, { message: "invalid_range" });
+    const weeks = q.data.weeks;
+    const src = await ticketSource();
+    const now = Date.now();
+    const monday = mondayOf(todayQc());
+    // weeks start on Monday 00:00, Québec (-05:00: within an hour in summer time)
+    const startOf = (k: number) => Date.parse(`${addDay(monday, -7 * k)}T00:00:00-05:00`);
+    const since = Math.min(startOf(weeks - 1), now - 7 * 86_400_000 * (weeks + 1));
+    const [history, everything, o] = await run(() => Promise.all([src.history(new Date(since).toISOString()), src.list(), src.options()]));
+    const L = lookup(o);
+    const queues = await gaugeQueues(o.queues);
+    const alert = isAlert(L);
+    // the same tickets as the gauges: the counted queues, no monitoring alerts
+    const counts = (t: { queue: string; source: string }) => queues.counted.includes(t.queue) && !alert(t as NTicket);
+    const rows = history.filter(counts).map((t) => ({ created: Date.parse(t.createdAt), done: t.completedAt ? Date.parse(t.completedAt) : null }));
+    const openNow = everything.filter((t) => counts(t) && L.statusKind(t.status) !== "complete").length;
+
+    /** Created, resolved and resolution times between two moments */
+    const measure = (from: number, to: number) => {
+      const created = rows.filter((r) => r.created >= from && r.created < to).length;
+      const hours = rows
+        .filter((r) => r.done != null && r.done >= from && r.done < to)
+        .map((r) => (r.done! - r.created) / 3_600_000)
+        .filter((h) => h >= 0)
+        .sort((x, y) => x - y);
+      const round = (v: number) => Math.round(v * 10) / 10;
+      return {
+        from: new Date(from).toISOString(),
+        to: new Date(to).toISOString(),
+        created,
+        resolved: hours.length,
+        avgHours: hours.length ? round(hours.reduce((x, y) => x + y, 0) / hours.length) : null,
+        medianHours: hours.length ? round(hours[Math.floor((hours.length - 1) / 2)]) : null,
+        // resolved within a day of coming in
+        within24h: hours.length ? Math.round((hours.filter((h) => h <= 24).length / hours.length) * 100) : null,
+      };
+    };
+    // open tickets at a moment: open today, minus those that came in since and are still open,
+    // plus those already there then and resolved since
+    const backlogAt = (at: number) => {
+      if (at >= now) return openNow;
+      const cameSince = rows.filter((r) => r.created >= at && r.done == null).length;
+      const resolvedSince = rows.filter((r) => r.created < at && r.done != null && r.done >= at).length;
+      return Math.max(0, openNow - cameSince + resolvedSince);
+    };
+    const window = (to: number) => ({ ...measure(to - 7 * 86_400_000, to), backlog: backlogAt(to) });
+
+    return c.json({
+      demo: src.demo,
+      generatedAt: new Date(now).toISOString(),
+      // calendar weeks, this one (so far) first
+      weeks: Array.from({ length: weeks }, (_, k) => {
+        const from = startOf(k);
+        const to = k === 0 ? now : startOf(k - 1);
+        return { ...measure(from, to), monday: addDay(monday, -7 * k), current: k === 0, backlog: backlogAt(to) };
+      }),
+      // the last 7 days, and the same 7 days 1, 2, … weeks earlier
+      live: window(now),
+      past: Array.from({ length: weeks }, (_, k) => window(now - 7 * 86_400_000 * (k + 1))),
+    });
   })
 
   // ── The week at a glance: everything planned, day by day ──
@@ -477,6 +603,43 @@ export function fridayDate(now: Date) {
   const dow = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"].indexOf(day);
   const [y, m, d] = new Intl.DateTimeFormat("en-CA", { timeZone: tz }).format(now).split("-").map(Number);
   return new Date(Date.UTC(y, m - 1, d + ((5 - dow + 7) % 7))).toISOString().slice(0, 10);
+}
+
+/** Today in Québec, YYYY-MM-DD */
+const todayQc = () => new Intl.DateTimeFormat("en-CA", { timeZone: "America/Toronto" }).format(new Date());
+
+/** The Monday of that day's week (YYYY-MM-DD) */
+function mondayOf(day: string) {
+  const dow = new Date(`${day}T12:00:00Z`).getUTCDay();
+  return addDay(day, -((dow + 6) % 7));
+}
+
+const pointFields = {
+  id: schema.meetingPoints.id,
+  text: schema.meetingPoints.text,
+  details: schema.meetingPoints.details,
+  doneAt: schema.meetingPoints.doneAt,
+  archivedAt: schema.meetingPoints.archivedAt,
+  snoozeUntil: schema.meetingPoints.snoozeUntil,
+  authorName: schema.meetingPoints.authorName,
+  createdAt: schema.meetingPoints.createdAt,
+};
+
+/** The points with their notes, oldest note first. */
+async function withNotes<T extends { id: string }>(points: T[]) {
+  if (!points.length) return [];
+  const n = schema.meetingPointNotes;
+  const notes = await db()
+    .select({ id: n.id, pointId: n.pointId, text: n.text, authorName: n.authorName, createdAt: n.createdAt })
+    .from(n)
+    .where(
+      inArray(
+        n.pointId,
+        points.map((p) => p.id),
+      ),
+    )
+    .orderBy(asc(n.createdAt));
+  return points.map((p) => ({ ...p, notes: notes.filter((x) => x.pointId === p.id).map(({ pointId: _, ...x }) => x) }));
 }
 
 /** Active team members a project can be assigned to. */

@@ -186,6 +186,32 @@
     scrollbar-width: thin;
     scrollbar-color: color-mix(in oklab, var(--foreground) 18%, transparent) transparent;
   }
+  /* Client portal: a warm, discreet light behind the glass panes */
+  .client-ambient {
+    background:
+      radial-gradient(60rem 40rem at 88% -12%, color-mix(in oklab, var(--gold) 13%, transparent), transparent 62%),
+      radial-gradient(48rem 34rem at -8% 108%, color-mix(in oklab, var(--gold-2) 9%, transparent), transparent 62%),
+      radial-gradient(34rem 26rem at 45% 42%, color-mix(in oklab, var(--gold-light) 4%, transparent), transparent 70%);
+  }
+  /* Glass pane: frosted, fine light edge (client portal) */
+  .pane {
+    position: relative;
+    background-color: var(--glass-bg);
+    background-image: linear-gradient(180deg, var(--glass-sheen), transparent 55%);
+    border: 1px solid var(--glass-border);
+    backdrop-filter: blur(22px) saturate(150%);
+    box-shadow: inset 0 1px 0 0 var(--glass-highlight), var(--glass-shadow);
+  }
+  /* A thin gold light along the top edge */
+  .gold-edge::before {
+    content: "";
+    position: absolute;
+    inset-inline: 14%;
+    top: -1px;
+    height: 1px;
+    background: linear-gradient(90deg, transparent, color-mix(in oklab, var(--gold) 75%, transparent), transparent);
+    pointer-events: none;
+  }
 }
 
 @media (prefers-reduced-motion: reduce) {

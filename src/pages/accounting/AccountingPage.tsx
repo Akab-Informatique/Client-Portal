@@ -1,11 +1,13 @@
 import { useTranslation } from "react-i18next";
-import { FileSignature, Receipt } from "lucide-react";
+import { FileSignature } from "lucide-react";
 import { GlassBackdrop } from "@/components/brand/GlassBackdrop";
+import { ItemsToInvoice } from "./ItemsToInvoice";
 
-/** Accounting: invoices and quotes (empty for now — the place is ready). */
+/** Accounting: invoices (Éléments à facturer for now) and quotes (empty for now — the place is ready). */
 export function AccountingPage({ kind }: { kind: "invoices" | "quotes" }) {
   const { t } = useTranslation();
-  const Icon = kind === "invoices" ? Receipt : FileSignature;
+  if (kind === "invoices") return <ItemsToInvoice />;
+  const Icon = FileSignature;
   return (
     <div className="relative isolate space-y-6">
       <GlassBackdrop className="-inset-x-8 -top-6" />

@@ -293,6 +293,78 @@ describe("permissions", () => {
     await admin.del(`/api/meetings/points/${a.json.id}`);
   });
 
+  it("weekly meeting: notes on points, archive, put off to a later day", async () => {
+    const admin = await signIn("admin@akab.local");
+    const tech = await signIn("tech@akab.local");
+    const day = (n: number) => {
+      const d = new Date(`${new Intl.DateTimeFormat("en-CA", { timeZone: "America/Toronto" }).format(new Date())}T12:00:00Z`);
+      d.setUTCDate(d.getUTCDate() + n);
+      return d.toISOString().slice(0, 10);
+    };
+    const ids = (path: string) => admin.get(path).then((r) => r.json.map((p: any) => p.id));
+    const p = (await admin.post("/api/meetings/points", { text: "Renouvellement des licences" })).json.id;
+
+    // notes, oldest first, signed
+    expect((await admin.post(`/api/meetings/points/${p}/notes`, { text: "Devis demandé" })).status).toBe(201);
+    const n2 = await admin.post(`/api/meetings/points/${p}/notes`, { text: "Réponse attendue vendredi" });
+    expect((await admin.post(`/api/meetings/points/${p}/notes`, { text: " " })).status).toBe(400);
+    expect((await tech.post(`/api/meetings/points/${p}/notes`, { text: "x" })).status).toBe(403);
+    let point = (await admin.get("/api/meetings/points")).json.find((x: any) => x.id === p);
+    expect(point.notes.map((x: any) => x.text)).toEqual(["Devis demandé", "Réponse attendue vendredi"]);
+    expect(point.notes[0].authorName).toBe("Administrateur AKAB");
+    expect((await admin.del(`/api/meetings/points/${p}/notes/${n2.json.id}`)).status).toBe(200);
+    expect((await admin.del(`/api/meetings/points/${p}/notes/${n2.json.id}`)).status).toBe(404);
+
+    // put off: gone from the list until that day, listed as "later"; not today or before
+    expect((await admin.patch(`/api/meetings/points/${p}`, { snoozeUntil: day(0) })).status).toBe(400);
+    expect((await admin.patch(`/api/meetings/points/${p}`, { snoozeUntil: "2026-02-30" })).status).toBe(400);
+    expect((await admin.patch(`/api/meetings/points/${p}`, { snoozeUntil: day(3) })).status).toBe(200);
+    expect(await ids("/api/meetings/points")).not.toContain(p);
+    point = (await admin.get("/api/meetings/points/later")).json.find((x: any) => x.id === p);
+    expect(point).toMatchObject({ snoozeUntil: day(3), notes: [{ text: "Devis demandé" }] });
+    expect((await admin.patch(`/api/meetings/points/${p}`, { snoozeUntil: null })).status).toBe(200);
+    expect(await ids("/api/meetings/points")).toContain(p);
+
+    // archive: out of the list, in the archive with its notes; restored, back on the list
+    expect((await tech.patch(`/api/meetings/points/${p}`, { archived: true })).status).toBe(403);
+    expect((await admin.patch(`/api/meetings/points/${p}`, { archived: true })).status).toBe(200);
+    expect(await ids("/api/meetings/points")).not.toContain(p);
+    point = (await admin.get("/api/meetings/points/archive")).json.find((x: any) => x.id === p);
+    expect(point.archivedAt).toBeTruthy();
+    expect(point.notes).toHaveLength(1);
+    expect((await tech.get("/api/meetings/points/archive")).status).toBe(403);
+    await admin.patch(`/api/meetings/points/${p}`, { snoozeUntil: day(5) });
+    expect((await admin.patch(`/api/meetings/points/${p}`, { archived: false })).status).toBe(200);
+    expect(await ids("/api/meetings/points")).toContain(p);
+    expect(await ids("/api/meetings/points/archive")).not.toContain(p);
+    await admin.del(`/api/meetings/points/${p}`);
+  });
+
+  it("weekly meeting: ticket trends", async () => {
+    const admin = await signIn("admin@akab.local");
+    const tech = await signIn("tech@akab.local");
+    expect((await tech.get("/api/meetings/trends")).status).toBe(403);
+    expect((await admin.get("/api/meetings/trends?weeks=2")).status).toBe(400);
+    const r = await admin.get("/api/meetings/trends?weeks=8");
+    expect(r.status).toBe(200);
+    expect(r.json.weeks).toHaveLength(8);
+    expect(r.json.past).toHaveLength(8);
+    expect(r.json.weeks[0].current).toBe(true);
+    // weeks start on Monday, one week apart, the newest first
+    const mondays = r.json.weeks.map((w: any) => w.monday);
+    for (const m of mondays) expect(new Date(`${m}T12:00:00Z`).getUTCDay()).toBe(1);
+    expect(Date.parse(mondays[0]) - Date.parse(mondays[1])).toBe(7 * 86_400_000);
+    for (const w of [...r.json.weeks, r.json.live, ...r.json.past]) {
+      expect(w.created).toBeGreaterThanOrEqual(0);
+      expect(w.resolved).toBeGreaterThanOrEqual(0);
+      expect(w.backlog).toBeGreaterThanOrEqual(0);
+      if (w.resolved) expect(w.medianHours).toBeGreaterThanOrEqual(0);
+      else expect(w.avgHours).toBeNull();
+    }
+    // the sample history has tickets every week
+    expect(r.json.weeks[1].created).toBeGreaterThan(0);
+  });
+
   it("weekly meeting: the week calendar, day by day", async () => {
     const admin = await signIn("admin@akab.local");
     const team = (await admin.get("/api/meetings/team")).json;
@@ -3401,6 +3473,72 @@ describe("billing rules and the invoice editor", () => {
     expect(after.filter((i: any) => i.kind === "labour").every((i: any) => i.status === "posted")).toBe(true);
     expect(after.find((i: any) => i.kind === "contract").status).toBe("approved");
     expect((await admin.get("/api/billables/clients")).json.find((g: any) => g.client.id === garage.id).kinds.map((k: any) => k.kind)).toEqual(["contract"]);
+
+    // a time frame: only the work of those days is listed, counted and invoiced
+    const item = (date: string, cents: number) => ({
+      clientId: garage.id,
+      kind: "charge",
+      source: "portal",
+      sourceId: `test:period:${date}`,
+      date,
+      description: `Pièce du ${date}`,
+      quantityX100: 100,
+      unitPriceCents: cents,
+      amountCents: cents,
+      status: "approved",
+      approvedAt: new Date(),
+    });
+    const [sep, oct] = await db().insert(schema.billingItems).values([item("2026-09-15", 1000), item("2026-10-05", 2500)]).returning();
+    const october = "from=2026-10-01&to=2026-10-31";
+    const listed = (await admin.get(`/api/billables?clientId=${garage.id}&kind=charge&status=approved&${october}`)).json.map((i: any) => i.id);
+    expect(listed).toContain(oct.id);
+    expect(listed).not.toContain(sep.id);
+    const readyOct = (await admin.get(`/api/billables/clients?${october}`)).json.find((g: any) => g.client.id === garage.id);
+    expect(readyOct.kinds.find((k: any) => k.kind === "charge")).toMatchObject({ count: 1, cents: 2500 });
+    expect((await admin.get(`/api/billables/summary?${october}`)).status).toBe(200);
+    expect((await admin.get("/api/billables?from=2026-10-31&to=2026-10-01")).json.error).toBe("invalid_period");
+    expect((await admin.get("/api/billables?from=octobre")).status).toBe(400);
+    // an item outside the time frame cannot go on its invoice
+    expect((await admin.post("/api/billables/invoice/preview", { clientId: garage.id, itemIds: [sep.id], from: "2026-10-01", to: "2026-10-31" })).json.error).toBe("billing_items_invalid");
+    // posting the month: the September item waits
+    await admin.post("/api/billables/post", { clientIds: [garage.id], from: "2026-10-01", to: "2026-10-31" });
+    const [sepAfter] = await db().select().from(schema.billingItems).where(eq(schema.billingItems.id, sep.id));
+    const [octAfter] = await db().select().from(schema.billingItems).where(eq(schema.billingItems.id, oct.id));
+    expect([sepAfter.status, octAfter.status]).toEqual(["approved", "posted"]);
+
+    // every invoice, filtered: status, client, dates, number or PO, sent by email, QuickBooks
+    const [paidInv, lateInv] = await db()
+      .insert(schema.clientInvoices)
+      .values([
+        { clientId: garage.id, number: "T-9001", issuedOn: "2026-08-01", dueOn: "2026-08-31", totalCents: 10000, paidOn: "2026-08-15", emailedAt: new Date(), quickbooksId: "qb-t-9001", source: "portal" },
+        { clientId: garage.id, number: "T-9002", issuedOn: "2026-10-02", dueOn: "2026-10-03", totalCents: 5000, poNumber: "PO-ABC", source: "portal" },
+      ])
+      .returning();
+    const find = (qs: string) => admin.get(`/api/crm/invoices?clientId=${garage.id}&q=T-900&${qs}`).then((r) => r.json.items.map((x: any) => x.number).sort());
+    expect(await find("")).toEqual(["T-9001", "T-9002"]);
+    expect(await find("status=paid")).toEqual(["T-9001"]);
+    expect(await find("status=overdue")).toEqual(["T-9002"]);
+    expect(await find("status=open")).toEqual(["T-9002"]);
+    expect(await find("emailed=yes")).toEqual(["T-9001"]);
+    expect(await find("emailed=no")).toEqual(["T-9002"]);
+    expect(await find("quickbooks=synced")).toEqual(["T-9001"]);
+    expect(await find("quickbooks=unsynced")).toEqual(["T-9002"]);
+    expect(await find("from=2026-10-01&to=2026-10-31")).toEqual(["T-9002"]);
+    expect((await admin.get(`/api/crm/invoices?q=po-abc`)).json.items.map((x: any) => x.id)).toEqual([lateInv.id]);
+    // % is a character, not "anything"
+    expect((await admin.get(`/api/crm/invoices?q=${encodeURIComponent("%")}`)).json.items).toEqual([]);
+    expect((await admin.get("/api/crm/invoices?status=lost")).status).toBe(400);
+    const one = (await admin.get(`/api/crm/invoices?clientId=${garage.id}&q=T-9002`)).json;
+    expect(one.summary).toMatchObject({ count: 1, dueCents: 5000, overdueCount: 1 });
+    expect(one.items[0]).toMatchObject({ clientId: garage.id, company: garage.name, status: "overdue", emailedAt: null });
+    expect(one.clients.some((x: any) => x.id === garage.id)).toBe(true);
+    // marked sent by email (accounting.manage)
+    expect((await tech.get("/api/crm/invoices")).status).toBe(403);
+    expect((await tech.post(`/api/crm/invoices/${lateInv.id}/emailed`, { emailed: true })).status).toBe(403);
+    expect((await admin.post(`/api/crm/invoices/${lateInv.id}/emailed`, { emailed: true })).json.emailedAt).toBeTruthy();
+    expect(await find("emailed=yes")).toEqual(["T-9001", "T-9002"]);
+    await admin.post(`/api/crm/invoices/${paidInv.id}/emailed`, { emailed: false });
+    expect(await find("emailed=no")).toEqual(["T-9001"]);
   });
 });
 
@@ -3605,6 +3743,71 @@ describe("submitting: timesheets (when required) and expenses", () => {
     const [client] = await db().select().from(schema.users).where(eq(schema.users.kind, "client"));
     expect((await admin.get(`/api/time/week?userId=${client.id}`)).status).toBe(404);
   });
+
+  it("expense reports: items added while open, sent together, approved one by one; a refused item opens the report again", async () => {
+    resetRateLimit("login:ip:unknown");
+    const admin = await signIn("admin@akab.local");
+    const tech2 = await signIn("tech2@akab.local");
+    const tech = await signIn("tech@akab.local");
+    const types = (await tech2.get("/api/time/types")).json.expense;
+    const parking = types.find((t: any) => t.name === "Stationnement").id;
+    const october = { periodStart: "2026-10-01", periodEnd: "2026-10-31" };
+    const report = await tech2.post("/api/time/expense-reports", { title: "Tournée Joliette — octobre", ...october });
+    expect(report.status).toBe(201);
+    expect(report.json).toMatchObject(october);
+    expect((await tech2.post("/api/time/expense-reports", { title: " ", ...october })).status).toBe(400);
+    // the days it covers: both, in order, a year at most
+    expect((await tech2.post("/api/time/expense-reports", { title: "x" })).status).toBe(400);
+    expect((await tech2.post("/api/time/expense-reports", { title: "x", periodStart: "2026-10-31", periodEnd: "2026-10-01" })).status).toBe(400);
+    expect((await tech2.post("/api/time/expense-reports", { title: "x", periodStart: "2026-01-01", periodEnd: "2027-06-01" })).status).toBe(400);
+    const add = (description: string, amountCents: number) =>
+      tech2.post("/api/time/expenses", { reportId: report.json.id, date: "2026-10-17", typeId: parking, description, amountCents });
+    const [i1, i2, i3] = [(await add("Stationnement A", 1200)).json, (await add("Stationnement B", 800)).json, (await add("Stationnement C", 500)).json];
+    // only days within the report
+    const outside = await tech2.post("/api/time/expenses", { reportId: report.json.id, date: "2026-11-02", typeId: parking, description: "Novembre", amountCents: 100 });
+    expect(outside.json.error).toBe("expense_out_of_period");
+    expect((await tech2.patch(`/api/time/expenses/${i1.id}`, { date: "2026-09-30" })).json.error).toBe("expense_out_of_period");
+    // the period cannot leave items out; a rename alone is fine
+    expect((await tech2.patch(`/api/time/expense-reports/${report.json.id}`, { periodStart: "2026-10-18", periodEnd: "2026-10-31" })).json.error).toBe("report_period_items");
+    expect((await tech2.patch(`/api/time/expense-reports/${report.json.id}`, { periodStart: "2026-10-18" })).status).toBe(400);
+    expect((await tech2.patch(`/api/time/expense-reports/${report.json.id}`, { periodStart: "2026-10-10", periodEnd: "2026-10-24" })).status).toBe(200);
+    // not someone else's report
+    expect((await tech.post("/api/time/expenses", { reportId: report.json.id, date: "2026-10-17", typeId: parking, description: "x", amountCents: 1 })).status).toBe(404);
+    expect((await tech.post(`/api/time/expense-reports/${report.json.id}/submit`)).status).toBe(404);
+    // an item removed while open
+    expect((await tech2.del(`/api/time/expenses/${i3.id}`)).status).toBe(200);
+    let mine = (await tech2.get("/api/time/expense-reports")).json.find((r: any) => r.id === report.json.id);
+    expect(mine).toMatchObject({ status: "open", totalCents: 2000, title: "Tournée Joliette — octobre", periodStart: "2026-10-10", periodEnd: "2026-10-24" });
+    expect(mine.items.map((x: any) => x.id).sort()).toEqual([i1.id, i2.id].sort());
+    expect((await tech2.patch(`/api/time/expense-reports/${report.json.id}`, { title: "Tournée Joliette" })).status).toBe(200);
+
+    // sent together: locked, nothing more can be added
+    expect((await tech2.post(`/api/time/expense-reports/${report.json.id}/submit`)).json.submitted).toBe(2);
+    expect((await add("Trop tard", 100)).json.error).toBe("report_submitted");
+    expect((await tech2.patch(`/api/time/expense-reports/${report.json.id}`, { title: "x" })).json.error).toBe("report_submitted");
+    expect((await tech2.del(`/api/time/expense-reports/${report.json.id}`)).json.error).toBe("report_submitted");
+    const pending = (await admin.get("/api/time/approvals/expenses")).json.filter((e: any) => e.reportId === report.json.id);
+    expect(pending).toHaveLength(2);
+    expect(pending[0].reportTitle).toBe("Tournée Joliette");
+
+    // one approved, one refused: the report is open again for the refused one (and new items)
+    await admin.post("/api/time/approvals/expenses", { ids: [i1.id], decision: "approve" });
+    await admin.post("/api/time/approvals/expenses", { ids: [i2.id], decision: "reject", comment: "Reçu illisible" });
+    mine = (await tech2.get("/api/time/expense-reports")).json.find((r: any) => r.id === report.json.id);
+    expect(mine).toMatchObject({ status: "open", rejected: 1 });
+    expect((await tech2.patch(`/api/time/expenses/${i1.id}`, { description: "x" })).json.error).toBe("expense_locked");
+    expect((await tech2.del(`/api/time/expense-reports/${report.json.id}`)).json.error).toBe("expense_locked");
+    expect((await add("Oublié", 300)).status).toBe(201);
+    expect((await tech2.post(`/api/time/expense-reports/${report.json.id}/submit`)).json.submitted).toBe(2);
+    await admin.post("/api/time/approvals/expenses", { ids: mine.items.map((x: any) => x.id).concat((await tech2.get("/api/time/expenses")).json.map((x: any) => x.id)), decision: "approve" });
+    mine = (await tech2.get("/api/time/expense-reports")).json.find((r: any) => r.id === report.json.id);
+    expect(mine.status).toBe("approved");
+
+    // an empty report cannot be sent; an open one is deleted with its items
+    const empty = (await tech2.post("/api/time/expense-reports", { title: "Vide", ...october })).json;
+    expect((await tech2.post(`/api/time/expense-reports/${empty.id}/submit`)).json.error).toBe("report_empty");
+    expect((await tech2.del(`/api/time/expense-reports/${empty.id}`)).status).toBe(200);
+  });
 });
 
 describe("security review fixes", () => {
@@ -3706,5 +3909,268 @@ describe("security review fixes", () => {
     const made = (await admin.post("/api/store/products", { name: "Souris sans fil", sku: "MOUSE-SEC-1", priceCents: 2999, costCents: 1500, active: false })).json;
     const r = (await admin.patch(`/api/store/products/${made.id}`, { priceCents: 3499 })).json;
     expect(r).toMatchObject({ priceCents: 3499, costCents: 1500, active: false, sku: "MOUSE-SEC-1" });
+  });
+});
+
+describe("client portal: message board questions", () => {
+  it("clients read the board, cannot post on it, and ask a question as a ticket for their company", async () => {
+    resetRateLimit("login:ip:unknown");
+    const { saveBillingSettings } = await import("../server/lib/billing.ts");
+    const [adminRow] = await db().select().from(schema.users).where(eq(schema.users.email, "admin@akab.local"));
+    await saveBillingSettings(adminRow.id, { company: { phone: "450 555-0199", email: "support@akab.example" } });
+
+    const client = await signIn("responsable1@client.example");
+    expect((await client.get("/api/board/contact")).json).toEqual({ phone: "450 555-0199", email: "support@akab.example" });
+    // the board is read-only for clients
+    expect((await client.post("/api/messages", { title: "x", body: "y", audience: "all" })).status).toBe(403);
+
+    const board = (await client.get("/api/board")).json;
+    const msg = board[0];
+    expect((await client.post(`/api/board/${msg.id}/ticket`, { question: "  " })).status).toBe(400);
+    const r = await client.post(`/api/board/${msg.id}/ticket`, { question: "Est-ce que la maintenance touche nos imprimantes ?" });
+    expect(r.status).toBe(201);
+    expect(r.json.number).toMatch(/^T\d{8}\.\d{3,5}$/);
+
+    // the technicians see it as a new ticket for that client's company
+    const tech = await signIn("tech@akab.local");
+    const t = (await tech.get(`/api/tickets/${r.json.id}`)).json;
+    const [me] = await db().select().from(schema.users).where(eq(schema.users.email, "responsable1@client.example"));
+    const [company] = await db().select().from(schema.clients).where(eq(schema.clients.id, me.clientId!));
+    expect(t.title).toBe(`Question — ${msg.title}`);
+    expect(t.company.name).toBe(company.name);
+    expect(t.description).toContain("Est-ce que la maintenance touche nos imprimantes ?");
+    expect(t.description).toContain(`Au sujet du message du babillard « ${msg.title} »`);
+    const log = await db().select().from(schema.auditLog).where(eq(schema.auditLog.actorId, me.id));
+    expect(log.some((l) => l.action === "board.ticket" && l.target === String(r.json.id))).toBe(true);
+  });
+
+  it("only about messages of their company, with the right, and never from the client view", async () => {
+    resetRateLimit("login:ip:unknown");
+    const admin = await signIn("admin@akab.local");
+    const clients = (await admin.get("/api/messages/client-options")).json;
+    const [me] = await db().select().from(schema.users).where(eq(schema.users.email, "responsable1@client.example"));
+    const other = clients.find((x: any) => x.id !== me.clientId);
+    const elsewhere = await admin.post("/api/messages", { title: "Pour un autre client", body: "x", audience: "selected", clientIds: [other.id] });
+    const client = await signIn("responsable1@client.example");
+    expect((await client.post(`/api/board/${elsewhere.json.id}/ticket`, { question: "?" })).status).toBe(404);
+
+    const mine = (await client.get("/api/board")).json[0];
+    await admin.put(`/api/admin/users/${me.id}/permissions`, { overrides: [{ key: "board.ticket", effect: "deny" }] });
+    expect((await client.post(`/api/board/${mine.id}/ticket`, { question: "Une question" })).status).toBe(403);
+    expect((await client.get("/api/board")).status).toBe(200);
+    await admin.put(`/api/admin/users/${me.id}/permissions`, { overrides: [] });
+
+    // a technician viewing the portal as this client cannot open a ticket in their name
+    expect((await admin.post("/api/view-as", { clientId: me.clientId })).status).toBe(200);
+    expect((await admin.post(`/api/board/${mine.id}/ticket`, { question: "Une question" })).json.error).toBe("read_only_view");
+    await admin.del("/api/view-as");
+  });
+});
+
+describe("client portal: sections, default roles and per-user rights", () => {
+  it("client companies get Admin, Accounting and Tech roles by default", async () => {
+    resetRateLimit("login:ip:unknown");
+    const admin = await signIn("admin@akab.local");
+    const roles = (await admin.get("/api/admin/roles")).json.filter((r: any) => r.audience === "client");
+    const bySlug = Object.fromEntries(roles.map((r: any) => [r.slug, r.permissions.slice().sort()]));
+    expect(bySlug["client-admin"]).toEqual(["board.ticket", "board.view", "clientAdmin.company", "clientAdmin.users", "clientDevices.view", "clientDocs.view", "clientInvoices.view", "clientQuotes.view", "clientTickets.all", "clientTickets.attach", "clientTickets.comment", "clientTickets.escalate", "clientTickets.view"]);
+    expect(bySlug["client-accounting"]).toEqual(["board.ticket", "board.view", "clientInvoices.view", "clientQuotes.view", "clientTickets.attach", "clientTickets.comment", "clientTickets.escalate", "clientTickets.view"]);
+    expect(bySlug["client-tech"]).toEqual(["board.ticket", "board.view", "clientDevices.view", "clientDocs.view", "clientTickets.all", "clientTickets.attach", "clientTickets.comment", "clientTickets.escalate", "clientTickets.view"]);
+    expect(bySlug["client-user"]).toEqual(["board.ticket", "board.view", "clientTickets.attach", "clientTickets.comment", "clientTickets.escalate", "clientTickets.view"]);
+    expect(bySlug["client-config"]).toEqual(["board.ticket", "board.view", "clientAdmin.company", "clientAdmin.users", "clientTickets.attach", "clientTickets.comment", "clientTickets.escalate", "clientTickets.view"]);
+  });
+
+  it("any right can be given to (or taken from) one person directly, without changing their role", async () => {
+    resetRateLimit("login:ip:unknown");
+    const admin = await signIn("admin@akab.local");
+    const [emp] = await db().select().from(schema.users).where(eq(schema.users.email, "employe1@client.example"));
+    const before = (await (await signIn("employe1@client.example")).get("/api/me")).json.permissions;
+    expect(before).not.toContain("clientInvoices.view");
+    expect((await admin.put(`/api/admin/users/${emp.id}/permissions`, { overrides: [{ key: "clientInvoices.view", effect: "allow" }, { key: "board.ticket", effect: "deny" }] })).status).toBe(200);
+    const after = (await (await signIn("employe1@client.example")).get("/api/me")).json.permissions;
+    expect(after).toContain("clientInvoices.view");
+    expect(after).not.toContain("board.ticket");
+    // a client right cannot be given to a technician
+    const tech = (await admin.get("/api/admin/staff")).json.find((u: any) => u.email === "tech@akab.local");
+    expect((await admin.put(`/api/admin/users/${tech.id}/permissions`, { overrides: [{ key: "clientInvoices.view", effect: "allow" }] })).status).toBe(400);
+    await admin.put(`/api/admin/users/${emp.id}/permissions`, { overrides: [] });
+  });
+});
+
+describe("client portal: admin settings", () => {
+  it("a client admin sees their own company and its users only; others are refused", async () => {
+    resetRateLimit("login:ip:unknown");
+    const [me] = await db().select().from(schema.users).where(eq(schema.users.email, "responsable1@client.example"));
+    await db().update(schema.clients).set({ notes: "Interne : ne pas montrer", city: "Joliette" }).where(eq(schema.clients.id, me.clientId!));
+    const admin = await signIn("responsable1@client.example");
+    const company = (await admin.get("/api/portal/company")).json;
+    expect(company).toMatchObject({ city: "Joliette" });
+    expect(JSON.stringify(company)).not.toContain("Interne");
+    const users = (await admin.get("/api/portal/users")).json;
+    const mates = await db().select().from(schema.users).where(eq(schema.users.clientId, me.clientId!));
+    expect(users.map((u: any) => u.email).sort()).toEqual(mates.map((u) => u.email).sort());
+    expect(users.find((u: any) => u.email === me.email).role).toEqual({ fr: "Administrateur client", en: "Client administrator" });
+    expect(JSON.stringify(users)).not.toMatch(/password|mfa/i);
+
+    // a plain client user, and a technician, do not have these pages
+    const emp = await signIn("employe1@client.example");
+    expect((await emp.get("/api/portal/company")).status).toBe(403);
+    expect((await emp.get("/api/portal/users")).status).toBe(403);
+    const tech = await signIn("tech@akab.local");
+    expect((await tech.get("/api/portal/users")).status).toBe(403);
+  });
+});
+
+describe("client portal: tickets", () => {
+  it("a user sees their own tickets; the company scope needs its right; internal notes never shown", async () => {
+    resetRateLimit("login:ip:unknown");
+    const tech = await signIn("tech@akab.local");
+    const [emp] = await db().select().from(schema.users).where(eq(schema.users.email, "employe1@client.example"));
+    const [company] = await db().select().from(schema.clients).where(eq(schema.clients.id, emp.clientId!));
+    // the sample ticket company of this client (created by the board question test, else here)
+    let co = (await tech.get("/api/tickets/companies")).json.find((x: any) => x.name === company.name);
+    if (!co) {
+      const owner = await signIn("responsable1@client.example");
+      const msg = (await owner.get("/api/board")).json[0];
+      await owner.post(`/api/board/${msg.id}/ticket`, { question: "Initialisation" });
+      co = (await tech.get("/api/tickets/companies")).json.find((x: any) => x.name === company.name);
+    }
+    const contact = (await tech.post(`/api/tickets/companies/${co.id}/contacts`, { firstName: "Jean", lastName: "Côté", email: emp.email })).json;
+    const facets = (await tech.get("/api/tickets?view=all")).json.facets;
+    const base = { companyId: co.id, priority: facets.priorities[0].value, queue: facets.queues[0].value, assigneeId: null, dueDate: "2026-12-01" };
+    const his = (await tech.post("/api/tickets", { ...base, title: "Écran noir au poste 3", contactId: contact.id })).json;
+    const other = (await tech.post("/api/tickets", { ...base, title: "Imprimante comptabilité", contactId: null })).json;
+    await tech.post(`/api/tickets/${his.id}/notes`, { text: "Pièce commandée, installation jeudi.", internal: false });
+    await tech.post(`/api/tickets/${his.id}/notes`, { text: "SECRET interne: client difficile", internal: true });
+
+    const jean = await signIn("employe1@client.example");
+    const mine = (await jean.get("/api/portal/tickets")).json;
+    expect(mine).toMatchObject({ linked: true, canSeeAll: false });
+    expect(mine.items.map((t: any) => t.id)).toContain(his.id);
+    expect(mine.items.map((t: any) => t.id)).not.toContain(other.id);
+    expect((await jean.get("/api/portal/tickets?scope=company")).status).toBe(403);
+    expect((await jean.get(`/api/portal/tickets/${other.id}`)).status).toBe(404);
+    const detail = (await jean.get(`/api/portal/tickets/${his.id}`)).json;
+    expect(detail.activity.map((n: any) => n.text)).toContain("Pièce commandée, installation jeudi.");
+    expect(JSON.stringify(detail)).not.toContain("SECRET");
+    expect(JSON.stringify(detail)).not.toMatch(/"hours"|internalText/);
+
+    // the client admin sees the whole company with the filter
+    const marie = await signIn("responsable1@client.example");
+    const all = (await marie.get("/api/portal/tickets?scope=company")).json;
+    expect(all.canSeeAll).toBe(true);
+    expect(all.items.map((t: any) => t.id)).toEqual(expect.arrayContaining([his.id, other.id]));
+    expect((await marie.get(`/api/portal/tickets/${other.id}`)).status).toBe(200);
+
+    // another company never sees them; technicians use their own Tickets page
+    const elsewhere = await signIn("responsable2@client.example");
+    const theirs = (await elsewhere.get("/api/portal/tickets?scope=company")).json.items.map((t: any) => t.id);
+    expect(theirs).not.toContain(his.id);
+    expect((await elsewhere.get(`/api/portal/tickets/${his.id}`)).status).toBe(404);
+    expect((await tech.get("/api/portal/tickets")).status).toBe(403);
+  });
+});
+
+describe("client portal: a question asked on the board", () => {
+  it("shows in the asker's own tickets, with them as the contact", async () => {
+    resetRateLimit("login:ip:unknown");
+    resetRateLimit("login:email:employe2@client.example"); // locked on purpose by an earlier test
+    const sam = await signIn("employe2@client.example");
+    const msg = (await sam.get("/api/board")).json[0];
+    const r = await sam.post(`/api/board/${msg.id}/ticket`, { question: "Question de Paul" });
+    expect(r.status).toBe(201);
+    const mine = (await sam.get("/api/portal/tickets")).json.items;
+    expect(mine.find((t: any) => t.id === r.json.id)).toMatchObject({ mine: true });
+    expect((await sam.get(`/api/portal/tickets/${r.json.id}`)).json.description).toContain("Question de Paul");
+  });
+});
+
+describe("client portal: working on a ticket", () => {
+  it("replies, files and escalations reach the technicians; the client sees who has it open", async () => {
+    resetRateLimit("login:ip:unknown");
+    resetRateLimit("login:email:employe1@client.example");
+    const tech = await signIn("tech@akab.local");
+    const jean = await signIn("employe1@client.example");
+    const mine = (await jean.get("/api/portal/tickets")).json.items;
+    const tk = mine.find((t: any) => t.title === "Écran noir au poste 3");
+    expect(tk).toBeTruthy();
+    // the technician takes it and opens it
+    const [techRow] = await db().select().from(schema.users).where(eq(schema.users.email, "tech@akab.local"));
+    await tech.patch(`/api/tickets/${tk.id}`, { assigneeId: techRow.id });
+    await tech.post(`/api/tickets/${tk.id}/presence`);
+    await tech.put(`/api/tickets/${tk.id}/start-date`, { startDate: "2026-11-20" });
+    const seen = (await jean.get(`/api/portal/tickets/${tk.id}`)).json;
+    expect(seen.viewing).toEqual(["Alex"]);
+    expect(seen.technicians).toEqual([{ name: "Alex Tremblay", primary: true, viewing: true }]);
+    expect(seen).toMatchObject({ startDate: "2026-11-20", statusKind: expect.any(String) });
+    expect(seen.dueAt).toMatch(/^2026-12-01/);
+    // closing the ticket in the technician's window: no longer "on it"
+    await tech.del(`/api/tickets/${tk.id}/presence`);
+    expect((await jean.get(`/api/portal/tickets/${tk.id}`)).json.technicians[0].viewing).toBe(false);
+    await tech.post(`/api/tickets/${tk.id}/presence`);
+
+    expect((await jean.post(`/api/portal/tickets/${tk.id}/comments`, { text: "Oui, l'écran reste noir même après redémarrage." })).status).toBe(201);
+    const file = { name: "photo-ecran.jpg", contentType: "image/jpeg", data: Buffer.from("fake-jpeg").toString("base64") };
+    expect((await jean.post(`/api/portal/tickets/${tk.id}/attachments`, file)).status).toBe(201);
+    expect((await jean.post(`/api/portal/tickets/${tk.id}/escalate`, { reason: "Tout le service est bloqué" })).status).toBe(201);
+    expect((await jean.post(`/api/portal/tickets/${tk.id}/escalate`, { reason: "Encore" })).json.error).toBe("portal_already_escalated");
+
+    const detail = (await jean.get(`/api/portal/tickets/${tk.id}`)).json;
+    expect(detail.activity.map((n: any) => n.text)).toEqual(expect.arrayContaining(["Oui, l'écran reste noir même après redémarrage.", "Demande d'escalade de priorité par le client :\nTout le service est bloqué"]));
+    expect(detail.activity.find((n: any) => n.text.startsWith("Oui,")).author).toBe("Jean Côté");
+    expect(detail.attachments.map((f: any) => f.name)).toContain("photo-ecran.jpg");
+
+    // the assigned technician is told, with a link to the ticket
+    const feed = (await tech.get("/api/notifications")).json.items.filter((n: any) => n.type === "ticket.client" && n.data.number === tk.number);
+    expect(feed.map((n: any) => n.data.kind).sort()).toEqual(["comment", "escalation", "file"]);
+    expect(feed[0].link).toBe(`/tickets?ticket=${tk.id}`);
+  });
+
+  it("needs the rights, only on their tickets, and never from the client view", async () => {
+    resetRateLimit("login:ip:unknown");
+    const admin = await signIn("admin@akab.local");
+    const jean = await signIn("employe1@client.example");
+    const [emp] = await db().select().from(schema.users).where(eq(schema.users.email, "employe1@client.example"));
+    const tk = (await jean.get("/api/portal/tickets")).json.items[0];
+    await admin.put(`/api/admin/users/${emp.id}/permissions`, { overrides: [{ key: "clientTickets.comment", effect: "deny" }] });
+    expect((await jean.post(`/api/portal/tickets/${tk.id}/comments`, { text: "x" })).status).toBe(403);
+    await admin.put(`/api/admin/users/${emp.id}/permissions`, { overrides: [] });
+    const other = await signIn("responsable2@client.example");
+    expect((await other.post(`/api/portal/tickets/${tk.id}/comments`, { text: "x" })).status).toBe(404);
+    expect((await admin.post("/api/view-as", { clientId: emp.clientId })).status).toBe(200);
+    expect((await admin.post(`/api/portal/tickets/${tk.id}/comments`, { text: "x" })).json.error).toBe("read_only_view");
+    await admin.del("/api/view-as");
+  });
+});
+
+describe("client portal: whose tickets", () => {
+  it("a ticket is mine when I opened it or I am one of its other contacts; the company filter can pick one contact", async () => {
+    resetRateLimit("login:ip:unknown");
+    resetRateLimit("login:email:employe1@client.example");
+    const { setDemoOtherContacts } = await import("../server/lib/demoTickets.ts");
+    const marie = await signIn("responsable1@client.example");
+    const company = (await marie.get("/api/portal/tickets?scope=company")).json;
+    const jeanContact = company.contacts.find((x: any) => x.name === "Jean Côté");
+    expect(jeanContact).toBeTruthy();
+    const printer = company.items.find((t: any) => t.title === "Imprimante comptabilité");
+
+    const jean = await signIn("employe1@client.example");
+    const before = (await jean.get("/api/portal/tickets")).json;
+    expect(before.contacts).toEqual([]); // the contact list is only for whom may see everyone's tickets
+    expect(before.items.map((t: any) => t.id)).not.toContain(printer.id);
+    // Jean is added as one of the other contacts of the printer ticket
+    setDemoOtherContacts(printer.id, [jeanContact.id]);
+    const after = (await jean.get("/api/portal/tickets")).json.items;
+    expect(after.find((t: any) => t.id === printer.id)).toMatchObject({ mine: true });
+    expect((await jean.get(`/api/portal/tickets/${printer.id}`)).status).toBe(200);
+
+    // Marie picks Jean in the filter: the tickets he opened and the ones he is on
+    const his = (await marie.get(`/api/portal/tickets?scope=contact&contact=${jeanContact.id}`)).json.items.map((t: any) => t.title);
+    expect(his).toEqual(expect.arrayContaining(["Écran noir au poste 3", "Imprimante comptabilité"]));
+    // without the right, or with another company's contact: refused
+    expect((await jean.get(`/api/portal/tickets?scope=contact&contact=${jeanContact.id}`)).status).toBe(403);
+    const other = await signIn("responsable2@client.example");
+    expect((await other.get(`/api/portal/tickets?scope=contact&contact=${jeanContact.id}`)).status).toBe(404);
+    setDemoOtherContacts(printer.id, []);
   });
 });

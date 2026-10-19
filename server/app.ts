@@ -24,6 +24,7 @@ import { storeRoutes } from "./routes/store.ts";
 import { planningRoutes } from "./routes/planning.ts";
 import { smsHookRoutes, smsRoutes } from "./routes/sms.ts";
 import { outlookRoutes } from "./routes/outlook.ts";
+import { portalRoutes } from "./routes/portal.ts";
 import { microsoftRoutes } from "./routes/microsoft.ts";
 import { meetingRoutes } from "./routes/meetings.ts";
 import { crmRoutes } from "./routes/crm.ts";
@@ -61,7 +62,7 @@ export function createApp() {
   // Small JSON everywhere; Outlook sends and ticket attachments carry files
   const smallBody = bodyLimit({ maxSize: 256 * 1024 });
   const mailBody = bodyLimit({ maxSize: 7 * 1024 * 1024 });
-  api.use("*", (c, next) => (c.req.path.startsWith("/api/outlook/") || c.req.path.startsWith("/api/time/expenses") || /^\/api\/tickets\/\d+\/attachments$/.test(c.req.path) ? mailBody(c, next) : smallBody(c, next)));
+  api.use("*", (c, next) => (c.req.path.startsWith("/api/outlook/") || c.req.path.startsWith("/api/time/expenses") || /^\/api\/(tickets|portal\/tickets)\/\d+\/attachments$/.test(c.req.path) ? mailBody(c, next) : smallBody(c, next)));
   api.use("*", sameOriginJson);
   api.use("*", loadAuth);
   api.use("*", readOnlyViewAs);
@@ -93,6 +94,7 @@ export function createApp() {
   api.route("/time", timeRoutes);
   api.route("/messages", messageRoutes);
   api.route("/board", boardRoutes);
+  api.route("/portal", portalRoutes);
   api.use("/dashboard/*", requireStaff);
   api.route("/dashboard", dashboardRoutes);
   api.use("/tickets/*", requireStaff);

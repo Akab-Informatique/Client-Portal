@@ -1,4 +1,4 @@
-import { and, asc, eq, inArray, isNotNull, sql } from "drizzle-orm";
+import { and, asc, eq, gte, inArray, isNotNull, lte, sql } from "drizzle-orm";
 import { db, schema } from "../db/index.ts";
 import { billingSettings, formatInvoiceNumber, saveBillingSettings, type BillingSettings } from "./billing.ts";
 import { ensureCrm } from "./crm.ts";
@@ -119,24 +119,37 @@ export function syncBillables(): Promise<BillablesState> {
   return running;
 }
 
+/** A time frame (YYYY-MM-DD, both days included): only the work of those days is listed, counted and invoiced. */
+export type Period = { from?: string | null; to?: string | null };
+const inPeriod = (p?: Period) =>
+  and(p?.from ? gte(schema.billingItems.date, p.from) : undefined, p?.to ? lte(schema.billingItems.date, p.to) : undefined);
+
 /** The items of a kind (and status), with their client. */
-export async function listBillables(kind: BillableKind | null, status: string | null, clientId?: string | null) {
+export async function listBillables(kind: BillableKind | null, status: string | null, clientId?: string | null, period?: Period) {
   const rows = await db()
     .select({ b: schema.billingItems, client: schema.clients.name, invoice: schema.clientInvoices.number, auto: schema.clientContracts.autoApprove })
     .from(schema.billingItems)
     .innerJoin(schema.clients, eq(schema.clients.id, schema.billingItems.clientId))
     .leftJoin(schema.clientInvoices, eq(schema.clientInvoices.id, schema.billingItems.invoiceId))
     .leftJoin(schema.clientContracts, eq(schema.clientContracts.id, schema.billingItems.contractId))
-    .where(and(kind ? eq(schema.billingItems.kind, kind) : undefined, status ? eq(schema.billingItems.status, status) : undefined, clientId ? eq(schema.billingItems.clientId, clientId) : undefined))
+    .where(
+      and(
+        kind ? eq(schema.billingItems.kind, kind) : undefined,
+        status ? eq(schema.billingItems.status, status) : undefined,
+        clientId ? eq(schema.billingItems.clientId, clientId) : undefined,
+        inPeriod(period),
+      ),
+    )
     .orderBy(asc(schema.clients.name), asc(schema.billingItems.date));
   return rows.map(({ b, client, invoice }) => ({ ...b, clientName: client, invoiceNumber: invoice, autoApproved: b.status !== "pending" && b.approvedAt != null && !b.approvedBy && b.status !== "excluded" }));
 }
 
 /** How many items wait, by kind and status (for the tab counts). */
-export async function billableCounts() {
+export async function billableCounts(period?: Period) {
   const rows = await db()
     .select({ kind: schema.billingItems.kind, status: schema.billingItems.status, n: sql<number>`count(*)::int`, cents: sql<number>`coalesce(sum(${schema.billingItems.amountCents}), 0)::bigint` })
     .from(schema.billingItems)
+    .where(inPeriod(period))
     .groupBy(schema.billingItems.kind, schema.billingItems.status);
   return rows.map((r) => ({ ...r, cents: Number(r.cents) }));
 }
@@ -174,13 +187,13 @@ function taxesOf(s: BillingSettings, taxableCents: number, exempt: boolean) {
   return { gst: Math.round((taxableCents * s.taxes.gstRate) / 100), qst: Math.round((taxableCents * s.taxes.qstRate) / 100) };
 }
 
-/** Per client: the approved items, by kind (what can be invoiced). */
-export async function invoiceableClients() {
+/** Per client: the approved items of the time frame, by kind (what can be invoiced). */
+export async function invoiceableClients(period?: Period) {
   const rows = await db()
     .select({ clientId: schema.billingItems.clientId, name: schema.clients.name, kind: schema.billingItems.kind, n: sql<number>`count(*)::int`, cents: sql<number>`sum(${schema.billingItems.amountCents})::bigint` })
     .from(schema.billingItems)
     .innerJoin(schema.clients, eq(schema.clients.id, schema.billingItems.clientId))
-    .where(eq(schema.billingItems.status, "approved"))
+    .where(and(eq(schema.billingItems.status, "approved"), inPeriod(period)))
     .groupBy(schema.billingItems.clientId, schema.clients.name, schema.billingItems.kind);
   const m = new Map<string, { client: { id: string; name: string }; kinds: { kind: string; count: number; cents: number }[]; cents: number }>();
   for (const r of rows) {
@@ -203,6 +216,9 @@ export type InvoiceDraft = {
   dueOn?: string;
   notes?: string | null;
   poNumber?: string | null;
+  /** Only the work of these days (an item outside makes the draft invalid) */
+  from?: string | null;
+  to?: string | null;
 };
 
 export class DraftError extends Error {}
@@ -218,7 +234,7 @@ export async function draftInvoice(p: InvoiceDraft) {
   const approved = await d
     .select()
     .from(schema.billingItems)
-    .where(and(eq(schema.billingItems.clientId, client.id), eq(schema.billingItems.status, "approved")))
+    .where(and(eq(schema.billingItems.clientId, client.id), eq(schema.billingItems.status, "approved"), inPeriod(p)))
     .orderBy(asc(schema.billingItems.kind), asc(schema.billingItems.date));
   let items: Item[];
   if (p.itemIds) {
@@ -340,20 +356,20 @@ export function createInvoice(actorId: string, p: InvoiceDraft) {
 }
 
 /** What invoicing every client at once would make (their defaults). */
-export async function postPreview(clientIds?: string[]) {
-  const groups = await invoiceableClients();
+export async function postPreview(clientIds?: string[], period?: Period) {
+  const groups = await invoiceableClients(period);
   const out = [];
   for (const g of groups.filter((x) => !clientIds?.length || clientIds.includes(x.client.id))) {
-    const dr = await draftInvoice({ clientId: g.client.id });
+    const dr = await draftInvoice({ clientId: g.client.id, ...period });
     out.push({ client: g.client, items: dr.items, count: dr.items.length, subtotalCents: dr.subtotalCents, gstCents: dr.gstCents, qstCents: dr.qstCents, totalCents: dr.totalCents, exempt: dr.exempt, termsDays: dr.termsDays ?? 0 });
   }
   return out;
 }
 
 /** Invoice every approved item: one invoice per client (all clients, or the ones given), their defaults. */
-export async function postInvoices(actorId: string, clientIds?: string[]) {
-  const groups = await invoiceableClients();
+export async function postInvoices(actorId: string, clientIds?: string[], period?: Period) {
+  const groups = await invoiceableClients(period);
   const made = [];
-  for (const g of groups.filter((x) => !clientIds?.length || clientIds.includes(x.client.id))) made.push(await createInvoice(actorId, { clientId: g.client.id }));
+  for (const g of groups.filter((x) => !clientIds?.length || clientIds.includes(x.client.id))) made.push(await createInvoice(actorId, { clientId: g.client.id, ...period }));
   return made;
 }
