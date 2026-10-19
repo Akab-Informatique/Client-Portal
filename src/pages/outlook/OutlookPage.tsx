@@ -83,6 +83,7 @@ import {
   type MailAccount,
   type MailFolder,
   type MailMessage,
+  type MailListItem,
   type MailPage,
   type OutlookStatus,
 } from "./shared";
@@ -1084,6 +1085,7 @@ function MessageList({
               {!m.isRead && <span className="absolute left-0 top-3 bottom-3 w-0.5 rounded-r bg-grad-gold" />}
               <span className="flex items-center gap-2">
                 <span className={cn("min-w-0 flex-1 truncate text-sm", !m.isRead ? "font-semibold" : "text-foreground/85")}>{who(m.from)}</span>
+                <VerbIcon verb={m.lastVerb} at={m.lastVerbAt} />
                 {m.hasAttachments && <Paperclip className="size-3.5 shrink-0 text-muted-foreground" />}
                 {m.flagged && <Flag className="size-3.5 shrink-0 fill-red-500 text-red-500" />}
                 <span className="shrink-0 text-[11px] text-muted-foreground">{listDate(m.receivedAt)}</span>
@@ -1329,6 +1331,12 @@ function MessageView({
           </span>
           <span className="text-xs text-muted-foreground">{m.receivedAt ? dateTime(m.receivedAt) : ""}</span>
         </div>
+        {m.lastVerb && (
+          <p className="flex items-center gap-1.5 text-xs text-primary">
+            <VerbIcon verb={m.lastVerb} at={m.lastVerbAt} />
+            {t(`outlook.verb.${m.lastVerb}`, { date: m.lastVerbAt ? dateTime(m.lastVerbAt) : "—" })}
+          </p>
+        )}
         <p className="truncate text-xs text-muted-foreground">
           {t("outlook.to")} : {m.to.map(who).join(", ") || "—"}
           {m.cc.length > 0 && ` · ${t("outlook.cc")} : ${m.cc.map(who).join(", ")}`}
@@ -1373,4 +1381,13 @@ function MessageView({
       )}
     </>
   );
+}
+
+/** Answered already: replied, replied to all or forwarded (with when, on hover). */
+function VerbIcon({ verb, at }: { verb: MailListItem["lastVerb"]; at: string | null }) {
+  const { t } = useTranslation();
+  if (!verb) return null;
+  const Icon = verb === "forward" ? Forward : verb === "replyAll" ? ReplyAll : Reply;
+  const label = t(`outlook.verb.${verb}`, { date: at ? dateTime(at) : "—" });
+  return <Icon className="size-3.5 shrink-0 text-[color:var(--gold)]" aria-label={label}><title>{label}</title></Icon>;
 }

@@ -909,6 +909,13 @@ const en: Dict = {
     },
   },
   expense: {
+    favorites: {
+      title: "Favourites",
+      keep: "Keep as a favourite",
+      name: "Favourite name (e.g. Joliette round trip)",
+      remove: "Remove the favourite \"{{name}}\"",
+      tooMany: "30 favourites at most: remove one first.",
+    },
     title: "Expenses",
     report: {
       new: "New report",
@@ -1232,6 +1239,11 @@ const en: Dict = {
     },
   },
   outlook: {
+    verb: {
+      reply: "You replied on {{date}}",
+      replyAll: "You replied to all on {{date}}",
+      forward: "You forwarded this email on {{date}}",
+    },
     rePrefix: "RE:",
     fwPrefix: "FW:",
     forwardOf: "Forwarding “{{subject}}” (its attachments go with it)",
@@ -1780,6 +1792,13 @@ const en: Dict = {
     },
   },
   ai: {
+    polish: "Correct",
+    polishHint: "Correct the language and structure (AI, in French)",
+    polishOther: "Other languages",
+    polishFr: "Correct in French",
+    polishEn: "Correct in English",
+    polished: "Text corrected",
+    undo: "Undo",
     picker: {
       title: "AI model",
       default: "Default ({{model}})",
@@ -2242,6 +2261,7 @@ const en: Dict = {
         ticket_analyze: "Ticket: analysis",
         ticket_reply: "Ticket: suggested reply",
         tickets_plan: "Tickets: planning",
+        text_polish: "Texts: correction (language and structure)",
       },
       usage: {
         title: "Usage (US dollars)",

@@ -33,6 +33,7 @@ import {
 } from "lucide-react";
 import { GlassBackdrop } from "@/components/brand/GlassBackdrop";
 import { Button } from "@/components/ui/button";
+import { AiTextarea } from "@/components/AiPolish";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
@@ -43,7 +44,6 @@ import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel,
 import { useConfirm } from "@/components/ConfirmDialog";
 import { relativeTime } from "@/lib/format";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { Textarea } from "@/components/ui/textarea";
 import { api, ApiError } from "@/lib/api";
 import { useCan } from "@/lib/session";
 import { cn } from "@/lib/utils";
@@ -262,7 +262,7 @@ function InfoTab({ client }: { client: CrmDetail }) {
             <Field label={t("crm.info.website")}>{input("website")}</Field>
             <Field label={t("crm.info.code")}>{input("code")}</Field>
             <Field label={t("crm.info.notes")} className="sm:col-span-2">
-              <Textarea rows={3} value={f.notes} disabled={!editable} onChange={(e) => setF({ ...f, notes: e.target.value })} />
+              <AiTextarea rows={3} value={f.notes} disabled={!editable} onChange={(e) => setF({ ...f, notes: e.target.value })} />
               <p className="text-[11px] text-muted-foreground">{t("crm.info.notesHint")}</p>
             </Field>
           </div>
@@ -1103,7 +1103,7 @@ function InvoiceTab({ client }: { client: CrmDetail }) {
             <p className="text-[11px] text-muted-foreground">{t("crm.invoice.autoApproveHint")}</p>
           </Field>
           <Field label={t("crm.invoice.notes")} className="sm:col-span-2 lg:col-span-3">
-            <Textarea rows={3} value={f.notes} onChange={(e) => setF({ ...f, notes: e.target.value })} />
+            <AiTextarea rows={3} value={f.notes} onChange={(e) => setF({ ...f, notes: e.target.value })} />
           </Field>
         </div>
         <div className="flex justify-end">

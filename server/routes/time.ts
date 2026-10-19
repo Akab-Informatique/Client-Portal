@@ -413,6 +413,62 @@ export const timeRoutes = new Hono<AppEnv>()
     return c.json({ submitted: sent.length });
   })
 
+  // ── my favourite expenses (the same trip, parking…) ──
+  .get("/expense-favorites", requirePermission("timesheets.use"), async (c) => {
+    const a = auth(c);
+    const rows = await db()
+      .select({ f: schema.expenseFavorites, type: schema.expenseTypes.name, client: schema.clients.name })
+      .from(schema.expenseFavorites)
+      .innerJoin(schema.expenseTypes, eq(schema.expenseTypes.id, schema.expenseFavorites.typeId))
+      .leftJoin(schema.clients, eq(schema.clients.id, schema.expenseFavorites.clientId))
+      .where(and(eq(schema.expenseFavorites.userId, a.user.id), eq(schema.expenseTypes.active, true)))
+      .orderBy(asc(schema.expenseFavorites.name));
+    return c.json(rows.map((r) => ({ ...r.f, type: r.type, clientName: r.client })));
+  })
+  .post("/expense-favorites", requirePermission("timesheets.use"), async (c) => {
+    const a = auth(c);
+    const p = await body(
+      c,
+      z.object({
+        name: z.string().trim().min(1).max(80),
+        typeId: zUuid,
+        description: z.string().trim().max(500).default(""),
+        quantity: z.number().min(0).max(100_000).optional(),
+        amountCents: z.number().int().min(0).max(10_000_000).optional(),
+        clientId: zUuid.nullable().optional(),
+        billable: z.boolean().optional(),
+      }),
+    );
+    const pr = await priced(p.typeId, p);
+    if (p.clientId) await activeClient(p.clientId);
+    const [{ n }] = await db().select({ n: sql<number>`count(*)::int` }).from(schema.expenseFavorites).where(eq(schema.expenseFavorites.userId, a.user.id));
+    if (n >= 30) throw new HTTPException(409, { message: "too_many_favorites" });
+    const byUnit = Boolean(pr.type.unit && pr.type.unitPriceCents != null);
+    const [row] = await db()
+      .insert(schema.expenseFavorites)
+      .values({
+        userId: a.user.id,
+        name: p.name,
+        typeId: pr.type.id,
+        description: p.description,
+        quantityX100: byUnit ? pr.quantityX100 : null,
+        amountCents: byUnit ? null : pr.amountCents,
+        clientId: p.clientId ?? null,
+        billable: Boolean(p.clientId) && (p.billable ?? pr.type.billable),
+      })
+      .returning();
+    return c.json(row, 201);
+  })
+  .delete("/expense-favorites/:id", requirePermission("timesheets.use"), async (c) => {
+    const a = auth(c);
+    const [row] = await db()
+      .delete(schema.expenseFavorites)
+      .where(and(eq(schema.expenseFavorites.id, zUuid.parse(c.req.param("id"))), eq(schema.expenseFavorites.userId, a.user.id)))
+      .returning({ id: schema.expenseFavorites.id });
+    if (!row) throw new HTTPException(404, { message: "not_found" });
+    return c.json({ ok: true });
+  })
+
   // ── my expenses (the items) ──
   .get("/expenses", requirePermission("timesheets.use"), async (c) => {
     const a = auth(c);

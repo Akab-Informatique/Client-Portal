@@ -4,10 +4,10 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { AlertTriangle, Archive, Bot, Building2, Clock3, Loader2, MessageSquareText, Search, Send, Ticket, Timer, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { AiTextarea } from "@/components/AiPolish";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
-import { Textarea } from "@/components/ui/textarea";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { useConfirm } from "@/components/ConfirmDialog";
 import { api, ApiError } from "@/lib/api";
@@ -353,7 +353,7 @@ function ThreadView({ id, onBack, onTicket }: { id: string; onBack: () => void; 
             if (text.trim()) send.mutate();
           }}
         >
-          <Textarea
+          <AiTextarea
             rows={2}
             value={text}
             maxLength={1000}
@@ -453,7 +453,7 @@ export function TicketSmsPanel({ ticketId, phone }: { ticketId: number; phone: s
           <span className="text-xs text-muted-foreground">{t("sms.to")}</span>
           <Input type="tel" value={to} onChange={(e) => setTo(e.target.value)} placeholder={t("sms.toNumber")} className="h-8 max-w-48 font-mono text-xs" />
         </div>
-        <Textarea
+        <AiTextarea
           rows={2}
           maxLength={1000}
           value={text}

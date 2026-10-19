@@ -379,6 +379,13 @@
       "when": 1792421557992,
       "tag": "0053_chess_and_break_time",
       "breakpoints": true
+    },
+    {
+      "idx": 54,
+      "version": "7",
+      "when": 1792426013118,
+      "tag": "0054_expense_favorites",
+      "breakpoints": true
     }
   ]
 }

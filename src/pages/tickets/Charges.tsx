@@ -4,13 +4,13 @@ import { keepPreviousData, useMutation, useQuery, useQueryClient } from "@tansta
 import { toast } from "sonner";
 import { Boxes, ChevronDown, Loader2, PackagePlus, Plus, Receipt, Search, Wallet, Warehouse, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { AiTextarea } from "@/components/AiPolish";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Switch } from "@/components/ui/switch";
-import { Textarea } from "@/components/ui/textarea";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { api, ApiError } from "@/lib/api";
 import { currentLocale } from "@/i18n";
@@ -340,7 +340,7 @@ function ChargesDialog({ tk, editable, onClose }: { tk: TicketDetail; editable: 
                     </div>
                     <div className="space-y-1.5">
                       <Label htmlFor="ch-desc">{t("tickets.charges.description")}</Label>
-                      <Textarea id="ch-desc" rows={2} maxLength={2000} value={f.description} onChange={(e) => set("description")(e.target.value)} />
+                      <AiTextarea id="ch-desc" rows={2} maxLength={2000} value={f.description} onChange={(e) => set("description")(e.target.value)} />
                     </div>
                   </div>
                 )}

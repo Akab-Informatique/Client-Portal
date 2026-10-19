@@ -26,6 +26,8 @@ export type MailListItem = {
   flagged: boolean;
   hasAttachments: boolean;
   importance: string;
+  lastVerb: "reply" | "replyAll" | "forward" | null;
+  lastVerbAt: string | null;
 };
 export type MailPage = { items: MailListItem[]; next: string | null };
 export type MailAttachment = { id: string; name: string; contentType: string; size: number; isInline: boolean };

@@ -4,11 +4,11 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { Building2, Check, Loader2, Mail, Pin, Search, Send, Users } from "lucide-react";
 import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from "@/components/ui/sheet";
+import { AiTextarea } from "@/components/AiPolish";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
-import { Textarea } from "@/components/ui/textarea";
 import { Checkbox } from "@/components/ui/checkbox";
 import { api, ApiError } from "@/lib/api";
 import { useCan } from "@/lib/session";
@@ -83,7 +83,7 @@ export function Composer({ open, onOpenChange }: { open: boolean; onOpenChange: 
               <Label htmlFor="m-body">{t("messages.body")}</Label>
               <span className="font-mono text-[11px] text-muted-foreground">{body.length} / 10000</span>
             </div>
-            <Textarea id="m-body" required maxLength={10000} rows={7} value={body} onChange={(e) => setBody(e.target.value)} placeholder={t("messages.bodyPlaceholder")} />
+            <AiTextarea id="m-body" required maxLength={10000} rows={7} value={body} onChange={(e) => setBody(e.target.value)} placeholder={t("messages.bodyPlaceholder")} />
           </div>
 
           <div className="space-y-3">

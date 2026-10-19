@@ -6,10 +6,10 @@ import { Files, Loader2, Receipt, Send } from "lucide-react";
 import { useSearchParams } from "react-router-dom";
 import { GlassBackdrop } from "@/components/brand/GlassBackdrop";
 import { Button } from "@/components/ui/button";
+import { AiTextarea } from "@/components/AiPolish";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
-import { Textarea } from "@/components/ui/textarea";
 import { api } from "@/lib/api";
 import { useCan } from "@/lib/session";
 import { cn } from "@/lib/utils";
@@ -305,7 +305,7 @@ function InvoiceEditor({ ready, lang, period }: { ready: Ready; lang: string; pe
           </label>
           <label className="space-y-1.5 text-xs sm:col-span-2">
             <span className="text-muted-foreground">{t("approvals.invoice.notes")}</span>
-            <Textarea rows={3} value={f.notes} maxLength={2000} onChange={(e) => setF({ ...f, notes: e.target.value })} />
+            <AiTextarea rows={3} value={f.notes} maxLength={2000} onChange={(e) => setF({ ...f, notes: e.target.value })} />
           </label>
         </section>
         {can("accounting.manage") && (

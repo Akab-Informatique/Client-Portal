@@ -3,7 +3,7 @@ import { useSearchParams } from "react-router-dom";
 import { useTranslation } from "react-i18next";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
-import { BadgeCheck, Banknote, CalendarRange, ChevronRight, FilePen, Loader2, Paperclip, Pencil, Plus, Send, Trash2, Wallet, X } from "lucide-react";
+import { BadgeCheck, Banknote, CalendarRange, ChevronRight, FilePen, Loader2, Paperclip, Pencil, Plus, Send, Star, Trash2, Wallet, X } from "lucide-react";
 import { GlassBackdrop } from "@/components/brand/GlassBackdrop";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
@@ -45,6 +45,68 @@ export const EXPENSE_STATUS_STYLE: Record<Expense["status"], string> = {
   paid: "border-[color:var(--gold)]/40 bg-[color:var(--gold)]/10 text-primary",
 };
 const MAX_FILE = 5 * 1024 * 1024;
+
+/** An expense kept to be added again in one click (the same trip, parking…) */
+export type ExpenseFavorite = {
+  id: string;
+  name: string;
+  typeId: string;
+  type: string;
+  description: string;
+  quantityX100: number | null;
+  amountCents: number | null;
+  clientId: string | null;
+  clientName: string | null;
+  billable: boolean;
+};
+const FAVORITES_KEY = ["time", "expense-favorites"] as const;
+const useFavorites = () => useQuery({ queryKey: FAVORITES_KEY, queryFn: () => api.get<ExpenseFavorite[]>("/time/expense-favorites") });
+
+/** The favourites as chips: a click uses one; the × forgets it. */
+function FavoriteChips({ onPick, removable }: { onPick: (f: ExpenseFavorite) => void; removable?: boolean }) {
+  const { t, i18n } = useTranslation();
+  const qc = useQueryClient();
+  const { data: favs = [] } = useFavorites();
+  const remove = useMutation({
+    mutationFn: (id: string) => api.del(`/time/expense-favorites/${id}`),
+    onSuccess: () => void qc.invalidateQueries({ queryKey: FAVORITES_KEY }),
+    onError: () => toast.error(t("common.error")),
+  });
+  if (!favs.length) return null;
+  return (
+    <div className="flex flex-wrap items-center gap-1.5">
+      <span className="inline-flex items-center gap-1 text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
+        <Star className="size-3 fill-[color:var(--gold)] text-[color:var(--gold)]" /> {t("expense.favorites.title")}
+      </span>
+      {favs.map((x) => (
+        <span key={x.id} className="inline-flex items-center rounded-full border border-[color:var(--gold)]/35 bg-[color:var(--gold)]/[0.06] text-xs">
+          <button
+            type="button"
+            onClick={() => onPick(x)}
+            title={[x.type, x.description, x.clientName].filter(Boolean).join(" · ")}
+            className={cn("py-1 pl-2.5 hover:text-primary", removable ? "pr-1" : "pr-2.5")}
+          >
+            {x.name}
+            <span className="ml-1 text-muted-foreground">
+              {x.quantityX100 != null ? `${x.quantityX100 / 100}` : x.amountCents != null ? money(x.amountCents, i18n.language) : ""}
+            </span>
+          </button>
+          {removable && (
+            <button
+              type="button"
+              aria-label={t("expense.favorites.remove", { name: x.name })}
+              title={t("expense.favorites.remove", { name: x.name })}
+              onClick={() => remove.mutate(x.id)}
+              className="rounded-full p-1 pr-1.5 text-muted-foreground hover:text-destructive"
+            >
+              <X className="size-3" />
+            </button>
+          )}
+        </span>
+      ))}
+    </div>
+  );
+}
 
 export type ExpenseReport = {
   id: string;
@@ -284,7 +346,7 @@ function ReportFormDialog({ report, onClose, onSaved }: { report: ExpenseReport 
 function ReportView({ r, money: m, onClose, onChanged }: { r: ExpenseReport; money: (c: number) => string; onClose: () => void; onChanged: () => void }) {
   const { t } = useTranslation();
   const open = r.status === "open";
-  const [item, setItem] = useState<Expense | "new" | null>(null);
+  const [item, setItem] = useState<Expense | "new" | { preset: ExpenseFavorite } | null>(null);
   const [editingReport, setEditingReport] = useState(false);
   const onError = (e: unknown) => {
     const code = e instanceof ApiError ? e.code : "";
@@ -369,6 +431,12 @@ function ReportView({ r, money: m, onClose, onChanged }: { r: ExpenseReport; mon
           )}
         </div>
 
+        {open && (
+          <div className="px-5 pb-1 pt-1">
+            <FavoriteChips onPick={(x) => setItem({ preset: x })} />
+          </div>
+        )}
+
         <div className="min-h-0 flex-1 overflow-y-auto px-2 pb-2 scrollbar-thin">
           {r.items.length > 0 ? (
             <ul className="divide-y divide-border/60">
@@ -434,7 +502,8 @@ function ReportView({ r, money: m, onClose, onChanged }: { r: ExpenseReport; mon
           <ExpenseDialog
             reportId={r.id}
             period={{ start: r.periodStart, end: r.periodEnd }}
-            expense={item === "new" ? null : item}
+            expense={item === "new" || "preset" in item ? null : item}
+            preset={item !== "new" && "preset" in item ? item.preset : undefined}
             onClose={() => setItem(null)}
             onSaved={onChanged}
           />
@@ -458,10 +527,13 @@ function ExpenseDialog({
   reportId,
   period,
   expense,
+  preset,
   onClose,
   onSaved,
 }: {
   reportId: string;
+  /** A favourite to start from */
+  preset?: ExpenseFavorite;
   /** The report's days: the date must be within */
   period: { start: string | null; end: string | null };
   expense: Expense | null;
@@ -469,12 +541,21 @@ function ExpenseDialog({
   onSaved: () => void;
 }) {
   const { t, i18n } = useTranslation();
+  const qc = useQueryClient();
   const { data: types } = useQuery({ queryKey: ["time", "types"], queryFn: () => api.get<{ expense: ExpenseType[] }>("/time/types") });
   const { data: clients = [] } = useCrmClients();
   const fileInput = useRef<HTMLInputElement>(null);
   // today, brought within the report's days
   const now = new Date().toLocaleDateString("en-CA");
   const today = period.start && now < period.start ? period.start : period.end && now > period.end ? period.end : now;
+  const fromFavorite = (x: ExpenseFavorite) => ({
+    typeId: x.typeId,
+    description: x.description,
+    quantity: x.quantityX100 != null ? String(x.quantityX100 / 100) : "",
+    amount: x.amountCents != null ? (x.amountCents / 100).toFixed(2) : "",
+    clientId: x.clientId ?? "",
+    billable: x.billable,
+  });
   const [f, setF] = useState({
     date: expense?.date ?? today,
     typeId: expense?.typeId ?? "",
@@ -483,7 +564,10 @@ function ExpenseDialog({
     amount: expense ? (expense.amountCents / 100).toFixed(2) : "",
     clientId: expense?.clientId ?? "",
     billable: expense?.billable ?? false,
+    ...(!expense && preset ? fromFavorite(preset) : {}),
   });
+  // also kept as a favourite, under this name
+  const [keep, setKeep] = useState<string | null>(null);
   const [file, setFile] = useState<File | null>(null);
   const type = types?.expense.find((x) => x.id === f.typeId);
   const byUnit = Boolean(type?.unit && type.unitPriceCents != null);
@@ -493,7 +577,15 @@ function ExpenseDialog({
     mutationFn: async () => {
       const receipt = file ? { name: file.name, contentType: file.type || "application/octet-stream", data: await fileToBase64(file) } : undefined;
       const p = { date: f.date, typeId: f.typeId, description: f.description, ...(byUnit ? { quantity: num(f.quantity) } : { amountCents: amount }), clientId: f.clientId || null, billable: Boolean(f.clientId) && f.billable, ...(receipt ? { receipt } : {}) };
-      return expense ? api.patch(`/time/expenses/${expense.id}`, p) : api.post("/time/expenses", { ...p, reportId });
+      const r = await (expense ? api.patch(`/time/expenses/${expense.id}`, p) : api.post("/time/expenses", { ...p, reportId }));
+      if (keep?.trim()) {
+        const { date: _date, receipt: _receipt, ...rest } = p as typeof p & { receipt?: unknown };
+        await api.post("/time/expense-favorites", { ...rest, name: keep.trim() }).catch((e) => {
+          toast.error(e instanceof ApiError && e.code === "too_many_favorites" ? t("expense.favorites.tooMany") : t("common.error"));
+        });
+        void qc.invalidateQueries({ queryKey: FAVORITES_KEY });
+      }
+      return r;
     },
     onSuccess: () => {
       onSaved();
@@ -514,6 +606,7 @@ function ExpenseDialog({
           </DialogTitle>
           <DialogDescription>{t("expense.dialogText")}</DialogDescription>
         </DialogHeader>
+        {!expense && <FavoriteChips removable onPick={(x) => setF((cur) => ({ ...cur, ...fromFavorite(x) }))} />}
         <form
           className="space-y-3"
           onSubmit={(e: FormEvent) => {
@@ -602,7 +695,28 @@ function ExpenseDialog({
               }}
             />
           </div>
-          <div className="flex justify-end gap-2">
+          <div className="flex flex-wrap items-center justify-end gap-2">
+            {keep === null ? (
+              <Button type="button" variant="ghost" size="sm" className="mr-auto gap-1 text-muted-foreground" onClick={() => setKeep(f.description.slice(0, 80))}>
+                <Star className="size-3.5" /> {t("expense.favorites.keep")}
+              </Button>
+            ) : (
+              <span className="mr-auto flex items-center gap-1">
+                <Star className="size-3.5 fill-[color:var(--gold)] text-[color:var(--gold)]" />
+                <Input
+                  autoFocus
+                  maxLength={80}
+                  value={keep}
+                  onChange={(e) => setKeep(e.target.value)}
+                  placeholder={t("expense.favorites.name")}
+                  aria-label={t("expense.favorites.name")}
+                  className="h-8 w-44"
+                />
+                <button type="button" aria-label={t("common.cancel")} onClick={() => setKeep(null)} className="rounded-md p-1 text-muted-foreground hover:text-foreground">
+                  <X className="size-3.5" />
+                </button>
+              </span>
+            )}
             <Button type="button" variant="ghost" onClick={onClose}>
               {t("common.cancel")}
             </Button>

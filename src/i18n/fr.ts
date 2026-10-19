@@ -907,6 +907,13 @@ const fr = {
     },
   },
   expense: {
+    favorites: {
+      title: "Favoris",
+      keep: "Garder en favori",
+      name: "Nom du favori (ex. : Aller-retour Joliette)",
+      remove: "Retirer le favori « {{name}} »",
+      tooMany: "30 favoris au plus : retirez-en un d'abord.",
+    },
     title: "Dépenses",
     report: {
       new: "Nouveau rapport",
@@ -1230,6 +1237,11 @@ const fr = {
     },
   },
   outlook: {
+    verb: {
+      reply: "Vous avez répondu le {{date}}",
+      replyAll: "Vous avez répondu à tous le {{date}}",
+      forward: "Vous avez transféré ce courriel le {{date}}",
+    },
     rePrefix: "RE :",
     fwPrefix: "TR :",
     forwardOf: "Transfert de « {{subject}} » (ses pièces jointes suivent)",
@@ -1778,6 +1790,13 @@ const fr = {
     },
   },
   ai: {
+    polish: "Corriger",
+    polishHint: "Corriger la langue et la structure (IA, en français)",
+    polishOther: "Autres langues",
+    polishFr: "Corriger en français",
+    polishEn: "Corriger en anglais",
+    polished: "Texte corrigé",
+    undo: "Annuler",
     picker: {
       title: "Modèle d'IA",
       default: "Par défaut ({{model}})",
@@ -2240,6 +2259,7 @@ const fr = {
         ticket_analyze: "Billet : analyse",
         ticket_reply: "Billet : réponse suggérée",
         tickets_plan: "Billets : planification",
+        text_polish: "Textes : correction (langue et structure)",
       },
       usage: {
         title: "Utilisation (dollars US)",

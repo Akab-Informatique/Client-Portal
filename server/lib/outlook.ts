@@ -26,7 +26,11 @@ export type MailListItem = {
   flagged: boolean;
   hasAttachments: boolean;
   importance: string;
+  /** Last answer from this mailbox (Outlook's "You replied / forwarded") */
+  lastVerb: MailVerb | null;
+  lastVerbAt: string | null;
 };
+export type MailVerb = "reply" | "replyAll" | "forward";
 export type MailAttachment = { id: string; name: string; contentType: string; size: number; isInline: boolean };
 export type MailMessage = MailListItem & {
   to: MailAddress[];
@@ -56,6 +60,7 @@ type GMsg = {
   replyTo?: GAddr[];
   body?: { contentType?: string; content?: string };
   parentFolderId?: string;
+  singleValueExtendedProperties?: { id?: string; value?: string }[];
 };
 
 const addr = (a?: GAddr): MailAddress | null => (a?.emailAddress?.address ? { name: a.emailAddress.name || null, address: a.emailAddress.address } : null);
@@ -64,6 +69,16 @@ const recipients = (l: string[]) => l.map((address) => ({ emailAddress: { addres
 const enc = encodeURIComponent;
 
 const LIST_FIELDS = "id,subject,from,receivedDateTime,bodyPreview,isRead,flag,hasAttachments,importance";
+/**
+ * PidTagLastVerbExecuted (0x1081: 102 reply, 103 reply all, 104 forward) and its
+ * time (0x1082), the properties Outlook uses for "You replied on…".
+ */
+const VERB_PROP = "Integer 0x1081";
+const VERB_TIME_PROP = "SystemTime 0x1082";
+const VERB_EXPAND = `singleValueExtendedProperties($filter=id eq '${VERB_PROP}' or id eq '${VERB_TIME_PROP}')`;
+const VERB_CODES: Record<string, MailVerb> = { "102": "reply", "103": "replyAll", "104": "forward" };
+const VERB_VALUE: Record<MailVerb, string> = { reply: "102", replyAll: "103", forward: "104" };
+const prop = (m: GMsg, id: string) => m.singleValueExtendedProperties?.find((p) => (p.id ?? "").toLowerCase() === id.toLowerCase())?.value;
 
 function listItem(m: GMsg): MailListItem {
   return {
@@ -76,6 +91,8 @@ function listItem(m: GMsg): MailListItem {
     flagged: m.flag?.flagStatus === "flagged",
     hasAttachments: Boolean(m.hasAttachments),
     importance: m.importance ?? "normal",
+    lastVerb: VERB_CODES[prop(m, VERB_PROP) ?? ""] ?? null,
+    lastVerbAt: VERB_CODES[prop(m, VERB_PROP) ?? ""] ? (prop(m, VERB_TIME_PROP) ?? null) : null,
   };
 }
 
@@ -151,7 +168,7 @@ export async function listMessages(
     }
     path = opts.cursor;
   } else {
-    const q = new URLSearchParams({ $top: String(PAGE), $select: LIST_FIELDS });
+    const q = new URLSearchParams({ $top: String(PAGE), $select: LIST_FIELDS, $expand: VERB_EXPAND });
     const search = (opts.search ?? "").trim().slice(0, 120);
     if (search) q.set("$search", `"${search.replace(/["\\]/g, " ")}"`);
     else q.set("$orderby", "receivedDateTime desc");
@@ -168,7 +185,7 @@ export async function getMessage(mailbox: string, id: string): Promise<MailMessa
   const base = `${user(mailbox)}/messages/${enc(id)}`;
   const m = await graph<GMsg>(
     "GET",
-    `${base}?$select=${LIST_FIELDS},toRecipients,ccRecipients,bccRecipients,replyTo,body,parentFolderId`,
+    `${base}?$select=${LIST_FIELDS},toRecipients,ccRecipients,bccRecipients,replyTo,body,parentFolderId&$expand=${enc(VERB_EXPAND)}`,
     undefined,
     undefined,
     ['outlook.body-content-type="html"'],
@@ -428,6 +445,13 @@ export async function respond(mailbox: string, id: string, mode: "reply" | "repl
     await graph("DELETE", draftPath).catch(() => undefined);
     throw e;
   }
+  // Mark the original as answered, as Outlook does (Graph's send leaves it as is)
+  await graph("PATCH", `${user(mailbox)}/messages/${enc(id)}`, {
+    singleValueExtendedProperties: [
+      { id: VERB_PROP, value: VERB_VALUE[mode] },
+      { id: VERB_TIME_PROP, value: new Date().toISOString() },
+    ],
+  }).catch(() => undefined);
 }
 
 /** Our part in the default Outlook font. */

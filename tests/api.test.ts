@@ -1373,6 +1373,40 @@ describe("tickets: inline edit, notes, team filter and AI", () => {
     }
     await admin.put("/api/admin/integrations/ai", { enabled: false });
   });
+
+  it("AI text correction: French by default, needs tickets.ai, HTML sanitized", async () => {
+    const admin = await session("admin@akab.local");
+    const tech = await session("tech@akab.local");
+    expect((await tech.post("/api/tickets/ai/polish", { text: "bonjour" })).status).toBe(403);
+    expect((await admin.post("/api/tickets/ai/polish", { text: "bonjour" })).json.error).toBe("ai_disabled");
+    await admin.put("/api/admin/integrations/ai", { apiKey: "sk-ant-test-secret", enabled: true });
+    const sent: any[] = [];
+    let reply = "Bonjour, l'imprimante est réparée.";
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (_u: unknown, init: RequestInit = {}) => {
+        sent.push(JSON.parse(String(init.body)));
+        return new Response(JSON.stringify({ content: [{ type: "text", text: reply }] }), { status: 200 });
+      }),
+    );
+    try {
+      expect((await admin.post("/api/tickets/ai/polish", { text: "   " })).status).toBe(400);
+      const r = await admin.post("/api/tickets/ai/polish", { text: "bonjour limprimante est reparer" });
+      expect(r.status).toBe(200);
+      expect(r.json.text).toBe("Bonjour, l'imprimante est réparée.");
+      expect(sent[0].system).toContain("français");
+      expect(sent[0].messages[0].content).toContain("limprimante");
+      await admin.post("/api/tickets/ai/polish", { text: "hello", lang: "en" });
+      expect(sent[1].system).toContain("anglais");
+      // an email body comes back as safe HTML
+      reply = '```html\n<p>Bonjour<script>alert(1)</script></p><p onclick="x()">Merci</p>\n```';
+      const h = await admin.post("/api/tickets/ai/polish", { text: "<p>bonjour</p>", format: "html" });
+      expect(h.json.text).toBe("<p>Bonjour</p><p>Merci</p>");
+    } finally {
+      vi.unstubAllGlobals();
+      await admin.put("/api/admin/integrations/ai", { enabled: false });
+    }
+  });
 });
 
 describe("tickets: client and contact", () => {
@@ -2689,7 +2723,7 @@ describe("Outlook (Microsoft 365 mail)", () => {
         if (/mailFolders\/[^/]+\/move$/.test(url) && method === "POST") return json({ id: "f2" }, 201);
         if (url.includes("/messages?") && method === "GET") {
           return json({
-            value: [{ id: "m1", subject: "Imprimante", from: { emailAddress: { name: "Marie", address: "marie@client.example" } }, receivedDateTime: "2026-10-13T12:00:00Z", bodyPreview: "Bonjour", isRead: false, flag: { flagStatus: "notFlagged" }, hasAttachments: true }],
+            value: [{ id: "m1", subject: "Imprimante", from: { emailAddress: { name: "Marie", address: "marie@client.example" } }, receivedDateTime: "2026-10-13T12:00:00Z", bodyPreview: "Bonjour", isRead: false, flag: { flagStatus: "notFlagged" }, hasAttachments: true, singleValueExtendedProperties: [{ id: "Integer 0x1081", value: "103" }, { id: "SystemTime 0x1082", value: "2026-10-13T13:00:00Z" }] }],
             "@odata.nextLink": `${G}${url.startsWith(`${G}me/`) ? "me" : "users/tech%40akab.local"}/mailFolders/inbox-id/messages?$skiptoken=abc`,
           });
         }
@@ -2807,7 +2841,8 @@ describe("Outlook (Microsoft 365 mail)", () => {
     const folders = (await tech.get(`/api/outlook/accounts/${acc.id}/folders`)).json;
     expect(folders[0]).toMatchObject({ id: "inbox-id", wellKnown: "inbox", unread: 2 });
     const page = (await tech.get(`/api/outlook/accounts/${acc.id}/messages?folder=inbox-id`)).json;
-    expect(page.items[0]).toMatchObject({ id: "m1", subject: "Imprimante", isRead: false, from: { address: "marie@client.example" } });
+    expect(page.items[0]).toMatchObject({ id: "m1", subject: "Imprimante", isRead: false, from: { address: "marie@client.example" }, lastVerb: "replyAll", lastVerbAt: "2026-10-13T13:00:00Z" });
+    expect(sent.some((s) => s.url.includes("$expand=singleValueExtendedProperties"))).toBe(true);
     expect(page.next).toBe("me/mailFolders/inbox-id/messages?$skiptoken=abc");
     // a page cursor cannot point at another mailbox
     const other = encodeURIComponent("users/ceo%40akab.local/messages");
@@ -2927,7 +2962,9 @@ describe("Outlook (Microsoft 365 mail)", () => {
         })
       ).status,
     ).toBe(201);
-    expect(sent.map((s) => `${s.method} ${s.url.split("/messages/")[1]}`)).toEqual(["POST m1/createReply", "PATCH d1", "POST d1/attachments", "POST d1/send"]);
+    expect(sent.map((s) => `${s.method} ${s.url.split("/messages/")[1]}`)).toEqual(["POST m1/createReply", "PATCH d1", "POST d1/attachments", "POST d1/send", "PATCH m1"]);
+    // the original is marked as answered (Outlook's "You replied")
+    expect(sent[4].body.singleValueExtendedProperties).toEqual([{ id: "Integer 0x1081", value: "102" }, { id: "SystemTime 0x1082", value: expect.any(String) }]);
     expect(sent[1].body).toMatchObject({
       toRecipients: [{ emailAddress: { address: "marie@client.example" } }],
       bccRecipients: [{ emailAddress: { address: "boss@akab.local" } }],
@@ -3676,6 +3713,32 @@ describe("timesheets and expenses, approved and sent to QuickBooks", () => {
     expect(raw).not.toContain("Cours Intune");
     expect(raw).not.toContain("Remplacement du disque");
     globalThis.__sheet = mine.id;
+  });
+
+  it("favourite expenses: kept per person, priced like an expense, one click to reuse", async () => {
+    resetRateLimit("login:ip:unknown");
+    const tech = await signIn("tech@akab.local");
+    const other = await signIn("tech2@akab.local");
+    const types = (await tech.get("/api/time/types")).json.expense;
+    const km = types.find((x: any) => x.name === "Kilométrage");
+    const parking = types.find((x: any) => x.name === "Stationnement");
+    const trip = await tech.post("/api/time/expense-favorites", { name: "Joliette", typeId: km.id, description: "Aller-retour Joliette", quantity: 42 });
+    expect(trip.status).toBe(201);
+    expect(trip.json).toMatchObject({ quantityX100: 4200, amountCents: null, billable: false });
+    const park = (await tech.post("/api/time/expense-favorites", { name: "Stationnement", typeId: parking.id, description: "Centre-ville", amountCents: 1200, quantity: 3 })).json;
+    expect(park).toMatchObject({ quantityX100: null, amountCents: 1200 });
+    // a quantity by unit and an amount otherwise, as for an expense
+    expect((await tech.post("/api/time/expense-favorites", { name: "Vide", typeId: km.id })).status).toBe(400);
+    expect((await tech.post("/api/time/expense-favorites", { name: "", typeId: parking.id, amountCents: 100 })).status).toBe(400);
+    const mine = (await tech.get("/api/time/expense-favorites")).json;
+    expect(mine.map((x: any) => x.name)).toEqual(["Joliette", "Stationnement"]);
+    expect(mine[0]).toMatchObject({ type: "Kilométrage", description: "Aller-retour Joliette" });
+    // only its owner sees or removes it
+    expect((await other.get("/api/time/expense-favorites")).json).toEqual([]);
+    expect((await other.del(`/api/time/expense-favorites/${park.id}`)).status).toBe(404);
+    expect((await tech.del(`/api/time/expense-favorites/${park.id}`)).status).toBe(200);
+    expect((await tech.del(`/api/time/expense-favorites/${trip.json.id}`)).status).toBe(200);
+    expect((await tech.get("/api/time/expense-favorites")).json).toEqual([]);
   });
 
   it("expenses with receipts; approved: billable ones go on the client's invoice; all sent to QuickBooks", async () => {

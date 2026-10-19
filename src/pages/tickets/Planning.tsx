@@ -23,12 +23,12 @@ import {
   Trash2,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { AiTextarea } from "@/components/AiPolish";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Skeleton } from "@/components/ui/skeleton";
-import { Textarea } from "@/components/ui/textarea";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { useConfirm } from "@/components/ConfirmDialog";
 import { api } from "@/lib/api";
@@ -887,7 +887,7 @@ export function PriorityDialog({
           </div>
           <div className="space-y-1.5">
             <Label htmlFor="pr-note">{t("planning.direction")}</Label>
-            <Textarea id="pr-note" rows={4} maxLength={2000} value={note} onChange={(e) => setNote(e.target.value)} placeholder={t("planning.directionHint")} />
+            <AiTextarea id="pr-note" rows={4} maxLength={2000} value={note} onChange={(e) => setNote(e.target.value)} placeholder={t("planning.directionHint")} />
           </div>
           <div className="flex justify-end gap-2">
             <Button type="button" variant="ghost" onClick={onClose}>
@@ -1403,7 +1403,7 @@ function BlockDialog({
           </div>
           <div className="space-y-1.5">
             <Label htmlFor="bl-note">{t("planning.blockNote")}</Label>
-            <Textarea id="bl-note" rows={2} maxLength={2000} value={note} onChange={(e) => setNote(e.target.value)} />
+            <AiTextarea id="bl-note" rows={2} maxLength={2000} value={note} onChange={(e) => setNote(e.target.value)} />
           </div>
           <div className="flex items-center gap-2">
             {block && (

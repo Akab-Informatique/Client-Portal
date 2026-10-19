@@ -4,7 +4,7 @@ import { toast } from "sonner";
 import { Bold, Eraser, ImagePlus, Italic, Link2, List, ListOrdered, Palette, Strikethrough, Underline } from "lucide-react";
 import { cn } from "@/lib/utils";
 
-export type RichEditorHandle = { html: () => string; focus: () => void; element: () => HTMLDivElement | null };
+export type RichEditorHandle = { html: () => string; setHtml: (html: string) => void; focus: () => void; element: () => HTMLDivElement | null };
 
 const COLORS = ["#111111", "#c00000", "#e36c09", "#1f6f3f", "#1f4e9c", "#7030a0", "#808080"];
 const MAX_IMAGE = 200 * 1024;
@@ -29,7 +29,15 @@ export const RichEditor = forwardRef<
   const { t } = useTranslation();
   const box = useRef<HTMLDivElement>(null);
   const picture = useRef<HTMLInputElement>(null);
-  useImperativeHandle(ref, () => ({ html: () => box.current?.innerHTML ?? "", focus: () => box.current?.focus(), element: () => box.current }));
+  useImperativeHandle(ref, () => ({
+    html: () => box.current?.innerHTML ?? "",
+    setHtml: (html: string) => {
+      if (box.current) box.current.innerHTML = html;
+      onChange?.(html);
+    },
+    focus: () => box.current?.focus(),
+    element: () => box.current,
+  }));
   // the content is set once; the editor owns it afterwards
   useEffect(() => {
     if (box.current) box.current.innerHTML = initialHtml;

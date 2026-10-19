@@ -43,6 +43,7 @@ import {
   MessageSquareText,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { AiTextarea } from "@/components/AiPolish";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import {
   DropdownMenu,
@@ -56,7 +57,6 @@ import { Input } from "@/components/ui/input";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Switch } from "@/components/ui/switch";
-import { Textarea } from "@/components/ui/textarea";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { api, ApiError } from "@/lib/api";
 import { AiModelSub, AiTodayLine, useAiModel } from "@/components/AiModelPicker";
@@ -1092,7 +1092,7 @@ function EditableDescription({
         </>
       ) : (
         <div className="space-y-2">
-          <Textarea autoFocus rows={8} value={draft} maxLength={8000} onChange={(e) => setDraft(e.target.value)} aria-label={t("tickets.description")} />
+          <AiTextarea autoFocus rows={8} value={draft} maxLength={8000} onChange={(e) => setDraft(e.target.value)} aria-label={t("tickets.description")} />
           <div className="flex justify-end gap-2">
             <Button size="sm" variant="ghost" onClick={() => setDraft(null)}>
               {t("common.cancel")}
@@ -1456,7 +1456,7 @@ function NoteComposer({
           </button>
         ))}
       </div>
-      <Textarea
+      <AiTextarea
         ref={ref}
         rows={focused || text ? 5 : 2}
         value={text}

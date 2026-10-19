@@ -5,12 +5,12 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { AlertTriangle, Clock3, Loader2, Pause, Play, Receipt, Square, Timer as TimerIcon, XCircle } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { AiTextarea } from "@/components/AiPolish";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { Textarea } from "@/components/ui/textarea";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { useConfirm } from "@/components/ConfirmDialog";
 import { api } from "@/lib/api";
@@ -457,7 +457,7 @@ function TimeEntryDialog({ timer, position, onLater }: { timer: Timer; position:
           </div>
           <div className="space-y-1.5">
             <Label htmlFor="te-summary">{t("tickets.timer.summary")}</Label>
-            <Textarea
+            <AiTextarea
               id="te-summary"
               rows={4}
               value={summary}
@@ -468,7 +468,7 @@ function TimeEntryDialog({ timer, position, onLater }: { timer: Timer; position:
           </div>
           <div className="space-y-1.5">
             <Label htmlFor="te-internal">{t("tickets.timer.internal")}</Label>
-            <Textarea id="te-internal" rows={2} value={internal} onChange={(e) => setInternal(e.target.value)} />
+            <AiTextarea id="te-internal" rows={2} value={internal} onChange={(e) => setInternal(e.target.value)} />
           </div>
           <div className="flex flex-wrap items-center gap-2 pt-1">
             <Button

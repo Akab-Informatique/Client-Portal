@@ -13,13 +13,16 @@ import { api } from "@/lib/api";
 import { cn } from "@/lib/utils";
 import type { TicketSummary } from "@/pages/tickets/shared";
 import { RichEditor, type RichEditorHandle } from "./RichEditor";
+import { AiPolishButton } from "@/components/AiPolish";
 import { isAddress, RecipientInput } from "./RecipientInput";
 import {
   base,
   bytes,
   fileToBase64,
   KEY,
+  messageKey,
   outlookErrorText,
+  patchListItem,
   statusKey,
   who,
   type ComposeMode,
@@ -273,6 +276,11 @@ export function ComposeDialog({
     },
     onSuccess: () => {
       toast.success(t("outlook.sentOk"));
+      if (mode !== "new" && message) {
+        const answered = { lastVerb: mode, lastVerbAt: new Date().toISOString() } as const;
+        patchListItem(qc, d.accountId, message.id, answered);
+        qc.setQueryData<MailMessage>(messageKey(d.accountId, message.id), (x) => (x ? { ...x, ...answered } : x));
+      }
       void qc.invalidateQueries({ queryKey: [...KEY, "folders", d.accountId] });
       void qc.invalidateQueries({ queryKey: [...KEY, "contacts"] });
       onOpenChange(false);
@@ -432,6 +440,22 @@ export function ComposeDialog({
               <Button type="button" variant="outline" size="sm" onClick={() => fileInput.current?.click()}>
                 <Paperclip className="size-4" /> {t("outlook.attach")}
               </Button>
+              <AiPolishButton
+                format="html"
+                get={() => {
+                  // the text written, without the signature (kept as is)
+                  const el = editor.current?.element();
+                  if (!el) return "";
+                  const copy = el.cloneNode(true) as HTMLElement;
+                  copy.querySelectorAll(`.${SIGNATURE_CLASS}`).forEach((n) => n.remove());
+                  return copy.innerHTML.replace(/(<p><br><\/p>)+$/, "");
+                }}
+                set={(html) => {
+                  const el = editor.current?.element();
+                  const sig = el?.querySelector(`.${SIGNATURE_CLASS}`)?.outerHTML ?? "";
+                  editor.current?.setHtml(`${html}${sig ? `<p><br></p>${sig}` : ""}`);
+                }}
+              />
               <Button
                 type="button"
                 variant={d.importance === "high" ? "default" : "outline"}

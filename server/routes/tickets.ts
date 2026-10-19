@@ -7,6 +7,7 @@ import { auth, requirePermission, type AppEnv, type AuthContext } from "../lib/a
 import { body, zEmail } from "../lib/validate.ts";
 import { audit } from "../lib/audit.ts";
 import { rateLimit } from "../lib/http.ts";
+import { sanitizeMailHtml } from "../lib/mailHtml.ts";
 import { AI_FEATURE_KEYS, AI_MODELS, AiError, aiSettings, askClaude, askClaudeJson, modelFor, todayOf, type AiModel } from "../lib/ai.ts";
 import { AutotaskError, PERMISSION_REFUSED } from "../lib/autotask.ts";
 import { sweepTimers, timerView, elapsedMs } from "../lib/timers.ts";
@@ -462,6 +463,44 @@ export const ticketRoutes = new Hono<AppEnv>()
       counts: Object.fromEntries(Object.entries(views).map(([k, f]) => [k, all.filter(f).filter((t) => k === "all" || open(t)).length])),
       facets: { queues: o.queues, companies, statuses: o.statuses, priorities: o.priorities, technicians: team },
     });
+  })
+
+  /**
+   * AI: a text written in the portal (note, time entry, ticket, email, message…)
+   * corrected — spelling, grammar, structure — in French by default, or English.
+   * Meaning, facts, names and numbers are kept; nothing is added.
+   */
+  .post("/ai/polish", requirePermission("tickets.ai"), async (c) => {
+    const a = auth(c);
+    const p = await body(
+      c,
+      z.object({
+        text: z.string().trim().min(1).max(20_000),
+        format: z.enum(["text", "html"]).default("text"),
+        lang: z.enum(["fr", "en"]).default("fr"),
+      }),
+    );
+    if (!rateLimit(`ai-polish:${a.user.id}`, 30, 60_000).ok) throw new HTTPException(429, { message: "rate_limited" });
+    const language = p.lang === "en" ? "anglais (canadien)" : "français (québécois standard, registre professionnel)";
+    const system = [
+      "Tu es le correcteur d'une entreprise de services informatiques (AKAB Informatique, au Québec).",
+      `Corrige et améliore le texte fourni en ${language} : orthographe, grammaire, ponctuation, accords, tournures.`,
+      "Améliore la structure quand c'est utile : phrases claires, paragraphes courts, listes à puces pour des étapes ou des éléments.",
+      "Garde exactement le sens, les faits, les noms, les numéros, les montants, les dates et les termes techniques. N'invente rien, n'ajoute ni formule ni signature.",
+      "Si le texte est dans une autre langue, traduis-le dans la langue demandée.",
+      p.format === "html"
+        ? "Le texte est du HTML simple (p, br, b, i, u, ul, ol, li, a). Réponds avec du HTML simple du même genre, sans balise html/body, sans style."
+        : "Réponds en texte brut (sauts de ligne permis, tirets pour les listes), sans Markdown, sans guillemets autour.",
+      "Réponds uniquement avec le texte corrigé, rien d'autre.",
+    ].join("\n");
+    try {
+      let out = await askClaude({ system, prompt: p.text, feature: "text.polish", userId: a.user.id, maxTokens: 8000 });
+      out = out.replace(/^```(?:html|text)?\s*/i, "").replace(/\s*```$/, "").trim();
+      if (!out) throw new AiError("bad_output");
+      return c.json({ text: p.format === "html" ? sanitizeMailHtml(out) : out });
+    } catch (e) {
+      throw aiHttpError(e);
+    }
   })
 
   // ── AI: plan my open tickets (order + suggested start dates) ──

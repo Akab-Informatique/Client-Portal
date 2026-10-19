@@ -1248,6 +1248,32 @@ export const expenseTypes = pgTable("expense_types", {
   updatedAt: updated(),
 });
 
+/**
+ * A technician's expense kept as a favourite (the same trip, parking…):
+ * one click fills a new expense with it.
+ */
+export const expenseFavorites = pgTable(
+  "expense_favorites",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    userId: uuid("user_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    name: text("name").notNull(),
+    typeId: uuid("type_id")
+      .notNull()
+      .references(() => expenseTypes.id, { onDelete: "cascade" }),
+    description: text("description").notNull().default(""),
+    /** By unit (km…): the quantity; otherwise the amount */
+    quantityX100: integer("quantity_x100"),
+    amountCents: bigint("amount_cents", { mode: "number" }),
+    clientId: uuid("client_id").references(() => clients.id, { onDelete: "set null" }),
+    billable: boolean("billable").notNull().default(false),
+    createdAt: created(),
+  },
+  (t) => [index("expense_favorites_user_idx").on(t.userId)],
+);
+
 /** A technician's week (Monday), submitted then approved. */
 export const timesheets = pgTable(
   "timesheets",
