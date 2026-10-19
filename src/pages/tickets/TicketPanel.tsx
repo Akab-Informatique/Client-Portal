@@ -69,7 +69,7 @@ import { ChargeButtons } from "./Charges";
 import { PriorityDialog, TicketPriorities } from "./Planning";
 import { TicketSmsPanel, useTicketSms } from "@/pages/sms/SmsPage";
 import { useConfirm } from "@/components/ConfirmDialog";
-import { dueState, longDateTime, shortDate, PRIORITY_STYLE, STATUS_STYLE, useChoiceText, usePresence, type AiAnalysis, type TicketDetail, type TicketList, type Viewer, ticketErrorText } from "./shared";
+import { dueState, longDateTime, shortDate, PRIORITY_STYLE, STATUS_STYLE, useChoiceText, usePresence, type AiAnalysis, type TicketDetail, type TicketList, type Viewer, ticketErrorText, type TicketSummary } from "./shared";
 
 const SOURCE_ICON: Record<string, LucideIcon> = { email: Mail, phone: Phone, portal: Inbox, monitoring: MonitorCog };
 
@@ -511,7 +511,7 @@ function TicketBody({
 
             {tk.startLocked && tk.startDate && tk.startDate > todayLocal() && (
               <p className="flex items-start gap-2 rounded-xl border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-xs text-amber-200">
-                <Lock className="mt-0.5 size-3.5 shrink-0" /> {t("tickets.startLock.notice", { date: shortDate(tk.startDate) })}
+                <Lock className="mt-0.5 size-3.5 shrink-0" /> {t("tickets.startLock.notice", { date: tk.startTime ? `${shortDate(tk.startDate)} ${tk.startTime}` : shortDate(tk.startDate) })}
               </p>
             )}
             <Section id="planning" icon={CalendarClock} title={t("tickets.sections.planning")}>
@@ -1042,6 +1042,35 @@ function Detail({ icon: Icon, label, children }: { icon: LucideIcon; label: stri
 }
 
 /** Portal-only planned start date (Planning section, above the due date), saved right away. */
+/** The time on the start date (optional): saved when the field is left */
+export function StartTimeInput({ tk, disabled, onSave }: { tk: TicketDetail | TicketSummary; disabled: boolean; onSave: (time: string | null) => void }) {
+  const { t } = useTranslation();
+  const [v, setV] = useState(tk.startTime ?? "");
+  useEffect(() => setV(tk.startTime ?? ""), [tk.startTime]);
+  const commit = () => {
+    const next = v || null;
+    if (next !== (tk.startTime ?? null)) onSave(next);
+  };
+  return (
+    <Input
+      type="time"
+      className="mt-1 h-8 w-32"
+      disabled={disabled || !tk.startDate}
+      value={v}
+      onChange={(e) => setV(e.target.value)}
+      onBlur={commit}
+      onKeyDown={(e) => {
+        if (e.key === "Enter") {
+          e.preventDefault();
+          commit();
+        }
+      }}
+      aria-label={t("tickets.startTime")}
+      title={t("tickets.startTimeHint")}
+    />
+  );
+}
+
 /** Today, YYYY-MM-DD (local) */
 const todayLocal = () => {
   const d = new Date();
@@ -1053,7 +1082,7 @@ function StartDate({ tk }: { tk: TicketDetail }) {
   const can = useCan();
   const qc = useQueryClient();
   const save = useMutation({
-    mutationFn: (p: { startDate?: string | null; startLocked?: boolean }) => api.put(`/tickets/${tk.id}/start-date`, p),
+    mutationFn: (p: { startDate?: string | null; startTime?: string | null; startLocked?: boolean }) => api.put(`/tickets/${tk.id}/start-date`, p),
     onSuccess: () => {
       void qc.invalidateQueries({ queryKey: ["tickets"] });
       toast.success(t("common.saved"));
@@ -1083,6 +1112,7 @@ function StartDate({ tk }: { tk: TicketDetail }) {
             key={tk.startDate ?? ""}
             onChange={(e) => save.mutate({ startDate: e.target.value || null })}
           />
+          <StartTimeInput tk={tk} disabled={!can("tickets.edit") || save.isPending} onSave={(startTime) => save.mutate({ startTime })} />
           {/* Restriction: nobody works on it before that day (off by default) */}
           <label className={cn("mt-1.5 flex items-center gap-2 text-xs", !tk.startDate && "opacity-60")} title={t("tickets.startLock.hint")}>
             <Switch

@@ -2348,6 +2348,8 @@ const en: Dict = {
     },
   },
   tickets: {
+    startTime: "Start time",
+    startTimeHint: "Optional: the start time that day (the restriction applies until then).",
     startClear: "Remove",
     startLock: {
       label: "Restriction",

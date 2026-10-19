@@ -38,6 +38,8 @@ export type TicketSummary = {
   dueAt: string;
   updatedAt: string;
   startDate: string | null;
+  /** HH:MM on the start date, when set */
+  startTime?: string | null;
   /** Restriction: no work before the start date */
   startLocked?: boolean;
   viewers: Viewer[];

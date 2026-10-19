@@ -2346,6 +2346,8 @@ const fr = {
     },
   },
   tickets: {
+    startTime: "Heure de début",
+    startTimeHint: "Facultatif : l'heure de début ce jour-là (la restriction s'applique jusqu'à cette heure).",
     startClear: "Retirer",
     startLock: {
       label: "Restriction",

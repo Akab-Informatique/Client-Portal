@@ -215,6 +215,8 @@ export type NewTicket = {
   queue: string;
   assigneeId: string | null;
   dueDate: string;
+  /** The exact due date and time (ISO), instead of the day at 17:00 */
+  dueAt?: string;
   /** Contract the work is billed on (null: none) */
   contractId?: string | null;
 };
@@ -462,7 +464,7 @@ const demoSource: TicketSource = {
       queue: p.queue,
       source: "portal",
       assignee,
-      dueAt: dueIso(p.dueDate),
+      dueAt: p.dueAt ? new Date(p.dueAt).toISOString() : dueIso(p.dueDate),
     }).id;
   },
   async companies() {
@@ -1347,7 +1349,7 @@ const autotaskSource: TicketSource = {
         status: Number(newStatus.value),
         priority: Number(p.priority),
         queueID: p.queue ? Number(p.queue) : undefined,
-        dueDateTime: dueIso(p.dueDate),
+        dueDateTime: p.dueAt ? new Date(p.dueAt).toISOString() : dueIso(p.dueDate),
         ...(p.contractId ? { contractID: Number(p.contractId) } : {}),
         ...(rid ? { assignedResourceID: rid, assignedResourceRoleID: await roleOf(at, rid) } : {}),
       },

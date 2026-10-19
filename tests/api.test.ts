@@ -1154,6 +1154,33 @@ describe("tickets (sample data)", () => {
     });
     expect(r.status).toBe(201);
     expect(r.json).toMatchObject({ title: "Test", status: "new", startDate: "2026-11-30" });
+
+    // a due date with its time, and a start time
+    const timed = await tech.post("/api/tickets", {
+      title: "Avec heures", companyId: 300, priority: "medium", queue: "Support niveau 1", assigneeId: null,
+      dueDate: "2026-12-02", dueAt: "2026-12-02T09:30:00-05:00", startDate: "2026-12-01", startTime: "08:15",
+    });
+    expect(timed.status).toBe(201);
+    expect(timed.json).toMatchObject({ dueAt: "2026-12-02T14:30:00.000Z", startDate: "2026-12-01", startTime: "08:15" });
+    expect((await tech.get(`/api/tickets/${timed.json.id}`)).json).toMatchObject({ startDate: "2026-12-01", startTime: "08:15" });
+    expect((await tech.post("/api/tickets", { title: "x", companyId: 300, priority: "medium", assigneeId: null, dueDate: "2026-12-02", startDate: "2026-12-01", startTime: "8h" })).status).toBe(400);
+    // the start time is changed alone, and goes with the day
+    expect((await tech.put(`/api/tickets/${timed.json.id}/start-date`, { startTime: "13:00" })).json).toMatchObject({ startDate: "2026-12-01", startTime: "13:00" });
+    expect((await tech.put(`/api/tickets/${timed.json.id}/start-date`, { startDate: null })).json).toMatchObject({ startDate: null, startTime: null });
+    // the restriction holds until the start time of the day (in Québec)
+    const today = new Intl.DateTimeFormat("en-CA", { timeZone: "America/Toronto" }).format(new Date());
+    const hour = Number(new Intl.DateTimeFormat("en-CA", { timeZone: "America/Toronto", hour: "2-digit", hourCycle: "h23" }).format(new Date()));
+    if (hour < 23) {
+      await tech.put(`/api/tickets/${timed.json.id}/start-date`, { startDate: today, startTime: "23:59", startLocked: true });
+      expect((await tech.post(`/api/tickets/${timed.json.id}/timer/start`)).json.error).toBe("ticket_not_started");
+    }
+    if (hour > 0) {
+      await tech.put(`/api/tickets/${timed.json.id}/start-date`, { startDate: today, startTime: "00:00", startLocked: true });
+      expect((await tech.post(`/api/tickets/${timed.json.id}/timer/start`)).status).toBe(200);
+      await tech.post(`/api/tickets/${timed.json.id}/timer/stop`);
+      const pend = (await tech.get("/api/tickets/timers")).json.find((x: any) => x.ticketId === timed.json.id);
+      if (pend) await tech.del(`/api/tickets/timers/${pend.id}`);
+    }
   });
 });
 

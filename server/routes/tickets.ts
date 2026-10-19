@@ -26,6 +26,8 @@ import { addTicketTime } from "../lib/timesheets.ts";
  */
 
 const zDate = z.string().regex(/^\d{4}-\d{2}-\d{2}$/);
+/** HH:MM, 24 h */
+const zTime = z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/);
 const zUuidOrNull = z.uuid().nullable().default(null);
 const FILTER_PARAMS = ["view", "assignee", "q", "due", "created", "attention", "statusKind", "status", "priority", "company", "queue", "dueFrom", "dueTo", "startFrom", "startTo", "alerts", "sort"];
 const PRIORITY_ORDER = { critical: 0, high: 1, medium: 2, low: 3 } as const;
@@ -139,14 +141,16 @@ function viewersOf(ticketId: number, exceptUserId?: string) {
 
 /** Start dates set in the portal (and the tickets restricted until then). */
 async function startDates(ids: number[]) {
-  const out = new Map<number, string>() as Map<number, string> & { locked: Set<number> };
+  const out = new Map<number, string>() as Map<number, string> & { locked: Set<number>; times: Map<number, string> };
   out.locked = new Set<number>();
+  out.times = new Map<number, string>();
   if (!ids.length) return out;
   for (let i = 0; i < ids.length; i += 500) {
     const rows = await db().select().from(schema.ticketMeta).where(inArray(schema.ticketMeta.ticketId, ids.slice(i, i + 500)));
     for (const r of rows) {
       if (!r.startDate) continue;
       out.set(r.ticketId, r.startDate);
+      if (r.startTime) out.times.set(r.ticketId, r.startTime);
       if (r.startLocked) out.locked.add(r.ticketId);
     }
   }
@@ -154,10 +158,15 @@ async function startDates(ids: number[]) {
 }
 /** Today in Québec, YYYY-MM-DD */
 const todayQuebec = () => new Intl.DateTimeFormat("en-CA", { timeZone: "America/Toronto" }).format(new Date());
-/** Restricted and its start date not reached yet: no work on it */
+/** Now in Québec, "YYYY-MM-DD HH:MM" */
+const nowQuebec = () =>
+  new Intl.DateTimeFormat("sv-SE", { timeZone: "America/Toronto", year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", hourCycle: "h23" }).format(new Date());
+/** Restricted and its start (day, and time when set) not reached yet: no work on it */
 async function notStartedYet(id: number): Promise<string | null> {
   const [m] = await db().select().from(schema.ticketMeta).where(eq(schema.ticketMeta.ticketId, id));
-  return m?.startLocked && m.startDate && m.startDate > todayQuebec() ? m.startDate : null;
+  if (!m?.startLocked || !m.startDate) return null;
+  const notYet = m.startTime ? `${m.startDate} ${m.startTime}` > nowQuebec() : m.startDate > todayQuebec();
+  return notYet ? m.startDate : null;
 }
 
 const endOfToday = () => {
@@ -174,7 +183,7 @@ export const isAlert = (L: Lookup) => (t: NTicket) => ALERT_QUEUE.test(L.queueLa
 
 const list = (v: string | undefined) => (v ? v.split(",").filter(Boolean) : []);
 
-function summary(t: NTicket, L: Lookup, start: string | undefined, me: string, locked = false) {
+function summary(t: NTicket, L: Lookup, start: string | undefined, me: string, locked = false, startTime?: string) {
   return {
     id: t.id,
     number: t.number,
@@ -199,6 +208,8 @@ function summary(t: NTicket, L: Lookup, start: string | undefined, me: string, l
     dueAt: t.dueAt,
     updatedAt: t.updatedAt,
     startDate: start ?? null,
+    /** HH:MM on the start date, when set */
+    startTime: (start && startTime) || null,
     /** No work before the start date */
     startLocked: Boolean(start && locked),
     viewers: viewersOf(t.id, me),
@@ -269,7 +280,7 @@ async function detailOf(src: TicketSource, id: number, a: AuthContext) {
       : Promise.resolve(null),
   ]);
   return {
-    ...summary(t, lookup(o), starts.get(id), a.user.id, starts.locked.has(id)),
+    ...summary(t, lookup(o), starts.get(id), a.user.id, starts.locked.has(id), starts.times.get(id)),
     description: t.description,
     source: t.source,
     hours: t.hours,
@@ -355,7 +366,7 @@ export const ticketRoutes = new Hono<AppEnv>()
       // Portal-only filter: Autotask has no start date
       .filter((t) => inRange(starts.get(t.id), q.startFrom, q.startTo));
     };
-    const items = select(q).map((t) => summary(t, L, starts.get(t.id), a.user.id, starts.locked.has(t.id)));
+    const items = select(q).map((t) => summary(t, L, starts.get(t.id), a.user.id, starts.locked.has(t.id), starts.times.get(t.id)));
     // the saved filters shown as buttons, with their counts
     const pinnedFilters = await db()
       .select({ id: schema.ticketFilters.id, name: schema.ticketFilters.name, query: schema.ticketFilters.query })
@@ -643,7 +654,7 @@ export const ticketRoutes = new Hono<AppEnv>()
       const older = await run(() => src.searchArchive(q));
       archive = older.filter((t) => !known.has(t.id)).map((t) => summary(t, L, undefined, a.user.id));
     }
-    return c.json({ items: top.map((t) => summary(t, L, starts.get(t.id), a.user.id, starts.locked.has(t.id))), total: scored.length, archive });
+    return c.json({ items: top.map((t) => summary(t, L, starts.get(t.id), a.user.id, starts.locked.has(t.id), starts.times.get(t.id))), total: scored.length, archive });
   })
 
   /** A client's devices, with RMM links. */
@@ -1073,18 +1084,20 @@ export const ticketRoutes = new Hono<AppEnv>()
     const a = auth(c);
     const id = Number(c.req.param("id"));
     if (!Number.isInteger(id) || id <= 0) throw new HTTPException(400, { message: "invalid_id" });
-    const p = await body(c, z.object({ startDate: zDate.nullable().optional(), startLocked: z.boolean().optional() }));
+    const p = await body(c, z.object({ startDate: zDate.nullable().optional(), startTime: zTime.nullable().optional(), startLocked: z.boolean().optional() }));
     const set = {
       ...(p.startDate !== undefined ? { startDate: p.startDate } : {}),
+      // no day: no time either
+      ...(p.startTime !== undefined ? { startTime: p.startTime } : p.startDate === null ? { startTime: null } : {}),
       ...(p.startLocked !== undefined ? { startLocked: p.startLocked } : {}),
     };
     const [row] = await db()
       .insert(schema.ticketMeta)
-      .values({ ticketId: id, startDate: p.startDate ?? null, startLocked: p.startLocked ?? false, updatedBy: a.user.id })
+      .values({ ticketId: id, startDate: p.startDate ?? null, startTime: p.startDate ? (p.startTime ?? null) : null, startLocked: p.startLocked ?? false, updatedBy: a.user.id })
       .onConflictDoUpdate({ target: schema.ticketMeta.ticketId, set: { ...set, updatedBy: a.user.id, updatedAt: new Date() } })
       .returning();
     if (p.startLocked !== undefined) await audit(a.user.id, p.startLocked ? "ticket.start_locked" : "ticket.start_unlocked", String(id), { startDate: row.startDate });
-    return c.json({ ok: true, startDate: row.startDate, startLocked: Boolean(row.startDate && row.startLocked) });
+    return c.json({ ok: true, startDate: row.startDate, startTime: row.startDate ? row.startTime : null, startLocked: Boolean(row.startDate && row.startLocked) });
   })
 
   .post("/", requirePermission("tickets.edit"), async (c) => {
@@ -1101,7 +1114,17 @@ export const ticketRoutes = new Hono<AppEnv>()
         queue: z.string().max(120).default(""),
         assigneeId: z.string().max(60).nullable(),
         dueDate: zDate,
+        /** The exact due date and time (ISO); otherwise the due day at 17:00 */
+        dueAt: z
+          .string()
+          .datetime({ offset: true })
+          .refine((v) => {
+            const y = new Date(v).getUTCFullYear();
+            return y >= 2000 && y <= 2100;
+          })
+          .optional(),
         startDate: zDate.nullable().optional(),
+        startTime: zTime.nullable().optional(),
         contractId: z.string().max(60).nullable().optional(),
       }),
     );
@@ -1114,11 +1137,11 @@ export const ticketRoutes = new Hono<AppEnv>()
     if (p.startDate) {
       await db()
         .insert(schema.ticketMeta)
-        .values({ ticketId: id, startDate: p.startDate, updatedBy: a.user.id })
+        .values({ ticketId: id, startDate: p.startDate, startTime: p.startTime ?? null, updatedBy: a.user.id })
         .onConflictDoNothing();
     }
     await audit(a.user.id, "ticket.created", String(id));
     const t = await run(() => src.get(id));
     if (!t) return c.json({ id }, 201);
-    return c.json(summary(t, lookup(o), p.startDate ?? undefined, a.user.id), 201);
+    return c.json(summary(t, lookup(o), p.startDate ?? undefined, a.user.id, false, p.startTime ?? undefined), 201);
   });

@@ -64,7 +64,7 @@ import { useTicketWorkspace } from "./workspace";
 import { GlobalSearch } from "./GlobalSearch";
 import { AgendaCard } from "./Planning";
 import { SmsInboxDialog, SmsTile } from "@/pages/sms/SmsPage";
-import { AiSetupHint, InlinePick, useAiError } from "./TicketPanel";
+import { AiSetupHint, InlinePick, StartTimeInput, useAiError } from "./TicketPanel";
 
 type Saved = { id: string; name: string; query: string; pinned?: boolean };
 type SetFn = (patch: Record<string, string | null>) => void;
@@ -1537,7 +1537,7 @@ function StartCell({ tk, editable }: { tk: TicketSummary; editable: boolean }) {
   const { t } = useTranslation();
   const qc = useQueryClient();
   const save = useMutation({
-    mutationFn: (p: { startDate?: string | null; startLocked?: boolean }) => api.put(`/tickets/${tk.id}/start-date`, p),
+    mutationFn: (p: { startDate?: string | null; startTime?: string | null; startLocked?: boolean }) => api.put(`/tickets/${tk.id}/start-date`, p),
     onSuccess: () => {
       void qc.invalidateQueries({ queryKey: ["tickets"] });
       toast.success(t("common.saved"));
@@ -1546,7 +1546,7 @@ function StartCell({ tk, editable }: { tk: TicketSummary; editable: boolean }) {
   });
   const label = (
     <span className={cn("flex items-center gap-1 whitespace-nowrap rounded px-0.5 font-mono text-xs tabular-nums text-muted-foreground", editable && "hover:bg-accent/60")}>
-      {tk.startDate ? shortDate(tk.startDate) : "—"}
+      {tk.startDate ? (tk.startTime ? `${shortDate(tk.startDate)} ${tk.startTime}` : shortDate(tk.startDate)) : "—"}
       {tk.startLocked && <Lock className="size-3 shrink-0 text-amber-300" aria-label={t("tickets.startLock.on")} />}
     </span>
   );
@@ -1579,6 +1579,7 @@ function StartCell({ tk, editable }: { tk: TicketSummary; editable: boolean }) {
             </Button>
           )}
         </div>
+        <StartTimeInput tk={tk} disabled={save.isPending} onSave={(startTime) => save.mutate({ startTime })} />
         <label className={cn("flex items-center gap-2 text-xs", !tk.startDate && "opacity-60")} title={t("tickets.startLock.hint")}>
           <Switch checked={Boolean(tk.startLocked)} disabled={save.isPending || !tk.startDate} onCheckedChange={(v) => save.mutate({ startLocked: v })} aria-label={t("tickets.startLock.label")} />
           <Lock className={cn("size-3.5", tk.startLocked ? "text-amber-300" : "text-muted-foreground")} />

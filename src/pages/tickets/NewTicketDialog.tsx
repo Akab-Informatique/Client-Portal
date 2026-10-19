@@ -52,7 +52,9 @@ export function NewTicketDialog({
     contractId: null as string | null,
     assigneeId: me.id as string,
     dueDate: inDays(2),
+    dueTime: "17:00",
     startDate: "",
+    startTime: "",
   });
   const [f, setF] = useState(empty);
   const [files, setFiles] = useState<File[]>([]);
@@ -86,7 +88,11 @@ export function NewTicketDialog({
         contactId: f.contactId,
         contractId: f.contractId || null,
         assigneeId: f.assigneeId === "none" ? null : f.assigneeId,
+        // the due day at the time chosen (local time)
+        dueAt: new Date(`${f.dueDate}T${f.dueTime || "17:00"}:00`).toISOString(),
+        dueTime: undefined,
         startDate: f.startDate || null,
+        startTime: f.startDate && f.startTime ? f.startTime : null,
       }),
     onSuccess: async (tk) => {
       // the files, one at a time, once the ticket exists
@@ -286,11 +292,24 @@ export function NewTicketDialog({
                 {t("tickets.fields.start")}
                 <span className="rounded border border-[color:var(--gold)]/40 px-1 text-[9px] font-semibold text-primary">{t("tickets.portalTag")}</span>
               </Label>
-              <Input id="nt-start" type="date" value={f.startDate} onChange={(e) => setF({ ...f, startDate: e.target.value })} />
+              <div className="flex gap-2">
+                <Input id="nt-start" type="date" className="min-w-0 flex-1" value={f.startDate} onChange={(e) => setF({ ...f, startDate: e.target.value })} />
+                <Input
+                  type="time"
+                  className="w-32 shrink-0"
+                  disabled={!f.startDate}
+                  value={f.startTime}
+                  onChange={(e) => setF({ ...f, startTime: e.target.value })}
+                  aria-label={t("tickets.startTime")}
+                />
+              </div>
             </div>
             <div className="space-y-2">
               <Label htmlFor="nt-due">{t("tickets.fields.due")}</Label>
-              <Input id="nt-due" type="date" required value={f.dueDate} onChange={(e) => setF({ ...f, dueDate: e.target.value })} />
+              <div className="flex gap-2">
+                <Input id="nt-due" type="date" required className="min-w-0 flex-1" value={f.dueDate} onChange={(e) => setF({ ...f, dueDate: e.target.value })} />
+                <Input type="time" required className="w-32 shrink-0" value={f.dueTime} onChange={(e) => setF({ ...f, dueTime: e.target.value })} aria-label={t("tickets.due.time")} />
+              </div>
             </div>
           </div>
 
