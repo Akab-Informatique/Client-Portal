@@ -13,6 +13,7 @@ import { api, ApiError } from "@/lib/api";
 import { currentLocale } from "@/i18n";
 import { cn, initials } from "@/lib/utils";
 import { ComplotsDialog, ComplotsTile } from "./Complots";
+import { ChessPiece, SQUARE_DARK, SQUARE_LIGHT } from "./ChessPieces";
 
 type Person = { id: string; name: string };
 type Color = "w" | "b";
@@ -173,7 +174,6 @@ function Hero({ status }: { status?: BreakStatus }) {
 }
 
 // ── Chess ──
-const PIECE: Record<string, string> = { k: "♚", q: "♛", r: "♜", b: "♝", n: "♞", p: "♟" };
 
 function ChessTile({ onOpen }: { onOpen: (id: string) => void }) {
   const { t } = useTranslation();
@@ -327,26 +327,19 @@ const Avatar = ({ name }: { name: string }) => (
   <span className="flex size-8 shrink-0 items-center justify-center rounded-full bg-muted text-[10px] font-semibold">{initials(name)}</span>
 );
 
-const LIGHT = "bg-[#e8dcc0]";
-const DARK = "bg-[#8a6a43]";
-const pieceClass = (color: Color) =>
-  color === "w"
-    ? "text-[#ffd84a] [text-shadow:0_1px_0_#7a4a00,0_0_1px_#3a2400,0_2px_6px_rgba(0,0,0,0.45)]"
-    : "text-[#141416] [text-shadow:0_1px_0_rgba(255,255,255,0.25),0_2px_6px_rgba(0,0,0,0.35)]";
+const LIGHT = SQUARE_LIGHT;
+const DARK = SQUARE_DARK;
 
 /** A small board (the tile's preview), read only */
 function MiniBoard({ fen, flip }: { fen: string; flip?: boolean }) {
   const board = useMemo(() => new Chess(fen).board(), [fen]);
   const rows = flip ? [...board].reverse().map((r) => [...r].reverse()) : board;
   return (
-    <div className="grid w-full grid-cols-8" style={{ aspectRatio: "1 / 1" }}>
+    <div className="grid aspect-square w-full grid-cols-8 grid-rows-8">
       {rows.flatMap((row, r) =>
         row.map((cell, c) => (
-          <span
-            key={`${r}-${c}`}
-            className={cn("flex items-center justify-center text-[clamp(0.9rem,2.4vw,1.5rem)] leading-none", (r + c) % 2 === 0 ? LIGHT : DARK)}
-          >
-            {cell && <span className={cn("[font-variant-emoji:text]", pieceClass(cell.color))}>{PIECE[cell.type]}</span>}
+          <span key={`${r}-${c}`} className={cn("flex min-h-0 min-w-0 items-center justify-center", (r + c) % 2 === 0 ? LIGHT : DARK)}>
+            {cell && <ChessPiece type={cell.type} color={cell.color} className="h-[82%] w-[82%]" />}
           </span>
         )),
       )}
@@ -449,10 +442,7 @@ function ChessDialog({ id, onClose }: { id: string; onClose: () => void }) {
           <>
             <PlayerBar name={g.opponent.name} color={g.myColor === "w" ? "b" : "w"} active={g.status === "playing" && !g.myTurn} />
             <div className="relative mx-auto w-full max-w-[min(34rem,70vh)]">
-              <div
-                className="grid grid-cols-8 overflow-hidden border-2 border-[color:var(--gold)]/40 shadow-[0_24px_70px_-28px_rgba(255,206,26,0.5)]"
-                style={{ aspectRatio: "1 / 1" }}
-              >
+              <div className="grid aspect-square w-full grid-cols-8 grid-rows-8 overflow-hidden border border-[color:var(--gold)]/35 shadow-[0_30px_80px_-30px_rgba(255,206,26,0.45)]">
                 {ranks.flatMap((rank, r) =>
                   files.map((file, c) => {
                     const sq = `${file}${rank}` as Square;
@@ -465,31 +455,32 @@ function ChessDialog({ id, onClose }: { id: string; onClose: () => void }) {
                         type="button"
                         onClick={() => click(sq)}
                         className={cn(
-                          "relative flex items-center justify-center text-[clamp(1.4rem,5.2vw,2.6rem)] leading-none outline-none",
+                          "relative flex min-h-0 min-w-0 items-center justify-center outline-none transition-[filter]",
                           light ? LIGHT : DARK,
-                          last.includes(sq) && "after:absolute after:inset-0 after:bg-[#ffce1a]/35",
-                          picked === sq && "after:absolute after:inset-0 after:bg-emerald-400/40",
+                          last.includes(sq) && "after:absolute after:inset-0 after:bg-[#ffce1a]/20 after:shadow-[inset_0_0_0_2px_rgba(255,206,26,0.45)]",
+                          picked === sq && "after:absolute after:inset-0 after:bg-[#ffce1a]/25 after:shadow-[inset_0_0_0_3px_#ffce1a]",
+                          g.myTurn && (piece?.color === g.myColor || target) && "hover:brightness-125",
                           kingInCheck === sq && "after:absolute after:inset-0 after:bg-[radial-gradient(circle,rgba(239,68,68,0.85),transparent_70%)]",
                           g.myTurn && (piece?.color === g.myColor || target) && "cursor-pointer",
                         )}
                         aria-label={sq}
                       >
                         {c === 0 && (
-                          <span className={cn("absolute left-0.5 top-0.5 z-10 text-[9px] font-semibold", light ? "text-[#8a6a43]" : "text-[#e8dcc0]")}>
+                          <span className="absolute left-1 top-0.5 z-10 font-mono text-[9px] font-semibold text-[color:var(--gold)]/60">
                             {rank}
                           </span>
                         )}
                         {r === 7 && (
-                          <span className={cn("absolute bottom-0.5 right-1 z-10 text-[9px] font-semibold", light ? "text-[#8a6a43]" : "text-[#e8dcc0]")}>
+                          <span className="absolute bottom-0.5 right-1 z-10 font-mono text-[9px] font-semibold text-[color:var(--gold)]/60">
                             {file}
                           </span>
                         )}
-                        {piece && <span className={cn("relative z-10 [font-variant-emoji:text]", pieceClass(piece.color))}>{PIECE[piece.type]}</span>}
+                        {piece && <ChessPiece type={piece.type} color={piece.color} className={cn("relative z-10 h-[84%] w-[84%] transition-transform", picked === sq && "-translate-y-0.5 scale-105")} />}
                         {target &&
                           (piece ? (
-                            <span className="absolute inset-[6%] z-10 rounded-full border-4 border-emerald-500/70" />
+                            <span className="absolute inset-[5%] z-10 rounded-full border-[3px] border-[#ffce1a]/80" />
                           ) : (
-                            <span className="absolute z-10 h-[28%] w-[28%] rounded-full bg-emerald-600/60" />
+                            <span className="absolute z-10 h-[24%] w-[24%] rounded-full bg-[#ffce1a]/55 shadow-[0_0_10px_rgba(255,206,26,0.6)]" />
                           ))}
                       </button>
                     );
@@ -507,7 +498,7 @@ function ChessDialog({ id, onClose }: { id: string; onClose: () => void }) {
                         className="flex h-14 w-14 items-center justify-center rounded-xl border bg-background/60 text-4xl hover:border-[color:var(--gold)]/60"
                         aria-label={t(`breakroom.chess.piece.${p}`)}
                       >
-                        <span className={cn("[font-variant-emoji:text]", pieceClass(g.myColor))}>{PIECE[p]}</span>
+                        <ChessPiece type={p} color={g.myColor} className="h-10 w-10" />
                       </button>
                     ))}
                   </div>
@@ -538,7 +529,7 @@ function PlayerBar({ name, color, active }: { name: string; color: Color; active
         active && "border-[color:var(--gold)]/50 bg-[color:var(--gold)]/10",
       )}
     >
-      <span className={cn("text-xl leading-none [font-variant-emoji:text]", pieceClass(color))}>{PIECE.k}</span>
+      <ChessPiece type="k" color={color} className="h-6 w-6" />
       <span className="font-medium">{name}</span>
       {active && <span className="ml-auto size-2 animate-pulse rounded-full bg-primary" />}
     </div>
