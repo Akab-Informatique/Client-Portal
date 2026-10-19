@@ -1892,6 +1892,44 @@ describe("tickets: client and contact", () => {
     expect((await tech.del(`/api/tickets/timers/${bt.id}`)).status).toBe(200);
     expect((await tech.get("/api/tickets/timers")).json).toEqual([]);
   });
+  it("a time entry can send its description by email to the ticket contact and other addresses (never the internal note)", async () => {
+    resetRateLimit("login:ip:unknown");
+    const tech = await signIn("tech@akab.local");
+    const { devOutbox } = await import("../server/lib/mail.ts");
+    const items = (await tech.get("/api/tickets?view=all")).json.items as any[];
+    let tk: any = null;
+    for (const x of items) {
+      const d = (await tech.get(`/api/tickets/${x.id}`)).json;
+      if (d.contactInfo?.email && d.statusKind !== "complete") {
+        tk = d;
+        break;
+      }
+    }
+    expect(tk).toBeTruthy();
+    await tech.post(`/api/tickets/${tk.id}/timer/start`);
+    await tech.post(`/api/tickets/${tk.id}/timer/stop`);
+    const timer = (await tech.get("/api/tickets/timers")).json.find((x: any) => x.ticketId === tk.id);
+    const entry = { hours: 0.5, summary: "Imprimante réinstallée, test d'impression réussi.", internal: "Pilote v3 seulement" };
+    expect((await tech.post(`/api/tickets/timers/${timer.id}/submit`, { ...entry, notify: { contact: true, others: ["pas-une-adresse"] } })).status).toBe(400);
+    devOutbox.length = 0;
+    const r = await tech.post(`/api/tickets/timers/${timer.id}/submit`, { ...entry, notify: { contact: true, others: ["Patron@Client.example", tk.contactInfo.email] } });
+    expect(r.status).toBe(201);
+    // one message each, the contact once
+    expect(r.json).toMatchObject({ notified: 2, notifyFailed: 0, noContactEmail: false });
+    expect(devOutbox.map((m) => m.to).sort()).toEqual([tk.contactInfo.email.toLowerCase(), "patron@client.example"].sort());
+    const mail = devOutbox[0];
+    expect(mail.subject).toContain(tk.number);
+    expect(mail.text).toContain(entry.summary);
+    expect(mail.text).toContain("Alex Tremblay");
+    expect(mail.text + mail.html).not.toContain("Pilote v3");
+    // not asked: nothing sent
+    await tech.post(`/api/tickets/${tk.id}/timer/start`);
+    await tech.post(`/api/tickets/${tk.id}/timer/stop`);
+    const t2 = (await tech.get("/api/tickets/timers")).json.find((x: any) => x.ticketId === tk.id);
+    devOutbox.length = 0;
+    expect((await tech.post(`/api/tickets/timers/${t2.id}/submit`, { hours: 0.1, summary: "Suivi" })).json).toMatchObject({ notified: 0 });
+    expect(devOutbox).toEqual([]);
+  });
 });
 
 describe("tickets from Autotask", () => {

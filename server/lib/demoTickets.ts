@@ -6,7 +6,7 @@
 export type TicketStatus = "new" | "inProgress" | "needsAttention" | "waitingCustomer" | "waitingVendor" | "scheduled" | "complete";
 export type TicketPriority = "critical" | "high" | "medium" | "low";
 export type Person = { id: string; name: string };
-export type Note = { id: string; author: string; at: string; text: string; internal: boolean };
+export type Note = { id: string; author: string; at: string; text: string; internal: boolean; system?: boolean };
 export type Ticket = {
   id: number;
   number: string;
@@ -129,6 +129,8 @@ function generate(): Stored[] {
         internal: k % 2 === 0 && r() > 0.5,
       });
     }
+    // what an Autotask workflow rule writes (hidden in the ticket view unless asked for)
+    if (i % 3 === 0) notes.push({ id: `n${i}-wf`, author: "Autotask", at: new Date(created.getTime() + 30 * 60_000).toISOString(), text: "Règle de flux de travail : billet assigné à la file Support niveau 1.", internal: true, system: true });
     return {
       id: 40000 + i,
       number: `T${ymd(created)}.${String(40 + i).padStart(4, "0")}`,

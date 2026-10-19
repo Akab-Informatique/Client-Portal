@@ -58,6 +58,8 @@ export type Note = {
   /** A time entry: billed to the client or not, and the hours not billed (offset) */
   billable?: boolean;
   offsetHours?: number;
+  /** Written by Autotask itself (workflow rule, forward, merge…), not by a technician or the client */
+  system?: boolean;
 };
 export type Company = { id: number; name: string };
 export type Contact = { id: string; companyId: number; name: string; email: string | null; phone: string | null };
@@ -1112,6 +1114,9 @@ async function loadList(): Promise<NTicket[]> {
   return normalize(at, rows, true);
 }
 
+/** Note types written by Autotask itself, not by a person */
+const SYSTEM_NOTE_TYPE = /workflow|flux|r[eè]gle|forward|transf[eé]r|duplicat|merge|fusion|copy|copi[eé]|survey|sondage|recurr|r[eé]curr|automat|syst[eè]m/i;
+
 /** Autotask lists (cached 10 min): ticket picklists + note types/publish values. */
 async function atOptions() {
   const at = await autotask();
@@ -1173,14 +1178,14 @@ const autotaskSource: TicketSource = {
       warnings.push({ part, detail });
       return fallback;
     };
-    type AtNote = { id: number; title?: string; description?: string; createDateTime: string; creatorResourceID?: number | null; createdByContactID?: number | null; creatorContactID?: number | null; publish?: number };
+    type AtNote = { id: number; title?: string; description?: string; createDateTime: string; creatorResourceID?: number | null; createdByContactID?: number | null; creatorContactID?: number | null; publish?: number; noteType?: number };
     type AtTime = { id: number; resourceID?: number | null; dateWorked?: string; startDateTime?: string | null; createDateTime?: string; hoursWorked?: number; summaryNotes?: string | null; internalNotes?: string | null; isNonBillable?: boolean | null; offsetHours?: number | null };
     type AtFile = { id: number; title?: string; fullPath?: string; fileSize?: number; attachDate?: string; publish?: number; attachedByResourceID?: number | null; attachedByContactID?: number | null };
     // Notes and time: kept until the ticket has new activity (or we change it)
     const extrasKey = `detail:${id}:${fromList?.updatedAt ?? "?"}`;
     const loadExtras = async () => {
       const [noteFields, timeFields] = await Promise.all([
-        safeFields(at, "TicketNotes", ["id", "title", "description", "createDateTime", "creatorResourceID", "createdByContactID", "creatorContactID", "publish"]),
+        safeFields(at, "TicketNotes", ["id", "title", "description", "createDateTime", "creatorResourceID", "createdByContactID", "creatorContactID", "publish", "noteType"]),
         safeFields(at, "TimeEntries", ["id", "resourceID", "dateWorked", "startDateTime", "createDateTime", "hoursWorked", "summaryNotes", "internalNotes", "isNonBillable", "offsetHours"]),
       ]);
       const [notes, times] = await Promise.all([
@@ -1202,7 +1207,10 @@ const autotaskSource: TicketSource = {
     const { notes, times } = extras;
     if (!t) return null;
     t.warnings = extras.warnings;
-    const internalValues = new Set((await atOptions()).publish.filter((p) => /intern/i.test(p.label)).map((p) => String(p.value)));
+    const atOpts = await atOptions();
+    const internalValues = new Set(atOpts.publish.filter((p) => /intern/i.test(p.label)).map((p) => String(p.value)));
+    // note types Autotask writes by itself (workflow rules, forward / modify, merge, copy, duplicate, survey, recurring…)
+    const systemTypes = new Set(atOpts.noteTypes.filter((x) => SYSTEM_NOTE_TYPE.test(x.label)).map((x) => String(x.value)));
     const contactOf = (n: AtNote) => n.createdByContactID ?? n.creatorContactID ?? null;
     const contactIds = [...notes.map(contactOf), ...(extras.files ?? []).map((f) => f.attachedByContactID)].filter((x): x is number => Boolean(x));
     const contactMap = contactIds.length ? await contactNames(at, contactIds).catch(() => new Map<number, string>()) : new Map<number, string>();
@@ -1221,6 +1229,8 @@ const autotaskSource: TicketSource = {
       text: [n.title, n.description].filter(Boolean).join("\n").trim(),
       internal: internalValues.has(String(n.publish)),
       kind: "note",
+      // neither a technician (portal or Autotask) nor the client: Autotask's own
+      ...(!portalAuthor("note", n.id) && (systemTypes.has(String(n.noteType)) || (!n.creatorResourceID && !contactOf(n))) ? { system: true } : {}),
     }));
     // Time entries = the work done on the ticket (summary for the client, internal note for the team)
     const timeItems: Note[] = times.map((x) => ({

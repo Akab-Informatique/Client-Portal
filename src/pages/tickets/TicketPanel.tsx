@@ -354,7 +354,6 @@ function TicketBody({
             <span className="ml-auto">
               <PresenceLight viewers={viewers} />
             </span>
-            <TimerControl ticketId={tk.id} />
             {can("tickets.ai") &&
               (tk.ai ? <AiMenu tk={tk} onReply={(text) => setDraft({ text, internal: false })} /> : <AiSetupHint label={t("tickets.ai.button")} />)}
             <Tooltip>
@@ -552,7 +551,7 @@ function TicketBody({
             )}
             {thread === "sms" && can("sms.view") ? <TicketSmsPanel ticketId={tk.id} phone={phone} /> : <Activity tk={tk} partial={partial && !loadError} />}
           </div>
-          {/* Charges and expenses: small buttons right above the note box */}
+          {/* Charges and expenses, texts and the timer: right above the note box */}
           <div className="flex flex-wrap items-center gap-1.5 pb-2 lg:pr-2">
             <ChargeButtons tk={tk} editable={editable} partial={partial} />
             {can("sms.view") && (
@@ -567,6 +566,9 @@ function TicketBody({
                 {(texts?.messages.length ?? 0) > 0 && <span className="font-mono text-[10px] opacity-70">{texts!.messages.length}</span>}
               </Button>
             )}
+            <span className="ml-auto">
+              <TimerControl ticketId={tk.id} />
+            </span>
           </div>
           {editable && thread !== "sms" && (
             <div className="sticky bottom-0 z-10 -mx-2 bg-gradient-to-t from-background via-background/95 to-transparent px-2 pb-4 pt-1 lg:static lg:mx-0 lg:bg-none lg:px-0 lg:pr-2">
@@ -817,9 +819,10 @@ function Activity({ tk, partial }: { tk: TicketDetail; partial: boolean }) {
   const [filter, setFilter] = useState<ActivityFilter>("all");
   const [newestFirst, setNewestFirst] = useState(() => {
     try {
-      return localStorage.getItem("akab.ticket.newestFirst") === "1";
+      // newest first unless the technician chose otherwise
+      return localStorage.getItem("akab.ticket.newestFirst") !== "0";
     } catch {
-      return false;
+      return true;
     }
   });
   const flip = () =>
@@ -831,10 +834,15 @@ function Activity({ tk, partial }: { tk: TicketDetail; partial: boolean }) {
       }
       return !v;
     });
+  // what Autotask writes by itself (workflow rules…): hidden unless asked for
+  const [showSystem, setShowSystem] = useState(false);
+  const systemCount = tk.notes.filter((n) => n.system).length;
+  // by date (oldest → newest; flipped below for newest first)
+  const notes = (showSystem ? tk.notes : tk.notes.filter((n) => !n.system)).slice().sort((x, y) => x.at.localeCompare(y.at));
   const kindOf = (n: TicketDetail["notes"][number]): Exclude<ActivityFilter, "all"> => (n.kind === "time" ? "time" : n.internal ? "internal" : "reply");
-  const counts = { all: tk.notes.length, reply: 0, internal: 0, time: 0 };
-  for (const n of tk.notes) counts[kindOf(n)]++;
-  const shown = tk.notes.filter((n) => filter === "all" || kindOf(n) === filter);
+  const counts = { all: notes.length, reply: 0, internal: 0, time: 0 };
+  for (const n of notes) counts[kindOf(n)]++;
+  const shown = notes.filter((n) => filter === "all" || kindOf(n) === filter);
   if (newestFirst) shown.reverse();
 
   return (
@@ -856,7 +864,17 @@ function Activity({ tk, partial }: { tk: TicketDetail; partial: boolean }) {
             {t(`tickets.activityFilter.${f}`)} {counts[f] > 0 && <span className="opacity-60">{counts[f]}</span>}
           </button>
         ))}
-        <button type="button" onClick={flip} className="ml-auto flex items-center gap-1 text-[11px] text-muted-foreground hover:text-foreground">
+        {systemCount > 0 && (
+          <button
+            type="button"
+            onClick={() => setShowSystem((v) => !v)}
+            className={cn("ml-auto rounded-full border px-2 py-0.5 text-[11px]", showSystem ? "border-slate-500/50 text-foreground" : "border-transparent text-muted-foreground hover:text-foreground")}
+            title={t("tickets.systemNotesHint")}
+          >
+            {t(showSystem ? "tickets.systemNotesHide" : "tickets.systemNotesShow", { count: systemCount })}
+          </button>
+        )}
+        <button type="button" onClick={flip} className={cn("flex items-center gap-1 text-[11px] text-muted-foreground hover:text-foreground", !systemCount && "ml-auto")}>
           <ArrowDownUp className="size-3" /> {newestFirst ? t("tickets.activityOrder.newest") : t("tickets.activityOrder.oldest")}
         </button>
       </div>

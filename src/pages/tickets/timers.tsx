@@ -1,9 +1,11 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { useTranslation } from "react-i18next";
+import type { TicketDetail } from "./shared";
+import { isAddress, RecipientInput } from "@/pages/outlook/RecipientInput";
 import { useSearchParams } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
-import { AlertTriangle, Clock3, Loader2, Pause, Play, Receipt, Square, Timer as TimerIcon, XCircle } from "lucide-react";
+import { AlertTriangle, ChevronDown, Clock3, CornerDownLeft, Loader2, Lock, Mail, Pause, Play, Receipt, Timer as TimerIcon, XCircle } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { AiTextarea } from "@/components/AiPolish";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -240,8 +242,8 @@ export function TimerControl({ ticketId }: { ticketId: number }) {
       >
         {run ? <Pause className="size-3.5 fill-current" /> : <Play className="size-3.5 fill-current" />}
       </TimerButton>
-      <TimerButton label={t("tickets.timer.stop")} onClick={() => act.mutate({ ticketId, action: "stop" })} disabled={act.isPending}>
-        <Square className="size-3 fill-current" />
+      <TimerButton label={t("tickets.timer.enter")} onClick={() => act.mutate({ ticketId, action: "stop" })} disabled={act.isPending}>
+        <CornerDownLeft className="size-3.5" />
       </TimerButton>
     </div>
   );
@@ -318,6 +320,16 @@ function TimeEntryDialog({ timer, position, onLater }: { timer: Timer; position:
   const [hours, setHours] = useState(() => String(Math.max(0.01, Math.round((timer.elapsedMs / 3_600_000) * 100) / 100)));
   const [summary, setSummary] = useState("");
   const [internal, setInternal] = useState("");
+  // the description by email: to the ticket contact, and to other addresses (the "Envoi" part)
+  const [notifyContact, setNotifyContact] = useState(false);
+  const [others, setOthers] = useState<string[]>([]);
+  const [sendOpen, setSendOpen] = useState(false);
+  const { data: ticket } = useQuery({
+    queryKey: ["tickets", "detail", timer.ticketId],
+    queryFn: () => api.get<TicketDetail>(`/tickets/${timer.ticketId}`),
+    staleTime: 60_000,
+  });
+  const contactEmail = ticket?.contactInfo?.email ?? null;
   const [workType, setWorkType] = useState("");
   // billed to the client, and the hours worked but not billed
   const [billable, setBillable] = useState(true);
@@ -337,16 +349,20 @@ function TimeEntryDialog({ timer, position, onLater }: { timer: Timer; position:
   };
   const submit = useMutation({
     mutationFn: () =>
-      api.post(`/tickets/timers/${timer.id}/submit`, {
+      api.post<{ notified?: number; notifyFailed?: number; noContactEmail?: boolean }>(`/tickets/timers/${timer.id}/submit`, {
         hours: Number(hours.replace(",", ".")),
         summary,
         internal,
         workTypeId: workType || null,
         billable,
         offsetHours: billable ? off : 0,
+        notify: { contact: notifyContact, others },
       }),
-    onSuccess: () => {
+    onSuccess: (r: { notified?: number; notifyFailed?: number; noContactEmail?: boolean }) => {
       toast.success(t("tickets.timer.saved"));
+      if (r?.notified) toast.success(t("tickets.timer.notified", { count: r.notified }));
+      if (r?.notifyFailed) toast.error(t("tickets.timer.notifyFailed", { count: r.notifyFailed }));
+      if (r?.noContactEmail) toast.warning(t("tickets.timer.noContactEmail"));
       done();
     },
     onError: (e) => toast.error(ticketErrorText(t, e)),
@@ -364,7 +380,8 @@ function TimeEntryDialog({ timer, position, onLater }: { timer: Timer; position:
   const off = offset.trim() ? Number(offset.replace(",", ".")) : 0;
   const offsetOk = !billable || (Number.isFinite(off) && off >= 0 && off <= h);
   const billed = Math.max(0, Math.round((h - (billable ? off : h)) * 100) / 100);
-  const valid = h > 0 && h <= 24 && summary.trim().length > 0 && offsetOk;
+  const othersOk = others.every(isAddress);
+  const valid = h > 0 && h <= 24 && summary.trim().length > 0 && offsetOk && othersOk;
   // a short timer is closed without asking; a longer one is confirmed first
   const closeWithoutTime = () =>
     minutes <= 5 ? discard.mutate() : void confirm({ title: t("tickets.timer.discardConfirm"), destructive: true }).then((ok) => ok && discard.mutate());
@@ -466,9 +483,36 @@ function TimeEntryDialog({ timer, position, onLater }: { timer: Timer; position:
               autoFocus
             />
           </div>
-          <div className="space-y-1.5">
-            <Label htmlFor="te-internal">{t("tickets.timer.internal")}</Label>
+          {/* the description can go to the client: the ticket contact, and other addresses */}
+          <div className="space-y-2">
+            <label className={cn("flex cursor-pointer items-center gap-2 text-sm", !contactEmail && "opacity-60")}>
+              <Checkbox checked={notifyContact} disabled={!contactEmail} onCheckedChange={(v) => setNotifyContact(v === true)} />
+              <Mail className="size-4 text-primary" />
+              {contactEmail ? t("tickets.timer.notifyContact", { who: ticket?.contact || contactEmail, email: contactEmail }) : t("tickets.timer.notifyNoContact")}
+            </label>
+            <button
+              type="button"
+              onClick={() => setSendOpen((v) => !v)}
+              className="flex items-center gap-1 text-[11px] text-muted-foreground hover:text-foreground"
+              aria-expanded={sendOpen}
+            >
+              <ChevronDown className={cn("size-3 transition-transform", sendOpen && "rotate-180")} />
+              {others.length ? t("tickets.timer.othersCount", { count: others.length }) : t("tickets.timer.others")}
+            </button>
+            {sendOpen && (
+              <div className="space-y-1.5 rounded-xl border p-3">
+                <p className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">{t("tickets.timer.sendTitle")}</p>
+                <RecipientInput id="te-others" label={t("tickets.timer.othersLabel")} value={others} onChange={setOthers} />
+                <p className="text-[11px] text-muted-foreground">{t("tickets.timer.sendHint")}</p>
+              </div>
+            )}
+          </div>
+          <div className="space-y-1.5 rounded-xl border border-violet-500/30 bg-violet-500/[0.04] p-3">
+            <Label htmlFor="te-internal" className="flex items-center gap-1.5">
+              <Lock className="size-3.5 text-violet-300" /> {t("tickets.timer.internal")}
+            </Label>
             <AiTextarea id="te-internal" rows={2} value={internal} onChange={(e) => setInternal(e.target.value)} />
+            <p className="text-[11px] text-muted-foreground">{t("tickets.timer.internalHint")}</p>
           </div>
           <div className="flex flex-wrap items-center gap-2 pt-1">
             <Button

@@ -8,6 +8,7 @@ import { body, zEmail } from "../lib/validate.ts";
 import { audit } from "../lib/audit.ts";
 import { rateLimit } from "../lib/http.ts";
 import { sanitizeMailHtml } from "../lib/mailHtml.ts";
+import { sendMail } from "../lib/mail.ts";
 import { AI_FEATURE_KEYS, AI_MODELS, AiError, aiSettings, askClaude, askClaudeJson, modelFor, todayOf, type AiModel } from "../lib/ai.ts";
 import { AutotaskError, PERMISSION_REFUSED } from "../lib/autotask.ts";
 import { sweepTimers, timerView, elapsedMs } from "../lib/timers.ts";
@@ -250,6 +251,40 @@ const fold = (s: string) =>
     .normalize("NFD")
     .replace(/[\u0300-\u036f]/g, "")
     .toLowerCase();
+
+const escHtml = (s: string) => s.replace(/[&<>"']/g, (ch) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[ch]!);
+
+/**
+ * The work done, by email (a time entry's description): to the ticket contact
+ * when asked, and to the other addresses typed. One message per recipient.
+ */
+async function notifyWork(
+  src: TicketSource,
+  tk: Awaited<ReturnType<TicketSource["get"]>> | null,
+  summary: string,
+  n: { contact: boolean; others: string[] },
+  a: AuthContext,
+): Promise<{ to: string[]; failed: number; noContactEmail: boolean }> {
+  if (!tk || (!n.contact && !n.others.length)) return { to: [], failed: 0, noContactEmail: false };
+  const contact =
+    n.contact && tk.contactId
+      ? await src
+          .contacts(tk.company.id)
+          .then((l) => l.find((x) => x.id === tk.contactId) ?? null)
+          .catch(() => null)
+      : null;
+  const contactEmail = contact?.email?.trim().toLowerCase() || null;
+  const to = [...new Set([...(contactEmail ? [contactEmail] : []), ...n.others.map((x) => x.trim().toLowerCase())])];
+  const hello = contact?.name ? `Bonjour ${contact.name},` : "Bonjour,";
+  const subject = `Billet ${tk.number} — ${tk.title}`.slice(0, 250);
+  const intro = `Voici le travail effectué sur votre billet ${tk.number} (${tk.title}) :`;
+  const sign = `${a.realUser.name}\nAKAB Informatique`;
+  const text = [hello, "", intro, "", summary, "", "—", sign].join("\n");
+  const html = `<p>${escHtml(hello)}</p><p>${escHtml(intro)}</p><p style="white-space:pre-wrap;border-left:3px solid #ffce1a;padding-left:10px">${escHtml(summary)}</p><p>—<br>${escHtml(a.realUser.name)}<br>AKAB Informatique</p>`;
+  let failed = 0;
+  for (const addr of to) if (!(await sendMail({ to: addr, subject, text, html }))) failed++;
+  return { to, failed, noContactEmail: n.contact && !contactEmail };
+}
 
 /** Full ticket for the ticket window, with the choices needed to edit it inline. */
 async function detailOf(src: TicketSource, id: number, a: AuthContext) {
@@ -786,6 +821,10 @@ export const ticketRoutes = new Hono<AppEnv>()
         workTypeId: z.string().max(40).nullable().default(null),
         billable: z.boolean().default(true),
         offsetHours: z.number().min(0).max(24).default(0),
+        // the description sent by email: to the ticket contact, and to other addresses
+        notify: z
+          .object({ contact: z.boolean().default(false), others: z.array(zEmail).max(10).default([]) })
+          .default({ contact: false, others: [] }),
       }),
     );
     // the offset cannot exceed the hours worked; it means nothing when nothing is billed
@@ -808,8 +847,9 @@ export const ticketRoutes = new Hono<AppEnv>()
       note: p.summary,
     });
     await db().delete(schema.ticketTimers).where(eq(schema.ticketTimers.id, timer.id));
-    await audit(a.user.id, "ticket.time_entry", String(timer.ticketId), { hours: p.hours, billable: p.billable, offsetHours: p.offsetHours });
-    return c.json({ ok: true }, 201);
+    const notified = await notifyWork(src, tk, p.summary, p.notify, a);
+    await audit(a.user.id, "ticket.time_entry", String(timer.ticketId), { hours: p.hours, billable: p.billable, offsetHours: p.offsetHours, ...(notified.to.length ? { notified: notified.to } : {}) });
+    return c.json({ ok: true, notified: notified.to.length, notifyFailed: notified.failed, noContactEmail: notified.noContactEmail }, 201);
     } finally {
       submitting.delete(timer.id);
     }
