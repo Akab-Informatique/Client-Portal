@@ -38,6 +38,8 @@ export type TicketSummary = {
   dueAt: string;
   updatedAt: string;
   startDate: string | null;
+  /** Restriction: no work before the start date */
+  startLocked?: boolean;
   viewers: Viewer[];
   /** This ticket is one of my priorities (given by an admin) */
   myPriority?: "day" | "week";
@@ -179,6 +181,8 @@ export function useChoiceText() {
 
 const loc = () => (currentLocale() === "en" ? "en-CA" : "fr-CA");
 export const shortDate = (iso: string) => new Intl.DateTimeFormat(loc(), { day: "numeric", month: "short" }).format(new Date(iso.length === 10 ? `${iso}T12:00:00` : iso));
+/** "16 oct. 17 h 00" / "Oct 16, 5:00 PM": the day and the time, short */
+export const shortDateTime = (iso: string) => new Intl.DateTimeFormat(loc(), { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit", hourCycle: "h23" }).format(new Date(iso));
 export const longDateTime = (iso: string) => new Intl.DateTimeFormat(loc(), { dateStyle: "medium", timeStyle: "short" }).format(new Date(iso));
 
 /** "overdue" | "today" | "soon" (≤ 2 days) | "later" */
@@ -244,6 +248,7 @@ export function usePresence(ticketId: number | null) {
 export function ticketErrorText(t: (k: string, o?: Record<string, unknown>) => string, e: unknown): string {
   if (e instanceof ApiError) {
     if (e.code === "autotask_not_linked") return t("tickets.errors.notLinked");
+    if (e.code === "ticket_not_started") return t("tickets.startLock.refused", { date: shortDate(e.fields?.find((f) => f.path === "startDate")?.message ?? "") });
     if (e.code === "autotask_permission") return t("tickets.errors.permission");
     if (e.code === "insufficient_stock") return t("tickets.errors.insufficient_stock");
     if (e.code === "serial_unavailable" || e.code === "serials_required") return t(`tickets.errors.${e.code}`);

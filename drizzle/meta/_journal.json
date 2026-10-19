@@ -344,6 +344,13 @@
       "when": 1792379999285,
       "tag": "0048_invoice_emailed",
       "breakpoints": true
+    },
+    {
+      "idx": 49,
+      "version": "7",
+      "when": 1792412690828,
+      "tag": "0049_ticket_start_lock",
+      "breakpoints": true
     }
   ]
 }

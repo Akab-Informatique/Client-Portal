@@ -137,14 +137,27 @@ function viewersOf(ticketId: number, exceptUserId?: string) {
   return [...m].filter(([id]) => id !== exceptUserId).map(([userId, v]) => ({ userId, name: v.name }));
 }
 
+/** Start dates set in the portal (and the tickets restricted until then). */
 async function startDates(ids: number[]) {
-  if (!ids.length) return new Map<number, string>();
-  const out = new Map<number, string>();
+  const out = new Map<number, string>() as Map<number, string> & { locked: Set<number> };
+  out.locked = new Set<number>();
+  if (!ids.length) return out;
   for (let i = 0; i < ids.length; i += 500) {
     const rows = await db().select().from(schema.ticketMeta).where(inArray(schema.ticketMeta.ticketId, ids.slice(i, i + 500)));
-    for (const r of rows) if (r.startDate) out.set(r.ticketId, r.startDate);
+    for (const r of rows) {
+      if (!r.startDate) continue;
+      out.set(r.ticketId, r.startDate);
+      if (r.startLocked) out.locked.add(r.ticketId);
+    }
   }
   return out;
+}
+/** Today in Québec, YYYY-MM-DD */
+const todayQuebec = () => new Intl.DateTimeFormat("en-CA", { timeZone: "America/Toronto" }).format(new Date());
+/** Restricted and its start date not reached yet: no work on it */
+async function notStartedYet(id: number): Promise<string | null> {
+  const [m] = await db().select().from(schema.ticketMeta).where(eq(schema.ticketMeta.ticketId, id));
+  return m?.startLocked && m.startDate && m.startDate > todayQuebec() ? m.startDate : null;
 }
 
 const endOfToday = () => {
@@ -161,7 +174,7 @@ export const isAlert = (L: Lookup) => (t: NTicket) => ALERT_QUEUE.test(L.queueLa
 
 const list = (v: string | undefined) => (v ? v.split(",").filter(Boolean) : []);
 
-function summary(t: NTicket, L: Lookup, start: string | undefined, me: string) {
+function summary(t: NTicket, L: Lookup, start: string | undefined, me: string, locked = false) {
   return {
     id: t.id,
     number: t.number,
@@ -186,6 +199,8 @@ function summary(t: NTicket, L: Lookup, start: string | undefined, me: string) {
     dueAt: t.dueAt,
     updatedAt: t.updatedAt,
     startDate: start ?? null,
+    /** No work before the start date */
+    startLocked: Boolean(start && locked),
     viewers: viewersOf(t.id, me),
   };
 }
@@ -228,10 +243,10 @@ const fold = (s: string) =>
 async function detailOf(src: TicketSource, id: number, a: AuthContext) {
   const t = await src.get(id);
   if (!t) throw new HTTPException(404, { message: "not_found" });
-  const [o, technicians, start, ai, asset, contactInfo] = await Promise.all([
+  const [o, technicians, starts, ai, asset, contactInfo] = await Promise.all([
     src.options(),
     src.technicians(),
-    startDates([id]).then((m) => m.get(id)),
+    startDates([id]),
     a.permissions.includes("tickets.ai") ? aiSettings() : Promise.resolve(null),
     // the device: from the client's (cached) list; a failure only hides it
     t.assetId
@@ -254,7 +269,7 @@ async function detailOf(src: TicketSource, id: number, a: AuthContext) {
       : Promise.resolve(null),
   ]);
   return {
-    ...summary(t, lookup(o), start, a.user.id),
+    ...summary(t, lookup(o), starts.get(id), a.user.id, starts.locked.has(id)),
     description: t.description,
     source: t.source,
     hours: t.hours,
@@ -340,7 +355,7 @@ export const ticketRoutes = new Hono<AppEnv>()
       // Portal-only filter: Autotask has no start date
       .filter((t) => inRange(starts.get(t.id), q.startFrom, q.startTo));
     };
-    const items = select(q).map((t) => summary(t, L, starts.get(t.id), a.user.id));
+    const items = select(q).map((t) => summary(t, L, starts.get(t.id), a.user.id, starts.locked.has(t.id)));
     // the saved filters shown as buttons, with their counts
     const pinnedFilters = await db()
       .select({ id: schema.ticketFilters.id, name: schema.ticketFilters.name, query: schema.ticketFilters.query })
@@ -376,10 +391,10 @@ export const ticketRoutes = new Hono<AppEnv>()
     }
 
     const sort = q.sort ?? "due";
-    // in "my tickets", my priorities come first (of the day, then of the week), then the chosen order
+    // "my priorities first": those of the day, then of the week, then by due date (the default is the due date only)
     const rankOf = (x: object) => {
       const p = (x as { myPriority?: "day" | "week" }).myPriority;
-      return (q.view ?? "mine") === "mine" ? (p === "day" ? 0 : p === "week" ? 1 : 2) : 2;
+      return sort === "priorities" ? (p === "day" ? 0 : p === "week" ? 1 : 2) : 2;
     };
     items.sort((x, y) =>
       rankOf(x) - rankOf(y) ||
@@ -628,7 +643,7 @@ export const ticketRoutes = new Hono<AppEnv>()
       const older = await run(() => src.searchArchive(q));
       archive = older.filter((t) => !known.has(t.id)).map((t) => summary(t, L, undefined, a.user.id));
     }
-    return c.json({ items: top.map((t) => summary(t, L, starts.get(t.id), a.user.id)), total: scored.length, archive });
+    return c.json({ items: top.map((t) => summary(t, L, starts.get(t.id), a.user.id, starts.locked.has(t.id))), total: scored.length, archive });
   })
 
   /** A client's devices, with RMM links. */
@@ -773,6 +788,8 @@ export const ticketRoutes = new Hono<AppEnv>()
     const a = auth(c);
     const id = Number(c.req.param("id"));
     if (!Number.isInteger(id)) throw new HTTPException(400, { message: "invalid_id" });
+    const until = await notStartedYet(id);
+    if (until) throw new HTTPException(409, { message: "ticket_not_started", cause: [{ path: "startDate", message: until }] });
     const now = new Date();
     const mine = await myTimers(a.user.id);
     for (const other of mine.filter((x) => x.state === "running" && x.ticketId !== id)) {
@@ -1056,12 +1073,18 @@ export const ticketRoutes = new Hono<AppEnv>()
     const a = auth(c);
     const id = Number(c.req.param("id"));
     if (!Number.isInteger(id) || id <= 0) throw new HTTPException(400, { message: "invalid_id" });
-    const p = await body(c, z.object({ startDate: zDate.nullable() }));
-    await db()
+    const p = await body(c, z.object({ startDate: zDate.nullable().optional(), startLocked: z.boolean().optional() }));
+    const set = {
+      ...(p.startDate !== undefined ? { startDate: p.startDate } : {}),
+      ...(p.startLocked !== undefined ? { startLocked: p.startLocked } : {}),
+    };
+    const [row] = await db()
       .insert(schema.ticketMeta)
-      .values({ ticketId: id, startDate: p.startDate, updatedBy: a.user.id })
-      .onConflictDoUpdate({ target: schema.ticketMeta.ticketId, set: { startDate: p.startDate, updatedBy: a.user.id, updatedAt: new Date() } });
-    return c.json({ ok: true, startDate: p.startDate });
+      .values({ ticketId: id, startDate: p.startDate ?? null, startLocked: p.startLocked ?? false, updatedBy: a.user.id })
+      .onConflictDoUpdate({ target: schema.ticketMeta.ticketId, set: { ...set, updatedBy: a.user.id, updatedAt: new Date() } })
+      .returning();
+    if (p.startLocked !== undefined) await audit(a.user.id, p.startLocked ? "ticket.start_locked" : "ticket.start_unlocked", String(id), { startDate: row.startDate });
+    return c.json({ ok: true, startDate: row.startDate, startLocked: Boolean(row.startDate && row.startLocked) });
   })
 
   .post("/", requirePermission("tickets.edit"), async (c) => {

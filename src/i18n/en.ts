@@ -2348,6 +2348,14 @@ const en: Dict = {
     },
   },
   tickets: {
+    startLock: {
+      label: "Restriction",
+      on: "No work before the start date",
+      hint: "On: nobody works on the ticket before its start date (the timer is refused).",
+      needsDate: "Pick a start date first.",
+      notice: "Restriction: this ticket must not be worked on before {{date}}.",
+      refused: "This ticket cannot be worked on before {{date}} (restriction).",
+    },
     due: { change: "Change the due date", date: "Due date", time: "Due time", today: "Today", tomorrow: "Tomorrow", monday: "Monday", week: "In 1 week" },
     filtersTitle: "Filters",
     tiles: {
@@ -2689,7 +2697,7 @@ const en: Dict = {
     quick: { today: "Today", week: "7 days", clear: "Clear" },
     clear: "Clear",
     clearFilters: "Clear filters",
-    sort: { due: "Due date", priority: "Priority", start: "Start date", updated: "Recent activity" },
+    sort: { due: "Due date", priorities: "My priorities first", priority: "Priority", start: "Start date", updated: "Recent activity" },
     fields: {
       secondary: "Secondary",
       technician: "Technician",

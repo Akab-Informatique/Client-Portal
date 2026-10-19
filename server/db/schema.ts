@@ -502,6 +502,8 @@ export const emailTemplates = pgTable(
 export const ticketMeta = pgTable("ticket_meta", {
   ticketId: bigint("ticket_id", { mode: "number" }).primaryKey(),
   startDate: text("start_date"),
+  /** Restriction: no work on the ticket before its start date (off by default) */
+  startLocked: boolean("start_locked").notNull().default(false),
   updatedBy: uuid("updated_by").references(() => users.id, { onDelete: "set null" }),
   updatedAt: updated(),
 });

@@ -53,6 +53,7 @@ import {
 import { Input } from "@/components/ui/input";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Skeleton } from "@/components/ui/skeleton";
+import { Switch } from "@/components/ui/switch";
 import { Textarea } from "@/components/ui/textarea";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { api, ApiError } from "@/lib/api";
@@ -68,7 +69,7 @@ import { ChargeButtons } from "./Charges";
 import { PriorityDialog, TicketPriorities } from "./Planning";
 import { TicketSmsPanel, useTicketSms } from "@/pages/sms/SmsPage";
 import { useConfirm } from "@/components/ConfirmDialog";
-import { dueState, longDateTime, PRIORITY_STYLE, STATUS_STYLE, useChoiceText, usePresence, type AiAnalysis, type TicketDetail, type TicketList, type Viewer, ticketErrorText } from "./shared";
+import { dueState, longDateTime, shortDate, PRIORITY_STYLE, STATUS_STYLE, useChoiceText, usePresence, type AiAnalysis, type TicketDetail, type TicketList, type Viewer, ticketErrorText } from "./shared";
 
 const SOURCE_ICON: Record<string, LucideIcon> = { email: Mail, phone: Phone, portal: Inbox, monitoring: MonitorCog };
 
@@ -508,6 +509,11 @@ function TicketBody({
               <AssetContent tk={tk} editable={editable} partial={partial} onPick={(assetId) => update.mutate({ assetId })} />
             </Section>
 
+            {tk.startLocked && tk.startDate && tk.startDate > todayLocal() && (
+              <p className="flex items-start gap-2 rounded-xl border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-xs text-amber-200">
+                <Lock className="mt-0.5 size-3.5 shrink-0" /> {t("tickets.startLock.notice", { date: shortDate(tk.startDate) })}
+              </p>
+            )}
             <Section id="planning" icon={CalendarClock} title={t("tickets.sections.planning")}>
               <dl className="space-y-3">
                 <StartDate tk={tk} />
@@ -1036,12 +1042,18 @@ function Detail({ icon: Icon, label, children }: { icon: LucideIcon; label: stri
 }
 
 /** Portal-only planned start date (Planning section, above the due date), saved right away. */
+/** Today, YYYY-MM-DD (local) */
+const todayLocal = () => {
+  const d = new Date();
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+};
+
 function StartDate({ tk }: { tk: TicketDetail }) {
   const { t } = useTranslation();
   const can = useCan();
   const qc = useQueryClient();
   const save = useMutation({
-    mutationFn: (startDate: string | null) => api.put(`/tickets/${tk.id}/start-date`, { startDate }),
+    mutationFn: (p: { startDate?: string | null; startLocked?: boolean }) => api.put(`/tickets/${tk.id}/start-date`, p),
     onSuccess: () => {
       void qc.invalidateQueries({ queryKey: ["tickets"] });
       toast.success(t("common.saved"));
@@ -1069,8 +1081,20 @@ function StartDate({ tk }: { tk: TicketDetail }) {
             disabled={!can("tickets.edit") || save.isPending}
             defaultValue={tk.startDate ?? ""}
             key={tk.startDate ?? ""}
-            onChange={(e) => save.mutate(e.target.value || null)}
+            onChange={(e) => save.mutate({ startDate: e.target.value || null })}
           />
+          {/* Restriction: nobody works on it before that day (off by default) */}
+          <label className={cn("mt-1.5 flex items-center gap-2 text-xs", !tk.startDate && "opacity-60")} title={t("tickets.startLock.hint")}>
+            <Switch
+              checked={Boolean(tk.startLocked)}
+              disabled={!can("tickets.edit") || save.isPending || !tk.startDate}
+              onCheckedChange={(v) => save.mutate({ startLocked: v })}
+              aria-label={t("tickets.startLock.label")}
+            />
+            <Lock className={cn("size-3.5", tk.startLocked ? "text-amber-300" : "text-muted-foreground")} />
+            {t("tickets.startLock.label")}
+          </label>
+          {!tk.startDate && <p className="mt-0.5 text-[10px] text-muted-foreground">{t("tickets.startLock.needsDate")}</p>}
         </dd>
       </div>
     </div>

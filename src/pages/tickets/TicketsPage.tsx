@@ -34,7 +34,7 @@ import {
   UserX,
   Wand2,
   X,
-  type LucideIcon, Star } from "lucide-react";
+  type LucideIcon, Star, Lock } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
@@ -58,7 +58,7 @@ import { useCan, useMe } from "@/lib/session";
 import { cn, initials } from "@/lib/utils";
 import { GlassBackdrop } from "@/components/brand/GlassBackdrop";
 import { NewTicketDialog } from "./NewTicketDialog";
-import { dueState, FILTER_KEYS, PRIORITY_STYLE, dueGlow, useChoiceText, shortDate, STATUS_STYLE, useTickets, VIEWS, type Tally, type TicketList, type TicketSummary, type View, ticketErrorText } from "./shared";
+import { dueState, FILTER_KEYS, PRIORITY_STYLE, dueGlow, useChoiceText, shortDate, shortDateTime, STATUS_STYLE, useTickets, VIEWS, type Tally, type TicketList, type TicketSummary, type View, ticketErrorText } from "./shared";
 import { useTicketWorkspace } from "./workspace";
 import { GlobalSearch } from "./GlobalSearch";
 import { AgendaCard } from "./Planning";
@@ -829,15 +829,18 @@ function TicketRow({
             <span className="block break-words leading-snug">{tk.company.name}</span>
             {tk.contact && <span className="block break-words text-[11px] leading-snug text-muted-foreground">{tk.contact}</span>}
           </span>
-          <span className="font-mono text-xs tabular-nums text-muted-foreground xl:[order:var(--o-start)]">{tk.startDate ? shortDate(tk.startDate) : "—"}</span>
+          <span className="flex items-center gap-1 font-mono text-xs tabular-nums text-muted-foreground xl:[order:var(--o-start)]">
+            {tk.startDate ? shortDate(tk.startDate) : "—"}
+            {tk.startLocked && <Lock className="size-3 shrink-0 text-amber-300" aria-label={t("tickets.startLock.on")} />}
+          </span>
           <span className="min-w-0 xl:[order:var(--o-due)]">
             <span
               className={cn(
-                "block font-mono text-xs font-medium tabular-nums",
+                "block whitespace-nowrap font-mono text-xs font-medium tabular-nums",
                 due === "overdue" ? "text-destructive" : due === "today" ? "text-orange-400" : due === "soon" ? "text-primary" : "text-muted-foreground",
               )}
             >
-              {due === "overdue" ? t("tickets.overdue") : due === "today" ? t("tickets.today") : shortDate(tk.dueAt)}
+              {shortDateTime(tk.dueAt)}
             </span>
             {tk.statusKind !== "complete" && (
               <span className="mt-1 block h-1 w-full max-w-28 overflow-hidden rounded-full bg-muted" title={t("tickets.slaUsed", { pct: Math.round(used * 100) })}>
@@ -1111,7 +1114,7 @@ function SortMenu({ value, onChange }: { value: string; onChange: (v: string) =>
         </Button>
       </PopoverTrigger>
       <PopoverContent align="end" className="w-48 p-1">
-        {["due", "priority", "start", "updated"].map((s) => (
+        {["due", "priorities", "priority", "start", "updated"].map((s) => (
           <button
             key={s}
             type="button"

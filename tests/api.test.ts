@@ -1106,6 +1106,28 @@ describe("tickets (sample data)", () => {
     expect(filtered.map((t: any) => t.id)).toEqual([target.id]);
     expect(filtered[0].startDate).toBe("2026-11-02");
     expect((await tech.put(`/api/tickets/${target.id}/start-date`, { startDate: "02/11/2026" })).status).toBe(400);
+
+    // the restriction: off by default; on, no timer before the start date
+    expect(filtered[0].startLocked).toBe(false);
+    const future = new Date(Date.now() + 10 * 86_400_000).toISOString().slice(0, 10);
+    await tech.put(`/api/tickets/${target.id}/start-date`, { startDate: future });
+    expect((await tech.put(`/api/tickets/${target.id}/start-date`, { startLocked: true })).json).toMatchObject({ startDate: future, startLocked: true });
+    expect((await tech.get(`/api/tickets/${target.id}`)).json).toMatchObject({ startDate: future, startLocked: true });
+    const refused = await tech.post(`/api/tickets/${target.id}/timer/start`);
+    expect(refused.status).toBe(409);
+    expect(refused.json.error).toBe("ticket_not_started");
+    // the start date reached (or past): work allowed
+    const past = new Date(Date.now() - 86_400_000).toISOString().slice(0, 10);
+    await tech.put(`/api/tickets/${target.id}/start-date`, { startDate: past });
+    expect((await tech.post(`/api/tickets/${target.id}/timer/start`)).status).toBe(200);
+    await tech.post(`/api/tickets/${target.id}/timer/stop`);
+    const pend = (await tech.get("/api/tickets/timers")).json.find((x: any) => x.ticketId === target.id);
+    if (pend) await tech.del(`/api/tickets/timers/${pend.id}`);
+    expect((await tech.put(`/api/tickets/${target.id}/start-date`, { startLocked: false })).json.startLocked).toBe(false);
+
+    // the default order is the due date (my priorities first is its own choice)
+    const due = (await tech.get("/api/tickets?view=mine")).json.items.map((x: any) => x.dueAt);
+    expect(due).toEqual([...due].sort());
   });
 
   it("tells who else has a ticket open", async () => {
@@ -1668,13 +1690,15 @@ describe("tickets: client and contact", () => {
     await admin.del(`/api/planning/calendar/${theirs.json.id}`);
     await admin.put(`/api/admin/users/${techRow.id}/permissions`, { overrides: [{ key: "tickets.planSelf", effect: "allow" }] });
     expect((await tech.post("/api/planning/pins", { ticketId: tk.id, technicianId: techRow.id, horizon: "day", note: "Moi-même" })).status).toBe(201);
-    // in "my tickets", my priorities come first (whatever the order chosen); other views keep their order
+    // "my priorities first" (its own sort): of the day, then of the week; the default order is the due date
     const myList = (await tech.get("/api/tickets")).json.items;
     const last = myList.at(-1);
     const lastPin = await tech.post("/api/planning/pins", { ticketId: last.id, technicianId: techRow.id, horizon: "day" });
     expect(lastPin.status).toBe(201);
     const rank = (x: any) => (x.myPriority === "day" ? 0 : x.myPriority === "week" ? 1 : 2);
-    for (const q of ["", "?sort=updated", "?sort=priority"]) {
+    const byDue = (await tech.get("/api/tickets")).json.items.map((x: any) => x.dueAt);
+    expect(byDue).toEqual([...byDue].sort());
+    for (const q of ["?sort=priorities"]) {
       const list = (await tech.get(`/api/tickets${q}`)).json.items;
       // of the day, then of the week, then the others
       expect(list.map(rank)).toEqual([...list.map(rank)].sort((a: number, b: number) => a - b));

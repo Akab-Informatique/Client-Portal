@@ -1,0 +1,1 @@
+ALTER TABLE "ticket_meta" ADD COLUMN "start_locked" boolean DEFAULT false NOT NULL;

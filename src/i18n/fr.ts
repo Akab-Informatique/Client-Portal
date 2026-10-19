@@ -2346,6 +2346,14 @@ const fr = {
     },
   },
   tickets: {
+    startLock: {
+      label: "Restriction",
+      on: "Pas de travail avant la date de début",
+      hint: "Activée : personne ne travaille sur le billet avant la date de début (le chrono est refusé).",
+      needsDate: "Choisissez d'abord une date de début.",
+      notice: "Restriction : ce billet ne doit pas être travaillé avant le {{date}}.",
+      refused: "Ce billet ne peut pas être travaillé avant le {{date}} (restriction).",
+    },
     due: { change: "Changer l'échéance", date: "Date d'échéance", time: "Heure d'échéance", today: "Aujourd'hui", tomorrow: "Demain", monday: "Lundi", week: "Dans 1 semaine" },
     filtersTitle: "Filtres",
     tiles: {
@@ -2687,7 +2695,7 @@ const fr = {
     quick: { today: "Aujourd'hui", week: "7 jours", clear: "Effacer" },
     clear: "Effacer",
     clearFilters: "Effacer les filtres",
-    sort: { due: "Échéance", priority: "Priorité", start: "Date de début", updated: "Activité récente" },
+    sort: { due: "Échéance", priorities: "Mes priorités d'abord", priority: "Priorité", start: "Date de début", updated: "Activité récente" },
     fields: {
       secondary: "Assigné secondaire",
       technician: "Technicien",
