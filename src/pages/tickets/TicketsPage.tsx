@@ -1,6 +1,5 @@
 import { Fragment, useEffect, useMemo, useRef, useState, type FormEvent, type ReactNode } from "react";
-import { createPortal } from "react-dom";
-import { DueEditor } from "./DueEditor";
+import { ConfirmRow, DueEditor } from "./DueEditor";
 import { useSearchParams } from "react-router-dom";
 import { useTranslation } from "react-i18next";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
@@ -65,7 +64,7 @@ import { useTicketWorkspace } from "./workspace";
 import { GlobalSearch } from "./GlobalSearch";
 import { AgendaCard } from "./Planning";
 import { SmsInboxDialog, SmsTile } from "@/pages/sms/SmsPage";
-import { AiSetupHint, InlinePick, MODIFIED, MODIFIED_BOX, PendingBar, StartTimeInput, useAiError } from "./TicketPanel";
+import { AiSetupHint, InlinePick, useAiError } from "./TicketPanel";
 
 type Saved = { id: string; name: string; query: string; pinned?: boolean };
 type SetFn = (patch: Record<string, string | null>) => void;
@@ -121,61 +120,16 @@ export function TicketsPage() {
       { replace: true },
     );
   }, [linked, setParams]);
-  // Inline changes from the list wait here (gold ring) until ✓ saves them all, or ✗ drops them
-  const [staged, setStaged] = useState<Record<number, RowPatch>>({});
-  const stageRow = (tk: TicketSummary, p: RowPatch) =>
-    setStaged((all) => {
-      const next: RowPatch = { ...all[tk.id], ...p };
-      // no day, no time nor restriction
-      if (p.startDate === null) Object.assign(next, { startTime: null, startLocked: false });
-      const original: Required<RowPatch> = {
-        status: tk.status,
-        priority: tk.priority,
-        assigneeId: tk.assignee?.id ?? null,
-        dueAt: tk.dueAt,
-        startDate: tk.startDate ?? null,
-        startTime: tk.startTime ?? null,
-        startLocked: Boolean(tk.startLocked),
-      };
-      for (const k of Object.keys(next) as (keyof RowPatch)[]) if (next[k] === original[k]) delete next[k];
-      const out = { ...all };
-      if (Object.keys(next).length) out[tk.id] = next;
-      else delete out[tk.id];
-      return out;
-    });
-  const pendingCount = Object.values(staged).reduce((n, p) => n + Object.keys(p).length, 0);
-  const saveStaged = useMutation({
-    mutationFn: async () => {
-      const failed: Record<number, RowPatch> = {};
-      let error: unknown = null;
-      for (const [id, changes] of Object.entries(staged)) {
-        const { startDate, startTime, startLocked, ...patch } = changes;
-        try {
-          if (Object.keys(patch).length) await api.patch(`/tickets/${id}`, patch);
-          const start = { startDate, startTime, startLocked };
-          if (Object.values(start).some((x) => x !== undefined)) await api.put(`/tickets/${id}/start-date`, start);
-        } catch (e) {
-          failed[Number(id)] = changes;
-          error = e;
-        }
-      }
-      return { failed, error };
-    },
-    onSuccess: ({ failed, error }) => {
+  // Inline change from the list (status, priority, assignee)
+  const patchTicket = useMutation({
+    mutationFn: (p: { id: number; patch: RowPatch }) => api.patch(`/tickets/${p.id}`, p.patch),
+    onSuccess: (_r, p) => {
       void qc.invalidateQueries({ queryKey: ["tickets"] });
-      // what could not be saved stays modified, with the reason
-      setStaged(failed);
-      if (error) toast.error(ticketErrorText(t, error));
-      else toast.success(t("common.saved"));
+      void qc.invalidateQueries({ queryKey: ["tickets", "detail", p.id] });
+      toast.success(t("common.saved"));
     },
+    onError: (e) => toast.error(ticketErrorText(t, e)),
   });
-  // leaving the page with changes not saved: the browser asks
-  useEffect(() => {
-    if (!pendingCount) return;
-    const ask = (e: BeforeUnloadEvent) => e.preventDefault();
-    window.addEventListener("beforeunload", ask);
-    return () => window.removeEventListener("beforeunload", ask);
-  }, [pendingCount]);
   const searchRef = useRef<HTMLInputElement>(null);
 
   const set: SetFn = (patch) =>
@@ -368,23 +322,12 @@ export function TicketsPage() {
                 onOpen={() => ws.open(tk.id)}
                 facets={data.facets}
                 editable={can("tickets.edit")}
-                staged={staged[tk.id]}
-                onPatch={(patch) => stageRow(tk, patch)}
+                onPatch={(patch) => patchTicket.mutate({ id: tk.id, patch })}
                 onHover={() => void qc.prefetchQuery({ queryKey: ["tickets", "detail", tk.id], queryFn: () => api.get(`/tickets/${tk.id}`), staleTime: 15_000 })}
               />
             ))}
           </ul>
         )}
-        {/* over the page (a transformed parent would hold a fixed element in place) */}
-        {pendingCount > 0 &&
-          createPortal(
-            <div className="pointer-events-none fixed inset-x-0 bottom-6 z-40 flex justify-center">
-              <div className="pointer-events-auto">
-                <PendingBar count={pendingCount} saving={saveStaged.isPending} onSave={() => saveStaged.mutate()} onCancel={() => setStaged({})} floating />
-              </div>
-            </div>,
-            document.body,
-          )}
         {data && data.items.length > 0 && (
           <div className="border-t border-[color:var(--glass-border)] bg-white/[0.02] px-5 py-2 font-mono text-[10px] uppercase tracking-[0.12em] text-muted-foreground">
             {t("tickets.shown", { count: data.items.length })}
@@ -788,15 +731,7 @@ function slaUsed(tk: TicketSummary) {
   return Math.min(1, Math.max(0, (Date.now() - start) / (end - start)));
 }
 
-type RowPatch = {
-  status?: string;
-  priority?: string;
-  assigneeId?: string | null;
-  dueAt?: string;
-  startDate?: string | null;
-  startTime?: string | null;
-  startLocked?: boolean;
-};
+type RowPatch = { status?: string; priority?: string; assigneeId?: string | null; dueAt?: string };
 
 /** Keeps clicks inside an inline picker from opening the ticket (React events cross portals). */
 const Stop = ({ children }: { children: ReactNode }) => (
@@ -806,8 +741,7 @@ const Stop = ({ children }: { children: ReactNode }) => (
 );
 
 function TicketRow({
-  tk: row,
-  staged,
+  tk,
   index,
   active,
   onOpen,
@@ -817,8 +751,6 @@ function TicketRow({
   onHover,
 }: {
   tk: TicketSummary;
-  /** Its changes not saved yet */
-  staged?: RowPatch;
   index: number;
   active: boolean;
   onOpen: () => void;
@@ -830,24 +762,8 @@ function TicketRow({
   const { t } = useTranslation();
   const txt = useChoiceText();
   const me = useMe();
-  // the row as it will be once saved
-  const s = staged ?? {};
-  const mod = (k: keyof RowPatch) => k in s;
-  const st = s.status !== undefined ? facets.statuses.find((x) => x.value === s.status) : undefined;
-  const pr = s.priority !== undefined ? facets.priorities.find((x) => x.value === s.priority) : undefined;
-  const tk: TicketSummary = {
-    ...row,
-    ...(st ? { status: st.value, statusKind: st.kind, statusLabel: st.label } : {}),
-    ...(pr ? { priority: pr.value, priorityKind: pr.kind, priorityLabel: pr.label } : {}),
-    ...(s.assigneeId !== undefined
-      ? { assignee: s.assigneeId ? { id: s.assigneeId, name: facets.technicians.find((p) => p.id === s.assigneeId)?.name ?? "" } : null }
-      : {}),
-    ...(s.dueAt ? { dueAt: s.dueAt } : {}),
-    ...(s.startDate !== undefined ? { startDate: s.startDate } : {}),
-    ...(s.startTime !== undefined ? { startTime: s.startTime } : {}),
-    ...(s.startLocked !== undefined ? { startLocked: s.startLocked } : {}),
-  };
   const due = dueState(tk.dueAt, tk.statusKind);
+  const [dueOpen, setDueOpen] = useState(false);
   const used = tk.statusKind === "complete" ? 0 : slaUsed(tk);
   // Load the ticket ahead only when the pointer rests on it (not when it just passes over)
   const hoverTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -903,7 +819,7 @@ function TicketRow({
                 options={facets.statuses.map((s) => ({ value: s.value, label: txt.status(s) }))}
                 onPick={(v) => onPatch({ status: v })}
                 trigger={
-                  <span className={cn("inline-flex max-w-full items-center gap-1.5 rounded-full border px-2 py-0.5 text-left text-[11px] font-medium leading-tight", STATUS_STYLE[tk.statusKind], mod("status") && MODIFIED)}>
+                  <span className={cn("inline-flex max-w-full items-center gap-1.5 rounded-full border px-2 py-0.5 text-left text-[11px] font-medium leading-tight", STATUS_STYLE[tk.statusKind])}>
                     <span className="size-1.5 rounded-full bg-current" />
                     {txt.status({ label: tk.statusLabel, kind: tk.statusKind })}
                   </span>
@@ -917,7 +833,7 @@ function TicketRow({
           </span>
           <span className="min-w-0 xl:[order:var(--o-start)]">
             <Stop>
-              <StartCell tk={tk} editable={editable} modified={mod("startDate") || mod("startTime") || mod("startLocked")} onChange={onPatch} />
+              <StartCell tk={tk} editable={editable} />
             </Stop>
           </span>
           <span className="min-w-0 xl:[order:var(--o-due)]">
@@ -928,7 +844,6 @@ function TicketRow({
                     "block whitespace-nowrap rounded px-0.5 font-mono text-xs font-medium tabular-nums",
                     due === "overdue" ? "text-destructive" : due === "today" ? "text-orange-400" : due === "soon" ? "text-primary" : "text-muted-foreground",
                     editable && "hover:bg-accent/60",
-                    mod("dueAt") && MODIFIED,
                   )}
                 >
                   {shortDateTime(tk.dueAt)}
@@ -936,7 +851,7 @@ function TicketRow({
               );
               return editable ? (
                 <Stop>
-                  <Popover>
+                  <Popover open={dueOpen} onOpenChange={setDueOpen}>
                     <PopoverTrigger asChild>
                       <button type="button" className="text-left" aria-label={t("tickets.due.change")} title={t("tickets.due.change")}>
                         {label}
@@ -946,7 +861,18 @@ function TicketRow({
                       <p className="text-sm font-semibold">
                         {t("tickets.fields.due")} · <span className="font-mono text-xs text-muted-foreground">{tk.number}</span>
                       </p>
-                      <DueEditor dueAt={tk.dueAt} quick autoFocus onSave={(dueAt) => onPatch({ dueAt })} />
+                      {dueOpen && (
+                        <DueEditor
+                          dueAt={tk.dueAt}
+                          quick
+                          autoFocus
+                          onSave={(dueAt) => {
+                            onPatch({ dueAt });
+                            setDueOpen(false);
+                          }}
+                          onCancel={() => setDueOpen(false)}
+                        />
+                      )}
                     </PopoverContent>
                   </Popover>
                 </Stop>
@@ -974,9 +900,8 @@ function TicketRow({
                 trigger={
                   <span
                     className={cn(
-                      "flex items-center gap-1.5 rounded px-1 text-xs font-medium",
+                      "flex items-center gap-1.5 px-1 text-xs font-medium",
                       PRIORITY_STYLE[tk.priorityKind].text,
-                      mod("priority") && MODIFIED,
                       tk.statusKind !== "complete" && tk.priorityKind === "critical" && "priority-nudge font-semibold",
                       tk.statusKind !== "complete" && tk.priorityKind === "high" && "font-semibold",
                     )}
@@ -997,7 +922,7 @@ function TicketRow({
                 options={[{ value: "none", label: t("tickets.unassigned") }, ...facets.technicians.map((p) => ({ value: p.id, label: p.name }))]}
                 onPick={(v) => onPatch({ assigneeId: v === "none" ? null : v })}
                 trigger={
-                  <span className={cn("flex min-w-0 items-center gap-2 rounded pr-1 text-left text-xs", mod("assigneeId") && MODIFIED)}>
+                  <span className="flex min-w-0 items-center gap-2 pr-1 text-left text-xs">
                     {tk.assignee ? (
                       <>
                         <span className="flex size-6 shrink-0 items-center justify-center rounded-full border bg-background/60 text-[10px] font-semibold">{initials(tk.assignee.name)}</span>
@@ -1619,34 +1544,44 @@ function filterLabel(key: string, value: string, data: TicketList | undefined, t
   }
 }
 
-/** The start date from the list: a day (or none), its time and the restriction, kept with the row's other changes. */
-function StartCell({
-  tk,
-  editable,
-  modified,
-  onChange,
-}: {
-  tk: TicketSummary;
-  editable: boolean;
-  modified: boolean;
-  onChange: (p: { startDate?: string | null; startTime?: string | null; startLocked?: boolean }) => void;
-}) {
+/** The start date from the list: a day (or none), its time and the restriction, saved by ✓. */
+function StartCell({ tk, editable }: { tk: TicketSummary; editable: boolean }) {
   const { t } = useTranslation();
+  const qc = useQueryClient();
+  const [open, setOpen] = useState(false);
+  const current = { startDate: tk.startDate ?? null, startTime: tk.startTime ?? null, startLocked: Boolean(tk.startLocked) };
+  const [draft, setDraft] = useState(current);
+  const save = useMutation({
+    mutationFn: (p: { startDate?: string | null; startTime?: string | null; startLocked?: boolean }) => api.put(`/tickets/${tk.id}/start-date`, p),
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: ["tickets"] });
+      toast.success(t("common.saved"));
+      setOpen(false);
+    },
+    onError: (e) => toast.error(ticketErrorText(t, e)),
+  });
+  const confirm = () => {
+    const p: { startDate?: string | null; startTime?: string | null; startLocked?: boolean } = {};
+    for (const k of ["startDate", "startTime", "startLocked"] as const) if (draft[k] !== current[k]) Object.assign(p, { [k]: draft[k] });
+    if (Object.keys(p).length) save.mutate(p);
+    else setOpen(false);
+  };
   const label = (
-    <span
-      className={cn(
-        "flex items-center gap-1 whitespace-nowrap rounded px-0.5 font-mono text-xs tabular-nums text-muted-foreground",
-        editable && "hover:bg-accent/60",
-        modified && MODIFIED,
-      )}
-    >
+    <span className={cn("flex items-center gap-1 whitespace-nowrap rounded px-0.5 font-mono text-xs tabular-nums text-muted-foreground", editable && "hover:bg-accent/60")}>
       {tk.startDate ? (tk.startTime ? `${shortDate(tk.startDate)} ${tk.startTime}` : shortDate(tk.startDate)) : "—"}
       {tk.startLocked && <Lock className="size-3 shrink-0 text-amber-300" aria-label={t("tickets.startLock.on")} />}
     </span>
   );
   if (!editable) return label;
   return (
-    <Popover>
+    <Popover
+      open={open}
+      onOpenChange={(o) => {
+        // each opening starts from the ticket as it is
+        if (o) setDraft(current);
+        setOpen(o);
+      }}
+    >
       <PopoverTrigger asChild>
         <button type="button" className="text-left" aria-label={t("tickets.fields.start")} title={t("tickets.fields.start")}>
           {label}
@@ -1659,26 +1594,46 @@ function StartCell({
         <div className="flex gap-2">
           <Input
             type="date"
-            className={cn("h-8 flex-1", modified && MODIFIED_BOX)}
+            className="h-8 flex-1"
             autoFocus
-            defaultValue={tk.startDate ?? ""}
-            key={tk.startDate ?? ""}
-            onChange={(e) => e.target.value && onChange({ startDate: e.target.value })}
+            disabled={save.isPending}
+            value={draft.startDate ?? ""}
+            onChange={(e) => setDraft((d) => (e.target.value ? { ...d, startDate: e.target.value } : { startDate: null, startTime: null, startLocked: false }))}
             aria-label={t("tickets.fields.start")}
           />
-          {tk.startDate && (
-            <Button type="button" size="sm" variant="ghost" className="h-8" onClick={() => onChange({ startDate: null, startLocked: false })}>
+          {draft.startDate && (
+            <Button
+              type="button"
+              size="sm"
+              variant="ghost"
+              className="h-8"
+              disabled={save.isPending}
+              onClick={() => setDraft({ startDate: null, startTime: null, startLocked: false })}
+            >
               {t("tickets.startClear")}
             </Button>
           )}
         </div>
-        <StartTimeInput tk={tk} disabled={false} onSave={(startTime) => onChange({ startTime })} />
-        <label className={cn("flex items-center gap-2 text-xs", !tk.startDate && "opacity-60")} title={t("tickets.startLock.hint")}>
-          <Switch checked={Boolean(tk.startLocked)} disabled={!tk.startDate} onCheckedChange={(v) => onChange({ startLocked: v })} aria-label={t("tickets.startLock.label")} />
-          <Lock className={cn("size-3.5", tk.startLocked ? "text-amber-300" : "text-muted-foreground")} />
+        <Input
+          type="time"
+          className="h-8 w-32"
+          disabled={save.isPending || !draft.startDate}
+          value={draft.startTime ?? ""}
+          onChange={(e) => setDraft((d) => ({ ...d, startTime: e.target.value || null }))}
+          aria-label={t("tickets.startTime")}
+        />
+        <label className={cn("flex items-center gap-2 text-xs", !draft.startDate && "opacity-60")} title={t("tickets.startLock.hint")}>
+          <Switch
+            checked={draft.startLocked}
+            disabled={save.isPending || !draft.startDate}
+            onCheckedChange={(v) => setDraft((d) => ({ ...d, startLocked: v }))}
+            aria-label={t("tickets.startLock.label")}
+          />
+          <Lock className={cn("size-3.5", draft.startLocked ? "text-amber-300" : "text-muted-foreground")} />
           {t("tickets.startLock.label")}
         </label>
-        {!tk.startDate && <p className="text-[10px] text-muted-foreground">{t("tickets.startLock.needsDate")}</p>}
+        {!draft.startDate && <p className="text-[10px] text-muted-foreground">{t("tickets.startLock.needsDate")}</p>}
+        <ConfirmRow saving={save.isPending} onSave={confirm} onCancel={() => setOpen(false)} />
       </PopoverContent>
     </Popover>
   );
