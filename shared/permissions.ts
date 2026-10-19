@@ -239,7 +239,7 @@ export const MODULES = [
       {
         key: "breakroom.use",
         label: { fr: "Accéder à la pause café", en: "Use the coffee break" },
-        description: { fr: "Jouer aux dames avec un collègue en ligne, regarder les vidéos d'Orbi", en: "Play checkers with an online colleague, watch Orbi's videos" },
+        description: { fr: "Jouer aux échecs avec un collègue en ligne, regarder les vidéos d'Orbi (30 minutes par jour)", en: "Play chess with an online colleague, watch Orbi's videos (30 minutes a day)" },
       },
     ],
   },

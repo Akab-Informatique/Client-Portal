@@ -3,7 +3,8 @@ import { useTranslation } from "react-i18next";
 import { useSearchParams } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
-import { Check, ChevronLeft, ChevronRight, Coffee, Crown, ExternalLink, Flag, Loader2, Play, Swords, UserPlus, Users, X } from "lucide-react";
+import { Chess, type Square } from "chess.js";
+import { Check, ChevronLeft, ChevronRight, Coffee, Crown, ExternalLink, Flag, Hourglass, Loader2, Play, Sparkles, UserPlus, Users, X } from "lucide-react";
 import { GlassBackdrop } from "@/components/brand/GlassBackdrop";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
@@ -11,33 +12,61 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { api, ApiError } from "@/lib/api";
 import { currentLocale } from "@/i18n";
 import { cn, initials } from "@/lib/utils";
-import { countPieces, legalMoves, type Side } from "@shared/checkers";
 
 type Person = { id: string; name: string };
+type Color = "w" | "b";
 type Game = {
   id: string;
   status: "invited" | "playing" | "done" | "declined";
-  board: string;
-  turn: Side;
-  mustFrom: number | null;
-  winner: Side | null;
-  endedBy: "win" | "resign" | null;
-  mySide: Side;
+  fen: string;
+  lastMove: string | null;
+  turn: Color;
+  inCheck: boolean;
+  result: Color | "draw" | null;
+  endedBy: "checkmate" | "stalemate" | "draw" | "resign" | null;
+  myColor: Color;
   myTurn: boolean;
   invitedByMe: boolean;
   opponent: Person;
   updatedAt: string;
 };
 type Video = { id: string; title: string; published: string };
+type BreakStatus = { limitSeconds: number; usedSeconds: number; remainingSeconds: number };
 
-const GAMES = ["breakroom", "checkers"] as const;
+const KEY = ["breakroom"] as const;
+const BEAT_MS = 30_000;
+const over = (e: unknown) => e instanceof ApiError && e.code === "break_over";
 
-/** Team › Coffee break: tiles of things to do on a break. */
+/**
+ * Team › Coffee break: chess with a colleague, Orbi's videos — 30 minutes a
+ * day, counted on the server while the page is on screen.
+ */
 export function BreakroomPage() {
   const { t } = useTranslation();
+  const qc = useQueryClient();
   const [params, setParams] = useSearchParams();
   const [gameId, setGameId] = useState<string | null>(null);
   const [orbi, setOrbi] = useState(false);
+  const status = useQuery({ queryKey: [...KEY, "status"], queryFn: () => api.get<BreakStatus>("/breakroom/status") });
+
+  // the time on screen counts: a beat every 30 s while the page is visible
+  useEffect(() => {
+    const beat = () => {
+      if (document.visibilityState !== "visible") return;
+      void api
+        .post<BreakStatus>("/breakroom/beat")
+        .then((s) => qc.setQueryData([...KEY, "status"], s))
+        .catch(() => undefined);
+    };
+    beat();
+    const id = setInterval(beat, BEAT_MS);
+    document.addEventListener("visibilitychange", beat);
+    return () => {
+      clearInterval(id);
+      document.removeEventListener("visibilitychange", beat);
+    };
+  }, [qc]);
+
   // from the bell: /breakroom?game=<id>
   useEffect(() => {
     const id = params.get("game");
@@ -53,294 +82,436 @@ export function BreakroomPage() {
     );
   }, [params, setParams]);
 
+  const left = status.data?.remainingSeconds ?? null;
+  const closed = left !== null && left <= 0;
+
   return (
     <div className="relative isolate space-y-6">
       <GlassBackdrop className="-inset-x-8 -top-6" />
-      <div>
-        <h1 className="flex items-center gap-2 text-2xl font-bold">
-          <Coffee className="size-6 text-primary" /> {t("breakroom.title")}
-        </h1>
-        <p className="text-sm text-muted-foreground">{t("breakroom.subtitle")}</p>
-      </div>
-      <div className="grid items-start gap-5 md:grid-cols-2 xl:grid-cols-3">
-        <CheckersTile onOpen={setGameId} />
-        <OrbiTile onOpen={() => setOrbi(true)} />
-      </div>
-      {gameId && <CheckersDialog id={gameId} onClose={() => setGameId(null)} />}
-      {orbi && <OrbiDialog onClose={() => setOrbi(false)} />}
+      <Hero status={status.data} />
+      {closed ? (
+        <section className="glass flex flex-col items-center gap-3 rounded-3xl border px-6 py-16 text-center">
+          <span className="flex size-16 items-center justify-center rounded-full border border-[color:var(--gold)]/40 bg-[color:var(--gold)]/10 text-primary">
+            <Coffee className="size-7" />
+          </span>
+          <h2 className="font-display text-2xl font-semibold">{t("breakroom.over.title")}</h2>
+          <p className="max-w-md text-sm text-muted-foreground">{t("breakroom.over.text")}</p>
+        </section>
+      ) : (
+        <div className="grid items-stretch gap-5 lg:grid-cols-3">
+          <ChessTile onOpen={setGameId} />
+          <OrbiTile onOpen={() => setOrbi(true)} />
+        </div>
+      )}
+      {!closed && gameId && <ChessDialog id={gameId} onClose={() => setGameId(null)} />}
+      {!closed && orbi && <OrbiDialog onClose={() => setOrbi(false)} />}
     </div>
   );
 }
 
-function Tile({ icon: Icon, title, text, children, accent }: { icon: typeof Coffee; title: string; text: string; children: React.ReactNode; accent: string }) {
+/** The title, and today's break time (a ring that empties) */
+function Hero({ status }: { status?: BreakStatus }) {
+  const { t } = useTranslation();
+  const share = status ? status.remainingSeconds / status.limitSeconds : 1;
+  const min = status ? Math.ceil(status.remainingSeconds / 60) : null;
+  const r = 26;
+  const len = 2 * Math.PI * r;
   return (
-    <section className="glass flex flex-col gap-4 overflow-hidden rounded-2xl border p-5">
-      <div className="flex items-start gap-3">
-        <span className={cn("flex size-11 shrink-0 items-center justify-center rounded-xl border", accent)}>
-          <Icon className="size-5" />
-        </span>
-        <div className="min-w-0">
-          <h2 className="font-display text-lg font-semibold">{title}</h2>
-          <p className="text-xs text-muted-foreground">{text}</p>
+    <section className="glass relative overflow-hidden rounded-3xl border p-6 sm:p-8">
+      <span
+        aria-hidden
+        className="pointer-events-none absolute -right-24 -top-24 h-72 w-72 bg-[radial-gradient(circle,rgba(255,206,26,0.22),transparent_65%)]"
+      />
+      <div className="relative flex flex-wrap items-center gap-6">
+        <div className="min-w-0 flex-1">
+          <p className="flex items-center gap-2 text-[11px] font-semibold uppercase tracking-[0.18em] text-primary">
+            <Coffee className="size-3.5" /> {t("breakroom.kicker")}
+          </p>
+          <h1 className="mt-1 font-display text-3xl font-bold tracking-tight sm:text-4xl">{t("breakroom.title")}</h1>
+          <p className="mt-1 max-w-xl text-sm text-muted-foreground">{t("breakroom.subtitle")}</p>
+        </div>
+        <div className="flex items-center gap-3 rounded-2xl border bg-background/40 px-4 py-3">
+          <svg viewBox="0 0 64 64" className="h-16 w-16 -rotate-90" aria-hidden>
+            <defs>
+              <linearGradient id="break-ring" x1="0" x2="1">
+                <stop offset="0" stopColor="#ffe24a" />
+                <stop offset="1" stopColor="#f59410" />
+              </linearGradient>
+            </defs>
+            <circle cx="32" cy="32" r={r} fill="none" stroke="currentColor" strokeOpacity={0.12} strokeWidth={6} />
+            <circle
+              cx="32"
+              cy="32"
+              r={r}
+              fill="none"
+              stroke="url(#break-ring)"
+              strokeWidth={6}
+              strokeLinecap="round"
+              strokeDasharray={`${share * len} ${len}`}
+              className="transition-[stroke-dasharray] duration-700"
+            />
+          </svg>
+          <div>
+            <p className="flex items-center gap-1 text-[11px] uppercase tracking-wide text-muted-foreground">
+              <Hourglass className="size-3" /> {t("breakroom.timeLeft")}
+            </p>
+            <p className="font-display text-2xl font-semibold tabular-nums">{min === null ? "…" : t("breakroom.minutes", { count: min })}</p>
+            <p className="text-[11px] text-muted-foreground">{t("breakroom.perDay")}</p>
+          </div>
         </div>
       </div>
-      {children}
     </section>
   );
 }
 
-// ── Checkers ──
-function CheckersTile({ onOpen }: { onOpen: (id: string) => void }) {
+// ── Chess ──
+const PIECE: Record<string, string> = { k: "♚", q: "♛", r: "♜", b: "♝", n: "♞", p: "♟" };
+
+function ChessTile({ onOpen }: { onOpen: (id: string) => void }) {
   const { t } = useTranslation();
   const qc = useQueryClient();
-  const online = useQuery({ queryKey: [...GAMES, "online"], queryFn: () => api.get<Person[]>("/breakroom/online"), refetchInterval: 20_000 });
-  const games = useQuery({ queryKey: [...GAMES, "list"], queryFn: () => api.get<Game[]>("/breakroom/checkers"), refetchInterval: 5_000 });
+  const online = useQuery({ queryKey: [...KEY, "online"], queryFn: () => api.get<Person[]>("/breakroom/online"), refetchInterval: 20_000 });
+  const games = useQuery({ queryKey: [...KEY, "chess"], queryFn: () => api.get<Game[]>("/breakroom/chess"), refetchInterval: 5_000 });
+  const onError = (e: unknown) => {
+    if (over(e)) void qc.invalidateQueries({ queryKey: [...KEY, "status"] });
+    else toast.error(t("common.error"));
+  };
   const invite = useMutation({
-    mutationFn: (opponentId: string) => api.post<Game>("/breakroom/checkers", { opponentId }),
+    mutationFn: (opponentId: string) => api.post<Game>("/breakroom/chess", { opponentId }),
     onSuccess: (g) => {
-      void qc.invalidateQueries({ queryKey: GAMES });
-      toast.success(t("breakroom.checkers.invited", { name: g.opponent.name }));
+      void qc.invalidateQueries({ queryKey: KEY });
+      toast.success(t("breakroom.chess.invited", { name: g.opponent.name }));
       onOpen(g.id);
     },
-    onError: () => toast.error(t("common.error")),
+    onError,
   });
   const respond = useMutation({
-    mutationFn: (p: { id: string; accept: boolean }) => api.post<Game>(`/breakroom/checkers/${p.id}/respond`, { accept: p.accept }),
+    mutationFn: (p: { id: string; accept: boolean }) => api.post<Game>(`/breakroom/chess/${p.id}/respond`, { accept: p.accept }),
     onSuccess: (g) => {
-      void qc.invalidateQueries({ queryKey: GAMES });
+      void qc.invalidateQueries({ queryKey: KEY });
       if (g.status === "playing") onOpen(g.id);
     },
-    onError: () => toast.error(t("common.error")),
+    onError,
   });
   const list = games.data ?? [];
   const invitations = list.filter((g) => g.status === "invited" && !g.invitedByMe);
   const current = list.filter((g) => g.status === "playing" || (g.status === "invited" && g.invitedByMe));
   // already in a game or an invitation with them: no second invitation
   const busy = new Map([...invitations, ...current].map((g) => [g.opponent.id, g.id]));
+  // the preview: my turn first, else the latest game
+  const featured = current.find((g) => g.myTurn) ?? current[0];
 
   return (
-    <Tile
-      icon={Swords}
-      title={t("breakroom.checkers.title")}
-      text={t("breakroom.checkers.text")}
-      accent="border-[color:var(--gold)]/40 bg-[color:var(--gold)]/10 text-primary"
-    >
-      {invitations.length > 0 && (
-        <div className="space-y-2">
+    <section className="glass relative flex flex-col overflow-hidden rounded-3xl border lg:col-span-2">
+      <span
+        aria-hidden
+        className="pointer-events-none absolute -left-20 top-1/3 h-72 w-72 bg-[radial-gradient(circle,rgba(255,206,26,0.12),transparent_70%)]"
+      />
+      <div className="relative grid flex-1 gap-6 p-6 md:grid-cols-[minmax(0,240px)_1fr]">
+        <button
+          type="button"
+          onClick={() => featured && onOpen(featured.id)}
+          disabled={!featured}
+          className="group self-start overflow-hidden border border-[color:var(--gold)]/30 shadow-[0_20px_60px_-24px_rgba(255,206,26,0.45)] transition-transform enabled:hover:-translate-y-0.5"
+          aria-label={featured ? t("breakroom.chess.resumeWith", { name: featured.opponent.name }) : t("breakroom.chess.title")}
+        >
+          <MiniBoard fen={featured?.fen ?? new Chess().fen()} flip={featured?.myColor === "b"} />
+        </button>
+        <div className="flex min-w-0 flex-col gap-4">
+          <div>
+            <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-primary">{t("breakroom.chess.kicker")}</p>
+            <h2 className="font-display text-2xl font-semibold">{t("breakroom.chess.title")}</h2>
+            <p className="text-sm text-muted-foreground">{t("breakroom.chess.text")}</p>
+          </div>
+
           {invitations.map((g) => (
-            <div key={g.id} className="flex items-center gap-2 rounded-xl border border-[color:var(--gold)]/50 bg-[color:var(--gold)]/10 px-3 py-2 text-sm">
-              <span className="min-w-0 flex-1 truncate">{t("breakroom.checkers.invitedBy", { name: g.opponent.name })}</span>
+            <div key={g.id} className="flex items-center gap-2 rounded-2xl border border-[color:var(--gold)]/50 bg-[color:var(--gold)]/10 px-3 py-2.5 text-sm">
+              <Sparkles className="size-4 shrink-0 text-primary" />
+              <span className="min-w-0 flex-1 truncate">{t("breakroom.chess.invitedBy", { name: g.opponent.name })}</span>
               <Button
                 size="sm"
-                className="h-7 bg-grad-gold font-semibold text-[#1a1204]"
+                className="h-8 bg-grad-gold font-semibold text-[#1a1204]"
                 disabled={respond.isPending}
                 onClick={() => respond.mutate({ id: g.id, accept: true })}
               >
-                <Check className="size-3.5" /> {t("breakroom.checkers.accept")}
+                <Check className="size-3.5" /> {t("breakroom.chess.accept")}
               </Button>
               <Button
                 size="sm"
                 variant="ghost"
-                className="h-7"
+                className="h-8"
                 disabled={respond.isPending}
                 onClick={() => respond.mutate({ id: g.id, accept: false })}
-                aria-label={t("breakroom.checkers.decline")}
+                aria-label={t("breakroom.chess.decline")}
               >
                 <X className="size-3.5" />
               </Button>
             </div>
           ))}
+
+          {current.length > 0 && (
+            <div className="space-y-1.5">
+              <p className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">{t("breakroom.chess.current")}</p>
+              <div className="grid gap-2 sm:grid-cols-2">
+                {current.map((g) => (
+                  <button
+                    key={g.id}
+                    type="button"
+                    onClick={() => onOpen(g.id)}
+                    className={cn(
+                      "flex items-center gap-2.5 rounded-2xl border px-3 py-2 text-left text-sm transition-colors hover:border-[color:var(--gold)]/50 hover:bg-accent/40",
+                      g.myTurn && "border-[color:var(--gold)]/50",
+                    )}
+                  >
+                    <Avatar name={g.opponent.name} />
+                    <span className="min-w-0 flex-1">
+                      <span className="block truncate font-medium">{g.opponent.name}</span>
+                      <span className={cn("block text-[11px]", g.myTurn ? "font-semibold text-primary" : "text-muted-foreground")}>
+                        {g.status === "invited" ? t("breakroom.chess.waiting") : g.myTurn ? t("breakroom.chess.yourTurn") : t("breakroom.chess.theirTurn")}
+                      </span>
+                    </span>
+                    <ChevronRight className="size-4 text-muted-foreground" />
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
+
+          <div className="space-y-1.5">
+            <p className="flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
+              <Users className="size-3.5" /> {t("breakroom.chess.online")}
+              {online.data && <span className="font-normal normal-case">· {online.data.length}</span>}
+            </p>
+            {online.isLoading ? (
+              <Skeleton className="h-12 rounded-2xl" />
+            ) : !(online.data ?? []).length ? (
+              <p className="rounded-2xl border border-dashed px-3 py-5 text-center text-xs text-muted-foreground">{t("breakroom.chess.nobody")}</p>
+            ) : (
+              <ul className="grid gap-2 sm:grid-cols-2">
+                {(online.data ?? []).map((p) => (
+                  <li key={p.id} className="flex items-center gap-2.5 rounded-2xl border bg-background/30 px-3 py-2 text-sm">
+                    <span className="relative">
+                      <Avatar name={p.name} />
+                      <span className="absolute -bottom-0.5 -right-0.5 size-2.5 rounded-full border-2 border-background bg-emerald-400" />
+                    </span>
+                    <span className="min-w-0 flex-1 truncate">{p.name}</span>
+                    {busy.has(p.id) ? (
+                      <Button size="sm" variant="ghost" className="h-8" onClick={() => onOpen(busy.get(p.id)!)}>
+                        {t("breakroom.chess.resume")}
+                      </Button>
+                    ) : (
+                      <Button size="sm" variant="outline" className="h-8" disabled={invite.isPending} onClick={() => invite.mutate(p.id)}>
+                        <UserPlus className="size-3.5" /> {t("breakroom.chess.invite")}
+                      </Button>
+                    )}
+                  </li>
+                ))}
+              </ul>
+            )}
+          </div>
         </div>
-      )}
-      {current.length > 0 && (
-        <div className="space-y-1.5">
-          <p className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">{t("breakroom.checkers.current")}</p>
-          {current.map((g) => (
-            <button
-              key={g.id}
-              type="button"
-              onClick={() => onOpen(g.id)}
-              className="flex w-full items-center gap-2 rounded-xl border px-3 py-2 text-left text-sm hover:border-[color:var(--gold)]/50 hover:bg-accent/40"
-            >
-              <Avatar name={g.opponent.name} />
-              <span className="min-w-0 flex-1 truncate">{g.opponent.name}</span>
-              <span
-                className={cn(
-                  "shrink-0 rounded-full px-2 py-0.5 text-[11px]",
-                  g.myTurn ? "bg-[color:var(--gold)]/20 font-semibold text-primary" : "text-muted-foreground",
-                )}
-              >
-                {g.status === "invited" ? t("breakroom.checkers.waiting") : g.myTurn ? t("breakroom.checkers.yourTurn") : t("breakroom.checkers.theirTurn")}
-              </span>
-            </button>
-          ))}
-        </div>
-      )}
-      <div className="space-y-1.5">
-        <p className="flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
-          <Users className="size-3.5" /> {t("breakroom.checkers.online")}
-        </p>
-        {online.isLoading ? (
-          <Skeleton className="h-10 rounded-xl" />
-        ) : !(online.data ?? []).length ? (
-          <p className="rounded-xl border border-dashed px-3 py-4 text-center text-xs text-muted-foreground">{t("breakroom.checkers.nobody")}</p>
-        ) : (
-          <ul className="space-y-1.5">
-            {(online.data ?? []).map((p) => (
-              <li key={p.id} className="flex items-center gap-2 rounded-xl border px-3 py-2 text-sm">
-                <span className="relative">
-                  <Avatar name={p.name} />
-                  <span className="absolute -bottom-0.5 -right-0.5 size-2.5 rounded-full border-2 border-background bg-emerald-400" />
-                </span>
-                <span className="min-w-0 flex-1 truncate">{p.name}</span>
-                {busy.has(p.id) ? (
-                  <Button size="sm" variant="ghost" className="h-7" onClick={() => onOpen(busy.get(p.id)!)}>
-                    {t("breakroom.checkers.resume")}
-                  </Button>
-                ) : (
-                  <Button size="sm" variant="outline" className="h-7" disabled={invite.isPending} onClick={() => invite.mutate(p.id)}>
-                    <UserPlus className="size-3.5" /> {t("breakroom.checkers.invite")}
-                  </Button>
-                )}
-              </li>
-            ))}
-          </ul>
-        )}
       </div>
-    </Tile>
+    </section>
   );
 }
 
 const Avatar = ({ name }: { name: string }) => (
-  <span className="flex size-7 shrink-0 items-center justify-center rounded-full bg-muted text-[10px] font-semibold">{initials(name)}</span>
+  <span className="flex size-8 shrink-0 items-center justify-center rounded-full bg-muted text-[10px] font-semibold">{initials(name)}</span>
 );
 
-function CheckersDialog({ id, onClose }: { id: string; onClose: () => void }) {
+const LIGHT = "bg-[#e8dcc0]";
+const DARK = "bg-[#8a6a43]";
+const pieceClass = (color: Color) =>
+  color === "w"
+    ? "text-[#ffd84a] [text-shadow:0_1px_0_#7a4a00,0_0_1px_#3a2400,0_2px_6px_rgba(0,0,0,0.45)]"
+    : "text-[#141416] [text-shadow:0_1px_0_rgba(255,255,255,0.25),0_2px_6px_rgba(0,0,0,0.35)]";
+
+/** A small board (the tile's preview), read only */
+function MiniBoard({ fen, flip }: { fen: string; flip?: boolean }) {
+  const board = useMemo(() => new Chess(fen).board(), [fen]);
+  const rows = flip ? [...board].reverse().map((r) => [...r].reverse()) : board;
+  return (
+    <div className="grid w-full grid-cols-8" style={{ aspectRatio: "1 / 1" }}>
+      {rows.flatMap((row, r) =>
+        row.map((cell, c) => (
+          <span
+            key={`${r}-${c}`}
+            className={cn("flex items-center justify-center text-[clamp(0.9rem,2.4vw,1.5rem)] leading-none", (r + c) % 2 === 0 ? LIGHT : DARK)}
+          >
+            {cell && <span className={cn("[font-variant-emoji:text]", pieceClass(cell.color))}>{PIECE[cell.type]}</span>}
+          </span>
+        )),
+      )}
+    </div>
+  );
+}
+
+const FILES = "abcdefgh";
+
+function ChessDialog({ id, onClose }: { id: string; onClose: () => void }) {
   const { t } = useTranslation();
   const qc = useQueryClient();
   const { data: g, isLoading } = useQuery({
-    queryKey: [...GAMES, "game", id],
-    queryFn: () => api.get<Game>(`/breakroom/checkers/${id}`),
+    queryKey: [...KEY, "game", id],
+    queryFn: () => api.get<Game>(`/breakroom/chess/${id}`),
     // the other player's move shows within a second or two
     refetchInterval: (q) => (q.state.data && (q.state.data.status === "done" || q.state.data.status === "declined") ? false : 1500),
   });
-  const [picked, setPicked] = useState<number | null>(null);
+  const [picked, setPicked] = useState<Square | null>(null);
+  const [promo, setPromo] = useState<{ from: Square; to: Square } | null>(null);
   const put = (next: Game) => {
-    qc.setQueryData([...GAMES, "game", id], next);
-    void qc.invalidateQueries({ queryKey: [...GAMES, "list"] });
+    qc.setQueryData([...KEY, "game", id], next);
+    void qc.invalidateQueries({ queryKey: [...KEY, "chess"] });
+  };
+  const onError = (e: unknown) => {
+    void qc.invalidateQueries({ queryKey: [...KEY, "game", id] });
+    if (over(e)) void qc.invalidateQueries({ queryKey: [...KEY, "status"] });
+    else toast.error(e instanceof ApiError && e.code === "illegal_move" ? t("breakroom.chess.illegal") : t("common.error"));
   };
   const move = useMutation({
-    mutationFn: (p: { from: number; to: number }) => api.post<Game>(`/breakroom/checkers/${id}/move`, p),
+    mutationFn: (p: { from: Square; to: Square; promotion?: string }) => api.post<Game>(`/breakroom/chess/${id}/move`, p),
     onSuccess: (next) => {
       put(next);
-      setPicked(next.myTurn && next.mustFrom !== null ? next.mustFrom : null);
+      setPicked(null);
+      setPromo(null);
     },
-    onError: (e) => {
-      void qc.invalidateQueries({ queryKey: [...GAMES, "game", id] });
-      toast.error(e instanceof ApiError && e.code === "illegal_move" ? t("breakroom.checkers.illegal") : t("common.error"));
-    },
+    onError,
   });
-  const resign = useMutation({
-    mutationFn: () => api.post<Game>(`/breakroom/checkers/${id}/resign`),
-    onSuccess: put,
-    onError: () => toast.error(t("common.error")),
-  });
+  const resign = useMutation({ mutationFn: () => api.post<Game>(`/breakroom/chess/${id}/resign`), onSuccess: put, onError });
 
-  const legal = useMemo(() => (g && g.myTurn ? legalMoves({ board: g.board, turn: g.turn, mustFrom: g.mustFrom }) : []), [g]);
-  // a capture in progress: that piece is the one to play
-  useEffect(() => {
-    if (g?.myTurn && g.mustFrom !== null) setPicked(g.mustFrom);
-  }, [g?.myTurn, g?.mustFrom]);
-  const movable = new Set(legal.map((m) => m.from));
-  const targets = new Set(legal.filter((m) => m.from === picked).map((m) => m.to));
-  // my side at the bottom
-  const order = g?.mySide === "b" ? Array.from({ length: 64 }, (_, i) => 63 - i) : Array.from({ length: 64 }, (_, i) => i);
+  const chess = useMemo(() => (g ? new Chess(g.fen) : null), [g]);
+  const targets = useMemo(() => (chess && picked && g?.myTurn ? chess.moves({ square: picked, verbose: true }) : []), [chess, picked, g?.myTurn]);
+  const flip = g?.myColor === "b";
+  const ranks = flip ? [1, 2, 3, 4, 5, 6, 7, 8] : [8, 7, 6, 5, 4, 3, 2, 1];
+  const files = flip ? [...FILES].reverse() : [...FILES];
+  const last = g?.lastMove ? [g.lastMove.slice(0, 2), g.lastMove.slice(2, 4)] : [];
+  const kingInCheck =
+    g?.inCheck && chess
+      ? chess
+          .board()
+          .flat()
+          .find((x) => x && x.type === "k" && x.color === g.turn)?.square
+      : undefined;
+
+  const click = (sq: Square) => {
+    if (!g || !chess || !g.myTurn || move.isPending) return;
+    const target = targets.find((m) => m.to === sq);
+    if (picked && target) {
+      if (target.promotion) setPromo({ from: picked, to: sq });
+      else move.mutate({ from: picked, to: sq });
+      return;
+    }
+    const piece = chess.get(sq);
+    setPicked(piece && piece.color === g.myColor ? (picked === sq ? null : sq) : null);
+  };
 
   const status = !g
     ? ""
     : g.status === "invited"
       ? g.invitedByMe
-        ? t("breakroom.checkers.waitingFor", { name: g.opponent.name })
-        : t("breakroom.checkers.invitedBy", { name: g.opponent.name })
+        ? t("breakroom.chess.waitingFor", { name: g.opponent.name })
+        : t("breakroom.chess.invitedBy", { name: g.opponent.name })
       : g.status === "declined"
-        ? t("breakroom.checkers.declined")
+        ? t("breakroom.chess.declined")
         : g.status === "done"
-          ? g.winner === g.mySide
-            ? t(g.endedBy === "resign" ? "breakroom.checkers.wonResign" : "breakroom.checkers.won")
-            : t(g.endedBy === "resign" ? "breakroom.checkers.lostResign" : "breakroom.checkers.lost", { name: g.opponent.name })
+          ? g.result === "draw"
+            ? t(g.endedBy === "stalemate" ? "breakroom.chess.stalemate" : "breakroom.chess.draw")
+            : g.result === g.myColor
+              ? t(g.endedBy === "resign" ? "breakroom.chess.wonResign" : "breakroom.chess.wonMate")
+              : t(g.endedBy === "resign" ? "breakroom.chess.lostResign" : "breakroom.chess.lostMate", { name: g.opponent.name })
           : g.myTurn
-            ? g.mustFrom !== null
-              ? t("breakroom.checkers.again")
-              : t("breakroom.checkers.yourTurn")
-            : t("breakroom.checkers.theirTurnName", { name: g.opponent.name });
+            ? g.inCheck
+              ? t("breakroom.chess.youCheck")
+              : t("breakroom.chess.yourTurn")
+            : t("breakroom.chess.theirTurnName", { name: g.opponent.name });
 
   return (
     <Dialog open onOpenChange={(o) => !o && onClose()}>
-      <DialogContent className="sm:max-w-xl">
+      <DialogContent className="sm:max-w-2xl">
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
-            <Swords className="size-5 text-primary" /> {t("breakroom.checkers.title")}
+            <Crown className="size-5 text-primary" /> {t("breakroom.chess.title")}
             {g && <span className="font-normal text-muted-foreground">· {g.opponent.name}</span>}
           </DialogTitle>
-          <DialogDescription className={cn(g?.myTurn && "font-semibold text-primary")}>{status}</DialogDescription>
+          <DialogDescription className={cn(g?.myTurn && "font-semibold text-primary", g?.inCheck && g.myTurn && "text-red-300")}>{status}</DialogDescription>
         </DialogHeader>
-        {isLoading || !g ? (
+        {isLoading || !g || !chess ? (
           <Skeleton className="aspect-square w-full rounded-xl" />
         ) : (
           <>
-            <div className="flex items-center justify-between text-xs text-muted-foreground">
-              <Score side={g.mySide === "r" ? "b" : "r"} board={g.board} label={g.opponent.name} />
-              <Score side={g.mySide} board={g.board} label={t("breakroom.checkers.you")} />
-            </div>
-            <div className="mx-auto grid aspect-square w-full max-w-[min(32rem,75vh)] grid-cols-8 overflow-hidden border-2 border-[color:var(--gold)]/40 shadow-[0_0_40px_-12px_rgba(255,206,26,0.4)]">
-              {order.map((i) => {
-                const dark = (Math.floor(i / 8) + (i % 8)) % 2 === 1;
-                const cell = g.board[i];
-                const mine = (g.mySide === "r" ? /[rR]/ : /[bB]/).test(cell);
-                const canPick = g.myTurn && movable.has(i) && !move.isPending;
-                const isTarget = targets.has(i);
-                return (
-                  <button
-                    key={i}
-                    type="button"
-                    disabled={!(canPick || isTarget)}
-                    onClick={() =>
-                      isTarget && picked !== null
-                        ? move.mutate({ from: picked, to: i })
-                        : canPick && g.mustFrom === null
-                          ? setPicked(picked === i ? null : i)
-                          : undefined
-                    }
-                    className={cn(
-                      "relative flex aspect-square items-center justify-center",
-                      dark ? "bg-[#3b2a17]" : "bg-[#e9dcc2]",
-                      isTarget && "cursor-pointer bg-emerald-700/70",
-                      canPick && "cursor-pointer",
-                    )}
-                    aria-label={`${Math.floor(i / 8) + 1}-${(i % 8) + 1}`}
-                  >
-                    {isTarget && <span className="size-1/4 rounded-full bg-emerald-300/80" />}
-                    {cell !== "." && (
-                      <span
+            <PlayerBar name={g.opponent.name} color={g.myColor === "w" ? "b" : "w"} active={g.status === "playing" && !g.myTurn} />
+            <div className="relative mx-auto w-full max-w-[min(34rem,70vh)]">
+              <div
+                className="grid grid-cols-8 overflow-hidden border-2 border-[color:var(--gold)]/40 shadow-[0_24px_70px_-28px_rgba(255,206,26,0.5)]"
+                style={{ aspectRatio: "1 / 1" }}
+              >
+                {ranks.flatMap((rank, r) =>
+                  files.map((file, c) => {
+                    const sq = `${file}${rank}` as Square;
+                    const piece = chess.get(sq);
+                    const target = targets.find((m) => m.to === sq);
+                    const light = (r + c) % 2 === 0;
+                    return (
+                      <button
+                        key={sq}
+                        type="button"
+                        onClick={() => click(sq)}
                         className={cn(
-                          "flex size-[78%] items-center justify-center rounded-full border-2 shadow-[inset_0_-4px_0_rgba(0,0,0,0.25)] transition-transform",
-                          /[rR]/.test(cell) ? "border-[#f59410] bg-grad-gold text-[#1a1204]" : "border-zinc-500 bg-zinc-900 text-zinc-200",
-                          picked === i && "scale-110 ring-4 ring-emerald-300/70",
-                          canPick && mine && picked !== i && "ring-2 ring-[color:var(--gold)]/60",
+                          "relative flex items-center justify-center text-[clamp(1.4rem,5.2vw,2.6rem)] leading-none outline-none",
+                          light ? LIGHT : DARK,
+                          last.includes(sq) && "after:absolute after:inset-0 after:bg-[#ffce1a]/35",
+                          picked === sq && "after:absolute after:inset-0 after:bg-emerald-400/40",
+                          kingInCheck === sq && "after:absolute after:inset-0 after:bg-[radial-gradient(circle,rgba(239,68,68,0.85),transparent_70%)]",
+                          g.myTurn && (piece?.color === g.myColor || target) && "cursor-pointer",
                         )}
+                        aria-label={sq}
                       >
-                        {/[RB]/.test(cell) && <Crown className="size-1/2" />}
-                      </span>
-                    )}
-                  </button>
-                );
-              })}
+                        {c === 0 && (
+                          <span className={cn("absolute left-0.5 top-0.5 z-10 text-[9px] font-semibold", light ? "text-[#8a6a43]" : "text-[#e8dcc0]")}>
+                            {rank}
+                          </span>
+                        )}
+                        {r === 7 && (
+                          <span className={cn("absolute bottom-0.5 right-1 z-10 text-[9px] font-semibold", light ? "text-[#8a6a43]" : "text-[#e8dcc0]")}>
+                            {file}
+                          </span>
+                        )}
+                        {piece && <span className={cn("relative z-10 [font-variant-emoji:text]", pieceClass(piece.color))}>{PIECE[piece.type]}</span>}
+                        {target &&
+                          (piece ? (
+                            <span className="absolute inset-[6%] z-10 rounded-full border-4 border-emerald-500/70" />
+                          ) : (
+                            <span className="absolute z-10 h-[28%] w-[28%] rounded-full bg-emerald-600/60" />
+                          ))}
+                      </button>
+                    );
+                  }),
+                )}
+              </div>
+              {promo && (
+                <div className="absolute inset-0 z-20 flex items-center justify-center bg-black/50">
+                  <div className="glass flex gap-2 rounded-2xl border p-3">
+                    {(["q", "r", "b", "n"] as const).map((p) => (
+                      <button
+                        key={p}
+                        type="button"
+                        onClick={() => move.mutate({ ...promo, promotion: p })}
+                        className="flex h-14 w-14 items-center justify-center rounded-xl border bg-background/60 text-4xl hover:border-[color:var(--gold)]/60"
+                        aria-label={t(`breakroom.chess.piece.${p}`)}
+                      >
+                        <span className={cn("[font-variant-emoji:text]", pieceClass(g.myColor))}>{PIECE[p]}</span>
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              )}
             </div>
+            <PlayerBar name={t("breakroom.chess.you")} color={g.myColor} active={g.myTurn} />
             <div className="flex items-center justify-between gap-2">
-              <p className="text-[11px] text-muted-foreground">{t("breakroom.checkers.rules")}</p>
+              <p className="text-[11px] text-muted-foreground">{t("breakroom.chess.hint")}</p>
               {(g.status === "playing" || (g.status === "invited" && g.invitedByMe)) && (
                 <Button size="sm" variant="ghost" className="text-destructive" disabled={resign.isPending} onClick={() => resign.mutate()}>
-                  <Flag className="size-3.5" /> {t(g.status === "invited" ? "breakroom.checkers.cancel" : "breakroom.checkers.resign")}
+                  <Flag className="size-3.5" /> {t(g.status === "invited" ? "breakroom.chess.cancel" : "breakroom.chess.resign")}
                 </Button>
               )}
             </div>
@@ -351,20 +522,26 @@ function CheckersDialog({ id, onClose }: { id: string; onClose: () => void }) {
   );
 }
 
-function Score({ side, board, label }: { side: Side; board: string; label: string }) {
+function PlayerBar({ name, color, active }: { name: string; color: Color; active: boolean }) {
   return (
-    <span className="flex items-center gap-1.5">
-      <span className={cn("size-3 rounded-full border", side === "r" ? "border-[#f59410] bg-grad-gold" : "border-zinc-500 bg-zinc-900")} />
-      {label} · {countPieces(board, side)}
-    </span>
+    <div
+      className={cn(
+        "flex items-center gap-2 rounded-xl border px-3 py-1.5 text-sm transition-colors",
+        active && "border-[color:var(--gold)]/50 bg-[color:var(--gold)]/10",
+      )}
+    >
+      <span className={cn("text-xl leading-none [font-variant-emoji:text]", pieceClass(color))}>{PIECE.k}</span>
+      <span className="font-medium">{name}</span>
+      {active && <span className="ml-auto size-2 animate-pulse rounded-full bg-primary" />}
+    </div>
   );
 }
 
 // ── Orbi the Alien ──
 function useOrbi() {
-  return useQuery({ queryKey: [...GAMES, "orbi"], queryFn: () => api.get<{ channel: string; videos: Video[] }>("/breakroom/videos"), staleTime: 10 * 60_000 });
+  return useQuery({ queryKey: [...KEY, "orbi"], queryFn: () => api.get<{ channel: string; videos: Video[] }>("/breakroom/videos"), staleTime: 10 * 60_000 });
 }
-const thumb = (id: string) => `https://i.ytimg.com/vi/${id}/mqdefault.jpg`;
+const thumb = (id: string, size: "mq" | "hq" = "mq") => `https://i.ytimg.com/vi/${id}/${size}default.jpg`;
 const day = (iso: string) =>
   iso ? new Intl.DateTimeFormat(currentLocale() === "en" ? "en-CA" : "fr-CA", { day: "numeric", month: "short", year: "numeric" }).format(new Date(iso)) : "";
 
@@ -373,34 +550,42 @@ function OrbiTile({ onOpen }: { onOpen: () => void }) {
   const { data, isLoading } = useOrbi();
   const latest = data?.videos[0];
   return (
-    <Tile icon={Play} title={t("breakroom.orbi.title")} text={t("breakroom.orbi.text")} accent="border-emerald-500/40 bg-emerald-500/10 text-emerald-300">
-      {isLoading ? (
-        <Skeleton className="aspect-video w-full rounded-xl" />
-      ) : latest ? (
-        <button type="button" onClick={onOpen} className="group relative block overflow-hidden rounded-xl border text-left">
+    <section className="glass relative flex flex-col overflow-hidden rounded-3xl border">
+      <button type="button" onClick={onOpen} disabled={!latest} className="group relative block aspect-[4/3] w-full overflow-hidden text-left">
+        {isLoading ? (
+          <Skeleton className="h-full w-full" />
+        ) : latest ? (
           <img
-            src={thumb(latest.id)}
+            src={thumb(latest.id, "hq")}
             alt=""
-            className="aspect-video w-full object-cover transition-transform group-hover:scale-105"
+            className="h-full w-full object-cover transition-transform duration-500 group-hover:scale-105"
             loading="lazy"
             referrerPolicy="no-referrer"
           />
-          <span className="absolute inset-0 flex items-center justify-center bg-black/30 opacity-90 transition-opacity group-hover:opacity-100">
-            <span className="flex size-14 items-center justify-center rounded-full bg-grad-gold text-[#1a1204] shadow-lg">
-              <Play className="ml-1 size-6 fill-current" />
+        ) : (
+          <span className="flex h-full w-full items-center justify-center text-xs text-muted-foreground">{t("breakroom.orbi.none")}</span>
+        )}
+        <span className="absolute inset-0 bg-gradient-to-t from-[#0a0a0b] via-[#0a0a0b]/40 to-transparent" />
+        {latest && (
+          <span className="absolute inset-0 flex items-center justify-center">
+            <span className="flex size-16 items-center justify-center rounded-full bg-grad-gold text-[#1a1204] shadow-[0_10px_40px_-8px_rgba(255,206,26,0.7)] transition-transform group-hover:scale-110">
+              <Play className="ml-1 size-7 fill-current" />
             </span>
           </span>
-          <span className="absolute inset-x-0 bottom-0 bg-gradient-to-t from-black/80 to-transparent px-3 pb-2 pt-6 text-sm font-medium text-white">
-            {latest.title}
-          </span>
-        </button>
-      ) : (
-        <p className="rounded-xl border border-dashed px-3 py-6 text-center text-xs text-muted-foreground">{t("breakroom.orbi.none")}</p>
-      )}
-      <Button variant="outline" onClick={onOpen} disabled={!latest}>
-        <Play className="size-4" /> {t("breakroom.orbi.watch", { count: data?.videos.length ?? 0 })}
-      </Button>
-    </Tile>
+        )}
+        <span className="absolute inset-x-0 bottom-0 p-5">
+          <span className="block text-[11px] font-semibold uppercase tracking-[0.18em] text-emerald-300">{t("breakroom.orbi.kicker")}</span>
+          <span className="block font-display text-2xl font-semibold text-white">{t("breakroom.orbi.title")}</span>
+          {latest && <span className="mt-0.5 line-clamp-1 block text-sm text-white/80">{latest.title}</span>}
+        </span>
+      </button>
+      <div className="flex items-center justify-between gap-2 p-4">
+        <span className="text-xs text-muted-foreground">{t("breakroom.orbi.count", { count: data?.videos.length ?? 0 })}</span>
+        <Button size="sm" variant="outline" onClick={onOpen} disabled={!latest}>
+          <Play className="size-3.5" /> {t("breakroom.orbi.watch")}
+        </Button>
+      </div>
+    </section>
   );
 }
 
@@ -419,7 +604,7 @@ function OrbiDialog({ onClose }: { onClose: () => void }) {
           </DialogTitle>
           <DialogDescription>{v ? `${v.title} · ${day(v.published)}` : t("breakroom.orbi.none")}</DialogDescription>
         </DialogHeader>
-        {v && (
+        {v ? (
           <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_260px]">
             <div className="space-y-2">
               <div className="overflow-hidden rounded-xl border bg-black">
@@ -471,8 +656,9 @@ function OrbiDialog({ onClose }: { onClose: () => void }) {
               ))}
             </ul>
           </div>
+        ) : (
+          <Loader2 className="mx-auto size-6 animate-spin text-muted-foreground" />
         )}
-        {!v && <Loader2 className="mx-auto size-6 animate-spin text-muted-foreground" />}
       </DialogContent>
     </Dialog>
   );

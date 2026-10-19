@@ -1,0 +1,1 @@
+DROP TABLE "checkers_games" CASCADE;

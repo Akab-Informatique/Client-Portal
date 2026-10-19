@@ -3892,7 +3892,7 @@ describe("submitting: timesheets (when required) and expenses", () => {
 });
 
 describe("coffee break", () => {
-  it("checkers with a colleague online: invitation, turns checked on the server, resign; nobody else sees it", async () => {
+  it("chess with a colleague online: invitation, moves checked on the server, checkmate, resign; nobody else sees it", async () => {
     resetRateLimit("login:ip:unknown");
     const tech = await signIn("tech@akab.local");
     const admin = await signIn("admin@akab.local");
@@ -3904,39 +3904,71 @@ describe("coffee break", () => {
     expect(online.some((p: any) => p.id === techRow.id)).toBe(false);
 
     // the invitation: a notification; asking again gives the same game
-    const g = await tech.post("/api/breakroom/checkers", { opponentId: adminRow.id });
+    const g = await tech.post("/api/breakroom/chess", { opponentId: adminRow.id });
     expect(g.status).toBe(201);
-    expect(g.json).toMatchObject({ status: "invited", mySide: "r", invitedByMe: true, opponent: { id: adminRow.id } });
-    expect((await tech.post("/api/breakroom/checkers", { opponentId: adminRow.id })).json.id).toBe(g.json.id);
-    expect((await tech.post("/api/breakroom/checkers", { opponentId: techRow.id })).status).toBe(400);
+    expect(g.json).toMatchObject({ status: "invited", myColor: "w", invitedByMe: true, opponent: { id: adminRow.id } });
+    expect((await tech.post("/api/breakroom/chess", { opponentId: adminRow.id })).json.id).toBe(g.json.id);
+    expect((await tech.post("/api/breakroom/chess", { opponentId: techRow.id })).status).toBe(400);
     const bell = (await admin.get("/api/notifications")).json.items.find((n: any) => n.type === "breakroom.invite");
     expect(bell).toMatchObject({ link: `/breakroom?game=${g.json.id}`, data: { from: "Alex Tremblay" } });
     // only the one invited answers; no move before
-    expect((await tech.post(`/api/breakroom/checkers/${g.json.id}/respond`, { accept: true })).status).toBe(409);
-    expect((await tech.post(`/api/breakroom/checkers/${g.json.id}/move`, { from: 40, to: 33 })).json.error).toBe("game_not_playing");
-    expect((await admin.post(`/api/breakroom/checkers/${g.json.id}/respond`, { accept: true })).json.status).toBe("playing");
+    expect((await tech.post(`/api/breakroom/chess/${g.json.id}/respond`, { accept: true })).status).toBe(409);
+    expect((await tech.post(`/api/breakroom/chess/${g.json.id}/move`, { from: "e2", to: "e4" })).json.error).toBe("game_not_playing");
+    expect((await admin.post(`/api/breakroom/chess/${g.json.id}/respond`, { accept: true })).json.status).toBe("playing");
 
-    // red (the one who invited) plays first; moves are checked
-    expect((await admin.post(`/api/breakroom/checkers/${g.json.id}/move`, { from: 17, to: 24 })).json.error).toBe("not_your_turn");
-    expect((await tech.post(`/api/breakroom/checkers/${g.json.id}/move`, { from: 40, to: 32 })).json.error).toBe("illegal_move");
-    const m1 = await tech.post(`/api/breakroom/checkers/${g.json.id}/move`, { from: 40, to: 33 });
-    expect(m1.json).toMatchObject({ turn: "b", myTurn: false });
-    expect((await admin.get(`/api/breakroom/checkers/${g.json.id}`)).json).toMatchObject({ mySide: "b", myTurn: true });
-    expect((await admin.post(`/api/breakroom/checkers/${g.json.id}/move`, { from: 17, to: 24 })).json.turn).toBe("r");
+    // white (the one who invited) plays first; the rules of chess are checked
+    const mv = (who: any, from: string, to: string) => who.post(`/api/breakroom/chess/${g.json.id}/move`, { from, to });
+    expect((await mv(admin, "e7", "e5")).json.error).toBe("not_your_turn");
+    expect((await mv(tech, "e2", "e5")).json.error).toBe("illegal_move");
+    expect((await tech.post(`/api/breakroom/chess/${g.json.id}/move`, { from: "z9", to: "e4" })).status).toBe(400);
+    // the fool's mate: 1. f3 e5 2. g4 Qh4#
+    expect((await mv(tech, "f2", "f3")).json).toMatchObject({ turn: "b", myTurn: false, lastMove: "f2f3" });
+    expect((await admin.get(`/api/breakroom/chess/${g.json.id}`)).json).toMatchObject({ myColor: "b", myTurn: true });
+    await mv(admin, "e7", "e5");
+    await mv(tech, "g2", "g4");
+    const mate = await mv(admin, "d8", "h4");
+    expect(mate.json).toMatchObject({ status: "done", result: "b", endedBy: "checkmate" });
+    expect((await tech.get(`/api/breakroom/chess/${g.json.id}`)).json).toMatchObject({ status: "done", result: "b", myColor: "w" });
 
-    // someone else cannot see or play it
+    // someone else cannot see or play a game
+    const g2 = (await tech.post("/api/breakroom/chess", { opponentId: adminRow.id })).json;
+    expect(g2.id).not.toBe(g.json.id);
     const tech2 = await signIn("tech2@akab.local");
-    expect((await tech2.get(`/api/breakroom/checkers/${g.json.id}`)).status).toBe(404);
-    expect((await tech2.post(`/api/breakroom/checkers/${g.json.id}/move`, { from: 42, to: 33 })).status).toBe(404);
-
-    // resigning ends it: the other one wins
-    const end = await admin.post(`/api/breakroom/checkers/${g.json.id}/resign`);
-    expect(end.json).toMatchObject({ status: "done", winner: "r", endedBy: "resign" });
-    expect((await tech.get(`/api/breakroom/checkers/${g.json.id}`)).json).toMatchObject({ status: "done", winner: "r", mySide: "r" });
+    expect((await tech2.get(`/api/breakroom/chess/${g2.id}`)).status).toBe(404);
+    expect((await tech2.post(`/api/breakroom/chess/${g2.id}/move`, { from: "e2", to: "e4" })).status).toBe(404);
+    // cancelling an invitation not answered yet
+    expect((await tech.post(`/api/breakroom/chess/${g2.id}/resign`)).json.status).toBe("declined");
 
     // clients have no coffee break
     const client = await signIn("responsable1@client.example");
     expect((await client.get("/api/breakroom/online")).status).toBe(403);
+  });
+
+  it("30 minutes a day: the time on screen counts (a minute at most between beats), then everything closes until tomorrow", async () => {
+    resetRateLimit("login:ip:unknown");
+    const tech = await signIn("tech@akab.local");
+    const [techRow] = await db().select().from(schema.users).where(eq(schema.users.email, "tech@akab.local"));
+    const day = new Intl.DateTimeFormat("en-CA", { timeZone: "America/Toronto" }).format(new Date());
+    await db().delete(schema.breakroomUsage).where(eq(schema.breakroomUsage.userId, techRow.id));
+    expect((await tech.get("/api/breakroom/status")).json).toEqual({ limitSeconds: 1800, usedSeconds: 0, remainingSeconds: 1800 });
+    // the first beat starts the clock; 40 s later, 40 s count
+    await tech.post("/api/breakroom/beat");
+    await db().update(schema.breakroomUsage).set({ lastBeatAt: new Date(Date.now() - 40_000) }).where(eq(schema.breakroomUsage.userId, techRow.id));
+    expect((await tech.post("/api/breakroom/beat")).json.usedSeconds).toBe(40);
+    // a long pause (page hidden or closed) does not count
+    await db().update(schema.breakroomUsage).set({ lastBeatAt: new Date(Date.now() - 10 * 60_000) }).where(eq(schema.breakroomUsage.userId, techRow.id));
+    expect((await tech.post("/api/breakroom/beat")).json.usedSeconds).toBe(40);
+    // the day's time used: everything but the status is closed
+    await db().update(schema.breakroomUsage).set({ usedSeconds: 1790, lastBeatAt: new Date(Date.now() - 30_000) }).where(eq(schema.breakroomUsage.userId, techRow.id));
+    expect((await tech.post("/api/breakroom/beat")).json).toMatchObject({ usedSeconds: 1800, remainingSeconds: 0 });
+    expect((await tech.get("/api/breakroom/online")).json.error).toBe("break_over");
+    expect((await tech.get("/api/breakroom/videos")).json.error).toBe("break_over");
+    expect((await tech.get("/api/breakroom/chess")).status).toBe(403);
+    expect((await tech.get("/api/breakroom/status")).json.remainingSeconds).toBe(0);
+    // tomorrow is another day
+    await db().update(schema.breakroomUsage).set({ day: "2000-01-01" }).where(eq(schema.breakroomUsage.userId, techRow.id));
+    expect((await tech.get("/api/breakroom/status")).json.remainingSeconds).toBe(1800);
+    expect(day).toMatch(/^\d{4}-\d{2}-\d{2}$/);
   });
 });
 

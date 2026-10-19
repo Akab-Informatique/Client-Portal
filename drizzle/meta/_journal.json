@@ -365,6 +365,20 @@
       "when": 1792420284456,
       "tag": "0051_checkers",
       "breakpoints": true
+    },
+    {
+      "idx": 52,
+      "version": "7",
+      "when": 1792421556596,
+      "tag": "0052_drop_checkers",
+      "breakpoints": true
+    },
+    {
+      "idx": 53,
+      "version": "7",
+      "when": 1792421557992,
+      "tag": "0053_chess_and_break_time",
+      "breakpoints": true
     }
   ]
 }

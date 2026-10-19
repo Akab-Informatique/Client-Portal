@@ -1076,13 +1076,13 @@ export const meetingAbsences = pgTable(
   (t) => [index("meeting_absences_dates_idx").on(t.startDate, t.endDate)],
 );
 
-/** Coffee break: a game of checkers between two team members (the board as 64 characters, see shared/checkers.ts) */
-export const checkersGames = pgTable(
-  "checkers_games",
+/** Coffee break: a game of chess between two team members (the position as FEN, the moves as PGN) */
+export const chessGames = pgTable(
+  "chess_games",
   {
     id: uuid("id").primaryKey().defaultRandom(),
-    /** Who invited (plays red, moves first) */
-    redId: uuid("red_id")
+    /** Who invited (plays white, moves first) */
+    whiteId: uuid("white_id")
       .notNull()
       .references(() => users.id, { onDelete: "cascade" }),
     blackId: uuid("black_id")
@@ -1090,18 +1090,33 @@ export const checkersGames = pgTable(
       .references(() => users.id, { onDelete: "cascade" }),
     /** invited | playing | done | declined */
     status: text("status").notNull().default("invited"),
-    board: text("board").notNull(),
-    turn: text("turn").notNull().default("r"),
-    /** A capture in progress: the square of the piece that goes on */
-    mustFrom: integer("must_from"),
-    /** r | b, once done */
-    winner: text("winner"),
-    /** win | resign */
+    fen: text("fen").notNull(),
+    pgn: text("pgn").notNull().default(""),
+    /** The last move, "e2e4" (shown on the board) */
+    lastMove: text("last_move"),
+    /** w | b | draw, once done */
+    result: text("result"),
+    /** checkmate | stalemate | draw | resign */
     endedBy: text("ended_by"),
     createdAt: created(),
     updatedAt: updated(),
   },
-  (t) => [index("checkers_games_players_idx").on(t.redId, t.blackId)],
+  (t) => [index("chess_games_players_idx").on(t.whiteId, t.blackId)],
+);
+
+/** Coffee break time used per person and day (Québec), 30 minutes at most */
+export const breakroomUsage = pgTable(
+  "breakroom_usage",
+  {
+    userId: uuid("user_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    /** YYYY-MM-DD in Québec */
+    day: text("day").notNull(),
+    usedSeconds: integer("used_seconds").notNull().default(0),
+    lastBeatAt: timestamp("last_beat_at", { withTimezone: true }),
+  },
+  (t) => [primaryKey({ columns: [t.userId, t.day] })],
 );
 
 /** Weekly meeting: something on the team week (a team lunch, a client visit, a deadline…) */
