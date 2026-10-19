@@ -2264,8 +2264,7 @@ const en: Dict = {
     ai: {
       perFeature: "Model per feature",
       perFeatureHint: "Each part of the portal that uses AI can have its own model: Haiku for simple tasks (fast, very economical), Opus for the deepest analysis.",
-      fixed: "{{model}} (always, the cheapest)",
-      fixedHint: "Text correction always uses Haiku, the cheapest model.",
+      featureDefault: "Default: {{model}} (the cheapest)",
       generalModel: "General model ({{model}})",
       price: "${{input}} / ${{output}} per million tokens",
       allowChoice: "Technicians may pick another model",

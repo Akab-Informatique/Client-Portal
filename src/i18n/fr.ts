@@ -2262,8 +2262,7 @@ const fr = {
     ai: {
       perFeature: "Modèle par fonction",
       perFeatureHint: "Chaque partie du portail qui utilise l'IA peut avoir son propre modèle : Haiku pour les tâches simples (rapide, très économique), Opus pour l'analyse la plus poussée.",
-      fixed: "{{model}} (toujours, le moins cher)",
-      fixedHint: "La correction des textes utilise toujours Haiku, le modèle le moins cher.",
+      featureDefault: "Par défaut : {{model}} (le moins cher)",
       generalModel: "Modèle général ({{model}})",
       price: "{{input}} $ / {{output}} $ par million de jetons",
       allowChoice: "Les techniciens peuvent choisir un autre modèle",

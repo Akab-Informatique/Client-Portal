@@ -1379,8 +1379,8 @@ describe("tickets: inline edit, notes, team filter and AI", () => {
     const tech = await session("tech@akab.local");
     expect((await tech.post("/api/tickets/ai/polish", { text: "bonjour" })).status).toBe(403);
     expect((await admin.post("/api/tickets/ai/polish", { text: "bonjour" })).json.error).toBe("ai_disabled");
-    // another model picked for it, or general: the correction always uses Haiku (the cheapest)
-    await admin.put("/api/admin/integrations/ai", { apiKey: "sk-ant-test-secret", enabled: true, model: "claude-opus-5-5", featureModels: { "text.polish": "claude-sonnet-5-5" } });
+    // whatever the general model, the correction uses Haiku (the cheapest) until an admin picks another one for it
+    await admin.put("/api/admin/integrations/ai", { apiKey: "sk-ant-test-secret", enabled: true, model: "claude-opus-5-5", featureModels: {} });
     const sent: any[] = [];
     let reply = "Bonjour, l'imprimante est réparée.";
     vi.stubGlobal(
@@ -1401,7 +1401,14 @@ describe("tickets: inline edit, notes, team filter and AI", () => {
       expect(sent.at(-1).model).toBe("claude-haiku-5-5");
       expect(sent.at(-1).system).toContain("français");
       sent.splice(1);
-      expect((await admin.get("/api/admin/integrations/ai")).json.features.find((x: any) => x.key === "text.polish")).toMatchObject({ fixed: "claude-haiku-5-5" });
+      expect((await admin.get("/api/admin/integrations/ai")).json.features.find((x: any) => x.key === "text.polish")).toMatchObject({ default: "claude-haiku-5-5", model: null });
+      // an admin may change it (Admin › AI); a model asked with the request still does not
+      await admin.put("/api/admin/integrations/ai", { featureModels: { "text.polish": "claude-sonnet-5-5" } });
+      await admin.post("/api/tickets/ai/polish", { text: "salut", model: "claude-opus-5-5" });
+      expect(sent.at(-1).model).toBe("claude-sonnet-5-5");
+      sent.splice(1);
+      // and only an admin
+      expect((await tech.put("/api/admin/integrations/ai", { featureModels: { "text.polish": "claude-opus-5-5" } })).status).toBe(403);
       expect(sent[0].messages[0].content).toContain("limprimante");
       await admin.post("/api/tickets/ai/polish", { text: "hello", lang: "en" });
       expect(sent[1].system).toContain("anglais");

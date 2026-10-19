@@ -93,12 +93,15 @@ export async function aiSettings(): Promise<AiSettings> {
 }
 
 /** The model of a part of the portal: the one asked for (when allowed), else its own, else the general one. */
-/** Parts that always use one model, whatever the settings (the text correction: the cheapest) */
-export const FIXED_FEATURE_MODELS: Partial<Record<AiFeature, AiModel>> = { "text.polish": "claude-haiku-5-5" };
+/**
+ * Parts with their own default model (the text correction: Haiku, the cheapest).
+ * Only an admin changes it (Admin › AI, per part); no model is picked per request.
+ */
+export const DEFAULT_FEATURE_MODELS: Partial<Record<AiFeature, AiModel>> = { "text.polish": "claude-haiku-5-5" };
 
 export function modelFor(s: AiSettings, feature: AiFeature, asked?: AiModel | null): AiModel {
-  const fixed = FIXED_FEATURE_MODELS[feature];
-  if (fixed) return fixed;
+  const own = DEFAULT_FEATURE_MODELS[feature];
+  if (own) return s.featureModels[feature] ?? own;
   if (asked && s.allowChoice && AI_MODELS.includes(asked)) return asked;
   return s.featureModels[feature] ?? s.model;
 }

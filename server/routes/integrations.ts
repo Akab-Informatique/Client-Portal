@@ -24,7 +24,7 @@ import { O365Error, o365Settings, saveO365Settings, testO365 } from "../lib/o365
 import { normalizePhone, saveSmsSettings, sendSms, SmsError, smsSettings, testVoipms, type SmsSettings } from "../lib/voipms.ts";
 import { config } from "../config.ts";
 import { microsoftRedirectUri } from "./microsoft.ts";
-import { AI_FEATURE_KEYS, FIXED_FEATURE_MODELS, AI_MODELS, AI_PRICES, AiError, aiSettings, askClaude, saveAiSettings, startOfToday, type AiErrorCode, type AiSettings } from "../lib/ai.ts";
+import { AI_FEATURE_KEYS, DEFAULT_FEATURE_MODELS, AI_MODELS, AI_PRICES, AiError, aiSettings, askClaude, saveAiSettings, startOfToday, type AiErrorCode, type AiSettings } from "../lib/ai.ts";
 
 const zCred = z.string().trim().min(1).max(300);
 
@@ -60,7 +60,7 @@ const aiView = (s: AiSettings) => ({
   hasKey: Boolean(s.apiKey),
   lastTest: s.lastTest ?? null,
   /** Per part: its own model, or null (the general one) */
-  features: AI_FEATURE_KEYS.map((k) => ({ key: k, model: s.featureModels[k] ?? null, fixed: FIXED_FEATURE_MODELS[k] ?? null })),
+  features: AI_FEATURE_KEYS.map((k) => ({ key: k, model: s.featureModels[k] ?? null, default: DEFAULT_FEATURE_MODELS[k] ?? null })),
   allowChoice: s.allowChoice,
   dailyLimitUsd: s.dailyLimitUsd,
   prices: AI_PRICES,
