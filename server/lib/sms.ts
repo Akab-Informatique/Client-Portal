@@ -67,6 +67,15 @@ async function tellTechnicians(conv: Conversation, body: string) {
   });
 }
 
+/** Texts received are handled one at a time, in the order they came (two at once never open two conversations). */
+let received: Promise<void> = Promise.resolve();
+export function queueReceived(p: { from: string; message: string; id?: string | null }): Promise<void> {
+  received = received.then(() => receiveSms(p)).catch((e) => console.error("[sms] callback:", e));
+  return received;
+}
+/** For tests: once every text received so far is handled */
+export const receivedSettled = () => received;
+
 /** A text received (VoIP.ms callback). */
 export async function receiveSms(p: { from: string; message: string; id?: string | null }): Promise<void> {
   const phone = normalizePhone(p.from);

@@ -7,7 +7,7 @@ import { auth, requirePermission, requireStaff, type AppEnv } from "../lib/auth.
 import { audit } from "../lib/audit.ts";
 import { clientIp, rateLimit } from "../lib/http.ts";
 import { body, zUuid } from "../lib/validate.ts";
-import { conversationForTicket, openTicket, receiveSms, replyAsTechnician, SmsTicketError } from "../lib/sms.ts";
+import { conversationForTicket, openTicket, queueReceived, replyAsTechnician, SmsTicketError } from "../lib/sms.ts";
 import { normalizePhone, SmsError, smsReady, SMS_MAX, tokenMatches } from "../lib/voipms.ts";
 import { AutotaskError } from "../lib/autotask.ts";
 import { SourceError, ticketSource } from "../lib/ticketSource.ts";
@@ -24,11 +24,9 @@ export const smsHookRoutes = new Hono<AppEnv>().get("/voipms", async (c) => {
     console.warn("[sms] callback refused (bad token)");
     return c.text("ok");
   }
-  try {
-    await receiveSms({ from: q.from ?? "", message: q.message ?? "", id: q.id || null });
-  } catch (e) {
-    console.error("[sms] callback:", e);
-  }
+  // answered at once: VoIP.ms waits for this answer, and a text sent to it
+  // meanwhile (the automatic reply) would time out. The text is handled just after.
+  void queueReceived({ from: q.from ?? "", message: q.message ?? "", id: q.id || null });
   return c.text("ok");
 });
 

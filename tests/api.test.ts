@@ -2571,7 +2571,13 @@ describe("text messages (VoIP.ms)", () => {
     await saveSmsSettings(null, { lastTest: { ok: false, at: new Date().toISOString(), error: "api" } });
     await sendSms("5145559999", "test");
     expect((await admin.get("/api/admin/integrations/voipms")).json.lastTest).toMatchObject({ ok: true });
-    const hook = (q: Record<string, string>) => admin.get(`/api/sms/hook/voipms?${new URLSearchParams(q)}`);
+    const { receivedSettled } = await import("../server/lib/sms.ts");
+    // the callback answers at once; the text is handled just after
+    const hook = async (q: Record<string, string>) => {
+      const r = await admin.get(`/api/sms/hook/voipms?${new URLSearchParams(q)}`);
+      await receivedSettled();
+      return r;
+    };
     // texts of a ticket are copied as internal notes (Autotask)
     const { ticketSource } = await import("../server/lib/ticketSource.ts");
     const notes = vi.spyOn(await ticketSource(), "addSmsNote");
