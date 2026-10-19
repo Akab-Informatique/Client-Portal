@@ -130,7 +130,6 @@ function fromLists(qc: QueryClient, id: number): TicketDetail | undefined {
 }
 
 export function TicketOverlay({ id, onClose, onMinimize }: { id: number | null; onClose: () => void; onMinimize: (tk: TicketDetail) => void }) {
-  const leaveRef = useRef<((go: () => void) => void) | null>(null);
   const { t } = useTranslation();
   const qc = useQueryClient();
   const { data, isLoading, isPlaceholderData, isError, error, refetch, isFetching } = useQuery({
@@ -146,7 +145,7 @@ export function TicketOverlay({ id, onClose, onMinimize }: { id: number | null; 
   const viewers = usePresence(id);
 
   return (
-    <DialogPrimitive.Root open={Boolean(id)} onOpenChange={(o) => !o && (leaveRef.current ? leaveRef.current(onClose) : onClose())}>
+    <DialogPrimitive.Root open={Boolean(id)} onOpenChange={(o) => !o && onClose()}>
       <AnimatePresence>
         {id && (
           <DialogPrimitive.Portal forceMount>
@@ -188,7 +187,6 @@ export function TicketOverlay({ id, onClose, onMinimize }: { id: number | null; 
                     viewers={viewers}
                     onClose={onClose}
                     onMinimize={() => onMinimize(shown)}
-                    leaveRef={leaveRef}
                   />
                 )}
               </motion.div>
@@ -235,7 +233,6 @@ function TicketBody({
   viewers,
   onClose,
   onMinimize,
-  leaveRef,
 }: {
   tk: TicketDetail;
   /** Shown from the list while the full ticket (description, notes, time) loads */
@@ -245,8 +242,6 @@ function TicketBody({
   viewers: Viewer[] | null;
   onClose: () => void;
   onMinimize: () => void;
-  /** Escape or a click outside: the overlay asks here first (changes not saved) */
-  leaveRef?: React.MutableRefObject<((go: () => void) => void) | null>;
 }) {
   const { t } = useTranslation();
   const txt = useChoiceText();
@@ -256,7 +251,7 @@ function TicketBody({
   const update = useTicketUpdate(tk);
   const qc = useQueryClient();
   const { data: companies = [tk.company] } = useCompanies();
-  // Changes made in place wait here (shown as "modified") until ✓ saves them all, or ✗ drops them
+  // A change made in place shows at once and is saved right away
   const [staged, setStaged] = useState<Staged>({});
   useEffect(() => setStaged({}), [tk.id]);
   const original: Required<Staged> = {
@@ -269,20 +264,20 @@ function TicketBody({
     startTime: tk.startTime ?? null,
     startLocked: Boolean(tk.startLocked),
   };
-  const stage = (p: Staged) =>
-    setStaged((s) => {
-      const next: Staged = { ...s, ...p };
-      // no day, no time nor restriction
-      if (p.startDate === null) Object.assign(next, { startTime: null, startLocked: false });
-      for (const k of Object.keys(next) as (keyof Staged)[]) if (next[k] === original[k]) delete next[k];
-      return next;
-    });
+  const stage = (p: Staged) => {
+    const next: Staged = { ...p };
+    // no day, no time nor restriction
+    if (p.startDate === null) Object.assign(next, { startTime: null, startLocked: false });
+    for (const k of Object.keys(next) as (keyof Staged)[]) if (next[k] === original[k]) delete next[k];
+    if (!Object.keys(next).length) return;
+    setStaged((s) => ({ ...s, ...next }));
+    saveAll.mutate(next);
+  };
   const view = { ...original, ...staged };
   const changed = (k: keyof Staged) => k in staged;
-  const pending = Object.keys(staged).length;
   const saveAll = useMutation({
-    mutationFn: async () => {
-      const { startDate, startTime, startLocked, ...patch } = staged;
+    mutationFn: async (changes: Staged) => {
+      const { startDate, startTime, startLocked, ...patch } = changes;
       let next: TicketDetail | null = null;
       if (Object.keys(patch).length) next = await api.patch<TicketDetail>(`/tickets/${tk.id}`, patch);
       const start = { startDate, startTime, startLocked };
@@ -295,18 +290,11 @@ function TicketBody({
       setStaged({});
       toast.success(t("common.saved"));
     },
-    onError: (e) => toast.error(ticketErrorText(t, e)),
-  });
-  /** Leaving with changes not saved: asked first */
-  const leave = (go: () => void) =>
-    pending ? void confirm({ title: t("tickets.pendingDiscard", { count: pending }), destructive: true }).then((ok) => ok && go()) : go();
-  if (leaveRef) leaveRef.current = leave;
-  useEffect(
-    () => () => {
-      if (leaveRef) leaveRef.current = null;
+    onError: (e) => {
+      setStaged({});
+      toast.error(ticketErrorText(t, e));
     },
-    [leaveRef],
-  );
+  });
   const statusOpt = tk.options.statuses.find((s) => s.value === view.status);
   const statusKind = statusOpt?.kind ?? tk.statusKind;
   const statusText = statusOpt ? txt.status(statusOpt) : txt.status({ label: tk.statusLabel, kind: tk.statusKind });
@@ -352,13 +340,6 @@ function TicketBody({
 
   return (
     <>
-      {pending > 0 && (
-        <div className="pointer-events-none fixed inset-x-0 bottom-6 z-50 flex justify-center">
-          <div className="pointer-events-auto">
-            <PendingBar count={pending} saving={saveAll.isPending} onSave={() => saveAll.mutate()} onCancel={() => setStaged({})} floating />
-          </div>
-        </div>
-      )}
       {/* Header: what the ticket is, where it stands, and the tools */}
       <div className="glass relative z-10 rounded-none border-x-0 border-t-0 border-b">
         <div className="w-full px-4 pb-3 pt-3 lg:px-6">
@@ -378,13 +359,13 @@ function TicketBody({
               (tk.ai ? <AiMenu tk={tk} onReply={(text) => setDraft({ text, internal: false })} /> : <AiSetupHint label={t("tickets.ai.button")} />)}
             <Tooltip>
               <TooltipTrigger asChild>
-                <Button variant="outline" size="icon" className="size-9" onClick={() => leave(onMinimize)} aria-label={t("tickets.minimize")}>
+                <Button variant="outline" size="icon" className="size-9" onClick={onMinimize} aria-label={t("tickets.minimize")}>
                   <Minus className="size-4" />
                 </Button>
               </TooltipTrigger>
               <TooltipContent>{t("tickets.minimizeHint")}</TooltipContent>
             </Tooltip>
-            <Button variant="outline" size="icon" className="size-9" onClick={() => leave(onClose)} aria-label={t("common.close")}>
+            <Button variant="outline" size="icon" className="size-9" onClick={onClose} aria-label={t("common.close")}>
               <X className="size-4" />
             </Button>
           </div>
@@ -397,13 +378,7 @@ function TicketBody({
               options={tk.options.statuses.map((s) => ({ value: s.value, label: txt.status(s) }))}
               onPick={(v) => stage({ status: v })}
               trigger={
-                <span
-                  className={cn(
-                    "inline-flex items-center gap-1.5 rounded-full border px-2.5 py-0.5 text-xs font-medium",
-                    STATUS_STYLE[statusKind],
-                    changed("status") && MODIFIED,
-                  )}
-                >
+                <span className={cn("inline-flex items-center gap-1.5 rounded-full border px-2.5 py-0.5 text-xs font-medium", STATUS_STYLE[statusKind])}>
                   {statusText}
                 </span>
               }
@@ -416,11 +391,7 @@ function TicketBody({
               onPick={(v) => stage({ priority: v })}
               trigger={
                 <span
-                  className={cn(
-                    "inline-flex items-center gap-1.5 rounded-full border px-2.5 py-0.5 text-xs font-medium",
-                    PRIORITY_STYLE[priorityKind].text,
-                    changed("priority") && MODIFIED,
-                  )}
+                  className={cn("inline-flex items-center gap-1.5 rounded-full border px-2.5 py-0.5 text-xs font-medium", PRIORITY_STYLE[priorityKind].text)}
                 >
                   <span className={cn("size-2 rounded-full", PRIORITY_STYLE[priorityKind].dot)} /> {priorityText}
                 </span>
@@ -432,12 +403,9 @@ function TicketBody({
               value={view.queue}
               options={tk.options.queues.map((q) => ({ value: q.value, label: q.label ?? q.value }))}
               onPick={(v) => stage({ queue: v })}
-              trigger={
-                <span className={cn("rounded-full border px-2.5 py-0.5 text-xs text-muted-foreground", changed("queue") && MODIFIED)}>{queueText || "—"}</span>
-              }
+              trigger={<span className={cn("rounded-full border px-2.5 py-0.5 text-xs text-muted-foreground")}>{queueText || "—"}</span>}
             />
             {(update.isPending || saveAll.isPending) && <Loader2 className="size-4 animate-spin text-muted-foreground" />}
-            {pending > 0 && <PendingBar count={pending} saving={saveAll.isPending} onSave={() => saveAll.mutate()} onCancel={() => setStaged({})} />}
             {(() => {
               const badge = (
                 <span
@@ -449,7 +417,6 @@ function TicketBody({
                         ? "border-orange-500/50 text-orange-400"
                         : "text-muted-foreground",
                     editable && "cursor-pointer hover:border-[color:var(--gold)]/60",
-                    changed("dueAt") && MODIFIED,
                   )}
                   title={editable ? t("tickets.due.change") : longDateTime(view.dueAt)}
                 >
@@ -665,10 +632,10 @@ function TicketBody({
           )}
           <Section id="planning" icon={CalendarClock} title={t("tickets.sections.planning")}>
             <dl className="space-y-3">
-              <StartDate tk={tk} value={view} changed={changed} onChange={stage} />
+              <StartDate tk={tk} value={view} onChange={stage} />
               <Detail icon={CalendarClock} label={t("tickets.fields.due")}>
                 {editable ? (
-                  <div className={cn("mt-0.5 rounded-lg", changed("dueAt") && MODIFIED_BOX)}>
+                  <div className={cn("mt-0.5 rounded-lg")}>
                     <DueEditor dueAt={view.dueAt} onSave={(dueAt) => stage({ dueAt })} />
                   </div>
                 ) : (
@@ -691,9 +658,7 @@ function TicketBody({
                   options={[{ value: "none", label: t("tickets.unassigned") }, ...tk.options.technicians.map((p) => ({ value: p.id, label: p.name }))]}
                   onPick={(v) => stage({ assigneeId: v === "none" ? null : v })}
                   trigger={
-                    <span className={cn("rounded px-1", !assigneeName && "italic text-muted-foreground", changed("assigneeId") && MODIFIED)}>
-                      {assigneeName ?? t("tickets.unassigned")}
-                    </span>
+                    <span className={cn("rounded px-1", !assigneeName && "italic text-muted-foreground")}>{assigneeName ?? t("tickets.unassigned")}</span>
                   }
                 />
               </Detail>
@@ -1269,12 +1234,10 @@ const todayLocal = () => {
 function StartDate({
   tk,
   value,
-  changed,
   onChange,
 }: {
   tk: TicketDetail;
   value: { startDate: string | null; startTime: string | null; startLocked: boolean };
-  changed: (k: "startDate" | "startTime" | "startLocked") => boolean;
   onChange: (p: { startDate?: string | null; startTime?: string | null; startLocked?: boolean }) => void;
 }) {
   const { t } = useTranslation();
@@ -1297,7 +1260,7 @@ function StartDate({
           <Input
             id="start-date"
             type="date"
-            className={cn("mt-0.5 h-8", changed("startDate") && MODIFIED_BOX)}
+            className={cn("mt-0.5 h-8")}
             disabled={off}
             value={value.startDate ?? ""}
             onChange={(e) => onChange({ startDate: e.target.value || null })}
@@ -1305,12 +1268,11 @@ function StartDate({
           <StartTimeInput
             tk={{ ...tk, startDate: value.startDate, startTime: value.startTime }}
             disabled={off}
-            className={cn(changed("startTime") && MODIFIED_BOX)}
             onSave={(startTime) => onChange({ startTime })}
           />
           {/* Restriction: nobody works on it before that day (off by default) */}
           <label
-            className={cn("mt-1.5 flex w-fit items-center gap-2 rounded-md px-1 text-xs", !value.startDate && "opacity-60", changed("startLocked") && MODIFIED)}
+            className={cn("mt-1.5 flex w-fit items-center gap-2 rounded-md px-1 text-xs", !value.startDate && "opacity-60")}
             title={t("tickets.startLock.hint")}
           >
             <Switch
@@ -1340,11 +1302,11 @@ type Staged = {
   startLocked?: boolean;
 };
 /** A field changed but not saved yet */
-const MODIFIED = "ring-2 ring-[color:var(--gold)]/80 ring-offset-1 ring-offset-background";
-const MODIFIED_BOX = "border-[color:var(--gold)] ring-1 ring-[color:var(--gold)]/50";
+export const MODIFIED = "ring-2 ring-[color:var(--gold)]/80 ring-offset-1 ring-offset-background";
+export const MODIFIED_BOX = "border-[color:var(--gold)] ring-1 ring-[color:var(--gold)]/50";
 
 /** "3 changements" with ✓ (save them all) and ✗ (drop them) */
-function PendingBar({
+export function PendingBar({
   count,
   saving,
   onSave,
