@@ -195,7 +195,8 @@ export function useTicketTimerAuto() {
 }
 
 /** In the ticket window header: ▶ / ⏸, h:mm:ss, ■ Terminer. */
-export function TimerControl({ ticketId }: { ticketId: number }) {
+/** compact: the small, discreet copy beside the note box (same timer as the header) */
+export function TimerControl({ ticketId, compact }: { ticketId: number; compact?: boolean }) {
   const { t } = useTranslation();
   const can = useCan();
   const { at, list } = useTimers();
@@ -205,6 +206,7 @@ export function TimerControl({ ticketId }: { ticketId: number }) {
   const ui = useTimerUi();
   if (!can("tickets.edit")) return null;
 
+  if (compact) return <CompactTimer ticketId={ticketId} />;
   if (!timer) {
     return (
       <Button variant="outline" size="sm" className="h-9 gap-1.5" disabled={act.isPending} onClick={() => act.mutate({ ticketId, action: "start" })}>
@@ -246,6 +248,44 @@ export function TimerControl({ ticketId }: { ticketId: number }) {
         <CornerDownLeft className="size-3.5" />
       </TimerButton>
     </div>
+  );
+}
+
+/** Beside the note box: h:mm:ss in small, ⏸ / ▶ and ↵ (enter the time) on hover-sized buttons */
+function CompactTimer({ ticketId }: { ticketId: number }) {
+  const { t } = useTranslation();
+  const { at, list } = useTimers();
+  const timer = list.find((x) => x.ticketId === ticketId);
+  const now = useNow(timer?.state === "running");
+  const act = useTimerAction();
+  if (!timer || timer.state === "pending") return null;
+  const run = timer.state === "running";
+  const small = "flex size-5 items-center justify-center rounded-full text-muted-foreground transition hover:bg-accent hover:text-foreground disabled:opacity-50";
+  return (
+    <span className="flex items-center gap-0.5 text-[11px] text-muted-foreground" aria-label={t("tickets.timer.label")}>
+      <span className={cn("size-1.5 rounded-full", run ? "bg-[color:var(--gold)]" : "bg-muted-foreground/60")} />
+      <span className={cn("ml-1 font-mono tabular-nums", run && "text-primary/80")}>{clock(liveMs(timer, at, now))}</span>
+      <button
+        type="button"
+        className={small}
+        disabled={act.isPending}
+        onClick={() => act.mutate({ ticketId, action: run ? "pause" : "start" })}
+        aria-label={run ? t("tickets.timer.pause") : t("tickets.timer.resume")}
+        title={run ? t("tickets.timer.pause") : t("tickets.timer.resume")}
+      >
+        {run ? <Pause className="size-2.5 fill-current" /> : <Play className="size-2.5 fill-current" />}
+      </button>
+      <button
+        type="button"
+        className={small}
+        disabled={act.isPending}
+        onClick={() => act.mutate({ ticketId, action: "stop" })}
+        aria-label={t("tickets.timer.enter")}
+        title={t("tickets.timer.enter")}
+      >
+        <CornerDownLeft className="size-3" />
+      </button>
+    </span>
   );
 }
 

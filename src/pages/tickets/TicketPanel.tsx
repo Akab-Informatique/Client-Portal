@@ -354,6 +354,7 @@ function TicketBody({
             <span className="ml-auto">
               <PresenceLight viewers={viewers} />
             </span>
+            <TimerControl ticketId={tk.id} />
             {can("tickets.ai") &&
               (tk.ai ? <AiMenu tk={tk} onReply={(text) => setDraft({ text, internal: false })} /> : <AiSetupHint label={t("tickets.ai.button")} />)}
             <Tooltip>
@@ -551,7 +552,7 @@ function TicketBody({
             )}
             {thread === "sms" && can("sms.view") ? <TicketSmsPanel ticketId={tk.id} phone={phone} /> : <Activity tk={tk} partial={partial && !loadError} />}
           </div>
-          {/* Charges and expenses, texts and the timer: right above the note box */}
+          {/* Charges and expenses: small buttons right above the note box */}
           <div className="flex flex-wrap items-center gap-1.5 pb-2 lg:pr-2">
             <ChargeButtons tk={tk} editable={editable} partial={partial} />
             {can("sms.view") && (
@@ -566,9 +567,6 @@ function TicketBody({
                 {(texts?.messages.length ?? 0) > 0 && <span className="font-mono text-[10px] opacity-70">{texts!.messages.length}</span>}
               </Button>
             )}
-            <span className="ml-auto">
-              <TimerControl ticketId={tk.id} />
-            </span>
           </div>
           {editable && thread !== "sms" && (
             <div className="sticky bottom-0 z-10 -mx-2 bg-gradient-to-t from-background via-background/95 to-transparent px-2 pb-4 pt-1 lg:static lg:mx-0 lg:bg-none lg:px-0 lg:pr-2">
@@ -1421,7 +1419,8 @@ function NoteComposer({
   });
   return (
     <div className={cn("glass rounded-2xl border p-3 transition-colors", internal && "border-violet-500/30")}>
-      <div className="mb-2 inline-flex rounded-lg border p-0.5 text-xs">
+      <div className="mb-2 flex items-center gap-2">
+      <div className="inline-flex rounded-lg border p-0.5 text-xs">
         {[false, true].map((v) => (
           <button
             key={String(v)}
@@ -1435,6 +1434,9 @@ function NoteComposer({
             {v ? t("tickets.noteInternal") : t("tickets.noteReply")}
           </button>
         ))}
+      </div>
+        {/* the same timer, small, where the work is written */}
+        <TimerControl ticketId={tk.id} compact />
       </div>
       <AiTextarea
         ref={ref}

@@ -2577,6 +2577,7 @@ const fr = {
     },
     editTitle: "Modifier le titre",
     timer: {
+      label: "Minuterie du billet",
       enter: "Saisir le temps",
       notifyContact: "Envoyer la description à {{who}} ({{email}})",
       notifyNoContact: "Envoyer la description au contact : aucun courriel au dossier",

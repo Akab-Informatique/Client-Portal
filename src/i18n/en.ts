@@ -2579,6 +2579,7 @@ const en: Dict = {
     },
     editTitle: "Edit title",
     timer: {
+      label: "Ticket timer",
       enter: "Enter the time",
       notifyContact: "Send the description to {{who}} ({{email}})",
       notifyNoContact: "Send the description to the contact: no email on file",
