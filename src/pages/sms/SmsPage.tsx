@@ -336,7 +336,7 @@ function ThreadView({ id, onBack, onTicket }: { id: string; onBack: () => void; 
                     <TooltipTrigger asChild>
                       <AlertTriangle className="size-3 text-destructive" />
                     </TooltipTrigger>
-                    <TooltipContent>{t("sms.failed", { error: m.error ?? "" })}</TooltipContent>
+                    <TooltipContent>{t("sms.failed", { error: smsFailureText(t, m.error) })}</TooltipContent>
                   </Tooltip>
                 )}
               </p>
@@ -375,9 +375,23 @@ function ThreadView({ id, onBack, onTicket }: { id: string; onBack: () => void; 
   );
 }
 
+/** What VoIP.ms answered, in words (its status codes: ip_not_enabled, invalid_did…) */
+const voipmsText = (t: (k: string, o?: Record<string, unknown>) => string, status: string) =>
+  t(`sms.voipms.${status}`, { defaultValue: "" }) || `${t("sms.errors.sms_api")} (${status})`;
+
+/** A failed text's stored reason ("disabled", "api: ip_not_enabled", "network: TimeoutError") in words */
+export function smsFailureText(t: (k: string, o?: Record<string, unknown>) => string, raw: string | null | undefined): string {
+  if (!raw) return t("sms.errors.sms_api");
+  const [code, ...rest] = raw.split(":");
+  const detail = rest.join(":").trim();
+  if (code === "api" && detail) return voipmsText(t, detail);
+  return t(`sms.errors.sms_${code}`, { defaultValue: raw }) + (detail && code !== "api" ? ` (${detail})` : "");
+}
+
 export function smsErrorText(t: (k: string, o?: Record<string, unknown>) => string, e: unknown): string {
   if (e instanceof ApiError) {
     const detail = e.fields?.find((f) => f.path === "sms" || f.path === "autotask")?.message;
+    if (e.code === "sms_api" && detail) return voipmsText(t, detail);
     return t(`sms.errors.${e.code}`, { defaultValue: t("common.error") }) + (detail ? ` (${detail})` : "");
   }
   return t("common.error");
@@ -397,6 +411,7 @@ export function TicketSmsPanel({ ticketId, phone }: { ticketId: number; phone: s
   const { t } = useTranslation();
   const qc = useQueryClient();
   const { data, isLoading } = useTicketSms(ticketId, true);
+  const { data: summary } = useSmsSummary();
   const known = data?.conversations[0]?.phone ?? null;
   const [to, setTo] = useState(known ?? phone ?? "");
   useEffect(() => {
@@ -437,6 +452,7 @@ export function TicketSmsPanel({ ticketId, phone }: { ticketId: number; phone: s
                 <span>· {time(m.createdAt)}</span>
                 {m.status === "failed" && <AlertTriangle className="size-3 text-destructive" />}
               </p>
+              {m.status === "failed" && <p className="mt-1 text-[11px] not-italic text-destructive">{t("sms.failed", { error: smsFailureText(t, m.error) })}</p>}
             </div>
           </div>
         ))}
@@ -449,6 +465,11 @@ export function TicketSmsPanel({ ticketId, phone }: { ticketId: number; phone: s
           if (to && text.trim()) send.mutate();
         }}
       >
+        {summary && !summary.ready && (
+          <p className="flex items-start gap-1.5 rounded-lg border border-orange-500/40 bg-orange-500/10 px-2.5 py-1.5 text-[11px] text-orange-200">
+            <AlertTriangle className="mt-0.5 size-3.5 shrink-0" /> {t("sms.cannotSend")}
+          </p>
+        )}
         <div className="flex items-center gap-2">
           <span className="text-xs text-muted-foreground">{t("sms.to")}</span>
           <Input type="tel" value={to} onChange={(e) => setTo(e.target.value)} placeholder={t("sms.toNumber")} className="h-8 max-w-48 font-mono text-xs" />

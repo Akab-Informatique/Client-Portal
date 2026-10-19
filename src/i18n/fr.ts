@@ -1731,6 +1731,19 @@ const fr = {
     o365Off: "Calendrier Outlook non synchronisé. Un administrateur peut l'activer pour vous.",
   },
   sms: {
+    cannotSend: "Envoi des textos impossible : la réception fonctionne, mais l'envoi demande VoIP.ms activé avec le courriel du compte, le mot de passe API et le numéro (DID) dans Admin › Intégrations › VoIP.ms (SMS).",
+    voipms: {
+      ip_not_enabled: "VoIP.ms refuse l'adresse IP du serveur : ajoutez-la dans VoIP.ms › Main menu › SOAP and REST/JSON API › Enable IP Addresses.",
+      api_not_enabled: "L'API de VoIP.ms n'est pas activée (VoIP.ms › Main menu › SOAP and REST/JSON API › Enable API).",
+      invalid_credentials: "VoIP.ms refuse l'identification : vérifiez le courriel du compte et le mot de passe API (pas celui du site).",
+      missing_credentials: "VoIP.ms refuse l'identification : courriel ou mot de passe API manquant.",
+      invalid_did: "Le numéro VoIP.ms (DID) est invalide ou n'a pas les textos activés (VoIP.ms › DID Numbers › Manage DIDs › SMS/MMS).",
+      sms_failed: "VoIP.ms n'a pas pu livrer le texto (numéro du client sans textos, ou textos non activés sur notre DID).",
+      invalid_dst: "VoIP.ms refuse le numéro du client.",
+      limit_reached: "Limite de textos VoIP.ms atteinte pour aujourd'hui.",
+      sms_toolong: "Message trop long pour VoIP.ms.",
+      no_balance: "Solde VoIP.ms insuffisant.",
+    },
     tileOff: "Non configurés · Admin › Intégrations",
     inAutotask: "Chaque texto (reçu, envoyé, automatique) est aussi copié en note interne dans le billet Autotask.",
     scope: {

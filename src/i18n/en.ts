@@ -1733,6 +1733,19 @@ const en: Dict = {
     o365Off: "Outlook calendar not synced. An administrator can turn it on for you.",
   },
   sms: {
+    cannotSend: "Texts cannot be sent: receiving works, but sending needs VoIP.ms turned on with the account email, the API password and the number (DID) in Admin › Integrations › VoIP.ms (SMS).",
+    voipms: {
+      ip_not_enabled: "VoIP.ms refuses the server's IP address: add it in VoIP.ms › Main menu › SOAP and REST/JSON API › Enable IP Addresses.",
+      api_not_enabled: "The VoIP.ms API is not enabled (VoIP.ms › Main menu › SOAP and REST/JSON API › Enable API).",
+      invalid_credentials: "VoIP.ms refuses the sign-in: check the account email and the API password (not the website one).",
+      missing_credentials: "VoIP.ms refuses the sign-in: email or API password missing.",
+      invalid_did: "The VoIP.ms number (DID) is invalid or does not have texts turned on (VoIP.ms › DID Numbers › Manage DIDs › SMS/MMS).",
+      sms_failed: "VoIP.ms could not deliver the text (client number without texts, or texts not turned on for our DID).",
+      invalid_dst: "VoIP.ms refuses the client's number.",
+      limit_reached: "VoIP.ms text limit reached for today.",
+      sms_toolong: "Message too long for VoIP.ms.",
+      no_balance: "VoIP.ms balance too low.",
+    },
     tileOff: "Not set up · Admin › Integrations",
     inAutotask: "Every text (received, sent, automatic) is also copied as an internal note in the Autotask ticket.",
     scope: {

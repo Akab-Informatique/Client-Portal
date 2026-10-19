@@ -98,6 +98,7 @@ export const smsRoutes = new Hono<AppEnv>()
         auto: schema.smsMessages.auto,
         status: schema.smsMessages.status,
         error: schema.smsMessages.error,
+        error: schema.smsMessages.error,
         createdAt: schema.smsMessages.createdAt,
         author: schema.users.name,
       })
@@ -175,6 +176,7 @@ export const smsRoutes = new Hono<AppEnv>()
         body: schema.smsMessages.body,
         auto: schema.smsMessages.auto,
         status: schema.smsMessages.status,
+        error: schema.smsMessages.error,
         createdAt: schema.smsMessages.createdAt,
         author: schema.users.name,
       })

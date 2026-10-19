@@ -2536,6 +2536,8 @@ describe("text messages (VoIP.ms)", () => {
         expect(init.method ?? "GET").toBe("GET");
         const p = new URL(url).searchParams;
         if (p.get("api_password") !== "api-secret") return new Response(JSON.stringify({ status: "invalid_credentials" }), { headers: { "content-type": "application/json" } });
+        // VoIP.ms refuses this one (the server IP not allowed in its API settings)
+        if (p.get("dst") === "5145558888") return new Response(JSON.stringify({ status: "ip_not_enabled" }), { headers: { "content-type": "application/json" } });
         sms.push({ method: p.get("method")!, dst: p.get("dst") ?? undefined, message: p.get("message") ?? undefined, did: p.get("did") ?? undefined });
         return new Response(JSON.stringify({ status: "success", sms: sms.length }), { headers: { "content-type": "application/json" } });
       }),
@@ -2644,6 +2646,11 @@ describe("text messages (VoIP.ms)", () => {
     const forTicket = (await tech.get(`/api/sms/ticket/${tk.id}`)).json;
     expect(forTicket.messages.map((m: any) => m.body)).toEqual(["Je passe à 14 h."]);
     expect(notes).toHaveBeenLastCalledWith(tk.id, expect.stringContaining("Texto envoyé par Alex Tremblay"), "Je passe à 14 h.");
+    // refused by VoIP.ms: the reason comes back, and stays on the failed text
+    const refused = await tech.post(`/api/sms/ticket/${tk.id}`, { phone: "514 555 8888", body: "Allo?" });
+    expect(refused.status).toBe(502);
+    expect(refused.json).toMatchObject({ error: "sms_api", fields: [{ path: "sms", message: "ip_not_enabled" }] });
+    expect((await tech.get(`/api/sms/ticket/${tk.id}`)).json.messages.at(-1)).toMatchObject({ body: "Allo?", status: "failed", error: "api: ip_not_enabled" });
     notes.mockRestore();
 
     // closed: the next text starts a new conversation
