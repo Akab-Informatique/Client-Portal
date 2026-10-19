@@ -119,6 +119,11 @@ export const MODULES = [
         label: { fr: "Approuver les feuilles de temps et dépenses", en: "Approve timesheets and expenses" },
         description: { fr: "Les heures par catégorie seulement (pas le détail) ; les dépenses avec leur reçu", en: "Hours per category only (not the details); expenses with their receipt" },
       },
+      {
+        key: "timesheets.manage",
+        label: { fr: "Gérer les feuilles de temps de tous", en: "Manage everyone's timesheets" },
+        description: { fr: "Voir et modifier la feuille de temps de n'importe quel membre de l'équipe, et la soumettre pour lui", en: "See and change any team member's timesheet, and submit it for them" },
+      },
     ],
   },
   {

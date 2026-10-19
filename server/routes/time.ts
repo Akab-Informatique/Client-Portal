@@ -3,7 +3,7 @@ import { HTTPException } from "hono/http-exception";
 import { and, asc, desc, eq, getTableColumns, inArray, ne, sql } from "drizzle-orm";
 import { z } from "zod";
 import { db, schema } from "../db/index.ts";
-import { auth, requirePermission, requireStaff, type AppEnv } from "../lib/auth.ts";
+import { auth, requirePermission, requireStaff, type AppEnv, type AuthContext } from "../lib/auth.ts";
 import { audit } from "../lib/audit.ts";
 import { body, zUuid } from "../lib/validate.ts";
 import { addDays, editable, ensureTypes, sheetOf, todayQc, weekEntries, weekStartOf, weekTotals } from "../lib/timesheets.ts";
@@ -35,6 +35,22 @@ const expenseView = (x: Omit<Expense, "receiptData"> & { receiptData?: string | 
 /** The expense columns, without the receipt file (lists stay small). */
 const { receiptData: _receipt, ...EXPENSE_COLUMNS } = getTableColumns(schema.expenses);
 const listColumns = { ...EXPENSE_COLUMNS, hasReceipt: sql<boolean>`(${schema.expenses.receiptData} is not null)` };
+
+/**
+ * Whose timesheet: one's own (timesheets.use), or a team member's with
+ * timesheets.manage (an active staff account; never a client).
+ */
+async function timesheetOwner(a: AuthContext, asked: string | undefined): Promise<string> {
+  if (!asked || asked === a.user.id) {
+    if (!a.permissions.includes("timesheets.use") && !a.permissions.includes("timesheets.manage")) throw new HTTPException(403, { message: "Forbidden" });
+    return a.user.id;
+  }
+  if (!a.permissions.includes("timesheets.manage")) throw new HTTPException(403, { message: "Forbidden" });
+  const id = zUuid.parse(asked);
+  const [u] = await db().select({ kind: schema.users.kind, active: schema.users.active }).from(schema.users).where(eq(schema.users.id, id));
+  if (!u || u.kind !== "staff" || !u.active) throw new HTTPException(404, { message: "not_found" });
+  return id;
+}
 
 async function ownExpense(id: string, userId: string) {
   const [x] = await db()
@@ -172,14 +188,25 @@ export const timeRoutes = new Hono<AppEnv>()
     return c.json(row);
   })
 
-  // ── my timesheet ──
-  .get("/week", requirePermission("timesheets.use"), async (c) => {
+  // ── a timesheet: one's own, or anyone's with timesheets.manage ──
+  /** The team members whose timesheet can be managed */
+  .get("/people", requirePermission("timesheets.manage"), async (c) => {
+    const rows = await db()
+      .select({ id: schema.users.id, name: schema.users.name, email: schema.users.email, timesheetRequired: schema.users.timesheetRequired })
+      .from(schema.users)
+      .where(and(eq(schema.users.kind, "staff"), eq(schema.users.active, true)))
+      .orderBy(asc(schema.users.name));
+    return c.json(rows);
+  })
+  .get("/week", requirePermission("timesheets.use", "timesheets.manage"), async (c) => {
     const a = auth(c);
+    const owner = await timesheetOwner(a, c.req.query("userId"));
     const weekStart = weekStartOf(c.req.query("start") ? zDay.parse(c.req.query("start")) : todayQc());
-    const sheet = await sheetOf(a.user.id, weekStart);
-    const rows = await weekEntries(a.user.id, weekStart);
-    const [me] = await db().select({ required: schema.users.timesheetRequired }).from(schema.users).where(eq(schema.users.id, a.user.id));
+    const sheet = await sheetOf(owner, weekStart);
+    const rows = await weekEntries(owner, weekStart);
+    const [me] = await db().select({ required: schema.users.timesheetRequired }).from(schema.users).where(eq(schema.users.id, owner));
     return c.json({
+      userId: owner,
       weekStart,
       /** This person submits weekly timesheets for approval (set by an admin) */
       required: me?.required ?? true,
@@ -187,48 +214,53 @@ export const timeRoutes = new Hono<AppEnv>()
       status: sheet.status,
       comment: sheet.comment,
       entries: rows.map((r) => ({ ...r.e, hours: r.e.hoursX100 / 100, type: r.type, kind: r.kind })),
-      ...(await weekTotals(a.user.id, weekStart)),
+      ...(await weekTotals(owner, weekStart)),
     });
   })
-  .post("/entries", requirePermission("timesheets.use"), async (c) => {
+  .post("/entries", requirePermission("timesheets.use", "timesheets.manage"), async (c) => {
     const a = auth(c);
-    const p = await body(c, z.object({ date: zDay, typeId: zUuid, hours: z.number().positive().max(24), note: z.string().trim().max(500).optional() }));
+    const p = await body(c, z.object({ date: zDay, typeId: zUuid, hours: z.number().positive().max(24), note: z.string().trim().max(500).optional(), userId: zUuid.optional() }));
+    const owner = await timesheetOwner(a, p.userId);
     const [type] = await db().select().from(schema.timesheetTypes).where(eq(schema.timesheetTypes.id, p.typeId));
     // ticket time comes from the tickets only
     if (!type || !type.active || type.kind === "labour") throw new HTTPException(400, { message: "time_type_unknown" });
-    const sheet = await sheetOf(a.user.id, weekStartOf(p.date));
+    const sheet = await sheetOf(owner, weekStartOf(p.date));
     if (!editable(sheet.status)) throw new HTTPException(409, { message: "timesheet_locked" });
     const [row] = await db()
       .insert(schema.timesheetEntries)
-      .values({ userId: a.user.id, date: p.date, typeId: type.id, hoursX100: Math.round(p.hours * 100), note: p.note || null, source: "manual" })
+      .values({ userId: owner, date: p.date, typeId: type.id, hoursX100: Math.round(p.hours * 100), note: p.note || null, source: "manual" })
       .returning();
+    if (owner !== a.user.id) await audit(a.user.id, "timesheet.entry_added_for", owner, { date: p.date, hours: p.hours });
     return c.json(row, 201);
   })
-  .delete("/entries/:id", requirePermission("timesheets.use"), async (c) => {
+  .delete("/entries/:id", requirePermission("timesheets.use", "timesheets.manage"), async (c) => {
     const a = auth(c);
+    const manager = a.permissions.includes("timesheets.manage");
     const [e] = await db()
       .select()
       .from(schema.timesheetEntries)
-      .where(and(eq(schema.timesheetEntries.id, zUuid.parse(c.req.param("id"))), eq(schema.timesheetEntries.userId, a.user.id)));
+      .where(and(eq(schema.timesheetEntries.id, zUuid.parse(c.req.param("id"))), manager ? undefined : eq(schema.timesheetEntries.userId, a.user.id)));
     if (!e || e.source !== "manual") throw new HTTPException(404, { message: "not_found" });
-    const sheet = await sheetOf(a.user.id, weekStartOf(e.date));
+    const sheet = await sheetOf(e.userId, weekStartOf(e.date));
     if (!editable(sheet.status)) throw new HTTPException(409, { message: "timesheet_locked" });
     await db().delete(schema.timesheetEntries).where(eq(schema.timesheetEntries.id, e.id));
+    if (e.userId !== a.user.id) await audit(a.user.id, "timesheet.entry_removed_for", e.userId, { date: e.date });
     return c.json({ ok: true });
   })
-  .post("/week/submit", requirePermission("timesheets.use"), async (c) => {
+  .post("/week/submit", requirePermission("timesheets.use", "timesheets.manage"), async (c) => {
     const a = auth(c);
-    const p = await body(c, z.object({ weekStart: zDay }));
-    const sheet = await sheetOf(a.user.id, weekStartOf(p.weekStart));
+    const p = await body(c, z.object({ weekStart: zDay, userId: zUuid.optional() }));
+    const owner = await timesheetOwner(a, p.userId);
+    const sheet = await sheetOf(owner, weekStartOf(p.weekStart));
     if (!editable(sheet.status)) throw new HTTPException(409, { message: "timesheet_locked" });
-    const [me] = await db().select({ required: schema.users.timesheetRequired }).from(schema.users).where(eq(schema.users.id, a.user.id));
+    const [me] = await db().select({ required: schema.users.timesheetRequired }).from(schema.users).where(eq(schema.users.id, owner));
     if (me && !me.required) throw new HTTPException(409, { message: "timesheet_not_required" });
     const [row] = await db()
       .update(schema.timesheets)
       .set({ status: "submitted", submittedAt: new Date(), updatedAt: new Date() })
       .where(eq(schema.timesheets.id, sheet.id))
       .returning();
-    await audit(a.user.id, "timesheet.submitted", row.id, { weekStart: row.weekStart });
+    await audit(a.user.id, "timesheet.submitted", row.id, { weekStart: row.weekStart, ...(owner !== a.user.id ? { for: owner } : {}) });
     return c.json(row);
   })
 

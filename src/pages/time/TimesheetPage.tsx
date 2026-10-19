@@ -2,17 +2,42 @@ import { useState, type FormEvent } from "react";
 import { useTranslation } from "react-i18next";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
-import { ChevronLeft, ChevronRight, Clock, Loader2, Plus, Send, Ticket, Trash2 } from "lucide-react";
+import { ChevronLeft, ChevronRight, Clock, Loader2, Plus, Send, Ticket, Trash2, UserCog } from "lucide-react";
 import { GlassBackdrop } from "@/components/brand/GlassBackdrop";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { api, ApiError } from "@/lib/api";
+import { useCan, useMe } from "@/lib/session";
 import { cn } from "@/lib/utils";
 
 export type TimeType = { id: string; name: string; kind: "labour" | "other"; active: boolean };
-type Entry = { id: string; date: string; typeId: string; type: string; kind: string; hours: number; note: string | null; ticketId: number | null; ticketNumber: string | null; ticketTitle: string | null; source: "ticket" | "manual" };
-type Week = { required: boolean; weekStart: string; weekEnd: string; status: "draft" | "submitted" | "approved" | "rejected" | "paid"; comment: string | null; entries: Entry[]; types: { type: string; kind: string; hours: number }[]; labourHours: number; totalHours: number };
+type Entry = {
+  id: string;
+  date: string;
+  typeId: string;
+  type: string;
+  kind: string;
+  hours: number;
+  note: string | null;
+  ticketId: number | null;
+  ticketNumber: string | null;
+  ticketTitle: string | null;
+  source: "ticket" | "manual";
+};
+type Person = { id: string; name: string; email: string; timesheetRequired: boolean };
+type Week = {
+  userId: string;
+  required: boolean;
+  weekStart: string;
+  weekEnd: string;
+  status: "draft" | "submitted" | "approved" | "rejected" | "paid";
+  comment: string | null;
+  entries: Entry[];
+  types: { type: string; kind: string; hours: number }[];
+  labourHours: number;
+  totalHours: number;
+};
 
 const STATUS_STYLE: Record<Week["status"], string> = {
   draft: "border-slate-500/40 bg-slate-500/10 text-slate-300",
@@ -35,15 +60,30 @@ const addDays = (day: string, n: number) => {
 export function TimesheetPage() {
   const { t, i18n } = useTranslation();
   const qc = useQueryClient();
+  const me = useMe();
+  // managers pick whose timesheet (their own by default)
+  const manager = useCan()("timesheets.manage");
+  const [who, setWho] = useState(me.id);
+  const others = who !== me.id;
+  const { data: people } = useQuery({ queryKey: ["time", "people"], queryFn: () => api.get<Person[]>("/time/people"), enabled: manager });
   const [start, setStart] = useState<string | null>(null);
-  const { data: week, isLoading } = useQuery({ queryKey: ["time", "week", start], queryFn: () => api.get<Week>(`/time/week${start ? `?start=${start}` : ""}`) });
+  const q = new URLSearchParams({ ...(start ? { start } : {}), ...(others ? { userId: who } : {}) }).toString();
+  const { data: week, isLoading } = useQuery({ queryKey: ["time", "week", who, start], queryFn: () => api.get<Week>(`/time/week${q ? `?${q}` : ""}`) });
+  const person = people?.find((x) => x.id === who);
   const { data: types } = useQuery({ queryKey: ["time", "types"], queryFn: () => api.get<{ time: TimeType[] }>("/time/types") });
   const manualTypes = (types?.time ?? []).filter((x) => x.kind !== "labour");
   const editable = week?.status === "draft" || week?.status === "rejected";
   const [f, setF] = useState({ date: "", typeId: "", hours: "", note: "" });
   const refresh = () => void qc.invalidateQueries({ queryKey: ["time", "week"] });
   const add = useMutation({
-    mutationFn: () => api.post("/time/entries", { date: f.date || week!.weekStart, typeId: f.typeId, hours: Number(f.hours.replace(",", ".")), note: f.note || undefined }),
+    mutationFn: () =>
+      api.post("/time/entries", {
+        date: f.date || week!.weekStart,
+        typeId: f.typeId,
+        hours: Number(f.hours.replace(",", ".")),
+        note: f.note || undefined,
+        ...(others ? { userId: who } : {}),
+      }),
     onSuccess: () => {
       refresh();
       setF({ ...f, hours: "", note: "" });
@@ -52,7 +92,7 @@ export function TimesheetPage() {
   });
   const remove = useMutation({ mutationFn: (id: string) => api.del(`/time/entries/${id}`), onSuccess: refresh });
   const submit = useMutation({
-    mutationFn: () => api.post("/time/week/submit", { weekStart: week!.weekStart }),
+    mutationFn: () => api.post("/time/week/submit", { weekStart: week!.weekStart, ...(others ? { userId: who } : {}) }),
     onSuccess: () => {
       refresh();
       toast.success(t("timesheet.submitted"));
@@ -73,13 +113,30 @@ export function TimesheetPage() {
           </h1>
           <p className="text-sm text-muted-foreground">{t("timesheet.subtitle")}</p>
         </div>
+        {manager && people && (
+          <Select value={who} onValueChange={setWho}>
+            <SelectTrigger className="w-64" aria-label={t("timesheet.person")}>
+              <UserCog className="size-4 text-primary" />
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              {people.map((x) => (
+                <SelectItem key={x.id} value={x.id}>
+                  {x.id === me.id ? t("timesheet.me", { name: x.name }) : x.name}
+                  {!x.timesheetRequired && <span className="text-xs text-muted-foreground"> · {t("timesheet.noSubmit")}</span>}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        )}
         {week && (
           <div className="flex items-center gap-2">
             <Button variant="outline" size="icon" onClick={() => setStart(addDays(week.weekStart, -7))} aria-label={t("timesheet.previous")}>
               <ChevronLeft className="size-4" />
             </Button>
             <span className="min-w-52 text-center text-sm font-medium">
-              {new Intl.DateTimeFormat(loc, { day: "numeric", month: "long" }).format(new Date(`${week.weekStart}T12:00:00`))} → {new Intl.DateTimeFormat(loc, { day: "numeric", month: "long", year: "numeric" }).format(new Date(`${week.weekEnd}T12:00:00`))}
+              {new Intl.DateTimeFormat(loc, { day: "numeric", month: "long" }).format(new Date(`${week.weekStart}T12:00:00`))} →{" "}
+              {new Intl.DateTimeFormat(loc, { day: "numeric", month: "long", year: "numeric" }).format(new Date(`${week.weekEnd}T12:00:00`))}
             </span>
             <Button variant="outline" size="icon" onClick={() => setStart(addDays(week.weekStart, 7))} aria-label={t("timesheet.next")}>
               <ChevronRight className="size-4" />
@@ -87,6 +144,11 @@ export function TimesheetPage() {
           </div>
         )}
       </div>
+      {others && person && (
+        <p className="flex items-center gap-2 rounded-xl border border-[color:var(--gold)]/40 bg-[color:var(--gold)]/10 px-3 py-2 text-sm">
+          <UserCog className="size-4 text-primary" /> {t("timesheet.managing", { name: person.name })}
+        </p>
+      )}
       {isLoading && <Loader2 className="mx-auto my-10 size-6 animate-spin text-muted-foreground" />}
       {week && (
         <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_300px]">
@@ -104,7 +166,11 @@ export function TimesheetPage() {
                     <ul className="divide-y divide-border/60">
                       {list.map((e) => (
                         <li key={e.id} className="group flex items-start gap-3 px-4 py-2 text-sm">
-                          {e.source === "ticket" ? <Ticket className="mt-0.5 size-4 shrink-0 text-primary" /> : <Clock className="mt-0.5 size-4 shrink-0 text-muted-foreground" />}
+                          {e.source === "ticket" ? (
+                            <Ticket className="mt-0.5 size-4 shrink-0 text-primary" />
+                          ) : (
+                            <Clock className="mt-0.5 size-4 shrink-0 text-muted-foreground" />
+                          )}
                           <span className="min-w-0 flex-1">
                             <span className="block">
                               {e.source === "ticket" ? (
@@ -119,7 +185,12 @@ export function TimesheetPage() {
                           </span>
                           <span className="font-mono">{hours(e.hours)} h</span>
                           {e.source === "manual" && editable && (
-                            <button type="button" onClick={() => remove.mutate(e.id)} className="rounded p-1 text-muted-foreground opacity-0 hover:text-destructive group-hover:opacity-100" aria-label={t("timesheet.remove")}>
+                            <button
+                              type="button"
+                              onClick={() => remove.mutate(e.id)}
+                              className="rounded p-1 text-muted-foreground opacity-0 hover:text-destructive group-hover:opacity-100"
+                              aria-label={t("timesheet.remove")}
+                            >
                               <Trash2 className="size-3.5" />
                             </button>
                           )}
@@ -135,10 +206,12 @@ export function TimesheetPage() {
           <aside className="space-y-4">
             <section className="glass space-y-3 rounded-2xl border p-4">
               <div className="flex items-center justify-between">
-                <span className="text-sm font-semibold">{t("timesheet.week")}</span>
+                <span className="text-sm font-semibold">{others && person ? t("timesheet.theirWeek", { name: person.name }) : t("timesheet.week")}</span>
                 <span className={cn("rounded-md border px-1.5 py-0.5 text-[11px]", STATUS_STYLE[week.status])}>{t(`timesheet.status.${week.status}`)}</span>
               </div>
-              {week.status === "rejected" && week.comment && <p className="rounded-lg border border-red-500/30 bg-red-500/10 p-2 text-xs text-red-200">{week.comment}</p>}
+              {week.status === "rejected" && week.comment && (
+                <p className="rounded-lg border border-red-500/30 bg-red-500/10 p-2 text-xs text-red-200">{week.comment}</p>
+              )}
               <ul className="space-y-1 text-sm">
                 {week.types.map((x) => (
                   <li key={x.type} className="flex justify-between">
@@ -155,7 +228,11 @@ export function TimesheetPage() {
               {!week.required && <p className="rounded-lg border bg-background/40 p-2 text-xs text-muted-foreground">{t("timesheet.notRequired")}</p>}
               {editable && week.required && week.entries.length > 0 && <p className="text-[11px] text-amber-300">{t("timesheet.toSubmit")}</p>}
               {editable && week.required && (
-                <Button className="w-full bg-grad-gold font-semibold text-[#1a1204] hover:brightness-105" disabled={submit.isPending || !week.entries.length} onClick={() => submit.mutate()}>
+                <Button
+                  className="w-full bg-grad-gold font-semibold text-[#1a1204] hover:brightness-105"
+                  disabled={submit.isPending || !week.entries.length}
+                  onClick={() => submit.mutate()}
+                >
                   {submit.isPending ? <Loader2 className="size-4 animate-spin" /> : <Send className="size-4" />} {t("timesheet.submit")}
                 </Button>
               )}
@@ -195,7 +272,13 @@ export function TimesheetPage() {
                     ))}
                   </SelectContent>
                 </Select>
-                <Input required inputMode="decimal" placeholder={t("timesheet.hours")} value={f.hours} onChange={(e) => setF({ ...f, hours: e.target.value })} />
+                <Input
+                  required
+                  inputMode="decimal"
+                  placeholder={t("timesheet.hours")}
+                  value={f.hours}
+                  onChange={(e) => setF({ ...f, hours: e.target.value })}
+                />
                 <Input placeholder={t("timesheet.note")} maxLength={500} value={f.note} onChange={(e) => setF({ ...f, note: e.target.value })} />
                 <Button type="submit" variant="outline" className="w-full" disabled={!f.typeId || !f.hours || add.isPending}>
                   <Plus className="size-4" /> {t("timesheet.addButton")}

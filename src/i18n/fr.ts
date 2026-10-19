@@ -789,6 +789,11 @@ const fr = {
     },
   },
   timesheet: {
+    theirWeek: "Semaine de {{name}}",
+    person: "Feuille de temps de",
+    me: "{{name}} (moi)",
+    noSubmit: "ne soumet pas",
+    managing: "Vous gérez la feuille de temps de {{name}} : vos changements et la soumission sont notés à votre nom.",
     title: "Feuille de temps",
     subtitle: "Le temps entré dans les billets s'ajoute seul, avec le billet. Ajoutez vos autres heures par type, puis soumettez la semaine.",
     previous: "Semaine précédente",

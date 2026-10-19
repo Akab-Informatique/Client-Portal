@@ -12,6 +12,7 @@ import {
   CommandSeparator,
 } from "@/components/ui/command";
 import { STAFF_MODULES } from "@/modules/registry";
+import { moduleVisible } from "@/modules/visible";
 import { useCan, useMe } from "@/lib/session";
 import { setLocale } from "@/i18n";
 import { api } from "@/lib/api";
@@ -27,7 +28,7 @@ export function CommandPalette({ open, onOpenChange }: { open: boolean; onOpenCh
     onOpenChange(false);
     fn();
   };
-  const modules = STAFF_MODULES.filter((m) => !m.upcoming && (!m.permission || can(m.permission)) && (!m.optIn || me.preferences[m.optIn]));
+  const modules = STAFF_MODULES.filter((m) => !m.upcoming && moduleVisible(m, me, can));
 
   return (
     <CommandDialog open={open} onOpenChange={onOpenChange} title={t("topbar.search")} description={t("palette.placeholder")}>

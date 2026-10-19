@@ -52,10 +52,10 @@ function ServerDown({ onRetry, retrying }: { onRetry: () => void; retrying: bool
   );
 }
 
-function Guard({ permission, children }: { permission: PermissionKey; children: React.ReactNode }) {
+function Guard({ permission, orRight, children }: { permission: PermissionKey; orRight?: PermissionKey; children: React.ReactNode }) {
   const { t } = useTranslation();
   const can = useCan();
-  if (!can(permission)) {
+  if (!can(permission) && !(orRight && can(orRight))) {
     return (
       <div className="flex flex-col items-center gap-3 rounded-2xl border border-dashed p-16 text-center text-muted-foreground">
         <ShieldAlert className="size-8 text-primary" />
@@ -91,7 +91,7 @@ function StaffApp() {
         <Route path="crm" element={<Guard permission="crm.view"><ClientsPage /></Guard>} />
         <Route path="crm/:id" element={<Guard permission="crm.view"><ClientPage /></Guard>} />
         <Route path="accounting/invoices" element={<Guard permission="accounting.view"><AccountingPage kind="invoices" /></Guard>} />
-        <Route path="timesheets" element={<Guard permission="timesheets.use"><TimesheetPage /></Guard>} />
+        <Route path="timesheets" element={<Guard permission="timesheets.use" orRight="timesheets.manage"><TimesheetPage /></Guard>} />
         <Route path="expenses" element={<Guard permission="timesheets.use"><ExpensesPage /></Guard>} />
         <Route path="accounting/approvals" element={<Guard permission="accounting.view"><ApprovalsPage /></Guard>} />
         <Route path="accounting/quotes" element={<Guard permission="accounting.view"><AccountingPage kind="quotes" /></Guard>} />

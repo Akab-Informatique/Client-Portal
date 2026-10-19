@@ -3563,7 +3563,47 @@ describe("submitting: timesheets (when required) and expenses", () => {
     const week = (await tech2.get("/api/time/week")).json;
     expect(week.required).toBe(false);
     expect((await tech2.post("/api/time/week/submit", { weekStart: week.weekStart })).json.error).toBe("timesheet_not_required");
+    // the sidebar hides the timesheet for them (the flag is on /me)
+    expect((await tech2.get("/api/me")).json.timesheetRequired).toBe(false);
     await admin.patch(`/api/admin/users/${u.id}`, { timesheetRequired: true });
+    expect((await tech2.get("/api/me")).json.timesheetRequired).toBe(true);
+  });
+
+  it("timesheets.manage: an admin picks anyone and manages their timesheet; nobody else can", async () => {
+    resetRateLimit("login:ip:unknown");
+    const admin = await signIn("admin@akab.local");
+    const tech2 = await signIn("tech2@akab.local");
+    const [u] = await db().select().from(schema.users).where(eq(schema.users.email, "tech2@akab.local"));
+    const [adminRow] = await db().select().from(schema.users).where(eq(schema.users.email, "admin@akab.local"));
+    // the team list, for managers only
+    const people = (await admin.get("/api/time/people")).json;
+    expect(people.some((p: any) => p.id === u.id && p.timesheetRequired === true)).toBe(true);
+    expect((await tech2.get("/api/time/people")).status).toBe(403);
+    // a technician cannot open or change someone else's
+    expect((await tech2.get(`/api/time/week?userId=${adminRow.id}`)).status).toBe(403);
+    const typeId = (await admin.get("/api/time/types")).json.time.find((x: any) => x.kind !== "labour").id;
+    expect((await tech2.post("/api/time/entries", { date: "2026-11-03", typeId, hours: 1, userId: adminRow.id })).status).toBe(403);
+
+    // the admin adds hours on the technician's week, removes them, then submits it for them
+    const added = await admin.post("/api/time/entries", { date: "2026-11-03", typeId, hours: 2.5, note: "Formation Fortinet", userId: u.id });
+    expect(added.status).toBe(201);
+    expect(added.json.userId).toBe(u.id);
+    let week = (await admin.get(`/api/time/week?start=2026-11-03&userId=${u.id}`)).json;
+    expect(week).toMatchObject({ userId: u.id, weekStart: "2026-11-02", totalHours: 2.5 });
+    // the technician sees them on their own week
+    expect((await tech2.get("/api/time/week?start=2026-11-03")).json.entries.some((e: any) => e.id === added.json.id)).toBe(true);
+    // their own entry: only a manager removes someone else's
+    expect((await tech2.post("/api/time/entries", { date: "2026-11-04", typeId, hours: 1 })).status).toBe(201);
+    const own = (await tech2.get("/api/time/week?start=2026-11-03")).json.entries.find((e: any) => e.hours === 1);
+    expect((await admin.del(`/api/time/entries/${own.id}`)).status).toBe(200);
+    expect((await admin.post("/api/time/week/submit", { weekStart: "2026-11-02", userId: u.id })).json.status).toBe("submitted");
+    week = (await tech2.get("/api/time/week?start=2026-11-03")).json;
+    expect(week).toMatchObject({ status: "submitted", totalHours: 2.5 });
+    const log = await db().select().from(schema.auditLog).where(eq(schema.auditLog.actorId, adminRow.id));
+    expect(log.map((l) => l.action)).toEqual(expect.arrayContaining(["timesheet.entry_added_for", "timesheet.entry_removed_for", "timesheet.submitted"]));
+    // a client account is never a timesheet
+    const [client] = await db().select().from(schema.users).where(eq(schema.users.kind, "client"));
+    expect((await admin.get(`/api/time/week?userId=${client.id}`)).status).toBe(404);
   });
 });
 

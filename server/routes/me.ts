@@ -37,6 +37,8 @@ export async function loadMe(a: AuthContext) {
     /** Set while a technician views the portal as a client (read only). */
     viewAs: a.viewAs,
     realUser: a.viewAs ? { name: a.realUser.name, email: a.realUser.email } : null,
+    /** Fills in a weekly timesheet (otherwise the Timesheets entry is hidden, unless they manage everyone's) */
+    timesheetRequired: u.timesheetRequired,
     preferences: { dashboard: prefs?.dashboard ?? null, theme: prefs?.theme ?? "dark", outlook: prefs?.outlook ?? false },
   };
 }

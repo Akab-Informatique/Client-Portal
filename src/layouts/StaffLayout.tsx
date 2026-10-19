@@ -43,6 +43,7 @@ import {
 import { Sheet, SheetContent, SheetTitle } from "@/components/ui/sheet";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { NAV_SECTIONS, STAFF_MODULES, type NavModule } from "@/modules/registry";
+import { moduleVisible } from "@/modules/visible";
 import { signOut, useCan, useMe } from "@/lib/session";
 import { cn, initials } from "@/lib/utils";
 import { TicketWorkspaceProvider } from "@/pages/tickets/workspace";
@@ -216,7 +217,7 @@ function SidebarContent({ collapsed, onToggle }: { collapsed: boolean; onToggle?
   const can = useCan();
   const location = useLocation();
   const me = useMe();
-  const visible = (m: NavModule) => m.upcoming || ((!m.permission || can(m.permission)) && (!m.optIn || me.preferences[m.optIn]));
+  const visible = (m: NavModule) => m.upcoming || moduleVisible(m, me, can);
   const isActive = (path: string) => (path === "/" ? location.pathname === "/" : location.pathname.startsWith(path));
   // Each section shows its modules; upcoming ones greyed out, after the live ones
   const groups = [

@@ -791,6 +791,11 @@ const en: Dict = {
     },
   },
   timesheet: {
+    theirWeek: "{{name}}’s week",
+    person: "Timesheet of",
+    me: "{{name}} (me)",
+    noSubmit: "does not submit",
+    managing: "You are managing {{name}}'s timesheet: your changes and the submission are logged under your name.",
     title: "Timesheet",
     subtitle: "Time entered on tickets adds itself, with the ticket. Add your other hours by type, then submit the week.",
     previous: "Previous week",
