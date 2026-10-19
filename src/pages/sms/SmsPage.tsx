@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState, type FormEvent } from "react";
 import { useTranslation } from "react-i18next";
+import { smsPartCount } from "@shared/sms";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { AlertTriangle, Archive, Bot, Building2, Clock3, Loader2, MessageSquareText, Search, Send, Ticket, Timer, X } from "lucide-react";
@@ -264,7 +265,7 @@ function ThreadView({ id, onBack, onTicket }: { id: string; onBack: () => void; 
     },
   });
   if (isLoading || !data) return <Skeleton className="h-96 rounded-2xl" />;
-  const parts = Math.max(1, Math.ceil(text.length / (data.max || 160)));
+  const parts = smsPartCount(text);
   const left = data.status === "waiting" ? minutesLeft(data.autoTicketAt) : null;
   return (
     <section className="flex min-h-0 flex-col overflow-hidden rounded-xl border">
@@ -486,7 +487,7 @@ export function TicketSmsPanel({ ticketId, phone }: { ticketId: number; phone: s
         />
         <div className="flex items-center justify-between text-[11px] text-muted-foreground">
           <span>
-            {t("sms.counter", { count: text.length, parts: Math.max(1, Math.ceil(text.length / 160)) })} · {t("sms.inAutotask")}
+            {t("sms.counter", { count: text.length, parts: smsPartCount(text) })} · {t("sms.inAutotask")}
           </span>
           <Button type="submit" size="sm" disabled={!to || !text.trim() || send.isPending} className="bg-grad-gold font-semibold text-[#1a1204]">
             {send.isPending ? <Loader2 className="size-3.5 animate-spin" /> : <Send className="size-3.5" />} {t("sms.send")}

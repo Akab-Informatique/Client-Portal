@@ -2,6 +2,9 @@ import { randomBytes, timingSafeEqual } from "node:crypto";
 import { eq } from "drizzle-orm";
 import { db, schema } from "../db/index.ts";
 import { seal, unseal } from "./crypto.ts";
+import { SMS_GSM_MAX, splitSms } from "../../shared/sms.ts";
+
+export { splitSms };
 
 /**
  * VoIP.ms text messages (server side only).
@@ -15,8 +18,8 @@ import { seal, unseal } from "./crypto.ts";
 export const VOIPMS_PROVIDER = "voipms";
 const API = "https://voip.ms/api/v1/rest.php";
 const TIMEOUT_MS = 15_000;
-/** VoIP.ms refuses texts longer than this: longer messages go in several parts. */
-export const SMS_MAX = 160;
+/** VoIP.ms refuses texts longer than one SMS: longer messages go in several parts (`splitSms`). */
+export const SMS_MAX = SMS_GSM_MAX;
 
 export type SmsSettings = {
   enabled: boolean;
@@ -147,20 +150,6 @@ async function call<T extends { status: string }>(s: Pick<SmsSettings, "username
 /** Test: the account answers (balance). */
 export async function testVoipms(s: Pick<SmsSettings, "username" | "password">) {
   await call(s, "getBalance", {});
-}
-
-/** Split a long text into parts VoIP.ms accepts (at spaces when possible). */
-export function splitSms(text: string): string[] {
-  const parts: string[] = [];
-  let rest = text.trim();
-  while (rest.length > SMS_MAX) {
-    let cut = rest.lastIndexOf(" ", SMS_MAX);
-    if (cut < SMS_MAX * 0.6) cut = SMS_MAX;
-    parts.push(rest.slice(0, cut).trim());
-    rest = rest.slice(cut).trim();
-  }
-  if (rest) parts.push(rest);
-  return parts;
 }
 
 /** Send a text from our number (several parts if long). */
