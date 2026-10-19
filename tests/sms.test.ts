@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { smsPartCount, splitSms, SMS_GSM_MAX, SMS_UNICODE_MAX } from "../shared/sms.ts";
 
 /** Units one part takes, as a phone counts them */
@@ -34,5 +34,35 @@ describe("text message length (VoIP.ms)", () => {
     const brackets = "[x]".repeat(60);
     expect(splitSms(brackets).every((p) => units(p) <= SMS_GSM_MAX)).toBe(true);
     expect(smsPartCount("")).toBe(1);
+  });
+});
+
+describe("text message parts (VoIP.ms)", () => {
+  it("go out in order, with a pause between them, and two messages to one number never mix", async () => {
+    process.env.NODE_ENV = "test";
+    const { initDb, db, schema } = await import("../server/db/index.ts");
+    await initDb({ memory: true });
+    const { saveSmsSettings, sendSms, setSmsPartDelay } = await import("../server/lib/voipms.ts");
+    await saveSmsSettings(null, { enabled: true, username: "a@akab.ca", password: "x", did: "4505559000" });
+    const sent: { message: string; at: number }[] = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: unknown) => {
+        sent.push({ message: new URL(String(url)).searchParams.get("message") ?? "", at: Date.now() });
+        return new Response(JSON.stringify({ status: "success" }), { headers: { "content-type": "application/json" } });
+      }),
+    );
+    setSmsPartDelay(60);
+    try {
+      const long = "Votre poste est prêt, vous pouvez venir le chercher au bureau de Joliette dès demain matin, merci";
+      await Promise.all([sendSms("5145550001", long), sendSms("5145550001", "Deuxième message")]);
+      expect(sent.map((s) => s.message)).toEqual([...splitSms(long), "Deuxième message"]);
+      // a pause between the parts of one message
+      expect(sent[1].at - sent[0].at).toBeGreaterThanOrEqual(55);
+    } finally {
+      setSmsPartDelay(0);
+      vi.unstubAllGlobals();
+      await db().delete(schema.integrations);
+    }
   });
 });

@@ -152,14 +152,41 @@ export async function testVoipms(s: Pick<SmsSettings, "username" | "password">) 
   await call(s, "getBalance", {});
 }
 
-/** Send a text from our number (several parts if long). */
+/**
+ * Pause between the parts of a long text: sent back to back, carriers may
+ * deliver them out of order. SMS_PART_DELAY_MS in .env changes it (none in tests).
+ */
+let partDelayMs = process.env.VITEST ? 0 : Math.max(0, Number(process.env.SMS_PART_DELAY_MS ?? 3000) || 0);
+/** For tests: the pause between parts */
+export const setSmsPartDelay = (ms: number) => {
+  partDelayMs = ms;
+};
+const pause = (ms: number) => new Promise((r) => setTimeout(r, ms));
+/** Texts to one number go out one after the other (two messages never mix their parts) */
+const queues = new Map<string, Promise<unknown>>();
+
+/** Send a text from our number (several parts if long, a pause between them). */
 export async function sendSms(dst: string, text: string): Promise<void> {
   const s = await smsSettings();
   if (!s.enabled) throw new SmsError("disabled");
   const did = normalizePhone(s.did);
   const to = normalizePhone(dst);
   if (!did || !to) throw new SmsError("not_configured");
-  for (const part of splitSms(text)) await call(s, "sendSMS", { did, dst: to, message: part });
+  const parts = splitSms(text);
+  const run = (queues.get(to) ?? Promise.resolve())
+    .catch(() => undefined)
+    .then(async () => {
+      for (const [i, part] of parts.entries()) {
+        if (i > 0 && partDelayMs) await pause(partDelayMs);
+        await call(s, "sendSMS", { did, dst: to, message: part });
+      }
+    });
+  queues.set(to, run);
+  try {
+    await run;
+  } finally {
+    if (queues.get(to) === run) queues.delete(to);
+  }
   // a text went out: the connection works (an old failed test no longer shows)
   if (!s.lastTest?.ok) await saveSmsSettings(null, { lastTest: { ok: true, at: new Date().toISOString() } }).catch(() => undefined);
 }
