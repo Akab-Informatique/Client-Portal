@@ -1,4 +1,5 @@
 import { Fragment, useEffect, useMemo, useRef, useState, type FormEvent, type ReactNode } from "react";
+import { DueEditor } from "./DueEditor";
 import { useSearchParams } from "react-router-dom";
 import { useTranslation } from "react-i18next";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
@@ -730,7 +731,7 @@ function slaUsed(tk: TicketSummary) {
   return Math.min(1, Math.max(0, (Date.now() - start) / (end - start)));
 }
 
-type RowPatch = { status?: string; priority?: string; assigneeId?: string | null };
+type RowPatch = { status?: string; priority?: string; assigneeId?: string | null; dueAt?: string };
 
 /** Keeps clicks inside an inline picker from opening the ticket (React events cross portals). */
 const Stop = ({ children }: { children: ReactNode }) => (
@@ -829,19 +830,44 @@ function TicketRow({
             <span className="block break-words leading-snug">{tk.company.name}</span>
             {tk.contact && <span className="block break-words text-[11px] leading-snug text-muted-foreground">{tk.contact}</span>}
           </span>
-          <span className="flex items-center gap-1 font-mono text-xs tabular-nums text-muted-foreground xl:[order:var(--o-start)]">
-            {tk.startDate ? shortDate(tk.startDate) : "—"}
-            {tk.startLocked && <Lock className="size-3 shrink-0 text-amber-300" aria-label={t("tickets.startLock.on")} />}
+          <span className="min-w-0 xl:[order:var(--o-start)]">
+            <Stop>
+              <StartCell tk={tk} editable={editable} />
+            </Stop>
           </span>
           <span className="min-w-0 xl:[order:var(--o-due)]">
-            <span
-              className={cn(
-                "block whitespace-nowrap font-mono text-xs font-medium tabular-nums",
-                due === "overdue" ? "text-destructive" : due === "today" ? "text-orange-400" : due === "soon" ? "text-primary" : "text-muted-foreground",
-              )}
-            >
-              {shortDateTime(tk.dueAt)}
-            </span>
+            {(() => {
+              const label = (
+                <span
+                  className={cn(
+                    "block whitespace-nowrap rounded px-0.5 font-mono text-xs font-medium tabular-nums",
+                    due === "overdue" ? "text-destructive" : due === "today" ? "text-orange-400" : due === "soon" ? "text-primary" : "text-muted-foreground",
+                    editable && "hover:bg-accent/60",
+                  )}
+                >
+                  {shortDateTime(tk.dueAt)}
+                </span>
+              );
+              return editable ? (
+                <Stop>
+                  <Popover>
+                    <PopoverTrigger asChild>
+                      <button type="button" className="text-left" aria-label={t("tickets.due.change")} title={t("tickets.due.change")}>
+                        {label}
+                      </button>
+                    </PopoverTrigger>
+                    <PopoverContent align="start" className="w-80 space-y-2">
+                      <p className="text-sm font-semibold">
+                        {t("tickets.fields.due")} · <span className="font-mono text-xs text-muted-foreground">{tk.number}</span>
+                      </p>
+                      <DueEditor dueAt={tk.dueAt} quick autoFocus onSave={(dueAt) => onPatch({ dueAt })} />
+                    </PopoverContent>
+                  </Popover>
+                </Stop>
+              ) : (
+                label
+              );
+            })()}
             {tk.statusKind !== "complete" && (
               <span className="mt-1 block h-1 w-full max-w-28 overflow-hidden rounded-full bg-muted" title={t("tickets.slaUsed", { pct: Math.round(used * 100) })}>
                 <span
@@ -1504,4 +1530,62 @@ function filterLabel(key: string, value: string, data: TicketList | undefined, t
     default:
       return parts.join(", ");
   }
+}
+
+/** The start date from the list: a day (or none) and the restriction, saved at once. */
+function StartCell({ tk, editable }: { tk: TicketSummary; editable: boolean }) {
+  const { t } = useTranslation();
+  const qc = useQueryClient();
+  const save = useMutation({
+    mutationFn: (p: { startDate?: string | null; startLocked?: boolean }) => api.put(`/tickets/${tk.id}/start-date`, p),
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: ["tickets"] });
+      toast.success(t("common.saved"));
+    },
+    onError: (e) => toast.error(ticketErrorText(t, e)),
+  });
+  const label = (
+    <span className={cn("flex items-center gap-1 whitespace-nowrap rounded px-0.5 font-mono text-xs tabular-nums text-muted-foreground", editable && "hover:bg-accent/60")}>
+      {tk.startDate ? shortDate(tk.startDate) : "—"}
+      {tk.startLocked && <Lock className="size-3 shrink-0 text-amber-300" aria-label={t("tickets.startLock.on")} />}
+    </span>
+  );
+  if (!editable) return label;
+  return (
+    <Popover>
+      <PopoverTrigger asChild>
+        <button type="button" className="text-left" aria-label={t("tickets.fields.start")} title={t("tickets.fields.start")}>
+          {label}
+        </button>
+      </PopoverTrigger>
+      <PopoverContent align="start" className="w-72 space-y-2">
+        <p className="text-sm font-semibold">
+          {t("tickets.fields.start")} · <span className="font-mono text-xs text-muted-foreground">{tk.number}</span>
+        </p>
+        <div className="flex gap-2">
+          <Input
+            type="date"
+            className="h-8 flex-1"
+            autoFocus
+            disabled={save.isPending}
+            defaultValue={tk.startDate ?? ""}
+            key={tk.startDate ?? ""}
+            onChange={(e) => e.target.value && save.mutate({ startDate: e.target.value })}
+            aria-label={t("tickets.fields.start")}
+          />
+          {tk.startDate && (
+            <Button type="button" size="sm" variant="ghost" className="h-8" disabled={save.isPending} onClick={() => save.mutate({ startDate: null, startLocked: false })}>
+              {t("tickets.startClear")}
+            </Button>
+          )}
+        </div>
+        <label className={cn("flex items-center gap-2 text-xs", !tk.startDate && "opacity-60")} title={t("tickets.startLock.hint")}>
+          <Switch checked={Boolean(tk.startLocked)} disabled={save.isPending || !tk.startDate} onCheckedChange={(v) => save.mutate({ startLocked: v })} aria-label={t("tickets.startLock.label")} />
+          <Lock className={cn("size-3.5", tk.startLocked ? "text-amber-300" : "text-muted-foreground")} />
+          {t("tickets.startLock.label")}
+        </label>
+        {!tk.startDate && <p className="text-[10px] text-muted-foreground">{t("tickets.startLock.needsDate")}</p>}
+      </PopoverContent>
+    </Popover>
+  );
 }

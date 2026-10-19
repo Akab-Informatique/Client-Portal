@@ -2348,6 +2348,7 @@ const en: Dict = {
     },
   },
   tickets: {
+    startClear: "Remove",
     startLock: {
       label: "Restriction",
       on: "No work before the start date",

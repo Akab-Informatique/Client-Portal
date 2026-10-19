@@ -2346,6 +2346,7 @@ const fr = {
     },
   },
   tickets: {
+    startClear: "Retirer",
     startLock: {
       label: "Restriction",
       on: "Pas de travail avant la date de début",
