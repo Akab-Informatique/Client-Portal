@@ -2,7 +2,7 @@ import { randomBytes, timingSafeEqual } from "node:crypto";
 import { eq } from "drizzle-orm";
 import { db, schema } from "../db/index.ts";
 import { seal, unseal } from "./crypto.ts";
-import { SMS_GSM_MAX, splitSms } from "../../shared/sms.ts";
+import { SMS_GSM_MAX, splitMms, splitSms } from "../../shared/sms.ts";
 
 export { splitSms };
 
@@ -32,6 +32,8 @@ export type SmsSettings = {
   autoTicketMinutes: number;
   /** No new automatic reply to a number that got one less than this many hours ago (0: every new conversation) */
   autoReplyCooldownHours: number;
+  /** A message longer than one text goes as one MMS (fewer pieces); refused by VoIP.ms: split texts as before */
+  longAsMms: boolean;
   autoReply: string;
   ticketOpened: string;
   /** After "1": what we ask the client before opening the ticket */
@@ -97,6 +99,7 @@ export async function smsSettings(): Promise<SmsSettings> {
     token: secrets.token ?? null,
     autoTicketMinutes: c.autoTicketMinutes ?? 240,
     autoReplyCooldownHours: c.autoReplyCooldownHours ?? 24,
+    longAsMms: c.longAsMms ?? true,
     autoReply: c.autoReply ?? DEFAULT_AUTO_REPLY,
     ticketOpened: c.ticketOpened ?? DEFAULT_TICKET_OPENED,
     askDetails: c.askDetails ?? DEFAULT_ASK_DETAILS,
@@ -185,13 +188,27 @@ export async function sendSms(dst: string, text: string): Promise<void> {
   const to = normalizePhone(dst);
   if (!did || !to) throw new SmsError("not_configured");
   const parts = splitSms(text);
+  const pieces = async (list: string[], method: "sendSMS" | "sendMMS") => {
+    for (const [i, part] of list.entries()) {
+      if (i > 0 && partDelayMs) await pause(partDelayMs);
+      await call(s, method, { did, dst: to, message: part });
+    }
+  };
   const run = (queues.get(to) ?? Promise.resolve())
     .catch(() => undefined)
     .then(async () => {
-      for (const [i, part] of parts.entries()) {
-        if (i > 0 && partDelayMs) await pause(partDelayMs);
-        await call(s, "sendSMS", { did, dst: to, message: part });
+      if (parts.length > 1 && s.longAsMms) {
+        try {
+          // one MMS instead of several texts
+          return await pieces(splitMms(text), "sendMMS");
+        } catch (e) {
+          // VoIP.ms refused it (MMS not on our number…): split texts. A timeout or a network error
+          // may still have gone out, so it is not sent twice.
+          if (!(e instanceof SmsError && e.code === "api")) throw e;
+          console.warn("[sms] MMS refused, sent as texts:", e.detail);
+        }
       }
+      await pieces(parts, "sendSMS");
     });
   queues.set(to, run);
   try {

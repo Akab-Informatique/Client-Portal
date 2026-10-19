@@ -43,7 +43,7 @@ describe("text message parts (VoIP.ms)", () => {
     const { initDb, db, schema } = await import("../server/db/index.ts");
     await initDb({ memory: true });
     const { saveSmsSettings, sendSms, setSmsPartDelay } = await import("../server/lib/voipms.ts");
-    await saveSmsSettings(null, { enabled: true, username: "a@akab.ca", password: "x", did: "4505559000" });
+    await saveSmsSettings(null, { enabled: true, username: "a@akab.ca", password: "x", did: "4505559000", longAsMms: false });
     const sent: { message: string; at: number }[] = [];
     vi.stubGlobal(
       "fetch",
@@ -61,6 +61,51 @@ describe("text message parts (VoIP.ms)", () => {
       expect(sent[1].at - sent[0].at).toBeGreaterThanOrEqual(55);
     } finally {
       setSmsPartDelay(0);
+      vi.unstubAllGlobals();
+      await db().delete(schema.integrations);
+    }
+  });
+});
+
+describe("long texts as MMS (VoIP.ms)", () => {
+  it("one MMS when on; refused by VoIP.ms: split texts; a network error is not sent twice", async () => {
+    process.env.NODE_ENV = "test";
+    const { initDb, db, schema } = await import("../server/db/index.ts");
+    await initDb({ memory: true });
+    const { saveSmsSettings, sendSms } = await import("../server/lib/voipms.ts");
+    await saveSmsSettings(null, { enabled: true, username: "a@akab.ca", password: "x", did: "4505559000", longAsMms: true });
+    let mms: "ok" | "refused" | "down" = "ok";
+    const sent: { method: string; message: string }[] = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: unknown) => {
+        const p = new URL(String(url)).searchParams;
+        const method = p.get("method") ?? "";
+        if (method === "sendMMS" && mms === "down") throw new TypeError("fetch failed");
+        if (method === "sendMMS" && mms === "refused") return new Response(JSON.stringify({ status: "invalid_did" }), { headers: { "content-type": "application/json" } });
+        sent.push({ method, message: p.get("message") ?? "" });
+        return new Response(JSON.stringify({ status: "success" }), { headers: { "content-type": "application/json" } });
+      }),
+    );
+    const long = "Votre poste est prêt, vous pouvez venir le chercher au bureau de Joliette dès demain matin, merci";
+    try {
+      await sendSms("5145550002", long);
+      expect(sent).toEqual([{ method: "sendMMS", message: long }]);
+      // a short one stays a text
+      sent.length = 0;
+      await sendSms("5145550002", "Merci!");
+      expect(sent).toEqual([{ method: "sendSMS", message: "Merci!" }]);
+      // MMS refused (not on our number): split texts
+      sent.length = 0;
+      mms = "refused";
+      await sendSms("5145550002", long);
+      expect(sent.map((s) => s.method)).toEqual(splitSms(long).map(() => "sendSMS"));
+      // VoIP.ms unreachable: an error, not a second copy as texts
+      sent.length = 0;
+      mms = "down";
+      await expect(sendSms("5145550002", long)).rejects.toThrow();
+      expect(sent).toEqual([]);
+    } finally {
       vi.unstubAllGlobals();
       await db().delete(schema.integrations);
     }

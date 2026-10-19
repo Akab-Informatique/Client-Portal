@@ -8,7 +8,7 @@ import { audit } from "../lib/audit.ts";
 import { clientIp, rateLimit } from "../lib/http.ts";
 import { body, zUuid } from "../lib/validate.ts";
 import { conversationForTicket, mapConversation, openTicket, queueReceived, replyAsTechnician, SmsTicketError } from "../lib/sms.ts";
-import { normalizePhone, SmsError, smsReady, SMS_MAX, tokenMatches } from "../lib/voipms.ts";
+import { normalizePhone, SmsError, smsReady, smsSettings, SMS_MAX, tokenMatches } from "../lib/voipms.ts";
 import { AutotaskError } from "../lib/autotask.ts";
 import { SourceError, ticketSource } from "../lib/ticketSource.ts";
 
@@ -69,7 +69,7 @@ export const smsRoutes = new Hono<AppEnv>()
         next: sql<string | null>`min(${schema.smsConversations.autoTicketAt}) filter (where ${schema.smsConversations.status} = 'waiting')`,
       })
       .from(schema.smsConversations);
-    return c.json({ ...r, ready: await smsReady() });
+    return c.json({ ...r, ready: await smsReady(), longAsMms: (await smsSettings()).longAsMms });
   })
 
   /** Conversations, newest first (closed ones on demand). */

@@ -2600,13 +2600,13 @@ describe("text messages (VoIP.ms)", () => {
     expect((await hook({ token: "nope", from: "5145550000", message: "x", id: "z" })).status).toBe(200);
     expect((await tech.get("/api/sms/conversations")).json).toEqual([]);
 
-    // an unknown number: a conversation waiting, the automatic reply (in two parts, it is long)
+    // an unknown number: a conversation waiting, the automatic reply (long: one MMS rather than several texts)
     sms.length = 0;
     await hook({ token, from: "15145550000", message: "Mon imprimante ne marche plus", id: "m1" });
     await hook({ token, from: "15145550000", message: "Mon imprimante ne marche plus", id: "m1" }); // twice: kept once
     let convs = (await tech.get("/api/sms/conversations")).json;
     expect(convs).toEqual([expect.objectContaining({ phone: "5145550000", status: "waiting", contactName: null, unread: 1, lastPreview: "Mon imprimante ne marche plus" })]);
-    expect(sms.every((s) => s.method === "sendSMS" && s.dst === "5145550000" && s.did === "4505559000" && s.message!.length <= 160)).toBe(true);
+    expect(sms.map((s) => [s.method, s.dst, s.did])).toEqual([["sendMMS", "5145550000", "4505559000"]]);
     expect(sms.map((s) => s.message).join(" ")).toContain("Répondez 1");
     expect(sms.map((s) => s.message).join(" ")).toContain("d'ici 4 h");
     const bell = (await tech.get("/api/notifications")).json.items.find((n: any) => n.type === "sms.received");

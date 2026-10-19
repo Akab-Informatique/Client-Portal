@@ -41,7 +41,7 @@ export type Conversation = {
 };
 type Message = { id: string; direction: "in" | "out"; body: string; auto: boolean; status: "received" | "sent" | "failed"; error?: string | null; createdAt: string; author: string | null };
 type Thread = Conversation & { messages: Message[]; max: number };
-type Summary = { waiting: number; unread: number; open: number; next: string | null; ready: boolean };
+type Summary = { waiting: number; unread: number; open: number; next: string | null; ready: boolean; longAsMms?: boolean };
 
 const loc = () => (currentLocale() === "en" ? "en-CA" : "fr-CA");
 export const fmtPhone = (p: string) => (p.length === 10 ? `(${p.slice(0, 3)}) ${p.slice(3, 6)}-${p.slice(6)}` : p);
@@ -234,6 +234,7 @@ function ThreadView({ id, onBack, onTicket }: { id: string; onBack: () => void; 
   const confirm = useConfirm();
   const ws = useTicketWorkspace();
   const { data, isLoading } = useQuery({ queryKey: ["sms", "thread", id], queryFn: () => api.get<Thread>(`/sms/conversations/${id}`), refetchInterval: 10_000 });
+  const { data: summary } = useSmsSummary();
   const [text, setText] = useState("");
   const end = useRef<HTMLDivElement>(null);
   useEffect(() => {
@@ -373,7 +374,7 @@ function ThreadView({ id, onBack, onTicket }: { id: string; onBack: () => void; 
             placeholder={t("sms.replyPlaceholder")}
           />
           <div className="mt-2 flex items-center justify-between gap-2 text-[11px] text-muted-foreground">
-            <span>{t("sms.counter", { count: text.length, parts })}</span>
+            <span>{counterText(t, text, parts, summary?.longAsMms)}</span>
             <Button type="submit" size="sm" disabled={!text.trim() || send.isPending} className="bg-grad-gold font-semibold text-[#1a1204]">
               {send.isPending ? <Loader2 className="size-3.5 animate-spin" /> : <Send className="size-3.5" />} {t("sms.send")}
             </Button>
@@ -422,6 +423,11 @@ export function useTicketSms(ticketId: number, enabled: boolean) {
     enabled,
     refetchInterval: 15_000,
   });
+}
+
+/** "120 caractères · 2 textos", or "· 1 MMS" when long messages go as MMS */
+function counterText(t: (k: string, o?: Record<string, unknown>) => string, text: string, parts: number, mms?: boolean) {
+  return parts > 1 && mms ? t("sms.counterMms", { count: text.length }) : t("sms.counter", { count: text.length, parts });
 }
 
 /** In a ticket: the texts with the client (instead of the activity), and the reply box. */
@@ -504,7 +510,7 @@ export function TicketSmsPanel({ ticketId, phone }: { ticketId: number; phone: s
         />
         <div className="flex items-center justify-between text-[11px] text-muted-foreground">
           <span>
-            {t("sms.counter", { count: text.length, parts: smsPartCount(text) })} · {t("sms.inAutotask")}
+            {counterText(t, text, smsPartCount(text), summary?.longAsMms)} · {t("sms.inAutotask")}
           </span>
           <Button type="submit" size="sm" disabled={!to || !text.trim() || send.isPending} className="bg-grad-gold font-semibold text-[#1a1204]">
             {send.isPending ? <Loader2 className="size-3.5 animate-spin" /> : <Send className="size-3.5" />} {t("sms.send")}

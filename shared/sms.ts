@@ -49,5 +49,22 @@ export function splitSms(text: string): string[] {
   return parts;
 }
 
+/** VoIP.ms sendMMS takes up to this many characters in one message */
+export const MMS_MAX = 2048;
+
+/** A long message as MMS: one piece (several only past 2048 characters, cut at a space) */
+export function splitMms(text: string): string[] {
+  const parts: string[] = [];
+  let rest = text.trim();
+  while (rest.length > MMS_MAX) {
+    let cut = rest.lastIndexOf(" ", MMS_MAX);
+    if (cut < MMS_MAX * 0.6) cut = MMS_MAX;
+    parts.push(rest.slice(0, cut).trim());
+    rest = rest.slice(cut).trim();
+  }
+  if (rest) parts.push(rest);
+  return parts;
+}
+
 /** How many texts a message will take (at least one) */
 export const smsPartCount = (text: string) => Math.max(1, splitSms(text).length);

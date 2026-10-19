@@ -987,6 +987,7 @@ type VoipmsView = {
   did: string;
   autoTicketMinutes: number;
   autoReplyCooldownHours: number;
+  longAsMms: boolean;
   askDetails: string;
   detailsMinutes: number;
   autoReply: string;
@@ -1035,7 +1036,7 @@ function VoipmsPage() {
     },
     staleTime: 5 * 60_000,
   });
-  const [f, setF] = useState({ username: "", password: "", did: "", enabled: false, minutes: "240", cooldown: "24", askDetails: "", detailsMinutes: "30", autoReply: "", ticketOpened: "", ticketTimeout: "", companyId: "", queue: "", priority: "", sendTo: "" });
+  const [f, setF] = useState({ username: "", password: "", did: "", enabled: false, minutes: "240", cooldown: "24", longAsMms: true, askDetails: "", detailsMinutes: "30", autoReply: "", ticketOpened: "", ticketTimeout: "", companyId: "", queue: "", priority: "", sendTo: "" });
   const [test, setTest] = useState<{ ok: boolean; error?: string; detail?: string } | null>(null);
   useEffect(() => {
     if (s)
@@ -1047,6 +1048,7 @@ function VoipmsPage() {
         enabled: s.enabled,
         minutes: String(s.autoTicketMinutes),
         cooldown: String(s.autoReplyCooldownHours ?? 24),
+        longAsMms: s.longAsMms ?? true,
         askDetails: s.askDetails,
         detailsMinutes: String(s.detailsMinutes ?? 30),
         autoReply: s.autoReply,
@@ -1068,6 +1070,7 @@ function VoipmsPage() {
         did: f.did,
         autoTicketMinutes: Math.max(1, Number(f.minutes) || 15),
         autoReplyCooldownHours: Math.min(720, Math.max(0, Math.round(Number(f.cooldown)) || 0)),
+        longAsMms: f.longAsMms,
         askDetails: f.askDetails.trim(),
         detailsMinutes: Math.min(1440, Math.max(1, Math.round(Number(f.detailsMinutes)) || 30)),
         autoReply: f.autoReply.trim(),
@@ -1196,6 +1199,13 @@ function VoipmsPage() {
             <Textarea id="vm-auto" rows={3} maxLength={600} value={f.autoReply} onChange={(e) => set("autoReply")(e.target.value)} />
             <p className="text-[11px] text-muted-foreground">{t("integrations.voipms.autoReplyHint")}</p>
           </div>
+          <label className="flex items-center justify-between gap-4 rounded-lg border bg-background/40 px-3 py-2 text-sm">
+            <span>
+              {t("integrations.voipms.longAsMms")}
+              <span className="block text-[11px] text-muted-foreground">{t("integrations.voipms.longAsMmsHint")}</span>
+            </span>
+            <Switch checked={f.longAsMms} onCheckedChange={(v) => set("longAsMms")(v)} />
+          </label>
           <div className="grid gap-4 sm:grid-cols-[180px_1fr]">
             <div className="space-y-2">
               <Label htmlFor="vm-cool">{t("integrations.voipms.cooldown")}</Label>
