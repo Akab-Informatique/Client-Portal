@@ -58,6 +58,7 @@ import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip
 import { api, ApiError } from "@/lib/api";
 import { AiModelSub, AiTodayLine, useAiModel } from "@/components/AiModelPicker";
 import { useCan, useMe } from "@/lib/session";
+import { DueEditor } from "./DueEditor";
 import { cn, initials } from "@/lib/utils";
 import { GlassBackdrop } from "@/components/brand/GlassBackdrop";
 import { CompanyPicker, ContactPicker, useCompanies } from "./pickers";
@@ -192,6 +193,7 @@ function useTicketUpdate(tk: TicketDetail) {
       assigneeId?: string | null;
       secondaryIds?: string[];
       dueDate?: string;
+      dueAt?: string;
       companyId?: number;
       contactId?: string | null;
       title?: string;
@@ -321,15 +323,37 @@ function TicketBody({
               trigger={<span className="rounded-full border px-2.5 py-0.5 text-xs text-muted-foreground">{tk.queueLabel || "—"}</span>}
             />
             {update.isPending && <Loader2 className="size-4 animate-spin text-muted-foreground" />}
-            <span
-              className={cn(
-                "flex items-center gap-1 rounded-full border px-2.5 py-0.5 text-xs font-medium",
-                due === "overdue" ? "border-destructive/50 text-destructive" : due === "today" ? "border-orange-500/50 text-orange-400" : "text-muted-foreground",
-              )}
-            >
-              <CalendarClock className="size-3.5" />
-              {due === "overdue" ? t("tickets.overdue") : due === "today" ? t("tickets.today") : longDateTime(tk.dueAt)}
-            </span>
+            {(() => {
+              const badge = (
+                <span
+                  className={cn(
+                    "flex items-center gap-1 rounded-full border px-2.5 py-0.5 text-xs font-medium",
+                    due === "overdue" ? "border-destructive/50 text-destructive" : due === "today" ? "border-orange-500/50 text-orange-400" : "text-muted-foreground",
+                    editable && "cursor-pointer hover:border-[color:var(--gold)]/60",
+                  )}
+                  title={editable ? t("tickets.due.change") : longDateTime(tk.dueAt)}
+                >
+                  <CalendarClock className="size-3.5" />
+                  {due === "overdue" ? t("tickets.overdue") : due === "today" ? t("tickets.today") : longDateTime(tk.dueAt)}
+                </span>
+              );
+              return editable ? (
+                <Popover>
+                  <PopoverTrigger asChild>
+                    <button type="button" aria-label={t("tickets.due.change")}>
+                      {badge}
+                    </button>
+                  </PopoverTrigger>
+                  <PopoverContent align="start" className="w-80 space-y-2">
+                    <p className="text-sm font-semibold">{t("tickets.fields.due")}</p>
+                    <p className="text-xs text-muted-foreground">{longDateTime(tk.dueAt)}</p>
+                    <DueEditor dueAt={tk.dueAt} quick autoFocus saving={update.isPending} onSave={(dueAt) => update.mutate({ dueAt })} />
+                  </PopoverContent>
+                </Popover>
+              ) : (
+                badge
+              );
+            })()}
 
             {/* Quick actions: what a technician does next, one click away */}
             <span className="hidden h-5 w-px bg-border lg:mx-1 lg:block" />
@@ -489,14 +513,9 @@ function TicketBody({
                 <StartDate tk={tk} />
                 <Detail icon={CalendarClock} label={t("tickets.fields.due")}>
                   {editable ? (
-                    <Input
-                      type="date"
-                      className="mt-0.5 h-8"
-                      key={tk.dueAt}
-                      defaultValue={tk.dueAt.slice(0, 10)}
-                      onChange={(e) => e.target.value && update.mutate({ dueDate: e.target.value })}
-                      aria-label={t("tickets.fields.due")}
-                    />
+                    <div className="mt-0.5">
+                      <DueEditor dueAt={tk.dueAt} saving={update.isPending} onSave={(dueAt) => update.mutate({ dueAt })} />
+                    </div>
                   ) : (
                     longDateTime(tk.dueAt)
                   )}

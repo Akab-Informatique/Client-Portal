@@ -2341,6 +2341,7 @@ const fr = {
     },
   },
   tickets: {
+    due: { change: "Changer l'échéance", date: "Date d'échéance", time: "Heure d'échéance", today: "Aujourd'hui", tomorrow: "Demain", monday: "Lundi", week: "Dans 1 semaine" },
     filtersTitle: "Filtres",
     tiles: {
       overdue: "En retard",

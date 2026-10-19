@@ -138,6 +138,8 @@ export type TicketPatch = {
   queue?: string;
   assigneeId?: string | null;
   dueDate?: string;
+  /** Exact due date and time (ISO), instead of a day at 17:00 */
+  dueAt?: string;
   companyId?: number;
   contactId?: string | null;
   title?: string;
@@ -295,7 +297,17 @@ const DEMO_PRODUCTS: Product[] = [
   { id: "p5", name: "Câble réseau Cat6 3 m", description: "Bleu", sku: "C6-3M-BL", manufacturer: "Tripp Lite", unitPrice: 12.5, unitCost: 4.1, materialCodeId: "10" },
 ];
 /** A due date picked in the portal: end of the working day in Québec. */
-export const dueIso = (date: string) => new Date(`${date}T17:00:00-04:00`).toISOString();
+/** A day (and time, 17:00 by default) in Québec as an ISO instant — summer (-04:00) or winter (-05:00) time. */
+export function dueIso(date: string, time = "17:00"): string {
+  const fmt = new Intl.DateTimeFormat("en-CA", { timeZone: "America/Toronto", year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", hourCycle: "h23" });
+  const want = `${date} ${time}`;
+  for (const offset of ["-04:00", "-05:00"]) {
+    const d = new Date(`${date}T${time}:00${offset}`);
+    const p = Object.fromEntries(fmt.formatToParts(d).map((x) => [x.type, x.value]));
+    if (`${p.year}-${p.month}-${p.day} ${p.hour}:${p.minute}` === want) return d.toISOString();
+  }
+  return new Date(`${date}T${time}:00-05:00`).toISOString();
+}
 
 export class SourceError extends Error {
   constructor(
@@ -376,7 +388,8 @@ const demoSource: TicketSource = {
     if (p.status) patch.status = p.status as never;
     if (p.priority) patch.priority = p.priority as never;
     if (p.queue) patch.queue = p.queue;
-    if (p.dueDate) patch.dueAt = dueIso(p.dueDate);
+    if (p.dueAt) patch.dueAt = new Date(p.dueAt).toISOString();
+    else if (p.dueDate) patch.dueAt = dueIso(p.dueDate);
     if (p.companyId !== undefined) {
       const company = demoCompanies().find((x) => x.id === p.companyId);
       if (!company) throw new SourceError("invalid_company");
@@ -1234,7 +1247,8 @@ const autotaskSource: TicketSource = {
       if (!opts.queues.some((s) => s.value === p.queue)) throw new SourceError("invalid_value");
       patch.queueID = Number(p.queue);
     }
-    if (p.dueDate) patch.dueDateTime = dueIso(p.dueDate);
+    if (p.dueAt) patch.dueDateTime = new Date(p.dueAt).toISOString();
+    else if (p.dueDate) patch.dueDateTime = dueIso(p.dueDate);
     if (p.companyId !== undefined) {
       patch.companyID = p.companyId;
       if (p.contactId === undefined) patch.contactID = null;

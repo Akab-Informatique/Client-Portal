@@ -1214,6 +1214,13 @@ describe("tickets: inline edit, notes, team filter and AI", () => {
     const r = await tech.patch(`/api/tickets/${tk.id}`, { status: "waitingCustomer", priority: "low", assigneeId: admin.id, dueDate: "2026-12-24" });
     expect(r.json).toMatchObject({ status: "waitingCustomer", priority: "low", assignee: { id: admin.id } });
     expect(r.json.dueAt.slice(0, 10)).toBe("2026-12-24");
+    // a day alone: 17:00 in Québec, winter (-05:00) or summer (-04:00) time
+    expect(r.json.dueAt).toBe("2026-12-24T22:00:00.000Z");
+    expect((await tech.patch(`/api/tickets/${tk.id}`, { dueDate: "2026-07-15" })).json.dueAt).toBe("2026-07-15T21:00:00.000Z");
+    // the exact date and time
+    expect((await tech.patch(`/api/tickets/${tk.id}`, { dueAt: "2026-12-23T10:30:00-05:00" })).json.dueAt).toBe("2026-12-23T15:30:00.000Z");
+    expect((await tech.patch(`/api/tickets/${tk.id}`, { dueAt: "demain" })).status).toBe(400);
+    expect((await tech.patch(`/api/tickets/${tk.id}`, { dueAt: "3026-01-01T10:00:00Z" })).status).toBe(400);
     expect((await tech.patch(`/api/tickets/${tk.id}`, { status: "nope" })).status).toBe(400);
 
     const byAdmin = (await tech.get(`/api/tickets?view=all&assignee=${admin.id}`)).json.items;

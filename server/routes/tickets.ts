@@ -920,6 +920,15 @@ export const ticketRoutes = new Hono<AppEnv>()
         contactId: z.string().max(60).nullable().optional(),
         assigneeId: z.string().max(60).nullable().optional(),
         dueDate: zDate.optional(),
+        // an exact moment (date and time), within reason
+        dueAt: z
+          .string()
+          .datetime({ offset: true })
+          .refine((v) => {
+            const y = new Date(v).getUTCFullYear();
+            return y >= 2000 && y <= 2100;
+          })
+          .optional(),
         title: z.string().trim().min(1).max(250).optional(),
         description: z.string().max(8000).optional(),
         secondaryIds: z.array(z.string().max(60)).max(20).optional(),

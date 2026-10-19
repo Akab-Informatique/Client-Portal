@@ -2343,6 +2343,7 @@ const en: Dict = {
     },
   },
   tickets: {
+    due: { change: "Change the due date", date: "Due date", time: "Due time", today: "Today", tomorrow: "Tomorrow", monday: "Monday", week: "In 1 week" },
     filtersTitle: "Filters",
     tiles: {
       overdue: "Overdue",
