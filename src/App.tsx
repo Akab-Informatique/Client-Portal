@@ -18,6 +18,7 @@ const TicketsPage = lazy(() => pageLoaders.tickets().then((m) => ({ default: m.T
 const StorePage = lazy(() => pageLoaders.store().then((m) => ({ default: m.StorePage })));
 const OutlookPage = lazy(() => pageLoaders.outlook().then((m) => ({ default: m.OutlookPage })));
 const MeetingsPage = lazy(() => pageLoaders.meetings().then((m) => ({ default: m.MeetingsPage })));
+const BreakroomPage = lazy(() => pageLoaders.breakroom().then((m) => ({ default: m.BreakroomPage })));
 const ClientsPage = lazy(() => pageLoaders.crm().then((m) => ({ default: m.ClientsPage })));
 const ClientPage = lazy(() => pageLoaders.client().then((m) => ({ default: m.ClientPage })));
 const TimesheetPage = lazy(() => pageLoaders.timesheet().then((m) => ({ default: m.TimesheetPage })));
@@ -91,6 +92,7 @@ function StaffApp() {
         <Route path="store" element={<Guard permission="store.view"><StorePage /></Guard>} />
         <Route path="outlook" element={<Guard permission="outlook.view"><OutlookPage /></Guard>} />
         <Route path="meetings" element={<Guard permission="meetings.view"><MeetingsPage /></Guard>} />
+        <Route path="breakroom" element={<Guard permission="breakroom.use"><BreakroomPage /></Guard>} />
         <Route path="crm" element={<Guard permission="crm.view"><ClientsPage /></Guard>} />
         <Route path="crm/:id" element={<Guard permission="crm.view"><ClientPage /></Guard>} />
         <Route path="accounting/invoices" element={<Guard permission="accounting.view"><AccountingPage kind="invoices" /></Guard>} />

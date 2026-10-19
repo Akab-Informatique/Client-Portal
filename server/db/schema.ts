@@ -1076,6 +1076,34 @@ export const meetingAbsences = pgTable(
   (t) => [index("meeting_absences_dates_idx").on(t.startDate, t.endDate)],
 );
 
+/** Coffee break: a game of checkers between two team members (the board as 64 characters, see shared/checkers.ts) */
+export const checkersGames = pgTable(
+  "checkers_games",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    /** Who invited (plays red, moves first) */
+    redId: uuid("red_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    blackId: uuid("black_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    /** invited | playing | done | declined */
+    status: text("status").notNull().default("invited"),
+    board: text("board").notNull(),
+    turn: text("turn").notNull().default("r"),
+    /** A capture in progress: the square of the piece that goes on */
+    mustFrom: integer("must_from"),
+    /** r | b, once done */
+    winner: text("winner"),
+    /** win | resign */
+    endedBy: text("ended_by"),
+    createdAt: created(),
+    updatedAt: updated(),
+  },
+  (t) => [index("checkers_games_players_idx").on(t.redId, t.blackId)],
+);
+
 /** Weekly meeting: something on the team week (a team lunch, a client visit, a deadline…) */
 export const meetingEvents = pgTable(
   "meeting_events",

@@ -358,6 +358,13 @@
       "when": 1792419721167,
       "tag": "0050_ticket_start_time",
       "breakpoints": true
+    },
+    {
+      "idx": 51,
+      "version": "7",
+      "when": 1792420284456,
+      "tag": "0051_checkers",
+      "breakpoints": true
     }
   ]
 }

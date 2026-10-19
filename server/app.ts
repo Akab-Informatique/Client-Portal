@@ -27,6 +27,7 @@ import { outlookRoutes } from "./routes/outlook.ts";
 import { portalRoutes } from "./routes/portal.ts";
 import { microsoftRoutes } from "./routes/microsoft.ts";
 import { meetingRoutes } from "./routes/meetings.ts";
+import { breakroomRoutes } from "./routes/breakroom.ts";
 import { crmRoutes } from "./routes/crm.ts";
 import { billingRoutes } from "./routes/billing.ts";
 import { billablesRoutes } from "./routes/billables.ts";
@@ -44,10 +45,12 @@ export function createApp() {
         defaultSrc: ["'self'"],
         scriptSrc: ["'self'"],
         styleSrc: ["'self'", "'unsafe-inline'"],
-        imgSrc: ["'self'", "data:"],
+        imgSrc: ["'self'", "data:", "https://i.ytimg.com"],
         fontSrc: ["'self'", "data:"],
         connectSrc: ["'self'"],
         frameAncestors: ["'none'"],
+        // the coffee break videos (youtube-nocookie: no tracking cookie until played)
+        frameSrc: ["https://www.youtube-nocookie.com"],
         baseUri: ["'self'"],
         formAction: ["'self'"],
         objectSrc: ["'none'"],
@@ -88,6 +91,7 @@ export function createApp() {
   api.route("/outlook", outlookRoutes);
   api.route("/microsoft", microsoftRoutes);
   api.route("/meetings", meetingRoutes);
+  api.route("/breakroom", breakroomRoutes);
   api.route("/crm", crmRoutes);
   api.route("/billing", billingRoutes);
   api.route("/billables", billablesRoutes);

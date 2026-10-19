@@ -232,6 +232,18 @@ export const MODULES = [
     ],
   },
   {
+    key: "breakroom",
+    audience: "staff",
+    label: { fr: "Pause café", en: "Coffee break" },
+    permissions: [
+      {
+        key: "breakroom.use",
+        label: { fr: "Accéder à la pause café", en: "Use the coffee break" },
+        description: { fr: "Jouer aux dames avec un collègue en ligne, regarder les vidéos d'Orbi", en: "Play checkers with an online colleague, watch Orbi's videos" },
+      },
+    ],
+  },
+  {
     key: "meetings",
     audience: "staff",
     label: { fr: "Rencontre hebdomadaire", en: "Weekly meeting" },
@@ -400,7 +412,7 @@ export type ModuleKey = (typeof MODULES)[number]["key"];
  * page, or right by right. Every module appears exactly once (tested).
  */
 export const ACCESS_LAYOUT: { key: string; audience: Audience; label: Localized; modules: ModuleKey[] }[] = [
-  { key: "team", audience: "staff", label: { fr: "Équipe", en: "Team" }, modules: ["dashboard", "meetings"] },
+  { key: "team", audience: "staff", label: { fr: "Équipe", en: "Team" }, modules: ["dashboard", "meetings", "breakroom"] },
   { key: "tools", audience: "staff", label: { fr: "Mes outils", en: "My tools" }, modules: ["outlook", "timesheets"] },
   { key: "command", audience: "staff", label: { fr: "Centre de commande", en: "Command center" }, modules: ["messages", "tickets", "sms"] },
   { key: "management", audience: "staff", label: { fr: "Gestion", en: "Management" }, modules: ["crm", "clientview", "store"] },
@@ -478,6 +490,7 @@ export const SYSTEM_ROLES: Array<{
       "tickets.planSelf",
       "crm.view",
       "timesheets.use",
+      "breakroom.use",
       "sms.view",
       "outlook.view",
       "outlook.send",

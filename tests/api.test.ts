@@ -3891,6 +3891,55 @@ describe("submitting: timesheets (when required) and expenses", () => {
   });
 });
 
+describe("coffee break", () => {
+  it("checkers with a colleague online: invitation, turns checked on the server, resign; nobody else sees it", async () => {
+    resetRateLimit("login:ip:unknown");
+    const tech = await signIn("tech@akab.local");
+    const admin = await signIn("admin@akab.local");
+    const [techRow] = await db().select().from(schema.users).where(eq(schema.users.email, "tech@akab.local"));
+    const [adminRow] = await db().select().from(schema.users).where(eq(schema.users.email, "admin@akab.local"));
+    // both signed in just now: online for each other (never oneself)
+    const online = (await tech.get("/api/breakroom/online")).json;
+    expect(online.some((p: any) => p.id === adminRow.id)).toBe(true);
+    expect(online.some((p: any) => p.id === techRow.id)).toBe(false);
+
+    // the invitation: a notification; asking again gives the same game
+    const g = await tech.post("/api/breakroom/checkers", { opponentId: adminRow.id });
+    expect(g.status).toBe(201);
+    expect(g.json).toMatchObject({ status: "invited", mySide: "r", invitedByMe: true, opponent: { id: adminRow.id } });
+    expect((await tech.post("/api/breakroom/checkers", { opponentId: adminRow.id })).json.id).toBe(g.json.id);
+    expect((await tech.post("/api/breakroom/checkers", { opponentId: techRow.id })).status).toBe(400);
+    const bell = (await admin.get("/api/notifications")).json.items.find((n: any) => n.type === "breakroom.invite");
+    expect(bell).toMatchObject({ link: `/breakroom?game=${g.json.id}`, data: { from: "Alex Tremblay" } });
+    // only the one invited answers; no move before
+    expect((await tech.post(`/api/breakroom/checkers/${g.json.id}/respond`, { accept: true })).status).toBe(409);
+    expect((await tech.post(`/api/breakroom/checkers/${g.json.id}/move`, { from: 40, to: 33 })).json.error).toBe("game_not_playing");
+    expect((await admin.post(`/api/breakroom/checkers/${g.json.id}/respond`, { accept: true })).json.status).toBe("playing");
+
+    // red (the one who invited) plays first; moves are checked
+    expect((await admin.post(`/api/breakroom/checkers/${g.json.id}/move`, { from: 17, to: 24 })).json.error).toBe("not_your_turn");
+    expect((await tech.post(`/api/breakroom/checkers/${g.json.id}/move`, { from: 40, to: 32 })).json.error).toBe("illegal_move");
+    const m1 = await tech.post(`/api/breakroom/checkers/${g.json.id}/move`, { from: 40, to: 33 });
+    expect(m1.json).toMatchObject({ turn: "b", myTurn: false });
+    expect((await admin.get(`/api/breakroom/checkers/${g.json.id}`)).json).toMatchObject({ mySide: "b", myTurn: true });
+    expect((await admin.post(`/api/breakroom/checkers/${g.json.id}/move`, { from: 17, to: 24 })).json.turn).toBe("r");
+
+    // someone else cannot see or play it
+    const tech2 = await signIn("tech2@akab.local");
+    expect((await tech2.get(`/api/breakroom/checkers/${g.json.id}`)).status).toBe(404);
+    expect((await tech2.post(`/api/breakroom/checkers/${g.json.id}/move`, { from: 42, to: 33 })).status).toBe(404);
+
+    // resigning ends it: the other one wins
+    const end = await admin.post(`/api/breakroom/checkers/${g.json.id}/resign`);
+    expect(end.json).toMatchObject({ status: "done", winner: "r", endedBy: "resign" });
+    expect((await tech.get(`/api/breakroom/checkers/${g.json.id}`)).json).toMatchObject({ status: "done", winner: "r", mySide: "r" });
+
+    // clients have no coffee break
+    const client = await signIn("responsable1@client.example");
+    expect((await client.get("/api/breakroom/online")).status).toBe(403);
+  });
+});
+
 describe("security review fixes", () => {
   it("a Graph path never climbs out of its mailbox (%2e%2e, %2f, backslash)", async () => {
     const { safeGraphPath } = await import("../server/lib/o365.ts");

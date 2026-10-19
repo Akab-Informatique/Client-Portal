@@ -13,6 +13,7 @@ export const pageLoaders = {
   store: () => import("@/pages/store/StorePage"),
   outlook: () => import("@/pages/outlook/OutlookPage"),
   meetings: () => import("@/pages/meetings/MeetingsPage"),
+  breakroom: () => import("@/pages/breakroom/BreakroomPage"),
   crm: () => import("@/pages/crm/ClientsPage"),
   client: () => import("@/pages/crm/ClientPage"),
   accounting: () => import("@/pages/accounting/AccountingPage"),
