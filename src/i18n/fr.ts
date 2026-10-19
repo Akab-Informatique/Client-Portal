@@ -477,6 +477,11 @@ const fr = {
     none: "Rien d'approuvé à facturer dans cette période.",
   },
   approvals: {
+    collapseAll: "Tout réduire",
+    expandAll: "Tout ouvrir",
+    collapse: "Réduire",
+    expand: "Ouvrir",
+    selectClient: "Sélectionner tout pour {{name}}",
     fromAutotask: "Dépenses importées d'Autotask (à facturer)",
     team: {
       submitted: "À approuver",

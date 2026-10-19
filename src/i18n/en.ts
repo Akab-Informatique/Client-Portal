@@ -479,6 +479,11 @@ const en: Dict = {
     none: "Nothing approved to invoice in this period.",
   },
   approvals: {
+    collapseAll: "Collapse all",
+    expandAll: "Expand all",
+    collapse: "Collapse",
+    expand: "Expand",
+    selectClient: "Select all for {{name}}",
     fromAutotask: "Expenses imported from Autotask (to invoice)",
     team: {
       submitted: "To approve",

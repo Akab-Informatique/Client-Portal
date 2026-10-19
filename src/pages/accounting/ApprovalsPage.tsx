@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState, type FormEvent } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
@@ -17,7 +17,9 @@ import {
   Hammer,
   Loader2,
   Package,
-  Pencil,
+  ChevronRight,
+  ChevronsDownUp,
+  ChevronsUpDown,
   Sparkles,
   Undo2,
   Wallet,
@@ -130,7 +132,11 @@ export function ApprovalsPage() {
       },
       { replace: true },
     );
-  const { data: summary } = useQuery({ queryKey: [...KEY, "summary", pq], queryFn: () => api.get<Summary>(`/billables/summary?${pq}`), refetchInterval: 60_000 });
+  const { data: summary } = useQuery({
+    queryKey: [...KEY, "summary", pq],
+    queryFn: () => api.get<Summary>(`/billables/summary?${pq}`),
+    refetchInterval: 60_000,
+  });
   const count = (kind: Kind, status: Status) => summary?.counts.find((c) => c.kind === kind && c.status === status)?.n ?? 0;
   const pendingIn = (f: Folder) => FOLDERS.find((x) => x.key === f)!.tabs.reduce((x, k) => x + (k === "timesheets" ? 0 : count(k, "pending")), 0);
   const importNow = useMutation({
@@ -200,13 +206,7 @@ export function ApprovalsPage() {
               >
                 {active && <span className="absolute inset-x-3 top-0 h-0.5 rounded-full bg-grad-gold" />}
                 <f.icon className={cn("size-4", active && "text-primary")} /> {t(`approvals.folders.${f.key}`)}
-                {n > 0 && (
-                  <span
-                    className="rounded-full bg-sky-500/20 px-1.5 font-mono text-[10px] text-sky-300"
-                  >
-                    {n}
-                  </span>
-                )}
+                {n > 0 && <span className="rounded-full bg-sky-500/20 px-1.5 font-mono text-[10px] text-sky-300">{n}</span>}
               </button>
             );
           })}
@@ -615,7 +615,17 @@ function KindTab({ kind, counts, lang, pq }: { kind: Kind; counts: (s: Status) =
   const qc = useQueryClient();
   const [status, setStatus] = useState<Status>("pending");
   const [sel, setSel] = useState<Set<string>>(new Set());
-  const [editing, setEditing] = useState<string | null>(null);
+  const [collapsed, setCollapsed] = useState<Set<string>>(readCollapsed);
+  const toggle = (ids: string[], close: boolean) =>
+    setCollapsed((s) => {
+      const next = new Set(s);
+      for (const id of ids) {
+        if (close) next.add(id);
+        else next.delete(id);
+      }
+      saveCollapsed(next);
+      return next;
+    });
   const { data: items = [], isLoading } = useQuery({
     queryKey: [...KEY, kind, status, pq],
     queryFn: () => api.get<Item[]>(`/billables?kind=${kind}&status=${status}&${pq}`),
@@ -633,6 +643,17 @@ function KindTab({ kind, counts, lang, pq }: { kind: Kind; counts: (s: Status) =
       setSel(new Set());
       void qc.invalidateQueries({ queryKey: KEY });
       toast.success(t(`approvals.moved.${to}`, { count: r.changed }));
+    },
+  });
+  const edit = useMutation({
+    mutationFn: (p: { id: string; patch: { description?: string; quantity?: number; unitPriceCents?: number } }) => api.patch(`/billables/${p.id}`, p.patch),
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: KEY });
+      toast.success(t("approvals.saved"));
+    },
+    onError: () => {
+      void qc.invalidateQueries({ queryKey: KEY });
+      toast.error(t("common.error"));
     },
   });
   const m = (c: number) => money(c, lang);
@@ -659,6 +680,36 @@ function KindTab({ kind, counts, lang, pq }: { kind: Kind; counts: (s: Status) =
             {t(`approvals.status.${s}`)} <span className="font-mono text-[10px] text-muted-foreground">{counts(s)}</span>
           </button>
         ))}
+        {groups.length > 1 && (
+          <span className="ml-2 flex gap-1">
+            <Button
+              size="sm"
+              variant="ghost"
+              className="h-8 px-2 text-xs"
+              onClick={() =>
+                toggle(
+                  groups.map(([id]) => id),
+                  true,
+                )
+              }
+            >
+              <ChevronsDownUp className="size-3.5" /> {t("approvals.collapseAll")}
+            </Button>
+            <Button
+              size="sm"
+              variant="ghost"
+              className="h-8 px-2 text-xs"
+              onClick={() =>
+                toggle(
+                  groups.map(([id]) => id),
+                  false,
+                )
+              }
+            >
+              <ChevronsUpDown className="size-3.5" /> {t("approvals.expandAll")}
+            </Button>
+          </span>
+        )}
         <span className="ml-auto font-mono text-sm">{m(total)}</span>
       </div>
 
@@ -693,38 +744,53 @@ function KindTab({ kind, counts, lang, pq }: { kind: Kind; counts: (s: Status) =
       {groups.map(([clientId, g]) => {
         const ids = g.items.map((i) => i.id);
         const sub = g.items.reduce((x, i) => x + i.amountCents, 0);
+        const closed = collapsed.has(clientId);
         return (
           <section key={clientId} className="glass overflow-hidden rounded-2xl border">
-            <div className="flex items-center gap-3 border-b bg-background/30 px-3 py-2">
+            <div className={cn("flex items-center gap-3 bg-background/30 px-3 py-2", !closed && "border-b")}>
               {manage && (
                 <Checkbox
                   checked={ids.every((x) => sel.has(x)) ? true : ids.some((x) => sel.has(x)) ? "indeterminate" : false}
                   onCheckedChange={(v) => setMany(ids, Boolean(v))}
+                  aria-label={t("approvals.selectClient", { name: g.name })}
                 />
               )}
-              <span className="flex-1 text-sm font-semibold">{g.name}</span>
-              <span className="text-xs text-muted-foreground">{t("approvals.items", { count: g.items.length })}</span>
+              <button
+                type="button"
+                onClick={() => toggle([clientId], !closed)}
+                aria-expanded={!closed}
+                className="flex min-w-0 flex-1 items-center gap-2 text-left"
+                title={t(closed ? "approvals.expand" : "approvals.collapse")}
+              >
+                <ChevronRight className={cn("size-4 shrink-0 text-muted-foreground transition-transform", !closed && "rotate-90")} />
+                <span className="truncate text-sm font-semibold">{g.name}</span>
+                <span className="ml-auto shrink-0 text-xs text-muted-foreground">{t("approvals.items", { count: g.items.length })}</span>
+              </button>
               <span className="font-mono text-sm">{m(sub)}</span>
             </div>
-            <ul className="divide-y divide-border/60">
-              {g.items.map((i) =>
-                editing === i.id ? (
-                  <li key={i.id}>
-                    <EditRow item={i} onDone={() => setEditing(null)} lang={lang} />
-                  </li>
-                ) : (
+            {!closed && (
+              <ul className="divide-y divide-border/60">
+                {g.items.map((i) => (
                   <li
                     key={i.id}
                     className="group grid grid-cols-[auto_minmax(0,1fr)_auto] items-start gap-3 px-3 py-2 text-sm md:grid-cols-[auto_90px_minmax(0,1fr)_80px_100px_110px_auto]"
                   >
-                    {manage ? <Checkbox className="mt-0.5" checked={sel.has(i.id)} onCheckedChange={(v) => setMany([i.id], Boolean(v))} /> : <span />}
-                    <span className="hidden text-xs text-muted-foreground md:block">
+                    {manage ? <Checkbox className="mt-1" checked={sel.has(i.id)} onCheckedChange={(v) => setMany([i.id], Boolean(v))} /> : <span />}
+                    <span className="hidden pt-1 text-xs text-muted-foreground md:block">
                       {shortDate(i.date)}
                       {i.dateEnd && <span className="block">→ {shortDate(i.dateEnd)}</span>}
                     </span>
                     <span className="min-w-0">
-                      <span className="block break-words">{i.description}</span>
-                      <span className="block text-[11px] text-muted-foreground">
+                      {manage ? (
+                        <InlineText
+                          value={i.description}
+                          label={t("approvals.description")}
+                          onSave={(description) => edit.mutate({ id: i.id, patch: { description } })}
+                        />
+                      ) : (
+                        <span className="block break-words">{i.description}</span>
+                      )}
+                      <span className="block px-1 text-[11px] text-muted-foreground">
                         {[
                           i.ticketNumber && `${t("approvals.ticket")} ${i.ticketNumber}`,
                           i.contractName,
@@ -737,11 +803,32 @@ function KindTab({ kind, counts, lang, pq }: { kind: Kind; counts: (s: Status) =
                       </span>
                     </span>
                     <span className="hidden text-right font-mono text-xs md:block">
-                      {(i.quantityX100 / 100).toLocaleString(lang === "en" ? "en-CA" : "fr-CA")}
+                      {manage ? (
+                        <InlineNumber
+                          value={i.quantityX100 / 100}
+                          lang={lang}
+                          label={t(i.kind === "labour" ? "approvals.hours" : "approvals.quantity")}
+                          onSave={(quantity) => edit.mutate({ id: i.id, patch: { quantity } })}
+                        />
+                      ) : (
+                        (i.quantityX100 / 100).toLocaleString(lang === "en" ? "en-CA" : "fr-CA")
+                      )}
                     </span>
-                    <span className="hidden text-right font-mono text-xs text-muted-foreground md:block">{m(i.unitPriceCents)}</span>
-                    <span className="text-right font-mono">{m(i.amountCents)}</span>
-                    <span className="flex items-center justify-end gap-1">
+                    <span className="hidden text-right font-mono text-xs text-muted-foreground md:block">
+                      {manage ? (
+                        <InlineNumber
+                          value={i.unitPriceCents / 100}
+                          lang={lang}
+                          money
+                          label={t("approvals.rate")}
+                          onSave={(rate) => edit.mutate({ id: i.id, patch: { unitPriceCents: Math.round(rate * 100) } })}
+                        />
+                      ) : (
+                        m(i.unitPriceCents)
+                      )}
+                    </span>
+                    <span className="pt-1 text-right font-mono">{m(i.amountCents)}</span>
+                    <span className="flex items-center justify-end gap-1 pt-0.5">
                       {i.autoApproved && i.status === "approved" && (
                         <span
                           className="flex items-center gap-0.5 rounded-md border border-violet-500/40 bg-violet-500/10 px-1 py-0.5 text-[10px] text-violet-300"
@@ -751,21 +838,11 @@ function KindTab({ kind, counts, lang, pq }: { kind: Kind; counts: (s: Status) =
                         </span>
                       )}
                       <span className={cn("rounded-md border px-1.5 py-0.5 text-[10px]", STATUS_STYLE[i.status])}>{t(`approvals.status.${i.status}`)}</span>
-                      {manage && (
-                        <button
-                          type="button"
-                          onClick={() => setEditing(i.id)}
-                          className="rounded p-1 text-muted-foreground opacity-0 transition-opacity hover:bg-accent hover:text-foreground group-hover:opacity-100"
-                          aria-label={t("approvals.edit")}
-                        >
-                          <Pencil className="size-3.5" />
-                        </button>
-                      )}
                     </span>
                   </li>
-                ),
-              )}
-            </ul>
+                ))}
+              </ul>
+            )}
           </section>
         );
       })}
@@ -773,54 +850,94 @@ function KindTab({ kind, counts, lang, pq }: { kind: Kind; counts: (s: Status) =
   );
 }
 
-function EditRow({ item: i, onDone, lang }: { item: Item; onDone: () => void; lang: string }) {
-  const { t } = useTranslation();
-  const qc = useQueryClient();
-  const [f, setF] = useState({ quantity: String(i.quantityX100 / 100), rate: (i.unitPriceCents / 100).toFixed(2), description: i.description });
-  const num = (s: string) => Number(s.replace(",", "."));
-  const save = useMutation({
-    mutationFn: () => api.patch(`/billables/${i.id}`, { quantity: num(f.quantity), unitPriceCents: Math.round(num(f.rate) * 100), description: f.description }),
-    onSuccess: () => {
-      void qc.invalidateQueries({ queryKey: KEY });
-      toast.success(t("approvals.saved"));
-      onDone();
-    },
-    onError: () => toast.error(t("common.error")),
-  });
+const COLLAPSED_KEY = "akab.approvals.collapsed";
+function readCollapsed(): Set<string> {
+  try {
+    return new Set(JSON.parse(sessionStorage.getItem(COLLAPSED_KEY) ?? "[]") as string[]);
+  } catch {
+    return new Set();
+  }
+}
+function saveCollapsed(s: Set<string>) {
+  try {
+    sessionStorage.setItem(COLLAPSED_KEY, JSON.stringify([...s]));
+  } catch {
+    /* private window: for this page only */
+  }
+}
+
+/** Text that is edited where it is: a click, then Enter or leaving the field saves; Escape cancels. */
+function InlineText({ value, label, onSave }: { value: string; label: string; onSave: (v: string) => void }) {
+  const [v, setV] = useState(value);
+  useEffect(() => setV(value), [value]);
+  const commit = () => {
+    const next = v.trim();
+    if (!next) return setV(value);
+    if (next !== value) onSave(next);
+  };
   return (
-    <form
-      className="grid gap-2 bg-[color:var(--gold)]/[0.04] px-3 py-2 sm:grid-cols-[minmax(0,1fr)_100px_110px_auto]"
-      onSubmit={(e: FormEvent) => {
-        e.preventDefault();
-        save.mutate();
+    <textarea
+      value={v}
+      rows={1}
+      aria-label={label}
+      onChange={(e) => setV(e.target.value)}
+      onBlur={commit}
+      onKeyDown={(e) => {
+        if (e.key === "Enter" && !e.shiftKey) {
+          e.preventDefault();
+          (e.target as HTMLTextAreaElement).blur();
+        }
+        if (e.key === "Escape") {
+          setV(value);
+          (e.target as HTMLTextAreaElement).blur();
+        }
       }}
-    >
-      <Input value={f.description} onChange={(e) => setF({ ...f, description: e.target.value })} className="h-8" aria-label={t("approvals.description")} />
-      <Input
-        value={f.quantity}
-        inputMode="decimal"
-        onChange={(e) => setF({ ...f, quantity: e.target.value })}
-        className="h-8 font-mono"
-        aria-label={t(i.kind === "labour" ? "approvals.hours" : "approvals.quantity")}
-        placeholder={t(i.kind === "labour" ? "approvals.hours" : "approvals.quantity")}
-      />
-      <Input
-        value={f.rate}
-        inputMode="decimal"
-        onChange={(e) => setF({ ...f, rate: e.target.value })}
-        className="h-8 font-mono"
-        aria-label={t("approvals.rate")}
-      />
-      <div className="flex items-center gap-1">
-        <span className="px-1 font-mono text-xs text-muted-foreground">{money(Math.round(num(f.quantity) * num(f.rate) * 100), lang)}</span>
-        <Button type="submit" size="sm" disabled={save.isPending} className="bg-grad-gold font-semibold text-[#1a1204]">
-          {save.isPending ? <Loader2 className="size-3.5 animate-spin" /> : <Check className="size-3.5" />}
-        </Button>
-        <Button type="button" size="sm" variant="ghost" onClick={onDone}>
-          <X className="size-3.5" />
-        </Button>
-      </div>
-    </form>
+      className="field-sizing-content block w-full resize-none rounded-md border border-transparent bg-transparent px-1 py-0.5 break-words outline-none hover:border-border focus:border-[color:var(--gold)]/60 focus:bg-background/60"
+    />
   );
 }
 
+/** A number edited where it is (hours, quantity, rate). */
+function InlineNumber({
+  value,
+  lang,
+  label,
+  money: asMoney,
+  onSave,
+}: {
+  value: number;
+  lang: string;
+  label: string;
+  money?: boolean;
+  onSave: (v: number) => void;
+}) {
+  const loc = lang === "en" ? "en-CA" : "fr-CA";
+  const show = (n: number) =>
+    asMoney ? n.toLocaleString(loc, { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : n.toLocaleString(loc, { maximumFractionDigits: 2 });
+  const [v, setV] = useState(show(value));
+  useEffect(() => setV(show(value)), [value]);
+  const commit = () => {
+    const n = Number(v.replace(/\s/g, "").replace(",", "."));
+    if (!Number.isFinite(n) || n < 0) return setV(show(value));
+    if (Math.round(n * 100) !== Math.round(value * 100)) onSave(n);
+    else setV(show(value));
+  };
+  return (
+    <input
+      value={v}
+      inputMode="decimal"
+      aria-label={label}
+      onChange={(e) => setV(e.target.value)}
+      onFocus={(e) => e.target.select()}
+      onBlur={commit}
+      onKeyDown={(e) => {
+        if (e.key === "Enter") (e.target as HTMLInputElement).blur();
+        if (e.key === "Escape") {
+          setV(show(value));
+          (e.target as HTMLInputElement).blur();
+        }
+      }}
+      className="w-full rounded-md border border-transparent bg-transparent px-1 py-0.5 text-right font-mono outline-none hover:border-border focus:border-[color:var(--gold)]/60 focus:bg-background/60"
+    />
+  );
+}
