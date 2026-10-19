@@ -904,8 +904,8 @@ export const smsConversations = pgTable(
     contactId: text("contact_id"),
     companyId: bigint("company_id", { mode: "number" }),
     companyName: text("company_name"),
-    /** waiting: the client waits for a technician (auto ticket at the deadline); open: being handled; ticket: linked to a ticket; closed */
-    status: text("status", { enum: ["waiting", "open", "ticket", "closed"] }).notNull().default("waiting"),
+    /** waiting: the client waits for a technician (auto ticket at the deadline); details: the client asked for a ticket (1), we asked what it is about; open: being handled; ticket: linked to a ticket; closed */
+    status: text("status", { enum: ["waiting", "details", "open", "ticket", "closed"] }).notNull().default("waiting"),
     ticketId: bigint("ticket_id", { mode: "number" }),
     ticketNumber: text("ticket_number"),
     /** When it becomes a ticket if no technician replies */

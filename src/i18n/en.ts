@@ -1733,6 +1733,13 @@ const en: Dict = {
     o365Off: "Outlook calendar not synced. An administrator can turn it on for you.",
   },
   sms: {
+    map: {
+      title: "Who is this ticket for?",
+      text: "The number {{phone}} is not linked to any contact: pick the ticket's client (and contact).",
+      client: "Client",
+      contact: "Contact (optional)",
+      contactHint: "Pick one of the client's contacts, or create it with this number.",
+    },
     cannotSend: "Texts cannot be sent: receiving works, but sending needs VoIP.ms turned on with the account email, the API password and the number (DID) in Admin › Integrations › VoIP.ms (SMS).",
     voipms: {
       ip_not_enabled: "VoIP.ms refuses the server's IP address: add it in VoIP.ms › Main menu › SOAP and REST/JSON API › Enable IP Addresses.",
@@ -1775,6 +1782,7 @@ const en: Dict = {
     none: "No conversation.",
     unknown: "Unknown number",
     status: {
+      details: "Details asked",
       waiting: "Waiting",
       open: "In progress",
       ticket: "Ticket",
@@ -1795,6 +1803,9 @@ const en: Dict = {
     toNumber: "Client's number",
     quick: "Text",
     errors: {
+      sms_needs_client: "Pick the ticket's client first.",
+      sms_unknown_client: "Client not found.",
+      sms_unknown_contact: "This contact is not one of this client's.",
       sms_not_configured: "Texts not set up (Admin › Integrations › VoIP.ms).",
       sms_disabled: "Texts are turned off.",
       sms_network: "VoIP.ms does not answer.",
@@ -2178,6 +2189,9 @@ const en: Dict = {
       autoReplyHint: "{delay} = the delay below (e.g. “4 h”). The client can answer 1 (or “ticket”) to make it a ticket right away.",
       cooldown: "Auto reply at most once every (hours)",
       cooldownHint: "A number that got the automatic reply more recently does not get it again (0 = every new conversation). A conversation made a ticket because nobody answered is closed: the next text starts a new one.",
+      askDetails: "After \"1\": the question to the client",
+      askDetailsHint: "The ticket opens with their answer (or after the delay), the client gets the message below, then the conversation closes.",
+      detailsMinutes: "Time to answer (minutes)",
       description: "Texts with clients on your VoIP.ms number: receiving, replies, automatic ticket.",
       account: "1. The VoIP.ms account",
       username: "VoIP.ms account email",
@@ -2201,7 +2215,7 @@ const en: Dict = {
       autoReply: "Automatic reply (new conversation)",
       minutes: "Auto ticket after (minutes without reply)",
       ticketOpened: "Message when the ticket is opened",
-      ticketOpenedHint: "{number} = the ticket number.",
+      ticketOpenedHint: "{number} = the ticket number; {request} = the client's request.",
       defaultCompany: "Client for unknown numbers",
       noDefault: "None (no automatic ticket)",
       firstQueue: "First queue",

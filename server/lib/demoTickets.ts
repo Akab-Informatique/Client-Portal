@@ -239,7 +239,9 @@ export function addDemoTimeEntry(
 
 /** Clients created in the portal (sample data, in memory) */
 const addedCompanies: { id: number; name: string }[] = [];
-export const demoCompanies = () => [...COMPANIES.map((name, i) => ({ id: 300 + i, name })), ...addedCompanies];
+/** Our own client (tickets of numbers nobody knows, when no default client is set) */
+export const DEMO_OWN_COMPANY = { id: 299, name: "AKAB Informatique" };
+export const demoCompanies = () => [...COMPANIES.map((name, i) => ({ id: 300 + i, name })), DEMO_OWN_COMPANY, ...addedCompanies];
 /**
  * A year of ticket history for the meeting trends (sample data): each day's
  * tickets and when they were resolved. Seeded by the day, so the same day

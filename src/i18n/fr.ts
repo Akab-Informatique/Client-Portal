@@ -1731,6 +1731,13 @@ const fr = {
     o365Off: "Calendrier Outlook non synchronisé. Un administrateur peut l'activer pour vous.",
   },
   sms: {
+    map: {
+      title: "Pour qui est ce billet?",
+      text: "Le numéro {{phone}} n'est lié à aucun contact : choisissez le client (et le contact) du billet.",
+      client: "Client",
+      contact: "Contact (facultatif)",
+      contactHint: "Choisissez un contact du client, ou créez-le avec ce numéro.",
+    },
     cannotSend: "Envoi des textos impossible : la réception fonctionne, mais l'envoi demande VoIP.ms activé avec le courriel du compte, le mot de passe API et le numéro (DID) dans Admin › Intégrations › VoIP.ms (SMS).",
     voipms: {
       ip_not_enabled: "VoIP.ms refuse l'adresse IP du serveur : ajoutez-la dans VoIP.ms › Main menu › SOAP and REST/JSON API › Enable IP Addresses.",
@@ -1773,6 +1780,7 @@ const fr = {
     none: "Aucune conversation.",
     unknown: "Numéro inconnu",
     status: {
+      details: "Précisions demandées",
       waiting: "En attente",
       open: "En cours",
       ticket: "Billet",
@@ -1793,6 +1801,9 @@ const fr = {
     toNumber: "Numéro du client",
     quick: "Texto",
     errors: {
+      sms_needs_client: "Choisissez d'abord le client du billet.",
+      sms_unknown_client: "Client introuvable.",
+      sms_unknown_contact: "Ce contact n'est pas de ce client.",
       sms_not_configured: "Textos non configurés (Admin › Intégrations › VoIP.ms).",
       sms_disabled: "Les textos sont désactivés.",
       sms_network: "VoIP.ms ne répond pas.",
@@ -2176,6 +2187,9 @@ const fr = {
       autoReplyHint: "{delay} = le délai ci-dessous (ex. « 4 h »). Le client peut répondre 1 (ou « billet ») pour en faire un billet tout de suite.",
       cooldown: "Réponse auto au plus une fois par (heures)",
       cooldownHint: "Un numéro qui a reçu la réponse automatique depuis moins longtemps ne la reçoit pas de nouveau (0 = à chaque nouvelle conversation). Une conversation devenue billet faute de réponse est fermée : le prochain texto en commence une nouvelle.",
+      askDetails: "Après « 1 » : la question au client",
+      askDetailsHint: "Le billet s'ouvre avec sa réponse (ou après le délai), le client reçoit le message ci-dessous, puis la conversation se ferme.",
+      detailsMinutes: "Délai pour répondre (minutes)",
       description: "Textos avec les clients sur votre numéro VoIP.ms : réception, réponses, billet automatique.",
       account: "1. Le compte VoIP.ms",
       username: "Courriel du compte VoIP.ms",
@@ -2199,7 +2213,7 @@ const fr = {
       autoReply: "Réponse automatique (nouvelle conversation)",
       minutes: "Billet auto après (minutes sans réponse)",
       ticketOpened: "Message quand le billet est ouvert",
-      ticketOpenedHint: "{number} = le numéro du billet.",
+      ticketOpenedHint: "{number} = le numéro du billet; {request} = la demande du client.",
       defaultCompany: "Client pour les numéros inconnus",
       noDefault: "Aucun (pas de billet automatique)",
       firstQueue: "Première file",

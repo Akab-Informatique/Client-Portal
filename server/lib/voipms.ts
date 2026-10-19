@@ -34,6 +34,10 @@ export type SmsSettings = {
   autoReplyCooldownHours: number;
   autoReply: string;
   ticketOpened: string;
+  /** After "1": what we ask the client before opening the ticket */
+  askDetails: string;
+  /** No answer to that question after this many minutes: the ticket opens with what we have */
+  detailsMinutes: number;
   /** When it became a ticket because nobody answered in time */
   ticketTimeout: string;
   /** Unknown numbers: the client used for their tickets */
@@ -48,7 +52,10 @@ export const DEFAULT_AUTO_REPLY =
   "AKAB Informatique : message bien reçu. Répondez 1 pour en faire un billet maintenant, ou un technicien vous répondra sous peu. Sans réponse d'ici {delay}, un billet sera ouvert automatiquement.";
 export const DEFAULT_TICKET_TIMEOUT =
   "AKAB Informatique : aucun technicien n'a pu prendre votre message à temps, nous avons donc ouvert le billet {number}. Nous vous contacterons dès que possible.";
-export const DEFAULT_TICKET_OPENED = "AKAB Informatique : votre demande est maintenant le billet {number}. Un technicien vous contactera. Merci!";
+export const DEFAULT_TICKET_OPENED =
+  "AKAB Informatique : merci! Votre billet {number} est créé : « {request} ». Un technicien vous contactera sous peu. Pour une autre demande, écrivez-nous de nouveau.";
+export const DEFAULT_ASK_DETAILS =
+  "AKAB Informatique : d'accord! En quelques mots, quelle est votre demande (ce qui ne fonctionne pas, l'appareil, depuis quand)? Votre réponse sera ajoutée au billet.";
 
 export class SmsError extends Error {
   constructor(
@@ -92,6 +99,8 @@ export async function smsSettings(): Promise<SmsSettings> {
     autoReplyCooldownHours: c.autoReplyCooldownHours ?? 24,
     autoReply: c.autoReply ?? DEFAULT_AUTO_REPLY,
     ticketOpened: c.ticketOpened ?? DEFAULT_TICKET_OPENED,
+    askDetails: c.askDetails ?? DEFAULT_ASK_DETAILS,
+    detailsMinutes: c.detailsMinutes ?? 30,
     ticketTimeout: c.ticketTimeout ?? DEFAULT_TICKET_TIMEOUT,
     defaultCompanyId: c.defaultCompanyId ?? null,
     defaultCompanyName: c.defaultCompanyName ?? null,

@@ -1,4 +1,4 @@
-import { and, desc, eq, lte, ne, sql, gte } from "drizzle-orm";
+import { and, desc, eq, lte, ne, sql, gte, inArray } from "drizzle-orm";
 import { db, schema } from "../db/index.ts";
 import type { AuthContext } from "./auth.ts";
 import { audit } from "./audit.ts";
@@ -132,7 +132,18 @@ export async function receiveSms(p: { from: string; message: string; id?: string
     return;
   }
   if (conv.status === "waiting" && WANTS_TICKET.test(body)) {
-    await openTicket(conv, null).catch((e) => console.warn("[sms] ticket on request:", e instanceof Error ? e.message : e));
+    // a ticket asked for: first, what it is about (the ticket opens with the answer, or after the delay)
+    const [next] = await db()
+      .update(schema.smsConversations)
+      .set({ status: "details", autoTicketAt: new Date(Date.now() + s.detailsMinutes * 60_000), updatedAt: new Date() })
+      .where(eq(schema.smsConversations.id, conv.id))
+      .returning();
+    await sendTo(next, s.askDetails, { auto: true }).catch((e) => console.warn("[sms] details question:", e instanceof Error ? e.message : e));
+    return;
+  }
+  if (conv.status === "details") {
+    // the answer: the ticket, with every text so far
+    await openTicket(conv, null, "client").catch((e) => console.warn("[sms] ticket on request:", e instanceof Error ? e.message : e));
     return;
   }
   // linked to a ticket: the client's text goes in it
@@ -144,15 +155,43 @@ export async function replyAsTechnician(conv: Conversation, body: string, a: Aut
   await sendTo(conv, body, { userId: a.realUser.id, author: a.realUser.name });
   await db()
     .update(schema.smsConversations)
-    .set({ status: conv.status === "waiting" ? "open" : conv.status, autoTicketAt: null, unread: 0, updatedAt: new Date() })
+    .set({ status: conv.status === "waiting" || conv.status === "details" ? "open" : conv.status, autoTicketAt: null, unread: 0, updatedAt: new Date() })
     .where(eq(schema.smsConversations.id, conv.id));
   await audit(a.realUser.id, "sms.sent", conv.id, { phone: conv.phone, ticketId: conv.ticketId });
 }
 
 export class SmsTicketError extends Error {
-  constructor(public code: "no_company") {
+  constructor(public code: "no_company" | "needs_client" | "unknown_client" | "unknown_contact") {
     super(code);
   }
+}
+
+/** Our own client (AKAB): the tickets of numbers nobody knows go there when no default client is set */
+async function ownCompanyId(): Promise<number | null> {
+  const list = await (await ticketSource()).companies().catch(() => []);
+  return (list.find((c) => c.id === 0) ?? list.find((c) => /\bakab\b/i.test(c.name)))?.id ?? null;
+}
+
+/**
+ * A technician opens the ticket of a number nobody knows: they say first which
+ * client (and contact) it is; the conversation keeps it.
+ */
+export async function mapConversation(conv: Conversation, p: { companyId: number; contactId: string | null }): Promise<Conversation> {
+  const src = await ticketSource();
+  const company = (await src.companies()).find((c) => c.id === p.companyId);
+  if (!company) throw new SmsTicketError("unknown_client");
+  let contactName: string | null = null;
+  if (p.contactId) {
+    const contact = (await src.contacts(company.id)).find((c) => c.id === p.contactId);
+    if (!contact) throw new SmsTicketError("unknown_contact");
+    contactName = contact.name;
+  }
+  const [next] = await db()
+    .update(schema.smsConversations)
+    .set({ companyId: company.id, companyName: company.name, contactId: p.contactId, contactName, updatedAt: new Date() })
+    .where(eq(schema.smsConversations.id, conv.id))
+    .returning();
+  return next;
 }
 
 /**
@@ -176,13 +215,18 @@ async function openTicketNow(conv: Conversation, a: AuthContext | null, reason: 
   if (fresh?.ticketId && fresh.ticketNumber) return { id: fresh.ticketId, number: fresh.ticketNumber };
   if (conv.ticketId && conv.ticketNumber) return { id: conv.ticketId, number: conv.ticketNumber };
   const s = await smsSettings();
-  const companyId = conv.companyId ?? s.defaultCompanyId;
-  if (!companyId) throw new SmsTicketError("no_company");
+  // a technician says which client first, when the number is nobody's
+  if (a && conv.companyId == null) throw new SmsTicketError("needs_client");
+  const companyId = conv.companyId ?? s.defaultCompanyId ?? (await ownCompanyId());
+  if (companyId == null) throw new SmsTicketError("no_company");
   const src = await ticketSource();
   const o = await src.options();
   const messages = await db().select().from(schema.smsMessages).where(eq(schema.smsMessages.conversationId, conv.id)).orderBy(schema.smsMessages.createdAt);
   const fromClient = messages.filter((m) => m.direction === "in");
   const first = fromClient[0]?.body ?? "";
+  // what the client asks: their answer to our question (after "1"), or their first text
+  const said = fromClient.map((m) => m.body).filter((b) => !WANTS_TICKET.test(b));
+  const request = (conv.status === "details" && said.length > 1 ? said[said.length - 1] : (said[0] ?? first)).replace(/\s+/g, " ").trim();
   const when = (d: Date) => new Intl.DateTimeFormat("fr-CA", { timeZone: "America/Toronto", dateStyle: "short", timeStyle: "short" }).format(d);
   const description = [
     `Demande reçue par texto de ${who(conv)} (${formatPhone(conv.phone)}).`,
@@ -193,10 +237,10 @@ async function openTicketNow(conv: Conversation, a: AuthContext | null, reason: 
   const queue = s.queue && o.queues.some((q) => q.value === s.queue) ? s.queue : (o.queues[0]?.value ?? "");
   const due = new Date(Date.now() + 86_400_000).toISOString().slice(0, 10);
   const p = {
-    title: `Texto de ${who(conv)} : ${first.replace(/\s+/g, " ").slice(0, 80)}`.slice(0, 250),
+    title: `Texto de ${who(conv)} : ${request.slice(0, 80)}`.slice(0, 250),
     description: description.slice(0, 8000),
     companyId,
-    contactId: conv.companyId ? conv.contactId : null,
+    contactId: conv.companyId != null ? conv.contactId : null,
     priority,
     queue,
     assigneeId: null,
@@ -215,10 +259,13 @@ async function openTicketNow(conv: Conversation, a: AuthContext | null, reason: 
     .where(eq(schema.smsConversations.id, conv.id))
     .returning();
   // no technician in time: the client is told so; otherwise, the ticket number
-  await sendTo(next, fill(reason === "timeout" ? s.ticketTimeout : s.ticketOpened, { number: ticket.number }), { auto: true }).catch((e) => console.warn("[sms] ticket message:", e instanceof Error ? e.message : e));
-  // made a ticket because nobody answered: the conversation ends there (kept with the ticket), so the
-  // next text from this number starts a new one, and a new ticket if nobody answers it either
-  if (reason === "timeout") await db().update(schema.smsConversations).set({ status: "closed", updatedAt: new Date() }).where(eq(schema.smsConversations.id, conv.id));
+  const short = request.length > 60 ? `${request.slice(0, 57)}…` : request;
+  await sendTo(next, fill(reason === "timeout" ? s.ticketTimeout : s.ticketOpened, { number: ticket.number, request: short }), { auto: true }).catch((e) =>
+    console.warn("[sms] ticket message:", e instanceof Error ? e.message : e),
+  );
+  // made a ticket by itself (nobody answered in time, or the client asked with 1): the conversation ends there
+  // (kept with the ticket), so the next text from this number starts a new one
+  if (!a) await db().update(schema.smsConversations).set({ status: "closed", updatedAt: new Date() }).where(eq(schema.smsConversations.id, conv.id));
   await audit(a?.realUser.id ?? null, "sms.ticket_opened", conv.id, { ticketId: ticket.id, reason });
   return ticket;
 }
@@ -238,11 +285,12 @@ async function autoTicketsNow(now: Date): Promise<number> {
   const due = await db()
     .select()
     .from(schema.smsConversations)
-    .where(and(eq(schema.smsConversations.status, "waiting"), lte(schema.smsConversations.autoTicketAt, now)));
+    .where(and(inArray(schema.smsConversations.status, ["waiting", "details"]), lte(schema.smsConversations.autoTicketAt, now)));
   let n = 0;
   for (const c of due) {
     try {
-      await openTicket(c, null, "timeout");
+      // asked for a ticket but said nothing more: it opens anyway, as asked
+      await openTicket(c, null, c.status === "details" ? "client" : "timeout");
       n++;
     } catch (e) {
       console.warn("[sms] automatic ticket:", e instanceof Error ? e.message : e);

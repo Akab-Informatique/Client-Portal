@@ -7,7 +7,7 @@ import { auth, requirePermission, requireStaff, type AppEnv } from "../lib/auth.
 import { audit } from "../lib/audit.ts";
 import { clientIp, rateLimit } from "../lib/http.ts";
 import { body, zUuid } from "../lib/validate.ts";
-import { conversationForTicket, openTicket, queueReceived, replyAsTechnician, SmsTicketError } from "../lib/sms.ts";
+import { conversationForTicket, mapConversation, openTicket, queueReceived, replyAsTechnician, SmsTicketError } from "../lib/sms.ts";
 import { normalizePhone, SmsError, smsReady, SMS_MAX, tokenMatches } from "../lib/voipms.ts";
 import { AutotaskError } from "../lib/autotask.ts";
 import { SourceError, ticketSource } from "../lib/ticketSource.ts";
@@ -34,7 +34,7 @@ export const smsHookRoutes = new Hono<AppEnv>().get("/voipms", async (c) => {
 export function smsHttp(e: unknown): HTTPException {
   if (e instanceof HTTPException) return e;
   if (e instanceof SmsError) return new HTTPException(e.code === "not_configured" || e.code === "disabled" ? 409 : 502, { message: `sms_${e.code}`, cause: e.detail ? [{ path: "sms", message: e.detail }] : undefined });
-  if (e instanceof SmsTicketError) return new HTTPException(409, { message: `sms_${e.code}` });
+  if (e instanceof SmsTicketError) return new HTTPException(e.code === "unknown_client" || e.code === "unknown_contact" ? 400 : 409, { message: `sms_${e.code}` });
   if (e instanceof AutotaskError) return new HTTPException(502, { message: `autotask_${e.code}`, cause: e.detail ? [{ path: "autotask", message: e.detail }] : undefined });
   if (e instanceof SourceError) return new HTTPException(400, { message: e.code });
   console.error("[sms]", e);
@@ -121,7 +121,16 @@ export const smsRoutes = new Hono<AppEnv>()
   .post("/conversations/:id/ticket", requirePermission("tickets.edit"), async (c) => {
     const a = auth(c);
     const conv = await conversation(zUuid.parse(c.req.param("id")));
-    const p = await body(c, z.object({ ticketId: z.number().int().positive().optional(), ticketNumber: z.string().max(40).optional() }));
+    const p = await body(
+      c,
+      z.object({
+        ticketId: z.number().int().positive().optional(),
+        ticketNumber: z.string().max(40).optional(),
+        // a number nobody knows: the client (and contact) the technician picked
+        companyId: z.number().int().min(0).optional(),
+        contactId: z.string().max(40).nullable().optional(),
+      }),
+    );
     if (p.ticketId) {
       await db()
         .update(schema.smsConversations)
@@ -130,7 +139,9 @@ export const smsRoutes = new Hono<AppEnv>()
       await audit(a.realUser.id, "sms.linked", conv.id, { ticketId: p.ticketId });
       return c.json({ id: p.ticketId, number: p.ticketNumber ?? String(p.ticketId) });
     }
-    return c.json(await run(() => openTicket(conv, a)), 201);
+    const mapped = p.companyId !== undefined ? await run(() => mapConversation(conv, { companyId: p.companyId!, contactId: p.contactId ?? null })) : conv;
+    if (mapped !== conv) await audit(a.realUser.id, "sms.mapped", conv.id, { companyId: mapped.companyId, contactId: mapped.contactId });
+    return c.json(await run(() => openTicket(mapped, a)), 201);
   })
 
   /** Done: the next text from this number starts a new conversation. */

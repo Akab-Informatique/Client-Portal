@@ -1,5 +1,7 @@
 import { useEffect, useMemo, useRef, useState, type FormEvent } from "react";
 import { useTranslation } from "react-i18next";
+import { Label } from "@/components/ui/label";
+import { CompanyPicker, ContactPicker, useCompanies, type Company } from "@/pages/tickets/pickers";
 import { smsPartCount } from "@shared/sms";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
@@ -26,8 +28,10 @@ export type Conversation = {
   id: string;
   phone: string;
   contactName: string | null;
+  contactId: string | null;
+  companyId: number | null;
   companyName: string | null;
-  status: "waiting" | "open" | "ticket" | "closed";
+  status: "waiting" | "details" | "open" | "ticket" | "closed";
   ticketId: number | null;
   ticketNumber: string | null;
   autoTicketAt: string | null;
@@ -51,6 +55,7 @@ const minutesLeft = (iso: string | null) => (iso ? Math.max(0, Math.ceil((new Da
 
 const STATUS_STYLE: Record<Conversation["status"], string> = {
   waiting: "border-orange-500/50 bg-orange-500/15 text-orange-300",
+  details: "border-violet-500/50 bg-violet-500/15 text-violet-300",
   open: "border-sky-500/40 bg-sky-500/10 text-sky-300",
   ticket: "border-[color:var(--gold)]/50 bg-[color:var(--gold)]/10 text-primary",
   closed: "border-border text-muted-foreground",
@@ -130,7 +135,7 @@ export function SmsInboxDialog({ initialId, onClose }: { initialId: string | nul
   const shown = useMemo(() => {
     const w = q.toLowerCase().replace(/[^\w\s]/g, "");
     return (list ?? [])
-      .filter((c) => (scope === "pending" ? c.status === "waiting" || c.status === "open" : scope === "closed" ? c.status === "closed" : c.status !== "closed"))
+      .filter((c) => (scope === "pending" ? c.status === "waiting" || c.status === "details" || c.status === "open" : scope === "closed" ? c.status === "closed" : c.status !== "closed"))
       .filter((c) => !w || `${c.phone} ${c.contactName ?? ""} ${c.companyName ?? ""} ${c.lastPreview}`.toLowerCase().includes(w));
   }, [list, q, scope]);
 
@@ -170,7 +175,7 @@ export function SmsInboxDialog({ initialId, onClose }: { initialId: string | nul
               {isLoading && <Skeleton className="m-3 h-16" />}
               {list && shown.length === 0 && <li className="px-4 py-10 text-center text-sm text-muted-foreground">{t("sms.none")}</li>}
               {shown.map((c) => {
-                const left = c.status === "waiting" ? minutesLeft(c.autoTicketAt) : null;
+                const left = c.status === "waiting" || c.status === "details" ? minutesLeft(c.autoTicketAt) : null;
                 return (
                   <li key={c.id}>
                     <button
@@ -245,9 +250,12 @@ function ThreadView({ id, onBack, onTicket }: { id: string; onBack: () => void; 
     },
     onError: (e) => toast.error(smsErrorText(t, e)),
   });
+  // a number nobody knows: the technician says which client (and contact) first
+  const [mapping, setMapping] = useState(false);
   const toTicket = useMutation({
-    mutationFn: () => api.post<{ id: number; number: string }>(`/sms/conversations/${id}/ticket`, {}),
+    mutationFn: (who: { companyId: number; contactId: string | null } | void) => api.post<{ id: number; number: string }>(`/sms/conversations/${id}/ticket`, who ?? {}),
     onSuccess: (r) => {
+      setMapping(false);
       toast.success(t("sms.ticketOpened", { number: r.number }));
       refresh();
       void qc.invalidateQueries({ queryKey: ["tickets"] });
@@ -266,7 +274,7 @@ function ThreadView({ id, onBack, onTicket }: { id: string; onBack: () => void; 
   });
   if (isLoading || !data) return <Skeleton className="h-96 rounded-2xl" />;
   const parts = smsPartCount(text);
-  const left = data.status === "waiting" ? minutesLeft(data.autoTicketAt) : null;
+  const left = data.status === "waiting" || data.status === "details" ? minutesLeft(data.autoTicketAt) : null;
   return (
     <section className="flex min-h-0 flex-col overflow-hidden rounded-xl border">
       <div className="flex flex-wrap items-center gap-2 border-b px-4 py-3">
@@ -301,7 +309,7 @@ function ThreadView({ id, onBack, onTicket }: { id: string; onBack: () => void; 
           </Button>
         ) : (
           can("tickets.edit") && (
-            <Button size="sm" className="h-8 gap-1.5 bg-grad-gold font-semibold text-[#1a1204]" disabled={toTicket.isPending} onClick={() => toTicket.mutate()}>
+            <Button size="sm" className="h-8 gap-1.5 bg-grad-gold font-semibold text-[#1a1204]" disabled={toTicket.isPending} onClick={() => (data.contactId ? toTicket.mutate() : setMapping(true))}>
               {toTicket.isPending ? <Loader2 className="size-3.5 animate-spin" /> : <Ticket className="size-3.5" />} {t("sms.openTicket")}
             </Button>
           )
@@ -371,6 +379,15 @@ function ThreadView({ id, onBack, onTicket }: { id: string; onBack: () => void; 
             </Button>
           </div>
         </form>
+      )}
+      {mapping && (
+        <MapDialog
+          phone={data.phone}
+          company={data.companyId != null ? { id: data.companyId, name: data.companyName ?? "" } : null}
+          saving={toTicket.isPending}
+          onClose={() => setMapping(false)}
+          onPick={(who) => toTicket.mutate(who)}
+        />
       )}
     </section>
   );
@@ -495,5 +512,64 @@ export function TicketSmsPanel({ ticketId, phone }: { ticketId: number; phone: s
         </div>
       </form>
     </section>
+  );
+}
+
+/** Before a ticket for a number nobody knows: which client, and which contact (optional, or a new one). */
+function MapDialog({
+  phone,
+  company: start,
+  saving,
+  onClose,
+  onPick,
+}: {
+  phone: string;
+  company: Company | null;
+  saving: boolean;
+  onClose: () => void;
+  onPick: (p: { companyId: number; contactId: string | null }) => void;
+}) {
+  const { t } = useTranslation();
+  const { data: companies = [] } = useCompanies();
+  const [company, setCompany] = useState<Company | null>(start);
+  const [contact, setContact] = useState<{ id: string; name: string } | null>(null);
+  return (
+    <Dialog open onOpenChange={(o) => !o && onClose()}>
+      <DialogContent className="sm:max-w-md">
+        <DialogHeader>
+          <DialogTitle className="flex items-center gap-2">
+            <Ticket className="size-5 text-primary" /> {t("sms.map.title")}
+          </DialogTitle>
+          <DialogDescription>{t("sms.map.text", { phone: fmtPhone(phone) })}</DialogDescription>
+        </DialogHeader>
+        <div className="space-y-3">
+          <div className="space-y-1.5">
+            <Label className="text-xs">{t("sms.map.client")}</Label>
+            <CompanyPicker
+              value={company}
+              companies={companies}
+              onChange={(c) => {
+                setCompany(c);
+                setContact(null);
+              }}
+              triggerClassName="w-full"
+            />
+          </div>
+          <div className="space-y-1.5">
+            <Label className="text-xs">{t("sms.map.contact")}</Label>
+            <ContactPicker companyId={company?.id ?? null} value={contact?.id ?? null} valueName={contact?.name} onChange={(c) => setContact(c ? { id: c.id, name: c.name } : null)} disabled={!company} triggerClassName="w-full" canCreate />
+            <p className="text-[11px] text-muted-foreground">{t("sms.map.contactHint")}</p>
+          </div>
+        </div>
+        <div className="flex justify-end gap-2">
+          <Button type="button" variant="ghost" onClick={onClose}>
+            {t("common.cancel")}
+          </Button>
+          <Button disabled={!company || saving} onClick={() => company && onPick({ companyId: company.id, contactId: contact?.id ?? null })} className="bg-grad-gold font-semibold text-[#1a1204]">
+            {saving ? <Loader2 className="size-4 animate-spin" /> : <Ticket className="size-4" />} {t("sms.openTicket")}
+          </Button>
+        </div>
+      </DialogContent>
+    </Dialog>
   );
 }

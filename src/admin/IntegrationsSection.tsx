@@ -987,6 +987,8 @@ type VoipmsView = {
   did: string;
   autoTicketMinutes: number;
   autoReplyCooldownHours: number;
+  askDetails: string;
+  detailsMinutes: number;
   autoReply: string;
   ticketOpened: string;
   ticketTimeout: string;
@@ -1033,7 +1035,7 @@ function VoipmsPage() {
     },
     staleTime: 5 * 60_000,
   });
-  const [f, setF] = useState({ username: "", password: "", did: "", enabled: false, minutes: "240", cooldown: "24", autoReply: "", ticketOpened: "", ticketTimeout: "", companyId: "", queue: "", priority: "", sendTo: "" });
+  const [f, setF] = useState({ username: "", password: "", did: "", enabled: false, minutes: "240", cooldown: "24", askDetails: "", detailsMinutes: "30", autoReply: "", ticketOpened: "", ticketTimeout: "", companyId: "", queue: "", priority: "", sendTo: "" });
   const [test, setTest] = useState<{ ok: boolean; error?: string; detail?: string } | null>(null);
   useEffect(() => {
     if (s)
@@ -1045,6 +1047,8 @@ function VoipmsPage() {
         enabled: s.enabled,
         minutes: String(s.autoTicketMinutes),
         cooldown: String(s.autoReplyCooldownHours ?? 24),
+        askDetails: s.askDetails,
+        detailsMinutes: String(s.detailsMinutes ?? 30),
         autoReply: s.autoReply,
         ticketOpened: s.ticketOpened,
         ticketTimeout: s.ticketTimeout,
@@ -1064,6 +1068,8 @@ function VoipmsPage() {
         did: f.did,
         autoTicketMinutes: Math.max(1, Number(f.minutes) || 15),
         autoReplyCooldownHours: Math.min(720, Math.max(0, Math.round(Number(f.cooldown)) || 0)),
+        askDetails: f.askDetails.trim(),
+        detailsMinutes: Math.min(1440, Math.max(1, Math.round(Number(f.detailsMinutes)) || 30)),
         autoReply: f.autoReply.trim(),
         ticketOpened: f.ticketOpened.trim(),
         ticketTimeout: f.ticketTimeout.trim(),
@@ -1196,6 +1202,17 @@ function VoipmsPage() {
               <Input id="vm-cool" inputMode="numeric" value={f.cooldown} onChange={(e) => set("cooldown")(e.target.value)} />
             </div>
             <p className="self-end pb-2 text-[11px] text-muted-foreground">{t("integrations.voipms.cooldownHint")}</p>
+          </div>
+          <div className="grid gap-4 sm:grid-cols-[180px_1fr]">
+            <div className="space-y-2">
+              <Label htmlFor="vm-dmin">{t("integrations.voipms.detailsMinutes")}</Label>
+              <Input id="vm-dmin" inputMode="numeric" value={f.detailsMinutes} onChange={(e) => set("detailsMinutes")(e.target.value)} />
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="vm-ask">{t("integrations.voipms.askDetails")}</Label>
+              <Textarea id="vm-ask" rows={2} maxLength={600} value={f.askDetails} onChange={(e) => set("askDetails")(e.target.value)} />
+              <p className="text-[11px] text-muted-foreground">{t("integrations.voipms.askDetailsHint")}</p>
+            </div>
           </div>
           <div className="grid gap-4 sm:grid-cols-[180px_1fr]">
             <div className="space-y-2">

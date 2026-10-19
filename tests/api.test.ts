@@ -2625,25 +2625,39 @@ describe("text messages (VoIP.ms)", () => {
       ["out", false, "Alex Tremblay"],
     ]);
 
-    // a known contact answers 1: a ticket at once for their client, and its number by text
+    // a known contact answers 1: we ask what it is about, then the ticket opens with the answer
     await hook({ token, from: "450-555-1000", message: "Le serveur est lent", id: "m2" });
     convs = (await tech.get("/api/sms/conversations")).json;
     const known = convs.find((c: any) => c.phone === "4505551000");
     expect(known).toMatchObject({ contactId: "c-300-0", companyId: 300, status: "waiting" });
     sms.length = 0;
     await hook({ token, from: "4505551000", message: " 1 ", id: "m3" });
+    expect((await tech.get(`/api/sms/conversations/${known.id}`)).json.status).toBe("details");
+    expect(sms.map((s) => s.message).join(" ")).toContain("quelle est votre demande");
+    sms.length = 0;
+    await hook({ token, from: "4505551000", message: "Depuis ce matin, sur le poste de Julie", id: "m3b" });
     const opened = (await tech.get(`/api/sms/conversations/${known.id}`)).json;
-    expect(opened.status).toBe("ticket");
-    expect(sms[0].message).toContain(opened.ticketNumber);
+    // the ticket is made, the client thanked with its number and request, and the conversation ends
+    expect(opened.status).toBe("closed");
+    const thanks = sms.map((s) => s.message).join(" ");
+    expect(thanks).toContain(opened.ticketNumber);
+    expect(thanks).toContain("Depuis ce matin");
     const ticket = (await tech.get(`/api/tickets/${opened.ticketId}`)).json;
     expect(ticket).toMatchObject({ company: { id: 300 }, contactId: "c-300-0" });
+    expect(ticket.title).toContain("Depuis ce matin, sur le poste de Julie");
     expect(ticket.description).toContain("Le serveur est lent");
-    // the ticket number sent to the client, and later texts, go in the ticket as internal notes…
+    expect(ticket.description).toContain("Depuis ce matin, sur le poste de Julie");
+    // the message to the client goes in the ticket as an internal note…
     expect(notes).toHaveBeenCalledWith(opened.ticketId, expect.stringContaining("Texto automatique"), expect.stringContaining(opened.ticketNumber));
+    // …and the next text starts a new conversation (no second automatic reply within 24 h)
+    sms.length = 0;
     await hook({ token, from: "4505551000", message: "Merci!", id: "m4" });
-    expect(notes).toHaveBeenLastCalledWith(opened.ticketId, expect.stringContaining("Texto reçu"), "Merci!");
-    // …that the portal does not list (it shows the texts themselves)
-    expect(JSON.stringify((await tech.get(`/api/tickets/${opened.ticketId}`)).json.notes)).not.toContain("Merci!");
+    expect((await tech.get("/api/sms/conversations")).json.filter((c: any) => c.phone === "4505551000").map((c: any) => c.status)).toEqual(["waiting"]);
+    expect(notes).not.toHaveBeenLastCalledWith(opened.ticketId, expect.anything(), "Merci!");
+    expect(sms).toEqual([]);
+    // the texts are kept with the ticket, not as notes the portal lists
+    expect(JSON.stringify((await tech.get(`/api/tickets/${opened.ticketId}`)).json.notes)).not.toContain("Depuis ce matin");
+    expect((await tech.get(`/api/sms/ticket/${opened.ticketId}`)).json.messages.some((m: any) => m.body === "Depuis ce matin, sur le poste de Julie")).toBe(true);
 
     // nobody answers in time: a ticket by itself (default client for an unknown number), and the client is told
     await hook({ token, from: "8195550123", message: "Besoin d'aide urgente", id: "m5" });
@@ -2666,7 +2680,7 @@ describe("text messages (VoIP.ms)", () => {
     const again2 = (await tech.get("/api/sms/conversations")).json.filter((c: any) => c.phone === "8195550123");
     expect(again2.map((c: any) => c.status)).toEqual(["waiting"]);
     expect(sms).toEqual([]);
-    expect(await autoTickets(new Date(Date.now() + 5 * 3_600_000))).toBe(1);
+    expect(await autoTickets(new Date(Date.now() + 5 * 3_600_000))).toBe(2); // this one and the "Merci!" conversation above
     const second = (await tech.get(`/api/sms/conversations/${again2[0].id}`)).json;
     expect(second.ticketId).toBeTruthy();
     expect(second.ticketId).not.toBe(auto.ticketId);
@@ -2699,6 +2713,52 @@ describe("text messages (VoIP.ms)", () => {
     await tech.post(`/api/sms/conversations/${third.id}/close`);
     await hook({ token, from: "5145550000", message: "Le lendemain", id: "m7" });
     expect(sms.map((s) => s.dst)).toContain("5145550000");
+  });
+
+  it("unknown numbers: AKAB when no default client; a technician picks the client first; 1 without details still opens", async () => {
+    resetRateLimit("login:ip:unknown");
+    const tech = await signIn("tech@akab.local");
+    const { receivedSettled, autoTickets } = await import("../server/lib/sms.ts");
+    const { saveSmsSettings, smsSettings } = await import("../server/lib/voipms.ts");
+    const token = (await smsSettings()).token!;
+    const hook = async (q: Record<string, string>) => {
+      await tech.get(`/api/sms/hook/voipms?${new URLSearchParams({ token, ...q })}`);
+      await receivedSettled();
+    };
+    const conv = async (phone: string) => (await tech.get("/api/sms/conversations")).json.find((c: any) => c.phone === phone);
+    await saveSmsSettings(null, { defaultCompanyId: null, defaultCompanyName: null });
+    try {
+      // nobody answers an unknown number, no default client: the ticket goes to AKAB
+      await hook({ from: "8195550301", message: "Mon imprimante", id: "u1" });
+      const c1 = await conv("8195550301");
+      expect(await autoTickets(new Date(Date.now() + 5 * 3_600_000))).toBeGreaterThanOrEqual(1);
+      const t1 = (await tech.get(`/api/sms/conversations/${c1.id}`)).json;
+      expect((await tech.get(`/api/tickets/${t1.ticketId}`)).json.company).toMatchObject({ id: 299, name: "AKAB Informatique" });
+
+      // 1, then no answer to the question: it opens anyway after the delay (30 min), and the conversation ends
+      await hook({ from: "8195550302", message: "Allo", id: "u2" });
+      await hook({ from: "8195550302", message: "1", id: "u3" });
+      const c2 = await conv("8195550302");
+      expect(c2.status).toBe("details");
+      expect(await autoTickets(new Date(Date.now() + 31 * 60_000))).toBe(1);
+      const t2 = (await tech.get(`/api/sms/conversations/${c2.id}`)).json;
+      expect(t2).toMatchObject({ status: "closed", ticketId: expect.any(Number) });
+
+      // a technician opens the ticket of a number nobody knows: the client (and contact) first
+      await hook({ from: "8195550303", message: "Besoin d'un technicien", id: "u4" });
+      const c3 = await conv("8195550303");
+      expect((await tech.post(`/api/sms/conversations/${c3.id}/ticket`, {})).json.error).toBe("sms_needs_client");
+      expect((await tech.post(`/api/sms/conversations/${c3.id}/ticket`, { companyId: 99999 })).json.error).toBe("sms_unknown_client");
+      expect((await tech.post(`/api/sms/conversations/${c3.id}/ticket`, { companyId: 302, contactId: "c-300-0" })).json.error).toBe("sms_unknown_contact");
+      const made = await tech.post(`/api/sms/conversations/${c3.id}/ticket`, { companyId: 302, contactId: "c-302-0" });
+      expect(made.status).toBe(201);
+      const t3 = (await tech.get(`/api/tickets/${made.json.id}`)).json;
+      expect(t3).toMatchObject({ company: { id: 302 }, contactId: "c-302-0" });
+      // the conversation keeps who it is, and stays with the ticket (a technician opened it)
+      expect((await tech.get(`/api/sms/conversations/${c3.id}`)).json).toMatchObject({ status: "ticket", companyId: 302, contactId: "c-302-0" });
+    } finally {
+      await saveSmsSettings(null, { defaultCompanyId: 301, defaultCompanyName: null });
+    }
   });
 
   it("is for technicians only", async () => {
