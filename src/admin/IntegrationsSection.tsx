@@ -531,7 +531,7 @@ type AiSettingsView = {
   hasKey: boolean;
   lastTest: { ok: boolean; at: string; error?: string } | null;
   /** Per part of the portal: its own model, or null (the general one) */
-  features: { key: string; model: string | null }[];
+  features: { key: string; model: string | null; fixed?: string | null }[];
   allowChoice: boolean;
   dailyLimitUsd: number | null;
   prices: Record<string, { input: number; output: number }>;
@@ -666,6 +666,11 @@ function AiPage() {
             {s.features.map((fe) => (
               <li key={fe.key} className="flex flex-wrap items-center gap-3 px-3 py-2">
                 <span className="min-w-40 flex-1 text-sm">{t(`integrations.ai.features.${fe.key.replace(/\./g, "_")}`, { defaultValue: fe.key })}</span>
+                {fe.fixed ? (
+                  <span className="flex h-8 w-60 items-center rounded-md border px-3 text-xs text-muted-foreground" title={t("integrations.ai.fixedHint")}>
+                    {t("integrations.ai.fixed", { model: shortModel(fe.fixed) })}
+                  </span>
+                ) : (
                 <Select value={featureModels[fe.key] ?? "general"} onValueChange={(v) => setFeatureModels((m) => (v === "general" ? Object.fromEntries(Object.entries(m).filter(([k]) => k !== fe.key)) : { ...m, [fe.key]: v }))}>
                   <SelectTrigger className="h-8 w-60 text-xs">
                     <SelectValue />
@@ -679,6 +684,7 @@ function AiPage() {
                     ))}
                   </SelectContent>
                 </Select>
+                )}
               </li>
             ))}
           </ul>
