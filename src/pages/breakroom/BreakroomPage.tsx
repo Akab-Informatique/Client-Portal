@@ -12,6 +12,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { api, ApiError } from "@/lib/api";
 import { currentLocale } from "@/i18n";
 import { cn, initials } from "@/lib/utils";
+import { ComplotsDialog, ComplotsTile } from "./Complots";
 
 type Person = { id: string; name: string };
 type Color = "w" | "b";
@@ -47,6 +48,8 @@ export function BreakroomPage() {
   const [params, setParams] = useSearchParams();
   const [gameId, setGameId] = useState<string | null>(null);
   const [orbi, setOrbi] = useState(false);
+  const [complotsId, setComplotsId] = useState<string | null>(null);
+  const online = useQuery({ queryKey: [...KEY, "online"], queryFn: () => api.get<Person[]>("/breakroom/online"), refetchInterval: 20_000 });
   const status = useQuery({ queryKey: [...KEY, "status"], queryFn: () => api.get<BreakStatus>("/breakroom/status") });
 
   // the time on screen counts: a beat every 30 s while the page is visible
@@ -67,15 +70,18 @@ export function BreakroomPage() {
     };
   }, [qc]);
 
-  // from the bell: /breakroom?game=<id>
+  // from the bell: /breakroom?game=<id> (chess), ?complots=<id>
   useEffect(() => {
     const id = params.get("game");
-    if (!id) return;
-    setGameId(id);
+    const table = params.get("complots");
+    if (!id && !table) return;
+    if (id) setGameId(id);
+    if (table) setComplotsId(table);
     setParams(
       (p) => {
         const n = new URLSearchParams(p);
         n.delete("game");
+        n.delete("complots");
         return n;
       },
       { replace: true },
@@ -101,8 +107,10 @@ export function BreakroomPage() {
         <div className="grid items-stretch gap-5 lg:grid-cols-3">
           <ChessTile onOpen={setGameId} />
           <OrbiTile onOpen={() => setOrbi(true)} />
+          <ComplotsTile onOpen={setComplotsId} online={online.data ?? []} />
         </div>
       )}
+      {!closed && complotsId && <ComplotsDialog id={complotsId} onClose={() => setComplotsId(null)} />}
       {!closed && gameId && <ChessDialog id={gameId} onClose={() => setGameId(null)} />}
       {!closed && orbi && <OrbiDialog onClose={() => setOrbi(false)} />}
     </div>

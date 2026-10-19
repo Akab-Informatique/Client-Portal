@@ -7,6 +7,8 @@ import { db, schema } from "../db/index.ts";
 import { auth, permissionsOf, requirePermission, requireStaff, type AppEnv } from "../lib/auth.ts";
 import { notify } from "../lib/notify.ts";
 import { body, zUuid } from "../lib/validate.ts";
+import { randomInt } from "node:crypto";
+import { CHARS, ComplotsError, leave as leaveGame, newGame, play as playMove, tick, validChars, viewFor, type CharKey, type Input, type State } from "../lib/complots.ts";
 
 /**
  * Coffee break (breakroom.use): chess with a colleague who is online (signed
@@ -124,6 +126,108 @@ async function save(g: Game, set: Partial<Game>) {
     .returning();
   if (!row) throw new HTTPException(409, { message: "game_changed" });
   return row;
+}
+
+// ── Complots ──
+type Table = typeof schema.complotsGames.$inferSelect;
+const zChar = z.enum(Object.keys(CHARS) as [CharKey, ...CharKey[]]);
+const zInput = z.discriminatedUnion("t", [
+  z.object({ t: z.literal("action"), kind: z.enum(["income", "aid", "coup", "tax", "assassinate", "steal", "exchange", "inquire", "execute", "justice"]), target: z.string().max(60).optional(), claim: zChar.optional() }),
+  z.object({ t: z.literal("pass") }),
+  z.object({ t: z.literal("challenge") }),
+  z.object({ t: z.literal("block"), claim: zChar }),
+  z.object({ t: z.literal("lose"), index: z.number().int().min(0).max(3) }),
+  z.object({ t: z.literal("exchange"), keep: z.array(z.number().int().min(0).max(3)).max(2) }),
+  z.object({ t: z.literal("show"), index: z.number().int().min(0).max(3) }),
+  z.object({ t: z.literal("judge"), replace: z.boolean() }),
+  z.object({ t: z.literal("draft"), char: zChar }),
+]);
+/** Cards and turn order: the server's own randomness */
+const cryptoRng = () => randomInt(0, 2 ** 31) / 2 ** 31;
+
+/** A table this person is seated at (nobody else sees it) */
+async function myTable(id: string, me: string): Promise<Table> {
+  const [row] = await db().select().from(schema.complotsGames).where(eq(schema.complotsGames.id, zUuid.parse(id)));
+  // seated, and not one who said no
+  if (!row || !row.seats.some((x) => x.id === me && x.answer !== "no")) throw new HTTPException(404, { message: "not_found" });
+  return row;
+}
+
+/** One change at a time per table (one app instance), and refused if it changed in between */
+const tableLocks = new Map<string, Promise<unknown>>();
+async function withTable(id: string, me: string, change: (row: Table) => Promise<Partial<Table>>) {
+  const prev = tableLocks.get(id) ?? Promise.resolve();
+  const run = prev.catch(() => undefined).then(async () => {
+    const row = await myTable(id, me);
+    const set = await change(row);
+    if (!Object.keys(set).length) return complotsView(row, me);
+    const t = schema.complotsGames;
+    const [saved] = await db()
+      .update(t)
+      .set({ ...set, rev: row.rev + 1, updatedAt: new Date() })
+      .where(and(eq(t.id, row.id), eq(t.rev, row.rev)))
+      .returning();
+    if (!saved) throw new HTTPException(409, { message: "game_changed" });
+    return complotsView(saved, me);
+  });
+  tableLocks.set(id, run);
+  try {
+    return await run;
+  } finally {
+    if (tableLocks.get(id) === run) tableLocks.delete(id);
+  }
+}
+
+/** The engine's new state, and the end of the game when there is a winner */
+function stateUpdate(next: State): Partial<Table> {
+  return { state: next as unknown as Record<string, unknown>, ...(next.winner ? { status: "done", winnerId: next.winner } : {}) };
+}
+
+/** Time ran out on someone (an answer, a turn): applied when the table is read */
+async function settle(row: Table): Promise<Table> {
+  if (row.status !== "playing" || !row.state) return row;
+  const next = tick(row.state as unknown as State, cryptoRng);
+  if (next === (row.state as unknown as State)) return row;
+  const t = schema.complotsGames;
+  const [saved] = await db()
+    .update(t)
+    .set({ ...stateUpdate(next), rev: row.rev + 1, updatedAt: new Date() })
+    .where(and(eq(t.id, row.id), eq(t.rev, row.rev)))
+    .returning();
+  // someone else saved it first: theirs
+  return saved ?? (await db().select().from(t).where(eq(t.id, row.id)))[0] ?? row;
+}
+
+function complotsView(row: Table, me: string) {
+  return {
+    id: row.id,
+    status: row.status,
+    hostId: row.hostId,
+    isHost: row.hostId === me,
+    seats: row.seats,
+    chars: row.chars,
+    winnerId: row.winnerId,
+    game: row.state ? viewFor(row.state as unknown as State, me) : null,
+    updatedAt: row.updatedAt,
+  };
+}
+
+function complotsSummary(row: Table, me: string) {
+  const v = complotsView(row, me);
+  const g = v.game;
+  const mySeat = row.seats.find((x) => x.id === me);
+  return {
+    id: v.id,
+    status: v.status,
+    isHost: v.isHost,
+    host: row.seats[0]?.name ?? "",
+    seats: v.seats,
+    invited: v.status === "lobby" && !v.isHost && mySeat?.answer === null,
+    // something to do for me now
+    myMove: Boolean(g?.you && (g.you.canAct || g.you.canPass || (g.phase.who === me && ["lose", "exchange", "show", "judge"].includes(g.phase.k)) || (g.phase.k === "draft" && !g.phase.picked))),
+    winnerId: v.winnerId,
+    updatedAt: v.updatedAt,
+  };
 }
 
 export const breakroomRoutes = new Hono<AppEnv>()
@@ -276,4 +380,107 @@ export const breakroomRoutes = new Hono<AppEnv>()
     if (g.status !== "playing") throw new HTTPException(409, { message: "game_not_playing" });
     const row = await save(g, { status: "done", result: g.whiteId === me ? "b" : "w", endedBy: "resign" });
     return c.json(view(row, me, await names([row.whiteId, row.blackId])));
+  })
+
+  // ── Complots ──
+  /** My tables: invitations, lobbies, games (finished ones for a day) */
+  .get("/complots", async (c) => {
+    const me = auth(c).user.id;
+    const g = schema.complotsGames;
+    const rows = await db()
+      .select()
+      .from(g)
+      .where(and(sql`${g.seats} @> ${JSON.stringify([{ id: me }])}::jsonb`, or(inArray(g.status, ["lobby", "playing"]), and(eq(g.status, "done"), gt(g.updatedAt, new Date(Date.now() - 86_400_000))))))
+      .orderBy(desc(g.updatedAt))
+      .limit(20);
+    const out = [];
+    for (const row of rows) {
+      const seat = row.seats.find((x) => x.id === me);
+      if (seat?.answer === "no") continue;
+      out.push(complotsSummary(await settle(row), me));
+    }
+    return c.json(out);
+  })
+
+  .get("/complots/:id", async (c) => {
+    const me = auth(c).user.id;
+    return c.json(complotsView(await settle(await myTable(c.req.param("id"), me)), me));
+  })
+
+  /** A table: the host and the colleagues asked (they get a notification) */
+  .post("/complots", async (c) => {
+    const a = auth(c);
+    const p = await body(c, z.object({ invite: z.array(zUuid).min(1).max(5), chars: z.array(zChar).length(5) }));
+    try {
+      validChars(p.chars);
+    } catch {
+      throw new HTTPException(400, { message: "invalid_chars" });
+    }
+    const ids = [...new Set(p.invite)].filter((x) => x !== a.user.id);
+    if (!ids.length) throw new HTTPException(400, { message: "invalid_opponent" });
+    const people = await db().select().from(schema.users).where(inArray(schema.users.id, ids));
+    for (const u of people) if (u.kind !== "staff" || !u.active || !(await permissionsOf(u)).includes("breakroom.use")) throw new HTTPException(400, { message: "invalid_opponent" });
+    if (people.length !== ids.length) throw new HTTPException(400, { message: "invalid_opponent" });
+    const seats = [{ id: a.user.id, name: a.user.name, answer: "yes" as const }, ...people.map((u) => ({ id: u.id, name: u.name, answer: null }))];
+    const [row] = await db().insert(schema.complotsGames).values({ hostId: a.user.id, seats, chars: p.chars }).returning();
+    await notify(ids, { type: "breakroom.complots", data: { from: a.user.name, gameId: row.id }, link: `/breakroom?complots=${row.id}` });
+    return c.json(complotsView(row, a.user.id), 201);
+  })
+
+  /** One asked says yes or no */
+  .post("/complots/:id/respond", async (c) => {
+    const me = auth(c).user.id;
+    const p = await body(c, z.object({ accept: z.boolean() }));
+    return c.json(
+      await withTable(c.req.param("id"), me, async (row) => {
+        if (row.status !== "lobby" || row.hostId === me) throw new HTTPException(409, { message: "game_not_invited" });
+        return { seats: row.seats.map((x) => (x.id === me ? { ...x, answer: p.accept ? ("yes" as const) : ("no" as const) } : x)) };
+      }),
+    );
+  })
+
+  /** The host starts with those who said yes (2 to 6 players) */
+  .post("/complots/:id/start", async (c) => {
+    const me = auth(c).user.id;
+    return c.json(
+      await withTable(c.req.param("id"), me, async (row) => {
+        if (row.status !== "lobby" || row.hostId !== me) throw new HTTPException(409, { message: "game_not_lobby" });
+        const players = row.seats.filter((x) => x.answer === "yes");
+        if (players.length < 2) throw new HTTPException(409, { message: "not_enough_players" });
+        return { status: "playing", state: newGame(players, row.chars as CharKey[], cryptoRng) as unknown as Record<string, unknown> };
+      }),
+    );
+  })
+
+  /** A move (checked by the rules) */
+  .post("/complots/:id/play", async (c) => {
+    const me = auth(c).user.id;
+    const p = await body(c, z.object({ input: zInput }));
+    return c.json(
+      await withTable(c.req.param("id"), me, async (row) => {
+        if (row.status !== "playing" || !row.state) throw new HTTPException(409, { message: "game_not_playing" });
+        try {
+          const next = playMove(tick(row.state as unknown as State, cryptoRng), me, p.input as Input, cryptoRng);
+          return stateUpdate(next);
+        } catch (e) {
+          if (e instanceof ComplotsError) throw new HTTPException(409, { message: `complots_${e.code}` });
+          throw e;
+        }
+      }),
+    );
+  })
+
+  /** Leave: an invitation declined, a lobby cancelled (host), or out of the game (the others go on) */
+  .post("/complots/:id/leave", async (c) => {
+    const me = auth(c).user.id;
+    return c.json(
+      await withTable(c.req.param("id"), me, async (row) => {
+        if (row.status === "lobby") {
+          if (row.hostId === me) return { status: "cancelled" };
+          return { seats: row.seats.map((x) => (x.id === me ? { ...x, answer: "no" as const } : x)) };
+        }
+        if (row.status !== "playing" || !row.state) return {};
+        return stateUpdate(leaveGame(row.state as unknown as State, me, cryptoRng));
+      }),
+    );
   });

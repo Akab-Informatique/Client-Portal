@@ -1079,6 +1079,34 @@ export const meetingAbsences = pgTable(
 );
 
 /** Coffee break: a game of chess between two team members (the position as FEN, the moves as PGN) */
+/**
+ * Complots (coffee break): a table of 2 to 6 colleagues. The host invites,
+ * those who accept play; the game itself is the engine's JSON state
+ * (server/lib/complots.ts), each player seeing only their own cards.
+ */
+export const complotsGames = pgTable(
+  "complots_games",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    hostId: uuid("host_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    /** lobby | playing | done | cancelled */
+    status: text("status").notNull().default("lobby"),
+    /** Everyone asked, the host first: their answer (null: not yet) */
+    seats: jsonb("seats").$type<{ id: string; name: string; answer: "yes" | "no" | null }[]>().notNull(),
+    /** The 5 characters of this game, one per clan */
+    chars: jsonb("chars").$type<string[]>().notNull(),
+    state: jsonb("state").$type<Record<string, unknown>>(),
+    winnerId: uuid("winner_id").references(() => users.id, { onDelete: "set null" }),
+    /** Changes counter: a write is refused when someone else wrote first */
+    rev: integer("rev").notNull().default(0),
+    createdAt: created(),
+    updatedAt: updated(),
+  },
+  (t) => [index("complots_games_status_idx").on(t.status, t.updatedAt)],
+);
+
 export const chessGames = pgTable(
   "chess_games",
   {

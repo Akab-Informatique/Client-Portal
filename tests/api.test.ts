@@ -4154,6 +4154,61 @@ describe("coffee break", () => {
     expect((await client.get("/api/breakroom/online")).status).toBe(403);
   });
 
+  it("Complots: a table of colleagues, the host starts with those who said yes; each one sees only their cards; moves checked; leaving ends it", async () => {
+    resetRateLimit("login:ip:unknown");
+    const tech = await signIn("tech@akab.local");
+    const admin = await signIn("admin@akab.local");
+    const tech2 = await signIn("tech2@akab.local");
+    const id = async (email: string) => (await db().select().from(schema.users).where(eq(schema.users.email, email)))[0].id;
+    const [techId, adminId, tech2Id] = [await id("tech@akab.local"), await id("admin@akab.local"), await id("tech2@akab.local")];
+    const chars = ["duchesse", "assassin", "comtesse", "capitaine", "ambassadeur"];
+    // one character per clan
+    expect((await tech.post("/api/breakroom/complots", { invite: [adminId], chars: ["duchesse", "assassin", "bourreau", "capitaine", "ambassadeur"] })).status).toBe(400);
+    const made = await tech.post("/api/breakroom/complots", { invite: [adminId, tech2Id], chars });
+    expect(made.status).toBe(201);
+    const gid = made.json.id;
+    const bell = (await admin.get("/api/notifications")).json.items.find((n: any) => n.type === "breakroom.complots");
+    expect(bell).toMatchObject({ link: `/breakroom?complots=${gid}` });
+    expect((await admin.get("/api/breakroom/complots")).json.find((x: any) => x.id === gid)).toMatchObject({ invited: true, status: "lobby" });
+    // only the host starts, with at least one yes
+    expect((await tech.post(`/api/breakroom/complots/${gid}/start`)).json.error).toBe("not_enough_players");
+    expect((await admin.post(`/api/breakroom/complots/${gid}/respond`, { accept: true })).status).toBe(200);
+    expect((await tech2.post(`/api/breakroom/complots/${gid}/respond`, { accept: false })).status).toBe(200);
+    expect((await admin.post(`/api/breakroom/complots/${gid}/start`)).json.error).toBe("game_not_lobby");
+    const started = await tech.post(`/api/breakroom/complots/${gid}/start`);
+    expect(started.json.status).toBe("playing");
+    // two players (tech2 said no): the draft first
+    const g = started.json.game;
+    expect(g.players.map((p: any) => p.id).sort()).toEqual([techId, adminId].sort());
+    expect(g.phase.k).toBe("draft");
+    // tech2 left the table: nothing to see any more
+    expect((await tech2.get(`/api/breakroom/complots`)).json.some((x: any) => x.id === gid)).toBe(false);
+    // each one sees only their own card
+    const mine = g.players.find((p: any) => p.id === techId);
+    const theirs = g.players.find((p: any) => p.id === adminId);
+    expect(mine.cards[0].c).toBeTruthy();
+    expect(theirs.cards[0].c).toBeNull();
+    for (const [agent, me] of [[tech, techId], [admin, adminId]] as const) {
+      const v = (await agent.get(`/api/breakroom/complots/${gid}`)).json.game;
+      expect((await agent.post(`/api/breakroom/complots/${gid}/play`, { input: { t: "draft", char: v.phase.options[0] } })).status).toBe(200);
+      expect(me).toBeTruthy();
+    }
+    const v = (await tech.get(`/api/breakroom/complots/${gid}`)).json.game;
+    expect(v.phase.k).toBe("turn");
+    const first = v.turn === techId ? tech : admin;
+    const second = v.turn === techId ? admin : tech;
+    expect((await second.post(`/api/breakroom/complots/${gid}/play`, { input: { t: "action", kind: "income" } })).json.error).toBe("complots_not_your_turn");
+    expect((await first.post(`/api/breakroom/complots/${gid}/play`, { input: { t: "action", kind: "fly" } })).status).toBe(400);
+    const after = (await first.post(`/api/breakroom/complots/${gid}/play`, { input: { t: "action", kind: "income" } })).json.game;
+    expect(after.turn).not.toBe(v.turn);
+    // someone else's table: not found
+    expect((await tech2.get(`/api/breakroom/complots/${gid}`)).status).toBe(404);
+    // one leaves: the other wins
+    const end = (await first.post(`/api/breakroom/complots/${gid}/leave`)).json;
+    expect(end.status).toBe("done");
+    expect(end.winnerId).toBe(v.turn === techId ? adminId : techId);
+  });
+
   it("30 minutes a day: the time on screen counts (a minute at most between beats), then everything closes until tomorrow", async () => {
     resetRateLimit("login:ip:unknown");
     const tech = await signIn("tech@akab.local");

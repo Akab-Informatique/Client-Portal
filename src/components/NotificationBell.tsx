@@ -55,6 +55,8 @@ function useView(n: Notification): { icon: LucideIcon; title: string; body: stri
         tone: k === "Escalation" ? "alert" : "gold",
       };
     }
+    case "breakroom.complots":
+      return { icon: Swords, title: t("notifications.complotsInvite", { from: n.data.from ?? "" }), body: t("notifications.complotsInviteBody"), tone: "gold" };
     case "breakroom.invite":
       return { icon: Swords, title: t("notifications.breakroomInvite", { from: n.data.from ?? "" }), body: t("notifications.breakroomInviteBody"), tone: "gold" };
     case "timer.pending":
