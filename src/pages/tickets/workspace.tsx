@@ -69,7 +69,12 @@ export function TicketWorkspaceProvider({ enabled, children }: { enabled: boolea
     return () => window.removeEventListener(CLOSE_TICKET_EVENT, on);
   }, []);
   const minimize = useCallback((tk: TicketDetail) => {
-    setDocked((d) => [...d.filter((x) => x.id !== tk.id), { id: tk.id, number: tk.number, title: tk.title, priority: tk.priorityKind, dueAt: tk.dueAt, statusKind: tk.statusKind }].slice(-6));
+    setDocked((d) =>
+      [
+        ...d.filter((x) => x.id !== tk.id),
+        { id: tk.id, number: tk.number, title: tk.title, priority: tk.priorityKind, dueAt: tk.dueAt, statusKind: tk.statusKind },
+      ].slice(-6),
+    );
     setOpenId(null);
   }, []);
   const dismiss = (id: number) => setDocked((d) => d.filter((x) => x.id !== id));
@@ -159,7 +164,9 @@ function Dock({
     });
   const items: Docked[] = [
     ...docked,
-    ...list.filter((x) => x.state !== "pending" && !docked.some((d) => d.id === x.ticketId)).map((x) => ({ id: x.ticketId, number: x.ticketNumber, title: x.ticketTitle })),
+    ...list
+      .filter((x) => x.state !== "pending" && !docked.some((d) => d.id === x.ticketId))
+      .map((x) => ({ id: x.ticketId, number: x.ticketNumber, title: x.ticketTitle })),
   ];
   if (hidden || items.length === 0) return null;
   const item = (d: Docked) => {
@@ -186,7 +193,10 @@ function Dock({
   const stacked = items.filter((d) => places[d.id]?.x === undefined);
   return (
     <>
-      <div className="pointer-events-none fixed bottom-4 right-4 z-40 flex max-w-[calc(100vw-2rem)] flex-wrap-reverse items-end justify-end gap-2" aria-label={t("tickets.dock")}>
+      <div
+        className="pointer-events-none fixed bottom-4 right-4 z-40 flex max-w-[calc(100vw-2rem)] flex-wrap-reverse items-end justify-end gap-2"
+        aria-label={t("tickets.dock")}
+      >
         <AnimatePresence>{stacked.map(item)}</AnimatePresence>
       </div>
       <AnimatePresence>{free.map(item)}</AnimatePresence>
@@ -293,6 +303,12 @@ function DockItem({
     >
       {compact ? (
         <>
+          {/* a running timer: an electric field around the cell */}
+          {running && (
+            <span aria-hidden className="timer-field">
+              <span className="timer-field-hex" />
+            </span>
+          )}
           {/* a honeycomb cell: number and time; the controls show on hover */}
           <button
             type="button"
@@ -316,7 +332,12 @@ function DockItem({
               )}
             </span>
           </button>
-          {busy && <span className="absolute right-1 top-2 size-2 rounded-full bg-orange-400" title={t("tickets.openBy", { names: viewers!.map((v) => v.name).join(", ") })} />}
+          {busy && (
+            <span
+              className="absolute right-1 top-2 size-2 rounded-full bg-orange-400"
+              title={t("tickets.openBy", { names: viewers!.map((v) => v.name).join(", ") })}
+            />
+          )}
           {/* the action bar: shows on hover; the padding below it bridges the gap to the cell,
               and it stays a moment after the mouse leaves, so it can be reached without a click */}
           <div
@@ -327,29 +348,31 @@ function DockItem({
           </div>
         </>
       ) : (
-        <div className="group relative isolate flex w-72 items-center gap-2 overflow-hidden rounded-xl border border-[color:var(--gold)]/25 bg-popover/90 py-1.5 pl-1.5 pr-1 shadow-[0_12px_40px_-12px_rgba(0,0,0,0.6),0_0_24px_-12px_rgba(255,206,26,0.35)] backdrop-blur-xl">
-          <span aria-hidden className="pointer-events-none absolute inset-y-0 left-0 -z-10 w-40" style={glow} />
-          <button type="button" onClick={restore} className="flex min-w-0 flex-1 items-center gap-2 text-left">
-            <Ticket className="size-4 shrink-0 text-primary" />
-            <span className="min-w-0">
-              <span className="block font-mono text-[10px] text-muted-foreground">{d.number}</span>
-              <span className="block truncate text-xs font-medium">{d.title}</span>
+        <div className={cn("relative", running && "timer-field-tab")}>
+          <div className="group relative isolate flex w-72 items-center gap-2 overflow-hidden rounded-xl border border-[color:var(--gold)]/25 bg-popover/90 py-1.5 pl-1.5 pr-1 shadow-[0_12px_40px_-12px_rgba(0,0,0,0.6),0_0_24px_-12px_rgba(255,206,26,0.35)] backdrop-blur-xl">
+            <span aria-hidden className="pointer-events-none absolute inset-y-0 left-0 -z-10 w-40" style={glow} />
+            <button type="button" onClick={restore} className="flex min-w-0 flex-1 items-center gap-2 text-left">
+              <Ticket className="size-4 shrink-0 text-primary" />
+              <span className="min-w-0">
+                <span className="block font-mono text-[10px] text-muted-foreground">{d.number}</span>
+                <span className="block truncate text-xs font-medium">{d.title}</span>
+              </span>
+            </button>
+            {busy && (
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <span className="relative flex size-2.5 shrink-0">
+                    <span className="absolute inline-flex size-full animate-ping rounded-full bg-orange-400 opacity-75" />
+                    <span className="relative inline-flex size-2.5 rounded-full bg-orange-400" />
+                  </span>
+                </TooltipTrigger>
+                <TooltipContent>{t("tickets.openBy", { names: viewers!.map((v) => v.name).join(", ") })}</TooltipContent>
+              </Tooltip>
+            )}
+            <span data-nodrag className="flex shrink-0 items-center">
+              {controls}
             </span>
-          </button>
-          {busy && (
-            <Tooltip>
-              <TooltipTrigger asChild>
-                <span className="relative flex size-2.5 shrink-0">
-                  <span className="absolute inline-flex size-full animate-ping rounded-full bg-orange-400 opacity-75" />
-                  <span className="relative inline-flex size-2.5 rounded-full bg-orange-400" />
-                </span>
-              </TooltipTrigger>
-              <TooltipContent>{t("tickets.openBy", { names: viewers!.map((v) => v.name).join(", ") })}</TooltipContent>
-            </Tooltip>
-          )}
-          <span data-nodrag className="flex shrink-0 items-center">
-            {controls}
-          </span>
+          </div>
         </div>
       )}
     </motion.div>

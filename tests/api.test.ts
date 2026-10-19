@@ -1787,18 +1787,19 @@ describe("tickets: client and contact", () => {
     expect((await admin.get("/api/me")).json.permissions).toContain("tickets.o365");
   });
 
-  it("timers: one running at a time, closed tab becomes an entry to validate", async () => {
+  it("timers: several can run at once, closed tab becomes an entry to validate", async () => {
     const tech = await session("tech@akab.local");
     const other = await session("tech2@akab.local");
     const [a, b] = (await tech.get("/api/tickets?view=all")).json.items;
     let timers = (await tech.post(`/api/tickets/${a.id}/timer/start`)).json;
     expect(timers).toMatchObject([{ ticketId: a.id, ticketNumber: a.number, state: "running" }]);
-    // starting another one pauses the first
+    // starting another one keeps the first going (several tickets minimized at once)
     timers = (await tech.post(`/api/tickets/${b.id}/timer/start`)).json;
     expect(timers.map((x: any) => [x.ticketId, x.state])).toEqual([
-      [a.id, "paused"],
+      [a.id, "running"],
       [b.id, "running"],
     ]);
+    await tech.post(`/api/tickets/${a.id}/timer/pause`);
     expect((await tech.post(`/api/tickets/${b.id}/timer/pause`)).json.every((x: any) => x.state === "paused")).toBe(true);
     // timers are personal
     expect((await other.get("/api/tickets/timers")).json).toEqual([]);

@@ -802,13 +802,8 @@ export const ticketRoutes = new Hono<AppEnv>()
     const until = await notStartedYet(id);
     if (until) throw new HTTPException(409, { message: "ticket_not_started", cause: [{ path: "startDate", message: until }] });
     const now = new Date();
+    // several timers may run at once (tickets minimized keep going)
     const mine = await myTimers(a.user.id);
-    for (const other of mine.filter((x) => x.state === "running" && x.ticketId !== id)) {
-      await db()
-        .update(schema.ticketTimers)
-        .set({ state: "paused", accumulatedMs: elapsedMs(other, now.getTime()), runningSince: null, updatedAt: now })
-        .where(eq(schema.ticketTimers.id, other.id));
-    }
     const existing = mine.find((x) => x.ticketId === id);
     if (existing?.state === "pending") throw new HTTPException(409, { message: "timer_pending" });
     if (existing) {

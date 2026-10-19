@@ -39,7 +39,9 @@ import {
   UserRound,
   Users,
   X,
-  type LucideIcon, MessageSquareText } from "lucide-react";
+  type LucideIcon,
+  MessageSquareText,
+} from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import {
@@ -69,7 +71,21 @@ import { ChargeButtons } from "./Charges";
 import { PriorityDialog, TicketPriorities } from "./Planning";
 import { TicketSmsPanel, useTicketSms } from "@/pages/sms/SmsPage";
 import { useConfirm } from "@/components/ConfirmDialog";
-import { dueState, longDateTime, shortDate, PRIORITY_STYLE, STATUS_STYLE, useChoiceText, usePresence, type AiAnalysis, type TicketDetail, type TicketList, type Viewer, ticketErrorText, type TicketSummary } from "./shared";
+import {
+  dueState,
+  longDateTime,
+  shortDate,
+  PRIORITY_STYLE,
+  STATUS_STYLE,
+  useChoiceText,
+  usePresence,
+  type AiAnalysis,
+  type TicketDetail,
+  type TicketList,
+  type Viewer,
+  ticketErrorText,
+  type TicketSummary,
+} from "./shared";
 
 const SOURCE_ICON: Record<string, LucideIcon> = { email: Mail, phone: Phone, portal: Inbox, monitoring: MonitorCog };
 
@@ -114,6 +130,7 @@ function fromLists(qc: QueryClient, id: number): TicketDetail | undefined {
 }
 
 export function TicketOverlay({ id, onClose, onMinimize }: { id: number | null; onClose: () => void; onMinimize: (tk: TicketDetail) => void }) {
+  const leaveRef = useRef<((go: () => void) => void) | null>(null);
   const { t } = useTranslation();
   const qc = useQueryClient();
   const { data, isLoading, isPlaceholderData, isError, error, refetch, isFetching } = useQuery({
@@ -129,7 +146,7 @@ export function TicketOverlay({ id, onClose, onMinimize }: { id: number | null; 
   const viewers = usePresence(id);
 
   return (
-    <DialogPrimitive.Root open={Boolean(id)} onOpenChange={(o) => !o && onClose()}>
+    <DialogPrimitive.Root open={Boolean(id)} onOpenChange={(o) => !o && (leaveRef.current ? leaveRef.current(onClose) : onClose())}>
       <AnimatePresence>
         {id && (
           <DialogPrimitive.Portal forceMount>
@@ -171,6 +188,7 @@ export function TicketOverlay({ id, onClose, onMinimize }: { id: number | null; 
                     viewers={viewers}
                     onClose={onClose}
                     onMinimize={() => onMinimize(shown)}
+                    leaveRef={leaveRef}
                   />
                 )}
               </motion.div>
@@ -200,8 +218,7 @@ function useTicketUpdate(tk: TicketDetail) {
       title?: string;
       description?: string;
       assetId?: string | null;
-    }) =>
-      api.patch<TicketDetail>(`/tickets/${tk.id}`, patch),
+    }) => api.patch<TicketDetail>(`/tickets/${tk.id}`, patch),
     onSuccess: (next) => {
       qc.setQueryData(["tickets", "detail", tk.id], next);
       void qc.invalidateQueries({ queryKey: ["tickets"] });
@@ -218,6 +235,7 @@ function TicketBody({
   viewers,
   onClose,
   onMinimize,
+  leaveRef,
 }: {
   tk: TicketDetail;
   /** Shown from the list while the full ticket (description, notes, time) loads */
@@ -227,6 +245,8 @@ function TicketBody({
   viewers: Viewer[] | null;
   onClose: () => void;
   onMinimize: () => void;
+  /** Escape or a click outside: the overlay asks here first (changes not saved) */
+  leaveRef?: React.MutableRefObject<((go: () => void) => void) | null>;
 }) {
   const { t } = useTranslation();
   const txt = useChoiceText();
@@ -234,8 +254,72 @@ function TicketBody({
   const confirm = useConfirm();
   const editable = can("tickets.edit");
   const update = useTicketUpdate(tk);
+  const qc = useQueryClient();
   const { data: companies = [tk.company] } = useCompanies();
-  const due = dueState(tk.dueAt, tk.statusKind);
+  // Changes made in place wait here (shown as "modified") until ✓ saves them all, or ✗ drops them
+  const [staged, setStaged] = useState<Staged>({});
+  useEffect(() => setStaged({}), [tk.id]);
+  const original: Required<Staged> = {
+    status: tk.status,
+    priority: tk.priority,
+    queue: tk.queue,
+    dueAt: tk.dueAt,
+    assigneeId: tk.assignee?.id ?? null,
+    startDate: tk.startDate ?? null,
+    startTime: tk.startTime ?? null,
+    startLocked: Boolean(tk.startLocked),
+  };
+  const stage = (p: Staged) =>
+    setStaged((s) => {
+      const next: Staged = { ...s, ...p };
+      // no day, no time nor restriction
+      if (p.startDate === null) Object.assign(next, { startTime: null, startLocked: false });
+      for (const k of Object.keys(next) as (keyof Staged)[]) if (next[k] === original[k]) delete next[k];
+      return next;
+    });
+  const view = { ...original, ...staged };
+  const changed = (k: keyof Staged) => k in staged;
+  const pending = Object.keys(staged).length;
+  const saveAll = useMutation({
+    mutationFn: async () => {
+      const { startDate, startTime, startLocked, ...patch } = staged;
+      let next: TicketDetail | null = null;
+      if (Object.keys(patch).length) next = await api.patch<TicketDetail>(`/tickets/${tk.id}`, patch);
+      const start = { startDate, startTime, startLocked };
+      if (Object.values(start).some((x) => x !== undefined)) await api.put(`/tickets/${tk.id}/start-date`, start);
+      return next;
+    },
+    onSuccess: (next) => {
+      if (next) qc.setQueryData(["tickets", "detail", tk.id], next);
+      void qc.invalidateQueries({ queryKey: ["tickets"] });
+      setStaged({});
+      toast.success(t("common.saved"));
+    },
+    onError: (e) => toast.error(ticketErrorText(t, e)),
+  });
+  /** Leaving with changes not saved: asked first */
+  const leave = (go: () => void) =>
+    pending ? void confirm({ title: t("tickets.pendingDiscard", { count: pending }), destructive: true }).then((ok) => ok && go()) : go();
+  if (leaveRef) leaveRef.current = leave;
+  useEffect(
+    () => () => {
+      if (leaveRef) leaveRef.current = null;
+    },
+    [leaveRef],
+  );
+  const statusOpt = tk.options.statuses.find((s) => s.value === view.status);
+  const statusKind = statusOpt?.kind ?? tk.statusKind;
+  const statusText = statusOpt ? txt.status(statusOpt) : txt.status({ label: tk.statusLabel, kind: tk.statusKind });
+  const priorityOpt = tk.options.priorities.find((p) => p.value === view.priority);
+  const priorityKind = priorityOpt?.kind ?? tk.priorityKind;
+  const priorityText = priorityOpt ? txt.priority(priorityOpt) : txt.priority({ label: tk.priorityLabel, kind: tk.priorityKind });
+  const queueText = tk.options.queues.find((q) => q.value === view.queue)?.label ?? (changed("queue") ? view.queue : tk.queueLabel);
+  const assigneeName = changed("assigneeId")
+    ? view.assigneeId
+      ? (tk.options.technicians.find((p) => p.id === view.assigneeId)?.name ?? "")
+      : null
+    : (tk.assignee?.name ?? null);
+  const due = dueState(view.dueAt, statusKind);
   const [draft, setDraft] = useState<{ text: string; internal: boolean } | null>(null);
   // Quick actions put the note box in a mode and bring it into view
   const [focusNote, setFocusNote] = useState<{ internal: boolean; at: number } | null>(null);
@@ -253,7 +337,8 @@ function TicketBody({
     if (!editable) return;
     const onKey = (e: KeyboardEvent) => {
       const el = e.target as HTMLElement;
-      if (e.ctrlKey || e.metaKey || e.altKey || el.closest("input, textarea, select, [contenteditable=true], [role=menu], [role=dialog] [role=listbox]")) return;
+      if (e.ctrlKey || e.metaKey || e.altKey || el.closest("input, textarea, select, [contenteditable=true], [role=menu], [role=dialog] [role=listbox]"))
+        return;
       const k = e.key.toLowerCase();
       if (k === "r" || k === "i") {
         e.preventDefault();
@@ -267,11 +352,20 @@ function TicketBody({
 
   return (
     <>
+      {pending > 0 && (
+        <div className="pointer-events-none fixed inset-x-0 bottom-6 z-50 flex justify-center">
+          <div className="pointer-events-auto">
+            <PendingBar count={pending} saving={saveAll.isPending} onSave={() => saveAll.mutate()} onCancel={() => setStaged({})} floating />
+          </div>
+        </div>
+      )}
       {/* Header: what the ticket is, where it stands, and the tools */}
       <div className="glass relative z-10 rounded-none border-x-0 border-t-0 border-b">
         <div className="w-full px-4 pb-3 pt-3 lg:px-6">
           <div className="flex items-center gap-3">
-            <span className="rounded-md border border-[color:var(--gold)]/30 bg-[color:var(--gold)]/10 px-2 py-0.5 font-mono text-xs text-primary">{tk.number}</span>
+            <span className="rounded-md border border-[color:var(--gold)]/30 bg-[color:var(--gold)]/10 px-2 py-0.5 font-mono text-xs text-primary">
+              {tk.number}
+            </span>
             <span className="truncate text-xs text-muted-foreground">
               {tk.company.name}
               {tk.contact && ` · ${tk.contact}`}
@@ -280,16 +374,17 @@ function TicketBody({
               <PresenceLight viewers={viewers} />
             </span>
             <TimerControl ticketId={tk.id} />
-            {can("tickets.ai") && (tk.ai ? <AiMenu tk={tk} onReply={(text) => setDraft({ text, internal: false })} /> : <AiSetupHint label={t("tickets.ai.button")} />)}
+            {can("tickets.ai") &&
+              (tk.ai ? <AiMenu tk={tk} onReply={(text) => setDraft({ text, internal: false })} /> : <AiSetupHint label={t("tickets.ai.button")} />)}
             <Tooltip>
               <TooltipTrigger asChild>
-                <Button variant="outline" size="icon" className="size-9" onClick={onMinimize} aria-label={t("tickets.minimize")}>
+                <Button variant="outline" size="icon" className="size-9" onClick={() => leave(onMinimize)} aria-label={t("tickets.minimize")}>
                   <Minus className="size-4" />
                 </Button>
               </TooltipTrigger>
               <TooltipContent>{t("tickets.minimizeHint")}</TooltipContent>
             </Tooltip>
-            <Button variant="outline" size="icon" className="size-9" onClick={onClose} aria-label={t("common.close")}>
+            <Button variant="outline" size="icon" className="size-9" onClick={() => leave(onClose)} aria-label={t("common.close")}>
               <X className="size-4" />
             </Button>
           </div>
@@ -298,44 +393,74 @@ function TicketBody({
             <InlinePick
               disabled={!editable}
               label={t("tickets.fields.status")}
-              value={tk.status}
+              value={view.status}
               options={tk.options.statuses.map((s) => ({ value: s.value, label: txt.status(s) }))}
-              onPick={(v) => update.mutate({ status: v })}
-              trigger={<span className={cn("inline-flex items-center gap-1.5 rounded-full border px-2.5 py-0.5 text-xs font-medium", STATUS_STYLE[tk.statusKind])}>{txt.status({ label: tk.statusLabel, kind: tk.statusKind })}</span>}
+              onPick={(v) => stage({ status: v })}
+              trigger={
+                <span
+                  className={cn(
+                    "inline-flex items-center gap-1.5 rounded-full border px-2.5 py-0.5 text-xs font-medium",
+                    STATUS_STYLE[statusKind],
+                    changed("status") && MODIFIED,
+                  )}
+                >
+                  {statusText}
+                </span>
+              }
             />
             <InlinePick
               disabled={!editable}
               label={t("tickets.fields.priority")}
-              value={tk.priority}
+              value={view.priority}
               options={tk.options.priorities.map((p) => ({ value: p.value, label: txt.priority(p), dot: PRIORITY_STYLE[p.kind].dot }))}
-              onPick={(v) => update.mutate({ priority: v })}
+              onPick={(v) => stage({ priority: v })}
               trigger={
-                <span className={cn("inline-flex items-center gap-1.5 rounded-full border px-2.5 py-0.5 text-xs font-medium", PRIORITY_STYLE[tk.priorityKind].text)}>
-                  <span className={cn("size-2 rounded-full", PRIORITY_STYLE[tk.priorityKind].dot)} /> {txt.priority({ label: tk.priorityLabel, kind: tk.priorityKind })}
+                <span
+                  className={cn(
+                    "inline-flex items-center gap-1.5 rounded-full border px-2.5 py-0.5 text-xs font-medium",
+                    PRIORITY_STYLE[priorityKind].text,
+                    changed("priority") && MODIFIED,
+                  )}
+                >
+                  <span className={cn("size-2 rounded-full", PRIORITY_STYLE[priorityKind].dot)} /> {priorityText}
                 </span>
               }
             />
             <InlinePick
               disabled={!editable}
               label={t("tickets.fields.queue")}
-              value={tk.queue}
+              value={view.queue}
               options={tk.options.queues.map((q) => ({ value: q.value, label: q.label ?? q.value }))}
-              onPick={(v) => update.mutate({ queue: v })}
-              trigger={<span className="rounded-full border px-2.5 py-0.5 text-xs text-muted-foreground">{tk.queueLabel || "—"}</span>}
+              onPick={(v) => stage({ queue: v })}
+              trigger={
+                <span className={cn("rounded-full border px-2.5 py-0.5 text-xs text-muted-foreground", changed("queue") && MODIFIED)}>{queueText || "—"}</span>
+              }
             />
-            {update.isPending && <Loader2 className="size-4 animate-spin text-muted-foreground" />}
+            {(update.isPending || saveAll.isPending) && <Loader2 className="size-4 animate-spin text-muted-foreground" />}
+            {pending > 0 && <PendingBar count={pending} saving={saveAll.isPending} onSave={() => saveAll.mutate()} onCancel={() => setStaged({})} />}
             {(() => {
               const badge = (
                 <span
                   className={cn(
                     "flex items-center gap-1 rounded-full border px-2.5 py-0.5 text-xs font-medium",
-                    due === "overdue" ? "border-destructive/50 text-destructive" : due === "today" ? "border-orange-500/50 text-orange-400" : "text-muted-foreground",
+                    due === "overdue"
+                      ? "border-destructive/50 text-destructive"
+                      : due === "today"
+                        ? "border-orange-500/50 text-orange-400"
+                        : "text-muted-foreground",
                     editable && "cursor-pointer hover:border-[color:var(--gold)]/60",
+                    changed("dueAt") && MODIFIED,
                   )}
-                  title={editable ? t("tickets.due.change") : longDateTime(tk.dueAt)}
+                  title={editable ? t("tickets.due.change") : longDateTime(view.dueAt)}
                 >
                   <CalendarClock className="size-3.5" />
-                  {due === "overdue" ? t("tickets.overdue") : due === "today" ? t("tickets.today") : longDateTime(tk.dueAt)}
+                  {changed("dueAt")
+                    ? longDateTime(view.dueAt)
+                    : due === "overdue"
+                      ? t("tickets.overdue")
+                      : due === "today"
+                        ? t("tickets.today")
+                        : longDateTime(view.dueAt)}
                 </span>
               );
               return editable ? (
@@ -347,8 +472,8 @@ function TicketBody({
                   </PopoverTrigger>
                   <PopoverContent align="start" className="w-80 space-y-2">
                     <p className="text-sm font-semibold">{t("tickets.fields.due")}</p>
-                    <p className="text-xs text-muted-foreground">{longDateTime(tk.dueAt)}</p>
-                    <DueEditor dueAt={tk.dueAt} quick autoFocus saving={update.isPending} onSave={(dueAt) => update.mutate({ dueAt })} />
+                    <p className="text-xs text-muted-foreground">{longDateTime(view.dueAt)}</p>
+                    <DueEditor dueAt={view.dueAt} quick autoFocus onSave={(dueAt) => stage({ dueAt })} />
                   </PopoverContent>
                 </Popover>
               ) : (
@@ -359,26 +484,47 @@ function TicketBody({
             {/* Quick actions: what a technician does next, one click away */}
             <span className="hidden h-5 w-px bg-border lg:mx-1 lg:block" />
             <div className="flex flex-wrap items-center gap-1.5 lg:ml-auto">
-            {editable && (
-              <>
-                <QuickAction icon={MessageSquareReply} label={t("tickets.quickAction.reply")} kbd="R" onClick={() => setFocusNote({ internal: false, at: Date.now() })} />
-                <QuickAction icon={Lock} label={t("tickets.quickAction.note")} kbd="I" onClick={() => setFocusNote({ internal: true, at: Date.now() })} />
-              </>
-            )}
-            {remote && <QuickAction icon={MonitorPlay} label={t("tickets.asset.remote")} href={remote} accent />}
-            {phone && <QuickAction icon={Phone} label={t("tickets.quickAction.call", { name: tk.contact.split(" ")[0] })} href={`tel:${phone.replace(/[^\d+]/g, "")}`} title={phone} />}
-            {can("sms.view") && <QuickAction icon={MessageSquareText} label={t("sms.quick")} onClick={() => setThread("sms")} />}
-            {email && <QuickAction icon={Mail} label={t("tickets.quickAction.email")} href={`mailto:${email}?subject=${encodeURIComponent(`[${tk.number}] ${tk.title}`)}`} title={email} />}
-            {can("tickets.plan") && <QuickAction icon={Star} label={t("planning.givePriority")} onClick={() => setGiving(true)} />}
-            {editable && done && tk.statusKind !== "complete" && (
-              <QuickAction
-                icon={CheckCircle2}
-                label={t("tickets.quickAction.resolve")}
-                onClick={() =>
-                  void confirm({ title: t("tickets.quickAction.resolveConfirm", { status: txt.status(done) }) }).then((ok) => ok && update.mutate({ status: done.value }))
-                }
-              />
-            )}
+              {editable && (
+                <>
+                  <QuickAction
+                    icon={MessageSquareReply}
+                    label={t("tickets.quickAction.reply")}
+                    kbd="R"
+                    onClick={() => setFocusNote({ internal: false, at: Date.now() })}
+                  />
+                  <QuickAction icon={Lock} label={t("tickets.quickAction.note")} kbd="I" onClick={() => setFocusNote({ internal: true, at: Date.now() })} />
+                </>
+              )}
+              {remote && <QuickAction icon={MonitorPlay} label={t("tickets.asset.remote")} href={remote} accent />}
+              {phone && (
+                <QuickAction
+                  icon={Phone}
+                  label={t("tickets.quickAction.call", { name: tk.contact.split(" ")[0] })}
+                  href={`tel:${phone.replace(/[^\d+]/g, "")}`}
+                  title={phone}
+                />
+              )}
+              {can("sms.view") && <QuickAction icon={MessageSquareText} label={t("sms.quick")} onClick={() => setThread("sms")} />}
+              {email && (
+                <QuickAction
+                  icon={Mail}
+                  label={t("tickets.quickAction.email")}
+                  href={`mailto:${email}?subject=${encodeURIComponent(`[${tk.number}] ${tk.title}`)}`}
+                  title={email}
+                />
+              )}
+              {can("tickets.plan") && <QuickAction icon={Star} label={t("planning.givePriority")} onClick={() => setGiving(true)} />}
+              {editable && done && tk.statusKind !== "complete" && (
+                <QuickAction
+                  icon={CheckCircle2}
+                  label={t("tickets.quickAction.resolve")}
+                  onClick={() =>
+                    void confirm({ title: t("tickets.quickAction.resolveConfirm", { status: txt.status(done) }) }).then(
+                      (ok) => ok && update.mutate({ status: done.value }),
+                    )
+                  }
+                />
+              )}
             </div>
           </div>
         </div>
@@ -430,7 +576,9 @@ function TicketBody({
                   >
                     {k === "activity" ? <Clock3 className="size-3.5" /> : <MessageSquareText className="size-3.5" />}
                     {t(`sms.thread.${k}`)}
-                    {k === "sms" && (texts?.messages.length ?? 0) > 0 && <span className="rounded-full bg-black/15 px-1.5 font-mono text-[10px]">{texts!.messages.length}</span>}
+                    {k === "sms" && (texts?.messages.length ?? 0) > 0 && (
+                      <span className="rounded-full bg-black/15 px-1.5 font-mono text-[10px]">{texts!.messages.length}</span>
+                    )}
                   </button>
                 ))}
               </div>
@@ -462,113 +610,118 @@ function TicketBody({
 
         {/* Tools and information, in the order they are needed; one column, own scroll */}
         <aside className="space-y-3 pb-4 lg:w-[380px] lg:shrink-0 lg:overflow-y-auto lg:pr-1">
-            <Section id="client" icon={Building2} title={t("tickets.sections.client")}>
-              <dl className="space-y-3">
-                <Detail icon={Building2} label={t("tickets.fields.company")}>
-                  <CompanyPicker
-                    disabled={!editable}
-                    value={tk.company}
-                    companies={companies}
-                    onChange={(c) => c.id !== tk.company.id && update.mutate({ companyId: c.id })}
-                  />
-                </Detail>
-                <Detail icon={UserRound} label={t("tickets.fields.contact")}>
-                  <ContactPicker
-                    disabled={!editable}
-                    canCreate={editable}
-                    companyId={tk.company.id}
-                    value={tk.contactId}
-                    valueName={tk.contact || undefined}
-                    onChange={(c) => update.mutate({ contactId: c?.id ?? null })}
-                  />
-                </Detail>
-                {(phone || email) && (
-                  <div className="flex flex-wrap gap-x-3 gap-y-1 pl-7 text-xs">
-                    {phone && (
-                      <a href={`tel:${phone.replace(/[^\d+]/g, "")}`} className="flex items-center gap-1 text-primary hover:underline">
-                        <Phone className="size-3" /> {phone}
-                      </a>
-                    )}
-                    {email && (
-                      <a href={`mailto:${email}`} className="flex min-w-0 items-center gap-1 truncate text-primary hover:underline">
-                        <Mail className="size-3 shrink-0" /> <span className="truncate">{email}</span>
-                      </a>
-                    )}
-                  </div>
-                )}
-              </dl>
-            </Section>
-
-            <Section
-              id="device"
-              icon={HardDrive}
-              title={t("tickets.asset.title")}
-              badge={tk.asset?.name}
-              action={editable && !partial ? <AssetPicker tk={tk} onPick={(assetId) => update.mutate({ assetId })} /> : null}
-            >
-              <AssetContent tk={tk} editable={editable} partial={partial} onPick={(assetId) => update.mutate({ assetId })} />
-            </Section>
-
-            {tk.startLocked && tk.startDate && tk.startDate > todayLocal() && (
-              <p className="flex items-start gap-2 rounded-xl border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-xs text-amber-200">
-                <Lock className="mt-0.5 size-3.5 shrink-0" /> {t("tickets.startLock.notice", { date: tk.startTime ? `${shortDate(tk.startDate)} ${tk.startTime}` : shortDate(tk.startDate) })}
-              </p>
-            )}
-            <Section id="planning" icon={CalendarClock} title={t("tickets.sections.planning")}>
-              <dl className="space-y-3">
-                <StartDate tk={tk} />
-                <Detail icon={CalendarClock} label={t("tickets.fields.due")}>
-                  {editable ? (
-                    <div className="mt-0.5">
-                      <DueEditor dueAt={tk.dueAt} saving={update.isPending} onSave={(dueAt) => update.mutate({ dueAt })} />
-                    </div>
-                  ) : (
-                    longDateTime(tk.dueAt)
+          <Section id="client" icon={Building2} title={t("tickets.sections.client")}>
+            <dl className="space-y-3">
+              <Detail icon={Building2} label={t("tickets.fields.company")}>
+                <CompanyPicker
+                  disabled={!editable}
+                  value={tk.company}
+                  companies={companies}
+                  onChange={(c) => c.id !== tk.company.id && update.mutate({ companyId: c.id })}
+                />
+              </Detail>
+              <Detail icon={UserRound} label={t("tickets.fields.contact")}>
+                <ContactPicker
+                  disabled={!editable}
+                  canCreate={editable}
+                  companyId={tk.company.id}
+                  value={tk.contactId}
+                  valueName={tk.contact || undefined}
+                  onChange={(c) => update.mutate({ contactId: c?.id ?? null })}
+                />
+              </Detail>
+              {(phone || email) && (
+                <div className="flex flex-wrap gap-x-3 gap-y-1 pl-7 text-xs">
+                  {phone && (
+                    <a href={`tel:${phone.replace(/[^\d+]/g, "")}`} className="flex items-center gap-1 text-primary hover:underline">
+                      <Phone className="size-3" /> {phone}
+                    </a>
                   )}
-                </Detail>
-                <Detail icon={Clock3} label={t("tickets.fields.hours")}>
-                  {partial ? "…" : t("tickets.hoursValue", { hours: tk.hours.toLocaleString() })}
-                </Detail>
-              </dl>
-            </Section>
+                  {email && (
+                    <a href={`mailto:${email}`} className="flex min-w-0 items-center gap-1 truncate text-primary hover:underline">
+                      <Mail className="size-3 shrink-0" /> <span className="truncate">{email}</span>
+                    </a>
+                  )}
+                </div>
+              )}
+            </dl>
+          </Section>
 
-            <Section id="team" icon={Users} title={t("tickets.sections.team")} badge={tk.assignee?.name}>
-              <dl className="space-y-3">
-                <Detail icon={UserRound} label={t("tickets.fields.assignee")}>
-                  <InlinePick
-                    disabled={!editable}
-                    label={t("tickets.fields.assignee")}
-                    value={tk.assignee?.id ?? "none"}
-                    options={[{ value: "none", label: t("tickets.unassigned") }, ...tk.options.technicians.map((p) => ({ value: p.id, label: p.name }))]}
-                    onPick={(v) => update.mutate({ assigneeId: v === "none" ? null : v })}
-                    trigger={<span className={cn(!tk.assignee && "italic text-muted-foreground")}>{tk.assignee?.name ?? t("tickets.unassigned")}</span>}
-                  />
-                </Detail>
-                <Detail icon={Users} label={t("tickets.fields.secondary")}>
-                  <SecondaryPick
-                    disabled={!editable}
-                    value={tk.secondary.map((p) => p.id)}
-                    names={tk.secondary.map((p) => p.name)}
-                    options={tk.options.technicians.filter((p) => p.id !== tk.assignee?.id)}
-                    onSave={(secondaryIds) => update.mutate({ secondaryIds })}
-                  />
-                </Detail>
-              </dl>
-            </Section>
+          <Section
+            id="device"
+            icon={HardDrive}
+            title={t("tickets.asset.title")}
+            badge={tk.asset?.name}
+            action={editable && !partial ? <AssetPicker tk={tk} onPick={(assetId) => update.mutate({ assetId })} /> : null}
+          >
+            <AssetContent tk={tk} editable={editable} partial={partial} onPick={(assetId) => update.mutate({ assetId })} />
+          </Section>
 
-            <Section id="details" icon={Inbox} title={t("tickets.sections.details")} defaultOpen={false}>
-              <dl className="space-y-3">
-                <Detail icon={SOURCE_ICON[tk.source] ?? Inbox} label={t("tickets.fields.source")}>
-                  {tk.source ? t(`tickets.source.${tk.source}`, { defaultValue: tk.source }) : "—"}
-                </Detail>
-                <Detail icon={Clock3} label={t("tickets.fields.created")}>
-                  {longDateTime(tk.createdAt)}
-                </Detail>
-                <Detail icon={RefreshCw} label={t("tickets.sections.lastActivity")}>
-                  {longDateTime(tk.updatedAt)}
-                </Detail>
-              </dl>
-            </Section>
+          {tk.startLocked && tk.startDate && tk.startDate > todayLocal() && (
+            <p className="flex items-start gap-2 rounded-xl border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-xs text-amber-200">
+              <Lock className="mt-0.5 size-3.5 shrink-0" />{" "}
+              {t("tickets.startLock.notice", { date: tk.startTime ? `${shortDate(tk.startDate)} ${tk.startTime}` : shortDate(tk.startDate) })}
+            </p>
+          )}
+          <Section id="planning" icon={CalendarClock} title={t("tickets.sections.planning")}>
+            <dl className="space-y-3">
+              <StartDate tk={tk} value={view} changed={changed} onChange={stage} />
+              <Detail icon={CalendarClock} label={t("tickets.fields.due")}>
+                {editable ? (
+                  <div className={cn("mt-0.5 rounded-lg", changed("dueAt") && MODIFIED_BOX)}>
+                    <DueEditor dueAt={view.dueAt} onSave={(dueAt) => stage({ dueAt })} />
+                  </div>
+                ) : (
+                  longDateTime(tk.dueAt)
+                )}
+              </Detail>
+              <Detail icon={Clock3} label={t("tickets.fields.hours")}>
+                {partial ? "…" : t("tickets.hoursValue", { hours: tk.hours.toLocaleString() })}
+              </Detail>
+            </dl>
+          </Section>
+
+          <Section id="team" icon={Users} title={t("tickets.sections.team")} badge={tk.assignee?.name}>
+            <dl className="space-y-3">
+              <Detail icon={UserRound} label={t("tickets.fields.assignee")}>
+                <InlinePick
+                  disabled={!editable}
+                  label={t("tickets.fields.assignee")}
+                  value={view.assigneeId ?? "none"}
+                  options={[{ value: "none", label: t("tickets.unassigned") }, ...tk.options.technicians.map((p) => ({ value: p.id, label: p.name }))]}
+                  onPick={(v) => stage({ assigneeId: v === "none" ? null : v })}
+                  trigger={
+                    <span className={cn("rounded px-1", !assigneeName && "italic text-muted-foreground", changed("assigneeId") && MODIFIED)}>
+                      {assigneeName ?? t("tickets.unassigned")}
+                    </span>
+                  }
+                />
+              </Detail>
+              <Detail icon={Users} label={t("tickets.fields.secondary")}>
+                <SecondaryPick
+                  disabled={!editable}
+                  value={tk.secondary.map((p) => p.id)}
+                  names={tk.secondary.map((p) => p.name)}
+                  options={tk.options.technicians.filter((p) => p.id !== tk.assignee?.id)}
+                  onSave={(secondaryIds) => update.mutate({ secondaryIds })}
+                />
+              </Detail>
+            </dl>
+          </Section>
+
+          <Section id="details" icon={Inbox} title={t("tickets.sections.details")} defaultOpen={false}>
+            <dl className="space-y-3">
+              <Detail icon={SOURCE_ICON[tk.source] ?? Inbox} label={t("tickets.fields.source")}>
+                {tk.source ? t(`tickets.source.${tk.source}`, { defaultValue: tk.source }) : "—"}
+              </Detail>
+              <Detail icon={Clock3} label={t("tickets.fields.created")}>
+                {longDateTime(tk.createdAt)}
+              </Detail>
+              <Detail icon={RefreshCw} label={t("tickets.sections.lastActivity")}>
+                {longDateTime(tk.updatedAt)}
+              </Detail>
+            </dl>
+          </Section>
         </aside>
       </div>
       <OpenedByOthers viewers={viewers} />
@@ -676,7 +829,13 @@ function Section({
       </div>
       <AnimatePresence initial={false}>
         {open && (
-          <motion.div initial={{ height: 0, opacity: 0 }} animate={{ height: "auto", opacity: 1 }} exit={{ height: 0, opacity: 0 }} transition={{ duration: 0.18 }} className="overflow-hidden">
+          <motion.div
+            initial={{ height: 0, opacity: 0 }}
+            animate={{ height: "auto", opacity: 1 }}
+            exit={{ height: 0, opacity: 0 }}
+            transition={{ duration: 0.18 }}
+            className="overflow-hidden"
+          >
             <div className="px-4 pb-4">{children}</div>
           </motion.div>
         )}
@@ -724,7 +883,9 @@ function Activity({ tk, partial }: { tk: TicketDetail; partial: boolean }) {
             onClick={() => setFilter(f)}
             className={cn(
               "rounded-full border px-2.5 py-0.5 text-[11px] font-medium transition-colors",
-              filter === f ? "border-[color:var(--gold)]/50 bg-[color:var(--gold)]/15 text-primary" : "border-transparent text-muted-foreground hover:text-foreground",
+              filter === f
+                ? "border-[color:var(--gold)]/50 bg-[color:var(--gold)]/15 text-primary"
+                : "border-transparent text-muted-foreground hover:text-foreground",
             )}
           >
             {t(`tickets.activityFilter.${f}`)} {counts[f] > 0 && <span className="opacity-60">{counts[f]}</span>}
@@ -763,7 +924,10 @@ function Activity({ tk, partial }: { tk: TicketDetail; partial: boolean }) {
                 )}
                 {n.kind === "time" && n.billable !== false && (n.offsetHours ?? 0) > 0 && (
                   <span className="rounded-full bg-amber-500/15 px-1.5 text-[10px] font-medium text-amber-300">
-                    {t("tickets.timer.billedAfterOffset", { billed: Math.max(0, (n.hours ?? 0) - (n.offsetHours ?? 0)).toLocaleString(), offset: (n.offsetHours ?? 0).toLocaleString() })}
+                    {t("tickets.timer.billedAfterOffset", {
+                      billed: Math.max(0, (n.hours ?? 0) - (n.offsetHours ?? 0)).toLocaleString(),
+                      offset: (n.offsetHours ?? 0).toLocaleString(),
+                    })}
                   </span>
                 )}
                 {n.internal && (
@@ -773,7 +937,14 @@ function Activity({ tk, partial }: { tk: TicketDetail; partial: boolean }) {
                 )}
               </div>
               {n.text && (
-                <p className={cn("mt-1 whitespace-pre-wrap rounded-lg px-3 py-2 text-sm", n.internal ? "bg-violet-500/5" : n.kind === "time" ? "bg-sky-500/5" : "bg-muted/50")}>{n.text}</p>
+                <p
+                  className={cn(
+                    "mt-1 whitespace-pre-wrap rounded-lg px-3 py-2 text-sm",
+                    n.internal ? "bg-violet-500/5" : n.kind === "time" ? "bg-sky-500/5" : "bg-muted/50",
+                  )}
+                >
+                  {n.text}
+                </p>
               )}
               {n.internalText && (
                 <p className="mt-1 whitespace-pre-wrap rounded-lg bg-violet-500/5 px-3 py-2 text-sm">
@@ -902,7 +1073,10 @@ function EditableDescription({
       id="description"
       icon={FileText}
       title={t("tickets.description")}
-      badge={text.split("\n").find((l) => l.trim())?.slice(0, 70)}
+      badge={text
+        .split("\n")
+        .find((l) => l.trim())
+        ?.slice(0, 70)}
       action={
         !disabled && draft === null ? (
           <button type="button" onClick={() => setDraft(text)} className="flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground">
@@ -993,7 +1167,12 @@ function SecondaryPick({
                 });
               }}
             >
-              <span className={cn("flex size-4 items-center justify-center rounded border", on ? "border-primary bg-primary text-primary-foreground" : "border-muted-foreground/40")}>
+              <span
+                className={cn(
+                  "flex size-4 items-center justify-center rounded border",
+                  on ? "border-primary bg-primary text-primary-foreground" : "border-muted-foreground/40",
+                )}
+              >
                 {on && <Check className="size-3" />}
               </span>
               <span className="flex-1 truncate">{o.name}</span>
@@ -1043,7 +1222,17 @@ function Detail({ icon: Icon, label, children }: { icon: LucideIcon; label: stri
 
 /** Portal-only planned start date (Planning section, above the due date), saved right away. */
 /** The time on the start date (optional): saved when the field is left */
-export function StartTimeInput({ tk, disabled, onSave }: { tk: TicketDetail | TicketSummary; disabled: boolean; onSave: (time: string | null) => void }) {
+export function StartTimeInput({
+  tk,
+  disabled,
+  onSave,
+  className,
+}: {
+  tk: Pick<TicketSummary, "startDate" | "startTime">;
+  disabled: boolean;
+  onSave: (time: string | null) => void;
+  className?: string;
+}) {
   const { t } = useTranslation();
   const [v, setV] = useState(tk.startTime ?? "");
   useEffect(() => setV(tk.startTime ?? ""), [tk.startTime]);
@@ -1054,7 +1243,7 @@ export function StartTimeInput({ tk, disabled, onSave }: { tk: TicketDetail | Ti
   return (
     <Input
       type="time"
-      className="mt-1 h-8 w-32"
+      className={cn("mt-1 h-8 w-32", className)}
       disabled={disabled || !tk.startDate}
       value={v}
       onChange={(e) => setV(e.target.value)}
@@ -1077,18 +1266,20 @@ const todayLocal = () => {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
 };
 
-function StartDate({ tk }: { tk: TicketDetail }) {
+function StartDate({
+  tk,
+  value,
+  changed,
+  onChange,
+}: {
+  tk: TicketDetail;
+  value: { startDate: string | null; startTime: string | null; startLocked: boolean };
+  changed: (k: "startDate" | "startTime" | "startLocked") => boolean;
+  onChange: (p: { startDate?: string | null; startTime?: string | null; startLocked?: boolean }) => void;
+}) {
   const { t } = useTranslation();
   const can = useCan();
-  const qc = useQueryClient();
-  const save = useMutation({
-    mutationFn: (p: { startDate?: string | null; startTime?: string | null; startLocked?: boolean }) => api.put(`/tickets/${tk.id}/start-date`, p),
-    onSuccess: () => {
-      void qc.invalidateQueries({ queryKey: ["tickets"] });
-      toast.success(t("common.saved"));
-    },
-    onError: (e) => toast.error(ticketErrorText(t, e)),
-  });
+  const off = !can("tickets.edit");
   return (
     <div className="flex gap-3">
       <CalendarPlus className="mt-0.5 size-4 shrink-0 text-primary" />
@@ -1106,28 +1297,102 @@ function StartDate({ tk }: { tk: TicketDetail }) {
           <Input
             id="start-date"
             type="date"
-            className="mt-0.5 h-8"
-            disabled={!can("tickets.edit") || save.isPending}
-            defaultValue={tk.startDate ?? ""}
-            key={tk.startDate ?? ""}
-            onChange={(e) => save.mutate({ startDate: e.target.value || null })}
+            className={cn("mt-0.5 h-8", changed("startDate") && MODIFIED_BOX)}
+            disabled={off}
+            value={value.startDate ?? ""}
+            onChange={(e) => onChange({ startDate: e.target.value || null })}
           />
-          <StartTimeInput tk={tk} disabled={!can("tickets.edit") || save.isPending} onSave={(startTime) => save.mutate({ startTime })} />
+          <StartTimeInput
+            tk={{ ...tk, startDate: value.startDate, startTime: value.startTime }}
+            disabled={off}
+            className={cn(changed("startTime") && MODIFIED_BOX)}
+            onSave={(startTime) => onChange({ startTime })}
+          />
           {/* Restriction: nobody works on it before that day (off by default) */}
-          <label className={cn("mt-1.5 flex items-center gap-2 text-xs", !tk.startDate && "opacity-60")} title={t("tickets.startLock.hint")}>
+          <label
+            className={cn("mt-1.5 flex w-fit items-center gap-2 rounded-md px-1 text-xs", !value.startDate && "opacity-60", changed("startLocked") && MODIFIED)}
+            title={t("tickets.startLock.hint")}
+          >
             <Switch
-              checked={Boolean(tk.startLocked)}
-              disabled={!can("tickets.edit") || save.isPending || !tk.startDate}
-              onCheckedChange={(v) => save.mutate({ startLocked: v })}
+              checked={value.startLocked}
+              disabled={off || !value.startDate}
+              onCheckedChange={(v) => onChange({ startLocked: v })}
               aria-label={t("tickets.startLock.label")}
             />
-            <Lock className={cn("size-3.5", tk.startLocked ? "text-amber-300" : "text-muted-foreground")} />
+            <Lock className={cn("size-3.5", value.startLocked ? "text-amber-300" : "text-muted-foreground")} />
             {t("tickets.startLock.label")}
           </label>
-          {!tk.startDate && <p className="mt-0.5 text-[10px] text-muted-foreground">{t("tickets.startLock.needsDate")}</p>}
+          {!value.startDate && <p className="mt-0.5 text-[10px] text-muted-foreground">{t("tickets.startLock.needsDate")}</p>}
         </dd>
       </div>
     </div>
+  );
+}
+
+type Staged = {
+  status?: string;
+  priority?: string;
+  queue?: string;
+  dueAt?: string;
+  assigneeId?: string | null;
+  startDate?: string | null;
+  startTime?: string | null;
+  startLocked?: boolean;
+};
+/** A field changed but not saved yet */
+const MODIFIED = "ring-2 ring-[color:var(--gold)]/80 ring-offset-1 ring-offset-background";
+const MODIFIED_BOX = "border-[color:var(--gold)] ring-1 ring-[color:var(--gold)]/50";
+
+/** "3 changements" with ✓ (save them all) and ✗ (drop them) */
+function PendingBar({
+  count,
+  saving,
+  onSave,
+  onCancel,
+  floating,
+}: {
+  count: number;
+  saving: boolean;
+  onSave: () => void;
+  onCancel: () => void;
+  floating?: boolean;
+}) {
+  const { t } = useTranslation();
+  return (
+    <span
+      className={cn(
+        "inline-flex items-center gap-1.5 rounded-full border border-[color:var(--gold)]/60 bg-[color:var(--gold)]/10 py-0.5 pl-2.5 pr-1 text-xs font-medium text-primary",
+        floating && "bg-popover/95 py-1.5 pl-4 pr-1.5 text-sm shadow-[0_16px_50px_-12px_rgba(0,0,0,0.7),0_0_30px_-10px_rgba(255,206,26,0.6)] backdrop-blur-xl",
+      )}
+    >
+      {t("tickets.pendingCount", { count })}
+      <button
+        type="button"
+        onClick={onSave}
+        disabled={saving}
+        title={t("tickets.pendingSave")}
+        aria-label={t("tickets.pendingSave")}
+        className={cn(
+          "flex items-center justify-center rounded-full bg-emerald-600 text-white hover:bg-emerald-500 disabled:opacity-60",
+          floating ? "h-8 w-8" : "h-6 w-6",
+        )}
+      >
+        {saving ? <Loader2 className="size-3.5 animate-spin" /> : <Check className="size-3.5" />}
+      </button>
+      <button
+        type="button"
+        onClick={onCancel}
+        disabled={saving}
+        title={t("tickets.pendingCancel")}
+        aria-label={t("tickets.pendingCancel")}
+        className={cn(
+          "flex items-center justify-center rounded-full border bg-background/60 text-muted-foreground hover:text-destructive",
+          floating ? "h-8 w-8" : "h-6 w-6",
+        )}
+      >
+        <X className="size-3.5" />
+      </button>
+    </span>
   );
 }
 
@@ -1182,7 +1447,10 @@ function NoteComposer({
             key={String(v)}
             type="button"
             onClick={() => setInternal(v)}
-            className={cn("rounded-md px-2.5 py-1 font-medium", internal === v ? (v ? "bg-violet-500/20 text-violet-200" : "bg-grad-gold text-[#1a1204]") : "text-muted-foreground")}
+            className={cn(
+              "rounded-md px-2.5 py-1 font-medium",
+              internal === v ? (v ? "bg-violet-500/20 text-violet-200" : "bg-grad-gold text-[#1a1204]") : "text-muted-foreground",
+            )}
           >
             {v ? t("tickets.noteInternal") : t("tickets.noteReply")}
           </button>
@@ -1333,7 +1601,9 @@ function AiPanel({ tk, onToNote }: { tk: TicketDetail; onToNote: (text: string) 
             <ol className="space-y-1.5 text-sm">
               {c.nextSteps.map((s, i) => (
                 <li key={i} className="flex gap-2">
-                  <span className="flex size-5 shrink-0 items-center justify-center rounded-full bg-violet-500/20 font-mono text-[10px] text-violet-200">{i + 1}</span>
+                  <span className="flex size-5 shrink-0 items-center justify-center rounded-full bg-violet-500/20 font-mono text-[10px] text-violet-200">
+                    {i + 1}
+                  </span>
                   <span>{s}</span>
                 </li>
               ))}
@@ -1346,7 +1616,11 @@ function AiPanel({ tk, onToNote }: { tk: TicketDetail; onToNote: (text: string) 
               <p className="mb-1.5 flex items-center gap-1.5 text-xs font-semibold text-orange-300">
                 <AlertTriangle className="size-3.5" /> {t("tickets.ai.risks")}
               </p>
-              <ul className="list-disc space-y-1 pl-5 text-sm">{c.risks.map((s, i) => <li key={i}>{s}</li>)}</ul>
+              <ul className="list-disc space-y-1 pl-5 text-sm">
+                {c.risks.map((s, i) => (
+                  <li key={i}>{s}</li>
+                ))}
+              </ul>
             </div>
           )}
           {c.questions.length > 0 && (
@@ -1354,7 +1628,11 @@ function AiPanel({ tk, onToNote }: { tk: TicketDetail; onToNote: (text: string) 
               <p className="mb-1.5 flex items-center gap-1.5 text-xs font-semibold text-sky-300">
                 <HelpCircle className="size-3.5" /> {t("tickets.ai.questions")}
               </p>
-              <ul className="list-disc space-y-1 pl-5 text-sm">{c.questions.map((s, i) => <li key={i}>{s}</li>)}</ul>
+              <ul className="list-disc space-y-1 pl-5 text-sm">
+                {c.questions.map((s, i) => (
+                  <li key={i}>{s}</li>
+                ))}
+              </ul>
             </div>
           )}
           {c.suggestedPriority && c.suggestedPriority !== tk.priorityKind && (
@@ -1392,7 +1670,10 @@ function PresenceLight({ viewers }: { viewers: Viewer[] | null }) {
             <>
               <span className="flex -space-x-1.5">
                 {viewers.slice(0, 3).map((v) => (
-                  <span key={v.userId} className="flex size-5 items-center justify-center rounded-full border border-background bg-orange-500/30 text-[9px] font-bold text-orange-100">
+                  <span
+                    key={v.userId}
+                    className="flex size-5 items-center justify-center rounded-full border border-background bg-orange-500/30 text-[9px] font-bold text-orange-100"
+                  >
                     {initials(v.name)}
                   </span>
                 ))}

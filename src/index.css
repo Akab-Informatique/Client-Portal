@@ -366,3 +366,86 @@
     animation: none;
   }
 }
+
+/*
+ * A ticket whose timer runs (minimized in the dock): an electric field — a
+ * gold and blue arc spinning around the cell, a flickering glow and sparks.
+ */
+@keyframes timer-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+@keyframes timer-flicker {
+  0%,
+  100% {
+    opacity: 0.9;
+  }
+  42% {
+    opacity: 0.55;
+  }
+  45% {
+    opacity: 1;
+  }
+  48% {
+    opacity: 0.65;
+  }
+  70% {
+    opacity: 0.95;
+  }
+}
+.timer-field {
+  position: absolute;
+  inset: -7px;
+  pointer-events: none;
+  filter: drop-shadow(0 0 5px rgba(255, 206, 26, 0.85)) drop-shadow(0 0 12px rgba(125, 211, 252, 0.45));
+  animation: timer-flicker 1.7s ease-in-out infinite;
+}
+.timer-field-hex {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+  clip-path: polygon(50% 0, 100% 25%, 100% 75%, 50% 100%, 0 75%, 0 25%);
+}
+.timer-field-hex::before,
+.timer-field-hex::after {
+  content: "";
+  position: absolute;
+  inset: -40%;
+  background: conic-gradient(from 0deg, transparent 0 14%, #ffe24a 18%, transparent 24% 46%, #7dd3fc 50%, transparent 54% 70%, #f59410 76%, transparent 82%);
+  animation: timer-spin 1.3s linear infinite;
+}
+.timer-field-hex::after {
+  background: conic-gradient(from 90deg, transparent 0 30%, rgba(255, 255, 255, 0.9) 31%, transparent 33% 80%, rgba(125, 211, 252, 0.9) 81%, transparent 83%);
+  animation-duration: 0.9s;
+  animation-direction: reverse;
+}
+/* the tab form: the same field along its border */
+.timer-field-tab::before {
+  content: "";
+  position: absolute;
+  inset: -2px;
+  border-radius: 12px;
+  overflow: hidden;
+  background: conic-gradient(from var(--timer-angle, 0deg), transparent 0 20%, #ffe24a 26%, transparent 34% 52%, #7dd3fc 58%, transparent 66%);
+  filter: drop-shadow(0 0 6px rgba(255, 206, 26, 0.8));
+  animation: timer-flicker 1.7s ease-in-out infinite, timer-angle 1.4s linear infinite;
+}
+@property --timer-angle {
+  syntax: "<angle>";
+  inherits: false;
+  initial-value: 0deg;
+}
+@keyframes timer-angle {
+  to {
+    --timer-angle: 360deg;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .timer-field,
+  .timer-field-hex::before,
+  .timer-field-hex::after,
+  .timer-field-tab::before {
+    animation: none;
+  }
+}

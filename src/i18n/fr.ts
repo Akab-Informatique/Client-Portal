@@ -2347,6 +2347,12 @@ const fr = {
     },
   },
   tickets: {
+    pendingCount_one: "{{count}} changement",
+    pendingCount_other: "{{count}} changements",
+    pendingSave: "Enregistrer tous les changements",
+    pendingCancel: "Annuler les changements",
+    pendingDiscard_one: "Abandonner le changement non enregistré ?",
+    pendingDiscard_other: "Abandonner les {{count}} changements non enregistrés ?",
     startTime: "Heure de début",
     startTimeHint: "Facultatif : l'heure de début ce jour-là (la restriction s'applique jusqu'à cette heure).",
     startClear: "Retirer",

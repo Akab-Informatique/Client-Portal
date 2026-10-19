@@ -2349,6 +2349,12 @@ const en: Dict = {
     },
   },
   tickets: {
+    pendingCount_one: "{{count}} change",
+    pendingCount_other: "{{count}} changes",
+    pendingSave: "Save all the changes",
+    pendingCancel: "Cancel the changes",
+    pendingDiscard_one: "Discard the unsaved change?",
+    pendingDiscard_other: "Discard the {{count}} unsaved changes?",
     startTime: "Start time",
     startTimeHint: "Optional: the start time that day (the restriction applies until then).",
     startClear: "Remove",
