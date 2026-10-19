@@ -45,6 +45,12 @@ Administration tab `/meetings`, used live during the Monday team meeting (lists 
 - Absences are shared with the Tickets planning calendar: `GET /api/planning/absences` (same access rules as `/planning/calendar`) hatches absent days in `WeekCalendar`, and creating or moving a block on an absent day returns the `absent` warning (still saved).
 - Migrations `0023`–`0026`. Tests: `tests/api.test.ts` ("weekly meeting: …") and `tests/meetings.test.ts` (Friday cut-off).
 
+## Pause café (coffee break)
+
+Team › Pause café (`/breakroom`, right `breakroom.use`, technicians by default; API `server/routes/breakroom.ts`, UI `src/pages/breakroom/BreakroomPage.tsx`). Tiles:
+- **Dames** (checkers): colleagues online = staff with a session active in the last 3 min (`GET /online`). Invite (`POST /checkers`, notification `breakroom.invite` → `/breakroom?game=<id>`; one open game per pair), the invited one accepts or declines (`/respond`); the one who invited plays red and moves first. Rules in `shared/checkers.ts` (American: mandatory captures, multi-jumps, kings; board = 64 characters), checked on the server for every move (`/move`; a concurrent change answers `game_changed`); the board polls every 1.5 s; `/resign` (or cancels an unanswered invitation). `checkers_games` (migration 0051). Tests: `tests/checkers.test.ts` (rules), `tests/api.test.ts` ("coffee break").
+- **Orbi l'extraterrestre**: the channel's public feed (`GET /videos`: YouTube RSS of channel `UCWwdio93JMiS987S0lo6RXg`, read by the server, kept 30 min, last list kept on failure), played in a popup through `youtube-nocookie.com` (CSP `frame-src`; thumbnails from `i.ytimg.com` in `img-src`).
+
 ## Roles and Microsoft 365
 
 - Built-in roles (`shared/permissions.ts` SYSTEM_ROLES): **Administrateur principal** (`administrator`, MASTER_ROLE, every right, locked), **Administrateur global** (`global-admin`: everything except MASTER_ONLY — roles, integrations, mail server, `admin.o365`, `outlook.anyMailbox`), **Technicien**, **Lecture seule**. Only a master admin gives the master role or edits / resets / disables a master admin (`assertMasterGuard` in `server/routes/admin.ts`).
