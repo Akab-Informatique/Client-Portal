@@ -263,3 +263,5 @@ export function ticketErrorText(t: (k: string, o?: Record<string, unknown>) => s
   }
   return t("common.error");
 }
+
+export { hm, parseHm } from "@shared/duration";

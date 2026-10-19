@@ -18,7 +18,7 @@ import { useConfirm } from "@/components/ConfirmDialog";
 import { api } from "@/lib/api";
 import { useCan } from "@/lib/session";
 import { cn } from "@/lib/utils";
-import { longDateTime, ticketErrorText } from "./shared";
+import { longDateTime, ticketErrorText, hm, parseHm } from "./shared";
 
 /**
  * Work timers on tickets. Opening a ticket starts (or resumes) its timer;
@@ -357,7 +357,8 @@ function TimeEntryDialog({ timer, position, onLater }: { timer: Timer; position:
   const qc = useQueryClient();
   const confirm = useConfirm();
   const minutes = Math.max(1, Math.round(timer.elapsedMs / 60_000));
-  const [hours, setHours] = useState(() => String(Math.max(0.01, Math.round((timer.elapsedMs / 3_600_000) * 100) / 100)));
+  // typed as h:mm (the measured time, at least a minute); sent as decimal hours
+  const [hours, setHours] = useState(() => hm(Math.max(1, Math.round(timer.elapsedMs / 60_000)) / 60));
   const [summary, setSummary] = useState("");
   const [internal, setInternal] = useState("");
   // the description by email: to the ticket contact, and to other addresses (the "Envoi" part)
@@ -390,7 +391,7 @@ function TimeEntryDialog({ timer, position, onLater }: { timer: Timer; position:
   const submit = useMutation({
     mutationFn: () =>
       api.post<{ notified?: number; notifyFailed?: number; noContactEmail?: boolean }>(`/tickets/timers/${timer.id}/submit`, {
-        hours: Number(hours.replace(",", ".")),
+        hours: h,
         summary,
         internal,
         workTypeId: workType || null,
@@ -416,12 +417,13 @@ function TimeEntryDialog({ timer, position, onLater }: { timer: Timer; position:
     },
     onError: (e) => toast.error(ticketErrorText(t, e)),
   });
-  const h = Number(hours.replace(",", "."));
-  const off = offset.trim() ? Number(offset.replace(",", ".")) : 0;
+  const h = parseHm(hours) ?? 0;
+  const hoursOk = parseHm(hours) !== null && h > 0 && h <= 24;
+  const off = offset.trim() ? (parseHm(offset) ?? Number.NaN) : 0;
   const offsetOk = !billable || (Number.isFinite(off) && off >= 0 && off <= h);
   const billed = Math.max(0, Math.round((h - (billable ? off : h)) * 100) / 100);
   const othersOk = others.every(isAddress);
-  const valid = h > 0 && h <= 24 && summary.trim().length > 0 && offsetOk && othersOk;
+  const valid = hoursOk && summary.trim().length > 0 && offsetOk && othersOk;
   // a short timer is closed without asking; a longer one is confirmed first
   const closeWithoutTime = () =>
     minutes <= 5 ? discard.mutate() : void confirm({ title: t("tickets.timer.discardConfirm"), destructive: true }).then((ok) => ok && discard.mutate());
@@ -456,7 +458,15 @@ function TimeEntryDialog({ timer, position, onLater }: { timer: Timer; position:
           <div className="grid gap-3 sm:grid-cols-[140px_1fr]">
             <div className="space-y-1.5">
               <Label htmlFor="te-hours">{t("tickets.timer.hours")}</Label>
-              <Input id="te-hours" inputMode="decimal" value={hours} onChange={(e) => setHours(e.target.value)} />
+              <Input
+                id="te-hours"
+                inputMode="numeric"
+                placeholder="h:mm"
+                className={cn("font-mono", hours.trim() && !hoursOk && "border-destructive")}
+                value={hours}
+                onChange={(e) => setHours(e.target.value)}
+                onBlur={() => hoursOk && setHours(hm(h))}
+              />
               <p className="flex items-center gap-1 text-[11px] text-muted-foreground">
                 <Clock3 className="size-3" /> {t("tickets.timer.measured", { minutes })}
               </p>
@@ -494,13 +504,13 @@ function TimeEntryDialog({ timer, position, onLater }: { timer: Timer; position:
                   </Label>
                   <Input
                     id="te-offset"
-                    inputMode="decimal"
-                    className={cn("h-8 w-20", !offsetOk && "border-destructive")}
-                    placeholder="0"
+                    inputMode="numeric"
+                    className={cn("h-8 w-20 font-mono", !offsetOk && "border-destructive")}
+                    placeholder="0:00"
                     value={offset}
                     onChange={(e) => setOffset(e.target.value)}
+                    onBlur={() => offset.trim() && Number.isFinite(off) && setOffset(hm(off))}
                   />
-                  <span className="text-sm text-muted-foreground">h</span>
                 </div>
               )}
             </div>
@@ -508,7 +518,7 @@ function TimeEntryDialog({ timer, position, onLater }: { timer: Timer; position:
               {!offsetOk
                 ? t("tickets.timer.offsetTooLarge")
                 : billable
-                  ? t("tickets.timer.billedHours", { worked: (h || 0).toLocaleString(), billed: billed.toLocaleString() })
+                  ? t("tickets.timer.billedHours", { worked: hm(h), billed: hm(billed) })
                   : t("tickets.timer.notBilled")}
             </p>
           </div>

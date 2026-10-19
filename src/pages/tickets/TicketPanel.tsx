@@ -85,6 +85,7 @@ import {
   type Viewer,
   ticketErrorText,
   type TicketSummary,
+  hm,
 } from "./shared";
 
 const SOURCE_ICON: Record<string, LucideIcon> = { email: Mail, phone: Phone, portal: Inbox, monitoring: MonitorCog };
@@ -897,7 +898,7 @@ function Activity({ tk, partial }: { tk: TicketDetail; partial: boolean }) {
                 <span className="text-xs text-muted-foreground">{longDateTime(n.at)}</span>
                 {n.kind === "time" && (
                   <span className="flex items-center gap-1 rounded-full bg-sky-500/15 px-1.5 text-[10px] font-medium text-sky-300">
-                    <Clock3 className="size-2.5" /> {t("tickets.timeEntry", { hours: (n.hours ?? 0).toLocaleString() })}
+                    <Clock3 className="size-2.5" /> {t("tickets.timeEntry", { hours: hm(n.hours ?? 0) })}
                   </span>
                 )}
                 {n.kind === "time" && n.billable === false && (
@@ -906,8 +907,8 @@ function Activity({ tk, partial }: { tk: TicketDetail; partial: boolean }) {
                 {n.kind === "time" && n.billable !== false && (n.offsetHours ?? 0) > 0 && (
                   <span className="rounded-full bg-amber-500/15 px-1.5 text-[10px] font-medium text-amber-300">
                     {t("tickets.timer.billedAfterOffset", {
-                      billed: Math.max(0, (n.hours ?? 0) - (n.offsetHours ?? 0)).toLocaleString(),
-                      offset: (n.offsetHours ?? 0).toLocaleString(),
+                      billed: hm(Math.max(0, (n.hours ?? 0) - (n.offsetHours ?? 0))),
+                      offset: hm(n.offsetHours ?? 0),
                     })}
                   </span>
                 )}
