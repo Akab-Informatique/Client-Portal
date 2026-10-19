@@ -910,6 +910,8 @@ export const smsConversations = pgTable(
     ticketNumber: text("ticket_number"),
     /** When it becomes a ticket if no technician replies */
     autoTicketAt: timestamp("auto_ticket_at", { withTimezone: true }),
+    /** When the automatic reply went to the client in this conversation (none: not sent, e.g. one went out to the number less than 24 h before) */
+    autoRepliedAt: timestamp("auto_replied_at", { withTimezone: true }),
     unread: integer("unread").notNull().default(0),
     lastMessageAt: timestamp("last_message_at", { withTimezone: true }).notNull().defaultNow(),
     lastPreview: text("last_preview").notNull().default(""),

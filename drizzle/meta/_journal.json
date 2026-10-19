@@ -386,6 +386,13 @@
       "when": 1792426013118,
       "tag": "0054_expense_favorites",
       "breakpoints": true
+    },
+    {
+      "idx": 55,
+      "version": "7",
+      "when": 1792434166173,
+      "tag": "0055_sms_auto_replied",
+      "breakpoints": true
     }
   ]
 }

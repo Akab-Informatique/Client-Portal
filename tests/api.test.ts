@@ -2653,11 +2653,23 @@ describe("text messages (VoIP.ms)", () => {
     const { autoTickets } = await import("../server/lib/sms.ts");
     expect(await autoTickets()).toBe(1);
     const auto = (await tech.get(`/api/sms/conversations/${late.id}`)).json;
-    expect(auto.status).toBe("ticket");
+    // made a ticket because nobody answered: the conversation is closed (kept with its ticket)
+    expect(auto.status).toBe("closed");
+    expect(auto.ticketId).toBeTruthy();
     expect((await tech.get(`/api/tickets/${auto.ticketId}`)).json.company.id).toBe(301);
     expect(sms[0]).toMatchObject({ dst: "8195550123", message: expect.stringContaining(auto.ticketNumber) });
     // the client is told nobody could answer in time (not the same as when they asked)
     expect(sms.map((s) => s.message).join(" ")).toContain("aucun technicien");
+    // the next text from that number: a new conversation (a new ticket if nobody answers), no second automatic reply within 24 h
+    sms.length = 0;
+    await hook({ token, from: "8195550123", message: "Toujours en panne", id: "m5b" });
+    const again2 = (await tech.get("/api/sms/conversations")).json.filter((c: any) => c.phone === "8195550123");
+    expect(again2.map((c: any) => c.status)).toEqual(["waiting"]);
+    expect(sms).toEqual([]);
+    expect(await autoTickets(new Date(Date.now() + 5 * 3_600_000))).toBe(1);
+    const second = (await tech.get(`/api/sms/conversations/${again2[0].id}`)).json;
+    expect(second.ticketId).toBeTruthy();
+    expect(second.ticketId).not.toBe(auto.ticketId);
 
     // from a ticket: a text to the contact, kept with the ticket
     const tk = (await tech.get("/api/tickets?view=all")).json.items[0];
@@ -2676,8 +2688,17 @@ describe("text messages (VoIP.ms)", () => {
     // closed: the next text starts a new conversation
     const first = (await tech.get("/api/sms/conversations")).json.find((c: any) => c.phone === "5145550000");
     await tech.post(`/api/sms/conversations/${first.id}/close`);
+    sms.length = 0;
     await hook({ token, from: "5145550000", message: "Encore moi", id: "m6" });
     expect((await tech.get("/api/sms/conversations")).json.filter((c: any) => c.phone === "5145550000").map((c: any) => c.status)).toEqual(["waiting"]);
+    // it got the automatic reply less than 24 h ago: not again
+    expect(sms).toEqual([]);
+    // after the cool-down (or with it at 0): again
+    await db().update(schema.smsConversations).set({ autoRepliedAt: new Date(Date.now() - 25 * 3_600_000) }).where(eq(schema.smsConversations.phone, "5145550000"));
+    const third = (await tech.get("/api/sms/conversations")).json.find((c: any) => c.phone === "5145550000");
+    await tech.post(`/api/sms/conversations/${third.id}/close`);
+    await hook({ token, from: "5145550000", message: "Le lendemain", id: "m7" });
+    expect(sms.map((s) => s.dst)).toContain("5145550000");
   });
 
   it("is for technicians only", async () => {

@@ -30,6 +30,8 @@ export type SmsSettings = {
   token: string | null;
   /** No technician reply after this many minutes: the conversation becomes a ticket */
   autoTicketMinutes: number;
+  /** No new automatic reply to a number that got one less than this many hours ago (0: every new conversation) */
+  autoReplyCooldownHours: number;
   autoReply: string;
   ticketOpened: string;
   /** When it became a ticket because nobody answered in time */
@@ -87,6 +89,7 @@ export async function smsSettings(): Promise<SmsSettings> {
     did: c.did ?? "",
     token: secrets.token ?? null,
     autoTicketMinutes: c.autoTicketMinutes ?? 240,
+    autoReplyCooldownHours: c.autoReplyCooldownHours ?? 24,
     autoReply: c.autoReply ?? DEFAULT_AUTO_REPLY,
     ticketOpened: c.ticketOpened ?? DEFAULT_TICKET_OPENED,
     ticketTimeout: c.ticketTimeout ?? DEFAULT_TICKET_TIMEOUT,

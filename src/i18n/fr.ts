@@ -2174,6 +2174,8 @@ const fr = {
     voipms: {
       ticketTimeout: "Message quand personne n'a répondu à temps (billet automatique)",
       autoReplyHint: "{delay} = le délai ci-dessous (ex. « 4 h »). Le client peut répondre 1 (ou « billet ») pour en faire un billet tout de suite.",
+      cooldown: "Réponse auto au plus une fois par (heures)",
+      cooldownHint: "Un numéro qui a reçu la réponse automatique depuis moins longtemps ne la reçoit pas de nouveau (0 = à chaque nouvelle conversation). Une conversation devenue billet faute de réponse est fermée : le prochain texto en commence une nouvelle.",
       description: "Textos avec les clients sur votre numéro VoIP.ms : réception, réponses, billet automatique.",
       account: "1. Le compte VoIP.ms",
       username: "Courriel du compte VoIP.ms",

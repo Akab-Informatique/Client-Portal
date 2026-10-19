@@ -291,6 +291,7 @@ export const integrationRoutes = new Hono<AppEnv>()
         password: zCred.optional(),
         did: z.string().max(30).optional(),
         autoTicketMinutes: z.number().int().min(1).max(24 * 60).optional(),
+        autoReplyCooldownHours: z.number().int().min(0).max(24 * 30).optional(),
         autoReply: z.string().trim().min(1).max(600).optional(),
         ticketOpened: z.string().trim().min(1).max(600).optional(),
         ticketTimeout: z.string().trim().min(1).max(600).optional(),

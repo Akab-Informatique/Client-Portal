@@ -2176,6 +2176,8 @@ const en: Dict = {
     voipms: {
       ticketTimeout: "Message when nobody answered in time (automatic ticket)",
       autoReplyHint: "{delay} = the delay below (e.g. “4 h”). The client can answer 1 (or “ticket”) to make it a ticket right away.",
+      cooldown: "Auto reply at most once every (hours)",
+      cooldownHint: "A number that got the automatic reply more recently does not get it again (0 = every new conversation). A conversation made a ticket because nobody answered is closed: the next text starts a new one.",
       description: "Texts with clients on your VoIP.ms number: receiving, replies, automatic ticket.",
       account: "1. The VoIP.ms account",
       username: "VoIP.ms account email",

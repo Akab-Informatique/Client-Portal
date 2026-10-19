@@ -1,4 +1,4 @@
-import { and, desc, eq, lte, ne, sql } from "drizzle-orm";
+import { and, desc, eq, lte, ne, sql, gte } from "drizzle-orm";
 import { db, schema } from "../db/index.ts";
 import type { AuthContext } from "./auth.ts";
 import { audit } from "./audit.ts";
@@ -114,8 +114,21 @@ export async function receiveSms(p: { from: string; message: string; id?: string
   await tellTechnicians(conv, body);
 
   if (isNew) {
-    // what happens next, for the client
-    await sendTo(conv, fill(s.autoReply, { minutes: String(s.autoTicketMinutes), delay: formatDelay(s.autoTicketMinutes) }), { auto: true }).catch((e) => console.warn("[sms] auto reply:", e instanceof Error ? e.message : e));
+    // what happens next, for the client — once per number in the cool-down (24 h by default)
+    const since = new Date(Date.now() - s.autoReplyCooldownHours * 3_600_000);
+    const [recent] = s.autoReplyCooldownHours
+      ? await db()
+          .select({ id: schema.smsConversations.id })
+          .from(schema.smsConversations)
+          .where(and(eq(schema.smsConversations.phone, phone), gte(schema.smsConversations.autoRepliedAt, since)))
+          .limit(1)
+      : [];
+    if (!recent) {
+      await db().update(schema.smsConversations).set({ autoRepliedAt: new Date() }).where(eq(schema.smsConversations.id, conv.id));
+      await sendTo(conv, fill(s.autoReply, { minutes: String(s.autoTicketMinutes), delay: formatDelay(s.autoTicketMinutes) }), { auto: true }).catch((e) =>
+        console.warn("[sms] auto reply:", e instanceof Error ? e.message : e),
+      );
+    }
     return;
   }
   if (conv.status === "waiting" && WANTS_TICKET.test(body)) {
@@ -203,6 +216,9 @@ async function openTicketNow(conv: Conversation, a: AuthContext | null, reason: 
     .returning();
   // no technician in time: the client is told so; otherwise, the ticket number
   await sendTo(next, fill(reason === "timeout" ? s.ticketTimeout : s.ticketOpened, { number: ticket.number }), { auto: true }).catch((e) => console.warn("[sms] ticket message:", e instanceof Error ? e.message : e));
+  // made a ticket because nobody answered: the conversation ends there (kept with the ticket), so the
+  // next text from this number starts a new one, and a new ticket if nobody answers it either
+  if (reason === "timeout") await db().update(schema.smsConversations).set({ status: "closed", updatedAt: new Date() }).where(eq(schema.smsConversations.id, conv.id));
   await audit(a?.realUser.id ?? null, "sms.ticket_opened", conv.id, { ticketId: ticket.id, reason });
   return ticket;
 }

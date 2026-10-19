@@ -1,0 +1,1 @@
+ALTER TABLE "sms_conversations" ADD COLUMN "auto_replied_at" timestamp with time zone;
