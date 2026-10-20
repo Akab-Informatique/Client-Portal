@@ -3936,7 +3936,11 @@ describe("work to bill: copied from Autotask, approved, posted as invoices", () 
     // approve all of this client except the expense (excluded: not billed)
     const expense = mine.find((i: any) => i.kind === "expense");
     expect((await admin.post("/api/billables/status", { ids: mine.filter((i: any) => i.id !== expense.id).map((i: any) => i.id), status: "approved" })).json.changed).toBe(mine.length - 1);
-    await admin.post("/api/billables/status", { ids: [expense.id], status: "excluded" });
+    // excluded as "already billed" (e.g. in Autotask): it says so, and an import neither brings it back nor drops it
+    expect((await admin.post("/api/billables/status", { ids: [expense.id], status: "excluded", reason: "billed" })).json.changed).toBe(1);
+    expect((await tech.post("/api/billables/status", { ids: [expense.id], status: "excluded", reason: "billed" })).status).toBe(403);
+    await admin.post("/api/billables/import");
+    expect((await admin.get("/api/billables?status=excluded")).json.find((i: any) => i.id === expense.id)).toMatchObject({ status: "excluded", excludedReason: "billed" });
 
     const preview = (await admin.get("/api/billables/post")).json;
     const g = preview.find((x: any) => x.client.id === clinique.id);

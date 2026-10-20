@@ -563,6 +563,11 @@ const en: Dict = {
     none: "Nothing approved to invoice in this period.",
   },
   approvals: {
+    alreadyBilled: "Exclude: already billed",
+    alreadyBilledHint: "Already billed elsewhere (Autotask…): excluded, never billed by the portal.",
+    alreadyBilledTag: "Already billed",
+    selectAll: "Select all ({{count}})",
+    selectNone: "Select none",
     collapseAll: "Collapse all",
     expandAll: "Expand all",
     collapse: "Collapse",
@@ -678,6 +683,8 @@ const en: Dict = {
     backToPending: "Back to approve",
     exclude: "Exclude (not billed)",
     moved: {
+      billed_one: "{{count}} item excluded (already billed)",
+      billed_other: "{{count}} items excluded (already billed)",
       approved: "{{count}} approved",
       pending: "{{count}} back to approve",
       excluded: "{{count}} excluded",

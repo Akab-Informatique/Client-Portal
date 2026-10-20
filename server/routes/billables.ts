@@ -70,9 +70,9 @@ export const billablesRoutes = new Hono<AppEnv>()
   })
   .post("/status", requirePermission("accounting.manage"), async (c) => {
     const a = auth(c);
-    const p = await body(c, z.object({ ids: z.array(zUuid).min(1).max(5000), status: z.enum(["pending", "approved", "excluded"]) }));
-    const changed = await setBillableStatus(a.user.id, p.ids, p.status);
-    await audit(a.user.id, `billing.items_${p.status}`, null, { count: changed });
+    const p = await body(c, z.object({ ids: z.array(zUuid).min(1).max(5000), status: z.enum(["pending", "approved", "excluded"]), reason: z.literal("billed").optional() }));
+    const changed = await setBillableStatus(a.user.id, p.ids, p.status, p.reason ?? null);
+    await audit(a.user.id, `billing.items_${p.status}`, null, { count: changed, ...(p.reason ? { reason: p.reason } : {}) });
     return c.json({ changed });
   })
   .patch("/:id", requirePermission("accounting.manage"), async (c) => {

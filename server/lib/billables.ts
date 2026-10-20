@@ -165,11 +165,11 @@ export async function billableCounts(period?: Period) {
 }
 
 /** Approve, send back, exclude or bring back items (never posted ones). */
-export async function setBillableStatus(actorId: string, ids: string[], status: "pending" | "approved" | "excluded") {
+export async function setBillableStatus(actorId: string, ids: string[], status: "pending" | "approved" | "excluded", reason: "billed" | null = null) {
   if (!ids.length) return 0;
   const rows = await db()
     .update(schema.billingItems)
-    .set({ status, approvedBy: status === "approved" ? actorId : null, approvedAt: status === "approved" ? new Date() : null, updatedAt: new Date() })
+    .set({ status, excludedReason: status === "excluded" ? reason : null, approvedBy: status === "approved" ? actorId : null, approvedAt: status === "approved" ? new Date() : null, updatedAt: new Date() })
     .where(and(inArray(schema.billingItems.id, ids), sql`${schema.billingItems.status} <> 'posted'`))
     .returning({ id: schema.billingItems.id });
   return rows.length;

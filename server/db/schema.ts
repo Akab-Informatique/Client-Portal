@@ -218,6 +218,8 @@ export const billingItems = pgTable(
     status: text("status").notNull().default("pending"),
     /** Changed in the portal: a sync does not overwrite it */
     edited: boolean("edited").notNull().default(false),
+    /** Why it is excluded: "billed" = already billed (e.g. in Autotask) */
+    excludedReason: text("excluded_reason"),
     invoiceId: uuid("invoice_id").references(() => clientInvoices.id, { onDelete: "set null" }),
     approvedBy: uuid("approved_by").references(() => users.id, { onDelete: "set null" }),
     approvedAt: timestamp("approved_at", { withTimezone: true }),

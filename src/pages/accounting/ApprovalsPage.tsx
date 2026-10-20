@@ -60,6 +60,7 @@ export type Item = {
   edited: boolean;
   invoiceNumber: string | null;
   autoApproved: boolean;
+  excludedReason: string | null;
 };
 type Summary = {
   state: { at: string | null; counts: Partial<Record<Kind, number>>; errors: Partial<Record<Kind, string>>; skipped: number };
@@ -638,7 +639,8 @@ function KindTab({ kind, counts, lang, pq }: { kind: Kind; counts: (s: Status) =
   const manage = can("accounting.manage") && status !== "posted";
   const setMany = (ids: string[], on: boolean) => setSel((s) => (on ? new Set([...s, ...ids]) : new Set([...s].filter((x) => !ids.includes(x)))));
   const move = useMutation({
-    mutationFn: (to: "pending" | "approved" | "excluded") => api.post<{ changed: number }>("/billables/status", { ids: [...sel], status: to }),
+    mutationFn: (to: "pending" | "approved" | "excluded" | "billed") =>
+      api.post<{ changed: number }>("/billables/status", to === "billed" ? { ids: [...sel], status: "excluded", reason: "billed" } : { ids: [...sel], status: to }),
     onSuccess: (r, to) => {
       setSel(new Set());
       void qc.invalidateQueries({ queryKey: KEY });
@@ -710,6 +712,11 @@ function KindTab({ kind, counts, lang, pq }: { kind: Kind; counts: (s: Status) =
             </Button>
           </span>
         )}
+        {manage && items.length > 0 && (
+          <Button size="sm" variant="ghost" className="h-8 px-2 text-xs" onClick={() => setSel(sel.size === items.length ? new Set() : new Set(items.map((i) => i.id)))}>
+            <Check className="size-3.5" /> {sel.size === items.length ? t("approvals.selectNone") : t("approvals.selectAll", { count: items.length })}
+          </Button>
+        )}
         <span className="ml-auto font-mono text-sm">{m(total)}</span>
       </div>
 
@@ -731,6 +738,9 @@ function KindTab({ kind, counts, lang, pq }: { kind: Kind; counts: (s: Status) =
               <Ban className="size-3.5" /> {t("approvals.exclude")}
             </Button>
           )}
+          <Button size="sm" variant="outline" disabled={move.isPending} onClick={() => move.mutate("billed")} title={t("approvals.alreadyBilledHint")}>
+            <Ban className="size-3.5" /> {t("approvals.alreadyBilled")}
+          </Button>
           <Button size="sm" variant="ghost" className="ml-auto" onClick={() => setSel(new Set())}>
             <X className="size-3.5" />
           </Button>
@@ -837,7 +847,9 @@ function KindTab({ kind, counts, lang, pq }: { kind: Kind; counts: (s: Status) =
                           <Sparkles className="size-2.5" /> {t("approvals.auto")}
                         </span>
                       )}
-                      <span className={cn("rounded-md border px-1.5 py-0.5 text-[10px]", STATUS_STYLE[i.status])}>{t(`approvals.status.${i.status}`)}</span>
+                      <span className={cn("rounded-md border px-1.5 py-0.5 text-[10px]", STATUS_STYLE[i.status])}>
+                        {i.status === "excluded" && i.excludedReason === "billed" ? t("approvals.alreadyBilledTag") : t(`approvals.status.${i.status}`)}
+                      </span>
                     </span>
                   </li>
                 ))}

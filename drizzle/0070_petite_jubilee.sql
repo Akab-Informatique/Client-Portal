@@ -1,0 +1,1 @@
+ALTER TABLE "billing_items" ADD COLUMN "excluded_reason" text;

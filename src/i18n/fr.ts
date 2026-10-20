@@ -561,6 +561,11 @@ const fr = {
     none: "Rien d'approuvé à facturer dans cette période.",
   },
   approvals: {
+    alreadyBilled: "Exclure : déjà facturé",
+    alreadyBilledHint: "Déjà facturé ailleurs (Autotask…) : exclu, jamais facturé par le portail.",
+    alreadyBilledTag: "Déjà facturé",
+    selectAll: "Tout sélectionner ({{count}})",
+    selectNone: "Tout désélectionner",
     collapseAll: "Tout réduire",
     expandAll: "Tout ouvrir",
     collapse: "Réduire",
@@ -676,6 +681,8 @@ const fr = {
     backToPending: "Remettre à approuver",
     exclude: "Exclure (non facturé)",
     moved: {
+      billed_one: "{{count}} élément exclu (déjà facturé)",
+      billed_other: "{{count}} éléments exclus (déjà facturés)",
       approved: "{{count}} approuvé(s)",
       pending: "{{count}} remis à approuver",
       excluded: "{{count}} exclu(s)",
