@@ -56,7 +56,25 @@
   --glow: rgba(245, 148, 16, 0.18);
 }
 
+/* Glossy panels: a specular sheen on top, a small tint of colour in two corners, a fine lit edge */
+:root {
+  --tint: var(--gold);
+  --tint-2: #7aa8ff;
+  --gloss-top: rgba(255, 255, 255, 0.85);
+  --gloss-mid: rgba(255, 255, 255, 0.25);
+  --gloss-edge: rgba(255, 255, 255, 0.9);
+  --gloss-depth: 0 14px 32px -20px rgba(24, 24, 32, 0.35);
+  --tint-strength: 7%;
+  --tint-2-strength: 4%;
+}
+
 .dark {
+  --gloss-top: rgba(255, 255, 255, 0.085);
+  --gloss-mid: rgba(255, 255, 255, 0.022);
+  --gloss-edge: rgba(255, 255, 255, 0.15);
+  --gloss-depth: 0 16px 36px -20px rgba(0, 0, 0, 0.75);
+  --tint-strength: 10%;
+  --tint-2-strength: 5.5%;
   --glass-bg: rgba(255, 255, 255, 0.045);
   --glass-sheen: rgba(255, 255, 255, 0.05);
   --glass-bg-strong: rgba(18, 19, 23, 0.72);
@@ -145,6 +163,29 @@
   }
 }
 
+@layer components {
+  :root {
+    --gloss-image:
+      linear-gradient(180deg, var(--gloss-top) 0%, var(--gloss-mid) 20%, transparent 52%),
+      radial-gradient(120% 95% at 0% 0%, color-mix(in oklab, var(--tint) var(--tint-strength), transparent), transparent 62%),
+      radial-gradient(105% 85% at 100% 100%, color-mix(in oklab, var(--tint-2) var(--tint-2-strength), transparent), transparent 66%);
+  }
+  /* Panels: the cards, and the rounded bordered boxes made with bg-card (an explicit shadow or ring on one still wins) */
+  [data-slot="card"],
+  [class*="rounded-xl"][class*="border"][class*="bg-card"],
+  [class*="rounded-2xl"][class*="border"][class*="bg-card"],
+  [class*="rounded-3xl"][class*="border"][class*="bg-card"] {
+    background-image: var(--gloss-image);
+    box-shadow: inset 0 1px 0 0 var(--gloss-edge), inset 0 0 0 1px color-mix(in oklab, var(--tint) 5%, transparent), var(--gloss-depth);
+  }
+  /* A panel can take another small tint of colour: data-tint on it or on a page */
+  [data-tint="violet"] { --tint: #a78bfa; --tint-2: #f472b6; }
+  [data-tint="blue"] { --tint: #38bdf8; --tint-2: #818cf8; }
+  [data-tint="green"] { --tint: #34d399; --tint-2: #38bdf8; }
+  [data-tint="rose"] { --tint: #fb7185; --tint-2: #fbbf24; }
+  [data-tint="orange"] { --tint: #fb923c; --tint-2: #f472b6; }
+}
+
 @layer utilities {
   .bg-grad-gold {
     background-image: var(--grad-gold);
@@ -167,11 +208,11 @@
      Only the standard backdrop-filter: the build adds the -webkit- prefix for Safari. */
   .glass {
     background-color: var(--glass-bg);
-    /* soft sheen from the top edge */
-    background-image: linear-gradient(180deg, var(--glass-sheen), transparent 55%);
+    /* gloss: a sheen from the top edge, a small tint of colour in two corners */
+    background-image: var(--gloss-image);
     border-color: var(--glass-border);
-    backdrop-filter: blur(18px) saturate(140%);
-    box-shadow: inset 0 1px 0 0 var(--glass-highlight), var(--glass-shadow);
+    backdrop-filter: blur(18px) saturate(150%);
+    box-shadow: inset 0 1px 0 0 var(--gloss-edge), inset 0 0 0 1px color-mix(in oklab, var(--tint) 6%, transparent), var(--glass-shadow);
   }
   .glass-strong {
     background-color: var(--glass-bg-strong);
@@ -201,10 +242,10 @@
   .pane {
     position: relative;
     background-color: var(--glass-bg);
-    background-image: linear-gradient(180deg, var(--glass-sheen), transparent 55%);
+    background-image: var(--gloss-image);
     border: 1px solid var(--glass-border);
-    backdrop-filter: blur(22px) saturate(150%);
-    box-shadow: inset 0 1px 0 0 var(--glass-highlight), var(--glass-shadow);
+    backdrop-filter: blur(22px) saturate(160%);
+    box-shadow: inset 0 1px 0 0 var(--gloss-edge), inset 0 0 0 1px color-mix(in oklab, var(--tint) 6%, transparent), var(--glass-shadow);
   }
   /* A thin gold light along the top edge */
   .gold-edge::before {

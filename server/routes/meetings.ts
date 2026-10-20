@@ -7,7 +7,7 @@ import { auth, requirePermission, requireStaff, type AppEnv } from "../lib/auth.
 import { audit } from "../lib/audit.ts";
 import { body, zOptText, zUuid } from "../lib/validate.ts";
 import { ticketSource, type NTicket } from "../lib/ticketSource.ts";
-import { ALERT_QUEUE, isAlert, lookup, run } from "./tickets.ts";
+import { isAlert, lookup, run } from "./tickets.ts";
 import { asSeen, seesFull, team as planningTeam } from "./planning.ts";
 
 /**
@@ -740,13 +740,13 @@ const zProject = z.object({
 });
 
 /** The queues the meeting gauges count: the ones chosen, or every queue but the alert ones. */
-async function gaugeQueues(all: { value: string; label: string | null }[]) {
+async function gaugeQueues(all: { value: string; label: string | null; kind?: string }[]) {
   const [row] = await db().select({ config: schema.integrations.config }).from(schema.integrations).where(eq(schema.integrations.provider, "meetings"));
   const chosen = (row?.config as { gaugeQueues?: string[] | null } | undefined)?.gaugeQueues;
   const custom = Array.isArray(chosen) && chosen.some((q) => all.some((x) => x.value === q));
   const counted = custom
     ? all.filter((q) => chosen!.includes(q.value)).map((q) => q.value)
-    : all.filter((q) => !ALERT_QUEUE.test(q.label ?? q.value)).map((q) => q.value);
+    : all.filter((q) => q.kind !== "alerts").map((q) => q.value);
   return { all: all.map((q) => ({ value: q.value, label: q.label ?? q.value })), counted, custom };
 }
 

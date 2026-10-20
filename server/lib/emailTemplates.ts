@@ -17,7 +17,7 @@ export type TemplateDef = {
   defaults: Record<Locale, TemplateText>;
   sample: Record<Locale, Record<string, string>>;
 };
-export type TemplateKey = "welcome" | "passwordReset" | "passwordChanged" | "boardMessage";
+export type TemplateKey = "welcome" | "passwordReset" | "passwordChanged" | "boardMessage" | "ticketReceived";
 
 const SIGN = { fr: "L'équipe AKAB Informatique", en: "The AKAB Informatique team" };
 const sampleBase = (l: Locale) => ({
@@ -165,6 +165,41 @@ ${SIGN.en}`,
     },
   },
 ];
+
+// the workflow "automatic reply to a new ticket" (Admin › Flux de travail)
+TEMPLATES.push({
+  key: "ticketReceived",
+  linkVar: "ticketUrl",
+  variables: ["name", "number", "title", "company", "ticketUrl", "portalUrl"],
+  defaults: {
+    fr: {
+      subject: "[{{number}}] Nous avons bien reçu votre demande",
+      body: `Bonjour {{name}},
+
+Nous avons bien reçu votre demande « {{title}} ». Elle porte le numéro {{number}}.
+
+Vous n'avez rien à faire pour le moment : un technicien d'AKAB Informatique la prendra en charge sous peu. Pour toute question, mentionnez le numéro {{number}}.
+
+${SIGN.fr}`,
+      action: "Voir mon billet",
+    },
+    en: {
+      subject: "[{{number}}] We received your request",
+      body: `Hello {{name}},
+
+We received your request "{{title}}". Its number is {{number}}.
+
+There is nothing you need to do for now: a technician from AKAB Informatique will take it on shortly. For any question, mention number {{number}}.
+
+${SIGN.en}`,
+      action: "View my ticket",
+    },
+  },
+  sample: {
+    fr: { ...sampleBase("fr"), number: "T20261019.0042", title: "Imprimante hors ligne à la réception", company: "Boulangerie Lanaudière", ticketUrl: `${config.publicUrl || "https://portail.akab.ca"}/tickets?t=42` },
+    en: { ...sampleBase("en"), number: "T20261019.0042", title: "Printer offline at the front desk", company: "Boulangerie Lanaudière", ticketUrl: `${config.publicUrl || "https://portail.akab.ca"}/tickets?t=42` },
+  },
+});
 
 export const templateDef = (key: string) => TEMPLATES.find((t) => t.key === key) ?? null;
 

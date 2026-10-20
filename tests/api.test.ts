@@ -1068,7 +1068,7 @@ describe("forgotten password and email", () => {
     expect((await admin.del("/api/admin/email/smtp")).json.source).toBe("none");
 
     const list = (await admin.get("/api/admin/email/templates")).json;
-    expect(list.map((x: any) => x.key)).toEqual(["welcome", "passwordReset", "passwordChanged", "boardMessage"]);
+    expect(list.map((x: any) => x.key)).toEqual(["welcome", "passwordReset", "passwordChanged", "boardMessage", "ticketReceived"]);
 
     const edited = { subject: "Bonjour {{name}}", body: "Allo {{name}} <script>", action: "Go" };
     const prev = (await admin.post("/api/admin/email/templates/passwordReset/fr/preview", edited)).json;
@@ -1151,14 +1151,14 @@ describe("tickets (sample data)", () => {
     void client;
     const tech = await session("tech@akab.local");
     const r = await tech.post("/api/tickets", {
-      title: "Test", description: "", companyId: 300, contact: "", priority: "medium", queue: "Support niveau 1", assigneeId: null, dueDate: "2026-12-01", startDate: "2026-11-30",
+      title: "Test", description: "", companyId: 300, contact: "", priority: "medium", queue: "support", assigneeId: null, dueDate: "2026-12-01", startDate: "2026-11-30",
     });
     expect(r.status).toBe(201);
     expect(r.json).toMatchObject({ title: "Test", status: "new", startDate: "2026-11-30" });
 
     // a due date with its time, and a start time
     const timed = await tech.post("/api/tickets", {
-      title: "Avec heures", companyId: 300, priority: "medium", queue: "Support niveau 1", assigneeId: null,
+      title: "Avec heures", companyId: 300, priority: "medium", queue: "support", assigneeId: null,
       dueDate: "2026-12-02", dueAt: "2026-12-02T09:30:00-05:00", startDate: "2026-12-01", startTime: "08:15",
     });
     expect(timed.status).toBe(201);
@@ -1450,7 +1450,7 @@ describe("tickets: client and contact", () => {
     // a contact of another client is refused
     expect((await tech.patch(`/api/tickets/${tk.id}`, { contactId: "c-300-0" })).json.error).toBe("invalid_contact");
 
-    const nt = await tech.post("/api/tickets", { title: "Avec contact", companyId: 301, contactId: created.json.id, priority: "low", queue: "Support niveau 1", assigneeId: null, dueDate: "2026-12-01" });
+    const nt = await tech.post("/api/tickets", { title: "Avec contact", companyId: 301, contactId: created.json.id, priority: "low", queue: "support", assigneeId: null, dueDate: "2026-12-01" });
     expect(nt.json).toMatchObject({ contact: "Nadia Gélinas", contactId: created.json.id });
   });
 
@@ -1930,6 +1930,171 @@ describe("tickets: client and contact", () => {
     devOutbox.length = 0;
     expect((await tech.post(`/api/tickets/timers/${t2.id}/submit`, { hours: 0.1, summary: "Suivi" })).json).toMatchObject({ notified: 0 });
     expect(devOutbox).toEqual([]);
+
+    // the client portal too: a portal user of that company with an address that got the email sees it on their bell
+    const [portalUser] = await db().select().from(schema.users).where(eq(schema.users.email, "responsable1@client.example"));
+    await db().update(schema.clients).set({ autotaskId: tk.company.id }).where(eq(schema.clients.id, portalUser.clientId!));
+    await tech.post(`/api/tickets/${tk.id}/timer/start`);
+    await tech.post(`/api/tickets/${tk.id}/timer/stop`);
+    const t3 = (await tech.get("/api/tickets/timers")).json.find((x: any) => x.ticketId === tk.id);
+    const shared = await tech.post(`/api/tickets/timers/${t3.id}/submit`, { hours: 0.25, summary: "Mise à jour appliquée.", internal: "Reboot nécessaire", notify: { contact: false, others: ["Responsable1@client.example", "inconnu@ailleurs.example"] } });
+    expect(shared.json).toMatchObject({ notified: 2, notifiedInPortal: 1 });
+    const bell = await db().select().from(schema.notifications).where(eq(schema.notifications.userId, portalUser.id));
+    const work = bell.filter((n) => n.type === "ticket.work");
+    expect(work).toHaveLength(1);
+    expect(work[0]).toMatchObject({ link: `/tickets?t=${tk.id}`, data: { number: tk.number, from: "Alex Tremblay", preview: "Mise à jour appliquée." } });
+    expect(JSON.stringify(work[0])).not.toContain("Reboot");
+    // not shared with the client: no notification
+    await tech.post(`/api/tickets/${tk.id}/timer/start`);
+    await tech.post(`/api/tickets/${tk.id}/timer/stop`);
+    const t4 = (await tech.get("/api/tickets/timers")).json.find((x: any) => x.ticketId === tk.id);
+    expect((await tech.post(`/api/tickets/timers/${t4.id}/submit`, { hours: 0.1, summary: "Interne" })).json).toMatchObject({ notified: 0, notifiedInPortal: 0 });
+    expect((await db().select().from(schema.notifications).where(eq(schema.notifications.userId, portalUser.id))).filter((n) => n.type === "ticket.work")).toHaveLength(1);
+  });
+});
+
+describe("workflows: automatic reply to a new ticket", () => {
+  it("starts off; once on, a new ticket gets one email to its contact; nothing before, nothing twice, nothing once off", async () => {
+    resetRateLimit("login:ip:unknown");
+    const admin = await signIn("admin@akab.local");
+    const tech = await signIn("tech@akab.local");
+    const { devOutbox } = await import("../server/lib/mail.ts");
+    const { workflowTick } = await import("../server/lib/workflows.ts");
+    const make = (title: string, contactId: string | null) =>
+      admin.post("/api/tickets", { title, description: "", companyId: 300, contactId, priority: "medium", assigneeId: null, dueDate: "2026-12-01" }).then((r) => r.json);
+
+    // the right is the administrators': a technician cannot see or switch anything
+    expect((await tech.get("/api/admin/workflows")).status).toBe(403);
+    expect((await tech.put("/api/admin/workflows/new-ticket-reply", { enabled: true })).status).toBe(403);
+    // off by default
+    const first = (await admin.get("/api/admin/workflows")).json;
+    expect(first.workflows).toEqual([expect.objectContaining({ key: "new-ticket-reply", template: "ticketReceived", enabled: false, enabledAt: null })]);
+    expect((await admin.put("/api/admin/workflows/nope", { enabled: true })).status).toBe(404);
+
+    // a ticket made while it is off: never answered, even after it is switched on
+    const before = await make("Avant le flux", "c-300-0");
+    devOutbox.length = 0;
+    await workflowTick();
+    expect(devOutbox).toEqual([]);
+    await new Promise((r) => setTimeout(r, 15));
+    expect((await admin.put("/api/admin/workflows/new-ticket-reply", { enabled: true })).json).toMatchObject({ enabled: true, enabledAt: expect.any(String) });
+    expect((await admin.get("/api/admin/workflows")).json.workflows[0].enabled).toBe(true);
+    await workflowTick();
+    expect(devOutbox).toEqual([]);
+
+    // a new ticket: one email to the contact, in the "Billet reçu" template
+    const contact = (await admin.get("/api/tickets/companies/300/contacts")).json.find((x: any) => x.id === "c-300-0");
+    const made = await make("Imprimante hors ligne", "c-300-0");
+    expect(await workflowTick()).toBe(1);
+    expect(devOutbox).toHaveLength(1);
+    expect(devOutbox[0].to).toBe(contact.email.toLowerCase());
+    expect(devOutbox[0].subject).toContain(made.number);
+    expect(devOutbox[0].text).toContain("Imprimante hors ligne");
+    expect(devOutbox[0].text).toContain(contact.name);
+    // not twice, not for the one from before
+    expect(await workflowTick()).toBe(0);
+    expect(devOutbox).toHaveLength(1);
+
+    // no contact: nothing to write to, noted once and not retried
+    const nobody = await make("Sans contact", null);
+    devOutbox.length = 0;
+    expect(await workflowTick()).toBe(0);
+    expect(await workflowTick()).toBe(0);
+    expect(devOutbox).toEqual([]);
+
+    const runs = (await admin.get("/api/admin/workflows/new-ticket-reply/runs")).json;
+    expect(runs.find((x: any) => x.ticketId === made.id)).toMatchObject({ status: "sent", toEmail: contact.email.toLowerCase(), ticketNumber: made.number });
+    expect(runs.find((x: any) => x.ticketId === nobody.id)).toMatchObject({ status: "skipped", reason: "no_contact" });
+    expect(runs.some((x: any) => x.ticketId === before.id)).toBe(false);
+    expect((await admin.get("/api/admin/workflows")).json.workflows[0].counts).toMatchObject({ sent: 1, skipped: 1 });
+
+    // the test message goes to the administrator, marked as a test
+    devOutbox.length = 0;
+    expect((await admin.post("/api/admin/workflows/new-ticket-reply/test")).json).toMatchObject({ ok: true, to: "admin@akab.local" });
+    expect(devOutbox[0]).toMatchObject({ to: "admin@akab.local" });
+    expect(devOutbox[0].subject).toMatch(/^\[TEST\]/);
+    expect((await tech.post("/api/admin/workflows/new-ticket-reply/test")).status).toBe(403);
+
+    // off again: a new ticket gets nothing
+    expect((await admin.put("/api/admin/workflows/new-ticket-reply", { enabled: false })).json).toMatchObject({ enabled: false, enabledAt: null });
+    devOutbox.length = 0;
+    await make("Après", "c-300-0");
+    expect(await workflowTick()).toBe(0);
+    expect(devOutbox).toEqual([]);
+    // switching it on again starts from that moment, not before
+    await admin.put("/api/admin/workflows/new-ticket-reply", { enabled: true });
+    expect(await workflowTick()).toBe(0);
+    await admin.put("/api/admin/workflows/new-ticket-reply", { enabled: false });
+  });
+});
+
+describe("ticket queues (the portal's own)", () => {
+  it("Support, Alertes and Projets to start; a technician picks one; an admin manages them", async () => {
+    resetRateLimit("login:ip:unknown");
+    const admin = await signIn("admin@akab.local");
+    const tech = await signIn("tech@akab.local");
+    // the right: administrators only
+    expect((await tech.get("/api/admin/queues")).status).toBe(403);
+    expect((await tech.post("/api/admin/queues", { name: "X" })).status).toBe(403);
+    const start = (await admin.get("/api/admin/queues")).json;
+    expect(start.map((q: any) => [q.key, q.name, q.alerts, q.isDefault])).toEqual([
+      ["support", "Support", false, true],
+      ["alerts", "Alertes", true, false],
+      ["projects", "Projets", false, false],
+    ]);
+    // what the tickets pages offer
+    const options = (await tech.get("/api/tickets")).json.facets.queues;
+    expect(options).toEqual([
+      { value: "support", label: "Support", kind: "" },
+      { value: "alerts", label: "Alertes", kind: "alerts" },
+      { value: "projects", label: "Projets", kind: "" },
+    ]);
+
+    // a ticket made in a queue; changed to another; an unknown one refused
+    const make = (queue: string) =>
+      tech.post("/api/tickets", { title: `File ${queue}`, companyId: 300, priority: "medium", queue, assigneeId: null, dueDate: "2026-12-01" });
+    const proj = await make("projects");
+    expect(proj.json).toMatchObject({ queue: "projects", queueLabel: "Projets" });
+    expect((await make("Support niveau 1")).status).toBe(400);
+    expect((await tech.patch(`/api/tickets/${proj.json.id}`, { queue: "nope" })).status).toBe(400);
+    const none = await tech.post("/api/tickets", { title: "Sans file", companyId: 300, priority: "medium", assigneeId: null, dueDate: "2026-12-01" });
+    expect(none.json).toMatchObject({ queue: "support", queueLabel: "Support" });
+    const inQueue = async (key: string) => (await tech.get(`/api/tickets?view=all&queue=${key}`)).json.items.map((t: any) => t.id);
+    expect(await inQueue("projects")).toContain(proj.json.id);
+    expect(await inQueue("support")).not.toContain(proj.json.id);
+
+    // a queue marked as alerts: its tickets are alerts (out of the gauges and the list without alerts)
+    expect((await tech.patch(`/api/tickets/${proj.json.id}`, { queue: "alerts" })).status).toBe(200);
+    expect((await tech.get("/api/tickets?view=all&alerts=0")).json.items.map((t: any) => t.id)).not.toContain(proj.json.id);
+    expect((await tech.get("/api/tickets?view=all&alerts=1")).json.items.map((t: any) => t.id)).toContain(proj.json.id);
+
+    // managing: create (a name once), rename, order, default, alerts flag
+    const created = await admin.post("/api/admin/queues", { name: "Réseau" });
+    expect(created.json.key).toBe("reseau");
+    expect((await admin.post("/api/admin/queues", { name: "réseau" })).json.error).toBe("queue_exists");
+    expect((await admin.post("/api/admin/queues", { name: " " })).status).toBe(400);
+    expect((await admin.patch("/api/admin/queues/reseau", { name: "Réseau et sécurité" })).status).toBe(200);
+    expect((await admin.patch("/api/admin/queues/reseau", { name: "Support" })).json.error).toBe("queue_exists");
+    expect((await tech.get("/api/tickets")).json.facets.queues.map((q: any) => q.label)).toEqual(["Support", "Alertes", "Projets", "Réseau et sécurité"]);
+    expect((await admin.post("/api/admin/queues/reseau/move", { direction: "up" })).status).toBe(200);
+    expect((await admin.get("/api/admin/queues")).json.map((q: any) => q.key)).toEqual(["support", "alerts", "reseau", "projects"]);
+    expect((await admin.patch("/api/admin/queues/alerts", { isDefault: true })).json.error).toBe("queue_default_alerts");
+    expect((await admin.patch("/api/admin/queues/support", { alerts: true })).json.error).toBe("queue_default_alerts");
+    expect((await admin.patch("/api/admin/queues/missing", { name: "x" })).status).toBe(404);
+
+    // deleting: its tickets go to the default queue; the default queue cannot go
+    await tech.patch(`/api/tickets/${none.json.id}`, { queue: "reseau" });
+    expect((await admin.get("/api/admin/queues")).json.find((q: any) => q.key === "reseau").openTickets).toBeGreaterThan(0);
+    expect((await admin.del("/api/admin/queues/support")).json.error).toBe("queue_is_default");
+    expect((await admin.del("/api/admin/queues/reseau")).status).toBe(200);
+    expect((await tech.get(`/api/tickets/${none.json.id}`)).json.queue).toBe("support");
+    // a queue that is the default cannot go either; the built-in ones stay (the other tests use them)
+    await admin.post("/api/admin/queues", { name: "Temp" });
+    expect((await admin.patch("/api/admin/queues/temp", { isDefault: true })).status).toBe(200);
+    expect((await admin.del("/api/admin/queues/temp")).json.error).toBe("queue_is_default");
+    expect((await admin.patch("/api/admin/queues/support", { isDefault: true })).status).toBe(200);
+    expect((await admin.del("/api/admin/queues/temp")).status).toBe(200);
+    expect((await admin.get("/api/admin/queues")).json.map((q: any) => [q.key, q.isDefault])).toEqual([["support", true], ["alerts", false], ["projects", false]]);
   });
 });
 
@@ -1961,8 +2126,10 @@ describe("tickets from Autotask", () => {
   });
 
   beforeAll(async () => {
-    const { clearTicketCache } = await import("../server/lib/ticketSource.ts");
+    const { clearTicketCache, saveTicketSyncSettings } = await import("../server/lib/ticketSource.ts");
     await clearTicketCache();
+    // these tests are about the automatic copy: it is off by default (tickets are synced by hand)
+    await saveTicketSyncSettings(null, { auto: true });
     vi.stubGlobal(
       "fetch",
       vi.fn(async (input: unknown, init: RequestInit = {}) => {
@@ -2085,7 +2252,13 @@ describe("tickets from Autotask", () => {
         if (path === "TicketNotes/query" && JSON.stringify(init.body ?? "").includes("9002")) return json({ errors: ["Notes indisponibles"] }, 500);
         if (path === "TicketNotes/query") {
           return json({
-            items: [{ id: 1, title: "Appel", description: "Client rappelé", createDateTime: "2026-09-30T14:00:00Z", creatorResourceID: 29682885, creatorContactID: null, publish: 2 }],
+            items: [
+              { id: 1, title: "Appel", description: "Client rappelé", createDateTime: "2026-09-30T14:00:00Z", creatorResourceID: 29682885, creatorContactID: null, publish: 2 },
+              // a client's reply made in the client portal: saved by the API user, signed with the client's name
+              { id: 2, title: "", description: "Je confirme.\n\n— Marie Gagnon (client, via le portail AKAB)", createDateTime: "2026-09-30T14:30:00Z", creatorResourceID: 99999, creatorContactID: null, publish: 1 },
+              // Autotask's own (a rule, the API user): not a technician, not the client
+              { id: 3, title: "", description: "Règle déclenchée", createDateTime: "2026-09-30T14:45:00Z", creatorResourceID: 99998, creatorContactID: null, publish: 1 },
+            ],
             pageDetails: {},
           });
         }
@@ -2147,18 +2320,29 @@ describe("tickets from Autotask", () => {
       statusKind: "new",
       priorityLabel: "Critical",
       priorityKind: "critical",
-      queueLabel: "Triage",
+      // the portal's own queue, not Autotask's "Triage": nothing stored, so the default one
+      queue: "support",
+      queueLabel: "Support",
       excerpt: "Le serveur ne répond plus.",
       secondary: [{ id: "at-29682999", name: "Autre Tech" }],
     });
     expect(r.metrics).toMatchObject({ mine: 2, unassigned: 1, statusAttention: 1 });
+    // the queue is the portal's own: changing it never reaches Autotask (no ticket PATCH is even mocked)
+    expect((await tech.patch("/api/tickets/9001", { queue: "projects" })).status).toBe(200);
+    expect((await tech.get("/api/tickets/9001")).json).toMatchObject({ queue: "projects", queueLabel: "Projets" });
+    expect(sent.some((s: any) => s.method === "PATCH")).toBe(false);
+    expect((await tech.patch("/api/tickets/9001", { queue: "Triage" })).status).toBe(400);
+    await tech.patch("/api/tickets/9001", { queue: "support" });
     expect((await tech.get("/api/tickets?view=all&statusKind=needsAttention")).json.items.map((t: any) => t.id)).toEqual([9002]);
 
     const d = (await tech.get("/api/tickets/9001")).json;
     expect(d.hours).toBe(1.5);
     expect(d.notes).toEqual([
-      { id: "n1", author: "Alex Tremblay", at: "2026-09-30T14:00:00Z", text: "Appel\nClient rappelé", internal: true, kind: "note" },
-      { id: "t70", author: "Alex Tremblay", at: "2026-09-30T15:00:00Z", text: "Serveur redémarré", internal: false, kind: "time", hours: 1.5, internalText: "RAID à surveiller" },
+      { id: "n1", author: "Alex Tremblay", at: "2026-09-30T14:00:00Z", text: "Appel\nClient rappelé", internal: true, kind: "note", by: "tech" },
+      // the client's portal reply is theirs (name and text without the signature), Autotask's own note is flagged
+      { id: "n2", author: "Marie Gagnon", at: "2026-09-30T14:30:00Z", text: "Je confirme.", internal: false, kind: "note", by: "client" },
+      { id: "n3", author: "#99998", at: "2026-09-30T14:45:00Z", text: "Règle déclenchée", internal: false, kind: "note", by: "tech", system: true },
+      { id: "t70", author: "Alex Tremblay", at: "2026-09-30T15:00:00Z", text: "Serveur redémarré", internal: false, kind: "time", by: "tech", hours: 1.5, internalText: "RAID à surveiller" },
     ]);
     // the note query only asks for fields TicketNotes really has (no creatorContactID)
     const noteQuery = sent.find((s) => s.url.endsWith("TicketNotes/query"))!;
@@ -4799,5 +4983,241 @@ describe("Stripe card payments (Accounting › Paiements)", () => {
     } finally {
       vi.unstubAllGlobals();
     }
+  });
+});
+
+describe("local devices (made in the portal)", () => {
+  it("a device the RMM does not know is created, listed with the synced ones and linked to a ticket", async () => {
+    resetRateLimit("login:ip:unknown");
+    const tech = await signIn("tech@akab.local");
+    const before = (await tech.get("/api/tickets/companies/300/assets")).json;
+    expect(before.length).toBeGreaterThan(0);
+    expect(before.every((a: any) => a.origin === "rmm")).toBe(true);
+
+    expect((await tech.post("/api/tickets/companies/300/assets", { name: "" })).status).toBe(400);
+    const made = await tech.post("/api/tickets/companies/300/assets", { name: "PC-COMPTA-01", type: "Poste", hostname: "pc-compta-01" });
+    expect(made.status).toBe(201);
+    expect(made.json.origin).toBe("local");
+    expect(made.json.id).toMatch(/^local:/);
+    const after = (await tech.get("/api/tickets/companies/300/assets")).json;
+    expect(after.length).toBe(before.length + 1);
+    // another company does not see it
+    expect((await tech.get("/api/tickets/companies/301/assets")).json.some((a: any) => a.id === made.json.id)).toBe(false);
+
+    const t = await tech.post("/api/tickets", { title: "Appareil local", companyId: 300, priority: "medium", queue: "support", assigneeId: null, dueDate: "2026-12-01" });
+    const id = t.json.id;
+    expect((await tech.patch(`/api/tickets/${id}`, { assetId: "local:00000000-0000-0000-0000-000000000000" })).status).toBeGreaterThanOrEqual(400);
+    expect((await tech.patch(`/api/tickets/${id}`, { assetId: made.json.id })).status).toBe(200);
+    const d = (await tech.get(`/api/tickets/${id}`)).json;
+    expect(d.assetId).toBe(made.json.id);
+    expect(d.asset.origin).toBe("local");
+    // picking a synced device (or none) takes the local one off
+    expect((await tech.patch(`/api/tickets/${id}`, { assetId: before[0].id })).status).toBe(200);
+    expect((await tech.get(`/api/tickets/${id}`)).json.asset.origin).toBe("rmm");
+  });
+});
+
+describe("client classifications and the client's hours", () => {
+  it("admins manage the classes; a client carries one; the ticket shows it with this month's hours", async () => {
+    resetRateLimit("login:ip:unknown");
+    const admin = await signIn("admin@akab.local");
+    const tech = await signIn("tech@akab.local");
+    const start = (await admin.get("/api/admin/client-classes")).json;
+    expect(start.map((k: any) => k.key)).toEqual(["break-fix", "msp", "bronze", "silver", "gold"]);
+    // technicians read them, only admins change them
+    expect((await tech.get("/api/admin/client-classes")).status).toBe(200);
+    expect((await tech.post("/api/admin/client-classes", { name: "X" })).status).toBe(403);
+    const made = await admin.post("/api/admin/client-classes", { name: "Platine", color: "violet" });
+    expect(made.status).toBe(201);
+    expect((await admin.post("/api/admin/client-classes", { name: "platine" })).json.error).toBe("class_exists");
+    expect((await admin.post("/api/admin/client-classes", { name: "Z", color: "pink" })).status).toBe(400);
+    expect((await admin.patch("/api/admin/client-classes/platine", { name: "Platine +" })).status).toBe(200);
+    expect((await admin.post("/api/admin/client-classes/platine/move", { direction: "up" })).status).toBe(200);
+
+    // a client carries one (CRM), an unknown one is refused
+    const clients = (await admin.get("/api/crm/clients")).json;
+    const list = clients.items ?? clients;
+    const c = list.find((x: any) => x.autotaskId === 300);
+    expect((await admin.patch(`/api/crm/clients/${c.id}`, { classKey: "nope" })).status).toBe(400);
+    expect((await admin.patch(`/api/crm/clients/${c.id}`, { classKey: "platine" })).json.classKey).toBe("platine");
+
+    // the ticket view: the class, and hours counted from this month's time entries of the client's tickets
+    const t = (await admin.get("/api/tickets?view=all")).json.items.find((x: any) => x.company.id === 300);
+    const detail = (await admin.get(`/api/tickets/${t.id}`)).json;
+    expect(detail.client.class).toMatchObject({ key: "platine", name: "Platine +", color: "violet" });
+    const hoursBefore = detail.client.hours;
+    expect(detail.client.goal).toBeNull();
+    await admin.post(`/api/tickets/${t.id}/timer/start`, {});
+    const timers = (await admin.get("/api/tickets/timers")).json;
+    const mine = (timers.timers ?? timers.items ?? timers).find((x: any) => (x.ticketId ?? x.ticket?.id) === t.id);
+    expect((await admin.post(`/api/tickets/timers/${mine.id}/submit`, { hours: 2.5, summary: "Test" })).status).toBe(201);
+    expect((await admin.get(`/api/tickets/${t.id}`)).json.client.hours).toBe(hoursBefore + 2.5);
+
+    // deleting a class leaves its clients without one
+    expect((await admin.del("/api/admin/client-classes/platine")).status).toBe(200);
+    expect((await admin.get(`/api/tickets/${t.id}`)).json.client.class).toBeNull();
+  });
+});
+
+describe("a contact's open tickets", () => {
+  it("lists the last five open tickets of a contact, newest first, without the one being viewed", async () => {
+    resetRateLimit("login:ip:unknown");
+    const tech = await signIn("tech@akab.local");
+    const all = (await tech.get("/api/tickets?view=all")).json.items;
+    const contactId = all.find((t: any) => t.contactId && all.filter((x: any) => x.contactId === t.contactId).length > 1)?.contactId;
+    expect(contactId).toBeTruthy();
+    const r = (await tech.get(`/api/tickets/contacts/${contactId}/open`)).json;
+    expect(r.items.length).toBeLessThanOrEqual(5);
+    expect(r.total).toBeGreaterThanOrEqual(r.items.length);
+    expect(r.items.every((x: any) => x.statusKind !== "complete")).toBe(true);
+    const dates = r.items.map((x: any) => x.createdAt);
+    expect([...dates].sort().reverse()).toEqual(dates);
+    const skip = r.items[0].id;
+    expect((await tech.get(`/api/tickets/contacts/${contactId}/open?exclude=${skip}`)).json.items.some((x: any) => x.id === skip)).toBe(false);
+  });
+});
+
+describe("estimated time to resolve", () => {
+  it("a technician sets, changes and clears it; the ticket detail carries it; the AI estimate needs the AI", async () => {
+    resetRateLimit("login:ip:unknown");
+    const tech = await signIn("tech@akab.local");
+    const t = (await tech.get("/api/tickets?view=all")).json.items[0];
+    expect((await tech.get(`/api/tickets/${t.id}`)).json.estimate).toBeNull();
+    expect((await tech.put(`/api/tickets/${t.id}/estimate`, { minutes: 0 })).status).toBe(400);
+    expect((await tech.put(`/api/tickets/${t.id}/estimate`, { minutes: 45 })).status).toBe(200);
+    expect((await tech.get(`/api/tickets/${t.id}`)).json.estimate).toEqual({ minutes: 45, source: "tech" });
+    expect((await tech.put(`/api/tickets/${t.id}/estimate`, { minutes: 90 })).status).toBe(200);
+    expect((await tech.get(`/api/tickets/${t.id}`)).json.estimate.minutes).toBe(90);
+    // not configured here: refused, nothing changes
+    const ai = await tech.post(`/api/tickets/${t.id}/ai/estimate`, {});
+    expect(ai.status).toBeGreaterThanOrEqual(400);
+    expect((await tech.get(`/api/tickets/${t.id}`)).json.estimate.minutes).toBe(90);
+    expect((await tech.put(`/api/tickets/${t.id}/estimate`, { minutes: null })).status).toBe(200);
+    expect((await tech.get(`/api/tickets/${t.id}`)).json.estimate).toBeNull();
+  });
+});
+
+describe("contracts: default support contract, billing modes and rates", () => {
+  it("a client has a default contract; billing modes and rates are set; a ticket and its time follow its contract", async () => {
+    resetRateLimit("login:ip:unknown");
+    const admin = await signIn("admin@akab.local");
+    const tech = await signIn("tech@akab.local");
+    const clients = (await admin.get("/api/crm/clients")).json;
+    const client = (clients.items ?? clients).find((x: any) => x.autotaskId === 300);
+    const contracts = (await admin.get(`/api/crm/clients/${client.id}/contracts`)).json;
+    expect(contracts.length).toBeGreaterThan(1);
+    expect(contracts.filter((k: any) => k.isSupportDefault && k.active).length).toBe(1);
+    expect(contracts.every((k: any) => k.billingMode === "hourly" && k.hourlyRateCents === null && k.usualRateCents > 0)).toBe(true);
+
+    // technicians cannot change billing; an admin picks the default, a mode and rates
+    const [first, second] = contracts.filter((k: any) => k.active);
+    expect((await tech.patch(`/api/crm/clients/${client.id}/contracts/${second.id}`, { billingMode: "none" })).status).toBe(403);
+    expect((await admin.patch(`/api/crm/clients/${client.id}/contracts/${second.id}`, { billingMode: "weekly" })).status).toBe(400);
+    expect((await admin.patch(`/api/crm/clients/${client.id}/contracts/${second.id}`, { supportDefault: true, hourlyRate: 135 })).status).toBe(200);
+    const after = (await admin.get(`/api/crm/clients/${client.id}/contracts`)).json;
+    expect(after.filter((k: any) => k.isSupportDefault).map((k: any) => k.id)).toEqual([second.id]);
+    expect(after.find((k: any) => k.id === second.id).hourlyRateCents).toBe(13500);
+
+    // a ticket of the client: its contract is the default one, changeable; an unknown one is refused
+    const t = (await tech.get("/api/tickets?view=all")).json.items.find((x: any) => x.company.id === 300);
+    let d = (await tech.get(`/api/tickets/${t.id}`)).json;
+    expect(d.contract.id).toBe(second.id);
+    expect(d.contract.rateCents).toBe(13500);
+    expect(d.contracts.length).toBe(after.filter((k: any) => k.active).length);
+    expect((await tech.put(`/api/tickets/${t.id}/contract`, { contractId: "00000000-0000-4000-8000-000000000000" })).status).toBe(400);
+    expect((await tech.put(`/api/tickets/${t.id}/contract`, { contractId: first.id })).status).toBe(200);
+    d = (await tech.get(`/api/tickets/${t.id}`)).json;
+    expect(d.contract.id).toBe(first.id);
+    // no own rate: the usual one of Admin › Facturation
+    expect(d.contract.rateCents).toBe(first.usualRateCents);
+
+    // a contract that does not bill by the hour: its time is never billable
+    expect((await admin.patch(`/api/crm/clients/${client.id}/contracts/${first.id}`, { billingMode: "none" })).status).toBe(200);
+    d = (await tech.get(`/api/tickets/${t.id}`)).json;
+    expect(d.contract.billed).toBe(false);
+    expect(d.contract.rateCents).toBeNull();
+    await tech.post(`/api/tickets/${t.id}/timer/start`, {});
+    const timers = (await tech.get("/api/tickets/timers")).json;
+    const mine = (timers.timers ?? timers.items ?? timers).find((x: any) => (x.ticketId ?? x.ticket?.id) === t.id);
+    expect((await tech.post(`/api/tickets/timers/${mine.id}/submit`, { hours: 1, summary: "Inclus", billable: true, contractId: "00000000-0000-4000-8000-000000000000" })).status).toBe(400);
+    expect((await tech.post(`/api/tickets/timers/${mine.id}/submit`, { hours: 1, summary: "Inclus", billable: true, contractId: first.id })).status).toBe(201);
+  });
+});
+
+describe("ticket sources, statuses and the manual sync (Admin › Billets)", () => {
+  it("sources: phone by hand, the email one from an email; admins manage them", async () => {
+    resetRateLimit("login:ip:unknown");
+    const admin = await signIn("admin@akab.local");
+    const tech = await signIn("tech@akab.local");
+    expect((await tech.get("/api/admin/ticket-setup/sources")).status).toBe(403);
+    const list = (await admin.get("/api/admin/ticket-setup/sources")).json;
+    expect(list.map((s: any) => s.key)).toEqual(["phone", "sms", "email", "in-person"]);
+    // what the tickets pages offer
+    expect((await tech.get("/api/tickets")).json.facets.sources.map((s: any) => s.value)).toEqual(["phone", "sms", "email", "in-person"]);
+
+    const make = (source?: string) => tech.post("/api/tickets", { title: `Source ${source ?? "défaut"}`, companyId: 300, priority: "medium", queue: "support", assigneeId: null, dueDate: "2026-12-01", ...(source ? { source } : {}) });
+    const byHand = await make();
+    expect(byHand.status).toBe(201);
+    expect((await tech.get(`/api/tickets/${byHand.json.id}`)).json.source).toBe("phone");
+    const fromMail = await make("email");
+    expect((await tech.get(`/api/tickets/${fromMail.json.id}`)).json.source).toBe("email");
+    expect((await make("nope")).status).toBeGreaterThanOrEqual(400);
+    // changed afterwards
+    expect((await tech.patch(`/api/tickets/${byHand.json.id}`, { source: "in-person" })).status).toBe(200);
+    expect((await tech.get(`/api/tickets/${byHand.json.id}`)).json.source).toBe("in-person");
+
+    const made = await admin.post("/api/admin/ticket-setup/sources", { name: "Portail client" });
+    expect(made.status).toBe(201);
+    expect((await admin.post("/api/admin/ticket-setup/sources", { name: "portail client" })).json.error).toBe("source_exists");
+    expect((await admin.patch("/api/admin/ticket-setup/sources/portail-client", { name: "Portail" })).status).toBe(200);
+    expect((await admin.post("/api/admin/ticket-setup/sources/portail-client/move", { direction: "up" })).status).toBe(200);
+    // deleting one sends its tickets back to the usual way
+    expect((await admin.del("/api/admin/ticket-setup/sources/in-person")).status).toBe(200);
+    expect((await tech.get(`/api/tickets/${byHand.json.id}`)).json.source).not.toBe("in-person");
+    expect((await admin.del("/api/admin/ticket-setup/sources/portail-client")).status).toBe(200);
+  });
+
+  it("statuses: renamed, retyped, ordered and hidden over the source's list; one closing status stays", async () => {
+    resetRateLimit("login:ip:unknown");
+    const admin = await signIn("admin@akab.local");
+    const tech = await signIn("tech@akab.local");
+    expect((await tech.get("/api/admin/ticket-setup/statuses")).status).toBe(403);
+    const { items, kinds } = (await admin.get("/api/admin/ticket-setup/statuses")).json;
+    expect(kinds).toContain("complete");
+    expect(items.length).toBeGreaterThan(3);
+    const put = (rows: any[]) => admin.put("/api/admin/ticket-setup/statuses", { items: rows.map((r: any) => ({ value: r.value, label: r.label === r.sourceLabel ? null : r.label, kind: r.kind === r.sourceKind ? null : r.kind, hidden: r.hidden })) });
+    const [first, second, ...rest] = items;
+    const inProgress = items.find((s: any) => s.kind === "inProgress");
+    // renamed + the order changed + one hidden
+    const next = [second, { ...first, label: "À traiter" }, ...rest].map((r: any) => (r.value === inProgress.value ? { ...r, hidden: true } : r));
+    expect((await put(next)).status).toBe(200);
+    const o = (await tech.get("/api/tickets")).json.facets.statuses;
+    expect(o[0].value).toBe(second.value);
+    expect(o.find((s: any) => s.value === first.value).label).toBe("À traiter");
+    expect(o.find((s: any) => s.value === inProgress.value).hidden).toBe(true);
+    // unknown status refused; hiding every closing status refused
+    expect((await put([{ value: "nope", label: null, kind: null, hidden: false, sourceLabel: "", sourceKind: "other" }])).status).toBe(400);
+    const noClose = next.map((r: any) => (r.kind === "complete" ? { ...r, hidden: true } : r));
+    expect((await put(noClose)).json.error).toBe("status_no_complete");
+    // back as it was
+    expect((await put(items)).status).toBe(200);
+  });
+
+  it("sync: manual, automatic off by default, from a date", async () => {
+    resetRateLimit("login:ip:unknown");
+    const admin = await signIn("admin@akab.local");
+    const tech = await signIn("tech@akab.local");
+    expect((await tech.get("/api/admin/ticket-setup/sync")).status).toBe(403);
+    expect((await tech.post("/api/admin/ticket-setup/sync/run", {})).status).toBe(403);
+    const s = (await admin.get("/api/admin/ticket-setup/sync")).json;
+    expect(s.since).toMatch(/^\d{4}-\d{2}-\d{2}$/);
+    expect(s.demo).toBe(true);
+    expect((await admin.put("/api/admin/ticket-setup/sync", { since: "not a date" })).status).toBe(400);
+    expect((await admin.put("/api/admin/ticket-setup/sync", { since: "2026-08-01", auto: false })).json).toEqual({ auto: false, since: "2026-08-01" });
+    const run = await admin.post("/api/admin/ticket-setup/sync/run", {});
+    expect(run.status).toBe(200);
+    expect(run.json.ok).toBe(true);
+    expect(run.json.total).toBeGreaterThan(0);
+    expect((await admin.get("/api/admin/ticket-setup/sync")).json.lastRun.total).toBe(run.json.total);
   });
 });

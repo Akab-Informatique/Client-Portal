@@ -34,7 +34,7 @@ export function NewTicketDialog({
   facets: TicketList["facets"];
   onCreated: (id: number) => void;
   /** Pre-filled title / description (e.g. a ticket made from an email). */
-  initial?: { title?: string; description?: string; companyId?: number | null; contactId?: string | null };
+  initial?: { title?: string; description?: string; companyId?: number | null; contactId?: string | null; source?: string };
 }) {
   const { t } = useTranslation();
   const txt = useChoiceText();
@@ -45,6 +45,8 @@ export function NewTicketDialog({
   const empty = () => ({
     companyId: initial?.companyId ? String(initial.companyId) : "",
     contactId: (initial?.contactId ?? null) as string | null,
+    // by hand it is a phone ticket; an email (or a text) says so
+    source: initial?.source ?? "phone",
     title: (initial?.title ?? "").slice(0, 250),
     description: (initial?.description ?? "").slice(0, 8000),
     priority: (facets.priorities.find((p) => p.kind === "medium") ?? facets.priorities[0])?.value ?? "",
@@ -237,6 +239,29 @@ export function NewTicketDialog({
               ))}
             </div>
           </div>
+
+          {(facets.sources ?? []).length > 0 && (
+            <div className="space-y-2">
+              <Label htmlFor="nt-source">{t("tickets.fields.source")}</Label>
+              <div id="nt-source" className="flex flex-wrap gap-2" role="radiogroup" aria-label={t("tickets.fields.source")}>
+                {(facets.sources ?? []).map((x) => (
+                  <button
+                    key={x.value}
+                    type="button"
+                    role="radio"
+                    aria-checked={f.source === x.value}
+                    onClick={() => setF({ ...f, source: x.value })}
+                    className={cn(
+                      "rounded-lg border px-3 py-1.5 text-sm transition-colors",
+                      f.source === x.value ? "border-[color:var(--gold)]/60 bg-[color:var(--gold)]/10 font-medium" : "text-muted-foreground hover:bg-accent/50",
+                    )}
+                  >
+                    {x.label ?? x.value}
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
 
           <div className="grid gap-4 sm:grid-cols-2">
             <div className="space-y-2">

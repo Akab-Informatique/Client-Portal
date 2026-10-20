@@ -19,6 +19,7 @@ import {
   UserPlus,
   XCircle,
   type LucideIcon,
+  TicketCheck,
 } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -52,7 +53,7 @@ type TemplateDetail = {
   locales: Record<"fr" | "en", { current: Text; default: Text; edited: boolean }>;
 };
 
-const ICONS: Record<string, LucideIcon> = { welcome: UserPlus, passwordReset: KeyRound, passwordChanged: ShieldCheck, boardMessage: Megaphone };
+const ICONS: Record<string, LucideIcon> = { welcome: UserPlus, passwordReset: KeyRound, passwordChanged: ShieldCheck, boardMessage: Megaphone, ticketReceived: TicketCheck };
 
 /** Admin › Email: outgoing server and templates (?template=<key> opens the editor). */
 export function EmailSection() {

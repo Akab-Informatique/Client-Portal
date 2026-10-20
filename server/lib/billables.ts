@@ -60,9 +60,9 @@ export function syncBillables(): Promise<BillablesState> {
     const clients = new Map(
       (await d.select({ id: schema.clients.id, at: schema.clients.autotaskId, invoice: schema.clients.invoice }).from(schema.clients)).filter((c) => c.at != null).map((c) => [c.at!, c]),
     );
-    const contractIds = new Map(
-      (await d.select({ id: schema.clientContracts.id, at: schema.clientContracts.autotaskId }).from(schema.clientContracts).where(isNotNull(schema.clientContracts.autotaskId))).map((k) => [k.at!, k.id]),
-    );
+    const contractRows = await d.select().from(schema.clientContracts).where(isNotNull(schema.clientContracts.autotaskId));
+    const contractIds = new Map(contractRows.map((k) => [k.autotaskId!, k.id]));
+    const contractsById = new Map(contractRows.map((k) => [k.id, k]));
     const autoK = await autoContracts();
     const existing = new Map((await d.select().from(schema.billingItems).where(eq(schema.billingItems.source, "autotask"))).map((x) => [x.sourceId!, x]));
     const counts: BillablesState["counts"] = {};
@@ -76,8 +76,15 @@ export function syncBillables(): Promise<BillablesState> {
       }
       seen.add(it.id);
       counts[it.kind] = (counts[it.kind] ?? 0) + 1;
-      // no rate in the source: the client's hourly rate, else the usual one
-      const rate = it.unitPriceCents ?? (it.kind === "labour" ? Math.round((client.invoice?.hourlyRate ?? s.rates.hourly) * 100) : 0);
+      // the contract the work is under: an hourly rate typed on it wins, then the source's rate, then the client's, then the usual one;
+      // under a monthly / per ticket / included contract the hours are not billed (left out, never billed by the hour)
+      const contract = it.contractSourceId ? contractsById.get(contractIds.get(it.contractSourceId) ?? "") : undefined;
+      const notBilled = it.kind === "labour" && contract != null && contract.billingMode !== "hourly";
+      const rate = notBilled
+        ? 0
+        : it.kind === "labour" && contract?.hourlyRateCents != null
+          ? contract.hourlyRateCents
+          : (it.unitPriceCents ?? (it.kind === "labour" ? Math.round((client.invoice?.hourlyRate ?? s.rates.hourly) * 100) : 0));
       const quantityX100 = Math.round(it.quantity * 100);
       const values = {
         clientId: client.id,
@@ -98,9 +105,10 @@ export function syncBillables(): Promise<BillablesState> {
       const hit = existing.get(it.id);
       if (!hit) {
         // new: approved right away when a rule says so
-        const auto = ruled(values, client, autoK);
-        await d.insert(schema.billingItems).values({ ...values, source: "autotask", sourceId: it.id, status: auto ? "approved" : "pending", approvedAt: auto ? now : null });
-      } else if (hit.status === "pending" && !hit.edited) await d.update(schema.billingItems).set({ ...values, updatedAt: now }).where(eq(schema.billingItems.id, hit.id));
+        const auto = !notBilled && ruled(values, client, autoK);
+        await d.insert(schema.billingItems).values({ ...values, source: "autotask", sourceId: it.id, status: notBilled ? "excluded" : auto ? "approved" : "pending", approvedAt: auto ? now : null });
+      } else if ((hit.status === "pending" || (notBilled && hit.status === "excluded")) && !hit.edited)
+        await d.update(schema.billingItems).set({ ...values, ...(notBilled ? { status: "excluded" } : {}), updatedAt: now }).where(eq(schema.billingItems.id, hit.id));
     }
     // gone from the source (posted or removed in Autotask): untouched ones go too — only for kinds read without error
     const gone = [...existing.values()]

@@ -316,6 +316,38 @@ export const MODULES = [
         },
       },
       {
+        key: "admin.tickets",
+        label: { fr: "Configurer les billets", en: "Configure tickets" },
+        description: {
+          fr: "Choisir les sources des billets (téléphone, texto, courriel…), nommer et ordonner les statuts, et lancer la synchronisation des billets avec Autotask",
+          en: "Choose where tickets come from (phone, text, email…), name and order the statuses, and run the ticket sync with Autotask",
+        },
+      },
+      {
+        key: "admin.classes",
+        label: { fr: "Gérer les classifications de clients", en: "Manage client classifications" },
+        description: {
+          fr: "Créer, renommer, colorer, ordonner et supprimer les classifications (Dépannage, MSP, Bronze, Argent, Or…)",
+          en: "Create, rename, colour, order and delete the client classifications (Break & fix, MSP, Bronze, Silver, Gold…)",
+        },
+      },
+      {
+        key: "admin.queues",
+        label: { fr: "Gérer les files d'attente", en: "Manage ticket queues" },
+        description: {
+          fr: "Créer, renommer, ordonner et supprimer les files d'attente des billets (Support, Alertes, Projets…)",
+          en: "Create, rename, order and delete the ticket queues (Support, Alerts, Projects…)",
+        },
+      },
+      {
+        key: "admin.workflows",
+        label: { fr: "Gérer les flux de travail", en: "Manage workflows" },
+        description: {
+          fr: "Activer ou désactiver les flux de travail automatiques (ex. réponse automatique à un nouveau billet)",
+          en: "Turn the automatic workflows on or off (e.g. automatic reply to a new ticket)",
+        },
+      },
+      {
         key: "admin.integrations",
         label: { fr: "Gérer les intégrations (Autotask)", en: "Manage integrations (Autotask)" },
         description: {
@@ -438,7 +470,7 @@ export function isPermissionKey(v: unknown): v is PermissionKey {
   return typeof v === "string" && (ALL_PERMISSIONS as readonly string[]).includes(v);
 }
 
-export const ADMIN_PERMISSIONS = ["admin.staff", "admin.clients", "admin.billing", "admin.roles", "admin.integrations", "admin.email", "admin.o365"] as const satisfies readonly PermissionKey[];
+export const ADMIN_PERMISSIONS = ["admin.staff", "admin.clients", "admin.billing", "admin.roles", "admin.integrations", "admin.email", "admin.o365", "admin.workflows", "admin.queues", "admin.classes", "admin.tickets"] as const satisfies readonly PermissionKey[];
 
 /** The master administrator role: every right, locked; only its holders give it or act on its holders. */
 export const MASTER_ROLE = "administrator";

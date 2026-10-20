@@ -7,14 +7,14 @@ import { toast } from "sonner";
 import { Dialog as DialogPrimitive } from "radix-ui";
 import {
   AlertTriangle,
-  ArrowDownUp,
   Bot,
   Building2,
   CalendarClock,
   CalendarPlus,
   Check,
-  CheckCircle2,
+  BookOpen,
   ChevronDown,
+  ListOrdered,
   ChevronUp,
   Clock3,
   Eye,
@@ -26,7 +26,6 @@ import {
   Loader2,
   Lock,
   Mail,
-  MessageSquareReply,
   Minus,
   MonitorCog,
   MonitorPlay,
@@ -36,11 +35,13 @@ import {
   RefreshCw,
   Send,
   Sparkles,
+  Timer,
   Star,
   UserRound,
   Users,
   X,
   type LucideIcon,
+  MessageSquareReply,
   MessageSquareText,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -68,10 +69,12 @@ import { GlassBackdrop } from "@/components/brand/GlassBackdrop";
 import { CompanyPicker, ContactPicker, useCompanies } from "./pickers";
 import { TimerControl } from "./timers";
 import { AssetContent, AssetPicker } from "./AssetCard";
+import { ClientHoursGauge } from "./ClientHoursGauge";
+import { contractNote } from "./contract";
+import { ContactTicketsList, useContactOpen } from "./ContactTickets";
 import { ChargeButtons } from "./Charges";
 import { PriorityDialog, TicketPriorities } from "./Planning";
 import { TicketSmsPanel, useTicketSms } from "@/pages/sms/SmsPage";
-import { useConfirm } from "@/components/ConfirmDialog";
 import {
   dueState,
   longDateTime,
@@ -86,6 +89,8 @@ import {
   type Viewer,
   ticketErrorText,
   type TicketSummary,
+  hm,
+  parseHm,
 } from "./shared";
 
 const SOURCE_ICON: Record<string, LucideIcon> = { email: Mail, phone: Phone, portal: Inbox, monitoring: MonitorCog };
@@ -217,6 +222,7 @@ function useTicketUpdate(tk: TicketDetail) {
       title?: string;
       description?: string;
       assetId?: string | null;
+      source?: string;
     }) => api.patch<TicketDetail>(`/tickets/${tk.id}`, patch),
     onSuccess: (next) => {
       qc.setQueryData(["tickets", "detail", tk.id], next);
@@ -247,7 +253,6 @@ function TicketBody({
   const { t } = useTranslation();
   const txt = useChoiceText();
   const can = useCan();
-  const confirm = useConfirm();
   const editable = can("tickets.edit");
   const update = useTicketUpdate(tk);
   const qc = useQueryClient();
@@ -297,6 +302,8 @@ function TicketBody({
     },
   });
   const statusOpt = tk.options.statuses.find((s) => s.value === view.status);
+  // where the ticket came from, in the portal's own words (Admin › Billets)
+  const sourceName = (tk.options.sources ?? []).find((x) => x.value === tk.source)?.label ?? (tk.source ? t(`tickets.source.${tk.source}`, { defaultValue: tk.source }) : "");
   const statusKind = statusOpt?.kind ?? tk.statusKind;
   const statusText = statusOpt ? txt.status(statusOpt) : txt.status({ label: tk.statusLabel, kind: tk.statusKind });
   const priorityOpt = tk.options.priorities.find((p) => p.value === view.priority);
@@ -313,6 +320,23 @@ function TicketBody({
   // Quick actions put the note box in a mode and bring it into view
   const [focusNote, setFocusNote] = useState<{ internal: boolean; at: number } | null>(null);
   const [giving, setGiving] = useState(false);
+  // the three squares: full size, or collapsed to small icons (kept per browser)
+  const [tilesOpen, setTilesOpen] = useState(() => {
+    try {
+      return localStorage.getItem("akab.ticket.tiles2") !== "0";
+    } catch {
+      return true;
+    }
+  });
+  const toggleTiles = () =>
+    setTilesOpen((v) => {
+      try {
+        localStorage.setItem("akab.ticket.tiles2", v ? "0" : "1");
+      } catch {
+        /* private mode: just not remembered */
+      }
+      return !v;
+    });
   // the exchange shown: the ticket activity, or the texts with the client
   const [thread, setThread] = useState<"activity" | "sms">("activity");
   const { data: texts } = useTicketSms(tk.id, can("sms.view") && !partial);
@@ -323,8 +347,8 @@ function TicketBody({
     if (unreadTexts > seenTexts.current) void qc.invalidateQueries({ queryKey: ["tickets"] });
     seenTexts.current = unreadTexts;
   }, [unreadTexts, qc]);
-  const done = tk.options.statuses.find((s) => s.kind === "complete");
   const remote = tk.asset?.links.remote ?? null;
+  const contactOpen = useContactOpen(tk.contactId, tk.id);
   const phone = tk.contactInfo?.phone ?? null;
   const email = tk.contactInfo?.email ?? null;
 
@@ -377,131 +401,267 @@ function TicketBody({
               <X className="size-4" />
             </Button>
           </div>
-          <EditableTitle value={tk.title} disabled={!editable || partial} onSave={(title) => update.mutate({ title })} />
-          <div className="mt-3 flex flex-wrap items-center gap-2">
-            <InlinePick
-              disabled={!editable}
-              label={t("tickets.fields.status")}
-              value={view.status}
-              options={tk.options.statuses.map((s) => ({ value: s.value, label: txt.status(s) }))}
-              onPick={(v) => stage({ status: v })}
-              trigger={
-                <span className={cn("inline-flex items-center gap-1.5 rounded-full border px-2.5 py-0.5 text-xs font-medium", STATUS_STYLE[statusKind])}>
-                  {statusText}
-                </span>
-              }
-            />
-            <InlinePick
-              disabled={!editable}
-              label={t("tickets.fields.priority")}
-              value={view.priority}
-              options={tk.options.priorities.map((p) => ({ value: p.value, label: txt.priority(p), dot: PRIORITY_STYLE[p.kind].dot }))}
-              onPick={(v) => stage({ priority: v })}
-              trigger={
-                <span
-                  className={cn("inline-flex items-center gap-1.5 rounded-full border px-2.5 py-0.5 text-xs font-medium", PRIORITY_STYLE[priorityKind].text)}
-                >
-                  <span className={cn("size-2 rounded-full", PRIORITY_STYLE[priorityKind].dot)} /> {priorityText}
-                </span>
-              }
-            />
-            <InlinePick
-              disabled={!editable}
-              label={t("tickets.fields.queue")}
-              value={view.queue}
-              options={tk.options.queues.map((q) => ({ value: q.value, label: q.label ?? q.value }))}
-              onPick={(v) => stage({ queue: v })}
-              trigger={<span className={cn("rounded-full border px-2.5 py-0.5 text-xs text-muted-foreground")}>{queueText || "—"}</span>}
-            />
-            {(update.isPending || saveAll.isPending) && <Loader2 className="size-4 animate-spin text-muted-foreground" />}
-            {(() => {
-              const badge = (
-                <span
-                  className={cn(
-                    "flex items-center gap-1 rounded-full border px-2.5 py-0.5 text-xs font-medium",
-                    due === "overdue"
-                      ? "border-destructive/50 text-destructive"
-                      : due === "today"
-                        ? "border-orange-500/50 text-orange-400"
-                        : "text-muted-foreground",
-                    editable && "cursor-pointer hover:border-[color:var(--gold)]/60",
-                  )}
-                  title={editable ? t("tickets.due.change") : longDateTime(view.dueAt)}
-                >
-                  <CalendarClock className="size-3.5" />
-                  {changed("dueAt")
-                    ? longDateTime(view.dueAt)
-                    : due === "overdue"
-                      ? t("tickets.overdue")
-                      : due === "today"
-                        ? t("tickets.today")
-                        : longDateTime(view.dueAt)}
-                </span>
-              );
-              return editable ? (
-                <Popover>
-                  <PopoverTrigger asChild>
-                    <button type="button" aria-label={t("tickets.due.change")}>
-                      {badge}
-                    </button>
-                  </PopoverTrigger>
-                  <PopoverContent align="start" className="w-80 space-y-2">
-                    <p className="text-sm font-semibold">{t("tickets.fields.due")}</p>
-                    <p className="text-xs text-muted-foreground">{longDateTime(view.dueAt)}</p>
-                    <DueEditor dueAt={view.dueAt} quick autoFocus onSave={(dueAt) => stage({ dueAt })} />
-                  </PopoverContent>
-                </Popover>
-              ) : (
-                badge
-              );
-            })()}
+          <div className="lg:grid lg:grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)] lg:items-start lg:gap-5">
+            <div className="min-w-0 lg:flex-1">
+            <div className="mt-3 flex flex-wrap items-center gap-x-3 gap-y-2">
+              <EditableTitle value={tk.title} disabled={!editable || partial} onSave={(title) => update.mutate({ title })} />
+              <InlinePick
+                disabled={!editable}
+                label={t("tickets.fields.queue")}
+                value={view.queue}
+                options={tk.options.queues.map((q) => ({ value: q.value, label: q.label ?? q.value }))}
+                onPick={(v) => stage({ queue: v })}
+                trigger={
+                  <span className="inline-flex items-center gap-1.5 rounded-full border border-[color:var(--gold)]/30 bg-[color:var(--gold)]/10 px-2.5 py-0.5 text-xs font-medium text-primary">
+                    <ListOrdered className="size-3.5" /> {queueText || "—"}
+                  </span>
+                }
+              />
+            </div>
+            <div className="mt-3 flex flex-wrap items-center gap-2">
+              <InlinePick
+                disabled={!editable}
+                label={t("tickets.fields.status")}
+                value={view.status}
+                options={tk.options.statuses.filter((s) => !s.hidden || s.value === view.status).map((s) => ({ value: s.value, label: txt.status(s) }))}
+                onPick={(v) => stage({ status: v })}
+                trigger={
+                  <span className={cn("inline-flex items-center gap-1.5 rounded-full border px-2.5 py-0.5 text-xs font-medium", STATUS_STYLE[statusKind])}>
+                    {statusText}
+                  </span>
+                }
+              />
+              <InlinePick
+                disabled={!editable}
+                label={t("tickets.fields.priority")}
+                value={view.priority}
+                options={tk.options.priorities.map((p) => ({ value: p.value, label: txt.priority(p), dot: PRIORITY_STYLE[p.kind].dot }))}
+                onPick={(v) => stage({ priority: v })}
+                trigger={
+                  <span
+                    className={cn("inline-flex items-center gap-1.5 rounded-full border px-2.5 py-0.5 text-xs font-medium", PRIORITY_STYLE[priorityKind].text)}
+                  >
+                    <span className={cn("size-2 rounded-full", PRIORITY_STYLE[priorityKind].dot)} /> {priorityText}
+                  </span>
+                }
+              />
+              {(update.isPending || saveAll.isPending) && <Loader2 className="size-4 animate-spin text-muted-foreground" />}
+              {(() => {
+                const badge = (
+                  <span
+                    className={cn(
+                      "flex items-center gap-1 rounded-full border px-2.5 py-0.5 text-xs font-medium",
+                      due === "overdue"
+                        ? "border-destructive/50 text-destructive"
+                        : due === "today"
+                          ? "border-orange-500/50 text-orange-400"
+                          : "text-muted-foreground",
+                      editable && "cursor-pointer hover:border-[color:var(--gold)]/60",
+                    )}
+                    title={editable ? t("tickets.due.change") : longDateTime(view.dueAt)}
+                  >
+                    <CalendarClock className="size-3.5" />
+                    {t("tickets.fields.due")} · {longDateTime(view.dueAt)}
+                  </span>
+                );
+                return editable ? (
+                  <Popover>
+                    <PopoverTrigger asChild>
+                      <button type="button" aria-label={t("tickets.due.change")}>
+                        {badge}
+                      </button>
+                    </PopoverTrigger>
+                    <PopoverContent align="start" className="w-80 space-y-2">
+                      <p className="text-sm font-semibold">{t("tickets.fields.due")}</p>
+                      <p className="text-xs text-muted-foreground">{longDateTime(view.dueAt)}</p>
+                      <DueEditor dueAt={view.dueAt} quick autoFocus onSave={(dueAt) => stage({ dueAt })} />
+                    </PopoverContent>
+                  </Popover>
+                ) : (
+                  badge
+                );
+              })()}
 
-            {/* Quick actions: what a technician does next, one click away */}
-            <span className="hidden h-5 w-px bg-border lg:mx-1 lg:block" />
-            <div className="flex flex-wrap items-center gap-1.5 lg:ml-auto">
-              {editable && (
-                <>
-                  <QuickAction
-                    icon={MessageSquareReply}
-                    label={t("tickets.quickAction.reply")}
-                    kbd="R"
-                    onClick={() => setFocusNote({ internal: false, at: Date.now() })}
-                  />
-                  <QuickAction icon={Lock} label={t("tickets.quickAction.note")} kbd="I" onClick={() => setFocusNote({ internal: true, at: Date.now() })} />
-                </>
-              )}
+            </div>
+            </div>
+            <div className="mt-3 lg:mt-1 lg:shrink-0">
+        {/* Team, planning and details: tight chips by the title; each opens a small floating panel (nothing is pushed down) */}
+        <div className="flex items-center gap-2">
+          <button
+            type="button"
+            onClick={toggleTiles}
+            aria-label={tilesOpen ? t("tickets.tileBar.collapse") : t("tickets.tileBar.expand")}
+            title={tilesOpen ? t("tickets.tileBar.collapse") : t("tickets.tileBar.expand")}
+            className={cn("flex w-4 items-center justify-center rounded-md text-muted-foreground hover:text-foreground", tilesOpen ? "h-[112px]" : "h-[76px]")}
+          >
+            <ChevronDown className={cn("size-3.5 transition-transform", tilesOpen ? "rotate-90" : "-rotate-90")} />
+          </button>
+          <div className={"grid grid-cols-4 gap-2"}>
+          {(
+            [
+              {
+                key: "team",
+                icon: Users,
+                label: t("tickets.sections.team"),
+                value: assigneeName ?? t("tickets.unassigned"),
+                more: [tk.secondary.length ? `${t("tickets.fields.secondary")} : ${tk.secondary.map((x) => x.name).join(", ")}` : `${t("tickets.fields.secondary")} : —`],
+              },
+              {
+                key: "planning",
+                icon: CalendarClock,
+                label: t("tickets.sections.planning"),
+                value: shortDate(view.dueAt),
+                more: [
+                  `${t("tickets.fields.start")} : ${tk.startDate ? shortDate(tk.startDate) + (tk.startTime ? ` ${tk.startTime}` : "") : "—"}`,
+                  `${t("tickets.fields.hours")} : ${partial ? "…" : t("tickets.hoursValue", { hours: tk.hours.toLocaleString() })}`,
+                  `${t("tickets.estimate.short")} : ${tk.estimate ? hm(tk.estimate.minutes / 60) : "—"}`,
+                ],
+              },
+              {
+                key: "details",
+                icon: Inbox,
+                label: t("tickets.sections.details"),
+                value: sourceName || "—",
+                more: [`${t("tickets.contractBilling.label")} : ${tk.contract?.name ?? "—"}`, `${t("tickets.fields.created")} : ${shortDate(tk.createdAt)}`, `${t("tickets.sections.lastActivity")} : ${shortDate(tk.updatedAt)}`],
+              },
+              {
+                key: "device",
+                icon: HardDrive,
+                label: t("tickets.asset.title"),
+                value: tk.asset?.name ?? t("tickets.tile.noDevice"),
+                more: tk.asset ? [tk.asset.origin === "local" ? t("tickets.asset.originLocal") : t("tickets.asset.originRmm"), tk.asset.os ?? tk.asset.type ?? "—"] : [t("tickets.tile.linkDevice")],
+              },
+            ] as const
+          ).map(({ key, icon: Icon, label, value, more }) => (
+            <Popover key={key}>
+              <PopoverTrigger asChild>
+                <button
+                  type="button"
+                  title={label}
+                  className={cn(
+                    "group flex flex-col justify-center rounded-2xl border border-border/60 bg-card/40 text-center transition hover:border-[color:var(--gold)]/40 hover:bg-card/70 data-[state=open]:border-[color:var(--gold)]/50 data-[state=open]:bg-[color:var(--gold)]/10",
+                    tilesOpen ? "h-[112px] w-[178px] items-start justify-start gap-1 px-3.5 py-3 text-left" : "size-[76px] items-center px-1 text-center",
+                  )}
+                >
+                  {tilesOpen ? (
+                    <>
+                      <span className="flex w-full items-center gap-1.5 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
+                        <Icon className="size-3.5 shrink-0 text-primary" /> {label}
+                      </span>
+                      <span className="w-full truncate text-sm font-semibold">{value}</span>
+                      {more.map((m) => (
+                        <span key={m} className="w-full truncate text-[11px] text-muted-foreground">
+                          {m}
+                        </span>
+                      ))}
+                    </>
+                  ) : (
+                    <>
+                      <Icon className="size-4 shrink-0 text-primary" />
+                      <span className="text-[9px] font-semibold uppercase tracking-wide text-muted-foreground">{label}</span>
+                      <span className="w-full truncate text-[11px] font-medium leading-none">{value}</span>
+                    </>
+                  )}
+                </button>
+              </PopoverTrigger>
+              <PopoverContent align="start" className={cn("p-3 text-sm", key === "device" ? "w-[26rem]" : "w-80")}>
+                {key === "team" && (
+                  <dl className="space-y-3">
+                      <Detail icon={UserRound} label={t("tickets.fields.assignee")}>
+                        <InlinePick
+                          disabled={!editable}
+                          label={t("tickets.fields.assignee")}
+                          value={view.assigneeId ?? "none"}
+                          options={[{ value: "none", label: t("tickets.unassigned") }, ...tk.options.technicians.map((p) => ({ value: p.id, label: p.name }))]}
+                          onPick={(v) => stage({ assigneeId: v === "none" ? null : v })}
+                          trigger={
+                            <span className={cn("rounded px-1", !assigneeName && "italic text-muted-foreground")}>{assigneeName ?? t("tickets.unassigned")}</span>
+                          }
+                        />
+                      </Detail>
+                      <Detail icon={Users} label={t("tickets.fields.secondary")}>
+                        <SecondaryPick
+                          disabled={!editable}
+                          value={tk.secondary.map((p) => p.id)}
+                          names={tk.secondary.map((p) => p.name)}
+                          options={tk.options.technicians.filter((p) => p.id !== tk.assignee?.id)}
+                          onSave={(secondaryIds) => update.mutate({ secondaryIds })}
+                        />
+                      </Detail>
+                    </dl>
+                )}
+                {key === "planning" && (
+                  <dl className="space-y-3">
+                      <StartDate tk={tk} value={view} onChange={stage} />
+                      <Detail icon={CalendarClock} label={t("tickets.fields.due")}>
+                        {editable ? (
+                          <div className={cn("mt-0.5 rounded-lg")}>
+                            <DueEditor dueAt={view.dueAt} onSave={(dueAt) => stage({ dueAt })} />
+                          </div>
+                        ) : (
+                          longDateTime(tk.dueAt)
+                        )}
+                      </Detail>
+                      <Detail icon={Clock3} label={t("tickets.fields.hours")}>
+                        {partial ? "…" : t("tickets.hoursValue", { hours: tk.hours.toLocaleString() })}
+                      </Detail>
+                      <Detail icon={Timer} label={t("tickets.estimate.label")}>
+                        <EstimateField tk={tk} editable={editable && !partial} />
+                      </Detail>
+                    </dl>
+                )}
+                {key === "details" && (
+                  <dl className="space-y-3">
+                    <Detail icon={FileText} label={t("tickets.contractBilling.label")}>
+                      <ContractField tk={tk} editable={editable && !partial} />
+                    </Detail>
+                      <Detail icon={SOURCE_ICON[tk.source] ?? Inbox} label={t("tickets.fields.source")}>
+                        <InlinePick
+                          disabled={!editable || partial || !(tk.options.sources ?? []).length}
+                          label={t("tickets.fields.source")}
+                          value={tk.source}
+                          options={(tk.options.sources ?? []).map((x) => ({ value: x.value, label: x.label ?? x.value }))}
+                          onPick={(source) => update.mutate({ source })}
+                          trigger={<span className="rounded px-1">{sourceName || "—"}</span>}
+                        />
+                      </Detail>
+                      <Detail icon={Clock3} label={t("tickets.fields.created")}>
+                        {longDateTime(tk.createdAt)}
+                      </Detail>
+                      <Detail icon={RefreshCw} label={t("tickets.sections.lastActivity")}>
+                        {longDateTime(tk.updatedAt)}
+                      </Detail>
+                    </dl>
+                )}
+                {key === "device" && (
+                  <div className="space-y-3">
+                    <div className="flex items-center justify-between gap-2">
+                      <span className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">{t("tickets.asset.title")}</span>
+                      {editable && !partial ? <AssetPicker tk={tk} onPick={(assetId) => update.mutate({ assetId })} /> : null}
+                    </div>
+                    <AssetContent tk={tk} editable={editable} partial={partial} onPick={(assetId) => update.mutate({ assetId })} />
+                  </div>
+                )}
+              </PopoverContent>
+            </Popover>
+          ))}
+          </div>
+          <ClientHoursGauge info={tk.client ?? null} big={tilesOpen} />
+        </div>
+            </div>
+            <div className="mt-3 flex flex-wrap items-center gap-1.5 lg:mt-12 lg:justify-end lg:justify-self-end">
               {remote && <QuickAction icon={MonitorPlay} label={t("tickets.asset.remote")} href={remote} accent />}
-              {phone && (
-                <QuickAction
-                  icon={Phone}
-                  label={t("tickets.quickAction.call", { name: tk.contact.split(" ")[0] })}
-                  href={`tel:${phone.replace(/[^\d+]/g, "")}`}
-                  title={phone}
-                />
-              )}
-              {can("sms.view") && <QuickAction icon={MessageSquareText} label={t("sms.quick")} onClick={() => setThread("sms")} />}
-              {email && (
-                <QuickAction
-                  icon={Mail}
-                  label={t("tickets.quickAction.email")}
-                  href={`mailto:${email}?subject=${encodeURIComponent(`[${tk.number}] ${tk.title}`)}`}
-                  title={email}
-                />
-              )}
               {can("tickets.plan") && <QuickAction icon={Star} label={t("planning.givePriority")} onClick={() => setGiving(true)} />}
-              {editable && done && tk.statusKind !== "complete" && (
-                <QuickAction
-                  icon={CheckCircle2}
-                  label={t("tickets.quickAction.resolve")}
-                  onClick={() =>
-                    void confirm({ title: t("tickets.quickAction.resolveConfirm", { status: txt.status(done) }) }).then(
-                      (ok) => ok && update.mutate({ status: done.value }),
-                    )
-                  }
-                />
-              )}
+              <CallButton contact={tk.contact} phone={phone} />
             </div>
           </div>
+
+          {tk.startLocked && tk.startDate && tk.startDate > todayLocal() && (
+            <p className="flex items-start gap-2 rounded-xl border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-xs text-amber-200">
+              <Lock className="mt-0.5 size-3.5 shrink-0" />{" "}
+              {t("tickets.startLock.notice", { date: tk.startTime ? `${shortDate(tk.startDate)} ${tk.startTime}` : shortDate(tk.startDate) })}
+            </p>
+          )}
         </div>
       </div>
 
@@ -621,78 +781,12 @@ function TicketBody({
             </dl>
           </Section>
 
-          <Section
-            id="device"
-            icon={HardDrive}
-            title={t("tickets.asset.title")}
-            badge={tk.asset?.name}
-            action={editable && !partial ? <AssetPicker tk={tk} onPick={(assetId) => update.mutate({ assetId })} /> : null}
-          >
-            <AssetContent tk={tk} editable={editable} partial={partial} onPick={(assetId) => update.mutate({ assetId })} />
+          <Section id="contactTickets" icon={Inbox} title={t("tickets.contactOpen.title", { name: tk.contact || "—" })} badge={contactOpen.data ? t("tickets.contactOpen.count", { count: contactOpen.data.total }) : null}>
+            <ContactTicketsList data={contactOpen.data} isLoading={contactOpen.isLoading} />
           </Section>
 
-          {tk.startLocked && tk.startDate && tk.startDate > todayLocal() && (
-            <p className="flex items-start gap-2 rounded-xl border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-xs text-amber-200">
-              <Lock className="mt-0.5 size-3.5 shrink-0" />{" "}
-              {t("tickets.startLock.notice", { date: tk.startTime ? `${shortDate(tk.startDate)} ${tk.startTime}` : shortDate(tk.startDate) })}
-            </p>
-          )}
-          <Section id="planning" icon={CalendarClock} title={t("tickets.sections.planning")}>
-            <dl className="space-y-3">
-              <StartDate tk={tk} value={view} onChange={stage} />
-              <Detail icon={CalendarClock} label={t("tickets.fields.due")}>
-                {editable ? (
-                  <div className={cn("mt-0.5 rounded-lg")}>
-                    <DueEditor dueAt={view.dueAt} onSave={(dueAt) => stage({ dueAt })} />
-                  </div>
-                ) : (
-                  longDateTime(tk.dueAt)
-                )}
-              </Detail>
-              <Detail icon={Clock3} label={t("tickets.fields.hours")}>
-                {partial ? "…" : t("tickets.hoursValue", { hours: tk.hours.toLocaleString() })}
-              </Detail>
-            </dl>
-          </Section>
-
-          <Section id="team" icon={Users} title={t("tickets.sections.team")} badge={tk.assignee?.name}>
-            <dl className="space-y-3">
-              <Detail icon={UserRound} label={t("tickets.fields.assignee")}>
-                <InlinePick
-                  disabled={!editable}
-                  label={t("tickets.fields.assignee")}
-                  value={view.assigneeId ?? "none"}
-                  options={[{ value: "none", label: t("tickets.unassigned") }, ...tk.options.technicians.map((p) => ({ value: p.id, label: p.name }))]}
-                  onPick={(v) => stage({ assigneeId: v === "none" ? null : v })}
-                  trigger={
-                    <span className={cn("rounded px-1", !assigneeName && "italic text-muted-foreground")}>{assigneeName ?? t("tickets.unassigned")}</span>
-                  }
-                />
-              </Detail>
-              <Detail icon={Users} label={t("tickets.fields.secondary")}>
-                <SecondaryPick
-                  disabled={!editable}
-                  value={tk.secondary.map((p) => p.id)}
-                  names={tk.secondary.map((p) => p.name)}
-                  options={tk.options.technicians.filter((p) => p.id !== tk.assignee?.id)}
-                  onSave={(secondaryIds) => update.mutate({ secondaryIds })}
-                />
-              </Detail>
-            </dl>
-          </Section>
-
-          <Section id="details" icon={Inbox} title={t("tickets.sections.details")} defaultOpen={false}>
-            <dl className="space-y-3">
-              <Detail icon={SOURCE_ICON[tk.source] ?? Inbox} label={t("tickets.fields.source")}>
-                {tk.source ? t(`tickets.source.${tk.source}`, { defaultValue: tk.source }) : "—"}
-              </Detail>
-              <Detail icon={Clock3} label={t("tickets.fields.created")}>
-                {longDateTime(tk.createdAt)}
-              </Detail>
-              <Detail icon={RefreshCw} label={t("tickets.sections.lastActivity")}>
-                {longDateTime(tk.updatedAt)}
-              </Detail>
-            </dl>
+          <Section id="kb" icon={BookOpen} title={t("tickets.kb.title")} badge={t("tickets.kb.soon")}>
+            <p className="text-sm text-muted-foreground">{t("tickets.kb.empty")}</p>
           </Section>
         </aside>
       </div>
@@ -703,6 +797,147 @@ function TicketBody({
 }
 
 /** A tool in the quick-action bar: a button, or a link (new tab for web pages). */
+/** The contract the ticket's work is billed on: the client's default support contract unless another is picked. */
+function ContractField({ tk, editable }: { tk: TicketDetail; editable: boolean }) {
+  const { t, i18n } = useTranslation();
+  const qc = useQueryClient();
+  const contracts = tk.contracts ?? [];
+  const save = useMutation({
+    mutationFn: (contractId: string | null) => api.put(`/tickets/${tk.id}/contract`, { contractId }),
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: ["tickets", "detail", tk.id] });
+      toast.success(t("common.saved"));
+    },
+    onError: (e) => toast.error(ticketErrorText(t, e)),
+  });
+  if (!contracts.length) return <span className="text-muted-foreground">{t("tickets.contractBilling.none")}</span>;
+  return (
+    <div className="mt-0.5 space-y-1">
+      <select
+        value={tk.contract?.id ?? ""}
+        disabled={!editable || save.isPending}
+        onChange={(e) => save.mutate(e.target.value || null)}
+        className="h-8 w-full rounded-md border bg-transparent px-2 text-sm outline-none focus:ring-2 focus:ring-[color:var(--gold)]/40 disabled:opacity-60"
+        aria-label={t("tickets.contractBilling.label")}
+      >
+        {!tk.contract && <option value="">{t("tickets.contractBilling.none")}</option>}
+        {contracts.map((k) => (
+          <option key={k.id} value={k.id}>
+            {k.name}
+            {k.isDefault ? ` · ${t("tickets.contractBilling.default")}` : ""}
+          </option>
+        ))}
+      </select>
+      <p className="text-[11px] text-muted-foreground">{contractNote(t, i18n.language, tk.contract)}</p>
+    </div>
+  );
+}
+
+/**
+ * The time the ticket should take to resolve, h:mm: typed by the technician, or
+ * estimated by the AI when the action is quick (anything bigger stays empty).
+ */
+function EstimateField({ tk, editable }: { tk: TicketDetail; editable: boolean }) {
+  const { t } = useTranslation();
+  const qc = useQueryClient();
+  const aiError = useAiError();
+  const can = useCan();
+  const model = useAiModel("ticket.analyze");
+  const [text, setText] = useState(tk.estimate ? hm(tk.estimate.minutes / 60) : "");
+  useEffect(() => setText(tk.estimate ? hm(tk.estimate.minutes / 60) : ""), [tk.estimate?.minutes]);
+  const refresh = () => {
+    void qc.invalidateQueries({ queryKey: ["tickets", "detail", tk.id] });
+    void qc.invalidateQueries({ queryKey: ["ai", "options"] });
+  };
+  const save = useMutation({
+    mutationFn: (minutes: number | null) => api.put(`/tickets/${tk.id}/estimate`, { minutes }),
+    onSuccess: refresh,
+    onError: (e) => toast.error(ticketErrorText(t, e)),
+  });
+  const ask = useMutation({
+    mutationFn: () => api.post<{ minutes: number | null; reason: string }>(`/tickets/${tk.id}/ai/estimate`, model.body),
+    onSuccess: (r) => {
+      refresh();
+      if (r.minutes) toast.success(r.reason ? `${hm(r.minutes / 60)} — ${r.reason}` : hm(r.minutes / 60));
+      else toast.info(r.reason ? `${t("tickets.estimate.none")} ${r.reason}` : t("tickets.estimate.none"));
+    },
+    onError: (e) => toast.error(aiError(e)),
+  });
+  const commit = () => {
+    const v = text.trim();
+    if (!v) {
+      if (tk.estimate) save.mutate(null);
+      return;
+    }
+    const h = parseHm(v);
+    if (h === null || h <= 0) {
+      setText(tk.estimate ? hm(tk.estimate.minutes / 60) : "");
+      toast.error(t("tickets.estimate.invalid"));
+      return;
+    }
+    const minutes = Math.round(h * 60);
+    if (minutes !== tk.estimate?.minutes) save.mutate(minutes);
+  };
+  return (
+    <div className="mt-0.5 space-y-1">
+      <div className="flex items-center gap-2">
+        <Input
+          value={text}
+          disabled={!editable}
+          placeholder="h:mm"
+          inputMode="numeric"
+          onChange={(e) => setText(e.target.value)}
+          onBlur={commit}
+          onKeyDown={(e) => {
+            if (e.key === "Enter") (e.target as HTMLInputElement).blur();
+          }}
+          className="h-8 w-24 font-mono"
+          aria-label={t("tickets.estimate.label")}
+        />
+        {tk.estimate?.source === "ai" && <span className="rounded-full border border-[color:var(--gold)]/40 bg-[color:var(--gold)]/10 px-1.5 py-px text-[10px] font-medium text-primary">AI</span>}
+        {editable && can("tickets.ai") && tk.ai && (
+          <Button type="button" variant="outline" size="sm" className="h-8 gap-1.5 text-xs" disabled={ask.isPending} onClick={() => ask.mutate()}>
+            {ask.isPending ? <Loader2 className="size-3.5 animate-spin" /> : <Sparkles className="size-3.5" />} {t("tickets.estimate.ask")}
+          </Button>
+        )}
+      </div>
+      <p className="text-[11px] text-muted-foreground">{t("tickets.estimate.hint")}</p>
+    </div>
+  );
+}
+
+/** Calling is not wired yet: the button, the contact's number and the dial pad do nothing for now. */
+function CallButton({ contact, phone }: { contact: string; phone?: string | null }) {
+  const { t } = useTranslation();
+  const [num, setNum] = useState("");
+  return (
+    <Popover>
+      <PopoverTrigger asChild>
+        <Button type="button" variant="outline" size="sm" className="h-8 gap-1.5 text-xs">
+          <Phone className="size-3.5" /> {t("tickets.quickAction.callBtn")}
+        </Button>
+      </PopoverTrigger>
+      <PopoverContent align="end" className="w-72 space-y-3">
+        {phone && (
+          <Button type="button" variant="outline" className="h-auto w-full justify-start gap-2 py-2 text-left" onClick={() => {}}>
+            <Phone className="size-4 shrink-0 text-primary" />
+            <span className="min-w-0">
+              <span className="block truncate text-sm font-medium">{contact}</span>
+              <span className="block text-xs text-muted-foreground">{phone}</span>
+            </span>
+          </Button>
+        )}
+        <form className="flex items-center gap-2" onSubmit={(e) => e.preventDefault()}>
+          <Input value={num} onChange={(e) => setNum(e.target.value)} inputMode="tel" placeholder={t("tickets.quickAction.callNumber")} aria-label={t("tickets.quickAction.callNumber")} />
+          <Button type="submit" size="icon" disabled={!num.trim()} aria-label={t("tickets.quickAction.callBtn")}>
+            <Phone className="size-4" />
+          </Button>
+        </form>
+      </PopoverContent>
+    </Popover>
+  );
+}
+
 function QuickAction({
   icon: Icon,
   label,
@@ -775,6 +1010,8 @@ function Section({
   title,
   badge,
   action,
+  titleExtra,
+  flat,
   defaultOpen = true,
   children,
 }: {
@@ -784,16 +1021,21 @@ function Section({
   /** Shown next to the title when the section is closed */
   badge?: string | null;
   action?: React.ReactNode;
+  /** Shown beside the title, always */
+  titleExtra?: React.ReactNode;
+  /** No panel: a hairline-separated row, lighter on the eye */
+  flat?: boolean;
   defaultOpen?: boolean;
   children: React.ReactNode;
 }) {
   const [open, toggle] = useSectionOpen(id, defaultOpen);
   return (
-    <section className="glass rounded-2xl border text-sm">
-      <div className="flex items-center gap-2 px-4 py-2.5">
+    <section className={cn("text-sm", flat ? "border-b border-border/40 last:border-b-0" : "glass rounded-2xl border")}>
+      <div className={cn("flex items-center gap-2", flat ? "px-1 py-2" : "px-4 py-2.5")}>
         <button type="button" onClick={toggle} aria-expanded={open} className="flex min-w-0 flex-1 items-center gap-2 text-left">
           <Icon className="size-3.5 shrink-0 text-primary" />
           <span className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">{title}</span>
+          {titleExtra}
           {!open && badge && <span className="truncate text-xs text-foreground/80">· {badge}</span>}
           <ChevronDown className={cn("ml-auto size-3.5 shrink-0 text-muted-foreground transition-transform", !open && "-rotate-90")} />
         </button>
@@ -808,7 +1050,7 @@ function Section({
             transition={{ duration: 0.18 }}
             className="overflow-hidden"
           >
-            <div className="px-4 pb-4">{children}</div>
+            <div className={flat ? "px-1 pb-4" : "px-4 pb-4"}>{children}</div>
           </motion.div>
         )}
       </AnimatePresence>
@@ -816,63 +1058,60 @@ function Section({
   );
 }
 
-type ActivityFilter = "all" | "reply" | "internal";
+type ActivityFilter = "all" | "reply" | "internal" | "time";
 
 /**
- * What was said: the client's messages, the technicians' replies and their
- * internal notes (marked internal). Nothing Autotask writes by itself (workflow
- * rules, the API user…) and no time entries.
+ * What was said and done, as a conversation, newest on top: the client's
+ * messages on the left, the technicians' replies on the right, internal notes
+ * and time entries in the middle (each in its own color). Nothing Autotask
+ * writes by itself (workflow rules, the API user…).
  */
 function Activity({ tk, partial }: { tk: TicketDetail; partial: boolean }) {
   const { t } = useTranslation();
   const [filter, setFilter] = useState<ActivityFilter>("all");
-  const [newestFirst, setNewestFirst] = useState(() => {
-    try {
-      // newest first unless the technician chose otherwise
-      return localStorage.getItem("akab.ticket.newestFirst") !== "0";
-    } catch {
-      return true;
-    }
-  });
-  const flip = () =>
-    setNewestFirst((v) => {
-      try {
-        localStorage.setItem("akab.ticket.newestFirst", v ? "0" : "1");
-      } catch {
-        /* ignore */
-      }
-      return !v;
-    });
-  // by date (oldest → newest; flipped below for newest first); never what Autotask writes by itself, never time entries
-  const notes = tk.notes.filter((n) => !n.system && n.kind !== "time").sort((x, y) => x.at.localeCompare(y.at));
-  const kindOf = (n: TicketDetail["notes"][number]): Exclude<ActivityFilter, "all"> => (n.internal ? "internal" : "reply");
-  const counts = { all: notes.length, reply: 0, internal: 0 };
+  type Item = TicketDetail["notes"][number];
+  const kindOf = (n: Item): Exclude<ActivityFilter, "all"> => (n.kind === "time" ? "time" : n.internal ? "internal" : "reply");
+  // the client's own words: told by the source, else by the name of the ticket's contact
+  const fromClient = (n: Item) => (n.by ? n.by === "client" : n.author === tk.contact);
+  const notes = tk.notes.filter((n) => !n.system).sort((x, y) => y.at.localeCompare(x.at));
+  const counts = { all: notes.length, reply: 0, internal: 0, time: 0 };
   for (const n of notes) counts[kindOf(n)]++;
   const shown = notes.filter((n) => filter === "all" || kindOf(n) === filter);
-  if (newestFirst) shown.reverse();
+  const initials = (name: string) =>
+    name
+      .split(/\s+/)
+      .map((w) => w[0])
+      .filter(Boolean)
+      .slice(0, 2)
+      .join("")
+      .toUpperCase();
 
   return (
     <section className="glass rounded-2xl border p-4">
-      <div className="mb-3 flex flex-wrap items-center gap-1.5">
+      <div className="mb-4 flex flex-wrap items-center gap-1.5">
         <p className="mr-2 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">{t("tickets.activity")}</p>
-        {(["all", "reply", "internal"] as const).map((f) => (
+        {(["all", "reply", "internal", "time"] as const).map((f) => (
           <button
             key={f}
             type="button"
             onClick={() => setFilter(f)}
             className={cn(
               "rounded-full border px-2.5 py-0.5 text-[11px] font-medium transition-colors",
-              filter === f
-                ? "border-[color:var(--gold)]/50 bg-[color:var(--gold)]/15 text-primary"
-                : "border-transparent text-muted-foreground hover:text-foreground",
+              filter === f ? "border-[color:var(--gold)]/50 bg-[color:var(--gold)]/15 text-primary" : "border-transparent text-muted-foreground hover:text-foreground",
             )}
           >
             {t(`tickets.activityFilter.${f}`)} {counts[f] > 0 && <span className="opacity-60">{counts[f]}</span>}
           </button>
         ))}
-        <button type="button" onClick={flip} className="ml-auto flex items-center gap-1 text-[11px] text-muted-foreground hover:text-foreground">
-          <ArrowDownUp className="size-3" /> {newestFirst ? t("tickets.activityOrder.newest") : t("tickets.activityOrder.oldest")}
-        </button>
+        {/* the legend: who is where */}
+        <span className="ml-auto hidden items-center gap-3 text-[10px] text-muted-foreground sm:flex">
+          <span className="flex items-center gap-1">
+            <span className="size-2 rounded-full bg-muted-foreground/50" /> {t("tickets.activityLegend.client")}
+          </span>
+          <span className="flex items-center gap-1">
+            <span className="size-2 rounded-full bg-grad-gold" /> {t("tickets.activityLegend.tech")}
+          </span>
+        </span>
       </div>
       {partial ? (
         <p className="flex items-center gap-2 text-sm text-muted-foreground">
@@ -881,36 +1120,77 @@ function Activity({ tk, partial }: { tk: TicketDetail; partial: boolean }) {
       ) : shown.length === 0 ? (
         <p className="text-sm text-muted-foreground">{t("tickets.noActivity")}</p>
       ) : (
-        <ol className="relative space-y-4 border-l pl-5">
-          {shown.map((n) => (
-            <li key={n.id} className="relative">
-              <span
-                className={cn(
-                  "absolute -left-[27px] top-1 flex size-3.5 items-center justify-center rounded-full border-2 border-background",
-                  n.internal ? "bg-violet-400" : "bg-grad-gold",
-                )}
-              />
-              <div className="flex flex-wrap items-baseline gap-x-2 text-sm">
-                <span className="font-medium">{n.author}</span>
-                <span className="text-xs text-muted-foreground">{longDateTime(n.at)}</span>
-                {n.internal && (
-                  <span className="flex items-center gap-1 rounded-full bg-violet-500/15 px-1.5 text-[10px] font-medium text-violet-300">
-                    <Lock className="size-2.5" /> {t("tickets.internalOnly")}
-                  </span>
-                )}
-              </div>
-              {n.text && (
-                <p
+        <ol className="space-y-3">
+          {shown.map((n) => {
+            const kind = kindOf(n);
+            const client = kind === "reply" && fromClient(n);
+            const head = (
+              <p className="flex flex-wrap items-baseline gap-x-2 text-xs">
+                <span className="font-semibold">{n.author}</span>
+                <span className="text-muted-foreground">{longDateTime(n.at)}</span>
+              </p>
+            );
+            // internal notes and time entries: centered, not part of the conversation with the client
+            if (kind === "internal" || kind === "time") {
+              const time = kind === "time";
+              return (
+                <li key={n.id} className="flex justify-center">
+                  <div
+                    className={cn(
+                      "w-full max-w-[88%] rounded-2xl border px-4 py-2.5",
+                      time ? "border-sky-400/40 bg-sky-500/10" : "border-violet-400/40 bg-violet-500/10",
+                    )}
+                  >
+                    <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
+                      <span className={cn("flex items-center gap-1 rounded-full px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide", time ? "bg-sky-500/20 text-sky-300" : "bg-violet-500/20 text-violet-300")}>
+                        {time ? <Clock3 className="size-3" /> : <Lock className="size-3" />}
+                        {time ? t("tickets.timeEntry", { hours: hm(n.hours ?? 0) }) : t("tickets.internalOnly")}
+                      </span>
+                      {time && n.billable === false && <span className="rounded-full bg-slate-500/20 px-1.5 text-[10px] font-medium text-slate-300">{t("tickets.timer.nonBillable")}</span>}
+                      {time && n.billable !== false && (n.offsetHours ?? 0) > 0 && (
+                        <span className="rounded-full bg-amber-500/15 px-1.5 text-[10px] font-medium text-amber-300">
+                          {t("tickets.timer.billedAfterOffset", { billed: hm(Math.max(0, (n.hours ?? 0) - (n.offsetHours ?? 0))), offset: hm(n.offsetHours ?? 0) })}
+                        </span>
+                      )}
+                      {head}
+                    </div>
+                    {n.text && <p className="mt-1.5 whitespace-pre-wrap text-sm">{n.text}</p>}
+                    {n.internalText && (
+                      <p className="mt-1.5 whitespace-pre-wrap rounded-lg bg-violet-500/10 px-3 py-2 text-sm">
+                        <span className="mb-0.5 flex items-center gap-1 text-[10px] font-medium uppercase tracking-wide text-violet-300">
+                          <Lock className="size-2.5" /> {t("tickets.internalOnly")}
+                        </span>
+                        {n.internalText}
+                      </p>
+                    )}
+                  </div>
+                </li>
+              );
+            }
+            // the conversation: the client on the left, the technician on the right
+            return (
+              <li key={n.id} className={cn("flex items-end gap-2", client ? "justify-start" : "flex-row-reverse justify-start")}>
+                <span
                   className={cn(
-                    "mt-1 whitespace-pre-wrap rounded-lg px-3 py-2 text-sm",
-                    n.internal ? "border-l-2 border-violet-400/60 bg-violet-500/5" : "bg-muted/50",
+                    "mb-1 flex size-7 shrink-0 items-center justify-center rounded-full text-[10px] font-bold",
+                    client ? "bg-muted text-muted-foreground" : "bg-grad-gold text-[#1a1204]",
+                  )}
+                  aria-hidden
+                >
+                  {initials(n.author)}
+                </span>
+                <div
+                  className={cn(
+                    "max-w-[78%] rounded-2xl border px-3.5 py-2",
+                    client ? "rounded-bl-sm bg-muted/60" : "rounded-br-sm border-[color:var(--gold)]/30 bg-[color:var(--gold)]/12",
                   )}
                 >
-                  {n.text}
-                </p>
-              )}
-            </li>
-          ))}
+                  <div className={cn(!client && "text-right")}>{head}</div>
+                  <p className="mt-1 whitespace-pre-wrap text-sm leading-relaxed">{n.text}</p>
+                </div>
+              </li>
+            );
+          })}
         </ol>
       )}
     </section>
@@ -964,7 +1244,7 @@ export function InlinePick({
 function EditableTitle({ value, disabled, onSave }: { value: string; disabled: boolean; onSave: (v: string) => void }) {
   const { t } = useTranslation();
   const [draft, setDraft] = useState<string | null>(null);
-  const cls = "mt-3 font-display text-2xl font-bold leading-snug sm:text-3xl";
+  const cls = "font-display text-2xl font-bold leading-snug sm:text-3xl";
   if (draft === null || disabled) {
     return (
       <DialogPrimitive.Title className={cls}>

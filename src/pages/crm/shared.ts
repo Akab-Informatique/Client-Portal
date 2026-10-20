@@ -18,6 +18,7 @@ export type CrmClient = {
   active: boolean;
   autotaskId: number | null;
   parentId: string | null;
+  classKey: string | null;
   syncedAt: string | null;
 };
 export type CrmListItem = CrmClient & { parentName: string | null; children: number; contacts: number; openTickets: number };
@@ -83,7 +84,25 @@ export type CrmInvoices = { summary: { dueCents: number; overdueCents: number; o
 /** 1 234,56 $ */
 export const money = (cents: number, lang: string) => new Intl.NumberFormat(lang === "en" ? "en-CA" : "fr-CA", { style: "currency", currency: "CAD" }).format(cents / 100);
 
-export type CrmContract = { id: string; name: string; type: string | null; active: boolean; isDefault: boolean; autoApprove: boolean; startDate: string | null; endDate: string | null };
+export type CrmContract = {
+  id: string;
+  name: string;
+  type: string | null;
+  active: boolean;
+  isDefault: boolean;
+  autoApprove: boolean;
+  startDate: string | null;
+  endDate: string | null;
+  /** hourly | monthly | per_ticket | none */
+  billingMode: "hourly" | "monthly" | "per_ticket" | "none";
+  hourlyRateCents: number | null;
+  monthlyRateCents: number | null;
+  ticketRateCents: number | null;
+  /** The client's default support contract */
+  isSupportDefault: boolean;
+  /** The usual hourly rate of Admin › Facturation, in cents */
+  usualRateCents: number;
+};
 export type CrmTicket = {
   id: number;
   number: string;

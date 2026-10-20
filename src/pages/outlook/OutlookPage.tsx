@@ -1144,7 +1144,7 @@ function MessageView({
   const navigate = useNavigate();
   const canTicket = can("tickets.edit");
   const [toTicket, setToTicket] = useState(false);
-  const [newTicket, setNewTicket] = useState<{ title: string; description: string; companyId?: number | null; contactId?: string | null } | null>(null);
+  const [newTicket, setNewTicket] = useState<{ title: string; description: string; companyId?: number | null; contactId?: string | null; source?: string } | null>(null);
   const msg = useQuery({
     queryKey: messageKey(account.id, messageId),
     queryFn: () => api.get<MailMessage>(`${base(account.id)}/messages/${encodeURIComponent(messageId)}`),
@@ -1222,13 +1222,18 @@ function MessageView({
         receivedAt: string;
         text: string;
         contact: { contactId: string; companyId: number; contactName: string; companyName: string } | null;
+        /** The sender's company, when only their domain matches one */
+        company: { id: number; name: string } | null;
       }>(`${path}/text`),
     onSuccess: (x) =>
       setNewTicket({
-        companyId: x.contact?.companyId ?? null,
+        // the sender's contact, else the client their domain belongs to; the technician decides when nothing matches
+        companyId: x.contact?.companyId ?? x.company?.id ?? null,
         contactId: x.contact?.contactId ?? null,
         title: x.subject || t("outlook.noSubject"),
-        description: `${t("outlook.fromEmail", { from: x.from ? `${x.from.name ?? ""} <${x.from.address}>`.trim() : "—", date: x.receivedAt ? dateTime(x.receivedAt) : "—" })}\n\n${x.text}`,
+        // the email as it was written
+        description: x.text,
+        source: "email",
       }),
     onError: (e) => toast.error(outlookErrorText(t, e)),
   });

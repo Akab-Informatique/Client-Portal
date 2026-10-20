@@ -1,6 +1,6 @@
 import { Hono } from "hono";
 import { HTTPException } from "hono/http-exception";
-import { and, asc, desc, eq, gte, ilike, inArray, isNotNull, isNull, lte, or, sql } from "drizzle-orm";
+import { and, asc, desc, eq, gte, ilike, inArray, isNotNull, isNull, lte, ne, or, sql } from "drizzle-orm";
 import { z } from "zod";
 import { db, schema } from "../db/index.ts";
 import { auth, requirePermission, requireStaff, revokeUserSessions, type AppEnv } from "../lib/auth.ts";
@@ -13,6 +13,8 @@ import { crmState, descendantsOf, ensureCrm, rememberCompany, rememberContact, s
 import { lookup, run } from "./tickets.ts";
 import { pushInvoice } from "../lib/quickbooks.ts";
 import { applyAutoApprove } from "../lib/billables.ts";
+import { BILLING_MODES } from "../lib/contracts.ts";
+import { billingSettings } from "../lib/billing.ts";
 import { quickbooksHttp } from "./billing.ts";
 
 /**
@@ -55,6 +57,7 @@ const view = (c: Client) => ({
   active: c.active,
   autotaskId: c.autotaskId,
   parentId: c.parentId,
+  classKey: c.classKey,
   syncedAt: c.syncedAt,
 });
 
@@ -138,9 +141,11 @@ export const crmRoutes = new Hono<AppEnv>()
         notes: zText(4000),
         code: zText(40),
         parentId: zUuid.nullable().optional(),
+        classKey: z.string().max(40).nullable().optional(),
       }),
     );
     const d = db();
+    if (p.classKey && !(await d.select().from(schema.clientClasses).where(eq(schema.clientClasses.key, p.classKey)))[0]) throw new HTTPException(400, { message: "invalid_value" });
     let parentAt: number | null | undefined;
     if (p.parentId !== undefined) {
       if (p.parentId) {
@@ -354,7 +359,15 @@ export const crmRoutes = new Hono<AppEnv>()
   .get("/clients/:id/contracts", async (c) => {
     const client = await clientOr404(c.req.param("id"));
     const rows = await db().select().from(schema.clientContracts).where(eq(schema.clientContracts.clientId, client.id)).orderBy(asc(schema.clientContracts.name));
-    return c.json(rows.sort((x, y) => Number(y.active) - Number(x.active) || Number(y.isDefault) - Number(x.isDefault)));
+    // the client's default support contract: the one picked here, else the source's, else its only active one
+    const active = rows.filter((k) => k.active);
+    const chosen = active.find((k) => k.supportDefault) ?? active.find((k) => k.isDefault) ?? (active.length === 1 ? active[0] : null);
+    const usual = Math.round((await billingSettings()).rates.hourly * 100);
+    return c.json(
+      rows
+        .map((k) => ({ ...k, isSupportDefault: chosen?.id === k.id, usualRateCents: usual }))
+        .sort((x, y) => Number(y.active) - Number(x.active) || Number(y.isSupportDefault) - Number(x.isSupportDefault) || x.name.localeCompare(y.name)),
+    );
   })
 
   // ── invoices of the client (and of its child companies, on demand): accounting.view
@@ -504,20 +517,50 @@ export const crmRoutes = new Hono<AppEnv>()
     return c.json({ ok: true });
   })
 
-  /** A contract's work approved automatically when imported (crm.billing). */
+  /**
+   * A contract's billing (crm.billing): how its support is billed (hourly, monthly, per ticket, never),
+   * its rates, whether it is the client's default support contract, and whether its work is approved
+   * automatically when imported.
+   */
   .patch("/clients/:id/contracts/:kid", requirePermission("crm.billing"), async (c) => {
     const a = auth(c);
     const client = await clientOr404(c.req.param("id"));
-    const p = await body(c, z.object({ autoApprove: z.boolean() }));
+    const zRate = z.number().min(0).max(100_000).nullable().optional();
+    const p = await body(
+      c,
+      z.object({
+        autoApprove: z.boolean().optional(),
+        billingMode: z.enum(BILLING_MODES).optional(),
+        /** Dollars; null: the usual hourly rate of Admin › Facturation applies */
+        hourlyRate: zRate,
+        monthlyRate: zRate,
+        ticketRate: zRate,
+        supportDefault: z.literal(true).optional(),
+      }),
+    );
     if (p.autoApprove && !a.permissions.includes("accounting.manage")) throw new HTTPException(403, { message: "accounting_manage_only" });
-    const [row] = await db()
-      .update(schema.clientContracts)
-      .set({ autoApprove: p.autoApprove, updatedAt: new Date() })
-      .where(and(eq(schema.clientContracts.id, zUuid.parse(c.req.param("kid"))), eq(schema.clientContracts.clientId, client.id)))
-      .returning();
+    const kid = zUuid.parse(c.req.param("kid"));
+    const cents = (v: number | null | undefined) => (v === undefined ? undefined : v === null ? null : Math.round(v * 100));
+    const set = {
+      ...(p.autoApprove !== undefined ? { autoApprove: p.autoApprove } : {}),
+      ...(p.billingMode ? { billingMode: p.billingMode } : {}),
+      ...(p.hourlyRate !== undefined ? { hourlyRateCents: cents(p.hourlyRate) } : {}),
+      ...(p.monthlyRate !== undefined ? { monthlyRateCents: cents(p.monthlyRate) } : {}),
+      ...(p.ticketRate !== undefined ? { ticketRateCents: cents(p.ticketRate) } : {}),
+      ...(p.supportDefault ? { supportDefault: true } : {}),
+    };
+    const row = await db().transaction(async (tx) => {
+      if (p.supportDefault) await tx.update(schema.clientContracts).set({ supportDefault: false }).where(and(eq(schema.clientContracts.clientId, client.id), ne(schema.clientContracts.id, kid)));
+      const [r] = await tx
+        .update(schema.clientContracts)
+        .set({ ...set, updatedAt: new Date() })
+        .where(and(eq(schema.clientContracts.id, kid), eq(schema.clientContracts.clientId, client.id)))
+        .returning();
+      return r;
+    });
     if (!row) throw new HTTPException(404, { message: "not_found" });
     const approved = p.autoApprove ? await applyAutoApprove(client.id) : 0;
-    await audit(a.user.id, "crm.contract_auto_approve", row.id, { autoApprove: p.autoApprove, approved });
+    await audit(a.user.id, "crm.contract_updated", row.id, { ...set, approved });
     return c.json({ ...row, approved });
   })
 

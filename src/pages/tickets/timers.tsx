@@ -19,6 +19,7 @@ import { api } from "@/lib/api";
 import { useCan } from "@/lib/session";
 import { cn } from "@/lib/utils";
 import { longDateTime, ticketErrorText, hm, parseHm } from "./shared";
+import { contractNote } from "./contract";
 
 /**
  * Work timers on tickets. Opening a ticket starts (or resumes) its timer;
@@ -353,7 +354,7 @@ export const CLOSE_TICKET_EVENT = "akab:close-ticket";
 
 /** Validate a stopped timer: hours, summary, internal note, work type → time entry. */
 function TimeEntryDialog({ timer, position, onLater }: { timer: Timer; position: { n: number; total: number }; onLater: () => void }) {
-  const { t } = useTranslation();
+  const { t, i18n } = useTranslation();
   const qc = useQueryClient();
   const confirm = useConfirm();
   const minutes = Math.max(1, Math.round(timer.elapsedMs / 60_000));
@@ -373,7 +374,13 @@ function TimeEntryDialog({ timer, position, onLater }: { timer: Timer; position:
   const contactEmail = ticket?.contactInfo?.email ?? null;
   const [workType, setWorkType] = useState("");
   // billed to the client, and the hours worked but not billed
-  const [billable, setBillable] = useState(true);
+  const [billableOn, setBillableOn] = useState(true);
+  // the contract the time is logged on: the ticket's, unless another is picked
+  const [contractPick, setContractPick] = useState("");
+  const contracts = ticket?.contracts ?? [];
+  const contract = contracts.find((k) => k.id === (contractPick || ticket?.contract?.id)) ?? null;
+  // only an hourly contract bills the hours; monthly, per ticket and included ones never do
+  const billable = billableOn && (contract ? contract.billed : true);
   const [offset, setOffset] = useState("");
   const { data: workTypes = [] } = useQuery({
     queryKey: ["tickets", "work-types"],
@@ -397,6 +404,7 @@ function TimeEntryDialog({ timer, position, onLater }: { timer: Timer; position:
         workTypeId: workType || null,
         billable,
         offsetHours: billable ? off : 0,
+        contractId: contract?.id ?? null,
         notify: { contact: notifyContact, others },
       }),
     onSuccess: (r: { notified?: number; notifyFailed?: number; noContactEmail?: boolean }) => {
@@ -490,11 +498,30 @@ function TimeEntryDialog({ timer, position, onLater }: { timer: Timer; position:
               </div>
             )}
           </div>
+          {contracts.length > 0 && (
+            <div className="space-y-1.5">
+              <Label htmlFor="te-contract">{t("tickets.contractBilling.label")}</Label>
+              <Select value={contract?.id ?? ""} onValueChange={setContractPick}>
+                <SelectTrigger id="te-contract" className="w-full">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent position="popper">
+                  {contracts.map((k) => (
+                    <SelectItem key={k.id} value={k.id}>
+                      {k.name}
+                      {k.isDefault ? ` · ${t("tickets.contractBilling.default")}` : ""}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+              <p className="text-[11px] text-muted-foreground">{contractNote(t, i18n.language, contract)}</p>
+            </div>
+          )}
           {/* billing: billed or not, and an offset (hours worked but not billed) */}
           <div className="space-y-2 rounded-xl border p-3">
             <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
               <label className="flex cursor-pointer items-center gap-2 text-sm font-medium">
-                <Checkbox checked={billable} onCheckedChange={(v) => setBillable(v === true)} />
+                <Checkbox checked={billable} disabled={contract ? !contract.billed : false} onCheckedChange={(v) => setBillableOn(v === true)} />
                 <Receipt className="size-4 text-primary" /> {t("tickets.timer.billable")}
               </label>
               {billable && (

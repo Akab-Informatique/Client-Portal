@@ -91,12 +91,12 @@ export async function sheetOf(userId: string, weekStart: string) {
 export const editable = (status: string) => status === "draft" || status === "rejected";
 
 /** Time logged on a ticket: on the technician's timesheet, with the ticket. */
-export async function addTicketTime(userId: string, p: { ticketId: number; ticketNumber: string | null; ticketTitle: string | null; hours: number; date: string; note?: string | null }) {
+export async function addTicketTime(userId: string, p: { ticketId: number; ticketNumber: string | null; ticketTitle: string | null; hours: number; date: string; note?: string | null; contractId?: string | null }) {
   const type = await labourType();
   await sheetOf(userId, weekStartOf(p.date));
   await db()
     .insert(schema.timesheetEntries)
-    .values({ userId, date: p.date, typeId: type.id, hoursX100: Math.round(p.hours * 100), note: p.note?.slice(0, 500) ?? null, ticketId: p.ticketId, ticketNumber: p.ticketNumber, ticketTitle: p.ticketTitle?.slice(0, 250) ?? null, source: "ticket" });
+    .values({ userId, date: p.date, typeId: type.id, hoursX100: Math.round(p.hours * 100), note: p.note?.slice(0, 500) ?? null, ticketId: p.ticketId, ticketNumber: p.ticketNumber, ticketTitle: p.ticketTitle?.slice(0, 250) ?? null, contractId: p.contractId ?? null, source: "ticket" });
 }
 
 /** A week's entries (with their type). */

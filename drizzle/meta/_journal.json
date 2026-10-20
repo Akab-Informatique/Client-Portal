@@ -1,6 +1,6 @@
 {
   "version": "7",
-  "dialect": "postgresql",
+  "dialect": "postgr0064_contract_billing",
   "entries": [
     {
       "idx": 0,
@@ -413,6 +413,55 @@
       "version": "7",
       "when": 1792457235319,
       "tag": "0058_sms_group_key",
+      "breakpoints": true
+    },
+    {
+      "idx": 59,
+      "version": "7",
+      "when": 1792461112653,
+      "tag": "0059_workflow_runs",
+      "breakpoints": true
+    },
+    {
+      "idx": 60,
+      "version": "7",
+      "when": 1792461905496,
+      "tag": "0060_ticket_queues",
+      "breakpoints": true
+    },
+    {
+      "idx": 61,
+      "version": "7",
+      "when": 1792463276662,
+      "tag": "0061_local_assets",
+      "breakpoints": true
+    },
+    {
+      "idx": 62,
+      "version": "7",
+      "when": 1792464810252,
+      "tag": "0062_client_classes",
+      "breakpoints": true
+    },
+    {
+      "idx": 63,
+      "version": "7",
+      "when": 1792466263714,
+      "tag": "0063_ticket_estimate",
+      "breakpoints": true
+    },
+    {
+      "idx": 64,
+      "version": "7",
+      "when": 1792466808605,
+      "tag": "0064_contract_billing",
+      "breakpoints": true
+    },
+    {
+      "idx": 65,
+      "version": "7",
+      "when": 1792468146035,
+      "tag": "0065_sources_statuses",
       "breakpoints": true
     }
   ]

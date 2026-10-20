@@ -11,7 +11,7 @@ import { currentLocale } from "@/i18n";
  */
 export type StatusKind = "new" | "inProgress" | "needsAttention" | "waitingCustomer" | "waitingVendor" | "scheduled" | "complete" | "other";
 export type PriorityKind = "critical" | "high" | "medium" | "low";
-export type Choice<K extends string = string> = { value: string; label: string | null; kind: K };
+export type Choice<K extends string = string> = { value: string; label: string | null; kind: K; hidden?: boolean };
 /** @deprecated kept for the AI suggestion (a kind) */
 export type Priority = PriorityKind;
 export type Status = StatusKind;
@@ -51,7 +51,7 @@ export type TicketDetail = TicketSummary & {
   source: string;
   hours: number;
   /** Notes and time entries (work done), oldest first */
-  notes: { id: string; author: string; at: string; text: string; internal: boolean; kind?: "note" | "time"; hours?: number; internalText?: string; billable?: boolean; offsetHours?: number; system?: boolean }[];
+  notes: { id: string; author: string; at: string; text: string; internal: boolean; kind?: "note" | "time"; hours?: number; internalText?: string; billable?: boolean; offsetHours?: number; system?: boolean; by?: "client" | "tech" }[];
   /** AI assistant available to me */
   ai: boolean;
   /** Parts Autotask could not give (notes, time) */
@@ -61,13 +61,39 @@ export type TicketDetail = TicketSummary & {
   asset?: AssetView | null;
   /** The contact phone and email (absent while the full ticket loads) */
   contactInfo?: { email: string | null; phone: string | null } | null;
+  /** The client's classification and the hours worked for it this month; goal = the contract's monthly hours (none yet) */
+  /** The contract the work is billed on (the ticket's own, else the client's default), and the client's others */
+  contract?: TicketContract | null;
+  contracts?: TicketContract[];
+  /** Estimated time to resolve (none: not estimated) */
+  estimate?: { minutes: number; source: "tech" | "ai" } | null;
+  client?: { class: { key: string; name: string; color: string } | null; month: string; hours: number; goal: number | null } | null;
   demo: boolean;
   options: {
     statuses: Choice<StatusKind>[];
     priorities: Choice<PriorityKind>[];
     queues: Choice[];
+    sources?: Choice[];
     technicians: { id: string; name: string }[];
   };
+};
+/** A client's contract as the ticket and the time entry see it: how its support is billed. */
+export type TicketContract = {
+  id: string;
+  sourceId: string | null;
+  name: string;
+  type: string | null;
+  mode: "hourly" | "monthly" | "per_ticket" | "none";
+  /** The rate typed on the contract (null: the usual rate applies) */
+  hourlyRateCents: number | null;
+  /** What an hour is billed at (null: the hours are not billed under this contract) */
+  rateCents: number | null;
+  monthlyRateCents: number | null;
+  ticketRateCents: number | null;
+  /** The client's default support contract */
+  isDefault: boolean;
+  /** Hours worked under it are billed */
+  billed: boolean;
 };
 /** A client device (Autotask configuration item) with its RMM links. */
 export type AssetView = {
@@ -85,6 +111,8 @@ export type AssetView = {
   lastSeen: string | null;
   warrantyEnd: string | null;
   rmm: { id: string | null; uid: string | null };
+  /** "rmm": synced from the RMM / Autotask; "local": made in the portal */
+  origin: "rmm" | "local";
   /** RMM name and links; null when the RMM is not set up or an id is missing */
   links: { rmm: string | null; device: string | null; remote: string | null };
 };
@@ -117,6 +145,8 @@ export type TicketList = {
   counts: Record<View, number>;
   facets: {
     queues: Choice[];
+    /** Where tickets come from (Admin › Billets) */
+    sources?: Choice[];
     companies: { id: number; name: string }[];
     statuses: Choice<StatusKind>[];
     priorities: Choice<PriorityKind>[];

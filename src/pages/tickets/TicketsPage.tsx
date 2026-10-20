@@ -816,7 +816,7 @@ function TicketRow({
                 disabled={!editable}
                 label={t("tickets.fields.status")}
                 value={tk.status}
-                options={facets.statuses.map((s) => ({ value: s.value, label: txt.status(s) }))}
+                options={facets.statuses.filter((s) => !s.hidden || s.value === tk.status).map((s) => ({ value: s.value, label: txt.status(s) }))}
                 onPick={(v) => onPatch({ status: v })}
                 trigger={
                   <span className={cn("inline-flex max-w-full items-center gap-1.5 rounded-full border px-2 py-0.5 text-left text-[11px] font-medium leading-tight", STATUS_STYLE[tk.statusKind])}>

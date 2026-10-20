@@ -1,6 +1,9 @@
 import { Hono, type Context } from "hono";
 import { HTTPException } from "hono/http-exception";
-import { and, asc, desc, eq, inArray, isNull } from "drizzle-orm";
+import { localAssets } from "../lib/queues.ts";
+import { clientInfo } from "../lib/clientHours.ts";
+import { contractOfTicket, contractsOfCompany, setTicketContract, type ContractView } from "../lib/contracts.ts";
+import { and, asc, desc, eq, inArray, isNull, or, sql } from "drizzle-orm";
 import { z } from "zod";
 import { db, schema } from "../db/index.ts";
 import { auth, requirePermission, type AppEnv, type AuthContext } from "../lib/auth.ts";
@@ -9,6 +12,7 @@ import { audit } from "../lib/audit.ts";
 import { rateLimit } from "../lib/http.ts";
 import { sanitizeMailHtml } from "../lib/mailHtml.ts";
 import { sendMail } from "../lib/mail.ts";
+import { notify } from "../lib/notify.ts";
 import { AI_FEATURE_KEYS, AI_MODELS, AiError, aiSettings, askClaude, askClaudeJson, modelFor, todayOf, type AiModel } from "../lib/ai.ts";
 import { AutotaskError, PERMISSION_REFUSED } from "../lib/autotask.ts";
 import { sweepTimers, timerView, elapsedMs } from "../lib/timers.ts";
@@ -108,7 +112,18 @@ export function lookup(o: Options) {
     priorityKind: (v: string) => pr.get(v)?.kind ?? "medium",
     priorityLabel: (v: string) => pr.get(v)?.label ?? null,
     queueLabel: (v: string) => qu.get(v)?.label ?? v,
+    queueKind: (v: string) => qu.get(v)?.kind ?? "",
   };
+}
+
+const zEstimate = z.object({ quick: z.boolean(), minutes: z.number().int().min(5).max(240).nullable(), reason: z.string().max(400).default("") });
+
+async function saveEstimate(id: number, minutes: number | null, source: "tech" | "ai", userId: string) {
+  const set = { estimateMinutes: minutes, estimateSource: minutes ? source : null };
+  await db()
+    .insert(schema.ticketMeta)
+    .values({ ticketId: id, ...set, updatedBy: userId })
+    .onConflictDoUpdate({ target: schema.ticketMeta.ticketId, set: { ...set, updatedBy: userId, updatedAt: new Date() } });
 }
 
 /** The ticket as text for the AI (no portal account data). */
@@ -176,12 +191,10 @@ const endOfToday = () => {
   d.setHours(23, 59, 59, 999);
   return d.getTime();
 };
-/** Monitoring alert queues ("Alertes", "Alerts"…) */
-export const ALERT_QUEUE = /alert/i;
 /** Ticket sources of monitoring ("Monitoring Alert", "monitoring"…) */
 const ALERT_SOURCE = /alert|monitor/i;
-/** A monitoring alert: in an alert queue, or created by monitoring */
-export const isAlert = (L: Lookup) => (t: NTicket) => ALERT_QUEUE.test(L.queueLabel(t.queue)) || ALERT_SOURCE.test(t.source ?? "");
+/** A monitoring alert: in a queue marked as alerts (Admin › Files d'attente), or created by monitoring */
+export const isAlert = (L: Lookup) => (t: NTicket) => L.queueKind(t.queue) === "alerts" || ALERT_SOURCE.test(t.source ?? "");
 
 const list = (v: string | undefined) => (v ? v.split(",").filter(Boolean) : []);
 
@@ -237,6 +250,8 @@ function assetView(x: Asset, r: RmmSettings) {
   const values = { uid: x.rmm.uid, id: x.rmm.id, hostname: x.hostname, serial: x.serial, ip: x.ip };
   return {
     ...x,
+    /** "local": made in the portal; "rmm": synced from the RMM / Autotask */
+    origin: x.id.startsWith("local:") ? ("local" as const) : ("rmm" as const),
     links: r.enabled
       ? { rmm: r.name || null, device: rmmLink(r.deviceUrl, values), remote: rmmLink(r.remoteUrl, values) }
       : { rmm: null, device: null, remote: null },
@@ -264,8 +279,8 @@ async function notifyWork(
   summary: string,
   n: { contact: boolean; others: string[] },
   a: AuthContext,
-): Promise<{ to: string[]; failed: number; noContactEmail: boolean }> {
-  if (!tk || (!n.contact && !n.others.length)) return { to: [], failed: 0, noContactEmail: false };
+): Promise<{ to: string[]; failed: number; noContactEmail: boolean; inPortal: number }> {
+  if (!tk || (!n.contact && !n.others.length)) return { to: [], failed: 0, noContactEmail: false, inPortal: 0 };
   const contact =
     n.contact && tk.contactId
       ? await src
@@ -283,14 +298,50 @@ async function notifyWork(
   const html = `<p>${escHtml(hello)}</p><p>${escHtml(intro)}</p><p style="white-space:pre-wrap;border-left:3px solid #ffce1a;padding-left:10px">${escHtml(summary)}</p><p>—<br>${escHtml(a.realUser.name)}<br>AKAB Informatique</p>`;
   let failed = 0;
   for (const addr of to) if (!(await sendMail({ to: addr, subject, text, html }))) failed++;
-  return { to, failed, noContactEmail: n.contact && !contactEmail };
+  // the client portal too: whoever got the email and has an account there sees it on their bell
+  const inPortal = await tellClientUsers(tk, to, summary, a);
+  return { to, failed, noContactEmail: n.contact && !contactEmail, inPortal };
+}
+
+/**
+ * Client portal users (of the ticket's company) with one of these addresses
+ * get a notification: a technician shared the work done on their ticket.
+ */
+async function tellClientUsers(tk: NTicket, emails: string[], summary: string, a: AuthContext): Promise<number> {
+  if (!emails.length) return 0;
+  const d = db();
+  // the portal clients tied to the ticket's company: its Autotask id, or (sample data) its name
+  const clients = await d
+    .select({ id: schema.clients.id })
+    .from(schema.clients)
+    .where(or(eq(schema.clients.autotaskId, tk.company.id), sql`lower(${schema.clients.name}) = ${tk.company.name.trim().toLowerCase()}`));
+  if (!clients.length) return 0;
+  const users = await d
+    .select({ id: schema.users.id })
+    .from(schema.users)
+    .where(
+      and(
+        eq(schema.users.kind, "client"),
+        eq(schema.users.active, true),
+        inArray(
+          schema.users.clientId,
+          clients.map((c) => c.id),
+        ),
+        inArray(sql`lower(${schema.users.email})`, emails),
+      ),
+    );
+  await notify(
+    users.map((u) => u.id),
+    { type: "ticket.work", data: { number: tk.number, title: tk.title, from: a.realUser.name, preview: summary.slice(0, 140) }, link: `/tickets?t=${tk.id}` },
+  );
+  return users.length;
 }
 
 /** Full ticket for the ticket window, with the choices needed to edit it inline. */
 async function detailOf(src: TicketSource, id: number, a: AuthContext) {
   const t = await src.get(id);
   if (!t) throw new HTTPException(404, { message: "not_found" });
-  const [o, technicians, starts, ai, asset, contactInfo] = await Promise.all([
+  const [o, technicians, starts, ai, asset, contactInfo, client, meta, billing] = await Promise.all([
     src.options(),
     src.technicians(),
     startDates([id]),
@@ -314,6 +365,11 @@ async function detailOf(src: TicketSource, id: number, a: AuthContext) {
           })
           .catch(() => null)
       : Promise.resolve(null),
+    // the client's classification and this month's hours (a failure only hides them)
+    clientInfo(t.company.id).catch(() => null),
+    db().select({ minutes: schema.ticketMeta.estimateMinutes, source: schema.ticketMeta.estimateSource }).from(schema.ticketMeta).where(eq(schema.ticketMeta.ticketId, id)),
+    // the contract the work is billed on, and the client's others (a failure only hides them)
+    contractOfTicket(id, t.company.id).catch(() => null),
   ]);
   return {
     ...summary(t, lookup(o), starts.get(id), a.user.id, starts.locked.has(id), starts.times.get(id)),
@@ -325,9 +381,13 @@ async function detailOf(src: TicketSource, id: number, a: AuthContext) {
     assetId: t.assetId ?? null,
     asset,
     contactInfo,
+    client,
+    contract: billing?.contract ?? null,
+    contracts: billing?.contracts ?? [],
+    estimate: meta[0]?.minutes ? { minutes: meta[0].minutes, source: meta[0].source === "ai" ? ("ai" as const) : ("tech" as const) } : null,
     demo: src.demo,
     ai: Boolean(ai?.enabled && ai.apiKey),
-    options: { statuses: o.statuses, priorities: o.priorities, queues: o.queues, technicians },
+    options: { statuses: o.statuses, priorities: o.priorities, queues: o.queues, sources: o.ticketSources ?? [], technicians },
   };
 }
 
@@ -496,7 +556,7 @@ export const ticketRoutes = new Hono<AppEnv>()
       buttons,
       items,
       counts: Object.fromEntries(Object.entries(views).map(([k, f]) => [k, all.filter(f).filter((t) => k === "all" || open(t)).length])),
-      facets: { queues: o.queues, companies, statuses: o.statuses, priorities: o.priorities, technicians: team },
+      facets: { queues: o.queues, sources: o.ticketSources ?? [], companies, statuses: o.statuses, priorities: o.priorities, technicians: team },
     });
   })
 
@@ -740,6 +800,58 @@ export const ticketRoutes = new Hono<AppEnv>()
     return c.json(list.map((x) => assetView(x, r)));
   })
 
+  /** A contact's open tickets (the last five, newest first), for the ticket view; `exclude` leaves out the ticket being viewed. */
+  .get("/contacts/:contactId/open", async (c) => {
+    const contactId = c.req.param("contactId");
+    const exclude = Number(c.req.query("exclude"));
+    const src = await ticketSource();
+    const [all, o] = await run(() => Promise.all([src.list(), src.options()]));
+    const L = lookup(o);
+    const mine = all.filter((t) => t.contactId === contactId && L.statusKind(t.status) !== "complete" && t.id !== exclude).sort((x, y) => y.createdAt.localeCompare(x.createdAt));
+    return c.json({
+      total: mine.length,
+      items: mine.slice(0, 5).map((t) => ({
+        id: t.id,
+        number: t.number,
+        title: t.title,
+        status: t.status,
+        statusLabel: L.statusLabel(t.status),
+        statusKind: L.statusKind(t.status),
+        priorityKind: L.priorityKind(t.priority),
+        dueAt: t.dueAt,
+        createdAt: t.createdAt,
+      })),
+    });
+  })
+
+  /** A device made in the portal, for a client the RMM does not know. */
+  .post("/companies/:cid/assets", requirePermission("tickets.edit"), async (c) => {
+    const cid = Number(c.req.param("cid"));
+    if (!Number.isInteger(cid)) throw new HTTPException(400, { message: "invalid_id" });
+    const opt = z.string().trim().max(120).nullish().transform((v) => v || null);
+    const p = await body(
+      c,
+      z.object({
+        name: z.string().trim().min(1).max(120),
+        type: opt,
+        hostname: opt,
+        serial: opt,
+        ip: opt,
+        os: opt,
+        contactId: z.string().max(60).nullish(),
+        contactName: opt,
+        notes: z.string().trim().max(2000).nullish(),
+      }),
+    );
+    const [row] = await db()
+      .insert(schema.localAssets)
+      .values({ ...p, companyId: cid, contactId: p.contactId ?? null, notes: p.notes || null, createdBy: auth(c).user.id })
+      .returning();
+    await audit(auth(c).user.id, "ticket.asset_created", row!.id, { companyId: cid, name: p.name });
+    const [list, r] = await Promise.all([localAssets(cid), rmmSettings()]);
+    return c.json(assetView(list.find((x) => x.id === "local:" + row!.id)!, r), 201);
+  })
+
   // ── Timers (work time → Autotask time entries) ──
   /** My timers: running / paused / waiting for validation (closed tab). */
   .get("/timers", requirePermission("tickets.edit"), async (c) => {
@@ -821,12 +933,23 @@ export const ticketRoutes = new Hono<AppEnv>()
         workTypeId: z.string().max(40).nullable().default(null),
         billable: z.boolean().default(true),
         offsetHours: z.number().min(0).max(24).default(0),
+        // the contract the time is logged on (none: the ticket's contract)
+        contractId: z.uuid().nullable().optional(),
         // the description sent by email: to the ticket contact, and to other addresses
         notify: z
           .object({ contact: z.boolean().default(false), others: z.array(zEmail).max(10).default([]) })
           .default({ contact: false, others: [] }),
       }),
     );
+    // the contract: the one picked, else the ticket's; only a contract that does not bill hours makes the time non billable
+    const tkForContract = await (await ticketSource()).get(timer.ticketId).catch(() => null);
+    let contract: ContractView | null = null;
+    if (tkForContract) {
+      const cs = await contractOfTicket(timer.ticketId, tkForContract.company.id);
+      contract = p.contractId ? (cs.contracts.find((k) => k.id === p.contractId) ?? null) : cs.contract;
+      if (p.contractId && !contract) throw new HTTPException(400, { message: "invalid_contract" });
+    }
+    if (contract && !contract.billed) p.billable = false;
     // the offset cannot exceed the hours worked; it means nothing when nothing is billed
     if (p.offsetHours > p.hours) throw new HTTPException(400, { message: "offset_too_large" });
     if (!p.billable) p.offsetHours = 0;
@@ -835,7 +958,7 @@ export const ticketRoutes = new Hono<AppEnv>()
     try {
     const endedAt = timer.endedAt ?? new Date();
     const src = await ticketSource();
-    await run(() => src.addTimeEntry(timer.ticketId, { ...p, startedAt: new Date(endedAt.getTime() - p.hours * 3_600_000), endedAt }, a));
+    await run(() => src.addTimeEntry(timer.ticketId, { ...p, contractSourceId: contract?.sourceId ?? null, startedAt: new Date(endedAt.getTime() - p.hours * 3_600_000), endedAt }, a));
     // on the technician's timesheet too, with the ticket
     const tk = await src.get(timer.ticketId).catch(() => null);
     await addTicketTime(a.realUser.id, {
@@ -845,11 +968,12 @@ export const ticketRoutes = new Hono<AppEnv>()
       hours: p.hours,
       date: endedAt.toLocaleDateString("en-CA", { timeZone: "America/Toronto" }),
       note: p.summary,
+      contractId: contract?.id ?? null,
     });
     await db().delete(schema.ticketTimers).where(eq(schema.ticketTimers.id, timer.id));
     const notified = await notifyWork(src, tk, p.summary, p.notify, a);
-    await audit(a.user.id, "ticket.time_entry", String(timer.ticketId), { hours: p.hours, billable: p.billable, offsetHours: p.offsetHours, ...(notified.to.length ? { notified: notified.to } : {}) });
-    return c.json({ ok: true, notified: notified.to.length, notifyFailed: notified.failed, noContactEmail: notified.noContactEmail }, 201);
+    await audit(a.user.id, "ticket.time_entry", String(timer.ticketId), { hours: p.hours, billable: p.billable, contract: contract?.name ?? null, offsetHours: p.offsetHours, ...(notified.to.length ? { notified: notified.to } : {}) });
+    return c.json({ ok: true, notified: notified.to.length, notifyFailed: notified.failed, noContactEmail: notified.noContactEmail, notifiedInPortal: notified.inPortal }, 201);
     } finally {
       submitting.delete(timer.id);
     }
@@ -974,6 +1098,38 @@ export const ticketRoutes = new Hono<AppEnv>()
     }
   })
 
+  /**
+   * The AI estimates the time to resolve, only for a quick action (a few hours
+   * at most); anything bigger or too vague stays empty (`minutes: null`).
+   * A usable answer is saved on the ticket, marked as the AI's.
+   */
+  .post("/:id/ai/estimate", requirePermission("tickets.ai"), async (c) => {
+    const a = auth(c);
+    aiLimit(a.user.id);
+    const model = await askedModel(c);
+    const id = Number(c.req.param("id"));
+    try {
+      const tk = await ticketForAi(await ticketSource(), id);
+      const out = await askClaudeJson<unknown>({
+        system: `${aiRole(a.user.locale)} Tu estimes le temps de travail d'un technicien.`,
+        feature: "ticket.analyze",
+        userId: a.user.id,
+        model,
+        prompt: `${tk}\n\nEstime le temps de travail nécessaire pour RÉSOUDRE ce billet. Ne donne une estimation que si l'action est rapide et claire (au plus 4 heures de travail) ; si le travail est grand, flou, dépend du client ou d'un fournisseur, ne donne rien. Format : {"quick": true|false, "minutes": nombre entier de minutes (multiple de 5) ou null, "reason": "une phrase"}`,
+        maxTokens: 600,
+      });
+      const parsed = zEstimate.safeParse(out);
+      if (!parsed.success) throw new AiError("bad_output");
+      const { quick, minutes, reason } = parsed.data;
+      await audit(a.user.id, "ai.ticket_estimate", String(id), { minutes: quick ? minutes : null });
+      if (!quick || !minutes) return c.json({ minutes: null, reason });
+      await saveEstimate(id, minutes, "ai", a.user.id);
+      return c.json({ minutes, reason });
+    } catch (e) {
+      throw aiHttpError(e);
+    }
+  })
+
   /** Draft a reply to the client (not saved: it goes into the note box). */
   .post("/:id/ai/reply", requirePermission("tickets.ai"), async (c) => {
     const a = auth(c);
@@ -1040,6 +1196,7 @@ export const ticketRoutes = new Hono<AppEnv>()
         description: z.string().max(8000).optional(),
         secondaryIds: z.array(z.string().max(60)).max(20).optional(),
         assetId: z.string().max(60).nullable().optional(),
+        source: z.string().trim().max(40).optional(),
       }),
     );
     const src = await ticketSource();
@@ -1174,6 +1331,32 @@ export const ticketRoutes = new Hono<AppEnv>()
     return c.json({ ok: true, startDate: row.startDate, startTime: row.startDate ? row.startTime : null, startLocked: Boolean(row.startDate && row.startLocked) });
   })
 
+  /** The contract the ticket's work is billed on (null: back to the client's default support contract). */
+  .put("/:id/contract", requirePermission("tickets.edit"), async (c) => {
+    const a = auth(c);
+    const id = Number(c.req.param("id"));
+    if (!Number.isInteger(id) || id <= 0) throw new HTTPException(400, { message: "invalid_id" });
+    const p = await body(c, z.object({ contractId: z.uuid().nullable() }));
+    const src = await ticketSource();
+    const t = await run(() => src.get(id));
+    if (!t) throw new HTTPException(404, { message: "not_found" });
+    if (p.contractId && !(await contractsOfCompany(t.company.id)).some((k) => k.id === p.contractId)) throw new HTTPException(400, { message: "invalid_contract" });
+    await setTicketContract(id, p.contractId, a.user.id);
+    await audit(a.user.id, "ticket.contract_set", String(id), { contractId: p.contractId });
+    return c.json(await contractOfTicket(id, t.company.id));
+  })
+
+  /** The time the ticket should take to resolve (minutes; null clears it), typed by a technician. */
+  .put("/:id/estimate", requirePermission("tickets.edit"), async (c) => {
+    const a = auth(c);
+    const id = Number(c.req.param("id"));
+    if (!Number.isInteger(id) || id <= 0) throw new HTTPException(400, { message: "invalid_id" });
+    const p = await body(c, z.object({ minutes: z.number().int().min(1).max(60 * 40).nullable() }));
+    await saveEstimate(id, p.minutes, "tech", a.user.id);
+    await audit(a.user.id, "ticket.estimate_set", String(id), { minutes: p.minutes });
+    return c.json({ ok: true, estimate: p.minutes ? { minutes: p.minutes, source: "tech" } : null });
+  })
+
   .post("/", requirePermission("tickets.edit"), async (c) => {
     const a = auth(c);
     const p = await body(
@@ -1200,6 +1383,8 @@ export const ticketRoutes = new Hono<AppEnv>()
         startDate: zDate.nullable().optional(),
         startTime: zTime.nullable().optional(),
         contractId: z.string().max(60).nullable().optional(),
+        // where it comes from (ticket_sources.key): phone by default, email from an email, sms from a text
+        source: z.string().trim().max(40).optional(),
       }),
     );
     const src = await ticketSource();
@@ -1212,7 +1397,13 @@ export const ticketRoutes = new Hono<AppEnv>()
       await db()
         .insert(schema.ticketMeta)
         .values({ ticketId: id, startDate: p.startDate, startTime: p.startTime ?? null, updatedBy: a.user.id })
-        .onConflictDoNothing();
+        // the row may already exist (the queue chosen for the ticket is stored in it)
+        .onConflictDoUpdate({ target: schema.ticketMeta.ticketId, set: { startDate: p.startDate, startTime: p.startTime ?? null, updatedBy: a.user.id, updatedAt: new Date() } });
+    }
+    {
+      const list = await contractsOfCompany(p.companyId);
+      const mine = (p.contractId ? list.find((k) => k.sourceId === p.contractId) : undefined) ?? list.find((k) => k.isDefault);
+      if (mine) await setTicketContract(id, mine.id, a.user.id);
     }
     await audit(a.user.id, "ticket.created", String(id));
     const t = await run(() => src.get(id));

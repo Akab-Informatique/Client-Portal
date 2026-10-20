@@ -493,8 +493,32 @@ export const outlookRoutes = new Hono<AppEnv>()
     // the sender, when they are a contact of a client: the ticket is opened for them
     const src = await ticketSource();
     const contact = m.from?.address ? await src.contactByEmail(m.from.address).catch(() => null) : null;
-    return c.json({ subject: m.subject, from: m.from, receivedAt: m.receivedAt, text: m.text.slice(0, 7000), contact });
+    // no such contact: the client whose contacts share the sender's domain, when it is only one
+    const company = !contact && m.from?.address ? await clientByDomain(m.from.address) : null;
+    return c.json({ subject: m.subject, from: m.from, receivedAt: m.receivedAt, text: m.text.slice(0, 7000), contact, company });
   });
+
+/** Mailboxes anybody has: a domain says nothing about the client. */
+const PUBLIC_DOMAINS = /^(gmail|googlemail|hotmail|outlook|live|msn|yahoo|ymail|icloud|me|mac|aol|proton|protonmail|videotron|bell|sympatico|cgocable|eastlink|telus|rogers|shaw|cooptel|qc|gmx|mail|zoho)\./i;
+
+/** The one client whose contacts (or own address) use the sender's domain, from the CRM copy; null when none or several. */
+async function clientByDomain(address: string): Promise<{ id: number; name: string } | null> {
+  const domain = address.split("@")[1]?.toLowerCase().trim();
+  if (!domain || PUBLIC_DOMAINS.test(domain)) return null;
+  const d = db();
+  const rows = await d
+    .select({ id: schema.clients.autotaskId, name: schema.clients.name })
+    .from(schema.clientContacts)
+    .innerJoin(schema.clients, eq(schema.clients.id, schema.clientContacts.clientId))
+    .where(and(eq(schema.clients.active, true), sql`lower(${schema.clientContacts.email}) like ${"%@" + domain}`));
+  const own = await d
+    .select({ id: schema.clients.autotaskId, name: schema.clients.name })
+    .from(schema.clients)
+    .where(and(eq(schema.clients.active, true), sql`lower(${schema.clients.email}) like ${"%@" + domain}`));
+  const found = new Map<number, string>();
+  for (const r of [...rows, ...own]) if (r.id != null) found.set(r.id, r.name);
+  return found.size === 1 ? { id: [...found.keys()][0]!, name: [...found.values()][0]! } : null;
+}
 
 /** The technician's email signature (sanitized HTML), if any. */
 async function signatureOf(userId: string) {

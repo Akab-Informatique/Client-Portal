@@ -8,6 +8,7 @@ import {
   AlertTriangle,
   Building2,
   Check,
+  Star,
   CircleCheck,
   CircleDashed,
   Clock,
@@ -221,8 +222,10 @@ function InfoTab({ client }: { client: CrmDetail }) {
     postalCode: c.postalCode ?? "",
     code: c.code ?? "",
     notes: c.notes ?? "",
+    classKey: c.classKey ?? "",
   });
   const [f, setF] = useState(() => pick(client));
+  const { data: classes = [] } = useQuery({ queryKey: ["admin", "client-classes"], queryFn: () => api.get<{ key: string; name: string }[]>("/admin/client-classes") });
   useEffect(() => setF(pick(client)), [client]);
   const dirty = JSON.stringify(f) !== JSON.stringify(pick(client));
   const save = useMutation({
@@ -242,12 +245,28 @@ function InfoTab({ client }: { client: CrmDetail }) {
           className="space-y-4"
           onSubmit={(e: FormEvent) => {
             e.preventDefault();
-            save.mutate(f);
+            save.mutate({ ...f, classKey: f.classKey || null });
           }}
         >
           <div className="grid gap-3 sm:grid-cols-2">
             <Field label={t("crm.name")} className="sm:col-span-2">
               <Input required minLength={2} value={f.name} disabled={!editable} onChange={(e) => setF({ ...f, name: e.target.value })} className="h-9" />
+            </Field>
+            <Field label={t("crm.info.class")} className="sm:col-span-2">
+              <select
+                value={f.classKey}
+                disabled={!editable}
+                onChange={(e) => setF({ ...f, classKey: e.target.value })}
+                className="h-9 w-full rounded-md border bg-transparent px-2 text-sm outline-none focus:ring-2 focus:ring-[color:var(--gold)]/40 disabled:opacity-60"
+              >
+                <option value="">{t("crm.info.classNone")}</option>
+                {classes.map((k) => (
+                  <option key={k.key} value={k.key}>
+                    {k.name}
+                  </option>
+                ))}
+              </select>
+              <p className="text-[11px] text-muted-foreground">{t("crm.info.classHint")}</p>
             </Field>
             <Field label={t("crm.phone")}>{input("phone", "tel")}</Field>
             <Field label={t("crm.info.email")}>{input("email", "email")}</Field>
@@ -959,6 +978,15 @@ function ContractsTab({ client }: { client: CrmDetail }) {
   const can = useCan();
   const qc = useQueryClient();
   const { data: contracts = [], isLoading } = useQuery({ queryKey: ["crm", "client", client.id, "contracts"], queryFn: () => api.get<CrmContract[]>(`/crm/clients/${client.id}/contracts`) });
+  const billing = useMutation({
+    mutationFn: (p: { id: string; patch: Record<string, unknown> }) => api.patch(`/crm/clients/${client.id}/contracts/${p.id}`, p.patch),
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: ["crm", "client", client.id, "contracts"] });
+      void qc.invalidateQueries({ queryKey: ["tickets"] });
+      toast.success(t("crm.contracts.billingSaved"));
+    },
+    onError: (e) => toast.error(ticketErrorText(t, e)),
+  });
   const auto = useMutation({
     mutationFn: (p: { id: string; autoApprove: boolean }) => api.patch<{ approved: number }>(`/crm/clients/${client.id}/contracts/${p.id}`, { autoApprove: p.autoApprove }),
     onSuccess: (r, p) => {
@@ -978,7 +1006,7 @@ function ContractsTab({ client }: { client: CrmDetail }) {
             <li key={k.id} className={cn("flex flex-wrap items-center gap-x-4 gap-y-1 px-3 py-2.5", !k.active && "opacity-60")}>
               <FileText className="size-4 shrink-0 text-muted-foreground" />
               <span className="min-w-0 flex-1 truncate text-sm font-medium">{k.name}</span>
-              {k.isDefault && <span className="rounded-md border border-[color:var(--gold)]/40 bg-[color:var(--gold)]/10 px-1.5 py-0.5 text-[10px] font-semibold text-primary">{t("crm.contracts.default")}</span>}
+              {k.isSupportDefault && <span className="rounded-md border border-[color:var(--gold)]/40 bg-[color:var(--gold)]/10 px-1.5 py-0.5 text-[10px] font-semibold text-primary">{t("crm.contracts.supportDefault")}</span>}
               {!k.active && <span className="text-[11px] text-muted-foreground">{t("crm.contracts.inactive")}</span>}
               <span className="w-32 truncate text-xs text-muted-foreground">{k.type ?? "—"}</span>
               <span className="w-44 text-xs text-muted-foreground">
@@ -987,12 +1015,76 @@ function ContractsTab({ client }: { client: CrmDetail }) {
               <label className="flex items-center gap-2 text-xs text-muted-foreground" title={t("crm.contracts.autoHint")}>
                 <Switch checked={k.autoApprove} disabled={!can("crm.billing") || auto.isPending} onCheckedChange={(v) => auto.mutate({ id: k.id, autoApprove: v })} /> {t("crm.contracts.auto")}
               </label>
+              <ContractBilling k={k} editable={can("crm.billing")} busy={billing.isPending} onChange={(patch) => billing.mutate({ id: k.id, patch })} />
             </li>
           ))}
         </ul>
       )}
       <p className="text-[11px] text-muted-foreground">{t("crm.contracts.fromAutotask")}</p>
     </Card>
+  );
+}
+
+/** How a contract bills its support: hourly (own rate, else the usual one), monthly, per ticket, or never; and whether it is the default. */
+function ContractBilling({ k, editable, busy, onChange }: { k: CrmContract; editable: boolean; busy: boolean; onChange: (patch: Record<string, unknown>) => void }) {
+  const { t, i18n } = useTranslation();
+  const rateOf = (cents: number | null) => (cents == null ? "" : String(cents / 100));
+  const field = k.billingMode === "monthly" ? "monthlyRate" : k.billingMode === "per_ticket" ? "ticketRate" : "hourlyRate";
+  const cents = k.billingMode === "monthly" ? k.monthlyRateCents : k.billingMode === "per_ticket" ? k.ticketRateCents : k.hourlyRateCents;
+  const [rate, setRate] = useState(rateOf(cents));
+  useEffect(() => setRate(rateOf(cents)), [cents, k.billingMode]);
+  const commit = () => {
+    const v = rate.trim().replace(",", ".");
+    const n = v === "" ? null : Number(v);
+    if (n !== null && (!Number.isFinite(n) || n < 0)) return setRate(rateOf(cents));
+    if ((n === null ? null : Math.round(n * 100)) !== cents) onChange({ [field]: n });
+  };
+  return (
+    <div className="flex w-full flex-wrap items-center gap-x-3 gap-y-2 pl-7 pt-1">
+      <select
+        value={k.billingMode}
+        disabled={!editable || busy}
+        onChange={(e) => onChange({ billingMode: e.target.value })}
+        className="h-8 rounded-md border bg-transparent px-2 text-xs outline-none focus:ring-2 focus:ring-[color:var(--gold)]/40 disabled:opacity-60"
+        aria-label={t("crm.contracts.billingMode")}
+      >
+        {(["hourly", "monthly", "per_ticket", "none"] as const).map((m) => (
+          <option key={m} value={m}>
+            {t(`tickets.contractBilling.modes.${m}`)}
+          </option>
+        ))}
+      </select>
+      {k.billingMode !== "none" && (
+        <label className="flex items-center gap-1.5 text-xs text-muted-foreground">
+          {t(`crm.contracts.rate_${k.billingMode}`)}
+          <span className="relative">
+            <Input
+              value={rate}
+              disabled={!editable || busy}
+              inputMode="decimal"
+              placeholder={k.billingMode === "hourly" ? String(k.usualRateCents / 100) : "0"}
+              onChange={(e) => setRate(e.target.value)}
+              onBlur={commit}
+              onKeyDown={(e) => e.key === "Enter" && (e.target as HTMLInputElement).blur()}
+              className="h-8 w-24 pr-6 text-right font-mono text-xs"
+            />
+            <span className="pointer-events-none absolute right-2 top-1/2 -translate-y-1/2 text-[11px]">$</span>
+          </span>
+        </label>
+      )}
+      <span className="text-[11px] text-muted-foreground">
+        {k.billingMode === "hourly" && k.hourlyRateCents == null
+          ? t("crm.contracts.usualRate", { rate: money(k.usualRateCents, i18n.language) })
+          : k.billingMode === "hourly"
+            ? ""
+            : t("crm.contracts.notByHour")}
+      </span>
+      {!k.isSupportDefault && k.active && editable && (
+        <Button type="button" variant="ghost" size="sm" className="ml-auto h-7 gap-1 text-xs" disabled={busy} onClick={() => onChange({ supportDefault: true })}>
+          <Star className="size-3" /> {t("crm.contracts.makeDefault")}
+        </Button>
+      )}
+    </div>
   );
 }
 

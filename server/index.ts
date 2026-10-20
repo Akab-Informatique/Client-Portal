@@ -13,6 +13,7 @@ import { syncBillables } from "./lib/billables.ts";
 import { sweepTimers } from "./lib/timers.ts";
 import { sendReminders } from "./lib/planning.ts";
 import { autoTickets } from "./lib/sms.ts";
+import { workflowTick } from "./lib/workflows.ts";
 
 await initDb();
 await seed();
@@ -49,6 +50,9 @@ const server = serve({ fetch: app.fetch, port: config.port, hostname: host }, (i
 
 // Texts with no technician reply in time become tickets
 setInterval(() => void autoTickets().catch((e) => console.warn("[sms] auto tickets:", e instanceof Error ? e.message : e)), 60_000).unref();
+
+// Automatic workflows (switched on in Admin › Flux de travail): the new tickets get their reply
+setInterval(() => void workflowTick().catch((e) => console.warn("[workflow] tick:", e instanceof Error ? e.message : e)), 60_000).unref();
 
 // Alerts before calendar events
 setInterval(() => void sendReminders().catch((e) => console.warn("[planning] reminders:", e instanceof Error ? e.message : e)), 60_000).unref();

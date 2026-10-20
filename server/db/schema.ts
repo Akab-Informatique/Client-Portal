@@ -60,12 +60,25 @@ export const clients = pgTable(
     invoice: jsonb("invoice").$type<ClientInvoiceSettings>().notNull().default({}),
     /** The matching QuickBooks customer (never two clients on the same one) */
     quickbooksId: text("quickbooks_id"),
+    /** The client's classification (client_classes.key): break & fix, MSP, bronze, silver, gold… */
+    classKey: text("class_key"),
     syncedAt: timestamp("synced_at", { withTimezone: true }),
     createdAt: created(),
     updatedAt: updated(),
   },
   (t) => [uniqueIndex("clients_autotask_idx").on(t.autotaskId), index("clients_parent_idx").on(t.parentId), uniqueIndex("clients_quickbooks_idx").on(t.quickbooksId)],
 );
+
+/** Client classifications (Admin › Classifications): break & fix, MSP, bronze, silver, gold to start; admins add their own. */
+export const clientClasses = pgTable("client_classes", {
+  key: text("key").primaryKey(),
+  name: text("name").notNull(),
+  /** A colour token the screens know: slate, blue, orange, zinc, yellow, green, red, violet */
+  color: text("color").notNull().default("slate"),
+  position: integer("position").notNull().default(0),
+  createdAt: created(),
+  updatedAt: updated(),
+});
 
 /** People at a client (Autotask Contacts). */
 export const clientContacts = pgTable(
@@ -109,6 +122,18 @@ export const clientContracts = pgTable(
     isDefault: boolean("is_default").notNull().default(false),
     /** Work done under this contract is approved automatically when imported */
     autoApprove: boolean("auto_approve").notNull().default(false),
+    /**
+     * How support under this contract is billed: hourly (rate below, else the usual
+     * rate of Admin › Facturation), monthly (a flat monthly rate), per_ticket (a flat
+     * rate per ticket) or none (included, never billed). Only hourly bills the hours.
+     */
+    billingMode: text("billing_mode").notNull().default("hourly"),
+    /** Hourly rate in cents; none: the usual hourly rate */
+    hourlyRateCents: integer("hourly_rate_cents"),
+    monthlyRateCents: integer("monthly_rate_cents"),
+    ticketRateCents: integer("ticket_rate_cents"),
+    /** The client's default support contract, chosen in the portal (else the source's default) */
+    supportDefault: boolean("support_default").notNull().default(false),
     /** YYYY-MM-DD */
     startDate: text("start_date"),
     endDate: text("end_date"),
@@ -506,7 +531,87 @@ export const ticketMeta = pgTable("ticket_meta", {
   startTime: text("start_time"),
   /** Restriction: no work on the ticket before its start date (off by default) */
   startLocked: boolean("start_locked").notNull().default(false),
+  /** The portal's own queue (ticket_queues.key); none: worked out from the source, else the default queue */
+  queue: text("queue"),
+  /** A device of the portal's own (local_assets.id) linked to the ticket when the RMM / Autotask has none */
+  localAsset: uuid("local_asset"),
+  /** Where the ticket came from (ticket_sources.key); none: worked out from the source's own label, else phone */
+  source: text("source"),
+  /** The contract the ticket's work is billed on (client_contracts.id); none: the client's default support contract */
+  contractId: uuid("contract_id"),
+  /** Estimated time to resolve, in minutes (none: not estimated); set by a technician or by the AI */
+  estimateMinutes: integer("estimate_minutes"),
+  /** tech | ai */
+  estimateSource: text("estimate_source"),
   updatedBy: uuid("updated_by").references(() => users.id, { onDelete: "set null" }),
+  updatedAt: updated(),
+});
+
+/**
+ * The portal's own ticket queues (Admin › Files d'attente): not tied to Autotask. A ticket is in the one
+ * stored on it (ticket_meta.queue), else the one its source suggests (an alert, a project), else the default.
+ */
+/**
+ * Devices made in the portal for a client the RMM does not know (RMM / Autotask
+ * devices stay the reference where they exist). Listed with the synced ones; id
+ * on a ticket is "local:<id>".
+ */
+export const localAssets = pgTable("local_assets", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  companyId: integer("company_id").notNull(),
+  name: text("name").notNull(),
+  type: text("type"),
+  serial: text("serial"),
+  hostname: text("hostname"),
+  ip: text("ip"),
+  os: text("os"),
+  contactId: text("contact_id"),
+  contactName: text("contact_name"),
+  notes: text("notes"),
+  createdBy: uuid("created_by").references(() => users.id, { onDelete: "set null" }),
+  createdAt: created(),
+});
+
+/**
+ * Where a ticket comes from (Admin › Sources): phone, text, email, in person to
+ * start. A ticket made from an email is "email", from a text "sms", by phone or
+ * by hand "phone".
+ */
+export const ticketSources = pgTable("ticket_sources", {
+  key: text("key").primaryKey(),
+  name: text("name").notNull(),
+  position: integer("position").notNull().default(0),
+  createdAt: created(),
+  updatedAt: updated(),
+});
+
+/**
+ * How the source's ticket statuses (Autotask's list) are shown and offered
+ * (Admin › Statuts): a label, a kind (colours, tiles, open / closed), an order,
+ * and whether the status can still be picked. Statuses without a row keep the
+ * source's own label and kind.
+ */
+export const ticketStatuses = pgTable("ticket_statuses", {
+  /** The status value in the source */
+  value: text("value").primaryKey(),
+  label: text("label"),
+  kind: text("kind"),
+  position: integer("position").notNull().default(0),
+  /** Not offered when changing a ticket's status (tickets already in it keep it) */
+  hidden: boolean("hidden").notNull().default(false),
+  updatedAt: updated(),
+});
+
+export const ticketQueues = pgTable("ticket_queues", {
+  /** Stable id (a slug); the name can change */
+  key: text("key").primaryKey(),
+  name: text("name").notNull(),
+  /** Monitoring alerts: kept out of the gauges, the client portal and the automatic replies */
+  alerts: boolean("alerts").notNull().default(false),
+  /** Where a ticket goes when nothing says otherwise (one queue) */
+  isDefault: boolean("is_default").notNull().default(false),
+  position: integer("position").notNull().default(0),
+  createdAt: created(),
   updatedAt: updated(),
 });
 
@@ -1045,6 +1150,28 @@ export const meetingPoints = pgTable("meeting_points", {
   createdAt: created(),
 });
 
+/**
+ * What the automatic workflows did (Admin › Flux de travail): one row per
+ * workflow and ticket — the unique key is what keeps a ticket from being
+ * answered twice.
+ */
+export const workflowRuns = pgTable(
+  "workflow_runs",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    workflow: text("workflow").notNull(),
+    ticketId: bigint("ticket_id", { mode: "number" }).notNull(),
+    ticketNumber: text("ticket_number").notNull().default(""),
+    ticketTitle: text("ticket_title").notNull().default(""),
+    toEmail: text("to_email"),
+    /** pending: being sent · sent · failed · skipped (see reason) */
+    status: text("status").notNull().default("pending"),
+    reason: text("reason"),
+    createdAt: created(),
+  },
+  (t) => [uniqueIndex("workflow_runs_ticket_idx").on(t.workflow, t.ticketId), index("workflow_runs_created_idx").on(t.workflow, t.createdAt)],
+);
+
 /** Notes taken on a point to discuss, oldest first. */
 export const meetingPointNotes = pgTable(
   "meeting_point_notes",
@@ -1351,6 +1478,8 @@ export const timesheetEntries = pgTable(
     ticketId: bigint("ticket_id", { mode: "number" }),
     ticketNumber: text("ticket_number"),
     ticketTitle: text("ticket_title"),
+    /** The contract the time was logged on (client_contracts.id) */
+    contractId: uuid("contract_id"),
     /** ticket | manual */
     source: text("source").notNull().default("manual"),
     createdAt: created(),

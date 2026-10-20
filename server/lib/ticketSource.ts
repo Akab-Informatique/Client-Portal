@@ -3,6 +3,7 @@ import { db, schema } from "../db/index.ts";
 import type { AuthContext } from "./auth.ts";
 import { localCompanies, localContacts, localContracts } from "./crm.ts";
 import { billingSettings } from "./billing.ts";
+import { withPortalQueues } from "./queues.ts";
 import { autotask, AutotaskError, listResources, loadSettings, type Client } from "./autotask.ts";
 import { demoHistory, ensureClientSamples, demoTicketsWithOtherContact,
   addDemoAttachment,
@@ -34,8 +35,9 @@ import { demoHistory, ensureClientSamples, demoTicketsWithOtherContact,
  */
 export type StatusKind = "new" | "inProgress" | "needsAttention" | "waitingCustomer" | "waitingVendor" | "scheduled" | "complete" | "other";
 export type PriorityKind = "critical" | "high" | "medium" | "low";
-export type Choice<K extends string = string> = { value: string; label: string | null; kind: K };
-export type Options = { statuses: Choice<StatusKind>[]; priorities: Choice<PriorityKind>[]; queues: Choice<"">[] };
+export type Choice<K extends string = string> = { value: string; label: string | null; kind: K; /** Not offered when changing a ticket's status (Admin › Statuts) */ hidden?: boolean };
+/** Queues are the portal's own; "alerts" marks the monitoring-alert queues */
+export type Options = { statuses: Choice<StatusKind>[]; priorities: Choice<PriorityKind>[]; queues: Choice<"" | "alerts">[]; /** Where tickets come from (the portal's own list, Admin › Sources) */ ticketSources?: Choice[] };
 export type Person = { id: string; name: string };
 /**
  * Texts with the client are copied into the ticket as internal notes, so the
@@ -60,6 +62,8 @@ export type Note = {
   offsetHours?: number;
   /** Written by Autotask itself (workflow rule, forward, merge…), not by a technician or the client */
   system?: boolean;
+  /** Who wrote it: the client (a contact, or a reply made in the client portal) or a technician. Absent: told by the name. */
+  by?: "client" | "tech";
 };
 export type Company = { id: number; name: string };
 export type Contact = { id: string; companyId: number; name: string; email: string | null; phone: string | null };
@@ -153,6 +157,8 @@ export type TicketPatch = {
   assetId?: string | null;
   /** Secondary technicians (person ids), replaces the list */
   secondaryIds?: string[];
+  /** Where the ticket came from (ticket_sources.key); kept in the portal */
+  source?: string;
 };
 /** A charge on a ticket (Autotask TicketCharges): material, expense, service… */
 export type Charge = {
@@ -207,6 +213,8 @@ export type NewTimeEntry = {
   billable: boolean;
   /** Hours worked but not billed: 4 h worked with an offset of 2 bills 2 h */
   offsetHours: number;
+  /** The contract's id in the source, when the time is logged on one */
+  contractSourceId?: string | null;
 };
 export type NewTicket = {
   title: string;
@@ -221,6 +229,8 @@ export type NewTicket = {
   dueAt?: string;
   /** Contract the work is billed on (null: none) */
   contractId?: string | null;
+  /** Where the ticket comes from (ticket_sources.key): email, sms, phone (the default, by hand), in-person… */
+  source?: string;
 };
 
 export interface TicketSource {
@@ -342,9 +352,14 @@ export class SourceError extends Error {
 }
 
 // ── Which source ─────────────────────────────────────────────────────────────────
+/** The ticket source (Autotask, or the sample data) with the portal's own queues over it (see lib/queues.ts) */
+const withQueues = new WeakMap<TicketSource, TicketSource>();
 export async function ticketSource(): Promise<TicketSource> {
   const s = await loadSettings();
-  return s.enabled && s.credentials && s.config.zone ? autotaskSource : demoSource;
+  const base = s.enabled && s.credentials && s.config.zone ? autotaskSource : demoSource;
+  // one wrapper per source
+  if (!withQueues.has(base)) withQueues.set(base, withPortalQueues(base));
+  return withQueues.get(base)!;
 }
 
 async function staffPeople(): Promise<Person[]> {
@@ -824,20 +839,78 @@ async function store(list: NTicket[], replace: boolean) {
   });
 }
 
-/** One sync at a time; callers share it. */
-export function syncTickets(): Promise<void> {
-  syncing ??= runSync().finally(() => {
+/**
+ * Ticket sync settings (Admin › Billets). The Autotask connection stays, but the
+ * tickets are no longer pulled in the background unless `auto` is on: they are
+ * synced by hand (`syncTicketsNow`), from `since` on — every ticket created or
+ * active since that day, completed ones included, keeping their status.
+ */
+export type TicketSyncSettings = { auto: boolean; since: string };
+const SYNC_PROVIDER = "tickets.sync";
+let syncSettingsCache: { at: number; value: TicketSyncSettings } | null = null;
+export async function ticketSyncSettings(): Promise<TicketSyncSettings> {
+  if (syncSettingsCache && Date.now() - syncSettingsCache.at < 5_000) return syncSettingsCache.value;
+  const [row] = await db().select().from(schema.integrations).where(eq(schema.integrations.provider, SYNC_PROVIDER));
+  const c = (row?.config ?? {}) as Partial<TicketSyncSettings> & { lastRun?: unknown };
+  const value = { auto: c.auto === true, since: /^\d{4}-\d{2}-\d{2}$/.test(c.since ?? "") ? c.since! : "2026-08-01" };
+  syncSettingsCache = { at: Date.now(), value };
+  return value;
+}
+export type TicketSyncRun = { at: string; ok: boolean; total: number; completed: number; error?: string };
+export async function ticketLastRun(): Promise<TicketSyncRun | null> {
+  const [row] = await db().select().from(schema.integrations).where(eq(schema.integrations.provider, SYNC_PROVIDER));
+  return ((row?.config ?? {}) as { lastRun?: TicketSyncRun }).lastRun ?? null;
+}
+async function writeSyncConfig(actorId: string | null, patch: Partial<TicketSyncSettings> & { lastRun?: TicketSyncRun }) {
+  const [row] = await db().select().from(schema.integrations).where(eq(schema.integrations.provider, SYNC_PROVIDER));
+  const config = { ...((row?.config ?? {}) as Record<string, unknown>), ...patch };
+  await db()
+    .insert(schema.integrations)
+    .values({ provider: SYNC_PROVIDER, enabled: true, config, updatedBy: actorId })
+    .onConflictDoUpdate({ target: schema.integrations.provider, set: { config, updatedBy: actorId, updatedAt: new Date() } });
+  syncSettingsCache = null;
+}
+export const saveTicketSyncSettings = (actorId: string | null, p: Partial<TicketSyncSettings>) => writeSyncConfig(actorId, p);
+
+/** What the local copy holds. */
+export async function ticketCopyInfo() {
+  const [r] = await db()
+    .select({ total: sql<number>`count(*)::int`, newest: sql<string | null>`max(${schema.autotaskTickets.lastActivity})`, syncedAt: sql<string | null>`max(${schema.autotaskTickets.syncedAt})` })
+    .from(schema.autotaskTickets);
+  return { total: r?.total ?? 0, newestActivity: r?.newest ?? null, syncedAt: r?.syncedAt ?? null };
+}
+
+/** The manual sync: a full pass now, whatever the automatic setting says. */
+export async function syncTicketsNow(actorId: string | null): Promise<TicketSyncRun> {
+  const src = await ticketSource();
+  let run: TicketSyncRun;
+  try {
+    if (!src.demo) await syncTickets(true);
+    const all = await src.list();
+    const L = (await src.options()).statuses;
+    const done = new Set(L.filter((x) => x.kind === "complete").map((x) => x.value));
+    run = { at: new Date().toISOString(), ok: true, total: all.length, completed: all.filter((t) => done.has(t.status)).length };
+  } catch (e) {
+    run = { at: new Date().toISOString(), ok: false, total: 0, completed: 0, error: e instanceof Error ? e.message : String(e) };
+  }
+  await writeSyncConfig(actorId, { lastRun: run });
+  return run;
+}
+
+/** One sync at a time; callers share it. `force`: a full pass whatever the timing. */
+export function syncTickets(force = false): Promise<void> {
+  syncing ??= runSync(force).finally(() => {
     syncing = null;
   });
   return syncing;
 }
 
-async function runSync() {
+async function runSync(force = false) {
   const gen = generation;
   const m = await mirrorMap();
-  if (!m.size || Date.now() - lastFull > FULL_EVERY) {
+  if (force || !m.size || Date.now() - lastFull > FULL_EVERY) {
     const started = Date.now();
-    const list = await loadList();
+    const list = await loadList((await ticketSyncSettings()).since);
     if (gen !== generation) return;
     await store(list, true);
     mirror = new Map(list.map((x) => [x.id, x]));
@@ -882,6 +955,8 @@ export function keepTicketsWarm() {
     if (lastUse && Date.now() - lastUse > 15 * 60_000) return;
     const src = await ticketSource();
     if (src.demo) return;
+    // not by itself unless asked for (Admin › Billets); the tickets are synced by hand
+    if (!(await ticketSyncSettings()).auto) return;
     await syncTickets().catch((e) => console.warn("[autotask] sync failed:", e instanceof Error ? e.message : e));
   };
   void tick();
@@ -1104,10 +1179,10 @@ async function refreshOne(at: Client, id: number): Promise<void> {
   }
 }
 
-/** Open tickets + those completed in the last 14 days, normalized. */
-async function loadList(): Promise<NTicket[]> {
+/** Every open ticket, and every ticket created, active or completed since the date (YYYY-MM-DD), completed ones with their status; normalized. */
+async function loadList(sinceDay: string): Promise<NTicket[]> {
   const at = await autotask();
-  const since = new Date(Date.now() - 14 * 86_400_000).toISOString();
+  const since = new Date(`${sinceDay}T00:00:00-04:00`).toISOString();
   const complete = (await atOptions()).statuses.filter((s) => s.kind === "complete").map((s) => Number(s.value));
   const rows = await at.query<AtTicket>(
     "Tickets",
@@ -1116,18 +1191,20 @@ async function loadList(): Promise<NTicket[]> {
         op: "or",
         items: [
           { op: "notIn", field: "status", value: complete.length ? complete : [5] },
+          { op: "gte", field: "createDate", value: since },
           { op: "gte", field: "completedDate", value: since },
+          { op: "gte", field: "lastActivityDate", value: since },
         ],
       },
     ],
-    { fields: TICKET_FIELDS, max: 3000 },
+    { fields: TICKET_FIELDS, max: 30_000, complete: true },
   );
   return normalize(at, rows, true);
 }
 
+/** The signature of a client's reply made in the client portal (saved by the API user): "— Name (client, via le portail AKAB)" */
+const CLIENT_SIGNED = /\n*—\s*(.+?)\s*\(client, via le portail AKAB\)\s*$/;
 /** Note types written by Autotask itself, not by a person */
-/** The signature of a client's reply made in the client portal (saved by the API user) */
-const CLIENT_BYLINE = /\(client, via le portail AKAB\)\s*$/;
 const SYSTEM_NOTE_TYPE = /workflow|flux|r[eè]gle|forward|transf[eé]r|duplicat|merge|fusion|copy|copi[eé]|survey|sondage|recurr|r[eé]curr|automat|syst[eè]m/i;
 
 /** Autotask lists (cached 10 min): ticket picklists + note types/publish values. */
@@ -1161,12 +1238,15 @@ const autotaskSource: TicketSource = {
     return u?.r ? a.user.id : null;
   },
 
-  /** Open tickets + those completed in the last 14 days, from the local copy. */
+  /** The local copy: open tickets and every ticket since the sync date, completed ones with their status. */
   async list() {
     lastUse = Date.now();
     const m = await mirrorMap();
-    if (!m.size) await syncTickets();
-    else if (Date.now() - lastInc > INCREMENTAL_EVERY) void syncTickets().catch((e) => console.warn("[autotask] sync failed:", e instanceof Error ? e.message : e));
+    // the copy is read as it is; it is refreshed in the background only when the automatic sync is on
+    if ((await ticketSyncSettings()).auto) {
+      if (!m.size) await syncTickets();
+      else if (Date.now() - lastInc > INCREMENTAL_EVERY) void syncTickets().catch((e) => console.warn("[autotask] sync failed:", e instanceof Error ? e.message : e));
+    }
     return [...(mirror ?? m).values()];
   },
 
@@ -1235,22 +1315,27 @@ const autotaskSource: TicketSource = {
       .innerJoin(schema.users, eq(schema.users.id, schema.autotaskAuthors.userId))
       .where(eq(schema.autotaskAuthors.ticketId, id));
     const portalAuthor = (entity: "note" | "time", aid: number) => authors.find((x) => x.entity === entity && x.autotaskId === aid)?.name ?? null;
-    const noteItems: Note[] = notes.filter((n) => !isSmsNote(n.title)).map((n) => ({
-      id: `n${n.id}`,
-      author: portalAuthor("note", n.id) ?? resourceName(n.creatorResourceID) ?? (contactOf(n) ? (contactMap.get(contactOf(n)!) ?? "") : "Autotask"),
-      at: n.createDateTime,
-      text: [n.title, n.description].filter(Boolean).join("\n").trim(),
-      internal: internalValues.has(String(n.publish)),
-      kind: "note",
-      // neither a technician (portal or Autotask) nor the client: Autotask's own
-      // neither a technician (portal or Autotask) nor the client: Autotask's own (workflow rules, the API user, a
-      // resource that is not an active technician); a client's reply made in the client portal is signed by the API user
-      ...(!portalAuthor("note", n.id) &&
-      !CLIENT_BYLINE.test(n.description ?? "") &&
-      (systemTypes.has(String(n.noteType)) || (!n.creatorResourceID && !contactOf(n)) || (n.creatorResourceID && !contactOf(n) && !res.some((r) => r.id === n.creatorResourceID)))
-        ? { system: true }
-        : {}),
-    }));
+    const noteItems: Note[] = notes.filter((n) => !isSmsNote(n.title)).map((n) => {
+      const raw = [n.title, n.description].filter(Boolean).join("\n").trim();
+      // a client's reply made in the client portal: shown as theirs, without the signature
+      const signed = portalAuthor("note", n.id) ? null : CLIENT_SIGNED.exec(raw);
+      const mine = portalAuthor("note", n.id);
+      const contact = contactOf(n);
+      return {
+        id: `n${n.id}`,
+        author: signed?.[1] ?? mine ?? resourceName(n.creatorResourceID) ?? (contact ? (contactMap.get(contact) ?? "") : "Autotask"),
+        at: n.createDateTime,
+        text: signed ? raw.slice(0, signed.index).trim() : raw,
+        internal: internalValues.has(String(n.publish)),
+        kind: "note" as const,
+        by: signed || (!mine && contact) ? ("client" as const) : ("tech" as const),
+        // neither a technician (portal or Autotask) nor the client: Autotask's own (workflow rules, the API user, a
+        // resource that is not an active technician); a client's reply made in the client portal is signed by the API user
+        ...(!mine && !signed && (systemTypes.has(String(n.noteType)) || (!n.creatorResourceID && !contact) || (n.creatorResourceID && !contact && !res.some((r) => r.id === n.creatorResourceID)))
+          ? { system: true }
+          : {}),
+      };
+    });
     // Time entries = the work done on the ticket (summary for the client, internal note for the team)
     const timeItems: Note[] = times.map((x) => ({
       id: `t${x.id}`,
@@ -1259,6 +1344,7 @@ const autotaskSource: TicketSource = {
       text: (x.summaryNotes ?? "").trim(),
       internal: false,
       kind: "time",
+      by: "tech" as const,
       hours: x.hoursWorked ?? 0,
       internalText: (x.internalNotes ?? "").trim() || undefined,
       billable: x.isNonBillable == null ? undefined : !x.isNonBillable,
@@ -1798,6 +1884,7 @@ const autotaskSource: TicketSource = {
         summaryNotes: p.summary,
         ...(p.internal ? { internalNotes: p.internal } : {}),
         ...(p.workTypeId ? { billingCodeID: Number(p.workTypeId) } : {}),
+        ...(p.contractSourceId && Number(p.contractSourceId) ? { contractID: Number(p.contractSourceId) } : {}),
       },
       { impersonate: actor },
     );
