@@ -195,10 +195,15 @@ export function createClient(creds: Credentials, zone: Zone, opts: { fallbackToA
         if (opts.complete) throw new AutotaskError("api", undefined, `${entity}: more than ${max} rows, copy stopped`);
         break;
       }
-      // the next page is a GET for most entities, a POST for some (TicketNotes: 405 on GET)
+      // the next page is a GET for most entities; for some (TicketNotes) Autotask answers 405 — then ask for
+      // the rows after the last id received instead (results come in id order)
       page = await call<Page<T>>("GET", next).catch((e) => {
-        if (e instanceof AutotaskError && e.status === 405) return call<Page<T>>("POST", next, {});
-        throw e;
+        const last = (out[out.length - 1] as { id?: number } | undefined)?.id;
+        if (!(e instanceof AutotaskError && e.status === 405) || typeof last !== "number") throw e;
+        return call<Page<T>>("POST", `${entity}/query`, {
+          filter: [...filter, { op: "gt", field: "id", value: last }],
+          ...(opts.fields ? { IncludeFields: opts.fields } : {}),
+        });
       });
     }
     return out.slice(0, max);
