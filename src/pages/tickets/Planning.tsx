@@ -75,7 +75,6 @@ type Block = {
   note: string;
   companyName: string | null;
   reminderMinutes: number;
-  autotaskServiceCallId: number | null;
   startsAt: string;
   endsAt: string;
   /** A colleague's time: only that they are busy (no details) */
@@ -1247,7 +1246,7 @@ function BlockDialog({
           }),
     onSuccess: (r) => {
       toast.success(t("planning.saved"));
-      // saved, but Autotask or Outlook did not follow
+      // saved, but Outlook did not follow
       for (const w of r?.warnings ?? []) toast.warning(t(`planning.warnings.${w.split("_")[0]}`, { code: w }));
       done();
     },
@@ -1383,7 +1382,6 @@ function BlockDialog({
               <Input id="bl-to" type="time" step={900} value={until} onChange={(e) => setUntil(e.target.value)} />
             </div>
           </div>
-          {kind === "onsite" && <p className="-mt-2 flex items-start gap-1.5 rounded-lg bg-orange-500/10 px-3 py-2 text-[11px] text-orange-200"><MapPin className="mt-0.5 size-3 shrink-0" /> {block?.autotaskServiceCallId ? t("planning.serviceCallLinked", { id: block.autotaskServiceCallId }) : t("planning.serviceCallHint")}</p>}
           <div className="space-y-1.5">
             <Label className="flex items-center gap-1.5">
               <BellRing className="size-3.5 text-primary" /> {t("planning.reminder")}

@@ -4,7 +4,7 @@ Portal for the AKAB Informatique team and its clients: technician workspace,
 admin settings (technicians, clients, client users, roles and granular rights),
 customizable dashboard and a message board to clients. French / English.
 
-Also: tickets (Autotask) with planning, store inventory, Outlook, text
+Also: tickets with planning, store inventory, Outlook, text
 messages, and a **weekly meeting** page (points to discuss, overdue tickets
 and those due by Friday per technician, projects in progress with notes and
 assignees, absence calendar shared with the ticket planning).

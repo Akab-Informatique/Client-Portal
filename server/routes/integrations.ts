@@ -1,26 +1,11 @@
 import { Hono } from "hono";
 import { HTTPException } from "hono/http-exception";
-import { and, asc, eq, isNull, gte } from "drizzle-orm";
+import { eq, gte } from "drizzle-orm";
 import { z } from "zod";
 import { db, schema } from "../db/index.ts";
 import { auth, permissionsOf, requirePermission, type AppEnv } from "../lib/auth.ts";
-import { exportFile, FinalSyncError, finalSyncState, startFinalSync } from "../lib/finalSync.ts";
-import { autotaskLinked } from "../lib/ticketSource.ts";
 import { audit } from "../lib/audit.ts";
-import {
-  AutotaskError,
-  autotaskUsage,
-  createClient,
-  detectZone,
-  listResources,
-  loadSettings,
-  saveSettings,
-  type AutotaskConfig,
-  type AutotaskErrorCode,
-  type Settings,
-} from "../lib/autotask.ts";
 import { body, zEmail, zUuid } from "../lib/validate.ts";
-import { clearTicketCache } from "../lib/ticketSource.ts";
 import { RMM_PLACEHOLDERS, rmmSettings, saveRmmSettings, validTemplate } from "../lib/rmm.ts";
 import { O365Error, o365Settings, saveO365Settings, testO365 } from "../lib/o365.ts";
 import { normalizePhone, saveSmsSettings, sendSms, SmsError, smsSettings, testVoipms, type SmsSettings } from "../lib/voipms.ts";
@@ -29,29 +14,6 @@ import { microsoftRedirectUri } from "./microsoft.ts";
 import { AI_FEATURE_KEYS, DEFAULT_FEATURE_MODELS, AI_MODELS, AI_PRICES, AiError, aiSettings, askClaude, saveAiSettings, startOfToday, type AiErrorCode, type AiSettings } from "../lib/ai.ts";
 
 const zCred = z.string().trim().min(1).max(300);
-
-function view(s: Settings, updatedByName: string | null) {
-  return {
-    enabled: s.enabled,
-    username: s.config.username ?? "",
-    hasSecret: s.hasSecret,
-    hasIntegrationCode: s.hasIntegrationCode,
-    configured: Boolean(s.credentials && s.config.zone),
-    zone: s.config.zone ?? null,
-    lastTest: s.config.lastTest ?? null,
-    fallbackToApiUser: Boolean(s.config.fallbackToApiUser),
-    /** API calls made by the portal in the last hour (Autotask allows 10,000 per hour) */
-    usage: autotaskUsage(),
-    updatedAt: s.updatedAt,
-    updatedByName,
-  };
-}
-
-async function current() {
-  const s = await loadSettings();
-  const [u] = s.updatedBy ? await db().select({ name: schema.users.name }).from(schema.users).where(eq(schema.users.id, s.updatedBy)) : [];
-  return view(s, u?.name ?? null);
-}
 
 /** Microsoft 365 settings as shown to the admin (never the secret). */
 /** The Claude settings for the admin page (never the key). */
@@ -81,207 +43,9 @@ function voipmsView(s: SmsSettings) {
   };
 }
 
-const codeOf = (e: unknown): AutotaskErrorCode => (e instanceof AutotaskError ? e.code : "api");
-
-async function staffWithLinks() {
-  return db()
-    .select({ id: schema.users.id, name: schema.users.name, email: schema.users.email, active: schema.users.active, resourceId: schema.users.autotaskResourceId })
-    .from(schema.users)
-    .where(eq(schema.users.kind, "staff"))
-    .orderBy(asc(schema.users.name));
-}
-
-/** Admin › Integrations › Autotask (admin.integrations). */
+/** Admin › Integrations (admin.integrations). */
 export const integrationRoutes = new Hono<AppEnv>()
   .use(requirePermission("admin.integrations"))
-
-  .get("/autotask", async (c) => c.json(await current()))
-
-  .put("/autotask", async (c) => {
-    const a = auth(c);
-    const p = await body(
-      c,
-      z.object({
-        enabled: z.boolean().optional(),
-        username: zEmail.optional(),
-        secret: zCred.optional(),
-        integrationCode: zCred.optional(),
-        fallbackToApiUser: z.boolean().optional(),
-      }),
-    );
-    const s = await loadSettings();
-    const config: AutotaskConfig = { ...s.config };
-    if (p.fallbackToApiUser !== undefined) config.fallbackToApiUser = p.fallbackToApiUser;
-    if (p.username !== undefined && p.username !== s.config.username) {
-      try {
-        config.zone = await detectZone(p.username);
-      } catch (e) {
-        throw new HTTPException(400, { message: codeOf(e) === "network" ? "autotask_network" : "autotask_zone" });
-      }
-      config.username = p.username;
-      delete config.lastTest;
-    }
-    if (p.secret !== undefined || p.integrationCode !== undefined) delete config.lastTest;
-    const complete = Boolean(config.username && config.zone && (p.secret ?? s.hasSecret) && (p.integrationCode ?? s.hasIntegrationCode));
-    if (p.enabled && !complete) throw new HTTPException(400, { message: "autotask_incomplete" });
-
-    await saveSettings(a.user.id, { enabled: p.enabled, config, secret: p.secret, integrationCode: p.integrationCode });
-    // Another Autotask account: its tickets are not ours, start the local copy again
-    if (p.username !== undefined && p.username !== s.config.username) await clearTicketCache();
-    // Never log the secret or the integration code, only that they changed
-    await audit(a.user.id, "integration.autotask.updated", null, {
-      enabled: p.enabled,
-      username: p.username,
-      secretChanged: p.secret !== undefined || undefined,
-      integrationCodeChanged: p.integrationCode !== undefined || undefined,
-      fallbackToApiUser: p.fallbackToApiUser,
-    });
-    return c.json(await current());
-  })
-
-  /**
-   * Test the connection. Values typed in the form (not saved yet) are used
-   * when given, otherwise the saved ones.
-   */
-  .post("/autotask/test", async (c) => {
-    const a = auth(c);
-    const p = await body(c, z.object({ username: zEmail.optional(), secret: zCred.optional(), integrationCode: zCred.optional() }));
-    const s = await loadSettings();
-    const draft = p.username !== undefined || p.secret !== undefined || p.integrationCode !== undefined;
-    const username = p.username ?? s.config.username;
-    const secret = p.secret ?? s.credentials?.secret;
-    const integrationCode = p.integrationCode ?? s.credentials?.integrationCode;
-    if (!username || !secret || !integrationCode) return c.json({ ok: false, error: "not_configured" });
-
-    let result: { ok: true; zone: { name: string; webUrl: string | null }; usage: { used: number; limit: number } } | { ok: false; error: AutotaskErrorCode };
-    try {
-      const zone = username === s.config.username && s.config.zone ? s.config.zone : await detectZone(username);
-      const client = createClient({ username, secret, integrationCode }, zone);
-      const th = await client.call<{ externalRequestThreshold?: number; currentTimeframeRequestCount?: number }>("GET", "ThresholdInformation");
-      result = {
-        ok: true,
-        zone: { name: zone.name, webUrl: zone.webUrl },
-        usage: { used: th.currentTimeframeRequestCount ?? 0, limit: th.externalRequestThreshold ?? 0 },
-      };
-    } catch (e) {
-      result = { ok: false, error: codeOf(e) };
-    }
-    if (!draft) {
-      const lastTest = { ok: result.ok, at: new Date().toISOString(), ...(result.ok ? {} : { error: result.error }) };
-      await saveSettings(a.user.id, { config: { ...s.config, lastTest } });
-    }
-    return c.json(result);
-  })
-
-  /** Technicians and the Autotask users they are linked to. */
-  // ── The last sync, before the connection is closed ──
-  .get("/autotask/final-sync", async (c) => c.json({ linked: await autotaskLinked(), state: await finalSyncState() }))
-
-  /** Tickets, expense reports (with their status) since a date, and the time sheets as CSV files */
-  .post("/autotask/final-sync", async (c) => {
-    const a = auth(c);
-    const p = await body(
-      c,
-      z.object({
-        since: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).default("2026-09-01"),
-        parts: z.array(z.enum(["tickets", "expenses", "timesheets"])).min(1).optional(),
-      }),
-    );
-    if (p.since < "2000-01-01" || p.since > "2100-01-01") throw new HTTPException(400, { message: "invalid_range" });
-    try {
-      await startFinalSync(p, a.user.id);
-    } catch (e) {
-      if (e instanceof FinalSyncError) throw new HTTPException(e.code === "running" ? 409 : 400, { message: e.code === "running" ? "final_sync_running" : "invalid_range" });
-      throw e;
-    }
-    return c.json({ ok: true }, 202);
-  })
-
-  /** A file kept by the final sync (always a download) */
-  .get("/autotask/final-sync/files/:id", async (c) => {
-    const file = await exportFile(zUuid.parse(c.req.param("id")));
-    if (!file) throw new HTTPException(404, { message: "not_found" });
-    // the UTF-8 mark makes Excel read the accents
-    return new Response(`${String.fromCharCode(0xfeff)}${file.content}`, {
-      headers: {
-        "content-type": "text/csv; charset=utf-8",
-        "content-disposition": `attachment; filename="${file.filename.replace(/[^\w.-]/g, "_")}"`,
-        "x-content-type-options": "nosniff",
-        "cache-control": "private, no-store",
-      },
-    });
-  })
-
-  .get("/autotask/links", async (c) => {
-    const staff = await staffWithLinks();
-    let resources: Awaited<ReturnType<typeof listResources>> = [];
-    let error: AutotaskErrorCode | null = null;
-    try {
-      resources = await listResources(c.req.query("refresh") === "1");
-    } catch (e) {
-      error = codeOf(e);
-    }
-    const linked = new Set(staff.map((s) => s.resourceId).filter((x): x is number => x !== null));
-    return c.json({
-      error,
-      resources,
-      staff: staff.map((s) => {
-        const match = s.resourceId === null ? resources.find((r) => r.email === s.email.toLowerCase() && !linked.has(r.id)) : undefined;
-        return { ...s, suggestedResourceId: match?.id ?? null };
-      }),
-    });
-  })
-
-  .put("/autotask/links/:userId", async (c) => {
-    const a = auth(c);
-    const userId = zUuid.parse(c.req.param("userId"));
-    const p = await body(c, z.object({ resourceId: z.number().int().positive().nullable() }));
-    const [u] = await db().select().from(schema.users).where(and(eq(schema.users.id, userId), eq(schema.users.kind, "staff")));
-    if (!u) throw new HTTPException(404, { message: "not_found" });
-    if (p.resourceId !== null) {
-      let resources;
-      try {
-        resources = await listResources();
-      } catch (e) {
-        throw new HTTPException(400, { message: `autotask_${codeOf(e)}` });
-      }
-      if (!resources.some((r) => r.id === p.resourceId)) throw new HTTPException(400, { message: "autotask_unknown_resource" });
-      const [taken] = await db().select({ id: schema.users.id }).from(schema.users).where(eq(schema.users.autotaskResourceId, p.resourceId));
-      if (taken && taken.id !== userId) throw new HTTPException(409, { message: "autotask_resource_taken" });
-    }
-    await db().update(schema.users).set({ autotaskResourceId: p.resourceId, updatedAt: new Date() }).where(eq(schema.users.id, userId));
-    await audit(a.user.id, "integration.autotask.link", userId, { resourceId: p.resourceId });
-    return c.json({ ok: true });
-  })
-
-  /** Link every unlinked technician whose email matches an Autotask user. */
-  .post("/autotask/links/auto", async (c) => {
-    const a = auth(c);
-    let resources;
-    try {
-      resources = await listResources(true);
-    } catch (e) {
-      throw new HTTPException(400, { message: `autotask_${codeOf(e)}` });
-    }
-    const staff = await staffWithLinks();
-    const used = new Set(staff.map((s) => s.resourceId).filter((x): x is number => x !== null));
-    let linked = 0;
-    for (const s of staff.filter((x) => x.resourceId === null)) {
-      const r = resources.find((x) => x.email === s.email.toLowerCase() && !used.has(x.id));
-      if (!r) continue;
-      const done = await db()
-        .update(schema.users)
-        .set({ autotaskResourceId: r.id, updatedAt: new Date() })
-        .where(and(eq(schema.users.id, s.id), isNull(schema.users.autotaskResourceId)))
-        .returning({ id: schema.users.id });
-      if (done.length) {
-        used.add(r.id);
-        linked++;
-      }
-    }
-    await audit(a.user.id, "integration.autotask.autolink", null, { linked });
-    return c.json({ linked });
-  })
 
   // ── Microsoft 365 calendars (Azure app registration, Calendars.ReadWrite) ──
   // with the address to register in Entra for the technicians' own sign-in

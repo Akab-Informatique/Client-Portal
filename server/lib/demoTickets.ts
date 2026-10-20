@@ -1,7 +1,6 @@
 /**
- * Sample tickets to design and try the Tickets screens before they are wired
- * to Autotask. Same shape as what the Autotask connector will return, so the
- * UI does not change when the data becomes real. Kept in memory (lost on restart).
+ * Sample tickets (development only) to design and try the Tickets screens.
+ * Same shape as the portal's real tickets. Kept in memory (lost on restart).
  */
 export type TicketStatus = "new" | "inProgress" | "needsAttention" | "waitingCustomer" | "waitingVendor" | "scheduled" | "complete";
 export type TicketPriority = "critical" | "high" | "medium" | "low";
@@ -20,16 +19,16 @@ export type Ticket = {
   queue: string;
   source: "email" | "phone" | "portal" | "monitoring";
   assignee: Person | null;
-  /** Secondary resources (Autotask) */
+  /** Secondary resources */
   secondary: Person[];
   createdAt: string;
   dueAt: string;
   updatedAt: string;
   hours: number;
   notes: Note[];
-  /** Device (Autotask configuration item) */
+  /** Device */
   assetId: string | null;
-  /** Contract the work is billed on (Autotask contract) */
+  /** Contract the work is billed on */
   contractId?: string | null;
   /** Files attached in the portal */
   attachments?: { id: string; name: string; size: number; at: string; author: string }[];
@@ -129,7 +128,7 @@ function generate(): Stored[] {
         internal: k % 2 === 0 && r() > 0.5,
       });
     }
-    // what an Autotask workflow rule writes (hidden in the ticket view unless asked for)
+    // what a workflow rule writes (hidden in the ticket view unless asked for)
     if (i % 3 === 0) notes.push({ id: `n${i}-wf`, author: "Autotask", at: new Date(created.getTime() + 30 * 60_000).toISOString(), text: "Règle de flux de travail : billet assigné à la file Support niveau 1.", internal: true, system: true });
     return {
       id: 40000 + i,
@@ -176,7 +175,7 @@ export function addDemoTicket(t: Omit<Ticket, "id" | "number" | "createdAt" | "u
 }
 
 /** Change fields of a sample ticket (an explicit assignee replaces the round-robin slot). */
-/** Other contacts of the sample tickets (Autotask "additional contacts"): ticket id → contact ids */
+/** Other contacts of the sample tickets: ticket id → contact ids */
 const otherContacts = new Map<number, Set<string>>();
 export function setDemoOtherContacts(ticketId: number, contactIds: string[]) {
   otherContacts.set(ticketId, new Set(contactIds));
@@ -400,7 +399,7 @@ export function ensureClientSamples(clients: { name: string; phone: string | nul
   }
 }
 
-// ── Contracts per client (Autotask "Contracts"); new clients have none ──
+// ── Contracts per client; new clients have none ──
 export type Contract = { id: string; name: string; isDefault: boolean; endDate: string | null };
 export function demoContracts(companyId: number): Contract[] {
   const c = companyId - 300;
@@ -412,7 +411,7 @@ export function demoContracts(companyId: number): Contract[] {
   ];
 }
 
-// ── Contacts per client (Autotask "Contacts") ──
+// ── Contacts per client ──
 export type Contact = { id: string; companyId: number; name: string; email: string | null; phone: string | null };
 let contacts: Contact[] | null = null;
 const slug = (s: string) =>
@@ -448,7 +447,7 @@ export function addDemoContact(p: Omit<Contact, "id">, id?: string): Contact {
   return c;
 }
 
-// ── Devices per client (Autotask "Configuration Items", with RMM data) ──
+// ── Devices per client (with RMM data) ──
 export type Asset = {
   id: string;
   name: string;
@@ -463,7 +462,7 @@ export type Asset = {
   lastUser: string | null;
   lastSeen: string | null;
   warrantyEnd: string | null;
-  /** Device ids in the RMM (Datto RMM fills them in Autotask) */
+  /** Device ids in the RMM */
   rmm: { id: string | null; uid: string | null };
 };
 let assets: Asset[] | null = null;

@@ -674,14 +674,6 @@ function TicketBody({
                 </Button>
               </div>
             )}
-            {(tk.warnings ?? []).map((w) => (
-              <p key={w.part} className="flex items-start gap-2 rounded-xl border border-orange-500/40 bg-orange-500/10 px-4 py-2.5 text-xs">
-                <AlertTriangle className="mt-0.5 size-3.5 shrink-0 text-orange-300" />
-                <span>
-                  {t(`tickets.partFailed.${w.part}`)} <span className="text-muted-foreground">{w.detail}</span>
-                </span>
-              </p>
-            ))}
             <TicketPriorities ticketId={tk.id} />
             <EditableDescription
               text={tk.description}
@@ -1057,7 +1049,7 @@ type ActivityFilter = "all" | "reply" | "internal" | "time";
 /**
  * What was said and done, as a conversation, newest on top: the client's
  * messages on the left, the technicians' replies on the right, internal notes
- * and time entries in the middle (each in its own color). Nothing Autotask
+ * and time entries in the middle (each in its own color). Nothing system-made
  * writes by itself (workflow rules, the API user…).
  */
 function Activity({ tk, partial }: { tk: TicketDetail; partial: boolean }) {
@@ -1281,7 +1273,7 @@ function EditableTitle({ value, disabled, onSave }: { value: string; disabled: b
   );
 }
 
-/** Description with an edit button (saved to Autotask). */
+/** Description with an edit button . */
 function EditableDescription({
   text,
   disabled,

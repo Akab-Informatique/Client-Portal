@@ -5,7 +5,7 @@ import { api, ApiError } from "@/lib/api";
 import { currentLocale } from "@/i18n";
 
 /**
- * Statuses, priorities and queues are the source's own lists (Autotask lets
+ * Statuses, priorities and queues are the source's own lists (which can
  * every MSP rename them): a value, its label (null = use our translation of
  * the kind) and a kind used for colours and "open/closed".
  */
@@ -54,8 +54,6 @@ export type TicketDetail = TicketSummary & {
   notes: { id: string; author: string; at: string; text: string; internal: boolean; kind?: "note" | "time"; hours?: number; internalText?: string; billable?: boolean; offsetHours?: number; system?: boolean; by?: "client" | "tech" }[];
   /** AI assistant available to me */
   ai: boolean;
-  /** Parts Autotask could not give (notes, time) */
-  warnings?: { part: "notes" | "time"; detail: string }[];
   /** The ticket device (absent while the full ticket loads) */
   assetId?: string | null;
   asset?: AssetView | null;
@@ -97,7 +95,7 @@ export type TicketContract = {
   /** Hours worked under it are billed */
   billed: boolean;
 };
-/** A client device (Autotask configuration item) with its RMM links. */
+/** A client device with its RMM links. */
 export type AssetView = {
   id: string;
   name: string;
@@ -113,7 +111,7 @@ export type AssetView = {
   lastSeen: string | null;
   warrantyEnd: string | null;
   rmm: { id: string | null; uid: string | null };
-  /** "rmm": synced from the RMM / Autotask; "local": made in the portal */
+  /** "rmm": synced from the RMM; "local": made in the portal */
   origin: "rmm" | "local";
   /** RMM name and links; null when the RMM is not set up or an id is missing */
   links: { rmm: string | null; device: string | null; remote: string | null };
@@ -129,8 +127,6 @@ export type Tally = { label: string | null; kind?: string; count: number }[];
 
 export type TicketList = {
   demo: boolean;
-  /** Autotask mode, and my portal account is not linked to an Autotask user */
-  notLinked: boolean;
   ai: boolean;
   metrics: {
     mine: number;
@@ -278,23 +274,17 @@ export function usePresence(ticketId: number | null) {
 }
 
 /**
- * Message for a failed ticket action. Autotask's own reason (e.g. a required
- * field) is shown as is; "not linked" explains what to do.
+ * Message for a failed ticket action.
  */
 export function ticketErrorText(t: (k: string, o?: Record<string, unknown>) => string, e: unknown): string {
   if (e instanceof ApiError) {
-    if (e.code === "autotask_not_linked") return t("tickets.errors.notLinked");
     if (e.code === "ticket_not_started") return t("tickets.startLock.refused", { date: shortDate(e.fields?.find((f) => f.path === "startDate")?.message ?? "") });
-    if (e.code === "autotask_permission") return t("tickets.errors.permission");
     if (e.code === "tickets_not_local") return t("tickets.errors.notLocal");
     if (e.code === "insufficient_stock") return t("tickets.errors.insufficient_stock");
     if (e.code === "serial_unavailable" || e.code === "serials_required") return t(`tickets.errors.${e.code}`);
-    const detail = e.fields?.find((f) => f.path === "autotask")?.message;
-    if (detail) return t("tickets.errors.autotask", { detail });
     if (e.code === "invalid_contact") return t("tickets.errors.invalidContact");
     if (e.code === "invalid_contract") return t("tickets.errors.invalidContract");
     if (e.code === "company_exists") return t("tickets.errors.companyExists");
-    if (e.code.startsWith("autotask_")) return t(`integrations.errors.${e.code.slice(9)}`, { defaultValue: t("common.error") });
   }
   return t("common.error");
 }

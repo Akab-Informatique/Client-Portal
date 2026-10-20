@@ -21,11 +21,11 @@ import {
   Eye,
   FlaskConical,
   Inbox,
-  Link2Off,
+ 
   Loader2,
   Layers,
   Plus,
-  PlugZap,
+ 
   RefreshCw,
   Search,
   Siren,
@@ -174,11 +174,6 @@ export function TicketsPage() {
         <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1">
           <h1 className="text-2xl font-bold">{t("tickets.title")}</h1>
           <LiveBadge updatedAt={dataUpdatedAt} fetching={isFetching} onRefresh={() => void refetch()} />
-          {data && !data.demo && (
-            <span className="flex items-center gap-1 text-[11px] text-muted-foreground">
-              <PlugZap className="size-3 text-primary" /> Autotask
-            </span>
-          )}
           {data?.demo && (
             <Tooltip>
               <TooltipTrigger asChild>
@@ -202,15 +197,6 @@ export function TicketsPage() {
           )}
         </div>
       </div>
-
-      {data?.notLinked && (
-        <div className="flex items-start gap-3 rounded-xl border border-orange-500/40 bg-orange-500/10 px-4 py-3 text-sm">
-          <Link2Off className="mt-0.5 size-4 shrink-0 text-orange-300" />
-          <span>
-            <span className="font-medium text-orange-200">{t("tickets.notLinkedTitle")}</span> <span className="text-muted-foreground">{t("tickets.notLinkedText")}</span>
-          </span>
-        </div>
-      )}
 
       {/* Left: the buttons, then the filters; right: the week, as tall as both (more room for the priorities) */}
       <div className="grid gap-3 lg:grid-cols-[minmax(0,1fr)_minmax(420px,0.9fr)] lg:items-stretch">

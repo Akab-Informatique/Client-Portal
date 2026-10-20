@@ -83,13 +83,6 @@ export function ClientPage() {
         <div className="min-w-0 flex-1">
           <h1 className="truncate text-2xl font-bold">{client.name}</h1>
           <div className="mt-1 flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
-            {client.autotaskId != null ? (
-              <span className="rounded-md border px-1.5 py-0.5 font-mono">{t("crm.inAutotask", { id: client.autotaskId })}</span>
-            ) : (
-              <span className="rounded-md border border-dashed px-1.5 py-0.5" title={t("crm.portalOnlyHint")}>
-                {t("crm.portalOnly")}
-              </span>
-            )}
             {!client.active && <span className="rounded-md border border-red-500/40 bg-red-500/10 px-1.5 py-0.5 text-red-300">{t("crm.inactiveTag")}</span>}
             {client.parent && (
               <Link to={`/crm/${client.parent.id}`} className="flex items-center gap-1 hover:text-primary">
@@ -286,7 +279,7 @@ function InfoTab({ client }: { client: CrmDetail }) {
             </Field>
           </div>
           <div className="flex flex-wrap items-center gap-3">
-            <p className="flex-1 text-[11px] text-muted-foreground">{editable ? (client.autotaskId != null ? t("crm.info.synced") : "") : t("crm.info.readOnly")}</p>
+            <p className="flex-1 text-[11px] text-muted-foreground">{editable ? "" : t("crm.info.readOnly")}</p>
             {editable && (
               <Button type="submit" disabled={!dirty || save.isPending} className="bg-grad-gold font-semibold text-[#1a1204] hover:brightness-105">
                 {save.isPending && <Loader2 className="size-4 animate-spin" />} {t("crm.info.save")}
@@ -556,7 +549,6 @@ function InvoicesTab({ client }: { client: CrmDetail }) {
             </ul>
           </div>
         )}
-        <p className="text-[11px] text-muted-foreground">{t("crm.invoices.fromAutotask")}</p>
       </Card>
     </div>
   );
@@ -1020,7 +1012,6 @@ function ContractsTab({ client }: { client: CrmDetail }) {
           ))}
         </ul>
       )}
-      <p className="text-[11px] text-muted-foreground">{t("crm.contracts.fromAutotask")}</p>
     </Card>
   );
 }

@@ -2,7 +2,7 @@ import { useQuery } from "@tanstack/react-query";
 import { api, ApiError } from "@/lib/api";
 import type { PriorityKind, StatusKind } from "@/pages/tickets/shared";
 
-/** The CRM: the portal's own copy of the clients (synced with Autotask while it is linked). */
+/** The CRM: the portal's clients. */
 export type CrmClient = {
   id: string;
   name: string;
@@ -72,7 +72,7 @@ export type CrmInvoice = {
   late: boolean;
   daysLate: number;
   payments: InvoicePayment[];
-  /** autotask: copied from Autotask · portal: made here (with its lines) */
+  /** autotask: copied from the old system · portal: made here (with its lines) */
   source: "autotask" | "portal";
   notes: string | null;
   poNumber: string | null;
@@ -118,7 +118,7 @@ export type CrmTicket = {
   updatedAt: string;
 };
 export type SyncStatus = {
-  mode: "autotask" | "sample" | "local";
+  mode: "sample" | "local";
   lastSync: string | null;
   ok: boolean | null;
   error: string | null;

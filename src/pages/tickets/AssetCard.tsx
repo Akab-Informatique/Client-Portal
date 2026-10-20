@@ -109,7 +109,7 @@ export function useAssets(companyId: number, enabled = true) {
 }
 
 /**
- * The ticket's device (Autotask configuration item): who uses it, its RMM
+ * The ticket's device : who uses it, its RMM
  * details, and the RMM links (device page, web remote control) in a new tab.
  * The picker shows the contact's devices first.
  */

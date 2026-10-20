@@ -1,25 +1,19 @@
 import { config } from "../config.ts";
-import { and, asc, desc, eq, gte, ilike, inArray, ne, or, sql, type SQL } from "drizzle-orm";
+import { and, asc, desc, eq, gte, ilike, inArray, or, sql, type SQL } from "drizzle-orm";
 import { db, schema } from "../db/index.ts";
 import type { AuthContext } from "./auth.ts";
 import { audit } from "./audit.ts";
 import { unsyncBlock, unsyncPin } from "./planning.ts";
+import { NATIVE_ID_START } from "./ids.ts";
 import {
   approvedStatus,
   dueIso,
-  autotaskLinked,
-  exportTickets,
   isSmsNote,
   SMS_NOTE_TAG,
   SourceError,
-  sourceExtras,
-  sourceOptions,
   type ChargeOptions,
-  ticketSyncSettings,
   type Billable,
   type Charge,
-  type ExportScope,
-  type ExportTicket,
   type HistoryTicket,
   type Note,
   type NTicket,
@@ -27,282 +21,37 @@ import {
   type Person,
   type TicketSource,
 } from "./ticketSource.ts";
+export { NATIVE_ID_START };
 
 /**
- * The portal's own tickets. Once switched (Admin › Intégrations › Autotask),
- * tickets, their notes, time, charges and files live in the portal database:
- * nothing about tickets is read from or written to Autotask any more. Clients,
- * contacts, contracts, devices, products and billing lists still come from the
- * source as before (`base`), until Autotask is unlinked.
- *
- * The switch copies every ticket once (`startTicketImport`), with progress;
- * the statuses, priorities and queues are kept as they were at that moment.
+ * The portal's own tickets: tickets, their notes, time, charges and files live in the portal database. In
+ * production this is always the case; in development it is chosen in the `tickets` integration row (mode local),
+ * otherwise sample data is shown. Clients, contacts, contracts, products and lists come from `base`
+ * (`localBase`, the database too). New tickets get ids from `NATIVE_ID_START` up.
  */
 const PROVIDER = "tickets";
 
-type ImportState = { state: "running" | "done" | "failed"; done: number; startedAt: string; finishedAt?: string; error?: string };
-export type TicketModeConfig = { mode: "autotask" | "local"; options?: Options; chargeOptions?: ChargeOptions; workTypes?: { value: string; label: string }[]; switchedAt?: string; switchedBy?: string; import?: ImportState };
+export type TicketModeConfig = { mode: "sample" | "local"; options?: Options; chargeOptions?: ChargeOptions; workTypes?: { value: string; label: string }[] };
 
 let cache: { at: number; value: TicketModeConfig } | null = null;
 export async function ticketMode(): Promise<TicketModeConfig> {
   if (cache && Date.now() - cache.at < 5_000) return cache.value;
   const [row] = await db().select().from(schema.integrations).where(eq(schema.integrations.provider, PROVIDER));
-  const value = { mode: "autotask", ...((row?.config ?? {}) as Partial<TicketModeConfig>) } as TicketModeConfig;
+  const value = { mode: "sample", ...((row?.config ?? {}) as Partial<TicketModeConfig>) } as TicketModeConfig;
   cache = { at: Date.now(), value };
   return value;
 }
-async function saveMode(next: TicketModeConfig, actorId: string | null = null) {
-  const values = { enabled: next.mode === "local", config: next as unknown as Record<string, unknown>, updatedBy: actorId, updatedAt: new Date() };
-  await db()
-    .insert(schema.integrations)
-    .values({ provider: PROVIDER, ...values })
-    .onConflictDoUpdate({ target: schema.integrations.provider, set: values });
-  cache = null;
-}
-/**
- * The portal's own tickets: chosen in Admin › Billets, and always in production
- * once Autotask is not linked (the portal never shows sample data there).
- */
-export const ticketsLocal = async () => (await ticketMode()).mode === "local" || (config.production && !(await autotaskLinked()));
+/** The portal's own tickets: always in production, in development when chosen (never sample data in production) */
+export const ticketsLocal = async () => config.production || (await ticketMode()).mode === "local";
 /** For the tests: forget the mode kept in memory */
 export const resetTicketMode = () => {
   cache = null;
 };
 
-// ── The copy ──
-let running: Promise<void> | null = null;
-
-/** Copy the tickets from the source (since the date set in Admin › Billets, open ones whatever their age), then switch to the portal's tickets. One at a time. */
-export async function startTicketImport(actorId: string, sinceOverride?: string): Promise<TicketModeConfig> {
-  const cur = await ticketMode();
-  if (cur.mode === "local") throw new SourceError("already_local");
-  if (running) return cur;
-  const started = new Date().toISOString();
-  await saveMode({ ...cur, import: { state: "running", done: 0, startedAt: started } }, actorId);
-  running = runImport(actorId, started, sinceOverride).finally(() => {
-    running = null;
-  });
-  return ticketMode();
-}
-/** For the tests: once the copy started is over */
-export const ticketImportSettled = () => running ?? Promise.resolve();
-
-async function runImport(actorId: string, started: string, sinceOverride?: string) {
-  let done = 0;
-  try {
-    const sinceDay = sinceOverride ?? (await ticketSyncSettings()).since;
-    let after = 0;
-    for (;;) {
-      const batch = await exportTickets(after, { size: 100, since: sinceDay });
-      if (!batch.length) break;
-      await storeBatch(batch);
-      done += batch.length;
-      after = batch[batch.length - 1].t.id;
-      const cur = await ticketMode();
-      await saveMode({ ...cur, import: { state: "running", done, startedAt: started } }, actorId);
-    }
-    // what changed while the copy ran, once more
-    let lastId = 0;
-    for (;;) {
-      const batch = await exportTickets(lastId, { size: 100, changedSince: new Date(Date.parse(started) - 5 * 60_000).toISOString() });
-      if (!batch.length) break;
-      await storeBatch(batch);
-      lastId = batch[batch.length - 1].t.id;
-    }
-    // the lists of the source, kept for when it is not there any more
-    const options = await sourceOptions();
-    const extras = await sourceExtras();
-    await saveMode(
-      { mode: "local", options, ...extras, switchedAt: new Date().toISOString(), switchedBy: actorId, import: { state: "done", done, startedAt: started, finishedAt: new Date().toISOString() } },
-      actorId,
-    );
-    await audit(actorId, "tickets.switched_local", null, { tickets: done });
-  } catch (e) {
-    const cur = await ticketMode();
-    await saveMode({ ...cur, import: { state: "failed", done, startedAt: started, finishedAt: new Date().toISOString(), error: e instanceof Error ? e.message.slice(0, 300) : String(e) } }, actorId);
-    console.error("[tickets] copy failed:", e);
-  }
-}
-
-/**
- * By hand: copy these tickets (by number), or those of a period, from Autotask
- * into the portal — the version of the portal is replaced by Autotask's. This
- * is the only way anything about tickets comes from Autotask once the portal
- * owns them.
- */
-export type ImportResult = { imported: number; missing: string[]; skippedDeleted: number; keptPortal: number; renumbered: number; possible: string[] };
-export async function importFromSource(scope: Pick<ExportScope, "numbers" | "since">, actorId: string): Promise<ImportResult> {
-  if (!(await ticketsLocal())) throw new SourceError("not_local");
-  if (!(await autotaskLinked())) throw new SourceError("not_linked");
-  if (!scope.numbers?.length && !scope.since) throw new SourceError("invalid_value");
-  const total: Omit<StoreStats, "savedTickets"> = { saved: 0, skippedDeleted: 0, keptPortal: 0, renumbered: 0 };
-  const saved: NTicket[] = [];
-  const found = new Set<string>();
-  let after = 0;
-  // asked for by number: a ticket deleted in the portal comes back (on purpose); by period, never
-  const restore = Boolean(scope.numbers?.length);
-  for (;;) {
-    const batch = await exportTickets(after, { ...scope, size: 100 });
-    if (!batch.length) break;
-    const s = await storeBatch(batch, { restore });
-    total.saved += s.saved;
-    total.skippedDeleted += s.skippedDeleted;
-    total.keptPortal += s.keptPortal;
-    total.renumbered += s.renumbered;
-    saved.push(...s.savedTickets);
-    for (const x of batch) found.add(x.t.number.toUpperCase());
-    after = batch[batch.length - 1].t.id;
-  }
-  const possible = await lookAlikes(saved);
-  await audit(actorId, "tickets.imported", null, { imported: total.saved, skippedDeleted: total.skippedDeleted, keptPortal: total.keptPortal, renumbered: total.renumbered, numbers: scope.numbers ?? null, since: scope.since ?? null });
-  return { imported: total.saved, missing: (scope.numbers ?? []).filter((n) => !found.has(n.toUpperCase())), skippedDeleted: total.skippedDeleted, keptPortal: total.keptPortal, renumbered: total.renumbered, possible };
-}
 
 const minutesOf = (h: number) => Math.round(h * 60);
 const cents = (v: number | null | undefined) => (v == null ? null : Math.round(v * 100));
 
-/**
- * Tickets made in the portal get ids from here on, far above Autotask's: an
- * Autotask ticket can never take the id of one of ours (nor the other way round).
- */
-import { NATIVE_ID_START } from "./ids.ts";
-export { NATIVE_ID_START };
-/** A ticket changed in the portal after this long past its last copy is "edited in the portal" */
-const EDIT_TOLERANCE_MS = 5_000;
-
-export type StoreStats = { saved: number; skippedDeleted: number; keptPortal: number; renumbered: number; savedTickets: NTicket[] };
-
-/**
- * One batch copied (again, if it was already): same ids, nothing doubled.
- * - a ticket deleted in the portal stays deleted (`restore`: on purpose, by its number);
- * - a ticket edited in the portal since its last copy keeps the portal's fields
- *   (Autotask's notes, time, charges and files are still added, by their ids);
- * - a number already used by another ticket (a day's numbering made in both
- *   places) is kept with a letter: T20261020.0529-A.
- */
-async function storeBatch(batch: ExportTicket[], opts: { restore?: boolean } = {}): Promise<StoreStats> {
-  const stats: StoreStats = { saved: 0, skippedDeleted: 0, keptPortal: 0, renumbered: 0, savedTickets: [] };
-  const deleted = new Set(
-    (await db().select({ id: schema.deletedTickets.ticketId }).from(schema.deletedTickets).where(inArray(schema.deletedTickets.ticketId, batch.map((x) => x.t.id)))).map((r) => r.id),
-  );
-  await db().transaction(async (tx) => {
-    for (const x of batch) {
-      const t = x.t;
-      if (deleted.has(t.id)) {
-        if (!opts.restore) {
-          stats.skippedDeleted++;
-          continue;
-        }
-        await tx.delete(schema.deletedTickets).where(eq(schema.deletedTickets.ticketId, t.id));
-      }
-      const [cur] = await tx.select().from(schema.tickets).where(eq(schema.tickets.id, t.id));
-      const edited = Boolean(cur?.autotaskSyncedAt && cur.updatedAt.getTime() > cur.autotaskSyncedAt.getTime() + EDIT_TOLERANCE_MS);
-      let number = t.number;
-      for (const letter of "ABCDEFGHIJKLMNOPQRSTUVWXYZ") {
-        const [clash] = await tx.select({ id: schema.tickets.id }).from(schema.tickets).where(and(eq(schema.tickets.number, number), ne(schema.tickets.id, t.id)));
-        if (!clash) break;
-        number = `${t.number}-${letter}`;
-      }
-      // counted when the number it is kept under is new (not again at every pass)
-      if (number !== t.number && !edited && cur?.number !== number) stats.renumbered++;
-      const values = {
-        id: t.id,
-        number,
-        title: t.title,
-        description: t.description,
-        companyId: t.company.id,
-        companyName: t.company.name,
-        contactId: t.contactId,
-        contactName: t.contact,
-        status: t.status,
-        priority: t.priority,
-        queue: t.queue,
-        source: t.source,
-        assigneeId: t.assignee?.id ?? null,
-        assigneeName: t.assignee?.name ?? null,
-        secondary: t.secondary,
-        dueAt: new Date(t.dueAt),
-        assetId: t.assetId ?? null,
-        contractId: t.contractId ?? null,
-        createdAt: new Date(t.createdAt),
-        updatedAt: new Date(t.updatedAt || t.createdAt),
-        completedAt: x.completedAt ? new Date(x.completedAt) : null,
-        autotaskSyncedAt: new Date(),
-      };
-      if (edited) stats.keptPortal++;
-      else {
-        await tx.insert(schema.tickets).values(values).onConflictDoUpdate({ target: schema.tickets.id, set: values });
-        stats.saved++;
-        stats.savedTickets.push({ ...t, number });
-      }
-      for (const n of x.notes) {
-        const v = { ticketId: t.id, externalId: n.externalId, author: n.author, userId: n.userId, text: n.text, internal: n.internal, system: n.system, createdAt: new Date(n.at) };
-        await tx.insert(schema.ticketNotes).values(v).onConflictDoUpdate({ target: schema.ticketNotes.externalId, set: v });
-      }
-      for (const e of x.times) {
-        const v = {
-          ticketId: t.id,
-          externalId: e.externalId,
-          userId: e.userId,
-          author: e.author,
-          startedAt: new Date(e.startedAt),
-          minutes: e.minutes,
-          offsetMinutes: e.offsetMinutes,
-          summary: e.summary,
-          internalText: e.internalText,
-          billable: e.billable,
-          workType: e.workType,
-          contractId: e.contractId,
-          billed: e.billed,
-        };
-        await tx.insert(schema.ticketTimeEntries).values(v).onConflictDoUpdate({ target: schema.ticketTimeEntries.externalId, set: v });
-      }
-      for (const c of x.charges) {
-        const v = {
-          ticketId: t.id,
-          externalId: c.externalId,
-          name: c.name,
-          description: c.description,
-          quantityX100: Math.round(c.quantity * 100),
-          unitPriceCents: cents(c.unitPrice),
-          unitCostCents: cents(c.unitCost),
-          billable: c.billable,
-          type: c.type,
-          status: c.status,
-          materialCode: c.materialCode,
-          productId: c.productId,
-          contractId: c.contractId,
-          date: c.date,
-          author: c.author,
-          billed: c.billed,
-        };
-        await tx.insert(schema.ticketCharges).values(v).onConflictDoUpdate({ target: schema.ticketCharges.externalId, set: v });
-      }
-      for (const f of x.files) {
-        const v = { ticketId: t.id, externalId: f.externalId, name: f.name, contentType: f.contentType, size: f.size, data: f.data, internal: f.internal, author: f.author, createdAt: new Date(f.at) };
-        await tx.insert(schema.ticketAttachments).values(v).onConflictDoUpdate({ target: schema.ticketAttachments.externalId, set: v });
-      }
-    }
-  });
-  return stats;
-}
-
-/** Imported tickets that look like one made in the portal (same client and title, within two hours): reported, never skipped */
-async function lookAlikes(imported: NTicket[]): Promise<string[]> {
-  if (!imported.length) return [];
-  const from = new Date(Math.min(...imported.map((t) => Date.parse(t.createdAt))) - 3 * 3_600_000);
-  const own = await db()
-    .select({ number: schema.tickets.number, companyId: schema.tickets.companyId, title: schema.tickets.title, createdAt: schema.tickets.createdAt })
-    .from(schema.tickets)
-    .where(and(gte(schema.tickets.id, NATIVE_ID_START), gte(schema.tickets.createdAt, from)));
-  const norm = (s: string) => s.trim().toLowerCase().replace(/\s+/g, " ");
-  const out: string[] = [];
-  for (const t of imported) {
-    const hit = own.find((o) => o.companyId === t.company.id && norm(o.title) === norm(t.title) && Math.abs(o.createdAt.getTime() - Date.parse(t.createdAt)) <= 2 * 3_600_000);
-    if (hit) out.push(`${t.number} ≈ ${hit.number}`);
-  }
-  return out.slice(0, 30);
-}
 
 // ── The portal's tickets as a ticket source ──
 type Row = typeof schema.tickets.$inferSelect;
@@ -609,11 +358,6 @@ export function localTicketSource(base: TicketSource): TicketSource {
     async ticketsWithOtherContact() {
       return [];
     },
-    async createServiceCall() {
-      return null;
-    },
-    async updateServiceCall() {},
-    async deleteServiceCall() {},
     // Billing: the work to bill on tickets is the portal's; the rest still comes from the source
     async billables(since) {
       const from = await base.billables(since);
@@ -743,7 +487,7 @@ export async function deleteTicket(id: number, a: AuthContext): Promise<{ number
   for (const b of blocks) await unsyncBlock(b).catch(() => undefined);
   const workIds = [...times.map((x) => x.externalId ?? `ptime:${x.id}`), ...charges.map((x) => x.externalId ?? `pcharge:${x.id}`)];
   await db().transaction(async (tx) => {
-    // remembered: an import from Autotask never brings it back
+    // remembered
     await tx.insert(schema.deletedTickets).values({ ticketId: id, number: r.number, title: r.title, deletedBy: a.realUser.id }).onConflictDoNothing();
     if (workIds.length) await tx.delete(schema.billingItems).where(and(inArray(schema.billingItems.sourceId, workIds), inArray(schema.billingItems.status, ["pending", "approved", "excluded"])));
     await tx.delete(schema.ticketTimers).where(eq(schema.ticketTimers.ticketId, id));

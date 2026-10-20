@@ -8,7 +8,7 @@ import { hashPassword, temporaryPassword } from "../lib/crypto.ts";
 import { forgetPasswordLinks, sendPasswordLink } from "../lib/passwordLinks.ts";
 import { audit } from "../lib/audit.ts";
 import { body, zEmail, zOptText, zUuid } from "../lib/validate.ts";
-import { autotaskLinked, ticketSource, type NTicket } from "../lib/ticketSource.ts";
+import { ticketSource, type NTicket } from "../lib/ticketSource.ts";
 import { crmState, descendantsOf, ensureCrm, rememberCompany, rememberContact, syncCrm } from "../lib/crm.ts";
 import { lookup, run } from "./tickets.ts";
 import { pushInvoice } from "../lib/quickbooks.ts";
@@ -18,9 +18,7 @@ import { billingSettings } from "../lib/billing.ts";
 import { quickbooksHttp } from "./billing.ts";
 
 /**
- * CRM (crm.view): the clients, from the portal's own copy kept in step with
- * Autotask. Changes go to Autotask first while it is linked (so the next
- * sync does not undo them), then into the copy.
+ * CRM (crm.view): the clients, contacts and contracts of the portal.
  */
 type Client = typeof schema.clients.$inferSelect;
 
@@ -68,7 +66,7 @@ export const crmRoutes = new Hono<AppEnv>()
   .get("/status", async (c) => {
     const src = await ticketSource();
     const s = await crmState();
-    return c.json({ mode: s?.source === "local" || (!src.demo && !(await autotaskLinked())) ? "local" : src.demo ? "sample" : "autotask", lastSync: s?.at ?? null, ok: s?.ok ?? null, error: s?.error ?? null, counts: s?.counts ?? null, every: 15 });
+    return c.json({ mode: src.demo ? "sample" : "local", lastSync: s?.at ?? null, ok: s?.ok ?? null, error: s?.error ?? null, counts: s?.counts ?? null, every: 15 });
   })
   .post("/sync", requirePermission("crm.edit"), async (c) => {
     const a = auth(c);
@@ -101,7 +99,7 @@ export const crmRoutes = new Hono<AppEnv>()
     );
   })
 
-  /** A new client: in Autotask first while it is linked, then in the copy. */
+  /** A new client. */
   .post("/clients", requirePermission("crm.edit"), async (c) => {
     const a = auth(c);
     const p = await body(c, z.object({ name: z.string().trim().min(2).max(100), phone: z.string().trim().min(7).max(40) }));
@@ -159,7 +157,7 @@ export const crmRoutes = new Hono<AppEnv>()
       const all = await d.select({ id: schema.clients.id, name: schema.clients.name }).from(schema.clients);
       if (all.some((x) => x.id !== client.id && x.name.trim().toLowerCase() === p.name!.toLowerCase())) throw new HTTPException(409, { message: "company_exists" });
     }
-    // Autotask first (the next sync would bring its version back otherwise)
+    // the source (the portal's database, or the sample data) first
     if (client.autotaskId != null) {
       const src = await ticketSource();
       const synced = { name: p.name, phone: p.phone, address: p.address, city: p.city, province: p.province, postalCode: p.postalCode, website: p.website, parentId: parentAt };
@@ -355,7 +353,7 @@ export const crmRoutes = new Hono<AppEnv>()
     return c.json({ enabled: true, welcomeSent });
   })
 
-  // ── contracts (from Autotask, read only for now)
+  // ── contracts
   .get("/clients/:id/contracts", async (c) => {
     const client = await clientOr404(c.req.param("id"));
     const rows = await db().select().from(schema.clientContracts).where(eq(schema.clientContracts.clientId, client.id)).orderBy(asc(schema.clientContracts.name));

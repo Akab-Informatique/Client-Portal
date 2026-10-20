@@ -12,7 +12,7 @@ type Result = { items: TicketSummary[]; total: number; archive: TicketSummary[] 
 /**
  * Search every ticket, whatever the view and filters below: all technicians,
  * recently completed ones too (local copy, instant). "Older tickets" also asks
- * Autotask, on demand. Opening a result shows it in the ticket window.
+ * the older tickets, on demand. Opening a result shows it in the ticket window.
  */
 export function GlobalSearch({ demo }: { demo: boolean }) {
   const { t } = useTranslation();

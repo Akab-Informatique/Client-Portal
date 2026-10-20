@@ -49,8 +49,6 @@ type Product = {
   priceCents: number;
   costCents: number;
   minQuantity: number;
-  autotaskProductId: number | null;
-  autotaskProductName: string | null;
   materialCodeId: string | null;
   serialized: boolean;
   active: boolean;
@@ -253,7 +251,6 @@ function ProductRow({ p, manage, open }: { p: Product; manage: boolean; open: Op
         <span className="flex items-baseline gap-2">
           <span className="truncate font-medium">{p.name}</span>
           {p.serialized && <span className="shrink-0 rounded border border-[color:var(--gold)]/40 px-1 text-[9px] font-semibold text-primary">{t("store.serializedTag")}</span>}
-          {p.autotaskProductId && <span className="shrink-0 rounded border border-sky-500/40 px-1 text-[9px] font-semibold text-sky-300">AUTOTASK</span>}
         </span>
         <span className="block truncate text-xs text-muted-foreground">{[p.sku, p.manufacturer].filter(Boolean).join(" · ") || "—"}</span>
       </span>
@@ -322,7 +319,7 @@ function Field({ id, label, children, hint }: { id?: string; label: string; chil
   );
 }
 
-/** Create or edit a product (with its optional link to an Autotask product). */
+/** Create or edit a product. */
 function ProductDialog({ product, onClose }: { product: Product | null; onClose: () => void }) {
   const { t } = useTranslation();
   const qc = useQueryClient();
@@ -341,7 +338,6 @@ function ProductDialog({ product, onClose }: { product: Product | null; onClose:
     serialized: product?.serialized ?? false,
     active: product?.active ?? true,
   });
-  const [link, setLink] = useState<{ id: number; name: string } | null>(product?.autotaskProductId ? { id: product.autotaskProductId, name: product.autotaskProductName ?? `#${product.autotaskProductId}` } : null);
   const set = (k: keyof typeof f) => (v: string | boolean) => setF((x) => ({ ...x, [k]: v }));
   const { data: codes } = useQuery({
     queryKey: ["tickets", "charge-options"],
@@ -365,8 +361,6 @@ function ProductDialog({ product, onClose }: { product: Product | null; onClose:
         costCents: cost,
         minQuantity: min,
         materialCodeId: f.materialCodeId || null,
-        autotaskProductId: link?.id ?? null,
-        autotaskProductName: link?.name ?? null,
         serialized: f.serialized,
         active: f.active,
       };
@@ -437,13 +431,10 @@ function ProductDialog({ product, onClose }: { product: Product | null; onClose:
             <Textarea id="sp-desc" rows={2} maxLength={4000} value={f.description} onChange={(e) => set("description")(e.target.value)} />
           </Field>
 
-          {/* When charged on a ticket in Autotask */}
+          {/* When charged on a ticket */}
           <div className="space-y-3 rounded-xl border p-3">
-            <p className="text-xs font-medium text-muted-foreground">{t("store.autotaskBlock")}</p>
+            <p className="text-xs font-medium text-muted-foreground">{t("store.chargeBlock")}</p>
             <div className="grid gap-3 sm:grid-cols-2">
-              <Field label={t("store.fields.autotaskProduct")}>
-                <AutotaskProductPick value={link} onChange={setLink} />
-              </Field>
               {codes && codes.materialCodes.length > 0 && (
                 <Field label={t("store.fields.materialCode")}>
                   <Select value={f.materialCodeId || "_"} onValueChange={(v) => set("materialCodeId")(v === "_" ? "" : v)}>
@@ -483,56 +474,6 @@ function ProductDialog({ product, onClose }: { product: Product | null; onClose:
         </form>
       </DialogContent>
     </Dialog>
-  );
-}
-
-/** Search the Autotask catalogue to link the product (numeric Autotask ids only). */
-function AutotaskProductPick({ value, onChange }: { value: { id: number; name: string } | null; onChange: (v: { id: number; name: string } | null) => void }) {
-  const { t } = useTranslation();
-  const can = useCan();
-  const [text, setText] = useState("");
-  const q = text.trim();
-  const { data, isFetching } = useQuery({
-    queryKey: ["tickets", "products", q],
-    queryFn: () => api.get<{ id: string; name: string; sku: string | null }[]>(`/tickets/products?q=${encodeURIComponent(q)}`),
-    enabled: q.length >= 2 && can("tickets.edit"),
-    staleTime: 60_000,
-  });
-  if (value) {
-    return (
-      <div className="flex h-9 items-center gap-2 rounded-md border px-3 text-sm">
-        <span className="min-w-0 flex-1 truncate">{value.name}</span>
-        <button type="button" onClick={() => onChange(null)} className="text-xs text-muted-foreground hover:text-destructive">
-          {t("store.unlink")}
-        </button>
-      </div>
-    );
-  }
-  const results = (data ?? []).filter((p) => /^\d+$/.test(p.id));
-  return (
-    <div className="relative">
-      <Input value={text} onChange={(e) => setText(e.target.value)} placeholder={t("store.searchAutotask")} />
-      {isFetching && <Loader2 className="absolute right-3 top-2.5 size-4 animate-spin text-muted-foreground" />}
-      {q.length >= 2 && data && (
-        <ul className="absolute z-10 mt-1 max-h-48 w-full overflow-y-auto rounded-md border bg-popover shadow-lg">
-          {results.length === 0 && <li className="px-3 py-2 text-xs text-muted-foreground">{t("tickets.charges.noProduct")}</li>}
-          {results.map((p) => (
-            <li key={p.id}>
-              <button
-                type="button"
-                onClick={() => {
-                  onChange({ id: Number(p.id), name: p.name });
-                  setText("");
-                }}
-                className="block w-full truncate px-3 py-1.5 text-left text-sm hover:bg-accent"
-              >
-                {p.name} {p.sku && <span className="text-xs text-muted-foreground">· {p.sku}</span>}
-              </button>
-            </li>
-          ))}
-        </ul>
-      )}
-    </div>
   );
 }
 

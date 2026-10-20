@@ -44,7 +44,6 @@ type StoreProduct = {
   unitPrice: number;
   unitCost: number;
   materialCodeId: string | null;
-  linked: boolean;
   serialized: boolean;
   stock: { locationId: string; location: string; quantity: number }[];
   total: number;
@@ -132,7 +131,7 @@ function ChargesList({ list }: { list: Charge[] }) {
   );
 }
 
-/** The ticket's charges and the form: a product of the portal inventory → a charge in Autotask. */
+/** The ticket's charges and the form: a product of the portal inventory → a charge on the ticket. */
 function ChargesDialog({ tk, editable, onClose }: { tk: TicketDetail; editable: boolean; onClose: () => void }) {
   const { t } = useTranslation();
   const qc = useQueryClient();
@@ -258,7 +257,7 @@ function ChargesDialog({ tk, editable, onClose }: { tk: TicketDetail; editable: 
                 <span className="min-w-0 flex-1">
                   <span className="block truncate font-medium">{product.name}</span>
                   <span className="block truncate text-[11px] text-muted-foreground">
-                    {[product.sku, product.manufacturer, product.linked ? t("tickets.charges.linkedAutotask") : null].filter(Boolean).join(" · ")}
+                    {[product.sku, product.manufacturer].filter(Boolean).join(" · ")}
                   </span>
                 </span>
                 <button type="button" onClick={() => setProduct(null)} className="rounded p-1 text-muted-foreground hover:text-foreground" aria-label={t("tickets.charges.unpick")}>
@@ -355,7 +354,6 @@ function ChargesDialog({ tk, editable, onClose }: { tk: TicketDetail; editable: 
                 {save.isPending && <Loader2 className="size-4 animate-spin" />} {t("tickets.charges.save")}
               </Button>
             </div>
-            <p className="text-[11px] text-muted-foreground">{t("tickets.charges.autotaskNote")}</p>
           </form>
         )}
       </DialogContent>

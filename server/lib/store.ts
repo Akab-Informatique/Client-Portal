@@ -236,7 +236,7 @@ export async function takeForTicket(p: {
   });
 }
 
-/** Undo a ticket take (the Autotask charge failed): stock and serials back. */
+/** Undo a ticket take (the charge failed): stock and serials back. */
 export async function undoTake(movementId: string): Promise<void> {
   await db().transaction(async (tx) => {
     const [m] = await tx.delete(schema.storeMovements).where(eq(schema.storeMovements.id, movementId)).returning();
@@ -328,7 +328,6 @@ export async function searchProducts(q: string) {
       unitPrice: p.priceCents / 100,
       unitCost: p.costCents / 100,
       materialCodeId: p.materialCodeId,
-      linked: Boolean(p.autotaskProductId),
       serialized: p.serialized,
       stock: p.stock.filter((s) => s.quantity > 0),
       total: p.total,

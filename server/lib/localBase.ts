@@ -1,11 +1,11 @@
 /**
  * The portal's own database as the source of everything around the tickets —
- * clients, contacts, contracts, products, lists — once Autotask is not the
+ * clients, contacts, contracts, products, lists — the
  * reference (not linked, or closed for good). No sample data, nothing read from
- * or written to Autotask. `localTicketSource` (localTickets.ts) puts the tickets
+ * or written outside. `localTicketSource` (localTickets.ts) puts the tickets
  * themselves over it.
  *
- * What the portal makes gets ids kept apart from Autotask's (see ids.ts), so a
+ * What the portal makes gets ids kept apart (see ids.ts), so a
  * link made again later can never meet them.
  */
 import { and, asc, eq, ilike, isNotNull, isNull, or, sql } from "drizzle-orm";
@@ -77,9 +77,6 @@ export const localBase: TicketSource = {
   companyHistory: async () => [],
   history: async () => [],
   searchArchive: async () => [],
-  createServiceCall: async () => null,
-  updateServiceCall: async () => {},
-  deleteServiceCall: async () => {},
 
   async companies(): Promise<Company[]> {
     return (await localCompanies(true)) ?? [];
@@ -133,7 +130,7 @@ export const localBase: TicketSource = {
     return hit ? { contactId: hit.c.autotaskId!, contactName: `${hit.c.firstName} ${hit.c.lastName}`.trim(), companyId: hit.companyId!, companyName: hit.companyName } : null;
   },
 
-  // Lists kept by the portal when it left Autotask (Admin › Billets), else the usual defaults
+  // Lists kept by the portal, else the usual defaults
   async chargeOptions() {
     const { ticketMode } = await import("./localTickets.ts");
     return (await ticketMode()).chargeOptions ?? defaultChargeOptions();

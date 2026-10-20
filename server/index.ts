@@ -6,7 +6,6 @@ import { createApp } from "./app.ts";
 import { purgeExpiredSessions } from "./lib/auth.ts";
 import { purgeOldNotifications } from "./lib/notify.ts";
 import { smtpSettings } from "./lib/mail.ts";
-import { keepTicketsWarm } from "./lib/ticketSource.ts";
 import { CRM_SYNC_EVERY, syncCrm } from "./lib/crm.ts";
 import { quickbooksTick } from "./lib/quickbooks.ts";
 import { syncBillables } from "./lib/billables.ts";
@@ -22,11 +21,8 @@ await seed();
 const app = createApp();
 const smtp = await smtpSettings();
 const host = process.env.HOST || (config.production ? "0.0.0.0" : "127.0.0.1");
-// Autotask: load the ticket list now and keep it fresh while the portal is used
-keepTicketsWarm();
 
-// CRM: the portal keeps its own copy of the clients, contacts and contracts (Autotask is the reference while linked)
-// then the work to bill (time, charges, expenses, contracts, milestones) not posted in Autotask yet
+// CRM and the work to bill (time, charges, expenses, contracts, milestones)
 const syncAll = () =>
   syncCrm()
     .then(() => syncBillables())

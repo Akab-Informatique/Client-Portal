@@ -11,7 +11,7 @@ import { cn } from "@/lib/utils";
 import { ticketErrorText } from "./shared";
 
 /**
- * Client and contact pickers (Autotask Companies / Contacts). Searchable, and
+ * Client and contact pickers Searchable, and
  * the contact picker can create a new contact for the chosen client.
  */
 export type Company = { id: number; name: string };
@@ -19,7 +19,7 @@ export type Contact = { id: string; companyId: number; name: string; email: stri
 
 export type Contract = { id: string; name: string; isDefault: boolean; endDate: string | null };
 
-/** All clients (Autotask can have thousands): loaded once and kept 10 minutes. */
+/** All clients (there can be thousands): loaded once and kept 10 minutes. */
 export function useCompanies() {
   return useQuery({ queryKey: ["tickets", "companies"], queryFn: () => api.get<Company[]>("/tickets/companies"), staleTime: 10 * 60_000 });
 }
@@ -107,7 +107,7 @@ export function CompanyPicker({
   disabled?: boolean;
   triggerClassName?: string;
   placeholder?: string;
-  /** Offer "New client" (Autotask company) at the bottom */
+  /** Offer "New client" at the bottom */
   canCreate?: boolean;
 }) {
   const { t } = useTranslation();
@@ -181,7 +181,7 @@ function NewCompanyForm({ initialName, onCancel, onCreated }: { initialName: str
   const create = useMutation({
     mutationFn: () => api.post<Company>("/tickets/companies", f),
     onSuccess: (c) => {
-      // the new client in the list right away (Autotask's list is cached)
+      // the new client in the list right away (the list is cached)
       qc.setQueryData<Company[]>(["tickets", "companies"], (old) => [...(old ?? []), c].sort((x, y) => x.name.localeCompare(y.name)));
       void qc.invalidateQueries({ queryKey: ["tickets", "companies"] });
       toast.success(t("tickets.companyCreated", { name: c.name }));

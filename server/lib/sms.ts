@@ -35,7 +35,7 @@ async function addMessage(conv: Conversation, m: { direction: "in" | "out"; body
     .where(eq(schema.smsConversations.id, conv.id));
 }
 
-/** A text of a conversation linked to a ticket, copied as an internal note (Autotask). */
+/** A text of a conversation linked to a ticket, copied as an internal note. */
 async function noteInTicket(conv: Conversation, title: string, body: string) {
   if (!conv.ticketId) return;
   const src = await ticketSource();

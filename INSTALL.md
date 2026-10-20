@@ -47,7 +47,7 @@ chmod 600 .env
 | Variable | Value |
 |----------|-------|
 | `POSTGRES_PASSWORD` | 1st generated value — never change it after the first start |
-| `APP_SECRET` | 2nd generated value — encrypts MFA secrets **and every integration key** (Autotask, Microsoft, QuickBooks, Stripe, VoIP.ms, Claude). Never change it, and back it up with the database (see Backup) |
+| `APP_SECRET` | 2nd generated value — encrypts MFA secrets **and every integration key** (Microsoft, QuickBooks, Stripe, VoIP.ms, Claude). Never change it, and back it up with the database (see Backup) |
 | `PUBLIC_URL` | **Required**: `https://portail.akab.ca`. Without it, password and welcome emails are not sent |
 | `ADMIN_EMAIL` / `ADMIN_NAME` | First administrator (created once) |
 | `ADMIN_PASSWORD` | Leave empty → one-time password in the log (if set: 12 characters minimum, changed at the first sign-in) |

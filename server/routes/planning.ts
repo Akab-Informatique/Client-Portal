@@ -9,7 +9,6 @@ import { audit } from "../lib/audit.ts";
 import { notify } from "../lib/notify.ts";
 import { body, zUuid } from "../lib/validate.ts";
 import { SourceError, ticketSource } from "../lib/ticketSource.ts";
-import { AutotaskError } from "../lib/autotask.ts";
 import { calendarsOf, onCalendar, syncBlock, syncPin, unsyncBlock, unsyncPin } from "../lib/planning.ts";
 import { O365Error, outlookEvents, type OutlookEvent } from "../lib/o365.ts";
 import { holidaysBetween } from "../../shared/holidays.ts";
@@ -22,7 +21,7 @@ import { holidaysBetween } from "../../shared/holidays.ts";
  * weeks stay shown (carried over) until marked done. Technicians see their
  * own; tickets.plan sees and plans everyone's; tickets.planSelf plans one's
  * own. Blocks are work on a ticket, an on-site service call (also created in
- * Autotask) or reserved time; each can alert its technician beforehand.
+ * a customer visit) or reserved time; each can alert its technician beforehand.
  * Technicians with tickets.o365 have it all in their Outlook calendar.
  */
 const zDay = z.string().regex(/^\d{4}-\d{2}-\d{2}$/);
@@ -51,9 +50,9 @@ const canEditFor = (a: AuthContext, technicianId: string) => canPlan(a) || (tech
 function mustEdit(a: AuthContext, technicianId: string) {
   if (!canEditFor(a, technicianId)) throw new HTTPException(403, { message: "forbidden" });
 }
-/** A side sync that failed (Autotask, Outlook): the change is kept, the reason is told. */
+/** A side sync that failed (Outlook): the change is kept, the reason is told. */
 function warningOf(e: unknown, prefix: string): string {
-  const code = e instanceof AutotaskError ? e.code : e instanceof SourceError ? e.code : e instanceof O365Error ? e.code : "api";
+  const code = e instanceof SourceError ? e.code : e instanceof O365Error ? e.code : "api";
   console.warn(`[planning] ${prefix}:`, e instanceof Error ? e.message : e);
   return `${prefix}_${code}`;
 }
@@ -102,7 +101,6 @@ export function asSeen(b: typeof schema.calendarBlocks.$inferSelect, full: boole
     note: "",
     companyName: null,
     reminderMinutes: 0,
-    autotaskServiceCallId: null,
     startsAt: b.startsAt,
     endsAt: b.endsAt,
     busy: true,
@@ -473,16 +471,6 @@ export const planningRoutes = new Hono<AppEnv>()
     }
     if (!title) throw new HTTPException(400, { message: "Validation failed" });
     const warnings: string[] = [];
-    // On site: the service call in Autotask (the block stays even if Autotask refuses)
-    let serviceCallId: number | null = null;
-    if (p.kind === "onsite" && ticketId) {
-      try {
-        const src = await ticketSource();
-        serviceCallId = await src.createServiceCall({ ticketId, technicianId: tech.id, startsAt, endsAt, description: [title, p.note].filter(Boolean).join("\n") }, a);
-      } catch (e) {
-        warnings.push(warningOf(e, "autotask"));
-      }
-    }
     const [row] = await db()
       .insert(schema.calendarBlocks)
       .values({
@@ -494,7 +482,6 @@ export const planningRoutes = new Hono<AppEnv>()
         note: p.note,
         companyName,
         reminderMinutes: p.reminderMinutes,
-        autotaskServiceCallId: serviceCallId,
         startsAt,
         endsAt,
         createdBy: a.user.id,
@@ -505,7 +492,7 @@ export const planningRoutes = new Hono<AppEnv>()
     // Booked on a day the technician is away: saved, but say so
     if ((await absencesOf(tech.id, dayOf(startsAt), dayOf(startsAt))).length) warnings.push("absent");
     if (holidaysBetween(dayOf(startsAt), dayOf(startsAt)).size) warnings.push("holiday");
-    await audit(a.user.id, "planning.block_created", row.id, { technicianId: tech.id, ticketId, kind: p.kind, serviceCallId });
+    await audit(a.user.id, "planning.block_created", row.id, { technicianId: tech.id, ticketId, kind: p.kind });
     return c.json({ ...row, warnings }, 201);
   })
 
@@ -544,13 +531,6 @@ export const planningRoutes = new Hono<AppEnv>()
       .returning();
     const warnings: string[] = [];
     const moved = startsAt.getTime() !== cur.startsAt.getTime() || endsAt.getTime() !== cur.endsAt.getTime();
-    if (moved && row.autotaskServiceCallId) {
-      try {
-        await (await ticketSource()).updateServiceCall(row.autotaskServiceCallId, { startsAt, endsAt }, a);
-      } catch (e) {
-        warnings.push(warningOf(e, "autotask"));
-      }
-    }
     const o365 = await syncBlock(row);
     if (o365) warnings.push(o365);
     if (moved && (await absencesOf(row.technicianId, dayOf(startsAt), dayOf(startsAt))).length) warnings.push("absent");
@@ -566,13 +546,6 @@ export const planningRoutes = new Hono<AppEnv>()
     if (!cur) return c.json({ ok: true, warnings: [] });
     mustEdit(a, cur.technicianId);
     const warnings: string[] = [];
-    if (cur.autotaskServiceCallId) {
-      try {
-        await (await ticketSource()).deleteServiceCall(cur.autotaskServiceCallId, a);
-      } catch (e) {
-        warnings.push(warningOf(e, "autotask"));
-      }
-    }
     const o365 = await unsyncBlock(cur);
     if (o365) warnings.push(o365);
     await db().delete(schema.calendarBlocks).where(eq(schema.calendarBlocks.id, id));

@@ -62,7 +62,7 @@ export const MODULES = [
       {
         key: "tickets.clients",
         label: { fr: "Créer des clients", en: "Create clients" },
-        description: { fr: "Ajouter un nouveau client dans Autotask en créant un billet", en: "Add a new client in Autotask while creating a ticket" },
+        description: { fr: "Ajouter un nouveau client en créant un billet", en: "Add a new client while creating a ticket" },
       },
       {
         key: "tickets.plan",
@@ -107,7 +107,7 @@ export const MODULES = [
       {
         key: "crm.edit",
         label: { fr: "Modifier les clients", en: "Edit clients" },
-        description: { fr: "Nouveau client, coordonnées, compagnie mère, contacts (aussi dans Autotask tant qu'il est lié)", en: "New client, details, parent company, contacts (in Autotask too while it is linked)" },
+        description: { fr: "Nouveau client, coordonnées, compagnie mère, contacts", en: "New client, details, parent company, contacts" },
       },
       { key: "crm.billing", label: { fr: "Paramètres de facturation", en: "Invoice settings" }, description: { fr: "Courriel de facturation, modalités, taxes, taux", en: "Billing email, terms, taxes, rate" } },
     ],
@@ -327,8 +327,8 @@ export const MODULES = [
         key: "admin.tickets",
         label: { fr: "Configurer les billets", en: "Configure tickets" },
         description: {
-          fr: "Choisir les sources des billets (téléphone, texto, courriel…), nommer et ordonner les statuts, et lancer la synchronisation des billets avec Autotask",
-          en: "Choose where tickets come from (phone, text, email…), name and order the statuses, and run the ticket sync with Autotask",
+          fr: "Choisir les sources des billets (téléphone, texto, courriel…), nommer et ordonner les statuts",
+          en: "Choose where tickets come from (phone, text, email…), name and order the statuses",
         },
       },
       {
@@ -357,10 +357,10 @@ export const MODULES = [
       },
       {
         key: "admin.integrations",
-        label: { fr: "Gérer les intégrations (Autotask)", en: "Manage integrations (Autotask)" },
+        label: { fr: "Gérer les intégrations", en: "Manage integrations" },
         description: {
-          fr: "Configurer la connexion Autotask et lier les techniciens à leur utilisateur Autotask",
-          en: "Configure the Autotask connection and link technicians to their Autotask user",
+          fr: "Configurer Microsoft 365, Claude, VoIP.ms, Stripe et le RMM",
+          en: "Configure Microsoft 365, Claude, VoIP.ms, Stripe and the RMM",
         },
       },
     ],

@@ -2,11 +2,10 @@ import { and, asc, eq, gte, inArray, isNotNull, lte, sql } from "drizzle-orm";
 import { db, schema } from "../db/index.ts";
 import { billingSettings, formatInvoiceNumber, saveBillingSettings, type BillingSettings } from "./billing.ts";
 import { ensureCrm } from "./crm.ts";
-import { autotaskLinked, ticketSource, type BillableKind } from "./ticketSource.ts";
+import { ticketSource, type BillableKind } from "./ticketSource.ts";
 
 /**
- * Work to bill (Accounting › Approbation): copied from Autotask while it is
- * linked — only what is not posted there yet, so nothing is billed twice —
+ * Work to bill (Accounting › Approbation): the portal's own work (ticket time and charges, expenses…),
  * approved by hand or by rules (per client: kinds; per contract: everything
  * under it), then invoiced: a client, the kinds or lines to bill, dates,
  * terms, notes; or every client at once.
@@ -55,8 +54,8 @@ export function syncBillables(): Promise<BillablesState> {
     const s = await billingSettings();
     const src = await ticketSource();
     const data = await src.billables(s.autotask.itemsSince);
-    // Autotask not linked: only the portal's own work is read, so what was copied from Autotask is never taken for "gone"
-    const alone = !(await autotaskLinked());
+    // the portal's own work only is read (no source of billable work besides the portal): what was copied before is never taken for "gone"
+    const alone = await (await import("./localTickets.ts")).ticketsLocal();
     const d = db();
     const now = new Date();
     const clients = new Map(
@@ -112,7 +111,7 @@ export function syncBillables(): Promise<BillablesState> {
       } else if ((hit.status === "pending" || (notBilled && hit.status === "excluded")) && !hit.edited)
         await d.update(schema.billingItems).set({ ...values, ...(notBilled ? { status: "excluded" } : {}), updatedAt: now }).where(eq(schema.billingItems.id, hit.id));
     }
-    // gone from the source (posted or removed in Autotask): untouched ones go too — only for kinds read without error
+    // gone from the source: untouched ones go too — only for kinds read without error
     const gone = [...existing.values()]
       .filter((x) => !seen.has(x.sourceId!) && (!alone || /^p(time|charge):/.test(x.sourceId!)) && (x.status === "pending" || (x.status === "approved" && !x.approvedBy)) && !x.edited && !data.errors[x.kind as BillableKind])
       .map((x) => x.id);
@@ -298,7 +297,7 @@ export async function draftInvoice(p: InvoiceDraft) {
 
 let numbering: Promise<unknown> = Promise.resolve();
 
-/** The number the next invoice would get: the setting, after the highest one used (the Autotask ones included). */
+/** The number the next invoice would get: the setting, after the highest one used (the copied ones included). */
 async function peekNumber(): Promise<string> {
   const s = await billingSettings();
   const all = await db().select({ number: schema.clientInvoices.number }).from(schema.clientInvoices);

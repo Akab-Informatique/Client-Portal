@@ -18,8 +18,6 @@ const zProduct = z.object({
   priceCents: zCents,
   costCents: zCents.default(0),
   minQuantity: z.number().int().min(0).max(1_000_000).default(0),
-  autotaskProductId: z.number().int().positive().nullable().default(null),
-  autotaskProductName: z.string().trim().max(200).nullable().default(null),
   materialCodeId: z.string().max(20).nullable().default(null),
   serialized: z.boolean().default(false),
   active: z.boolean().default(true),

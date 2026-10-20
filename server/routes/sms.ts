@@ -9,7 +9,6 @@ import { clientIp, rateLimit } from "../lib/http.ts";
 import { body, zUuid } from "../lib/validate.ts";
 import { conversationForTicket, mapConversation, openTicket, queueReceived, replyAsTechnician, SmsTicketError } from "../lib/sms.ts";
 import { normalizePhone, SmsError, smsReady, smsSettings, SMS_MAX, tokenMatches } from "../lib/voipms.ts";
-import { AutotaskError } from "../lib/autotask.ts";
 import { SourceError, ticketSource } from "../lib/ticketSource.ts";
 
 /**
@@ -35,7 +34,6 @@ export function smsHttp(e: unknown): HTTPException {
   if (e instanceof HTTPException) return e;
   if (e instanceof SmsError) return new HTTPException(e.code === "not_configured" || e.code === "disabled" ? 409 : 502, { message: `sms_${e.code}`, cause: e.detail ? [{ path: "sms", message: e.detail }] : undefined });
   if (e instanceof SmsTicketError) return new HTTPException(e.code === "unknown_client" || e.code === "unknown_contact" ? 400 : 409, { message: `sms_${e.code}` });
-  if (e instanceof AutotaskError) return new HTTPException(502, { message: `autotask_${e.code}`, cause: e.detail ? [{ path: "autotask", message: e.detail }] : undefined });
   if (e instanceof SourceError) return new HTTPException(400, { message: e.code });
   console.error("[sms]", e);
   return new HTTPException(500, { message: "Internal error" });

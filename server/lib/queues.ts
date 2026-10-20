@@ -4,11 +4,10 @@ import type { Asset } from "./demoTickets.ts";
 import { SourceError, type Choice, type HistoryTicket, type NewTicket, type NTicket, type Options, type TicketPatch, type TicketSource } from "./ticketSource.ts";
 
 /**
- * The portal's own ticket queues (Admin › Files d'attente), not tied to
- * Autotask: Support, Alertes and Projets to start. A ticket is in the queue
- * stored on it in the portal; without one, the queue its source suggests (a
- * monitoring alert, a project), else the default. Nothing here is written to
- * Autotask, and its queue list is no longer shown.
+ * The portal's own ticket queues (Admin › Files d'attente): Support, Alertes
+ * and Projets to start. A ticket is in the queue stored on it in the portal;
+ * without one, the queue its source suggests (a monitoring alert, a project),
+ * else the default.
  */
 export type Queue = typeof schema.ticketQueues.$inferSelect;
 
@@ -64,7 +63,7 @@ export async function withStatusConfig<T extends { value: string; label: string 
 
 /**
  * The portal's source for a ticket without one stored: from the label its own
- * source gives (Autotask's "Email", "Phone"…). Monitoring alerts keep their label
+ * source gives ("Email", "Phone"…). Monitoring alerts keep their label
  * (the alert detection reads it); anything else made by hand is a phone ticket.
  */
 function sourceFromLabel(list: Source[], raw: string | undefined): string {
@@ -89,7 +88,7 @@ function suggested(list: Queue[], label: string, source: string | undefined): st
 /** The ticket source with the portal's queues over it. */
 export function withPortalQueues(src: TicketSource): TicketSource {
   const d = Object.create(src) as TicketSource;
-  /** The source's own queue labels (Autotask's list), used only to suggest a first queue */
+  /** The source's own queue labels, used only to suggest a first queue */
   const sourceLabels = async () => new Map((await src.options()).queues.map((q) => [q.value, q.label ?? q.value]));
   const stored = async () => new Map((await db().select({ id: schema.ticketMeta.ticketId, queue: schema.ticketMeta.queue, source: schema.ticketMeta.source }).from(schema.ticketMeta)).map((r) => [r.id, r]));
 
@@ -176,13 +175,13 @@ export function withPortalQueues(src: TicketSource): TicketSource {
     await remember(id, queue);
     await rememberSource(id, source);
     if (p.assetId !== undefined) {
-      // a portal device is kept here only (Autotask's device is cleared); any other pick drops it
+      // a portal device is kept here only (the source's device is cleared); any other pick drops it
       const local = p.assetId?.startsWith(LOCAL) ? p.assetId.slice(LOCAL.length) : null;
       if (local && !(await localAssets()).some((x) => x.id === p.assetId)) throw new SourceError("invalid_value");
       await db().insert(schema.ticketMeta).values({ ticketId: id, localAsset: local }).onConflictDoUpdate({ target: schema.ticketMeta.ticketId, set: { localAsset: local, updatedAt: new Date() } });
       if (local) rest.assetId = null;
     }
-    // the queue is the portal's: Autotask is told about the rest only
+    // the queue is the portal's, never sent to the source
     if (Object.keys(rest).length) await src.update(id, rest, a);
   };
   return d;

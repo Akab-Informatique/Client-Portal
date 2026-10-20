@@ -6,7 +6,6 @@ import { db, schema } from "../db/index.ts";
 import { auth, requirePermission, type AppEnv, type AuthContext } from "../lib/auth.ts";
 import { SYSTEM_ROLES } from "../../shared/permissions.ts";
 import { isSmsNote, MAX_TICKET_ATTACHMENT_BYTES, SourceError, ticketSource, type NTicket } from "../lib/ticketSource.ts";
-import { AutotaskError } from "../lib/autotask.ts";
 import { audit } from "../lib/audit.ts";
 import { rateLimit } from "../lib/http.ts";
 import { notify, usersWith } from "../lib/notify.ts";
@@ -255,7 +254,7 @@ async function run<T>(fn: () => Promise<T>): Promise<T> {
   try {
     return await fn();
   } catch (e) {
-    if (e instanceof SourceError || e instanceof AutotaskError) {
+    if (e instanceof SourceError) {
       console.error("[portal] ticket:", e);
       throw new HTTPException(502, { message: "portal_ticket_failed" });
     }

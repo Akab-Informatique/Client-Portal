@@ -11,7 +11,6 @@ import { notifyMessagePosted } from "../lib/notify.ts";
 import { body, zUuid } from "../lib/validate.ts";
 import { rateLimit } from "../lib/http.ts";
 import { billingSettings } from "../lib/billing.ts";
-import { AutotaskError } from "../lib/autotask.ts";
 import { SourceError, ticketSource } from "../lib/ticketSource.ts";
 import { contactOfUser, ticketCompanyOf } from "../lib/clientTickets.ts";
 
@@ -286,7 +285,7 @@ export const boardRoutes = new Hono<AppEnv>()
       return c.json({ id: ticketId, number: t?.number ?? null }, 201);
     } catch (e) {
       if (e instanceof HTTPException) throw e;
-      if (e instanceof SourceError || e instanceof AutotaskError) {
+      if (e instanceof SourceError) {
         console.error("[board] ticket:", e);
         throw new HTTPException(502, { message: "board_ticket_failed" });
       }

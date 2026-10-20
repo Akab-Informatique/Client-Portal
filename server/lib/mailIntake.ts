@@ -17,7 +17,7 @@ import { ticketSource } from "./ticketSource.ts";
  * that ticket as the client's message instead. Only emails received after it
  * was switched on are read; it starts OFF.
  *
- * Careful: Autotask's own email-to-ticket on the same mailbox would open every
+ * Careful: any other email-to-ticket on the same mailbox would open every
  * ticket twice — one of the two must be off.
  */
 const PROVIDER = "mail.intake";

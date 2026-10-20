@@ -112,11 +112,7 @@ export function ClientsPage() {
                   {depth > 0 ? <CornerDownRight className="size-3.5 shrink-0 text-muted-foreground" /> : <Building2 className="size-4 shrink-0 text-muted-foreground" />}
                   <span className="min-w-0">
                     <span className="block truncate text-sm font-medium">{c.name}</span>
-                    {(c.parentName && depth === 0) || c.autotaskId == null ? (
-                      <span className="block truncate text-[11px] text-muted-foreground">
-                        {[c.parentName && depth === 0 && t("crm.childOf", { name: c.parentName }), c.autotaskId == null && t("crm.portalOnly")].filter(Boolean).join(" · ")}
-                      </span>
-                    ) : null}
+                    {c.parentName && depth === 0 ? <span className="block truncate text-[11px] text-muted-foreground">{t("crm.childOf", { name: c.parentName })}</span> : null}
                   </span>
                   {c.children > 0 && (
                     <span className="ml-1 flex shrink-0 items-center gap-1 rounded-full border border-[color:var(--gold)]/30 px-1.5 py-0.5 text-[10px] text-primary" title={t("crm.children", { count: c.children })}>

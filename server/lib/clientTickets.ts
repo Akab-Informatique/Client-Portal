@@ -8,8 +8,8 @@ import type { Company, TicketSource } from "./ticketSource.ts";
  */
 
 /**
- * The ticket-system company of a portal client: its Autotask id. With the
- * sample data (no Autotask), the sample company of the same name, created
+ * The ticket-system company of a portal client: its id. With the
+ * sample data (development), the sample company of the same name, created
  * if needed (`create`).
  */
 export async function ticketCompanyOf(clientId: string, src: TicketSource, opts: { create?: boolean } = {}): Promise<Company | null> {

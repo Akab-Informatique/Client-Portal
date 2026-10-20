@@ -463,7 +463,7 @@ export function smsFailureText(t: (k: string, o?: Record<string, unknown>) => st
 
 export function smsErrorText(t: (k: string, o?: Record<string, unknown>) => string, e: unknown): string {
   if (e instanceof ApiError) {
-    const detail = e.fields?.find((f) => f.path === "sms" || f.path === "autotask")?.message;
+    const detail = e.fields?.find((f) => f.path === "sms")?.message;
     if (e.code === "sms_api" && detail) return voipmsText(t, detail);
     return t(`sms.errors.${e.code}`, { defaultValue: t("common.error") }) + (detail ? ` (${detail})` : "");
   }

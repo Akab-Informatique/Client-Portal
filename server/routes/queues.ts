@@ -12,7 +12,7 @@ import { lookup, run } from "./tickets.ts";
 
 /**
  * Admin › Files d'attente (admin.queues): the portal's own ticket queues —
- * Support, Alertes and Projets to start. Not tied to Autotask.
+ * Support, Alertes and Projets to start.
  */
 const zName = z.string().trim().min(1).max(40);
 const slug = (name: string) =>

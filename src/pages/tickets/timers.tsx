@@ -28,7 +28,7 @@ import { contractNote } from "./contract";
  * technician); this page beats every 30 s while one runs. If every page is
  * closed, the server stops the timer at its last beat and it waits here,
  * "to validate", with a bell notification. Validating = a time entry in
- * Autotask under the technician.
+ * the portal under the technician.
  */
 export type Timer = {
   id: string;

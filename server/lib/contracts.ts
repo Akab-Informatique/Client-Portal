@@ -18,7 +18,7 @@ export type BillingMode = (typeof BILLING_MODES)[number];
 
 export type ContractView = {
   id: string;
-  /** The contract's id in the source (Autotask), when it has one */
+  /** The contract's id in the source, when it has one */
   sourceId: string | null;
   name: string;
   type: string | null;
@@ -42,7 +42,7 @@ export function hourlyRateOf(k: { billingMode: string; hourlyRateCents: number |
   return modeOf(k.billingMode) === "hourly" ? (k.hourlyRateCents ?? Math.round(usualHourlyDollars * 100)) : null;
 }
 
-/** The client's active contracts (by Autotask company id), the default one flagged. */
+/** The client's active contracts (by the ticket-side company id), the default one flagged. */
 export async function contractsOfCompany(companyAt: number): Promise<ContractView[]> {
   const d = db();
   const [client] = await d.select({ id: schema.clients.id }).from(schema.clients).where(eq(schema.clients.autotaskId, companyAt));

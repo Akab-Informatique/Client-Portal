@@ -7,7 +7,7 @@ import { todayQc } from "./timesheets.ts";
  * What the ticket view shows about a ticket's client: its classification
  * (Admin › Classifications) and the hours worked for it this month (Québec),
  * counted from the time entries of its tickets kept in the portal. Time typed
- * straight in Autotask is not in this count until time entries come local.
+ * straight in the source is not in this count.
  * `goal` is where the contract's monthly hours will go; none for now.
  */
 export type ClientInfo = {

@@ -17,7 +17,7 @@ const KEY = ["admin", "queues"];
 
 /**
  * Admin › Files d'attente: the portal's own ticket queues (Support, Alertes
- * and Projets to start). Not tied to Autotask: what is set here is only in
+ * and Projets to start). What is set here is only in
  * the portal.
  */
 export function QueuesSection() {

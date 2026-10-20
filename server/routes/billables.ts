@@ -6,7 +6,6 @@ import { audit } from "../lib/audit.ts";
 import { body, zUuid } from "../lib/validate.ts";
 import { BILLABLE_KINDS, billableCounts, billablesState, createInvoice, DraftError, draftInvoice, editBillable, invoiceableClients, listBillables, postInvoices, postPreview, setBillableStatus, syncBillables, unpostInvoice } from "../lib/billables.ts";
 import type { BillableKind } from "../lib/ticketSource.ts";
-import { AutotaskError } from "../lib/autotask.ts";
 import { autoSync } from "../lib/quickbooks.ts";
 
 /**
@@ -56,17 +55,12 @@ export const billablesRoutes = new Hono<AppEnv>()
   })
   .get("/summary", async (c) => c.json({ state: await billablesState(), counts: await billableCounts(periodOf((k) => c.req.query(k))) }))
 
-  /** Copy the work to bill from Autotask now (it also comes with each CRM sync). */
+  /** Refresh the work to bill now (it also comes with each CRM sync). */
   .post("/import", requirePermission("accounting.manage"), async (c) => {
     const a = auth(c);
-    try {
-      const s = await syncBillables();
-      await audit(a.user.id, "billing.items_imported", null, { counts: s.counts, errors: Object.keys(s.errors) });
-      return c.json(s);
-    } catch (e) {
-      if (e instanceof AutotaskError) throw new HTTPException(502, { message: `autotask_${e.code}` });
-      throw e;
-    }
+    const s = await syncBillables();
+    await audit(a.user.id, "billing.items_imported", null, { counts: s.counts, errors: Object.keys(s.errors) });
+    return c.json(s);
   })
   /** Un-post: void a portal invoice and give its items back (approved again) */
   .post("/unpost", requirePermission("accounting.manage"), async (c) => {

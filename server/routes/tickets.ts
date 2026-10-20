@@ -14,7 +14,6 @@ import { sanitizeMailHtml } from "../lib/mailHtml.ts";
 import { sendMail } from "../lib/mail.ts";
 import { notify } from "../lib/notify.ts";
 import { AI_FEATURE_KEYS, AI_MODELS, AiError, aiSettings, askClaude, askClaudeJson, modelFor, todayOf, type AiModel } from "../lib/ai.ts";
-import { AutotaskError, PERMISSION_REFUSED } from "../lib/autotask.ts";
 import { sweepTimers, timerView, elapsedMs } from "../lib/timers.ts";
 import { MAX_TICKET_ATTACHMENT_BYTES, SourceError, ticketSource, type Asset, type NTicket, type Options, type TicketSource } from "../lib/ticketSource.ts";
 import { deleteTicket, ticketFile, ticketsLocal } from "../lib/localTickets.ts";
@@ -26,10 +25,8 @@ import { fridayEnd } from "./meetings.ts";
 import { addTicketTime } from "../lib/timesheets.ts";
 
 /**
- * Tickets (staff). Data come from the ticket source: Autotask when the
- * integration is enabled, sample tickets otherwise (see ticketSource.ts).
- * Writes go to Autotask on behalf of the technician. The start date, saved
- * filters, presence and AI analyses are portal-only.
+ * Tickets (staff). Data come from the ticket source: the portal's database,
+ * sample tickets in development (see ticketSource.ts).
  */
 
 const zDate = z.string().regex(/^\d{4}-\d{2}-\d{2}$/);
@@ -39,23 +36,11 @@ const zUuidOrNull = z.uuid().nullable().default(null);
 const FILTER_PARAMS = ["view", "assignee", "q", "due", "created", "attention", "statusKind", "status", "priority", "company", "queue", "dueFrom", "dueTo", "startFrom", "startTo", "alerts", "sort"];
 const PRIORITY_ORDER = { critical: 0, high: 1, medium: 2, low: 3 } as const;
 
-// ── Errors from the source (Autotask) → HTTP ──
+// ── Errors from the source → HTTP ──
 function sourceError(e: unknown): HTTPException {
   if (e instanceof HTTPException) return e;
   if (e instanceof SourceError) {
-    const status = e.code === "not_found" ? 404 : e.code === "not_linked" ? 409 : 400;
-    return new HTTPException(status, { message: e.code === "not_linked" ? "autotask_not_linked" : e.code });
-  }
-  if (e instanceof AutotaskError) {
-    // In the server log too (docker compose logs app), with Autotask's own message
-    console.warn(`[autotask] ${e.code}${e.status ? ` (HTTP ${e.status})` : ""}${e.detail ? `: ${e.detail}` : ""}`);
-    // The technician's own Autotask user may not do this (changes are made in their name)
-    if (e.detail && PERMISSION_REFUSED.test(e.detail)) {
-      return new HTTPException(403, { message: "autotask_permission", cause: [{ path: "autotask", message: e.detail }] });
-    }
-    const status = e.code === "not_configured" || e.code === "disabled" ? 409 : e.code === "rate_limit" ? 429 : 502;
-    // Autotask's own message (e.g. a required field) helps the technician
-    return new HTTPException(status, { message: `autotask_${e.code}`, cause: e.detail ? [{ path: "autotask", message: e.detail }] : undefined });
+    return new HTTPException(e.code === "not_found" ? 404 : 400, { message: e.code });
   }
   console.error("[tickets]", e);
   return new HTTPException(500, { message: "Internal error" });
@@ -251,7 +236,7 @@ function assetView(x: Asset, r: RmmSettings) {
   const values = { uid: x.rmm.uid, id: x.rmm.id, hostname: x.hostname, serial: x.serial, ip: x.ip };
   return {
     ...x,
-    /** "local": made in the portal; "rmm": synced from the RMM / Autotask */
+    /** "local": made in the portal; "rmm": synced from the RMM */
     origin: x.id.startsWith("local:") ? ("local" as const) : ("rmm" as const),
     links: r.enabled
       ? { rmm: r.name || null, device: rmmLink(r.deviceUrl, values), remote: rmmLink(r.remoteUrl, values) }
@@ -378,7 +363,6 @@ async function detailOf(src: TicketSource, id: number, a: AuthContext) {
     source: t.source,
     hours: t.hours,
     notes: t.notes,
-    warnings: t.warnings ?? [],
     assetId: t.assetId ?? null,
     asset,
     contactInfo,
@@ -561,7 +545,6 @@ export const ticketRoutes = new Hono<AppEnv>()
     return c.json({
       demo: src.demo,
       /** Autotask mode and my account is not linked to an Autotask user */
-      notLinked: !src.demo && !meId,
       ai: Boolean(ai?.enabled && ai.apiKey),
       metrics,
       buttons,
@@ -673,12 +656,12 @@ export const ticketRoutes = new Hono<AppEnv>()
     return c.json({ ok: true });
   })
 
-  // ── Clients and their contacts (Autotask Companies / Contacts) ──
+  // ── Clients and their contacts ──
   .get("/companies", async (c) => {
     const src = await ticketSource();
     return c.json(await run(() => src.companies()));
   })
-  /** A new client, when the ticket is for someone not yet in Autotask. */
+  /** A new client, when the ticket is for someone not yet in the portal. */
   .post("/companies", requirePermission("tickets.clients"), async (c) => {
     const a = auth(c);
     const p = await body(c, z.object({ name: z.string().trim().min(2).max(100), phone: z.string().trim().min(7).max(40) }));
@@ -863,7 +846,7 @@ export const ticketRoutes = new Hono<AppEnv>()
     return c.json(assetView(list.find((x) => x.id === "local:" + row!.id)!, r), 201);
   })
 
-  // ── Timers (work time → Autotask time entries) ──
+  // ── Timers (work time → time entries) ──
   /** My timers: running / paused / waiting for validation (closed tab). */
   .get("/timers", requirePermission("tickets.edit"), async (c) => {
     const a = auth(c);
@@ -931,7 +914,7 @@ export const ticketRoutes = new Hono<AppEnv>()
       .where(and(eq(schema.ticketTimers.userId, a.user.id), eq(schema.ticketTimers.state, "running")));
     return c.json((await myTimers(a.user.id)).map(timerView));
   })
-  /** Validate a timer: becomes a time entry under my Autotask resource. */
+  /** Validate a timer: becomes a time entry. */
   .post("/timers/:timerId/submit", requirePermission("tickets.edit"), async (c) => {
     const a = auth(c);
     const timer = await ownTimer(c.req.param("timerId"), a.user.id);
@@ -1261,8 +1244,7 @@ export const ticketRoutes = new Hono<AppEnv>()
     if (storeProductId) {
       const [product] = await db().select().from(schema.storeProducts).where(eq(schema.storeProducts.id, storeProductId));
       if (!product || !product.active) throw new HTTPException(404, { message: "not_found" });
-      // The Autotask product it is linked to (if any) goes on the charge
-      charge.productId = product.autotaskProductId ? String(product.autotaskProductId) : null;
+      charge.productId = null;
       if (locationId) {
         // Whole units only, never more than what is on hand
         if (!Number.isInteger(charge.quantity)) throw new HTTPException(400, { message: "Validation failed" });
@@ -1272,7 +1254,7 @@ export const ticketRoutes = new Hono<AppEnv>()
         } catch (e) {
           throw e instanceof StoreError ? storeHttp(e) : e;
         }
-        // The serial numbers go on the Autotask charge too
+        // The serial numbers go on the charge too
         if (taken.serials.length) {
           const line = `N° de série : ${taken.serials.join(", ")}`;
           charge.description = (charge.description ? `${charge.description}\n${line}` : line).slice(0, 2000);

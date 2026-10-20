@@ -1,6 +1,6 @@
 import { and, asc, eq, inArray, isNotNull, sql } from "drizzle-orm";
 import { db, schema } from "../db/index.ts";
-import { autotaskLinked, ticketSource, type CrmExport } from "./ticketSource.ts";
+import { ticketSource, type CrmExport } from "./ticketSource.ts";
 import { isLocalId, NATIVE_ID_START } from "./ids.ts";
 import { billingSettings } from "./billing.ts";
 import { revokeUserSessions } from "./auth.ts";
@@ -8,9 +8,8 @@ import { forgetPasswordLinks } from "./passwordLinks.ts";
 
 /**
  * The CRM: the portal's own copy of the clients, their contacts and their
- * contracts. While Autotask is linked, a sync copies everything from it
- * (Autotask is the reference) and the portal's own changes are sent to it
- * first; the day it is unlinked, the portal already has everything.
+ * contracts. The database is the reference; in development a sync copies the
+ * sample data in.
  *
  * Portal-only fields (notes, invoice settings, code, email) are never
  * overwritten by a sync.
@@ -20,7 +19,7 @@ const STATE_KEY = "autotask.crm";
 export const CRM_SYNC_EVERY = 15 * 60_000;
 
 export type CrmState = {
-  source: "autotask" | "sample" | "local";
+  source: "sample" | "local";
   at: string | null;
   ok: boolean;
   error: string | null;
@@ -44,9 +43,9 @@ let running: Promise<CrmState> | null = null;
 /** Copy every client, contact and contract from the source (one at a time). */
 export function syncCrm(): Promise<CrmState> {
   running ??= (async () => {
-    // the portal's own database is the reference (tickets are the portal's, Autotask not linked): nothing to copy
+    // the portal's own database is the reference: nothing to copy (only the sample data of development is copied)
     const { ticketsLocal } = await import("./localTickets.ts");
-    if ((await ticketsLocal()) && !(await autotaskLinked())) {
+    if (await ticketsLocal()) {
       const [[c], [k], [x], [v]] = await Promise.all([
         db().select({ n: sql<number>`count(*)::int` }).from(schema.clients),
         db().select({ n: sql<number>`count(*)::int` }).from(schema.clientContacts),
@@ -58,7 +57,7 @@ export function syncCrm(): Promise<CrmState> {
       return s;
     }
     const src = await ticketSource();
-    const source = src.demo ? "sample" : "autotask";
+    const source = "sample";
     const before = await crmState();
     try {
       const data = await src.crmExport();
@@ -90,7 +89,7 @@ async function apply(data: CrmExport) {
   const d = db();
   const now = new Date();
 
-  // ── clients: by Autotask id, else a portal client of the same name (linked then)
+  // ── clients: by id, else a portal client of the same name
   const local = await d.select().from(schema.clients);
   const byAt = new Map(local.filter((c) => c.autotaskId != null).map((c) => [c.autotaskId!, c]));
   const byName = new Map(local.filter((c) => c.autotaskId == null).map((c) => [c.name.trim().toLowerCase(), c]));
@@ -111,7 +110,7 @@ async function apply(data: CrmExport) {
     const changed = hit.autotaskId !== c.id || !hit.active || (Object.keys(fields) as (keyof typeof fields)[]).some((k) => !same(hit[k], fields[k]));
     if (changed) await d.update(schema.clients).set({ ...fields, autotaskId: c.id, active: true, syncedAt: now, updatedAt: now }).where(eq(schema.clients.id, hit.id));
   }
-  // parent companies (Autotask is the reference while linked)
+  // parent companies
   const parents = new Map((await d.select({ id: schema.clients.id, parentId: schema.clients.parentId }).from(schema.clients)).map((r) => [r.id, r.parentId]));
   for (const c of data.companies) {
     const id = idOf.get(c.id)!;

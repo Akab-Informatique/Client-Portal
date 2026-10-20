@@ -18,14 +18,14 @@ export type BillingSettings = {
   template: { language: "fr" | "en"; termsDays: number; footer: string; paymentInstructions: string; showPaymentLink: boolean };
   /** The usual hourly rate when neither the source nor the client gives one ($) */
   rates: { hourly: number };
-  /** What is copied from Autotask: invoices from this date and number on, work to bill from this date */
+  /** Window of what is copied (name kept from the Autotask days): invoices from this date and number on, work to bill from this date */
   autotask: { invoicesSince: string; invoiceMinNumber: number | null; itemsSince: string };
   /** Default accounts (ledger account ids) used for invoice lines and payments */
   accounts: { receivable: string | null; bank: string | null; labour: string | null; charges: string | null; contracts: string | null; gst: string | null; qst: string | null };
 };
 
 export const DEFAULT_BILLING: BillingSettings = {
-  // the Autotask invoices start at 10000: the portal carries on after the highest one
+  // the numbers start at 10000: the portal carries on after the highest one
   numbering: { prefix: "", next: 10000, digits: 5 },
   taxes: { gstNumber: "", qstNumber: "", gstRate: 5, qstRate: 9.975 },
   company: { legalName: "AKAB Informatique", address: "", phone: "", email: "", website: "akab.ca" },

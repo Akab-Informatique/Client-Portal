@@ -2,7 +2,7 @@ import { useEffect, useState, type FormEvent, type ReactNode } from "react";
 import { useTranslation } from "react-i18next";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
-import { ArrowDown, ArrowUp, CircleAlert, CircleCheck, Eye, EyeOff, Loader2, Plus, RefreshCw, Save, Trash2 } from "lucide-react";
+import { ArrowDown, ArrowUp, Eye, EyeOff, Loader2, Plus, Save, Trash2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Switch } from "@/components/ui/switch";
@@ -23,200 +23,15 @@ function Card({ title, hint, children }: { title: string; hint?: string; childre
   );
 }
 
-/** Admin › Billets: where tickets come from, how the statuses are named and offered, and the manual sync with Autotask. */
+/** Admin › Billets: where tickets come from, how the statuses are named and offered. */
 export function TicketSetupSection() {
   const { t } = useTranslation();
   return (
     <div>
       <SectionHeader title={t("ticketSetup.title")} subtitle={t("ticketSetup.subtitle")} />
-      <LocalCard />
-      <SyncCard />
       <SourcesCard />
       <StatusesCard />
     </div>
-  );
-}
-
-// ── Sync with Autotask, by hand ──
-type SyncInfo = {
-  auto: boolean;
-  since: string;
-  demo: boolean;
-  copy: { total: number; newestActivity: string | null; syncedAt: string | null };
-  lastRun: { at: string; ok: boolean; total: number; completed: number; error?: string } | null;
-  local?: boolean;
-};
-
-// ── The tickets of the portal (no longer tied to Autotask) ──
-type LocalInfo = {
-  mode: "autotask" | "local";
-  linked: boolean;
-  switchedAt: string | null;
-  since: string;
-  tickets: number;
-  import: { state: "running" | "done" | "failed"; done: number; startedAt: string; finishedAt?: string; error?: string } | null;
-};
-function LocalCard() {
-  const { t } = useTranslation();
-  const qc = useQueryClient();
-  const confirm = useConfirm();
-  const { data } = useQuery({
-    queryKey: ["admin", "ticket-local"],
-    queryFn: () => api.get<LocalInfo>("/admin/ticket-setup/local"),
-    // while the copy runs
-    refetchInterval: (q) => (q.state.data?.import?.state === "running" ? 2000 : false),
-  });
-  const refresh = () => {
-    void qc.invalidateQueries({ queryKey: ["admin", "ticket-local"] });
-    void qc.invalidateQueries({ queryKey: ["admin", "ticket-sync"] });
-    void qc.invalidateQueries({ queryKey: ["tickets"] });
-  };
-  const start = useMutation({ mutationFn: () => api.post("/admin/ticket-setup/local/switch", {}), onSuccess: refresh, onError: fail(t) });
-  const [numbers, setNumbers] = useState("");
-  const [period, setPeriod] = useState("");
-  const pull = useMutation({
-    mutationFn: (p: { numbers?: string[]; since?: string }) => api.post<{ imported: number; missing: string[] }>("/admin/ticket-setup/local/import", p),
-    onSuccess: (r) => {
-      refresh();
-      toast.success(t("ticketSetup.local.imported", { count: r.imported }));
-      if (r.missing.length) toast.warning(t("ticketSetup.local.missing", { list: r.missing.join(", ") }));
-      setNumbers("");
-    },
-    onError: fail(t),
-  });
-  const when = (iso: string | null | undefined) => (iso ? new Date(iso).toLocaleString() : "—");
-  const running = data?.import?.state === "running";
-  const parsed = numbers.split(/[\s,;]+/).map((x) => x.trim().toUpperCase()).filter(Boolean);
-  const ask = () =>
-    void confirm({ title: t("ticketSetup.local.confirmTitle"), description: t("ticketSetup.local.confirmText", { since: data?.since ?? "" }), confirmLabel: t("ticketSetup.local.confirm"), destructive: true }).then((ok) => ok && start.mutate());
-  if (!data) return null;
-  return (
-    <Card title={t("ticketSetup.local.title")} hint={t("ticketSetup.local.hint")}>
-      {data.mode === "autotask" ? (
-        <div className="space-y-3">
-          <p className="text-sm">{t("ticketSetup.local.notYet")}</p>
-          <div className="flex flex-wrap items-center gap-3">
-            <Button type="button" onClick={ask} disabled={running || start.isPending}>
-              {running || start.isPending ? <Loader2 className="size-4 animate-spin" /> : <RefreshCw className="size-4" />} {t("ticketSetup.local.switch")}
-            </Button>
-            {running && <span className="text-xs text-muted-foreground">{t("ticketSetup.local.copying", { count: data.import?.done ?? 0 })}</span>}
-          </div>
-          {data.import?.state === "failed" && (
-            <p className="flex items-start gap-2 text-xs text-destructive">
-              <CircleAlert className="mt-0.5 size-3.5 shrink-0" /> {t("ticketSetup.local.failed", { error: data.import.error ?? "" })}
-            </p>
-          )}
-        </div>
-      ) : (
-        <div className="space-y-4">
-          <p className="flex items-start gap-2 text-sm text-emerald-300">
-            <CircleCheck className="mt-0.5 size-4 shrink-0" /> {t("ticketSetup.local.active", { at: when(data.switchedAt), count: data.tickets })}
-          </p>
-          <div className="space-y-2 rounded-xl border p-3">
-            <p className="text-sm font-medium">{t("ticketSetup.local.importTitle")}</p>
-            <p className="text-xs text-muted-foreground">{data.linked ? t("ticketSetup.local.importHint") : t("ticketSetup.local.notLinked")}</p>
-            <div className="flex flex-wrap items-end gap-2">
-              <label className="min-w-64 flex-1 space-y-1 text-xs text-muted-foreground">
-                {t("ticketSetup.local.numbers")}
-                <Input value={numbers} onChange={(e) => setNumbers(e.target.value)} placeholder="T20261016.0043, T20261016.0044" className="h-9 font-mono text-sm" disabled={!data.linked} />
-              </label>
-              <Button type="button" variant="outline" disabled={!data.linked || !parsed.length || pull.isPending} onClick={() => pull.mutate({ numbers: parsed })}>
-                {pull.isPending ? <Loader2 className="size-4 animate-spin" /> : <RefreshCw className="size-4" />} {t("ticketSetup.local.importNumbers")}
-              </Button>
-            </div>
-            <div className="flex flex-wrap items-end gap-2">
-              <label className="space-y-1 text-xs text-muted-foreground">
-                {t("ticketSetup.local.period")}
-                <Input type="date" value={period} onChange={(e) => setPeriod(e.target.value)} className="h-9 w-44" disabled={!data.linked} />
-              </label>
-              <Button type="button" variant="outline" disabled={!data.linked || !period || pull.isPending} onClick={() => pull.mutate({ since: period })}>
-                {pull.isPending ? <Loader2 className="size-4 animate-spin" /> : <RefreshCw className="size-4" />} {t("ticketSetup.local.importPeriod")}
-              </Button>
-            </div>
-            <p className="text-[11px] text-muted-foreground">{t("ticketSetup.local.replaces")}</p>
-          </div>
-        </div>
-      )}
-    </Card>
-  );
-}
-
-function SyncCard() {
-  const { t } = useTranslation();
-  const qc = useQueryClient();
-  const { data } = useQuery({ queryKey: ["admin", "ticket-sync"], queryFn: () => api.get<SyncInfo>("/admin/ticket-setup/sync") });
-  const [since, setSince] = useState("");
-  useEffect(() => data && setSince(data.since), [data?.since]); // eslint-disable-line react-hooks/exhaustive-deps
-  const refresh = () => {
-    void qc.invalidateQueries({ queryKey: ["admin", "ticket-sync"] });
-    void qc.invalidateQueries({ queryKey: ["tickets"] });
-  };
-  const save = useMutation({
-    mutationFn: (p: { auto?: boolean; since?: string }) => api.put("/admin/ticket-setup/sync", p),
-    onSuccess: () => {
-      refresh();
-      toast.success(t("common.saved"));
-    },
-    onError: fail(t),
-  });
-  const run = useMutation({
-    mutationFn: () => api.post<{ ok: boolean; total: number; completed: number }>("/admin/ticket-setup/sync/run", {}),
-    onSuccess: (r) => {
-      refresh();
-      toast.success(t("ticketSetup.sync.done", { total: r.total, completed: r.completed }));
-    },
-    onError: (e) => {
-      refresh();
-      fail(t)(e);
-    },
-  });
-  const when = (iso: string | null | undefined) => (iso ? new Date(iso).toLocaleString() : "—");
-  // the portal owns the tickets: nothing is synced by itself (the card above imports what is asked)
-  if (data?.local) return null;
-  return (
-    <Card title={t("ticketSetup.sync.title")} hint={t("ticketSetup.sync.hint")}>
-      {data?.demo && <p className="mb-3 rounded-lg border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-xs text-amber-200">{t("ticketSetup.sync.demo")}</p>}
-      <div className="flex flex-wrap items-center gap-x-6 gap-y-3">
-        <label className="flex items-center gap-2 text-sm">
-          <Switch checked={data?.auto ?? false} disabled={!data || save.isPending} onCheckedChange={(auto) => save.mutate({ auto })} /> {t("ticketSetup.sync.auto")}
-        </label>
-        <label className="flex items-center gap-2 text-sm text-muted-foreground">
-          {t("ticketSetup.sync.since")}
-          <Input
-            type="date"
-            value={since}
-            onChange={(e) => setSince(e.target.value)}
-            onBlur={() => since && data && since !== data.since && save.mutate({ since })}
-            className="h-9 w-40"
-          />
-        </label>
-        <Button type="button" onClick={() => run.mutate()} disabled={run.isPending}>
-          {run.isPending ? <Loader2 className="size-4 animate-spin" /> : <RefreshCw className="size-4" />} {t("ticketSetup.sync.run")}
-        </Button>
-      </div>
-      <p className="mt-3 text-xs text-muted-foreground">{data?.auto ? t("ticketSetup.sync.autoOn") : t("ticketSetup.sync.autoOff")}</p>
-      {run.isPending && <p className="mt-2 text-xs text-muted-foreground">{t("ticketSetup.sync.running")}</p>}
-      <dl className="mt-4 grid gap-x-6 gap-y-1 text-xs sm:grid-cols-3">
-        <div>
-          <dt className="text-muted-foreground">{t("ticketSetup.sync.inCopy")}</dt>
-          <dd className="font-medium">{data?.copy.total ?? "—"}</dd>
-        </div>
-        <div>
-          <dt className="text-muted-foreground">{t("ticketSetup.sync.lastSync")}</dt>
-          <dd className="font-medium">{when(data?.copy.syncedAt)}</dd>
-        </div>
-        <div>
-          <dt className="text-muted-foreground">{t("ticketSetup.sync.newest")}</dt>
-          <dd className="font-medium">{when(data?.copy.newestActivity)}</dd>
-        </div>
-      </dl>
-      {data?.lastRun && (
-        <p className={cn("mt-3 flex items-start gap-2 text-xs", data.lastRun.ok ? "text-emerald-300" : "text-destructive")}>
-          {data.lastRun.ok ? <CircleCheck className="mt-0.5 size-3.5 shrink-0" /> : <CircleAlert className="mt-0.5 size-3.5 shrink-0" />}
-          {data.lastRun.ok ? t("ticketSetup.sync.lastOk", { at: when(data.lastRun.at), total: data.lastRun.total, completed: data.lastRun.completed }) : t("ticketSetup.sync.lastFailed", { at: when(data.lastRun.at), error: data.lastRun.error ?? "" })}
-        </p>
-      )}
-    </Card>
   );
 }
 

@@ -17,7 +17,7 @@ import { CompanyPicker, ContactPicker, useCompanies, useContracts } from "./pick
 import { PRIORITY_STYLE, useChoiceText, type TicketList, type TicketSummary, ticketErrorText } from "./shared";
 
 const inDays = (n: number) => new Date(Date.now() + n * 86_400_000).toISOString().slice(0, 10);
-/** Same limit as the API (Autotask takes a few megabytes per attachment) */
+/** Same limit as the API */
 const MAX_FILE = 5 * 1024 * 1024;
 const sizeText = (b: number) => (b < 1024 * 1024 ? `${Math.max(1, Math.round(b / 1024))} Ko` : `${(b / 1024 / 1024).toFixed(1)} Mo`);
 

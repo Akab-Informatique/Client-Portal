@@ -28,7 +28,6 @@ import {
   updateMessage,
   type OutgoingAttachment,
 } from "../lib/outlook.ts";
-import { AutotaskError } from "../lib/autotask.ts";
 import { htmlText, sanitizeMailHtml } from "../lib/mailHtml.ts";
 import { SourceError, ticketSource } from "../lib/ticketSource.ts";
 import { matchSender } from "../lib/mailIntake.ts";
@@ -42,8 +41,6 @@ function outlookHttp(e: unknown): HTTPException {
     const status = e.code === "not_configured" ? 409 : e.code === "not_found" ? 404 : 502;
     return new HTTPException(status, { message: `outlook_${e.code}`, cause: e.detail ? [{ path: "outlook", message: e.detail }] : undefined });
   }
-  if (e instanceof AutotaskError)
-    return new HTTPException(502, { message: `autotask_${e.code}`, cause: e.detail ? [{ path: "autotask", message: e.detail }] : undefined });
   if (e instanceof SourceError) return new HTTPException(400, { message: e.code });
   console.error("[outlook]", e);
   return new HTTPException(500, { message: "Internal error" });
