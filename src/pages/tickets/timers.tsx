@@ -5,7 +5,7 @@ import { isAddress, RecipientInput } from "@/pages/outlook/RecipientInput";
 import { useSearchParams } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
-import { AlertTriangle, ChevronDown, Clock3, CornerDownLeft, Loader2, Lock, Mail, Pause, Play, Receipt, Timer as TimerIcon, XCircle } from "lucide-react";
+import { AlertTriangle, ChevronDown, Clock3, CornerDownLeft, Loader2, Lock, Mail, Pause, PiggyBank, Play, Receipt, Timer as TimerIcon, XCircle } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { AiTextarea } from "@/components/AiPolish";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -16,7 +16,8 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { useConfirm } from "@/components/ConfirmDialog";
 import { api } from "@/lib/api";
-import { useCan } from "@/lib/session";
+import { useCan, useMe } from "@/lib/session";
+import { Switch } from "@/components/ui/switch";
 import { cn } from "@/lib/utils";
 import { longDateTime, ticketErrorText, hm, parseHm } from "./shared";
 import { contractNote } from "./contract";
@@ -375,6 +376,10 @@ function TimeEntryDialog({ timer, position, onLater }: { timer: Timer; position:
   const [workType, setWorkType] = useState("");
   // billed to the client, and the hours worked but not billed
   const [billableOn, setBillableOn] = useState(true);
+  // banked instead of paid: what the technician's profile says, for this entry
+  const me = useMe();
+  const [bankPick, setBankPick] = useState<boolean | null>(null);
+  const bankOn = bankPick ?? me.preferences.bankHours;
   // the contract the time is logged on: the ticket's, unless another is picked
   const [contractPick, setContractPick] = useState("");
   const contracts = ticket?.contracts ?? [];
@@ -405,6 +410,7 @@ function TimeEntryDialog({ timer, position, onLater }: { timer: Timer; position:
         billable,
         offsetHours: billable ? off : 0,
         contractId: contract?.id ?? null,
+        banked: bankOn,
         notify: { contact: notifyContact, others },
       }),
     onSuccess: (r: { notified?: number; notifyFailed?: number; noContactEmail?: boolean }) => {
@@ -549,6 +555,16 @@ function TimeEntryDialog({ timer, position, onLater }: { timer: Timer; position:
                   : t("tickets.timer.notBilled")}
             </p>
           </div>
+          {/* banked instead of paid */}
+          <label className="flex items-center justify-between gap-3 rounded-xl border border-sky-400/25 bg-sky-500/[0.05] p-3 text-sm">
+            <span className="space-y-0.5">
+              <span className="flex items-center gap-1.5 font-medium">
+                <PiggyBank className="size-4 text-sky-300" /> {t("timesheet.bankEntry")}
+              </span>
+              <span className="block text-xs text-muted-foreground">{t("timesheet.bankEntryHint")}</span>
+            </span>
+            <Switch checked={bankOn} onCheckedChange={setBankPick} aria-label={t("timesheet.bankEntry")} />
+          </label>
           <div className="space-y-1.5">
             <Label htmlFor="te-summary">{t("tickets.timer.summary")}</Label>
             <AiTextarea

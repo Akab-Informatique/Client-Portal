@@ -3730,7 +3730,7 @@ describe("submitting: timesheets (when required) and expenses", () => {
     expect((await tech2.get("/api/time/people")).status).toBe(403);
     // a technician cannot open or change someone else's
     expect((await tech2.get(`/api/time/week?userId=${adminRow.id}`)).status).toBe(403);
-    const typeId = (await admin.get("/api/time/types")).json.time.find((x: any) => x.kind !== "labour").id;
+    const typeId = (await admin.get("/api/time/types")).json.time.find((x: any) => x.kind === "other").id;
     expect((await tech2.post("/api/time/entries", { date: "2026-11-03", typeId, hours: 1, userId: adminRow.id })).status).toBe(403);
 
     // the admin adds hours on the technician's week, removes them, then submits it for them
@@ -5025,5 +5025,126 @@ describe("contract types, contracts made by hand, services", () => {
     expect((await admin.patch(`/api/services/${s.json.id}`, { priceCents: 10900, active: false })).json).toMatchObject({ priceCents: 10900, active: false });
     expect((await admin.del(`/api/services/${s.json.id}`)).status).toBe(200);
     expect((await admin.del(`/api/services/${s.json.id}`)).status).toBe(404);
+  });
+});
+
+describe("timesheet: work day, billable and non billable time, ratio", () => {
+  it("a work day (start, end, lunch) is not counted in the hours worked; types are marked billable; the ratio is billable over worked", async () => {
+    resetRateLimit("login:ip:unknown");
+    const admin = await signIn("admin@akab.local");
+    const tech = await signIn("tech@akab.local");
+    const types = (await tech.get("/api/time/types")).json.time;
+    const workday = types.find((x: any) => x.kind === "workday");
+    expect(workday).toBeTruthy();
+    const other = types.filter((x: any) => x.kind === "other");
+    const admin1 = other.find((x: any) => /admin/i.test(x.name)) ?? other[0];
+    const meeting = other.find((x: any) => x.id !== admin1.id);
+
+    // marking types billable (admin); the built-in ones cannot be
+    expect((await tech.patch(`/api/time/admin/timesheet-types/${admin1.id}`, { billable: true })).status).toBe(403);
+    expect((await admin.patch(`/api/time/admin/timesheet-types/${admin1.id}`, { billable: true })).json.billable).toBe(true);
+    expect((await admin.patch(`/api/time/admin/timesheet-types/${workday.id}`, { billable: true })).json.error).toBe("time_type_builtin");
+    expect((await admin.patch(`/api/time/admin/timesheet-types/${workday.id}`, { active: false })).json.error).toBe("time_type_builtin");
+
+    const day = "2026-12-08";
+    // a work day needs its start, end and a lunch of 30 min or 1 h
+    expect((await tech.post("/api/time/entries", { date: day, typeId: workday.id, hours: 7 })).json.error).toBe("workday_times");
+    expect((await tech.post("/api/time/entries", { date: day, typeId: workday.id, start: "08:00", end: "16:30", lunchMinutes: 45 })).status).toBe(400);
+    expect((await tech.post("/api/time/entries", { date: day, typeId: workday.id, start: "16:00", end: "08:00", lunchMinutes: 30 })).json.error).toBe("workday_times");
+    const wd = await tech.post("/api/time/entries", { date: day, typeId: workday.id, start: "08:00", end: "16:30", lunchMinutes: 30 });
+    expect(wd.status).toBe(201);
+    expect(wd.json).toMatchObject({ startTime: "08:00", endTime: "16:30", lunchMinutes: 30, hoursX100: 800 });
+    // one a day
+    expect((await tech.post("/api/time/entries", { date: day, typeId: workday.id, start: "09:00", end: "12:00", lunchMinutes: 30 })).json.error).toBe("workday_exists");
+    // 1 h of lunch
+    expect((await tech.post("/api/time/entries", { date: "2026-12-09", typeId: workday.id, start: "08:00", end: "17:00", lunchMinutes: 60 })).json.hoursX100).toBe(800);
+
+    // 3 h of a billable type, 1 h of a non billable one
+    expect((await tech.post("/api/time/entries", { date: day, typeId: admin1.id, hours: 3 })).status).toBe(201);
+    expect((await tech.post("/api/time/entries", { date: day, typeId: meeting.id, hours: 1 })).status).toBe(201);
+    const week = (await tech.get(`/api/time/week?start=${day}`)).json;
+    // the work days (16 h) are apart: the hours worked are the 4 h
+    expect(week.workdayHours).toBe(16);
+    expect(week.totalHours).toBe(4);
+    expect(week.billableHours).toBe(3);
+    expect(week.nonBillableHours).toBe(1);
+    expect(week.billableRatio).toBe(75);
+    expect(week.types.some((x: any) => x.kind === "workday")).toBe(false);
+    expect(week.entries.find((e: any) => e.kind === "workday").billableHours).toBe(0);
+    expect(week.entries.find((e: any) => e.typeId === admin1.id).billableHours).toBe(3);
+    expect(week.entries.find((e: any) => e.typeId === meeting.id).billableHours).toBe(0);
+    // back to non billable
+    await admin.patch(`/api/time/admin/timesheet-types/${admin1.id}`, { billable: false });
+    expect((await tech.get(`/api/time/week?start=${day}`)).json).toMatchObject({ billableHours: 0, billableRatio: 0 });
+  });
+});
+
+describe("hours bank and the time report", () => {
+  it("hours are banked by profile default or per entry; the report shows worked, billable, banked and the bank; banked hours are not paid", async () => {
+    resetRateLimit("login:ip:unknown");
+    const tech = await signIn("tech@akab.local");
+    const admin = await signIn("admin@akab.local");
+    const other = (await tech.get("/api/time/types")).json.time.filter((x: any) => x.kind === "other");
+    const type = other[0];
+    const day = "2027-01-12";
+
+    // the profile default
+    expect((await tech.get("/api/me")).json.preferences.bankHours).toBe(false);
+    // not banked unless said: paid
+    expect((await tech.post("/api/time/entries", { date: day, typeId: type.id, hours: 2 })).json.banked).toBe(false);
+    expect((await tech.post("/api/time/entries", { date: day, typeId: type.id, hours: 1, banked: true })).json.banked).toBe(true);
+    expect((await tech.put("/api/me/preferences", { bankHours: true })).status).toBe(200);
+    expect((await tech.get("/api/me")).json.preferences.bankHours).toBe(true);
+    // the default now banks an entry that does not say; an entry can still say no
+    expect((await tech.post("/api/time/entries", { date: day, typeId: type.id, hours: 4 })).json.banked).toBe(true);
+    expect((await tech.post("/api/time/entries", { date: day, typeId: type.id, hours: 0.5, banked: false })).json.banked).toBe(false);
+    // the work day is never banked
+    const wd = (await tech.get("/api/time/types")).json.time.find((x: any) => x.kind === "workday");
+    expect((await tech.post("/api/time/entries", { date: day, typeId: wd.id, start: "08:00", end: "16:00", lunchMinutes: 30 })).json.banked).toBe(false);
+    await tech.put("/api/me/preferences", { bankHours: false });
+
+    // the week: 7.5 h worked, 5 h of it banked
+    const week = (await tech.get(`/api/time/week?start=${day}`)).json;
+    expect(week.totalHours).toBe(7.5);
+    expect(week.bankedHours).toBe(5);
+
+    // the report of a period: own, or anyone's for a manager
+    const rep = (await tech.get(`/api/time/report?from=2027-01-11&to=2027-01-17`)).json;
+    expect(rep).toMatchObject({ workedHours: 7.5, bankedHours: 5, paidHours: 2.5, workdayHours: 7.5, billableHours: 0 });
+    expect(rep.bankBalanceHours).toBeGreaterThanOrEqual(5);
+    expect(rep.weeks).toHaveLength(1);
+    expect(rep.types[0]).toMatchObject({ bankedHours: 5 });
+    expect((await tech.get("/api/time/report?from=2027-01-17&to=2027-01-11")).status).toBe(400);
+    const [u] = await db().select().from(schema.users).where(eq(schema.users.email, "tech@akab.local"));
+    expect((await tech.get(`/api/time/report?userId=${u.id}`)).status).toBe(200);
+    const [adm] = await db().select().from(schema.users).where(eq(schema.users.email, "admin@akab.local"));
+    expect((await tech.get(`/api/time/report?userId=${adm.id}`)).status).toBe(403);
+    expect((await admin.get(`/api/time/report?from=2027-01-11&to=2027-01-17&userId=${u.id}`)).json.bankedHours).toBe(5);
+
+    // paying hours out of the bank: a built-in type that takes them off, never more than it holds
+    const types = (await tech.get("/api/time/types")).json.time;
+    const pay = types.find((x: any) => x.kind === "bankpay");
+    expect(pay).toBeTruthy();
+    expect((await admin.patch(`/api/time/admin/timesheet-types/${pay.id}`, { active: false })).json.error).toBe("time_type_builtin");
+    const before = (await tech.get(`/api/time/week?start=${day}`)).json.bankBalanceHours;
+    expect(before).toBeGreaterThanOrEqual(5);
+    expect((await tech.post("/api/time/entries", { date: "2027-01-14", typeId: pay.id, hours: before + 1 })).json.error).toBe("bank_insufficient");
+    const paid = await tech.post("/api/time/entries", { date: "2027-01-14", typeId: pay.id, hours: 3 });
+    expect(paid.status).toBe(201);
+    expect(paid.json.banked).toBe(false);
+    const wk = (await tech.get(`/api/time/week?start=${day}`)).json;
+    // not hours worked, not billable: the week still has its 7.5 h worked; the bank went down by 3
+    expect(wk).toMatchObject({ totalHours: 7.5, bankedHours: 5, bankPaidHours: 3, bankBalanceHours: before - 3 });
+    expect(wk.types.some((x: any) => x.kind === "bankpay")).toBe(false);
+    const rep2 = (await tech.get("/api/time/report?from=2027-01-11&to=2027-01-17")).json;
+    expect(rep2).toMatchObject({ workedHours: 7.5, bankPaidHours: 3, bankBalanceHours: before - 3 });
+    // banked hours already paid out cannot be taken back (here the bank would go below zero); removing the payout frees them
+    const banked4 = wk.entries.find((e: any) => e.banked && e.hours === 4);
+    if (before - 3 - 4 < 0) expect((await tech.del(`/api/time/entries/${banked4.id}`)).json.error).toBe("bank_in_use");
+    const payout = wk.entries.find((e: any) => e.kind === "bankpay");
+    expect((await tech.del(`/api/time/entries/${payout.id}`)).status).toBe(200);
+    expect((await tech.get(`/api/time/week?start=${day}`)).json.bankBalanceHours).toBe(before);
+    expect((await tech.del(`/api/time/entries/${banked4.id}`)).status).toBe(200);
+    expect((await tech.get(`/api/time/week?start=${day}`)).json.bankBalanceHours).toBe(before - 4);
   });
 });

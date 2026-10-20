@@ -11,7 +11,7 @@ import { api } from "@/lib/api";
 import { cn } from "@/lib/utils";
 import { SectionHeader } from "./sections";
 
-type TimeType = { id: string; name: string; kind: "labour" | "other"; active: boolean; quickbooksItemId: string | null };
+type TimeType = { id: string; name: string; kind: "labour" | "workday" | "bankpay" | "other"; active: boolean; billable: boolean; quickbooksItemId: string | null };
 type ExpenseType = { id: string; name: string; ledgerAccountId: string | null; unit: string | null; unitPriceCents: number | null; billable: boolean; active: boolean };
 type Account = { id: string; number: string; name: string; type: string; active: boolean };
 const KEY = ["admin", "time-types"];
@@ -54,12 +54,18 @@ export function TimeExpenseSection() {
           {(data?.time ?? []).map((x) => (
             <li key={x.id} className={cn("flex items-center gap-3 px-3 py-2", !x.active && "opacity-50")}>
               <Input defaultValue={x.name} onBlur={(e) => e.target.value.trim() && e.target.value !== x.name && patchTime.mutate({ id: x.id, name: e.target.value.trim() })} className="h-8 flex-1 border-transparent bg-transparent px-2 hover:border-border focus:border-border" />
-              {x.kind === "labour" ? (
-                <span className="flex items-center gap-1 text-[11px] text-muted-foreground" title={t("timeAdmin.builtinHint")}>
-                  <Lock className="size-3" /> {t("timeAdmin.builtin")}
-                </span>
+              {x.kind === "other" ? (
+                <>
+                  <label className="flex items-center gap-2 text-[11px] text-muted-foreground" title={t("timeAdmin.billableStatHint")}>
+                    <Switch checked={x.billable} onCheckedChange={(v) => patchTime.mutate({ id: x.id, billable: v })} aria-label={t("timeAdmin.billableStat")} />
+                    <span className={cn("w-24", x.billable ? "text-emerald-300" : "text-muted-foreground")}>{x.billable ? t("timeAdmin.billableYes") : t("timeAdmin.billableNo")}</span>
+                  </label>
+                  <Switch checked={x.active} onCheckedChange={(v) => patchTime.mutate({ id: x.id, active: v })} aria-label={t("timeAdmin.active")} />
+                </>
               ) : (
-                <Switch checked={x.active} onCheckedChange={(v) => patchTime.mutate({ id: x.id, active: v })} aria-label={t("timeAdmin.active")} />
+                <span className="flex items-center gap-1 text-[11px] text-muted-foreground" title={t("timeAdmin.builtinHint")}>
+                  <Lock className="size-3" /> {x.kind === "workday" ? t("timeAdmin.workdayKind") : x.kind === "bankpay" ? t("timeAdmin.bankpayKind") : t("timeAdmin.labourKind")}
+                </span>
               )}
             </li>
           ))}

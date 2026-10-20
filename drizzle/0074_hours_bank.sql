@@ -1,0 +1,2 @@
+ALTER TABLE "timesheet_entries" ADD COLUMN "banked" boolean DEFAULT false NOT NULL;--> statement-breakpoint
+ALTER TABLE "user_preferences" ADD COLUMN "bank_hours_default" boolean DEFAULT false NOT NULL;

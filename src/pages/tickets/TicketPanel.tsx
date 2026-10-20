@@ -5,7 +5,7 @@ import { useMutation, useQuery, useQueryClient, type QueryClient } from "@tansta
 import { AnimatePresence, motion } from "motion/react";
 import { toast } from "sonner";
 import { Dialog as DialogPrimitive } from "radix-ui";
-import { AlertTriangle, Bot, Building2, CalendarClock, CalendarPlus, Check, BookOpen, ChevronDown, ListOrdered, ChevronUp, Clock3, Eye, FileText, HardDrive, HelpCircle, Inbox, ListChecks, Loader2, Lock, Mail, Minus, MonitorCog, MonitorPlay, NotebookPen, Pencil, Phone, RefreshCw, Send, Sparkles, Timer, Star, UserRound, Users, X, type LucideIcon, MessageSquareReply, MessageSquareText, Trash2 } from "lucide-react";
+import { AlertTriangle, Bot, Building2, CalendarClock, CalendarPlus, Check, BookOpen, ChevronDown, ListOrdered, ChevronUp, Clock3, Eye, FileText, HardDrive, HelpCircle, Inbox, ListChecks, Loader2, Lock, Mail, Minus, MonitorCog, MonitorPlay, NotebookPen, Pencil, Phone, RefreshCw, Send, Sparkles, Timer, Star, UserCheck, UserRound, Users, X, type LucideIcon, MessageSquareReply, MessageSquareText, Trash2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { useConfirm } from "@/components/ConfirmDialog";
 import { AiTextarea } from "@/components/AiPolish";
@@ -33,6 +33,7 @@ import { CompanyPicker, ContactPicker, useCompanies } from "./pickers";
 import { TimerControl } from "./timers";
 import { AssetContent, AssetPicker } from "./AssetCard";
 import { ClientHoursGauge } from "./ClientHoursGauge";
+import { AcceptDialog } from "./AcceptDialog";
 import { contractNote } from "./contract";
 import { ContactTicketsList, useContactOpen } from "./ContactTickets";
 import { ChargeButtons } from "./Charges";
@@ -216,6 +217,7 @@ function TicketBody({
   const { t } = useTranslation();
   const txt = useChoiceText();
   const can = useCan();
+  const me = useMe();
   const editable = can("tickets.edit");
   const update = useTicketUpdate(tk);
   const qc = useQueryClient();
@@ -297,6 +299,7 @@ function TicketBody({
   // Quick actions put the note box in a mode and bring it into view
   const [focusNote, setFocusNote] = useState<{ internal: boolean; at: number } | null>(null);
   const [giving, setGiving] = useState(false);
+  const [accepting, setAccepting] = useState(false);
   // the three squares: full size, or collapsed to small icons (kept per browser)
   const [tilesOpen, setTilesOpen] = useState(() => {
     try {
@@ -645,6 +648,7 @@ function TicketBody({
             </div>
             <div className="mt-3 flex flex-wrap items-center gap-1.5 lg:mt-12 lg:justify-end lg:justify-self-end">
               {remote && <QuickAction icon={MonitorPlay} label={t("tickets.asset.remote")} href={remote} accent />}
+              {editable && !partial && tk.assignee?.id !== me.id && statusKind !== "complete" && <QuickAction icon={UserCheck} label={t("tickets.accept.button")} onClick={() => setAccepting(true)} accent />}
               {can("tickets.plan") && <QuickAction icon={Star} label={t("planning.givePriority")} onClick={() => setGiving(true)} />}
               <CallButton contact={tk.contact} phone={phone} />
             </div>
@@ -777,6 +781,7 @@ function TicketBody({
         </aside>
       </div>
       <OpenedByOthers viewers={viewers} />
+      {accepting && <AcceptDialog open onOpenChange={(o) => !o && setAccepting(false)} tk={tk} statuses={tk.options.statuses} />}
       {giving && <PriorityDialog priority={null} ticket={{ id: tk.id, number: tk.number, title: tk.title }} onClose={() => setGiving(false)} />}
     </>
   );

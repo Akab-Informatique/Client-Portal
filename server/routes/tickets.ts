@@ -929,6 +929,8 @@ export const ticketRoutes = new Hono<AppEnv>()
         offsetHours: z.number().min(0).max(24).default(0),
         // the contract the time is logged on (none: the ticket's contract)
         contractId: z.uuid().nullable().optional(),
+        // banked instead of paid (none: the technician's profile says)
+        banked: z.boolean().optional(),
         // the description sent by email: to the ticket contact, and to other addresses
         notify: z
           .object({ contact: z.boolean().default(false), others: z.array(zEmail).max(10).default([]) })
@@ -963,6 +965,9 @@ export const ticketRoutes = new Hono<AppEnv>()
       date: endedAt.toLocaleDateString("en-CA", { timeZone: "America/Toronto" }),
       note: p.summary,
       contractId: contract?.id ?? null,
+      // what counts as billable time in the timesheet stats: worked minus the offset, nothing when not billed
+      billableHours: p.billable ? Math.max(0, p.hours - p.offsetHours) : 0,
+      banked: p.banked,
     });
     await db().delete(schema.ticketTimers).where(eq(schema.ticketTimers.id, timer.id));
     const notified = await notifyWork(src, tk, p.summary, p.notify, a);

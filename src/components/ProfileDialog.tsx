@@ -16,8 +16,10 @@ import {
   Loader2,
   Mail,
   PenLine,
+  PiggyBank,
   Plus,
   Smartphone,
+  Timer,
   Trash2,
   UserRound,
 } from "lucide-react";
@@ -30,6 +32,7 @@ import { useConfirm } from "@/components/ConfirmDialog";
 import { api, ApiError } from "@/lib/api";
 import { useCan, useMe } from "@/lib/session";
 import { LinkMailboxDialog } from "@/pages/outlook/dialogs";
+import { TimeReportCard } from "@/pages/time/TimeReport";
 import { RichEditor, type RichEditorHandle } from "@/pages/outlook/RichEditor";
 import { KEY, outlookErrorText, statusKey, type MailAccount, type OutlookStatus } from "@/pages/outlook/shared";
 
@@ -173,7 +176,12 @@ export function ProfileDialog({ open, onOpenChange }: { open: boolean; onOpenCha
               </form>
             </Card>
           </div>
-          {staff && <Microsoft365Card onNavigate={() => onOpenChange(false)} />}
+          {staff && (
+            <div className="space-y-4">
+              <HoursCard />
+              <Microsoft365Card onNavigate={() => onOpenChange(false)} />
+            </div>
+          )}
         </div>
       </DialogContent>
     </Dialog>
@@ -188,6 +196,37 @@ function Card({ icon: Icon, title, children, className }: { icon: typeof Mail; t
       </h3>
       {children}
     </section>
+  );
+}
+
+/** My hours: whether they are banked instead of paid by default, and my time report (managers: anyone's). */
+function HoursCard() {
+  const { t } = useTranslation();
+  const me = useMe();
+  const can = useCan();
+  const qc = useQueryClient();
+  const bank = useMutation({
+    mutationFn: (bankHours: boolean) => api.put("/me/preferences", { bankHours }),
+    onSuccess: (_r, v) => {
+      void qc.invalidateQueries({ queryKey: ["auth"] });
+      toast.success(v ? t("profile.hours.bankOn") : t("profile.hours.bankOff"));
+    },
+    onError: () => toast.error(t("common.error")),
+  });
+  if (!can("timesheets.use") && !can("timesheets.manage")) return null;
+  return (
+    <Card icon={Timer} title={t("profile.hours.title")} className="space-y-3">
+      <label className="flex items-start justify-between gap-4 rounded-lg border p-3 text-sm">
+        <span className="space-y-0.5">
+          <span className="flex items-center gap-1.5 font-medium">
+            <PiggyBank className="size-4 text-sky-300" /> {t("profile.hours.bankDefault")}
+          </span>
+          <span className="block text-xs text-muted-foreground">{t("profile.hours.bankDefaultHint")}</span>
+        </span>
+        <Switch checked={me.preferences.bankHours} disabled={bank.isPending} onCheckedChange={(v) => bank.mutate(v)} aria-label={t("profile.hours.bankDefault")} />
+      </label>
+      <TimeReportCard />
+    </Card>
   );
 }
 

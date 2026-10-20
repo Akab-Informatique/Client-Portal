@@ -39,7 +39,7 @@ export async function loadMe(a: AuthContext) {
     realUser: a.viewAs ? { name: a.realUser.name, email: a.realUser.email } : null,
     /** Fills in a weekly timesheet (otherwise the Timesheets entry is hidden, unless they manage everyone's) */
     timesheetRequired: u.timesheetRequired,
-    preferences: { dashboard: prefs?.dashboard ?? null, theme: prefs?.theme ?? "dark", outlook: prefs?.outlook ?? false },
+    preferences: { dashboard: prefs?.dashboard ?? null, theme: prefs?.theme ?? "dark", outlook: prefs?.outlook ?? false, bankHours: prefs?.bankHoursDefault ?? false },
   };
 }
 
@@ -81,18 +81,21 @@ export const meRoutes = new Hono<AppEnv>()
         dashboard: z.array(widget).max(40).nullable().optional(),
         theme: z.enum(["dark", "light", "system"]).optional(),
         outlook: z.boolean().optional(),
+        /** Hours worked are banked by default */
+        bankHours: z.boolean().optional(),
       }),
     );
     if (p.outlook && !a.permissions.includes("outlook.view")) throw new HTTPException(403, { message: "forbidden" });
     await db()
       .insert(schema.userPreferences)
-      .values({ userId: a.user.id, dashboard: p.dashboard ?? null, theme: p.theme ?? null, outlook: p.outlook ?? false })
+      .values({ userId: a.user.id, dashboard: p.dashboard ?? null, theme: p.theme ?? null, outlook: p.outlook ?? false, bankHoursDefault: p.bankHours ?? false })
       .onConflictDoUpdate({
         target: schema.userPreferences.userId,
         set: {
           ...(p.dashboard !== undefined ? { dashboard: p.dashboard } : {}),
           ...(p.theme !== undefined ? { theme: p.theme } : {}),
           ...(p.outlook !== undefined ? { outlook: p.outlook } : {}),
+          ...(p.bankHours !== undefined ? { bankHoursDefault: p.bankHours } : {}),
           updatedAt: new Date(),
         },
       });

@@ -6,7 +6,7 @@ import { db, schema } from "../db/index.ts";
 import { auth, requirePermission, requireStaff, type AppEnv, type AuthContext } from "../lib/auth.ts";
 import { audit } from "../lib/audit.ts";
 import { body, zUuid } from "../lib/validate.ts";
-import { addDays, editable, ensureTypes, sheetOf, todayQc, weekEntries, weekStartOf, weekTotals } from "../lib/timesheets.ts";
+import { addDays, bankBalanceX100, bankByDefault, billableX100, editable, ensureTypes, sheetOf, todayQc, weekEntries, weekStartOf, weekTotals } from "../lib/timesheets.ts";
 
 /**
  * Timesheets and expenses: my week and my expense claims (timesheets.use),
@@ -180,12 +180,14 @@ export const timeRoutes = new Hono<AppEnv>()
     const id = zUuid.parse(c.req.param("id"));
     const p = await body(
       c,
-      z.object({ name: z.string().trim().min(1).max(80), active: z.boolean(), quickbooksItemId: z.string().max(40).nullable() }).partial(),
+      z.object({ name: z.string().trim().min(1).max(80), active: z.boolean(), billable: z.boolean(), quickbooksItemId: z.string().max(40).nullable() }).partial(),
     );
     const [cur] = await db().select().from(schema.timesheetTypes).where(eq(schema.timesheetTypes.id, id));
     if (!cur) throw new HTTPException(404, { message: "not_found" });
     // the ticket time type is always there
-    if (cur.kind === "labour" && p.active === false) throw new HTTPException(409, { message: "time_type_builtin" });
+    if (cur.kind !== "other" && p.active === false) throw new HTTPException(409, { message: "time_type_builtin" });
+    // ticket time is billable entry by entry; the work day is never billable time
+    if (cur.kind !== "other" && p.billable !== undefined) throw new HTTPException(409, { message: "time_type_builtin" });
     const [row] = await db()
       .update(schema.timesheetTypes)
       .set({ ...p, updatedAt: new Date() })
@@ -271,24 +273,135 @@ export const timeRoutes = new Hono<AppEnv>()
       weekEnd: addDays(weekStart, 6),
       status: sheet.status,
       comment: sheet.comment,
-      entries: rows.map((r) => ({ ...r.e, hours: r.e.hoursX100 / 100, type: r.type, kind: r.kind })),
+      entries: rows.map((r) => ({ ...r.e, hours: r.e.hoursX100 / 100, type: r.type, kind: r.kind, billableHours: billableX100(r.e, r.kind, r.typeBillable) / 100 })),
       ...(await weekTotals(owner, weekStart)),
+      /** What the hours bank holds (every hour banked, less the ones paid out of it) */
+      bankBalanceHours: (await bankBalanceX100(owner)) / 100,
+    });
+  })
+  /**
+   * A person's hours over a period (own, or anyone's with timesheets.manage): the work day apart, the hours worked,
+   * the billable ones and the ratio, the hours banked instead of paid, per type and per week, and the bank so far.
+   */
+  .get("/report", requirePermission("timesheets.use", "timesheets.manage"), async (c) => {
+    const a = auth(c);
+    const owner = await timesheetOwner(a, c.req.query("userId"));
+    const from = c.req.query("from") ? zDay.parse(c.req.query("from")) : weekStartOf(todayQc());
+    const to = c.req.query("to") ? zDay.parse(c.req.query("to")) : addDays(from, 6);
+    if (to < from || (new Date(to).getTime() - new Date(from).getTime()) / 86_400_000 > 800) throw new HTTPException(400, { message: "Validation failed" });
+    const d = db();
+    const rows = await d
+      .select({ e: schema.timesheetEntries, type: schema.timesheetTypes.name, kind: schema.timesheetTypes.kind, typeBillable: schema.timesheetTypes.billable })
+      .from(schema.timesheetEntries)
+      .innerJoin(schema.timesheetTypes, eq(schema.timesheetTypes.id, schema.timesheetEntries.typeId))
+      .where(and(eq(schema.timesheetEntries.userId, owner), gte(schema.timesheetEntries.date, from), lte(schema.timesheetEntries.date, to)));
+    const byType = new Map<string, { type: string; kind: string; hours: number; billable: number; banked: number }>();
+    const byWeek = new Map<string, { weekStart: string; worked: number; billable: number; banked: number; workday: number }>();
+    let workday = 0;
+    let worked = 0;
+    let billable = 0;
+    let banked = 0;
+    let bankPaid = 0;
+    for (const r of rows) {
+      const h = r.e.hoursX100;
+      const w = weekStartOf(r.e.date);
+      const wk = byWeek.get(w) ?? { weekStart: w, worked: 0, billable: 0, banked: 0, workday: 0 };
+      byWeek.set(w, wk);
+      if (r.kind === "workday") {
+        workday += h;
+        wk.workday += h;
+        continue;
+      }
+      if (r.kind === "bankpay") {
+        bankPaid += h;
+        continue;
+      }
+      const b = billableX100(r.e, r.kind, r.typeBillable);
+      worked += h;
+      billable += b;
+      wk.worked += h;
+      wk.billable += b;
+      if (r.e.banked) {
+        banked += h;
+        wk.banked += h;
+      }
+      const t = byType.get(r.e.typeId) ?? { type: r.type, kind: r.kind, hours: 0, billable: 0, banked: 0 };
+      t.hours += h;
+      t.billable += b;
+      if (r.e.banked) t.banked += h;
+      byType.set(r.e.typeId, t);
+    }
+    const [u] = await d.select({ name: schema.users.name }).from(schema.users).where(eq(schema.users.id, owner));
+    const h = (n: number) => n / 100;
+    return c.json({
+      userId: owner,
+      name: u?.name ?? "",
+      from,
+      to,
+      workdayHours: h(workday),
+      workedHours: h(worked),
+      billableHours: h(billable),
+      nonBillableHours: h(worked - billable),
+      billableRatio: worked ? Math.round((billable / worked) * 1000) / 10 : null,
+      bankedHours: h(banked),
+      paidHours: h(worked - banked),
+      /** Paid out of the bank in the period */
+      bankPaidHours: h(bankPaid),
+      /** The bank now: every hour banked, less the ones paid out of it */
+      bankBalanceHours: h(await bankBalanceX100(owner)),
+      types: [...byType.values()].sort((x, y) => y.hours - x.hours).map((t) => ({ type: t.type, kind: t.kind, hours: h(t.hours), billableHours: h(t.billable), bankedHours: h(t.banked) })),
+      weeks: [...byWeek.values()].sort((x, y) => x.weekStart.localeCompare(y.weekStart)).map((w) => ({ weekStart: w.weekStart, workedHours: h(w.worked), billableHours: h(w.billable), bankedHours: h(w.banked), workdayHours: h(w.workday) })),
     });
   })
   .post("/entries", requirePermission("timesheets.use", "timesheets.manage"), async (c) => {
     const a = auth(c);
-    const p = await body(c, z.object({ date: zDay, typeId: zUuid, hours: z.number().positive().max(24), note: z.string().trim().max(500).optional(), userId: zUuid.optional() }));
+    const zTime = z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/);
+    const p = await body(
+      c,
+      z.object({
+        date: zDay,
+        typeId: zUuid,
+        hours: z.number().positive().max(24).optional(),
+        note: z.string().trim().max(500).optional(),
+        userId: zUuid.optional(),
+        // a work day: from, to, and the lunch taken off (30 min or 1 h)
+        start: zTime.optional(),
+        end: zTime.optional(),
+        lunchMinutes: z.union([z.literal(30), z.literal(60)]).optional(),
+        // banked instead of paid (none: the person's profile says)
+        banked: z.boolean().optional(),
+      }),
+    );
     const owner = await timesheetOwner(a, p.userId);
     const [type] = await db().select().from(schema.timesheetTypes).where(eq(schema.timesheetTypes.id, p.typeId));
     // ticket time comes from the tickets only
     if (!type || !type.active || type.kind === "labour") throw new HTTPException(400, { message: "time_type_unknown" });
     const sheet = await sheetOf(owner, weekStartOf(p.date));
     if (!editable(sheet.status)) throw new HTTPException(409, { message: "timesheet_locked" });
+    let hours = p.hours ?? 0;
+    let workday: { startTime: string; endTime: string; lunchMinutes: number } | null = null;
+    if (type.kind === "workday") {
+      if (!p.start || !p.end || !p.lunchMinutes) throw new HTTPException(400, { message: "workday_times" });
+      const minutes = (t: string) => Number(t.slice(0, 2)) * 60 + Number(t.slice(3));
+      const span = minutes(p.end) - minutes(p.start) - p.lunchMinutes;
+      if (span <= 0) throw new HTTPException(400, { message: "workday_times" });
+      hours = Math.round((span / 60) * 100) / 100;
+      // one work day a day: change it by removing it first
+      const [again] = await db()
+        .select({ id: schema.timesheetEntries.id })
+        .from(schema.timesheetEntries)
+        .where(and(eq(schema.timesheetEntries.userId, owner), eq(schema.timesheetEntries.date, p.date), eq(schema.timesheetEntries.typeId, type.id)))
+        .limit(1);
+      if (again) throw new HTTPException(409, { message: "workday_exists" });
+      workday = { startTime: p.start, endTime: p.end, lunchMinutes: p.lunchMinutes };
+    } else if (!p.hours) throw new HTTPException(400, { message: "Validation failed" });
+    // hours paid out of the bank: no more than the bank holds
+    if (type.kind === "bankpay" && Math.round(hours * 100) > (await bankBalanceX100(owner))) throw new HTTPException(409, { message: "bank_insufficient" });
     const [row] = await db()
       .insert(schema.timesheetEntries)
-      .values({ userId: owner, date: p.date, typeId: type.id, hoursX100: Math.round(p.hours * 100), note: p.note || null, source: "manual" })
+      .values({ userId: owner, date: p.date, typeId: type.id, hoursX100: Math.round(hours * 100), note: p.note || null, source: "manual", banked: type.kind === "workday" || type.kind === "bankpay" ? false : (p.banked ?? (await bankByDefault(owner))), ...(workday ?? {}) })
       .returning();
-    if (owner !== a.user.id) await audit(a.user.id, "timesheet.entry_added_for", owner, { date: p.date, hours: p.hours });
+    if (owner !== a.user.id) await audit(a.user.id, "timesheet.entry_added_for", owner, { date: p.date, hours });
     return c.json(row, 201);
   })
   .delete("/entries/:id", requirePermission("timesheets.use", "timesheets.manage"), async (c) => {
@@ -301,6 +414,8 @@ export const timeRoutes = new Hono<AppEnv>()
     if (!e || e.source !== "manual") throw new HTTPException(404, { message: "not_found" });
     const sheet = await sheetOf(e.userId, weekStartOf(e.date));
     if (!editable(sheet.status)) throw new HTTPException(409, { message: "timesheet_locked" });
+    // banked hours already paid out cannot be taken back
+    if (e.banked && (await bankBalanceX100(e.userId, e.id)) < 0) throw new HTTPException(409, { message: "bank_in_use" });
     await db().delete(schema.timesheetEntries).where(eq(schema.timesheetEntries.id, e.id));
     if (e.userId !== a.user.id) await audit(a.user.id, "timesheet.entry_removed_for", e.userId, { date: e.date });
     return c.json({ ok: true });

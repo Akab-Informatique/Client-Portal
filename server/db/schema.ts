@@ -440,6 +440,8 @@ export const userPreferences = pgTable("user_preferences", {
   outlook: boolean("outlook").notNull().default(false),
   /** Email signature (sanitized HTML), added to the emails they write in the Outlook module */
   emailSignature: text("email_signature"),
+  /** Hours worked go to the hours bank by default (each entry can still say otherwise) */
+  bankHoursDefault: boolean("bank_hours_default").notNull().default(false),
   updatedAt: updated(),
 });
 
@@ -1568,10 +1570,12 @@ export const aiUsage = pgTable(
 export const timesheetTypes = pgTable("timesheet_types", {
   id: uuid("id").primaryKey().defaultRandom(),
   name: text("name").notNull(),
-  /** labour (built in, from tickets) | other (entered by hand) */
+  /** labour (built in, from tickets) | workday (built in: start, end and lunch of the day, not counted in the hours worked) | bankpay (built in: hours paid out of the hours bank, taken off the bank, not hours worked) | other (entered by hand) */
   kind: text("kind").notNull().default("other"),
   active: boolean("active").notNull().default(true),
   position: integer("position").notNull().default(0),
+  /** Counts as billable time in our stats (Admin › Temps et dépenses); ticket time is billable entry by entry */
+  billable: boolean("billable").notNull().default(false),
   /** QuickBooks service item for its time activities */
   quickbooksItemId: text("quickbooks_item_id"),
   createdAt: created(),
@@ -1665,6 +1669,14 @@ export const timesheetEntries = pgTable(
     ticketId: bigint("ticket_id", { mode: "number" }),
     ticketNumber: text("ticket_number"),
     ticketTitle: text("ticket_title"),
+    /** A work day (type workday): HH:MM, and the lunch in minutes (30 or 60) taken off */
+    startTime: text("start_time"),
+    endTime: text("end_time"),
+    lunchMinutes: integer("lunch_minutes"),
+    /** The hours of this entry that count as billable (ticket time: worked − offset, or 0 when not billed); none: by its type */
+    billableX100: integer("billable_x100"),
+    /** Banked instead of paid: the hours go to the person's hours bank */
+    banked: boolean("banked").notNull().default(false),
     /** The contract the time was logged on (client_contracts.id) */
     contractId: uuid("contract_id"),
     /** ticket | manual */

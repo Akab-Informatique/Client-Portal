@@ -31,6 +31,8 @@ import {
   Siren,
   Sparkles,
   Trash2,
+  UserCheck,
+  ExternalLink,
   UserRound,
   UserX,
   Wand2,
@@ -52,6 +54,7 @@ import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover
 import { Skeleton } from "@/components/ui/skeleton";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { Switch } from "@/components/ui/switch";
+import { useConfirm } from "@/components/ConfirmDialog";
 import { api } from "@/lib/api";
 import { AiModelButton, useAiModel } from "@/components/AiModelPicker";
 import { relativeTime } from "@/lib/format";
@@ -59,6 +62,7 @@ import { useCan, useMe } from "@/lib/session";
 import { cn, initials } from "@/lib/utils";
 import { GlassBackdrop } from "@/components/brand/GlassBackdrop";
 import { NewTicketDialog } from "./NewTicketDialog";
+import { AcceptDialog } from "./AcceptDialog";
 import { PendingMails } from "./PendingMails";
 import { dueState, FILTER_KEYS, PRIORITY_STYLE, dueGlow, useChoiceText, shortDate, shortDateTime, STATUS_STYLE, useTickets, VIEWS, type Tally, type TicketList, type TicketSummary, type View, ticketErrorText } from "./shared";
 import { useTicketWorkspace } from "./workspace";
@@ -128,6 +132,18 @@ export function TicketsPage() {
       void qc.invalidateQueries({ queryKey: ["tickets"] });
       void qc.invalidateQueries({ queryKey: ["tickets", "detail", p.id] });
       toast.success(t("common.saved"));
+    },
+    onError: (e) => toast.error(ticketErrorText(t, e)),
+  });
+  const confirm = useConfirm();
+  const [accepting, setAccepting] = useState<TicketSummary | null>(null);
+  // delete for good (administrators): from the row's menu
+  const deleteTicket = useMutation({
+    mutationFn: (tk: { id: number; number: string }) => api.del(`/tickets/${tk.id}`).then(() => tk),
+    onSuccess: (tk) => {
+      toast.success(t("tickets.delete.done", { number: tk.number }));
+      void qc.invalidateQueries({ queryKey: ["tickets"] });
+      void qc.invalidateQueries({ queryKey: ["meetings"] });
     },
     onError: (e) => toast.error(ticketErrorText(t, e)),
   });
@@ -311,6 +327,13 @@ export function TicketsPage() {
                 facets={data.facets}
                 editable={can("tickets.edit")}
                 onPatch={(patch) => patchTicket.mutate({ id: tk.id, patch })}
+                // accept: the technician takes the ticket (in charge, with a delay)
+                onAccept={() => setAccepting(tk)}
+                onDelete={
+                  can("tickets.delete")
+                    ? () => void confirm({ title: t("tickets.delete.title", { number: tk.number }), description: t("tickets.delete.text"), confirmLabel: t("tickets.delete.confirm"), destructive: true }).then((ok) => ok && deleteTicket.mutate({ id: tk.id, number: tk.number }))
+                    : undefined
+                }
                 onHover={() => void qc.prefetchQuery({ queryKey: ["tickets", "detail", tk.id], queryFn: () => api.get(`/tickets/${tk.id}`), staleTime: 15_000 })}
               />
             ))}
@@ -323,6 +346,7 @@ export function TicketsPage() {
         )}
       </div>
 
+      {data && accepting && <AcceptDialog open onOpenChange={(o) => !o && setAccepting(null)} tk={accepting} statuses={data.facets.statuses} />}
       {data && <NewTicketDialog open={creating} onOpenChange={setCreating} facets={data.facets} onCreated={(id) => ws.open(id)} />}
     </div>
     {smsInbox !== null && <SmsInboxDialog initialId={smsInbox || null} onClose={() => setSmsInbox(null)} />}
@@ -738,6 +762,8 @@ function TicketRow({
   facets,
   editable,
   onPatch,
+  onAccept,
+  onDelete,
   onHover,
 }: {
   tk: TicketSummary;
@@ -747,6 +773,9 @@ function TicketRow({
   facets: TicketList["facets"];
   editable: boolean;
   onPatch: (patch: RowPatch) => void;
+  onAccept: () => void;
+  /** Only for those who may delete tickets */
+  onDelete?: () => void;
   onHover: () => void;
 }) {
   const { t } = useTranslation();
@@ -785,6 +814,48 @@ function TicketRow({
           tk.statusKind !== "complete" && tk.priorityKind === "high" && "ticket-high",
         )}
       >
+        {/* The line on the left: it glows with the due state and opens the row's menu (accept the ticket, open it, delete it) */}
+        {(editable || onDelete) && (
+          // out of the grid (absolute): it must not take a column of the row
+          <span className="absolute inset-y-0 left-0 z-10 flex" onClick={(e) => e.stopPropagation()} onKeyDown={(e) => e.stopPropagation()}>
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <button
+                  type="button"
+                  title={t("tickets.rowMenu.title")}
+                  aria-label={t("tickets.rowMenu.title")}
+                  className="group/line flex h-full w-3.5 items-center justify-start outline-none"
+                >
+                  <span
+                    aria-hidden
+                    className={cn(
+                      "block h-[70%] w-[3px] rounded-r-full transition-all duration-200 group-hover/line:h-[88%] group-hover/line:w-[6px] group-data-[state=open]/line:h-[88%] group-data-[state=open]/line:w-[6px]",
+                      due === "overdue" ? "bg-red-400 shadow-[0_0_12px_2px_rgba(248,113,113,0.65)]" : due === "today" ? "bg-orange-400 shadow-[0_0_12px_2px_rgba(251,146,60,0.6)]" : "bg-[color:var(--gold)] shadow-[0_0_12px_2px_rgba(255,206,26,0.5)]",
+                    )}
+                  />
+                </button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="start" side="right" className="min-w-52">
+                {editable && tk.assignee?.id !== me.id && (
+                  <DropdownMenuItem onSelect={onAccept}>
+                    <UserCheck className="size-4 text-primary" /> {t("tickets.rowMenu.accept")}
+                  </DropdownMenuItem>
+                )}
+                <DropdownMenuItem onSelect={onOpen}>
+                  <ExternalLink className="size-4" /> {t("tickets.rowMenu.open")}
+                </DropdownMenuItem>
+                {onDelete && (
+                  <>
+                    <DropdownMenuSeparator />
+                    <DropdownMenuItem variant="destructive" onSelect={onDelete}>
+                      <Trash2 className="size-4" /> {t("tickets.delete.button")}
+                    </DropdownMenuItem>
+                  </>
+                )}
+              </DropdownMenuContent>
+            </DropdownMenu>
+          </span>
+        )}
         {/* Due date: a glowing hue fading out behind the number and title */}
         <span aria-hidden className="pointer-events-none absolute inset-y-0 left-0 -z-10 w-72 opacity-80 transition-opacity group-hover:opacity-100" style={dueGlow(tk.dueAt, tk.statusKind)} />
         <span className="min-w-0 xl:[order:var(--o-ticket)]">
