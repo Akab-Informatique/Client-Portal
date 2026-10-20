@@ -1,0 +1,693 @@
+import { and, asc, desc, eq, gte, ilike, inArray, or, sql, type SQL } from "drizzle-orm";
+import { db, schema } from "../db/index.ts";
+import type { AuthContext } from "./auth.ts";
+import { audit } from "./audit.ts";
+import { unsyncBlock, unsyncPin } from "./planning.ts";
+import {
+  approvedStatus,
+  dueIso,
+  autotaskLinked,
+  exportTickets,
+  isSmsNote,
+  SMS_NOTE_TAG,
+  SourceError,
+  sourceOptions,
+  ticketSyncSettings,
+  type Billable,
+  type Charge,
+  type ExportScope,
+  type ExportTicket,
+  type HistoryTicket,
+  type Note,
+  type NTicket,
+  type Options,
+  type Person,
+  type TicketSource,
+} from "./ticketSource.ts";
+
+/**
+ * The portal's own tickets. Once switched (Admin › Intégrations › Autotask),
+ * tickets, their notes, time, charges and files live in the portal database:
+ * nothing about tickets is read from or written to Autotask any more. Clients,
+ * contacts, contracts, devices, products and billing lists still come from the
+ * source as before (`base`), until Autotask is unlinked.
+ *
+ * The switch copies every ticket once (`startTicketImport`), with progress;
+ * the statuses, priorities and queues are kept as they were at that moment.
+ */
+const PROVIDER = "tickets";
+
+type ImportState = { state: "running" | "done" | "failed"; done: number; startedAt: string; finishedAt?: string; error?: string };
+export type TicketModeConfig = { mode: "autotask" | "local"; options?: Options; switchedAt?: string; switchedBy?: string; import?: ImportState };
+
+let cache: { at: number; value: TicketModeConfig } | null = null;
+export async function ticketMode(): Promise<TicketModeConfig> {
+  if (cache && Date.now() - cache.at < 5_000) return cache.value;
+  const [row] = await db().select().from(schema.integrations).where(eq(schema.integrations.provider, PROVIDER));
+  const value = { mode: "autotask", ...((row?.config ?? {}) as Partial<TicketModeConfig>) } as TicketModeConfig;
+  cache = { at: Date.now(), value };
+  return value;
+}
+async function saveMode(next: TicketModeConfig, actorId: string | null = null) {
+  const values = { enabled: next.mode === "local", config: next as unknown as Record<string, unknown>, updatedBy: actorId, updatedAt: new Date() };
+  await db()
+    .insert(schema.integrations)
+    .values({ provider: PROVIDER, ...values })
+    .onConflictDoUpdate({ target: schema.integrations.provider, set: values });
+  cache = null;
+}
+export const ticketsLocal = async () => (await ticketMode()).mode === "local";
+/** For the tests: forget the mode kept in memory */
+export const resetTicketMode = () => {
+  cache = null;
+};
+
+// ── The copy ──
+let running: Promise<void> | null = null;
+
+/** Copy the tickets from the source (since the date set in Admin › Billets, open ones whatever their age), then switch to the portal's tickets. One at a time. */
+export async function startTicketImport(actorId: string): Promise<TicketModeConfig> {
+  const cur = await ticketMode();
+  if (cur.mode === "local") throw new SourceError("already_local");
+  if (running) return cur;
+  const started = new Date().toISOString();
+  await saveMode({ ...cur, import: { state: "running", done: 0, startedAt: started } }, actorId);
+  running = runImport(actorId, started).finally(() => {
+    running = null;
+  });
+  return ticketMode();
+}
+/** For the tests: once the copy started is over */
+export const ticketImportSettled = () => running ?? Promise.resolve();
+
+async function runImport(actorId: string, started: string) {
+  let done = 0;
+  try {
+    const sinceDay = (await ticketSyncSettings()).since;
+    let after = 0;
+    for (;;) {
+      const batch = await exportTickets(after, { size: 100, since: sinceDay });
+      if (!batch.length) break;
+      await storeBatch(batch);
+      done += batch.length;
+      after = batch[batch.length - 1].t.id;
+      const cur = await ticketMode();
+      await saveMode({ ...cur, import: { state: "running", done, startedAt: started } }, actorId);
+    }
+    // what changed while the copy ran, once more
+    let lastId = 0;
+    for (;;) {
+      const batch = await exportTickets(lastId, { size: 100, changedSince: new Date(Date.parse(started) - 5 * 60_000).toISOString() });
+      if (!batch.length) break;
+      await storeBatch(batch);
+      lastId = batch[batch.length - 1].t.id;
+    }
+    const options = await sourceOptions();
+    await saveMode(
+      { mode: "local", options, switchedAt: new Date().toISOString(), switchedBy: actorId, import: { state: "done", done, startedAt: started, finishedAt: new Date().toISOString() } },
+      actorId,
+    );
+    await audit(actorId, "tickets.switched_local", null, { tickets: done });
+  } catch (e) {
+    const cur = await ticketMode();
+    await saveMode({ ...cur, import: { state: "failed", done, startedAt: started, finishedAt: new Date().toISOString(), error: e instanceof Error ? e.message.slice(0, 300) : String(e) } }, actorId);
+    console.error("[tickets] copy failed:", e);
+  }
+}
+
+/**
+ * By hand: copy these tickets (by number), or those of a period, from Autotask
+ * into the portal — the version of the portal is replaced by Autotask's. This
+ * is the only way anything about tickets comes from Autotask once the portal
+ * owns them.
+ */
+export async function importFromSource(scope: Pick<ExportScope, "numbers" | "since">, actorId: string): Promise<{ imported: number; missing: string[] }> {
+  if (!(await ticketsLocal())) throw new SourceError("not_local");
+  if (!(await autotaskLinked())) throw new SourceError("not_linked");
+  if (!scope.numbers?.length && !scope.since) throw new SourceError("invalid_value");
+  let imported = 0;
+  const found = new Set<string>();
+  let after = 0;
+  for (;;) {
+    const batch = await exportTickets(after, { ...scope, size: 100 });
+    if (!batch.length) break;
+    await storeBatch(batch);
+    for (const x of batch) found.add(x.t.number.toUpperCase());
+    imported += batch.length;
+    after = batch[batch.length - 1].t.id;
+  }
+  await audit(actorId, "tickets.imported", null, { imported, numbers: scope.numbers ?? null, since: scope.since ?? null });
+  return { imported, missing: (scope.numbers ?? []).filter((n) => !found.has(n.toUpperCase())) };
+}
+
+const minutesOf = (h: number) => Math.round(h * 60);
+const cents = (v: number | null | undefined) => (v == null ? null : Math.round(v * 100));
+
+/** One batch copied (again, if it was already): same ids, nothing doubled */
+async function storeBatch(batch: ExportTicket[]) {
+  await db().transaction(async (tx) => {
+    for (const x of batch) {
+      const t = x.t;
+      const values = {
+        id: t.id,
+        number: t.number,
+        title: t.title,
+        description: t.description,
+        companyId: t.company.id,
+        companyName: t.company.name,
+        contactId: t.contactId,
+        contactName: t.contact,
+        status: t.status,
+        priority: t.priority,
+        queue: t.queue,
+        source: t.source,
+        assigneeId: t.assignee?.id ?? null,
+        assigneeName: t.assignee?.name ?? null,
+        secondary: t.secondary,
+        dueAt: new Date(t.dueAt),
+        assetId: t.assetId ?? null,
+        contractId: t.contractId ?? null,
+        createdAt: new Date(t.createdAt),
+        updatedAt: new Date(t.updatedAt || t.createdAt),
+        completedAt: x.completedAt ? new Date(x.completedAt) : null,
+      };
+      await tx.insert(schema.tickets).values(values).onConflictDoUpdate({ target: schema.tickets.id, set: values });
+      for (const n of x.notes) {
+        const v = { ticketId: t.id, externalId: n.externalId, author: n.author, userId: n.userId, text: n.text, internal: n.internal, system: n.system, createdAt: new Date(n.at) };
+        await tx.insert(schema.ticketNotes).values(v).onConflictDoUpdate({ target: schema.ticketNotes.externalId, set: v });
+      }
+      for (const e of x.times) {
+        const v = {
+          ticketId: t.id,
+          externalId: e.externalId,
+          userId: e.userId,
+          author: e.author,
+          startedAt: new Date(e.startedAt),
+          minutes: e.minutes,
+          offsetMinutes: e.offsetMinutes,
+          summary: e.summary,
+          internalText: e.internalText,
+          billable: e.billable,
+          workType: e.workType,
+          contractId: e.contractId,
+          billed: e.billed,
+        };
+        await tx.insert(schema.ticketTimeEntries).values(v).onConflictDoUpdate({ target: schema.ticketTimeEntries.externalId, set: v });
+      }
+      for (const c of x.charges) {
+        const v = {
+          ticketId: t.id,
+          externalId: c.externalId,
+          name: c.name,
+          description: c.description,
+          quantityX100: Math.round(c.quantity * 100),
+          unitPriceCents: cents(c.unitPrice),
+          unitCostCents: cents(c.unitCost),
+          billable: c.billable,
+          type: c.type,
+          status: c.status,
+          materialCode: c.materialCode,
+          productId: c.productId,
+          contractId: c.contractId,
+          date: c.date,
+          author: c.author,
+          billed: c.billed,
+        };
+        await tx.insert(schema.ticketCharges).values(v).onConflictDoUpdate({ target: schema.ticketCharges.externalId, set: v });
+      }
+      for (const f of x.files) {
+        const v = { ticketId: t.id, externalId: f.externalId, name: f.name, contentType: f.contentType, size: f.size, data: f.data, internal: f.internal, author: f.author, createdAt: new Date(f.at) };
+        await tx.insert(schema.ticketAttachments).values(v).onConflictDoUpdate({ target: schema.ticketAttachments.externalId, set: v });
+      }
+    }
+  });
+}
+
+// ── The portal's tickets as a ticket source ──
+type Row = typeof schema.tickets.$inferSelect;
+async function staff(): Promise<Person[]> {
+  return db()
+    .select({ id: schema.users.id, name: schema.users.name })
+    .from(schema.users)
+    .where(and(eq(schema.users.kind, "staff"), eq(schema.users.active, true)))
+    .orderBy(asc(schema.users.name));
+}
+
+async function hoursOf(ids: number[]): Promise<Map<number, number>> {
+  if (!ids.length) return new Map();
+  const rows = await db()
+    .select({ id: schema.ticketTimeEntries.ticketId, minutes: sql<number>`sum(${schema.ticketTimeEntries.minutes})`.mapWith(Number) })
+    .from(schema.ticketTimeEntries)
+    .where(inArray(schema.ticketTimeEntries.ticketId, ids))
+    .groupBy(schema.ticketTimeEntries.ticketId);
+  return new Map(rows.map((r) => [r.id, Math.round((r.minutes / 60) * 100) / 100]));
+}
+
+function toTicket(r: Row, hours = 0): NTicket {
+  return {
+    id: r.id,
+    number: r.number,
+    title: r.title,
+    description: r.description,
+    company: { id: r.companyId, name: r.companyName },
+    contact: r.contactName,
+    contactId: r.contactId,
+    status: r.status,
+    priority: r.priority,
+    queue: r.queue,
+    source: r.source,
+    assignee: r.assigneeId ? { id: r.assigneeId, name: r.assigneeName ?? "" } : null,
+    secondary: r.secondary ?? [],
+    createdAt: r.createdAt.toISOString(),
+    dueAt: r.dueAt.toISOString(),
+    updatedAt: r.updatedAt.toISOString(),
+    hours,
+    notes: [],
+    assetId: r.assetId,
+    contractId: r.contractId,
+  };
+}
+
+async function rows(where: SQL | undefined, limit?: number): Promise<NTicket[]> {
+  const q = db().select().from(schema.tickets).where(where).orderBy(desc(schema.tickets.updatedAt));
+  const list = limit ? await q.limit(limit) : await q;
+  const hours = await hoursOf(list.map((r) => r.id));
+  return list.map((r) => toTicket(r, hours.get(r.id) ?? 0));
+}
+
+async function one(id: number): Promise<Row> {
+  const [r] = await db().select().from(schema.tickets).where(eq(schema.tickets.id, id));
+  if (!r) throw new SourceError("not_found");
+  return r;
+}
+const touch = (id: number) => db().update(schema.tickets).set({ updatedAt: new Date() }).where(eq(schema.tickets.id, id));
+
+/** The next ticket: id after the highest, number T<day>.<n> (Québec day) */
+let numbering: Promise<unknown> = Promise.resolve();
+async function nextIdentity(): Promise<{ id: number; number: string }> {
+  const day = new Intl.DateTimeFormat("en-CA", { timeZone: "America/Toronto", year: "numeric", month: "2-digit", day: "2-digit" }).format(new Date()).replace(/-/g, "");
+  const [{ max }] = await db().select({ max: sql<number>`coalesce(max(${schema.tickets.id}), 0)`.mapWith(Number) }).from(schema.tickets);
+  const same = await db()
+    .select({ number: schema.tickets.number })
+    .from(schema.tickets)
+    .where(ilike(schema.tickets.number, `T${day}.%`));
+  const n = Math.max(0, ...same.map((x) => Number(x.number.split(".")[1]) || 0)) + 1;
+  return { id: Math.max(max + 1, 100_000), number: `T${day}.${String(n).padStart(4, "0")}` };
+}
+
+const cachedSources = new WeakMap<TicketSource, TicketSource>();
+export function localTicketSource(base: TicketSource): TicketSource {
+  const hit = cachedSources.get(base);
+  if (hit) return hit;
+  const options = async (): Promise<Options> => (await ticketMode()).options ?? (await base.options());
+  const isComplete = async (status: string) => (await options()).statuses.find((s) => s.value === status)?.kind === "complete";
+
+  const src: TicketSource = {
+    demo: base.demo,
+    options,
+    technicians: staff,
+    async meId(a) {
+      return a.user.id;
+    },
+    async list() {
+      return rows(undefined);
+    },
+    async get(id) {
+      const [r] = await db().select().from(schema.tickets).where(eq(schema.tickets.id, id));
+      if (!r) return null;
+      const [notes, times, files] = await Promise.all([
+        db().select().from(schema.ticketNotes).where(eq(schema.ticketNotes.ticketId, id)).orderBy(asc(schema.ticketNotes.createdAt)),
+        db().select().from(schema.ticketTimeEntries).where(eq(schema.ticketTimeEntries.ticketId, id)).orderBy(asc(schema.ticketTimeEntries.startedAt)),
+        db()
+          .select({ id: schema.ticketAttachments.id, name: schema.ticketAttachments.name, size: schema.ticketAttachments.size, at: schema.ticketAttachments.createdAt, author: schema.ticketAttachments.author, internal: schema.ticketAttachments.internal })
+          .from(schema.ticketAttachments)
+          .where(eq(schema.ticketAttachments.ticketId, id))
+          .orderBy(asc(schema.ticketAttachments.createdAt)),
+      ]);
+      const minutes = times.reduce((s, x) => s + x.minutes, 0);
+      const t = toTicket(r, Math.round((minutes / 60) * 100) / 100);
+      const items: Note[] = [
+        ...notes
+          .filter((n) => !isSmsNote(n.text))
+          .map((n) => ({ id: `n-${n.id}`, author: n.author, at: n.createdAt.toISOString(), text: n.text, internal: n.internal, kind: "note" as const, ...(n.system ? { system: true } : {}) })),
+        ...times.map((x) => ({
+          id: `t-${x.id}`,
+          author: x.author,
+          at: x.startedAt.toISOString(),
+          text: x.summary,
+          internal: false,
+          kind: "time" as const,
+          hours: Math.round((x.minutes / 60) * 10_000) / 10_000,
+          internalText: x.internalText || undefined,
+          billable: x.billable,
+          offsetHours: x.offsetMinutes ? Math.round((x.offsetMinutes / 60) * 10_000) / 10_000 : undefined,
+        })),
+      ].sort((a, b) => a.at.localeCompare(b.at));
+      t.notes = items;
+      t.attachments = files.map((f) => ({ id: f.id, name: f.name, size: f.size, at: f.at.toISOString(), author: f.author, internal: f.internal }));
+      return t;
+    },
+    async update(id, p) {
+      const cur = await one(id);
+      const o = await options();
+      const set: Partial<Row> = { updatedAt: new Date() };
+      if (p.status !== undefined) {
+        if (!o.statuses.some((s) => s.value === p.status)) throw new SourceError("invalid_value");
+        set.status = p.status;
+        const done = await isComplete(p.status);
+        set.completedAt = done ? (cur.completedAt ?? new Date()) : null;
+      }
+      if (p.priority !== undefined) {
+        if (!o.priorities.some((s) => s.value === p.priority)) throw new SourceError("invalid_value");
+        set.priority = p.priority;
+      }
+      if (p.queue !== undefined) {
+        if (p.queue && !o.queues.some((s) => s.value === p.queue)) throw new SourceError("invalid_value");
+        set.queue = p.queue;
+      }
+      if (p.dueAt) set.dueAt = new Date(p.dueAt);
+      else if (p.dueDate) set.dueAt = new Date(dueIso(p.dueDate));
+      const companyId = p.companyId ?? cur.companyId;
+      if (p.companyId !== undefined && p.companyId !== cur.companyId) {
+        const company = (await base.companies()).find((c) => c.id === p.companyId);
+        if (!company) throw new SourceError("invalid_company");
+        set.companyId = company.id;
+        set.companyName = company.name;
+        if (p.contactId === undefined) {
+          set.contactId = null;
+          set.contactName = "";
+        }
+        if (p.assetId === undefined) set.assetId = null;
+      }
+      if (p.contactId !== undefined) {
+        const contact = p.contactId ? (await base.contacts(companyId)).find((c) => c.id === p.contactId) : null;
+        if (p.contactId && !contact) throw new SourceError("invalid_contact");
+        set.contactId = contact?.id ?? null;
+        set.contactName = contact?.name ?? "";
+      }
+      if (p.assigneeId !== undefined) {
+        const person = p.assigneeId ? (await staff()).find((s) => s.id === p.assigneeId) : null;
+        if (p.assigneeId && !person) throw new SourceError("invalid_assignee");
+        set.assigneeId = person?.id ?? null;
+        set.assigneeName = person?.name ?? null;
+      }
+      if (p.title !== undefined) set.title = p.title;
+      if (p.description !== undefined) set.description = p.description;
+      if (p.assetId !== undefined) {
+        if (p.assetId && !(await base.assets(companyId)).some((x) => x.id === p.assetId)) throw new SourceError("invalid_value");
+        set.assetId = p.assetId;
+      }
+      if (p.secondaryIds) {
+        const people = await staff();
+        const list = p.secondaryIds.map((sid) => people.find((s) => s.id === sid) ?? cur.secondary.find((s) => s.id === sid));
+        if (list.some((x) => !x)) throw new SourceError("invalid_assignee");
+        set.secondary = list as Person[];
+      }
+      await db().update(schema.tickets).set(set).where(eq(schema.tickets.id, id));
+    },
+    async addNote(id, p, a) {
+      await one(id);
+      await db()
+        .insert(schema.ticketNotes)
+        .values({ ticketId: id, author: a.realUser.name, userId: a.realUser.kind === "staff" ? a.realUser.id : null, text: p.text, internal: p.internal });
+      await touch(id);
+    },
+    async create(p, a) {
+      return (await createTicket(p, a)).id;
+    },
+    async createSystem(p) {
+      return createTicket(p, null);
+    },
+    async addSmsNote(ticketId, title, text) {
+      await db().insert(schema.ticketNotes).values({ ticketId, author: "Texto", text: `${SMS_NOTE_TAG} ${title}\n${text}`, internal: true });
+      await touch(ticketId);
+    },
+    async addAttachment(ticketId, p, a) {
+      await one(ticketId);
+      const size = Math.floor((p.data.length * 3) / 4) - (p.data.endsWith("==") ? 2 : p.data.endsWith("=") ? 1 : 0);
+      await db()
+        .insert(schema.ticketAttachments)
+        .values({ ticketId, name: p.name.slice(0, 255), contentType: p.contentType || "application/octet-stream", size, data: p.data, author: a.realUser.name });
+      await touch(ticketId);
+    },
+    async charges(ticketId) {
+      const list = await db().select().from(schema.ticketCharges).where(eq(schema.ticketCharges.ticketId, ticketId)).orderBy(asc(schema.ticketCharges.createdAt));
+      return list.map(
+        (c): Charge => ({
+          id: c.id,
+          name: c.name,
+          description: c.description,
+          quantity: c.quantityX100 / 100,
+          unitPrice: c.unitPriceCents == null ? null : c.unitPriceCents / 100,
+          unitCost: c.unitCostCents == null ? null : c.unitCostCents / 100,
+          billable: c.billable,
+          type: c.type,
+          status: c.status,
+          materialCode: c.materialCode,
+          date: c.date,
+          author: c.author,
+        }),
+      );
+    },
+    chargeOptions: () => base.chargeOptions(),
+    products: (q) => base.products(q),
+    async addCharge(ticketId, p, a) {
+      await one(ticketId);
+      const o = await base.chargeOptions();
+      const label = (list: { value: string; label: string }[], v: string | null) => (v ? (list.find((x) => x.value === v)?.label ?? null) : null);
+      if (p.materialCodeId && !label(o.materialCodes, p.materialCodeId)) throw new SourceError("invalid_value");
+      await db()
+        .insert(schema.ticketCharges)
+        .values({
+          ticketId,
+          name: p.name,
+          description: p.description,
+          quantityX100: Math.round(p.quantity * 100),
+          unitPriceCents: cents(p.unitPrice),
+          unitCostCents: cents(p.unitCost),
+          billable: p.billable,
+          type: label(o.types, p.typeId) ?? o.types[0]?.label ?? null,
+          status: label(o.statuses, p.statusId) ?? (o.statuses.length ? approvedStatus(o.statuses).label : null),
+          materialCode: label(o.materialCodes, p.materialCodeId),
+          productId: p.productId,
+          date: p.date ?? new Date().toISOString().slice(0, 10),
+          author: a.realUser.name,
+        });
+      await touch(ticketId);
+    },
+    workTypes: () => base.workTypes(),
+    async addTimeEntry(ticketId, p, a) {
+      await one(ticketId);
+      await db()
+        .insert(schema.ticketTimeEntries)
+        .values({
+          ticketId,
+          userId: a.realUser.id,
+          author: a.realUser.name,
+          startedAt: p.startedAt,
+          minutes: minutesOf(p.hours),
+          offsetMinutes: minutesOf(p.offsetHours),
+          summary: p.summary,
+          internalText: p.internal,
+          billable: p.billable,
+          workType: p.workTypeId,
+          contractId: p.contractSourceId ?? null,
+        });
+      await touch(ticketId);
+    },
+    async addMailReply(ticketId, from, text) {
+      await one(ticketId);
+      await db()
+        .insert(schema.ticketNotes)
+        .values({ ticketId, author: from.name || from.address, text: `${text}\n\n— ${from.name || from.address} (client, par courriel)`.slice(0, 8000), internal: false });
+      await touch(ticketId);
+    },
+    async markNeedsAttention(ticketId) {
+      const cur = await one(ticketId);
+      const o = await options();
+      const attention = o.statuses.find((s) => s.kind === "needsAttention");
+      if (!attention || cur.status === attention.value || (await isComplete(cur.status))) return false;
+      await db().update(schema.tickets).set({ status: attention.value, updatedAt: new Date() }).where(eq(schema.tickets.id, ticketId));
+      return true;
+    },
+    async history(since): Promise<HistoryTicket[]> {
+      const d = new Date(since);
+      const list = await db()
+        .select({ id: schema.tickets.id, createdAt: schema.tickets.createdAt, completedAt: schema.tickets.completedAt, queue: schema.tickets.queue, source: schema.tickets.source, priority: schema.tickets.priority })
+        .from(schema.tickets)
+        .where(or(gte(schema.tickets.createdAt, d), gte(schema.tickets.completedAt, d)));
+      return list.map((r) => ({ id: r.id, createdAt: r.createdAt.toISOString(), completedAt: r.completedAt?.toISOString() ?? null, queue: r.queue, source: r.source, priority: r.priority }));
+    },
+    async companyHistory() {
+      // the list already holds every ticket
+      return [];
+    },
+    async searchArchive() {
+      return [];
+    },
+    async ticketsWithOtherContact() {
+      return [];
+    },
+    async createServiceCall() {
+      return null;
+    },
+    async updateServiceCall() {},
+    async deleteServiceCall() {},
+    // Billing: the work to bill on tickets is the portal's; the rest still comes from the source
+    async billables(since) {
+      const from = await base.billables(since);
+      const items: Billable[] = from.items.filter((x) => x.kind !== "labour" && x.kind !== "charge");
+      const d = new Date(`${since}T00:00:00`);
+      const times = await db()
+        .select({ e: schema.ticketTimeEntries, number: schema.tickets.number, companyId: schema.tickets.companyId, ticketContract: schema.tickets.contractId })
+        .from(schema.ticketTimeEntries)
+        .innerJoin(schema.tickets, eq(schema.tickets.id, schema.ticketTimeEntries.ticketId))
+        .where(and(eq(schema.ticketTimeEntries.billable, true), eq(schema.ticketTimeEntries.billed, false), gte(schema.ticketTimeEntries.startedAt, d)));
+      for (const { e, number, companyId, ticketContract } of times) {
+        const billed = Math.max(0, e.minutes - e.offsetMinutes);
+        if (!billed) continue;
+        const contract = e.contractId ?? ticketContract;
+        items.push({
+          id: e.externalId ?? `ptime:${e.id}`,
+          kind: "labour",
+          companyId,
+          date: e.startedAt.toISOString().slice(0, 10),
+          description: e.summary.slice(0, 2000) || `Billet ${number}`,
+          ticketNumber: number,
+          contractSourceId: contract,
+          resourceName: e.author || null,
+          quantity: Math.round((billed / 60) * 100) / 100,
+          unitPriceCents: null,
+          taxable: true,
+        });
+      }
+      const charges = await db()
+        .select({ c: schema.ticketCharges, number: schema.tickets.number, companyId: schema.tickets.companyId })
+        .from(schema.ticketCharges)
+        .innerJoin(schema.tickets, eq(schema.tickets.id, schema.ticketCharges.ticketId))
+        .where(and(eq(schema.ticketCharges.billable, true), eq(schema.ticketCharges.billed, false)));
+      for (const { c, number, companyId } of charges) {
+        const date = c.date ?? c.createdAt.toISOString().slice(0, 10);
+        if (date < since) continue;
+        items.push({
+          id: c.externalId ?? `pcharge:${c.id}`,
+          kind: "charge",
+          companyId,
+          date,
+          description: [c.name, c.description].filter(Boolean).join(" — ").slice(0, 2000),
+          ticketNumber: number,
+          contractSourceId: c.contractId,
+          quantity: c.quantityX100 / 100,
+          unitPriceCents: c.unitPriceCents,
+          taxable: true,
+        });
+      }
+      return { items, errors: Object.fromEntries(Object.entries(from.errors).filter(([k]) => k !== "labour" && k !== "charge")) };
+    },
+    // Everything else still comes from the source
+    companies: () => base.companies(),
+    contacts: (companyId) => base.contacts(companyId),
+    addContact: (companyId, p, a) => base.addContact(companyId, p, a),
+    crmExport: () => base.crmExport(),
+    updateCompany: (id, p, a) => base.updateCompany(id, p, a),
+    updateContact: (id, p, a) => base.updateContact(id, p, a),
+    addCompany: (p, a) => base.addCompany(p, a),
+    contracts: (companyId) => base.contracts(companyId),
+    assets: (companyId) => base.assets(companyId),
+    contactByPhone: (phone) => base.contactByPhone(phone),
+    contactByEmail: (email) => base.contactByEmail(email),
+  };
+
+  async function createTicket(p: Parameters<TicketSource["create"]>[0], a: AuthContext | null): Promise<{ id: number; number: string }> {
+    const company = (await base.companies()).find((c) => c.id === p.companyId);
+    if (!company) throw new SourceError("invalid_company");
+    const contact = p.contactId ? (await base.contacts(company.id)).find((c) => c.id === p.contactId) : null;
+    if (p.contactId && !contact) throw new SourceError("invalid_contact");
+    const o = await options();
+    if (!o.priorities.some((x) => x.value === p.priority)) throw new SourceError("invalid_value");
+    if (p.queue && !o.queues.some((x) => x.value === p.queue)) throw new SourceError("invalid_value");
+    const assignee = p.assigneeId ? (await staff()).find((s) => s.id === p.assigneeId) : null;
+    if (p.assigneeId && !assignee) throw new SourceError("invalid_assignee");
+    const status = (o.statuses.find((s) => s.kind === (assignee ? "inProgress" : "new")) ?? o.statuses.find((s) => s.kind === "new") ?? o.statuses[0]).value;
+    // one number at a time (one app instance)
+    const run = numbering.catch(() => undefined).then(async () => {
+      const { id, number } = await nextIdentity();
+      await db()
+        .insert(schema.tickets)
+        .values({
+          id,
+          number,
+          title: p.title,
+          description: p.description,
+          companyId: company.id,
+          companyName: company.name,
+          contactId: contact?.id ?? null,
+          contactName: contact?.name ?? "",
+          status,
+          priority: p.priority,
+          queue: p.queue,
+          source: a ? "portal" : "sms",
+          assigneeId: assignee?.id ?? null,
+          assigneeName: assignee?.name ?? null,
+          dueAt: new Date(p.dueAt ?? dueIso(p.dueDate)),
+          contractId: p.contractId ?? null,
+        });
+      return { id, number };
+    });
+    numbering = run;
+    return run;
+  }
+
+  cachedSources.set(base, src);
+  return src;
+}
+
+/**
+ * Delete a portal ticket for good: it leaves every list, count and statistic
+ * (the weekly meeting, the trends, the gauges). Its notes, time, charges and
+ * files go with it; work not billed yet is dropped from Accounting (what is on
+ * an invoice stays there); its timers, priorities and planned time are removed;
+ * the hours on a timesheet stay (time worked is time worked).
+ */
+export async function deleteTicket(id: number, a: AuthContext): Promise<{ number: string; title: string }> {
+  const r = await one(id);
+  const [times, charges, pins, blocks] = await Promise.all([
+    db().select({ id: schema.ticketTimeEntries.id, externalId: schema.ticketTimeEntries.externalId }).from(schema.ticketTimeEntries).where(eq(schema.ticketTimeEntries.ticketId, id)),
+    db().select({ id: schema.ticketCharges.id, externalId: schema.ticketCharges.externalId }).from(schema.ticketCharges).where(eq(schema.ticketCharges.ticketId, id)),
+    db().select().from(schema.ticketPins).where(eq(schema.ticketPins.ticketId, id)),
+    db().select().from(schema.calendarBlocks).where(eq(schema.calendarBlocks.ticketId, id)),
+  ]);
+  // the Outlook events of its priorities and planned time (a failure there does not stop the deletion)
+  for (const p of pins) await unsyncPin(p).catch(() => undefined);
+  for (const b of blocks) await unsyncBlock(b).catch(() => undefined);
+  const workIds = [...times.map((x) => x.externalId ?? `ptime:${x.id}`), ...charges.map((x) => x.externalId ?? `pcharge:${x.id}`)];
+  await db().transaction(async (tx) => {
+    if (workIds.length) await tx.delete(schema.billingItems).where(and(inArray(schema.billingItems.sourceId, workIds), inArray(schema.billingItems.status, ["pending", "approved", "excluded"])));
+    await tx.delete(schema.ticketTimers).where(eq(schema.ticketTimers.ticketId, id));
+    await tx.delete(schema.ticketPins).where(eq(schema.ticketPins.ticketId, id));
+    await tx.delete(schema.calendarBlocks).where(eq(schema.calendarBlocks.ticketId, id));
+    await tx.delete(schema.ticketAiNotes).where(eq(schema.ticketAiNotes.ticketId, id));
+    await tx.delete(schema.autotaskAuthors).where(eq(schema.autotaskAuthors.ticketId, id));
+    await tx.delete(schema.ticketMeta).where(eq(schema.ticketMeta.ticketId, id));
+    // the email that made it stays (so it is not read again and made a new ticket), without the link
+    await tx.update(schema.mailIntake).set({ ticketId: null, ticketNumber: null, note: "Billet supprimé", updatedAt: new Date() }).where(eq(schema.mailIntake.ticketId, id));
+    await tx.update(schema.meetingEvents).set({ ticketId: null, ticketNumber: null }).where(eq(schema.meetingEvents.ticketId, id));
+    // the text conversation ends (the next text from the number starts a new one)
+    await tx
+      .update(schema.smsConversations)
+      .set({ ticketId: null, ticketNumber: null, status: "closed", autoTicketAt: null, updatedAt: new Date() })
+      .where(eq(schema.smsConversations.ticketId, id));
+    await tx.delete(schema.tickets).where(eq(schema.tickets.id, id));
+  });
+  await audit(a.realUser.id, "ticket.deleted", String(id), { number: r.number, title: r.title, company: r.companyName, timeEntries: times.length, charges: charges.length });
+  return { number: r.number, title: r.title };
+}
+
+/** A portal ticket's file */
+export async function ticketFile(ticketId: number, fileId: string) {
+  const [f] = await db()
+    .select()
+    .from(schema.ticketAttachments)
+    .where(and(eq(schema.ticketAttachments.ticketId, ticketId), eq(schema.ticketAttachments.id, fileId)));
+  return f ?? null;
+}

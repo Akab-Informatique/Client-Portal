@@ -5388,3 +5388,87 @@ describe("unassigned and new tickets leave out monitoring alerts", () => {
     expect(admin).toBeTruthy();
   });
 });
+
+describe("tickets owned by the portal (Admin › Billets)", () => {
+  afterAll(async () => {
+    const local = await import("../server/lib/localTickets.ts");
+    await db().delete(schema.integrations).where(eq(schema.integrations.provider, "tickets"));
+    await db().delete(schema.tickets);
+    local.resetTicketMode();
+  });
+
+  it("switch: tickets are copied with their notes and time; new ones are the portal's; a deleted one is gone from lists and the meeting numbers", async () => {
+    resetRateLimit("login:ip:unknown");
+    const local = await import("../server/lib/localTickets.ts");
+    const admin = await signIn("admin@akab.local");
+    const tech = await signIn("tech@akab.local");
+    const setup = "/api/admin/ticket-setup";
+
+    // before: tickets are still in the source, nothing can be deleted
+    expect((await admin.get(`${setup}/local`)).json).toMatchObject({ mode: "autotask", tickets: 0, linked: false });
+    const first = (await admin.get("/api/tickets?view=all")).json.items[0];
+    const refused = await admin.del(`/api/tickets/${first.id}`);
+    expect(refused.status).toBe(409);
+    expect(refused.json.error).toBe("tickets_not_local");
+    // a technician cannot switch (master admins only) or see the page
+    expect((await tech.post(`${setup}/local/switch`, {})).status).toBe(403);
+    // importing by hand needs the link to Autotask
+    expect((await admin.post(`${setup}/local/import`, { numbers: ["T20261001.0001"] })).json.error).toBe("not_local");
+
+    // the switch: copied in the background, then local
+    const before = (await admin.get("/api/tickets?view=all")).json.items.length;
+    expect((await admin.post(`${setup}/local/switch`, {})).status).toBe(202);
+    await local.ticketImportSettled();
+    const state = (await admin.get(`${setup}/local`)).json;
+    expect(state).toMatchObject({ mode: "local", import: { state: "done" } });
+    expect(state.tickets).toBeGreaterThan(0);
+    local.resetTicketMode();
+    const copied = (await admin.get("/api/tickets?view=all")).json;
+    expect(copied.items.length).toBe(before);
+    const sample = copied.items.find((t: any) => t.id === first.id);
+    expect(sample).toMatchObject({ number: first.number, title: first.title, statusKind: first.statusKind });
+    const detail = (await admin.get(`/api/tickets/${first.id}`)).json;
+    expect(detail.local).toBe(true);
+    // the switch cannot be done twice; nothing is pulled from Autotask any more
+    expect((await admin.post(`${setup}/local/switch`, {})).json.error).toBe("already_local");
+    expect((await admin.post(`${setup}/sync/run`, {})).json.error).toBe("tickets_local");
+
+    // a new ticket: the portal's own id and number; notes and time are the portal's
+    const made = await tech.post("/api/tickets", { title: "Billet du portail", description: "Test local", companyId: 300, priority: "medium", queue: "support", assigneeId: null, dueDate: "2026-01-05" });
+    expect(made.status).toBe(201);
+    const id = made.json.id;
+    expect(id).toBeGreaterThanOrEqual(100_000);
+    const mine = (await tech.get(`/api/tickets/${id}`)).json;
+    expect(mine.number).toMatch(/^T\d{8}\.\d{4}$/);
+    expect((await tech.post(`/api/tickets/${id}/notes`, { text: "Premier suivi", internal: false })).status).toBe(201);
+    expect((await tech.post(`/api/tickets/${id}/notes`, { text: "Note interne", internal: true })).status).toBe(201);
+    expect((await tech.get(`/api/tickets/${id}`)).json.notes.map((n: any) => [n.text, n.internal])).toEqual([["Premier suivi", false], ["Note interne", true]]);
+    // status and assignee changes are kept (and a complete status sets the completion)
+    expect((await tech.patch(`/api/tickets/${id}`, { priority: "high" })).status).toBe(200);
+    expect((await tech.get(`/api/tickets/${id}`)).json.priority).toBe("high");
+
+    // it is overdue (due in the past): counted in the weekly meeting
+    const overdueWith = (await admin.get("/api/meetings/overdue")).json;
+    const listed = (r: any) => [...r.technicians.flatMap((p: any) => p.tickets), ...r.unassigned].map((t: any) => t.id);
+    expect(listed(overdueWith)).toContain(id);
+    const trendsWith = (await admin.get("/api/meetings/trends?weeks=8")).json;
+    const createdWith = [trendsWith.weeks[0].created, trendsWith.live.created];
+
+    // only the right to delete; then it is gone for good
+    const refusedTech = await tech.del(`/api/tickets/${id}`);
+    expect(refusedTech.status).toBe(403);
+    const gone = await admin.del(`/api/tickets/${id}`);
+    expect(gone.status).toBe(200);
+    expect(gone.json).toMatchObject({ ok: true, number: mine.number });
+    expect((await admin.get(`/api/tickets/${id}`)).status).toBe(404);
+    expect((await admin.get("/api/tickets?view=all")).json.items.some((t: any) => t.id === id)).toBe(false);
+    // …and out of every count: the overdue gauge, the trends
+    expect(listed((await admin.get("/api/meetings/overdue")).json)).not.toContain(id);
+    expect((await admin.get("/api/meetings/overdue")).json.total).toBe(overdueWith.total - 1);
+    const trendsWithout = (await admin.get("/api/meetings/trends?weeks=8")).json;
+    expect([trendsWithout.weeks[0].created, trendsWithout.live.created]).toEqual(createdWith.map((n: number) => n - 1));
+    expect((await admin.del(`/api/tickets/${id}`)).status).toBe(404);
+    const audited = await db().select().from(schema.auditLog).where(eq(schema.auditLog.action, "ticket.deleted"));
+    expect(audited.some((x) => x.target === String(id))).toBe(true);
+  });
+});

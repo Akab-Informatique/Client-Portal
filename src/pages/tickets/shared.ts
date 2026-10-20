@@ -69,6 +69,8 @@ export type TicketDetail = TicketSummary & {
   estimate?: { minutes: number; source: "tech" | "ai" } | null;
   client?: { class: { key: string; name: string; color: string } | null; month: string; hours: number; goal: number | null } | null;
   demo: boolean;
+  /** The ticket lives in the portal's own database: it can be deleted */
+  local?: boolean;
   options: {
     statuses: Choice<StatusKind>[];
     priorities: Choice<PriorityKind>[];
@@ -284,6 +286,7 @@ export function ticketErrorText(t: (k: string, o?: Record<string, unknown>) => s
     if (e.code === "autotask_not_linked") return t("tickets.errors.notLinked");
     if (e.code === "ticket_not_started") return t("tickets.startLock.refused", { date: shortDate(e.fields?.find((f) => f.path === "startDate")?.message ?? "") });
     if (e.code === "autotask_permission") return t("tickets.errors.permission");
+    if (e.code === "tickets_not_local") return t("tickets.errors.notLocal");
     if (e.code === "insufficient_stock") return t("tickets.errors.insufficient_stock");
     if (e.code === "serial_unavailable" || e.code === "serials_required") return t(`tickets.errors.${e.code}`);
     const detail = e.fields?.find((f) => f.path === "autotask")?.message;

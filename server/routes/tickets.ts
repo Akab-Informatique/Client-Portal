@@ -7,7 +7,7 @@ import { and, asc, desc, eq, inArray, isNull, or, sql } from "drizzle-orm";
 import { z } from "zod";
 import { db, schema } from "../db/index.ts";
 import { auth, requirePermission, type AppEnv, type AuthContext } from "../lib/auth.ts";
-import { body, zEmail } from "../lib/validate.ts";
+import { body, zEmail, zUuid } from "../lib/validate.ts";
 import { audit } from "../lib/audit.ts";
 import { rateLimit } from "../lib/http.ts";
 import { sanitizeMailHtml } from "../lib/mailHtml.ts";
@@ -17,6 +17,7 @@ import { AI_FEATURE_KEYS, AI_MODELS, AiError, aiSettings, askClaude, askClaudeJs
 import { AutotaskError, PERMISSION_REFUSED } from "../lib/autotask.ts";
 import { sweepTimers, timerView, elapsedMs } from "../lib/timers.ts";
 import { MAX_TICKET_ATTACHMENT_BYTES, SourceError, ticketSource, type Asset, type NTicket, type Options, type TicketSource } from "../lib/ticketSource.ts";
+import { deleteTicket, ticketFile, ticketsLocal } from "../lib/localTickets.ts";
 import { rmmLink, rmmSettings, type RmmSettings } from "../lib/rmm.ts";
 import { searchProducts, serialsOf, StoreError, takeForTicket, undoTake } from "../lib/store.ts";
 import { storeHttp } from "./store.ts";
@@ -386,6 +387,8 @@ async function detailOf(src: TicketSource, id: number, a: AuthContext) {
     contracts: billing?.contracts ?? [],
     estimate: meta[0]?.minutes ? { minutes: meta[0].minutes, source: meta[0].source === "ai" ? ("ai" as const) : ("tech" as const) } : null,
     demo: src.demo,
+    /** The ticket lives in the portal's own database (it can be deleted here) */
+    local: await ticketsLocal(),
     ai: Boolean(ai?.enabled && ai.apiKey),
     options: { statuses: o.statuses, priorities: o.priorities, queues: o.queues, sources: o.ticketSources ?? [], technicians },
   };
@@ -1297,6 +1300,36 @@ export const ticketRoutes = new Hono<AppEnv>()
     const src = await ticketSource();
     await run(() => src.addNote(id, p, a));
     return c.json({ ok: true }, 201);
+  })
+
+  /**
+   * Delete a ticket for good (tickets.delete: administrators): it leaves every
+   * list, count and statistic, with its notes, time and charges. Only tickets the
+   * portal owns (Admin › Billets); one still kept in Autotask is not touched.
+   */
+  .delete("/:id", requirePermission("tickets.delete"), async (c) => {
+    const a = auth(c);
+    const id = Number(c.req.param("id"));
+    if (!Number.isInteger(id) || id <= 0) throw new HTTPException(400, { message: "invalid_id" });
+    if (!(await ticketsLocal())) throw new HTTPException(409, { message: "tickets_not_local" });
+    const gone = await run(() => deleteTicket(id, a));
+    return c.json({ ok: true, ...gone });
+  })
+
+  /** A file attached to a ticket of the portal (always a download, never shown in the page) */
+  .get("/:id/files/:fileId", async (c) => {
+    const id = Number(c.req.param("id"));
+    if (!Number.isInteger(id) || id <= 0) throw new HTTPException(400, { message: "invalid_id" });
+    const f = await ticketFile(id, zUuid.parse(c.req.param("fileId")));
+    if (!f?.data) throw new HTTPException(404, { message: "not_found" });
+    return new Response(Buffer.from(f.data, "base64"), {
+      headers: {
+        "content-type": "application/octet-stream",
+        "content-disposition": `attachment; filename*=UTF-8''${encodeURIComponent(f.name)}`,
+        "x-content-type-options": "nosniff",
+        "cache-control": "private, no-store",
+      },
+    });
   })
 
   /** Attach a file (one per request, base64). */

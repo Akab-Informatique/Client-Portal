@@ -52,6 +52,14 @@ export const MODULES = [
         description: { fr: "Nouveau billet, notes, date de début", en: "New ticket, notes, start date" },
       },
       {
+        key: "tickets.delete",
+        label: { fr: "Supprimer des billets", en: "Delete tickets" },
+        description: {
+          fr: "Un billet supprimé disparaît du portail, de ses listes et de ses statistiques (avec ses notes, son temps et ses frais)",
+          en: "A deleted ticket is gone from the portal, its lists and its statistics (with its notes, time and charges)",
+        },
+      },
+      {
         key: "tickets.clients",
         label: { fr: "Créer des clients", en: "Create clients" },
         description: { fr: "Ajouter un nouveau client dans Autotask en créant un billet", en: "Add a new client in Autotask while creating a ticket" },

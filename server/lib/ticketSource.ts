@@ -1,4 +1,4 @@
-import { and, asc, eq, isNotNull, sql } from "drizzle-orm";
+import { and, asc, eq, inArray, isNotNull, sql } from "drizzle-orm";
 import { db, schema } from "../db/index.ts";
 import type { AuthContext } from "./auth.ts";
 import { localCompanies, localContacts, localContracts } from "./crm.ts";
@@ -347,7 +347,7 @@ export function dueIso(date: string, time = "17:00"): string {
 
 export class SourceError extends Error {
   constructor(
-    public code: "not_found" | "invalid_company" | "invalid_contact" | "invalid_assignee" | "invalid_value" | "not_linked",
+    public code: "not_found" | "invalid_company" | "invalid_contact" | "invalid_assignee" | "invalid_value" | "not_linked" | "already_local" | "not_local",
   ) {
     super(code);
   }
@@ -358,7 +358,10 @@ export class SourceError extends Error {
 const withQueues = new WeakMap<TicketSource, TicketSource>();
 export async function ticketSource(): Promise<TicketSource> {
   const s = await loadSettings();
-  const base = s.enabled && s.credentials && s.config.zone ? autotaskSource : demoSource;
+  const linked = s.enabled && s.credentials && s.config.zone ? autotaskSource : demoSource;
+  // tickets in the portal's own database (Admin › Billets): clients, contacts, contracts… still come from the link
+  const { ticketsLocal, localTicketSource } = await import("./localTickets.ts");
+  const base = (await ticketsLocal()) ? localTicketSource(linked) : linked;
   // one wrapper per source
   if (!withQueues.has(base)) withQueues.set(base, withPortalQueues(base));
   return withQueues.get(base)!;
@@ -996,6 +999,8 @@ export function keepTicketsWarm() {
   if (warmTimer) return;
   const tick = async () => {
     if (lastUse && Date.now() - lastUse > 15 * 60_000) return;
+    // the tickets are the portal's own: nothing comes from Autotask by itself (only what is imported by hand)
+    if (await (await import("./localTickets.ts")).ticketsLocal()) return;
     const src = await ticketSource();
     if (src.demo) return;
     // the whole copy is refreshed by itself only when asked for (Admin › Billets); new tickets always arrive
@@ -2364,3 +2369,297 @@ const autotaskSource: TicketSource = {
     return { id: String(res.itemId), companyId, name: `${p.firstName} ${p.lastName}`, email: p.email, phone: p.phone };
   },
 };
+
+// ── The copy for the portal's own tickets (the switch from Autotask) ──────────────
+export type ExportNote = { externalId: string; author: string; userId: string | null; at: string; text: string; internal: boolean; system: boolean };
+export type ExportTime = {
+  externalId: string;
+  userId: string | null;
+  author: string;
+  startedAt: string;
+  minutes: number;
+  offsetMinutes: number;
+  summary: string;
+  internalText: string;
+  billable: boolean;
+  workType: string | null;
+  contractId: string | null;
+  billed: boolean;
+};
+export type ExportCharge = {
+  externalId: string;
+  name: string;
+  description: string;
+  quantity: number;
+  unitPrice: number | null;
+  unitCost: number | null;
+  billable: boolean;
+  type: string | null;
+  status: string | null;
+  materialCode: string | null;
+  productId: string | null;
+  contractId: string | null;
+  date: string | null;
+  author: string | null;
+  billed: boolean;
+};
+export type ExportFile = { externalId: string; name: string; contentType: string; size: number; data: string | null; internal: boolean; author: string; at: string };
+export type ExportTicket = { t: NTicket; completedAt: string | null; notes: ExportNote[]; times: ExportTime[]; charges: ExportCharge[]; files: ExportFile[] };
+
+/** Is the Autotask link on (else: sample data) */
+export async function autotaskLinked(): Promise<boolean> {
+  const s = await loadSettings();
+  return Boolean(s.enabled && s.credentials && s.config.zone);
+}
+
+/** The lists of the source the tickets come from (kept by the portal at the switch) */
+export async function sourceOptions(): Promise<Options> {
+  return (await autotaskLinked()) ? autotaskSource.options() : demoSource.options();
+}
+
+/** Which tickets to copy: those since a day (open ones whatever their age), the ones with these numbers, or those changed since an instant */
+export type ExportScope = { size?: number; since?: string; numbers?: string[]; changedSince?: string };
+
+/**
+ * Tickets after this id (a batch), with their notes, time entries, charges and
+ * files: what the portal copies before working on its own tickets, or when a
+ * ticket is imported by hand.
+ */
+export async function exportTickets(after: number, scope: ExportScope = {}): Promise<ExportTicket[]> {
+  if (!(await autotaskLinked())) return scope.changedSince ? [] : exportDemo(after, scope);
+  return exportAutotask(after, scope);
+}
+
+async function exportDemo(after: number, scope: ExportScope): Promise<ExportTicket[]> {
+  const staff = await staffPeople();
+  const wanted = scope.numbers?.length ? new Set(scope.numbers.map((n) => n.toUpperCase())) : null;
+  const all = (demoTickets(staff) as unknown as NTicket[])
+    .filter((t) => t.id > after && (!wanted || wanted.has(t.number.toUpperCase())))
+    .sort((a, b) => a.id - b.id)
+    .slice(0, scope.size ?? 200);
+  return all.map((t) => ({
+    t: { ...t, notes: [] },
+    completedAt: t.status === "complete" ? t.updatedAt : null,
+    notes: t.notes
+      .filter((n) => n.kind !== "time")
+      .map((n) => ({ externalId: `demo:${t.id}:${n.id}`, author: n.author, userId: staff.find((p) => p.name === n.author)?.id ?? null, at: n.at, text: n.text, internal: n.internal, system: Boolean(n.system) })),
+    times: t.notes
+      .filter((n) => n.kind === "time")
+      .map((n) => ({
+        externalId: `demo:${t.id}:${n.id}`,
+        userId: staff.find((p) => p.name === n.author)?.id ?? null,
+        author: n.author,
+        startedAt: n.at,
+        minutes: Math.round((n.hours ?? 0) * 60),
+        offsetMinutes: Math.round((n.offsetHours ?? 0) * 60),
+        summary: n.text,
+        internalText: n.internalText ?? "",
+        billable: n.billable !== false,
+        workType: null,
+        contractId: null,
+        billed: false,
+      })),
+    charges: (demoCharges.get(t.id) ?? []).map((c) => ({
+      externalId: `demo:${t.id}:${c.id}`,
+      name: c.name,
+      description: c.description,
+      quantity: c.quantity,
+      unitPrice: c.unitPrice,
+      unitCost: c.unitCost,
+      billable: c.billable,
+      type: c.type,
+      status: c.status,
+      materialCode: c.materialCode,
+      productId: null,
+      contractId: null,
+      date: c.date,
+      author: c.author,
+      billed: false,
+    })),
+    files: (t.attachments ?? []).map((f) => ({ externalId: `demo:${t.id}:${f.id}`, name: f.name, contentType: "application/octet-stream", size: f.size, data: null, internal: Boolean(f.internal), author: f.author, at: f.at })),
+  }));
+}
+
+async function exportAutotask(after: number, scope: ExportScope): Promise<ExportTicket[]> {
+  const size = scope.size ?? 200;
+  const at = await autotask();
+  const fields = await safeFields(at, "Tickets", [...TICKET_FIELDS, "completedDate"]);
+  const completeIds = (await atOptions()).statuses.filter((s) => s.kind === "complete").map((s) => Number(s.value));
+  const sinceIso = scope.since ? new Date(`${scope.since}T00:00:00-04:00`).toISOString() : null;
+  const filter: unknown[] = [];
+  if (scope.numbers?.length) filter.push({ op: "in", field: "ticketNumber", value: scope.numbers.map((n) => n.toUpperCase()) });
+  else if (scope.changedSince)
+    filter.push({ op: "or", items: [{ op: "gte", field: "lastActivityDate", value: scope.changedSince }, { op: "gte", field: "createDate", value: scope.changedSince }] });
+  else if (sinceIso)
+    filter.push({
+      op: "or",
+      items: [
+        { op: "notIn", field: "status", value: completeIds.length ? completeIds : [5] },
+        { op: "gte", field: "createDate", value: sinceIso },
+        { op: "gte", field: "completedDate", value: sinceIso },
+        { op: "gte", field: "lastActivityDate", value: sinceIso },
+      ],
+    });
+  filter.push({ op: "gt", field: "id", value: after });
+  const rows = (await at.query<AtTicket & { completedDate?: string | null }>("Tickets", filter as never, { fields, max: size })).sort((a, b) => a.id - b.id).slice(0, size);
+  if (!rows.length) return [];
+  const ids = rows.map((r) => r.id);
+  const list = await normalize(at, rows, true);
+  const opts = await atOptions();
+  const internalValues = new Set(opts.publish.filter((p) => /intern/i.test(p.label)).map((p) => String(p.value)));
+  const systemTypes = new Set(opts.noteTypes.filter((x) => SYSTEM_NOTE_TYPE.test(x.label)).map((x) => String(x.value)));
+  const [res, linked] = await Promise.all([listResources(), links()]);
+  const resName = (rid?: number | null) => (rid ? (res.find((r) => r.id === rid)?.name ?? `#${rid}`) : null);
+  const authors = await db()
+    .select({ entity: schema.autotaskAuthors.entity, autotaskId: schema.autotaskAuthors.autotaskId, userId: schema.autotaskAuthors.userId, name: schema.users.name })
+    .from(schema.autotaskAuthors)
+    .innerJoin(schema.users, eq(schema.users.id, schema.autotaskAuthors.userId))
+    .where(inArray(schema.autotaskAuthors.ticketId, ids));
+  const portalAuthor = (entity: "note" | "time", aid: number) => authors.find((x) => x.entity === entity && x.autotaskId === aid) ?? null;
+
+  type AtNote = { id: number; ticketID: number; title?: string; description?: string; createDateTime: string; creatorResourceID?: number | null; createdByContactID?: number | null; creatorContactID?: number | null; publish?: number; noteType?: number };
+  type AtTime = {
+    id: number;
+    ticketID: number;
+    resourceID?: number | null;
+    dateWorked?: string;
+    startDateTime?: string | null;
+    createDateTime?: string;
+    hoursWorked?: number;
+    summaryNotes?: string | null;
+    internalNotes?: string | null;
+    isNonBillable?: boolean | null;
+    offsetHours?: number | null;
+    billingApprovalDateTime?: string | null;
+    billingCodeID?: number | null;
+    contractID?: number | null;
+  };
+  type AtCharge = {
+    id: number;
+    ticketID: number;
+    name?: string;
+    description?: string | null;
+    unitQuantity?: number;
+    unitPrice?: number | null;
+    unitCost?: number | null;
+    isBillableToCompany?: boolean;
+    chargeType?: number;
+    status?: number;
+    billingCodeID?: number | null;
+    productID?: number | null;
+    contractID?: number | null;
+    datePurchased?: string | null;
+    creatorResourceID?: number | null;
+    isBilled?: boolean | null;
+  };
+  type AtFile = { id: number; parentID: number; title?: string; fullPath?: string; fileSize?: number; contentType?: string; attachDate?: string; publish?: number; attachedByResourceID?: number | null; attachedByContactID?: number | null };
+  const [noteF, timeF, chargeF, fileF] = await Promise.all([
+    safeFields(at, "TicketNotes", ["id", "ticketID", "title", "description", "createDateTime", "creatorResourceID", "createdByContactID", "creatorContactID", "publish", "noteType"]),
+    safeFields(at, "TimeEntries", ["id", "ticketID", "resourceID", "dateWorked", "startDateTime", "createDateTime", "hoursWorked", "summaryNotes", "internalNotes", "isNonBillable", "offsetHours", "billingApprovalDateTime", "billingCodeID", "contractID"]),
+    safeFields(at, "TicketCharges", ["id", "ticketID", "name", "description", "unitQuantity", "unitPrice", "unitCost", "isBillableToCompany", "chargeType", "status", "billingCodeID", "productID", "contractID", "datePurchased", "creatorResourceID", "isBilled"]),
+    safeFields(at, "TicketAttachments", ["id", "parentID", "title", "fullPath", "fileSize", "contentType", "attachDate", "publish", "attachedByResourceID", "attachedByContactID"]),
+  ]);
+  const inIds = (field: string) => [{ op: "in", field, value: ids }] as never;
+  const [notes, times, charges, files] = await Promise.all([
+    at.query<AtNote>("TicketNotes", inIds("ticketID"), { fields: noteF, max: 50_000, complete: true }),
+    at.query<AtTime>("TimeEntries", inIds("ticketID"), { fields: timeF, max: 50_000, complete: true }),
+    at.query<AtCharge>("TicketCharges", inIds("ticketID"), { fields: chargeF, max: 50_000, complete: true }),
+    at.query<AtFile>("TicketAttachments", inIds("parentID"), { fields: fileF, max: 50_000, complete: true }).catch(() => [] as AtFile[]),
+  ]);
+  const contactIds = [...notes.map((n) => n.createdByContactID ?? n.creatorContactID ?? null), ...files.map((f) => f.attachedByContactID ?? null)].filter((x): x is number => Boolean(x));
+  const contacts = contactIds.length ? await contactNames(at, contactIds).catch(() => new Map<number, string>()) : new Map<number, string>();
+  const charge = await autotaskSource.chargeOptions().catch(() => ({ types: [], statuses: [], materialCodes: [] }) as ChargeOptions);
+  const label = (l: { value: string; label: string }[], v?: number | null) => (v == null ? null : (l.find((x) => x.value === String(v))?.label ?? String(v)));
+  const dayOf = (x?: string | null) => (x ? x.slice(0, 10) : null);
+
+  const out: ExportTicket[] = [];
+  for (const t of list) {
+    const row = rows.find((r) => r.id === t.id)!;
+    const completed = opts.statuses.find((x) => x.value === t.status)?.kind === "complete";
+    const myFiles: ExportFile[] = [];
+    for (const f of files.filter((x) => x.parentID === t.id)) {
+      let data: string | null = null;
+      let contentType = f.contentType || "application/octet-stream";
+      if ((f.fileSize ?? 0) <= MAX_TICKET_ATTACHMENT_BYTES) {
+        try {
+          const r = await at.call<{ items?: { data?: string; contentType?: string }[]; item?: { data?: string; contentType?: string } }>("GET", `Tickets/${t.id}/Attachments/${f.id}`);
+          const x = r.item ?? r.items?.[0];
+          data = x?.data ?? null;
+          contentType = x?.contentType || contentType;
+        } catch {
+          data = null;
+        }
+      }
+      myFiles.push({
+        externalId: `file:${f.id}`,
+        name: f.title || f.fullPath || "document",
+        contentType,
+        size: f.fileSize ?? 0,
+        data,
+        internal: internalValues.has(String(f.publish)),
+        author: resName(f.attachedByResourceID) ?? (f.attachedByContactID ? (contacts.get(f.attachedByContactID) ?? "") : ""),
+        at: f.attachDate ?? t.createdAt,
+      });
+    }
+    out.push({
+      t: { ...t, notes: [] },
+      completedAt: completed ? (row.completedDate ?? row.lastActivityDate ?? t.updatedAt) : null,
+      notes: notes
+        .filter((n) => n.ticketID === t.id)
+        .map((n) => {
+          const contact = n.createdByContactID ?? n.creatorContactID ?? null;
+          const mine = portalAuthor("note", n.id);
+          return {
+            externalId: `note:${n.id}`,
+            author: mine?.name ?? resName(n.creatorResourceID) ?? (contact ? (contacts.get(contact) ?? "") : "Autotask"),
+            userId: mine?.userId ?? (n.creatorResourceID ? (linked.get(n.creatorResourceID) ?? null) : null),
+            at: n.createDateTime,
+            text: [n.title, n.description].filter(Boolean).join("\n").trim(),
+            internal: internalValues.has(String(n.publish)),
+            system: !mine && (systemTypes.has(String(n.noteType)) || (!n.creatorResourceID && !contact)),
+          };
+        }),
+      times: times
+        .filter((x) => x.ticketID === t.id)
+        .map((x) => {
+          const mine = portalAuthor("time", x.id);
+          return {
+            externalId: `time:${x.id}`,
+            userId: mine?.userId ?? (x.resourceID ? (linked.get(x.resourceID) ?? null) : null),
+            author: mine?.name ?? resName(x.resourceID) ?? "Autotask",
+            startedAt: x.startDateTime ?? x.dateWorked ?? x.createDateTime ?? t.createdAt,
+            minutes: Math.round((x.hoursWorked ?? 0) * 60),
+            offsetMinutes: Math.round((x.offsetHours ?? 0) * 60),
+            summary: (x.summaryNotes ?? "").trim(),
+            internalText: (x.internalNotes ?? "").trim(),
+            billable: !x.isNonBillable,
+            workType: x.billingCodeID ? String(x.billingCodeID) : null,
+            contractId: x.contractID ? String(x.contractID) : null,
+            // approved and posted in Autotask: billed already
+            billed: Boolean(x.billingApprovalDateTime),
+          };
+        }),
+      charges: charges
+        .filter((c) => c.ticketID === t.id)
+        .map((c) => ({
+          externalId: `charge:${c.id}`,
+          name: c.name ?? "",
+          description: c.description ?? "",
+          quantity: c.unitQuantity ?? 1,
+          unitPrice: c.unitPrice ?? null,
+          unitCost: c.unitCost ?? null,
+          billable: c.isBillableToCompany !== false,
+          type: label(charge.types, c.chargeType),
+          status: label(charge.statuses, c.status),
+          materialCode: label(charge.materialCodes, c.billingCodeID),
+          productId: c.productID ? String(c.productID) : null,
+          contractId: c.contractID ? String(c.contractID) : null,
+          date: dayOf(c.datePurchased),
+          author: resName(c.creatorResourceID),
+          billed: c.isBilled === true,
+        })),
+      files: myFiles,
+    });
+  }
+  return out;
+}

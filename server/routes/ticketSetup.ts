@@ -1,6 +1,6 @@
 import { Hono } from "hono";
 import { HTTPException } from "hono/http-exception";
-import { and, eq, ne } from "drizzle-orm";
+import { and, eq, ne, sql } from "drizzle-orm";
 import { z } from "zod";
 import { db, schema } from "../db/index.ts";
 import { auth, requirePermission, requireStaff, type AppEnv } from "../lib/auth.ts";
@@ -8,6 +8,8 @@ import { audit } from "../lib/audit.ts";
 import { body } from "../lib/validate.ts";
 import { forgetSources, forgetStatuses, sources, withStatusConfig } from "../lib/queues.ts";
 import { saveTicketSyncSettings, syncTicketsNow, ticketCopyInfo, ticketLastRun, ticketSource, ticketSyncSettings, type TicketSource } from "../lib/ticketSource.ts";
+import { importFromSource, startTicketImport, ticketMode, ticketsLocal } from "../lib/localTickets.ts";
+import { autotaskLinked } from "../lib/ticketSource.ts";
 import { run } from "./tickets.ts";
 
 /**
@@ -146,8 +148,40 @@ export const ticketSetupRoutes = new Hono<AppEnv>()
   // ── Sync with Autotask (by hand) ──
   .get("/sync", async (c) => {
     const src = await ticketSource();
-    const [settings, copy, last] = await Promise.all([ticketSyncSettings(), ticketCopyInfo(), ticketLastRun()]);
-    return c.json({ ...settings, demo: src.demo, copy, lastRun: last });
+    const [settings, copy, last, local] = await Promise.all([ticketSyncSettings(), ticketCopyInfo(), ticketLastRun(), ticketsLocal()]);
+    return c.json({ ...settings, demo: src.demo, copy, lastRun: last, local });
+  })
+
+  // ── The tickets of the portal (no longer tied to Autotask) ──
+  .get("/local", async (c) => {
+    const [mode, linked, [row]] = await Promise.all([
+      ticketMode(),
+      autotaskLinked(),
+      db().select({ n: sql<number>`count(*)::int` }).from(schema.tickets),
+    ]);
+    return c.json({ mode: mode.mode, linked, switchedAt: mode.switchedAt ?? null, import: mode.import ?? null, tickets: row?.n ?? 0, since: (await ticketSyncSettings()).since });
+  })
+
+  /** The one-way switch: the tickets (with notes, time, charges, files) are copied into the portal, which then owns them */
+  .post("/local/switch", requirePermission("admin.integrations"), async (c) => {
+    const a = auth(c);
+    const state = await run(() => startTicketImport(a.user.id));
+    return c.json({ mode: state.mode, import: state.import ?? null }, 202);
+  })
+
+  /** By hand: copy these tickets (numbers) or a period from Autotask; the portal's version is replaced */
+  .post("/local/import", async (c) => {
+    const a = auth(c);
+    const p = await body(
+      c,
+      z
+        .object({
+          numbers: z.array(z.string().trim().regex(/^T\d{8}\.\d{3,6}$/i)).min(1).max(50).optional(),
+          since: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
+        })
+        .refine((v) => Boolean(v.numbers?.length) !== Boolean(v.since)),
+    );
+    return c.json(await run(() => importFromSource(p, a.user.id)));
   })
 
   .put("/sync", async (c) => {
@@ -161,6 +195,8 @@ export const ticketSetupRoutes = new Hono<AppEnv>()
   /** A full pass now: every ticket since the date, completed ones with their status. */
   .post("/sync/run", async (c) => {
     const a = auth(c);
+    // the portal owns the tickets: nothing is pulled by itself (import the ones wanted: /local/import)
+    if (await ticketsLocal()) throw new HTTPException(409, { message: "tickets_local" });
     const r = await syncTicketsNow(a.user.id);
     await audit(a.user.id, "ticket_sync.run", null, { ok: r.ok, total: r.total, completed: r.completed });
     return c.json(r, r.ok ? 200 : 502);

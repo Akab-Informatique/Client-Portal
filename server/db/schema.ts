@@ -524,6 +524,140 @@ export const emailTemplates = pgTable(
  * Portal-only data about an Autotask ticket (fields Autotask does not have),
  * keyed by the Autotask ticket id. E.g. the planned start date.
  */
+/**
+ * The portal's own tickets (once switched from Autotask: Admin › Intégrations).
+ * Tickets copied from Autotask keep their id and number; new ones follow.
+ * Company and contact are the CRM ids (Autotask ids as text for contacts),
+ * with their names as they were; people are portal users, or "at-<resource>"
+ * for Autotask resources never linked to an account.
+ */
+export const tickets = pgTable(
+  "tickets",
+  {
+    id: bigint("id", { mode: "number" }).primaryKey(),
+    number: text("number").notNull(),
+    title: text("title").notNull(),
+    description: text("description").notNull().default(""),
+    companyId: bigint("company_id", { mode: "number" }).notNull(),
+    companyName: text("company_name").notNull().default(""),
+    contactId: text("contact_id"),
+    contactName: text("contact_name").notNull().default(""),
+    status: text("status").notNull(),
+    priority: text("priority").notNull(),
+    queue: text("queue").notNull().default(""),
+    source: text("source").notNull().default("portal"),
+    assigneeId: text("assignee_id"),
+    assigneeName: text("assignee_name"),
+    secondary: jsonb("secondary").$type<{ id: string; name: string }[]>().notNull().default(sql`'[]'::jsonb`),
+    dueAt: timestamp("due_at", { withTimezone: true }).notNull(),
+    assetId: text("asset_id"),
+    contractId: text("contract_id"),
+    createdAt: created(),
+    updatedAt: updated(),
+    /** When it got a "complete" status (null while open) */
+    completedAt: timestamp("completed_at", { withTimezone: true }),
+  },
+  (t) => [uniqueIndex("tickets_number_idx").on(t.number), index("tickets_company_idx").on(t.companyId), index("tickets_completed_idx").on(t.completedAt), index("tickets_created_idx").on(t.createdAt)],
+);
+
+/** Replies and internal notes of a portal ticket */
+export const ticketNotes = pgTable(
+  "ticket_notes",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    ticketId: bigint("ticket_id", { mode: "number" })
+      .notNull()
+      .references(() => tickets.id, { onDelete: "cascade" }),
+    /** Where it came from ("n123": an Autotask note) */
+    externalId: text("external_id"),
+    author: text("author").notNull().default(""),
+    userId: uuid("user_id").references(() => users.id, { onDelete: "set null" }),
+    text: text("text").notNull(),
+    internal: boolean("internal").notNull().default(false),
+    /** Written by the system (an Autotask workflow rule…), not by a person */
+    system: boolean("system").notNull().default(false),
+    createdAt: created(),
+  },
+  (t) => [index("ticket_notes_ticket_idx").on(t.ticketId, t.createdAt), uniqueIndex("ticket_notes_external_idx").on(t.externalId)],
+);
+
+/** Work done on a portal ticket (minutes; the billing uses what is not billed yet) */
+export const ticketTimeEntries = pgTable(
+  "ticket_time_entries",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    ticketId: bigint("ticket_id", { mode: "number" })
+      .notNull()
+      .references(() => tickets.id, { onDelete: "cascade" }),
+    /** "time:123": an Autotask time entry (same id as its work to bill) */
+    externalId: text("external_id"),
+    userId: uuid("user_id").references(() => users.id, { onDelete: "set null" }),
+    author: text("author").notNull().default(""),
+    startedAt: timestamp("started_at", { withTimezone: true }).notNull(),
+    minutes: integer("minutes").notNull(),
+    offsetMinutes: integer("offset_minutes").notNull().default(0),
+    summary: text("summary").notNull().default(""),
+    internalText: text("internal_text").notNull().default(""),
+    billable: boolean("billable").notNull().default(true),
+    workType: text("work_type"),
+    contractId: text("contract_id"),
+    /** Already billed (posted in Autotask before the switch): never billed again */
+    billed: boolean("billed").notNull().default(false),
+    createdAt: created(),
+  },
+  (t) => [index("ticket_time_ticket_idx").on(t.ticketId), index("ticket_time_started_idx").on(t.startedAt), uniqueIndex("ticket_time_external_idx").on(t.externalId)],
+);
+
+/** Charges on a portal ticket (material, services…) */
+export const ticketCharges = pgTable(
+  "ticket_charges",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    ticketId: bigint("ticket_id", { mode: "number" })
+      .notNull()
+      .references(() => tickets.id, { onDelete: "cascade" }),
+    /** "charge:45": an Autotask charge */
+    externalId: text("external_id"),
+    name: text("name").notNull(),
+    description: text("description").notNull().default(""),
+    quantityX100: integer("quantity_x100").notNull().default(100),
+    unitPriceCents: bigint("unit_price_cents", { mode: "number" }),
+    unitCostCents: bigint("unit_cost_cents", { mode: "number" }),
+    billable: boolean("billable").notNull().default(true),
+    type: text("type"),
+    status: text("status"),
+    materialCode: text("material_code"),
+    productId: text("product_id"),
+    contractId: text("contract_id"),
+    date: text("date"),
+    author: text("author"),
+    billed: boolean("billed").notNull().default(false),
+    createdAt: created(),
+  },
+  (t) => [index("ticket_charges_ticket_idx").on(t.ticketId), uniqueIndex("ticket_charges_external_idx").on(t.externalId)],
+);
+
+/** Files of a portal ticket (base64, 5 MB each at most) */
+export const ticketAttachments = pgTable(
+  "ticket_attachments",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    ticketId: bigint("ticket_id", { mode: "number" })
+      .notNull()
+      .references(() => tickets.id, { onDelete: "cascade" }),
+    externalId: text("external_id"),
+    name: text("name").notNull(),
+    contentType: text("content_type").notNull().default("application/octet-stream"),
+    size: integer("size").notNull().default(0),
+    /** The file (null: Autotask could not give it when the tickets were copied) */
+    data: text("data"),
+    internal: boolean("internal").notNull().default(false),
+    author: text("author").notNull().default(""),
+    createdAt: created(),
+  },
+  (t) => [index("ticket_attachments_ticket_idx").on(t.ticketId), uniqueIndex("ticket_attachments_external_idx").on(t.externalId)],
+);
+
 export const ticketMeta = pgTable("ticket_meta", {
   ticketId: bigint("ticket_id", { mode: "number" }).primaryKey(),
   startDate: text("start_date"),

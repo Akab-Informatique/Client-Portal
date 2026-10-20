@@ -5,46 +5,9 @@ import { useMutation, useQuery, useQueryClient, type QueryClient } from "@tansta
 import { AnimatePresence, motion } from "motion/react";
 import { toast } from "sonner";
 import { Dialog as DialogPrimitive } from "radix-ui";
-import {
-  AlertTriangle,
-  Bot,
-  Building2,
-  CalendarClock,
-  CalendarPlus,
-  Check,
-  BookOpen,
-  ChevronDown,
-  ListOrdered,
-  ChevronUp,
-  Clock3,
-  Eye,
-  FileText,
-  HardDrive,
-  HelpCircle,
-  Inbox,
-  ListChecks,
-  Loader2,
-  Lock,
-  Mail,
-  Minus,
-  MonitorCog,
-  MonitorPlay,
-  NotebookPen,
-  Pencil,
-  Phone,
-  RefreshCw,
-  Send,
-  Sparkles,
-  Timer,
-  Star,
-  UserRound,
-  Users,
-  X,
-  type LucideIcon,
-  MessageSquareReply,
-  MessageSquareText,
-} from "lucide-react";
+import { AlertTriangle, Bot, Building2, CalendarClock, CalendarPlus, Check, BookOpen, ChevronDown, ListOrdered, ChevronUp, Clock3, Eye, FileText, HardDrive, HelpCircle, Inbox, ListChecks, Loader2, Lock, Mail, Minus, MonitorCog, MonitorPlay, NotebookPen, Pencil, Phone, RefreshCw, Send, Sparkles, Timer, Star, UserRound, Users, X, type LucideIcon, MessageSquareReply, MessageSquareText, Trash2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { useConfirm } from "@/components/ConfirmDialog";
 import { AiTextarea } from "@/components/AiPolish";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import {
@@ -256,6 +219,7 @@ function TicketBody({
   const editable = can("tickets.edit");
   const update = useTicketUpdate(tk);
   const qc = useQueryClient();
+  const confirm = useConfirm();
   const { data: companies = [tk.company] } = useCompanies();
   // A change made in place shows at once and is saved right away
   const [staged, setStaged] = useState<Staged>({});
@@ -301,6 +265,19 @@ function TicketBody({
       toast.error(ticketErrorText(t, e));
     },
   });
+  // delete for good (administrators; the portal's own tickets)
+  const remove = useMutation({
+    mutationFn: () => api.del(`/tickets/${tk.id}`),
+    onSuccess: () => {
+      toast.success(t("tickets.delete.done", { number: tk.number }));
+      void qc.invalidateQueries({ queryKey: ["tickets"] });
+      void qc.invalidateQueries({ queryKey: ["meetings"] });
+      onClose();
+    },
+    onError: (e) => toast.error(ticketErrorText(t, e)),
+  });
+  const askDelete = () =>
+    void confirm({ title: t("tickets.delete.title", { number: tk.number }), description: t("tickets.delete.text"), confirmLabel: t("tickets.delete.confirm"), destructive: true }).then((ok) => ok && remove.mutate());
   const statusOpt = tk.options.statuses.find((s) => s.value === view.status);
   // where the ticket came from, in the portal's own words (Admin › Billets)
   const sourceName = (tk.options.sources ?? []).find((x) => x.value === tk.source)?.label ?? (tk.source ? t(`tickets.source.${tk.source}`, { defaultValue: tk.source }) : "");
@@ -389,6 +366,23 @@ function TicketBody({
             <TimerControl ticketId={tk.id} />
             {can("tickets.ai") &&
               (tk.ai ? <AiMenu tk={tk} onReply={(text) => setDraft({ text, internal: false })} /> : <AiSetupHint label={t("tickets.ai.button")} />)}
+            {can("tickets.delete") && !partial && (
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <Button
+                    variant="outline"
+                    size="icon"
+                    className="size-9 text-muted-foreground hover:border-destructive/60 hover:bg-destructive/10 hover:text-destructive"
+                    disabled={remove.isPending}
+                    onClick={askDelete}
+                    aria-label={t("tickets.delete.button")}
+                  >
+                    {remove.isPending ? <Loader2 className="size-4 animate-spin" /> : <Trash2 className="size-4" />}
+                  </Button>
+                </TooltipTrigger>
+                <TooltipContent>{t("tickets.delete.button")}</TooltipContent>
+              </Tooltip>
+            )}
             <Tooltip>
               <TooltipTrigger asChild>
                 <Button variant="outline" size="icon" className="size-9" onClick={onMinimize} aria-label={t("tickets.minimize")}>
