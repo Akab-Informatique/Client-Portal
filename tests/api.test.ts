@@ -5394,6 +5394,7 @@ describe("tickets owned by the portal (Admin › Billets)", () => {
     const local = await import("../server/lib/localTickets.ts");
     await db().delete(schema.integrations).where(eq(schema.integrations.provider, "tickets"));
     await db().delete(schema.tickets);
+    await db().delete(schema.deletedTickets);
     local.resetTicketMode();
   });
 
@@ -5480,6 +5481,8 @@ describe("final sync from Autotask (Integrations › Autotask)", () => {
   const sent: { path: string; body: any }[] = [];
   const names = (...n: string[]) => ({ fields: n.map((name) => ({ name })) });
   let clientId = "";
+  /** Tickets the test makes appear in Autotask later */
+  let extraTickets: Record<string, unknown>[] = [];
 
   beforeAll(async () => {
     const { clearTicketCache } = await import("../server/lib/ticketSource.ts");
@@ -5561,17 +5564,22 @@ describe("final sync from Autotask (Integrations › Autotask)", () => {
             ],
             pageDetails: {},
           });
-        if (path === "Tickets/query" && (body?.filter ?? []).some((f: any) => f.op === "gt" && f.field === "id" && Number(f.value) >= 9001)) return json({ items: [], pageDetails: {} });
-        if (path === "Tickets/query")
+        if (path === "Tickets/query") {
+          const ticketBase = { description: "Le serveur ne répond plus.", status: 2, priority: 2, queueID: 29683, companyID: 77, contactID: 501, assignedResourceID: 29682885, dueDateTime: "2026-10-20T17:00:00Z", createDate: "2026-10-12T12:00:00Z", lastActivityDate: "2026-10-12T13:00:00Z", source: 4 };
+          const all = [
+            { ...ticketBase, id: 9001, ticketNumber: "T20261012.0001", title: "Serveur réel en panne" },
+            { ...ticketBase, id: 9002, ticketNumber: "T20261012.0002", title: "Imprimante réelle", assignedResourceID: null },
+            ...extraTickets,
+          ];
+          const filter: any[] = body?.filter ?? [];
+          const after = Number(filter.find((f) => f.op === "gt" && f.field === "id")?.value ?? 0);
+          const numbers: string[] | undefined = filter.find((f) => f.field === "ticketNumber")?.value;
+          const wanted: number[] | undefined = filter.find((f) => f.op === "in" && f.field === "id")?.value;
           return json({
-            items: [
-              {
-                id: 9001, ticketNumber: "T20261012.0001", title: "Serveur réel en panne", description: "Le serveur ne répond plus.", status: 2, priority: 2, queueID: 29683, companyID: 77, contactID: 501,
-                assignedResourceID: 29682885, dueDateTime: "2026-10-20T17:00:00Z", createDate: "2026-10-12T12:00:00Z", lastActivityDate: "2026-10-12T13:00:00Z", source: 4,
-              },
-            ],
+            items: all.filter((x: any) => x.id > after && (!numbers || numbers.includes(String(x.ticketNumber).toUpperCase())) && (!wanted || wanted.includes(x.id))),
             pageDetails: {},
           });
+        }
         if (path === "BillingCodes/query") return json({ items: [{ id: 77, name: "Travail à distance" }], pageDetails: {} });
         // the portal's own background copies (clients, contacts…) ask too: nothing there
         if (path.endsWith("/query")) return json({ items: [], pageDetails: {} });
@@ -5619,7 +5627,7 @@ describe("final sync from Autotask (Integrations › Autotask)", () => {
     await finalSyncSettled();
     const state = (await admin.get(url)).json.state;
     expect(state).toMatchObject({ since: "2026-09-01", running: false });
-    expect(state.results.tickets).toMatchObject({ state: "done", counts: { tickets: 1 }, note: "switched" });
+    expect(state.results.tickets).toMatchObject({ state: "done", counts: { tickets: 2 }, note: "switched" });
     const [copied] = await db().select().from(schema.tickets).where(eq(schema.tickets.number, "T20261012.0001"));
     expect(copied).toMatchObject({ id: 9001, title: "Serveur réel en panne", companyName: "Client réel", contactName: "Marie Gagnon", status: "2" });
     expect((await db().select().from(schema.ticketNotes).where(eq(schema.ticketNotes.ticketId, 9001))).map((n) => [n.externalId, n.internal])).toEqual([["note:31", true]]);
@@ -5628,7 +5636,7 @@ describe("final sync from Autotask (Integrations › Autotask)", () => {
     // Autotask was asked for the tickets since the date (open ones whatever their age)
     const askedTickets = sent.find((q) => q.path === "Tickets/query" && JSON.stringify(q.body?.filter).includes("2026-09-01"));
     expect(askedTickets).toBeTruthy();
-    expect((await admin.get("/api/admin/ticket-setup/local")).json).toMatchObject({ mode: "local", tickets: 1 });
+    expect((await admin.get("/api/admin/ticket-setup/local")).json).toMatchObject({ mode: "local", tickets: 2 });
     expect(state.results.expenses).toMatchObject({ state: "done", counts: { reports: 3, items: 4, noAccount: 1, status_paid: 1, status_rejected: 1, status_draft: 1 } });
     expect(state.results.timesheets).toMatchObject({ state: "done", counts: { entries: 3, weeks: 2 } });
     // Autotask was asked for the reports of the period (their week ending)
@@ -5703,11 +5711,78 @@ describe("final sync from Autotask (Integrations › Autotask)", () => {
     // a second pass: updated, not doubled (the tickets of the portal are now only imported by hand)
     expect((await admin.post(url, { since: "2026-09-01" })).status).toBe(202);
     await finalSyncSettled();
-    expect((await admin.get(url)).json.state.results.tickets).toMatchObject({ state: "done", counts: { tickets: 1 } });
-    expect(await db().select().from(schema.tickets)).toHaveLength(1);
+    expect((await admin.get(url)).json.state.results.tickets).toMatchObject({ state: "done", counts: { tickets: 2 } });
+    expect(await db().select().from(schema.tickets)).toHaveLength(2);
     expect(await db().select().from(schema.ticketTimeEntries).where(eq(schema.ticketTimeEntries.ticketId, 9001))).toHaveLength(2);
     expect(await db().select().from(schema.expenseReports).where(isNotNull(schema.expenseReports.autotaskId))).toHaveLength(3);
     expect(await db().select().from(schema.expenses).where(isNotNull(schema.expenses.autotaskId))).toHaveLength(4);
     expect((await admin.get(url)).json.state.files).toHaveLength(2);
+  });
+
+  it("a later pass keeps what was done in the portal: edits, deletions, own tickets and expenses; reports look-alikes; nothing is doubled", async () => {
+    resetRateLimit("login:ip:unknown");
+    const { finalSyncSettled, startFinalSync } = await import("../server/lib/finalSync.ts");
+    const admin = await signIn("admin@akab.local");
+    const tech = await signIn("tech@akab.local");
+    const url = "/api/admin/integrations/autotask/final-sync";
+    const results = async () => {
+      await startFinalSync({ since: "2026-09-01" }, (await db().select().from(schema.users).where(eq(schema.users.email, "admin@akab.local")))[0].id);
+      await finalSyncSettled();
+      return (await admin.get(url)).json.state.results;
+    };
+    const ago = new Date(Date.now() - 60_000);
+
+    // work done in the portal after the first copy (the last copy is taken as a minute old)
+    await db().update(schema.tickets).set({ autotaskSyncedAt: ago });
+    await db().update(schema.expenses).set({ autotaskSyncedAt: ago, updatedAt: ago }).where(isNotNull(schema.expenses.autotaskId));
+    await db().update(schema.expenseReports).set({ autotaskSyncedAt: ago, updatedAt: ago }).where(isNotNull(schema.expenseReports.autotaskId));
+    // 1. a ticket worked on: its priority is changed
+    expect((await tech.patch("/api/tickets/9001", { priority: "1" })).status).toBe(200);
+    // 2. a ticket deleted
+    expect((await admin.del("/api/tickets/9002")).status).toBe(200);
+    // 3. a ticket made in the portal: its own id range, never Autotask's
+    const companyId = ((await tech.get("/api/tickets/companies")).json as { id: number }[])[0].id;
+    const own = await tech.post("/api/tickets", { title: "Doublon courriel", description: "", companyId, priority: "2", queue: "support", assigneeId: null, dueDate: "2026-12-01" });
+    expect(own.status).toBe(201);
+    expect(own.json.id).toBeGreaterThanOrEqual(1_000_000_000);
+    // …and Autotask makes one with the same number, title and client (an email read in both places)
+    extraTickets = [{ id: 9003, ticketNumber: own.json.number, title: "Doublon courriel", description: "", status: 1, priority: 2, queueID: 29683, companyID: companyId, contactID: null, assignedResourceID: null, dueDateTime: "2026-12-01T17:00:00Z", createDate: new Date().toISOString(), lastActivityDate: new Date().toISOString(), source: 4 }];
+    // 4. expenses: an item approved in the portal after the first copy, and one typed by hand that Autotask also has
+    const [techRow] = await db().select().from(schema.users).where(eq(schema.users.email, "tech@akab.local"));
+    await db().update(schema.expenses).set({ status: "approved", comment: "Vérifié ici", updatedAt: new Date() }).where(eq(schema.expenses.autotaskId, 5001));
+    const [gone] = await db().select().from(schema.expenses).where(eq(schema.expenses.autotaskId, 5004));
+    await db().delete(schema.expenses).where(eq(schema.expenses.autotaskId, 5004));
+    await db().insert(schema.expenses).values({ userId: techRow.id, reportId: gone.reportId, date: gone.date, typeId: gone.typeId, description: "Déplacement (saisi à la main)", amountCents: gone.amountCents });
+
+    const r = await results();
+    // tickets: 9003 comes in (its number gets a letter: the number is the portal's), 9001 stays as edited here, 9002 stays deleted
+    expect(r.tickets).toMatchObject({ state: "done", counts: { tickets: 1, keptPortal: 1, skippedDeleted: 1, renumbered: 1, possibleDuplicates: 1 } });
+    expect(r.tickets.lists.possibleDuplicates).toEqual([`${own.json.number}-A ≈ ${own.json.number}`]);
+    const tickets = await db().select().from(schema.tickets);
+    expect(tickets.map((x) => x.id).sort((a, b) => a - b)).toEqual([9001, 9003, own.json.id]);
+    expect(tickets.find((x) => x.id === 9001)!.priority).toBe("1");
+    expect(tickets.find((x) => x.id === 9003)!.number).toBe(`${own.json.number}-A`);
+    expect(tickets.find((x) => x.id === own.json.id)!.number).toBe(own.json.number);
+    expect(await db().select().from(schema.deletedTickets).where(eq(schema.deletedTickets.ticketId, 9002))).toMatchObject([{ ticketId: 9002, number: "T20261012.0002" }]);
+    // expenses: the item approved here stays so; the look-alike is reported and the item still comes in
+    expect(r.expenses).toMatchObject({ state: "done", counts: { keptPortal: 1, possibleDuplicates: 1 } });
+    expect(r.expenses.lists.possibleDuplicates[0]).toContain("2026-10-15");
+    const [kept] = await db().select().from(schema.expenses).where(eq(schema.expenses.autotaskId, 5001));
+    expect(kept).toMatchObject({ status: "approved", comment: "Vérifié ici" });
+    expect(await db().select().from(schema.expenses).where(eq(schema.expenses.autotaskId, 5004))).toHaveLength(1);
+
+    // once more: the same, nothing doubled, nothing more renumbered
+    const before = { tickets: (await db().select().from(schema.tickets)).length, expenses: (await db().select().from(schema.expenses)).length, notes: (await db().select().from(schema.ticketNotes)).length };
+    const again = await results();
+    expect(again.tickets.counts).toMatchObject({ skippedDeleted: 1, keptPortal: 1 });
+    expect(again.tickets.counts.renumbered ?? 0).toBe(0);
+    expect({ tickets: (await db().select().from(schema.tickets)).length, expenses: (await db().select().from(schema.expenses)).length, notes: (await db().select().from(schema.ticketNotes)).length }).toEqual(before);
+
+    // a ticket asked for by its number comes back on purpose, the deleted mark removed
+    const back = await admin.post("/api/admin/ticket-setup/local/import", { numbers: ["T20261012.0002"] });
+    expect(back.json).toMatchObject({ imported: 1, missing: [], skippedDeleted: 0 });
+    expect((await db().select().from(schema.tickets).where(eq(schema.tickets.id, 9002))).length).toBe(1);
+    expect(await db().select().from(schema.deletedTickets).where(eq(schema.deletedTickets.ticketId, 9002))).toHaveLength(0);
+    extraTickets = [];
   });
 });

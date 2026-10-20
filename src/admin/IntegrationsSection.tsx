@@ -402,7 +402,7 @@ function TestBanner({ r }: { r: TestResult }) {
 // ── Technicians ↔ Autotask users ───────────────────────────────────────────────
 // ── The last sync, before the connection is closed ──
 type FinalKey = "tickets" | "expenses" | "timesheets";
-type FinalPart = { state: "pending" | "running" | "done" | "failed" | "skipped"; counts?: Record<string, number>; note?: string; error?: string };
+type FinalPart = { state: "pending" | "running" | "done" | "failed" | "skipped"; counts?: Record<string, number>; lists?: Record<string, string[]>; note?: string; error?: string };
 type FinalInfo = {
   linked: boolean;
   state: null | {
@@ -451,10 +451,17 @@ function AutotaskFinalSync() {
     if (p.state === "failed") return t("integrations.finalSync.failed", { error: p.error ?? "" });
     if (p.state === "skipped") return t("integrations.finalSync.skipped");
     const c = p.counts ?? {};
-    if (k === "tickets") return t("integrations.finalSync.ticketsDone", { count: c.tickets ?? 0 }) + (p.note === "switched" ? ` · ${t("integrations.finalSync.switched")}` : "");
+    // what was left alone, so nothing is a surprise
+    const left = [
+      c.skippedDeleted ? t("integrations.finalSync.skippedDeleted", { count: c.skippedDeleted }) : "",
+      c.keptPortal ? t("integrations.finalSync.keptPortal", { count: c.keptPortal }) : "",
+      c.renumbered ? t("integrations.finalSync.renumbered", { count: c.renumbered }) : "",
+      c.possibleDuplicates ? t("integrations.finalSync.possible", { count: c.possibleDuplicates }) : "",
+    ];
+    if (k === "tickets") return [t("integrations.finalSync.ticketsDone", { count: c.tickets ?? 0 }) + (p.note === "switched" ? ` · ${t("integrations.finalSync.switched")}` : ""), ...left].filter(Boolean).join(" · ");
     if (k === "expenses") {
       const status = (["draft", "submitted", "approved", "rejected", "paid"] as const).filter((s) => c[`status_${s}`]).map((s) => `${c[`status_${s}`]} ${t(`integrations.finalSync.status.${s}`)}`).join(", ");
-      return [t("integrations.finalSync.expensesDone", { reports: c.reports ?? 0, items: c.items ?? 0 }), status, c.noAccount ? t("integrations.finalSync.noAccount", { count: c.noAccount }) : ""].filter(Boolean).join(" · ");
+      return [t("integrations.finalSync.expensesDone", { reports: c.reports ?? 0, items: c.items ?? 0 }), status, c.noAccount ? t("integrations.finalSync.noAccount", { count: c.noAccount }) : "", left[1], left[3]].filter(Boolean).join(" · ");
     }
     return t("integrations.finalSync.timesheetsDone", { entries: c.entries ?? 0, weeks: c.weeks ?? 0 });
   };
@@ -510,6 +517,16 @@ function AutotaskFinalSync() {
                     <span className="block font-medium">{t(`integrations.finalSync.part.${k}`)}</span>
                     <span className={cn("block text-xs", p.state === "failed" ? "text-destructive" : "text-muted-foreground")}>{summary(k, p)}</span>
                     {k === "timesheets" && p.state === "done" && p.note && <span className="mt-1 block text-[11px] text-muted-foreground">{t("integrations.finalSync.timesheetNote")}</span>}
+                    {p.lists?.possibleDuplicates?.length ? (
+                      <span className="mt-2 block rounded-lg border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-[11px] text-amber-100">
+                        <span className="block font-medium">{t("integrations.finalSync.checkTitle")}</span>
+                        {p.lists.possibleDuplicates.map((x) => (
+                          <span key={x} className="block font-mono">
+                            {x}
+                          </span>
+                        ))}
+                      </span>
+                    ) : null}
                   </span>
                 </li>
               );

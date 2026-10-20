@@ -1,4 +1,4 @@
-import { and, asc, desc, eq, gte, ilike, inArray, or, sql, type SQL } from "drizzle-orm";
+import { and, asc, desc, eq, gte, ilike, inArray, ne, or, sql, type SQL } from "drizzle-orm";
 import { db, schema } from "../db/index.ts";
 import type { AuthContext } from "./auth.ts";
 import { audit } from "./audit.ts";
@@ -121,36 +121,83 @@ async function runImport(actorId: string, started: string, sinceOverride?: strin
  * is the only way anything about tickets comes from Autotask once the portal
  * owns them.
  */
-export async function importFromSource(scope: Pick<ExportScope, "numbers" | "since">, actorId: string): Promise<{ imported: number; missing: string[] }> {
+export type ImportResult = { imported: number; missing: string[]; skippedDeleted: number; keptPortal: number; renumbered: number; possible: string[] };
+export async function importFromSource(scope: Pick<ExportScope, "numbers" | "since">, actorId: string): Promise<ImportResult> {
   if (!(await ticketsLocal())) throw new SourceError("not_local");
   if (!(await autotaskLinked())) throw new SourceError("not_linked");
   if (!scope.numbers?.length && !scope.since) throw new SourceError("invalid_value");
-  let imported = 0;
+  const total: Omit<StoreStats, "savedTickets"> = { saved: 0, skippedDeleted: 0, keptPortal: 0, renumbered: 0 };
+  const saved: NTicket[] = [];
   const found = new Set<string>();
   let after = 0;
+  // asked for by number: a ticket deleted in the portal comes back (on purpose); by period, never
+  const restore = Boolean(scope.numbers?.length);
   for (;;) {
     const batch = await exportTickets(after, { ...scope, size: 100 });
     if (!batch.length) break;
-    await storeBatch(batch);
+    const s = await storeBatch(batch, { restore });
+    total.saved += s.saved;
+    total.skippedDeleted += s.skippedDeleted;
+    total.keptPortal += s.keptPortal;
+    total.renumbered += s.renumbered;
+    saved.push(...s.savedTickets);
     for (const x of batch) found.add(x.t.number.toUpperCase());
-    imported += batch.length;
     after = batch[batch.length - 1].t.id;
   }
-  await audit(actorId, "tickets.imported", null, { imported, numbers: scope.numbers ?? null, since: scope.since ?? null });
-  return { imported, missing: (scope.numbers ?? []).filter((n) => !found.has(n.toUpperCase())) };
+  const possible = await lookAlikes(saved);
+  await audit(actorId, "tickets.imported", null, { imported: total.saved, skippedDeleted: total.skippedDeleted, keptPortal: total.keptPortal, renumbered: total.renumbered, numbers: scope.numbers ?? null, since: scope.since ?? null });
+  return { imported: total.saved, missing: (scope.numbers ?? []).filter((n) => !found.has(n.toUpperCase())), skippedDeleted: total.skippedDeleted, keptPortal: total.keptPortal, renumbered: total.renumbered, possible };
 }
 
 const minutesOf = (h: number) => Math.round(h * 60);
 const cents = (v: number | null | undefined) => (v == null ? null : Math.round(v * 100));
 
-/** One batch copied (again, if it was already): same ids, nothing doubled */
-async function storeBatch(batch: ExportTicket[]) {
+/**
+ * Tickets made in the portal get ids from here on, far above Autotask's: an
+ * Autotask ticket can never take the id of one of ours (nor the other way round).
+ */
+export const NATIVE_ID_START = 1_000_000_000;
+/** A ticket changed in the portal after this long past its last copy is "edited in the portal" */
+const EDIT_TOLERANCE_MS = 5_000;
+
+export type StoreStats = { saved: number; skippedDeleted: number; keptPortal: number; renumbered: number; savedTickets: NTicket[] };
+
+/**
+ * One batch copied (again, if it was already): same ids, nothing doubled.
+ * - a ticket deleted in the portal stays deleted (`restore`: on purpose, by its number);
+ * - a ticket edited in the portal since its last copy keeps the portal's fields
+ *   (Autotask's notes, time, charges and files are still added, by their ids);
+ * - a number already used by another ticket (a day's numbering made in both
+ *   places) is kept with a letter: T20261020.0529-A.
+ */
+async function storeBatch(batch: ExportTicket[], opts: { restore?: boolean } = {}): Promise<StoreStats> {
+  const stats: StoreStats = { saved: 0, skippedDeleted: 0, keptPortal: 0, renumbered: 0, savedTickets: [] };
+  const deleted = new Set(
+    (await db().select({ id: schema.deletedTickets.ticketId }).from(schema.deletedTickets).where(inArray(schema.deletedTickets.ticketId, batch.map((x) => x.t.id)))).map((r) => r.id),
+  );
   await db().transaction(async (tx) => {
     for (const x of batch) {
       const t = x.t;
+      if (deleted.has(t.id)) {
+        if (!opts.restore) {
+          stats.skippedDeleted++;
+          continue;
+        }
+        await tx.delete(schema.deletedTickets).where(eq(schema.deletedTickets.ticketId, t.id));
+      }
+      const [cur] = await tx.select().from(schema.tickets).where(eq(schema.tickets.id, t.id));
+      const edited = Boolean(cur?.autotaskSyncedAt && cur.updatedAt.getTime() > cur.autotaskSyncedAt.getTime() + EDIT_TOLERANCE_MS);
+      let number = t.number;
+      for (const letter of "ABCDEFGHIJKLMNOPQRSTUVWXYZ") {
+        const [clash] = await tx.select({ id: schema.tickets.id }).from(schema.tickets).where(and(eq(schema.tickets.number, number), ne(schema.tickets.id, t.id)));
+        if (!clash) break;
+        number = `${t.number}-${letter}`;
+      }
+      // counted when the number it is kept under is new (not again at every pass)
+      if (number !== t.number && !edited && cur?.number !== number) stats.renumbered++;
       const values = {
         id: t.id,
-        number: t.number,
+        number,
         title: t.title,
         description: t.description,
         companyId: t.company.id,
@@ -170,8 +217,14 @@ async function storeBatch(batch: ExportTicket[]) {
         createdAt: new Date(t.createdAt),
         updatedAt: new Date(t.updatedAt || t.createdAt),
         completedAt: x.completedAt ? new Date(x.completedAt) : null,
+        autotaskSyncedAt: new Date(),
       };
-      await tx.insert(schema.tickets).values(values).onConflictDoUpdate({ target: schema.tickets.id, set: values });
+      if (edited) stats.keptPortal++;
+      else {
+        await tx.insert(schema.tickets).values(values).onConflictDoUpdate({ target: schema.tickets.id, set: values });
+        stats.saved++;
+        stats.savedTickets.push({ ...t, number });
+      }
       for (const n of x.notes) {
         const v = { ticketId: t.id, externalId: n.externalId, author: n.author, userId: n.userId, text: n.text, internal: n.internal, system: n.system, createdAt: new Date(n.at) };
         await tx.insert(schema.ticketNotes).values(v).onConflictDoUpdate({ target: schema.ticketNotes.externalId, set: v });
@@ -221,6 +274,24 @@ async function storeBatch(batch: ExportTicket[]) {
       }
     }
   });
+  return stats;
+}
+
+/** Imported tickets that look like one made in the portal (same client and title, within two hours): reported, never skipped */
+async function lookAlikes(imported: NTicket[]): Promise<string[]> {
+  if (!imported.length) return [];
+  const from = new Date(Math.min(...imported.map((t) => Date.parse(t.createdAt))) - 3 * 3_600_000);
+  const own = await db()
+    .select({ number: schema.tickets.number, companyId: schema.tickets.companyId, title: schema.tickets.title, createdAt: schema.tickets.createdAt })
+    .from(schema.tickets)
+    .where(and(gte(schema.tickets.id, NATIVE_ID_START), gte(schema.tickets.createdAt, from)));
+  const norm = (s: string) => s.trim().toLowerCase().replace(/\s+/g, " ");
+  const out: string[] = [];
+  for (const t of imported) {
+    const hit = own.find((o) => o.companyId === t.company.id && norm(o.title) === norm(t.title) && Math.abs(o.createdAt.getTime() - Date.parse(t.createdAt)) <= 2 * 3_600_000);
+    if (hit) out.push(`${t.number} ≈ ${hit.number}`);
+  }
+  return out.slice(0, 30);
 }
 
 // ── The portal's tickets as a ticket source ──
@@ -292,7 +363,7 @@ async function nextIdentity(): Promise<{ id: number; number: string }> {
     .from(schema.tickets)
     .where(ilike(schema.tickets.number, `T${day}.%`));
   const n = Math.max(0, ...same.map((x) => Number(x.number.split(".")[1]) || 0)) + 1;
-  return { id: Math.max(max + 1, 100_000), number: `T${day}.${String(n).padStart(4, "0")}` };
+  return { id: Math.max(max + 1, NATIVE_ID_START), number: `T${day}.${String(n).padStart(4, "0")}` };
 }
 
 const cachedSources = new WeakMap<TicketSource, TicketSource>();
@@ -662,6 +733,8 @@ export async function deleteTicket(id: number, a: AuthContext): Promise<{ number
   for (const b of blocks) await unsyncBlock(b).catch(() => undefined);
   const workIds = [...times.map((x) => x.externalId ?? `ptime:${x.id}`), ...charges.map((x) => x.externalId ?? `pcharge:${x.id}`)];
   await db().transaction(async (tx) => {
+    // remembered: an import from Autotask never brings it back
+    await tx.insert(schema.deletedTickets).values({ ticketId: id, number: r.number, title: r.title, deletedBy: a.realUser.id }).onConflictDoNothing();
     if (workIds.length) await tx.delete(schema.billingItems).where(and(inArray(schema.billingItems.sourceId, workIds), inArray(schema.billingItems.status, ["pending", "approved", "excluded"])));
     await tx.delete(schema.ticketTimers).where(eq(schema.ticketTimers.ticketId, id));
     await tx.delete(schema.ticketPins).where(eq(schema.ticketPins.ticketId, id));

@@ -1,4 +1,4 @@
-import { and, desc, eq, inArray, isNotNull } from "drizzle-orm";
+import { and, desc, eq, gte, inArray, isNotNull, isNull } from "drizzle-orm";
 import { db, schema } from "../db/index.ts";
 import { audit } from "./audit.ts";
 import { autotask, AutotaskError, listResources } from "./autotask.ts";
@@ -15,7 +15,7 @@ import { importFromSource, startTicketImport, ticketImportSettled, ticketMode, t
  */
 export type PartKey = "tickets" | "expenses" | "timesheets";
 export const PARTS: PartKey[] = ["tickets", "expenses", "timesheets"];
-export type PartState = { state: "pending" | "running" | "done" | "failed" | "skipped"; counts?: Record<string, number>; note?: string; error?: string };
+export type PartState = { state: "pending" | "running" | "done" | "failed" | "skipped"; counts?: Record<string, number>; lists?: Record<string, string[]>; note?: string; error?: string };
 export type FinalSyncState = {
   since: string;
   parts: PartKey[];
@@ -73,7 +73,7 @@ export async function startFinalSync(p: { since: string; parts?: PartKey[] }, ac
 /** For the tests: once the pass started is over */
 export const finalSyncSettled = () => live ?? Promise.resolve();
 
-const FUNCTIONS: Record<PartKey, (since: string, actorId: string) => Promise<{ counts?: Record<string, number>; note?: string; skipped?: boolean }>> = {
+const FUNCTIONS: Record<PartKey, (since: string, actorId: string) => Promise<{ counts?: Record<string, number>; lists?: Record<string, string[]>; note?: string; skipped?: boolean }>> = {
   tickets: syncTickets,
   expenses: syncExpenses,
   timesheets: exportTimesheets,
@@ -85,7 +85,7 @@ async function run(state: FinalSyncState, actorId: string) {
     await save(state, actorId);
     try {
       const r = await FUNCTIONS[key](state.since, actorId);
-      state.results[key] = r.skipped ? { state: "skipped", note: r.note } : { state: "done", counts: r.counts, note: r.note };
+      state.results[key] = r.skipped ? { state: "skipped", note: r.note } : { state: "done", counts: r.counts, lists: r.lists, note: r.note };
     } catch (e) {
       const text = e instanceof AutotaskError ? (e.detail ?? e.code) : e instanceof Error ? e.message : String(e);
       state.results[key] = { state: "failed", error: text.slice(0, 300) };
@@ -100,11 +100,15 @@ async function run(state: FinalSyncState, actorId: string) {
 }
 
 // ── Tickets ──
-async function syncTickets(since: string, actorId: string) {
+type PartResult = { counts?: Record<string, number>; lists?: Record<string, string[]>; note?: string; skipped?: boolean };
+async function syncTickets(since: string, actorId: string): Promise<PartResult> {
   if (!(await autotaskLinked())) return { skipped: true, note: "not_linked" };
   if (await ticketsLocal()) {
     const r = await importFromSource({ since }, actorId);
-    return { counts: { tickets: r.imported } };
+    return {
+      counts: { tickets: r.imported, skippedDeleted: r.skippedDeleted, keptPortal: r.keptPortal, renumbered: r.renumbered, possibleDuplicates: r.possible.length },
+      lists: r.possible.length ? { possibleDuplicates: r.possible } : undefined,
+    };
   }
   // not in the portal yet: the move is made with this date (one way, as in Admin › Billets)
   await startTicketImport(actorId, since);
@@ -144,7 +148,7 @@ type AtItem = {
   miles?: number | null;
 };
 
-async function syncExpenses(since: string, _actorId: string) {
+async function syncExpenses(since: string, _actorId: string): Promise<PartResult> {
   if (!(await autotaskLinked())) return { skipped: true, note: "not_linked" };
   const at = await autotask();
   const [reportFields, itemFields, statusLabels, categoryLabels] = await Promise.all([
@@ -183,7 +187,21 @@ async function syncExpenses(since: string, _actorId: string) {
   let importedReports = 0;
   let importedItems = 0;
   let noAccount = 0;
+  let keptPortal = 0;
   const byStatus: Record<string, number> = {};
+  // changed in the portal since the last copy (approved, paid, edited…): the portal's version stays
+  const EDIT_MS = 5_000;
+  const edited = (row: { updatedAt: Date; autotaskSyncedAt: Date | null } | undefined) => Boolean(row?.autotaskSyncedAt && row.updatedAt.getTime() > row.autotaskSyncedAt.getTime() + EDIT_MS);
+  const [knownReports, knownItems, ownItems] = await Promise.all([
+    db().select({ id: schema.expenseReports.id, at: schema.expenseReports.autotaskId, updatedAt: schema.expenseReports.updatedAt, autotaskSyncedAt: schema.expenseReports.autotaskSyncedAt }).from(schema.expenseReports).where(isNotNull(schema.expenseReports.autotaskId)),
+    db().select({ at: schema.expenses.autotaskId, updatedAt: schema.expenses.updatedAt, autotaskSyncedAt: schema.expenses.autotaskSyncedAt }).from(schema.expenses).where(isNotNull(schema.expenses.autotaskId)),
+    // what technicians typed in the portal themselves: a look-alike is reported, never skipped
+    db().select({ userId: schema.expenses.userId, date: schema.expenses.date, amount: schema.expenses.amountCents }).from(schema.expenses).where(and(isNull(schema.expenses.autotaskId), gte(schema.expenses.date, since))),
+  ]);
+  const reportRow = new Map(knownReports.map((r) => [r.at!, r]));
+  const itemRow = new Map(knownItems.map((r) => [r.at!, r]));
+  const own = new Set(ownItems.map((x) => `${x.userId}|${x.date}|${Number(x.amount)}`));
+  const possible: string[] = [];
   for (const r of reports) {
     const userId = r.submitterID ? userOf.get(r.submitterID) : undefined;
     if (!userId) {
@@ -203,13 +221,17 @@ async function syncExpenses(since: string, _actorId: string) {
     const typeIds = new Map<number | null | undefined, string>();
     for (const it of mine) if (!typeIds.has(it.expenseCategory)) typeIds.set(it.expenseCategory, await typeFor(it.expenseCategory));
     await db().transaction(async (tx) => {
-      const base = { userId, title: (r.name ?? "").trim() || `Autotask #${r.id}`, periodStart, periodEnd, submittedAt, autotaskId: r.id, updatedAt: new Date() };
-      const [report] = await tx
-        .insert(schema.expenseReports)
-        .values(base)
-        .onConflictDoUpdate({ target: schema.expenseReports.autotaskId, set: base })
-        .returning({ id: schema.expenseReports.id });
+      const now = new Date();
+      const base = { userId, title: (r.name ?? "").trim() || `Autotask #${r.id}`, periodStart, periodEnd, submittedAt, autotaskId: r.id, autotaskSyncedAt: now, updatedAt: now };
+      const known = reportRow.get(r.id);
+      const [report] = edited(known)
+        ? [{ id: known!.id }]
+        : await tx.insert(schema.expenseReports).values(base).onConflictDoUpdate({ target: schema.expenseReports.autotaskId, set: base }).returning({ id: schema.expenseReports.id });
       for (const it of mine) {
+        if (edited(itemRow.get(it.id))) {
+          keptPortal++;
+          continue;
+        }
         const amount = cents(it.expenseCurrencyExpenseAmount ?? it.internalCurrencyExpenseAmount);
         const miles = it.miles && it.miles > 0 ? it.miles : null;
         const values = {
@@ -230,8 +252,11 @@ async function syncExpenses(since: string, _actorId: string) {
           comment: kind === "rejected" ? (r.rejectionReason ?? null) : null,
           paidAt: kind === "paid" ? (decidedAt ?? submittedAt) : null,
           autotaskId: it.id,
-          updatedAt: new Date(),
+          autotaskSyncedAt: now,
+          updatedAt: now,
         };
+        // new here, and the same day, amount and person as something typed in the portal: reported
+        if (!itemRow.has(it.id) && own.has(`${userId}|${values.date}|${amount}`) && possible.length < 30) possible.push(`${values.date} · ${(amount / 100).toFixed(2)} $ · ${values.description || "—"}`);
         await tx.insert(schema.expenses).values(values).onConflictDoUpdate({ target: schema.expenses.autotaskId, set: values });
         importedItems++;
       }
@@ -239,7 +264,10 @@ async function syncExpenses(since: string, _actorId: string) {
     importedReports++;
     byStatus[kind] = (byStatus[kind] ?? 0) + 1;
   }
-  return { counts: { reports: importedReports, items: importedItems, noAccount, ...Object.fromEntries(Object.entries(byStatus).map(([k, v]) => [`status_${k}`, v])) } };
+  return {
+    counts: { reports: importedReports, items: importedItems, noAccount, keptPortal, possibleDuplicates: possible.length, ...Object.fromEntries(Object.entries(byStatus).map(([k, v]) => [`status_${k}`, v])) },
+    lists: possible.length ? { possibleDuplicates: possible } : undefined,
+  };
 }
 /** A category label without the "(Mileage)"-style leftovers the picklist may carry */
 const categoryClean = (s?: string) => s?.replace(/\s+/g, " ").trim() || null;

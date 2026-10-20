@@ -556,9 +556,23 @@ export const tickets = pgTable(
     updatedAt: updated(),
     /** When it got a "complete" status (null while open) */
     completedAt: timestamp("completed_at", { withTimezone: true }),
+    /** When it was last written from Autotask (null: made in the portal). Edited in the portal since: an import keeps the portal's version. */
+    autotaskSyncedAt: timestamp("autotask_synced_at", { withTimezone: true }),
   },
   (t) => [uniqueIndex("tickets_number_idx").on(t.number), index("tickets_company_idx").on(t.companyId), index("tickets_completed_idx").on(t.completedAt), index("tickets_created_idx").on(t.createdAt)],
 );
+
+/**
+ * Tickets deleted in the portal: an import from Autotask never brings them
+ * back (unless a ticket is imported by its number on purpose).
+ */
+export const deletedTickets = pgTable("deleted_tickets", {
+  ticketId: bigint("ticket_id", { mode: "number" }).primaryKey(),
+  number: text("number").notNull(),
+  title: text("title").notNull().default(""),
+  deletedBy: uuid("deleted_by").references(() => users.id, { onDelete: "set null" }),
+  deletedAt: timestamp("deleted_at", { withTimezone: true }).notNull().defaultNow(),
+});
 
 /** Replies and internal notes of a portal ticket */
 export const ticketNotes = pgTable(
@@ -1673,6 +1687,8 @@ export const expenseReports = pgTable(
     submittedAt: timestamp("submitted_at", { withTimezone: true }),
     /** The Autotask expense report it was copied from (the final sync): a second pass updates it */
     autotaskId: bigint("autotask_id", { mode: "number" }),
+    /** When it was last copied; changed in the portal since: a second pass keeps the portal's version */
+    autotaskSyncedAt: timestamp("autotask_synced_at", { withTimezone: true }),
     createdAt: created(),
     updatedAt: updated(),
   },
@@ -1718,6 +1734,7 @@ export const expenses = pgTable(
     quickbooksError: text("quickbooks_error"),
     /** The Autotask expense item it was copied from (the final sync) */
     autotaskId: bigint("autotask_id", { mode: "number" }),
+    autotaskSyncedAt: timestamp("autotask_synced_at", { withTimezone: true }),
     createdAt: created(),
     updatedAt: updated(),
   },

@@ -484,6 +484,13 @@
       "when": 1792504837255,
       "tag": "0068_autotask_final_sync",
       "breakpoints": true
+    },
+    {
+      "idx": 69,
+      "version": "7",
+      "when": 1792506581769,
+      "tag": "0069_final_sync_safety",
+      "breakpoints": true
     }
   ]
 }
