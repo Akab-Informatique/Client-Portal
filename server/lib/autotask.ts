@@ -170,7 +170,7 @@ export function createClient(creds: Credentials, zone: Zone, opts: { fallbackToA
         console.warn(`[autotask] ${method} ${url.pathname}: refused in resource ${o.impersonate}'s name, saved as the API user`);
         return call<T>(method, path, o.asApiUser ? o.asApiUser(body) : body);
       }
-      throw new AutotaskError("api", res.status, detail);
+      throw new AutotaskError("api", res.status, detail || `HTTP ${res.status} ${method} ${url.pathname}`);
     }
     return (await res.json()) as T;
   }
