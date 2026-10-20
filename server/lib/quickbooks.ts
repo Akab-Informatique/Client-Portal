@@ -437,9 +437,9 @@ async function pushInvoiceNow(invoiceId: string): Promise<{ quickbooksId: string
 type RawPayment = { Id: string; TxnDate: string; PaymentRefNum?: string; PaymentMethodRef?: { name?: string }; PrivateNote?: string; Line?: { Amount: number; LinkedTxn?: { TxnId: string; TxnType: string }[] }[]; MetaData?: { LastUpdatedTime?: string } };
 
 /** Payments made or changed in QuickBooks since the last time, put on their invoices. */
-export async function pullPayments(actorId: string | null) {
+export async function pullPayments(actorId: string | null, from?: string) {
   const s = await quickbooksSettings();
-  const since = s.paymentsPulledAt ?? new Date(Date.now() - 365 * 86_400_000).toISOString();
+  const since = from ?? s.paymentsPulledAt ?? new Date(Date.now() - 365 * 86_400_000).toISOString();
   const started = new Date().toISOString();
   const rows = await query<RawPayment>("Payment", `MetaData.LastUpdatedTime >= '${since}'`);
   const d = db();
@@ -477,6 +477,146 @@ export async function pullPayments(actorId: string | null) {
   }
   await saveQuickBooksSettings(actorId, { paymentsPulledAt: started });
   return { added, updated, at: started };
+}
+
+// ── invoices: QuickBooks → portal ──
+type RawInvoice = {
+  Id: string;
+  DocNumber?: string;
+  TxnDate: string;
+  DueDate?: string;
+  TotalAmt?: number;
+  Balance?: number;
+  PrivateNote?: string;
+  CustomerRef?: { value: string };
+  TxnTaxDetail?: { TotalTax?: number };
+  Line?: { Amount?: number; Description?: string; DetailType?: string; SalesItemLineDetail?: { Qty?: number; UnitPrice?: number; TaxCodeRef?: { value?: string }; ItemRef?: { name?: string } } }[];
+  MetaData?: { LastUpdatedTime?: string };
+};
+const cents0 = (v: number | undefined) => Math.round((v ?? 0) * 100);
+/** QuickBooks keeps a voided invoice with its amount at zero and "Voided" in its note. */
+const isVoided = (r: RawInvoice) => /^voided/i.test(r.PrivateNote ?? "") || (cents0(r.TotalAmt) === 0 && cents0(r.Balance) === 0 && (r.Line ?? []).some((l) => l.DetailType === "SalesItemLineDetail" && (l.Description ?? "").toLowerCase().includes("voided")));
+const numberOf = (doc: string | undefined) => {
+  const n = Number((doc ?? "").replace(/\D/g, ""));
+  return (doc ?? "").replace(/\D/g, "") !== "" && Number.isFinite(n) ? n : null;
+};
+
+/**
+ * The invoices of QuickBooks from the chosen number on (10000 by default), with their status (balance, paid,
+ * voided), for the clients mapped to a customer. One invoice = one row, found by its QuickBooks id (or, for one
+ * the portal sent, by its number). What QuickBooks says is paid and not yet seen as a payment is recorded as a
+ * payment of source quickbooks (`bal:<id>`), so the portal's status is the same as QuickBooks'.
+ */
+export async function pullInvoices(actorId: string | null) {
+  const s = await quickbooksSettings();
+  const rows = (await query<RawInvoice>("Invoice")).filter((r) => (numberOf(r.DocNumber) ?? -1) >= s.invoicesFromNumber);
+  const d = db();
+  const clients = new Map((await d.select({ id: schema.clients.id, qb: schema.clients.quickbooksId }).from(schema.clients).where(isNotNull(schema.clients.quickbooksId))).map((x) => [x.qb!, x.id]));
+  const existing = await d.select().from(schema.clientInvoices);
+  const byQb = new Map(existing.filter((v) => v.quickbooksId).map((v) => [v.quickbooksId!, v]));
+  const byNumber = new Map(existing.filter((v) => !v.quickbooksId).map((v) => [`${v.clientId}|${v.number}`, v]));
+  const now = new Date();
+  let added = 0;
+  let updated = 0;
+  let unmapped = 0;
+  for (const r of rows) {
+    const clientId = clients.get(r.CustomerRef?.value ?? "");
+    if (!clientId) {
+      unmapped++;
+      continue;
+    }
+    const voided = isVoided(r);
+    const total = cents0(r.TotalAmt);
+    const balance = voided ? 0 : cents0(r.Balance);
+    const number = r.DocNumber ?? r.Id;
+    const updatedOn = (r.MetaData?.LastUpdatedTime ?? now.toISOString()).slice(0, 10);
+    let hit = byQb.get(r.Id) ?? byNumber.get(`${clientId}|${number}`);
+    let id: string;
+    if (!hit) {
+      const [row] = await d
+        .insert(schema.clientInvoices)
+        .values({
+          clientId,
+          number,
+          issuedOn: r.TxnDate,
+          dueOn: r.DueDate ?? null,
+          totalCents: total,
+          taxCents: cents0(r.TxnTaxDetail?.TotalTax),
+          paidOn: !voided && total > 0 && balance === 0 ? updatedOn : null,
+          voided,
+          source: "quickbooks",
+          quickbooksId: r.Id,
+          quickbooksSyncedAt: now,
+          syncedAt: now,
+        })
+        .onConflictDoNothing()
+        .returning({ id: schema.clientInvoices.id });
+      if (!row) continue;
+      id = row.id;
+      added++;
+    } else {
+      id = hit.id;
+      const own = hit.source === "portal";
+      // an invoice the portal made keeps its own lines and totals; the rest follows QuickBooks
+      await d
+        .update(schema.clientInvoices)
+        .set({
+          quickbooksId: r.Id,
+          quickbooksSyncedAt: now,
+          quickbooksError: null,
+          voided,
+          paidOn: !voided && total > 0 && balance === 0 ? (hit.paidOn ?? updatedOn) : null,
+          ...(own ? {} : { number, issuedOn: r.TxnDate, dueOn: r.DueDate ?? null, totalCents: total, taxCents: cents0(r.TxnTaxDetail?.TotalTax) }),
+          updatedAt: now,
+        })
+        .where(eq(schema.clientInvoices.id, id));
+      updated++;
+    }
+    // the lines of an invoice that comes from QuickBooks
+    if (!hit || hit.source !== "portal") {
+      const lines = (r.Line ?? []).filter((l) => l.DetailType === "SalesItemLineDetail");
+      await d.delete(schema.invoiceLines).where(eq(schema.invoiceLines.invoiceId, id));
+      if (lines.length) {
+        await d.insert(schema.invoiceLines).values(
+          lines.map((l, position) => {
+            const qty = l.SalesItemLineDetail?.Qty ?? 1;
+            return {
+              invoiceId: id,
+              kind: "charge",
+              description: (l.Description || l.SalesItemLineDetail?.ItemRef?.name || "—").slice(0, 2000),
+              quantityX100: Math.round(qty * 100),
+              unitPriceCents: cents0(l.SalesItemLineDetail?.UnitPrice),
+              amountCents: cents0(l.Amount),
+              taxable: Boolean(l.SalesItemLineDetail?.TaxCodeRef?.value && l.SalesItemLineDetail.TaxCodeRef.value !== "NON"),
+              position,
+            };
+          }),
+        );
+      }
+    }
+    // the status: what QuickBooks says is paid, minus the payments already known, as one adjusting payment
+    const synthetic = `bal:${r.Id}`;
+    const payments = await d.select().from(schema.invoicePayments).where(eq(schema.invoicePayments.invoiceId, id));
+    const others = payments.filter((p) => p.externalId !== synthetic).reduce((x, p) => x + p.amountCents, 0);
+    const missing = voided ? 0 : total - balance - others;
+    const mine = payments.find((p) => p.externalId === synthetic);
+    if (missing > 0) {
+      if (!mine) await d.insert(schema.invoicePayments).values({ invoiceId: id, amountCents: missing, paidOn: updatedOn, method: "transfer", note: "QuickBooks", source: "quickbooks", externalId: synthetic });
+      else if (mine.amountCents !== missing) await d.update(schema.invoicePayments).set({ amountCents: missing }).where(eq(schema.invoicePayments.id, mine.id));
+    } else if (mine) {
+      await d.delete(schema.invoicePayments).where(eq(schema.invoicePayments.id, mine.id));
+    }
+  }
+  const result = { at: now.toISOString(), added, updated, unmapped, total: rows.length };
+  await saveQuickBooksSettings(actorId, { imports: { ...s.imports, invoices: result } });
+  return result;
+}
+
+// ── vendors (read-only: the portal's vendors are mapped to them by hand, never synced) ──
+export type QbVendor = { id: string; name: string; email: string | null; phone: string | null };
+export async function quickbooksVendors(): Promise<QbVendor[]> {
+  const rows = await query<{ Id: string; DisplayName: string; PrimaryEmailAddr?: { Address?: string }; PrimaryPhone?: { FreeFormNumber?: string } }>("Vendor", "Active = true");
+  return rows.map((v) => ({ id: v.Id, name: v.DisplayName, email: v.PrimaryEmailAddr?.Address ?? null, phone: v.PrimaryPhone?.FreeFormNumber ?? null })).sort((a, b) => a.name.localeCompare(b.name));
 }
 
 // ── employees (timesheets, expenses) ──
@@ -611,6 +751,7 @@ async function tickNow() {
   const s = await quickbooksSettings();
   if (!s.enabled || !s.refreshToken || !s.realmId) return;
   const warn = (what: string) => (e: unknown) => console.warn(`[quickbooks] ${what}:`, errText(e));
+  if (s.sync.invoicesIn) await pullInvoices(null).catch(warn("invoices in"));
   if (s.sync.payments) await pullPayments(null).catch(warn("payments"));
   const d = db();
   if (s.sync.invoices) {

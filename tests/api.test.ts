@@ -3093,6 +3093,7 @@ describe("client portal access for contacts", () => {
 describe("QuickBooks through its API: customers, chart, items, invoices, payments", () => {
   const sent: { method: string; url: string; body: any }[] = [];
   let payments: any[] = [];
+  let qbInvoices: any[] = [];
   const json = (b: unknown, status = 200) => new Response(JSON.stringify(b), { status, headers: { "content-type": "application/json" } });
   beforeAll(async () => {
     const { saveQuickBooksSettings } = await import("../server/lib/billing.ts");
@@ -3139,7 +3140,8 @@ describe("QuickBooks through its API: customers, chart, items, invoices, payment
           });
         }
         if (url.includes("select * from TaxCode")) return json({ QueryResponse: { TaxCode: [{ Id: "5", Name: "TPS/TVQ QC - 9,975" }, { Id: "6", Name: "Exonéré" }] } });
-        if (url.includes("select * from Invoice")) return json({ QueryResponse: {} });
+        if (url.includes("select * from Invoice")) return json({ QueryResponse: qbInvoices.length ? { Invoice: qbInvoices } : {} });
+        if (url.includes("select * from Vendor")) return json({ QueryResponse: { Vendor: [{ Id: "v1", DisplayName: "Distributeur TI" }, { Id: "v2", DisplayName: "Bureau en gros" }] } });
         if (url.includes("select * from Payment")) return json({ QueryResponse: { Payment: payments } });
         if (url.includes("/customer?") && method === "POST") return json({ Customer: { Id: "61", DisplayName: JSON.parse(String(init.body)).DisplayName } });
         if (url.includes("/invoice/500?")) return json({ Invoice: { Id: "500", SyncToken: "0" } });
@@ -3181,6 +3183,56 @@ describe("QuickBooks through its API: customers, chart, items, invoices, payment
     await admin.put(`/api/billing/quickbooks/mapping/${clin.id}`, { quickbooksId: null });
     expect((await admin.post(`/api/billing/quickbooks/mapping/${clin.id}/create`)).json.error).toBe("quickbooks_customer_exists");
     await admin.put(`/api/billing/quickbooks/mapping/${clin.id}`, { quickbooksId: "58" });
+  });
+
+  it("brings in the QuickBooks invoices from the chosen number with their status; vendors are mapped by hand", async () => {
+    resetRateLimit("login:ip:unknown");
+    const admin = await signIn("admin@akab.local");
+    const tech = await signIn("tech@akab.local");
+    const line = { DetailType: "SalesItemLineDetail", Amount: 500, Description: "Soutien", SalesItemLineDetail: { Qty: 4, UnitPrice: 125, TaxCodeRef: { value: "5" } } };
+    qbInvoices = [
+      { Id: "900", DocNumber: "9999", TxnDate: "2026-08-30", CustomerRef: { value: "59" }, TotalAmt: 100, Balance: 100 },
+      { Id: "901", DocNumber: "30001", TxnDate: "2026-09-02", DueDate: "2026-10-02", CustomerRef: { value: "59" }, TotalAmt: 500, Balance: 0, TxnTaxDetail: { TotalTax: 65 }, MetaData: { LastUpdatedTime: "2026-09-20T10:00:00Z" }, Line: [line] },
+      { Id: "902", DocNumber: "30002", TxnDate: "2026-09-05", CustomerRef: { value: "58" }, TotalAmt: 300, Balance: 200, Line: [line] },
+      { Id: "903", DocNumber: "30003", TxnDate: "2026-09-06", CustomerRef: { value: "58" }, TotalAmt: 0, Balance: 0, PrivateNote: "Voided" },
+      { Id: "904", DocNumber: "30004", TxnDate: "2026-09-07", CustomerRef: { value: "60" }, TotalAmt: 50, Balance: 50 },
+    ];
+    expect((await tech.post("/api/billing/quickbooks/invoices/pull")).status).toBe(403);
+    // below 10000: left out; a customer not mapped to a client: skipped
+    expect((await admin.post("/api/billing/quickbooks/invoices/pull")).json).toMatchObject({ added: 3, updated: 0, unmapped: 1, total: 4 });
+    const list = async () => (await admin.get("/api/crm/invoices?source=quickbooks")).json.items;
+    let invoices = await list();
+    const by = (n: string) => invoices.find((v: any) => v.number === n);
+    expect(invoices.map((v: any) => v.number).sort()).toEqual(["30001", "30002", "30003"]);
+    expect(by("30001")).toMatchObject({ status: "paid", totalCents: 50000, paidCents: 50000, balanceCents: 0, source: "quickbooks", issuedOn: "2026-09-02", dueOn: "2026-10-02" });
+    expect(by("30002")).toMatchObject({ status: "partial", totalCents: 30000, paidCents: 10000, balanceCents: 20000 });
+    expect(by("30003")).toMatchObject({ status: "voided" });
+    // again: nothing doubled; the status follows QuickBooks (the rest was paid)
+    qbInvoices[2] = { ...qbInvoices[2], Balance: 0 };
+    expect((await admin.post("/api/billing/quickbooks/invoices/pull")).json).toMatchObject({ added: 0, updated: 3 });
+    invoices = await list();
+    expect(invoices).toHaveLength(3);
+    expect(by("30002")).toMatchObject({ status: "paid", paidCents: 30000 });
+    expect((await db().select().from(schema.invoiceLines).where(eq(schema.invoiceLines.invoiceId, by("30001").id)))).toHaveLength(1);
+    expect(await db().select().from(schema.invoicePayments).where(eq(schema.invoicePayments.invoiceId, by("30002").id))).toHaveLength(1);
+    // the number it starts from is a setting
+    expect((await admin.put("/api/billing/quickbooks", { invoicesFromNumber: 30002 })).json.invoicesFromNumber).toBe(30002);
+    expect((await admin.post("/api/billing/quickbooks/invoices/pull")).json.total).toBe(3);
+    await admin.put("/api/billing/quickbooks", { invoicesFromNumber: 10000 });
+    qbInvoices = [];
+
+    // vendors: made here, mapped by hand to a QuickBooks vendor, never two on the same one
+    expect((await tech.get("/api/admin/vendors")).status).toBe(403);
+    const v1 = (await admin.post("/api/admin/vendors", { name: "Distributeur TI", email: "ventes@dist.test" })).json;
+    const v2 = (await admin.post("/api/admin/vendors", { name: "Autre fournisseur" })).json;
+    expect((await admin.get("/api/admin/vendors/quickbooks/list")).json.map((x: any) => x.id)).toEqual(["v2", "v1"]);
+    expect((await admin.put(`/api/admin/vendors/${v1.id}/quickbooks`, { quickbooksId: "v1" })).json.quickbooksId).toBe("v1");
+    expect((await admin.put(`/api/admin/vendors/${v2.id}/quickbooks`, { quickbooksId: "v1" })).json.error).toBe("quickbooks_vendor_taken");
+    expect((await admin.put(`/api/admin/vendors/${v1.id}/quickbooks`, { quickbooksId: null })).json.quickbooksId).toBeNull();
+    expect((await admin.patch(`/api/admin/vendors/${v2.id}`, { name: "Renommé" })).json.name).toBe("Renommé");
+    expect((await admin.del(`/api/admin/vendors/${v2.id}`)).status).toBe(200);
+    // nothing was copied from QuickBooks
+    expect((await admin.get("/api/admin/vendors")).json.map((x: any) => x.name)).toEqual(["Distributeur TI"]);
   });
 
   it("syncs the chart of accounts and the categories only as reviewed and accepted", async () => {
@@ -4909,16 +4961,14 @@ describe("un-post: take back an invoice made by the portal", () => {
   });
 });
 
-describe("un-post ready items, erase all contracts", () => {
-  it("approved items go back to pending without any invoice; erasing contracts needs admin.billing and clears what pointed at them", async () => {
+describe("un-post ready items", () => {
+  it("approved items go back to pending without any invoice", async () => {
     resetRateLimit("login:ip:unknown");
     const admin = await signIn("admin@akab.local");
-    const tech = await signIn("tech@akab.local");
     const [c] = await db().select().from(schema.clients).limit(1);
-    const [k] = await db().insert(schema.clientContracts).values({ clientId: c.id, name: "Contrat à effacer", autotaskId: "test-erase-1" }).returning();
     const [it] = await db()
       .insert(schema.billingItems)
-      .values({ clientId: c.id, contractId: k.id, kind: "charge", source: "portal", sourceId: "test:unpost:items", date: "2026-10-11", description: "Prêt à facturer", quantityX100: 100, unitPriceCents: 1000, amountCents: 1000, status: "approved", approvedAt: new Date() })
+      .values({ clientId: c.id, kind: "charge", source: "portal", sourceId: "test:unpost:items", date: "2026-10-11", description: "Prêt à facturer", quantityX100: 100, unitPriceCents: 1000, amountCents: 1000, status: "approved", approvedAt: new Date() })
       .returning();
     // ready to invoice -> back to pending: no invoice, nothing voided
     const invoicesBefore = (await db().select().from(schema.clientInvoices)).length;
@@ -4926,14 +4976,6 @@ describe("un-post ready items, erase all contracts", () => {
     expect((await db().select().from(schema.billingItems).where(eq(schema.billingItems.id, it.id)))[0]).toMatchObject({ status: "pending", invoiceId: null });
     expect((await db().select().from(schema.clientInvoices)).length).toBe(invoicesBefore);
 
-    // erase every contract
-    expect((await tech.post("/api/billing/contracts/erase", { confirm: true })).status).toBe(403);
-    expect((await admin.post("/api/billing/contracts/erase", {})).status).toBe(400);
-    const r = await admin.post("/api/billing/contracts/erase", { confirm: true });
-    expect(r.json.erased).toBeGreaterThanOrEqual(1);
-    expect(await db().select().from(schema.clientContracts)).toHaveLength(0);
-    expect((await db().select().from(schema.billingItems).where(eq(schema.billingItems.id, it.id)))[0].contractId).toBeNull();
-    expect((await db().select().from(schema.auditLog).where(eq(schema.auditLog.action, "billing.contracts_erased"))).length).toBe(1);
   });
 });
 
@@ -4975,13 +5017,6 @@ describe("contract types, contracts made by hand, services", () => {
     const extra = await admin.post("/api/admin/contract-types", { name: "Temporaire", kind: "hourly" });
     expect((await admin.del(`/api/admin/contract-types/${extra.json.key}`)).status).toBe(200);
 
-    // erase one kind only: the banked contracts
-    expect((await tech.post("/api/billing/contracts/erase", { confirm: true, kind: "banked" })).status).toBe(403);
-    expect((await admin.post("/api/billing/contracts/erase", { confirm: true, kind: "banked" })).json.erased).toBe(1);
-    const left = await db().select().from(schema.clientContracts).where(eq(schema.clientContracts.clientId, client.id));
-    expect(left.some((k) => k.id === banked.id)).toBe(false);
-    expect(left.some((k) => k.id === recurring.id)).toBe(true);
-
     // services: anyone with services.view reads, services.manage changes
     const s = await admin.post("/api/services", { name: "Surveillance 24/7", kind: "recurring", priceCents: 9900, description: "Par poste" });
     expect(s.status).toBe(201);
@@ -4990,32 +5025,5 @@ describe("contract types, contracts made by hand, services", () => {
     expect((await admin.patch(`/api/services/${s.json.id}`, { priceCents: 10900, active: false })).json).toMatchObject({ priceCents: 10900, active: false });
     expect((await admin.del(`/api/services/${s.json.id}`)).status).toBe(200);
     expect((await admin.del(`/api/services/${s.json.id}`)).status).toBe(404);
-  });
-});
-
-describe("delete every invoice (Admin › Facturation)", () => {
-  it("admin.billing only; invoices, lines and payments go for good; the work on them is un-posted, not erased", async () => {
-    resetRateLimit("login:ip:unknown");
-    const admin = await signIn("admin@akab.local");
-    const tech = await signIn("tech@akab.local");
-    const [c] = await db().select().from(schema.clients).limit(1);
-    const [it] = await db()
-      .insert(schema.billingItems)
-      .values({ clientId: c.id, kind: "charge", source: "portal", sourceId: "test:erase:inv", date: "2026-10-12", description: "À effacer", quantityX100: 100, unitPriceCents: 2000, amountCents: 2000, status: "approved", approvedAt: new Date() })
-      .returning();
-    const made = (await admin.post("/api/billables/invoice", { clientId: c.id, itemIds: [it.id] })).json;
-    await db().insert(schema.invoicePayments).values({ invoiceId: made.id, amountCents: 500, paidOn: "2026-10-13", method: "cheque" });
-    expect((await tech.post("/api/billing/invoices/erase", { confirm: true })).status).toBe(403);
-    expect((await admin.post("/api/billing/invoices/erase", {})).status).toBe(400);
-    const r = await admin.post("/api/billing/invoices/erase", { confirm: true });
-    expect(r.json.erased).toBeGreaterThanOrEqual(1);
-    expect(await db().select().from(schema.clientInvoices)).toHaveLength(0);
-    expect(await db().select().from(schema.invoicePayments)).toHaveLength(0);
-    expect(await db().select().from(schema.invoiceLines)).toHaveLength(0);
-    // the work is not erased: un-posted, approved again
-    expect(r.json.unposted).toBeGreaterThanOrEqual(1);
-    expect((await db().select().from(schema.billingItems).where(eq(schema.billingItems.id, it.id)))[0]).toMatchObject({ status: "approved", invoiceId: null, postedAt: null });
-    expect(await db().select().from(schema.billingItems).where(eq(schema.billingItems.status, "posted"))).toHaveLength(0);
-    expect((await db().select().from(schema.auditLog).where(eq(schema.auditLog.action, "billing.invoices_erased"))).length).toBe(1);
   });
 });

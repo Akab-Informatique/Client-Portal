@@ -182,13 +182,20 @@ export type QuickBooksSettings = {
   realmId: string | null;
   companyName: string | null;
   connectedAt: string | null;
-  sync: { invoices: boolean; payments: boolean; customers: boolean; timesheets: boolean; expenses: boolean };
+  /** invoices: portal invoices sent to QuickBooks · invoicesIn: QuickBooks invoices (and their status) brought in */
+  sync: { invoices: boolean; invoicesIn: boolean; payments: boolean; customers: boolean; timesheets: boolean; expenses: boolean };
+  /** QuickBooks invoices are brought in from this invoice number on */
+  invoicesFromNumber: number;
   /** QuickBooks item and tax codes used for the invoices sent */
   invoice: { itemId: string | null; taxCodeId: string | null; exemptTaxCodeId: string | null };
   /** Payments brought back from QuickBooks up to this time */
   paymentsPulledAt: string | null;
   /** Last imports from QuickBooks (accounts, items) */
-  imports: { accounts?: { at: string; matched: number; created: number }; items?: { at: string; items: number; categories: number; products: number } };
+  imports: {
+    accounts?: { at: string; matched: number; created: number };
+    items?: { at: string; items: number; categories: number; products: number };
+    invoices?: { at: string; added: number; updated: number; unmapped: number; total: number };
+  };
   clientSecret: string | null;
   refreshToken: string | null;
   lastTest?: { ok: boolean; at: string; error?: string };
@@ -210,7 +217,8 @@ export async function quickbooksSettings(): Promise<QuickBooksSettings> {
     realmId: c.realmId ?? null,
     companyName: c.companyName ?? null,
     connectedAt: c.connectedAt ?? null,
-    sync: { invoices: true, payments: true, customers: true, timesheets: true, expenses: true, ...c.sync },
+    sync: { invoices: true, invoicesIn: true, payments: true, customers: true, timesheets: true, expenses: true, ...c.sync },
+    invoicesFromNumber: c.invoicesFromNumber ?? 10000,
     invoice: { itemId: null, taxCodeId: null, exemptTaxCodeId: null, ...c.invoice },
     paymentsPulledAt: c.paymentsPulledAt ?? null,
     imports: c.imports ?? {},
@@ -234,6 +242,7 @@ export async function saveQuickBooksSettings(actorId: string | null, p: Partial<
       companyName: n.companyName,
       connectedAt: n.connectedAt,
       sync: n.sync,
+      invoicesFromNumber: n.invoicesFromNumber,
       lastTest: n.lastTest,
       invoice: n.invoice,
       paymentsPulledAt: n.paymentsPulledAt,

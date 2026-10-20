@@ -25,10 +25,8 @@ import {
   testQuickBooks,
   testStripe,
 } from "../lib/billing.ts";
-import { CONTRACT_KINDS, eraseContracts } from "../lib/contracts.ts";
-import { eraseInvoices } from "../lib/billables.ts";
 import { createCheckout, expireCheckout, handleEvent, MIN_CENTS, StripeError, verifySignature } from "../lib/stripe.ts";
-import { applyAccounts, applyItems, createCustomer, forgetQuickBooksToken, invoiceChoices, matchReason, planAccounts, planItems, pullPayments, quickbooksCustomers, QuickBooksError, suggestions } from "../lib/quickbooks.ts";
+import { applyAccounts, applyItems, createCustomer, forgetQuickBooksToken, invoiceChoices, matchReason, planAccounts, planItems, pullInvoices, pullPayments, quickbooksCustomers, QuickBooksError, suggestions } from "../lib/quickbooks.ts";
 
 /** QuickBooks errors as API errors (quickbooks_not_mapped, quickbooks_api…). */
 export function quickbooksHttp(e: unknown): never {
@@ -67,6 +65,7 @@ const quickbooksView = async (origin?: string | null) => {
     companyName: s.companyName,
     connectedAt: s.connectedAt,
     sync: s.sync,
+    invoicesFromNumber: s.invoicesFromNumber,
     lastTest: s.lastTest ?? null,
     redirectUri: base ? quickbooksRedirectUri(base) : null,
     invoice: s.invoice,
@@ -150,22 +149,6 @@ export const billingRoutes = new Hono<AppEnv>()
   })
 
   // ── General: numbering, taxes, company, template, default accounts ──
-  /** Erase every client's contracts (to start again by hand). The work to bill and tickets keep their lines, with no contract. */
-  .post("/contracts/erase", requirePermission("admin.billing"), async (c) => {
-    const a = auth(c);
-    const p = await body(c, z.object({ confirm: z.literal(true), kind: z.enum(["all", ...CONTRACT_KINDS]).default("all") }));
-    const n = await eraseContracts(p.kind);
-    await audit(a.user.id, "billing.contracts_erased", null, { count: n, kind: p.kind });
-    return c.json({ erased: n });
-  })
-  /** Delete every invoice of every client for good (new ones are brought in afterwards). */
-  .post("/invoices/erase", requirePermission("admin.billing"), async (c) => {
-    const a = auth(c);
-    await body(c, z.object({ confirm: z.literal(true) }));
-    const r = await eraseInvoices(a.user.id);
-    await audit(a.user.id, "billing.invoices_erased", null, { count: r.invoices, items: r.items });
-    return c.json({ erased: r.invoices, unposted: r.items });
-  })
   .get("/settings", requirePermission("admin.billing"), async (c) => {
     const s = await billingSettings();
     return c.json({ ...s, preview: formatInvoiceNumber(s.numbering) });
@@ -335,7 +318,8 @@ export const billingRoutes = new Hono<AppEnv>()
         environment: z.enum(["sandbox", "production"]).optional(),
         clientId: z.string().trim().max(200).optional(),
         clientSecret: z.string().trim().min(1).max(200).optional(),
-        sync: z.object({ invoices: z.boolean(), payments: z.boolean(), customers: z.boolean(), timesheets: z.boolean(), expenses: z.boolean() }).partial().optional(),
+        sync: z.object({ invoices: z.boolean(), invoicesIn: z.boolean(), payments: z.boolean(), customers: z.boolean(), timesheets: z.boolean(), expenses: z.boolean() }).partial().optional(),
+        invoicesFromNumber: z.number().int().min(0).max(100_000_000).optional(),
       }),
     );
     const s = await quickbooksSettings();
@@ -453,6 +437,13 @@ export const billingRoutes = new Hono<AppEnv>()
     return c.json((await quickbooksSettings()).invoice);
   })
   /** Payments made in QuickBooks, now (they also come every 15 minutes while the sync is on). */
+  /** Bring in the QuickBooks invoices (from the chosen number) with their status, for the clients mapped to a customer. */
+  .post("/quickbooks/invoices/pull", requirePermission("accounting.manage"), async (c) => {
+    const a = auth(c);
+    const r = await qbRun(() => pullInvoices(a.user.id));
+    await audit(a.user.id, "billing.quickbooks.invoices_pulled", null, { added: r.added, updated: r.updated, unmapped: r.unmapped });
+    return c.json(r);
+  })
   .post("/quickbooks/payments/pull", requirePermission("accounting.manage"), async (c) => {
     const a = auth(c);
     const r = await qbRun(() => pullPayments(a.user.id));

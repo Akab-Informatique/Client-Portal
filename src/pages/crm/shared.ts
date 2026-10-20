@@ -73,7 +73,7 @@ export type CrmInvoice = {
   daysLate: number;
   payments: InvoicePayment[];
   /** autotask: copied from the old system · portal: made here (with its lines) */
-  source: "autotask" | "portal";
+  source: "autotask" | "quickbooks" | "portal";
   notes: string | null;
   poNumber: string | null;
   lines: { id: string; kind: string; description: string; quantity: number; unitPriceCents: number; amountCents: number; taxable: boolean }[];

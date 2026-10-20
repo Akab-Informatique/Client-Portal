@@ -43,11 +43,12 @@ type QuickBooks = {
   realmId: string | null;
   companyName: string | null;
   connectedAt: string | null;
-  sync: { invoices: boolean; payments: boolean; customers: boolean; timesheets: boolean; expenses: boolean };
+  sync: { invoices: boolean; invoicesIn: boolean; payments: boolean; customers: boolean; timesheets: boolean; expenses: boolean };
+  invoicesFromNumber: number;
   lastTest: { ok: boolean; at: string; error?: string } | null;
   redirectUri: string | null;
   invoice: { itemId: string | null; taxCodeId: string | null; exemptTaxCodeId: string | null };
-  imports: { accounts?: { at: string; matched: number; created: number }; items?: { at: string; items: number; categories: number; products: number } };
+  imports: { accounts?: { at: string; matched: number; created: number }; items?: { at: string; items: number; categories: number; products: number }; invoices?: { at: string; added: number; updated: number; unmapped: number; total: number } };
   paymentsPulledAt: string | null;
 };
 type QbCustomer = { id: string; name: string; email: string | null; phone: string | null; active: boolean };
@@ -267,78 +268,7 @@ function GeneralTab() {
           {save.isPending && <Loader2 className="size-4 animate-spin" />} {t("billing.save")}
         </Button>
       </div>
-      <EraseContracts />
-      <EraseInvoices />
     </form>
-  );
-}
-
-/** Danger zone: delete every invoice of every client for good */
-function EraseInvoices() {
-  const { t } = useTranslation();
-  const qc = useQueryClient();
-  const confirm = useConfirm();
-  const erase = useMutation({
-    mutationFn: () => api.post<{ erased: number; unposted: number }>("/billing/invoices/erase", { confirm: true }),
-    onSuccess: (r) => {
-      void qc.invalidateQueries({ queryKey: ["crm"] });
-      void qc.invalidateQueries({ queryKey: ["billables"] });
-      toast.success(t("billing.eraseInvoices.done", { count: r.erased, items: r.unposted }));
-    },
-    onError: () => toast.error(t("common.error")),
-  });
-  return (
-    <Card title={t("billing.eraseInvoices.title")} text={t("billing.eraseInvoices.text")}>
-      <Button
-        type="button"
-        variant="destructive"
-        disabled={erase.isPending}
-        onClick={() => void confirm({ title: t("billing.eraseInvoices.confirmTitle"), description: t("billing.eraseInvoices.confirmText"), confirmLabel: t("billing.eraseInvoices.button"), destructive: true }).then((ok) => ok && erase.mutate())}
-      >
-        {erase.isPending && <Loader2 className="size-4 animate-spin" />} {t("billing.eraseInvoices.button")}
-      </Button>
-    </Card>
-  );
-}
-
-/** Danger zone: erase every client's contracts */
-function EraseContracts() {
-  const { t } = useTranslation();
-  const qc = useQueryClient();
-  const confirm = useConfirm();
-  const [kind, setKind] = useState<"all" | "recurring" | "hourly" | "banked" | "fixed">("all");
-  const erase = useMutation({
-    mutationFn: () => api.post<{ erased: number }>("/billing/contracts/erase", { confirm: true, kind }),
-    onSuccess: (r) => {
-      void qc.invalidateQueries({ queryKey: ["crm"] });
-      void qc.invalidateQueries({ queryKey: ["billables"] });
-      toast.success(t("billing.eraseContracts.done", { count: r.erased }));
-    },
-    onError: () => toast.error(t("common.error")),
-  });
-  return (
-    <Card title={t("billing.eraseContracts.title")} text={t("billing.eraseContracts.text")}>
-      <select
-        value={kind}
-        onChange={(e) => setKind(e.target.value as typeof kind)}
-        className="mb-3 block h-9 w-72 rounded-md border bg-transparent px-2 text-sm outline-none focus:ring-2 focus:ring-[color:var(--gold)]/40"
-        aria-label={t("billing.eraseContracts.which")}
-      >
-        {(["all", "recurring", "hourly", "banked", "fixed"] as const).map((k) => (
-          <option key={k} value={k}>
-            {k === "all" ? t("billing.eraseContracts.all") : t(`contractTypes.kind.${k}`)}
-          </option>
-        ))}
-      </select>
-      <Button
-        type="button"
-        variant="destructive"
-        disabled={erase.isPending}
-        onClick={() => void confirm({ title: t("billing.eraseContracts.confirmTitle"), description: t("billing.eraseContracts.confirmText"), confirmLabel: t("billing.eraseContracts.button"), destructive: true }).then((ok) => ok && erase.mutate())}
-      >
-        {erase.isPending && <Loader2 className="size-4 animate-spin" />} {t("billing.eraseContracts.button")}
-      </Button>
-    </Card>
   );
 }
 
@@ -730,7 +660,7 @@ function QuickBooksTab() {
 
       <Card title={t("billing.qb.sync")} text={t("billing.qb.syncText")} aside={<Switch checked={q.enabled} disabled={!q.connected} onCheckedChange={(v) => toggle.mutate({ enabled: v })} aria-label={t("billing.enabled")} />}>
         <div className="grid gap-2 sm:grid-cols-3">
-          {(["customers", "invoices", "payments", "timesheets", "expenses"] as const).map((k) => (
+          {(["customers", "invoicesIn", "invoices", "payments", "timesheets", "expenses"] as const).map((k) => (
             <label key={k} className="flex items-start gap-2 rounded-xl border p-3 text-sm">
               {/* timesheets and expenses are paused (accounting marks them paid in the portal) */}
               <Switch
@@ -795,8 +725,9 @@ function QuickBooksData({ q }: { q: QuickBooks }) {
       </Card>
       {review === "accounts" && <AccountsReview onClose={() => setReview(null)} />}
       {review === "items" && <ItemsReview onClose={() => setReview(null)} />}
-      <InvoiceDefaultsCard />
       <MappingCard />
+      <InvoicesInCard q={q} />
+      <InvoiceDefaultsCard />
       <Card
         title={t("billing.qb.paymentsTitle")}
         text={t("billing.qb.paymentsText")}
@@ -809,6 +740,55 @@ function QuickBooksData({ q }: { q: QuickBooks }) {
         <p className="text-xs text-muted-foreground">{q.paymentsPulledAt ? t("billing.qb.pulledAt", { at: dateTime(q.paymentsPulledAt) }) : t("billing.qb.neverPulled")}</p>
       </Card>
     </>
+  );
+}
+
+/** QuickBooks invoices brought in from a number on, with their status; for the clients mapped to a customer. */
+function InvoicesInCard({ q }: { q: QuickBooks }) {
+  const { t } = useTranslation();
+  const qc = useQueryClient();
+  const err = useBillingError();
+  const [from, setFrom] = useState(String(q.invoicesFromNumber));
+  useEffect(() => setFrom(String(q.invoicesFromNumber)), [q.invoicesFromNumber]);
+  const save = useMutation({
+    mutationFn: (n: number) => api.put<QuickBooks>("/billing/quickbooks", { invoicesFromNumber: n }),
+    onSuccess: (r) => qc.setQueryData([...KEY, "quickbooks"], r),
+    onError: (e) => toast.error(err(e)),
+  });
+  const pull = useMutation({
+    mutationFn: () => api.post<{ added: number; updated: number; unmapped: number; total: number }>("/billing/quickbooks/invoices/pull"),
+    onSuccess: (r) => {
+      void qc.invalidateQueries({ queryKey: KEY });
+      void qc.invalidateQueries({ queryKey: ["crm"] });
+      toast.success(t("billing.qb.invoicesInDone", r));
+    },
+    onError: (e) => toast.error(err(e)),
+  });
+  const commit = () => {
+    const n = Number(from.replace(/\D/g, ""));
+    if (!Number.isFinite(n) || from.trim() === "") return setFrom(String(q.invoicesFromNumber));
+    if (n !== q.invoicesFromNumber) save.mutate(n);
+  };
+  return (
+    <Card
+      title={t("billing.qb.invoicesInTitle")}
+      text={t("billing.qb.invoicesInText")}
+      aside={
+        <Button size="sm" variant="outline" disabled={pull.isPending} onClick={() => pull.mutate()}>
+          {pull.isPending ? <Loader2 className="size-3.5 animate-spin" /> : <ArrowDownToLine className="size-3.5" />} {t("billing.qb.invoicesInPull")}
+        </Button>
+      }
+    >
+      <div className="flex flex-wrap items-end gap-4">
+        <label className="space-y-1 text-xs">
+          <span className="text-muted-foreground">{t("billing.qb.invoicesFrom")}</span>
+          <Input value={from} onChange={(e) => setFrom(e.target.value)} onBlur={commit} onKeyDown={(e) => e.key === "Enter" && (e.target as HTMLInputElement).blur()} inputMode="numeric" className="w-32 font-mono" />
+        </label>
+        <p className="text-xs text-muted-foreground">
+          {q.imports.invoices ? t("billing.qb.invoicesInLast", { ...q.imports.invoices, when: dateTime(q.imports.invoices.at) }) : t("billing.qb.invoicesInNever")}
+        </p>
+      </div>
+    </Card>
   );
 }
 

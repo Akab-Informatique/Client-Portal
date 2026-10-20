@@ -505,6 +505,13 @@
       "when": 1792516630605,
       "tag": "0071_lumpy_wendell_vaughn",
       "breakpoints": true
+    },
+    {
+      "idx": 72,
+      "version": "7",
+      "when": 1792520322670,
+      "tag": "0072_neat_vision",
+      "breakpoints": true
     }
   ]
 }

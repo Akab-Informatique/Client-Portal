@@ -1824,3 +1824,21 @@ export const services = pgTable(
   },
   (t) => [index("services_name_idx").on(t.name)],
 );
+
+/** Vendors (Admin › PSA › Fournisseurs). Mapped by hand to QuickBooks vendors, never synced with them. */
+export const vendors = pgTable(
+  "vendors",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    name: text("name").notNull(),
+    email: text("email"),
+    phone: text("phone"),
+    notes: text("notes"),
+    active: boolean("active").notNull().default(true),
+    /** The QuickBooks vendor it is mapped to (never two vendors on the same one) */
+    quickbooksId: text("quickbooks_id"),
+    createdAt: created(),
+    updatedAt: updated(),
+  },
+  (t) => [uniqueIndex("vendors_quickbooks_idx").on(t.quickbooksId), index("vendors_name_idx").on(t.name)],
+);

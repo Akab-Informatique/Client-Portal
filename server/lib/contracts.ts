@@ -24,8 +24,6 @@ export const CONTRACT_KINDS = ["recurring", "hourly", "banked", "fixed"] as cons
 export type ContractKind = (typeof CONTRACT_KINDS)[number];
 /** The billing mode a contract of this kind gets */
 export const KIND_MODE: Record<ContractKind, BillingMode> = { recurring: "monthly", hourly: "hourly", banked: "banked", fixed: "fixed" };
-/** The billing modes a kind stands for (to erase every contract of a kind) */
-const KIND_MODES: Record<ContractKind, BillingMode[]> = { recurring: ["monthly", "per_ticket"], hourly: ["hourly"], banked: ["banked"], fixed: ["fixed"] };
 
 const STARTER_TYPES: { key: string; name: string; kind: ContractKind }[] = [
   { key: "recurring", name: "Service récurrent", kind: "recurring" },
@@ -139,30 +137,4 @@ export async function setTicketContract(ticketId: number, contractId: string | n
     .insert(schema.ticketMeta)
     .values({ ticketId, contractId, updatedBy: userId })
     .onConflictDoUpdate({ target: schema.ticketMeta.ticketId, set: { contractId, updatedBy: userId, updatedAt: new Date() } });
-}
-
-/**
- * Erase the contracts of every client: all of them, or only one kind (recurring service, hourly, banked hours,
- * fixed price). What pointed at one (tickets, time, charges, timesheets, work to bill) keeps its lines and loses
- * the contract. Returns how many contracts went.
- */
-export async function eraseContracts(kind: ContractKind | "all" = "all"): Promise<number> {
-  const d = db();
-  const rows = await d.select({ id: schema.clientContracts.id, source: schema.clientContracts.autotaskId, mode: schema.clientContracts.billingMode }).from(schema.clientContracts);
-  const gone = rows.filter((r) => kind === "all" || KIND_MODES[kind].includes(r.mode as BillingMode));
-  const ids = gone.map((r) => r.id);
-  if (!ids.length) return 0;
-  // tickets, time and charges name a contract by its source id
-  const sid = gone.map((r) => r.source).filter((x): x is string => Boolean(x));
-  await d.transaction(async (tx) => {
-    if (sid.length) {
-      await tx.update(schema.tickets).set({ contractId: null }).where(inArray(schema.tickets.contractId, sid));
-      await tx.update(schema.ticketTimeEntries).set({ contractId: null }).where(inArray(schema.ticketTimeEntries.contractId, sid));
-      await tx.update(schema.ticketCharges).set({ contractId: null }).where(inArray(schema.ticketCharges.contractId, sid));
-    }
-    await tx.update(schema.ticketMeta).set({ contractId: null }).where(inArray(schema.ticketMeta.contractId, ids));
-    await tx.update(schema.timesheetEntries).set({ contractId: null }).where(inArray(schema.timesheetEntries.contractId, ids));
-    await tx.delete(schema.clientContracts).where(inArray(schema.clientContracts.id, ids));
-  });
-  return ids.length;
 }

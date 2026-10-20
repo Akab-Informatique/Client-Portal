@@ -28,7 +28,7 @@ type Invoice = {
   status: Status;
   late: boolean;
   daysLate: number;
-  source: "portal" | "autotask";
+  source: "portal" | "autotask" | "quickbooks";
   poNumber: string | null;
   emailedAt: string | null;
   quickbooks: { id: string | null; syncedAt: string | null; error: string | null } | null;
@@ -154,7 +154,8 @@ export function AllInvoices() {
             <SelectContent>
               <SelectItem value="all">{t("allInvoices.sourceAll")}</SelectItem>
               <SelectItem value="portal">{t("allInvoices.sourcePortal")}</SelectItem>
-              <SelectItem value="autotask">Autotask</SelectItem>
+              <SelectItem value="quickbooks">QuickBooks</SelectItem>
+              <SelectItem value="autotask">{t("allInvoices.sourceOld")}</SelectItem>
             </SelectContent>
           </Select>
         </div>
@@ -248,7 +249,7 @@ export function AllInvoices() {
                     <td className="px-4 py-2">
                       <span className="font-mono font-medium">{v.number}</span>
                       <span className="block text-[11px] text-muted-foreground">
-                        {[v.source === "portal" ? t("allInvoices.sourcePortal") : "Autotask", v.poNumber && `PO ${v.poNumber}`].filter(Boolean).join(" · ")}
+                        {[v.source === "portal" ? t("allInvoices.sourcePortal") : v.source === "quickbooks" ? "QuickBooks" : t("allInvoices.sourceOld"), v.poNumber && `PO ${v.poNumber}`].filter(Boolean).join(" · ")}
                       </span>
                     </td>
                     <td className="max-w-56 px-3 py-2">

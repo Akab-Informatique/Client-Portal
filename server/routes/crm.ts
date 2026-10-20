@@ -456,7 +456,7 @@ export const crmRoutes = new Hono<AppEnv>()
         q: z.string().trim().max(100).optional(),
         emailed: z.enum(["yes", "no"]).optional(),
         quickbooks: z.enum(["synced", "unsynced", "error"]).optional(),
-        source: z.enum(["portal", "autotask"]).optional(),
+        source: z.enum(["portal", "autotask", "quickbooks"]).optional(),
       })
       .safeParse(Object.fromEntries(Object.entries(c.req.queries()).map(([k, v]) => [k, v[0] || undefined])));
     if (!q.success) throw new HTTPException(400, { message: "invalid_filter" });
