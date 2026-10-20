@@ -279,11 +279,11 @@ function EraseInvoices() {
   const qc = useQueryClient();
   const confirm = useConfirm();
   const erase = useMutation({
-    mutationFn: () => api.post<{ erased: number }>("/billing/invoices/erase", { confirm: true }),
+    mutationFn: () => api.post<{ erased: number; unposted: number }>("/billing/invoices/erase", { confirm: true }),
     onSuccess: (r) => {
       void qc.invalidateQueries({ queryKey: ["crm"] });
       void qc.invalidateQueries({ queryKey: ["billables"] });
-      toast.success(t("billing.eraseInvoices.done", { count: r.erased }));
+      toast.success(t("billing.eraseInvoices.done", { count: r.erased, items: r.unposted }));
     },
     onError: () => toast.error(t("common.error")),
   });

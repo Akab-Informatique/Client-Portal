@@ -162,9 +162,9 @@ export const billingRoutes = new Hono<AppEnv>()
   .post("/invoices/erase", requirePermission("admin.billing"), async (c) => {
     const a = auth(c);
     await body(c, z.object({ confirm: z.literal(true) }));
-    const n = await eraseInvoices();
-    await audit(a.user.id, "billing.invoices_erased", null, { count: n });
-    return c.json({ erased: n });
+    const r = await eraseInvoices(a.user.id);
+    await audit(a.user.id, "billing.invoices_erased", null, { count: r.invoices, items: r.items });
+    return c.json({ erased: r.invoices, unposted: r.items });
   })
   .get("/settings", requirePermission("admin.billing"), async (c) => {
     const s = await billingSettings();

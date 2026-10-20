@@ -4994,7 +4994,7 @@ describe("contract types, contracts made by hand, services", () => {
 });
 
 describe("delete every invoice (Admin › Facturation)", () => {
-  it("admin.billing only; invoices, lines and payments go for good; billed work stays billed", async () => {
+  it("admin.billing only; invoices, lines and payments go for good; the work on them is un-posted, not erased", async () => {
     resetRateLimit("login:ip:unknown");
     const admin = await signIn("admin@akab.local");
     const tech = await signIn("tech@akab.local");
@@ -5012,7 +5012,10 @@ describe("delete every invoice (Admin › Facturation)", () => {
     expect(await db().select().from(schema.clientInvoices)).toHaveLength(0);
     expect(await db().select().from(schema.invoicePayments)).toHaveLength(0);
     expect(await db().select().from(schema.invoiceLines)).toHaveLength(0);
-    expect((await db().select().from(schema.billingItems).where(eq(schema.billingItems.id, it.id)))[0]).toMatchObject({ status: "posted", invoiceId: null });
+    // the work is not erased: un-posted, approved again
+    expect(r.json.unposted).toBeGreaterThanOrEqual(1);
+    expect((await db().select().from(schema.billingItems).where(eq(schema.billingItems.id, it.id)))[0]).toMatchObject({ status: "approved", invoiceId: null, postedAt: null });
+    expect(await db().select().from(schema.billingItems).where(eq(schema.billingItems.status, "posted"))).toHaveLength(0);
     expect((await db().select().from(schema.auditLog).where(eq(schema.auditLog.action, "billing.invoices_erased"))).length).toBe(1);
   });
 });

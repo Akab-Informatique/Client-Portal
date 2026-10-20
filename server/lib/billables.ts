@@ -409,13 +409,21 @@ export async function postInvoices(actorId: string, clientIds?: string[], period
 }
 
 /**
- * Delete every invoice of every client for good, with their lines, payments and payment links. The work to bill
- * keeps its lines and its "posted" status (it was billed: it is not billed again), with no invoice. The invoice
- * numbering is left as it is. Returns how many invoices went.
+ * Delete every invoice of every client for good (billed ones too), with their lines, payments and payment links.
+ * The labour, charges and other work that was on them is not deleted: it is un-posted, approved again and ready
+ * to be invoiced. The invoice numbering is left as it is. Returns how many invoices and items were touched.
  */
-export async function eraseInvoices(): Promise<number> {
+export async function eraseInvoices(actorId: string): Promise<{ invoices: number; items: number }> {
   const d = db();
-  const [{ n }] = await d.select({ n: sql<number>`count(*)::int` }).from(schema.clientInvoices);
-  await d.delete(schema.clientInvoices);
-  return n;
+  const now = new Date();
+  return d.transaction(async (tx) => {
+    const [{ n }] = await tx.select({ n: sql<number>`count(*)::int` }).from(schema.clientInvoices);
+    const back = await tx
+      .update(schema.billingItems)
+      .set({ status: "approved", invoiceId: null, postedAt: null, approvedBy: actorId, approvedAt: now, updatedAt: now })
+      .where(eq(schema.billingItems.status, "posted"))
+      .returning({ id: schema.billingItems.id });
+    await tx.delete(schema.clientInvoices);
+    return { invoices: n, items: back.length };
+  });
 }
