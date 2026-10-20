@@ -90,3 +90,21 @@ export async function setTicketContract(ticketId: number, contractId: string | n
     .values({ ticketId, contractId, updatedBy: userId })
     .onConflictDoUpdate({ target: schema.ticketMeta.ticketId, set: { contractId, updatedBy: userId, updatedAt: new Date() } });
 }
+
+/**
+ * Erase every contract of every client. What pointed at one (tickets, time, charges, timesheets, work to bill)
+ * keeps its lines and loses the contract. Returns how many contracts went.
+ */
+export async function eraseContracts(): Promise<number> {
+  const d = db();
+  const n = (await d.select({ id: schema.clientContracts.id }).from(schema.clientContracts)).length;
+  await d.transaction(async (tx) => {
+    await tx.update(schema.tickets).set({ contractId: null });
+    await tx.update(schema.ticketTimeEntries).set({ contractId: null });
+    await tx.update(schema.ticketCharges).set({ contractId: null });
+    await tx.update(schema.ticketMeta).set({ contractId: null });
+    await tx.update(schema.timesheetEntries).set({ contractId: null });
+    await tx.delete(schema.clientContracts);
+  });
+  return n;
+}

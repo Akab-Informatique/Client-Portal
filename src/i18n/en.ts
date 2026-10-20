@@ -558,6 +558,9 @@ const en: Dict = {
     },
   },
   invoicing: {
+    unpostItems: "Take off the list to invoice",
+    unpostItemsTitle: "Put {{count}} item(s) back on hold?",
+    unpostItemsText: "The items are not invoiced: they go back to “To approve” and will be on no invoice until approved again.",
     madeTitle: "Invoices made by the portal in this period ({{count}})",
     unpost: "Void invoice",
     unpostHint: "Voids the invoice (it stays on file, voided) and gives its items back to invoice.",
@@ -736,6 +739,15 @@ const en: Dict = {
     },
   },
   billing: {
+    eraseContracts: {
+      title: "Erase every client's contracts",
+      text: "Deletes the contracts of all clients (to start again by hand). Tickets, time and work to bill keep their lines but lose their contract. Cannot be undone.",
+      button: "Erase all contracts",
+      confirmTitle: "Erase every contract of every client?",
+      confirmText: "This is final. While Autotask is linked, the next sync copies its contracts again.",
+      done_one: "{{count}} contract erased",
+      done_other: "{{count}} contracts erased",
+    },
     title: "Invoicing",
     subtitle: "Numbering, taxes, invoice template, chart of accounts and QuickBooks.",
     tabs: {

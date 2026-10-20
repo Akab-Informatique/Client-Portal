@@ -277,7 +277,36 @@ function GeneralTab() {
           {save.isPending && <Loader2 className="size-4 animate-spin" />} {t("billing.save")}
         </Button>
       </div>
+      <EraseContracts />
     </form>
+  );
+}
+
+/** Danger zone: erase every client's contracts */
+function EraseContracts() {
+  const { t } = useTranslation();
+  const qc = useQueryClient();
+  const confirm = useConfirm();
+  const erase = useMutation({
+    mutationFn: () => api.post<{ erased: number }>("/billing/contracts/erase", { confirm: true }),
+    onSuccess: (r) => {
+      void qc.invalidateQueries({ queryKey: ["crm"] });
+      void qc.invalidateQueries({ queryKey: ["billables"] });
+      toast.success(t("billing.eraseContracts.done", { count: r.erased }));
+    },
+    onError: () => toast.error(t("common.error")),
+  });
+  return (
+    <Card title={t("billing.eraseContracts.title")} text={t("billing.eraseContracts.text")}>
+      <Button
+        type="button"
+        variant="destructive"
+        disabled={erase.isPending}
+        onClick={() => void confirm({ title: t("billing.eraseContracts.confirmTitle"), description: t("billing.eraseContracts.confirmText"), confirmLabel: t("billing.eraseContracts.button"), destructive: true }).then((ok) => ok && erase.mutate())}
+      >
+        {erase.isPending && <Loader2 className="size-4 animate-spin" />} {t("billing.eraseContracts.button")}
+      </Button>
+    </Card>
   );
 }
 

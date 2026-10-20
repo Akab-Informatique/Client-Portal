@@ -25,6 +25,7 @@ import {
   testQuickBooks,
   testStripe,
 } from "../lib/billing.ts";
+import { eraseContracts } from "../lib/contracts.ts";
 import { createCheckout, expireCheckout, handleEvent, MIN_CENTS, StripeError, verifySignature } from "../lib/stripe.ts";
 import { applyAccounts, applyItems, createCustomer, forgetQuickBooksToken, invoiceChoices, matchReason, planAccounts, planItems, pullPayments, quickbooksCustomers, QuickBooksError, suggestions } from "../lib/quickbooks.ts";
 
@@ -148,6 +149,14 @@ export const billingRoutes = new Hono<AppEnv>()
   })
 
   // ── General: numbering, taxes, company, template, default accounts ──
+  /** Erase every client's contracts (to start again by hand). The work to bill and tickets keep their lines, with no contract. */
+  .post("/contracts/erase", requirePermission("admin.billing"), async (c) => {
+    const a = auth(c);
+    await body(c, z.object({ confirm: z.literal(true) }));
+    const n = await eraseContracts();
+    await audit(a.user.id, "billing.contracts_erased", null, { count: n });
+    return c.json({ erased: n });
+  })
   .get("/settings", requirePermission("admin.billing"), async (c) => {
     const s = await billingSettings();
     return c.json({ ...s, preview: formatInvoiceNumber(s.numbering) });

@@ -556,6 +556,9 @@ const fr = {
     },
   },
   invoicing: {
+    unpostItems: "Retirer des éléments à facturer",
+    unpostItemsTitle: "Remettre {{count}} élément(s) en attente ?",
+    unpostItemsText: "Les éléments ne sont pas facturés : ils retournent à « À approuver » et ne seront sur aucune facture tant qu'ils ne sont pas approuvés de nouveau.",
     madeTitle: "Factures faites par le portail dans cette période ({{count}})",
     unpost: "Annuler la facture",
     unpostHint: "Annule la facture (elle reste au dossier, annulée) et remet ses éléments à facturer.",
@@ -734,6 +737,15 @@ const fr = {
     },
   },
   billing: {
+    eraseContracts: {
+      title: "Effacer tous les contrats des clients",
+      text: "Supprime les contrats de tous les clients (pour repartir de zéro à la main). Les billets, le temps et les éléments à facturer gardent leurs lignes mais perdent leur contrat. Irréversible.",
+      button: "Effacer tous les contrats",
+      confirmTitle: "Effacer tous les contrats de tous les clients ?",
+      confirmText: "Cette action est définitive. Tant qu'Autotask est lié, la prochaine synchronisation recopie ses contrats.",
+      done_one: "{{count}} contrat effacé",
+      done_other: "{{count}} contrats effacés",
+    },
     title: "Facturation",
     subtitle: "Numérotation, taxes, modèle de facture, plan comptable et QuickBooks.",
     tabs: {

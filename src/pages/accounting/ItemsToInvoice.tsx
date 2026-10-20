@@ -272,6 +272,15 @@ function InvoiceEditor({ ready, lang, period }: { ready: Ready; lang: string; pe
     },
     onError: () => toast.error(t("common.error")),
   });
+  const confirm = useConfirm();
+  const unpostItems = useMutation({
+    mutationFn: () => api.post<{ changed: number }>("/billables/status", { ids: itemIds, status: "pending" }),
+    onSuccess: (r) => {
+      void qc.invalidateQueries({ queryKey: KEY });
+      toast.success(t("approvals.moved.pending", { count: r.changed }));
+    },
+    onError: () => toast.error(t("common.error")),
+  });
   const toggleKind = (k: Kind, on: boolean) => setKinds((s) => (on ? new Set([...s, k]) : new Set([...s].filter((x) => x !== k))));
   const byKind = (k: Kind) => items.filter((i) => i.kind === k);
   return (
@@ -327,6 +336,19 @@ function InvoiceEditor({ ready, lang, period }: { ready: Ready; lang: string; pe
               );
             })}
           </ul>
+          {can("accounting.manage") && itemIds.length > 0 && (
+            <Button
+              type="button"
+              size="sm"
+              variant="outline"
+              disabled={unpostItems.isPending}
+              onClick={() =>
+                void confirm({ title: t("invoicing.unpostItemsTitle", { count: itemIds.length }), description: t("invoicing.unpostItemsText"), confirmLabel: t("invoicing.unpostItems") }).then((ok) => ok && unpostItems.mutate())
+              }
+            >
+              <Undo2 className="size-3.5" /> {t("invoicing.unpostItems")} ({itemIds.length})
+            </Button>
+          )}
         </section>
 
         <section className="grid gap-3 sm:grid-cols-2">

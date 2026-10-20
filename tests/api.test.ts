@@ -5880,3 +5880,31 @@ describe("un-post: take back an invoice made by the portal", () => {
     expect((await admin.post("/api/billables/invoice", { clientId: c.id, itemIds: [it.id] })).json.number).not.toBe(made.number);
   });
 });
+
+describe("un-post ready items, erase all contracts", () => {
+  it("approved items go back to pending without any invoice; erasing contracts needs admin.billing and clears what pointed at them", async () => {
+    resetRateLimit("login:ip:unknown");
+    const admin = await signIn("admin@akab.local");
+    const tech = await signIn("tech@akab.local");
+    const [c] = await db().select().from(schema.clients).limit(1);
+    const [k] = await db().insert(schema.clientContracts).values({ clientId: c.id, name: "Contrat à effacer", autotaskId: "test-erase-1" }).returning();
+    const [it] = await db()
+      .insert(schema.billingItems)
+      .values({ clientId: c.id, contractId: k.id, kind: "charge", source: "portal", sourceId: "test:unpost:items", date: "2026-10-11", description: "Prêt à facturer", quantityX100: 100, unitPriceCents: 1000, amountCents: 1000, status: "approved", approvedAt: new Date() })
+      .returning();
+    // ready to invoice -> back to pending: no invoice, nothing voided
+    const invoicesBefore = (await db().select().from(schema.clientInvoices)).length;
+    expect((await admin.post("/api/billables/status", { ids: [it.id], status: "pending" })).json.changed).toBe(1);
+    expect((await db().select().from(schema.billingItems).where(eq(schema.billingItems.id, it.id)))[0]).toMatchObject({ status: "pending", invoiceId: null });
+    expect((await db().select().from(schema.clientInvoices)).length).toBe(invoicesBefore);
+
+    // erase every contract
+    expect((await tech.post("/api/billing/contracts/erase", { confirm: true })).status).toBe(403);
+    expect((await admin.post("/api/billing/contracts/erase", {})).status).toBe(400);
+    const r = await admin.post("/api/billing/contracts/erase", { confirm: true });
+    expect(r.json.erased).toBeGreaterThanOrEqual(1);
+    expect(await db().select().from(schema.clientContracts)).toHaveLength(0);
+    expect((await db().select().from(schema.billingItems).where(eq(schema.billingItems.id, it.id)))[0].contractId).toBeNull();
+    expect((await db().select().from(schema.auditLog).where(eq(schema.auditLog.action, "billing.contracts_erased"))).length).toBe(1);
+  });
+});
