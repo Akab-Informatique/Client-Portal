@@ -195,7 +195,11 @@ export function createClient(creds: Credentials, zone: Zone, opts: { fallbackToA
         if (opts.complete) throw new AutotaskError("api", undefined, `${entity}: more than ${max} rows, copy stopped`);
         break;
       }
-      page = await call<Page<T>>("GET", next);
+      // the next page is a GET for most entities, a POST for some (TicketNotes: 405 on GET)
+      page = await call<Page<T>>("GET", next).catch((e) => {
+        if (e instanceof AutotaskError && e.status === 405) return call<Page<T>>("POST", next, {});
+        throw e;
+      });
     }
     return out.slice(0, max);
   }
