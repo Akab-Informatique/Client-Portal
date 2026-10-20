@@ -2973,6 +2973,21 @@ describe("text messages (VoIP.ms)", () => {
     await tech.post(`/api/sms/conversations/${third.id}/close`);
     await hook({ token, from: "5145550000", message: "Le lendemain", id: "m7" });
     expect(sms.map((s) => s.dst)).toContain("5145550000");
+
+    // deleted for good, texts and all (open or closed); every closed one at once
+    const all = (await tech.get("/api/sms/conversations?all=1")).json;
+    const mine = all.filter((c: any) => c.phone === "5145550000");
+    expect(mine.length).toBeGreaterThan(1);
+    const closed = mine.find((c: any) => c.status === "closed");
+    expect((await tech.del(`/api/sms/conversations/${closed.id}`)).status).toBe(200);
+    expect((await tech.get(`/api/sms/conversations/${closed.id}`)).status).toBe(404);
+    expect((await tech.del(`/api/sms/conversations/${closed.id}`)).status).toBe(404);
+    const live = mine.find((c: any) => c.status !== "closed");
+    expect((await tech.del(`/api/sms/conversations/${live.id}`)).status).toBe(200);
+    expect((await tech.del("/api/sms/conversations")).status).toBe(400);
+    const left = (await tech.del("/api/sms/conversations?closed=1")).json;
+    expect(left.ok).toBe(true);
+    expect((await tech.get("/api/sms/conversations?all=1")).json.some((c: any) => c.status === "closed")).toBe(false);
   });
 
   it("unknown numbers: AKAB when no default client; a technician picks the client first; 1 without details still opens", async () => {
@@ -5219,5 +5234,77 @@ describe("ticket sources, statuses and the manual sync (Admin › Billets)", () 
     expect(run.json.ok).toBe(true);
     expect(run.json.total).toBeGreaterThan(0);
     expect((await admin.get("/api/admin/ticket-setup/sync")).json.lastRun.total).toBe(run.json.total);
+  });
+});
+
+describe("tickets from the support mailbox (Admin › Courriel entrant)", () => {
+  it("a known sender opens a ticket once; a domain finds the client; strangers wait; a ticket number is a reply; machines are skipped", async () => {
+    resetRateLimit("login:ip:unknown");
+    const admin = await signIn("admin@akab.local");
+    const tech = await signIn("tech@akab.local");
+    const { processIncoming } = await import("../server/lib/mailIntake.ts");
+    // the CRM copy (clients and contacts) is what the domain match reads
+    const clients = (await admin.get("/api/crm/clients")).json;
+    const client = (clients.items ?? clients).find((x: any) => x.autotaskId === 300);
+    const contacts = (await admin.get(`/api/crm/clients/${client.id}/contacts`)).json;
+    const known = contacts.find((x: any) => x.email);
+    expect(known).toBeTruthy();
+    const domain = known.email.split("@")[1];
+    const mail = (id: string, from: string | null, subject: string, text = "Bonjour,\nLe poste ne démarre plus.") => ({
+      id,
+      mailbox: "support@akab.ca",
+      subject,
+      from: from ? { name: "Quelqu'un", address: from } : null,
+      receivedAt: new Date().toISOString(),
+      text,
+    });
+
+    // their contact: a ticket for them, once
+    const first = await processIncoming(mail("m-1", known.email, "RE: Imprimante en panne"));
+    expect(first.outcome).toBe("ticket");
+    const detail = (await tech.get(`/api/tickets/${first.ticket!.id}`)).json;
+    expect(detail.title).toBe("Imprimante en panne");
+    expect(detail.description).toContain("Le poste ne démarre plus.");
+    expect(detail.company.id).toBe(300);
+    expect(detail.source).toBe("email");
+    expect((await processIncoming(mail("m-1", known.email, "RE: Imprimante en panne"))).outcome).toBe("duplicate");
+
+    // a new address on the same domain: the client is found, no contact
+    const viaDomain = await processIncoming(mail("m-2", `nouveau.employe@${domain}`, "Nouvel employé"));
+    expect(viaDomain.outcome).toBe("ticket");
+    const d2 = (await tech.get(`/api/tickets/${viaDomain.ticket!.id}`)).json;
+    expect(d2.company.id).toBe(300);
+    expect(d2.contactId).toBeNull();
+
+    // a stranger: nothing is opened, a technician decides
+    expect((await processIncoming(mail("m-3", "inconnu@exemple-inconnu.org", "Besoin d'aide"))).outcome).toBe("pending");
+    const pending = (await tech.get("/api/mail-intake/pending")).json.items;
+    const waiting = pending.find((x: any) => x.subject === "Besoin d'aide");
+    expect(waiting).toMatchObject({ from: "inconnu@exemple-inconnu.org" });
+    expect((await tech.post(`/api/mail-intake/${waiting.id}/ignore`, {})).status).toBe(200);
+    expect((await tech.get("/api/mail-intake/pending")).json.items.some((x: any) => x.id === waiting.id)).toBe(false);
+    expect((await tech.post(`/api/mail-intake/${waiting.id}/ignore`, {})).status).toBe(404);
+
+    // naming a ticket: the client's message on it, the ticket needs attention
+    const reply = await processIncoming(mail("m-4", known.email, `RE: [${first.ticket!.number}] Imprimante en panne`, "C'est revenu, merci."));
+    expect(reply.outcome).toBe("reply");
+    expect(reply.ticket!.id).toBe(first.ticket!.id);
+    const after = (await tech.get(`/api/tickets/${first.ticket!.id}`)).json;
+    expect(after.notes.some((n: any) => n.text.includes("C'est revenu, merci."))).toBe(true);
+
+    // machines and loops
+    expect((await processIncoming(mail("m-5", "no-reply@service.com", "Votre facture"))).outcome).toBe("skipped");
+    expect((await processIncoming(mail("m-6", known.email, "Réponse automatique : absent"))).outcome).toBe("skipped");
+    expect((await processIncoming(mail("m-7", "support@akab.ca", "Boucle"))).outcome).toBe("skipped");
+    expect((await processIncoming(mail("m-8", null, "Sans expéditeur"))).outcome).toBe("skipped");
+
+    // the settings: master admins only, off by default, needs Microsoft 365
+    expect((await tech.get("/api/admin/mail-intake")).status).toBe(403);
+    const s = (await admin.get("/api/admin/mail-intake")).json;
+    expect(s).toMatchObject({ enabled: false, mailbox: "", markRead: true, replies: true, o365Ready: false });
+    expect(s.counts.ticket).toBeGreaterThanOrEqual(2);
+    expect((await admin.put("/api/admin/mail-intake", { enabled: true })).json.error).toBe("intake_no_mailbox");
+    expect((await admin.put("/api/admin/mail-intake", { enabled: true, mailbox: "support@akab.ca" })).json.error).toBe("intake_no_o365");
+    expect((await admin.post("/api/admin/mail-intake/run", {})).json.error).toBe("intake_off");
   });
 });

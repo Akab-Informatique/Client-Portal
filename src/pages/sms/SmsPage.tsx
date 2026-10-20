@@ -5,7 +5,7 @@ import { CompanyPicker, ContactPicker, useCompanies, useContacts, type Company }
 import { smsPartCount } from "@shared/sms";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
-import { AlertTriangle, Archive, Bot, Building2, Clock3, Loader2, MessageSquareText, Plus, Search, Send, Ticket, Timer, Users, X } from "lucide-react";
+import { AlertTriangle, Archive, Bot, Building2, Clock3, Loader2, MessageSquareText, Plus, Search, Send, Ticket, Timer, Trash2, Users, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { AiTextarea } from "@/components/AiPolish";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
@@ -138,6 +138,17 @@ export function SmsInboxDialog({ initialId, onClose }: { initialId: string | nul
   const [selected, setSelected] = useState<string | null>(initialId);
   const [q, setQ] = useState("");
   const [scope, setScope] = useState<"pending" | "all" | "closed">("pending");
+  const inboxQc = useQueryClient();
+  const inboxConfirm = useConfirm();
+  const deleteClosed = useMutation({
+    mutationFn: () => api.del<{ deleted: number }>("/sms/conversations?closed=1"),
+    onSuccess: (r) => {
+      void inboxQc.invalidateQueries({ queryKey: ["sms"] });
+      setSelected(null);
+      toast.success(t("sms.deletedMany", { count: r.deleted }));
+    },
+    onError: () => toast.error(t("common.error")),
+  });
   const { data: list, isLoading } = useQuery({
     queryKey: ["sms", "conversations", scope === "closed"],
     queryFn: () => api.get<Conversation[]>(`/sms/conversations${scope === "closed" ? "?all=1" : ""}`),
@@ -183,6 +194,19 @@ export function SmsInboxDialog({ initialId, onClose }: { initialId: string | nul
                 ))}
               </div>
             </div>
+            {scope === "closed" && shown.length > 0 && (
+              <div className="border-b px-2 py-1.5">
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  className="h-7 w-full justify-start gap-1.5 text-[11px] text-muted-foreground hover:text-destructive"
+                  disabled={deleteClosed.isPending}
+                  onClick={() => void inboxConfirm({ title: t("sms.deleteClosedConfirm"), description: t("sms.deleteText"), destructive: true }).then((ok) => ok && deleteClosed.mutate())}
+                >
+                  {deleteClosed.isPending ? <Loader2 className="size-3 animate-spin" /> : <Trash2 className="size-3" />} {t("sms.deleteClosed")}
+                </Button>
+              </div>
+            )}
             <ul className="min-h-0 flex-1 divide-y overflow-y-auto">
               {isLoading && <Skeleton className="m-3 h-16" />}
               {list && shown.length === 0 && <li className="px-4 py-10 text-center text-sm text-muted-foreground">{t("sms.none")}</li>}
@@ -285,6 +309,15 @@ function ThreadView({ id, onBack, onTicket }: { id: string; onBack: () => void; 
       onBack();
     },
   });
+  const remove = useMutation({
+    mutationFn: () => api.del(`/sms/conversations/${id}`),
+    onSuccess: () => {
+      refresh();
+      onBack();
+      toast.success(t("sms.deleted"));
+    },
+    onError: () => toast.error(t("common.error")),
+  });
   if (isLoading || !data) return <Skeleton className="h-96 rounded-2xl" />;
   const parts = smsPartCount(text);
   const left = data.status === "waiting" || data.status === "details" ? minutesLeft(data.autoTicketAt) : null;
@@ -332,6 +365,15 @@ function ThreadView({ id, onBack, onTicket }: { id: string; onBack: () => void; 
             <Archive className="size-3.5" /> {t("sms.close")}
           </Button>
         )}
+        <Button
+          size="sm"
+          variant="ghost"
+          className="h-8 text-muted-foreground hover:text-destructive"
+          disabled={remove.isPending}
+          onClick={() => void confirm({ title: t("sms.deleteConfirm"), description: t("sms.deleteText"), destructive: true }).then((ok) => ok && remove.mutate())}
+        >
+          {remove.isPending ? <Loader2 className="size-3.5 animate-spin" /> : <Trash2 className="size-3.5" />} {t("sms.delete")}
+        </Button>
       </div>
       {left !== null && (
         <p className="flex items-center gap-2 border-b bg-orange-500/10 px-4 py-2 text-xs text-orange-200">

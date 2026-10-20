@@ -153,6 +153,24 @@ export const smsRoutes = new Hono<AppEnv>()
     return c.json({ ok: true });
   })
 
+  /** Every closed conversation, deleted with its texts. */
+  .delete("/conversations", async (c) => {
+    const a = auth(c);
+    if (c.req.query("closed") !== "1") throw new HTTPException(400, { message: "invalid_value" });
+    const gone = await db().delete(schema.smsConversations).where(eq(schema.smsConversations.status, "closed")).returning({ id: schema.smsConversations.id });
+    await audit(a.realUser.id, "sms.deleted_closed", null, { count: gone.length });
+    return c.json({ ok: true, deleted: gone.length });
+  })
+
+  /** A conversation deleted for good, with its texts (the ticket it made, if any, stays). The next text from this number starts a new one. */
+  .delete("/conversations/:id", async (c) => {
+    const a = auth(c);
+    const conv = await conversation(zUuid.parse(c.req.param("id")));
+    await db().delete(schema.smsConversations).where(eq(schema.smsConversations.id, conv.id));
+    await audit(a.realUser.id, "sms.deleted", conv.id, { phone: conv.phone, status: conv.status });
+    return c.json({ ok: true });
+  })
+
   /** A text to the client from a ticket (to the contact's number, or the one typed). */
   .post("/ticket/:ticketId", async (c) => {
     const a = auth(c);

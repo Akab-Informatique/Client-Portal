@@ -573,6 +573,37 @@ export const localAssets = pgTable("local_assets", {
 });
 
 /**
+ * Emails read from the support mailbox (Admin › Courriel entrant): each one is
+ * claimed here before anything is done with it, so it never makes two tickets.
+ * status: ticket (a ticket was opened), reply (added to the ticket named in its
+ * subject), pending (nobody to match: a technician decides), ignored, skipped
+ * (an automatic or looping message), error.
+ */
+export const mailIntake = pgTable(
+  "mail_intake",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    /** Graph message id */
+    messageId: text("message_id").notNull(),
+    mailbox: text("mailbox").notNull(),
+    fromAddress: text("from_address"),
+    fromName: text("from_name"),
+    subject: text("subject"),
+    body: text("body"),
+    receivedAt: timestamp("received_at", { withTimezone: true }),
+    status: text("status").notNull().default("processing"),
+    ticketId: bigint("ticket_id", { mode: "number" }),
+    ticketNumber: text("ticket_number"),
+    companyId: integer("company_id"),
+    contactId: text("contact_id"),
+    note: text("note"),
+    createdAt: created(),
+    updatedAt: updated(),
+  },
+  (t) => [uniqueIndex("mail_intake_message_idx").on(t.messageId), index("mail_intake_status_idx").on(t.status)],
+);
+
+/**
  * Where a ticket comes from (Admin › Sources): phone, text, email, in person to
  * start. A ticket made from an email is "email", from a text "sms", by phone or
  * by hand "phone".

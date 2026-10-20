@@ -288,6 +288,8 @@ export interface TicketSource {
   /** A note written by the portal itself (e.g. a text from the client), internal */
   /** An internal note for a text with the client (title starts with SMS_NOTE_TAG) */
   addSmsNote(ticketId: number, title: string, text: string): Promise<void>;
+  /** An email from the client, added to its ticket as the client's own message (written by the portal, no technician) */
+  addMailReply(ticketId: number, from: { name: string | null; address: string }, text: string): Promise<void>;
   /**
    * A text (or any message) from the client arrived: the ticket goes to its
    * "needs attention" status, like a new client reply, unless it is complete.
@@ -669,6 +671,10 @@ const demoSource: TicketSource = {
       if (hit) return { contactId: hit.id, contactName: hit.name, companyId: c.id, companyName: c.name };
     }
     return null;
+  },
+  async addMailReply(ticketId, from, text) {
+    await this.list();
+    if (!addDemoNote(ticketId, { author: from.name || from.address, text, internal: false })) throw new SourceError("not_found");
   },
   async addSmsNote(ticketId, title, text) {
     await this.list();
@@ -1203,7 +1209,7 @@ async function loadList(sinceDay: string): Promise<NTicket[]> {
 }
 
 /** The signature of a client's reply made in the client portal (saved by the API user): "— Name (client, via le portail AKAB)" */
-const CLIENT_SIGNED = /\n*—\s*(.+?)\s*\(client, via le portail AKAB\)\s*$/;
+const CLIENT_SIGNED = /\n*—\s*(.+?)\s*\(client, (?:via le portail AKAB|par courriel)\)\s*$/;
 /** Note types written by Autotask itself, not by a person */
 const SYSTEM_NOTE_TYPE = /workflow|flux|r[eè]gle|forward|transf[eé]r|duplicat|merge|fusion|copy|copi[eé]|survey|sondage|recurr|r[eé]curr|automat|syst[eè]m/i;
 
@@ -1765,6 +1771,23 @@ const autotaskSource: TicketSource = {
     await refreshOne(at, ticketId);
     return true;
   },
+  async addMailReply(ticketId, from, text) {
+    const at = await autotask();
+    const opts = await atOptions();
+    const noteType = opts.noteTypes.find((n) => /task|tâche|detail|détail/i.test(n.label)) ?? opts.noteTypes[0];
+    const publish = opts.publish.find((x) => /all|tous|client|customer/i.test(x.label)) ?? opts.publish[0];
+    // saved by the API user (a client is not an Autotask resource), signed with the sender's name
+    const signed = `${text}\n\n— ${from.name || from.address} (client, par courriel)`.slice(0, 8000);
+    await at.call("POST", `Tickets/${ticketId}/Notes`, {
+      ticketID: ticketId,
+      title: text.split("\n")[0].slice(0, 120) || "Courriel",
+      description: signed,
+      noteType: noteType ? Number(noteType.value) : 1,
+      publish: publish ? Number(publish.value) : 1,
+    });
+    forget(`detail:${ticketId}:`);
+  },
+
   async addSmsNote(ticketId, title, text) {
     const at = await autotask();
     const opts = await atOptions();

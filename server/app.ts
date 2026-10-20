@@ -17,6 +17,7 @@ import { workflowRoutes } from "./routes/workflows.ts";
 import { queueRoutes } from "./routes/queues.ts";
 import { classRoutes } from "./routes/classes.ts";
 import { ticketSetupRoutes } from "./routes/ticketSetup.ts";
+import { mailIntakeAdminRoutes, mailIntakeRoutes } from "./routes/mailIntake.ts";
 import { emailRoutes } from "./routes/email.ts";
 import { boardRoutes, messageRoutes } from "./routes/messages.ts";
 import { dashboardRoutes } from "./routes/dashboard.ts";
@@ -89,6 +90,8 @@ export function createApp() {
   api.route("/admin/queues", queueRoutes);
   api.route("/admin/client-classes", classRoutes);
   api.route("/admin/ticket-setup", ticketSetupRoutes);
+  api.route("/admin/mail-intake", mailIntakeAdminRoutes);
+  api.route("/mail-intake", mailIntakeRoutes);
   api.route("/admin", adminRoutes);
   api.use("/messages/*", requireStaff);
   api.route("/store", storeRoutes);

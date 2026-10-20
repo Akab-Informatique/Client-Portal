@@ -59,6 +59,7 @@ import { useCan, useMe } from "@/lib/session";
 import { cn, initials } from "@/lib/utils";
 import { GlassBackdrop } from "@/components/brand/GlassBackdrop";
 import { NewTicketDialog } from "./NewTicketDialog";
+import { PendingMails } from "./PendingMails";
 import { dueState, FILTER_KEYS, PRIORITY_STYLE, dueGlow, useChoiceText, shortDate, shortDateTime, STATUS_STYLE, useTickets, VIEWS, type Tally, type TicketList, type TicketSummary, type View, ticketErrorText } from "./shared";
 import { useTicketWorkspace } from "./workspace";
 import { GlobalSearch } from "./GlobalSearch";
@@ -192,6 +193,7 @@ export function TicketsPage() {
         <div className="flex w-full flex-wrap items-center gap-2 sm:w-auto">
           <GlobalSearch demo={Boolean(data?.demo)} />
           {can("tickets.ai") && data && (data.ai ? <AiPlanButton /> : <AiSetupHint label={t("tickets.ai.plan")} />)}
+          {can("tickets.edit") && data && <PendingMails facets={data.facets} onCreated={(id) => ws.open(id)} />}
           {can("tickets.edit") && (
             <Button size="sm" onClick={() => setCreating(true)} className="h-9 bg-grad-gold font-semibold text-[#1a1204] glow-gold hover:brightness-105">
               <Plus className="size-4" /> {t("tickets.new")}
