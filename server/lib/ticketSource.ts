@@ -278,6 +278,12 @@ export interface TicketSource {
   /** A note written by the portal itself (e.g. a text from the client), internal */
   /** An internal note for a text with the client (title starts with SMS_NOTE_TAG) */
   addSmsNote(ticketId: number, title: string, text: string): Promise<void>;
+  /**
+   * A text (or any message) from the client arrived: the ticket goes to its
+   * "needs attention" status, like a new client reply, unless it is complete.
+   * Done by the portal itself (no technician). Returns whether it changed.
+   */
+  markNeedsAttention(ticketId: number): Promise<boolean>;
   /** Work types for time entries (Autotask billing codes); empty when not used */
   workTypes(): Promise<{ value: string; label: string }[]>;
   addTimeEntry(ticketId: number, p: NewTimeEntry, a: AuthContext): Promise<void>;
@@ -652,6 +658,11 @@ const demoSource: TicketSource = {
   async addSmsNote(ticketId, title, text) {
     await this.list();
     addDemoNote(ticketId, { author: "Texto", text: `${SMS_NOTE_TAG} ${title}\n${text}`, internal: true });
+  },
+  async markNeedsAttention(ticketId) {
+    const t = (await this.list()).find((x) => x.id === ticketId);
+    if (!t || t.status === "complete" || t.status === "needsAttention") return false;
+    return updateDemoTicket(ticketId, { status: "needsAttention" });
   },
   async createSystem(p) {
     const id = await this.create(p, undefined as never);
@@ -1115,6 +1126,8 @@ async function loadList(): Promise<NTicket[]> {
 }
 
 /** Note types written by Autotask itself, not by a person */
+/** The signature of a client's reply made in the client portal (saved by the API user) */
+const CLIENT_BYLINE = /\(client, via le portail AKAB\)\s*$/;
 const SYSTEM_NOTE_TYPE = /workflow|flux|r[eè]gle|forward|transf[eé]r|duplicat|merge|fusion|copy|copi[eé]|survey|sondage|recurr|r[eé]curr|automat|syst[eè]m/i;
 
 /** Autotask lists (cached 10 min): ticket picklists + note types/publish values. */
@@ -1230,7 +1243,13 @@ const autotaskSource: TicketSource = {
       internal: internalValues.has(String(n.publish)),
       kind: "note",
       // neither a technician (portal or Autotask) nor the client: Autotask's own
-      ...(!portalAuthor("note", n.id) && (systemTypes.has(String(n.noteType)) || (!n.creatorResourceID && !contactOf(n))) ? { system: true } : {}),
+      // neither a technician (portal or Autotask) nor the client: Autotask's own (workflow rules, the API user, a
+      // resource that is not an active technician); a client's reply made in the client portal is signed by the API user
+      ...(!portalAuthor("note", n.id) &&
+      !CLIENT_BYLINE.test(n.description ?? "") &&
+      (systemTypes.has(String(n.noteType)) || (!n.creatorResourceID && !contactOf(n)) || (n.creatorResourceID && !contactOf(n) && !res.some((r) => r.id === n.creatorResourceID)))
+        ? { system: true }
+        : {}),
     }));
     // Time entries = the work done on the ticket (summary for the client, internal note for the team)
     const timeItems: Note[] = times.map((x) => ({
@@ -1648,6 +1667,18 @@ const autotaskSource: TicketSource = {
     });
   },
 
+  async markNeedsAttention(ticketId) {
+    const at = await autotask();
+    const opts = await atOptions();
+    const attention = opts.statuses.find((s) => s.kind === "needsAttention");
+    if (!attention) return false;
+    const cur = (await mirrorMap()).get(ticketId) ?? (await this.get(ticketId));
+    if (!cur || cur.status === attention.value || opts.statuses.find((s) => s.value === cur.status)?.kind === "complete") return false;
+    // the portal's own API user: no technician to act for
+    await at.call("PATCH", "Tickets", { id: ticketId, status: Number(attention.value) });
+    await refreshOne(at, ticketId);
+    return true;
+  },
   async addSmsNote(ticketId, title, text) {
     const at = await autotask();
     const opts = await atOptions();

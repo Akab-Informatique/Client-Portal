@@ -159,15 +159,63 @@ export const smsRoutes = new Hono<AppEnv>()
     const ticketId = Number(c.req.param("ticketId"));
     if (!Number.isInteger(ticketId)) throw new HTTPException(400, { message: "invalid_id" });
     if (!rateLimit(`sms-send:${a.realUser.id}`, 60, 60_000).ok) throw new HTTPException(429, { message: "rate_limited" });
-    const p = await body(c, z.object({ phone: z.string().max(30), body: z.string().trim().min(1).max(1000) }));
-    const phone = normalizePhone(p.phone);
-    if (!phone) throw new HTTPException(400, { message: "invalid_phone" });
+    // one number (the ticket's client by default), or several people: a group text
+    const p = await body(
+      c,
+      z.object({
+        phone: z.string().max(30).optional(),
+        recipients: z.array(z.object({ phone: z.string().max(30), name: z.string().trim().max(120).nullable().optional(), contactId: z.string().max(40).nullable().optional() })).min(1).max(10).optional(),
+        groupKey: z.string().uuid().optional(),
+        body: z.string().trim().min(1).max(1000),
+      }),
+    );
+    const wanted = p.recipients ?? (p.phone ? [{ phone: p.phone }] : []);
+    if (!wanted.length) throw new HTTPException(400, { message: "invalid_phone" });
+    const phones = wanted.map((r) => normalizePhone(r.phone));
+    if (phones.some((x) => !x)) throw new HTTPException(400, { message: "invalid_phone" });
+    if (new Set(phones).size !== phones.length) throw new HTTPException(400, { message: "duplicate_recipient" });
     const src = await ticketSource();
     const t = await run(() => src.get(ticketId));
     if (!t) throw new HTTPException(404, { message: "not_found" });
-    const conv = await conversationForTicket({ id: t.id, number: t.number, phone, contactName: t.contact || null, contactId: t.contactId, companyId: t.company.id, companyName: t.company.name });
-    await run(() => replyAsTechnician(conv, p.body, a));
-    return c.json({ ok: true, conversationId: conv.id }, 201);
+    // the company's contacts: a contact id must be one of them (never trust the browser), and the ticket's own contact is known by its number
+    const contacts = await run(() => src.contacts(t.company.id)).catch(() => []);
+    const clientPhone = normalizePhone(contacts.find((x) => x.id === t.contactId)?.phone ?? "");
+    const groupKey = wanted.length > 1 ? (p.groupKey ?? crypto.randomUUID()) : null;
+    const sent: { phone: string; conversationId: string; ok: boolean }[] = [];
+    let firstError: unknown = null;
+    for (const [i, r] of wanted.entries()) {
+      const own = (Boolean(clientPhone) && phones[i] === clientPhone) || (!("contactId" in r) && wanted.length === 1);
+      const known = "contactId" in r && r.contactId ? contacts.find((x) => x.id === r.contactId) : undefined;
+      const conv = await conversationForTicket({
+        id: t.id,
+        number: t.number,
+        phone: phones[i]!,
+        contactName: known?.name ?? ("name" in r && r.name ? r.name : own ? t.contact || null : null),
+        contactId: known?.id ?? (own ? t.contactId : null),
+        companyId: t.company.id,
+        companyName: t.company.name,
+      });
+      // one failing number does not stop the others; its failed text stays in its conversation
+      const ok = await run(() => replyAsTechnician(conv, p.body, a, groupKey)).then(
+        () => true,
+        (e) => {
+          firstError ??= e;
+          return false;
+        },
+      );
+      sent.push({ phone: phones[i]!, conversationId: conv.id, ok });
+    }
+    // nobody got it: the reason (VoIP.ms's) goes back
+    if (sent.every((x) => !x.ok)) throw firstError;
+    return c.json({ ok: true, conversationId: sent[0].conversationId, groupKey, sent }, 201);
+  })
+
+  /** The texts of a ticket were looked at: their unread count goes back to zero. */
+  .post("/ticket/:ticketId/read", async (c) => {
+    const ticketId = Number(c.req.param("ticketId"));
+    if (!Number.isInteger(ticketId)) throw new HTTPException(400, { message: "invalid_id" });
+    await db().update(schema.smsConversations).set({ unread: 0 }).where(and(eq(schema.smsConversations.ticketId, ticketId), sql`${schema.smsConversations.unread} > 0`));
+    return c.json({ ok: true });
   })
 
   /** Texts of the conversations linked to a ticket. */
@@ -183,6 +231,7 @@ export const smsRoutes = new Hono<AppEnv>()
         direction: schema.smsMessages.direction,
         body: schema.smsMessages.body,
         auto: schema.smsMessages.auto,
+        groupKey: schema.smsMessages.groupKey,
         status: schema.smsMessages.status,
         error: schema.smsMessages.error,
         createdAt: schema.smsMessages.createdAt,

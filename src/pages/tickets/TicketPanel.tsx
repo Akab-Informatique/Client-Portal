@@ -15,6 +15,7 @@ import {
   Check,
   CheckCircle2,
   ChevronDown,
+  ChevronUp,
   Clock3,
   Eye,
   FileText,
@@ -85,7 +86,6 @@ import {
   type Viewer,
   ticketErrorText,
   type TicketSummary,
-  hm,
 } from "./shared";
 
 const SOURCE_ICON: Record<string, LucideIcon> = { email: Mail, phone: Phone, portal: Inbox, monitoring: MonitorCog };
@@ -316,6 +316,13 @@ function TicketBody({
   // the exchange shown: the ticket activity, or the texts with the client
   const [thread, setThread] = useState<"activity" | "sms">("activity");
   const { data: texts } = useTicketSms(tk.id, can("sms.view") && !partial);
+  // texts received and not looked at yet; a new one also moved the ticket to "needs attention": the ticket is read again
+  const unreadTexts = (texts?.conversations ?? []).reduce((n, c) => n + c.unread, 0);
+  const seenTexts = useRef(0);
+  useEffect(() => {
+    if (unreadTexts > seenTexts.current) void qc.invalidateQueries({ queryKey: ["tickets"] });
+    seenTexts.current = unreadTexts;
+  }, [unreadTexts, qc]);
   const done = tk.options.statuses.find((s) => s.kind === "complete");
   const remote = tk.asset?.links.remote ?? null;
   const phone = tk.contactInfo?.phone ?? null;
@@ -540,34 +547,33 @@ function TicketBody({
                     className={cn(
                       "flex flex-1 items-center justify-center gap-1.5 rounded-lg px-3 py-1.5 font-medium transition-colors",
                       thread === k ? "bg-grad-gold text-[#1a1204]" : "text-muted-foreground hover:text-foreground",
+                      // a text came in and was not looked at yet: the tab blinks until it is opened
+                      k === "sms" && unreadTexts > 0 && thread !== "sms" && "animate-attention font-semibold text-orange-200",
                     )}
                   >
                     {k === "activity" ? <Clock3 className="size-3.5" /> : <MessageSquareText className="size-3.5" />}
                     {t(`sms.thread.${k}`)}
-                    {k === "sms" && (texts?.messages.length ?? 0) > 0 && (
+                    {k === "sms" && unreadTexts > 0 && (
+                      <span className="rounded-full bg-orange-500 px-1.5 font-mono text-[10px] font-bold text-white" title={t("sms.ticket.unread", { count: unreadTexts })}>
+                        {unreadTexts}
+                      </span>
+                    )}
+                    {k === "sms" && unreadTexts === 0 && (texts?.messages.length ?? 0) > 0 && (
                       <span className="rounded-full bg-black/15 px-1.5 font-mono text-[10px]">{texts!.messages.length}</span>
                     )}
                   </button>
                 ))}
               </div>
             )}
-            {thread === "sms" && can("sms.view") ? <TicketSmsPanel ticketId={tk.id} phone={phone} /> : <Activity tk={tk} partial={partial && !loadError} />}
+            {thread === "sms" && can("sms.view") ? (
+              <TicketSmsPanel ticketId={tk.id} phone={phone} companyId={tk.company.id} clientName={tk.contact || null} />
+            ) : (
+              <Activity tk={tk} partial={partial && !loadError} />
+            )}
           </div>
           {/* Charges and expenses: small buttons right above the note box */}
           <div className="flex flex-wrap items-center gap-1.5 pb-2 lg:pr-2">
             <ChargeButtons tk={tk} editable={editable} partial={partial} />
-            {can("sms.view") && (
-              <Button
-                type="button"
-                size="sm"
-                variant={thread === "sms" ? "default" : "outline"}
-                className={cn("h-8 gap-1.5 text-xs", thread === "sms" && "bg-grad-gold text-[#1a1204]")}
-                onClick={() => setThread(thread === "sms" ? "activity" : "sms")}
-              >
-                <MessageSquareText className="size-3.5" /> {t("sms.quick")}
-                {(texts?.messages.length ?? 0) > 0 && <span className="font-mono text-[10px] opacity-70">{texts!.messages.length}</span>}
-              </Button>
-            )}
           </div>
           {editable && thread !== "sms" && (
             <div className="sticky bottom-0 z-10 -mx-2 bg-gradient-to-t from-background via-background/95 to-transparent px-2 pb-4 pt-1 lg:static lg:mx-0 lg:bg-none lg:px-0 lg:pr-2">
@@ -810,9 +816,13 @@ function Section({
   );
 }
 
-type ActivityFilter = "all" | "reply" | "internal" | "time";
+type ActivityFilter = "all" | "reply" | "internal";
 
-/** What was said and done: replies, internal notes and time entries, filterable. */
+/**
+ * What was said: the client's messages, the technicians' replies and their
+ * internal notes (marked internal). Nothing Autotask writes by itself (workflow
+ * rules, the API user…) and no time entries.
+ */
 function Activity({ tk, partial }: { tk: TicketDetail; partial: boolean }) {
   const { t } = useTranslation();
   const [filter, setFilter] = useState<ActivityFilter>("all");
@@ -833,13 +843,10 @@ function Activity({ tk, partial }: { tk: TicketDetail; partial: boolean }) {
       }
       return !v;
     });
-  // what Autotask writes by itself (workflow rules…): hidden unless asked for
-  const [showSystem, setShowSystem] = useState(false);
-  const systemCount = tk.notes.filter((n) => n.system).length;
-  // by date (oldest → newest; flipped below for newest first)
-  const notes = (showSystem ? tk.notes : tk.notes.filter((n) => !n.system)).slice().sort((x, y) => x.at.localeCompare(y.at));
-  const kindOf = (n: TicketDetail["notes"][number]): Exclude<ActivityFilter, "all"> => (n.kind === "time" ? "time" : n.internal ? "internal" : "reply");
-  const counts = { all: notes.length, reply: 0, internal: 0, time: 0 };
+  // by date (oldest → newest; flipped below for newest first); never what Autotask writes by itself, never time entries
+  const notes = tk.notes.filter((n) => !n.system && n.kind !== "time").sort((x, y) => x.at.localeCompare(y.at));
+  const kindOf = (n: TicketDetail["notes"][number]): Exclude<ActivityFilter, "all"> => (n.internal ? "internal" : "reply");
+  const counts = { all: notes.length, reply: 0, internal: 0 };
   for (const n of notes) counts[kindOf(n)]++;
   const shown = notes.filter((n) => filter === "all" || kindOf(n) === filter);
   if (newestFirst) shown.reverse();
@@ -848,7 +855,7 @@ function Activity({ tk, partial }: { tk: TicketDetail; partial: boolean }) {
     <section className="glass rounded-2xl border p-4">
       <div className="mb-3 flex flex-wrap items-center gap-1.5">
         <p className="mr-2 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">{t("tickets.activity")}</p>
-        {(["all", "reply", "internal", "time"] as const).map((f) => (
+        {(["all", "reply", "internal"] as const).map((f) => (
           <button
             key={f}
             type="button"
@@ -863,17 +870,7 @@ function Activity({ tk, partial }: { tk: TicketDetail; partial: boolean }) {
             {t(`tickets.activityFilter.${f}`)} {counts[f] > 0 && <span className="opacity-60">{counts[f]}</span>}
           </button>
         ))}
-        {systemCount > 0 && (
-          <button
-            type="button"
-            onClick={() => setShowSystem((v) => !v)}
-            className={cn("ml-auto rounded-full border px-2 py-0.5 text-[11px]", showSystem ? "border-slate-500/50 text-foreground" : "border-transparent text-muted-foreground hover:text-foreground")}
-            title={t("tickets.systemNotesHint")}
-          >
-            {t(showSystem ? "tickets.systemNotesHide" : "tickets.systemNotesShow", { count: systemCount })}
-          </button>
-        )}
-        <button type="button" onClick={flip} className={cn("flex items-center gap-1 text-[11px] text-muted-foreground hover:text-foreground", !systemCount && "ml-auto")}>
+        <button type="button" onClick={flip} className="ml-auto flex items-center gap-1 text-[11px] text-muted-foreground hover:text-foreground">
           <ArrowDownUp className="size-3" /> {newestFirst ? t("tickets.activityOrder.newest") : t("tickets.activityOrder.oldest")}
         </button>
       </div>
@@ -890,31 +887,15 @@ function Activity({ tk, partial }: { tk: TicketDetail; partial: boolean }) {
               <span
                 className={cn(
                   "absolute -left-[27px] top-1 flex size-3.5 items-center justify-center rounded-full border-2 border-background",
-                  n.kind === "time" ? "bg-sky-400" : n.internal ? "bg-violet-400" : "bg-grad-gold",
+                  n.internal ? "bg-violet-400" : "bg-grad-gold",
                 )}
               />
               <div className="flex flex-wrap items-baseline gap-x-2 text-sm">
                 <span className="font-medium">{n.author}</span>
                 <span className="text-xs text-muted-foreground">{longDateTime(n.at)}</span>
-                {n.kind === "time" && (
-                  <span className="flex items-center gap-1 rounded-full bg-sky-500/15 px-1.5 text-[10px] font-medium text-sky-300">
-                    <Clock3 className="size-2.5" /> {t("tickets.timeEntry", { hours: hm(n.hours ?? 0) })}
-                  </span>
-                )}
-                {n.kind === "time" && n.billable === false && (
-                  <span className="rounded-full bg-slate-500/20 px-1.5 text-[10px] font-medium text-slate-300">{t("tickets.timer.nonBillable")}</span>
-                )}
-                {n.kind === "time" && n.billable !== false && (n.offsetHours ?? 0) > 0 && (
-                  <span className="rounded-full bg-amber-500/15 px-1.5 text-[10px] font-medium text-amber-300">
-                    {t("tickets.timer.billedAfterOffset", {
-                      billed: hm(Math.max(0, (n.hours ?? 0) - (n.offsetHours ?? 0))),
-                      offset: hm(n.offsetHours ?? 0),
-                    })}
-                  </span>
-                )}
                 {n.internal && (
                   <span className="flex items-center gap-1 rounded-full bg-violet-500/15 px-1.5 text-[10px] font-medium text-violet-300">
-                    <Lock className="size-2.5" /> {t("tickets.internal")}
+                    <Lock className="size-2.5" /> {t("tickets.internalOnly")}
                   </span>
                 )}
               </div>
@@ -922,18 +903,10 @@ function Activity({ tk, partial }: { tk: TicketDetail; partial: boolean }) {
                 <p
                   className={cn(
                     "mt-1 whitespace-pre-wrap rounded-lg px-3 py-2 text-sm",
-                    n.internal ? "bg-violet-500/5" : n.kind === "time" ? "bg-sky-500/5" : "bg-muted/50",
+                    n.internal ? "border-l-2 border-violet-400/60 bg-violet-500/5" : "bg-muted/50",
                   )}
                 >
                   {n.text}
-                </p>
-              )}
-              {n.internalText && (
-                <p className="mt-1 whitespace-pre-wrap rounded-lg bg-violet-500/5 px-3 py-2 text-sm">
-                  <span className="mb-0.5 flex items-center gap-1 text-[10px] font-medium uppercase tracking-wide text-violet-300">
-                    <Lock className="size-2.5" /> {t("tickets.internal")}
-                  </span>
-                  {n.internalText}
                 </p>
               )}
             </li>
@@ -1177,16 +1150,24 @@ function Description({ text }: { text: string }) {
     if (el && !open) setLong(el.scrollHeight > el.clientHeight + 2);
   }, [text, open]);
   return (
-    <>
+    <div className="relative">
       <p ref={ref} className={cn("whitespace-pre-wrap text-sm leading-relaxed", !open && "line-clamp-5")}>
         {text}
       </p>
+      {/* a long description: one discreet arrow on the section's bottom edge, in the middle, to open or fold it */}
       {(long || open) && (
-        <button type="button" onClick={() => setOpen((o) => !o)} className="mt-1.5 flex items-center gap-1 text-xs font-medium text-primary hover:underline">
-          <ChevronDown className={cn("size-3.5 transition-transform", open && "rotate-180")} /> {open ? t("tickets.showLess") : t("tickets.showMore")}
+        <button
+          type="button"
+          onClick={() => setOpen((o) => !o)}
+          aria-expanded={open}
+          aria-label={open ? t("tickets.showLess") : t("tickets.showMore")}
+          title={open ? t("tickets.showLess") : t("tickets.showMore")}
+          className="absolute -bottom-4 left-1/2 flex h-4 w-20 -translate-x-1/2 items-center justify-center rounded-t-lg border border-b-0 border-[color:var(--glass-border)] bg-foreground/[0.05] text-muted-foreground transition-colors hover:border-[color:var(--gold)]/40 hover:bg-[color:var(--gold)]/10 hover:text-primary"
+        >
+          {open ? <ChevronUp className="size-4" /> : <ChevronDown className="size-4" />}
         </button>
       )}
-    </>
+    </div>
   );
 }
 

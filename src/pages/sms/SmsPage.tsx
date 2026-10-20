@@ -1,11 +1,11 @@
 import { useEffect, useMemo, useRef, useState, type FormEvent } from "react";
 import { useTranslation } from "react-i18next";
 import { Label } from "@/components/ui/label";
-import { CompanyPicker, ContactPicker, useCompanies, type Company } from "@/pages/tickets/pickers";
+import { CompanyPicker, ContactPicker, useCompanies, useContacts, type Company } from "@/pages/tickets/pickers";
 import { smsPartCount } from "@shared/sms";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
-import { AlertTriangle, Archive, Bot, Building2, Clock3, Loader2, MessageSquareText, Search, Send, Ticket, Timer, X } from "lucide-react";
+import { AlertTriangle, Archive, Bot, Building2, Clock3, Loader2, MessageSquareText, Plus, Search, Send, Ticket, Timer, Users, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { AiTextarea } from "@/components/AiPolish";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
@@ -39,7 +39,19 @@ export type Conversation = {
   lastMessageAt: string;
   lastPreview: string;
 };
-type Message = { id: string; direction: "in" | "out"; body: string; auto: boolean; status: "received" | "sent" | "failed"; error?: string | null; createdAt: string; author: string | null };
+type Message = {
+  id: string;
+  direction: "in" | "out";
+  body: string;
+  auto: boolean;
+  status: "received" | "sent" | "failed";
+  error?: string | null;
+  createdAt: string;
+  author: string | null;
+  /** In a ticket: whose conversation it is, and the group it was sent to (if any) */
+  conversationId?: string;
+  groupKey?: string | null;
+};
 type Thread = Conversation & { messages: Message[]; max: number };
 type Summary = { waiting: number; unread: number; open: number; next: string | null; ready: boolean; longAsMms?: boolean };
 
@@ -430,93 +442,307 @@ function counterText(t: (k: string, o?: Record<string, unknown>) => string, text
   return parts > 1 && mms ? t("sms.counterMms", { count: text.length }) : t("sms.counter", { count: text.length, parts });
 }
 
-/** In a ticket: the texts with the client (instead of the activity), and the reply box. */
-export function TicketSmsPanel({ ticketId, phone }: { ticketId: number; phone: string | null }) {
+/** The last 10 digits: how numbers are compared */
+const d10 = (p: string | null | undefined) => (p ?? "").replace(/\D/g, "").slice(-10);
+const initialsOf = (n: string) =>
+  n
+    .split(/\s+/)
+    .map((w) => w[0])
+    .filter(Boolean)
+    .slice(0, 2)
+    .join("")
+    .toUpperCase();
+
+type Recipient = { phone: string; name: string | null; contactId?: string | null };
+type Entry = {
+  key: string;
+  kind: "person" | "group";
+  name: string;
+  /** Person: their number; group: the people's numbers */
+  phones: string[];
+  people: Recipient[];
+  isClient?: boolean;
+  groupKey?: string;
+  messages: Message[];
+  unread: number;
+};
+
+/**
+ * In a ticket: the texts, with a small sidebar of the conversations of this
+ * ticket — the ticket's client first (shown by default), anyone else, and group
+ * texts (the same text to several people; each person answers on their own) —
+ * and "+" to text someone new or a group.
+ */
+export function TicketSmsPanel({ ticketId, phone, companyId, clientName }: { ticketId: number; phone: string | null; companyId: number; clientName: string | null }) {
   const { t } = useTranslation();
   const qc = useQueryClient();
   const { data, isLoading } = useTicketSms(ticketId, true);
   const { data: summary } = useSmsSummary();
-  const known = data?.conversations[0]?.phone ?? null;
-  const [to, setTo] = useState(known ?? phone ?? "");
-  useEffect(() => {
-    if (known) setTo((v) => v || known);
-  }, [known]);
+  const { data: contacts = [] } = useContacts(companyId);
+  const clientPhone = d10(phone);
+
+  // who is who: every conversation of the ticket, by number
+  const entries = useMemo<Entry[]>(() => {
+    const convs = data?.conversations ?? [];
+    const msgs = data?.messages ?? [];
+    const nameOf = (c: Conversation | undefined, p: string) => c?.contactName ?? (p === clientPhone ? clientName : null) ?? fmtPhone(p);
+    const phones = [...new Set([...(clientPhone ? [clientPhone] : []), ...convs.map((c) => c.phone)])];
+    const people: Entry[] = phones.map((p) => {
+      const mine = convs.filter((c) => c.phone === p);
+      const ids = new Set(mine.map((c) => c.id));
+      return {
+        key: p === clientPhone ? "client" : `p:${p}`,
+        kind: "person",
+        name: nameOf(mine[0], p),
+        phones: [p],
+        people: [{ phone: p, name: nameOf(mine[0], p), contactId: mine[0]?.contactId }],
+        isClient: p === clientPhone,
+        messages: msgs.filter((m) => m.conversationId && ids.has(m.conversationId)),
+        unread: mine.reduce((n, c) => n + c.unread, 0),
+      };
+    });
+    // the ticket's client always has an entry, even with no number yet
+    if (!clientPhone) people.unshift({ key: "client", kind: "person", name: clientName ?? t("sms.ticket.client"), phones: [], people: [], isClient: true, messages: [], unread: 0 });
+    // group texts: one entry per group key — what was sent once, and what each person answered after
+    const groups: Entry[] = [];
+    for (const key of [...new Set(msgs.map((m) => m.groupKey).filter((k): k is string => Boolean(k)))]) {
+      const sent = msgs.filter((m) => m.groupKey === key);
+      const convIds = new Set(sent.map((m) => m.conversationId));
+      const members = convs.filter((c) => convIds.has(c.id));
+      const first = sent.map((m) => m.createdAt).sort()[0];
+      // each person got their own copy a moment apart: shown once (same text within a minute)
+      const out: Message[] = [];
+      for (const m of [...sent].sort((a, b) => a.createdAt.localeCompare(b.createdAt))) {
+        if (!out.some((o) => o.body === m.body && Math.abs(Date.parse(m.createdAt) - Date.parse(o.createdAt)) < 60_000)) out.push(m);
+      }
+      const back = msgs.filter((m) => m.direction === "in" && m.conversationId && convIds.has(m.conversationId) && m.createdAt >= first);
+      groups.push({
+        key: `g:${key}`,
+        kind: "group",
+        name: members.map((c) => nameOf(c, c.phone).split(" ")[0]).join(", "),
+        phones: members.map((c) => c.phone),
+        people: members.map((c) => ({ phone: c.phone, name: nameOf(c, c.phone), contactId: c.contactId })),
+        groupKey: key,
+        messages: [...out, ...back].sort((a, b) => a.createdAt.localeCompare(b.createdAt)),
+        unread: members.reduce((n, c) => n + c.unread, 0),
+      });
+    }
+    const last = (e: Entry) => e.messages.at(-1)?.createdAt ?? "";
+    const rest = [...people.filter((e) => !e.isClient), ...groups].sort((a, b) => last(b).localeCompare(last(a)));
+    return [...people.filter((e) => e.isClient), ...rest];
+  }, [data, clientPhone, clientName, t]);
+  const names = useMemo(() => new Map((data?.conversations ?? []).map((c) => [c.id, c.contactName ?? fmtPhone(c.phone)])), [data]);
+
+  // "client" (shown by default), another entry, or "new" (text someone / a group)
+  const [sel, setSel] = useState("client");
+  const entry = entries.find((e) => e.key === sel) ?? entries[0];
+  const composing = sel === "new";
+  const [to, setTo] = useState(phone ?? "");
+  const [picked, setPicked] = useState<Recipient[]>([]);
+  const [other, setOther] = useState("");
   const [text, setText] = useState("");
+  const [find, setFind] = useState("");
+  useEffect(() => setTo(phone ?? ""), [phone]);
   const end = useRef<HTMLDivElement>(null);
+  const shown = composing ? [] : (entry?.messages ?? []);
   useEffect(() => {
     end.current?.scrollIntoView({ block: "end" });
-  }, [data?.messages.length]);
+  }, [shown.length, sel]);
+
+  // looking at the texts of the ticket clears what was unread (and the blinking tab)
+  const unreadTotal = (data?.conversations ?? []).reduce((n, c) => n + c.unread, 0);
+  useEffect(() => {
+    if (unreadTotal > 0) void api.post(`/sms/ticket/${ticketId}/read`).then(() => qc.invalidateQueries({ queryKey: ["sms"] }));
+  }, [unreadTotal, ticketId, qc]);
+
   const send = useMutation({
-    mutationFn: () => api.post(`/sms/ticket/${ticketId}`, { phone: to, body: text.trim() }),
-    onSuccess: () => {
+    mutationFn: (v: { phone?: string; recipients?: Recipient[]; groupKey?: string }) => api.post<{ groupKey: string | null }>(`/sms/ticket/${ticketId}`, { ...v, body: text.trim() }),
+    onSuccess: (r, v) => {
       setText("");
       void qc.invalidateQueries({ queryKey: ["sms"] });
       void qc.invalidateQueries({ queryKey: ["tickets", "detail", ticketId] });
+      // a new text goes to its person (or its group) conversation
+      if (composing) {
+        setSel(r.groupKey ? `g:${r.groupKey}` : v.recipients?.[0] && d10(v.recipients[0].phone) === clientPhone ? "client" : `p:${d10(v.recipients?.[0]?.phone)}`);
+        setPicked([]);
+      }
     },
     onError: (e) => toast.error(smsErrorText(t, e)),
   });
+  const canSend = Boolean(text.trim()) && !send.isPending && (composing ? picked.length > 0 : entry?.kind === "group" ? true : Boolean(to));
+  const doSend = () => {
+    if (!canSend) return;
+    if (composing) send.mutate({ recipients: picked });
+    else if (entry?.kind === "group") send.mutate({ recipients: entry.people, groupKey: entry.groupKey });
+    else send.mutate({ phone: entry?.isClient ? to : entry?.phones[0] });
+  };
+
+  const togglePick = (r: Recipient) => setPicked((l) => (l.some((x) => d10(x.phone) === d10(r.phone)) ? l.filter((x) => d10(x.phone) !== d10(r.phone)) : [...l, r]));
+  const addOther = () => {
+    const n = other.trim();
+    if (d10(n).length === 10 && !picked.some((x) => d10(x.phone) === d10(n))) setPicked((l) => [...l, { phone: n, name: null }]);
+    setOther("");
+  };
+  const withPhone = contacts.filter((c) => d10(c.phone).length === 10 && `${c.name} ${c.phone}`.toLowerCase().includes(find.toLowerCase()));
+
   return (
-    <section className="glass flex flex-col rounded-2xl border">
-      <div className="max-h-[50vh] min-h-40 space-y-2 overflow-y-auto p-4">
-        {isLoading && <Skeleton className="h-16" />}
-        {data && data.messages.length === 0 && <p className="py-8 text-center text-sm text-muted-foreground">{t("sms.noneInTicket")}</p>}
-        {data?.messages.map((m) => (
-          <div key={m.id} className={cn("flex", m.direction === "out" ? "justify-end" : "justify-start")}>
-            <div
-              className={cn(
-                "max-w-[80%] rounded-2xl px-3 py-2 text-sm",
-                m.direction === "in" ? "rounded-bl-sm bg-muted" : m.auto ? "rounded-br-sm border border-dashed border-[color:var(--gold)]/40 italic text-muted-foreground" : "rounded-br-sm bg-[color:var(--gold)]/20",
-                m.status === "failed" && "border border-destructive/60",
-              )}
-            >
-              <p className="whitespace-pre-wrap">{m.body}</p>
-              <p className="mt-1 flex items-center justify-end gap-1 text-[10px] text-muted-foreground">
-                {m.auto && <Bot className="size-3" />}
-                {m.auto ? t("sms.automatic") : m.direction === "in" ? t("sms.client") : m.author}
-                <span>· {time(m.createdAt)}</span>
-                {m.status === "failed" && <AlertTriangle className="size-3 text-destructive" />}
-              </p>
-              {m.status === "failed" && <p className="mt-1 text-[11px] not-italic text-destructive">{t("sms.failed", { error: smsFailureText(t, m.error) })}</p>}
-            </div>
-          </div>
+    <section className="glass flex min-h-80 flex-col overflow-hidden rounded-2xl border sm:flex-row">
+      {/* Sidebar: this ticket's conversations */}
+      <aside className="flex max-h-44 shrink-0 flex-col gap-0.5 overflow-y-auto border-b p-1.5 sm:max-h-[60vh] sm:w-52 sm:border-b-0 sm:border-r" aria-label={t("sms.ticket.sidebar")}>
+        {entries.map((e) => (
+          <button
+            key={e.key}
+            type="button"
+            onClick={() => setSel(e.key)}
+            aria-pressed={sel === e.key}
+            className={cn("flex w-full items-center gap-2 rounded-lg px-2 py-1.5 text-left transition-colors", sel === e.key ? "bg-[color:var(--gold)]/15" : "hover:bg-accent/50")}
+          >
+            <span className={cn("flex size-7 shrink-0 items-center justify-center rounded-full text-[10px] font-bold", e.kind === "group" ? "bg-violet-500/20 text-violet-300" : e.isClient ? "bg-grad-gold text-[#1a1204]" : "bg-muted")}>
+              {e.kind === "group" ? <Users className="size-3.5" /> : initialsOf(e.name)}
+            </span>
+            <span className="min-w-0 flex-1">
+              <span className="flex items-center gap-1 text-xs font-medium">
+                <span className="truncate">{e.kind === "group" ? t("sms.ticket.groupOf", { count: e.people.length }) : e.name}</span>
+                {e.isClient && <span className="shrink-0 rounded bg-[color:var(--gold)]/20 px-1 text-[9px] font-semibold uppercase text-primary">{t("sms.ticket.client")}</span>}
+              </span>
+              <span className="block truncate text-[10px] text-muted-foreground">{e.messages.at(-1)?.body ?? (e.kind === "group" ? e.name : t("sms.ticket.noText"))}</span>
+            </span>
+            {e.unread > 0 && <span className="size-2 shrink-0 animate-pulse rounded-full bg-orange-400" aria-label={t("sms.ticket.unread", { count: e.unread })} />}
+          </button>
         ))}
-        <div ref={end} />
-      </div>
-      <form
-        className="space-y-2 border-t p-3"
-        onSubmit={(e: FormEvent) => {
-          e.preventDefault();
-          if (to && text.trim()) send.mutate();
-        }}
-      >
-        {summary && !summary.ready && (
-          <p className="flex items-start gap-1.5 rounded-lg border border-orange-500/40 bg-orange-500/10 px-2.5 py-1.5 text-[11px] text-orange-200">
-            <AlertTriangle className="mt-0.5 size-3.5 shrink-0" /> {t("sms.cannotSend")}
-          </p>
+        <button
+          type="button"
+          onClick={() => setSel("new")}
+          aria-pressed={composing}
+          className={cn("mt-1 flex w-full items-center gap-2 rounded-lg border border-dashed px-2 py-1.5 text-left text-xs transition-colors", composing ? "border-[color:var(--gold)]/60 bg-[color:var(--gold)]/10 text-foreground" : "text-muted-foreground hover:border-[color:var(--gold)]/50 hover:text-foreground")}
+        >
+          <Plus className="size-4 shrink-0 text-primary" /> {t("sms.ticket.newText")}
+        </button>
+      </aside>
+
+      {/* The conversation, or who the new text goes to */}
+      <div className="flex min-w-0 flex-1 flex-col">
+        <div className="flex items-center gap-2 border-b px-4 py-2 text-xs">
+          {composing ? (
+            <span className="font-medium">{t("sms.ticket.newTitle")}</span>
+          ) : (
+            <>
+              <span className="font-medium">{entry?.kind === "group" ? t("sms.ticket.groupOf", { count: entry.people.length }) : entry?.name}</span>
+              <span className="truncate text-muted-foreground">{entry?.kind === "group" ? entry.name : entry?.phones[0] ? fmtPhone(entry.phones[0]) : ""}</span>
+            </>
+          )}
+        </div>
+
+        {composing ? (
+          <div className="max-h-[42vh] min-h-40 space-y-3 overflow-y-auto p-4">
+            <p className="text-xs text-muted-foreground">{t("sms.ticket.pickHint")}</p>
+            {contacts.some((c) => d10(c.phone).length === 10) && (
+              <div className="space-y-1.5">
+                {contacts.length > 6 && <Input value={find} onChange={(e) => setFind(e.target.value)} placeholder={t("sms.ticket.find")} className="h-8 text-xs" />}
+                <ul className="max-h-40 divide-y overflow-y-auto rounded-lg border">
+                  {withPhone.map((c) => {
+                    const on = picked.some((x) => d10(x.phone) === d10(c.phone));
+                    return (
+                      <li key={c.id}>
+                        <label className="flex cursor-pointer items-center gap-2 px-2.5 py-1.5 text-xs hover:bg-accent/40">
+                          <input type="checkbox" checked={on} onChange={() => togglePick({ phone: c.phone!, name: c.name, contactId: c.id })} className="accent-[color:var(--gold)]" />
+                          <span className="min-w-0 flex-1 truncate">{c.name}</span>
+                          <span className="font-mono text-[11px] text-muted-foreground">{fmtPhone(d10(c.phone))}</span>
+                        </label>
+                      </li>
+                    );
+                  })}
+                </ul>
+              </div>
+            )}
+            <div className="flex items-center gap-2">
+              <Input type="tel" value={other} onChange={(e) => setOther(e.target.value)} onKeyDown={(e) => e.key === "Enter" && (e.preventDefault(), addOther())} placeholder={t("sms.ticket.otherNumber")} className="h-8 max-w-48 font-mono text-xs" />
+              <Button type="button" size="sm" variant="outline" className="h-8" disabled={d10(other).length !== 10} onClick={addOther}>
+                <Plus className="size-3.5" /> {t("sms.ticket.add")}
+              </Button>
+            </div>
+            {picked.length > 0 && (
+              <div className="flex flex-wrap items-center gap-1.5">
+                {picked.map((r) => (
+                  <span key={r.phone} className="flex items-center gap-1 rounded-full border border-[color:var(--gold)]/40 bg-[color:var(--gold)]/10 py-0.5 pl-2.5 pr-1 text-xs">
+                    {r.name ?? fmtPhone(d10(r.phone))}
+                    <button type="button" onClick={() => togglePick(r)} aria-label={t("common.delete")} className="rounded-full p-0.5 hover:bg-foreground/10">
+                      <X className="size-3" />
+                    </button>
+                  </span>
+                ))}
+                {picked.length > 1 && <span className="text-[11px] text-violet-300">{t("sms.ticket.groupNote", { count: picked.length })}</span>}
+              </div>
+            )}
+          </div>
+        ) : (
+          <div className="max-h-[42vh] min-h-40 space-y-2 overflow-y-auto p-4">
+            {isLoading && <Skeleton className="h-16" />}
+            {data && shown.length === 0 && <p className="py-8 text-center text-sm text-muted-foreground">{t("sms.noneInTicket")}</p>}
+            {shown.map((m) => (
+              <div key={m.id} className={cn("flex", m.direction === "out" ? "justify-end" : "justify-start")}>
+                <div
+                  className={cn(
+                    "max-w-[80%] rounded-2xl px-3 py-2 text-sm",
+                    m.direction === "in" ? "rounded-bl-sm bg-muted" : m.auto ? "rounded-br-sm border border-dashed border-[color:var(--gold)]/40 italic text-muted-foreground" : "rounded-br-sm bg-[color:var(--gold)]/20",
+                    m.status === "failed" && "border border-destructive/60",
+                  )}
+                >
+                  <p className="whitespace-pre-wrap">{m.body}</p>
+                  <p className="mt-1 flex items-center justify-end gap-1 text-[10px] text-muted-foreground">
+                    {m.auto && <Bot className="size-3" />}
+                    {m.groupKey && entry?.kind !== "group" && <Users className="size-3 text-violet-300" aria-label={t("sms.ticket.groupMessage")} />}
+                    {m.auto ? t("sms.automatic") : m.direction === "in" ? (entry?.kind === "group" ? (names.get(m.conversationId ?? "") ?? t("sms.client")) : t("sms.client")) : m.author}
+                    <span>· {time(m.createdAt)}</span>
+                    {m.status === "failed" && <AlertTriangle className="size-3 text-destructive" />}
+                  </p>
+                  {m.status === "failed" && <p className="mt-1 text-[11px] not-italic text-destructive">{t("sms.failed", { error: smsFailureText(t, m.error) })}</p>}
+                </div>
+              </div>
+            ))}
+            <div ref={end} />
+          </div>
         )}
-        <div className="flex items-center gap-2">
-          <span className="text-xs text-muted-foreground">{t("sms.to")}</span>
-          <Input type="tel" value={to} onChange={(e) => setTo(e.target.value)} placeholder={t("sms.toNumber")} className="h-8 max-w-48 font-mono text-xs" />
-        </div>
-        <AiTextarea
-          rows={2}
-          maxLength={1000}
-          value={text}
-          onChange={(e) => setText(e.target.value)}
-          onKeyDown={(e) => {
-            if (e.key === "Enter" && (e.ctrlKey || e.metaKey) && to && text.trim()) send.mutate();
+
+        <form
+          className="space-y-2 border-t p-3"
+          onSubmit={(e: FormEvent) => {
+            e.preventDefault();
+            doSend();
           }}
-          placeholder={t("sms.replyPlaceholder")}
-        />
-        <div className="flex items-center justify-between text-[11px] text-muted-foreground">
-          <span>
-            {counterText(t, text, smsPartCount(text), summary?.longAsMms)} · {t("sms.inAutotask")}
-          </span>
-          <Button type="submit" size="sm" disabled={!to || !text.trim() || send.isPending} className="bg-grad-gold font-semibold text-[#1a1204]">
-            {send.isPending ? <Loader2 className="size-3.5 animate-spin" /> : <Send className="size-3.5" />} {t("sms.send")}
-          </Button>
-        </div>
-      </form>
+        >
+          {summary && !summary.ready && (
+            <p className="flex items-start gap-1.5 rounded-lg border border-orange-500/40 bg-orange-500/10 px-2.5 py-1.5 text-[11px] text-orange-200">
+              <AlertTriangle className="mt-0.5 size-3.5 shrink-0" /> {t("sms.cannotSend")}
+            </p>
+          )}
+          {!composing && entry?.kind === "person" && entry.isClient && (
+            <div className="flex items-center gap-2">
+              <span className="text-xs text-muted-foreground">{t("sms.to")}</span>
+              <Input type="tel" value={to} onChange={(e) => setTo(e.target.value)} placeholder={t("sms.toNumber")} className="h-8 max-w-48 font-mono text-xs" />
+            </div>
+          )}
+          {!composing && entry?.kind === "group" && <p className="text-[11px] text-violet-300">{t("sms.ticket.groupReply", { names: entry.name })}</p>}
+          <AiTextarea
+            rows={2}
+            maxLength={1000}
+            value={text}
+            onChange={(e) => setText(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) doSend();
+            }}
+            placeholder={t("sms.replyPlaceholder")}
+          />
+          <div className="flex items-center justify-between text-[11px] text-muted-foreground">
+            <span>
+              {counterText(t, text, smsPartCount(text), summary?.longAsMms)} · {t("sms.inAutotask")}
+            </span>
+            <Button type="submit" size="sm" disabled={!canSend} className="bg-grad-gold font-semibold text-[#1a1204]">
+              {send.isPending ? <Loader2 className="size-3.5 animate-spin" /> : <Send className="size-3.5" />} {composing && picked.length > 1 ? t("sms.ticket.sendGroup", { count: picked.length }) : t("sms.send")}
+            </Button>
+          </div>
+        </form>
+      </div>
     </section>
   );
 }

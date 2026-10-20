@@ -2736,6 +2736,43 @@ describe("text messages (VoIP.ms)", () => {
     expect(refused.status).toBe(502);
     expect(refused.json).toMatchObject({ error: "sms_api", fields: [{ path: "sms", message: "ip_not_enabled" }] });
     expect((await tech.get(`/api/sms/ticket/${tk.id}`)).json.messages.at(-1)).toMatchObject({ body: "Allo?", status: "failed", error: "api: ip_not_enabled" });
+
+    // a text from the client of a ticket: the ticket needs attention (like a new client reply), the texts count as unread until looked at
+    const open = (await tech.get("/api/tickets?view=all")).json.items.find((x: any) => x.statusKind === "inProgress");
+    await tech.post(`/api/sms/ticket/${open.id}`, { phone: "514 555 6600", body: "Bonjour, je passe à 15 h." });
+    expect((await tech.get(`/api/tickets/${open.id}`)).json.statusKind).toBe("inProgress");
+    await hook({ token, from: "5145556600", message: "Parfait, merci !", id: "att1" });
+    expect((await tech.get(`/api/tickets/${open.id}`)).json.statusKind).toBe("needsAttention");
+    let linked = (await tech.get(`/api/sms/ticket/${open.id}`)).json;
+    expect(linked.conversations[0].unread).toBe(1);
+    expect((await tech.post(`/api/sms/ticket/${open.id}/read`)).status).toBe(200);
+    expect((await tech.get(`/api/sms/ticket/${open.id}`)).json.conversations[0].unread).toBe(0);
+    // a resolved ticket stays resolved
+    const done = (await tech.get("/api/tickets?view=all&statusKind=complete")).json.items[0];
+    if (done) {
+      await tech.post(`/api/sms/ticket/${done.id}`, { phone: "514 555 6601", body: "Terminé ?" });
+      await hook({ token, from: "5145556601", message: "Oui merci", id: "att2" });
+      expect((await tech.get(`/api/tickets/${done.id}`)).json.statusKind).toBe("complete");
+    }
+
+    // a group text: the same text to several people, each in their own conversation, one group key
+    const group = await tech.post(`/api/sms/ticket/${open.id}`, {
+      recipients: [{ phone: "514 555 6610", name: "Marc Roy" }, { phone: "514 555 6611", name: "Julie Fortin" }],
+      body: "Panne réseau, on s'en occupe.",
+    });
+    expect(group.status).toBe(201);
+    expect(group.json.groupKey).toMatch(/^[0-9a-f-]{36}$/);
+    expect(group.json.sent.map((x: any) => x.ok)).toEqual([true, true]);
+    linked = (await tech.get(`/api/sms/ticket/${open.id}`)).json;
+    const groupMsgs = linked.messages.filter((m: any) => m.groupKey === group.json.groupKey);
+    expect(groupMsgs.map((m: any) => m.body)).toEqual(["Panne réseau, on s'en occupe.", "Panne réseau, on s'en occupe."]);
+    expect(new Set(groupMsgs.map((m: any) => m.conversationId)).size).toBe(2);
+    expect(linked.conversations.filter((c: any) => ["5145556610", "5145556611"].includes(c.phone)).map((c: any) => c.contactName).sort()).toEqual(["Julie Fortin", "Marc Roy"]);
+    // the same person twice, a bad number, nobody: refused; one person alone is not a group
+    expect((await tech.post(`/api/sms/ticket/${open.id}`, { recipients: [{ phone: "514 555 6610" }, { phone: "(514) 555-6610" }], body: "x" })).json.error).toBe("duplicate_recipient");
+    expect((await tech.post(`/api/sms/ticket/${open.id}`, { recipients: [{ phone: "nope" }, { phone: "514 555 6611" }], body: "x" })).json.error).toBe("invalid_phone");
+    expect((await tech.post(`/api/sms/ticket/${open.id}`, { recipients: [], body: "x" })).status).toBe(400);
+    expect((await tech.post(`/api/sms/ticket/${open.id}`, { recipients: [{ phone: "514 555 6612" }], body: "Seul" })).json.groupKey).toBeNull();
     notes.mockRestore();
 
     // closed: the next text starts a new conversation

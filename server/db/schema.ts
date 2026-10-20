@@ -935,6 +935,8 @@ export const smsMessages = pgTable(
     /** Sent by a technician (null: the client, or an automatic message) */
     userId: uuid("user_id").references(() => users.id, { onDelete: "set null" }),
     auto: boolean("auto").notNull().default(false),
+    /** Sent to several people at once from a ticket: the same key on each person's copy */
+    groupKey: text("group_key"),
     status: text("status", { enum: ["received", "sent", "failed"] }).notNull(),
     error: text("error"),
     createdAt: created(),

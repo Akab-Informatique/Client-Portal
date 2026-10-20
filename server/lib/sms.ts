@@ -18,10 +18,10 @@ import { formatDelay, formatPhone, normalizePhone, sendSms, SmsError, smsSetting
 export type Conversation = typeof schema.smsConversations.$inferSelect;
 const WANTS_TICKET = /^\s*(1|billet|ticket)\s*[.!]?\s*$/i;
 
-async function addMessage(conv: Conversation, m: { direction: "in" | "out"; body: string; providerId?: string | null; userId?: string | null; auto?: boolean; status: "received" | "sent" | "failed"; error?: string | null }) {
+async function addMessage(conv: Conversation, m: { direction: "in" | "out"; body: string; providerId?: string | null; userId?: string | null; auto?: boolean; groupKey?: string | null; status: "received" | "sent" | "failed"; error?: string | null }) {
   await db()
     .insert(schema.smsMessages)
-    .values({ conversationId: conv.id, direction: m.direction, body: m.body, providerId: m.providerId ?? null, userId: m.userId ?? null, auto: m.auto ?? false, status: m.status, error: m.error ?? null });
+    .values({ conversationId: conv.id, direction: m.direction, body: m.body, providerId: m.providerId ?? null, userId: m.userId ?? null, auto: m.auto ?? false, groupKey: m.groupKey ?? null, status: m.status, error: m.error ?? null });
   // automatic messages do not change the list (preview, order)
   if (m.auto) return;
   await db()
@@ -43,14 +43,14 @@ async function noteInTicket(conv: Conversation, title: string, body: string) {
 }
 
 /** A text from the portal to the client, kept in the conversation (failed ones too). */
-async function sendTo(conv: Conversation, body: string, by: { userId?: string | null; auto?: boolean; author?: string }) {
+async function sendTo(conv: Conversation, body: string, by: { userId?: string | null; auto?: boolean; author?: string; groupKey?: string | null }) {
   try {
     await sendSms(conv.phone, body);
-    await addMessage(conv, { direction: "out", body, userId: by.userId, auto: by.auto, status: "sent" });
+    await addMessage(conv, { direction: "out", body, userId: by.userId, auto: by.auto, groupKey: by.groupKey, status: "sent" });
     await noteInTicket(conv, by.auto ? `Texto automatique envoyé à ${formatPhone(conv.phone)}` : `Texto envoyé par ${by.author ?? "AKAB"} à ${formatPhone(conv.phone)}`, body);
   } catch (e) {
     const error = e instanceof SmsError ? e.code + (e.detail ? `: ${e.detail}` : "") : String(e);
-    await addMessage(conv, { direction: "out", body, userId: by.userId, auto: by.auto, status: "failed", error });
+    await addMessage(conv, { direction: "out", body, userId: by.userId, auto: by.auto, groupKey: by.groupKey, status: "failed", error });
     throw e;
   }
 }
@@ -146,13 +146,25 @@ export async function receiveSms(p: { from: string; message: string; id?: string
     await openTicket(conv, null, "client").catch((e) => console.warn("[sms] ticket on request:", e instanceof Error ? e.message : e));
     return;
   }
-  // linked to a ticket: the client's text goes in it
-  if (conv.status === "ticket" && conv.ticketId) await noteInTicket(conv, `Texto reçu de ${who(conv)} (${formatPhone(conv.phone)})`, body);
+  // linked to a ticket: the client's text goes in it, and the ticket needs attention (like a new client reply)
+  if (conv.status === "ticket" && conv.ticketId) {
+    await noteInTicket(conv, `Texto reçu de ${who(conv)} (${formatPhone(conv.phone)})`, body);
+    await needsAttention(conv.ticketId);
+  }
+}
+
+/** The ticket goes to "needs attention" because of a text; a failure here never loses the text. */
+async function needsAttention(ticketId: number) {
+  try {
+    await (await ticketSource()).markNeedsAttention(ticketId);
+  } catch (e) {
+    console.warn("[sms] needs attention:", e instanceof Error ? e.message : e);
+  }
 }
 
 /** A technician answers: the client no longer waits (no automatic ticket). */
-export async function replyAsTechnician(conv: Conversation, body: string, a: AuthContext): Promise<void> {
-  await sendTo(conv, body, { userId: a.realUser.id, author: a.realUser.name });
+export async function replyAsTechnician(conv: Conversation, body: string, a: AuthContext, groupKey?: string | null): Promise<void> {
+  await sendTo(conv, body, { userId: a.realUser.id, author: a.realUser.name, groupKey });
   await db()
     .update(schema.smsConversations)
     .set({ status: conv.status === "waiting" || conv.status === "details" ? "open" : conv.status, autoTicketAt: null, unread: 0, updatedAt: new Date() })
