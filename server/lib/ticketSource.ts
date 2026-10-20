@@ -2044,6 +2044,12 @@ const autotaskSource: TicketSource = {
       at.query<AtContact>("Contacts", [{ op: "eq", field: "isActive", value: 1 }], { fields: pf, max: 100_000, complete: true }),
       at.query<AtContract>("Contracts", [{ op: "eq", field: "status", value: 1 }], { fields: kf, max: 20_000, complete: true }),
     ]);
+    // contracts that ended since the work to bill starts are listed too: Approbation still shows their recurring charges
+    const ended = await at
+      .query<AtContract>("Contracts", [{ op: "gte", field: "endDate", value: (await billingSettings()).autotask.itemsSince }], { fields: kf, max: 20_000, complete: true })
+      .catch(() => [] as AtContract[]);
+    const known = new Set(contracts.map((k) => k.id));
+    for (const k of ended) if (!known.has(k.id)) contracts.push(k);
     const types = new Map(picklist(kinfo, "contractType").map((v) => [String(v.value), v.label]));
     const day = (s?: string | null) => (s ? s.slice(0, 10) : null);
     return {
