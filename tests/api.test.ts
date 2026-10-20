@@ -5786,3 +5786,56 @@ describe("final sync from Autotask (Integrations › Autotask)", () => {
     extraTickets = [];
   });
 });
+
+describe("the portal on its own: no Autotask, no sample data", () => {
+  afterAll(async () => {
+    const local = await import("../server/lib/localTickets.ts");
+    await db().delete(schema.integrations).where(eq(schema.integrations.provider, "tickets"));
+    await db().delete(schema.tickets);
+    await db().delete(schema.clients).where(eq(schema.clients.name, "Client Autonome inc."));
+    local.resetTicketMode();
+  });
+
+  it("clients, contacts and tickets live in the database; a sync never touches them; the badge says so", async () => {
+    resetRateLimit("login:ip:unknown");
+    const local = await import("../server/lib/localTickets.ts");
+    const { ticketSource } = await import("../server/lib/ticketSource.ts");
+    const { syncCrm } = await import("../server/lib/crm.ts");
+    const admin = await signIn("admin@akab.local");
+    await db().delete(schema.tickets);
+    await db()
+      .insert(schema.integrations)
+      .values({ provider: "tickets", enabled: true, config: { mode: "local", switchedAt: new Date().toISOString() } })
+      .onConflictDoUpdate({ target: schema.integrations.provider, set: { enabled: true, config: { mode: "local", switchedAt: new Date().toISOString() } } });
+    local.resetTicketMode();
+
+    // not the sample source, and no tickets made up
+    const src = await ticketSource();
+    expect(src.demo).toBe(false);
+    expect(await src.list()).toEqual([]);
+
+    // a client, a contact and a ticket made in the portal
+    const made = await admin.post("/api/crm/clients", { name: "Client Autonome inc.", phone: "450-555-0188" });
+    expect(made.status).toBe(201);
+    const [client] = await db().select().from(schema.clients).where(eq(schema.clients.name, "Client Autonome inc."));
+    expect(client.autotaskId).toBeGreaterThanOrEqual(1_000_000_000);
+    const c = await admin.post(`/api/crm/clients/${client.id}/contacts`, { firstName: "Lou", lastName: "Autonome", email: "lou@autonome.test" });
+    expect(c.status).toBe(201);
+    const [contact] = await db().select().from(schema.clientContacts).where(eq(schema.clientContacts.clientId, client.id));
+    expect(contact.autotaskId).toMatch(/^local-/);
+    expect((await src.contactByEmail("LOU@autonome.test"))?.companyId).toBe(client.autotaskId);
+    expect((await admin.get("/api/tickets/companies")).json.map((x: { name: string }) => x.name)).toContain("Client Autonome inc.");
+    const ticket = await admin.post("/api/tickets", { title: "Premier billet autonome", description: "", companyId: client.autotaskId, contactId: contact.autotaskId, priority: "medium", queue: "support", assigneeId: null, dueDate: "2026-12-01" });
+    expect(ticket.status).toBe(201);
+    expect(ticket.json.id).toBeGreaterThanOrEqual(1_000_000_000);
+    expect((await admin.get("/api/tickets?view=all")).json.items.map((x: { title: string }) => x.title)).toEqual(["Premier billet autonome"]);
+
+    // a sync copies nothing and removes nothing
+    const state = await syncCrm();
+    expect(state.source).toBe("local");
+    expect(state.ok).toBe(true);
+    const [after] = await db().select().from(schema.clients).where(eq(schema.clients.id, client.id));
+    expect(after.active).toBe(true);
+    expect((await admin.get("/api/crm/status")).json).toMatchObject({ mode: "local", ok: true });
+  });
+});

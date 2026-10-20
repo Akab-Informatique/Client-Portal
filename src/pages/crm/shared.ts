@@ -118,7 +118,7 @@ export type CrmTicket = {
   updatedAt: string;
 };
 export type SyncStatus = {
-  mode: "autotask" | "sample";
+  mode: "autotask" | "sample" | "local";
   lastSync: string | null;
   ok: boolean | null;
   error: string | null;

@@ -1,3 +1,4 @@
+import { config } from "../config.ts";
 import { and, asc, desc, eq, gte, ilike, inArray, ne, or, sql, type SQL } from "drizzle-orm";
 import { db, schema } from "../db/index.ts";
 import type { AuthContext } from "./auth.ts";
@@ -11,7 +12,9 @@ import {
   isSmsNote,
   SMS_NOTE_TAG,
   SourceError,
+  sourceExtras,
   sourceOptions,
+  type ChargeOptions,
   ticketSyncSettings,
   type Billable,
   type Charge,
@@ -38,7 +41,7 @@ import {
 const PROVIDER = "tickets";
 
 type ImportState = { state: "running" | "done" | "failed"; done: number; startedAt: string; finishedAt?: string; error?: string };
-export type TicketModeConfig = { mode: "autotask" | "local"; options?: Options; switchedAt?: string; switchedBy?: string; import?: ImportState };
+export type TicketModeConfig = { mode: "autotask" | "local"; options?: Options; chargeOptions?: ChargeOptions; workTypes?: { value: string; label: string }[]; switchedAt?: string; switchedBy?: string; import?: ImportState };
 
 let cache: { at: number; value: TicketModeConfig } | null = null;
 export async function ticketMode(): Promise<TicketModeConfig> {
@@ -56,7 +59,11 @@ async function saveMode(next: TicketModeConfig, actorId: string | null = null) {
     .onConflictDoUpdate({ target: schema.integrations.provider, set: values });
   cache = null;
 }
-export const ticketsLocal = async () => (await ticketMode()).mode === "local";
+/**
+ * The portal's own tickets: chosen in Admin › Billets, and always in production
+ * once Autotask is not linked (the portal never shows sample data there).
+ */
+export const ticketsLocal = async () => (await ticketMode()).mode === "local" || (config.production && !(await autotaskLinked()));
 /** For the tests: forget the mode kept in memory */
 export const resetTicketMode = () => {
   cache = null;
@@ -102,9 +109,11 @@ async function runImport(actorId: string, started: string, sinceOverride?: strin
       await storeBatch(batch);
       lastId = batch[batch.length - 1].t.id;
     }
+    // the lists of the source, kept for when it is not there any more
     const options = await sourceOptions();
+    const extras = await sourceExtras();
     await saveMode(
-      { mode: "local", options, switchedAt: new Date().toISOString(), switchedBy: actorId, import: { state: "done", done, startedAt: started, finishedAt: new Date().toISOString() } },
+      { mode: "local", options, ...extras, switchedAt: new Date().toISOString(), switchedBy: actorId, import: { state: "done", done, startedAt: started, finishedAt: new Date().toISOString() } },
       actorId,
     );
     await audit(actorId, "tickets.switched_local", null, { tickets: done });
@@ -156,7 +165,8 @@ const cents = (v: number | null | undefined) => (v == null ? null : Math.round(v
  * Tickets made in the portal get ids from here on, far above Autotask's: an
  * Autotask ticket can never take the id of one of ours (nor the other way round).
  */
-export const NATIVE_ID_START = 1_000_000_000;
+import { NATIVE_ID_START } from "./ids.ts";
+export { NATIVE_ID_START };
 /** A ticket changed in the portal after this long past its last copy is "edited in the portal" */
 const EDIT_TOLERANCE_MS = 5_000;
 

@@ -1,6 +1,7 @@
-import { and, asc, eq, inArray, isNotNull } from "drizzle-orm";
+import { and, asc, eq, inArray, isNotNull, sql } from "drizzle-orm";
 import { db, schema } from "../db/index.ts";
-import { ticketSource, type CrmExport } from "./ticketSource.ts";
+import { autotaskLinked, ticketSource, type CrmExport } from "./ticketSource.ts";
+import { isLocalId, NATIVE_ID_START } from "./ids.ts";
 import { billingSettings } from "./billing.ts";
 import { revokeUserSessions } from "./auth.ts";
 import { forgetPasswordLinks } from "./passwordLinks.ts";
@@ -19,7 +20,7 @@ const STATE_KEY = "autotask.crm";
 export const CRM_SYNC_EVERY = 15 * 60_000;
 
 export type CrmState = {
-  source: "autotask" | "sample";
+  source: "autotask" | "sample" | "local";
   at: string | null;
   ok: boolean;
   error: string | null;
@@ -43,6 +44,19 @@ let running: Promise<CrmState> | null = null;
 /** Copy every client, contact and contract from the source (one at a time). */
 export function syncCrm(): Promise<CrmState> {
   running ??= (async () => {
+    // the portal's own database is the reference (tickets are the portal's, Autotask not linked): nothing to copy
+    const { ticketsLocal } = await import("./localTickets.ts");
+    if ((await ticketsLocal()) && !(await autotaskLinked())) {
+      const [[c], [k], [x], [v]] = await Promise.all([
+        db().select({ n: sql<number>`count(*)::int` }).from(schema.clients),
+        db().select({ n: sql<number>`count(*)::int` }).from(schema.clientContacts),
+        db().select({ n: sql<number>`count(*)::int` }).from(schema.clientContracts),
+        db().select({ n: sql<number>`count(*)::int` }).from(schema.clientInvoices),
+      ]);
+      const s: CrmState = { source: "local", at: new Date().toISOString(), ok: true, error: null, counts: { clients: c.n, contacts: k.n, contracts: x.n, invoices: v.n } };
+      await saveState(s);
+      return s;
+    }
     const src = await ticketSource();
     const source = src.demo ? "sample" : "autotask";
     const before = await crmState();
@@ -106,7 +120,7 @@ async function apply(data: CrmExport) {
   }
   // gone from the source (deactivated there): kept, marked inactive
   const seen = new Set(data.companies.map((c) => c.id));
-  const gone = local.filter((c) => c.autotaskId != null && c.active && !seen.has(c.autotaskId)).map((c) => c.id);
+  const gone = local.filter((c) => c.autotaskId != null && c.autotaskId < NATIVE_ID_START && c.active && !seen.has(c.autotaskId)).map((c) => c.id);
   if (gone.length) await d.update(schema.clients).set({ active: false, updatedAt: now }).where(inArray(schema.clients.id, gone));
 
   // ── contacts
@@ -123,7 +137,7 @@ async function apply(data: CrmExport) {
       await d.update(schema.clientContacts).set({ ...fields, active: true, syncedAt: now, updatedAt: now }).where(eq(schema.clientContacts.id, hit.id));
   }
   const seenContacts = new Set(data.contacts.map((c) => c.id));
-  const goneRows = [...contacts.values()].filter((c) => c.active && !seenContacts.has(c.autotaskId!));
+  const goneRows = [...contacts.values()].filter((c) => c.active && !isLocalId(c.autotaskId) && !seenContacts.has(c.autotaskId!));
   const goneContacts = goneRows.map((c) => c.id);
   if (goneContacts.length) await d.update(schema.clientContacts).set({ active: false, updatedAt: now }).where(inArray(schema.clientContacts.id, goneContacts));
   // their client portal account goes too (someone who left the client company)
@@ -147,7 +161,7 @@ async function apply(data: CrmExport) {
       await d.update(schema.clientContracts).set({ ...fields, active: true, syncedAt: now, updatedAt: now }).where(eq(schema.clientContracts.id, hit.id));
   }
   const seenContracts = new Set(data.contracts.map((k) => k.id));
-  const goneContracts = [...contracts.values()].filter((k) => k.active && !seenContracts.has(k.autotaskId!)).map((k) => k.id);
+  const goneContracts = [...contracts.values()].filter((k) => k.active && !isLocalId(k.autotaskId) && !seenContracts.has(k.autotaskId!)).map((k) => k.id);
   if (goneContracts.length) await d.update(schema.clientContracts).set({ active: false, updatedAt: now }).where(inArray(schema.clientContracts.id, goneContracts));
 
   // ── invoices (never removed: a voided invoice says so)
@@ -214,8 +228,8 @@ export async function rememberContact(companyId: number, c: { id: string; firstN
 // ── Reads for the tickets (clients, contacts, contracts by source id) ──
 
 /** Clients known to the source, from the portal's copy (null: no copy yet). */
-export async function localCompanies(): Promise<{ id: number; name: string }[] | null> {
-  if (!(await crmState())?.at) return null;
+export async function localCompanies(force = false): Promise<{ id: number; name: string }[] | null> {
+  if (!force && !(await crmState())?.at) return null;
   const rows = await db()
     .select({ id: schema.clients.autotaskId, name: schema.clients.name })
     .from(schema.clients)
@@ -224,8 +238,8 @@ export async function localCompanies(): Promise<{ id: number; name: string }[] |
   return rows.map((r) => ({ id: r.id!, name: r.name }));
 }
 
-export async function localContacts(companyId: number) {
-  if (!(await crmState())?.at) return null;
+export async function localContacts(companyId: number, force = false) {
+  if (!force && !(await crmState())?.at) return null;
   const rows = await db()
     .select({ c: schema.clientContacts })
     .from(schema.clientContacts)
@@ -236,8 +250,8 @@ export async function localContacts(companyId: number) {
     .sort((x, y) => x.name.localeCompare(y.name));
 }
 
-export async function localContracts(companyId: number) {
-  if (!(await crmState())?.at) return null;
+export async function localContracts(companyId: number, force = false) {
+  if (!force && !(await crmState())?.at) return null;
   const rows = await db()
     .select({ k: schema.clientContracts })
     .from(schema.clientContracts)

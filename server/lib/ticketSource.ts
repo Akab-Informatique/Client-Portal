@@ -1,3 +1,4 @@
+import { config } from "../config.ts";
 import { and, asc, eq, inArray, isNotNull, sql } from "drizzle-orm";
 import { db, schema } from "../db/index.ts";
 import type { AuthContext } from "./auth.ts";
@@ -356,12 +357,23 @@ export class SourceError extends Error {
 // ── Which source ─────────────────────────────────────────────────────────────────
 /** The ticket source (Autotask, or the sample data) with the portal's own queues over it (see lib/queues.ts) */
 const withQueues = new WeakMap<TicketSource, TicketSource>();
+/** Ids given to what was made in the portal before it ran alone, once per start */
+let adopted: Promise<void> | null = null;
 export async function ticketSource(): Promise<TicketSource> {
   const s = await loadSettings();
-  const linked = s.enabled && s.credentials && s.config.zone ? autotaskSource : demoSource;
-  // tickets in the portal's own database (Admin › Billets): clients, contacts, contracts… still come from the link
+  const isLinked = Boolean(s.enabled && s.credentials && s.config.zone);
+  // the portal's own database (Admin › Billets, or production with no Autotask): tickets and, with no link, clients,
+  // contacts, contracts… too — never sample data. Linked, those still come from Autotask until it is closed.
   const { ticketsLocal, localTicketSource } = await import("./localTickets.ts");
-  const base = (await ticketsLocal()) ? localTicketSource(linked) : linked;
+  const local = await ticketsLocal();
+  let base: TicketSource = demoSource;
+  if (isLinked) base = local ? localTicketSource(autotaskSource) : autotaskSource;
+  else if (local) {
+    const { localBase, adoptLocalIds } = await import("./localBase.ts");
+    if (!adopted) adopted = adoptLocalIds().catch((e) => { adopted = null; throw e; });
+    await adopted;
+    base = localTicketSource(localBase);
+  }
   // one wrapper per source
   if (!withQueues.has(base)) withQueues.set(base, withPortalQueues(base));
   return withQueues.get(base)!;
@@ -2421,6 +2433,14 @@ export async function autotaskLinked(): Promise<boolean> {
 }
 
 /** The lists of the source the tickets come from (kept by the portal at the switch) */
+/** Charge types / statuses / material codes and work types of the linked source, kept when the portal leaves it */
+export async function sourceExtras(): Promise<{ chargeOptions?: ChargeOptions; workTypes?: { value: string; label: string }[] }> {
+  const src = (await autotaskLinked()) ? autotaskSource : demoSource;
+  const [chargeOptions, workTypes] = await Promise.all([src.chargeOptions().catch(() => undefined), src.workTypes().catch(() => undefined)]);
+  return { chargeOptions, workTypes };
+}
+export const defaultChargeOptions = (): ChargeOptions => DEMO_CHARGE_OPTIONS;
+
 export async function sourceOptions(): Promise<Options> {
   return (await autotaskLinked()) ? autotaskSource.options() : demoSource.options();
 }
@@ -2434,7 +2454,7 @@ export type ExportScope = { size?: number; since?: string; numbers?: string[]; c
  * ticket is imported by hand.
  */
 export async function exportTickets(after: number, scope: ExportScope = {}): Promise<ExportTicket[]> {
-  if (!(await autotaskLinked())) return scope.changedSince ? [] : exportDemo(after, scope);
+  if (!(await autotaskLinked())) return scope.changedSince || config.production ? [] : exportDemo(after, scope);
   return exportAutotask(after, scope);
 }
 

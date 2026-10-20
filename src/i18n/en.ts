@@ -212,6 +212,8 @@ const en: Dict = {
     autotaskShort: "Autotask",
     sample: "Local database · sample data",
     sampleShort: "Local database",
+    local: "Portal's own database",
+    textLocal: "The portal runs on its own: clients, contacts, contracts, tickets and billing are in its own database, with no Autotask.",
     failed: "Sync failing",
     never: "Never synced",
     ago: "{{time}} ago",

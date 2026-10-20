@@ -154,12 +154,14 @@ export const ticketSetupRoutes = new Hono<AppEnv>()
 
   // ── The tickets of the portal (no longer tied to Autotask) ──
   .get("/local", async (c) => {
-    const [mode, linked, [row]] = await Promise.all([
+    const [mode, linked, [row], effective] = await Promise.all([
       ticketMode(),
       autotaskLinked(),
       db().select({ n: sql<number>`count(*)::int` }).from(schema.tickets),
+      ticketsLocal(),
     ]);
-    return c.json({ mode: mode.mode, linked, switchedAt: mode.switchedAt ?? null, import: mode.import ?? null, tickets: row?.n ?? 0, since: (await ticketSyncSettings()).since });
+    // production with no Autotask is always the portal's own
+    return c.json({ mode: effective ? "local" : "autotask", linked, switchedAt: mode.switchedAt ?? null, import: mode.import ?? null, tickets: row?.n ?? 0, since: (await ticketSyncSettings()).since });
   })
 
   /** The one-way switch: the tickets (with notes, time, charges, files) are copied into the portal, which then owns them */

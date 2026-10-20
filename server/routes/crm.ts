@@ -8,7 +8,7 @@ import { hashPassword, temporaryPassword } from "../lib/crypto.ts";
 import { forgetPasswordLinks, sendPasswordLink } from "../lib/passwordLinks.ts";
 import { audit } from "../lib/audit.ts";
 import { body, zEmail, zOptText, zUuid } from "../lib/validate.ts";
-import { ticketSource, type NTicket } from "../lib/ticketSource.ts";
+import { autotaskLinked, ticketSource, type NTicket } from "../lib/ticketSource.ts";
 import { crmState, descendantsOf, ensureCrm, rememberCompany, rememberContact, syncCrm } from "../lib/crm.ts";
 import { lookup, run } from "./tickets.ts";
 import { pushInvoice } from "../lib/quickbooks.ts";
@@ -68,7 +68,7 @@ export const crmRoutes = new Hono<AppEnv>()
   .get("/status", async (c) => {
     const src = await ticketSource();
     const s = await crmState();
-    return c.json({ mode: src.demo ? "sample" : "autotask", lastSync: s?.at ?? null, ok: s?.ok ?? null, error: s?.error ?? null, counts: s?.counts ?? null, every: 15 });
+    return c.json({ mode: s?.source === "local" || (!src.demo && !(await autotaskLinked())) ? "local" : src.demo ? "sample" : "autotask", lastSync: s?.at ?? null, ok: s?.ok ?? null, error: s?.error ?? null, counts: s?.counts ?? null, every: 15 });
   })
   .post("/sync", requirePermission("crm.edit"), async (c) => {
     const a = auth(c);

@@ -2,7 +2,7 @@ import { and, asc, eq, gte, inArray, isNotNull, lte, sql } from "drizzle-orm";
 import { db, schema } from "../db/index.ts";
 import { billingSettings, formatInvoiceNumber, saveBillingSettings, type BillingSettings } from "./billing.ts";
 import { ensureCrm } from "./crm.ts";
-import { ticketSource, type BillableKind } from "./ticketSource.ts";
+import { autotaskLinked, ticketSource, type BillableKind } from "./ticketSource.ts";
 
 /**
  * Work to bill (Accounting › Approbation): copied from Autotask while it is
@@ -55,6 +55,8 @@ export function syncBillables(): Promise<BillablesState> {
     const s = await billingSettings();
     const src = await ticketSource();
     const data = await src.billables(s.autotask.itemsSince);
+    // Autotask not linked: only the portal's own work is read, so what was copied from Autotask is never taken for "gone"
+    const alone = !(await autotaskLinked());
     const d = db();
     const now = new Date();
     const clients = new Map(
@@ -112,7 +114,7 @@ export function syncBillables(): Promise<BillablesState> {
     }
     // gone from the source (posted or removed in Autotask): untouched ones go too — only for kinds read without error
     const gone = [...existing.values()]
-      .filter((x) => !seen.has(x.sourceId!) && (x.status === "pending" || (x.status === "approved" && !x.approvedBy)) && !x.edited && !data.errors[x.kind as BillableKind])
+      .filter((x) => !seen.has(x.sourceId!) && (!alone || /^p(time|charge):/.test(x.sourceId!)) && (x.status === "pending" || (x.status === "approved" && !x.approvedBy)) && !x.edited && !data.errors[x.kind as BillableKind])
       .map((x) => x.id);
     if (gone.length) await d.delete(schema.billingItems).where(inArray(schema.billingItems.id, gone));
     const state: BillablesState = { at: now.toISOString(), counts, errors: data.errors, skipped };

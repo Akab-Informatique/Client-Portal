@@ -107,6 +107,10 @@ Team › Pause café (`/breakroom`, right `breakroom.use`, technicians by defaul
 - `alerts` flag = monitoring alerts (replaces the old /alert/i name test): `Options.queues[].kind`, `lookup().queueKind`, `isAlert` in `server/routes/tickets.ts`, default of the meeting gauge queues.
 - Right `admin.queues`; API `/api/admin/queues` (`server/routes/queues.ts`: list with open counts, POST, PATCH `{name, alerts, isDefault}`, `/:key/move`, DELETE moves its tickets to the default; the default can be neither deleted nor flagged alerts). UI `src/admin/QueuesSection.tsx`; the queue shows beside the title in the ticket view.
 
+## Running on its own (no Autotask, never sample data)
+
+`ticketsLocal()` is true when Admin › Billets switched to the portal's tickets **or in production while Autotask is not linked**. With no link, `ticketSource()` builds `localTicketSource(localBase)` (`server/lib/localBase.ts`): clients, contacts, contracts (`localCompanies/Contacts/Contracts(…, true)` read the CRM tables directly), products (`store_products`), client lookup by email / phone, charge options and work types (snapshot kept in the tickets mode config at the switch, else defaults). Nothing is read from or written to Autotask, and `demoSource` is never used in production. What the portal makes has ids apart from Autotask's (`server/lib/ids.ts`): clients ≥ 1,000,000,000 (`clients.autotask_id`), contacts and contracts `local-<uuid>`; `adoptLocalIds()` gives one to anything made before. `syncCrm()` then copies nothing (state `source: "local"`, `/api/crm/status` mode `local`, badge "Base locale du portail"), `apply()` never marks native ids "gone", `syncBillables` never drops items copied from Autotask while it is not linked, `exportTickets` returns nothing in production without a link. To leave Autotask: final sync (Integrations › Autotask), switch tickets to the portal, then turn the Autotask integration off.
+
 ## Security rules
 
 - Authorization is enforced in the API, never only in the UI. Use `auth(c)` / `requirePermission`; never trust ids or roles sent by the browser.

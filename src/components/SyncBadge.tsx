@@ -31,6 +31,7 @@ export function SyncBadge() {
   if (!s) return null;
   const linked = s.mode === "autotask";
   const failing = linked && s.ok === false;
+  const own = s.mode === "local";
   const tone = !linked ? "local" : failing ? "warn" : "ok";
   return (
     <Popover>
@@ -48,7 +49,7 @@ export function SyncBadge() {
             {tone === "ok" && <span className="absolute inline-flex size-full animate-ping rounded-full bg-emerald-400 opacity-40 [animation-duration:2.5s]" />}
             <span className={cn("relative inline-flex size-2 rounded-full", tone === "ok" ? "bg-emerald-400" : tone === "warn" ? "bg-amber-400" : "bg-sky-400")} />
           </span>
-          <span className="hidden md:inline">{linked ? (failing ? t("sync.failed") : t("sync.autotask")) : t("sync.sample")}</span>
+          <span className="hidden md:inline">{linked ? (failing ? t("sync.failed") : t("sync.autotask")) : own ? t("sync.local") : t("sync.sample")}</span>
           <span className="md:hidden">{linked ? t("sync.autotaskShort") : t("sync.sampleShort")}</span>
         </button>
       </PopoverTrigger>
@@ -56,7 +57,7 @@ export function SyncBadge() {
         <p className="flex items-center gap-2 text-sm font-semibold">
           <Database className="size-4 text-primary" /> {t("sync.title")}
         </p>
-        <p className="text-xs leading-relaxed text-muted-foreground">{linked ? t("sync.textAutotask", { every: s.every }) : t("sync.textSample")}</p>
+        <p className="text-xs leading-relaxed text-muted-foreground">{linked ? t("sync.textAutotask", { every: s.every }) : own ? t("sync.textLocal") : t("sync.textSample")}</p>
         <Details s={s} lang={i18n.language} />
         {can("crm.edit") && (
           <Button size="sm" variant="outline" className="w-full" disabled={sync.isPending} onClick={() => sync.mutate()}>

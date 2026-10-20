@@ -210,6 +210,8 @@ const fr = {
     autotaskShort: "Autotask",
     sample: "Base locale · données d'exemple",
     sampleShort: "Base locale",
+    local: "Base locale du portail",
+    textLocal: "Le portail fonctionne seul : clients, contacts, contrats, billets et facturation sont dans sa propre base de données, sans Autotask.",
     failed: "Synchronisation en erreur",
     never: "Jamais synchronisé",
     ago: "il y a {{time}}",
