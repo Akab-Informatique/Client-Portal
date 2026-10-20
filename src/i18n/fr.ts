@@ -782,6 +782,15 @@ const fr = {
     },
   },
   billing: {
+    eraseInvoices: {
+      title: "Supprimer toutes les factures des clients",
+      text: "Supprime pour de bon toutes les factures de tous les clients, avec leurs lignes, leurs paiements et leurs liens de paiement (pour en synchroniser de nouvelles). Le travail déjà facturé reste « facturé » : il ne sera pas refacturé. Le numéro de la prochaine facture ne change pas. Irréversible.",
+      button: "Supprimer toutes les factures",
+      confirmTitle: "Supprimer toutes les factures de tous les clients ?",
+      confirmText: "Cette action est définitive : factures, paiements enregistrés et liens de paiement disparaissent. Les factures déjà dans QuickBooks n'y sont pas touchées.",
+      done_one: "{{count}} facture supprimée",
+      done_other: "{{count}} factures supprimées",
+    },
     eraseContracts: {
       which: "Quels contrats effacer",
       all: "Tous les contrats",

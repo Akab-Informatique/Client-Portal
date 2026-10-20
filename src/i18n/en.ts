@@ -784,6 +784,15 @@ const en: Dict = {
     },
   },
   billing: {
+    eraseInvoices: {
+      title: "Delete every client's invoices",
+      text: "Permanently deletes every invoice of every client, with their lines, payments and payment links (to bring in new ones). Work already billed stays \"billed\": it is not billed again. The next invoice number does not change. Cannot be undone.",
+      button: "Delete all invoices",
+      confirmTitle: "Delete every invoice of every client?",
+      confirmText: "This is final: invoices, recorded payments and payment links are gone. Invoices already in QuickBooks are not touched there.",
+      done_one: "{{count}} invoice deleted",
+      done_other: "{{count}} invoices deleted",
+    },
     eraseContracts: {
       which: "Which contracts to erase",
       all: "All contracts",

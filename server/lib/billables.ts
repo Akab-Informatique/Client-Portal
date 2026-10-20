@@ -407,3 +407,15 @@ export async function postInvoices(actorId: string, clientIds?: string[], period
   for (const g of groups.filter((x) => !clientIds?.length || clientIds.includes(x.client.id))) made.push(await createInvoice(actorId, { clientId: g.client.id, ...period }));
   return made;
 }
+
+/**
+ * Delete every invoice of every client for good, with their lines, payments and payment links. The work to bill
+ * keeps its lines and its "posted" status (it was billed: it is not billed again), with no invoice. The invoice
+ * numbering is left as it is. Returns how many invoices went.
+ */
+export async function eraseInvoices(): Promise<number> {
+  const d = db();
+  const [{ n }] = await d.select({ n: sql<number>`count(*)::int` }).from(schema.clientInvoices);
+  await d.delete(schema.clientInvoices);
+  return n;
+}

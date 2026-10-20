@@ -268,7 +268,36 @@ function GeneralTab() {
         </Button>
       </div>
       <EraseContracts />
+      <EraseInvoices />
     </form>
+  );
+}
+
+/** Danger zone: delete every invoice of every client for good */
+function EraseInvoices() {
+  const { t } = useTranslation();
+  const qc = useQueryClient();
+  const confirm = useConfirm();
+  const erase = useMutation({
+    mutationFn: () => api.post<{ erased: number }>("/billing/invoices/erase", { confirm: true }),
+    onSuccess: (r) => {
+      void qc.invalidateQueries({ queryKey: ["crm"] });
+      void qc.invalidateQueries({ queryKey: ["billables"] });
+      toast.success(t("billing.eraseInvoices.done", { count: r.erased }));
+    },
+    onError: () => toast.error(t("common.error")),
+  });
+  return (
+    <Card title={t("billing.eraseInvoices.title")} text={t("billing.eraseInvoices.text")}>
+      <Button
+        type="button"
+        variant="destructive"
+        disabled={erase.isPending}
+        onClick={() => void confirm({ title: t("billing.eraseInvoices.confirmTitle"), description: t("billing.eraseInvoices.confirmText"), confirmLabel: t("billing.eraseInvoices.button"), destructive: true }).then((ok) => ok && erase.mutate())}
+      >
+        {erase.isPending && <Loader2 className="size-4 animate-spin" />} {t("billing.eraseInvoices.button")}
+      </Button>
+    </Card>
   );
 }
 

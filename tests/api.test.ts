@@ -4992,3 +4992,27 @@ describe("contract types, contracts made by hand, services", () => {
     expect((await admin.del(`/api/services/${s.json.id}`)).status).toBe(404);
   });
 });
+
+describe("delete every invoice (Admin › Facturation)", () => {
+  it("admin.billing only; invoices, lines and payments go for good; billed work stays billed", async () => {
+    resetRateLimit("login:ip:unknown");
+    const admin = await signIn("admin@akab.local");
+    const tech = await signIn("tech@akab.local");
+    const [c] = await db().select().from(schema.clients).limit(1);
+    const [it] = await db()
+      .insert(schema.billingItems)
+      .values({ clientId: c.id, kind: "charge", source: "portal", sourceId: "test:erase:inv", date: "2026-10-12", description: "À effacer", quantityX100: 100, unitPriceCents: 2000, amountCents: 2000, status: "approved", approvedAt: new Date() })
+      .returning();
+    const made = (await admin.post("/api/billables/invoice", { clientId: c.id, itemIds: [it.id] })).json;
+    await db().insert(schema.invoicePayments).values({ invoiceId: made.id, amountCents: 500, paidOn: "2026-10-13", method: "cheque" });
+    expect((await tech.post("/api/billing/invoices/erase", { confirm: true })).status).toBe(403);
+    expect((await admin.post("/api/billing/invoices/erase", {})).status).toBe(400);
+    const r = await admin.post("/api/billing/invoices/erase", { confirm: true });
+    expect(r.json.erased).toBeGreaterThanOrEqual(1);
+    expect(await db().select().from(schema.clientInvoices)).toHaveLength(0);
+    expect(await db().select().from(schema.invoicePayments)).toHaveLength(0);
+    expect(await db().select().from(schema.invoiceLines)).toHaveLength(0);
+    expect((await db().select().from(schema.billingItems).where(eq(schema.billingItems.id, it.id)))[0]).toMatchObject({ status: "posted", invoiceId: null });
+    expect((await db().select().from(schema.auditLog).where(eq(schema.auditLog.action, "billing.invoices_erased"))).length).toBe(1);
+  });
+});
