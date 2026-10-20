@@ -120,7 +120,9 @@ export async function ledger(actorId?: string) {
 }
 
 // ── Stripe (payment links on invoices) ──
-export type StripeSettings = { enabled: boolean; publishableKey: string; paymentLinks: boolean; secretKey: string | null; webhookSecret: string | null; lastTest?: { ok: boolean; at: string; error?: string } };
+/** The Stripe account a key belongs to (read when the key is tested) */
+export type StripeAccount = { id: string; name: string | null; country: string | null };
+export type StripeSettings = { enabled: boolean; publishableKey: string; paymentLinks: boolean; secretKey: string | null; webhookSecret: string | null; lastTest?: { ok: boolean; at: string; error?: string; account?: StripeAccount | null } };
 
 export async function stripeSettings(): Promise<StripeSettings> {
   const r = await row("stripe");
@@ -147,15 +149,28 @@ export async function saveStripeSettings(actorId: string, p: Partial<Omit<Stripe
 /** "test" or "live", from the key itself */
 export const stripeMode = (key: string | null) => (key?.startsWith("sk_live_") || key?.startsWith("rk_live_") ? "live" : key ? "test" : null);
 
-/** Ask Stripe for the account balance with this key: proves the key works. */
-export async function testStripe(secretKey: string): Promise<{ ok: true; mode: "test" | "live" } | { ok: false; error: string }> {
+/** Ask Stripe for the account balance with this key: proves the key works; the account's name and id come with it when the key may read them. */
+export async function testStripe(secretKey: string): Promise<{ ok: true; mode: "test" | "live"; account: StripeAccount | null } | { ok: false; error: string }> {
   try {
     const res = await fetch("https://api.stripe.com/v1/balance", { headers: { authorization: `Bearer ${secretKey}` }, signal: AbortSignal.timeout(15_000) });
-    if (res.ok) return { ok: true, mode: stripeMode(secretKey) === "live" ? "live" : "test" };
+    if (res.ok) return { ok: true, mode: stripeMode(secretKey) === "live" ? "live" : "test", account: await stripeAccount(secretKey) };
     const j = (await res.json().catch(() => ({}))) as { error?: { message?: string } };
     return { ok: false, error: res.status === 401 ? "invalid_key" : (j.error?.message ?? `HTTP ${res.status}`).slice(0, 200) };
   } catch {
     return { ok: false, error: "network" };
+  }
+}
+
+/** Who the key belongs to; a restricted key without that right gives none (the key still works). */
+async function stripeAccount(secretKey: string): Promise<StripeAccount | null> {
+  try {
+    const res = await fetch("https://api.stripe.com/v1/account", { headers: { authorization: `Bearer ${secretKey}` }, signal: AbortSignal.timeout(10_000) });
+    if (!res.ok) return null;
+    const a = (await res.json()) as { id?: string; country?: string; business_profile?: { name?: string | null }; settings?: { dashboard?: { display_name?: string | null } } };
+    if (!a.id) return null;
+    return { id: a.id, name: a.business_profile?.name || a.settings?.dashboard?.display_name || null, country: a.country ?? null };
+  } catch {
+    return null;
   }
 }
 

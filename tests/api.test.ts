@@ -3367,11 +3367,22 @@ describe("billing: settings, chart of accounts, QuickBooks, Stripe, payments", (
     vi.stubGlobal(
       "fetch",
       vi.fn(async (url: unknown, init: RequestInit = {}) => {
+        const ok = (init.headers as any).authorization === "Bearer sk_test_abc123";
+        // the balance proves the key; the account says whose it is
+        if (String(url) === "https://api.stripe.com/v1/account") return new Response(JSON.stringify({ id: "acct_1AKAB", country: "CA", business_profile: { name: "AKAB Informatique" } }), { status: ok ? 200 : 401 });
         expect(String(url)).toBe("https://api.stripe.com/v1/balance");
-        return new Response(JSON.stringify({ object: "balance" }), { status: (init.headers as any).authorization === "Bearer sk_test_abc123" ? 200 : 401 });
+        return new Response(JSON.stringify({ object: "balance" }), { status: ok ? 200 : 401 });
       }),
     );
-    expect((await admin.post("/api/billing/stripe/test")).json).toEqual({ ok: true, mode: "test" });
+    expect((await admin.post("/api/billing/stripe/test")).json).toEqual({ ok: true, mode: "test", account: { id: "acct_1AKAB", name: "AKAB Informatique", country: "CA" } });
+    // the account is kept with the last test, and the webhook address and events are given for Stripe's dashboard
+    const view = (await admin.get("/api/billing/stripe")).json;
+    expect(view.lastTest).toMatchObject({ ok: true, account: { id: "acct_1AKAB", name: "AKAB Informatique" } });
+    expect(view.webhookUrl).toBe("http://localhost/api/stripe/hook");
+    expect(view.events).toContain("checkout.session.completed");
+    // a technician cannot see any of it
+    const tech = await session("tech@akab.local");
+    expect((await tech.get("/api/billing/stripe")).status).toBe(403);
     vi.unstubAllGlobals();
   });
 

@@ -3,7 +3,7 @@ import { useSearchParams } from "react-router-dom";
 import { useTranslation } from "react-i18next";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
-import { ArrowDownToLine, BookOpenText, CheckCircle2, Copy, CreditCard, FileText, Hash, Link2, Loader2, Plus, RefreshCw, Search, Sparkles, Unlink, Users, Wallet, XCircle } from "lucide-react";
+import { ArrowDownToLine, BookOpenText, CheckCircle2, Copy, FileText, Hash, Link2, Loader2, Plus, RefreshCw, Search, Sparkles, Unlink, Users, Wallet, XCircle } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
@@ -54,14 +54,13 @@ type QuickBooks = {
 type QbCustomer = { id: string; name: string; email: string | null; phone: string | null; active: boolean };
 type Mapping = { customers: QbCustomer[]; clients: { id: string; name: string; email: string | null; city: string | null; quickbooksId: string | null; suggestion: string | null; reason: "name" | "email" | null }[] };
 type InvoiceDefaults = { items: { id: string; name: string; sku: string | null; type: string }[]; taxCodes: { id: string; name: string; description: string | null }[]; chosen: QuickBooks["invoice"] };
-type Stripe = { enabled: boolean; publishableKey: string; paymentLinks: boolean; hasSecretKey: boolean; hasWebhookSecret: boolean; mode: "test" | "live" | null; lastTest: { ok: boolean; at: string; error?: string } | null };
 
-const KEY = ["admin", "billing"];
+export const KEY = ["admin", "billing"];
 const GOLD = "bg-grad-gold font-semibold text-[#1a1204] hover:brightness-105";
-const TABS = ["general", "template", "ledger", "quickbooks", "stripe"] as const;
+const TABS = ["general", "template", "ledger", "quickbooks"] as const;
 type Tab = (typeof TABS)[number];
 
-function useBillingError() {
+export function useBillingError() {
   const { t } = useTranslation();
   return (e: unknown) => {
     const code = e instanceof ApiError ? e.code : "";
@@ -76,7 +75,7 @@ export function BillingSection() {
   const can = useCan();
   const [params, setParams] = useSearchParams();
   const money = can("admin.integrations");
-  const tabs = TABS.filter((x) => money || (x !== "quickbooks" && x !== "stripe"));
+  const tabs = TABS.filter((x) => money || x !== "quickbooks");
   const tab = (tabs as readonly string[]).includes(params.get("tab") ?? "") ? (params.get("tab") as Tab) : "general";
 
   // back from the Intuit sign-in
@@ -120,14 +119,9 @@ export function BillingSection() {
             <BookOpenText className="size-4" /> {t("billing.tabs.ledger")}
           </TabsTrigger>
           {money && (
-            <>
-              <TabsTrigger value="quickbooks">
-                <RefreshCw className="size-4" /> QuickBooks
-              </TabsTrigger>
-              <TabsTrigger value="stripe">
-                <CreditCard className="size-4" /> Stripe
-              </TabsTrigger>
-            </>
+            <TabsTrigger value="quickbooks">
+              <RefreshCw className="size-4" /> QuickBooks
+            </TabsTrigger>
           )}
         </TabsList>
         <TabsContent value="general" className="mt-5">
@@ -140,21 +134,16 @@ export function BillingSection() {
           <LedgerTab />
         </TabsContent>
         {money && (
-          <>
-            <TabsContent value="quickbooks" className="mt-5">
-              <QuickBooksTab />
-            </TabsContent>
-            <TabsContent value="stripe" className="mt-5">
-              <StripeTab />
-            </TabsContent>
-          </>
+          <TabsContent value="quickbooks" className="mt-5">
+            <QuickBooksTab />
+          </TabsContent>
         )}
       </Tabs>
     </div>
   );
 }
 
-function Card({ title, text, children, aside }: { title: string; text?: string; children: ReactNode; aside?: ReactNode }) {
+export function Card({ title, text, children, aside }: { title: string; text?: string; children: ReactNode; aside?: ReactNode }) {
   return (
     <section className="space-y-4 rounded-2xl border bg-card/40 p-5">
       <div className="flex flex-wrap items-start gap-3">
@@ -169,7 +158,7 @@ function Card({ title, text, children, aside }: { title: string; text?: string; 
   );
 }
 
-function Field({ label, children, hint, className }: { label: string; children: ReactNode; hint?: string; className?: string }) {
+export function Field({ label, children, hint, className }: { label: string; children: ReactNode; hint?: string; className?: string }) {
   return (
     <div className={cn("space-y-1.5", className)}>
       <Label className="text-xs">{label}</Label>
@@ -516,16 +505,16 @@ function LedgerTab() {
 }
 
 // ── QuickBooks ──
-function SecretInput({ value, onChange, saved, placeholder }: { value: string; onChange: (v: string) => void; saved: boolean; placeholder?: string }) {
+export function SecretInput({ value, onChange, saved, placeholder }: { value: string; onChange: (v: string) => void; saved: boolean; placeholder?: string }) {
   return <Input type="password" autoComplete="new-password" value={value} onChange={(e) => onChange(e.target.value)} placeholder={saved ? "••••••••••••" : placeholder} />;
 }
 
-function Saved({ on }: { on: boolean }) {
+export function Saved({ on }: { on: boolean }) {
   const { t } = useTranslation();
   return on ? <span className="ml-2 rounded-full bg-emerald-500/15 px-1.5 py-0.5 text-[10px] font-medium text-emerald-400">{t("integrations.savedValue")}</span> : null;
 }
 
-function LastTest({ r }: { r: { ok: boolean; at: string; error?: string } | null }) {
+export function LastTest({ r }: { r: { ok: boolean; at: string; error?: string } | null }) {
   const { t } = useTranslation();
   if (!r) return null;
   return r.ok ? (
@@ -1212,92 +1201,3 @@ function MappingCard() {
   );
 }
 
-// ── Stripe ──
-function StripeTab() {
-  const { t } = useTranslation();
-  const qc = useQueryClient();
-  const err = useBillingError();
-  const { data: s } = useQuery({ queryKey: [...KEY, "stripe"], queryFn: () => api.get<Stripe>("/billing/stripe") });
-  const [f, setF] = useState({ publishableKey: "", secretKey: "", webhookSecret: "" });
-  useEffect(() => {
-    if (s) setF({ publishableKey: s.publishableKey, secretKey: "", webhookSecret: "" });
-  }, [s]);
-  const done = (r: Stripe) => qc.setQueryData([...KEY, "stripe"], r);
-  const put = (p: Record<string, unknown>) => api.put<Stripe>("/billing/stripe", p);
-  const save = useMutation({
-    mutationFn: () => put({ publishableKey: f.publishableKey, ...(f.secretKey ? { secretKey: f.secretKey } : {}), ...(f.webhookSecret ? { webhookSecret: f.webhookSecret } : {}) }),
-    onSuccess: (r) => {
-      done(r);
-      toast.success(t("billing.saved"));
-    },
-    onError: (e) => toast.error(err(e)),
-  });
-  const toggle = useMutation({ mutationFn: put, onSuccess: done, onError: (e) => toast.error(err(e)) });
-  const test = useMutation({
-    mutationFn: () => api.post<{ ok: boolean; error?: string }>("/billing/stripe/test"),
-    onSuccess: (r) => {
-      void qc.invalidateQueries({ queryKey: [...KEY, "stripe"] });
-      if (r.ok) toast.success(t("billing.stripe.testOk"));
-      else toast.error(t("billing.testFailed", { error: r.error === "invalid_key" ? t("billing.stripe.invalidKey") : (r.error ?? "") }));
-    },
-    onError: (e) => toast.error(err(e)),
-  });
-  if (!s) return <Loader2 className="size-5 animate-spin text-muted-foreground" />;
-  return (
-    <div className="space-y-5">
-      <Card
-        title={t("billing.stripe.title")}
-        text={t("billing.stripe.text")}
-        aside={
-          <div className="flex items-center gap-2">
-            {s.mode && (
-              <span className={cn("rounded-full border px-2 py-0.5 text-[11px] font-semibold uppercase", s.mode === "live" ? "border-emerald-500/40 text-emerald-300" : "border-amber-500/40 text-amber-300")}>
-                {s.mode === "live" ? t("billing.stripe.live") : t("billing.stripe.test")}
-              </span>
-            )}
-            <Switch checked={s.enabled} onCheckedChange={(v) => toggle.mutate({ enabled: v })} aria-label={t("billing.enabled")} />
-          </div>
-        }
-      >
-        <form
-          className="grid gap-3"
-          onSubmit={(e: FormEvent) => {
-            e.preventDefault();
-            save.mutate();
-          }}
-        >
-          <Field label={t("billing.stripe.publishableKey")}>
-            <Input value={f.publishableKey} placeholder="pk_live_…" onChange={(e) => setF({ ...f, publishableKey: e.target.value.trim() })} className="font-mono text-xs" />
-          </Field>
-          <div className="space-y-1.5">
-            <Label className="text-xs">
-              {t("billing.stripe.secretKey")}
-              <Saved on={s.hasSecretKey} />
-            </Label>
-            <SecretInput value={f.secretKey} onChange={(v) => setF({ ...f, secretKey: v.trim() })} saved={s.hasSecretKey} placeholder="sk_live_… / rk_live_…" />
-            <p className="text-[11px] text-muted-foreground">{t("billing.stripe.secretHint")}</p>
-          </div>
-          <div className="space-y-1.5">
-            <Label className="text-xs">
-              {t("billing.stripe.webhookSecret")}
-              <Saved on={s.hasWebhookSecret} />
-            </Label>
-            <SecretInput value={f.webhookSecret} onChange={(v) => setF({ ...f, webhookSecret: v.trim() })} saved={s.hasWebhookSecret} placeholder="whsec_…" />
-          </div>
-          <label className="flex items-center gap-2 text-sm">
-            <Switch checked={s.paymentLinks} onCheckedChange={(v) => toggle.mutate({ paymentLinks: v })} /> {t("billing.stripe.paymentLinks")}
-          </label>
-          <div className="flex flex-wrap items-center gap-2">
-            <Button type="submit" variant="outline" disabled={save.isPending}>
-              {save.isPending && <Loader2 className="size-4 animate-spin" />} {t("billing.save")}
-            </Button>
-            <Button type="button" variant="outline" disabled={!s.hasSecretKey || test.isPending} onClick={() => test.mutate()}>
-              {test.isPending ? <Loader2 className="size-4 animate-spin" /> : <RefreshCw className="size-4" />} {t("billing.test")}
-            </Button>
-          </div>
-          <LastTest r={s.lastTest} />
-        </form>
-      </Card>
-    </div>
-  );
-}

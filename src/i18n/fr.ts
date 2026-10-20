@@ -112,13 +112,13 @@ const fr = {
     open: "Ouvrir",
     status: {
       notReady: "Stripe n'est pas branché",
-      notReadyText: "Un administrateur principal l'active dans Paramètres admin, Facturation, Stripe.",
+      notReadyText: "Un administrateur principal l'active dans Paramètres admin, Intégrations, Stripe.",
       connected: "Stripe est branché",
       live: "Mode réel",
       test: "Mode test",
       testHint: "Aucune vraie carte n'est débitée. Carte de test : 4242 4242 4242 4242, une date future et trois chiffres au choix.",
       noWebhook: "Le webhook Stripe n'est pas configuré",
-      noWebhookText: "Sans lui, un paiement reçu par Stripe n'apparaît pas sur la facture, alors les liens sont désactivés. Dans Stripe, ajoutez ce point de terminaison avec ces événements, puis collez son secret (whsec_) dans Paramètres admin, Facturation, Stripe.",
+      noWebhookText: "Sans lui, un paiement reçu par Stripe n'apparaît pas sur la facture, alors les liens sont désactivés. Dans Stripe, ajoutez ce point de terminaison avec ces événements, puis collez son secret (whsec_) dans Paramètres admin, Intégrations, Stripe.",
       webhookUrl: "Adresse du webhook",
       events: "Événements à envoyer",
     },
@@ -701,7 +701,7 @@ const fr = {
   },
   billing: {
     title: "Facturation",
-    subtitle: "Numérotation, taxes, modèle de facture, plan comptable, QuickBooks et Stripe.",
+    subtitle: "Numérotation, taxes, modèle de facture, plan comptable et QuickBooks.",
     tabs: {
       general: "Numérotation et taxes",
       template: "Modèle de facture",
@@ -2271,6 +2271,18 @@ const fr = {
     },
   },
   integrations: {
+    stripe: {
+      webhookUrl: "Adresse du webhook (point de terminaison)",
+      events: "Événements à envoyer (cliquez pour copier)",
+      description: "Paiements par carte sur les factures : votre compte Stripe, ses clés et le webhook des paiements reçus.",
+      account: "Compte Stripe connecté",
+      noName: "Compte sans nom",
+      accountTest: "Cliquez sur Tester : Stripe donne alors le nom et l'identifiant du compte de cette clé.",
+      accountNone: "Entrez la clé secrète de votre compte Stripe, enregistrez, puis testez.",
+      webhookTitle: "Webhook : paiements reçus",
+      webhookText: "Dans Stripe › Développeurs › Webhooks, ajoutez ce point de terminaison avec ces événements, puis collez ci-dessous son secret (whsec_…). Sans lui, un paiement par carte n'apparaît pas sur la facture.",
+      webhookSecretHint: "Stripe l'affiche une fois le point de terminaison créé (Révéler le secret de signature).",
+    },
     voipms: {
       ticketTimeout: "Message quand personne n'a répondu à temps (billet automatique)",
       autoReplyHint: "{delay} = le délai ci-dessous (ex. « 4 h »). Le client peut répondre 1 (ou « billet ») pour en faire un billet tout de suite.",

@@ -114,13 +114,13 @@ const en: Dict = {
     open: "Open",
     status: {
       notReady: "Stripe is not connected",
-      notReadyText: "A master administrator turns it on in Admin settings, Billing, Stripe.",
+      notReadyText: "A master administrator turns it on in Admin settings, Integrations, Stripe.",
       connected: "Stripe is connected",
       live: "Live mode",
       test: "Test mode",
       testHint: "No real card is charged. Test card: 4242 4242 4242 4242, a future date and any three digits.",
       noWebhook: "The Stripe webhook is not set up",
-      noWebhookText: "Without it, a payment received by Stripe does not show on the invoice, so links are turned off. In Stripe, add this endpoint with these events, then paste its secret (whsec_) in Admin settings, Billing, Stripe.",
+      noWebhookText: "Without it, a payment received by Stripe does not show on the invoice, so links are turned off. In Stripe, add this endpoint with these events, then paste its secret (whsec_) in Admin settings, Integrations, Stripe.",
       webhookUrl: "Webhook address",
       events: "Events to send",
     },
@@ -703,7 +703,7 @@ const en: Dict = {
   },
   billing: {
     title: "Invoicing",
-    subtitle: "Numbering, taxes, invoice template, chart of accounts, QuickBooks and Stripe.",
+    subtitle: "Numbering, taxes, invoice template, chart of accounts and QuickBooks.",
     tabs: {
       general: "Numbering and taxes",
       template: "Invoice template",
@@ -2273,6 +2273,18 @@ const en: Dict = {
     },
   },
   integrations: {
+    stripe: {
+      webhookUrl: "Webhook address (endpoint URL)",
+      events: "Events to send (click to copy)",
+      description: "Card payments on invoices: your Stripe account, its keys and the webhook for payments received.",
+      account: "Connected Stripe account",
+      noName: "Unnamed account",
+      accountTest: "Click Test: Stripe then gives the name and id of this key's account.",
+      accountNone: "Enter your Stripe account's secret key, save, then test.",
+      webhookTitle: "Webhook: payments received",
+      webhookText: "In Stripe › Developers › Webhooks, add this endpoint with these events, then paste its secret (whsec_…) below. Without it, a card payment does not show on the invoice.",
+      webhookSecretHint: "Stripe shows it once the endpoint is created (Reveal signing secret).",
+    },
     voipms: {
       ticketTimeout: "Message when nobody answered in time (automatic ticket)",
       autoReplyHint: "{delay} = the delay below (e.g. “4 h”). The client can answer 1 (or “ticket”) to make it a ticket right away.",

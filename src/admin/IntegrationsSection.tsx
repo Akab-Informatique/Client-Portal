@@ -3,7 +3,7 @@ import { useSearchParams } from "react-router-dom";
 import { useTranslation } from "react-i18next";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
-import { ArrowLeft, CalendarDays, CheckCircle2, ChevronDown, ChevronRight, ExternalLink, KeyRound, Link2, Loader2, MonitorPlay, PlugZap, RefreshCw, Sparkles, Unlink, XCircle, type LucideIcon, MessageSquareText } from "lucide-react";
+import { ArrowLeft, CalendarDays, CheckCircle2, ChevronDown, ChevronRight, CreditCard, ExternalLink, KeyRound, Link2, Loader2, MonitorPlay, PlugZap, RefreshCw, Sparkles, Unlink, XCircle, type LucideIcon, MessageSquareText } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -16,7 +16,10 @@ import { api, ApiError } from "@/lib/api";
 import { useConfirm } from "@/components/ConfirmDialog";
 import { dateTime } from "@/lib/format";
 import { cn } from "@/lib/utils";
+import type { PermissionKey } from "@shared/permissions";
+import { useCan } from "@/lib/session";
 import { SectionHeader } from "./sections";
+import { StripePage, StripeStatus } from "./StripeIntegration";
 import { AI_USAGE_KEY, AiUsagePanel } from "./AiUsage";
 import { shortModel } from "@/components/AiModelPicker";
 
@@ -57,7 +60,7 @@ function useIntegrationError() {
  * Available integrations. To add one: an entry here, its page component,
  * a Status component (badge on the card) and its texts under integrations.<key>.
  */
-type Integration = { key: string; name: string; icon: LucideIcon; Status: () => ReactNode; Page: () => ReactNode };
+type Integration = { key: string; name: string; icon: LucideIcon; Status: () => ReactNode; Page: () => ReactNode; /** An extra right needed to see it */ needs?: PermissionKey };
 const INTEGRATIONS: Integration[] = [
   {
     key: "autotask",
@@ -74,6 +77,8 @@ const INTEGRATIONS: Integration[] = [
   { key: "ai", name: "Claude (Anthropic)", icon: Sparkles, Status: AiStatus, Page: AiPage },
   { key: "o365", name: "Microsoft 365", icon: CalendarDays, Status: O365Status, Page: O365Page },
   { key: "voipms", name: "VoIP.ms (SMS)", icon: MessageSquareText, Status: VoipmsStatus, Page: VoipmsPage },
+  // card payments on invoices: master administrators (the API needs billing and integrations)
+  { key: "stripe", name: "Stripe", icon: CreditCard, Status: StripeStatus, Page: StripePage, needs: "admin.billing" },
   { key: "rmm", name: "RMM", icon: MonitorPlay, Status: RmmStatus, Page: RmmPage },
 ];
 
@@ -81,7 +86,9 @@ const INTEGRATIONS: Integration[] = [
 export function IntegrationsSection() {
   const { t } = useTranslation();
   const [params, setParams] = useSearchParams();
-  const open = INTEGRATIONS.find((i) => i.key === params.get("integration")) ?? null;
+  const can = useCan();
+  const shownIntegrations = INTEGRATIONS.filter((i) => !i.needs || can(i.needs));
+  const open = shownIntegrations.find((i) => i.key === params.get("integration")) ?? null;
   const go = (key: string | null) =>
     setParams((p) => {
       if (key) p.set("integration", key);
@@ -107,7 +114,7 @@ export function IntegrationsSection() {
     <div>
       <SectionHeader title={t("integrations.title")} subtitle={t("integrations.subtitle")} />
       <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
-        {INTEGRATIONS.map((i) => (
+        {shownIntegrations.map((i) => (
           <button
             key={i.key}
             type="button"

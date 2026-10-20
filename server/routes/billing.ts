@@ -1,4 +1,4 @@
-import { Hono } from "hono";
+import { Hono, type Context } from "hono";
 import { HTTPException } from "hono/http-exception";
 import { and, asc, desc, eq, ne } from "drizzle-orm";
 import { z } from "zod";
@@ -72,9 +72,24 @@ const quickbooksView = async (origin?: string | null) => {
     paymentsPulledAt: s.paymentsPulledAt,
   };
 };
-const stripeView = async () => {
+/** The portal's public address: PUBLIC_URL, else the one the request came to */
+const publicBase = (c: Context) => config.publicUrl || c.req.header("origin") || new URL(c.req.url).origin;
+
+/** Where Stripe sends its events, and which ones the portal listens to (Stripe › Développeurs › Webhooks) */
+const STRIPE_EVENTS = ["checkout.session.completed", "checkout.session.async_payment_succeeded", "checkout.session.async_payment_failed", "checkout.session.expired"];
+const stripeView = async (base: string) => {
   const s = await stripeSettings();
-  return { enabled: s.enabled, publishableKey: s.publishableKey, paymentLinks: s.paymentLinks, hasSecretKey: Boolean(s.secretKey), hasWebhookSecret: Boolean(s.webhookSecret), mode: stripeMode(s.secretKey), lastTest: s.lastTest ?? null };
+  return {
+    enabled: s.enabled,
+    publishableKey: s.publishableKey,
+    paymentLinks: s.paymentLinks,
+    hasSecretKey: Boolean(s.secretKey),
+    hasWebhookSecret: Boolean(s.webhookSecret),
+    mode: stripeMode(s.secretKey),
+    lastTest: s.lastTest ?? null,
+    webhookUrl: `${base}/api/stripe/hook`,
+    events: STRIPE_EVENTS,
+  };
 };
 
 /** Stripe errors as API errors (stripe_not_configured, stripe_api…). */
@@ -204,7 +219,7 @@ export const billingRoutes = new Hono<AppEnv>()
   })
 
   // ── Stripe (master administrators) ──
-  .get("/stripe", requirePermission("admin.billing"), requirePermission("admin.integrations"), async (c) => c.json(await stripeView()))
+  .get("/stripe", requirePermission("admin.billing"), requirePermission("admin.integrations"), async (c) => c.json(await stripeView(publicBase(c))))
   .put("/stripe", requirePermission("admin.billing"), requirePermission("admin.integrations"), async (c) => {
     const a = auth(c);
     const p = await body(
@@ -225,7 +240,7 @@ export const billingRoutes = new Hono<AppEnv>()
     if (pub && secret && pub.includes("_live_") !== (stripeMode(secret) === "live")) throw new HTTPException(400, { message: "stripe_mode_mismatch" });
     await saveStripeSettings(a.user.id, p);
     await audit(a.user.id, "billing.stripe.updated", null, { enabled: p.enabled, keyChanged: p.secretKey !== undefined || undefined, webhookChanged: p.webhookSecret !== undefined || undefined });
-    return c.json(await stripeView());
+    return c.json(await stripeView(publicBase(c)));
   })
   .post("/stripe/test", requirePermission("admin.billing"), requirePermission("admin.integrations"), async (c) => {
     const a = auth(c);
@@ -233,14 +248,14 @@ export const billingRoutes = new Hono<AppEnv>()
     const s = await stripeSettings();
     if (!s.secretKey) throw new HTTPException(400, { message: "stripe_incomplete" });
     const r = await testStripe(s.secretKey);
-    await saveStripeSettings(a.user.id, { lastTest: { ok: r.ok, at: new Date().toISOString(), ...(r.ok ? {} : { error: r.error }) } });
+    await saveStripeSettings(a.user.id, { lastTest: { ok: r.ok, at: new Date().toISOString(), ...(r.ok ? { account: r.account } : { error: r.error }) } });
     return c.json(r);
   })
 
   // ── Card payments on invoices (Accounting › Paiements): see accounting.view, make links with accounting.manage ──
   .get("/payments/status", requirePermission("accounting.view"), async (c) => {
     const s = await stripeSettings();
-    const base = config.publicUrl || c.req.header("origin") || new URL(c.req.url).origin;
+    const base = publicBase(c);
     return c.json({ ready: s.enabled && Boolean(s.secretKey) && s.paymentLinks, mode: stripeMode(s.secretKey), hasWebhookSecret: Boolean(s.webhookSecret), webhookUrl: `${base}/api/stripe/hook`, minCents: MIN_CENTS });
   })
   .get("/payments/checkouts", requirePermission("accounting.view"), async (c) => {
