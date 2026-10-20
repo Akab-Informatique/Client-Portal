@@ -498,6 +498,13 @@
       "when": 1792510089194,
       "tag": "0070_petite_jubilee",
       "breakpoints": true
+    },
+    {
+      "idx": 71,
+      "version": "7",
+      "when": 1792516630605,
+      "tag": "0071_lumpy_wendell_vaughn",
+      "breakpoints": true
     }
   ]
 }

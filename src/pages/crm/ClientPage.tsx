@@ -49,7 +49,7 @@ import { api, ApiError } from "@/lib/api";
 import { useCan } from "@/lib/session";
 import { cn } from "@/lib/utils";
 import { PRIORITY_STYLE, STATUS_STYLE, shortDate, ticketErrorText } from "@/pages/tickets/shared";
-import { crmErrorText, money, useCrmClients, type CrmInvoice, type CrmInvoices, type InvoiceStatus, type CrmClient, type CrmContact, type CrmContract, type CrmDetail, type CrmTicket, type InvoiceSettings } from "./shared";
+import { crmErrorText, money, useContractTypes, useCrmClients, type CrmInvoice, type CrmInvoices, type InvoiceStatus, type CrmClient, type CrmContact, type CrmContract, type CrmDetail, type CrmTicket, type InvoiceSettings } from "./shared";
 
 const TABS = ["info", "tickets", "invoices", "contacts", "contracts", "invoice"] as const;
 type Tab = (typeof TABS)[number];
@@ -988,8 +988,20 @@ function ContractsTab({ client }: { client: CrmDetail }) {
     },
     onError: () => toast.error(t("common.error")),
   });
+  const [adding, setAdding] = useState(false);
   return (
-    <Card title={t("crm.tabs.contracts")} icon={<FileText className="size-4" />}>
+    <Card
+      title={t("crm.tabs.contracts")}
+      icon={<FileText className="size-4" />}
+      aside={
+        can("crm.billing") && !adding ? (
+          <Button size="sm" variant="outline" onClick={() => setAdding(true)}>
+            <Plus className="size-3.5" /> {t("crm.contracts.new")}
+          </Button>
+        ) : undefined
+      }
+    >
+      {adding && <NewContract client={client} onDone={() => setAdding(false)} />}
       {isLoading && <Loader2 className="mx-auto size-5 animate-spin text-muted-foreground" />}
       {!isLoading && contracts.length === 0 && <p className="py-6 text-center text-sm text-muted-foreground">{t("crm.contracts.none")}</p>}
       {contracts.length > 0 && (
@@ -1016,38 +1028,58 @@ function ContractsTab({ client }: { client: CrmDetail }) {
   );
 }
 
-/** How a contract bills its support: hourly (own rate, else the usual one), monthly, per ticket, or never; and whether it is the default. */
+/** The number a contract's kind asks for: an hourly rate, a monthly rate, a fixed price or the hours of the bank. */
+function figureOf(k: CrmContract): { field: string; value: number | null; unit: "$" | "h" } | null {
+  switch (k.billingMode) {
+    case "hourly":
+      return { field: "hourlyRate", value: k.hourlyRateCents, unit: "$" };
+    case "monthly":
+      return { field: "monthlyRate", value: k.monthlyRateCents, unit: "$" };
+    case "per_ticket":
+      return { field: "ticketRate", value: k.ticketRateCents, unit: "$" };
+    case "fixed":
+      return { field: "fixedPrice", value: k.fixedPriceCents, unit: "$" };
+    case "banked":
+      return { field: "bankedHours", value: k.bankedHoursX100, unit: "h" };
+    default:
+      return null;
+  }
+}
+
+/** A contract's type and the figure it asks for (hourly rate, monthly rate, fixed price, hours in the bank); and whether it is the default. */
 function ContractBilling({ k, editable, busy, onChange }: { k: CrmContract; editable: boolean; busy: boolean; onChange: (patch: Record<string, unknown>) => void }) {
   const { t, i18n } = useTranslation();
-  const rateOf = (cents: number | null) => (cents == null ? "" : String(cents / 100));
-  const field = k.billingMode === "monthly" ? "monthlyRate" : k.billingMode === "per_ticket" ? "ticketRate" : "hourlyRate";
-  const cents = k.billingMode === "monthly" ? k.monthlyRateCents : k.billingMode === "per_ticket" ? k.ticketRateCents : k.hourlyRateCents;
-  const [rate, setRate] = useState(rateOf(cents));
-  useEffect(() => setRate(rateOf(cents)), [cents, k.billingMode]);
+  const { data: types = [] } = useContractTypes();
+  const fig = figureOf(k);
+  const show = (v: number | null) => (v == null ? "" : String(v / 100));
+  const [rate, setRate] = useState(show(fig?.value ?? null));
+  useEffect(() => setRate(show(fig?.value ?? null)), [fig?.value, k.billingMode]);
   const commit = () => {
+    if (!fig) return;
     const v = rate.trim().replace(",", ".");
     const n = v === "" ? null : Number(v);
-    if (n !== null && (!Number.isFinite(n) || n < 0)) return setRate(rateOf(cents));
-    if ((n === null ? null : Math.round(n * 100)) !== cents) onChange({ [field]: n });
+    if (n !== null && (!Number.isFinite(n) || n < 0)) return setRate(show(fig.value));
+    if ((n === null ? null : Math.round(n * 100)) !== fig.value) onChange({ [fig.field]: n });
   };
   return (
     <div className="flex w-full flex-wrap items-center gap-x-3 gap-y-2 pl-7 pt-1">
       <select
-        value={k.billingMode}
+        value={k.typeKey ?? ""}
         disabled={!editable || busy}
-        onChange={(e) => onChange({ billingMode: e.target.value })}
+        onChange={(e) => e.target.value && onChange({ typeKey: e.target.value })}
         className="h-8 rounded-md border bg-transparent px-2 text-xs outline-none focus:ring-2 focus:ring-[color:var(--gold)]/40 disabled:opacity-60"
         aria-label={t("crm.contracts.billingMode")}
       >
-        {(["hourly", "monthly", "per_ticket", "none"] as const).map((m) => (
-          <option key={m} value={m}>
-            {t(`tickets.contractBilling.modes.${m}`)}
+        {!k.typeKey && <option value="">{k.type ?? t("crm.contracts.noType")}</option>}
+        {types.map((x) => (
+          <option key={x.key} value={x.key}>
+            {x.name}
           </option>
         ))}
       </select>
-      {k.billingMode !== "none" && (
+      {fig && (
         <label className="flex items-center gap-1.5 text-xs text-muted-foreground">
-          {t(`crm.contracts.rate_${k.billingMode}`)}
+          {t(`crm.contracts.figure_${k.billingMode}`)}
           <span className="relative">
             <Input
               value={rate}
@@ -1059,16 +1091,18 @@ function ContractBilling({ k, editable, busy, onChange }: { k: CrmContract; edit
               onKeyDown={(e) => e.key === "Enter" && (e.target as HTMLInputElement).blur()}
               className="h-8 w-24 pr-6 text-right font-mono text-xs"
             />
-            <span className="pointer-events-none absolute right-2 top-1/2 -translate-y-1/2 text-[11px]">$</span>
+            <span className="pointer-events-none absolute right-2 top-1/2 -translate-y-1/2 text-[11px]">{fig.unit}</span>
           </span>
         </label>
       )}
       <span className="text-[11px] text-muted-foreground">
-        {k.billingMode === "hourly" && k.hourlyRateCents == null
-          ? t("crm.contracts.usualRate", { rate: money(k.usualRateCents, i18n.language) })
-          : k.billingMode === "hourly"
-            ? ""
-            : t("crm.contracts.notByHour")}
+        {k.billingMode === "banked"
+          ? t("crm.contracts.bankBalance", { used: k.usedHours, total: (k.bankedHoursX100 ?? 0) / 100, left: Math.max(0, (k.bankedHoursX100 ?? 0) / 100 - k.usedHours) })
+          : k.billingMode === "hourly" && k.hourlyRateCents == null
+            ? t("crm.contracts.usualRate", { rate: money(k.usualRateCents, i18n.language) })
+            : k.billingMode === "hourly"
+              ? ""
+              : t("crm.contracts.notByHour")}
       </span>
       {!k.isSupportDefault && k.active && editable && (
         <Button type="button" variant="ghost" size="sm" className="ml-auto h-7 gap-1 text-xs" disabled={busy} onClick={() => onChange({ supportDefault: true })}>
@@ -1076,6 +1110,75 @@ function ContractBilling({ k, editable, busy, onChange }: { k: CrmContract; edit
         </Button>
       )}
     </div>
+  );
+}
+
+/** A contract made by hand: its name, its type, its dates and the figure the type asks for. */
+function NewContract({ client, onDone }: { client: CrmDetail; onDone: () => void }) {
+  const { t } = useTranslation();
+  const qc = useQueryClient();
+  const { data: types = [] } = useContractTypes();
+  const [f, setF] = useState({ name: "", typeKey: "", startDate: "", endDate: "", figure: "" });
+  const type = types.find((x) => x.key === (f.typeKey || types[0]?.key));
+  const create = useMutation({
+    mutationFn: () => {
+      const n = f.figure.trim() === "" ? null : Number(f.figure.replace(",", "."));
+      const figure = type?.kind === "hourly" ? { hourlyRate: n } : type?.kind === "recurring" ? { monthlyRate: n } : type?.kind === "fixed" ? { fixedPrice: n } : { bankedHours: n };
+      return api.post(`/crm/clients/${client.id}/contracts`, { name: f.name.trim(), typeKey: type!.key, startDate: f.startDate || null, endDate: f.endDate || null, ...figure });
+    },
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: ["crm", "client", client.id, "contracts"] });
+      toast.success(t("crm.contracts.created"));
+      onDone();
+    },
+    onError: (e) => toast.error(ticketErrorText(t, e)),
+  });
+  const set = (k: keyof typeof f) => (e: { target: { value: string } }) => setF((x) => ({ ...x, [k]: e.target.value }));
+  return (
+    <form
+      className="mb-3 space-y-3 rounded-xl border border-[color:var(--gold)]/30 bg-[color:var(--gold)]/[0.04] p-3"
+      onSubmit={(e: FormEvent) => {
+        e.preventDefault();
+        if (f.name.trim() && type) create.mutate();
+      }}
+    >
+      <div className="grid gap-2 sm:grid-cols-3">
+        <label className="space-y-1 text-xs">
+          <span className="text-muted-foreground">{t("crm.contracts.name")}</span>
+          <Input value={f.name} onChange={set("name")} required maxLength={120} />
+        </label>
+        <label className="space-y-1 text-xs">
+          <span className="text-muted-foreground">{t("crm.contracts.type")}</span>
+          <select value={type?.key ?? ""} onChange={set("typeKey")} className="h-9 w-full rounded-md border bg-transparent px-2 text-sm outline-none focus:ring-2 focus:ring-[color:var(--gold)]/40">
+            {types.map((x) => (
+              <option key={x.key} value={x.key}>
+                {x.name}
+              </option>
+            ))}
+          </select>
+        </label>
+        <label className="space-y-1 text-xs">
+          <span className="text-muted-foreground">{type ? t(`crm.contracts.figure_${type.kind === "recurring" ? "monthly" : type.kind}`) : ""}</span>
+          <Input value={f.figure} onChange={set("figure")} inputMode="decimal" placeholder={type?.kind === "banked" ? "h" : "$"} />
+        </label>
+        <label className="space-y-1 text-xs">
+          <span className="text-muted-foreground">{t("crm.contracts.start")}</span>
+          <Input type="date" value={f.startDate} onChange={set("startDate")} />
+        </label>
+        <label className="space-y-1 text-xs">
+          <span className="text-muted-foreground">{t("crm.contracts.end")}</span>
+          <Input type="date" value={f.endDate} onChange={set("endDate")} />
+        </label>
+      </div>
+      <div className="flex justify-end gap-2">
+        <Button type="button" size="sm" variant="ghost" onClick={onDone}>
+          {t("common.cancel")}
+        </Button>
+        <Button type="submit" size="sm" disabled={create.isPending || !f.name.trim() || !type} className="bg-grad-gold font-semibold text-[#1a1204]">
+          {create.isPending && <Loader2 className="size-3.5 animate-spin" />} {t("crm.contracts.create")}
+        </Button>
+      </div>
+    </form>
   );
 }
 

@@ -240,6 +240,23 @@ export const MODULES = [
     ],
   },
   {
+    key: "services",
+    audience: "staff",
+    label: { fr: "Services", en: "Services" },
+    permissions: [
+      {
+        key: "services.view",
+        label: { fr: "Voir les services", en: "View the services" },
+        description: { fr: "La liste des services vendus, avec leurs prix", en: "The list of services sold, with their prices" },
+      },
+      {
+        key: "services.manage",
+        label: { fr: "Gérer les services", en: "Manage the services" },
+        description: { fr: "Créer, modifier et supprimer les services", en: "Create, edit and delete services" },
+      },
+    ],
+  },
+  {
     key: "breakroom",
     audience: "staff",
     label: { fr: "Pause café", en: "Coffee break" },
@@ -455,7 +472,7 @@ export const ACCESS_LAYOUT: { key: string; audience: Audience; label: Localized;
   { key: "team", audience: "staff", label: { fr: "Équipe", en: "Team" }, modules: ["dashboard", "meetings", "breakroom"] },
   { key: "tools", audience: "staff", label: { fr: "Mes outils", en: "My tools" }, modules: ["outlook", "timesheets"] },
   { key: "command", audience: "staff", label: { fr: "Centre de commande", en: "Command center" }, modules: ["messages", "tickets", "sms"] },
-  { key: "management", audience: "staff", label: { fr: "Gestion", en: "Management" }, modules: ["crm", "clientview", "store"] },
+  { key: "management", audience: "staff", label: { fr: "Gestion", en: "Management" }, modules: ["crm", "clientview", "store", "services"] },
   { key: "accounting", audience: "staff", label: { fr: "Comptabilité", en: "Accounting" }, modules: ["accounting"] },
   { key: "admin", audience: "staff", label: { fr: "Paramètres admin", en: "Admin settings" }, modules: ["admin"] },
   { key: "clientBoard", audience: "client", label: { fr: "Babillard", en: "Message board" }, modules: ["board"] },

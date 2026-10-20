@@ -93,8 +93,13 @@ export type CrmContract = {
   autoApprove: boolean;
   startDate: string | null;
   endDate: string | null;
-  /** hourly | monthly | per_ticket | none */
-  billingMode: "hourly" | "monthly" | "per_ticket" | "none";
+  /** hourly | monthly | per_ticket | none | banked | fixed */
+  billingMode: "hourly" | "monthly" | "per_ticket" | "none" | "banked" | "fixed";
+  typeKey: string | null;
+  bankedHoursX100: number | null;
+  fixedPriceCents: number | null;
+  /** Hours worked under it */
+  usedHours: number;
   hourlyRateCents: number | null;
   monthlyRateCents: number | null;
   ticketRateCents: number | null;
@@ -103,6 +108,9 @@ export type CrmContract = {
   /** The usual hourly rate of Admin › Facturation, in cents */
   usualRateCents: number;
 };
+/** A contract type of Admin › Types de contrats, as the contract forms list it */
+export type ContractTypeOption = { key: string; name: string; kind: "recurring" | "hourly" | "banked" | "fixed" };
+export const useContractTypes = () => useQuery({ queryKey: ["crm", "contract-types"], queryFn: () => api.get<ContractTypeOption[]>("/crm/contract-types"), staleTime: 60_000 });
 export type CrmTicket = {
   id: number;
   number: string;

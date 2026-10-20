@@ -15,6 +15,8 @@ import { adminRoutes } from "./routes/admin.ts";
 import { integrationRoutes } from "./routes/integrations.ts";
 import { workflowRoutes } from "./routes/workflows.ts";
 import { queueRoutes } from "./routes/queues.ts";
+import { contractTypeRoutes } from "./routes/contractTypes.ts";
+import { serviceRoutes } from "./routes/services.ts";
 import { classRoutes } from "./routes/classes.ts";
 import { ticketSetupRoutes } from "./routes/ticketSetup.ts";
 import { mailIntakeAdminRoutes, mailIntakeRoutes } from "./routes/mailIntake.ts";
@@ -88,6 +90,7 @@ export function createApp() {
   api.route("/admin/email", emailRoutes);
   api.route("/admin/workflows", workflowRoutes);
   api.route("/admin/queues", queueRoutes);
+  api.route("/admin/contract-types", contractTypeRoutes);
   api.route("/admin/client-classes", classRoutes);
   api.route("/admin/ticket-setup", ticketSetupRoutes);
   api.route("/admin/mail-intake", mailIntakeAdminRoutes);
@@ -95,6 +98,7 @@ export function createApp() {
   api.route("/admin", adminRoutes);
   api.use("/messages/*", requireStaff);
   api.route("/store", storeRoutes);
+  api.route("/services", serviceRoutes);
   api.route("/planning", planningRoutes);
   // VoIP.ms calls this one (secret token, no session); the rest is for technicians
   api.route("/sms/hook", smsHookRoutes);

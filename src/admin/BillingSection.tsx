@@ -277,8 +277,9 @@ function EraseContracts() {
   const { t } = useTranslation();
   const qc = useQueryClient();
   const confirm = useConfirm();
+  const [kind, setKind] = useState<"all" | "recurring" | "hourly" | "banked" | "fixed">("all");
   const erase = useMutation({
-    mutationFn: () => api.post<{ erased: number }>("/billing/contracts/erase", { confirm: true }),
+    mutationFn: () => api.post<{ erased: number }>("/billing/contracts/erase", { confirm: true, kind }),
     onSuccess: (r) => {
       void qc.invalidateQueries({ queryKey: ["crm"] });
       void qc.invalidateQueries({ queryKey: ["billables"] });
@@ -288,6 +289,18 @@ function EraseContracts() {
   });
   return (
     <Card title={t("billing.eraseContracts.title")} text={t("billing.eraseContracts.text")}>
+      <select
+        value={kind}
+        onChange={(e) => setKind(e.target.value as typeof kind)}
+        className="mb-3 block h-9 w-72 rounded-md border bg-transparent px-2 text-sm outline-none focus:ring-2 focus:ring-[color:var(--gold)]/40"
+        aria-label={t("billing.eraseContracts.which")}
+      >
+        {(["all", "recurring", "hourly", "banked", "fixed"] as const).map((k) => (
+          <option key={k} value={k}>
+            {k === "all" ? t("billing.eraseContracts.all") : t(`contractTypes.kind.${k}`)}
+          </option>
+        ))}
+      </select>
       <Button
         type="button"
         variant="destructive"

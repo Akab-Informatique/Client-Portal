@@ -1,4 +1,4 @@
-import { and, asc, eq } from "drizzle-orm";
+import { and, asc, eq, inArray } from "drizzle-orm";
 import { db, schema } from "../db/index.ts";
 import { billingSettings } from "./billing.ts";
 
@@ -11,10 +11,36 @@ import { billingSettings } from "./billing.ts";
  *  - hourly: the contract's hourly rate, else the usual rate of Admin › Facturation;
  *  - monthly: a flat monthly rate, the hours are not billed;
  *  - per_ticket: a flat rate per ticket, the hours are not billed;
+ *  - banked: a block of hours bought; the hours worked are drawn from it, never billed by the hour;
+ *  - fixed: a fixed price; the hours are not billed;
  *  - none: support is included, never billed.
+ * The contract types of Admin › Types de contrats each carry one of four kinds (recurring service,
+ * hourly, banked hours, fixed price) which sets the billing mode.
  */
-export const BILLING_MODES = ["hourly", "monthly", "per_ticket", "none"] as const;
+export const BILLING_MODES = ["hourly", "monthly", "per_ticket", "none", "banked", "fixed"] as const;
 export type BillingMode = (typeof BILLING_MODES)[number];
+
+export const CONTRACT_KINDS = ["recurring", "hourly", "banked", "fixed"] as const;
+export type ContractKind = (typeof CONTRACT_KINDS)[number];
+/** The billing mode a contract of this kind gets */
+export const KIND_MODE: Record<ContractKind, BillingMode> = { recurring: "monthly", hourly: "hourly", banked: "banked", fixed: "fixed" };
+/** The billing modes a kind stands for (to erase every contract of a kind) */
+const KIND_MODES: Record<ContractKind, BillingMode[]> = { recurring: ["monthly", "per_ticket"], hourly: ["hourly"], banked: ["banked"], fixed: ["fixed"] };
+
+const STARTER_TYPES: { key: string; name: string; kind: ContractKind }[] = [
+  { key: "recurring", name: "Service récurrent", kind: "recurring" },
+  { key: "hourly", name: "Taux horaire", kind: "hourly" },
+  { key: "banked", name: "Banque d'heures", kind: "banked" },
+  { key: "fixed", name: "Prix fixe", kind: "fixed" },
+];
+/** The contract types in order; the four starter ones are made the first time. */
+export async function contractTypes(): Promise<(typeof schema.contractTypes.$inferSelect)[]> {
+  const d = db();
+  const rows = await d.select().from(schema.contractTypes).orderBy(asc(schema.contractTypes.position), asc(schema.contractTypes.name));
+  if (rows.length) return rows;
+  await d.insert(schema.contractTypes).values(STARTER_TYPES.map((x, position) => ({ ...x, position }))).onConflictDoNothing();
+  return d.select().from(schema.contractTypes).orderBy(asc(schema.contractTypes.position), asc(schema.contractTypes.name));
+}
 
 export type ContractView = {
   id: string;
@@ -33,6 +59,12 @@ export type ContractView = {
   isDefault: boolean;
   /** Hours worked under it are billed */
   billed: boolean;
+  /** The contract type (Admin › Types de contrats) */
+  typeKey: string | null;
+  /** Banked hours: hours bought and hours worked under the contract */
+  bankedHours: number | null;
+  usedHours: number;
+  fixedPriceCents: number | null;
 };
 
 const modeOf = (v: string): BillingMode => ((BILLING_MODES as readonly string[]).includes(v) ? (v as BillingMode) : "hourly");
@@ -55,6 +87,7 @@ export async function contractsOfCompany(companyAt: number): Promise<ContractVie
   if (!rows.length) return [];
   const usual = (await billingSettings()).rates.hourly;
   const chosen = rows.find((k) => k.supportDefault) ?? rows.find((k) => k.isDefault) ?? (rows.length === 1 ? rows[0] : null);
+  const used = await usedHoursOf(rows);
   return rows.map((k) => {
     const mode = modeOf(k.billingMode);
     return {
@@ -69,8 +102,25 @@ export async function contractsOfCompany(companyAt: number): Promise<ContractVie
       ticketRateCents: k.ticketRateCents,
       isDefault: chosen?.id === k.id,
       billed: mode === "hourly",
+      typeKey: k.typeKey,
+      bankedHours: k.bankedHoursX100 == null ? null : k.bankedHoursX100 / 100,
+      usedHours: used.get(k.id) ?? 0,
+      fixedPriceCents: k.fixedPriceCents,
     };
   });
+}
+
+/** Hours worked under each contract (ticket time entries, which carry the contract's source id). Keyed by the contract's id. */
+export async function usedHoursOf(contracts: { id: string; autotaskId: string | null }[]): Promise<Map<string, number>> {
+  const out = new Map<string, number>();
+  const bySource = new Map(contracts.filter((k) => k.autotaskId).map((k) => [k.autotaskId!, k.id]));
+  if (!bySource.size) return out;
+  const rows = await db().select({ id: schema.ticketTimeEntries.contractId, minutes: schema.ticketTimeEntries.minutes }).from(schema.ticketTimeEntries).where(inArray(schema.ticketTimeEntries.contractId, [...bySource.keys()]));
+  for (const r of rows) {
+    const id = r.id ? bySource.get(r.id) : undefined;
+    if (id) out.set(id, Math.round(((out.get(id) ?? 0) + r.minutes / 60) * 100) / 100);
+  }
+  return out;
 }
 
 /** A ticket's contract: the one stored on it, else the client's default. `chosen`: set on the ticket itself. */
@@ -92,19 +142,27 @@ export async function setTicketContract(ticketId: number, contractId: string | n
 }
 
 /**
- * Erase every contract of every client. What pointed at one (tickets, time, charges, timesheets, work to bill)
- * keeps its lines and loses the contract. Returns how many contracts went.
+ * Erase the contracts of every client: all of them, or only one kind (recurring service, hourly, banked hours,
+ * fixed price). What pointed at one (tickets, time, charges, timesheets, work to bill) keeps its lines and loses
+ * the contract. Returns how many contracts went.
  */
-export async function eraseContracts(): Promise<number> {
+export async function eraseContracts(kind: ContractKind | "all" = "all"): Promise<number> {
   const d = db();
-  const n = (await d.select({ id: schema.clientContracts.id }).from(schema.clientContracts)).length;
+  const rows = await d.select({ id: schema.clientContracts.id, source: schema.clientContracts.autotaskId, mode: schema.clientContracts.billingMode }).from(schema.clientContracts);
+  const gone = rows.filter((r) => kind === "all" || KIND_MODES[kind].includes(r.mode as BillingMode));
+  const ids = gone.map((r) => r.id);
+  if (!ids.length) return 0;
+  // tickets, time and charges name a contract by its source id
+  const sid = gone.map((r) => r.source).filter((x): x is string => Boolean(x));
   await d.transaction(async (tx) => {
-    await tx.update(schema.tickets).set({ contractId: null });
-    await tx.update(schema.ticketTimeEntries).set({ contractId: null });
-    await tx.update(schema.ticketCharges).set({ contractId: null });
-    await tx.update(schema.ticketMeta).set({ contractId: null });
-    await tx.update(schema.timesheetEntries).set({ contractId: null });
-    await tx.delete(schema.clientContracts);
+    if (sid.length) {
+      await tx.update(schema.tickets).set({ contractId: null }).where(inArray(schema.tickets.contractId, sid));
+      await tx.update(schema.ticketTimeEntries).set({ contractId: null }).where(inArray(schema.ticketTimeEntries.contractId, sid));
+      await tx.update(schema.ticketCharges).set({ contractId: null }).where(inArray(schema.ticketCharges.contractId, sid));
+    }
+    await tx.update(schema.ticketMeta).set({ contractId: null }).where(inArray(schema.ticketMeta.contractId, ids));
+    await tx.update(schema.timesheetEntries).set({ contractId: null }).where(inArray(schema.timesheetEntries.contractId, ids));
+    await tx.delete(schema.clientContracts).where(inArray(schema.clientContracts.id, ids));
   });
-  return n;
+  return ids.length;
 }

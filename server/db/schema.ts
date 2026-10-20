@@ -132,6 +132,12 @@ export const clientContracts = pgTable(
     hourlyRateCents: integer("hourly_rate_cents"),
     monthlyRateCents: integer("monthly_rate_cents"),
     ticketRateCents: integer("ticket_rate_cents"),
+    /** The contract type (contract_types.key) it was made from */
+    typeKey: text("type_key"),
+    /** Banked hours: the block of hours bought (x100) */
+    bankedHoursX100: integer("banked_hours_x100"),
+    /** Fixed price in cents */
+    fixedPriceCents: integer("fixed_price_cents"),
     /** The client's default support contract, chosen in the portal (else the source's default) */
     supportDefault: boolean("support_default").notNull().default(false),
     /** YYYY-MM-DD */
@@ -1781,4 +1787,40 @@ export const stripeCheckouts = pgTable(
     createdAt: created(),
   },
   (t) => [uniqueIndex("stripe_checkouts_session_idx").on(t.sessionId), index("stripe_checkouts_invoice_idx").on(t.invoiceId)],
+);
+
+/** Contract types set up in Admin › Types de contrats: a name over one of four ways to bill (kind) */
+export const contractTypes = pgTable(
+  "contract_types",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    key: text("key").notNull(),
+    name: text("name").notNull(),
+    /** recurring (monthly service) | hourly | banked (block of hours) | fixed (fixed price) */
+    kind: text("kind").notNull(),
+    position: integer("position").notNull().default(0),
+    active: boolean("active").notNull().default(true),
+    createdAt: created(),
+    updatedAt: updated(),
+  },
+  (t) => [uniqueIndex("contract_types_key_idx").on(t.key)],
+);
+
+/** Services the company sells (Services, under Inventory): the catalogue, with no stock */
+export const services = pgTable(
+  "services",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    name: text("name").notNull(),
+    description: text("description").notNull().default(""),
+    /** one_time | recurring (monthly) */
+    kind: text("kind").notNull().default("one_time"),
+    priceCents: integer("price_cents").notNull().default(0),
+    costCents: integer("cost_cents").notNull().default(0),
+    taxable: boolean("taxable").notNull().default(true),
+    active: boolean("active").notNull().default(true),
+    createdAt: created(),
+    updatedAt: updated(),
+  },
+  (t) => [index("services_name_idx").on(t.name)],
 );

@@ -83,7 +83,12 @@ export type TicketContract = {
   sourceId: string | null;
   name: string;
   type: string | null;
-  mode: "hourly" | "monthly" | "per_ticket" | "none";
+  mode: "hourly" | "monthly" | "per_ticket" | "none" | "banked" | "fixed";
+  typeKey?: string | null;
+  /** Banked hours: hours bought and hours worked under the contract */
+  bankedHours?: number | null;
+  usedHours?: number;
+  fixedPriceCents?: number | null;
   /** The rate typed on the contract (null: the usual rate applies) */
   hourlyRateCents: number | null;
   /** What an hour is billed at (null: the hours are not billed under this contract) */

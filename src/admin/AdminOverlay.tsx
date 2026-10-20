@@ -3,7 +3,7 @@ import { useSearchParams } from "react-router-dom";
 import { useTranslation } from "react-i18next";
 import { AnimatePresence, motion } from "motion/react";
 import { Dialog as DialogPrimitive } from "radix-ui";
-import { Briefcase, ChevronDown, Clock, Inbox, PanelLeftClose, PanelLeftOpen, History, ListOrdered, Mail, Tags, Ticket, PlugZap, Receipt, ShieldCheck, Users, Workflow, X, type LucideIcon } from "lucide-react";
+import { Briefcase, ChevronDown, Clock, Inbox, PanelLeftClose, PanelLeftOpen, History, FileText, ListOrdered, Mail, Tags, Ticket, PlugZap, Receipt, ShieldCheck, Users, Workflow, X, type LucideIcon } from "lucide-react";
 import { LogoMark } from "@/components/brand/Logo";
 import { TechBackground } from "@/components/brand/TechBackground";
 import { useCan } from "@/lib/session";
@@ -13,6 +13,7 @@ import { ActivitySection, RolesSection, StaffSection } from "./sections";
 import { IntegrationsSection } from "./IntegrationsSection";
 import { EmailSection } from "./EmailSection";
 import { BillingSection } from "./BillingSection";
+import { ContractTypesSection } from "./ContractTypesSection";
 import { TimeExpenseSection } from "./TimeExpenseSection";
 import { WorkflowsSection } from "./WorkflowsSection";
 import { QueuesSection } from "./QueuesSection";
@@ -25,6 +26,7 @@ type Section = { key: string; labelKey: string; icon: LucideIcon; permission: Pe
 const SECTIONS: Section[] = [
   { key: "staff", labelKey: "admin.sections.staff", icon: Users, permission: ["admin.staff"], render: () => <StaffSection /> },
   { key: "billing", labelKey: "admin.sections.billing", icon: Receipt, permission: ["admin.billing"], render: () => <BillingSection /> },
+  { key: "contracttypes", labelKey: "admin.sections.contracttypes", icon: FileText, permission: ["admin.billing"], render: () => <ContractTypesSection /> },
   { key: "time", labelKey: "admin.sections.time", icon: Clock, permission: ["admin.billing"], render: () => <TimeExpenseSection /> },
   { key: "roles", labelKey: "admin.sections.roles", icon: ShieldCheck, permission: ["admin.roles"], render: () => <RolesSection /> },
   { key: "email", labelKey: "admin.sections.email", icon: Mail, permission: ["admin.email"], render: () => <EmailSection /> },
@@ -54,6 +56,7 @@ const MENU: Entry[] = [
   { kind: "group", id: "people", labelKey: "admin.groups.people", icon: Users, keys: ["staff", "roles"] },
   { kind: "item", key: "integrations" },
   { kind: "item", key: "billing" },
+  { kind: "item", key: "contracttypes" },
   { kind: "group", id: "psa", labelKey: "admin.groups.psa", icon: Briefcase, keys: ["workflows", "email", "mailintake", "classes", "queues", "time", "ticketsetup"] },
   { kind: "item", key: "activity" },
 ];

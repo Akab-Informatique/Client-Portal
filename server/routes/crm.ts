@@ -13,7 +13,7 @@ import { crmState, descendantsOf, ensureCrm, rememberCompany, rememberContact, s
 import { lookup, run } from "./tickets.ts";
 import { pushInvoice } from "../lib/quickbooks.ts";
 import { applyAutoApprove } from "../lib/billables.ts";
-import { BILLING_MODES } from "../lib/contracts.ts";
+import { BILLING_MODES, KIND_MODE, contractTypes, usedHoursOf, type ContractKind } from "../lib/contracts.ts";
 import { billingSettings } from "../lib/billing.ts";
 import { quickbooksHttp } from "./billing.ts";
 
@@ -353,7 +353,54 @@ export const crmRoutes = new Hono<AppEnv>()
     return c.json({ enabled: true, welcomeSent });
   })
 
+  // ── contract types (Admin › Types de contrats), for the contract forms
+  .get("/contract-types", async (c) => c.json((await contractTypes()).filter((t) => t.active).map((t) => ({ key: t.key, name: t.name, kind: t.kind }))))
+
   // ── contracts
+  /** A contract made by hand (crm.billing): from a contract type, whose kind sets how it is billed. */
+  .post("/clients/:id/contracts", requirePermission("crm.billing"), async (c) => {
+    const a = auth(c);
+    const client = await clientOr404(c.req.param("id"));
+    const zDay = z.string().regex(/^\d{4}-\d{2}-\d{2}$/);
+    const p = await body(
+      c,
+      z.object({
+        name: z.string().trim().min(1).max(120),
+        typeKey: z.string().trim().min(1).max(60),
+        startDate: zDay.nullable().optional(),
+        endDate: zDay.nullable().optional(),
+        /** Dollars */
+        hourlyRate: z.number().min(0).max(100_000).nullable().optional(),
+        monthlyRate: z.number().min(0).max(1_000_000).nullable().optional(),
+        fixedPrice: z.number().min(0).max(10_000_000).nullable().optional(),
+        bankedHours: z.number().min(0).max(100_000).nullable().optional(),
+      }),
+    );
+    const type = (await contractTypes()).find((t) => t.key === p.typeKey && t.active);
+    if (!type) throw new HTTPException(400, { message: "invalid_type" });
+    const cents = (v: number | null | undefined) => (v == null ? null : Math.round(v * 100));
+    const mode = KIND_MODE[type.kind as ContractKind];
+    const [row] = await db()
+      .insert(schema.clientContracts)
+      .values({
+        clientId: client.id,
+        autotaskId: `local-${crypto.randomUUID()}`,
+        name: p.name,
+        type: type.name,
+        typeKey: type.key,
+        billingMode: mode,
+        startDate: p.startDate ?? null,
+        endDate: p.endDate ?? null,
+        hourlyRateCents: cents(p.hourlyRate),
+        monthlyRateCents: cents(p.monthlyRate),
+        fixedPriceCents: cents(p.fixedPrice),
+        bankedHoursX100: p.bankedHours == null ? null : Math.round(p.bankedHours * 100),
+        syncedAt: new Date(),
+      })
+      .returning();
+    await audit(a.user.id, "crm.contract_created", row.id, { name: p.name, type: type.key });
+    return c.json(row, 201);
+  })
   .get("/clients/:id/contracts", async (c) => {
     const client = await clientOr404(c.req.param("id"));
     const rows = await db().select().from(schema.clientContracts).where(eq(schema.clientContracts.clientId, client.id)).orderBy(asc(schema.clientContracts.name));
@@ -361,9 +408,10 @@ export const crmRoutes = new Hono<AppEnv>()
     const active = rows.filter((k) => k.active);
     const chosen = active.find((k) => k.supportDefault) ?? active.find((k) => k.isDefault) ?? (active.length === 1 ? active[0] : null);
     const usual = Math.round((await billingSettings()).rates.hourly * 100);
+    const used = await usedHoursOf(rows);
     return c.json(
       rows
-        .map((k) => ({ ...k, isSupportDefault: chosen?.id === k.id, usualRateCents: usual }))
+        .map((k) => ({ ...k, isSupportDefault: chosen?.id === k.id, usualRateCents: usual, usedHours: used.get(k.id) ?? 0 }))
         .sort((x, y) => Number(y.active) - Number(x.active) || Number(y.isSupportDefault) - Number(x.isSupportDefault) || x.name.localeCompare(y.name)),
     );
   })
@@ -534,8 +582,17 @@ export const crmRoutes = new Hono<AppEnv>()
         monthlyRate: zRate,
         ticketRate: zRate,
         supportDefault: z.literal(true).optional(),
+        name: z.string().trim().min(1).max(120).optional(),
+        typeKey: z.string().trim().min(1).max(60).optional(),
+        startDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).nullable().optional(),
+        endDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).nullable().optional(),
+        fixedPrice: z.number().min(0).max(10_000_000).nullable().optional(),
+        bankedHours: z.number().min(0).max(100_000).nullable().optional(),
+        active: z.boolean().optional(),
       }),
     );
+    const type = p.typeKey ? (await contractTypes()).find((t) => t.key === p.typeKey) : undefined;
+    if (p.typeKey && !type) throw new HTTPException(400, { message: "invalid_type" });
     if (p.autoApprove && !a.permissions.includes("accounting.manage")) throw new HTTPException(403, { message: "accounting_manage_only" });
     const kid = zUuid.parse(c.req.param("kid"));
     const cents = (v: number | null | undefined) => (v === undefined ? undefined : v === null ? null : Math.round(v * 100));
@@ -546,6 +603,13 @@ export const crmRoutes = new Hono<AppEnv>()
       ...(p.monthlyRate !== undefined ? { monthlyRateCents: cents(p.monthlyRate) } : {}),
       ...(p.ticketRate !== undefined ? { ticketRateCents: cents(p.ticketRate) } : {}),
       ...(p.supportDefault ? { supportDefault: true } : {}),
+      ...(p.name ? { name: p.name } : {}),
+      ...(type ? { typeKey: type.key, type: type.name, billingMode: KIND_MODE[type.kind as ContractKind] } : {}),
+      ...(p.startDate !== undefined ? { startDate: p.startDate } : {}),
+      ...(p.endDate !== undefined ? { endDate: p.endDate } : {}),
+      ...(p.fixedPrice !== undefined ? { fixedPriceCents: cents(p.fixedPrice) } : {}),
+      ...(p.bankedHours !== undefined ? { bankedHoursX100: p.bankedHours === null ? null : Math.round(p.bankedHours * 100) } : {}),
+      ...(p.active !== undefined ? { active: p.active } : {}),
     };
     const row = await db().transaction(async (tx) => {
       if (p.supportDefault) await tx.update(schema.clientContracts).set({ supportDefault: false }).where(and(eq(schema.clientContracts.clientId, client.id), ne(schema.clientContracts.id, kid)));

@@ -4936,3 +4936,59 @@ describe("un-post ready items, erase all contracts", () => {
     expect((await db().select().from(schema.auditLog).where(eq(schema.auditLog.action, "billing.contracts_erased"))).length).toBe(1);
   });
 });
+
+describe("contract types, contracts made by hand, services", () => {
+  it("the four starter types; admins manage them; a contract takes its billing from its type; erase by kind; services CRUD", async () => {
+    resetRateLimit("login:ip:unknown");
+    const admin = await signIn("admin@akab.local");
+    const tech = await signIn("tech@akab.local");
+    const [client] = await db().select().from(schema.clients).limit(1);
+
+    // starter types (recurring service, hourly, banked hours, fixed price); only billing admins manage them
+    const types = (await admin.get("/api/admin/contract-types")).json;
+    expect(types.map((x: any) => x.kind)).toEqual(["recurring", "hourly", "banked", "fixed"]);
+    expect((await tech.get("/api/admin/contract-types")).status).toBe(403);
+    expect((await tech.get("/api/crm/contract-types")).json.length).toBe(4);
+    const added = await admin.post("/api/admin/contract-types", { name: "Soutien géré", kind: "recurring" });
+    expect(added.json.key).toBe("soutien-gere");
+
+    // contracts by hand: the kind sets the billing mode
+    const mk = async (body: any) => (await admin.post(`/api/crm/clients/${client.id}/contracts`, body)).json;
+    const hourly = await mk({ name: "Horaire A", typeKey: "hourly", hourlyRate: 120 });
+    const recurring = await mk({ name: "Mensuel A", typeKey: "soutien-gere", monthlyRate: 450, startDate: "2026-10-01" });
+    const banked = await mk({ name: "Banque A", typeKey: "banked", bankedHours: 40 });
+    const fixed = await mk({ name: "Fixe A", typeKey: "fixed", fixedPrice: 3000 });
+    expect([hourly, recurring, banked, fixed].map((k) => k.billingMode)).toEqual(["hourly", "monthly", "banked", "fixed"]);
+    expect(hourly.hourlyRateCents).toBe(12000);
+    expect(banked.bankedHoursX100).toBe(4000);
+    expect(fixed.fixedPriceCents).toBe(300000);
+    expect((await tech.post(`/api/crm/clients/${client.id}/contracts`, { name: "x", typeKey: "hourly" })).status).toBe(403);
+    expect((await admin.post(`/api/crm/clients/${client.id}/contracts`, { name: "x", typeKey: "inconnu" })).json.error).toBe("invalid_type");
+    // changing the type changes the billing
+    expect((await admin.patch(`/api/crm/clients/${client.id}/contracts/${hourly.id}`, { typeKey: "fixed", fixedPrice: 99 })).json).toMatchObject({ billingMode: "fixed", typeKey: "fixed", fixedPriceCents: 9900 });
+    const listed = (await admin.get(`/api/crm/clients/${client.id}/contracts`)).json;
+    expect(listed.find((k: any) => k.id === banked.id)).toMatchObject({ usedHours: 0, bankedHoursX100: 4000 });
+
+    // a type in use cannot be deleted or change kind; an unused one can go
+    expect((await admin.del("/api/admin/contract-types/banked")).json.error).toBe("type_in_use");
+    expect((await admin.patch("/api/admin/contract-types/banked", { kind: "hourly" })).json.error).toBe("type_in_use");
+    const extra = await admin.post("/api/admin/contract-types", { name: "Temporaire", kind: "hourly" });
+    expect((await admin.del(`/api/admin/contract-types/${extra.json.key}`)).status).toBe(200);
+
+    // erase one kind only: the banked contracts
+    expect((await tech.post("/api/billing/contracts/erase", { confirm: true, kind: "banked" })).status).toBe(403);
+    expect((await admin.post("/api/billing/contracts/erase", { confirm: true, kind: "banked" })).json.erased).toBe(1);
+    const left = await db().select().from(schema.clientContracts).where(eq(schema.clientContracts.clientId, client.id));
+    expect(left.some((k) => k.id === banked.id)).toBe(false);
+    expect(left.some((k) => k.id === recurring.id)).toBe(true);
+
+    // services: anyone with services.view reads, services.manage changes
+    const s = await admin.post("/api/services", { name: "Surveillance 24/7", kind: "recurring", priceCents: 9900, description: "Par poste" });
+    expect(s.status).toBe(201);
+    expect((await admin.get("/api/services")).json.some((x: any) => x.id === s.json.id)).toBe(true);
+    expect((await tech.post("/api/services", { name: "Interdit", priceCents: 1 })).status).toBe(403);
+    expect((await admin.patch(`/api/services/${s.json.id}`, { priceCents: 10900, active: false })).json).toMatchObject({ priceCents: 10900, active: false });
+    expect((await admin.del(`/api/services/${s.json.id}`)).status).toBe(200);
+    expect((await admin.del(`/api/services/${s.json.id}`)).status).toBe(404);
+  });
+});

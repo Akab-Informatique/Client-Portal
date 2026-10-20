@@ -16,6 +16,7 @@ const StaffLayout = lazy(() => import("@/layouts/StaffLayout").then((m) => ({ de
 const DashboardPage = lazy(() => pageLoaders.dashboard().then((m) => ({ default: m.DashboardPage })));
 const MessagesPage = lazy(() => pageLoaders.messages().then((m) => ({ default: m.MessagesPage })));
 const TicketsPage = lazy(() => pageLoaders.tickets().then((m) => ({ default: m.TicketsPage })));
+const ServicesPage = lazy(() => pageLoaders.services().then((m) => ({ default: m.ServicesPage })));
 const StorePage = lazy(() => pageLoaders.store().then((m) => ({ default: m.StorePage })));
 const OutlookPage = lazy(() => pageLoaders.outlook().then((m) => ({ default: m.OutlookPage })));
 const MeetingsPage = lazy(() => pageLoaders.meetings().then((m) => ({ default: m.MeetingsPage })));
@@ -92,6 +93,7 @@ function StaffApp() {
         <Route path="messages" element={<Guard permission="messages.view"><MessagesPage /></Guard>} />
         <Route path="tickets" element={<Guard permission="tickets.view"><TicketsPage /></Guard>} />
         <Route path="store" element={<Guard permission="store.view"><StorePage /></Guard>} />
+        <Route path="services" element={<Guard permission="services.view"><ServicesPage /></Guard>} />
         <Route path="outlook" element={<Guard permission="outlook.view"><OutlookPage /></Guard>} />
         <Route path="meetings" element={<Guard permission="meetings.view"><MeetingsPage /></Guard>} />
         <Route path="breakroom" element={<Guard permission="breakroom.use"><BreakroomPage /></Guard>} />
