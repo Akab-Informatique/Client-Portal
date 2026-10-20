@@ -4,7 +4,7 @@ import { z } from "zod";
 import { auth, requirePermission, requireStaff, type AppEnv } from "../lib/auth.ts";
 import { audit } from "../lib/audit.ts";
 import { body, zUuid } from "../lib/validate.ts";
-import { BILLABLE_KINDS, billableCounts, billablesState, createInvoice, DraftError, draftInvoice, editBillable, invoiceableClients, listBillables, postInvoices, postPreview, setBillableStatus, syncBillables } from "../lib/billables.ts";
+import { BILLABLE_KINDS, billableCounts, billablesState, createInvoice, DraftError, draftInvoice, editBillable, invoiceableClients, listBillables, postInvoices, postPreview, setBillableStatus, syncBillables, unpostInvoice } from "../lib/billables.ts";
 import type { BillableKind } from "../lib/ticketSource.ts";
 import { AutotaskError } from "../lib/autotask.ts";
 import { autoSync } from "../lib/quickbooks.ts";
@@ -65,6 +65,19 @@ export const billablesRoutes = new Hono<AppEnv>()
       return c.json(s);
     } catch (e) {
       if (e instanceof AutotaskError) throw new HTTPException(502, { message: `autotask_${e.code}` });
+      throw e;
+    }
+  })
+  /** Un-post: void a portal invoice and give its items back (approved again) */
+  .post("/unpost", requirePermission("accounting.manage"), async (c) => {
+    const a = auth(c);
+    const p = await body(c, z.object({ invoiceId: zUuid }));
+    try {
+      const r = await unpostInvoice(a.user.id, p.invoiceId);
+      await audit(a.user.id, "billing.invoice_unposted", p.invoiceId, { number: r.number, items: r.items });
+      return c.json(r);
+    } catch (e) {
+      if (e instanceof DraftError) throw new HTTPException(e.message === "not_found" ? 404 : 409, { message: e.message });
       throw e;
     }
   })

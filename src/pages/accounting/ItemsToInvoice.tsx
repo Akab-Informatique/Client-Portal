@@ -2,7 +2,8 @@ import { useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
-import { Files, Loader2, Receipt, Send } from "lucide-react";
+import { Files, Loader2, Receipt, Send, Undo2 } from "lucide-react";
+import { useConfirm } from "@/components/ConfirmDialog";
 import { useSearchParams } from "react-router-dom";
 import { GlassBackdrop } from "@/components/brand/GlassBackdrop";
 import { Button } from "@/components/ui/button";
@@ -90,11 +91,69 @@ export function ItemsToInvoice() {
             <>
               <PeriodBar period={period} onChange={set} />
               <InvoiceFolder lang={i18n.language} period={period} />
+              <MadeInvoices lang={i18n.language} period={period} />
             </>
           )}
         </div>
       </div>
     </div>
+  );
+}
+
+type Made = { id: string; number: string; company: string; issuedOn: string; totalCents: number; paidCents: number; status: string; quickbooks: { id: string | null } | null };
+
+/** Invoices made by the portal in the time frame: take one back and its items are approved again */
+function MadeInvoices({ lang, period }: { lang: string; period: Period }) {
+  const { t } = useTranslation();
+  const can = useCan();
+  const qc = useQueryClient();
+  const confirm = useConfirm();
+  const { data } = useQuery({
+    queryKey: [...KEY, "made", period.from, period.to],
+    queryFn: () => api.get<{ items: Made[] }>(`/crm/invoices?source=portal&from=${period.from}&to=${period.to}`),
+  });
+  const unpost = useMutation({
+    mutationFn: (id: string) => api.post<{ number: string; items: number }>("/billables/unpost", { invoiceId: id }),
+    onSuccess: (r) => {
+      void qc.invalidateQueries({ queryKey: KEY });
+      void qc.invalidateQueries({ queryKey: ["crm"] });
+      toast.success(t("invoicing.unposted", { number: r.number, count: r.items }));
+    },
+    onError: (e: unknown) => {
+      const code = (e as { code?: string }).code;
+      toast.error(code && ["invoice_has_payments", "invoice_in_quickbooks", "invoice_voided", "invoice_not_portal"].includes(code) ? t(`invoicing.unpostError.${code}`) : t("common.error"));
+    },
+  });
+  const list = (data?.items ?? []).filter((x) => x.status !== "voided");
+  if (!list.length || !can("accounting.manage")) return null;
+  return (
+    <section className="space-y-2">
+      <p className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">{t("invoicing.madeTitle", { count: list.length })}</p>
+      <ul className="divide-y divide-border/60 overflow-hidden rounded-xl border">
+        {list.map((x) => {
+          const locked = x.paidCents > 0 || Boolean(x.quickbooks?.id);
+          return (
+            <li key={x.id} className="flex items-center gap-3 px-3 py-2 text-sm">
+              <span className="font-mono text-xs">{x.number}</span>
+              <span className="min-w-0 flex-1 truncate">{x.company}</span>
+              <span className="text-xs text-muted-foreground">{shortDate(x.issuedOn)}</span>
+              <span className="w-24 text-right font-mono text-xs">{money(x.totalCents, lang)}</span>
+              <Button
+                size="sm"
+                variant="outline"
+                disabled={locked || unpost.isPending}
+                title={locked ? t("invoicing.unpostLocked") : t("invoicing.unpostHint")}
+                onClick={() =>
+                  void confirm({ title: t("invoicing.unpostTitle", { number: x.number }), description: t("invoicing.unpostText"), confirmLabel: t("invoicing.unpost"), destructive: true }).then((ok) => ok && unpost.mutate(x.id))
+                }
+              >
+                <Undo2 className="size-3.5" /> {t("invoicing.unpost")}
+              </Button>
+            </li>
+          );
+        })}
+      </ul>
+    </section>
   );
 }
 

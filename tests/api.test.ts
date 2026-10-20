@@ -5843,3 +5843,40 @@ describe("the portal on its own: no Autotask, no sample data", () => {
     expect((await admin.get("/api/crm/status")).json).toMatchObject({ mode: "local", ok: true });
   });
 });
+
+describe("un-post: take back an invoice made by the portal", () => {
+  it("voids it (number kept) and approves its items again; refused with payments, in QuickBooks, or already voided", async () => {
+    resetRateLimit("login:ip:unknown");
+    const admin = await signIn("admin@akab.local");
+    const tech = await signIn("tech@akab.local");
+    const [client] = await db().select().from(schema.clients).where(eq(schema.clients.name, "Client Autonome inc."));
+    const [c] = client ? [client] : await db().select().from(schema.clients).limit(1);
+    const [it] = await db()
+      .insert(schema.billingItems)
+      .values({ clientId: c.id, kind: "charge", source: "portal", sourceId: "test:unpost:1", date: "2026-10-10", description: "Pièce à reprendre", quantityX100: 100, unitPriceCents: 5000, amountCents: 5000, status: "approved", approvedAt: new Date() })
+      .returning();
+    const made = (await admin.post("/api/billables/invoice", { clientId: c.id, itemIds: [it.id] })).json;
+    expect(made.id).toBeTruthy();
+    await db().update(schema.clientInvoices).set({ quickbooksId: null }).where(eq(schema.clientInvoices.id, made.id));
+    expect((await db().select().from(schema.billingItems).where(eq(schema.billingItems.id, it.id)))[0].status).toBe("posted");
+
+    // a payment received: refused
+    await db().insert(schema.invoicePayments).values({ invoiceId: made.id, amountCents: 100, paidOn: "2026-10-12", method: "cheque" });
+    expect((await admin.post("/api/billables/unpost", { invoiceId: made.id })).json.error).toBe("invoice_has_payments");
+    await db().delete(schema.invoicePayments).where(eq(schema.invoicePayments.invoiceId, made.id));
+    // in QuickBooks: refused
+    await db().update(schema.clientInvoices).set({ quickbooksId: "9" }).where(eq(schema.clientInvoices.id, made.id));
+    expect((await admin.post("/api/billables/unpost", { invoiceId: made.id })).json.error).toBe("invoice_in_quickbooks");
+    await db().update(schema.clientInvoices).set({ quickbooksId: null }).where(eq(schema.clientInvoices.id, made.id));
+
+    // accounting only
+    expect((await tech.post("/api/billables/unpost", { invoiceId: made.id })).status).toBe(403);
+    const back = await admin.post("/api/billables/unpost", { invoiceId: made.id });
+    expect(back.json).toMatchObject({ number: made.number, items: 1 });
+    expect((await db().select().from(schema.billingItems).where(eq(schema.billingItems.id, it.id)))[0]).toMatchObject({ status: "approved", invoiceId: null, postedAt: null });
+    expect((await db().select().from(schema.clientInvoices).where(eq(schema.clientInvoices.id, made.id)))[0]).toMatchObject({ voided: true, number: made.number });
+    expect((await admin.post("/api/billables/unpost", { invoiceId: made.id })).json.error).toBe("invoice_voided");
+    // the items can be invoiced again
+    expect((await admin.post("/api/billables/invoice", { clientId: c.id, itemIds: [it.id] })).json.number).not.toBe(made.number);
+  });
+});

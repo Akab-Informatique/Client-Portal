@@ -365,6 +365,31 @@ export function createInvoice(actorId: string, p: InvoiceDraft) {
   return run;
 }
 
+/**
+ * Take back an invoice made by the portal: it is voided (its number stays, shown as voided) and its items are
+ * approved again, ready for another invoice. Refused once money was received, or the invoice is in QuickBooks.
+ */
+export async function unpostInvoice(actorId: string, invoiceId: string): Promise<{ number: string; items: number }> {
+  const [inv] = await db().select().from(schema.clientInvoices).where(eq(schema.clientInvoices.id, invoiceId));
+  if (!inv) throw new DraftError("not_found");
+  if (inv.source !== "portal") throw new DraftError("invoice_not_portal");
+  if (inv.voided) throw new DraftError("invoice_voided");
+  if (inv.quickbooksId) throw new DraftError("invoice_in_quickbooks");
+  const [{ n }] = await db().select({ n: sql<number>`count(*)::int` }).from(schema.invoicePayments).where(eq(schema.invoicePayments.invoiceId, invoiceId));
+  if (n > 0) throw new DraftError("invoice_has_payments");
+  const now = new Date();
+  const items = await db().transaction(async (tx) => {
+    await tx.update(schema.clientInvoices).set({ voided: true, updatedAt: now }).where(eq(schema.clientInvoices.id, invoiceId));
+    const back = await tx
+      .update(schema.billingItems)
+      .set({ status: "approved", invoiceId: null, postedAt: null, approvedBy: actorId, approvedAt: now, updatedAt: now })
+      .where(and(eq(schema.billingItems.invoiceId, invoiceId), eq(schema.billingItems.status, "posted")))
+      .returning({ id: schema.billingItems.id });
+    return back.length;
+  });
+  return { number: inv.number, items };
+}
+
 /** What invoicing every client at once would make (their defaults). */
 export async function postPreview(clientIds?: string[], period?: Period) {
   const groups = await invoiceableClients(period);
