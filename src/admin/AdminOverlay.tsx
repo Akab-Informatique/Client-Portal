@@ -83,7 +83,7 @@ export function AdminOverlay({ section }: { section: string | null }) {
   const [folded, setFolded] = useState<Record<string, boolean>>(readGroups);
   const toggleGroup = (id: string, open: boolean) =>
     setFolded((f) => {
-      const next = { ...f, [id]: !open };
+      const next = { ...f, [id]: open };
       try {
         localStorage.setItem(GROUPS_KEY, JSON.stringify(next));
       } catch {
@@ -153,7 +153,7 @@ export function AdminOverlay({ section }: { section: string | null }) {
                     )}
                     {rail && <DialogPrimitive.Title className="sr-only">{t("admin.title")}</DialogPrimitive.Title>}
                   </div>
-                  <nav className="relative space-y-1 overflow-y-auto px-3 pb-4 scrollbar-thin">
+                  <nav className="relative min-h-0 flex-1 space-y-1 overflow-y-auto px-3 pb-4 scrollbar-thin">
                     {rail &&
                       menu.flatMap((e) => (e.kind === "item" ? [e.key] : e.keys)).map((k) => {
                         const x = byKey.get(k)!;
@@ -204,7 +204,7 @@ export function AdminOverlay({ section }: { section: string | null }) {
                     onClick={toggleRail}
                     title={rail ? t("admin.expandMenu") : t("admin.collapseMenu")}
                     aria-label={rail ? t("admin.expandMenu") : t("admin.collapseMenu")}
-                    className={cn("relative mx-3 mb-3 mt-auto flex h-10 items-center gap-3 rounded-lg px-3 text-sm text-muted-foreground transition-colors hover:bg-accent/60 hover:text-foreground", rail && "justify-center px-0")}
+                    className={cn("relative mx-3 mb-3 mt-1 flex h-10 shrink-0 items-center gap-3 rounded-lg px-3 text-sm text-muted-foreground transition-colors hover:bg-accent/60 hover:text-foreground", rail && "justify-center px-0")}
                   >
                     {rail ? <PanelLeftOpen className="size-[18px]" /> : <PanelLeftClose className="size-[18px]" />}
                     {!rail && <span>{t("admin.collapseMenu")}</span>}
