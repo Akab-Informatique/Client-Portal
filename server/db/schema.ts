@@ -1423,3 +1423,26 @@ export const expenses = pgTable(
   },
   (t) => [index("expenses_user_idx").on(t.userId, t.date), index("expenses_status_idx").on(t.status)],
 );
+
+/** Card payment links made for invoices (Accounting › Paiements, Stripe Checkout). Money in cents. */
+export const stripeCheckouts = pgTable(
+  "stripe_checkouts",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    invoiceId: uuid("invoice_id")
+      .notNull()
+      .references(() => clientInvoices.id, { onDelete: "cascade" }),
+    sessionId: text("session_id").notNull(),
+    url: text("url").notNull(),
+    amountCents: bigint("amount_cents", { mode: "number" }).notNull(),
+    /** open | paid | expired | failed */
+    status: text("status").notNull().default("open"),
+    /** Made with a live key (real money) or a test key */
+    live: boolean("live").notNull().default(false),
+    expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
+    paidAt: timestamp("paid_at", { withTimezone: true }),
+    createdBy: uuid("created_by").references(() => users.id, { onDelete: "set null" }),
+    createdAt: created(),
+  },
+  (t) => [uniqueIndex("stripe_checkouts_session_idx").on(t.sessionId), index("stripe_checkouts_invoice_idx").on(t.invoiceId)],
+);

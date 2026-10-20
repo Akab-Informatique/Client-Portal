@@ -1,5 +1,6 @@
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import * as OTPAuth from "otpauth";
+import nodeCrypto from "node:crypto";
 
 process.env.NODE_ENV = "test";
 process.env.SEED_DEMO = "true";
@@ -4599,5 +4600,156 @@ describe("client portal: whose tickets", () => {
     const other = await signIn("responsable2@client.example");
     expect((await other.get(`/api/portal/tickets?scope=contact&contact=${jeanContact.id}`)).status).toBe(404);
     setDemoOtherContacts(printer.id, []);
+  });
+});
+
+describe("Stripe card payments (Accounting › Paiements)", () => {
+  const SECRET = "whsec_testsecret123";
+  /** The webhook as Stripe sends it: the raw body signed with the endpoint secret */
+  const hook = async (event: unknown, opts: { secret?: string; at?: number; header?: string } = {}) => {
+    const raw = JSON.stringify(event);
+    const t = String(opts.at ?? Math.floor(Date.now() / 1000));
+    const sig = nodeCrypto.createHmac("sha256", opts.secret ?? SECRET).update(`${t}.${raw}`).digest("hex");
+    const res = await app.request("/api/stripe/hook", {
+      method: "POST",
+      headers: { "content-type": "application/json", "stripe-signature": opts.header ?? `t=${t},v1=${sig}` },
+      body: raw,
+    });
+    return { status: res.status, json: (await res.json()) as any };
+  };
+  const session = (id: string, extra: Record<string, unknown> = {}) => ({ id, object: "checkout.session", livemode: false, currency: "cad", payment_intent: `pi_${id}`, ...extra });
+  const event = (type: string, object: unknown) => ({ id: `evt_${Math.random().toString(36).slice(2)}`, type, data: { object } });
+
+  it("makes a payment link, records the payment from Stripe's signed webhook, once", async () => {
+    const admin = await signIn("admin@akab.local");
+    const [garage] = await db().select().from(schema.clients).limit(1);
+    const [inv] = await db().insert(schema.clientInvoices).values({ clientId: garage.id, number: "S-1001", issuedOn: "2026-10-01", dueOn: "2026-10-31", totalCents: 114975, source: "portal" }).returning();
+
+    // nothing set up: no link (earlier tests may have saved keys)
+    await db().delete(schema.integrations).where(eq(schema.integrations.provider, "stripe"));
+    expect((await admin.get("/api/billing/payments/status")).json).toMatchObject({ ready: false });
+    expect((await admin.post("/api/billing/payments/checkouts", { invoiceId: inv.id })).json.error).toBe("stripe_not_configured");
+
+    // keys saved, but no webhook secret yet: still no link (a payment would never reach the invoice)
+    expect((await admin.put("/api/billing/stripe", { enabled: true, publishableKey: "pk_test_abc", secretKey: "sk_test_abc123" })).status).toBe(200);
+    expect((await admin.get("/api/billing/payments/status")).json).toMatchObject({ ready: true, mode: "test", hasWebhookSecret: false });
+    expect((await admin.post("/api/billing/payments/checkouts", { invoiceId: inv.id })).json.error).toBe("stripe_no_webhook_secret");
+    expect((await admin.put("/api/billing/stripe", { webhookSecret: SECRET })).status).toBe(200);
+    expect((await admin.get("/api/billing/payments/status")).json).toMatchObject({ hasWebhookSecret: true, webhookUrl: "http://localhost/api/stripe/hook", minCents: 50 });
+
+    // the amount: a part of the balance, never more, at least 0,50 $
+    expect((await admin.post("/api/billing/payments/checkouts", { invoiceId: inv.id, amountCents: 0 })).status).toBe(400);
+    expect((await admin.post("/api/billing/payments/checkouts", { invoiceId: inv.id, amountCents: 114976 })).json.error).toBe("stripe_amount");
+    expect((await admin.post("/api/billing/payments/checkouts", { invoiceId: inv.id, amountCents: 49 })).json.error).toBe("stripe_amount");
+
+    const calls: { url: string; auth: string | null; body: URLSearchParams }[] = [];
+    let n = 0;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: unknown, init?: RequestInit) => {
+        calls.push({ url: String(url), auth: new Headers(init?.headers).get("authorization"), body: new URLSearchParams(String(init?.body ?? "")) });
+        n++;
+        return new Response(JSON.stringify({ id: `cs_test_${n}`, url: `https://checkout.stripe.com/c/pay/cs_test_${n}`, livemode: false, expires_at: Math.floor(Date.now() / 1000) + 82_800 }), { headers: { "content-type": "application/json" } });
+      }),
+    );
+    try {
+      const first = await admin.post("/api/billing/payments/checkouts", { invoiceId: inv.id, amountCents: 50000 });
+      expect(first.status).toBe(201);
+      expect(first.json).toMatchObject({ url: "https://checkout.stripe.com/c/pay/cs_test_1", amountCents: 50000, live: false });
+      // what was asked of Stripe: the exact amount in CAD, tied to the invoice, with the secret key
+      expect(calls[0].url).toBe("https://api.stripe.com/v1/checkout/sessions");
+      expect(calls[0].auth).toBe("Bearer sk_test_abc123");
+      expect(Object.fromEntries(calls[0].body)).toMatchObject({
+        mode: "payment",
+        "line_items[0][price_data][currency]": "cad",
+        "line_items[0][price_data][unit_amount]": "50000",
+        "line_items[0][quantity]": "1",
+        "metadata[invoice_id]": inv.id,
+        "metadata[invoice_number]": "S-1001",
+        success_url: "http://localhost/paiement-recu",
+        cancel_url: "http://localhost/paiement-recu?annule=1",
+      });
+      const listed = (await admin.get("/api/billing/payments/checkouts")).json;
+      expect(listed[0]).toMatchObject({ id: first.json.id, number: "S-1001", status: "open", amountCents: 50000, url: first.json.url });
+
+      // Stripe's call, checked: another secret, an old signature, no signature
+      const paid = event("checkout.session.completed", session("cs_test_1", { payment_status: "paid", amount_total: 50000 }));
+      expect((await hook(paid, { secret: "whsec_other" })).status).toBe(400);
+      expect((await hook(paid, { at: Math.floor(Date.now() / 1000) - 3600 })).status).toBe(400);
+      expect((await hook(paid, { header: "" })).status).toBe(400);
+      expect((await admin.get("/api/crm/invoices?q=S-1001")).json.items[0]).toMatchObject({ paidCents: 0, balanceCents: 114975 });
+
+      // paid: recorded on the invoice, as a Stripe payment
+      expect(await hook(paid)).toMatchObject({ status: 200, json: { result: "paid" } });
+      expect((await admin.get("/api/crm/invoices?q=S-1001")).json.items[0]).toMatchObject({ paidCents: 50000, balanceCents: 64975, status: "partial" });
+      const [pay] = await db().select().from(schema.invoicePayments).where(eq(schema.invoicePayments.invoiceId, inv.id));
+      expect(pay).toMatchObject({ amountCents: 50000, method: "stripe", source: "stripe", reference: "pi_cs_test_1", externalId: "stripe:cs_test_1" });
+      expect((await admin.get("/api/billing/payments/checkouts")).json[0]).toMatchObject({ status: "paid", url: null });
+      // Stripe sends events again: nothing is counted twice
+      expect(await hook(paid)).toMatchObject({ status: 200, json: { result: "ignored" } });
+      expect((await db().select().from(schema.invoicePayments).where(eq(schema.invoicePayments.invoiceId, inv.id))).length).toBe(1);
+      // a session this portal did not make is not ours
+      expect((await hook(event("checkout.session.completed", session("cs_other", { payment_status: "paid", amount_total: 999 })))).json.result).toBe("ignored");
+
+      // the rest, paid by bank debit: confirmed later
+      const second = await admin.post("/api/billing/payments/checkouts", { invoiceId: inv.id });
+      expect(second.json.amountCents).toBe(64975);
+      expect((await hook(event("checkout.session.completed", session("cs_test_2", { payment_status: "unpaid", amount_total: 64975 })))).json.result).toBe("waiting");
+      expect((await admin.get("/api/crm/invoices?q=S-1001")).json.items[0].balanceCents).toBe(64975);
+      expect((await hook(event("checkout.session.async_payment_succeeded", session("cs_test_2", { payment_status: "paid", amount_total: 64975 })))).json.result).toBe("paid");
+      expect((await admin.get("/api/crm/invoices?q=S-1001")).json.items[0]).toMatchObject({ balanceCents: 0, status: "paid" });
+      // nothing left to pay
+      expect((await admin.post("/api/billing/payments/checkouts", { invoiceId: inv.id })).json.error).toBe("stripe_nothing_to_pay");
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it("closes a link, takes failures and expiry from Stripe, and is for accounting rights only", async () => {
+    const admin = await signIn("admin@akab.local");
+    const [inv] = await db().select().from(schema.clientInvoices).where(eq(schema.clientInvoices.number, "S-1001"));
+    const [other] = await db().insert(schema.clientInvoices).values({ clientId: inv.clientId, number: "S-1002", issuedOn: "2026-10-02", totalCents: 20000, source: "portal" }).returning();
+    const asked: string[] = [];
+    let n = 100;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: unknown) => {
+        asked.push(String(url));
+        n++;
+        return new Response(JSON.stringify({ id: `cs_test_${n}`, url: `https://checkout.stripe.com/c/pay/cs_test_${n}`, livemode: false, expires_at: Math.floor(Date.now() / 1000) + 82_800 }), { headers: { "content-type": "application/json" } });
+      }),
+    );
+    try {
+      const a = (await admin.post("/api/billing/payments/checkouts", { invoiceId: other.id })).json;
+      const b = (await admin.post("/api/billing/payments/checkouts", { invoiceId: other.id, amountCents: 5000 })).json;
+      const c = (await admin.post("/api/billing/payments/checkouts", { invoiceId: other.id, amountCents: 6000 })).json;
+      const status = async () => (await admin.get("/api/billing/payments/checkouts")).json.reduce((m: any, x: any) => ({ ...m, [x.id]: x.status }), {});
+
+      // closed by hand: Stripe is told, and the link no longer shows
+      expect((await admin.post(`/api/billing/payments/checkouts/${a.id}/expire`)).json).toMatchObject({ ok: true, status: "expired" });
+      expect(asked.at(-1)).toBe("https://api.stripe.com/v1/checkout/sessions/cs_test_101/expire");
+      expect((await status())[a.id]).toBe("expired");
+      // Stripe says another expired, and that a bank debit failed
+      await hook(event("checkout.session.expired", session("cs_test_102")));
+      await hook(event("checkout.session.async_payment_failed", session("cs_test_103")));
+      expect(await status()).toMatchObject({ [a.id]: "expired", [b.id]: "expired", [c.id]: "failed" });
+
+      // rights: view alone sees but cannot make or close links; no accounting right sees nothing
+      const tech = await signIn("tech@akab.local");
+      expect((await tech.get("/api/billing/payments/status")).status).toBe(403);
+      const staff = (await admin.get("/api/admin/staff")).json;
+      const techUser = staff.find((u: any) => u.email === "tech@akab.local");
+      await admin.put(`/api/admin/users/${techUser.id}/permissions`, { overrides: [{ key: "accounting.view", effect: "allow" }] });
+      const viewer = await signIn("tech@akab.local");
+      expect((await viewer.get("/api/billing/payments/checkouts")).status).toBe(200);
+      expect((await viewer.post("/api/billing/payments/checkouts", { invoiceId: other.id })).status).toBe(403);
+      expect((await viewer.post(`/api/billing/payments/checkouts/${a.id}/expire`)).status).toBe(403);
+      // Stripe's keys stay for master administrators
+      expect((await viewer.get("/api/billing/stripe")).status).toBe(403);
+      await admin.put(`/api/admin/users/${techUser.id}/permissions`, { overrides: [] });
+      expect((await new Agent().post("/api/billing/payments/checkouts", { invoiceId: other.id })).status).toBe(401);
+    } finally {
+      vi.unstubAllGlobals();
+    }
   });
 });

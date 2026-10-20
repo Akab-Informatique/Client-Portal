@@ -1,12 +1,12 @@
 import { Hono } from "hono";
 import { HTTPException } from "hono/http-exception";
-import { and, asc, eq, ne } from "drizzle-orm";
+import { and, asc, desc, eq, ne } from "drizzle-orm";
 import { z } from "zod";
 import { db, schema } from "../db/index.ts";
 import { auth, requirePermission, requireStaff, type AppEnv } from "../lib/auth.ts";
 import { audit } from "../lib/audit.ts";
 import { body, zEmail, zUuid } from "../lib/validate.ts";
-import { rateLimit } from "../lib/http.ts";
+import { clientIp, rateLimit } from "../lib/http.ts";
 import { config } from "../config.ts";
 import {
   billingSettings,
@@ -25,6 +25,7 @@ import {
   testQuickBooks,
   testStripe,
 } from "../lib/billing.ts";
+import { createCheckout, expireCheckout, handleEvent, MIN_CENTS, StripeError, verifySignature } from "../lib/stripe.ts";
 import { applyAccounts, applyItems, createCustomer, forgetQuickBooksToken, invoiceChoices, matchReason, planAccounts, planItems, pullPayments, quickbooksCustomers, QuickBooksError, suggestions } from "../lib/quickbooks.ts";
 
 /** QuickBooks errors as API errors (quickbooks_not_mapped, quickbooks_api…). */
@@ -75,6 +76,42 @@ const stripeView = async () => {
   const s = await stripeSettings();
   return { enabled: s.enabled, publishableKey: s.publishableKey, paymentLinks: s.paymentLinks, hasSecretKey: Boolean(s.secretKey), hasWebhookSecret: Boolean(s.webhookSecret), mode: stripeMode(s.secretKey), lastTest: s.lastTest ?? null };
 };
+
+/** Stripe errors as API errors (stripe_not_configured, stripe_api…). */
+function stripeHttp(e: unknown): never {
+  if (e instanceof StripeError) {
+    const status = e.code === "api" ? 502 : e.code === "invoice_not_found" ? 404 : e.code === "amount" ? 400 : 409;
+    throw new HTTPException(status, { message: `stripe_${e.code}`, cause: e.detail ? [{ path: "stripe", message: e.detail }] : undefined });
+  }
+  throw e;
+}
+
+/**
+ * Stripe calls this when a payment link is paid or runs out (signed: nothing is
+ * done without the endpoint secret). No session: it is Stripe, not a person.
+ */
+export const stripeHookRoutes = new Hono<AppEnv>().post("/", async (c) => {
+  if (!rateLimit(`stripe-hook:${clientIp(c)}`, 300, 60_000).ok) return c.json({ error: "rate_limited" }, 429);
+  const raw = await c.req.text();
+  const s = await stripeSettings();
+  if (!s.webhookSecret || !verifySignature(raw, c.req.header("stripe-signature"), s.webhookSecret)) {
+    console.warn("[stripe] webhook refused (bad signature)");
+    return c.json({ error: "bad_signature" }, 400);
+  }
+  let event;
+  try {
+    event = JSON.parse(raw);
+  } catch {
+    return c.json({ error: "bad_json" }, 400);
+  }
+  try {
+    return c.json({ received: true, result: await handleEvent(event) });
+  } catch (e) {
+    // an error answer makes Stripe send the event again later
+    console.error("[stripe] webhook", e);
+    return c.json({ error: "server_error" }, 500);
+  }
+});
 
 export const billingRoutes = new Hono<AppEnv>()
   .use(requireStaff)
@@ -198,6 +235,60 @@ export const billingRoutes = new Hono<AppEnv>()
     const r = await testStripe(s.secretKey);
     await saveStripeSettings(a.user.id, { lastTest: { ok: r.ok, at: new Date().toISOString(), ...(r.ok ? {} : { error: r.error }) } });
     return c.json(r);
+  })
+
+  // ── Card payments on invoices (Accounting › Paiements): see accounting.view, make links with accounting.manage ──
+  .get("/payments/status", requirePermission("accounting.view"), async (c) => {
+    const s = await stripeSettings();
+    const base = config.publicUrl || c.req.header("origin") || new URL(c.req.url).origin;
+    return c.json({ ready: s.enabled && Boolean(s.secretKey) && s.paymentLinks, mode: stripeMode(s.secretKey), hasWebhookSecret: Boolean(s.webhookSecret), webhookUrl: `${base}/api/stripe/hook`, minCents: MIN_CENTS });
+  })
+  .get("/payments/checkouts", requirePermission("accounting.view"), async (c) => {
+    const k = schema.stripeCheckouts;
+    const rows = await db()
+      .select({ k, number: schema.clientInvoices.number, company: schema.clients.name, by: schema.users.name })
+      .from(k)
+      .innerJoin(schema.clientInvoices, eq(schema.clientInvoices.id, k.invoiceId))
+      .innerJoin(schema.clients, eq(schema.clients.id, schema.clientInvoices.clientId))
+      .leftJoin(schema.users, eq(schema.users.id, k.createdBy))
+      .orderBy(desc(k.createdAt))
+      .limit(100);
+    const now = Date.now();
+    return c.json(
+      rows.map((r) => ({
+        id: r.k.id,
+        invoiceId: r.k.invoiceId,
+        number: r.number,
+        company: r.company,
+        amountCents: r.k.amountCents,
+        // a link past its time is expired even if Stripe has not said so yet
+        status: r.k.status === "open" && r.k.expiresAt.getTime() < now ? "expired" : r.k.status,
+        live: r.k.live,
+        url: r.k.status === "open" && r.k.expiresAt.getTime() >= now ? r.k.url : null,
+        expiresAt: r.k.expiresAt,
+        paidAt: r.k.paidAt,
+        createdAt: r.k.createdAt,
+        by: r.by,
+      })),
+    );
+  })
+  .post("/payments/checkouts", requirePermission("accounting.manage"), async (c) => {
+    const a = auth(c);
+    if (!rateLimit(`stripe-checkout:${a.user.id}`, 30, 60_000).ok) throw new HTTPException(429, { message: "rate_limited" });
+    const p = await body(c, z.object({ invoiceId: zUuid, amountCents: z.number().int().min(1).max(100_000_000).optional() }));
+    const baseUrl = config.publicUrl || c.req.header("origin");
+    if (!baseUrl) throw new HTTPException(409, { message: "public_url_missing" });
+    try {
+      const row = await createCheckout({ invoiceId: p.invoiceId, amountCents: p.amountCents, actorId: a.user.id, baseUrl });
+      return c.json({ id: row.id, url: row.url, amountCents: row.amountCents, live: row.live, expiresAt: row.expiresAt }, 201);
+    } catch (e) {
+      return stripeHttp(e);
+    }
+  })
+  .post("/payments/checkouts/:id/expire", requirePermission("accounting.manage"), async (c) => {
+    const row = await expireCheckout(zUuid.parse(c.req.param("id")), auth(c).user.id).catch(stripeHttp);
+    if (!row) throw new HTTPException(404, { message: "not_found" });
+    return c.json({ ok: true, status: row.status });
   })
 
   // ── QuickBooks Online (master administrators) ──

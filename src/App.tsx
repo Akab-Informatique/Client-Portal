@@ -4,6 +4,7 @@ import { useTranslation } from "react-i18next";
 import { Loader2, RefreshCw, ShieldAlert } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { LoginPage } from "@/pages/LoginPage";
+import { PaymentReceivedPage } from "@/pages/PaymentReceivedPage";
 import { LogoMark } from "@/components/brand/Logo";
 import { SessionProvider, useAuthState, useCan, useUnauthorizedListener } from "@/lib/session";
 import type { Me } from "@/lib/types";
@@ -24,6 +25,7 @@ const ClientPage = lazy(() => pageLoaders.client().then((m) => ({ default: m.Cli
 const TimesheetPage = lazy(() => pageLoaders.timesheet().then((m) => ({ default: m.TimesheetPage })));
 const ExpensesPage = lazy(() => pageLoaders.expenses().then((m) => ({ default: m.ExpensesPage })));
 const ApprovalsPage = lazy(() => pageLoaders.approvals().then((m) => ({ default: m.ApprovalsPage })));
+const PaymentsPage = lazy(() => pageLoaders.payments().then((m) => ({ default: m.PaymentsPage })));
 const AccountingPage = lazy(() => pageLoaders.accounting().then((m) => ({ default: m.AccountingPage })));
 const ClientHome = lazy(() => import("@/pages/client/ClientHome").then((m) => ({ default: m.ClientHome })));
 const ClientLayout = lazy(() => import("@/layouts/ClientLayout").then((m) => ({ default: m.ClientLayout })));
@@ -99,6 +101,7 @@ function StaffApp() {
         <Route path="timesheets" element={<Guard permission="timesheets.use" orRight="timesheets.manage"><TimesheetPage /></Guard>} />
         <Route path="expenses" element={<Guard permission="timesheets.use"><ExpensesPage /></Guard>} />
         <Route path="accounting/approvals" element={<Guard permission="accounting.view"><ApprovalsPage /></Guard>} />
+        <Route path="accounting/payments" element={<Guard permission="accounting.view"><PaymentsPage /></Guard>} />
         <Route path="accounting/quotes" element={<Guard permission="accounting.view"><AccountingPage kind="quotes" /></Guard>} />
         <Route path="*" element={<Navigate to="/" replace />} />
       </Route>
@@ -109,6 +112,8 @@ function StaffApp() {
 function Root() {
   useUnauthorizedListener();
   const { data, isLoading, isError, refetch, isFetching } = useAuthState();
+  // where Stripe sends a customer after a payment link: public, no sign-in
+  if (window.location.pathname === "/paiement-recu") return <PaymentReceivedPage />;
   if (isError && !data) return <ServerDown onRetry={() => void refetch()} retrying={isFetching} />;
   if (isLoading || !data) return <Splash />;
   if (data.stage !== "ready") return <LoginPage stage={data.stage} email={data.me?.email} />;

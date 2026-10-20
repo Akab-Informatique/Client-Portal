@@ -29,7 +29,7 @@ import { microsoftRoutes } from "./routes/microsoft.ts";
 import { meetingRoutes } from "./routes/meetings.ts";
 import { breakroomRoutes } from "./routes/breakroom.ts";
 import { crmRoutes } from "./routes/crm.ts";
-import { billingRoutes } from "./routes/billing.ts";
+import { billingRoutes, stripeHookRoutes } from "./routes/billing.ts";
 import { billablesRoutes } from "./routes/billables.ts";
 import { timeRoutes } from "./routes/time.ts";
 
@@ -93,6 +93,8 @@ export function createApp() {
   api.route("/meetings", meetingRoutes);
   api.route("/breakroom", breakroomRoutes);
   api.route("/crm", crmRoutes);
+  // Stripe calls this one (signed, no session)
+  api.route("/stripe/hook", stripeHookRoutes);
   api.route("/billing", billingRoutes);
   api.route("/billables", billablesRoutes);
   api.route("/time", timeRoutes);
