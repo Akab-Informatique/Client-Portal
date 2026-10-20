@@ -31,7 +31,7 @@ import {
 import { AutotaskError } from "../lib/autotask.ts";
 import { htmlText, sanitizeMailHtml } from "../lib/mailHtml.ts";
 import { SourceError, ticketSource } from "../lib/ticketSource.ts";
-import { clientByDomain } from "../lib/mailIntake.ts";
+import { matchSender } from "../lib/mailIntake.ts";
 
 const MAX_ACCOUNTS = 20;
 
@@ -492,10 +492,10 @@ export const outlookRoutes = new Hono<AppEnv>()
     const acc = await account(auth(c), c.req.param("id"));
     const m = await run(() => messageText(acc.address, zMessageId.parse(c.req.param("mid"))));
     // the sender, when they are a contact of a client: the ticket is opened for them
-    const src = await ticketSource();
-    const contact = m.from?.address ? await src.contactByEmail(m.from.address).catch(() => null) : null;
-    // no such contact: the client whose contacts share the sender's domain, when it is only one
-    const company = !contact && m.from?.address ? await clientByDomain(m.from.address) : null;
+    // their email, their name, a phone number in the email, else the client their domain belongs to; the technician decides when nothing matches
+    const found = m.from?.address ? await matchSender(m.from.address, m.from.name, m.text).catch(() => null) : null;
+    const contact = found?.contact ?? null;
+    const company = !contact && found && found.how !== "akab" ? found.company : null;
     return c.json({ subject: m.subject, from: m.from, receivedAt: m.receivedAt, text: m.text.slice(0, 7000), contact, company });
   });
 

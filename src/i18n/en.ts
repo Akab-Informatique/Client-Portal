@@ -443,7 +443,7 @@ const en: Dict = {
       auto: "Approve automatically",
       autoHint: "Work done under this contract (time, charges, periods, milestones) is approved as soon as it is imported.",
       autoOn: "Automatic approval on ({{count}} approved now)",
-      autoOff: "Automatic approval off",
+      autoOff: "New tickets arrive automatically; tickets already copied are only refreshed by \"Sync now\". Your edits in the portal go to Autotask.",
     },
     invoice: {
       title: "Invoice settings",
@@ -2357,7 +2357,7 @@ const en: Dict = {
     tickets_other: "{{count}} tickets",
     sync: {
       title: "Sync with Autotask",
-      hint: "The Autotask connection stays, but tickets are no longer copied by themselves: run the sync when you want. It copies every ticket created or active since the chosen date, closed ones included, with their status.",
+      hint: "The Autotask connection stays. New tickets (email, phone, client…) arrive by themselves every minute; the full sync is run by hand: it copies every ticket created or active since the chosen date, closed ones included, with their status, and refreshes the tickets already copied.",
       demo: "Sample data: nothing to sync.",
       auto: "Automatic sync (every 30 seconds)",
       since: "Tickets since",
@@ -2756,6 +2756,7 @@ const en: Dict = {
       overlap: "A ticket can be in more than one category (e.g. critical and overdue): it counts once in the total.",
       none: "No ticket for now.",
       what: {
+        fresh: "Tickets in a \"new\" status nobody has taken, monitoring alerts left out. By priority:",
         mine: "Open tickets assigned to you, or where you are a secondary technician. By status:",
         unassigned: "Open tickets with no technician assigned. By priority:",
         statusAttention: "Tickets in a “Needs attention” status (e.g. the client replied). By technician:",
@@ -3139,12 +3140,14 @@ const en: Dict = {
     dock: "Minimized tickets",
     dueFilter: { overdue: "Overdue", today: "Today" },
     metrics: {
+      fresh: "New",
       statusAttention: "Needs attention",
       mine: "My tickets",
       unassigned: "Unassigned",
       attention: "To watch",
     },
     metricsHint: {
+      fresh: "New status, no technician",
       statusAttention: "Ticket status · e.g. the client replied",
       mine: "Open, assigned to you or as secondary",
       unassigned: "To pick up",

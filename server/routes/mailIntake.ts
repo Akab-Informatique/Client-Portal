@@ -72,7 +72,7 @@ export const mailIntakeRoutes = new Hono<AppEnv>()
     // a client may be known by now: suggest it
     const items = await Promise.all(
       rows.map(async (r) => {
-        const m = r.fromAddress ? await matchSender(r.fromAddress).catch(() => null) : null;
+        const m = r.fromAddress ? await matchSender(r.fromAddress, r.fromName, r.body ?? "").catch(() => null) : null;
         return {
           id: r.id,
           from: r.fromAddress,

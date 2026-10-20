@@ -903,6 +903,43 @@ export async function syncTicketsNow(actorId: string | null): Promise<TicketSync
   return run;
 }
 
+/**
+ * New tickets arrive by themselves even when the automatic sync is off: those
+ * made by email (the portal's own mailbox reading, or Autotask's), by phone
+ * elsewhere, by a client… A small request every minute for the tickets created
+ * since the newest one the copy knows; tickets already in the copy are not
+ * touched (refreshing those is the manual sync's job).
+ */
+const NEW_EVERY = 60_000;
+let lastNew = 0;
+let newRunning: Promise<void> | null = null;
+export function syncNewTickets(): Promise<void> {
+  newRunning ??= runNew().finally(() => {
+    newRunning = null;
+  });
+  return newRunning;
+}
+async function runNew() {
+  const m = await mirrorMap();
+  // an empty copy waits for the first manual sync (the window starts there)
+  if (!m.size) return;
+  const gen = generation;
+  const started = Date.now();
+  const known = [...m.values()].map((x) => new Date(x.createdAt).getTime()).filter((n) => Number.isFinite(n));
+  const newest = Math.max(lastNew, ...known);
+  if (!Number.isFinite(newest) || newest <= 0) return;
+  const at = await autotask();
+  const rows = await at.query<AtTicket>("Tickets", [{ op: "gte", field: "createDate", value: new Date(newest - 10 * 60_000).toISOString() }], { fields: TICKET_FIELDS, max: 500 });
+  const fresh = rows.filter((r) => !m.has(r.id));
+  if (fresh.length) {
+    const list = await normalize(at, fresh, true);
+    if (gen !== generation) return;
+    await store(list, false);
+    for (const x of list) m.set(x.id, x);
+  }
+  lastNew = started;
+}
+
 /** One sync at a time; callers share it. `force`: a full pass whatever the timing. */
 export function syncTickets(force = false): Promise<void> {
   syncing ??= runSync(force).finally(() => {
@@ -961,8 +998,11 @@ export function keepTicketsWarm() {
     if (lastUse && Date.now() - lastUse > 15 * 60_000) return;
     const src = await ticketSource();
     if (src.demo) return;
-    // not by itself unless asked for (Admin › Billets); the tickets are synced by hand
-    if (!(await ticketSyncSettings()).auto) return;
+    // the whole copy is refreshed by itself only when asked for (Admin › Billets); new tickets always arrive
+    if (!(await ticketSyncSettings()).auto) {
+      await syncNewTickets().catch((e) => console.warn("[autotask] new tickets failed:", e instanceof Error ? e.message : e));
+      return;
+    }
     await syncTickets().catch((e) => console.warn("[autotask] sync failed:", e instanceof Error ? e.message : e));
   };
   void tick();
@@ -1248,10 +1288,12 @@ const autotaskSource: TicketSource = {
   async list() {
     lastUse = Date.now();
     const m = await mirrorMap();
-    // the copy is read as it is; it is refreshed in the background only when the automatic sync is on
+    // the copy is read as it is; refreshed in the background only when the automatic sync is on, but new tickets always come
     if ((await ticketSyncSettings()).auto) {
       if (!m.size) await syncTickets();
       else if (Date.now() - lastInc > INCREMENTAL_EVERY) void syncTickets().catch((e) => console.warn("[autotask] sync failed:", e instanceof Error ? e.message : e));
+    } else if (m.size && Date.now() - lastNew > NEW_EVERY) {
+      void syncNewTickets().catch((e) => console.warn("[autotask] new tickets failed:", e instanceof Error ? e.message : e));
     }
     return [...(mirror ?? m).values()];
   },

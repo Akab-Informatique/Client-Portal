@@ -441,7 +441,7 @@ const fr = {
       auto: "Approuver automatiquement",
       autoHint: "Le travail fait sous ce contrat (temps, frais, périodes, jalons) est approuvé dès qu'il est importé.",
       autoOn: "Approbation automatique activée ({{count}} approuvés maintenant)",
-      autoOff: "Approbation automatique retirée",
+      autoOff: "Les nouveaux billets arrivent automatiquement ; les billets déjà copiés ne se mettent à jour que par « Synchroniser maintenant ». Vos modifications dans le portail vont à Autotask.",
     },
     invoice: {
       title: "Paramètres de facturation",
@@ -2355,7 +2355,7 @@ const fr = {
     tickets_other: "{{count}} billets",
     sync: {
       title: "Synchronisation avec Autotask",
-      hint: "La connexion à Autotask reste en place, mais les billets ne sont plus copiés d'eux-mêmes : lancez la synchronisation quand vous le voulez. Elle copie chaque billet créé ou actif depuis la date choisie, fermés compris, avec leur statut.",
+      hint: "La connexion à Autotask reste en place. Les nouveaux billets (courriel, téléphone, client…) arrivent d'eux-mêmes chaque minute ; la synchronisation complète, elle, se lance à la main : elle copie chaque billet créé ou actif depuis la date choisie, fermés compris, avec leur statut, et met à jour les billets déjà copiés.",
       demo: "Données d'exemple : rien à synchroniser.",
       auto: "Synchronisation automatique (toutes les 30 secondes)",
       since: "Billets depuis le",
@@ -2754,6 +2754,7 @@ const fr = {
       overlap: "Un billet peut être dans plus d'une catégorie (ex. critique et en retard) : il ne compte qu'une fois dans le total.",
       none: "Aucun billet pour l'instant.",
       what: {
+        fresh: "Billets au statut « nouveau » que personne n'a pris, sans les alertes de surveillance. Par priorité :",
         mine: "Billets ouverts qui vous sont assignés, ou où vous êtes technicien secondaire. Par statut :",
         unassigned: "Billets ouverts sans technicien assigné. Par priorité :",
         statusAttention: "Billets dans un statut « Nécessite attention » (ex. le client a répondu). Par technicien :",
@@ -3137,12 +3138,14 @@ const fr = {
     dock: "Billets réduits",
     dueFilter: { overdue: "En retard", today: "Aujourd'hui" },
     metrics: {
+      fresh: "Nouveaux",
       statusAttention: "Nécessite attention",
       mine: "Mes billets",
       unassigned: "Non assignés",
       attention: "Billets à surveiller",
     },
     metricsHint: {
+      fresh: "Statut nouveau, sans technicien",
       statusAttention: "Statut du billet · ex. : le client a répondu",
       mine: "Ouverts, assignés à vous ou en secondaire",
       unassigned: "À prendre en charge",

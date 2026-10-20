@@ -421,16 +421,21 @@ export const ticketRoutes = new Hono<AppEnv>()
     const attention = (t: NTicket) => open(t) && (isOverdue(t) || isDueToday(t) || isCritical(t));
 
     const isMine = (t: NTicket) => Boolean(meId) && (t.assignee?.id === meId || t.secondary.some((p) => p.id === meId));
+    // monitoring alerts (the alerts queue, alert emails) are not tickets to pick up: not in "unassigned"
+    const alert = isAlert(L);
+    /** Open, nobody on it, not a monitoring alert */
+    const toPickUp = (t: NTicket) => !t.assignee && open(t) && !alert(t);
+    /** New: in a "new" status and nobody on it, not a monitoring alert */
+    const fresh = (t: NTicket) => toPickUp(t) && L.statusKind(t.status) === "new";
     const views = {
       // Mine: assigned to me, or I am one of the secondary technicians
       mine: (t: NTicket) => isMine(t) && open(t),
-      unassigned: (t: NTicket) => !t.assignee && open(t),
+      unassigned: toPickUp,
       due: (t: NTicket) => open(t) && new Date(t.dueAt).getTime() <= eod,
       all: (_t: NTicket) => true,
     };
     const inRange = (v: string | undefined, from?: string, to?: string) =>
       (!from && !to) || (v !== undefined && (!from || v.slice(0, 10) >= from) && (!to || v.slice(0, 10) <= to));
-    const alert = isAlert(L);
     /** The tickets a set of list parameters selects (the list, and the saved filters' buttons). */
     const select = (q: Record<string, string | undefined>) => {
       const view = ((q.view ?? "") in views ? q.view : "mine") as keyof typeof views;
@@ -520,6 +525,8 @@ export const ticketRoutes = new Hono<AppEnv>()
     const metrics = {
       mine: all.filter(views.mine).length,
       unassigned: all.filter(views.unassigned).length,
+      /** New tickets nobody has taken */
+      fresh: all.filter(fresh).length,
       attention: needs.length,
       /** Tickets in a "Needs attention" status (e.g. the client replied) */
       statusAttention: all.filter((t) => open(t) && L.statusKind(t.status) === "needsAttention").length,
@@ -532,6 +539,7 @@ export const ticketRoutes = new Hono<AppEnv>()
       breakdown: {
         mine: byStatus(all.filter(views.mine)),
         unassigned: tally(all.filter(views.unassigned), (x) => ({ label: L.priorityLabel(x.priority), kind: L.priorityKind(x.priority) })),
+        fresh: tally(all.filter(fresh), (x) => ({ label: L.priorityLabel(x.priority), kind: L.priorityKind(x.priority) })),
         statusAttention: tally(
           all.filter((x) => open(x) && L.statusKind(x.status) === "needsAttention"),
           (x) => ({ label: x.assignee?.name ?? null }),

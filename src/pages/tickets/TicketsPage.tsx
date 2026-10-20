@@ -392,9 +392,10 @@ function PortalTag() {
 }
 
 // ── Metric tiles ───────────────────────────────────────────────────────────────
-type TileKey = "mine" | "unassigned" | "attention" | "statusAttention";
+type TileKey = "mine" | "fresh" | "unassigned" | "attention" | "statusAttention";
 const TILES: { key: TileKey; icon: LucideIcon; tone: string; glow: string; query: string }[] = [
   { key: "mine", icon: UserRound, tone: "text-primary", glow: "rgba(255,206,26,0.35)", query: "view=mine" },
+  { key: "fresh", icon: Sparkles, tone: "text-emerald-400", glow: "rgba(52,211,153,0.35)", query: "view=unassigned&statusKind=new" },
   { key: "unassigned", icon: UserX, tone: "text-sky-400", glow: "rgba(56,189,248,0.35)", query: "view=unassigned" },
   { key: "statusAttention", icon: BellRing, tone: "text-amber-300", glow: "rgba(251,191,36,0.38)", query: "view=all&statusKind=needsAttention" },
   { key: "attention", icon: Siren, tone: "text-red-400", glow: "rgba(239,68,68,0.38)", query: "view=all&attention=1" },
@@ -455,6 +456,7 @@ function MetricTiles({ data, params, apply, onSms }: { data: TicketList | undefi
         note: t("tickets.tiles.overlap"),
       };
     if (key === "mine") return { rows: statusRows(by?.mine) };
+    if (key === "fresh") return { rows: by?.fresh?.map((x) => ({ label: txt.priority({ label: x.label, kind: x.kind as never }), count: x.count })) };
     if (key === "unassigned") return { rows: by?.unassigned.map((x) => ({ label: txt.priority({ label: x.label, kind: x.kind as never }), count: x.count })) };
     if (key === "statusAttention") return { rows: by?.statusAttention.map((x) => ({ label: x.label ?? "", count: x.count })) };
     return {};

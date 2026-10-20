@@ -1209,7 +1209,7 @@ describe("tickets: metrics and saved filters", () => {
     resetRateLimit("login:ip:unknown");
     const tech = await signIn("tech@akab.local");
     const list = (await tech.get("/api/tickets")).json;
-    expect(Object.keys(list.metrics).sort()).toEqual(["attention", "attentionBreakdown", "breakdown", "mine", "statusAttention", "unassigned"]);
+    expect(Object.keys(list.metrics).sort()).toEqual(["attention", "attentionBreakdown", "breakdown", "fresh", "mine", "statusAttention", "unassigned"]);
     const needs = (await tech.get("/api/tickets?view=all&status=needsAttention")).json.items;
     expect(needs).toHaveLength(list.metrics.statusAttention);
     expect(needs.every((t: any) => t.status === "needsAttention")).toBe(true);
@@ -2467,6 +2467,23 @@ describe("tickets from Autotask", () => {
     expect(q).toHaveLength(1);
     expect(JSON.stringify(q[0].body.filter)).toContain("lastActivityDate");
     expect(sent.some((s) => s.url.endsWith("Contacts/query") || s.url.endsWith("TicketSecondaryResources/query"))).toBe(false);
+  });
+
+  it("new tickets arrive by themselves even when the automatic sync is off: one small request, known tickets untouched", async () => {
+    resetRateLimit("login:ip:unknown");
+    const { syncNewTickets, saveTicketSyncSettings, ticketSyncSettings } = await import("../server/lib/ticketSource.ts");
+    await saveTicketSyncSettings(null, { auto: false });
+    expect((await ticketSyncSettings()).auto).toBe(false);
+    sent.length = 0;
+    await syncNewTickets();
+    const q = sent.filter((s) => s.url.endsWith("Tickets/query"));
+    expect(q).toHaveLength(1);
+    // only what was created since the newest ticket known
+    expect(JSON.stringify(q[0].body.filter)).toContain("createDate");
+    expect(JSON.stringify(q[0].body.filter)).not.toContain("lastActivityDate");
+    // nothing new: nothing read about the tickets already in the copy
+    expect(sent.some((s) => s.url.endsWith("Contacts/query") || s.url.endsWith("TicketSecondaryResources/query"))).toBe(false);
+    await saveTicketSyncSettings(null, { auto: true });
   });
 
   it("never sends more than 3 requests at once and retries when Autotask says 429", async () => {
@@ -5276,14 +5293,26 @@ describe("tickets from the support mailbox (Admin › Courriel entrant)", () => 
     expect(d2.company.id).toBe(300);
     expect(d2.contactId).toBeNull();
 
-    // a stranger: nothing is opened, a technician decides
-    expect((await processIncoming(mail("m-3", "inconnu@exemple-inconnu.org", "Besoin d'aide"))).outcome).toBe("pending");
-    const pending = (await tech.get("/api/mail-intake/pending")).json.items;
-    const waiting = pending.find((x: any) => x.subject === "Besoin d'aide");
-    expect(waiting).toMatchObject({ from: "inconnu@exemple-inconnu.org" });
-    expect((await tech.post(`/api/mail-intake/${waiting.id}/ignore`, {})).status).toBe(200);
-    expect((await tech.get("/api/mail-intake/pending")).json.items.some((x: any) => x.id === waiting.id)).toBe(false);
-    expect((await tech.post(`/api/mail-intake/${waiting.id}/ignore`, {})).status).toBe(404);
+    // their name (another address), or their phone number written in the email: the contact is found
+    // (a contact whose name and phone are theirs alone: the sample ones repeat between clients)
+    expect((await admin.post(`/api/crm/clients/${client.id}/contacts`, { firstName: "Zoé", lastName: "Quantique", email: "zoe@quantique-inc.test", phone: "450-555-9123" })).status).toBe(201);
+    const named = await processIncoming({ ...mail("m-3a", "autre.adresse@exemple-inconnu.org", "Même personne"), from: { name: "Quantique, Zoé", address: "autre.adresse@exemple-inconnu.org" } });
+    expect(named.outcome).toBe("ticket");
+    const nd = (await tech.get(`/api/tickets/${named.ticket!.id}`)).json;
+    expect(nd.company.id).toBe(300);
+    expect(nd.contact).toBe("Zoé Quantique");
+    const byPhone = await processIncoming(mail("m-3b", "quelquun@exemple-inconnu.org", "Par téléphone", "Bonjour,\nRappelez-moi au (450) 555-9123, merci."));
+    expect(byPhone.outcome).toBe("ticket");
+    expect((await tech.get(`/api/tickets/${byPhone.ticket!.id}`)).json.contact).toBe("Zoé Quantique");
+
+    // a stranger: the ticket is opened for AKAB itself, flagged, to be changed later
+    const stranger = await processIncoming(mail("m-3", "inconnu@exemple-inconnu.org", "Besoin d'aide"));
+    expect(stranger.outcome).toBe("ticket");
+    const sd = (await tech.get(`/api/tickets/${stranger.ticket!.id}`)).json;
+    expect(sd.company.name).toMatch(/akab/i);
+    expect(sd.description).toContain("Expéditeur non reconnu");
+    expect(sd.description).toContain("inconnu@exemple-inconnu.org");
+    expect(sd.source).toBe("email");
 
     // naming a ticket: the client's message on it, the ticket needs attention
     const reply = await processIncoming(mail("m-4", known.email, `RE: [${first.ticket!.number}] Imprimante en panne`, "C'est revenu, merci."));
@@ -5306,5 +5335,32 @@ describe("tickets from the support mailbox (Admin › Courriel entrant)", () => 
     expect((await admin.put("/api/admin/mail-intake", { enabled: true })).json.error).toBe("intake_no_mailbox");
     expect((await admin.put("/api/admin/mail-intake", { enabled: true, mailbox: "support@akab.ca" })).json.error).toBe("intake_no_o365");
     expect((await admin.post("/api/admin/mail-intake/run", {})).json.error).toBe("intake_off");
+  });
+});
+
+describe("unassigned and new tickets leave out monitoring alerts", () => {
+  it("the unassigned view and the New tile skip the alerts queue; New = new status and nobody on it", async () => {
+    resetRateLimit("login:ip:unknown");
+    const tech = await signIn("tech@akab.local");
+    const admin = await signIn("admin@akab.local");
+    // an alert nobody has taken, and an ordinary new ticket nobody has taken
+    const make = (title: string, queue: string) => tech.post("/api/tickets", { title, companyId: 300, priority: "medium", queue, assigneeId: null, dueDate: "2026-12-01" });
+    const alert = await make("Alerte disque plein", "alerts");
+    const plain = await make("Demande ordinaire", "support");
+    expect(alert.status).toBe(201);
+    const before = (await tech.get("/api/tickets?view=unassigned")).json;
+    expect(before.items.some((x: any) => x.id === alert.json.id)).toBe(false);
+    expect(before.items.some((x: any) => x.id === plain.json.id)).toBe(true);
+    expect(before.items.every((x: any) => x.queue !== "alerts")).toBe(true);
+    // still reachable as alerts
+    expect((await tech.get("/api/tickets?view=all&alerts=1")).json.items.some((x: any) => x.id === alert.json.id)).toBe(true);
+
+    // New: new status, nobody on it
+    const fresh = (await tech.get("/api/tickets?view=unassigned&statusKind=new")).json;
+    expect(fresh.items.every((x: any) => x.statusKind === "new" && !x.assignee && x.queue !== "alerts")).toBe(true);
+    expect(fresh.metrics.fresh).toBeGreaterThanOrEqual(fresh.items.length);
+    expect(fresh.metrics.fresh).toBeLessThanOrEqual(fresh.metrics.unassigned);
+    expect(fresh.items.some((x: any) => x.id === plain.json.id)).toBe(true);
+    expect(admin).toBeTruthy();
   });
 });

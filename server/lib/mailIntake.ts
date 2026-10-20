@@ -8,9 +8,11 @@ import { ticketSource } from "./ticketSource.ts";
 /**
  * Tickets from the support mailbox (Admin › Courriel entrant). The portal reads
  * the mailbox itself (the organisation's Microsoft 365 access) and opens a
- * ticket for each new email: for the sender's contact when it is one, else for
- * the client their domain belongs to; when nobody matches, the email waits in
- * "Courriels à trier" for a technician to choose the client and contact. An
+ * ticket for each new email: for the sender's contact (found by their email
+ * address, their name, or a phone number written in the email), else for the
+ * client their domain belongs to, else for AKAB itself with a flag in the
+ * description, so that every email becomes a ticket and a technician changes the
+ * client later ("Courriels à trier" only if AKAB cannot be found). An
  * email whose subject names an existing ticket (T20261012.0001) is added to
  * that ticket as the client's message instead. Only emails received after it
  * was switched on are read; it starts OFF.
@@ -76,12 +78,68 @@ export async function clientByDomain(address: string): Promise<{ id: number; nam
   return found.size === 1 ? { id: [...found.keys()][0]!, name: [...found.values()][0]! } : null;
 }
 
-/** Who sent it: their contact (and client), else the client their domain belongs to, else nobody. */
-export async function matchSender(address: string) {
+const fold = (v: string) =>
+  v
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase()
+    .replace(/[^a-z0-9 ]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+
+type Found = { contactId: string; contactName: string; companyId: number; companyName: string };
+
+/** A contact with this name ("Julie Gagnon", or "Gagnon, Julie"), when there is exactly one. */
+async function contactByName(name: string | null): Promise<Found | null> {
+  if (!name) return null;
+  const parts = name.includes(",") ? name.split(",").reverse().join(" ") : name;
+  const want = fold(parts);
+  if (want.split(" ").length < 2) return null;
+  const rows = await db()
+    .select({ id: schema.clientContacts.autotaskId, first: schema.clientContacts.firstName, last: schema.clientContacts.lastName, company: schema.clients.autotaskId, companyName: schema.clients.name })
+    .from(schema.clientContacts)
+    .innerJoin(schema.clients, eq(schema.clients.id, schema.clientContacts.clientId))
+    .where(and(eq(schema.clients.active, true), eq(schema.clientContacts.active, true)));
+  const hits = rows.filter((r) => r.id && r.company != null && fold(`${r.first} ${r.last}`) === want);
+  return hits.length === 1 ? { contactId: hits[0]!.id!, contactName: `${hits[0]!.first} ${hits[0]!.last}`.trim(), companyId: hits[0]!.company!, companyName: hits[0]!.companyName } : null;
+}
+
+/** A contact whose phone number is written in the email (signature…), the first that is known. */
+async function contactByPhoneIn(text: string): Promise<Found | null> {
   const src = await ticketSource();
-  const contact = await src.contactByEmail(address).catch(() => null);
-  const company = contact ? { id: contact.companyId, name: contact.companyName } : await clientByDomain(address);
-  return { contact, company };
+  const numbers = [...new Set((text.match(/(?:\+?1[\s.-]?)?\(?\d{3}\)?[\s.-]?\d{3}[\s.-]?\d{4}/g) ?? []).map((n) => n.replace(/\D/g, "").slice(-10)))].slice(0, 5);
+  for (const n of numbers) {
+    const hit = await src.contactByPhone(n).catch(() => null);
+    if (hit) return hit;
+  }
+  return null;
+}
+
+/** Our own client (AKAB): where an email nobody can be matched to goes, to be changed later. */
+export async function ownCompany(): Promise<{ id: number; name: string } | null> {
+  const list = await (await ticketSource()).companies().catch(() => []);
+  const own = list.find((c) => c.id === 0) ?? list.find((c) => /\bakab\b/i.test(c.name));
+  return own ? { id: own.id, name: own.name } : null;
+}
+
+export type Matched = { contact: Found | null; company: { id: number; name: string } | null; how: "email" | "name" | "phone" | "domain" | "akab" | null };
+
+/**
+ * Who sent it, from what the email gives: their email address (a contact), their name
+ * (a contact with that name), a phone number in the email (a contact), their domain (the
+ * client). Nothing matches: our own client, AKAB, and a technician changes it later.
+ */
+export async function matchSender(address: string, name: string | null = null, text = ""): Promise<Matched> {
+  const src = await ticketSource();
+  const byEmail = await src.contactByEmail(address).catch(() => null);
+  const named = byEmail ?? (await contactByName(name).catch(() => null));
+  const byPhone = named ?? (await contactByPhoneIn(text).catch(() => null));
+  const contact = named ?? byPhone;
+  if (contact) return { contact, company: { id: contact.companyId, name: contact.companyName }, how: byEmail ? "email" : named ? "name" : "phone" };
+  const domain = await clientByDomain(address);
+  if (domain) return { contact: null, company: domain, how: "domain" };
+  const own = await ownCompany();
+  return { contact: null, company: own, how: own ? "akab" : null };
 }
 
 /** Machines and loops: never a ticket. */
@@ -143,9 +201,9 @@ export async function processIncoming(m: Incoming): Promise<{ outcome: Outcome; 
       }
     }
 
-    const { contact, company } = await matchSender(from);
+    const { contact, company, how } = await matchSender(from, m.from?.name ?? null, m.text);
     if (!company) {
-      // nobody to match: a technician picks the client and contact
+      // not even our own client to put it on: a technician picks the client and contact
       await done("pending");
       return { outcome: "pending" };
     }
@@ -153,7 +211,8 @@ export async function processIncoming(m: Incoming): Promise<{ outcome: Outcome; 
     const priority = (o.priorities.find((p) => p.kind === "medium") ?? o.priorities[0])?.value ?? "";
     const made = await src.createSystem({
       title: (cleanSubject(m.subject) || "(sans objet)").slice(0, 250),
-      description: m.text.slice(0, 8000),
+      // who wrote, when the ticket does not say it (no contact): the sender, and a flag when nobody was recognised
+      description: (how === "akab" ? `[Expéditeur non reconnu : ${m.from?.name ? `${m.from.name} ` : ""}<${from}> — client à corriger]\n\n` : contact ? "" : `[De : ${m.from?.name ? `${m.from.name} ` : ""}<${from}>]\n\n`) + m.text.slice(0, 7800),
       companyId: company.id,
       contactId: contact?.contactId ?? null,
       priority,
@@ -162,7 +221,7 @@ export async function processIncoming(m: Incoming): Promise<{ outcome: Outcome; 
       dueDate: tomorrow(),
       source: "email",
     });
-    await done("ticket", { ticketId: made.id, ticketNumber: made.number, companyId: company.id, contactId: contact?.contactId ?? null });
+    await done("ticket", { ticketId: made.id, ticketNumber: made.number, companyId: company.id, contactId: contact?.contactId ?? null, note: how === "akab" ? "unmatched" : null });
     await audit(null, "mail_intake.ticket", String(made.id), { from, subject: m.subject.slice(0, 120) });
     return { outcome: "ticket", ticket: made };
   } catch (e) {

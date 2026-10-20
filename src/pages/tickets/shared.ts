@@ -133,11 +133,13 @@ export type TicketList = {
   metrics: {
     mine: number;
     unassigned: number;
+    /** New tickets nobody has taken */
+    fresh: number;
     attention: number;
     statusAttention: number;
     attentionBreakdown: { overdue: number; dueToday: number; critical: number };
     /** By category, for the tiles' details: mine by status, unassigned by priority, "needs attention" by technician */
-    breakdown?: Record<"mine" | "unassigned" | "statusAttention", Tally>;
+    breakdown?: Record<"mine" | "unassigned" | "fresh" | "statusAttention", Tally>;
   };
   /** My saved filters shown as buttons, with their counts (by status) */
   buttons?: { id: string; name: string; query: string; count: number; breakdown?: Tally }[];
