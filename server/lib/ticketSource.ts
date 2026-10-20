@@ -1061,11 +1061,37 @@ async function actorResource(a: AuthContext): Promise<number> {
   if (!u?.r) throw new SourceError("not_linked");
   return u.r;
 }
+/** The resource's active roles, their default one first (Autotask only accepts some of them on a ticket) */
+async function rolesOf(at: Client, resourceId: number): Promise<number[]> {
+  const rows = await cached(`roles:${resourceId}`, 60 * 60_000, async () => {
+    const fields = await safeFields(at, "ResourceRoles", ["roleID", "isDefault"]);
+    return at.query<{ roleID: number; isDefault?: boolean }>("ResourceRoles", [{ op: "eq", field: "resourceID", value: resourceId }, { op: "eq", field: "isActive", value: true }], { fields, max: 20 });
+  });
+  return [...rows].sort((x, y) => Number(Boolean(y.isDefault)) - Number(Boolean(x.isDefault))).map((r) => r.roleID);
+}
 async function roleOf(at: Client, resourceId: number): Promise<number | null> {
-  const roles = await cached(`roles:${resourceId}`, 60 * 60_000, () =>
-    at.query<{ roleID: number }>("ResourceRoles", [{ op: "eq", field: "resourceID", value: resourceId }, { op: "eq", field: "isActive", value: true }], { fields: ["roleID"], max: 20 }),
-  );
-  return roles[0]?.roleID ?? null;
+  return (await rolesOf(at, resourceId))[0] ?? null;
+}
+/** Autotask refused the role chosen for this resource on this ticket ("this role cannot be selected"…) */
+const ROLE_REFUSED = /\brole\b/i;
+/**
+ * Send something with the resource's role: its default role first; when Autotask
+ * refuses it, the next one (a role must also suit the ticket's queue). None
+ * works: the last refusal is the error.
+ */
+async function withRole<T>(at: Client, resourceId: number, send: (roleId: number | null) => Promise<T>): Promise<T> {
+  const roles = await rolesOf(at, resourceId);
+  if (!roles.length) return send(null);
+  let last: unknown;
+  for (const role of roles) {
+    try {
+      return await send(role);
+    } catch (e) {
+      last = e;
+      if (!(e instanceof AutotaskError && e.code === "api" && ROLE_REFUSED.test(e.detail ?? ""))) throw e;
+    }
+  }
+  throw last;
 }
 
 /**
@@ -1442,12 +1468,14 @@ const autotaskSource: TicketSource = {
       }
       patch.contactID = p.contactId ? Number(p.contactId) : null;
     }
+    // the person the ticket goes to: sent with the role Autotask accepts for them
+    let assignTo: number | null = null;
     if (p.assigneeId !== undefined) {
       if (p.assigneeId) {
         const rid = await resourceIdOf(p.assigneeId);
         if (!rid) throw new SourceError("invalid_assignee");
         patch.assignedResourceID = rid;
-        patch.assignedResourceRoleID = await roleOf(at, rid);
+        assignTo = rid;
       } else {
         patch.assignedResourceID = null;
         patch.assignedResourceRoleID = null;
@@ -1462,7 +1490,10 @@ const autotaskSource: TicketSource = {
       }
       patch.configurationItemID = p.assetId ? Number(p.assetId) : null;
     }
-    if (Object.keys(patch).length > 1) await at.call("PATCH", "Tickets", patch, { impersonate: actor });
+    if (Object.keys(patch).length > 1) {
+      if (assignTo) await withRole(at, assignTo, (roleId) => at.call("PATCH", "Tickets", { ...patch, assignedResourceRoleID: roleId }, { impersonate: actor }));
+      else await at.call("PATCH", "Tickets", patch, { impersonate: actor });
+    }
     if (p.secondaryIds) await setSecondary(at, id, p.secondaryIds, actor);
     await refreshOne(at, id);
   },
@@ -1501,23 +1532,25 @@ const autotaskSource: TicketSource = {
     const rid = p.assigneeId ? await resourceIdOf(p.assigneeId) : null;
     if (p.assigneeId && !rid) throw new SourceError("invalid_assignee");
     const newStatus = opts.statuses.find((s) => s.kind === "new") ?? opts.statuses[0];
-    const res = await at.call<{ itemId: number }>(
-      "POST",
-      "Tickets",
-      {
-        companyID: p.companyId,
-        contactID: p.contactId ? Number(p.contactId) : null,
-        title: p.title,
-        description: p.description || undefined,
-        status: Number(newStatus.value),
-        priority: Number(p.priority),
-        queueID: p.queue ? Number(p.queue) : undefined,
-        dueDateTime: p.dueAt ? new Date(p.dueAt).toISOString() : dueIso(p.dueDate),
-        ...(p.contractId ? { contractID: Number(p.contractId) } : {}),
-        ...(rid ? { assignedResourceID: rid, assignedResourceRoleID: await roleOf(at, rid) } : {}),
-      },
-      { impersonate: actor, asApiUser: signText(a, "description") },
-    );
+    const post = (roleId: number | null) =>
+      at.call<{ itemId: number }>(
+        "POST",
+        "Tickets",
+        {
+          companyID: p.companyId,
+          contactID: p.contactId ? Number(p.contactId) : null,
+          title: p.title,
+          description: p.description || undefined,
+          status: Number(newStatus.value),
+          priority: Number(p.priority),
+          queueID: p.queue ? Number(p.queue) : undefined,
+          dueDateTime: p.dueAt ? new Date(p.dueAt).toISOString() : dueIso(p.dueDate),
+          ...(p.contractId ? { contractID: Number(p.contractId) } : {}),
+          ...(rid ? { assignedResourceID: rid, assignedResourceRoleID: roleId } : {}),
+        },
+        { impersonate: actor, asApiUser: signText(a, "description") },
+      );
+    const res = rid ? await withRole(at, rid, post) : await post(null);
     await refreshOne(at, res.itemId);
     return res.itemId;
   },

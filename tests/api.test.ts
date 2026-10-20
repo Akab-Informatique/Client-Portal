@@ -2271,6 +2271,14 @@ describe("tickets from Autotask", () => {
             pageDetails: {},
           });
         }
+        // a technician with two roles, the default one second in Autotask's answer
+        if (path === "ResourceRoles/query" && JSON.stringify(JSON.parse(String(init.body)).filter).includes("29682888"))
+          return json({ items: [{ roleID: 111, isDefault: false }, { roleID: 222, isDefault: true }], pageDetails: {} });
+        // Autotask only accepts 333 for this one: the others are refused with a message about the role
+        if (path === "ResourceRoles/query" && JSON.stringify(JSON.parse(String(init.body)).filter).includes("29682777"))
+          return json({ items: [{ roleID: 111, isDefault: true }, { roleID: 222, isDefault: false }, { roleID: 333, isDefault: false }], pageDetails: {} });
+        if (path === "Tickets" && method === "PATCH" && [111, 222].includes(JSON.parse(String(init.body)).assignedResourceRoleID) && JSON.parse(String(init.body)).assignedResourceID === 29682777)
+          return json({ errors: ["Data violation: this role cannot be selected for the resource."] }, 500);
         if (path === "ResourceRoles/query") return json({ items: [{ roleID: 29683461 }], pageDetails: {} });
         // refused only in a technician's name (impersonation), accepted for the API user itself
         if (path === "Tickets" && method === "PATCH" && JSON.parse(String(init.body)).priority === 3 && headers.impersonationresourceid) {
@@ -2359,6 +2367,14 @@ describe("tickets from Autotask", () => {
     expect(patch.headers.impersonationresourceid).toBe("29682885");
     expect(patch.body).toEqual({ id: 9001, status: 2, priority: 1, assignedResourceID: 29682999, assignedResourceRoleID: 29683461 });
     expect((await tech.patch("/api/tickets/9001", { status: "999" })).json.error).toBe("invalid_value");
+    // a resource with several roles: the default one first (not the first listed)
+    sent.length = 0;
+    expect((await tech.patch("/api/tickets/9001", { assigneeId: "at-29682888" })).status).toBe(200);
+    expect(sent.find((s) => s.method === "PATCH")!.body).toMatchObject({ assignedResourceID: 29682888, assignedResourceRoleID: 222 });
+    // Autotask refuses a role ("this role cannot be selected"): the next one is tried
+    sent.length = 0;
+    expect((await tech.patch("/api/tickets/9001", { assigneeId: "at-29682777" })).status).toBe(200);
+    expect(sent.filter((s) => s.method === "PATCH").map((s) => s.body.assignedResourceRoleID)).toEqual([111, 222, 333]);
     // Autotask refuses in the technician's name: a clear code, Autotask's text kept
     const refused = await tech.patch("/api/tickets/9001", { priority: "3" });
     expect(refused.status).toBe(403);
