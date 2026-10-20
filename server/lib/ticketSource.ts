@@ -1064,8 +1064,14 @@ async function actorResource(a: AuthContext): Promise<number> {
 /** The resource's active roles, their default one first (Autotask only accepts some of them on a ticket) */
 async function rolesOf(at: Client, resourceId: number): Promise<number[]> {
   const rows = await cached(`roles:${resourceId}`, 60 * 60_000, async () => {
-    const fields = await safeFields(at, "ResourceRoles", ["roleID", "isDefault"]);
-    return at.query<{ roleID: number; isDefault?: boolean }>("ResourceRoles", [{ op: "eq", field: "resourceID", value: resourceId }, { op: "eq", field: "isActive", value: true }], { fields, max: 20 });
+    type R = { roleID: number; isDefault?: boolean };
+    const ask = async (entity: string) => {
+      const fields = await safeFields(at, entity, ["roleID", "isDefault"]);
+      return at.query<R>(entity, [{ op: "eq", field: "resourceID", value: resourceId }, { op: "eq", field: "isActive", value: true }], { fields, max: 20 });
+    };
+    // a ticket takes the resource's SERVICE DESK roles (the roles it may work tickets with), else its general roles
+    const desk = await ask("ResourceServiceDeskRoles").catch(() => [] as R[]);
+    return desk.length ? desk : ask("ResourceRoles");
   });
   return [...rows].sort((x, y) => Number(Boolean(y.isDefault)) - Number(Boolean(x.isDefault))).map((r) => r.roleID);
 }
@@ -1073,7 +1079,7 @@ async function roleOf(at: Client, resourceId: number): Promise<number | null> {
   return (await rolesOf(at, resourceId))[0] ?? null;
 }
 /** Autotask refused the role chosen for this resource on this ticket ("this role cannot be selected"…) */
-const ROLE_REFUSED = /\brole\b/i;
+const ROLE_REFUSED = /role/i;
 /**
  * Send something with the resource's role: its default role first; when Autotask
  * refuses it, the next one (a role must also suit the ticket's queue). None

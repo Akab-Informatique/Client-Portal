@@ -2271,6 +2271,10 @@ describe("tickets from Autotask", () => {
             pageDetails: {},
           });
         }
+        // the service desk roles are asked first (a ticket takes those)
+        if (path === "ResourceServiceDeskRoles/query" && JSON.stringify(JSON.parse(String(init.body)).filter).includes("29682555"))
+          return json({ items: [{ roleID: 444, isDefault: true }], pageDetails: {} });
+        if (path === "ResourceServiceDeskRoles/query") return json({ items: [], pageDetails: {} });
         // a technician with two roles, the default one second in Autotask's answer
         if (path === "ResourceRoles/query" && JSON.stringify(JSON.parse(String(init.body)).filter).includes("29682888"))
           return json({ items: [{ roleID: 111, isDefault: false }, { roleID: 222, isDefault: true }], pageDetails: {} });
@@ -2278,7 +2282,7 @@ describe("tickets from Autotask", () => {
         if (path === "ResourceRoles/query" && JSON.stringify(JSON.parse(String(init.body)).filter).includes("29682777"))
           return json({ items: [{ roleID: 111, isDefault: true }, { roleID: 222, isDefault: false }, { roleID: 333, isDefault: false }], pageDetails: {} });
         if (path === "Tickets" && method === "PATCH" && [111, 222].includes(JSON.parse(String(init.body)).assignedResourceRoleID) && JSON.parse(String(init.body)).assignedResourceID === 29682777)
-          return json({ errors: ["Data violation: this role cannot be selected for the resource."] }, 500);
+          return json({ errors: ["Data violation: The specified assignedResourceID and AssignedRoleID combination is not currently defined."] }, 500);
         if (path === "ResourceRoles/query") return json({ items: [{ roleID: 29683461 }], pageDetails: {} });
         // refused only in a technician's name (impersonation), accepted for the API user itself
         if (path === "Tickets" && method === "PATCH" && JSON.parse(String(init.body)).priority === 3 && headers.impersonationresourceid) {
@@ -2371,7 +2375,11 @@ describe("tickets from Autotask", () => {
     sent.length = 0;
     expect((await tech.patch("/api/tickets/9001", { assigneeId: "at-29682888" })).status).toBe(200);
     expect(sent.find((s) => s.method === "PATCH")!.body).toMatchObject({ assignedResourceID: 29682888, assignedResourceRoleID: 222 });
-    // Autotask refuses a role ("this role cannot be selected"): the next one is tried
+    // the service desk roles win over the general ones
+    sent.length = 0;
+    expect((await tech.patch("/api/tickets/9001", { assigneeId: "at-29682555" })).status).toBe(200);
+    expect(sent.find((s) => s.method === "PATCH")!.body).toMatchObject({ assignedResourceID: 29682555, assignedResourceRoleID: 444 });
+    // Autotask refuses a combination ("...AssignedRoleID combination is not currently defined"): the next role is tried
     sent.length = 0;
     expect((await tech.patch("/api/tickets/9001", { assigneeId: "at-29682777" })).status).toBe(200);
     expect(sent.filter((s) => s.method === "PATCH").map((s) => s.body.assignedResourceRoleID)).toEqual([111, 222, 333]);
