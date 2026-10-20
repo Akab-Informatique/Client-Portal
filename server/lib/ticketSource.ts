@@ -1035,6 +1035,14 @@ async function safeFields(at: Client, entity: string, wanted: string[]): Promise
   return wanted.filter((w) => known.has(w.toLowerCase()));
 }
 
+/** For the final sync: the fields an Autotask entity really has, and a picklist's labels */
+export const atSafeFields = safeFields;
+export async function atPicklist(at: Client, entity: string, field: string): Promise<Map<string, string>> {
+  const fields = await fieldsOf(at, entity).catch(() => [] as FieldInfo[]);
+  return new Map(picklist(fields, field).map((v) => [String(v.value), v.label]));
+}
+export const atChunks = <T>(a: T[], n: number) => Array.from({ length: Math.ceil(a.length / n) }, (_, i) => a.slice(i * n, i * n + n));
+
 const chunks = <T>(a: T[], n: number) => Array.from({ length: Math.ceil(a.length / n) }, (_, i) => a.slice(i * n, i * n + n));
 
 /** Portal accounts linked to an Autotask resource: resource id → portal user id. */

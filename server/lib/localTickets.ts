@@ -66,13 +66,13 @@ export const resetTicketMode = () => {
 let running: Promise<void> | null = null;
 
 /** Copy the tickets from the source (since the date set in Admin › Billets, open ones whatever their age), then switch to the portal's tickets. One at a time. */
-export async function startTicketImport(actorId: string): Promise<TicketModeConfig> {
+export async function startTicketImport(actorId: string, sinceOverride?: string): Promise<TicketModeConfig> {
   const cur = await ticketMode();
   if (cur.mode === "local") throw new SourceError("already_local");
   if (running) return cur;
   const started = new Date().toISOString();
   await saveMode({ ...cur, import: { state: "running", done: 0, startedAt: started } }, actorId);
-  running = runImport(actorId, started).finally(() => {
+  running = runImport(actorId, started, sinceOverride).finally(() => {
     running = null;
   });
   return ticketMode();
@@ -80,10 +80,10 @@ export async function startTicketImport(actorId: string): Promise<TicketModeConf
 /** For the tests: once the copy started is over */
 export const ticketImportSettled = () => running ?? Promise.resolve();
 
-async function runImport(actorId: string, started: string) {
+async function runImport(actorId: string, started: string, sinceOverride?: string) {
   let done = 0;
   try {
-    const sinceDay = (await ticketSyncSettings()).since;
+    const sinceDay = sinceOverride ?? (await ticketSyncSettings()).since;
     let after = 0;
     for (;;) {
       const batch = await exportTickets(after, { size: 100, since: sinceDay });

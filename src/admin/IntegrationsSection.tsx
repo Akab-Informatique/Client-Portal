@@ -6,6 +6,7 @@ import { toast } from "sonner";
 import { ArrowLeft, CalendarDays, CheckCircle2, ChevronDown, ChevronRight, CreditCard, ExternalLink, KeyRound, Link2, Loader2, MonitorPlay, PlugZap, RefreshCw, Sparkles, Unlink, XCircle, type LucideIcon, MessageSquareText } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { Checkbox } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
@@ -71,6 +72,7 @@ const INTEGRATIONS: Integration[] = [
       <>
         <AutotaskConnection />
         <AutotaskLinks />
+        <AutotaskFinalSync />
       </>
     ),
   },
@@ -398,6 +400,147 @@ function TestBanner({ r }: { r: TestResult }) {
 }
 
 // ── Technicians ↔ Autotask users ───────────────────────────────────────────────
+// ── The last sync, before the connection is closed ──
+type FinalKey = "tickets" | "expenses" | "timesheets";
+type FinalPart = { state: "pending" | "running" | "done" | "failed" | "skipped"; counts?: Record<string, number>; note?: string; error?: string };
+type FinalInfo = {
+  linked: boolean;
+  state: null | {
+    since: string;
+    parts: FinalKey[];
+    running: boolean;
+    startedAt: string;
+    finishedAt?: string;
+    results: Record<FinalKey, FinalPart>;
+    files: { id: string; kind: string; filename: string; rows: number; createdAt: string }[];
+  };
+};
+const FINAL_KEYS: FinalKey[] = ["tickets", "expenses", "timesheets"];
+function AutotaskFinalSync() {
+  const { t } = useTranslation();
+  const qc = useQueryClient();
+  const confirm = useConfirm();
+  const errorText = useIntegrationError();
+  const { data } = useQuery({
+    queryKey: [...KEY, "final-sync"],
+    queryFn: () => api.get<FinalInfo>("/admin/integrations/autotask/final-sync"),
+    // while it runs
+    refetchInterval: (q) => (q.state.data?.state?.running ? 2000 : false),
+  });
+  const [since, setSince] = useState("2026-09-01");
+  const [parts, setParts] = useState<FinalKey[]>(FINAL_KEYS);
+  useEffect(() => {
+    if (data?.state?.since) setSince(data.state.since);
+  }, [data?.state?.since]);
+  const start = useMutation({
+    mutationFn: () => api.post("/admin/integrations/autotask/final-sync", { since, parts }),
+    onSuccess: () => void qc.invalidateQueries({ queryKey: [...KEY, "final-sync"] }),
+    onError: (e) => toast.error(e instanceof ApiError && e.code === "final_sync_running" ? t("integrations.finalSync.running") : errorText(e)),
+  });
+  const state = data?.state ?? null;
+  const running = Boolean(state?.running) || start.isPending;
+  const ask = () =>
+    void confirm({
+      title: t("integrations.finalSync.confirmTitle"),
+      description: t("integrations.finalSync.confirmText", { since }),
+      confirmLabel: t("integrations.finalSync.run"),
+    }).then((ok) => ok && start.mutate());
+  const summary = (k: FinalKey, p: FinalPart): string => {
+    if (p.state === "pending") return t("integrations.finalSync.pending");
+    if (p.state === "running") return t("integrations.finalSync.working");
+    if (p.state === "failed") return t("integrations.finalSync.failed", { error: p.error ?? "" });
+    if (p.state === "skipped") return t("integrations.finalSync.skipped");
+    const c = p.counts ?? {};
+    if (k === "tickets") return t("integrations.finalSync.ticketsDone", { count: c.tickets ?? 0 }) + (p.note === "switched" ? ` · ${t("integrations.finalSync.switched")}` : "");
+    if (k === "expenses") {
+      const status = (["draft", "submitted", "approved", "rejected", "paid"] as const).filter((s) => c[`status_${s}`]).map((s) => `${c[`status_${s}`]} ${t(`integrations.finalSync.status.${s}`)}`).join(", ");
+      return [t("integrations.finalSync.expensesDone", { reports: c.reports ?? 0, items: c.items ?? 0 }), status, c.noAccount ? t("integrations.finalSync.noAccount", { count: c.noAccount }) : ""].filter(Boolean).join(" · ");
+    }
+    return t("integrations.finalSync.timesheetsDone", { entries: c.entries ?? 0, weeks: c.weeks ?? 0 });
+  };
+  return (
+    <section className="overflow-hidden rounded-2xl border bg-card/80">
+      <div className="border-b px-6 py-5">
+        <h3 className="flex items-center gap-2 font-display text-lg font-semibold">
+          <RefreshCw className="size-5 text-primary" /> {t("integrations.finalSync.title")}
+        </h3>
+        <p className="text-sm text-muted-foreground">{t("integrations.finalSync.subtitle")}</p>
+      </div>
+      <div className="space-y-4 px-6 py-5">
+        {!data?.linked && <p className="rounded-lg border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-xs text-amber-200">{t("integrations.finalSync.notLinked")}</p>}
+        <div className="flex flex-wrap items-end gap-x-6 gap-y-3">
+          <div className="space-y-1.5">
+            <Label htmlFor="fs-since" className="text-xs">
+              {t("integrations.finalSync.since")}
+            </Label>
+            <Input id="fs-since" type="date" value={since} onChange={(e) => setSince(e.target.value)} className="h-9 w-44" disabled={running} />
+          </div>
+          <div className="flex flex-wrap gap-x-5 gap-y-2 pb-1.5">
+            {FINAL_KEYS.map((k) => (
+              <label key={k} className="flex cursor-pointer items-center gap-2 text-sm">
+                <Checkbox checked={parts.includes(k)} disabled={running} onCheckedChange={(v) => setParts((cur) => (v === true ? [...cur, k] : cur.filter((x) => x !== k)))} />
+                {t(`integrations.finalSync.part.${k}`)}
+              </label>
+            ))}
+          </div>
+          <Button type="button" onClick={ask} disabled={!data?.linked || running || !parts.length || !since}>
+            {running ? <Loader2 className="size-4 animate-spin" /> : <RefreshCw className="size-4" />} {t("integrations.finalSync.run")}
+          </Button>
+        </div>
+        <p className="text-xs text-muted-foreground">{t("integrations.finalSync.rules")}</p>
+
+        {state && (
+          <ul className="divide-y rounded-xl border">
+            {FINAL_KEYS.filter((k) => state.parts.includes(k)).map((k) => {
+              const p = state.results[k];
+              return (
+                <li key={k} className="flex items-start gap-3 px-4 py-3 text-sm">
+                  <span className="mt-0.5 shrink-0">
+                    {p.state === "done" ? (
+                      <CheckCircle2 className="size-4 text-emerald-400" />
+                    ) : p.state === "failed" ? (
+                      <XCircle className="size-4 text-destructive" />
+                    ) : p.state === "running" ? (
+                      <Loader2 className="size-4 animate-spin text-primary" />
+                    ) : (
+                      <span className="block size-4 rounded-full border border-muted-foreground/40" />
+                    )}
+                  </span>
+                  <span className="min-w-0 flex-1">
+                    <span className="block font-medium">{t(`integrations.finalSync.part.${k}`)}</span>
+                    <span className={cn("block text-xs", p.state === "failed" ? "text-destructive" : "text-muted-foreground")}>{summary(k, p)}</span>
+                    {k === "timesheets" && p.state === "done" && p.note && <span className="mt-1 block text-[11px] text-muted-foreground">{t("integrations.finalSync.timesheetNote")}</span>}
+                  </span>
+                </li>
+              );
+            })}
+          </ul>
+        )}
+        {state && (
+          <p className="text-xs text-muted-foreground">
+            {state.finishedAt ? t("integrations.finalSync.finished", { at: dateTime(state.finishedAt), since: state.since }) : t("integrations.finalSync.startedAt", { at: dateTime(state.startedAt) })}
+          </p>
+        )}
+        {state && state.files.length > 0 && (
+          <div className="space-y-1.5">
+            <p className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">{t("integrations.finalSync.files")}</p>
+            <ul className="space-y-1">
+              {state.files.map((f) => (
+                <li key={f.id}>
+                  <a href={`/api/admin/integrations/autotask/final-sync/files/${f.id}`} className="inline-flex items-center gap-2 text-sm text-primary hover:underline">
+                    <ExternalLink className="size-3.5" /> {f.filename}
+                    <span className="text-xs text-muted-foreground">({t("integrations.finalSync.rows", { count: f.rows })})</span>
+                  </a>
+                </li>
+              ))}
+            </ul>
+          </div>
+        )}
+      </div>
+    </section>
+  );
+}
+
 function AutotaskLinks() {
   const { t } = useTranslation();
   const qc = useQueryClient();

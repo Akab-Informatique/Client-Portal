@@ -477,6 +477,13 @@
       "when": 1792503523385,
       "tag": "0067_local_tickets",
       "breakpoints": true
+    },
+    {
+      "idx": 68,
+      "version": "7",
+      "when": 1792504837255,
+      "tag": "0068_autotask_final_sync",
+      "breakpoints": true
     }
   ]
 }

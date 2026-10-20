@@ -1671,10 +1671,12 @@ export const expenseReports = pgTable(
     periodEnd: text("period_end"),
     /** null: open (items can be added, changed, removed) */
     submittedAt: timestamp("submitted_at", { withTimezone: true }),
+    /** The Autotask expense report it was copied from (the final sync): a second pass updates it */
+    autotaskId: bigint("autotask_id", { mode: "number" }),
     createdAt: created(),
     updatedAt: updated(),
   },
-  (t) => [index("expense_reports_user_idx").on(t.userId)],
+  (t) => [index("expense_reports_user_idx").on(t.userId), uniqueIndex("expense_reports_autotask_idx").on(t.autotaskId)],
 );
 
 export const expenses = pgTable(
@@ -1714,11 +1716,30 @@ export const expenses = pgTable(
     quickbooksId: text("quickbooks_id"),
     quickbooksSyncedAt: timestamp("quickbooks_synced_at", { withTimezone: true }),
     quickbooksError: text("quickbooks_error"),
+    /** The Autotask expense item it was copied from (the final sync) */
+    autotaskId: bigint("autotask_id", { mode: "number" }),
     createdAt: created(),
     updatedAt: updated(),
   },
-  (t) => [index("expenses_user_idx").on(t.userId, t.date), index("expenses_status_idx").on(t.status)],
+  (t) => [index("expenses_user_idx").on(t.userId, t.date), index("expenses_status_idx").on(t.status), uniqueIndex("expenses_autotask_idx").on(t.autotaskId)],
 );
+
+/**
+ * Files made from Autotask's data by the final sync (time sheets as CSV), kept
+ * in the portal so they can still be downloaded once the connection is closed.
+ */
+export const autotaskExports = pgTable("autotask_exports", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  /** timesheets-detail | timesheets-weeks */
+  kind: text("kind").notNull(),
+  filename: text("filename").notNull(),
+  /** The period it starts at (YYYY-MM-DD) */
+  since: text("since").notNull(),
+  content: text("content").notNull(),
+  rows: integer("rows").notNull().default(0),
+  createdBy: uuid("created_by").references(() => users.id, { onDelete: "set null" }),
+  createdAt: created(),
+});
 
 /** Card payment links made for invoices (Accounting › Paiements, Stripe Checkout). Money in cents. */
 export const stripeCheckouts = pgTable(

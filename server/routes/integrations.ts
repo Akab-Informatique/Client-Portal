@@ -4,6 +4,8 @@ import { and, asc, eq, isNull, gte } from "drizzle-orm";
 import { z } from "zod";
 import { db, schema } from "../db/index.ts";
 import { auth, permissionsOf, requirePermission, type AppEnv } from "../lib/auth.ts";
+import { exportFile, FinalSyncError, finalSyncState, startFinalSync } from "../lib/finalSync.ts";
+import { autotaskLinked } from "../lib/ticketSource.ts";
 import { audit } from "../lib/audit.ts";
 import {
   AutotaskError,
@@ -172,6 +174,44 @@ export const integrationRoutes = new Hono<AppEnv>()
   })
 
   /** Technicians and the Autotask users they are linked to. */
+  // ── The last sync, before the connection is closed ──
+  .get("/autotask/final-sync", async (c) => c.json({ linked: await autotaskLinked(), state: await finalSyncState() }))
+
+  /** Tickets, expense reports (with their status) since a date, and the time sheets as CSV files */
+  .post("/autotask/final-sync", async (c) => {
+    const a = auth(c);
+    const p = await body(
+      c,
+      z.object({
+        since: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).default("2026-09-01"),
+        parts: z.array(z.enum(["tickets", "expenses", "timesheets"])).min(1).optional(),
+      }),
+    );
+    if (p.since < "2000-01-01" || p.since > "2100-01-01") throw new HTTPException(400, { message: "invalid_range" });
+    try {
+      await startFinalSync(p, a.user.id);
+    } catch (e) {
+      if (e instanceof FinalSyncError) throw new HTTPException(e.code === "running" ? 409 : 400, { message: e.code === "running" ? "final_sync_running" : "invalid_range" });
+      throw e;
+    }
+    return c.json({ ok: true }, 202);
+  })
+
+  /** A file kept by the final sync (always a download) */
+  .get("/autotask/final-sync/files/:id", async (c) => {
+    const file = await exportFile(zUuid.parse(c.req.param("id")));
+    if (!file) throw new HTTPException(404, { message: "not_found" });
+    // the UTF-8 mark makes Excel read the accents
+    return new Response(`${String.fromCharCode(0xfeff)}${file.content}`, {
+      headers: {
+        "content-type": "text/csv; charset=utf-8",
+        "content-disposition": `attachment; filename="${file.filename.replace(/[^\w.-]/g, "_")}"`,
+        "x-content-type-options": "nosniff",
+        "cache-control": "private, no-store",
+      },
+    });
+  })
+
   .get("/autotask/links", async (c) => {
     const staff = await staffWithLinks();
     let resources: Awaited<ReturnType<typeof listResources>> = [];

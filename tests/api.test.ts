@@ -9,7 +9,7 @@ process.env.REQUIRE_MFA = "true";
 const { initDb, db, schema } = await import("../server/db/index.ts");
 const { seed } = await import("../server/db/seed.ts");
 const { createApp } = await import("../server/app.ts");
-const { eq, sql } = await import("drizzle-orm");
+const { eq, sql, isNotNull } = await import("drizzle-orm");
 const { resetRateLimit } = await import("../server/lib/http.ts");
 
 let app: ReturnType<typeof createApp>;
@@ -5470,5 +5470,244 @@ describe("tickets owned by the portal (Admin › Billets)", () => {
     expect((await admin.del(`/api/tickets/${id}`)).status).toBe(404);
     const audited = await db().select().from(schema.auditLog).where(eq(schema.auditLog.action, "ticket.deleted"));
     expect(audited.some((x) => x.target === String(id))).toBe(true);
+  });
+});
+
+describe("final sync from Autotask (Integrations › Autotask)", () => {
+  const base = "https://webservices99.autotask.net/ATServicesRest/v1.0/";
+  const json = (b: unknown, status = 200) => new Response(JSON.stringify(b), { status, headers: { "content-type": "application/json" } });
+  const pick = (list: [number, string][]) => list.map(([value, label]) => ({ value: String(value), label, isActive: true, sortOrder: 0 }));
+  const sent: { path: string; body: any }[] = [];
+  const names = (...n: string[]) => ({ fields: n.map((name) => ({ name })) });
+  let clientId = "";
+
+  beforeAll(async () => {
+    const { clearTicketCache } = await import("../server/lib/ticketSource.ts");
+    await clearTicketCache();
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: unknown, init: RequestInit = {}) => {
+        const url = String(input);
+        if (url.includes("zoneInformation")) return json({ zoneName: "Zone 99", url: "https://webservices99.autotask.net/ATServicesRest/", webUrl: "https://ww99.autotask.net/" });
+        const path = url.slice(base.length);
+        const body = init.body ? JSON.parse(String(init.body)) : undefined;
+        sent.push({ path, body });
+        const ids = (field: string): number[] => (body?.filter ?? []).find((f: any) => f.field === field)?.value ?? [];
+        if (path === "Resources/query")
+          return json({ items: [{ id: 29682885, firstName: "Alex", lastName: "Tremblay", email: "tech@akab.local" }, { id: 29682999, firstName: "Autre", lastName: "Tech", email: "x@y.ca" }], pageDetails: {} });
+        if (path === "Tickets/entityInformation/fields")
+          return json({
+            fields: [
+              ...names("id", "ticketNumber", "title", "description", "companyID", "contactID", "assignedResourceID", "queueID", "dueDateTime", "createDate", "lastActivityDate", "completedDate", "configurationItemID").fields,
+              { name: "status", isPickList: true, picklistValues: pick([[1, "New"], [2, "In Progress"], [5, "Complete"]]) },
+              { name: "priority", isPickList: true, picklistValues: pick([[1, "High"], [2, "Medium"], [3, "Low"]]) },
+              { name: "queueID", isPickList: true, picklistValues: pick([[29683, "Triage"]]) },
+              { name: "source", isPickList: true, picklistValues: pick([[4, "Phone"]]) },
+            ],
+          });
+        if (path === "TicketNotes/entityInformation/fields")
+          return json({
+            fields: [
+              ...names("id", "ticketID", "title", "description", "createDateTime", "creatorResourceID", "createdByContactID").fields,
+              { name: "noteType", isPickList: true, picklistValues: pick([[1, "Task"], [2, "Workflow Rule"]]) },
+              { name: "publish", isPickList: true, picklistValues: pick([[1, "All Autotask Users"], [2, "Internal Only"]]) },
+            ],
+          });
+        if (path === "Companies/query") return json({ items: [{ id: 77, companyName: "Client réel" }], pageDetails: {} });
+        if (path === "Contacts/query") return json({ items: [{ id: 501, firstName: "Marie", lastName: "Gagnon" }], pageDetails: {} });
+        if (path === "TicketNotes/query")
+          return json({ items: [{ id: 31, ticketID: 9001, title: "Appel", description: "Client rappelé", createDateTime: "2026-10-01T14:00:00Z", creatorResourceID: 29682885, publish: 2, noteType: 1 }], pageDetails: {} });
+        if (path === "ExpenseReports/entityInformation/fields")
+          return json({
+            fields: [
+              ...names("id", "name", "submitterID", "submitDate", "weekEnding", "approvedDate", "approverID", "rejectionReason").fields,
+              { name: "status", isPickList: true, picklistValues: pick([[1, "In Progress"], [2, "Awaiting Approval"], [3, "Approved for Payment"], [4, "Rejected"], [5, "Paid"], [6, "Transferred to QuickBooks"]]) },
+            ],
+          });
+        if (path === "ExpenseItems/entityInformation/fields")
+          return json({
+            fields: [
+              ...names("id", "expenseReportID", "expenseDate", "description", "expenseCurrencyExpenseAmount", "companyID", "isBillableToCompany", "miles").fields,
+              { name: "expenseCategory", isPickList: true, picklistValues: pick([[1, "Mileage"], [2, "Parking"]]) },
+            ],
+          });
+        if (path === "ExpenseReports/query")
+          return json({
+            items: [
+              { id: 1001, name: "Octobre — semaine 1", submitterID: 29682885, status: 5, weekEnding: "2026-10-04T00:00:00Z", submitDate: "2026-10-05T10:00:00Z", approvedDate: "2026-10-08T10:00:00Z", approverID: 29682999 },
+              { id: 1002, name: "Octobre — semaine 2", submitterID: 29682885, status: 4, weekEnding: "2026-10-11T00:00:00Z", submitDate: "2026-10-12T10:00:00Z", rejectionReason: "Reçu manquant" },
+              { id: 1003, name: "Octobre — semaine 3", submitterID: 29682885, status: 1, weekEnding: "2026-10-18T00:00:00Z" },
+              { id: 1004, name: "Sans compte", submitterID: 29682999, status: 2, weekEnding: "2026-10-04T00:00:00Z", submitDate: "2026-10-05T10:00:00Z" },
+            ],
+            pageDetails: {},
+          });
+        if (path === "ExpenseItems/query") {
+          const wanted = new Set(ids("expenseReportID"));
+          const all = [
+            { id: 5001, expenseReportID: 1001, expenseDate: "2026-10-02T00:00:00Z", description: "Aller-retour Joliette", expenseCategory: 1, expenseCurrencyExpenseAmount: 28.56, companyID: 307, isBillableToCompany: true, miles: 42 },
+            { id: 5002, expenseReportID: 1001, expenseDate: "2026-10-03T00:00:00Z", description: "Stationnement", expenseCategory: 2, expenseCurrencyExpenseAmount: 12 },
+            { id: 5003, expenseReportID: 1002, expenseDate: "2026-10-09T00:00:00Z", description: "Stationnement client", expenseCategory: 2, expenseCurrencyExpenseAmount: 8.5 },
+            { id: 5004, expenseReportID: 1003, expenseDate: "2026-10-15T00:00:00Z", description: "Déplacement", expenseCategory: 1, expenseCurrencyExpenseAmount: 10.2, miles: 15 },
+            { id: 5005, expenseReportID: 1004, expenseDate: "2026-10-02T00:00:00Z", description: "Autre", expenseCategory: 2, expenseCurrencyExpenseAmount: 5 },
+          ];
+          return json({ items: all.filter((x) => wanted.has(x.expenseReportID)), pageDetails: {} });
+        }
+        if (path === "TimeEntries/query")
+          return json({
+            items: [
+              { id: 1, resourceID: 29682885, ticketID: 9001, dateWorked: "2026-10-05T00:00:00Z", startDateTime: "2026-10-05T13:00:00Z", endDateTime: "2026-10-05T14:30:00Z", hoursWorked: 1.5, hoursToBill: 1.5, isNonBillable: false, billingCodeID: 77, summaryNotes: "Serveur redémarré", internalNotes: "=cmd|' /C calc'!A0", billingApprovalDateTime: "2026-10-09T10:00:00Z" },
+              { id: 2, resourceID: 29682885, ticketID: 9001, dateWorked: "2026-10-06T00:00:00Z", hoursWorked: 1, isNonBillable: true, summaryNotes: 'Suivi, "interne"' },
+              { id: 3, resourceID: 29682999, dateWorked: "2026-10-14T00:00:00Z", hoursWorked: 2, hoursToBill: 2, isNonBillable: false, taskID: 12 },
+            ],
+            pageDetails: {},
+          });
+        if (path === "Tickets/query" && (body?.filter ?? []).some((f: any) => f.op === "gt" && f.field === "id" && Number(f.value) >= 9001)) return json({ items: [], pageDetails: {} });
+        if (path === "Tickets/query")
+          return json({
+            items: [
+              {
+                id: 9001, ticketNumber: "T20261012.0001", title: "Serveur réel en panne", description: "Le serveur ne répond plus.", status: 2, priority: 2, queueID: 29683, companyID: 77, contactID: 501,
+                assignedResourceID: 29682885, dueDateTime: "2026-10-20T17:00:00Z", createDate: "2026-10-12T12:00:00Z", lastActivityDate: "2026-10-12T13:00:00Z", source: 4,
+              },
+            ],
+            pageDetails: {},
+          });
+        if (path === "BillingCodes/query") return json({ items: [{ id: 77, name: "Travail à distance" }], pageDetails: {} });
+        // the portal's own background copies (clients, contacts…) ask too: nothing there
+        if (path.endsWith("/query")) return json({ items: [], pageDetails: {} });
+        if (path.endsWith("entityInformation/fields")) return json({ fields: [] });
+        return json({ errors: [`unexpected ${init.method ?? "GET"} ${path}`] }, 500);
+      }),
+    );
+    resetRateLimit("login:ip:unknown");
+    const admin = await signIn("admin@akab.local");
+    await admin.put("/api/admin/integrations/autotask", { username: "portal-api@akab.ca", secret: "good-secret", integrationCode: "TRACKING-ID", enabled: true });
+    const staff = (await admin.get("/api/admin/integrations/autotask/links")).json.staff;
+    const techId = staff.find((s: any) => s.email === "tech@akab.local").id;
+    await admin.put(`/api/admin/integrations/autotask/links/${techId}`, { resourceId: 29682885 });
+    // (read from the database: the CRM page would start a copy from the simulated Autotask)
+    clientId = (await db().select().from(schema.clients).where(eq(schema.clients.autotaskId, 307)))[0]?.id ?? "";
+  });
+  afterAll(async () => {
+    vi.unstubAllGlobals();
+    const { clearTicketCache } = await import("../server/lib/ticketSource.ts");
+    await db().update(schema.integrations).set({ enabled: false }).where(eq(schema.integrations.provider, "autotask"));
+    await db().delete(schema.integrations).where(eq(schema.integrations.provider, "autotask.finalsync"));
+    await db().delete(schema.expenseReports).where(isNotNull(schema.expenseReports.autotaskId));
+    await db().delete(schema.autotaskExports);
+    await db().delete(schema.integrations).where(eq(schema.integrations.provider, "tickets"));
+    await db().delete(schema.tickets);
+    (await import("../server/lib/localTickets.ts")).resetTicketMode();
+    await clearTicketCache();
+  });
+
+  it("copies expense reports with their status, keeps the time sheets as CSV files, and a second pass doubles nothing", async () => {
+    resetRateLimit("login:ip:unknown");
+    const { finalSyncSettled, startFinalSync } = await import("../server/lib/finalSync.ts");
+    const admin = await signIn("admin@akab.local");
+    const tech = await signIn("tech@akab.local");
+    const url = "/api/admin/integrations/autotask/final-sync";
+
+    expect((await admin.get(url)).json).toMatchObject({ linked: true, state: null });
+    expect((await tech.get(url)).status).toBe(403);
+    expect((await tech.post(url, {})).status).toBe(403);
+    expect((await admin.post(url, { since: "01/09/2026" })).status).toBe(400);
+
+    // the date and the parts asked (the tickets too: not in the portal yet, so they are moved with this date)
+    expect((await admin.post(url, { since: "2026-09-01" })).status).toBe(202);
+    await expect(startFinalSync({ since: "2026-09-01" }, "x")).rejects.toThrow("running");
+    await finalSyncSettled();
+    const state = (await admin.get(url)).json.state;
+    expect(state).toMatchObject({ since: "2026-09-01", running: false });
+    expect(state.results.tickets).toMatchObject({ state: "done", counts: { tickets: 1 }, note: "switched" });
+    const [copied] = await db().select().from(schema.tickets).where(eq(schema.tickets.number, "T20261012.0001"));
+    expect(copied).toMatchObject({ id: 9001, title: "Serveur réel en panne", companyName: "Client réel", contactName: "Marie Gagnon", status: "2" });
+    expect((await db().select().from(schema.ticketNotes).where(eq(schema.ticketNotes.ticketId, 9001))).map((n) => [n.externalId, n.internal])).toEqual([["note:31", true]]);
+    const times = await db().select().from(schema.ticketTimeEntries).where(eq(schema.ticketTimeEntries.ticketId, 9001));
+    expect(times.map((x) => [x.externalId, x.minutes, x.billed]).sort()).toEqual([["time:1", 90, true], ["time:2", 60, false]]);
+    // Autotask was asked for the tickets since the date (open ones whatever their age)
+    const askedTickets = sent.find((q) => q.path === "Tickets/query" && JSON.stringify(q.body?.filter).includes("2026-09-01"));
+    expect(askedTickets).toBeTruthy();
+    expect((await admin.get("/api/admin/ticket-setup/local")).json).toMatchObject({ mode: "local", tickets: 1 });
+    expect(state.results.expenses).toMatchObject({ state: "done", counts: { reports: 3, items: 4, noAccount: 1, status_paid: 1, status_rejected: 1, status_draft: 1 } });
+    expect(state.results.timesheets).toMatchObject({ state: "done", counts: { entries: 3, weeks: 2 } });
+    // Autotask was asked for the reports of the period (their week ending)
+    const asked = sent.find((s) => s.path === "ExpenseReports/query")!;
+    expect(JSON.stringify(asked.body.filter)).toContain("2026-09-01");
+    expect(JSON.stringify(asked.body.filter)).toContain("weekEnding");
+
+    // the reports, their items and status in the portal (what the technician sees)
+    const rows = await db().select().from(schema.expenseReports).where(isNotNull(schema.expenseReports.autotaskId));
+    expect(rows.map((r) => r.title).sort()).toEqual(["Octobre — semaine 1", "Octobre — semaine 2", "Octobre — semaine 3"]);
+    const report = (title: string) => rows.find((r) => r.title === title)!;
+    const itemsOf = async (title: string) =>
+      db()
+        .select({ x: schema.expenses, type: schema.expenseTypes.name })
+        .from(schema.expenses)
+        .innerJoin(schema.expenseTypes, eq(schema.expenseTypes.id, schema.expenses.typeId))
+        .where(eq(schema.expenses.reportId, report(title).id))
+        .orderBy(schema.expenses.date);
+    expect(report("Octobre — semaine 1")).toMatchObject({ periodStart: "2026-09-28", periodEnd: "2026-10-04" });
+    const w1 = await itemsOf("Octobre — semaine 1");
+    expect(w1.map((i) => [i.x.description, Number(i.x.amountCents), i.x.status, i.type])).toEqual([
+      ["Aller-retour Joliette", 2856, "paid", "Mileage"],
+      ["Stationnement", 1200, "paid", "Parking"],
+    ]);
+    expect(w1[0].x).toMatchObject({ quantityX100: 4200, billable: true, clientId: clientId || null });
+    expect(w1[0].x.paidAt).toBeTruthy();
+    const w2 = await itemsOf("Octobre — semaine 2");
+    expect(w2[0].x).toMatchObject({ status: "rejected", comment: "Reçu manquant" });
+    expect(report("Octobre — semaine 2").submittedAt).toBeTruthy();
+    const w3 = await itemsOf("Octobre — semaine 3");
+    expect(w3[0].x).toMatchObject({ status: "draft", quantityX100: 1500 });
+    expect(report("Octobre — semaine 3").submittedAt).toBeNull();
+    // what the technician sees: the status of each report
+    const mine = (await tech.get("/api/time/expense-reports?status=all")).json as any[];
+    const status = (title: string) => mine.find((r) => r.title === title)?.status;
+    expect([status("Octobre — semaine 1"), status("Octobre — semaine 2"), status("Octobre — semaine 3")]).toEqual(["paid", "submitted", "open"]);
+    expect(mine.some((r) => r.title === "Sans compte")).toBe(false);
+    // the types made from Autotask's categories stay out of the choices for new expenses
+    const types = (await tech.get("/api/time/types")).json.expense as any[];
+    expect(types.some((x) => x.name === "Parking")).toBe(false);
+
+    // the time sheets: two CSV files kept in the portal
+    const files = (await admin.get(url)).json.state.files as any[];
+    expect(files.map((f) => f.kind).sort()).toEqual(["timesheets-detail", "timesheets-weeks"]);
+    const detail = files.find((f) => f.kind === "timesheets-detail");
+    expect(detail.rows).toBe(3);
+    const download = await admin.get(`${url}/files/${detail.id}`);
+    expect(download.status).toBe(200);
+    const text = String(download.json);
+    expect((await tech.get(`${url}/files/${detail.id}`)).status).toBe(403);
+    // a download, with the UTF-8 mark (bytes EF BB BF) so Excel reads the accents
+    const raw = await app.request(`${url}/files/${detail.id}`, { headers: { host: "localhost", cookie: admin.cookie } });
+    expect([...new Uint8Array(await raw.arrayBuffer()).slice(0, 3)]).toEqual([0xef, 0xbb, 0xbf]);
+    expect(raw.headers.get("content-type")).toContain("text/csv");
+    expect(raw.headers.get("content-disposition")).toMatch(/^attachment; filename="feuilles-de-temps-detail-2026-09-01-au-/);
+    expect(text).toContain("Technicien");
+    expect(text).toContain("Alex Tremblay");
+    expect(text).toContain("T20261012.0001");
+    expect(text).toContain(";1,5;"); // decimal comma for a French Excel
+    expect(text).toContain("approuvé");
+    expect(text).toContain("non approuvé");
+    expect(text).toContain("Travail à distance");
+    // a cell is never read as a formula, and quotes are doubled
+    expect(text).toContain("\"'=cmd");
+    expect(text).toContain('"Suivi, ""interne"""');
+    // the weeks: a summary by technician and week (Monday)
+    const weeksFile = files.find((f) => f.kind === "timesheets-weeks");
+    const [weeksRow] = await db().select().from(schema.autotaskExports).where(eq(schema.autotaskExports.id, weeksFile.id));
+    expect(weeksRow.content).toContain("2026-10-05");
+    expect(weeksRow.content).toContain("partiellement approuvé");
+
+    // a second pass: updated, not doubled (the tickets of the portal are now only imported by hand)
+    expect((await admin.post(url, { since: "2026-09-01" })).status).toBe(202);
+    await finalSyncSettled();
+    expect((await admin.get(url)).json.state.results.tickets).toMatchObject({ state: "done", counts: { tickets: 1 } });
+    expect(await db().select().from(schema.tickets)).toHaveLength(1);
+    expect(await db().select().from(schema.ticketTimeEntries).where(eq(schema.ticketTimeEntries.ticketId, 9001))).toHaveLength(2);
+    expect(await db().select().from(schema.expenseReports).where(isNotNull(schema.expenseReports.autotaskId))).toHaveLength(3);
+    expect(await db().select().from(schema.expenses).where(isNotNull(schema.expenses.autotaskId))).toHaveLength(4);
+    expect((await admin.get(url)).json.state.files).toHaveLength(2);
   });
 });
