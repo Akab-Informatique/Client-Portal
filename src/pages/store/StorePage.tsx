@@ -19,8 +19,10 @@ import {
   SlidersHorizontal,
   Store,
   Warehouse,
+  Tag,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { LabelDialog } from "./LabelDialog";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { Input } from "@/components/ui/input";
@@ -98,7 +100,7 @@ export function StorePage() {
   const [q, setQ] = useState("");
   const [filter, setFilter] = useState<Filter>("all");
   const [dialog, setDialog] = useState<
-    { kind: "product"; product: Product | null } | { kind: "stock"; product: Product; mode: "receive" | "adjust" } | { kind: "history"; product: Product } | { kind: "locations" } | null
+    { kind: "product"; product: Product | null } | { kind: "stock"; product: Product; mode: "receive" | "adjust" } | { kind: "history"; product: Product } | { kind: "label"; product: Product } | { kind: "locations" } | null
   >(null);
 
   const shown = useMemo(() => {
@@ -215,6 +217,7 @@ export function StorePage() {
         <ReceiveDialog product={dialog.product} locations={data.locations} onClose={() => setDialog(null)} onLocations={() => setDialog({ kind: "locations" })} />
       )}
       {dialog?.kind === "stock" && data && dialog.mode === "adjust" && <AdjustDialog product={dialog.product} locations={data.locations} onClose={() => setDialog(null)} />}
+      {dialog?.kind === "label" && <LabelDialog product={dialog.product} onClose={() => setDialog(null)} />}
       {dialog?.kind === "history" && <HistoryDialog product={dialog.product} onClose={() => setDialog(null)} />}
       {dialog?.kind === "locations" && data && <LocationsDialog locations={data.locations} onClose={() => setDialog(null)} />}
     </div>
@@ -240,7 +243,7 @@ function Tile({ icon: Icon, label, value, hint, alert, onClick }: { icon: typeof
   );
 }
 
-type Open = (d: { kind: "product"; product: Product } | { kind: "stock"; product: Product; mode: "receive" | "adjust" } | { kind: "history"; product: Product }) => void;
+type Open = (d: { kind: "product"; product: Product } | { kind: "stock"; product: Product; mode: "receive" | "adjust" } | { kind: "history"; product: Product } | { kind: "label"; product: Product }) => void;
 
 function ProductRow({ p, manage, open }: { p: Product; manage: boolean; open: Open }) {
   const { t } = useTranslation();
@@ -299,6 +302,9 @@ function ProductRow({ p, manage, open }: { p: Product; manage: boolean; open: Op
                 <DropdownMenuSeparator />
               </>
             )}
+            <DropdownMenuItem onSelect={() => open({ kind: "label", product: p })}>
+              <Tag className="size-4" /> {t("store.label.button")}
+            </DropdownMenuItem>
             <DropdownMenuItem onSelect={() => open({ kind: "history", product: p })}>
               <History className="size-4" /> {t("store.history")}
             </DropdownMenuItem>

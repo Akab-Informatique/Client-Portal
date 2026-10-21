@@ -1498,6 +1498,9 @@ describe("tickets: client and contact", () => {
     expect((await take(3)).status).toBe(201);
     expect((await take(2)).json.error).toBe("insufficient_stock");
     expect((await take(0.5)).status).toBe(400);
+    // stock taken without serial numbers shows on the label too: the ticket and its client
+    const plain = (await admin.get(`/api/store/products/${ssd.id}/label`)).json;
+    expect(plain.assignments).toEqual([expect.objectContaining({ ticketId: tk.id, ticketNumber: tk.number, serial: null, client: tk.company.name })]);
     // without taking stock (bought for this client)
     expect((await tech.post(`/api/tickets/${tk.id}/charges`, { name: "SSD 1 To", quantity: 2, unitPrice: 189.99, storeProductId: ssd.id })).status).toBe(201);
     // a technician adds a product that does not exist yet
@@ -1556,6 +1559,13 @@ describe("tickets: client and contact", () => {
       ["receive", 3, ["FGT40F-A", "FGT40F-B", "FGT40F-C"]],
     ]);
     expect(moves[2]).toMatchObject({ supplier: "Synnex", reference: "PO-77", unitCostCents: 61000 });
+
+    // the label: the product, and where units and stock went (ticket and client)
+    const label = (await admin.get(`/api/store/products/${fw.id}/label`)).json;
+    expect(label.product).toMatchObject({ name: fw.name, sku: "FG-40F", priceCents: 79900 });
+    expect(label.assignments).toEqual([expect.objectContaining({ ticketId: tk.id, ticketNumber: tk.number, serial: "FGT40F-B", client: tk.company.name })]);
+    expect((await tech.get(`/api/store/products/${fw.id}/label`)).status).toBe(403);
+    expect((await admin.get("/api/store/products/00000000-0000-4000-8000-000000000000/label")).status).toBe(404);
   });
 
   it("priorities of the day / week: given by an admin, carried over until done, on the calendar", async () => {

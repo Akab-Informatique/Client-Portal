@@ -1,11 +1,12 @@
 import { Hono } from "hono";
 import { HTTPException } from "hono/http-exception";
-import { and, asc, desc, eq, ne } from "drizzle-orm";
+import { and, asc, desc, eq, inArray, ne } from "drizzle-orm";
 import { z } from "zod";
 import { db, schema } from "../db/index.ts";
 import { auth, requirePermission, requireStaff, type AppEnv } from "../lib/auth.ts";
 import { audit } from "../lib/audit.ts";
 import { body, zUuid } from "../lib/validate.ts";
+import { ticketSource } from "../lib/ticketSource.ts";
 import { adjustCount, productsWithStock, receiptsOf, receive, removeSerials, serialsOf, StoreError, suppliers } from "../lib/store.ts";
 
 const zCents = z.number().int().min(0).max(100_000_000);
@@ -169,6 +170,51 @@ export const storeRoutes = new Hono<AppEnv>()
   })
 
   .get("/products/:id/serials", async (c) => c.json(await serialsOf(zUuid.parse(c.req.param("id")))))
+  /**
+   * What the product label needs: the product and where it went — the units (serial numbers) or the stock
+   * taken for a ticket, with the ticket's number and client. Newest first.
+   */
+  .get("/products/:id/label", async (c) => {
+    const id = zUuid.parse(c.req.param("id"));
+    const [p] = await db().select().from(schema.storeProducts).where(eq(schema.storeProducts.id, id));
+    if (!p) throw new HTTPException(404, { message: "not_found" });
+    const [serials, moves] = await Promise.all([
+      db()
+        .select({ serial: schema.storeSerials.serial, ticketId: schema.storeSerials.ticketId, ticketNumber: schema.storeSerials.ticketNumber, at: schema.storeSerials.updatedAt })
+        .from(schema.storeSerials)
+        .where(and(eq(schema.storeSerials.productId, id), eq(schema.storeSerials.status, "used"))),
+      db()
+        .select({ ticketId: schema.storeMovements.ticketId, ticketNumber: schema.storeMovements.ticketNumber, serials: schema.storeMovements.serials, at: schema.storeMovements.createdAt })
+        .from(schema.storeMovements)
+        .where(and(eq(schema.storeMovements.productId, id), eq(schema.storeMovements.kind, "ticket"))),
+    ]);
+    const rows: { ticketId: number; ticketNumber: string | null; serial: string | null; at: Date }[] = [];
+    for (const r of serials) if (r.ticketId) rows.push({ ticketId: r.ticketId, ticketNumber: r.ticketNumber, serial: r.serial, at: r.at });
+    // stock taken without serial numbers: one line per ticket
+    const seen = new Set(rows.map((r) => r.ticketId));
+    for (const m of moves) if (m.ticketId && !m.serials.length && !seen.has(m.ticketId)) {
+      seen.add(m.ticketId);
+      rows.push({ ticketId: m.ticketId, ticketNumber: m.ticketNumber, serial: null, at: m.at });
+    }
+    // the client of each ticket: the portal's own tickets, else the ticket source
+    const ids = [...seen];
+    const own = ids.length ? await db().select({ id: schema.tickets.id, company: schema.tickets.companyName, number: schema.tickets.number }).from(schema.tickets).where(inArray(schema.tickets.id, ids)) : [];
+    const info = new Map(own.map((t) => [t.id, { client: t.company, number: t.number }]));
+    const missing = ids.filter((x) => !info.has(x));
+    if (missing.length) {
+      const src = await ticketSource();
+      for (const tid of missing.slice(0, 20)) {
+        const t = await src.get(tid).catch(() => null);
+        if (t) info.set(tid, { client: t.company.name, number: t.number });
+      }
+    }
+    return c.json({
+      product: { id: p.id, name: p.name, sku: p.sku, priceCents: p.priceCents, serialized: p.serialized },
+      assignments: rows
+        .sort((x, y) => y.at.getTime() - x.at.getTime())
+        .map((r) => ({ ticketId: r.ticketId, ticketNumber: info.get(r.ticketId)?.number ?? r.ticketNumber, client: info.get(r.ticketId)?.client ?? null, serial: r.serial, at: r.at })),
+    });
+  })
   .get("/products/:id/receipts", async (c) => c.json(await receiptsOf(zUuid.parse(c.req.param("id")))))
   .get("/suppliers", async (c) => c.json(await suppliers()))
 

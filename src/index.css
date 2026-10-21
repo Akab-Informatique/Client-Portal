@@ -517,3 +517,27 @@
     animation: none;
   }
 }
+
+/* Printing a product label (Inventory › Étiquette): only the 4 in × 2 in label, at the top left of the page */
+@media print {
+  html.printing-label body * {
+    visibility: hidden !important;
+  }
+  html.printing-label #akab-label,
+  html.printing-label #akab-label * {
+    visibility: visible !important;
+  }
+  html.printing-label #akab-label {
+    position: fixed !important;
+    left: 0 !important;
+    top: 0 !important;
+    margin: 0 !important;
+    box-shadow: none !important;
+    print-color-adjust: exact;
+    -webkit-print-color-adjust: exact;
+  }
+  html.printing-label,
+  html.printing-label body {
+    background: #fff !important;
+  }
+}

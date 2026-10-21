@@ -38,7 +38,7 @@ import {
   UserX,
   Wand2,
   X,
-  type LucideIcon, Star, Lock, GitMerge } from "lucide-react";
+  type LucideIcon, Star, Lock, GitMerge, ListChecks, Flag } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
@@ -101,6 +101,8 @@ export function TicketsPage() {
   const view = (VIEWS.includes(params.get("view") as View) ? params.get("view") : "mine") as View;
   const { data, isLoading, dataUpdatedAt, isFetching, refetch } = useTickets(view, params);
   const [creating, setCreating] = useState(false);
+  // tickets ticked in the list (several at a time: the bar above the filters)
+  const [picked, setPicked] = useState<Set<number>>(new Set());
   const qc = useQueryClient();
   // Texts pop-up: from the tile, or a notification (/tickets?sms=<conversation>)
   const [smsInbox, setSmsInbox] = useState<string | null>(null);
@@ -220,6 +222,17 @@ export function TicketsPage() {
         </div>
       </div>
 
+      {/* the tickets ticked in the list: a discreet bar, far left, above the other bars */}
+      {data && picked.size > 0 && (
+        <BulkBar
+          ids={[...picked].filter((id) => data.items.some((x) => x.id === id))}
+          facets={data.facets}
+          canEdit={can("tickets.edit")}
+          canDelete={can("tickets.delete")}
+          onClear={() => setPicked(new Set())}
+        />
+      )}
+
       {/* Left: the buttons, then the filters; right: the week, as tall as both (more room for the priorities) */}
       <div className="grid gap-3 lg:grid-cols-[minmax(0,1fr)_minmax(420px,0.9fr)] lg:items-stretch">
       <div className="flex min-w-0 flex-col gap-3">
@@ -295,6 +308,14 @@ export function TicketsPage() {
       <div className="glass overflow-hidden rounded-2xl border xl:overflow-x-auto" style={cols.vars as React.CSSProperties}>
         <ColumnHeader
           cols={cols}
+          selection={
+            data && data.items.length > 0
+              ? {
+                  state: data.items.every((x) => picked.has(x.id)) ? true : data.items.some((x) => picked.has(x.id)) ? "indeterminate" : false,
+                  onToggle: () => setPicked(data.items.every((x) => picked.has(x.id)) ? new Set() : new Set(data.items.map((x) => x.id))),
+                }
+              : undefined
+          }
           labels={{
             ticket: t("tickets.fields.ticket"),
             status: t("tickets.fields.status"),
@@ -335,6 +356,14 @@ export function TicketsPage() {
                 onPatch={(patch) => patchTicket.mutate({ id: tk.id, patch })}
                 // accept: the technician takes the ticket (in charge, with a delay)
                 onAccept={() => setAccepting(tk)}
+                picked={picked.has(tk.id)}
+                onPick={() =>
+                  setPicked((p) => {
+                    const n = new Set(p);
+                    if (!n.delete(tk.id)) n.add(tk.id);
+                    return n;
+                  })
+                }
                 onMerge={can("tickets.edit") && tk.statusKind !== "complete" ? () => setMerging(tk) : undefined}
                 onDelete={
                   can("tickets.delete")
@@ -796,6 +825,8 @@ function TicketRow({
   editable,
   onPatch,
   onAccept,
+  picked,
+  onPick,
   onMerge,
   onDelete,
   onHover,
@@ -808,6 +839,9 @@ function TicketRow({
   editable: boolean;
   onPatch: (patch: RowPatch) => void;
   onAccept: () => void;
+  /** Ticked in the list (several tickets at a time) */
+  picked: boolean;
+  onPick: () => void;
   /** Merge into another ticket of the client (open tickets, tickets.edit) */
   onMerge?: () => void;
   /** Only for those who may delete tickets */
@@ -842,14 +876,19 @@ function TicketRow({
         }}
         className={cn(
           "cursor-pointer outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-[color:var(--gold)]/50",
-          "group relative isolate grid w-full grid-cols-1 gap-x-3 gap-y-1.5 px-5 py-2.5 text-left transition-colors xl:min-w-[var(--tk-min)] xl:grid-cols-[var(--tk-cols)] xl:items-center",
+          "group relative isolate grid w-full grid-cols-1 gap-x-3 gap-y-1.5 pl-10 pr-5 py-2.5 text-left transition-colors xl:min-w-[var(--tk-min)] xl:grid-cols-[var(--tk-cols)] xl:items-center",
           "hover:bg-[linear-gradient(90deg,rgba(255,206,26,0.07),transparent_60%)]",
           active && "bg-[linear-gradient(90deg,rgba(255,206,26,0.1),transparent_70%)]",
+          picked && "bg-[color:var(--gold)]/[0.07]",
           // Critical pops and moves, high pops (open tickets only)
           tk.statusKind !== "complete" && tk.priorityKind === "critical" && "ticket-critical",
           tk.statusKind !== "complete" && tk.priorityKind === "high" && "ticket-high",
         )}
       >
+        {/* the small square to tick the ticket (out of the grid, like the line) */}
+        <span className="absolute left-[18px] top-1/2 z-10 -translate-y-1/2" onClick={(e) => e.stopPropagation()} onKeyDown={(e) => e.stopPropagation()}>
+          <Checkbox checked={picked} onCheckedChange={onPick} aria-label={t("tickets.bulk.pick", { number: tk.number })} className="size-3.5 rounded-[4px] border-muted-foreground/50" />
+        </span>
         {/* The line on the left: it glows with the due state and opens the row's menu (accept the ticket, open it, delete it) */}
         {(editable || onDelete || onMerge) && (
           // out of the grid (absolute): it must not take a column of the row
@@ -1468,7 +1507,7 @@ function useColumns() {
  * line shows where), drag the line between two titles to resize (double-click:
  * the usual width).
  */
-function ColumnHeader({ cols, labels }: { cols: ReturnType<typeof useColumns>; labels: Record<ColumnId, ReactNode> }) {
+function ColumnHeader({ cols, labels, selection }: { cols: ReturnType<typeof useColumns>; labels: Record<ColumnId, ReactNode>; selection?: { state: boolean | "indeterminate"; onToggle: () => void } }) {
   const { t } = useTranslation();
   const row = useRef<HTMLDivElement>(null);
   const [moving, setMoving] = useState<{ id: ColumnId; to: number; x: number } | null>(null);
@@ -1494,8 +1533,13 @@ function ColumnHeader({ cols, labels }: { cols: ReturnType<typeof useColumns>; l
   return (
     <div
       ref={row}
-      className="relative hidden select-none grid-cols-[var(--tk-cols)] gap-3 xl:min-w-[var(--tk-min)] border-b border-[color:var(--glass-border)] bg-white/[0.02] px-5 font-mono text-[10px] uppercase tracking-[0.12em] text-muted-foreground xl:grid"
+      className="relative hidden select-none grid-cols-[var(--tk-cols)] gap-3 xl:min-w-[var(--tk-min)] border-b border-[color:var(--glass-border)] bg-white/[0.02] pl-10 pr-5 font-mono text-[10px] uppercase tracking-[0.12em] text-muted-foreground xl:grid"
     >
+      {selection && (
+        <span className="absolute left-[18px] top-1/2 z-10 -translate-y-1/2">
+          <Checkbox checked={selection.state} onCheckedChange={selection.onToggle} aria-label={t("tickets.bulk.all")} title={t("tickets.bulk.all")} className="size-3.5 rounded-[4px] border-muted-foreground/50" />
+        </span>
+      )}
       {cols.order.map((id, i) => (
         <div
           key={id}
@@ -1781,5 +1825,103 @@ function StartCell({ tk, editable }: { tk: TicketSummary; editable: boolean }) {
         <ConfirmRow saving={save.isPending} onSave={confirm} onCancel={() => setOpen(false)} />
       </PopoverContent>
     </Popover>
+  );
+}
+
+/**
+ * The bar for the tickets ticked in the list: assign, status, priority, delete — each applied to every
+ * ticked ticket (one change per ticket, the same rules as in the row).
+ */
+function BulkBar({ ids, facets, canEdit, canDelete, onClear }: { ids: number[]; facets: TicketList["facets"]; canEdit: boolean; canDelete: boolean; onClear: () => void }) {
+  const { t } = useTranslation();
+  const txt = useChoiceText();
+  const qc = useQueryClient();
+  const confirm = useConfirm();
+  const run = useMutation({
+    mutationFn: async (job: { patch?: RowPatch; remove?: boolean }) => {
+      const results = await Promise.allSettled(ids.map((id) => (job.remove ? api.del(`/tickets/${id}`) : api.patch(`/tickets/${id}`, job.patch))));
+      return { ok: results.filter((r) => r.status === "fulfilled").length, failed: results.filter((r) => r.status === "rejected").length };
+    },
+    onSuccess: (r) => {
+      void qc.invalidateQueries({ queryKey: ["tickets"] });
+      void qc.invalidateQueries({ queryKey: ["meetings"] });
+      if (r.failed) toast.error(t("tickets.bulk.partial", { ok: r.ok, failed: r.failed }));
+      else toast.success(t("tickets.bulk.done", { count: r.ok }));
+      onClear();
+    },
+    onError: (e) => toast.error(ticketErrorText(t, e)),
+  });
+  const busy = run.isPending;
+  const pick = (Icon: LucideIcon, label: string, children: ReactNode) => (
+    <DropdownMenu>
+      <DropdownMenuTrigger asChild>
+        <Button variant="ghost" size="sm" disabled={busy} className="h-7 gap-1 px-2 text-xs">
+          <Icon className="size-3.5" /> {label}
+        </Button>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="start" className="max-h-72 min-w-44 overflow-y-auto">
+        {children}
+      </DropdownMenuContent>
+    </DropdownMenu>
+  );
+  return (
+    <div className="flex w-fit max-w-full flex-wrap items-center gap-0.5 rounded-xl border border-[color:var(--gold)]/30 bg-[color:var(--gold)]/[0.06] px-2 py-1 backdrop-blur">
+      <span className="px-1.5 text-xs font-medium text-primary">{t("tickets.bulk.selected", { count: ids.length })}</span>
+      {busy && <Loader2 className="size-3.5 animate-spin text-muted-foreground" />}
+      {canEdit && (
+        <>
+          {pick(
+            UserRound,
+            t("tickets.bulk.assign"),
+            <>
+              <DropdownMenuItem onSelect={() => run.mutate({ patch: { assigneeId: null } })}>
+                <UserX className="size-4" /> {t("tickets.unassigned")}
+              </DropdownMenuItem>
+              {facets.technicians.map((p) => (
+                <DropdownMenuItem key={p.id} onSelect={() => run.mutate({ patch: { assigneeId: p.id } })}>
+                  {p.name}
+                </DropdownMenuItem>
+              ))}
+            </>,
+          )}
+          {pick(
+            ListChecks,
+            t("tickets.fields.status"),
+            facets.statuses
+              .filter((s) => !s.hidden)
+              .map((s) => (
+                <DropdownMenuItem key={s.value} onSelect={() => run.mutate({ patch: { status: s.value } })}>
+                  {txt.status(s)}
+                </DropdownMenuItem>
+              )),
+          )}
+          {pick(
+            Flag,
+            t("tickets.fields.priority"),
+            facets.priorities.map((p) => (
+              <DropdownMenuItem key={p.value} onSelect={() => run.mutate({ patch: { priority: p.value } })}>
+                <span className={cn("size-2 rounded-full", PRIORITY_STYLE[p.kind].dot)} /> {txt.priority(p)}
+              </DropdownMenuItem>
+            )),
+          )}
+        </>
+      )}
+      {canDelete && (
+        <Button
+          variant="ghost"
+          size="sm"
+          disabled={busy}
+          className="h-7 gap-1 px-2 text-xs text-muted-foreground hover:text-destructive"
+          onClick={() =>
+            void confirm({ title: t("tickets.bulk.deleteTitle", { count: ids.length }), description: t("tickets.delete.text"), confirmLabel: t("tickets.delete.confirm"), destructive: true }).then((ok) => ok && run.mutate({ remove: true }))
+          }
+        >
+          <Trash2 className="size-3.5" /> {t("tickets.delete.button")}
+        </Button>
+      )}
+      <Button variant="ghost" size="icon" className="size-7" onClick={onClear} aria-label={t("tickets.bulk.clear")} title={t("tickets.bulk.clear")}>
+        <X className="size-3.5" />
+      </Button>
+    </div>
   );
 }
