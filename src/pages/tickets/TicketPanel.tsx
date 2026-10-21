@@ -1661,12 +1661,20 @@ function NoteComposer({
     requestAnimationFrame(() => ref.current?.focus());
   }, [focusRequest]);
   const [focused, setFocused] = useState(false);
+  // a reply also goes by email to the ticket's contact, unless switched off for this one
+  const contactEmail = tk.contactInfo?.email ?? null;
+  const [emailIt, setEmailIt] = useState(true);
   const send = useMutation({
-    mutationFn: () => api.post(`/tickets/${tk.id}/notes`, { text, internal }),
-    onSuccess: () => {
+    mutationFn: () => api.post<{ emailed?: boolean; to?: string | null; noContactEmail?: boolean }>(`/tickets/${tk.id}/notes`, { text, internal, ...(internal ? {} : { email: emailIt }) }),
+    onSuccess: (r) => {
       setText("");
+      setEmailIt(true);
       void qc.invalidateQueries({ queryKey: ["tickets", "detail", tk.id] });
-      toast.success(internal ? t("tickets.noteAdded") : t("tickets.replySent"));
+      if (internal) toast.success(t("tickets.noteAdded"));
+      else if (r.emailed) toast.success(t("tickets.replySentEmail", { to: r.to ?? "" }));
+      else if (emailIt && r.noContactEmail) toast.warning(t("tickets.replyNoEmail"));
+      else if (emailIt && r.to) toast.error(t("tickets.replyEmailFailed", { to: r.to }));
+      else toast.success(t("tickets.replySent"));
     },
     onError: (e) => toast.error(ticketErrorText(t, e)),
   });
@@ -1705,6 +1713,13 @@ function NoteComposer({
         placeholder={internal ? t("tickets.notePlaceholderInternal") : t("tickets.notePlaceholder")}
         className="resize-y transition-[height]"
       />
+      {!internal && (
+        <label className={cn("mt-2 flex items-center gap-2 text-xs", contactEmail ? "text-muted-foreground" : "text-muted-foreground/60")} title={contactEmail ? undefined : t("tickets.replyNoEmail")}>
+          <Switch checked={emailIt && Boolean(contactEmail)} disabled={!contactEmail} onCheckedChange={setEmailIt} aria-label={t("tickets.replyEmailToggle")} />
+          <Mail className="size-3.5" />
+          {contactEmail ? t("tickets.replyEmailTo", { name: tk.contact || contactEmail, email: contactEmail }) : t("tickets.replyNoEmail")}
+        </label>
+      )}
       <div className="mt-2 flex items-center justify-between gap-3">
         <span className="text-[11px] text-muted-foreground">{t("tickets.noteSendHint")}</span>
         <Button size="sm" disabled={!text.trim() || send.isPending} onClick={() => send.mutate()} className={cn(!internal && "bg-grad-gold text-[#1a1204]")}>

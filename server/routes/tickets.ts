@@ -2,6 +2,7 @@ import { Hono, type Context } from "hono";
 import { HTTPException } from "hono/http-exception";
 import { localAssets } from "../lib/queues.ts";
 import { clientInfo } from "../lib/clientHours.ts";
+import { intakeSettings } from "../lib/mailIntake.ts";
 import { contractOfTicket, contractsOfCompany, setTicketContract, type ContractView } from "../lib/contracts.ts";
 import { and, asc, desc, eq, inArray, isNull, or, sql } from "drizzle-orm";
 import { z } from "zod";
@@ -287,6 +288,29 @@ async function notifyWork(
   // the client portal too: whoever got the email and has an account there sees it on their bell
   const inPortal = await tellClientUsers(tk, to, summary, a);
   return { to, failed, noContactEmail: n.contact && !contactEmail, inPortal };
+}
+
+/**
+ * A reply to the client, by email to the ticket's contact too. The ticket number is in the subject, so
+ * their answer — to the support mailbox, which is set as the reply address when it is read by the portal —
+ * lands on this ticket. Returns what happened for the screen.
+ */
+async function emailReply(src: TicketSource, id: number, text: string, a: AuthContext): Promise<{ emailed: boolean; to: string | null; noContactEmail: boolean }> {
+  const tk = await src.get(id).catch(() => null);
+  if (!tk) return { emailed: false, to: null, noContactEmail: false };
+  const contact = tk.contactId ? ((await src.contacts(tk.company.id).catch(() => [])).find((x) => x.id === tk.contactId) ?? null) : null;
+  const to = contact?.email?.trim().toLowerCase() || null;
+  if (!to) return { emailed: false, to: null, noContactEmail: true };
+  const hello = contact?.name ? `Bonjour ${contact.name},` : "Bonjour,";
+  const subject = `[${tk.number}] ${tk.title}`.slice(0, 250);
+  const foot = "Vous pouvez répondre directement à ce courriel.";
+  const sign = `${a.realUser.name}\nAKAB Informatique`;
+  const mailText = [hello, "", text, "", "—", sign, "", foot].join("\n");
+  const html = `<p>${escHtml(hello)}</p><p style="white-space:pre-wrap">${escHtml(text)}</p><p>—<br>${escHtml(a.realUser.name)}<br>AKAB Informatique</p><p style="color:#777;font-size:12px">${escHtml(foot)} (${escHtml(tk.number)})</p>`;
+  const intake = await intakeSettings().catch(() => null);
+  const ok = await sendMail({ to, subject, text: mailText, html, ...(intake?.enabled && intake.mailbox ? { replyTo: intake.mailbox } : {}) });
+  await audit(a.user.id, ok ? "ticket.reply_emailed" : "ticket.reply_email_failed", String(id), { to });
+  return { emailed: ok, to, noContactEmail: false };
 }
 
 /**
@@ -1300,10 +1324,12 @@ export const ticketRoutes = new Hono<AppEnv>()
   .post("/:id/notes", requirePermission("tickets.edit"), async (c) => {
     const a = auth(c);
     const id = Number(c.req.param("id"));
-    const p = await body(c, z.object({ text: z.string().trim().min(1).max(8000), internal: z.boolean() }));
+    // email: a reply to the client is also emailed to the ticket's contact unless the technician says not to
+    const p = await body(c, z.object({ text: z.string().trim().min(1).max(8000), internal: z.boolean(), email: z.boolean().optional() }));
     const src = await ticketSource();
-    await run(() => src.addNote(id, p, a));
-    return c.json({ ok: true }, 201);
+    await run(() => src.addNote(id, { text: p.text, internal: p.internal }, a));
+    const mail = !p.internal && p.email !== false ? await emailReply(src, id, p.text, a) : null;
+    return c.json({ ok: true, ...(mail ?? {}) }, 201);
   })
 
   /**

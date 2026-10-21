@@ -6,7 +6,7 @@ import { seal, unseal } from "./crypto.ts";
 import { renderTemplate, type Locale, type TemplateKey } from "./emailTemplates.ts";
 
 export { escapeHtml } from "./emailTemplates.ts";
-export type Mail = { to: string; subject: string; text: string; html: string };
+export type Mail = { to: string; subject: string; text: string; html: string; /** Where the answers go (e.g. the support mailbox) */ replyTo?: string };
 
 /**
  * Outgoing mail server. Settings saved in Admin settings › Email (password
@@ -151,7 +151,7 @@ export async function sendMail(mail: Mail): Promise<boolean> {
     transporter = { key, t: createTransport(s) };
   }
   try {
-    await transporter.t.sendMail({ from: { name: s.fromName, address: s.from }, to: mail.to, subject: mail.subject, text: mail.text, html: mail.html });
+    await transporter.t.sendMail({ from: { name: s.fromName, address: s.from }, to: mail.to, ...(mail.replyTo ? { replyTo: mail.replyTo } : {}), subject: mail.subject, text: mail.text, html: mail.html });
     return true;
   } catch (e) {
     console.error(`[mail] send failed:`, e instanceof Error ? e.message : e);

@@ -3026,6 +3026,11 @@ const fr = {
         custom: "Date précise…",
       },
     },
+    replyEmailToggle: "Envoyer aussi par courriel",
+    replyEmailTo: "Envoyer aussi par courriel à {{name}} ({{email}})",
+    replyNoEmail: "Aucun courriel au dossier du contact : la réponse reste dans le portail.",
+    replySentEmail: "Réponse enregistrée et envoyée par courriel à {{to}}.",
+    replyEmailFailed: "Réponse enregistrée, mais le courriel à {{to}} n'est pas parti (serveur de courriel).",
     rowMenu: {"assign":"Assigner à…","assignMe":"{{name}} (moi)","title":"Actions du billet","accept":"Accepter le billet (me l'assigner)","open":"Ouvrir le billet"},
     tileBar: {
       collapse: "Réduire les carrés",

@@ -5248,3 +5248,43 @@ describe("services on a contract, with their prorata", () => {
     expect((await tech.get(base)).json).toHaveLength(2);
   });
 });
+
+describe("a reply to the client is also emailed to the ticket's contact", () => {
+  it("emailed by default with the ticket number in the subject; not for notes, nor when switched off, nor without an email", async () => {
+    resetRateLimit("login:ip:unknown");
+    const tech = await signIn("tech@akab.local");
+    const { devOutbox } = await import("../server/lib/mail.ts");
+    const items = (await tech.get("/api/tickets?view=all")).json.items;
+    const withContact = items.find((x: any) => x.contactId && x.company.id === 300);
+    const detail = (await tech.get(`/api/tickets/${withContact.id}`)).json;
+    expect(detail.contactInfo.email).toBeTruthy();
+
+    // a reply: saved in the portal and emailed
+    devOutbox.length = 0;
+    const r = await tech.post(`/api/tickets/${withContact.id}/notes`, { text: "Le correctif est en place, redémarrez le poste.", internal: false });
+    expect(r.status).toBe(201);
+    expect(r.json).toMatchObject({ ok: true, emailed: true, to: detail.contactInfo.email.toLowerCase() });
+    expect(devOutbox).toHaveLength(1);
+    expect(devOutbox[0]).toMatchObject({ to: detail.contactInfo.email.toLowerCase() });
+    expect(devOutbox[0]!.subject).toContain(`[${withContact.number}]`);
+    expect(devOutbox[0]!.text).toContain("Le correctif est en place");
+    const notes = (await tech.get(`/api/tickets/${withContact.id}`)).json.notes;
+    expect(notes.some((n: any) => n.text.includes("Le correctif est en place") && !n.internal)).toBe(true);
+
+    // an internal note, or a reply with the email switched off: nothing goes out
+    devOutbox.length = 0;
+    expect((await tech.post(`/api/tickets/${withContact.id}/notes`, { text: "Note d'équipe", internal: true })).json.emailed).toBeUndefined();
+    const off = await tech.post(`/api/tickets/${withContact.id}/notes`, { text: "Réponse sans courriel", internal: false, email: false });
+    expect(off.status).toBe(201);
+    expect(off.json.emailed).toBeUndefined();
+    expect(devOutbox).toHaveLength(0);
+
+    // no contact on the ticket: the reply stays in the portal, and the screen is told
+    const noContact = items.find((x: any) => !x.contactId);
+    if (noContact) {
+      const n = await tech.post(`/api/tickets/${noContact.id}/notes`, { text: "Réponse sans contact", internal: false });
+      expect(n.json).toMatchObject({ ok: true, emailed: false, noContactEmail: true });
+      expect(devOutbox).toHaveLength(0);
+    }
+  });
+});

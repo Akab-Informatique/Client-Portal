@@ -3028,6 +3028,11 @@ const en: Dict = {
         custom: "A date…",
       },
     },
+    replyEmailToggle: "Also send by email",
+    replyEmailTo: "Also email {{name}} ({{email}})",
+    replyNoEmail: "No email on file for the contact: the reply stays in the portal.",
+    replySentEmail: "Reply saved and emailed to {{to}}.",
+    replyEmailFailed: "Reply saved, but the email to {{to}} did not go out (mail server).",
     rowMenu: {"assign":"Assign to…","assignMe":"{{name}} (me)","title":"Ticket actions","accept":"Accept the ticket (assign it to me)","open":"Open the ticket"},
     tileBar: {
       collapse: "Collapse the squares",
