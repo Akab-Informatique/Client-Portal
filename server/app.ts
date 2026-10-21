@@ -28,6 +28,7 @@ import { dashboardsRoutes } from "./routes/dashboards.ts";
 import { viewAsRoutes } from "./routes/viewAs.ts";
 import { notificationRoutes } from "./routes/notifications.ts";
 import { ticketRoutes } from "./routes/tickets.ts";
+import { quoteRoutes } from "./routes/quotes.ts";
 import { storeRoutes } from "./routes/store.ts";
 import { pipelineRoutes } from "./routes/pipeline.ts";
 import { planningRoutes } from "./routes/planning.ts";
@@ -101,6 +102,7 @@ export function createApp() {
   api.route("/admin", adminRoutes);
   api.use("/messages/*", requireStaff);
   api.route("/store", storeRoutes);
+  api.route("/quotes", quoteRoutes);
   api.route("/pipeline", pipelineRoutes);
   api.route("/services", serviceRoutes);
   api.route("/planning", planningRoutes);

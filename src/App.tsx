@@ -28,6 +28,8 @@ const TimesheetPage = lazy(() => pageLoaders.timesheet().then((m) => ({ default:
 const ExpensesPage = lazy(() => pageLoaders.expenses().then((m) => ({ default: m.ExpensesPage })));
 const ApprovalsPage = lazy(() => pageLoaders.approvals().then((m) => ({ default: m.ApprovalsPage })));
 const PaymentsPage = lazy(() => pageLoaders.payments().then((m) => ({ default: m.PaymentsPage })));
+const QuotesPage = lazy(() => pageLoaders.quotes().then((m) => ({ default: m.QuotesPage })));
+const QuoteEditor = lazy(() => pageLoaders.quote().then((m) => ({ default: m.QuoteEditor })));
 const AccountingPage = lazy(() => pageLoaders.accounting().then((m) => ({ default: m.AccountingPage })));
 const ClientHome = lazy(() => import("@/pages/client/ClientHome").then((m) => ({ default: m.ClientHome })));
 const ClientLayout = lazy(() => import("@/layouts/ClientLayout").then((m) => ({ default: m.ClientLayout })));
@@ -106,7 +108,8 @@ function StaffApp() {
         <Route path="expenses" element={<Guard permission="timesheets.use"><ExpensesPage /></Guard>} />
         <Route path="accounting/approvals" element={<Guard permission="accounting.view"><ApprovalsPage /></Guard>} />
         <Route path="accounting/payments" element={<Guard permission="accounting.view"><PaymentsPage /></Guard>} />
-        <Route path="accounting/quotes" element={<Guard permission="accounting.view"><AccountingPage kind="quotes" /></Guard>} />
+        <Route path="accounting/quotes" element={<Guard permission="quotes.view"><QuotesPage /></Guard>} />
+        <Route path="accounting/quotes/:id" element={<Guard permission="quotes.view"><QuoteEditor /></Guard>} />
         <Route path="*" element={<Navigate to="/" replace />} />
       </Route>
     </Routes>

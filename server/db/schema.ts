@@ -2078,3 +2078,75 @@ export type PipelineBlock = {
   /** Not shown in detail to this viewer (a private event or task) */
   masked?: boolean;
 };
+
+// ── Quotes (soumissions) ──────────────────────────────────────────────────────
+/**
+ * A quote for a client (or a prospect not yet in the CRM). Lines are typed on
+ * the spot or picked from the inventory; the totals are always computed from
+ * the lines. Money in cents, quantities ×100.
+ */
+export const quotes = pgTable(
+  "quotes",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    /** "S-1001": the next one is the highest + 1 */
+    number: text("number").notNull(),
+    clientId: uuid("client_id").references(() => clients.id, { onDelete: "set null" }),
+    /** Who it is for when there is no client yet */
+    prospectName: text("prospect_name"),
+    contactName: text("contact_name"),
+    contactEmail: text("contact_email"),
+    title: text("title").notNull().default(""),
+    /** draft | sent | accepted | declined */
+    status: text("status").notNull().default("draft"),
+    /** standard | site_visit (a new client: the IT checklist is filled in during the visit) */
+    kind: text("kind").notNull().default("standard"),
+    /** The answers of the site visit checklist, by field key (shared/quoteSurvey.ts) */
+    survey: jsonb("survey").$type<Record<string, string>>().notNull().default({}),
+    /** YYYY-MM-DD */
+    issuedOn: text("issued_on").notNull(),
+    validUntil: text("valid_until"),
+    /** GST / QST charged on the taxable lines (false: exempt) */
+    taxes: boolean("taxes").notNull().default(true),
+    /** Shown to the client */
+    notes: text("notes"),
+    /** Internal only */
+    internalNotes: text("internal_notes"),
+    createdBy: uuid("created_by").references(() => users.id, { onDelete: "set null" }),
+    /** The technician who prepared it: shown on the sheet (starts as who created it) */
+    preparedBy: uuid("prepared_by").references(() => users.id, { onDelete: "set null" }),
+    /** The project ticket made from this quote (Vente › Dernières soumissions) and its point in the weekly meeting */
+    projectTicketId: bigint("project_ticket_id", { mode: "number" }),
+    projectTicketNumber: text("project_ticket_number"),
+    meetingPointId: uuid("meeting_point_id").references(() => meetingPoints.id, { onDelete: "set null" }),
+    projectAt: timestamp("project_at", { withTimezone: true }),
+    sentAt: timestamp("sent_at", { withTimezone: true }),
+    decidedAt: timestamp("decided_at", { withTimezone: true }),
+    createdAt: created(),
+    updatedAt: updated(),
+  },
+  (t) => [uniqueIndex("quotes_number_unique").on(t.number), index("quotes_client_idx").on(t.clientId), index("quotes_status_idx").on(t.status, t.issuedOn)],
+);
+
+export const quoteLines = pgTable(
+  "quote_lines",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    quoteId: uuid("quote_id")
+      .notNull()
+      .references(() => quotes.id, { onDelete: "cascade" }),
+    /** The inventory product it came from (null: typed on the spot) */
+    productId: uuid("product_id").references(() => storeProducts.id, { onDelete: "set null" }),
+    sku: text("sku"),
+    description: text("description").notNull(),
+    quantityX100: integer("quantity_x100").notNull().default(100),
+    unitPriceCents: bigint("unit_price_cents", { mode: "number" }).notNull().default(0),
+    /** What it costs AKAB, for the margin (internal) */
+    unitCostCents: bigint("unit_cost_cents", { mode: "number" }).notNull().default(0),
+    taxable: boolean("taxable").notNull().default(true),
+    /** An option offered to the client: shown, but not in the total */
+    optional: boolean("optional").notNull().default(false),
+    position: integer("position").notNull().default(0),
+  },
+  (t) => [index("quote_lines_quote_idx").on(t.quoteId, t.position), index("quote_lines_product_idx").on(t.productId)],
+);

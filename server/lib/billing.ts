@@ -28,7 +28,7 @@ export const DEFAULT_BILLING: BillingSettings = {
   // the numbers start at 10000: the portal carries on after the highest one
   numbering: { prefix: "", next: 10000, digits: 5 },
   taxes: { gstNumber: "", qstNumber: "", gstRate: 5, qstRate: 9.975 },
-  company: { legalName: "AKAB Informatique", address: "", phone: "", email: "", website: "akab.ca" },
+  company: { legalName: "AKAB Informatique", address: "5, rue Industrielle\nSaint-Roch-de-l'Achigan (Québec)  J0K 3H0", phone: "450-834-3344", email: "", website: "akab.ca" },
   template: { language: "fr", termsDays: 30, footer: "Merci de votre confiance !", paymentInstructions: "", showPaymentLink: true },
   accounts: { receivable: null, bank: null, labour: null, charges: null, contracts: null, gst: null, qst: null },
   autotask: { invoicesSince: "2026-09-01", invoiceMinNumber: 10000, itemsSince: "2026-09-01" },

@@ -582,6 +582,34 @@
       "when": 1792555670247,
       "tag": "0082_week_brief",
       "breakpoints": true
+    },
+    {
+      "idx": 83,
+      "version": "7",
+      "when": 1792594561169,
+      "tag": "0083_complete_riptide",
+      "breakpoints": true
+    },
+    {
+      "idx": 84,
+      "version": "7",
+      "when": 1792594947283,
+      "tag": "0084_unusual_squadron_sinister",
+      "breakpoints": true
+    },
+    {
+      "idx": 85,
+      "version": "7",
+      "when": 1792596268024,
+      "tag": "0085_wooden_stick",
+      "breakpoints": true
+    },
+    {
+      "idx": 86,
+      "version": "7",
+      "when": 1792596460531,
+      "tag": "0086_sleepy_wiccan",
+      "breakpoints": true
     }
   ]
 }

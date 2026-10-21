@@ -1,0 +1,2 @@
+ALTER TABLE "quotes" ADD COLUMN "prepared_by" uuid;--> statement-breakpoint
+ALTER TABLE "quotes" ADD CONSTRAINT "quotes_prepared_by_users_id_fk" FOREIGN KEY ("prepared_by") REFERENCES "public"."users"("id") ON DELETE set null ON UPDATE no action;

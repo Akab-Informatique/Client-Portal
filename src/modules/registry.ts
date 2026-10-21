@@ -1,4 +1,4 @@
-import { Workflow, Coffee, CreditCard, BarChart3, BookOpen, FolderKanban, ClipboardCheck, Building2, CalendarCheck, Clock, FileSignature, LayoutDashboard, Mail, Megaphone, MonitorSmartphone, Receipt, Store, Ticket, Wallet, Wrench, type LucideIcon } from "lucide-react";
+import { FilePlus2, History, Workflow, Coffee, CreditCard, BarChart3, BookOpen, FolderKanban, ClipboardCheck, Building2, CalendarCheck, Clock, FileSignature, LayoutDashboard, Mail, Megaphone, MonitorSmartphone, Receipt, Store, Ticket, Wallet, Wrench, type LucideIcon } from "lucide-react";
 import type { PermissionKey } from "@shared/permissions";
 
 /**
@@ -13,6 +13,7 @@ export const NAV_SECTIONS = [
   { key: "command", labelKey: "nav.commandCenter" },
   { key: "projects", labelKey: "nav.projectsSection" },
   { key: "management", labelKey: "nav.management" },
+  { key: "sales", labelKey: "nav.sales" },
   { key: "accounting", labelKey: "nav.accounting" },
 ] as const;
 export type NavSection = (typeof NAV_SECTIONS)[number]["key"];
@@ -44,7 +45,8 @@ export const STAFF_MODULES: NavModule[] = [
   { key: "invoices", path: "/accounting/invoices", labelKey: "nav.invoices", icon: Receipt, section: "accounting", permission: "accounting.view" },
   { key: "approvals", path: "/accounting/approvals", labelKey: "nav.approvals", icon: ClipboardCheck, section: "accounting", permission: "accounting.view" },
   { key: "payments", path: "/accounting/payments", labelKey: "nav.payments", icon: CreditCard, section: "accounting", permission: "accounting.view" },
-  { key: "quotes", path: "/accounting/quotes", labelKey: "nav.quotes", icon: FileSignature, section: "accounting", permission: "accounting.view" },
+  { key: "quotes", path: "/accounting/quotes", labelKey: "nav.quotesLatest", icon: History, section: "sales", permission: "quotes.view" },
+  { key: "quotesNew", path: "/accounting/quotes/new", labelKey: "nav.quotesNew", icon: FilePlus2, section: "sales", permission: "quotes.manage" },
   { key: "store", path: "/store", labelKey: "nav.store", icon: Store, section: "management", permission: "store.view" },
   { key: "services", path: "/services", labelKey: "nav.services", icon: Wrench, section: "management", permission: "services.view" },
   { key: "projects", path: "/projects", labelKey: "nav.projects", icon: FolderKanban, section: "projects", upcoming: true },

@@ -541,3 +541,34 @@
     background: #fff !important;
   }
 }
+
+/* A quote printed or saved as PDF: only the white sheet, on letter paper */
+@media print {
+  html.printing-quote body > *:not(.quote-overlay) {
+    display: none !important;
+  }
+  html.printing-quote .no-print {
+    display: none !important;
+  }
+  html.printing-quote .quote-overlay {
+    position: static !important;
+    overflow: visible !important;
+    background: none !important;
+    padding: 0 !important;
+  }
+  html.printing-quote .quote-sheet {
+    max-width: none !important;
+    border-radius: 0 !important;
+    box-shadow: none !important;
+    print-color-adjust: exact;
+    -webkit-print-color-adjust: exact;
+  }
+  html.printing-quote,
+  html.printing-quote body {
+    background: #fff !important;
+  }
+  @page {
+    size: letter;
+    margin: 10mm;
+  }
+}

@@ -148,6 +148,19 @@ export const MODULES = [
     ],
   },
   {
+    key: "quotes",
+    audience: "staff",
+    label: { fr: "Soumissions", en: "Quotes" },
+    permissions: [
+      { key: "quotes.view", label: { fr: "Voir les soumissions", en: "View quotes" }, description: { fr: "Liste, détail et marges", en: "List, detail and margins" } },
+      {
+        key: "quotes.manage",
+        label: { fr: "Gérer les soumissions", en: "Manage quotes" },
+        description: { fr: "Créer, modifier, dupliquer, changer le statut et supprimer", en: "Create, edit, duplicate, change the status and delete" },
+      },
+    ],
+  },
+  {
     key: "messages",
     audience: "staff",
     label: { fr: "Babillard", en: "Message board" },
@@ -495,6 +508,7 @@ export const ACCESS_LAYOUT: { key: string; audience: Audience; label: Localized;
   { key: "tools", audience: "staff", label: { fr: "Mes outils", en: "My tools" }, modules: ["pipeline", "outlook", "timesheets"] },
   { key: "command", audience: "staff", label: { fr: "Centre de commande", en: "Command center" }, modules: ["messages", "tickets", "sms"] },
   { key: "management", audience: "staff", label: { fr: "Gestion", en: "Management" }, modules: ["crm", "clientview", "store", "services"] },
+  { key: "sales", audience: "staff", label: { fr: "Vente", en: "Sales" }, modules: ["quotes"] },
   { key: "accounting", audience: "staff", label: { fr: "Comptabilité", en: "Accounting" }, modules: ["accounting"] },
   { key: "admin", audience: "staff", label: { fr: "Paramètres admin", en: "Admin settings" }, modules: ["admin"] },
   { key: "clientBoard", audience: "client", label: { fr: "Babillard", en: "Message board" }, modules: ["board"] },

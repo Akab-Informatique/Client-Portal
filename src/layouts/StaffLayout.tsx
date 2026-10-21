@@ -218,7 +218,12 @@ function SidebarContent({ collapsed, onToggle }: { collapsed: boolean; onToggle?
   const location = useLocation();
   const me = useMe();
   const visible = (m: NavModule) => m.upcoming || moduleVisible(m, me, can);
-  const isActive = (path: string) => (path === "/" ? location.pathname === "/" : location.pathname.startsWith(path));
+  // the entry with the longest matching path is the one shown (Nouvelle soumission over Dernières soumissions)
+  const isActive = (path: string) => {
+    if (path === "/") return location.pathname === "/";
+    if (!location.pathname.startsWith(path)) return false;
+    return !STAFF_MODULES.some((x) => !x.upcoming && x.path.length > path.length && x.path.startsWith(path) && location.pathname.startsWith(x.path));
+  };
   // Each section shows its modules; upcoming ones greyed out, after the live ones
   const groups = [
     ...NAV_SECTIONS.map((s) => ({

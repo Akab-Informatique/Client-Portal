@@ -1519,6 +1519,117 @@ describe("tickets: client and contact", () => {
     expect(moves[0].user).toBe("Alex Tremblay");
   });
 
+  it("quotes: lines from the inventory or typed on the spot, totals, statuses, a line saved to the inventory", async () => {
+    const admin = await session("admin@akab.local");
+    const tech = await session("tech@akab.local");
+    // reserved to quotes.view / quotes.manage (technicians have neither by default)
+    expect((await tech.get("/api/quotes")).status).toBe(403);
+    const dock = (await admin.post("/api/store/products", { sku: "DOCK-USBC", name: "Station d'accueil USB-C", priceCents: 14999, costCents: 9000 })).json;
+    const [client] = (await admin.get("/api/quotes/clients")).json;
+    expect(client).toMatchObject({ id: expect.any(String), taxes: true });
+    // nobody to quote for
+    expect((await admin.post("/api/quotes", { title: "Vide", lines: [] })).json.error).toBe("quote_who_required");
+    expect((await admin.post("/api/quotes", { prospectName: "X", lines: [{ productId: "00000000-0000-4000-8000-000000000000", description: "?", quantityX100: 100, unitPriceCents: 1 }] })).json.error).toBe("product_not_found");
+
+    // a quote with an inventory product (qty 2), a device typed on the spot, and an option
+    const made = await admin.post("/api/quotes", {
+      clientId: client.id,
+      title: "Remplacement de postes",
+      lines: [
+        { productId: dock.id, sku: "DOCK-USBC", description: dock.name, quantityX100: 200, unitPriceCents: 14999, unitCostCents: 9000 },
+        { description: "Portable Latitude 5450", quantityX100: 100, unitPriceCents: 129900, unitCostCents: 98000 },
+        { description: "Garantie 3 ans (option)", quantityX100: 100, unitPriceCents: 20000, optional: true },
+      ],
+    });
+    expect(made.status).toBe(201);
+    const q = made.json;
+    expect(q.number).toMatch(/^S-\d+$/);
+    expect(q.status).toBe("draft");
+    // (2 × 149.99) + 1299.00 = 1598.98 ; GST 5 % and QST 9.975 % ; the option is shown but not counted
+    expect(q.totals).toMatchObject({ subtotalCents: 159898, gstCents: 7995, qstCents: 15950, totalCents: 183843, optionalCents: 20000, marginCents: 159898 - (2 * 9000 + 98000) });
+    expect(q.lines.map((l: any) => l.description)).toEqual([dock.name, "Portable Latitude 5450", "Garantie 3 ans (option)"]);
+    // the next one gets the next number
+    expect(Number((await admin.post("/api/quotes", { prospectName: "Prospect inc." })).json.number.slice(2))).toBe(Number(q.number.slice(2)) + 1);
+
+    // the inventory search: the product used in a quote, by SKU or name
+    expect((await admin.get("/api/quotes/products?q=dock")).json).toEqual([expect.objectContaining({ id: dock.id, sku: "DOCK-USBC", priceCents: 14999, costCents: 9000, uses: 1 })]);
+
+    // edit: replace the lines, no taxes
+    const saved = await admin.put(`/api/quotes/${q.id}`, { clientId: client.id, title: "Remplacement", taxes: false, lines: [{ description: "Portable", quantityX100: 150, unitPriceCents: 100000 }] });
+    expect(saved.json.totals).toMatchObject({ subtotalCents: 150000, gstCents: 0, qstCents: 0, totalCents: 150000 });
+    expect((await tech.put(`/api/quotes/${q.id}`, {})).status).toBe(403);
+
+    // statuses: not an empty quote; accepted is locked
+    const empty = (await admin.post("/api/quotes", { prospectName: "Vide" })).json;
+    expect((await admin.post(`/api/quotes/${empty.id}/status`, { status: "sent" })).json.error).toBe("quote_empty");
+    expect((await admin.post(`/api/quotes/${q.id}/status`, { status: "sent" })).json).toMatchObject({ status: "sent", sentAt: expect.any(String) });
+    expect((await admin.post(`/api/quotes/${q.id}/status`, { status: "accepted" })).json).toMatchObject({ status: "accepted", decidedAt: expect.any(String) });
+    expect((await admin.put(`/api/quotes/${q.id}`, { clientId: client.id, lines: [] })).json.error).toBe("quote_locked");
+    expect((await admin.del(`/api/quotes/${q.id}`)).json.error).toBe("quote_locked");
+
+    // a copy is a new draft with the same lines
+    const copy = (await admin.post(`/api/quotes/${q.id}/duplicate`, {})).json;
+    expect(copy).toMatchObject({ status: "draft", clientId: client.id, taxes: false });
+    expect(copy.lines).toHaveLength(1);
+
+    // a line typed on the spot goes to the inventory, tied to the product; the SKU cannot be taken twice
+    const line = copy.lines[0];
+    expect((await admin.post(`/api/quotes/${copy.id}/lines/${line.id}/to-inventory`, { sku: "DOCK-USBC" })).json.error).toBe("sku_taken");
+    const added = await admin.post(`/api/quotes/${copy.id}/lines/${line.id}/to-inventory`, { sku: "LAT-5450" });
+    expect(added.status).toBe(201);
+    expect((await admin.get(`/api/quotes/${copy.id}`)).json.lines[0]).toMatchObject({ productId: added.json.productId, sku: "LAT-5450" });
+    expect((await admin.post(`/api/quotes/${copy.id}/lines/${line.id}/to-inventory`, {})).json.error).toBe("already_in_inventory");
+    expect((await admin.get("/api/store")).json.products.find((p: any) => p.sku === "LAT-5450")).toMatchObject({ name: "Portable", priceCents: 100000 });
+
+    // who prepared it: the creator by default, a technician chosen from the staff list, traced on the sheet's data
+    const staff = (await admin.get("/api/quotes/staff")).json;
+    const me = staff.find((x: any) => x.id === q.preparedById);
+    expect(me).toBeTruthy();
+    expect(q.preparedBy).toBe(me.name);
+    const techUser = staff.find((x: any) => x.id !== q.preparedById);
+    expect((await admin.put(`/api/quotes/${empty.id}`, { prospectName: "Vide", preparedById: "00000000-0000-4000-8000-000000000000" })).json.error).toBe("prepared_by_invalid");
+    const handed = await admin.put(`/api/quotes/${empty.id}`, { prospectName: "Vide", preparedById: techUser.id });
+    expect(handed.json).toMatchObject({ preparedById: techUser.id, preparedBy: techUser.name });
+    // the printed sheet takes AKAB's address and phone from the set-up (or its default)
+    expect(handed.json.company).toMatchObject({ phone: "450-834-3344", address: expect.stringContaining("J0K 3H0") });
+
+    // quote → project: a ticket in the Projets queue and a point for the weekly meeting, once
+    const proj = (await admin.post("/api/quotes", { clientId: client.id, title: "Migration du bureau", lines: [{ description: "Portable", quantityX100: 200, unitPriceCents: 100000 }] })).json;
+    expect(proj.clientId ?? proj).toBe(client.id);
+    expect((await tech.post(`/api/quotes/${proj.id}/to-project`, {})).status).toBe(403);
+    expect((await admin.post(`/api/quotes/${(await admin.post("/api/quotes", { prospectName: "Sans client", lines: [{ description: "x", unitPriceCents: 1 }] })).json.id}/to-project`, {})).json.error).toBe("project_needs_client");
+    const pointsBefore = (await admin.get("/api/meetings/points")).json.length;
+    // the client is tied to a company of the ticket source (the CRM keeps its id)
+    const tk0 = (await admin.get("/api/tickets?view=all")).json.items[0];
+    await db().update(schema.clients).set({ autotaskId: tk0.company.id }).where(eq(schema.clients.id, client.id));
+    const made2 = await admin.post(`/api/quotes/${proj.id}/to-project`, {});
+    expect(made2.status).toBe(201);
+    expect(made2.json).toMatchObject({ ticketId: expect.any(Number), ticketNumber: expect.any(String), meetingPointId: expect.any(String) });
+    expect((await admin.post(`/api/quotes/${proj.id}/to-project`, {})).json.error).toBe("already_project");
+    expect((await admin.get(`/api/quotes/${proj.id}`)).json).toMatchObject({ projectTicketId: made2.json.ticketId, projectTicketNumber: made2.json.ticketNumber });
+    const pts = (await admin.get("/api/meetings/points")).json;
+    expect(pts.length).toBe(pointsBefore + 1);
+    expect(pts.find((x: any) => x.id === made2.json.meetingPointId)).toMatchObject({ text: expect.stringContaining("Migration du bureau") });
+    const tk2 = (await admin.get(`/api/tickets/${made2.json.ticketId}`)).json;
+    expect(tk2.title).toBe("Projet: Migration du bureau");
+    expect(tk2.queue).toBe("projects");
+
+    // a new client's site visit: the checklist answers are kept with the quote, sent with it only, and copied
+    const visit = (await admin.post("/api/quotes", { kind: "site_visit", prospectName: "Clinique du Nord", survey: { "general.users": "14", "devices.laptop.qty": "9", "security.mfa_admin": "no" } })).json;
+    expect(visit).toMatchObject({ kind: "site_visit", survey: { "general.users": "14", "devices.laptop.qty": "9", "security.mfa_admin": "no" } });
+    expect((await admin.put(`/api/quotes/${visit.id}`, { prospectName: "Clinique du Nord", survey: { "general.users": "15" } })).json).toMatchObject({ kind: "site_visit", survey: { "general.users": "15" } });
+    expect((await admin.get("/api/quotes")).json.find((x: any) => x.id === visit.id)).toMatchObject({ kind: "site_visit" });
+    expect((await admin.get("/api/quotes")).json.find((x: any) => x.id === visit.id).survey).toBeUndefined();
+    expect((await admin.post(`/api/quotes/${visit.id}/duplicate`, {})).json).toMatchObject({ kind: "site_visit", survey: { "general.users": "15" } });
+    expect((await admin.post("/api/quotes", { kind: "nope", prospectName: "X" })).status).toBe(400);
+
+    // list and filters; deleting a draft
+    expect((await admin.get("/api/quotes?status=accepted")).json.map((x: any) => x.id)).toEqual([q.id]);
+    expect((await admin.get("/api/quotes?q=prospect")).json).toHaveLength(1);
+    expect((await admin.del(`/api/quotes/${copy.id}`)).status).toBe(200);
+    expect((await admin.get(`/api/quotes/${copy.id}`)).status).toBe(404);
+  });
+
   it("serialized products: received by serial number, the ones taken are chosen on the ticket", async () => {
     const admin = await session("admin@akab.local");
     const tech = await session("tech@akab.local");
