@@ -3,7 +3,7 @@ import { useNavigate } from "react-router-dom";
 import { useTranslation } from "react-i18next";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { AnimatePresence, motion } from "motion/react";
-import { Bell, BellOff, CalendarClock, CheckCheck, MapPin, Megaphone, MessageSquareReply, Paperclip, ShieldAlert, Siren, Star, Timer, type LucideIcon, MessageSquareText, Swords, Wrench } from "lucide-react";
+import { Bell, BellOff, CalendarClock, CheckCheck, MapPin, Megaphone, MessageSquareReply, Paperclip, ShieldAlert, Siren, Star, Timer, type LucideIcon, MessageSquareText, Swords, Wrench, Workflow } from "lucide-react";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Button } from "@/components/ui/button";
 import { api } from "@/lib/api";
@@ -62,6 +62,8 @@ function useView(n: Notification): { icon: LucideIcon; title: string; body: stri
         body: [`${n.data.number ?? ""} · ${n.data.title ?? ""}`, n.data.preview].filter(Boolean).join(" — "),
         tone: "gold",
       };
+    case "pipeline.assigned":
+      return { icon: Workflow, title: t(n.data.comment ? "notifications.pipelineComment" : "notifications.pipelineAssigned", { by: n.data.by ?? "" }), body: String(n.data.title ?? ""), tone: "gold" };
     case "breakroom.complots":
       return { icon: Swords, title: t("notifications.complotsInvite", { from: n.data.from ?? "" }), body: t("notifications.complotsInviteBody"), tone: "gold" };
     case "breakroom.invite":

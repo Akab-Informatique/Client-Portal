@@ -1903,3 +1903,106 @@ export const vendors = pgTable(
   },
   (t) => [uniqueIndex("vendors_quickbooks_idx").on(t.quickbooksId), index("vendors_name_idx").on(t.name)],
 );
+
+// ── Pipeline: the team's to-do list and each technician's day ──
+/** A to-do: shared by the team, assigned to someone (or nobody), with a checklist, notes, a parent and a task it waits for. */
+export const pipelineTasks = pgTable(
+  "pipeline_tasks",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    title: text("title").notNull(),
+    /** Instructions / notes written on the task */
+    notes: text("notes").notNull().default(""),
+    status: text("status", { enum: ["todo", "doing", "blocked", "done"] }).notNull().default("todo"),
+    priority: text("priority", { enum: ["low", "normal", "high", "urgent"] }).notNull().default("normal"),
+    assigneeId: uuid("assignee_id").references(() => users.id, { onDelete: "set null" }),
+    createdBy: uuid("created_by").references(() => users.id, { onDelete: "set null" }),
+    /** A subtask of this task: the parent is done only when every subtask is */
+    parentId: uuid("parent_id").references((): AnyPgColumn => pipelineTasks.id, { onDelete: "set null" }),
+    /** This task cannot start or be finished before that one is done */
+    blockedById: uuid("blocked_by_id").references((): AnyPgColumn => pipelineTasks.id, { onDelete: "set null" }),
+    /** YYYY-MM-DD */
+    dueDate: text("due_date"),
+    estimateMinutes: integer("estimate_minutes"),
+    /** A ticket the task is about (only its id comes from the browser) */
+    ticketId: bigint("ticket_id", { mode: "number" }),
+    ticketNumber: text("ticket_number"),
+    ticketTitle: text("ticket_title"),
+    position: integer("position").notNull().default(0),
+    completedAt: timestamp("completed_at", { withTimezone: true }),
+    completedBy: uuid("completed_by").references(() => users.id, { onDelete: "set null" }),
+    createdAt: created(),
+    updatedAt: updated(),
+  },
+  (t) => [index("pipeline_tasks_assignee_idx").on(t.assigneeId, t.status), index("pipeline_tasks_parent_idx").on(t.parentId), index("pipeline_tasks_due_idx").on(t.dueDate)],
+);
+
+export const pipelineChecklist = pgTable(
+  "pipeline_checklist",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    taskId: uuid("task_id")
+      .notNull()
+      .references(() => pipelineTasks.id, { onDelete: "cascade" }),
+    text: text("text").notNull(),
+    done: boolean("done").notNull().default(false),
+    position: integer("position").notNull().default(0),
+    createdAt: created(),
+  },
+  (t) => [index("pipeline_checklist_task_idx").on(t.taskId, t.position)],
+);
+
+/** Comments on a task (what was done, questions, instructions added later) */
+export const pipelineTaskNotes = pgTable(
+  "pipeline_task_notes",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    taskId: uuid("task_id")
+      .notNull()
+      .references(() => pipelineTasks.id, { onDelete: "cascade" }),
+    userId: uuid("user_id").references(() => users.id, { onDelete: "set null" }),
+    author: text("author").notNull().default(""),
+    text: text("text").notNull(),
+    createdAt: created(),
+  },
+  (t) => [index("pipeline_task_notes_task_idx").on(t.taskId, t.createdAt)],
+);
+
+/** One technician's day as planned (a suggestion, not a calendar): the AI's summary and the time blocks. */
+export const pipelineDayPlans = pgTable(
+  "pipeline_day_plans",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    userId: uuid("user_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    /** YYYY-MM-DD (Québec) */
+    date: text("date").notNull(),
+    summary: text("summary").notNull().default(""),
+    blocks: jsonb("blocks").$type<PipelineBlock[]>().notNull().default(sql`'[]'::jsonb`),
+    /** Minutes available that day (work hours less absences and events) and minutes of work to place */
+    capacityMinutes: integer("capacity_minutes").notNull().default(0),
+    plannedMinutes: integer("planned_minutes").notNull().default(0),
+    /** ai: written by the AI; rules: laid out by the portal's own rules (AI off or failed) */
+    source: text("source", { enum: ["ai", "rules"] }).notNull().default("rules"),
+    smsSentAt: timestamp("sms_sent_at", { withTimezone: true }),
+    createdAt: created(),
+    updatedAt: updated(),
+  },
+  (t) => [uniqueIndex("pipeline_day_plans_user_date_unique").on(t.userId, t.date)],
+);
+
+export type PipelineBlock = {
+  start: string;
+  end: string;
+  title: string;
+  kind: "task" | "ticket" | "event" | "break";
+  /** The task id, or the ticket id */
+  refId: string | null;
+  ticketNumber?: string | null;
+  priority?: string | null;
+  /** The AI's reason, in a few words */
+  note?: string | null;
+  /** Did not fit in the day */
+  overflow?: boolean;
+};

@@ -29,6 +29,7 @@ import { viewAsRoutes } from "./routes/viewAs.ts";
 import { notificationRoutes } from "./routes/notifications.ts";
 import { ticketRoutes } from "./routes/tickets.ts";
 import { storeRoutes } from "./routes/store.ts";
+import { pipelineRoutes } from "./routes/pipeline.ts";
 import { planningRoutes } from "./routes/planning.ts";
 import { smsHookRoutes, smsRoutes } from "./routes/sms.ts";
 import { outlookRoutes } from "./routes/outlook.ts";
@@ -100,6 +101,7 @@ export function createApp() {
   api.route("/admin", adminRoutes);
   api.use("/messages/*", requireStaff);
   api.route("/store", storeRoutes);
+  api.route("/pipeline", pipelineRoutes);
   api.route("/services", serviceRoutes);
   api.route("/planning", planningRoutes);
   // VoIP.ms calls this one (secret token, no session); the rest is for technicians

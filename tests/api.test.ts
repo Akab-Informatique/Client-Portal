@@ -5401,3 +5401,86 @@ describe("my tickets: secondary technician", () => {
     expect(without.metrics.mine).toBe(without.items.length);
   });
 });
+
+describe("pipeline: shared to-dos and the day", () => {
+  it("tasks: assign, checklist, subtasks and waiting-for rules, notes", async () => {
+    resetRateLimit("login:ip:unknown");
+    const admin = await signIn("admin@akab.local");
+    const tech = await signIn("tech@akab.local");
+    const me = (await tech.get("/api/me")).json.id as string;
+    const boss = (await admin.get("/api/me")).json.id as string;
+
+    // made by the administrator for the technician (who is told), with a checklist
+    const parent = (await admin.post("/api/pipeline/tasks", { title: "Migrer le serveur", assigneeId: me, dueDate: "2026-01-05", estimateMinutes: 120, checklist: ["Sauvegarde", "Copie"], notes: "Voir la procédure" })).json;
+    expect(parent).toMatchObject({ title: "Migrer le serveur", assignee: expect.any(String), checklist: { done: 0, total: 2 } });
+    expect((await tech.get("/api/notifications")).json.items.some((n: any) => n.type === "pipeline.assigned")).toBe(true);
+    const sub = (await tech.post("/api/pipeline/tasks", { title: "Tester", parentId: parent.id, assigneeId: me })).json;
+    const wait = (await tech.post("/api/pipeline/tasks", { title: "Annoncer", blockedById: sub.id })).json;
+    expect(wait.waiting).toBe(true);
+
+    // a parent is done only when its subtasks are; a task waiting for another cannot start or finish
+    expect((await tech.patch(`/api/pipeline/tasks/${parent.id}`, { status: "done" })).json.error).toBe("task_open_children");
+    expect((await tech.patch(`/api/pipeline/tasks/${wait.id}`, { status: "doing" })).json.error).toBe("task_blocked");
+    // no loops
+    expect((await tech.patch(`/api/pipeline/tasks/${parent.id}`, { parentId: sub.id })).json.error).toBe("task_cycle");
+    expect((await tech.patch(`/api/pipeline/tasks/${sub.id}`, { blockedById: wait.id })).json.error).toBe("task_cycle");
+    expect((await tech.patch(`/api/pipeline/tasks/${sub.id}`, { status: "done" })).status).toBe(200);
+    expect((await tech.patch(`/api/pipeline/tasks/${wait.id}`, { status: "doing" })).status).toBe(200);
+    expect((await tech.patch(`/api/pipeline/tasks/${parent.id}`, { status: "done" })).status).toBe(200);
+
+    // the checklist and the notes
+    const full = (await tech.get(`/api/pipeline/tasks/${parent.id}`)).json;
+    expect(full.notes).toBe("Voir la procédure");
+    expect(full.subtaskList.map((x: any) => x.title)).toEqual(["Tester"]);
+    expect((await tech.patch(`/api/pipeline/tasks/${parent.id}/checklist/${full.checklistItems[0].id}`, { done: true })).json.done).toBe(true);
+    expect((await tech.post(`/api/pipeline/tasks/${parent.id}/checklist`, { text: "Valider" })).status).toBe(201);
+    expect((await tech.post(`/api/pipeline/tasks/${parent.id}/notes`, { text: "Fait hier soir" })).status).toBe(201);
+    expect((await tech.get(`/api/pipeline/tasks/${parent.id}`)).json).toMatchObject({ checklist: { done: 1, total: 3 }, comments: [expect.objectContaining({ text: "Fait hier soir" })] });
+
+    // the shared list: mine / team, open / done
+    const mine = (await tech.get("/api/pipeline/tasks?scope=mine&status=all")).json.map((x: any) => x.title);
+    expect(mine).toContain("Tester");
+    expect((await tech.get("/api/pipeline/tasks?status=done")).json.map((x: any) => x.title)).toEqual(expect.arrayContaining(["Migrer le serveur", "Tester"]));
+    // only the author or a manager deletes
+    const boss1 = (await admin.post("/api/pipeline/tasks", { title: "Du patron" })).json;
+    expect((await tech.del(`/api/pipeline/tasks/${boss1.id}`)).status).toBe(403);
+    expect((await admin.del(`/api/pipeline/tasks/${boss1.id}`)).status).toBe(200);
+    expect((await tech.patch(`/api/pipeline/tasks/${parent.id}`, { assigneeId: "00000000-0000-4000-8000-000000000000" })).json.error).toBe("invalid_assignee");
+    expect(boss).toBeTruthy();
+  });
+
+  it("my day: a plan with time blocks, the summary, and the morning run (no texts unless asked)", async () => {
+    resetRateLimit("login:ip:unknown");
+    const admin = await signIn("admin@akab.local");
+    const tech = await signIn("tech@akab.local");
+    const me = (await tech.get("/api/me")).json.id as string;
+    await tech.post("/api/pipeline/tasks", { title: "Appeler le fournisseur", assigneeId: me, dueDate: "2000-01-03", priority: "high", estimateMinutes: 45 });
+    const day = (await tech.get("/api/pipeline/day?date=2026-03-04")).json;
+    expect(day.plan.source).toBe("rules");
+    expect(day.plan.capacityMinutes).toBe(480);
+    const first = day.plan.blocks.find((b: any) => b.title === "Appeler le fournisseur");
+    expect(first).toMatchObject({ kind: "task", start: "08:00", end: "08:45" });
+    // never in the lunch hour
+    expect(day.plan.blocks.filter((b: any) => b.kind !== "break" && !b.overflow).every((b: any) => b.end <= "12:00" || b.start >= "13:00")).toBe(true);
+    expect(day.items.some((i: any) => i.title === "Appeler le fournisseur" && i.overdue)).toBe(true);
+    // planning again without the AI set up still gives a plan
+    const again = (await tech.post("/api/pipeline/day/plan", { date: "2026-03-04" })).json;
+    expect(again.plan.source).toBe("rules");
+    expect(["not_configured", "disabled"]).toContain(again.aiError);
+    // a weekend or a holiday plans nothing
+    const sat = (await tech.get("/api/pipeline/day?date=2026-03-07")).json;
+    expect(sat.plan.blocks.filter((b: any) => b.kind === "task")).toEqual([]);
+    // someone else's day: managers only
+    expect((await tech.get(`/api/pipeline/day?userId=${(await admin.get("/api/me")).json.id}`)).status).toBe(403);
+    expect((await admin.get(`/api/pipeline/day?userId=${me}`)).status).toBe(200);
+
+    // settings and the morning run: managers only
+    expect((await tech.get("/api/pipeline/settings")).status).toBe(403);
+    expect((await admin.put("/api/pipeline/settings", { auto: true, time: "06:45", sms: true, workStart: "08:00", workEnd: "17:00", lunchStart: "12:00", lunchEnd: "13:00" })).json.time).toBe("06:45");
+    expect((await admin.put("/api/pipeline/settings", { auto: true, time: "06:45", sms: true, workStart: "17:00", workEnd: "08:00", lunchStart: "12:00", lunchEnd: "13:00" })).status).toBe(400);
+    const run = (await admin.post("/api/pipeline/morning/run", { sms: false })).json;
+    expect(run.planned).toBeGreaterThanOrEqual(1);
+    expect(run.texted).toBe(0);
+    expect((await tech.post("/api/pipeline/morning/run", {})).status).toBe(403);
+  });
+});
