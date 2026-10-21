@@ -526,17 +526,24 @@ function MetricTiles({ data, params, apply, onSms }: { data: TicketList | undefi
             </Tooltip>
             {/* on the left of "my tickets", beside its icon: off = the tickets where I am only a secondary technician are left out */}
             {tile.key === "mine" && (
-              <button
-                type="button"
-                role="switch"
-                aria-checked={withSecondary}
-                aria-label={t("tickets.secondary.label")}
-                title={withSecondary ? t("tickets.secondary.on") : t("tickets.secondary.off")}
-                onClick={() => setWithSecondary(!withSecondary)}
-                className={cn("absolute left-1.5 top-1/2 flex h-5 w-2.5 -translate-y-1/2 flex-col items-center rounded-full border transition-colors", withSecondary ? "border-[color:var(--gold)]/60 bg-[color:var(--gold)]/30" : "border-muted-foreground/40 bg-muted/40")}
-              >
-                <span className={cn("block size-1.5 rounded-full bg-current transition-transform", withSecondary ? "translate-y-0.5 text-primary" : "translate-y-[9px] text-muted-foreground")} />
-              </button>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <button
+                    type="button"
+                    role="switch"
+                    aria-checked={withSecondary}
+                    aria-label={t("tickets.secondary.label")}
+                    onClick={() => setWithSecondary(!withSecondary)}
+                    className={cn("absolute left-1.5 top-1/2 flex h-5 w-2.5 -translate-y-1/2 flex-col items-center rounded-full border transition-colors", withSecondary ? "border-[color:var(--gold)]/60 bg-[color:var(--gold)]/30" : "border-muted-foreground/40 bg-muted/40")}
+                  >
+                    <span className={cn("block size-1.5 rounded-full bg-current transition-transform", withSecondary ? "translate-y-0.5 text-primary" : "translate-y-[9px] text-muted-foreground")} />
+                  </button>
+                </TooltipTrigger>
+                <TooltipContent side="bottom" className="max-w-56">
+                  <p className="font-medium">{t("tickets.secondary.hide")}</p>
+                  <p className="text-xs opacity-80">{withSecondary ? t("tickets.secondary.on") : t("tickets.secondary.off")}</p>
+                </TooltipContent>
+              </Tooltip>
             )}
             </span>
             {/* the texts right after my tickets */}
