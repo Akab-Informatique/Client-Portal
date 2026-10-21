@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import { and, asc, eq, inArray, isNotNull, isNull } from "drizzle-orm";
 import { db, schema } from "../db/index.ts";
 import { addDays, linkDefaultAccounts, typesById, weekByDayAndType } from "./timesheets.ts";
+import { syncAll } from "./qbSync.ts";
 import { billingSettings, ledger, qbApi, qbToken, quickbooksSettings, saveQuickBooksSettings, type LedgerType, type QuickBooksSettings } from "./billing.ts";
 
 /**
@@ -44,7 +45,7 @@ async function accessToken(s: QuickBooksSettings & { realmId: string; refreshTok
 
 type Fault = { Fault?: { Error?: { Message?: string; Detail?: string }[] } };
 
-async function qb<T>(method: "GET" | "POST", path: string, body?: unknown): Promise<T> {
+export async function qb<T>(method: "GET" | "POST", path: string, body?: unknown): Promise<T> {
   const s = await connected();
   const url = `${qbApi(s.environment)}/v3/company/${encodeURIComponent(s.realmId)}/${path}${path.includes("?") ? "&" : "?"}minorversion=70`;
   const res = await fetch(url, {
@@ -63,7 +64,7 @@ async function qb<T>(method: "GET" | "POST", path: string, body?: unknown): Prom
 }
 
 /** QuickBooks idempotency key: the same creation sent twice (a retry after a timeout) is made once. */
-const requestId = (key: string, body?: unknown) =>
+export const requestId = (key: string, body?: unknown) =>
   createHash("sha256")
     .update(key + (body === undefined ? "" : JSON.stringify(body)))
     .digest("hex")
@@ -82,7 +83,7 @@ async function once<T>(key: string, fn: () => Promise<T>): Promise<T | undefined
 }
 
 /** Every row of a query, 1000 at a time. */
-async function query<T>(entity: string, where = ""): Promise<T[]> {
+export async function query<T>(entity: string, where = ""): Promise<T[]> {
   const out: T[] = [];
   for (let start = 1; ; start += 1000) {
     const sql = `select * from ${entity}${where ? ` where ${where}` : ""} startposition ${start} maxresults 1000`;
@@ -93,7 +94,7 @@ async function query<T>(entity: string, where = ""): Promise<T[]> {
   }
 }
 
-const norm = (s: string | null | undefined) =>
+export const norm = (s: string | null | undefined) =>
   (s ?? "")
     .normalize("NFD")
     .replace(/[̀-ͯ]/g, "")
@@ -717,7 +718,7 @@ async function pushExpenseNow(id: string) {
   }
 }
 
-const errText = (e: unknown) => (e instanceof QuickBooksError ? (e.detail ? `${e.code}: ${e.detail}` : e.code) : e instanceof Error ? e.message : String(e)).slice(0, 300);
+export const errText = (e: unknown) => (e instanceof QuickBooksError ? (e.detail ? `${e.code}: ${e.detail}` : e.code) : e instanceof Error ? e.message : String(e)).slice(0, 300);
 
 /** Timesheets and expenses are not sent to QuickBooks for now: accounting pays them and marks them paid in the portal. */
 export const QUICKBOOKS_PAUSED = new Set<string>(["timesheets", "expenses"]);
@@ -751,6 +752,8 @@ async function tickNow() {
   const s = await quickbooksSettings();
   if (!s.enabled || !s.refreshToken || !s.realmId) return;
   const warn = (what: string) => (e: unknown) => console.warn(`[quickbooks] ${what}:`, errText(e));
+  // clients, chart of accounts and chosen vendors, both ways
+  await syncAll(null).catch(warn("sync"));
   if (s.sync.invoicesIn) await pullInvoices(null).catch(warn("invoices in"));
   if (s.sync.payments) await pullPayments(null).catch(warn("payments"));
   const d = db();

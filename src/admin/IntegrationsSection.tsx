@@ -19,6 +19,7 @@ import type { PermissionKey } from "@shared/permissions";
 import { useCan } from "@/lib/session";
 import { SectionHeader } from "./sections";
 import { StripePage, StripeStatus } from "./StripeIntegration";
+import { QuickBooksPage, QuickBooksStatus } from "./QuickBooksIntegration";
 import { AI_USAGE_KEY, AiUsagePanel } from "./AiUsage";
 import { shortModel } from "@/components/AiModelPicker";
 
@@ -33,6 +34,8 @@ const INTEGRATIONS: Integration[] = [
   { key: "voipms", name: "VoIP.ms (SMS)", icon: MessageSquareText, Status: VoipmsStatus, Page: VoipmsPage },
   // card payments on invoices: master administrators (the API needs billing and integrations)
   { key: "stripe", name: "Stripe", icon: CreditCard, Status: StripeStatus, Page: StripePage, needs: "admin.billing" },
+  // clients, chart of accounts and vendors kept in step, and invoices and payments (the API needs billing and integrations)
+  { key: "quickbooks", name: "QuickBooks Online", icon: RefreshCw, Status: QuickBooksStatus, Page: QuickBooksPage, needs: "admin.billing" },
   { key: "rmm", name: "RMM", icon: MonitorPlay, Status: RmmStatus, Page: RmmPage },
 ];
 

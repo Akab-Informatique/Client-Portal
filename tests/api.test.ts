@@ -3033,7 +3033,7 @@ describe("billing: settings, chart of accounts, QuickBooks, Stripe, payments", (
     const tech = await session("tech@akab.local");
     expect((await tech.get(`/api/billing/quickbooks/callback?state=${state}&code=c1&realmId=9130`)).status).toBe(403);
     const back = await admin.get(`/api/billing/quickbooks/callback?state=${state}&code=c1&realmId=9130`);
-    expect(back.location).toBe("/?admin=billing&tab=quickbooks&quickbooks=connected");
+    expect(back.location).toBe("/?admin=integrations&integration=quickbooks&quickbooks=connected");
     expect((await admin.get(`/api/billing/quickbooks/callback?state=${state}&code=c1&realmId=9130`)).location).toContain("quickbooks=error");
     expect((await admin.get("/api/billing/quickbooks")).json).toMatchObject({ connected: true, realmId: "9130", companyName: "AKAB Informatique inc." });
     expect((await admin.post("/api/billing/quickbooks/test")).json).toMatchObject({ ok: true });
@@ -5572,5 +5572,146 @@ describe("pipeline: times, files, recurring and private tasks", () => {
     await tech.post("/api/pipeline/tasks", { title: "Sous-tâche publique", parentId: priv.id, assigneeId: me });
     const sub = (await admin.get("/api/pipeline/tasks?status=all")).json.find((x: any) => x.title === "Sous-tâche publique");
     expect(sub.parentTitle).toBeNull();
+  });
+});
+
+describe("QuickBooks: clients, chart of accounts and vendors kept in step both ways", () => {
+  type Rec = Record<string, any>;
+  const store = { Customer: new Map<string, Rec>(), Account: new Map<string, Rec>(), Vendor: new Map<string, Rec>() };
+  const real = globalThis.fetch;
+  let seq = 100;
+  // a change on either side is later than the last sync, by a clear margin
+  const tick = () => new Promise((r) => setTimeout(r, 25));
+  const stamp = (r: Rec, at = Date.now()) => {
+    r.MetaData = { LastUpdatedTime: new Date(at).toISOString() };
+    r.SyncToken = String(Number(r.SyncToken ?? "0") + 1);
+    return r;
+  };
+  const mock = async (input: any, init?: any) => {
+    const url = new URL(typeof input === "string" ? input : input.url);
+    if (url.hostname === "oauth.platform.intuit.com") return Response.json({ access_token: "a", refresh_token: "r", expires_in: 3600 });
+    if (!url.hostname.endsWith("intuit.com")) return real(input, init);
+    const path = url.pathname.replace(/^\/v3\/company\/[^/]+\//, "");
+    if (path === "query") {
+      const entity = /from (\w+)/.exec(url.searchParams.get("query") ?? "")![1] as keyof typeof store;
+      return Response.json({ QueryResponse: { [entity]: [...store[entity].values()] } });
+    }
+    const [what, id] = path.split("/");
+    const entity = (what[0].toUpperCase() + what.slice(1)) as keyof typeof store;
+    if (init?.method === "POST") {
+      const b = JSON.parse(init.body);
+      if (b.Id) {
+        const cur = store[entity].get(b.Id)!;
+        if (cur.SyncToken !== b.SyncToken) return Response.json({ Fault: { Error: [{ Message: "stale" }] } }, { status: 400 });
+        Object.assign(cur, b);
+        stamp(cur);
+        return Response.json({ [entity]: cur });
+      }
+      const r = stamp({ Id: String(++seq), Active: true, ...b });
+      store[entity].set(r.Id, r);
+      return Response.json({ [entity]: r });
+    }
+    return Response.json({ [entity]: store[entity].get(id)! });
+  };
+
+  it("clients: mapped customers follow each other; accounts and chosen vendors too", async () => {
+    resetRateLimit("login:ip:unknown");
+    vi.stubGlobal("fetch", mock);
+    const admin = await signIn("admin@akab.local");
+    const tech = await signIn("tech@akab.local");
+    const billing = await import("../server/lib/billing.ts");
+    const { saveQuickBooksSettings, quickbooksSettings } = billing;
+    const { syncAll } = await import("../server/lib/qbSync.ts");
+    const { forgetQuickBooksToken } = await import("../server/lib/quickbooks.ts");
+    // the app first (a new app resets the connection), then the connection
+    await saveQuickBooksSettings(null, { clientId: "x", clientSecret: "y", environment: "sandbox" });
+    await saveQuickBooksSettings(null, { enabled: true, realmId: "123", refreshToken: "r" });
+    forgetQuickBooksToken();
+    try {
+      // ── clients ──
+      const [cl] = await db().insert(schema.clients).values({ name: "Garage Test QB", phone: "450-111-1111", email: "info@garage.test" }).returning();
+      const cust = stamp({ Id: "77", DisplayName: "Garage Test QB", PrimaryPhone: { FreeFormNumber: "450-999-0000" }, PrimaryEmailAddr: { Address: "info@garage.test" }, Active: true }, Date.now() - 86_400_000);
+      store.Customer.set("77", cust);
+      expect((await admin.put(`/api/billing/quickbooks/mapping/${cl.id}`, { quickbooksId: "77" })).status).toBe(200);
+      // mapped just now: the portal is the newer side, so its phone goes to QuickBooks
+      let r = (await syncAll(null))!;
+      expect(r.clients).toMatchObject({ pushed: 1, pulled: 0, failed: 0 });
+      expect(store.Customer.get("77")!.PrimaryPhone.FreeFormNumber).toBe("450-111-1111");
+      // a change in QuickBooks comes in
+      await tick();
+      Object.assign(store.Customer.get("77")!, { PrimaryEmailAddr: { Address: "compta@garage.test" } });
+      stamp(store.Customer.get("77")!, Date.now());
+      r = (await syncAll(null))!;
+      expect(r.clients).toMatchObject({ pulled: 1, pushed: 0 });
+      expect((await db().select().from(schema.clients).where(eq(schema.clients.id, cl.id)))[0].email).toBe("compta@garage.test");
+      // nothing changed: nothing is written either way
+      expect((await syncAll(null))!.clients).toMatchObject({ pulled: 0, pushed: 0 });
+      // a change here goes out (the edit sends it at once; the pass also would)
+      await tick();
+      expect((await admin.patch(`/api/crm/clients/${cl.id}`, { phone: "450-222-2222" })).status).toBe(200);
+      await syncAll(null);
+      expect(store.Customer.get("77")!.PrimaryPhone.FreeFormNumber).toBe("450-222-2222");
+      // switched off: the pass leaves clients alone
+      await saveQuickBooksSettings(null, { sync: { ...(await quickbooksSettings()).sync, customers: false } });
+      expect((await syncAll(null))!.clients).toBeUndefined();
+      await saveQuickBooksSettings(null, { sync: { ...(await quickbooksSettings()).sync, customers: true } });
+
+      // ── chart of accounts ──
+      store.Account.set("501", stamp({ Id: "501", Name: "Frais bancaires QB", Classification: "Expense", Active: true }, Date.now() - 86_400_000));
+      store.Account.set("502", stamp({ Id: "502", Name: "Revenus QB", AcctNum: "4999", Classification: "Revenue", Active: true }, Date.now() - 86_400_000));
+      r = (await syncAll(null))!;
+      expect(r.accounts!.created).toBeGreaterThanOrEqual(2);
+      const acct = async (qbId: string) => (await db().select().from(schema.ledgerAccounts).where(eq(schema.ledgerAccounts.quickbooksId, qbId)))[0];
+      expect(await acct("501")).toMatchObject({ name: "Frais bancaires QB", type: "expense", number: "QB-501" });
+      expect(await acct("502")).toMatchObject({ name: "Revenus QB", type: "revenue", number: "4999" });
+      // renamed in QuickBooks → here; renamed here → QuickBooks
+      await tick();
+      Object.assign(store.Account.get("501")!, { Name: "Frais de banque" });
+      stamp(store.Account.get("501")!, Date.now());
+      await syncAll(null);
+      expect((await acct("501")).name).toBe("Frais de banque");
+      const a502 = await acct("502");
+      await tick();
+      expect((await admin.patch(`/api/billing/ledger/${a502.id}`, { name: "Revenus de services" })).status).toBe(200);
+      await syncAll(null);
+      expect(store.Account.get("502")!.Name).toBe("Revenus de services");
+      // an account made here since the sync started is made in QuickBooks
+      const made = (await admin.post("/api/billing/ledger", { number: "9100", name: "Compte neuf", type: "expense" })).json;
+      await syncAll(null);
+      const inQb = [...store.Account.values()].find((x) => x.Name === "Compte neuf");
+      expect(inQb).toMatchObject({ AccountType: "Expense", AcctNum: "9100" });
+      expect((await db().select().from(schema.ledgerAccounts).where(eq(schema.ledgerAccounts.id, made.id)))[0].quickbooksId).toBe(inQb!.Id);
+
+      // ── vendors: the ones chosen ──
+      store.Vendor.set("601", stamp({ Id: "601", DisplayName: "Ingram Micro QB", PrimaryPhone: { FreeFormNumber: "514-000-0001" }, Active: true }, Date.now() - 86_400_000));
+      store.Vendor.set("602", stamp({ Id: "602", DisplayName: "Synnex QB", Active: true }, Date.now() - 86_400_000));
+      await admin.post("/api/admin/vendors", { name: "Ingram Micro QB" });
+      expect((await tech.get("/api/billing/quickbooks/vendors")).status).toBe(403);
+      const choices = (await admin.get("/api/billing/quickbooks/vendors")).json;
+      expect(choices.vendors.map((v: any) => [v.name, v.selected])).toEqual([["Ingram Micro QB", false], ["Synnex QB", false]]);
+      const sel = (await admin.put("/api/billing/quickbooks/vendors/selection", { ids: ["601", "602"] })).json;
+      expect(sel).toMatchObject({ tied: 1, created: 1, untied: 0 });
+      const vend = async (qbId: string) => (await db().select().from(schema.vendors).where(eq(schema.vendors.quickbooksId, qbId)))[0];
+      expect(await vend("602")).toMatchObject({ name: "Synnex QB" });
+      await tick();
+      Object.assign(store.Vendor.get("602")!, { PrimaryPhone: { FreeFormNumber: "514-555-0102" } });
+      stamp(store.Vendor.get("602")!, Date.now());
+      await syncAll(null);
+      expect((await vend("602")).phone).toBe("514-555-0102");
+      // a vendor not chosen any more is untied, never deleted
+      expect((await admin.put("/api/billing/quickbooks/vendors/selection", { ids: ["601"] })).json).toMatchObject({ untied: 1 });
+      expect((await db().select().from(schema.vendors).where(eq(schema.vendors.name, "Synnex QB")))[0].quickbooksId).toBeNull();
+      // a vendor made here is made in QuickBooks on request
+      const mine = (await admin.post("/api/admin/vendors", { name: "Nouveau fournisseur", email: "a@b.test" })).json;
+      expect((await admin.post(`/api/billing/quickbooks/vendors/${mine.id}/create`, {})).status).toBe(200);
+      expect([...store.Vendor.values()].find((x) => x.DisplayName === "Nouveau fournisseur")).toMatchObject({ PrimaryEmailAddr: { Address: "a@b.test" } });
+      // the sync button: managers only
+      expect((await tech.post("/api/billing/quickbooks/sync", {})).status).toBe(403);
+      expect((await admin.post("/api/billing/quickbooks/sync", {})).json.runs.vendors).toBeTruthy();
+    } finally {
+      vi.unstubAllGlobals();
+      await saveQuickBooksSettings(null, { enabled: false, refreshToken: null, realmId: null });
+      forgetQuickBooksToken();
+    }
   });
 });

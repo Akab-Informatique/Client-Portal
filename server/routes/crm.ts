@@ -1,3 +1,4 @@
+import { pushSoon } from "../lib/qbSync.ts";
 import { Hono } from "hono";
 import { HTTPException } from "hono/http-exception";
 import { and, asc, desc, eq, gte, ilike, inArray, isNotNull, isNull, lte, ne, or, sql } from "drizzle-orm";
@@ -186,6 +187,8 @@ export const crmRoutes = new Hono<AppEnv>()
       .where(eq(schema.clients.id, client.id))
       .returning();
     await audit(a.user.id, "crm.client_updated", client.id, { fields: Object.keys(p) });
+    // a client tied to a QuickBooks customer: the change goes there too
+    void pushSoon("clients", client.id);
     return c.json(view(row));
   })
 
@@ -210,6 +213,7 @@ export const crmRoutes = new Hono<AppEnv>()
     const before = client.invoice?.autoApprove ?? [];
     if ((p.autoApprove ?? []).some((k) => !before.includes(k)) && !a.permissions.includes("accounting.manage")) throw new HTTPException(403, { message: "accounting_manage_only" });
     const [row] = await db().update(schema.clients).set({ invoice: { ...client.invoice, ...p }, updatedAt: new Date() }).where(eq(schema.clients.id, client.id)).returning();
+    if (p.billingEmail !== undefined) void pushSoon("clients", client.id);
     // what waits already follows the new rule
     const approved = p.autoApprove?.length ? await applyAutoApprove(client.id) : 0;
     await audit(a.user.id, "crm.invoice_updated", client.id, { autoApprove: p.autoApprove, approved });

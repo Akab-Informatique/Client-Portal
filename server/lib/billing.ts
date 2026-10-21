@@ -175,6 +175,7 @@ async function stripeAccount(secretKey: string): Promise<StripeAccount | null> {
 }
 
 // ── QuickBooks Online (OAuth 2, accounting scope) ──
+export type SyncRun = { at: string; pulled: number; pushed: number; created: number; linked: number; failed: number; errors: string[] };
 export type QuickBooksSettings = {
   enabled: boolean;
   environment: "sandbox" | "production";
@@ -183,7 +184,7 @@ export type QuickBooksSettings = {
   companyName: string | null;
   connectedAt: string | null;
   /** invoices: portal invoices sent to QuickBooks · invoicesIn: QuickBooks invoices (and their status) brought in */
-  sync: { invoices: boolean; invoicesIn: boolean; payments: boolean; customers: boolean; timesheets: boolean; expenses: boolean };
+  sync: { invoices: boolean; invoicesIn: boolean; payments: boolean; customers: boolean; accounts: boolean; vendors: boolean; timesheets: boolean; expenses: boolean };
   /** QuickBooks invoices are brought in from this invoice number on */
   invoicesFromNumber: number;
   /** QuickBooks item and tax codes used for the invoices sent */
@@ -196,6 +197,8 @@ export type QuickBooksSettings = {
     items?: { at: string; items: number; categories: number; products: number };
     invoices?: { at: string; added: number; updated: number; unmapped: number; total: number };
   };
+  /** The last two-way pass of each part (clients, accounts, vendors); accounts also keeps when it started (accounts made here since are made in QuickBooks too) */
+  runs: { clients?: SyncRun; accounts?: SyncRun & { since?: string }; vendors?: SyncRun };
   clientSecret: string | null;
   refreshToken: string | null;
   lastTest?: { ok: boolean; at: string; error?: string };
@@ -217,11 +220,12 @@ export async function quickbooksSettings(): Promise<QuickBooksSettings> {
     realmId: c.realmId ?? null,
     companyName: c.companyName ?? null,
     connectedAt: c.connectedAt ?? null,
-    sync: { invoices: true, invoicesIn: true, payments: true, customers: true, timesheets: true, expenses: true, ...c.sync },
+    sync: { invoices: true, invoicesIn: true, payments: true, customers: true, accounts: true, vendors: true, timesheets: true, expenses: true, ...c.sync },
     invoicesFromNumber: c.invoicesFromNumber ?? 10000,
     invoice: { itemId: null, taxCodeId: null, exemptTaxCodeId: null, ...c.invoice },
     paymentsPulledAt: c.paymentsPulledAt ?? null,
     imports: c.imports ?? {},
+    runs: c.runs ?? {},
     clientSecret: secrets.clientSecret ?? null,
     refreshToken: secrets.refreshToken ?? null,
     lastTest: c.lastTest,
@@ -247,6 +251,7 @@ export async function saveQuickBooksSettings(actorId: string | null, p: Partial<
       invoice: n.invoice,
       paymentsPulledAt: n.paymentsPulledAt,
       imports: n.imports,
+      runs: n.runs,
     },
     secret: seal(JSON.stringify({ clientSecret: n.clientSecret ?? undefined, refreshToken: n.refreshToken ?? undefined })),
   });
@@ -292,7 +297,8 @@ export async function completeQuickBooks(userId: string, state: string, code: st
   const s = await quickbooksSettings();
   const t = await qbToken(s, { grant_type: "authorization_code", code, redirect_uri: p.redirectUri });
   const name = await companyName({ ...s, realmId }, t.access_token).catch(() => null);
-  await saveQuickBooksSettings(userId, { realmId, refreshToken: t.refresh_token ?? null, companyName: name, connectedAt: new Date().toISOString(), lastTest: { ok: true, at: new Date().toISOString() } });
+  // connected: the sync is on (clients, chart of accounts and chosen vendors both ways), each part can be switched off
+  await saveQuickBooksSettings(userId, { enabled: true, realmId, refreshToken: t.refresh_token ?? null, companyName: name, connectedAt: new Date().toISOString(), lastTest: { ok: true, at: new Date().toISOString() } });
 }
 
 async function companyName(s: QuickBooksSettings, access: string) {

@@ -943,11 +943,17 @@ const en: Dict = {
       testOk: "QuickBooks answers",
       sync: "Sync",
       syncText: "What the portal will exchange with QuickBooks once enabled.",
+      twoWay: {"title":"Two-way sync","text":"Once connected, the tied clients, the chart of accounts and the chosen vendors stay up to date on both sides: what you change here goes to QuickBooks at once, what changes in QuickBooks comes here within 15 minutes.","now":"Sync now","done":"Sync finished.","running":"A sync is already running.","clients":"Clients","accounts":"Chart of accounts","vendors":"Vendors","clientsText":"Name, email, phone, address and status of the clients tied to a QuickBooks customer (tie them below).","accountsText":"Name, number and status of the accounts; a new QuickBooks account is created here, an account created here is created in QuickBooks.","vendorsText":"Name, email, phone and status of the vendors you tick.","on":"on","off":"off","counts":"{{pulled}} received, {{pushed}} sent, {{created}} created/tied","failed":"{{count}} failed","never":"Not synced yet.","rule":"When something changed on both sides, the latest change wins. Only differences are written; nothing is ever deleted (what you no longer want is turned off)."},
+      vendors: {"title":"Vendors to sync","text":"Tick the QuickBooks vendors to keep up to date with the portal's. A ticked vendor is tied to the portal vendor with the same name, or added if there is none. Unticking detaches it (it stays in the portal).","search":"Search a vendor…","count":"{{chosen}} chosen of {{total}}","all":"Tick the ones shown","none":"Untick the ones shown","none404":"No vendor.","inStep":"in sync","portalOnly":"Portal vendors QuickBooks does not have","create":"Create in QuickBooks","created":"Vendor created in QuickBooks.","exists":"A vendor with that name already exists in QuickBooks: tick it above.","saved":"{{tied}} tied, {{created}} added, {{untied}} detached."},
       syncItems: {
+        customers: "Clients (both ways)",
+        customersText: "Clients tied to a QuickBooks customer: a change made on one side goes to the other",
+        accounts: "Chart of accounts (both ways)",
+        accountsText: "Tied accounts follow QuickBooks and the other way round; new QuickBooks accounts come in here",
+        vendors: "Chosen vendors (both ways)",
+        vendorsText: "Only the vendors you tick below",
         invoicesIn: "Invoices (QuickBooks → portal)",
         invoicesInText: "QuickBooks invoices and their status copied into the portal, from the chosen number on",
-        customers: "Customers",
-        customersText: "Portal clients created and kept up to date in QuickBooks",
         invoices: "Invoices (portal → QuickBooks)",
         invoicesText: "Posted invoices sent to QuickBooks, with the chart of accounts",
         payments: "Payments",
@@ -2670,6 +2676,7 @@ const en: Dict = {
     },
   },
   integrations: {
+    quickbooks: { description: "Clients, chart of accounts and vendors kept up to date on both sides, invoices and payments." },
     stripe: {
       webhookUrl: "Webhook address (endpoint URL)",
       events: "Events to send (click to copy)",

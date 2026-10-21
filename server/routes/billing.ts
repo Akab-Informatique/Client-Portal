@@ -26,6 +26,7 @@ import {
   testStripe,
 } from "../lib/billing.ts";
 import { createCheckout, expireCheckout, handleEvent, MIN_CENTS, StripeError, verifySignature } from "../lib/stripe.ts";
+import { createVendorInQb, pushSoon, selectVendors, syncAll, syncVendors, vendorChoices, type SyncPart } from "../lib/qbSync.ts";
 import { applyAccounts, applyItems, createCustomer, forgetQuickBooksToken, invoiceChoices, matchReason, planAccounts, planItems, pullInvoices, pullPayments, quickbooksCustomers, QuickBooksError, suggestions } from "../lib/quickbooks.ts";
 
 /** QuickBooks errors as API errors (quickbooks_not_mapped, quickbooks_api…). */
@@ -70,6 +71,7 @@ const quickbooksView = async (origin?: string | null) => {
     redirectUri: base ? quickbooksRedirectUri(base) : null,
     invoice: s.invoice,
     imports: s.imports,
+    runs: s.runs,
     paymentsPulledAt: s.paymentsPulledAt,
   };
 };
@@ -136,15 +138,15 @@ export const billingRoutes = new Hono<AppEnv>()
   .get("/quickbooks/callback", requirePermission("admin.integrations"), async (c) => {
     const a = auth(c);
     const { state, code, realmId, error } = c.req.query();
-    if (error || !state || !code || !realmId) return c.redirect("/?admin=billing&tab=quickbooks&quickbooks=cancelled");
+    if (error || !state || !code || !realmId) return c.redirect("/?admin=integrations&integration=quickbooks&quickbooks=cancelled");
     try {
       await completeQuickBooks(a.realUser.id, state, code, realmId);
       forgetQuickBooksToken();
       await audit(a.realUser.id, "billing.quickbooks.connected", null, { realmId });
-      return c.redirect("/?admin=billing&tab=quickbooks&quickbooks=connected");
+      return c.redirect("/?admin=integrations&integration=quickbooks&quickbooks=connected");
     } catch (e) {
       console.warn("[quickbooks] connect failed:", e instanceof Error ? e.message : e);
-      return c.redirect("/?admin=billing&tab=quickbooks&quickbooks=error");
+      return c.redirect("/?admin=integrations&integration=quickbooks&quickbooks=error");
     }
   })
 
@@ -216,6 +218,7 @@ export const billingRoutes = new Hono<AppEnv>()
     const [row] = await db().update(schema.ledgerAccounts).set({ ...p, updatedAt: new Date() }).where(eq(schema.ledgerAccounts.id, id)).returning();
     if (!row) throw new HTTPException(404, { message: "not_found" });
     await audit(a.user.id, "billing.account_updated", id, { fields: Object.keys(p) });
+    void pushSoon("accounts", id);
     return c.json(row);
   })
 
@@ -318,7 +321,7 @@ export const billingRoutes = new Hono<AppEnv>()
         environment: z.enum(["sandbox", "production"]).optional(),
         clientId: z.string().trim().max(200).optional(),
         clientSecret: z.string().trim().min(1).max(200).optional(),
-        sync: z.object({ invoices: z.boolean(), invoicesIn: z.boolean(), payments: z.boolean(), customers: z.boolean(), timesheets: z.boolean(), expenses: z.boolean() }).partial().optional(),
+        sync: z.object({ invoices: z.boolean(), invoicesIn: z.boolean(), payments: z.boolean(), customers: z.boolean(), accounts: z.boolean(), vendors: z.boolean(), timesheets: z.boolean(), expenses: z.boolean() }).partial().optional(),
         invoicesFromNumber: z.number().int().min(0).max(100_000_000).optional(),
       }),
     );
@@ -370,7 +373,7 @@ export const billingRoutes = new Hono<AppEnv>()
       const [other] = await db().select({ name: schema.clients.name }).from(schema.clients).where(and(eq(schema.clients.quickbooksId, p.quickbooksId), ne(schema.clients.id, clientId)));
       if (other) throw new HTTPException(409, { message: "quickbooks_customer_taken", cause: [{ path: "quickbooks", message: other.name }] });
     }
-    const [row] = await db().update(schema.clients).set({ quickbooksId: p.quickbooksId, updatedAt: new Date() }).where(eq(schema.clients.id, clientId)).returning({ id: schema.clients.id });
+    const [row] = await db().update(schema.clients).set({ quickbooksId: p.quickbooksId, qbSyncedAt: null, updatedAt: new Date() }).where(eq(schema.clients.id, clientId)).returning({ id: schema.clients.id });
     if (!row) throw new HTTPException(404, { message: "not_found" });
     await audit(a.user.id, "billing.quickbooks.mapped", clientId, { quickbooksId: p.quickbooksId });
     return c.json({ ok: true });
@@ -390,7 +393,7 @@ export const billingRoutes = new Hono<AppEnv>()
         skipped.push(m.clientId);
         continue;
       }
-      const [row] = await db().update(schema.clients).set({ quickbooksId: m.quickbooksId, updatedAt: new Date() }).where(eq(schema.clients.id, m.clientId)).returning({ id: schema.clients.id });
+      const [row] = await db().update(schema.clients).set({ quickbooksId: m.quickbooksId, qbSyncedAt: null, updatedAt: new Date() }).where(eq(schema.clients.id, m.clientId)).returning({ id: schema.clients.id });
       if (!row) continue;
       taken.set(m.quickbooksId, m.clientId);
       mapped++;
@@ -449,6 +452,37 @@ export const billingRoutes = new Hono<AppEnv>()
     const r = await qbRun(() => pullPayments(a.user.id));
     await audit(a.user.id, "billing.quickbooks.payments_pulled", null, { added: r.added, updated: r.updated });
     return c.json(r);
+  })
+
+  // ── The two-way sync: clients (mapped), chart of accounts, vendors (chosen) ──
+  /** One pass now: every part that is switched on (or the ones named) */
+  .post("/quickbooks/sync", requirePermission("admin.billing"), requirePermission("admin.integrations"), async (c) => {
+    const a = auth(c);
+    const p = await body(c, z.object({ parts: z.array(z.enum(["clients", "accounts", "vendors"])).max(3).optional() }));
+    const s = await quickbooksSettings();
+    const parts = (p.parts ?? (["clients", "accounts", "vendors"] as SyncPart[])).filter((x) => s.sync[x === "clients" ? "customers" : x]);
+    const r = await qbRun(() => syncAll(a.user.id, parts));
+    if (!r) throw new HTTPException(409, { message: "quickbooks_sync_running" });
+    await audit(a.user.id, "billing.quickbooks.sync_now", null, { parts });
+    return c.json({ ...r, runs: (await quickbooksSettings()).runs });
+  })
+  /** The QuickBooks vendors, each with whether it is kept in step with a vendor here, and the portal vendors QuickBooks does not have */
+  .get("/quickbooks/vendors", requirePermission("admin.billing"), requirePermission("admin.integrations"), async (c) => c.json(await qbRun(() => vendorChoices())))
+  /** The vendors kept in step are exactly the ones chosen (the others are untied, never deleted); then a pass on them */
+  .put("/quickbooks/vendors/selection", requirePermission("admin.billing"), requirePermission("admin.integrations"), async (c) => {
+    const a = auth(c);
+    const p = await body(c, z.object({ ids: z.array(z.string().trim().min(1).max(40)).max(5000) }));
+    const r = await qbRun(() => selectVendors(p.ids, a.user.id));
+    await qbRun(() => syncVendors()).catch(() => undefined);
+    return c.json(r);
+  })
+  /** A vendor made here, made in QuickBooks too */
+  .post("/quickbooks/vendors/:id/create", requirePermission("admin.billing"), requirePermission("admin.integrations"), async (c) => {
+    const a = auth(c);
+    const id = zUuid.parse(c.req.param("id"));
+    await qbRun(() => createVendorInQb(id));
+    await audit(a.user.id, "billing.quickbooks.vendor_created", id, {});
+    return c.json({ ok: true });
   })
 
   .delete("/quickbooks/connection", requirePermission("admin.billing"), requirePermission("admin.integrations"), async (c) => {

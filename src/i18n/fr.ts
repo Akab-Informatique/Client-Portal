@@ -941,11 +941,17 @@ const fr = {
       testOk: "QuickBooks répond",
       sync: "Synchronisation",
       syncText: "Ce que le portail échangera avec QuickBooks une fois activé.",
+      twoWay: {"title":"Synchronisation dans les deux sens","text":"Une fois connecté, les clients liés, le plan comptable et les fournisseurs choisis restent à jour des deux côtés : ce que vous changez ici va dans QuickBooks tout de suite, ce qui change dans QuickBooks arrive ici dans les 15 minutes.","now":"Synchroniser maintenant","done":"Synchronisation terminée.","running":"Une synchronisation est déjà en cours.","clients":"Clients","accounts":"Plan comptable","vendors":"Fournisseurs","clientsText":"Nom, courriel, téléphone, adresse et état des clients liés à un client QuickBooks (liez-les plus bas).","accountsText":"Nom, numéro et état des comptes; un nouveau compte de QuickBooks est créé ici, un compte créé ici est créé dans QuickBooks.","vendorsText":"Nom, courriel, téléphone et état des fournisseurs que vous cochez.","on":"actif","off":"arrêté","counts":"{{pulled}} reçus, {{pushed}} envoyés, {{created}} créés/liés","failed":"{{count}} en échec","never":"Pas encore synchronisé.","rule":"Si un élément a changé des deux côtés, le changement le plus récent gagne. Seules les différences sont écrites; rien n'est jamais supprimé (un élément qu'on ne veut plus est désactivé)."},
+      vendors: {"title":"Fournisseurs à synchroniser","text":"Cochez les fournisseurs QuickBooks à garder à jour avec ceux du portail. Un fournisseur coché est lié à celui du portail de même nom, ou ajouté s'il n'existe pas. Décocher le détache (il reste dans le portail).","search":"Chercher un fournisseur…","count":"{{chosen}} choisi(s) sur {{total}}","all":"Cocher les affichés","none":"Décocher les affichés","none404":"Aucun fournisseur.","inStep":"synchronisé","portalOnly":"Fournisseurs du portail absents de QuickBooks","create":"Créer dans QuickBooks","created":"Fournisseur créé dans QuickBooks.","exists":"Un fournisseur de même nom existe déjà dans QuickBooks : cochez-le plus haut.","saved":"{{tied}} liés, {{created}} ajoutés, {{untied}} détachés."},
       syncItems: {
+        customers: "Clients (dans les deux sens)",
+        customersText: "Les clients liés à un client QuickBooks : un changement fait d'un côté passe de l'autre",
+        accounts: "Plan comptable (dans les deux sens)",
+        accountsText: "Les comptes liés suivent QuickBooks et inversement; les nouveaux comptes de QuickBooks arrivent ici",
+        vendors: "Fournisseurs choisis (dans les deux sens)",
+        vendorsText: "Seulement les fournisseurs que vous cochez plus bas",
         invoicesIn: "Factures (QuickBooks → portail)",
         invoicesInText: "Les factures de QuickBooks et leur état copiées dans le portail, à partir du numéro choisi",
-        customers: "Clients",
-        customersText: "Les clients du portail créés et tenus à jour dans QuickBooks",
         invoices: "Factures (portail → QuickBooks)",
         invoicesText: "Les factures publiées envoyées à QuickBooks, avec les comptes du plan comptable",
         payments: "Paiements",
@@ -2668,6 +2674,7 @@ const fr = {
     },
   },
   integrations: {
+    quickbooks: { description: "Clients, plan comptable et fournisseurs gardés à jour des deux côtés, factures et paiements." },
     stripe: {
       webhookUrl: "Adresse du webhook (point de terminaison)",
       events: "Événements à envoyer (cliquez pour copier)",

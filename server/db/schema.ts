@@ -62,6 +62,8 @@ export const clients = pgTable(
     quickbooksId: text("quickbooks_id"),
     /** The client's classification (client_classes.key): break & fix, MSP, bronze, silver, gold… */
     classKey: text("class_key"),
+    /** When the client and its QuickBooks customer were last known to match */
+    qbSyncedAt: timestamp("qb_synced_at", { withTimezone: true }),
     syncedAt: timestamp("synced_at", { withTimezone: true }),
     createdAt: created(),
     updatedAt: updated(),
@@ -320,6 +322,7 @@ export const ledgerAccounts = pgTable(
     active: boolean("active").notNull().default(true),
     /** The matching QuickBooks account, once linked */
     quickbooksId: text("quickbooks_id"),
+    qbSyncedAt: timestamp("qb_synced_at", { withTimezone: true }),
     createdAt: created(),
     updatedAt: updated(),
   },
@@ -1898,6 +1901,7 @@ export const vendors = pgTable(
     active: boolean("active").notNull().default(true),
     /** The QuickBooks vendor it is mapped to (never two vendors on the same one) */
     quickbooksId: text("quickbooks_id"),
+    qbSyncedAt: timestamp("qb_synced_at", { withTimezone: true }),
     createdAt: created(),
     updatedAt: updated(),
   },

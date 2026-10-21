@@ -568,6 +568,13 @@
       "when": 1792553382270,
       "tag": "0080_pipeline_more",
       "breakpoints": true
+    },
+    {
+      "idx": 81,
+      "version": "7",
+      "when": 1792554690905,
+      "tag": "0081_quickbooks_sync",
+      "breakpoints": true
     }
   ]
 }

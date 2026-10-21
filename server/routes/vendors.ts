@@ -7,6 +7,7 @@ import { auth, requirePermission, requireStaff, type AppEnv } from "../lib/auth.
 import { audit } from "../lib/audit.ts";
 import { body, zUuid } from "../lib/validate.ts";
 import { QuickBooksError, quickbooksVendors } from "../lib/quickbooks.ts";
+import { pushSoon } from "../lib/qbSync.ts";
 
 /**
  * Admin › PSA › Fournisseurs (admin.billing): the company's vendors. They are NOT synced with QuickBooks: each
@@ -47,6 +48,8 @@ export const vendorRoutes = new Hono<AppEnv>()
       .returning();
     if (!row) throw new HTTPException(404, { message: "not_found" });
     await audit(a.user.id, "vendor.updated", id, { fields: Object.keys(p) });
+    // a vendor kept in step with QuickBooks: the change goes there too
+    void pushSoon("vendors", id);
     return c.json(row);
   })
 
@@ -78,7 +81,7 @@ export const vendorRoutes = new Hono<AppEnv>()
       const [other] = await db().select({ name: schema.vendors.name }).from(schema.vendors).where(and(eq(schema.vendors.quickbooksId, p.quickbooksId), ne(schema.vendors.id, id)));
       if (other) throw new HTTPException(409, { message: "quickbooks_vendor_taken", cause: [{ path: "quickbooks", message: other.name }] });
     }
-    const [row] = await db().update(schema.vendors).set({ quickbooksId: p.quickbooksId, updatedAt: new Date() }).where(eq(schema.vendors.id, id)).returning();
+    const [row] = await db().update(schema.vendors).set({ quickbooksId: p.quickbooksId, qbSyncedAt: null, updatedAt: new Date() }).where(eq(schema.vendors.id, id)).returning();
     if (!row) throw new HTTPException(404, { message: "not_found" });
     await audit(a.user.id, "vendor.mapped", id, { quickbooksId: p.quickbooksId });
     return c.json(row);
