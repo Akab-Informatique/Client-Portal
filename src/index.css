@@ -151,6 +151,17 @@
   html:not(.dark) {
     color-scheme: light;
   }
+  /* native dropdowns (select lists, date pickers) follow the chosen theme: the list takes the popover colours, never white on white */
+  select,
+  input,
+  textarea {
+    color-scheme: inherit;
+  }
+  select option,
+  select optgroup {
+    background-color: var(--popover);
+    color: var(--popover-foreground);
+  }
   body {
     @apply bg-background text-foreground font-sans antialiased;
     font-feature-settings: "ss01";
