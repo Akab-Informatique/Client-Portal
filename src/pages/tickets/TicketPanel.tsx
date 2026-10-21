@@ -37,6 +37,7 @@ import { AcceptDialog } from "./AcceptDialog";
 import { MergeDialog } from "./MergeDialog";
 import { useTicketWorkspace } from "./workspace";
 import { contractNote } from "./contract";
+import { EmailSend } from "./EmailSend";
 import { ContactTicketsList, useContactOpen } from "./ContactTickets";
 import { ChargeButtons } from "./Charges";
 import { PriorityDialog, TicketPriorities } from "./Planning";
@@ -1684,11 +1685,12 @@ function NoteComposer({
     requestAnimationFrame(() => ref.current?.focus());
   }, [focusRequest]);
   const [focused, setFocused] = useState(false);
-  // a reply also goes by email to the ticket's contact, unless switched off for this one
+  // a reply also goes by email to the ticket's contact (on by default, switched off for this one if wanted), and to other people
   const contactEmail = tk.contactInfo?.email ?? null;
   const [emailIt, setEmailIt] = useState(true);
+  const [mailOthers, setMailOthers] = useState<string[]>([]);
   const send = useMutation({
-    mutationFn: () => api.post<{ emailed?: boolean; to?: string | null; noContactEmail?: boolean }>(`/tickets/${tk.id}/notes`, { text, internal, ...(internal ? {} : { email: emailIt }) }),
+    mutationFn: () => api.post<{ emailed?: boolean; to?: string | null; noContactEmail?: boolean }>(`/tickets/${tk.id}/notes`, { text, internal, ...(internal ? {} : { email: emailIt, others: mailOthers }) }),
     onSuccess: (r) => {
       setText("");
       setEmailIt(true);
@@ -1737,11 +1739,9 @@ function NoteComposer({
         className="resize-y transition-[height]"
       />
       {!internal && (
-        <label className={cn("mt-2 flex items-center gap-2 text-xs", contactEmail ? "text-muted-foreground" : "text-muted-foreground/60")} title={contactEmail ? undefined : t("tickets.replyNoEmail")}>
-          <Switch checked={emailIt && Boolean(contactEmail)} disabled={!contactEmail} onCheckedChange={setEmailIt} aria-label={t("tickets.replyEmailToggle")} />
-          <Mail className="size-3.5" />
-          {contactEmail ? t("tickets.replyEmailTo", { name: tk.contact || contactEmail, email: contactEmail }) : t("tickets.replyNoEmail")}
-        </label>
+        <div className="mt-2">
+          <EmailSend ticket={tk} contact={emailIt && Boolean(contactEmail)} onContact={setEmailIt} others={mailOthers} onOthers={setMailOthers} contactLabel={(name, email) => t("tickets.replyEmailTo", { name, email })} idPrefix="reply" />
+        </div>
       )}
       <div className="mt-2 flex items-center justify-between gap-3">
         <span className="text-[11px] text-muted-foreground">{t("tickets.noteSendHint")}</span>

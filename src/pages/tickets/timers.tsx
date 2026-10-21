@@ -1,11 +1,11 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { useTranslation } from "react-i18next";
 import type { TicketDetail } from "./shared";
-import { isAddress, RecipientInput } from "@/pages/outlook/RecipientInput";
+import { isAddress } from "@/pages/outlook/RecipientInput";
 import { useSearchParams } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
-import { AlertTriangle, ChevronDown, Clock3, CornerDownLeft, Loader2, Lock, Mail, Pause, Play, Receipt, Timer as TimerIcon, XCircle } from "lucide-react";
+import { AlertTriangle, Clock3, CornerDownLeft, Loader2, Lock, Pause, Play, Receipt, Timer as TimerIcon, XCircle } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { AiTextarea } from "@/components/AiPolish";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -19,6 +19,7 @@ import { api } from "@/lib/api";
 import { useCan } from "@/lib/session";
 import { cn } from "@/lib/utils";
 import { longDateTime, ticketErrorText, hm, parseHm, useChoiceText } from "./shared";
+import { EmailSend } from "./EmailSend";
 import { contractNote } from "./contract";
 
 /**
@@ -365,13 +366,11 @@ function TimeEntryDialog({ timer, position, onLater }: { timer: Timer; position:
   // the description by email: to the ticket contact, and to other addresses (the "Envoi" part)
   const [notifyContact, setNotifyContact] = useState(false);
   const [others, setOthers] = useState<string[]>([]);
-  const [sendOpen, setSendOpen] = useState(false);
   const { data: ticket } = useQuery({
     queryKey: ["tickets", "detail", timer.ticketId],
     queryFn: () => api.get<TicketDetail>(`/tickets/${timer.ticketId}`),
     staleTime: 60_000,
   });
-  const contactEmail = ticket?.contactInfo?.email ?? null;
   const txt = useChoiceText();
   // the ticket's status and due date can change with the time entered
   const [statusNew, setStatusNew] = useState("");
@@ -598,30 +597,8 @@ function TimeEntryDialog({ timer, position, onLater }: { timer: Timer; position:
               autoFocus
             />
           </div>
-          {/* the description can go to the client: the ticket contact, and other addresses */}
-          <div className="space-y-2">
-            <label className={cn("flex cursor-pointer items-center gap-2 text-sm", !contactEmail && "opacity-60")}>
-              <Checkbox checked={notifyContact} disabled={!contactEmail} onCheckedChange={(v) => setNotifyContact(v === true)} />
-              <Mail className="size-4 text-primary" />
-              {contactEmail ? t("tickets.timer.notifyContact", { who: ticket?.contact || contactEmail, email: contactEmail }) : t("tickets.timer.notifyNoContact")}
-            </label>
-            <button
-              type="button"
-              onClick={() => setSendOpen((v) => !v)}
-              className="flex items-center gap-1 text-[11px] text-muted-foreground hover:text-foreground"
-              aria-expanded={sendOpen}
-            >
-              <ChevronDown className={cn("size-3 transition-transform", sendOpen && "rotate-180")} />
-              {others.length ? t("tickets.timer.othersCount", { count: others.length }) : t("tickets.timer.others")}
-            </button>
-            {sendOpen && (
-              <div className="space-y-1.5 rounded-xl border p-3">
-                <p className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">{t("tickets.timer.sendTitle")}</p>
-                <RecipientInput id="te-others" label={t("tickets.timer.othersLabel")} value={others} onChange={setOthers} />
-                <p className="text-[11px] text-muted-foreground">{t("tickets.timer.sendHint")}</p>
-              </div>
-            )}
-          </div>
+          {/* the description can go to the client: the ticket contact, the client's other contacts, any address */}
+          <EmailSend ticket={ticket} contact={notifyContact} onContact={setNotifyContact} others={others} onOthers={setOthers} contactLabel={(who, email) => t("tickets.timer.notifyContact", { who, email })} idPrefix="te" />
           <div className="space-y-1.5 rounded-xl border border-violet-500/30 bg-violet-500/[0.04] p-3">
             <Label htmlFor="te-internal" className="flex items-center gap-1.5">
               <Lock className="size-3.5 text-violet-300" /> {t("tickets.timer.internal")}

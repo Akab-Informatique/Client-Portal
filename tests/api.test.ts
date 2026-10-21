@@ -1936,6 +1936,21 @@ describe("tickets: client and contact", () => {
     expect(mail.text).toContain(entry.summary);
     expect(mail.text).toContain("Alex Tremblay");
     expect(mail.text + mail.html).not.toContain("Pilote v3");
+    // a reply (not an internal note) can also go to other addresses, one message each
+    devOutbox.length = 0;
+    const rep = await tech.post(`/api/tickets/${tk.id}/notes`, { text: "Voici la marche à suivre.", internal: false, others: ["Collegue@Client.example"] });
+    expect(rep.json).toMatchObject({ emailed: true });
+    expect(devOutbox.map((m) => m.to).sort()).toEqual([tk.contactInfo.email.toLowerCase(), "collegue@client.example"].sort());
+    expect(devOutbox[0].text).toContain("Voici la marche à suivre.");
+    // the contact switched off: only the others
+    devOutbox.length = 0;
+    await tech.post(`/api/tickets/${tk.id}/notes`, { text: "Pour toi seulement.", internal: false, email: false, others: ["collegue@client.example"] });
+    expect(devOutbox.map((m) => m.to)).toEqual(["collegue@client.example"]);
+    // never an internal note; a wrong address is refused
+    devOutbox.length = 0;
+    await tech.post(`/api/tickets/${tk.id}/notes`, { text: "Note privée", internal: true, others: ["x@y.example"] });
+    expect(devOutbox).toHaveLength(0);
+    expect((await tech.post(`/api/tickets/${tk.id}/notes`, { text: "Mauvaise adresse", internal: false, others: ["pas-une-adresse"] })).status).toBe(400);
     // not asked: nothing sent
     await tech.post(`/api/tickets/${tk.id}/timer/start`);
     await tech.post(`/api/tickets/${tk.id}/timer/stop`);
