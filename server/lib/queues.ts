@@ -55,7 +55,7 @@ export async function withStatusConfig<T extends { value: string; label: string 
   return list
     .map((s, i) => {
       const c = cfg.get(s.value);
-      return { s: { ...s, label: c?.label || s.label, kind: (c?.kind as T["kind"]) || s.kind, hidden: c?.hidden ?? false } as T, pos: c ? c.position : 1000 + i };
+      return { s: { ...s, label: c?.label || s.label, kind: (c?.kind as T["kind"]) || s.kind, hidden: c?.hidden ?? s.hidden ?? false } as T, pos: c ? c.position : 1000 + i };
     })
     .sort((x, y) => x.pos - y.pos)
     .map((x) => x.s);

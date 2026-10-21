@@ -38,7 +38,7 @@ import {
   UserX,
   Wand2,
   X,
-  type LucideIcon, Star, Lock } from "lucide-react";
+  type LucideIcon, Star, Lock, GitMerge } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
@@ -67,6 +67,7 @@ import { cn, initials } from "@/lib/utils";
 import { GlassBackdrop } from "@/components/brand/GlassBackdrop";
 import { NewTicketDialog } from "./NewTicketDialog";
 import { AcceptDialog } from "./AcceptDialog";
+import { MergeDialog } from "./MergeDialog";
 import { PendingMails } from "./PendingMails";
 import { dueState, FILTER_KEYS, PRIORITY_STYLE, dueGlow, useChoiceText, shortDate, shortDateTime, STATUS_STYLE, useTickets, VIEWS, type Tally, type TicketList, type TicketSummary, type View, ticketErrorText } from "./shared";
 import { useTicketWorkspace } from "./workspace";
@@ -141,6 +142,7 @@ export function TicketsPage() {
   });
   const confirm = useConfirm();
   const [accepting, setAccepting] = useState<TicketSummary | null>(null);
+  const [merging, setMerging] = useState<TicketSummary | null>(null);
   // delete for good (administrators): from the row's menu
   const deleteTicket = useMutation({
     mutationFn: (tk: { id: number; number: string }) => api.del(`/tickets/${tk.id}`).then(() => tk),
@@ -333,6 +335,7 @@ export function TicketsPage() {
                 onPatch={(patch) => patchTicket.mutate({ id: tk.id, patch })}
                 // accept: the technician takes the ticket (in charge, with a delay)
                 onAccept={() => setAccepting(tk)}
+                onMerge={can("tickets.edit") && tk.statusKind !== "complete" ? () => setMerging(tk) : undefined}
                 onDelete={
                   can("tickets.delete")
                     ? () => void confirm({ title: t("tickets.delete.title", { number: tk.number }), description: t("tickets.delete.text"), confirmLabel: t("tickets.delete.confirm"), destructive: true }).then((ok) => ok && deleteTicket.mutate({ id: tk.id, number: tk.number }))
@@ -350,6 +353,7 @@ export function TicketsPage() {
         )}
       </div>
 
+      {merging && <MergeDialog open onOpenChange={(o) => !o && setMerging(null)} tk={merging} onDone={(into) => ws.open(into.id)} />}
       {data && accepting && <AcceptDialog open onOpenChange={(o) => !o && setAccepting(null)} tk={accepting} statuses={data.facets.statuses} />}
       {data && <NewTicketDialog open={creating} onOpenChange={setCreating} facets={data.facets} onCreated={(id) => ws.open(id)} />}
     </div>
@@ -767,6 +771,7 @@ function TicketRow({
   editable,
   onPatch,
   onAccept,
+  onMerge,
   onDelete,
   onHover,
 }: {
@@ -778,6 +783,8 @@ function TicketRow({
   editable: boolean;
   onPatch: (patch: RowPatch) => void;
   onAccept: () => void;
+  /** Merge into another ticket of the client (open tickets, tickets.edit) */
+  onMerge?: () => void;
   /** Only for those who may delete tickets */
   onDelete?: () => void;
   onHover: () => void;
@@ -819,7 +826,7 @@ function TicketRow({
         )}
       >
         {/* The line on the left: it glows with the due state and opens the row's menu (accept the ticket, open it, delete it) */}
-        {(editable || onDelete) && (
+        {(editable || onDelete || onMerge) && (
           // out of the grid (absolute): it must not take a column of the row
           <span className="absolute inset-y-0 left-0 z-10 flex" onClick={(e) => e.stopPropagation()} onKeyDown={(e) => e.stopPropagation()}>
             <DropdownMenu>
@@ -868,6 +875,11 @@ function TicketRow({
                       )}
                     </DropdownMenuSubContent>
                   </DropdownMenuSub>
+                )}
+                {onMerge && (
+                  <DropdownMenuItem onSelect={onMerge}>
+                    <GitMerge className="size-4" /> {t("tickets.merge.button")}
+                  </DropdownMenuItem>
                 )}
                 <DropdownMenuItem onSelect={onOpen}>
                   <ExternalLink className="size-4" /> {t("tickets.rowMenu.open")}

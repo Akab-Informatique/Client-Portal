@@ -1,0 +1,1 @@
+ALTER TABLE "tickets" ADD COLUMN "merged_into_id" bigint;

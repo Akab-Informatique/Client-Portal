@@ -5058,24 +5058,27 @@ describe("timesheet: work day, billable and non billable time, ratio", () => {
     expect((await admin.patch(`/api/time/admin/timesheet-types/${workday.id}`, { active: false })).json.error).toBe("time_type_builtin");
 
     const day = "2026-12-08";
-    // a work day needs its start, end and a lunch of 30 min or 1 h
+    // a work day needs its start and end; the lunch is 1 h, 30 min paid: 30 min come off
     expect((await tech.post("/api/time/entries", { date: day, typeId: workday.id, hours: 7 })).json.error).toBe("workday_times");
-    expect((await tech.post("/api/time/entries", { date: day, typeId: workday.id, start: "08:00", end: "16:30", lunchMinutes: 45 })).status).toBe(400);
-    expect((await tech.post("/api/time/entries", { date: day, typeId: workday.id, start: "16:00", end: "08:00", lunchMinutes: 30 })).json.error).toBe("workday_times");
-    const wd = await tech.post("/api/time/entries", { date: day, typeId: workday.id, start: "08:00", end: "16:30", lunchMinutes: 30 });
+    expect((await tech.post("/api/time/entries", { date: day, typeId: workday.id, start: "16:00", end: "08:00" })).json.error).toBe("workday_times");
+    const wd = await tech.post("/api/time/entries", { date: day, typeId: workday.id, start: "08:00", end: "16:30" });
     expect(wd.status).toBe(201);
     expect(wd.json).toMatchObject({ startTime: "08:00", endTime: "16:30", lunchMinutes: 30, hoursX100: 800 });
     // one a day
-    expect((await tech.post("/api/time/entries", { date: day, typeId: workday.id, start: "09:00", end: "12:00", lunchMinutes: 30 })).json.error).toBe("workday_exists");
-    // 1 h of lunch
-    expect((await tech.post("/api/time/entries", { date: "2026-12-09", typeId: workday.id, start: "08:00", end: "17:00", lunchMinutes: 60 })).json.hoursX100).toBe(800);
+    expect((await tech.post("/api/time/entries", { date: day, typeId: workday.id, start: "09:00", end: "12:00" })).json.error).toBe("workday_exists");
+    // 8 to 16 = 7.5 h
+    expect((await tech.post("/api/time/entries", { date: "2026-12-09", typeId: workday.id, start: "08:00", end: "16:00" })).json.hoursX100).toBe(750);
+    // under 5 h without the lunch hour (8 to 13 = 4 h): no lunch taken off
+    expect((await tech.post("/api/time/entries", { date: "2026-11-03", typeId: workday.id, start: "08:00", end: "13:00" })).json.hoursX100).toBe(500);
+    // exactly 5 h without the lunch hour (8 to 14): 30 min off
+    expect((await tech.post("/api/time/entries", { date: "2026-11-04", typeId: workday.id, start: "08:00", end: "14:00" })).json.hoursX100).toBe(550);
 
     // 3 h of a billable type, 1 h of a non billable one
     expect((await tech.post("/api/time/entries", { date: day, typeId: admin1.id, hours: 3 })).status).toBe(201);
     expect((await tech.post("/api/time/entries", { date: day, typeId: meeting.id, hours: 1 })).status).toBe(201);
     const week = (await tech.get(`/api/time/week?start=${day}`)).json;
-    // the work days (16 h) are apart: the hours worked are the 4 h
-    expect(week.workdayHours).toBe(16);
+    // the work days (15.5 h) are apart: the hours worked are the 4 h
+    expect(week.workdayHours).toBe(15.5);
     expect(week.totalHours).toBe(4);
     expect(week.billableHours).toBe(3);
     expect(week.nonBillableHours).toBe(1);
@@ -5111,7 +5114,7 @@ describe("hours bank and the time report", () => {
     expect((await tech.post("/api/time/entries", { date: day, typeId: type.id, hours: 0.5, banked: false })).json.banked).toBe(false);
     // the work day is never banked
     const wd = (await tech.get("/api/time/types")).json.time.find((x: any) => x.kind === "workday");
-    expect((await tech.post("/api/time/entries", { date: day, typeId: wd.id, start: "08:00", end: "16:00", lunchMinutes: 30 })).json.banked).toBe(false);
+    expect((await tech.post("/api/time/entries", { date: day, typeId: wd.id, start: "08:00", end: "16:00" })).json.banked).toBe(false);
     await tech.put("/api/me/preferences", { bankHours: false });
 
     // the week: 7.5 h worked, 5 h of it banked
@@ -5286,5 +5289,88 @@ describe("a reply to the client is also emailed to the ticket's contact", () => 
       expect(n.json).toMatchObject({ ok: true, emailed: false, noContactEmail: true });
       expect(devOutbox).toHaveLength(0);
     }
+  });
+});
+
+describe("time entry: the ticket's status and due date can change with it", () => {
+  it("saves the time and moves the ticket's status and due date when asked; a bad status refuses before the time is kept", async () => {
+    resetRateLimit("login:ip:unknown");
+    const tech = await signIn("tech@akab.local");
+    const items = (await tech.get("/api/tickets?view=all")).json.items.filter((x: any) => x.statusKind !== "complete");
+    const t = items[0];
+    const detail = (await tech.get(`/api/tickets/${t.id}`)).json;
+    const other = detail.options.statuses.find((s: any) => s.value !== detail.status && s.kind === "inProgress") ?? detail.options.statuses.find((s: any) => s.value !== detail.status && s.kind !== "complete");
+    const timers = async () => {
+      await tech.post(`/api/tickets/${t.id}/timer/start`, {});
+      await tech.post(`/api/tickets/${t.id}/timer/stop`, {});
+      const l = (await tech.get("/api/tickets/timers")).json;
+      return (l.timers ?? l.items ?? l).find((x: any) => (x.ticketId ?? x.ticket?.id) === t.id);
+    };
+    // a status that does not exist: refused, the ticket untouched
+    let timer = await timers();
+    const bad = await tech.post(`/api/tickets/timers/${timer.id}/submit`, { hours: 1, summary: "Test", status: "nope-status" });
+    expect(bad.status).toBeGreaterThanOrEqual(400);
+    expect((await tech.get(`/api/tickets/${t.id}`)).json.status).toBe(detail.status);
+
+    // the status and due date change with the time
+    const due = "2027-03-05T21:00:00.000Z";
+    timer = (await tech.get("/api/tickets/timers")).json.timers?.find?.((x: any) => x.id === timer.id) ?? timer;
+    const ok = await tech.post(`/api/tickets/timers/${timer.id}/submit`, { hours: 1, summary: "Test", status: other.value, dueAt: due });
+    expect(ok.status).toBe(201);
+    const after = (await tech.get(`/api/tickets/${t.id}`)).json;
+    expect(after.status).toBe(other.value);
+    expect(after.dueAt).toBe(due);
+  });
+});
+
+describe("merge tickets", () => {
+  afterAll(async () => {
+    const local = await import("../server/lib/localTickets.ts");
+    await db().delete(schema.integrations).where(eq(schema.integrations.provider, "tickets"));
+    await db().delete(schema.tickets);
+    local.resetTicketMode();
+  });
+
+  it("moves the work to the other ticket and closes this one as merged", async () => {
+    resetRateLimit("login:ip:unknown");
+    const local = await import("../server/lib/localTickets.ts");
+    const tech = await signIn("tech@akab.local");
+    await db()
+      .insert(schema.integrations)
+      .values({ provider: "tickets", enabled: true, config: { mode: "local" } })
+      .onConflictDoUpdate({ target: schema.integrations.provider, set: { enabled: true, config: { mode: "local" } } });
+    local.resetTicketMode();
+    const mk = async (title: string, companyId: number) => (await tech.post("/api/tickets", { title, description: `Texte ${title}`, companyId, priority: "medium", queue: "support", assigneeId: null, dueDate: "2027-01-05" })).json.id as number;
+    const a = await mk("Doublon", 300);
+    const b = await mk("Principal", 300);
+    const companies = (await tech.get("/api/tickets/companies")).json as { id: number }[];
+    const other = companies.find((x) => x.id !== 300)!.id;
+    const c = await mk("Autre client", other);
+    await tech.post(`/api/tickets/${a}/notes`, { text: "Message du client", internal: false, email: false });
+
+    // not with itself, not with another client
+    expect((await tech.post(`/api/tickets/${a}/merge`, { intoId: a })).json.error).toBe("merge_same");
+    expect((await tech.post(`/api/tickets/${a}/merge`, { intoId: c })).json.error).toBe("merge_other_client");
+
+    const done = await tech.post(`/api/tickets/${a}/merge`, { intoId: b });
+    expect(done.status).toBe(200);
+    const merged = (await tech.get(`/api/tickets/${a}`)).json;
+    expect(merged.status).toBe("merged");
+    expect(merged.statusKind).toBe("complete");
+    expect(merged.mergedInto.id).toBe(b);
+    // the client's message and the original description are on the main ticket
+    const texts = (await tech.get(`/api/tickets/${b}`)).json.notes.map((n: any) => n.text) as string[];
+    expect(texts).toContain("Message du client");
+    expect(texts.some((x) => x.includes("Texte Doublon"))).toBe(true);
+    // what came from the merged ticket says so, and the merged tickets are listed on the main one
+    const detail = (await tech.get(`/api/tickets/${b}`)).json;
+    expect(detail.notes.filter((n: any) => n.mergedFrom === merged.number).length).toBeGreaterThanOrEqual(2);
+    expect(detail.mergedTickets.map((m: any) => m.id)).toEqual([a]);
+    expect(detail.mergedTickets[0].description).toBe("Texte Doublon");
+    // already merged: neither side again; and it is out of the open list
+    expect((await tech.post(`/api/tickets/${a}/merge`, { intoId: b })).json.error).toBe("merge_already");
+    expect((await tech.post(`/api/tickets/${b}/merge`, { intoId: a })).json.error).toBe("merge_target_merged");
+    const open = (await tech.get("/api/tickets?view=all&statusKind=new,inProgress,needsAttention")).json.items.map((x: any) => x.id);
+    expect(open).not.toContain(a);
   });
 });

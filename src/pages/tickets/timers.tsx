@@ -5,7 +5,7 @@ import { isAddress, RecipientInput } from "@/pages/outlook/RecipientInput";
 import { useSearchParams } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
-import { AlertTriangle, ChevronDown, Clock3, CornerDownLeft, Loader2, Lock, Mail, Pause, PiggyBank, Play, Receipt, Timer as TimerIcon, XCircle } from "lucide-react";
+import { AlertTriangle, ChevronDown, Clock3, CornerDownLeft, Loader2, Lock, Mail, Pause, Play, Receipt, Timer as TimerIcon, XCircle } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { AiTextarea } from "@/components/AiPolish";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -16,10 +16,9 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { useConfirm } from "@/components/ConfirmDialog";
 import { api } from "@/lib/api";
-import { useCan, useMe } from "@/lib/session";
-import { Switch } from "@/components/ui/switch";
+import { useCan } from "@/lib/session";
 import { cn } from "@/lib/utils";
-import { longDateTime, ticketErrorText, hm, parseHm } from "./shared";
+import { longDateTime, ticketErrorText, hm, parseHm, useChoiceText } from "./shared";
 import { contractNote } from "./contract";
 
 /**
@@ -373,13 +372,18 @@ function TimeEntryDialog({ timer, position, onLater }: { timer: Timer; position:
     staleTime: 60_000,
   });
   const contactEmail = ticket?.contactInfo?.email ?? null;
+  const txt = useChoiceText();
+  // the ticket's status and due date can change with the time entered
+  const [statusNew, setStatusNew] = useState("");
+  const [dueNew, setDueNew] = useState("");
+  const [dueChanged, setDueChanged] = useState(false);
+  const localInput = (iso: string) => {
+    const d = new Date(iso);
+    return Number.isNaN(d.getTime()) ? "" : new Date(d.getTime() - d.getTimezoneOffset() * 60_000).toISOString().slice(0, 16);
+  };
   const [workType, setWorkType] = useState("");
   // billed to the client, and the hours worked but not billed
   const [billableOn, setBillableOn] = useState(true);
-  // banked instead of paid: what the technician's profile says, for this entry
-  const me = useMe();
-  const [bankPick, setBankPick] = useState<boolean | null>(null);
-  const bankOn = bankPick ?? me.preferences.bankHours;
   // the contract the time is logged on: the ticket's, unless another is picked
   const [contractPick, setContractPick] = useState("");
   const contracts = ticket?.contracts ?? [];
@@ -410,7 +414,9 @@ function TimeEntryDialog({ timer, position, onLater }: { timer: Timer; position:
         billable,
         offsetHours: billable ? off : 0,
         contractId: contract?.id ?? null,
-        banked: bankOn,
+        // what changes on the ticket with this time: its status and due date, only when changed
+        ...(statusNew && statusNew !== ticket?.status ? { status: statusNew } : {}),
+        ...(dueChanged && dueNew ? { dueAt: new Date(dueNew).toISOString() } : {}),
         notify: { contact: notifyContact, others },
       }),
     onSuccess: (r: { notified?: number; notifyFailed?: number; noContactEmail?: boolean }) => {
@@ -555,16 +561,32 @@ function TimeEntryDialog({ timer, position, onLater }: { timer: Timer; position:
                   : t("tickets.timer.notBilled")}
             </p>
           </div>
-          {/* banked instead of paid */}
-          <label className="flex items-center justify-between gap-3 rounded-xl border border-sky-400/25 bg-sky-500/[0.05] p-3 text-sm">
-            <span className="space-y-0.5">
-              <span className="flex items-center gap-1.5 font-medium">
-                <PiggyBank className="size-4 text-sky-300" /> {t("timesheet.bankEntry")}
-              </span>
-              <span className="block text-xs text-muted-foreground">{t("timesheet.bankEntryHint")}</span>
-            </span>
-            <Switch checked={bankOn} onCheckedChange={setBankPick} aria-label={t("timesheet.bankEntry")} />
-          </label>
+          {/* what the ticket becomes with this work: its status and its due date */}
+          {ticket && (
+            <div className="grid gap-3 sm:grid-cols-2">
+              <div className="space-y-1.5">
+                <Label htmlFor="te-status">{t("tickets.fields.status")}</Label>
+                <select
+                  id="te-status"
+                  value={statusNew || ticket.status}
+                  onChange={(e) => setStatusNew(e.target.value)}
+                  className="h-9 w-full rounded-md border bg-transparent px-2 text-sm outline-none focus:ring-2 focus:ring-[color:var(--gold)]/40"
+                >
+                  {ticket.options.statuses
+                    .filter((x) => !x.hidden || x.value === ticket.status)
+                    .map((x) => (
+                      <option key={x.value} value={x.value}>
+                        {txt.status(x)}
+                      </option>
+                    ))}
+                </select>
+              </div>
+              <div className="space-y-1.5">
+                <Label htmlFor="te-due">{t("tickets.fields.due")}</Label>
+                <Input id="te-due" type="datetime-local" value={dueNew || localInput(ticket.dueAt)} onChange={(e) => (setDueNew(e.target.value), setDueChanged(true))} />
+              </div>
+            </div>
+          )}
           <div className="space-y-1.5">
             <Label htmlFor="te-summary">{t("tickets.timer.summary")}</Label>
             <AiTextarea

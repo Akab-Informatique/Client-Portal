@@ -591,6 +591,8 @@ export const tickets = pgTable(
     updatedAt: updated(),
     /** When it got a "complete" status (null while open) */
     completedAt: timestamp("completed_at", { withTimezone: true }),
+    /** The ticket this one was merged into (its status is then "merged", a closed one) */
+    mergedIntoId: bigint("merged_into_id", { mode: "number" }),
     /** When it was last written from Autotask (null: made in the portal). Edited in the portal since: an import keeps the portal's version. */
     autotaskSyncedAt: timestamp("autotask_synced_at", { withTimezone: true }),
   },
@@ -625,6 +627,8 @@ export const ticketNotes = pgTable(
     internal: boolean("internal").notNull().default(false),
     /** Written by the system (an Autotask workflow rule…), not by a person */
     system: boolean("system").notNull().default(false),
+    /** The number of the ticket it was written on before that ticket was merged into this one */
+    mergedFrom: text("merged_from"),
     createdAt: created(),
   },
   (t) => [index("ticket_notes_ticket_idx").on(t.ticketId, t.createdAt), uniqueIndex("ticket_notes_external_idx").on(t.externalId)],
@@ -650,6 +654,8 @@ export const ticketTimeEntries = pgTable(
     billable: boolean("billable").notNull().default(true),
     workType: text("work_type"),
     contractId: text("contract_id"),
+    /** The number of the ticket it was entered on before that ticket was merged into this one */
+    mergedFrom: text("merged_from"),
     /** Already billed (posted in Autotask before the switch): never billed again */
     billed: boolean("billed").notNull().default(false),
     createdAt: created(),

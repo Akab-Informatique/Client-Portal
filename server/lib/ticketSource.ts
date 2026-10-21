@@ -60,6 +60,8 @@ export type Note = {
   system?: boolean;
   /** Who wrote it: the client (a contact, or a reply made in the client portal) or a technician. Absent: told by the name. */
   by?: "client" | "tech";
+  /** Written on a ticket that was merged into this one (its number) */
+  mergedFrom?: string;
 };
 export type Company = { id: number; name: string };
 export type Contact = { id: string; companyId: number; name: string; email: string | null; phone: string | null };
@@ -128,6 +130,10 @@ export type NTicket = {
   assetId?: string | null;
   /** Contract the work is billed on */
   contractId?: string | null;
+  /** The ticket this one was merged into (it is then closed, status "merged") */
+  mergedInto?: { id: number; number: string } | null;
+  /** The tickets merged into this one, with what they said at the start */
+  mergedTickets?: { id: number; number: string; title: string; description: string; createdAt: string; mergedAt: string; contact: string }[];
   /** Files attached in the portal (sample data only) */
   attachments?: { id: string; name: string; size: number; at: string; author: string; internal?: boolean }[];
   /** Parts that could not be loaded (the rest of the ticket is shown) */
@@ -337,7 +343,7 @@ export function dueIso(date: string, time = "17:00"): string {
 
 export class SourceError extends Error {
   constructor(
-    public code: "not_found" | "invalid_company" | "invalid_contact" | "invalid_assignee" | "invalid_value" | "not_linked" | "already_local" | "not_local",
+    public code: "not_found" | "invalid_company" | "invalid_contact" | "invalid_assignee" | "invalid_value" | "not_linked" | "already_local" | "not_local" | "merge_same" | "merge_already" | "merge_target_merged" | "merge_other_client",
   ) {
     super(code);
   }
@@ -402,7 +408,11 @@ const demoSource: TicketSource = {
   async options() {
     return {
       // label null: the screen shows its own translated name
-      statuses: DEMO_STATUSES.map((k) => ({ value: k, label: null, kind: k })),
+      statuses: [
+        ...DEMO_STATUSES.map((k) => ({ value: k, label: null, kind: k })),
+        // a closed ticket merged into another: set by the merge only, never picked by hand
+        { value: "merged", label: "Fusionné", kind: "complete" as const, hidden: true },
+      ],
       priorities: DEMO_PRIORITIES.map((k) => ({ value: k, label: null, kind: k })),
       queues: QUEUES.map((q) => ({ value: q, label: q, kind: "" as const })),
     };

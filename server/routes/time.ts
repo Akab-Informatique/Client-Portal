@@ -5,6 +5,7 @@ import { z } from "zod";
 import { db, schema } from "../db/index.ts";
 import { auth, requirePermission, requireStaff, type AppEnv, type AuthContext } from "../lib/auth.ts";
 import { audit } from "../lib/audit.ts";
+import { unpaidLunch } from "../../shared/workday.ts";
 import { body, zUuid } from "../lib/validate.ts";
 import { addDays, bankBalanceX100, bankByDefault, billableX100, editable, ensureTypes, sheetOf, todayQc, weekEntries, weekStartOf, weekTotals } from "../lib/timesheets.ts";
 
@@ -364,10 +365,9 @@ export const timeRoutes = new Hono<AppEnv>()
         hours: z.number().positive().max(24).optional(),
         note: z.string().trim().max(500).optional(),
         userId: zUuid.optional(),
-        // a work day: from, to, and the lunch taken off (30 min or 1 h)
+        // a work day: from and to (the lunch rule is in shared/workday.ts)
         start: zTime.optional(),
         end: zTime.optional(),
-        lunchMinutes: z.union([z.literal(30), z.literal(60)]).optional(),
         // banked instead of paid (none: the person's profile says)
         banked: z.boolean().optional(),
       }),
@@ -381,9 +381,10 @@ export const timeRoutes = new Hono<AppEnv>()
     let hours = p.hours ?? 0;
     let workday: { startTime: string; endTime: string; lunchMinutes: number } | null = null;
     if (type.kind === "workday") {
-      if (!p.start || !p.end || !p.lunchMinutes) throw new HTTPException(400, { message: "workday_times" });
+      if (!p.start || !p.end) throw new HTTPException(400, { message: "workday_times" });
       const minutes = (t: string) => Number(t.slice(0, 2)) * 60 + Number(t.slice(3));
-      const span = minutes(p.end) - minutes(p.start) - p.lunchMinutes;
+      const lunch = unpaidLunch(minutes(p.start), minutes(p.end));
+      const span = minutes(p.end) - minutes(p.start) - lunch;
       if (span <= 0) throw new HTTPException(400, { message: "workday_times" });
       hours = Math.round((span / 60) * 100) / 100;
       // one work day a day: change it by removing it first
@@ -393,7 +394,7 @@ export const timeRoutes = new Hono<AppEnv>()
         .where(and(eq(schema.timesheetEntries.userId, owner), eq(schema.timesheetEntries.date, p.date), eq(schema.timesheetEntries.typeId, type.id)))
         .limit(1);
       if (again) throw new HTTPException(409, { message: "workday_exists" });
-      workday = { startTime: p.start, endTime: p.end, lunchMinutes: p.lunchMinutes };
+      workday = { startTime: p.start, endTime: p.end, lunchMinutes: lunch };
     } else if (!p.hours) throw new HTTPException(400, { message: "Validation failed" });
     // hours paid out of the bank: no more than the bank holds
     if (type.kind === "bankpay" && Math.round(hours * 100) > (await bankBalanceX100(owner))) throw new HTTPException(409, { message: "bank_insufficient" });

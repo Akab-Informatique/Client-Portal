@@ -156,10 +156,16 @@ export function localTicketSource(base: TicketSource): TicketSource {
       ]);
       const minutes = times.reduce((s, x) => s + x.minutes, 0);
       const t = toTicket(r, Math.round((minutes / 60) * 100) / 100);
+      if (r.mergedIntoId) {
+        const [m] = await db().select({ id: schema.tickets.id, number: schema.tickets.number }).from(schema.tickets).where(eq(schema.tickets.id, r.mergedIntoId));
+        t.mergedInto = m ?? null;
+      }
+      const merged = await db().select().from(schema.tickets).where(eq(schema.tickets.mergedIntoId, id)).orderBy(asc(schema.tickets.createdAt));
+      t.mergedTickets = merged.map((m) => ({ id: m.id, number: m.number, title: m.title, description: m.description, createdAt: m.createdAt.toISOString(), mergedAt: (m.completedAt ?? m.updatedAt).toISOString(), contact: m.contactName }));
       const items: Note[] = [
         ...notes
           .filter((n) => !isSmsNote(n.text))
-          .map((n) => ({ id: `n-${n.id}`, author: n.author, at: n.createdAt.toISOString(), text: n.text, internal: n.internal, kind: "note" as const, ...(n.system ? { system: true } : {}) })),
+          .map((n) => ({ id: `n-${n.id}`, author: n.author, at: n.createdAt.toISOString(), text: n.text, internal: n.internal, kind: "note" as const, ...(n.system ? { system: true } : {}), ...(n.mergedFrom ? { mergedFrom: n.mergedFrom } : {}) })),
         ...times.map((x) => ({
           id: `t-${x.id}`,
           author: x.author,
@@ -171,6 +177,7 @@ export function localTicketSource(base: TicketSource): TicketSource {
           internalText: x.internalText || undefined,
           billable: x.billable,
           offsetHours: x.offsetMinutes ? Math.round((x.offsetMinutes / 60) * 10_000) / 10_000 : undefined,
+          ...(x.mergedFrom ? { mergedFrom: x.mergedFrom } : {}),
         })),
       ].sort((a, b) => a.at.localeCompare(b.at));
       t.notes = items;
@@ -508,6 +515,50 @@ export async function deleteTicket(id: number, a: AuthContext): Promise<{ number
   });
   await audit(a.realUser.id, "ticket.deleted", String(id), { number: r.number, title: r.title, company: r.companyName, timeEntries: times.length, charges: charges.length });
   return { number: r.number, title: r.title };
+}
+
+/**
+ * Merge a ticket into another of the same client: its notes, time, charges, files, timers and text / email
+ * links move to the other ticket, which gets its description as an internal note. The merged ticket stays,
+ * closed with the status "merged" (it leaves the open lists and counts like any closed ticket) and points at the other.
+ */
+export async function mergeTickets(id: number, intoId: number, a: AuthContext): Promise<{ number: string; into: { id: number; number: string } }> {
+  if (id === intoId) throw new SourceError("merge_same");
+  const [from, into] = await Promise.all([one(id), one(intoId)]);
+  if (from.status === "merged" || from.mergedIntoId) throw new SourceError("merge_already");
+  if (into.status === "merged" || into.mergedIntoId) throw new SourceError("merge_target_merged");
+  if (from.companyId !== into.companyId) throw new SourceError("merge_other_client");
+  const who = a.realUser.name;
+  const [pins, blocks] = await Promise.all([db().select().from(schema.ticketPins).where(eq(schema.ticketPins.ticketId, id)), db().select().from(schema.calendarBlocks).where(eq(schema.calendarBlocks.ticketId, id))]);
+  for (const p of pins) await unsyncPin(p).catch(() => undefined);
+  for (const b of blocks) await unsyncBlock(b).catch(() => undefined);
+  await db().transaction(async (tx) => {
+    // what moves keeps the number of the ticket it was written on (what came from an earlier merge keeps its own)
+    await tx.update(schema.ticketNotes).set({ ticketId: intoId, mergedFrom: sql`coalesce(${schema.ticketNotes.mergedFrom}, ${from.number})` }).where(eq(schema.ticketNotes.ticketId, id));
+    await tx.update(schema.ticketTimeEntries).set({ ticketId: intoId, mergedFrom: sql`coalesce(${schema.ticketTimeEntries.mergedFrom}, ${from.number})` }).where(eq(schema.ticketTimeEntries.ticketId, id));
+    for (const t of [schema.ticketCharges, schema.ticketAttachments]) await tx.update(t).set({ ticketId: intoId }).where(eq(t.ticketId, id));
+    await tx.update(schema.ticketTimers).set({ ticketId: intoId, ticketNumber: into.number, ticketTitle: into.title }).where(eq(schema.ticketTimers.ticketId, id));
+    // its priorities and planned time end with it (the other ticket keeps its own)
+    await tx.delete(schema.ticketPins).where(eq(schema.ticketPins.ticketId, id));
+    await tx.delete(schema.calendarBlocks).where(eq(schema.calendarBlocks.ticketId, id));
+    await tx.update(schema.smsConversations).set({ ticketId: intoId, ticketNumber: into.number }).where(eq(schema.smsConversations.ticketId, id));
+    await tx.update(schema.mailIntake).set({ ticketId: intoId, ticketNumber: into.number }).where(eq(schema.mailIntake.ticketId, id));
+    await tx.insert(schema.ticketNotes).values({
+      ticketId: intoId,
+      author: who,
+      userId: a.realUser.kind === "staff" ? a.realUser.id : null,
+      internal: true,
+      mergedFrom: from.number,
+      text: `Billet ${from.number} fusionné ici — ${from.title}${from.description.trim() ? `
+
+${from.description.trim()}` : ""}`,
+    });
+    await tx.insert(schema.ticketNotes).values({ ticketId: id, author: who, userId: a.realUser.kind === "staff" ? a.realUser.id : null, internal: true, system: true, text: `Fusionné dans ${into.number}` });
+    await tx.update(schema.tickets).set({ updatedAt: new Date() }).where(eq(schema.tickets.id, intoId));
+    await tx.update(schema.tickets).set({ status: "merged", mergedIntoId: intoId, completedAt: from.completedAt ?? new Date(), updatedAt: new Date() }).where(eq(schema.tickets.id, id));
+  });
+  await audit(a.realUser.id, "ticket.merged", String(id), { number: from.number, into: into.number });
+  return { number: from.number, into: { id: into.id, number: into.number } };
 }
 
 /** A portal ticket's file */

@@ -51,7 +51,7 @@ export type TicketDetail = TicketSummary & {
   source: string;
   hours: number;
   /** Notes and time entries (work done), oldest first */
-  notes: { id: string; author: string; at: string; text: string; internal: boolean; kind?: "note" | "time"; hours?: number; internalText?: string; billable?: boolean; offsetHours?: number; system?: boolean; by?: "client" | "tech" }[];
+  notes: { id: string; author: string; at: string; text: string; internal: boolean; kind?: "note" | "time"; hours?: number; internalText?: string; billable?: boolean; offsetHours?: number; system?: boolean; by?: "client" | "tech"; mergedFrom?: string }[];
   /** AI assistant available to me */
   ai: boolean;
   /** The ticket device (absent while the full ticket loads) */
@@ -69,6 +69,10 @@ export type TicketDetail = TicketSummary & {
   demo: boolean;
   /** The ticket lives in the portal's own database: it can be deleted */
   local?: boolean;
+  /** The ticket it was merged into (this one is then closed) */
+  mergedInto?: { id: number; number: string } | null;
+  /** The tickets merged into this one */
+  mergedTickets?: { id: number; number: string; title: string; description: string; createdAt: string; mergedAt: string; contact: string }[];
   options: {
     statuses: Choice<StatusKind>[];
     priorities: Choice<PriorityKind>[];

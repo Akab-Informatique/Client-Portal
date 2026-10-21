@@ -6,6 +6,7 @@ import { BarChart3, ChevronDown, ChevronLeft, ChevronRight, ChevronsDownUp, Chev
 import { GlassBackdrop } from "@/components/brand/GlassBackdrop";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { unpaidLunch } from "@shared/workday";
 import { Input } from "@/components/ui/input";
 import { Switch } from "@/components/ui/switch";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
@@ -263,7 +264,7 @@ export function TimesheetPage() {
                                 )}
                               </span>
                               {e.kind === "workday" && e.startTime && e.endTime && (
-                                <span className="block text-xs text-muted-foreground">{t("timesheet.workdayLine", { from: e.startTime, to: e.endTime, lunch: e.lunchMinutes === 60 ? "1 h" : "30 min" })}</span>
+                                <span className="block text-xs text-muted-foreground">{t("timesheet.workdayLine", { from: e.startTime, to: e.endTime, lunch: `${e.lunchMinutes ?? 0} min` })}</span>
                               )}
                               {e.note && <span className="block text-xs text-muted-foreground">{e.note}</span>}
                             </span>
@@ -447,12 +448,12 @@ function EntryDialog({
   const [banked, setBanked] = useState<boolean | null>(null);
   const bankOn = banked ?? me.preferences.bankHours;
   const manual = (types?.time ?? []).filter((x) => x.kind !== "labour");
-  const [f, setF] = useState({ date: "", typeId: "", hours: "", note: "", start: "08:00", end: "16:30", lunch: 30 as 30 | 60 });
+  const [f, setF] = useState({ date: "", typeId: "", hours: "", note: "", start: "08:00", end: "16:30" });
   const type = manual.find((x) => x.id === f.typeId);
   const isWorkday = type?.kind === "workday";
   const isBankPay = type?.kind === "bankpay";
   const hoursAsked = Number(f.hours.replace(",", "."));
-  const span = minutesOf(f.end) - minutesOf(f.start) - f.lunch;
+  const span = minutesOf(f.end) - minutesOf(f.start) - unpaidLunch(minutesOf(f.start), minutesOf(f.end));
   const workdayOk = Number.isFinite(span) && span > 0 && span <= 24 * 60;
   const add = useMutation({
     mutationFn: () =>
@@ -460,7 +461,7 @@ function EntryDialog({
         date: f.date || week.weekStart,
         typeId: f.typeId,
         note: f.note || undefined,
-        ...(isWorkday ? { start: f.start, end: f.end, lunchMinutes: f.lunch } : { hours: hoursAsked, ...(isBankPay ? {} : { banked: bankOn }) }),
+        ...(isWorkday ? { start: f.start, end: f.end } : { hours: hoursAsked, ...(isBankPay ? {} : { banked: bankOn }) }),
         ...(userId ? { userId } : {}),
       }),
     onSuccess: () => {
@@ -525,23 +526,7 @@ function EntryDialog({
                   <Input type="time" value={f.end} onChange={(e) => setF({ ...f, end: e.target.value })} className="text-foreground" />
                 </label>
               </div>
-              <div role="radiogroup" aria-label={t("timesheet.lunch")} className="space-y-1">
-                <p className="text-xs text-muted-foreground">{t("timesheet.lunch")}</p>
-                <div className="grid grid-cols-2 gap-2">
-                  {([30, 60] as const).map((m) => (
-                    <button
-                      key={m}
-                      type="button"
-                      role="radio"
-                      aria-checked={f.lunch === m}
-                      onClick={() => setF({ ...f, lunch: m })}
-                      className={cn("rounded-lg border py-2 text-sm transition-colors", f.lunch === m ? "border-[color:var(--gold)]/60 bg-[color:var(--gold)]/10 font-medium" : "text-muted-foreground hover:bg-accent/50")}
-                    >
-                      {m === 30 ? t("timesheet.lunch30") : t("timesheet.lunch60")}
-                    </button>
-                  ))}
-                </div>
-              </div>
+              <p className="text-xs text-muted-foreground">{t("timesheet.lunchRule")}</p>
               <p className={cn("text-sm", workdayOk ? "text-foreground" : "text-destructive")}>
                 {workdayOk ? t("timesheet.workdayTotal", { hours: (span / 60).toLocaleString(undefined, { maximumFractionDigits: 2 }) }) : t("timesheet.workdayTimes")}
               </p>
@@ -726,7 +711,7 @@ function ReportDialog({
                               <span className="font-mono text-xs text-muted-foreground">{e.ticketNumber}</span> {e.ticketTitle}
                             </>
                           ) : e.kind === "workday" && e.startTime ? (
-                            `${e.type} · ${e.startTime}–${e.endTime} · ${t("timesheet.lunchShort", { lunch: e.lunchMinutes === 60 ? "1 h" : "30 min" })}`
+                            `${e.type} · ${e.startTime}–${e.endTime} · ${t("timesheet.lunchShort", { lunch: `${e.lunchMinutes ?? 0} min` })}`
                           ) : (
                             e.type
                           )}

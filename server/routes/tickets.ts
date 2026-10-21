@@ -17,7 +17,7 @@ import { notify } from "../lib/notify.ts";
 import { AI_FEATURE_KEYS, AI_MODELS, AiError, aiSettings, askClaude, askClaudeJson, modelFor, todayOf, type AiModel } from "../lib/ai.ts";
 import { sweepTimers, timerView, elapsedMs } from "../lib/timers.ts";
 import { MAX_TICKET_ATTACHMENT_BYTES, SourceError, ticketSource, type Asset, type NTicket, type Options, type TicketSource } from "../lib/ticketSource.ts";
-import { deleteTicket, ticketFile, ticketsLocal } from "../lib/localTickets.ts";
+import { deleteTicket, mergeTickets, ticketFile, ticketsLocal } from "../lib/localTickets.ts";
 import { rmmLink, rmmSettings, type RmmSettings } from "../lib/rmm.ts";
 import { searchProducts, serialsOf, StoreError, takeForTicket, undoTake } from "../lib/store.ts";
 import { storeHttp } from "./store.ts";
@@ -393,6 +393,8 @@ async function detailOf(src: TicketSource, id: number, a: AuthContext) {
     client,
     contract: billing?.contract ?? null,
     contracts: billing?.contracts ?? [],
+    mergedInto: t.mergedInto ?? null,
+    mergedTickets: t.mergedTickets ?? [],
     estimate: meta[0]?.minutes ? { minutes: meta[0].minutes, source: meta[0].source === "ai" ? ("ai" as const) : ("tech" as const) } : null,
     demo: src.demo,
     /** The ticket lives in the portal's own database (it can be deleted here) */
@@ -972,6 +974,12 @@ export const ticketRoutes = new Hono<AppEnv>()
         contractId: z.uuid().nullable().optional(),
         // banked instead of paid (none: the technician's profile says)
         banked: z.boolean().optional(),
+        // what the ticket becomes with this time: its status and due date
+        status: z.string().max(60).optional(),
+        dueAt: z
+          .string()
+          .refine((v) => !Number.isNaN(new Date(v).getTime()))
+          .optional(),
         // the description sent by email: to the ticket contact, and to other addresses
         notify: z
           .object({ contact: z.boolean().default(false), others: z.array(zEmail).max(10).default([]) })
@@ -995,6 +1003,9 @@ export const ticketRoutes = new Hono<AppEnv>()
     try {
     const endedAt = timer.endedAt ?? new Date();
     const src = await ticketSource();
+    // the ticket's status and due date, when the technician changed them with this time (checked before the time is kept)
+    if (p.status && !(await run(() => src.options())).statuses.some((x) => x.value === p.status)) throw new HTTPException(400, { message: "Validation failed" });
+    if (p.status || p.dueAt) await run(() => src.update(timer.ticketId, { ...(p.status ? { status: p.status } : {}), ...(p.dueAt ? { dueAt: new Date(p.dueAt).toISOString() } : {}) }, a));
     await run(() => src.addTimeEntry(timer.ticketId, { ...p, contractSourceId: contract?.sourceId ?? null, startedAt: new Date(endedAt.getTime() - p.hours * 3_600_000), endedAt }, a));
     // on the technician's timesheet too, with the ticket
     const tk = await src.get(timer.ticketId).catch(() => null);
@@ -1344,6 +1355,20 @@ export const ticketRoutes = new Hono<AppEnv>()
     if (!(await ticketsLocal())) throw new HTTPException(409, { message: "tickets_not_local" });
     const gone = await run(() => deleteTicket(id, a));
     return c.json({ ok: true, ...gone });
+  })
+
+  /**
+   * Merge this ticket into another of the same client (tickets.edit): everything moves to the other ticket,
+   * this one is closed with the status "merged". Only tickets the portal owns.
+   */
+  .post("/:id/merge", requirePermission("tickets.edit"), async (c) => {
+    const a = auth(c);
+    const id = Number(c.req.param("id"));
+    if (!Number.isInteger(id) || id <= 0) throw new HTTPException(400, { message: "invalid_id" });
+    const p = await body(c, z.object({ intoId: z.number().int().positive() }));
+    if (!(await ticketsLocal())) throw new HTTPException(409, { message: "tickets_not_local" });
+    const r = await run(() => mergeTickets(id, p.intoId, a));
+    return c.json({ ok: true, ...r });
   })
 
   /** A file attached to a ticket of the portal (always a download, never shown in the page) */

@@ -5,7 +5,7 @@ import { useMutation, useQuery, useQueryClient, type QueryClient } from "@tansta
 import { AnimatePresence, motion } from "motion/react";
 import { toast } from "sonner";
 import { Dialog as DialogPrimitive } from "radix-ui";
-import { AlertTriangle, Bot, Building2, CalendarClock, CalendarPlus, Check, BookOpen, ChevronDown, ListOrdered, ChevronUp, Clock3, Eye, FileText, HardDrive, HelpCircle, Inbox, ListChecks, Loader2, Lock, Mail, Minus, MonitorCog, MonitorPlay, NotebookPen, Pencil, Phone, RefreshCw, Send, Sparkles, Timer, Star, UserCheck, UserRound, Users, X, type LucideIcon, MessageSquareReply, MessageSquareText, Trash2 } from "lucide-react";
+import { AlertTriangle, Bot, Building2, CalendarClock, CalendarPlus, Check, BookOpen, ChevronDown, ListOrdered, ChevronUp, Clock3, Eye, FileText, HardDrive, HelpCircle, Inbox, ListChecks, Loader2, Lock, Mail, Minus, MonitorCog, MonitorPlay, NotebookPen, Pencil, Phone, RefreshCw, Send, Sparkles, Timer, Star, UserCheck, UserRound, Users, X, type LucideIcon, MessageSquareReply, MessageSquareText, Trash2, GitMerge } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { useConfirm } from "@/components/ConfirmDialog";
 import { AiTextarea } from "@/components/AiPolish";
@@ -34,6 +34,8 @@ import { TimerControl } from "./timers";
 import { AssetContent, AssetPicker } from "./AssetCard";
 import { ClientHoursGauge } from "./ClientHoursGauge";
 import { AcceptDialog } from "./AcceptDialog";
+import { MergeDialog } from "./MergeDialog";
+import { useTicketWorkspace } from "./workspace";
 import { contractNote } from "./contract";
 import { ContactTicketsList, useContactOpen } from "./ContactTickets";
 import { ChargeButtons } from "./Charges";
@@ -300,6 +302,7 @@ function TicketBody({
   const [focusNote, setFocusNote] = useState<{ internal: boolean; at: number } | null>(null);
   const [giving, setGiving] = useState(false);
   const [accepting, setAccepting] = useState(false);
+  const [merging, setMerging] = useState(false);
   // the three squares: full size, or collapsed to small icons (kept per browser)
   const [tilesOpen, setTilesOpen] = useState(() => {
     try {
@@ -367,6 +370,7 @@ function TicketBody({
               <PresenceLight viewers={viewers} />
             </span>
             <TimerControl ticketId={tk.id} />
+            <MergedTickets tk={tk} />
             {can("tickets.ai") &&
               (tk.ai ? <AiMenu tk={tk} onReply={(text) => setDraft({ text, internal: false })} /> : <AiSetupHint label={t("tickets.ai.button")} />)}
             {can("tickets.delete") && !partial && (
@@ -649,11 +653,17 @@ function TicketBody({
             <div className="mt-3 flex flex-wrap items-center gap-1.5 lg:mt-12 lg:justify-end lg:justify-self-end">
               {remote && <QuickAction icon={MonitorPlay} label={t("tickets.asset.remote")} href={remote} accent />}
               {editable && !partial && tk.assignee?.id !== me.id && statusKind !== "complete" && <QuickAction icon={UserCheck} label={t("tickets.accept.button")} onClick={() => setAccepting(true)} accent />}
+              {editable && !partial && tk.local && statusKind !== "complete" && <QuickAction icon={GitMerge} label={t("tickets.merge.button")} onClick={() => setMerging(true)} />}
               {can("tickets.plan") && <QuickAction icon={Star} label={t("planning.givePriority")} onClick={() => setGiving(true)} />}
               <CallButton contact={tk.contact} phone={phone} />
             </div>
           </div>
 
+          {tk.mergedInto && (
+            <p className="flex items-start gap-2 rounded-xl border border-violet-500/40 bg-violet-500/10 px-3 py-2 text-xs text-violet-200">
+              <GitMerge className="mt-0.5 size-3.5 shrink-0" /> {t("tickets.merge.mergedInto", { number: tk.mergedInto.number })}
+            </p>
+          )}
           {tk.startLocked && tk.startDate && tk.startDate > todayLocal() && (
             <p className="flex items-start gap-2 rounded-xl border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-xs text-amber-200">
               <Lock className="mt-0.5 size-3.5 shrink-0" />{" "}
@@ -781,6 +791,7 @@ function TicketBody({
         </aside>
       </div>
       <OpenedByOthers viewers={viewers} />
+      {merging && <MergeDialog open onOpenChange={(o) => !o && setMerging(false)} tk={tk} onDone={() => onClose()} />}
       {accepting && <AcceptDialog open onOpenChange={(o) => !o && setAccepting(false)} tk={tk} statuses={tk.options.statuses} />}
       {giving && <PriorityDialog priority={null} ticket={{ id: tk.id, number: tk.number, title: tk.title }} onClose={() => setGiving(false)} />}
     </>
@@ -1049,7 +1060,7 @@ function Section({
   );
 }
 
-type ActivityFilter = "all" | "reply" | "internal" | "time";
+type ActivityFilter = "all" | "reply" | "internal" | "time" | "merged";
 
 /**
  * What was said and done, as a conversation, newest on top: the client's
@@ -1061,13 +1072,21 @@ function Activity({ tk, partial }: { tk: TicketDetail; partial: boolean }) {
   const { t } = useTranslation();
   const [filter, setFilter] = useState<ActivityFilter>("all");
   type Item = TicketDetail["notes"][number];
-  const kindOf = (n: Item): Exclude<ActivityFilter, "all"> => (n.kind === "time" ? "time" : n.internal ? "internal" : "reply");
+  const kindOf = (n: Item): Exclude<ActivityFilter, "all" | "merged"> => (n.kind === "time" ? "time" : n.internal ? "internal" : "reply");
   // the client's own words: told by the source, else by the name of the ticket's contact
   const fromClient = (n: Item) => (n.by ? n.by === "client" : n.author === tk.contact);
   const notes = tk.notes.filter((n) => !n.system).sort((x, y) => y.at.localeCompare(x.at));
   const counts = { all: notes.length, reply: 0, internal: 0, time: 0 };
   for (const n of notes) counts[kindOf(n)]++;
-  const shown = notes.filter((n) => filter === "all" || kindOf(n) === filter);
+  // what came from a ticket merged into this one is tinted and has its own filter
+  const mergedCount = notes.filter((n) => n.mergedFrom).length;
+  const shown = notes.filter((n) => filter === "all" || (filter === "merged" ? Boolean(n.mergedFrom) : kindOf(n) === filter));
+  const mergedChip = (n: Item) =>
+    n.mergedFrom ? (
+      <span className="flex items-center gap-1 rounded-full bg-emerald-500/20 px-2 py-0.5 text-[10px] font-semibold tracking-wide text-emerald-300" title={t("tickets.merge.fromHint", { number: n.mergedFrom })}>
+        <GitMerge className="size-3" /> {n.mergedFrom}
+      </span>
+    ) : null;
   const initials = (name: string) =>
     name
       .split(/\s+/)
@@ -1081,7 +1100,7 @@ function Activity({ tk, partial }: { tk: TicketDetail; partial: boolean }) {
     <section className="glass rounded-2xl border p-4">
       <div className="mb-4 flex flex-wrap items-center gap-1.5">
         <p className="mr-2 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">{t("tickets.activity")}</p>
-        {(["all", "reply", "internal", "time"] as const).map((f) => (
+        {(["all", "reply", "internal", "time", ...(mergedCount ? (["merged"] as const) : [])] as const).map((f) => (
           <button
             key={f}
             type="button"
@@ -1091,7 +1110,7 @@ function Activity({ tk, partial }: { tk: TicketDetail; partial: boolean }) {
               filter === f ? "border-[color:var(--gold)]/50 bg-[color:var(--gold)]/15 text-primary" : "border-transparent text-muted-foreground hover:text-foreground",
             )}
           >
-            {t(`tickets.activityFilter.${f}`)} {counts[f] > 0 && <span className="opacity-60">{counts[f]}</span>}
+            {t(`tickets.activityFilter.${f}`)} {(f === "merged" ? mergedCount : counts[f]) > 0 && <span className="opacity-60">{f === "merged" ? mergedCount : counts[f]}</span>}
           </button>
         ))}
         {/* the legend: who is where */}
@@ -1130,6 +1149,7 @@ function Activity({ tk, partial }: { tk: TicketDetail; partial: boolean }) {
                     className={cn(
                       "w-full max-w-[88%] rounded-2xl border px-4 py-2.5",
                       time ? "border-sky-400/40 bg-sky-500/10" : "border-violet-400/40 bg-violet-500/10",
+                      n.mergedFrom && "border-emerald-400/60 shadow-[inset_3px_0_0_0_rgba(52,211,153,0.8)]",
                     )}
                   >
                     <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
@@ -1143,6 +1163,7 @@ function Activity({ tk, partial }: { tk: TicketDetail; partial: boolean }) {
                           {t("tickets.timer.billedAfterOffset", { billed: hm(Math.max(0, (n.hours ?? 0) - (n.offsetHours ?? 0))), offset: hm(n.offsetHours ?? 0) })}
                         </span>
                       )}
+                      {mergedChip(n)}
                       {head}
                     </div>
                     {n.text && <p className="mt-1.5 whitespace-pre-wrap text-sm">{n.text}</p>}
@@ -1174,8 +1195,10 @@ function Activity({ tk, partial }: { tk: TicketDetail; partial: boolean }) {
                   className={cn(
                     "max-w-[78%] rounded-2xl border px-3.5 py-2",
                     client ? "rounded-bl-sm bg-muted/60" : "rounded-br-sm border-[color:var(--gold)]/30 bg-[color:var(--gold)]/12",
+                    n.mergedFrom && "border-emerald-400/60 bg-emerald-500/10 shadow-[inset_3px_0_0_0_rgba(52,211,153,0.8)]",
                   )}
                 >
+                  {n.mergedFrom && <div className={cn("mb-1 flex", !client && "justify-end")}>{mergedChip(n)}</div>}
                   <div className={cn(!client && "text-right")}>{head}</div>
                   <p className="mt-1 whitespace-pre-wrap text-sm leading-relaxed">{n.text}</p>
                 </div>
@@ -2017,6 +2040,44 @@ export function AiSetupHint({ label }: { label: string }) {
             {t("tickets.ai.configure")}
           </Button>
         )}
+      </PopoverContent>
+    </Popover>
+  );
+}
+
+/** The tickets merged into this one: a small button with a list, each ticket as it was written (description) */
+function MergedTickets({ tk }: { tk: TicketDetail }) {
+  const { t } = useTranslation();
+  const ws = useTicketWorkspace();
+  const list = tk.mergedTickets ?? [];
+  if (!list.length) return null;
+  return (
+    <Popover>
+      <PopoverTrigger asChild>
+        <Button variant="outline" size="sm" className="h-9 gap-1.5 border-emerald-400/40 text-emerald-300 hover:bg-emerald-500/10" aria-label={t("tickets.merge.list")}>
+          <GitMerge className="size-4" /> {t("tickets.merge.listCount", { count: list.length })}
+        </Button>
+      </PopoverTrigger>
+      <PopoverContent align="end" className="w-96 max-w-[92vw] space-y-2 p-3">
+        <p className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">{t("tickets.merge.list")}</p>
+        <ul className="max-h-80 space-y-2 overflow-y-auto">
+          {list.map((m) => (
+            <li key={m.id} className="rounded-xl border border-emerald-400/30 bg-emerald-500/5 p-2.5 text-sm">
+              <div className="flex items-baseline gap-2">
+                <span className="font-mono text-xs text-emerald-300">{m.number}</span>
+                <span className="min-w-0 flex-1 truncate font-medium">{m.title}</span>
+                <button type="button" className="shrink-0 text-xs text-primary hover:underline" onClick={() => ws.open(m.id)}>
+                  {t("tickets.rowMenu.open")}
+                </button>
+              </div>
+              <p className="mt-0.5 text-[11px] text-muted-foreground">
+                {m.contact && `${m.contact} · `}
+                {t("tickets.merge.mergedOn", { date: longDateTime(m.mergedAt) })}
+              </p>
+              {m.description.trim() && <p className="mt-1.5 line-clamp-6 whitespace-pre-wrap text-xs text-muted-foreground">{m.description}</p>}
+            </li>
+          ))}
+        </ul>
       </PopoverContent>
     </Popover>
   );
