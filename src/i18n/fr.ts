@@ -3007,7 +3007,7 @@ const fr = {
         custom: "Date précise…",
       },
     },
-    rowMenu: {"title":"Actions du billet","accept":"Accepter le billet (me l'assigner)","open":"Ouvrir le billet"},
+    rowMenu: {"assign":"Assigner à…","assignMe":"{{name}} (moi)","title":"Actions du billet","accept":"Accepter le billet (me l'assigner)","open":"Ouvrir le billet"},
     tileBar: {
       collapse: "Réduire les carrés",
       expand: "Agrandir les carrés",

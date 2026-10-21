@@ -3009,7 +3009,7 @@ const en: Dict = {
         custom: "A date…",
       },
     },
-    rowMenu: {"title":"Ticket actions","accept":"Accept the ticket (assign it to me)","open":"Open the ticket"},
+    rowMenu: {"assign":"Assign to…","assignMe":"{{name}} (me)","title":"Ticket actions","accept":"Accept the ticket (assign it to me)","open":"Open the ticket"},
     tileBar: {
       collapse: "Collapse the squares",
       expand: "Expand the squares",

@@ -32,6 +32,7 @@ import {
   Sparkles,
   Trash2,
   UserCheck,
+  UserRoundPlus,
   ExternalLink,
   UserRound,
   UserX,
@@ -47,6 +48,9 @@ import {
   DropdownMenuItem,
   DropdownMenuLabel,
   DropdownMenuSeparator,
+  DropdownMenuSub,
+  DropdownMenuSubContent,
+  DropdownMenuSubTrigger,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { Input } from "@/components/ui/input";
@@ -840,6 +844,30 @@ function TicketRow({
                   <DropdownMenuItem onSelect={onAccept}>
                     <UserCheck className="size-4 text-primary" /> {t("tickets.rowMenu.accept")}
                   </DropdownMenuItem>
+                )}
+                {editable && (
+                  // hand the ticket to another technician (or take the assignment off)
+                  <DropdownMenuSub>
+                    <DropdownMenuSubTrigger>
+                      <UserRoundPlus className="size-4" /> {t("tickets.rowMenu.assign")}
+                    </DropdownMenuSubTrigger>
+                    <DropdownMenuSubContent className="max-h-72 min-w-48 overflow-y-auto">
+                      {facets.technicians.map((p) => (
+                        <DropdownMenuItem key={p.id} disabled={tk.assignee?.id === p.id} onSelect={() => onPatch({ assigneeId: p.id })}>
+                          <span className="flex-1 truncate">{p.id === me.id ? t("tickets.rowMenu.assignMe", { name: p.name }) : p.name}</span>
+                          {tk.assignee?.id === p.id && <Check className="size-3.5 text-primary" />}
+                        </DropdownMenuItem>
+                      ))}
+                      {tk.assignee && (
+                        <>
+                          <DropdownMenuSeparator />
+                          <DropdownMenuItem onSelect={() => onPatch({ assigneeId: null })}>
+                            <UserX className="size-4" /> {t("tickets.unassigned")}
+                          </DropdownMenuItem>
+                        </>
+                      )}
+                    </DropdownMenuSubContent>
+                  </DropdownMenuSub>
                 )}
                 <DropdownMenuItem onSelect={onOpen}>
                   <ExternalLink className="size-4" /> {t("tickets.rowMenu.open")}
