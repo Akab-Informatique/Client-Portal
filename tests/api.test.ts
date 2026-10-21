@@ -5335,10 +5335,13 @@ describe("merge tickets", () => {
     resetRateLimit("login:ip:unknown");
     const local = await import("../server/lib/localTickets.ts");
     const tech = await signIn("tech@akab.local");
+    // options saved before merging existed (production): no "merged" status in them
+    const saved = await (await import("../server/lib/ticketSource.ts")).sourceOptions();
+    const cfg = { mode: "local", options: { ...saved, statuses: saved.statuses.filter((x) => x.value !== "merged") } };
     await db()
       .insert(schema.integrations)
-      .values({ provider: "tickets", enabled: true, config: { mode: "local" } })
-      .onConflictDoUpdate({ target: schema.integrations.provider, set: { enabled: true, config: { mode: "local" } } });
+      .values({ provider: "tickets", enabled: true, config: cfg })
+      .onConflictDoUpdate({ target: schema.integrations.provider, set: { enabled: true, config: cfg } });
     local.resetTicketMode();
     const mk = async (title: string, companyId: number) => (await tech.post("/api/tickets", { title, description: `Texte ${title}`, companyId, priority: "medium", queue: "support", assigneeId: null, dueDate: "2027-01-05" })).json.id as number;
     const a = await mk("Doublon", 300);
@@ -5357,6 +5360,7 @@ describe("merge tickets", () => {
     const merged = (await tech.get(`/api/tickets/${a}`)).json;
     expect(merged.status).toBe("merged");
     expect(merged.statusKind).toBe("complete");
+    expect(merged.statusLabel).toBe("Fusionné");
     expect(merged.mergedInto.id).toBe(b);
     // the client's message and the original description are on the main ticket
     const texts = (await tech.get(`/api/tickets/${b}`)).json.notes.map((n: any) => n.text) as string[];

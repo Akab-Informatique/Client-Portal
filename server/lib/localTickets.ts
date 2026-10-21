@@ -129,7 +129,11 @@ const cachedSources = new WeakMap<TicketSource, TicketSource>();
 export function localTicketSource(base: TicketSource): TicketSource {
   const hit = cachedSources.get(base);
   if (hit) return hit;
-  const options = async (): Promise<Options> => (await ticketMode()).options ?? (await base.options());
+  // the status "merged" (a closed one) is always there, also when the list was saved before merging existed
+  const options = async (): Promise<Options> => {
+    const o = (await ticketMode()).options ?? (await base.options());
+    return o.statuses.some((x) => x.value === "merged") ? o : { ...o, statuses: [...o.statuses, { value: "merged", label: "Fusionné", kind: "complete", hidden: true }] };
+  };
   const isComplete = async (status: string) => (await options()).statuses.find((s) => s.value === status)?.kind === "complete";
 
   const src: TicketSource = {
