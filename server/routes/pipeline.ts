@@ -8,7 +8,7 @@ import { audit } from "../lib/audit.ts";
 import { aiSettings } from "../lib/ai.ts";
 import { rateLimit } from "../lib/http.ts";
 import { notify, usersWith } from "../lib/notify.ts";
-import { buildPipelineView, morningRun, pipelineSettings, planOf, buildPlan, savePipelineSettings, type PipelineSettings } from "../lib/pipeline.ts";
+import { buildPipelineView, maskPhone, morningRun, phoneOf, PipelineError, pipelineSettings, planOf, buildPlan, savePipelineSettings, sendTestSms, type PipelineSettings } from "../lib/pipeline.ts";
 import { ticketSource } from "../lib/ticketSource.ts";
 import { todayQc } from "../lib/timesheets.ts";
 import { body, zUuid } from "../lib/validate.ts";
@@ -347,6 +347,25 @@ export const pipelineRoutes = new Hono<AppEnv>()
     const next = await savePipelineSettings(p as Partial<PipelineSettings>);
     await audit(a.user.id, "pipeline.settings", null, { auto: p.auto, time: p.time, sms: p.sms });
     return c.json(next);
+  })
+  /** Who can be sent a test text: the technicians, whether they have a mobile number (masked) and the text line is ready */
+  .get("/test-targets", requirePermission("pipeline.manage"), async (c) => {
+    const ids = await usersWith("staff", "pipeline.view");
+    const rows = ids.length ? await db().select().from(schema.users).where(inArray(schema.users.id, ids)).orderBy(asc(schema.users.name)) : [];
+    return c.json(rows.map((u) => ({ id: u.id, name: u.name, phone: maskPhone(phoneOf(u)) })));
+  })
+  /** One test text to one person: their real morning text, or a short line */
+  .post("/morning/test-sms", requirePermission("pipeline.manage"), async (c) => {
+    const a = auth(c);
+    const p = await body(c, z.object({ userId: zUuid, mode: z.enum(["plan", "short"]).default("short") }));
+    try {
+      const r = await sendTestSms(p.userId, p.mode);
+      await audit(a.user.id, "pipeline.test_sms_sent", p.userId, { mode: p.mode });
+      return c.json({ ok: true, ...r });
+    } catch (e) {
+      if (e instanceof PipelineError) throw new HTTPException(e.code === "not_found" ? 404 : e.code === "sms_failed" ? 502 : 409, { message: e.code });
+      throw e;
+    }
   })
   /** Run the morning plan now, for everyone or one person (texts only when asked) */
   .post("/morning/run", requirePermission("pipeline.manage"), async (c) => {

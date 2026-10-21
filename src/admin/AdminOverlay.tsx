@@ -3,7 +3,7 @@ import { useSearchParams } from "react-router-dom";
 import { useTranslation } from "react-i18next";
 import { AnimatePresence, motion } from "motion/react";
 import { Dialog as DialogPrimitive } from "radix-ui";
-import { Briefcase, ChevronDown, Clock, Inbox, PanelLeftClose, PanelLeftOpen, History, FileText, ListOrdered, Mail, Tags, Truck, Ticket, PlugZap, Receipt, ShieldCheck, Users, Workflow, X, type LucideIcon } from "lucide-react";
+import { Briefcase, ChevronDown, Clock, Inbox, PanelLeftClose, PanelLeftOpen, History, FileText, ListChecks, ListOrdered, Mail, Tags, Truck, Ticket, PlugZap, Receipt, ShieldCheck, Users, Workflow, X, type LucideIcon } from "lucide-react";
 import { LogoMark } from "@/components/brand/Logo";
 import { TechBackground } from "@/components/brand/TechBackground";
 import { useCan } from "@/lib/session";
@@ -21,6 +21,7 @@ import { QueuesSection } from "./QueuesSection";
 import { ClassesSection } from "./ClassesSection";
 import { TicketSetupSection } from "./TicketSetupSection";
 import { MailIntakeSection } from "./MailIntakeSection";
+import { PipelineSection } from "./PipelineSection";
 
 type Section = { key: string; labelKey: string; icon: LucideIcon; permission: PermissionKey[]; render: () => React.ReactNode };
 
@@ -37,6 +38,7 @@ const SECTIONS: Section[] = [
   { key: "ticketsetup", labelKey: "admin.sections.ticketsetup", icon: Ticket, permission: ["admin.tickets"], render: () => <TicketSetupSection /> },
   { key: "classes", labelKey: "admin.sections.classes", icon: Tags, permission: ["admin.classes"], render: () => <ClassesSection /> },
   { key: "queues", labelKey: "admin.sections.queues", icon: ListOrdered, permission: ["admin.queues"], render: () => <QueuesSection /> },
+  { key: "pipeline", labelKey: "admin.sections.pipeline", icon: ListChecks, permission: ["pipeline.manage"], render: () => <PipelineSection /> },
   { key: "workflows", labelKey: "admin.sections.workflows", icon: Workflow, permission: ["admin.workflows"], render: () => <WorkflowsSection /> },
   {
     key: "activity",
@@ -59,7 +61,7 @@ const MENU: Entry[] = [
   { kind: "item", key: "integrations" },
   { kind: "item", key: "billing" },
   { kind: "item", key: "contracttypes" },
-  { kind: "group", id: "psa", labelKey: "admin.groups.psa", icon: Briefcase, keys: ["workflows", "email", "mailintake", "classes", "queues", "vendors", "time", "ticketsetup"] },
+  { kind: "group", id: "psa", labelKey: "admin.groups.psa", icon: Briefcase, keys: ["workflows", "pipeline", "email", "mailintake", "classes", "queues", "vendors", "time", "ticketsetup"] },
   { kind: "item", key: "activity" },
 ];
 const GROUPS_KEY = "akab.admin.groups";

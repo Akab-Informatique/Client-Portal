@@ -32,7 +32,7 @@ export type PipelineSettings = {
   /** The day of the last morning run (YYYY-MM-DD) */
   lastRun: string | null;
 };
-export const DEFAULT_SETTINGS: PipelineSettings = { auto: true, time: "06:30", sms: true, workStart: "08:00", workEnd: "17:00", lunchStart: "12:00", lunchEnd: "13:00", lastRun: null };
+export const DEFAULT_SETTINGS: PipelineSettings = { auto: true, time: "07:30", sms: true, workStart: "08:00", workEnd: "17:00", lunchStart: "12:00", lunchEnd: "13:00", lastRun: null };
 
 export async function pipelineSettings(): Promise<PipelineSettings> {
   const [row] = await db().select().from(schema.integrations).where(eq(schema.integrations.provider, PROVIDER));
@@ -345,6 +345,44 @@ export function planSms(name: string, plan: { blocks: PipelineBlock[]; capacityM
   return `AKAB — Bonjour ${first} ! Aujourd'hui : ${tickets} billet${tickets > 1 ? "s" : ""}, ${tasks} tâche${tasks > 1 ? "s" : ""} (${hours(plan.plannedMinutes)} pour ${hours(plan.capacityMinutes)} de libre).${late ? ` ${late} risque${late > 1 ? "nt" : ""} de ne pas entrer.` : ""} ${top}${link}`.trim();
 }
 
+/** The mobile number of a technician (profile), as the SMS line wants it */
+export const phoneOf = (u: { mobile: string | null; phone: string | null }) => normalizePhone(u.mobile) ?? normalizePhone(u.phone);
+/** "••• 1234" */
+export const maskPhone = (p: string | null) => (p ? `••• ${p.slice(-4)}` : null);
+
+/**
+ * A test text to one person: their real morning text for today (what they would get), or a short line that
+ * only proves the number and the SMS line work. Nothing is saved on the day's plan.
+ */
+export async function sendTestSms(userId: string, mode: "plan" | "short"): Promise<{ to: string; text: string }> {
+  const [u] = await db().select().from(schema.users).where(and(eq(schema.users.id, userId), eq(schema.users.kind, "staff"), eq(schema.users.active, true)));
+  if (!u) throw new PipelineError("not_found");
+  const phone = phoneOf(u);
+  if (!phone) throw new PipelineError("no_phone");
+  if (!(await smsReady().catch(() => false))) throw new PipelineError("sms_not_ready");
+  let text: string;
+  if (mode === "plan") {
+    const { plan } = await buildPlan(u.id, todayQc(), { ai: true, locale: u.locale });
+    text = planSms(u.name, plan, u.locale) ?? (u.locale === "en" ? "AKAB — Pipeline test: nothing planned for you today." : "AKAB — Test du Pipeline : rien de prévu pour vous aujourd'hui.");
+    text = `[TEST] ${text}`;
+  } else text = u.locale === "en" ? "AKAB — Pipeline test text. If you get this, your morning text will reach you." : "AKAB — Texto de test du Pipeline. Si vous le recevez, votre texto du matin vous parviendra.";
+  try {
+    await sendSms(phone, text);
+  } catch (e) {
+    throw new PipelineError("sms_failed", e instanceof Error ? e.message : undefined);
+  }
+  return { to: maskPhone(phone) ?? "", text };
+}
+
+export class PipelineError extends Error {
+  constructor(
+    public code: "not_found" | "no_phone" | "sms_not_ready" | "sms_failed",
+    detail?: string,
+  ) {
+    super(detail ? `${code}: ${detail}` : code);
+  }
+}
+
 /** Plan every technician's day (AI) and text them. Returns what was done. */
 export async function morningRun(opts: { sms?: boolean; date?: string; onlyUserId?: string } = {}): Promise<{ planned: number; texted: number; failed: number }> {
   const settings = await pipelineSettings();
@@ -362,7 +400,7 @@ export async function morningRun(opts: { sms?: boolean; date?: string; onlyUserI
       if (!(await permissionsOf(u)).includes("pipeline.view")) continue;
       const { plan } = await buildPlan(u.id, date, { ai: true, locale: u.locale });
       planned++;
-      const phone = normalizePhone(u.mobile ?? u.phone);
+      const phone = phoneOf(u);
       const text = sms && phone && isWorkday(date) ? planSms(u.name, plan, u.locale) : null;
       if (text && phone) {
         await sendSms(phone, text);

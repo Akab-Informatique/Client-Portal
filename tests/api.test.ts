@@ -5482,5 +5482,12 @@ describe("pipeline: shared to-dos and the day", () => {
     expect(run.planned).toBeGreaterThanOrEqual(1);
     expect(run.texted).toBe(0);
     expect((await tech.post("/api/pipeline/morning/run", {})).status).toBe(403);
+    // the test text: managers only; a person with no number, or no SMS line, gets a clear refusal
+    expect((await tech.post("/api/pipeline/morning/test-sms", { userId: me })).status).toBe(403);
+    expect((await tech.get("/api/pipeline/test-targets")).status).toBe(403);
+    const targets = (await admin.get("/api/pipeline/test-targets")).json;
+    expect(targets.some((x: any) => x.id === me)).toBe(true);
+    expect(["no_phone", "sms_not_ready"]).toContain((await admin.post("/api/pipeline/morning/test-sms", { userId: me, mode: "short" })).json.error);
+    expect((await admin.post("/api/pipeline/morning/test-sms", { userId: "00000000-0000-4000-8000-000000000000" })).status).toBe(404);
   });
 });
