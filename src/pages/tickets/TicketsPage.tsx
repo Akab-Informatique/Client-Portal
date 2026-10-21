@@ -502,11 +502,12 @@ function MetricTiles({ data, params, apply, onSms }: { data: TicketList | undefi
                   style={{ ["--tile-glow" as string]: tile.glow }}
                   className={cn(
                     "glass group flex h-10 shrink-0 items-center gap-1.5 rounded-xl border px-2.5 text-left transition-all hover:border-[color:var(--gold)]/40 hover:shadow-[0_0_20px_-12px_var(--tile-glow)]",
+                    tile.key === "mine" && "pl-6",
                     active && "border-[color:var(--gold)]/60 bg-[color:var(--gold)]/[0.06] shadow-[0_0_20px_-10px_var(--tile-glow)]",
                   )}
                 >
                   <tile.icon className={cn("size-4 shrink-0", tile.tone)} />
-                  <span className={cn("whitespace-nowrap text-xs font-medium", tile.key === "mine" && "mr-4")}>{t(`tickets.metrics.${tile.key}`)}</span>
+                  <span className="whitespace-nowrap text-xs font-medium">{t(`tickets.metrics.${tile.key}`)}</span>
                   <span className={cn("font-mono text-base font-semibold tabular-nums", value ? "text-foreground" : "text-muted-foreground/50")}>
                     {value === undefined ? "–" : <CountUp value={value} />}
                   </span>
@@ -523,7 +524,7 @@ function MetricTiles({ data, params, apply, onSms }: { data: TicketList | undefi
                 <TileDetails title={t(`tickets.metrics.${tile.key}`)} hint={t(`tickets.tiles.what.${tile.key}`)} rows={d.rows} note={d.note} />
               </TooltipContent>
             </Tooltip>
-            {/* in the corner of "my tickets": off = the tickets where I am only a secondary technician are left out */}
+            {/* on the left of "my tickets", beside its icon: off = the tickets where I am only a secondary technician are left out */}
             {tile.key === "mine" && (
               <button
                 type="button"
@@ -532,9 +533,9 @@ function MetricTiles({ data, params, apply, onSms }: { data: TicketList | undefi
                 aria-label={t("tickets.secondary.label")}
                 title={withSecondary ? t("tickets.secondary.on") : t("tickets.secondary.off")}
                 onClick={() => setWithSecondary(!withSecondary)}
-                className={cn("absolute right-1 top-1 flex h-2.5 w-5 items-center rounded-full border transition-colors", withSecondary ? "border-[color:var(--gold)]/60 bg-[color:var(--gold)]/30" : "border-muted-foreground/40 bg-muted/40")}
+                className={cn("absolute left-1.5 top-1/2 flex h-5 w-2.5 -translate-y-1/2 flex-col items-center rounded-full border transition-colors", withSecondary ? "border-[color:var(--gold)]/60 bg-[color:var(--gold)]/30" : "border-muted-foreground/40 bg-muted/40")}
               >
-                <span className={cn("block size-1.5 rounded-full bg-current transition-transform", withSecondary ? "translate-x-2.5 text-primary" : "translate-x-0.5 text-muted-foreground")} />
+                <span className={cn("block size-1.5 rounded-full bg-current transition-transform", withSecondary ? "translate-y-0.5 text-primary" : "translate-y-[9px] text-muted-foreground")} />
               </button>
             )}
             </span>
