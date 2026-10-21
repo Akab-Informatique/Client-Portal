@@ -2,7 +2,7 @@ import { useEffect, useState, type ReactNode } from "react";
 import { useTranslation } from "react-i18next";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
-import { CalendarClock, CheckCircle2, CircleDashed, Clock3, ListChecks, Loader2, Lock, MessageSquare, Plus, Trash2, UserRound, Workflow, Ticket as TicketIcon, Link2 } from "lucide-react";
+import { CalendarClock, CheckCircle2, CircleDashed, Clock3, ListChecks, Loader2, Lock, MessageSquare, Paperclip, PlayCircle, Plus, Repeat, Tag, Trash2, UserRound, Workflow, Ticket as TicketIcon, Link2, Eye } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from "@/components/ui/dialog";
@@ -13,7 +13,8 @@ import { api, ApiError } from "@/lib/api";
 import { useCan, useMe } from "@/lib/session";
 import { cn } from "@/lib/utils";
 import { hm as hmHours, parseHm } from "@shared/duration";
-import { PRIORITIES, PRIORITY_STYLE, STATUSES, STATUS_STYLE, dayLabel, hm, type Person, type TaskCard, type TaskFull, type TaskPriority } from "./shared";
+import { PRIORITIES, PRIORITY_STYLE, STATUSES, STATUS_STYLE, dayLabel, fileToBase64, hm, type Person, type Recurrence, type TaskCard, type TaskFull, type TaskPriority, type Visibility } from "./shared";
+import { FilesBox, RecurrenceEditor, TagsEditor, VisibilityEditor } from "./TaskParts";
 
 const selectCls = "h-9 w-full rounded-md border bg-transparent px-2 text-sm outline-none focus:ring-2 focus:ring-[color:var(--gold)]/40";
 
@@ -92,7 +93,8 @@ export function TaskDialog({ taskId, defaults, onClose, onOpenTask }: { taskId: 
   }, [task?.id, task?.updatedAt]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // ── a new task ──
-  const [f, setF] = useState({ title: "", notes: "", assigneeId: defaults?.assigneeId ?? me.id, dueDate: defaults?.dueDate ?? "", priority: "normal" as TaskPriority, estimate: "", parentId: defaults?.parentId ?? "", checklist: "" });
+  const [f, setF] = useState({ title: "", notes: "", assigneeId: defaults?.assigneeId ?? me.id, dueDate: defaults?.dueDate ?? "", dueTime: "", startDate: "", startTime: "", priority: "normal" as TaskPriority, estimate: "", parentId: defaults?.parentId ?? "", checklist: "", tags: [] as string[], recurrence: null as Recurrence | null, visibility: "team" as Visibility, viewerIds: [] as string[] });
+  const [staged, setStaged] = useState<File[]>([]);
   const create = useMutation({
     mutationFn: () => {
       const minutes = f.estimate.trim() ? Math.round((parseHm(f.estimate) ?? 0) * 60) : null;
@@ -102,12 +104,27 @@ export function TaskDialog({ taskId, defaults, onClose, onOpenTask }: { taskId: 
         priority: f.priority,
         assigneeId: f.assigneeId || null,
         dueDate: f.dueDate || null,
+        dueTime: f.dueDate && f.dueTime ? f.dueTime : null,
+        startDate: f.startDate || null,
+        startTime: f.startDate && f.startTime ? f.startTime : null,
+        tags: f.tags,
+        recurrence: f.recurrence,
+        visibility: f.visibility,
+        viewerIds: f.viewerIds,
         parentId: f.parentId || null,
         estimateMinutes: minutes && minutes >= 5 ? minutes : null,
         checklist: f.checklist.split("\n").map((x) => x.trim()).filter(Boolean),
       });
     },
-    onSuccess: (r) => {
+    onSuccess: async (r) => {
+      // the files, one at a time, once the task exists
+      for (const x of staged) {
+        try {
+          await api.post(`/pipeline/tasks/${r.id}/files`, { name: x.name, contentType: x.type || "application/octet-stream", data: await fileToBase64(x) });
+        } catch {
+          toast.error(t("pipeline.files.failed", { name: x.name }));
+        }
+      }
       refresh();
       toast.success(t("pipeline.created"));
       if (onOpenTask) onOpenTask(r.id);
@@ -177,6 +194,17 @@ export function TaskDialog({ taskId, defaults, onClose, onOpenTask }: { taskId: 
               <Input value={f.estimate} onChange={(e) => setF({ ...f, estimate: e.target.value })} placeholder="1:30" inputMode="text" />
             </Field>
           </div>
+          <div className="grid gap-3 sm:grid-cols-3">
+            <Field label={t("pipeline.startDate")} icon={PlayCircle}>
+              <Input type="date" value={f.startDate} onChange={(e) => setF({ ...f, startDate: e.target.value })} />
+            </Field>
+            <Field label={t("pipeline.startTime")}>
+              <Input type="time" disabled={!f.startDate} value={f.startTime} onChange={(e) => setF({ ...f, startTime: e.target.value })} />
+            </Field>
+            <Field label={t("pipeline.dueTime")}>
+              <Input type="time" disabled={!f.dueDate} value={f.dueTime} onChange={(e) => setF({ ...f, dueTime: e.target.value })} />
+            </Field>
+          </div>
           <Field label={t("pipeline.parent")} icon={Link2}>
             <select className={selectCls} value={f.parentId} onChange={(e) => setF({ ...f, parentId: e.target.value })}>
               <option value="">{t("pipeline.noParent")}</option>
@@ -193,6 +221,34 @@ export function TaskDialog({ taskId, defaults, onClose, onOpenTask }: { taskId: 
           <Field label={t("pipeline.checklist")} icon={ListChecks}>
             <Textarea value={f.checklist} onChange={(e) => setF({ ...f, checklist: e.target.value })} rows={4} placeholder={t("pipeline.checklistPlaceholder")} />
           </Field>
+          <div className="grid gap-4 md:grid-cols-2">
+            <div className="space-y-1">
+              <span className="flex items-center gap-1.5 text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
+                <Repeat className="size-3" /> {t("pipeline.recurring")}
+              </span>
+              <RecurrenceEditor value={f.recurrence} onChange={(r) => setF({ ...f, recurrence: r })} />
+            </div>
+            <div className="space-y-1">
+              <span className="flex items-center gap-1.5 text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
+                <Eye className="size-3" /> {t("pipeline.whoSees")}
+              </span>
+              <VisibilityEditor value={f.visibility} viewerIds={f.viewerIds} people={people.data ?? []} meId={me.id} onChange={(v, ids) => setF({ ...f, visibility: v, viewerIds: ids })} />
+            </div>
+          </div>
+          <div className="grid gap-4 md:grid-cols-2">
+            <div className="space-y-1">
+              <span className="flex items-center gap-1.5 text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
+                <Tag className="size-3" /> {t("pipeline.tags")}
+              </span>
+              <TagsEditor value={f.tags} onChange={(tags) => setF({ ...f, tags })} />
+            </div>
+            <div className="space-y-1">
+              <span className="flex items-center gap-1.5 text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
+                <Paperclip className="size-3" /> {t("pipeline.files.title")}
+              </span>
+              <FilesBox staged={staged} onAdd={(x) => setStaged((old) => (old.some((o) => o.name === x.name && o.size === x.size) ? old : [...old, x]))} onRemoveStaged={(x) => setStaged((old) => old.filter((o) => o !== x))} />
+            </div>
+          </div>
         </div>
         <div className="flex items-center justify-end gap-2 border-t px-6 py-3">
           <Button type="button" variant="outline" onClick={onClose}>
@@ -324,6 +380,24 @@ export function TaskDialog({ taskId, defaults, onClose, onOpenTask }: { taskId: 
 
           <section className="space-y-2">
             <h3 className="flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
+              <Paperclip className="size-3.5" /> {t("pipeline.files.title")}
+              {task.fileList.length > 0 && <span className="font-normal normal-case">{task.fileList.length}</span>}
+            </h3>
+            <FilesBox
+              stored={task.fileList}
+              disabled={!editable}
+              downloadUrl={(id) => `/api/pipeline/tasks/${task.id}/files/${id}`}
+              onRemove={(id) => void sub(() => api.del(`/pipeline/tasks/${task.id}/files/${id}`))}
+              onAdd={(x) =>
+                void sub(async () => {
+                  await api.post(`/pipeline/tasks/${task.id}/files`, { name: x.name, contentType: x.type || "application/octet-stream", data: await fileToBase64(x) });
+                })
+              }
+            />
+          </section>
+
+          <section className="space-y-2">
+            <h3 className="flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
               <Workflow className="size-3.5" /> {t("pipeline.subtasks")}
               {task.subtasks.total > 0 && (
                 <span className="font-normal normal-case">
@@ -442,6 +516,17 @@ export function TaskDialog({ taskId, defaults, onClose, onOpenTask }: { taskId: 
               />
             </Field>
           </div>
+          <div className="grid grid-cols-2 gap-3">
+            <Field label={t("pipeline.startDate")} icon={PlayCircle}>
+              <Input type="date" disabled={!editable} value={task.startDate ?? ""} onChange={(e) => patch.mutate({ startDate: e.target.value || null })} />
+            </Field>
+            <Field label={t("pipeline.startTime")}>
+              <Input type="time" disabled={!editable || !task.startDate} value={task.startTime ?? ""} onChange={(e) => patch.mutate({ startTime: e.target.value || null })} />
+            </Field>
+            <Field label={t("pipeline.dueTime")}>
+              <Input type="time" disabled={!editable || !task.dueDate} value={task.dueTime ?? ""} onChange={(e) => patch.mutate({ dueTime: e.target.value || null })} />
+            </Field>
+          </div>
           <Field label={t("pipeline.parent")} icon={Link2}>
             <select className={selectCls} disabled={!editable} value={task.parentId ?? ""} onChange={(e) => patch.mutate({ parentId: e.target.value || null })}>
               <option value="">{t("pipeline.noParent")}</option>
@@ -463,6 +548,31 @@ export function TaskDialog({ taskId, defaults, onClose, onOpenTask }: { taskId: 
             </select>
             <span className="block text-[11px] text-muted-foreground">{t("pipeline.waitsHint")}</span>
           </Field>
+          <div className="space-y-1">
+            <span className="flex items-center gap-1.5 text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
+              <Tag className="size-3" /> {t("pipeline.tags")}
+            </span>
+            <TagsEditor value={task.tags} disabled={!editable} onChange={(tags) => patch.mutate({ tags })} />
+          </div>
+          <div className="space-y-1">
+            <span className="flex items-center gap-1.5 text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
+              <Repeat className="size-3" /> {t("pipeline.recurring")}
+            </span>
+            <RecurrenceEditor value={task.recurrence} disabled={!editable} onChange={(recurrence) => patch.mutate({ recurrence })} />
+          </div>
+          <div className="space-y-1">
+            <span className="flex items-center gap-1.5 text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
+              <Eye className="size-3" /> {t("pipeline.whoSees")}
+            </span>
+            <VisibilityEditor
+              value={task.visibility}
+              viewerIds={task.viewerIds}
+              people={people.data ?? []}
+              meId={me.id}
+              disabled={!editable || (task.createdById !== me.id && task.assigneeId !== me.id)}
+              onChange={(visibility, viewerIds) => patch.mutate({ visibility, viewerIds })}
+            />
+          </div>
           {task.ticketNumber ? (
             <div className="rounded-xl border bg-background/40 p-3 text-sm">
               <p className="flex items-center gap-1.5 text-[11px] font-medium uppercase tracking-wide text-muted-foreground">

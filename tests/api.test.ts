@@ -5491,3 +5491,86 @@ describe("pipeline: shared to-dos and the day", () => {
     expect((await admin.post("/api/pipeline/morning/test-sms", { userId: "00000000-0000-4000-8000-000000000000" })).status).toBe(404);
   });
 });
+
+describe("pipeline: times, files, recurring and private tasks", () => {
+  it("start / due times, files, and a recurring task that makes the next one", async () => {
+    resetRateLimit("login:ip:unknown");
+    const tech = await signIn("tech@akab.local");
+    const me = (await tech.get("/api/me")).json.id as string;
+    // a time needs its day
+    const t1 = (await tech.post("/api/pipeline/tasks", { title: "Heures", assigneeId: me, dueTime: "15:30", startTime: "09:00" })).json;
+    expect(t1).toMatchObject({ dueDate: null, dueTime: null, startDate: null, startTime: null });
+    const t2 = (await tech.patch(`/api/pipeline/tasks/${t1.id}`, { dueDate: "2026-03-04", dueTime: "15:30", startDate: "2026-03-04", startTime: "10:00", tags: ["urgent", "client", "urgent"] })).json;
+    expect(t2).toMatchObject({ dueDate: "2026-03-04", dueTime: "15:30", startDate: "2026-03-04", startTime: "10:00", tags: ["urgent", "client"] });
+    // clearing the day clears its time
+    expect((await tech.patch(`/api/pipeline/tasks/${t1.id}`, { dueDate: null })).json).toMatchObject({ dueDate: null, dueTime: null });
+
+    // the plan does not start it before its time
+    await tech.patch(`/api/pipeline/tasks/${t1.id}`, { dueDate: "2026-03-04", dueTime: "15:30", estimateMinutes: 60 });
+    const day = (await tech.get("/api/pipeline/day?date=2026-03-04")).json;
+    const block = day.plan.blocks.find((b: any) => b.title === "Heures");
+    expect(block.start >= "10:00").toBe(true);
+
+    // files
+    const up = await tech.post(`/api/pipeline/tasks/${t1.id}/files`, { name: "plan.txt", contentType: "text/plain", data: Buffer.from("bonjour").toString("base64") });
+    expect(up.status).toBe(201);
+    expect(up.json).toMatchObject({ name: "plan.txt", size: 7 });
+    expect((await tech.post(`/api/pipeline/tasks/${t1.id}/files`, { name: "x", data: "***" })).status).toBe(400);
+    const full = (await tech.get(`/api/pipeline/tasks/${t1.id}`)).json;
+    expect(full.files).toBe(1);
+    expect(full.fileList[0]).toMatchObject({ name: "plan.txt", size: 7 });
+    const dl = await tech.get(`/api/pipeline/tasks/${t1.id}/files/${up.json.id}`);
+    expect(dl.status).toBe(200);
+    expect((await tech.del(`/api/pipeline/tasks/${t1.id}/files/${up.json.id}`)).status).toBe(200);
+    expect((await tech.get(`/api/pipeline/tasks/${t1.id}`)).json.files).toBe(0);
+
+    // recurring: completing it makes the next one, after today, with a fresh checklist
+    const rec = (await tech.post("/api/pipeline/tasks", { title: "Vérifier les sauvegardes", assigneeId: me, dueDate: "2020-01-06", dueTime: "09:00", recurrence: { freq: "weekly", interval: 1, weekdays: [1] }, checklist: ["Serveur", "NAS"] })).json;
+    expect(rec.recurrence).toMatchObject({ freq: "weekly", interval: 1 });
+    const first = (await tech.get(`/api/pipeline/tasks/${rec.id}`)).json;
+    await tech.patch(`/api/pipeline/tasks/${rec.id}/checklist/${first.checklistItems[0].id}`, { done: true });
+    const done = (await tech.patch(`/api/pipeline/tasks/${rec.id}`, { status: "done" })).json;
+    expect(done.next).toEqual(expect.any(String));
+    const next = (await tech.get(`/api/pipeline/tasks/${done.next}`)).json;
+    expect(next).toMatchObject({ title: "Vérifier les sauvegardes", status: "todo", dueTime: "09:00", seriesId: rec.id, assigneeId: me });
+    expect(next.dueDate > new Date().toISOString().slice(0, 10)).toBe(true);
+    expect(new Date(`${next.dueDate}T12:00:00Z`).getUTCDay()).toBe(1);
+    expect(next.checklistItems.map((i: any) => [i.text, i.done])).toEqual([["Serveur", false], ["NAS", false]]);
+    // a task without a rule makes none
+    const plain = (await tech.post("/api/pipeline/tasks", { title: "Une fois", assigneeId: me })).json;
+    expect((await tech.patch(`/api/pipeline/tasks/${plain.id}`, { status: "done" })).json.next).toBeNull();
+  });
+
+  it("private tasks: only who made it, who has it and the people chosen — not even a manager", async () => {
+    resetRateLimit("login:ip:unknown");
+    const admin = await signIn("admin@akab.local");
+    const tech = await signIn("tech@akab.local");
+    const me = (await tech.get("/api/me")).json.id as string;
+    const boss = (await admin.get("/api/me")).json.id as string;
+    const priv = (await tech.post("/api/pipeline/tasks", { title: "Évaluation de Jean", visibility: "private", assigneeId: me, dueDate: "2000-01-03" })).json;
+    const shared = (await tech.post("/api/pipeline/tasks", { title: "Budget du projet", visibility: "selected", viewerIds: [boss], assigneeId: me, dueDate: "2000-01-03" })).json;
+    const team = (await tech.post("/api/pipeline/tasks", { title: "Pour tous", assigneeId: me, dueDate: "2000-01-03" })).json;
+    const names = async (s: typeof admin) => (await s.get("/api/pipeline/tasks?status=all")).json.map((x: any) => x.title);
+    expect(await names(tech)).toEqual(expect.arrayContaining(["Évaluation de Jean", "Budget du projet", "Pour tous"]));
+    const seen = await names(admin);
+    expect(seen).toEqual(expect.arrayContaining(["Budget du projet", "Pour tous"]));
+    expect(seen).not.toContain("Évaluation de Jean");
+    // and not by its address, nor to change it
+    expect((await admin.get(`/api/pipeline/tasks/${priv.id}`)).status).toBe(404);
+    expect((await admin.patch(`/api/pipeline/tasks/${priv.id}`, { title: "x" })).status).toBe(404);
+    expect((await admin.post(`/api/pipeline/tasks/${priv.id}/notes`, { text: "x" })).status).toBe(404);
+    expect((await admin.del(`/api/pipeline/tasks/${priv.id}`)).status).toBe(404);
+    expect((await admin.get(`/api/pipeline/tasks/${shared.id}`)).json.viewerIds).toEqual([boss]);
+    expect((await admin.get(`/api/pipeline/tasks/${team.id}`)).status).toBe(200);
+    // the manager looking at the technician's day sees no private title
+    const day = (await admin.get(`/api/pipeline/day?date=2026-03-04&userId=${me}`)).json;
+    expect(JSON.stringify(day)).not.toContain("Évaluation de Jean");
+    expect(day.items.some((i: any) => i.masked)).toBe(true);
+    // the technician's own day shows it
+    expect(JSON.stringify((await tech.get("/api/pipeline/day?date=2026-03-04")).json)).toContain("Évaluation de Jean");
+    // a subtask of a private task: the manager does not see the parent's title
+    await tech.post("/api/pipeline/tasks", { title: "Sous-tâche publique", parentId: priv.id, assigneeId: me });
+    const sub = (await admin.get("/api/pipeline/tasks?status=all")).json.find((x: any) => x.title === "Sous-tâche publique");
+    expect(sub.parentTitle).toBeNull();
+  });
+});

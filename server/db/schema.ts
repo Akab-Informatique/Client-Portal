@@ -1923,7 +1923,20 @@ export const pipelineTasks = pgTable(
     blockedById: uuid("blocked_by_id").references((): AnyPgColumn => pipelineTasks.id, { onDelete: "set null" }),
     /** YYYY-MM-DD */
     dueDate: text("due_date"),
+    /** HH:MM (Québec) on the due day, optional */
+    dueTime: text("due_time"),
+    /** Not to be started before this day (YYYY-MM-DD) and time (HH:MM), optional */
+    startDate: text("start_date"),
+    startTime: text("start_time"),
     estimateMinutes: integer("estimate_minutes"),
+    /** Free labels, to find and filter */
+    tags: jsonb("tags").$type<string[]>().notNull().default(sql`'[]'::jsonb`),
+    /** team: everyone who sees the Pipeline; private: the one who made it and the one it is assigned to; selected: those and the people chosen (pipeline_task_viewers) */
+    visibility: text("visibility", { enum: ["team", "private", "selected"] }).notNull().default("team"),
+    /** Comes back after it is done (see shared/recurrence.ts); the next one is made when this one is completed */
+    recurrence: jsonb("recurrence").$type<{ freq: "daily" | "weekly" | "monthly" | "yearly"; interval: number; weekdays?: number[]; until?: string | null } | null>(),
+    /** The first task of a recurring series (every occurrence points at it) */
+    seriesId: uuid("series_id"),
     /** A ticket the task is about (only its id comes from the browser) */
     ticketId: bigint("ticket_id", { mode: "number" }),
     ticketNumber: text("ticket_number"),
@@ -1950,6 +1963,38 @@ export const pipelineChecklist = pgTable(
     createdAt: created(),
   },
   (t) => [index("pipeline_checklist_task_idx").on(t.taskId, t.position)],
+);
+
+/** The people a "selected" task is shared with, besides who made it and who has it */
+export const pipelineTaskViewers = pgTable(
+  "pipeline_task_viewers",
+  {
+    taskId: uuid("task_id")
+      .notNull()
+      .references(() => pipelineTasks.id, { onDelete: "cascade" }),
+    userId: uuid("user_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+  },
+  (t) => [primaryKey({ columns: [t.taskId, t.userId] })],
+);
+
+/** Files attached to a task (base64, 5 MB each at most) */
+export const pipelineTaskFiles = pgTable(
+  "pipeline_task_files",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    taskId: uuid("task_id")
+      .notNull()
+      .references(() => pipelineTasks.id, { onDelete: "cascade" }),
+    name: text("name").notNull(),
+    contentType: text("content_type").notNull().default("application/octet-stream"),
+    size: integer("size").notNull().default(0),
+    data: text("data").notNull(),
+    uploadedBy: uuid("uploaded_by").references(() => users.id, { onDelete: "set null" }),
+    createdAt: created(),
+  },
+  (t) => [index("pipeline_task_files_task_idx").on(t.taskId)],
 );
 
 /** Comments on a task (what was done, questions, instructions added later) */
@@ -1983,6 +2028,9 @@ export const pipelineDayPlans = pgTable(
     /** Minutes available that day (work hours less absences and events) and minutes of work to place */
     capacityMinutes: integer("capacity_minutes").notNull().default(0),
     plannedMinutes: integer("planned_minutes").notNull().default(0),
+    /** The technician's Microsoft 365 calendar when the plan was made: ok (read), none (no calendar linked or Microsoft 365 off), or the error */
+    calendar: text("calendar").notNull().default("none"),
+    calendarEvents: integer("calendar_events").notNull().default(0),
     /** ai: written by the AI; rules: laid out by the portal's own rules (AI off or failed) */
     source: text("source", { enum: ["ai", "rules"] }).notNull().default("rules"),
     smsSentAt: timestamp("sms_sent_at", { withTimezone: true }),
@@ -2005,4 +2053,10 @@ export type PipelineBlock = {
   note?: string | null;
   /** Did not fit in the day */
   overflow?: boolean;
+  /** An event of the technician's Microsoft 365 calendar (not one the portal reserved) */
+  o365?: boolean;
+  /** An event that lasts the whole day (it does not take hours off) */
+  allDay?: boolean;
+  /** Not shown in detail to this viewer (a private event or task) */
+  masked?: boolean;
 };

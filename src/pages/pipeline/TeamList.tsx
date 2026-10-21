@@ -2,7 +2,7 @@ import { useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
-import { CalendarClock, CheckCircle2, Columns3, ListChecks, Lock, Rows3, Search, Ticket as TicketIcon, UserRound, Workflow } from "lucide-react";
+import { CalendarClock, CheckCircle2, Columns3, Eye, ListChecks, Lock, Paperclip, Repeat, Rows3, Search, Ticket as TicketIcon, UserRound, Workflow } from "lucide-react";
 import { Checkbox } from "@/components/ui/checkbox";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { Input } from "@/components/ui/input";
@@ -179,8 +179,30 @@ function Meta({ task }: { task: TaskCard }) {
       {task.dueDate && (
         <span className={cn("flex items-center gap-1", late && "text-red-300")}>
           <CalendarClock className="size-3" /> {dayLabel(task.dueDate)}
+          {task.dueTime ? ` ${task.dueTime}` : ""}
         </span>
       )}
+      {task.startDate && task.startDate > todayYmd() && <span>{t("pipeline.startsOn", { date: dayLabel(task.startDate) })}</span>}
+      {task.recurrence && (
+        <span className="flex items-center gap-1" title={t("pipeline.recurring")}>
+          <Repeat className="size-3" />
+        </span>
+      )}
+      {task.visibility !== "team" && (
+        <span className="flex items-center gap-1" title={t(`pipeline.visibility.${task.visibility}`)}>
+          {task.visibility === "private" ? <Lock className="size-3" /> : <Eye className="size-3" />}
+        </span>
+      )}
+      {task.files > 0 && (
+        <span className="flex items-center gap-1">
+          <Paperclip className="size-3" /> {task.files}
+        </span>
+      )}
+      {task.tags.slice(0, 3).map((tag) => (
+        <span key={tag} className="rounded-full bg-[color:var(--gold)]/10 px-1.5 text-primary">
+          {tag}
+        </span>
+      ))}
       {task.estimateMinutes ? <span className="font-mono">{hm(task.estimateMinutes)}</span> : null}
       {task.checklist.total > 0 && (
         <span className="flex items-center gap-1">

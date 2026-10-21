@@ -74,7 +74,7 @@ export function createApp() {
   // Small JSON everywhere; Outlook sends and ticket attachments carry files
   const smallBody = bodyLimit({ maxSize: 256 * 1024 });
   const mailBody = bodyLimit({ maxSize: 7 * 1024 * 1024 });
-  api.use("*", (c, next) => (c.req.path.startsWith("/api/outlook/") || c.req.path.startsWith("/api/time/expenses") || /^\/api\/(tickets|portal\/tickets)\/\d+\/attachments$/.test(c.req.path) ? mailBody(c, next) : smallBody(c, next)));
+  api.use("*", (c, next) => (c.req.path.startsWith("/api/outlook/") || c.req.path.startsWith("/api/time/expenses") || /^\/api\/(tickets|portal\/tickets)\/\d+\/attachments$/.test(c.req.path) || /^\/api\/pipeline\/tasks\/[0-9a-f-]{36}\/files$/.test(c.req.path) ? mailBody(c, next) : smallBody(c, next)));
   api.use("*", sameOriginJson);
   api.use("*", loadAuth);
   api.use("*", readOnlyViewAs);

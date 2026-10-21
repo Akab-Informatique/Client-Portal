@@ -5,6 +5,9 @@ export type TaskPriority = "low" | "normal" | "high" | "urgent";
 export const STATUSES: TaskStatus[] = ["todo", "doing", "blocked", "done"];
 export const PRIORITIES: TaskPriority[] = ["urgent", "high", "normal", "low"];
 
+export type Recurrence = { freq: "daily" | "weekly" | "monthly" | "yearly"; interval: number; weekdays?: number[]; until?: string | null };
+export type Visibility = "team" | "private" | "selected";
+
 export type TaskCard = {
   id: string;
   title: string;
@@ -21,7 +24,15 @@ export type TaskCard = {
   /** Cannot start or finish: the task it waits for is not done */
   waiting: boolean;
   dueDate: string | null;
+  dueTime: string | null;
+  startDate: string | null;
+  startTime: string | null;
   estimateMinutes: number | null;
+  tags: string[];
+  visibility: Visibility;
+  recurrence: Recurrence | null;
+  seriesId: string | null;
+  files: number;
   ticketId: number | null;
   ticketNumber: string | null;
   ticketTitle: string | null;
@@ -37,6 +48,8 @@ export type TaskFull = TaskCard & {
   checklistItems: { id: string; text: string; done: boolean; position: number }[];
   comments: { id: string; author: string; text: string; createdAt: string }[];
   subtaskList: TaskCard[];
+  fileList: { id: string; name: string; size: number; contentType: string; createdAt: string; by: string | null }[];
+  viewerIds: string[];
 };
 
 export type Block = {
@@ -49,6 +62,10 @@ export type Block = {
   priority?: string | null;
   note?: string | null;
   overflow?: boolean;
+  /** An event of the technician's Microsoft 365 calendar */
+  o365?: boolean;
+  allDay?: boolean;
+  masked?: boolean;
 };
 
 export type DayItem = {
@@ -63,12 +80,14 @@ export type DayItem = {
   ticketNumber?: string | null;
   client?: string | null;
   blocked?: boolean;
+  dueTime?: string | null;
+  masked?: boolean;
 };
 
 export type DayData = {
   date: string;
   userId: string;
-  plan: { summary: string; blocks: Block[]; capacityMinutes: number; plannedMinutes: number; source: "ai" | "rules"; smsSentAt: string | null; updatedAt: string };
+  plan: { summary: string; blocks: Block[]; capacityMinutes: number; plannedMinutes: number; source: "ai" | "rules"; smsSentAt: string | null; updatedAt: string; calendar: string; calendarEvents: number };
   items: DayItem[];
   /** The AI's plan is older than the list: something to do is not in it */
   stale: boolean;
@@ -109,3 +128,21 @@ export const dayLabel = (ymd: string) => new Intl.DateTimeFormat(loc(), { weekda
 export const longDay = (ymd: string) => new Intl.DateTimeFormat(loc(), { weekday: "long", day: "numeric", month: "long" }).format(new Date(`${ymd}T12:00:00`));
 export const todayYmd = () => new Date().toLocaleDateString("en-CA", { timeZone: "America/Toronto" });
 export const addDays = (ymd: string, n: number) => new Date(new Date(`${ymd}T12:00:00Z`).getTime() + n * 86_400_000).toISOString().slice(0, 10);
+
+export const WEEKDAYS = [0, 1, 2, 3, 4, 5, 6] as const;
+/** "37 ko" / "1,2 Mo" */
+export function fileSize(n: number): string {
+  const [b, kb, mb] = currentLocale() === "en" ? ["B", "KB", "MB"] : ["o", "Ko", "Mo"];
+  if (n < 1024) return `${n} ${b}`;
+  if (n < 1024 * 1024) return `${Math.round(n / 1024)} ${kb}`;
+  return `${(n / 1024 / 1024).toFixed(1)} ${mb}`;
+}
+export function fileToBase64(f: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const r = new FileReader();
+    r.onload = () => resolve(String(r.result).split(",")[1] ?? "");
+    r.onerror = () => reject(r.error);
+    r.readAsDataURL(f);
+  });
+}
+export const MAX_FILE = 5 * 1024 * 1024;

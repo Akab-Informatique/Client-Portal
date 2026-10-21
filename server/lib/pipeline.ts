@@ -9,6 +9,8 @@ import { ticketSource, type NTicket } from "./ticketSource.ts";
 import { smsReady, sendSms, normalizePhone } from "./voipms.ts";
 import { todayQc } from "./timesheets.ts";
 import { permissionsOf } from "./auth.ts";
+import { calendarsOf, onCalendar } from "./planning.ts";
+import { outlookEvents } from "./o365.ts";
 
 /**
  * Pipeline: each technician's day. What is on their plate (their tasks and tickets due), laid out as a
@@ -80,12 +82,22 @@ export type DayItem = {
   client?: string | null;
   /** Waits for another task: not planned */
   blocked?: boolean;
+  /** HH:MM on the due day, when it has one */
+  dueTime?: string | null;
+  /** Not before this time today (minutes since midnight) */
+  notBefore?: number;
+  /** A private task the viewer may not see in detail */
+  masked?: boolean;
 };
+type Busy = { start: number; end: number; title: string; o365?: boolean; allDay?: boolean };
 const RANK = { urgent: 0, high: 1, normal: 2, low: 3 } as const;
 const ticketPriority = (kind: string): DayItem["priority"] => (kind === "critical" ? "urgent" : kind === "high" ? "high" : kind === "low" ? "low" : "normal");
 
-export async function dayItems(userId: string, date: string): Promise<{ items: DayItem[]; busy: { start: number; end: number; title: string }[]; absent: boolean; holiday: boolean }> {
+export async function dayItems(userId: string, date: string, viewerId: string = userId): Promise<{ items: DayItem[]; busy: Busy[]; absent: boolean; holiday: boolean }> {
   const d = db();
+  // who may see which private task: the one who made it, the one who has it, the people chosen
+  const viewing = viewerId !== userId;
+  const shared = viewing ? new Set((await d.select({ taskId: schema.pipelineTaskViewers.taskId }).from(schema.pipelineTaskViewers).where(eq(schema.pipelineTaskViewers.userId, viewerId))).map((r) => r.taskId)) : new Set<string>();
   const dayStart = new Date(`${date}T00:00:00-05:00`);
   const dayEnd = new Date(dayStart.getTime() + 36 * 3_600_000);
   const [tasks, children, absences, blocks, pins] = await Promise.all([
@@ -107,18 +119,24 @@ export async function dayItems(userId: string, date: string): Promise<{ items: D
     // a parent is done through its subtasks: they are planned, not the parent
     if (hasOpenChildren.has(t.id)) continue;
     const due = t.dueDate;
+    // not to be started yet: its start day is later
+    if (t.startDate && t.startDate > date && t.status !== "doing") continue;
     const relevant = t.status === "doing" || t.priority === "urgent" || (due !== null && due <= date);
     if (!relevant) continue;
+    const masked = viewing && t.visibility !== "team" && t.createdBy !== viewerId && !(t.visibility === "selected" && shared.has(t.id));
     items.push({
       key: `task:${t.id}`,
       kind: "task",
       refId: t.id,
-      title: t.title,
+      title: masked ? "" : t.title,
+      masked,
+      dueTime: t.dueDate === date ? t.dueTime : null,
+      notBefore: t.startDate === date && t.startTime ? mins(t.startTime) : undefined,
       priority: t.priority,
       due,
       overdue: due !== null && due < date,
       minutes: t.estimateMinutes ?? 30,
-      ticketNumber: t.ticketNumber,
+      ticketNumber: masked ? null : t.ticketNumber,
       blocked: t.status === "blocked" || (t.blockedById !== null && openIds.has(t.blockedById)),
     });
   }
@@ -154,22 +172,71 @@ export async function dayItems(userId: string, date: string): Promise<{ items: D
   return { items, busy, absent, holiday: holidaysBetween(date, date).has(date) };
 }
 
-const score = (i: DayItem) => [i.overdue ? 0 : 1, RANK[i.priority], i.due ?? "9999", i.kind === "ticket" ? 0 : 1] as const;
+const score = (i: DayItem) => [i.overdue ? 0 : 1, RANK[i.priority], i.due ?? "9999", i.dueTime ?? "99:99", i.kind === "ticket" ? 0 : 1] as const;
 export function byUrgency(a: DayItem, b: DayItem): number {
   const x = score(a);
   const y = score(b);
-  return x[0] - y[0] || x[1] - y[1] || x[2].localeCompare(y[2]) || x[3] - y[3];
+  return x[0] - y[0] || x[1] - y[1] || x[2].localeCompare(y[2]) || x[3].localeCompare(y[3]) || x[4] - y[4];
+}
+
+// ── the technician's Microsoft 365 calendar ──
+type CalEvent = { title: string; start: number; end: number; allDay: boolean; private: boolean; free: boolean };
+const calCache = new Map<string, { at: number; value: { status: string; events: CalEvent[] } }>();
+/**
+ * What is on the technician's own Outlook calendar that day (the calendars linked to them in Planning, else their own):
+ * read through their Microsoft sign-in. Events marked "free" do not take time. Kept 5 minutes; a failure is
+ * reported, never thrown (the day is planned without it).
+ */
+export async function calendarOfDay(userId: string, date: string): Promise<{ status: string; events: CalEvent[] }> {
+  const key = `${userId}:${date}`;
+  const hit = calCache.get(key);
+  if (hit && Date.now() - hit.at < 5 * 60_000) return hit.value;
+  let value: { status: string; events: CalEvent[] } = { status: "none", events: [] };
+  try {
+    const targets = (await calendarsOf(userId)).filter((t) => t.ownerId === userId || t.display === "details");
+    if (targets.length) {
+      const from = new Date(`${date}T00:00:00-05:00`);
+      const to = new Date(from.getTime() + 30 * 3_600_000);
+      const events: CalEvent[] = [];
+      let error: string | null = null;
+      let read = 0;
+      for (const t of targets) {
+        if (!t.mailbox) {
+          error ??= "o365_not_signed_in";
+          continue;
+        }
+        try {
+          const list = await onCalendar(t, () => outlookEvents(t.mailbox!, from, to, t.calendarId));
+          read++;
+          for (const e of list) {
+            const start = minutesOnDay(new Date(e.startsAt), date);
+            const end = minutesOnDay(new Date(e.endsAt), date);
+            // an event of another day that Graph returned for the window: only this day's count
+            if (end <= start && !e.allDay) continue;
+            events.push({ title: e.private ? "Occupé" : e.title, start, end, allDay: e.allDay, private: e.private, free: e.showAs === "free" });
+          }
+        } catch (e) {
+          error ??= e instanceof Error ? e.message.slice(0, 80) : "error";
+        }
+      }
+      value = { status: read ? "ok" : (error ?? "none"), events };
+    }
+  } catch (e) {
+    value = { status: e instanceof Error ? e.message.slice(0, 80) : "error", events: [] };
+  }
+  calCache.set(key, { at: Date.now(), value });
+  return value;
 }
 
 /** Lay the items out in the free hours of the day (in the order given), splitting a long one across the lunch hour. */
-export function layout(items: DayItem[], s: Pick<PipelineSettings, "workStart" | "workEnd" | "lunchStart" | "lunchEnd">, busy: { start: number; end: number; title: string }[], notes: Map<string, string> = new Map()) {
+export function layout(items: DayItem[], s: Pick<PipelineSettings, "workStart" | "workEnd" | "lunchStart" | "lunchEnd">, busy: Busy[], notes: Map<string, string> = new Map()) {
   const work = [
     { start: mins(s.workStart), end: mins(s.lunchStart) },
     { start: mins(s.lunchEnd), end: mins(s.workEnd) },
   ];
   // free segments: work hours less the events
   let free = work.filter((w) => w.end > w.start);
-  for (const b of busy) {
+  for (const b of busy.filter((x) => !x.allDay)) {
     free = free.flatMap((f) => {
       if (b.end <= f.start || b.start >= f.end) return [f];
       const out: { start: number; end: number }[] = [];
@@ -184,7 +251,26 @@ export function layout(items: DayItem[], s: Pick<PipelineSettings, "workStart" |
   let cursor = free[0]?.start ?? 0;
   let planned = 0;
   let overflowMinutes = 0;
-  for (const it of items) {
+  // an item that must not start before a time waits for it; the others fill the gap meanwhile
+  const queue = [...items];
+  const moveTo = (minute: number) => {
+    while (seg < free.length && free[seg].end <= minute) {
+      seg++;
+      cursor = free[seg]?.start ?? 0;
+    }
+    if (seg < free.length && cursor < minute) cursor = minute;
+  };
+  while (queue.length) {
+    const now = seg < free.length ? cursor : Infinity;
+    let at = queue.findIndex((q) => (q.notBefore ?? 0) <= now);
+    if (at < 0) {
+      // nothing is ready: jump to the earliest start
+      moveTo(Math.min(...queue.map((q) => q.notBefore ?? 0)));
+      at = queue.findIndex((q) => (q.notBefore ?? 0) <= (seg < free.length ? cursor : Infinity));
+      if (at < 0) at = 0;
+    }
+    const it = queue.splice(at, 1)[0];
+    if (it.notBefore !== undefined && seg < free.length) moveTo(it.notBefore);
     let left = it.minutes;
     let first = true;
     while (left > 0 && seg < free.length) {
@@ -215,9 +301,12 @@ export function layout(items: DayItem[], s: Pick<PipelineSettings, "workStart" |
       blocks.push({ start: "", end: "", title: it.title, kind: it.kind, refId: it.refId, ticketNumber: it.ticketNumber ?? null, priority: it.priority, note: notes.get(it.key) ?? null, overflow: true });
     }
   }
-  for (const b of busy) if (b.end > b.start) blocks.push({ start: hhmm(b.start), end: hhmm(b.end), title: b.title, kind: "event", refId: null });
+  for (const b of busy) {
+    if (b.allDay) blocks.push({ start: "", end: "", title: b.title, kind: "event", refId: null, allDay: true, o365: Boolean(b.o365) });
+    else if (b.end > b.start) blocks.push({ start: hhmm(b.start), end: hhmm(b.end), title: b.title, kind: "event", refId: null, o365: Boolean(b.o365) });
+  }
   if (mins(s.lunchEnd) > mins(s.lunchStart)) blocks.push({ start: s.lunchStart, end: s.lunchEnd, title: "", kind: "break", refId: null });
-  blocks.sort((a, b) => (a.overflow ? 1 : 0) - (b.overflow ? 1 : 0) || a.start.localeCompare(b.start));
+  blocks.sort((a, b) => (a.overflow ? 1 : 0) - (b.overflow ? 1 : 0) || (a.allDay ? 0 : 1) - (b.allDay ? 0 : 1) || a.start.localeCompare(b.start));
   return { blocks, capacityMinutes, plannedMinutes: planned, overflowMinutes };
 }
 
@@ -243,7 +332,11 @@ export async function buildPlan(userId: string, date: string, opts: { ai: boolea
   const [user] = await db().select({ name: schema.users.name, locale: schema.users.locale }).from(schema.users).where(eq(schema.users.id, userId));
   const locale = opts.locale ?? user?.locale ?? "fr";
   const day = await dayItems(userId, date);
-  const { items, busy, absent } = day;
+  const { items, absent } = day;
+  // what is already on the technician's Outlook calendar takes its hours off the day
+  const cal = await calendarOfDay(userId, date);
+  const calEvents = cal.events.filter((e) => !e.free);
+  const busy: Busy[] = [...day.busy, ...calEvents.map((e) => ({ start: e.start, end: e.end, title: e.title, o365: true, allDay: e.allDay }))];
   // a holiday or a weekend: a day off, nothing is planned
   const holiday = day.holiday || !isWorkday(date);
   const planable = absent || holiday ? [] : items.filter((i) => !i.blocked).sort(byUrgency);
@@ -256,13 +349,14 @@ export async function buildPlan(userId: string, date: string, opts: { ai: boolea
     const s = await aiSettings();
     if (s.enabled && s.apiKey) {
       try {
-        const lines = planable.map((i) => `- ${i.key} · ${i.kind === "ticket" ? `billet ${i.ticketNumber ?? ""}` : "tâche"} · « ${i.title} »${i.client ? ` · client ${i.client}` : ""} · priorité ${i.priority} · échéance ${i.due ?? "aucune"}${i.overdue ? " (EN RETARD)" : ""} · ${i.minutes} min`);
+        const lines = planable.map((i) => `- ${i.key} · ${i.kind === "ticket" ? `billet ${i.ticketNumber ?? ""}` : "tâche"} · « ${i.title} »${i.client ? ` · client ${i.client}` : ""} · priorité ${i.priority} · échéance ${i.due ?? "aucune"}${i.dueTime ? ` ${i.dueTime}` : ""}${i.overdue ? " (EN RETARD)" : ""}${i.notBefore !== undefined ? ` · pas avant ${hhmm(i.notBefore)}` : ""} · ${i.minutes} min`);
+        const agenda = calEvents.filter((e) => !e.allDay).map((e) => `- ${hhmm(e.start)}–${hhmm(e.end)} ${e.title}`);
         const free = layout([], settings, busy).capacityMinutes;
         const out = await askClaudeJson<{ summary?: unknown; order?: { ref?: unknown; note?: unknown }[] }>({
           system: `Tu es l'assistant de planification d'AKAB Informatique (services TI, Québec). Réponds en ${locale === "en" ? "anglais" : "français québécois"}, ton direct et chaleureux, tutoiement. Tu prépares la journée d'un technicien : c'est une suggestion, pas un horaire fixe.`,
           feature: "pipeline.day",
           userId,
-          prompt: `Date : ${date}. Heures de travail ${settings.workStart}–${settings.workEnd} (dîner ${settings.lunchStart}–${settings.lunchEnd}), ${hours(free)} libres après les événements. Voici ce qui est à faire :\n${lines.join("\n")}\n\nChoisis l'ordre de traitement (les retards et les urgences d'abord, regroupe ce qui va ensemble, garde les tâches longues pour le début de la matinée ou de l'après-midi). Donne un résumé de 2 à 4 phrases de la journée : ce qui compte le plus, si le temps est suffisant, ce qu'il faudrait déplacer ou déléguer sinon. Format : {"summary": "...", "order": [{"ref": "task:... ou ticket:...", "note": "raison en 12 mots ou moins"}]}`,
+          prompt: `Date : ${date}. Heures de travail ${settings.workStart}–${settings.workEnd} (dîner ${settings.lunchStart}–${settings.lunchEnd}), ${hours(free)} libres après les événements.${agenda.length ? ` Déjà à son agenda Outlook :\n${agenda.join("\n")}\n` : ""} Voici ce qui est à faire :\n${lines.join("\n")}\n\nRespecte « pas avant » et garde ce qui a une heure d'échéance avant cette heure. Choisis l'ordre de traitement (les retards et les urgences d'abord, regroupe ce qui va ensemble, garde les tâches longues pour le début de la matinée ou de l'après-midi). Donne un résumé de 2 à 4 phrases de la journée : ce qui compte le plus, si le temps est suffisant, ce qu'il faudrait déplacer ou déléguer sinon. Format : {"summary": "...", "order": [{"ref": "task:... ou ticket:...", "note": "raison en 12 mots ou moins"}]}`,
           maxTokens: 4000,
         });
         const byKey = new Map(planable.map((i) => [i.key, i]));
@@ -292,11 +386,11 @@ export async function buildPlan(userId: string, date: string, opts: { ai: boolea
   for (const i of absent || holiday ? [] : items.filter((x) => x.blocked)) lay.blocks.push({ start: "", end: "", title: i.title, kind: i.kind, refId: i.refId, ticketNumber: i.ticketNumber ?? null, priority: i.priority, note: locale === "en" ? "Waiting on another task" : "En attente d'une autre tâche", overflow: true });
   const cap = absent || holiday ? 0 : lay.capacityMinutes;
   if (!summary) summary = rulesSummary(planable, cap, lay.plannedMinutes, lay.overflowMinutes, locale, absent, holiday);
-  const values = { userId, date, summary, blocks: lay.blocks, capacityMinutes: cap, plannedMinutes: lay.plannedMinutes + lay.overflowMinutes, source, updatedAt: new Date() };
+  const values = { userId, date, summary, blocks: lay.blocks, capacityMinutes: cap, plannedMinutes: lay.plannedMinutes + lay.overflowMinutes, source, calendar: cal.status, calendarEvents: calEvents.length, updatedAt: new Date() };
   const [row] = await db()
     .insert(schema.pipelineDayPlans)
     .values(values)
-    .onConflictDoUpdate({ target: [schema.pipelineDayPlans.userId, schema.pipelineDayPlans.date], set: { summary, blocks: lay.blocks, capacityMinutes: cap, plannedMinutes: values.plannedMinutes, source, updatedAt: new Date() } })
+    .onConflictDoUpdate({ target: [schema.pipelineDayPlans.userId, schema.pipelineDayPlans.date], set: { summary, blocks: lay.blocks, capacityMinutes: cap, plannedMinutes: values.plannedMinutes, source, calendar: cal.status, calendarEvents: calEvents.length, updatedAt: new Date() } })
     .returning();
   return { plan: row, aiError };
 }
@@ -310,8 +404,8 @@ export async function planOf(userId: string, date: string) {
 }
 
 /** What the day screen lists besides the plan: everything on the plate, the urgent first */
-export async function buildPipelineView(userId: string, date: string) {
-  const { items, absent, holiday, busy } = await dayItems(userId, date);
+export async function buildPipelineView(userId: string, date: string, viewerId: string = userId) {
+  const { items, absent, holiday, busy } = await dayItems(userId, date, viewerId);
   const doneToday = await db()
     .select({ n: sql<number>`count(*)`.mapWith(Number) })
     .from(schema.pipelineTasks)

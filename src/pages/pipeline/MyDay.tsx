@@ -2,7 +2,7 @@ import { useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
-import { AlertTriangle, CalendarOff, CheckCircle2, ChevronLeft, ChevronRight, Coffee, Loader2, Lock, MessageSquareText, Plus, RefreshCw, Sparkles, Ticket as TicketIcon, Workflow } from "lucide-react";
+import { AlertTriangle, CalendarDays, CalendarOff, CheckCircle2, EyeOff, ChevronLeft, ChevronRight, Coffee, Loader2, Lock, MessageSquareText, Plus, RefreshCw, Sparkles, Ticket as TicketIcon, Workflow } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
@@ -132,6 +132,10 @@ export function MyDay({ onOpenTask }: { onOpenTask: (id: string) => void }) {
               <p className="max-w-3xl text-[15px] leading-relaxed">{plan.summary}</p>
               <div className="flex flex-wrap items-center gap-3 pt-1 text-xs text-muted-foreground">
                 <span>{t("pipeline.day.updated", { time: when })}</span>
+                <span className={cn("flex items-center gap-1", plan.calendar === "ok" ? "text-sky-300" : plan.calendar === "none" ? "" : "text-orange-300")} title={plan.calendar === "ok" || plan.calendar === "none" ? undefined : plan.calendar}>
+                  <CalendarDays className="size-3" />{" "}
+                  {plan.calendar === "ok" ? t("pipeline.day.calendarOk", { count: plan.calendarEvents }) : plan.calendar === "none" ? t("pipeline.day.calendarNone") : plan.calendar === "o365_not_signed_in" ? t("pipeline.day.calendarSignIn") : t("pipeline.day.calendarError")}
+                </span>
                 {data.stale && <span className="flex items-center gap-1 text-orange-300"><AlertTriangle className="size-3" /> {t("pipeline.day.stale")}</span>}
                 {can("pipeline.edit") && (
                   <Button variant="outline" size="sm" className="h-8 gap-1.5" disabled={replan.isPending} onClick={() => replan.mutate()}>
@@ -185,6 +189,18 @@ export function MyDay({ onOpenTask }: { onOpenTask: (id: string) => void }) {
         {/* the blocks of the day */}
         <section className="glass rounded-2xl border p-4">
           <h3 className="mb-3 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">{t("pipeline.day.timeline")}</h3>
+          {data && data.plan.blocks.some((b) => b.allDay) && (
+            <div className="mb-3 flex flex-wrap items-center gap-1.5">
+              <span className="text-[11px] uppercase tracking-wide text-muted-foreground">{t("pipeline.day.allDay")}</span>
+              {data.plan.blocks
+                .filter((b) => b.allDay)
+                .map((b, i) => (
+                  <span key={i} className="rounded-full border border-sky-400/30 bg-sky-500/10 px-2.5 py-0.5 text-xs text-sky-200">
+                    {b.title}
+                  </span>
+                ))}
+            </div>
+          )}
           {isLoading || !data ? <Skeleton className="h-96 w-full" /> : <Timeline data={data} onOpen={(b) => (b.kind === "ticket" ? ws.open(Number(b.refId)) : b.refId && onOpenTask(b.refId))} />}
           <p className="mt-3 text-[11px] text-muted-foreground">{t("pipeline.day.suggestion")}</p>
         </section>
@@ -234,12 +250,13 @@ function ItemList({ title, icon: Icon, items, loading, onOpen, onComplete, empty
               <button type="button" onClick={() => onOpen(i)} className="min-w-0 flex-1 text-left">
                 <span className="flex items-baseline gap-2">
                   {i.ticketNumber && <span className="shrink-0 font-mono text-[11px] text-primary">{i.ticketNumber}</span>}
-                  <span className="truncate text-sm font-medium">{i.title}</span>
+                  <span className={cn("truncate text-sm font-medium", i.masked && "italic text-muted-foreground")}>{i.title || t("pipeline.private")}</span>
                 </span>
                 {i.client && <span className="block truncate text-xs text-muted-foreground">{i.client}</span>}
               </button>
               {i.blocked && <Lock className="size-3.5 shrink-0 text-fuchsia-300" />}
               {i.overdue && <span className="shrink-0 rounded-full bg-red-500/15 px-1.5 text-[10px] font-medium text-red-300">{t("pipeline.late")}</span>}
+              {i.dueTime && <span className="shrink-0 font-mono text-[10px] text-orange-300">{t("pipeline.before", { time: i.dueTime })}</span>}
               <span className="shrink-0 font-mono text-[11px] text-muted-foreground">{hm(i.minutes)}</span>
             </li>
           ))}
@@ -255,7 +272,7 @@ function Timeline({ data, onOpen }: { data: DayData; onOpen: (b: Block) => void 
   const startH = Math.max(0, Math.floor(toMinutes(data.workHours.start) / 60) - 1);
   const endH = Math.min(24, Math.ceil(toMinutes(data.workHours.end) / 60) + 1);
   const hours = Array.from({ length: endH - startH }, (_, i) => startH + i);
-  const placed = data.plan.blocks.filter((b) => !b.overflow && b.start);
+  const placed = data.plan.blocks.filter((b) => !b.overflow && !b.allDay && b.start);
   const overflow = data.plan.blocks.filter((b) => b.overflow);
   const top = (m: number) => ((m - startH * 60) / 60) * HOUR_PX;
   const now = new Date();
@@ -290,7 +307,9 @@ function Timeline({ data, onOpen }: { data: DayData; onOpen: (b: Block) => void 
                 className={cn(
                   "absolute inset-x-0 overflow-hidden rounded-lg border px-2.5 py-1 text-left transition-all enabled:hover:brightness-110",
                   event
-                    ? "border-slate-400/30 bg-slate-500/10 text-slate-300"
+                    ? b.o365
+                      ? "border-sky-400/40 bg-sky-500/10 text-sky-100"
+                      : "border-slate-400/30 bg-slate-500/10 text-slate-300"
                     : task
                       ? "border-violet-400/40 bg-violet-500/10"
                       : b.priority === "urgent"
@@ -305,8 +324,10 @@ function Timeline({ data, onOpen }: { data: DayData; onOpen: (b: Block) => void 
                     {b.start}–{b.end}
                   </span>
                   {b.ticketNumber && <span className="font-mono text-[10px] text-primary">{b.ticketNumber}</span>}
+                  {b.o365 && <span className="flex items-center gap-0.5 text-[10px] font-semibold uppercase tracking-wide text-sky-300"><CalendarDays className="size-2.5" /> Outlook</span>}
+                  {b.masked && <EyeOff className="size-3 text-muted-foreground" />}
                 </span>
-                <span className="block truncate text-[13px] font-medium leading-tight">{b.title}</span>
+                <span className="block truncate text-[13px] font-medium leading-tight">{b.title || t("pipeline.private")}</span>
                 {b.note && h > 50 && <span className="block truncate text-[11px] text-muted-foreground">{b.note}</span>}
               </button>
             );

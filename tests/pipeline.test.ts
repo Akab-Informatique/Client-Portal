@@ -23,6 +23,17 @@ describe("pipeline: the day laid out in blocks", () => {
     expect(lay.blocks.find((b) => b.kind === "event")).toMatchObject({ start: "09:00", end: "10:00", title: "Réunion" });
   });
 
+  it("an item with a start time waits for it while the others fill the gap; all-day events take no hours", () => {
+    const lay = layout([item({ key: "late-start", minutes: 60, notBefore: 10 * 60 }), item({ key: "b", minutes: 60 }), item({ key: "c", minutes: 120 })], S, [{ start: 0, end: 1440, title: "Congrès", allDay: true, o365: true }]);
+    expect(lay.capacityMinutes).toBe(480);
+    const placed = lay.blocks.filter((b) => b.kind === "task").map((b) => [b.refId, b.start, b.end]);
+    // b fills 08:00–09:00, then c from 09:00 until the start time of the other, which starts at 10:00 or later
+    expect(placed.find((p) => p[0] === "b")).toEqual(["b", "08:00", "09:00"]);
+    const late = placed.find((p) => p[0] === "late-start")!;
+    expect(String(late[1]) >= "10:00").toBe(true);
+    expect(lay.blocks.find((b) => b.allDay)).toMatchObject({ title: "Congrès", o365: true, start: "" });
+  });
+
   it("orders by lateness, then priority, then due date", () => {
     const list = [item({ key: "low", priority: "low" }), item({ key: "late", overdue: true, priority: "low", due: "2026-01-01" }), item({ key: "urgent", priority: "urgent" }), item({ key: "high", priority: "high" })];
     expect(list.sort(byUrgency).map((i) => i.key)).toEqual(["late", "urgent", "high", "low"]);
