@@ -150,6 +150,31 @@ export const clientContracts = pgTable(
   (t) => [uniqueIndex("client_contracts_autotask_idx").on(t.autotaskId), index("client_contracts_client_idx").on(t.clientId)],
 );
 
+/**
+ * Recurring services added to a contract: the service as it was when added (name, price, cost), the day it
+ * was added, and from them the prorata of the first period and of the rest of the term (shared/prorata.ts).
+ */
+export const contractServices = pgTable(
+  "contract_services",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    contractId: uuid("contract_id")
+      .notNull()
+      .references(() => clientContracts.id, { onDelete: "cascade" }),
+    serviceId: uuid("service_id").references(() => services.id, { onDelete: "set null" }),
+    name: text("name").notNull(),
+    /** recurring (monthly) | recurring_yearly */
+    kind: text("kind").notNull(),
+    priceCents: integer("price_cents").notNull(),
+    costCents: integer("cost_cents").notNull().default(0),
+    /** YYYY-MM-DD: when the service starts on the contract */
+    addedOn: text("added_on").notNull(),
+    createdBy: uuid("created_by").references(() => users.id, { onDelete: "set null" }),
+    createdAt: created(),
+  },
+  (t) => [index("contract_services_contract_idx").on(t.contractId)],
+);
+
 /** A client's invoices (Autotask Invoices while linked). Money in cents. */
 export const clientInvoices = pgTable(
   "client_invoices",
@@ -790,6 +815,24 @@ export const ticketStatuses = pgTable("ticket_statuses", {
   hidden: boolean("hidden").notNull().default(false),
   updatedAt: updated(),
 });
+
+/**
+ * The order the AI planned for a technician's tickets, kept when they apply the plan
+ * (Tickets › sort "Planifié par l'IA"). Applying a new plan replaces it.
+ */
+export const ticketAiPlan = pgTable(
+  "ticket_ai_plan",
+  {
+    userId: uuid("user_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    ticketId: bigint("ticket_id", { mode: "number" }).notNull(),
+    /** 0 = first */
+    position: integer("position").notNull(),
+    plannedAt: timestamp("planned_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [primaryKey({ columns: [t.userId, t.ticketId] })],
+);
 
 export const ticketQueues = pgTable("ticket_queues", {
   /** Stable id (a slug); the name can change */
@@ -1825,7 +1868,7 @@ export const services = pgTable(
     id: uuid("id").primaryKey().defaultRandom(),
     name: text("name").notNull(),
     description: text("description").notNull().default(""),
-    /** one_time | recurring (monthly) */
+    /** one_time | recurring (monthly) | recurring_yearly */
     kind: text("kind").notNull().default("one_time"),
     priceCents: integer("price_cents").notNull().default(0),
     costCents: integer("cost_cents").notNull().default(0),

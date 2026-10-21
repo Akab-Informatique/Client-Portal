@@ -229,7 +229,7 @@ export function TicketsPage() {
           <span className="text-sm font-semibold">{t("tickets.filtersTitle")}</span>
           <ViewMenu view={view} counts={data?.counts} params={params} apply={apply} />
           <div className="ml-auto">
-            <SortMenu value={params.get("sort") ?? "due"} onChange={(v) => set({ sort: v === "due" ? null : v })} />
+            <SortMenu value={params.get("sort") ?? "due"} aiPlan={data?.aiPlan ?? null} onChange={(v) => set({ sort: v === "due" ? null : v })} />
           </div>
         </div>
         {/* 2. search */}
@@ -1231,7 +1231,7 @@ function QuickRange({ label, onClick }: { label: string; onClick: () => void }) 
   );
 }
 
-function SortMenu({ value, onChange }: { value: string; onChange: (v: string) => void }) {
+function SortMenu({ value, onChange, aiPlan }: { value: string; onChange: (v: string) => void; aiPlan: { at: string; count: number } | null }) {
   const { t } = useTranslation();
   return (
     <Popover>
@@ -1251,6 +1251,18 @@ function SortMenu({ value, onChange }: { value: string; onChange: (v: string) =>
             {t(`tickets.sort.${s}`)}
           </button>
         ))}
+        {/* the order the AI planned, as of the last plan applied */}
+        <button
+          type="button"
+          disabled={!aiPlan}
+          onClick={() => onChange("ai")}
+          className={cn("mt-1 block w-full rounded-md border-t px-2.5 py-1.5 text-left text-sm hover:bg-accent disabled:cursor-not-allowed disabled:opacity-50", value === "ai" && "font-semibold text-primary")}
+        >
+          <span className="flex items-center gap-1.5">
+            <Sparkles className="size-3.5 text-violet-300" /> {t("tickets.sort.ai")}
+          </span>
+          <span className="block text-[10px] font-normal text-muted-foreground">{aiPlan ? t("tickets.sort.aiAt", { when: shortDateTime(aiPlan.at), count: aiPlan.count }) : t("tickets.sort.aiNone")}</span>
+        </button>
       </PopoverContent>
     </Popover>
   );
@@ -1528,6 +1540,7 @@ type Plan = { overview: string; items: { id: number; number: string; title: stri
 function AiPlanButton() {
   const { t } = useTranslation();
   const qc = useQueryClient();
+  const [, setParams] = useSearchParams();
   const aiError = useAiError();
   const [plan, setPlan] = useState<Plan | null>(null);
   const planModel = useAiModel("tickets.plan");
@@ -1541,9 +1554,15 @@ function AiPlanButton() {
     onError: (e) => toast.error(aiError(e)),
   });
   const apply = useMutation({
-    mutationFn: () => api.post("/tickets/start-dates", { items: plan!.items.map((i) => ({ id: i.id, startDate: i.startDate })) }),
+    // the start dates, and the order: kept for the sort "Planifié par l'IA"
+    mutationFn: () => api.post("/tickets/start-dates", { items: plan!.items.map((i) => ({ id: i.id, startDate: i.startDate })), plan: true }),
     onSuccess: () => {
       void qc.invalidateQueries({ queryKey: ["tickets"] });
+      // the list now follows the plan
+      setParams((p) => {
+        p.set("sort", "ai");
+        return p;
+      }, { replace: true });
       toast.success(t("tickets.ai.planApplied", { count: plan!.items.length }));
       setPlan(null);
     },

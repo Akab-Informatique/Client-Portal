@@ -14,6 +14,7 @@ import { lookup, run } from "./tickets.ts";
 import { pushInvoice } from "../lib/quickbooks.ts";
 import { applyAutoApprove } from "../lib/billables.ts";
 import { BILLING_MODES, KIND_MODE, contractTypes, usedHoursOf, type ContractKind } from "../lib/contracts.ts";
+import { prorata, type ServicePeriod } from "../../shared/prorata.ts";
 import { billingSettings } from "../lib/billing.ts";
 import { quickbooksHttp } from "./billing.ts";
 
@@ -58,6 +59,21 @@ const view = (c: Client) => ({
   classKey: c.classKey,
   syncedAt: c.syncedAt,
 });
+
+type ContractRow = typeof schema.clientContracts.$inferSelect;
+async function contractOr404(clientId: string, id: string) {
+  const [k] = await db()
+    .select()
+    .from(schema.clientContracts)
+    .where(and(eq(schema.clientContracts.id, zUuid.parse(id)), eq(schema.clientContracts.clientId, clientId)));
+  if (!k) throw new HTTPException(404, { message: "not_found" });
+  return k;
+}
+/** A service on a contract, with the prorata worked out on the contract's term (none while it has no term). */
+function serviceLine(r: typeof schema.contractServices.$inferSelect, k: ContractRow) {
+  const plan = k.startDate && k.endDate ? prorata({ period: (r.kind === "recurring_yearly" ? "yearly" : "monthly") as ServicePeriod, priceCents: r.priceCents, addedOn: r.addedOn, start: k.startDate, end: k.endDate }) : "dates";
+  return { ...r, firstCents: typeof plan === "string" ? null : plan.firstCents, totalCents: typeof plan === "string" ? null : plan.totalCents, periods: typeof plan === "string" ? [] : plan.periods };
+}
 
 export const crmRoutes = new Hono<AppEnv>()
   .use(requireStaff)
@@ -367,8 +383,9 @@ export const crmRoutes = new Hono<AppEnv>()
       z.object({
         name: z.string().trim().min(1).max(120),
         typeKey: z.string().trim().min(1).max(60),
-        startDate: zDay.nullable().optional(),
-        endDate: zDay.nullable().optional(),
+        // a contract has a term: both days are needed (the prorata of its services runs on them)
+        startDate: zDay,
+        endDate: zDay,
         /** Dollars */
         hourlyRate: z.number().min(0).max(100_000).nullable().optional(),
         monthlyRate: z.number().min(0).max(1_000_000).nullable().optional(),
@@ -378,6 +395,7 @@ export const crmRoutes = new Hono<AppEnv>()
     );
     const type = (await contractTypes()).find((t) => t.key === p.typeKey && t.active);
     if (!type) throw new HTTPException(400, { message: "invalid_type" });
+    if (p.endDate < p.startDate) throw new HTTPException(400, { message: "contract_dates" });
     const cents = (v: number | null | undefined) => (v == null ? null : Math.round(v * 100));
     const mode = KIND_MODE[type.kind as ContractKind];
     const [row] = await db()
@@ -389,8 +407,8 @@ export const crmRoutes = new Hono<AppEnv>()
         type: type.name,
         typeKey: type.key,
         billingMode: mode,
-        startDate: p.startDate ?? null,
-        endDate: p.endDate ?? null,
+        startDate: p.startDate,
+        endDate: p.endDate,
         hourlyRateCents: cents(p.hourlyRate),
         monthlyRateCents: cents(p.monthlyRate),
         fixedPriceCents: cents(p.fixedPrice),
@@ -400,6 +418,49 @@ export const crmRoutes = new Hono<AppEnv>()
       .returning();
     await audit(a.user.id, "crm.contract_created", row.id, { name: p.name, type: type.key });
     return c.json(row, 201);
+  })
+  // ── the recurring services of a contract, with their prorata
+  /** The catalogue to pick from: the active recurring services (monthly or yearly). */
+  .get("/services-catalog", async (c) => {
+    const rows = await db().select().from(schema.services).where(and(eq(schema.services.active, true), inArray(schema.services.kind, ["recurring", "recurring_yearly"]))).orderBy(asc(schema.services.name));
+    return c.json(rows.map((x) => ({ id: x.id, name: x.name, kind: x.kind, priceCents: x.priceCents, costCents: x.costCents })));
+  })
+  .get("/clients/:id/contracts/:kid/services", async (c) => {
+    const client = await clientOr404(c.req.param("id"));
+    const k = await contractOr404(client.id, c.req.param("kid"));
+    const rows = await db().select().from(schema.contractServices).where(eq(schema.contractServices.contractId, k.id)).orderBy(asc(schema.contractServices.addedOn), asc(schema.contractServices.name));
+    return c.json(rows.map((r) => serviceLine(r, k)));
+  })
+  /** Adds a service to a contract from a day: its price, then the prorata of the first period and of the term is worked out (crm.billing). */
+  .post("/clients/:id/contracts/:kid/services", requirePermission("crm.billing"), async (c) => {
+    const a = auth(c);
+    const client = await clientOr404(c.req.param("id"));
+    const k = await contractOr404(client.id, c.req.param("kid"));
+    const p = await body(c, z.object({ serviceId: zUuid, addedOn: z.string().regex(/^\d{4}-\d{2}-\d{2}$/), priceCents: z.number().int().min(0).max(100_000_000).optional() }));
+    const [svc] = await db().select().from(schema.services).where(eq(schema.services.id, p.serviceId));
+    if (!svc || !svc.active) throw new HTTPException(404, { message: "not_found" });
+    if (svc.kind !== "recurring" && svc.kind !== "recurring_yearly") throw new HTTPException(400, { message: "service_not_recurring" });
+    if (!k.startDate || !k.endDate) throw new HTTPException(400, { message: "contract_no_term" });
+    const plan = prorata({ period: svc.kind === "recurring_yearly" ? "yearly" : "monthly", priceCents: p.priceCents ?? svc.priceCents, addedOn: p.addedOn, start: k.startDate, end: k.endDate });
+    if (typeof plan === "string") throw new HTTPException(400, { message: plan === "outside" ? "service_outside_term" : "contract_dates" });
+    const [row] = await db()
+      .insert(schema.contractServices)
+      .values({ contractId: k.id, serviceId: svc.id, name: svc.name, kind: svc.kind, priceCents: p.priceCents ?? svc.priceCents, costCents: svc.costCents, addedOn: p.addedOn, createdBy: a.user.id })
+      .returning();
+    await audit(a.user.id, "crm.contract_service_added", k.id, { service: svc.name, addedOn: p.addedOn, firstCents: plan.firstCents, totalCents: plan.totalCents });
+    return c.json(serviceLine(row, k), 201);
+  })
+  .delete("/clients/:id/contracts/:kid/services/:sid", requirePermission("crm.billing"), async (c) => {
+    const a = auth(c);
+    const client = await clientOr404(c.req.param("id"));
+    const k = await contractOr404(client.id, c.req.param("kid"));
+    const [row] = await db()
+      .delete(schema.contractServices)
+      .where(and(eq(schema.contractServices.id, zUuid.parse(c.req.param("sid"))), eq(schema.contractServices.contractId, k.id)))
+      .returning({ name: schema.contractServices.name });
+    if (!row) throw new HTTPException(404, { message: "not_found" });
+    await audit(a.user.id, "crm.contract_service_removed", k.id, { service: row.name });
+    return c.json({ ok: true });
   })
   .get("/clients/:id/contracts", async (c) => {
     const client = await clientOr404(c.req.param("id"));

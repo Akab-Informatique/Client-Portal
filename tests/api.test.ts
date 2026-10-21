@@ -4995,17 +4995,22 @@ describe("contract types, contracts made by hand, services", () => {
     expect(added.json.key).toBe("soutien-gere");
 
     // contracts by hand: the kind sets the billing mode
-    const mk = async (body: any) => (await admin.post(`/api/crm/clients/${client.id}/contracts`, body)).json;
+    const term = { startDate: "2026-10-01", endDate: "2027-09-30" };
+    const mk = async (body: any) => (await admin.post(`/api/crm/clients/${client.id}/contracts`, { ...term, ...body })).json;
     const hourly = await mk({ name: "Horaire A", typeKey: "hourly", hourlyRate: 120 });
-    const recurring = await mk({ name: "Mensuel A", typeKey: "soutien-gere", monthlyRate: 450, startDate: "2026-10-01" });
+    const recurring = await mk({ name: "Mensuel A", typeKey: "soutien-gere", monthlyRate: 450 });
     const banked = await mk({ name: "Banque A", typeKey: "banked", bankedHours: 40 });
     const fixed = await mk({ name: "Fixe A", typeKey: "fixed", fixedPrice: 3000 });
     expect([hourly, recurring, banked, fixed].map((k) => k.billingMode)).toEqual(["hourly", "monthly", "banked", "fixed"]);
     expect(hourly.hourlyRateCents).toBe(12000);
     expect(banked.bankedHoursX100).toBe(4000);
     expect(fixed.fixedPriceCents).toBe(300000);
-    expect((await tech.post(`/api/crm/clients/${client.id}/contracts`, { name: "x", typeKey: "hourly" })).status).toBe(403);
-    expect((await admin.post(`/api/crm/clients/${client.id}/contracts`, { name: "x", typeKey: "inconnu" })).json.error).toBe("invalid_type");
+    expect((await tech.post(`/api/crm/clients/${client.id}/contracts`, { name: "x", typeKey: "hourly", ...term })).status).toBe(403);
+    expect((await admin.post(`/api/crm/clients/${client.id}/contracts`, { name: "x", typeKey: "inconnu", ...term })).json.error).toBe("invalid_type");
+    // a contract has a term: both days, the end not before the start
+    expect((await admin.post(`/api/crm/clients/${client.id}/contracts`, { name: "Sans dates", typeKey: "hourly" })).status).toBe(400);
+    expect((await admin.post(`/api/crm/clients/${client.id}/contracts`, { name: "Sans fin", typeKey: "hourly", startDate: "2026-10-01" })).status).toBe(400);
+    expect((await admin.post(`/api/crm/clients/${client.id}/contracts`, { name: "A l'envers", typeKey: "hourly", startDate: "2026-10-01", endDate: "2026-09-01" })).json.error).toBe("contract_dates");
     // changing the type changes the billing
     expect((await admin.patch(`/api/crm/clients/${client.id}/contracts/${hourly.id}`, { typeKey: "fixed", fixedPrice: 99 })).json).toMatchObject({ billingMode: "fixed", typeKey: "fixed", fixedPriceCents: 9900 });
     const listed = (await admin.get(`/api/crm/clients/${client.id}/contracts`)).json;
@@ -5023,6 +5028,12 @@ describe("contract types, contracts made by hand, services", () => {
     expect((await admin.get("/api/services")).json.some((x: any) => x.id === s.json.id)).toBe(true);
     expect((await tech.post("/api/services", { name: "Interdit", priceCents: 1 })).status).toBe(403);
     expect((await admin.patch(`/api/services/${s.json.id}`, { priceCents: 10900, active: false })).json).toMatchObject({ priceCents: 10900, active: false });
+    // monthly or yearly, with its cost and price (the margin is worked out on screen)
+    const y = await admin.post("/api/services", { name: "Licence annuelle", kind: "recurring_yearly", priceCents: 12000, costCents: 9000 });
+    expect(y.status).toBe(201);
+    expect(y.json).toMatchObject({ kind: "recurring_yearly", priceCents: 12000, costCents: 9000 });
+    expect((await admin.post("/api/services", { name: "Sans type", priceCents: 100 })).json.kind).toBe("recurring");
+    expect((await admin.post("/api/services", { name: "Faux", kind: "weekly", priceCents: 100 })).status).toBe(400);
     expect((await admin.del(`/api/services/${s.json.id}`)).status).toBe(200);
     expect((await admin.del(`/api/services/${s.json.id}`)).status).toBe(404);
   });
@@ -5146,5 +5157,94 @@ describe("hours bank and the time report", () => {
     expect((await tech.get(`/api/time/week?start=${day}`)).json.bankBalanceHours).toBe(before);
     expect((await tech.del(`/api/time/entries/${banked4.id}`)).status).toBe(200);
     expect((await tech.get(`/api/time/week?start=${day}`)).json.bankBalanceHours).toBe(before - 4);
+  });
+});
+
+describe("sort by the order the AI planned", () => {
+  it("applying a plan keeps its order for the sort 'ai'; a new plan replaces it; others see their own", async () => {
+    resetRateLimit("login:ip:unknown");
+    const tech = await signIn("tech@akab.local");
+    const admin = await signIn("admin@akab.local");
+    const mine = (await tech.get("/api/tickets?view=all")).json;
+    // nothing planned yet: no plan offered
+    expect(mine.aiPlan).toBeNull();
+    const ids: number[] = mine.items.filter((x: any) => x.statusKind !== "complete").slice(0, 4).map((x: any) => x.id);
+    expect(ids.length).toBe(4);
+
+    // a plan applied: its order, then the others by due date
+    const plan = [ids[2], ids[0], ids[3]];
+    expect((await tech.post("/api/tickets/start-dates", { items: plan.map((id) => ({ id, startDate: "2026-12-01" })), plan: true })).status).toBe(200);
+    const sorted = (await tech.get("/api/tickets?view=all&sort=ai")).json;
+    expect(sorted.aiPlan).toMatchObject({ count: 3 });
+    expect(sorted.items.slice(0, 3).map((x: any) => x.id)).toEqual(plan);
+    // the default sort is still the due date
+    const byDue = (await tech.get("/api/tickets?view=all")).json.items.map((x: any) => x.dueAt);
+    expect([...byDue].sort()).toEqual(byDue);
+
+    // dates alone (no plan) leave the kept order alone
+    await tech.post("/api/tickets/start-dates", { items: [{ id: ids[1], startDate: "2026-12-02" }] });
+    expect((await tech.get("/api/tickets?view=all&sort=ai")).json.items.slice(0, 3).map((x: any) => x.id)).toEqual(plan);
+
+    // a new plan replaces it
+    const plan2 = [ids[1], ids[3]];
+    await tech.post("/api/tickets/start-dates", { items: plan2.map((id) => ({ id, startDate: "2026-12-03" })), plan: true });
+    const again = (await tech.get("/api/tickets?view=all&sort=ai")).json;
+    expect(again.aiPlan).toMatchObject({ count: 2 });
+    expect(again.items.slice(0, 2).map((x: any) => x.id)).toEqual(plan2);
+
+    // someone else has none of it
+    expect((await admin.get("/api/tickets?view=all")).json.aiPlan).toBeNull();
+  });
+});
+
+describe("services on a contract, with their prorata", () => {
+  it("a service is added from a day; the first period and the term are prorated; the dates are checked", async () => {
+    resetRateLimit("login:ip:unknown");
+    const admin = await signIn("admin@akab.local");
+    const tech = await signIn("tech@akab.local");
+    const clients = (await admin.get("/api/crm/clients")).json;
+    const client = (clients.items ?? clients).find((x: any) => x.autotaskId === 300);
+    const types = (await admin.get("/api/crm/contract-types")).json;
+    const typeKey = types.find((x: any) => x.kind === "recurring")?.key ?? types[0].key;
+    const contract = (await admin.post(`/api/crm/clients/${client.id}/contracts`, { name: "Services gérés 2026-27", typeKey, startDate: "2026-10-01", endDate: "2026-12-15", monthlyRate: 0 })).json;
+    const monthly = (await admin.post("/api/services", { name: "Surveillance serveur", kind: "recurring", priceCents: 30_000, costCents: 12_000 })).json;
+    const yearly = (await admin.post("/api/services", { name: "Licence antivirus", kind: "recurring_yearly", priceCents: 36_500 })).json;
+    const once = (await admin.post("/api/services", { name: "Installation", kind: "one_time", priceCents: 5_000 })).json;
+    const base = `/api/crm/clients/${client.id}/contracts/${contract.id}/services`;
+
+    // the catalogue to pick from: recurring ones only
+    const catalog = (await tech.get("/api/crm/services-catalog")).json;
+    expect(catalog.some((x: any) => x.id === monthly.id)).toBe(true);
+    expect(catalog.some((x: any) => x.id === once.id)).toBe(false);
+
+    // monthly, added on 16 October: 16/31 of October, then November, then 15 days of December
+    const added = await admin.post(base, { serviceId: monthly.id, addedOn: "2026-10-16" });
+    expect(added.status).toBe(201);
+    expect(added.json.firstCents).toBe(15_484);
+    expect(added.json.totalCents).toBe(60_000);
+    expect(added.json.periods.map((p: any) => [p.from, p.to, p.full, p.amountCents])).toEqual([
+      ["2026-10-16", "2026-10-31", false, 15_484],
+      ["2026-11-01", "2026-11-30", true, 30_000],
+      ["2026-12-01", "2026-12-15", false, 14_516],
+    ]);
+    // yearly: the days left of the (short) term
+    const y = await admin.post(base, { serviceId: yearly.id, addedOn: "2026-11-01" });
+    expect(y.json.firstCents).toBe(4_500); // 45 days of 365: 1 Nov to 15 Dec
+    // a price agreed for this contract
+    expect((await admin.post(base, { serviceId: monthly.id, addedOn: "2026-10-01", priceCents: 20_000 })).json.firstCents).toBe(20_000);
+
+    // dates and kinds are checked
+    expect((await admin.post(base, { serviceId: monthly.id, addedOn: "2026-09-30" })).json.error).toBe("service_outside_term");
+    expect((await admin.post(base, { serviceId: monthly.id, addedOn: "2027-01-01" })).json.error).toBe("service_outside_term");
+    expect((await admin.post(base, { serviceId: once.id, addedOn: "2026-10-16" })).json.error).toBe("service_not_recurring");
+    // only billing managers add or remove; anyone on CRM reads
+    expect((await tech.post(base, { serviceId: monthly.id, addedOn: "2026-10-16" })).status).toBe(403);
+    const list = (await tech.get(base)).json;
+    expect(list).toHaveLength(3);
+    expect(list.find((x: any) => x.id === added.json.id)).toMatchObject({ name: "Surveillance serveur", priceCents: 30_000, totalCents: 60_000 });
+    expect((await tech.del(`${base}/${added.json.id}`)).status).toBe(403);
+    expect((await admin.del(`${base}/${added.json.id}`)).status).toBe(200);
+    expect((await admin.del(`${base}/${added.json.id}`)).status).toBe(404);
+    expect((await tech.get(base)).json).toHaveLength(2);
   });
 });

@@ -144,6 +144,8 @@ export type TicketList = {
     /** By category, for the tiles' details: mine by status, unassigned by priority, "needs attention" by technician */
     breakdown?: Record<"mine" | "unassigned" | "fresh" | "statusAttention", Tally>;
   };
+  /** The last AI plan applied: when, and how many tickets; none yet: the sort by it is not offered */
+  aiPlan?: { at: string; count: number } | null;
   /** My saved filters shown as buttons, with their counts (by status) */
   buttons?: { id: string; name: string; query: string; count: number; breakdown?: Tally }[];
   items: TicketSummary[];

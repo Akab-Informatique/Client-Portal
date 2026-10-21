@@ -15,7 +15,15 @@ import { useCan } from "@/lib/session";
 import { cn } from "@/lib/utils";
 import { money } from "@/pages/crm/shared";
 
-type Service = { id: string; name: string; description: string; kind: "one_time" | "recurring"; priceCents: number; costCents: number; taxable: boolean; active: boolean };
+/** The margin on the price, in percent: (price − cost) / price. */
+const marginOf = (price: number, cost: number) => (price > 0 ? Math.round(((price - cost) / price) * 1000) / 10 : 0);
+const toNum = (v: string) => {
+  const n = Number(v.replace(",", "."));
+  return v.trim() === "" || Number.isNaN(n) ? null : n;
+};
+const fmt = (n: number) => String(Math.round(n * 100) / 100);
+
+type Service = { id: string; name: string; description: string; kind: "one_time" | "recurring" | "recurring_yearly"; priceCents: number; costCents: number; taxable: boolean; active: boolean };
 const KEY = ["services"];
 
 /** Services, under Inventory: what the company sells besides products (one time or monthly). */
@@ -73,9 +81,14 @@ export function ServicesPage() {
                 {s.description && <span className="block truncate text-xs text-muted-foreground">{s.description}</span>}
               </span>
               <span className="rounded-md border px-2 py-0.5 text-[11px] text-muted-foreground">{t(`services.kind.${s.kind}`)}</span>
-              <span className="w-28 text-right font-mono text-sm">
+              <span className="w-32 text-right font-mono text-sm">
                 {money(s.priceCents, i18n.language)}
                 {s.kind === "recurring" && <span className="text-[10px] text-muted-foreground">{t("services.perMonth")}</span>}
+                {s.kind === "recurring_yearly" && <span className="text-[10px] text-muted-foreground">{t("services.perYear")}</span>}
+                <span className="block text-[10px] font-sans text-muted-foreground">
+                  {t("services.costShort")} {money(s.costCents, i18n.language)}
+                  {s.priceCents > 0 && <span className={cn("ml-1.5", s.costCents > s.priceCents ? "text-destructive" : "text-emerald-300")}>{marginOf(s.priceCents / 100, s.costCents / 100)} %</span>}
+                </span>
               </span>
               {manage && (
                 <>
@@ -109,11 +122,43 @@ function ServiceDialog({ service, onClose }: { service: Service | null; onClose:
   const [f, setF] = useState({
     name: service?.name ?? "",
     description: service?.description ?? "",
-    kind: service?.kind ?? ("one_time" as Service["kind"]),
+    // a new service is recurring (monthly) unless said otherwise
+    kind: service?.kind ?? ("recurring" as Service["kind"]),
     price: service ? String(service.priceCents / 100) : "",
     cost: service ? String(service.costCents / 100) : "",
+    margin: service && service.priceCents > 0 ? fmt(marginOf(service.priceCents / 100, service.costCents / 100)) : "",
     taxable: service?.taxable ?? true,
   });
+  // cost, price and margin (on the price) fill each other: with two of them, the third follows
+  const setCost = (v: string) => {
+    const next = { ...f, cost: v };
+    const c = toNum(v);
+    const p = toNum(f.price);
+    const m = toNum(f.margin);
+    if (c !== null && p !== null && p > 0) next.margin = fmt(marginOf(p, c));
+    else if (c !== null && m !== null && m < 100) next.price = fmt(c / (1 - m / 100));
+    setF(next);
+  };
+  const setPrice = (v: string) => {
+    const next = { ...f, price: v };
+    const p = toNum(v);
+    const c = toNum(f.cost);
+    const m = toNum(f.margin);
+    if (p !== null && p > 0 && c !== null) next.margin = fmt(marginOf(p, c));
+    else if (p !== null && m !== null && m < 100) next.cost = fmt(p * (1 - m / 100));
+    setF(next);
+  };
+  const setMargin = (v: string) => {
+    const next = { ...f, margin: v };
+    const m = toNum(v);
+    const c = toNum(f.cost);
+    const p = toNum(f.price);
+    if (m !== null && m < 100) {
+      if (c !== null) next.price = fmt(c / (1 - m / 100));
+      else if (p !== null) next.cost = fmt(p * (1 - m / 100));
+    }
+    setF(next);
+  };
   const cents = (v: string) => Math.round((Number(v.replace(",", ".")) || 0) * 100);
   const save = useMutation({
     mutationFn: () => {
@@ -148,23 +193,29 @@ function ServiceDialog({ service, onClose }: { service: Service | null; onClose:
             <span className="text-muted-foreground">{t("services.description")}</span>
             <Textarea value={f.description} onChange={(e) => setF({ ...f, description: e.target.value })} rows={3} maxLength={4000} />
           </label>
+          <label className="block space-y-1 text-xs">
+            <span className="text-muted-foreground">{t("services.kindLabel")}</span>
+            <select value={f.kind} onChange={(e) => setF({ ...f, kind: e.target.value as Service["kind"] })} className="h-9 w-full rounded-md border bg-transparent px-2 text-sm outline-none focus:ring-2 focus:ring-[color:var(--gold)]/40">
+              <option value="recurring">{t("services.kind.recurring")}</option>
+              <option value="recurring_yearly">{t("services.kind.recurring_yearly")}</option>
+              <option value="one_time">{t("services.kind.one_time")}</option>
+            </select>
+          </label>
           <div className="grid gap-3 sm:grid-cols-3">
             <label className="space-y-1 text-xs">
-              <span className="text-muted-foreground">{t("services.kindLabel")}</span>
-              <select value={f.kind} onChange={(e) => setF({ ...f, kind: e.target.value as Service["kind"] })} className="h-9 w-full rounded-md border bg-transparent px-2 text-sm outline-none focus:ring-2 focus:ring-[color:var(--gold)]/40">
-                <option value="one_time">{t("services.kind.one_time")}</option>
-                <option value="recurring">{t("services.kind.recurring")}</option>
-              </select>
+              <span className="text-muted-foreground">{t("services.cost")}</span>
+              <Input value={f.cost} onChange={(e) => setCost(e.target.value)} inputMode="decimal" placeholder="0" />
             </label>
             <label className="space-y-1 text-xs">
               <span className="text-muted-foreground">{t("services.price")}</span>
-              <Input value={f.price} onChange={(e) => setF({ ...f, price: e.target.value })} inputMode="decimal" placeholder="0" />
+              <Input value={f.price} onChange={(e) => setPrice(e.target.value)} inputMode="decimal" placeholder="0" />
             </label>
             <label className="space-y-1 text-xs">
-              <span className="text-muted-foreground">{t("services.cost")}</span>
-              <Input value={f.cost} onChange={(e) => setF({ ...f, cost: e.target.value })} inputMode="decimal" placeholder="0" />
+              <span className="text-muted-foreground">{t("services.margin")}</span>
+              <Input value={f.margin} onChange={(e) => setMargin(e.target.value)} inputMode="decimal" placeholder="0" />
             </label>
           </div>
+          <p className="text-[11px] text-muted-foreground">{t("services.marginHint")}</p>
           <label className="flex items-center gap-2 text-sm">
             <Switch checked={f.taxable} onCheckedChange={(v) => setF({ ...f, taxable: v })} /> {t("services.taxable")}
           </label>

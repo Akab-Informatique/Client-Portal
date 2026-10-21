@@ -490,6 +490,10 @@ export const ticketRoutes = new Hono<AppEnv>()
     }
 
     const sort = q.sort ?? "due";
+    // the order the AI planned (the last plan applied): its tickets in that order, the others after, by due date
+    const aiRows = await db().select().from(schema.ticketAiPlan).where(eq(schema.ticketAiPlan.userId, a.user.id));
+    const aiPos = new Map(aiRows.map((r) => [r.ticketId, r.position]));
+    const aiPlannedAt = aiRows[0]?.plannedAt ?? null;
     // "my priorities first": those of the day, then of the week, then by due date (the default is the due date only)
     const rankOf = (x: object) => {
       const p = (x as { myPriority?: "day" | "week" }).myPriority;
@@ -497,7 +501,9 @@ export const ticketRoutes = new Hono<AppEnv>()
     };
     items.sort((x, y) =>
       rankOf(x) - rankOf(y) ||
-      (sort === "priority"
+      (sort === "ai"
+        ? (aiPos.get(x.id) ?? 1e9) - (aiPos.get(y.id) ?? 1e9) || x.dueAt.localeCompare(y.dueAt)
+        : sort === "priority"
         ? PRIORITY_ORDER[x.priorityKind] - PRIORITY_ORDER[y.priorityKind] || x.dueAt.localeCompare(y.dueAt)
         : sort === "updated"
           ? y.updatedAt.localeCompare(x.updatedAt)
@@ -548,6 +554,8 @@ export const ticketRoutes = new Hono<AppEnv>()
       ai: Boolean(ai?.enabled && ai.apiKey),
       metrics,
       buttons,
+      /** The last AI plan applied by this technician (for the sort "Planifié par l'IA") */
+      aiPlan: aiPlannedAt ? { at: aiPlannedAt, count: aiRows.length } : null,
       items,
       counts: Object.fromEntries(Object.entries(views).map(([k, f]) => [k, all.filter(f).filter((t) => k === "all" || open(t)).length])),
       facets: { queues: o.queues, sources: o.ticketSources ?? [], companies, statuses: o.statuses, priorities: o.priorities, technicians: team },
@@ -646,7 +654,16 @@ export const ticketRoutes = new Hono<AppEnv>()
   /** Several start dates at once (e.g. from the AI plan). */
   .post("/start-dates", requirePermission("tickets.edit"), async (c) => {
     const a = auth(c);
-    const p = await body(c, z.object({ items: z.array(z.object({ id: z.number().int().positive(), startDate: zDate.nullable() })).max(200) }));
+    const p = await body(c, z.object({ items: z.array(z.object({ id: z.number().int().positive(), startDate: zDate.nullable() })).max(200), plan: z.boolean().optional() }));
+    // the AI plan applied: its order is kept for the sort "Planifié par l'IA" (a new plan replaces the last one)
+    if (p.plan) {
+      const now = new Date();
+      await db().transaction(async (tx) => {
+        await tx.delete(schema.ticketAiPlan).where(eq(schema.ticketAiPlan.userId, a.user.id));
+        if (p.items.length) await tx.insert(schema.ticketAiPlan).values(p.items.map((it, position) => ({ userId: a.user.id, ticketId: it.id, position, plannedAt: now })));
+      });
+      await audit(a.user.id, "ai.plan_applied", null, { tickets: p.items.length });
+    }
     for (const it of p.items) {
       await db()
         .insert(schema.ticketMeta)

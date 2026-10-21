@@ -526,6 +526,20 @@
       "when": 1792538761438,
       "tag": "0074_hours_bank",
       "breakpoints": true
+    },
+    {
+      "idx": 75,
+      "version": "7",
+      "when": 1792541801302,
+      "tag": "0075_ticket_ai_plan",
+      "breakpoints": true
+    },
+    {
+      "idx": 76,
+      "version": "7",
+      "when": 1792542267541,
+      "tag": "0076_contract_services",
+      "breakpoints": true
     }
   ]
 }

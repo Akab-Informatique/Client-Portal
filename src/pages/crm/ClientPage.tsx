@@ -50,6 +50,7 @@ import { useCan } from "@/lib/session";
 import { cn } from "@/lib/utils";
 import { PRIORITY_STYLE, STATUS_STYLE, shortDate, ticketErrorText } from "@/pages/tickets/shared";
 import { crmErrorText, money, useContractTypes, useCrmClients, type CrmInvoice, type CrmInvoices, type InvoiceStatus, type CrmClient, type CrmContact, type CrmContract, type CrmDetail, type CrmTicket, type InvoiceSettings } from "./shared";
+import { ContractServices } from "./ContractServices";
 
 const TABS = ["info", "tickets", "invoices", "contacts", "contracts", "invoice"] as const;
 type Tab = (typeof TABS)[number];
@@ -1020,6 +1021,7 @@ function ContractsTab({ client }: { client: CrmDetail }) {
                 <Switch checked={k.autoApprove} disabled={!can("crm.billing") || auto.isPending} onCheckedChange={(v) => auto.mutate({ id: k.id, autoApprove: v })} /> {t("crm.contracts.auto")}
               </label>
               <ContractBilling k={k} editable={can("crm.billing")} busy={billing.isPending} onChange={(patch) => billing.mutate({ id: k.id, patch })} />
+              <ContractServices clientId={client.id} k={k} editable={can("crm.billing")} />
             </li>
           ))}
         </ul>
@@ -1118,13 +1120,20 @@ function NewContract({ client, onDone }: { client: CrmDetail; onDone: () => void
   const { t } = useTranslation();
   const qc = useQueryClient();
   const { data: types = [] } = useContractTypes();
-  const [f, setF] = useState({ name: "", typeKey: "", startDate: "", endDate: "", figure: "" });
+  // a contract has a term: a year from today unless said otherwise (both days are required)
+  const [f, setF] = useState(() => {
+    const now = new Date();
+    const end = new Date(now.getFullYear() + 1, now.getMonth(), now.getDate() - 1, 12);
+    const day = (d: Date) => new Date(d.getTime() - d.getTimezoneOffset() * 60_000).toISOString().slice(0, 10);
+    return { name: "", typeKey: "", startDate: day(now), endDate: day(end), figure: "" };
+  });
+  const termOk = Boolean(f.startDate && f.endDate && f.endDate >= f.startDate);
   const type = types.find((x) => x.key === (f.typeKey || types[0]?.key));
   const create = useMutation({
     mutationFn: () => {
       const n = f.figure.trim() === "" ? null : Number(f.figure.replace(",", "."));
       const figure = type?.kind === "hourly" ? { hourlyRate: n } : type?.kind === "recurring" ? { monthlyRate: n } : type?.kind === "fixed" ? { fixedPrice: n } : { bankedHours: n };
-      return api.post(`/crm/clients/${client.id}/contracts`, { name: f.name.trim(), typeKey: type!.key, startDate: f.startDate || null, endDate: f.endDate || null, ...figure });
+      return api.post(`/crm/clients/${client.id}/contracts`, { name: f.name.trim(), typeKey: type!.key, startDate: f.startDate, endDate: f.endDate, ...figure });
     },
     onSuccess: () => {
       void qc.invalidateQueries({ queryKey: ["crm", "client", client.id, "contracts"] });
@@ -1139,7 +1148,7 @@ function NewContract({ client, onDone }: { client: CrmDetail; onDone: () => void
       className="mb-3 space-y-3 rounded-xl border border-[color:var(--gold)]/30 bg-[color:var(--gold)]/[0.04] p-3"
       onSubmit={(e: FormEvent) => {
         e.preventDefault();
-        if (f.name.trim() && type) create.mutate();
+        if (f.name.trim() && type && termOk) create.mutate();
       }}
     >
       <div className="grid gap-2 sm:grid-cols-3">
@@ -1163,18 +1172,18 @@ function NewContract({ client, onDone }: { client: CrmDetail; onDone: () => void
         </label>
         <label className="space-y-1 text-xs">
           <span className="text-muted-foreground">{t("crm.contracts.start")}</span>
-          <Input type="date" value={f.startDate} onChange={set("startDate")} />
+          <Input type="date" required value={f.startDate} onChange={set("startDate")} />
         </label>
         <label className="space-y-1 text-xs">
           <span className="text-muted-foreground">{t("crm.contracts.end")}</span>
-          <Input type="date" value={f.endDate} onChange={set("endDate")} />
+          <Input type="date" required min={f.startDate || undefined} value={f.endDate} onChange={set("endDate")} className={cn(f.endDate && f.startDate && f.endDate < f.startDate && "border-destructive")} />
         </label>
       </div>
       <div className="flex justify-end gap-2">
         <Button type="button" size="sm" variant="ghost" onClick={onDone}>
           {t("common.cancel")}
         </Button>
-        <Button type="submit" size="sm" disabled={create.isPending || !f.name.trim() || !type} className="bg-grad-gold font-semibold text-[#1a1204]">
+        <Button type="submit" size="sm" disabled={create.isPending || !f.name.trim() || !type || !termOk} className="bg-grad-gold font-semibold text-[#1a1204]">
           {create.isPending && <Loader2 className="size-3.5 animate-spin" />} {t("crm.contracts.create")}
         </Button>
       </div>

@@ -15,7 +15,8 @@ const zCents = z.number().int().min(0).max(100_000_000);
 const zService = z.object({
   name: z.string().trim().min(1).max(200),
   description: z.string().trim().max(4000).default(""),
-  kind: z.enum(["one_time", "recurring"]).default("one_time"),
+  // one time, recurring monthly ("recurring", as before) or recurring yearly
+  kind: z.enum(["one_time", "recurring", "recurring_yearly"]).default("recurring"),
   priceCents: zCents,
   costCents: zCents.default(0),
   taxable: z.boolean().default(true),
