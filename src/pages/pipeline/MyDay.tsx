@@ -2,7 +2,7 @@ import { useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
-import { AlertTriangle, CalendarDays, CalendarOff, CheckCircle2, EyeOff, ChevronLeft, ChevronRight, Coffee, Loader2, Lock, MessageSquareText, Plus, RefreshCw, Sparkles, Ticket as TicketIcon, Workflow } from "lucide-react";
+import { AlertTriangle, CalendarDays, Star, CalendarOff, CheckCircle2, EyeOff, ChevronLeft, ChevronRight, Coffee, Loader2, Lock, MessageSquareText, Plus, RefreshCw, Sparkles, Ticket as TicketIcon, Workflow } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
@@ -249,10 +249,11 @@ function ItemList({ title, icon: Icon, items, loading, onOpen, onComplete, empty
               <span className={cn("size-2 shrink-0 rounded-full", PRIORITY_STYLE[i.priority].dot)} />
               <button type="button" onClick={() => onOpen(i)} className="min-w-0 flex-1 text-left">
                 <span className="flex items-baseline gap-2">
+                  {i.pin && <Star className={cn("size-3 shrink-0 fill-current", i.pin === "day" ? "text-primary" : "text-muted-foreground")} aria-label={t(`pipeline.day.pin.${i.pin}`)} />}
                   {i.ticketNumber && <span className="shrink-0 font-mono text-[11px] text-primary">{i.ticketNumber}</span>}
                   <span className={cn("truncate text-sm font-medium", i.masked && "italic text-muted-foreground")}>{i.title || t("pipeline.private")}</span>
                 </span>
-                {i.client && <span className="block truncate text-xs text-muted-foreground">{i.client}</span>}
+                {(i.client || i.pinNote) && <span className="block truncate text-xs text-muted-foreground">{[i.client, i.pinNote].filter(Boolean).join(" · ")}</span>}
               </button>
               {i.blocked && <Lock className="size-3.5 shrink-0 text-fuchsia-300" />}
               {i.overdue && <span className="shrink-0 rounded-full bg-red-500/15 px-1.5 text-[10px] font-medium text-red-300">{t("pipeline.late")}</span>}
@@ -323,6 +324,7 @@ function Timeline({ data, onOpen }: { data: DayData; onOpen: (b: Block) => void 
                   <span className="font-mono text-[10px] text-muted-foreground">
                     {b.start}–{b.end}
                   </span>
+                  {b.pinned && <Star className={cn("size-2.5 fill-current", b.pinned === "day" ? "text-primary" : "text-muted-foreground")} />}
                   {b.ticketNumber && <span className="font-mono text-[10px] text-primary">{b.ticketNumber}</span>}
                   {b.o365 && <span className="flex items-center gap-0.5 text-[10px] font-semibold uppercase tracking-wide text-sky-300"><CalendarDays className="size-2.5" /> Outlook</span>}
                   {b.masked && <EyeOff className="size-3 text-muted-foreground" />}

@@ -1,4 +1,4 @@
-import { and, eq, inArray, ne, sql } from "drizzle-orm";
+import { and, eq, inArray, ne, or, sql } from "drizzle-orm";
 import { db, schema } from "../db/index.ts";
 import type { PipelineBlock } from "../db/schema.ts";
 import { config } from "../config.ts";
@@ -9,8 +9,8 @@ import { ticketSource, type NTicket } from "./ticketSource.ts";
 import { smsReady, sendSms, normalizePhone } from "./voipms.ts";
 import { todayQc } from "./timesheets.ts";
 import { permissionsOf } from "./auth.ts";
-import { calendarsOf, onCalendar } from "./planning.ts";
-import { outlookEvents } from "./o365.ts";
+import { calendarsOf, onCalendar, type CalendarTarget } from "./planning.ts";
+import { o365Ready, outlookEvents } from "./o365.ts";
 
 /**
  * Pipeline: each technician's day. What is on their plate (their tasks and tickets due), laid out as a
@@ -66,6 +66,12 @@ export const isWorkday = (date: string) => {
   const d = new Date(`${date}T12:00:00Z`).getUTCDay();
   return d >= 1 && d <= 5 && !holidaysBetween(date, date).has(date);
 };
+/** The Monday of the week of a day (YYYY-MM-DD): where the week's priorities are kept */
+export const mondayOf = (date: string) => {
+  const d = new Date(`${date}T12:00:00Z`);
+  const back = (d.getUTCDay() + 6) % 7;
+  return new Date(d.getTime() - back * 86_400_000).toISOString().slice(0, 10);
+};
 const nextDay = (date: string) => new Date(new Date(`${date}T12:00:00Z`).getTime() + 86_400_000).toISOString().slice(0, 10);
 
 // ── what is on the day ──
@@ -88,6 +94,10 @@ export type DayItem = {
   notBefore?: number;
   /** A private task the viewer may not see in detail */
   masked?: boolean;
+  /** A priority pinned for the technician (Planning): of the day, or of the week, with its rank and the direction given */
+  pin?: "day" | "week";
+  pinRank?: number;
+  pinNote?: string | null;
 };
 type Busy = { start: number; end: number; title: string; o365?: boolean; allDay?: boolean };
 const RANK = { urgent: 0, high: 1, normal: 2, low: 3 } as const;
@@ -108,7 +118,17 @@ export async function dayItems(userId: string, date: string, viewerId: string = 
     d.select({ parentId: schema.pipelineTasks.parentId }).from(schema.pipelineTasks).where(and(ne(schema.pipelineTasks.status, "done"), sql`${schema.pipelineTasks.parentId} is not null`)),
     d.select().from(schema.meetingAbsences).where(and(eq(schema.meetingAbsences.userId, userId), sql`${schema.meetingAbsences.startDate} <= ${date} and ${schema.meetingAbsences.endDate} >= ${date}`)),
     d.select().from(schema.calendarBlocks).where(and(eq(schema.calendarBlocks.technicianId, userId), sql`${schema.calendarBlocks.startsAt} < ${dayEnd} and ${schema.calendarBlocks.endsAt} > ${dayStart}`)),
-    d.select().from(schema.ticketPins).where(and(eq(schema.ticketPins.technicianId, userId), eq(schema.ticketPins.horizon, "day"), eq(schema.ticketPins.forDate, date), sql`${schema.ticketPins.doneAt} is null`)),
+    // the priorities pinned for the technician: this day's, and this week's (the Monday of its week)
+    d
+      .select()
+      .from(schema.ticketPins)
+      .where(
+        and(
+          eq(schema.ticketPins.technicianId, userId),
+          or(and(eq(schema.ticketPins.horizon, "day"), eq(schema.ticketPins.forDate, date)), and(eq(schema.ticketPins.horizon, "week"), eq(schema.ticketPins.forDate, mondayOf(date)))),
+          sql`${schema.ticketPins.doneAt} is null`,
+        ),
+      ),
   ]);
   const hasOpenChildren = new Set(children.map((c) => c.parentId));
   const openIds = new Set(
@@ -145,9 +165,12 @@ export async function dayItems(userId: string, date: string, viewerId: string = 
   const [all, o] = await Promise.all([src.list().catch(() => [] as NTicket[]), src.options()]);
   const kindOf = new Map(o.statuses.map((s) => [s.value, s.kind]));
   const prio = new Map(o.priorities.map((p) => [p.value, p.kind]));
-  const pinned = new Set(pins.map((p) => p.ticketId));
+  // a day pin outranks a week pin on the same ticket
+  const pinOf = new Map<number, (typeof pins)[number]>();
+  for (const p of [...pins].sort((a, b) => (a.horizon === "week" ? 1 : 0) - (b.horizon === "week" ? 1 : 0))) if (!pinOf.has(p.ticketId)) pinOf.set(p.ticketId, p);
   const endOfDay = new Date(`${nextDay(date)}T00:00:00-05:00`).getTime();
-  const mine = all.filter((t) => t.assignee?.id === userId && kindOf.get(t.status) !== "complete" && (pinned.has(t.id) || new Date(t.dueAt).getTime() < endOfDay));
+  // the ones assigned to the technician and due by the end of the day, and every ticket pinned to them (even one assigned to someone else)
+  const mine = all.filter((t) => kindOf.get(t.status) !== "complete" && (pinOf.has(t.id) || (t.assignee?.id === userId && new Date(t.dueAt).getTime() < endOfDay)));
   const est = mine.length
     ? await d.select({ id: schema.ticketMeta.ticketId, m: schema.ticketMeta.estimateMinutes }).from(schema.ticketMeta).where(inArray(schema.ticketMeta.ticketId, mine.map((t) => t.id)))
     : [];
@@ -159,12 +182,13 @@ export async function dayItems(userId: string, date: string, viewerId: string = 
       kind: "ticket",
       refId: String(t.id),
       title: t.title,
-      priority: ticketPriority(prio.get(t.priority) ?? "medium"),
+      priority: ((p) => (pinOf.has(t.id) && (p === "normal" || p === "low") ? "high" : p))(ticketPriority(prio.get(t.priority) ?? "medium")),
       due,
       overdue: new Date(t.dueAt).getTime() < Date.now() && due < date,
       minutes: estimate.get(t.id) ?? 45,
       ticketNumber: t.number,
       client: t.company.name,
+      ...(pinOf.has(t.id) ? { pin: pinOf.get(t.id)!.horizon, pinRank: pinOf.get(t.id)!.rank, pinNote: pinOf.get(t.id)!.note || null } : {}),
     });
   }
   const busy = blocks.map((b) => ({ start: minutesOnDay(b.startsAt, date), end: minutesOnDay(b.endsAt, date), title: b.title }));
@@ -172,11 +196,12 @@ export async function dayItems(userId: string, date: string, viewerId: string = 
   return { items, busy, absent, holiday: holidaysBetween(date, date).has(date) };
 }
 
-const score = (i: DayItem) => [i.overdue ? 0 : 1, RANK[i.priority], i.due ?? "9999", i.dueTime ?? "99:99", i.kind === "ticket" ? 0 : 1] as const;
+// the priorities of the day first (in their rank), then what is late, then the priorities of the week, then the rest
+const score = (i: DayItem) => [i.pin === "day" ? 0 : 1, i.pin === "day" ? (i.pinRank ?? 99) : 0, i.overdue ? 0 : 1, i.pin === "week" ? 0 : 1, RANK[i.priority], i.due ?? "9999", i.dueTime ?? "99:99", i.kind === "ticket" ? 0 : 1] as const;
 export function byUrgency(a: DayItem, b: DayItem): number {
   const x = score(a);
   const y = score(b);
-  return x[0] - y[0] || x[1] - y[1] || x[2].localeCompare(y[2]) || x[3].localeCompare(y[3]) || x[4] - y[4];
+  return x[0] - y[0] || x[1] - y[1] || x[2] - y[2] || x[3] - y[3] || x[4] - y[4] || x[5].localeCompare(y[5]) || x[6].localeCompare(y[6]) || x[7] - y[7];
 }
 
 // ── the technician's Microsoft 365 calendar ──
@@ -193,7 +218,16 @@ export async function calendarOfDay(userId: string, date: string): Promise<{ sta
   if (hit && Date.now() - hit.at < 5 * 60_000) return hit.value;
   let value: { status: string; events: CalEvent[] } = { status: "none", events: [] };
   try {
-    const targets = (await calendarsOf(userId)).filter((t) => t.ownerId === userId || t.display === "details");
+    let targets = (await calendarsOf(userId)).filter((t) => t.ownerId === userId || t.display === "details");
+    // none linked (or no right on Planning calendars): their own Microsoft sign-in, when they have one
+    let notSignedIn = false;
+    if (!targets.length && (await o365Ready())) {
+      const [u] = await db().select({ name: schema.users.name }).from(schema.users).where(eq(schema.users.id, userId));
+      const [conn] = await db().select({ email: schema.msConnections.email }).from(schema.msConnections).where(eq(schema.msConnections.userId, userId));
+      if (conn) targets = [{ id: null, source: "user", ownerId: userId, mailbox: conn.email, calendarId: null, calendarName: null, label: u?.name ?? "", display: "details", push: false } satisfies CalendarTarget];
+      else notSignedIn = true;
+    }
+    if (notSignedIn) value = { status: "o365_not_signed_in", events: [] };
     if (targets.length) {
       const from = new Date(`${date}T00:00:00-05:00`);
       const to = new Date(from.getTime() + 30 * 3_600_000);
@@ -289,7 +323,8 @@ export function layout(items: DayItem[], s: Pick<PipelineSettings, "workStart" |
         refId: it.refId,
         ticketNumber: it.ticketNumber ?? null,
         priority: it.priority,
-        note: first ? (notes.get(it.key) ?? null) : null,
+        ...(it.pin ? { pinned: it.pin } : {}),
+        note: first ? (notes.get(it.key) ?? (it.pinNote ? `${it.pinNote}` : null)) : null,
       });
       cursor += take;
       left -= take;
@@ -298,7 +333,7 @@ export function layout(items: DayItem[], s: Pick<PipelineSettings, "workStart" |
     }
     if (left > 0) {
       overflowMinutes += left;
-      blocks.push({ start: "", end: "", title: it.title, kind: it.kind, refId: it.refId, ticketNumber: it.ticketNumber ?? null, priority: it.priority, note: notes.get(it.key) ?? null, overflow: true });
+      blocks.push({ start: "", end: "", title: it.title, kind: it.kind, refId: it.refId, ticketNumber: it.ticketNumber ?? null, priority: it.priority, ...(it.pin ? { pinned: it.pin } : {}), note: notes.get(it.key) ?? it.pinNote ?? null, overflow: true });
     }
   }
   for (const b of busy) {
@@ -320,10 +355,11 @@ function rulesSummary(items: DayItem[], cap: number, planned: number, overflow: 
   if (holiday) return locale === "en" ? "Today is a day off: nothing is planned." : "Aujourd'hui est un jour de congé : rien n'est planifié.";
   if (!items.length) return locale === "en" ? "Nothing due today. A good day to move the backlog forward." : "Rien d'échu aujourd'hui. Bonne journée pour faire avancer le reste.";
   const over = items.filter((i) => i.overdue).length;
+  const pins = items.filter((i) => i.pin).length;
   const enough = overflow === 0;
   if (locale === "en")
-    return `${t} ticket${t === 1 ? "" : "s"} and ${k} task${k === 1 ? "" : "s"} for today, about ${hours(planned + overflow)} of work for ${hours(cap)} available.${over ? ` ${over} already late.` : ""} ${enough ? "It fits in the day." : `About ${hours(overflow)} will not fit: move or hand off something.`}`;
-  return `${t} billet${t > 1 ? "s" : ""} et ${k} tâche${k > 1 ? "s" : ""} aujourd'hui, environ ${hours(planned + overflow)} de travail pour ${hours(cap)} de disponible.${over ? ` ${over} déjà en retard.` : ""} ${enough ? "Ça entre dans la journée." : `Environ ${hours(overflow)} ne rentreront pas : déplacez ou déléguez quelque chose.`}`;
+    return `${t} ticket${t === 1 ? "" : "s"} and ${k} task${k === 1 ? "" : "s"} for today, about ${hours(planned + overflow)} of work for ${hours(cap)} available.${over ? ` ${over} already late.` : ""}${pins ? ` ${pins} pinned priorit${pins === 1 ? "y" : "ies"} first.` : ""} ${enough ? "It fits in the day." : `About ${hours(overflow)} will not fit: move or hand off something.`}`;
+  return `${t} billet${t > 1 ? "s" : ""} et ${k} tâche${k > 1 ? "s" : ""} aujourd'hui, environ ${hours(planned + overflow)} de travail pour ${hours(cap)} de disponible.${over ? ` ${over} déjà en retard.` : ""}${pins ? ` ${pins} priorité${pins > 1 ? "s" : ""} épinglée${pins > 1 ? "s" : ""} en premier.` : ""} ${enough ? "Ça entre dans la journée." : `Environ ${hours(overflow)} ne rentreront pas : déplacez ou déléguez quelque chose.`}`;
 }
 
 /** Plan one technician's day and keep it. The AI orders the work and writes the summary; the hours are laid out here. */
@@ -349,14 +385,14 @@ export async function buildPlan(userId: string, date: string, opts: { ai: boolea
     const s = await aiSettings();
     if (s.enabled && s.apiKey) {
       try {
-        const lines = planable.map((i) => `- ${i.key} · ${i.kind === "ticket" ? `billet ${i.ticketNumber ?? ""}` : "tâche"} · « ${i.title} »${i.client ? ` · client ${i.client}` : ""} · priorité ${i.priority} · échéance ${i.due ?? "aucune"}${i.dueTime ? ` ${i.dueTime}` : ""}${i.overdue ? " (EN RETARD)" : ""}${i.notBefore !== undefined ? ` · pas avant ${hhmm(i.notBefore)}` : ""} · ${i.minutes} min`);
+        const lines = planable.map((i) => `- ${i.key} · ${i.kind === "ticket" ? `billet ${i.ticketNumber ?? ""}` : "tâche"} · « ${i.title} »${i.client ? ` · client ${i.client}` : ""} · priorité ${i.priority} · échéance ${i.due ?? "aucune"}${i.dueTime ? ` ${i.dueTime}` : ""}${i.overdue ? " (EN RETARD)" : ""}${i.pin ? ` · PRIORITÉ ${i.pin === "day" ? "DU JOUR" : "DE LA SEMAINE"}${i.pinNote ? ` (directive : ${i.pinNote})` : ""}` : ""}${i.notBefore !== undefined ? ` · pas avant ${hhmm(i.notBefore)}` : ""} · ${i.minutes} min`);
         const agenda = calEvents.filter((e) => !e.allDay).map((e) => `- ${hhmm(e.start)}–${hhmm(e.end)} ${e.title}`);
         const free = layout([], settings, busy).capacityMinutes;
         const out = await askClaudeJson<{ summary?: unknown; order?: { ref?: unknown; note?: unknown }[] }>({
           system: `Tu es l'assistant de planification d'AKAB Informatique (services TI, Québec). Réponds en ${locale === "en" ? "anglais" : "français québécois"}, ton direct et chaleureux, tutoiement. Tu prépares la journée d'un technicien : c'est une suggestion, pas un horaire fixe.`,
           feature: "pipeline.day",
           userId,
-          prompt: `Date : ${date}. Heures de travail ${settings.workStart}–${settings.workEnd} (dîner ${settings.lunchStart}–${settings.lunchEnd}), ${hours(free)} libres après les événements.${agenda.length ? ` Déjà à son agenda Outlook :\n${agenda.join("\n")}\n` : ""} Voici ce qui est à faire :\n${lines.join("\n")}\n\nRespecte « pas avant » et garde ce qui a une heure d'échéance avant cette heure. Choisis l'ordre de traitement (les retards et les urgences d'abord, regroupe ce qui va ensemble, garde les tâches longues pour le début de la matinée ou de l'après-midi). Donne un résumé de 2 à 4 phrases de la journée : ce qui compte le plus, si le temps est suffisant, ce qu'il faudrait déplacer ou déléguer sinon. Format : {"summary": "...", "order": [{"ref": "task:... ou ticket:...", "note": "raison en 12 mots ou moins"}]}`,
+          prompt: `Date : ${date}. Heures de travail ${settings.workStart}–${settings.workEnd} (dîner ${settings.lunchStart}–${settings.lunchEnd}), ${hours(free)} libres après les événements.${agenda.length ? ` Déjà à son agenda Outlook :\n${agenda.join("\n")}\n` : ""} Voici ce qui est à faire :\n${lines.join("\n")}\n\nLes priorités du jour passent en premier. Respecte « pas avant » et garde ce qui a une heure d'échéance avant cette heure. Choisis l'ordre de traitement (les retards et les urgences d'abord, regroupe ce qui va ensemble, garde les tâches longues pour le début de la matinée ou de l'après-midi). Donne un résumé de 2 à 4 phrases de la journée : ce qui compte le plus, si le temps est suffisant, ce qu'il faudrait déplacer ou déléguer sinon. Format : {"summary": "...", "order": [{"ref": "task:... ou ticket:...", "note": "raison en 12 mots ou moins"}]}`,
           maxTokens: 4000,
         });
         const byKey = new Map(planable.map((i) => [i.key, i]));
@@ -521,5 +557,10 @@ export async function pipelineTick(now = new Date()): Promise<void> {
   // claimed before anything is done (one run a day, never twice)
   await savePipelineSettings({ lastRun: date });
   await morningRun({ date });
+  // Monday: the week ahead for the team meeting
+  if (new Date(`${date}T12:00:00Z`).getUTCDay() === 1) {
+    const { buildBrief } = await import("./weekBrief.ts");
+    await buildBrief(date, { ai: true }).catch((e) => console.warn("[pipeline] week brief:", e instanceof Error ? e.message : e));
+  }
 }
 

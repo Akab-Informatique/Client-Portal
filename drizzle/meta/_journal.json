@@ -575,6 +575,13 @@
       "when": 1792554690905,
       "tag": "0081_quickbooks_sync",
       "breakpoints": true
+    },
+    {
+      "idx": 82,
+      "version": "7",
+      "when": 1792555670247,
+      "tag": "0082_week_brief",
+      "breakpoints": true
     }
   ]
 }

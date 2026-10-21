@@ -1,3 +1,4 @@
+import { WeekBrief } from "./WeekBrief";
 import { useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
@@ -117,6 +118,9 @@ export function MeetingsPage() {
         </h1>
         <p className="text-sm text-muted-foreground">{t("meetings.subtitle")}</p>
       </div>
+
+      {/* the week ahead, written for the meeting */}
+      <WeekBrief />
 
       <div className="grid items-start gap-6 xl:grid-cols-2">
         <PointsSection />

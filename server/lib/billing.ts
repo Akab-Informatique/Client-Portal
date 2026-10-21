@@ -63,7 +63,7 @@ export async function billingSettings(): Promise<BillingSettings> {
 /** Each part may be given in part (the rest is kept). */
 export type BillingPatch = { [K in keyof BillingSettings]?: Partial<BillingSettings[K]> };
 
-export async function saveBillingSettings(actorId: string, p: BillingPatch) {
+export async function saveBillingSettings(actorId: string | null, p: BillingPatch) {
   const cur = await billingSettings();
   const next: BillingSettings = {
     numbering: { ...cur.numbering, ...p.numbering },
@@ -185,8 +185,10 @@ export type QuickBooksSettings = {
   connectedAt: string | null;
   /** invoices: portal invoices sent to QuickBooks · invoicesIn: QuickBooks invoices (and their status) brought in */
   sync: { invoices: boolean; invoicesIn: boolean; payments: boolean; customers: boolean; accounts: boolean; vendors: boolean; timesheets: boolean; expenses: boolean };
-  /** QuickBooks invoices are brought in from this invoice number on */
+  /** QuickBooks invoices are brought in from this invoice number on (mode "number") or from this day on (mode "date") */
   invoicesFromNumber: number;
+  invoicesFromDate: string | null;
+  invoicesMode: "number" | "date";
   /** QuickBooks item and tax codes used for the invoices sent */
   invoice: { itemId: string | null; taxCodeId: string | null; exemptTaxCodeId: string | null };
   /** Payments brought back from QuickBooks up to this time */
@@ -222,6 +224,8 @@ export async function quickbooksSettings(): Promise<QuickBooksSettings> {
     connectedAt: c.connectedAt ?? null,
     sync: { invoices: true, invoicesIn: true, payments: true, customers: true, accounts: true, vendors: true, timesheets: true, expenses: true, ...c.sync },
     invoicesFromNumber: c.invoicesFromNumber ?? 10000,
+    invoicesFromDate: c.invoicesFromDate ?? null,
+    invoicesMode: c.invoicesMode === "date" ? "date" : "number",
     invoice: { itemId: null, taxCodeId: null, exemptTaxCodeId: null, ...c.invoice },
     paymentsPulledAt: c.paymentsPulledAt ?? null,
     imports: c.imports ?? {},
@@ -247,6 +251,8 @@ export async function saveQuickBooksSettings(actorId: string | null, p: Partial<
       connectedAt: n.connectedAt,
       sync: n.sync,
       invoicesFromNumber: n.invoicesFromNumber,
+      invoicesFromDate: n.invoicesFromDate,
+      invoicesMode: n.invoicesMode,
       lastTest: n.lastTest,
       invoice: n.invoice,
       paymentsPulledAt: n.paymentsPulledAt,

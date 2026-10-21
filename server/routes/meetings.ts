@@ -9,6 +9,9 @@ import { body, zOptText, zUuid } from "../lib/validate.ts";
 import { ticketSource, type NTicket } from "../lib/ticketSource.ts";
 import { isAlert, lookup, run } from "./tickets.ts";
 import { asSeen, seesFull, team as planningTeam } from "./planning.ts";
+import { addDay, gaugeQueues } from "../lib/meetingsData.ts";
+import { briefOf, briefWeek, buildBrief } from "../lib/weekBrief.ts";
+import { rateLimit } from "../lib/http.ts";
 
 /**
  * Weekly team meeting dashboard (meetings.view). Tickets: every technician
@@ -17,6 +20,22 @@ import { asSeen, seesFull, team as planningTeam } from "./planning.ts";
 export const meetingRoutes = new Hono<AppEnv>()
   .use(requireStaff)
   .use(requirePermission("meetings.view"))
+
+  /**
+   * The week ahead in a few bullets and what management could do about it (written by the AI from the meeting page's
+   * data and each technician's days; the portal's own rules when the AI is off). Kept per week.
+   */
+  .get("/brief", async (c) => {
+    const q = z.object({ from: zDay.optional() }).safeParse(c.req.query());
+    if (!q.success) throw new HTTPException(400, { message: "invalid_range" });
+    return c.json(await briefOf(q.data.from ?? briefWeek(todayQc())));
+  })
+  .post("/brief", requirePermission("meetings.manage"), async (c) => {
+    const a = auth(c);
+    if (!rateLimit(`week-brief:${a.user.id}`, 10, 60 * 60_000).ok) throw new HTTPException(429, { message: "rate_limited" });
+    const p = await body(c, z.object({ from: zDay.optional() }));
+    return c.json(await buildBrief(p.from ?? briefWeek(todayQc()), { ai: true, userId: a.user.id }));
+  })
 
   .get("/overdue", async (c) => {
     const src = await ticketSource();
@@ -738,24 +757,6 @@ const zProject = z.object({
     .optional()
     .or(z.literal("").transform(() => null)),
 });
-
-/** The queues the meeting gauges count: the ones chosen, or every queue but the alert ones. */
-async function gaugeQueues(all: { value: string; label: string | null; kind?: string }[]) {
-  const [row] = await db().select({ config: schema.integrations.config }).from(schema.integrations).where(eq(schema.integrations.provider, "meetings"));
-  const chosen = (row?.config as { gaugeQueues?: string[] | null } | undefined)?.gaugeQueues;
-  const custom = Array.isArray(chosen) && chosen.some((q) => all.some((x) => x.value === q));
-  const counted = custom
-    ? all.filter((q) => chosen!.includes(q.value)).map((q) => q.value)
-    : all.filter((q) => q.kind !== "alerts").map((q) => q.value);
-  return { all: all.map((q) => ({ value: q.value, label: q.label ?? q.value })), counted, custom };
-}
-
-/** YYYY-MM-DD plus n days */
-function addDay(day: string, n: number) {
-  const d = new Date(`${day}T12:00:00Z`);
-  d.setUTCDate(d.getUTCDate() + n);
-  return d.toISOString().slice(0, 10);
-}
 
 function projectId(v: string) {
   const r = zUuid.safeParse(v);

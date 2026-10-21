@@ -5577,7 +5577,7 @@ describe("pipeline: times, files, recurring and private tasks", () => {
 
 describe("QuickBooks: clients, chart of accounts and vendors kept in step both ways", () => {
   type Rec = Record<string, any>;
-  const store = { Customer: new Map<string, Rec>(), Account: new Map<string, Rec>(), Vendor: new Map<string, Rec>() };
+  const store = { Customer: new Map<string, Rec>(), Account: new Map<string, Rec>(), Vendor: new Map<string, Rec>(), Invoice: new Map<string, Rec>() };
   const real = globalThis.fetch;
   let seq = 100;
   // a change on either side is later than the last sync, by a clear margin
@@ -5594,7 +5594,10 @@ describe("QuickBooks: clients, chart of accounts and vendors kept in step both w
     const path = url.pathname.replace(/^\/v3\/company\/[^/]+\//, "");
     if (path === "query") {
       const entity = /from (\w+)/.exec(url.searchParams.get("query") ?? "")![1] as keyof typeof store;
-      return Response.json({ QueryResponse: { [entity]: [...store[entity].values()] } });
+      // the one filter the portal uses on invoices: from a day on
+      const since = /TxnDate >= '([0-9]{4}-[0-9]{2}-[0-9]{2})'/.exec(url.searchParams.get("query") ?? "")?.[1];
+      const rows = [...store[entity].values()].filter((r) => !since || r.TxnDate >= since);
+      return Response.json({ QueryResponse: { [entity]: rows } });
     }
     const [what, id] = path.split("/");
     const entity = (what[0].toUpperCase() + what.slice(1)) as keyof typeof store;
@@ -5713,5 +5716,121 @@ describe("QuickBooks: clients, chart of accounts and vendors kept in step both w
       await saveQuickBooksSettings(null, { enabled: false, refreshToken: null, realmId: null });
       forgetQuickBooksToken();
     }
+  });
+
+  it("invoices: the first copy starts from a number or a date, and the next number is never behind QuickBooks", async () => {
+    resetRateLimit("login:ip:unknown");
+    vi.stubGlobal("fetch", mock);
+    const admin = await signIn("admin@akab.local");
+    const tech = await signIn("tech@akab.local");
+    const billing = await import("../server/lib/billing.ts");
+    const { forgetQuickBooksToken } = await import("../server/lib/quickbooks.ts");
+    await billing.saveQuickBooksSettings(null, { clientId: "x", clientSecret: "y", environment: "sandbox" });
+    await billing.saveQuickBooksSettings(null, { enabled: true, realmId: "123", refreshToken: "r" });
+    forgetQuickBooksToken();
+    try {
+      const [cl] = await db().insert(schema.clients).values({ name: "Client Factures QB", quickbooksId: "880" }).returning();
+      const inv = (n: string, day: string, customer = "880") => store.Invoice.set(n, stamp({ Id: n, DocNumber: n, TxnDate: day, DueDate: day, TotalAmt: 100, Balance: 100, CustomerRef: { value: customer }, Line: [] }));
+      inv("20001", "2026-01-10");
+      inv("20002", "2026-02-10");
+      inv("20007", "2026-03-10");
+      inv("20008", "2026-03-11", "999");
+      // from a number
+      await admin.put("/api/billing/quickbooks", { invoicesMode: "number", invoicesFromNumber: 20002 });
+      let p = (await admin.get("/api/billing/quickbooks/invoices/preview")).json;
+      expect(p).toMatchObject({ total: 3, unmapped: 1, firstNumber: 20002, lastNumber: 20008 });
+      // from a date
+      await admin.put("/api/billing/quickbooks", { invoicesMode: "date", invoicesFromDate: "2026-03-01" });
+      p = (await admin.get("/api/billing/quickbooks/invoices/preview")).json;
+      expect(p).toMatchObject({ total: 2, firstNumber: 20007, lastNumber: 20008, firstDate: "2026-03-10" });
+      expect((await admin.get("/api/billing/quickbooks")).json).toMatchObject({ invoicesMode: "date", invoicesFromDate: "2026-03-01" });
+      const pulled = (await admin.post("/api/billing/quickbooks/invoices/pull", {})).json;
+      expect(pulled).toMatchObject({ added: 1, unmapped: 1, total: 2 });
+      expect((await db().select().from(schema.clientInvoices).where(eq(schema.clientInvoices.clientId, cl.id))).map((x) => x.number)).toEqual(["20007"]);
+      // the next number: QuickBooks is at 20009; the portal is brought to it (never lowered)
+      const n = (await admin.get("/api/billing/quickbooks/numbering")).json;
+      expect(n).toMatchObject({ qbNext: 20009, qbHighest: 20008 });
+      await billing.saveBillingSettings(null, { numbering: { next: 100 } });
+      expect((await admin.get("/api/billing/quickbooks/numbering")).json).toMatchObject({ portalNext: 100, status: "behind" });
+      expect((await tech.post("/api/billing/quickbooks/numbering/align", {})).status).toBe(403);
+      expect((await admin.post("/api/billing/quickbooks/numbering/align", {})).json).toMatchObject({ portalNext: 20009, raised: true });
+      expect((await admin.get("/api/billing/quickbooks/numbering")).json).toMatchObject({ status: "aligned" });
+      // already ahead: never lowered
+      await billing.saveBillingSettings(null, { numbering: { next: 30000 } });
+      expect((await admin.post("/api/billing/quickbooks/numbering/align", {})).json).toMatchObject({ portalNext: 30000, raised: false });
+      expect((await admin.get("/api/billing/quickbooks/numbering")).json.status).toBe("ahead");
+    } finally {
+      vi.unstubAllGlobals();
+      await billing.saveQuickBooksSettings(null, { enabled: false, refreshToken: null, realmId: null, invoicesMode: "number" });
+      forgetQuickBooksToken();
+    }
+  });
+});
+
+describe("pipeline: pinned priorities in my day", () => {
+  it("the tickets pinned to me (of the day, of the week) are on my day first, even when assigned to someone else", async () => {
+    resetRateLimit("login:ip:unknown");
+    const tech = await signIn("tech@akab.local");
+    const me = (await tech.get("/api/me")).json.id as string;
+    const all = (await tech.get("/api/tickets?view=all")).json.items as any[];
+    const open = all.filter((x) => x.statusKind !== "complete" && x.assignee?.id !== me);
+    // pins left by earlier tests
+    await db().delete(schema.ticketPins);
+    const dayPinned = open[0];
+    const weekPinned = open[1];
+    const date = "2026-03-04"; // a Wednesday: its week starts 2026-03-02
+    await db().insert(schema.ticketPins).values([
+      { ticketId: dayPinned.id, ticketNumber: dayPinned.number, ticketTitle: dayPinned.title, technicianId: me, note: "Appeler le client avant midi", horizon: "day", forDate: date, rank: 1 },
+      { ticketId: weekPinned.id, ticketNumber: weekPinned.number, ticketTitle: weekPinned.title, technicianId: me, note: "", horizon: "week", forDate: "2026-03-02", rank: 2 },
+    ]);
+    const day = (await tech.get(`/api/pipeline/day?date=${date}`)).json;
+    const dp = day.items.find((i: any) => i.refId === String(dayPinned.id));
+    const wp = day.items.find((i: any) => i.refId === String(weekPinned.id));
+    expect(dp).toMatchObject({ pin: "day", pinNote: "Appeler le client avant midi" });
+    expect(wp).toMatchObject({ pin: "week" });
+    // the first block of the day is the priority of the day, with its direction
+    const first = day.plan.blocks.find((b: any) => b.kind === "ticket" && !b.overflow);
+    expect(first).toMatchObject({ refId: String(dayPinned.id), pinned: "day", note: "Appeler le client avant midi" });
+    // another day of the same week still has the week's priority, but not the day's
+    const thursday = (await tech.get("/api/pipeline/day?date=2026-03-05")).json;
+    expect(thursday.items.find((i: any) => i.refId === String(weekPinned.id))).toMatchObject({ pin: "week" });
+    expect(thursday.items.find((i: any) => i.refId === String(dayPinned.id))?.pin).toBeUndefined();
+    // a done pin is no longer a priority
+    await db().update(schema.ticketPins).set({ doneAt: new Date() }).where(eq(schema.ticketPins.ticketId, dayPinned.id));
+    expect((await tech.get(`/api/pipeline/day?date=${date}`)).json.items.find((i: any) => i.refId === String(dayPinned.id))).toBeUndefined();
+    await db().delete(schema.ticketPins);
+  });
+});
+
+describe("weekly meeting: the week ahead summary", () => {
+  it("is written from the week's absences, events, projects, tickets and each technician's load; managers regenerate it", async () => {
+    resetRateLimit("login:ip:unknown");
+    const admin = await signIn("admin@akab.local");
+    const tech = await signIn("tech@akab.local");
+    const team = (await admin.get("/api/meetings/team")).json as { id: string; name: string }[];
+    const alex = team.find((x) => x.name.includes("Alex"))!;
+    const from = "2026-03-02"; // a Monday
+    await admin.post("/api/meetings/absences", { userId: alex.id, startDate: "2026-03-03", endDate: "2026-03-04", kind: "vacation", note: "" });
+    await admin.post("/api/meetings/events", { date: "2026-03-05", title: "Formation Microsoft", startTime: "09:00", endTime: "12:00", userId: null });
+    await admin.post("/api/meetings/projects", { title: "Livraison réseau", dueDate: "2026-03-06" });
+    // technicians do not see the meeting page by default
+    expect((await tech.get(`/api/meetings/brief?from=${from}`)).status).toBe(403);
+    const brief = (await admin.get(`/api/meetings/brief?from=${from}`)).json;
+    expect(brief).toMatchObject({ weekStart: from, source: "rules" });
+    const text = [...brief.bullets, ...brief.suggestions].join(" | ");
+    expect(brief.bullets.length).toBeGreaterThanOrEqual(3);
+    expect(brief.bullets.length).toBeLessThanOrEqual(8);
+    expect(text).toContain("Alex");
+    expect(text).toContain("Formation Microsoft");
+    expect(text).toContain("Livraison réseau");
+    expect(brief.suggestions.length).toBeGreaterThanOrEqual(1);
+    // no week asked: the current one (or the next over a weekend)
+    expect((await admin.get("/api/meetings/brief")).json.weekStart).toMatch(/^\d{4}-\d{2}-\d{2}$/);
+    expect((await admin.get("/api/meetings/brief?from=2026-13-40")).status).toBe(400);
+    // regenerating: managers only; without the AI it falls back to the rules and says why
+    expect((await tech.post("/api/meetings/brief", { from })).status).toBe(403);
+    const again = (await admin.post("/api/meetings/brief", { from })).json;
+    expect(again.brief.source).toBe("rules");
+    expect(["not_configured", "disabled"]).toContain(again.aiError);
   });
 });

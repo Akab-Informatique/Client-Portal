@@ -37,6 +37,8 @@ type QuickBooks = {
   sync: { invoices: boolean; invoicesIn: boolean; payments: boolean; customers: boolean; accounts: boolean; vendors: boolean; timesheets: boolean; expenses: boolean };
   runs: { clients?: SyncRun; accounts?: SyncRun; vendors?: SyncRun };
   invoicesFromNumber: number;
+  invoicesFromDate: string | null;
+  invoicesMode: "number" | "date";
   lastTest: { ok: boolean; at: string; error?: string } | null;
   redirectUri: string | null;
   invoice: { itemId: string | null; taxCodeId: string | null; exemptTaxCodeId: string | null };
@@ -314,10 +316,35 @@ function InvoicesInCard({ q }: { q: QuickBooks }) {
   const qc = useQueryClient();
   const err = useBillingError();
   const [from, setFrom] = useState(String(q.invoicesFromNumber));
+  const [date, setDate] = useState(q.invoicesFromDate ?? "");
   useEffect(() => setFrom(String(q.invoicesFromNumber)), [q.invoicesFromNumber]);
+  useEffect(() => setDate(q.invoicesFromDate ?? ""), [q.invoicesFromDate]);
   const save = useMutation({
-    mutationFn: (n: number) => api.put<QuickBooks>("/billing/quickbooks", { invoicesFromNumber: n }),
-    onSuccess: (r) => qc.setQueryData([...KEY, "quickbooks"], r),
+    mutationFn: (p: Record<string, unknown>) => api.put<QuickBooks>("/billing/quickbooks", p),
+    onSuccess: (r) => {
+      qc.setQueryData([...KEY, "quickbooks"], r);
+      void qc.invalidateQueries({ queryKey: [...KEY, "qb-invoice-preview"] });
+    },
+    onError: (e) => toast.error(err(e)),
+  });
+  const preview = useQuery({
+    queryKey: [...KEY, "qb-invoice-preview", q.invoicesMode, q.invoicesFromNumber, q.invoicesFromDate],
+    queryFn: () => api.get<{ total: number; unmapped: number; firstNumber: number | null; lastNumber: number | null; firstDate: string | null }>("/billing/quickbooks/invoices/preview"),
+    retry: false,
+    staleTime: 30_000,
+  });
+  const numbering = useQuery({
+    queryKey: [...KEY, "qb-numbering"],
+    queryFn: () => api.get<{ portalNext: number; qbNext: number; qbHighest: number; status: "aligned" | "behind" | "ahead" }>("/billing/quickbooks/numbering"),
+    retry: false,
+  });
+  const align = useMutation({
+    mutationFn: () => api.post<{ portalNext: number; qbNext: number; raised: boolean }>("/billing/quickbooks/numbering/align"),
+    onSuccess: (r) => {
+      void qc.invalidateQueries({ queryKey: [...KEY, "qb-numbering"] });
+      void qc.invalidateQueries({ queryKey: KEY });
+      toast.success(r.raised ? t("billing.qb.numbering.raised", { next: r.portalNext }) : t("billing.qb.numbering.already"));
+    },
     onError: (e) => toast.error(err(e)),
   });
   const pull = useMutation({
@@ -332,26 +359,72 @@ function InvoicesInCard({ q }: { q: QuickBooks }) {
   const commit = () => {
     const n = Number(from.replace(/\D/g, ""));
     if (!Number.isFinite(n) || from.trim() === "") return setFrom(String(q.invoicesFromNumber));
-    if (n !== q.invoicesFromNumber) save.mutate(n);
+    if (n !== q.invoicesFromNumber) save.mutate({ invoicesFromNumber: n });
   };
+  const mode = q.invoicesMode;
+  const p = preview.data;
+  const nb = numbering.data;
   return (
     <Card
       title={t("billing.qb.invoicesInTitle")}
       text={t("billing.qb.invoicesInText")}
       aside={
-        <Button size="sm" variant="outline" disabled={pull.isPending} onClick={() => pull.mutate()}>
+        <Button size="sm" variant="outline" disabled={pull.isPending || (mode === "date" && !q.invoicesFromDate)} onClick={() => pull.mutate()}>
           {pull.isPending ? <Loader2 className="size-3.5 animate-spin" /> : <ArrowDownToLine className="size-3.5" />} {t("billing.qb.invoicesInPull")}
         </Button>
       }
     >
-      <div className="flex flex-wrap items-end gap-4">
-        <label className="space-y-1 text-xs">
-          <span className="text-muted-foreground">{t("billing.qb.invoicesFrom")}</span>
-          <Input value={from} onChange={(e) => setFrom(e.target.value)} onBlur={commit} onKeyDown={(e) => e.key === "Enter" && (e.target as HTMLInputElement).blur()} inputMode="numeric" className="w-32 font-mono" />
-        </label>
+      {/* where the first copy starts: an invoice number, or a day */}
+      <div className="space-y-3">
+        <p className="text-xs font-medium text-muted-foreground">{t("billing.qb.invoicesStart")}</p>
+        <div className="grid gap-2 sm:grid-cols-2">
+          {(["number", "date"] as const).map((m) => (
+            <div key={m} className={cn("space-y-2 rounded-xl border p-3 transition-colors", mode === m && "border-[color:var(--gold)]/50 bg-[color:var(--gold)]/[0.05]")}>
+              <label className="flex cursor-pointer items-center gap-2 text-sm font-medium">
+                <input type="radio" name="qb-invoices-mode" checked={mode === m} onChange={() => save.mutate({ invoicesMode: m })} className="accent-[color:var(--gold)]" />
+                {t(`billing.qb.invoicesMode.${m}`)}
+              </label>
+              {m === "number" ? (
+                <Input value={from} disabled={mode !== "number"} onChange={(e) => setFrom(e.target.value)} onBlur={commit} onKeyDown={(e) => e.key === "Enter" && (e.target as HTMLInputElement).blur()} inputMode="numeric" className="w-40 font-mono" placeholder="10000" />
+              ) : (
+                <Input type="date" value={date} disabled={mode !== "date"} onChange={(e) => setDate(e.target.value)} onBlur={() => date !== (q.invoicesFromDate ?? "") && save.mutate({ invoicesFromDate: date || null })} className="w-44" />
+              )}
+              <p className="text-[11px] text-muted-foreground">{t(`billing.qb.invoicesMode.${m}Hint`)}</p>
+            </div>
+          ))}
+        </div>
         <p className="text-xs text-muted-foreground">
-          {q.imports.invoices ? t("billing.qb.invoicesInLast", { ...q.imports.invoices, when: dateTime(q.imports.invoices.at) }) : t("billing.qb.invoicesInNever")}
+          {preview.isLoading ? <Loader2 className="inline size-3 animate-spin" /> : p ? t("billing.qb.invoicesPreview", { total: p.total, first: p.firstNumber ?? "—", last: p.lastNumber ?? "—", unmapped: p.unmapped }) : ""}
         </p>
+        <p className="text-xs text-muted-foreground">{q.imports.invoices ? t("billing.qb.invoicesInLast", { ...q.imports.invoices, when: dateTime(q.imports.invoices.at) }) : t("billing.qb.invoicesInNever")}</p>
+      </div>
+
+      {/* the next invoice number: the same here as in QuickBooks */}
+      <div className="space-y-2 rounded-xl border p-3">
+        <p className="text-sm font-medium">{t("billing.qb.numbering.title")}</p>
+        {nb ? (
+          <div className="flex flex-wrap items-center gap-x-6 gap-y-2 text-sm">
+            <span>
+              {t("billing.qb.numbering.portal")} <span className="font-mono font-semibold">{nb.portalNext}</span>
+            </span>
+            <span>
+              QuickBooks <span className="font-mono font-semibold">{nb.qbNext}</span>
+            </span>
+            <span className={cn("flex items-center gap-1 text-xs", nb.status === "aligned" ? "text-emerald-400" : nb.status === "behind" ? "text-orange-300" : "text-sky-300")}>
+              {nb.status === "aligned" && <CheckCircle2 className="size-3.5" />} {t(`billing.qb.numbering.${nb.status}`)}
+            </span>
+            {nb.status === "behind" && (
+              <Button size="sm" variant="outline" className="h-8" disabled={align.isPending} onClick={() => align.mutate()}>
+                {align.isPending && <Loader2 className="size-3.5 animate-spin" />} {t("billing.qb.numbering.align")}
+              </Button>
+            )}
+          </div>
+        ) : numbering.isLoading ? (
+          <Loader2 className="size-4 animate-spin text-muted-foreground" />
+        ) : (
+          <p className="text-xs text-destructive">{err(numbering.error)}</p>
+        )}
+        <p className="text-[11px] text-muted-foreground">{t("billing.qb.numbering.hint")}</p>
       </div>
     </Card>
   );

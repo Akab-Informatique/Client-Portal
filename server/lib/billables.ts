@@ -1,5 +1,6 @@
 import { and, asc, eq, gte, inArray, isNotNull, lte, sql } from "drizzle-orm";
 import { db, schema } from "../db/index.ts";
+import { alignNumbering } from "./quickbooks.ts";
 import { billingSettings, formatInvoiceNumber, saveBillingSettings, type BillingSettings } from "./billing.ts";
 import { ensureCrm } from "./crm.ts";
 import { ticketSource, type BillableKind } from "./ticketSource.ts";
@@ -299,6 +300,8 @@ let numbering: Promise<unknown> = Promise.resolve();
 
 /** The number the next invoice would get: the setting, after the highest one used (the copied ones included). */
 async function peekNumber(): Promise<string> {
+  // with QuickBooks connected, its numbering is looked at first (at most every 2 minutes): never a number it already has
+  await alignNumbering().catch(() => undefined);
   const s = await billingSettings();
   const all = await db().select({ number: schema.clientInvoices.number }).from(schema.clientInvoices);
   const used = new Set(all.map((x) => x.number));

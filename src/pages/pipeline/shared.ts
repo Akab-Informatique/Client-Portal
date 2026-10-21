@@ -62,6 +62,8 @@ export type Block = {
   priority?: string | null;
   note?: string | null;
   overflow?: boolean;
+  /** A priority pinned for the technician (of the day / of the week) */
+  pinned?: "day" | "week";
   /** An event of the technician's Microsoft 365 calendar */
   o365?: boolean;
   allDay?: boolean;
@@ -82,6 +84,8 @@ export type DayItem = {
   blocked?: boolean;
   dueTime?: string | null;
   masked?: boolean;
+  pin?: "day" | "week";
+  pinNote?: string | null;
 };
 
 export type DayData = {

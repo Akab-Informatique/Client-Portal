@@ -1908,6 +1908,18 @@ export const vendors = pgTable(
   (t) => [uniqueIndex("vendors_quickbooks_idx").on(t.quickbooksId), index("vendors_name_idx").on(t.name)],
 );
 
+/** The week ahead written for the Monday meeting (a few bullets and management suggestions), one per week */
+export const meetingWeekBriefs = pgTable("meeting_week_briefs", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  /** The Monday (YYYY-MM-DD) */
+  weekStart: text("week_start").notNull().unique(),
+  bullets: jsonb("bullets").$type<string[]>().notNull().default(sql`'[]'::jsonb`),
+  suggestions: jsonb("suggestions").$type<string[]>().notNull().default(sql`'[]'::jsonb`),
+  source: text("source", { enum: ["ai", "rules"] }).notNull().default("rules"),
+  generatedBy: uuid("generated_by").references(() => users.id, { onDelete: "set null" }),
+  generatedAt: timestamp("generated_at", { withTimezone: true }).notNull().defaultNow(),
+});
+
 // ── Pipeline: the team's to-do list and each technician's day ──
 /** A to-do: shared by the team, assigned to someone (or nobody), with a checklist, notes, a parent and a task it waits for. */
 export const pipelineTasks = pgTable(
@@ -2057,6 +2069,8 @@ export type PipelineBlock = {
   note?: string | null;
   /** Did not fit in the day */
   overflow?: boolean;
+  /** A priority pinned for the technician: of the day, or of the week */
+  pinned?: "day" | "week";
   /** An event of the technician's Microsoft 365 calendar (not one the portal reserved) */
   o365?: boolean;
   /** An event that lasts the whole day (it does not take hours off) */

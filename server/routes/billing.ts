@@ -27,6 +27,7 @@ import {
 } from "../lib/billing.ts";
 import { createCheckout, expireCheckout, handleEvent, MIN_CENTS, StripeError, verifySignature } from "../lib/stripe.ts";
 import { createVendorInQb, pushSoon, selectVendors, syncAll, syncVendors, vendorChoices, type SyncPart } from "../lib/qbSync.ts";
+import { alignNumbering, numberingStatus, previewInvoices } from "../lib/quickbooks.ts";
 import { applyAccounts, applyItems, createCustomer, forgetQuickBooksToken, invoiceChoices, matchReason, planAccounts, planItems, pullInvoices, pullPayments, quickbooksCustomers, QuickBooksError, suggestions } from "../lib/quickbooks.ts";
 
 /** QuickBooks errors as API errors (quickbooks_not_mapped, quickbooks_api…). */
@@ -67,6 +68,8 @@ const quickbooksView = async (origin?: string | null) => {
     connectedAt: s.connectedAt,
     sync: s.sync,
     invoicesFromNumber: s.invoicesFromNumber,
+    invoicesFromDate: s.invoicesFromDate,
+    invoicesMode: s.invoicesMode,
     lastTest: s.lastTest ?? null,
     redirectUri: base ? quickbooksRedirectUri(base) : null,
     invoice: s.invoice,
@@ -323,6 +326,8 @@ export const billingRoutes = new Hono<AppEnv>()
         clientSecret: z.string().trim().min(1).max(200).optional(),
         sync: z.object({ invoices: z.boolean(), invoicesIn: z.boolean(), payments: z.boolean(), customers: z.boolean(), accounts: z.boolean(), vendors: z.boolean(), timesheets: z.boolean(), expenses: z.boolean() }).partial().optional(),
         invoicesFromNumber: z.number().int().min(0).max(100_000_000).optional(),
+        invoicesFromDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).nullable().optional(),
+        invoicesMode: z.enum(["number", "date"]).optional(),
       }),
     );
     const s = await quickbooksSettings();
@@ -438,6 +443,16 @@ export const billingRoutes = new Hono<AppEnv>()
     await saveQuickBooksSettings(a.user.id, { invoice: { ...s.invoice, ...p } });
     await audit(a.user.id, "billing.quickbooks.invoice_defaults", null, p);
     return c.json((await quickbooksSettings()).invoice);
+  })
+  /** What the chosen start would bring in, and the next invoice number here and in QuickBooks */
+  .get("/quickbooks/invoices/preview", requirePermission("admin.billing"), requirePermission("admin.integrations"), async (c) => c.json(await qbRun(() => previewInvoices())))
+  .get("/quickbooks/numbering", requirePermission("admin.billing"), requirePermission("admin.integrations"), async (c) => c.json(await qbRun(() => numberingStatus())))
+  /** Raise the next number here to QuickBooks' next (never lowers it) */
+  .post("/quickbooks/numbering/align", requirePermission("admin.billing"), requirePermission("admin.integrations"), async (c) => {
+    const a = auth(c);
+    const r = await qbRun(() => alignNumbering(true, a.user.id));
+    await audit(a.user.id, "billing.quickbooks.numbering_aligned", null, { portalNext: r.portalNext, qbNext: r.qbNext, raised: r.raised });
+    return c.json(r);
   })
   /** Payments made in QuickBooks, now (they also come every 15 minutes while the sync is on). */
   /** Bring in the QuickBooks invoices (from the chosen number) with their status, for the clients mapped to a customer. */

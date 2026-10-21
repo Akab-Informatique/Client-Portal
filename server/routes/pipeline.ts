@@ -10,7 +10,7 @@ import { audit } from "../lib/audit.ts";
 import { aiSettings } from "../lib/ai.ts";
 import { rateLimit } from "../lib/http.ts";
 import { notify, usersWith } from "../lib/notify.ts";
-import { buildPipelineView, maskPhone, morningRun, phoneOf, PipelineError, pipelineSettings, planOf, buildPlan, savePipelineSettings, sendTestSms, type PipelineSettings } from "../lib/pipeline.ts";
+import { calendarOfDay, buildPipelineView, maskPhone, morningRun, phoneOf, PipelineError, pipelineSettings, planOf, buildPlan, savePipelineSettings, sendTestSms, type PipelineSettings } from "../lib/pipeline.ts";
 import { ticketSource } from "../lib/ticketSource.ts";
 import { todayQc } from "../lib/timesheets.ts";
 import { body, zUuid } from "../lib/validate.ts";
@@ -229,7 +229,9 @@ export const pipelineRoutes = new Hono<AppEnv>()
       : stored;
     // the AI's plan does not follow the list: tell when something to do is not in it
     const planned = new Set(plan.blocks.filter((b) => (b.kind === "task" || b.kind === "ticket") && b.refId).map((b) => `${b.kind}:${b.refId}`));
-    const stale = plan.source === "ai" && view.items.some((i) => !i.blocked && !planned.has(i.key));
+    // also when the Outlook calendar changed (a meeting added or moved)
+    const cal = plan.source === "ai" ? await calendarOfDay(userId, date).catch(() => null) : null;
+    const stale = plan.source === "ai" && (view.items.some((i) => !i.blocked && !planned.has(i.key)) || (cal !== null && cal.events.filter((e) => !e.free).length !== plan.calendarEvents));
     return c.json({ date, userId, plan, stale, ...view, workHours: { start: s.workStart, end: s.workEnd, lunchStart: s.lunchStart, lunchEnd: s.lunchEnd }, ai: Boolean(ai.enabled && ai.apiKey) });
   })
 

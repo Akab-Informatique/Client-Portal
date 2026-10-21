@@ -3,7 +3,7 @@ import { and, asc, eq, inArray, isNotNull, isNull } from "drizzle-orm";
 import { db, schema } from "../db/index.ts";
 import { addDays, linkDefaultAccounts, typesById, weekByDayAndType } from "./timesheets.ts";
 import { syncAll } from "./qbSync.ts";
-import { billingSettings, ledger, qbApi, qbToken, quickbooksSettings, saveQuickBooksSettings, type LedgerType, type QuickBooksSettings } from "./billing.ts";
+import { billingSettings, saveBillingSettings, ledger, qbApi, qbToken, quickbooksSettings, saveQuickBooksSettings, type LedgerType, type QuickBooksSettings } from "./billing.ts";
 
 /**
  * QuickBooks Online, through its API: clients ↔ customers (no doubles),
@@ -508,9 +508,61 @@ const numberOf = (doc: string | undefined) => {
  * the portal sent, by its number). What QuickBooks says is paid and not yet seen as a payment is recorded as a
  * payment of source quickbooks (`bal:<id>`), so the portal's status is the same as QuickBooks'.
  */
+/** The QuickBooks invoices the chosen start brings in: from an invoice number on, or from a day on */
+async function invoicesToPull(s: QuickBooksSettings): Promise<RawInvoice[]> {
+  if (s.invoicesMode === "date" && s.invoicesFromDate) return query<RawInvoice>("Invoice", `TxnDate >= '${s.invoicesFromDate}'`);
+  return (await query<RawInvoice>("Invoice")).filter((r) => (numberOf(r.DocNumber) ?? -1) >= s.invoicesFromNumber);
+}
+
+/** What the chosen start would bring in (nothing is copied): how many, from which number to which, how many for clients not mapped yet */
+export async function previewInvoices() {
+  const s = await quickbooksSettings();
+  const rows = await invoicesToPull(s);
+  const mapped = new Set((await db().select({ qb: schema.clients.quickbooksId }).from(schema.clients).where(isNotNull(schema.clients.quickbooksId))).map((x) => x.qb));
+  const numbers = rows.map((r) => numberOf(r.DocNumber)).filter((n): n is number => n !== null);
+  return {
+    total: rows.length,
+    unmapped: rows.filter((r) => !mapped.has(r.CustomerRef?.value ?? "")).length,
+    firstNumber: numbers.length ? Math.min(...numbers) : null,
+    lastNumber: numbers.length ? Math.max(...numbers) : null,
+    firstDate: rows.map((r) => r.TxnDate).sort()[0] ?? null,
+  };
+}
+
+/**
+ * The invoice number QuickBooks will give next (its highest number + 1) and the portal's. The portal's numbering is
+ * raised to QuickBooks' when it is behind (never lowered), so an invoice made here never takes a number QuickBooks
+ * already has. Looked at again at most every 2 minutes unless forced.
+ */
+let numberingSeen: { at: number; qbNext: number } | null = null;
+export async function alignNumbering(force = false, actorId: string | null = null): Promise<{ portalNext: number; qbNext: number; qbHighest: number; raised: boolean }> {
+  const bs = await billingSettings();
+  if (!force && numberingSeen && Date.now() - numberingSeen.at < 120_000) return { portalNext: bs.numbering.next, qbNext: numberingSeen.qbNext, qbHighest: numberingSeen.qbNext - 1, raised: false };
+  const all = await query<RawInvoice>("Invoice");
+  const highest = all.reduce((m, r) => Math.max(m, numberOf(r.DocNumber) ?? 0), 0);
+  numberingSeen = { at: Date.now(), qbNext: highest + 1 };
+  let raised = false;
+  let next = bs.numbering.next;
+  if (highest + 1 > next) {
+    await saveBillingSettings(actorId, { numbering: { next: highest + 1 } });
+    next = highest + 1;
+    raised = true;
+  }
+  return { portalNext: next, qbNext: highest + 1, qbHighest: highest, raised };
+}
+
+/** Where the two numberings stand (nothing is changed): equal, the portal behind (it will be raised) or ahead (invoices not sent yet) */
+export async function numberingStatus() {
+  const bs = await billingSettings();
+  const all = await query<RawInvoice>("Invoice");
+  const highest = all.reduce((m, r) => Math.max(m, numberOf(r.DocNumber) ?? 0), 0);
+  const portalNext = bs.numbering.next;
+  return { portalNext, qbNext: highest + 1, qbHighest: highest, status: portalNext === highest + 1 ? "aligned" : portalNext < highest + 1 ? "behind" : "ahead" } as const;
+}
+
 export async function pullInvoices(actorId: string | null) {
   const s = await quickbooksSettings();
-  const rows = (await query<RawInvoice>("Invoice")).filter((r) => (numberOf(r.DocNumber) ?? -1) >= s.invoicesFromNumber);
+  const rows = await invoicesToPull(s);
   const d = db();
   const clients = new Map((await d.select({ id: schema.clients.id, qb: schema.clients.quickbooksId }).from(schema.clients).where(isNotNull(schema.clients.quickbooksId))).map((x) => [x.qb!, x.id]));
   const existing = await d.select().from(schema.clientInvoices);
@@ -610,6 +662,8 @@ export async function pullInvoices(actorId: string | null) {
   }
   const result = { at: now.toISOString(), added, updated, unmapped, total: rows.length };
   await saveQuickBooksSettings(actorId, { imports: { ...s.imports, invoices: result } });
+  // the next number here is never behind QuickBooks'
+  await alignNumbering(true, actorId).catch((e) => console.warn("[quickbooks] numbering:", errText(e)));
   return result;
 }
 
