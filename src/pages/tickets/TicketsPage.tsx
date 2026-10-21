@@ -69,7 +69,7 @@ import { NewTicketDialog } from "./NewTicketDialog";
 import { AcceptDialog } from "./AcceptDialog";
 import { MergeDialog } from "./MergeDialog";
 import { PendingMails } from "./PendingMails";
-import { dueState, FILTER_KEYS, PRIORITY_STYLE, dueGlow, useChoiceText, shortDate, shortDateTime, STATUS_STYLE, useTickets, VIEWS, type Tally, type TicketList, type TicketSummary, type View, ticketErrorText } from "./shared";
+import { dueState, FILTER_KEYS, PRIORITY_STYLE, dueGlow, useChoiceText, shortDate, shortDateTime, STATUS_STYLE, useTickets, useShowSecondary, VIEWS, type Tally, type TicketList, type TicketSummary, type View, ticketErrorText } from "./shared";
 import { useTicketWorkspace } from "./workspace";
 import { GlobalSearch } from "./GlobalSearch";
 import { AgendaCard } from "./Planning";
@@ -445,6 +445,7 @@ function TileDetails({ title, hint, rows, note }: { title: string; hint: string;
 }
 
 function MetricTiles({ data, params, apply, onSms }: { data: TicketList | undefined; params: URLSearchParams; apply: (q: string) => void; onSms: () => void }) {
+  const [withSecondary, setWithSecondary] = useShowSecondary();
   const { t } = useTranslation();
   const qc = useQueryClient();
   const current = useMemo(() => {
@@ -489,6 +490,7 @@ function MetricTiles({ data, params, apply, onSms }: { data: TicketList | undefi
         const d = details(tile.key);
         return (
           <Fragment key={tile.key}>
+            <span className="relative shrink-0">
             <Tooltip>
               <TooltipTrigger asChild>
                 <motion.button
@@ -504,7 +506,7 @@ function MetricTiles({ data, params, apply, onSms }: { data: TicketList | undefi
                   )}
                 >
                   <tile.icon className={cn("size-4 shrink-0", tile.tone)} />
-                  <span className="whitespace-nowrap text-xs font-medium">{t(`tickets.metrics.${tile.key}`)}</span>
+                  <span className={cn("whitespace-nowrap text-xs font-medium", tile.key === "mine" && "mr-4")}>{t(`tickets.metrics.${tile.key}`)}</span>
                   <span className={cn("font-mono text-base font-semibold tabular-nums", value ? "text-foreground" : "text-muted-foreground/50")}>
                     {value === undefined ? "–" : <CountUp value={value} />}
                   </span>
@@ -521,6 +523,21 @@ function MetricTiles({ data, params, apply, onSms }: { data: TicketList | undefi
                 <TileDetails title={t(`tickets.metrics.${tile.key}`)} hint={t(`tickets.tiles.what.${tile.key}`)} rows={d.rows} note={d.note} />
               </TooltipContent>
             </Tooltip>
+            {/* in the corner of "my tickets": off = the tickets where I am only a secondary technician are left out */}
+            {tile.key === "mine" && (
+              <button
+                type="button"
+                role="switch"
+                aria-checked={withSecondary}
+                aria-label={t("tickets.secondary.label")}
+                title={withSecondary ? t("tickets.secondary.on") : t("tickets.secondary.off")}
+                onClick={() => setWithSecondary(!withSecondary)}
+                className={cn("absolute right-1 top-1 flex h-2.5 w-5 items-center rounded-full border transition-colors", withSecondary ? "border-[color:var(--gold)]/60 bg-[color:var(--gold)]/30" : "border-muted-foreground/40 bg-muted/40")}
+              >
+                <span className={cn("block size-1.5 rounded-full bg-current transition-transform", withSecondary ? "translate-x-2.5 text-primary" : "translate-x-0.5 text-muted-foreground")} />
+              </button>
+            )}
+            </span>
             {/* the texts right after my tickets */}
             {tile.key === "mine" && <SmsTile onOpen={onSms} compact />}
           </Fragment>

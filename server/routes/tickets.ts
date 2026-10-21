@@ -433,7 +433,9 @@ export const ticketRoutes = new Hono<AppEnv>()
     /** Needs attention: open and overdue, due today or critical */
     const attention = (t: NTicket) => open(t) && (isOverdue(t) || isDueToday(t) || isCritical(t));
 
-    const isMine = (t: NTicket) => Boolean(meId) && (t.assignee?.id === meId || t.secondary.some((p) => p.id === meId));
+    // secondary=0: the tickets where I am only a secondary technician are left out of "mine"
+    const withSecondary = q.secondary !== "0";
+    const isMine = (t: NTicket) => Boolean(meId) && (t.assignee?.id === meId || (withSecondary && t.secondary.some((p) => p.id === meId)));
     // monitoring alerts (the alerts queue, alert emails) are not tickets to pick up: not in "unassigned"
     const alert = isAlert(L);
     /** Open, nobody on it, not a monitoring alert */

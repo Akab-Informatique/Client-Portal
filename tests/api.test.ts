@@ -5378,3 +5378,16 @@ describe("merge tickets", () => {
     expect(open).not.toContain(a);
   });
 });
+
+describe("my tickets: secondary technician", () => {
+  it("secondary=0 leaves out the tickets where I am only secondary", async () => {
+    resetRateLimit("login:ip:unknown");
+    const tech = await signIn("tech@akab.local");
+    const mine = (await tech.get("/api/tickets?view=mine")).json;
+    const without = (await tech.get("/api/tickets?view=mine&secondary=0")).json;
+    const me = (await tech.get("/api/me")).json.id as string;
+    expect(without.items.every((t: any) => t.assignee?.id === me)).toBe(true);
+    expect(without.items.length).toBeLessThanOrEqual(mine.items.length);
+    expect(without.metrics.mine).toBe(without.items.length);
+  });
+});

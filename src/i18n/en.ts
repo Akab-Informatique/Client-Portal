@@ -3035,6 +3035,7 @@ const en: Dict = {
     replySentEmail: "Reply saved and emailed to {{to}}.",
     replyEmailFailed: "Reply saved, but the email to {{to}} did not go out (mail server).",
     merge: {"button":"Merge","title":"Merge the ticket","text":"Pick the ticket of {{client}} to merge this one into. Its notes, time, charges and files move there; the original ticket stays, marked “Merged” (closed).","search":"Search the client's open tickets…","none":"No other open ticket for this client.","summary":"{{from}} will be merged into {{into}}: all its content moves to {{into}} and {{from}} is closed.","confirm":"Merge","done":"{{number}} merged into {{into}}.","mergedInto":"Ticket merged into {{number}}: it is closed, all the work is on that ticket.","errors":{"merge_same":"A ticket cannot be merged with itself.","merge_already":"This ticket is already merged.","merge_target_merged":"The chosen ticket is already merged into another.","merge_other_client":"Both tickets must be for the same client."},"list":"Merged tickets","listCount":"Merged ({{count}})","mergedOn":"merged on {{date}}","fromHint":"Written on ticket {{number}}, merged here"},
+    secondary: {"label":"Include tickets where I am secondary","on":"My tickets include those where I am secondary","off":"My tickets leave out those where I am secondary"},
     rowMenu: {"assign":"Assign to…","assignMe":"{{name}} (me)","title":"Ticket actions","accept":"Accept the ticket (assign it to me)","open":"Open the ticket"},
     tileBar: {
       collapse: "Collapse the squares",

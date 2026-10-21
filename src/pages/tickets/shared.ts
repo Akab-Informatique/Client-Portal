@@ -1,4 +1,4 @@
-import { useEffect, useState, type CSSProperties } from "react";
+import { useEffect, useState, useSyncExternalStore, type CSSProperties } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
 import { api, ApiError } from "@/lib/api";
@@ -240,8 +240,43 @@ export function dueState(iso: string, status: StatusKind) {
   return due.getTime() - now.getTime() < 2 * 86_400_000 ? "soon" : "later";
 }
 
+/**
+ * "My tickets" also lists the tickets where I am a secondary technician; a small switch on its button turns
+ * that off (kept in this browser, on by default).
+ */
+const SECONDARY_KEY = "akab.tickets.secondary";
+const secondaryListeners = new Set<() => void>();
+const readSecondary = () => {
+  try {
+    return localStorage.getItem(SECONDARY_KEY) !== "0";
+  } catch {
+    return true;
+  }
+};
+export function useShowSecondary(): [boolean, (on: boolean) => void] {
+  const on = useSyncExternalStore(
+    (cb) => {
+      secondaryListeners.add(cb);
+      return () => secondaryListeners.delete(cb);
+    },
+    readSecondary,
+    () => true,
+  );
+  const set = (v: boolean) => {
+    try {
+      localStorage.setItem(SECONDARY_KEY, v ? "1" : "0");
+    } catch {
+      /* private window: the choice lasts until the page is reloaded */
+    }
+    secondaryListeners.forEach((f) => f());
+  };
+  return [on, set];
+}
+
 export function useTickets(view: View, filters: URLSearchParams) {
+  const [withSecondary] = useShowSecondary();
   const qs = new URLSearchParams({ view });
+  if (!withSecondary) qs.set("secondary", "0");
   for (const k of FILTER_KEYS) {
     const v = filters.get(k);
     if (v) qs.set(k, v);
