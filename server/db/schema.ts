@@ -1671,6 +1671,9 @@ export const expenseFavorites = pgTable(
     /** By unit (km…): the quantity; otherwise the amount */
     quantityX100: integer("quantity_x100"),
     amountCents: bigint("amount_cents", { mode: "number" }),
+    /** A trip (mileage type): where from and where to */
+    fromPlace: text("from_place"),
+    toPlace: text("to_place"),
     clientId: uuid("client_id").references(() => clients.id, { onDelete: "set null" }),
     billable: boolean("billable").notNull().default(false),
     createdAt: created(),
@@ -1783,6 +1786,9 @@ export const expenses = pgTable(
       .notNull()
       .references(() => expenseTypes.id, { onDelete: "restrict" }),
     description: text("description").notNull().default(""),
+    /** A trip (mileage type): where from and where to */
+    fromPlace: text("from_place"),
+    toPlace: text("to_place"),
     quantityX100: integer("quantity_x100").notNull().default(100),
     unitPriceCents: bigint("unit_price_cents", { mode: "number" }).notNull().default(0),
     amountCents: bigint("amount_cents", { mode: "number" }).notNull().default(0),

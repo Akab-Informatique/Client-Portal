@@ -1364,6 +1364,14 @@ const fr = {
     },
   },
   expense: {
+    km: "{{km}} km",
+    kmPaid: "{{km}} km payés",
+    from: "Départ (d'où)",
+    to: "Arrivée (où)",
+    fromHint: "Ex. : bureau, Joliette",
+    toHint: "Ex. : chez le client, Montréal",
+    noteOptional: "Note (facultatif)",
+    placesRequired: "Indiquez d'où et jusqu'où vous êtes allé.",
     favorites: {
       title: "Favoris",
       keep: "Garder en favori",

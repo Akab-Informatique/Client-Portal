@@ -13,6 +13,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Switch } from "@/components/ui/switch";
 import { api, ApiError } from "@/lib/api";
 import { cn } from "@/lib/utils";
+import { isMileageUnit } from "@shared/mileage";
 import { money, useCrmClients } from "@/pages/crm/shared";
 import { fileToBase64 } from "@/pages/outlook/shared";
 import { shortDate } from "@/pages/tickets/shared";
@@ -36,6 +37,11 @@ export type Expense = {
   receiptName: string | null;
   quickbooksId: string | null;
   quickbooksError: string | null;
+  /** A trip (a mileage type, in km): where from and to; it shows as kilometres, never in money */
+  unit: string | null;
+  mileage: boolean;
+  fromPlace: string | null;
+  toPlace: string | null;
 };
 export const EXPENSE_STATUS_STYLE: Record<Expense["status"], string> = {
   draft: "border-slate-500/40 bg-slate-500/10 text-slate-300",
@@ -58,6 +64,9 @@ export type ExpenseFavorite = {
   clientId: string | null;
   clientName: string | null;
   billable: boolean;
+  mileage: boolean;
+  fromPlace: string | null;
+  toPlace: string | null;
 };
 const FAVORITES_KEY = ["time", "expense-favorites"] as const;
 const useFavorites = () => useQuery({ queryKey: FAVORITES_KEY, queryFn: () => api.get<ExpenseFavorite[]>("/time/expense-favorites") });
@@ -88,7 +97,7 @@ function FavoriteChips({ onPick, removable }: { onPick: (f: ExpenseFavorite) => 
           >
             {x.name}
             <span className="ml-1 text-muted-foreground">
-              {x.quantityX100 != null ? `${x.quantityX100 / 100}` : x.amountCents != null ? money(x.amountCents, i18n.language) : ""}
+              {x.quantityX100 != null ? `${x.quantityX100 / 100}${x.mileage ? " km" : ""}` : x.amountCents != null ? money(x.amountCents, i18n.language) : ""}
             </span>
           </button>
           {removable && (
@@ -118,10 +127,22 @@ export type ExpenseReport = {
   status: "open" | "submitted" | "approved" | "paid";
   rejected: number;
   totalCents: number;
+  /** What is shown in money (a trip shows its kilometres instead) and the kilometres paid */
+  moneyCents: number;
+  totalKm: number;
   from: string | null;
   to: string | null;
   items: Expense[];
 };
+
+/** A report's total: the money of its lines, and the kilometres paid (a trip shows no money) */
+function useTotalText() {
+  const { t, i18n } = useTranslation();
+  return (r: { moneyCents: number; totalKm: number }) => {
+    const parts = [r.moneyCents > 0 || r.totalKm === 0 ? money(r.moneyCents, i18n.language) : null, r.totalKm > 0 ? t("expense.kmPaid", { km: r.totalKm }) : null].filter(Boolean);
+    return parts.join(" + ");
+  };
+}
 
 /** The filters, on the reports: open (being filled, or with a refused item to fix), submitted, approved, paid */
 const FILTERS = [
@@ -148,6 +169,7 @@ export function ExpensesPage() {
   const { data: reports = [], isLoading } = useQuery({ queryKey: ["time", "expense-reports"], queryFn: () => api.get<ExpenseReport[]>("/time/expense-reports") });
   const [creating, setCreating] = useState(false);
   const m = (c: number) => money(c, i18n.language);
+  const totalText = useTotalText();
   const refresh = () => {
     void qc.invalidateQueries({ queryKey: ["time", "expense-reports"] });
     void qc.invalidateQueries({ queryKey: ["time", "expenses"] });
@@ -253,7 +275,7 @@ export function ExpensesPage() {
                 <span className={cn("inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[11px] font-medium", pill.className)}>
                   <pill.icon className="size-3" /> {t(`expense.filter.${pill.key}`)}
                 </span>
-                <span className="w-24 text-right font-mono font-semibold">{m(r.totalCents)}</span>
+                <span className="w-28 text-right font-mono font-semibold">{totalText(r)}</span>
                 <ChevronRight className="size-4 text-muted-foreground transition-transform group-hover:translate-x-0.5 group-hover:text-primary" />
               </button>
             </li>
@@ -345,6 +367,7 @@ function ReportFormDialog({ report, onClose, onSaved }: { report: ExpenseReport 
 /** One report: + to add an expense, a pencil to change one (or the report), and one button to send it all. */
 function ReportView({ r, money: m, onClose, onChanged }: { r: ExpenseReport; money: (c: number) => string; onClose: () => void; onChanged: () => void }) {
   const { t } = useTranslation();
+  const totalText = useTotalText();
   const open = r.status === "open";
   const [item, setItem] = useState<Expense | "new" | { preset: ExpenseFavorite } | null>(null);
   const [editingReport, setEditingReport] = useState(false);
@@ -413,7 +436,7 @@ function ReportView({ r, money: m, onClose, onChanged }: { r: ExpenseReport; mon
           </div>
           <div className="text-right">
             <p className="text-[11px] uppercase tracking-wide text-muted-foreground">{t("expense.report.total")}</p>
-            <p className="font-mono text-xl font-bold">{m(r.totalCents)}</p>
+            <p className="font-mono text-xl font-bold">{totalText(r)}</p>
           </div>
           <IconBtn label={t("common.close")} onClick={onClose}>
             <X className="size-4" />
@@ -456,7 +479,7 @@ function ReportView({ r, money: m, onClose, onChanged }: { r: ExpenseReport; mon
                       {/* each item's own stage once sent (approved one by one) */}
                       {x.status !== "draft" && <span className={cn("rounded-md border px-1.5 py-0.5 text-[11px]", EXPENSE_STATUS_STYLE[x.status])}>{t(`expense.status.${x.status}`)}</span>}
                     </span>
-                    <span className="text-right font-mono">{m(x.amountCents)}</span>
+                    <span className="text-right font-mono">{x.mileage ? t("expense.km", { km: x.quantityX100 / 100 }) : m(x.amountCents)}</span>
                     <span className="flex justify-end gap-0.5">
                       {x.hasReceipt && (
                         <a href={`/api/time/expenses/${x.id}/receipt`} target="_blank" rel="noreferrer" className="rounded-md p-1.5 text-muted-foreground hover:bg-foreground/[0.06] hover:text-foreground" aria-label={t("expense.receipt")} title={t("expense.receipt")}>
@@ -553,6 +576,8 @@ function ExpenseDialog({
     description: x.description,
     quantity: x.quantityX100 != null ? String(x.quantityX100 / 100) : "",
     amount: x.amountCents != null ? (x.amountCents / 100).toFixed(2) : "",
+    fromPlace: x.fromPlace ?? "",
+    toPlace: x.toPlace ?? "",
     clientId: x.clientId ?? "",
     billable: x.billable,
   });
@@ -562,6 +587,8 @@ function ExpenseDialog({
     description: expense?.description ?? "",
     quantity: expense ? String(expense.quantityX100 / 100) : "",
     amount: expense ? (expense.amountCents / 100).toFixed(2) : "",
+    fromPlace: expense?.fromPlace ?? "",
+    toPlace: expense?.toPlace ?? "",
     clientId: expense?.clientId ?? "",
     billable: expense?.billable ?? false,
     ...(!expense && preset ? fromFavorite(preset) : {}),
@@ -571,12 +598,14 @@ function ExpenseDialog({
   const [file, setFile] = useState<File | null>(null);
   const type = types?.expense.find((x) => x.id === f.typeId);
   const byUnit = Boolean(type?.unit && type.unitPriceCents != null);
+  // a trip (km): where from and where to, the distance paid; never the amount in money
+  const mileage = isMileageUnit(type?.unit);
   const num = (s: string) => Number(s.replace(",", "."));
   const amount = byUnit ? Math.round(num(f.quantity) * (type!.unitPriceCents ?? 0)) : Math.round(num(f.amount) * 100);
   const save = useMutation({
     mutationFn: async () => {
       const receipt = file ? { name: file.name, contentType: file.type || "application/octet-stream", data: await fileToBase64(file) } : undefined;
-      const p = { date: f.date, typeId: f.typeId, description: f.description, ...(byUnit ? { quantity: num(f.quantity) } : { amountCents: amount }), clientId: f.clientId || null, billable: Boolean(f.clientId) && f.billable, ...(receipt ? { receipt } : {}) };
+      const p = { date: f.date, typeId: f.typeId, description: f.description, ...(byUnit ? { quantity: num(f.quantity) } : { amountCents: amount }), ...(mileage ? { fromPlace: f.fromPlace.trim(), toPlace: f.toPlace.trim() } : {}), clientId: f.clientId || null, billable: Boolean(f.clientId) && f.billable, ...(receipt ? { receipt } : {}) };
       const r = await (expense ? api.patch(`/time/expenses/${expense.id}`, p) : api.post("/time/expenses", { ...p, reportId }));
       if (keep?.trim()) {
         const { date: _date, receipt: _receipt, ...rest } = p as typeof p & { receipt?: unknown };
@@ -594,7 +623,7 @@ function ExpenseDialog({
     },
     onError: (e) => {
       const code = e instanceof ApiError ? e.code : "";
-      toast.error(code === "expense_out_of_period" ? t("expense.report.outOfPeriod") : code === "Validation failed" ? t("expense.invalid") : t("common.error"));
+      toast.error(code === "expense_out_of_period" ? t("expense.report.outOfPeriod") : code === "mileage_places_required" ? t("expense.placesRequired") : code === "Validation failed" ? t("expense.invalid") : t("common.error"));
     },
   });
   return (
@@ -629,16 +658,28 @@ function ExpenseDialog({
                   {(types?.expense ?? []).map((x) => (
                     <SelectItem key={x.id} value={x.id}>
                       {x.name}
-                      {x.unit && x.unitPriceCents != null && <span className="ml-1 text-xs text-muted-foreground">({money(x.unitPriceCents, i18n.language)}/{x.unit})</span>}
+                      {x.unit && x.unitPriceCents != null && !isMileageUnit(x.unit) && <span className="ml-1 text-xs text-muted-foreground">({money(x.unitPriceCents, i18n.language)}/{x.unit})</span>}
                     </SelectItem>
                   ))}
                 </SelectContent>
               </Select>
             </div>
           </div>
+          {mileage && (
+            <div className="grid gap-3 sm:grid-cols-2">
+              <div className="space-y-1.5">
+                <Label className="text-xs">{t("expense.from")}</Label>
+                <Input required maxLength={200} value={f.fromPlace} onChange={(e) => setF({ ...f, fromPlace: e.target.value })} placeholder={t("expense.fromHint")} />
+              </div>
+              <div className="space-y-1.5">
+                <Label className="text-xs">{t("expense.to")}</Label>
+                <Input required maxLength={200} value={f.toPlace} onChange={(e) => setF({ ...f, toPlace: e.target.value })} placeholder={t("expense.toHint")} />
+              </div>
+            </div>
+          )}
           <div className="space-y-1.5">
-            <Label className="text-xs">{t("expense.description")}</Label>
-            <Input required maxLength={500} value={f.description} onChange={(e) => setF({ ...f, description: e.target.value })} />
+            <Label className="text-xs">{mileage ? t("expense.noteOptional") : t("expense.description")}</Label>
+            <Input required={!mileage} maxLength={500} value={f.description} onChange={(e) => setF({ ...f, description: e.target.value })} />
           </div>
           <div className="grid gap-3 sm:grid-cols-2">
             {byUnit ? (
@@ -652,7 +693,7 @@ function ExpenseDialog({
                 <Input required inputMode="decimal" value={f.amount} onChange={(e) => setF({ ...f, amount: e.target.value })} />
               </div>
             )}
-            <div className="flex items-end pb-2 font-mono text-sm">{Number.isFinite(amount) && amount > 0 ? money(amount, i18n.language) : ""}</div>
+            <div className="flex items-end pb-2 font-mono text-sm">{mileage ? (num(f.quantity) > 0 ? t("expense.km", { km: num(f.quantity) }) : "") : Number.isFinite(amount) && amount > 0 ? money(amount, i18n.language) : ""}</div>
           </div>
           <div className="grid gap-3 sm:grid-cols-2">
             <div className="space-y-1.5">

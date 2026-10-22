@@ -1,3 +1,4 @@
+import { isMileageUnit, tripLabel } from "../../shared/mileage.ts";
 import { Hono } from "hono";
 import { HTTPException } from "hono/http-exception";
 import { and, asc, desc, eq, getTableColumns, gte, inArray, lte, ne, sql } from "drizzle-orm";
@@ -29,6 +30,8 @@ const zReceipt = z
   .optional();
 
 type Expense = typeof schema.expenses.$inferSelect;
+/** Where from / to of a trip, trimmed (a mileage type needs both) */
+const place = z.string().trim().max(200).nullable().optional();
 const expenseView = (x: Omit<Expense, "receiptData"> & { receiptData?: string | null; hasReceipt?: boolean }, extra: Record<string, unknown> = {}) => {
   const { receiptData, hasReceipt, ...rest } = x;
   return { ...rest, hasReceipt: hasReceipt ?? Boolean(receiptData), ...extra };
@@ -36,6 +39,8 @@ const expenseView = (x: Omit<Expense, "receiptData"> & { receiptData?: string | 
 /** The expense columns, without the receipt file (lists stay small). */
 const { receiptData: _receipt, ...EXPENSE_COLUMNS } = getTableColumns(schema.expenses);
 const listColumns = { ...EXPENSE_COLUMNS, hasReceipt: sql<boolean>`(${schema.expenses.receiptData} is not null)` };
+/** A mileage expense (km): the screens show the distance, never the amount in money */
+const mileageExtra = (unit: string | null) => ({ unit, mileage: isMileageUnit(unit) });
 
 /**
  * Whose timesheet: one's own (timesheets.use), or a team member's with
@@ -126,6 +131,15 @@ async function activeClient(id: string) {
 }
 
 /** Amount from quantity × the type's rate (km…), or the amount typed. */
+/** The trip of a mileage type (both places asked, the line reads "from → to"); nothing for the other types */
+function tripOf(unit: string | null | undefined, from: string | null | undefined, to: string | null | undefined): { mileage: boolean; from: string | null; to: string | null; label: string } {
+  if (!isMileageUnit(unit)) return { mileage: false, from: null, to: null, label: "" };
+  const f = (from ?? "").trim();
+  const t = (to ?? "").trim();
+  if (!f || !t) throw new HTTPException(400, { message: "mileage_places_required" });
+  return { mileage: true, from: f, to: t, label: tripLabel(f, t) };
+}
+
 async function priced(typeId: string, p: { quantity?: number; amountCents?: number }) {
   const [type] = await db().select().from(schema.expenseTypes).where(eq(schema.expenseTypes.id, typeId));
   if (!type || !type.active) throw new HTTPException(400, { message: "expense_type_unknown" });
@@ -444,7 +458,7 @@ export const timeRoutes = new Hono<AppEnv>()
     const [reports, rows] = await Promise.all([
       db().select().from(schema.expenseReports).where(eq(schema.expenseReports.userId, a.user.id)).orderBy(desc(schema.expenseReports.createdAt)),
       db()
-        .select({ x: listColumns, type: schema.expenseTypes.name, client: schema.clients.name })
+        .select({ x: listColumns, type: schema.expenseTypes.name, unit: schema.expenseTypes.unit, client: schema.clients.name })
         .from(schema.expenses)
         .innerJoin(schema.expenseTypes, eq(schema.expenseTypes.id, schema.expenses.typeId))
         .leftJoin(schema.clients, eq(schema.clients.id, schema.expenses.clientId))
@@ -452,7 +466,7 @@ export const timeRoutes = new Hono<AppEnv>()
         .orderBy(asc(schema.expenses.date), asc(schema.expenses.createdAt)),
     ]);
     const out = reports.map((r) => {
-      const items = rows.filter((x) => x.x.reportId === r.id).map((x) => expenseView(x.x, { type: x.type, clientName: x.client }));
+      const items = rows.filter((x) => x.x.reportId === r.id).map((x) => ({ ...expenseView(x.x, { type: x.type, clientName: x.client, ...mileageExtra(x.unit) }), mileage: isMileageUnit(x.unit) }));
       const dates = items.map((i) => i.date).sort();
       return {
         id: r.id,
@@ -465,6 +479,9 @@ export const timeRoutes = new Hono<AppEnv>()
         // refused items to fix (the report is open again)
         rejected: items.filter((i) => i.status === "rejected").length,
         totalCents: items.reduce((s, i) => s + i.amountCents, 0),
+        /** What shows in money (a mileage line shows its distance instead) and the kilometres paid */
+        moneyCents: items.filter((i) => !i.mileage).reduce((s, i) => s + i.amountCents, 0),
+        totalKm: items.filter((i) => i.mileage).reduce((s, i) => s + i.quantityX100, 0) / 100,
         from: dates[0] ?? null,
         to: dates.at(-1) ?? null,
         items,
@@ -533,13 +550,13 @@ export const timeRoutes = new Hono<AppEnv>()
   .get("/expense-favorites", requirePermission("timesheets.use"), async (c) => {
     const a = auth(c);
     const rows = await db()
-      .select({ f: schema.expenseFavorites, type: schema.expenseTypes.name, client: schema.clients.name })
+      .select({ f: schema.expenseFavorites, type: schema.expenseTypes.name, unit: schema.expenseTypes.unit, client: schema.clients.name })
       .from(schema.expenseFavorites)
       .innerJoin(schema.expenseTypes, eq(schema.expenseTypes.id, schema.expenseFavorites.typeId))
       .leftJoin(schema.clients, eq(schema.clients.id, schema.expenseFavorites.clientId))
       .where(and(eq(schema.expenseFavorites.userId, a.user.id), eq(schema.expenseTypes.active, true)))
       .orderBy(asc(schema.expenseFavorites.name));
-    return c.json(rows.map((r) => ({ ...r.f, type: r.type, clientName: r.client })));
+    return c.json(rows.map((r) => ({ ...r.f, type: r.type, clientName: r.client, ...mileageExtra(r.unit) })));
   })
   .post("/expense-favorites", requirePermission("timesheets.use"), async (c) => {
     const a = auth(c);
@@ -553,6 +570,8 @@ export const timeRoutes = new Hono<AppEnv>()
         amountCents: z.number().int().min(0).max(10_000_000).optional(),
         clientId: zUuid.nullable().optional(),
         billable: z.boolean().optional(),
+        fromPlace: place,
+        toPlace: place,
       }),
     );
     const pr = await priced(p.typeId, p);
@@ -569,6 +588,8 @@ export const timeRoutes = new Hono<AppEnv>()
         description: p.description,
         quantityX100: byUnit ? pr.quantityX100 : null,
         amountCents: byUnit ? null : pr.amountCents,
+        fromPlace: isMileageUnit(pr.type.unit) ? (p.fromPlace?.trim() || null) : null,
+        toPlace: isMileageUnit(pr.type.unit) ? (p.toPlace?.trim() || null) : null,
         clientId: p.clientId ?? null,
         billable: Boolean(p.clientId) && (p.billable ?? pr.type.billable),
       })
@@ -589,13 +610,13 @@ export const timeRoutes = new Hono<AppEnv>()
   .get("/expenses", requirePermission("timesheets.use"), async (c) => {
     const a = auth(c);
     const rows = await db()
-      .select({ x: listColumns, type: schema.expenseTypes.name, client: schema.clients.name })
+      .select({ x: listColumns, type: schema.expenseTypes.name, unit: schema.expenseTypes.unit, client: schema.clients.name })
       .from(schema.expenses)
       .innerJoin(schema.expenseTypes, eq(schema.expenseTypes.id, schema.expenses.typeId))
       .leftJoin(schema.clients, eq(schema.clients.id, schema.expenses.clientId))
       .where(eq(schema.expenses.userId, a.user.id))
       .orderBy(desc(schema.expenses.date), desc(schema.expenses.createdAt));
-    return c.json(rows.map((r) => expenseView(r.x, { type: r.type, clientName: r.client })));
+    return c.json(rows.map((r) => expenseView(r.x, { type: r.type, clientName: r.client, ...mileageExtra(r.unit) })));
   })
   .post("/expenses", requirePermission("timesheets.use"), async (c) => {
     const a = auth(c);
@@ -604,9 +625,12 @@ export const timeRoutes = new Hono<AppEnv>()
       z.object({
         date: zDay,
         typeId: zUuid,
-        description: z.string().trim().min(1).max(500),
+        // a mileage type needs no note: the trip says it
+        description: z.string().trim().max(500).default(""),
         quantity: z.number().min(0).max(100_000).optional(),
         amountCents: z.number().int().min(0).max(10_000_000).optional(),
+        fromPlace: place,
+        toPlace: place,
         clientId: zUuid.nullable().optional(),
         billable: z.boolean().optional(),
         receipt: zReceipt,
@@ -615,6 +639,9 @@ export const timeRoutes = new Hono<AppEnv>()
       }),
     );
     const pr = await priced(p.typeId, p);
+    const trip = tripOf(pr.type.unit, p.fromPlace, p.toPlace);
+    p.description = p.description || trip.label;
+    if (!p.description) throw new HTTPException(400, { message: "Validation failed" });
     if (p.clientId) await activeClient(p.clientId);
     let reportId: string;
     if (p.reportId) {
@@ -636,6 +663,8 @@ export const timeRoutes = new Hono<AppEnv>()
         date: p.date,
         typeId: pr.type.id,
         description: p.description,
+        fromPlace: trip.from,
+        toPlace: trip.to,
         quantityX100: pr.quantityX100,
         unitPriceCents: pr.unitPriceCents,
         amountCents: pr.amountCents,
@@ -657,9 +686,11 @@ export const timeRoutes = new Hono<AppEnv>()
       z.object({
         date: zDay.optional(),
         typeId: zUuid.optional(),
-        description: z.string().trim().min(1).max(500).optional(),
+        description: z.string().trim().max(500).optional(),
         quantity: z.number().min(0).max(100_000).optional(),
         amountCents: z.number().int().min(0).max(10_000_000).optional(),
+        fromPlace: place,
+        toPlace: place,
         clientId: zUuid.nullable().optional(),
         billable: z.boolean().optional(),
         receipt: zReceipt,
@@ -672,11 +703,18 @@ export const timeRoutes = new Hono<AppEnv>()
         : null;
     const clientId = p.clientId !== undefined ? p.clientId : cur.clientId;
     if (p.clientId) await activeClient(p.clientId);
+    // the trip of a mileage type: both places, the line reads "from → to" when no note is written
+    const [curType] = await db().select().from(schema.expenseTypes).where(eq(schema.expenseTypes.id, p.typeId ?? cur.typeId));
+    const trip = tripOf(curType?.unit, p.fromPlace !== undefined ? p.fromPlace : cur.fromPlace, p.toPlace !== undefined ? p.toPlace : cur.toPlace);
+    const description = p.description !== undefined ? p.description || trip.label : trip.mileage && (!cur.description || cur.description === tripLabel(cur.fromPlace, cur.toPlace)) ? trip.label : cur.description;
+    if (!description) throw new HTTPException(400, { message: "Validation failed" });
     const [row] = await db()
       .update(schema.expenses)
       .set({
         date: p.date ?? cur.date,
-        description: p.description ?? cur.description,
+        description,
+        fromPlace: trip.from,
+        toPlace: trip.to,
         ...(pr ? { typeId: pr.type.id, quantityX100: pr.quantityX100, unitPriceCents: pr.unitPriceCents, amountCents: pr.amountCents } : {}),
         clientId,
         billable: Boolean(clientId) && (p.billable ?? cur.billable),
@@ -826,7 +864,7 @@ export const timeRoutes = new Hono<AppEnv>()
       .where(and(eq(schema.expenses.status, status), from ? gte(schema.expenses.date, from) : undefined, to ? lte(schema.expenses.date, to) : undefined))
       .orderBy(asc(schema.users.name), desc(schema.expenses.date))
       .limit(500);
-    return c.json(rows.map((r) => expenseView(r.x, { type: r.type, unit: r.unit, userName: r.user, clientName: r.client, reportTitle: r.report })));
+    return c.json(rows.map((r) => expenseView(r.x, { type: r.type, ...mileageExtra(r.unit), userName: r.user, clientName: r.client, reportTitle: r.report })));
   })
   .post("/approvals/expenses/paid", requirePermission("accounting.manage"), async (c) => {
     const a = auth(c);

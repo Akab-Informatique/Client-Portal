@@ -1366,6 +1366,14 @@ const en: Dict = {
     },
   },
   expense: {
+    km: "{{km}} km",
+    kmPaid: "{{km}} km paid",
+    from: "From (where)",
+    to: "To (where)",
+    fromHint: "E.g. office, Joliette",
+    toHint: "E.g. client's site, Montréal",
+    noteOptional: "Note (optional)",
+    placesRequired: "Say where you went from and to.",
     favorites: {
       title: "Favourites",
       keep: "Keep as a favourite",

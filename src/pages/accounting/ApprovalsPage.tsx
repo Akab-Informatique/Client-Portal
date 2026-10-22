@@ -277,6 +277,10 @@ type TeamExpense = {
   date: string;
   type: string;
   unit: string | null;
+  /** A trip (km): shown as the distance paid, never in money */
+  mileage?: boolean;
+  fromPlace?: string | null;
+  toPlace?: string | null;
   description: string;
   quantityX100: number;
   amountCents: number;
@@ -469,7 +473,7 @@ function ExpenseApprovals({ lang, pq }: { lang: string; pq: string }) {
                   {x.paidAt && <PaidMark at={x.paidAt} />}
                 </span>
               </span>
-              <span className="text-right font-mono">{m(x.amountCents)}</span>
+              <span className="text-right font-mono">{x.mileage ? t("expense.km", { km: x.quantityX100 / 100 }) : m(x.amountCents)}</span>
               <span />
             </li>
           ))}

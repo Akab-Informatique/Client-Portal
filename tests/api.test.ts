@@ -3743,6 +3743,34 @@ describe("timesheets and expenses, approved and sent to QuickBooks", () => {
     expect((await tech.get("/api/time/expense-favorites")).json).toEqual([]);
   });
 
+  it("trips (mileage): where from and to, shown in kilometres, never in money", async () => {
+    resetRateLimit("login:ip:unknown");
+    const tech = await signIn("tech@akab.local");
+    const types = (await tech.get("/api/time/types")).json.expense;
+    const km = types.find((x: any) => x.name === "Kilométrage");
+    const parking = types.find((x: any) => x.name === "Stationnement");
+    const report = (await tech.post("/api/time/expense-reports", { title: "Déplacements", periodStart: "2026-10-01", periodEnd: "2026-10-31" })).json;
+    const trip = { reportId: report.id, date: "2026-10-12", typeId: km.id, quantity: 42 };
+    // both places are needed
+    expect((await tech.post("/api/time/expenses", { ...trip, fromPlace: "Bureau" })).json.error).toBe("mileage_places_required");
+    const ok = await tech.post("/api/time/expenses", { ...trip, fromPlace: " Bureau ", toPlace: "Joliette" });
+    expect(ok.status).toBe(201);
+    expect(ok.json).toMatchObject({ fromPlace: "Bureau", toPlace: "Joliette", description: "Bureau → Joliette", quantityX100: 4200 });
+    await tech.post("/api/time/expenses", { reportId: report.id, date: "2026-10-13", typeId: parking.id, description: "Stationnement", amountCents: 1200 });
+    // a normal expense still needs its description
+    expect((await tech.post("/api/time/expenses", { reportId: report.id, date: "2026-10-13", typeId: parking.id, amountCents: 100 })).status).toBe(400);
+    const r = (await tech.get("/api/time/expense-reports")).json.find((x: any) => x.id === report.id);
+    expect(r).toMatchObject({ totalKm: 42, moneyCents: 1200 });
+    expect(r.items.find((x: any) => x.id === ok.json.id).mileage).toBe(true);
+    // changing the places rewrites the description
+    const upd = await tech.patch(`/api/time/expenses/${ok.json.id}`, { toPlace: "Montréal" });
+    expect(upd.json).toMatchObject({ toPlace: "Montréal", description: "Bureau → Montréal" });
+    // a favourite remembers the places
+    const fav = await tech.post("/api/time/expense-favorites", { name: "Joliette", typeId: km.id, quantity: 42, fromPlace: "Bureau", toPlace: "Joliette" });
+    expect(fav.json).toMatchObject({ fromPlace: "Bureau", toPlace: "Joliette" });
+    await tech.del(`/api/time/expense-favorites/${fav.json.id}`);
+  });
+
   it("expenses with receipts; approved: billable ones go on the client's invoice; all sent to QuickBooks", async () => {
     resetRateLimit("login:ip:unknown");
     const admin = await signIn("admin@akab.local");
@@ -3753,7 +3781,7 @@ describe("timesheets and expenses, approved and sent to QuickBooks", () => {
     const material = types.find((x: any) => x.name === "Matériel pour un client");
     const client = (await admin.get("/api/crm/clients")).json.find((c: any) => c.autotaskId === 307);
     const receipt = { name: "reçu.png", contentType: "image/png", data: Buffer.from("png").toString("base64") };
-    const a1 = (await tech.post("/api/time/expenses", { date: "2026-10-15", typeId: km.id, description: "Aller-retour Joliette", quantity: 42, receipt })).json;
+    const a1 = (await tech.post("/api/time/expenses", { date: "2026-10-15", typeId: km.id, description: "Aller-retour Joliette", quantity: 42, fromPlace: "Bureau", toPlace: "Joliette", receipt })).json;
     expect(a1).toMatchObject({ amountCents: 2856, hasReceipt: true, status: "draft", billable: false });
     expect(a1.receiptData).toBeUndefined();
     const a2 = (await tech.post("/api/time/expenses", { date: "2026-10-16", typeId: material.id, description: "Câble HDMI", amountCents: 4599, clientId: client.id })).json;
