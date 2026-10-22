@@ -6,6 +6,8 @@ import { db, schema } from "../db/index.ts";
 import { auth, permissionsOf, requirePermission, type AppEnv } from "../lib/auth.ts";
 import { audit } from "../lib/audit.ts";
 import { body, zEmail, zUuid } from "../lib/validate.ts";
+import { saveTeamsSettings, sendTeams, teamsSettings, validTeamsUrl } from "../lib/teams.ts";
+import { rateLimit } from "../lib/http.ts";
 import { RMM_PLACEHOLDERS, rmmSettings, saveRmmSettings, validTemplate } from "../lib/rmm.ts";
 import { O365Error, o365Settings, saveO365Settings, testO365 } from "../lib/o365.ts";
 import { normalizePhone, saveSmsSettings, sendSms, SmsError, smsSettings, testVoipms, type SmsSettings } from "../lib/voipms.ts";
@@ -158,6 +160,35 @@ export const integrationRoutes = new Hono<AppEnv>()
     return c.json({ ...(await rmmSettings()), placeholders: RMM_PLACEHOLDERS });
   })
 
+  // ── Microsoft Teams (one incoming webhook; the portal posts a card mentioning the technician) ──
+  .get("/teams", async (c) => c.json(await teamsView()))
+  .put("/teams", async (c) => {
+    const a = auth(c);
+    const p = await body(c, z.object({ enabled: z.boolean().optional(), webhookUrl: z.string().trim().max(2000).optional() }));
+    if (p.webhookUrl !== undefined && p.webhookUrl !== "" && !validTeamsUrl(p.webhookUrl)) throw new HTTPException(400, { message: "teams_bad_url" });
+    const cur = await teamsSettings();
+    if (p.enabled && !(p.webhookUrl || cur.webhookUrl)) throw new HTTPException(400, { message: "teams_incomplete" });
+    await saveTeamsSettings(a.user.id, { ...(p.enabled !== undefined ? { enabled: p.enabled } : {}), ...(p.webhookUrl !== undefined ? { webhookUrl: p.webhookUrl || null } : {}) });
+    await audit(a.user.id, "integration.teams.updated", null, { enabled: p.enabled, urlChanged: p.webhookUrl !== undefined || undefined });
+    return c.json(await teamsView());
+  })
+  /** A test card in the channel */
+  .post("/teams/test", async (c) => {
+    const a = auth(c);
+    if (!rateLimit(`teams-test:${a.user.id}`, 6, 60_000).ok) throw new HTTPException(429, { message: "rate_limited" });
+    let result: { ok: boolean; at: string; error?: string };
+    try {
+      const s = await teamsSettings();
+      if (!s.webhookUrl) throw new Error("teams_incomplete");
+      await sendTeams({ title: "AKAB Portal", text: `Test de ${a.user.name}: la connexion Teams fonctionne.` });
+      result = { ok: true, at: new Date().toISOString() };
+    } catch (e) {
+      result = { ok: false, at: new Date().toISOString(), error: e instanceof Error ? e.message.slice(0, 120) : "error" };
+    }
+    await saveTeamsSettings(a.user.id, { lastTest: result });
+    return c.json(await teamsView());
+  })
+
   // ── AI assistant (Anthropic Claude) ──
   .get("/ai", async (c) => c.json(aiView(await aiSettings())))
   .put("/ai", async (c) => {
@@ -289,3 +320,9 @@ export const integrationRoutes = new Hono<AppEnv>()
     if (!p.apiKey) await saveAiSettings(a.user.id, { lastTest: { ok: result.ok, at: new Date().toISOString(), ...(result.ok ? {} : { error: (result as { error: AiErrorCode }).error }) } });
     return c.json(result);
   });
+
+/** Teams as the admin sees it: never the webhook address, only that one is set */
+async function teamsView() {
+  const s = await teamsSettings();
+  return { enabled: s.enabled, hasUrl: Boolean(s.webhookUrl), lastTest: s.lastTest ?? null };
+}

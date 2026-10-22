@@ -1,0 +1,1 @@
+ALTER TABLE "user_preferences" ADD COLUMN "notify_defaults" jsonb DEFAULT '{"email":true,"sms":false,"teams":false}'::jsonb NOT NULL;

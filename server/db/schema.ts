@@ -470,6 +470,8 @@ export const userPreferences = pgTable("user_preferences", {
   emailSignature: text("email_signature"),
   /** Hours worked go to the hours bank by default (each entry can still say otherwise) */
   bankHoursDefault: boolean("bank_hours_default").notNull().default(false),
+  /** The channels ticked by default when notifying a technician from a ticket (the bell is always on) */
+  notifyDefaults: jsonb("notify_defaults").$type<{ email: boolean; sms: boolean; teams: boolean }>().notNull().default({ email: true, sms: false, teams: false }),
   updatedAt: updated(),
 });
 

@@ -610,6 +610,13 @@
       "when": 1792596460531,
       "tag": "0086_sleepy_wiccan",
       "breakpoints": true
+    },
+    {
+      "idx": 87,
+      "version": "7",
+      "when": 1792677833622,
+      "tag": "0087_marvelous_valkyrie",
+      "breakpoints": true
     }
   ]
 }

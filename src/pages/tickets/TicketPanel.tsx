@@ -35,6 +35,8 @@ import { AssetContent, AssetPicker } from "./AssetCard";
 import { ClientHoursGauge } from "./ClientHoursGauge";
 import { AcceptDialog } from "./AcceptDialog";
 import { MergeDialog } from "./MergeDialog";
+import { NotifyTech } from "./NotifyTech";
+import { NotificationBell } from "@/components/NotificationBell";
 import { useTicketWorkspace } from "./workspace";
 import { contractNote } from "./contract";
 import { EmailSend } from "./EmailSend";
@@ -374,6 +376,8 @@ function TicketBody({
             <MergedTickets tk={tk} />
             {can("tickets.ai") &&
               (tk.ai ? <AiMenu tk={tk} onReply={(text) => setDraft({ text, internal: false })} /> : <AiSetupHint label={t("tickets.ai.button")} />)}
+            {can("tickets.edit") && !partial && <NotifyTech tk={tk} />}
+            <NotificationBell />
             {can("tickets.delete") && !partial && (
               <Tooltip>
                 <TooltipTrigger asChild>

@@ -22,6 +22,7 @@ import {
   Timer,
   Trash2,
   UserRound,
+  BellRing,
 } from "lucide-react";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
@@ -179,6 +180,7 @@ export function ProfileDialog({ open, onOpenChange }: { open: boolean; onOpenCha
           {staff && (
             <div className="space-y-4">
               <HoursCard />
+              <NotifyCard />
               <Microsoft365Card onNavigate={() => onOpenChange(false)} />
             </div>
           )}
@@ -196,6 +198,35 @@ function Card({ icon: Icon, title, children, className }: { icon: typeof Mail; t
       </h3>
       {children}
     </section>
+  );
+}
+
+/** The channels ticked by default when I notify a technician from a ticket (the bell is always on). */
+function NotifyCard() {
+  const { t } = useTranslation();
+  const me = useMe();
+  const can = useCan();
+  const qc = useQueryClient();
+  const cur = me.preferences.notify ?? { email: true, sms: false, teams: false };
+  const save = useMutation({
+    mutationFn: (notify: typeof cur) => api.put("/me/preferences", { notify }),
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: ["auth"] });
+      toast.success(t("common.saved"));
+    },
+    onError: () => toast.error(t("common.error")),
+  });
+  if (!can("tickets.edit")) return null;
+  return (
+    <Card icon={BellRing} title={t("profile.notify.title")} className="space-y-3">
+      <p className="text-xs text-muted-foreground">{t("profile.notify.hint")}</p>
+      {(["email", "sms", "teams"] as const).map((k) => (
+        <label key={k} className="flex items-center justify-between gap-4 rounded-lg border p-3 text-sm">
+          <span className="font-medium">{t(`tickets.notifyTech.channel.${k}`)}</span>
+          <Switch checked={cur[k]} disabled={save.isPending} onCheckedChange={(v) => save.mutate({ ...cur, [k]: v })} aria-label={t(`tickets.notifyTech.channel.${k}`)} />
+        </label>
+      ))}
+    </Card>
   );
 }
 

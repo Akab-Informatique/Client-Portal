@@ -26,7 +26,7 @@ export type Me = {
   realUser: { name: string; email: string } | null;
   /** Fills in a weekly timesheet (set by an admin) */
   timesheetRequired: boolean;
-  preferences: { dashboard: DashboardWidget[] | null; theme: "dark" | "light" | "system"; outlook: boolean; bankHours: boolean };
+  preferences: { dashboard: DashboardWidget[] | null; theme: "dark" | "light" | "system"; outlook: boolean; bankHours: boolean; notify: { email: boolean; sms: boolean; teams: boolean } };
 };
 
 export type AuthState = { stage: Stage; me?: Me | { name: string; email: string; locale: "fr" | "en" } };

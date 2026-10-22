@@ -3,7 +3,7 @@ import { useSearchParams } from "react-router-dom";
 import { useTranslation } from "react-i18next";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
-import { ArrowLeft, CalendarDays, CheckCircle2, ChevronRight, CreditCard, KeyRound, Loader2, MonitorPlay, RefreshCw, Sparkles, XCircle, type LucideIcon, MessageSquareText } from "lucide-react";
+import { Users, ArrowLeft, CalendarDays, CheckCircle2, ChevronRight, CreditCard, KeyRound, Loader2, MonitorPlay, RefreshCw, Sparkles, XCircle, type LucideIcon, MessageSquareText } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -36,6 +36,7 @@ const INTEGRATIONS: Integration[] = [
   { key: "stripe", name: "Stripe", icon: CreditCard, Status: StripeStatus, Page: StripePage, needs: "admin.billing" },
   // clients, chart of accounts and vendors kept in step, and invoices and payments (the API needs billing and integrations)
   { key: "quickbooks", name: "QuickBooks Online", icon: RefreshCw, Status: QuickBooksStatus, Page: QuickBooksPage, needs: "admin.billing" },
+  { key: "teams", name: "Microsoft Teams", icon: Users, Status: TeamsStatus, Page: TeamsPage },
   { key: "rmm", name: "RMM", icon: MonitorPlay, Status: RmmStatus, Page: RmmPage },
 ];
 
@@ -327,6 +328,106 @@ function AiPage() {
     </section>
     {s.hasKey && <AiUsagePanel />}
     </div>
+  );
+}
+
+// ── Microsoft Teams: one incoming webhook, a card mentioning the technician ──
+type TeamsView = { enabled: boolean; hasUrl: boolean; lastTest: { ok: boolean; at: string; error?: string } | null };
+const TEAMS_KEY = ["admin", "integrations", "teams"];
+
+function TeamsStatus() {
+  const { t } = useTranslation();
+  const { data } = useQuery({ queryKey: TEAMS_KEY, queryFn: () => api.get<TeamsView>("/admin/integrations/teams") });
+  if (!data) return null;
+  const on = data.enabled && data.hasUrl;
+  return (
+    <Badge variant="outline" className={cn("gap-1.5", on ? "border-emerald-500/40 text-emerald-400" : "text-muted-foreground")}>
+      <span className="size-1.5 rounded-full bg-current" />
+      {t(`integrations.status.${on ? "connected" : data.hasUrl ? "disabled" : "notConfigured"}`)}
+    </Badge>
+  );
+}
+
+function TeamsPage() {
+  const { t } = useTranslation();
+  const qc = useQueryClient();
+  const { data: s, isLoading } = useQuery({ queryKey: TEAMS_KEY, queryFn: () => api.get<TeamsView>("/admin/integrations/teams") });
+  const [url, setUrl] = useState("");
+  const done = (next: TeamsView) => qc.setQueryData(TEAMS_KEY, next);
+  const fail = (e: unknown) => toast.error(e instanceof ApiError && e.code === "teams_bad_url" ? t("integrations.teams.badUrl") : e instanceof ApiError && e.code === "teams_incomplete" ? t("integrations.teams.needUrl") : t("common.error"));
+  const save = useMutation({
+    mutationFn: (p: { enabled?: boolean; webhookUrl?: string }) => api.put<TeamsView>("/admin/integrations/teams", p),
+    onSuccess: (next) => {
+      done(next);
+      setUrl("");
+      toast.success(t("common.saved"));
+    },
+    onError: fail,
+  });
+  const test = useMutation({
+    mutationFn: () => api.post<TeamsView>("/admin/integrations/teams/test"),
+    onSuccess: (next) => {
+      done(next);
+      if (next.lastTest?.ok) toast.success(t("integrations.teams.testOk"));
+      else toast.error(t("integrations.teams.testFailed", { error: next.lastTest?.error ?? "" }));
+    },
+    onError: fail,
+  });
+  if (isLoading || !s) return <Skeleton className="h-60 rounded-2xl" />;
+  return (
+    <section className="overflow-hidden rounded-2xl border bg-card/80">
+      <div className="flex flex-wrap items-center gap-4 border-b px-6 py-5">
+        <span className="flex size-11 items-center justify-center rounded-xl bg-grad-gold text-[#1a1204]">
+          <Users className="size-5" />
+        </span>
+        <div className="min-w-0 flex-1">
+          <h3 className="font-display text-lg font-semibold">{t("integrations.teams.title")}</h3>
+          <div className="mt-1">
+            <TeamsStatus />
+          </div>
+        </div>
+        <label className="flex items-center gap-3 text-sm font-medium">
+          {t("integrations.enabled")}
+          <Switch checked={s.enabled} disabled={save.isPending} onCheckedChange={(v) => save.mutate({ enabled: v })} />
+        </label>
+      </div>
+      <form
+        className="space-y-4 px-6 py-6"
+        onSubmit={(e: FormEvent) => {
+          e.preventDefault();
+          if (url.trim()) save.mutate({ webhookUrl: url.trim() });
+        }}
+      >
+        <div className="space-y-2">
+          <Label htmlFor="teams-url" className="flex items-center gap-2">
+            {t("integrations.teams.url")}
+            {s.hasUrl && <span className="rounded-full bg-emerald-500/15 px-1.5 py-0.5 text-[10px] font-medium text-emerald-400">{t("integrations.savedValue")}</span>}
+          </Label>
+          <Input id="teams-url" type="password" autoComplete="off" value={url} onChange={(e) => setUrl(e.target.value)} placeholder={s.hasUrl ? "••••••••••••" : "https://…"} className="font-mono text-xs" />
+        </div>
+        <div className="flex flex-wrap items-center gap-2">
+          <Button type="submit" disabled={save.isPending || !url.trim()} className="bg-grad-gold font-semibold text-[#1a1204] hover:brightness-105">
+            {save.isPending && <Loader2 className="size-4 animate-spin" />} {t("common.save")}
+          </Button>
+          <Button type="button" variant="outline" disabled={!s.hasUrl || test.isPending} onClick={() => test.mutate()}>
+            {test.isPending ? <Loader2 className="size-4 animate-spin" /> : <RefreshCw className="size-4" />} {t("integrations.teams.test")}
+          </Button>
+          {s.lastTest && (
+            <span className={cn("text-xs", s.lastTest.ok ? "text-emerald-400" : "text-destructive")}>
+              {s.lastTest.ok ? t("integrations.teams.testOk") : t("integrations.teams.testFailed", { error: s.lastTest.error ?? "" })}
+            </span>
+          )}
+        </div>
+        <div className="rounded-xl border bg-background/40 p-4 text-xs text-muted-foreground">
+          <p className="mb-2 font-medium text-foreground">{t("integrations.teams.helpTitle")}</p>
+          <ol className="list-decimal space-y-1 pl-4">
+            {(t("integrations.teams.helpSteps", { returnObjects: true }) as string[]).map((step) => (
+              <li key={step}>{step}</li>
+            ))}
+          </ol>
+        </div>
+      </form>
+    </section>
   );
 }
 

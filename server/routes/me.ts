@@ -39,7 +39,7 @@ export async function loadMe(a: AuthContext) {
     realUser: a.viewAs ? { name: a.realUser.name, email: a.realUser.email } : null,
     /** Fills in a weekly timesheet (otherwise the Timesheets entry is hidden, unless they manage everyone's) */
     timesheetRequired: u.timesheetRequired,
-    preferences: { dashboard: prefs?.dashboard ?? null, theme: prefs?.theme ?? "dark", outlook: prefs?.outlook ?? false, bankHours: prefs?.bankHoursDefault ?? false },
+    preferences: { dashboard: prefs?.dashboard ?? null, theme: prefs?.theme ?? "dark", outlook: prefs?.outlook ?? false, bankHours: prefs?.bankHoursDefault ?? false, notify: prefs?.notifyDefaults ?? { email: true, sms: false, teams: false } },
   };
 }
 
@@ -83,12 +83,14 @@ export const meRoutes = new Hono<AppEnv>()
         outlook: z.boolean().optional(),
         /** Hours worked are banked by default */
         bankHours: z.boolean().optional(),
+        /** Channels ticked by default when notifying a technician */
+        notify: z.object({ email: z.boolean(), sms: z.boolean(), teams: z.boolean() }).optional(),
       }),
     );
     if (p.outlook && !a.permissions.includes("outlook.view")) throw new HTTPException(403, { message: "forbidden" });
     await db()
       .insert(schema.userPreferences)
-      .values({ userId: a.user.id, dashboard: p.dashboard ?? null, theme: p.theme ?? null, outlook: p.outlook ?? false, bankHoursDefault: p.bankHours ?? false })
+      .values({ userId: a.user.id, dashboard: p.dashboard ?? null, theme: p.theme ?? null, outlook: p.outlook ?? false, bankHoursDefault: p.bankHours ?? false, ...(p.notify ? { notifyDefaults: p.notify } : {}) })
       .onConflictDoUpdate({
         target: schema.userPreferences.userId,
         set: {
@@ -96,6 +98,7 @@ export const meRoutes = new Hono<AppEnv>()
           ...(p.theme !== undefined ? { theme: p.theme } : {}),
           ...(p.outlook !== undefined ? { outlook: p.outlook } : {}),
           ...(p.bankHours !== undefined ? { bankHoursDefault: p.bankHours } : {}),
+          ...(p.notify !== undefined ? { notifyDefaults: p.notify } : {}),
           updatedAt: new Date(),
         },
       });

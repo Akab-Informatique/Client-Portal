@@ -13,6 +13,7 @@ import { ActivitySection, RolesSection, StaffSection } from "./sections";
 import { IntegrationsSection } from "./IntegrationsSection";
 import { EmailSection } from "./EmailSection";
 import { BillingSection } from "./BillingSection";
+import { NotificationBell } from "@/components/NotificationBell";
 import { ContractTypesSection } from "./ContractTypesSection";
 import { VendorsSection } from "./VendorsSection";
 import { TimeExpenseSection } from "./TimeExpenseSection";
@@ -236,6 +237,10 @@ export function AdminOverlay({ section }: { section: string | null }) {
                         </button>
                       ))}
                     </div>
+                  </div>
+                  {/* the settings cover the top bar: the bell stays in view */}
+                  <div className="absolute right-16 top-3 z-10 md:right-[4.5rem] md:top-5">
+                    <NotificationBell />
                   </div>
                   <DialogPrimitive.Close
                     className="absolute right-4 top-3 z-10 flex size-9 items-center justify-center rounded-full border bg-card text-muted-foreground transition-colors hover:border-[color:var(--gold)]/50 hover:text-foreground md:right-6 md:top-5"

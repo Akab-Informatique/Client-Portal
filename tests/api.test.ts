@@ -5960,3 +5960,64 @@ describe("weekly meeting: the week ahead summary", () => {
     expect(["not_configured", "disabled"]).toContain(again.aiError);
   });
 });
+
+describe("notify a technician from a ticket", () => {
+  afterAll(() => vi.unstubAllGlobals());
+  it("the bell always; email, text and Teams as ticked; defaults in the profile; the Teams webhook is a sealed secret", async () => {
+    resetRateLimit("login:ip:unknown");
+    const admin = await signIn("admin@akab.local");
+    const tech = await signIn("tech@akab.local");
+    const [adminRow] = await db().select().from(schema.users).where(eq(schema.users.email, "admin@akab.local"));
+    const ticketId = (await tech.get("/api/tickets?view=all")).json.items[0].id;
+    const { devOutbox } = await import("../server/lib/mail.ts");
+
+    // the channels ticked by default: email only, set per person in the profile
+    expect((await tech.get("/api/me")).json.preferences.notify).toEqual({ email: true, sms: false, teams: false });
+    expect((await tech.put("/api/me/preferences", { notify: { email: false, sms: true, teams: true } })).status).toBe(200);
+    expect((await tech.get("/api/me")).json.preferences.notify).toEqual({ email: false, sms: true, teams: true });
+    await tech.put("/api/me/preferences", { notify: { email: true, sms: false, teams: false } });
+
+    // Teams: one webhook, only Microsoft's addresses, never sent back
+    expect((await tech.put("/api/admin/integrations/teams", { enabled: true, webhookUrl: "https://prod.westus.logic.azure.com/x" })).status).toBe(403);
+    expect((await admin.put("/api/admin/integrations/teams", { webhookUrl: "http://evil.example/hook" })).json.error).toBe("teams_bad_url");
+    expect((await admin.put("/api/admin/integrations/teams", { webhookUrl: "https://evil.example/hook" })).json.error).toBe("teams_bad_url");
+    expect((await admin.put("/api/admin/integrations/teams", { enabled: true })).json.error).toBe("teams_incomplete");
+    const posts: any[] = [];
+    vi.stubGlobal("fetch", vi.fn(async (url: unknown, init: RequestInit = {}) => {
+      posts.push({ url: String(url), body: JSON.parse(String(init.body)) });
+      return new Response("", { status: 202 });
+    }));
+    const set = await admin.put("/api/admin/integrations/teams", { enabled: true, webhookUrl: "https://prod.westus.logic.azure.com/workflows/abc" });
+    expect(set.json).toMatchObject({ enabled: true, hasUrl: true });
+    expect(JSON.stringify(set.json)).not.toContain("logic.azure.com");
+    expect((await db().select().from(schema.integrations).where(eq(schema.integrations.provider, "teams")))[0].secret).not.toContain("logic.azure.com");
+
+    // notify: the bell, the email and Teams (the text line is not set up here)
+    devOutbox.length = 0;
+    const r = await tech.post(`/api/tickets/${ticketId}/notify-tech`, { userIds: [adminRow.id], message: "Urgent pour 15 h", channels: { email: true, sms: true, teams: true } });
+    expect(r.status).toBe(200);
+    expect(r.json.people).toMatchObject([{ id: adminRow.id, bell: true, email: "sent", sms: "not_ready", teams: "sent" }]);
+    expect(devOutbox.map((m) => m.to)).toEqual([adminRow.email]);
+    expect(devOutbox[0].text).toContain("Urgent pour 15 h");
+    expect(posts).toHaveLength(1);
+    expect(posts[0].url).toBe("https://prod.westus.logic.azure.com/workflows/abc");
+    expect(JSON.stringify(posts[0].body)).toContain(adminRow.email);
+    const bell = (await admin.get("/api/notifications")).json.items.find((n: any) => n.type === "ticket.notify");
+    expect(bell).toMatchObject({ data: { message: "Urgent pour 15 h" } });
+    expect(bell.link).toBe(`/tickets?t=${ticketId}`);
+
+    // nothing ticked: the bell only
+    devOutbox.length = 0;
+    posts.length = 0;
+    const bellOnly = await tech.post(`/api/tickets/${ticketId}/notify-tech`, { userIds: [adminRow.id], channels: { email: false, sms: false, teams: false } });
+    expect(bellOnly.json.people[0]).toEqual({ id: adminRow.id, name: adminRow.name, bell: true });
+    expect(devOutbox).toHaveLength(0);
+    expect(posts).toHaveLength(0);
+
+    // not yourself, not a stranger
+    const [techRow] = await db().select().from(schema.users).where(eq(schema.users.email, "tech@akab.local"));
+    expect((await tech.post(`/api/tickets/${ticketId}/notify-tech`, { userIds: [techRow.id], channels: { email: true, sms: false, teams: false } })).json.error).toBe("no_recipient");
+    expect((await tech.post(`/api/tickets/${ticketId}/notify-tech`, { userIds: ["00000000-0000-4000-8000-000000000000"], channels: { email: true, sms: false, teams: false } })).json.error).toBe("no_recipient");
+    await admin.put("/api/admin/integrations/teams", { enabled: false });
+  });
+});

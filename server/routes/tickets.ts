@@ -10,6 +10,7 @@ import { db, schema } from "../db/index.ts";
 import { auth, requirePermission, type AppEnv, type AuthContext } from "../lib/auth.ts";
 import { body, zEmail, zUuid } from "../lib/validate.ts";
 import { audit } from "../lib/audit.ts";
+import { notifyTechs } from "../lib/techNotify.ts";
 import { rateLimit } from "../lib/http.ts";
 import { sanitizeMailHtml } from "../lib/mailHtml.ts";
 import { sendMail } from "../lib/mail.ts";
@@ -1347,6 +1348,32 @@ export const ticketRoutes = new Hono<AppEnv>()
     }
     await audit(a.user.id, "ticket.charge_added", String(id), { name: p.name, quantity: p.quantity, unitPrice: p.unitPrice, billable: p.billable, productId: p.productId });
     return c.json(await run(() => src.charges(id)), 201);
+  })
+
+  /**
+   * Notify technicians about a ticket (tickets.edit): the bell for each, always, and — as ticked — an email, a
+   * text (their mobile number) and a Teams message (the webhook set in Admin › Intégrations). Nothing is sent
+   * to the client.
+   */
+  .post("/:id/notify-tech", requirePermission("tickets.edit"), async (c) => {
+    const a = auth(c);
+    const id = Number(c.req.param("id"));
+    if (!rateLimit(`notify-tech:${a.user.id}`, 30, 60_000).ok) throw new HTTPException(429, { message: "rate_limited" });
+    const p = await body(
+      c,
+      z.object({
+        userIds: z.array(zUuid).min(1).max(20),
+        message: z.string().trim().max(1000).default(""),
+        channels: z.object({ email: z.boolean(), sms: z.boolean(), teams: z.boolean() }),
+      }),
+    );
+    const src = await ticketSource();
+    const tk = await run(() => src.get(id));
+    if (!tk) throw new HTTPException(404, { message: "not_found" });
+    const people = await notifyTechs(tk, { id: a.user.id, name: a.realUser.name }, p.userIds, p.message, p.channels);
+    if (!people.length) throw new HTTPException(400, { message: "no_recipient" });
+    await audit(a.user.id, "ticket.tech_notified", String(id), { to: people.map((x) => x.id), channels: p.channels });
+    return c.json({ people });
   })
 
   /** Reply to the client or internal note (the technician is the author). */

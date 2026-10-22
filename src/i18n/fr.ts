@@ -2106,6 +2106,10 @@ const fr = {
     removeBlockConfirm: "Supprimer ce temps réservé ?",
   },
   profile: {
+    notify: {
+      title: "Notifier un technicien",
+      hint: "Les cases cochées d'avance quand vous notifiez un collègue depuis un billet. La cloche du portail est toujours de la partie.",
+    },
     signature: "Signature de courriel",
     signatureHint: "Ajoutée au bas des courriels écrits dans le module Outlook (nouveau, réponse, transfert). Vous pouvez la retirer au cas par cas.",
     signatureSaved: "Signature enregistrée",
@@ -2837,6 +2841,22 @@ const fr = {
     },
   },
   integrations: {
+    teams: {
+      title: "Messages Teams",
+      url: "Adresse du webhook (Teams › Flux de travail)",
+      badUrl: "Cette adresse n'est pas un webhook Teams (Microsoft).",
+      needUrl: "Entrez d'abord l'adresse du webhook.",
+      test: "Envoyer un test",
+      testOk: "Message de test envoyé dans Teams.",
+      testFailed: "Teams a refusé : {{error}}",
+      helpTitle: "Comment obtenir l'adresse",
+      helpSteps: [
+        "Dans Teams, ouvrez le canal (ou la discussion) où les notifications doivent arriver.",
+        "Choisissez Flux de travail, puis le modèle « Publier dans un canal quand une demande de webhook est reçue ».",
+        "Une fois créé, copiez l'adresse du webhook et collez-la ici. Elle reste secrète (jamais réaffichée).",
+        "Le portail y publie une carte et mentionne le technicien par son adresse courriel.",
+      ],
+    },
     quickbooks: { description: "Clients, plan comptable et fournisseurs gardés à jour des deux côtés, factures et paiements." },
     stripe: {
       webhookUrl: "Adresse du webhook (point de terminaison)",
@@ -3023,6 +3043,23 @@ const fr = {
     },
   },
   tickets: {
+    notifyTech: {
+      button: "Notifier un technicien",
+      title: "Notifier un technicien",
+      who: "Qui ?",
+      nobody: "Aucun autre technicien.",
+      message: "Message (facultatif)",
+      messageHint: "Ex. : le client attend un retour avant 15 h.",
+      how: "Comment ?",
+      bellHint: "La cloche du portail est toujours incluse.",
+      defaultsHint: "Les cases cochées d'avance se règlent dans votre profil.",
+      send: "Notifier",
+      sent_one: "{{count}} technicien notifié.",
+      sent_other: "{{count}} techniciens notifiés.",
+      problem: "{{name}} : {{channel}} non envoyé ({{why}}).",
+      channel: { bell: "Cloche", email: "Courriel", sms: "Texto", teams: "Teams" },
+      why: { failed: "échec d'envoi", no_address: "pas d'adresse ou de numéro au dossier", not_ready: "non configuré" },
+    },
     pendingCount_one: "{{count}} changement",
     pendingCount_other: "{{count}} changements",
     pendingSave: "Enregistrer tous les changements",
@@ -3862,6 +3899,7 @@ const fr = {
     },
   },
   notifications: {
+    ticketNotify: "{{from}} vous signale un billet",
     breakroomInvite: "{{from}} vous invite aux échecs",
     complotsInvite: "{{from}} vous invite à une partie de Complots",
     complotsInviteBody: "Pause café : rejoignez la table pour jouer.",

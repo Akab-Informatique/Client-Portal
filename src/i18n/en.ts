@@ -2108,6 +2108,10 @@ const en: Dict = {
     removeBlockConfirm: "Delete this reserved time?",
   },
   profile: {
+    notify: {
+      title: "Notify a technician",
+      hint: "The boxes ticked for you when you notify a colleague from a ticket. The portal bell is always included.",
+    },
     signature: "Email signature",
     signatureHint: "Added at the bottom of the emails written in the Outlook module (new, reply, forward). You can leave it out each time.",
     signatureSaved: "Signature saved",
@@ -2839,6 +2843,22 @@ const en: Dict = {
     },
   },
   integrations: {
+    teams: {
+      title: "Teams messages",
+      url: "Webhook address (Teams › Workflows)",
+      badUrl: "This address is not a Teams (Microsoft) webhook.",
+      needUrl: "Enter the webhook address first.",
+      test: "Send a test",
+      testOk: "Test message sent to Teams.",
+      testFailed: "Teams refused: {{error}}",
+      helpTitle: "How to get the address",
+      helpSteps: [
+        "In Teams, open the channel (or chat) where the notifications should arrive.",
+        "Choose Workflows, then the template “Post to a channel when a webhook request is received”.",
+        "Once made, copy the webhook address and paste it here. It stays secret (never shown again).",
+        "The portal posts a card there and mentions the technician by their email address.",
+      ],
+    },
     quickbooks: { description: "Clients, chart of accounts and vendors kept up to date on both sides, invoices and payments." },
     stripe: {
       webhookUrl: "Webhook address (endpoint URL)",
@@ -3025,6 +3045,23 @@ const en: Dict = {
     },
   },
   tickets: {
+    notifyTech: {
+      button: "Notify a technician",
+      title: "Notify a technician",
+      who: "Who?",
+      nobody: "No other technician.",
+      message: "Message (optional)",
+      messageHint: "E.g. the client is waiting for an answer before 3 pm.",
+      how: "How?",
+      bellHint: "The portal bell is always included.",
+      defaultsHint: "The boxes ticked by default are set in your profile.",
+      send: "Notify",
+      sent_one: "{{count}} technician notified.",
+      sent_other: "{{count}} technicians notified.",
+      problem: "{{name}}: {{channel}} not sent ({{why}}).",
+      channel: { bell: "Bell", email: "Email", sms: "Text", teams: "Teams" },
+      why: { failed: "sending failed", no_address: "no address or number on file", not_ready: "not set up" },
+    },
     pendingCount_one: "{{count}} change",
     pendingCount_other: "{{count}} changes",
     pendingSave: "Save all the changes",
@@ -3864,6 +3901,7 @@ const en: Dict = {
     },
   },
   notifications: {
+    ticketNotify: "{{from}} flagged a ticket for you",
     breakroomInvite: "{{from}} invites you to chess",
     complotsInvite: "{{from}} invites you to a game of Complots",
     complotsInviteBody: "Coffee break: join the table to play.",
