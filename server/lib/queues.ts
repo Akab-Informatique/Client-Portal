@@ -1,3 +1,4 @@
+import { openItems } from "./checklist.ts";
 import { asc, eq } from "drizzle-orm";
 import { db, schema } from "../db/index.ts";
 import type { Asset } from "./demoTickets.ts";
@@ -170,6 +171,8 @@ export function withPortalQueues(src: TicketSource): TicketSource {
   d.update = async (id: number, p: TicketPatch, a) => {
     await validQueue(p.queue);
     await validSource(p.source);
+    // a ticket with an open checklist item cannot be completed (whatever way the status is changed)
+    if (p.status !== undefined && (await d.options()).statuses.find((s) => s.value === p.status)?.kind === "complete" && (await openItems(id)) > 0) throw new SourceError("checklist_open");
     const { queue, source, ...r } = p;
     const rest: TicketPatch = { ...r };
     await remember(id, queue);

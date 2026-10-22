@@ -507,6 +507,7 @@ export async function deleteTicket(id: number, a: AuthContext): Promise<{ number
     await tx.delete(schema.ticketAiNotes).where(eq(schema.ticketAiNotes.ticketId, id));
     await tx.delete(schema.autotaskAuthors).where(eq(schema.autotaskAuthors.ticketId, id));
     await tx.delete(schema.ticketMeta).where(eq(schema.ticketMeta.ticketId, id));
+    await tx.delete(schema.ticketChecklist).where(eq(schema.ticketChecklist.ticketId, id));
     // the email that made it stays (so it is not read again and made a new ticket), without the link
     await tx.update(schema.mailIntake).set({ ticketId: null, ticketNumber: null, note: "Billet supprimé", updatedAt: new Date() }).where(eq(schema.mailIntake.ticketId, id));
     await tx.update(schema.meetingEvents).set({ ticketId: null, ticketNumber: null }).where(eq(schema.meetingEvents.ticketId, id));

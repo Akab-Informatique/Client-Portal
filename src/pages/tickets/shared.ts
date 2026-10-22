@@ -45,8 +45,23 @@ export type TicketSummary = {
   viewers: Viewer[];
   /** This ticket is one of my priorities (given by an admin) */
   myPriority?: "day" | "week";
+  /** Checklist progress, when it has one (the list shows it) */
+  checklist?: { done: number; total: number } | null;
 };
-export type TicketDetail = TicketSummary & {
+/** One task of a ticket's checklist; it may wait for another item (blockedBy while that one is not done) */
+export type ChecklistItem = {
+  id: string;
+  text: string;
+  position: number;
+  done: boolean;
+  doneAt: string | null;
+  doneBy: string | null;
+  dependsOnId: string | null;
+  blockedBy: { id: string; text: string } | null;
+};
+export type TicketDetail = Omit<TicketSummary, "checklist"> & {
+  /** The checklist: tasks to complete before the ticket can be */
+  checklist?: ChecklistItem[];
   description: string;
   source: string;
   hours: number;
@@ -326,6 +341,7 @@ export function ticketErrorText(t: (k: string, o?: Record<string, unknown>) => s
   if (e instanceof ApiError) {
     if (e.code === "ticket_not_started") return t("tickets.startLock.refused", { date: shortDate(e.fields?.find((f) => f.path === "startDate")?.message ?? "") });
     if (e.code === "tickets_not_local") return t("tickets.errors.notLocal");
+    if (["checklist_open", "item_blocked", "item_cycle", "item_dependency_invalid", "item_has_done_dependents", "item_not_found"].includes(e.code)) return t(`tickets.checklist.errors.${e.code}`);
     if (e.code === "insufficient_stock") return t("tickets.errors.insufficient_stock");
     if (e.code === "serial_unavailable" || e.code === "serials_required") return t(`tickets.errors.${e.code}`);
     if (e.code === "invalid_contact") return t("tickets.errors.invalidContact");

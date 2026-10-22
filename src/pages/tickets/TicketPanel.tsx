@@ -36,6 +36,7 @@ import { ClientHoursGauge } from "./ClientHoursGauge";
 import { AcceptDialog } from "./AcceptDialog";
 import { MergeDialog } from "./MergeDialog";
 import { NotifyTech } from "./NotifyTech";
+import { ChecklistCard } from "./Checklist";
 import { NotificationBell } from "@/components/NotificationBell";
 import { useTicketWorkspace } from "./workspace";
 import { contractNote } from "./contract";
@@ -92,6 +93,7 @@ function fromLists(qc: QueryClient, id: number): TicketDetail | undefined {
     if (!tk) continue;
     return {
       ...tk,
+      checklist: undefined,
       description: tk.excerpt,
       source: "",
       hours: 0,
@@ -701,6 +703,8 @@ function TicketBody({
               partial={partial}
               onSave={(description) => update.mutate({ description })}
             />
+            {/* the tasks to complete before the ticket can be: right under the description, folded away or open */}
+            <ChecklistCard tk={tk} editable={editable && !partial} />
             <AiPanel tk={tk} onToNote={(text) => setDraft({ text, internal: true })} />
             {can("sms.view") && (
               <div className="flex items-center gap-1 rounded-xl border p-1 text-xs">

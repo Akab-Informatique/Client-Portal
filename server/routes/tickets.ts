@@ -11,6 +11,7 @@ import { auth, requirePermission, type AppEnv, type AuthContext } from "../lib/a
 import { body, zEmail, zUuid } from "../lib/validate.ts";
 import { audit } from "../lib/audit.ts";
 import { notifyTechs } from "../lib/techNotify.ts";
+import { addItem, ChecklistError, checklistCounts, checklistOf, createItems, deleteItem, reorderItems, updateItem } from "../lib/checklist.ts";
 import { rateLimit } from "../lib/http.ts";
 import { sanitizeMailHtml } from "../lib/mailHtml.ts";
 import { sendMail } from "../lib/mail.ts";
@@ -38,11 +39,21 @@ const zUuidOrNull = z.uuid().nullable().default(null);
 const FILTER_PARAMS = ["view", "assignee", "q", "due", "created", "attention", "statusKind", "status", "priority", "company", "queue", "dueFrom", "dueTo", "startFrom", "startTo", "alerts", "sort"];
 const PRIORITY_ORDER = { critical: 0, high: 1, medium: 2, low: 3 } as const;
 
+/** The checklist's refusals as HTTP answers (not found 404, waiting for another item or a dependent already done 409, a bad link 400) */
+async function checklistRun<T>(fn: () => Promise<T>): Promise<T> {
+  try {
+    return await fn();
+  } catch (e) {
+    if (e instanceof ChecklistError) throw new HTTPException(e.code === "item_not_found" ? 404 : e.code === "item_blocked" || e.code === "item_has_done_dependents" ? 409 : 400, { message: e.code });
+    throw e;
+  }
+}
+
 // ── Errors from the source → HTTP ──
 function sourceError(e: unknown): HTTPException {
   if (e instanceof HTTPException) return e;
   if (e instanceof SourceError) {
-    return new HTTPException(e.code === "not_found" ? 404 : 400, { message: e.code });
+    return new HTTPException(e.code === "not_found" ? 404 : e.code === "checklist_open" ? 409 : 400, { message: e.code });
   }
   console.error("[tickets]", e);
   return new HTTPException(500, { message: "Internal error" });
@@ -409,6 +420,8 @@ async function detailOf(src: TicketSource, id: number, a: AuthContext) {
     contactInfo,
     client,
     contract: billing?.contract ?? null,
+    /** The checklist: tasks to complete before the ticket can be */
+    checklist: await checklistOf(t.id),
     contracts: billing?.contracts ?? [],
     mergedInto: t.mergedInto ?? null,
     mergedTickets: t.mergedTickets ?? [],
@@ -499,7 +512,9 @@ export const ticketRoutes = new Hono<AppEnv>()
       // Portal-only filter: Autotask has no start date
       .filter((t) => inRange(starts.get(t.id), q.startFrom, q.startTo));
     };
-    const items = select(q).map((t) => summary(t, L, starts.get(t.id), a.user.id, starts.locked.has(t.id), starts.times.get(t.id)));
+    const selected = select(q);
+    const checks = await checklistCounts(selected.map((t) => t.id));
+    const items = selected.map((t) => ({ ...summary(t, L, starts.get(t.id), a.user.id, starts.locked.has(t.id), starts.times.get(t.id)), checklist: checks.get(t.id) ?? null }));
     // the saved filters shown as buttons, with their counts
     const pinnedFilters = await db()
       .select({ id: schema.ticketFilters.id, name: schema.ticketFilters.name, query: schema.ticketFilters.query })
@@ -1376,6 +1391,39 @@ export const ticketRoutes = new Hono<AppEnv>()
     return c.json({ people });
   })
 
+  // ── The checklist of a ticket (tickets.edit): tasks to complete before the ticket can be; an item may wait for another ──
+  .get("/:id/checklist", async (c) => {
+    const id = Number(c.req.param("id"));
+    if (!(await run(() => (ticketSource().then((s) => s.get(id)))))) throw new HTTPException(404, { message: "not_found" });
+    return c.json(await checklistOf(id));
+  })
+  .post("/:id/checklist", requirePermission("tickets.edit"), async (c) => {
+    const a = auth(c);
+    const id = Number(c.req.param("id"));
+    const p = await body(c, z.object({ text: z.string().trim().min(1).max(300), dependsOnId: zUuid.nullable().optional() }));
+    if (!(await run(() => ticketSource().then((s) => s.get(id))))) throw new HTTPException(404, { message: "not_found" });
+    await checklistRun(() => addItem(id, p, a.user.id));
+    return c.json(await checklistOf(id), 201);
+  })
+  .patch("/:id/checklist/:itemId", requirePermission("tickets.edit"), async (c) => {
+    const a = auth(c);
+    const id = Number(c.req.param("id"));
+    const p = await body(c, z.object({ text: z.string().trim().min(1).max(300).optional(), done: z.boolean().optional(), dependsOnId: zUuid.nullable().optional() }));
+    await checklistRun(() => updateItem(id, zUuid.parse(c.req.param("itemId")), p, a.user.id));
+    return c.json(await checklistOf(id));
+  })
+  .post("/:id/checklist/reorder", requirePermission("tickets.edit"), async (c) => {
+    const id = Number(c.req.param("id"));
+    const p = await body(c, z.object({ ids: z.array(zUuid).max(100) }));
+    await reorderItems(id, p.ids);
+    return c.json(await checklistOf(id));
+  })
+  .delete("/:id/checklist/:itemId", requirePermission("tickets.edit"), async (c) => {
+    const id = Number(c.req.param("id"));
+    await checklistRun(() => deleteItem(id, zUuid.parse(c.req.param("itemId"))));
+    return c.json(await checklistOf(id));
+  })
+
   /** Reply to the client or internal note (the technician is the author). */
   .post("/:id/notes", requirePermission("tickets.edit"), async (c) => {
     const a = auth(c);
@@ -1526,6 +1574,12 @@ export const ticketRoutes = new Hono<AppEnv>()
         contractId: z.string().max(60).nullable().optional(),
         // where it comes from (ticket_sources.key): phone by default, email from an email, sms from a text
         source: z.string().trim().max(40).optional(),
+        // the checklist typed with the ticket; "dependsOn" is the position of an EARLIER item that must be done first
+        checklist: z
+          .array(z.object({ text: z.string().trim().min(1).max(300), dependsOn: z.number().int().min(0).nullable().optional() }))
+          .max(50)
+          .default([])
+          .refine((l) => l.every((x, i) => x.dependsOn == null || x.dependsOn < i), { message: "checklist_dependency" }),
       }),
     );
     const src = await ticketSource();
@@ -1533,7 +1587,9 @@ export const ticketRoutes = new Hono<AppEnv>()
     if (!o.priorities.some((x) => x.value === p.priority)) throw new HTTPException(400, { message: "Validation failed" });
     if (p.queue && !o.queues.some((x) => x.value === p.queue)) throw new HTTPException(400, { message: "Validation failed" });
     if (p.contractId && !(await run(() => src.contracts(p.companyId))).some((x) => x.id === p.contractId)) throw new HTTPException(400, { message: "invalid_contract" });
-    const id = await run(() => src.create({ ...p, contactId: p.contactId ?? null, contractId: p.contractId ?? null }, a));
+    const { checklist: checklistItems, ...rest } = p;
+    const id = await run(() => src.create({ ...rest, contactId: p.contactId ?? null, contractId: p.contractId ?? null }, a));
+    await createItems(id, checklistItems, a.user.id);
     if (p.startDate) {
       await db()
         .insert(schema.ticketMeta)

@@ -2164,3 +2164,23 @@ export const passboltKeys = pgTable("passbolt_keys", {
   fingerprint: text("fingerprint").notNull(),
   updatedAt: updated(),
 });
+
+/** The checklist of a ticket: tasks to complete before the ticket can be; an item can wait for another item of the same ticket */
+export const ticketChecklist = pgTable(
+  "ticket_checklist",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    ticketId: integer("ticket_id").notNull(),
+    text: text("text").notNull(),
+    position: integer("position").notNull().default(0),
+    done: boolean("done").notNull().default(false),
+    doneAt: timestamp("done_at", { withTimezone: true }),
+    doneBy: uuid("done_by").references(() => users.id, { onDelete: "set null" }),
+    /** Another item of the same ticket that must be done first */
+    dependsOnId: uuid("depends_on_id").references((): AnyPgColumn => ticketChecklist.id, { onDelete: "set null" }),
+    createdBy: uuid("created_by").references(() => users.id, { onDelete: "set null" }),
+    createdAt: created(),
+    updatedAt: updated(),
+  },
+  (t) => [index("ticket_checklist_ticket_idx").on(t.ticketId, t.position)],
+);

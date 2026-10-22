@@ -966,6 +966,14 @@ function TicketRow({
           <span className="flex flex-wrap items-baseline gap-x-2">
             <span className="shrink-0 font-mono text-[11px] text-muted-foreground group-hover:text-primary">{tk.number}</span>
             <span className="min-w-0 break-words font-medium">{tk.title}</span>
+            {tk.checklist && tk.checklist.total > 0 && (
+              <span
+                className={cn("flex shrink-0 items-center gap-0.5 rounded-full border px-1.5 text-[10px] font-semibold", tk.checklist.done === tk.checklist.total ? "border-emerald-500/40 bg-emerald-500/10 text-emerald-300" : "border-border text-muted-foreground")}
+                title={t("tickets.checklist.title")}
+              >
+                <ListChecks className="size-2.5" /> {tk.checklist.done}/{tk.checklist.total}
+              </span>
+            )}
             {tk.myPriority && (
               <span className="flex shrink-0 items-center gap-0.5 rounded-full border border-[color:var(--gold)]/50 bg-[color:var(--gold)]/10 px-1.5 text-[10px] font-semibold text-primary">
                 <Star className="size-2.5 fill-current" /> {t(`planning.badge.${tk.myPriority}`)}

@@ -343,7 +343,7 @@ export function dueIso(date: string, time = "17:00"): string {
 
 export class SourceError extends Error {
   constructor(
-    public code: "not_found" | "invalid_company" | "invalid_contact" | "invalid_assignee" | "invalid_value" | "not_linked" | "already_local" | "not_local" | "merge_same" | "merge_already" | "merge_target_merged" | "merge_other_client",
+    public code: "not_found" | "invalid_company" | "invalid_contact" | "invalid_assignee" | "invalid_value" | "not_linked" | "already_local" | "not_local" | "merge_same" | "merge_already" | "merge_target_merged" | "merge_other_client" | "checklist_open",
   ) {
     super(code);
   }

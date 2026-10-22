@@ -2,7 +2,7 @@ import { useEffect, useRef, useState, type FormEvent } from "react";
 import { useTranslation } from "react-i18next";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
-import { FileText, Loader2, Paperclip, Ticket, X } from "lucide-react";
+import { FileText, ListChecks, Loader2, Paperclip, Ticket, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { AiTextarea } from "@/components/AiPolish";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
@@ -14,6 +14,7 @@ import { useCan, useMe } from "@/lib/session";
 import { cn } from "@/lib/utils";
 import { fileToBase64 } from "../outlook/shared";
 import { CompanyPicker, ContactPicker, useCompanies, useContracts } from "./pickers";
+import { ChecklistField, type DraftItem } from "./Checklist";
 import { PRIORITY_STYLE, useChoiceText, type TicketList, type TicketSummary, ticketErrorText } from "./shared";
 
 const inDays = (n: number) => new Date(Date.now() + n * 86_400_000).toISOString().slice(0, 10);
@@ -58,6 +59,7 @@ export function NewTicketDialog({
     startDate: "",
     startTime: "",
   });
+  const [checklist, setChecklist] = useState<DraftItem[]>([]);
   const [f, setF] = useState(empty);
   const [files, setFiles] = useState<File[]>([]);
   const [dragging, setDragging] = useState(false);
@@ -67,6 +69,7 @@ export function NewTicketDialog({
     if (open) {
       setF(empty());
       setFiles([]);
+      setChecklist([]);
     }
   }, [open]);
 
@@ -95,6 +98,7 @@ export function NewTicketDialog({
         dueTime: undefined,
         startDate: f.startDate || null,
         startTime: f.startDate && f.startTime ? f.startTime : null,
+        checklist,
       }),
     onSuccess: async (tk) => {
       // the files, one at a time, once the ticket exists
@@ -163,6 +167,13 @@ export function NewTicketDialog({
           <div className="space-y-2">
             <Label htmlFor="nt-desc">{t("tickets.description")}</Label>
             <AiTextarea id="nt-desc" rows={4} value={f.description} onChange={(e) => setF({ ...f, description: e.target.value })} />
+          </div>
+
+          <div className="space-y-2">
+            <Label className="flex items-center gap-1.5">
+              <ListChecks className="size-3.5 text-primary" /> {t("tickets.checklist.title")}
+            </Label>
+            <ChecklistField value={checklist} onChange={setChecklist} />
           </div>
 
           <div className="space-y-2">

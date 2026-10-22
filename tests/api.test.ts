@@ -6108,3 +6108,71 @@ describe("Sécurité › Passbolt (spike): the server only keeps a protected key
     await admin.put("/api/admin/integrations/passbolt", { enabled: false, hideMenu: true });
   });
 });
+
+describe("ticket checklist: items to complete, with dependencies, before the ticket can be", () => {
+  it("made with the ticket; an item waits for another; the ticket cannot be completed while one is open", async () => {
+    resetRateLimit("login:ip:unknown");
+    const tech = await signIn("tech@akab.local");
+    const readOnly = await signIn("viewer@akab.local").catch(() => null);
+    const companyId = (await tech.get("/api/tickets/companies")).json[0].id;
+    const made = await tech.post("/api/tickets", {
+      title: "Installation poste",
+      description: "",
+      companyId,
+      priority: "medium",
+      queue: "support",
+      assigneeId: null,
+      dueDate: "2026-12-01",
+      checklist: [{ text: "Préparer le poste" }, { text: "Installer les logiciels", dependsOn: 0 }, { text: "Remettre au client" }],
+    });
+    expect(made.status).toBe(201);
+    const id = made.json.id;
+    const detail = async () => (await tech.get(`/api/tickets/${id}`)).json;
+    let d = await detail();
+    expect(d.checklist.map((x: any) => x.text)).toEqual(["Préparer le poste", "Installer les logiciels", "Remettre au client"]);
+    const [a, b, c] = d.checklist;
+    expect(b).toMatchObject({ dependsOnId: a.id, blockedBy: { id: a.id } });
+    expect(a.blockedBy).toBeNull();
+    // the list shows done / total
+    expect((await tech.get("/api/tickets?view=all")).json.items.find((x: any) => x.id === id).checklist).toEqual({ done: 0, total: 3 });
+    // a dependency can only point at an earlier item when the ticket is made
+    const bad = await tech.post("/api/tickets", { title: "x", description: "", companyId, priority: "medium", queue: "support", assigneeId: null, dueDate: "2026-12-01", checklist: [{ text: "a", dependsOn: 0 }] });
+    expect(bad.status).toBe(400);
+
+    // an item cannot be ticked before the one it waits for
+    expect((await tech.patch(`/api/tickets/${id}/checklist/${b.id}`, { done: true })).json.error).toBe("item_blocked");
+    // no loop: a waits for b while b waits for a
+    expect((await tech.patch(`/api/tickets/${id}/checklist/${a.id}`, { dependsOnId: b.id })).json.error).toBe("item_cycle");
+    expect((await tech.patch(`/api/tickets/${id}/checklist/${a.id}`, { dependsOnId: a.id })).json.error).toBe("item_cycle");
+
+    // the ticket cannot be completed while an item is open (the same rule for every way the status changes)
+    const complete = d.options.statuses.find((s: any) => s.kind === "complete").value;
+    expect((await tech.patch(`/api/tickets/${id}`, { status: complete })).json.error).toBe("checklist_open");
+    expect((await tech.patch(`/api/tickets/${id}`, { priority: "high" })).status).toBe(200);
+
+    // tick in order; an item cannot be un-ticked while one that waited for it is done
+    expect((await tech.patch(`/api/tickets/${id}/checklist/${a.id}`, { done: true })).status).toBe(200);
+    expect((await tech.patch(`/api/tickets/${id}/checklist/${b.id}`, { done: true })).status).toBe(200);
+    expect((await tech.patch(`/api/tickets/${id}/checklist/${a.id}`, { done: false })).json.error).toBe("item_has_done_dependents");
+    d = await detail();
+    expect(d.checklist.find((x: any) => x.id === b.id)).toMatchObject({ done: true, blockedBy: null, doneBy: expect.any(String) });
+    expect((await tech.patch(`/api/tickets/${id}`, { status: complete })).json.error).toBe("checklist_open");
+
+    // add an item (waiting for the last one), delete one: the ones that waited for it are freed
+    const added = (await tech.post(`/api/tickets/${id}/checklist`, { text: "Facturer", dependsOnId: c.id })).json;
+    const extra = added.find((x: any) => x.text === "Facturer");
+    expect(extra).toMatchObject({ dependsOnId: c.id, blockedBy: { id: c.id } });
+    expect((await tech.post(`/api/tickets/${id}/checklist`, { text: "x", dependsOnId: "00000000-0000-4000-8000-000000000000" })).json.error).toBe("item_dependency_invalid");
+    const afterDelete = (await tech.del(`/api/tickets/${id}/checklist/${c.id}`)).json;
+    expect(afterDelete.find((x: any) => x.id === extra.id)).toMatchObject({ dependsOnId: null, blockedBy: null });
+    expect((await tech.del(`/api/tickets/${id}/checklist/${c.id}`)).json.error).toBe("item_not_found");
+    // reorder
+    const order = (await tech.post(`/api/tickets/${id}/checklist/reorder`, { ids: [extra.id, b.id, a.id] })).json.map((x: any) => x.text);
+    expect(order).toEqual(["Facturer", "Installer les logiciels", "Préparer le poste"]);
+
+    // everything done: the ticket can be completed
+    expect((await tech.patch(`/api/tickets/${id}/checklist/${extra.id}`, { done: true })).status).toBe(200);
+    expect((await tech.patch(`/api/tickets/${id}`, { status: complete })).status).toBe(200);
+    expect(readOnly === null || (await readOnly.post(`/api/tickets/${id}/checklist`, { text: "interdit" })).status === 403).toBe(true);
+  });
+});
