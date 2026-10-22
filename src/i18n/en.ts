@@ -2885,6 +2885,7 @@ const en: Dict = {
   },
   integrations: {
     passbolt: {
+      description: "The password vault behind Security › Passbolt: the portal is the screen, Passbolt keeps the encrypted secrets.",
       title: "Passbolt (password vault)",
       hideMenu: "Hide the Security menu from the sidebar",
       hideMenuHint: "While this is on, nothing of Security shows in the sidebar, for anyone. Turn it off to show Security › Passbolt to those who have the right.",
@@ -2898,6 +2899,7 @@ const en: Dict = {
       help: "Only the address is kept here: no secret. Each person puts their own key in Security › Passbolt; the passwords are decrypted in their browser.",
     },
     teams: {
+      description: "Send a Teams message (with a mention) to a technician from a ticket.",
       title: "Teams messages",
       url: "Webhook address (Teams › Workflows)",
       badUrl: "This address is not a Teams (Microsoft) webhook.",

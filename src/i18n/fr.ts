@@ -2883,6 +2883,7 @@ const fr = {
   },
   integrations: {
     passbolt: {
+      description: "Le coffre de mots de passe derrière Sécurité › Passbolt : le portail est l'écran, Passbolt garde les secrets chiffrés.",
       title: "Passbolt (coffre de mots de passe)",
       hideMenu: "Cacher le menu Sécurité dans la barre latérale",
       hideMenuHint: "Tant que c'est activé, rien de Sécurité n'apparaît dans la barre latérale, pour personne. Désactivez pour montrer Sécurité › Passbolt à ceux qui ont le droit.",
@@ -2896,6 +2897,7 @@ const fr = {
       help: "Seule l'adresse est gardée ici : aucun secret. Chaque personne met sa propre clé dans Sécurité › Passbolt ; les mots de passe se déchiffrent dans son navigateur.",
     },
     teams: {
+      description: "Envoyer un message Teams (avec mention) à un technicien depuis un billet.",
       title: "Messages Teams",
       url: "Adresse du webhook (Teams › Flux de travail)",
       badUrl: "Cette adresse n'est pas un webhook Teams (Microsoft).",
