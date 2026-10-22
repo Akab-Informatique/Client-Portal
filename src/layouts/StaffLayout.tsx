@@ -16,6 +16,7 @@ import {
   Settings2,
   Sun,
   UserRound,
+  ShieldCheck,
 } from "lucide-react";
 import { Logo, LogoMark } from "@/components/brand/Logo";
 import { LanguageToggle } from "@/components/LanguageToggle";
@@ -42,7 +43,7 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { Sheet, SheetContent, SheetTitle } from "@/components/ui/sheet";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
-import { NAV_SECTIONS, STAFF_MODULES, type NavModule } from "@/modules/registry";
+import { NAV_GROUPS, NAV_SECTIONS, STAFF_MODULES, type NavModule } from "@/modules/registry";
 import { moduleVisible } from "@/modules/visible";
 import { signOut, useCan, useMe } from "@/lib/session";
 import { cn, initials } from "@/lib/utils";
@@ -274,11 +275,43 @@ function SidebarContent({ collapsed, onToggle }: { collapsed: boolean; onToggle?
               )}
               <div className={cn("grid transition-[grid-template-rows] duration-200 ease-out", shown ? "grid-rows-[1fr]" : "grid-rows-[0fr]")}>
                 <ul className={cn("space-y-1 overflow-hidden", !collapsed && shown && "pb-2")} inert={!shown}>
-                  {g.items.map((m) => (
-                    <li key={m.key}>
-                      <NavItem m={m} collapsed={collapsed} active={!m.upcoming && isActive(m.path)} />
-                    </li>
-                  ))}
+                  {g.items
+                    .filter((m) => !m.group)
+                    .map((m) => (
+                      <li key={m.key}>
+                        <NavItem m={m} collapsed={collapsed} active={!m.upcoming && isActive(m.path)} />
+                      </li>
+                    ))}
+                  {/* a sub-menu inside the section (Sécurité): collapsible too, remembered with the sections */}
+                  {(Object.keys(NAV_GROUPS) as (keyof typeof NAV_GROUPS)[]).map((gk) => {
+                    const sub = g.items.filter((m) => m.group === gk);
+                    if (!sub.length) return null;
+                    const subKey = `${g.key}/${gk}`;
+                    const subOpen = collapsed || open.has(subKey) || sub.some((m) => !m.upcoming && isActive(m.path));
+                    return (
+                      <li key={gk}>
+                        {!collapsed && (
+                          <button
+                            type="button"
+                            onClick={() => toggle(subKey)}
+                            aria-expanded={subOpen}
+                            className="flex w-full items-center gap-2 rounded-md px-3 py-1.5 text-left text-xs font-medium text-muted-foreground transition-colors hover:bg-accent/40 hover:text-foreground"
+                          >
+                            <ShieldCheck className="size-3.5 shrink-0 text-primary/80" />
+                            <span className="flex-1 truncate">{t(NAV_GROUPS[gk].labelKey)}</span>
+                            <ChevronDown className={cn("size-3 shrink-0 transition-transform duration-200", !subOpen && "-rotate-90")} />
+                          </button>
+                        )}
+                        <ul className={cn("space-y-1 overflow-hidden", !collapsed && "ml-3 border-l pl-2", !collapsed && !subOpen && "hidden")} inert={!subOpen}>
+                          {sub.map((m) => (
+                            <li key={m.key}>
+                              <NavItem m={m} collapsed={collapsed} active={!m.upcoming && isActive(m.path)} />
+                            </li>
+                          ))}
+                        </ul>
+                      </li>
+                    );
+                  })}
                 </ul>
               </div>
             </div>

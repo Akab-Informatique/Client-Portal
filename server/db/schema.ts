@@ -2152,3 +2152,15 @@ export const quoteLines = pgTable(
   },
   (t) => [index("quote_lines_quote_idx").on(t.quoteId, t.position), index("quote_lines_product_idx").on(t.productId)],
 );
+
+/** A person's Passbolt private key, still protected by their passphrase (sealed again with the portal's secret). The server never has the passphrase. */
+export const passboltKeys = pgTable("passbolt_keys", {
+  userId: uuid("user_id")
+    .primaryKey()
+    .references(() => users.id, { onDelete: "cascade" }),
+  armoredSealed: text("armored_sealed").notNull(),
+  /** Their user id in Passbolt (needed to sign in) */
+  passboltUserId: text("passbolt_user_id").notNull(),
+  fingerprint: text("fingerprint").notNull(),
+  updatedAt: updated(),
+});

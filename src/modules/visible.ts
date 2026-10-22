@@ -12,5 +12,6 @@ export function moduleVisible(m: NavModule, me: Me, can: (p: PermissionKey) => b
   if (m.permission && !can(m.permission)) return false;
   if (m.optIn && !me.preferences[m.optIn]) return false;
   if (m.rule === "timesheetRequired" && !me.timesheetRequired) return false;
+  if (m.rule === "passbolt" && !me.features?.passbolt) return false;
   return true;
 }

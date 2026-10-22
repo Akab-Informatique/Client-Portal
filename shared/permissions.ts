@@ -253,6 +253,21 @@ export const MODULES = [
     ],
   },
   {
+    key: "passbolt",
+    audience: "staff",
+    label: { fr: "Sécurité · Passbolt", en: "Security · Passbolt" },
+    permissions: [
+      {
+        key: "passbolt.use",
+        label: { fr: "Utiliser Passbolt dans le portail", en: "Use Passbolt in the portal" },
+        description: {
+          fr: "Voir et copier les mots de passe auxquels la personne a accès dans Passbolt, avec sa propre clé (déchiffrés dans son navigateur)",
+          en: "See and copy the passwords the person can reach in Passbolt, with their own key (decrypted in their browser)",
+        },
+      },
+    ],
+  },
+  {
     key: "services",
     audience: "staff",
     label: { fr: "Services", en: "Services" },
@@ -506,7 +521,7 @@ export type ModuleKey = (typeof MODULES)[number]["key"];
 export const ACCESS_LAYOUT: { key: string; audience: Audience; label: Localized; modules: ModuleKey[] }[] = [
   { key: "team", audience: "staff", label: { fr: "Équipe", en: "Team" }, modules: ["dashboard", "meetings", "breakroom"] },
   { key: "tools", audience: "staff", label: { fr: "Mes outils", en: "My tools" }, modules: ["pipeline", "outlook", "timesheets"] },
-  { key: "command", audience: "staff", label: { fr: "Centre de commande", en: "Command center" }, modules: ["messages", "tickets", "sms"] },
+  { key: "command", audience: "staff", label: { fr: "Centre de commande", en: "Command center" }, modules: ["messages", "tickets", "sms", "passbolt"] },
   { key: "management", audience: "staff", label: { fr: "Gestion", en: "Management" }, modules: ["crm", "clientview", "store", "services"] },
   { key: "sales", audience: "staff", label: { fr: "Vente", en: "Sales" }, modules: ["quotes"] },
   { key: "accounting", audience: "staff", label: { fr: "Comptabilité", en: "Accounting" }, modules: ["accounting"] },

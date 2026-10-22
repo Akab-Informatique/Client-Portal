@@ -24,6 +24,8 @@ export type Me = {
   /** Set while a technician views the portal as a client (read only). */
   viewAs: { clientId: string; clientName: string } | null;
   realUser: { name: string; email: string } | null;
+  /** Parts switched on for this server (Sécurité › Passbolt is off in production unless set) */
+  features?: { passbolt: boolean };
   /** Fills in a weekly timesheet (set by an admin) */
   timesheetRequired: boolean;
   preferences: { dashboard: DashboardWidget[] | null; theme: "dark" | "light" | "system"; outlook: boolean; bankHours: boolean; notify: { email: boolean; sms: boolean; teams: boolean } };

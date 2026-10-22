@@ -6,6 +6,7 @@ import { db, schema } from "../db/index.ts";
 import { auth, permissionsOf, requirePermission, type AppEnv } from "../lib/auth.ts";
 import { audit } from "../lib/audit.ts";
 import { body, zEmail, zUuid } from "../lib/validate.ts";
+import { passboltSettings, savePassboltSettings, testPassbolt, validBaseUrl } from "../lib/passbolt.ts";
 import { saveTeamsSettings, sendTeams, teamsSettings, validTeamsUrl } from "../lib/teams.ts";
 import { rateLimit } from "../lib/http.ts";
 import { RMM_PLACEHOLDERS, rmmSettings, saveRmmSettings, validTemplate } from "../lib/rmm.ts";
@@ -158,6 +159,29 @@ export const integrationRoutes = new Hono<AppEnv>()
     await saveRmmSettings(a.user.id, p);
     await audit(a.user.id, "integration.rmm.updated", null, { enabled: p.enabled, name: p.name });
     return c.json({ ...(await rmmSettings()), placeholders: RMM_PLACEHOLDERS });
+  })
+
+  // ── Passbolt (the vault behind Sécurité › Passbolt: the server address only) ──
+  .get("/passbolt", async (c) => c.json(await passboltView()))
+  .put("/passbolt", async (c) => {
+    const a = auth(c);
+    const p = await body(c, z.object({ enabled: z.boolean().optional(), baseUrl: z.string().trim().max(300).optional() }));
+    const url = p.baseUrl?.replace(/\/+$/, "");
+    if (url !== undefined && url !== "" && !validBaseUrl(url)) throw new HTTPException(400, { message: "passbolt_bad_url" });
+    const cur = await passboltSettings();
+    if (p.enabled && !(url || cur.baseUrl)) throw new HTTPException(400, { message: "passbolt_incomplete" });
+    await savePassboltSettings(a.user.id, { ...(p.enabled !== undefined ? { enabled: p.enabled } : {}), ...(url !== undefined ? { baseUrl: url } : {}) });
+    await audit(a.user.id, "integration.passbolt.updated", null, { enabled: p.enabled, baseUrl: url });
+    return c.json(await passboltView());
+  })
+  .post("/passbolt/test", async (c) => {
+    const a = auth(c);
+    if (!rateLimit(`passbolt-test:${a.user.id}`, 6, 60_000).ok) throw new HTTPException(429, { message: "rate_limited" });
+    const s = await passboltSettings();
+    if (!s.baseUrl) throw new HTTPException(400, { message: "passbolt_incomplete" });
+    const r = await testPassbolt(s.baseUrl);
+    await savePassboltSettings(a.user.id, { lastTest: { ok: r.ok, at: new Date().toISOString(), ...(r.ok ? {} : { error: r.error }) } });
+    return c.json(await passboltView());
   })
 
   // ── Microsoft Teams (one incoming webhook; the portal posts a card mentioning the technician) ──
@@ -325,4 +349,10 @@ export const integrationRoutes = new Hono<AppEnv>()
 async function teamsView() {
   const s = await teamsSettings();
   return { enabled: s.enabled, hasUrl: Boolean(s.webhookUrl), lastTest: s.lastTest ?? null };
+}
+
+/** Passbolt as the admin sees it, and whether the spike is allowed on this server */
+async function passboltView() {
+  const s = await passboltSettings();
+  return { enabled: s.enabled, baseUrl: s.baseUrl, lastTest: s.lastTest ?? null, spikeAllowed: config.passboltEnabled };
 }

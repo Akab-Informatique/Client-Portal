@@ -36,6 +36,7 @@ const INTEGRATIONS: Integration[] = [
   { key: "stripe", name: "Stripe", icon: CreditCard, Status: StripeStatus, Page: StripePage, needs: "admin.billing" },
   // clients, chart of accounts and vendors kept in step, and invoices and payments (the API needs billing and integrations)
   { key: "quickbooks", name: "QuickBooks Online", icon: RefreshCw, Status: QuickBooksStatus, Page: QuickBooksPage, needs: "admin.billing" },
+  { key: "passbolt", name: "Passbolt", icon: KeyRound, Status: PassboltStatus, Page: PassboltAdminPage },
   { key: "teams", name: "Microsoft Teams", icon: Users, Status: TeamsStatus, Page: TeamsPage },
   { key: "rmm", name: "RMM", icon: MonitorPlay, Status: RmmStatus, Page: RmmPage },
 ];
@@ -328,6 +329,98 @@ function AiPage() {
     </section>
     {s.hasKey && <AiUsagePanel />}
     </div>
+  );
+}
+
+// ── Passbolt: the vault behind Sécurité › Passbolt (the server address only; nothing secret is stored here) ──
+type PassboltView = { enabled: boolean; baseUrl: string; lastTest: { ok: boolean; at: string; error?: string } | null; spikeAllowed: boolean };
+const PASSBOLT_KEY = ["admin", "integrations", "passbolt"];
+
+function PassboltStatus() {
+  const { t } = useTranslation();
+  const { data } = useQuery({ queryKey: PASSBOLT_KEY, queryFn: () => api.get<PassboltView>("/admin/integrations/passbolt") });
+  if (!data) return null;
+  const on = data.enabled && Boolean(data.baseUrl);
+  return (
+    <Badge variant="outline" className={cn("gap-1.5", on ? "border-emerald-500/40 text-emerald-400" : "text-muted-foreground")}>
+      <span className="size-1.5 rounded-full bg-current" />
+      {t(`integrations.status.${on ? "connected" : data.baseUrl ? "disabled" : "notConfigured"}`)}
+    </Badge>
+  );
+}
+
+function PassboltAdminPage() {
+  const { t } = useTranslation();
+  const qc = useQueryClient();
+  const { data: s, isLoading } = useQuery({ queryKey: PASSBOLT_KEY, queryFn: () => api.get<PassboltView>("/admin/integrations/passbolt") });
+  const [url, setUrl] = useState("");
+  useEffect(() => {
+    if (s) setUrl(s.baseUrl);
+  }, [s]);
+  const done = (next: PassboltView) => {
+    qc.setQueryData(PASSBOLT_KEY, next);
+    void qc.invalidateQueries({ queryKey: ["passbolt"] });
+  };
+  const fail = (e: unknown) => toast.error(e instanceof ApiError && e.code === "passbolt_bad_url" ? t("integrations.passbolt.badUrl") : e instanceof ApiError && e.code === "passbolt_incomplete" ? t("integrations.passbolt.needUrl") : t("common.error"));
+  const save = useMutation({
+    mutationFn: (p: { enabled?: boolean; baseUrl?: string }) => api.put<PassboltView>("/admin/integrations/passbolt", p),
+    onSuccess: (next) => {
+      done(next);
+      toast.success(t("common.saved"));
+    },
+    onError: fail,
+  });
+  const test = useMutation({
+    mutationFn: () => api.post<PassboltView>("/admin/integrations/passbolt/test"),
+    onSuccess: (next) => {
+      done(next);
+      if (next.lastTest?.ok) toast.success(t("integrations.passbolt.testOk"));
+      else toast.error(t("integrations.passbolt.testFailed", { error: next.lastTest?.error ?? "" }));
+    },
+    onError: fail,
+  });
+  if (isLoading || !s) return <Skeleton className="h-60 rounded-2xl" />;
+  return (
+    <section className="overflow-hidden rounded-2xl border bg-card/80">
+      <div className="flex flex-wrap items-center gap-4 border-b px-6 py-5">
+        <span className="flex size-11 items-center justify-center rounded-xl bg-grad-gold text-[#1a1204]">
+          <KeyRound className="size-5" />
+        </span>
+        <div className="min-w-0 flex-1">
+          <h3 className="font-display text-lg font-semibold">{t("integrations.passbolt.title")}</h3>
+          <div className="mt-1">
+            <PassboltStatus />
+          </div>
+        </div>
+        <label className="flex items-center gap-3 text-sm font-medium">
+          {t("integrations.enabled")}
+          <Switch checked={s.enabled} disabled={save.isPending} onCheckedChange={(v) => save.mutate({ enabled: v })} />
+        </label>
+      </div>
+      <form
+        className="space-y-4 px-6 py-6"
+        onSubmit={(e: FormEvent) => {
+          e.preventDefault();
+          save.mutate({ baseUrl: url.trim() });
+        }}
+      >
+        {!s.spikeAllowed && <p className="rounded-xl border border-amber-500/40 bg-amber-500/10 px-4 py-3 text-xs text-amber-200">{t("integrations.passbolt.spikeOff")}</p>}
+        <div className="space-y-2">
+          <Label htmlFor="pb-url">{t("integrations.passbolt.url")}</Label>
+          <Input id="pb-url" value={url} onChange={(e) => setUrl(e.target.value)} placeholder="https://passbolt.exemple.com" className="font-mono text-xs" />
+        </div>
+        <div className="flex flex-wrap items-center gap-2">
+          <Button type="submit" disabled={save.isPending} className="bg-grad-gold font-semibold text-[#1a1204] hover:brightness-105">
+            {save.isPending && <Loader2 className="size-4 animate-spin" />} {t("common.save")}
+          </Button>
+          <Button type="button" variant="outline" disabled={!s.baseUrl || test.isPending} onClick={() => test.mutate()}>
+            {test.isPending ? <Loader2 className="size-4 animate-spin" /> : <RefreshCw className="size-4" />} {t("integrations.passbolt.test")}
+          </Button>
+          {s.lastTest && <span className={cn("text-xs", s.lastTest.ok ? "text-emerald-400" : "text-destructive")}>{s.lastTest.ok ? t("integrations.passbolt.testOk") : t("integrations.passbolt.testFailed", { error: s.lastTest.error ?? "" })}</span>}
+        </div>
+        <p className="text-xs text-muted-foreground">{t("integrations.passbolt.help")}</p>
+      </form>
+    </section>
   );
 }
 

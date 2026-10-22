@@ -6021,3 +6021,83 @@ describe("notify a technician from a ticket", () => {
     await admin.put("/api/admin/integrations/teams", { enabled: false });
   });
 });
+
+describe("Sécurité › Passbolt (spike): the server only keeps a protected key and forwards a few calls", () => {
+  afterAll(() => vi.unstubAllGlobals());
+  it("integration address; the right; the key must be protected; only listed Passbolt paths go through; off when the spike is off", async () => {
+    resetRateLimit("login:ip:unknown");
+    const openpgp = await import("openpgp");
+    const { config } = await import("../server/config.ts");
+    const admin = await signIn("admin@akab.local");
+    const tech = await signIn("tech@akab.local");
+
+    // the integration: only the address, https only, admins only
+    expect((await tech.put("/api/admin/integrations/passbolt", { baseUrl: "https://pb.test" })).status).toBe(403);
+    expect((await admin.put("/api/admin/integrations/passbolt", { baseUrl: "http://pb.example.com" })).json.error).toBe("passbolt_bad_url");
+    expect((await admin.put("/api/admin/integrations/passbolt", { baseUrl: "https://user:pw@pb.test" })).json.error).toBe("passbolt_bad_url");
+    expect((await admin.put("/api/admin/integrations/passbolt", { enabled: true })).json.error).toBe("passbolt_incomplete");
+    const calls: { url: string; init: RequestInit }[] = [];
+    vi.stubGlobal("fetch", vi.fn(async (url: unknown, init: RequestInit = {}) => {
+      calls.push({ url: String(url), init });
+      if (String(url).endsWith("/healthcheck/status.json")) return new Response(JSON.stringify({ body: "OK" }), { status: 200 });
+      return new Response(JSON.stringify({ header: { code: 200 }, body: [{ id: "x" }] }), { status: 200, headers: { "content-type": "application/json", "set-cookie": "pb=1" } });
+    }));
+    expect((await admin.put("/api/admin/integrations/passbolt", { enabled: true, baseUrl: "https://pb.test/" })).json).toMatchObject({ enabled: true, baseUrl: "https://pb.test", spikeAllowed: true });
+    expect((await admin.post("/api/admin/integrations/passbolt/test")).json.lastTest).toMatchObject({ ok: true });
+
+    // the right: administrators have it, a technician does not
+    expect((await admin.get("/api/passbolt/status")).json).toMatchObject({ enabled: true, baseUrl: "https://pb.test", hasKey: false });
+    expect((await tech.get("/api/passbolt/status")).status).toBe(403);
+    expect((await admin.get("/api/me")).json.features).toEqual({ passbolt: true });
+
+    // the key: must be protected by a passphrase; kept sealed; given back to its owner only
+    const protectedKey = (await openpgp.generateKey({ type: "ecc", curve: "curve25519Legacy", userIDs: [{ name: "Test", email: "t@test.example" }], passphrase: "pass phrase here", format: "armored" })).privateKey;
+    const openKey = (await openpgp.generateKey({ type: "ecc", curve: "curve25519Legacy", userIDs: [{ name: "Open", email: "o@test.example" }], format: "armored" })).privateKey;
+    const uid = "11111111-2222-4333-8444-555555555555";
+    expect((await admin.put("/api/passbolt/key", { armoredKey: "x".repeat(200), passboltUserId: uid })).json.error).toBe("passbolt_bad_key");
+    expect((await admin.put("/api/passbolt/key", { armoredKey: openKey, passboltUserId: uid })).json.error).toBe("passbolt_key_unprotected");
+    const saved = await admin.put("/api/passbolt/key", { armoredKey: protectedKey, passboltUserId: uid });
+    expect(saved.status).toBe(200);
+    const row = (await db().select().from(schema.passboltKeys))[0];
+    expect(row.armoredSealed.startsWith("v1.")).toBe(true);
+    expect(row.armoredSealed).not.toContain("PGP");
+    const back = (await admin.get("/api/passbolt/key")).json;
+    expect(back).toMatchObject({ passboltUserId: uid, fingerprint: saved.json.fingerprint });
+    expect(back.armoredKey).toContain("BEGIN PGP PRIVATE KEY BLOCK");
+    expect((await admin.get("/api/passbolt/status")).json).toMatchObject({ hasKey: true, fingerprint: saved.json.fingerprint });
+
+    // the forwarding: a listed path, the person's own bearer token, no cookie of the portal, no cookie back
+    calls.length = 0;
+    const list = await admin.get("/api/passbolt/proxy/resources.json?api-version=v2&contain[permission]=1");
+    expect(list.status).toBe(200);
+    expect(list.json.body).toEqual([{ id: "x" }]);
+    expect(calls[0].url).toBe("https://pb.test/resources.json?api-version=v2&contain[permission]=1");
+    expect((calls[0].init.headers as Record<string, string>).cookie).toBeUndefined();
+    // anything else: refused before it leaves
+    calls.length = 0;
+    expect((await admin.get("/api/passbolt/proxy/users.json")).json.error).toBe("passbolt_path");
+    expect((await admin.get("/api/passbolt/proxy/resources/not-a-uuid.json")).json.error).toBe("passbolt_path");
+    expect((await admin.get("/api/passbolt/proxy/../../etc/passwd")).status).toBeGreaterThanOrEqual(400);
+    expect((await admin.get("/api/passbolt/proxy/resources.json?x=a;b")).json.error).toBe("passbolt_path");
+    expect((await admin.del("/api/passbolt/proxy/resources.json")).status).toBe(405);
+    expect(calls).toHaveLength(0);
+    // a secret read is logged as an event, never with the secret
+    expect((await admin.post("/api/passbolt/reveal-log", { resourceId: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa" })).status).toBe(200);
+    expect((await db().select().from(schema.auditLog).where(eq(schema.auditLog.action, "passbolt.reveal"))).length).toBe(1);
+
+    // the key goes with its owner's choice
+    expect((await admin.del("/api/passbolt/key")).status).toBe(200);
+    expect((await admin.get("/api/passbolt/key")).status).toBe(404);
+
+    // off (production, unless PASSBOLT_SPIKE=true): nothing works, the menu is hidden
+    (config as { passboltEnabled: boolean }).passboltEnabled = false;
+    try {
+      expect((await admin.get("/api/passbolt/status")).json.error).toBe("passbolt_disabled");
+      expect((await admin.get("/api/passbolt/proxy/resources.json")).status).toBe(403);
+      expect((await admin.get("/api/me")).json.features).toEqual({ passbolt: false });
+    } finally {
+      (config as { passboltEnabled: boolean }).passboltEnabled = true;
+    }
+    await admin.put("/api/admin/integrations/passbolt", { enabled: false });
+  });
+});

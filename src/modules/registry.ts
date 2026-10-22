@@ -1,4 +1,4 @@
-import { FilePlus2, History, Workflow, Coffee, CreditCard, BarChart3, BookOpen, FolderKanban, ClipboardCheck, Building2, CalendarCheck, Clock, FileSignature, LayoutDashboard, Mail, Megaphone, MonitorSmartphone, Receipt, Store, Ticket, Wallet, Wrench, type LucideIcon } from "lucide-react";
+import { FilePlus2, History, Workflow, Coffee, CreditCard, BarChart3, BookOpen, FolderKanban, ClipboardCheck, Building2, CalendarCheck, Clock, FileSignature, LayoutDashboard, Mail, Megaphone, MonitorSmartphone, Receipt, KeyRound, Store, Ticket, Wallet, Wrench, type LucideIcon } from "lucide-react";
 import type { PermissionKey } from "@shared/permissions";
 
 /**
@@ -11,7 +11,6 @@ export const NAV_SECTIONS = [
   { key: "team", labelKey: "nav.team" },
   { key: "tools", labelKey: "nav.myTools" },
   { key: "command", labelKey: "nav.commandCenter" },
-  { key: "projects", labelKey: "nav.projectsSection" },
   { key: "management", labelKey: "nav.management" },
   { key: "sales", labelKey: "nav.sales" },
   { key: "accounting", labelKey: "nav.accounting" },
@@ -29,9 +28,14 @@ export type NavModule = {
   optIn?: "outlook";
   /** Also needs this right, or else the rule (e.g. the timesheet only for those who fill one) */
   orRight?: PermissionKey;
-  rule?: "timesheetRequired";
+  rule?: "timesheetRequired" | "passbolt";
   upcoming?: boolean;
+  /** A collapsible sub-menu inside its section (the entries of one group sit under its header) */
+  group?: "security";
 };
+
+/** The sub-menus inside a section */
+export const NAV_GROUPS = { security: { labelKey: "nav.security" } } as const;
 
 export const STAFF_MODULES: NavModule[] = [
   { key: "dashboard", path: "/", labelKey: "nav.dashboard", icon: LayoutDashboard, section: "team", permission: "dashboard.view" },
@@ -49,7 +53,8 @@ export const STAFF_MODULES: NavModule[] = [
   { key: "quotesNew", path: "/accounting/quotes/new", labelKey: "nav.quotesNew", icon: FilePlus2, section: "sales", permission: "quotes.manage" },
   { key: "store", path: "/store", labelKey: "nav.store", icon: Store, section: "management", permission: "store.view" },
   { key: "services", path: "/services", labelKey: "nav.services", icon: Wrench, section: "management", permission: "services.view" },
-  { key: "projects", path: "/projects", labelKey: "nav.projects", icon: FolderKanban, section: "projects", upcoming: true },
+  { key: "projects", path: "/projects", labelKey: "nav.projects", icon: FolderKanban, section: "command", upcoming: true },
+  { key: "passbolt", path: "/security/passbolt", labelKey: "nav.passbolt", icon: KeyRound, section: "command", group: "security", permission: "passbolt.use", rule: "passbolt" },
   { key: "reports", path: "/reports", labelKey: "nav.reports", icon: BarChart3, section: "management", upcoming: true },
   { key: "meetings", path: "/meetings", labelKey: "nav.meetings", icon: CalendarCheck, section: "team", permission: "meetings.view" },
   { key: "breakroom", path: "/breakroom", labelKey: "nav.breakroom", icon: Coffee, section: "team", permission: "breakroom.use" },
