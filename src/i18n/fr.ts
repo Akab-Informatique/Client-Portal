@@ -2884,6 +2884,8 @@ const fr = {
   integrations: {
     passbolt: {
       title: "Passbolt (coffre de mots de passe)",
+      hideMenu: "Cacher le menu Sécurité dans la barre latérale",
+      hideMenuHint: "Tant que c'est activé, rien de Sécurité n'apparaît dans la barre latérale, pour personne. Désactivez pour montrer Sécurité › Passbolt à ceux qui ont le droit.",
       url: "Adresse du serveur Passbolt",
       badUrl: "Adresse invalide : il faut une adresse https.",
       needUrl: "Entrez d'abord l'adresse du serveur.",

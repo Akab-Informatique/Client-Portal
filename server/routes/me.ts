@@ -1,4 +1,4 @@
-import { config } from "../config.ts";
+import { passboltMenuShown } from "../lib/passbolt.ts";
 import { Hono } from "hono";
 import { HTTPException } from "hono/http-exception";
 import { eq } from "drizzle-orm";
@@ -39,7 +39,7 @@ export async function loadMe(a: AuthContext) {
     viewAs: a.viewAs,
     realUser: a.viewAs ? { name: a.realUser.name, email: a.realUser.email } : null,
     /** Parts switched on for this server (Sécurité › Passbolt is off in production unless set) */
-    features: { passbolt: config.passboltEnabled },
+    features: { passbolt: await passboltMenuShown() },
     /** Fills in a weekly timesheet (otherwise the Timesheets entry is hidden, unless they manage everyone's) */
     timesheetRequired: u.timesheetRequired,
     preferences: { dashboard: prefs?.dashboard ?? null, theme: prefs?.theme ?? "dark", outlook: prefs?.outlook ?? false, bankHours: prefs?.bankHoursDefault ?? false, notify: prefs?.notifyDefaults ?? { email: true, sms: false, teams: false } },

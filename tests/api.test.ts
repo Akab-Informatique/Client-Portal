@@ -6048,6 +6048,12 @@ describe("Sécurité › Passbolt (spike): the server only keeps a protected key
     // the right: administrators have it, a technician does not
     expect((await admin.get("/api/passbolt/status")).json).toMatchObject({ enabled: true, baseUrl: "https://pb.test", hasKey: false });
     expect((await tech.get("/api/passbolt/status")).status).toBe(403);
+    // the trigger: while it is on (the start) nothing of Sécurité shows; off, it shows
+    expect((await admin.get("/api/passbolt/status")).json).toMatchObject({ enabled: true });
+    expect((await admin.get("/api/admin/integrations/passbolt")).json.hideMenu).toBe(true);
+    expect((await admin.get("/api/me")).json.features).toEqual({ passbolt: false });
+    expect((await tech.put("/api/admin/integrations/passbolt", { hideMenu: false })).status).toBe(403);
+    expect((await admin.put("/api/admin/integrations/passbolt", { hideMenu: false })).json.hideMenu).toBe(false);
     expect((await admin.get("/api/me")).json.features).toEqual({ passbolt: true });
 
     // the key: must be protected by a passphrase; kept sealed; given back to its owner only
@@ -6094,10 +6100,11 @@ describe("Sécurité › Passbolt (spike): the server only keeps a protected key
     try {
       expect((await admin.get("/api/passbolt/status")).json.error).toBe("passbolt_disabled");
       expect((await admin.get("/api/passbolt/proxy/resources.json")).status).toBe(403);
+      // even with the trigger off, nothing shows while the spike is off on the server
       expect((await admin.get("/api/me")).json.features).toEqual({ passbolt: false });
     } finally {
       (config as { passboltEnabled: boolean }).passboltEnabled = true;
     }
-    await admin.put("/api/admin/integrations/passbolt", { enabled: false });
+    await admin.put("/api/admin/integrations/passbolt", { enabled: false, hideMenu: true });
   });
 });

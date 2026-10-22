@@ -333,7 +333,7 @@ function AiPage() {
 }
 
 // ── Passbolt: the vault behind Sécurité › Passbolt (the server address only; nothing secret is stored here) ──
-type PassboltView = { enabled: boolean; baseUrl: string; lastTest: { ok: boolean; at: string; error?: string } | null; spikeAllowed: boolean };
+type PassboltView = { enabled: boolean; baseUrl: string; hideMenu: boolean; lastTest: { ok: boolean; at: string; error?: string } | null; spikeAllowed: boolean };
 const PASSBOLT_KEY = ["admin", "integrations", "passbolt"];
 
 function PassboltStatus() {
@@ -363,9 +363,11 @@ function PassboltAdminPage() {
   };
   const fail = (e: unknown) => toast.error(e instanceof ApiError && e.code === "passbolt_bad_url" ? t("integrations.passbolt.badUrl") : e instanceof ApiError && e.code === "passbolt_incomplete" ? t("integrations.passbolt.needUrl") : t("common.error"));
   const save = useMutation({
-    mutationFn: (p: { enabled?: boolean; baseUrl?: string }) => api.put<PassboltView>("/admin/integrations/passbolt", p),
+    mutationFn: (p: { enabled?: boolean; baseUrl?: string; hideMenu?: boolean }) => api.put<PassboltView>("/admin/integrations/passbolt", p),
     onSuccess: (next) => {
       done(next);
+      // the sidebar follows the trigger at once
+      void qc.invalidateQueries({ queryKey: ["auth"] });
       toast.success(t("common.saved"));
     },
     onError: fail,
@@ -404,6 +406,13 @@ function PassboltAdminPage() {
           save.mutate({ baseUrl: url.trim() });
         }}
       >
+        <label className="flex items-start justify-between gap-4 rounded-xl border p-4 text-sm">
+          <span className="space-y-0.5">
+            <span className="block font-medium">{t("integrations.passbolt.hideMenu")}</span>
+            <span className="block text-xs text-muted-foreground">{t("integrations.passbolt.hideMenuHint")}</span>
+          </span>
+          <Switch checked={s.hideMenu} disabled={save.isPending} onCheckedChange={(v) => save.mutate({ hideMenu: v })} aria-label={t("integrations.passbolt.hideMenu")} />
+        </label>
         {!s.spikeAllowed && <p className="rounded-xl border border-amber-500/40 bg-amber-500/10 px-4 py-3 text-xs text-amber-200">{t("integrations.passbolt.spikeOff")}</p>}
         <div className="space-y-2">
           <Label htmlFor="pb-url">{t("integrations.passbolt.url")}</Label>

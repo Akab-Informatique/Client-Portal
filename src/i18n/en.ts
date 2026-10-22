@@ -2886,6 +2886,8 @@ const en: Dict = {
   integrations: {
     passbolt: {
       title: "Passbolt (password vault)",
+      hideMenu: "Hide the Security menu from the sidebar",
+      hideMenuHint: "While this is on, nothing of Security shows in the sidebar, for anyone. Turn it off to show Security › Passbolt to those who have the right.",
       url: "Passbolt server address",
       badUrl: "Invalid address: an https address is needed.",
       needUrl: "Enter the server address first.",

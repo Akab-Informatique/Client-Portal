@@ -165,13 +165,13 @@ export const integrationRoutes = new Hono<AppEnv>()
   .get("/passbolt", async (c) => c.json(await passboltView()))
   .put("/passbolt", async (c) => {
     const a = auth(c);
-    const p = await body(c, z.object({ enabled: z.boolean().optional(), baseUrl: z.string().trim().max(300).optional() }));
+    const p = await body(c, z.object({ enabled: z.boolean().optional(), baseUrl: z.string().trim().max(300).optional(), hideMenu: z.boolean().optional() }));
     const url = p.baseUrl?.replace(/\/+$/, "");
     if (url !== undefined && url !== "" && !validBaseUrl(url)) throw new HTTPException(400, { message: "passbolt_bad_url" });
     const cur = await passboltSettings();
     if (p.enabled && !(url || cur.baseUrl)) throw new HTTPException(400, { message: "passbolt_incomplete" });
-    await savePassboltSettings(a.user.id, { ...(p.enabled !== undefined ? { enabled: p.enabled } : {}), ...(url !== undefined ? { baseUrl: url } : {}) });
-    await audit(a.user.id, "integration.passbolt.updated", null, { enabled: p.enabled, baseUrl: url });
+    await savePassboltSettings(a.user.id, { ...(p.enabled !== undefined ? { enabled: p.enabled } : {}), ...(url !== undefined ? { baseUrl: url } : {}), ...(p.hideMenu !== undefined ? { hideMenu: p.hideMenu } : {}) });
+    await audit(a.user.id, "integration.passbolt.updated", null, { enabled: p.enabled, baseUrl: url, hideMenu: p.hideMenu });
     return c.json(await passboltView());
   })
   .post("/passbolt/test", async (c) => {
@@ -354,5 +354,5 @@ async function teamsView() {
 /** Passbolt as the admin sees it, and whether the spike is allowed on this server */
 async function passboltView() {
   const s = await passboltSettings();
-  return { enabled: s.enabled, baseUrl: s.baseUrl, lastTest: s.lastTest ?? null, spikeAllowed: config.passboltEnabled };
+  return { enabled: s.enabled, baseUrl: s.baseUrl, hideMenu: s.hideMenu, lastTest: s.lastTest ?? null, spikeAllowed: config.passboltEnabled };
 }

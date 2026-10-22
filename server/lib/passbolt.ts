@@ -10,7 +10,8 @@ import { config } from "../config.ts";
  */
 export const PASSBOLT_PROVIDER = "passbolt";
 
-export type PassboltSettings = { enabled: boolean; baseUrl: string; lastTest?: { ok: boolean; at: string; error?: string } };
+/** hideMenu: the trigger in Intégrations — while it is on, nothing of Sécurité shows in the sidebar (on until an admin turns it off) */
+export type PassboltSettings = { enabled: boolean; baseUrl: string; hideMenu: boolean; lastTest?: { ok: boolean; at: string; error?: string } };
 
 /** https only; a local address over http is allowed outside production (a test server) */
 export function validBaseUrl(u: string): boolean {
@@ -27,13 +28,13 @@ export function validBaseUrl(u: string): boolean {
 export async function passboltSettings(): Promise<PassboltSettings> {
   const [row] = await db().select().from(schema.integrations).where(eq(schema.integrations.provider, PASSBOLT_PROVIDER));
   const c = (row?.config ?? {}) as Partial<PassboltSettings>;
-  return { enabled: row?.enabled ?? false, baseUrl: (c.baseUrl ?? "").replace(/\/+$/, ""), lastTest: c.lastTest };
+  return { enabled: row?.enabled ?? false, baseUrl: (c.baseUrl ?? "").replace(/\/+$/, ""), hideMenu: c.hideMenu ?? true, lastTest: c.lastTest };
 }
 
 export async function savePassboltSettings(actorId: string, p: Partial<PassboltSettings>) {
   const cur = await passboltSettings();
   const next = { ...cur, ...p };
-  const values = { enabled: next.enabled, config: { baseUrl: next.baseUrl, lastTest: next.lastTest }, updatedBy: actorId, updatedAt: new Date() };
+  const values = { enabled: next.enabled, config: { baseUrl: next.baseUrl, hideMenu: next.hideMenu, lastTest: next.lastTest }, updatedBy: actorId, updatedAt: new Date() };
   await db()
     .insert(schema.integrations)
     .values({ provider: PASSBOLT_PROVIDER, ...values })
@@ -79,6 +80,11 @@ export async function forward(method: "GET" | "POST", path: string, query: strin
   const text = await res.text();
   if (text.length > MAX_BYTES) throw new Error("passbolt_too_big");
   return { status: res.status, text };
+}
+
+/** Is Sécurité shown in the sidebar? The spike is allowed on this server, and the trigger in Intégrations is off. */
+export async function passboltMenuShown(): Promise<boolean> {
+  return config.passboltEnabled && !(await passboltSettings()).hideMenu;
 }
 
 /** Does the server answer? (its public health status, no sign-in) */
