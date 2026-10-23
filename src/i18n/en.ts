@@ -2921,6 +2921,7 @@ const en: Dict = {
         itcloud_busy: "A sync is already running.",
         itcloud_customer_not_matched: "Match this ITCloud customer to a client first.",
         itcloud_contract_not_found: "That is no longer an active contract of this client.",
+        itcloud_service_not_found: "That service is not in the last report any more: sync.",
         itcloud_error: "Unexpected error.",
       },
       list: {
@@ -2976,6 +2977,11 @@ const en: Dict = {
         failed: "Sync failed: {{error}}",
         summary: "{{active}} active services · {{created}} added · {{updated}} changed · {{removed}} removed",
         filter: "Filter by state",
+        contract: "Contract of this service",
+        contractDefault: "The customer's contract",
+        contractHint: "Put this service on a different contract than the ITCloud customer's (picked in step 1, else automatic).",
+        contractMoved: "Service moved to that contract.",
+        contractSaved: "Contract saved: applied at the next sync.",
         allStates: "All states",
         empty: "No services received yet: run the sync.",
         state: {

@@ -15,6 +15,7 @@ import {
   ItcloudError,
   saveItcloudSettings,
   setCustomerContract,
+  setServiceContract,
   serviceStates,
   servicePlan,
   syncItcloud,
@@ -126,6 +127,21 @@ export const itcloudRoutes = new Hono<AppEnv>()
   })
 
   // ── the services each customer has, and the sync onto contracts ──
+  /** Pick by hand the contract of one ITCloud service (over the customer's); null: back to the customer's / automatic */
+  .put("/services/:id/contract", async (c) => {
+    const a = auth(c);
+    const id = Number(c.req.param("id"));
+    if (!Number.isInteger(id) || id <= 0) throw new HTTPException(400, { message: "invalid_id" });
+    const p = await body(c, z.object({ contractId: zUuid.nullable() }));
+    try {
+      const r = await setServiceContract(id, p.contractId);
+      await audit(a.user.id, "itcloud.service_contract_picked", String(id), { contractId: p.contractId, moved: r.moved });
+      return c.json(r);
+    } catch (e) {
+      if (e instanceof ItcloudError) throw new HTTPException(e.code === "contract_not_found" || e.code === "service_not_found" || e.code === "customer_not_matched" ? 404 : 400, { message: e.code });
+      throw e;
+    }
+  })
   .get("/services", async (c) => c.json({ rows: await serviceStates(), lastSync: (await itcloudSettings()).lastSync ?? null }))
   .post("/sync", async (c) => {
     const a = auth(c);

@@ -6742,6 +6742,24 @@ describe("ITCloud: vendor, clients matched, services kept on contracts", () => {
     expect((await admin.post("/api/admin/itcloud/sync", {})).json.counts).toMatchObject({ created: 0, updated: 2, removed: 0 });
     expect((await admin.get(`/api/crm/clients/${client.id}/contracts/${other.id}/services`)).json).toHaveLength(2);
     expect((await admin.get(`/api/crm/clients/${client.id}/contracts/${contract.id}/services`)).json).toHaveLength(0);
+    // one service alone on another contract (over the customer's pick): its line moves at once, the other stays
+    expect((await admin.put("/api/admin/itcloud/services/9001/contract", { contractId: contract.id })).json).toEqual({ moved: true });
+    expect((await admin.get(`/api/crm/clients/${client.id}/contracts/${contract.id}/services`)).json.map((l: any) => l.name)).toEqual(["Exchange Plan 1"]);
+    expect((await admin.get(`/api/crm/clients/${client.id}/contracts/${other.id}/services`)).json.map((l: any) => l.name)).toEqual(["Cloud Security"]);
+    const row = (await admin.get("/api/admin/itcloud/services")).json.rows.find((r: any) => r.serviceId === 9001);
+    expect(row).toMatchObject({ contractId: contract.id, contractName: "Services gérés" });
+    expect(row.contracts.map((k: any) => k.id)).toEqual(expect.arrayContaining([contract.id, other.id]));
+    // it stays there through a sync; the checks
+    expect((await admin.post("/api/admin/itcloud/sync", {})).json.counts).toMatchObject({ created: 0, updated: 0, removed: 0 });
+    expect((await admin.get(`/api/crm/clients/${client.id}/contracts/${contract.id}/services`)).json.map((l: any) => l.name)).toEqual(["Exchange Plan 1"]);
+    expect((await admin.put("/api/admin/itcloud/services/9003/contract", { contractId: contract.id })).json.error).toBe("customer_not_matched");
+    expect((await admin.put("/api/admin/itcloud/services/1/contract", { contractId: contract.id })).json.error).toBe("service_not_found");
+    expect((await admin.put("/api/admin/itcloud/services/9001/contract", { contractId: "00000000-0000-4000-8000-000000000000" })).json.error).toBe("contract_not_found");
+    expect((await tech.put("/api/admin/itcloud/services/9001/contract", { contractId: null })).status).toBe(403);
+    // cleared: back to the customer's contract
+    expect((await admin.put("/api/admin/itcloud/services/9001/contract", { contractId: null })).json).toEqual({ moved: true });
+    expect((await admin.get(`/api/crm/clients/${client.id}/contracts/${other.id}/services`)).json).toHaveLength(2);
+
     // back to the first one by hand; cleared, the portal chooses again (never breaks, never loses a line)
     expect((await admin.put("/api/admin/itcloud/clients/777/contract", { contractId: contract.id })).status).toBe(200);
     expect((await admin.post("/api/admin/itcloud/sync", {})).json.counts).toMatchObject({ created: 0, updated: 2, removed: 0 });

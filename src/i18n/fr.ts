@@ -2919,6 +2919,7 @@ const fr = {
         itcloud_busy: "Une synchronisation est déjà en cours.",
         itcloud_customer_not_matched: "Associez d'abord ce client ITCloud à un client.",
         itcloud_contract_not_found: "Ce contrat n'est plus un contrat actif de ce client.",
+        itcloud_service_not_found: "Ce service n'est plus dans le dernier rapport : synchronisez.",
         itcloud_error: "Erreur inattendue.",
       },
       list: {
@@ -2974,6 +2975,11 @@ const fr = {
         failed: "Échec de la synchronisation : {{error}}",
         summary: "{{active}} services actifs · {{created}} ajoutés · {{updated}} modifiés · {{removed}} retirés",
         filter: "Filtrer par état",
+        contract: "Contrat de ce service",
+        contractDefault: "Contrat du client",
+        contractHint: "Mettre ce service sur un autre contrat que celui du client ITCloud (choisi à l'étape 1, sinon automatique).",
+        contractMoved: "Service déplacé sur ce contrat.",
+        contractSaved: "Contrat enregistré : appliqué à la prochaine synchronisation.",
         allStates: "Tous les états",
         empty: "Aucun service reçu pour l'instant : lancez la synchronisation.",
         state: {

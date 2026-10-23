@@ -493,7 +493,7 @@ function ServicesStep() {
 }
 
 // ── 3. the sync: each customer's services and the contract that carries them ──
-type Row = { serviceId: number; clientName: string; productGroup: string; product: string; status: string; billingCycle: string; quantity: number; amountCents: number; state: string; contractName: string | null };
+type Row = { serviceId: number; clientName: string; productGroup: string; product: string; status: string; billingCycle: string; quantity: number; amountCents: number; state: string; contractName: string | null; contractId: string | null; contracts: { id: string; name: string }[] };
 const STATES = ["synced", "client_unlinked", "product_unmatched", "no_contract", "inactive"] as const;
 
 function SyncStep() {
@@ -509,6 +509,14 @@ function SyncStep() {
       else toast.error(t("integrations.itcloud.sync.failed", { error: t(`integrations.itcloud.errors.${r.error}`, { defaultValue: r.error }) }));
       void qc.invalidateQueries({ queryKey: [...KEY, "services"] });
       void qc.invalidateQueries({ queryKey: KEY });
+    },
+    onError: (e) => toast.error(errorText(t, e)),
+  });
+  const pick = useMutation({
+    mutationFn: (p: { serviceId: number; contractId: string | null }) => api.put<{ moved: boolean }>(`/admin/itcloud/services/${p.serviceId}/contract`, { contractId: p.contractId }),
+    onSuccess: (r) => {
+      toast.success(t(r.moved ? "integrations.itcloud.sync.contractMoved" : "integrations.itcloud.sync.contractSaved"));
+      void qc.invalidateQueries({ queryKey: [...KEY, "services"] });
     },
     onError: (e) => toast.error(errorText(t, e)),
   });
@@ -566,6 +574,24 @@ function SyncStep() {
                   </span>
                 </span>
                 <span className="font-mono text-xs text-muted-foreground">{money(r.amountCents, i18n.language)}</span>
+                {/* the contract of this service: the customer's choice (or the portal's), or one picked for this service alone */}
+                {r.contracts.length > 0 && r.status.toLowerCase() === "active" && (
+                  <select
+                    value={r.contractId ?? ""}
+                    disabled={pick.isPending}
+                    onChange={(e) => pick.mutate({ serviceId: r.serviceId, contractId: e.target.value || null })}
+                    className="h-8 max-w-48 rounded-md border bg-transparent px-2 text-xs"
+                    aria-label={t("integrations.itcloud.sync.contract")}
+                    title={t("integrations.itcloud.sync.contractHint")}
+                  >
+                    <option value="">{t("integrations.itcloud.sync.contractDefault")}</option>
+                    {r.contracts.map((k) => (
+                      <option key={k.id} value={k.id}>
+                        {k.name}
+                      </option>
+                    ))}
+                  </select>
+                )}
                 <Badge variant="outline" className={cn("w-40 justify-center", r.state === "synced" ? "border-emerald-500/40 text-emerald-400" : r.state === "inactive" ? "text-muted-foreground" : "border-amber-500/40 text-amber-300")}>
                   {t(`integrations.itcloud.sync.state.${r.state}`)}
                 </Badge>

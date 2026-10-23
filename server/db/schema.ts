@@ -1922,6 +1922,15 @@ export const itcloudClients = pgTable("itcloud_clients", {
   createdAt: created(),
 });
 
+/** A contract picked by hand for one ITCloud service (over the one picked for its customer); kept across syncs, keyed by the ITCloud service id */
+export const itcloudServiceContracts = pgTable("itcloud_service_contracts", {
+  serviceId: integer("service_id").primaryKey(),
+  contractId: uuid("contract_id")
+    .notNull()
+    .references(() => clientContracts.id, { onDelete: "cascade" }),
+  createdAt: created(),
+});
+
 /** The last ITCloud services report (one row per service of a customer), kept to show what is matched and what is not */
 export const itcloudServices = pgTable(
   "itcloud_services",
