@@ -107,6 +107,13 @@ export type CrmContract = {
   isSupportDefault: boolean;
   /** The usual hourly rate of Admin › Facturation, in cents */
   usualRateCents: number;
+  /** How a recurring services contract is charged */
+  billingPeriod?: "monthly" | "yearly";
+  /** The day charging was stopped (inactive after charges had started) */
+  endedOn?: string | null;
+  serviceCount?: number;
+  /** What it charges: potential revenue over its term, a full period (per month or per year), the next charge */
+  summary?: { revenueCents: number; perPeriodCents: number; yearlyExtraCents: number; endsOn: string | null; dueCents: number; next: { date: string; amountCents: number; prorated: boolean } | null };
 };
 /** A contract type of Admin › Types de contrats, as the contract forms list it */
 export type ContractTypeOption = { key: string; name: string; kind: "recurring" | "hourly" | "banked" | "fixed" };

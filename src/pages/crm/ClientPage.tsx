@@ -8,7 +8,7 @@ import {
   AlertTriangle,
   Building2,
   Check,
-  Star,
+ 
   CircleCheck,
   CircleDashed,
   Clock,
@@ -49,8 +49,8 @@ import { api, ApiError } from "@/lib/api";
 import { useCan } from "@/lib/session";
 import { cn } from "@/lib/utils";
 import { PRIORITY_STYLE, STATUS_STYLE, shortDate, ticketErrorText } from "@/pages/tickets/shared";
-import { crmErrorText, money, useContractTypes, useCrmClients, type CrmInvoice, type CrmInvoices, type InvoiceStatus, type CrmClient, type CrmContact, type CrmContract, type CrmDetail, type CrmTicket, type InvoiceSettings } from "./shared";
-import { ContractServices } from "./ContractServices";
+import { crmErrorText, money, useCrmClients, type CrmInvoice, type CrmInvoices, type InvoiceStatus, type CrmClient, type CrmContact, type CrmContract, type CrmDetail, type CrmTicket, type InvoiceSettings } from "./shared";
+import { ContractWindow, NewContractDialog } from "./ContractDialog";
 
 const TABS = ["info", "tickets", "invoices", "contacts", "contracts", "invoice"] as const;
 type Tab = (typeof TABS)[number];
@@ -966,228 +966,60 @@ function ContactForm({ clientId, contact, onDone }: { clientId: string; contact?
 }
 
 // ── Contracts ──
+/** The client's contracts: a list with what each charges; making or opening one is a window of its own (ContractDialog). */
 function ContractsTab({ client }: { client: CrmDetail }) {
-  const { t } = useTranslation();
+  const { t, i18n } = useTranslation();
   const can = useCan();
-  const qc = useQueryClient();
   const { data: contracts = [], isLoading } = useQuery({ queryKey: ["crm", "client", client.id, "contracts"], queryFn: () => api.get<CrmContract[]>(`/crm/clients/${client.id}/contracts`) });
-  const billing = useMutation({
-    mutationFn: (p: { id: string; patch: Record<string, unknown> }) => api.patch(`/crm/clients/${client.id}/contracts/${p.id}`, p.patch),
-    onSuccess: () => {
-      void qc.invalidateQueries({ queryKey: ["crm", "client", client.id, "contracts"] });
-      void qc.invalidateQueries({ queryKey: ["tickets"] });
-      toast.success(t("crm.contracts.billingSaved"));
-    },
-    onError: (e) => toast.error(ticketErrorText(t, e)),
-  });
-  const auto = useMutation({
-    mutationFn: (p: { id: string; autoApprove: boolean }) => api.patch<{ approved: number }>(`/crm/clients/${client.id}/contracts/${p.id}`, { autoApprove: p.autoApprove }),
-    onSuccess: (r, p) => {
-      void qc.invalidateQueries({ queryKey: ["crm", "client", client.id, "contracts"] });
-      void qc.invalidateQueries({ queryKey: ["billables"] });
-      toast.success(p.autoApprove ? t("crm.contracts.autoOn", { count: r.approved }) : t("crm.contracts.autoOff"));
-    },
-    onError: () => toast.error(t("common.error")),
-  });
   const [adding, setAdding] = useState(false);
+  const [openId, setOpenId] = useState<string | null>(null);
   return (
     <Card
       title={t("crm.tabs.contracts")}
       icon={<FileText className="size-4" />}
       aside={
-        can("crm.billing") && !adding ? (
+        can("crm.billing") ? (
           <Button size="sm" variant="outline" onClick={() => setAdding(true)}>
             <Plus className="size-3.5" /> {t("crm.contracts.new")}
           </Button>
         ) : undefined
       }
     >
-      {adding && <NewContract client={client} onDone={() => setAdding(false)} />}
+      {adding && <NewContractDialog client={client} onClose={() => setAdding(false)} />}
+      {openId && <ContractWindow client={client} contractId={openId} onClose={() => setOpenId(null)} />}
       {isLoading && <Loader2 className="mx-auto size-5 animate-spin text-muted-foreground" />}
       {!isLoading && contracts.length === 0 && <p className="py-6 text-center text-sm text-muted-foreground">{t("crm.contracts.none")}</p>}
       {contracts.length > 0 && (
         <ul className="divide-y divide-border/60 overflow-hidden rounded-xl border">
           {contracts.map((k) => (
-            <li key={k.id} className={cn("flex flex-wrap items-center gap-x-4 gap-y-1 px-3 py-2.5", !k.active && "opacity-60")}>
-              <FileText className="size-4 shrink-0 text-muted-foreground" />
-              <span className="min-w-0 flex-1 truncate text-sm font-medium">{k.name}</span>
-              {k.isSupportDefault && <span className="rounded-md border border-[color:var(--gold)]/40 bg-[color:var(--gold)]/10 px-1.5 py-0.5 text-[10px] font-semibold text-primary">{t("crm.contracts.supportDefault")}</span>}
-              {!k.active && <span className="text-[11px] text-muted-foreground">{t("crm.contracts.inactive")}</span>}
-              <span className="w-32 truncate text-xs text-muted-foreground">{k.type ?? "—"}</span>
-              <span className="w-44 text-xs text-muted-foreground">
-                {k.startDate ? shortDate(k.startDate) : "…"} → {k.endDate ? shortDate(k.endDate) : t("crm.contracts.noEnd")}
-              </span>
-              <label className="flex items-center gap-2 text-xs text-muted-foreground" title={t("crm.contracts.autoHint")}>
-                <Switch checked={k.autoApprove} disabled={!can("crm.billing") || auto.isPending} onCheckedChange={(v) => auto.mutate({ id: k.id, autoApprove: v })} /> {t("crm.contracts.auto")}
-              </label>
-              <ContractBilling k={k} editable={can("crm.billing")} busy={billing.isPending} onChange={(patch) => billing.mutate({ id: k.id, patch })} />
-              <ContractServices clientId={client.id} k={k} editable={can("crm.billing")} />
+            <li key={k.id}>
+              <button type="button" onClick={() => setOpenId(k.id)} className={cn("flex w-full flex-wrap items-center gap-x-4 gap-y-1 px-3 py-2.5 text-left transition-colors hover:bg-accent/40", !k.active && "opacity-60")}>
+                <FileText className="size-4 shrink-0 text-muted-foreground" />
+                <span className="min-w-0 flex-1 truncate text-sm font-medium">{k.name}</span>
+                {k.isSupportDefault && <span className="rounded-md border border-[color:var(--gold)]/40 bg-[color:var(--gold)]/10 px-1.5 py-0.5 text-[10px] font-semibold text-primary">{t("crm.contracts.supportDefault")}</span>}
+                {!k.active && <span className="text-[11px] text-muted-foreground">{k.endedOn ? t("crm.contracts.window.stoppedOn", { date: shortDate(k.endedOn) }) : t("crm.contracts.inactive")}</span>}
+                <span className="w-32 truncate text-xs text-muted-foreground">{k.type ?? "—"}</span>
+                <span className="w-44 text-xs text-muted-foreground">
+                  {k.startDate ? shortDate(k.startDate) : "…"} → {k.endDate ? shortDate(k.endDate) : t("crm.contracts.noEnd")}
+                </span>
+                {k.summary && (k.serviceCount ?? 0) > 0 ? (
+                  <span className="w-48 text-right text-xs">
+                    <span className="block font-mono font-semibold">
+                      {money(k.summary.perPeriodCents, i18n.language)} <span className="font-sans font-normal text-muted-foreground">{k.billingPeriod === "yearly" ? t("services.perYear") : t("services.perMonth")}</span>
+                    </span>
+                    <span className="block text-[11px] text-muted-foreground">
+                      {t("crm.contracts.window.revenue")} {money(k.summary.revenueCents, i18n.language)}
+                    </span>
+                  </span>
+                ) : (
+                  <span className="w-48 text-right text-[11px] text-muted-foreground">{t("crm.contracts.window.noLinesShort")}</span>
+                )}
+              </button>
             </li>
           ))}
         </ul>
       )}
     </Card>
-  );
-}
-
-/** The number a contract's kind asks for: an hourly rate, a monthly rate, a fixed price or the hours of the bank. */
-function figureOf(k: CrmContract): { field: string; value: number | null; unit: "$" | "h" } | null {
-  switch (k.billingMode) {
-    case "hourly":
-      return { field: "hourlyRate", value: k.hourlyRateCents, unit: "$" };
-    case "monthly":
-      return { field: "monthlyRate", value: k.monthlyRateCents, unit: "$" };
-    case "per_ticket":
-      return { field: "ticketRate", value: k.ticketRateCents, unit: "$" };
-    case "fixed":
-      return { field: "fixedPrice", value: k.fixedPriceCents, unit: "$" };
-    case "banked":
-      return { field: "bankedHours", value: k.bankedHoursX100, unit: "h" };
-    default:
-      return null;
-  }
-}
-
-/** A contract's type and the figure it asks for (hourly rate, monthly rate, fixed price, hours in the bank); and whether it is the default. */
-function ContractBilling({ k, editable, busy, onChange }: { k: CrmContract; editable: boolean; busy: boolean; onChange: (patch: Record<string, unknown>) => void }) {
-  const { t, i18n } = useTranslation();
-  const { data: types = [] } = useContractTypes();
-  const fig = figureOf(k);
-  const show = (v: number | null) => (v == null ? "" : String(v / 100));
-  const [rate, setRate] = useState(show(fig?.value ?? null));
-  useEffect(() => setRate(show(fig?.value ?? null)), [fig?.value, k.billingMode]);
-  const commit = () => {
-    if (!fig) return;
-    const v = rate.trim().replace(",", ".");
-    const n = v === "" ? null : Number(v);
-    if (n !== null && (!Number.isFinite(n) || n < 0)) return setRate(show(fig.value));
-    if ((n === null ? null : Math.round(n * 100)) !== fig.value) onChange({ [fig.field]: n });
-  };
-  return (
-    <div className="flex w-full flex-wrap items-center gap-x-3 gap-y-2 pl-7 pt-1">
-      <select
-        value={k.typeKey ?? ""}
-        disabled={!editable || busy}
-        onChange={(e) => e.target.value && onChange({ typeKey: e.target.value })}
-        className="h-8 rounded-md border bg-transparent px-2 text-xs outline-none focus:ring-2 focus:ring-[color:var(--gold)]/40 disabled:opacity-60"
-        aria-label={t("crm.contracts.billingMode")}
-      >
-        {!k.typeKey && <option value="">{k.type ?? t("crm.contracts.noType")}</option>}
-        {types.map((x) => (
-          <option key={x.key} value={x.key}>
-            {x.name}
-          </option>
-        ))}
-      </select>
-      {fig && (
-        <label className="flex items-center gap-1.5 text-xs text-muted-foreground">
-          {t(`crm.contracts.figure_${k.billingMode}`)}
-          <span className="relative">
-            <Input
-              value={rate}
-              disabled={!editable || busy}
-              inputMode="decimal"
-              placeholder={k.billingMode === "hourly" ? String(k.usualRateCents / 100) : "0"}
-              onChange={(e) => setRate(e.target.value)}
-              onBlur={commit}
-              onKeyDown={(e) => e.key === "Enter" && (e.target as HTMLInputElement).blur()}
-              className="h-8 w-24 pr-6 text-right font-mono text-xs"
-            />
-            <span className="pointer-events-none absolute right-2 top-1/2 -translate-y-1/2 text-[11px]">{fig.unit}</span>
-          </span>
-        </label>
-      )}
-      <span className="text-[11px] text-muted-foreground">
-        {k.billingMode === "banked"
-          ? t("crm.contracts.bankBalance", { used: k.usedHours, total: (k.bankedHoursX100 ?? 0) / 100, left: Math.max(0, (k.bankedHoursX100 ?? 0) / 100 - k.usedHours) })
-          : k.billingMode === "hourly" && k.hourlyRateCents == null
-            ? t("crm.contracts.usualRate", { rate: money(k.usualRateCents, i18n.language) })
-            : k.billingMode === "hourly"
-              ? ""
-              : t("crm.contracts.notByHour")}
-      </span>
-      {!k.isSupportDefault && k.active && editable && (
-        <Button type="button" variant="ghost" size="sm" className="ml-auto h-7 gap-1 text-xs" disabled={busy} onClick={() => onChange({ supportDefault: true })}>
-          <Star className="size-3" /> {t("crm.contracts.makeDefault")}
-        </Button>
-      )}
-    </div>
-  );
-}
-
-/** A contract made by hand: its name, its type, its dates and the figure the type asks for. */
-function NewContract({ client, onDone }: { client: CrmDetail; onDone: () => void }) {
-  const { t } = useTranslation();
-  const qc = useQueryClient();
-  const { data: types = [] } = useContractTypes();
-  // a contract has a term: a year from today unless said otherwise (both days are required)
-  const [f, setF] = useState(() => {
-    const now = new Date();
-    const end = new Date(now.getFullYear() + 1, now.getMonth(), now.getDate() - 1, 12);
-    const day = (d: Date) => new Date(d.getTime() - d.getTimezoneOffset() * 60_000).toISOString().slice(0, 10);
-    return { name: "", typeKey: "", startDate: day(now), endDate: day(end), figure: "" };
-  });
-  const termOk = Boolean(f.startDate && f.endDate && f.endDate >= f.startDate);
-  const type = types.find((x) => x.key === (f.typeKey || types[0]?.key));
-  const create = useMutation({
-    mutationFn: () => {
-      const n = f.figure.trim() === "" ? null : Number(f.figure.replace(",", "."));
-      const figure = type?.kind === "hourly" ? { hourlyRate: n } : type?.kind === "recurring" ? { monthlyRate: n } : type?.kind === "fixed" ? { fixedPrice: n } : { bankedHours: n };
-      return api.post(`/crm/clients/${client.id}/contracts`, { name: f.name.trim(), typeKey: type!.key, startDate: f.startDate, endDate: f.endDate, ...figure });
-    },
-    onSuccess: () => {
-      void qc.invalidateQueries({ queryKey: ["crm", "client", client.id, "contracts"] });
-      toast.success(t("crm.contracts.created"));
-      onDone();
-    },
-    onError: (e) => toast.error(ticketErrorText(t, e)),
-  });
-  const set = (k: keyof typeof f) => (e: { target: { value: string } }) => setF((x) => ({ ...x, [k]: e.target.value }));
-  return (
-    <form
-      className="mb-3 space-y-3 rounded-xl border border-[color:var(--gold)]/30 bg-[color:var(--gold)]/[0.04] p-3"
-      onSubmit={(e: FormEvent) => {
-        e.preventDefault();
-        if (f.name.trim() && type && termOk) create.mutate();
-      }}
-    >
-      <div className="grid gap-2 sm:grid-cols-3">
-        <label className="space-y-1 text-xs">
-          <span className="text-muted-foreground">{t("crm.contracts.name")}</span>
-          <Input value={f.name} onChange={set("name")} required maxLength={120} />
-        </label>
-        <label className="space-y-1 text-xs">
-          <span className="text-muted-foreground">{t("crm.contracts.type")}</span>
-          <select value={type?.key ?? ""} onChange={set("typeKey")} className="h-9 w-full rounded-md border bg-transparent px-2 text-sm outline-none focus:ring-2 focus:ring-[color:var(--gold)]/40">
-            {types.map((x) => (
-              <option key={x.key} value={x.key}>
-                {x.name}
-              </option>
-            ))}
-          </select>
-        </label>
-        <label className="space-y-1 text-xs">
-          <span className="text-muted-foreground">{type ? t(`crm.contracts.figure_${type.kind === "recurring" ? "monthly" : type.kind}`) : ""}</span>
-          <Input value={f.figure} onChange={set("figure")} inputMode="decimal" placeholder={type?.kind === "banked" ? "h" : "$"} />
-        </label>
-        <label className="space-y-1 text-xs">
-          <span className="text-muted-foreground">{t("crm.contracts.start")}</span>
-          <Input type="date" required value={f.startDate} onChange={set("startDate")} />
-        </label>
-        <label className="space-y-1 text-xs">
-          <span className="text-muted-foreground">{t("crm.contracts.end")}</span>
-          <Input type="date" required min={f.startDate || undefined} value={f.endDate} onChange={set("endDate")} className={cn(f.endDate && f.startDate && f.endDate < f.startDate && "border-destructive")} />
-        </label>
-      </div>
-      <div className="flex justify-end gap-2">
-        <Button type="button" size="sm" variant="ghost" onClick={onDone}>
-          {t("common.cancel")}
-        </Button>
-        <Button type="submit" size="sm" disabled={create.isPending || !f.name.trim() || !type || !termOk} className="bg-grad-gold font-semibold text-[#1a1204]">
-          {create.isPending && <Loader2 className="size-3.5 animate-spin" />} {t("crm.contracts.create")}
-        </Button>
-      </div>
-    </form>
   );
 }
 

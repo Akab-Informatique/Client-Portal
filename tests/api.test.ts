@@ -6797,3 +6797,96 @@ describe("ITCloud: vendor, clients matched, services kept on contracts", () => {
     vi.unstubAllGlobals();
   });
 });
+
+describe("contracts: services when made, charges, activity, stop instead of delete", () => {
+  it("a recurring contract is charged monthly or yearly from its services, shows its revenue, keeps its activity, and is stopped (not deleted) once charged", async () => {
+    resetRateLimit("login:ip:unknown");
+    const admin = await signIn("admin@akab.local");
+    const tech = await signIn("tech@akab.local");
+    const clients = (await admin.get("/api/crm/clients")).json;
+    const client = (clients.items ?? clients).find((x: any) => x.autotaskId === 300);
+    const typeKey = (await admin.get("/api/crm/contract-types")).json.find((x: any) => x.kind === "recurring").key;
+    const monthly = (await admin.post("/api/services", { name: "Surveillance 24/7", kind: "recurring", priceCents: 10_000, costCents: 4_000 })).json;
+    const yearly = (await admin.post("/api/services", { name: "Licence annuelle", kind: "recurring_yearly", priceCents: 36_500 })).json;
+    const once = (await admin.post("/api/services", { name: "Installation unique", kind: "one_time", priceCents: 5_000 })).json;
+    const y = new Date().getFullYear() + 1;
+    const base = `/api/crm/clients/${client.id}/contracts`;
+
+    // services can be added as the contract is made; they are all checked first, nothing is made when one is wrong
+    const before = (await admin.get(base)).json.length;
+    const mk = (services: any[]) => admin.post(base, { name: "Services gérés", typeKey, startDate: `${y}-01-01`, endDate: `${y}-12-31`, billingPeriod: "yearly", services });
+    expect((await mk([{ serviceId: monthly.id, addedOn: `${y - 1}-12-31` }])).json.error).toBe("service_outside_term");
+    expect((await mk([{ serviceId: once.id, addedOn: `${y}-01-01` }])).json.error).toBe("service_not_recurring");
+    expect((await mk([{ serviceId: "00000000-0000-4000-8000-000000000000", addedOn: `${y}-01-01` }])).status).toBe(404);
+    expect((await tech.post(base, { name: "x", typeKey, startDate: `${y}-01-01`, endDate: `${y}-12-31` })).status).toBe(403);
+    expect((await admin.get(base)).json).toHaveLength(before);
+    const made = await mk([
+      { serviceId: monthly.id, addedOn: `${y}-01-01`, quantity: 2 },
+      { serviceId: yearly.id, addedOn: `${y}-01-01` },
+    ]);
+    expect(made.status).toBe(201);
+    expect(made.json).toMatchObject({ billingPeriod: "yearly", endedOn: null, active: true });
+    const kid = made.json.id;
+
+    // the window: services, and what it will charge (a yearly contract: per year)
+    const detail = (await admin.get(`${base}/${kid}`)).json;
+    expect(detail.services).toHaveLength(2);
+    expect(detail.services.find((s: any) => s.name === "Surveillance 24/7")).toMatchObject({ quantity: 2, priceCents: 10_000, totalCents: 240_000 });
+    expect(detail.summary).toMatchObject({ revenueCents: 276_500, perPeriodCents: 276_500, yearlyExtraCents: 0, next: { date: `${y}-01-01`, amountCents: 276_500, prorated: false } });
+    expect(detail.charged.has).toBe(false);
+    // a recurring contract shows its monthly charge where it used to be typed: monthly services + a twelfth of the yearly ones
+    expect(detail.monthlyRateCents).toBe(20_000 + Math.round(36_500 / 12));
+    const listed = (await admin.get(base)).json.find((k: any) => k.id === kid);
+    expect(listed).toMatchObject({ serviceCount: 2, summary: { revenueCents: 276_500 } });
+
+    // a service added in the middle of the year: charged on its day for what is left (16 July: 16 of 31 days, then 5 months)
+    const mid = await admin.post(`${base}/${kid}/services`, { serviceId: monthly.id, addedOn: `${y}-07-16`, quantity: 1 });
+    expect(mid.status).toBe(201);
+    expect(mid.json).toMatchObject({ firstCents: Math.round((10_000 * 16) / 31), totalCents: Math.round((10_000 * 16) / 31) + 50_000 });
+    expect((await admin.get(`${base}/${kid}`)).json.summary.revenueCents).toBe(276_500 + Math.round((10_000 * 16) / 31) + 50_000);
+    // a line can be changed (quantity, price, day); the day stays inside the term
+    expect((await admin.patch(`${base}/${kid}/services/${mid.json.id}`, { quantity: 3, priceCents: 9_000 })).json).toMatchObject({ quantity: 3, priceCents: 9_000 });
+    expect((await admin.patch(`${base}/${kid}/services/${mid.json.id}`, { addedOn: `${y + 1}-01-01` })).json.error).toBe("service_outside_term");
+    expect((await tech.patch(`${base}/${kid}/services/${mid.json.id}`, { quantity: 1 })).status).toBe(403);
+    // the term cannot leave a service out
+    expect((await admin.patch(`${base}/${kid}`, { endDate: `${y}-06-30` })).json.error).toBe("contract_dates_services");
+    // monthly or yearly charging is the contract's choice
+    expect((await admin.patch(`${base}/${kid}`, { billingPeriod: "monthly" })).json.billingPeriod).toBe("monthly");
+    const asMonthly = (await admin.get(`${base}/${kid}`)).json.summary;
+    expect(asMonthly).toMatchObject({ perPeriodCents: 2 * 10_000 + 3 * 9_000, yearlyExtraCents: 36_500 });
+    await admin.del(`${base}/${kid}/services/${mid.json.id}`);
+
+    // the activity: what was made, added, changed, removed (newest first), with who
+    const log = (await tech.get(`${base}/${kid}/activity`)).json;
+    expect(log.map((e: any) => e.kind)).toEqual(["service_removed", "updated", "service_changed", "service_added", "service_added", "service_added", "created"]);
+    expect(log[0]).toMatchObject({ source: "user", actor: expect.any(String), detail: { name: "Surveillance 24/7", quantity: 3 } });
+    expect(log.find((e: any) => e.kind === "updated").detail.changes.billingPeriod).toEqual(["yearly", "monthly"]);
+
+    // no charges yet: deleting removes the contract
+    expect((await tech.del(`${base}/${kid}`)).status).toBe(403);
+    expect((await admin.del(`${base}/${kid}`)).json).toEqual({ deleted: true, deactivated: false });
+    expect((await admin.get(`${base}/${kid}`)).status).toBe(404);
+
+    // billing started (a service whose first day has come): deleting only stops it, from today, and keeps everything
+    const thisYear = new Date().getFullYear();
+    const live = (await admin.post(base, { name: "En cours", typeKey, startDate: `${thisYear}-01-01`, endDate: `${thisYear}-12-31`, billingPeriod: "monthly", services: [{ serviceId: monthly.id, addedOn: `${thisYear}-01-01` }] })).json;
+    expect((await admin.get(`${base}/${live.id}`)).json.charged).toMatchObject({ has: true, servicesStarted: 1 });
+    const stopped = (await admin.del(`${base}/${live.id}`)).json;
+    expect(stopped).toMatchObject({ deleted: false, deactivated: true });
+    const today = new Date().toLocaleDateString("en-CA", { timeZone: "America/Toronto" });
+    expect(stopped.endedOn).toBe(today);
+    const after = (await admin.get(`${base}/${live.id}`)).json;
+    expect(after).toMatchObject({ active: false, endedOn: today });
+    expect(after.services).toHaveLength(1);
+    // charging stops at that day: nothing is scheduled after it
+    expect(after.summary.endsOn).toBe(today);
+    expect(after.summary.next).toBeNull();
+    expect((await admin.get(`${base}/${live.id}/activity`)).json.map((e: any) => e.kind)).toContain("stopped");
+    // again: still there; started again from the window: charging resumes
+    expect((await admin.del(`${base}/${live.id}`)).json.deactivated).toBe(true);
+    expect((await admin.patch(`${base}/${live.id}`, { active: true })).json).toMatchObject({ active: true, endedOn: null });
+    expect((await admin.get(`${base}/${live.id}/activity`)).json.map((e: any) => e.kind)).toContain("resumed");
+    // stopped from the window too (the same rule)
+    expect((await admin.patch(`${base}/${live.id}`, { active: false })).json).toMatchObject({ active: false, endedOn: today });
+  });
+});

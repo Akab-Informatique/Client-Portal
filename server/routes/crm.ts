@@ -17,6 +17,9 @@ import { pushInvoice } from "../lib/quickbooks.ts";
 import { applyAutoApprove } from "../lib/billables.ts";
 import { BILLING_MODES, KIND_MODE, contractTypes, usedHoursOf, type ContractKind } from "../lib/contracts.ts";
 import { prorata, type ServicePeriod } from "../../shared/prorata.ts";
+import { chargesOn, contractCharges, type ChargeLine } from "../../shared/contractCharges.ts";
+import { contractCharged, contractEventsOf, recordContractEvent, syncMonthlyRate } from "../lib/contractEvents.ts";
+import { todayQc } from "../lib/timesheets.ts";
 import { billingSettings } from "../lib/billing.ts";
 import { quickbooksHttp } from "./billing.ts";
 
@@ -76,6 +79,24 @@ function serviceLine(r: typeof schema.contractServices.$inferSelect, k: Contract
   const plan = k.startDate && k.endDate ? prorata({ period: (r.kind === "recurring_yearly" ? "yearly" : "monthly") as ServicePeriod, priceCents: r.priceCents * r.quantity, addedOn: r.addedOn, start: k.startDate, end: k.endDate }) : "dates";
   return { ...r, firstCents: typeof plan === "string" ? null : plan.firstCents, totalCents: typeof plan === "string" ? null : plan.totalCents, periods: typeof plan === "string" ? [] : plan.periods };
 }
+
+const zDay = z.string().regex(/^\d{4}-\d{2}-\d{2}$/);
+type ServiceRow = typeof schema.contractServices.$inferSelect;
+const chargeLines = (rows: ServiceRow[]): ChargeLine[] => rows.map((r) => ({ id: r.id, name: r.name, kind: r.kind === "recurring_yearly" ? "recurring_yearly" : "recurring", priceCents: r.priceCents, quantity: r.quantity, addedOn: r.addedOn }));
+/** What a contract charges (per full period, over its term) and what comes next, from its services */
+function summaryOf(k: ContractRow, rows: ServiceRow[], today: string) {
+  const ch = contractCharges({ startDate: k.startDate, endDate: k.endDate, endedOn: k.endedOn, billingPeriod: k.billingPeriod === "yearly" ? "yearly" : "monthly" }, chargeLines(rows));
+  const on = chargesOn(ch, today);
+  return {
+    revenueCents: ch.revenueCents,
+    perPeriodCents: ch.perPeriodCents,
+    yearlyExtraCents: ch.yearlyExtraCents,
+    endsOn: ch.endsOn,
+    dueCents: on.dueCents,
+    next: on.next ? { date: on.next.date, amountCents: on.next.amountCents, prorated: on.next.prorated } : null,
+  };
+}
+const servicesOf = (contractId: string) => db().select().from(schema.contractServices).where(eq(schema.contractServices.contractId, contractId)).orderBy(asc(schema.contractServices.addedOn), asc(schema.contractServices.name));
 
 export const crmRoutes = new Hono<AppEnv>()
   .use(requireStaff)
@@ -378,11 +399,13 @@ export const crmRoutes = new Hono<AppEnv>()
   .get("/contract-types", async (c) => c.json((await contractTypes()).filter((t) => t.active).map((t) => ({ key: t.key, name: t.name, kind: t.kind }))))
 
   // ── contracts
-  /** A contract made by hand (crm.billing): from a contract type, whose kind sets how it is billed. */
+  /**
+   * A contract made by hand (crm.billing): from a contract type, whose kind sets how it is billed. A recurring services
+   * contract has no figure: it is charged monthly or yearly from its services, which can be added as it is made.
+   */
   .post("/clients/:id/contracts", requirePermission("crm.billing"), async (c) => {
     const a = auth(c);
     const client = await clientOr404(c.req.param("id"));
-    const zDay = z.string().regex(/^\d{4}-\d{2}-\d{2}$/);
     const p = await body(
       c,
       z.object({
@@ -391,11 +414,18 @@ export const crmRoutes = new Hono<AppEnv>()
         // a contract has a term: both days are needed (the prorata of its services runs on them)
         startDate: zDay,
         endDate: zDay,
+        /** How a recurring services contract is charged */
+        billingPeriod: z.enum(["monthly", "yearly"]).default("monthly"),
         /** Dollars */
         hourlyRate: z.number().min(0).max(100_000).nullable().optional(),
         monthlyRate: z.number().min(0).max(1_000_000).nullable().optional(),
         fixedPrice: z.number().min(0).max(10_000_000).nullable().optional(),
         bankedHours: z.number().min(0).max(100_000).nullable().optional(),
+        /** Recurring services added as the contract is made */
+        services: z
+          .array(z.object({ serviceId: zUuid, addedOn: zDay, quantity: z.number().int().min(1).max(100_000).default(1), priceCents: z.number().int().min(0).max(100_000_000).optional() }))
+          .max(100)
+          .default([]),
       }),
     );
     const type = (await contractTypes()).find((t) => t.key === p.typeKey && t.active);
@@ -403,25 +433,46 @@ export const crmRoutes = new Hono<AppEnv>()
     if (p.endDate < p.startDate) throw new HTTPException(400, { message: "contract_dates" });
     const cents = (v: number | null | undefined) => (v == null ? null : Math.round(v * 100));
     const mode = KIND_MODE[type.kind as ContractKind];
-    const [row] = await db()
-      .insert(schema.clientContracts)
-      .values({
-        clientId: client.id,
-        autotaskId: `local-${crypto.randomUUID()}`,
-        name: p.name,
-        type: type.name,
-        typeKey: type.key,
-        billingMode: mode,
-        startDate: p.startDate,
-        endDate: p.endDate,
-        hourlyRateCents: cents(p.hourlyRate),
-        monthlyRateCents: cents(p.monthlyRate),
-        fixedPriceCents: cents(p.fixedPrice),
-        bankedHoursX100: p.bankedHours == null ? null : Math.round(p.bankedHours * 100),
-        syncedAt: new Date(),
-      })
-      .returning();
-    await audit(a.user.id, "crm.contract_created", row.id, { name: p.name, type: type.key });
+    // the services, checked before anything is written
+    const catalog = p.services.length ? await db().select().from(schema.services).where(inArray(schema.services.id, [...new Set(p.services.map((s) => s.serviceId))])) : [];
+    const lines = p.services.map((s) => {
+      const svc = catalog.find((x) => x.id === s.serviceId);
+      if (!svc || !svc.active) throw new HTTPException(404, { message: "not_found" });
+      if (svc.kind !== "recurring" && svc.kind !== "recurring_yearly") throw new HTTPException(400, { message: "service_not_recurring" });
+      const plan = prorata({ period: svc.kind === "recurring_yearly" ? "yearly" : "monthly", priceCents: s.priceCents ?? svc.priceCents, addedOn: s.addedOn, start: p.startDate, end: p.endDate });
+      if (typeof plan === "string") throw new HTTPException(400, { message: plan === "outside" ? "service_outside_term" : "contract_dates" });
+      return { svc, s };
+    });
+    const row = await db().transaction(async (tx) => {
+      const [k] = await tx
+        .insert(schema.clientContracts)
+        .values({
+          clientId: client.id,
+          autotaskId: `local-${crypto.randomUUID()}`,
+          name: p.name,
+          type: type.name,
+          typeKey: type.key,
+          billingMode: mode,
+          billingPeriod: p.billingPeriod,
+          startDate: p.startDate,
+          endDate: p.endDate,
+          hourlyRateCents: cents(p.hourlyRate),
+          // a recurring services contract has no typed charge: it comes from its services
+          monthlyRateCents: type.kind === "recurring" ? null : cents(p.monthlyRate),
+          fixedPriceCents: cents(p.fixedPrice),
+          bankedHoursX100: p.bankedHours == null ? null : Math.round(p.bankedHours * 100),
+          syncedAt: new Date(),
+        })
+        .returning();
+      for (const { svc, s } of lines) {
+        await tx.insert(schema.contractServices).values({ contractId: k.id, serviceId: svc.id, name: svc.name, kind: svc.kind, priceCents: s.priceCents ?? svc.priceCents, costCents: svc.costCents, addedOn: s.addedOn, quantity: s.quantity, createdBy: a.user.id });
+      }
+      return k;
+    });
+    await audit(a.user.id, "crm.contract_created", row.id, { name: p.name, type: type.key, services: lines.length });
+    await recordContractEvent(row.id, "created", { name: p.name, type: type.name, startDate: p.startDate, endDate: p.endDate, billingPeriod: p.billingPeriod }, { userId: a.user.id });
+    for (const { svc, s } of lines) await recordContractEvent(row.id, "service_added", { name: svc.name, quantity: s.quantity, priceCents: s.priceCents ?? svc.priceCents, addedOn: s.addedOn, kind: svc.kind }, { userId: a.user.id });
+    await syncMonthlyRate(row.id);
     return c.json(row, 201);
   })
   // ── the recurring services of a contract, with their prorata
@@ -436,24 +487,50 @@ export const crmRoutes = new Hono<AppEnv>()
     const rows = await db().select().from(schema.contractServices).where(eq(schema.contractServices.contractId, k.id)).orderBy(asc(schema.contractServices.addedOn), asc(schema.contractServices.name));
     return c.json(rows.map((r) => serviceLine(r, k)));
   })
-  /** Adds a service to a contract from a day: its price, then the prorata of the first period and of the term is worked out (crm.billing). */
+  /** Adds a service to a contract from a day: its price and quantity, then the prorata of the first period and of the term is worked out (crm.billing). */
   .post("/clients/:id/contracts/:kid/services", requirePermission("crm.billing"), async (c) => {
     const a = auth(c);
     const client = await clientOr404(c.req.param("id"));
     const k = await contractOr404(client.id, c.req.param("kid"));
-    const p = await body(c, z.object({ serviceId: zUuid, addedOn: z.string().regex(/^\d{4}-\d{2}-\d{2}$/), priceCents: z.number().int().min(0).max(100_000_000).optional() }));
+    const p = await body(c, z.object({ serviceId: zUuid, addedOn: zDay, quantity: z.number().int().min(1).max(100_000).default(1), priceCents: z.number().int().min(0).max(100_000_000).optional() }));
     const [svc] = await db().select().from(schema.services).where(eq(schema.services.id, p.serviceId));
     if (!svc || !svc.active) throw new HTTPException(404, { message: "not_found" });
     if (svc.kind !== "recurring" && svc.kind !== "recurring_yearly") throw new HTTPException(400, { message: "service_not_recurring" });
     if (!k.startDate || !k.endDate) throw new HTTPException(400, { message: "contract_no_term" });
-    const plan = prorata({ period: svc.kind === "recurring_yearly" ? "yearly" : "monthly", priceCents: p.priceCents ?? svc.priceCents, addedOn: p.addedOn, start: k.startDate, end: k.endDate });
+    const plan = prorata({ period: svc.kind === "recurring_yearly" ? "yearly" : "monthly", priceCents: (p.priceCents ?? svc.priceCents) * p.quantity, addedOn: p.addedOn, start: k.startDate, end: k.endDate });
     if (typeof plan === "string") throw new HTTPException(400, { message: plan === "outside" ? "service_outside_term" : "contract_dates" });
     const [row] = await db()
       .insert(schema.contractServices)
-      .values({ contractId: k.id, serviceId: svc.id, name: svc.name, kind: svc.kind, priceCents: p.priceCents ?? svc.priceCents, costCents: svc.costCents, addedOn: p.addedOn, createdBy: a.user.id })
+      .values({ contractId: k.id, serviceId: svc.id, name: svc.name, kind: svc.kind, priceCents: p.priceCents ?? svc.priceCents, costCents: svc.costCents, addedOn: p.addedOn, quantity: p.quantity, createdBy: a.user.id })
       .returning();
     await audit(a.user.id, "crm.contract_service_added", k.id, { service: svc.name, addedOn: p.addedOn, firstCents: plan.firstCents, totalCents: plan.totalCents });
+    await recordContractEvent(k.id, "service_added", { name: svc.name, quantity: p.quantity, priceCents: row.priceCents, addedOn: p.addedOn, kind: svc.kind, firstCents: plan.firstCents }, { userId: a.user.id });
+    await syncMonthlyRate(k.id);
     return c.json(serviceLine(row, k), 201);
+  })
+  /** Changes a line of a contract: its quantity, its price (per unit) or the day it starts. A line kept by a vendor follows the vendor. */
+  .patch("/clients/:id/contracts/:kid/services/:sid", requirePermission("crm.billing"), async (c) => {
+    const a = auth(c);
+    const client = await clientOr404(c.req.param("id"));
+    const k = await contractOr404(client.id, c.req.param("kid"));
+    const sid = zUuid.parse(c.req.param("sid"));
+    const p = await body(c, z.object({ quantity: z.number().int().min(1).max(100_000).optional(), priceCents: z.number().int().min(0).max(100_000_000).optional(), addedOn: zDay.optional() }));
+    const [cur] = await db().select().from(schema.contractServices).where(and(eq(schema.contractServices.id, sid), eq(schema.contractServices.contractId, k.id)));
+    if (!cur) throw new HTTPException(404, { message: "not_found" });
+    if (cur.source) throw new HTTPException(409, { message: "service_from_vendor" });
+    if (!k.startDate || !k.endDate) throw new HTTPException(400, { message: "contract_no_term" });
+    const next = { quantity: p.quantity ?? cur.quantity, priceCents: p.priceCents ?? cur.priceCents, addedOn: p.addedOn ?? cur.addedOn };
+    const plan = prorata({ period: cur.kind === "recurring_yearly" ? "yearly" : "monthly", priceCents: next.priceCents * next.quantity, addedOn: next.addedOn, start: k.startDate, end: k.endDate });
+    if (typeof plan === "string") throw new HTTPException(400, { message: plan === "outside" ? "service_outside_term" : "contract_dates" });
+    const [row] = await db().update(schema.contractServices).set(next).where(eq(schema.contractServices.id, sid)).returning();
+    const changes: Record<string, [unknown, unknown]> = {};
+    for (const key of ["quantity", "priceCents", "addedOn"] as const) if (cur[key] !== next[key]) changes[key] = [cur[key], next[key]];
+    if (Object.keys(changes).length) {
+      await audit(a.user.id, "crm.contract_service_changed", k.id, { service: cur.name, ...changes });
+      await recordContractEvent(k.id, "service_changed", { name: cur.name, changes }, { userId: a.user.id });
+      await syncMonthlyRate(k.id);
+    }
+    return c.json(serviceLine(row, k));
   })
   // ── ITCloud services of the client that wait for a contract: map them to this one ──
   .get("/clients/:id/contracts/:kid/itcloud-services", requirePermission("crm.billing"), async (c) => {
@@ -481,16 +558,56 @@ export const crmRoutes = new Hono<AppEnv>()
     const a = auth(c);
     const client = await clientOr404(c.req.param("id"));
     const k = await contractOr404(client.id, c.req.param("kid"));
+    const sid = zUuid.parse(c.req.param("sid"));
+    const [line] = await db().select().from(schema.contractServices).where(and(eq(schema.contractServices.id, sid), eq(schema.contractServices.contractId, k.id)));
+    if (!line) throw new HTTPException(404, { message: "not_found" });
     // a line kept by a vendor (ITCloud) follows the vendor: it leaves when the service ends there
-    const [line] = await db().select({ source: schema.contractServices.source }).from(schema.contractServices).where(and(eq(schema.contractServices.id, zUuid.parse(c.req.param("sid"))), eq(schema.contractServices.contractId, k.id)));
-    if (line?.source) throw new HTTPException(409, { message: "service_from_vendor" });
-    const [row] = await db()
-      .delete(schema.contractServices)
-      .where(and(eq(schema.contractServices.id, zUuid.parse(c.req.param("sid"))), eq(schema.contractServices.contractId, k.id)))
-      .returning({ name: schema.contractServices.name });
-    if (!row) throw new HTTPException(404, { message: "not_found" });
-    await audit(a.user.id, "crm.contract_service_removed", k.id, { service: row.name });
+    if (line.source) throw new HTTPException(409, { message: "service_from_vendor" });
+    await db().delete(schema.contractServices).where(eq(schema.contractServices.id, sid));
+    await audit(a.user.id, "crm.contract_service_removed", k.id, { service: line.name });
+    await recordContractEvent(k.id, "service_removed", { name: line.name, quantity: line.quantity, priceCents: line.priceCents, addedOn: line.addedOn, kind: line.kind }, { userId: a.user.id });
+    await syncMonthlyRate(k.id);
     return c.json({ ok: true });
+  })
+  /** One contract with its services and the activity summary (the contract window) */
+  .get("/clients/:id/contracts/:kid", async (c) => {
+    const client = await clientOr404(c.req.param("id"));
+    const k = await contractOr404(client.id, c.req.param("kid"));
+    const rows = await servicesOf(k.id);
+    const today = todayQc();
+    const used = await usedHoursOf([k]);
+    const usual = Math.round((await billingSettings()).rates.hourly * 100);
+    return c.json({ ...k, usedHours: used.get(k.id) ?? 0, usualRateCents: usual, services: rows.map((r) => serviceLine(r, k)), summary: summaryOf(k, rows, today), charged: await contractCharged(k.id, today) });
+  })
+  /** What happened on a contract: added, changed, removed, stopped (newest first) */
+  .get("/clients/:id/contracts/:kid/activity", async (c) => {
+    const client = await clientOr404(c.req.param("id"));
+    const k = await contractOr404(client.id, c.req.param("kid"));
+    return c.json(await contractEventsOf(k.id));
+  })
+  /**
+   * Deleting a contract: one that has no charges is removed; one on which billing started (work to bill, time, or
+   * a service whose first day has come) is only stopped: made inactive from today, its services charged up to then,
+   * so that everything already done stays on record.
+   */
+  .delete("/clients/:id/contracts/:kid", requirePermission("crm.billing"), async (c) => {
+    const a = auth(c);
+    const client = await clientOr404(c.req.param("id"));
+    const k = await contractOr404(client.id, c.req.param("kid"));
+    const today = todayQc();
+    const charged = await contractCharged(k.id, today);
+    if (!charged.has) {
+      await db().delete(schema.clientContracts).where(eq(schema.clientContracts.id, k.id));
+      await audit(a.user.id, "crm.contract_deleted", k.id, { name: k.name });
+      return c.json({ deleted: true, deactivated: false });
+    }
+    const stop = k.startDate && today < k.startDate ? k.startDate : today;
+    if (k.active) {
+      await db().update(schema.clientContracts).set({ active: false, endedOn: stop, supportDefault: false, updatedAt: new Date() }).where(eq(schema.clientContracts.id, k.id));
+      await recordContractEvent(k.id, "stopped", { on: stop, billingItems: charged.billingItems, timeEntries: charged.timeEntries, servicesStarted: charged.servicesStarted }, { userId: a.user.id });
+    }
+    await audit(a.user.id, "crm.contract_stopped", k.id, { name: k.name, on: stop });
+    return c.json({ deleted: false, deactivated: true, endedOn: k.active ? stop : k.endedOn });
   })
   .get("/clients/:id/contracts", async (c) => {
     const client = await clientOr404(c.req.param("id"));
@@ -500,9 +617,11 @@ export const crmRoutes = new Hono<AppEnv>()
     const chosen = active.find((k) => k.supportDefault) ?? active.find((k) => k.isDefault) ?? (active.length === 1 ? active[0] : null);
     const usual = Math.round((await billingSettings()).rates.hourly * 100);
     const used = await usedHoursOf(rows);
+    const allLines = rows.length ? await db().select().from(schema.contractServices).where(inArray(schema.contractServices.contractId, rows.map((k) => k.id))) : [];
+    const today = todayQc();
     return c.json(
       rows
-        .map((k) => ({ ...k, isSupportDefault: chosen?.id === k.id, usualRateCents: usual, usedHours: used.get(k.id) ?? 0 }))
+        .map((k) => ({ ...k, isSupportDefault: chosen?.id === k.id, usualRateCents: usual, usedHours: used.get(k.id) ?? 0, serviceCount: allLines.filter((l) => l.contractId === k.id).length, summary: summaryOf(k, allLines.filter((l) => l.contractId === k.id), today) }))
         .sort((x, y) => Number(y.active) - Number(x.active) || Number(y.isSupportDefault) - Number(x.isSupportDefault) || x.name.localeCompare(y.name)),
     );
   })
@@ -679,9 +798,11 @@ export const crmRoutes = new Hono<AppEnv>()
         endDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).nullable().optional(),
         fixedPrice: z.number().min(0).max(10_000_000).nullable().optional(),
         bankedHours: z.number().min(0).max(100_000).nullable().optional(),
+        billingPeriod: z.enum(["monthly", "yearly"]).optional(),
         active: z.boolean().optional(),
       }),
     );
+    const before = await contractOr404(client.id, c.req.param("kid"));
     const type = p.typeKey ? (await contractTypes()).find((t) => t.key === p.typeKey) : undefined;
     if (p.typeKey && !type) throw new HTTPException(400, { message: "invalid_type" });
     if (p.autoApprove && !a.permissions.includes("accounting.manage")) throw new HTTPException(403, { message: "accounting_manage_only" });
@@ -700,8 +821,18 @@ export const crmRoutes = new Hono<AppEnv>()
       ...(p.endDate !== undefined ? { endDate: p.endDate } : {}),
       ...(p.fixedPrice !== undefined ? { fixedPriceCents: cents(p.fixedPrice) } : {}),
       ...(p.bankedHours !== undefined ? { bankedHoursX100: p.bankedHours === null ? null : Math.round(p.bankedHours * 100) } : {}),
-      ...(p.active !== undefined ? { active: p.active } : {}),
+      ...(p.billingPeriod ? { billingPeriod: p.billingPeriod } : {}),
+      // stopping a contract keeps what was charged: it is charged up to today; starting it again clears the stop
+      ...(p.active !== undefined && p.active !== before.active ? (p.active ? { active: true, endedOn: null } : { active: false, endedOn: before.startDate && todayQc() < before.startDate ? before.startDate : todayQc(), supportDefault: false }) : {}),
     };
+    // the term cannot leave a service out
+    if ((p.startDate !== undefined || p.endDate !== undefined) && (before.startDate || before.endDate)) {
+      const start = p.startDate !== undefined ? p.startDate : before.startDate;
+      const end = p.endDate !== undefined ? p.endDate : before.endDate;
+      if (start && end && end < start) throw new HTTPException(400, { message: "contract_dates" });
+      const lines = await servicesOf(before.id);
+      if (lines.some((l) => (start && l.addedOn < start) || (end && l.addedOn > end))) throw new HTTPException(400, { message: "contract_dates_services" });
+    }
     const row = await db().transaction(async (tx) => {
       if (p.supportDefault) await tx.update(schema.clientContracts).set({ supportDefault: false }).where(and(eq(schema.clientContracts.clientId, client.id), ne(schema.clientContracts.id, kid)));
       const [r] = await tx
@@ -714,6 +845,13 @@ export const crmRoutes = new Hono<AppEnv>()
     if (!row) throw new HTTPException(404, { message: "not_found" });
     const approved = p.autoApprove ? await applyAutoApprove(client.id) : 0;
     await audit(a.user.id, "crm.contract_updated", row.id, { ...set, approved });
+    // the activity: what changed, and a stop or a restart on its own
+    const watched = ["name", "type", "startDate", "endDate", "billingPeriod", "billingMode", "hourlyRateCents", "monthlyRateCents", "ticketRateCents", "fixedPriceCents", "bankedHoursX100", "autoApprove"] as const;
+    const changes: Record<string, [unknown, unknown]> = {};
+    for (const key of watched) if (key in set && before[key] !== row[key]) changes[key] = [before[key], row[key]];
+    if (Object.keys(changes).length) await recordContractEvent(row.id, "updated", { changes }, { userId: a.user.id });
+    if (p.active !== undefined && p.active !== before.active) await recordContractEvent(row.id, p.active ? "resumed" : "stopped", p.active ? {} : { on: row.endedOn }, { userId: a.user.id });
+    if (p.typeKey || p.billingMode) await syncMonthlyRate(row.id);
     return c.json({ ...row, approved });
   })
 

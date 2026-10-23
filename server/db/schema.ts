@@ -145,11 +145,34 @@ export const clientContracts = pgTable(
     /** YYYY-MM-DD */
     startDate: text("start_date"),
     endDate: text("end_date"),
+    /** How a recurring services contract is charged: monthly | yearly */
+    billingPeriod: text("billing_period").notNull().default("monthly"),
+    /** The day charging was stopped (the contract made inactive after charges had started): its services are charged up to it */
+    endedOn: text("ended_on"),
     syncedAt: timestamp("synced_at", { withTimezone: true }),
     createdAt: created(),
     updatedAt: updated(),
   },
   (t) => [uniqueIndex("client_contracts_autotask_idx").on(t.autotaskId), index("client_contracts_client_idx").on(t.clientId)],
+);
+
+/** What happened on a contract: made, changed, a service added / changed / removed, stopped, started again (also by the vendor sync) */
+export const contractEvents = pgTable(
+  "contract_events",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    contractId: uuid("contract_id")
+      .notNull()
+      .references(() => clientContracts.id, { onDelete: "cascade" }),
+    /** created | updated | service_added | service_changed | service_removed | stopped | resumed */
+    kind: text("kind").notNull(),
+    /** user | itcloud */
+    source: text("source").notNull().default("user"),
+    actorId: uuid("actor_id").references(() => users.id, { onDelete: "set null" }),
+    detail: jsonb("detail").$type<Record<string, unknown>>().notNull().default(sql`'{}'::jsonb`),
+    createdAt: created(),
+  },
+  (t) => [index("contract_events_contract_idx").on(t.contractId, t.createdAt)],
 );
 
 /**

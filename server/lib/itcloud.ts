@@ -3,6 +3,7 @@ import { and, asc, eq, inArray, sql } from "drizzle-orm";
 import { db, schema } from "../db/index.ts";
 import { seal, unseal } from "./crypto.ts";
 import { audit } from "./audit.ts";
+import { recordContractEvent, syncMonthlyRate } from "./contractEvents.ts";
 
 /**
  * ITCloud (zone.itcloud.ca), the partner API: customers, products and the services report. ITCloud is a vendor:
@@ -421,12 +422,27 @@ async function ensureLine(contract: typeof schema.clientContracts.$inferSelect, 
   const unitCost = Math.round(r.amountCents / r.quantity);
   const addedOn = clamp(r.registrationDate ?? today, contract.startDate, contract.endDate);
   const [cur] = await db().select().from(schema.contractServices).where(and(eq(schema.contractServices.source, "itcloud"), eq(schema.contractServices.externalId, external)));
+  const by = { source: "itcloud" as const };
   if (!cur) {
     const [line] = await db().insert(schema.contractServices).values({ contractId: contract.id, serviceId: svc.id, name: svc.name, kind: svc.kind, priceCents: svc.priceCents, costCents: unitCost, addedOn, quantity: r.quantity, source: "itcloud", externalId: external }).returning();
+    await recordContractEvent(contract.id, "service_added", { name: svc.name, quantity: r.quantity, priceCents: svc.priceCents, addedOn, kind: svc.kind }, by);
+    await syncMonthlyRate(contract.id);
     return { line, change: "created" };
   }
   if (cur.contractId !== contract.id || cur.serviceId !== svc.id || cur.quantity !== r.quantity || cur.costCents !== unitCost || cur.kind !== svc.kind) {
     const [line] = await db().update(schema.contractServices).set({ contractId: contract.id, serviceId: svc.id, name: svc.name, kind: svc.kind, quantity: r.quantity, costCents: unitCost }).where(eq(schema.contractServices.id, cur.id)).returning();
+    if (cur.contractId !== contract.id) {
+      // moved from one contract to another
+      await recordContractEvent(cur.contractId, "service_removed", { name: cur.name, quantity: cur.quantity, priceCents: cur.priceCents, addedOn: cur.addedOn, kind: cur.kind, movedTo: contract.name }, by);
+      await recordContractEvent(contract.id, "service_added", { name: svc.name, quantity: r.quantity, priceCents: line.priceCents, addedOn: line.addedOn, kind: svc.kind, movedFrom: true }, by);
+      await syncMonthlyRate(cur.contractId);
+    } else {
+      const changes: Record<string, [unknown, unknown]> = {};
+      if (cur.quantity !== r.quantity) changes.quantity = [cur.quantity, r.quantity];
+      if (cur.costCents !== unitCost) changes.costCents = [cur.costCents, unitCost];
+      if (Object.keys(changes).length) await recordContractEvent(contract.id, "service_changed", { name: svc.name, changes }, by);
+    }
+    await syncMonthlyRate(contract.id);
     return { line, change: "updated" };
   }
   return { line: cur, change: "same" };
@@ -510,14 +526,15 @@ export async function syncItcloud(actorId: string | null = null): Promise<SyncRe
       else if (change === "updated") counts.updated++;
     }
     // a service that is no longer active (or no longer matched) at ITCloud leaves the contract
-    const gone = await db()
-      .select({ id: schema.contractServices.id, externalId: schema.contractServices.externalId })
-      .from(schema.contractServices)
-      .where(eq(schema.contractServices.source, "itcloud"));
-    const goneIds = gone.filter((g) => g.externalId && !keep.has(g.externalId)).map((g) => g.id);
-    if (goneIds.length) {
-      await db().delete(schema.contractServices).where(inArray(schema.contractServices.id, goneIds));
-      counts.removed = goneIds.length;
+    const gone = await db().select().from(schema.contractServices).where(eq(schema.contractServices.source, "itcloud"));
+    const goneRows = gone.filter((g) => g.externalId && !keep.has(g.externalId));
+    if (goneRows.length) {
+      await db().delete(schema.contractServices).where(inArray(schema.contractServices.id, goneRows.map((g) => g.id)));
+      counts.removed = goneRows.length;
+      for (const g of goneRows) {
+        await recordContractEvent(g.contractId, "service_removed", { name: g.name, quantity: g.quantity, priceCents: g.priceCents, addedOn: g.addedOn, kind: g.kind, reason: "ended" }, { source: "itcloud" });
+        await syncMonthlyRate(g.contractId);
+      }
     }
     // the report, with its states, replaces the last one
     await db().transaction(async (tx) => {
@@ -581,6 +598,8 @@ export async function setServiceContract(serviceId: number, contractId: string |
     // unmapped: its line leaves, it waits for a contract
     if (cur) {
       await db().delete(schema.contractServices).where(eq(schema.contractServices.id, cur.id));
+      await recordContractEvent(cur.contractId, "service_removed", { name: cur.name, quantity: cur.quantity, priceCents: cur.priceCents, addedOn: cur.addedOn, kind: cur.kind, reason: "unmapped" }, { source: "itcloud" });
+      await syncMonthlyRate(cur.contractId);
       await db().update(schema.itcloudServices).set({ state: "no_contract", contractName: null }).where(eq(schema.itcloudServices.serviceId, serviceId));
     }
     return { moved: Boolean(cur), line: null };

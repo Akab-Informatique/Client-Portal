@@ -35,7 +35,7 @@ const inclusive = (a: string, b: string) => Math.round((ms(b) - ms(a)) / DAY) + 
 const daysInMonth = (d: string) => new Date(Date.UTC(Number(d.slice(0, 4)), Number(d.slice(5, 7)), 0)).getUTCDate();
 const endOfMonth = (d: string) => `${d.slice(0, 8)}${String(daysInMonth(d)).padStart(2, "0")}`;
 /** The same day n years later (29 February → 28 February in a common year) */
-function addYears(d: string, n: number): string {
+export function addYears(d: string, n: number): string {
   const y = Number(d.slice(0, 4)) + n;
   const m = Number(d.slice(5, 7));
   const day = Math.min(Number(d.slice(8, 10)), new Date(Date.UTC(y, m, 0)).getUTCDate());
