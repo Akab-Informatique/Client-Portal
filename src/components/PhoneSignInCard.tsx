@@ -2,15 +2,17 @@ import { useState, type FormEvent } from "react";
 import { useTranslation } from "react-i18next";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
-import { Loader2, Smartphone, Trash2 } from "lucide-react";
+import { BellRing, Loader2, Smartphone, Trash2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { Switch } from "@/components/ui/switch";
+import { useMe } from "@/lib/session";
 import { useConfirm } from "@/components/ConfirmDialog";
 import { api, ApiError } from "@/lib/api";
 import { enrollThisPhone, forgetDevice, pushSupport, storedDevice } from "@/lib/push";
 
-type Devices = { vapidPublicKey: string; devices: { id: string; label: string; createdAt: string; lastUsedAt: string | null; userAgent: string }[] };
+type Devices = { vapidPublicKey: string; devices: { id: string; label: string; notify: boolean; createdAt: string; lastUsedAt: string | null; userAgent: string }[] };
 
 /**
  * Profile › Sign in with my phone: the phones that approve sign-ins with a notification (number matching + the phone's
@@ -52,6 +54,22 @@ export function PhoneSignInCard() {
     },
     onError: () => toast.error(t("common.error")),
   });
+  const me = useMe();
+  const setNotify = useMutation({
+    mutationFn: (p: { id: string; notify: boolean }) => api.patch(`/auth/push/devices/${p.id}`, { notify: p.notify }),
+    onSuccess: () => void qc.invalidateQueries({ queryKey: ["push-devices"] }),
+    onError: () => toast.error(t("common.error")),
+  });
+  const test = useMutation({
+    mutationFn: (id: string) => api.post<{ sent: boolean }>(`/auth/push/devices/${id}/test`),
+    onSuccess: (r) => (r.sent ? toast.success(t("phoneLogin.testSent")) : toast.error(t("phoneLogin.testFailed"))),
+    onError: () => toast.error(t("phoneLogin.testFailed")),
+  });
+  const details = useMutation({
+    mutationFn: (pushDetails: boolean) => api.put("/me/preferences", { pushDetails }),
+    onSuccess: () => void qc.invalidateQueries({ queryKey: ["auth"] }),
+    onError: () => toast.error(t("common.error")),
+  });
   const submit = (e: FormEvent) => {
     e.preventDefault();
     if (password && !enroll.isPending) enroll.mutate();
@@ -76,6 +94,13 @@ export function PhoneSignInCard() {
                 {d.lastUsedAt ? ` · ${t("phoneLogin.lastUsed", { date: new Date(d.lastUsedAt).toLocaleDateString() })}` : ""}
               </span>
             </span>
+            <label className="flex shrink-0 items-center gap-1.5 text-[11px] text-muted-foreground" title={t("phoneLogin.notifyHint")}>
+              <BellRing className="size-3.5" />
+              <Switch checked={d.notify} disabled={setNotify.isPending} onCheckedChange={(v) => setNotify.mutate({ id: d.id, notify: v })} aria-label={t("phoneLogin.notify")} />
+            </label>
+            <Button variant="ghost" size="sm" className="h-8 shrink-0 px-2 text-xs" disabled={test.isPending} onClick={() => test.mutate(d.id)}>
+              {test.isPending && test.variables === d.id ? <Loader2 className="size-3 animate-spin" /> : t("phoneLogin.test")}
+            </Button>
             <Button
               variant="ghost"
               size="icon"
@@ -89,6 +114,15 @@ export function PhoneSignInCard() {
         ))}
         {data && data.devices.length === 0 && <li className="text-xs text-muted-foreground">{t("phoneLogin.none")}</li>}
       </ul>
+      {data && data.devices.length > 0 && (
+        <label className="mb-3 flex items-start gap-3 rounded-xl border p-3 text-sm">
+          <Switch checked={me.preferences.pushDetails} disabled={details.isPending} onCheckedChange={(v) => details.mutate(v)} />
+          <span>
+            <span className="block font-medium">{t("phoneLogin.details")}</span>
+            <span className="block text-[11px] text-muted-foreground">{t("phoneLogin.detailsHint")}</span>
+          </span>
+        </label>
+      )}
       {support === "ok" ? (
         open ? (
           <form onSubmit={submit} className="space-y-3 rounded-xl border bg-background/50 p-3">

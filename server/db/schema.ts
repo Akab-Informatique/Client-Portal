@@ -471,6 +471,8 @@ export const userPreferences = pgTable("user_preferences", {
   /** Hours worked go to the hours bank by default (each entry can still say otherwise) */
   bankHoursDefault: boolean("bank_hours_default").notNull().default(false),
   /** The channels ticked by default when notifying a technician from a ticket (the bell is always on) */
+  /** The lock screen of the phone shows the detail of a notification (number, title, text); off = only its kind */
+  pushDetails: boolean("push_details").notNull().default(false),
   notifyDefaults: jsonb("notify_defaults").$type<{ email: boolean; sms: boolean; teams: boolean }>().notNull().default({ email: true, sms: false, teams: false }),
   updatedAt: updated(),
 });
@@ -2208,6 +2210,8 @@ export const pushDevices = pgTable(
     transports: jsonb("transports").$type<string[]>().notNull().default(sql`'[]'::jsonb`),
     /** The web push subscription (endpoint and keys), sealed with APP_SECRET */
     subscription: text("subscription").notNull(),
+    /** This phone also receives the portal's notifications (the bell) as push */
+    notify: boolean("notify").notNull().default(true),
     /** SHA-256 of the random token the phone keeps: with the passkey, what proves it is that phone */
     tokenHash: text("token_hash").notNull(),
     userAgent: text("user_agent").notNull().default(""),

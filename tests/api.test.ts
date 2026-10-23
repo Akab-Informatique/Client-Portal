@@ -6282,6 +6282,12 @@ class Phone {
 describe("sign-in approved on the phone (push + passkey)", () => {
   const subscription = { endpoint: "https://push.example.test/abc123", keys: { p256dh: nodeCrypto.randomBytes(65).toString("base64url"), auth: nodeCrypto.randomBytes(16).toString("base64url") } };
 
+  /** The limits of one person are reset between tests (they share the same account) */
+  async function freshLimits(email = "tech@akab.local") {
+    const [u] = await db().select().from(schema.users).where(eq(schema.users.email, email));
+    for (const k of ["enroll", "test", "notify"]) resetRateLimit(`push:${k}:${u.id}`);
+  }
+
   /** A browser that gave the password and waits for the second step */
   async function waiting(email = "tech@akab.local") {
     resetRateLimit("login:ip:unknown");
@@ -6293,6 +6299,7 @@ describe("sign-in approved on the phone (push + passkey)", () => {
 
   it("enrolling a phone: the password again, a full session, a real passkey; removing it", async () => {
     resetRateLimit("login:ip:unknown");
+    await freshLimits();
     const tech = await signIn("tech@akab.local");
     await db().delete(schema.pushDevices);
     // a session that only gave the password cannot enroll
@@ -6330,6 +6337,7 @@ describe("sign-in approved on the phone (push + passkey)", () => {
 
   it("signing in: number matching, the passkey signature, one session only, once", async () => {
     resetRateLimit("login:ip:unknown");
+    await freshLimits();
     const tech = await signIn("tech@akab.local");
     await db().delete(schema.pushDevices);
     await db().delete(schema.pushChallenges);
@@ -6353,7 +6361,8 @@ describe("sign-in approved on the phone (push + passkey)", () => {
     // the push carries no secret, only which request
     const push = pushed.at(-1);
     expect(push.payload).toMatchObject({ type: "signin", challengeId: start.id, deviceId: phone.deviceId });
-    expect(JSON.stringify(push.payload)).not.toContain(String(start.number));
+    // the number is not in it (checked by name: a 2-digit number can sit inside an id by chance)
+    expect(Object.keys(push.payload).sort()).toEqual(["body", "challengeId", "deviceId", "title", "type"]);
     expect((await browser.post("/api/auth/push/start")).status).toBe(429);
     expect((await browser.get("/api/auth/push/status")).json).toMatchObject({ status: "pending", number: start.number });
 
@@ -6397,9 +6406,61 @@ describe("sign-in approved on the phone (push + passkey)", () => {
     expect(row.lastUsedAt).toBeTruthy();
   });
 
+  it("the portal's notifications reach the enrolled phone: the kind only by default, the detail on request, a switch per phone, a test", async () => {
+    resetRateLimit("login:ip:unknown");
+    await freshLimits();
+    const tech = await signIn("tech@akab.local");
+    const admin = await signIn("admin@akab.local");
+    const me = (await tech.get("/api/me")).json.id as string;
+    await db().delete(schema.pushDevices);
+    const phone = new Phone();
+    const opts = (await tech.post("/api/auth/push/enroll/options", { password: PASSWORD })).json;
+    const enrolled = (await tech.post("/api/auth/push/enroll/verify", { label: "Cellulaire", subscription, response: phone.register(opts.challenge) })).json;
+    const settle = () => new Promise((r) => setTimeout(r, 150));
+    const assign = async (title: string) => (await admin.post("/api/pipeline/tasks", { title, assigneeId: me })).json;
+    const notices = () => pushed.filter((p) => p.payload.type === "notify" && p.payload.notifType === "pipeline.assigned");
+
+    // by default: what kind it is, never the title
+    pushed.length = 0;
+    const t1 = await assign("Changer le mot de passe du NAS de Garage Bouchard");
+    await settle();
+    expect(notices()).toHaveLength(1);
+    expect(notices()[0].payload).toMatchObject({ title: "Tâche pour vous", body: "Touchez pour ouvrir le portail.", url: `/pipeline?task=${t1.id}` });
+    expect(JSON.stringify(notices()[0].payload)).not.toContain("NAS");
+    // the detail on the lock screen, when asked for
+    expect((await tech.put("/api/me/preferences", { pushDetails: true })).status).toBe(200);
+    expect((await tech.get("/api/me")).json.preferences.pushDetails).toBe(true);
+    pushed.length = 0;
+    await assign("Appeler Garage Bouchard");
+    await settle();
+    expect(notices()[0].payload.body).toContain("Appeler Garage Bouchard");
+    // a phone that does not take the notifications gets none (the sign-in approvals stay)
+    expect((await tech.patch(`/api/auth/push/devices/${enrolled.id}`, { notify: false })).status).toBe(200);
+    pushed.length = 0;
+    await assign("Rien sur le téléphone");
+    await settle();
+    expect(notices()).toHaveLength(0);
+    expect((await tech.get("/api/auth/push/devices")).json.devices[0].notify).toBe(false);
+    expect((await admin.patch(`/api/auth/push/devices/${enrolled.id}`, { notify: true })).status).toBe(404);
+    expect((await tech.patch(`/api/auth/push/devices/${enrolled.id}`, { notify: true })).status).toBe(200);
+    // the test button: only the person's own phone
+    pushed.length = 0;
+    expect((await tech.post(`/api/auth/push/devices/${enrolled.id}/test`, {})).json).toEqual({ sent: true });
+    expect(pushed.at(-1)!.payload).toMatchObject({ type: "notify", notifType: "test" });
+    expect((await admin.post(`/api/auth/push/devices/${enrolled.id}/test`, {})).status).toBe(404);
+    // a link is only ever a path of the portal
+    const { safePath } = await import("../server/lib/pushNotify.ts");
+    expect(safePath("/tickets?t=1")).toBe("/tickets?t=1");
+    expect(safePath("//evil.example/x")).toBe("/");
+    expect(safePath("https://evil.example")).toBe("/");
+    expect(safePath("/\\evil.example")).toBe("/");
+    await tech.put("/api/me/preferences", { pushDetails: false });
+    await db().delete(schema.pushDevices);
+  });
+
   it("two wrong numbers close the request; \"not me\" closes the session and rests the account; an old request is refused", async () => {
     resetRateLimit("login:ip:unknown");
-    const [d] = await db().select().from(schema.pushDevices);
+    await freshLimits();
     const [user] = await db().select().from(schema.users).where(eq(schema.users.email, "tech@akab.local"));
     // a phone object bound to the stored device: its token is not kept, so enroll a fresh one
     const tech = await signIn("tech@akab.local");
@@ -6408,7 +6469,6 @@ describe("sign-in approved on the phone (push + passkey)", () => {
     const opts = (await tech.post("/api/auth/push/enroll/options", { password: PASSWORD })).json;
     const e = (await tech.post("/api/auth/push/enroll/verify", { label: "Cellulaire", subscription, response: phone.register(opts.challenge) })).json;
     const dev = { deviceId: e.id, token: e.token };
-    expect(d).toBeTruthy();
 
     // two wrong numbers
     const b1 = await waiting();

@@ -9,6 +9,7 @@ import { auth, isFullySignedIn, type AppEnv } from "../lib/auth.ts";
 import { verifyPassword } from "../lib/crypto.ts";
 import { clientIp, rateLimit } from "../lib/http.ts";
 import { body } from "../lib/validate.ts";
+import { pushTo } from "../lib/pushAuth.ts";
 import { deviceChallenge, deviceDeny, deviceRefresh, deviceRespond, enrollOptions, enrollVerify, PushError, revokeDevices, sessionChallenge, startChallenge, vapid } from "../lib/pushAuth.ts";
 
 /**
@@ -40,7 +41,7 @@ export const pushAuthRoutes = new Hono<AppEnv>()
   .get("/devices", async (c) => {
     const a = ready(c);
     const rows = await db().select().from(schema.pushDevices).where(and(eq(schema.pushDevices.userId, a.user.id), isNull(schema.pushDevices.revokedAt))).orderBy(asc(schema.pushDevices.createdAt));
-    return c.json({ vapidPublicKey: (await vapid()).publicKey, devices: rows.map((d) => ({ id: d.id, label: d.label, createdAt: d.createdAt, lastUsedAt: d.lastUsedAt, userAgent: d.userAgent })) });
+    return c.json({ vapidPublicKey: (await vapid()).publicKey, devices: rows.map((d) => ({ id: d.id, label: d.label, notify: d.notify, createdAt: d.createdAt, lastUsedAt: d.lastUsedAt, userAgent: d.userAgent })) });
   })
 
   /** The passkey options for this phone — the password is asked again (adding a phone is as sensitive as changing it) */
@@ -59,6 +60,41 @@ export const pushAuthRoutes = new Hono<AppEnv>()
     const p = await body(c, z.object({ label: z.string().trim().max(60).default(""), subscription: zSubscription, response: zResponse }));
     const r = await enrollVerify(c, a.user, a.sessionId, { label: p.label, subscription: p.subscription, response: p.response as never }).catch(http);
     return c.json({ id: r.device.id, label: r.device.label, token: r.token }, 201);
+  })
+
+  /** This phone takes the portal's notifications, or not */
+  .patch("/devices/:id", async (c) => {
+    const a = ready(c);
+    if (a.viewAs) throw new HTTPException(403, { message: "read_only_view" });
+    const id = z.uuid().parse(c.req.param("id"));
+    const p = await body(c, z.object({ notify: z.boolean() }));
+    const [row] = await db()
+      .update(schema.pushDevices)
+      .set({ notify: p.notify })
+      .where(and(eq(schema.pushDevices.id, id), eq(schema.pushDevices.userId, a.user.id), isNull(schema.pushDevices.revokedAt)))
+      .returning({ id: schema.pushDevices.id });
+    if (!row) throw new HTTPException(404, { message: "not_found" });
+    await audit(a.user.id, p.notify ? "push.notifications_on" : "push.notifications_off", id, {});
+    return c.json({ ok: true });
+  })
+
+  /** A test notification to this phone (what a real one looks like, with the person's lock screen choice) */
+  .post("/devices/:id/test", async (c) => {
+    const a = ready(c);
+    const id = z.uuid().parse(c.req.param("id"));
+    if (!rateLimit(`push:test:${a.user.id}`, 6, 5 * 60_000).ok) throw new HTTPException(429, { message: "rate_limited" });
+    const [d] = await db().select().from(schema.pushDevices).where(and(eq(schema.pushDevices.id, id), eq(schema.pushDevices.userId, a.user.id), isNull(schema.pushDevices.revokedAt)));
+    if (!d) throw new HTTPException(404, { message: "not_found" });
+    const [pref] = await db().select({ details: schema.userPreferences.pushDetails }).from(schema.userPreferences).where(eq(schema.userPreferences.userId, a.user.id));
+    const fr = a.user.locale !== "en";
+    const sent = await pushTo(d, {
+      type: "notify",
+      notifType: "test",
+      title: fr ? "Portail AKAB" : "AKAB portal",
+      body: pref?.details ? (fr ? "Notification de test : tout fonctionne." : "Test notification: everything works.") : fr ? "Touchez pour ouvrir le portail." : "Tap to open the portal.",
+      url: "/",
+    });
+    return c.json({ sent });
   })
 
   .delete("/devices/:id", async (c) => {

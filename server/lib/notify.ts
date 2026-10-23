@@ -17,6 +17,8 @@ export async function notify(userIds: string[], n: Notice): Promise<void> {
         .insert(schema.notifications)
         .values(ids.slice(i, i + 500).map((userId) => ({ userId, type: n.type, data: n.data, link: n.link })));
     }
+    // and to the phones that take the portal's notifications (never waits, never throws)
+    void import("./pushNotify.ts").then((m) => m.pushOut(ids, n));
   } catch (e) {
     console.warn("[notify] insert failed", e);
   }

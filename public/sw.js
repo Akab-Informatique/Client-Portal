@@ -10,6 +10,20 @@ self.addEventListener("push", (event) => {
     data = {};
   }
   const signin = data.type === "signin";
+  // the portal's notifications (the bell), for the phones that take them
+  if (data.type === "notify") {
+    event.waitUntil(
+      self.registration.showNotification(data.title || "Portail AKAB", {
+        body: data.body || "",
+        icon: "/akab-icon.png",
+        badge: "/akab-icon.png",
+        tag: "akab-" + (data.notifType || "notify"),
+        renotify: true,
+        data,
+      }),
+    );
+    return;
+  }
   event.waitUntil(
     self.registration.showNotification(data.title || "Portail AKAB", {
       body: data.body || "",
@@ -27,7 +41,9 @@ self.addEventListener("push", (event) => {
 self.addEventListener("notificationclick", (event) => {
   event.notification.close();
   const d = event.notification.data || {};
-  const url = d.type === "signin" && d.challengeId ? "/approve?c=" + encodeURIComponent(d.challengeId) : "/";
+  // only a path of this portal (never another site)
+  const own = (u) => typeof u === "string" && u.startsWith("/") && !u.startsWith("//") && !u.startsWith("/\\");
+  const url = d.type === "signin" && d.challengeId ? "/approve?c=" + encodeURIComponent(d.challengeId) : d.type === "notify" && own(d.url) ? d.url : "/";
   event.waitUntil(
     (async () => {
       const all = await self.clients.matchAll({ type: "window", includeUncontrolled: true });
