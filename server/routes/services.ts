@@ -12,23 +12,31 @@ import { body, zUuid } from "../lib/validate.ts";
  * recurring (monthly). No stock. Seen with services.view, changed with services.manage.
  */
 const zCents = z.number().int().min(0).max(100_000_000);
-const zService = z.object({
+const zFields = z.object({
   name: z.string().trim().min(1).max(200),
-  description: z.string().trim().max(4000).default(""),
+  description: z.string().trim().max(4000),
   // one time, recurring monthly ("recurring", as before) or recurring yearly
-  kind: z.enum(["one_time", "recurring", "recurring_yearly"]).default("recurring"),
+  kind: z.enum(["one_time", "recurring", "recurring_yearly"]),
   priceCents: zCents,
-  costCents: zCents.default(0),
-  taxable: z.boolean().default(true),
-  active: z.boolean().default(true),
+  costCents: zCents,
+  taxable: z.boolean(),
+  active: z.boolean(),
 });
+// a new service: the defaults
+const zService = zFields.partial({ description: true, kind: true, costCents: true, taxable: true, active: true }).transform((p) => ({ description: "", kind: "recurring" as const, costCents: 0, taxable: true, active: true, ...p }));
+// a change: only what is sent (a default here would reset the other fields)
+const zPatch = zFields.partial();
 
 export const serviceRoutes = new Hono<AppEnv>()
   .use(requireStaff)
 
   .get("/", requirePermission("services.view"), async (c) => {
-    const rows = await db().select().from(schema.services).orderBy(asc(schema.services.name));
-    return c.json(rows);
+    const rows = await db()
+      .select({ s: schema.services, vendorName: schema.vendors.name })
+      .from(schema.services)
+      .leftJoin(schema.vendors, eq(schema.vendors.id, schema.services.vendorId))
+      .orderBy(asc(schema.services.name));
+    return c.json(rows.map((r) => ({ ...r.s, vendorName: r.vendorName })));
   })
 
   .post("/", requirePermission("services.manage"), async (c) => {
@@ -42,7 +50,7 @@ export const serviceRoutes = new Hono<AppEnv>()
   .patch("/:id", requirePermission("services.manage"), async (c) => {
     const a = auth(c);
     const id = zUuid.parse(c.req.param("id"));
-    const p = await body(c, zService.partial());
+    const p = await body(c, zPatch);
     const [row] = await db()
       .update(schema.services)
       .set({ ...p, updatedAt: new Date() })

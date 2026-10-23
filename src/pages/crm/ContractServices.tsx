@@ -19,6 +19,10 @@ type Line = {
   priceCents: number;
   costCents: number;
   addedOn: string;
+  /** How many (the price is per unit) */
+  quantity: number;
+  /** itcloud: kept by the vendor, follows what is sold there */
+  source: string | null;
   firstCents: number | null;
   totalCents: number | null;
   periods: { from: string; to: string; days: number; periodDays: number; full: boolean; amountCents: number }[];
@@ -61,7 +65,11 @@ export function ContractServices({ clientId, k, editable }: { clientId: string; 
               {lines.map((l) => (
                 <li key={l.id} className="flex flex-wrap items-center gap-x-3 gap-y-0.5 px-3 py-2">
                   <span className="min-w-0 flex-1">
-                    <span className="block truncate font-medium">{l.name}</span>
+                    <span className="flex items-center gap-1.5 truncate font-medium">
+                      {l.name}
+                      {l.quantity > 1 && <span className="font-mono text-xs text-muted-foreground">× {l.quantity}</span>}
+                      {l.source && <span className="rounded border border-sky-400/40 px-1 text-[9px] font-semibold uppercase text-sky-300" title={t("crm.contracts.fromVendorHint")}>{l.source === "itcloud" ? "ITCloud" : l.source}</span>}
+                    </span>
                     <span className="block text-[11px] text-muted-foreground">
                       {money(l.priceCents, i18n.language)} {l.kind === "recurring_yearly" ? t("services.perYear") : t("services.perMonth")} · {t("crm.contracts.addedOn", { date: shortDate(l.addedOn) })}
                     </span>
@@ -77,7 +85,7 @@ export function ContractServices({ clientId, k, editable }: { clientId: string; 
                       </span>
                     </span>
                   )}
-                  {editable && (
+                  {editable && !l.source && (
                     <Button type="button" size="icon" variant="ghost" className="size-7 text-muted-foreground hover:text-destructive" disabled={remove.isPending} onClick={() => remove.mutate(l.id)} aria-label={t("common.delete")}>
                       <Trash2 className="size-3.5" />
                     </Button>

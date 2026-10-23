@@ -171,10 +171,15 @@ export const contractServices = pgTable(
     costCents: integer("cost_cents").notNull().default(0),
     /** YYYY-MM-DD: when the service starts on the contract */
     addedOn: text("added_on").notNull(),
+    /** How many (price is per unit): kept from the vendor for a vendor line */
+    quantity: integer("quantity").notNull().default(1),
+    /** Where the line comes from when a vendor keeps it in step (itcloud), and its id there; none: added by hand */
+    source: text("source"),
+    externalId: text("external_id"),
     createdBy: uuid("created_by").references(() => users.id, { onDelete: "set null" }),
     createdAt: created(),
   },
-  (t) => [index("contract_services_contract_idx").on(t.contractId)],
+  (t) => [index("contract_services_contract_idx").on(t.contractId), uniqueIndex("contract_services_external_idx").on(t.source, t.externalId)],
 );
 
 /** A client's invoices (Autotask Invoices while linked). Money in cents. */
@@ -1895,10 +1900,49 @@ export const services = pgTable(
     costCents: integer("cost_cents").notNull().default(0),
     taxable: boolean("taxable").notNull().default(true),
     active: boolean("active").notNull().default(true),
+    /** Our code for it (an ITCloud service is ITC-<its product id>) */
+    sku: text("sku"),
+    /** The vendor it is bought from, and the vendor's own code for it (ITCloud: its product id); the cost follows the vendor */
+    vendorId: uuid("vendor_id").references(() => vendors.id, { onDelete: "set null" }),
+    vendorSku: text("vendor_sku"),
     createdAt: created(),
     updatedAt: updated(),
   },
-  (t) => [index("services_name_idx").on(t.name)],
+  (t) => [index("services_name_idx").on(t.name), uniqueIndex("services_sku_idx").on(t.sku), uniqueIndex("services_vendor_sku_idx").on(t.vendorId, t.vendorSku)],
+);
+
+/** ITCloud customers matched to the portal's clients (a client may have several there; a customer only one client) */
+export const itcloudClients = pgTable("itcloud_clients", {
+  itcloudId: integer("itcloud_id").primaryKey(),
+  clientId: uuid("client_id")
+    .notNull()
+    .references(() => clients.id, { onDelete: "cascade" }),
+  createdAt: created(),
+});
+
+/** The last ITCloud services report (one row per service of a customer), kept to show what is matched and what is not */
+export const itcloudServices = pgTable(
+  "itcloud_services",
+  {
+    serviceId: integer("service_id").primaryKey(),
+    itcloudClientId: integer("itcloud_client_id").notNull(),
+    clientName: text("client_name").notNull().default(""),
+    productGroup: text("product_group").notNull().default(""),
+    product: text("product").notNull().default(""),
+    status: text("status").notNull().default(""),
+    billingCycle: text("billing_cycle").notNull().default(""),
+    quantity: integer("quantity").notNull().default(1),
+    /** What ITCloud bills us for the whole service, in cents */
+    amountCents: integer("amount_cents").notNull().default(0),
+    registrationDate: text("registration_date"),
+    nextInvoiceDate: text("next_invoice_date"),
+    /** inactive | synced | client_unlinked | product_unmatched | no_contract */
+    state: text("state").notNull().default("inactive"),
+    /** The contract carrying it, when synced */
+    contractName: text("contract_name"),
+    seenAt: timestamp("seen_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [index("itcloud_services_client_idx").on(t.itcloudClientId)],
 );
 
 /** Vendors (Admin › PSA › Fournisseurs). Mapped by hand to QuickBooks vendors, never synced with them. */

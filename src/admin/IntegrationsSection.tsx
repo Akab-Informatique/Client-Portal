@@ -3,7 +3,7 @@ import { useSearchParams } from "react-router-dom";
 import { useTranslation } from "react-i18next";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
-import { Users, ArrowLeft, CalendarDays, CheckCircle2, ChevronRight, CreditCard, KeyRound, Loader2, MonitorPlay, RefreshCw, Sparkles, XCircle, type LucideIcon, MessageSquareText } from "lucide-react";
+import { Users, Cloud, ArrowLeft, CalendarDays, CheckCircle2, ChevronRight, CreditCard, KeyRound, Loader2, MonitorPlay, RefreshCw, Sparkles, XCircle, type LucideIcon, MessageSquareText } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -20,6 +20,7 @@ import { useCan } from "@/lib/session";
 import { SectionHeader } from "./sections";
 import { StripePage, StripeStatus } from "./StripeIntegration";
 import { QuickBooksPage, QuickBooksStatus } from "./QuickBooksIntegration";
+import { ITCloudPage, ITCloudStatus } from "./ITCloudIntegration";
 import { AI_USAGE_KEY, AiUsagePanel } from "./AiUsage";
 import { shortModel } from "@/components/AiModelPicker";
 
@@ -36,6 +37,8 @@ const INTEGRATIONS: Integration[] = [
   { key: "stripe", name: "Stripe", icon: CreditCard, Status: StripeStatus, Page: StripePage, needs: "admin.billing" },
   // clients, chart of accounts and vendors kept in step, and invoices and payments (the API needs billing and integrations)
   { key: "quickbooks", name: "QuickBooks Online", icon: RefreshCw, Status: QuickBooksStatus, Page: QuickBooksPage, needs: "admin.billing" },
+  // a vendor: its customers matched to clients, its products as services, its services kept on contracts
+  { key: "itcloud", name: "ITCloud", icon: Cloud, Status: ITCloudStatus, Page: ITCloudPage },
   { key: "passbolt", name: "Passbolt", icon: KeyRound, Status: PassboltStatus, Page: PassboltAdminPage },
   { key: "teams", name: "Microsoft Teams", icon: Users, Status: TeamsStatus, Page: TeamsPage },
   { key: "rmm", name: "RMM", icon: MonitorPlay, Status: RmmStatus, Page: RmmPage },

@@ -8,6 +8,7 @@ import { purgeOldNotifications } from "./lib/notify.ts";
 import { smtpSettings } from "./lib/mail.ts";
 import { CRM_SYNC_EVERY, syncCrm } from "./lib/crm.ts";
 import { quickbooksTick } from "./lib/quickbooks.ts";
+import { itcloudTick } from "./lib/itcloud.ts";
 import { syncBillables } from "./lib/billables.ts";
 import { sweepTimers } from "./lib/timers.ts";
 import { sendReminders } from "./lib/planning.ts";
@@ -32,6 +33,8 @@ void syncAll();
 setInterval(() => void syncAll(), CRM_SYNC_EVERY).unref();
 // QuickBooks: payments made there brought onto the portal's invoices
 setInterval(() => void quickbooksTick(), 15 * 60_000).unref();
+// ITCloud: the services of the matched customers kept on their contracts
+setInterval(() => void itcloudTick().catch((e) => console.warn("[itcloud] tick:", e instanceof Error ? e.message : e)), 15 * 60_000).unref();
 
 
 const server = serve({ fetch: app.fetch, port: config.port, hostname: host }, (info) => {

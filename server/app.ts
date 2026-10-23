@@ -20,6 +20,7 @@ import { contractTypeRoutes } from "./routes/contractTypes.ts";
 import { vendorRoutes } from "./routes/vendors.ts";
 import { passboltRoutes } from "./routes/passbolt.ts";
 import { serviceRoutes } from "./routes/services.ts";
+import { itcloudRoutes } from "./routes/itcloud.ts";
 import { classRoutes } from "./routes/classes.ts";
 import { ticketSetupRoutes } from "./routes/ticketSetup.ts";
 import { mailIntakeAdminRoutes, mailIntakeRoutes } from "./routes/mailIntake.ts";
@@ -98,6 +99,7 @@ export function createApp() {
   api.route("/admin/queues", queueRoutes);
   api.route("/admin/contract-types", contractTypeRoutes);
   api.route("/admin/vendors", vendorRoutes);
+  api.route("/admin/itcloud", itcloudRoutes);
   api.route("/admin/client-classes", classRoutes);
   api.route("/admin/ticket-setup", ticketSetupRoutes);
   api.route("/admin/mail-intake", mailIntakeAdminRoutes);

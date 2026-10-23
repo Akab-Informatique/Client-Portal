@@ -23,7 +23,7 @@ const toNum = (v: string) => {
 };
 const fmt = (n: number) => String(Math.round(n * 100) / 100);
 
-type Service = { id: string; name: string; description: string; kind: "one_time" | "recurring" | "recurring_yearly"; priceCents: number; costCents: number; taxable: boolean; active: boolean };
+type Service = { id: string; name: string; description: string; kind: "one_time" | "recurring" | "recurring_yearly"; priceCents: number; costCents: number; taxable: boolean; active: boolean; sku?: string | null; vendorName?: string | null };
 const KEY = ["services"];
 
 /** Services, under Inventory: what the company sells besides products (one time or monthly). */
@@ -79,6 +79,12 @@ export function ServicesPage() {
               <span className="min-w-0 flex-1">
                 <span className="block truncate text-sm font-medium">{s.name}</span>
                 {s.description && <span className="block truncate text-xs text-muted-foreground">{s.description}</span>}
+                {(s.sku || s.vendorName) && (
+                  <span className="block truncate font-mono text-[11px] text-muted-foreground">
+                    {s.sku}
+                    {s.vendorName ? ` · ${s.vendorName}` : ""}
+                  </span>
+                )}
               </span>
               <span className="rounded-md border px-2 py-0.5 text-[11px] text-muted-foreground">{t(`services.kind.${s.kind}`)}</span>
               <span className="w-32 text-right font-mono text-sm">

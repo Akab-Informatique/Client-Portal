@@ -6600,3 +6600,124 @@ describe("sign-in approved on the phone (push + passkey)", () => {
     await db().delete(schema.pushChallenges);
   });
 });
+
+describe("ITCloud: vendor, clients matched, services kept on contracts", () => {
+  it("signs the partner JWT, matches customers, makes services by SKU and keeps each customer services on its contract", async () => {
+    resetRateLimit("login:ip:unknown");
+    const crypto = await import("node:crypto");
+    const { publicKey, privateKey } = crypto.generateKeyPairSync("rsa", { modulusLength: 2048, privateKeyEncoding: { type: "pkcs8", format: "pem" }, publicKeyEncoding: { type: "spki", format: "pem" } });
+    const admin = await signIn("admin@akab.local");
+    const tech = await signIn("tech@akab.local");
+    const clients = (await admin.get("/api/crm/clients")).json;
+    const client = (clients.items ?? clients).find((x: any) => x.autotaskId === 300);
+    const KEY = "0b0e1f6a-1d2c-4f1e-9a55-0c9d8e7f6a5b";
+
+    // what ITCloud says (the report changes during the test)
+    let report: any[] = [
+      { clientId: 777, clientCompany: client.name, productGroup: "Microsoft 365", product: "Exchange Plan 1", serviceId: 9001, status: "Active", billingCycle: "Monthly", registrationDate: "2026-10-16", nextInvoiceDate: "2026-11-16", quantity: 3, amount: 15 },
+      { clientId: 777, clientCompany: client.name, productGroup: "Bitdefender", product: "Cloud Security", serviceId: 9002, status: "Active", billingCycle: "Monthly", registrationDate: "2026-10-01", nextInvoiceDate: "2026-11-01", quantity: 1, amount: 3 },
+      { clientId: 888, clientCompany: "Inconnu inc.", productGroup: "Microsoft 365", product: "Exchange Plan 1", serviceId: 9003, status: "Active", billingCycle: "Monthly", registrationDate: "2026-09-01", nextInvoiceDate: "2026-11-01", quantity: 2, amount: 10 },
+    ];
+    const seen: { auth: string | null; version: string | null; url: string }[] = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: unknown, init: RequestInit = {}) => {
+        const u = String(url);
+        if (!u.startsWith("https://zone.itcloud.ca/api/partner/")) return new Response("{}", { status: 404 });
+        const h = new Headers(init.headers);
+        seen.push({ auth: h.get("authorization"), version: h.get("accept-version"), url: u });
+        if (u.endsWith("/customers"))
+          return Response.json({
+            items: [
+              { clientId: 777, clientCode: "c-777", companyName: client.name.toUpperCase(), fullName: "X", email: "x@x.ca", status: "Active" },
+              { clientId: 888, clientCode: "c-888", companyName: "Inconnu inc.", fullName: "Y", email: "y@y.ca", status: "Active" },
+            ],
+          });
+        if (u.endsWith("/products"))
+          return Response.json({
+            items: [
+              { productId: 42, productGroupId: 11, productGroup: "Microsoft 365", name: "Exchange Plan 1", payType: "recurring", isUsageBasedBilling: false, term: "None", monthlyUnitPrice: 5, annuallyUnitPrice: 50, billingCycles: ["Monthly", "Annually"] },
+              { productId: 43, productGroupId: 12, productGroup: "Bitdefender", name: "Cloud Security", payType: "recurring", isUsageBasedBilling: false, term: "None", monthlyUnitPrice: 3, annuallyUnitPrice: null, billingCycles: ["Monthly"] },
+              { productId: 44, productGroupId: 13, productGroup: "Azure", name: "Consumption", payType: "recurring", isUsageBasedBilling: true, term: "None", monthlyUnitPrice: null, annuallyUnitPrice: null, billingCycles: ["Monthly"] },
+            ],
+          });
+        if (u.endsWith("/services-report")) return Response.json({ items: report });
+        return new Response("{}", { status: 404 });
+      }),
+    );
+
+    // only administrators reach it
+    expect((await tech.get("/api/admin/itcloud")).status).toBe(403);
+    // the keys are checked; the private key is never given back
+    expect((await admin.put("/api/admin/itcloud", { integrationKey: "nope" })).json.error).toBe("itcloud_bad_key");
+    expect((await admin.put("/api/admin/itcloud", { privateKey: "-----BEGIN PRIVATE KEY-----\nabc\n-----END PRIVATE KEY-----" })).json.error).toBe("itcloud_bad_private_key");
+    expect((await admin.put("/api/admin/itcloud", { enabled: true })).json.error).toBe("itcloud_incomplete");
+    const saved = (await admin.put("/api/admin/itcloud", { integrationKey: KEY, privateKey, enabled: true })).json;
+    expect(saved).toMatchObject({ enabled: true, integrationKey: KEY, hasKey: true, vendorName: "ITCloud" });
+    expect(JSON.stringify(saved)).not.toContain("BEGIN");
+    // ITCloud is a vendor of the portal now
+    const vendors = (await admin.get("/api/admin/vendors")).json;
+    expect(vendors.some((v: any) => v.name === "ITCloud" && v.id === saved.vendorId)).toBe(true);
+
+    // the test: the call carries a JWT signed with the private key (RS256, our key, the partner audience, scopes)
+    const tested = (await admin.post("/api/admin/itcloud/test", {})).json;
+    expect(tested.lastTest).toMatchObject({ ok: true, customers: 2, products: 3 });
+    const bearer = seen[0].auth!.replace("Bearer ", "");
+    const [h, p, sig] = bearer.split(".");
+    expect(JSON.parse(Buffer.from(h, "base64url").toString())).toMatchObject({ alg: "RS256", typ: "JWT" });
+    const claims = JSON.parse(Buffer.from(p, "base64url").toString());
+    expect(claims).toMatchObject({ iss: KEY, aud: "https://zone.itcloud.ca/api/partner" });
+    expect(claims.exp - claims.iat).toBeLessThanOrEqual(900);
+    expect(claims.scope.split(" ")).toEqual(expect.arrayContaining(["customer.read", "product.read", "report.read"]));
+    expect(crypto.verify("RSA-SHA256", Buffer.from(`${h}.${p}`), publicKey, Buffer.from(sig, "base64url"))).toBe(true);
+    expect(seen[0].version).toBe("1");
+
+    // customers to clients: the same name (accents and case ignored) is proposed, the other is not
+    const plan = (await admin.get("/api/admin/itcloud/clients")).json;
+    expect(plan.find((r: any) => r.itcloudId === 777).suggestion).toMatchObject({ clientId: client.id, reason: "name" });
+    expect(plan.find((r: any) => r.itcloudId === 888).suggestion).toBeNull();
+    expect((await admin.put("/api/admin/itcloud/clients", { links: [{ itcloudId: 777, clientId: client.id }] })).json.changed).toBe(1);
+    expect((await admin.get("/api/admin/itcloud/clients")).json.find((r: any) => r.itcloudId === 777)).toMatchObject({ clientId: client.id, suggestion: null });
+
+    // products to services, by SKU, only recurring ones; reviewed, then applied
+    const sp = (await admin.get("/api/admin/itcloud/services/plan")).json;
+    expect(sp.ignored).toBe(1);
+    expect(sp.rows.map((r: any) => [r.key, r.state, r.costCents])).toEqual([
+      ["43", "new", 300],
+      ["42", "new", 500],
+    ]);
+    expect((await admin.post("/api/admin/itcloud/services/plan", { keys: ["42", "43"] })).json).toEqual({ created: 2, updated: 0 });
+    const svcs = (await admin.get("/api/services")).json;
+    const exchange = svcs.find((s: any) => s.sku === "ITC-42");
+    expect(exchange).toMatchObject({ name: "Exchange Plan 1", kind: "recurring", costCents: 500, vendorName: "ITCloud", vendorSku: "42" });
+    // nothing left to apply; the price we set stays
+    await admin.patch(`/api/services/${exchange.id}`, { priceCents: 800 });
+    expect((await admin.get("/api/admin/itcloud/services/plan")).json.rows.every((r: any) => r.state === "same")).toBe(true);
+
+    // the sync: matched customer + matched product + a contract gives a line with the quantity
+    const typeKey = (await admin.get("/api/crm/contract-types")).json.find((x: any) => x.kind === "recurring").key;
+    const contract = (await admin.post(`/api/crm/clients/${client.id}/contracts`, { name: "Services gérés", typeKey, startDate: "2026-10-01", endDate: "2026-12-31", monthlyRate: 0 })).json;
+    const sync = (await admin.post("/api/admin/itcloud/sync", {})).json;
+    expect(sync).toMatchObject({ ok: true, counts: { services: 3, active: 3, created: 2, updated: 0, removed: 0, clientUnlinked: 1, productUnmatched: 0, noContract: 0 } });
+    const lines = (await admin.get(`/api/crm/clients/${client.id}/contracts/${contract.id}/services`)).json;
+    const ex = lines.find((l: any) => l.name === "Exchange Plan 1");
+    expect(ex).toMatchObject({ quantity: 3, source: "itcloud", priceCents: 800, costCents: 500, addedOn: "2026-10-16" });
+    // the total is for the three units: 16/31 of October, then November and December
+    expect(ex.totalCents).toBe(Math.round((2400 * 16) / 31) + 2400 * 2);
+    const states = (await admin.get("/api/admin/itcloud/services")).json.rows;
+    expect(states.find((r: any) => r.serviceId === 9003).state).toBe("client_unlinked");
+    expect(states.find((r: any) => r.serviceId === 9001)).toMatchObject({ state: "synced", contractName: "Services gérés" });
+    // a line kept by the vendor cannot be removed by hand
+    expect((await admin.del(`/api/crm/clients/${client.id}/contracts/${contract.id}/services/${ex.id}`)).json.error).toBe("service_from_vendor");
+
+    // a new quantity follows; a service no longer active leaves the contract; running it again changes nothing
+    report = [{ ...report[0], quantity: 5, amount: 25 }, { ...report[1], status: "Cancelled" }, report[2]];
+    const again = (await admin.post("/api/admin/itcloud/sync", {})).json;
+    expect(again.counts).toMatchObject({ created: 0, updated: 1, removed: 1 });
+    const after = (await admin.get(`/api/crm/clients/${client.id}/contracts/${contract.id}/services`)).json;
+    expect(after).toHaveLength(1);
+    expect(after[0]).toMatchObject({ quantity: 5, costCents: 500 });
+    expect((await admin.post("/api/admin/itcloud/sync", {})).json.counts).toMatchObject({ created: 0, updated: 0, removed: 0 });
+    vi.unstubAllGlobals();
+  });
+});

@@ -72,7 +72,7 @@ async function contractOr404(clientId: string, id: string) {
 }
 /** A service on a contract, with the prorata worked out on the contract's term (none while it has no term). */
 function serviceLine(r: typeof schema.contractServices.$inferSelect, k: ContractRow) {
-  const plan = k.startDate && k.endDate ? prorata({ period: (r.kind === "recurring_yearly" ? "yearly" : "monthly") as ServicePeriod, priceCents: r.priceCents, addedOn: r.addedOn, start: k.startDate, end: k.endDate }) : "dates";
+  const plan = k.startDate && k.endDate ? prorata({ period: (r.kind === "recurring_yearly" ? "yearly" : "monthly") as ServicePeriod, priceCents: r.priceCents * r.quantity, addedOn: r.addedOn, start: k.startDate, end: k.endDate }) : "dates";
   return { ...r, firstCents: typeof plan === "string" ? null : plan.firstCents, totalCents: typeof plan === "string" ? null : plan.totalCents, periods: typeof plan === "string" ? [] : plan.periods };
 }
 
@@ -458,6 +458,9 @@ export const crmRoutes = new Hono<AppEnv>()
     const a = auth(c);
     const client = await clientOr404(c.req.param("id"));
     const k = await contractOr404(client.id, c.req.param("kid"));
+    // a line kept by a vendor (ITCloud) follows the vendor: it leaves when the service ends there
+    const [line] = await db().select({ source: schema.contractServices.source }).from(schema.contractServices).where(and(eq(schema.contractServices.id, zUuid.parse(c.req.param("sid"))), eq(schema.contractServices.contractId, k.id)));
+    if (line?.source) throw new HTTPException(409, { message: "service_from_vendor" });
     const [row] = await db()
       .delete(schema.contractServices)
       .where(and(eq(schema.contractServices.id, zUuid.parse(c.req.param("sid"))), eq(schema.contractServices.contractId, k.id)))
