@@ -258,7 +258,7 @@ function ClientsStep() {
 }
 
 // ── 2. products → services ──
-type ServicePlan = { rows: { key: string; productGroup: string; name: string; kind: "recurring" | "recurring_yearly"; costCents: number; state: "new" | "update" | "same"; serviceName: string | null; priceCents: number | null; change: string[] }[]; ignored: number };
+type ServicePlan = { rows: { key: string; productGroup: string; name: string; kind: "recurring" | "recurring_yearly"; costCents: number; state: "new" | "update" | "same"; serviceName: string | null; priceCents: number | null; suggestedPriceCents: number; priceSource: "msrp" | "markup"; change: string[] }[]; ignored: number; msrpError: string | null };
 
 function ServicesStep() {
   const { t, i18n } = useTranslation();
@@ -309,11 +309,16 @@ function ServicesStep() {
                 </span>
                 <span className="text-right text-xs text-muted-foreground">
                   {t("integrations.itcloud.services.cost")} <span className="font-mono text-foreground">{money(r.costCents, i18n.language)}</span>
-                  {r.priceCents !== null && (
-                    <span className="block">
-                      {t("services.price")} <span className="font-mono text-foreground">{money(r.priceCents, i18n.language)}</span>
-                    </span>
-                  )}
+                  <span className="block">
+                    {t("services.price")}{" "}
+                    {r.priceCents !== null ? (
+                      <span className="font-mono text-foreground">{money(r.priceCents, i18n.language)}</span>
+                    ) : (
+                      <span className="font-mono text-foreground" title={t(`integrations.itcloud.services.priceSource.${r.priceSource}`)}>
+                        {money(r.suggestedPriceCents, i18n.language)} <span className="font-sans text-[10px] text-muted-foreground">({t(`integrations.itcloud.services.priceShort.${r.priceSource}`)})</span>
+                      </span>
+                    )}
+                  </span>
                 </span>
                 <Badge variant="outline" className={cn("w-28 justify-center", r.state === "new" ? "border-sky-500/40 text-sky-300" : r.state === "update" ? "border-amber-500/40 text-amber-300" : "text-muted-foreground")}>
                   {t(`integrations.itcloud.services.state.${r.state}`)}
@@ -321,6 +326,7 @@ function ServicesStep() {
               </li>
             ))}
           </ul>
+          {data?.msrpError && <p className="mt-2 text-xs text-amber-300">{t("integrations.itcloud.services.msrpError")}</p>}
           {data && data.ignored > 0 && <p className="mt-2 text-xs text-muted-foreground">{t("integrations.itcloud.services.ignored", { count: data.ignored })}</p>}
         </>
       )}

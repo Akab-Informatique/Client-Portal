@@ -6642,6 +6642,18 @@ describe("ITCloud: vendor, clients matched, services kept on contracts", () => {
             ],
           });
         if (u.endsWith("/services-report")) return Response.json({ items: report });
+        // the MSRP is only given on invoice lines: product 42 has two monthly ones (the latest wins) and a yearly one, product 43 none
+        if (u.includes("/invoice-items-report?from=")) {
+          const q = new URL(u).searchParams;
+          expect(q.get("from")! < q.get("to")!).toBe(true);
+          return Response.json({
+            items: [
+              { productId: 42, billingCycle: "Monthly", unitMsrp: 6.5, invoiceDate: "2026-08-15" },
+              { productId: 42, billingCycle: "Monthly", unitMsrp: 7.25, invoiceDate: "2026-09-15" },
+              { productId: 42, billingCycle: "Annually", unitMsrp: 70, invoiceDate: "2026-07-01" },
+            ],
+          });
+        }
         return new Response("{}", { status: 404 });
       }),
     );
@@ -6686,10 +6698,16 @@ describe("ITCloud: vendor, clients matched, services kept on contracts", () => {
       ["43", "new", 300],
       ["42", "new", 500],
     ]);
+    // the price a new service starts at: ITCloud's MSRP when it gives one (latest line, the product's own period), else the cost plus 20 %
+    expect(sp.rows.map((r: any) => [r.key, r.suggestedPriceCents, r.priceSource])).toEqual([
+      ["43", 360, "markup"],
+      ["42", 725, "msrp"],
+    ]);
     expect((await admin.post("/api/admin/itcloud/services/plan", { keys: ["42", "43"] })).json).toEqual({ created: 2, updated: 0 });
     const svcs = (await admin.get("/api/services")).json;
     const exchange = svcs.find((s: any) => s.sku === "ITC-42");
-    expect(exchange).toMatchObject({ name: "Exchange Plan 1", kind: "recurring", costCents: 500, vendorName: "ITCloud", vendorSku: "42" });
+    expect(exchange).toMatchObject({ name: "Exchange Plan 1", kind: "recurring", costCents: 500, priceCents: 725, vendorName: "ITCloud", vendorSku: "42" });
+    expect(svcs.find((s: any) => s.sku === "ITC-43")).toMatchObject({ costCents: 300, priceCents: 360 });
     // nothing left to apply; the price we set stays
     await admin.patch(`/api/services/${exchange.id}`, { priceCents: 800 });
     expect((await admin.get("/api/admin/itcloud/services/plan")).json.rows.every((r: any) => r.state === "same")).toBe(true);

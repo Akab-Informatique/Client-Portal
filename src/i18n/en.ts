@@ -2933,11 +2933,14 @@ const en: Dict = {
       },
       services: {
         title: "2. ITCloud products → services",
-        hint: "Each recurring product becomes a portal service with the SKU ITC-<id> and the vendor ITCloud. The cost follows ITCloud; the selling price stays yours (at first equal to the cost).",
+        hint: "Each recurring product becomes a portal service with the SKU ITC-<id> and the vendor ITCloud. The cost follows ITCloud; the selling price starts at ITCloud's MSRP (else cost + 20%) and stays yours: edit it afterwards, it is never overwritten.",
         apply: "Apply ({{count}})",
         applied: "{{created}} service(s) created, {{updated}} updated",
         cost: "Cost",
         state: { new: "New", update: "To update", same: "Up to date" },
+        priceShort: { msrp: "MSRP", markup: "cost + 20%" },
+        priceSource: { msrp: "ITCloud's suggested retail price (MSRP)", markup: "ITCloud gives no MSRP for this product: cost + 20%" },
+        msrpError: "ITCloud's MSRP could not be read (invoice items report): the suggested prices are cost + 20%.",
         ignored: "{{count}} product(s) ignored (usage-based or not recurring).",
       },
       sync: {

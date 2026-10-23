@@ -2931,11 +2931,14 @@ const fr = {
       },
       services: {
         title: "2. Produits ITCloud → services",
-        hint: "Chaque produit récurrent devient un service du portail avec le SKU ITC-<id> et le fournisseur ITCloud. Le coût suit ITCloud ; le prix de vente reste le vôtre (au départ égal au coût).",
+        hint: "Chaque produit récurrent devient un service du portail avec le SKU ITC-<id> et le fournisseur ITCloud. Le coût suit ITCloud ; le prix de vente démarre au PDSF d'ITCloud (sinon coût + 20 %) et reste le vôtre : vous pouvez le modifier ensuite, il n'est jamais écrasé.",
         apply: "Appliquer ({{count}})",
         applied: "{{created}} service(s) créé(s), {{updated}} mis à jour",
         cost: "Coût",
         state: { new: "Nouveau", update: "À mettre à jour", same: "À jour" },
+        priceShort: { msrp: "PDSF", markup: "coût + 20 %" },
+        priceSource: { msrp: "Prix de détail suggéré (PDSF) d'ITCloud", markup: "ITCloud ne donne pas de PDSF pour ce produit : coût + 20 %" },
+        msrpError: "Le PDSF d'ITCloud n'a pas pu être lu (rapport des lignes de facture) : les prix suggérés sont le coût + 20 %.",
         ignored: "{{count}} produit(s) ignoré(s) (à la consommation ou non récurrents).",
       },
       sync: {

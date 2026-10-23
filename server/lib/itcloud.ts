@@ -126,6 +126,9 @@ export type ItServiceRow = {
 };
 export const itcloudCustomers = async (s: ItcloudSettings) => (await call<{ items?: ItCustomer[] }>(s, "/api/partner/customers")).items ?? [];
 export const itcloudProducts = async (s: ItcloudSettings) => (await call<{ items?: ItProduct[] }>(s, "/api/partner/products")).items ?? [];
+/** One invoiced line: the MSRP ITCloud shows for a product (the only place the API gives it) */
+export type ItInvoiceItem = { productId: number; billingCycle: string; unitMsrp: number; invoiceDate: string };
+export const itcloudInvoiceItems = async (s: ItcloudSettings, from: string, to: string) => (await call<{ items?: ItInvoiceItem[] }>(s, `/api/partner/invoice-items-report?from=${from}&to=${to}`)).items ?? [];
 export const itcloudServicesReport = async (s: ItcloudSettings) => (await call<{ items?: ItServiceRow[] }>(s, "/api/partner/services-report")).items ?? [];
 
 export async function testItcloud(s: ItcloudSettings) {
@@ -151,6 +154,30 @@ export function normName(s: string): string {
     .join(" ");
 }
 const normEmail = (e: string | null | undefined) => (e ?? "").trim().toLowerCase();
+/** Our price when ITCloud gives no MSRP for a product: the cost plus 20 % */
+export const MARKUP = 1.2;
+/**
+ * The MSRP per unit and period of each product, from the latest invoice line that carries one (the last 12
+ * months of the invoice items report): the line of the product's own period first (monthly or yearly).
+ */
+export async function msrpByProduct(s: ItcloudSettings, now = new Date()): Promise<{ map: Map<string, { monthly?: number; yearly?: number }>; error: string | null }> {
+  const map = new Map<string, { monthly?: number; yearly?: number }>();
+  try {
+    const to = now.toISOString().slice(0, 10);
+    const from = new Date(now.getTime() - 365 * 86_400_000).toISOString().slice(0, 10);
+    const items = (await itcloudInvoiceItems(s, from, to)).filter((i) => i.productId && i.unitMsrp > 0).sort((a, b) => (a.invoiceDate < b.invoiceDate ? -1 : 1));
+    // oldest first, so the latest line wins
+    for (const i of items) {
+      const cur = map.get(String(i.productId)) ?? {};
+      if (/^month/i.test(i.billingCycle)) cur.monthly = i.unitMsrp;
+      else if (/^(annual|year)/i.test(i.billingCycle)) cur.yearly = i.unitMsrp;
+      map.set(String(i.productId), cur);
+    }
+    return { map, error: null };
+  } catch (e) {
+    return { map, error: e instanceof ItcloudError ? e.code : "itcloud_error" };
+  }
+}
 /** Portal service kind from the ITCloud product's billing cycles */
 export const kindOf = (p: ItProduct): "recurring" | "recurring_yearly" => (p.billingCycles.includes("Monthly") || p.monthlyUnitPrice != null ? "recurring" : "recurring_yearly");
 const cents = (n: number | null | undefined) => Math.max(0, Math.round((n ?? 0) * 100));
@@ -252,13 +279,18 @@ export type ServiceRowPlan = {
   /** The portal service it is tied to or would be tied to (by SKU, or by the same name) */
   serviceId: string | null;
   serviceName: string | null;
+  /** The price of the portal service tied to it, if any */
   priceCents: number | null;
+  /** The price a new service would start at: ITCloud's MSRP, else the cost plus 20 % */
+  suggestedPriceCents: number;
+  priceSource: "msrp" | "markup";
   change: string[];
 };
 
-export async function servicePlan(s: ItcloudSettings): Promise<{ rows: ServiceRowPlan[]; ignored: number }> {
+export async function servicePlan(s: ItcloudSettings): Promise<{ rows: ServiceRowPlan[]; ignored: number; msrpError: string | null }> {
   const vendorId = await ensureVendor();
   const products = await itcloudProducts(s);
+  const msrp = await msrpByProduct(s);
   const services = await db().select().from(schema.services);
   const byVendorSku = new Map(services.filter((x) => x.vendorId === vendorId && x.vendorSku).map((x) => [x.vendorSku!, x]));
   const byName = new Map<string, typeof services>();
@@ -283,12 +315,15 @@ export async function servicePlan(s: ItcloudSettings): Promise<{ rows: ServiceRo
       if (svc.kind !== kind) change.push("kind");
       if (change.length) state = "update";
     }
-    return { key, productGroup: p.productGroup, name, kind, costCents: cost, state, serviceId: svc?.id ?? null, serviceName: svc?.name ?? null, priceCents: svc?.priceCents ?? null, change };
+    const m = msrp.map.get(key);
+    const listed = cents(kind === "recurring" ? m?.monthly : m?.yearly);
+    const suggestedPriceCents = listed > 0 ? listed : Math.round(cost * MARKUP);
+    return { key, productGroup: p.productGroup, name, kind, costCents: cost, state, serviceId: svc?.id ?? null, serviceName: svc?.name ?? null, priceCents: svc?.priceCents ?? null, suggestedPriceCents, priceSource: listed > 0 ? ("msrp" as const) : ("markup" as const), change };
   });
-  return { rows: rows.sort((a, b) => a.productGroup.localeCompare(b.productGroup) || a.name.localeCompare(b.name)), ignored: products.length - recurring.length };
+  return { rows: rows.sort((a, b) => a.productGroup.localeCompare(b.productGroup) || a.name.localeCompare(b.name)), ignored: products.length - recurring.length, msrpError: msrp.error };
 }
 
-/** Make / update the portal services of the accepted ITCloud products (keys). A new service starts priced at its cost: the price is set by hand afterwards. */
+/** Make / update the portal services of the accepted ITCloud products (keys). A new service starts at ITCloud's MSRP (else cost + 20 %); the price is ours to change afterwards and is never overwritten. */
 export async function applyServicePlan(s: ItcloudSettings, keys: string[], actorId: string | null): Promise<{ created: number; updated: number }> {
   const { rows } = await servicePlan(s);
   const vendorId = await ensureVendor();
@@ -303,7 +338,7 @@ export async function applyServicePlan(s: ItcloudSettings, keys: string[], actor
       await db().update(schema.services).set({ vendorId, vendorSku: r.key, sku, costCents: r.costCents, kind: r.kind, updatedAt: new Date() }).where(eq(schema.services.id, r.serviceId));
       updated++;
     } else {
-      await db().insert(schema.services).values({ name: r.name, description: r.productGroup, kind: r.kind, priceCents: r.costCents, costCents: r.costCents, sku: `ITC-${r.key}`, vendorId, vendorSku: r.key });
+      await db().insert(schema.services).values({ name: r.name, description: r.productGroup, kind: r.kind, priceCents: r.suggestedPriceCents, costCents: r.costCents, sku: `ITC-${r.key}`, vendorId, vendorSku: r.key });
       created++;
     }
   }
