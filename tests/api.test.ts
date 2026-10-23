@@ -5377,6 +5377,36 @@ describe("sort by the order the AI planned", () => {
   });
 });
 
+describe("plan my tickets: hours laid out without overlap, milestone", () => {
+  it("the plan never overlaps, flags what cannot meet its due date, and applying sets start, time and milestone", async () => {
+    resetRateLimit("login:ip:unknown");
+    const tech = await signIn("admin@akab.local");
+    const res = await tech.post("/api/tickets/ai/plan", {});
+    expect(res.status).toBe(200);
+    const plan = res.json;
+    expect(["ai", "rules"]).toContain(plan.source);
+    expect(plan.items.length).toBeGreaterThan(0);
+    // one technician cannot be in two places: no two planned slots of the same day overlap
+    const spans = plan.items.filter((i: any) => i.startDate && i.startDate === i.endDate).map((i: any) => ({ d: i.startDate, s: i.startTime, e: i.endTime }));
+    for (const a of spans) for (const b of spans) if (a !== b && a.d === b.d) expect(a.e <= b.s || b.e <= a.s).toBe(true);
+    for (const i of plan.items) {
+      expect(i.minutes).toBeGreaterThanOrEqual(15);
+      if (i.startDate) expect(i.milestoneDate).toBe(i.endDate);
+      if (i.late && i.endDate) expect(i.suggestedDue).toBe(`${i.endDate} ${i.endTime}`);
+    }
+    // applying: start, time and milestone saved on the ticket
+    const one = plan.items.find((i: any) => i.startDate);
+    expect((await tech.post("/api/tickets/start-dates", { items: [{ id: one.id, startDate: one.startDate, startTime: one.startTime, milestoneDate: one.milestoneDate }], plan: true })).status).toBe(200);
+    const tk = (await tech.get(`/api/tickets/${one.id}`)).json;
+    expect(tk).toMatchObject({ startDate: one.startDate, startTime: one.startTime, milestoneDate: one.milestoneDate });
+    // the goal date cannot come before the start; and can be cleared
+    expect((await tech.put(`/api/tickets/${one.id}/start-date`, { startDate: "2026-12-10", milestoneDate: "2026-12-01" })).json.error).toBe("milestone_before_start");
+    const set = await tech.put(`/api/tickets/${one.id}/start-date`, { startDate: "2026-12-10", milestoneDate: "2026-12-15" });
+    expect(set.json.milestoneDate).toBe("2026-12-15");
+    expect((await tech.put(`/api/tickets/${one.id}/start-date`, { milestoneDate: null })).json.milestoneDate).toBeNull();
+  });
+});
+
 describe("services on a contract, with their prorata", () => {
   it("a service is added from a day; the first period and the term are prorated; the dates are checked", async () => {
     resetRateLimit("login:ip:unknown");

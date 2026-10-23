@@ -5,7 +5,7 @@ import { useMutation, useQuery, useQueryClient, type QueryClient } from "@tansta
 import { AnimatePresence, motion } from "motion/react";
 import { toast } from "sonner";
 import { Dialog as DialogPrimitive } from "radix-ui";
-import { AlertTriangle, Bot, Building2, CalendarClock, CalendarPlus, Check, BookOpen, ChevronDown, ListOrdered, ChevronUp, Clock3, Eye, FileText, HardDrive, HelpCircle, Inbox, ListChecks, Loader2, Lock, Mail, Minus, MonitorCog, MonitorPlay, NotebookPen, Pencil, Phone, RefreshCw, Send, Sparkles, Timer, Star, UserCheck, UserRound, Users, X, type LucideIcon, MessageSquareReply, MessageSquareText, Trash2, GitMerge } from "lucide-react";
+import { AlertTriangle, Flag, Bot, Building2, CalendarClock, CalendarPlus, Check, BookOpen, ChevronDown, ListOrdered, ChevronUp, Clock3, Eye, FileText, HardDrive, HelpCircle, Inbox, ListChecks, Loader2, Lock, Mail, Minus, MonitorCog, MonitorPlay, NotebookPen, Pencil, Phone, RefreshCw, Send, Sparkles, Timer, Star, UserCheck, UserRound, Users, X, type LucideIcon, MessageSquareReply, MessageSquareText, Trash2, GitMerge } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { useConfirm } from "@/components/ConfirmDialog";
 import { AiTextarea } from "@/components/AiPolish";
@@ -242,6 +242,7 @@ function TicketBody({
     startDate: tk.startDate ?? null,
     startTime: tk.startTime ?? null,
     startLocked: Boolean(tk.startLocked),
+    milestoneDate: tk.milestoneDate ?? null,
   };
   const stage = (p: Staged) => {
     const next: Staged = { ...p };
@@ -256,10 +257,10 @@ function TicketBody({
   const changed = (k: keyof Staged) => k in staged;
   const saveAll = useMutation({
     mutationFn: async (changes: Staged) => {
-      const { startDate, startTime, startLocked, ...patch } = changes;
+      const { startDate, startTime, startLocked, milestoneDate, ...patch } = changes;
       let next: TicketDetail | null = null;
       if (Object.keys(patch).length) next = await api.patch<TicketDetail>(`/tickets/${tk.id}`, patch);
-      const start = { startDate, startTime, startLocked };
+      const start = { startDate, startTime, startLocked, milestoneDate };
       if (Object.values(start).some((x) => x !== undefined)) await api.put(`/tickets/${tk.id}/start-date`, start);
       return next;
     },
@@ -521,6 +522,7 @@ function TicketBody({
                 value: shortDate(view.dueAt),
                 more: [
                   `${t("tickets.fields.start")} : ${tk.startDate ? shortDate(tk.startDate) + (tk.startTime ? ` ${tk.startTime}` : "") : "—"}`,
+                  `${t("tickets.milestone.label")} : ${tk.milestoneDate ? shortDate(tk.milestoneDate) : "—"}`,
                   `${t("tickets.fields.hours")} : ${partial ? "…" : t("tickets.hoursValue", { hours: tk.hours.toLocaleString() })}`,
                   `${t("tickets.estimate.short")} : ${tk.estimate ? hm(tk.estimate.minutes / 60) : "—"}`,
                 ],
@@ -1538,8 +1540,8 @@ function StartDate({
   onChange,
 }: {
   tk: TicketDetail;
-  value: { startDate: string | null; startTime: string | null; startLocked: boolean };
-  onChange: (p: { startDate?: string | null; startTime?: string | null; startLocked?: boolean }) => void;
+  value: { startDate: string | null; startTime: string | null; startLocked: boolean; milestoneDate: string | null };
+  onChange: (p: { startDate?: string | null; startTime?: string | null; startLocked?: boolean; milestoneDate?: string | null }) => void;
 }) {
   const { t } = useTranslation();
   const can = useCan();
@@ -1586,6 +1588,19 @@ function StartDate({
             {t("tickets.startLock.label")}
           </label>
           {!value.startDate && <p className="mt-0.5 text-[10px] text-muted-foreground">{t("tickets.startLock.needsDate")}</p>}
+          {/* the goal date: between the start and the final due date, so the technician and the AI plan in steps */}
+          <label htmlFor="milestone-date" className="mt-2 flex items-center gap-1.5 text-[11px] text-muted-foreground" title={t("tickets.milestone.hint")}>
+            <Flag className="size-3 text-primary" /> {t("tickets.milestone.label")}
+          </label>
+          <Input
+            id="milestone-date"
+            type="date"
+            className="mt-0.5 h-8"
+            disabled={off}
+            min={value.startDate ?? undefined}
+            value={value.milestoneDate ?? ""}
+            onChange={(e) => onChange({ milestoneDate: e.target.value || null })}
+          />
         </dd>
       </div>
     </div>
@@ -1601,6 +1616,7 @@ type Staged = {
   startDate?: string | null;
   startTime?: string | null;
   startLocked?: boolean;
+  milestoneDate?: string | null;
 };
 /** A field changed but not saved yet */
 export const MODIFIED = "ring-2 ring-[color:var(--gold)]/80 ring-offset-1 ring-offset-background";

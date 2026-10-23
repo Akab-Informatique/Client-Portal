@@ -42,6 +42,8 @@ export type TicketSummary = {
   startTime?: string | null;
   /** Restriction: no work before the start date */
   startLocked?: boolean;
+  /** The goal date between the start and the final due date (YYYY-MM-DD) */
+  milestoneDate?: string | null;
   viewers: Viewer[];
   /** This ticket is one of my priorities (given by an admin) */
   myPriority?: "day" | "week";

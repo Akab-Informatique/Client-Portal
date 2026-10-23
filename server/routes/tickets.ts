@@ -26,6 +26,7 @@ import { storeHttp } from "./store.ts";
 import { rememberCompany, rememberContact } from "../lib/crm.ts";
 import { fridayEnd } from "./meetings.ts";
 import { addTicketTime } from "../lib/timesheets.ts";
+import { quebecStamp, scheduleTickets, type SchedIn } from "../lib/ticketSchedule.ts";
 
 /**
  * Tickets (staff). Data come from the ticket source: the portal's database,
@@ -76,11 +77,10 @@ const zAnalysis = z.object({
   questions: z.array(z.string().max(500)).max(10).default([]),
   suggestedPriority: z.enum(["critical", "high", "medium", "low"]).nullable().optional(),
 });
+// the AI only orders the tickets (and says why); the portal lays the hours out
 const zPlan = z.object({
   overview: z.string().max(2000).default(""),
-  items: z
-    .array(z.object({ id: z.number(), order: z.number(), startDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/), reason: z.string().max(400).default("") }))
-    .max(100),
+  items: z.array(z.object({ id: z.number(), order: z.number(), reason: z.string().max(400).default("") })).max(100),
 });
 function aiHttpError(e: unknown) {
   if (e instanceof AiError) {
@@ -157,13 +157,15 @@ function viewersOf(ticketId: number, exceptUserId?: string) {
 
 /** Start dates set in the portal (and the tickets restricted until then). */
 async function startDates(ids: number[]) {
-  const out = new Map<number, string>() as Map<number, string> & { locked: Set<number>; times: Map<number, string> };
+  const out = new Map<number, string>() as Map<number, string> & { locked: Set<number>; times: Map<number, string>; milestones: Map<number, string> };
   out.locked = new Set<number>();
   out.times = new Map<number, string>();
+  out.milestones = new Map<number, string>();
   if (!ids.length) return out;
   for (let i = 0; i < ids.length; i += 500) {
     const rows = await db().select().from(schema.ticketMeta).where(inArray(schema.ticketMeta.ticketId, ids.slice(i, i + 500)));
     for (const r of rows) {
+      if (r.milestoneDate) out.milestones.set(r.ticketId, r.milestoneDate);
       if (!r.startDate) continue;
       out.set(r.ticketId, r.startDate);
       if (r.startTime) out.times.set(r.ticketId, r.startTime);
@@ -197,7 +199,7 @@ export const isAlert = (L: Lookup) => (t: NTicket) => L.queueKind(t.queue) === "
 
 const list = (v: string | undefined) => (v ? v.split(",").filter(Boolean) : []);
 
-function summary(t: NTicket, L: Lookup, start: string | undefined, me: string, locked = false, startTime?: string) {
+function summary(t: NTicket, L: Lookup, start: string | undefined, me: string, locked = false, startTime?: string, milestone?: string) {
   return {
     id: t.id,
     number: t.number,
@@ -226,6 +228,8 @@ function summary(t: NTicket, L: Lookup, start: string | undefined, me: string, l
     startTime: (start && startTime) || null,
     /** No work before the start date */
     startLocked: Boolean(start && locked),
+    /** The goal date between the start and the final due date, when set */
+    milestoneDate: milestone ?? null,
     viewers: viewersOf(t.id, me),
   };
 }
@@ -410,7 +414,7 @@ async function detailOf(src: TicketSource, id: number, a: AuthContext) {
     contractOfTicket(id, t.company.id).catch(() => null),
   ]);
   return {
-    ...summary(t, lookup(o), starts.get(id), a.user.id, starts.locked.has(id), starts.times.get(id)),
+    ...summary(t, lookup(o), starts.get(id), a.user.id, starts.locked.has(id), starts.times.get(id), starts.milestones.get(id)),
     description: t.description,
     source: t.source,
     hours: t.hours,
@@ -514,7 +518,7 @@ export const ticketRoutes = new Hono<AppEnv>()
     };
     const selected = select(q);
     const checks = await checklistCounts(selected.map((t) => t.id));
-    const items = selected.map((t) => ({ ...summary(t, L, starts.get(t.id), a.user.id, starts.locked.has(t.id), starts.times.get(t.id)), checklist: checks.get(t.id) ?? null }));
+    const items = selected.map((t) => ({ ...summary(t, L, starts.get(t.id), a.user.id, starts.locked.has(t.id), starts.times.get(t.id), starts.milestones.get(t.id)), checklist: checks.get(t.id) ?? null }));
     // the saved filters shown as buttons, with their counts
     const pinnedFilters = await db()
       .select({ id: schema.ticketFilters.id, name: schema.ticketFilters.name, query: schema.ticketFilters.query })
@@ -681,40 +685,114 @@ export const ticketRoutes = new Hono<AppEnv>()
     const [all, o, meId] = await run(() => Promise.all([src.list(), src.options(), src.meId(a)]));
     const L = lookup(o);
     const mine = all.filter((x) => meId && (x.assignee?.id === meId || x.secondary.some((p) => p.id === meId)) && L.statusKind(x.status) !== "complete");
-    if (!mine.length) return c.json({ overview: "", items: [] });
+    if (!mine.length) return c.json({ overview: "", source: "rules", items: [], late: 0, unscheduled: 0 });
     const starts = await startDates(mine.map((x) => x.id));
+    const metas = await db().select({ id: schema.ticketMeta.ticketId, minutes: schema.ticketMeta.estimateMinutes }).from(schema.ticketMeta).where(inArray(schema.ticketMeta.ticketId, mine.map((x) => x.id)));
+    const estimate = new Map(metas.filter((m) => m.minutes).map((m) => [m.id, m.minutes!]));
     const today = new Date().toISOString().slice(0, 10);
-    const lines = mine.map(
-      (x) =>
-        `- id ${x.id} · ${x.number} · « ${x.title} » · client ${x.company.name} · priorité ${L.priorityLabel(x.priority) ?? L.priorityKind(x.priority)} · statut ${L.statusLabel(x.status) ?? L.statusKind(x.status)} · échéance ${x.dueAt.slice(0, 16)} · début prévu ${starts.get(x.id) ?? "aucun"}`,
-    );
+    const minutesOf = (x: NTicket) => Math.min(480, Math.max(15, estimate.get(x.id) ?? 60));
+    const rank = (x: NTicket) => ({ critical: 0, high: 1, medium: 2, low: 3 })[L.priorityKind(x.priority) as "critical" | "high" | "medium" | "low"] ?? 2;
+    // the portal's own order: priority, then the nearest due date
+    const rules = [...mine].sort((x, y) => rank(x) - rank(y) || x.dueAt.localeCompare(y.dueAt));
+    let order = rules.map((x) => x.id);
+    const reasons = new Map<number, string>();
+    let overview = "";
+    let source: "ai" | "rules" = "rules";
     try {
+      const lines = mine.map(
+        (x) =>
+          `- id ${x.id} · ${x.number} · « ${x.title} » · client ${x.company.name} · priorité ${L.priorityLabel(x.priority) ?? L.priorityKind(x.priority)} · statut ${L.statusLabel(x.status) ?? L.statusKind(x.status)} · durée estimée ${minutesOf(x)} min${estimate.has(x.id) ? "" : " (par défaut)"} · échéance ${x.dueAt.slice(0, 16)} · début prévu ${starts.get(x.id) ?? "aucun"}${starts.milestones.get(x.id) ? ` · jalon ${starts.milestones.get(x.id)}` : ""}`,
+      );
       const out = await askClaudeJson<unknown>({
-        system: `${aiRole(a.user.locale)} Tu aides un technicien à planifier ses billets. Aujourd'hui : ${today}, journée de travail 8 h à 17 h, lundi au vendredi.`,
+        system: `${aiRole(a.user.locale)} Tu aides un technicien à planifier ses billets. Aujourd'hui : ${today}, journée de travail 8 h à 17 h, lundi au vendredi. Le portail place lui-même les heures dans le calendrier (jamais de chevauchement) : tu ne donnes que l'ordre de traitement.`,
         feature: "tickets.plan",
         userId: a.user.id,
         model,
-        prompt: `Voici mes billets ouverts :\n${lines.join("\n")}\n\nPropose un ordre de traitement et une date de début (AAAA-MM-JJ, au plus tôt aujourd'hui, jours ouvrables) pour chacun, en tenant compte des échéances, des priorités et d'une charge réaliste (environ 4 à 6 billets par jour). Format : {"overview": "2 ou 3 phrases", "items": [{"id": nombre, "order": nombre, "startDate": "AAAA-MM-JJ", "reason": "courte justification"}]}`,
+        prompt: `Voici mes billets ouverts :\n${lines.join("\n")}\n\nDonne l'ordre dans lequel les traiter, un après l'autre, pour que le plus de billets possible soient terminés avant leur échéance : les échéances les plus proches et les priorités d'abord, les billets d'un même client ensemble quand c'est sensible. Format : {"overview": "2 ou 3 phrases", "items": [{"id": nombre, "order": nombre, "reason": "courte justification"}]}`,
         maxTokens: 6000,
       });
       const parsed = zPlan.safeParse(out);
       if (!parsed.success) throw new AiError("bad_output");
-      const byId = new Map(mine.map((x) => [x.id, x]));
-      const items = parsed.data.items
-        .filter((i) => byId.has(i.id))
-        .map((i) => ({ ...i, startDate: i.startDate < today ? today : i.startDate, number: byId.get(i.id)!.number, title: byId.get(i.id)!.title }))
-        .sort((x, y) => x.order - y.order);
+      const known = new Set(mine.map((x) => x.id));
+      const given = parsed.data.items.filter((i) => known.has(i.id)).sort((x, y) => x.order - y.order);
+      for (const i of given) if (i.reason) reasons.set(i.id, i.reason);
+      const seen = new Set(given.map((i) => i.id));
+      order = [...given.map((i) => i.id), ...order.filter((id) => !seen.has(id))];
+      overview = parsed.data.overview;
+      source = "ai";
       await audit(a.user.id, "ai.tickets_plan", null, { tickets: mine.length });
-      return c.json({ overview: parsed.data.overview, items });
     } catch (e) {
-      throw aiHttpError(e);
+      // the AI is off, out of budget or failed: the portal's own order still gives a valid schedule
+      if (!(e instanceof AiError)) throw e;
+      console.warn("[ai]", e.message);
     }
+    // the hours: laid out by the portal in the free time of each working day, no overlap
+    const byId = new Map(mine.map((x) => [x.id, x]));
+    const input: SchedIn[] = order.map((id) => {
+      const x = byId.get(id)!;
+      const k = L.priorityKind(x.priority);
+      return {
+        id,
+        number: x.number,
+        title: x.title,
+        priority: k === "critical" ? "urgent" : k === "high" ? "high" : k === "low" ? "low" : "normal",
+        minutes: minutesOf(x),
+        earliest: starts.locked.has(id) ? (starts.get(id) ?? null) : null,
+      };
+    });
+    const sched = await scheduleTickets(a.user.id, input);
+    const items = order.map((id, n) => {
+      const x = byId.get(id)!;
+      const s = sched.get(id)!;
+      const first = s.slots[0];
+      const last = s.slots[s.slots.length - 1];
+      const finish = last ? `${last.date} ${last.end}` : null;
+      const dueLocal = quebecStamp(new Date(x.dueAt));
+      const late = Boolean(finish && finish > dueLocal) || s.unscheduledMinutes > 0;
+      return {
+        id,
+        number: x.number,
+        title: x.title,
+        order: n + 1,
+        reason: reasons.get(id) ?? "",
+        minutes: minutesOf(x),
+        estimated: estimate.has(id),
+        startDate: first?.date ?? null,
+        startTime: first?.start ?? null,
+        endDate: last?.date ?? null,
+        endTime: last?.end ?? null,
+        // the goal date: when the planned work is done
+        milestoneDate: last?.date ?? null,
+        dueAt: x.dueAt,
+        late,
+        // the earliest final due date that the plan can keep (Québec, "YYYY-MM-DD HH:MM")
+        suggestedDue: late && finish ? finish : null,
+        unscheduled: s.unscheduledMinutes > 0,
+      };
+    });
+    return c.json({ overview, source, items, late: items.filter((i) => i.late).length, unscheduled: items.filter((i) => i.unscheduled).length });
   })
 
-  /** Several start dates at once (e.g. from the AI plan). */
+  /** Several start dates at once (e.g. from the AI plan): the day, the time, the goal date and, when asked, a later due date. */
   .post("/start-dates", requirePermission("tickets.edit"), async (c) => {
     const a = auth(c);
-    const p = await body(c, z.object({ items: z.array(z.object({ id: z.number().int().positive(), startDate: zDate.nullable() })).max(200), plan: z.boolean().optional() }));
+    const p = await body(
+      c,
+      z.object({
+        items: z
+          .array(
+            z.object({
+              id: z.number().int().positive(),
+              startDate: zDate.nullable(),
+              startTime: zTime.nullable().optional(),
+              milestoneDate: zDate.nullable().optional(),
+              dueAt: z.string().datetime({ offset: true }).optional(),
+            }),
+          )
+          .max(200),
+        plan: z.boolean().optional(),
+      }),
+    );
     // the AI plan applied: its order is kept for the sort "Planifié par l'IA" (a new plan replaces the last one)
     if (p.plan) {
       const now = new Date();
@@ -724,13 +802,30 @@ export const ticketRoutes = new Hono<AppEnv>()
       });
       await audit(a.user.id, "ai.plan_applied", null, { tickets: p.items.length });
     }
+    const src = await ticketSource();
+    let dueFailed = 0;
     for (const it of p.items) {
+      const set = {
+        startDate: it.startDate,
+        startTime: it.startDate ? (it.startTime ?? null) : null,
+        ...(it.milestoneDate !== undefined ? { milestoneDate: it.milestoneDate } : {}),
+        updatedBy: a.user.id,
+        updatedAt: new Date(),
+      };
       await db()
         .insert(schema.ticketMeta)
-        .values({ ticketId: it.id, startDate: it.startDate, updatedBy: a.user.id })
-        .onConflictDoUpdate({ target: schema.ticketMeta.ticketId, set: { startDate: it.startDate, updatedBy: a.user.id, updatedAt: new Date() } });
+        .values({ ticketId: it.id, ...set })
+        .onConflictDoUpdate({ target: schema.ticketMeta.ticketId, set });
+      if (it.dueAt) {
+        try {
+          await run(() => src.update(it.id, { dueAt: it.dueAt }, a));
+        } catch {
+          dueFailed++;
+        }
+      }
     }
-    return c.json({ ok: true });
+    if (p.items.some((i) => i.dueAt)) await audit(a.user.id, "ai.plan_due_moved", null, { tickets: p.items.filter((i) => i.dueAt).length, failed: dueFailed });
+    return c.json({ ok: true, dueFailed });
   })
 
   // ── Clients and their contacts ──
@@ -1504,8 +1599,14 @@ export const ticketRoutes = new Hono<AppEnv>()
     const a = auth(c);
     const id = Number(c.req.param("id"));
     if (!Number.isInteger(id) || id <= 0) throw new HTTPException(400, { message: "invalid_id" });
-    const p = await body(c, z.object({ startDate: zDate.nullable().optional(), startTime: zTime.nullable().optional(), startLocked: z.boolean().optional() }));
+    const p = await body(c, z.object({ startDate: zDate.nullable().optional(), startTime: zTime.nullable().optional(), startLocked: z.boolean().optional(), milestoneDate: zDate.nullable().optional() }));
+    // the goal date cannot come before the start
+    const [before] = await db().select().from(schema.ticketMeta).where(eq(schema.ticketMeta.ticketId, id));
+    const startAfter = p.startDate !== undefined ? p.startDate : before?.startDate;
+    const milestoneAfter = p.milestoneDate !== undefined ? p.milestoneDate : before?.milestoneDate;
+    if (startAfter && milestoneAfter && milestoneAfter < startAfter) throw new HTTPException(400, { message: "milestone_before_start" });
     const set = {
+      ...(p.milestoneDate !== undefined ? { milestoneDate: p.milestoneDate } : {}),
       ...(p.startDate !== undefined ? { startDate: p.startDate } : {}),
       // no day: no time either
       ...(p.startTime !== undefined ? { startTime: p.startTime } : p.startDate === null ? { startTime: null } : {}),
@@ -1513,11 +1614,11 @@ export const ticketRoutes = new Hono<AppEnv>()
     };
     const [row] = await db()
       .insert(schema.ticketMeta)
-      .values({ ticketId: id, startDate: p.startDate ?? null, startTime: p.startDate ? (p.startTime ?? null) : null, startLocked: p.startLocked ?? false, updatedBy: a.user.id })
+      .values({ ticketId: id, startDate: p.startDate ?? null, startTime: p.startDate ? (p.startTime ?? null) : null, startLocked: p.startLocked ?? false, milestoneDate: p.milestoneDate ?? null, updatedBy: a.user.id })
       .onConflictDoUpdate({ target: schema.ticketMeta.ticketId, set: { ...set, updatedBy: a.user.id, updatedAt: new Date() } })
       .returning();
     if (p.startLocked !== undefined) await audit(a.user.id, p.startLocked ? "ticket.start_locked" : "ticket.start_unlocked", String(id), { startDate: row.startDate });
-    return c.json({ ok: true, startDate: row.startDate, startTime: row.startDate ? row.startTime : null, startLocked: Boolean(row.startDate && row.startLocked) });
+    return c.json({ ok: true, startDate: row.startDate, startTime: row.startDate ? row.startTime : null, startLocked: Boolean(row.startDate && row.startLocked), milestoneDate: row.milestoneDate });
   })
 
   /** The contract the ticket's work is billed on (null: back to the client's default support contract). */

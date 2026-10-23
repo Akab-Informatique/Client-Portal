@@ -38,7 +38,7 @@ import {
   UserX,
   Wand2,
   X,
-  type LucideIcon, Star, Lock, GitMerge, ListChecks, Flag } from "lucide-react";
+  type LucideIcon, Star, Lock, GitMerge, ListChecks, Flag, AlertTriangle } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
@@ -69,7 +69,7 @@ import { NewTicketDialog } from "./NewTicketDialog";
 import { AcceptDialog } from "./AcceptDialog";
 import { MergeDialog } from "./MergeDialog";
 import { PendingMails } from "./PendingMails";
-import { dueState, FILTER_KEYS, PRIORITY_STYLE, dueGlow, useChoiceText, shortDate, shortDateTime, STATUS_STYLE, useTickets, useShowSecondary, VIEWS, type Tally, type TicketList, type TicketSummary, type View, ticketErrorText } from "./shared";
+import { dueState, FILTER_KEYS, PRIORITY_STYLE, dueGlow, useChoiceText, shortDate, shortDateTime, hm, STATUS_STYLE, useTickets, useShowSecondary, VIEWS, type Tally, type TicketList, type TicketSummary, type View, ticketErrorText } from "./shared";
 import { useTicketWorkspace } from "./workspace";
 import { GlobalSearch } from "./GlobalSearch";
 import { AgendaCard } from "./Planning";
@@ -1624,7 +1624,26 @@ function ColumnHeader({ cols, labels, selection }: { cols: ReturnType<typeof use
 }
 
 // ── AI: plan my open tickets ─────────────────────────────────────────────────────
-type Plan = { overview: string; items: { id: number; number: string; title: string; order: number; startDate: string; reason: string }[] };
+type PlanItem = {
+  id: number;
+  number: string;
+  title: string;
+  order: number;
+  reason: string;
+  minutes: number;
+  estimated: boolean;
+  startDate: string | null;
+  startTime: string | null;
+  endDate: string | null;
+  endTime: string | null;
+  milestoneDate: string | null;
+  dueAt: string;
+  late: boolean;
+  /** "YYYY-MM-DD HH:MM" (Québec): the earliest due date the plan can keep */
+  suggestedDue: string | null;
+  unscheduled: boolean;
+};
+type Plan = { overview: string; source: "ai" | "rules"; items: PlanItem[]; late: number; unscheduled: number };
 
 function AiPlanButton() {
   const { t } = useTranslation();
@@ -1632,20 +1651,38 @@ function AiPlanButton() {
   const [, setParams] = useSearchParams();
   const aiError = useAiError();
   const [plan, setPlan] = useState<Plan | null>(null);
+  // the due dates that the plan cannot keep: moved to the planned finish when ticked
+  const [moveDue, setMoveDue] = useState(false);
   const planModel = useAiModel("tickets.plan");
   const run = useMutation({
     mutationFn: () => api.post<Plan>("/tickets/ai/plan", planModel.body),
     onSuccess: (p) => {
       void qc.invalidateQueries({ queryKey: ["ai", "options"] });
-      if (p.items.length) setPlan(p);
+      if (p.items.length) {
+        setMoveDue(false);
+        setPlan(p);
+      }
       else toast.info(t("tickets.ai.planEmpty"));
     },
     onError: (e) => toast.error(aiError(e)),
   });
   const apply = useMutation({
     // the start dates, and the order: kept for the sort "Planifié par l'IA"
-    mutationFn: () => api.post("/tickets/start-dates", { items: plan!.items.map((i) => ({ id: i.id, startDate: i.startDate })), plan: true }),
-    onSuccess: () => {
+    mutationFn: () =>
+      api.post<{ dueFailed: number }>("/tickets/start-dates", {
+        items: plan!.items
+          .filter((i) => i.startDate)
+          .map((i) => ({
+            id: i.id,
+            startDate: i.startDate,
+            startTime: i.startTime,
+            milestoneDate: i.milestoneDate,
+            ...(moveDue && i.late && i.suggestedDue ? { dueAt: new Date(i.suggestedDue.replace(" ", "T")).toISOString() } : {}),
+          })),
+        plan: true,
+      }),
+    onSuccess: (r) => {
+      if (r.dueFailed) toast.warning(t("tickets.ai.planDueMoveFailed", { count: r.dueFailed }));
       void qc.invalidateQueries({ queryKey: ["tickets"] });
       // the list now follows the plan
       setParams((p) => {
@@ -1675,6 +1712,11 @@ function AiPlanButton() {
           {plan && (
             <div className="space-y-4">
               {plan.overview && <p className="rounded-xl border border-violet-500/30 bg-violet-500/10 p-3 text-sm">{plan.overview}</p>}
+              {plan.source === "rules" && <p className="text-xs text-muted-foreground">{t("tickets.ai.planRules")}</p>}
+              <p className={cn("flex items-center gap-2 rounded-xl border p-2.5 text-sm", plan.late ? "border-amber-500/40 bg-amber-500/10 text-amber-200" : "border-emerald-500/40 bg-emerald-500/10 text-emerald-200")}>
+                {plan.late ? <AlertTriangle className="size-4 shrink-0" /> : <CalendarCheck className="size-4 shrink-0" />}
+                {plan.late ? t("tickets.ai.planConflicts", { count: plan.late }) : t("tickets.ai.planAllFit")}
+              </p>
               <ol className="max-h-[50vh] space-y-2 overflow-y-auto pr-1">
                 {plan.items.map((i, n) => (
                   <li key={i.id} className="flex gap-3 rounded-xl border bg-card/60 p-3">
@@ -1684,16 +1726,36 @@ function AiPlanButton() {
                         <span className="font-mono text-[11px] text-muted-foreground">{i.number}</span>
                         <span className="truncate text-sm font-medium">{i.title}</span>
                       </span>
-                      <span className="mt-0.5 block text-xs text-muted-foreground">{i.reason}</span>
+                      <span className="mt-0.5 block text-xs text-muted-foreground">
+                        {i.reason}
+                        {i.reason ? " · " : ""}
+                        {t("tickets.ai.planMinutes", { time: hm(i.minutes / 60) })}
+                        {!i.estimated && ` (${t("tickets.ai.planDefaultEstimate")})`}
+                      </span>
+                      {i.late && (
+                        <span className="mt-1 flex flex-wrap items-center gap-1.5 text-xs text-amber-300">
+                          <AlertTriangle className="size-3.5" />
+                          {i.unscheduled ? t("tickets.ai.planNoRoom") : t("tickets.ai.planLate", { due: shortDateTime(i.dueAt) })}
+                          {i.suggestedDue && <span className="text-muted-foreground">· {t("tickets.ai.planMoveDue", { date: shortDate(i.suggestedDue.slice(0, 10)) })}</span>}
+                        </span>
+                      )}
                     </span>
                     <span className="shrink-0 text-right">
                       <span className="block text-[10px] uppercase tracking-wide text-muted-foreground">{t("tickets.fields.start")}</span>
-                      <span className="font-mono text-sm text-primary">{shortDate(i.startDate)}</span>
+                      <span className="font-mono text-sm text-primary">{i.startDate ? `${shortDate(i.startDate)} ${i.startTime ?? ""}` : "—"}</span>
+                      <span className="block text-[10px] uppercase tracking-wide text-muted-foreground">{t("tickets.ai.planFinish")}</span>
+                      <span className="font-mono text-xs">{i.endDate ? `${shortDate(i.endDate)} ${i.endTime ?? ""}` : "—"}</span>
                     </span>
                   </li>
                 ))}
               </ol>
               <p className="text-[11px] text-muted-foreground">{t("tickets.ai.planNote")}</p>
+              {plan.late > 0 && (
+                <label className="flex items-center gap-2 text-xs">
+                  <Switch checked={moveDue} onCheckedChange={setMoveDue} aria-label={t("tickets.ai.planMoveDues", { count: plan.late })} />
+                  {t("tickets.ai.planMoveDues", { count: plan.late })}
+                </label>
+              )}
               <div className="flex justify-end gap-2">
                 <Button variant="ghost" onClick={() => setPlan(null)}>
                   {t("common.close")}
