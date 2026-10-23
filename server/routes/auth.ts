@@ -21,6 +21,7 @@ import { clientIp, rateLimit, resetRateLimit, refundRateLimit } from "../lib/htt
 import { body, zEmail } from "../lib/validate.ts";
 import { audit } from "../lib/audit.ts";
 import { loadMe } from "./me.ts";
+import { countDevices } from "../lib/pushAuth.ts";
 import { notifyUserLocked } from "../lib/notify.ts";
 import { consumePasswordLink, findPasswordLink, forgetPasswordLinks, sendPasswordChanged, sendPasswordLink } from "../lib/passwordLinks.ts";
 
@@ -40,7 +41,9 @@ export const authRoutes = new Hono<AppEnv>()
     const a = c.var.auth;
     const stage = stageOf(a);
     if (!a) return c.json({ stage });
-    return c.json({ stage, me: stage === "ready" ? await loadMe(a) : { name: a.user.name, email: a.user.email, locale: a.user.locale } });
+    // waiting for the second step: how many phones can approve this sign-in
+    const push = stage === "mfa" ? await countDevices(a.user.id) : 0;
+    return c.json({ stage, push, me: stage === "ready" ? await loadMe(a) : { name: a.user.name, email: a.user.email, locale: a.user.locale } });
   })
 
   .post("/login", async (c) => {

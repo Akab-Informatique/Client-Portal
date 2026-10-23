@@ -2,6 +2,14 @@ import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import * as OTPAuth from "otpauth";
 import nodeCrypto from "node:crypto";
 
+// web push: nothing leaves the tests; what would be sent is recorded
+const pushed = vi.hoisted(() => [] as { sub: unknown; payload: any }[]);
+vi.mock("web-push", async (orig) => {
+  const real: any = await orig();
+  const wp = real.default ?? real;
+  return { default: { ...wp, setVapidDetails: () => undefined, sendNotification: async (sub: unknown, payload: string) => (pushed.push({ sub, payload: JSON.parse(payload) }), { statusCode: 201 }) } };
+});
+
 process.env.NODE_ENV = "test";
 process.env.SEED_DEMO = "true";
 process.env.REQUIRE_MFA = "true";
@@ -6202,5 +6210,240 @@ describe("ticket checklist: items to complete, with dependencies, before the tic
     expect((await tech.patch(`/api/tickets/${id}/checklist/${extra.id}`, { done: true })).status).toBe(200);
     expect((await tech.patch(`/api/tickets/${id}`, { status: complete })).status).toBe(200);
     expect(readOnly === null || (await readOnly.post(`/api/tickets/${id}/checklist`, { text: "interdit" })).status === 403).toBe(true);
+  });
+});
+
+// ── Sign-in approved on the phone: push + passkey ──
+/** A phone's secure hardware, in software: makes a passkey and signs challenges (ES256, user verified) */
+function cbor(v: any): Buffer {
+  const head = (major: number, n: number) => {
+    if (n < 24) return Buffer.from([(major << 5) | n]);
+    if (n < 256) return Buffer.from([(major << 5) | 24, n]);
+    const b = Buffer.alloc(3);
+    b[0] = (major << 5) | 25;
+    b.writeUInt16BE(n, 1);
+    return b;
+  };
+  if (typeof v === "number") return v >= 0 ? head(0, v) : head(1, -1 - v);
+  if (Buffer.isBuffer(v)) return Buffer.concat([head(2, v.length), v]);
+  if (typeof v === "string") {
+    const b = Buffer.from(v);
+    return Buffer.concat([head(3, b.length), b]);
+  }
+  if (v instanceof Map) return Buffer.concat([head(5, v.size), ...[...v].flatMap(([k, x]) => [cbor(k), cbor(x)])]);
+  throw new Error("cbor");
+}
+class Phone {
+  keys = nodeCrypto.generateKeyPairSync("ec", { namedCurve: "P-256" });
+  credId = nodeCrypto.randomBytes(32);
+  counter = 0;
+  deviceId = "";
+  token = "";
+  constructor(public origin = "http://localhost", public rpId = "localhost") {}
+  private rpHash = () => nodeCrypto.createHash("sha256").update(this.rpId).digest();
+  private clientData = (type: string, challenge: string) => Buffer.from(JSON.stringify({ type, challenge, origin: this.origin, crossOrigin: false }));
+  /** The passkey made on the phone (attestation "none") */
+  register(challenge: string) {
+    const jwk = this.keys.publicKey.export({ format: "jwk" });
+    const cose = cbor(new Map<number, any>([[1, 2], [3, -7], [-1, 1], [-2, Buffer.from(jwk.x!, "base64url")], [-3, Buffer.from(jwk.y!, "base64url")]]));
+    const count = Buffer.alloc(4);
+    const idLen = Buffer.alloc(2);
+    idLen.writeUInt16BE(this.credId.length);
+    // flags: user present + user verified + attested credential data
+    const authData = Buffer.concat([this.rpHash(), Buffer.from([0x45]), count, Buffer.alloc(16), idLen, this.credId, cose]);
+    const attestationObject = cbor(new Map<string, any>([["fmt", "none"], ["attStmt", new Map()], ["authData", authData]]));
+    return {
+      id: this.credId.toString("base64url"),
+      rawId: this.credId.toString("base64url"),
+      type: "public-key",
+      response: { clientDataJSON: this.clientData("webauthn.create", challenge).toString("base64url"), attestationObject: attestationObject.toString("base64url"), transports: ["internal"] },
+      clientExtensionResults: {},
+      authenticatorAttachment: "platform",
+    };
+  }
+  /** Unlock the passkey (the person is verified on the phone) and sign the challenge; `key` signs with another key to test a forgery */
+  sign(challenge: string, opts: { key?: nodeCrypto.KeyObject; verified?: boolean } = {}) {
+    this.counter++;
+    const count = Buffer.alloc(4);
+    count.writeUInt32BE(this.counter);
+    const authData = Buffer.concat([this.rpHash(), Buffer.from([opts.verified === false ? 0x01 : 0x05]), count]);
+    const clientDataJSON = this.clientData("webauthn.get", challenge);
+    const signature = nodeCrypto.sign("sha256", Buffer.concat([authData, nodeCrypto.createHash("sha256").update(clientDataJSON).digest()]), opts.key ?? this.keys.privateKey);
+    return {
+      id: this.credId.toString("base64url"),
+      rawId: this.credId.toString("base64url"),
+      type: "public-key",
+      response: { clientDataJSON: clientDataJSON.toString("base64url"), authenticatorData: authData.toString("base64url"), signature: signature.toString("base64url") },
+      clientExtensionResults: {},
+    };
+  }
+}
+
+describe("sign-in approved on the phone (push + passkey)", () => {
+  const subscription = { endpoint: "https://push.example.test/abc123", keys: { p256dh: nodeCrypto.randomBytes(65).toString("base64url"), auth: nodeCrypto.randomBytes(16).toString("base64url") } };
+
+  /** A browser that gave the password and waits for the second step */
+  async function waiting(email = "tech@akab.local") {
+    resetRateLimit("login:ip:unknown");
+    const a = new Agent();
+    const r = await a.post("/api/auth/login", { email, password: PASSWORD });
+    expect(r.json.stage).toBe("mfa");
+    return a;
+  }
+
+  it("enrolling a phone: the password again, a full session, a real passkey; removing it", async () => {
+    resetRateLimit("login:ip:unknown");
+    const tech = await signIn("tech@akab.local");
+    await db().delete(schema.pushDevices);
+    // a session that only gave the password cannot enroll
+    const early = await waiting();
+    expect((await early.post("/api/auth/push/enroll/options", { password: PASSWORD })).status).toBe(401);
+    // the password is asked again
+    expect((await tech.post("/api/auth/push/enroll/options", { password: "wrong password" })).status).toBe(401);
+    const opts = (await tech.post("/api/auth/push/enroll/options", { password: PASSWORD })).json;
+    expect(opts).toMatchObject({ rp: { id: "localhost" }, authenticatorSelection: { authenticatorAttachment: "platform", userVerification: "required" } });
+    const phone = new Phone();
+    // a passkey made for another site is refused
+    const stranger = new Phone("https://evil.example", "evil.example");
+    expect((await tech.post("/api/auth/push/enroll/verify", { label: "x", subscription, response: stranger.register(opts.challenge) })).status).toBe(400);
+    // a push endpoint that is not https is refused
+    const opts2 = (await tech.post("/api/auth/push/enroll/options", { password: PASSWORD })).json;
+    expect((await tech.post("/api/auth/push/enroll/verify", { label: "x", subscription: { ...subscription, endpoint: "http://insecure.test/x" }, response: phone.register(opts2.challenge) })).status).toBe(400);
+    const opts3 = (await tech.post("/api/auth/push/enroll/options", { password: PASSWORD })).json;
+    const done = await tech.post("/api/auth/push/enroll/verify", { label: "Mon cellulaire", subscription, response: phone.register(opts3.challenge) });
+    expect(done.status).toBe(201);
+    expect(done.json.token.length).toBeGreaterThan(30);
+    // the challenge is single use
+    expect((await tech.post("/api/auth/push/enroll/verify", { label: "x", subscription, response: phone.register(opts3.challenge) })).status).toBe(400);
+    const list = (await tech.get("/api/auth/push/devices")).json;
+    expect(list.vapidPublicKey.length).toBeGreaterThan(40);
+    expect(list.devices).toEqual([expect.objectContaining({ label: "Mon cellulaire" })]);
+    // only the hash of the token and a sealed subscription are kept
+    const [row] = await db().select().from(schema.pushDevices);
+    expect(row.tokenHash).not.toContain(done.json.token);
+    expect(row.subscription).not.toContain("push.example.test");
+    // removing it
+    expect((await tech.del(`/api/auth/push/devices/${done.json.id}`)).status).toBe(200);
+    expect((await tech.get("/api/auth/push/devices")).json.devices).toEqual([]);
+    expect((await tech.del(`/api/auth/push/devices/${done.json.id}`)).status).toBe(404);
+  });
+
+  it("signing in: number matching, the passkey signature, one session only, once", async () => {
+    resetRateLimit("login:ip:unknown");
+    const tech = await signIn("tech@akab.local");
+    await db().delete(schema.pushDevices);
+    await db().delete(schema.pushChallenges);
+    pushed.length = 0;
+    const phone = new Phone();
+    const opts = (await tech.post("/api/auth/push/enroll/options", { password: PASSWORD })).json;
+    const enrolled = (await tech.post("/api/auth/push/enroll/verify", { label: "Cellulaire", subscription, response: phone.register(opts.challenge) })).json;
+    phone.deviceId = enrolled.id;
+    phone.token = enrolled.token;
+    const dev = { deviceId: phone.deviceId, token: phone.token };
+
+    // password given: the browser waits; it learns that a phone can approve
+    const browser = await waiting();
+    expect((await browser.get("/api/auth/me")).json).toMatchObject({ stage: "mfa", push: 1 });
+    // nothing else can be done meanwhile
+    expect((await browser.get("/api/tickets")).status).toBe(401);
+    const start = (await browser.post("/api/auth/push/start")).json;
+    expect(start).toMatchObject({ sent: 1, devices: 1 });
+    expect(start.number).toBeGreaterThanOrEqual(10);
+    expect(start.number).toBeLessThanOrEqual(99);
+    // the push carries no secret, only which request
+    const push = pushed.at(-1);
+    expect(push.payload).toMatchObject({ type: "signin", challengeId: start.id, deviceId: phone.deviceId });
+    expect(JSON.stringify(push.payload)).not.toContain(String(start.number));
+    expect((await browser.post("/api/auth/push/start")).status).toBe(429);
+    expect((await browser.get("/api/auth/push/status")).json).toMatchObject({ status: "pending", number: start.number });
+
+    // the phone: a wrong token is refused; the right one sees where the request comes from and three numbers
+    expect((await new Agent().post("/api/auth/push/device/challenge", { deviceId: phone.deviceId, token: "x".repeat(40) })).status).toBe(401);
+    const view = (await new Agent().post("/api/auth/push/device/challenge", dev)).json;
+    expect(view).toMatchObject({ pending: true, challengeId: start.id });
+    expect(view.numbers).toHaveLength(3);
+    expect(view.numbers).toContain(start.number);
+    expect(view.where.agent).toBeTruthy();
+    expect(view.options.challenge).toBeTruthy();
+    const respond = (number: number, response: any, id = start.id) => new Agent().post("/api/auth/push/device/respond", { ...dev, challengeId: id, number, response });
+    // the wrong number: refused (twice closes the request)
+    const wrong = view.numbers.find((n: number) => n !== start.number);
+    expect((await respond(wrong, phone.sign(view.options.challenge))).json.error).toBe("push_wrong_number");
+    // a signature from another key, or without the person verified on the phone: refused
+    const other = nodeCrypto.generateKeyPairSync("ec", { namedCurve: "P-256" });
+    expect((await respond(start.number, phone.sign(view.options.challenge, { key: other.privateKey }))).json.error).toBe("push_bad_assertion");
+    expect((await respond(start.number, phone.sign(view.options.challenge, { verified: false }))).json.error).toBe("push_bad_assertion");
+    // a signature of another challenge: refused
+    expect((await respond(start.number, phone.sign("QUJD"))).json.error).toBe("push_bad_assertion");
+    expect((await browser.get("/api/auth/me")).json.stage).toBe("mfa");
+
+    // another browser with the password, waiting too: an approval of the first never unlocks it
+    const second = await waiting();
+    // the right answer
+    const ok = await respond(start.number, phone.sign(view.options.challenge));
+    expect(ok.json).toMatchObject({ ok: true });
+    expect((await browser.get("/api/auth/push/status")).json.status).toBe("approved");
+    expect((await browser.get("/api/auth/me")).json.stage).toBe("ready");
+    expect((await browser.get("/api/tickets")).status).toBe(200);
+    expect((await second.get("/api/auth/me")).json.stage).toBe("mfa");
+    // single use: the same answer again is refused, and replaying the signature too
+    expect((await respond(start.number, phone.sign(view.options.challenge))).status).toBe(409);
+    // the audit trail
+    const log = (await db().select().from(schema.auditLog)).map((r) => r.action);
+    expect(log).toEqual(expect.arrayContaining(["push.device_added", "push.challenge_sent", "push.signin_approved", "push.wrong_number", "push.bad_assertion"]));
+    // the counter moved on and the phone's last use is kept
+    const [row] = await db().select().from(schema.pushDevices);
+    expect(row.counter).toBeGreaterThan(0);
+    expect(row.lastUsedAt).toBeTruthy();
+  });
+
+  it("two wrong numbers close the request; \"not me\" closes the session and rests the account; an old request is refused", async () => {
+    resetRateLimit("login:ip:unknown");
+    const [d] = await db().select().from(schema.pushDevices);
+    const [user] = await db().select().from(schema.users).where(eq(schema.users.email, "tech@akab.local"));
+    // a phone object bound to the stored device: its token is not kept, so enroll a fresh one
+    const tech = await signIn("tech@akab.local");
+    await db().delete(schema.pushDevices);
+    const phone = new Phone();
+    const opts = (await tech.post("/api/auth/push/enroll/options", { password: PASSWORD })).json;
+    const e = (await tech.post("/api/auth/push/enroll/verify", { label: "Cellulaire", subscription, response: phone.register(opts.challenge) })).json;
+    const dev = { deviceId: e.id, token: e.token };
+    expect(d).toBeTruthy();
+
+    // two wrong numbers
+    const b1 = await waiting();
+    const s1 = (await b1.post("/api/auth/push/start")).json;
+    const v1 = (await new Agent().post("/api/auth/push/device/challenge", dev)).json;
+    const wrongs = v1.numbers.filter((n: number) => n !== s1.number);
+    for (const n of wrongs) await new Agent().post("/api/auth/push/device/respond", { ...dev, challengeId: s1.id, number: n, response: phone.sign(v1.options.challenge) });
+    expect((await b1.get("/api/auth/push/status")).json.status).toBe("failed");
+    expect((await new Agent().post("/api/auth/push/device/challenge", dev)).json.pending).toBe(false);
+
+    // an expired request: refused, and the status says so
+    const b2 = await waiting();
+    const s2 = (await b2.post("/api/auth/push/start")).json;
+    await db().update(schema.pushChallenges).set({ expiresAt: new Date(Date.now() - 1000) }).where(eq(schema.pushChallenges.id, s2.id));
+    expect((await b2.get("/api/auth/push/status")).json.status).toBe("expired");
+    const v2 = await new Agent().post("/api/auth/push/device/challenge", dev);
+    expect(v2.json.pending).toBe(false);
+
+    // "not me": the session that asked is closed and the account rests
+    const b3 = await waiting();
+    const s3 = (await b3.post("/api/auth/push/start")).json;
+    expect((await new Agent().post("/api/auth/push/device/deny", { ...dev, challengeId: s3.id })).status).toBe(200);
+    expect((await b3.get("/api/auth/me")).json.stage).toBe("anonymous");
+    resetRateLimit("login:ip:unknown");
+    expect((await new Agent().post("/api/auth/login", { email: "tech@akab.local", password: PASSWORD })).status).toBe(429);
+    const alerts = (await db().select().from(schema.notifications).where(eq(schema.notifications.userId, user.id))).filter((n) => n.type === "security.alert");
+    expect(alerts.length).toBeGreaterThanOrEqual(1);
+    await db().update(schema.users).set({ lockedUntil: null }).where(eq(schema.users.id, user.id));
+
+    // an administrator resetting the MFA removes the phones
+    const admin = await signIn("admin@akab.local");
+    expect((await admin.post(`/api/admin/users/${user.id}/reset-mfa`, {})).status).toBe(200);
+    expect((await new Agent().post("/api/auth/push/device/challenge", dev)).status).toBe(401);
+    // the secret of the authenticator was reset: the next sign-in sets it up again
+    secrets.delete("tech@akab.local");
+    await db().delete(schema.pushChallenges);
   });
 });

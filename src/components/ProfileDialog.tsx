@@ -35,6 +35,7 @@ import { useCan, useMe } from "@/lib/session";
 import { LinkMailboxDialog } from "@/pages/outlook/dialogs";
 import { TimeReportCard } from "@/pages/time/TimeReport";
 import { RichEditor, type RichEditorHandle } from "@/pages/outlook/RichEditor";
+import { PhoneSignInCard } from "@/components/PhoneSignInCard";
 import { KEY, outlookErrorText, statusKey, type MailAccount, type OutlookStatus } from "@/pages/outlook/shared";
 
 export function ProfileDialog({ open, onOpenChange }: { open: boolean; onOpenChange: (o: boolean) => void }) {
@@ -176,6 +177,7 @@ export function ProfileDialog({ open, onOpenChange }: { open: boolean; onOpenCha
                 </div>
               </form>
             </Card>
+            <PhoneSignInCard />
           </div>
           {staff && (
             <div className="space-y-4">

@@ -1,3 +1,4 @@
+import { revokeDevices } from "../lib/pushAuth.ts";
 import { Hono, type Context } from "hono";
 import { HTTPException } from "hono/http-exception";
 import { and, asc, desc, eq, inArray, sql } from "drizzle-orm";
@@ -407,6 +408,8 @@ export const adminRoutes = new Hono<AppEnv>()
       .set({ mfaEnabled: false, mfaSecret: null, mfaLastStep: null, updatedAt: new Date() })
       .where(eq(schema.users.id, target.id));
     await revokeUserSessions(target.id);
+    // the phones that approved sign-ins are removed with it (a lost phone is the usual reason)
+    await revokeDevices(target.id);
     await audit(a.user.id, "user.mfa_reset", target.id);
     return c.json({ ok: true });
   })

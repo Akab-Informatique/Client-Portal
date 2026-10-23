@@ -1,4 +1,4 @@
-import { Fragment, useEffect, useRef, useState, type FormEvent } from "react";
+import { Fragment, useCallback, useEffect, useRef, useState, type FormEvent } from "react";
 import { useTranslation } from "react-i18next";
 import { AnimatePresence, motion, useMotionValue, useSpring, useTransform } from "motion/react";
 import { useQueryClient } from "@tanstack/react-query";
@@ -28,7 +28,7 @@ function initialView(): View {
   return { kind: "login" };
 }
 
-export function LoginPage({ stage, email }: { stage: Stage; email?: string }) {
+export function LoginPage({ stage, email, push = 0 }: { stage: Stage; email?: string; push?: number }) {
   const [view, setView] = useState<View>(initialView);
   // subtle 3D tilt of the card following the mouse
   const mx = useMotionValue(0);
@@ -82,7 +82,7 @@ export function LoginPage({ stage, email }: { stage: Stage; email?: string }) {
                 <ResetStep token={view.token} onDone={(notice) => setView({ kind: "login", notice })} onNewLink={() => setView({ kind: "forgot" })} />
               )}
               {stage === "mfa-setup" && <MfaSetupStep email={email} />}
-              {stage === "mfa" && <MfaChallengeStep email={email} />}
+              {stage === "mfa" && <MfaChallengeStep email={email} push={push} />}
               {stage === "password" && <PasswordStep />}
             </motion.div>
           </AnimatePresence>
@@ -459,9 +459,98 @@ function useVerify() {
   return { verify, busy, error };
 }
 
-function MfaChallengeStep({ email }: { email?: string }) {
+type PushState = { status: "starting" | "pending" | "failed" | "expired" | "error"; number?: number; expiresAt?: string };
+
+/**
+ * Sign in with the phone: a notification is sent as soon as the password is given; the number shown here must be
+ * tapped on the phone (among three), then the phone's fingerprint / face / PIN approves. Only this browser is let in.
+ */
+function PhoneApproval({ onUseCode }: { onUseCode: () => void }) {
+  const { t } = useTranslation();
+  const refresh = useRefreshAuth();
+  const [state, setState] = useState<PushState>({ status: "starting" });
+  const [left, setLeft] = useState(0);
+  const started = useRef(false);
+  const start = useCallback(async () => {
+    setState({ status: "starting" });
+    try {
+      const r = await api.post<{ number: number; expiresAt: string; sent: number }>("/auth/push/start");
+      setState({ status: r.sent > 0 ? "pending" : "error", number: r.number, expiresAt: r.expiresAt });
+    } catch (e) {
+      // asked again too soon: the request already waiting is the one to follow
+      if (e instanceof ApiError && e.status === 429) {
+        const s = await api.get<{ status: string; number?: number; expiresAt?: string }>("/auth/push/status").catch(() => null);
+        if (s?.status === "pending") return setState({ status: "pending", number: s.number, expiresAt: s.expiresAt });
+      }
+      setState({ status: "error" });
+    }
+  }, []);
+  useEffect(() => {
+    if (started.current) return;
+    started.current = true;
+    void start();
+  }, [start]);
+  // while it waits: is it answered?
+  useEffect(() => {
+    if (state.status !== "pending") return;
+    const timer = setInterval(async () => {
+      const s = await api.get<{ status: string }>("/auth/push/status").catch(() => null);
+      if (!s) return;
+      if (s.status === "approved") void refresh();
+      else if (s.status !== "pending") setState((x) => ({ ...x, status: s.status === "expired" ? "expired" : "failed" }));
+    }, 1500);
+    return () => clearInterval(timer);
+  }, [state.status, refresh]);
+  useEffect(() => {
+    if (state.status !== "pending" || !state.expiresAt) return;
+    const tick = () => setLeft(Math.max(0, Math.round((new Date(state.expiresAt!).getTime() - Date.now()) / 1000)));
+    tick();
+    const timer = setInterval(tick, 1000);
+    return () => clearInterval(timer);
+  }, [state.status, state.expiresAt]);
+  return (
+    <div className="space-y-5">
+      <StepHeader icon={Smartphone} title={t("phoneLogin.waitTitle")} text={t("phoneLogin.waitText")} />
+      {state.status === "starting" && (
+        <div className="flex justify-center py-6">
+          <Loader2 className="size-6 animate-spin text-muted-foreground" />
+        </div>
+      )}
+      {state.status === "pending" && (
+        <div className="space-y-3 text-center">
+          <p className="text-xs uppercase tracking-wide text-muted-foreground">{t("phoneLogin.tapNumber")}</p>
+          <div className="mx-auto flex h-24 w-40 items-center justify-center rounded-2xl border border-[color:var(--gold)]/40 bg-[color:var(--gold)]/10 font-mono text-5xl font-bold text-primary">{state.number}</div>
+          <p className="flex items-center justify-center gap-2 text-xs text-muted-foreground">
+            <Loader2 className="size-3.5 animate-spin" /> {t("phoneLogin.waiting", { seconds: left })}
+          </p>
+        </div>
+      )}
+      {(state.status === "failed" || state.status === "expired" || state.status === "error") && <FormError message={t(state.status === "failed" ? "phoneLogin.requestFailed" : `phoneLogin.${state.status}`)} />}
+      <div className="flex flex-col gap-2">
+        {state.status !== "starting" && (
+          <Button type="button" variant="outline" className="h-11 w-full" onClick={() => void start()}>
+            {t("phoneLogin.resend")}
+          </Button>
+        )}
+        <button type="button" onClick={onUseCode} className="text-center text-sm text-muted-foreground underline-offset-4 hover:text-foreground hover:underline">
+          {t("phoneLogin.useCode")}
+        </button>
+      </div>
+    </div>
+  );
+}
+
+function MfaChallengeStep({ email, push }: { email?: string; push: number }) {
   const { t } = useTranslation();
   const { verify, busy, error } = useVerify();
+  const [useCode, setUseCode] = useState(push === 0);
+  if (!useCode)
+    return (
+      <>
+        <PhoneApproval onUseCode={() => setUseCode(true)} />
+        <BackToLogin />
+      </>
+    );
   return (
     <div className="space-y-5">
       <StepHeader icon={ShieldCheck} title={t("mfa.challengeTitle")} text={t("mfa.challengeText")} />
@@ -469,6 +558,11 @@ function MfaChallengeStep({ email }: { email?: string }) {
       <CodeInput key={error ?? "c"} onComplete={verify} busy={busy} />
       <FormError message={error} />
       <p className="text-xs text-muted-foreground">{t("mfa.lostDevice")}</p>
+      {push > 0 && (
+        <button type="button" onClick={() => setUseCode(false)} className="text-sm text-primary underline-offset-4 hover:underline">
+          {t("phoneLogin.usePhone")}
+        </button>
+      )}
       <BackToLogin />
     </div>
   );

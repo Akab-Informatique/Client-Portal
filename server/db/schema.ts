@@ -2190,3 +2190,58 @@ export const ticketChecklist = pgTable(
   },
   (t) => [index("ticket_checklist_ticket_idx").on(t.ticketId, t.position)],
 );
+
+// ── Sign-in approved on a phone (push notification + passkey) ──
+/** A phone that approves sign-ins: its passkey (WebAuthn public key), its web push subscription (sealed), and a device token (hashed) */
+export const pushDevices = pgTable(
+  "push_devices",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    userId: uuid("user_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    label: text("label").notNull().default(""),
+    /** The passkey made on the phone (base64url id) and its public key (COSE, base64url); the private key never leaves the phone */
+    credentialId: text("credential_id").notNull(),
+    publicKey: text("public_key").notNull(),
+    counter: bigint("counter", { mode: "number" }).notNull().default(0),
+    transports: jsonb("transports").$type<string[]>().notNull().default(sql`'[]'::jsonb`),
+    /** The web push subscription (endpoint and keys), sealed with APP_SECRET */
+    subscription: text("subscription").notNull(),
+    /** SHA-256 of the random token the phone keeps: with the passkey, what proves it is that phone */
+    tokenHash: text("token_hash").notNull(),
+    userAgent: text("user_agent").notNull().default(""),
+    createdAt: created(),
+    lastUsedAt: timestamp("last_used_at", { withTimezone: true }),
+    revokedAt: timestamp("revoked_at", { withTimezone: true }),
+  },
+  (t) => [uniqueIndex("push_devices_credential_unique").on(t.credentialId), index("push_devices_user_idx").on(t.userId)],
+);
+
+/** One request to approve a sign-in: bound to the session of the browser that asked (after the password), single use, two minutes */
+export const pushChallenges = pgTable(
+  "push_challenges",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    userId: uuid("user_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    /** sessions.id (hash) of the waiting browser: it is the only session an approval can unlock */
+    sessionId: text("session_id").notNull(),
+    /** What the phone's passkey signs (random, base64url) */
+    nonce: text("nonce").notNull(),
+    /** The number shown on the computer; the phone shows it among two others and the person picks it */
+    number: integer("number").notNull(),
+    decoys: jsonb("decoys").$type<number[]>().notNull().default(sql`'[]'::jsonb`),
+    status: text("status", { enum: ["pending", "approved", "denied", "failed"] }).notNull().default("pending"),
+    wrongTries: integer("wrong_tries").notNull().default(0),
+    ip: text("ip").notNull().default(""),
+    userAgent: text("user_agent").notNull().default(""),
+    /** The phone that answered */
+    deviceId: uuid("device_id").references(() => pushDevices.id, { onDelete: "set null" }),
+    createdAt: created(),
+    expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
+    answeredAt: timestamp("answered_at", { withTimezone: true }),
+  },
+  (t) => [index("push_challenges_user_idx").on(t.userId, t.createdAt), index("push_challenges_session_idx").on(t.sessionId)],
+);

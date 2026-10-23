@@ -1,0 +1,11 @@
+{
+  "name": "Portail AKAB",
+  "short_name": "AKAB",
+  "description": "Portail AKAB Informatique",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "background_color": "#0a0a0b",
+  "theme_color": "#0a0a0b",
+  "icons": [{ "src": "/akab-icon.png", "sizes": "192x192 512x512", "type": "image/png", "purpose": "any" }]
+}

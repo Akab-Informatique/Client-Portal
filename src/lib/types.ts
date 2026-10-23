@@ -31,7 +31,7 @@ export type Me = {
   preferences: { dashboard: DashboardWidget[] | null; theme: "dark" | "light" | "system"; outlook: boolean; bankHours: boolean; notify: { email: boolean; sms: boolean; teams: boolean } };
 };
 
-export type AuthState = { stage: Stage; me?: Me | { name: string; email: string; locale: "fr" | "en" } };
+export type AuthState = { stage: Stage; /** Phones that can approve this sign-in (while the second step is asked) */ push?: number; me?: Me | { name: string; email: string; locale: "fr" | "en" } };
 
 export type AdminUser = {
   id: string;

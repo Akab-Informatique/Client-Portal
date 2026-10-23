@@ -1,3 +1,4 @@
+import { ApprovePage } from "@/pages/ApprovePage";
 import { lazy, Suspense } from "react";
 import { BrowserRouter, Navigate, Route, Routes } from "react-router-dom";
 import { useTranslation } from "react-i18next";
@@ -123,9 +124,11 @@ function Root() {
   const { data, isLoading, isError, refetch, isFetching } = useAuthState();
   // where Stripe sends a customer after a payment link: public, no sign-in
   if (window.location.pathname === "/paiement-recu") return <PaymentReceivedPage />;
+  // the phone's page for a sign-in request (opened from the notification): no session, the phone proves itself
+  if (window.location.pathname === "/approve") return <ApprovePage />;
   if (isError && !data) return <ServerDown onRetry={() => void refetch()} retrying={isFetching} />;
   if (isLoading || !data) return <Splash />;
-  if (data.stage !== "ready") return <LoginPage stage={data.stage} email={data.me?.email} />;
+  if (data.stage !== "ready") return <LoginPage stage={data.stage} email={data.me?.email} push={data.push} />;
   const me = data.me as Me;
   return (
     <SessionProvider me={me}>

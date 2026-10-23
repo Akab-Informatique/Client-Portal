@@ -10,6 +10,7 @@ import { config } from "./config.ts";
 import { loadAuth, readOnlyViewAs, requireStaff, type AppEnv } from "./lib/auth.ts";
 import { sameOriginJson } from "./lib/http.ts";
 import { authRoutes } from "./routes/auth.ts";
+import { pushAuthRoutes } from "./routes/pushAuth.ts";
 import { meRoutes } from "./routes/me.ts";
 import { adminRoutes } from "./routes/admin.ts";
 import { integrationRoutes } from "./routes/integrations.ts";
@@ -86,6 +87,7 @@ export function createApp() {
   });
   api.get("/health", (c) => c.json({ ok: true }));
   api.route("/auth", authRoutes);
+  api.route("/auth/push", pushAuthRoutes);
   api.route("/me", meRoutes);
   api.route("/view-as", viewAsRoutes);
   api.route("/notifications", notificationRoutes);

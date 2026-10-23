@@ -69,6 +69,13 @@ function useView(n: Notification): { icon: LucideIcon; title: string; body: stri
         body: [`${n.data.number ?? ""} · ${n.data.title ?? ""}`, n.data.company, n.data.message].filter(Boolean).join(" — "),
         tone: "gold",
       };
+    case "security.alert":
+      return {
+        icon: ShieldAlert,
+        title: t(n.data.kind === "signin_denied" ? "notifications.signinDenied" : "notifications.deviceAdded"),
+        body: n.data.kind === "signin_denied" ? [n.data.agent, n.data.ip].filter(Boolean).join(" · ") : String(n.data.label ?? ""),
+        tone: "alert",
+      };
     case "pipeline.assigned":
       return { icon: Workflow, title: t(n.data.comment ? "notifications.pipelineComment" : "notifications.pipelineAssigned", { by: n.data.by ?? "" }), body: String(n.data.title ?? ""), tone: "gold" };
     case "breakroom.complots":
