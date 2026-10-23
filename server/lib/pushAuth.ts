@@ -119,22 +119,37 @@ export async function revokeDevices(userId: string, only?: string): Promise<numb
   return rows.length;
 }
 
-/** One push to a phone. A subscription the push service says is gone (404 / 410) revokes the phone. */
-export async function pushTo(d: Device, payload: Record<string, unknown>): Promise<boolean> {
-  await vapid();
+/** What came of one push: sent, or why not (the push service's status and a short word, never a secret) */
+export type PushOutcome = { ok: true } | { ok: false; status: number | null; reason: string };
+
+/**
+ * One push to a phone. A subscription the push service says is gone (404 / 410) revokes the phone. The reason of a
+ * failure is kept (the server log, the audit trail, and the answer of the sign-in page) so it can be found.
+ */
+export async function pushDetailed(d: Device, payload: Record<string, unknown>): Promise<PushOutcome> {
   try {
+    await vapid();
     const sub = JSON.parse(unseal(d.subscription) ?? "{}") as PushSubscriptionJSON;
-    if (!validSubscription(sub)) return false;
+    if (!validSubscription(sub)) return { ok: false, status: null, reason: "bad_subscription" };
     await webpush.sendNotification(sub, JSON.stringify(payload), { TTL: CHALLENGE_SECONDS, urgency: "high" });
-    return true;
+    return { ok: true };
   } catch (e) {
-    const status = (e as { statusCode?: number }).statusCode;
+    const err = e as { statusCode?: number; body?: unknown; message?: string; code?: string };
+    const status = typeof err.statusCode === "number" ? err.statusCode : null;
+    // what the push service said, cut to a few harmless characters
+    const said = String(typeof err.body === "string" ? err.body : (err.message ?? err.code ?? "")).replace(/[^A-Za-z0-9 _:.-]/g, " ").replace(/\s+/g, " ").trim().slice(0, 80);
     if (status === 404 || status === 410) {
       await revokeDevices(d.userId, d.id);
-      await audit(d.userId, "push.device_gone", d.id, { label: d.label });
-    } else console.warn("[push] send failed:", e instanceof Error ? e.message : e);
-    return false;
+      await audit(d.userId, "push.device_gone", d.id, { label: d.label, status });
+      return { ok: false, status, reason: "gone" };
+    }
+    const reason = status === 401 || status === 403 ? "refused" : status === 413 ? "too_large" : status === 429 ? "throttled" : status && status >= 500 ? "service" : status === null ? "network" : "error";
+    console.warn(`[push] send to "${d.label}" failed: ${status ?? "no answer"} ${reason} — ${said}`);
+    return { ok: false, status, reason: said ? `${reason}: ${said}` : reason };
   }
+}
+export async function pushTo(d: Device, payload: Record<string, unknown>): Promise<boolean> {
+  return (await pushDetailed(d, payload)).ok;
 }
 
 // ── enrolling a phone ──
@@ -212,14 +227,14 @@ export async function startChallenge(c: Context, a: { user: { id: string; name: 
   const devices = await activeDevices(a.user.id);
   if (!devices.length) throw new PushError("no_device");
   const now = new Date();
-  // one request at a time per sign-in, not more often than every 15 s, 6 an hour per person
+  // one request at a time per sign-in, not more often than every 15 s, 10 an hour per person
   const [last] = await db().select().from(schema.pushChallenges).where(eq(schema.pushChallenges.sessionId, a.sessionId)).orderBy(desc(schema.pushChallenges.createdAt)).limit(1);
   if (last && last.status === "pending" && last.expiresAt > now && now.getTime() - last.createdAt.getTime() < 15_000) throw new PushError("too_soon", 15);
   const [{ n }] = await db()
     .select({ n: sql<number>`count(*)`.mapWith(Number) })
     .from(schema.pushChallenges)
     .where(and(eq(schema.pushChallenges.userId, a.user.id), gt(schema.pushChallenges.createdAt, new Date(now.getTime() - 3_600_000))));
-  if (n >= 6) throw new PushError("rate_limited", 600);
+  if (n >= 10) throw new PushError("rate_limited", 600);
   // an earlier request of this sign-in is closed
   await db().update(schema.pushChallenges).set({ status: "failed", answeredAt: now }).where(and(eq(schema.pushChallenges.sessionId, a.sessionId), eq(schema.pushChallenges.status, "pending")));
   const number = randomInt(10, 100);
@@ -243,9 +258,14 @@ export async function startChallenge(c: Context, a: { user: { id: string; name: 
     .returning();
   // nothing secret in the push: the phone asks for the details with its own token
   let sent = 0;
-  for (const d of devices) if (await pushTo(d, { type: "signin", challengeId: row.id, deviceId: d.id, title: "Connexion au portail", body: "Touchez pour approuver ou refuser." })) sent++;
-  await audit(a.user.id, "push.challenge_sent", row.id, { devices: devices.length, sent });
-  return { id: row.id, number, expiresAt: row.expiresAt, sent, devices: devices.length };
+  const failures: { status: number | null; reason: string }[] = [];
+  for (const d of devices) {
+    const r = await pushDetailed(d, { type: "signin", challengeId: row.id, deviceId: d.id, title: "Connexion au portail", body: "Touchez pour approuver ou refuser." });
+    if (r.ok) sent++;
+    else failures.push({ status: r.status, reason: r.reason });
+  }
+  await audit(a.user.id, "push.challenge_sent", row.id, { devices: devices.length, sent, ...(failures.length ? { failures } : {}) });
+  return { id: row.id, number, expiresAt: row.expiresAt, sent, devices: devices.length, failures };
 }
 
 /** The state of the waiting browser's latest request */

@@ -459,7 +459,7 @@ function useVerify() {
   return { verify, busy, error };
 }
 
-type PushState = { status: "starting" | "pending" | "failed" | "expired" | "error"; number?: number; expiresAt?: string };
+type PushState = { status: "starting" | "pending" | "failed" | "expired" | "error"; number?: number; expiresAt?: string; /** why the notification could not be sent */ why?: string };
 
 /**
  * Sign in with the phone: a notification is sent as soon as the password is given; the number shown here must be
@@ -474,15 +474,18 @@ function PhoneApproval({ onUseCode }: { onUseCode: () => void }) {
   const start = useCallback(async () => {
     setState({ status: "starting" });
     try {
-      const r = await api.post<{ number: number; expiresAt: string; sent: number }>("/auth/push/start");
-      setState({ status: r.sent > 0 ? "pending" : "error", number: r.number, expiresAt: r.expiresAt });
+      const r = await api.post<{ number: number; expiresAt: string; sent: number; failures?: { status: number | null; reason: string }[] }>("/auth/push/start");
+      const f = r.failures?.[0];
+      setState({ status: r.sent > 0 ? "pending" : "error", number: r.number, expiresAt: r.expiresAt, why: r.sent > 0 ? undefined : f ? `${f.reason}${f.status ? ` (${f.status})` : ""}` : undefined });
     } catch (e) {
       // asked again too soon: the request already waiting is the one to follow
       if (e instanceof ApiError && e.status === 429) {
         const s = await api.get<{ status: string; number?: number; expiresAt?: string }>("/auth/push/status").catch(() => null);
         if (s?.status === "pending") return setState({ status: "pending", number: s.number, expiresAt: s.expiresAt });
       }
-      setState({ status: "error" });
+      // the server says why when it can: too many requests, no phone, the session no longer asks for a second step
+      const code = e instanceof ApiError ? e.code : "";
+      setState({ status: "error", why: ["push_rate_limited", "push_no_device", "push_not_needed", "push_too_soon"].includes(code) ? code : undefined });
     }
   }, []);
   useEffect(() => {
@@ -549,7 +552,10 @@ function PhoneApproval({ onUseCode }: { onUseCode: () => void }) {
           </p>
         </div>
       )}
-      {(state.status === "failed" || state.status === "expired" || state.status === "error") && <FormError message={t(state.status === "failed" ? "phoneLogin.requestFailed" : `phoneLogin.${state.status}`)} />}
+      {(state.status === "failed" || state.status === "expired" || state.status === "error") && (
+        <FormError message={t(state.status === "failed" ? "phoneLogin.requestFailed" : state.why?.startsWith("push_") ? `phoneLogin.why.${state.why}` : `phoneLogin.${state.status}`)} />
+      )}
+      {state.status === "error" && state.why && !state.why.startsWith("push_") && <p className="break-words text-center font-mono text-[11px] text-muted-foreground">{state.why}</p>}
       <div className="flex flex-col gap-2">
         {state.status !== "starting" && (
           <Button type="button" variant="outline" className="h-11 w-full" onClick={() => void start()}>

@@ -61,8 +61,8 @@ export function PhoneSignInCard() {
     onError: () => toast.error(t("common.error")),
   });
   const test = useMutation({
-    mutationFn: (id: string) => api.post<{ sent: boolean }>(`/auth/push/devices/${id}/test`),
-    onSuccess: (r) => (r.sent ? toast.success(t("phoneLogin.testSent")) : toast.error(t("phoneLogin.testFailed"))),
+    mutationFn: (id: string) => api.post<{ sent: boolean; reason?: string; status?: number | null }>(`/auth/push/devices/${id}/test`),
+    onSuccess: (r) => (r.sent ? toast.success(t("phoneLogin.testSent")) : toast.error(t("phoneLogin.testFailed"), { description: [r.reason, r.status].filter(Boolean).join(" · ") || undefined })),
     onError: () => toast.error(t("phoneLogin.testFailed")),
   });
   const details = useMutation({

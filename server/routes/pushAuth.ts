@@ -9,7 +9,7 @@ import { auth, isFullySignedIn, type AppEnv } from "../lib/auth.ts";
 import { verifyPassword } from "../lib/crypto.ts";
 import { clientIp, rateLimit } from "../lib/http.ts";
 import { body } from "../lib/validate.ts";
-import { pushTo } from "../lib/pushAuth.ts";
+import { pushDetailed } from "../lib/pushAuth.ts";
 import { pushEndpointOk, deviceChallenge, deviceDeny, deviceRefresh, deviceRespond, enrollOptions, enrollVerify, PushError, revokeDevices, sessionChallenge, startChallenge, vapid } from "../lib/pushAuth.ts";
 
 /**
@@ -87,14 +87,14 @@ export const pushAuthRoutes = new Hono<AppEnv>()
     if (!d) throw new HTTPException(404, { message: "not_found" });
     const [pref] = await db().select({ details: schema.userPreferences.pushDetails }).from(schema.userPreferences).where(eq(schema.userPreferences.userId, a.user.id));
     const fr = a.user.locale !== "en";
-    const sent = await pushTo(d, {
+    const outcome = await pushDetailed(d, {
       type: "notify",
       notifType: "test",
       title: fr ? "Portail AKAB" : "AKAB portal",
       body: pref?.details ? (fr ? "Notification de test : tout fonctionne." : "Test notification: everything works.") : fr ? "Touchez pour ouvrir le portail." : "Tap to open the portal.",
       url: "/",
     });
-    return c.json({ sent });
+    return c.json({ sent: outcome.ok, ...(outcome.ok ? {} : { reason: outcome.reason, status: outcome.status }) });
   })
 
   .delete("/devices/:id", async (c) => {
@@ -115,7 +115,7 @@ export const pushAuthRoutes = new Hono<AppEnv>()
     const lim = rateLimit(`push:start:ip:${clientIp(c)}`, 30, 15 * 60_000);
     if (!lim.ok) throw new HTTPException(429, { message: "rate_limited" });
     const r = await startChallenge(c, { user: a.user, sessionId: a.sessionId }).catch(http);
-    return c.json({ id: r.id, number: r.number, expiresAt: r.expiresAt, sent: r.sent, devices: r.devices });
+    return c.json({ id: r.id, number: r.number, expiresAt: r.expiresAt, sent: r.sent, devices: r.devices, failures: r.failures });
   })
 
   .get("/status", async (c) => {

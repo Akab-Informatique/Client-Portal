@@ -4,10 +4,15 @@ import nodeCrypto from "node:crypto";
 
 // web push: nothing leaves the tests; what would be sent is recorded
 const pushed = vi.hoisted(() => [] as { sub: unknown; payload: any }[]);
+const pushFail = vi.hoisted(() => ({ next: null as null | { statusCode?: number; body?: string } }));
 vi.mock("web-push", async (orig) => {
   const real: any = await orig();
   const wp = real.default ?? real;
-  return { default: { ...wp, setVapidDetails: () => undefined, sendNotification: async (sub: unknown, payload: string) => (pushed.push({ sub, payload: JSON.parse(payload) }), { statusCode: 201 }) } };
+  return { default: { ...wp, setVapidDetails: () => undefined, sendNotification: async (sub: unknown, payload: string) => {
+        if (pushFail.next) throw Object.assign(new Error("Received unexpected response code"), pushFail.next);
+        pushed.push({ sub, payload: JSON.parse(payload) });
+        return { statusCode: 201 };
+      } } };
 });
 
 process.env.NODE_ENV = "test";
@@ -6460,6 +6465,50 @@ describe("sign-in approved on the phone (push + passkey)", () => {
     expect(safePath("/\\evil.example")).toBe("/");
     await tech.put("/api/me/preferences", { pushDetails: false });
     await db().delete(schema.pushDevices);
+  });
+
+  it("when the push service refuses, the sign-in page and the log say why; a phone it no longer knows is removed", async () => {
+    resetRateLimit("login:ip:unknown");
+    await freshLimits();
+    const tech = await signIn("tech@akab.local");
+    await db().delete(schema.pushDevices);
+    await db().delete(schema.pushChallenges);
+    const phone = new Phone();
+    const opts = (await tech.post("/api/auth/push/enroll/options", { password: PASSWORD })).json;
+    const e = (await tech.post("/api/auth/push/enroll/verify", { label: "Cellulaire", subscription, response: phone.register(opts.challenge) })).json;
+    try {
+      // refused (a key problem on our side): nothing sent, the reason is told, the phone stays
+      pushFail.next = { statusCode: 403, body: "BadJwtToken" };
+      const b1 = await waiting();
+      const r1 = (await b1.post("/api/auth/push/start")).json;
+      expect(r1).toMatchObject({ sent: 0, devices: 1 });
+      expect(r1.failures[0]).toMatchObject({ status: 403 });
+      expect(r1.failures[0].reason).toContain("refused");
+      expect(r1.failures[0].reason).toContain("BadJwtToken");
+      expect((await tech.get("/api/auth/push/devices")).json.devices).toHaveLength(1);
+      // the test button says why too
+      expect((await tech.post(`/api/auth/push/devices/${e.id}/test`, {})).json).toMatchObject({ sent: false, status: 403 });
+      // the audit trail has it
+      const sentLog = (await db().select().from(schema.auditLog)).filter((r) => r.action === "push.challenge_sent").at(-1);
+      expect(JSON.stringify(sentLog?.details)).toContain("BadJwtToken");
+      // no answer at all (the server cannot reach the push service)
+      pushFail.next = {};
+      const b2 = await waiting();
+      expect((await b2.post("/api/auth/push/start")).json.failures[0]).toMatchObject({ status: null });
+      // the push service no longer knows the phone: it is removed, and the next sign-in says there is none
+      pushFail.next = { statusCode: 410 };
+      const b3 = await waiting();
+      expect((await b3.post("/api/auth/push/start")).json.failures[0].reason).toBe("gone");
+      expect((await tech.get("/api/auth/push/devices")).json.devices).toEqual([]);
+      pushFail.next = null;
+      const b4 = await waiting();
+      expect((await b4.post("/api/auth/push/start")).json.error).toBe("push_no_device");
+      expect((await b4.get("/api/auth/me")).json.push).toBe(0);
+    } finally {
+      pushFail.next = null;
+      await db().delete(schema.pushChallenges);
+      await db().delete(schema.pushDevices);
+    }
   });
 
   it("two wrong numbers close the request; \"not me\" closes the session and rests the account; an old request is refused", async () => {
