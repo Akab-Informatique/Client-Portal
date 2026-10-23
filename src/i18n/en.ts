@@ -2339,6 +2339,12 @@ const en: Dict = {
     polishEn: "Correct in English",
     polished: "Text corrected",
     undo: "Undo",
+    direction: {
+      title: "Extra direction for the AI",
+      placeholder: "E.g. the Tremblay ticket goes first; nothing planned Friday afternoon; short, reassuring reply",
+      hint: "Followed on top of the portal's rules. Kept while the page stays open.",
+      clear: "Clear",
+    },
     picker: {
       title: "AI model",
       default: "Default ({{model}})",

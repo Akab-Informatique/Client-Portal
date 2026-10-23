@@ -1,4 +1,5 @@
 import { Hono } from "hono";
+import { cleanDirection } from "../lib/aiDirection.ts";
 import { HTTPException } from "hono/http-exception";
 import { and, asc, desc, eq, inArray, ne, sql } from "drizzle-orm";
 import type { SQL } from "drizzle-orm";
@@ -239,9 +240,9 @@ export const pipelineRoutes = new Hono<AppEnv>()
   .post("/day/plan", requirePermission("pipeline.edit"), async (c) => {
     const a = auth(c);
     aiLimit(a.user.id);
-    const p = await body(c, z.object({ date: zDate.optional(), userId: zUuid.optional() }));
+    const p = await body(c, z.object({ date: zDate.optional(), userId: zUuid.optional(), direction: z.string().max(2000).optional() }));
     const userId = p.userId && p.userId !== a.user.id ? (a.permissions.includes("pipeline.manage") ? p.userId : (() => { throw new HTTPException(403, { message: "forbidden" }); })()) : a.user.id;
-    const out = await buildPlan(userId, p.date ?? todayQc(), { ai: true });
+    const out = await buildPlan(userId, p.date ?? todayQc(), { ai: true, direction: cleanDirection(p.direction) });
     await audit(a.user.id, "pipeline.day_planned", userId, { source: out.plan.source, aiError: out.aiError });
     return c.json(out);
   })

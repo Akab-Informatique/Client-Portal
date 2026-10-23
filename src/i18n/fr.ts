@@ -2337,6 +2337,12 @@ const fr = {
     polishEn: "Corriger en anglais",
     polished: "Texte corrigé",
     undo: "Annuler",
+    direction: {
+      title: "Consigne supplémentaire pour l'IA",
+      placeholder: "Ex. : le billet du client Tremblay passe en premier ; rien de planifié vendredi après-midi ; réponse courte et rassurante",
+      hint: "Suivie en plus des règles du portail. Gardée tant que la page reste ouverte.",
+      clear: "Effacer",
+    },
     picker: {
       title: "Modèle d'IA",
       default: "Par défaut ({{model}})",

@@ -11,6 +11,7 @@ import { todayQc } from "./timesheets.ts";
 import { permissionsOf } from "./auth.ts";
 import { calendarsOf, onCalendar, type CalendarTarget } from "./planning.ts";
 import { o365Ready, outlookEvents } from "./o365.ts";
+import { directionPrompt } from "./aiDirection.ts";
 
 /**
  * Pipeline: each technician's day. What is on their plate (their tasks and tickets due), laid out as a
@@ -363,7 +364,7 @@ function rulesSummary(items: DayItem[], cap: number, planned: number, overflow: 
 }
 
 /** Plan one technician's day and keep it. The AI orders the work and writes the summary; the hours are laid out here. */
-export async function buildPlan(userId: string, date: string, opts: { ai: boolean; locale?: "fr" | "en"; by?: string | null } = { ai: false }) {
+export async function buildPlan(userId: string, date: string, opts: { ai: boolean; locale?: "fr" | "en"; by?: string | null; direction?: string } = { ai: false }) {
   const settings = await pipelineSettings();
   const [user] = await db().select({ name: schema.users.name, locale: schema.users.locale }).from(schema.users).where(eq(schema.users.id, userId));
   const locale = opts.locale ?? user?.locale ?? "fr";
@@ -392,7 +393,7 @@ export async function buildPlan(userId: string, date: string, opts: { ai: boolea
           system: `Tu es l'assistant de planification d'AKAB Informatique (services TI, Québec). Réponds en ${locale === "en" ? "anglais" : "français québécois"}, ton direct et chaleureux, tutoiement. Tu prépares la journée d'un technicien : c'est une suggestion, pas un horaire fixe.`,
           feature: "pipeline.day",
           userId,
-          prompt: `Date : ${date}. Heures de travail ${settings.workStart}–${settings.workEnd} (dîner ${settings.lunchStart}–${settings.lunchEnd}), ${hours(free)} libres après les événements.${agenda.length ? ` Déjà à son agenda Outlook :\n${agenda.join("\n")}\n` : ""} Voici ce qui est à faire :\n${lines.join("\n")}\n\nLes priorités du jour passent en premier. Respecte « pas avant » et garde ce qui a une heure d'échéance avant cette heure. Choisis l'ordre de traitement (les retards et les urgences d'abord, regroupe ce qui va ensemble, garde les tâches longues pour le début de la matinée ou de l'après-midi). Donne un résumé de 2 à 4 phrases de la journée : ce qui compte le plus, si le temps est suffisant, ce qu'il faudrait déplacer ou déléguer sinon. Format : {"summary": "...", "order": [{"ref": "task:... ou ticket:...", "note": "raison en 12 mots ou moins"}]}`,
+          prompt: `Date : ${date}. Heures de travail ${settings.workStart}–${settings.workEnd} (dîner ${settings.lunchStart}–${settings.lunchEnd}), ${hours(free)} libres après les événements.${agenda.length ? ` Déjà à son agenda Outlook :\n${agenda.join("\n")}\n` : ""} Voici ce qui est à faire :\n${lines.join("\n")}\n\nLes priorités du jour passent en premier. Respecte « pas avant » et garde ce qui a une heure d'échéance avant cette heure. Choisis l'ordre de traitement (les retards et les urgences d'abord, regroupe ce qui va ensemble, garde les tâches longues pour le début de la matinée ou de l'après-midi). Donne un résumé de 2 à 4 phrases de la journée : ce qui compte le plus, si le temps est suffisant, ce qu'il faudrait déplacer ou déléguer sinon. Format : {"summary": "...", "order": [{"ref": "task:... ou ticket:...", "note": "raison en 12 mots ou moins"}]}${directionPrompt(opts.direction ?? "")}`,
           maxTokens: 4000,
         });
         const byKey = new Map(planable.map((i) => [i.key, i]));

@@ -25,6 +25,7 @@ import { Switch } from "@/components/ui/switch";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { api, ApiError } from "@/lib/api";
 import { AiModelSub, AiTodayLine, useAiModel } from "@/components/AiModelPicker";
+import { AiDirection, useAiDirection } from "@/components/AiDirection";
 import { useCan, useMe } from "@/lib/session";
 import { DueEditor } from "./DueEditor";
 import { cn, initials } from "@/lib/utils";
@@ -378,7 +379,12 @@ function TicketBody({
             <TimerControl ticketId={tk.id} />
             <MergedTickets tk={tk} />
             {can("tickets.ai") &&
-              (tk.ai ? <AiMenu tk={tk} onReply={(text) => setDraft({ text, internal: false })} /> : <AiSetupHint label={t("tickets.ai.button")} />)}
+              (tk.ai ? (
+                <span className="inline-flex items-center">
+                  <AiMenu tk={tk} onReply={(text) => setDraft({ text, internal: false })} />
+                  <AiDirection id={`ticket:${tk.id}`} />
+                </span>
+              ) : <AiSetupHint label={t("tickets.ai.button")} />)}
             {can("tickets.edit") && !partial && <NotifyTech tk={tk} />}
             <NotificationBell />
             {can("tickets.delete") && !partial && (
@@ -856,6 +862,7 @@ function EstimateField({ tk, editable }: { tk: TicketDetail; editable: boolean }
   const aiError = useAiError();
   const can = useCan();
   const model = useAiModel("ticket.analyze");
+  const direction = useAiDirection(`ticket:${tk.id}`);
   const [text, setText] = useState(tk.estimate ? hm(tk.estimate.minutes / 60) : "");
   useEffect(() => setText(tk.estimate ? hm(tk.estimate.minutes / 60) : ""), [tk.estimate?.minutes]);
   const refresh = () => {
@@ -868,7 +875,7 @@ function EstimateField({ tk, editable }: { tk: TicketDetail; editable: boolean }
     onError: (e) => toast.error(ticketErrorText(t, e)),
   });
   const ask = useMutation({
-    mutationFn: () => api.post<{ minutes: number | null; reason: string }>(`/tickets/${tk.id}/ai/estimate`, model.body),
+    mutationFn: () => api.post<{ minutes: number | null; reason: string }>(`/tickets/${tk.id}/ai/estimate`, { ...model.body, ...direction.body }),
     onSuccess: (r) => {
       refresh();
       if (r.minutes) toast.success(r.reason ? `${hm(r.minutes / 60)} — ${r.reason}` : hm(r.minutes / 60));
@@ -1784,9 +1791,10 @@ function AiMenu({ tk, onReply }: { tk: TicketDetail; onReply: (text: string) => 
   const aiError = useAiError();
   const analyzeModel = useAiModel("ticket.analyze");
   const replyModel = useAiModel("ticket.reply");
+  const direction = useAiDirection(`ticket:${tk.id}`);
   const done = () => void qc.invalidateQueries({ queryKey: ["ai", "options"] });
   const analyze = useMutation({
-    mutationFn: () => api.post<AiAnalysis>(`/tickets/${tk.id}/ai/analyze`, analyzeModel.body),
+    mutationFn: () => api.post<AiAnalysis>(`/tickets/${tk.id}/ai/analyze`, { ...analyzeModel.body, ...direction.body }),
     onSuccess: () => {
       void qc.invalidateQueries({ queryKey: ["tickets", "ai", tk.id] });
       done();
@@ -1794,7 +1802,7 @@ function AiMenu({ tk, onReply }: { tk: TicketDetail; onReply: (text: string) => 
     onError: (e) => toast.error(aiError(e)),
   });
   const reply = useMutation({
-    mutationFn: () => api.post<{ text: string }>(`/tickets/${tk.id}/ai/reply`, replyModel.body),
+    mutationFn: () => api.post<{ text: string }>(`/tickets/${tk.id}/ai/reply`, { ...replyModel.body, ...direction.body }),
     onSuccess: (r) => {
       onReply(r.text);
       done();
@@ -1848,8 +1856,9 @@ function AiPanel({ tk, onToNote }: { tk: TicketDetail; onToNote: (text: string) 
   const aiError = useAiError();
   const { data: list = [] } = useQuery({ queryKey: ["tickets", "ai", tk.id], queryFn: () => api.get<AiAnalysis[]>(`/tickets/${tk.id}/ai`) });
   const analyzeModel = useAiModel("ticket.analyze");
+  const direction = useAiDirection(`ticket:${tk.id}`);
   const again = useMutation({
-    mutationFn: () => api.post<AiAnalysis>(`/tickets/${tk.id}/ai/analyze`, analyzeModel.body),
+    mutationFn: () => api.post<AiAnalysis>(`/tickets/${tk.id}/ai/analyze`, { ...analyzeModel.body, ...direction.body }),
     onSuccess: () => void qc.invalidateQueries({ queryKey: ["tickets", "ai", tk.id] }),
     onError: (e) => toast.error(aiError(e)),
   });

@@ -4,6 +4,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { AlertTriangle, CalendarDays, Star, CalendarOff, CheckCircle2, EyeOff, ChevronLeft, ChevronRight, Coffee, Loader2, Lock, MessageSquareText, Plus, RefreshCw, Sparkles, Ticket as TicketIcon, Workflow } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { AiDirection, useAiDirection } from "@/components/AiDirection";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -32,6 +33,7 @@ export function MyDay({ onOpenTask }: { onOpenTask: (id: string) => void }) {
   const [date, setDate] = useState(todayYmd());
   const [userId, setUserId] = useState<string>(me.id);
   const [quick, setQuick] = useState("");
+  const direction = useAiDirection(`pipeline.day:${date}:${userId}`);
   const key = ["pipeline", "day", date, userId];
   const { data, isLoading } = useQuery({
     queryKey: key,
@@ -40,7 +42,7 @@ export function MyDay({ onOpenTask }: { onOpenTask: (id: string) => void }) {
   });
   const refresh = () => void qc.invalidateQueries({ queryKey: ["pipeline"] });
   const replan = useMutation({
-    mutationFn: () => api.post<{ aiError: string | null }>("/pipeline/day/plan", { date, ...(userId !== me.id ? { userId } : {}) }),
+    mutationFn: () => api.post<{ aiError: string | null }>("/pipeline/day/plan", { date, ...(userId !== me.id ? { userId } : {}), ...direction.body }),
     onSuccess: (r) => {
       refresh();
       if (r.aiError) toast.message(t("pipeline.day.rulesOnly"), { description: t(`pipeline.day.aiError.${["not_configured", "disabled"].includes(r.aiError) ? r.aiError : "other"}`) });
@@ -141,6 +143,9 @@ export function MyDay({ onOpenTask }: { onOpenTask: (id: string) => void }) {
                   <Button variant="outline" size="sm" className="h-8 gap-1.5" disabled={replan.isPending} onClick={() => replan.mutate()}>
                     {replan.isPending ? <Loader2 className="size-3.5 animate-spin" /> : <RefreshCw className="size-3.5" />} {t("pipeline.day.replan")}
                   </Button>
+                )}
+                {can("pipeline.edit") && (
+                  <AiDirection id={`pipeline.day:${date}:${userId}`} className="-ml-2" />
                 )}
               </div>
             </div>

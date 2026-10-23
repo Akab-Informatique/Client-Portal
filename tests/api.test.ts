@@ -5383,6 +5383,16 @@ describe("plan my tickets: hours laid out without overlap, milestone", () => {
     const tech = await signIn("admin@akab.local");
     const res = await tech.post("/api/tickets/ai/plan", {});
     expect(res.status).toBe(200);
+    // extra direction is accepted (cleaned, capped); with no AI the portal's own order still answers
+    expect((await tech.post("/api/tickets/ai/plan", { direction: "  le plus urgent   d'abord  ".padEnd(5000, "x") })).status).toBe(200);
+    expect((await tech.post("/api/pipeline/day/plan", { direction: "pas de réunion le matin" })).status).toBe(200);
+    expect((await tech.post("/api/pipeline/day/plan", { direction: "x".repeat(2001) })).status).toBe(400);
+    const { cleanDirection, directionPrompt } = await import("../server/lib/aiDirection.ts");
+    expect(cleanDirection("  a \n b  ")).toBe("a b");
+    expect(cleanDirection(42)).toBe("");
+    expect(cleanDirection("x".repeat(5000)).length).toBe(1000);
+    expect(directionPrompt("")).toBe("");
+    expect(directionPrompt("premier le client X")).toContain("premier le client X");
     const plan = res.json;
     expect(["ai", "rules"]).toContain(plan.source);
     expect(plan.items.length).toBeGreaterThan(0);

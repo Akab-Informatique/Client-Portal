@@ -26,6 +26,7 @@ import { storeHttp } from "./store.ts";
 import { rememberCompany, rememberContact } from "../lib/crm.ts";
 import { fridayEnd } from "./meetings.ts";
 import { addTicketTime } from "../lib/timesheets.ts";
+import { cleanDirection, directionPrompt } from "../lib/aiDirection.ts";
 import { quebecStamp, scheduleTickets, type SchedIn } from "../lib/ticketSchedule.ts";
 
 /**
@@ -94,6 +95,11 @@ function aiHttpError(e: unknown) {
 async function askedModel(c: Context<AppEnv>): Promise<AiModel | null> {
   const raw = (await c.req.json().catch(() => ({}))) as { model?: unknown };
   return AI_MODELS.includes(raw?.model as AiModel) ? (raw.model as AiModel) : null;
+}
+/** The technician's extra direction for the AI (empty when none) */
+async function askedDirection(c: Context<AppEnv>): Promise<string> {
+  const raw = (await c.req.json().catch(() => ({}))) as { direction?: unknown };
+  return cleanDirection(raw?.direction);
 }
 const aiLimit = (userId: string) => {
   if (!rateLimit(`ai:${userId}`, 30, 60 * 60_000).ok) throw new HTTPException(429, { message: "rate_limited" });
@@ -681,6 +687,7 @@ export const ticketRoutes = new Hono<AppEnv>()
     const a = auth(c);
     aiLimit(a.user.id);
     const model = await askedModel(c);
+    const direction = await askedDirection(c);
     const src = await ticketSource();
     const [all, o, meId] = await run(() => Promise.all([src.list(), src.options(), src.meId(a)]));
     const L = lookup(o);
@@ -708,7 +715,7 @@ export const ticketRoutes = new Hono<AppEnv>()
         feature: "tickets.plan",
         userId: a.user.id,
         model,
-        prompt: `Voici mes billets ouverts :\n${lines.join("\n")}\n\nDonne l'ordre dans lequel les traiter, un après l'autre, pour que le plus de billets possible soient terminés avant leur échéance : les échéances les plus proches et les priorités d'abord, les billets d'un même client ensemble quand c'est sensible. Format : {"overview": "2 ou 3 phrases", "items": [{"id": nombre, "order": nombre, "reason": "courte justification"}]}`,
+        prompt: `Voici mes billets ouverts :\n${lines.join("\n")}\n\nDonne l'ordre dans lequel les traiter, un après l'autre, pour que le plus de billets possible soient terminés avant leur échéance : les échéances les plus proches et les priorités d'abord, les billets d'un même client ensemble quand c'est sensible. Format : {"overview": "2 ou 3 phrases", "items": [{"id": nombre, "order": nombre, "reason": "courte justification"}]}${directionPrompt(direction)}`,
         maxTokens: 6000,
       });
       const parsed = zPlan.safeParse(out);
@@ -1257,6 +1264,7 @@ export const ticketRoutes = new Hono<AppEnv>()
     const a = auth(c);
     aiLimit(a.user.id);
     const model = await askedModel(c);
+    const direction = await askedDirection(c);
     const id = Number(c.req.param("id"));
     try {
       const tk = await ticketForAi(await ticketSource(), id);
@@ -1265,7 +1273,7 @@ export const ticketRoutes = new Hono<AppEnv>()
         feature: "ticket.analyze",
         userId: a.user.id,
         model,
-        prompt: `${tk}\n\nAnalyse ce billet. Format : {"summary": "résumé en 2 à 4 phrases", "nextSteps": ["étapes concrètes, dans l'ordre"], "risks": ["points d'attention, s'il y en a"], "questions": ["questions à poser au client, s'il en manque"], "suggestedPriority": "critical|high|medium|low"}`,
+        prompt: `${tk}\n\nAnalyse ce billet. Format : {"summary": "résumé en 2 à 4 phrases", "nextSteps": ["étapes concrètes, dans l'ordre"], "risks": ["points d'attention, s'il y en a"], "questions": ["questions à poser au client, s'il en manque"], "suggestedPriority": "critical|high|medium|low"}${directionPrompt(direction)}`,
         maxTokens: 4000,
       });
       const parsed = zAnalysis.safeParse(out);
@@ -1287,6 +1295,7 @@ export const ticketRoutes = new Hono<AppEnv>()
     const a = auth(c);
     aiLimit(a.user.id);
     const model = await askedModel(c);
+    const direction = await askedDirection(c);
     const id = Number(c.req.param("id"));
     try {
       const tk = await ticketForAi(await ticketSource(), id);
@@ -1295,7 +1304,7 @@ export const ticketRoutes = new Hono<AppEnv>()
         feature: "ticket.analyze",
         userId: a.user.id,
         model,
-        prompt: `${tk}\n\nEstime le temps de travail nécessaire pour RÉSOUDRE ce billet. Ne donne une estimation que si l'action est rapide et claire (au plus 4 heures de travail) ; si le travail est grand, flou, dépend du client ou d'un fournisseur, ne donne rien. Format : {"quick": true|false, "minutes": nombre entier de minutes (multiple de 5) ou null, "reason": "une phrase"}`,
+        prompt: `${tk}\n\nEstime le temps de travail nécessaire pour RÉSOUDRE ce billet. Ne donne une estimation que si l'action est rapide et claire (au plus 4 heures de travail) ; si le travail est grand, flou, dépend du client ou d'un fournisseur, ne donne rien. Format : {"quick": true|false, "minutes": nombre entier de minutes (multiple de 5) ou null, "reason": "une phrase"}${directionPrompt(direction)}`,
         maxTokens: 600,
       });
       const parsed = zEstimate.safeParse(out);
@@ -1315,6 +1324,7 @@ export const ticketRoutes = new Hono<AppEnv>()
     const a = auth(c);
     aiLimit(a.user.id);
     const model = await askedModel(c);
+    const direction = await askedDirection(c);
     try {
       const tk = await ticketForAi(await ticketSource(), Number(c.req.param("id")));
       const text = await askClaude({
@@ -1322,7 +1332,7 @@ export const ticketRoutes = new Hono<AppEnv>()
         feature: "ticket.reply",
         userId: a.user.id,
         model,
-        prompt: `${tk}\n\nRédige la prochaine réponse au client (texte seul, sans objet), signée « ${a.user.name.split(" ")[0]} – AKAB Informatique ».`,
+        prompt: `${tk}\n\nRédige la prochaine réponse au client (texte seul, sans objet), signée « ${a.user.name.split(" ")[0]} – AKAB Informatique ».${directionPrompt(direction)}`,
         maxTokens: 2000,
       });
       await audit(a.user.id, "ai.ticket_reply", c.req.param("id"));

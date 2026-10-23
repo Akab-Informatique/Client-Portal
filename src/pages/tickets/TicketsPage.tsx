@@ -61,6 +61,7 @@ import { Switch } from "@/components/ui/switch";
 import { useConfirm } from "@/components/ConfirmDialog";
 import { api } from "@/lib/api";
 import { AiModelButton, useAiModel } from "@/components/AiModelPicker";
+import { AiDirection, useAiDirection } from "@/components/AiDirection";
 import { relativeTime } from "@/lib/format";
 import { useCan, useMe } from "@/lib/session";
 import { cn, initials } from "@/lib/utils";
@@ -1654,8 +1655,9 @@ function AiPlanButton() {
   // the due dates that the plan cannot keep: moved to the planned finish when ticked
   const [moveDue, setMoveDue] = useState(false);
   const planModel = useAiModel("tickets.plan");
+  const direction = useAiDirection("tickets.plan");
   const run = useMutation({
-    mutationFn: () => api.post<Plan>("/tickets/ai/plan", planModel.body),
+    mutationFn: () => api.post<Plan>("/tickets/ai/plan", { ...planModel.body, ...direction.body }),
     onSuccess: (p) => {
       void qc.invalidateQueries({ queryKey: ["ai", "options"] });
       if (p.items.length) {
@@ -1700,6 +1702,7 @@ function AiPlanButton() {
         <Button variant="outline" onClick={() => run.mutate()} disabled={run.isPending} className="gap-2 border-violet-500/40 bg-violet-500/10 text-violet-200 hover:bg-violet-500/20">
           {run.isPending ? <Loader2 className="size-4 animate-spin" /> : <Wand2 className="size-4" />} {t("tickets.ai.plan")}
         </Button>
+        <AiDirection id="tickets.plan" />
         <AiModelButton feature="tickets.plan" m={planModel} />
       </span>
       <Dialog open={Boolean(plan)} onOpenChange={(o) => !o && setPlan(null)}>
