@@ -680,6 +680,13 @@
       "when": 1792788831273,
       "tag": "0096_mute_blade",
       "breakpoints": true
+    },
+    {
+      "idx": 97,
+      "version": "7",
+      "when": 1792789181834,
+      "tag": "0097_aromatic_sabretooth",
+      "breakpoints": true
     }
   ]
 }

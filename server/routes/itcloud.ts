@@ -136,7 +136,7 @@ export const itcloudRoutes = new Hono<AppEnv>()
     try {
       const r = await setServiceContract(id, p.contractId);
       await audit(a.user.id, "itcloud.service_contract_picked", String(id), { contractId: p.contractId, moved: r.moved });
-      return c.json(r);
+      return c.json({ moved: r.moved });
     } catch (e) {
       if (e instanceof ItcloudError) throw new HTTPException(e.code === "contract_not_found" || e.code === "service_not_found" || e.code === "customer_not_matched" ? 404 : 400, { message: e.code });
       throw e;

@@ -1947,8 +1947,10 @@ export const itcloudServices = pgTable(
     amountCents: integer("amount_cents").notNull().default(0),
     registrationDate: text("registration_date"),
     nextInvoiceDate: text("next_invoice_date"),
-    /** inactive | synced | client_unlinked | product_unmatched | no_contract */
+    /** inactive | synced | client_unlinked | product_unmatched | no_contract (unmapped: waits for a contract) */
     state: text("state").notNull().default("inactive"),
+    /** The portal service (SKU ITC-…) of its product, when matched */
+    portalServiceId: uuid("portal_service_id"),
     /** The contract carrying it, when synced */
     contractName: text("contract_name"),
     seenAt: timestamp("seen_at", { withTimezone: true }).notNull().defaultNow(),

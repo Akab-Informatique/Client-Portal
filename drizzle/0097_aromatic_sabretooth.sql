@@ -1,0 +1,1 @@
+ALTER TABLE "itcloud_services" ADD COLUMN "portal_service_id" uuid;

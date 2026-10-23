@@ -400,16 +400,36 @@ export async function applyServicePlan(s: ItcloudSettings, keys: string[], actor
 const day = (v: string | null | undefined) => (v && /^\d{4}-\d{2}-\d{2}/.test(v) ? v.slice(0, 10) : null);
 const clamp = (d: string, from: string | null, to: string | null) => (from && d < from ? from : to && d > to ? to : d);
 
-/** The contract that carries a client's vendor services: a monthly one, else the support default, else the first active one */
+/**
+ * The contract that carries a service: only one picked by hand (the service's, else its customer's), while it is
+ * still an active contract of the client. There is no automatic choice: a service waits unmapped until it is mapped.
+ */
 async function contractFor(clientId: string, preferred: (string | null | undefined)[] = []): Promise<typeof schema.clientContracts.$inferSelect | null> {
-  const list = await db().select().from(schema.clientContracts).where(and(eq(schema.clientContracts.clientId, clientId), eq(schema.clientContracts.active, true))).orderBy(asc(schema.clientContracts.name));
-  if (!list.length) return null;
-  // the ones picked by hand, the service's before the customer's, while still an active contract of the client
+  const list = await db().select().from(schema.clientContracts).where(and(eq(schema.clientContracts.clientId, clientId), eq(schema.clientContracts.active, true)));
   for (const id of preferred) {
     const picked = id ? list.find((k) => k.id === id) : undefined;
     if (picked) return picked;
   }
-  return list.find((k) => k.billingMode === "monthly") ?? list.find((k) => k.supportDefault) ?? list[0];
+  return null;
+}
+
+type Line = typeof schema.contractServices.$inferSelect;
+/** The line of a service on a contract: made, or brought up to date (quantity, cost, contract, price kind) */
+async function ensureLine(contract: typeof schema.clientContracts.$inferSelect, svc: typeof schema.services.$inferSelect, r: { serviceId: number; quantity: number; amountCents: number; registrationDate: string | null }, today: string): Promise<{ line: Line; change: "created" | "updated" | "same" }> {
+  const external = String(r.serviceId);
+  // what ITCloud charges us per unit
+  const unitCost = Math.round(r.amountCents / r.quantity);
+  const addedOn = clamp(r.registrationDate ?? today, contract.startDate, contract.endDate);
+  const [cur] = await db().select().from(schema.contractServices).where(and(eq(schema.contractServices.source, "itcloud"), eq(schema.contractServices.externalId, external)));
+  if (!cur) {
+    const [line] = await db().insert(schema.contractServices).values({ contractId: contract.id, serviceId: svc.id, name: svc.name, kind: svc.kind, priceCents: svc.priceCents, costCents: unitCost, addedOn, quantity: r.quantity, source: "itcloud", externalId: external }).returning();
+    return { line, change: "created" };
+  }
+  if (cur.contractId !== contract.id || cur.serviceId !== svc.id || cur.quantity !== r.quantity || cur.costCents !== unitCost || cur.kind !== svc.kind) {
+    const [line] = await db().update(schema.contractServices).set({ contractId: contract.id, serviceId: svc.id, name: svc.name, kind: svc.kind, quantity: r.quantity, costCents: unitCost }).where(eq(schema.contractServices.id, cur.id)).returning();
+    return { line, change: "updated" };
+  }
+  return { line: cur, change: "same" };
 }
 
 let syncing = false;
@@ -437,6 +457,7 @@ export async function syncItcloud(actorId: string | null = null): Promise<SyncRe
       registrationDate: day(r.registrationDate),
       nextInvoiceDate: day(r.nextInvoiceDate),
       state: "inactive" as string,
+      portalServiceId: null as string | null,
       contractName: null as string | null,
       seenAt: now,
     }));
@@ -448,6 +469,8 @@ export async function syncItcloud(actorId: string | null = null): Promise<SyncRe
     const productOf = productMatcher(products);
     const counts = { services: rows.length, active: 0, created: 0, updated: 0, removed: 0, clientUnlinked: 0, productUnmatched: 0, noContract: 0 };
     const keep = new Set<string>();
+    // lines already on a contract (kept while their service stays active, even if nothing maps them any more)
+    const existing = new Map((await db().select({ externalId: schema.contractServices.externalId, name: schema.clientContracts.name }).from(schema.contractServices).innerJoin(schema.clientContracts, eq(schema.clientContracts.id, schema.contractServices.contractId)).where(eq(schema.contractServices.source, "itcloud"))).map((l) => [l.externalId, l.name]));
     for (const r of rows) {
       if (r.status.toLowerCase() !== "active") continue;
       counts.active++;
@@ -464,27 +487,27 @@ export async function syncItcloud(actorId: string | null = null): Promise<SyncRe
         r.state = "product_unmatched";
         continue;
       }
+      r.portalServiceId = svc.id;
       const contract = await contractFor(clientId, [perService.get(r.serviceId), pickedContract.get(r.itcloudClientId)]);
+      const external = String(r.serviceId);
       if (!contract) {
-        counts.noContract++;
-        r.state = "no_contract";
+        // not mapped to a contract: it waits (a line it already has stays where it is)
+        if (existing.has(external)) {
+          keep.add(external);
+          r.state = "synced";
+          r.contractName = existing.get(external) ?? null;
+        } else {
+          counts.noContract++;
+          r.state = "no_contract";
+        }
         continue;
       }
       r.state = "synced";
       r.contractName = contract.name;
-      const external = String(r.serviceId);
       keep.add(external);
-      // what ITCloud charges us per unit
-      const unitCost = Math.round(r.amountCents / r.quantity);
-      const addedOn = clamp(r.registrationDate ?? now.toISOString().slice(0, 10), contract.startDate, contract.endDate);
-      const [cur] = await db().select().from(schema.contractServices).where(and(eq(schema.contractServices.source, "itcloud"), eq(schema.contractServices.externalId, external)));
-      if (!cur) {
-        await db().insert(schema.contractServices).values({ contractId: contract.id, serviceId: svc.id, name: svc.name, kind: svc.kind, priceCents: svc.priceCents, costCents: unitCost, addedOn, quantity: r.quantity, source: "itcloud", externalId: external });
-        counts.created++;
-      } else if (cur.contractId !== contract.id || cur.serviceId !== svc.id || cur.quantity !== r.quantity || cur.costCents !== unitCost || cur.kind !== svc.kind) {
-        await db().update(schema.contractServices).set({ contractId: contract.id, serviceId: svc.id, name: svc.name, kind: svc.kind, quantity: r.quantity, costCents: unitCost }).where(eq(schema.contractServices.id, cur.id));
-        counts.updated++;
-      }
+      const { change } = await ensureLine(contract, svc, r, now.toISOString().slice(0, 10));
+      if (change === "created") counts.created++;
+      else if (change === "updated") counts.updated++;
     }
     // a service that is no longer active (or no longer matched) at ITCloud leaves the contract
     const gone = await db()
@@ -531,32 +554,56 @@ export async function serviceStates() {
     const contracts = clientId ? kontracts.filter((k) => k.clientId === clientId).map((k) => ({ id: k.id, name: k.name })) : [];
     // the contract picked by hand for this service, while it is still an active contract of the client
     const contractId = picked.get(r.serviceId) && contracts.some((k) => k.id === picked.get(r.serviceId)) ? (picked.get(r.serviceId) ?? null) : null;
-    return { ...r, seenAt: r.seenAt.toISOString(), contracts, contractId };
+    const customerContractId = links.find((l) => l.itcloudId === r.itcloudClientId)?.contractId ?? null;
+    return { ...r, seenAt: r.seenAt.toISOString(), contracts, contractId, customerContractId: customerContractId && contracts.some((k) => k.id === customerContractId) ? customerContractId : null };
   });
 }
 
 /**
- * Pick (or clear, null) the contract of one ITCloud service. The line already on a contract moves at once; a service
- * that has no line yet gets it at the next sync. Returns whether a line moved.
+ * Map (or unmap, null) one ITCloud service to a contract. Mapped, its line is made or moved at once (from the report
+ * kept at the last sync); unmapped, a line it had leaves the contract and it waits again. `onlyClient`: the service must
+ * belong to that portal client (used from a client's contract).
  */
-export async function setServiceContract(serviceId: number, contractId: string | null): Promise<{ moved: boolean }> {
+export async function setServiceContract(serviceId: number, contractId: string | null, onlyClient?: string): Promise<{ moved: boolean; line: Line | null }> {
   const [row] = await db().select().from(schema.itcloudServices).where(eq(schema.itcloudServices.serviceId, serviceId));
   if (!row) throw new ItcloudError("service_not_found");
   const [link] = await db().select().from(schema.itcloudClients).where(eq(schema.itcloudClients.itcloudId, row.itcloudClientId));
   if (!link) throw new ItcloudError("customer_not_matched");
+  if (onlyClient && link.clientId !== onlyClient) throw new ItcloudError("service_not_found");
   if (contractId) {
     const [k] = await db().select({ id: schema.clientContracts.id }).from(schema.clientContracts).where(and(eq(schema.clientContracts.id, contractId), eq(schema.clientContracts.clientId, link.clientId), eq(schema.clientContracts.active, true)));
     if (!k) throw new ItcloudError("contract_not_found");
     await db().insert(schema.itcloudServiceContracts).values({ serviceId, contractId }).onConflictDoUpdate({ target: schema.itcloudServiceContracts.serviceId, set: { contractId } });
   } else await db().delete(schema.itcloudServiceContracts).where(eq(schema.itcloudServiceContracts.serviceId, serviceId));
-  // the line, if there is one, goes to the contract now
-  const [line] = await db().select().from(schema.contractServices).where(and(eq(schema.contractServices.source, "itcloud"), eq(schema.contractServices.externalId, String(serviceId))));
-  if (!line) return { moved: false };
   const target = await contractFor(link.clientId, [contractId, link.contractId]);
-  if (!target || target.id === line.contractId) return { moved: false };
-  await db().update(schema.contractServices).set({ contractId: target.id }).where(eq(schema.contractServices.id, line.id));
-  await db().update(schema.itcloudServices).set({ contractName: target.name }).where(eq(schema.itcloudServices.serviceId, serviceId));
-  return { moved: true };
+  const [cur] = await db().select().from(schema.contractServices).where(and(eq(schema.contractServices.source, "itcloud"), eq(schema.contractServices.externalId, String(serviceId))));
+  if (!target) {
+    // unmapped: its line leaves, it waits for a contract
+    if (cur) {
+      await db().delete(schema.contractServices).where(eq(schema.contractServices.id, cur.id));
+      await db().update(schema.itcloudServices).set({ state: "no_contract", contractName: null }).where(eq(schema.itcloudServices.serviceId, serviceId));
+    }
+    return { moved: Boolean(cur), line: null };
+  }
+  // a service that is not active, or whose product has no portal service, has no line to make
+  const [svc] = row.portalServiceId && row.status.toLowerCase() === "active" ? await db().select().from(schema.services).where(eq(schema.services.id, row.portalServiceId)) : [];
+  if (!svc) return { moved: false, line: null };
+  const { line, change } = await ensureLine(target, svc, row, new Date().toISOString().slice(0, 10));
+  await db().update(schema.itcloudServices).set({ state: "synced", contractName: target.name }).where(eq(schema.itcloudServices.serviceId, serviceId));
+  return { moved: change !== "same", line };
+}
+
+/** A client's ITCloud services that wait for a contract (active, product known, not mapped), to pick from when building its contract */
+export async function unmappedServices(clientId: string) {
+  const links = await db().select({ itcloudId: schema.itcloudClients.itcloudId }).from(schema.itcloudClients).where(eq(schema.itcloudClients.clientId, clientId));
+  if (!links.length) return [];
+  const rows = await db()
+    .select({ r: schema.itcloudServices, svcName: schema.services.name, svcKind: schema.services.kind, svcPrice: schema.services.priceCents })
+    .from(schema.itcloudServices)
+    .innerJoin(schema.services, eq(schema.services.id, schema.itcloudServices.portalServiceId))
+    .where(and(inArray(schema.itcloudServices.itcloudClientId, links.map((l) => l.itcloudId)), eq(schema.itcloudServices.state, "no_contract")))
+    .orderBy(asc(schema.itcloudServices.product));
+  return rows.map((x) => ({ serviceId: x.r.serviceId, product: x.r.product, productGroup: x.r.productGroup, quantity: x.r.quantity, billingCycle: x.r.billingCycle, registrationDate: x.r.registrationDate, costCents: x.r.amountCents, serviceName: x.svcName, kind: x.svcKind, priceCents: x.svcPrice }));
 }
 
 export async function itcloudTick(): Promise<void> {

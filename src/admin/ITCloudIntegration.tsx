@@ -493,7 +493,7 @@ function ServicesStep() {
 }
 
 // ── 3. the sync: each customer's services and the contract that carries them ──
-type Row = { serviceId: number; clientName: string; productGroup: string; product: string; status: string; billingCycle: string; quantity: number; amountCents: number; state: string; contractName: string | null; contractId: string | null; contracts: { id: string; name: string }[] };
+type Row = { serviceId: number; clientName: string; productGroup: string; product: string; status: string; billingCycle: string; quantity: number; amountCents: number; state: string; contractName: string | null; contractId: string | null; customerContractId: string | null; contracts: { id: string; name: string }[] };
 const STATES = ["synced", "client_unlinked", "product_unmatched", "no_contract", "inactive"] as const;
 
 function SyncStep() {
@@ -584,7 +584,7 @@ function SyncStep() {
                     aria-label={t("integrations.itcloud.sync.contract")}
                     title={t("integrations.itcloud.sync.contractHint")}
                   >
-                    <option value="">{t("integrations.itcloud.sync.contractDefault")}</option>
+                    <option value="">{r.customerContractId ? t("integrations.itcloud.sync.contractDefault") : t("integrations.itcloud.sync.contractNone")}</option>
                     {r.contracts.map((k) => (
                       <option key={k.id} value={k.id}>
                         {k.name}

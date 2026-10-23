@@ -1,4 +1,5 @@
 import { pushSoon } from "../lib/qbSync.ts";
+import { ItcloudError, setServiceContract, unmappedServices } from "../lib/itcloud.ts";
 import { Hono } from "hono";
 import { HTTPException } from "hono/http-exception";
 import { and, asc, desc, eq, gte, ilike, inArray, isNotNull, isNull, lte, ne, or, sql } from "drizzle-orm";
@@ -453,6 +454,28 @@ export const crmRoutes = new Hono<AppEnv>()
       .returning();
     await audit(a.user.id, "crm.contract_service_added", k.id, { service: svc.name, addedOn: p.addedOn, firstCents: plan.firstCents, totalCents: plan.totalCents });
     return c.json(serviceLine(row, k), 201);
+  })
+  // ── ITCloud services of the client that wait for a contract: map them to this one ──
+  .get("/clients/:id/contracts/:kid/itcloud-services", requirePermission("crm.billing"), async (c) => {
+    const client = await clientOr404(c.req.param("id"));
+    await contractOr404(client.id, c.req.param("kid"));
+    return c.json(await unmappedServices(client.id));
+  })
+  .post("/clients/:id/contracts/:kid/itcloud-services", requirePermission("crm.billing"), async (c) => {
+    const a = auth(c);
+    const client = await clientOr404(c.req.param("id"));
+    const k = await contractOr404(client.id, c.req.param("kid"));
+    const p = await body(c, z.object({ serviceId: z.number().int().positive() }));
+    if (!k.active) throw new HTTPException(409, { message: "contract_inactive" });
+    try {
+      const r = await setServiceContract(p.serviceId, k.id, client.id);
+      if (!r.line) throw new HTTPException(409, { message: "itcloud_service_not_placeable" });
+      await audit(a.user.id, "crm.contract_itcloud_service_mapped", k.id, { itcloudService: p.serviceId, service: r.line.name });
+      return c.json(serviceLine(r.line, k), 201);
+    } catch (e) {
+      if (e instanceof ItcloudError) throw new HTTPException(404, { message: e.code });
+      throw e;
+    }
   })
   .delete("/clients/:id/contracts/:kid/services/:sid", requirePermission("crm.billing"), async (c) => {
     const a = auth(c);
