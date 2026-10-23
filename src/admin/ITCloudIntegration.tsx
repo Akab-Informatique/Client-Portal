@@ -2,7 +2,7 @@ import { useMemo, useState, type FormEvent } from "react";
 import { useTranslation } from "react-i18next";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
-import { Check, Cloud, Link2, Loader2, RefreshCw, Unlink } from "lucide-react";
+import { Check, ChevronLeft, ChevronRight, Cloud, Link2, Loader2, RefreshCw, Unlink } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -146,8 +146,101 @@ export function ITCloudPage() {
   );
 }
 
-// ── 1. customers ↔ clients ──
-type ClientRow = { itcloudId: number; code: string; company: string; email: string; status: string; clientId: string | null; clientName: string | null; suggestion: { clientId: string; name: string; reason: "name" | "email" } | null };
+// ── lists: pages of 25, search, and a selection that can be cleared by page or all at once ──
+const PAGE = 25;
+
+function usePaged<T>(items: T[]) {
+  const [page, setPage] = useState(0);
+  const pages = Math.max(1, Math.ceil(items.length / PAGE));
+  const p = Math.min(page, pages - 1);
+  return { page: p, pages, setPage, rows: items.slice(p * PAGE, (p + 1) * PAGE) };
+}
+
+function Pager({ page, pages, total, setPage }: { page: number; pages: number; total: number; setPage: (n: number) => void }) {
+  const { t } = useTranslation();
+  if (total <= PAGE) return <p className="pt-3 text-xs text-muted-foreground">{t("integrations.itcloud.list.count", { count: total })}</p>;
+  return (
+    <div className="flex items-center justify-between gap-3 pt-3 text-xs text-muted-foreground">
+      <span>{t("integrations.itcloud.list.range", { from: page * PAGE + 1, to: Math.min(total, (page + 1) * PAGE), total })}</span>
+      <span className="flex items-center gap-2">
+        <Button type="button" size="icon" variant="outline" className="size-8" disabled={page === 0} onClick={() => setPage(page - 1)} aria-label={t("integrations.itcloud.list.prev")}>
+          <ChevronLeft className="size-4" />
+        </Button>
+        <span className="font-mono">
+          {page + 1} / {pages}
+        </span>
+        <Button type="button" size="icon" variant="outline" className="size-8" disabled={page >= pages - 1} onClick={() => setPage(page + 1)} aria-label={t("integrations.itcloud.list.next")}>
+          <ChevronRight className="size-4" />
+        </Button>
+      </span>
+    </div>
+  );
+}
+
+/**
+ * A selection over the rows of a list. `null` is the default (everything that can be picked is picked); the
+ * buttons then work on the whole filtered list or on the page shown.
+ */
+function useSelection(selectable: string[]) {
+  const [chosen, setChosen] = useState<Set<string> | null>(null);
+  const eff = useMemo(() => (chosen ? new Set([...chosen].filter((k) => selectable.includes(k))) : new Set(selectable)), [chosen, selectable]);
+  const set = (fn: (cur: Set<string>) => void) =>
+    setChosen(() => {
+      const next = new Set(eff);
+      fn(next);
+      return next;
+    });
+  return {
+    selected: eff,
+    toggle: (k: string, on: boolean) => set((s) => (on ? s.add(k) : s.delete(k))),
+    selectMany: (keys: string[]) => set((s) => keys.forEach((k) => s.add(k))),
+    unselectMany: (keys: string[]) => set((s) => keys.forEach((k) => s.delete(k))),
+    clear: () => setChosen(new Set()),
+    reset: () => setChosen(null),
+  };
+}
+
+function SelectBar({ sel, all, page }: { sel: ReturnType<typeof useSelection>; all: string[]; page: string[] }) {
+  const { t } = useTranslation();
+  const b = "h-7 px-2 text-xs";
+  return (
+    <div className="flex flex-wrap items-center gap-1.5 pb-3 text-xs">
+      <span className="mr-1 text-muted-foreground">{t("integrations.itcloud.list.selected", { count: sel.selected.size })}</span>
+      <Button type="button" variant="outline" className={b} onClick={() => sel.selectMany(all)}>
+        {t("integrations.itcloud.list.selectAll")}
+      </Button>
+      <Button type="button" variant="outline" className={b} onClick={() => sel.selectMany(page)}>
+        {t("integrations.itcloud.list.selectPage")}
+      </Button>
+      <Button type="button" variant="outline" className={b} onClick={() => sel.unselectMany(page)}>
+        {t("integrations.itcloud.list.unselectPage")}
+      </Button>
+      <Button type="button" variant="outline" className={b} onClick={() => sel.clear()}>
+        {t("integrations.itcloud.list.unselectAll")}
+      </Button>
+    </div>
+  );
+}
+
+function Search({ value, onChange }: { value: string; onChange: (v: string) => void }) {
+  const { t } = useTranslation();
+  return <Input value={value} onChange={(e) => onChange(e.target.value)} placeholder={t("integrations.itcloud.list.search")} className="h-8 w-56 text-xs" aria-label={t("integrations.itcloud.list.search")} />;
+}
+
+const has = (q: string, ...parts: (string | null | undefined)[]) => {
+  const words = normName(q).split(" ").filter(Boolean);
+  const hay = normName(parts.join(" "));
+  return words.every((w) => hay.includes(w));
+};
+/** Same folding as the server (accents, case, punctuation), without its company-suffix list getting in the way of a search */
+const normName = (s: string) =>
+  s
+    .normalize("NFD")
+    .replace(/[̀-ͯ]/g, "")
+    .toLowerCase()
+    .replace(/[^a-z0-9 ]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
 
 function Step({ n, title, hint, children, action }: { n: number; title: string; hint: string; children: React.ReactNode; action?: React.ReactNode }) {
   return (
@@ -165,12 +258,17 @@ function Step({ n, title, hint, children, action }: { n: number; title: string; 
   );
 }
 
+// ── 1. customers ↔ clients ──
+type ClientRow = { itcloudId: number; code: string; company: string; email: string; status: string; clientId: string | null; clientName: string | null; suggestion: { clientId: string; name: string; reason: "name" | "email" } | null };
+
 function ClientsStep() {
   const { t } = useTranslation();
   const qc = useQueryClient();
   const { data: rows, isLoading, error, refetch, isFetching } = useQuery({ queryKey: [...KEY, "clients"], queryFn: () => api.get<ClientRow[]>("/admin/itcloud/clients"), retry: false });
   const { data: crm = [] } = useCrmClients();
   const [pick, setPick] = useState<Record<number, string>>({});
+  const [q, setQ] = useState("");
+  const [onlyOpen, setOnlyOpen] = useState(false);
   const link = useMutation({
     mutationFn: (links: { itcloudId: number; clientId: string | null }[]) => api.put<{ changed: number }>("/admin/itcloud/clients", { links }),
     onSuccess: (r) => {
@@ -180,23 +278,26 @@ function ClientsStep() {
     },
     onError: (e) => toast.error(errorText(t, e)),
   });
-  const suggestions = (rows ?? []).filter((r) => r.suggestion);
+  const shown = useMemo(() => (rows ?? []).filter((r) => (!onlyOpen || !r.clientId) && has(q, r.company, r.email, r.code, r.clientName)), [rows, q, onlyOpen]);
+  const selectable = useMemo(() => shown.filter((r) => r.suggestion && !r.clientId).map((r) => String(r.itcloudId)), [shown]);
+  const sel = useSelection(selectable);
+  const paged = usePaged(shown);
+  const pageSelectable = paged.rows.filter((r) => r.suggestion && !r.clientId).map((r) => String(r.itcloudId));
   const names = useMemo(() => [...crm].sort((a, b) => a.name.localeCompare(b.name)), [crm]);
+  const toAccept = shown.filter((r) => r.suggestion && !r.clientId && sel.selected.has(String(r.itcloudId)));
   return (
     <Step
       n={1}
       title={t("integrations.itcloud.clients.title")}
       hint={t("integrations.itcloud.clients.hint")}
       action={
-        <div className="flex gap-2">
+        <div className="flex flex-wrap gap-2">
           <Button type="button" variant="outline" size="sm" onClick={() => void refetch()} disabled={isFetching}>
             {isFetching ? <Loader2 className="size-4 animate-spin" /> : <RefreshCw className="size-4" />} {t("integrations.itcloud.reload")}
           </Button>
-          {suggestions.length > 0 && (
-            <Button type="button" size="sm" disabled={link.isPending} onClick={() => link.mutate(suggestions.map((r) => ({ itcloudId: r.itcloudId, clientId: r.suggestion!.clientId })))} className="bg-grad-gold font-semibold text-[#1a1204]">
-              <Check className="size-4" /> {t("integrations.itcloud.clients.acceptAll", { count: suggestions.length })}
-            </Button>
-          )}
+          <Button type="button" size="sm" disabled={!toAccept.length || link.isPending} onClick={() => link.mutate(toAccept.map((r) => ({ itcloudId: r.itcloudId, clientId: r.suggestion!.clientId })))} className="bg-grad-gold font-semibold text-[#1a1204]">
+            {link.isPending ? <Loader2 className="size-4 animate-spin" /> : <Check className="size-4" />} {t("integrations.itcloud.clients.acceptSelected", { count: toAccept.length })}
+          </Button>
         </div>
       }
     >
@@ -205,67 +306,83 @@ function ClientsStep() {
       ) : error ? (
         <p className="text-sm text-destructive">{errorText(t, error)}</p>
       ) : (
-        <ul className="divide-y divide-border/60 text-sm">
-          {(rows ?? []).map((r) => (
-            <li key={r.itcloudId} className="flex flex-wrap items-center gap-x-4 gap-y-2 py-2.5">
-              <span className="min-w-0 flex-1">
-                <span className="block truncate font-medium">{r.company}</span>
-                <span className="block truncate text-xs text-muted-foreground">
-                  {r.code} · {r.email} · {r.status}
+        <>
+          <div className="mb-3 flex flex-wrap items-center gap-3">
+            <Search value={q} onChange={setQ} />
+            <label className="flex items-center gap-2 text-xs">
+              <Switch checked={onlyOpen} onCheckedChange={setOnlyOpen} aria-label={t("integrations.itcloud.clients.onlyOpen")} />
+              {t("integrations.itcloud.clients.onlyOpen")}
+            </label>
+          </div>
+          {selectable.length > 0 && <SelectBar sel={sel} all={selectable} page={pageSelectable} />}
+          <ul className="divide-y divide-border/60 text-sm">
+            {paged.rows.map((r) => (
+              <li key={r.itcloudId} className="flex flex-wrap items-center gap-x-4 gap-y-2 py-2.5">
+                {r.suggestion && !r.clientId ? <Checkbox checked={sel.selected.has(String(r.itcloudId))} onCheckedChange={(v) => sel.toggle(String(r.itcloudId), Boolean(v))} aria-label={r.company} /> : <span className="size-4" />}
+                <span className="min-w-0 flex-1">
+                  <span className="block truncate font-medium">{r.company}</span>
+                  <span className="block truncate text-xs text-muted-foreground">
+                    {r.code} · {r.email} · {r.status}
+                  </span>
                 </span>
-              </span>
-              {r.clientId ? (
-                <span className="flex items-center gap-2">
-                  <Badge variant="outline" className="gap-1 border-emerald-500/40 text-emerald-400">
-                    <Link2 className="size-3" /> {r.clientName}
-                  </Badge>
-                  <Button type="button" size="icon" variant="ghost" className="size-7 text-muted-foreground hover:text-destructive" onClick={() => link.mutate([{ itcloudId: r.itcloudId, clientId: null }])} aria-label={t("integrations.itcloud.clients.unlink")} title={t("integrations.itcloud.clients.unlink")}>
-                    <Unlink className="size-3.5" />
-                  </Button>
-                </span>
-              ) : (
-                <span className="flex flex-wrap items-center gap-2">
-                  {r.suggestion && (
-                    <Button type="button" size="sm" variant="outline" className="h-8 gap-1.5 text-xs" onClick={() => link.mutate([{ itcloudId: r.itcloudId, clientId: r.suggestion!.clientId }])}>
-                      <Check className="size-3.5" /> {r.suggestion.name}
-                      <span className="text-muted-foreground">({t(`integrations.itcloud.clients.by.${r.suggestion.reason}`)})</span>
+                {r.clientId ? (
+                  <span className="flex items-center gap-2">
+                    <Badge variant="outline" className="gap-1 border-emerald-500/40 text-emerald-400">
+                      <Link2 className="size-3" /> {r.clientName}
+                    </Badge>
+                    <Button type="button" size="icon" variant="ghost" className="size-7 text-muted-foreground hover:text-destructive" onClick={() => link.mutate([{ itcloudId: r.itcloudId, clientId: null }])} aria-label={t("integrations.itcloud.clients.unlink")} title={t("integrations.itcloud.clients.unlink")}>
+                      <Unlink className="size-3.5" />
                     </Button>
-                  )}
-                  <select
-                    value={pick[r.itcloudId] ?? ""}
-                    onChange={(e) => setPick({ ...pick, [r.itcloudId]: e.target.value })}
-                    className="h-8 max-w-52 rounded-md border bg-transparent px-2 text-xs"
-                    aria-label={t("integrations.itcloud.clients.pick")}
-                  >
-                    <option value="">{t("integrations.itcloud.clients.pick")}</option>
-                    {names.map((c) => (
-                      <option key={c.id} value={c.id}>
-                        {c.name}
-                      </option>
-                    ))}
-                  </select>
-                  <Button type="button" size="sm" variant="ghost" className="h-8 text-xs" disabled={!pick[r.itcloudId] || link.isPending} onClick={() => link.mutate([{ itcloudId: r.itcloudId, clientId: pick[r.itcloudId] }])}>
-                    {t("integrations.itcloud.clients.link")}
-                  </Button>
-                </span>
-              )}
-            </li>
-          ))}
-        </ul>
+                  </span>
+                ) : (
+                  <span className="flex flex-wrap items-center gap-2">
+                    {r.suggestion && (
+                      <span className="text-xs text-muted-foreground">
+                        → <span className="text-foreground">{r.suggestion.name}</span> ({t(`integrations.itcloud.clients.by.${r.suggestion.reason}`)})
+                      </span>
+                    )}
+                    <select value={pick[r.itcloudId] ?? ""} onChange={(e) => setPick({ ...pick, [r.itcloudId]: e.target.value })} className="h-8 max-w-52 rounded-md border bg-transparent px-2 text-xs" aria-label={t("integrations.itcloud.clients.pick")}>
+                      <option value="">{t("integrations.itcloud.clients.pick")}</option>
+                      {names.map((c) => (
+                        <option key={c.id} value={c.id}>
+                          {c.name}
+                        </option>
+                      ))}
+                    </select>
+                    <Button type="button" size="sm" variant="ghost" className="h-8 text-xs" disabled={!pick[r.itcloudId] || link.isPending} onClick={() => link.mutate([{ itcloudId: r.itcloudId, clientId: pick[r.itcloudId] }])}>
+                      {t("integrations.itcloud.clients.link")}
+                    </Button>
+                  </span>
+                )}
+              </li>
+            ))}
+          </ul>
+          {!shown.length && <p className="py-4 text-sm text-muted-foreground">{t("integrations.itcloud.list.none")}</p>}
+          <Pager page={paged.page} pages={paged.pages} total={shown.length} setPage={paged.setPage} />
+        </>
       )}
     </Step>
   );
 }
 
 // ── 2. products → services ──
-type ServicePlan = { rows: { key: string; productGroup: string; name: string; kind: "recurring" | "recurring_yearly"; costCents: number; state: "new" | "update" | "same"; serviceName: string | null; priceCents: number | null; suggestedPriceCents: number; priceSource: "msrp" | "markup"; change: string[] }[]; ignored: number; msrpError: string | null };
+type PlanRow = { key: string; productGroup: string; name: string; kind: "recurring" | "recurring_yearly"; costCents: number; state: "new" | "update" | "same"; serviceName: string | null; priceCents: number | null; suggestedPriceCents: number; priceSource: "msrp" | "markup"; soldTo: number; soldUnits: number; change: string[] };
+type ServicePlan = { rows: PlanRow[]; ignored: number; msrpError: string | null };
 
 function ServicesStep() {
   const { t, i18n } = useTranslation();
   const qc = useQueryClient();
   const { data, isLoading, error, refetch, isFetching } = useQuery({ queryKey: [...KEY, "plan"], queryFn: () => api.get<ServicePlan>("/admin/itcloud/services/plan"), retry: false });
-  const [off, setOff] = useState<Set<string>>(new Set());
-  const todo = (data?.rows ?? []).filter((r) => r.state !== "same" && !off.has(r.key));
+  const [q, setQ] = useState("");
+  // only what is really sold to my clients at ITCloud (an active service of a customer)
+  const [onlySold, setOnlySold] = useState(false);
+  const shown = useMemo(() => (data?.rows ?? []).filter((r) => (!onlySold || r.soldTo > 0) && has(q, r.name, r.productGroup, `ITC-${r.key}`)), [data, q, onlySold]);
+  const selectable = useMemo(() => shown.filter((r) => r.state !== "same").map((r) => r.key), [shown]);
+  const sel = useSelection(selectable);
+  const paged = usePaged(shown);
+  const pageSelectable = paged.rows.filter((r) => r.state !== "same").map((r) => r.key);
+  const todo = shown.filter((r) => r.state !== "same" && sel.selected.has(r.key));
+  const soldCount = (data?.rows ?? []).filter((r) => r.soldTo > 0).length;
   const apply = useMutation({
     mutationFn: () => api.post<{ created: number; updated: number }>("/admin/itcloud/services/plan", { keys: todo.map((r) => r.key) }),
     onSuccess: (r) => {
@@ -281,7 +398,7 @@ function ServicesStep() {
       title={t("integrations.itcloud.services.title")}
       hint={t("integrations.itcloud.services.hint")}
       action={
-        <div className="flex gap-2">
+        <div className="flex flex-wrap gap-2">
           <Button type="button" variant="outline" size="sm" onClick={() => void refetch()} disabled={isFetching}>
             {isFetching ? <Loader2 className="size-4 animate-spin" /> : <RefreshCw className="size-4" />} {t("integrations.itcloud.reload")}
           </Button>
@@ -297,16 +414,31 @@ function ServicesStep() {
         <p className="text-sm text-destructive">{errorText(t, error)}</p>
       ) : (
         <>
+          <div className="mb-3 flex flex-wrap items-center gap-3">
+            <Search value={q} onChange={setQ} />
+            <label className="flex items-center gap-2 text-xs">
+              <Switch checked={onlySold} onCheckedChange={setOnlySold} aria-label={t("integrations.itcloud.services.onlySold")} />
+              {t("integrations.itcloud.services.onlySold", { count: soldCount })}
+            </label>
+          </div>
+          {selectable.length > 0 && <SelectBar sel={sel} all={selectable} page={pageSelectable} />}
           <ul className="divide-y divide-border/60 text-sm">
-            {(data?.rows ?? []).map((r) => (
+            {paged.rows.map((r) => (
               <li key={r.key} className="flex flex-wrap items-center gap-x-4 gap-y-1 py-2">
-                <Checkbox checked={r.state !== "same" && !off.has(r.key)} disabled={r.state === "same"} onCheckedChange={(v) => setOff((o) => { const n = new Set(o); if (v) n.delete(r.key); else n.add(r.key); return n; })} aria-label={r.name} />
+                {r.state !== "same" ? <Checkbox checked={sel.selected.has(r.key)} onCheckedChange={(v) => sel.toggle(r.key, Boolean(v))} aria-label={r.name} /> : <span className="size-4" />}
                 <span className="min-w-0 flex-1">
                   <span className="block truncate font-medium">{r.name}</span>
                   <span className="block truncate text-xs text-muted-foreground">
                     {r.productGroup} · SKU ITC-{r.key} · {t(`services.kind.${r.kind}`)}
                   </span>
                 </span>
+                {r.soldTo > 0 ? (
+                  <Badge variant="outline" className="border-sky-500/40 text-sky-300" title={t("integrations.itcloud.services.soldHint")}>
+                    {t("integrations.itcloud.services.sold", { clients: r.soldTo, units: r.soldUnits })}
+                  </Badge>
+                ) : (
+                  <span className="text-[11px] text-muted-foreground">{t("integrations.itcloud.services.notSold")}</span>
+                )}
                 <span className="text-right text-xs text-muted-foreground">
                   {t("integrations.itcloud.services.cost")} <span className="font-mono text-foreground">{money(r.costCents, i18n.language)}</span>
                   <span className="block">
@@ -326,6 +458,8 @@ function ServicesStep() {
               </li>
             ))}
           </ul>
+          {!shown.length && <p className="py-4 text-sm text-muted-foreground">{t("integrations.itcloud.list.none")}</p>}
+          <Pager page={paged.page} pages={paged.pages} total={shown.length} setPage={paged.setPage} />
           {data?.msrpError && <p className="mt-2 text-xs text-amber-300">{t("integrations.itcloud.services.msrpError")}</p>}
           {data && data.ignored > 0 && <p className="mt-2 text-xs text-muted-foreground">{t("integrations.itcloud.services.ignored", { count: data.ignored })}</p>}
         </>
@@ -334,13 +468,16 @@ function ServicesStep() {
   );
 }
 
-// ── 3. the sync ──
+// ── 3. the sync: each customer's services and the contract that carries them ──
 type Row = { serviceId: number; clientName: string; productGroup: string; product: string; status: string; billingCycle: string; quantity: number; amountCents: number; state: string; contractName: string | null };
+const STATES = ["synced", "client_unlinked", "product_unmatched", "no_contract", "inactive"] as const;
 
 function SyncStep() {
   const { t, i18n } = useTranslation();
   const qc = useQueryClient();
   const { data, isLoading } = useQuery({ queryKey: [...KEY, "services"], queryFn: () => api.get<{ rows: Row[]; lastSync: View["lastSync"] }>("/admin/itcloud/services") });
+  const [q, setQ] = useState("");
+  const [state, setState] = useState<string>("");
   const sync = useMutation({
     mutationFn: () => api.post<NonNullable<View["lastSync"]>>("/admin/itcloud/sync", {}),
     onSuccess: (r) => {
@@ -353,6 +490,9 @@ function SyncStep() {
   });
   const last = data?.lastSync;
   const c = last?.counts;
+  const shown = useMemo(() => (data?.rows ?? []).filter((r) => (!state || r.state === state) && has(q, r.product, r.clientName, r.productGroup, r.contractName)), [data, q, state]);
+  const paged = usePaged(shown);
+  const tally = (s: string) => (data?.rows ?? []).filter((r) => r.state === s).length;
   return (
     <Step
       n={3}
@@ -377,28 +517,40 @@ function SyncStep() {
       ) : !data?.rows.length ? (
         <p className="text-sm text-muted-foreground">{t("integrations.itcloud.sync.empty")}</p>
       ) : (
-        <ul className="divide-y divide-border/60 text-sm">
-          {data.rows.map((r) => (
-            <li key={r.serviceId} className="flex flex-wrap items-center gap-x-4 gap-y-1 py-2">
-              <span className="min-w-0 flex-1">
-                <span className="block truncate font-medium">
-                  {r.product} <span className="font-mono text-xs text-muted-foreground">× {r.quantity}</span>
+        <>
+          <div className="mb-3 flex flex-wrap items-center gap-3">
+            <Search value={q} onChange={setQ} />
+            <select value={state} onChange={(e) => setState(e.target.value)} className="h-8 rounded-md border bg-transparent px-2 text-xs" aria-label={t("integrations.itcloud.sync.filter")}>
+              <option value="">{t("integrations.itcloud.sync.allStates")}</option>
+              {STATES.map((s) => (
+                <option key={s} value={s}>
+                  {t(`integrations.itcloud.sync.state.${s}`)} ({tally(s)})
+                </option>
+              ))}
+            </select>
+          </div>
+          <ul className="divide-y divide-border/60 text-sm">
+            {paged.rows.map((r) => (
+              <li key={r.serviceId} className="flex flex-wrap items-center gap-x-4 gap-y-1 py-2">
+                <span className="min-w-0 flex-1">
+                  <span className="block truncate font-medium">
+                    {r.product} <span className="font-mono text-xs text-muted-foreground">× {r.quantity}</span>
+                  </span>
+                  <span className="block truncate text-xs text-muted-foreground">
+                    {r.clientName} · {r.productGroup} · {r.billingCycle}
+                    {r.contractName ? ` · ${r.contractName}` : ""}
+                  </span>
                 </span>
-                <span className="block truncate text-xs text-muted-foreground">
-                  {r.clientName} · {r.productGroup} · {r.billingCycle}
-                  {r.contractName ? ` · ${r.contractName}` : ""}
-                </span>
-              </span>
-              <span className="font-mono text-xs text-muted-foreground">{money(r.amountCents, i18n.language)}</span>
-              <Badge
-                variant="outline"
-                className={cn("w-40 justify-center", r.state === "synced" ? "border-emerald-500/40 text-emerald-400" : r.state === "inactive" ? "text-muted-foreground" : "border-amber-500/40 text-amber-300")}
-              >
-                {t(`integrations.itcloud.sync.state.${r.state}`)}
-              </Badge>
-            </li>
-          ))}
-        </ul>
+                <span className="font-mono text-xs text-muted-foreground">{money(r.amountCents, i18n.language)}</span>
+                <Badge variant="outline" className={cn("w-40 justify-center", r.state === "synced" ? "border-emerald-500/40 text-emerald-400" : r.state === "inactive" ? "text-muted-foreground" : "border-amber-500/40 text-amber-300")}>
+                  {t(`integrations.itcloud.sync.state.${r.state}`)}
+                </Badge>
+              </li>
+            ))}
+          </ul>
+          {!shown.length && <p className="py-4 text-sm text-muted-foreground">{t("integrations.itcloud.list.none")}</p>}
+          <Pager page={paged.page} pages={paged.pages} total={shown.length} setPage={paged.setPage} />
+        </>
       )}
     </Step>
   );

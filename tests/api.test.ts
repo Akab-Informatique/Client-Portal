@@ -6694,6 +6694,8 @@ describe("ITCloud: vendor, clients matched, services kept on contracts", () => {
     // products to services, by SKU, only recurring ones; reviewed, then applied
     const sp = (await admin.get("/api/admin/itcloud/services/plan")).json;
     expect(sp.ignored).toBe(1);
+    // what is really sold to customers (active services): Exchange to 2 customers (5 units), Cloud Security to 1
+    expect(sp.rows.map((r: any) => [r.key, r.soldTo, r.soldUnits])).toEqual([["43", 1, 1], ["42", 2, 5]]);
     expect(sp.rows.map((r: any) => [r.key, r.state, r.costCents])).toEqual([
       ["43", "new", 300],
       ["42", "new", 500],

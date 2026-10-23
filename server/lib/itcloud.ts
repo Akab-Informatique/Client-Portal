@@ -183,6 +183,16 @@ export const kindOf = (p: ItProduct): "recurring" | "recurring_yearly" => (p.bil
 const cents = (n: number | null | undefined) => Math.max(0, Math.round((n ?? 0) * 100));
 const isRecurringProduct = (p: ItProduct) => p.payType === "recurring" && !p.isUsageBasedBilling;
 const productKey = (group: string, name: string) => `${normName(group)}|${normName(name)}`;
+/** Which product a services-report line is for: the same group and name, else the same name when only one product has it */
+export function productMatcher(products: ItProduct[]) {
+  const byKey = new Map<string, number>();
+  const byName = new Map<string, number[]>();
+  for (const p of products) {
+    byKey.set(productKey(p.productGroup, p.name), p.productId);
+    byName.set(normName(p.name), [...(byName.get(normName(p.name)) ?? []), p.productId]);
+  }
+  return (group: string, name: string): number | undefined => byKey.get(productKey(group, name)) ?? (byName.get(normName(name))?.length === 1 ? byName.get(normName(name))![0] : undefined);
+}
 
 /** The ITCloud vendor of the portal (made the first time it is needed) */
 export async function ensureVendor(): Promise<string> {
@@ -284,6 +294,9 @@ export type ServiceRowPlan = {
   /** The price a new service would start at: ITCloud's MSRP, else the cost plus 20 % */
   suggestedPriceCents: number;
   priceSource: "msrp" | "markup";
+  /** Active services of this product at ITCloud: how many customers have it, and how many units in all (0: sold to nobody) */
+  soldTo: number;
+  soldUnits: number;
   change: string[];
 };
 
@@ -291,6 +304,21 @@ export async function servicePlan(s: ItcloudSettings): Promise<{ rows: ServiceRo
   const vendorId = await ensureVendor();
   const products = await itcloudProducts(s);
   const msrp = await msrpByProduct(s);
+  // what is really sold: the active lines of the services report (live, else the last one kept)
+  const report: { clientId: number; productGroup: string; product: string; status: string; quantity: number }[] = await itcloudServicesReport(s).catch(async () =>
+    (await db().select().from(schema.itcloudServices)).map((r) => ({ clientId: r.itcloudClientId, productGroup: r.productGroup, product: r.product, status: r.status, quantity: r.quantity })),
+  );
+  const productOf = productMatcher(products);
+  const sold = new Map<string, { clients: Set<number>; units: number }>();
+  for (const r of report) {
+    if (r.status.toLowerCase() !== "active") continue;
+    const pid = productOf(r.productGroup, r.product);
+    if (pid === undefined) continue;
+    const cur = sold.get(String(pid)) ?? { clients: new Set<number>(), units: 0 };
+    cur.clients.add(r.clientId);
+    cur.units += Math.max(1, Math.round(r.quantity ?? 1));
+    sold.set(String(pid), cur);
+  }
   const services = await db().select().from(schema.services);
   const byVendorSku = new Map(services.filter((x) => x.vendorId === vendorId && x.vendorSku).map((x) => [x.vendorSku!, x]));
   const byName = new Map<string, typeof services>();
@@ -318,7 +346,7 @@ export async function servicePlan(s: ItcloudSettings): Promise<{ rows: ServiceRo
     const m = msrp.map.get(key);
     const listed = cents(kind === "recurring" ? m?.monthly : m?.yearly);
     const suggestedPriceCents = listed > 0 ? listed : Math.round(cost * MARKUP);
-    return { key, productGroup: p.productGroup, name, kind, costCents: cost, state, serviceId: svc?.id ?? null, serviceName: svc?.name ?? null, priceCents: svc?.priceCents ?? null, suggestedPriceCents, priceSource: listed > 0 ? ("msrp" as const) : ("markup" as const), change };
+    return { key, productGroup: p.productGroup, name, kind, costCents: cost, state, serviceId: svc?.id ?? null, serviceName: svc?.name ?? null, priceCents: svc?.priceCents ?? null, suggestedPriceCents, priceSource: listed > 0 ? ("msrp" as const) : ("markup" as const), soldTo: sold.get(key)?.clients.size ?? 0, soldUnits: sold.get(key)?.units ?? 0, change };
   });
   return { rows: rows.sort((a, b) => a.productGroup.localeCompare(b.productGroup) || a.name.localeCompare(b.name)), ignored: products.length - recurring.length, msrpError: msrp.error };
 }
@@ -388,12 +416,7 @@ export async function syncItcloud(actorId: string | null = null): Promise<SyncRe
     const [links, svcs] = await Promise.all([db().select().from(schema.itcloudClients), db().select().from(schema.services).where(eq(schema.services.vendorId, vendorId))]);
     const clientOf = new Map(links.map((l) => [l.itcloudId, l.clientId]));
     const svcBySku = new Map(svcs.filter((x) => x.vendorSku).map((x) => [x.vendorSku!, x]));
-    const productId = new Map<string, number>();
-    const byName = new Map<string, number[]>();
-    for (const p of products) {
-      productId.set(productKey(p.productGroup, p.name), p.productId);
-      byName.set(normName(p.name), [...(byName.get(normName(p.name)) ?? []), p.productId]);
-    }
+    const productOf = productMatcher(products);
     const counts = { services: rows.length, active: 0, created: 0, updated: 0, removed: 0, clientUnlinked: 0, productUnmatched: 0, noContract: 0 };
     const keep = new Set<string>();
     for (const r of rows) {
@@ -405,7 +428,7 @@ export async function syncItcloud(actorId: string | null = null): Promise<SyncRe
         r.state = "client_unlinked";
         continue;
       }
-      const pid = productId.get(productKey(r.productGroup, r.product)) ?? (byName.get(normName(r.product))?.length === 1 ? byName.get(normName(r.product))![0] : undefined);
+      const pid = productOf(r.productGroup, r.product);
       const svc = pid !== undefined ? svcBySku.get(String(pid)) : undefined;
       if (!svc) {
         counts.productUnmatched++;
