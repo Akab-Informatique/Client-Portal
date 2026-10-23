@@ -1917,6 +1917,8 @@ export const itcloudClients = pgTable("itcloud_clients", {
   clientId: uuid("client_id")
     .notNull()
     .references(() => clients.id, { onDelete: "cascade" }),
+  /** The contract that carries this customer's services; none: chosen by the portal (a monthly one, else the support default, else the first active) */
+  contractId: uuid("contract_id").references(() => clientContracts.id, { onDelete: "set null" }),
   createdAt: created(),
 });
 

@@ -259,7 +259,7 @@ function Step({ n, title, hint, children, action }: { n: number; title: string; 
 }
 
 // ── 1. customers ↔ clients ──
-type ClientRow = { itcloudId: number; code: string; company: string; email: string; status: string; clientId: string | null; clientName: string | null; suggestion: { clientId: string; name: string; reason: "name" | "email" } | null };
+type ClientRow = { itcloudId: number; code: string; company: string; email: string; status: string; clientId: string | null; clientName: string | null; contractId: string | null; contracts: { id: string; name: string }[]; suggestion: { clientId: string; name: string; reason: "name" | "email" } | null };
 
 function ClientsStep() {
   const { t } = useTranslation();
@@ -275,6 +275,14 @@ function ClientsStep() {
       toast.success(t("integrations.itcloud.clients.saved", { count: r.changed }));
       void qc.invalidateQueries({ queryKey: [...KEY, "clients"] });
       void qc.invalidateQueries({ queryKey: [...KEY, "services"] });
+    },
+    onError: (e) => toast.error(errorText(t, e)),
+  });
+  const pickContract = useMutation({
+    mutationFn: (p: { itcloudId: number; contractId: string | null }) => api.put(`/admin/itcloud/clients/${p.itcloudId}/contract`, { contractId: p.contractId }),
+    onSuccess: () => {
+      toast.success(t("integrations.itcloud.clients.contractSaved"));
+      void qc.invalidateQueries({ queryKey: [...KEY, "clients"] });
     },
     onError: (e) => toast.error(errorText(t, e)),
   });
@@ -326,10 +334,26 @@ function ClientsStep() {
                   </span>
                 </span>
                 {r.clientId ? (
-                  <span className="flex items-center gap-2">
+                  <span className="flex flex-wrap items-center gap-2">
                     <Badge variant="outline" className="gap-1 border-emerald-500/40 text-emerald-400">
                       <Link2 className="size-3" /> {r.clientName}
                     </Badge>
+                    {/* the contract that carries this customer's services: the portal's choice, or one picked by hand */}
+                    <select
+                      value={r.contractId ?? ""}
+                      disabled={pickContract.isPending}
+                      onChange={(e) => pickContract.mutate({ itcloudId: r.itcloudId, contractId: e.target.value || null })}
+                      className="h-8 max-w-52 rounded-md border bg-transparent px-2 text-xs"
+                      aria-label={t("integrations.itcloud.clients.contract")}
+                      title={t("integrations.itcloud.clients.contractHint")}
+                    >
+                      <option value="">{t("integrations.itcloud.clients.contractAuto")}</option>
+                      {r.contracts.map((k) => (
+                        <option key={k.id} value={k.id}>
+                          {k.name}
+                        </option>
+                      ))}
+                    </select>
                     <Button type="button" size="icon" variant="ghost" className="size-7 text-muted-foreground hover:text-destructive" onClick={() => link.mutate([{ itcloudId: r.itcloudId, clientId: null }])} aria-label={t("integrations.itcloud.clients.unlink")} title={t("integrations.itcloud.clients.unlink")}>
                       <Unlink className="size-3.5" />
                     </Button>

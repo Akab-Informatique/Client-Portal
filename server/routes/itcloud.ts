@@ -14,6 +14,7 @@ import {
   itcloudSettings,
   ItcloudError,
   saveItcloudSettings,
+  setCustomerContract,
   serviceStates,
   servicePlan,
   syncItcloud,
@@ -98,6 +99,22 @@ export const itcloudRoutes = new Hono<AppEnv>()
     const changed = await run(() => applyClientLinks(p.links));
     await audit(a.user.id, "itcloud.clients_linked", null, { changed });
     return c.json({ changed });
+  })
+
+  /** Pick by hand the contract that carries a customer's services (null: the portal chooses) */
+  .put("/clients/:id/contract", async (c) => {
+    const a = auth(c);
+    const id = Number(c.req.param("id"));
+    if (!Number.isInteger(id) || id <= 0) throw new HTTPException(400, { message: "invalid_id" });
+    const p = await body(c, z.object({ contractId: zUuid.nullable() }));
+    try {
+      await setCustomerContract(id, p.contractId);
+    } catch (e) {
+      if (e instanceof ItcloudError) throw new HTTPException(e.code === "contract_not_found" || e.code === "customer_not_matched" ? 404 : 400, { message: e.code });
+      throw e;
+    }
+    await audit(a.user.id, "itcloud.contract_picked", String(id), { contractId: p.contractId });
+    return c.json({ ok: true });
   })
 
   // ── products → services (SKU ITC-<id>, vendor ITCloud) ──

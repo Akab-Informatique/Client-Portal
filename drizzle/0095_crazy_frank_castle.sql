@@ -1,0 +1,2 @@
+ALTER TABLE "itcloud_clients" ADD COLUMN "contract_id" uuid;--> statement-breakpoint
+ALTER TABLE "itcloud_clients" ADD CONSTRAINT "itcloud_clients_contract_id_client_contracts_id_fk" FOREIGN KEY ("contract_id") REFERENCES "public"."client_contracts"("id") ON DELETE set null ON UPDATE no action;

@@ -6730,6 +6730,26 @@ describe("ITCloud: vendor, clients matched, services kept on contracts", () => {
     // a line kept by the vendor cannot be removed by hand
     expect((await admin.del(`/api/crm/clients/${client.id}/contracts/${contract.id}/services/${ex.id}`)).json.error).toBe("service_from_vendor");
 
+    // the contract can be picked by hand for a customer: the lines move to it at the next sync; cleared, back to the automatic one
+    const other = (await admin.post(`/api/crm/clients/${client.id}/contracts`, { name: "Contrat choisi", typeKey, startDate: "2026-10-01", endDate: "2026-12-31", monthlyRate: 0 })).json;
+    const listed = (await admin.get("/api/admin/itcloud/clients")).json.find((r: any) => r.itcloudId === 777);
+    expect(listed.contracts.map((k: any) => k.name)).toEqual(expect.arrayContaining(["Contrat choisi", "Services gérés"]));
+    expect((await admin.put("/api/admin/itcloud/clients/888/contract", { contractId: other.id })).json.error).toBe("customer_not_matched");
+    expect((await admin.put("/api/admin/itcloud/clients/777/contract", { contractId: "00000000-0000-4000-8000-000000000000" })).json.error).toBe("contract_not_found");
+    expect((await tech.put("/api/admin/itcloud/clients/777/contract", { contractId: other.id })).status).toBe(403);
+    expect((await admin.put("/api/admin/itcloud/clients/777/contract", { contractId: other.id })).status).toBe(200);
+    expect((await admin.get("/api/admin/itcloud/clients")).json.find((r: any) => r.itcloudId === 777).contractId).toBe(other.id);
+    expect((await admin.post("/api/admin/itcloud/sync", {})).json.counts).toMatchObject({ created: 0, updated: 2, removed: 0 });
+    expect((await admin.get(`/api/crm/clients/${client.id}/contracts/${other.id}/services`)).json).toHaveLength(2);
+    expect((await admin.get(`/api/crm/clients/${client.id}/contracts/${contract.id}/services`)).json).toHaveLength(0);
+    // back to the first one by hand; cleared, the portal chooses again (never breaks, never loses a line)
+    expect((await admin.put("/api/admin/itcloud/clients/777/contract", { contractId: contract.id })).status).toBe(200);
+    expect((await admin.post("/api/admin/itcloud/sync", {})).json.counts).toMatchObject({ created: 0, updated: 2, removed: 0 });
+    expect((await admin.get(`/api/crm/clients/${client.id}/contracts/${contract.id}/services`)).json).toHaveLength(2);
+    expect((await admin.put("/api/admin/itcloud/clients/777/contract", { contractId: null })).status).toBe(200);
+    expect((await admin.get("/api/admin/itcloud/clients")).json.find((r: any) => r.itcloudId === 777).contractId).toBeNull();
+    expect((await admin.put("/api/admin/itcloud/clients/777/contract", { contractId: contract.id })).status).toBe(200);
+
     // a new quantity follows; a service no longer active leaves the contract; running it again changes nothing
     report = [{ ...report[0], quantity: 5, amount: 25 }, { ...report[1], status: "Cancelled" }, report[2]];
     const again = (await admin.post("/api/admin/itcloud/sync", {})).json;
