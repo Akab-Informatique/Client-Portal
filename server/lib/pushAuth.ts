@@ -80,9 +80,23 @@ export function describeAgent(ua: string): string {
 
 type Device = typeof schema.pushDevices.$inferSelect;
 export type PushSubscriptionJSON = { endpoint: string; keys: { p256dh: string; auth: string } };
+/**
+ * The push services of the browsers: Google (Chrome, Edge, Brave, Opera, Android), Mozilla (Firefox), Apple (Safari,
+ * the home-screen app) and Microsoft (Windows). A subscription pointing anywhere else is refused: the portal sends a
+ * request to that address, so it must never be an address of the person's choosing inside our network.
+ */
+const PUSH_HOSTS = [/(^|\.)googleapis\.com$/, /(^|\.)push\.services\.mozilla\.com$/, /(^|\.)push\.apple\.com$/, /(^|\.)notify\.windows\.com$/];
+export function pushEndpointOk(endpoint: string): boolean {
+  try {
+    const u = new URL(endpoint);
+    return u.protocol === "https:" && !u.port && !u.username && !u.password && PUSH_HOSTS.some((re) => re.test(u.hostname));
+  } catch {
+    return false;
+  }
+}
 const zSubscriptionOk = (s: unknown): s is PushSubscriptionJSON => {
   const x = s as PushSubscriptionJSON;
-  return Boolean(x && typeof x.endpoint === "string" && x.endpoint.startsWith("https://") && x.endpoint.length < 1000 && typeof x.keys?.p256dh === "string" && typeof x.keys?.auth === "string");
+  return Boolean(x && typeof x.endpoint === "string" && x.endpoint.length < 1000 && pushEndpointOk(x.endpoint) && typeof x.keys?.p256dh === "string" && typeof x.keys?.auth === "string");
 };
 export const validSubscription = zSubscriptionOk;
 
@@ -128,6 +142,8 @@ const enrolling = new Map<string, { challenge: string; until: number }>();
 
 export async function enrollOptions(c: Context, user: { id: string; email: string; name: string }, sessionId: string) {
   const rp = relyingParty(c);
+  // passkeys and push only exist on HTTPS (and the address must be the portal's own)
+  if (config.production && !rp.origin.startsWith("https://")) throw new PushError("needs_https");
   const existing = await activeDevices(user.id);
   const options = await generateRegistrationOptions({
     rpName: rp.rpName,
@@ -185,7 +201,7 @@ export async function enrollVerify(c: Context, user: { id: string; email: string
 // ── the request to approve ──
 export class PushError extends Error {
   constructor(
-    public code: "enroll_expired" | "bad_subscription" | "bad_attestation" | "no_device" | "too_soon" | "rate_limited" | "not_found" | "expired" | "bad_device" | "wrong_number" | "bad_assertion" | "already_answered",
+    public code: "enroll_expired" | "needs_https" | "bad_subscription" | "bad_attestation" | "no_device" | "too_soon" | "rate_limited" | "not_found" | "expired" | "bad_device" | "wrong_number" | "bad_assertion" | "already_answered",
     public retryAfter?: number,
   ) {
     super(code);

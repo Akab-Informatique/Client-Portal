@@ -490,17 +490,41 @@ function PhoneApproval({ onUseCode }: { onUseCode: () => void }) {
     started.current = true;
     void start();
   }, [start]);
-  // while it waits: is it answered?
+  // while it waits: is it answered? (looks every second, and at once when the page comes back to the screen). The
+  // check is one chain of timeouts that nothing re-renders away: `refresh` is read through a ref, because it is a new
+  // function on every render and the countdown re-renders every second.
+  const refreshRef = useRef(refresh);
+  refreshRef.current = refresh;
   useEffect(() => {
     if (state.status !== "pending") return;
-    const timer = setInterval(async () => {
-      const s = await api.get<{ status: string }>("/auth/push/status").catch(() => null);
-      if (!s) return;
-      if (s.status === "approved") void refresh();
-      else if (s.status !== "pending") setState((x) => ({ ...x, status: s.status === "expired" ? "expired" : "failed" }));
-    }, 1500);
-    return () => clearInterval(timer);
-  }, [state.status, refresh]);
+    let stop = false;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const check = async () => {
+      clearTimeout(timer);
+      const s = await api.get<{ status: string }>("/auth/push/status").catch((e: unknown) => (e instanceof ApiError && e.status === 401 ? { status: "gone" } : null));
+      if (stop) return;
+      if (s?.status === "approved" || s?.status === "gone") {
+        // approved: the session is let in now; the app asks who is signed in again and moves on (a closed session sends back to the password)
+        await refreshRef.current();
+        return;
+      }
+      if (s && s.status !== "pending") {
+        setState((x) => ({ ...x, status: s.status === "expired" ? "expired" : "failed" }));
+        return;
+      }
+      timer = setTimeout(() => void check(), 1000);
+    };
+    const wake = () => void check();
+    document.addEventListener("visibilitychange", wake);
+    window.addEventListener("focus", wake);
+    timer = setTimeout(() => void check(), 600);
+    return () => {
+      stop = true;
+      clearTimeout(timer);
+      document.removeEventListener("visibilitychange", wake);
+      window.removeEventListener("focus", wake);
+    };
+  }, [state.status]);
   useEffect(() => {
     if (state.status !== "pending" || !state.expiresAt) return;
     const tick = () => setLeft(Math.max(0, Math.round((new Date(state.expiresAt!).getTime() - Date.now()) / 1000)));

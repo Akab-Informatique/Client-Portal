@@ -10,7 +10,7 @@ import { verifyPassword } from "../lib/crypto.ts";
 import { clientIp, rateLimit } from "../lib/http.ts";
 import { body } from "../lib/validate.ts";
 import { pushTo } from "../lib/pushAuth.ts";
-import { deviceChallenge, deviceDeny, deviceRefresh, deviceRespond, enrollOptions, enrollVerify, PushError, revokeDevices, sessionChallenge, startChallenge, vapid } from "../lib/pushAuth.ts";
+import { pushEndpointOk, deviceChallenge, deviceDeny, deviceRefresh, deviceRespond, enrollOptions, enrollVerify, PushError, revokeDevices, sessionChallenge, startChallenge, vapid } from "../lib/pushAuth.ts";
 
 /**
  * Approving a sign-in on the phone (see lib/pushAuth.ts). Three groups of routes:
@@ -27,7 +27,7 @@ const http = (e: unknown): never => {
 };
 
 const zResponse = z.looseObject({ id: z.string().max(1000), rawId: z.string().max(1000), type: z.literal("public-key"), response: z.looseObject({}) });
-const zSubscription = z.object({ endpoint: z.string().url().max(1000), keys: z.object({ p256dh: z.string().max(200), auth: z.string().max(100) }) });
+const zSubscription = z.object({ endpoint: z.string().url().max(1000).refine(pushEndpointOk, "push_endpoint"), keys: z.object({ p256dh: z.string().max(200), auth: z.string().max(100) }) });
 const zDevice = z.object({ deviceId: z.uuid(), token: z.string().min(20).max(200) });
 
 const ready = (c: Parameters<typeof auth>[0]) => {

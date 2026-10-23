@@ -6280,7 +6280,7 @@ class Phone {
 }
 
 describe("sign-in approved on the phone (push + passkey)", () => {
-  const subscription = { endpoint: "https://push.example.test/abc123", keys: { p256dh: nodeCrypto.randomBytes(65).toString("base64url"), auth: nodeCrypto.randomBytes(16).toString("base64url") } };
+  const subscription = { endpoint: "https://fcm.googleapis.com/fcm/send/abc123", keys: { p256dh: nodeCrypto.randomBytes(65).toString("base64url"), auth: nodeCrypto.randomBytes(16).toString("base64url") } };
 
   /** The limits of one person are reset between tests (they share the same account) */
   async function freshLimits(email = "tech@akab.local") {
@@ -6313,6 +6313,10 @@ describe("sign-in approved on the phone (push + passkey)", () => {
     // a passkey made for another site is refused
     const stranger = new Phone("https://evil.example", "evil.example");
     expect((await tech.post("/api/auth/push/enroll/verify", { label: "x", subscription, response: stranger.register(opts.challenge) })).status).toBe(400);
+    // a push address that is not one of the browsers' push services is refused (the portal sends to it): an internal address, a look-alike, a port, http
+    for (const endpoint of ["https://internal.example/x", "https://fcm.googleapis.com.attacker.example/x", "https://fcm.googleapis.com:8443/x", "https://user@fcm.googleapis.com/x", "https://localhost/x"]) {
+      expect((await tech.post("/api/auth/push/enroll/verify", { label: "x", subscription: { ...subscription, endpoint }, response: phone.register(opts.challenge) })).status).toBe(400);
+    }
     // a push endpoint that is not https is refused
     const opts2 = (await tech.post("/api/auth/push/enroll/options", { password: PASSWORD })).json;
     expect((await tech.post("/api/auth/push/enroll/verify", { label: "x", subscription: { ...subscription, endpoint: "http://insecure.test/x" }, response: phone.register(opts2.challenge) })).status).toBe(400);
@@ -6328,7 +6332,7 @@ describe("sign-in approved on the phone (push + passkey)", () => {
     // only the hash of the token and a sealed subscription are kept
     const [row] = await db().select().from(schema.pushDevices);
     expect(row.tokenHash).not.toContain(done.json.token);
-    expect(row.subscription).not.toContain("push.example.test");
+    expect(row.subscription).not.toContain("fcm.googleapis.com");
     // removing it
     expect((await tech.del(`/api/auth/push/devices/${done.json.id}`)).status).toBe(200);
     expect((await tech.get("/api/auth/push/devices")).json.devices).toEqual([]);
