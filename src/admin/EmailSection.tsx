@@ -275,12 +275,12 @@ function TemplateList({ onOpen }: { onOpen: (key: string) => void }) {
   );
 }
 
-function TemplateEditor({ tkey, onBack }: { tkey: string; onBack: () => void }) {
+export function TemplateEditor({ tkey, onBack, base = "/admin/email" }: { tkey: string; onBack: () => void; base?: string }) {
   const { t, i18n } = useTranslation();
   const confirm = useConfirm();
   const qc = useQueryClient();
-  const key = ["admin", "email", "templates", tkey];
-  const { data, isLoading, isError } = useQuery({ queryKey: key, queryFn: () => api.get<TemplateDetail>(`/admin/email/templates/${tkey}`) });
+  const key = ["admin", "email", base, "templates", tkey];
+  const { data, isLoading, isError } = useQuery({ queryKey: key, queryFn: () => api.get<TemplateDetail>(`${base}/templates/${tkey}`) });
   const [locale, setLocale] = useState<"fr" | "en">(i18n.language === "en" ? "en" : "fr");
   const [draft, setDraft] = useState<Record<"fr" | "en", Text> | null>(null);
   const bodyRef = useRef<HTMLTextAreaElement>(null);
@@ -299,7 +299,7 @@ function TemplateEditor({ tkey, onBack }: { tkey: string; onBack: () => void }) 
     if (!text || !text.subject.trim() || !text.body.trim()) return;
     const id = setTimeout(() => {
       api
-        .post<{ subject: string; html: string }>(`/admin/email/templates/${tkey}/${locale}/preview`, text)
+        .post<{ subject: string; html: string }>(`${base}/templates/${tkey}/${locale}/preview`, text)
         .then(setPreview)
         .catch(() => undefined);
     }, 300);
@@ -309,9 +309,10 @@ function TemplateEditor({ tkey, onBack }: { tkey: string; onBack: () => void }) 
   const refresh = () => {
     void qc.invalidateQueries({ queryKey: key });
     void qc.invalidateQueries({ queryKey: ["admin", "email", "templates"], exact: true });
+    void qc.invalidateQueries({ queryKey: ["admin", "billing", "email", "templates"], exact: true });
   };
   const save = useMutation({
-    mutationFn: () => api.put(`/admin/email/templates/${tkey}/${locale}`, text),
+    mutationFn: () => api.put(`${base}/templates/${tkey}/${locale}`, text),
     onSuccess: () => {
       toast.success(t("common.saved"));
       refresh();
@@ -319,14 +320,14 @@ function TemplateEditor({ tkey, onBack }: { tkey: string; onBack: () => void }) 
     onError: () => toast.error(t("common.error")),
   });
   const reset = useMutation({
-    mutationFn: () => api.del(`/admin/email/templates/${tkey}/${locale}`),
+    mutationFn: () => api.del(`${base}/templates/${tkey}/${locale}`),
     onSuccess: () => {
       toast.success(t("email.templates.restored"));
       refresh();
     },
   });
   const sendTest = useMutation({
-    mutationFn: () => api.post<TestResult>(`/admin/email/templates/${tkey}/${locale}/test`, text),
+    mutationFn: () => api.post<TestResult>(`${base}/templates/${tkey}/${locale}/test`, text),
     onSuccess: (r) => (r.ok ? toast.success(t("email.smtp.testOk", { email: r.to })) : toast.error(t("email.smtp.errors.send"))),
     onError: () => toast.error(t("common.error")),
   });

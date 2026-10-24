@@ -3,7 +3,7 @@ import { useSearchParams } from "react-router-dom";
 import { useTranslation } from "react-i18next";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
-import { BookOpenText, CheckCircle2, FileText, Hash, Loader2, Plus, XCircle } from "lucide-react";
+import { BookOpenText, CheckCircle2, FileText, Hash, Loader2, Mail, Plus, XCircle } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -16,6 +16,7 @@ import { dateTime } from "@/lib/format";
 import { cn } from "@/lib/utils";
 import { SectionHeader } from "./sections";
 import { CleanupCard } from "./CleanupCard";
+import { BillingMailTab } from "./BillingMailTab";
 
 type Settings = {
   numbering: { prefix: string; next: number; digits: number };
@@ -33,7 +34,7 @@ const LEDGER_TYPES: LedgerType[] = ["asset", "liability", "equity", "revenue", "
 type Account = { id: string; number: string; name: string; type: LedgerType; active: boolean; quickbooksId: string | null };
 export const KEY = ["admin", "billing"];
 const GOLD = "bg-grad-gold font-semibold text-[#1a1204] hover:brightness-105";
-const TABS = ["general", "template", "ledger"] as const;
+const TABS = ["general", "template", "emails", "ledger"] as const;
 type Tab = (typeof TABS)[number];
 
 export function useBillingError() {
@@ -74,6 +75,9 @@ export function BillingSection() {
           <TabsTrigger value="template">
             <FileText className="size-4" /> {t("billing.tabs.template")}
           </TabsTrigger>
+          <TabsTrigger value="emails">
+            <Mail className="size-4" /> {t("billing.tabs.emails")}
+          </TabsTrigger>
           <TabsTrigger value="ledger">
             <BookOpenText className="size-4" /> {t("billing.tabs.ledger")}
           </TabsTrigger>
@@ -83,6 +87,9 @@ export function BillingSection() {
         </TabsContent>
         <TabsContent value="template" className="mt-5">
           <TemplateTab />
+        </TabsContent>
+        <TabsContent value="emails" className="mt-5">
+          <BillingMailTab />
         </TabsContent>
         <TabsContent value="ledger" className="mt-5">
           <LedgerTab />

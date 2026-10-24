@@ -17,7 +17,21 @@ export type TemplateDef = {
   defaults: Record<Locale, TemplateText>;
   sample: Record<Locale, Record<string, string>>;
 };
-export type TemplateKey = "welcome" | "passwordReset" | "passwordChanged" | "boardMessage" | "ticketReceived";
+export type TemplateKey =
+  | "welcome"
+  | "passwordReset"
+  | "passwordChanged"
+  | "boardMessage"
+  | "ticketReceived"
+  | "invoiceSent"
+  | "invoicePastDue"
+  | "invoiceReminder5"
+  | "invoiceReminder15"
+  | "invoiceReminder20"
+  | "invoiceReminder30"
+  | "invoiceReminder60"
+  | "invoiceReminder90"
+  | "accountStatement";
 
 const SIGN = { fr: "L'équipe AKAB Informatique", en: "The AKAB Informatique team" };
 const sampleBase = (l: Locale) => ({
@@ -200,6 +214,137 @@ ${SIGN.en}`,
     en: { ...sampleBase("en"), number: "T20261019.0042", title: "Printer offline at the front desk", company: "Boulangerie Lanaudière", ticketUrl: `${config.publicUrl || "https://portail.akab.ca"}/tickets?t=42` },
   },
 });
+
+// ── Invoicing (Admin › Facturation › Courriels): the invoice sent, past due notices and reminders, the account statement ──
+/** Days past due at which a reminder goes out (the last one means "and more") */
+export const REMINDER_LEVELS = [5, 15, 20, 30, 60, 90] as const;
+export const reminderKey = (level: number) => `invoiceReminder${level}` as TemplateKey;
+export const BILLING_TEMPLATE_KEYS: TemplateKey[] = ["invoiceSent", "invoicePastDue", ...REMINDER_LEVELS.map(reminderKey), "accountStatement"];
+
+const invoiceVars = ["name", "company", "number", "issuedOn", "dueOn", "total", "balance", "daysLate", "poNumber", "portalUrl"];
+const invoiceSample = (l: Locale, daysLate: string) => ({
+  ...sampleBase(l),
+  company: "Boulangerie Lanaudière",
+  number: "F-10452",
+  issuedOn: l === "en" ? "October 1, 2026" : "1 octobre 2026",
+  dueOn: l === "en" ? "October 16, 2026" : "16 octobre 2026",
+  total: l === "en" ? "$1,149.75" : "1 149,75 $",
+  balance: l === "en" ? "$1,149.75" : "1 149,75 $",
+  daysLate,
+  poNumber: "PO-778",
+});
+const REMINDER_TEXT: Record<number, { fr: [string, string]; en: [string, string] }> = {
+  5: {
+    fr: ["Rappel : facture {{number}} échue", "Un petit rappel : la facture {{number}} de {{balance}} était due le {{dueOn}}. Elle n'apparaît pas encore comme payée de notre côté. Si le paiement est en route, vous pouvez ignorer ce message."],
+    en: ["Reminder: invoice {{number}} is past due", "A friendly reminder: invoice {{number}} for {{balance}} was due on {{dueOn}}. It does not show as paid on our side yet. If payment is on its way, please ignore this message."],
+  },
+  15: {
+    fr: ["Facture {{number}} en retard de {{daysLate}} jours", "La facture {{number}} de {{balance}}, due le {{dueOn}}, est en retard de {{daysLate}} jours. Nous vous demandons de la régler dès que possible ou de nous écrire si un problème retarde le paiement."],
+    en: ["Invoice {{number}} is {{daysLate}} days past due", "Invoice {{number}} for {{balance}}, due on {{dueOn}}, is {{daysLate}} days past due. Please pay it as soon as possible, or write to us if something is holding up the payment."],
+  },
+  20: {
+    fr: ["Deuxième rappel : facture {{number}}", "Malgré notre rappel, la facture {{number}} de {{balance}} reste impayée ({{daysLate}} jours de retard). Merci de la régler cette semaine ou de communiquer avec nous pour convenir d'une entente."],
+    en: ["Second reminder: invoice {{number}}", "Despite our earlier reminder, invoice {{number}} for {{balance}} is still unpaid ({{daysLate}} days past due). Please pay it this week, or contact us to agree on an arrangement."],
+  },
+  30: {
+    fr: ["Avis important : facture {{number}} en retard de plus de 30 jours", "La facture {{number}} de {{balance}} est en retard de {{daysLate}} jours. Sans paiement ou entente de votre part rapidement, nous devrons suspendre certains services. Communiquez avec nous dès aujourd'hui."],
+    en: ["Important notice: invoice {{number}} is over 30 days past due", "Invoice {{number}} for {{balance}} is {{daysLate}} days past due. Without payment or an arrangement from you soon, we may have to suspend some services. Please contact us today."],
+  },
+  60: {
+    fr: ["Avis de retard sérieux : facture {{number}} (plus de 60 jours)", "La facture {{number}} de {{balance}} est en retard de {{daysLate}} jours. Votre compte est en souffrance. Veuillez la régler immédiatement; à défaut, nous devrons prendre les mesures prévues à notre entente de service."],
+    en: ["Serious past-due notice: invoice {{number}} (over 60 days)", "Invoice {{number}} for {{balance}} is {{daysLate}} days past due. Your account is delinquent. Please pay it immediately; otherwise we will have to take the steps set out in our service agreement."],
+  },
+  90: {
+    fr: ["Dernier avis : facture {{number}} (plus de 90 jours)", "La facture {{number}} de {{balance}} est en retard de {{daysLate}} jours. C'est notre dernier avis avant d'entreprendre des démarches de recouvrement. Pour l'éviter, réglez le solde aujourd'hui ou communiquez avec nous."],
+    en: ["Final notice: invoice {{number}} (over 90 days)", "Invoice {{number}} for {{balance}} is {{daysLate}} days past due. This is our final notice before we begin collection steps. To avoid this, pay the balance today or contact us."],
+  },
+};
+for (const level of REMINDER_LEVELS) {
+  const t = REMINDER_TEXT[level];
+  TEMPLATES.push({
+    key: reminderKey(level),
+    linkVar: null,
+    variables: invoiceVars,
+    defaults: {
+      fr: { subject: t.fr[0], body: `Bonjour {{name}},\n\n${t.fr[1]}\n\nFacture : {{number}} · Date : {{issuedOn}} · Échéance : {{dueOn}} · Solde : {{balance}}\n\n${SIGN.fr}`, action: "" },
+      en: { subject: t.en[0], body: `Hello {{name}},\n\n${t.en[1]}\n\nInvoice: {{number}} · Date: {{issuedOn}} · Due: {{dueOn}} · Balance: {{balance}}\n\n${SIGN.en}`, action: "" },
+    },
+    sample: { fr: invoiceSample("fr", String(level)), en: invoiceSample("en", String(level)) },
+  });
+}
+TEMPLATES.push(
+  {
+    key: "invoiceSent",
+    linkVar: null,
+    variables: invoiceVars,
+    defaults: {
+      fr: {
+        subject: "Facture {{number}} d'AKAB Informatique",
+        body: `Bonjour {{name}},\n\nVoici votre facture {{number}} du {{issuedOn}}, d'un montant de {{total}}. Elle est payable au plus tard le {{dueOn}}.\n\nPour toute question au sujet de cette facture, répondez simplement à ce courriel en mentionnant le numéro {{number}}.\n\nMerci de votre confiance,\n${SIGN.fr}`,
+        action: "",
+      },
+      en: {
+        subject: "Invoice {{number}} from AKAB Informatique",
+        body: `Hello {{name}},\n\nHere is your invoice {{number}} dated {{issuedOn}}, for {{total}}. It is payable no later than {{dueOn}}.\n\nFor any question about this invoice, simply reply to this email and mention number {{number}}.\n\nThank you for your business,\n${SIGN.en}`,
+        action: "",
+      },
+    },
+    sample: { fr: invoiceSample("fr", "0"), en: invoiceSample("en", "0") },
+  },
+  {
+    key: "invoicePastDue",
+    linkVar: null,
+    variables: invoiceVars,
+    defaults: {
+      fr: {
+        subject: "Facture {{number}} échue",
+        body: `Bonjour {{name}},\n\nLa facture {{number}} de {{balance}} était due le {{dueOn}} et n'est pas encore payée. Pourriez-vous la régler dès que possible?\n\nSi le paiement a déjà été fait, merci de nous en aviser et d'ignorer ce message.\n\n${SIGN.fr}`,
+        action: "",
+      },
+      en: {
+        subject: "Invoice {{number}} is past due",
+        body: `Hello {{name}},\n\nInvoice {{number}} for {{balance}} was due on {{dueOn}} and has not been paid yet. Could you please pay it as soon as possible?\n\nIf payment has already been made, please let us know and ignore this message.\n\n${SIGN.en}`,
+        action: "",
+      },
+    },
+    sample: { fr: invoiceSample("fr", "2"), en: invoiceSample("en", "2") },
+  },
+  {
+    key: "accountStatement",
+    linkVar: null,
+    variables: ["name", "company", "date", "count", "totalDue", "overdueDue", "statementLines", "portalUrl"],
+    defaults: {
+      fr: {
+        subject: "Relevé de compte — {{company}} au {{date}}",
+        body: `Bonjour {{name}},\n\nVoici le relevé de votre compte au {{date}}. Solde à payer : {{totalDue}}, dont {{overdueDue}} en retard.\n\n{{statementLines}}\n\nSi un paiement a croisé ce relevé, merci de ne pas en tenir compte. Pour toute question, répondez à ce courriel.\n\n${SIGN.fr}`,
+        action: "",
+      },
+      en: {
+        subject: "Account statement — {{company}} as of {{date}}",
+        body: `Hello {{name}},\n\nHere is the statement of your account as of {{date}}. Balance due: {{totalDue}}, of which {{overdueDue}} is past due.\n\n{{statementLines}}\n\nIf a payment crossed this statement, please disregard it. For any question, reply to this email.\n\n${SIGN.en}`,
+        action: "",
+      },
+    },
+    sample: {
+      fr: {
+        ...sampleBase("fr"),
+        company: "Boulangerie Lanaudière",
+        count: "2",
+        totalDue: "1 724,63 $",
+        overdueDue: "574,88 $",
+        statementLines: "F-10452 · du 1 octobre 2026 · échéance 16 octobre 2026 · solde 1 149,75 $\nF-10389 · du 15 septembre 2026 · échéance 1 octobre 2026 · solde 574,88 $ (22 jours de retard)",
+      },
+      en: {
+        ...sampleBase("en"),
+        company: "Boulangerie Lanaudière",
+        count: "2",
+        totalDue: "$1,724.63",
+        overdueDue: "$574.88",
+        statementLines: "F-10452 · dated October 1, 2026 · due October 16, 2026 · balance $1,149.75\nF-10389 · dated September 15, 2026 · due October 1, 2026 · balance $574.88 (22 days past due)",
+      },
+    },
+  },
+);
 
 export const templateDef = (key: string) => TEMPLATES.find((t) => t.key === key) ?? null;
 

@@ -3,7 +3,8 @@ import { Link, useSearchParams } from "react-router-dom";
 import { useTranslation } from "react-i18next";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
-import { AlertTriangle, ArrowDown, ArrowUp, ArrowUpDown, CircleCheck, CircleDashed, Clock, FileX, Loader2, Mail, MailX, RotateCcw, Search, type LucideIcon } from "lucide-react";
+import { AlertTriangle, ArrowDown, ArrowUp, ArrowUpDown, CircleCheck, CircleDashed, Clock, FileText, FileX, Loader2, Mail, MailX, RotateCcw, Search, type LucideIcon } from "lucide-react";
+import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
@@ -11,6 +12,7 @@ import { api } from "@/lib/api";
 import { useCan } from "@/lib/session";
 import { cn } from "@/lib/utils";
 import { Pager, pageSizeOf } from "@/components/Pager";
+import { InvoiceMailButtons, StatementsDialog } from "./Statements";
 import { money } from "@/pages/crm/shared";
 import { shortDate } from "@/pages/tickets/shared";
 
@@ -79,11 +81,19 @@ export function AllInvoices() {
   const qc = useQueryClient();
   const m = (c: number) => money(c, i18n.language);
   const [params, setParams] = useSearchParams();
-  const get = (k: Filter) => params.get(KEYS[k]) ?? "";
+  // the usual view: only what is unpaid; "all" in the address shows everything
+  const get = (k: Filter) => (k === "status" ? (params.get(KEYS.status) === null ? "open" : params.get(KEYS.status) === "all" ? "" : (params.get(KEYS.status) ?? "")) : (params.get(KEYS[k]) ?? ""));
   const set = (patch: Partial<Record<Filter, string | null>>) =>
     setParams(
       (p) => {
-        for (const [k, v] of Object.entries(patch)) (v ? p.set(KEYS[k as Filter], v) : p.delete(KEYS[k as Filter]));
+        for (const [k, v] of Object.entries(patch)) {
+          if (k === "status") {
+            if (!v) p.set(KEYS.status, "all");
+            else if (v === "open") p.delete(KEYS.status);
+            else p.set(KEYS.status, v);
+          } else if (v) p.set(KEYS[k as Filter], v);
+          else p.delete(KEYS[k as Filter]);
+        }
         p.delete("ipage");
         return p;
       },
@@ -130,12 +140,13 @@ export function AllInvoices() {
       { replace: true },
     );
   // the column clicked, and which way (a second click turns it round, a third gives the usual order back)
-  const sort = (SORTS as readonly string[]).includes(params.get("isort") ?? "") ? (params.get("isort") as Sort) : null;
-  const desc = params.get("idir") === "desc";
+  const sortParam = (SORTS as readonly string[]).includes(params.get("isort") ?? "") ? (params.get("isort") as Sort) : null;
+  const sort: Sort = sortParam ?? "due";
+  const desc = sortParam !== null && params.get("idir") === "desc";
   const clickSort = (key: Sort) =>
     setParams(
       (p) => {
-        if (sort !== key) {
+        if (sortParam !== key) {
           p.set("isort", key);
           p.delete("idir");
         } else if (!desc) p.set("idir", "desc");
@@ -148,7 +159,7 @@ export function AllInvoices() {
       },
       { replace: true },
     );
-  const sorted = data && sort ? [...data.items].sort((x, y) => { const a = SORT_OF[sort](x), b = SORT_OF[sort](y); const r = typeof a === "number" && typeof b === "number" ? a - b : String(a).localeCompare(String(b), undefined, { numeric: true }); return (desc ? -r : r) || x.number.localeCompare(y.number, undefined, { numeric: true }); }) : (data?.items ?? []);
+  const sorted = data ? [...data.items].sort((x, y) => { const a = SORT_OF[sort](x), b = SORT_OF[sort](y); const r = typeof a === "number" && typeof b === "number" ? a - b : String(a).localeCompare(String(b), undefined, { numeric: true }); return (desc ? -r : r) || x.number.localeCompare(y.number, undefined, { numeric: true }); }) : [];
   const pages = Math.max(1, Math.ceil(sorted.length / size));
   const shown = sorted.slice((Math.min(page, pages) - 1) * size, Math.min(page, pages) * size);
   const Th = ({ id, label, align = "left", className }: { id: Sort; label: string; align?: "left" | "right" | "center"; className?: string }) => (
@@ -160,7 +171,8 @@ export function AllInvoices() {
     </th>
   );
   const manage = can("accounting.manage");
-  const active = (Object.keys(KEYS) as Filter[]).some((k) => get(k));
+  const [statements, setStatements] = useState(false);
+  const active = (Object.keys(KEYS) as Filter[]).some((k) => (k === "status" ? get(k) !== "open" : get(k))) || params.has("isort");
 
   // quick date ranges on the issue date
   const now = new Date();
@@ -275,6 +287,14 @@ export function AllInvoices() {
         )}
       </div>
 
+      {/* Account statements: for every client that owes something, or the ones chosen */}
+      <div className="flex justify-end">
+        <Button type="button" size="sm" variant="outline" onClick={() => setStatements(true)}>
+          <FileText className="size-3.5" /> {t("statements.bulkTitle")}
+        </Button>
+      </div>
+      {statements && <StatementsDialog onClose={() => setStatements(false)} />}
+
       {/* Totals of what is shown */}
       {data && (
         <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
@@ -305,7 +325,8 @@ export function AllInvoices() {
                 <Th id="balance" label={t("allInvoices.col.balance")} align="right" />
                 <Th id="status" label={t("allInvoices.status")} />
                 <Th id="email" label={t("allInvoices.col.email")} align="center" />
-                <Th id="qb" label="QB" align="center" className="px-4" />
+                <Th id="qb" label="QB" align="center" />
+                <th className="px-3 py-2.5" aria-label={t("statements.sendInvoice")} />
               </tr>
             </thead>
             <tbody className="divide-y divide-border/60">
@@ -360,7 +381,7 @@ export function AllInvoices() {
                         </TooltipContent>
                       </Tooltip>
                     </td>
-                    <td className="px-4 py-2 text-center">
+                    <td className="px-3 py-2 text-center">
                       {v.quickbooks?.error ? (
                         <span className="rounded border border-red-500/30 px-1.5 py-0.5 text-[10px] text-red-300" title={v.quickbooks.error}>
                           {t("allInvoices.qbErrorShort")}
@@ -370,6 +391,9 @@ export function AllInvoices() {
                       ) : (
                         <span className="text-xs text-muted-foreground/60">—</span>
                       )}
+                    </td>
+                    <td className="px-3 py-2 text-right">
+                      <InvoiceMailButtons invoice={v} compact />
                     </td>
                   </tr>
                 );

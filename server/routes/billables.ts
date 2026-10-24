@@ -8,6 +8,7 @@ import { BILLABLE_KINDS, billableCounts, billablesState, createInvoice, DraftErr
 import type { BillableKind } from "../lib/ticketSource.ts";
 import { autoSync, createQbItem, invoiceChoices } from "../lib/quickbooks.ts";
 import { quickbooksSettings } from "../lib/billing.ts";
+import { autoSendInvoice } from "../lib/invoiceMail.ts";
 import { quickbooksHttp } from "./billing.ts";
 
 /**
@@ -142,6 +143,7 @@ export const billablesRoutes = new Hono<AppEnv>()
     const made = await drafted(() => createInvoice(a.user.id, p));
     await audit(a.user.id, "billing.invoice_created", made.id, { number: made.number, totalCents: made.totalCents });
     await autoSync("invoices", made.id);
+    await autoSendInvoice(made.id, a.user.id);
     return c.json(made, 201);
   })
 
@@ -155,6 +157,9 @@ export const billablesRoutes = new Hono<AppEnv>()
     const p = await body(c, z.object({ clientIds: z.array(zUuid).max(5000).optional(), from: zDay.nullable().optional(), to: zDay.nullable().optional() }));
     const made = await postInvoices(a.user.id, p.clientIds, { from: p.from, to: p.to });
     await audit(a.user.id, "billing.invoices_posted", null, { count: made.length, numbers: made.map((m) => m.number) });
-    for (const m of made) await autoSync("invoices", m.id);
+    for (const m of made) {
+      await autoSync("invoices", m.id);
+      await autoSendInvoice(m.id, a.user.id);
+    }
     return c.json(made, 201);
   });

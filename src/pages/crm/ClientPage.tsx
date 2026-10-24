@@ -45,6 +45,7 @@ import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel,
 import { useConfirm } from "@/components/ConfirmDialog";
 import { relativeTime } from "@/lib/format";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { ClientStatementDialog, InvoiceMailButtons } from "@/pages/accounting/Statements";
 import { api, ApiError } from "@/lib/api";
 import { useCan } from "@/lib/session";
 import { cn } from "@/lib/utils";
@@ -442,14 +443,17 @@ const inFilter = (v: CrmInvoice, f: InvoiceFilter) => (f === "all" ? true : f ==
 function InvoicesTab({ client }: { client: CrmDetail }) {
   const { t, i18n } = useTranslation();
   const [withChildren, setWithChildren] = useState(false);
-  const [filter, setFilter] = useState<InvoiceFilter>("all");
+  // what is unpaid first, by due day
+  const [filter, setFilter] = useState<InvoiceFilter>("unpaid");
+  const [statement, setStatement] = useState(false);
   const [open, setOpen] = useState<string | null>(null);
   const { data, isLoading } = useQuery({
     queryKey: ["crm", "client", client.id, "invoices", withChildren],
     queryFn: () => api.get<CrmInvoices>(`/crm/clients/${client.id}/invoices${withChildren ? "?children=1" : ""}`),
   });
   const m = (c: number) => money(c, i18n.language);
-  const items = (data?.items ?? []).filter((v) => inFilter(v, filter));
+  const byDue = (a: CrmInvoice, b: CrmInvoice) => (a.dueOn ?? "9999-99-99").localeCompare(b.dueOn ?? "9999-99-99") || a.number.localeCompare(b.number, undefined, { numeric: true });
+  const items = (data?.items ?? []).filter((v) => inFilter(v, filter)).sort(filter === "unpaid" || filter === "overdue" ? byDue : () => 0);
   return (
     <div className="space-y-4">
       {data && (
@@ -474,15 +478,20 @@ function InvoicesTab({ client }: { client: CrmDetail }) {
         title={t("crm.tabs.invoices")}
         icon={<Receipt className="size-4" />}
         aside={
-          client.children.length > 0 && (
-            <label className="flex items-center gap-2 text-xs text-muted-foreground">
-              <Switch checked={withChildren} onCheckedChange={setWithChildren} /> {t("crm.tickets.withChildren")}
-            </label>
-          )
+          <span className="flex flex-wrap items-center gap-3">
+            {client.children.length > 0 && (
+              <label className="flex items-center gap-2 text-xs text-muted-foreground">
+                <Switch checked={withChildren} onCheckedChange={setWithChildren} /> {t("crm.tickets.withChildren")}
+              </label>
+            )}
+            <Button type="button" size="sm" variant="outline" onClick={() => setStatement(true)}>
+              <FileText className="size-3.5" /> {t("statements.title")}
+            </Button>
+          </span>
         }
       >
         <div className="flex flex-wrap gap-1">
-          {(["all", "unpaid", "overdue", "paid"] as InvoiceFilter[]).map((f) => (
+          {(["unpaid", "overdue", "paid", "all"] as InvoiceFilter[]).map((f) => (
             <button
               key={f}
               type="button"
@@ -543,6 +552,11 @@ function InvoicesTab({ client }: { client: CrmDetail }) {
                         </span>
                       </span>
                     </button>
+                    {expanded && (
+                      <div className="px-3 pb-1">
+                        <InvoiceMailButtons invoice={v} />
+                      </div>
+                    )}
                     {expanded && <Payments invoice={v} clientId={client.id} />}
                   </li>
                 );
@@ -551,6 +565,7 @@ function InvoicesTab({ client }: { client: CrmDetail }) {
           </div>
         )}
       </Card>
+      {statement && <ClientStatementDialog clientId={client.id} onClose={() => setStatement(false)} />}
     </div>
   );
 }

@@ -974,7 +974,9 @@ describe("forgotten password and email", () => {
     expect((await admin.del("/api/admin/email/smtp")).json.source).toBe("none");
 
     const list = (await admin.get("/api/admin/email/templates")).json;
-    expect(list.map((x: any) => x.key)).toEqual(["welcome", "passwordReset", "passwordChanged", "boardMessage", "ticketReceived"]);
+    // the first five, then the invoicing ones (Admin › Facturation › Courriels edits those under admin.billing)
+    expect(list.map((x: any) => x.key).slice(0, 5)).toEqual(["welcome", "passwordReset", "passwordChanged", "boardMessage", "ticketReceived"]);
+    expect(list.map((x: any) => x.key)).toEqual(expect.arrayContaining(["invoiceSent", "invoicePastDue", "invoiceReminder5", "invoiceReminder90", "accountStatement"]));
 
     const edited = { subject: "Bonjour {{name}}", body: "Allo {{name}} <script>", action: "Go" };
     const prev = (await admin.post("/api/admin/email/templates/passwordReset/fr/preview", edited)).json;
@@ -7070,5 +7072,83 @@ describe("contracts: services when made, charges, activity, stop instead of dele
     const [c] = await mk(3);
     const exact = (await admin.post("/api/billables/invoice", { clientId: client!.id, itemIds: [c!.id], dueOn: "2026-12-24" })).json;
     expect((await db().select().from(schema.clientInvoices).where(eq(schema.clientInvoices.id, exact.id)))[0]!.dueOn).toBe("2026-12-24");
+  });
+
+  it("invoicing emails: templates, an invoice and its reminders, account statements for one client or several", async () => {
+    const admin = await signIn("admin@akab.local");
+    const tech = await signIn("tech@akab.local");
+    const { devOutbox } = await import("../server/lib/mail.ts");
+    const { runReminders, levelFor } = await import("../server/lib/invoiceMail.ts");
+    const { addDaysYmd } = await import("../shared/invoiceDue.ts");
+    const today = new Date().toLocaleDateString("en-CA", { timeZone: "America/Toronto" });
+    // templates under admin.billing: only the invoicing ones, editable, with a default to come back to
+    expect((await tech.get("/api/billing/email/templates")).status).toBe(403);
+    const list = (await admin.get("/api/billing/email/templates")).json;
+    expect(list.map((x: any) => x.key)).toEqual(expect.arrayContaining(["invoiceSent", "invoicePastDue", "invoiceReminder5", "invoiceReminder15", "invoiceReminder20", "invoiceReminder30", "invoiceReminder60", "invoiceReminder90", "accountStatement"]));
+    expect(list.some((x: any) => x.key === "welcome")).toBe(false);
+    expect((await admin.get("/api/billing/email/templates/welcome")).status).toBe(404);
+    expect((await admin.put("/api/billing/email/templates/invoiceSent/fr", { subject: "Votre facture {{number}}", body: "Bonjour {{name}}, facture {{number}} : {{total}}", action: "" })).status).toBe(200);
+    // settings: nothing automatic by default
+    expect((await admin.get("/api/billing/email/settings")).json).toMatchObject({ autoSend: false, remindersAuto: false, levels: [5, 15, 20, 30, 60, 90], remindersFrom: "2026-11-01" });
+    expect((await admin.put("/api/billing/email/settings", { levels: [15, 30, 7] })).json.levels).toEqual([15, 30]);
+    await admin.put("/api/billing/email/settings", { levels: [5, 15, 20, 30, 60, 90] });
+    expect([levelFor(3, [5, 15]), levelFor(5, [5, 15]), levelFor(19, [5, 15, 20]), levelFor(95, [5, 15, 20, 30, 60, 90]), levelFor(40, [5, 60])]).toEqual([null, 5, 15, 90, 5]);
+
+    // two clients that owe, one without an email
+    const [a] = await db().insert(schema.clients).values({ name: "Relevé A inc.", autotaskId: 987654330, email: "compta@a.example" }).returning();
+    const [b] = await db().insert(schema.clients).values({ name: "Relevé B inc.", autotaskId: 987654331 }).returning();
+    const mk = (clientId: string, number: string, due: string, total: number) => ({ clientId, number, issuedOn: addDaysYmd(due, -15), dueOn: due, totalCents: total, taxCents: 0, source: "portal" });
+    const [i1, i2, i3] = await db().insert(schema.clientInvoices).values([mk(a!.id, "R-1", addDaysYmd(today, -20), 100000), mk(a!.id, "R-2", addDaysYmd(today, 10), 50000), mk(b!.id, "R-3", addDaysYmd(today, -3), 20000)]).returning();
+    // the statement: what is unpaid, how late, by age
+    const st = (await admin.get(`/api/crm/clients/${a!.id}/statement`)).json;
+    expect(st).toMatchObject({ count: 2, totalDueCents: 150000, overdueCents: 100000, client: { email: "compta@a.example" } });
+    expect(st.buckets).toMatchObject({ current: 50000, d30: 100000, over90: 0 });
+    expect(st.items.map((x: any) => x.number)).toEqual(["R-1", "R-2"]);
+    // sent by email (tech cannot): the template text with the lines
+    expect((await tech.post(`/api/crm/clients/${a!.id}/statement/send`, {})).status).toBe(403);
+    devOutbox.length = 0;
+    expect((await admin.post(`/api/crm/clients/${a!.id}/statement/send`, {})).json).toMatchObject({ to: "compta@a.example", count: 2, totalDueCents: 150000 });
+    expect(devOutbox[0]!.subject).toContain("Relevé de compte");
+    expect(devOutbox[0]!.text).toContain("R-1");
+    expect(devOutbox[0]!.text).toContain("R-2");
+    // a client with no email: told, nothing sent; a client owing nothing: nothing to send
+    expect((await admin.post(`/api/crm/clients/${b!.id}/statement/send`, {})).json.error).toBe("invoice_mail_no_email");
+    const [none] = await db().insert(schema.clients).values({ name: "Relevé C inc.", autotaskId: 987654332, email: "c@c.example" }).returning();
+    expect((await admin.post(`/api/crm/clients/${none!.id}/statement/send`, {})).json.error).toBe("invoice_mail_nothing_due");
+    // several at once: the clients that owe, and the result for each
+    const targets = (await admin.get("/api/crm/statements/targets")).json;
+    expect(targets.find((x: any) => x.id === a!.id)).toMatchObject({ count: 2, totalDueCents: 150000, email: "compta@a.example" });
+    expect(targets.some((x: any) => x.id === none!.id)).toBe(false);
+    devOutbox.length = 0;
+    const bulk = (await admin.post("/api/crm/statements/send", { clientIds: [a!.id, b!.id] })).json;
+    expect(bulk.sent).toBe(1);
+    expect(bulk.results.find((r: any) => r.id === b!.id).status).toBe("no_email");
+    expect(devOutbox).toHaveLength(1);
+
+    // one invoice: sent as is (marked sent), then a reminder that follows how late it is
+    devOutbox.length = 0;
+    expect((await admin.post(`/api/crm/invoices/${i1!.id}/mail`, { kind: "sent" })).json).toMatchObject({ to: "compta@a.example", template: "invoiceSent" });
+    expect(devOutbox[0]!.subject).toBe("Votre facture R-1");
+    expect((await db().select().from(schema.clientInvoices).where(eq(schema.clientInvoices.id, i1!.id)))[0]!.emailedAt).not.toBeNull();
+    expect((await admin.post(`/api/crm/invoices/${i1!.id}/mail`, { kind: "reminder" })).json.template).toBe("invoiceReminder20");
+    expect((await admin.post(`/api/crm/invoices/${i3!.id}/mail`, { kind: "reminder" })).json.error).toBe("invoice_mail_no_email");
+    expect((await admin.post(`/api/crm/invoices/${i2!.id}/mail`, { kind: "reminder" })).json.error).toBe("invoice_mail_nothing_due");
+    // paid: nothing to remind
+    await db().update(schema.clientInvoices).set({ paidOn: today }).where(eq(schema.clientInvoices.id, i3!.id));
+    // the automatic pass: only invoices dated from the chosen day on (a day in the future: none)
+    await db().delete(schema.invoiceReminders);
+    devOutbox.length = 0;
+    await admin.put("/api/billing/email/settings", { remindersFrom: addDaysYmd(today, 1) });
+    expect((await runReminders()).sent).toBe(0);
+    expect((await admin.put("/api/billing/email/settings", { remindersFrom: addDaysYmd(today, -200) })).json.remindersFrom).toBe(addDaysYmd(today, -200));
+    // then the level reached, once, only for invoices whose client has an email
+    const r1 = await runReminders();
+    expect(r1.sent).toBeGreaterThanOrEqual(1);
+    expect(devOutbox.some((m) => m.subject.includes("R-1") || m.text.includes("R-1"))).toBe(true);
+    const log = await db().select().from(schema.invoiceReminders).where(eq(schema.invoiceReminders.invoiceId, i1!.id));
+    expect(log).toEqual([expect.objectContaining({ level: 20, ok: true })]);
+    devOutbox.length = 0;
+    await runReminders();
+    expect(devOutbox.filter((m) => m.text.includes("R-1"))).toHaveLength(0);
   });
 });

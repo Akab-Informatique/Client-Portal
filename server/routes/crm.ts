@@ -9,11 +9,13 @@ import { auth, requirePermission, requireStaff, revokeUserSessions, type AppEnv 
 import { hashPassword, temporaryPassword } from "../lib/crypto.ts";
 import { forgetPasswordLinks, sendPasswordLink } from "../lib/passwordLinks.ts";
 import { audit } from "../lib/audit.ts";
+import { rateLimit } from "../lib/http.ts";
 import { body, zEmail, zOptText, zUuid } from "../lib/validate.ts";
 import { ticketSource, type NTicket } from "../lib/ticketSource.ts";
 import { crmState, descendantsOf, ensureCrm, rememberCompany, rememberContact, syncCrm } from "../lib/crm.ts";
 import { lookup, run } from "./tickets.ts";
 import { pushInvoice } from "../lib/quickbooks.ts";
+import { InvoiceMailError, sendInvoiceMail, sendStatement, sendStatements, statementOf, statementTargets } from "../lib/invoiceMail.ts";
 import { applyAutoApprove } from "../lib/billables.ts";
 import { BILLING_MODES, KIND_MODE, contractTypes, usedHoursOf, type ContractKind } from "../lib/contracts.ts";
 import { prorata, type ServicePeriod } from "../../shared/prorata.ts";
@@ -738,6 +740,37 @@ export const crmRoutes = new Hono<AppEnv>()
     return c.json(row);
   })
 
+  // ── emails: an invoice, a reminder, an account statement (one client, some, or all that owe something)
+  .post("/invoices/:iid/mail", requirePermission("accounting.manage"), async (c) => {
+    const p = await body(c, z.object({ kind: z.enum(["sent", "reminder"]) }));
+    if (!rateLimit(`invoice-mail:${auth(c).user.id}`, 60, 10 * 60_000).ok) throw new HTTPException(429, { message: "rate_limited" });
+    try {
+      return c.json(await sendInvoiceMail(zUuid.parse(c.req.param("iid")), p.kind, auth(c).user.id));
+    } catch (e) {
+      return mailHttp(e);
+    }
+  })
+  .get("/clients/:id/statement", requirePermission("accounting.view"), async (c) => {
+    const client = await clientOr404(c.req.param("id"));
+    return c.json(await statementOf(client.id));
+  })
+  .post("/clients/:id/statement/send", requirePermission("accounting.manage"), async (c) => {
+    const client = await clientOr404(c.req.param("id"));
+    if (!rateLimit(`statement-mail:${auth(c).user.id}`, 30, 10 * 60_000).ok) throw new HTTPException(429, { message: "rate_limited" });
+    try {
+      return c.json(await sendStatement(client.id, auth(c).user.id));
+    } catch (e) {
+      return mailHttp(e);
+    }
+  })
+  .get("/statements/targets", requirePermission("accounting.view"), async (c) => c.json(await statementTargets()))
+  .post("/statements/send", requirePermission("accounting.manage"), async (c) => {
+    const p = await body(c, z.object({ clientIds: z.array(zUuid).min(1).max(1000).optional() }));
+    if (!rateLimit(`statements-mail:${auth(c).user.id}`, 5, 10 * 60_000).ok) throw new HTTPException(429, { message: "rate_limited" });
+    const results = await sendStatements(p.clientIds ?? null, auth(c).user.id);
+    return c.json({ results, sent: results.filter((r) => r.status === "sent").length });
+  })
+
   /** A payment received (all or part of the balance): accounting.manage. */
   .post("/invoices/:iid/payments", requirePermission("accounting.manage"), async (c) => {
     const a = auth(c);
@@ -912,6 +945,12 @@ export const crmRoutes = new Hono<AppEnv>()
  * paid in the source), the balance, the status (voided, paid, partial,
  * overdue, due), QuickBooks, sent by email; their lines on demand.
  */
+/** Email errors as API errors (invoice_mail_no_email…). */
+function mailHttp(e: unknown): never {
+  if (e instanceof InvoiceMailError) throw new HTTPException(e.code === "mail_failed" ? 502 : 409, { message: `invoice_mail_${e.code}` });
+  throw e;
+}
+
 async function invoiceViews(rows: (typeof schema.clientInvoices.$inferSelect)[], names: Map<string, string>, opts: { lines: boolean }) {
   const d = db();
   const ids = rows.map((r) => r.id);

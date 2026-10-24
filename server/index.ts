@@ -16,6 +16,7 @@ import { autoTickets } from "./lib/sms.ts";
 import { runIntake } from "./lib/mailIntake.ts";
 import { workflowTick } from "./lib/workflows.ts";
 import { pipelineTick } from "./lib/pipeline.ts";
+import { reminderTick } from "./lib/invoiceMail.ts";
 
 await initDb();
 await seed();
@@ -59,6 +60,7 @@ setInterval(() => void runIntake().catch((e) => console.warn("[mail-intake] pass
 setInterval(() => void workflowTick().catch((e) => console.warn("[workflow] tick:", e instanceof Error ? e.message : e)), 60_000).unref();
 // Pipeline: each morning (at the chosen time, work days) everyone's day is planned and texted
 setInterval(() => void pipelineTick().catch((e) => console.warn("[pipeline] tick:", e instanceof Error ? e.message : e)), 60_000).unref();
+setInterval(() => void reminderTick().catch((e) => console.warn("[invoice reminders] tick:", e instanceof Error ? e.message : e)), 60_000).unref();
 
 // Alerts before calendar events
 setInterval(() => void sendReminders().catch((e) => console.warn("[planning] reminders:", e instanceof Error ? e.message : e)), 60_000).unref();

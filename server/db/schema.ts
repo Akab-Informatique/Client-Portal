@@ -2364,3 +2364,20 @@ export const cleanupLog = pgTable(
   },
   (t) => [index("cleanup_log_run_idx").on(t.runId), index("cleanup_log_kind_idx").on(t.kind, t.createdAt)],
 );
+
+/** The past due reminders sent: one per invoice and level (5, 15, 20, 30, 60, 90 days), never twice */
+export const invoiceReminders = pgTable(
+  "invoice_reminders",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    invoiceId: uuid("invoice_id")
+      .notNull()
+      .references(() => clientInvoices.id, { onDelete: "cascade" }),
+    level: integer("level").notNull(),
+    toEmail: text("to_email"),
+    /** null: being sent; true: sent; false: it failed (not tried again at this level) */
+    ok: boolean("ok"),
+    sentAt: timestamp("sent_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [uniqueIndex("invoice_reminders_invoice_level_idx").on(t.invoiceId, t.level)],
+);

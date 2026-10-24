@@ -25,6 +25,7 @@ import { classRoutes } from "./routes/classes.ts";
 import { ticketSetupRoutes } from "./routes/ticketSetup.ts";
 import { mailIntakeAdminRoutes, mailIntakeRoutes } from "./routes/mailIntake.ts";
 import { emailRoutes } from "./routes/email.ts";
+import { billingMailRoutes } from "./routes/billingMail.ts";
 import { boardRoutes, messageRoutes } from "./routes/messages.ts";
 import { dashboardRoutes } from "./routes/dashboard.ts";
 import { dashboardsRoutes } from "./routes/dashboards.ts";
@@ -122,6 +123,7 @@ export function createApp() {
   api.route("/crm", crmRoutes);
   // Stripe calls this one (signed, no session)
   api.route("/stripe/hook", stripeHookRoutes);
+  api.route("/billing/email", billingMailRoutes);
   api.route("/billing", billingRoutes);
   api.route("/billables", billablesRoutes);
   api.route("/time", timeRoutes);
