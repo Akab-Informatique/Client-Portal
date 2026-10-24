@@ -12,7 +12,7 @@ import { cn } from "@/lib/utils";
 import { Card } from "./BillingSection";
 import { TemplateEditor } from "./EmailSection";
 
-type Settings = { autoSend: boolean; remindersAuto: boolean; remindersFrom: string | null; levels: number[]; levelsAvailable: number[]; lastRun: string | null };
+type Settings = { autoSend: boolean; remindersAuto: boolean; remindersFrom: string | null; fromEmail: string; fromName: string | null; levels: number[]; levelsAvailable: number[]; lastRun: string | null };
 type Summary = { key: string; variables: string[]; edited: { fr: boolean; en: boolean } };
 const KEY = ["admin", "billing", "email"];
 const ORDER = ["invoiceSent", "invoicePastDue", "invoiceReminder5", "invoiceReminder15", "invoiceReminder20", "invoiceReminder30", "invoiceReminder60", "invoiceReminder90", "accountStatement"];
@@ -35,7 +35,7 @@ export function BillingMailTab() {
   const settings = useQuery({ queryKey: [...KEY, "settings"], queryFn: () => api.get<Settings>("/billing/email/settings") });
   const templates = useQuery({ queryKey: [...KEY, "templates"], queryFn: () => api.get<Summary[]>("/billing/email/templates") });
   const save = useMutation({
-    mutationFn: (p: Partial<Pick<Settings, "autoSend" | "remindersAuto" | "levels" | "remindersFrom">>) => api.put<Settings>("/billing/email/settings", p),
+    mutationFn: (p: Partial<Pick<Settings, "autoSend" | "remindersAuto" | "levels" | "remindersFrom" | "fromEmail" | "fromName">>) => api.put<Settings>("/billing/email/settings", p),
     onSuccess: (s) => {
       qc.setQueryData([...KEY, "settings"], s);
       toast.success(t("billing.mail.saved"));
@@ -52,6 +52,17 @@ export function BillingMailTab() {
           <Loader2 className="size-4 animate-spin text-muted-foreground" />
         ) : (
           <div className="space-y-4">
+            <div className="grid max-w-2xl gap-3 sm:grid-cols-2">
+              <label className="block space-y-1 text-xs">
+                <span className="text-muted-foreground">{t("billing.mail.fromEmail")}</span>
+                <Input key={s.fromEmail} type="email" defaultValue={s.fromEmail} onBlur={(e) => e.target.value.trim() && e.target.value.trim() !== s.fromEmail && save.mutate({ fromEmail: e.target.value.trim() })} />
+              </label>
+              <label className="block space-y-1 text-xs">
+                <span className="text-muted-foreground">{t("billing.mail.fromName")}</span>
+                <Input key={s.fromName ?? ""} defaultValue={s.fromName ?? ""} maxLength={80} placeholder="AKAB Informatique" onBlur={(e) => (e.target.value.trim() || null) !== s.fromName && save.mutate({ fromName: e.target.value.trim() || null })} />
+              </label>
+              <p className="text-[10px] leading-snug text-muted-foreground sm:col-span-2">{t("billing.mail.fromText2")}</p>
+            </div>
             <label className="flex items-start gap-3 text-sm">
               <Switch checked={s.autoSend} disabled={save.isPending} onCheckedChange={(v) => save.mutate({ autoSend: v })} />
               <span>

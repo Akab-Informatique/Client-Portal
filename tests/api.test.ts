@@ -7109,6 +7109,8 @@ describe("contracts: services when made, charges, activity, stop instead of dele
     devOutbox.length = 0;
     expect((await admin.post(`/api/crm/clients/${a!.id}/statement/send`, {})).json).toMatchObject({ to: "compta@a.example", count: 2, totalDueCents: 150000 });
     expect(devOutbox[0]!.subject).toContain("Relevé de compte");
+    // from the accounting address, answered there (not the address of the mail server settings)
+    expect(devOutbox[0]).toMatchObject({ from: { address: "comptabilite@akab.ca" }, replyTo: "comptabilite@akab.ca" });
     expect(devOutbox[0]!.text).toContain("R-1");
     expect(devOutbox[0]!.text).toContain("R-2");
     // a client with no email: told, nothing sent; a client owing nothing: nothing to send

@@ -3,7 +3,7 @@ import { db, schema } from "../db/index.ts";
 import { audit } from "./audit.ts";
 import { billingSettings } from "./billing.ts";
 import { reminderKey, renderTemplate, REMINDER_LEVELS, type Locale, type TemplateKey } from "./emailTemplates.ts";
-import { mailConfigured, sendMail } from "./mail.ts";
+import { mailConfigured, sendMail, smtpSettings } from "./mail.ts";
 import { config } from "../config.ts";
 
 /**
@@ -28,10 +28,14 @@ export type MailSettings = {
   levels: number[];
   /** Automatic reminders only for invoices dated on or after this day (YYYY-MM-DD); none: every invoice */
   remindersFrom: string | null;
+  /** The address every invoicing email is sent from, and answered to */
+  fromEmail: string;
+  /** Its name (none: the mail server's sender name) */
+  fromName: string | null;
   /** The day of the last automatic pass (YYYY-MM-DD) */
   lastRun: string | null;
 };
-export const DEFAULT_MAIL_SETTINGS: MailSettings = { autoSend: false, remindersAuto: false, levels: [...REMINDER_LEVELS], remindersFrom: "2026-11-01", lastRun: null };
+export const DEFAULT_MAIL_SETTINGS: MailSettings = { autoSend: false, remindersAuto: false, levels: [...REMINDER_LEVELS], remindersFrom: "2026-11-01", fromEmail: "comptabilite@akab.ca", fromName: null, lastRun: null };
 
 export async function mailSettings(): Promise<MailSettings> {
   const [row] = await db().select().from(schema.integrations).where(eq(schema.integrations.provider, PROVIDER));
@@ -87,13 +91,20 @@ export async function unpaidInvoices(clientIds?: string[]): Promise<Owed[]> {
 const recipientOf = (c: Client) => (c.invoice?.billingEmail || c.email || "").trim() || null;
 const languageOf = async (): Promise<Locale> => ((await billingSettings()).template.language === "en" ? "en" : "fr");
 
+/** Who invoicing emails come from (and are answered by): the accounting address, through the same mail server. */
+export async function invoiceSender(): Promise<{ from: { name: string; address: string }; replyTo: string }> {
+  const s = await mailSettings();
+  const smtp = await smtpSettings();
+  return { from: { name: s.fromName || smtp.fromName || "AKAB Informatique", address: s.fromEmail }, replyTo: s.fromEmail };
+}
+
 async function deliver(key: TemplateKey, c: Client, vars: Record<string, string>, locale: Locale) {
   const to = recipientOf(c);
   if (!to) throw new InvoiceMailError("no_email");
   // without a mail server production sends nothing (development keeps the message in memory)
   if (config.production && !(await mailConfigured())) throw new InvoiceMailError("mail_not_configured");
   const r = await renderTemplate(key, locale, vars);
-  if (!(await sendMail({ to, ...r }))) throw new InvoiceMailError("mail_failed");
+  if (!(await sendMail({ to, ...r, ...(await invoiceSender()) }))) throw new InvoiceMailError("mail_failed");
   return to;
 }
 

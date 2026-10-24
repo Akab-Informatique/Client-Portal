@@ -5,7 +5,7 @@ import { z } from "zod";
 import { db, schema } from "../db/index.ts";
 import { auth, type AppEnv } from "../lib/auth.ts";
 import { audit } from "../lib/audit.ts";
-import { sendMail } from "../lib/mail.ts";
+import { sendMail, type Mail } from "../lib/mail.ts";
 import { render, TEMPLATES, templateDef, templateText, type Locale, type TemplateDef } from "../lib/emailTemplates.ts";
 import { rateLimit } from "../lib/http.ts";
 import { body } from "../lib/validate.ts";
@@ -21,7 +21,7 @@ const zTemplateText = z.object({
  * The email template routes (list, read, save, restore, preview, test). Admin › Email gets them all; Admin › Facturation
  * gets only the invoicing ones (`allowed`), under its own right.
  */
-export function templateRoutes(allowed: (key: string) => boolean = () => true) {
+export function templateRoutes(allowed: (key: string) => boolean = () => true, sender?: () => Promise<Partial<Mail>>) {
   const getDef = (key: string): TemplateDef => {
     const def = templateDef(key);
     if (!def || !allowed(def.key)) throw new HTTPException(404, { message: "not_found" });
@@ -90,7 +90,7 @@ export function templateRoutes(allowed: (key: string) => boolean = () => true) {
     const locale = zLocale.parse(c.req.param("locale"));
     const p = await body(c, zTemplateText);
     const r = render(def, locale, p, def.sample[locale]);
-    const ok = await sendMail({ to: a.user.email, subject: `[TEST] ${r.subject}`, text: r.text, html: r.html });
+    const ok = await sendMail({ to: a.user.email, subject: `[TEST] ${r.subject}`, text: r.text, html: r.html, ...(sender ? await sender() : {}) });
     return c.json(ok ? { ok: true, to: a.user.email } : { ok: false, error: "send" });
   });
 }
