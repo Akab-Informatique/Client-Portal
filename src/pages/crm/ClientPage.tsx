@@ -443,7 +443,7 @@ const inFilter = (v: CrmInvoice, f: InvoiceFilter) => (f === "all" ? true : f ==
 function InvoicesTab({ client }: { client: CrmDetail }) {
   const { t, i18n } = useTranslation();
   const [withChildren, setWithChildren] = useState(false);
-  // what is unpaid first, by due day
+  // what is unpaid first
   const [filter, setFilter] = useState<InvoiceFilter>("unpaid");
   const [statement, setStatement] = useState(false);
   const [open, setOpen] = useState<string | null>(null);
@@ -452,8 +452,9 @@ function InvoicesTab({ client }: { client: CrmDetail }) {
     queryFn: () => api.get<CrmInvoices>(`/crm/clients/${client.id}/invoices${withChildren ? "?children=1" : ""}`),
   });
   const m = (c: number) => money(c, i18n.language);
-  const byDue = (a: CrmInvoice, b: CrmInvoice) => (a.dueOn ?? "9999-99-99").localeCompare(b.dueOn ?? "9999-99-99") || a.number.localeCompare(b.number, undefined, { numeric: true });
-  const items = (data?.items ?? []).filter((v) => inFilter(v, filter)).sort(filter === "unpaid" || filter === "overdue" ? byDue : () => 0);
+  // newest invoice number on top
+  const newest = (a: CrmInvoice, b: CrmInvoice) => b.number.localeCompare(a.number, undefined, { numeric: true });
+  const items = (data?.items ?? []).filter((v) => inFilter(v, filter)).sort(newest);
   return (
     <div className="space-y-4">
       {data && (

@@ -139,18 +139,26 @@ export function AllInvoices() {
       },
       { replace: true },
     );
-  // the column clicked, and which way (a second click turns it round, a third gives the usual order back)
+  // the usual order is the invoice number, newest on top; a column clicked sorts by it (a second click turns it round, a third gives the usual order back)
   const sortParam = (SORTS as readonly string[]).includes(params.get("isort") ?? "") ? (params.get("isort") as Sort) : null;
-  const sort: Sort = sortParam ?? "due";
-  const desc = sortParam !== null && params.get("idir") === "desc";
+  const sort: Sort = sortParam ?? "number";
+  const desc = sortParam === null ? true : params.get("idir") === "desc";
   const clickSort = (key: Sort) =>
     setParams(
       (p) => {
-        if (sortParam !== key) {
+        if (sort !== key) {
           p.set("isort", key);
           p.delete("idir");
-        } else if (!desc) p.set("idir", "desc");
-        else {
+        } else if (!desc) {
+          // ascending: the invoice number goes back to the usual order (newest first), another column turns round
+          if (key === "number") p.delete("isort");
+          else p.set("idir", "desc");
+          if (key === "number") p.delete("idir");
+        } else if (sortParam === null) {
+          // the usual order: the number the other way round
+          p.set("isort", "number");
+          p.delete("idir");
+        } else {
           p.delete("isort");
           p.delete("idir");
         }
