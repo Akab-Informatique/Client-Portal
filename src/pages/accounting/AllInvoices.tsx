@@ -3,13 +3,14 @@ import { Link, useSearchParams } from "react-router-dom";
 import { useTranslation } from "react-i18next";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
-import { AlertTriangle, CircleCheck, CircleDashed, Clock, FileX, Loader2, Mail, MailX, RotateCcw, Search, type LucideIcon } from "lucide-react";
+import { AlertTriangle, ArrowDown, ArrowUp, ArrowUpDown, CircleCheck, CircleDashed, Clock, FileX, Loader2, Mail, MailX, RotateCcw, Search, type LucideIcon } from "lucide-react";
 import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { api } from "@/lib/api";
 import { useCan } from "@/lib/session";
 import { cn } from "@/lib/utils";
+import { Pager, pageSizeOf } from "@/components/Pager";
 import { money } from "@/pages/crm/shared";
 import { shortDate } from "@/pages/tickets/shared";
 
@@ -37,6 +38,22 @@ type List = {
   summary: { count: number; totalCents: number; paidCents: number; dueCents: number; overdueCents: number; overdueCount: number };
   clients: { id: string; name: string }[];
   items: Invoice[];
+};
+
+/** The columns that sort when their name is clicked */
+const SORTS = ["number", "client", "issued", "due", "total", "balance", "status", "email", "qb"] as const;
+type Sort = (typeof SORTS)[number];
+const STATUS_ORDER: Record<Status, number> = { overdue: 0, due: 1, partial: 2, paid: 3, voided: 4 };
+const SORT_OF: Record<Sort, (v: Invoice) => string | number> = {
+  number: (v) => v.number,
+  client: (v) => v.company.toLowerCase(),
+  issued: (v) => v.issuedOn,
+  due: (v) => v.dueOn ?? "9999-99-99",
+  total: (v) => v.totalCents,
+  balance: (v) => v.balanceCents,
+  status: (v) => STATUS_ORDER[v.status],
+  email: (v) => (v.emailedAt ? 1 : 0),
+  qb: (v) => (v.quickbooks?.error ? 2 : v.quickbooks?.id ? 1 : 0),
 };
 
 const STYLE: Record<Status, string> = {
@@ -67,6 +84,7 @@ export function AllInvoices() {
     setParams(
       (p) => {
         for (const [k, v] of Object.entries(patch)) (v ? p.set(KEYS[k as Filter], v) : p.delete(KEYS[k as Filter]));
+        p.delete("ipage");
         return p;
       },
       { replace: true },
@@ -92,6 +110,55 @@ export function AllInvoices() {
     },
     onError: () => toast.error(t("common.error")),
   });
+  // pages of 10 (25, 50 or 100 from the foot of the list), kept in the address
+  const size = pageSizeOf(params.get("isize"));
+  const page = Math.max(1, Number(params.get("ipage")) || 1);
+  const setPaging = (patch: { page?: number; size?: number }) =>
+    setParams(
+      (p) => {
+        if (patch.size !== undefined) {
+          if (patch.size === 10) p.delete("isize");
+          else p.set("isize", String(patch.size));
+          p.delete("ipage");
+        }
+        if (patch.page !== undefined) {
+          if (patch.page <= 1) p.delete("ipage");
+          else p.set("ipage", String(patch.page));
+        }
+        return p;
+      },
+      { replace: true },
+    );
+  // the column clicked, and which way (a second click turns it round, a third gives the usual order back)
+  const sort = (SORTS as readonly string[]).includes(params.get("isort") ?? "") ? (params.get("isort") as Sort) : null;
+  const desc = params.get("idir") === "desc";
+  const clickSort = (key: Sort) =>
+    setParams(
+      (p) => {
+        if (sort !== key) {
+          p.set("isort", key);
+          p.delete("idir");
+        } else if (!desc) p.set("idir", "desc");
+        else {
+          p.delete("isort");
+          p.delete("idir");
+        }
+        p.delete("ipage");
+        return p;
+      },
+      { replace: true },
+    );
+  const sorted = data && sort ? [...data.items].sort((x, y) => { const a = SORT_OF[sort](x), b = SORT_OF[sort](y); const r = typeof a === "number" && typeof b === "number" ? a - b : String(a).localeCompare(String(b), undefined, { numeric: true }); return (desc ? -r : r) || x.number.localeCompare(y.number, undefined, { numeric: true }); }) : (data?.items ?? []);
+  const pages = Math.max(1, Math.ceil(sorted.length / size));
+  const shown = sorted.slice((Math.min(page, pages) - 1) * size, Math.min(page, pages) * size);
+  const Th = ({ id, label, align = "left", className }: { id: Sort; label: string; align?: "left" | "right" | "center"; className?: string }) => (
+    <th aria-sort={sort === id ? (desc ? "descending" : "ascending") : "none"} className={cn("px-3 py-2.5 font-medium", align === "right" ? "text-right" : align === "center" ? "text-center" : "text-left", className)}>
+      <button type="button" onClick={() => clickSort(id)} className={cn("inline-flex items-center gap-1 uppercase tracking-wide hover:text-foreground", sort === id && "text-foreground")}>
+        {label}
+        {sort === id ? desc ? <ArrowDown className="size-3" /> : <ArrowUp className="size-3" /> : <ArrowUpDown className="size-3 opacity-40" />}
+      </button>
+    </th>
+  );
   const manage = can("accounting.manage");
   const active = (Object.keys(KEYS) as Filter[]).some((k) => get(k));
 
@@ -230,19 +297,19 @@ export function AllInvoices() {
           <table className="w-full min-w-[56rem] text-sm">
             <thead className="text-xs uppercase tracking-wide text-muted-foreground">
               <tr className="border-b">
-                <th className="px-4 py-2.5 text-left font-medium">{t("allInvoices.col.number")}</th>
-                <th className="px-3 py-2.5 text-left font-medium">{t("allInvoices.client")}</th>
-                <th className="px-3 py-2.5 text-left font-medium">{t("allInvoices.col.issued")}</th>
-                <th className="px-3 py-2.5 text-left font-medium">{t("allInvoices.col.due")}</th>
-                <th className="px-3 py-2.5 text-right font-medium">{t("allInvoices.col.total")}</th>
-                <th className="px-3 py-2.5 text-right font-medium">{t("allInvoices.col.balance")}</th>
-                <th className="px-3 py-2.5 text-left font-medium">{t("allInvoices.status")}</th>
-                <th className="px-3 py-2.5 text-center font-medium">{t("allInvoices.col.email")}</th>
-                <th className="px-4 py-2.5 text-center font-medium">QB</th>
+                <Th id="number" label={t("allInvoices.col.number")} className="px-4" />
+                <Th id="client" label={t("allInvoices.client")} />
+                <Th id="issued" label={t("allInvoices.col.issued")} />
+                <Th id="due" label={t("allInvoices.col.due")} />
+                <Th id="total" label={t("allInvoices.col.total")} align="right" />
+                <Th id="balance" label={t("allInvoices.col.balance")} align="right" />
+                <Th id="status" label={t("allInvoices.status")} />
+                <Th id="email" label={t("allInvoices.col.email")} align="center" />
+                <Th id="qb" label="QB" align="center" className="px-4" />
               </tr>
             </thead>
             <tbody className="divide-y divide-border/60">
-              {data.items.map((v) => {
+              {shown.map((v) => {
                 const Icon = ICON[v.status];
                 return (
                   <tr key={v.id} className="transition-colors hover:bg-foreground/[0.03]">
@@ -309,6 +376,7 @@ export function AllInvoices() {
               })}
             </tbody>
           </table>
+          <Pager total={sorted.length} page={page} size={size} onPage={(n) => setPaging({ page: n })} onSize={(n) => setPaging({ size: n })} />
           {data.items.length >= 2000 && <p className="border-t px-4 py-2 text-center text-xs text-muted-foreground">{t("allInvoices.capped")}</p>}
         </div>
       )}
