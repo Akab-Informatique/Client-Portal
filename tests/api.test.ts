@@ -7190,4 +7190,31 @@ describe("contracts: services when made, charges, activity, stop instead of dele
     await runReminders();
     expect(devOutbox.filter((m) => m.text.includes("R-1"))).toHaveLength(0);
   });
+
+  it("temporary clean-up: every invoice marked as sent, on its own date, nothing emailed", async () => {
+    const admin = await signIn("admin@akab.local");
+    const tech = await signIn("tech@akab.local");
+    const { devOutbox } = await import("../server/lib/mail.ts");
+    const [client] = await db().insert(schema.clients).values({ name: "Envoyées inc.", autotaskId: 987654340, email: "e@e.example" }).returning();
+    const [a, b, gone] = await db()
+      .insert(schema.clientInvoices)
+      .values([
+        { clientId: client!.id, number: "ENV-1", issuedOn: "2026-09-03", dueOn: "2026-09-18", totalCents: 1000, source: "portal" },
+        { clientId: client!.id, number: "ENV-2", issuedOn: "2026-10-04", dueOn: "2026-10-19", totalCents: 1000, source: "portal", emailedAt: new Date("2026-10-05T15:00:00Z") },
+        { clientId: client!.id, number: "ENV-3", issuedOn: "2026-10-04", dueOn: "2026-10-19", totalCents: 1000, source: "portal", voided: true },
+      ])
+      .returning();
+    expect((await tech.post("/api/billing/cleanup/invoices-sent", {})).status).toBe(403);
+    expect((await admin.get("/api/billing/cleanup")).json.unsentInvoices).toBeGreaterThanOrEqual(1);
+    devOutbox.length = 0;
+    expect((await admin.post("/api/billing/cleanup/invoices-sent", {})).json.changed).toBeGreaterThanOrEqual(1);
+    const rows = await db().select().from(schema.clientInvoices).where(eq(schema.clientInvoices.clientId, client!.id));
+    const by = (id: string) => rows.find((r) => r.id === id)!;
+    // sent on the invoice date (noon, Québec); one already sent keeps its own time; a voided one is left alone
+    expect(by(a!.id).emailedAt?.toISOString()).toBe("2026-09-03T16:00:00.000Z");
+    expect(by(b!.id).emailedAt?.toISOString()).toBe("2026-10-05T15:00:00.000Z");
+    expect(by(gone!.id).emailedAt).toBeNull();
+    expect(devOutbox).toHaveLength(0);
+    expect((await admin.get("/api/billing/cleanup")).json.unsentInvoices).toBe(0);
+  });
 });

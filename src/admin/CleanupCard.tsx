@@ -9,7 +9,7 @@ import { useConfirm } from "@/components/ConfirmDialog";
 import { Card } from "./BillingSection";
 import { CleanupLog } from "./CleanupLog";
 
-type Counts = { contractLines: number; timesheets: number; expenses: number; keptLines: number; keptRecords: number };
+type Counts = { contractLines: number; timesheets: number; expenses: number; keptLines: number; keptRecords: number; unsentInvoices: number };
 
 /** Temporary: tidy the approval pages without touching what people entered. */
 export function CleanupCard() {
@@ -30,6 +30,11 @@ export function CleanupCard() {
   const approvals = useMutation({
     mutationFn: () => api.post<{ timesheets: number; expenses: number }>("/billing/cleanup/approvals"),
     onSuccess: (r) => (toast.success(t("billing.cleanup.approvalsDone", { sheets: r.timesheets, expenses: r.expenses })), done()),
+    onError: () => toast.error(t("billing.cleanup.failed")),
+  });
+  const sent = useMutation({
+    mutationFn: () => api.post<{ changed: number }>("/billing/cleanup/invoices-sent"),
+    onSuccess: (r) => (toast.success(t("billing.cleanup.sentDone", { count: r.changed })), done(), void qc.invalidateQueries({ queryKey: ["crm"] })),
     onError: () => toast.error(t("billing.cleanup.failed")),
   });
   const purge = useMutation({
@@ -55,6 +60,13 @@ export function CleanupCard() {
           onClick={() => void confirm({ title: t("billing.cleanup.approvalsConfirm"), description: t("billing.cleanup.approvalsHint"), destructive: true }).then((ok) => ok && approvals.mutate())}
         >
           {approvals.isPending ? <Loader2 className="size-4 animate-spin" /> : <Eraser className="size-4" />} {t("billing.cleanup.approvals", { sheets: c?.timesheets ?? 0, expenses: c?.expenses ?? 0 })}
+        </Button>
+        <Button
+          variant="outline"
+          disabled={sent.isPending || !c?.unsentInvoices}
+          onClick={() => void confirm({ title: t("billing.cleanup.sentConfirm"), description: t("billing.cleanup.sentHint"), destructive: true }).then((ok) => ok && sent.mutate())}
+        >
+          {sent.isPending ? <Loader2 className="size-4 animate-spin" /> : <Eraser className="size-4" />} {t("billing.cleanup.sent", { count: c?.unsentInvoices ?? 0 })}
         </Button>
       </div>
       <div className="flex flex-wrap items-center gap-3 border-t pt-3 text-xs text-muted-foreground">

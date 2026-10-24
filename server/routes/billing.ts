@@ -1,6 +1,6 @@
 import { Hono, type Context } from "hono";
 import { HTTPException } from "hono/http-exception";
-import { and, asc, count, desc, eq, inArray, ne } from "drizzle-orm";
+import { and, asc, count, desc, eq, inArray, isNull, ne, sql } from "drizzle-orm";
 import { z } from "zod";
 import { db, schema } from "../db/index.ts";
 import { auth, requirePermission, requireStaff, type AppEnv } from "../lib/auth.ts";
@@ -162,7 +162,8 @@ export const billingRoutes = new Hono<AppEnv>()
     const [ex] = await d.select({ n: count() }).from(schema.expenses).where(inArray(schema.expenses.status, ["submitted", "approved", "rejected"]));
     const [kept] = await d.select({ n: count() }).from(schema.billingItems).where(and(eq(schema.billingItems.status, "excluded"), eq(schema.billingItems.excludedReason, "aside")));
     const [rec] = await d.select({ n: count() }).from(schema.cleanupLog);
-    return c.json({ contractLines: lines?.n ?? 0, timesheets: ts?.n ?? 0, expenses: ex?.n ?? 0, keptLines: kept?.n ?? 0, keptRecords: rec?.n ?? 0 });
+    const [unsent] = await d.select({ n: count() }).from(schema.clientInvoices).where(and(eq(schema.clientInvoices.voided, false), isNull(schema.clientInvoices.emailedAt)));
+    return c.json({ contractLines: lines?.n ?? 0, timesheets: ts?.n ?? 0, expenses: ex?.n ?? 0, keptLines: kept?.n ?? 0, keptRecords: rec?.n ?? 0, unsentInvoices: unsent?.n ?? 0 });
   })
   // recurring-contract lines still to approve or approved (not invoiced) are set aside: excluded, never brought back by an import
   .post("/cleanup/contracts", requirePermission("admin.billing"), async (c) => {
@@ -173,6 +174,18 @@ export const billingRoutes = new Hono<AppEnv>()
       .where(and(eq(schema.billingItems.kind, "contract"), inArray(schema.billingItems.status, ["pending", "approved"])))
       .returning({ id: schema.billingItems.id });
     await audit(a.realUser.id, "billing.cleanup_contract_lines", null, { count: rows.length });
+    return c.json({ changed: rows.length });
+  })
+  // every invoice not marked as sent yet is marked sent, on its own invoice date (nothing is emailed)
+  .post("/cleanup/invoices-sent", requirePermission("admin.billing"), async (c) => {
+    const a = auth(c);
+    const v = schema.clientInvoices;
+    const rows = await db()
+      .update(v)
+      .set({ emailedAt: sql`(${v.issuedOn}::date + time '12:00')::timestamp at time zone 'America/Toronto'`, updatedAt: new Date() })
+      .where(and(eq(v.voided, false), isNull(v.emailedAt)))
+      .returning({ id: v.id });
+    await audit(a.realUser.id, "billing.cleanup_invoices_sent", null, { count: rows.length });
     return c.json({ changed: rows.length });
   })
   // every timesheet and expense waiting, approved or refused (not the paid ones) goes back to its owner as a draft; their data stays,
