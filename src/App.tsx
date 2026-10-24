@@ -6,6 +6,7 @@ import { Loader2, RefreshCw, ShieldAlert } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { LoginPage } from "@/pages/LoginPage";
 import { PaymentReceivedPage } from "@/pages/PaymentReceivedPage";
+import { LegalPage } from "@/pages/LegalPage";
 import { LogoMark } from "@/components/brand/Logo";
 import { SessionProvider, useAuthState, useCan, useUnauthorizedListener } from "@/lib/session";
 import type { Me } from "@/lib/types";
@@ -124,6 +125,9 @@ function Root() {
   const { data, isLoading, isError, refetch, isFetching } = useAuthState();
   // where Stripe sends a customer after a payment link: public, no sign-in
   if (window.location.pathname === "/paiement-recu") return <PaymentReceivedPage />;
+  // the public privacy policy and terms of use (linked from QuickBooks and emails): no sign-in
+  if (window.location.pathname === "/privacy") return <LegalPage kind="privacy" />;
+  if (window.location.pathname === "/terms") return <LegalPage kind="terms" />;
   // the phone's page for a sign-in request (opened from the notification): no session, the phone proves itself
   if (window.location.pathname === "/approve") return <ApprovePage />;
   if (isError && !data) return <ServerDown onRetry={() => void refetch()} retrying={isFetching} />;

@@ -1,0 +1,98 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>QuickBooks setup — AKAB Portal</title>
+<style>
+  :root { --ink:#0a0a0b; --paper:#f4f4f1; --gold:#f59410; --line:#d9d9d2; --muted:#5b5b57; }
+  * { box-sizing: border-box; }
+  body { margin:0; background:var(--paper); color:var(--ink); font:15px/1.55 "Instrument Sans", system-ui, sans-serif; }
+  main { max-width: 780px; margin: 0 auto; padding: 32px 24px 56px; }
+  header { border-bottom: 3px solid var(--gold); padding-bottom: 12px; margin-bottom: 8px; display:flex; justify-content:space-between; align-items:flex-end; gap:12px; }
+  h1 { font: 700 26px/1.15 "Bricolage Grotesque", system-ui, sans-serif; margin:0; }
+  .tag { font-size:12px; color:var(--muted); }
+  h2 { font: 700 18px/1.2 "Bricolage Grotesque", system-ui, sans-serif; margin: 28px 0 8px; padding-top: 4px; }
+  h2 span { display:inline-block; min-width:26px; height:26px; line-height:26px; text-align:center; border-radius:50%; background:var(--ink); color:#ffd23a; font-size:14px; margin-right:8px; }
+  ul, ol { margin: 6px 0 6px 20px; padding:0; }
+  li { margin: 3px 0; }
+  code { background:#e8e8e2; padding:1px 5px; border-radius:4px; font-size:13px; word-break: break-all; }
+  .box { border:1px solid var(--line); border-left:4px solid var(--gold); background:#fff; padding:10px 14px; border-radius:6px; margin:10px 0; }
+  .check li { list-style:none; margin-left:-20px; }
+  .check li::before { content:"☐"; margin-right:8px; }
+  .muted { color:var(--muted); font-size:13px; }
+  table { border-collapse: collapse; width:100%; margin:8px 0; font-size:14px; }
+  td, th { border:1px solid var(--line); padding:6px 9px; text-align:left; vertical-align:top; }
+  th { background:#ebebe5; }
+  h2, .box, table { break-inside: avoid; }
+  @media print { body { background:#fff; font-size:12.5px; } main { padding:0; max-width:none; } .noprint { display:none; } }
+  .noprint { margin: 0 0 18px; }
+  button { font:inherit; padding:8px 16px; border:0; border-radius:8px; background:var(--ink); color:#ffd23a; font-weight:600; cursor:pointer; }
+</style>
+</head>
+<body>
+<main>
+  <div class="noprint"><button onclick="window.print()">Print or save as PDF</button></div>
+  <header>
+    <h1>Linking QuickBooks Online<br>to the AKAB Portal</h1>
+    <span class="tag">Admin › Intégrations › QuickBooks</span>
+  </header>
+
+  <h2><span>1</span>Before you start</h2>
+  <ul class="check">
+    <li>You are signed in as a <b>master admin</b> (needs the rights <code>admin.integrations</code> and <code>admin.billing</code>).</li>
+    <li><code>PUBLIC_URL</code> in the server's <code>.env</code> is your real HTTPS address, for example <code>https://portail.akab.ca</code>.</li>
+    <li>Do a first pass in <b>Sandbox</b>. Switching between sandbox and production resets the connection.</li>
+  </ul>
+
+  <h2><span>2</span>Create the app at Intuit</h2>
+  <ol>
+    <li>Go to <b>developer.intuit.com</b> and sign in (create a developer account if needed).</li>
+    <li><b>Create an app</b> for QuickBooks Online with the <b>Accounting</b> scope. This is the only scope the portal asks for.</li>
+    <li>On the app's <b>Keys &amp; OAuth</b> page, copy the <b>Client ID</b> and <b>Client Secret</b>. Sandbox and production have separate keys.</li>
+    <li>Under <b>Redirect URIs</b>, add exactly:<br><code>https://&lt;your-portal&gt;/api/billing/quickbooks/callback</code><br>
+        <span class="muted">The portal shows this address on its QuickBooks page too, so you can copy it from there.</span></li>
+    <li>For production keys, Intuit asks you to complete its app questionnaire first.</li>
+  </ol>
+
+  <h2><span>3</span>Connect in the portal</h2>
+  <ol>
+    <li>Open <b>Admin › Intégrations › QuickBooks</b>.</li>
+    <li>Choose the environment (Sandbox or Production).</li>
+    <li>Paste the Client ID and Client Secret. The secret is stored encrypted and is never shown again.</li>
+    <li>Click <b>Connecter QuickBooks</b>, sign in to Intuit and pick your company.</li>
+    <li>You come back to the portal: <i>"QuickBooks est connecté"</i> with the company number. <b>Connecting turns the sync on.</b></li>
+  </ol>
+
+  <h2><span>4</span>Set it up, in this order</h2>
+  <table>
+    <tr><th style="width:26%">Step</th><th>What to do</th></tr>
+    <tr><td><b>Clients ↔ customers</b></td><td>The portal suggests matches by name or email. Nothing is applied until you review and accept. An unmapped client can be created in QuickBooks instead (refused if the name already exists).</td></tr>
+    <tr><td><b>Chart of accounts</b></td><td>Review the proposed plan, tick what you accept, apply. Matching is by id, then number, then name. QuickBooks-only accounts are added here; portal-only accounts are turned off, never deleted. Then set the default accounts in Admin › Facturation.</td></tr>
+    <tr><td><b>Items and categories</b></td><td>Also proposed first; only what you accept is applied.</td></tr>
+    <tr><td><b>Vendors</b></td><td>Tick only the QuickBooks vendors you want kept in step. A ticked vendor is tied to the portal vendor of the same name, or added if there is none.</td></tr>
+    <tr><td><b>Invoices from QuickBooks</b></td><td>Choose where the first copy starts: from an <b>invoice number</b> or from a <b>date</b>. Check the preview (how many invoices would come). Invoices of clients you have not mapped are skipped.</td></tr>
+    <tr><td><b>Next invoice number</b></td><td>Click <b>Aligner sur QuickBooks</b>. The portal's next number is raised to follow QuickBooks' highest; it is never lowered. It is re-checked before each new invoice.</td></tr>
+    <tr><td><b>Switches</b></td><td>Turn on the parts you want: customers, accounts, vendors, invoices in, invoices out, payments. Leave <b>timesheets</b> and <b>expenses</b> off for now.</td></tr>
+  </table>
+
+  <h2><span>5</span>How it works day to day</h2>
+  <ul>
+    <li><b>Two-way sync</b> every 15 minutes, on <i>Synchroniser maintenant</i>, and right after you edit a client, account or vendor in the portal.</li>
+    <li><b>Who wins:</b> only the portal changed → pushed to QuickBooks. Only QuickBooks changed → pulled into the portal. Both changed → the latest wins.</li>
+    <li><b>Nothing is ever deleted</b>; records are turned off instead.</li>
+    <li><b>Invoices</b> made in the portal are sent to QuickBooks; sending again updates the invoice instead of doubling it. <b>Payments</b> come back from QuickBooks every 15 minutes.</li>
+  </ul>
+
+  <h2><span>6</span>Check that it worked</h2>
+  <ul class="check">
+    <li>The page shows <b>Connecté</b> and the last sync times.</li>
+    <li>The test button answers <i>"QuickBooks répond"</i>.</li>
+    <li>Change a client's phone number in the portal; a minute later it is changed on the customer in QuickBooks.</li>
+    <li>If a sync fails, the error appears on that part's card.</li>
+  </ul>
+
+  <div class="box"><b>Good to know.</b> Menu names in Intuit's console may differ slightly from the above. The portal part follows the current code.</div>
+</main>
+</body>
+</html>

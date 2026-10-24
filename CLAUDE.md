@@ -182,6 +182,10 @@ Sidebar: **Projets** is an entry of the Centre de commande now (still "upcoming"
 - **Off in production**: `config.passboltEnabled` (`PASSBOLT_SPIKE=true` turns it on in production; always on in development and tests). Off = every `/api/passbolt` route answers 403 `passbolt_disabled`, `GET /api/me` says `features.passbolt: false` and the menu entry is hidden (rule `passbolt` in `src/modules/visible.ts`). The portal creates no sample data: the test data is only on the test Passbolt server and in the tests.
 - Not in the spike: adding / editing / sharing entries, client access, folders linked to CRM clients, creating Passbolt users.
 
+## Public legal pages
+
+`/privacy` (privacy policy) and `/terms` (terms of use) — `src/pages/LegalPage.tsx`, texts in `legal.*` (FR + EN), routed in `Root` of `src/App.tsx` before the sign-in check, so no login. Written for QuickBooks (Intuit asks for both URLs: `PUBLIC_URL/privacy` and `PUBLIC_URL/terms`) and mention each integration; change `UPDATED` in the page when the texts change, and keep section 4 (QuickBooks) in step with what the portal really reads and writes. A template, not legal advice.
+
 ## Security rules
 
 - Authorization is enforced in the API, never only in the UI. Use `auth(c)` / `requirePermission`; never trust ids or roles sent by the browser.
