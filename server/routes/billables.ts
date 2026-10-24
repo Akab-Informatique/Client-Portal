@@ -6,7 +6,9 @@ import { audit } from "../lib/audit.ts";
 import { body, zUuid } from "../lib/validate.ts";
 import { BILLABLE_KINDS, billableCounts, billablesState, createInvoice, DraftError, draftInvoice, editBillable, invoiceableClients, listBillables, postInvoices, postPreview, setBillableStatus, syncBillables, unpostInvoice } from "../lib/billables.ts";
 import type { BillableKind } from "../lib/ticketSource.ts";
-import { autoSync } from "../lib/quickbooks.ts";
+import { autoSync, createQbItem, invoiceChoices } from "../lib/quickbooks.ts";
+import { quickbooksSettings } from "../lib/billing.ts";
+import { quickbooksHttp } from "./billing.ts";
 
 /**
  * Accounting › Approbation: the work to bill (accounting.view), approved,
@@ -24,6 +26,8 @@ const zDraft = z.object({
   dueOn: zDay.optional(),
   notes: z.string().trim().max(2000).nullable().optional(),
   poNumber: z.string().trim().max(60).nullable().optional(),
+  qbItemId: z.string().trim().max(40).nullable().optional(),
+  qbTaxCodeId: z.string().trim().max(40).nullable().optional(),
   // the time frame: only its work goes on the invoice
   from: zDay.nullable().optional(),
   to: zDay.nullable().optional(),
@@ -56,6 +60,29 @@ export const billablesRoutes = new Hono<AppEnv>()
   .get("/summary", async (c) => c.json({ state: await billablesState(), counts: await billableCounts(periodOf((k) => c.req.query(k))) }))
 
   /** Refresh the work to bill now (it also comes with each CRM sync). */
+  /** The QuickBooks items and tax codes an invoice can be sent with, and the defaults that fill them in */
+  .get("/quickbooks-codes", async (c) => {
+    const s = await quickbooksSettings();
+    if (!s.refreshToken || !s.realmId) return c.json({ connected: false, items: [], taxCodes: [], defaults: { itemId: null, taxCodeId: null } });
+    try {
+      const o = await invoiceChoices();
+      return c.json({ connected: true, ...o, defaults: { itemId: s.invoice.itemId, taxCodeId: s.invoice.taxCodeId } });
+    } catch {
+      return c.json({ connected: false, items: [], taxCodes: [], defaults: { itemId: s.invoice.itemId, taxCodeId: s.invoice.taxCodeId } });
+    }
+  })
+  /** A new item for invoice lines: a service in the portal and an item in QuickBooks (one that exists is used) */
+  .post("/quickbooks-items", requirePermission("accounting.manage"), async (c) => {
+    const a = auth(c);
+    const p = await body(c, z.object({ name: z.string().trim().min(1).max(100), sku: z.string().trim().max(60).nullable().optional(), priceCents: z.number().int().min(0).max(100_000_000).nullable().optional() }));
+    try {
+      const r = await createQbItem(p);
+      await audit(a.user.id, "billing.quickbooks.item_created", null, { name: r.name, created: r.created });
+      return c.json(r, r.created ? 201 : 200);
+    } catch (e) {
+      return quickbooksHttp(e);
+    }
+  })
   .post("/import", requirePermission("accounting.manage"), async (c) => {
     const a = auth(c);
     const s = await syncBillables();
@@ -92,6 +119,9 @@ export const billablesRoutes = new Hono<AppEnv>()
         unitPriceCents: z.number().int().min(0).max(100_000_000).optional(),
         description: z.string().trim().min(1).max(2000).optional(),
         taxable: z.boolean().optional(),
+        // the QuickBooks item and tax code of this line (null: those of the invoice, then the defaults)
+        qbItemId: z.string().trim().max(40).nullable().optional(),
+        qbTaxCodeId: z.string().trim().max(40).nullable().optional(),
       }),
     );
     const row = await editBillable(id, p);

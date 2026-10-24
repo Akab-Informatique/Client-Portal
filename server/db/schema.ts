@@ -234,6 +234,9 @@ export const clientInvoices = pgTable(
     /** Shown on the invoice (made in the portal) */
     notes: text("notes"),
     poNumber: text("po_number"),
+    /** The QuickBooks item and tax code sent on every line of this invoice (none: the defaults of Admin › Intégrations › QuickBooks) */
+    qbItemId: text("qb_item_id"),
+    qbTaxCodeId: text("qb_tax_code_id"),
     /** Sent to the client by email (marked by hand until the portal emails invoices) */
     emailedAt: timestamp("emailed_at", { withTimezone: true }),
     syncedAt: timestamp("synced_at", { withTimezone: true }),
@@ -283,6 +286,9 @@ export const billingItems = pgTable(
     edited: boolean("edited").notNull().default(false),
     /** Why it is excluded: "billed" = already billed (e.g. in Autotask) */
     excludedReason: text("excluded_reason"),
+    /** The QuickBooks item and tax code of this line (none: those of the invoice, then the defaults) */
+    qbItemId: text("qb_item_id"),
+    qbTaxCodeId: text("qb_tax_code_id"),
     invoiceId: uuid("invoice_id").references(() => clientInvoices.id, { onDelete: "set null" }),
     approvedBy: uuid("approved_by").references(() => users.id, { onDelete: "set null" }),
     approvedAt: timestamp("approved_at", { withTimezone: true }),
@@ -310,6 +316,9 @@ export const invoiceLines = pgTable(
     amountCents: bigint("amount_cents", { mode: "number" }).notNull(),
     taxable: boolean("taxable").notNull().default(true),
     ledgerAccountId: uuid("ledger_account_id").references(() => ledgerAccounts.id, { onDelete: "set null" }),
+    /** Sent to QuickBooks on this line (none: those of the invoice, then the defaults) */
+    qbItemId: text("qb_item_id"),
+    qbTaxCodeId: text("qb_tax_code_id"),
     position: integer("position").notNull().default(0),
   },
   (t) => [index("invoice_lines_invoice_idx").on(t.invoiceId, t.position)],
@@ -1930,6 +1939,8 @@ export const services = pgTable(
     /** The vendor it is bought from, and the vendor's own code for it (ITCloud: its product id); the cost follows the vendor */
     vendorId: uuid("vendor_id").references(() => vendors.id, { onDelete: "set null" }),
     vendorSku: text("vendor_sku"),
+    /** The QuickBooks item made for it (an item created from an invoice line) */
+    quickbooksItemId: text("quickbooks_item_id"),
     createdAt: created(),
     updatedAt: updated(),
   },

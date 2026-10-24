@@ -11,7 +11,7 @@ import { AiTextarea } from "@/components/AiPolish";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
-import { api } from "@/lib/api";
+import { api, ApiError } from "@/lib/api";
 import { useCan } from "@/lib/session";
 import { cn } from "@/lib/utils";
 import { money } from "@/pages/crm/shared";
@@ -244,6 +244,23 @@ function InvoiceEditor({ ready, lang, period }: { ready: Ready; lang: string; pe
   const [left, setLeft] = useState<Set<string>>(new Set());
   const [open, setOpen] = useState<Kind | null>(null);
   const [f, setF] = useState({ issuedOn: today, due: "terms" as "terms" | "date", termsDays: "", dueOn: "", poNumber: "", notes: "" });
+  // the QuickBooks item and tax code sent on every line of this invoice (filled in from the defaults, changed here when needed)
+  const { data: qbCodes } = useQuery({
+    queryKey: [...KEY, "qb-codes"],
+    queryFn: () => api.get<{ connected: boolean; items: { id: string; name: string }[]; taxCodes: { id: string; name: string }[]; defaults: { itemId: string | null; taxCodeId: string | null } }>("/billables/quickbooks-codes"),
+    staleTime: 60_000,
+  });
+  // one line's own QuickBooks item or tax code (kept on the line, so every invoice made from it carries it)
+  const setCodes = useMutation({
+    mutationFn: (p: { id: string; qbItemId?: string | null; qbTaxCodeId?: string | null }) => api.patch(`/billables/${p.id}`, { ...(p.qbItemId !== undefined ? { qbItemId: p.qbItemId } : {}), ...(p.qbTaxCodeId !== undefined ? { qbTaxCodeId: p.qbTaxCodeId } : {}) }),
+    onSuccess: () => void qc.invalidateQueries({ queryKey: [...KEY, "approved", ready.client.id] }),
+    onError: () => toast.error(t("common.error")),
+  });
+  // a new QuickBooks item, made from the item select (for the invoice, or for one line)
+  const [newItemFor, setNewItemFor] = useState<{ line: string | null } | null>(null);
+  const [qb, setQb] = useState<{ itemId: string | null; taxCodeId: string | null }>({ itemId: null, taxCodeId: null });
+  const qbItem = qb.itemId ?? qbCodes?.defaults.itemId ?? "";
+  const qbTax = qb.taxCodeId ?? qbCodes?.defaults.taxCodeId ?? "";
   const itemIds = items.filter((i) => kinds.has(i.kind) && !left.has(i.id)).map((i) => i.id);
   const draft = {
     clientId: ready.client.id,
@@ -264,7 +281,7 @@ function InvoiceEditor({ ready, lang, period }: { ready: Ready; lang: string; pe
     placeholderData: (p) => p,
   });
   const create = useMutation({
-    mutationFn: () => api.post<{ number: string }>("/billables/invoice", draft),
+    mutationFn: () => api.post<{ number: string }>("/billables/invoice", { ...draft, ...(qbCodes?.connected ? { qbItemId: qbItem || null, qbTaxCodeId: qbTax || null } : {}) }),
     onSuccess: (r) => {
       void qc.invalidateQueries({ queryKey: KEY });
       void qc.invalidateQueries({ queryKey: ["crm"] });
@@ -328,6 +345,37 @@ function InvoiceEditor({ ready, lang, period }: { ready: Ready; lang: string; pe
                             </span>
                             <span className="font-mono">{m(i.amountCents)}</span>
                           </label>
+                          {qbCodes?.connected && (
+                            <div className="mb-1 ml-6 mt-0.5 grid gap-1 sm:grid-cols-2">
+                              <select
+                                value={i.qbItemId ?? ""}
+                                onChange={(e) => (e.target.value === NEW_ITEM ? setNewItemFor({ line: i.id }) : setCodes.mutate({ id: i.id, qbItemId: e.target.value || null }))}
+                                aria-label={t("approvals.invoice.qbItem")}
+                                className="h-7 rounded border bg-transparent px-1.5 text-[11px]"
+                              >
+                                <option value="">{t("approvals.invoice.qbSameItem")}</option>
+                                {qbCodes.items.map((x) => (
+                                  <option key={x.id} value={x.id}>
+                                    {x.name}
+                                  </option>
+                                ))}
+                                <option value={NEW_ITEM}>{t("approvals.invoice.qbNew")}</option>
+                              </select>
+                              <select
+                                value={i.qbTaxCodeId ?? ""}
+                                onChange={(e) => setCodes.mutate({ id: i.id, qbTaxCodeId: e.target.value || null })}
+                                aria-label={t("approvals.invoice.qbTax")}
+                                className="h-7 rounded border bg-transparent px-1.5 text-[11px]"
+                              >
+                                <option value="">{t("approvals.invoice.qbSameTax")}</option>
+                                {qbCodes.taxCodes.map((x) => (
+                                  <option key={x.id} value={x.id}>
+                                    {x.name}
+                                  </option>
+                                ))}
+                              </select>
+                            </div>
+                          )}
                         </li>
                       ))}
                     </ul>
@@ -388,7 +436,46 @@ function InvoiceEditor({ ready, lang, period }: { ready: Ready; lang: string; pe
             <span className="text-muted-foreground">{t("approvals.invoice.notes")}</span>
             <AiTextarea rows={3} value={f.notes} maxLength={2000} onChange={(e) => setF({ ...f, notes: e.target.value })} />
           </label>
+          {qbCodes?.connected && (
+            <>
+              <label className="space-y-1.5 text-xs">
+                <span className="text-muted-foreground">{t("approvals.invoice.qbItem")}</span>
+                <select value={qbItem} onChange={(e) => (e.target.value === NEW_ITEM ? setNewItemFor({ line: null }) : setQb({ ...qb, itemId: e.target.value }))} className="h-9 w-full rounded-md border bg-transparent px-2 text-sm outline-none focus:ring-2 focus:ring-[color:var(--gold)]/40">
+                  <option value="">—</option>
+                  {qbCodes.items.map((x) => (
+                    <option key={x.id} value={x.id}>
+                      {x.name}
+                    </option>
+                  ))}
+                  <option value={NEW_ITEM}>{t("approvals.invoice.qbNew")}</option>
+                </select>
+              </label>
+              <label className="space-y-1.5 text-xs">
+                <span className="text-muted-foreground">{t("approvals.invoice.qbTax")}</span>
+                <select value={qbTax} onChange={(e) => setQb({ ...qb, taxCodeId: e.target.value })} className="h-9 w-full rounded-md border bg-transparent px-2 text-sm outline-none focus:ring-2 focus:ring-[color:var(--gold)]/40">
+                  <option value="">—</option>
+                  {qbCodes.taxCodes.map((x) => (
+                    <option key={x.id} value={x.id}>
+                      {x.name}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <p className="text-[11px] text-muted-foreground sm:col-span-2">{t("approvals.invoice.qbHint")}</p>
+            </>
+          )}
         </section>
+        {newItemFor && (
+          <NewItemDialog
+            onClose={() => setNewItemFor(null)}
+            onCreated={(id) => {
+              void qc.invalidateQueries({ queryKey: [...KEY, "qb-codes"] });
+              if (newItemFor.line) setCodes.mutate({ id: newItemFor.line, qbItemId: id });
+              else setQb((x) => ({ ...x, itemId: id }));
+              setNewItemFor(null);
+            }}
+          />
+        )}
         {can("accounting.manage") && (
           <Button
             disabled={!itemIds.length || create.isPending || (pv?.poRequired && !f.poNumber)}
@@ -574,6 +661,60 @@ function PostDialog({ period, onClose }: { period: Period; onClose: () => void }
             {post.isPending ? <Loader2 className="size-4 animate-spin" /> : <Send className="size-4" />} {t("approvals.postConfirm")}
           </Button>
         </div>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+const NEW_ITEM = "__new__";
+
+/** Makes the item when it does not exist: a service in the portal and an item in QuickBooks, at once. */
+function NewItemDialog({ onClose, onCreated }: { onClose: () => void; onCreated: (id: string) => void }) {
+  const { t } = useTranslation();
+  const [f, setF] = useState({ name: "", sku: "", price: "" });
+  const make = useMutation({
+    mutationFn: () => {
+      const n = f.price.trim() === "" ? null : Math.round((Number(f.price.replace(",", ".")) || 0) * 100);
+      return api.post<{ id: string; name: string; created: boolean }>("/billables/quickbooks-items", { name: f.name.trim(), sku: f.sku.trim() || null, priceCents: n });
+    },
+    onSuccess: (r) => {
+      toast.success(t(r.created ? "approvals.invoice.qbNewDone" : "approvals.invoice.qbNewExists", { name: r.name }));
+      onCreated(r.id);
+    },
+    onError: (e) => toast.error(e instanceof ApiError && e.code === "quickbooks_no_account" ? t("approvals.invoice.qbNewNoAccount") : t("common.error")),
+  });
+  return (
+    <Dialog open onOpenChange={(o) => !o && onClose()}>
+      <DialogContent className="sm:max-w-md">
+        <DialogHeader>
+          <DialogTitle>{t("approvals.invoice.qbNewTitle")}</DialogTitle>
+          <DialogDescription>{t("approvals.invoice.qbNewText")}</DialogDescription>
+        </DialogHeader>
+        <form
+          className="space-y-3"
+          onSubmit={(e) => {
+            e.preventDefault();
+            if (f.name.trim()) make.mutate();
+          }}
+        >
+          <label className="block space-y-1 text-xs">
+            <span className="text-muted-foreground">{t("approvals.invoice.qbNewName")}</span>
+            <Input autoFocus required maxLength={100} value={f.name} onChange={(e) => setF({ ...f, name: e.target.value })} />
+          </label>
+          <div className="grid grid-cols-2 gap-3">
+            <label className="block space-y-1 text-xs">
+              <span className="text-muted-foreground">{t("approvals.invoice.qbNewSku")}</span>
+              <Input maxLength={60} value={f.sku} onChange={(e) => setF({ ...f, sku: e.target.value })} />
+            </label>
+            <label className="block space-y-1 text-xs">
+              <span className="text-muted-foreground">{t("approvals.invoice.qbNewPrice")}</span>
+              <Input inputMode="decimal" value={f.price} onChange={(e) => setF({ ...f, price: e.target.value })} placeholder="$" />
+            </label>
+          </div>
+          <Button type="submit" disabled={make.isPending || !f.name.trim()} className="w-full bg-grad-gold font-semibold text-[#1a1204] hover:brightness-105">
+            {make.isPending ? <Loader2 className="size-4 animate-spin" /> : null} {t("approvals.invoice.qbNewCreate")}
+          </Button>
+        </form>
       </DialogContent>
     </Dialog>
   );

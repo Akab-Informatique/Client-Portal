@@ -1,0 +1,1 @@
+ALTER TABLE "services" ADD COLUMN "quickbooks_item_id" text;

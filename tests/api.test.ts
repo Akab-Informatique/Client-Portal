@@ -6945,4 +6945,105 @@ describe("contracts: services when made, charges, activity, stop instead of dele
     expect((await admin.get("/api/billing/cleanup")).json.keptRecords).toBe(0);
     await db().delete(schema.timesheets).where(eq(schema.timesheets.userId, u!.id));
   });
+
+  it("an invoice keeps the QuickBooks item and tax code chosen on it", async () => {
+    const admin = await signIn("admin@akab.local");
+    const [client] = await db().insert(schema.clients).values({ name: "Codes QB inc.", autotaskId: 987654321 }).returning();
+    const [it] = await db()
+      .insert(schema.billingItems)
+      .values({ clientId: client!.id, kind: "charge", source: "portal", sourceId: "test:qbcodes:1", date: "2026-10-05", description: "Pièce", quantityX100: 100, unitPriceCents: 5000, amountCents: 5000, status: "approved", approvedAt: new Date() })
+      .returning();
+    // not connected: no choices, and the answer says so
+    expect((await admin.get("/api/billables/quickbooks-codes")).json).toMatchObject({ connected: false, items: [] });
+    // a line of its own: its item and tax code travel with it onto the invoice line (not counted as an edit of the work)
+    const [it2] = await db()
+      .insert(schema.billingItems)
+      .values({ clientId: client!.id, kind: "labour", source: "portal", sourceId: "test:qbcodes:2", date: "2026-10-06", description: "Heures", quantityX100: 200, unitPriceCents: 9000, amountCents: 18000, status: "approved", approvedAt: new Date() })
+      .returning();
+    const set = await admin.patch(`/api/billables/${it2!.id}`, { qbItemId: "88", qbTaxCodeId: "9" });
+    expect(set.json).toMatchObject({ qbItemId: "88", qbTaxCodeId: "9", edited: false });
+    const made = await admin.post("/api/billables/invoice", { clientId: client!.id, itemIds: [it!.id, it2!.id], qbItemId: "55", qbTaxCodeId: "7" });
+    expect(made.status).toBe(201);
+    const [inv] = await db().select().from(schema.clientInvoices).where(eq(schema.clientInvoices.clientId, client!.id));
+    expect(inv).toMatchObject({ qbItemId: "55", qbTaxCodeId: "7" });
+    const lines = await db().select().from(schema.invoiceLines).where(eq(schema.invoiceLines.invoiceId, inv!.id));
+    expect(lines.find((l) => l.description === "Heures")).toMatchObject({ qbItemId: "88", qbTaxCodeId: "9" });
+    expect(lines.find((l) => l.description === "Pièce")).toMatchObject({ qbItemId: "55", qbTaxCodeId: "7" });
+  });
+
+  it("QuickBooks: a new item is made in both, each line is sent with its codes, a total that differs is shown", async () => {
+    const admin = await signIn("admin@akab.local");
+    const { saveQuickBooksSettings, billingSettings } = await import("../server/lib/billing.ts");
+    const { forgetQuickBooksToken } = await import("../server/lib/quickbooks.ts");
+    forgetQuickBooksToken();
+    // a new app clears the connection, so the keys first and the connection after
+    await saveQuickBooksSettings(null, { clientId: "ABqb", clientSecret: "qb-secret", environment: "sandbox" });
+    await saveQuickBooksSettings(null, { realmId: "9131", refreshToken: "qb-refresh", enabled: true, sync: { invoices: false, payments: false, customers: false, timesheets: false, expenses: false }, invoice: { itemId: "11", taxCodeId: "5", exemptTaxCodeId: "6" } });
+    await admin.get("/api/billing/ledger");
+    const bs = await billingSettings();
+    await db().update(schema.ledgerAccounts).set({ quickbooksId: "Q4100" }).where(eq(schema.ledgerAccounts.id, bs.accounts.charges!));
+    await db().delete(schema.quickbooksItems);
+    const [client] = await db().insert(schema.clients).values({ name: "Totaux QB inc.", autotaskId: 987654322, quickbooksId: "761" }).returning();
+    const calls: { method: string; url: string; body: any }[] = [];
+    let totalOff = 0;
+    const json = (b: unknown) => new Response(JSON.stringify(b), { status: 200, headers: { "content-type": "application/json" } });
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: unknown, init: RequestInit = {}) => {
+        const url = decodeURIComponent(String(input));
+        if (url.startsWith("https://oauth.platform.intuit.com/")) return json({ access_token: "qb-access", refresh_token: "qb-refresh" });
+        const body = init.body ? JSON.parse(String(init.body)) : undefined;
+        calls.push({ method: init.method ?? "GET", url, body });
+        if (url.includes("select * from Item where Name")) return json({ QueryResponse: {} });
+        if (url.includes("select * from Item")) return json({ QueryResponse: { Item: [{ Id: "11", Name: "Services", Type: "Service", Active: true }] } });
+        if (url.includes("select * from TaxCode")) return json({ QueryResponse: { TaxCode: [{ Id: "5", Name: "GST/QST" }] } });
+        if (url.includes("select * from Invoice")) return json({ QueryResponse: {} });
+        if (url.includes("/invoice/800")) return json({ Invoice: { Id: "800", SyncToken: "0" } });
+        if (url.includes("/item?")) return json({ Item: { Id: "300", Name: body.Name, Type: "Service", Sku: body.Sku, IncomeAccountRef: body.IncomeAccountRef, UnitPrice: body.UnitPrice, Active: true } });
+        if (url.includes("/invoice?")) {
+          const sub = body.Line.reduce((n: number, l: any) => n + l.Amount, 0);
+          // QuickBooks works out each tax on its own and rounds it (GST 5 %, QST 9.975 %)
+          const tax = Math.round(sub * 5) / 100 + Math.round(sub * 9.975) / 100 + totalOff;
+          return json({ Invoice: { Id: "800", TotalAmt: Math.round((sub + tax) * 100) / 100, TxnTaxDetail: { TotalTax: Math.round(tax * 100) / 100 } } });
+        }
+        return new Response(JSON.stringify({ Fault: { Error: [{ Message: `unexpected ${url}` }] } }), { status: 400 });
+      }),
+    );
+    try {
+      // the choices come from QuickBooks even when nothing was copied yet
+      const codes = (await admin.get("/api/billables/quickbooks-codes")).json;
+      expect(codes).toMatchObject({ connected: true, taxCodes: [{ id: "5" }] });
+      expect(codes.items.map((x: any) => x.id)).toEqual(["11"]);
+      // an item that does not exist is made in QuickBooks and in the portal's services, once
+      const made = await admin.post("/api/billables/quickbooks-items", { name: "Hébergement courriel", sku: "HEB-1", priceCents: 1500 });
+      expect(made.status).toBe(201);
+      expect(made.json).toMatchObject({ id: "300", created: true });
+      expect(calls.find((c) => c.url.includes("/item?"))!.body).toMatchObject({ Name: "Hébergement courriel", Type: "Service", IncomeAccountRef: { value: "Q4100" }, Sku: "HEB-1", UnitPrice: 15 });
+      expect((await db().select().from(schema.services).where(eq(schema.services.name, "Hébergement courriel")))[0]).toMatchObject({ quickbooksItemId: "300", kind: "one_time", priceCents: 1500 });
+      const again = await admin.post("/api/billables/quickbooks-items", { name: "hébergement courriel" });
+      expect(again.json).toMatchObject({ id: "300", created: false });
+      expect(calls.filter((c) => c.url.includes("/item?"))).toHaveLength(1);
+      // each line goes with its own item, else the invoice's, else the default; tax codes the same
+      const mk = async (n: number, kind: string, cents: number, extra: object = {}) =>
+        (await db().insert(schema.billingItems).values({ clientId: client!.id, kind, source: "portal", sourceId: `test:totals:${n}`, date: "2026-10-07", description: `Ligne ${n}`, quantityX100: 100, unitPriceCents: cents, amountCents: cents, status: "approved", approvedAt: new Date(), ...extra }).returning())[0]!;
+      const l1 = await mk(1, "charge", 10000, { qbItemId: "300" });
+      const l2 = await mk(2, "labour", 5033);
+      const inv = (await admin.post("/api/billables/invoice", { clientId: client!.id, itemIds: [l1.id, l2.id] })).json;
+      calls.length = 0;
+      expect((await admin.post(`/api/crm/invoices/${inv.id}/quickbooks`)).json).toEqual({ quickbooksId: "800" });
+      const lines = calls.find((c) => c.url.includes("/invoice?"))!.body.Line;
+      expect(lines[0].SalesItemLineDetail).toMatchObject({ ItemRef: { value: "300" }, TaxCodeRef: { value: "5" } });
+      expect(lines[1].SalesItemLineDetail).toMatchObject({ ItemRef: { value: "11" }, TaxCodeRef: { value: "5" } });
+      // the taxes add up: QuickBooks' total equals the portal's, nothing flagged
+      const fresh = async () => (await admin.get(`/api/crm/clients/${client!.id}/invoices`)).json.items.find((v: any) => v.id === inv.id);
+      expect((await fresh()).quickbooks).toMatchObject({ id: "800", error: null });
+      // a cent of difference is shown on the invoice, never silent
+      totalOff = 0.01;
+      const warned = (await admin.post(`/api/crm/invoices/${inv.id}/quickbooks`)).json;
+      expect(warned.warning).toContain("total_mismatch");
+      expect((await fresh()).quickbooks.error).toContain("total_mismatch");
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
 });

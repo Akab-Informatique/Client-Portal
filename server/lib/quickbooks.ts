@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { and, asc, eq, inArray, isNotNull, isNull } from "drizzle-orm";
+import { and, asc, desc, eq, ilike, inArray, isNotNull, isNull } from "drizzle-orm";
 import { db, schema } from "../db/index.ts";
 import { addDays, linkDefaultAccounts, typesById, weekByDayAndType } from "./timesheets.ts";
 import { syncAll } from "./qbSync.ts";
@@ -312,8 +312,8 @@ export async function planItems(): Promise<ItemsPlan> {
 }
 
 /** Copy QuickBooks' categories and items (by their QuickBooks id: never twice), then apply the accepted product changes. */
-export async function applyItems(actorId: string, accept: string[]) {
-  const items = await query<RawItem>("Item");
+/** Keep QuickBooks' items in our copy, by their QuickBooks id (never twice). */
+async function copyItems(items: RawItem[]) {
   const d = db();
   const now = new Date();
   const known = new Set((await d.select({ id: schema.quickbooksItems.quickbooksId }).from(schema.quickbooksItems)).map((x) => x.id));
@@ -331,6 +331,13 @@ export async function applyItems(actorId: string, accept: string[]) {
     if (known.has(i.Id)) await d.update(schema.quickbooksItems).set(values).where(eq(schema.quickbooksItems.quickbooksId, i.Id));
     else await d.insert(schema.quickbooksItems).values({ quickbooksId: i.Id, ...values });
   }
+}
+
+export async function applyItems(actorId: string, accept: string[]) {
+  const items = await query<RawItem>("Item");
+  const d = db();
+  const now = new Date();
+  await copyItems(items);
   const wanted = new Set(accept);
   const plan = await planItems();
   let products = 0;
@@ -351,6 +358,9 @@ export async function applyItems(actorId: string, accept: string[]) {
 /** Items and tax codes to choose from for the invoices sent. */
 export async function invoiceChoices() {
   type RawTax = { Id: string; Name: string; Description?: string; Active?: boolean };
+  // the items are read from QuickBooks when the copy is empty or more than 10 minutes old (so a new item shows up)
+  const [latest] = await db().select({ at: schema.quickbooksItems.syncedAt }).from(schema.quickbooksItems).orderBy(desc(schema.quickbooksItems.syncedAt)).limit(1);
+  if (!latest || Date.now() - latest.at.getTime() > 10 * 60_000) await copyItems(await query<RawItem>("Item")).catch(() => undefined);
   const [items, taxes] = await Promise.all([
     db().select().from(schema.quickbooksItems).where(and(eq(schema.quickbooksItems.active, true), inArray(schema.quickbooksItems.type, ["Service", "NonInventory", "Inventory"]))),
     query<RawTax>("TaxCode").catch(() => [] as RawTax[]),
@@ -361,16 +371,58 @@ export async function invoiceChoices() {
   };
 }
 
+/**
+ * A new item for invoice lines: made as a service in the portal (Inventory › Services, one time) and in QuickBooks
+ * (a Service item on the income account of the default charges account), and kept in our copy of the items.
+ * One that already exists (same name) is used, never doubled.
+ */
+export async function createQbItem(p: { name: string; sku?: string | null; priceCents?: number | null }): Promise<{ id: string; name: string; created: boolean }> {
+  const d = db();
+  const name = p.name.replace(/[:\t\n]/g, " ").replace(/\s+/g, " ").trim().slice(0, 100);
+  if (!name) throw new QuickBooksError("api", "name");
+  const sku = p.sku?.trim() || null;
+  const [have] = await d.select().from(schema.quickbooksItems).where(and(eq(schema.quickbooksItems.active, true), ilike(schema.quickbooksItems.name, name))).limit(1);
+  let qbId = have?.quickbooksId ?? null;
+  let created = false;
+  if (!qbId) {
+    await linkDefaultAccounts();
+    const bs = await billingSettings();
+    const accounts = await d.select().from(schema.ledgerAccounts);
+    // the income account: the default charges account, else labour, else any revenue account tied to QuickBooks
+    const income =
+      [bs.accounts.charges, bs.accounts.labour].map((id) => accounts.find((a) => a.id === id)?.quickbooksId).find(Boolean) ?? accounts.find((a) => a.type === "revenue" && a.active && a.quickbooksId)?.quickbooksId;
+    if (!income) throw new QuickBooksError("no_account", "income");
+    const body = { Name: name, Type: "Service", IncomeAccountRef: { value: income }, Taxable: true, ...(sku ? { Sku: sku } : {}), ...(p.priceCents ? { UnitPrice: dollars(p.priceCents) } : {}) };
+    try {
+      const r = await qb<{ Item: RawItem }>("POST", `item?requestid=${requestId(`item:${name.toLowerCase()}`, body)}`, body);
+      await copyItems([r.Item]);
+      qbId = r.Item.Id;
+      created = true;
+    } catch (e) {
+      // the name is already taken in QuickBooks (an inactive or not yet copied item): that one is used
+      const again = (await query<RawItem>("Item", `Name = '${name.replace(/'/g, "\\'")}'`))[0];
+      if (!again) throw e;
+      await copyItems([again]);
+      qbId = again.Id;
+    }
+  }
+  // the same item in the portal's services (no doubles by name)
+  const [svc] = await d.select({ id: schema.services.id, q: schema.services.quickbooksItemId }).from(schema.services).where(ilike(schema.services.name, name)).limit(1);
+  if (!svc) await d.insert(schema.services).values({ name, kind: "one_time", priceCents: p.priceCents ?? 0, sku: sku && !(await d.select({ id: schema.services.id }).from(schema.services).where(eq(schema.services.sku, sku)).limit(1)).length ? sku : null, quickbooksItemId: qbId });
+  else if (!svc.q) await d.update(schema.services).set({ quickbooksItemId: qbId, updatedAt: new Date() }).where(eq(schema.services.id, svc.id));
+  return { id: qbId, name, created };
+}
+
 // ── invoices ──
 const dollars = (cents: number) => Math.round(cents) / 100;
 
 /** Send one invoice (or its changes) to QuickBooks. The client must be mapped to a customer. */
-export async function pushInvoice(invoiceId: string): Promise<{ quickbooksId: string }> {
+export async function pushInvoice(invoiceId: string): Promise<{ quickbooksId: string; warning?: string }> {
   const r = await once(`invoice:${invoiceId}`, () => pushInvoiceNow(invoiceId));
   if (!r) throw new QuickBooksError("api", "busy");
   return r;
 }
-async function pushInvoiceNow(invoiceId: string): Promise<{ quickbooksId: string }> {
+async function pushInvoiceNow(invoiceId: string): Promise<{ quickbooksId: string; warning?: string }> {
   const d = db();
   const [inv] = await d.select().from(schema.clientInvoices).where(eq(schema.clientInvoices.id, invoiceId));
   if (!inv) throw new QuickBooksError("api", "invoice");
@@ -385,17 +437,23 @@ async function pushInvoiceNow(invoiceId: string): Promise<{ quickbooksId: string
     const [client] = await d.select().from(schema.clients).where(eq(schema.clients.id, inv.clientId));
     if (!client?.quickbooksId) throw new QuickBooksError("not_mapped", client?.name);
     const s = await quickbooksSettings();
-    if (!s.invoice.itemId) throw new QuickBooksError("no_item");
+    // the item and tax code chosen on this invoice, else the defaults
+    const itemId = inv.qbItemId || s.invoice.itemId;
+    if (!itemId) throw new QuickBooksError("no_item");
     const exempt = client.invoice?.taxes === false;
-    const taxCode = exempt ? s.invoice.exemptTaxCodeId : s.invoice.taxCodeId;
+    const taxCode = exempt ? s.invoice.exemptTaxCodeId : inv.qbTaxCodeId || s.invoice.taxCodeId;
     const subtotal = dollars(inv.totalCents - inv.taxCents);
     const own = await d.select().from(schema.invoiceLines).where(eq(schema.invoiceLines.invoiceId, inv.id)).orderBy(asc(schema.invoiceLines.position));
-    const lineOf = (description: string, amount: number, qty: number, unit: number, taxed: boolean) => ({
-      DetailType: "SalesItemLineDetail",
-      Amount: amount,
-      Description: description.slice(0, 4000),
-      SalesItemLineDetail: { ItemRef: { value: s.invoice.itemId! }, Qty: qty, UnitPrice: unit, ...((taxed ? taxCode : s.invoice.exemptTaxCodeId) ? { TaxCodeRef: { value: (taxed ? taxCode : s.invoice.exemptTaxCodeId)! } } : {}) },
-    });
+    // each line: its own item and tax code, else the invoice's, else the defaults
+    const lineOf = (description: string, amount: number, qty: number, unit: number, taxed: boolean, own?: { qbItemId: string | null; qbTaxCodeId: string | null }) => {
+      const code = taxed ? (exempt ? s.invoice.exemptTaxCodeId : own?.qbTaxCodeId || taxCode) : s.invoice.exemptTaxCodeId;
+      return {
+        DetailType: "SalesItemLineDetail",
+        Amount: amount,
+        Description: description.slice(0, 4000),
+        SalesItemLineDetail: { ItemRef: { value: own?.qbItemId || itemId }, Qty: qty, UnitPrice: unit, ...(code ? { TaxCodeRef: { value: code } } : {}) },
+      };
+    };
     const body = {
       DocNumber: inv.number.slice(0, 21),
       TxnDate: inv.issuedOn,
@@ -406,15 +464,17 @@ async function pushInvoiceNow(invoiceId: string): Promise<{ quickbooksId: string
       ...(inv.poNumber ? { PrivateNote: `PO ${inv.poNumber}` } : {}),
       ...(client.invoice?.billingEmail ? { BillEmail: { Address: client.invoice.billingEmail } } : {}),
       Line: own.length
-        ? own.map((l) => lineOf(l.description, dollars(l.amountCents), l.quantityX100 / 100, dollars(l.unitPriceCents), l.taxable))
+        ? own.map((l) => lineOf(l.description, dollars(l.amountCents), l.quantityX100 / 100, dollars(l.unitPriceCents), l.taxable, l))
         : [lineOf(`Facture ${inv.number}`, subtotal, 1, subtotal, true)],
     };
+    type Saved = { Invoice: { Id: string; TotalAmt?: number; TxnTaxDetail?: { TotalTax?: number } } };
+    let saved: Saved | null = null;
     let id = inv.quickbooksId;
     if (id) {
       // changes: the current version (SyncToken) is required
       const cur = await qb<{ Invoice: { Id: string; SyncToken: string } }>("GET", `invoice/${encodeURIComponent(id)}`);
-      const r = await qb<{ Invoice: { Id: string } }>("POST", "invoice", { ...body, Id: cur.Invoice.Id, SyncToken: cur.Invoice.SyncToken, sparse: true });
-      id = r.Invoice.Id;
+      saved = await qb<Saved>("POST", "invoice", { ...body, Id: cur.Invoice.Id, SyncToken: cur.Invoice.SyncToken, sparse: true });
+      id = saved.Invoice.Id;
     } else {
       // already in QuickBooks under the same number (sent by hand before): linked, not doubled
       const docNumber = inv.number.slice(0, 21).replace(/[^A-Za-z0-9.-]/g, "");
@@ -422,13 +482,20 @@ async function pushInvoiceNow(invoiceId: string): Promise<{ quickbooksId: string
       const mine = same.find((x) => x.CustomerRef?.value === client.quickbooksId);
       if (mine) {
         const cur = await qb<{ Invoice: { Id: string; SyncToken: string } }>("GET", `invoice/${encodeURIComponent(mine.Id)}`);
-        id = (await qb<{ Invoice: { Id: string } }>("POST", "invoice", { ...body, Id: cur.Invoice.Id, SyncToken: cur.Invoice.SyncToken, sparse: true })).Invoice.Id;
+        saved = await qb<Saved>("POST", "invoice", { ...body, Id: cur.Invoice.Id, SyncToken: cur.Invoice.SyncToken, sparse: true });
+        id = saved.Invoice.Id;
       } else {
-        id = (await qb<{ Invoice: { Id: string } }>("POST", `invoice?requestid=${requestId(`invoice:${inv.id}`, body)}`, body)).Invoice.Id;
+        saved = await qb<Saved>("POST", `invoice?requestid=${requestId(`invoice:${inv.id}`, body)}`, body);
+        id = saved.Invoice.Id;
       }
     }
-    await d.update(schema.clientInvoices).set({ quickbooksId: id, quickbooksSyncedAt: new Date(), quickbooksError: null }).where(eq(schema.clientInvoices.id, inv.id));
-    return { quickbooksId: id };
+    // the total (and the tax) QuickBooks worked out must be the portal's: a difference is shown on the invoice, never silent
+    const sent = saved?.Invoice;
+    const diff = sent?.TotalAmt != null ? Math.round(sent.TotalAmt * 100) - inv.totalCents : 0;
+    const taxDiff = sent?.TxnTaxDetail?.TotalTax != null ? Math.round(sent.TxnTaxDetail.TotalTax * 100) - inv.taxCents : 0;
+    const mismatch = diff !== 0 || taxDiff !== 0 ? `total_mismatch: portail ${(inv.totalCents / 100).toFixed(2)} $ (taxes ${(inv.taxCents / 100).toFixed(2)} $), QuickBooks ${(sent!.TotalAmt ?? 0).toFixed(2)} $ (taxes ${(sent?.TxnTaxDetail?.TotalTax ?? 0).toFixed(2)} $) — vérifier le code de taxe` : null;
+    await d.update(schema.clientInvoices).set({ quickbooksId: id, quickbooksSyncedAt: new Date(), quickbooksError: mismatch }).where(eq(schema.clientInvoices.id, inv.id));
+    return { quickbooksId: id, ...(mismatch ? { warning: mismatch } : {}) };
   } catch (e) {
     return fail(e);
   }

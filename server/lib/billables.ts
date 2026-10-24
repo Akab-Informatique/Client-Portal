@@ -1,7 +1,7 @@
 import { and, asc, eq, gte, inArray, isNotNull, lte, sql } from "drizzle-orm";
 import { db, schema } from "../db/index.ts";
 import { alignNumbering } from "./quickbooks.ts";
-import { billingSettings, formatInvoiceNumber, saveBillingSettings, type BillingSettings } from "./billing.ts";
+import { billingSettings, formatInvoiceNumber, quickbooksSettings, saveBillingSettings, type BillingSettings } from "./billing.ts";
 import { ensureCrm } from "./crm.ts";
 import { ticketSource, type BillableKind } from "./ticketSource.ts";
 
@@ -176,14 +176,19 @@ export async function setBillableStatus(actorId: string, ids: string[], status: 
 }
 
 /** Change an item before it is posted (the next syncs keep the change). */
-export async function editBillable(id: string, p: { quantity?: number; unitPriceCents?: number; description?: string; taxable?: boolean }) {
+export async function editBillable(id: string, p: { quantity?: number; unitPriceCents?: number; description?: string; taxable?: boolean; qbItemId?: string | null; qbTaxCodeId?: string | null }) {
   const [cur] = await db().select().from(schema.billingItems).where(eq(schema.billingItems.id, id));
   if (!cur || cur.status === "posted") return null;
   const quantityX100 = p.quantity !== undefined ? Math.round(p.quantity * 100) : cur.quantityX100;
   const unitPriceCents = p.unitPriceCents ?? cur.unitPriceCents;
   const [row] = await db()
     .update(schema.billingItems)
-    .set({ quantityX100, unitPriceCents, amountCents: amountOf(quantityX100, unitPriceCents), description: p.description ?? cur.description, taxable: p.taxable ?? cur.taxable, edited: true, updatedAt: new Date() })
+    .set({ quantityX100, unitPriceCents, amountCents: amountOf(quantityX100, unitPriceCents), description: p.description ?? cur.description, taxable: p.taxable ?? cur.taxable,
+      ...(p.qbItemId !== undefined ? { qbItemId: p.qbItemId || null } : {}),
+      ...(p.qbTaxCodeId !== undefined ? { qbTaxCodeId: p.qbTaxCodeId || null } : {}),
+      // choosing the QuickBooks codes alone is not a change of the work itself
+      ...(p.quantity !== undefined || p.unitPriceCents !== undefined || p.description !== undefined || p.taxable !== undefined ? { edited: true } : {}),
+      updatedAt: new Date() })
     .where(eq(schema.billingItems.id, id))
     .returning();
   return row;
@@ -226,6 +231,9 @@ export type InvoiceDraft = {
   dueOn?: string;
   notes?: string | null;
   poNumber?: string | null;
+  /** The QuickBooks item and tax code sent on every line (none: the defaults) */
+  qbItemId?: string | null;
+  qbTaxCodeId?: string | null;
   /** Only the work of these days (an item outside makes the draft invalid) */
   from?: string | null;
   to?: string | null;
@@ -285,6 +293,8 @@ export async function draftInvoice(p: InvoiceDraft) {
       unitPriceCents: i.unitPriceCents,
       amountCents: i.amountCents,
       taxable: i.taxable,
+      qbItemId: i.qbItemId ?? null,
+      qbTaxCodeId: i.qbTaxCodeId ?? null,
     })),
     subtotalCents: subtotal,
     gstCents: gst,
@@ -319,6 +329,10 @@ export function createInvoice(actorId: string, p: InvoiceDraft) {
   const run = numbering.then(async () => {
     const draft = await draftInvoice(p);
     const s = await billingSettings();
+    // what goes to QuickBooks is settled here, line by line: the line's own, else the invoice's, else the defaults
+    const qbDefaults = (await quickbooksSettings()).invoice;
+    const invoiceItem = p.qbItemId || qbDefaults.itemId || null;
+    const invoiceTax = p.qbTaxCodeId || qbDefaults.taxCodeId || null;
     const number = draft.number;
     // all or nothing: the invoice, its lines and the items posted (a crash never leaves items to bill twice)
     const inv = await db().transaction(async (tx) => {
@@ -334,6 +348,8 @@ export function createInvoice(actorId: string, p: InvoiceDraft) {
           source: "portal",
           notes: draft.notes,
           poNumber: draft.poNumber,
+          qbItemId: invoiceItem,
+          qbTaxCodeId: invoiceTax,
         })
         .returning();
       await tx.insert(schema.invoiceLines).values(
@@ -346,6 +362,8 @@ export function createInvoice(actorId: string, p: InvoiceDraft) {
           unitPriceCents: l.unitPriceCents,
           amountCents: l.amountCents,
           taxable: l.taxable,
+          qbItemId: l.qbItemId || invoiceItem,
+          qbTaxCodeId: l.qbTaxCodeId || invoiceTax,
           ledgerAccountId: s.accounts[ACCOUNT_OF[l.kind as BillableKind] ?? "labour"] ?? null,
           position: n,
         })),

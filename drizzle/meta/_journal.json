@@ -701,6 +701,27 @@
       "when": 1792809095585,
       "tag": "0099_serious_captain_universe",
       "breakpoints": true
+    },
+    {
+      "idx": 100,
+      "version": "7",
+      "when": 1792865998025,
+      "tag": "0100_sturdy_pixie",
+      "breakpoints": true
+    },
+    {
+      "idx": 101,
+      "version": "7",
+      "when": 1792866233543,
+      "tag": "0101_lame_jasper_sitwell",
+      "breakpoints": true
+    },
+    {
+      "idx": 102,
+      "version": "7",
+      "when": 1792866586180,
+      "tag": "0102_familiar_the_anarchist",
+      "breakpoints": true
     }
   ]
 }

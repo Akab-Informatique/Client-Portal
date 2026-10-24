@@ -61,6 +61,8 @@ export type Item = {
   invoiceNumber: string | null;
   autoApproved: boolean;
   excludedReason: string | null;
+  qbItemId?: string | null;
+  qbTaxCodeId?: string | null;
 };
 type Summary = {
   state: { at: string | null; counts: Partial<Record<Kind, number>>; errors: Partial<Record<Kind, string>>; skipped: number };
