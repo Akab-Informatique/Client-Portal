@@ -2,7 +2,7 @@ import { useMemo, useState, type FormEvent } from "react";
 import { useTranslation } from "react-i18next";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
-import { BarChart3, ChevronDown, ChevronLeft, ChevronRight, ChevronsDownUp, ChevronsUpDown, Clock, Loader2, PiggyBank, Plus, Send, Sun, Ticket, Trash2, UserCog } from "lucide-react";
+import { BarChart3, ChevronDown, ChevronLeft, ChevronRight, ChevronsDownUp, ChevronsUpDown, Clock, ListTree, Loader2, PiggyBank, Plus, Send, Sun, Ticket, Trash2, UserCog } from "lucide-react";
 import { GlassBackdrop } from "@/components/brand/GlassBackdrop";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
@@ -94,6 +94,16 @@ function BillTag({ e }: { e: Entry }) {
   );
 }
 
+/** A figure of a day: a small label over its value */
+function Figure({ label, value, tone }: { label: string; value: string; tone?: "good" | "muted" }) {
+  return (
+    <span className="flex flex-col leading-tight">
+      <span className="text-[10px] uppercase tracking-wide text-muted-foreground">{label}</span>
+      <span className={cn("font-mono text-sm font-semibold", tone === "good" && "text-emerald-300", tone === "muted" && "text-muted-foreground")}>{value}</span>
+    </span>
+  );
+}
+
 /** Banked instead of paid. */
 function BankTag() {
   const { t } = useTranslation();
@@ -127,7 +137,9 @@ export function TimesheetPage() {
   const { data: week, isLoading } = useQuery({ queryKey: ["time", "week", who, start], queryFn: () => api.get<Week>(`/time/week${q ? `?${q}` : ""}`) });
   const person = people?.find((x) => x.id === who);
   const editable = week?.status === "draft" || week?.status === "rejected";
-  const [closed, setClosed] = useState<Record<string, boolean>>({});
+  // the days start minimized; a day opens to its figures, and its details (each entry) open on their own
+  const [open, setOpen] = useState<Record<string, boolean>>({});
+  const [detail, setDetail] = useState<Record<string, boolean>>({});
   const [adding, setAdding] = useState(false);
   const [report, setReport] = useState(false);
   const refresh = () => void qc.invalidateQueries({ queryKey: ["time", "week"] });
@@ -148,7 +160,7 @@ export function TimesheetPage() {
   const days = week ? Array.from({ length: 7 }, (_, i) => addDays(week.weekStart, i)) : [];
   const hours = (n: number) => n.toLocaleString(loc, { maximumFractionDigits: 2 });
   const workdays = week?.entries.filter((e) => e.kind === "workday") ?? [];
-  const allClosed = days.length > 0 && days.every((d) => closed[d]);
+  const allOpen = days.length > 0 && days.every((d) => open[d]);
 
   return (
     <div className="relative isolate space-y-5">
@@ -207,8 +219,11 @@ export function TimesheetPage() {
           <Button variant="outline" onClick={() => setReport(true)}>
             <BarChart3 className="size-4" /> {t("timesheet.report")}
           </Button>
-          <Button variant="ghost" size="sm" className="ml-auto gap-1.5 text-muted-foreground" onClick={() => setClosed(allClosed ? {} : Object.fromEntries(days.map((d) => [d, true])))}>
-            {allClosed ? <ChevronsUpDown className="size-4" /> : <ChevronsDownUp className="size-4" />} {allClosed ? t("timesheet.expandAll") : t("timesheet.collapseAll")}
+          <Button variant="ghost" size="sm" className="ml-auto gap-1.5 text-muted-foreground" onClick={() => {
+              setOpen(allOpen ? {} : Object.fromEntries(days.map((d) => [d, true])));
+              if (allOpen) setDetail({});
+            }}>
+            {allOpen ? <ChevronsDownUp className="size-4" /> : <ChevronsUpDown className="size-4" />} {allOpen ? t("timesheet.collapseAll") : t("timesheet.expandAll")}
           </Button>
         </div>
       )}
@@ -220,11 +235,16 @@ export function TimesheetPage() {
               const worked = list.filter((e) => e.kind !== "workday" && e.kind !== "bankpay").reduce((x, e) => x + e.hours, 0);
               const wd = list.filter((e) => e.kind === "workday").reduce((x, e) => x + e.hours, 0);
               const paidFromBank = list.filter((e) => e.kind === "bankpay").reduce((x, e) => x + e.hours, 0);
-              const isClosed = Boolean(closed[d]);
+              const isOpen = Boolean(open[d]);
+              const showDetail = Boolean(detail[d]);
+              // the day in three figures: what was worked, what of it is billable, what is not
+              const real = list.filter((e) => e.kind !== "workday" && e.kind !== "bankpay");
+              const billable = real.reduce((x, e) => x + Math.min(e.billableHours, e.hours), 0);
+              const nonBillable = Math.max(0, worked - billable);
               return (
                 <section key={d} className={cn("glass rounded-2xl border", !list.length && "opacity-70")}>
-                  <button type="button" aria-expanded={!isClosed} onClick={() => setClosed((c) => ({ ...c, [d]: !c[d] }))} className="flex w-full items-center gap-3 px-4 py-2 text-left">
-                    <ChevronDown className={cn("size-4 shrink-0 text-muted-foreground transition-transform", isClosed && "-rotate-90")} />
+                  <button type="button" aria-expanded={isOpen} onClick={() => setOpen((c) => ({ ...c, [d]: !c[d] }))} className="flex w-full items-center gap-3 px-4 py-2 text-left">
+                    <ChevronDown className={cn("size-4 shrink-0 text-muted-foreground transition-transform", !isOpen && "-rotate-90")} />
                     <span className="flex-1 text-sm font-semibold capitalize">{dayName(d)}</span>
                     {wd > 0 && (
                       <span className="flex items-center gap-1 rounded-full border border-amber-400/30 bg-amber-500/10 px-2 py-px text-[11px] text-amber-300" title={t("timesheet.workday")}>
@@ -238,59 +258,86 @@ export function TimesheetPage() {
                     )}
                     <span className="font-mono text-sm">{worked ? `${hours(worked)} h` : "—"}</span>
                   </button>
-                  {!isClosed && list.length > 0 && (
-                    <ul className="divide-y divide-border/60 border-t">
-                      {list.map((e) => {
-                        const openTicket = e.source === "ticket" && e.ticketId != null && can("tickets.view");
-                        const body = (
-                          <>
-                            {e.kind === "workday" ? (
-                              <Sun className="mt-0.5 size-4 shrink-0 text-amber-300" />
-                            ) : e.kind === "bankpay" ? (
-                              <PiggyBank className="mt-0.5 size-4 shrink-0 text-sky-300" />
-                            ) : e.source === "ticket" ? (
-                              <Ticket className="mt-0.5 size-4 shrink-0 text-primary" />
-                            ) : (
-                              <Clock className="mt-0.5 size-4 shrink-0 text-muted-foreground" />
-                            )}
-                            <span className="min-w-0 flex-1">
-                              <span className="block">
-                                {e.source === "ticket" ? (
-                                  <>
-                                    <span className="font-mono text-xs text-muted-foreground">{e.ticketNumber}</span> {e.ticketTitle}
-                                  </>
-                                ) : (
-                                  e.type
-                                )}
-                              </span>
-                              {e.kind === "workday" && e.startTime && e.endTime && (
-                                <span className="block text-xs text-muted-foreground">{t("timesheet.workdayLine", { from: e.startTime, to: e.endTime, lunch: `${e.lunchMinutes ?? 0} min` })}</span>
-                              )}
-                              {e.note && <span className="block text-xs text-muted-foreground">{e.note}</span>}
-                            </span>
-                            {e.banked && <BankTag />}
-                            <BillTag e={e} />
-                            <span className="font-mono">{hours(e.hours)} h</span>
-                          </>
-                        );
-                        return (
-                          <li key={e.id} className="group flex items-start gap-2 px-4 py-2 text-sm">
-                            {openTicket ? (
-                              <button type="button" title={t("timesheet.openTicket")} onClick={() => ws.open(e.ticketId!)} className="-mx-2 flex min-w-0 flex-1 items-start gap-3 rounded-lg px-2 py-0.5 text-left transition hover:bg-accent/50">
-                                {body}
-                              </button>
-                            ) : (
-                              <div className="flex min-w-0 flex-1 items-start gap-3">{body}</div>
-                            )}
-                            {e.source === "manual" && editable && (
-                              <button type="button" onClick={() => remove.mutate(e.id)} className="rounded p-1 text-muted-foreground opacity-0 hover:text-destructive group-hover:opacity-100" aria-label={t("timesheet.remove")}>
-                                <Trash2 className="size-3.5" />
-                              </button>
-                            )}
-                          </li>
-                        );
-                      })}
-                    </ul>
+                  {isOpen && (
+                    <div className="space-y-2 border-t px-4 py-2.5">
+                      {list.length === 0 ? (
+                        <p className="text-xs text-muted-foreground">{t("timesheet.dayEmpty")}</p>
+                      ) : (
+                        <>
+                          {/* the figures of the day, and the way to its details */}
+                          <div className="flex flex-wrap items-center gap-x-6 gap-y-1.5 text-sm">
+                            <Figure label={t("timesheet.worked")} value={`${hours(worked)} h`} />
+                            <Figure label={t("timesheet.billable")} value={`${hours(billable)} h`} tone="good" />
+                            <Figure label={t("timesheet.nonBillable")} value={`${hours(nonBillable)} h`} tone={nonBillable > 0 ? "muted" : undefined} />
+                            <button
+                              type="button"
+                              onClick={() => setDetail((c) => ({ ...c, [d]: !c[d] }))}
+                              aria-expanded={showDetail}
+                              className="ml-auto flex items-center gap-1.5 rounded-lg px-2 py-1 text-xs font-medium text-primary transition hover:bg-[color:var(--gold)]/10"
+                            >
+                              <ListTree className="size-3.5" /> {showDetail ? t("timesheet.hideDetails") : t("timesheet.details")}
+                            </button>
+                          </div>
+                          {showDetail && (
+                            <table className="w-full text-sm">
+                              <thead>
+                                <tr className="border-b text-left text-[10px] uppercase tracking-wide text-muted-foreground">
+                                  <th className="py-1 pr-2 font-medium">{t("timesheet.colEntry")}</th>
+                                  <th className="w-20 py-1 text-right font-medium">{t("timesheet.colHours")}</th>
+                                  <th className="w-24 py-1 text-right font-medium">{t("timesheet.billable")}</th>
+                                  <th className="w-24 py-1 text-right font-medium">{t("timesheet.nonBillable")}</th>
+                                  <th className="w-7" />
+                                </tr>
+                              </thead>
+                              <tbody className="divide-y divide-border/50">
+                                {list.map((e) => {
+                                  const openTicket = e.source === "ticket" && e.ticketId != null && can("tickets.view");
+                                  const paid = e.kind !== "workday" && e.kind !== "bankpay";
+                                  const bill = paid ? Math.min(e.billableHours, e.hours) : 0;
+                                  const name = e.kind === "workday" ? (e.startTime && e.endTime ? `${e.type} · ${e.startTime}–${e.endTime}` : e.type) : e.source === "ticket" ? null : e.type;
+                                  const label = (
+                                    <span className="flex min-w-0 items-center gap-2">
+                                      {e.kind === "workday" ? <Sun className="size-3.5 shrink-0 text-amber-300" /> : e.kind === "bankpay" ? <PiggyBank className="size-3.5 shrink-0 text-sky-300" /> : e.source === "ticket" ? <Ticket className="size-3.5 shrink-0 text-primary" /> : <Clock className="size-3.5 shrink-0 text-muted-foreground" />}
+                                      {name === null ? (
+                                        <span className="min-w-0 truncate">
+                                          <span className="font-mono text-xs text-muted-foreground">{e.ticketNumber}</span> {e.ticketTitle}
+                                        </span>
+                                      ) : (
+                                        <span className="min-w-0 truncate">{name}</span>
+                                      )}
+                                      {e.banked && <BankTag />}
+                                    </span>
+                                  );
+                                  return (
+                                    <tr key={e.id} className="group" title={e.note ?? undefined}>
+                                      <td className="max-w-0 py-1.5 pr-2">
+                                        {openTicket ? (
+                                          <button type="button" title={t("timesheet.openTicket")} onClick={() => ws.open(e.ticketId!)} className="block w-full rounded px-1 py-0.5 text-left transition hover:bg-accent/50">
+                                            {label}
+                                          </button>
+                                        ) : (
+                                          <span className="block px-1 py-0.5">{label}</span>
+                                        )}
+                                      </td>
+                                      <td className="py-1.5 text-right font-mono">{e.kind === "bankpay" ? `−${hours(e.hours)}` : hours(e.hours)}</td>
+                                      <td className="py-1.5 text-right font-mono text-emerald-300">{paid ? hours(bill) : "—"}</td>
+                                      <td className="py-1.5 text-right font-mono text-muted-foreground">{paid ? hours(Math.max(0, e.hours - bill)) : "—"}</td>
+                                      <td className="py-1.5 text-right">
+                                        {e.source === "manual" && editable && (
+                                          <button type="button" onClick={() => remove.mutate(e.id)} className="rounded p-1 text-muted-foreground opacity-0 hover:text-destructive group-hover:opacity-100" aria-label={t("timesheet.remove")}>
+                                            <Trash2 className="size-3.5" />
+                                          </button>
+                                        )}
+                                      </td>
+                                    </tr>
+                                  );
+                                })}
+                              </tbody>
+                            </table>
+                          )}
+                        </>
+                      )}
+                    </div>
                   )}
                 </section>
               );
