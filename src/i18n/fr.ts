@@ -1027,6 +1027,8 @@ const fr = {
       qbNewDone: "Article « {{name}} » créé dans le portail et QuickBooks.",
       qbNewExists: "L'article « {{name}} » existait déjà : il est utilisé.",
       qbNewNoAccount: "Aucun compte de revenus lié à QuickBooks : liez-le dans Administration › Facturation › Plan comptable.",
+      dueHint: "L'échéance compte à partir de l'envoi (aujourd'hui, la facture part en la créant), pas de la date de la facture : conditions + 1 jour, « à la réception » = le lendemain. Échéance : {{due}}.",
+      dueHintExact: "Une date précise reste telle quelle.",
       poRequired: "requis pour ce client",
       notes: "Notes sur la facture",
       create: "Créer la facture {{total}}",

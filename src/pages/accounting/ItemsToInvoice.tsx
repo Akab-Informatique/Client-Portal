@@ -424,6 +424,7 @@ function InvoiceEditor({ ready, lang, period }: { ready: Ready; lang: string; pe
             ) : (
               <Input type="date" value={f.dueOn} onChange={(e) => setF({ ...f, dueOn: e.target.value })} />
             )}
+            <p className="text-[10px] leading-snug text-muted-foreground">{f.due === "terms" ? t("approvals.invoice.dueHint", { due: pv ? shortDate(pv.dueOn) : "" }) : t("approvals.invoice.dueHintExact")}</p>
           </div>
           <label className="space-y-1.5 text-xs">
             <span className="text-muted-foreground">

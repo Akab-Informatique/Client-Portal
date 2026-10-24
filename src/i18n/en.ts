@@ -1029,6 +1029,8 @@ const en: Dict = {
       qbNewDone: "Item “{{name}}” created in the portal and QuickBooks.",
       qbNewExists: "Item “{{name}}” already existed: it is used.",
       qbNewNoAccount: "No income account is linked to QuickBooks: link it in Admin › Invoicing › Chart of accounts.",
+      dueHint: "The due day counts from when it is sent (today: the invoice goes out when it is made), not the invoice date: terms + 1 day, “on receipt” = the next day. Due: {{due}}.",
+      dueHintExact: "An exact date stays as it is.",
       poRequired: "required for this client",
       notes: "Notes on the invoice",
       create: "Create the invoice {{total}}",

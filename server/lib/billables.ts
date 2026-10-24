@@ -1,6 +1,7 @@
 import { and, asc, eq, gte, inArray, isNotNull, lte, sql } from "drizzle-orm";
 import { db, schema } from "../db/index.ts";
 import { alignNumbering } from "./quickbooks.ts";
+import { dueAfterSent } from "../../shared/invoiceDue.ts";
 import { billingSettings, formatInvoiceNumber, quickbooksSettings, saveBillingSettings, type BillingSettings } from "./billing.ts";
 import { ensureCrm } from "./crm.ts";
 import { ticketSource, type BillableKind } from "./ticketSource.ts";
@@ -265,11 +266,8 @@ export async function draftInvoice(p: InvoiceDraft) {
   const issuedOn = p.issuedOn ?? todayQc();
   const termsDays = p.termsDays ?? client.invoice?.termsDays ?? s.template.termsDays;
   let dueOn = p.dueOn;
-  if (!dueOn) {
-    const due = new Date(`${issuedOn}T12:00:00`);
-    due.setDate(due.getDate() + termsDays);
-    dueOn = due.toISOString().slice(0, 10);
-  }
+  // counted from the day it is sent (an invoice goes out when it is made), not from the date written on it
+  if (!dueOn) dueOn = dueAfterSent(todayQc(), termsDays);
   const subtotal = items.reduce((x, i) => x + i.amountCents, 0);
   const taxable = items.filter((i) => i.taxable).reduce((x, i) => x + i.amountCents, 0);
   const exempt = client.invoice?.taxes === false;

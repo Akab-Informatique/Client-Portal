@@ -1,3 +1,4 @@
+import { dueAfterSent } from "../shared/invoiceDue.ts";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import * as OTPAuth from "otpauth";
 import nodeCrypto from "node:crypto";
@@ -3587,7 +3588,9 @@ describe("billing rules and the invoice editor", () => {
     // a preview of only the labour: client terms (15 days), a due date, a PO, notes; nothing saved
     const pv = (await admin.post("/api/billables/invoice/preview", { clientId: garage.id, kinds: ["labour"], issuedOn: "2026-10-20", poNumber: "PO-778", notes: "Merci !" })).json;
     const labour = all.filter((i: any) => i.kind === "labour");
-    expect(pv).toMatchObject({ issuedOn: "2026-10-20", dueOn: "2026-11-04", termsDays: 15, poNumber: "PO-778", notes: "Merci !", subtotalCents: labour.reduce((x: number, i: any) => x + i.amountCents, 0) });
+    // the due day counts from the day it is sent (today, an invoice goes out when it is made), terms + 1 day — not from the date written on it
+    const sendDay = new Date().toLocaleDateString("en-CA", { timeZone: "America/Toronto" });
+    expect(pv).toMatchObject({ issuedOn: "2026-10-20", dueOn: dueAfterSent(sendDay, 15), termsDays: 15, poNumber: "PO-778", notes: "Merci !", subtotalCents: labour.reduce((x: number, i: any) => x + i.amountCents, 0) });
     expect(pv.lines).toHaveLength(labour.length);
     expect((await items()).filter((i: any) => i.status === "posted")).toHaveLength(0);
     // an exact due date instead of terms; an item of another client or not approved: refused
@@ -3601,7 +3604,7 @@ describe("billing rules and the invoice editor", () => {
     const made = (await admin.post("/api/billables/invoice", { clientId: garage.id, kinds: ["labour"], issuedOn: "2026-10-20", poNumber: "PO-778", notes: "Merci !" })).json;
     expect(made.number).toBe(pv.number);
     const invoice = (await admin.get(`/api/crm/clients/${garage.id}/invoices`)).json.items.find((v: any) => v.id === made.id);
-    expect(invoice).toMatchObject({ source: "portal", issuedOn: "2026-10-20", dueOn: "2026-11-04", poNumber: "PO-778", notes: "Merci !" });
+    expect(invoice).toMatchObject({ source: "portal", issuedOn: "2026-10-20", dueOn: dueAfterSent(sendDay, 15), poNumber: "PO-778", notes: "Merci !" });
     expect(invoice.lines).toHaveLength(labour.length);
     const after = await items();
     expect(after.filter((i: any) => i.kind === "labour").every((i: any) => i.status === "posted")).toBe(true);
@@ -7045,5 +7048,27 @@ describe("contracts: services when made, charges, activity, stop instead of dele
     } finally {
       vi.unstubAllGlobals();
     }
+  });
+
+  it("the due day counts from the day the invoice is sent: terms + 1 day, on receipt = the next day", async () => {
+    const admin = await signIn("admin@akab.local");
+    const today = new Date().toLocaleDateString("en-CA", { timeZone: "America/Toronto" });
+    expect(dueAfterSent("2026-10-05", 15)).toBe("2026-10-21");
+    expect(dueAfterSent("2026-10-05", 0)).toBe("2026-10-06");
+    expect(dueAfterSent("2026-12-31", 0)).toBe("2027-01-01");
+    const [client] = await db().insert(schema.clients).values({ name: "Échéance inc.", autotaskId: 987654323 }).returning();
+    const mk = (n: number) => db().insert(schema.billingItems).values({ clientId: client!.id, kind: "charge", source: "portal", sourceId: `test:due:${n}`, date: "2026-10-01", description: `Pièce ${n}`, quantityX100: 100, unitPriceCents: 1000, amountCents: 1000, status: "approved", approvedAt: new Date() }).returning();
+    const [a] = await mk(1);
+    // dated the 1st of October with terms of 15 days: not due the 16th, but 16 days after the day it is made and sent
+    const made = (await admin.post("/api/billables/invoice", { clientId: client!.id, itemIds: [a!.id], issuedOn: "2026-10-01", termsDays: 15 })).json;
+    expect((await db().select().from(schema.clientInvoices).where(eq(schema.clientInvoices.id, made.id)))[0]).toMatchObject({ issuedOn: "2026-10-01", dueOn: dueAfterSent(today, 15) });
+    // on receipt (0 days): the next day
+    const [b] = await mk(2);
+    const receipt = (await admin.post("/api/billables/invoice", { clientId: client!.id, itemIds: [b!.id], termsDays: 0 })).json;
+    expect((await db().select().from(schema.clientInvoices).where(eq(schema.clientInvoices.id, receipt.id)))[0]!.dueOn).toBe(dueAfterSent(today, 0));
+    // an exact due date chosen by hand is left alone
+    const [c] = await mk(3);
+    const exact = (await admin.post("/api/billables/invoice", { clientId: client!.id, itemIds: [c!.id], dueOn: "2026-12-24" })).json;
+    expect((await db().select().from(schema.clientInvoices).where(eq(schema.clientInvoices.id, exact.id)))[0]!.dueOn).toBe("2026-12-24");
   });
 });
