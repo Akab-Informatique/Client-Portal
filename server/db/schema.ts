@@ -149,6 +149,8 @@ export const clientContracts = pgTable(
     billingPeriod: text("billing_period").notNull().default("monthly"),
     /** The day charging was stopped (the contract made inactive after charges had started): its services are charged up to it */
     endedOn: text("ended_on"),
+    /** YYYY-MM-DD: already invoiced in the old system up to this day (included): what falls on or before it is never billed here */
+    billedThrough: text("billed_through"),
     syncedAt: timestamp("synced_at", { withTimezone: true }),
     createdAt: created(),
     updatedAt: updated(),
@@ -2330,4 +2332,24 @@ export const pushChallenges = pgTable(
     answeredAt: timestamp("answered_at", { withTimezone: true }),
   },
   (t) => [index("push_challenges_user_idx").on(t.userId, t.createdAt), index("push_challenges_session_idx").on(t.sessionId)],
+);
+
+/** The temporary clean-up of the approval pages keeps what it set aside here, to find it back and delete it later */
+export const cleanupLog = pgTable(
+  "cleanup_log",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    /** One run of the clean-up */
+    runId: uuid("run_id").notNull(),
+    /** timesheet | expense */
+    kind: text("kind").notNull(),
+    refId: uuid("ref_id").notNull(),
+    userId: uuid("user_id").references(() => users.id, { onDelete: "set null" }),
+    /** What it was: week or date, type, amount… */
+    label: text("label").notNull().default(""),
+    /** The state it had (status, submitted / decided by and when, comment) */
+    previous: jsonb("previous").notNull().default({}),
+    createdAt: created(),
+  },
+  (t) => [index("cleanup_log_run_idx").on(t.runId), index("cleanup_log_kind_idx").on(t.kind, t.createdAt)],
 );

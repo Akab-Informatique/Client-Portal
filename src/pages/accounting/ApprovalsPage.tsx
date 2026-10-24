@@ -852,7 +852,7 @@ function KindTab({ kind, counts, lang, pq }: { kind: Kind; counts: (s: Status) =
                         </span>
                       )}
                       <span className={cn("rounded-md border px-1.5 py-0.5 text-[10px]", STATUS_STYLE[i.status])}>
-                        {i.status === "excluded" && i.excludedReason === "billed" ? t("approvals.alreadyBilledTag") : t(`approvals.status.${i.status}`)}
+                        {i.status === "excluded" && i.excludedReason === "billed" ? t("approvals.alreadyBilledTag") : i.status === "excluded" && i.excludedReason === "aside" ? t("approvals.asideTag") : t(`approvals.status.${i.status}`)}
                       </span>
                     </span>
                   </li>

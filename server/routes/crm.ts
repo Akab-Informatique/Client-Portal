@@ -86,8 +86,10 @@ const chargeLines = (rows: ServiceRow[]): ChargeLine[] => rows.map((r) => ({ id:
 /** What a contract charges (per full period, over its term) and what comes next, from its services */
 function summaryOf(k: ContractRow, rows: ServiceRow[], today: string) {
   const ch = contractCharges({ startDate: k.startDate, endDate: k.endDate, endedOn: k.endedOn, billingPeriod: k.billingPeriod === "yearly" ? "yearly" : "monthly" }, chargeLines(rows));
-  const on = chargesOn(ch, today);
+  const on = chargesOn(ch, today, k.billedThrough);
   return {
+    billedThrough: k.billedThrough ?? null,
+    billedCents: on.billedCents,
     revenueCents: ch.revenueCents,
     perPeriodCents: ch.perPeriodCents,
     yearlyExtraCents: ch.yearlyExtraCents,
@@ -95,6 +97,15 @@ function summaryOf(k: ContractRow, rows: ServiceRow[], today: string) {
     dueCents: on.dueCents,
     next: on.next ? { date: on.next.date, amountCents: on.next.amountCents, prorated: on.next.prorated } : null,
   };
+}
+/** Lines of a contract still to approve or approved, dated up to `through` (included): "already invoiced", never billed here */
+async function excludeBilledThrough(contractId: string, through: string) {
+  const rows = await db()
+    .update(schema.billingItems)
+    .set({ status: "excluded", excludedReason: "billed", approvedBy: null, approvedAt: null, updatedAt: new Date() })
+    .where(and(eq(schema.billingItems.contractId, contractId), inArray(schema.billingItems.status, ["pending", "approved"]), lte(schema.billingItems.date, through)))
+    .returning({ id: schema.billingItems.id });
+  return rows.length;
 }
 const servicesOf = (contractId: string) => db().select().from(schema.contractServices).where(eq(schema.contractServices.contractId, contractId)).orderBy(asc(schema.contractServices.addedOn), asc(schema.contractServices.name));
 
@@ -416,6 +427,8 @@ export const crmRoutes = new Hono<AppEnv>()
         endDate: zDay,
         /** How a recurring services contract is charged */
         billingPeriod: z.enum(["monthly", "yearly"]).default("monthly"),
+        /** Already invoiced in the old system up to this day (included) */
+        billedThrough: zDay.nullable().optional(),
         /** Dollars */
         hourlyRate: z.number().min(0).max(100_000).nullable().optional(),
         monthlyRate: z.number().min(0).max(1_000_000).nullable().optional(),
@@ -454,6 +467,7 @@ export const crmRoutes = new Hono<AppEnv>()
           typeKey: type.key,
           billingMode: mode,
           billingPeriod: p.billingPeriod,
+          billedThrough: p.billedThrough ?? null,
           startDate: p.startDate,
           endDate: p.endDate,
           hourlyRateCents: cents(p.hourlyRate),
@@ -799,6 +813,7 @@ export const crmRoutes = new Hono<AppEnv>()
         fixedPrice: z.number().min(0).max(10_000_000).nullable().optional(),
         bankedHours: z.number().min(0).max(100_000).nullable().optional(),
         billingPeriod: z.enum(["monthly", "yearly"]).optional(),
+        billedThrough: zDay.nullable().optional(),
         active: z.boolean().optional(),
       }),
     );
@@ -822,6 +837,7 @@ export const crmRoutes = new Hono<AppEnv>()
       ...(p.fixedPrice !== undefined ? { fixedPriceCents: cents(p.fixedPrice) } : {}),
       ...(p.bankedHours !== undefined ? { bankedHoursX100: p.bankedHours === null ? null : Math.round(p.bankedHours * 100) } : {}),
       ...(p.billingPeriod ? { billingPeriod: p.billingPeriod } : {}),
+      ...(p.billedThrough !== undefined ? { billedThrough: p.billedThrough } : {}),
       // stopping a contract keeps what was charged: it is charged up to today; starting it again clears the stop
       ...(p.active !== undefined && p.active !== before.active ? (p.active ? { active: true, endedOn: null } : { active: false, endedOn: before.startDate && todayQc() < before.startDate ? before.startDate : todayQc(), supportDefault: false }) : {}),
     };
@@ -844,15 +860,17 @@ export const crmRoutes = new Hono<AppEnv>()
     });
     if (!row) throw new HTTPException(404, { message: "not_found" });
     const approved = p.autoApprove ? await applyAutoApprove(client.id) : 0;
+    // lines of this contract already copied for days up to there were invoiced elsewhere: set aside as "already invoiced"
+    const setAside = row.billedThrough ? await excludeBilledThrough(row.id, row.billedThrough) : 0;
     await audit(a.user.id, "crm.contract_updated", row.id, { ...set, approved });
     // the activity: what changed, and a stop or a restart on its own
-    const watched = ["name", "type", "startDate", "endDate", "billingPeriod", "billingMode", "hourlyRateCents", "monthlyRateCents", "ticketRateCents", "fixedPriceCents", "bankedHoursX100", "autoApprove"] as const;
+    const watched = ["name", "type", "startDate", "endDate", "billingPeriod", "billingMode", "hourlyRateCents", "monthlyRateCents", "ticketRateCents", "fixedPriceCents", "bankedHoursX100", "autoApprove", "billedThrough"] as const;
     const changes: Record<string, [unknown, unknown]> = {};
     for (const key of watched) if (key in set && before[key] !== row[key]) changes[key] = [before[key], row[key]];
     if (Object.keys(changes).length) await recordContractEvent(row.id, "updated", { changes }, { userId: a.user.id });
     if (p.active !== undefined && p.active !== before.active) await recordContractEvent(row.id, p.active ? "resumed" : "stopped", p.active ? {} : { on: row.endedOn }, { userId: a.user.id });
     if (p.typeKey || p.billingMode) await syncMonthlyRate(row.id);
-    return c.json({ ...row, approved });
+    return c.json({ ...row, approved, setAside });
   })
 
   // ── tickets of the client (and of its child companies, on demand)

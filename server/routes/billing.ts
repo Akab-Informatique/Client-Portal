@@ -1,6 +1,6 @@
 import { Hono, type Context } from "hono";
 import { HTTPException } from "hono/http-exception";
-import { and, asc, desc, eq, ne } from "drizzle-orm";
+import { and, asc, count, desc, eq, inArray, ne } from "drizzle-orm";
 import { z } from "zod";
 import { db, schema } from "../db/index.ts";
 import { auth, requirePermission, requireStaff, type AppEnv } from "../lib/auth.ts";
@@ -154,6 +154,106 @@ export const billingRoutes = new Hono<AppEnv>()
   })
 
   // ── General: numbering, taxes, company, template, default accounts ──
+  // Temporary clean-up of the approval pages (admin.billing): nothing is deleted from the people's own data
+  .get("/cleanup", requirePermission("admin.billing"), async (c) => {
+    const d = db();
+    const [lines] = await d.select({ n: count() }).from(schema.billingItems).where(and(eq(schema.billingItems.kind, "contract"), inArray(schema.billingItems.status, ["pending", "approved"])));
+    const [ts] = await d.select({ n: count() }).from(schema.timesheets).where(inArray(schema.timesheets.status, ["submitted", "approved", "rejected"]));
+    const [ex] = await d.select({ n: count() }).from(schema.expenses).where(inArray(schema.expenses.status, ["submitted", "approved", "rejected"]));
+    const [kept] = await d.select({ n: count() }).from(schema.billingItems).where(and(eq(schema.billingItems.status, "excluded"), eq(schema.billingItems.excludedReason, "aside")));
+    const [rec] = await d.select({ n: count() }).from(schema.cleanupLog);
+    return c.json({ contractLines: lines?.n ?? 0, timesheets: ts?.n ?? 0, expenses: ex?.n ?? 0, keptLines: kept?.n ?? 0, keptRecords: rec?.n ?? 0 });
+  })
+  // recurring-contract lines still to approve or approved (not invoiced) are set aside: excluded, never brought back by an import
+  .post("/cleanup/contracts", requirePermission("admin.billing"), async (c) => {
+    const a = auth(c);
+    const rows = await db()
+      .update(schema.billingItems)
+      .set({ status: "excluded", excludedReason: "aside", approvedBy: null, approvedAt: null, updatedAt: new Date() })
+      .where(and(eq(schema.billingItems.kind, "contract"), inArray(schema.billingItems.status, ["pending", "approved"])))
+      .returning({ id: schema.billingItems.id });
+    await audit(a.realUser.id, "billing.cleanup_contract_lines", null, { count: rows.length });
+    return c.json({ changed: rows.length });
+  })
+  // every timesheet and expense waiting, approved or refused (not the paid ones) goes back to its owner as a draft; their data stays,
+  // and what they were is kept in cleanup_log (to find it back, and to delete later)
+  .post("/cleanup/approvals", requirePermission("admin.billing"), async (c) => {
+    const a = auth(c);
+    const d = db();
+    const open = ["submitted", "approved", "rejected"];
+    const runId = crypto.randomUUID();
+    const out = await d.transaction(async (tx) => {
+      const sheets = await tx.select({ t: schema.timesheets, who: schema.users.name }).from(schema.timesheets).innerJoin(schema.users, eq(schema.users.id, schema.timesheets.userId)).where(inArray(schema.timesheets.status, open));
+      const exps = await tx
+        .select({ x: schema.expenses, who: schema.users.name, type: schema.expenseTypes.name })
+        .from(schema.expenses)
+        .innerJoin(schema.users, eq(schema.users.id, schema.expenses.userId))
+        .innerJoin(schema.expenseTypes, eq(schema.expenseTypes.id, schema.expenses.typeId))
+        .where(inArray(schema.expenses.status, open));
+      const snap = (r: { status: string; submittedAt: Date | null; decidedBy: string | null; decidedAt: Date | null; comment: string | null }) => ({ status: r.status, submittedAt: r.submittedAt, decidedBy: r.decidedBy, decidedAt: r.decidedAt, comment: r.comment });
+      const log = [
+        ...sheets.map(({ t, who }) => ({ runId, kind: "timesheet", refId: t.id, userId: t.userId, label: `${who} — ${t.weekStart}`, previous: snap(t) })),
+        ...exps.map(({ x, who, type }) => ({ runId, kind: "expense", refId: x.id, userId: x.userId, label: `${who} — ${x.date} — ${type}${x.description ? ` — ${x.description}` : ""} — ${(x.amountCents / 100).toFixed(2)} $`, previous: { ...snap(x), billingItemId: x.billingItemId } })),
+      ];
+      for (let i = 0; i < log.length; i += 200) await tx.insert(schema.cleanupLog).values(log.slice(i, i + 200));
+      if (sheets.length)
+        await tx
+          .update(schema.timesheets)
+          .set({ status: "draft", submittedAt: null, decidedBy: null, decidedAt: null, comment: null, updatedAt: new Date() })
+          .where(inArray(schema.timesheets.id, sheets.map((r) => r.t.id)));
+      if (exps.length)
+        await tx
+          .update(schema.expenses)
+          .set({ status: "draft", submittedAt: null, decidedBy: null, decidedAt: null, comment: null, billingItemId: null, updatedAt: new Date() })
+          .where(inArray(schema.expenses.id, exps.map((r) => r.x.id)));
+      const reports = [...new Set(exps.map((r) => r.x.reportId).filter((id): id is string => Boolean(id)))];
+      if (reports.length) await tx.update(schema.expenseReports).set({ submittedAt: null, updatedAt: new Date() }).where(inArray(schema.expenseReports.id, reports));
+      // the work to bill made from an approved expense is kept, set aside (a new approval makes a fresh one), unless it was already invoiced
+      let lines = 0;
+      for (const { x } of exps) {
+        const rows = await tx
+          .update(schema.billingItems)
+          .set({ status: "excluded", excludedReason: "aside", sourceId: `aside:${runId}:expense:${x.id}`, approvedBy: null, approvedAt: null, updatedAt: new Date() })
+          .where(and(eq(schema.billingItems.source, "portal"), eq(schema.billingItems.sourceId, `expense:${x.id}`), ne(schema.billingItems.status, "posted")))
+          .returning({ id: schema.billingItems.id });
+        lines += rows.length;
+      }
+      return { timesheets: sheets.length, expenses: exps.length, lines };
+    });
+    await audit(a.realUser.id, "billing.cleanup_approvals", null, { ...out, runId });
+    return c.json(out);
+  })
+  // what the clean-up set aside, to look it up
+  .get("/cleanup/log", requirePermission("admin.billing"), async (c) => {
+    const kind = c.req.query("kind");
+    const q = (c.req.query("q") ?? "").trim().toLowerCase();
+    const rows = await db()
+      .select()
+      .from(schema.cleanupLog)
+      .where(kind === "timesheet" || kind === "expense" ? eq(schema.cleanupLog.kind, kind) : undefined)
+      .orderBy(desc(schema.cleanupLog.createdAt), asc(schema.cleanupLog.label))
+      .limit(2000);
+    const items = await db()
+      .select({ id: schema.billingItems.id, clientId: schema.billingItems.clientId, client: schema.clients.name, kind: schema.billingItems.kind, date: schema.billingItems.date, description: schema.billingItems.description, amountCents: schema.billingItems.amountCents, contractName: schema.billingItems.contractName })
+      .from(schema.billingItems)
+      .leftJoin(schema.clients, eq(schema.clients.id, schema.billingItems.clientId))
+      .where(and(eq(schema.billingItems.status, "excluded"), eq(schema.billingItems.excludedReason, "aside")))
+      .orderBy(asc(schema.clients.name), asc(schema.billingItems.date))
+      .limit(2000);
+    const has = (t: string) => !q || t.toLowerCase().includes(q);
+    return c.json({
+      records: rows.filter((r) => has(r.label)).map((r) => ({ id: r.id, runId: r.runId, kind: r.kind, label: r.label, previous: r.previous, at: r.createdAt })),
+      lines: items.filter((i) => has(`${i.client ?? ""} ${i.description} ${i.contractName ?? ""}`)),
+    });
+  })
+  // later, when it is no longer needed: deletes the set-aside lines and the record of the clean-up (never the people's own time or expenses)
+  .post("/cleanup/purge", requirePermission("admin.billing"), async (c) => {
+    const a = auth(c);
+    const lines = await db().delete(schema.billingItems).where(and(eq(schema.billingItems.status, "excluded"), eq(schema.billingItems.excludedReason, "aside"))).returning({ id: schema.billingItems.id });
+    const records = await db().delete(schema.cleanupLog).returning({ id: schema.cleanupLog.id });
+    await audit(a.realUser.id, "billing.cleanup_purged", null, { lines: lines.length, records: records.length });
+    return c.json({ lines: lines.length, records: records.length });
+  })
   .get("/settings", requirePermission("admin.billing"), async (c) => {
     const s = await billingSettings();
     return c.json({ ...s, preview: formatInvoiceNumber(s.numbering) });

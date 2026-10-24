@@ -5182,6 +5182,18 @@ describe("contract types, contracts made by hand, services", () => {
     expect(hourly.hourlyRateCents).toBe(12000);
     expect(banked.bankedHoursX100).toBe(4000);
     expect(fixed.fixedPriceCents).toBe(300000);
+
+    // already invoiced in the old system: lines of the contract up to that day are set aside as "already billed", later ones stay
+    const early = await mk({ name: "Ancien A", typeKey: "fixed", fixedPrice: 100, startDate: "2024-01-01", endDate: "2026-12-31", billedThrough: "2025-06-30" });
+    expect(early.billedThrough).toBe("2025-06-30");
+    const oldLine = (date: string) => ({ clientId: client.id, kind: "contract", source: "autotask", sourceId: `test:billed:${date}`, date, description: "x", contractName: "Ancien A", contractId: early.id, quantityX100: 100, unitPriceCents: 1000, amountCents: 1000, status: "pending" });
+    const olds = await db().insert(schema.billingItems).values([oldLine("2025-03-01"), oldLine("2025-09-01")]).returning();
+    const moved = await admin.patch(`/api/crm/clients/${client.id}/contracts/${early.id}`, { billedThrough: "2025-06-30" });
+    expect(moved.json).toMatchObject({ setAside: 1 });
+    const nowRows = await db().select().from(schema.billingItems).where(eq(schema.billingItems.contractId, early.id));
+    expect(nowRows.find((x) => x.id === olds[0]!.id)).toMatchObject({ status: "excluded", excludedReason: "billed" });
+    expect(nowRows.find((x) => x.id === olds[1]!.id)!.status).toBe("pending");
+    expect((await admin.patch(`/api/crm/clients/${client.id}/contracts/${early.id}`, { billedThrough: null })).json.billedThrough).toBeNull();
     expect((await tech.post(`/api/crm/clients/${client.id}/contracts`, { name: "x", typeKey: "hourly", ...term })).status).toBe(403);
     expect((await admin.post(`/api/crm/clients/${client.id}/contracts`, { name: "x", typeKey: "inconnu", ...term })).json.error).toBe("invalid_type");
     // a contract has a term: both days, the end not before the start
@@ -6888,5 +6900,49 @@ describe("contracts: services when made, charges, activity, stop instead of dele
     expect((await admin.get(`${base}/${live.id}/activity`)).json.map((e: any) => e.kind)).toContain("resumed");
     // stopped from the window too (the same rule)
     expect((await admin.patch(`${base}/${live.id}`, { active: false })).json).toMatchObject({ active: false, endedOn: today });
+  });
+
+  it("temporary clean-up: recurring contract lines set aside, timesheets and expenses back to drafts", async () => {
+    const admin = await signIn("admin@akab.local");
+    const tech = await signIn("tech@akab.local");
+    const [u] = await db().select().from(schema.users).where(eq(schema.users.email, "tech@akab.local"));
+    const [client] = await db().insert(schema.clients).values({ name: "Nettoyage inc." }).returning();
+    const line = (kind: string, status: string, n: number) => ({ clientId: client!.id, kind, source: "autotask", sourceId: `test:clean:${kind}:${status}:${n}`, date: "2026-10-01", description: "x", quantityX100: 100, unitPriceCents: 1000, amountCents: 1000, status });
+    const rows = await db()
+      .insert(schema.billingItems)
+      .values([line("contract", "pending", 1), line("contract", "approved", 2), line("contract", "posted", 3), line("charge", "pending", 4)])
+      .returning();
+    const [sheet] = await db().insert(schema.timesheets).values({ userId: u!.id, weekStart: "2026-10-12", status: "approved", submittedAt: new Date(), decidedAt: new Date() }).returning();
+    const [paid] = await db().insert(schema.timesheets).values({ userId: u!.id, weekStart: "2026-10-05", status: "paid", submittedAt: new Date() }).returning();
+    // only an administrator with the right
+    expect((await tech.post("/api/billing/cleanup/contracts", {})).status).toBe(403);
+    expect((await tech.post("/api/billing/cleanup/approvals", {})).status).toBe(403);
+    const before = (await admin.get("/api/billing/cleanup")).json;
+    expect(before.contractLines).toBeGreaterThanOrEqual(2);
+    expect(before.timesheets).toBeGreaterThanOrEqual(1);
+    // recurring contract lines only: pending and approved ones are excluded, an invoiced one and other kinds stay
+    expect((await admin.post("/api/billing/cleanup/contracts", {})).json.changed).toBeGreaterThanOrEqual(2);
+    const after = await db().select().from(schema.billingItems).where(eq(schema.billingItems.clientId, client!.id));
+    const by = (n: number) => after.find((x) => x.id === rows[n]!.id)!;
+    expect(by(0)).toMatchObject({ status: "excluded", excludedReason: "aside" });
+    expect(by(1)).toMatchObject({ status: "excluded", excludedReason: "aside" });
+    expect(by(2).status).toBe("posted");
+    expect(by(3).status).toBe("pending");
+    // timesheets and expenses go back to drafts; paid ones are left alone
+    expect((await admin.post("/api/billing/cleanup/approvals", {})).json.timesheets).toBeGreaterThanOrEqual(1);
+    const [s1] = await db().select().from(schema.timesheets).where(eq(schema.timesheets.id, sheet!.id));
+    const [s2] = await db().select().from(schema.timesheets).where(eq(schema.timesheets.id, paid!.id));
+    expect(s1).toMatchObject({ status: "draft", submittedAt: null });
+    expect(s2!.status).toBe("paid");
+    // what it did is kept, findable, and only a purge deletes it
+    const log = (await admin.get("/api/billing/cleanup/log?q=2026-10-12")).json;
+    const logAll = (await admin.get("/api/billing/cleanup/log")).json;
+    expect(log.records.some((r: { refId?: string; label: string; kind: string }) => r.kind === "timesheet" && r.label.includes("2026-10-12"))).toBe(true);
+    expect(logAll.lines.length).toBeGreaterThanOrEqual(2);
+    expect((await tech.post("/api/billing/cleanup/purge", {})).status).toBe(403);
+    expect((await admin.post("/api/billing/cleanup/purge", {})).json.lines).toBeGreaterThanOrEqual(2);
+    expect((await db().select().from(schema.billingItems).where(eq(schema.billingItems.id, rows[0]!.id))).length).toBe(0);
+    expect((await admin.get("/api/billing/cleanup")).json.keptRecords).toBe(0);
+    await db().delete(schema.timesheets).where(eq(schema.timesheets.userId, u!.id));
   });
 });

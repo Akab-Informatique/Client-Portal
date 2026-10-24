@@ -101,7 +101,14 @@ export function contractCharges(
 }
 
 /** What has fallen due on a day, and the next charge after it */
-export function chargesOn(ch: ContractCharges, today: string) {
-  const due = ch.entries.filter((e) => e.date <= today);
-  return { due, dueCents: due.reduce((n, e) => n + e.amountCents, 0), next: ch.entries.find((e) => e.date > today) ?? null };
+export function chargesOn(ch: ContractCharges, today: string, billedThrough?: string | null) {
+  // what was invoiced in the old system (on or before `billedThrough`) is never due here
+  const billed = billedThrough ? ch.entries.filter((e) => e.date <= billedThrough) : [];
+  const due = ch.entries.filter((e) => e.date <= today && !(billedThrough && e.date <= billedThrough));
+  return {
+    due,
+    dueCents: due.reduce((n, e) => n + e.amountCents, 0),
+    billedCents: billed.reduce((n, e) => n + e.amountCents, 0),
+    next: ch.entries.find((e) => e.date > today && !(billedThrough && e.date <= billedThrough)) ?? null,
+  };
 }

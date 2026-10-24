@@ -36,8 +36,8 @@ type Line = {
   totalCents: number | null;
   periods: { from: string; to: string; days: number; periodDays: number; full: boolean; amountCents: number }[];
 };
-type Summary = { revenueCents: number; perPeriodCents: number; yearlyExtraCents: number; endsOn: string | null; dueCents: number; next: { date: string; amountCents: number; prorated: boolean } | null };
-type Detail = CrmContract & { billingPeriod: BillingPeriod; endedOn: string | null; services: Line[]; summary: Summary; charged: { has: boolean; billingItems: number; timeEntries: number; servicesStarted: number } };
+type Summary = { billedThrough?: string | null; billedCents?: number; revenueCents: number; perPeriodCents: number; yearlyExtraCents: number; endsOn: string | null; dueCents: number; next: { date: string; amountCents: number; prorated: boolean } | null };
+type Detail = CrmContract & { billingPeriod: BillingPeriod; endedOn: string | null; billedThrough: string | null; services: Line[]; summary: Summary; charged: { has: boolean; billingItems: number; timeEntries: number; servicesStarted: number } };
 type CatalogItem = { id: string; name: string; kind: "recurring" | "recurring_yearly"; priceCents: number; costCents: number };
 type Event = { id: string; kind: string; source: string; detail: Record<string, any>; at: string; actor: string | null };
 
@@ -80,7 +80,7 @@ function Figures({ summary, period, lang }: { summary: Summary; period: BillingP
         value={summary.next ? money(summary.next.amountCents, lang) : "—"}
         hint={summary.next ? `${shortDate(summary.next.date)}${summary.next.prorated ? ` · ${t("crm.contracts.window.prorated")}` : ""}` : t("crm.contracts.window.noNext")}
       />
-      <Kpi icon={<CalendarDays className="size-3.5" />} label={t("crm.contracts.window.due")} value={money(summary.dueCents, lang)} hint={t("crm.contracts.window.dueHint")} tone="sky" />
+      <Kpi icon={<CalendarDays className="size-3.5" />} label={t("crm.contracts.window.due")} value={money(summary.dueCents, lang)} hint={summary.billedThrough ? t("crm.contracts.billedThroughHint", { date: shortDate(summary.billedThrough), amount: money(summary.billedCents ?? 0, lang) }) : t("crm.contracts.window.dueHint")} tone="sky" />
     </div>
   );
 }
@@ -151,11 +151,12 @@ function ServiceAdder({ term, onAdd, busy }: { term: { start: string; end: strin
 }
 
 const field = "h-9 w-full rounded-md border bg-transparent px-2 text-sm outline-none focus:ring-2 focus:ring-[color:var(--gold)]/40 disabled:opacity-60";
-function Field({ label, children, className }: { label: string; children: ReactNode; className?: string }) {
+function Field({ label, children, className, hint }: { label: string; children: ReactNode; className?: string; hint?: string }) {
   return (
     <label className={cn("space-y-1 text-xs", className)}>
       <span className="text-muted-foreground">{label}</span>
       {children}
+      {hint && <span className="block text-[10px] leading-snug text-muted-foreground">{hint}</span>}
     </label>
   );
 }
@@ -171,7 +172,7 @@ export function NewContractDialog({ client, onClose }: { client: CrmDetail; onCl
     const now = new Date();
     const end = new Date(now.getFullYear() + 1, now.getMonth(), now.getDate() - 1, 12);
     const day = (d: Date) => new Date(d.getTime() - d.getTimezoneOffset() * 60_000).toISOString().slice(0, 10);
-    return { name: "", typeKey: "", startDate: day(now), endDate: day(end), figure: "", billingPeriod: "monthly" as BillingPeriod };
+    return { name: "", typeKey: "", startDate: day(now), endDate: day(end), figure: "", billingPeriod: "monthly" as BillingPeriod, billedThrough: "" };
   });
   const [lines, setLines] = useState<Draft[]>([]);
   const type = types.find((x) => x.key === (f.typeKey || types[0]?.key));
@@ -182,7 +183,7 @@ export function NewContractDialog({ client, onClose }: { client: CrmDetail; onCl
     () => contractCharges({ startDate: f.startDate, endDate: f.endDate, billingPeriod: f.billingPeriod }, lines.map((l, i): ChargeLine => ({ id: String(i), name: l.name, kind: l.kind, priceCents: l.priceCents, quantity: l.quantity, addedOn: l.addedOn }))),
     [f.startDate, f.endDate, f.billingPeriod, lines],
   );
-  const on = chargesOn(charges, todayYmd());
+  const on = chargesOn(charges, todayYmd(), f.billedThrough || null);
   const create = useMutation({
     mutationFn: () => {
       const n = f.figure.trim() === "" ? null : Number(f.figure.replace(",", "."));
@@ -194,6 +195,7 @@ export function NewContractDialog({ client, onClose }: { client: CrmDetail; onCl
         startDate: f.startDate,
         endDate: f.endDate,
         billingPeriod: f.billingPeriod,
+        ...(f.billedThrough ? { billedThrough: f.billedThrough } : {}),
         ...figure,
         services: lines.map((l) => ({ serviceId: l.serviceId, addedOn: l.addedOn, quantity: l.quantity, ...(l.unitCustom ? { priceCents: l.priceCents } : {}) })),
       });
@@ -250,6 +252,9 @@ export function NewContractDialog({ client, onClose }: { client: CrmDetail; onCl
                   <option value="yearly">{t("crm.contracts.window.yearly")}</option>
                 </select>
               </Field>
+              <Field label={t("crm.contracts.billedThrough")} hint={t("crm.contracts.billedThroughText")}>
+                <Input type="date" value={f.billedThrough} onChange={set("billedThrough")} />
+              </Field>
               {/* the recurring services contract asks no charge here: it comes from its services */}
               {type && type.kind !== "recurring" && (
                 <Field label={t(`crm.contracts.figure_${type.kind}`)}>
@@ -288,7 +293,7 @@ export function NewContractDialog({ client, onClose }: { client: CrmDetail; onCl
             />
           </section>
 
-          <Figures summary={{ revenueCents: charges.revenueCents, perPeriodCents: charges.perPeriodCents, yearlyExtraCents: charges.yearlyExtraCents, endsOn: charges.endsOn, dueCents: on.dueCents, next: on.next ? { date: on.next.date, amountCents: on.next.amountCents, prorated: on.next.prorated } : null }} period={f.billingPeriod} lang={lang} />
+          <Figures summary={{ billedThrough: f.billedThrough || null, billedCents: on.billedCents, revenueCents: charges.revenueCents, perPeriodCents: charges.perPeriodCents, yearlyExtraCents: charges.yearlyExtraCents, endsOn: charges.endsOn, dueCents: on.dueCents, next: on.next ? { date: on.next.date, amountCents: on.next.amountCents, prorated: on.next.prorated } : null }} period={f.billingPeriod} lang={lang} />
 
           <div className="flex justify-end gap-2 border-t pt-4">
             <Button type="button" variant="ghost" onClick={onClose}>
@@ -540,7 +545,7 @@ function ChargesTab({ k, lang }: { k: Detail; lang: string }) {
     () => contractCharges({ startDate: k.startDate, endDate: k.endDate, endedOn: k.endedOn, billingPeriod: k.billingPeriod }, k.services.map((l): ChargeLine => ({ id: l.id, name: l.name, kind: l.kind, priceCents: l.priceCents, quantity: l.quantity, addedOn: l.addedOn }))),
     [k],
   );
-  const on = chargesOn(ch, today);
+  const on = chargesOn(ch, today, k.billedThrough);
   if (!k.startDate || !k.endDate) return <p className="text-sm text-amber-300">{t("crm.contracts.needTerm")}</p>;
   if (!ch.entries.length) return <p className="rounded-lg border border-dashed py-6 text-center text-sm text-muted-foreground">{t("crm.contracts.window.noCharges")}</p>;
   return (
@@ -550,7 +555,8 @@ function ChargesTab({ k, lang }: { k: Detail; lang: string }) {
       <ul className="divide-y divide-border/50 overflow-hidden rounded-lg border text-sm">
         {ch.entries.map((e) => {
           const isNext = on.next?.date === e.date;
-          const past = e.date <= today;
+          const billed = Boolean(k.billedThrough && e.date <= k.billedThrough);
+          const past = e.date <= today || billed;
           return (
             <li key={e.date} className={cn("px-3 py-2", isNext && "bg-[color:var(--gold)]/[0.07]", past && "text-muted-foreground")}>
               <div className="flex flex-wrap items-center gap-x-3 gap-y-0.5">
@@ -560,7 +566,7 @@ function ChargesTab({ k, lang }: { k: Detail; lang: string }) {
                 </span>
                 {e.prorated && <span className="rounded border border-amber-400/40 px-1.5 text-[10px] font-semibold uppercase text-amber-300">{t("crm.contracts.window.prorated")}</span>}
                 {isNext && <span className="rounded border border-[color:var(--gold)]/50 px-1.5 text-[10px] font-semibold uppercase text-primary">{t("crm.contracts.window.nextTag")}</span>}
-                {past && <span className="rounded border px-1.5 text-[10px] uppercase">{t("crm.contracts.window.dueTag")}</span>}
+                {billed ? <span className="rounded border border-emerald-500/40 px-1.5 text-[10px] font-semibold uppercase text-emerald-300">{t("crm.contracts.billedTag")}</span> : past && <span className="rounded border px-1.5 text-[10px] uppercase">{t("crm.contracts.window.dueTag")}</span>}
                 <span className={cn("w-28 text-right font-mono font-semibold", !past && "text-foreground")}>{money(e.amountCents, lang)}</span>
               </div>
               {(e.pieces.length > 1 || e.prorated) && (
@@ -593,6 +599,7 @@ const FIELD_LABEL: Record<string, string> = {
   startDate: "crm.contracts.start",
   endDate: "crm.contracts.end",
   billingPeriod: "crm.contracts.window.chargedBy",
+  billedThrough: "crm.contracts.billedThrough",
   autoApprove: "crm.contracts.auto",
 };
 
@@ -656,8 +663,8 @@ function OverviewTab({ client, k, editable, onChanged, onClose }: { client: CrmD
   const figureField = k.billingMode === "hourly" ? "hourlyRate" : k.billingMode === "per_ticket" ? "ticketRate" : k.billingMode === "fixed" ? "fixedPrice" : k.billingMode === "banked" ? "bankedHours" : null;
   const figureValue = k.billingMode === "hourly" ? k.hourlyRateCents : k.billingMode === "per_ticket" ? k.ticketRateCents : k.billingMode === "fixed" ? k.fixedPriceCents : k.billingMode === "banked" ? k.bankedHoursX100 : null;
   const show = (v: number | null) => (v == null ? "" : String(v / 100));
-  const [f, setF] = useState({ name: k.name, typeKey: k.typeKey ?? "", startDate: k.startDate ?? "", endDate: k.endDate ?? "", billingPeriod: k.billingPeriod, figure: show(figureValue) });
-  useEffect(() => setF({ name: k.name, typeKey: k.typeKey ?? "", startDate: k.startDate ?? "", endDate: k.endDate ?? "", billingPeriod: k.billingPeriod, figure: show(figureValue) }), [k.name, k.typeKey, k.startDate, k.endDate, k.billingPeriod, figureValue]); // eslint-disable-line react-hooks/exhaustive-deps
+  const [f, setF] = useState({ name: k.name, typeKey: k.typeKey ?? "", startDate: k.startDate ?? "", endDate: k.endDate ?? "", billingPeriod: k.billingPeriod, billedThrough: k.billedThrough ?? "", figure: show(figureValue) });
+  useEffect(() => setF({ name: k.name, typeKey: k.typeKey ?? "", startDate: k.startDate ?? "", endDate: k.endDate ?? "", billingPeriod: k.billingPeriod, billedThrough: k.billedThrough ?? "", figure: show(figureValue) }), [k.name, k.typeKey, k.startDate, k.endDate, k.billingPeriod, k.billedThrough, figureValue]); // eslint-disable-line react-hooks/exhaustive-deps
   const patch = useMutation({
     mutationFn: (p: Record<string, unknown>) => api.patch<{ approved?: number }>(base, p),
     onSuccess: () => {
@@ -675,7 +682,7 @@ function OverviewTab({ client, k, editable, onChanged, onClose }: { client: CrmD
     },
     onError: (e) => toast.error(contractError(t, e)),
   });
-  const dirty = f.name.trim() !== k.name || f.typeKey !== (k.typeKey ?? "") || f.startDate !== (k.startDate ?? "") || f.endDate !== (k.endDate ?? "") || f.billingPeriod !== k.billingPeriod || (figureField !== null && (toCents(f.figure) ?? null) !== (figureValue ?? null));
+  const dirty = f.name.trim() !== k.name || f.typeKey !== (k.typeKey ?? "") || f.startDate !== (k.startDate ?? "") || f.endDate !== (k.endDate ?? "") || f.billingPeriod !== k.billingPeriod || f.billedThrough !== (k.billedThrough ?? "") || (figureField !== null && (toCents(f.figure) ?? null) !== (figureValue ?? null));
   const save = () => {
     const p: Record<string, unknown> = {};
     if (f.name.trim() !== k.name) p.name = f.name.trim();
@@ -683,6 +690,7 @@ function OverviewTab({ client, k, editable, onChanged, onClose }: { client: CrmD
     if (f.startDate !== (k.startDate ?? "")) p.startDate = f.startDate || null;
     if (f.endDate !== (k.endDate ?? "")) p.endDate = f.endDate || null;
     if (f.billingPeriod !== k.billingPeriod) p.billingPeriod = f.billingPeriod;
+    if (f.billedThrough !== (k.billedThrough ?? "")) p.billedThrough = f.billedThrough || null;
     if (figureField && (toCents(f.figure) ?? null) !== (figureValue ?? null)) {
       const n = f.figure.trim() === "" ? null : Number(f.figure.replace(",", "."));
       p[figureField] = n;
@@ -724,6 +732,9 @@ function OverviewTab({ client, k, editable, onChanged, onClose }: { client: CrmD
             <option value="monthly">{t("crm.contracts.window.monthly")}</option>
             <option value="yearly">{t("crm.contracts.window.yearly")}</option>
           </select>
+        </Field>
+        <Field label={t("crm.contracts.billedThrough")} hint={t("crm.contracts.billedThroughText")}>
+          <Input type="date" value={f.billedThrough} disabled={!editable} onChange={(e) => setF({ ...f, billedThrough: e.target.value })} />
         </Field>
         {figureField && (
           <Field label={t(`crm.contracts.figure_${k.billingMode}`)}>

@@ -530,6 +530,10 @@ const en: Dict = {
       },
     },
     contracts: {
+      billedThrough: "Billed through",
+      billedThroughText: "Already invoiced in the old system up to this day (included): what falls before is never billed here.",
+      billedThroughHint: "Already invoiced through {{date}} ({{amount}})",
+      billedTag: "Already billed",
       services: "Services",
       window: {
         newHint: "Pick the type, the term and how often it is charged, then add the services: the revenue and the charges are worked out as you go.",
@@ -947,6 +951,7 @@ const en: Dict = {
     alreadyBilled: "Exclude: already billed",
     alreadyBilledHint: "Already billed elsewhere: excluded, never billed by the portal.",
     alreadyBilledTag: "Already billed",
+    asideTag: "Set aside",
     selectAll: "Select all ({{count}})",
     selectNone: "Select none",
     collapseAll: "Collapse all",
@@ -1109,6 +1114,7 @@ const en: Dict = {
     },
   },
   billing: {
+    cleanup: {"title":"Temporary approval clean-up","text":"A temporary tool to tidy Approbation. Nothing the employees entered is deleted.","contracts":"Set recurring contracts aside ({{count}})","contractsConfirm":"Set the recurring contract lines aside?","contractsHint":"Every recurring contract line to approve or approved (not invoiced yet) becomes \"Excluded\" and does not come back. Invoices already made are not touched.","contractsDone":"{{count}} contract line(s) set aside.","approvals":"Unapprove timesheets ({{sheets}}) and expenses ({{expenses}})","approvalsConfirm":"Unapprove every timesheet and expense?","approvalsHint":"Submitted, approved or refused timesheets and expenses (not the paid ones) go back to their owner as drafts, with all their data. What they were is kept and can be looked up below. The work to bill made from approved expenses is set aside (not deleted) unless already invoiced.","approvalsDone":"{{sheets}} timesheet(s) and {{expenses}} expense(s) back to draft.","failed":"The clean-up failed.","kept":"Kept aside: {{lines}} billing line(s) and {{records}} timesheet / expense record(s).","view":"See what was set aside","purge":"Delete for good","purgeConfirm":"Delete what was set aside for good?","purgeHint":"The set-aside lines and the list of records are erased. The employees' own timesheets and expenses are not touched.","purged":"{{lines}} line(s) and {{records}} record(s) deleted.","logTitle":"Set aside by the clean-up","search":"Search (name, client, date, contract…)","logRecords":"Timesheets and expenses put back to draft ({{count}})","logLines":"Billing lines set aside ({{count}})","none":"Nothing.","was":"was: {{status}}","kind_timesheet":"Timesheet","kind_expense":"Expense"},
     title: "Invoicing",
     subtitle: "Numbering, taxes, invoice template, chart of accounts and QuickBooks.",
     tabs: {

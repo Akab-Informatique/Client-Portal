@@ -528,6 +528,10 @@ const fr = {
       },
     },
     contracts: {
+      billedThrough: "Facturé jusqu'au",
+      billedThroughText: "Déjà facturé dans l'ancien système jusqu'à ce jour (inclus) : ce qui tombe avant n'est jamais facturé ici.",
+      billedThroughHint: "Déjà facturé jusqu'au {{date}} ({{amount}})",
+      billedTag: "Déjà facturé",
       services: "Services",
       window: {
         newHint: "Choisissez le type, le terme et la fréquence de facturation, puis ajoutez les services : le revenu et les charges se calculent au fur et à mesure.",
@@ -945,6 +949,7 @@ const fr = {
     alreadyBilled: "Exclure : déjà facturé",
     alreadyBilledHint: "Déjà facturé ailleurs : exclu, jamais facturé par le portail.",
     alreadyBilledTag: "Déjà facturé",
+    asideTag: "Mis de côté",
     selectAll: "Tout sélectionner ({{count}})",
     selectNone: "Tout désélectionner",
     collapseAll: "Tout réduire",
@@ -1107,6 +1112,7 @@ const fr = {
     },
   },
   billing: {
+    cleanup: {"title":"Nettoyage temporaire des approbations","text":"Outil temporaire pour faire le ménage dans Approbation. Rien de ce que les employés ont saisi n'est supprimé.","contracts":"Mettre de côté les contrats récurrents ({{count}})","contractsConfirm":"Mettre de côté les lignes de contrat récurrent ?","contractsHint":"Toutes les lignes de contrat récurrent à approuver ou approuvées (pas encore facturées) passent à « Exclu » et ne reviennent pas. Les factures déjà faites ne sont pas touchées.","contractsDone":"{{count}} ligne(s) de contrat mise(s) de côté.","approvals":"Désapprouver feuilles de temps ({{sheets}}) et dépenses ({{expenses}})","approvalsConfirm":"Désapprouver toutes les feuilles de temps et dépenses ?","approvalsHint":"Les feuilles de temps et dépenses soumises, approuvées ou refusées (pas les payées) retournent à leur auteur en brouillon, avec toutes leurs données. Ce qu'elles étaient est gardé et consultable ci-dessous. Le travail à facturer créé par les dépenses approuvées est mis de côté (pas supprimé), sauf s'il est déjà facturé.","approvalsDone":"{{sheets}} feuille(s) de temps et {{expenses}} dépense(s) remises en brouillon.","failed":"Le nettoyage a échoué.","kept":"Gardé de côté : {{lines}} ligne(s) de facturation et {{records}} fiche(s) de feuille de temps / dépense.","view":"Voir ce qui a été mis de côté","purge":"Supprimer définitivement","purgeConfirm":"Supprimer définitivement ce qui a été mis de côté ?","purgeHint":"Les lignes mises de côté et la liste des fiches sont effacées. Les feuilles de temps et dépenses des employés ne sont pas touchées.","purged":"{{lines}} ligne(s) et {{records}} fiche(s) supprimées.","logTitle":"Mis de côté par le nettoyage","search":"Chercher (nom, client, date, contrat…)","logRecords":"Feuilles de temps et dépenses remises en brouillon ({{count}})","logLines":"Lignes de facturation mises de côté ({{count}})","none":"Rien.","was":"était : {{status}}","kind_timesheet":"Feuille de temps","kind_expense":"Dépense"},
     title: "Facturation",
     subtitle: "Numérotation, taxes, modèle de facture, plan comptable et QuickBooks.",
     tabs: {

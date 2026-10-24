@@ -15,6 +15,7 @@ import { api, ApiError } from "@/lib/api";
 import { dateTime } from "@/lib/format";
 import { cn } from "@/lib/utils";
 import { SectionHeader } from "./sections";
+import { CleanupCard } from "./CleanupCard";
 
 type Settings = {
   numbering: { prefix: string; next: number; digits: number };
@@ -87,6 +88,9 @@ export function BillingSection() {
           <LedgerTab />
         </TabsContent>
       </Tabs>
+      <div className="mt-8">
+        <CleanupCard />
+      </div>
     </div>
   );
 }
