@@ -221,7 +221,7 @@ export const REMINDER_LEVELS = [5, 15, 20, 30, 60, 90] as const;
 export const reminderKey = (level: number) => `invoiceReminder${level}` as TemplateKey;
 export const BILLING_TEMPLATE_KEYS: TemplateKey[] = ["invoiceSent", "invoicePastDue", ...REMINDER_LEVELS.map(reminderKey), "accountStatement"];
 
-const invoiceVars = ["name", "company", "number", "issuedOn", "dueOn", "total", "balance", "daysLate", "poNumber", "portalUrl"];
+const invoiceVars = ["name", "company", "number", "issuedOn", "dueOn", "total", "balance", "daysLate", "poNumber", "portalUrl", "payUrl"];
 const invoiceSample = (l: Locale, daysLate: string) => ({
   ...sampleBase(l),
   company: "Boulangerie Lanaudière",
@@ -232,6 +232,7 @@ const invoiceSample = (l: Locale, daysLate: string) => ({
   balance: l === "en" ? "$1,149.75" : "1 149,75 $",
   daysLate,
   poNumber: "PO-778",
+  payUrl: `${config.publicUrl || "https://portail.akab.ca"}/api/pay/…`,
 });
 const REMINDER_TEXT: Record<number, { fr: [string, string]; en: [string, string] }> = {
   5: {
@@ -263,11 +264,11 @@ for (const level of REMINDER_LEVELS) {
   const t = REMINDER_TEXT[level];
   TEMPLATES.push({
     key: reminderKey(level),
-    linkVar: null,
+    linkVar: "payUrl",
     variables: invoiceVars,
     defaults: {
-      fr: { subject: t.fr[0], body: `Bonjour {{name}},\n\n${t.fr[1]}\n\nFacture : {{number}} · Date : {{issuedOn}} · Échéance : {{dueOn}} · Solde : {{balance}}\n\n${SIGN.fr}`, action: "" },
-      en: { subject: t.en[0], body: `Hello {{name}},\n\n${t.en[1]}\n\nInvoice: {{number}} · Date: {{issuedOn}} · Due: {{dueOn}} · Balance: {{balance}}\n\n${SIGN.en}`, action: "" },
+      fr: { subject: t.fr[0], body: `Bonjour {{name}},\n\n${t.fr[1]}\n\nFacture : {{number}} · Date : {{issuedOn}} · Échéance : {{dueOn}} · Solde : {{balance}}\n\n${SIGN.fr}`, action: "Payer en ligne" },
+      en: { subject: t.en[0], body: `Hello {{name}},\n\n${t.en[1]}\n\nInvoice: {{number}} · Date: {{issuedOn}} · Due: {{dueOn}} · Balance: {{balance}}\n\n${SIGN.en}`, action: "Pay online" },
     },
     sample: { fr: invoiceSample("fr", String(level)), en: invoiceSample("en", String(level)) },
   });
@@ -275,36 +276,36 @@ for (const level of REMINDER_LEVELS) {
 TEMPLATES.push(
   {
     key: "invoiceSent",
-    linkVar: null,
+    linkVar: "payUrl",
     variables: invoiceVars,
     defaults: {
       fr: {
         subject: "Facture {{number}} d'AKAB Informatique",
         body: `Bonjour {{name}},\n\nVoici votre facture {{number}} du {{issuedOn}}, d'un montant de {{total}}. Elle est payable au plus tard le {{dueOn}}.\n\nPour toute question au sujet de cette facture, répondez simplement à ce courriel en mentionnant le numéro {{number}}.\n\nMerci de votre confiance,\n${SIGN.fr}`,
-        action: "",
+        action: "Payer en ligne",
       },
       en: {
         subject: "Invoice {{number}} from AKAB Informatique",
         body: `Hello {{name}},\n\nHere is your invoice {{number}} dated {{issuedOn}}, for {{total}}. It is payable no later than {{dueOn}}.\n\nFor any question about this invoice, simply reply to this email and mention number {{number}}.\n\nThank you for your business,\n${SIGN.en}`,
-        action: "",
+        action: "Pay online",
       },
     },
     sample: { fr: invoiceSample("fr", "0"), en: invoiceSample("en", "0") },
   },
   {
     key: "invoicePastDue",
-    linkVar: null,
+    linkVar: "payUrl",
     variables: invoiceVars,
     defaults: {
       fr: {
         subject: "Facture {{number}} échue",
         body: `Bonjour {{name}},\n\nLa facture {{number}} de {{balance}} était due le {{dueOn}} et n'est pas encore payée. Pourriez-vous la régler dès que possible?\n\nSi le paiement a déjà été fait, merci de nous en aviser et d'ignorer ce message.\n\n${SIGN.fr}`,
-        action: "",
+        action: "Payer en ligne",
       },
       en: {
         subject: "Invoice {{number}} is past due",
         body: `Hello {{name}},\n\nInvoice {{number}} for {{balance}} was due on {{dueOn}} and has not been paid yet. Could you please pay it as soon as possible?\n\nIf payment has already been made, please let us know and ignore this message.\n\n${SIGN.en}`,
-        action: "",
+        action: "Pay online",
       },
     },
     sample: { fr: invoiceSample("fr", "2"), en: invoiceSample("en", "2") },

@@ -3,7 +3,9 @@ import { db, schema } from "../db/index.ts";
 import { audit } from "./audit.ts";
 import { billingSettings } from "./billing.ts";
 import { reminderKey, renderTemplate, REMINDER_LEVELS, type Locale, type TemplateKey } from "./emailTemplates.ts";
-import { mailConfigured, sendMail, smtpSettings } from "./mail.ts";
+import { mailConfigured, sendMail, smtpSettings, type Mail } from "./mail.ts";
+import { invoicePdf } from "./invoicePdf.ts";
+import { payOnlineFor, payUrlOf } from "./payLink.ts";
 import { config } from "../config.ts";
 
 /**
@@ -98,13 +100,23 @@ export async function invoiceSender(): Promise<{ from: { name: string; address: 
   return { from: { name: s.fromName || smtp.fromName || "AKAB Informatique", address: s.fromEmail }, replyTo: s.fromEmail };
 }
 
-async function deliver(key: TemplateKey, c: Client, vars: Record<string, string>, locale: Locale) {
+/** The PDF copy of an invoice and, when paying online is on for its client, the link to pay (in the email and in the PDF). */
+async function invoiceExtras(inv: Invoice, client: Client, balanceCents: number): Promise<{ payUrl: string; attachments: NonNullable<Mail["attachments"]> }> {
+  const payUrl = balanceCents > 0 && (await payOnlineFor(client)) ? payUrlOf(inv.id) : "";
+  const pdf = await invoicePdf(inv.id, payUrl || null).catch((e) => {
+    console.warn("[invoice mail] PDF not made:", e instanceof Error ? e.message : e);
+    return null;
+  });
+  return { payUrl, attachments: pdf ? [{ filename: pdf.filename, content: pdf.content, contentType: "application/pdf" }] : [] };
+}
+
+async function deliver(key: TemplateKey, c: Client, vars: Record<string, string>, locale: Locale, attachments?: Mail["attachments"]) {
   const to = recipientOf(c);
   if (!to) throw new InvoiceMailError("no_email");
   // without a mail server production sends nothing (development keeps the message in memory)
   if (config.production && !(await mailConfigured())) throw new InvoiceMailError("mail_not_configured");
   const r = await renderTemplate(key, locale, vars);
-  if (!(await sendMail({ to, ...r, ...(await invoiceSender()) }))) throw new InvoiceMailError("mail_failed");
+  if (!(await sendMail({ to, ...r, ...(await invoiceSender()), ...(attachments?.length ? { attachments } : {}) }))) throw new InvoiceMailError("mail_failed");
   return to;
 }
 
@@ -124,7 +136,7 @@ async function invoiceMail(invoiceId: string) {
   return { inv, client, balanceCents: owed?.balanceCents ?? 0, daysLate: owed?.daysLate ?? 0 };
 }
 
-function invoiceVars(inv: Invoice, client: Client, balanceCents: number, daysLate: number, l: Locale): Record<string, string> {
+function invoiceVars(inv: Invoice, client: Client, balanceCents: number, daysLate: number, l: Locale, payUrl = ""): Record<string, string> {
   return {
     name: client.name,
     company: client.name,
@@ -136,6 +148,7 @@ function invoiceVars(inv: Invoice, client: Client, balanceCents: number, daysLat
     daysLate: String(daysLate),
     poNumber: inv.poNumber ?? "",
     portalUrl: config.publicUrl,
+    payUrl,
   };
 }
 
@@ -147,7 +160,8 @@ export async function sendInvoiceMail(invoiceId: string, kind: "sent" | "reminde
   if (kind === "reminder" && (balanceCents <= 0 || daysLate <= 0)) throw new InvoiceMailError("nothing_due");
   const locale = await languageOf();
   const template: TemplateKey = kind === "sent" ? "invoiceSent" : templateFor(daysLate);
-  const to = await deliver(template, client, invoiceVars(inv, client, balanceCents, daysLate, locale), locale);
+  const extras = await invoiceExtras(inv, client, balanceCents);
+  const to = await deliver(template, client, invoiceVars(inv, client, balanceCents, daysLate, locale, extras.payUrl), locale, extras.attachments);
   if (kind === "sent" && !inv.emailedAt) await db().update(schema.clientInvoices).set({ emailedAt: new Date(), updatedAt: new Date() }).where(eq(schema.clientInvoices.id, inv.id));
   await audit(actorId, kind === "sent" ? "billing.invoice_mailed" : "billing.invoice_reminded", inv.id, { number: inv.number, to, template });
   return { to, template };
@@ -275,7 +289,8 @@ export async function runReminders(): Promise<{ sent: number; skipped: number }>
     if (!claimed) continue;
     try {
       const l = await languageOf();
-      const to = await deliver(reminderKey(level), client, invoiceVars(o.invoice, client, o.balanceCents, o.daysLate, l), l);
+      const extras = await invoiceExtras(o.invoice, client, o.balanceCents);
+      const to = await deliver(reminderKey(level), client, invoiceVars(o.invoice, client, o.balanceCents, o.daysLate, l, extras.payUrl), l, extras.attachments);
       await db().update(schema.invoiceReminders).set({ toEmail: to, ok: true }).where(eq(schema.invoiceReminders.id, claimed.id));
       await audit(null, "billing.reminder_sent", o.invoice.id, { number: o.invoice.number, level, to });
       sent++;

@@ -1,3 +1,4 @@
+import { DEFAULT_FOOTER_TEXT, DEFAULT_PAYMENT_TEXT } from "../../shared/invoiceDefaults.ts";
 import { randomBytes } from "node:crypto";
 import { asc, eq } from "drizzle-orm";
 import { db, schema } from "../db/index.ts";
@@ -29,7 +30,7 @@ export const DEFAULT_BILLING: BillingSettings = {
   numbering: { prefix: "", next: 10000, digits: 5 },
   taxes: { gstNumber: "", qstNumber: "", gstRate: 5, qstRate: 9.975 },
   company: { legalName: "AKAB Informatique", address: "5, rue Industrielle\nSaint-Roch-de-l'Achigan (Québec)  J0K 3H0", phone: "450-834-3344", email: "", website: "akab.ca" },
-  template: { language: "fr", termsDays: 30, footer: "Merci de votre confiance !", paymentInstructions: "", showPaymentLink: true },
+  template: { language: "fr", termsDays: 30, footer: DEFAULT_FOOTER_TEXT.fr, paymentInstructions: DEFAULT_PAYMENT_TEXT.fr, showPaymentLink: true },
   accounts: { receivable: null, bank: null, labour: null, charges: null, contracts: null, gst: null, qst: null },
   autotask: { invoicesSince: "2026-09-01", invoiceMinNumber: 10000, itemsSince: "2026-09-01" },
   rates: { hourly: 115 },

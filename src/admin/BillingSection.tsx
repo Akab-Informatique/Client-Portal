@@ -15,6 +15,8 @@ import { api, ApiError } from "@/lib/api";
 import { dateTime } from "@/lib/format";
 import { cn } from "@/lib/utils";
 import { SectionHeader } from "./sections";
+import { InvoiceSheet } from "@/components/InvoiceSheet";
+import { DEFAULT_FOOTER_TEXT, DEFAULT_PAYMENT_TEXT } from "@shared/invoiceDefaults";
 import { CleanupCard } from "./CleanupCard";
 import { BillingMailTab } from "./BillingMailTab";
 
@@ -278,10 +280,24 @@ function TemplateTab() {
               </Select>
             </Field>
             <Field label={t("billing.template.paymentInstructions")} className="sm:col-span-2" hint={t("billing.template.paymentInstructionsHint")}>
-              <Textarea rows={3} value={f.paymentInstructions} onChange={(e) => setF({ ...f, paymentInstructions: e.target.value })} />
+              <Textarea rows={10} value={f.paymentInstructions} onChange={(e) => setF({ ...f, paymentInstructions: e.target.value })} />
             </Field>
+            <div className="sm:col-span-2">
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                onClick={() => {
+                  if ((f.paymentInstructions.trim() || f.footer.trim()) && !window.confirm(t("billing.template.useDefaultConfirm"))) return;
+                  setF({ ...f, paymentInstructions: DEFAULT_PAYMENT_TEXT[f.language], footer: DEFAULT_FOOTER_TEXT[f.language] });
+                }}
+              >
+                {t("billing.template.useDefault")}
+              </Button>
+              <span className="ml-2 text-[11px] text-muted-foreground">{t("billing.template.useDefaultHint")}</span>
+            </div>
             <Field label={t("billing.template.footer")} className="sm:col-span-2">
-              <Textarea rows={2} value={f.footer} onChange={(e) => setF({ ...f, footer: e.target.value })} />
+              <Textarea rows={5} value={f.footer} onChange={(e) => setF({ ...f, footer: e.target.value })} />
             </Field>
             <label className="flex items-center gap-2 text-sm sm:col-span-2">
               <Switch checked={f.showPaymentLink} onCheckedChange={(v) => setF({ ...f, showPaymentLink: v })} /> {t("billing.template.showPaymentLink")}
@@ -299,42 +315,36 @@ function TemplateTab() {
   );
 }
 
-/** A sketch of the invoice with the settings (the real PDF comes with Accounting). */
+/** The invoice with the settings and a sample line: the same sheet the client gets. */
 function InvoicePreview({ s }: { s: Settings }) {
   const { t } = useTranslation();
-  const L = (k: string) => t(`billing.preview.${k}`, { lng: s.template.language });
+  const net = 5000;
+  const gst = Math.round((net * s.taxes.gstRate) / 100);
+  const qst = Math.round((net * s.taxes.qstRate) / 100);
+  const day = (n: number) => new Date(Date.now() + n * 86_400_000).toLocaleDateString("en-CA", { timeZone: "America/Toronto" });
   return (
     <div className="space-y-2">
       <p className="text-xs font-medium text-muted-foreground">{t("billing.template.preview")}</p>
-      <div className="rounded-2xl bg-[#f4f4f1] p-6 text-[13px] text-[#0a0a0b] shadow-xl">
-        <div className="flex items-start justify-between gap-4">
-          <div>
-            <p className="text-base font-bold">{s.company.legalName || "—"}</p>
-            <p className="whitespace-pre-line text-[11px] text-black/60">{[s.company.address, s.company.phone, s.company.email, s.company.website].filter(Boolean).join("\n")}</p>
-          </div>
-          <div className="text-right">
-            <p className="text-lg font-bold tracking-wide">{L("invoice")}</p>
-            <p className="font-mono text-xs">{s.preview}</p>
-          </div>
-        </div>
-        <div className="mt-5 grid grid-cols-[1fr_auto] gap-y-1 border-y border-black/10 py-3 text-[12px]">
-          <span>{L("line")}</span>
-          <span className="font-mono">500,00 $</span>
-          <span className="text-black/60">TPS ({s.taxes.gstRate} %)</span>
-          <span className="font-mono text-black/60">{(500 * s.taxes.gstRate / 100).toFixed(2).replace(".", ",")} $</span>
-          <span className="text-black/60">TVQ ({s.taxes.qstRate} %)</span>
-          <span className="font-mono text-black/60">{(500 * s.taxes.qstRate / 100).toFixed(2).replace(".", ",")} $</span>
-          <span className="font-semibold">{L("total")}</span>
-          <span className="font-mono font-semibold">{(500 * (1 + (s.taxes.gstRate + s.taxes.qstRate) / 100)).toFixed(2).replace(".", ",")} $</span>
-        </div>
-        <p className="mt-3 text-[11px] text-black/60">
-          {s.template.termsDays === 0 ? L("onReceipt") : L("terms").replace("{{days}}", String(s.template.termsDays))}
-          {(s.taxes.gstNumber || s.taxes.qstNumber) && ` · TPS ${s.taxes.gstNumber || "—"} · TVQ ${s.taxes.qstNumber || "—"}`}
-        </p>
-        {s.template.paymentInstructions && <p className="mt-2 whitespace-pre-line text-[11px]">{s.template.paymentInstructions}</p>}
-        {s.template.showPaymentLink && <p className="mt-3 inline-block rounded-md bg-[#0a0a0b] px-3 py-1.5 text-[11px] font-semibold text-[#ffce1a]">{L("payOnline")}</p>}
-        {s.template.footer && <p className="mt-4 border-t border-black/10 pt-2 text-center text-[11px] text-black/60">{s.template.footer}</p>}
-      </div>
+      <InvoiceSheet
+        d={{
+          number: s.preview,
+          issuedOn: day(0),
+          dueOn: day(s.template.termsDays + 1),
+          termsDays: s.template.termsDays,
+          poNumber: null,
+          notes: null,
+          client: { name: "Client exemple inc.", address: "123, rue Principale", city: "Joliette", province: "QC", postalCode: "J6E 1A1", email: null },
+          lines: [{ date: day(-3), description: t("billing.preview.line", { lng: s.template.language }), kind: "labour", quantity: 2, unitPriceCents: 2500, amountCents: net }],
+          subtotalCents: net,
+          gstCents: gst,
+          qstCents: qst,
+          totalCents: net + gst + qst,
+          exempt: false,
+          company: s.company,
+          taxes: s.taxes,
+          template: s.template,
+        }}
+      />
     </div>
   );
 }

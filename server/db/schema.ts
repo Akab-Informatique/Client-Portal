@@ -28,6 +28,8 @@ export type ClientInvoiceSettings = {
   taxes?: boolean;
   taxNumber?: string;
   poRequired?: boolean;
+  /** "Pay online" link in the invoice email: its own choice (none: the default of the invoice template) */
+  payOnline?: boolean | null;
   hourlyRate?: number | null;
   /** Kinds of work approved automatically when imported (labour, charge, contract, milestone, project) */
   autoApprove?: string[];

@@ -1262,7 +1262,7 @@ describe("tickets: inline edit, notes, team filter and AI", () => {
       expect(u.byFeature).toEqual([{ feature: "ticket.reply", costUsd: expect.closeTo(6.3, 5), requests: 3 }]);
       expect(u.byModel.map((m: any) => m.model)).toEqual(["claude-opus-5-5", "claude-haiku-5-5"]);
       expect(u.byDay).toHaveLength(7);
-      const [adminRow] = await db().select().from(schema.users).where(eq(schema.users.email, "admin@akab.local"));
+    const [adminRow] = await db().select().from(schema.users).where(eq(schema.users.email, "admin@akab.local"));
       expect(u.byUser.find((x: any) => x.userId === adminRow.id)).toMatchObject({ name: "Administrateur AKAB", todayUsd: expect.closeTo(6.3, 5), requests: 3 });
       // a daily limit per person: reached, no more AI today
       await admin.put("/api/admin/integrations/ai", { dailyLimitUsd: 5 });
@@ -7087,7 +7087,7 @@ describe("contracts: services when made, charges, activity, stop instead of dele
     expect(list.map((x: any) => x.key)).toEqual(expect.arrayContaining(["invoiceSent", "invoicePastDue", "invoiceReminder5", "invoiceReminder15", "invoiceReminder20", "invoiceReminder30", "invoiceReminder60", "invoiceReminder90", "accountStatement"]));
     expect(list.some((x: any) => x.key === "welcome")).toBe(false);
     expect((await admin.get("/api/billing/email/templates/welcome")).status).toBe(404);
-    expect((await admin.put("/api/billing/email/templates/invoiceSent/fr", { subject: "Votre facture {{number}}", body: "Bonjour {{name}}, facture {{number}} : {{total}}", action: "" })).status).toBe(200);
+    expect((await admin.put("/api/billing/email/templates/invoiceSent/fr", { subject: "Votre facture {{number}}", body: "Bonjour {{name}}, facture {{number}} : {{total}}", action: "Payer en ligne" })).status).toBe(200);
     // settings: nothing automatic by default
     expect((await admin.get("/api/billing/email/settings")).json).toMatchObject({ autoSend: false, remindersAuto: false, levels: [5, 15, 20, 30, 60, 90], remindersFrom: "2026-11-01" });
     expect((await admin.put("/api/billing/email/settings", { levels: [15, 30, 7] })).json.levels).toEqual([15, 30]);
@@ -7131,6 +7131,43 @@ describe("contracts: services when made, charges, activity, stop instead of dele
     devOutbox.length = 0;
     expect((await admin.post(`/api/crm/invoices/${i1!.id}/mail`, { kind: "sent" })).json).toMatchObject({ to: "compta@a.example", template: "invoiceSent" });
     expect(devOutbox[0]!.subject).toBe("Votre facture R-1");
+    // the PDF copy goes with it; no pay link while Stripe is not set up
+    expect(devOutbox[0]!.attachments).toHaveLength(1);
+    expect(devOutbox[0]!.attachments![0]).toMatchObject({ filename: "Facture_R-1.pdf", contentType: "application/pdf" });
+    expect(devOutbox[0]!.attachments![0]!.content.subarray(0, 5).toString()).toBe("%PDF-");
+    expect(devOutbox[0]!.text).not.toContain("/api/pay/");
+    // Stripe set up: the "Pay online" link follows the template setting, and each client can say yes or no
+    const { saveStripeSettings } = await import("../server/lib/billing.ts");
+    const { invoiceOfToken } = await import("../server/lib/payLink.ts");
+    // the links are built from the public address of the portal
+    const { config: appConfig } = await import("../server/config.ts");
+    const publicBefore = appConfig.publicUrl;
+    (appConfig as { publicUrl: string }).publicUrl = "https://portail.test";
+    const [adminRow] = await db().select().from(schema.users).where(eq(schema.users.email, "admin@akab.local"));
+    await saveStripeSettings(adminRow!.id, { enabled: true, publishableKey: "pk_test_x", paymentLinks: true, secretKey: "sk_test_x", webhookSecret: "whsec_x" });
+    const payOf = (m: { text: string }) => m.text.match(/(https?:\/\/\S*\/api\/pay\/\S+)/)?.[1] ?? null;
+    devOutbox.length = 0;
+    await admin.post(`/api/crm/invoices/${i1!.id}/mail`, { kind: "sent" });
+    const link = payOf(devOutbox[0]!);
+    expect(link).not.toBeNull();
+    const token = link!.split("/api/pay/")[1]!;
+    expect(invoiceOfToken(token)).toBe(i1!.id);
+    expect(invoiceOfToken(token.slice(0, -1) + (token.endsWith("a") ? "b" : "a"))).toBeNull();
+    expect(invoiceOfToken(`${i2!.id}.${token.split(".")[1]}`)).toBeNull();
+    await admin.put(`/api/crm/clients/${a!.id}/invoice`, { payOnline: false });
+    devOutbox.length = 0;
+    await admin.post(`/api/crm/invoices/${i1!.id}/mail`, { kind: "sent" });
+    expect(payOf(devOutbox[0]!)).toBeNull();
+    expect(devOutbox[0]!.attachments).toHaveLength(1);
+    await admin.put(`/api/crm/clients/${a!.id}/invoice`, { payOnline: null });
+    devOutbox.length = 0;
+    await admin.post(`/api/crm/invoices/${i1!.id}/mail`, { kind: "sent" });
+    expect(payOf(devOutbox[0]!)).not.toBeNull();
+    await saveStripeSettings(adminRow!.id, { enabled: false });
+    devOutbox.length = 0;
+    await admin.post(`/api/crm/invoices/${i1!.id}/mail`, { kind: "sent" });
+    expect(payOf(devOutbox[0]!)).toBeNull();
+    (appConfig as { publicUrl: string }).publicUrl = publicBefore;
     expect((await db().select().from(schema.clientInvoices).where(eq(schema.clientInvoices.id, i1!.id)))[0]!.emailedAt).not.toBeNull();
     expect((await admin.post(`/api/crm/invoices/${i1!.id}/mail`, { kind: "reminder" })).json.template).toBe("invoiceReminder20");
     expect((await admin.post(`/api/crm/invoices/${i3!.id}/mail`, { kind: "reminder" })).json.error).toBe("invoice_mail_no_email");

@@ -285,6 +285,8 @@ export async function draftInvoice(p: InvoiceDraft) {
     items,
     lines: items.map((i) => ({
       itemId: i.id,
+      date: i.date,
+      contractName: i.contractName ?? null,
       kind: i.kind,
       description: [i.ticketNumber && `[${i.ticketNumber}]`, i.description, i.resourceName && `(${i.resourceName})`].filter(Boolean).join(" "),
       quantity: i.quantityX100 / 100,
@@ -300,7 +302,8 @@ export async function draftInvoice(p: InvoiceDraft) {
     totalCents: subtotal + gst + qst,
     company: s.company,
     taxes: s.taxes,
-    template: s.template,
+    // the pay button shows only when this client pays online (its own choice, else the template default)
+    template: { ...s.template, showPaymentLink: client.invoice?.payOnline ?? s.template.showPaymentLink },
   };
 }
 

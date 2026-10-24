@@ -1049,6 +1049,7 @@ function InvoiceTab({ client }: { client: CrmDetail }) {
     taxes: s?.taxes ?? true,
     taxNumber: s?.taxNumber ?? "",
     poRequired: s?.poRequired ?? false,
+    payOnline: s?.payOnline ?? null,
     hourlyRate: s?.hourlyRate ?? null,
     notes: s?.notes ?? "",
     autoApprove: s?.autoApprove ?? [],
@@ -1108,6 +1109,18 @@ function InvoiceTab({ client }: { client: CrmDetail }) {
               <SelectContent>
                 <SelectItem value="email">{t("crm.invoice.byEmail")}</SelectItem>
                 <SelectItem value="mail">{t("crm.invoice.byMail")}</SelectItem>
+              </SelectContent>
+            </Select>
+          </Field>
+          <Field label={t("crm.invoice.payOnline")}>
+            <Select value={f.payOnline === null ? "default" : f.payOnline ? "yes" : "no"} onValueChange={(v) => setF({ ...f, payOnline: v === "default" ? null : v === "yes" })}>
+              <SelectTrigger className="w-full">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="default">{t("crm.invoice.payOnlineDefault")}</SelectItem>
+                <SelectItem value="yes">{t("crm.invoice.payOnlineYes")}</SelectItem>
+                <SelectItem value="no">{t("crm.invoice.payOnlineNo")}</SelectItem>
               </SelectContent>
             </Select>
           </Field>

@@ -15,6 +15,8 @@ export type Mail = {
   replyTo?: string;
   /** Sent from this sender instead of the mail server's (the accounting address for invoices); the same server carries it */
   from?: { name: string; address: string };
+  /** Files sent with it (the PDF copy of an invoice) */
+  attachments?: { filename: string; content: Buffer; contentType?: string }[];
 };
 
 /**
@@ -160,7 +162,7 @@ export async function sendMail(mail: Mail): Promise<boolean> {
     transporter = { key, t: createTransport(s) };
   }
   try {
-    await transporter.t.sendMail({ from: mail.from ?? { name: s.fromName, address: s.from }, to: mail.to, ...(mail.replyTo ? { replyTo: mail.replyTo } : {}), subject: mail.subject, text: mail.text, html: mail.html });
+    await transporter.t.sendMail({ from: mail.from ?? { name: s.fromName, address: s.from }, to: mail.to, ...(mail.replyTo ? { replyTo: mail.replyTo } : {}), subject: mail.subject, text: mail.text, html: mail.html, ...(mail.attachments?.length ? { attachments: mail.attachments } : {}) });
     return true;
   } catch (e) {
     console.error(`[mail] send failed:`, e instanceof Error ? e.message : e);

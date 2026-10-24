@@ -67,7 +67,7 @@ type Session = {
 };
 
 /** A payment link for an invoice: the whole balance, or part of it. */
-export async function createCheckout(p: { invoiceId: string; amountCents?: number; actorId: string; baseUrl: string }) {
+export async function createCheckout(p: { invoiceId: string; amountCents?: number; actorId: string | null; baseUrl: string }) {
   const s = await stripeSettings();
   if (!s.enabled || !s.secretKey || !s.paymentLinks) throw new StripeError("not_configured");
   // without the webhook, a payment would reach Stripe but never the invoice

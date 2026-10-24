@@ -11,6 +11,7 @@ import { AiTextarea } from "@/components/AiPolish";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
+import { InvoiceSheet } from "@/components/InvoiceSheet";
 import { api, ApiError } from "@/lib/api";
 import { useCan } from "@/lib/session";
 import { cn } from "@/lib/utils";
@@ -168,7 +169,7 @@ type Draft = {
   notes: string | null;
   poRequired: boolean;
   exempt: boolean;
-  lines: { itemId: string; kind: Kind; description: string; quantity: number; unitPriceCents: number; amountCents: number; taxable: boolean }[];
+  lines: { itemId: string; date?: string | null; contractName?: string | null; kind: Kind; description: string; quantity: number; unitPriceCents: number; amountCents: number; taxable: boolean }[];
   subtotalCents: number;
   gstCents: number;
   qstCents: number;
@@ -500,97 +501,9 @@ function InvoiceEditor({ ready, lang, period }: { ready: Ready; lang: string; pe
   );
 }
 
-/** The invoice as the client will see it. */
+/** The invoice as the client will see it (the same sheet as the template preview in Admin › Facturation). */
 function InvoicePaper({ d }: { d: Draft }) {
-  const { t } = useTranslation();
-  const lng = d.template.language;
-  const L = (k: string, o?: Record<string, unknown>) => t(`approvals.paper.${k}`, { lng, ...o });
-  const mm = (c: number) => money(c, lng);
-  const day = (s: string) => new Intl.DateTimeFormat(lng === "en" ? "en-CA" : "fr-CA", { dateStyle: "long" }).format(new Date(`${s}T12:00:00`));
-  return (
-    <div className="rounded-2xl bg-[#f4f4f1] p-6 text-[12px] text-[#0a0a0b] shadow-xl">
-      <div className="flex items-start justify-between gap-4">
-        <div>
-          <p className="text-base font-bold">{d.company.legalName || "—"}</p>
-          <p className="whitespace-pre-line text-[11px] text-black/60">
-            {[d.company.address, d.company.phone, d.company.email, d.company.website].filter(Boolean).join("\n")}
-          </p>
-        </div>
-        <div className="text-right">
-          <p className="text-lg font-bold tracking-wide">{L("invoice")}</p>
-          <p className="font-mono">{d.number}</p>
-          <p className="text-[11px] text-black/60">
-            {L("date")} : {day(d.issuedOn)}
-          </p>
-          <p className="text-[11px] font-semibold">
-            {L("due")} : {day(d.dueOn)}
-          </p>
-          {d.poNumber && <p className="text-[11px] text-black/60">PO : {d.poNumber}</p>}
-        </div>
-      </div>
-      <div className="mt-4">
-        <p className="text-[10px] uppercase tracking-wider text-black/50">{L("billTo")}</p>
-        <p className="font-semibold">{d.client.name}</p>
-        <p className="whitespace-pre-line text-[11px] text-black/60">
-          {[d.client.address, [d.client.city, d.client.province, d.client.postalCode].filter(Boolean).join(" "), d.client.email].filter(Boolean).join("\n")}
-        </p>
-      </div>
-      <table className="mt-4 w-full">
-        <thead>
-          <tr className="border-b border-black/20 text-[10px] uppercase tracking-wider text-black/50">
-            <th className="pb-1 text-left font-medium">{L("description")}</th>
-            <th className="whitespace-nowrap pb-1 pl-3 text-right font-medium">{L("qty")}</th>
-            <th className="whitespace-nowrap pb-1 pl-3 text-right font-medium">{L("rate")}</th>
-            <th className="whitespace-nowrap pb-1 pl-3 text-right font-medium">{L("amount")}</th>
-          </tr>
-        </thead>
-        <tbody className="divide-y divide-black/10">
-          {d.lines.map((l) => (
-            <tr key={l.itemId}>
-              <td className="py-1.5 pr-2">{l.description}</td>
-              <td className="whitespace-nowrap py-1.5 pl-3 text-right font-mono">{l.quantity}</td>
-              <td className="whitespace-nowrap py-1.5 pl-3 text-right font-mono">{mm(l.unitPriceCents)}</td>
-              <td className="whitespace-nowrap py-1.5 pl-3 text-right font-mono">{mm(l.amountCents)}</td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
-      <div className="ml-auto mt-3 w-56 space-y-0.5 text-[12px]">
-        <p className="flex justify-between">
-          <span>{L("subtotal")}</span>
-          <span className="font-mono">{mm(d.subtotalCents)}</span>
-        </p>
-        {d.exempt ? (
-          <p className="text-[11px] text-black/60">{L("exempt")}</p>
-        ) : (
-          <>
-            <p className="flex justify-between text-black/70">
-              <span>TPS ({d.taxes.gstRate} %)</span>
-              <span className="font-mono">{mm(d.gstCents)}</span>
-            </p>
-            <p className="flex justify-between text-black/70">
-              <span>TVQ ({d.taxes.qstRate} %)</span>
-              <span className="font-mono">{mm(d.qstCents)}</span>
-            </p>
-          </>
-        )}
-        <p className="flex justify-between border-t border-black/20 pt-1 text-sm font-bold">
-          <span>{L("total")}</span>
-          <span className="font-mono">{mm(d.totalCents)}</span>
-        </p>
-      </div>
-      {d.notes && <p className="mt-4 whitespace-pre-line rounded-md bg-black/5 p-2 text-[11px]">{d.notes}</p>}
-      <p className="mt-3 text-[11px] text-black/60">
-        {d.termsDays != null ? (d.termsDays === 0 ? L("onReceipt") : L("terms", { days: d.termsDays })) : L("dueOn", { date: day(d.dueOn) })}
-        {(d.taxes.gstNumber || d.taxes.qstNumber) && ` · TPS ${d.taxes.gstNumber || "—"} · TVQ ${d.taxes.qstNumber || "—"}`}
-      </p>
-      {d.template.paymentInstructions && <p className="mt-2 whitespace-pre-line text-[11px]">{d.template.paymentInstructions}</p>}
-      {d.template.showPaymentLink && (
-        <p className="mt-3 inline-block rounded-md bg-[#0a0a0b] px-3 py-1.5 text-[11px] font-semibold text-[#ffce1a]">{L("payOnline")}</p>
-      )}
-      {d.template.footer && <p className="mt-4 border-t border-black/10 pt-2 text-center text-[11px] text-black/60">{d.template.footer}</p>}
-    </div>
-  );
+  return <InvoiceSheet d={d} />;
 }
 
 /** What posting will make, client by client; then the invoices are made. */
