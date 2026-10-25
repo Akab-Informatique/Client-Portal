@@ -370,6 +370,7 @@ function ExpenseApprovals({ lang, pq }: { lang: string; pq: string }) {
   const approver = can("timesheets.approve");
   const accounting = can("accounting.manage");
   const allowed = approver || accounting;
+  const { opened, toggle } = useOpened();
   const { data: rows = [], isLoading } = useQuery({
     queryKey: ["time", "approvals", "expenses", status, pq],
     queryFn: () => api.get<TeamExpense[]>(`/time/approvals/expenses?status=${status}&${pq}`),
@@ -397,6 +398,50 @@ function ExpenseApprovals({ lang, pq }: { lang: string; pq: string }) {
   });
   if (!allowed) return <p className="text-sm text-muted-foreground">{t("approvals.team.noRight")}</p>;
   const m = (c: number) => money(c, lang);
+  // one section per person, folded until opened
+  const byPerson = [...rows.reduce((g, x) => g.set(x.userName, [...(g.get(x.userName) ?? []), x]), new Map<string, TeamExpense[]>())].sort((x, y) => x[0].localeCompare(y[0]));
+  const renderRow = (x: TeamExpense) => (
+    <li
+      key={x.id}
+      className="grid grid-cols-[auto_minmax(0,1fr)_auto] items-center gap-3 px-3 py-2 text-sm md:grid-cols-[auto_140px_minmax(0,1fr)_110px_auto]"
+    >
+      {selectable ? (
+        <Checkbox
+          checked={sel.has(x.id)}
+          onCheckedChange={(v) => setSel((s) => (v ? new Set([...s, x.id]) : new Set([...s].filter((y) => y !== x.id))))}
+        />
+      ) : (
+        <span />
+      )}
+      <span className="hidden min-w-0 md:block">
+        <span className="block truncate font-medium">{x.userName}</span>
+        <span className="block text-[11px] text-muted-foreground">{shortDate(x.date)}</span>
+        {x.reportTitle && <span className="block truncate text-[11px] text-primary/80">{x.reportTitle}</span>}
+      </span>
+      <span className="min-w-0">
+        <span className="block truncate">
+          {x.type} — {x.description}
+        </span>
+        <span className="flex flex-wrap items-center gap-1.5 text-[11px] text-muted-foreground">
+          {x.unit && (
+            <span>
+              {(x.quantityX100 / 100).toLocaleString()} {x.unit}
+            </span>
+          )}
+          {x.clientName && <span>{x.billable ? t("expense.billedTo", { name: x.clientName }) : x.clientName}</span>}
+          {x.hasReceipt && (
+            <a href={`/api/time/expenses/${x.id}/receipt`} target="_blank" rel="noreferrer" className="text-primary hover:underline">
+              {t("expense.receipt")}
+            </a>
+          )}
+          <QbMark id={x.quickbooksId} error={x.quickbooksError} />
+          {x.paidAt && <PaidMark at={x.paidAt} />}
+        </span>
+      </span>
+      <span className="text-right font-mono">{x.mileage ? t("expense.km", { km: x.quantityX100 / 100 }) : m(x.amountCents)}</span>
+      <span />
+    </li>
+  );
   return (
     <section className="space-y-3">
       <div className="flex flex-wrap items-center gap-2">
@@ -439,50 +484,43 @@ function ExpenseApprovals({ lang, pq }: { lang: string; pq: string }) {
         <p className="rounded-xl border border-dashed py-8 text-center text-sm text-muted-foreground">{t("approvals.team.noExpenses")}</p>
       )}
       {rows.length > 0 && (
-        <ul className="divide-y divide-border/60 overflow-hidden rounded-xl border">
-          {rows.map((x) => (
-            <li
-              key={x.id}
-              className="grid grid-cols-[auto_minmax(0,1fr)_auto] items-center gap-3 px-3 py-2 text-sm md:grid-cols-[auto_140px_minmax(0,1fr)_110px_auto]"
-            >
-              {selectable ? (
-                <Checkbox
-                  checked={sel.has(x.id)}
-                  onCheckedChange={(v) => setSel((s) => (v ? new Set([...s, x.id]) : new Set([...s].filter((y) => y !== x.id))))}
-                />
-              ) : (
-                <span />
-              )}
-              <span className="hidden min-w-0 md:block">
-                <span className="block truncate font-medium">{x.userName}</span>
-                <span className="block text-[11px] text-muted-foreground">{shortDate(x.date)}</span>
-                {x.reportTitle && <span className="block truncate text-[11px] text-primary/80">{x.reportTitle}</span>}
-              </span>
-              <span className="min-w-0">
-                <span className="block truncate">
-                  {x.type} — {x.description}
-                </span>
-                <span className="flex flex-wrap items-center gap-1.5 text-[11px] text-muted-foreground">
-                  {x.unit && (
-                    <span>
-                      {(x.quantityX100 / 100).toLocaleString()} {x.unit}
-                    </span>
+        <>
+          <div className="flex justify-end gap-1">
+            <Button size="sm" variant="ghost" className="h-8 px-2 text-xs" onClick={() => toggle(byPerson.map(([name]) => `exp:${status}:${name}`), true)}>
+              <ChevronsDownUp className="size-3.5" /> {t("approvals.collapseAll")}
+            </Button>
+            <Button size="sm" variant="ghost" className="h-8 px-2 text-xs" onClick={() => toggle(byPerson.map(([name]) => `exp:${status}:${name}`), false)}>
+              <ChevronsUpDown className="size-3.5" /> {t("approvals.expandAll")}
+            </Button>
+          </div>
+          {byPerson.map(([name, list]) => {
+            const key = `exp:${status}:${name}`;
+            const open = opened.has(key);
+            const money$ = list.filter((x) => !x.mileage).reduce((n, x) => n + x.amountCents, 0);
+            const km = list.filter((x) => x.mileage).reduce((n, x) => n + x.quantityX100 / 100, 0);
+            const ids = list.map((x) => x.id);
+            return (
+              <section key={key} className="overflow-hidden rounded-xl border">
+                <div className={cn("flex items-center gap-3 bg-background/30 px-3 py-2", open && "border-b")}>
+                  {selectable && (
+                    <Checkbox
+                      checked={ids.every((x) => sel.has(x)) ? true : ids.some((x) => sel.has(x)) ? "indeterminate" : false}
+                      onCheckedChange={(v) => setSel((s) => new Set(v ? [...s, ...ids] : [...s].filter((y) => !ids.includes(y))))}
+                      aria-label={name}
+                    />
                   )}
-                  {x.clientName && <span>{x.billable ? t("expense.billedTo", { name: x.clientName }) : x.clientName}</span>}
-                  {x.hasReceipt && (
-                    <a href={`/api/time/expenses/${x.id}/receipt`} target="_blank" rel="noreferrer" className="text-primary hover:underline">
-                      {t("expense.receipt")}
-                    </a>
-                  )}
-                  <QbMark id={x.quickbooksId} error={x.quickbooksError} />
-                  {x.paidAt && <PaidMark at={x.paidAt} />}
-                </span>
-              </span>
-              <span className="text-right font-mono">{x.mileage ? t("expense.km", { km: x.quantityX100 / 100 }) : m(x.amountCents)}</span>
-              <span />
-            </li>
-          ))}
-        </ul>
+                  <button type="button" onClick={() => toggle([key], open)} aria-expanded={open} title={t(open ? "approvals.collapse" : "approvals.expand")} className="flex min-w-0 flex-1 items-center gap-2 text-left">
+                    <ChevronRight className={cn("size-4 shrink-0 text-muted-foreground transition-transform", open && "rotate-90")} />
+                    <span className="truncate text-sm font-semibold">{name}</span>
+                    <span className="ml-auto shrink-0 text-xs text-muted-foreground">{t("approvals.items", { count: list.length })}</span>
+                  </button>
+                  <span className="font-mono text-sm">{[money$ > 0 && m(money$), km > 0 && t("expense.km", { km })].filter(Boolean).join(" + ") || m(0)}</span>
+                </div>
+                {open && <ul className="divide-y divide-border/60">{list.map(renderRow)}</ul>}
+              </section>
+            );
+          })}
+        </>
       )}
     </section>
   );
@@ -497,6 +535,7 @@ function TimesheetApprovals({ lang, pq }: { lang: string; pq: string }) {
   const approver = can("timesheets.approve");
   const accounting = can("accounting.manage");
   const allowed = approver || accounting;
+  const { opened, toggle } = useOpened();
   const pay = useMutation({
     mutationFn: (p: { id: string; paid: boolean }) => api.post<{ changed: number }>("/time/approvals/timesheets/paid", { ids: [p.id], paid: p.paid }),
     onSuccess: (_r, p) => {
@@ -535,18 +574,42 @@ function TimesheetApprovals({ lang, pq }: { lang: string; pq: string }) {
       {!isLoading && !rows.length && (
         <p className="rounded-xl border border-dashed py-8 text-center text-sm text-muted-foreground">{t("approvals.team.noWeeks")}</p>
       )}
-      <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
+      {rows.length > 0 && (
+        <div className="flex justify-end gap-1">
+          <Button size="sm" variant="ghost" className="h-8 px-2 text-xs" onClick={() => toggle(rows.map((w) => `wk:${w.id}`), true)}>
+            <ChevronsDownUp className="size-3.5" /> {t("approvals.collapseAll")}
+          </Button>
+          <Button size="sm" variant="ghost" className="h-8 px-2 text-xs" onClick={() => toggle(rows.map((w) => `wk:${w.id}`), false)}>
+            <ChevronsUpDown className="size-3.5" /> {t("approvals.expandAll")}
+          </Button>
+        </div>
+      )}
+      <div className="grid items-start gap-3 md:grid-cols-2 xl:grid-cols-3">
         {rows.map((w) => (
           <article key={w.id} className="space-y-3 rounded-2xl border bg-background/30 p-4">
-            <div className="flex items-start justify-between gap-2">
-              <div>
-                <p className="font-semibold">{w.userName}</p>
-                <p className="text-xs text-muted-foreground">
-                  {shortDate(w.weekStart)} → {shortDate(w.weekEnd)}
-                </p>
-              </div>
-              <QbMark id={w.quickbooks?.syncedAt ? "ok" : null} error={w.quickbooks?.error} />
-            </div>
+            <button
+              type="button"
+              onClick={() => toggle([`wk:${w.id}`], opened.has(`wk:${w.id}`))}
+              aria-expanded={opened.has(`wk:${w.id}`)}
+              title={t(opened.has(`wk:${w.id}`) ? "approvals.collapse" : "approvals.expand")}
+              className="flex w-full items-start justify-between gap-2 text-left"
+            >
+              <span className="flex min-w-0 items-start gap-2">
+                <ChevronRight className={cn("mt-1 size-4 shrink-0 text-muted-foreground transition-transform", opened.has(`wk:${w.id}`) && "rotate-90")} />
+                <span>
+                  <span className="block font-semibold">{w.userName}</span>
+                  <span className="block text-xs text-muted-foreground">
+                    {shortDate(w.weekStart)} → {shortDate(w.weekEnd)}
+                  </span>
+                </span>
+              </span>
+              <span className="flex shrink-0 items-center gap-2">
+                <span className="font-mono text-sm">{h(w.totalHours)}</span>
+                <QbMark id={w.quickbooks?.syncedAt ? "ok" : null} error={w.quickbooks?.error} />
+              </span>
+            </button>
+            {opened.has(`wk:${w.id}`) && (
+              <>
             <ul className="space-y-1 text-sm">
               <li className="flex justify-between font-medium">
                 <span className="flex items-center gap-1.5">
@@ -612,6 +675,8 @@ function TimesheetApprovals({ lang, pq }: { lang: string; pq: string }) {
                   </Button>
                 </div>
               ))}
+              </>
+            )}
           </article>
         ))}
       </div>
@@ -625,15 +690,16 @@ function KindTab({ kind, counts, lang, pq }: { kind: Kind; counts: (s: Status) =
   const qc = useQueryClient();
   const [status, setStatus] = useState<Status>("pending");
   const [sel, setSel] = useState<Set<string>>(new Set());
-  const [collapsed, setCollapsed] = useState<Set<string>>(readCollapsed);
+  // every section (a client, and under it a contract) starts folded; the ones opened are kept for the session
+  const [opened, setOpened] = useState<Set<string>>(readOpened);
   const toggle = (ids: string[], close: boolean) =>
-    setCollapsed((s) => {
+    setOpened((s) => {
       const next = new Set(s);
       for (const id of ids) {
-        if (close) next.add(id);
-        else next.delete(id);
+        if (close) next.delete(id);
+        else next.add(id);
       }
-      saveCollapsed(next);
+      saveOpened(next);
       return next;
     });
   const { data: items = [], isLoading } = useQuery({
@@ -682,6 +748,7 @@ function KindTab({ kind, counts, lang, pq }: { kind: Kind; counts: (s: Status) =
   });
   const m = (c: number) => money(c, lang);
   const total = items.reduce((x, i) => x + i.amountCents, 0);
+  const allSections = groups.flatMap(([id, g]) => [id, ...(kind === "contract" ? byContract(g.items).map((cg) => `${id}|${cg.key}`) : [])]);
   const renderItem = (i: Item) => (
     <li
       key={i.id}
@@ -783,12 +850,7 @@ function KindTab({ kind, counts, lang, pq }: { kind: Kind; counts: (s: Status) =
               size="sm"
               variant="ghost"
               className="h-8 px-2 text-xs"
-              onClick={() =>
-                toggle(
-                  groups.map(([id]) => id),
-                  true,
-                )
-              }
+              onClick={() => toggle(allSections, true)}
             >
               <ChevronsDownUp className="size-3.5" /> {t("approvals.collapseAll")}
             </Button>
@@ -796,12 +858,7 @@ function KindTab({ kind, counts, lang, pq }: { kind: Kind; counts: (s: Status) =
               size="sm"
               variant="ghost"
               className="h-8 px-2 text-xs"
-              onClick={() =>
-                toggle(
-                  groups.map(([id]) => id),
-                  false,
-                )
-              }
+              onClick={() => toggle(allSections, false)}
             >
               <ChevronsUpDown className="size-3.5" /> {t("approvals.expandAll")}
             </Button>
@@ -860,7 +917,7 @@ function KindTab({ kind, counts, lang, pq }: { kind: Kind; counts: (s: Status) =
       {groups.map(([clientId, g]) => {
         const ids = g.items.map((i) => i.id);
         const sub = g.items.reduce((x, i) => x + i.amountCents, 0);
-        const closed = collapsed.has(clientId);
+        const closed = !opened.has(clientId);
         return (
           <section key={clientId} className="glass overflow-hidden rounded-2xl border">
             <div className={cn("flex items-center gap-3 bg-background/30 px-3 py-2", !closed && "border-b")}>
@@ -899,6 +956,15 @@ function KindTab({ kind, counts, lang, pq }: { kind: Kind; counts: (s: Status) =
                   ? byContract(g.items).map((cg) => (
                       <Fragment key={cg.key}>
                         <li className="flex items-center gap-3 border-t bg-background/30 px-3 py-1.5 text-xs font-semibold">
+                          <button
+                            type="button"
+                            onClick={() => toggle([`${clientId}|${cg.key}`], opened.has(`${clientId}|${cg.key}`))}
+                            aria-expanded={opened.has(`${clientId}|${cg.key}`)}
+                            title={t(opened.has(`${clientId}|${cg.key}`) ? "approvals.collapse" : "approvals.expand")}
+                            className="shrink-0"
+                          >
+                            <ChevronRight className={cn("size-3.5 text-muted-foreground transition-transform", opened.has(`${clientId}|${cg.key}`) && "rotate-90")} />
+                          </button>
                           {manage ? (
                             <Checkbox
                               checked={cg.items.every((x) => sel.has(x.id)) ? true : cg.items.some((x) => sel.has(x.id)) ? "indeterminate" : false}
@@ -913,7 +979,7 @@ function KindTab({ kind, counts, lang, pq }: { kind: Kind; counts: (s: Status) =
                           <span className="shrink-0 font-normal text-muted-foreground">{t("approvals.items", { count: cg.items.length })}</span>
                           <span className="shrink-0 font-mono">{m(cg.items.reduce((x, i) => x + i.amountCents, 0))}</span>
                         </li>
-                        {cg.items.map(renderItem)}
+                        {opened.has(`${clientId}|${cg.key}`) && cg.items.map(renderItem)}
                       </Fragment>
                     ))
                   : g.items.map(renderItem)}
@@ -924,6 +990,22 @@ function KindTab({ kind, counts, lang, pq }: { kind: Kind; counts: (s: Status) =
       })}
     </div>
   );
+}
+
+/** The sections opened on this page (everything starts folded; kept for the session). */
+function useOpened() {
+  const [opened, setOpened] = useState<Set<string>>(readOpened);
+  const toggle = (ids: string[], close: boolean) =>
+    setOpened((s) => {
+      const next = new Set(s);
+      for (const id of ids) {
+        if (close) next.delete(id);
+        else next.add(id);
+      }
+      saveOpened(next);
+      return next;
+    });
+  return { opened, toggle };
 }
 
 /** The lines of a client's recurring contracts, one group per contract (its services inside, by charge date) */
@@ -940,17 +1022,17 @@ function byContract(items: Item[]) {
     .sort((x, y) => x.name.localeCompare(y.name));
 }
 
-const COLLAPSED_KEY = "akab.approvals.collapsed";
-function readCollapsed(): Set<string> {
+const OPENED_KEY = "akab.approvals.opened";
+function readOpened(): Set<string> {
   try {
-    return new Set(JSON.parse(sessionStorage.getItem(COLLAPSED_KEY) ?? "[]") as string[]);
+    return new Set(JSON.parse(sessionStorage.getItem(OPENED_KEY) ?? "[]") as string[]);
   } catch {
     return new Set();
   }
 }
-function saveCollapsed(s: Set<string>) {
+function saveOpened(s: Set<string>) {
   try {
-    sessionStorage.setItem(COLLAPSED_KEY, JSON.stringify([...s]));
+    sessionStorage.setItem(OPENED_KEY, JSON.stringify([...s]));
   } catch {
     /* private window: for this page only */
   }
