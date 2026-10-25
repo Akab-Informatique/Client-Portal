@@ -423,7 +423,7 @@ const fr = {
       paidOn: "Payée le {{date}}",
       filter: {
         all: "Toutes",
-        unpaid: "À payer",
+        unpaid: "Impayées",
         overdue: "En retard",
         paid: "Payées",
       },
@@ -453,7 +453,7 @@ const fr = {
       state: {
         paid: "Payée",
         partial: "Paiement partiel",
-        due: "À payer",
+        due: "Impayée",
         overdue: "En retard",
         voided: "Annulée",
       },
@@ -902,7 +902,7 @@ const fr = {
     status: "Statut",
     statusAll: "Toutes",
     statusFilter: {
-      open: "À payer",
+      open: "Impayées",
       overdue: "En retard",
       partial: "Partielles",
       paid: "Payées",
@@ -936,8 +936,8 @@ const fr = {
     totals: {
       count_one: "{{count}} facture",
       count_other: "{{count}} factures",
-      paid: "Payé",
-      due: "Reste à payer",
+      paid: "Encaissé",
+      due: "À recevoir",
       overdue_one: "En retard ({{count}})",
       overdue_other: "En retard ({{count}})",
     },

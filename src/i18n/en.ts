@@ -904,7 +904,7 @@ const en: Dict = {
     status: "Status",
     statusAll: "All",
     statusFilter: {
-      open: "To pay",
+      open: "Unpaid",
       overdue: "Overdue",
       partial: "Partial",
       paid: "Paid",
@@ -938,8 +938,8 @@ const en: Dict = {
     totals: {
       count_one: "{{count}} invoice",
       count_other: "{{count}} invoices",
-      paid: "Paid",
-      due: "Left to pay",
+      paid: "Received",
+      due: "Outstanding",
       overdue_one: "Overdue ({{count}})",
       overdue_other: "Overdue ({{count}})",
     },

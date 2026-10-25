@@ -1,4 +1,4 @@
-import { FilePlus2, History, Workflow, Coffee, CreditCard, BarChart3, BookOpen, FolderKanban, ClipboardCheck, Building2, CalendarCheck, Clock, FileSignature, LayoutDashboard, Mail, Megaphone, MonitorSmartphone, Receipt, KeyRound, Store, Ticket, Wallet, Wrench, type LucideIcon } from "lucide-react";
+import { FilePlus2, History, Workflow, Coffee, BarChart3, BookOpen, FolderKanban, ClipboardCheck, Building2, CalendarCheck, Clock, FileSignature, LayoutDashboard, Mail, Megaphone, MonitorSmartphone, Receipt, KeyRound, Store, Ticket, Wallet, Wrench, type LucideIcon } from "lucide-react";
 import type { PermissionKey } from "@shared/permissions";
 
 /**
@@ -48,7 +48,6 @@ export const STAFF_MODULES: NavModule[] = [
   { key: "crm", path: "/crm", labelKey: "nav.crmClients", icon: Building2, section: "management", permission: "crm.view" },
   { key: "invoices", path: "/accounting/invoices", labelKey: "nav.invoices", icon: Receipt, section: "accounting", permission: "accounting.view" },
   { key: "approvals", path: "/accounting/approvals", labelKey: "nav.approvals", icon: ClipboardCheck, section: "accounting", permission: "accounting.view" },
-  { key: "payments", path: "/accounting/payments", labelKey: "nav.payments", icon: CreditCard, section: "accounting", permission: "accounting.view" },
   { key: "quotes", path: "/accounting/quotes", labelKey: "nav.quotesLatest", icon: History, section: "sales", permission: "quotes.view" },
   { key: "quotesNew", path: "/accounting/quotes/new", labelKey: "nav.quotesNew", icon: FilePlus2, section: "sales", permission: "quotes.manage" },
   { key: "store", path: "/store", labelKey: "nav.store", icon: Store, section: "management", permission: "store.view" },
