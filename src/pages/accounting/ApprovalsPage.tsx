@@ -6,7 +6,6 @@ import { toast } from "sonner";
 import {
   AlertTriangle,
   Ban,
-  BadgeDollarSign,
   Check,
   ClipboardCheck,
   Clock,
@@ -30,7 +29,6 @@ import {
 import { GlassBackdrop } from "@/components/brand/GlassBackdrop";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
-import { Input } from "@/components/ui/input";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { api } from "@/lib/api";
 import { relativeTime } from "@/lib/format";
@@ -83,11 +81,10 @@ export type Group = {
   kinds: Kind[];
 };
 
-type Folder = "work" | "staff";
-const FOLDERS: { key: Folder; icon: LucideIcon; tabs: (Kind | "timesheets")[] }[] = [
-  { key: "work", icon: Hammer, tabs: ["labour", "charge", "contract", "milestone", "project"] },
-  { key: "staff", icon: Wallet, tabs: ["expense", "timesheets"] },
-];
+type Folder = "work";
+// the technicians' timesheets and expenses are not approved here any more: they are approved when sent (Admin › Temps et dépenses);
+// only the expenses billed back to a client are work to bill, so that tab stays
+const FOLDERS: { key: Folder; icon: LucideIcon; tabs: Kind[] }[] = [{ key: "work", icon: Hammer, tabs: ["labour", "charge", "expense", "contract", "milestone", "project"] }];
 export const TAB_ICON: Record<Kind | "timesheets", LucideIcon> = {
   labour: Hammer,
   charge: Package,
@@ -127,7 +124,7 @@ export function ApprovalsPage() {
   }, [legacyInvoice, navigate]);
   const folder = (FOLDERS.find((f) => f.key === params.get("folder"))?.key ?? "work") as Folder;
   const tabs = FOLDERS.find((f) => f.key === folder)!.tabs;
-  const tab = (tabs.includes(params.get("tab") as Kind) ? params.get("tab") : tabs[0]) as Kind | "timesheets";
+  const tab = (tabs.includes(params.get("tab") as Kind) ? params.get("tab") : tabs[0]) as Kind;
   const go = (f: Folder, tb?: string) =>
     setParams(
       (p) => {
@@ -144,7 +141,7 @@ export function ApprovalsPage() {
     refetchInterval: 60_000,
   });
   const count = (kind: Kind, status: Status) => summary?.counts.find((c) => c.kind === kind && c.status === status)?.n ?? 0;
-  const pendingIn = (f: Folder) => FOLDERS.find((x) => x.key === f)!.tabs.reduce((x, k) => x + (k === "timesheets" ? 0 : count(k, "pending")), 0);
+  const pendingIn = (f: Folder) => FOLDERS.find((x) => x.key === f)!.tabs.reduce((x, k) => x + count(k, "pending"), 0);
   const importNow = useMutation({
     mutationFn: () => api.post<Summary["state"]>("/billables/import"),
     onSuccess: (s) => {
@@ -223,7 +220,7 @@ export function ApprovalsPage() {
               <TabsList className="h-auto flex-wrap justify-start">
                 {tabs.map((k) => {
                   const Icon = TAB_ICON[k];
-                  const soon = k === "project" || k === "timesheets";
+                  const soon = k === "project";
                   return (
                     <TabsTrigger key={k} value={k} className={soon ? "opacity-70" : undefined}>
                       <Icon className="size-4" /> {t(`approvals.tabs.${k}`)}
@@ -239,16 +236,6 @@ export function ApprovalsPage() {
                 <TabsContent key={k} value={k} className="mt-4">
                   {k === "project" ? (
                     <Placeholder kind={k} />
-                  ) : k === "timesheets" ? (
-                    <TimesheetApprovals lang={i18n.language} pq={pq} />
-                  ) : k === "expense" ? (
-                    <div className="space-y-6">
-                      <ExpenseApprovals lang={i18n.language} pq={pq} />
-                      <section className="space-y-2">
-                        <p className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">{t("approvals.fromAutotask")}</p>
-                        <KindTab kind="expense" counts={(s) => count("expense", s)} lang={i18n.language} pq={pq} />
-                      </section>
-                    </div>
                   ) : (
                     <KindTab kind={k} counts={(s) => count(k, s)} lang={i18n.language} pq={pq} />
                   )}
@@ -262,7 +249,7 @@ export function ApprovalsPage() {
   );
 }
 
-function Placeholder({ kind }: { kind: "timesheets" | "project" }) {
+function Placeholder({ kind }: { kind: "project" }) {
   const { t } = useTranslation();
   const Icon = TAB_ICON[kind];
   return (
@@ -272,417 +259,6 @@ function Placeholder({ kind }: { kind: "timesheets" | "project" }) {
       <p className="max-w-lg text-sm text-muted-foreground">{t(`approvals.empty.${kind}.text`)}</p>
       <span className="rounded-full border border-dashed px-2.5 py-0.5 text-[11px] text-muted-foreground">{t("common.comingSoon")}</span>
     </div>
-  );
-}
-
-// ── Expenses and timesheets of the team (timesheets.approve) ──
-type TeamExpense = {
-  id: string;
-  userName: string;
-  date: string;
-  type: string;
-  unit: string | null;
-  /** A trip (km): shown as the distance paid, never in money */
-  mileage?: boolean;
-  fromPlace?: string | null;
-  toPlace?: string | null;
-  description: string;
-  quantityX100: number;
-  amountCents: number;
-  clientName: string | null;
-  billable: boolean;
-  hasReceipt: boolean;
-  status: string;
-  paidAt: string | null;
-  quickbooksId: string | null;
-  quickbooksError: string | null;
-  /** The report it was sent in */
-  reportTitle: string | null;
-};
-type TeamWeek = {
-  id: string;
-  userName: string;
-  weekStart: string;
-  weekEnd: string;
-  status: string;
-  submittedAt: string | null;
-  comment: string | null;
-  paidAt: string | null;
-  types: { type: string; kind: string; hours: number }[];
-  labourHours: number;
-  totalHours: number;
-  quickbooks: { syncedAt: string | null; error: string | null } | null;
-};
-type Decision = "submitted" | "approved" | "rejected" | "paid";
-
-function DecisionFilter({ value, onChange }: { value: Decision; onChange: (v: Decision) => void }) {
-  const { t } = useTranslation();
-  return (
-    <div className="flex gap-1">
-      {(["submitted", "approved", "paid", "rejected"] as Decision[]).map((s) => (
-        <button
-          key={s}
-          type="button"
-          aria-pressed={value === s}
-          onClick={() => onChange(s)}
-          className={cn(
-            "h-8 rounded-lg border px-2.5 text-xs",
-            value === s ? "border-[color:var(--gold)]/50 bg-[color:var(--gold)]/10 font-medium" : "text-muted-foreground hover:bg-accent/50",
-          )}
-        >
-          {t(`approvals.team.${s}`)}
-        </button>
-      ))}
-    </div>
-  );
-}
-
-function QbMark({ id, error }: { id?: string | null; error?: string | null }) {
-  const { t } = useTranslation();
-  if (id) return <span className="rounded border border-emerald-500/30 px-1 text-[10px] text-emerald-300">QuickBooks</span>;
-  if (error)
-    return (
-      <span className="rounded border border-red-500/30 px-1 text-[10px] text-red-300" title={error}>
-        {t("approvals.team.qbError")}
-      </span>
-    );
-  return null;
-}
-
-const GOLD_BTN = "bg-grad-gold font-semibold text-[#1a1204] hover:brightness-105";
-
-/** Paid by accounting, on that day */
-function PaidMark({ at }: { at: string }) {
-  const { t } = useTranslation();
-  return (
-    <span className="inline-flex items-center gap-1 rounded border border-[color:var(--gold)]/40 px-1.5 text-[11px] text-primary">
-      <BadgeDollarSign className="size-3" /> {t("approvals.team.paidOn", { date: shortDate(at) })}
-    </span>
-  );
-}
-
-function ExpenseApprovals({ lang, pq }: { lang: string; pq: string }) {
-  const { t } = useTranslation();
-  const can = useCan();
-  const qc = useQueryClient();
-  const [status, setStatus] = useState<Decision>("submitted");
-  const [sel, setSel] = useState<Set<string>>(new Set());
-  const approver = can("timesheets.approve");
-  const accounting = can("accounting.manage");
-  const allowed = approver || accounting;
-  const { opened, toggle } = useOpened();
-  const { data: rows = [], isLoading } = useQuery({
-    queryKey: ["time", "approvals", "expenses", status, pq],
-    queryFn: () => api.get<TeamExpense[]>(`/time/approvals/expenses?status=${status}&${pq}`),
-    enabled: allowed,
-  });
-  // approved → paid (accounting), or back to approved
-  const pay = useMutation({
-    mutationFn: (paid: boolean) => api.post<{ changed: number }>("/time/approvals/expenses/paid", { ids: [...sel], paid }),
-    onSuccess: (r, paid) => {
-      setSel(new Set());
-      void qc.invalidateQueries({ queryKey: ["time"] });
-      toast.success(t(paid ? "approvals.team.expenses_paid" : "approvals.team.expenses_unpaid", { count: r.changed }));
-    },
-    onError: () => toast.error(t("common.error")),
-  });
-  const selectable = (status === "submitted" && approver) || ((status === "approved" || status === "paid") && accounting);
-  const decide = useMutation({
-    mutationFn: (decision: "approve" | "reject") => api.post<{ changed: number }>("/time/approvals/expenses", { ids: [...sel], decision }),
-    onSuccess: (r, decision) => {
-      setSel(new Set());
-      void qc.invalidateQueries({ queryKey: ["time"] });
-      void qc.invalidateQueries({ queryKey: KEY });
-      toast.success(t(`approvals.team.expenses_${decision}`, { count: r.changed }));
-    },
-  });
-  if (!allowed) return <p className="text-sm text-muted-foreground">{t("approvals.team.noRight")}</p>;
-  const m = (c: number) => money(c, lang);
-  // one section per person, folded until opened
-  const byPerson = [...rows.reduce((g, x) => g.set(x.userName, [...(g.get(x.userName) ?? []), x]), new Map<string, TeamExpense[]>())].sort((x, y) => x[0].localeCompare(y[0]));
-  const renderRow = (x: TeamExpense) => (
-    <li
-      key={x.id}
-      className="grid grid-cols-[auto_minmax(0,1fr)_auto] items-center gap-3 px-3 py-2 text-sm md:grid-cols-[auto_140px_minmax(0,1fr)_110px_auto]"
-    >
-      {selectable ? (
-        <Checkbox
-          checked={sel.has(x.id)}
-          onCheckedChange={(v) => setSel((s) => (v ? new Set([...s, x.id]) : new Set([...s].filter((y) => y !== x.id))))}
-        />
-      ) : (
-        <span />
-      )}
-      <span className="hidden min-w-0 md:block">
-        <span className="block truncate font-medium">{x.userName}</span>
-        <span className="block text-[11px] text-muted-foreground">{shortDate(x.date)}</span>
-        {x.reportTitle && <span className="block truncate text-[11px] text-primary/80">{x.reportTitle}</span>}
-      </span>
-      <span className="min-w-0">
-        <span className="block truncate">
-          {x.type} — {x.description}
-        </span>
-        <span className="flex flex-wrap items-center gap-1.5 text-[11px] text-muted-foreground">
-          {x.unit && (
-            <span>
-              {(x.quantityX100 / 100).toLocaleString()} {x.unit}
-            </span>
-          )}
-          {x.clientName && <span>{x.billable ? t("expense.billedTo", { name: x.clientName }) : x.clientName}</span>}
-          {x.hasReceipt && (
-            <a href={`/api/time/expenses/${x.id}/receipt`} target="_blank" rel="noreferrer" className="text-primary hover:underline">
-              {t("expense.receipt")}
-            </a>
-          )}
-          <QbMark id={x.quickbooksId} error={x.quickbooksError} />
-          {x.paidAt && <PaidMark at={x.paidAt} />}
-        </span>
-      </span>
-      <span className="text-right font-mono">{x.mileage ? t("expense.km", { km: x.quantityX100 / 100 }) : m(x.amountCents)}</span>
-      <span />
-    </li>
-  );
-  return (
-    <section className="space-y-3">
-      <div className="flex flex-wrap items-center gap-2">
-        <p className="mr-auto text-sm font-semibold">{t("approvals.team.expensesTitle")}</p>
-        <RefreshButton />
-        <DecisionFilter
-          value={status}
-          onChange={(v) => {
-            setStatus(v);
-            setSel(new Set());
-          }}
-        />
-      </div>
-      {selectable && sel.size > 0 && status !== "submitted" && (
-        <div className="flex flex-wrap items-center gap-2 rounded-xl border border-[color:var(--gold)]/40 p-2">
-          <span className="px-1 text-xs">{t("approvals.selected", { count: sel.size })}</span>
-          {status === "approved" ? (
-            <Button size="sm" disabled={pay.isPending} onClick={() => pay.mutate(true)} className={GOLD_BTN}>
-              <BadgeDollarSign className="size-3.5" /> {t("approvals.team.markPaid")}
-            </Button>
-          ) : (
-            <Button size="sm" variant="outline" disabled={pay.isPending} onClick={() => pay.mutate(false)}>
-              <Undo2 className="size-3.5" /> {t("approvals.team.markUnpaid")}
-            </Button>
-          )}
-        </div>
-      )}
-      {status === "submitted" && approver && sel.size > 0 && (
-        <div className="flex flex-wrap items-center gap-2 rounded-xl border border-[color:var(--gold)]/40 p-2">
-          <span className="px-1 text-xs">{t("approvals.selected", { count: sel.size })}</span>
-          <Button size="sm" disabled={decide.isPending} onClick={() => decide.mutate("approve")} className="bg-emerald-600 text-white hover:bg-emerald-500">
-            <Check className="size-3.5" /> {t("approvals.approve")}
-          </Button>
-          <Button size="sm" variant="outline" disabled={decide.isPending} onClick={() => decide.mutate("reject")}>
-            <Ban className="size-3.5" /> {t("approvals.team.reject")}
-          </Button>
-        </div>
-      )}
-      {isLoading && <Loader2 className="mx-auto size-5 animate-spin text-muted-foreground" />}
-      {!isLoading && !rows.length && (
-        <p className="rounded-xl border border-dashed py-8 text-center text-sm text-muted-foreground">{t("approvals.team.noExpenses")}</p>
-      )}
-      {rows.length > 0 && (
-        <>
-          <div className="flex justify-end gap-1">
-            <Button size="sm" variant="ghost" className="h-8 px-2 text-xs" onClick={() => toggle(byPerson.map(([name]) => `exp:${status}:${name}`), true)}>
-              <ChevronsDownUp className="size-3.5" /> {t("approvals.collapseAll")}
-            </Button>
-            <Button size="sm" variant="ghost" className="h-8 px-2 text-xs" onClick={() => toggle(byPerson.map(([name]) => `exp:${status}:${name}`), false)}>
-              <ChevronsUpDown className="size-3.5" /> {t("approvals.expandAll")}
-            </Button>
-          </div>
-          {byPerson.map(([name, list]) => {
-            const key = `exp:${status}:${name}`;
-            const open = opened.has(key);
-            const money$ = list.filter((x) => !x.mileage).reduce((n, x) => n + x.amountCents, 0);
-            const km = list.filter((x) => x.mileage).reduce((n, x) => n + x.quantityX100 / 100, 0);
-            const ids = list.map((x) => x.id);
-            return (
-              <section key={key} className="overflow-hidden rounded-xl border">
-                <div className={cn("flex items-center gap-3 bg-background/30 px-3 py-2", open && "border-b")}>
-                  {selectable && (
-                    <Checkbox
-                      checked={ids.every((x) => sel.has(x)) ? true : ids.some((x) => sel.has(x)) ? "indeterminate" : false}
-                      onCheckedChange={(v) => setSel((s) => new Set(v ? [...s, ...ids] : [...s].filter((y) => !ids.includes(y))))}
-                      aria-label={name}
-                    />
-                  )}
-                  <button type="button" onClick={() => toggle([key], open)} aria-expanded={open} title={t(open ? "approvals.collapse" : "approvals.expand")} className="flex min-w-0 flex-1 items-center gap-2 text-left">
-                    <ChevronRight className={cn("size-4 shrink-0 text-muted-foreground transition-transform", open && "rotate-90")} />
-                    <span className="truncate text-sm font-semibold">{name}</span>
-                    <span className="ml-auto shrink-0 text-xs text-muted-foreground">{t("approvals.items", { count: list.length })}</span>
-                  </button>
-                  <span className="font-mono text-sm">{[money$ > 0 && m(money$), km > 0 && t("expense.km", { km })].filter(Boolean).join(" + ") || m(0)}</span>
-                </div>
-                {open && <ul className="divide-y divide-border/60">{list.map(renderRow)}</ul>}
-              </section>
-            );
-          })}
-        </>
-      )}
-    </section>
-  );
-}
-
-/** Weeks to approve: the hours per type only — no tickets, no notes. */
-function TimesheetApprovals({ lang, pq }: { lang: string; pq: string }) {
-  const { t } = useTranslation();
-  const can = useCan();
-  const qc = useQueryClient();
-  const [status, setStatus] = useState<Decision>("submitted");
-  const approver = can("timesheets.approve");
-  const accounting = can("accounting.manage");
-  const allowed = approver || accounting;
-  const { opened, toggle } = useOpened();
-  const pay = useMutation({
-    mutationFn: (p: { id: string; paid: boolean }) => api.post<{ changed: number }>("/time/approvals/timesheets/paid", { ids: [p.id], paid: p.paid }),
-    onSuccess: (_r, p) => {
-      void qc.invalidateQueries({ queryKey: ["time"] });
-      toast.success(t(p.paid ? "approvals.team.week_paid" : "approvals.team.week_unpaid"));
-    },
-    onError: () => toast.error(t("common.error")),
-  });
-  const { data: rows = [], isLoading } = useQuery({
-    queryKey: ["time", "approvals", "weeks", status, pq],
-    queryFn: () => api.get<TeamWeek[]>(`/time/approvals/timesheets?status=${status}&${pq}`),
-    enabled: allowed,
-  });
-  const [rejecting, setRejecting] = useState<string | null>(null);
-  const [comment, setComment] = useState("");
-  const decide = useMutation({
-    mutationFn: (p: { id: string; decision: "approve" | "reject"; comment?: string }) =>
-      api.post(`/time/approvals/timesheets/${p.id}`, { decision: p.decision, comment: p.comment }),
-    onSuccess: (_r, p) => {
-      setRejecting(null);
-      setComment("");
-      void qc.invalidateQueries({ queryKey: ["time"] });
-      toast.success(t(`approvals.team.week_${p.decision}`));
-    },
-  });
-  if (!allowed) return <p className="text-sm text-muted-foreground">{t("approvals.team.noRight")}</p>;
-  const loc = lang === "en" ? "en-CA" : "fr-CA";
-  const h = (n: number) => `${n.toLocaleString(loc, { maximumFractionDigits: 2 })} h`;
-  return (
-    <section className="space-y-3">
-      <div className="flex flex-wrap items-center gap-2">
-        <p className="mr-auto text-xs text-muted-foreground">{t("approvals.team.weeksHint")}</p>
-        <RefreshButton />
-        <DecisionFilter value={status} onChange={setStatus} />
-      </div>
-      {isLoading && <Loader2 className="mx-auto size-5 animate-spin text-muted-foreground" />}
-      {!isLoading && !rows.length && (
-        <p className="rounded-xl border border-dashed py-8 text-center text-sm text-muted-foreground">{t("approvals.team.noWeeks")}</p>
-      )}
-      {rows.length > 0 && (
-        <div className="flex justify-end gap-1">
-          <Button size="sm" variant="ghost" className="h-8 px-2 text-xs" onClick={() => toggle(rows.map((w) => `wk:${w.id}`), true)}>
-            <ChevronsDownUp className="size-3.5" /> {t("approvals.collapseAll")}
-          </Button>
-          <Button size="sm" variant="ghost" className="h-8 px-2 text-xs" onClick={() => toggle(rows.map((w) => `wk:${w.id}`), false)}>
-            <ChevronsUpDown className="size-3.5" /> {t("approvals.expandAll")}
-          </Button>
-        </div>
-      )}
-      <div className="grid items-start gap-3 md:grid-cols-2 xl:grid-cols-3">
-        {rows.map((w) => (
-          <article key={w.id} className="space-y-3 rounded-2xl border bg-background/30 p-4">
-            <button
-              type="button"
-              onClick={() => toggle([`wk:${w.id}`], opened.has(`wk:${w.id}`))}
-              aria-expanded={opened.has(`wk:${w.id}`)}
-              title={t(opened.has(`wk:${w.id}`) ? "approvals.collapse" : "approvals.expand")}
-              className="flex w-full items-start justify-between gap-2 text-left"
-            >
-              <span className="flex min-w-0 items-start gap-2">
-                <ChevronRight className={cn("mt-1 size-4 shrink-0 text-muted-foreground transition-transform", opened.has(`wk:${w.id}`) && "rotate-90")} />
-                <span>
-                  <span className="block font-semibold">{w.userName}</span>
-                  <span className="block text-xs text-muted-foreground">
-                    {shortDate(w.weekStart)} → {shortDate(w.weekEnd)}
-                  </span>
-                </span>
-              </span>
-              <span className="flex shrink-0 items-center gap-2">
-                <span className="font-mono text-sm">{h(w.totalHours)}</span>
-                <QbMark id={w.quickbooks?.syncedAt ? "ok" : null} error={w.quickbooks?.error} />
-              </span>
-            </button>
-            {opened.has(`wk:${w.id}`) && (
-              <>
-            <ul className="space-y-1 text-sm">
-              <li className="flex justify-between font-medium">
-                <span className="flex items-center gap-1.5">
-                  <Hammer className="size-3.5 text-primary" /> {t("approvals.team.labour")}
-                </span>
-                <span className="font-mono">{h(w.labourHours)}</span>
-              </li>
-              {w.types
-                .filter((x) => x.kind !== "labour")
-                .map((x) => (
-                  <li key={x.type} className="flex justify-between text-muted-foreground">
-                    <span>{x.type}</span>
-                    <span className="font-mono">{h(x.hours)}</span>
-                  </li>
-                ))}
-            </ul>
-            <p className="flex justify-between border-t pt-2 text-sm font-semibold">
-              <span>{t("timesheet.total")}</span>
-              <span className="font-mono">{h(w.totalHours)}</span>
-            </p>
-            {w.status === "rejected" && w.comment && <p className="text-xs text-red-300">{w.comment}</p>}
-            {w.status === "approved" && accounting && (
-              <Button size="sm" disabled={pay.isPending} onClick={() => pay.mutate({ id: w.id, paid: true })} className={`w-full ${GOLD_BTN}`}>
-                <BadgeDollarSign className="size-3.5" /> {t("approvals.team.markPaid")}
-              </Button>
-            )}
-            {w.status === "paid" && (
-              <div className="flex items-center justify-between gap-2">
-                {w.paidAt && <PaidMark at={w.paidAt} />}
-                {accounting && (
-                  <Button size="sm" variant="ghost" disabled={pay.isPending} onClick={() => pay.mutate({ id: w.id, paid: false })}>
-                    <Undo2 className="size-3.5" /> {t("approvals.team.markUnpaid")}
-                  </Button>
-                )}
-              </div>
-            )}
-            {w.status === "submitted" &&
-              approver &&
-              (rejecting === w.id ? (
-                <div className="space-y-2">
-                  <Input autoFocus placeholder={t("approvals.team.why")} value={comment} onChange={(e) => setComment(e.target.value)} />
-                  <div className="flex gap-2">
-                    <Button size="sm" variant="outline" disabled={decide.isPending} onClick={() => decide.mutate({ id: w.id, decision: "reject", comment })}>
-                      {t("approvals.team.sendBack")}
-                    </Button>
-                    <Button size="sm" variant="ghost" onClick={() => setRejecting(null)}>
-                      {t("common.cancel")}
-                    </Button>
-                  </div>
-                </div>
-              ) : (
-                <div className="flex gap-2">
-                  <Button
-                    size="sm"
-                    disabled={decide.isPending}
-                    onClick={() => decide.mutate({ id: w.id, decision: "approve" })}
-                    className="flex-1 bg-emerald-600 text-white hover:bg-emerald-500"
-                  >
-                    <Check className="size-3.5" /> {t("approvals.approve")}
-                  </Button>
-                  <Button size="sm" variant="outline" onClick={() => setRejecting(w.id)}>
-                    <Undo2 className="size-3.5" /> {t("approvals.team.sendBack")}
-                  </Button>
-                </div>
-              ))}
-              </>
-            )}
-          </article>
-        ))}
-      </div>
-    </section>
   );
 }
 
@@ -1020,22 +596,6 @@ function RefreshButton() {
       <RefreshCw className={cn("size-3.5", run.isPending && "animate-spin")} /> {t("approvals.refresh")}
     </Button>
   );
-}
-
-/** The sections opened on this page (everything starts folded; kept for the session). */
-function useOpened() {
-  const [opened, setOpened] = useState<Set<string>>(readOpened);
-  const toggle = (ids: string[], close: boolean) =>
-    setOpened((s) => {
-      const next = new Set(s);
-      for (const id of ids) {
-        if (close) next.delete(id);
-        else next.add(id);
-      }
-      saveOpened(next);
-      return next;
-    });
-  return { opened, toggle };
 }
 
 /** The lines of a client's recurring contracts, one group per contract (its services inside, by charge date) */
