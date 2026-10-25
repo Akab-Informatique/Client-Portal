@@ -3,7 +3,7 @@ import { useSearchParams } from "react-router-dom";
 import { useTranslation } from "react-i18next";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
-import { BadgeCheck, Banknote, CalendarRange, ChevronRight, FilePen, Loader2, Paperclip, Pencil, Plus, Send, Star, Trash2, Wallet, X } from "lucide-react";
+import { BadgeCheck, Banknote, CalendarRange, ChevronRight, FilePen, FileText, Folder, FolderOpen, Loader2, Paperclip, Pencil, Plus, Send, Star, Trash2, UserCog, Wallet, X } from "lucide-react";
 import { GlassBackdrop } from "@/components/brand/GlassBackdrop";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
@@ -12,6 +12,7 @@ import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Switch } from "@/components/ui/switch";
 import { api, ApiError } from "@/lib/api";
+import { useCan, useMe } from "@/lib/session";
 import { cn } from "@/lib/utils";
 import { isMileageUnit } from "@shared/mileage";
 import { money, useCrmClients } from "@/pages/crm/shared";
@@ -166,7 +167,13 @@ const periodText = (from: string | null, to: string | null) => (from && to ? (fr
 export function ExpensesPage() {
   const { t, i18n } = useTranslation();
   const qc = useQueryClient();
-  const { data: reports = [], isLoading } = useQuery({ queryKey: ["time", "expense-reports"], queryFn: () => api.get<ExpenseReport[]>("/time/expense-reports") });
+  // managers pick whose expenses to look at (their own by default; others are read only)
+  const me = useMe();
+  const manager = useCan()("timesheets.manage");
+  const [who, setWho] = useState(me.id);
+  const others = who !== me.id;
+  const { data: people } = useQuery({ queryKey: ["time", "people"], queryFn: () => api.get<{ id: string; name: string; timesheetRequired: boolean }[]>("/time/people"), enabled: manager });
+  const { data: reports = [], isLoading } = useQuery({ queryKey: ["time", "expense-reports", who], queryFn: () => api.get<ExpenseReport[]>(`/time/expense-reports${others ? `?userId=${who}` : ""}`) });
   const [creating, setCreating] = useState(false);
   const m = (c: number) => money(c, i18n.language);
   const totalText = useTotalText();
@@ -202,10 +209,28 @@ export function ExpensesPage() {
           </h1>
           <p className="text-sm text-muted-foreground">{t("expense.subtitle")}</p>
         </div>
-        <Button onClick={() => setCreating(true)} className="bg-grad-gold font-semibold text-[#1a1204] hover:brightness-105">
-          <Plus className="size-4" /> {t("expense.report.new")}
-        </Button>
+        {manager && people && (
+          <Select value={who} onValueChange={setWho}>
+            <SelectTrigger className="w-64" aria-label={t("timesheet.person")}>
+              <UserCog className="size-4 text-primary" />
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              {people.map((x) => (
+                <SelectItem key={x.id} value={x.id}>
+                  {x.id === me.id ? t("timesheet.me", { name: x.name }) : x.name}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        )}
+        {!others && (
+          <Button onClick={() => setCreating(true)} className="bg-grad-gold font-semibold text-[#1a1204] hover:brightness-105">
+            <Plus className="size-4" /> {t("expense.report.new")}
+          </Button>
+        )}
       </div>
+      {others && <p className="rounded-xl border border-[color:var(--gold)]/30 bg-[color:var(--gold)]/5 px-3 py-2 text-xs text-muted-foreground">{t("expense.viewing", { name: people?.find((x) => x.id === who)?.name ?? "" })}</p>}
 
       {toFix.length > 0 && filter?.key !== "open" && (
         <button
@@ -262,8 +287,8 @@ export function ExpensesPage() {
                   r.status === "open" && "border-[color:var(--gold)]/25",
                 )}
               >
-                <span className="flex size-9 shrink-0 items-center justify-center rounded-xl bg-[color:var(--gold)]/10 text-primary">
-                  <Wallet className="size-4" />
+                <span className="flex size-10 shrink-0 items-center justify-center rounded-xl bg-[color:var(--gold)]/10 text-primary">
+                  <Folder className="size-5 fill-[color:var(--gold)]/20 transition-all group-hover:fill-[color:var(--gold)]/40" />
                 </span>
                 <span className="min-w-0 flex-1">
                   <span className="block truncate font-semibold">{r.title}</span>
@@ -295,7 +320,7 @@ export function ExpensesPage() {
           }}
         />
       )}
-      {openReport && <ReportView r={openReport} money={m} onClose={() => set({ report: null })} onChanged={refresh} />}
+      {openReport && <ReportView r={openReport} readOnly={others} money={m} onClose={() => set({ report: null })} onChanged={refresh} />}
     </div>
   );
 }
@@ -365,10 +390,10 @@ function ReportFormDialog({ report, onClose, onSaved }: { report: ExpenseReport 
 }
 
 /** One report: + to add an expense, a pencil to change one (or the report), and one button to send it all. */
-function ReportView({ r, money: m, onClose, onChanged }: { r: ExpenseReport; money: (c: number) => string; onClose: () => void; onChanged: () => void }) {
+function ReportView({ r, readOnly, money: m, onClose, onChanged }: { r: ExpenseReport; readOnly?: boolean; money: (c: number) => string; onClose: () => void; onChanged: () => void }) {
   const { t } = useTranslation();
   const totalText = useTotalText();
-  const open = r.status === "open";
+  const open = r.status === "open" && !readOnly;
   const [item, setItem] = useState<Expense | "new" | { preset: ExpenseFavorite } | null>(null);
   const [editingReport, setEditingReport] = useState(false);
   const onError = (e: unknown) => {
@@ -393,6 +418,8 @@ function ReportView({ r, money: m, onClose, onChanged }: { r: ExpenseReport; mon
     onError,
   });
   const toSend = r.items.filter((x) => x.status === "draft" || x.status === "rejected").length;
+  // the files of the folder, by classification (the order of the first of each)
+  const groups = [...r.items.reduce((acc, x) => acc.set(x.type, [...(acc.get(x.type) ?? []), x]), new Map<string, Expense[]>()).entries()].map(([type, items]) => ({ type, items, mileage: items.every((i) => i.mileage) }));
   const pill = FILTERS.find((f) => f.key === r.status)!;
   const IconBtn = ({ label, onClick, danger, children }: { label: string; onClick: () => void; danger?: boolean; children: React.ReactNode }) => (
     <button
@@ -411,7 +438,7 @@ function ReportView({ r, money: m, onClose, onChanged }: { r: ExpenseReport; mon
       <DialogContent showCloseButton={false} className="flex max-h-[min(88dvh,52rem)] flex-col gap-0 overflow-hidden p-0 sm:max-w-3xl">
         <header className="flex items-start gap-3 border-b px-5 py-4">
           <span className="flex size-10 shrink-0 items-center justify-center rounded-xl bg-[color:var(--gold)]/10 text-primary">
-            <Wallet className="size-5" />
+            <FolderOpen className="size-5 fill-[color:var(--gold)]/25" />
           </span>
           <div className="min-w-0 flex-1">
             <DialogTitle className="flex items-center gap-1.5 text-lg">
@@ -438,6 +465,17 @@ function ReportView({ r, money: m, onClose, onChanged }: { r: ExpenseReport; mon
             <p className="text-[11px] uppercase tracking-wide text-muted-foreground">{t("expense.report.total")}</p>
             <p className="font-mono text-xl font-bold">{totalText(r)}</p>
           </div>
+          {r.submittedAt && (
+            <a
+              href={`/api/time/expense-reports/${r.id}/pdf`}
+              target="_blank"
+              rel="noreferrer"
+              className="inline-flex h-8 items-center gap-1.5 rounded-md border px-2.5 text-xs font-medium text-muted-foreground transition-colors hover:border-[color:var(--gold)]/50 hover:text-foreground"
+              title={t("expense.report.pdf")}
+            >
+              <FileText className="size-3.5" /> PDF
+            </a>
+          )}
           <IconBtn label={t("common.close")} onClick={onClose}>
             <X className="size-4" />
           </IconBtn>
@@ -462,12 +500,24 @@ function ReportView({ r, money: m, onClose, onChanged }: { r: ExpenseReport; mon
 
         <div className="min-h-0 flex-1 overflow-y-auto px-2 pb-2 scrollbar-thin">
           {r.items.length > 0 ? (
-            <ul className="divide-y divide-border/60">
-              {r.items.map((x) => {
+            <div className="space-y-3 px-1 pb-1">
+              {groups.map((g) => (
+                <section key={g.type}>
+                  <h3 className="flex items-center gap-2 px-3 pb-1 pt-2 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+                    <Folder className="size-3.5 text-primary" />
+                    <span className="flex-1 truncate">{g.type}</span>
+                    <span className="font-normal normal-case">{t("expense.report.items", { count: g.items.length })}</span>
+                    <span className="w-24 text-right font-mono text-sm font-semibold normal-case text-foreground">{g.mileage ? t("expense.km", { km: g.items.reduce((n, i) => n + i.quantityX100, 0) / 100 }) : m(g.items.reduce((n, i) => n + i.amountCents, 0))}</span>
+                  </h3>
+            <ul className="divide-y divide-border/60 rounded-xl border border-border/50 bg-card/30">
+              {g.items.map((x) => {
                 const editable = open && (x.status === "draft" || x.status === "rejected");
                 return (
                   <li key={x.id} className="grid grid-cols-[64px_minmax(0,1fr)_auto] items-center gap-3 rounded-lg px-3 py-2.5 text-sm hover:bg-foreground/[0.03] md:grid-cols-[72px_minmax(0,1fr)_96px_96px_auto]">
-                    <span className="text-xs text-muted-foreground">{shortDate(x.date)}</span>
+                    <span className="flex items-center gap-1.5 text-xs text-muted-foreground">
+                      <FileText className="size-3.5 shrink-0 text-primary/70" />
+                      {shortDate(x.date)}
+                    </span>
                     <span className="min-w-0">
                       <span className="block truncate">{x.description}</span>
                       <span className="block truncate text-[11px] text-muted-foreground">
@@ -501,6 +551,9 @@ function ReportView({ r, money: m, onClose, onChanged }: { r: ExpenseReport; mon
                 );
               })}
             </ul>
+                </section>
+              ))}
+            </div>
           ) : (
             <button type="button" disabled={!open} onClick={() => setItem("new")} className="mx-3 my-2 flex w-[calc(100%-1.5rem)] flex-col items-center gap-2 rounded-xl border border-dashed py-10 text-sm text-muted-foreground hover:border-[color:var(--gold)]/50 hover:text-foreground">
               <Plus className="size-5 text-primary" /> {t("expense.report.noItems")}

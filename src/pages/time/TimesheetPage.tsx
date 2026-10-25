@@ -2,7 +2,7 @@ import { useMemo, useState, type FormEvent } from "react";
 import { useTranslation } from "react-i18next";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
-import { BarChart3, ChevronDown, ChevronLeft, ChevronRight, ChevronsDownUp, ChevronsUpDown, Clock, ListTree, Loader2, PiggyBank, Plus, Send, Sun, Ticket, Trash2, UserCog } from "lucide-react";
+import { BarChart3, ChevronDown, ChevronLeft, ChevronRight, ChevronsDownUp, ChevronsUpDown, Clock, FileText, ListTree, Loader2, PiggyBank, Plus, Send, Sun, Ticket, Trash2, UserCog } from "lucide-react";
 import { GlassBackdrop } from "@/components/brand/GlassBackdrop";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
@@ -219,6 +219,13 @@ export function TimesheetPage() {
           <Button variant="outline" onClick={() => setReport(true)}>
             <BarChart3 className="size-4" /> {t("timesheet.report")}
           </Button>
+          {week && week.status !== "draft" && (
+            <Button variant="outline" asChild>
+              <a href={`/api/time/week/pdf?start=${week.weekStart}${others ? `&userId=${who}` : ""}`} target="_blank" rel="noreferrer">
+                <FileText className="size-4" /> {t("timesheet.pdf")}
+              </a>
+            </Button>
+          )}
           <Button variant="ghost" size="sm" className="ml-auto gap-1.5 text-muted-foreground" onClick={() => {
               setOpen(allOpen ? {} : Object.fromEntries(days.map((d) => [d, true])));
               if (allOpen) setDetail({});

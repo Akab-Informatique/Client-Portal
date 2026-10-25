@@ -2,9 +2,10 @@ import { useState, type FormEvent } from "react";
 import { useTranslation } from "react-i18next";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
-import { Clock, Lock, Plus, Wallet } from "lucide-react";
+import { Clock, Lock, Plus, Send, Wallet } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { Textarea } from "@/components/ui/textarea";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Switch } from "@/components/ui/switch";
 import { api } from "@/lib/api";
@@ -15,6 +16,51 @@ type TimeType = { id: string; name: string; kind: "labour" | "workday" | "bankpa
 type ExpenseType = { id: string; name: string; ledgerAccountId: string | null; unit: string | null; unitPriceCents: number | null; billable: boolean; active: boolean };
 type Account = { id: string; number: string; name: string; type: string; active: boolean };
 const KEY = ["admin", "time-types"];
+
+/** What happens when a week or an expense report is sent: approved at once, and the PDF to accounting. */
+function ReportSettings() {
+  const { t } = useTranslation();
+  const qc = useQueryClient();
+  const key = ["admin", "time-report-settings"];
+  const { data } = useQuery({ queryKey: key, queryFn: () => api.get<{ autoApprove: boolean; recipients: string[] }>("/time/admin/report-settings") });
+  const [to, setTo] = useState<string | null>(null);
+  const save = useMutation({
+    mutationFn: (p: { autoApprove?: boolean; recipients?: string[] }) => api.put("/time/admin/report-settings", p),
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: key });
+      setTo(null);
+      toast.success(t("timeReports.saved"));
+    },
+    onError: () => toast.error(t("common.error")),
+  });
+  if (!data) return null;
+  const text = to ?? data.recipients.join("\n");
+  return (
+    <section className="space-y-3 rounded-2xl border bg-card/40 p-5">
+      <div>
+        <h3 className="flex items-center gap-2 font-semibold">
+          <Send className="size-4 text-primary" /> {t("timeReports.title")}
+        </h3>
+        <p className="text-xs text-muted-foreground">{t("timeReports.text")}</p>
+      </div>
+      <label className="flex items-center gap-3 text-sm">
+        <Switch checked={data.autoApprove} onCheckedChange={(v) => save.mutate({ autoApprove: v })} aria-label={t("timeReports.auto")} />
+        <span>
+          {t("timeReports.auto")}
+          <span className="block text-xs text-muted-foreground">{t("timeReports.autoHint")}</span>
+        </span>
+      </label>
+      <div className="space-y-1.5">
+        <p className="text-sm font-medium">{t("timeReports.recipients")}</p>
+        <Textarea rows={2} value={text} onChange={(e) => setTo(e.target.value)} placeholder="comptabilite@akab.ca" />
+        <p className="text-xs text-muted-foreground">{t("timeReports.recipientsHint")}</p>
+        <Button size="sm" disabled={to === null || save.isPending} onClick={() => save.mutate({ recipients: text.split(/[\s,;]+/).filter(Boolean) })}>
+          {t("timeReports.save")}
+        </Button>
+      </div>
+    </section>
+  );
+}
 
 /** Admin › Temps et dépenses: the kinds of timesheet entries and of expenses. */
 export function TimeExpenseSection() {
@@ -42,6 +88,8 @@ export function TimeExpenseSection() {
   return (
     <div className="space-y-6">
       <SectionHeader title={t("timeAdmin.title")} subtitle={t("timeAdmin.subtitle")} />
+
+      <ReportSettings />
 
       <section className="space-y-3 rounded-2xl border bg-card/40 p-5">
         <div>

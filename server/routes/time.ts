@@ -8,6 +8,8 @@ import { auth, requirePermission, requireStaff, type AppEnv, type AuthContext } 
 import { audit } from "../lib/audit.ts";
 import { unpaidLunch } from "../../shared/workday.ts";
 import { body, zUuid } from "../lib/validate.ts";
+import { mailExpenseReport, mailTimesheet, saveTimeReportSettings, timeReportSettings } from "../lib/timeReports.ts";
+import { expenseReportPdf, timesheetPdf } from "../lib/timePdf.ts";
 import { addDays, bankBalanceX100, bankByDefault, billableX100, editable, ensureTypes, sheetOf, todayQc, weekEntries, weekStartOf, weekTotals } from "../lib/timesheets.ts";
 
 /**
@@ -86,16 +88,55 @@ async function ownReport(id: string, userId: string, opts: { open?: boolean } = 
  */
 async function submitReport(reportId: string, userId: string) {
   const x = schema.expenses;
-  return db().transaction(async (tx) => {
-    const sent = await tx
+  // no approver for now: the items are approved as they are sent (Admin › PSA › Temps et dépenses)
+  const auto = (await timeReportSettings()).autoApprove;
+  const now = new Date();
+  const sent = await db().transaction(async (tx) => {
+    const rows = await tx
       .update(x)
-      .set({ status: "submitted", submittedAt: new Date(), updatedAt: new Date() })
+      .set(auto ? { status: "approved", submittedAt: now, decidedAt: now, comment: null, updatedAt: now } : { status: "submitted", submittedAt: now, updatedAt: now })
       .where(and(eq(x.reportId, reportId), eq(x.userId, userId), inArray(x.status, ["draft", "rejected"])))
-      .returning({ id: x.id, amountCents: x.amountCents });
-    if (!sent.length) throw new HTTPException(409, { message: "report_empty" });
-    await tx.update(schema.expenseReports).set({ submittedAt: new Date(), updatedAt: new Date() }).where(eq(schema.expenseReports.id, reportId));
-    return sent;
+      .returning({ id: x.id, amountCents: x.amountCents, billable: x.billable, clientId: x.clientId, typeId: x.typeId, userId: x.userId, date: x.date, description: x.description, quantityX100: x.quantityX100, unitPriceCents: x.unitPriceCents });
+    if (!rows.length) throw new HTTPException(409, { message: "report_empty" });
+    await tx.update(schema.expenseReports).set({ submittedAt: now, updatedAt: now }).where(eq(schema.expenseReports.id, reportId));
+    if (auto) for (const r of rows) await billExpense(tx, r, userId);
+    return rows;
   });
+  // accounting gets the report as a PDF (the email failing never undoes the report)
+  await mailExpenseReport(reportId, userId);
+  return sent;
+}
+
+/** A billable expense (to a client) becomes work to invoice, already approved. Returns the billing item. */
+async function billExpense(
+  tx: Pick<ReturnType<typeof db>, "select" | "insert" | "update">,
+  x: Pick<Expense, "id" | "billable" | "clientId" | "typeId" | "userId" | "date" | "description" | "quantityX100" | "unitPriceCents" | "amountCents">,
+  actorId: string,
+) {
+  if (!x.billable || !x.clientId) return null;
+  const [type] = await tx.select({ name: schema.expenseTypes.name }).from(schema.expenseTypes).where(eq(schema.expenseTypes.id, x.typeId));
+  const [u] = await tx.select({ name: schema.users.name }).from(schema.users).where(eq(schema.users.id, x.userId));
+  const [item] = await tx
+    .insert(schema.billingItems)
+    .values({
+      clientId: x.clientId,
+      kind: "expense",
+      source: "portal",
+      sourceId: `expense:${x.id}`,
+      date: x.date,
+      description: `${type?.name ?? ""} — ${x.description}`,
+      resourceName: u?.name ?? null,
+      quantityX100: x.quantityX100,
+      unitPriceCents: x.unitPriceCents,
+      amountCents: x.amountCents,
+      status: "approved",
+      approvedBy: actorId,
+      approvedAt: new Date(),
+    })
+    .onConflictDoNothing()
+    .returning({ id: schema.billingItems.id });
+  if (item) await tx.update(schema.expenses).set({ billingItemId: item.id }).where(eq(schema.expenses.id, x.id));
+  return item?.id ?? null;
 }
 
 /** The days a report covers: both given, the end not before the start, a year at most */
@@ -182,6 +223,15 @@ export const timeRoutes = new Hono<AppEnv>()
       time: await d.select().from(schema.timesheetTypes).orderBy(asc(schema.timesheetTypes.position), asc(schema.timesheetTypes.name)),
       expense: await d.select().from(schema.expenseTypes).orderBy(asc(schema.expenseTypes.position), asc(schema.expenseTypes.name)),
     });
+  })
+  /** What happens when a week or a report is sent: approved at once, and who gets the PDF */
+  .get("/admin/report-settings", requirePermission("admin.billing"), async (c) => c.json(await timeReportSettings()))
+  .put("/admin/report-settings", requirePermission("admin.billing"), async (c) => {
+    const a = auth(c);
+    const p = await body(c, z.object({ autoApprove: z.boolean().optional(), recipients: z.array(z.string().trim().toLowerCase().email().max(200)).max(10).optional() }));
+    const next = await saveTimeReportSettings(p);
+    await audit(a.user.id, "time.report_settings", null, { autoApprove: next.autoApprove, recipients: next.recipients.length });
+    return c.json(next);
   })
   .post("/admin/timesheet-types", requirePermission("admin.billing"), async (c) => {
     const a = auth(c);
@@ -443,26 +493,44 @@ export const timeRoutes = new Hono<AppEnv>()
     if (!editable(sheet.status)) throw new HTTPException(409, { message: "timesheet_locked" });
     const [me] = await db().select({ required: schema.users.timesheetRequired }).from(schema.users).where(eq(schema.users.id, owner));
     if (me && !me.required) throw new HTTPException(409, { message: "timesheet_not_required" });
+    // no approver for now: the week is approved as it is sent (Admin › PSA › Temps et dépenses)
+    const auto = (await timeReportSettings()).autoApprove;
+    const now = new Date();
     const [row] = await db()
       .update(schema.timesheets)
-      .set({ status: "submitted", submittedAt: new Date(), updatedAt: new Date() })
+      .set(auto ? { status: "approved", submittedAt: now, decidedAt: now, comment: null, updatedAt: now } : { status: "submitted", submittedAt: now, updatedAt: now })
       .where(eq(schema.timesheets.id, sheet.id))
       .returning();
-    await audit(a.user.id, "timesheet.submitted", row.id, { weekStart: row.weekStart, ...(owner !== a.user.id ? { for: owner } : {}) });
+    await audit(a.user.id, "timesheet.submitted", row.id, { weekStart: row.weekStart, ...(owner !== a.user.id ? { for: owner } : {}), ...(auto ? { auto: true } : {}) });
+    // accounting gets the week as a PDF (the email failing never undoes the submit)
+    await mailTimesheet(owner, row.weekStart, a.user.id, row.id);
     return c.json(row);
   })
 
-  // ── my expense reports: items added while open, then sent together ──
-  .get("/expense-reports", requirePermission("timesheets.use"), async (c) => {
+  /** The week as the PDF accounting gets: one's own, or anyone's for whoever manages or approves */
+  .get("/week/pdf", requirePermission("timesheets.use", "timesheets.manage", "timesheets.approve", "accounting.manage"), async (c) => {
     const a = auth(c);
+    const asked = c.req.query("userId");
+    const owner = !asked || asked === a.user.id ? a.user.id : zUuid.parse(asked);
+    if (owner !== a.user.id && !(["timesheets.manage", "timesheets.approve", "accounting.manage"] as const).some((k) => a.permissions.includes(k))) throw new HTTPException(403, { message: "Forbidden" });
+    const pdf = await timesheetPdf(owner, weekStartOf(zDay.parse(c.req.query("start") ?? todayQc())));
+    if (!pdf) throw new HTTPException(404, { message: "not_found" });
+    return new Response(new Uint8Array(pdf.content), { headers: { "content-type": "application/pdf", "content-disposition": `inline; filename="${pdf.filename}"`, "cache-control": "no-store" } });
+  })
+
+  // ── my expense reports: items added while open, then sent together ──
+  /** My reports, or (with timesheets.manage, `?userId=`) a team member's, to look at */
+  .get("/expense-reports", requirePermission("timesheets.use", "timesheets.manage"), async (c) => {
+    const a = auth(c);
+    const owner = await timesheetOwner(a, c.req.query("userId"));
     const [reports, rows] = await Promise.all([
-      db().select().from(schema.expenseReports).where(eq(schema.expenseReports.userId, a.user.id)).orderBy(desc(schema.expenseReports.createdAt)),
+      db().select().from(schema.expenseReports).where(eq(schema.expenseReports.userId, owner)).orderBy(desc(schema.expenseReports.createdAt)),
       db()
         .select({ x: listColumns, type: schema.expenseTypes.name, unit: schema.expenseTypes.unit, client: schema.clients.name })
         .from(schema.expenses)
         .innerJoin(schema.expenseTypes, eq(schema.expenseTypes.id, schema.expenses.typeId))
         .leftJoin(schema.clients, eq(schema.clients.id, schema.expenses.clientId))
-        .where(eq(schema.expenses.userId, a.user.id))
+        .where(eq(schema.expenses.userId, owner))
         .orderBy(asc(schema.expenses.date), asc(schema.expenses.createdAt)),
     ]);
     const out = reports.map((r) => {
@@ -537,6 +605,15 @@ export const timeRoutes = new Hono<AppEnv>()
     if (locked) throw new HTTPException(409, { message: "expense_locked" });
     await db().delete(schema.expenseReports).where(eq(schema.expenseReports.id, rep.id));
     return c.json({ ok: true });
+  })
+  /** The report as the PDF accounting gets: its owner, or whoever manages, approves or does the accounting */
+  .get("/expense-reports/:id/pdf", requirePermission("timesheets.use", "timesheets.manage", "timesheets.approve", "accounting.manage"), async (c) => {
+    const a = auth(c);
+    const [rep] = await db().select().from(schema.expenseReports).where(eq(schema.expenseReports.id, zUuid.parse(c.req.param("id"))));
+    if (!rep || (rep.userId !== a.user.id && !(["timesheets.manage", "timesheets.approve", "accounting.manage"] as const).some((k) => a.permissions.includes(k)))) throw new HTTPException(404, { message: "not_found" });
+    const pdf = await expenseReportPdf(rep.id);
+    if (!pdf) throw new HTTPException(404, { message: "not_found" });
+    return new Response(new Uint8Array(pdf.content), { headers: { "content-type": "application/pdf", "content-disposition": `inline; filename="${pdf.filename}"`, "cache-control": "no-store" } });
   })
   .post("/expense-reports/:id/submit", requirePermission("timesheets.use"), async (c) => {
     const a = auth(c);
@@ -752,7 +829,7 @@ export const timeRoutes = new Hono<AppEnv>()
       .select()
       .from(schema.expenses)
       .where(eq(schema.expenses.id, zUuid.parse(c.req.param("id"))));
-    if (!x || !x.receiptData || (x.userId !== a.user.id && !a.permissions.includes("timesheets.approve")))
+    if (!x || !x.receiptData || (x.userId !== a.user.id && !a.permissions.includes("timesheets.approve") && !a.permissions.includes("timesheets.manage")))
       throw new HTTPException(404, { message: "not_found" });
     const name = x.receiptName ?? "recu";
     const ascii = name.replace(/[^\x20-\x7e]/g, "_").replace(/"/g, "");
@@ -911,33 +988,8 @@ export const timeRoutes = new Hono<AppEnv>()
           .returning({ id: schema.expenses.id });
         if (!won) return;
         decided.push(x);
-        let billingItemId: string | null = null;
         // billable to a client: it becomes work to invoice, already approved
-        if (p.decision === "approve" && x.billable && x.clientId) {
-          const [type] = await tx.select({ name: schema.expenseTypes.name }).from(schema.expenseTypes).where(eq(schema.expenseTypes.id, x.typeId));
-          const [u] = await tx.select({ name: schema.users.name }).from(schema.users).where(eq(schema.users.id, x.userId));
-          const [item] = await tx
-            .insert(schema.billingItems)
-            .values({
-              clientId: x.clientId,
-              kind: "expense",
-              source: "portal",
-              sourceId: `expense:${x.id}`,
-              date: x.date,
-              description: `${type?.name ?? ""} — ${x.description}`,
-              resourceName: u?.name ?? null,
-              quantityX100: x.quantityX100,
-              unitPriceCents: x.unitPriceCents,
-              amountCents: x.amountCents,
-              status: "approved",
-              approvedBy: a.user.id,
-              approvedAt: new Date(),
-            })
-            .onConflictDoNothing()
-            .returning({ id: schema.billingItems.id });
-          billingItemId = item?.id ?? null;
-        }
-        if (billingItemId) await tx.update(schema.expenses).set({ billingItemId }).where(eq(schema.expenses.id, x.id));
+        if (p.decision === "approve") await billExpense(tx, x, a.user.id);
       });
     }
     // a refused item opens its report again: fixed (or removed), then sent anew

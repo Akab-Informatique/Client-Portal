@@ -96,6 +96,8 @@ beforeAll(async () => {
   await initDb({ memory: true });
   await seed();
   app = createApp();
+  // the approval flow of the older tests is the manual one (the portal itself approves at once by default)
+  await db().insert(schema.integrations).values({ provider: "time.reports", enabled: true, config: { autoApprove: false, recipients: [] } });
 });
 
 describe("authentication", () => {
@@ -3935,6 +3937,67 @@ describe("submitting: timesheets (when required) and expenses", () => {
     // a client account is never a timesheet
     const [client] = await db().select().from(schema.users).where(eq(schema.users.kind, "client"));
     expect((await admin.get(`/api/time/week?userId=${client.id}`)).status).toBe(404);
+  });
+
+  it("timesheets.manage: an admin looks at anyone's expense reports; a technician only at their own", async () => {
+    resetRateLimit("login:ip:unknown");
+    const admin = await signIn("admin@akab.local");
+    const tech2 = await signIn("tech2@akab.local");
+    const [u] = await db().select().from(schema.users).where(eq(schema.users.email, "tech2@akab.local"));
+    const [adminRow] = await db().select().from(schema.users).where(eq(schema.users.email, "admin@akab.local"));
+    const made = await tech2.post("/api/time/expense-reports", { title: "Voyage vu par l'admin", periodStart: "2026-11-01", periodEnd: "2026-11-30" });
+    expect(made.status).toBe(201);
+    // the technician sees theirs; the admin sees it by asking for them, and not in their own list
+    expect((await tech2.get("/api/time/expense-reports")).json.some((r: any) => r.id === made.json.id)).toBe(true);
+    expect((await admin.get(`/api/time/expense-reports?userId=${u.id}`)).json.some((r: any) => r.id === made.json.id)).toBe(true);
+    expect((await admin.get("/api/time/expense-reports")).json.some((r: any) => r.id === made.json.id)).toBe(false);
+    // a technician cannot open someone else's
+    expect((await tech2.get(`/api/time/expense-reports?userId=${adminRow.id}`)).status).toBe(403);
+  });
+
+  it("no approver for now: a sent report or week is approved at once and accounting gets a PDF of it", async () => {
+    resetRateLimit("login:ip:unknown");
+    const { devOutbox } = await import("../server/lib/mail.ts");
+    const admin = await signIn("admin@akab.local");
+    const tech = await signIn("tech@akab.local");
+    // the setting: administrators only, valid addresses only
+    expect((await tech.put("/api/time/admin/report-settings", { autoApprove: true })).status).toBe(403);
+    expect((await admin.put("/api/time/admin/report-settings", { recipients: ["pas-un-courriel"] })).status).toBe(400);
+    expect((await admin.put("/api/time/admin/report-settings", { autoApprove: true, recipients: ["Compta@akab.local"] })).json).toMatchObject({ autoApprove: true, recipients: ["compta@akab.local"] });
+    try {
+      const types = (await tech.get("/api/time/types")).json.expense;
+      const km = types.find((x: any) => x.name === "Kilométrage");
+      const parking = types.find((x: any) => x.name === "Stationnement");
+      const report = (await tech.post("/api/time/expense-reports", { title: "Rapport automatique", periodStart: "2026-10-01", periodEnd: "2026-10-31" })).json;
+      await tech.post("/api/time/expenses", { reportId: report.id, date: "2026-10-12", typeId: km.id, quantity: 40, fromPlace: "Bureau", toPlace: "Joliette" });
+      await tech.post("/api/time/expenses", { reportId: report.id, date: "2026-10-13", typeId: parking.id, description: "Stationnement", amountCents: 1500 });
+      devOutbox.length = 0;
+      expect((await tech.post(`/api/time/expense-reports/${report.id}/submit`)).json.submitted).toBe(2);
+      // approved by itself: nothing waits for an approver
+      const mine = (await tech.get("/api/time/expense-reports")).json.find((r: any) => r.id === report.id);
+      expect(mine.status).toBe("approved");
+      expect(mine.items.every((i: any) => i.status === "approved")).toBe(true);
+      // accounting got one email with the PDF
+      const mail = devOutbox.filter((m) => m.to === "compta@akab.local");
+      expect(mail).toHaveLength(1);
+      expect(mail[0].attachments?.[0].contentType).toBe("application/pdf");
+      expect(mail[0].attachments![0].content.subarray(0, 4).toString()).toBe("%PDF");
+      // the same PDF can be opened: by its owner and by a manager, not by another technician
+      const pdf = await tech.get(`/api/time/expense-reports/${report.id}/pdf`);
+      expect(pdf.status).toBe(200);
+      expect((await admin.get(`/api/time/expense-reports/${report.id}/pdf`)).status).toBe(200);
+      expect((await (await signIn("tech2@akab.local")).get(`/api/time/expense-reports/${report.id}/pdf`)).status).toBe(404);
+
+      // a week: approved as it is sent, and its PDF goes out too
+      const typeId = (await tech.get("/api/time/types")).json.time.find((x: any) => x.kind === "other").id;
+      await tech.post("/api/time/entries", { date: "2026-11-10", typeId, hours: 3, note: "Formation" });
+      devOutbox.length = 0;
+      expect((await tech.post("/api/time/week/submit", { weekStart: "2026-11-09" })).json.status).toBe("approved");
+      expect(devOutbox.filter((m) => m.to === "compta@akab.local" && m.attachments?.[0]?.filename.startsWith("Feuille_de_temps"))).toHaveLength(1);
+      expect((await tech.get("/api/time/week/pdf?start=2026-11-09")).status).toBe(200);
+    } finally {
+      await admin.put("/api/time/admin/report-settings", { autoApprove: false, recipients: [] });
+    }
   });
 
   it("expense reports: items added while open, sent together, approved one by one; a refused item opens the report again", async () => {
