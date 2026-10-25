@@ -961,6 +961,10 @@ const en: Dict = {
   approvals: {
     alreadyBilled: "Exclude: already billed",
     alreadyBilledHint: "Already billed elsewhere: excluded, never billed by the portal.",
+    updateRates: "Update the rates",
+    updateRatesTitle: "Update the hourly rate of labour?",
+    updateRatesText: "Every line of the time frame takes the rate of the contract of its time entry; with no contract, the client's default support contract; else the usual hourly rate. A contract at $0 includes the hours (the line is set aside). Lines edited by hand and lines already invoiced do not change.",
+    updateRatesDone: "{{updated}} line(s) updated ({{included}} included, {{billedAgain}} back to bill), {{unchanged}} already at the right rate, {{skipped}} edited by hand left alone.",
     alreadyBilledTag: "Already billed",
     asideTag: "Set aside",
     selectAll: "Select all ({{count}})",

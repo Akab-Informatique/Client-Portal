@@ -1,4 +1,4 @@
-import { and, asc, eq, gte, inArray, isNotNull, lte, sql } from "drizzle-orm";
+import { and, asc, eq, gte, inArray, isNotNull, lte, or, sql } from "drizzle-orm";
 import { db, schema } from "../db/index.ts";
 import { alignNumbering } from "./quickbooks.ts";
 import { dueAfterSent } from "../../shared/invoiceDue.ts";
@@ -156,6 +156,65 @@ export async function listBillables(kind: BillableKind | null, status: string | 
     )
     .orderBy(asc(schema.clients.name), asc(schema.billingItems.date));
   return rows.map(({ b, client, invoice }) => ({ ...b, clientName: client, invoiceNumber: invoice, autoApproved: b.status !== "pending" && b.approvedAt != null && !b.approvedBy && b.status !== "excluded" }));
+}
+
+/**
+ * Put the right hourly rate on the labour lines of a time frame (not invoiced yet): the rate of the contract of the time
+ * entry; none: the client's default support contract; none: the client's own hourly rate, else the usual one of Admin ›
+ * Facturation. A contract with a rate of 0 includes the hours: the line becomes 0 $ and is set aside (excluded, "included");
+ * a line set aside that way comes back to approve when its rate is above 0 again. Lines edited by hand are left alone.
+ */
+export async function refreshLabourRates(period?: Period) {
+  const d = db();
+  const s = await billingSettings();
+  const usualCents = Math.round(s.rates.hourly * 100);
+  const b = schema.billingItems;
+  const items = await d
+    .select()
+    .from(b)
+    .where(and(eq(b.kind, "labour"), or(inArray(b.status, ["pending", "approved"]), and(eq(b.status, "excluded"), eq(b.excludedReason, "included"))), inPeriod(period)));
+  const clients = new Map((await d.select({ id: schema.clients.id, invoice: schema.clients.invoice }).from(schema.clients)).map((c) => [c.id, c]));
+  const contracts = await d.select().from(schema.clientContracts);
+  const byId = new Map(contracts.map((k) => [k.id, k]));
+  // each client's default support contract: the one picked, else the source's, else its only active one
+  const defaults = new Map<string, (typeof contracts)[number]>();
+  for (const [clientId] of clients) {
+    const active = contracts.filter((k) => k.clientId === clientId && k.active);
+    const pick = active.find((k) => k.supportDefault) ?? active.find((k) => k.isDefault) ?? (active.length === 1 ? active[0] : null);
+    if (pick) defaults.set(clientId, pick);
+  }
+  const out = { updated: 0, unchanged: 0, skipped: 0, included: 0, billedAgain: 0 };
+  for (const it of items) {
+    if (it.edited) {
+      out.skipped++;
+      continue;
+    }
+    const own = it.contractId ? byId.get(it.contractId) : undefined;
+    const contract = own ?? defaults.get(it.clientId) ?? null;
+    const clientRate = clients.get(it.clientId)?.invoice?.hourlyRate;
+    const rate = contract ? hourlyRateOf(contract, s.rates.hourly) : clientRate != null ? Math.round(clientRate * 100) : usualCents;
+    const included = rate == null;
+    const unit = rate ?? 0;
+    const wasIncluded = it.status === "excluded";
+    const next: { unitPriceCents: number; amountCents: number; contractId?: string; contractName?: string; status?: string; excludedReason?: string | null; approvedBy?: null; approvedAt?: null } = {
+      unitPriceCents: unit,
+      amountCents: amountOf(it.quantityX100, unit),
+      ...(contract && !own ? { contractId: contract.id, contractName: contract.name } : {}),
+      ...(included ? { status: "excluded", excludedReason: "included", approvedBy: null, approvedAt: null } : wasIncluded ? { status: "pending", excludedReason: null } : {}),
+    };
+    const same = it.unitPriceCents === next.unitPriceCents && it.amountCents === next.amountCents && (next.status ?? it.status) === it.status && (!("contractId" in next) || next.contractId === it.contractId);
+    if (same) {
+      out.unchanged++;
+      continue;
+    }
+    await d.update(b).set({ ...next, updatedAt: new Date() }).where(eq(b.id, it.id));
+    out.updated++;
+    if (included && !wasIncluded) out.included++;
+    if (!included && wasIncluded) out.billedAgain++;
+  }
+  // what comes back to approve follows the client / contract rules
+  if (out.billedAgain) await applyAutoApprove();
+  return out;
 }
 
 /** How many items wait, by kind and status (for the tab counts). */

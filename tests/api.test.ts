@@ -7246,4 +7246,51 @@ describe("contracts: services when made, charges, activity, stop instead of dele
     expect(c).toMatchObject({ hourlyRateCents: 9500, supportDefault: false });
     expect((await admin.patch(`/api/crm/clients/${client!.id}/contracts/${c.id}`, { hourlyRate: 0 })).json.hourlyRateCents).toBe(0);
   });
+
+  it("approval: the hourly rate of labour lines follows the contract of the time entry, else the default support contract, else the usual rate", async () => {
+    const admin = await signIn("admin@akab.local");
+    const tech = await signIn("tech@akab.local");
+    const [withK, noK] = await db()
+      .insert(schema.clients)
+      .values([
+        { name: "Taux A inc.", autotaskId: 987654360 },
+        { name: "Taux B inc.", autotaskId: 987654361, invoice: { hourlyRate: 100 } },
+      ])
+      .returning();
+    const ct = (name: string, rate: number | null, extra: object = {}) => ({ clientId: withK!.id, name, autotaskId: `local-rates-${name}`, billingMode: "monthly", hourlyRateCents: rate, ...extra });
+    const [kOwn, kDefault, kIncluded] = await db().insert(schema.clientContracts).values([ct("Propre", 9500), ct("Défaut", 8000, { supportDefault: true }), ct("Inclus", 0)]).returning();
+    const line = (n: number, over: object) => ({ clientId: withK!.id, kind: "labour", source: "portal", sourceId: `test:rates:${n}`, date: "2026-10-12", description: `Heures ${n}`, quantityX100: 200, unitPriceCents: 11500, amountCents: 23000, status: "pending", ...over });
+    const rows = await db()
+      .insert(schema.billingItems)
+      .values([
+        line(1, { contractId: kOwn!.id }),
+        line(2, {}),
+        line(3, { clientId: noK!.id }),
+        line(4, { contractId: kIncluded!.id, status: "approved", approvedAt: new Date() }),
+        line(5, { contractId: kOwn!.id, edited: true, unitPriceCents: 7000, amountCents: 14000 }),
+        line(6, { contractId: kOwn!.id, status: "excluded", excludedReason: "included", unitPriceCents: 0, amountCents: 0 }),
+        line(7, { contractId: kOwn!.id, status: "posted" }),
+      ])
+      .returning();
+    expect((await tech.post("/api/billables/rates", {})).status).toBe(403);
+    const r = (await admin.post("/api/billables/rates", { from: "2026-10-01", to: "2026-10-31" })).json;
+    expect(r).toMatchObject({ skipped: 1, included: 1, billedAgain: 1 });
+    const ids = new Set(rows.map((x) => x.id));
+    const now = (await db().select().from(schema.billingItems)).filter((x) => ids.has(x.id));
+    const by = (n: number) => now.find((x) => x.sourceId === `test:rates:${n}`)!;
+    // the contract of the time entry
+    expect(by(1)).toMatchObject({ unitPriceCents: 9500, amountCents: 19000 });
+    // none: the client's default support contract (and the line shows it)
+    expect(by(2)).toMatchObject({ unitPriceCents: 8000, amountCents: 16000, contractId: kDefault!.id, contractName: "Défaut" });
+    // no contract at all: the client's own hourly rate, else the usual one
+    expect(by(3)).toMatchObject({ unitPriceCents: 10000, amountCents: 20000 });
+    // a contract at 0: included, set aside, never billed
+    expect(by(4)).toMatchObject({ unitPriceCents: 0, amountCents: 0, status: "excluded", excludedReason: "included", approvedAt: null });
+    // edited by hand: left alone; set aside as included before but now billed: back to approve; invoiced: untouched
+    expect(by(5)).toMatchObject({ unitPriceCents: 7000, amountCents: 14000 });
+    expect(by(6)).toMatchObject({ unitPriceCents: 9500, amountCents: 19000, status: "pending", excludedReason: null });
+    expect(by(7)).toMatchObject({ unitPriceCents: 11500, status: "posted" });
+    // again: nothing more to change
+    expect((await admin.post("/api/billables/rates", { from: "2026-10-01", to: "2026-10-31" })).json).toMatchObject({ updated: 0 });
+  });
 });

@@ -4,7 +4,7 @@ import { z } from "zod";
 import { auth, requirePermission, requireStaff, type AppEnv } from "../lib/auth.ts";
 import { audit } from "../lib/audit.ts";
 import { body, zUuid } from "../lib/validate.ts";
-import { BILLABLE_KINDS, billableCounts, billablesState, createInvoice, DraftError, draftInvoice, editBillable, invoiceableClients, listBillables, postInvoices, postPreview, setBillableStatus, syncBillables, unpostInvoice } from "../lib/billables.ts";
+import { BILLABLE_KINDS, refreshLabourRates, billableCounts, billablesState, createInvoice, DraftError, draftInvoice, editBillable, invoiceableClients, listBillables, postInvoices, postPreview, setBillableStatus, syncBillables, unpostInvoice } from "../lib/billables.ts";
 import type { BillableKind } from "../lib/ticketSource.ts";
 import { autoSync, createQbItem, invoiceChoices } from "../lib/quickbooks.ts";
 import { quickbooksSettings } from "../lib/billing.ts";
@@ -83,6 +83,14 @@ export const billablesRoutes = new Hono<AppEnv>()
     } catch (e) {
       return quickbooksHttp(e);
     }
+  })
+  /** Put the right hourly rate on the labour lines of the time frame (the contract's, else the default support contract's, else the usual one) */
+  .post("/rates", requirePermission("accounting.manage"), async (c) => {
+    const a = auth(c);
+    const p = await body(c, z.object({ from: zDay.nullable().optional(), to: zDay.nullable().optional() }));
+    const r = await refreshLabourRates({ from: p.from, to: p.to });
+    await audit(a.user.id, "billing.labour_rates_updated", null, r);
+    return c.json(r);
   })
   .post("/import", requirePermission("accounting.manage"), async (c) => {
     const a = auth(c);

@@ -959,6 +959,10 @@ const fr = {
   approvals: {
     alreadyBilled: "Exclure : déjà facturé",
     alreadyBilledHint: "Déjà facturé ailleurs : exclu, jamais facturé par le portail.",
+    updateRates: "Mettre à jour les taux",
+    updateRatesTitle: "Mettre à jour le taux horaire de la main-d'œuvre ?",
+    updateRatesText: "Chaque ligne de la période reprend le taux du contrat de son entrée de temps; sans contrat, celui du contrat de soutien par défaut du client; sinon le taux horaire habituel. Un contrat à 0 $ inclut les heures (la ligne est mise de côté). Les lignes modifiées à la main et les lignes déjà facturées ne changent pas.",
+    updateRatesDone: "{{updated}} ligne(s) mise(s) à jour ({{included}} incluse(s), {{billedAgain}} remise(s) à facturer), {{unchanged}} déjà au bon taux, {{skipped}} modifiée(s) à la main laissée(s).",
     alreadyBilledTag: "Déjà facturé",
     asideTag: "Mis de côté",
     selectAll: "Tout sélectionner ({{count}})",

@@ -24,6 +24,7 @@ import {
   Undo2,
   Wallet,
   X,
+  RefreshCw,
   type LucideIcon,
 } from "lucide-react";
 import { GlassBackdrop } from "@/components/brand/GlassBackdrop";
@@ -38,6 +39,7 @@ import { cn } from "@/lib/utils";
 import { money } from "@/pages/crm/shared";
 import { shortDate } from "@/pages/tickets/shared";
 import { PeriodBar, usePeriod } from "./period";
+import { useConfirm } from "@/components/ConfirmDialog";
 
 export type Kind = "labour" | "charge" | "expense" | "contract" | "milestone" | "project";
 export type Status = "pending" | "approved" | "posted" | "excluded";
@@ -653,6 +655,19 @@ function KindTab({ kind, counts, lang, pq }: { kind: Kind; counts: (s: Status) =
       toast.success(t(`approvals.moved.${to}`, { count: r.changed }));
     },
   });
+  // the right hourly rate on every labour line of the time frame (the contract's, else the default support contract's, else the usual one)
+  const confirm = useConfirm();
+  const updateRates = useMutation({
+    mutationFn: () => {
+      const q = new URLSearchParams(pq);
+      return api.post<{ updated: number; unchanged: number; skipped: number; included: number; billedAgain: number }>("/billables/rates", { from: q.get("from"), to: q.get("to") });
+    },
+    onSuccess: (r) => {
+      void qc.invalidateQueries({ queryKey: KEY });
+      toast.success(t("approvals.updateRatesDone", r));
+    },
+    onError: () => toast.error(t("common.error")),
+  });
   const edit = useMutation({
     mutationFn: (p: { id: string; patch: { description?: string; quantity?: number; unitPriceCents?: number } }) => api.patch(`/billables/${p.id}`, p.patch),
     onSuccess: () => {
@@ -721,6 +736,17 @@ function KindTab({ kind, counts, lang, pq }: { kind: Kind; counts: (s: Status) =
         {manage && items.length > 0 && (
           <Button size="sm" variant="ghost" className="h-8 px-2 text-xs" onClick={() => setSel(sel.size === items.length ? new Set() : new Set(items.map((i) => i.id)))}>
             <Check className="size-3.5" /> {sel.size === items.length ? t("approvals.selectNone") : t("approvals.selectAll", { count: items.length })}
+          </Button>
+        )}
+        {kind === "labour" && can("accounting.manage") && status !== "posted" && (
+          <Button
+            size="sm"
+            variant="outline"
+            className="h-8 text-xs"
+            disabled={updateRates.isPending}
+            onClick={() => void confirm({ title: t("approvals.updateRatesTitle"), description: t("approvals.updateRatesText") }).then((ok) => ok && updateRates.mutate())}
+          >
+            {updateRates.isPending ? <Loader2 className="size-3.5 animate-spin" /> : <RefreshCw className="size-3.5" />} {t("approvals.updateRates")}
           </Button>
         )}
         <span className="ml-auto font-mono text-sm">{m(total)}</span>
