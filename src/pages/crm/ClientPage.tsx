@@ -46,7 +46,7 @@ import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel,
 import { useConfirm } from "@/components/ConfirmDialog";
 import { relativeTime } from "@/lib/format";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { ClientStatementDialog, InvoiceMailButtons, InvoicePdfButton } from "@/pages/accounting/Statements";
+import { ClientStatementDialog, InvoiceMailButtons, InvoicePdfButton, InvoiceVoidButton } from "@/pages/accounting/Statements";
 import { api, ApiError } from "@/lib/api";
 import { useCan } from "@/lib/session";
 import { cn } from "@/lib/utils";
@@ -561,6 +561,7 @@ function InvoicesTab({ client }: { client: CrmDetail }) {
                       <div className="flex flex-wrap items-center gap-2 px-3 pb-1">
                         <InvoiceMailButtons invoice={v} />
                         <FixTaxesButton invoice={v} />
+                        <InvoiceVoidButton invoice={v} />
                       </div>
                     )}
                     {expanded && <Payments invoice={v} clientId={client.id} />}

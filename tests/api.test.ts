@@ -5126,9 +5126,9 @@ describe("un-post: take back an invoice made by the portal", () => {
     await db().insert(schema.invoicePayments).values({ invoiceId: made.id, amountCents: 100, paidOn: "2026-10-12", method: "cheque" });
     expect((await admin.post("/api/billables/unpost", { invoiceId: made.id })).json.error).toBe("invoice_has_payments");
     await db().delete(schema.invoicePayments).where(eq(schema.invoicePayments.invoiceId, made.id));
-    // in QuickBooks: refused
+    // in QuickBooks: it has to be voided there first; with QuickBooks not reachable it stays as it is
     await db().update(schema.clientInvoices).set({ quickbooksId: "9" }).where(eq(schema.clientInvoices.id, made.id));
-    expect((await admin.post("/api/billables/unpost", { invoiceId: made.id })).json.error).toBe("invoice_in_quickbooks");
+    expect((await admin.post("/api/billables/unpost", { invoiceId: made.id })).json.error).toBe("quickbooks_void_failed");
     await db().update(schema.clientInvoices).set({ quickbooksId: null }).where(eq(schema.clientInvoices.id, made.id));
 
     // accounting only
@@ -7349,6 +7349,8 @@ describe("contracts: services when made, charges, activity, stop instead of dele
       const old = (n: number, status: string) => ({ clientId: client!.id, kind: "contract", source: "autotask", sourceId: `legacy-contract-${n}`, date: "2026-09-01", description: "ancien", quantityX100: 1000, unitPriceCents: 45000, amountCents: 450000, status });
       await db().insert(schema.billingItems).values([old(1, "pending"), { ...old(2, "approved"), approvedBy: adminRow!.id, approvedAt: new Date() }]);
       // into Approbation: refreshed and checked line by line
+      // a sync already running when the contract was made would not have it: the second import starts a fresh one
+      expect((await admin.post("/api/billables/import", {})).status).toBe(200);
       expect((await admin.post("/api/billables/import", {})).status).toBe(200);
       const list = (await admin.get(`/api/billables?kind=contract&clientId=${client!.id}`)).json;
       const aideRow = list.find((x: any) => x.description.startsWith("Aide"));
@@ -7483,5 +7485,59 @@ describe("contracts: services when made, charges, activity, stop instead of dele
     await db().insert(schema.invoicePayments).values({ invoiceId: paid.id, amountCents: 1000, paidOn: "2026-10-01", method: "transfer" });
     expect((await view(paid.id)).taxFixCents).toBe(0);
     expect((await admin.post(`/api/crm/invoices/${paid.id}/taxes`, {})).json.error).toBe("invoice_has_payments");
+  });
+
+
+  it("a submitted invoice is voided in the portal and in QuickBooks (nothing changes when QuickBooks refuses)", async () => {
+    const admin = await signIn("admin@akab.local");
+    const { saveQuickBooksSettings } = await import("../server/lib/billing.ts");
+    const { forgetQuickBooksToken } = await import("../server/lib/quickbooks.ts");
+    forgetQuickBooksToken();
+    await saveQuickBooksSettings(null, { clientId: "ABqb", clientSecret: "qb-secret", environment: "sandbox" });
+    await saveQuickBooksSettings(null, { realmId: "9133", refreshToken: "qb-refresh", enabled: true, sync: { invoices: false, payments: false, customers: false, timesheets: false, expenses: false } });
+    const [client] = await db().insert(schema.clients).values({ name: "Annulée QB inc.", autotaskId: 987654400 }).returning();
+    const mk = async (n: number, qb: string | null) => {
+      const [item] = await db().insert(schema.billingItems).values({ clientId: client!.id, kind: "charge", source: "portal", sourceId: `test:void:${n}`, date: "2026-10-01", description: `Pièce ${n}`, quantityX100: 100, unitPriceCents: 1000, amountCents: 1000, status: "posted", postedAt: new Date() }).returning();
+      const [inv] = await db().insert(schema.clientInvoices).values({ clientId: client!.id, number: `VOID-${n}`, issuedOn: "2026-10-01", dueOn: "2026-11-01", totalCents: 1000, source: "portal", quickbooksId: qb }).returning();
+      await db().update(schema.billingItems).set({ invoiceId: inv!.id }).where(eq(schema.billingItems.id, item!.id));
+      return { inv: inv!, item: item! };
+    };
+    const calls: { method: string; url: string; body: any }[] = [];
+    let refuse = false;
+    const json = (b: unknown) => new Response(JSON.stringify(b), { status: 200, headers: { "content-type": "application/json" } });
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: unknown, init: RequestInit = {}) => {
+        const url = decodeURIComponent(String(input));
+        if (url.startsWith("https://oauth.platform.intuit.com/")) return json({ access_token: "qb-access", refresh_token: "qb-refresh" });
+        calls.push({ method: init.method ?? "GET", url, body: init.body ? JSON.parse(String(init.body)) : undefined });
+        if (url.includes("/invoice/811")) return json({ Invoice: { Id: "811", SyncToken: "2" } });
+        if (url.includes("/invoice?operation=void")) return refuse ? new Response(JSON.stringify({ Fault: { Error: [{ Message: "Business Validation Error" }] } }), { status: 400 }) : json({ Invoice: { Id: "811", PrivateNote: "Voided" } });
+        return new Response(JSON.stringify({ Fault: { Error: [{ Message: `unexpected ${url}` }] } }), { status: 400 });
+      }),
+    );
+    try {
+      // QuickBooks refuses: the portal invoice stays as it was, its work stays posted
+      const a = await mk(1, "811");
+      refuse = true;
+      expect((await admin.post("/api/billables/unpost", { invoiceId: a.inv.id })).json.error).toBe("quickbooks_void_failed");
+      expect((await db().select().from(schema.clientInvoices).where(eq(schema.clientInvoices.id, a.inv.id)))[0]!.voided).toBe(false);
+      expect((await db().select().from(schema.billingItems).where(eq(schema.billingItems.id, a.item.id)))[0]!.status).toBe("posted");
+      // QuickBooks voids it (with the version it holds): the portal voids it too and the work goes back to approve
+      refuse = false;
+      calls.length = 0;
+      const r = (await admin.post("/api/billables/unpost", { invoiceId: a.inv.id })).json;
+      expect(r).toMatchObject({ number: "VOID-1", items: 1, quickbooks: true });
+      expect(calls.find((c) => c.url.includes("operation=void"))!.body).toEqual({ Id: "811", SyncToken: "2" });
+      expect((await db().select().from(schema.clientInvoices).where(eq(schema.clientInvoices.id, a.inv.id)))[0]).toMatchObject({ voided: true, quickbooksError: null });
+      expect((await db().select().from(schema.billingItems).where(eq(schema.billingItems.id, a.item.id)))[0]).toMatchObject({ status: "approved", invoiceId: null });
+      // not in QuickBooks: only the portal
+      const b = await mk(2, null);
+      calls.length = 0;
+      expect((await admin.post("/api/billables/unpost", { invoiceId: b.inv.id })).json).toMatchObject({ quickbooks: false });
+      expect(calls.some((c) => c.url.includes("operation=void"))).toBe(false);
+    } finally {
+      vi.unstubAllGlobals();
+    }
   });
 });

@@ -1,8 +1,8 @@
 import { useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { useMutation, useQuery } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
-import { BellRing, Download, ExternalLink, Eye, FileText, Loader2, Mail, Search, Send } from "lucide-react";
+import { Ban, BellRing, Download, ExternalLink, Eye, FileText, Loader2, Mail, Search, Send } from "lucide-react";
 import { useConfirm } from "@/components/ConfirmDialog";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -287,5 +287,36 @@ export function InvoicePdfButton({ invoice, compact }: { invoice: { id: string; 
       </Button>
       {open && <InvoicePdfDialog invoice={invoice} onClose={() => setOpen(false)} />}
     </>
+  );
+}
+
+/**
+ * Void an invoice made by the portal: it is voided in the portal and, when it went there, in QuickBooks (the number stays,
+ * never used again), and its work goes back to approve. Not once a payment is received.
+ */
+export function InvoiceVoidButton({ invoice, compact }: { invoice: { id: string; number: string; status: string; source?: string; paidCents?: number }; compact?: boolean }) {
+  const { t } = useTranslation();
+  const can = useCan();
+  const confirm = useConfirm();
+  const qc = useQueryClient();
+  const run = useMutation({
+    mutationFn: () => api.post<{ number: string; items: number; quickbooks: boolean }>("/billables/unpost", { invoiceId: invoice.id }),
+    onSuccess: (r) => {
+      void qc.invalidateQueries();
+      toast.success(t(r.quickbooks ? "statements.voidedQb" : "statements.voided", { number: r.number, count: r.items }));
+    },
+    onError: (e) => {
+      const code = e instanceof ApiError ? e.code : "";
+      toast.error(["invoice_has_payments", "invoice_voided", "invoice_not_portal", "quickbooks_void_failed"].includes(code) ? t(`statements.voidError.${code}`) : t("common.error"));
+    },
+  });
+  if (!can("accounting.manage") || invoice.status === "voided" || (invoice.source && invoice.source !== "portal") || (invoice.paidCents ?? 0) > 0) return null;
+  const ask = async () => {
+    if (await confirm({ title: t("statements.voidTitle", { number: invoice.number }), description: t("statements.voidText"), confirmLabel: t("statements.void"), destructive: true })) run.mutate();
+  };
+  return (
+    <Button type="button" size={compact ? "icon" : "sm"} variant="ghost" className={compact ? "size-7 text-red-300" : "h-7 text-xs text-red-300"} disabled={run.isPending} onClick={() => void ask()} title={t("statements.void")}>
+      {run.isPending ? <Loader2 className="size-3.5 animate-spin" /> : <Ban className="size-3.5" />} {!compact && t("statements.void")}
+    </Button>
   );
 }

@@ -1,6 +1,6 @@
 import { and, asc, eq, gte, inArray, isNotNull, lte, or, sql } from "drizzle-orm";
 import { db, schema } from "../db/index.ts";
-import { alignNumbering, qbItemsForBillingItems } from "./quickbooks.ts";
+import { alignNumbering, qbItemsForBillingItems, voidInvoiceInQb } from "./quickbooks.ts";
 import { dueAfterSent } from "../../shared/invoiceDue.ts";
 import { taxesOfLines } from "../../shared/invoiceTax.ts";
 import { hourlyRateOf } from "./contracts.ts";
@@ -485,17 +485,24 @@ export function createInvoice(actorId: string, p: InvoiceDraft) {
  * Take back an invoice made by the portal: it is voided (its number stays, shown as voided) and its items are
  * approved again, ready for another invoice. Refused once money was received, or the invoice is in QuickBooks.
  */
-export async function unpostInvoice(actorId: string, invoiceId: string): Promise<{ number: string; items: number }> {
+export async function unpostInvoice(actorId: string, invoiceId: string): Promise<{ number: string; items: number; quickbooks: boolean }> {
   const [inv] = await db().select().from(schema.clientInvoices).where(eq(schema.clientInvoices.id, invoiceId));
   if (!inv) throw new DraftError("not_found");
   if (inv.source !== "portal") throw new DraftError("invoice_not_portal");
   if (inv.voided) throw new DraftError("invoice_voided");
-  if (inv.quickbooksId) throw new DraftError("invoice_in_quickbooks");
   const [{ n }] = await db().select({ n: sql<number>`count(*)::int` }).from(schema.invoicePayments).where(eq(schema.invoicePayments.invoiceId, invoiceId));
   if (n > 0) throw new DraftError("invoice_has_payments");
+  // an invoice already in QuickBooks is voided there first: when QuickBooks refuses, nothing changes here
+  if (inv.quickbooksId) {
+    try {
+      await voidInvoiceInQb(inv.quickbooksId);
+    } catch {
+      throw new DraftError("quickbooks_void_failed");
+    }
+  }
   const now = new Date();
   const items = await db().transaction(async (tx) => {
-    await tx.update(schema.clientInvoices).set({ voided: true, updatedAt: now }).where(eq(schema.clientInvoices.id, invoiceId));
+    await tx.update(schema.clientInvoices).set({ voided: true, quickbooksError: null, quickbooksSyncedAt: inv.quickbooksId ? now : null, updatedAt: now }).where(eq(schema.clientInvoices.id, invoiceId));
     const back = await tx
       .update(schema.billingItems)
       .set({ status: "approved", invoiceId: null, postedAt: null, approvedBy: actorId, approvedAt: now, updatedAt: now })
@@ -503,7 +510,7 @@ export async function unpostInvoice(actorId: string, invoiceId: string): Promise
       .returning({ id: schema.billingItems.id });
     return back.length;
   });
-  return { number: inv.number, items };
+  return { number: inv.number, items, quickbooks: Boolean(inv.quickbooksId) };
 }
 
 /** What invoicing every client at once would make (their defaults). */

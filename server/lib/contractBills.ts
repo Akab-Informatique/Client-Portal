@@ -48,7 +48,7 @@ export async function contractBillables(since: string): Promise<Billable[]> {
           companyId: companyId!,
           date: e.date,
           dateEnd: p.to,
-          description: `${p.name}${p.prorated ? ` (prorata ${p.days}/${p.periodDays} j)` : ""} — ${dmy(p.from)} → ${dmy(p.to)}`,
+          description: `${p.name}${p.prorated ? ` (prorata ${p.days}/${p.periodDays} j)` : ""} — ${dmy(p.from)} – ${dmy(p.to)}`,
           contractName: k.name,
           contractSourceId: k.autotaskId,
           quantity: whole ? qty : 1,

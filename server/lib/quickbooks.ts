@@ -466,6 +466,23 @@ export async function qbItemsForBillingItems(items: { id: string; sourceId: stri
 // ── invoices ──
 const dollars = (cents: number) => Math.round(cents) / 100;
 
+/**
+ * Void an invoice in QuickBooks (its amounts go to 0, it stays on record, marked voided). One already voided, or gone, is
+ * fine. Any other answer of QuickBooks is an error: the portal then leaves the invoice as it is.
+ */
+export async function voidInvoiceInQb(quickbooksId: string): Promise<void> {
+  let cur: { Invoice: { Id: string; SyncToken: string; PrivateNote?: string } };
+  try {
+    cur = await qb("GET", `invoice/${encodeURIComponent(quickbooksId)}`);
+  } catch (e) {
+    // no longer there: nothing to void
+    if (e instanceof QuickBooksError && /not found|object not found|stale|does not exist/i.test(e.detail ?? "")) return;
+    throw e;
+  }
+  if (/^voided/i.test(cur.Invoice.PrivateNote ?? "")) return;
+  await qb("POST", "invoice?operation=void", { Id: cur.Invoice.Id, SyncToken: cur.Invoice.SyncToken });
+}
+
 /** Send one invoice (or its changes) to QuickBooks. The client must be mapped to a customer. */
 export async function pushInvoice(invoiceId: string): Promise<{ quickbooksId: string; warning?: string }> {
   const r = await once(`invoice:${invoiceId}`, () => pushInvoiceNow(invoiceId));

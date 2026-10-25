@@ -65,6 +65,21 @@ export async function invoicePdf(invoiceId: string, payUrl: string | null = null
   doc.on("data", (c: Buffer) => chunks.push(c));
   const done = new Promise<Buffer>((resolve) => doc.on("end", () => resolve(Buffer.concat(chunks))));
 
+  // the built-in font only knows Windows-1252: an arrow or any other symbol outside it would print as "!" — the arrow becomes a dash, the rest is dropped
+  const WIN = new Set("€‚ƒ„…†‡ˆ‰Š‹ŒŽ‘’“”•–—˜™š›œžŸ");
+  const clean = (v: string) =>
+    v
+      .replace(/\s*[→➜➔⟶]\s*/g, " – ")
+      .split("")
+      .filter((ch) => ch.charCodeAt(0) < 256 || WIN.has(ch))
+      .join("");
+  const rawText = doc.text.bind(doc) as (...a: unknown[]) => PDFKit.PDFDocument;
+  (doc as unknown as { text: (...a: unknown[]) => unknown }).text = (t: unknown, ...rest: unknown[]) => rawText(typeof t === "string" ? clean(t) : t, ...rest);
+  const rawHeight = doc.heightOfString.bind(doc);
+  doc.heightOfString = (t: string, o?: PDFKit.Mixins.TextOptions) => rawHeight(clean(t), o);
+  const rawWidth = doc.widthOfString.bind(doc);
+  doc.widthOfString = (t: string, o?: PDFKit.Mixins.TextOptions) => rawWidth(clean(t), o);
+
   const font = (bold = false, size = 8) => doc.font(bold ? "Helvetica-Bold" : "Helvetica").fontSize(size).fillColor("#000000");
 
   // ── page 1: the logo, the company, the boxed date

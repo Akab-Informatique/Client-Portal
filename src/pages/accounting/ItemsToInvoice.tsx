@@ -122,7 +122,7 @@ function MadeInvoices({ lang, period }: { lang: string; period: Period }) {
     },
     onError: (e: unknown) => {
       const code = (e as { code?: string }).code;
-      toast.error(code && ["invoice_has_payments", "invoice_in_quickbooks", "invoice_voided", "invoice_not_portal"].includes(code) ? t(`invoicing.unpostError.${code}`) : t("common.error"));
+      toast.error(code && ["invoice_has_payments", "invoice_voided", "invoice_not_portal", "quickbooks_void_failed"].includes(code) ? t(`invoicing.unpostError.${code}`) : t("common.error"));
     },
   });
   const list = (data?.items ?? []).filter((x) => x.status !== "voided");
@@ -132,7 +132,7 @@ function MadeInvoices({ lang, period }: { lang: string; period: Period }) {
       <p className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">{t("invoicing.madeTitle", { count: list.length })}</p>
       <ul className="divide-y divide-border/60 overflow-hidden rounded-xl border">
         {list.map((x) => {
-          const locked = x.paidCents > 0 || Boolean(x.quickbooks?.id);
+          const locked = x.paidCents > 0;
           return (
             <li key={x.id} className="flex items-center gap-3 px-3 py-2 text-sm">
               <span className="font-mono text-xs">{x.number}</span>
