@@ -796,8 +796,9 @@ export async function pullInvoices(actorId: string | null) {
           quickbooksId: r.Id,
           quickbooksSyncedAt: now,
           quickbooksError: null,
-          voided,
-          paidOn: !voided && total > 0 && balance === 0 ? (hit.paidOn ?? updatedOn) : null,
+          // a voided invoice stays voided (QuickBooks cannot bring one back; the pull must not undo a void made here)
+          voided: hit.voided || voided,
+          paidOn: !hit.voided && !voided && total > 0 && balance === 0 ? (hit.paidOn ?? updatedOn) : null,
           ...(own ? {} : { number, issuedOn: r.TxnDate, dueOn: r.DueDate ?? null, totalCents: total, taxCents: cents0(r.TxnTaxDetail?.TotalTax) }),
           updatedAt: now,
         })
