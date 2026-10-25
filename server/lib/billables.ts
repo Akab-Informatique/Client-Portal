@@ -1,6 +1,6 @@
 import { and, asc, eq, gte, inArray, isNotNull, lte, or, sql } from "drizzle-orm";
 import { db, schema } from "../db/index.ts";
-import { alignNumbering } from "./quickbooks.ts";
+import { alignNumbering, qbItemsForBillingItems } from "./quickbooks.ts";
 import { dueAfterSent } from "../../shared/invoiceDue.ts";
 import { hourlyRateOf } from "./contracts.ts";
 import { billingSettings, formatInvoiceNumber, quickbooksSettings, saveBillingSettings, type BillingSettings } from "./billing.ts";
@@ -397,6 +397,8 @@ export function createInvoice(actorId: string, p: InvoiceDraft) {
     const qbDefaults = (await quickbooksSettings()).invoice;
     const invoiceItem = p.qbItemId || qbDefaults.itemId || null;
     const invoiceTax = p.qbTaxCodeId || qbDefaults.taxCodeId || null;
+    // the QuickBooks item of each line, from its portal service or product (made in QuickBooks when missing): outside the transaction (it talks to QuickBooks)
+    const autoItems = await qbItemsForBillingItems(draft.items.map((i) => ({ id: i.id, sourceId: i.sourceId }))).catch(() => new Map<string, string>());
     const number = draft.number;
     // all or nothing: the invoice, its lines and the items posted (a crash never leaves items to bill twice)
     const inv = await db().transaction(async (tx) => {
@@ -426,7 +428,8 @@ export function createInvoice(actorId: string, p: InvoiceDraft) {
           unitPriceCents: l.unitPriceCents,
           amountCents: l.amountCents,
           taxable: l.taxable,
-          qbItemId: l.qbItemId || invoiceItem,
+          // its own pick, else its portal service or product, else the invoice's item (the default)
+          qbItemId: l.qbItemId || autoItems.get(l.itemId) || invoiceItem,
           qbTaxCodeId: l.qbTaxCodeId || invoiceTax,
           ledgerAccountId: s.accounts[ACCOUNT_OF[l.kind as BillableKind] ?? "labour"] ?? null,
           position: n,

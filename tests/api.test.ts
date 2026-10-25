@@ -7363,4 +7363,72 @@ describe("contracts: services when made, charges, activity, stop instead of dele
       else await db().delete(schema.integrations).where(eq(schema.integrations.provider, "tickets"));
     }
   });
+
+  it("QuickBooks: each invoice line goes on the QuickBooks item of its portal service (made when missing), line by line", async () => {
+    const admin = await signIn("admin@akab.local");
+    const { saveQuickBooksSettings, billingSettings } = await import("../server/lib/billing.ts");
+    const { forgetQuickBooksToken } = await import("../server/lib/quickbooks.ts");
+    forgetQuickBooksToken();
+    await saveQuickBooksSettings(null, { clientId: "ABqb", clientSecret: "qb-secret", environment: "sandbox" });
+    await saveQuickBooksSettings(null, { realmId: "9132", refreshToken: "qb-refresh", enabled: true, sync: { invoices: false, payments: false, customers: false, timesheets: false, expenses: false }, invoice: { itemId: null, taxCodeId: "5", exemptTaxCodeId: null } });
+    await admin.get("/api/billing/ledger");
+    const bs = await billingSettings();
+    await db().update(schema.ledgerAccounts).set({ quickbooksId: "Q4100" }).where(eq(schema.ledgerAccounts.id, bs.accounts.charges!));
+    await db().delete(schema.quickbooksItems);
+    const [client] = await db().insert(schema.clients).values({ name: "Lignes QB inc.", autotaskId: 987654380, quickbooksId: "762" }).returning();
+    const calls: { method: string; url: string; body: any }[] = [];
+    const json = (b: unknown) => new Response(JSON.stringify(b), { status: 200, headers: { "content-type": "application/json" } });
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: unknown, init: RequestInit = {}) => {
+        const url = decodeURIComponent(String(input));
+        if (url.startsWith("https://oauth.platform.intuit.com/")) return json({ access_token: "qb-access", refresh_token: "qb-refresh" });
+        const body = init.body ? JSON.parse(String(init.body)) : undefined;
+        calls.push({ method: init.method ?? "GET", url, body });
+        if (url.includes("select * from Item where Name")) return json({ QueryResponse: {} });
+        if (url.includes("select * from Item")) return json({ QueryResponse: { Item: [{ Id: "21", Name: "Surveillance serveur", Type: "Service", Active: true }] } });
+        if (url.includes("select * from TaxCode")) return json({ QueryResponse: { TaxCode: [{ Id: "5", Name: "GST/QST" }] } });
+        if (url.includes("select * from Invoice")) return json({ QueryResponse: {} });
+        if (url.includes("/item?")) return json({ Item: { Id: "322", Name: body.Name, Type: "Service", IncomeAccountRef: body.IncomeAccountRef, Active: true } });
+        if (url.includes("/invoice?")) return json({ Invoice: { Id: "810" } });
+        return new Response(JSON.stringify({ Fault: { Error: [{ Message: `unexpected ${url}` }] } }), { status: 400 });
+      }),
+    );
+    try {
+      // a contract with two services: one the same as an item of QuickBooks, one that QuickBooks does not have yet
+      const [k] = await db().insert(schema.clientContracts).values({ clientId: client!.id, name: "Soutien", autotaskId: "local-lines-qb", billingMode: "monthly", startDate: "2026-10-01", endDate: "2027-09-30" }).returning();
+      const [known, fresh] = await db()
+        .insert(schema.contractServices)
+        .values([
+          { contractId: k!.id, name: "Surveillance serveur", kind: "recurring", priceCents: 30000, addedOn: "2026-10-01", quantity: 1 },
+          { contractId: k!.id, name: "Aide gérée", kind: "recurring", priceCents: 4500, addedOn: "2026-10-01", quantity: 10 },
+        ])
+        .returning();
+      const mk = async (n: number, sourceId: string, kind: string, description: string, quantityX100: number, unit: number) =>
+        (await db().insert(schema.billingItems).values({ clientId: client!.id, kind, source: "autotask", sourceId, date: "2026-10-01", description, quantityX100, unitPriceCents: unit, amountCents: Math.round((quantityX100 * unit) / 100), status: "approved", approvedAt: new Date() }).returning())[0]!;
+      const l1 = await mk(1, `contract:${k!.id}:${known!.id}:2026-10-01`, "contract", "Surveillance serveur — octobre", 100, 30000);
+      const l2 = await mk(2, `contract:${k!.id}:${fresh!.id}:2026-10-01`, "contract", "Aide gérée — octobre", 1000, 4500);
+      const l3 = await mk(3, "ptime:test-no-service", "labour", "Heures", 200, 9000);
+      // no default item at all: lines with a service still have theirs
+      const made = (await admin.post("/api/billables/invoice", { clientId: client!.id, itemIds: [l1.id, l2.id] })).json;
+      const lines = await db().select().from(schema.invoiceLines).where(eq(schema.invoiceLines.invoiceId, made.id));
+      expect(lines.find((l) => l.description.startsWith("Surveillance"))!.qbItemId).toBe("21");
+      expect(lines.find((l) => l.description.startsWith("Aide"))!.qbItemId).toBe("322");
+      expect(calls.filter((c) => c.url.includes("/item?"))).toHaveLength(1);
+      expect(calls.find((c) => c.url.includes("/item?"))!.body).toMatchObject({ Name: "Aide gérée", Type: "Service" });
+      // the new item is tied to the portal's service
+      expect((await db().select().from(schema.services).where(eq(schema.services.name, "Aide gérée")))[0]).toMatchObject({ quickbooksItemId: "322" });
+      // sent line by line, each on its item
+      calls.length = 0;
+      expect((await admin.post(`/api/crm/invoices/${made.id}/quickbooks`)).json).toMatchObject({ quickbooksId: "810" });
+      const sent = calls.find((c) => c.url.includes("/invoice?"))!.body.Line;
+      expect(sent.map((l: any) => l.SalesItemLineDetail.ItemRef.value).sort()).toEqual(["21", "322"]);
+      // a line with no service and no default: the error names it
+      const bad = (await admin.post("/api/billables/invoice", { clientId: client!.id, itemIds: [l3.id] })).json;
+      const refused = (await admin.post(`/api/crm/invoices/${bad.id}/quickbooks`)).json;
+      expect(refused.error).toBe("quickbooks_no_item");
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
 });

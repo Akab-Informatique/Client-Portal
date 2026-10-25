@@ -413,6 +413,56 @@ export async function createQbItem(p: { name: string; sku?: string | null; price
   return { id: qbId, name, created };
 }
 
+/**
+ * The QuickBooks item each line of work goes on, line by line: the item tied to its **portal service** (the service of
+ * a contract line; made in QuickBooks, with the same name, when it does not exist yet) or to its **inventory product**
+ * (a charge). A line with no service or product gets none here (the invoice's or the default item is used). Nothing
+ * happens when QuickBooks is not connected. Returns billing item id → QuickBooks item id.
+ */
+export async function qbItemsForBillingItems(items: { id: string; sourceId: string | null; description?: string }[]): Promise<Map<string, string>> {
+  const out = new Map<string, string>();
+  const s = await quickbooksSettings();
+  if (!s.refreshToken || !s.realmId || !items.length) return out;
+  const d = db();
+  // our copy of QuickBooks' items is looked at fresh (a new item shows up)
+  await invoiceChoices().catch(() => undefined);
+  const copy = await d.select().from(schema.quickbooksItems).where(and(eq(schema.quickbooksItems.active, true), inArray(schema.quickbooksItems.type, ["Service", "NonInventory", "Inventory"])));
+  const byName = new Map(copy.map((i) => [norm(i.name), i.quickbooksId]));
+  const bySku = new Map(copy.filter((i) => i.sku).map((i) => [skuKey(i.sku), i.quickbooksId]));
+  for (const it of items) {
+    try {
+      const src = it.sourceId ?? "";
+      // a recurring contract line: its service
+      if (src.startsWith("contract:")) {
+        const serviceRowId = src.split(":")[2];
+        const [row] = serviceRowId ? await d.select().from(schema.contractServices).where(eq(schema.contractServices.id, serviceRowId)) : [];
+        if (!row) continue;
+        const [svc] = row.serviceId ? await d.select().from(schema.services).where(eq(schema.services.id, row.serviceId)) : [];
+        let id = svc?.quickbooksItemId ?? bySku.get(skuKey(svc?.sku)) ?? byName.get(norm(row.name)) ?? null;
+        if (!id) id = (await createQbItem({ name: row.name, sku: svc?.sku ?? null, priceCents: row.priceCents })).id;
+        if (svc && svc.quickbooksItemId !== id) await d.update(schema.services).set({ quickbooksItemId: id, updatedAt: new Date() }).where(eq(schema.services.id, svc.id));
+        out.set(it.id, id);
+        continue;
+      }
+      // a charge on a ticket: its inventory product
+      if (src.startsWith("pcharge:")) {
+        const [charge] = await d.select({ productId: schema.ticketCharges.productId }).from(schema.ticketCharges).where(eq(schema.ticketCharges.id, src.slice("pcharge:".length)));
+        if (!charge?.productId || !/^[0-9a-f-]{36}$/.test(charge.productId)) continue;
+        const [p] = await d.select().from(schema.storeProducts).where(eq(schema.storeProducts.id, charge.productId));
+        if (!p) continue;
+        const id = p.quickbooksItemId ?? bySku.get(skuKey(p.sku)) ?? null;
+        if (id) {
+          if (p.quickbooksItemId !== id) await d.update(schema.storeProducts).set({ quickbooksItemId: id, updatedAt: new Date() }).where(eq(schema.storeProducts.id, p.id));
+          out.set(it.id, id);
+        }
+      }
+    } catch (e) {
+      console.warn("[quickbooks] item for a line:", e instanceof Error ? e.message : e);
+    }
+  }
+  return out;
+}
+
 // ── invoices ──
 const dollars = (cents: number) => Math.round(cents) / 100;
 
@@ -439,11 +489,26 @@ async function pushInvoiceNow(invoiceId: string): Promise<{ quickbooksId: string
     const s = await quickbooksSettings();
     // the item and tax code chosen on this invoice, else the defaults
     const itemId = inv.qbItemId || s.invoice.itemId;
-    if (!itemId) throw new QuickBooksError("no_item");
     const exempt = client.invoice?.taxes === false;
     const taxCode = exempt ? s.invoice.exemptTaxCodeId : inv.qbTaxCodeId || s.invoice.taxCodeId;
     const subtotal = dollars(inv.totalCents - inv.taxCents);
     const own = await d.select().from(schema.invoiceLines).where(eq(schema.invoiceLines.invoiceId, inv.id)).orderBy(asc(schema.invoiceLines.position));
+    // a line with no item yet (the invoice was made before one was chosen): the item of its portal service or product, made if needed
+    const missing = own.filter((l) => !l.qbItemId && l.billingItemId);
+    if (missing.length) {
+      const found = await qbItemsForBillingItems((await d.select({ id: schema.billingItems.id, sourceId: schema.billingItems.sourceId }).from(schema.billingItems).where(inArray(schema.billingItems.id, missing.map((l) => l.billingItemId!)))));
+      for (const l of missing) {
+        const id = found.get(l.billingItemId!);
+        if (id) {
+          l.qbItemId = id;
+          await d.update(schema.invoiceLines).set({ qbItemId: id }).where(eq(schema.invoiceLines.id, l.id));
+        }
+      }
+    }
+    // every line needs an item: its own, else the invoice's, else the default; the error says which line has none
+    const noItem = own.find((l) => !l.qbItemId && !itemId);
+    if (noItem) throw new QuickBooksError("no_item", noItem.description.slice(0, 120));
+    if (!own.length && !itemId) throw new QuickBooksError("no_item");
     // each line: its own item and tax code, else the invoice's, else the defaults
     const lineOf = (description: string, amount: number, qty: number, unit: number, taxed: boolean, own?: { qbItemId: string | null; qbTaxCodeId: string | null }) => {
       const code = taxed ? (exempt ? s.invoice.exemptTaxCodeId : own?.qbTaxCodeId || taxCode) : s.invoice.exemptTaxCodeId;
@@ -451,7 +516,7 @@ async function pushInvoiceNow(invoiceId: string): Promise<{ quickbooksId: string
         DetailType: "SalesItemLineDetail",
         Amount: amount,
         Description: description.slice(0, 4000),
-        SalesItemLineDetail: { ItemRef: { value: own?.qbItemId || itemId }, Qty: qty, UnitPrice: unit, ...(code ? { TaxCodeRef: { value: code } } : {}) },
+        SalesItemLineDetail: { ItemRef: { value: (own?.qbItemId || itemId)! }, Qty: qty, UnitPrice: unit, ...(code ? { TaxCodeRef: { value: code } } : {}) },
       };
     };
     const body = {
