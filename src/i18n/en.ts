@@ -534,6 +534,9 @@ const en: Dict = {
       },
     },
     contracts: {
+      hourlyRate: "Default hourly rate ($/h)",
+      hourlyRateHint: "Time entered under this contract is billed at this rate. It starts at the usual rate (Admin › Invoicing); 0 = no hourly rate, the time is included.",
+      supportDefaultHint: "This client's tickets log their time on it, unless another contract is picked.",
       billedThrough: "Billed through",
       billedThroughText: "Already invoiced in the old system up to this day (included): what falls before is never billed here.",
       billedThroughHint: "Already invoiced through {{date}} ({{amount}})",
@@ -3548,6 +3551,7 @@ const en: Dict = {
       none: "The AI does not estimate this ticket (too long or too vague).",
     },
     contractBilling: {
+      includedNote: "Hourly rate of $0: the time is included, nothing is billed.",
       bankedNote: "Banked hours: {{used}} h used of {{total}} h ({{left}} h left); the hours are not billed.",
       fixedNote: "Fixed price ({{price}}): the hours are not billed.",
       label: "Contract",

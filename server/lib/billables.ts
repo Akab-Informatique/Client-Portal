@@ -2,6 +2,7 @@ import { and, asc, eq, gte, inArray, isNotNull, lte, sql } from "drizzle-orm";
 import { db, schema } from "../db/index.ts";
 import { alignNumbering } from "./quickbooks.ts";
 import { dueAfterSent } from "../../shared/invoiceDue.ts";
+import { hourlyRateOf } from "./contracts.ts";
 import { billingSettings, formatInvoiceNumber, quickbooksSettings, saveBillingSettings, type BillingSettings } from "./billing.ts";
 import { ensureCrm } from "./crm.ts";
 import { ticketSource, type BillableKind } from "./ticketSource.ts";
@@ -82,11 +83,13 @@ export function syncBillables(): Promise<BillablesState> {
       // the contract the work is under: an hourly rate typed on it wins, then the source's rate, then the client's, then the usual one;
       // under a monthly / per ticket / included contract the hours are not billed (left out, never billed by the hour)
       const contract = it.contractSourceId ? contractsById.get(contractIds.get(it.contractSourceId) ?? "") : undefined;
-      const notBilled = it.kind === "labour" && contract != null && contract.billingMode !== "hourly";
+      // the contract's own rate bills the hours (above 0); a rate of 0 means they are included, never billed
+      const contractRate = contract ? hourlyRateOf(contract, s.rates.hourly) : null;
+      const notBilled = it.kind === "labour" && contract != null && contractRate == null;
       const rate = notBilled
         ? 0
-        : it.kind === "labour" && contract?.hourlyRateCents != null
-          ? contract.hourlyRateCents
+        : it.kind === "labour" && contractRate != null
+          ? contractRate
           : (it.unitPriceCents ?? (it.kind === "labour" ? Math.round((client.invoice?.hourlyRate ?? s.rates.hourly) * 100) : 0));
       const quantityX100 = Math.round(it.quantity * 100);
       const values = {

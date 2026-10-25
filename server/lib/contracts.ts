@@ -8,12 +8,15 @@ import { billingSettings } from "./billing.ts";
  * Each client has a default support contract (the one picked in the portal,
  * else the source's, else its only active one); a ticket is billed on its own
  * contract, or that default. How the work is billed depends on the contract:
- *  - hourly: the contract's hourly rate, else the usual rate of Admin › Facturation;
- *  - monthly: a flat monthly rate, the hours are not billed;
- *  - per_ticket: a flat rate per ticket, the hours are not billed;
- *  - banked: a block of hours bought; the hours worked are drawn from it, never billed by the hour;
- *  - fixed: a fixed price; the hours are not billed;
- *  - none: support is included, never billed.
+ * Every contract carries a default hourly rate (made with the usual rate of Admin › Facturation, changeable): the time
+ * entered under it is billed at that rate, and a rate of 0 means the hours are included. The billing mode adds what else
+ * the contract charges:
+ *  - hourly: the hours at the rate;
+ *  - monthly: a flat monthly rate;
+ *  - per_ticket: a flat rate per ticket;
+ *  - banked: a block of hours bought; the hours worked are drawn from it;
+ *  - fixed: a fixed price;
+ *  - none: support is included.
  * The contract types of Admin › Types de contrats each carry one of four kinds (recurring service,
  * hourly, banked hours, fixed price) which sets the billing mode.
  */
@@ -67,9 +70,15 @@ export type ContractView = {
 
 const modeOf = (v: string): BillingMode => ((BILLING_MODES as readonly string[]).includes(v) ? (v as BillingMode) : "hourly");
 
-/** What an hour costs under a contract (null: hours are not billed under it). */
+/**
+ * What an hour costs under a contract (null: hours are not billed under it, they are included).
+ * The rate typed on the contract decides: above 0 the hours are billed at it, **0 means no hourly rate: included**.
+ * A contract with no rate typed (made before every contract had one) keeps its old rule: an hourly one bills the usual
+ * rate of Admin › Facturation, any other does not bill hours.
+ */
 export function hourlyRateOf(k: { billingMode: string; hourlyRateCents: number | null }, usualHourlyDollars: number): number | null {
-  return modeOf(k.billingMode) === "hourly" ? (k.hourlyRateCents ?? Math.round(usualHourlyDollars * 100)) : null;
+  if (k.hourlyRateCents != null) return k.hourlyRateCents > 0 ? k.hourlyRateCents : null;
+  return modeOf(k.billingMode) === "hourly" ? Math.round(usualHourlyDollars * 100) : null;
 }
 
 /** The client's active contracts (by the ticket-side company id), the default one flagged. */
@@ -99,7 +108,7 @@ export async function contractsOfCompany(companyAt: number): Promise<ContractVie
       monthlyRateCents: k.monthlyRateCents,
       ticketRateCents: k.ticketRateCents,
       isDefault: chosen?.id === k.id,
-      billed: mode === "hourly",
+      billed: hourlyRateOf(k, usual) != null,
       typeKey: k.typeKey,
       bankedHours: k.bankedHoursX100 == null ? null : k.bankedHoursX100 / 100,
       usedHours: used.get(k.id) ?? 0,

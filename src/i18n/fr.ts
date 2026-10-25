@@ -532,6 +532,9 @@ const fr = {
       },
     },
     contracts: {
+      hourlyRate: "Taux horaire par défaut ($/h)",
+      hourlyRateHint: "Le temps entré sous ce contrat est facturé à ce taux. Commence au taux habituel (Administration › Facturation) ; 0 = pas de taux horaire, le temps est inclus.",
+      supportDefaultHint: "Les billets de ce client y inscrivent leur temps, sauf si un autre contrat est choisi.",
       billedThrough: "Facturé jusqu'au",
       billedThroughText: "Déjà facturé dans l'ancien système jusqu'à ce jour (inclus) : ce qui tombe avant n'est jamais facturé ici.",
       billedThroughHint: "Déjà facturé jusqu'au {{date}} ({{amount}})",
@@ -3546,6 +3549,7 @@ const fr = {
       none: "L'IA n'estime pas ce billet (trop long ou trop flou).",
     },
     contractBilling: {
+      includedNote: "Taux horaire à 0 $ : le temps est inclus, rien n'est facturé.",
       bankedNote: "Banque d'heures : {{used}} h utilisées sur {{total}} h ({{left}} h restantes) ; les heures ne sont pas facturées.",
       fixedNote: "Prix fixe ({{price}}) : les heures ne sont pas facturées.",
       label: "Contrat",

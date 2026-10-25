@@ -410,6 +410,8 @@ export const crmRoutes = new Hono<AppEnv>()
   })
 
   // ── contract types (Admin › Types de contrats), for the contract forms
+  /** What a new contract starts with: the usual hourly rate of Admin › Facturation (the contract takes it, and can change it). */
+  .get("/contract-defaults", requirePermission("crm.billing"), async (c) => c.json({ hourlyRateCents: Math.round((await billingSettings()).rates.hourly * 100) }))
   .get("/contract-types", async (c) => c.json((await contractTypes()).filter((t) => t.active).map((t) => ({ key: t.key, name: t.name, kind: t.kind }))))
 
   // ── contracts
@@ -432,6 +434,8 @@ export const crmRoutes = new Hono<AppEnv>()
         billingPeriod: z.enum(["monthly", "yearly"]).default("monthly"),
         /** Already invoiced in the old system up to this day (included) */
         billedThrough: zDay.nullable().optional(),
+        /** The client's default support contract (the one tickets are logged on unless another is picked) */
+        supportDefault: z.boolean().optional(),
         /** Dollars */
         hourlyRate: z.number().min(0).max(100_000).nullable().optional(),
         monthlyRate: z.number().min(0).max(1_000_000).nullable().optional(),
@@ -460,6 +464,7 @@ export const crmRoutes = new Hono<AppEnv>()
       return { svc, s };
     });
     const row = await db().transaction(async (tx) => {
+      if (p.supportDefault) await tx.update(schema.clientContracts).set({ supportDefault: false }).where(eq(schema.clientContracts.clientId, client.id));
       const [k] = await tx
         .insert(schema.clientContracts)
         .values({
@@ -474,6 +479,7 @@ export const crmRoutes = new Hono<AppEnv>()
           startDate: p.startDate,
           endDate: p.endDate,
           hourlyRateCents: cents(p.hourlyRate),
+          supportDefault: Boolean(p.supportDefault),
           // a recurring services contract has no typed charge: it comes from its services
           monthlyRateCents: type.kind === "recurring" ? null : cents(p.monthlyRate),
           fixedPriceCents: cents(p.fixedPrice),

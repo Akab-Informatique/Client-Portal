@@ -7217,4 +7217,33 @@ describe("contracts: services when made, charges, activity, stop instead of dele
     expect(devOutbox).toHaveLength(0);
     expect((await admin.get("/api/billing/cleanup")).json.unsentInvoices).toBe(0);
   });
+
+  it("contracts: a default hourly rate on every contract (0 = included), and the support default chosen when it is made", async () => {
+    const admin = await signIn("admin@akab.local");
+    const tech = await signIn("tech@akab.local");
+    const { hourlyRateOf } = await import("../server/lib/contracts.ts");
+    // the contract's own rate decides: above 0 it bills the hours, 0 includes them; none typed keeps the old rule
+    expect(hourlyRateOf({ billingMode: "monthly", hourlyRateCents: 9500 }, 115)).toBe(9500);
+    expect(hourlyRateOf({ billingMode: "hourly", hourlyRateCents: 0 }, 115)).toBeNull();
+    expect(hourlyRateOf({ billingMode: "banked", hourlyRateCents: 0 }, 115)).toBeNull();
+    expect(hourlyRateOf({ billingMode: "hourly", hourlyRateCents: null }, 115)).toBe(11500);
+    expect(hourlyRateOf({ billingMode: "monthly", hourlyRateCents: null }, 115)).toBeNull();
+    // what a new contract starts with: the usual rate of Admin › Facturation
+    expect((await tech.get("/api/crm/contract-defaults")).status).toBe(403);
+    expect((await admin.get("/api/crm/contract-defaults")).json.hourlyRateCents).toBeGreaterThan(0);
+    const [client] = await db().insert(schema.clients).values({ name: "Taux défaut inc.", autotaskId: 987654350 }).returning();
+    const mk = async (body: object) => (await admin.post(`/api/crm/clients/${client!.id}/contracts`, { startDate: "2026-11-01", endDate: "2027-10-31", ...body })).json;
+    const a = await mk({ name: "Soutien A", typeKey: "hourly", hourlyRate: 120, supportDefault: true });
+    expect(a).toMatchObject({ hourlyRateCents: 12000, supportDefault: true });
+    // another one made as the default takes it from the first
+    const b = await mk({ name: "Inclus B", typeKey: "recurring", hourlyRate: 0, supportDefault: true });
+    expect(b).toMatchObject({ hourlyRateCents: 0, supportDefault: true });
+    const rows = await db().select().from(schema.clientContracts).where(eq(schema.clientContracts.clientId, client!.id));
+    expect(rows.find((r) => r.id === a.id)!.supportDefault).toBe(false);
+    expect(rows.find((r) => r.id === b.id)!.supportDefault).toBe(true);
+    // a rate typed on a recurring contract bills the hours worked under it
+    const c = await mk({ name: "Mensuel C", typeKey: "recurring", hourlyRate: 95 });
+    expect(c).toMatchObject({ hourlyRateCents: 9500, supportDefault: false });
+    expect((await admin.patch(`/api/crm/clients/${client!.id}/contracts/${c.id}`, { hourlyRate: 0 })).json.hourlyRateCents).toBe(0);
+  });
 });

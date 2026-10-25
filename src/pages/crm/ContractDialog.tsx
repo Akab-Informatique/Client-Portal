@@ -172,9 +172,13 @@ export function NewContractDialog({ client, onClose }: { client: CrmDetail; onCl
     const now = new Date();
     const end = new Date(now.getFullYear() + 1, now.getMonth(), now.getDate() - 1, 12);
     const day = (d: Date) => new Date(d.getTime() - d.getTimezoneOffset() * 60_000).toISOString().slice(0, 10);
-    return { name: "", typeKey: "", startDate: day(now), endDate: day(end), figure: "", billingPeriod: "monthly" as BillingPeriod, billedThrough: "" };
+    return { name: "", typeKey: "", startDate: day(now), endDate: day(end), figure: "", rate: "", billingPeriod: "monthly" as BillingPeriod, billedThrough: "", supportDefault: false };
   });
   const [lines, setLines] = useState<Draft[]>([]);
+  // the hourly rate starts at the usual one of Admin › Facturation; typing another changes it, 0 means no hourly rate (included)
+  const { data: defaults } = useQuery({ queryKey: ["crm", "contract-defaults"], queryFn: () => api.get<{ hourlyRateCents: number }>("/crm/contract-defaults"), staleTime: 60_000 });
+  const usualRate = defaults ? String(defaults.hourlyRateCents / 100) : "";
+  const rate = f.rate === "" ? usualRate : f.rate;
   const type = types.find((x) => x.key === (f.typeKey || types[0]?.key));
   const termOk = Boolean(f.startDate && f.endDate && f.endDate >= f.startDate);
   const term = termOk ? { start: f.startDate, end: f.endDate } : null;
@@ -188,7 +192,8 @@ export function NewContractDialog({ client, onClose }: { client: CrmDetail; onCl
     mutationFn: () => {
       const n = f.figure.trim() === "" ? null : Number(f.figure.replace(",", "."));
       // a recurring services contract has no typed charge: it comes from its services
-      const figure = type?.kind === "hourly" ? { hourlyRate: n } : type?.kind === "fixed" ? { fixedPrice: n } : type?.kind === "banked" ? { bankedHours: n } : {};
+      const figure = type?.kind === "fixed" ? { fixedPrice: n } : type?.kind === "banked" ? { bankedHours: n } : {};
+      const hourlyRate = rate.trim() === "" ? undefined : Number(rate.replace(",", "."));
       return api.post(`/crm/clients/${client.id}/contracts`, {
         name: f.name.trim(),
         typeKey: type!.key,
@@ -196,6 +201,8 @@ export function NewContractDialog({ client, onClose }: { client: CrmDetail; onCl
         endDate: f.endDate,
         billingPeriod: f.billingPeriod,
         ...(f.billedThrough ? { billedThrough: f.billedThrough } : {}),
+        ...(f.supportDefault ? { supportDefault: true } : {}),
+        ...(hourlyRate !== undefined && Number.isFinite(hourlyRate) ? { hourlyRate } : {}),
         ...figure,
         services: lines.map((l) => ({ serviceId: l.serviceId, addedOn: l.addedOn, quantity: l.quantity, ...(l.unitCustom ? { priceCents: l.priceCents } : {}) })),
       });
@@ -255,8 +262,18 @@ export function NewContractDialog({ client, onClose }: { client: CrmDetail; onCl
               <Field label={t("crm.contracts.billedThrough")} hint={t("crm.contracts.billedThroughText")}>
                 <Input type="date" value={f.billedThrough} onChange={set("billedThrough")} />
               </Field>
+              <Field label={t("crm.contracts.hourlyRate")} hint={t("crm.contracts.hourlyRateHint")}>
+                <Input value={rate} onChange={(e) => setF((x) => ({ ...x, rate: e.target.value }))} inputMode="decimal" placeholder={usualRate || "$"} className="text-right font-mono" />
+              </Field>
+              <label className="flex items-center gap-2 self-end pb-2 text-xs">
+                <input type="checkbox" checked={f.supportDefault} onChange={(e) => setF((x) => ({ ...x, supportDefault: e.target.checked }))} className="size-4 accent-[color:var(--gold)]" />
+                <span>
+                  <span className="block font-medium">{t("crm.contracts.supportDefault")}</span>
+                  <span className="block text-[10px] text-muted-foreground">{t("crm.contracts.supportDefaultHint")}</span>
+                </span>
+              </label>
               {/* the recurring services contract asks no charge here: it comes from its services */}
-              {type && type.kind !== "recurring" && (
+              {type && type.kind !== "recurring" && type.kind !== "hourly" && (
                 <Field label={t(`crm.contracts.figure_${type.kind}`)}>
                   <Input value={f.figure} onChange={set("figure")} inputMode="decimal" placeholder={type.kind === "banked" ? "h" : "$"} />
                 </Field>
@@ -660,9 +677,13 @@ function OverviewTab({ client, k, editable, onChanged, onClose }: { client: CrmD
   const can = useCan();
   const { data: types = [] } = useContractTypes();
   const base = `/crm/clients/${client.id}/contracts/${k.id}`;
-  const figureField = k.billingMode === "hourly" ? "hourlyRate" : k.billingMode === "per_ticket" ? "ticketRate" : k.billingMode === "fixed" ? "fixedPrice" : k.billingMode === "banked" ? "bankedHours" : null;
-  const figureValue = k.billingMode === "hourly" ? k.hourlyRateCents : k.billingMode === "per_ticket" ? k.ticketRateCents : k.billingMode === "fixed" ? k.fixedPriceCents : k.billingMode === "banked" ? k.bankedHoursX100 : null;
+  const figureField = k.billingMode === "hourly" ? null : k.billingMode === "per_ticket" ? "ticketRate" : k.billingMode === "fixed" ? "fixedPrice" : k.billingMode === "banked" ? "bankedHours" : null;
+  const figureValue = k.billingMode === "hourly" ? null : k.billingMode === "per_ticket" ? k.ticketRateCents : k.billingMode === "fixed" ? k.fixedPriceCents : k.billingMode === "banked" ? k.bankedHoursX100 : null;
   const show = (v: number | null) => (v == null ? "" : String(v / 100));
+  // the hourly rate of the contract: what is typed, else what applies (the usual rate on an hourly contract, none on the others)
+  const rateNow = show(k.hourlyRateCents ?? (k.billingMode === "hourly" ? k.usualRateCents : 0));
+  const [rate, setRate] = useState(rateNow);
+  useEffect(() => setRate(rateNow), [rateNow]);
   const [f, setF] = useState({ name: k.name, typeKey: k.typeKey ?? "", startDate: k.startDate ?? "", endDate: k.endDate ?? "", billingPeriod: k.billingPeriod, billedThrough: k.billedThrough ?? "", figure: show(figureValue) });
   useEffect(() => setF({ name: k.name, typeKey: k.typeKey ?? "", startDate: k.startDate ?? "", endDate: k.endDate ?? "", billingPeriod: k.billingPeriod, billedThrough: k.billedThrough ?? "", figure: show(figureValue) }), [k.name, k.typeKey, k.startDate, k.endDate, k.billingPeriod, k.billedThrough, figureValue]); // eslint-disable-line react-hooks/exhaustive-deps
   const patch = useMutation({
@@ -682,7 +703,7 @@ function OverviewTab({ client, k, editable, onChanged, onClose }: { client: CrmD
     },
     onError: (e) => toast.error(contractError(t, e)),
   });
-  const dirty = f.name.trim() !== k.name || f.typeKey !== (k.typeKey ?? "") || f.startDate !== (k.startDate ?? "") || f.endDate !== (k.endDate ?? "") || f.billingPeriod !== k.billingPeriod || f.billedThrough !== (k.billedThrough ?? "") || (figureField !== null && (toCents(f.figure) ?? null) !== (figureValue ?? null));
+  const dirty = f.name.trim() !== k.name || f.typeKey !== (k.typeKey ?? "") || f.startDate !== (k.startDate ?? "") || f.endDate !== (k.endDate ?? "") || f.billingPeriod !== k.billingPeriod || f.billedThrough !== (k.billedThrough ?? "") || (figureField !== null && (toCents(f.figure) ?? null) !== (figureValue ?? null)) || rate !== rateNow;
   const save = () => {
     const p: Record<string, unknown> = {};
     if (f.name.trim() !== k.name) p.name = f.name.trim();
@@ -691,6 +712,7 @@ function OverviewTab({ client, k, editable, onChanged, onClose }: { client: CrmD
     if (f.endDate !== (k.endDate ?? "")) p.endDate = f.endDate || null;
     if (f.billingPeriod !== k.billingPeriod) p.billingPeriod = f.billingPeriod;
     if (f.billedThrough !== (k.billedThrough ?? "")) p.billedThrough = f.billedThrough || null;
+    if (rate !== rateNow) p.hourlyRate = rate.trim() === "" ? 0 : Number(rate.replace(",", "."));
     if (figureField && (toCents(f.figure) ?? null) !== (figureValue ?? null)) {
       const n = f.figure.trim() === "" ? null : Number(f.figure.replace(",", "."));
       p[figureField] = n;
@@ -735,6 +757,9 @@ function OverviewTab({ client, k, editable, onChanged, onClose }: { client: CrmD
         </Field>
         <Field label={t("crm.contracts.billedThrough")} hint={t("crm.contracts.billedThroughText")}>
           <Input type="date" value={f.billedThrough} disabled={!editable} onChange={(e) => setF({ ...f, billedThrough: e.target.value })} />
+        </Field>
+        <Field label={t("crm.contracts.hourlyRate")} hint={t("crm.contracts.hourlyRateHint")}>
+          <Input value={rate} disabled={!editable} inputMode="decimal" placeholder={String(k.usualRateCents / 100)} onChange={(e) => setRate(e.target.value)} className="text-right font-mono" />
         </Field>
         {figureField && (
           <Field label={t(`crm.contracts.figure_${k.billingMode}`)}>
