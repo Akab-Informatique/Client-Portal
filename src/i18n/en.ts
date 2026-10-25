@@ -397,7 +397,8 @@ const en: Dict = {
         send: "Send to QuickBooks",
         resend: "Send the changes",
         notSent: "Not sent yet",
-        inQb: "Invoice no. {{id}}",
+        inQb: "In QuickBooks · invoice no. {{number}}",
+        internalId: "QuickBooks' own record number: {{id}} (not the invoice number)",
         syncedAt: "sent {{when}}",
         errors: {
           quickbooks_not_connected: "QuickBooks is not connected (Admin settings › Invoicing › QuickBooks).",

@@ -4,7 +4,9 @@ const locale = () => (currentLocale() === "en" ? "en-CA" : "fr-CA");
 
 export function relativeTime(iso: string | Date): string {
   const d = typeof iso === "string" ? new Date(iso) : iso;
-  const diff = (d.getTime() - Date.now()) / 1000;
+  let diff = (d.getTime() - Date.now()) / 1000;
+  // the server clock a little ahead of this browser's: "now", not "in 2 seconds"
+  if (diff > 0 && diff < 120) diff = 0;
   const rtf = new Intl.RelativeTimeFormat(locale(), { numeric: "auto" });
   const abs = Math.abs(diff);
   if (abs < 60) return rtf.format(Math.round(diff), "second");

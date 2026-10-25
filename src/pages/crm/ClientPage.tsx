@@ -633,8 +633,8 @@ function QuickBooksLine({ invoice: v, clientId }: { invoice: CrmInvoice; clientI
     <div className="flex flex-wrap items-center gap-2 text-xs">
       <span className="font-medium">QuickBooks</span>
       {qb?.id ? (
-        <span className="flex items-center gap-1 text-emerald-300">
-          <CircleCheck className="size-3.5" /> {t("crm.invoices.qb.inQb", { id: qb.id })}
+        <span className="flex items-center gap-1 text-emerald-300" title={t("crm.invoices.qb.internalId", { id: qb.id })}>
+          <CircleCheck className="size-3.5" /> {t("crm.invoices.qb.inQb", { number: v.number })}
           {qb.syncedAt && <span className="text-muted-foreground">· {t("crm.invoices.qb.syncedAt", { when: relativeTime(qb.syncedAt) })}</span>}
         </span>
       ) : (

@@ -395,7 +395,8 @@ const fr = {
         send: "Envoyer à QuickBooks",
         resend: "Renvoyer les changements",
         notSent: "Pas encore envoyée",
-        inQb: "Facture n° {{id}}",
+        inQb: "Dans QuickBooks · facture n° {{number}}",
+        internalId: "Numéro d'enregistrement interne de QuickBooks : {{id}} (pas le numéro de facture)",
         syncedAt: "envoyée {{when}}",
         errors: {
           quickbooks_not_connected: "QuickBooks n'est pas connecté (Paramètres admin › Facturation › QuickBooks).",
