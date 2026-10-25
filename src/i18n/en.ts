@@ -379,6 +379,11 @@ const en: Dict = {
       invoice: "Invoice settings",
     },
     invoices: {
+      taxesFix: "Fix the taxes ({{diff}})",
+      taxesFixTitle: "Fix the taxes of invoice {{number}}?",
+      taxesFixText: "The taxes are worked out again line by line, like QuickBooks ({{diff}}): the total becomes {{total}}. The invoice is then sent to QuickBooks again. If the client already got the old PDF, their amount is a cent different.",
+      taxesFixed: "Taxes fixed: total {{total}}.{{qb}}",
+      taxesFixedQb: " Sent to QuickBooks again.",
       lines: {
         description: "Description",
         qty: "Qty",

@@ -7436,4 +7436,52 @@ describe("contracts: services when made, charges, activity, stop instead of dele
       vi.unstubAllGlobals();
     }
   });
+
+  it("invoice taxes are rounded line by line, the way QuickBooks does (invoice 10100: QST 103,27 not 103,26)", async () => {
+    const admin = await signIn("admin@akab.local");
+    const { taxesOfLines } = await import("../shared/invoiceTax.ts");
+    // the six lines of invoice 10100: 1 035,16 $; QuickBooks says GST 51,76 and QST 103,27 (total 1 190,19)
+    expect(taxesOfLines([45000, 284, 2592, 29640, 6000, 20000], 5, 9.975)).toEqual({ gst: 5176, qst: 10327 });
+    // half a cent goes up, with no floating point drift (60,00 $ x 9,975 % = 5,985)
+    expect(taxesOfLines([6000], 5, 9.975)).toEqual({ gst: 300, qst: 599 });
+    expect(taxesOfLines([], 5, 9.975)).toEqual({ gst: 0, qst: 0 });
+    // in an invoice: the preview and the invoice made say the same
+    const [client] = await db().insert(schema.clients).values({ name: "Taxes lignes inc.", autotaskId: 987654390 }).returning();
+    const amounts = [45000, 284, 2592, 29640, 6000, 20000];
+    const rows = await db()
+      .insert(schema.billingItems)
+      .values(amounts.map((a, n) => ({ clientId: client!.id, kind: "charge", source: "portal", sourceId: `test:taxline:${n}`, date: "2026-10-01", description: `Ligne ${n}`, quantityX100: 100, unitPriceCents: a, amountCents: a, taxable: true, status: "approved", approvedAt: new Date() })))
+      .returning();
+    const itemIds = rows.map((r) => r.id);
+    const pv = (await admin.post("/api/billables/invoice/preview", { clientId: client!.id, itemIds })).json;
+    expect(pv).toMatchObject({ subtotalCents: 103516, gstCents: 5176, qstCents: 10327, totalCents: 119019 });
+    const made = (await admin.post("/api/billables/invoice", { clientId: client!.id, itemIds })).json;
+    expect(made.totalCents).toBe(119019);
+    expect((await db().select().from(schema.clientInvoices).where(eq(schema.clientInvoices.id, made.id)))[0]).toMatchObject({ totalCents: 119019, taxCents: 15503 });
+  });
+
+  it("an invoice made with the old rounding can be put on the line-by-line taxes (and sent to QuickBooks again)", async () => {
+    const admin = await signIn("admin@akab.local");
+    const tech = await signIn("tech@akab.local");
+    const [client] = await db().insert(schema.clients).values({ name: "Taxes à corriger inc.", autotaskId: 987654391 }).returning();
+    const amounts = [45000, 284, 2592, 29640, 6000, 20000];
+    const mk = async (number: string, taxCents: number) => {
+      const [inv] = await db().insert(schema.clientInvoices).values({ clientId: client!.id, number, issuedOn: "2026-09-30", dueOn: "2026-11-09", totalCents: 103516 + taxCents, taxCents, source: "portal" }).returning();
+      await db().insert(schema.invoiceLines).values(amounts.map((a, n) => ({ invoiceId: inv!.id, kind: "charge", description: `Ligne ${n}`, quantityX100: 100, unitPriceCents: a, amountCents: a, taxable: true, position: n })));
+      return inv!;
+    };
+    // made with the tax taken once on the total: 51,76 + 103,26 = 155,02 (QuickBooks: 155,03)
+    const old = await mk("TX-1", 15502);
+    const view = async (id: string) => (await admin.get(`/api/crm/clients/${client!.id}/invoices`)).json.items.find((x: any) => x.id === id);
+    expect((await view(old.id)).taxFixCents).toBe(1);
+    expect((await tech.post(`/api/crm/invoices/${old.id}/taxes`, {})).status).toBe(403);
+    const r = (await admin.post(`/api/crm/invoices/${old.id}/taxes`, {})).json;
+    expect(r).toMatchObject({ before: { taxCents: 15502, totalCents: 119018 }, after: { taxCents: 15503, totalCents: 119019 }, sentToQuickBooks: false });
+    expect(await view(old.id)).toMatchObject({ totalCents: 119019, taxFixCents: 0 });
+    // already right: nothing to change; with a payment: refused and not offered
+    const paid = await mk("TX-2", 15502);
+    await db().insert(schema.invoicePayments).values({ invoiceId: paid.id, amountCents: 1000, paidOn: "2026-10-01", method: "transfer" });
+    expect((await view(paid.id)).taxFixCents).toBe(0);
+    expect((await admin.post(`/api/crm/invoices/${paid.id}/taxes`, {})).json.error).toBe("invoice_has_payments");
+  });
 });

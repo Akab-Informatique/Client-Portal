@@ -377,6 +377,11 @@ const fr = {
       invoice: "Paramètres de facturation",
     },
     invoices: {
+      taxesFix: "Corriger les taxes ({{diff}})",
+      taxesFixTitle: "Corriger les taxes de la facture {{number}} ?",
+      taxesFixText: "Les taxes sont recalculées ligne par ligne, comme QuickBooks ({{diff}}) : le total devient {{total}}. La facture est ensuite renvoyée à QuickBooks. Si le client a déjà reçu l'ancien PDF, il a un montant différent d'un cent.",
+      taxesFixed: "Taxes corrigées : total {{total}}.{{qb}}",
+      taxesFixedQb: " Renvoyée à QuickBooks.",
       lines: {
         description: "Description",
         qty: "Qté",

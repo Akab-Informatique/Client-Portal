@@ -3,6 +3,7 @@ import PDFDocument from "pdfkit";
 import { asc, eq } from "drizzle-orm";
 import { db, schema } from "../db/index.ts";
 import { billingSettings } from "./billing.ts";
+import { taxesOfLines } from "../../shared/invoiceTax.ts";
 
 /**
  * The PDF copy of an invoice, drawn like the sheet of Admin › Facturation › Modèle de facture: the logo in its pill, the
@@ -51,7 +52,10 @@ export async function invoicePdf(invoiceId: string, payUrl: string | null = null
     : [{ date: inv.issuedOn, description: `Facture ${inv.number}`, contractName: null, kind: "other", quantity: 1, unitPriceCents: subtotal, amountCents: subtotal }];
   const gstRate = s.taxes.gstRate;
   const qstRate = s.taxes.qstRate;
-  const gst = inv.taxCents ? Math.round((inv.taxCents * gstRate) / (gstRate + qstRate)) : 0;
+  // line by line, as when the invoice was made; when that does not give the stored tax (an older invoice), the stored tax is split by the rates
+  const byLine = taxesOfLines(rows.length ? rows.filter(({ l }) => l.taxable).map(({ l }) => l.amountCents) : [subtotal], gstRate, qstRate);
+  const exactSplit = inv.taxCents > 0 && byLine.gst + byLine.qst === inv.taxCents;
+  const gst = exactSplit ? byLine.gst : inv.taxCents ? Math.round((inv.taxCents * gstRate) / (gstRate + qstRate)) : 0;
   const qst = inv.taxCents - gst;
   const hours = lines.filter((l) => l.kind === "labour").reduce((n, l) => n + l.quantity, 0);
   const termsDays = client?.invoice?.termsDays ?? s.template.termsDays;

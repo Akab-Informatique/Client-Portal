@@ -15,6 +15,7 @@ import { ticketSource, type NTicket } from "../lib/ticketSource.ts";
 import { crmState, descendantsOf, ensureCrm, rememberCompany, rememberContact, syncCrm } from "../lib/crm.ts";
 import { lookup, run } from "./tickets.ts";
 import { pushInvoice } from "../lib/quickbooks.ts";
+import { DraftError, recalcInvoiceTaxes, taxesByLine } from "../lib/billables.ts";
 import { InvoiceMailError, invoicePdfFor, sendInvoiceMail, sendStatement, sendStatements, statementOf, statementTargets } from "../lib/invoiceMail.ts";
 import { applyAutoApprove } from "../lib/billables.ts";
 import { BILLING_MODES, KIND_MODE, contractTypes, usedHoursOf, type ContractKind } from "../lib/contracts.ts";
@@ -758,6 +759,21 @@ export const crmRoutes = new Hono<AppEnv>()
       return mailHttp(e);
     }
   })
+  /** Put an invoice on the line-by-line taxes (the way QuickBooks rounds them), and send it to QuickBooks again */
+  .post("/invoices/:iid/taxes", requirePermission("accounting.manage"), async (c) => {
+    const a = auth(c);
+    const id = zUuid.parse(c.req.param("iid"));
+    try {
+      const r = await recalcInvoiceTaxes(id);
+      await audit(a.user.id, "billing.invoice_taxes_recalculated", id, r);
+      const [inv] = await db().select({ qb: schema.clientInvoices.quickbooksId }).from(schema.clientInvoices).where(eq(schema.clientInvoices.id, id));
+      const sent = inv?.qb ? await pushInvoice(id).catch(() => null) : null;
+      return c.json({ ...r, sentToQuickBooks: Boolean(sent) });
+    } catch (e) {
+      if (e instanceof DraftError) throw new HTTPException(409, { message: e.message });
+      return mailHttp(e);
+    }
+  })
   // ── emails: an invoice, a reminder, an account statement (one client, some, or all that owe something)
   .post("/invoices/:iid/mail", requirePermission("accounting.manage"), async (c) => {
     const p = await body(c, z.object({ kind: z.enum(["sent", "reminder"]) }));
@@ -988,6 +1004,15 @@ async function invoiceViews(rows: (typeof schema.clientInvoices.$inferSelect)[],
     }
   }
   const today = new Date().toLocaleDateString("en-CA", { timeZone: "America/Toronto" });
+  // an invoice of the portal, with no payment, whose taxes are not the line-by-line ones: how much they would change
+  const taxFix = new Map<string, number>();
+  if (opts.lines) {
+    for (const v of rows) {
+      if (v.source !== "portal" || v.voided || v.taxCents === 0 || payments.some((x) => x.p.invoiceId === v.id)) continue;
+      const diff = (await taxesByLine(v.id)) - v.taxCents;
+      if (diff !== 0) taxFix.set(v.id, diff);
+    }
+  }
   return rows.map((v) => {
     const mine = payments.filter((x) => x.p.invoiceId === v.id);
     const received = mine.reduce((s, x) => s + x.p.amountCents, 0);
@@ -1014,6 +1039,7 @@ async function invoiceViews(rows: (typeof schema.clientInvoices.$inferSelect)[],
       notes: v.notes,
       poNumber: v.poNumber,
       emailedAt: v.emailedAt,
+      taxFixCents: taxFix.get(v.id) ?? 0,
       lines: (lines.get(v.id) ?? []).map((l) => ({ id: l.id, kind: l.kind, description: l.description, quantity: l.quantityX100 / 100, unitPriceCents: l.unitPriceCents, amountCents: l.amountCents, taxable: l.taxable })),
       quickbooks: v.quickbooksId || v.quickbooksError ? { id: v.quickbooksId, syncedAt: v.quickbooksSyncedAt, error: v.quickbooksError } : null,
       payments: mine.map((x) => ({ id: x.p.id, amountCents: x.p.amountCents, paidOn: x.p.paidOn, method: x.p.method, reference: x.p.reference, note: x.p.note, source: x.p.source, by: x.by })),

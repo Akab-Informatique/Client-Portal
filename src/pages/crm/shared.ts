@@ -60,6 +60,8 @@ export type InvoiceStatus = "paid" | "partial" | "due" | "overdue" | "voided";
 export type InvoicePayment = { id: string; amountCents: number; paidOn: string; method: string; reference: string | null; note: string | null; source: string; by: string | null };
 export type CrmInvoice = {
   id: string;
+  /** The taxes would change by this much when put on the line-by-line rounding of QuickBooks (0: they already are, or cannot be changed) */
+  taxFixCents?: number;
   number: string;
   company: string;
   issuedOn: string;

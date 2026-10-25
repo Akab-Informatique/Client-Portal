@@ -7,6 +7,7 @@ import {
   ArrowLeft,
   AlertTriangle,
   Building2,
+  Calculator,
   Check,
  
   CircleCheck,
@@ -557,8 +558,9 @@ function InvoicesTab({ client }: { client: CrmDetail }) {
                       </span>
                     </button>
                     {expanded && (
-                      <div className="px-3 pb-1">
+                      <div className="flex flex-wrap items-center gap-2 px-3 pb-1">
                         <InvoiceMailButtons invoice={v} />
+                        <FixTaxesButton invoice={v} />
                       </div>
                     )}
                     {expanded && <Payments invoice={v} clientId={client.id} />}
@@ -571,6 +573,41 @@ function InvoicesTab({ client }: { client: CrmDetail }) {
       </Card>
       {statement && <ClientStatementDialog clientId={client.id} onClose={() => setStatement(false)} />}
     </div>
+  );
+}
+
+/** When an invoice's taxes are a cent out of QuickBooks: puts them on the line-by-line rounding and sends the invoice again */
+function FixTaxesButton({ invoice: v }: { invoice: CrmInvoice }) {
+  const { t, i18n } = useTranslation();
+  const can = useCan();
+  const qc = useQueryClient();
+  const confirm = useConfirm();
+  const fix = useMutation({
+    mutationFn: () => api.post<{ after: { totalCents: number }; sentToQuickBooks: boolean }>(`/crm/invoices/${v.id}/taxes`),
+    onSuccess: (r) => {
+      void qc.invalidateQueries({ queryKey: ["crm"] });
+      toast.success(t("crm.invoices.taxesFixed", { total: money(r.after.totalCents, i18n.language), qb: r.sentToQuickBooks ? t("crm.invoices.taxesFixedQb") : "" }));
+    },
+    onError: () => toast.error(t("common.error")),
+  });
+  if (!v.taxFixCents || !can("accounting.manage")) return null;
+  const diff = money(Math.abs(v.taxFixCents), i18n.language);
+  return (
+    <Button
+      type="button"
+      size="sm"
+      variant="outline"
+      className="h-7 text-xs"
+      disabled={fix.isPending}
+      onClick={() =>
+        void confirm({
+          title: t("crm.invoices.taxesFixTitle", { number: v.number }),
+          description: t("crm.invoices.taxesFixText", { diff: `${v.taxFixCents! > 0 ? "+" : "−"}${diff}`, total: money(v.totalCents + v.taxFixCents!, i18n.language) }),
+        }).then((ok) => ok && fix.mutate())
+      }
+    >
+      {fix.isPending ? <Loader2 className="size-3.5 animate-spin" /> : <Calculator className="size-3.5" />} {t("crm.invoices.taxesFix", { diff: `${v.taxFixCents > 0 ? "+" : "−"}${diff}` })}
+    </Button>
   );
 }
 

@@ -2,6 +2,7 @@ import { and, asc, eq, gte, inArray, isNotNull, lte, or, sql } from "drizzle-orm
 import { db, schema } from "../db/index.ts";
 import { alignNumbering, qbItemsForBillingItems } from "./quickbooks.ts";
 import { dueAfterSent } from "../../shared/invoiceDue.ts";
+import { taxesOfLines } from "../../shared/invoiceTax.ts";
 import { hourlyRateOf } from "./contracts.ts";
 import { billingSettings, formatInvoiceNumber, quickbooksSettings, saveBillingSettings, type BillingSettings } from "./billing.ts";
 import { ensureCrm } from "./crm.ts";
@@ -261,9 +262,10 @@ export async function editBillable(id: string, p: { quantity?: number; unitPrice
 // ── invoicing: approved items → an invoice ──
 const ACCOUNT_OF: Record<BillableKind, keyof BillingSettings["accounts"]> = { labour: "labour", charge: "charges", expense: "charges", contract: "contracts", milestone: "contracts", project: "labour" };
 
-function taxesOf(s: BillingSettings, taxableCents: number, exempt: boolean) {
+/** The taxes of an invoice, line by line (the way QuickBooks rounds them) */
+function taxesOf(s: BillingSettings, taxableLinesCents: number[], exempt: boolean) {
   if (exempt) return { gst: 0, qst: 0 };
-  return { gst: Math.round((taxableCents * s.taxes.gstRate) / 100), qst: Math.round((taxableCents * s.taxes.qstRate) / 100) };
+  return taxesOfLines(taxableLinesCents, s.taxes.gstRate, s.taxes.qstRate);
 }
 
 /** Per client: the approved items of the time frame, by kind (what can be invoiced). */
@@ -307,6 +309,34 @@ export class DraftError extends Error {}
 
 const todayQc = () => new Date().toLocaleDateString("en-CA", { timeZone: "America/Toronto" });
 
+/** What the taxes of an invoice made by the portal come to line by line (the way QuickBooks rounds them); 0 for a tax-exempt one. */
+export async function taxesByLine(invoiceId: string): Promise<number> {
+  const [inv] = await db().select().from(schema.clientInvoices).where(eq(schema.clientInvoices.id, invoiceId));
+  if (!inv || inv.taxCents === 0) return 0;
+  const lines = await db().select({ a: schema.invoiceLines.amountCents, t: schema.invoiceLines.taxable }).from(schema.invoiceLines).where(eq(schema.invoiceLines.invoiceId, invoiceId));
+  if (!lines.length) return inv.taxCents;
+  const s = await billingSettings();
+  const t = taxesOfLines(lines.filter((l) => l.t).map((l) => l.a), s.taxes.gstRate, s.taxes.qstRate);
+  return t.gst + t.qst;
+}
+
+/**
+ * Put an invoice made by the portal on the line-by-line taxes (when it was made the taxes were rounded on the total and
+ * were a cent out of QuickBooks). Refused once money was received or for a voided / copied invoice.
+ */
+export async function recalcInvoiceTaxes(invoiceId: string): Promise<{ before: { taxCents: number; totalCents: number }; after: { taxCents: number; totalCents: number } }> {
+  const [inv] = await db().select().from(schema.clientInvoices).where(eq(schema.clientInvoices.id, invoiceId));
+  if (!inv) throw new DraftError("not_found");
+  if (inv.source !== "portal") throw new DraftError("invoice_not_portal");
+  if (inv.voided) throw new DraftError("invoice_voided");
+  const [{ n }] = await db().select({ n: sql<number>`count(*)::int` }).from(schema.invoicePayments).where(eq(schema.invoicePayments.invoiceId, invoiceId));
+  if (n > 0) throw new DraftError("invoice_has_payments");
+  const taxCents = await taxesByLine(invoiceId);
+  const totalCents = inv.totalCents - inv.taxCents + taxCents;
+  await db().update(schema.clientInvoices).set({ taxCents, totalCents, updatedAt: new Date() }).where(eq(schema.clientInvoices.id, invoiceId));
+  return { before: { taxCents: inv.taxCents, totalCents: inv.totalCents }, after: { taxCents, totalCents } };
+}
+
 /** The invoice the draft would make (nothing saved): its lines, taxes, dates, the number it would get. */
 export async function draftInvoice(p: InvoiceDraft) {
   const s = await billingSettings();
@@ -332,9 +362,8 @@ export async function draftInvoice(p: InvoiceDraft) {
   // counted from the day it is sent (an invoice goes out when it is made), not from the date written on it
   if (!dueOn) dueOn = dueAfterSent(todayQc(), termsDays);
   const subtotal = items.reduce((x, i) => x + i.amountCents, 0);
-  const taxable = items.filter((i) => i.taxable).reduce((x, i) => x + i.amountCents, 0);
   const exempt = client.invoice?.taxes === false;
-  const { gst, qst } = taxesOf(s, taxable, exempt);
+  const { gst, qst } = taxesOf(s, items.filter((i) => i.taxable).map((i) => i.amountCents), exempt);
   return {
     client: { id: client.id, name: client.name, address: client.address, city: client.city, province: client.province, postalCode: client.postalCode, email: client.invoice?.billingEmail || client.email },
     number: await peekNumber(),
