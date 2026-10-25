@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { Fragment, useEffect, useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
@@ -63,6 +63,7 @@ export type Item = {
   invoiceNumber: string | null;
   autoApproved: boolean;
   excludedReason: string | null;
+  contractId?: string | null;
   qbItemId?: string | null;
   qbTaxCodeId?: string | null;
 };
@@ -681,6 +682,79 @@ function KindTab({ kind, counts, lang, pq }: { kind: Kind; counts: (s: Status) =
   });
   const m = (c: number) => money(c, lang);
   const total = items.reduce((x, i) => x + i.amountCents, 0);
+  const renderItem = (i: Item) => (
+    <li
+      key={i.id}
+      className="group grid grid-cols-[auto_minmax(0,1fr)_auto] items-start gap-3 px-3 py-2 text-sm md:grid-cols-[auto_90px_minmax(0,1fr)_80px_100px_110px_auto]"
+    >
+      {manage ? <Checkbox className="mt-1" checked={sel.has(i.id)} onCheckedChange={(v) => setMany([i.id], Boolean(v))} /> : <span />}
+      <span className="hidden pt-1 text-xs text-muted-foreground md:block">
+        {shortDate(i.date)}
+        {i.dateEnd && <span className="block">→ {shortDate(i.dateEnd)}</span>}
+      </span>
+      <span className="min-w-0">
+        {manage ? (
+          <InlineText
+            value={i.description}
+            label={t("approvals.description")}
+            onSave={(description) => edit.mutate({ id: i.id, patch: { description } })}
+          />
+        ) : (
+          <span className="block break-words">{i.description}</span>
+        )}
+        <span className="block px-1 text-[11px] text-muted-foreground">
+          {[
+            i.ticketNumber && `${t("approvals.ticket")} ${i.ticketNumber}`,
+            i.contractName,
+            i.resourceName,
+            i.edited && t("approvals.edited"),
+            i.invoiceNumber && t("approvals.onInvoice", { number: i.invoiceNumber }),
+          ]
+            .filter(Boolean)
+            .join(" · ")}
+        </span>
+      </span>
+      <span className="hidden text-right font-mono text-xs md:block">
+        {manage ? (
+          <InlineNumber
+            value={i.quantityX100 / 100}
+            lang={lang}
+            label={t(i.kind === "labour" ? "approvals.hours" : "approvals.quantity")}
+            onSave={(quantity) => edit.mutate({ id: i.id, patch: { quantity } })}
+          />
+        ) : (
+          (i.quantityX100 / 100).toLocaleString(lang === "en" ? "en-CA" : "fr-CA")
+        )}
+      </span>
+      <span className="hidden text-right font-mono text-xs text-muted-foreground md:block">
+        {manage ? (
+          <InlineNumber
+            value={i.unitPriceCents / 100}
+            lang={lang}
+            money
+            label={t("approvals.rate")}
+            onSave={(rate) => edit.mutate({ id: i.id, patch: { unitPriceCents: Math.round(rate * 100) } })}
+          />
+        ) : (
+          m(i.unitPriceCents)
+        )}
+      </span>
+      <span className="pt-1 text-right font-mono">{m(i.amountCents)}</span>
+      <span className="flex items-center justify-end gap-1 pt-0.5">
+        {i.autoApproved && i.status === "approved" && (
+          <span
+            className="flex items-center gap-0.5 rounded-md border border-violet-500/40 bg-violet-500/10 px-1 py-0.5 text-[10px] text-violet-300"
+            title={t("approvals.autoHint")}
+          >
+            <Sparkles className="size-2.5" /> {t("approvals.auto")}
+          </span>
+        )}
+        <span className={cn("rounded-md border px-1.5 py-0.5 text-[10px]", STATUS_STYLE[i.status])}>
+          {i.status === "excluded" && i.excludedReason === "billed" ? t("approvals.alreadyBilledTag") : i.status === "excluded" && i.excludedReason === "aside" ? t("approvals.asideTag") : t(`approvals.status.${i.status}`)}
+        </span>
+      </span>
+    </li>
+  );
   return (
     <div className="space-y-3">
       <div className="flex flex-wrap items-center gap-2">
@@ -812,79 +886,37 @@ function KindTab({ kind, counts, lang, pq }: { kind: Kind; counts: (s: Status) =
             </div>
             {!closed && (
               <ul className="divide-y divide-border/60">
-                {g.items.map((i) => (
-                  <li
-                    key={i.id}
-                    className="group grid grid-cols-[auto_minmax(0,1fr)_auto] items-start gap-3 px-3 py-2 text-sm md:grid-cols-[auto_90px_minmax(0,1fr)_80px_100px_110px_auto]"
-                  >
-                    {manage ? <Checkbox className="mt-1" checked={sel.has(i.id)} onCheckedChange={(v) => setMany([i.id], Boolean(v))} /> : <span />}
-                    <span className="hidden pt-1 text-xs text-muted-foreground md:block">
-                      {shortDate(i.date)}
-                      {i.dateEnd && <span className="block">→ {shortDate(i.dateEnd)}</span>}
-                    </span>
-                    <span className="min-w-0">
-                      {manage ? (
-                        <InlineText
-                          value={i.description}
-                          label={t("approvals.description")}
-                          onSave={(description) => edit.mutate({ id: i.id, patch: { description } })}
-                        />
-                      ) : (
-                        <span className="block break-words">{i.description}</span>
-                      )}
-                      <span className="block px-1 text-[11px] text-muted-foreground">
-                        {[
-                          i.ticketNumber && `${t("approvals.ticket")} ${i.ticketNumber}`,
-                          i.contractName,
-                          i.resourceName,
-                          i.edited && t("approvals.edited"),
-                          i.invoiceNumber && t("approvals.onInvoice", { number: i.invoiceNumber }),
-                        ]
-                          .filter(Boolean)
-                          .join(" · ")}
-                      </span>
-                    </span>
-                    <span className="hidden text-right font-mono text-xs md:block">
-                      {manage ? (
-                        <InlineNumber
-                          value={i.quantityX100 / 100}
-                          lang={lang}
-                          label={t(i.kind === "labour" ? "approvals.hours" : "approvals.quantity")}
-                          onSave={(quantity) => edit.mutate({ id: i.id, patch: { quantity } })}
-                        />
-                      ) : (
-                        (i.quantityX100 / 100).toLocaleString(lang === "en" ? "en-CA" : "fr-CA")
-                      )}
-                    </span>
-                    <span className="hidden text-right font-mono text-xs text-muted-foreground md:block">
-                      {manage ? (
-                        <InlineNumber
-                          value={i.unitPriceCents / 100}
-                          lang={lang}
-                          money
-                          label={t("approvals.rate")}
-                          onSave={(rate) => edit.mutate({ id: i.id, patch: { unitPriceCents: Math.round(rate * 100) } })}
-                        />
-                      ) : (
-                        m(i.unitPriceCents)
-                      )}
-                    </span>
-                    <span className="pt-1 text-right font-mono">{m(i.amountCents)}</span>
-                    <span className="flex items-center justify-end gap-1 pt-0.5">
-                      {i.autoApproved && i.status === "approved" && (
-                        <span
-                          className="flex items-center gap-0.5 rounded-md border border-violet-500/40 bg-violet-500/10 px-1 py-0.5 text-[10px] text-violet-300"
-                          title={t("approvals.autoHint")}
-                        >
-                          <Sparkles className="size-2.5" /> {t("approvals.auto")}
-                        </span>
-                      )}
-                      <span className={cn("rounded-md border px-1.5 py-0.5 text-[10px]", STATUS_STYLE[i.status])}>
-                        {i.status === "excluded" && i.excludedReason === "billed" ? t("approvals.alreadyBilledTag") : i.status === "excluded" && i.excludedReason === "aside" ? t("approvals.asideTag") : t(`approvals.status.${i.status}`)}
-                      </span>
-                    </span>
-                  </li>
-                ))}
+                <li aria-hidden className="hidden grid-cols-[auto_90px_minmax(0,1fr)_80px_100px_110px_auto] gap-3 bg-background/20 px-3 py-1.5 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground md:grid">
+                  <span className="w-4" />
+                  <span>{t("approvals.col.date")}</span>
+                  <span>{t("approvals.col.description")}</span>
+                  <span className="text-right">{t(kind === "labour" ? "approvals.col.hours" : "approvals.col.qty")}</span>
+                  <span className="text-right">{t(kind === "labour" ? "approvals.col.rate" : "approvals.col.unitPrice")}</span>
+                  <span className="text-right">{t("approvals.col.amount")}</span>
+                  <span />
+                </li>
+                {kind === "contract"
+                  ? byContract(g.items).map((cg) => (
+                      <Fragment key={cg.key}>
+                        <li className="flex items-center gap-3 border-t bg-background/30 px-3 py-1.5 text-xs font-semibold">
+                          {manage ? (
+                            <Checkbox
+                              checked={cg.items.every((x) => sel.has(x.id)) ? true : cg.items.some((x) => sel.has(x.id)) ? "indeterminate" : false}
+                              onCheckedChange={(v) => setMany(cg.items.map((x) => x.id), Boolean(v))}
+                              aria-label={cg.name}
+                            />
+                          ) : (
+                            <span className="w-4" />
+                          )}
+                          <FileText className="size-3.5 shrink-0 text-primary" />
+                          <span className="min-w-0 flex-1 truncate">{cg.name}</span>
+                          <span className="shrink-0 font-normal text-muted-foreground">{t("approvals.items", { count: cg.items.length })}</span>
+                          <span className="shrink-0 font-mono">{m(cg.items.reduce((x, i) => x + i.amountCents, 0))}</span>
+                        </li>
+                        {cg.items.map(renderItem)}
+                      </Fragment>
+                    ))
+                  : g.items.map(renderItem)}
               </ul>
             )}
           </section>
@@ -892,6 +924,20 @@ function KindTab({ kind, counts, lang, pq }: { kind: Kind; counts: (s: Status) =
       })}
     </div>
   );
+}
+
+/** The lines of a client's recurring contracts, one group per contract (its services inside, by charge date) */
+function byContract(items: Item[]) {
+  const m = new Map<string, { key: string; name: string; items: Item[] }>();
+  for (const i of items) {
+    const key = i.contractId ?? i.contractName ?? "—";
+    const g = m.get(key) ?? { key, name: i.contractName ?? "—", items: [] };
+    g.items.push(i);
+    m.set(key, g);
+  }
+  return [...m.values()]
+    .map((g) => ({ ...g, items: g.items.sort((x, y) => x.date.localeCompare(y.date) || x.description.localeCompare(y.description)) }))
+    .sort((x, y) => x.name.localeCompare(y.name));
 }
 
 const COLLAPSED_KEY = "akab.approvals.collapsed";
@@ -910,38 +956,53 @@ function saveCollapsed(s: Set<string>) {
   }
 }
 
-/** Text that is edited where it is: a click, then Enter or leaving the field saves; Escape cancels. */
-function InlineText({ value, label, onSave }: { value: string; label: string; onSave: (v: string) => void }) {
-  const [v, setV] = useState(value);
-  useEffect(() => setV(value), [value]);
-  const commit = () => {
-    const next = v.trim();
-    if (!next) return setV(value);
-    if (next !== value) onSave(next);
-  };
+/** The small check (approve) and cross (drop) beside a box that was changed */
+function Confirm({ onYes, onNo, label }: { onYes: () => void; onNo: () => void; label: string }) {
   return (
-    <textarea
-      value={v}
-      rows={1}
-      aria-label={label}
-      onChange={(e) => setV(e.target.value)}
-      onBlur={commit}
-      onKeyDown={(e) => {
-        if (e.key === "Enter" && !e.shiftKey) {
-          e.preventDefault();
-          (e.target as HTMLTextAreaElement).blur();
-        }
-        if (e.key === "Escape") {
-          setV(value);
-          (e.target as HTMLTextAreaElement).blur();
-        }
-      }}
-      className="field-sizing-content block w-full resize-none rounded-md border border-transparent bg-transparent px-1 py-0.5 break-words outline-none hover:border-border focus:border-[color:var(--gold)]/60 focus:bg-background/60"
-    />
+    <span className="absolute right-0 top-full z-10 mt-0.5 flex gap-1 rounded-md border bg-popover p-0.5 shadow-md">
+      <button type="button" onMouseDown={(e) => e.preventDefault()} onClick={onYes} aria-label={label} title={label} className="grid size-6 place-items-center rounded bg-emerald-600 text-white hover:bg-emerald-500">
+        <Check className="size-3.5" />
+      </button>
+      <button type="button" onMouseDown={(e) => e.preventDefault()} onClick={onNo} aria-label="✗" className="grid size-6 place-items-center rounded border text-muted-foreground hover:bg-accent">
+        <X className="size-3.5" />
+      </button>
+    </span>
   );
 }
 
-/** A number edited where it is (hours, quantity, rate). */
+/** Text that is changed where it is: nothing is saved until the check (or Enter); the cross (or Escape) puts it back. */
+function InlineText({ value, label, onSave }: { value: string; label: string; onSave: (v: string) => void }) {
+  const { t } = useTranslation();
+  const [v, setV] = useState(value);
+  useEffect(() => setV(value), [value]);
+  const dirty = v.trim() !== value && v.trim() !== "";
+  const yes = () => dirty && onSave(v.trim());
+  const no = () => setV(value);
+  return (
+    <span className="relative block">
+      <textarea
+        value={v}
+        rows={1}
+        aria-label={label}
+        onChange={(e) => setV(e.target.value)}
+        onKeyDown={(e) => {
+          if (e.key === "Enter" && !e.shiftKey) {
+            e.preventDefault();
+            yes();
+          }
+          if (e.key === "Escape") no();
+        }}
+        className={cn(
+          "field-sizing-content block w-full resize-none rounded-md border bg-transparent px-1 py-0.5 break-words outline-none hover:border-border focus:border-[color:var(--gold)]/60 focus:bg-background/60",
+          dirty ? "border-[color:var(--gold)]/60" : "border-transparent",
+        )}
+      />
+      {dirty && <Confirm onYes={yes} onNo={no} label={t("approvals.confirmChange")} />}
+    </span>
+  );
+}
+
+/** A number (hours, quantity, unit price) changed where it is: saved by the check (or Enter), put back by the cross (or Escape). */
 function InlineNumber({
   value,
   lang,
@@ -955,33 +1016,38 @@ function InlineNumber({
   money?: boolean;
   onSave: (v: number) => void;
 }) {
+  const { t } = useTranslation();
   const loc = lang === "en" ? "en-CA" : "fr-CA";
-  const show = (n: number) =>
-    asMoney ? n.toLocaleString(loc, { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : n.toLocaleString(loc, { maximumFractionDigits: 2 });
+  const show = (n: number) => (asMoney ? n.toLocaleString(loc, { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : n.toLocaleString(loc, { maximumFractionDigits: 2 }));
   const [v, setV] = useState(show(value));
-  useEffect(() => setV(show(value)), [value]);
-  const commit = () => {
-    const n = Number(v.replace(/\s/g, "").replace(",", "."));
-    if (!Number.isFinite(n) || n < 0) return setV(show(value));
-    if (Math.round(n * 100) !== Math.round(value * 100)) onSave(n);
-    else setV(show(value));
-  };
+  useEffect(() => setV(show(value)), [value]); // eslint-disable-line react-hooks/exhaustive-deps
+  const parsed = Number(v.replace(/\s/g, "").replace(",", "."));
+  const valid = Number.isFinite(parsed) && parsed >= 0 && v.trim() !== "";
+  const dirty = valid && Math.round(parsed * 100) !== Math.round(value * 100);
+  const yes = () => dirty && onSave(parsed);
+  const no = () => setV(show(value));
   return (
-    <input
-      value={v}
-      inputMode="decimal"
-      aria-label={label}
-      onChange={(e) => setV(e.target.value)}
-      onFocus={(e) => e.target.select()}
-      onBlur={commit}
-      onKeyDown={(e) => {
-        if (e.key === "Enter") (e.target as HTMLInputElement).blur();
-        if (e.key === "Escape") {
-          setV(show(value));
-          (e.target as HTMLInputElement).blur();
-        }
-      }}
-      className="w-full rounded-md border border-transparent bg-transparent px-1 py-0.5 text-right font-mono outline-none hover:border-border focus:border-[color:var(--gold)]/60 focus:bg-background/60"
-    />
+    <span className="relative block">
+      <input
+        value={v}
+        inputMode="decimal"
+        aria-label={label}
+        onChange={(e) => setV(e.target.value)}
+        onFocus={(e) => e.target.select()}
+        onKeyDown={(e) => {
+          if (e.key === "Enter") yes();
+          if (e.key === "Escape") {
+            no();
+            (e.target as HTMLInputElement).blur();
+          }
+        }}
+        className={cn(
+          "w-full rounded-md border bg-transparent px-1 py-0.5 text-right font-mono outline-none hover:border-border focus:border-[color:var(--gold)]/60 focus:bg-background/60",
+          dirty ? "border-[color:var(--gold)]/60" : "border-transparent",
+          v.trim() !== "" && !valid && "border-destructive",
+        )}
+      />
+      {dirty && <Confirm onYes={yes} onNo={no} label={t("approvals.confirmChange")} />}
+    </span>
   );
 }

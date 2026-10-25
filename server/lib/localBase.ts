@@ -8,6 +8,7 @@
  * What the portal makes gets ids kept apart (see ids.ts), so a
  * link made again later can never meet them.
  */
+import { contractBillables } from "./contractBills.ts";
 import { and, asc, eq, ilike, isNotNull, isNull, or, sql } from "drizzle-orm";
 import { db, schema } from "../db/index.ts";
 import { LOCAL_PREFIX, NATIVE_ID_START } from "./ids.ts";
@@ -94,8 +95,9 @@ export const localBase: TicketSource = {
   async crmExport() {
     return { companies: [], contacts: [], contracts: [], invoices: [], invoicesRead: false };
   },
-  async billables() {
-    return { items: [], errors: {} };
+  // the recurring charges of the contracts (the labour and charges come from the portal's tickets)
+  async billables(since) {
+    return { items: await contractBillables(since), errors: {} };
   },
   async addCompany(p) {
     const id = await nextCompanyId();

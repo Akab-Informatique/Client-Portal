@@ -7293,4 +7293,74 @@ describe("contracts: services when made, charges, activity, stop instead of dele
     // again: nothing more to change
     expect((await admin.post("/api/billables/rates", { from: "2026-10-01", to: "2026-10-31" })).json).toMatchObject({ updated: 0 });
   });
+
+  it("approval: the recurring charges of a contract are lines to approve — quantity × unit price, one group per contract; old unapproved imports go", async () => {
+    const admin = await signIn("admin@akab.local");
+    const { contractBillables } = await import("../server/lib/contractBills.ts");
+    const { saveBillingSettings } = await import("../server/lib/billing.ts");
+    const { addDaysYmd } = await import("../shared/invoiceDue.ts");
+    const [adminRow] = await db().select().from(schema.users).where(eq(schema.users.email, "admin@akab.local"));
+    await saveBillingSettings(adminRow!.id, { autotask: { invoicesSince: "2000-01-01", invoiceMinNumber: null, itemsSince: "2000-01-01" } });
+    // the portal on its own (the lines come from the portal's own data)
+    const [prev] = await db().select().from(schema.integrations).where(eq(schema.integrations.provider, "tickets"));
+    await db().insert(schema.integrations).values({ provider: "tickets", enabled: true, config: { mode: "local" } }).onConflictDoUpdate({ target: schema.integrations.provider, set: { enabled: true, config: { mode: "local" } } });
+    try {
+      const today = new Date().toLocaleDateString("en-CA", { timeZone: "America/Toronto" });
+      const first = `${addDaysYmd(today.slice(0, 7) + "-01", -62).slice(0, 7)}-01`;
+      const [client] = await db().insert(schema.clients).values({ name: "Contrats lignes inc.", autotaskId: 987654370 }).returning();
+      const [aide, surveillance, miMois] = await db()
+        .insert(schema.services)
+        .values([
+          { name: "Aide", kind: "recurring", priceCents: 4500, taxable: true },
+          { name: "Surveillance", kind: "recurring", priceCents: 30000, taxable: false },
+          { name: "Mi-mois", kind: "recurring", priceCents: 9000, taxable: true },
+        ])
+        .returning();
+      const made = (
+        await admin.post(`/api/crm/clients/${client!.id}/contracts`, {
+          name: "Soutien",
+          typeKey: "recurring",
+          startDate: first,
+          endDate: addDaysYmd(first, 400),
+          services: [
+            { serviceId: aide!.id, addedOn: first, quantity: 10 },
+            { serviceId: surveillance!.id, addedOn: first, quantity: 1 },
+            { serviceId: miMois!.id, addedOn: addDaysYmd(first, 15), quantity: 1 },
+          ],
+        })
+      ).json;
+      const lines = await contractBillables("2000-01-01");
+      const mine = lines.filter((l) => l.contractSourceId === made.autotaskId);
+      const aideLines = mine.filter((l) => l.description.startsWith("Aide"));
+      // 10 units at $45: quantity 10 × unit price $45 = $450 (never the total as the unit price)
+      expect(aideLines.length).toBeGreaterThanOrEqual(3);
+      for (const l of aideLines) expect([l.quantity, l.unitPriceCents]).toEqual([10, 4500]);
+      expect(mine.find((l) => l.description.startsWith("Surveillance"))).toMatchObject({ quantity: 1, unitPriceCents: 30000, taxable: false, contractName: "Soutien" });
+      // a part period: one line, quantity 1, the prorated total
+      const part = mine.find((l) => l.description.startsWith("Mi-mois") && l.description.includes("prorata"))!;
+      expect(part.quantity).toBe(1);
+      expect(part.unitPriceCents).toBeLessThan(9000);
+      // old imported contract lines: the unapproved one goes, an approved one stays
+      const old = (n: number, status: string) => ({ clientId: client!.id, kind: "contract", source: "autotask", sourceId: `legacy-contract-${n}`, date: "2026-09-01", description: "ancien", quantityX100: 1000, unitPriceCents: 45000, amountCents: 450000, status });
+      await db().insert(schema.billingItems).values([old(1, "pending"), { ...old(2, "approved"), approvedBy: adminRow!.id, approvedAt: new Date() }]);
+      // into Approbation: refreshed and checked line by line
+      expect((await admin.post("/api/billables/import", {})).status).toBe(200);
+      const list = (await admin.get(`/api/billables?kind=contract&clientId=${client!.id}`)).json;
+      const aideRow = list.find((x: any) => x.description.startsWith("Aide"));
+      expect(aideRow).toMatchObject({ quantityX100: 1000, unitPriceCents: 4500, amountCents: 45000, contractName: "Soutien", status: "pending" });
+      expect(list.some((x: any) => x.sourceId === "legacy-contract-1")).toBe(false);
+      expect(list.some((x: any) => x.sourceId === "legacy-contract-2")).toBe(true);
+      expect(list.every((x: any) => x.sourceId.startsWith("legacy-") || x.contractId === made.id)).toBe(true);
+      // a change of quantity or price is kept (not overwritten by the next import)
+      expect((await admin.patch(`/api/billables/${aideRow.id}`, { quantity: 8, unitPriceCents: 5000 })).json).toMatchObject({ amountCents: 40000, edited: true });
+      await admin.post("/api/billables/import", {});
+      expect((await db().select().from(schema.billingItems).where(eq(schema.billingItems.id, aideRow.id)))[0]).toMatchObject({ quantityX100: 800, unitPriceCents: 5000 });
+      // invoiced through the old system: nothing before that day
+      await admin.patch(`/api/crm/clients/${client!.id}/contracts/${made.id}`, { billedThrough: addDaysYmd(first, 40) });
+      expect((await contractBillables("2000-01-01")).filter((l) => l.contractSourceId === made.autotaskId).every((l) => l.date > addDaysYmd(first, 40))).toBe(true);
+    } finally {
+      if (prev) await db().update(schema.integrations).set({ enabled: prev.enabled, config: prev.config }).where(eq(schema.integrations.provider, "tickets"));
+      else await db().delete(schema.integrations).where(eq(schema.integrations.provider, "tickets"));
+    }
+  });
 });
