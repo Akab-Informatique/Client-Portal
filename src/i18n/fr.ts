@@ -402,6 +402,7 @@ const fr = {
           quickbooks_not_connected: "QuickBooks n'est pas connecté (Paramètres admin › Facturation › QuickBooks).",
           quickbooks_not_mapped: "Ce client n'est associé à aucun client QuickBooks (Paramètres admin › Facturation › QuickBooks).",
           quickbooks_no_item: "Choisissez l'article QuickBooks des factures (Paramètres admin › Facturation › QuickBooks).",
+          quickbooks_no_tax_code: "Une ligne n'a pas de code de taxe QuickBooks : choisissez le code de taxe, et celui des lignes non taxables ou des clients exonérés, dans Paramètres admin › Intégrations › QuickBooks.",
           quickbooks_voided: "Une facture annulée n'est pas envoyée.",
           quickbooks_api: "QuickBooks a refusé la facture.",
         },

@@ -1,6 +1,6 @@
 import { and, asc, eq, gte, inArray, isNotNull, lte, or, sql } from "drizzle-orm";
 import { db, schema } from "../db/index.ts";
-import { alignNumbering, qbItemsForBillingItems, voidInvoiceInQb } from "./quickbooks.ts";
+import { alignNumbering, autoTaxCodes, qbItemsForBillingItems, voidInvoiceInQb } from "./quickbooks.ts";
 import { dueAfterSent } from "../../shared/invoiceDue.ts";
 import { taxesOfLines } from "../../shared/invoiceTax.ts";
 import { hourlyRateOf } from "./contracts.ts";
@@ -425,7 +425,7 @@ export function createInvoice(actorId: string, p: InvoiceDraft) {
     // what goes to QuickBooks is settled here, line by line: the line's own, else the invoice's, else the defaults
     const qbDefaults = (await quickbooksSettings()).invoice;
     const invoiceItem = p.qbItemId || qbDefaults.itemId || null;
-    const invoiceTax = p.qbTaxCodeId || qbDefaults.taxCodeId || null;
+    const invoiceTax = p.qbTaxCodeId || qbDefaults.taxCodeId || (qbDefaults.itemId || p.qbItemId ? (await autoTaxCodes().catch(() => null))?.taxable : null) || null;
     // the QuickBooks item of each line, from its portal service or product (made in QuickBooks when missing): outside the transaction (it talks to QuickBooks)
     const autoItems = await qbItemsForBillingItems(draft.items.map((i) => ({ id: i.id, sourceId: i.sourceId }))).catch(() => new Map<string, string>());
     const number = draft.number;

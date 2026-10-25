@@ -12,7 +12,7 @@ import { billingSettings, saveBillingSettings, ledger, qbApi, qbToken, quickbook
  */
 export class QuickBooksError extends Error {
   constructor(
-    public code: "not_connected" | "not_mapped" | "no_item" | "customer_exists" | "voided" | "api" | "no_employee" | "no_account",
+    public code: "not_connected" | "not_mapped" | "no_item" | "customer_exists" | "voided" | "no_tax_code" | "api" | "no_employee" | "no_account",
     public detail?: string,
   ) {
     super(detail ? `${code}: ${detail}` : code);
@@ -372,6 +372,29 @@ export async function invoiceChoices() {
 }
 
 /**
+ * The GST/QST and the exempt tax code of the company, found in QuickBooks by their names when the settings of
+ * Admin › Intégrations › QuickBooks have none (QuickBooks Canada refuses a line with no code). Read at most every 10 minutes.
+ */
+let autoCodes: { at: number; taxable: string | null; exempt: string | null } | null = null;
+export async function autoTaxCodes(): Promise<{ taxable: string | null; exempt: string | null }> {
+  if (autoCodes && Date.now() - autoCodes.at < 10 * 60_000) return autoCodes;
+  const all = (await query<{ Id: string; Name: string; Active?: boolean; Taxable?: boolean }>("TaxCode").catch(() => [])).filter((x) => x.Active !== false);
+  const find = (...res: RegExp[]) => {
+    for (const re of res) {
+      const hit = all.find((x) => re.test(x.Name));
+      if (hit) return hit.Id;
+    }
+    return null;
+  };
+  autoCodes = {
+    at: Date.now(),
+    taxable: find(/(tps|gst).*(tvq|qst)/i, /tps|gst/i),
+    exempt: find(/exon|exempt/i, /d[ée]tax|zero|z[ée]ro/i, /^non$/i, /aucune|out of scope/i),
+  };
+  return autoCodes;
+}
+
+/**
  * A new item for invoice lines: made as a service in the portal (Inventory › Services, one time) and in QuickBooks
  * (a Service item on the income account of the default charges account), and kept in our copy of the items.
  * One that already exists (same name) is used, never doubled.
@@ -507,7 +530,10 @@ async function pushInvoiceNow(invoiceId: string): Promise<{ quickbooksId: string
     // the item and tax code chosen on this invoice, else the defaults
     const itemId = inv.qbItemId || s.invoice.itemId;
     const exempt = client.invoice?.taxes === false;
-    const taxCode = exempt ? s.invoice.exemptTaxCodeId : inv.qbTaxCodeId || s.invoice.taxCodeId;
+    // a code the settings do not give is looked for in QuickBooks by its name
+    const auto = !s.invoice.taxCodeId || !s.invoice.exemptTaxCodeId ? await autoTaxCodes() : { taxable: null, exempt: null };
+    const exemptCode = s.invoice.exemptTaxCodeId || auto.exempt;
+    const taxCode = exempt ? exemptCode : inv.qbTaxCodeId || s.invoice.taxCodeId || auto.taxable;
     const subtotal = dollars(inv.totalCents - inv.taxCents);
     const own = await d.select().from(schema.invoiceLines).where(eq(schema.invoiceLines.invoiceId, inv.id)).orderBy(asc(schema.invoiceLines.position));
     // a line with no item yet (the invoice was made before one was chosen): the item of its portal service or product, made if needed
@@ -526,9 +552,13 @@ async function pushInvoiceNow(invoiceId: string): Promise<{ quickbooksId: string
     const noItem = own.find((l) => !l.qbItemId && !itemId);
     if (noItem) throw new QuickBooksError("no_item", noItem.description.slice(0, 120));
     if (!own.length && !itemId) throw new QuickBooksError("no_item");
+    // QuickBooks Canada refuses a line with no GST/HST code: say which one before asking
+    const noCode = own.find((l) => !(exempt || !l.taxable ? exemptCode : l.qbTaxCodeId || taxCode));
+    if (noCode) throw new QuickBooksError("no_tax_code", noCode.description.slice(0, 120));
+    if (!own.length && !taxCode) throw new QuickBooksError("no_tax_code");
     // each line: its own item and tax code, else the invoice's, else the defaults
     const lineOf = (description: string, amount: number, qty: number, unit: number, taxed: boolean, own?: { qbItemId: string | null; qbTaxCodeId: string | null }) => {
-      const code = taxed ? (exempt ? s.invoice.exemptTaxCodeId : own?.qbTaxCodeId || taxCode) : s.invoice.exemptTaxCodeId;
+      const code = taxed ? (exempt ? exemptCode : own?.qbTaxCodeId || taxCode) : exemptCode;
       return {
         DetailType: "SalesItemLineDetail",
         Amount: amount,
