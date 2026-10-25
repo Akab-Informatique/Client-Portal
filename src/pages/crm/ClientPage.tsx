@@ -45,7 +45,7 @@ import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel,
 import { useConfirm } from "@/components/ConfirmDialog";
 import { relativeTime } from "@/lib/format";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { ClientStatementDialog, InvoiceMailButtons } from "@/pages/accounting/Statements";
+import { ClientStatementDialog, InvoiceMailButtons, InvoicePdfButton } from "@/pages/accounting/Statements";
 import { api, ApiError } from "@/lib/api";
 import { useCan } from "@/lib/session";
 import { cn } from "@/lib/utils";
@@ -525,12 +525,15 @@ function InvoicesTab({ client }: { client: CrmDetail }) {
                 const Icon = INVOICE_ICON[v.status];
                 const expanded = open === v.id;
                 return (
-                  <li key={v.id} className={cn(v.status === "voided" && "opacity-60")}>
+                  <li key={v.id} className={cn("relative", v.status === "voided" && "opacity-60")}>
+                    <span className="absolute right-1 top-2 z-10">
+                      <InvoicePdfButton invoice={v} compact />
+                    </span>
                     <button
                       type="button"
                       onClick={() => setOpen(expanded ? null : v.id)}
                       aria-expanded={expanded}
-                      className="grid w-full grid-cols-2 gap-x-3 gap-y-1 px-3 py-2.5 text-left text-sm transition-colors hover:bg-accent/30 md:grid-cols-[minmax(0,1.1fr)_100px_minmax(0,1.3fr)_120px_120px_minmax(0,1.3fr)] md:items-center"
+                      className="grid w-full grid-cols-2 gap-x-3 gap-y-1 py-2.5 pl-3 pr-10 text-left text-sm transition-colors hover:bg-accent/30 md:grid-cols-[minmax(0,1.1fr)_100px_minmax(0,1.3fr)_120px_120px_minmax(0,1.3fr)] md:items-center"
                     >
                       <span className="flex min-w-0 items-center gap-1.5">
                         <ChevronDown className={cn("size-3.5 shrink-0 text-muted-foreground transition-transform", !expanded && "-rotate-90")} />

@@ -2,7 +2,7 @@ import { useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { toast } from "sonner";
-import { BellRing, FileText, Loader2, Mail, Search, Send } from "lucide-react";
+import { BellRing, Download, ExternalLink, Eye, FileText, Loader2, Mail, Search, Send } from "lucide-react";
 import { useConfirm } from "@/components/ConfirmDialog";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -242,5 +242,50 @@ export function InvoiceMailButtons({ invoice, compact }: { invoice: { id: string
         </Button>
       )}
     </span>
+  );
+}
+
+/** The invoice as a PDF in a window over the page (opened where it is, or in a tab, or downloaded). */
+export function InvoicePdfDialog({ invoice, onClose }: { invoice: { id: string; number: string }; onClose: () => void }) {
+  const { t } = useTranslation();
+  const src = `/api/crm/invoices/${invoice.id}/pdf`;
+  return (
+    <Dialog open onOpenChange={(o) => !o && onClose()}>
+      <DialogContent className="flex h-[90vh] max-h-[90vh] flex-col gap-3 sm:max-w-4xl">
+        <DialogHeader>
+          <DialogTitle className="flex flex-wrap items-center gap-2 pr-6">
+            <FileText className="size-5 text-primary" /> {t("statements.pdfTitle", { number: invoice.number })}
+            <span className="ml-auto flex gap-1.5">
+              <Button asChild size="sm" variant="outline" className="h-8 text-xs">
+                <a href={src} target="_blank" rel="noreferrer">
+                  <ExternalLink className="size-3.5" /> {t("statements.pdfOpen")}
+                </a>
+              </Button>
+              <Button asChild size="sm" variant="outline" className="h-8 text-xs">
+                <a href={`${src}?download=1`}>
+                  <Download className="size-3.5" /> {t("statements.pdfDownload")}
+                </a>
+              </Button>
+            </span>
+          </DialogTitle>
+          <DialogDescription className="sr-only">{t("statements.pdfTitle", { number: invoice.number })}</DialogDescription>
+        </DialogHeader>
+        <iframe src={src} title={invoice.number} className="min-h-0 w-full flex-1 rounded-lg border bg-white" />
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+/** The button that shows an invoice's PDF in a window (a small icon, or with its name). */
+export function InvoicePdfButton({ invoice, compact }: { invoice: { id: string; number: string }; compact?: boolean }) {
+  const { t } = useTranslation();
+  const [open, setOpen] = useState(false);
+  return (
+    <>
+      <Button type="button" size={compact ? "icon" : "sm"} variant="ghost" className={compact ? "size-7" : "h-7 text-xs"} onClick={() => setOpen(true)} title={t("statements.pdfPreview")}>
+        <Eye className="size-3.5" /> {!compact && t("statements.pdfPreview")}
+      </Button>
+      {open && <InvoicePdfDialog invoice={invoice} onClose={() => setOpen(false)} />}
+    </>
   );
 }

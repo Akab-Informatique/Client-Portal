@@ -228,6 +228,8 @@ export async function invoicePdf(invoiceId: string, payUrl: string | null = null
   const range = doc.bufferedPageRange();
   for (let i = 0; i < range.count; i++) {
     doc.switchToPage(range.start + i);
+    // writing under the bottom margin would make pdfkit add a blank page
+    doc.page.margins.bottom = 0;
     font(false, 9).fillColor("#000000").text(String(i + 1), LEFT, 758, { width: RIGHT - LEFT, align: "center", lineBreak: false });
   }
   doc.end();

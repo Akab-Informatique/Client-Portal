@@ -15,7 +15,7 @@ import { ticketSource, type NTicket } from "../lib/ticketSource.ts";
 import { crmState, descendantsOf, ensureCrm, rememberCompany, rememberContact, syncCrm } from "../lib/crm.ts";
 import { lookup, run } from "./tickets.ts";
 import { pushInvoice } from "../lib/quickbooks.ts";
-import { InvoiceMailError, sendInvoiceMail, sendStatement, sendStatements, statementOf, statementTargets } from "../lib/invoiceMail.ts";
+import { InvoiceMailError, invoicePdfFor, sendInvoiceMail, sendStatement, sendStatements, statementOf, statementTargets } from "../lib/invoiceMail.ts";
 import { applyAutoApprove } from "../lib/billables.ts";
 import { BILLING_MODES, KIND_MODE, contractTypes, usedHoursOf, type ContractKind } from "../lib/contracts.ts";
 import { prorata, type ServicePeriod } from "../../shared/prorata.ts";
@@ -747,6 +747,17 @@ export const crmRoutes = new Hono<AppEnv>()
     return c.json(row);
   })
 
+  /** The invoice as a PDF, shown in the preview window (or opened / downloaded): accounting.view */
+  .get("/invoices/:iid/pdf", requirePermission("accounting.view"), async (c) => {
+    try {
+      const pdf = await invoicePdfFor(zUuid.parse(c.req.param("iid")));
+      if (!pdf) throw new HTTPException(500, { message: "pdf_failed" });
+      const download = c.req.query("download") === "1";
+      return new Response(new Uint8Array(pdf.content), { headers: { "content-type": "application/pdf", "content-disposition": `${download ? "attachment" : "inline"}; filename="${pdf.filename}"`, "cache-control": "private, no-store" } });
+    } catch (e) {
+      return mailHttp(e);
+    }
+  })
   // ── emails: an invoice, a reminder, an account statement (one client, some, or all that owe something)
   .post("/invoices/:iid/mail", requirePermission("accounting.manage"), async (c) => {
     const p = await body(c, z.object({ kind: z.enum(["sent", "reminder"]) }));

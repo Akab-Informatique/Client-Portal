@@ -12,7 +12,7 @@ import { api } from "@/lib/api";
 import { useCan } from "@/lib/session";
 import { cn } from "@/lib/utils";
 import { Pager, pageSizeOf } from "@/components/Pager";
-import { InvoiceMailButtons, StatementsDialog } from "./Statements";
+import { InvoiceMailButtons, InvoicePdfButton, StatementsDialog } from "./Statements";
 import { money } from "@/pages/crm/shared";
 import { shortDate } from "@/pages/tickets/shared";
 
@@ -400,8 +400,9 @@ export function AllInvoices() {
                         <span className="text-xs text-muted-foreground/60">—</span>
                       )}
                     </td>
-                    <td className="px-3 py-2 text-right">
+                    <td className="whitespace-nowrap px-3 py-2 text-right">
                       <InvoiceMailButtons invoice={v} compact />
+                      <InvoicePdfButton invoice={v} compact />
                     </td>
                   </tr>
                 );

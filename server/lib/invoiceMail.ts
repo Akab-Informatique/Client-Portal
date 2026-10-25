@@ -110,6 +110,14 @@ async function invoiceExtras(inv: Invoice, client: Client, balanceCents: number)
   return { payUrl, attachments: pdf ? [{ filename: pdf.filename, content: pdf.content, contentType: "application/pdf" }] : [] };
 }
 
+/** The invoice's PDF exactly as it goes out by email (with the "Pay online" link when it applies). */
+export async function invoicePdfFor(invoiceId: string): Promise<{ filename: string; content: Buffer } | null> {
+  const { inv, client, balanceCents } = await invoiceMail(invoiceId);
+  const e = await invoiceExtras(inv, client, balanceCents);
+  const a = e.attachments[0];
+  return a ? { filename: a.filename, content: a.content } : null;
+}
+
 async function deliver(key: TemplateKey, c: Client, vars: Record<string, string>, locale: Locale, attachments?: Mail["attachments"]) {
   const to = recipientOf(c);
   if (!to) throw new InvoiceMailError("no_email");

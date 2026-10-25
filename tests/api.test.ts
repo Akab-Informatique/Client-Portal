@@ -7113,6 +7113,11 @@ describe("contracts: services when made, charges, activity, stop instead of dele
     expect(devOutbox[0]).toMatchObject({ from: { address: "comptabilite@akab.ca" }, replyTo: "comptabilite@akab.ca" });
     expect(devOutbox[0]!.text).toContain("R-1");
     expect(devOutbox[0]!.text).toContain("R-2");
+    // the PDF of an invoice shown in the preview window: a PDF file for staff, nothing without a session
+    const pdfView = await admin.get(`/api/crm/invoices/${i1!.id}/pdf`);
+    expect(pdfView.status).toBe(200);
+    expect(String(pdfView.json).startsWith("%PDF-")).toBe(true);
+    expect((await new Agent().get(`/api/crm/invoices/${i1!.id}/pdf`)).status).toBe(401);
     // a client with no email: told, nothing sent; a client owing nothing: nothing to send
     expect((await admin.post(`/api/crm/clients/${b!.id}/statement/send`, {})).json.error).toBe("invoice_mail_no_email");
     const [none] = await db().insert(schema.clients).values({ name: "Relevé C inc.", autotaskId: 987654332, email: "c@c.example" }).returning();

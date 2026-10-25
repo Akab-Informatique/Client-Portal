@@ -63,12 +63,14 @@ export function createApp() {
         imgSrc: ["'self'", "data:", "https://i.ytimg.com"],
         fontSrc: ["'self'", "data:"],
         connectSrc: ["'self'"],
-        frameAncestors: ["'none'"],
+        // only our own pages frame our pages (the invoice PDF preview window)
+        frameAncestors: ["'self'"],
         // the coffee break videos (youtube-nocookie: no tracking cookie until played)
-        frameSrc: ["https://www.youtube-nocookie.com"],
+        frameSrc: ["'self'", "https://www.youtube-nocookie.com"],
         baseUri: ["'self'"],
         formAction: ["'self'"],
-        objectSrc: ["'none'"],
+        // the browser's PDF viewer (invoice preview) shows a PDF of ours inside the window
+        objectSrc: ["'self'"],
       },
       strictTransportSecurity: config.production ? "max-age=31536000; includeSubDomains" : false,
       referrerPolicy: "strict-origin-when-cross-origin",
