@@ -3982,6 +3982,11 @@ describe("submitting: timesheets (when required) and expenses", () => {
       expect(mail).toHaveLength(1);
       expect(mail[0].attachments?.[0].contentType).toBe("application/pdf");
       expect(mail[0].attachments![0].content.subarray(0, 4).toString()).toBe("%PDF");
+      // and the same figures are in the body, not only in the PDF
+      expect(mail[0].html).toContain("Total à rembourser");
+      expect(mail[0].html).toContain("EMPLOYÉ");
+      expect(mail[0].html).toContain("Stationnement");
+      expect(mail[0].text).toContain("Total à rembourser");
       // the same PDF can be opened: by its owner and by a manager, not by another technician
       const pdf = await tech.get(`/api/time/expense-reports/${report.id}/pdf`);
       expect(pdf.status).toBe(200);
@@ -3994,6 +3999,7 @@ describe("submitting: timesheets (when required) and expenses", () => {
       devOutbox.length = 0;
       expect((await tech.post("/api/time/week/submit", { weekStart: "2026-11-09" })).json.status).toBe("approved");
       expect(devOutbox.filter((m) => m.to === "compta@akab.local" && m.attachments?.[0]?.filename.startsWith("Feuille_de_temps"))).toHaveLength(1);
+      expect(devOutbox.find((m) => m.attachments?.[0]?.filename.startsWith("Feuille_de_temps"))!.html).toContain("Heures à payer");
       expect((await tech.get("/api/time/week/pdf?start=2026-11-09")).status).toBe(200);
     } finally {
       await admin.put("/api/time/admin/report-settings", { autoApprove: false, recipients: [] });

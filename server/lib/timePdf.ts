@@ -132,8 +132,24 @@ async function finish(doc: PDFKit.PDFDocument, font: ReturnType<typeof start>["f
   return done;
 }
 
+/**
+ * A report as data — the same figures and tables feed the PDF and the email body, so they never differ.
+ */
+export type Model = {
+  /** The document title ("Rapport de dépenses") and the file name */
+  title: string;
+  filename: string;
+  employee: string;
+  /** Small lines under the title: the report, the period, when it was sent */
+  lines: string[];
+  figures: { label: string; value: string; strong?: boolean }[];
+  /** A sentence under the figures, when there is something more to say */
+  note?: string;
+  sections: { heading: string; head: string[]; cols: Col[]; rows: string[][]; boldLast?: boolean }[];
+};
+
 /** An expense report: what to pay back to the person, the kilometres and what they come to, by classification, then every line. */
-export async function expenseReportPdf(reportId: string): Promise<Pdf | null> {
+export async function expenseReportModel(reportId: string): Promise<Model | null> {
   const d = db();
   const [rep] = await d.select().from(schema.expenseReports).where(eq(schema.expenseReports.id, reportId));
   if (!rep) return null;
@@ -155,16 +171,6 @@ export async function expenseReportPdf(reportId: string): Promise<Pdf | null> {
   const dates = items.map((i) => i.date).sort();
   const period = rep.periodStart && rep.periodEnd ? `${dmy(rep.periodStart)} – ${dmy(rep.periodEnd)}` : dates.length ? `${dmy(dates[0])} – ${dmy(dates.at(-1)!)}` : "";
 
-  const p = start("Rapport de dépenses", who?.name ?? "", [rep.title, period, rep.submittedAt ? `Envoyé le ${dmy(rep.submittedAt.toISOString().slice(0, 10))}` : ""].filter(Boolean));
-  const { doc, font } = p;
-  let y = figures(doc, font, p.y, [
-    { label: "Dépenses (hors km)", value: cad(otherCents) },
-    { label: "Kilométrage", value: `${num(km)} km` },
-    { label: `Kilométrage en $`, value: cad(kmCents) },
-    { label: "Total à rembourser", value: cad(total), strong: true },
-  ]);
-
-  // by classification
   const groups = new Map<string, { mileage: boolean; count: number; qty: number; cents: number; rate: number }>();
   for (const i of items) {
     const g = groups.get(i.type) ?? { mileage: i.mileage, count: 0, qty: 0, cents: 0, rate: i.unitPriceCents };
@@ -173,32 +179,37 @@ export async function expenseReportPdf(reportId: string): Promise<Pdf | null> {
     g.cents += i.amountCents;
     groups.set(i.type, g);
   }
-  y = heading(doc, font, y, "Par classification");
-  y = table(
-    doc,
-    font,
-    y,
-    ["Classification", "Lignes", "Détail", "Montant"],
-    [{ w: 230 }, { w: 60, align: "right" }, { w: 120, align: "right" }, { w: 106, align: "right" }],
-    [...groups.entries()].map(([name, g]) => [name, String(g.count), g.mileage ? `${num(g.qty)} km × ${cad(g.rate)}/km` : "", cad(g.cents)]).concat([["Total", String(items.length), "", cad(total)]]),
-    { bold: (r) => r === groups.size },
-  );
-
-  y = heading(doc, font, y, "Détail des dépenses");
-  table(
-    doc,
-    font,
-    y,
-    ["Date", "Description", "Classification", "Client", "Montant"],
-    [{ w: 54 }, { w: 190 }, { w: 96 }, { w: 90 }, { w: 86, align: "right" }],
-    items.map((i) => [dmy(i.date), i.description, i.type, i.clientName ?? "", i.mileage ? `${num(i.quantityX100 / 100)} km · ${cad(i.amountCents)}` : cad(i.amountCents)]),
-  );
-  const content = await finish(doc, font, p.done, who?.name ?? "");
-  return { filename: `Depenses_${slug(who?.name ?? "")}_${slug(rep.title)}.pdf`, content };
+  return {
+    title: "Rapport de dépenses",
+    filename: `Depenses_${slug(who?.name ?? "")}_${slug(rep.title)}.pdf`,
+    employee: who?.name ?? "",
+    lines: [rep.title, period, rep.submittedAt ? `Envoyé le ${dmy(rep.submittedAt.toISOString().slice(0, 10))}` : ""].filter(Boolean),
+    figures: [
+      { label: "Dépenses (hors km)", value: cad(otherCents) },
+      { label: "Kilométrage", value: `${num(km)} km` },
+      { label: "Kilométrage en $", value: cad(kmCents) },
+      { label: "Total à rembourser", value: cad(total), strong: true },
+    ],
+    sections: [
+      {
+        heading: "Par classification",
+        head: ["Classification", "Lignes", "Détail", "Montant"],
+        cols: [{ w: 230 }, { w: 60, align: "right" }, { w: 120, align: "right" }, { w: 106, align: "right" }],
+        rows: [...groups.entries()].map(([name, g]) => [name, String(g.count), g.mileage ? `${num(g.qty)} km × ${cad(g.rate)}/km` : "", cad(g.cents)]).concat([["Total", String(items.length), "", cad(total)]]),
+        boldLast: true,
+      },
+      {
+        heading: "Détail des dépenses",
+        head: ["Date", "Description", "Classification", "Client", "Montant"],
+        cols: [{ w: 54 }, { w: 190 }, { w: 96 }, { w: 90 }, { w: 86, align: "right" }],
+        rows: items.map((i) => [dmy(i.date), i.description, i.type, i.clientName ?? "", i.mileage ? `${num(i.quantityX100 / 100)} km · ${cad(i.amountCents)}` : cad(i.amountCents)]),
+      },
+    ],
+  };
 }
 
-/** A week's timesheet: the hours to pay first, by type, then day by day. */
-export async function timesheetPdf(userId: string, weekStart: string): Promise<Pdf | null> {
+/** A week's timesheet: the hours to pay first, by type, then day by day (types and hours only: no ticket, no note). */
+export async function timesheetModel(userId: string, weekStart: string): Promise<Model | null> {
   const d = db();
   const [who] = await d.select({ name: schema.users.name }).from(schema.users).where(eq(schema.users.id, userId));
   if (!who) return null;
@@ -208,31 +219,6 @@ export async function timesheetPdf(userId: string, weekStart: string): Promise<P
   const toPay = Math.round((tot.totalHours - tot.bankedHours + tot.bankPaidHours) * 100) / 100;
   const end = addDays(weekStart, 6);
 
-  const p = start("Feuille de temps", who.name, [`Semaine du ${dmy(weekStart)} au ${dmy(end)}`, sheet?.submittedAt ? `Envoyée le ${dmy(sheet.submittedAt.toISOString().slice(0, 10))}` : ""].filter(Boolean));
-  const { doc, font } = p;
-  let y = figures(doc, font, p.y, [
-    { label: "Heures travaillées", value: `${num(tot.totalHours)} h` },
-    { label: "Facturables", value: `${num(tot.billableHours)} h` },
-    { label: "Mises en banque", value: `${num(tot.bankedHours)} h` },
-    { label: "Heures à payer", value: `${num(toPay)} h`, strong: true },
-  ]);
-  if (tot.bankPaidHours) {
-    font(false, 9, "#444444").text(`Dont ${num(tot.bankPaidHours)} h payées à même la banque d'heures.`, LEFT, y - 8, { width: RIGHT - LEFT });
-    y += 8;
-  }
-
-  y = heading(doc, font, y, "Heures par type");
-  y = table(
-    doc,
-    font,
-    y,
-    ["Type", "Heures", "Facturables"],
-    [{ w: 296 }, { w: 110, align: "right" }, { w: 110, align: "right" }],
-    tot.types.map((t) => [t.type, `${num(t.hours)} h`, `${num(t.billableHours)} h`]).concat([["Total", `${num(tot.totalHours)} h`, `${num(tot.billableHours)} h`]]),
-    { bold: (r) => r === tot.types.length },
-  );
-
-  // day by day: the hours per type (no ticket, no note)
   const byDay = new Map<string, { worked: number; banked: number; parts: Map<string, number> }>();
   for (let i = 0; i < 7; i++) byDay.set(addDays(weekStart, i), { worked: 0, banked: 0, parts: new Map() });
   for (const r of entries) {
@@ -242,20 +228,100 @@ export async function timesheetPdf(userId: string, weekStart: string): Promise<P
     const h = r.e.hoursX100 / 100;
     if (r.kind !== "bankpay") day.worked += h;
     if (r.e.banked) day.banked += h;
-    day.parts.set(r.kind === "bankpay" ? `${r.type} (banque)` : r.type, (day.parts.get(r.kind === "bankpay" ? `${r.type} (banque)` : r.type) ?? 0) + h);
+    const label = r.kind === "bankpay" ? `${r.type} (banque)` : r.type;
+    day.parts.set(label, (day.parts.get(label) ?? 0) + h);
   }
   const loc = new Intl.DateTimeFormat("fr-CA", { weekday: "long", timeZone: "UTC" });
-  y = heading(doc, font, y, "Jour par jour");
-  table(
-    doc,
-    font,
-    y,
-    ["Jour", "Heures", "En banque", "Détail"],
-    [{ w: 110 }, { w: 60, align: "right" }, { w: 70, align: "right" }, { w: 276 }],
-    [...byDay.entries()]
-      .filter(([, v]) => v.parts.size)
-      .map(([date, v]) => [`${loc.format(new Date(`${date}T12:00:00Z`))} ${dmy(date)}`, `${num(v.worked)} h`, v.banked ? `${num(v.banked)} h` : "", [...v.parts.entries()].map(([k, h]) => `${k} ${num(h)} h`).join(" · ")]),
-  );
-  const content = await finish(doc, font, p.done, who.name);
-  return { filename: `Feuille_de_temps_${slug(who.name)}_${weekStart}.pdf`, content };
+  return {
+    title: "Feuille de temps",
+    filename: `Feuille_de_temps_${slug(who.name)}_${weekStart}.pdf`,
+    employee: who.name,
+    lines: [`Semaine du ${dmy(weekStart)} au ${dmy(end)}`, sheet?.submittedAt ? `Envoyée le ${dmy(sheet.submittedAt.toISOString().slice(0, 10))}` : ""].filter(Boolean),
+    figures: [
+      { label: "Heures travaillées", value: `${num(tot.totalHours)} h` },
+      { label: "Facturables", value: `${num(tot.billableHours)} h` },
+      { label: "Mises en banque", value: `${num(tot.bankedHours)} h` },
+      { label: "Heures à payer", value: `${num(toPay)} h`, strong: true },
+    ],
+    ...(tot.bankPaidHours ? { note: `Dont ${num(tot.bankPaidHours)} h payées à même la banque d'heures.` } : {}),
+    sections: [
+      {
+        heading: "Heures par type",
+        head: ["Type", "Heures", "Facturables"],
+        cols: [{ w: 296 }, { w: 110, align: "right" }, { w: 110, align: "right" }],
+        rows: tot.types.map((t) => [t.type, `${num(t.hours)} h`, `${num(t.billableHours)} h`]).concat([["Total", `${num(tot.totalHours)} h`, `${num(tot.billableHours)} h`]]),
+        boldLast: true,
+      },
+      {
+        heading: "Jour par jour",
+        head: ["Jour", "Heures", "En banque", "Détail"],
+        cols: [{ w: 110 }, { w: 60, align: "right" }, { w: 70, align: "right" }, { w: 276 }],
+        rows: [...byDay.entries()]
+          .filter(([, v]) => v.parts.size)
+          .map(([date, v]) => [`${loc.format(new Date(`${date}T12:00:00Z`))} ${dmy(date)}`, `${num(v.worked)} h`, v.banked ? `${num(v.banked)} h` : "", [...v.parts.entries()].map(([k, h]) => `${k} ${num(h)} h`).join(" · ")]),
+      },
+    ],
+  };
+}
+
+/** The model as a PDF file. */
+export async function renderPdf(m: Model): Promise<Pdf> {
+  const p = start(m.title, m.employee, m.lines);
+  const { doc, font } = p;
+  let y = figures(doc, font, p.y, m.figures);
+  if (m.note) {
+    font(false, 9, "#444444").text(m.note, LEFT, y - 8, { width: RIGHT - LEFT });
+    y += 8;
+  }
+  for (const sec of m.sections) {
+    y = heading(doc, font, y, sec.heading);
+    y = table(doc, font, y, sec.head, sec.cols, sec.rows, sec.boldLast ? { bold: (r) => r === sec.rows.length - 1 } : {});
+  }
+  return { filename: m.filename, content: await finish(doc, font, p.done, m.employee) };
+}
+
+const esc = (v: string) => v.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+
+/** The model as an email body: the employee, the big figures, the same tables (inline styles, as mail programs need). */
+export function renderHtml(m: Model): string {
+  const td = (v: string, right: boolean, bold: boolean, head = false) =>
+    `<${head ? "th" : "td"} style="padding:5px 8px;border-bottom:1px solid ${head ? "#000" : "#ddd"};text-align:${right ? "right" : "left"};${bold || head ? "font-weight:bold;" : ""}${head ? "background:#eee;font-size:12px;" : "font-size:13px;"}">${esc(v)}</${head ? "th" : "td"}>`;
+  const figs = m.figures
+    .map((f) => `<td style="padding:10px 12px;border:${f.strong ? "2px solid #000" : "1px solid #999"};vertical-align:top;width:25%"><div style="font-size:11px;color:#555;text-transform:uppercase">${esc(f.label)}</div><div style="font-size:${f.strong ? 22 : 18}px;font-weight:bold">${esc(f.value)}</div></td>`)
+    .join('<td style="width:6px"></td>');
+  const sections = m.sections
+    .map(
+      (sec) =>
+        `<h3 style="margin:22px 0 6px;font-size:15px">${esc(sec.heading)}</h3><table style="border-collapse:collapse;width:100%"><tr>${sec.head.map((h, i) => td(h, sec.cols[i].align === "right", true, true)).join("")}</tr>${sec.rows
+          .map((r, ri) => `<tr>${r.map((v, i) => td(v, sec.cols[i].align === "right", Boolean(sec.boldLast) && ri === sec.rows.length - 1)).join("")}</tr>`)
+          .join("")}</table>`,
+    )
+    .join("");
+  return `<div style="font-family:Arial,Helvetica,sans-serif;color:#000;max-width:720px">
+<h2 style="margin:0 0 4px;font-size:20px">${esc(m.title)}</h2>
+<div style="font-size:13px;color:#444">${m.lines.map(esc).join(" · ")}</div>
+<div style="margin:14px 0;padding:10px 14px;border:2px solid #000;background:#f3f3f3"><div style="font-size:11px;color:#555">EMPLOYÉ</div><div style="font-size:24px;font-weight:bold">${esc(m.employee || "—")}</div></div>
+<table style="border-collapse:separate;width:100%"><tr>${figs}</tr></table>
+${m.note ? `<p style="font-size:13px;color:#444">${esc(m.note)}</p>` : ""}
+${sections}
+<p style="margin-top:20px;font-size:12px;color:#666">Le même rapport est en pièce jointe (PDF).</p>
+</div>`;
+}
+
+/** The model as plain text (the other half of the email). */
+export function renderText(m: Model): string {
+  const out = [m.title.toUpperCase(), `Employé : ${m.employee}`, ...m.lines, "", ...m.figures.map((f) => `${f.label} : ${f.value}`)];
+  if (m.note) out.push(m.note);
+  for (const sec of m.sections) out.push("", sec.heading.toUpperCase(), ...sec.rows.map((r) => r.filter(Boolean).join(" | ")));
+  return out.join("\n");
+}
+
+/** Kept for the screens that open the PDF. */
+export async function expenseReportPdf(reportId: string): Promise<Pdf | null> {
+  const m = await expenseReportModel(reportId);
+  return m ? renderPdf(m) : null;
+}
+export async function timesheetPdf(userId: string, weekStart: string): Promise<Pdf | null> {
+  const m = await timesheetModel(userId, weekStart);
+  return m ? renderPdf(m) : null;
 }

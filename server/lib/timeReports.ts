@@ -2,8 +2,8 @@ import { eq } from "drizzle-orm";
 import { db, schema } from "../db/index.ts";
 import { audit } from "./audit.ts";
 import { mailSettings } from "./invoiceMail.ts";
-import { escapeHtml, sendMail } from "./mail.ts";
-import { expenseReportPdf, timesheetPdf, type Pdf } from "./timePdf.ts";
+import { sendMail } from "./mail.ts";
+import { expenseReportModel, renderHtml, renderPdf, renderText, timesheetModel, type Model } from "./timePdf.ts";
 
 /**
  * What happens when a timesheet week or an expense report is sent: for now nothing is approved by hand (`autoApprove`,
@@ -40,10 +40,12 @@ async function toWhom(): Promise<string[]> {
   return [(await mailSettings()).fromEmail].filter(Boolean);
 }
 
-async function send(subject: string, lines: string[], pdf: Pdf, actorId: string, entity: string, id: string) {
+/** The report in the body of the email (figures and tables) and as a PDF attachment. */
+async function send(subject: string, model: Model, actorId: string, entity: string, id: string) {
   const to = await toWhom();
-  const text = lines.join("\n");
-  const html = lines.map((l) => `<p>${escapeHtml(l)}</p>`).join("");
+  const pdf = await renderPdf(model);
+  const text = renderText(model);
+  const html = renderHtml(model);
   let sent = 0;
   for (const address of to) {
     if (await sendMail({ to: address, subject, text, html, attachments: [{ filename: pdf.filename, content: pdf.content, contentType: "application/pdf" }] })) sent++;
@@ -55,11 +57,9 @@ async function send(subject: string, lines: string[], pdf: Pdf, actorId: string,
 /** The expense report as a PDF to accounting. Never throws: sending a report must not fail because the email did. */
 export async function mailExpenseReport(reportId: string, actorId: string): Promise<number> {
   try {
-    const pdf = await expenseReportPdf(reportId);
-    if (!pdf) return 0;
-    const [rep] = await db().select().from(schema.expenseReports).where(eq(schema.expenseReports.id, reportId));
-    const [who] = await db().select({ name: schema.users.name }).from(schema.users).where(eq(schema.users.id, rep.userId));
-    return await send(`Rapport de dépenses — ${who?.name ?? ""} — ${rep.title}`, [`Rapport de dépenses de ${who?.name ?? ""} : ${rep.title}.`, "Le total à rembourser est en haut du PDF ci-joint."], pdf, actorId, "expense_report", reportId);
+    const model = await expenseReportModel(reportId);
+    if (!model) return 0;
+    return await send(`Rapport de dépenses — ${model.employee} — ${model.lines[0] ?? ""}`, model, actorId, "expense_report", reportId);
   } catch (e) {
     console.warn("[time reports] expense report not sent:", e instanceof Error ? e.message : e);
     return 0;
@@ -69,10 +69,9 @@ export async function mailExpenseReport(reportId: string, actorId: string): Prom
 /** The week's timesheet as a PDF to accounting. Never throws. */
 export async function mailTimesheet(userId: string, weekStart: string, actorId: string, sheetId: string): Promise<number> {
   try {
-    const pdf = await timesheetPdf(userId, weekStart);
-    if (!pdf) return 0;
-    const [who] = await db().select({ name: schema.users.name }).from(schema.users).where(eq(schema.users.id, userId));
-    return await send(`Feuille de temps — ${who?.name ?? ""} — semaine du ${weekStart}`, [`Feuille de temps de ${who?.name ?? ""} pour la semaine du ${weekStart}.`, "Les heures à payer sont en haut du PDF ci-joint."], pdf, actorId, "timesheet", sheetId);
+    const model = await timesheetModel(userId, weekStart);
+    if (!model) return 0;
+    return await send(`Feuille de temps — ${model.employee} — semaine du ${weekStart}`, model, actorId, "timesheet", sheetId);
   } catch (e) {
     console.warn("[time reports] timesheet not sent:", e instanceof Error ? e.message : e);
     return 0;
