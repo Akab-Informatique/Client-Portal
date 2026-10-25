@@ -446,6 +446,7 @@ function ExpenseApprovals({ lang, pq }: { lang: string; pq: string }) {
     <section className="space-y-3">
       <div className="flex flex-wrap items-center gap-2">
         <p className="mr-auto text-sm font-semibold">{t("approvals.team.expensesTitle")}</p>
+        <RefreshButton />
         <DecisionFilter
           value={status}
           onChange={(v) => {
@@ -568,6 +569,7 @@ function TimesheetApprovals({ lang, pq }: { lang: string; pq: string }) {
     <section className="space-y-3">
       <div className="flex flex-wrap items-center gap-2">
         <p className="mr-auto text-xs text-muted-foreground">{t("approvals.team.weeksHint")}</p>
+        <RefreshButton />
         <DecisionFilter value={status} onChange={setStatus} />
       </div>
       {isLoading && <Loader2 className="mx-auto size-5 animate-spin text-muted-foreground" />}
@@ -869,6 +871,7 @@ function KindTab({ kind, counts, lang, pq }: { kind: Kind; counts: (s: Status) =
             <Check className="size-3.5" /> {sel.size === items.length ? t("approvals.selectNone") : t("approvals.selectAll", { count: items.length })}
           </Button>
         )}
+        <RefreshButton />
         {kind === "labour" && can("accounting.manage") && status !== "posted" && (
           <Button
             size="sm"
@@ -989,6 +992,33 @@ function KindTab({ kind, counts, lang, pq }: { kind: Kind; counts: (s: Status) =
         );
       })}
     </div>
+  );
+}
+
+/**
+ * A refresh button for a section: reads the contracts, tickets and charges again (what changed on a contract shows in
+ * its recurring lines) and reloads the lists.
+ */
+function RefreshButton() {
+  const { t } = useTranslation();
+  const qc = useQueryClient();
+  const can = useCan();
+  const run = useMutation({
+    mutationFn: () => api.post<Summary["state"]>("/billables/import"),
+    onSuccess: (s) => {
+      void qc.invalidateQueries({ queryKey: KEY });
+      void qc.invalidateQueries({ queryKey: ["time"] });
+      const errors = Object.keys(s.errors);
+      if (errors.length) toast.warning(t("approvals.importPartial", { kinds: errors.map((k) => t(`approvals.tabs.${k}`)).join(", ") }));
+      else toast.success(t("approvals.refreshed"));
+    },
+    onError: () => toast.error(t("approvals.importFailed")),
+  });
+  if (!can("accounting.manage")) return null;
+  return (
+    <Button size="sm" variant="outline" className="h-8 text-xs" disabled={run.isPending} onClick={() => run.mutate()} title={t("approvals.refreshHint")}>
+      <RefreshCw className={cn("size-3.5", run.isPending && "animate-spin")} /> {t("approvals.refresh")}
+    </Button>
   );
 }
 
