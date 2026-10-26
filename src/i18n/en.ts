@@ -1426,6 +1426,10 @@ const en: Dict = {
     },
   },
   timesheet: {
+    change: "Change the entry",
+    changedReopened: "Entry changed: the week is open again, send it again when ready.",
+    changeHint: "Change the hours, the note or the day of this entry.",
+    changeSentHint: "This week was already sent: changing it opens it again, you will have to send it again.",
     pdf: "Week PDF",
     theirWeek: "{{name}}’s week",
     person: "Timesheet of",
@@ -1508,6 +1512,10 @@ const en: Dict = {
     },
   },
   expense: {
+    removeSentTitle: "Remove this sent expense?",
+    removeSentText: "It was already sent: it is removed from the report and from the work to bill. The PDF accounting already received does not change.",
+    billedLocked: "This expense is already on an invoice: cancel the invoice first.",
+    lockedItem: "This expense can no longer be changed or removed (it is paid or sent).",
     viewing: "You are looking at {{name}}'s expenses (read only).",
     km: "{{km}} km",
     kmPaid: "{{km}} km paid",
@@ -1526,6 +1534,8 @@ const en: Dict = {
     },
     title: "Expenses",
     report: {
+      deleteSentTitle: "Delete \"{{title}}\"?",
+      deleteSentText: "The report is deleted with its expenses and their work to bill (not what is already on an invoice). This cannot be undone.",
       new: "New report",
       edit: "Edit the report",
       create: "Create the report",

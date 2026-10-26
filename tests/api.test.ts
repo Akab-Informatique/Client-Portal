@@ -3811,7 +3811,10 @@ describe("timesheets and expenses, approved and sent to QuickBooks", () => {
     expect((await other.get(`/api/time/expenses/${a1.id}/receipt`)).status).toBe(404);
     expect((await admin.get(`/api/time/expenses/${a1.id}/receipt`)).status).toBe(200);
     for (const x of [a1, a2]) await tech.post(`/api/time/expenses/${x.id}/submit`);
-    expect((await tech.patch(`/api/time/expenses/${a1.id}`, { description: "x" })).json.error).toBe("expense_locked");
+    // a sent item can still be corrected by its owner (it goes back to a draft, to be sent again); removing it stays locked
+    expect((await tech.del(`/api/time/expenses/${a1.id}`)).json.error).toBe("expense_locked");
+    expect((await tech.patch(`/api/time/expenses/${a1.id}`, { description: a1.description })).json).toMatchObject({ status: "draft" });
+    await tech.post(`/api/time/expenses/${a1.id}/submit`);
 
     // QuickBooks on: what is approved goes there by itself
     const { saveQuickBooksSettings } = await import("../server/lib/billing.ts");
@@ -4238,7 +4241,7 @@ describe("submitting: timesheets (when required) and expenses", () => {
     await admin.post("/api/time/approvals/expenses", { ids: [i2.id], decision: "reject", comment: "Reçu illisible" });
     mine = (await tech2.get("/api/time/expense-reports")).json.find((r: any) => r.id === report.json.id);
     expect(mine).toMatchObject({ status: "open", rejected: 1 });
-    expect((await tech2.patch(`/api/time/expenses/${i1.id}`, { description: "x" })).json.error).toBe("expense_locked");
+    expect((await tech2.del(`/api/time/expenses/${i1.id}`)).json.error).toBe("expense_locked");
     expect((await tech2.del(`/api/time/expense-reports/${report.json.id}`)).json.error).toBe("expense_locked");
     expect((await add("Oublié", 300)).status).toBe(201);
     expect((await tech2.post(`/api/time/expense-reports/${report.json.id}/submit`)).json.submitted).toBe(2);
@@ -7789,5 +7792,101 @@ describe("contracts: services when made, charges, activity, stop instead of dele
     } finally {
       vi.unstubAllGlobals();
     }
+  });
+});
+
+describe("changing time entries and expenses: the owner, and a manager over everything", () => {
+  it("an owner corrects a sent entry (the week opens again); a paid week is locked to them; a manager changes and removes anything", async () => {
+    resetRateLimit("login:ip:unknown");
+    const admin = await signIn("admin@akab.local");
+    const tech = await signIn("tech@akab.local");
+    const tech2 = await signIn("tech2@akab.local");
+    const training = (await tech.get("/api/time/types")).json.time.find((x: any) => x.name === "Formation");
+    const monday = "2027-02-01";
+    const week = async () => (await tech.get(`/api/time/week?start=${monday}`)).json;
+    const made = await tech.post("/api/time/entries", { date: "2027-02-02", typeId: training.id, hours: 2, note: "Cours" });
+    expect(made.json).toMatchObject({ hoursX100: 200 });
+    const e = made.json;
+
+    // changed while open; nobody else's
+    expect((await tech.patch(`/api/time/entries/${e.id}`, { hours: 3, note: "Cours Intune" })).json).toMatchObject({ hoursX100: 300, note: "Cours Intune" });
+    expect((await tech2.patch(`/api/time/entries/${e.id}`, { hours: 1 })).status).toBe(404);
+    expect((await tech.patch(`/api/time/entries/${e.id}`, { hours: 30 })).status).toBe(400);
+
+    // sent: adding and removing stay locked, but the owner can correct an entry: the week is open again, to be sent again
+    await tech.post("/api/time/week/submit", { weekStart: monday });
+    expect(["submitted", "approved"]).toContain((await week()).status);
+    expect((await tech.post("/api/time/entries", { date: "2027-02-03", typeId: training.id, hours: 1 })).json.error).toBe("timesheet_locked");
+    expect((await tech.del(`/api/time/entries/${e.id}`)).json.error).toBe("timesheet_locked");
+    expect((await tech.patch(`/api/time/entries/${e.id}`, { hours: 4 })).json.hoursX100).toBe(400);
+    expect((await week()).status).toBe("draft");
+    await tech.post("/api/time/week/submit", { weekStart: monday });
+
+    // paid: locked to the owner; a manager still can, and the week stays paid
+    const find = async (s: string) => (await admin.get(`/api/time/approvals/timesheets?status=${s}`)).json.find((x: any) => x.userName === "Alex Tremblay" && x.weekStart === monday);
+    const sheet = (await find("submitted")) ?? (await find("approved"));
+    if (sheet.status === "submitted") await admin.post(`/api/time/approvals/timesheets/${sheet.id}`, { decision: "approve" });
+    expect((await admin.post("/api/time/approvals/timesheets/paid", { ids: [sheet.id], paid: true })).json.changed).toBe(1);
+    expect((await tech.patch(`/api/time/entries/${e.id}`, { hours: 5 })).json.error).toBe("timesheet_locked");
+    expect((await admin.patch(`/api/time/entries/${e.id}`, { hours: 5, note: "Corrigé par l'admin" })).json).toMatchObject({ hoursX100: 500, note: "Corrigé par l'admin" });
+    expect((await week()).status).toBe("paid");
+    expect((await tech.get(`/api/time/week?start=${monday}`)).json.entries.find((x: any) => x.id === e.id).hours).toBe(5);
+    // the manager removes it too (a person who only uses timesheets cannot)
+    expect((await tech2.del(`/api/time/entries/${e.id}`)).status).toBe(404);
+    expect((await admin.del(`/api/time/entries/${e.id}`)).json).toEqual({ ok: true });
+    expect((await week()).entries.find((x: any) => x.id === e.id)).toBeUndefined();
+  });
+
+  it("an owner corrects a sent expense (back to a draft, its report open, its work to bill taken off); a manager changes or removes any, but not what is invoiced", async () => {
+    resetRateLimit("login:ip:unknown");
+    const admin = await signIn("admin@akab.local");
+    const tech = await signIn("tech@akab.local");
+    const tech2 = await signIn("tech2@akab.local");
+    const clients = (await admin.get("/api/crm/clients")).json;
+    const client = (clients.items ?? clients).find((x: any) => x.autotaskId === 300);
+    const parking = (await tech.get("/api/time/types")).json.expense.find((x: any) => x.name === "Stationnement").id;
+    const rep = (await tech.post("/api/time/expense-reports", { title: "Corrections", periodStart: "2026-08-01", periodEnd: "2026-08-31" })).json;
+    const item = (await tech.post("/api/time/expenses", { reportId: rep.id, date: "2026-08-10", typeId: parking, description: "Stationnement client", amountCents: 1_500, clientId: client.id, billable: true })).json;
+    const other = (await tech.post("/api/time/expenses", { reportId: rep.id, date: "2026-08-11", typeId: parking, description: "Autre", amountCents: 700 })).json;
+    await tech.post(`/api/time/expense-reports/${rep.id}/submit`, {});
+    await admin.post("/api/time/approvals/expenses", { ids: [item.id], decision: "approve" });
+    const billed = async () => (await admin.get("/api/billables?status=approved")).json.filter((i: any) => i.description.includes("Stationnement client"));
+    expect(await billed()).toHaveLength(1);
+    const mine = async () => (await tech.get("/api/time/expense-reports")).json.find((r: any) => r.id === rep.id);
+
+    // its owner corrects the approved item: a draft again, the report open, the work to bill taken off (made again once approved)
+    expect((await tech.patch(`/api/time/expenses/${item.id}`, { amountCents: 1_800 })).json).toMatchObject({ status: "draft", amountCents: 1_800 });
+    expect((await mine()).status).toBe("open");
+    expect(await billed()).toHaveLength(0);
+    // removing a sent one stays locked to its owner; nobody else's
+    expect((await tech.del(`/api/time/expenses/${other.id}`)).json.error).toBe("expense_locked");
+    expect((await tech2.patch(`/api/time/expenses/${item.id}`, { amountCents: 1 })).status).toBe(404);
+    await tech.post(`/api/time/expense-reports/${rep.id}/submit`, {});
+    await admin.post("/api/time/approvals/expenses", { ids: [item.id], decision: "approve" });
+    expect((await billed())[0]).toMatchObject({ amountCents: 1_800 });
+
+    // a manager changes any, whatever its status: it keeps it, and the work to bill follows
+    expect((await tech.patch(`/api/time/expenses/${other.id}`, { amountCents: 800 })).json.status).toBe("draft");
+    expect((await admin.patch(`/api/time/expenses/${item.id}`, { amountCents: 2_000 })).json).toMatchObject({ status: "approved", amountCents: 2_000 });
+    expect((await billed())[0]).toMatchObject({ amountCents: 2_000, status: "approved" });
+    // and removes any (even sent) — but not once it is on an invoice
+    const [row] = await db().select().from(schema.expenses).where(eq(schema.expenses.id, item.id));
+    await db().update(schema.billingItems).set({ status: "posted" }).where(eq(schema.billingItems.id, row.billingItemId!));
+    expect((await admin.patch(`/api/time/expenses/${item.id}`, { amountCents: 1 })).json.error).toBe("expense_billed");
+    expect((await admin.del(`/api/time/expenses/${item.id}`)).json.error).toBe("expense_billed");
+    expect((await admin.del(`/api/time/expense-reports/${rep.id}`)).json.error).toBe("expense_billed");
+    await db().update(schema.billingItems).set({ status: "approved" }).where(eq(schema.billingItems.id, row.billingItemId!));
+    expect((await admin.del(`/api/time/expenses/${item.id}`)).json).toEqual({ ok: true });
+    expect(await billed()).toHaveLength(0);
+
+    // the report: its owner only while it is open; a manager changes it and removes it any time
+    await tech.post(`/api/time/expense-reports/${rep.id}/submit`, {});
+    expect((await tech.del(`/api/time/expense-reports/${rep.id}`)).json.error).toBe("report_submitted");
+    expect((await tech.patch(`/api/time/expense-reports/${rep.id}`, { title: "x" })).json.error).toBe("report_submitted");
+    expect((await admin.patch(`/api/time/expense-reports/${rep.id}`, { title: "Titre corrigé" })).json).toEqual({ ok: true });
+    expect((await mine()).title).toBe("Titre corrigé");
+    expect((await admin.del(`/api/time/expense-reports/${rep.id}`)).json).toEqual({ ok: true });
+    expect(await mine()).toBeUndefined();
+    expect((await tech.del(`/api/time/expense-reports/${rep.id}`)).status).toBe(404);
   });
 });

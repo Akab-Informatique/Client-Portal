@@ -1424,6 +1424,10 @@ const fr = {
     },
   },
   timesheet: {
+    change: "Modifier l'entrée",
+    changedReopened: "Entrée modifiée : la semaine est rouverte, renvoyez-la quand c'est prêt.",
+    changeHint: "Changez les heures, la note ou le jour de cette entrée.",
+    changeSentHint: "Cette semaine est déjà envoyée : la modifier la rouvre, vous devrez la renvoyer.",
     pdf: "PDF de la semaine",
     theirWeek: "Semaine de {{name}}",
     person: "Feuille de temps de",
@@ -1506,6 +1510,10 @@ const fr = {
     },
   },
   expense: {
+    removeSentTitle: "Retirer cette dépense envoyée ?",
+    removeSentText: "Elle a déjà été envoyée : elle est retirée du rapport et du travail à facturer. Le PDF déjà reçu par la comptabilité ne change pas.",
+    billedLocked: "Cette dépense est déjà sur une facture : annulez d'abord la facture.",
+    lockedItem: "Cette dépense ne peut plus être changée ou retirée (elle est payée ou envoyée).",
     viewing: "Vous consultez les dépenses de {{name}} (lecture seule).",
     km: "{{km}} km",
     kmPaid: "{{km}} km payés",
@@ -1524,6 +1532,8 @@ const fr = {
     },
     title: "Dépenses",
     report: {
+      deleteSentTitle: "Supprimer « {{title}} » ?",
+      deleteSentText: "Le rapport est supprimé avec ses dépenses et leur travail à facturer (pas ce qui est déjà sur une facture). Cette action est définitive.",
       new: "Nouveau rapport",
       edit: "Modifier le rapport",
       create: "Créer le rapport",

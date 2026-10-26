@@ -2,7 +2,7 @@ import { useMemo, useState, type FormEvent } from "react";
 import { useTranslation } from "react-i18next";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
-import { BarChart3, ChevronDown, ChevronLeft, ChevronRight, ChevronsDownUp, ChevronsUpDown, Clock, FileText, ListTree, Loader2, PiggyBank, Plus, Send, Sun, Ticket, Trash2, UserCog } from "lucide-react";
+import { BarChart3, ChevronDown, ChevronLeft, ChevronRight, ChevronsDownUp, ChevronsUpDown, Clock, FileText, ListTree, Loader2, PiggyBank, Pencil, Plus, Send, Sun, Ticket, Trash2, UserCog } from "lucide-react";
 import { GlassBackdrop } from "@/components/brand/GlassBackdrop";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
@@ -141,6 +141,7 @@ export function TimesheetPage() {
   const [open, setOpen] = useState<Record<string, boolean>>({});
   const [detail, setDetail] = useState<Record<string, boolean>>({});
   const [adding, setAdding] = useState(false);
+  const [changing, setChanging] = useState<Entry | null>(null);
   const [report, setReport] = useState(false);
   const refresh = () => void qc.invalidateQueries({ queryKey: ["time", "week"] });
   const remove = useMutation({
@@ -330,7 +331,13 @@ export function TimesheetPage() {
                                       <td className="py-1.5 text-right font-mono text-emerald-300">{paid ? hours(bill) : "—"}</td>
                                       <td className="py-1.5 text-right font-mono text-muted-foreground">{paid ? hours(Math.max(0, e.hours - bill)) : "—"}</td>
                                       <td className="py-1.5 text-right">
-                                        {e.source === "manual" && editable && (
+                                        {/* an entry made by hand: its owner changes it until the week is paid (a sent week opens again), a manager changes or removes anything */}
+                                        {e.source === "manual" && (editable || manager || week.status !== "paid") && (
+                                          <button type="button" onClick={() => setChanging(e)} className="rounded p-1 text-muted-foreground opacity-0 hover:text-foreground group-hover:opacity-100" aria-label={t("timesheet.change")}>
+                                            <Pencil className="size-3.5" />
+                                          </button>
+                                        )}
+                                        {e.source === "manual" && (editable || manager) && (
                                           <button type="button" onClick={() => remove.mutate(e.id)} className="rounded p-1 text-muted-foreground opacity-0 hover:text-destructive group-hover:opacity-100" aria-label={t("timesheet.remove")}>
                                             <Trash2 className="size-3.5" />
                                           </button>
@@ -456,6 +463,7 @@ export function TimesheetPage() {
         </div>
       )}
 
+      {week && changing && <ChangeEntryDialog entry={changing} days={days} dayName={dayName} sent={!editable && !manager} onClose={() => setChanging(null)} onDone={refresh} />}
       {week && editable && <EntryDialog open={adding} onOpenChange={setAdding} week={week} days={days} dayName={dayName} userId={others ? who : null} onDone={refresh} />}
       {week && <ReportDialog open={report} onOpenChange={setReport} week={week} days={days} dayName={dayName} hours={hours} personName={others && person ? person.name : me.name} />}
     </div>
@@ -474,6 +482,92 @@ function Ratio({ worked, billable, ratio, label }: { worked: number; billable: n
         <div className="h-full rounded-full bg-gradient-to-r from-emerald-400 to-emerald-300 transition-all" style={{ width: `${worked ? Math.min(100, (billable / worked) * 100) : 0}%` }} />
       </div>
     </div>
+  );
+}
+
+/** Change an entry made by hand: hours (or start and end of a work day), note, day. On a week already sent, the week opens again. */
+function ChangeEntryDialog({ entry, days, dayName, sent, onClose, onDone }: { entry: Entry; days: string[]; dayName: (d: string) => string; sent: boolean; onClose: () => void; onDone: () => void }) {
+  const { t } = useTranslation();
+  const isWorkday = entry.kind === "workday";
+  const [f, setF] = useState({ date: entry.date, hours: String(entry.hours), note: entry.note ?? "", start: entry.startTime ?? "08:00", end: entry.endTime ?? "16:30", banked: entry.banked });
+  const asked = Number(f.hours.replace(",", "."));
+  const span = minutesOf(f.end) - minutesOf(f.start) - unpaidLunch(minutesOf(f.start), minutesOf(f.end));
+  const valid = isWorkday ? Number.isFinite(span) && span > 0 && span <= 24 * 60 : asked > 0 && asked <= 24;
+  const save = useMutation({
+    mutationFn: () => api.patch(`/time/entries/${entry.id}`, { date: f.date, note: f.note, ...(isWorkday ? { start: f.start, end: f.end } : { hours: asked }), ...(entry.kind === "bankpay" || isWorkday ? {} : { banked: f.banked }) }),
+    onSuccess: () => {
+      toast.success(sent ? t("timesheet.changedReopened") : t("common.saved"));
+      onDone();
+      onClose();
+    },
+    onError: (e) =>
+      toast.error(
+        e instanceof ApiError && e.code === "timesheet_locked" ? t("timesheet.locked") : e instanceof ApiError && e.code === "workday_exists" ? t("timesheet.workdayExists") : e instanceof ApiError && e.code === "bank_insufficient" ? t("timesheet.bankInsufficient") : e instanceof ApiError && e.code === "bank_in_use" ? t("timesheet.bankInUse") : t("common.error"),
+      ),
+  });
+  return (
+    <Dialog open onOpenChange={(o) => !o && onClose()}>
+      <DialogContent className="sm:max-w-md">
+        <DialogHeader>
+          <DialogTitle className="flex items-center gap-2">
+            <Pencil className="size-5 text-primary" /> {t("timesheet.change")} — {entry.type}
+          </DialogTitle>
+          <DialogDescription>{sent ? t("timesheet.changeSentHint") : t("timesheet.changeHint")}</DialogDescription>
+        </DialogHeader>
+        <form
+          className="space-y-3"
+          onSubmit={(e: FormEvent) => {
+            e.preventDefault();
+            if (valid) save.mutate();
+          }}
+        >
+          <label className="block space-y-1 text-xs">
+            <span className="text-muted-foreground">{t("timesheet.day")}</span>
+            <select value={f.date} onChange={(e) => setF({ ...f, date: e.target.value })} className="h-9 w-full rounded-md border bg-transparent px-2 text-sm capitalize">
+              {days.map((d) => (
+                <option key={d} value={d}>
+                  {dayName(d)}
+                </option>
+              ))}
+            </select>
+          </label>
+          {isWorkday ? (
+            <div className="grid grid-cols-2 gap-3">
+              <label className="space-y-1 text-xs">
+                <span className="text-muted-foreground">{t("timesheet.startTime")}</span>
+                <Input type="time" value={f.start} onChange={(e) => setF({ ...f, start: e.target.value })} />
+              </label>
+              <label className="space-y-1 text-xs">
+                <span className="text-muted-foreground">{t("timesheet.endTime")}</span>
+                <Input type="time" value={f.end} onChange={(e) => setF({ ...f, end: e.target.value })} />
+              </label>
+            </div>
+          ) : (
+            <label className="block space-y-1 text-xs">
+              <span className="text-muted-foreground">{t("timesheet.hours")}</span>
+              <Input value={f.hours} inputMode="decimal" onChange={(e) => setF({ ...f, hours: e.target.value })} className="font-mono" />
+            </label>
+          )}
+          <label className="block space-y-1 text-xs">
+            <span className="text-muted-foreground">{t("timesheet.note")}</span>
+            <Input value={f.note} maxLength={500} onChange={(e) => setF({ ...f, note: e.target.value })} />
+          </label>
+          {entry.kind !== "bankpay" && !isWorkday && (
+            <label className="flex items-center gap-2 text-xs">
+              <Switch checked={f.banked} onCheckedChange={(v) => setF({ ...f, banked: v })} /> {t("timesheet.bankEntry")}
+            </label>
+          )}
+          <div className="flex justify-end gap-2">
+            <Button type="button" variant="ghost" onClick={onClose}>
+              {t("common.cancel")}
+            </Button>
+            <Button type="submit" disabled={!valid || save.isPending} className="bg-grad-gold font-semibold text-[#1a1204]">
+              {save.isPending && <Loader2 className="size-4 animate-spin" />} {t("common.save")}
+            </Button>
+          </div>
+        </form>
+      </DialogContent>
+    </Dialog>
   );
 }
 

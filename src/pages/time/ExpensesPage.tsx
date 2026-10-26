@@ -6,6 +6,7 @@ import { toast } from "sonner";
 import { BadgeCheck, Banknote, CalendarRange, ChevronRight, FilePen, FileText, Folder, FolderOpen, Loader2, Paperclip, Pencil, Plus, Send, Star, Trash2, UserCog, Wallet, X } from "lucide-react";
 import { GlassBackdrop } from "@/components/brand/GlassBackdrop";
 import { Button } from "@/components/ui/button";
+import { useConfirm } from "@/components/ConfirmDialog";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -320,7 +321,7 @@ export function ExpensesPage() {
           }}
         />
       )}
-      {openReport && <ReportView r={openReport} readOnly={others} money={m} onClose={() => set({ report: null })} onChanged={refresh} />}
+      {openReport && <ReportView r={openReport} readOnly={others && !manager} money={m} onClose={() => set({ report: null })} onChanged={refresh} />}
     </div>
   );
 }
@@ -393,12 +394,15 @@ function ReportFormDialog({ report, onClose, onSaved }: { report: ExpenseReport 
 function ReportView({ r, readOnly, money: m, onClose, onChanged }: { r: ExpenseReport; readOnly?: boolean; money: (c: number) => string; onClose: () => void; onChanged: () => void }) {
   const { t } = useTranslation();
   const totalText = useTotalText();
+  const confirm = useConfirm();
+  // a manager (timesheets.manage) changes and removes any item or report, whoever's and whatever its status
+  const manager = useCan()("timesheets.manage");
   const open = r.status === "open" && !readOnly;
   const [item, setItem] = useState<Expense | "new" | { preset: ExpenseFavorite } | null>(null);
   const [editingReport, setEditingReport] = useState(false);
   const onError = (e: unknown) => {
     const code = e instanceof ApiError ? e.code : "";
-    toast.error(code === "report_empty" ? t("expense.report.empty") : code === "report_submitted" ? t("expense.report.locked") : t("common.error"));
+    toast.error(code === "report_empty" ? t("expense.report.empty") : code === "report_submitted" ? t("expense.report.locked") : code === "expense_billed" ? t("expense.billedLocked") : code === "expense_locked" ? t("expense.lockedItem") : t("common.error"));
   };
   const submit = useMutation({
     mutationFn: () => api.post(`/time/expense-reports/${r.id}/submit`),
@@ -443,7 +447,7 @@ function ReportView({ r, readOnly, money: m, onClose, onChanged }: { r: ExpenseR
           <div className="min-w-0 flex-1">
             <DialogTitle className="flex items-center gap-1.5 text-lg">
               <span className="truncate">{r.title}</span>
-              {open && (
+              {(open || (manager && r.status !== "open")) && (
                 <IconBtn label={t("expense.report.edit")} onClick={() => setEditingReport(true)}>
                   <Pencil className="size-3.5" />
                 </IconBtn>
@@ -511,7 +515,9 @@ function ReportView({ r, readOnly, money: m, onClose, onChanged }: { r: ExpenseR
                   </h3>
             <ul className="divide-y divide-border/60 rounded-xl border border-border/50 bg-card/30">
               {g.items.map((x) => {
-                const editable = open && (x.status === "draft" || x.status === "rejected");
+                // its owner changes it until it is paid (a sent one goes back to a draft) and removes it while it is not sent; a manager any
+                const canChange = manager || (!readOnly && x.status !== "paid");
+                const canRemove = manager || (open && (x.status === "draft" || x.status === "rejected"));
                 return (
                   <li key={x.id} className="grid grid-cols-[64px_minmax(0,1fr)_auto] items-center gap-3 rounded-lg px-3 py-2.5 text-sm hover:bg-foreground/[0.03] md:grid-cols-[72px_minmax(0,1fr)_96px_96px_auto]">
                     <span className="flex items-center gap-1.5 text-xs text-muted-foreground">
@@ -536,15 +542,19 @@ function ReportView({ r, readOnly, money: m, onClose, onChanged }: { r: ExpenseR
                           <Paperclip className="size-3.5" />
                         </a>
                       )}
-                      {editable && (
-                        <>
-                          <IconBtn label={t("expense.edit")} onClick={() => setItem(x)}>
-                            <Pencil className="size-3.5" />
-                          </IconBtn>
-                          <IconBtn label={t("expense.remove")} danger onClick={() => removeItem.mutate(x.id)}>
-                            <Trash2 className="size-3.5" />
-                          </IconBtn>
-                        </>
+                      {canChange && (
+                        <IconBtn label={t("expense.edit")} onClick={() => setItem(x)}>
+                          <Pencil className="size-3.5" />
+                        </IconBtn>
+                      )}
+                      {canRemove && (
+                        <IconBtn
+                          label={t("expense.remove")}
+                          danger
+                          onClick={() => (x.status === "draft" || x.status === "rejected" ? removeItem.mutate(x.id) : void confirm({ title: t("expense.removeSentTitle"), description: t("expense.removeSentText"), confirmLabel: t("expense.remove"), destructive: true }).then((ok) => ok && removeItem.mutate(x.id)))}
+                        >
+                          <Trash2 className="size-3.5" />
+                        </IconBtn>
                       )}
                     </span>
                   </li>
@@ -561,6 +571,13 @@ function ReportView({ r, readOnly, money: m, onClose, onChanged }: { r: ExpenseR
           )}
         </div>
 
+        {!open && manager && (
+          <footer className="flex flex-wrap items-center gap-2 border-t bg-foreground/[0.02] px-5 py-3">
+            <Button size="sm" variant="ghost" className="text-muted-foreground hover:text-destructive" disabled={removeReport.isPending} onClick={() => void confirm({ title: t("expense.report.deleteSentTitle", { title: r.title }), description: t("expense.report.deleteSentText"), confirmLabel: t("expense.report.delete"), destructive: true }).then((ok) => ok && removeReport.mutate())}>
+              <Trash2 className="size-3.5" /> {t("expense.report.delete")}
+            </Button>
+          </footer>
+        )}
         {open && (
           <footer className="flex flex-wrap items-center gap-2 border-t bg-foreground/[0.02] px-5 py-3">
             {r.items.every((x) => x.status === "draft" || x.status === "rejected") && (

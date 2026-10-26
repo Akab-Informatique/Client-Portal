@@ -60,26 +60,63 @@ async function timesheetOwner(a: AuthContext, asked: string | undefined): Promis
   return id;
 }
 
-async function ownExpense(id: string, userId: string) {
+const isManager = (a: AuthContext) => a.permissions.includes("timesheets.manage");
+
+/**
+ * Before an entry of a week is added, changed or removed. A week still open: fine. A manager (timesheets.manage) always
+ * can, for anyone, and the week keeps its status. A week already sent (submitted or approved): its owner can **change**
+ * an entry (`reopen`), and the week is open again afterwards (the function returned) to be sent again; adding or
+ * removing an entry there stays locked, and so does a paid week (timesheet_locked).
+ */
+async function weekLock(owner: string, date: string, a: AuthContext, opts: { reopen?: boolean } = {}): Promise<() => Promise<void>> {
+  const sheet = await sheetOf(owner, weekStartOf(date));
+  if (editable(sheet.status) || isManager(a)) return async () => {};
+  if (sheet.status === "paid" || !opts.reopen) throw new HTTPException(409, { message: "timesheet_locked" });
+  return async () => {
+    await db().update(schema.timesheets).set({ status: "draft", submittedAt: null, decidedAt: null, decidedBy: null, comment: null, updatedAt: new Date() }).where(eq(schema.timesheets.id, sheet.id));
+  };
+}
+
+/** An expense: its owner's, or anyone's for a manager (timesheets.manage) */
+async function ownExpense(id: string, a: AuthContext) {
   const [x] = await db()
     .select()
     .from(schema.expenses)
-    .where(and(eq(schema.expenses.id, zUuid.parse(id)), eq(schema.expenses.userId, userId)));
+    .where(and(eq(schema.expenses.id, zUuid.parse(id)), isManager(a) ? undefined : eq(schema.expenses.userId, a.user.id)));
   if (!x) throw new HTTPException(404, { message: "not_found" });
   return x;
 }
 
-/** One of my expense reports; `open`: refused once it was submitted (items are locked then). */
-async function ownReport(id: string, userId: string, opts: { open?: boolean } = {}) {
+/** An expense report: its owner's, or anyone's for a manager; `open`: the owner cannot change a report once it was sent (a manager always can). */
+async function ownReport(id: string, a: AuthContext, opts: { open?: boolean } = {}) {
   const r = zUuid.safeParse(id);
   if (!r.success) throw new HTTPException(404, { message: "not_found" });
   const [rep] = await db()
     .select()
     .from(schema.expenseReports)
-    .where(and(eq(schema.expenseReports.id, r.data), eq(schema.expenseReports.userId, userId)));
+    .where(and(eq(schema.expenseReports.id, r.data), isManager(a) ? undefined : eq(schema.expenseReports.userId, a.user.id)));
   if (!rep) throw new HTTPException(404, { message: "not_found" });
-  if (opts.open && rep.submittedAt) throw new HTTPException(409, { message: "report_submitted" });
+  if (opts.open && rep.submittedAt && !isManager(a)) throw new HTTPException(409, { message: "report_submitted" });
   return rep;
+}
+
+/** The work to bill an expense gave: what is already on an invoice cannot be changed (cancel the invoice first), the rest is taken off */
+async function billedBy(x: { billingItemId: string | null }) {
+  if (!x.billingItemId) return null;
+  const [bi] = await db().select({ id: schema.billingItems.id, status: schema.billingItems.status, invoiceId: schema.billingItems.invoiceId }).from(schema.billingItems).where(eq(schema.billingItems.id, x.billingItemId));
+  return bi ?? null;
+}
+/** Before an expense is changed or removed: nothing on an invoice; a paid one only by a manager */
+async function expenseGuard(x: { status: string; billingItemId: string | null }, a: AuthContext) {
+  const bi = await billedBy(x);
+  if (bi && (bi.status === "posted" || bi.invoiceId)) throw new HTTPException(409, { message: "expense_billed" });
+  if (x.status === "paid" && !isManager(a)) throw new HTTPException(409, { message: "expense_locked" });
+}
+/** Takes the (not invoiced) work to bill of an expense away, it is made again when the expense is approved */
+async function releaseBilling(x: { id: string; billingItemId: string | null }) {
+  if (!x.billingItemId) return;
+  await db().delete(schema.billingItems).where(eq(schema.billingItems.id, x.billingItemId));
+  await db().update(schema.expenses).set({ billingItemId: null }).where(eq(schema.expenses.id, x.id));
 }
 
 /**
@@ -418,6 +455,11 @@ export const timeRoutes = new Hono<AppEnv>()
       weeks: [...byWeek.values()].sort((x, y) => x.weekStart.localeCompare(y.weekStart)).map((w) => ({ weekStart: w.weekStart, workedHours: h(w.worked), billableHours: h(w.billable), bankedHours: h(w.banked), workdayHours: h(w.workday) })),
     });
   })
+  /**
+   * The week of an entry before it is added, changed or removed. Its owner can while the week is not paid: a week already
+   * sent is open again afterwards, to be sent again (the returned function does it). A manager (timesheets.manage) can
+   * for anyone, whatever the status, and the week keeps it.
+   */
   .post("/entries", requirePermission("timesheets.use", "timesheets.manage"), async (c) => {
     const a = auth(c);
     const zTime = z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/);
@@ -440,8 +482,7 @@ export const timeRoutes = new Hono<AppEnv>()
     const [type] = await db().select().from(schema.timesheetTypes).where(eq(schema.timesheetTypes.id, p.typeId));
     // ticket time comes from the tickets only
     if (!type || !type.active || type.kind === "labour") throw new HTTPException(400, { message: "time_type_unknown" });
-    const sheet = await sheetOf(owner, weekStartOf(p.date));
-    if (!editable(sheet.status)) throw new HTTPException(409, { message: "timesheet_locked" });
+    const reopen = await weekLock(owner, p.date, a);
     let hours = p.hours ?? 0;
     let workday: { startTime: string; endTime: string; lunchMinutes: number } | null = null;
     if (type.kind === "workday") {
@@ -466,22 +507,71 @@ export const timeRoutes = new Hono<AppEnv>()
       .insert(schema.timesheetEntries)
       .values({ userId: owner, date: p.date, typeId: type.id, hoursX100: Math.round(hours * 100), note: p.note || null, source: "manual", banked: type.kind === "workday" || type.kind === "bankpay" ? false : (p.banked ?? (await bankByDefault(owner))), ...(workday ?? {}) })
       .returning();
+    await reopen();
     if (owner !== a.user.id) await audit(a.user.id, "timesheet.entry_added_for", owner, { date: p.date, hours });
     return c.json(row, 201);
   })
+  /** Change an entry made by hand: its hours (or start and end for a work day), its note, its day, whether it is banked */
+  .patch("/entries/:id", requirePermission("timesheets.use", "timesheets.manage"), async (c) => {
+    const a = auth(c);
+    const zTime = z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/);
+    const p = await body(c, z.object({ date: zDay.optional(), hours: z.number().positive().max(24).optional(), note: z.string().trim().max(500).nullable().optional(), start: zTime.optional(), end: zTime.optional(), banked: z.boolean().optional() }));
+    const manager = isManager(a);
+    const [e] = await db()
+      .select()
+      .from(schema.timesheetEntries)
+      .where(and(eq(schema.timesheetEntries.id, zUuid.parse(c.req.param("id"))), manager ? undefined : eq(schema.timesheetEntries.userId, a.user.id)));
+    // ticket time is changed on its ticket
+    if (!e || e.source !== "manual") throw new HTTPException(404, { message: "not_found" });
+    const [type] = await db().select().from(schema.timesheetTypes).where(eq(schema.timesheetTypes.id, e.typeId));
+    const date = p.date ?? e.date;
+    const reopenFrom = await weekLock(e.userId, e.date, a, { reopen: true });
+    const reopenTo = date !== e.date && weekStartOf(date) !== weekStartOf(e.date) ? await weekLock(e.userId, date, a, { reopen: true }) : async () => {};
+    let hoursX100 = e.hoursX100;
+    let workday: { startTime: string; endTime: string; lunchMinutes: number } | null = null;
+    if (type?.kind === "workday") {
+      const start = p.start ?? e.startTime;
+      const end = p.end ?? e.endTime;
+      if (!start || !end) throw new HTTPException(400, { message: "workday_times" });
+      const minutes = (v: string) => Number(v.slice(0, 2)) * 60 + Number(v.slice(3));
+      const lunch = unpaidLunch(minutes(start), minutes(end));
+      const span = minutes(end) - minutes(start) - lunch;
+      if (span <= 0) throw new HTTPException(400, { message: "workday_times" });
+      hoursX100 = Math.round((span / 60) * 100);
+      workday = { startTime: start, endTime: end, lunchMinutes: lunch };
+      if (date !== e.date) {
+        const [again] = await db().select({ id: schema.timesheetEntries.id }).from(schema.timesheetEntries).where(and(eq(schema.timesheetEntries.userId, e.userId), eq(schema.timesheetEntries.date, date), eq(schema.timesheetEntries.typeId, e.typeId))).limit(1);
+        if (again) throw new HTTPException(409, { message: "workday_exists" });
+      }
+    } else if (p.hours !== undefined) hoursX100 = Math.round(p.hours * 100);
+    const banked = type?.kind === "workday" || type?.kind === "bankpay" ? false : (p.banked ?? e.banked);
+    // the hours bank: a payout cannot exceed it, banked hours already paid out cannot be taken back
+    const base = await bankBalanceX100(e.userId, e.id);
+    if (type?.kind === "bankpay" && hoursX100 > base) throw new HTTPException(409, { message: "bank_insufficient" });
+    if (e.banked && base + (banked ? hoursX100 : 0) < 0) throw new HTTPException(409, { message: "bank_in_use" });
+    const [row] = await db()
+      .update(schema.timesheetEntries)
+      .set({ date, hoursX100, banked, ...(p.note !== undefined ? { note: p.note || null } : {}), ...(workday ?? {}) })
+      .where(eq(schema.timesheetEntries.id, e.id))
+      .returning();
+    await reopenFrom();
+    await reopenTo();
+    await audit(a.user.id, "timesheet.entry_changed", e.id, { date: e.date, ...(e.userId !== a.user.id ? { for: e.userId } : {}) });
+    return c.json(row);
+  })
   .delete("/entries/:id", requirePermission("timesheets.use", "timesheets.manage"), async (c) => {
     const a = auth(c);
-    const manager = a.permissions.includes("timesheets.manage");
+    const manager = isManager(a);
     const [e] = await db()
       .select()
       .from(schema.timesheetEntries)
       .where(and(eq(schema.timesheetEntries.id, zUuid.parse(c.req.param("id"))), manager ? undefined : eq(schema.timesheetEntries.userId, a.user.id)));
     if (!e || e.source !== "manual") throw new HTTPException(404, { message: "not_found" });
-    const sheet = await sheetOf(e.userId, weekStartOf(e.date));
-    if (!editable(sheet.status)) throw new HTTPException(409, { message: "timesheet_locked" });
+    const reopen = await weekLock(e.userId, e.date, a);
     // banked hours already paid out cannot be taken back
     if (e.banked && (await bankBalanceX100(e.userId, e.id)) < 0) throw new HTTPException(409, { message: "bank_in_use" });
     await db().delete(schema.timesheetEntries).where(eq(schema.timesheetEntries.id, e.id));
+    await reopen();
     if (e.userId !== a.user.id) await audit(a.user.id, "timesheet.entry_removed_for", e.userId, { date: e.date });
     return c.json({ ok: true });
   })
@@ -569,9 +659,9 @@ export const timeRoutes = new Hono<AppEnv>()
     return c.json(row, 201);
   })
   /** Rename, or change the days covered (its items must stay within). */
-  .patch("/expense-reports/:id", requirePermission("timesheets.use"), async (c) => {
+  .patch("/expense-reports/:id", requirePermission("timesheets.use", "timesheets.manage"), async (c) => {
     const a = auth(c);
-    const rep = await ownReport(c.req.param("id"), a.user.id, { open: true });
+    const rep = await ownReport(c.req.param("id"), a, { open: true });
     const p = await body(
       c,
       z
@@ -593,17 +683,19 @@ export const timeRoutes = new Hono<AppEnv>()
       .where(eq(schema.expenseReports.id, rep.id));
     return c.json({ ok: true });
   })
-  /** An open report goes with its items, unless one of them was already approved or paid. */
-  .delete("/expense-reports/:id", requirePermission("timesheets.use"), async (c) => {
+  /**
+   * A report goes with its items (and their work to bill). Its owner only while it is open (not sent); a manager
+   * (timesheets.manage) for anyone, even sent, approved or paid. Nothing already on an invoice: cancel the invoice first.
+   */
+  .delete("/expense-reports/:id", requirePermission("timesheets.use", "timesheets.manage"), async (c) => {
     const a = auth(c);
-    const rep = await ownReport(c.req.param("id"), a.user.id, { open: true });
-    const [locked] = await db()
-      .select({ id: schema.expenses.id })
-      .from(schema.expenses)
-      .where(and(eq(schema.expenses.reportId, rep.id), inArray(schema.expenses.status, ["submitted", "approved", "paid"])))
-      .limit(1);
-    if (locked) throw new HTTPException(409, { message: "expense_locked" });
+    const rep = await ownReport(c.req.param("id"), a, { open: true });
+    const items = await db().select().from(schema.expenses).where(eq(schema.expenses.reportId, rep.id));
+    if (!isManager(a) && items.some((x) => x.status !== "draft" && x.status !== "rejected")) throw new HTTPException(409, { message: "expense_locked" });
+    for (const x of items) await expenseGuard(x, a);
+    for (const x of items) await releaseBilling(x);
     await db().delete(schema.expenseReports).where(eq(schema.expenseReports.id, rep.id));
+    await audit(a.user.id, "expense.report_deleted", rep.id, { title: rep.title, items: items.length, ...(rep.userId !== a.user.id ? { for: rep.userId } : {}) });
     return c.json({ ok: true });
   })
   /** The report as the PDF accounting gets: its owner, or whoever manages, approves or does the accounting */
@@ -617,8 +709,8 @@ export const timeRoutes = new Hono<AppEnv>()
   })
   .post("/expense-reports/:id/submit", requirePermission("timesheets.use"), async (c) => {
     const a = auth(c);
-    const rep = await ownReport(c.req.param("id"), a.user.id, { open: true });
-    const sent = await submitReport(rep.id, a.user.id);
+    const rep = await ownReport(c.req.param("id"), a, { open: true });
+    const sent = await submitReport(rep.id, rep.userId);
     await audit(a.user.id, "expense.submitted", rep.id, { count: sent.length, amountCents: sent.reduce((s, x) => s + x.amountCents, 0) });
     return c.json({ submitted: sent.length });
   })
@@ -722,7 +814,7 @@ export const timeRoutes = new Hono<AppEnv>()
     if (p.clientId) await activeClient(p.clientId);
     let reportId: string;
     if (p.reportId) {
-      const rep = await ownReport(p.reportId, a.user.id, { open: true });
+      const rep = await ownReport(p.reportId, a, { open: true });
       inPeriod(rep, p.date);
       reportId = rep.id;
     } else {
@@ -754,10 +846,15 @@ export const timeRoutes = new Hono<AppEnv>()
       .returning();
     return c.json(expenseView(row), 201);
   })
-  .patch("/expenses/:id", requirePermission("timesheets.use"), async (c) => {
+  /**
+   * Change an expense. Its owner can until it is paid or invoiced: a sent item goes back to a draft and its report is
+   * open again, to be sent again. A manager (timesheets.manage) can change anyone's, whatever its status: it keeps it,
+   * and its work to bill follows.
+   */
+  .patch("/expenses/:id", requirePermission("timesheets.use", "timesheets.manage"), async (c) => {
     const a = auth(c);
-    const cur = await ownExpense(c.req.param("id"), a.user.id);
-    if (!editable(cur.status)) throw new HTTPException(409, { message: "expense_locked" });
+    const cur = await ownExpense(c.req.param("id"), a);
+    await expenseGuard(cur, a);
     const p = await body(
       c,
       z.object({
@@ -773,7 +870,7 @@ export const timeRoutes = new Hono<AppEnv>()
         receipt: zReceipt,
       }),
     );
-    if (p.date && cur.reportId) inPeriod(await ownReport(cur.reportId, a.user.id), p.date);
+    if (p.date && cur.reportId) inPeriod(await ownReport(cur.reportId, a), p.date);
     const pr =
       p.typeId || p.quantity !== undefined || p.amountCents !== undefined
         ? await priced(p.typeId ?? cur.typeId, { quantity: p.quantity ?? cur.quantityX100 / 100, amountCents: p.amountCents ?? cur.amountCents })
@@ -798,26 +895,36 @@ export const timeRoutes = new Hono<AppEnv>()
         ...(p.receipt !== undefined
           ? { receiptName: p.receipt?.name ?? null, receiptType: p.receipt?.contentType ?? null, receiptData: p.receipt?.data ?? null }
           : {}),
-        status: "draft",
+        // a manager keeps the status; the owner's change on a sent item sends it back
+        ...(isManager(a) ? {} : { status: "draft", decidedAt: null, comment: null }),
         updatedAt: new Date(),
       })
       .where(eq(schema.expenses.id, cur.id))
       .returning();
+    // the work to bill follows: taken off, and made again for an approved / paid item a manager changed
+    await releaseBilling(cur);
+    if (isManager(a) && (cur.status === "approved" || cur.status === "paid")) await billExpense(db(), row, a.user.id);
+    if (!isManager(a) && cur.reportId && cur.status !== "draft") await db().update(schema.expenseReports).set({ submittedAt: null, updatedAt: new Date() }).where(eq(schema.expenseReports.id, cur.reportId));
+    if (cur.userId !== a.user.id || cur.status !== "draft") await audit(a.user.id, "expense.changed", cur.id, { was: cur.status, ...(cur.userId !== a.user.id ? { for: cur.userId } : {}) });
     return c.json(expenseView(row));
   })
-  .delete("/expenses/:id", requirePermission("timesheets.use"), async (c) => {
+  /** Remove an expense: its owner while it is a draft or refused (not sent), a manager (timesheets.manage) anyone's whatever its status (not once invoiced) */
+  .delete("/expenses/:id", requirePermission("timesheets.use", "timesheets.manage"), async (c) => {
     const a = auth(c);
-    const cur = await ownExpense(c.req.param("id"), a.user.id);
-    if (!editable(cur.status)) throw new HTTPException(409, { message: "expense_locked" });
+    const cur = await ownExpense(c.req.param("id"), a);
+    if (!isManager(a) && !editable(cur.status)) throw new HTTPException(409, { message: "expense_locked" });
+    await expenseGuard(cur, a);
+    await releaseBilling(cur);
     await db().delete(schema.expenses).where(eq(schema.expenses.id, cur.id));
+    if (cur.userId !== a.user.id || cur.status !== "draft") await audit(a.user.id, "expense.removed", cur.id, { was: cur.status, description: cur.description, ...(cur.userId !== a.user.id ? { for: cur.userId } : {}) });
     return c.json({ ok: true });
   })
   /** Sends the item's whole report (items go to approval together). */
   .post("/expenses/:id/submit", requirePermission("timesheets.use"), async (c) => {
     const a = auth(c);
-    const cur = await ownExpense(c.req.param("id"), a.user.id);
+    const cur = await ownExpense(c.req.param("id"), a);
     if (!editable(cur.status) || !cur.reportId) throw new HTTPException(409, { message: "expense_locked" });
-    const sent = await submitReport(cur.reportId, a.user.id);
+    const sent = await submitReport(cur.reportId, cur.userId);
     await audit(a.user.id, "expense.submitted", cur.reportId, { count: sent.length, amountCents: sent.reduce((s, x) => s + x.amountCents, 0) });
     const [row] = await db().select().from(schema.expenses).where(eq(schema.expenses.id, cur.id));
     return c.json(expenseView(row));
