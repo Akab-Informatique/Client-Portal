@@ -3,9 +3,10 @@ import { useSearchParams } from "react-router-dom";
 import { useTranslation } from "react-i18next";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
-import { BadgeCheck, Banknote, CalendarRange, ChevronRight, FilePen, FileText, Folder, FolderOpen, Loader2, Paperclip, Pencil, Plus, Send, Star, Trash2, UserCog, Wallet, X } from "lucide-react";
+import { Archive, ArchiveRestore, Eraser, BadgeCheck, Banknote, CalendarRange, ChevronRight, FilePen, FileText, Folder, FolderOpen, Loader2, Paperclip, Pencil, Plus, Send, Star, Trash2, UserCog, Wallet, X } from "lucide-react";
 import { GlassBackdrop } from "@/components/brand/GlassBackdrop";
 import { Button } from "@/components/ui/button";
+import { useConfirm } from "@/components/ConfirmDialog";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -175,6 +176,18 @@ export function ExpensesPage() {
   const { data: people } = useQuery({ queryKey: ["time", "people"], queryFn: () => api.get<{ id: string; name: string; timesheetRequired: boolean }[]>("/time/people"), enabled: manager });
   const { data: reports = [], isLoading } = useQuery({ queryKey: ["time", "expense-reports", who], queryFn: () => api.get<ExpenseReport[]>(`/time/expense-reports${others ? `?userId=${who}` : ""}`) });
   const [creating, setCreating] = useState(false);
+  const confirm = useConfirm();
+  // the backup: reports put aside for a clean start (managers look at them, bring one back)
+  const { data: backup = [] } = useQuery({ queryKey: ["time", "expense-reports", "backup"], queryFn: () => api.get<BackupReport[]>("/time/expense-reports/backup"), enabled: manager });
+  const backupAll = useMutation({
+    mutationFn: () => api.post<{ reports: number; items: number }>("/time/expense-reports/backup-all", { confirm: true }),
+    onSuccess: (r) => {
+      toast.success(t("expense.backup.done", { reports: r.reports, items: r.items }));
+      refresh();
+      set({ view: "backup", status: null, report: null });
+    },
+    onError: () => toast.error(t("common.error")),
+  });
   const m = (c: number) => money(c, i18n.language);
   const totalText = useTotalText();
   const refresh = () => {
@@ -192,6 +205,7 @@ export function ExpensesPage() {
       },
       { replace: true },
     );
+  const backupView = manager && params.get("view") === "backup";
   const raw = params.get("status");
   const filter = raw === "all" ? null : (FILTERS.find((f) => f.key === raw) ?? FILTERS[0]);
   const setFilter = (k: FilterKey | "all") => set({ status: k === "open" ? null : k });
@@ -224,7 +238,24 @@ export function ExpensesPage() {
             </SelectContent>
           </Select>
         )}
-        {!others && (
+        {manager && !others && (
+          <>
+            <Button variant="outline" onClick={() => set({ view: backupView ? null : "backup", report: null })} className="gap-1.5">
+              <Archive className="size-4" /> {backupView ? t("expense.backup.back") : t("expense.backup.button", { count: backup.length })}
+            </Button>
+            {!backupView && (
+              <Button
+                variant="outline"
+                disabled={backupAll.isPending}
+                onClick={() => void confirm({ title: t("expense.backup.confirmTitle"), description: t("expense.backup.confirmText"), confirmLabel: t("expense.backup.confirm"), destructive: true }).then((ok) => ok && backupAll.mutate())}
+                className="gap-1.5 border-amber-500/40 text-amber-200 hover:bg-amber-500/10"
+              >
+                {backupAll.isPending ? <Loader2 className="size-4 animate-spin" /> : <Eraser className="size-4" />} {t("expense.backup.reset")}
+              </Button>
+            )}
+          </>
+        )}
+        {!others && !backupView && (
           <Button onClick={() => setCreating(true)} className="bg-grad-gold font-semibold text-[#1a1204] hover:brightness-105">
             <Plus className="size-4" /> {t("expense.report.new")}
           </Button>
@@ -232,6 +263,10 @@ export function ExpensesPage() {
       </div>
       {others && <p className="rounded-xl border border-[color:var(--gold)]/30 bg-[color:var(--gold)]/5 px-3 py-2 text-xs text-muted-foreground">{t("expense.viewing", { name: people?.find((x) => x.id === who)?.name ?? "" })}</p>}
 
+      {backupView ? (
+        <BackupSection rows={backup} onChanged={refresh} />
+      ) : (
+        <>
       {toFix.length > 0 && filter?.key !== "open" && (
         <button
           type="button"
@@ -307,6 +342,8 @@ export function ExpensesPage() {
           );
         })}
       </ul>
+        </>
+      )}
 
       {creating && (
         <ReportFormDialog
@@ -321,6 +358,71 @@ export function ExpensesPage() {
         />
       )}
       {openReport && <ReportView r={openReport} readOnly={others} money={m} onClose={() => set({ report: null })} onChanged={refresh} />}
+    </div>
+  );
+}
+
+type BackupReport = { id: string; title: string; userName: string; periodStart: string | null; periodEnd: string | null; archivedAt: string; status: FilterKey; itemCount: number; moneyCents: number; totalKm: number };
+
+/** The backup: every report put aside for a clean start, by person, each with its PDF and a way to bring it back. */
+function BackupSection({ rows, onChanged }: { rows: BackupReport[]; onChanged: () => void }) {
+  const { t, i18n } = useTranslation();
+  const confirm = useConfirm();
+  const totalText = useTotalText();
+  const restore = useMutation({
+    mutationFn: (id: string) => api.post(`/time/expense-reports/${id}/restore`, {}),
+    onSuccess: () => {
+      toast.success(t("expense.backup.restored"));
+      onChanged();
+    },
+    onError: () => toast.error(t("common.error")),
+  });
+  const people = [...new Set(rows.map((r) => r.userName))];
+  if (!rows.length) return <p className="glass rounded-2xl border border-dashed py-14 text-center text-sm text-muted-foreground">{t("expense.backup.none")}</p>;
+  return (
+    <div className="space-y-5">
+      <p className="rounded-xl border border-[color:var(--gold)]/30 bg-[color:var(--gold)]/5 px-3 py-2 text-xs text-muted-foreground">{t("expense.backup.hint")}</p>
+      {people.map((name) => (
+        <section key={name} className="space-y-2">
+          <h3 className="flex items-center gap-2 text-sm font-semibold">
+            <UserCog className="size-4 text-primary" /> {name}
+          </h3>
+          <ul className="space-y-2">
+            {rows
+              .filter((r) => r.userName === name)
+              .map((r) => {
+                const pill = FILTERS.find((x) => x.key === r.status)!;
+                return (
+                  <li key={r.id} className="glass flex flex-wrap items-center gap-x-4 gap-y-1 rounded-2xl border px-4 py-3">
+                    <span className="min-w-0 flex-1">
+                      <span className="block truncate font-semibold">{r.title}</span>
+                      <span className="block truncate text-xs text-muted-foreground">
+                        {[periodText(r.periodStart, r.periodEnd), t("expense.report.items", { count: r.itemCount }), t("expense.backup.on", { date: new Date(r.archivedAt).toLocaleDateString(i18n.language) })].filter(Boolean).join(" · ")}
+                      </span>
+                    </span>
+                    <span className={cn("inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[11px] font-medium", pill.className)}>
+                      <pill.icon className="size-3" /> {t(`expense.filter.${pill.key}`)}
+                    </span>
+                    <span className="w-28 text-right font-mono font-semibold">{totalText(r)}</span>
+                    <a href={`/api/time/expense-reports/${r.id}/pdf`} target="_blank" rel="noreferrer" className="inline-flex h-8 items-center gap-1.5 rounded-md border px-2.5 text-xs hover:bg-accent/40">
+                      <FileText className="size-3.5" /> PDF
+                    </a>
+                    <Button
+                      type="button"
+                      size="sm"
+                      variant="outline"
+                      className="h-8 gap-1.5 text-xs"
+                      disabled={restore.isPending}
+                      onClick={() => void confirm({ title: t("expense.backup.restoreTitle", { title: r.title }), description: t("expense.backup.restoreText"), confirmLabel: t("expense.backup.restore") }).then((ok) => ok && restore.mutate(r.id))}
+                    >
+                      <ArchiveRestore className="size-3.5" /> {t("expense.backup.restore")}
+                    </Button>
+                  </li>
+                );
+              })}
+          </ul>
+        </section>
+      ))}
     </div>
   );
 }

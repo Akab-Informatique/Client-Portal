@@ -7791,3 +7791,61 @@ describe("contracts: services when made, charges, activity, stop instead of dele
     }
   });
 });
+
+describe("expense reports: the backup (a clean start)", () => {
+  it("puts every report in the backup, keeps it as it was, out of every list; managers look at it and can bring one back", async () => {
+    resetRateLimit("login:ip:unknown");
+    const admin = await signIn("admin@akab.local");
+    const tech = await signIn("tech@akab.local");
+    const tech2 = await signIn("tech2@akab.local");
+    const parking = (await tech.get("/api/time/types")).json.expense.find((x: any) => x.name === "Stationnement").id;
+    const mk = async (who: any, title: string, amountCents: number, send: boolean) => {
+      const r = (await who.post("/api/time/expense-reports", { title, periodStart: "2026-09-01", periodEnd: "2026-09-30" })).json;
+      const item = (await who.post("/api/time/expenses", { reportId: r.id, date: "2026-09-10", typeId: parking, description: "Stationnement", amountCents })).json;
+      if (send) await who.post(`/api/time/expense-reports/${r.id}/submit`, {});
+      return { r, item };
+    };
+    const a = await mk(tech, "Septembre (envoyé)", 1_500, true);
+    const b = await mk(tech2, "Septembre (ouvert)", 2_500, false);
+    expect((await tech.get("/api/time/expense-reports")).json.map((x: any) => x.id)).toContain(a.r.id);
+
+    // only a manager does it, and only when sure
+    expect((await tech.post("/api/time/expense-reports/backup-all", { confirm: true })).status).toBe(403);
+    expect((await admin.post("/api/time/expense-reports/backup-all", {})).status).toBe(400);
+    const done = (await admin.post("/api/time/expense-reports/backup-all", { confirm: true })).json;
+    expect(done.reports).toBeGreaterThanOrEqual(2);
+    expect(done.items).toBeGreaterThanOrEqual(2);
+
+    // everybody starts from new: no report, no item, nothing to approve
+    expect((await tech.get("/api/time/expense-reports")).json).toEqual([]);
+    expect((await tech2.get("/api/time/expense-reports")).json).toEqual([]);
+    expect((await tech.get("/api/time/expenses")).json).toEqual([]);
+    expect((await admin.get("/api/time/approvals/expenses?status=submitted")).json.find((x: any) => x.id === a.item.id)).toBeUndefined();
+    // nothing is added to, changed or sent in a report of the backup
+    expect((await tech.post("/api/time/expenses", { reportId: a.r.id, date: "2026-09-11", typeId: parking, description: "x", amountCents: 1 })).json.error).toBe("report_archived");
+    expect((await tech.patch(`/api/time/expenses/${a.item.id}`, { description: "changé" })).json.error).toBe("report_archived");
+    expect((await tech2.post(`/api/time/expense-reports/${b.r.id}/submit`, {})).json.error).toBe("report_archived");
+    // a new report is a fresh start
+    const fresh = await tech.post("/api/time/expense-reports", { title: "Octobre", periodStart: "2026-10-01", periodEnd: "2026-10-31" });
+    expect((await tech.get("/api/time/expense-reports")).json.map((x: any) => x.title)).toEqual(["Octobre"]);
+
+    // the backup, kept as it was: everyone's, with the person, the status and the totals
+    expect((await tech.get("/api/time/expense-reports/backup")).status).toBe(403);
+    const backup = (await admin.get("/api/time/expense-reports/backup")).json;
+    const sent = backup.find((x: any) => x.id === a.r.id);
+    expect(sent).toMatchObject({ title: "Septembre (envoyé)", status: "submitted", itemCount: 1, moneyCents: 1_500, totalKm: 0 });
+    expect(sent.userName).toEqual(expect.any(String));
+    expect(backup.find((x: any) => x.id === b.r.id)).toMatchObject({ status: "open", moneyCents: 2_500 });
+    expect(backup.find((x: any) => x.title === "Octobre")).toBeUndefined();
+    // running it again only takes what is new (the fresh report), and the backup grows
+    expect((await admin.post("/api/time/expense-reports/backup-all", { confirm: true })).json.reports).toBe(1);
+
+    // bringing one back
+    expect((await tech.post(`/api/time/expense-reports/${a.r.id}/restore`, {})).status).toBe(403);
+    expect((await admin.post(`/api/time/expense-reports/${a.r.id}/restore`, {})).json).toEqual({ ok: true });
+    expect((await admin.post(`/api/time/expense-reports/${a.r.id}/restore`, {})).status).toBe(404);
+    expect((await tech.get("/api/time/expense-reports")).json.map((x: any) => x.id)).toEqual([a.r.id]);
+    expect((await tech.get("/api/time/expenses")).json.map((x: any) => x.id)).toEqual([a.item.id]);
+    expect(fresh.status).toBe(201);
+  });
+});

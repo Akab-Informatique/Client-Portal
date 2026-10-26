@@ -1,7 +1,7 @@
 import { isMileageUnit, tripLabel } from "../../shared/mileage.ts";
 import { Hono } from "hono";
 import { HTTPException } from "hono/http-exception";
-import { and, asc, desc, eq, getTableColumns, gte, inArray, lte, ne, sql } from "drizzle-orm";
+import { and, asc, count, desc, eq, getTableColumns, gte, inArray, isNotNull, isNull, lte, ne, sql } from "drizzle-orm";
 import { z } from "zod";
 import { db, schema } from "../db/index.ts";
 import { auth, requirePermission, requireStaff, type AppEnv, type AuthContext } from "../lib/auth.ts";
@@ -66,8 +66,16 @@ async function ownExpense(id: string, userId: string) {
     .from(schema.expenses)
     .where(and(eq(schema.expenses.id, zUuid.parse(id)), eq(schema.expenses.userId, userId)));
   if (!x) throw new HTTPException(404, { message: "not_found" });
+  // an expense of a report put in the backup is no longer changed
+  if (x.reportId) {
+    const [r] = await db().select({ archivedAt: schema.expenseReports.archivedAt }).from(schema.expenseReports).where(eq(schema.expenseReports.id, x.reportId));
+    if (r?.archivedAt) throw new HTTPException(409, { message: "report_archived" });
+  }
   return x;
 }
+
+/** The expenses that are not in a report put in the backup */
+const notArchived = sql`(${schema.expenses.reportId} is null or ${schema.expenses.reportId} not in (select id from expense_reports where archived_at is not null))`;
 
 /** One of my expense reports; `open`: refused once it was submitted (items are locked then). */
 async function ownReport(id: string, userId: string, opts: { open?: boolean } = {}) {
@@ -78,6 +86,7 @@ async function ownReport(id: string, userId: string, opts: { open?: boolean } = 
     .from(schema.expenseReports)
     .where(and(eq(schema.expenseReports.id, r.data), eq(schema.expenseReports.userId, userId)));
   if (!rep) throw new HTTPException(404, { message: "not_found" });
+  if (rep.archivedAt) throw new HTTPException(409, { message: "report_archived" });
   if (opts.open && rep.submittedAt) throw new HTTPException(409, { message: "report_submitted" });
   return rep;
 }
@@ -524,13 +533,13 @@ export const timeRoutes = new Hono<AppEnv>()
     const a = auth(c);
     const owner = await timesheetOwner(a, c.req.query("userId"));
     const [reports, rows] = await Promise.all([
-      db().select().from(schema.expenseReports).where(eq(schema.expenseReports.userId, owner)).orderBy(desc(schema.expenseReports.createdAt)),
+      db().select().from(schema.expenseReports).where(and(eq(schema.expenseReports.userId, owner), isNull(schema.expenseReports.archivedAt))).orderBy(desc(schema.expenseReports.createdAt)),
       db()
         .select({ x: listColumns, type: schema.expenseTypes.name, unit: schema.expenseTypes.unit, client: schema.clients.name })
         .from(schema.expenses)
         .innerJoin(schema.expenseTypes, eq(schema.expenseTypes.id, schema.expenses.typeId))
         .leftJoin(schema.clients, eq(schema.clients.id, schema.expenses.clientId))
-        .where(eq(schema.expenses.userId, owner))
+        .where(and(eq(schema.expenses.userId, owner), notArchived))
         .orderBy(asc(schema.expenses.date), asc(schema.expenses.createdAt)),
     ]);
     const out = reports.map((r) => {
@@ -558,6 +567,63 @@ export const timeRoutes = new Hono<AppEnv>()
     // open ones first, then the latest
     out.sort((p, q) => Number(q.status === "open") - Number(p.status === "open"));
     return c.json(out);
+  })
+  /**
+   * The backup of expense reports: a clean start. Every report in use, whoever's, is put in the backup — kept exactly
+   * as it was (items, status, receipts, PDF), out of every list, nothing added to it. Nothing is deleted. (timesheets.manage)
+   */
+  .post("/expense-reports/backup-all", requirePermission("timesheets.manage"), async (c) => {
+    const a = auth(c);
+    await body(c, z.object({ confirm: z.literal(true) }));
+    const now = new Date();
+    const reports = await db().update(schema.expenseReports).set({ archivedAt: now, archivedBy: a.user.id }).where(isNull(schema.expenseReports.archivedAt)).returning({ id: schema.expenseReports.id });
+    const [items] = await db().select({ n: count() }).from(schema.expenses).where(inArray(schema.expenses.reportId, reports.length ? reports.map((r) => r.id) : ["00000000-0000-4000-8000-000000000000"]));
+    await audit(a.user.id, "expense.backup_all", null, { reports: reports.length, items: items?.n ?? 0 });
+    return c.json({ reports: reports.length, items: items?.n ?? 0 });
+  })
+  /** What is in the backup, everyone's, with the person and the totals (to look at, to open as PDF, to bring back) */
+  .get("/expense-reports/backup", requirePermission("timesheets.manage", "timesheets.approve", "accounting.manage"), async (c) => {
+    const reports = await db()
+      .select({ r: schema.expenseReports, user: schema.users.name })
+      .from(schema.expenseReports)
+      .innerJoin(schema.users, eq(schema.users.id, schema.expenseReports.userId))
+      .where(isNotNull(schema.expenseReports.archivedAt))
+      .orderBy(asc(schema.users.name), desc(schema.expenseReports.createdAt));
+    const rows = reports.length
+      ? await db()
+          .select({ x: listColumns, unit: schema.expenseTypes.unit })
+          .from(schema.expenses)
+          .innerJoin(schema.expenseTypes, eq(schema.expenseTypes.id, schema.expenses.typeId))
+          .where(inArray(schema.expenses.reportId, reports.map((r) => r.r.id)))
+      : [];
+    return c.json(
+      reports.map(({ r, user }) => {
+        const items = rows.filter((x) => x.x.reportId === r.id).map((x) => ({ ...x.x, mileage: isMileageUnit(x.unit) }));
+        return {
+          id: r.id,
+          title: r.title,
+          userId: r.userId,
+          userName: user,
+          periodStart: r.periodStart,
+          periodEnd: r.periodEnd,
+          submittedAt: r.submittedAt,
+          archivedAt: r.archivedAt,
+          status: reportStatus(r.submittedAt, items.map((i) => ({ status: i.status }))),
+          itemCount: items.length,
+          moneyCents: items.filter((i) => !i.mileage).reduce((s, i) => s + i.amountCents, 0),
+          totalKm: items.filter((i) => i.mileage).reduce((s, i) => s + i.quantityX100, 0) / 100,
+        };
+      }),
+    );
+  })
+  /** Bring a report back out of the backup */
+  .post("/expense-reports/:id/restore", requirePermission("timesheets.manage"), async (c) => {
+    const a = auth(c);
+    const id = zUuid.parse(c.req.param("id"));
+    const [row] = await db().update(schema.expenseReports).set({ archivedAt: null, archivedBy: null }).where(and(eq(schema.expenseReports.id, id), isNotNull(schema.expenseReports.archivedAt))).returning({ id: schema.expenseReports.id, title: schema.expenseReports.title });
+    if (!row) throw new HTTPException(404, { message: "not_found" });
+    await audit(a.user.id, "expense.restored", id, { title: row.title });
+    return c.json({ ok: true });
   })
   .post("/expense-reports", requirePermission("timesheets.use"), async (c) => {
     const a = auth(c);
@@ -691,7 +757,7 @@ export const timeRoutes = new Hono<AppEnv>()
       .from(schema.expenses)
       .innerJoin(schema.expenseTypes, eq(schema.expenseTypes.id, schema.expenses.typeId))
       .leftJoin(schema.clients, eq(schema.clients.id, schema.expenses.clientId))
-      .where(eq(schema.expenses.userId, a.user.id))
+      .where(and(eq(schema.expenses.userId, a.user.id), notArchived))
       .orderBy(desc(schema.expenses.date), desc(schema.expenses.createdAt));
     return c.json(rows.map((r) => expenseView(r.x, { type: r.type, clientName: r.client, ...mileageExtra(r.unit) })));
   })
@@ -938,7 +1004,7 @@ export const timeRoutes = new Hono<AppEnv>()
       .innerJoin(schema.users, eq(schema.users.id, schema.expenses.userId))
       .leftJoin(schema.clients, eq(schema.clients.id, schema.expenses.clientId))
       .leftJoin(schema.expenseReports, eq(schema.expenseReports.id, schema.expenses.reportId))
-      .where(and(eq(schema.expenses.status, status), from ? gte(schema.expenses.date, from) : undefined, to ? lte(schema.expenses.date, to) : undefined))
+      .where(and(eq(schema.expenses.status, status), notArchived, from ? gte(schema.expenses.date, from) : undefined, to ? lte(schema.expenses.date, to) : undefined))
       .orderBy(asc(schema.users.name), desc(schema.expenses.date))
       .limit(500);
     return c.json(rows.map((r) => expenseView(r.x, { type: r.type, ...mileageExtra(r.unit), userName: r.user, clientName: r.client, reportTitle: r.report })));
