@@ -1815,9 +1815,6 @@ export const expenseReports = pgTable(
     autotaskId: bigint("autotask_id", { mode: "number" }),
     /** When it was last copied; changed in the portal since: a second pass keeps the portal's version */
     autotaskSyncedAt: timestamp("autotask_synced_at", { withTimezone: true }),
-    /** Put in the backup (a clean start): kept as it was, out of every list, nothing is added to it; null: in use */
-    archivedAt: timestamp("archived_at", { withTimezone: true }),
-    archivedBy: uuid("archived_by").references(() => users.id, { onDelete: "set null" }),
     createdAt: created(),
     updatedAt: updated(),
   },
