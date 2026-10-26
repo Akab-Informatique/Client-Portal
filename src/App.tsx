@@ -19,6 +19,7 @@ const DashboardPage = lazy(() => pageLoaders.dashboard().then((m) => ({ default:
 const MessagesPage = lazy(() => pageLoaders.messages().then((m) => ({ default: m.MessagesPage })));
 const TicketsPage = lazy(() => pageLoaders.tickets().then((m) => ({ default: m.TicketsPage })));
 const PipelinePage = lazy(() => pageLoaders.pipeline().then((m) => ({ default: m.PipelinePage })));
+const ProjectsPage = lazy(() => pageLoaders.projects().then((m) => ({ default: m.ProjectsPage })));
 const ServicesPage = lazy(() => pageLoaders.services().then((m) => ({ default: m.ServicesPage })));
 const PassboltPage = lazy(() => pageLoaders.passbolt().then((m) => ({ default: m.PassboltPage })));
 const StorePage = lazy(() => pageLoaders.store().then((m) => ({ default: m.StorePage })));
@@ -100,6 +101,7 @@ function StaffApp() {
         <Route path="tickets" element={<Guard permission="tickets.view"><TicketsPage /></Guard>} />
         <Route path="store" element={<Guard permission="store.view"><StorePage /></Guard>} />
         <Route path="pipeline" element={<Guard permission="pipeline.view"><PipelinePage /></Guard>} />
+        <Route path="projects" element={<Guard permission="projects.view"><ProjectsPage /></Guard>} />
         <Route path="security/passbolt" element={<Guard permission="passbolt.use"><PassboltPage /></Guard>} />
         <Route path="services" element={<Guard permission="services.view"><ServicesPage /></Guard>} />
         <Route path="outlook" element={<Guard permission="outlook.view"><OutlookPage /></Guard>} />

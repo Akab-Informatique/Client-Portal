@@ -36,6 +36,7 @@ import { ticketRoutes } from "./routes/tickets.ts";
 import { quoteRoutes } from "./routes/quotes.ts";
 import { storeRoutes } from "./routes/store.ts";
 import { pipelineRoutes } from "./routes/pipeline.ts";
+import { projectsRoutes } from "./routes/projects.ts";
 import { planningRoutes } from "./routes/planning.ts";
 import { smsHookRoutes, smsRoutes } from "./routes/sms.ts";
 import { outlookRoutes } from "./routes/outlook.ts";
@@ -113,6 +114,7 @@ export function createApp() {
   api.route("/store", storeRoutes);
   api.route("/quotes", quoteRoutes);
   api.route("/pipeline", pipelineRoutes);
+  api.route("/projects", projectsRoutes);
   api.route("/services", serviceRoutes);
   api.route("/passbolt", passboltRoutes);
   api.route("/planning", planningRoutes);

@@ -1,0 +1,2 @@
+ALTER TABLE "project_task_notes" ADD COLUMN "kind" text DEFAULT 'internal' NOT NULL;--> statement-breakpoint
+ALTER TABLE "project_task_notes" ADD COLUMN "emailed_to" jsonb DEFAULT '[]'::jsonb NOT NULL;

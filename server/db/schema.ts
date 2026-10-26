@@ -1781,7 +1781,11 @@ export const timesheetEntries = pgTable(
     banked: boolean("banked").notNull().default(false),
     /** The contract the time was logged on (client_contracts.id) */
     contractId: uuid("contract_id"),
-    /** ticket | manual */
+    /** The project (and its milestone) the time was logged on (Projets › Temps); no ticket then */
+    projectId: uuid("project_id"),
+    milestoneId: uuid("milestone_id"),
+    taskId: uuid("task_id"),
+    /** ticket | manual | project */
     source: text("source").notNull().default("manual"),
     createdAt: created(),
   },
@@ -2382,4 +2386,165 @@ export const invoiceReminders = pgTable(
     sentAt: timestamp("sent_at", { withTimezone: true }).notNull().defaultNow(),
   },
   (t) => [uniqueIndex("invoice_reminders_invoice_level_idx").on(t.invoiceId, t.level)],
+);
+
+// ── Projects (Centre de commande › Projets) ──
+/** A project: a folder of milestones, tasks, time and notes, for a client or for ourselves. */
+export const projects = pgTable(
+  "projects",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    /** P-1001… (highest + 1) */
+    number: text("number").notNull().unique(),
+    name: text("name").notNull(),
+    clientId: uuid("client_id").references(() => clients.id, { onDelete: "set null" }),
+    description: text("description").notNull().default(""),
+    status: text("status", { enum: ["planning", "active", "on_hold", "done", "cancelled"] }).notNull().default("planning"),
+    leadId: uuid("lead_id").references(() => users.id, { onDelete: "set null" }),
+    /** YYYY-MM-DD (Québec) */
+    startDate: text("start_date"),
+    dueDate: text("due_date"),
+    /** Hours planned for the whole project, in hundredths; none = no budget */
+    budgetHoursX100: integer("budget_hours_x100"),
+    /** How the project is billed: by the hour, or for a fixed price. It only sets whether time entries start billable (hourly) or included (fixed); each entry can be changed. */
+    billingMode: text("billing_mode", { enum: ["hourly", "fixed"] }).notNull().default("hourly"),
+    /** The hourly rate of billable time on this project (none: the client's, else the usual one) */
+    hourlyRateCents: integer("hourly_rate_cents"),
+    /** The agreed price of a fixed-price project */
+    fixedPriceCents: integer("fixed_price_cents"),
+    createdBy: uuid("created_by").references(() => users.id, { onDelete: "set null" }),
+    closedAt: timestamp("closed_at", { withTimezone: true }),
+    createdAt: created(),
+    updatedAt: updated(),
+  },
+  (t) => [index("projects_status_idx").on(t.status), index("projects_lead_idx").on(t.leadId), index("projects_client_idx").on(t.clientId)],
+);
+
+/** The team of a project (the lead is one of them too) */
+export const projectMembers = pgTable(
+  "project_members",
+  {
+    projectId: uuid("project_id")
+      .notNull()
+      .references(() => projects.id, { onDelete: "cascade" }),
+    userId: uuid("user_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    createdAt: created(),
+  },
+  (t) => [primaryKey({ columns: [t.projectId, t.userId] })],
+);
+
+/** Who follows a project ("À surveiller") */
+export const projectFollowers = pgTable(
+  "project_followers",
+  {
+    projectId: uuid("project_id")
+      .notNull()
+      .references(() => projects.id, { onDelete: "cascade" }),
+    userId: uuid("user_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    createdAt: created(),
+  },
+  (t) => [primaryKey({ columns: [t.projectId, t.userId] })],
+);
+
+/** A step of the project with its own date; tasks and time hang under it */
+export const projectMilestones = pgTable(
+  "project_milestones",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    projectId: uuid("project_id")
+      .notNull()
+      .references(() => projects.id, { onDelete: "cascade" }),
+    name: text("name").notNull(),
+    notes: text("notes").notNull().default(""),
+    status: text("status", { enum: ["todo", "doing", "done"] }).notNull().default("todo"),
+    /** YYYY-MM-DD */
+    dueDate: text("due_date"),
+    budgetHoursX100: integer("budget_hours_x100"),
+    position: integer("position").notNull().default(0),
+    doneAt: timestamp("done_at", { withTimezone: true }),
+    createdAt: created(),
+    updatedAt: updated(),
+  },
+  (t) => [index("project_milestones_project_idx").on(t.projectId, t.position)],
+);
+
+/** A task of a milestone: a line to tick, with a person and a day */
+export const projectTasks = pgTable(
+  "project_tasks",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    projectId: uuid("project_id")
+      .notNull()
+      .references(() => projects.id, { onDelete: "cascade" }),
+    milestoneId: uuid("milestone_id")
+      .notNull()
+      .references(() => projectMilestones.id, { onDelete: "cascade" }),
+    title: text("title").notNull(),
+    /** What to do, how (the body of the task, like a ticket's description) */
+    description: text("description").notNull().default(""),
+    status: text("status", { enum: ["todo", "doing", "blocked", "done"] }).notNull().default("todo"),
+    priority: text("priority", { enum: ["low", "normal", "high", "urgent"] }).notNull().default("normal"),
+    /** Kept equal to status = done */
+    done: boolean("done").notNull().default(false),
+    assigneeId: uuid("assignee_id").references(() => users.id, { onDelete: "set null" }),
+    dueDate: text("due_date"),
+    estimateMinutes: integer("estimate_minutes"),
+    position: integer("position").notNull().default(0),
+    doneAt: timestamp("done_at", { withTimezone: true }),
+    createdAt: created(),
+    updatedAt: updated(),
+  },
+  (t) => [index("project_tasks_milestone_idx").on(t.milestoneId, t.position)],
+);
+
+/** The thread of a task: comments, newest first */
+export const projectTaskNotes = pgTable(
+  "project_task_notes",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    taskId: uuid("task_id")
+      .notNull()
+      .references(() => projectTasks.id, { onDelete: "cascade" }),
+    authorId: uuid("author_id").references(() => users.id, { onDelete: "set null" }),
+    text: text("text").notNull(),
+    /** internal: the team only; reply: also emailed to the client (emailed_to) */
+    kind: text("kind", { enum: ["internal", "reply"] }).notNull().default("internal"),
+    emailedTo: jsonb("emailed_to").$type<string[]>().notNull().default(sql`'[]'::jsonb`),
+    createdAt: created(),
+  },
+  (t) => [index("project_task_notes_task_idx").on(t.taskId, t.createdAt)],
+);
+
+/** A timer running on a task for a person (stopping it makes a time entry) */
+export const projectTaskTimers = pgTable(
+  "project_task_timers",
+  {
+    taskId: uuid("task_id")
+      .notNull()
+      .references(() => projectTasks.id, { onDelete: "cascade" }),
+    userId: uuid("user_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    startedAt: timestamp("started_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [primaryKey({ columns: [t.taskId, t.userId] })],
+);
+
+/** The thread of a project: what was said and done, newest first */
+export const projectNotes = pgTable(
+  "project_notes",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    projectId: uuid("project_id")
+      .notNull()
+      .references(() => projects.id, { onDelete: "cascade" }),
+    authorId: uuid("author_id").references(() => users.id, { onDelete: "set null" }),
+    text: text("text").notNull(),
+    createdAt: created(),
+  },
+  (t) => [index("project_notes_project_idx").on(t.projectId, t.createdAt)],
 );

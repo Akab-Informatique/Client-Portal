@@ -3955,6 +3955,187 @@ describe("submitting: timesheets (when required) and expenses", () => {
     expect((await tech2.get(`/api/time/expense-reports?userId=${adminRow.id}`)).status).toBe(403);
   });
 
+  it("projects: milestones and tasks, my / attention / watch views, time on the timesheet, closing, rights", async () => {
+    resetRateLimit("login:ip:unknown");
+    const admin = await signIn("admin@akab.local");
+    const tech = await signIn("tech@akab.local");
+    const tech2 = await signIn("tech2@akab.local");
+    const [t1] = await db().select().from(schema.users).where(eq(schema.users.email, "tech@akab.local"));
+    const [client] = await db().select().from(schema.users).where(eq(schema.users.kind, "client"));
+    // a made project: its lead is the maker, the numbers go P-1001, P-1002…
+    const made = await tech.post("/api/projects", { name: "Migration du serveur", dueDate: "2020-01-31", budgetHours: 2, milestones: [{ name: "Analyse", dueDate: "2020-01-15" }, { name: "Déploiement" }] });
+    expect(made.status).toBe(201);
+    expect(made.json).toMatchObject({ name: "Migration du serveur", status: "planning", lead: { id: t1.id }, progress: { done: 0, total: 2 }, budgetHours: 2 });
+    expect(made.json.number).toMatch(/^P-\d{4}$/);
+    expect((await tech.post("/api/projects", { name: "Second" })).json.number).not.toBe(made.json.number);
+    // only active staff lead a project; dates in order
+    expect((await tech.post("/api/projects", { name: "x", leadId: client.id })).status).toBe(400);
+    expect((await tech.post("/api/projects", { name: "x", startDate: "2026-05-02", dueDate: "2026-05-01" })).json.error).toBe("project_dates");
+    expect((await tech.post("/api/projects", { name: " " })).status).toBe(400);
+    const id = made.json.id;
+    const [analyse, deploy] = made.json.milestones;
+    expect(analyse.late).toBe(true);
+
+    // the views: mine (lead or member), what needs attention (late), what I follow
+    const ids = async (agent: any, q = "") => (await agent.get(`/api/projects${q}`)).json.map((p: any) => p.id);
+    expect(await ids(tech, "?view=mine")).toContain(id);
+    expect(await ids(tech2, "?view=mine")).not.toContain(id);
+    expect(await ids(tech2, "?view=all")).toContain(id);
+    expect(await ids(tech2, "?view=attention")).toContain(id);
+    expect((await tech2.get("/api/projects?view=attention")).json.find((p: any) => p.id === id).attention).toEqual(expect.arrayContaining(["late", "milestone_late"]));
+    expect(await ids(tech2, "?view=watch")).not.toContain(id);
+    expect((await tech2.put(`/api/projects/${id}/follow`, { follow: true })).json.following).toBe(true);
+    expect(await ids(tech2, "?view=watch")).toContain(id);
+    expect((await tech2.get("/api/projects/summary")).json).toMatchObject({ watch: 1 });
+    // search and filters
+    expect(await ids(tech, "?view=all&q=serveur")).toContain(id);
+    expect(await ids(tech, "?view=all&q=zzzz")).toEqual([]);
+    // the team: a member sees it as theirs
+    const [t2] = await db().select().from(schema.users).where(eq(schema.users.email, "tech2@akab.local"));
+    expect((await tech.patch(`/api/projects/${id}`, { memberIds: [t2.id] })).status).toBe(200);
+    expect(await ids(tech2, "?view=mine")).toContain(id);
+
+    // tasks under a milestone
+    const task = await tech.post(`/api/projects/${id}/milestones/${analyse.id}/tasks`, { title: "Inventaire des serveurs", assigneeId: t2.id });
+    expect(task.status).toBe(201);
+    expect((await tech.patch(`/api/projects/${id}/tasks/${task.json.id}`, { done: true })).json.done).toBe(true);
+    let detail = (await tech.get(`/api/projects/${id}`)).json;
+    expect(detail.milestones[0]).toMatchObject({ tasksDone: 1, tasksTotal: 1 });
+    expect(detail.milestones[0].tasks[0]).toMatchObject({ title: "Inventaire des serveurs", assigneeName: t2.name });
+    // a milestone of another project is not reachable
+    const other = (await tech.post("/api/projects", { name: "Autre" })).json;
+    expect((await tech.post(`/api/projects/${other.id}/milestones/${analyse.id}/tasks`, { title: "x" })).status).toBe(404);
+    expect((await tech.post(`/api/projects/${id}/milestones/reorder`, { ids: [deploy.id, analyse.id] })).status).toBe(200);
+    expect((await tech.get(`/api/projects/${id}`)).json.milestones.map((m: any) => m.name)).toEqual(["Déploiement", "Analyse"]);
+
+    // time: an entry of the person's own timesheet, tied to the project and a milestone
+    expect((await tech.post(`/api/projects/${id}/time`, { date: "2026-12-01", hours: 3, milestoneId: analyse.id, note: "Relevé" })).status).toBe(201);
+    detail = (await tech.get(`/api/projects/${id}`)).json;
+    expect(detail.hours).toBe(3);
+    expect(detail.attention).toContain("over_budget");
+    expect(detail.time.byPerson).toEqual([{ userId: t1.id, name: t1.name, hours: 3 }]);
+    expect(detail.milestones.find((m: any) => m.id === analyse.id).hours).toBe(3);
+    const week = (await tech.get("/api/time/week?start=2026-12-01")).json;
+    expect(week.entries.some((e: any) => e.ticketNumber === made.json.number && e.hours === 3)).toBe(true);
+    expect((await tech.post(`/api/projects/${id}/time`, { date: "2026-12-01", hours: 1, milestoneId: other.milestones?.[0]?.id ?? "00000000-0000-4000-8000-000000000000" })).status).toBe(404);
+    // this week's panel
+    expect((await tech.get("/api/projects/week?from=2026-12-01")).json.days).toHaveLength(7);
+
+    // notes: written by anyone who edits, removed by their author or a manager
+    const note = (await tech.post(`/api/projects/${id}/notes`, { text: "Client prévenu" })).json;
+    expect((await tech2.del(`/api/projects/${id}/notes/${note.id}`)).status).toBe(403);
+    expect((await tech.get(`/api/projects/${id}`)).json.notes[0]).toMatchObject({ text: "Client prévenu", author: t1.name });
+    expect((await tech.del(`/api/projects/${id}/notes/${note.id}`)).status).toBe(200);
+
+    // closing: every milestone first; nothing more is logged on a closed project
+    expect((await tech.patch(`/api/projects/${id}`, { status: "done" })).json.error).toBe("project_open_milestones");
+    // Analyse has a task and is done with it; it cannot be ticked by hand. Déploiement has none: marked by hand.
+    expect((await tech.get(`/api/projects/${id}`)).json.milestones.find((m: any) => m.id === analyse.id).status).toBe("done");
+    expect((await tech.patch(`/api/projects/${id}/milestones/${analyse.id}`, { status: "todo" })).json.error).toBe("milestone_has_tasks");
+    expect((await tech.patch(`/api/projects/${id}/milestones/${deploy.id}`, { status: "done" })).status).toBe(200);
+    expect((await tech.patch(`/api/projects/${id}`, { status: "done" })).json.status).toBe("done");
+    expect(await ids(tech, "?view=all")).not.toContain(id);
+    expect(await ids(tech, "?view=all&status=done")).toContain(id);
+    expect((await tech.post(`/api/projects/${id}/time`, { date: "2026-12-01", hours: 1 })).json.error).toBe("project_closed");
+
+    // deleting is for managers; the hours stay on the timesheet
+    expect((await tech.del(`/api/projects/${id}`)).status).toBe(403);
+    expect((await admin.del(`/api/projects/${id}`)).status).toBe(200);
+    expect((await tech.get(`/api/projects/${id}`)).status).toBe(404);
+    expect((await tech.get("/api/time/week?start=2026-12-01")).json.entries.some((e: any) => e.hours === 3)).toBe(true);
+    // a client account sees nothing
+    expect((await new Agent().get("/api/projects")).status).toBe(401);
+  });
+
+  it("project tasks are small tickets: status, thread, timer and time billed by the project's mode", async () => {
+    resetRateLimit("login:ip:unknown");
+    const admin = await signIn("admin@akab.local");
+    const tech = await signIn("tech@akab.local");
+    const tech2 = await signIn("tech2@akab.local");
+    const [t2] = await db().select().from(schema.users).where(eq(schema.users.email, "tech2@akab.local"));
+    const clients = (await admin.get("/api/crm/clients")).json;
+    const client = clients.find((c: any) => c.autotaskId === 300);
+    // a new project starts hourly at the usual rate; a fixed price one starts with its time included
+    const usual = (await tech.get("/api/projects/defaults")).json.hourlyRate;
+    expect(usual).toBeGreaterThan(0);
+    const hourly = (await tech.post("/api/projects", { name: "Taux horaire", clientId: client.id, hourlyRate: 120, milestones: [{ name: "Phase 1" }] })).json;
+    expect(hourly).toMatchObject({ billingMode: "hourly", hourlyRate: 120 });
+    expect((await tech.post("/api/projects", { name: "Défaut" })).json.hourlyRate).toBe(usual);
+    const fixed = (await tech.post("/api/projects", { name: "Prix fixe", clientId: client.id, billingMode: "fixed", fixedPrice: 5000, milestones: [{ name: "Livraison" }] })).json;
+    expect(fixed).toMatchObject({ billingMode: "fixed", fixedPrice: 5000 });
+
+    // a task: its fields, a thread, and the milestone follows it
+    const ms = hourly.milestones[0];
+    const task = (await tech.post(`/api/projects/${hourly.id}/milestones/${ms.id}/tasks`, { title: "Installer le serveur", description: "Voir la fiche", priority: "high", assigneeId: t2.id, estimateHours: 3 })).json;
+    expect(task).toMatchObject({ status: "todo", priority: "high", estimateMinutes: 180 });
+    expect((await tech.patch(`/api/projects/${hourly.id}/tasks/${task.id}`, { status: "doing" })).json.status).toBe("doing");
+    expect((await tech.get(`/api/projects/${hourly.id}`)).json.milestones[0].status).toBe("doing");
+    await tech2.post(`/api/projects/${hourly.id}/tasks/${task.id}/notes`, { text: "Serveur reçu" });
+    let detail = (await tech.get(`/api/projects/${hourly.id}/tasks/${task.id}`)).json;
+    expect(detail).toMatchObject({ title: "Installer le serveur", description: "Voir la fiche", assigneeName: t2.name, milestone: { name: "Phase 1" }, project: { number: hourly.number, billingMode: "hourly" }, estimateHours: 3, timer: null });
+    expect(detail.notes[0]).toMatchObject({ text: "Serveur reçu", author: t2.name });
+    // a reply to the client is emailed to the contacts picked (one message each) and kept as such; an internal note is not
+    const { devOutbox } = await import("../server/lib/mail.ts");
+    devOutbox.length = 0;
+    const reply = await tech.post(`/api/projects/${hourly.id}/tasks/${task.id}/notes`, { text: "Le serveur est installé.", kind: "reply", to: ["Client@Example.com"] });
+    expect(reply.status).toBe(201);
+    expect(reply.json).toMatchObject({ kind: "reply", emailed: true, emailedTo: ["client@example.com"] });
+    expect(devOutbox.filter((m) => m.to === "client@example.com" && m.subject === `[${hourly.number}] Installer le serveur`)).toHaveLength(1);
+    expect((await tech.post(`/api/projects/${hourly.id}/tasks/${task.id}/notes`, { text: "x", kind: "reply", to: [] })).json.error).toBe("reply_needs_recipient");
+    const noClient = (await tech.post("/api/projects", { name: "Interne", milestones: [{ name: "A" }] })).json;
+    const noTask = (await tech.post(`/api/projects/${noClient.id}/milestones/${noClient.milestones[0].id}/tasks`, { title: "T" })).json;
+    expect((await tech.post(`/api/projects/${noClient.id}/tasks/${noTask.id}/notes`, { text: "x", kind: "reply", to: ["a@b.co"] })).json.error).toBe("project_no_client");
+    devOutbox.length = 0;
+    await tech.post(`/api/projects/${hourly.id}/tasks/${task.id}/notes`, { text: "Note pour nous", kind: "internal" });
+    expect(devOutbox).toHaveLength(0);
+    detail = (await tech.get(`/api/projects/${hourly.id}/tasks/${task.id}`)).json;
+    expect(detail.notes.map((n: any) => n.kind).sort()).toEqual(["internal", "internal", "reply"]);
+    expect((await tech.get(`/api/projects/${hourly.id}/contacts`)).status).toBe(200);
+    expect((await tech.get("/api/projects/timers")).status).toBe(200);
+
+    // the timer: started, stopped into a time entry on the task (the hours can be changed), billable as the project says
+    expect((await admin.post(`/api/projects/${hourly.id}/tasks/${task.id}/timer/stop`, {})).json.error).toBe("timer_not_running");
+    expect((await admin.post(`/api/projects/${hourly.id}/tasks/${task.id}/timer/start`, {})).status).toBe(200);
+    expect((await admin.get(`/api/projects/${hourly.id}/tasks/${task.id}`)).json.timer).not.toBeNull();
+    const stopped = (await admin.post(`/api/projects/${hourly.id}/tasks/${task.id}/timer/stop`, { hours: 2, date: "2026-12-08", note: "Montage" })).json;
+    expect(stopped).toMatchObject({ hours: 2, billable: true });
+    expect((await tech.get(`/api/projects/${hourly.id}/tasks/${task.id}`)).json).toMatchObject({ timer: null, hours: 2 });
+    // a timer thrown away makes nothing
+    await admin.post(`/api/projects/${hourly.id}/tasks/${task.id}/timer/start`, {});
+    expect((await admin.post(`/api/projects/${hourly.id}/tasks/${task.id}/timer/stop`, { discard: true })).json.discarded).toBe(true);
+    // one entry set as included, one more by hand
+    const entry = (await admin.post(`/api/projects/${hourly.id}/time`, { date: "2026-12-08", hours: 1, taskId: task.id, billable: false })).json;
+    expect(entry.billable).toBe(false);
+
+    // fixed price: the time starts included; one entry can still be billed by the hour
+    const fms = fixed.milestones[0];
+    const ftask = (await tech.post(`/api/projects/${fixed.id}/milestones/${fms.id}/tasks`, { title: "Livrer" })).json;
+    const inc = (await admin.post(`/api/projects/${fixed.id}/time`, { date: "2026-12-09", hours: 2, taskId: ftask.id })).json;
+    const extra = (await admin.post(`/api/projects/${fixed.id}/time`, { date: "2026-12-09", hours: 1.5, taskId: ftask.id, billable: true })).json;
+    expect(inc.billable).toBe(false);
+    expect(extra.billable).toBe(true);
+    // the entry can be changed after (its owner or a manager, not someone else)
+    expect((await tech2.patch(`/api/projects/${fixed.id}/time/${inc.id}`, { billable: true })).status).toBe(403);
+    expect((await admin.patch(`/api/projects/${fixed.id}/time/${inc.id}`, { billable: true })).status).toBe(200);
+    expect((await admin.patch(`/api/projects/${fixed.id}/time/${inc.id}`, { billable: false })).status).toBe(200);
+
+    // work to bill: only the billable time, at the project's hourly rate, for its client
+    const { localTicketSource } = await import("../server/lib/localTickets.ts");
+    const { localBase } = await import("../server/lib/localBase.ts");
+    const items = (await localTicketSource(localBase).billables("2020-01-01")).items.filter((i) => i.id.startsWith("prtime:"));
+    const mine = items.filter((i) => i.ticketNumber === hourly.number || i.ticketNumber === fixed.number);
+    expect(mine.map((i) => [i.ticketNumber, i.quantity, i.unitPriceCents]).sort()).toEqual(
+      [
+        [hourly.number, 2, 12000],
+        [fixed.number, 1.5, usual === 0 ? null : usual * 0 + (fixed.hourlyRate == null ? null : Math.round(fixed.hourlyRate * 100))],
+      ].sort(),
+    );
+
+    // deleting a task keeps its time on the project
+    expect((await tech.del(`/api/projects/${hourly.id}/tasks/${task.id}`)).status).toBe(200);
+    expect((await tech.get(`/api/projects/${hourly.id}`)).json.hours).toBe(3);
+  });
+
   it("no approver for now: a sent report or week is approved at once and accounting gets a PDF of it", async () => {
     resetRateLimit("login:ip:unknown");
     const { devOutbox } = await import("../server/lib/mail.ts");
@@ -5826,7 +6007,7 @@ describe("pipeline: times, files, recurring and private tasks", () => {
     expect(done.next).toEqual(expect.any(String));
     const next = (await tech.get(`/api/pipeline/tasks/${done.next}`)).json;
     expect(next).toMatchObject({ title: "Vérifier les sauvegardes", status: "todo", dueTime: "09:00", seriesId: rec.id, assigneeId: me });
-    expect(next.dueDate > new Date().toISOString().slice(0, 10)).toBe(true);
+    expect(next.dueDate > new Date().toLocaleDateString("en-CA", { timeZone: "America/Toronto" })).toBe(true);
     expect(new Date(`${next.dueDate}T12:00:00Z`).getUTCDay()).toBe(1);
     expect(next.checklistItems.map((i: any) => [i.text, i.done])).toEqual([["Serveur", false], ["NAS", false]]);
     // a task without a rule makes none

@@ -307,6 +307,28 @@ export const MODULES = [
     ],
   },
   {
+    key: "projects",
+    audience: "staff",
+    label: { fr: "Projets", en: "Projects" },
+    permissions: [
+      {
+        key: "projects.view",
+        label: { fr: "Voir les projets", en: "See the projects" },
+        description: { fr: "La liste des projets, leurs jalons, leurs tâches, le temps et les notes", en: "The list of projects, their milestones, tasks, time and notes" },
+      },
+      {
+        key: "projects.edit",
+        label: { fr: "Créer et modifier des projets", en: "Create and edit projects" },
+        description: { fr: "Créer un projet, ses jalons et ses tâches, écrire des notes et inscrire son temps", en: "Make a project, its milestones and tasks, write notes and log time" },
+      },
+      {
+        key: "projects.manage",
+        label: { fr: "Gérer les projets", en: "Manage the projects" },
+        description: { fr: "Supprimer un projet, retirer le temps ou les notes des autres", en: "Delete a project, remove other people's time or notes" },
+      },
+    ],
+  },
+  {
     key: "breakroom",
     audience: "staff",
     label: { fr: "Pause café", en: "Coffee break" },
@@ -521,7 +543,7 @@ export type ModuleKey = (typeof MODULES)[number]["key"];
 export const ACCESS_LAYOUT: { key: string; audience: Audience; label: Localized; modules: ModuleKey[] }[] = [
   { key: "team", audience: "staff", label: { fr: "Équipe", en: "Team" }, modules: ["dashboard", "meetings", "breakroom"] },
   { key: "tools", audience: "staff", label: { fr: "Mes outils", en: "My tools" }, modules: ["pipeline", "outlook", "timesheets"] },
-  { key: "command", audience: "staff", label: { fr: "Centre de commande", en: "Command center" }, modules: ["messages", "tickets", "sms", "passbolt"] },
+  { key: "command", audience: "staff", label: { fr: "Centre de commande", en: "Command center" }, modules: ["messages", "tickets", "projects", "sms", "passbolt"] },
   { key: "management", audience: "staff", label: { fr: "Gestion", en: "Management" }, modules: ["crm", "clientview", "store", "services"] },
   { key: "sales", audience: "staff", label: { fr: "Vente", en: "Sales" }, modules: ["quotes"] },
   { key: "accounting", audience: "staff", label: { fr: "Comptabilité", en: "Accounting" }, modules: ["accounting"] },
@@ -600,6 +622,8 @@ export const SYSTEM_ROLES: Array<{
       "timesheets.use",
       "pipeline.view",
       "pipeline.edit",
+      "projects.view",
+      "projects.edit",
       "breakroom.use",
       "sms.view",
       "outlook.view",

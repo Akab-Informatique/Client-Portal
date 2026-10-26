@@ -48,6 +48,7 @@ import { moduleVisible } from "@/modules/visible";
 import { signOut, useCan, useMe } from "@/lib/session";
 import { cn, initials } from "@/lib/utils";
 import { TicketWorkspaceProvider } from "@/pages/tickets/workspace";
+import { ProjectWorkspaceProvider } from "@/pages/projects/ProjectWorkspace";
 import { preloadPagesWhenIdle, preloadRoute } from "@/lib/preload";
 
 const AdminOverlay = lazy(() => import("@/admin/AdminOverlay").then((m) => ({ default: m.AdminOverlay })));
@@ -113,6 +114,7 @@ export function StaffLayout() {
 
   return (
     <TicketWorkspaceProvider enabled={me.permissions.includes("tickets.view")}>
+    <ProjectWorkspaceProvider enabled={me.permissions.includes("projects.view")}>
     <div className="flex min-h-dvh bg-background">
       <motion.aside
         animate={{ width: collapsed ? 76 : 256 }}
@@ -155,6 +157,7 @@ export function StaffLayout() {
         </Suspense>
       )}
     </div>
+    </ProjectWorkspaceProvider>
     </TicketWorkspaceProvider>
   );
 }

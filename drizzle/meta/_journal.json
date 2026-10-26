@@ -729,6 +729,27 @@
       "when": 1792881019789,
       "tag": "0103_lyrical_smasher",
       "breakpoints": true
+    },
+    {
+      "idx": 104,
+      "version": "7",
+      "when": 1792972448372,
+      "tag": "0104_green_the_stranger",
+      "breakpoints": true
+    },
+    {
+      "idx": 105,
+      "version": "7",
+      "when": 1792974650502,
+      "tag": "0105_harsh_phil_sheldon",
+      "breakpoints": true
+    },
+    {
+      "idx": 106,
+      "version": "7",
+      "when": 1792976025738,
+      "tag": "0106_polite_fabian_cortez",
+      "breakpoints": true
     }
   ]
 }

@@ -418,6 +418,29 @@ export function localTicketSource(base: TicketSource): TicketSource {
           taxable: true,
         });
       }
+      // the billable time logged on projects (Projets › Temps): billed at the project's hourly rate; the entries left included are not work to bill
+      const onProjects = await db()
+        .select({ e: schema.timesheetEntries, number: schema.projects.number, rate: schema.projects.hourlyRateCents, companyId: schema.clients.autotaskId, who: schema.users.name })
+        .from(schema.timesheetEntries)
+        .innerJoin(schema.projects, eq(schema.projects.id, schema.timesheetEntries.projectId))
+        .innerJoin(schema.clients, eq(schema.clients.id, schema.projects.clientId))
+        .innerJoin(schema.users, eq(schema.users.id, schema.timesheetEntries.userId))
+        .where(and(sql`${schema.timesheetEntries.billableX100} > 0`, gte(schema.timesheetEntries.date, since)));
+      for (const { e, number, rate, companyId, who } of onProjects) {
+        if (companyId == null) continue;
+        items.push({
+          id: `prtime:${e.id}`,
+          kind: "labour",
+          companyId,
+          date: e.date,
+          description: [e.ticketTitle, e.note].filter(Boolean).join(" — ").slice(0, 2000),
+          ticketNumber: number,
+          resourceName: who,
+          quantity: (e.billableX100 ?? e.hoursX100) / 100,
+          unitPriceCents: rate,
+          taxable: true,
+        });
+      }
       return { items, errors: Object.fromEntries(Object.entries(from.errors).filter(([k]) => k !== "labour" && k !== "charge")) };
     },
     // Everything else still comes from the source
