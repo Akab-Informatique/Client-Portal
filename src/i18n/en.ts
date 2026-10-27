@@ -3154,6 +3154,7 @@ const en: Dict = {
     },
   },
   mailIntake: {
+    lastSeen: "{{seen}} email(s) seen in the mailbox, {{known}} already handled",
     title: "Incoming email",
     subtitle: "Emails sent to the support mailbox open tickets in the portal.",
     warning: "If another email-to-ticket reads the same mailbox, every email will open two tickets: turn one of the two off.",

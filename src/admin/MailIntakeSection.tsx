@@ -18,7 +18,7 @@ type Intake = {
   markRead: boolean;
   replies: boolean;
   o365Ready: boolean;
-  lastRun: { at: string; ok: boolean; tickets: number; replies: number; pending: number; error?: string } | null;
+  lastRun: { at: string; ok: boolean; tickets: number; replies: number; pending: number; seen?: number; known?: number; error?: string } | null;
   counts: Record<string, number>;
   recent: { id: string; from: string | null; subject: string | null; status: string; ticketId: number | null; ticketNumber: string | null; note: string | null; at: string }[];
 };
@@ -103,7 +103,7 @@ export function MailIntakeSection() {
           <p className={cn("mt-2 flex items-start gap-2 text-xs", data.lastRun.ok ? "text-emerald-300" : "text-destructive")}>
             {data.lastRun.ok ? <CircleCheck className="mt-0.5 size-3.5 shrink-0" /> : <CircleAlert className="mt-0.5 size-3.5 shrink-0" />}
             {data.lastRun.ok
-              ? t("mailIntake.lastOk", { at: dateTime(data.lastRun.at), tickets: data.lastRun.tickets, replies: data.lastRun.replies, pending: data.lastRun.pending })
+              ? t("mailIntake.lastOk", { at: dateTime(data.lastRun.at), tickets: data.lastRun.tickets, replies: data.lastRun.replies, pending: data.lastRun.pending }) + (data.lastRun.seen !== undefined ? ` · ${t("mailIntake.lastSeen", { seen: data.lastRun.seen, known: data.lastRun.known ?? 0 })}` : "")
               : t("mailIntake.lastFailed", { at: dateTime(data.lastRun.at), error: data.lastRun.error ?? "" })}
           </p>
         )}

@@ -30,7 +30,8 @@ export type IntakeSettings = {
   markRead: boolean;
   /** An email naming an existing ticket is added to it (else it opens a new one) */
   replies: boolean;
-  lastRun: { at: string; ok: boolean; tickets: number; replies: number; pending: number; error?: string } | null;
+  /** `seen`: emails the mailbox answered with in that pass, `known`: how many of them were already handled */
+  lastRun: { at: string; ok: boolean; tickets: number; replies: number; pending: number; seen?: number; known?: number; error?: string } | null;
 };
 
 const DEFAULTS: IntakeSettings = { enabled: false, mailbox: "", enabledAt: null, markRead: true, replies: true, lastRun: null };
@@ -246,18 +247,31 @@ async function pass(force: boolean): Promise<IntakeSettings["lastRun"]> {
   const s = await intakeSettings();
   if ((!s.enabled && !force) || !s.mailbox || !s.enabledAt) return null;
   if (!(await o365Ready())) return null;
-  const run = { at: new Date().toISOString(), ok: true, tickets: 0, replies: 0, pending: 0 } as NonNullable<IntakeSettings["lastRun"]>;
+  const run = { at: new Date().toISOString(), ok: true, tickets: 0, replies: 0, pending: 0, seen: 0, known: 0 } as NonNullable<IntakeSettings["lastRun"]>;
   try {
-    const q = new URLSearchParams({
-      $filter: `receivedDateTime ge ${s.enabledAt}`,
-      $orderby: "receivedDateTime asc",
-      $top: "50",
-      $select: "id,subject,from,receivedDateTime,isRead",
-    });
-    const r = await graph<{ value: GMessage[] }>("GET", `${user(s.mailbox)}/mailFolders/inbox/messages?${q}`);
     const known = new Set((await db().select({ id: schema.mailIntake.messageId }).from(schema.mailIntake)).map((x) => x.id));
-    for (const g of r.value ?? []) {
-      if (known.has(g.id)) continue;
+    // newest first, page by page, until a whole page is already handled (or the pages run out): a mailbox that gets a lot of
+    // automatic mail must never hide the new one behind the first 50 — the old way (oldest first, 50 at most) stopped there
+    const fresh: GMessage[] = [];
+    const PAGE = 50;
+    for (let skip = 0; skip < PAGE * 20; skip += PAGE) {
+      const q = new URLSearchParams({
+        $filter: `receivedDateTime ge ${s.enabledAt}`,
+        $orderby: "receivedDateTime desc",
+        $top: String(PAGE),
+        $skip: String(skip),
+        $select: "id,subject,from,receivedDateTime,isRead",
+      });
+      const r = await graph<{ value: GMessage[] }>("GET", `${user(s.mailbox)}/mailFolders/inbox/messages?${q}`);
+      const page = r.value ?? [];
+      run.seen = (run.seen ?? 0) + page.length;
+      const unknown = page.filter((g) => !known.has(g.id));
+      run.known = (run.known ?? 0) + page.length - unknown.length;
+      fresh.push(...unknown);
+      if (page.length < PAGE || !unknown.length) break;
+    }
+    // the oldest first, so tickets come in the order the emails did
+    for (const g of fresh.reverse()) {
       const full = await messageText(s.mailbox, g.id);
       const out = await processIncoming({ id: g.id, mailbox: s.mailbox, subject: g.subject ?? "", from: full.from, receivedAt: g.receivedDateTime ?? null, text: full.text });
       if (out.outcome === "ticket") run.tickets++;

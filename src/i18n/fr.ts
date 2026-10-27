@@ -3152,6 +3152,7 @@ const fr = {
     },
   },
   mailIntake: {
+    lastSeen: "{{seen}} courriel(s) vus dans la boîte, dont {{known}} déjà traités",
     title: "Courriel entrant",
     subtitle: "Les courriels envoyés à la boîte de soutien ouvrent des billets dans le portail.",
     warning: "Si un autre courriel-à-billet lit la même boîte, chaque courriel ouvrira deux billets : désactivez l'un des deux.",
