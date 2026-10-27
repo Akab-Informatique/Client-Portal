@@ -6980,6 +6980,15 @@ describe("ITCloud: vendor, clients matched, services kept on contracts", () => {
     const exchange = svcs.find((s: any) => s.sku === "ITC-42");
     expect(exchange).toMatchObject({ name: "Exchange Plan 1", kind: "recurring", costCents: 0, priceCents: 0, vendorName: "ITCloud", vendorSku: "42" });
     expect(svcs.find((s: any) => s.sku === "ITC-43")).toMatchObject({ costCents: 0, priceCents: 0 });
+    // the button: ITCloud's unit cost becomes the cost, its list price (the latest invoice line that has one) the price; no list price: the price stays
+    expect((await tech.post("/api/admin/itcloud/services/prices", { applyToContracts: false })).status).toBe(403);
+    const resynced = (await admin.post("/api/admin/itcloud/services/prices", { applyToContracts: false })).json;
+    expect(resynced).toMatchObject({ updated: 2, noListPrice: 1, lines: 0 });
+    const afterSync = (await admin.get("/api/services")).json;
+    expect(afterSync.find((x: any) => x.sku === "ITC-42")).toMatchObject({ costCents: 500, priceCents: 725 });
+    expect(afterSync.find((x: any) => x.sku === "ITC-43")).toMatchObject({ costCents: 300, priceCents: 0 });
+    // the margin it comes out to: (725 - 500) / 725 on the one that has a price
+    expect(resynced.marginPct).toBeCloseTo(31, 0);
     // nothing left to apply; the price and the cost are typed by hand and stay
     await admin.patch(`/api/services/${exchange.id}`, { priceCents: 800, costCents: 500 });
     expect((await admin.get("/api/admin/itcloud/services/plan")).json.rows.every((r: any) => r.state === "same")).toBe(true);

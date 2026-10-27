@@ -4,6 +4,7 @@ import { db, schema } from "../db/index.ts";
 import { seal, unseal } from "./crypto.ts";
 import { audit } from "./audit.ts";
 import { recordContractEvent, syncMonthlyRate } from "./contractEvents.ts";
+import { applyToLines, runningLinesOf } from "./servicePrices.ts";
 
 /**
  * ITCloud (zone.itcloud.ca), the partner API: customers, products and the services report. ITCloud is a vendor:
@@ -389,6 +390,50 @@ export async function applyServicePlan(s: ItcloudSettings, keys: string[], actor
   }
   await audit(actorId, "itcloud.services_applied", null, { created, updated });
   return { created, updated };
+}
+
+/**
+ * Fill the cost and the price of the ITCloud services from ITCloud, on demand: the cost = what ITCloud charges per unit (the
+ * product's monthly or yearly unit price), the price = ITCloud's list price (MSRP). A service with no list price keeps its price
+ * (nothing is invented). `applyToContracts`: the ITCloud lines of running contracts follow too; false: only the services (future
+ * additions). Gives the margin it comes out to.
+ */
+export async function resyncServicePrices(s: ItcloudSettings, actorId: string | null, applyToContracts: boolean): Promise<{ updated: number; unchanged: number; noListPrice: number; lines: number; marginPct: number | null; lowMargin: number; msrpError: string | null }> {
+  const vendorId = await ensureVendor();
+  const d = db();
+  const [products, msrp] = [await itcloudProducts(s), await msrpByProduct(s)];
+  const byId = new Map(products.map((p) => [String(p.productId), p]));
+  const services = (await d.select().from(schema.services).where(eq(schema.services.vendorId, vendorId))).filter((x) => x.vendorSku);
+  let updated = 0;
+  let unchanged = 0;
+  let noListPrice = 0;
+  let lines = 0;
+  const margins: number[] = [];
+  for (const svc of services) {
+    const p = byId.get(svc.vendorSku!);
+    if (!p) continue;
+    const kind = kindOf(p);
+    const cost = cents(kind === "recurring" ? p.monthlyUnitPrice : p.annuallyUnitPrice);
+    const m = msrp.map.get(svc.vendorSku!);
+    const listed = cents(kind === "recurring" ? m?.monthly : m?.yearly);
+    if (listed <= 0) noListPrice++;
+    const next = { costCents: cost, priceCents: listed > 0 ? listed : svc.priceCents };
+    if (next.priceCents > 0) margins.push(((next.priceCents - next.costCents) / next.priceCents) * 100);
+    if (next.costCents === svc.costCents && next.priceCents === svc.priceCents) {
+      unchanged++;
+      continue;
+    }
+    await d.update(schema.services).set({ ...next, updatedAt: new Date() }).where(eq(schema.services.id, svc.id));
+    updated++;
+    if (applyToContracts) {
+      const running = await runningLinesOf(svc.id);
+      lines += running.length;
+      await applyToLines(running, next, { userId: actorId });
+    }
+  }
+  const marginPct = margins.length ? Math.round((margins.reduce((n, x) => n + x, 0) / margins.length) * 10) / 10 : null;
+  await audit(actorId, "itcloud.prices_resynced", null, { updated, unchanged, noListPrice, lines, applyToContracts });
+  return { updated, unchanged, noListPrice, lines, marginPct, lowMargin: margins.filter((x) => x < 15).length, msrpError: msrp.error };
 }
 
 /**

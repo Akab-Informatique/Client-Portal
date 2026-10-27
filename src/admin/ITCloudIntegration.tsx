@@ -13,6 +13,7 @@ import { Switch } from "@/components/ui/switch";
 import { Textarea } from "@/components/ui/textarea";
 import { api, ApiError } from "@/lib/api";
 import { useConfirm } from "@/components/ConfirmDialog";
+import { ScopeDialog } from "@/components/ScopeDialog";
 import { cn } from "@/lib/utils";
 import { money, useCrmClients } from "@/pages/crm/shared";
 
@@ -399,6 +400,23 @@ function ServicesStep() {
   const qc = useQueryClient();
   const confirm = useConfirm();
   // one-time clean-up: every ITCloud service (and its contract lines) back to no price and no cost
+  // fill the cost and the price from ITCloud; asked whether the running contracts follow
+  const [asking, setAsking] = useState(false);
+  const resync = useMutation({
+    mutationFn: (applyToContracts: boolean) => api.post<{ updated: number; unchanged: number; noListPrice: number; lines: number; marginPct: number | null; lowMargin: number; msrpError: string | null }>("/admin/itcloud/services/prices", { applyToContracts }),
+    onSuccess: (r) => {
+      setAsking(false);
+      toast.success(t("integrations.itcloud.services.resynced", { updated: r.updated, unchanged: r.unchanged, noList: r.noListPrice, margin: r.marginPct === null ? "—" : `${r.marginPct} %`, low: r.lowMargin }), { duration: 12000 });
+      if (r.msrpError) toast.warning(t("integrations.itcloud.services.msrpError"));
+      void qc.invalidateQueries({ queryKey: [...KEY, "plan"] });
+      void qc.invalidateQueries({ queryKey: ["services"] });
+      void qc.invalidateQueries({ queryKey: ["crm"] });
+    },
+    onError: (e) => {
+      setAsking(false);
+      toast.error(errorText(t, e));
+    },
+  });
   const zero = useMutation({
     mutationFn: () => api.post<{ services: number; lines: number }>("/admin/itcloud/services/zero", {}),
     onSuccess: (r) => {
@@ -484,6 +502,11 @@ function ServicesStep() {
                       {t("integrations.itcloud.services.cost")} <span className="font-mono text-foreground">{money(r.costCents, i18n.language)}</span>
                       <span className="block">
                         {t("services.price")} <span className="font-mono text-foreground">{money(r.priceCents, i18n.language)}</span>
+                        {r.priceCents > 0 && (
+                          <span className={cn("ml-1.5", r.priceCents - r.costCents <= 0 ? "text-red-400" : "text-emerald-300")}>
+                            {t("integrations.itcloud.services.margin")} {Math.round(((r.priceCents - r.costCents) / r.priceCents) * 1000) / 10} %
+                          </span>
+                        )}
                       </span>
                     </>
                   )}
@@ -497,6 +520,21 @@ function ServicesStep() {
           {!shown.length && <p className="py-4 text-sm text-muted-foreground">{t("integrations.itcloud.list.none")}</p>}
           <Pager page={paged.page} pages={paged.pages} total={shown.length} setPage={paged.setPage} />
           <p className="mt-2 text-xs text-muted-foreground">{t("integrations.itcloud.services.manualNote")}</p>
+          <Button type="button" variant="outline" size="sm" className="mr-2 mt-2 text-xs" disabled={resync.isPending} onClick={() => setAsking(true)}>
+            {resync.isPending && <Loader2 className="size-3.5 animate-spin" />} {t("integrations.itcloud.services.resync")}
+          </Button>
+          {asking && (
+            <ScopeDialog
+              title={t("integrations.itcloud.services.resyncTitle")}
+              description={t("integrations.itcloud.services.resyncText")}
+              options={[
+                { label: t("integrations.itcloud.services.resyncAll"), onClick: () => resync.mutate(true) },
+                { label: t("integrations.itcloud.services.resyncServices"), onClick: () => resync.mutate(false) },
+              ]}
+              busy={resync.isPending}
+              onCancel={() => setAsking(false)}
+            />
+          )}
           <Button
             type="button"
             variant="outline"

@@ -9,6 +9,7 @@ import {
   applyClientLinks,
   applyServicePlan,
   zeroServiceMoney,
+  resyncServicePrices,
   clientPlan,
   ensureVendor,
   itcloudReady,
@@ -127,6 +128,12 @@ export const itcloudRoutes = new Hono<AppEnv>()
     return c.json(await run(async () => applyServicePlan(await ready(), p.keys, a.user.id)));
   })
 
+  /** Fill the cost (ITCloud's unit price) and the price (ITCloud's list price) of the ITCloud services; the contract lines follow only when asked */
+  .post("/services/prices", async (c) => {
+    const a = auth(c);
+    const p = await body(c, z.object({ applyToContracts: z.boolean() }));
+    return c.json(await run(async () => resyncServicePrices(await ready(), a.user.id, p.applyToContracts)));
+  })
   /** One-time clean-up: the price and cost of every ITCloud service (and of its contract lines) back to 0, to type them by hand */
   .post("/services/zero", async (c) => {
     const a = auth(c);
