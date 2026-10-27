@@ -306,7 +306,7 @@ export type ServiceRowPlan = {
   productGroup: string;
   name: string;
   kind: "recurring" | "recurring_yearly";
-  /** What ITCloud charges us per unit and period */
+  /** The cost of the portal service tied to it (typed by hand; ITCloud's amounts are never copied) */
   costCents: number;
   state: "new" | "update" | "same";
   /** The portal service it is tied to or would be tied to (by SKU, or by the same name) */
@@ -314,9 +314,9 @@ export type ServiceRowPlan = {
   serviceName: string | null;
   /** The price of the portal service tied to it, if any */
   priceCents: number | null;
-  /** The price a new service would start at: ITCloud's MSRP, else the cost plus 20 % */
+  /** A new service starts with no price: 0, typed by hand in Inventory › Services */
   suggestedPriceCents: number;
-  priceSource: "msrp" | "markup";
+  priceSource: "manual";
   /** Active services of this product at ITCloud: how many customers have it, and how many units in all (0: sold to nobody) */
   soldTo: number;
   soldUnits: number;
@@ -326,7 +326,6 @@ export type ServiceRowPlan = {
 export async function servicePlan(s: ItcloudSettings): Promise<{ rows: ServiceRowPlan[]; ignored: number; msrpError: string | null }> {
   const vendorId = await ensureVendor();
   const products = await itcloudProducts(s);
-  const msrp = await msrpByProduct(s);
   // what is really sold: the active lines of the services report (live, else the last one kept)
   const report: { clientId: number; productGroup: string; product: string; status: string; quantity: number }[] = await itcloudServicesReport(s).catch(async () =>
     (await db().select().from(schema.itcloudServices)).map((r) => ({ clientId: r.itcloudClientId, productGroup: r.productGroup, product: r.product, status: r.status, quantity: r.quantity })),
@@ -350,7 +349,6 @@ export async function servicePlan(s: ItcloudSettings): Promise<{ rows: ServiceRo
   const rows = recurring.map((p) => {
     const key = String(p.productId);
     const kind = kindOf(p);
-    const cost = cents(kind === "recurring" ? p.monthlyUnitPrice : p.annuallyUnitPrice);
     const name = p.name;
     let svc = byVendorSku.get(key);
     if (!svc) {
@@ -362,19 +360,15 @@ export async function servicePlan(s: ItcloudSettings): Promise<{ rows: ServiceRo
     if (!svc) state = "new";
     else {
       if (svc.vendorSku !== key || svc.vendorId !== vendorId) change.push("link");
-      if (svc.costCents !== cost) change.push("cost");
       if (svc.kind !== kind) change.push("kind");
       if (change.length) state = "update";
     }
-    const m = msrp.map.get(key);
-    const listed = cents(kind === "recurring" ? m?.monthly : m?.yearly);
-    const suggestedPriceCents = listed > 0 ? listed : Math.round(cost * MARKUP);
-    return { key, productGroup: p.productGroup, name, kind, costCents: cost, state, serviceId: svc?.id ?? null, serviceName: svc?.name ?? null, priceCents: svc?.priceCents ?? null, suggestedPriceCents, priceSource: listed > 0 ? ("msrp" as const) : ("markup" as const), soldTo: sold.get(key)?.clients.size ?? 0, soldUnits: sold.get(key)?.units ?? 0, change };
+    return { key, productGroup: p.productGroup, name, kind, costCents: svc?.costCents ?? 0, state, serviceId: svc?.id ?? null, serviceName: svc?.name ?? null, priceCents: svc?.priceCents ?? null, suggestedPriceCents: 0, priceSource: "manual" as const, soldTo: sold.get(key)?.clients.size ?? 0, soldUnits: sold.get(key)?.units ?? 0, change };
   });
-  return { rows: rows.sort((a, b) => a.productGroup.localeCompare(b.productGroup) || a.name.localeCompare(b.name)), ignored: products.length - recurring.length, msrpError: msrp.error };
+  return { rows: rows.sort((a, b) => a.productGroup.localeCompare(b.productGroup) || a.name.localeCompare(b.name)), ignored: products.length - recurring.length, msrpError: null };
 }
 
-/** Make / update the portal services of the accepted ITCloud products (keys). A new service starts at ITCloud's MSRP (else cost + 20 %); the price is ours to change afterwards and is never overwritten. */
+/** Make / update the portal services of the accepted ITCloud products (keys). **A new service has no price and no cost** (0): they are typed by hand in Inventory › Services and never touched by ITCloud. */
 export async function applyServicePlan(s: ItcloudSettings, keys: string[], actorId: string | null): Promise<{ created: number; updated: number }> {
   const { rows } = await servicePlan(s);
   const vendorId = await ensureVendor();
@@ -386,15 +380,38 @@ export async function applyServicePlan(s: ItcloudSettings, keys: string[], actor
     if (r.serviceId) {
       const [cur] = await db().select().from(schema.services).where(eq(schema.services.id, r.serviceId));
       const sku = cur.sku ?? `ITC-${r.key}`;
-      await db().update(schema.services).set({ vendorId, vendorSku: r.key, sku, costCents: r.costCents, kind: r.kind, updatedAt: new Date() }).where(eq(schema.services.id, r.serviceId));
+      await db().update(schema.services).set({ vendorId, vendorSku: r.key, sku, kind: r.kind, updatedAt: new Date() }).where(eq(schema.services.id, r.serviceId));
       updated++;
     } else {
-      await db().insert(schema.services).values({ name: r.name, description: r.productGroup, kind: r.kind, priceCents: r.suggestedPriceCents, costCents: r.costCents, sku: `ITC-${r.key}`, vendorId, vendorSku: r.key });
+      await db().insert(schema.services).values({ name: r.name, description: r.productGroup, kind: r.kind, priceCents: 0, costCents: 0, sku: `ITC-${r.key}`, vendorId, vendorSku: r.key });
       created++;
     }
   }
   await audit(actorId, "itcloud.services_applied", null, { created, updated });
   return { created, updated };
+}
+
+/**
+ * Put the price and the cost of every ITCloud service back to 0 (and the same on the contract lines made from them), so
+ * they can be typed by hand. A one-time clean-up of what was copied from ITCloud before it stopped setting them.
+ */
+export async function zeroServiceMoney(actorId: string | null): Promise<{ services: number; lines: number }> {
+  const vendorId = await ensureVendor();
+  const d = db();
+  const services = await d.select({ id: schema.services.id }).from(schema.services).where(eq(schema.services.vendorId, vendorId));
+  if (!services.length) return { services: 0, lines: 0 };
+  const ids = services.map((x) => x.id);
+  await d.update(schema.services).set({ priceCents: 0, costCents: 0, updatedAt: new Date() }).where(inArray(schema.services.id, ids));
+  const lines = await d.select().from(schema.contractServices).where(and(inArray(schema.contractServices.serviceId, ids), eq(schema.contractServices.source, "itcloud")));
+  if (lines.length) {
+    await d.update(schema.contractServices).set({ priceCents: 0, costCents: 0 }).where(inArray(schema.contractServices.id, lines.map((l) => l.id)));
+    for (const k of new Set(lines.map((l) => l.contractId))) {
+      await recordContractEvent(k, "service_changed", { name: "ITCloud", changes: { priceCents: ["ITCloud", 0], costCents: ["ITCloud", 0] } }, { userId: actorId });
+      await syncMonthlyRate(k);
+    }
+  }
+  await audit(actorId, "itcloud.services_zeroed", null, { services: services.length, lines: lines.length });
+  return { services: services.length, lines: lines.length };
 }
 
 // ── the sync: services report → contract lines ──
@@ -415,22 +432,20 @@ async function contractFor(clientId: string, preferred: (string | null | undefin
 }
 
 type Line = typeof schema.contractServices.$inferSelect;
-/** The line of a service on a contract: made, or brought up to date (quantity, cost, contract, price kind) */
+/** The line of a service on a contract: made (with the portal service's price and cost, never ITCloud's amounts), or brought up to date (quantity, contract, kind). Its price and cost are only changed by people, once made. */
 async function ensureLine(contract: typeof schema.clientContracts.$inferSelect, svc: typeof schema.services.$inferSelect, r: { serviceId: number; quantity: number; amountCents: number; registrationDate: string | null }, today: string): Promise<{ line: Line; change: "created" | "updated" | "same" }> {
   const external = String(r.serviceId);
-  // what ITCloud charges us per unit
-  const unitCost = Math.round(r.amountCents / r.quantity);
   const addedOn = clamp(r.registrationDate ?? today, contract.startDate, contract.endDate);
   const [cur] = await db().select().from(schema.contractServices).where(and(eq(schema.contractServices.source, "itcloud"), eq(schema.contractServices.externalId, external)));
   const by = { source: "itcloud" as const };
   if (!cur) {
-    const [line] = await db().insert(schema.contractServices).values({ contractId: contract.id, serviceId: svc.id, name: svc.name, kind: svc.kind, priceCents: svc.priceCents, costCents: unitCost, addedOn, quantity: r.quantity, source: "itcloud", externalId: external }).returning();
+    const [line] = await db().insert(schema.contractServices).values({ contractId: contract.id, serviceId: svc.id, name: svc.name, kind: svc.kind, priceCents: svc.priceCents, costCents: svc.costCents, addedOn, quantity: r.quantity, source: "itcloud", externalId: external }).returning();
     await recordContractEvent(contract.id, "service_added", { name: svc.name, quantity: r.quantity, priceCents: svc.priceCents, addedOn, kind: svc.kind }, by);
     await syncMonthlyRate(contract.id);
     return { line, change: "created" };
   }
-  if (cur.contractId !== contract.id || cur.serviceId !== svc.id || cur.quantity !== r.quantity || cur.costCents !== unitCost || cur.kind !== svc.kind) {
-    const [line] = await db().update(schema.contractServices).set({ contractId: contract.id, serviceId: svc.id, name: svc.name, kind: svc.kind, quantity: r.quantity, costCents: unitCost }).where(eq(schema.contractServices.id, cur.id)).returning();
+  if (cur.contractId !== contract.id || cur.serviceId !== svc.id || cur.quantity !== r.quantity || cur.kind !== svc.kind) {
+    const [line] = await db().update(schema.contractServices).set({ contractId: contract.id, serviceId: svc.id, name: svc.name, kind: svc.kind, quantity: r.quantity }).where(eq(schema.contractServices.id, cur.id)).returning();
     if (cur.contractId !== contract.id) {
       // moved from one contract to another
       await recordContractEvent(cur.contractId, "service_removed", { name: cur.name, quantity: cur.quantity, priceCents: cur.priceCents, addedOn: cur.addedOn, kind: cur.kind, movedTo: contract.name }, by);
@@ -439,7 +454,6 @@ async function ensureLine(contract: typeof schema.clientContracts.$inferSelect, 
     } else {
       const changes: Record<string, [unknown, unknown]> = {};
       if (cur.quantity !== r.quantity) changes.quantity = [cur.quantity, r.quantity];
-      if (cur.costCents !== unitCost) changes.costCents = [cur.costCents, unitCost];
       if (Object.keys(changes).length) await recordContractEvent(contract.id, "service_changed", { name: svc.name, changes }, by);
     }
     await syncMonthlyRate(contract.id);

@@ -12,6 +12,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { Switch } from "@/components/ui/switch";
 import { Textarea } from "@/components/ui/textarea";
 import { api, ApiError } from "@/lib/api";
+import { useConfirm } from "@/components/ConfirmDialog";
 import { cn } from "@/lib/utils";
 import { money, useCrmClients } from "@/pages/crm/shared";
 
@@ -390,12 +391,24 @@ function ClientsStep() {
 }
 
 // ── 2. products → services ──
-type PlanRow = { key: string; productGroup: string; name: string; kind: "recurring" | "recurring_yearly"; costCents: number; state: "new" | "update" | "same"; serviceName: string | null; priceCents: number | null; suggestedPriceCents: number; priceSource: "msrp" | "markup"; soldTo: number; soldUnits: number; change: string[] };
+type PlanRow = { key: string; productGroup: string; name: string; kind: "recurring" | "recurring_yearly"; costCents: number; state: "new" | "update" | "same"; serviceName: string | null; priceCents: number | null; suggestedPriceCents: number; priceSource: "manual"; soldTo: number; soldUnits: number; change: string[] };
 type ServicePlan = { rows: PlanRow[]; ignored: number; msrpError: string | null };
 
 function ServicesStep() {
   const { t, i18n } = useTranslation();
   const qc = useQueryClient();
+  const confirm = useConfirm();
+  // one-time clean-up: every ITCloud service (and its contract lines) back to no price and no cost
+  const zero = useMutation({
+    mutationFn: () => api.post<{ services: number; lines: number }>("/admin/itcloud/services/zero", {}),
+    onSuccess: (r) => {
+      toast.success(t("integrations.itcloud.services.zeroed", { services: r.services, lines: r.lines }));
+      void qc.invalidateQueries({ queryKey: [...KEY, "plan"] });
+      void qc.invalidateQueries({ queryKey: ["services"] });
+      void qc.invalidateQueries({ queryKey: ["crm"] });
+    },
+    onError: (e) => toast.error(errorText(t, e)),
+  });
   const { data, isLoading, error, refetch, isFetching } = useQuery({ queryKey: [...KEY, "plan"], queryFn: () => api.get<ServicePlan>("/admin/itcloud/services/plan"), retry: false });
   const [q, setQ] = useState("");
   // only what is really sold to my clients at ITCloud (an active service of a customer)
@@ -464,17 +477,16 @@ function ServicesStep() {
                   <span className="text-[11px] text-muted-foreground">{t("integrations.itcloud.services.notSold")}</span>
                 )}
                 <span className="text-right text-xs text-muted-foreground">
-                  {t("integrations.itcloud.services.cost")} <span className="font-mono text-foreground">{money(r.costCents, i18n.language)}</span>
-                  <span className="block">
-                    {t("services.price")}{" "}
-                    {r.priceCents !== null ? (
-                      <span className="font-mono text-foreground">{money(r.priceCents, i18n.language)}</span>
-                    ) : (
-                      <span className="font-mono text-foreground" title={t(`integrations.itcloud.services.priceSource.${r.priceSource}`)}>
-                        {money(r.suggestedPriceCents, i18n.language)} <span className="font-sans text-[10px] text-muted-foreground">({t(`integrations.itcloud.services.priceShort.${r.priceSource}`)})</span>
+                  {r.priceCents === null ? (
+                    <span title={t("integrations.itcloud.services.manualHint")}>{t("integrations.itcloud.services.manual")}</span>
+                  ) : (
+                    <>
+                      {t("integrations.itcloud.services.cost")} <span className="font-mono text-foreground">{money(r.costCents, i18n.language)}</span>
+                      <span className="block">
+                        {t("services.price")} <span className="font-mono text-foreground">{money(r.priceCents, i18n.language)}</span>
                       </span>
-                    )}
-                  </span>
+                    </>
+                  )}
                 </span>
                 <Badge variant="outline" className={cn("w-28 justify-center", r.state === "new" ? "border-sky-500/40 text-sky-300" : r.state === "update" ? "border-amber-500/40 text-amber-300" : "text-muted-foreground")}>
                   {t(`integrations.itcloud.services.state.${r.state}`)}
@@ -484,7 +496,17 @@ function ServicesStep() {
           </ul>
           {!shown.length && <p className="py-4 text-sm text-muted-foreground">{t("integrations.itcloud.list.none")}</p>}
           <Pager page={paged.page} pages={paged.pages} total={shown.length} setPage={paged.setPage} />
-          {data?.msrpError && <p className="mt-2 text-xs text-amber-300">{t("integrations.itcloud.services.msrpError")}</p>}
+          <p className="mt-2 text-xs text-muted-foreground">{t("integrations.itcloud.services.manualNote")}</p>
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            className="mt-2 text-xs"
+            disabled={zero.isPending}
+            onClick={() => void confirm({ title: t("integrations.itcloud.services.zeroTitle"), description: t("integrations.itcloud.services.zeroText"), confirmLabel: t("integrations.itcloud.services.zeroConfirm"), destructive: true }).then((ok) => ok && zero.mutate())}
+          >
+            {zero.isPending && <Loader2 className="size-3.5 animate-spin" />} {t("integrations.itcloud.services.zero")}
+          </Button>
           {data && data.ignored > 0 && <p className="mt-2 text-xs text-muted-foreground">{t("integrations.itcloud.services.ignored", { count: data.ignored })}</p>}
         </>
       )}

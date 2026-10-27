@@ -9,6 +9,7 @@ import { Input } from "@/components/ui/input";
 import { Switch } from "@/components/ui/switch";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { useConfirm } from "@/components/ConfirmDialog";
+import { ScopeDialog } from "@/components/ScopeDialog";
 import { api, ApiError } from "@/lib/api";
 import { useCan } from "@/lib/session";
 import { cn } from "@/lib/utils";
@@ -411,6 +412,16 @@ function ServicesTab({ client, k, editable, onChanged }: { client: CrmDetail; k:
   const term = k.startDate && k.endDate ? { start: k.startDate, end: k.endDate } : null;
   const [editing, setEditing] = useState<string | null>(null);
   const [mapping, setMapping] = useState(false);
+  // the day the prices are looked at: the period it falls in is shown for every service (prorated only if the service starts or ends inside it)
+  const today = new Date().toLocaleDateString("en-CA", { timeZone: "America/Toronto" });
+  const [asOf, setAsOf] = useState(today);
+  const nextMonth = (() => {
+    const d = new Date(`${today}T12:00:00Z`);
+    d.setUTCMonth(d.getUTCMonth() + 1, 1);
+    return d.toISOString().slice(0, 10);
+  })();
+  const periodAt = (l: Line) => l.periods.find((p) => p.from <= asOf && asOf <= p.to) ?? null;
+  const totalAt = k.services.reduce((n, l) => n + (periodAt(l)?.amountCents ?? 0), 0);
   const { data: waiting = [] } = useQuery({ queryKey: ["crm", "client", client.id, "itcloud-unmapped", k.id], queryFn: () => api.get<Unmapped[]>(`${base}/itcloud-services`), enabled: editable && k.active });
   const qc = useQueryClient();
   const add = useMutation({
@@ -426,19 +437,40 @@ function ServicesTab({ client, k, editable, onChanged }: { client: CrmDetail; k:
     onSuccess: onChanged,
     onError: (e) => toast.error(contractError(t, e)),
   });
+  // a changed price: "only this contract" or "the service and every running contract" — the server asks (and says how many others)
+  const [scope, setScope] = useState<{ edit: { id: string; quantity: number; priceCents: number; addedOn: string }; others: number } | null>(null);
   const change = useMutation({
-    mutationFn: (p: { id: string; quantity: number; priceCents: number; addedOn: string }) => api.patch(`${base}/services/${p.id}`, { quantity: p.quantity, priceCents: p.priceCents, addedOn: p.addedOn }),
+    mutationFn: (p: { id: string; quantity: number; priceCents: number; addedOn: string; scope?: "line" | "service" }) => api.patch(`${base}/services/${p.id}`, { quantity: p.quantity, priceCents: p.priceCents, addedOn: p.addedOn, ...(p.scope ? { scope: p.scope } : {}) }),
     onSuccess: () => {
       setEditing(null);
+      setScope(null);
       onChanged();
+      void qc.invalidateQueries({ queryKey: ["services"] });
     },
-    onError: (e) => toast.error(contractError(t, e)),
+    onError: (e, v) => {
+      if (e instanceof ApiError && e.code === "price_scope_required") setScope({ edit: { id: v.id, quantity: v.quantity, priceCents: v.priceCents, addedOn: v.addedOn }, others: Number(e.fields?.find((x) => x.path === "contracts")?.message ?? 0) });
+      else toast.error(contractError(t, e));
+    },
   });
   return (
     <div className="space-y-3">
-      {k.services.length === 0 ? (
-        <p className="rounded-lg border border-dashed py-6 text-center text-sm text-muted-foreground">{t("crm.contracts.window.noLines")}</p>
-      ) : (
+      {k.services.length === 0 && <p className="rounded-lg border border-dashed py-6 text-center text-sm text-muted-foreground">{t("crm.contracts.window.noLines")}</p>}
+      {k.services.length > 0 && (
+        <div className="flex flex-wrap items-center gap-2 rounded-lg border bg-background/30 px-3 py-2 text-sm">
+          <span className="text-xs font-medium text-muted-foreground">{t("crm.contracts.asOf")}</span>
+          <Input type="date" value={asOf} min={k.startDate ?? undefined} max={k.endDate ?? undefined} onChange={(e) => e.target.value && setAsOf(e.target.value)} className="h-8 w-40" aria-label={t("crm.contracts.asOf")} />
+          <Button type="button" size="sm" variant={asOf === today ? "secondary" : "ghost"} className="h-7 text-xs" onClick={() => setAsOf(today)}>
+            {t("crm.contracts.asOfToday")}
+          </Button>
+          <Button type="button" size="sm" variant={asOf === nextMonth ? "secondary" : "ghost"} className="h-7 text-xs" onClick={() => setAsOf(nextMonth)}>
+            {t("crm.contracts.asOfNextMonth")}
+          </Button>
+          <span className="ml-auto text-xs text-muted-foreground">
+            {t("crm.contracts.periodTotal")} <span className="font-mono text-sm text-foreground">{money(totalAt, i18n.language)}</span>
+          </span>
+        </div>
+      )}
+      {k.services.length > 0 && (
         <ul className="divide-y divide-border/50 rounded-lg border bg-background/30 text-sm">
           {k.services.map((l) => (
             <li key={l.id} className="px-3 py-2.5">
@@ -455,10 +487,17 @@ function ServicesTab({ client, k, editable, onChanged }: { client: CrmDetail; k:
                 </span>
                 {l.firstCents !== null && (
                   <span className="text-right text-[11px] text-muted-foreground">
-                    <span className="block">
-                      {t("crm.contracts.firstCharge")} <span className="font-mono text-sm text-foreground">{money(l.firstCents, i18n.language)}</span>
-                      {l.periods[0] && !l.periods[0].full && <span className="ml-1 text-amber-300">({t("crm.contracts.prorata", { days: l.periods[0].days, of: l.periods[0].periodDays })})</span>}
-                    </span>
+                    {(() => {
+                      const p = periodAt(l);
+                      return p ? (
+                        <span className="block">
+                          {t("crm.contracts.periodOf", { from: shortDate(p.from), to: shortDate(p.to) })} <span className="font-mono text-sm text-foreground">{money(p.amountCents, i18n.language)}</span>
+                          {p.full ? <span className="ml-1 text-emerald-300">({t("crm.contracts.fullPrice")})</span> : <span className="ml-1 text-amber-300">({t("crm.contracts.prorata", { days: p.days, of: p.periodDays })})</span>}
+                        </span>
+                      ) : (
+                        <span className="block">{asOf < l.addedOn ? t("crm.contracts.notStarted", { date: shortDate(l.addedOn) }) : t("crm.contracts.noMoreCharge")}</span>
+                      );
+                    })()}
                     <span className="block">
                       {t("crm.contracts.termTotal")} <span className="font-mono text-foreground">{money(l.totalCents ?? 0, i18n.language)}</span>
                     </span>
@@ -499,6 +538,18 @@ function ServicesTab({ client, k, editable, onChanged }: { client: CrmDetail; k:
         </>
       )}
       {!k.active && <p className="text-xs text-amber-300">{t("crm.contracts.window.inactiveServices")}</p>}
+      {scope && (
+        <ScopeDialog
+          title={t("crm.contracts.scope.title")}
+          description={t("crm.contracts.scope.text", { count: scope.others })}
+          wideLabel={t("crm.contracts.scope.wide", { count: scope.others })}
+          narrowLabel={t("crm.contracts.scope.narrow")}
+          busy={change.isPending}
+          onWide={() => change.mutate({ ...scope.edit, scope: "service" })}
+          onNarrow={() => change.mutate({ ...scope.edit, scope: "line" })}
+          onCancel={() => setScope(null)}
+        />
+      )}
       {mapping && (
         <MapItcloudDialog
           clientId={client.id}

@@ -10,7 +10,8 @@ import { Switch } from "@/components/ui/switch";
 import { Textarea } from "@/components/ui/textarea";
 import { GlassBackdrop } from "@/components/brand/GlassBackdrop";
 import { useConfirm } from "@/components/ConfirmDialog";
-import { api } from "@/lib/api";
+import { api, ApiError } from "@/lib/api";
+import { ScopeDialog } from "@/components/ScopeDialog";
 import { useCan } from "@/lib/session";
 import { cn } from "@/lib/utils";
 import { money } from "@/pages/crm/shared";
@@ -166,20 +167,38 @@ function ServiceDialog({ service, onClose }: { service: Service | null; onClose:
     setF(next);
   };
   const cents = (v: string) => Math.round((Number(v.replace(",", ".")) || 0) * 100);
+  // the price or cost changed on a service that is in running contracts: ask whether they follow (the server says how many)
+  const [ask, setAsk] = useState<number | null>(null);
   const save = useMutation({
-    mutationFn: () => {
-      const body = { name: f.name.trim(), description: f.description.trim(), kind: f.kind, priceCents: cents(f.price), costCents: cents(f.cost), taxable: f.taxable };
+    mutationFn: (applyToContracts?: boolean) => {
+      const body = { name: f.name.trim(), description: f.description.trim(), kind: f.kind, priceCents: cents(f.price), costCents: cents(f.cost), taxable: f.taxable, ...(applyToContracts !== undefined ? { applyToContracts } : {}) };
       return service ? api.patch(`/services/${service.id}`, body) : api.post("/services", body);
     },
     onSuccess: () => {
       void qc.invalidateQueries({ queryKey: KEY });
+      void qc.invalidateQueries({ queryKey: ["crm"] });
       toast.success(t("services.saved"));
       onClose();
     },
-    onError: () => toast.error(t("common.error")),
+    onError: (e) => {
+      if (e instanceof ApiError && e.code === "price_scope_required") setAsk(Number(e.fields?.find((x) => x.path === "contracts")?.message ?? 0));
+      else toast.error(t("common.error"));
+    },
   });
   return (
     <Dialog open onOpenChange={(o) => !o && onClose()}>
+      {ask !== null && (
+        <ScopeDialog
+          title={t("services.scope.title")}
+          description={t("services.scope.text", { count: ask })}
+          wideLabel={t("services.scope.wide", { count: ask })}
+          narrowLabel={t("services.scope.narrow")}
+          busy={save.isPending}
+          onWide={() => save.mutate(true)}
+          onNarrow={() => save.mutate(false)}
+          onCancel={() => setAsk(null)}
+        />
+      )}
       <DialogContent className="max-w-lg">
         <DialogHeader>
           <DialogTitle>{service ? t("services.edit") : t("services.new")}</DialogTitle>
@@ -188,7 +207,7 @@ function ServiceDialog({ service, onClose }: { service: Service | null; onClose:
           className="space-y-3"
           onSubmit={(e: FormEvent) => {
             e.preventDefault();
-            if (f.name.trim()) save.mutate();
+            if (f.name.trim()) save.mutate(undefined);
           }}
         >
           <label className="block space-y-1 text-xs">

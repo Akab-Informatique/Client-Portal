@@ -6966,22 +6966,22 @@ describe("ITCloud: vendor, clients matched, services kept on contracts", () => {
     expect(sp.ignored).toBe(1);
     // what is really sold to customers (active services): Exchange to 2 customers (5 units), Cloud Security to 1
     expect(sp.rows.map((r: any) => [r.key, r.soldTo, r.soldUnits])).toEqual([["43", 1, 1], ["42", 2, 5]]);
+    // ITCloud's prices and costs are never copied: a new service has none, they are typed by hand
     expect(sp.rows.map((r: any) => [r.key, r.state, r.costCents])).toEqual([
-      ["43", "new", 300],
-      ["42", "new", 500],
+      ["43", "new", 0],
+      ["42", "new", 0],
     ]);
-    // the price a new service starts at: ITCloud's MSRP when it gives one (latest line, the product's own period), else the cost plus 20 %
     expect(sp.rows.map((r: any) => [r.key, r.suggestedPriceCents, r.priceSource])).toEqual([
-      ["43", 360, "markup"],
-      ["42", 725, "msrp"],
+      ["43", 0, "manual"],
+      ["42", 0, "manual"],
     ]);
     expect((await admin.post("/api/admin/itcloud/services/plan", { keys: ["42", "43"] })).json).toEqual({ created: 2, updated: 0 });
     const svcs = (await admin.get("/api/services")).json;
     const exchange = svcs.find((s: any) => s.sku === "ITC-42");
-    expect(exchange).toMatchObject({ name: "Exchange Plan 1", kind: "recurring", costCents: 500, priceCents: 725, vendorName: "ITCloud", vendorSku: "42" });
-    expect(svcs.find((s: any) => s.sku === "ITC-43")).toMatchObject({ costCents: 300, priceCents: 360 });
-    // nothing left to apply; the price we set stays
-    await admin.patch(`/api/services/${exchange.id}`, { priceCents: 800 });
+    expect(exchange).toMatchObject({ name: "Exchange Plan 1", kind: "recurring", costCents: 0, priceCents: 0, vendorName: "ITCloud", vendorSku: "42" });
+    expect(svcs.find((s: any) => s.sku === "ITC-43")).toMatchObject({ costCents: 0, priceCents: 0 });
+    // nothing left to apply; the price and the cost are typed by hand and stay
+    await admin.patch(`/api/services/${exchange.id}`, { priceCents: 800, costCents: 500 });
     expect((await admin.get("/api/admin/itcloud/services/plan")).json.rows.every((r: any) => r.state === "same")).toBe(true);
 
     // no automatic contract: with a contract made, nothing is placed until a service is mapped to one
@@ -7010,6 +7010,12 @@ describe("ITCloud: vendor, clients matched, services kept on contracts", () => {
     expect(ex).toMatchObject({ name: "Exchange Plan 1", quantity: 3, source: "itcloud", priceCents: 800, costCents: 500, addedOn: "2026-10-16" });
     // the total is for the three units: 16/31 of October, then November and December
     expect(ex.totalCents).toBe(Math.round((2400 * 16) / 31) + 2400 * 2);
+    // the line has the portal service's price and cost when made, then only people change them: a change of the service asks whether the running contracts follow
+    expect((await admin.patch(`/api/services/${exchange.id}`, { priceCents: 900, costCents: 450 })).json.error).toBe("price_scope_required");
+    await admin.patch(`/api/services/${exchange.id}`, { priceCents: 900, costCents: 450, applyToContracts: true });
+    expect((await admin.get(svcUrl)).json.find((x: any) => x.id === ex.id)).toMatchObject({ priceCents: 900, costCents: 450 });
+    await admin.patch(`/api/services/${exchange.id}`, { priceCents: 800, costCents: 500, applyToContracts: true });
+    expect((await admin.get(svcUrl)).json.find((x: any) => x.id === ex.id)).toMatchObject({ priceCents: 800, costCents: 500 });
     expect((await admin.get(waitUrl)).json.map((s: any) => s.serviceId)).toEqual([9002]);
     states = (await admin.get("/api/admin/itcloud/services")).json.rows;
     expect(states.find((r: any) => r.serviceId === 9001)).toMatchObject({ state: "synced", contractName: "Services gérés", contractId: contract.id });
@@ -7068,6 +7074,62 @@ describe("ITCloud: vendor, clients matched, services kept on contracts", () => {
   });
 });
 
+describe("service prices and the contracts that use them", () => {
+  it("a price changed on a service, or on a contract line, asks how far it goes", async () => {
+    resetRateLimit("login:ip:unknown");
+    const admin = await signIn("admin@akab.local");
+    const tech = await signIn("tech@akab.local");
+    const clients = (await admin.get("/api/crm/clients")).json;
+    const client = (clients.items ?? clients).find((x: any) => x.autotaskId === 300);
+    const typeKey = (await admin.get("/api/crm/contract-types")).json.find((x: any) => x.kind === "recurring").key;
+    const y = new Date().getFullYear() + 2;
+    const base = `/api/crm/clients/${client.id}/contracts`;
+    const svc = (await admin.post("/api/services", { name: "Antivirus géré", kind: "recurring", priceCents: 1_000, costCents: 400 })).json;
+    const mk = async (name: string) => {
+      const k = (await admin.post(base, { name, typeKey, startDate: `${y}-01-01`, endDate: `${y}-12-31`, services: [{ serviceId: svc.id, addedOn: `${y}-01-01`, quantity: 1 }] })).json;
+      return { id: k.id as string, line: (await admin.get(`${base}/${k.id}`)).json.services[0] };
+    };
+    const a = await mk("Contrat A");
+    const b = await mk("Contrat B");
+    const price = async (k: { id: string }) => (await admin.get(`${base}/${k.id}`)).json.services[0].priceCents;
+
+    // the service: the price changes, the question is asked, the server says how many contracts
+    const ask = await admin.patch(`/api/services/${svc.id}`, { priceCents: 1_200 });
+    expect(ask.status).toBe(409);
+    expect(ask.json.error).toBe("price_scope_required");
+    expect(ask.json.fields).toEqual([{ path: "contracts", message: "2" }]);
+    // "no": only the service, for future additions; the contracts keep their price
+    expect((await admin.patch(`/api/services/${svc.id}`, { priceCents: 1_200, applyToContracts: false })).json.priceCents).toBe(1_200);
+    expect([await price(a), await price(b)]).toEqual([1_000, 1_000]);
+    // "yes": every running contract follows
+    await admin.patch(`/api/services/${svc.id}`, { priceCents: 1_500, costCents: 600, applyToContracts: true });
+    expect([await price(a), await price(b)]).toEqual([1_500, 1_500]);
+    // a change that is not a price or a cost asks nothing
+    expect((await admin.patch(`/api/services/${svc.id}`, { description: "Poste de travail" })).status).toBe(200);
+
+    // the contract line: a new price asks "only this contract" or "the service and the others too"
+    const lineUrl = (k: { id: string; line: { id: string } }) => `${base}/${k.id}/services/${k.line.id}`;
+    const asked = await admin.patch(lineUrl(a), { priceCents: 1_800 });
+    expect(asked.status).toBe(409);
+    expect(asked.json).toMatchObject({ error: "price_scope_required", fields: [{ path: "contracts", message: "1" }] });
+    expect((await admin.patch(lineUrl(a), { priceCents: 1_800, scope: "line" })).json.priceCents).toBe(1_800);
+    expect([await price(a), await price(b)]).toEqual([1_800, 1_500]);
+    expect((await admin.get("/api/services")).json.find((x: any) => x.id === svc.id).priceCents).toBe(1_500);
+    // the service and the other contracts too
+    expect((await admin.patch(lineUrl(a), { priceCents: 2_000, scope: "service" })).json.priceCents).toBe(2_000);
+    expect([await price(a), await price(b)]).toEqual([2_000, 2_000]);
+    expect((await admin.get("/api/services")).json.find((x: any) => x.id === svc.id).priceCents).toBe(2_000);
+    // a quantity change alone asks nothing
+    expect((await admin.patch(lineUrl(a), { quantity: 2 })).status).toBe(200);
+    // only a manager changes services
+    expect((await tech.patch(`/api/services/${svc.id}`, { priceCents: 1 })).status).toBe(403);
+
+    // the one-time clean-up of the ITCloud services: administrators only
+    expect((await tech.post("/api/admin/itcloud/services/zero", {})).status).toBe(403);
+    expect((await admin.post("/api/admin/itcloud/services/zero", {})).status).toBe(200);
+  });
+});
+
 describe("contracts: services when made, charges, activity, stop instead of delete", () => {
   it("a recurring contract is charged monthly or yearly from its services, shows its revenue, keeps its activity, and is stopped (not deleted) once charged", async () => {
     resetRateLimit("login:ip:unknown");
@@ -7115,7 +7177,7 @@ describe("contracts: services when made, charges, activity, stop instead of dele
     expect(mid.json).toMatchObject({ firstCents: Math.round((10_000 * 16) / 31), totalCents: Math.round((10_000 * 16) / 31) + 50_000 });
     expect((await admin.get(`${base}/${kid}`)).json.summary.revenueCents).toBe(276_500 + Math.round((10_000 * 16) / 31) + 50_000);
     // a line can be changed (quantity, price, day); the day stays inside the term
-    expect((await admin.patch(`${base}/${kid}/services/${mid.json.id}`, { quantity: 3, priceCents: 9_000 })).json).toMatchObject({ quantity: 3, priceCents: 9_000 });
+    expect((await admin.patch(`${base}/${kid}/services/${mid.json.id}`, { quantity: 3, priceCents: 9_000, scope: "line" })).json).toMatchObject({ quantity: 3, priceCents: 9_000 });
     expect((await admin.patch(`${base}/${kid}/services/${mid.json.id}`, { addedOn: `${y + 1}-01-01` })).json.error).toBe("service_outside_term");
     expect((await tech.patch(`${base}/${kid}/services/${mid.json.id}`, { quantity: 1 })).status).toBe(403);
     // the term cannot leave a service out

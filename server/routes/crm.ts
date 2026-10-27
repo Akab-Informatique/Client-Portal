@@ -16,6 +16,7 @@ import { crmState, descendantsOf, ensureCrm, rememberCompany, rememberContact, s
 import { lookup, run } from "./tickets.ts";
 import { pushInvoice } from "../lib/quickbooks.ts";
 import { DraftError, recalcInvoiceTaxes, taxesByLine } from "../lib/billables.ts";
+import { applyToLines, contractsIn, runningLinesOf } from "../lib/servicePrices.ts";
 import { InvoiceMailError, invoicePdfFor, sendInvoiceMail, sendStatement, sendStatements, statementOf, statementTargets } from "../lib/invoiceMail.ts";
 import { applyAutoApprove } from "../lib/billables.ts";
 import { BILLING_MODES, KIND_MODE, contractTypes, usedHoursOf, type ContractKind } from "../lib/contracts.ts";
@@ -538,10 +539,14 @@ export const crmRoutes = new Hono<AppEnv>()
     const client = await clientOr404(c.req.param("id"));
     const k = await contractOr404(client.id, c.req.param("kid"));
     const sid = zUuid.parse(c.req.param("sid"));
-    const p = await body(c, z.object({ quantity: z.number().int().min(1).max(100_000).optional(), priceCents: z.number().int().min(0).max(100_000_000).optional(), addedOn: zDay.optional() }));
+    // `scope` (asked when the price changes): "line" = this contract only; "service" = the service itself and every running contract that has it
+    const { scope, ...p } = await body(c, z.object({ quantity: z.number().int().min(1).max(100_000).optional(), priceCents: z.number().int().min(0).max(100_000_000).optional(), addedOn: zDay.optional(), scope: z.enum(["line", "service"]).optional() }));
     const [cur] = await db().select().from(schema.contractServices).where(and(eq(schema.contractServices.id, sid), eq(schema.contractServices.contractId, k.id)));
     if (!cur) throw new HTTPException(404, { message: "not_found" });
     if (cur.source) throw new HTTPException(409, { message: "service_from_vendor" });
+    const priceChanges = p.priceCents !== undefined && p.priceCents !== cur.priceCents && Boolean(cur.serviceId);
+    const others = priceChanges && cur.serviceId ? await runningLinesOf(cur.serviceId, cur.id) : [];
+    if (priceChanges && !scope) throw new HTTPException(409, { message: "price_scope_required", cause: [{ path: "contracts", message: String(contractsIn(others)) }] });
     if (!k.startDate || !k.endDate) throw new HTTPException(400, { message: "contract_no_term" });
     const next = { quantity: p.quantity ?? cur.quantity, priceCents: p.priceCents ?? cur.priceCents, addedOn: p.addedOn ?? cur.addedOn };
     const plan = prorata({ period: cur.kind === "recurring_yearly" ? "yearly" : "monthly", priceCents: next.priceCents * next.quantity, addedOn: next.addedOn, start: k.startDate, end: k.endDate });
@@ -553,6 +558,12 @@ export const crmRoutes = new Hono<AppEnv>()
       await audit(a.user.id, "crm.contract_service_changed", k.id, { service: cur.name, ...changes });
       await recordContractEvent(k.id, "service_changed", { name: cur.name, changes }, { userId: a.user.id });
       await syncMonthlyRate(k.id);
+    }
+    // the price goes to the service and to the other running contracts too
+    if (priceChanges && scope === "service" && cur.serviceId) {
+      await db().update(schema.services).set({ priceCents: next.priceCents, updatedAt: new Date() }).where(eq(schema.services.id, cur.serviceId));
+      await applyToLines(others, { priceCents: next.priceCents }, { userId: a.user.id });
+      await audit(a.user.id, "crm.contract_service_price_to_service", k.id, { service: cur.name, priceCents: next.priceCents, contracts: contractsIn(others) });
     }
     return c.json(serviceLine(row, k));
   })

@@ -8,6 +8,7 @@ import { rateLimit } from "../lib/http.ts";
 import {
   applyClientLinks,
   applyServicePlan,
+  zeroServiceMoney,
   clientPlan,
   ensureVendor,
   itcloudReady,
@@ -124,6 +125,12 @@ export const itcloudRoutes = new Hono<AppEnv>()
     const a = auth(c);
     const p = await body(c, z.object({ keys: z.array(z.string().regex(/^\d{1,9}$/)).max(1000) }));
     return c.json(await run(async () => applyServicePlan(await ready(), p.keys, a.user.id)));
+  })
+
+  /** One-time clean-up: the price and cost of every ITCloud service (and of its contract lines) back to 0, to type them by hand */
+  .post("/services/zero", async (c) => {
+    const a = auth(c);
+    return c.json(await run(async () => zeroServiceMoney(a.user.id)));
   })
 
   // ── the services each customer has, and the sync onto contracts ──
