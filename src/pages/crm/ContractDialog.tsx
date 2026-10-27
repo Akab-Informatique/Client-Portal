@@ -93,7 +93,8 @@ function ServiceAdder({ term, onAdd, busy }: { term: { start: string; end: strin
   const inside = (d: string) => (term ? (d < term.start ? term.start : d > term.end ? term.end : d) : d);
   const [serviceId, setServiceId] = useState("");
   const [quantity, setQuantity] = useState("1");
-  const [addedOn, setAddedOn] = useState(() => inside(todayYmd()));
+  // a service starts with the contract unless another day is picked
+  const [addedOn, setAddedOn] = useState(() => term?.start ?? inside(todayYmd()));
   const [price, setPrice] = useState("");
   // the day follows the term when it changes
   useEffect(() => setAddedOn((d) => inside(d)), [term?.start, term?.end]); // eslint-disable-line react-hooks/exhaustive-deps
@@ -440,7 +441,7 @@ function ServicesTab({ client, k, editable, onChanged }: { client: CrmDetail; k:
   // a changed price: "only this contract" or "the service and every running contract" — the server asks (and says how many others)
   const [scope, setScope] = useState<{ edit: { id: string; quantity: number; priceCents: number; addedOn: string }; others: number } | null>(null);
   const change = useMutation({
-    mutationFn: (p: { id: string; quantity: number; priceCents: number; addedOn: string; scope?: "line" | "service" }) => api.patch(`${base}/services/${p.id}`, { quantity: p.quantity, priceCents: p.priceCents, addedOn: p.addedOn, ...(p.scope ? { scope: p.scope } : {}) }),
+    mutationFn: (p: { id: string; quantity: number; priceCents: number; addedOn: string; scope?: "line" | "service" | "all" }) => api.patch(`${base}/services/${p.id}`, { quantity: p.quantity, priceCents: p.priceCents, addedOn: p.addedOn, ...(p.scope ? { scope: p.scope } : {}) }),
     onSuccess: () => {
       setEditing(null);
       setScope(null);
@@ -503,7 +504,7 @@ function ServicesTab({ client, k, editable, onChanged }: { client: CrmDetail; k:
                     </span>
                   </span>
                 )}
-                {editable && !l.source && (
+                {editable && (
                   <span className="flex">
                     <Button type="button" size="icon" variant="ghost" className="size-7 text-muted-foreground hover:text-foreground" onClick={() => setEditing(editing === l.id ? null : l.id)} aria-label={t("common.edit")}>
                       <Pencil className="size-3.5" />
@@ -522,7 +523,7 @@ function ServicesTab({ client, k, editable, onChanged }: { client: CrmDetail; k:
                   </span>
                 )}
               </div>
-              {editing === l.id && <LineEditor l={l} term={term} busy={change.isPending} onSave={(p) => change.mutate({ id: l.id, ...p })} onCancel={() => setEditing(null)} />}
+              {editing === l.id && <LineEditor l={l} term={term} fromVendor={Boolean(l.source)} busy={change.isPending} onSave={(p) => change.mutate({ id: l.id, ...p })} onCancel={() => setEditing(null)} />}
             </li>
           ))}
         </ul>
@@ -542,11 +543,12 @@ function ServicesTab({ client, k, editable, onChanged }: { client: CrmDetail; k:
         <ScopeDialog
           title={t("crm.contracts.scope.title")}
           description={t("crm.contracts.scope.text", { count: scope.others })}
-          wideLabel={t("crm.contracts.scope.wide", { count: scope.others })}
-          narrowLabel={t("crm.contracts.scope.narrow")}
+          options={[
+            ...(scope.others > 0 ? [{ label: t("crm.contracts.scope.all", { count: scope.others }), onClick: () => change.mutate({ ...scope.edit, scope: "all" as const }) }] : []),
+            { label: t("crm.contracts.scope.service"), onClick: () => change.mutate({ ...scope.edit, scope: "service" as const }) },
+            { label: t("crm.contracts.scope.narrow"), onClick: () => change.mutate({ ...scope.edit, scope: "line" as const }) },
+          ]}
           busy={change.isPending}
-          onWide={() => change.mutate({ ...scope.edit, scope: "service" })}
-          onNarrow={() => change.mutate({ ...scope.edit, scope: "line" })}
           onCancel={() => setScope(null)}
         />
       )}
@@ -567,7 +569,7 @@ function ServicesTab({ client, k, editable, onChanged }: { client: CrmDetail; k:
 }
 
 /** Changes a line: its quantity, its price per unit, the day it starts (the prorata is shown as it goes) */
-function LineEditor({ l, term, busy, onSave, onCancel }: { l: Line; term: { start: string; end: string } | null; busy: boolean; onSave: (p: { quantity: number; priceCents: number; addedOn: string }) => void; onCancel: () => void }) {
+function LineEditor({ l, term, fromVendor, busy, onSave, onCancel }: { l: Line; fromVendor?: boolean; term: { start: string; end: string } | null; busy: boolean; onSave: (p: { quantity: number; priceCents: number; addedOn: string }) => void; onCancel: () => void }) {
   const { t, i18n } = useTranslation();
   const [quantity, setQuantity] = useState(String(l.quantity));
   const [price, setPrice] = useState(String(l.priceCents / 100));
@@ -578,13 +580,13 @@ function LineEditor({ l, term, busy, onSave, onCancel }: { l: Line; term: { star
   return (
     <div className="mt-2 flex flex-wrap items-end gap-2 rounded-lg border bg-background/40 p-2">
       <Field label={t("crm.contracts.window.quantity")}>
-        <Input value={quantity} inputMode="numeric" onChange={(e) => setQuantity(e.target.value)} className="h-8 w-20 text-right font-mono" />
+        <Input value={quantity} inputMode="numeric" disabled={fromVendor} onChange={(e) => setQuantity(e.target.value)} className="h-8 w-20 text-right font-mono" />
       </Field>
       <Field label={t("crm.contracts.window.unitPrice")}>
         <Input value={price} inputMode="decimal" onChange={(e) => setPrice(e.target.value)} className="h-8 w-28 text-right font-mono" />
       </Field>
       <Field label={t("crm.contracts.startsOn")}>
-        <Input type="date" value={addedOn} min={term?.start} max={term?.end} onChange={(e) => setAddedOn(e.target.value)} className="h-8" />
+        <Input type="date" value={addedOn} min={term?.start} max={term?.end} disabled={fromVendor} onChange={(e) => setAddedOn(e.target.value)} className="h-8" />
       </Field>
       <span className="pb-2 text-[11px] text-muted-foreground">
         {typeof plan !== "string" && (

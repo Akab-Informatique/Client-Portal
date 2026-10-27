@@ -539,11 +539,12 @@ export const crmRoutes = new Hono<AppEnv>()
     const client = await clientOr404(c.req.param("id"));
     const k = await contractOr404(client.id, c.req.param("kid"));
     const sid = zUuid.parse(c.req.param("sid"));
-    // `scope` (asked when the price changes): "line" = this contract only; "service" = the service itself and every running contract that has it
-    const { scope, ...p } = await body(c, z.object({ quantity: z.number().int().min(1).max(100_000).optional(), priceCents: z.number().int().min(0).max(100_000_000).optional(), addedOn: zDay.optional(), scope: z.enum(["line", "service"]).optional() }));
+    // `scope` (asked when the price changes): "line" = this contract only; "service" = this contract and the service's price (future additions); "all" = this contract, the service and every other running contract that has it
+    const { scope, ...p } = await body(c, z.object({ quantity: z.number().int().min(1).max(100_000).optional(), priceCents: z.number().int().min(0).max(100_000_000).optional(), addedOn: zDay.optional(), scope: z.enum(["line", "service", "all"]).optional() }));
     const [cur] = await db().select().from(schema.contractServices).where(and(eq(schema.contractServices.id, sid), eq(schema.contractServices.contractId, k.id)));
     if (!cur) throw new HTTPException(404, { message: "not_found" });
-    if (cur.source) throw new HTTPException(409, { message: "service_from_vendor" });
+    // a line that comes from a vendor (ITCloud) keeps its quantity and day from the vendor; its price can be changed
+    if (cur.source && ((p.quantity !== undefined && p.quantity !== cur.quantity) || (p.addedOn !== undefined && p.addedOn !== cur.addedOn))) throw new HTTPException(409, { message: "service_from_vendor" });
     const priceChanges = p.priceCents !== undefined && p.priceCents !== cur.priceCents && Boolean(cur.serviceId);
     const others = priceChanges && cur.serviceId ? await runningLinesOf(cur.serviceId, cur.id) : [];
     if (priceChanges && !scope) throw new HTTPException(409, { message: "price_scope_required", cause: [{ path: "contracts", message: String(contractsIn(others)) }] });
@@ -560,10 +561,10 @@ export const crmRoutes = new Hono<AppEnv>()
       await syncMonthlyRate(k.id);
     }
     // the price goes to the service and to the other running contracts too
-    if (priceChanges && scope === "service" && cur.serviceId) {
+    if (priceChanges && (scope === "service" || scope === "all") && cur.serviceId) {
       await db().update(schema.services).set({ priceCents: next.priceCents, updatedAt: new Date() }).where(eq(schema.services.id, cur.serviceId));
-      await applyToLines(others, { priceCents: next.priceCents }, { userId: a.user.id });
-      await audit(a.user.id, "crm.contract_service_price_to_service", k.id, { service: cur.name, priceCents: next.priceCents, contracts: contractsIn(others) });
+      if (scope === "all") await applyToLines(others, { priceCents: next.priceCents }, { userId: a.user.id });
+      await audit(a.user.id, "crm.contract_service_price_to_service", k.id, { service: cur.name, priceCents: next.priceCents, scope, contracts: scope === "all" ? contractsIn(others) : 0 });
     }
     return c.json(serviceLine(row, k));
   })

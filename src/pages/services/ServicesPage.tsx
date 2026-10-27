@@ -191,11 +191,11 @@ function ServiceDialog({ service, onClose }: { service: Service | null; onClose:
         <ScopeDialog
           title={t("services.scope.title")}
           description={t("services.scope.text", { count: ask })}
-          wideLabel={t("services.scope.wide", { count: ask })}
-          narrowLabel={t("services.scope.narrow")}
+          options={[
+            { label: t("services.scope.wide", { count: ask }), onClick: () => save.mutate(true) },
+            { label: t("services.scope.narrow"), onClick: () => save.mutate(false) },
+          ]}
           busy={save.isPending}
-          onWide={() => save.mutate(true)}
-          onNarrow={() => save.mutate(false)}
           onCancel={() => setAsk(null)}
         />
       )}

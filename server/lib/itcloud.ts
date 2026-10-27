@@ -435,7 +435,8 @@ type Line = typeof schema.contractServices.$inferSelect;
 /** The line of a service on a contract: made (with the portal service's price and cost, never ITCloud's amounts), or brought up to date (quantity, contract, kind). Its price and cost are only changed by people, once made. */
 async function ensureLine(contract: typeof schema.clientContracts.$inferSelect, svc: typeof schema.services.$inferSelect, r: { serviceId: number; quantity: number; amountCents: number; registrationDate: string | null }, today: string): Promise<{ line: Line; change: "created" | "updated" | "same" }> {
   const external = String(r.serviceId);
-  const addedOn = clamp(r.registrationDate ?? today, contract.startDate, contract.endDate);
+  // the line starts when the contract starts (never ITCloud's registration day, nor the service's)
+  const addedOn = clamp(contract.startDate ?? today, contract.startDate, contract.endDate);
   const [cur] = await db().select().from(schema.contractServices).where(and(eq(schema.contractServices.source, "itcloud"), eq(schema.contractServices.externalId, external)));
   const by = { source: "itcloud" as const };
   if (!cur) {
@@ -444,8 +445,8 @@ async function ensureLine(contract: typeof schema.clientContracts.$inferSelect, 
     await syncMonthlyRate(contract.id);
     return { line, change: "created" };
   }
-  if (cur.contractId !== contract.id || cur.serviceId !== svc.id || cur.quantity !== r.quantity || cur.kind !== svc.kind) {
-    const [line] = await db().update(schema.contractServices).set({ contractId: contract.id, serviceId: svc.id, name: svc.name, kind: svc.kind, quantity: r.quantity }).where(eq(schema.contractServices.id, cur.id)).returning();
+  if (cur.contractId !== contract.id || cur.serviceId !== svc.id || cur.quantity !== r.quantity || cur.kind !== svc.kind || cur.addedOn !== addedOn) {
+    const [line] = await db().update(schema.contractServices).set({ contractId: contract.id, serviceId: svc.id, name: svc.name, kind: svc.kind, quantity: r.quantity, addedOn }).where(eq(schema.contractServices.id, cur.id)).returning();
     if (cur.contractId !== contract.id) {
       // moved from one contract to another
       await recordContractEvent(cur.contractId, "service_removed", { name: cur.name, quantity: cur.quantity, priceCents: cur.priceCents, addedOn: cur.addedOn, kind: cur.kind, movedTo: contract.name }, by);

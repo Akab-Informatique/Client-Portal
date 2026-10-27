@@ -7,7 +7,7 @@ import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { api } from "@/lib/api";
-import { shortDate, ticketErrorText } from "@/pages/tickets/shared";
+import { ticketErrorText } from "@/pages/tickets/shared";
 import { money, type CrmContract } from "./shared";
 
 export type Unmapped = { serviceId: number; product: string; productGroup: string; quantity: number; billingCycle: string; registrationDate: string | null; costCents: number; serviceName: string; kind: "recurring" | "recurring_yearly"; priceCents: number };
@@ -66,7 +66,6 @@ export function MapItcloudDialog({ clientId, k, rows, onClose, onDone }: { clien
                 </span>
                 <span className="block truncate text-xs text-muted-foreground">
                   {r.productGroup} · {money(r.priceCents, i18n.language)} {r.kind === "recurring_yearly" ? t("services.perYear") : t("services.perMonth")}
-                  {r.registrationDate ? ` · ${t("crm.contracts.addedOn", { date: shortDate(r.registrationDate) })}` : ""}
                 </span>
               </span>
             </li>

@@ -7007,9 +7007,9 @@ describe("ITCloud: vendor, clients matched, services kept on contracts", () => {
     const mapped = await admin.post(waitUrl, { serviceId: 9001 });
     expect(mapped.status).toBe(201);
     const ex = mapped.json;
-    expect(ex).toMatchObject({ name: "Exchange Plan 1", quantity: 3, source: "itcloud", priceCents: 800, costCents: 500, addedOn: "2026-10-16" });
-    // the total is for the three units: 16/31 of October, then November and December
-    expect(ex.totalCents).toBe(Math.round((2400 * 16) / 31) + 2400 * 2);
+    expect(ex).toMatchObject({ name: "Exchange Plan 1", quantity: 3, source: "itcloud", priceCents: 800, costCents: 500, addedOn: "2026-10-01" });
+    // the line starts with the contract (not ITCloud's registration day): the total is for the three units, October to December, in full
+    expect(ex.totalCents).toBe(2400 * 3);
     // the line has the portal service's price and cost when made, then only people change them: a change of the service asks whether the running contracts follow
     expect((await admin.patch(`/api/services/${exchange.id}`, { priceCents: 900, costCents: 450 })).json.error).toBe("price_scope_required");
     await admin.patch(`/api/services/${exchange.id}`, { priceCents: 900, costCents: 450, applyToContracts: true });
@@ -7115,8 +7115,12 @@ describe("service prices and the contracts that use them", () => {
     expect((await admin.patch(lineUrl(a), { priceCents: 1_800, scope: "line" })).json.priceCents).toBe(1_800);
     expect([await price(a), await price(b)]).toEqual([1_800, 1_500]);
     expect((await admin.get("/api/services")).json.find((x: any) => x.id === svc.id).priceCents).toBe(1_500);
-    // the service and the other contracts too
-    expect((await admin.patch(lineUrl(a), { priceCents: 2_000, scope: "service" })).json.priceCents).toBe(2_000);
+    // this contract and the service's price (future additions), the other contract keeps its own
+    expect((await admin.patch(lineUrl(a), { priceCents: 1_900, scope: "service" })).json.priceCents).toBe(1_900);
+    expect([await price(a), await price(b)]).toEqual([1_900, 1_500]);
+    expect((await admin.get("/api/services")).json.find((x: any) => x.id === svc.id).priceCents).toBe(1_900);
+    // this contract, the service and the other running contracts too
+    expect((await admin.patch(lineUrl(a), { priceCents: 2_000, scope: "all" })).json.priceCents).toBe(2_000);
     expect([await price(a), await price(b)]).toEqual([2_000, 2_000]);
     expect((await admin.get("/api/services")).json.find((x: any) => x.id === svc.id).priceCents).toBe(2_000);
     // a quantity change alone asks nothing

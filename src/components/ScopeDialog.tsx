@@ -10,20 +10,15 @@ import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } f
 export function ScopeDialog({
   title,
   description,
-  wideLabel,
-  narrowLabel,
+  options,
   busy,
-  onWide,
-  onNarrow,
   onCancel,
 }: {
   title: string;
   description: string;
-  wideLabel: string;
-  narrowLabel: string;
+  /** The ways to go on, the first one is the widest and highlighted */
+  options: { label: string; onClick: () => void }[];
   busy?: boolean;
-  onWide: () => void;
-  onNarrow: () => void;
   onCancel: () => void;
 }) {
   const { t } = useTranslation();
@@ -40,12 +35,11 @@ export function ScopeDialog({
           <DialogDescription className="pl-12">{description}</DialogDescription>
         </DialogHeader>
         <div className="flex flex-col gap-2 pt-2">
-          <Button disabled={busy} onClick={onWide} className="h-auto justify-start whitespace-normal bg-grad-gold py-2.5 text-left font-semibold text-[#1a1204] hover:brightness-105">
-            {wideLabel}
-          </Button>
-          <Button disabled={busy} variant="outline" onClick={onNarrow} className="h-auto justify-start whitespace-normal py-2.5 text-left">
-            {narrowLabel}
-          </Button>
+          {options.map((o, i) => (
+            <Button key={o.label} disabled={busy} variant={i === 0 ? "default" : "outline"} onClick={o.onClick} className={i === 0 ? "h-auto justify-start whitespace-normal bg-grad-gold py-2.5 text-left font-semibold text-[#1a1204] hover:brightness-105" : "h-auto justify-start whitespace-normal py-2.5 text-left"}>
+              {o.label}
+            </Button>
+          ))}
           <Button disabled={busy} variant="ghost" onClick={onCancel}>
             {t("common.cancel")}
           </Button>
