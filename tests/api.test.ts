@@ -1740,6 +1740,77 @@ describe("tickets: client and contact", () => {
     expect(copy.lines[2]).toMatchObject({ serviceId: licence.id, discountX100: 1250 });
   });
 
+  it("sales: opportunities move through the pipeline, and the dashboard counts MRR, follow-ups and conversion", async () => {
+    const admin = await session("admin@akab.local");
+    const tech = await session("tech@akab.local");
+    const { todayQc } = await import("../server/lib/quotes.ts");
+    const { periodRange, shiftPeriod } = await import("../shared/sales.ts");
+    const today = todayQc();
+    // reserved to opportunities.view / .edit (technicians have neither by default)
+    expect((await tech.get("/api/sales/opportunities")).status).toBe(403);
+    expect((await tech.get("/api/sales/dashboard")).status).toBe(403);
+
+    // a recurring deal: 12 users at the usual 150 $, starts as a lead at 10 %
+    const a = (await admin.post("/api/sales/opportunities", { companyName: "Garage Lavoie", source: "bni", kind: "recurring", users: 12, nextFollowUp: "2020-01-15" })).json;
+    expect(a).toMatchObject({ stage: "lead", probability: 10, ratePerUserCents: 15000, monthlyCents: 180000, openedOn: today, overdue: true });
+    // the next stage takes its own probability, "quote sent" dates the quote
+    const moved = (await admin.patch(`/api/sales/opportunities/${a.id}`, { stage: "quote_sent" })).json;
+    expect(moved).toMatchObject({ probability: 50, quoteSentOn: today, closedOn: null });
+    // a probability typed by hand is kept
+    expect((await admin.patch(`/api/sales/opportunities/${a.id}`, { probability: 70 })).json.probability).toBe(70);
+
+    // a second one at another price, still open (pipeline), and a one-time sale won
+    const b = (await admin.post("/api/sales/opportunities", { companyName: "Clinique Rivard", kind: "recurring", users: 5, ratePerUserCents: 13000, stage: "meeting" })).json;
+    expect(b).toMatchObject({ probability: 35, monthlyCents: 65000 });
+    const c = (await admin.post("/api/sales/opportunities", { companyName: "Ferme Beaulieu", kind: "one_time", oneTimeCents: 450000, source: "referral" })).json;
+    expect((await admin.patch(`/api/sales/opportunities/${c.id}`, { stage: "won" })).json).toMatchObject({ closedOn: today, probability: 100, monthlyCents: 0 });
+
+    // the dashboard before the first recurring win: two overdue? only the open one with a past follow-up
+    let d = (await admin.get("/api/sales/dashboard?period=month")).json;
+    expect(d.activity.overdue.map((o: { id: string }) => o.id)).toEqual([a.id]);
+    expect(d.pipeline).toMatchObject({ openDeals: 2, openMrrCents: 245000, weightedMrrCents: Math.round(180000 * 0.7 + 65000 * 0.35) });
+    expect(d.results).toMatchObject({ mrrAddedCents: 0, oneTimeWonCents: 450000, oneTimeWonDeals: 1 });
+    expect(d.activity.quotesSent).toBe(1);
+
+    // won: the MRR is added this month, the users are under contract, the follow-up is cleared
+    expect((await admin.patch(`/api/sales/opportunities/${a.id}`, { stage: "won" })).json).toMatchObject({ closedOn: today, nextFollowUp: null, overdue: false });
+    // lost needs a reason
+    expect((await admin.patch(`/api/sales/opportunities/${b.id}`, { stage: "lost" })).json.error).toBe("lost_reason_required");
+    expect((await admin.patch(`/api/sales/opportunities/${b.id}`, { stage: "lost", lostReason: "price" })).json).toMatchObject({ probability: 0, closedOn: today });
+
+    d = (await admin.get("/api/sales/dashboard?period=month")).json;
+    expect(d.results).toMatchObject({ mrrAddedCents: 180000, mrrAddedDeals: 1, mrrTotalCents: 180000, usersUnderContract: 12 });
+    expect(d.results.mrrSeries).toHaveLength(12);
+    expect(d.results.mrrSeries.at(-1)).toMatchObject({ month: today.slice(0, 7), mrrCents: 180000, addedCents: 180000 });
+    expect(d.activity.overdue).toEqual([]);
+    expect(d.pipeline.openDeals).toBe(0);
+    // 2 won (recurring + one time), 1 lost
+    expect(d.efficiency).toMatchObject({ won: 2, lost: 1, conversionPct: 66.7, avgCycleDays: 0 });
+    expect(d.efficiency.bySource.map((s: { key: string }) => s.key).sort()).toEqual(["bni", "referral"]);
+    expect(d.efficiency.lostReasons).toEqual([{ key: "price", count: 1, mrrCents: 65000, oneTimeCents: 0 }]);
+
+    // a month earlier: nothing added, nothing under contract yet
+    const before = (await admin.get(`/api/sales/dashboard?period=month&day=${shiftPeriod("month", today, -1)}`)).json;
+    expect(before.results).toMatchObject({ mrrAddedCents: 0, mrrTotalCents: 0 });
+
+    // back to an open stage: the closing is cleared
+    expect((await admin.patch(`/api/sales/opportunities/${b.id}`, { stage: "contact" })).json).toMatchObject({ closedOn: null, lostReason: null, probability: 20 });
+    // list filters
+    expect((await admin.get("/api/sales/opportunities?stage=won")).json.map((o: { id: string }) => o.id).sort()).toEqual([a.id, c.id].sort());
+    expect((await admin.get("/api/sales/opportunities?kind=one_time")).json).toHaveLength(1);
+    // an unknown salesperson is refused; delete
+    expect((await admin.patch(`/api/sales/opportunities/${b.id}`, { ownerId: "00000000-0000-4000-8000-000000000000" })).json.error).toBe("owner_invalid");
+    expect((await tech.del(`/api/sales/opportunities/${b.id}`)).status).toBe(403);
+    expect((await admin.del(`/api/sales/opportunities/${b.id}`)).status).toBe(200);
+
+    // the financial year ends on October 31; its quarters start in November
+    expect(periodRange("year", "2026-03-10")).toMatchObject({ from: "2025-11-01", to: "2026-10-31", fiscalYear: 2026 });
+    expect(periodRange("year", "2026-11-02")).toMatchObject({ from: "2026-11-01", to: "2027-10-31", fiscalYear: 2027 });
+    expect(periodRange("quarter", "2026-01-20")).toMatchObject({ from: "2025-11-01", to: "2026-01-31", quarter: 1 });
+    expect(periodRange("quarter", "2026-10-28")).toMatchObject({ from: "2026-08-01", to: "2026-10-31", quarter: 4 });
+    expect(periodRange("month", "2026-02-11")).toMatchObject({ from: "2026-02-01", to: "2026-02-28" });
+  });
+
   it("serialized products: received by serial number, the ones taken are chosen on the ticket", async () => {
     const admin = await session("admin@akab.local");
     const tech = await session("tech@akab.local");

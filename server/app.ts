@@ -35,6 +35,7 @@ import { notificationRoutes } from "./routes/notifications.ts";
 import { ticketRoutes } from "./routes/tickets.ts";
 import { ticketBoardRoutes } from "./routes/ticketBoards.ts";
 import { quoteRoutes } from "./routes/quotes.ts";
+import { salesRoutes } from "./routes/sales.ts";
 import { storeRoutes } from "./routes/store.ts";
 import { pipelineRoutes } from "./routes/pipeline.ts";
 import { projectsRoutes } from "./routes/projects.ts";
@@ -114,6 +115,7 @@ export function createApp() {
   api.use("/messages/*", requireStaff);
   api.route("/store", storeRoutes);
   api.route("/quotes", quoteRoutes);
+  api.route("/sales", salesRoutes);
   api.route("/pipeline", pipelineRoutes);
   api.route("/projects", projectsRoutes);
   api.route("/services", serviceRoutes);

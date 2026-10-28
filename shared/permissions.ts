@@ -161,6 +161,19 @@ export const MODULES = [
     ],
   },
   {
+    key: "opportunities",
+    audience: "staff",
+    label: { fr: "Ventes (pipeline)", en: "Sales (pipeline)" },
+    permissions: [
+      { key: "opportunities.view", label: { fr: "Voir les ventes", en: "View sales" }, description: { fr: "Tableau de bord, pipeline et liste des opportunités", en: "Dashboard, pipeline and list of opportunities" } },
+      {
+        key: "opportunities.edit",
+        label: { fr: "Gérer les opportunités", en: "Manage opportunities" },
+        description: { fr: "Ajouter, modifier, changer d'étape et supprimer", en: "Add, edit, move between stages and delete" },
+      },
+    ],
+  },
+  {
     key: "messages",
     audience: "staff",
     label: { fr: "Babillard", en: "Message board" },
@@ -545,7 +558,7 @@ export const ACCESS_LAYOUT: { key: string; audience: Audience; label: Localized;
   { key: "tools", audience: "staff", label: { fr: "Mes outils", en: "My tools" }, modules: ["pipeline", "outlook", "timesheets"] },
   { key: "command", audience: "staff", label: { fr: "Centre de commande", en: "Command center" }, modules: ["messages", "tickets", "projects", "sms", "passbolt"] },
   { key: "management", audience: "staff", label: { fr: "Gestion", en: "Management" }, modules: ["crm", "clientview", "store", "services"] },
-  { key: "sales", audience: "staff", label: { fr: "Vente", en: "Sales" }, modules: ["quotes"] },
+  { key: "sales", audience: "staff", label: { fr: "Vente", en: "Sales" }, modules: ["opportunities", "quotes"] },
   { key: "accounting", audience: "staff", label: { fr: "Comptabilité", en: "Accounting" }, modules: ["accounting"] },
   { key: "admin", audience: "staff", label: { fr: "Paramètres admin", en: "Admin settings" }, modules: ["admin"] },
   { key: "clientBoard", audience: "client", label: { fr: "Babillard", en: "Message board" }, modules: ["board"] },

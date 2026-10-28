@@ -2616,3 +2616,42 @@ export const projectNotes = pgTable(
   },
   (t) => [index("project_notes_project_idx").on(t.projectId, t.createdAt)],
 );
+
+/** Vente › Ventes: a sales opportunity, from the first lead to won or lost (shared/sales.ts) */
+export const salesOpportunities = pgTable(
+  "sales_opportunities",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    /** The company, as typed (or the CRM client's name when one is picked) */
+    companyName: text("company_name").notNull(),
+    clientId: uuid("client_id").references(() => clients.id, { onDelete: "set null" }),
+    contactName: text("contact_name"),
+    contactEmail: text("contact_email"),
+    contactPhone: text("contact_phone"),
+    /** bni | referral | website | millenium | prospecting | other */
+    source: text("source").notNull().default("other"),
+    /** recurring (per user per month) | one_time (project, equipment) */
+    kind: text("kind").notNull().default("recurring"),
+    users: integer("users"),
+    ratePerUserCents: integer("rate_per_user_cents").notNull().default(15000),
+    oneTimeCents: bigint("one_time_cents", { mode: "number" }),
+    /** lead | contact | meeting | quote_sent | won | lost */
+    stage: text("stage").notNull().default("lead"),
+    /** 0-100, starts at the stage's default */
+    probability: integer("probability").notNull().default(10),
+    /** YYYY-MM-DD (Québec): created, quote sent, won or lost, next follow-up */
+    openedOn: text("opened_on").notNull(),
+    quoteSentOn: text("quote_sent_on"),
+    closedOn: text("closed_on"),
+    nextFollowUp: text("next_follow_up"),
+    /** price | timing | incumbent | no_answer | other (when lost) */
+    lostReason: text("lost_reason"),
+    notes: text("notes"),
+    /** The salesperson in charge */
+    ownerId: uuid("owner_id").references(() => users.id, { onDelete: "set null" }),
+    createdBy: uuid("created_by").references(() => users.id, { onDelete: "set null" }),
+    createdAt: created(),
+    updatedAt: updated(),
+  },
+  (t) => [index("sales_opps_stage_idx").on(t.stage, t.closedOn), index("sales_opps_owner_idx").on(t.ownerId), index("sales_opps_follow_idx").on(t.nextFollowUp)],
+);
