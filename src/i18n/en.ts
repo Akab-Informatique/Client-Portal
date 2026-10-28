@@ -314,6 +314,12 @@ const en: Dict = {
     },
   },
   services: {
+    vendor: "Vendor",
+    noVendor: "No vendor",
+    vendorSku: "Vendor reference",
+    vendorHint: "Where we buy this service. For our own use only: never shown to a client.",
+    vendorLocked: "This service's vendor comes from the ITCloud sync: it cannot be changed here.",
+    vendorSkuTaken: "This vendor already has another service with that reference.",
     scope: {
       title: "This service is in running contracts",
       text_one: "This service is in {{count}} running contract. Do you also want to change the price or cost in that contract, or only for the service's future additions?",

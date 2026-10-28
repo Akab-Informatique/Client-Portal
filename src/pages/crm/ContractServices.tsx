@@ -1,6 +1,6 @@
 import { useState, type FormEvent } from "react";
 import { useTranslation } from "react-i18next";
-import { useMutation, useQueryClient } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { Cloud, Loader2, Plus } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -96,11 +96,12 @@ export type NewService = { id: string; name: string; kind: "recurring" | "recurr
 export function NewServiceDialog({ term, defaultDay, onClose, onCreated }: { term: { start: string; end: string } | null; defaultDay: string; onClose: () => void; onCreated: (s: NewService, quantity: number, addedOn: string) => void }) {
   const { t } = useTranslation();
   const qc = useQueryClient();
-  const [f, setF] = useState({ name: "", kind: "recurring" as "recurring" | "recurring_yearly", price: "", cost: "", taxable: true, quantity: "1", addedOn: defaultDay });
+  const [f, setF] = useState({ name: "", kind: "recurring" as "recurring" | "recurring_yearly", price: "", cost: "", taxable: true, quantity: "1", addedOn: defaultDay, vendorId: "" });
+  const { data: vendors = [] } = useQuery({ queryKey: ["services", "vendors"], queryFn: () => api.get<{ id: string; name: string }[]>("/services/vendors") });
   const cents = (v: string) => Math.round((Number(v.replace(",", ".")) || 0) * 100);
   const quantity = Math.max(1, Math.round(Number(f.quantity) || 1));
   const make = useMutation({
-    mutationFn: () => api.post<NewService>("/services", { name: f.name.trim(), description: "", kind: f.kind, priceCents: cents(f.price), costCents: cents(f.cost), taxable: f.taxable, active: true }),
+    mutationFn: () => api.post<NewService>("/services", { name: f.name.trim(), description: "", kind: f.kind, priceCents: cents(f.price), costCents: cents(f.cost), taxable: f.taxable, active: true, vendorId: f.vendorId || null }),
     onSuccess: (svc) => {
       void qc.invalidateQueries({ queryKey: ["crm", "services-catalog"] });
       void qc.invalidateQueries({ queryKey: ["services"] });
@@ -157,6 +158,18 @@ export function NewServiceDialog({ term, defaultDay, onClose, onCreated }: { ter
               <Label>{t("crm.contracts.startsOn")}</Label>
               <Input type="date" value={f.addedOn} min={term?.start} max={term?.end} onChange={(e) => setF({ ...f, addedOn: e.target.value })} aria-invalid={!dayOk} />
             </div>
+          </div>
+          <div className="space-y-1.5">
+            <Label>{t("services.vendor")}</Label>
+            <select value={f.vendorId} onChange={(e) => setF({ ...f, vendorId: e.target.value })} className="h-9 w-full rounded-md border bg-transparent px-2 text-sm outline-none focus:ring-2 focus:ring-[color:var(--gold)]/40">
+              <option value="">{t("services.noVendor")}</option>
+              {vendors.map((v) => (
+                <option key={v.id} value={v.id}>
+                  {v.name}
+                </option>
+              ))}
+            </select>
+            <p className="text-[11px] text-muted-foreground">{t("services.vendorHint")}</p>
           </div>
           <label className="flex items-center gap-2 text-sm text-muted-foreground">
             <Switch checked={f.taxable} onCheckedChange={(v) => setF({ ...f, taxable: v })} /> {t("services.taxable")}

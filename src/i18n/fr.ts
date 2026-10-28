@@ -312,6 +312,12 @@ const fr = {
     },
   },
   services: {
+    vendor: "Fournisseur",
+    noVendor: "Aucun fournisseur",
+    vendorSku: "Référence chez le fournisseur",
+    vendorHint: "Où nous achetons ce service. Pour notre usage seulement : jamais montré au client.",
+    vendorLocked: "Le fournisseur de ce service vient de la synchronisation ITCloud : il ne se change pas ici.",
+    vendorSkuTaken: "Ce fournisseur a déjà un autre service avec cette référence.",
     scope: {
       title: "Ce service est dans des contrats en cours",
       text_one: "Ce service est dans {{count}} contrat en cours. Voulez-vous aussi changer le prix ou le coût dans ce contrat, ou seulement pour les prochains ajouts du service ?",

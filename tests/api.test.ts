@@ -7083,6 +7083,29 @@ describe("ITCloud: vendor, clients matched, services kept on contracts", () => {
   });
 });
 
+describe("services: the vendor we buy from (internal)", () => {
+  it("a service can be tied to a vendor and their reference; ITCloud ones keep the sync's", async () => {
+    resetRateLimit("login:ip:unknown");
+    const admin = await signIn("admin@akab.local");
+    const tech = await signIn("tech@akab.local");
+    const v = (await admin.post("/api/admin/vendors", { name: "Distributeur Test" })).json;
+    // the vendors to pick from (whoever sees the services)
+    expect((await admin.get("/api/services/vendors")).json.some((x: any) => x.id === v.id)).toBe(true);
+    expect((await tech.get("/api/services/vendors")).status).toBe(403);
+    const made = await admin.post("/api/services", { name: "Pare-feu géré", kind: "recurring", priceCents: 5_000, vendorId: v.id, vendorSku: "FW-100" });
+    expect(made.status).toBe(201);
+    expect(made.json).toMatchObject({ vendorId: v.id, vendorSku: "FW-100" });
+    // a reference is used once by a vendor
+    expect((await admin.post("/api/services", { name: "Autre", kind: "recurring", priceCents: 1, vendorId: v.id, vendorSku: "FW-100" })).json.error).toBe("vendor_sku_taken");
+    expect((await admin.post("/api/services", { name: "Inconnu", kind: "recurring", priceCents: 1, vendorId: "00000000-0000-4000-8000-000000000000" })).json.error).toBe("vendor_unknown");
+    // changed, then cleared
+    expect((await admin.patch(`/api/services/${made.json.id}`, { vendorSku: "FW-200" })).json.vendorSku).toBe("FW-200");
+    expect((await admin.patch(`/api/services/${made.json.id}`, { vendorId: null, vendorSku: null })).json).toMatchObject({ vendorId: null, vendorSku: null });
+    // only a manager changes it
+    expect((await tech.patch(`/api/services/${made.json.id}`, { vendorId: v.id })).status).toBe(403);
+  });
+});
+
 describe("a recurring contract sold as a bundle", () => {
   it("one price and a quantity for the package, the services listed with no price of their own", async () => {
     resetRateLimit("login:ip:unknown");

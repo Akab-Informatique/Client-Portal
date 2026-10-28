@@ -24,7 +24,7 @@ const toNum = (v: string) => {
 };
 const fmt = (n: number) => String(Math.round(n * 100) / 100);
 
-type Service = { id: string; name: string; description: string; kind: "one_time" | "recurring" | "recurring_yearly"; priceCents: number; costCents: number; taxable: boolean; active: boolean; sku?: string | null; vendorName?: string | null };
+type Service = { id: string; name: string; description: string; kind: "one_time" | "recurring" | "recurring_yearly"; priceCents: number; costCents: number; taxable: boolean; active: boolean; sku?: string | null; vendorName?: string | null; vendorId?: string | null; vendorSku?: string | null };
 const KEY = ["services"];
 
 /** Services, under Inventory: what the company sells besides products (one time or monthly). */
@@ -80,10 +80,9 @@ export function ServicesPage() {
               <span className="min-w-0 flex-1">
                 <span className="block truncate text-sm font-medium">{s.name}</span>
                 {s.description && <span className="block truncate text-xs text-muted-foreground">{s.description}</span>}
-                {(s.sku || s.vendorName) && (
+                {s.sku && (
                   <span className="block truncate font-mono text-[11px] text-muted-foreground">
                     {s.sku}
-                    {s.vendorName ? ` · ${s.vendorName}` : ""}
                   </span>
                 )}
               </span>
@@ -135,7 +134,13 @@ function ServiceDialog({ service, onClose }: { service: Service | null; onClose:
     cost: service ? String(service.costCents / 100) : "",
     margin: service && service.priceCents > 0 ? fmt(marginOf(service.priceCents / 100, service.costCents / 100)) : "",
     taxable: service?.taxable ?? true,
+    // who we buy it from (for our own use: never shown to a client)
+    vendorId: service?.vendorId ?? "",
+    vendorSku: service?.vendorSku ?? "",
   });
+  const { data: vendors = [] } = useQuery({ queryKey: ["services", "vendors"], queryFn: () => api.get<{ id: string; name: string }[]>("/services/vendors") });
+  // a service made by the ITCloud sync keeps the sync's vendor
+  const vendorLocked = Boolean(service?.sku?.startsWith("ITC-"));
   // cost, price and margin (on the price) fill each other: with two of them, the third follows
   const setCost = (v: string) => {
     const next = { ...f, cost: v };
@@ -171,7 +176,7 @@ function ServiceDialog({ service, onClose }: { service: Service | null; onClose:
   const [ask, setAsk] = useState<number | null>(null);
   const save = useMutation({
     mutationFn: (applyToContracts?: boolean) => {
-      const body = { name: f.name.trim(), description: f.description.trim(), kind: f.kind, priceCents: cents(f.price), costCents: cents(f.cost), taxable: f.taxable, ...(applyToContracts !== undefined ? { applyToContracts } : {}) };
+      const body = { name: f.name.trim(), description: f.description.trim(), kind: f.kind, priceCents: cents(f.price), costCents: cents(f.cost), taxable: f.taxable, ...(vendorLocked ? {} : { vendorId: f.vendorId || null, vendorSku: f.vendorSku.trim() || null }), ...(applyToContracts !== undefined ? { applyToContracts } : {}) };
       return service ? api.patch(`/services/${service.id}`, body) : api.post("/services", body);
     },
     onSuccess: () => {
@@ -182,6 +187,7 @@ function ServiceDialog({ service, onClose }: { service: Service | null; onClose:
     },
     onError: (e) => {
       if (e instanceof ApiError && e.code === "price_scope_required") setAsk(Number(e.fields?.find((x) => x.path === "contracts")?.message ?? 0));
+      else if (e instanceof ApiError && e.code === "vendor_sku_taken") toast.error(t("services.vendorSkuTaken"));
       else toast.error(t("common.error"));
     },
   });
@@ -226,6 +232,24 @@ function ServiceDialog({ service, onClose }: { service: Service | null; onClose:
               <option value="one_time">{t("services.kind.one_time")}</option>
             </select>
           </label>
+          <div className="grid gap-3 rounded-lg border border-dashed p-3 sm:grid-cols-2">
+            <label className="space-y-1 text-xs">
+              <span className="text-muted-foreground">{t("services.vendor")}</span>
+              <select value={f.vendorId} disabled={vendorLocked} onChange={(e) => setF({ ...f, vendorId: e.target.value })} className="h-9 w-full rounded-md border bg-transparent px-2 text-sm outline-none focus:ring-2 focus:ring-[color:var(--gold)]/40 disabled:opacity-60">
+                <option value="">{t("services.noVendor")}</option>
+                {vendors.map((v) => (
+                  <option key={v.id} value={v.id}>
+                    {v.name}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label className="space-y-1 text-xs">
+              <span className="text-muted-foreground">{t("services.vendorSku")}</span>
+              <Input value={f.vendorSku} disabled={vendorLocked} onChange={(e) => setF({ ...f, vendorSku: e.target.value })} maxLength={100} />
+            </label>
+            <p className="text-[11px] text-muted-foreground sm:col-span-2">{vendorLocked ? t("services.vendorLocked") : t("services.vendorHint")}</p>
+          </div>
           <div className="grid gap-3 sm:grid-cols-3">
             <label className="space-y-1 text-xs">
               <span className="text-muted-foreground">{t("services.cost")}</span>
