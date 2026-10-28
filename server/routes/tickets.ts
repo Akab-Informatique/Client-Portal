@@ -512,8 +512,8 @@ export const ticketRoutes = new Hono<AppEnv>()
       const text = (q.q ?? "").trim().toLowerCase();
       return all
       .filter(views[view])
-      // Completed tickets only when asked for (status filter) or in "all"
-      .filter((t) => (status.length || statusKinds.length ? true : view === "all" || open(t)))
+      // Completed tickets only when asked for (a status filter) or in "all" — and not when a team member is picked: all of their open tickets
+      .filter((t) => (status.length || statusKinds.length ? true : (view === "all" && !assignee.length) || open(t)))
       .filter((t) => !status.length || status.includes(t.status))
       .filter((t) => !statusKinds.length || statusKinds.includes(L.statusKind(t.status)))
       .filter((t) => !priority.length || priority.includes(t.priority))
@@ -586,7 +586,9 @@ export const ticketRoutes = new Hono<AppEnv>()
         ? PRIORITY_ORDER[x.priorityKind] - PRIORITY_ORDER[y.priorityKind] || x.dueAt.localeCompare(y.dueAt)
         : sort === "updated"
           ? y.updatedAt.localeCompare(x.updatedAt)
-          : sort === "start"
+          : sort === "milestone"
+            ? (x.milestoneDate ?? "9999").localeCompare(y.milestoneDate ?? "9999") || x.dueAt.localeCompare(y.dueAt)
+            : sort === "start"
             ? (x.startDate ?? "9999").localeCompare(y.startDate ?? "9999") || x.dueAt.localeCompare(y.dueAt)
             : // default: due date, then start date
               x.dueAt.localeCompare(y.dueAt) || (x.startDate ?? "9999").localeCompare(y.startDate ?? "9999")),

@@ -4267,7 +4267,7 @@ const fr = {
     quick: { today: "Aujourd'hui", week: "7 jours", clear: "Effacer" },
     clear: "Effacer",
     clearFilters: "Effacer les filtres",
-    sort: { due: "Échéance", priorities: "Mes priorités d'abord", priority: "Priorité", start: "Date de début", updated: "Activité récente", ai: "Planifié par l'IA", aiAt: "Dernier plan : {{when}} · {{count}} billets", aiNone: "Lancez « Planifier mes billets » et appliquez le plan" },
+    sort: { due: "Échéance", priorities: "Mes priorités d'abord", priority: "Priorité", start: "Date de début", milestone: "Date du jalon", updated: "Activité récente", ai: "Planifié par l'IA", aiAt: "Dernier plan : {{when}} · {{count}} billets", aiNone: "Lancez « Planifier mes billets » et appliquez le plan" },
     fields: {
       secondary: "Assigné secondaire",
       technician: "Technicien",
@@ -4280,6 +4280,7 @@ const fr = {
       queue: "File d'attente",
       assignee: "Assigné à",
       start: "Début",
+      milestone: "Jalon",
       due: "Échéance",
       source: "Source",
       created: "Créé",

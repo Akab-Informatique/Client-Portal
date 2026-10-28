@@ -4269,7 +4269,7 @@ const en: Dict = {
     quick: { today: "Today", week: "7 days", clear: "Clear" },
     clear: "Clear",
     clearFilters: "Clear filters",
-    sort: { due: "Due date", priorities: "My priorities first", priority: "Priority", start: "Start date", updated: "Recent activity", ai: "AI planned", aiAt: "Last plan: {{when}} · {{count}} tickets", aiNone: "Run \"Plan my tickets\" and apply the plan" },
+    sort: { due: "Due date", priorities: "My priorities first", priority: "Priority", start: "Start date", milestone: "Milestone date", updated: "Recent activity", ai: "AI planned", aiAt: "Last plan: {{when}} · {{count}} tickets", aiNone: "Run \"Plan my tickets\" and apply the plan" },
     fields: {
       secondary: "Secondary",
       technician: "Technician",
@@ -4282,6 +4282,7 @@ const en: Dict = {
       queue: "Queue",
       assignee: "Assigned to",
       start: "Start",
+      milestone: "Milestone",
       due: "Due",
       source: "Source",
       created: "Created",

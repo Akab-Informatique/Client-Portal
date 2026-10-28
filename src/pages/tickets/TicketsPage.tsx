@@ -326,6 +326,7 @@ export function TicketsPage() {
                 {t("tickets.fields.start")} <PortalTag />
               </span>
             ),
+            milestone: t("tickets.fields.milestone"),
             due: t("tickets.fields.due"),
             priority: t("tickets.fields.priority"),
             assignee: t("tickets.fields.assignee"),
@@ -1010,6 +1011,17 @@ function TicketRow({
               <StartCell tk={tk} editable={editable} />
             </Stop>
           </span>
+          {/* the goal date between the start and the final due date (changed in the ticket's Planning) */}
+          <span className="min-w-0 xl:[order:var(--o-milestone)]" title={t("tickets.milestone.hint")}>
+            <span
+              className={cn(
+                "block whitespace-nowrap font-mono text-xs tabular-nums",
+                tk.milestoneDate && tk.statusKind !== "complete" && tk.milestoneDate < new Date().toLocaleDateString("en-CA") ? "text-destructive" : "text-muted-foreground",
+              )}
+            >
+              {tk.milestoneDate ? shortDate(tk.milestoneDate) : "—"}
+            </span>
+          </span>
           <span className="min-w-0 xl:[order:var(--o-due)]">
             {(() => {
               const label = (
@@ -1326,7 +1338,7 @@ function SortMenu({ value, onChange, aiPlan }: { value: string; onChange: (v: st
         </Button>
       </PopoverTrigger>
       <PopoverContent align="end" className="w-48 p-1">
-        {["due", "priorities", "priority", "start", "updated"].map((s) => (
+        {["due", "priorities", "priority", "start", "milestone", "updated"].map((s) => (
           <button
             key={s}
             type="button"
@@ -1436,11 +1448,11 @@ function TeamFilter({ technicians, params, set }: { technicians: TicketList["fac
 }
 
 // ── Columns of the list: each technician resizes and moves them (kept on this computer) ──
-const TICKET_COLUMNS = ["ticket", "status", "company", "start", "due", "priority", "assignee", "secondary"] as const;
+const TICKET_COLUMNS = ["ticket", "status", "company", "start", "milestone", "due", "priority", "assignee", "secondary"] as const;
 type ColumnId = (typeof TICKET_COLUMNS)[number];
 const COLS_KEY = "akab.tickets.columns.v2";
 /** Usual widths (px); the ticket column is elastic (at least this, takes the rest) */
-const DEFAULT_WIDTHS: Record<ColumnId, number> = { ticket: 220, status: 144, company: 140, start: 64, due: 104, priority: 86, assignee: 132, secondary: 64 };
+const DEFAULT_WIDTHS: Record<ColumnId, number> = { ticket: 220, status: 144, company: 140, start: 64, milestone: 72, due: 104, priority: 86, assignee: 132, secondary: 64 };
 const COL_MIN = 56;
 const COL_MAX = 480;
 type ColumnPrefs = { order: ColumnId[]; widths: Partial<Record<ColumnId, number>> };
@@ -1448,6 +1460,11 @@ type ColumnPrefs = { order: ColumnId[]; widths: Partial<Record<ColumnId, number>
 function readColumns(): ColumnPrefs {
   try {
     const v = JSON.parse(localStorage.getItem(COLS_KEY) ?? "null") as ColumnPrefs | null;
+    // a column added later (the milestone) takes its usual place, after the start; what a person arranged stays
+    if (v && Array.isArray(v.order) && !v.order.includes("milestone")) {
+      const at = v.order.indexOf("start");
+      v.order = at >= 0 ? [...v.order.slice(0, at + 1), "milestone", ...v.order.slice(at + 1)] : [...v.order, "milestone"];
+    }
     if (v && Array.isArray(v.order) && v.order.length === TICKET_COLUMNS.length && TICKET_COLUMNS.every((c) => v.order.includes(c))) return { order: v.order, widths: v.widths ?? {} };
   } catch {
     /* defaults */

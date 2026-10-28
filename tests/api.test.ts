@@ -8109,3 +8109,32 @@ describe("ticket files: what comes with the client's emails, what goes with ours
     expect(devOutbox[0].attachments ?? []).toEqual([]);
   });
 });
+
+describe("tickets list: milestone column and sort, a team member shows their open tickets", () => {
+  it("picking a person leaves out completed tickets (until a status is asked for); sort=milestone orders by the goal date", async () => {
+    resetRateLimit("login:ip:unknown");
+    const tech = await signIn("tech@akab.local");
+    const all = (await tech.get("/api/tickets?view=all")).json.items;
+    const done = all.find((x: any) => x.statusKind === "complete" && x.assignee);
+    expect(done).toBeTruthy();
+    const who = done.assignee.id;
+    // everything of the person, completed ones too, in "all" without a person…
+    expect(all.some((x: any) => x.statusKind === "complete")).toBe(true);
+    // …but with a person picked: only what is open
+    const theirs = (await tech.get(`/api/tickets?view=all&assignee=${who}`)).json.items;
+    expect(theirs.length).toBeGreaterThan(0);
+    expect(theirs.every((x: any) => x.assignee?.id === who && x.statusKind !== "complete")).toBe(true);
+    // a status asked for still shows them
+    const closed = (await tech.get(`/api/tickets?view=all&assignee=${who}&statusKind=complete`)).json.items;
+    expect(closed.some((x: any) => x.id === done.id)).toBe(true);
+
+    // the milestone: on the summary, and a sort
+    const open = all.filter((x: any) => x.statusKind !== "complete");
+    const [a, b, c] = open;
+    await tech.put(`/api/tickets/${a.id}/start-date`, { milestoneDate: "2026-12-20" });
+    await tech.put(`/api/tickets/${b.id}/start-date`, { milestoneDate: "2026-12-05" });
+    const sorted = (await tech.get("/api/tickets?view=all&sort=milestone")).json.items;
+    expect(sorted.slice(0, 2).map((x: any) => [x.id, x.milestoneDate])).toEqual([[b.id, "2026-12-05"], [a.id, "2026-12-20"]]);
+    expect(sorted.find((x: any) => x.id === c.id).milestoneDate).toBeNull();
+  });
+});
