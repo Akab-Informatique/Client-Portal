@@ -2,7 +2,9 @@ import { and, desc, eq, sql } from "drizzle-orm";
 import { db, schema } from "../db/index.ts";
 import { audit } from "./audit.ts";
 import { graph, o365Ready, O365Error, user } from "./o365.ts";
-import { messageText, testMailbox, updateMessage } from "./outlook.ts";
+import { messageFiles, messageText, testMailbox, updateMessage } from "./outlook.ts";
+import { addEmailAttachment } from "./localTickets.ts";
+import { MAX_TICKET_ATTACHMENT_BYTES } from "./ticketSource.ts";
 import { ticketSource } from "./ticketSource.ts";
 
 /**
@@ -155,11 +157,28 @@ export type Incoming = {
   from: { name: string | null; address: string } | null;
   receivedAt: string | null;
   text: string;
+  /** The files that came with it (pictures included), kept on the ticket */
+  files?: { name: string; contentType: string; size: number; data: string }[];
+  /** Files left out for being too big */
+  skippedFiles?: number;
 };
 export type Outcome = "ticket" | "reply" | "pending" | "skipped" | "duplicate" | "error";
 
 const tomorrow = () => new Date(Date.now() + 86_400_000).toISOString().slice(0, 10);
 const cleanSubject = (s: string) => s.replace(/^\s*((re|tr|fw|fwd|rv)\s*:\s*)+/i, "").trim();
+
+/** The files of an email go on its ticket, each once; a failure never loses the ticket or the reply */
+async function keepFiles(ticketId: number, m: Incoming): Promise<void> {
+  let kept = 0;
+  for (const f of m.files ?? []) {
+    try {
+      if (await addEmailAttachment(ticketId, { ...f, from: m.from?.name ? `${m.from.name} <${m.from.address}>` : (m.from?.address ?? "") })) kept++;
+    } catch (e) {
+      console.warn("[mail-intake] file not kept:", e instanceof Error ? e.message : e);
+    }
+  }
+  if (kept || m.skippedFiles) await audit(null, "mail_intake.files", String(ticketId), { kept, skipped: m.skippedFiles ?? 0 });
+}
 
 /** One email: claimed first (never twice), then a reply, a ticket, or left for a technician. */
 export async function processIncoming(m: Incoming): Promise<{ outcome: Outcome; ticket?: { id: number; number: string } }> {
@@ -196,6 +215,7 @@ export async function processIncoming(m: Incoming): Promise<{ outcome: Outcome; 
       const t = (await src.list()).find((x) => x.number.toUpperCase() === named);
       if (t) {
         await src.addMailReply(t.id, m.from!, m.text.slice(0, 7500));
+        await keepFiles(t.id, m);
         await src.markNeedsAttention(t.id).catch(() => false);
         await done("reply", { ticketId: t.id, ticketNumber: t.number, companyId: t.company.id });
         return { outcome: "reply", ticket: { id: t.id, number: t.number } };
@@ -222,6 +242,7 @@ export async function processIncoming(m: Incoming): Promise<{ outcome: Outcome; 
       dueDate: tomorrow(),
       source: "email",
     });
+    await keepFiles(made.id, m);
     await done("ticket", { ticketId: made.id, ticketNumber: made.number, companyId: company.id, contactId: contact?.contactId ?? null, note: how === "akab" ? "unmatched" : null });
     await audit(null, "mail_intake.ticket", String(made.id), { from, subject: m.subject.slice(0, 120) });
     return { outcome: "ticket", ticket: made };
@@ -273,7 +294,9 @@ async function pass(force: boolean): Promise<IntakeSettings["lastRun"]> {
     // the oldest first, so tickets come in the order the emails did
     for (const g of fresh.reverse()) {
       const full = await messageText(s.mailbox, g.id);
-      const out = await processIncoming({ id: g.id, mailbox: s.mailbox, subject: g.subject ?? "", from: full.from, receivedAt: g.receivedDateTime ?? null, text: full.text });
+      // the files, read only once the email is known to be new; a failure there never stops the email
+      const att = await messageFiles(s.mailbox, g.id, { maxBytes: MAX_TICKET_ATTACHMENT_BYTES }).catch(() => ({ files: [], skipped: 0 }));
+      const out = await processIncoming({ id: g.id, mailbox: s.mailbox, subject: g.subject ?? "", from: full.from, receivedAt: g.receivedDateTime ?? null, text: full.text, files: att.files, skippedFiles: att.skipped });
       if (out.outcome === "ticket") run.tickets++;
       else if (out.outcome === "reply") run.replies++;
       else if (out.outcome === "pending") run.pending++;

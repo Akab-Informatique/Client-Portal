@@ -5,7 +5,7 @@ import { useMutation, useQuery, useQueryClient, type QueryClient } from "@tansta
 import { AnimatePresence, motion } from "motion/react";
 import { toast } from "sonner";
 import { Dialog as DialogPrimitive } from "radix-ui";
-import { AlertTriangle, Flag, Bot, Building2, CalendarClock, CalendarPlus, Check, BookOpen, ChevronDown, ListOrdered, ChevronUp, Clock3, Eye, FileText, HardDrive, HelpCircle, Inbox, ListChecks, Loader2, Lock, Mail, Minus, MonitorCog, MonitorPlay, NotebookPen, Pencil, Phone, RefreshCw, Send, Sparkles, Timer, Star, UserCheck, UserRound, Users, X, type LucideIcon, MessageSquareReply, MessageSquareText, Trash2, GitMerge } from "lucide-react";
+import { AlertTriangle, Flag, Paperclip, Bot, Building2, CalendarClock, CalendarPlus, Check, BookOpen, ChevronDown, ListOrdered, ChevronUp, Clock3, Eye, FileText, HardDrive, HelpCircle, Inbox, ListChecks, Loader2, Lock, Mail, Minus, MonitorCog, MonitorPlay, NotebookPen, Pencil, Phone, RefreshCw, Send, Sparkles, Timer, Star, UserCheck, UserRound, Users, X, type LucideIcon, MessageSquareReply, MessageSquareText, Trash2, GitMerge } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { useConfirm } from "@/components/ConfirmDialog";
 import { AiTextarea } from "@/components/AiPolish";
@@ -38,6 +38,8 @@ import { AcceptDialog } from "./AcceptDialog";
 import { MergeDialog } from "./MergeDialog";
 import { NotifyTech } from "./NotifyTech";
 import { ChecklistCard } from "./Checklist";
+import { fileToBase64 } from "@/pages/outlook/shared";
+import { TicketFiles } from "./Files";
 import { NotificationBell } from "@/components/NotificationBell";
 import { useTicketWorkspace } from "./workspace";
 import { contractNote } from "./contract";
@@ -328,7 +330,7 @@ function TicketBody({
       return !v;
     });
   // the exchange shown: the ticket activity, or the texts with the client
-  const [thread, setThread] = useState<"activity" | "sms">("activity");
+  const [thread, setThread] = useState<"activity" | "sms" | "files">("activity");
   const { data: texts } = useTicketSms(tk.id, can("sms.view") && !partial);
   // texts received and not looked at yet; a new one also moved the ticket to "needs attention": the ticket is read again
   const unreadTexts = (texts?.conversations ?? []).reduce((n, c) => n + c.unread, 0);
@@ -714,9 +716,9 @@ function TicketBody({
             {/* the tasks to complete before the ticket can be: right under the description, folded away or open */}
             <ChecklistCard tk={tk} editable={editable && !partial} />
             <AiPanel tk={tk} onToNote={(text) => setDraft({ text, internal: true })} />
-            {can("sms.view") && (
+            {(
               <div className="flex items-center gap-1 rounded-xl border p-1 text-xs">
-                {(["activity", "sms"] as const).map((k) => (
+                {(can("sms.view") ? (["activity", "sms", "files"] as const) : (["activity", "files"] as const)).map((k) => (
                   <button
                     key={k}
                     type="button"
@@ -728,8 +730,9 @@ function TicketBody({
                       k === "sms" && unreadTexts > 0 && thread !== "sms" && "animate-attention font-semibold text-orange-200",
                     )}
                   >
-                    {k === "activity" ? <Clock3 className="size-3.5" /> : <MessageSquareText className="size-3.5" />}
-                    {t(`sms.thread.${k}`)}
+                    {k === "activity" ? <Clock3 className="size-3.5" /> : k === "files" ? <Paperclip className="size-3.5" /> : <MessageSquareText className="size-3.5" />}
+                    {k === "files" ? t("tickets.files.tab") : t(`sms.thread.${k}`)}
+                    {k === "files" && (tk.attachments?.length ?? 0) > 0 && <span className="rounded-full bg-black/15 px-1.5 font-mono text-[10px]">{tk.attachments!.length}</span>}
                     {k === "sms" && unreadTexts > 0 && (
                       <span className="rounded-full bg-orange-500 px-1.5 font-mono text-[10px] font-bold text-white" title={t("sms.ticket.unread", { count: unreadTexts })}>
                         {unreadTexts}
@@ -742,7 +745,9 @@ function TicketBody({
                 ))}
               </div>
             )}
-            {thread === "sms" && can("sms.view") ? (
+            {thread === "files" ? (
+              <TicketFiles tk={tk} editable={editable && !partial} />
+            ) : thread === "sms" && can("sms.view") ? (
               <TicketSmsPanel ticketId={tk.id} phone={phone} companyId={tk.company.id} clientName={tk.contact || null} />
             ) : (
               <Activity tk={tk} partial={partial && !loadError} />
@@ -752,7 +757,7 @@ function TicketBody({
           <div className="flex flex-wrap items-center gap-1.5 pb-2 lg:pr-2">
             <ChargeButtons tk={tk} editable={editable} partial={partial} />
           </div>
-          {editable && thread !== "sms" && (
+          {editable && thread !== "sms" && thread !== "files" && (
             <div className="sticky bottom-0 z-10 -mx-2 bg-gradient-to-t from-background via-background/95 to-transparent px-2 pb-4 pt-1 lg:static lg:mx-0 lg:bg-none lg:px-0 lg:pr-2">
               <NoteComposer tk={tk} draft={draft} onDraftUsed={() => setDraft(null)} focusRequest={focusNote} />
             </div>
@@ -1720,10 +1725,30 @@ function NoteComposer({
   const contactEmail = tk.contactInfo?.email ?? null;
   const [emailIt, setEmailIt] = useState(true);
   const [mailOthers, setMailOthers] = useState<string[]>([]);
+  // files: kept on the ticket, and sent with the reply when it goes by email
+  const [files, setFiles] = useState<File[]>([]);
+  const pick = useRef<HTMLInputElement>(null);
+  const addFiles = (list: FileList | null) => {
+    const ok = [...(list ?? [])].filter((f) => {
+      if (f.size > 5 * 1024 * 1024) toast.error(t("tickets.files.tooBig", { name: f.name }));
+      return f.size <= 5 * 1024 * 1024;
+    });
+    setFiles((x) => [...x, ...ok].slice(0, 10));
+  };
   const send = useMutation({
-    mutationFn: () => api.post<{ emailed?: boolean; to?: string | null; noContactEmail?: boolean }>(`/tickets/${tk.id}/notes`, { text, internal, ...(internal ? {} : { email: emailIt, others: mailOthers }) }),
+    mutationFn: async () => {
+      // the files first (they are the ticket's, `email_out` when they go with an email), then the note naming them
+      const byEmail = !internal && (emailIt || mailOthers.length > 0);
+      const ids: string[] = [];
+      for (const f of files) {
+        const r = await api.post<{ id: string | null }>(`/tickets/${tk.id}/attachments`, { name: f.name, contentType: f.type || "application/octet-stream", data: await fileToBase64(f), source: byEmail ? "email_out" : "upload" });
+        if (r.id) ids.push(r.id);
+      }
+      return api.post<{ emailed?: boolean; to?: string | null; noContactEmail?: boolean }>(`/tickets/${tk.id}/notes`, { text, internal, ...(internal ? {} : { email: emailIt, others: mailOthers, attachmentIds: ids }) });
+    },
     onSuccess: (r) => {
       setText("");
+      setFiles([]);
       setEmailIt(true);
       void qc.invalidateQueries({ queryKey: ["tickets", "detail", tk.id] });
       if (internal) toast.success(t("tickets.noteAdded"));
@@ -1774,8 +1799,26 @@ function NoteComposer({
           <EmailSend ticket={tk} contact={emailIt && Boolean(contactEmail)} onContact={setEmailIt} others={mailOthers} onOthers={setMailOthers} contactLabel={(name, email) => t("tickets.replyEmailTo", { name, email })} idPrefix="reply" />
         </div>
       )}
+      {files.length > 0 && (
+        <ul className="mt-2 flex flex-wrap gap-1.5">
+          {files.map((f, i) => (
+            <li key={i} className="flex items-center gap-1.5 rounded-full border px-2 py-0.5 text-[11px]">
+              <Paperclip className="size-3 text-muted-foreground" /> {f.name}
+              <button type="button" onClick={() => setFiles((x) => x.filter((_, j) => j !== i))} className="text-muted-foreground hover:text-destructive" aria-label={t("common.delete")}>
+                <X className="size-3" />
+              </button>
+            </li>
+          ))}
+        </ul>
+      )}
       <div className="mt-2 flex items-center justify-between gap-3">
-        <span className="text-[11px] text-muted-foreground">{t("tickets.noteSendHint")}</span>
+        <span className="flex items-center gap-2 text-[11px] text-muted-foreground">
+          <input ref={pick} type="file" multiple hidden onChange={(e) => (addFiles(e.target.files), (e.target.value = ""))} />
+          <Button type="button" size="sm" variant="ghost" className="h-7 gap-1 px-2 text-xs" onClick={() => pick.current?.click()}>
+            <Paperclip className="size-3.5" /> {t("tickets.files.attach")}
+          </Button>
+          {t("tickets.noteSendHint")}
+        </span>
         <Button size="sm" disabled={!text.trim() || send.isPending} onClick={() => send.mutate()} className={cn(!internal && "bg-grad-gold text-[#1a1204]")}>
           {send.isPending ? <Loader2 className="size-3.5 animate-spin" /> : <Send className="size-3.5" />} {internal ? t("tickets.addNote") : t("tickets.send")}
         </Button>

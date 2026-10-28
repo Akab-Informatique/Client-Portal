@@ -759,6 +759,8 @@ export const ticketAttachments = pgTable(
     data: text("data"),
     internal: boolean("internal").notNull().default(false),
     author: text("author").notNull().default(""),
+    /** upload (added by a technician) | email_in (came with an email from the client) | email_out (sent with our reply) | portal (added by the client in the portal) */
+    source: text("source").notNull().default("upload"),
     createdAt: created(),
   },
   (t) => [index("ticket_attachments_ticket_idx").on(t.ticketId), uniqueIndex("ticket_attachments_external_idx").on(t.externalId)],

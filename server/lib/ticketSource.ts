@@ -104,7 +104,7 @@ export type BillableExport = { items: Billable[]; errors: Partial<Record<Billabl
 export type CompanyPatch = Partial<{ name: string; phone: string | null; address: string | null; city: string | null; province: string | null; postalCode: string | null; website: string | null; parentId: number | null }>;
 export type ContactPatch = Partial<{ firstName: string; lastName: string; email: string | null; phone: string | null; mobile: string | null; title: string | null; active: boolean }>;
 /** A file attached to a ticket (base64 data) */
-export type NewAttachment = { name: string; contentType: string; data: string };
+export type NewAttachment = { name: string; contentType: string; data: string; /** upload | email_out (default: from who adds it) */ source?: string };
 /** The portal stops attachments at 5 MB a file. */
 export const MAX_TICKET_ATTACHMENT_BYTES = 5 * 1024 * 1024;
 export type NTicket = {
@@ -135,7 +135,7 @@ export type NTicket = {
   /** The tickets merged into this one, with what they said at the start */
   mergedTickets?: { id: number; number: string; title: string; description: string; createdAt: string; mergedAt: string; contact: string }[];
   /** Files attached in the portal (sample data only) */
-  attachments?: { id: string; name: string; size: number; at: string; author: string; internal?: boolean }[];
+  attachments?: { id: string; name: string; size: number; at: string; author: string; internal?: boolean; contentType?: string; source?: string }[];
   /** Parts that could not be loaded (the rest of the ticket is shown) */
   warnings?: { part: "notes" | "time"; detail: string }[];
 };
@@ -259,7 +259,7 @@ export interface TicketSource {
   /** The client's active contracts */
   contracts(companyId: number): Promise<Contract[]>;
   /** Attach a file to the ticket */
-  addAttachment(ticketId: number, p: NewAttachment, a: AuthContext): Promise<void>;
+  addAttachment(ticketId: number, p: NewAttachment, a: AuthContext): Promise<{ id: string } | void>;
   /** Tickets where this contact is one of the other contacts (not the main one) */
   ticketsWithOtherContact(contactId: string): Promise<number[]>;
   /** Every resolved ticket of a company, however old (the client portal's history; the list keeps recent ones only) */

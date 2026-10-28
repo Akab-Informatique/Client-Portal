@@ -153,7 +153,7 @@ export function localTicketSource(base: TicketSource): TicketSource {
         db().select().from(schema.ticketNotes).where(eq(schema.ticketNotes.ticketId, id)).orderBy(asc(schema.ticketNotes.createdAt)),
         db().select().from(schema.ticketTimeEntries).where(eq(schema.ticketTimeEntries.ticketId, id)).orderBy(asc(schema.ticketTimeEntries.startedAt)),
         db()
-          .select({ id: schema.ticketAttachments.id, name: schema.ticketAttachments.name, size: schema.ticketAttachments.size, at: schema.ticketAttachments.createdAt, author: schema.ticketAttachments.author, internal: schema.ticketAttachments.internal })
+          .select({ id: schema.ticketAttachments.id, name: schema.ticketAttachments.name, size: schema.ticketAttachments.size, at: schema.ticketAttachments.createdAt, author: schema.ticketAttachments.author, internal: schema.ticketAttachments.internal, contentType: schema.ticketAttachments.contentType, source: schema.ticketAttachments.source })
           .from(schema.ticketAttachments)
           .where(eq(schema.ticketAttachments.ticketId, id))
           .orderBy(asc(schema.ticketAttachments.createdAt)),
@@ -185,7 +185,7 @@ export function localTicketSource(base: TicketSource): TicketSource {
         })),
       ].sort((a, b) => a.at.localeCompare(b.at));
       t.notes = items;
-      t.attachments = files.map((f) => ({ id: f.id, name: f.name, size: f.size, at: f.at.toISOString(), author: f.author, internal: f.internal }));
+      t.attachments = files.map((f) => ({ id: f.id, name: f.name, size: f.size, at: f.at.toISOString(), author: f.author, internal: f.internal, contentType: f.contentType, source: f.source }));
       return t;
     },
     async update(id, p) {
@@ -266,10 +266,13 @@ export function localTicketSource(base: TicketSource): TicketSource {
     async addAttachment(ticketId, p, a) {
       await one(ticketId);
       const size = Math.floor((p.data.length * 3) / 4) - (p.data.endsWith("==") ? 2 : p.data.endsWith("=") ? 1 : 0);
-      await db()
+      const source = p.source === "email_out" ? "email_out" : a.user.kind === "client" ? "portal" : "upload";
+      const [row] = await db()
         .insert(schema.ticketAttachments)
-        .values({ ticketId, name: p.name.slice(0, 255), contentType: p.contentType || "application/octet-stream", size, data: p.data, author: a.realUser.name });
+        .values({ ticketId, name: p.name.slice(0, 255), contentType: p.contentType || "application/octet-stream", size, data: p.data, author: a.realUser.name, source })
+        .returning({ id: schema.ticketAttachments.id });
       await touch(ticketId);
+      return { id: row!.id };
     },
     async charges(ticketId) {
       const list = await db().select().from(schema.ticketCharges).where(eq(schema.ticketCharges.ticketId, ticketId)).orderBy(asc(schema.ticketCharges.createdAt));
@@ -587,6 +590,21 @@ ${from.description.trim()}` : ""}`,
   });
   await audit(a.realUser.id, "ticket.merged", String(id), { number: from.number, into: into.number });
   return { number: from.number, into: { id: into.id, number: into.number } };
+}
+
+/**
+ * A file that came with an email from the client (the support mailbox): kept on the ticket, once (the same name and size is
+ * not added again). Returns whether it was added.
+ */
+export async function addEmailAttachment(ticketId: number, f: { name: string; contentType: string; data: string; size: number; from: string }): Promise<boolean> {
+  const [same] = await db()
+    .select({ id: schema.ticketAttachments.id })
+    .from(schema.ticketAttachments)
+    .where(and(eq(schema.ticketAttachments.ticketId, ticketId), eq(schema.ticketAttachments.name, f.name.slice(0, 255)), eq(schema.ticketAttachments.size, f.size), eq(schema.ticketAttachments.source, "email_in")))
+    .limit(1);
+  if (same) return false;
+  await db().insert(schema.ticketAttachments).values({ ticketId, name: f.name.slice(0, 255), contentType: f.contentType || "application/octet-stream", size: f.size, data: f.data, author: f.from.slice(0, 200), source: "email_in" });
+  return true;
 }
 
 /** A portal ticket's file */

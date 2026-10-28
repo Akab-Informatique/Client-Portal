@@ -249,6 +249,37 @@ export async function messageText(mailbox: string, id: string): Promise<MailMess
 }
 
 /**
+ * The files that came with a message, for a ticket: real files and the pictures pasted in the text. A picture inside the
+ * email smaller than `minInline` bytes is a signature logo or a tracking dot and is left out. Over `maxBytes` a file is counted
+ * as skipped. (Item attachments — a forwarded email — and links cannot be downloaded.)
+ */
+export async function messageFiles(mailbox: string, id: string, opts: { maxBytes: number; minInline?: number }): Promise<{ files: { name: string; contentType: string; size: number; data: string }[]; skipped: number }> {
+  type A = { "@odata.type"?: string; id: string; name?: string; contentType?: string; size?: number; isInline?: boolean };
+  const base = `${user(mailbox)}/messages/${enc(id)}`;
+  const list = (await graph<{ value: A[] }>("GET", `${base}/attachments?$select=id,name,contentType,size,isInline`)).value ?? [];
+  const files: { name: string; contentType: string; size: number; data: string }[] = [];
+  let skipped = 0;
+  for (const a of list) {
+    if (a["@odata.type"] && a["@odata.type"] !== "#microsoft.graph.fileAttachment") continue;
+    const type = a.contentType || "application/octet-stream";
+    const size = a.size ?? 0;
+    if (a.isInline && type.startsWith("image/") && size < (opts.minInline ?? 10_000)) continue;
+    if (size > opts.maxBytes) {
+      skipped++;
+      continue;
+    }
+    const full = await graph<{ contentBytes?: string; name?: string }>("GET", `${base}/attachments/${enc(a.id)}`).catch(() => null);
+    if (!full?.contentBytes) {
+      skipped++;
+      continue;
+    }
+    const ext = type.split("/")[1]?.split("+")[0] || "bin";
+    files.push({ name: (a.name || full.name || `image.${ext}`).slice(0, 255), contentType: type, size, data: full.contentBytes });
+  }
+  return { files, skipped };
+}
+
+/**
  * Mark every unread message of a folder as read (Graph has no single call
  * for it: pages of unread ids, patched 20 at a time with $batch). Returns how
  * many were marked; stops after `max`.

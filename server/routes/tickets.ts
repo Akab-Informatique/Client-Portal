@@ -323,6 +323,7 @@ async function emailReply(
   text: string,
   a: AuthContext,
   who: { contact: boolean; others: string[] } = { contact: true, others: [] },
+  fileIds: string[] = [],
 ): Promise<{ emailed: boolean; to: string | null; noContactEmail: boolean }> {
   const tk = await src.get(id).catch(() => null);
   if (!tk) return { emailed: false, to: null, noContactEmail: false };
@@ -339,11 +340,17 @@ async function emailReply(
   const mailText = [hello, "", text, "", "—", sign, "", foot].join("\n");
   const html = `<p>${escHtml(hello)}</p><p style="white-space:pre-wrap">${escHtml(text)}</p><p>—<br>${escHtml(a.realUser.name)}<br>AKAB Informatique</p><p style="color:#777;font-size:12px">${escHtml(foot)} (${escHtml(tk.number)})</p>`;
   const intake = await intakeSettings().catch(() => null);
+  // the files that go with it: this ticket's own, by id
+  const files: { filename: string; content: Buffer; contentType?: string }[] = [];
+  for (const fid of fileIds) {
+    const f = await ticketFile(id, fid).catch(() => null);
+    if (f?.data) files.push({ filename: f.name, content: Buffer.from(f.data, "base64"), contentType: f.contentType });
+  }
   // one message each (nobody sees the others' addresses)
   const sent: string[] = [];
   const failed: string[] = [];
   for (const to of recipients) {
-    const ok = await sendMail({ to, subject, text: mailText, html, ...(intake?.enabled && intake.mailbox ? { replyTo: intake.mailbox } : {}) });
+    const ok = await sendMail({ to, subject, text: mailText, html, ...(files.length ? { attachments: files } : {}), ...(intake?.enabled && intake.mailbox ? { replyTo: intake.mailbox } : {}) });
     (ok ? sent : failed).push(to);
   }
   if (sent.length) await audit(a.user.id, "ticket.reply_emailed", String(id), { to: sent });
@@ -425,6 +432,8 @@ async function detailOf(src: TicketSource, id: number, a: AuthContext) {
     source: t.source,
     hours: t.hours,
     notes: t.notes,
+    /** Every file of the ticket: what came with the client's emails, what went with ours, what was added (no content) */
+    attachments: t.attachments ?? [],
     assetId: t.assetId ?? null,
     asset,
     contactInfo,
@@ -1534,10 +1543,10 @@ export const ticketRoutes = new Hono<AppEnv>()
     const a = auth(c);
     const id = Number(c.req.param("id"));
     // email: a reply to the client is also emailed to the ticket's contact unless the technician says not to, and to other addresses if asked
-    const p = await body(c, z.object({ text: z.string().trim().min(1).max(8000), internal: z.boolean(), email: z.boolean().optional(), others: z.array(zEmail).max(10).default([]) }));
+    const p = await body(c, z.object({ text: z.string().trim().min(1).max(8000), internal: z.boolean(), email: z.boolean().optional(), others: z.array(zEmail).max(10).default([]), /** files of this ticket (uploaded just before) that go with the email */ attachmentIds: z.array(zUuid).max(10).default([]) }));
     const src = await ticketSource();
     await run(() => src.addNote(id, { text: p.text, internal: p.internal }, a));
-    const mail = !p.internal && (p.email !== false || p.others.length) ? await emailReply(src, id, p.text, a, { contact: p.email !== false, others: p.others }) : null;
+    const mail = !p.internal && (p.email !== false || p.others.length) ? await emailReply(src, id, p.text, a, { contact: p.email !== false, others: p.others }, p.attachmentIds) : null;
     return c.json({ ok: true, ...(mail ?? {}) }, 201);
   })
 
@@ -1575,11 +1584,15 @@ export const ticketRoutes = new Hono<AppEnv>()
     if (!Number.isInteger(id) || id <= 0) throw new HTTPException(400, { message: "invalid_id" });
     const f = await ticketFile(id, zUuid.parse(c.req.param("fileId")));
     if (!f?.data) throw new HTTPException(404, { message: "not_found" });
+    // `?inline=1`: a picture shown in the page (a thumbnail, a preview); only these types, never anything else
+    const picture = /^image\/(png|jpe?g|gif|webp)$/i.test(f.contentType) ? f.contentType.toLowerCase().replace("jpg", "jpeg") : null;
+    const inline = c.req.query("inline") === "1" && picture;
     return new Response(Buffer.from(f.data, "base64"), {
       headers: {
-        "content-type": "application/octet-stream",
-        "content-disposition": `attachment; filename*=UTF-8''${encodeURIComponent(f.name)}`,
+        "content-type": inline ? picture! : "application/octet-stream",
+        "content-disposition": `${inline ? "inline" : "attachment"}; filename*=UTF-8''${encodeURIComponent(f.name)}`,
         "x-content-type-options": "nosniff",
+        "content-security-policy": "sandbox; default-src 'none'",
         "cache-control": "private, no-store",
       },
     });
@@ -1596,13 +1609,15 @@ export const ticketRoutes = new Hono<AppEnv>()
         name: z.string().trim().min(1).max(200),
         contentType: z.string().max(120).default("application/octet-stream"),
         data: z.string().regex(/^[A-Za-z0-9+/]*={0,2}$/).max(Math.ceil(MAX_TICKET_ATTACHMENT_BYTES / 3) * 4),
+        // email_out: a file that goes with our reply by email
+        source: z.enum(["upload", "email_out"]).default("upload"),
       }),
     );
     if (!p.data) throw new HTTPException(400, { message: "Validation failed" });
     const src = await ticketSource();
-    await run(() => src.addAttachment(id, p, a));
+    const made = await run(() => src.addAttachment(id, p, a));
     await audit(a.user.id, "ticket.attachment_added", String(id), { name: p.name, bytes: Math.floor((p.data.length * 3) / 4) });
-    return c.json({ ok: true }, 201);
+    return c.json({ ok: true, id: made && "id" in made ? made.id : null }, 201);
   })
 
   .put("/:id/start-date", requirePermission("tickets.edit"), async (c) => {

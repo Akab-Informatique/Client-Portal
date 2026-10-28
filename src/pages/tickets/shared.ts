@@ -61,6 +61,7 @@ export type ChecklistItem = {
   dependsOnId: string | null;
   blockedBy: { id: string; text: string } | null;
 };
+export type TicketFile = { id: string; name: string; size: number; at: string; author: string; internal?: boolean; contentType?: string; source?: "upload" | "email_in" | "email_out" | "portal" };
 export type TicketDetail = Omit<TicketSummary, "checklist"> & {
   /** The checklist: tasks to complete before the ticket can be */
   checklist?: ChecklistItem[];
@@ -68,6 +69,8 @@ export type TicketDetail = Omit<TicketSummary, "checklist"> & {
   source: string;
   hours: number;
   /** Notes and time entries (work done), oldest first */
+  /** Every file of the ticket (no content): came with an email, went with our reply, added by a technician or by the client */
+  attachments?: TicketFile[];
   notes: { id: string; author: string; at: string; text: string; internal: boolean; kind?: "note" | "time"; hours?: number; internalText?: string; billable?: boolean; offsetHours?: number; system?: boolean; by?: "client" | "tech"; mergedFrom?: string }[];
   /** AI assistant available to me */
   ai: boolean;

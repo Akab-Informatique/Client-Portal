@@ -56,7 +56,7 @@ class Agent {
     } catch {
       json = text;
     }
-    return { status: res.status, json, location: res.headers.get("location") };
+    return { status: res.status, json, location: res.headers.get("location"), headers: res.headers };
   }
   get = (p: string) => this.req("GET", p);
   post = (p: string, b: unknown = {}) => this.req("POST", p, b);
@@ -8030,5 +8030,82 @@ describe("changing time entries and expenses: the owner, and a manager over ever
     expect((await admin.del(`/api/time/expense-reports/${rep.id}`)).json).toEqual({ ok: true });
     expect(await mine()).toBeUndefined();
     expect((await tech.del(`/api/time/expense-reports/${rep.id}`)).status).toBe(404);
+  });
+});
+
+describe("ticket files: what comes with the client's emails, what goes with ours", () => {
+  afterAll(async () => {
+    const local = await import("../server/lib/localTickets.ts");
+    await db().delete(schema.integrations).where(eq(schema.integrations.provider, "tickets"));
+    await db().delete(schema.tickets);
+    await db().delete(schema.deletedTickets);
+    local.resetTicketMode();
+  });
+
+  it("an email's files (pictures included) are kept on its ticket once; sent files are kept too; pictures show inline, everything else only downloads", async () => {
+    resetRateLimit("login:ip:unknown");
+    const local = await import("../server/lib/localTickets.ts");
+    const admin = await signIn("admin@akab.local");
+    const tech = await signIn("tech@akab.local");
+    await db()
+      .insert(schema.integrations)
+      .values({ provider: "tickets", enabled: true, config: { mode: "local" } })
+      .onConflictDoUpdate({ target: schema.integrations.provider, set: { enabled: true, config: { mode: "local" } } });
+    local.resetTicketMode();
+    const { processIncoming } = await import("../server/lib/mailIntake.ts");
+    const { devOutbox } = await import("../server/lib/mail.ts");
+    const clients = (await admin.get("/api/crm/clients")).json;
+    const client = (clients.items ?? clients).find((x: any) => x.autotaskId === 300);
+    const known = (await admin.get(`/api/crm/clients/${client.id}/contacts`)).json.find((x: any) => x.email);
+    const PNG = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==";
+    const png = { name: "capture.png", contentType: "image/png", size: Buffer.from(PNG, "base64").length, data: PNG };
+    const pdf = { name: "devis.pdf", contentType: "application/pdf", size: 9, data: Buffer.from("%PDF-1.4 x").toString("base64") };
+    const mail = (id: string, subject: string, files: any[]) => ({ id, mailbox: "support@akab.ca", subject, from: { name: "Client", address: known.email }, receivedAt: new Date().toISOString(), text: "Voir la capture.", files });
+
+    // a new email with a picture and a document: the ticket keeps both
+    const first = await processIncoming(mail("files-1", "Imprimante en panne", [png, pdf]));
+    expect(first.outcome).toBe("ticket");
+    const id = first.ticket!.id;
+    const files = (await tech.get(`/api/tickets/${id}`)).json.attachments;
+    expect(files.map((f: any) => [f.name, f.source, f.contentType]).sort()).toEqual([["capture.png", "email_in", "image/png"], ["devis.pdf", "email_in", "application/pdf"]]);
+    expect(files[0].author).toContain(known.email);
+    expect(JSON.stringify(files)).not.toContain(PNG);
+
+    // the client answers on the ticket with the same picture and a new one: the same file is not added twice
+    const number = first.ticket!.number;
+    const again = await processIncoming(mail("files-2", `RE: [${number}] Imprimante en panne`, [png, { ...png, name: "photo.png", size: png.size + 1 }]));
+    expect(again.outcome).toBe("reply");
+    expect((await tech.get(`/api/tickets/${id}`)).json.attachments.map((f: any) => f.name).sort()).toEqual(["capture.png", "devis.pdf", "photo.png"]);
+
+    // downloads: always a download, except a picture asked inline (nothing else is ever shown in the page)
+    const pic = files.find((f: any) => f.name === "capture.png");
+    const doc = files.find((f: any) => f.name === "devis.pdf");
+    const dl = await tech.get(`/api/tickets/${id}/files/${pic.id}`);
+    expect(dl.headers.get("content-disposition")).toMatch(/^attachment/);
+    const inline = await tech.get(`/api/tickets/${id}/files/${pic.id}?inline=1`);
+    expect(inline.headers.get("content-type")).toBe("image/png");
+    expect(inline.headers.get("content-disposition")).toMatch(/^inline/);
+    expect(inline.headers.get("x-content-type-options")).toBe("nosniff");
+    const docInline = await tech.get(`/api/tickets/${id}/files/${doc.id}?inline=1`);
+    expect(docInline.headers.get("content-type")).toBe("application/octet-stream");
+    expect(docInline.headers.get("content-disposition")).toMatch(/^attachment/);
+
+    // our own: uploaded for an email (kept on the ticket, source email_out), then sent with the reply
+    const up = await tech.post(`/api/tickets/${id}/attachments`, { name: "solution.pdf", contentType: "application/pdf", data: pdf.data, source: "email_out" });
+    expect(up.status).toBe(201);
+    expect(up.json.id).toEqual(expect.any(String));
+    expect((await tech.post(`/api/tickets/${id}/attachments`, { name: "x.pdf", contentType: "application/pdf", data: pdf.data, source: "bogus" })).status).toBe(400);
+    devOutbox.length = 0;
+    expect((await tech.post(`/api/tickets/${id}/notes`, { text: "Voici la solution.", internal: false, email: false, others: ["patron@client.example"], attachmentIds: [up.json.id, pic.id] })).status).toBe(201);
+    expect(devOutbox).toHaveLength(1);
+    expect(devOutbox[0].attachments!.map((a) => a.filename).sort()).toEqual(["capture.png", "solution.pdf"]);
+    const all = (await tech.get(`/api/tickets/${id}`)).json.attachments;
+    expect(all.find((f: any) => f.name === "solution.pdf").source).toBe("email_out");
+    // a file of another ticket never goes out
+    const other = (await tech.post("/api/tickets", { title: "Autre", description: "x", companyId: 300, priority: "medium", queue: "support", assigneeId: null, dueDate: "2026-01-05" })).json;
+    const otherFile = (await tech.post(`/api/tickets/${other.id}/attachments`, { name: "secret.pdf", contentType: "application/pdf", data: pdf.data })).json.id;
+    devOutbox.length = 0;
+    await tech.post(`/api/tickets/${id}/notes`, { text: "Encore.", internal: false, email: false, others: ["patron@client.example"], attachmentIds: [otherFile] });
+    expect(devOutbox[0].attachments ?? []).toEqual([]);
   });
 });
