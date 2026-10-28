@@ -398,7 +398,8 @@ export function QuoteEditor() {
             </div>
           </section>
 
-          <section className="glass space-y-4 rounded-2xl border p-5">
+          {/* above the cards that follow (notes…): the glass makes its own layer, so the add list would slip under them */}
+          <section className="glass relative z-20 space-y-4 rounded-2xl border p-5">
             <h2 className="text-lg font-semibold">{t("quotes.editor.linesTitle")}</h2>
 
             {!locked && <LineAdder onProduct={addProduct} onService={addService} onFree={addFree} />}
