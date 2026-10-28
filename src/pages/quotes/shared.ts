@@ -32,6 +32,7 @@ export type QuoteListItem = {
 export type QuoteLine = {
   id: string;
   productId: string | null;
+  serviceId: string | null;
   sku: string | null;
   description: string;
   details: string | null;
@@ -39,6 +40,7 @@ export type QuoteLine = {
   quantityX100: number;
   unitPriceCents: number;
   unitCostCents: number;
+  discountX100: number;
   taxable: boolean;
   optional: boolean;
 };
@@ -70,6 +72,19 @@ export type QuoteProduct = {
   uses: number;
 };
 
+/** A service of Inventory › Services, as the line adder lists it */
+export type QuoteService = {
+  id: string;
+  sku: string | null;
+  name: string;
+  description: string;
+  recurrence: QuoteRecurrence;
+  priceCents: number;
+  costCents: number;
+  taxable: boolean;
+  uses: number;
+};
+
 export type QuoteStaff = { id: string; name: string; title: string | null };
 export const useQuoteStaff = () => useQuery({ queryKey: ["quotes", "staff"], queryFn: () => api.get<QuoteStaff[]>("/quotes/staff"), staleTime: 5 * 60_000 });
 
@@ -89,6 +104,12 @@ export const toQtyX100 = (v: string) => {
 };
 export const fromCents = (c: number) => (c / 100).toFixed(2).replace(".", ",");
 export const fromQty = (x: number) => String(x / 100).replace(".", ",");
+/** A discount typed as "10" or "12,5" (percent) → percent ×100, 0 to 100 % */
+export const toPct = (v: string) => {
+  const n = parseNum(v.replace("%", ""));
+  return Number.isFinite(n) && n > 0 ? Math.min(Math.round(n * 100), 10_000) : 0;
+};
+export const fromPct = (x: number) => String(x / 100).replace(".", ",");
 
 export const STATUS_STYLE: Record<QuoteStatus | "expired", string> = {
   draft: "border-slate-500/40 bg-slate-500/10 text-slate-300",

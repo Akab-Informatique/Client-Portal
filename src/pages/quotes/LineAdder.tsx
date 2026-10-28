@@ -1,19 +1,22 @@
 import { useEffect, useRef, useState, type KeyboardEvent } from "react";
 import { useTranslation } from "react-i18next";
 import { useQuery } from "@tanstack/react-query";
-import { Package, Plus, Search } from "lucide-react";
+import { Layers, Package, Plus, Search } from "lucide-react";
 import { Input } from "@/components/ui/input";
 import { api } from "@/lib/api";
 import { cn } from "@/lib/utils";
 import { money } from "@/pages/crm/shared";
-import type { QuoteProduct } from "./shared";
+import type { QuoteProduct, QuoteService } from "./shared";
+
+type Choice = { kind: "service"; s: QuoteService } | { kind: "product"; p: QuoteProduct };
 
 /**
  * The quick add of a quote: one field. Type a SKU or a name to pick from the
- * inventory (what is quoted most often comes first), or type anything and
- * press Enter for a free line, with no product to create beforehand.
+ * services (Inventory › Services) or the inventory (what is quoted most often
+ * comes first), or type anything and press Enter for a free line, with nothing
+ * to create beforehand.
  */
-export function LineAdder({ onProduct, onFree }: { onProduct: (p: QuoteProduct) => void; onFree: (text: string) => void }) {
+export function LineAdder({ onProduct, onService, onFree }: { onProduct: (p: QuoteProduct) => void; onService: (s: QuoteService) => void; onFree: (text: string) => void }) {
   const { t, i18n } = useTranslation();
   const [text, setText] = useState("");
   const [typed, setTyped] = useState("");
@@ -27,12 +30,22 @@ export function LineAdder({ onProduct, onFree }: { onProduct: (p: QuoteProduct) 
     return () => window.clearTimeout(id);
   }, [text]);
 
-  const { data: found = [] } = useQuery({
+  const products = useQuery({
     queryKey: ["quotes", "products", typed],
     queryFn: () => api.get<QuoteProduct[]>(`/quotes/products?q=${encodeURIComponent(typed)}`),
     placeholderData: (prev) => prev,
     staleTime: 15_000,
   });
+  const services = useQuery({
+    queryKey: ["quotes", "services", typed],
+    queryFn: () => api.get<QuoteService[]>(`/quotes/services?q=${encodeURIComponent(typed)}`),
+    placeholderData: (prev) => prev,
+    staleTime: 15_000,
+  });
+  // services first, then the inventory; with nothing typed, a few of each
+  const svc = (services.data ?? []).slice(0, typed ? 15 : 6);
+  const prod = (products.data ?? []).slice(0, typed ? 25 : 8);
+  const found: Choice[] = [...svc.map((s) => ({ kind: "service" as const, s })), ...prod.map((p) => ({ kind: "product" as const, p }))];
   const free = text.trim();
   const showFree = free.length > 0;
   const count = found.length + (showFree ? 1 : 0);
@@ -44,7 +57,8 @@ export function LineAdder({ onProduct, onFree }: { onProduct: (p: QuoteProduct) 
     input.current?.focus();
   };
   const choose = (i: number) => {
-    if (i < found.length) onProduct(found[i]);
+    const c = found[i];
+    if (c) c.kind === "service" ? onService(c.s) : onProduct(c.p);
     else if (showFree) onFree(free);
     else return;
     reset();
@@ -60,12 +74,36 @@ export function LineAdder({ onProduct, onFree }: { onProduct: (p: QuoteProduct) 
     } else if (e.key === "Enter") {
       e.preventDefault();
       // an exact SKU wins over the first suggestion
-      const exact = found.findIndex((p) => p.sku && p.sku.toLowerCase() === free.toLowerCase());
+      const sku = (c: Choice) => (c.kind === "service" ? c.s.sku : c.p.sku);
+      const exact = found.findIndex((c) => sku(c)?.toLowerCase() === free.toLowerCase());
       choose(exact >= 0 ? exact : active);
     } else if (e.key === "Escape") {
       setOpen(false);
     }
   };
+
+  const heading = (label: string) => <li className="sticky top-0 z-10 bg-popover px-3 pb-1 pt-2 text-xs font-semibold uppercase tracking-wide text-muted-foreground">{label}</li>;
+  const row = (i: number, icon: React.ReactNode, title: string, sub: string, price: string) => (
+    <li
+      key={i}
+      role="option"
+      aria-selected={i === active}
+      // mouse down, not click: the field must not lose focus first
+      onMouseDown={(e) => {
+        e.preventDefault();
+        choose(i);
+      }}
+      onMouseEnter={() => setIndex(i)}
+      className={cn("flex cursor-pointer items-center gap-3 rounded-lg px-3 py-2", i === active && "bg-accent text-accent-foreground")}
+    >
+      {icon}
+      <div className="min-w-0 flex-1">
+        <p className="truncate text-sm font-medium">{title}</p>
+        {sub && <p className="truncate text-xs text-muted-foreground">{sub}</p>}
+      </div>
+      <span className="shrink-0 text-sm font-semibold tabular-nums">{price}</span>
+    </li>
+  );
 
   return (
     <div className="relative">
@@ -93,32 +131,29 @@ export function LineAdder({ onProduct, onFree }: { onProduct: (p: QuoteProduct) 
       </div>
       <p className="mt-1.5 text-xs text-muted-foreground">{t("quotes.editor.addHint")}</p>
 
+      {/* solid background (not glass): the lines under the list must not show through */}
       {open && count > 0 && (
-        <ul id="quote-line-suggestions" role="listbox" className="glass absolute inset-x-0 top-12 z-40 max-h-80 overflow-y-auto rounded-xl border p-1 shadow-lg">
-          {!typed && found.length > 0 && <li className="px-3 pb-1 pt-2 text-xs font-medium text-muted-foreground">{found.some((p) => p.uses > 0) ? t("quotes.editor.suggestions") : t("quotes.editor.inventory")}</li>}
-          {found.map((p, i) => (
-            <li
-              key={p.id}
-              role="option"
-              aria-selected={i === active}
-              // mouse down, not click: the field must not lose focus first
-              onMouseDown={(e) => {
-                e.preventDefault();
-                choose(i);
-              }}
-              onMouseEnter={() => setIndex(i)}
-              className={cn("flex cursor-pointer items-center gap-3 rounded-lg px-3 py-2", i === active && "bg-accent")}
-            >
-              <Package className="size-4 shrink-0 text-muted-foreground" />
-              <div className="min-w-0 flex-1">
-                <p className="truncate text-sm font-medium">{p.name}</p>
-                <p className="truncate text-xs text-muted-foreground">
-                  {[p.sku, p.manufacturer, p.stock > 0 ? t("quotes.editor.inStock", { count: p.stock }) : t("quotes.editor.noStock")].filter(Boolean).join("  ·  ")}
-                </p>
-              </div>
-              <span className="shrink-0 text-sm font-semibold tabular-nums">{money(p.priceCents, i18n.language)}</span>
-            </li>
-          ))}
+        <ul id="quote-line-suggestions" role="listbox" className="absolute inset-x-0 top-12 z-40 max-h-96 overflow-y-auto rounded-xl border bg-popover p-1 text-popover-foreground shadow-2xl ring-1 ring-black/40">
+          {svc.length > 0 && heading(t("quotes.editor.services"))}
+          {svc.map((s, i) =>
+            row(
+              i,
+              <Layers className="size-4 shrink-0 text-sky-400" />,
+              s.name,
+              [s.sku, t(`quotes.recurrence.${s.recurrence}`)].filter(Boolean).join("  ·  "),
+              `${money(s.priceCents, i18n.language)}${s.recurrence !== "once" ? ` ${t(`quotes.recurrence.per.${s.recurrence}`)}` : ""}`,
+            ),
+          )}
+          {prod.length > 0 && heading(!typed && prod.some((p) => p.uses > 0) ? t("quotes.editor.suggestions") : t("quotes.editor.inventory"))}
+          {prod.map((p, j) =>
+            row(
+              svc.length + j,
+              <Package className="size-4 shrink-0 text-muted-foreground" />,
+              p.name,
+              [p.sku, p.manufacturer, p.stock > 0 ? t("quotes.editor.inStock", { count: p.stock }) : t("quotes.editor.noStock")].filter(Boolean).join("  ·  "),
+              money(p.priceCents, i18n.language),
+            ),
+          )}
           {showFree && (
             <li
               role="option"
@@ -128,7 +163,7 @@ export function LineAdder({ onProduct, onFree }: { onProduct: (p: QuoteProduct) 
                 choose(found.length);
               }}
               onMouseEnter={() => setIndex(found.length)}
-              className={cn("flex cursor-pointer items-center gap-3 rounded-lg px-3 py-2", active === found.length && "bg-accent", found.length > 0 && "mt-1 border-t")}
+              className={cn("flex cursor-pointer items-center gap-3 rounded-lg px-3 py-2", active === found.length && "bg-accent text-accent-foreground", found.length > 0 && "mt-1 border-t")}
             >
               <Plus className="size-4 shrink-0 text-primary" />
               <span className="min-w-0 truncate text-sm">{t("quotes.editor.addFree", { text: free })}</span>

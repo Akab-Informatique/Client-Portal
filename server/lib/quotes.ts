@@ -15,12 +15,14 @@ export async function nextQuoteNumber(): Promise<string> {
 
 export type QuoteLineInput = {
   productId: string | null;
+  serviceId: string | null;
   sku: string | null;
   description: string;
   details: string | null;
   quantityX100: number;
   unitPriceCents: number;
   unitCostCents: number;
+  discountX100: number;
   taxable: boolean;
   optional: boolean;
   recurrence: QuoteRecurrence;

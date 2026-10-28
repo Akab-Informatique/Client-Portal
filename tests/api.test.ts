@@ -1684,6 +1684,48 @@ describe("tickets: client and contact", () => {
     expect(copy.lines[0]).toMatchObject({ details: "Modèle FG-60F", recurrence: "yearly" });
   });
 
+  it("quotes: services from Inventory › Services as lines, and a discount on each line", async () => {
+    const admin = await session("admin@akab.local");
+    const tech = await session("tech@akab.local");
+    const backup = (await admin.post("/api/services", { name: "Sauvegarde Veeam M365", description: "Par utilisateur", kind: "recurring", priceCents: 600, costCents: 350 })).json;
+    const licence = (await admin.post("/api/services", { name: "Licence pare-feu annuelle", kind: "recurring_yearly", priceCents: 48000, costCents: 36000, taxable: false })).json;
+    await admin.post("/api/services", { name: "Service retiré", kind: "recurring", priceCents: 100, active: false });
+
+    // the services list of the quotes: active ones only, monthly / yearly as the service is; quotes.view is enough
+    const found = (await admin.get("/api/quotes/services?q=veeam")).json;
+    expect(found).toEqual([expect.objectContaining({ id: backup.id, name: "Sauvegarde Veeam M365", description: "Par utilisateur", recurrence: "monthly", priceCents: 600, costCents: 350, taxable: true })]);
+    expect((await admin.get("/api/quotes/services?q=licence")).json[0]).toMatchObject({ id: licence.id, recurrence: "yearly", taxable: false });
+    expect((await admin.get("/api/quotes/services?q=retir")).json).toEqual([]);
+    expect((await tech.get("/api/quotes/services")).status).toBe(403);
+
+    // a service line, a discounted line; an unknown service or a discount over 100 % is refused
+    expect((await admin.post("/api/quotes", { prospectName: "X", lines: [{ serviceId: "00000000-0000-4000-8000-000000000000", description: "?" }] })).json.error).toBe("service_not_found");
+    expect((await admin.post("/api/quotes", { prospectName: "X", lines: [{ description: "?", discountX100: 10_001 }] })).status).toBe(400);
+    const q = (
+      await admin.post("/api/quotes", {
+        prospectName: "Garage Beaulieu",
+        lines: [
+          { description: "Portable", quantityX100: 200, unitPriceCents: 100000, unitCostCents: 80000, discountX100: 1000 },
+          { serviceId: backup.id, description: backup.name, quantityX100: 1500, unitPriceCents: 600, unitCostCents: 350, recurrence: "monthly" },
+          { serviceId: licence.id, description: licence.name, quantityX100: 100, unitPriceCents: 48000, unitCostCents: 36000, recurrence: "yearly", taxable: false, discountX100: 1250 },
+        ],
+      })
+    ).json;
+    expect(q.lines.map((l: any) => [l.serviceId, l.discountX100])).toEqual([
+      [null, 1000],
+      [backup.id, 0],
+      [licence.id, 1250],
+    ]);
+    // 2 × 1000 $ less 10 % = 1800 $ (margin 1800 − 1600); 15 × 6 $ = 90 $ a month; 480 $ less 12,5 % = 420 $ a year
+    expect(q.totals).toMatchObject({ subtotalCents: 180000, marginCents: 20000, gstCents: 9000 });
+    expect(q.totals.monthly).toMatchObject({ subtotalCents: 9000, marginCents: 9000 - 5250 });
+    expect(q.totals.yearly).toMatchObject({ subtotalCents: 42000, marginCents: 6000, totalCents: 42000 });
+    // the service most quoted comes first next time; a copy keeps the service and the discount
+    expect((await admin.get("/api/quotes/services")).json[0].uses).toBeGreaterThanOrEqual(1);
+    const copy = (await admin.post(`/api/quotes/${q.id}/duplicate`, {})).json;
+    expect(copy.lines[2]).toMatchObject({ serviceId: licence.id, discountX100: 1250 });
+  });
+
   it("serialized products: received by serial number, the ones taken are chosen on the ticket", async () => {
     const admin = await session("admin@akab.local");
     const tech = await session("tech@akab.local");

@@ -2,7 +2,7 @@
 export const QUOTE_RECURRENCES = ["once", "monthly", "yearly"] as const;
 export type QuoteRecurrence = (typeof QUOTE_RECURRENCES)[number];
 
-export type QuoteLineMoney = { quantityX100: number; unitPriceCents: number; unitCostCents?: number; taxable: boolean; optional: boolean; recurrence?: QuoteRecurrence | string };
+export type QuoteLineMoney = { quantityX100: number; unitPriceCents: number; unitCostCents?: number; taxable: boolean; optional: boolean; recurrence?: QuoteRecurrence | string; /** percent ×100 (10 % = 1000) */ discountX100?: number };
 
 export const QUOTE_KINDS = ["standard", "site_visit"] as const;
 export type QuoteKind = (typeof QUOTE_KINDS)[number];
@@ -10,7 +10,14 @@ export type QuoteKind = (typeof QUOTE_KINDS)[number];
 export const QUOTE_STATUSES = ["draft", "sent", "accepted", "declined"] as const;
 export type QuoteStatus = (typeof QUOTE_STATUSES)[number];
 
-export const lineAmount = (l: Pick<QuoteLineMoney, "quantityX100" | "unitPriceCents">) => Math.round((l.quantityX100 * l.unitPriceCents) / 100);
+/** Quantity × unit price, before the discount */
+export const lineGross = (l: Pick<QuoteLineMoney, "quantityX100" | "unitPriceCents">) => Math.round((l.quantityX100 * l.unitPriceCents) / 100);
+/** What the line comes to: quantity × unit price, less its discount (in percent) */
+export const lineAmount = (l: Pick<QuoteLineMoney, "quantityX100" | "unitPriceCents" | "discountX100">) => {
+  const gross = lineGross(l);
+  const d = Math.min(Math.max(l.discountX100 ?? 0, 0), 10_000);
+  return d ? gross - Math.round((gross * d) / 10_000) : gross;
+};
 
 export const recurrenceOf = (l: Pick<QuoteLineMoney, "recurrence">): QuoteRecurrence => (l.recurrence === "monthly" || l.recurrence === "yearly" ? l.recurrence : "once");
 

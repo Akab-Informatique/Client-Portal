@@ -780,6 +780,28 @@ const en: Dict = {
     },
   },
   quotes: {
+    mode: {
+      label: "Display",
+      client: "Client-facing",
+      internal: "Internal",
+      clientHelp: "To show the screen to the client: no cost, no margin, no internal note.",
+      internalHelp: "For you: costs, margins and the Margins tab.",
+    },
+    margins: {
+      tab: "Margins",
+      line: "Line",
+      sold: "Sold",
+      cost: "Cost",
+      margin: "Margin",
+      firstYear: "First year",
+      onSales: "{{pct}} on {{amount}}",
+      discount: "{{pct}} % off",
+      noCost: "no cost entered",
+      options: "Options (not counted)",
+      note: "Margin = sold (after discount, before taxes) less the cost. First year = implementation + 12 months of the monthly lines + the yearly ones. Red: a loss; orange: under 15 %.",
+      empty: "No lines yet",
+      emptyText: "Add devices or services in the Quote tab to see their margins.",
+    },
     recurrence: {
       once: "One time",
       monthly: "Monthly",
@@ -807,6 +829,7 @@ const en: Dict = {
       badge: "Project {{number}}",
     },
     doc: {
+      discount: "{{pct}} % discount (−{{amount}})",
       preparedBy: "Prepared by",
       title: "Quote",
       open: "Preview, print or PDF",
@@ -853,6 +876,9 @@ const en: Dict = {
     status: { draft: "Draft", sent: "Sent", accepted: "Accepted", declined: "Not retained", expired: "Expired" },
     summary: { open: "Pending", accepted: "Accepted", draft: "Drafts" },
     editor: {
+      discount: "Discount (%)",
+      service: "Service",
+      services: "Services",
       preparedBy: "Prepared by",
       preparedByPick: "Pick a technician…",
       preparedByHelp: "Their name is on the printed quote and kept in the history.",
@@ -938,6 +964,7 @@ const en: Dict = {
       by: "By {{name}}",
     },
     errors: {
+      service_not_found: "A service of the quote no longer exists.",
       already_project: "This quote already became a project.",
       project_needs_client: "Pick a CRM client: a prospect cannot have a ticket.",
       project_no_priority: "No ticket priority is available.",

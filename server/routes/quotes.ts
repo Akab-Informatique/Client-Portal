@@ -20,12 +20,15 @@ const text = (max: number) => z.string().trim().max(max).transform((s) => s || n
 
 const zLine = z.object({
   productId: zUuid.nullable().default(null),
+  serviceId: zUuid.nullable().default(null),
   sku: z.string().trim().max(60).transform((s) => s || null).nullable().default(null),
   description: z.string().trim().min(1).max(2000),
   details: text(2000),
   quantityX100: z.number().int().min(1).max(100_000_000).default(100),
   unitPriceCents: zCents.default(0),
   unitCostCents: zCents.default(0),
+  /** percent ×100: 0 to 100 % */
+  discountX100: z.number().int().min(0).max(10_000).default(0),
   taxable: z.boolean().default(true),
   optional: z.boolean().default(false),
   recurrence: z.enum(QUOTE_RECURRENCES).default("once"),
@@ -60,12 +63,20 @@ const needsWho = (p: { clientId: string | null; prospectName: string | null }) =
 };
 
 /** A line keeps the inventory product it came from only while that product exists. */
-async function checkProducts(lines: { productId: string | null }[]) {
+async function checkProducts(lines: { productId: string | null; serviceId: string | null }[]) {
   const ids = [...new Set(lines.map((l) => l.productId).filter((x): x is string => Boolean(x)))];
-  if (!ids.length) return;
-  const rows = await db().select({ id: schema.storeProducts.id }).from(schema.storeProducts).where(inArray(schema.storeProducts.id, ids));
-  const known = new Set(rows.map((r) => r.id));
-  if (ids.some((i) => !known.has(i))) throw new HTTPException(400, { message: "product_not_found" });
+  if (ids.length) {
+    const rows = await db().select({ id: schema.storeProducts.id }).from(schema.storeProducts).where(inArray(schema.storeProducts.id, ids));
+    const known = new Set(rows.map((r) => r.id));
+    if (ids.some((i) => !known.has(i))) throw new HTTPException(400, { message: "product_not_found" });
+  }
+  // the same for a line taken from Inventory › Services
+  const sids = [...new Set(lines.map((l) => l.serviceId).filter((x): x is string => Boolean(x)))];
+  if (sids.length) {
+    const rows = await db().select({ id: schema.services.id }).from(schema.services).where(inArray(schema.services.id, sids));
+    const known = new Set(rows.map((r) => r.id));
+    if (sids.some((i) => !known.has(i))) throw new HTTPException(400, { message: "service_not_found" });
+  }
 }
 
 /** Whoever prepares a quote is an active staff member (the list of the editor). */
@@ -142,6 +153,31 @@ export const quoteRoutes = new Hono<AppEnv>()
         uses: uses.get(p.id) ?? 0,
       }));
     return c.json(shown);
+  })
+
+  /**
+   * The services (Inventory › Services), for adding lines: the active ones, the most quoted first.
+   * A monthly / yearly service becomes a monthly / yearly line. Needs no services right, like the inventory.
+   */
+  .get("/services", async (c) => {
+    const q = (c.req.query("q") ?? "").trim().toLowerCase();
+    const [rows, used] = await Promise.all([
+      db().select().from(schema.services).where(eq(schema.services.active, true)),
+      db()
+        .select({ serviceId: schema.quoteLines.serviceId, n: sql<number>`count(*)::int` })
+        .from(schema.quoteLines)
+        .where(isNotNull(schema.quoteLines.serviceId))
+        .groupBy(schema.quoteLines.serviceId),
+    ]);
+    const uses = new Map(used.map((u) => [u.serviceId, u.n]));
+    const recurrence = (kind: string) => (kind === "recurring" ? "monthly" : kind === "recurring_yearly" ? "yearly" : "once");
+    return c.json(
+      rows
+        .filter((s) => !q || `${s.sku ?? ""} ${s.name} ${s.description}`.toLowerCase().includes(q))
+        .sort((a, b) => (uses.get(b.id) ?? 0) - (uses.get(a.id) ?? 0) || a.name.localeCompare(b.name))
+        .slice(0, 40)
+        .map((s) => ({ id: s.id, sku: s.sku, name: s.name, description: s.description, recurrence: recurrence(s.kind), priceCents: s.priceCents, costCents: s.costCents, taxable: s.taxable, uses: uses.get(s.id) ?? 0 })),
+    );
   })
 
   .get("/:id", async (c) => {
@@ -278,7 +314,7 @@ await audit(a.user.id, "quote.updated", id, { number: cur.number, lines: p.lines
       await saveLines(
         tx,
         row.id,
-        (cur.lines ?? []).map(({ productId, sku, description, details, quantityX100, unitPriceCents, unitCostCents, taxable, optional, recurrence }) => ({ productId, sku, description, details, quantityX100, unitPriceCents, unitCostCents, taxable, optional, recurrence: recurrenceOf({ recurrence }) })),
+        (cur.lines ?? []).map(({ productId, serviceId, sku, description, details, quantityX100, unitPriceCents, unitCostCents, discountX100, taxable, optional, recurrence }) => ({ productId, serviceId, sku, description, details, quantityX100, unitPriceCents, unitCostCents, discountX100, taxable, optional, recurrence: recurrenceOf({ recurrence }) })),
       );
       return row.id;
     });
@@ -327,7 +363,7 @@ await audit(a.user.id, "quote.updated", id, { number: cur.number, lines: p.lines
     const t = quoteTotals(q.lines ?? [], q.taxes, q.rates!);
     const fmt = (cents: number) => new Intl.NumberFormat("fr-CA", { style: "currency", currency: "CAD" }).format(cents / 100);
     const per = { once: "", monthly: " / mois", yearly: " / an" };
-    const bullets = (q.lines ?? []).map((l) => `- ${l.quantityX100 / 100} × ${l.description}${l.sku ? ` (${l.sku})` : ""}${l.optional ? " [option]" : ""}: ${fmt(lineAmount(l))}${per[recurrenceOf(l)]}${l.details ? `\n  ${l.details.replace(/\n/g, "\n  ")}` : ""}`);
+    const bullets = (q.lines ?? []).map((l) => `- ${l.quantityX100 / 100} × ${l.description}${l.sku ? ` (${l.sku})` : ""}${l.optional ? " [option]" : ""}${l.discountX100 ? ` (rabais ${l.discountX100 / 100} %)` : ""}: ${fmt(lineAmount(l))}${per[recurrenceOf(l)]}${l.details ? `\n  ${l.details.replace(/\n/g, "\n  ")}` : ""}`);
     const name = q.title || q.number;
     const description = [
       `Projet issu de la soumission ${q.number}${q.title ? ` « ${q.title} »` : ""} pour ${client.name}.`,

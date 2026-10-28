@@ -2275,12 +2275,16 @@ export const quoteLines = pgTable(
       .references(() => quotes.id, { onDelete: "cascade" }),
     /** The inventory product it came from (null: typed on the spot) */
     productId: uuid("product_id").references(() => storeProducts.id, { onDelete: "set null" }),
+    /** The service it came from (Inventory › Services; null: a product or typed on the spot) */
+    serviceId: uuid("service_id").references(() => services.id, { onDelete: "set null" }),
     sku: text("sku"),
     description: text("description").notNull(),
     /** More about the line, under its name on the sheet (free text) */
     details: text("details"),
     quantityX100: integer("quantity_x100").notNull().default(100),
     unitPriceCents: bigint("unit_price_cents", { mode: "number" }).notNull().default(0),
+    /** Discount on the line in percent ×100 (10 % = 1000), taken off quantity × price */
+    discountX100: integer("discount_x100").notNull().default(0),
     /** once (implementation, paid now) | monthly | yearly: each has its own total */
     recurrence: text("recurrence").notNull().default("once"),
     /** What it costs AKAB, for the margin (internal) */
@@ -2290,7 +2294,7 @@ export const quoteLines = pgTable(
     optional: boolean("optional").notNull().default(false),
     position: integer("position").notNull().default(0),
   },
-  (t) => [index("quote_lines_quote_idx").on(t.quoteId, t.position), index("quote_lines_product_idx").on(t.productId)],
+  (t) => [index("quote_lines_quote_idx").on(t.quoteId, t.position), index("quote_lines_product_idx").on(t.productId), index("quote_lines_service_idx").on(t.serviceId)],
 );
 
 /** A person's Passbolt private key, still protected by their passphrase (sealed again with the portal's secret). The server never has the passphrase. */

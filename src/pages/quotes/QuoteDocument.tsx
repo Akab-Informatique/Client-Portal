@@ -6,9 +6,9 @@ import { LogoPill } from "@/components/brand/Logo";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import { money } from "@/pages/crm/shared";
-import { lineAmount, QUOTE_RECURRENCES, quoteTotals, recurrenceOf, type QuotePart, type QuoteRecurrence } from "@shared/quotes";
+import { lineAmount, lineGross, QUOTE_RECURRENCES, quoteTotals, recurrenceOf, type QuotePart, type QuoteRecurrence } from "@shared/quotes";
 
-export type DocRow = { sku: string; description: string; details: string; recurrence: QuoteRecurrence; quantityX100: number; unitPriceCents: number; taxable: boolean; optional: boolean };
+export type DocRow = { sku: string; description: string; details: string; recurrence: QuoteRecurrence; quantityX100: number; unitPriceCents: number; discountX100?: number; taxable: boolean; optional: boolean };
 export type DocData = {
   number: string;
   title: string;
@@ -30,6 +30,7 @@ export type DocData = {
 
 const longDate = (iso: string) => new Intl.DateTimeFormat(document.documentElement.lang === "en" ? "en-CA" : "fr-CA", { dateStyle: "long" }).format(new Date(`${iso}T12:00:00`));
 const qty = (x: number) => String(x / 100).replace(".", ",");
+const fromPctLabel = (x: number) => String(x / 100).replace(".", ",");
 
 /**
  * The quote as the client reads it: a white sheet (no costs, no margin, no
@@ -179,6 +180,9 @@ function Sheet({ data, kind, rows, className }: { data: DocData; kind: SheetKind
                     <span className="font-medium">{r.description}</span>
                     {r.sku && <span className="ml-2 font-mono text-[11px] text-neutral-500">{r.sku}</span>}
                     {r.details && <p className="whitespace-pre-line text-[12px] text-neutral-600">{r.details}</p>}
+                    {(r.discountX100 ?? 0) > 0 && (
+                      <p className="text-[12px] font-medium text-emerald-700">{t("quotes.doc.discount", { pct: fromPctLabel(r.discountX100!), amount: money(lineGross(r) - lineAmount(r), lang) })}</p>
+                    )}
                   </td>
                   <td className="py-2 text-right tabular-nums">{qty(r.quantityX100)}</td>
                   <td className="py-2 text-right tabular-nums">{money(r.unitPriceCents, lang)}</td>
@@ -214,6 +218,9 @@ function Sheet({ data, kind, rows, className }: { data: DocData; kind: SheetKind
                       {r.description}
                       {r.sku && <span className="ml-2 font-mono text-[11px] text-neutral-500">{r.sku}</span>}
                       {r.details && <p className="whitespace-pre-line text-[12px] text-neutral-600">{r.details}</p>}
+                      {(r.discountX100 ?? 0) > 0 && (
+                        <p className="text-[12px] font-medium text-emerald-700">{t("quotes.doc.discount", { pct: fromPctLabel(r.discountX100!), amount: money(lineGross(r) - lineAmount(r), lang) })}</p>
+                      )}
                     </td>
                     <td className="w-14 py-1.5 text-right tabular-nums">{qty(r.quantityX100)}</td>
                     <td className="w-28 py-1.5 text-right tabular-nums">{money(r.unitPriceCents, lang)}</td>

@@ -3,7 +3,7 @@ import { useTranslation } from "react-i18next";
 import { useNavigate, useParams, useSearchParams } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
-import { ArrowDown, ArrowLeft, ArrowUp, Check, ChevronsUpDown, ClipboardList, Copy, FileSignature, FileText, FolderKanban, Loader2, PackagePlus, Save, Send, Trash2, Undo2, X } from "lucide-react";
+import { ArrowDown, ArrowLeft, ArrowUp, Check, ChevronsUpDown, ClipboardList, Copy, Eye, FileSignature, FileText, FolderKanban, Loader2, Lock, PackagePlus, Save, Send, Trash2, Undo2, X } from "lucide-react";
 import { GlassBackdrop } from "@/components/brand/GlassBackdrop";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
@@ -20,15 +20,16 @@ import { useCan, useMe } from "@/lib/session";
 import { cn } from "@/lib/utils";
 import { money } from "@/pages/crm/shared";
 import { longDateTime } from "@/pages/tickets/shared";
-import { QUOTE_RECURRENCES, quoteTotals, recurrenceOf, type QuoteKind, type QuoteRecurrence } from "@shared/quotes";
+import { lineAmount, lineGross, QUOTE_RECURRENCES, quoteTotals, recurrenceOf, type QuoteKind, type QuoteRecurrence } from "@shared/quotes";
 import { SurveyPanel } from "./SurveyPanel";
 import { QuoteDocument, type DocData } from "./QuoteDocument";
 import { useToProject } from "./useToProject";
 import { LineAdder } from "./LineAdder";
-import { fromCents, fromQty, parseNum, STATUS_STYLE, toCents, toQtyX100, useQuoteClients, useQuoteStaff, type Quote, type QuoteProduct } from "./shared";
+import { MarginsPanel } from "./Margins";
+import { fromCents, fromPct, fromQty, parseNum, STATUS_STYLE, toCents, toPct, toQtyX100, useQuoteClients, useQuoteStaff, type Quote, type QuoteProduct, type QuoteService } from "./shared";
 
 /** A line as it is typed: numbers stay text until saved, so "12," and "1 299" can be written. */
-type Row = { key: string; id?: string; productId: string | null; sku: string; description: string; details: string; recurrence: QuoteRecurrence; qty: string; unit: string; cost: string; taxable: boolean; optional: boolean };
+type Row = { key: string; id?: string; productId: string | null; serviceId: string | null; discount: string; sku: string; description: string; details: string; recurrence: QuoteRecurrence; qty: string; unit: string; cost: string; taxable: boolean; optional: boolean };
 
 type Form = {
   preparedById: string | null;
@@ -68,7 +69,7 @@ const fromQuote = (q: Quote): Form => ({
   taxes: q.taxes,
   notes: q.notes ?? "",
   internalNotes: q.internalNotes ?? "",
-  rows: q.lines.map((l) => ({ key: key(), id: l.id, productId: l.productId, sku: l.sku ?? "", description: l.description, details: l.details ?? "", recurrence: recurrenceOf(l), qty: fromQty(l.quantityX100), unit: fromCents(l.unitPriceCents), cost: fromCents(l.unitCostCents), taxable: l.taxable, optional: l.optional })),
+  rows: q.lines.map((l) => ({ key: key(), id: l.id, productId: l.productId, serviceId: l.serviceId, discount: fromPct(l.discountX100), sku: l.sku ?? "", description: l.description, details: l.details ?? "", recurrence: recurrenceOf(l), qty: fromQty(l.quantityX100), unit: fromCents(l.unitPriceCents), cost: fromCents(l.unitCostCents), taxable: l.taxable, optional: l.optional })),
 });
 
 const payload = (f: Form) => ({
@@ -85,10 +86,10 @@ const payload = (f: Form) => ({
   taxes: f.taxes,
   notes: f.notes.trim() || null,
   internalNotes: f.internalNotes.trim() || null,
-  lines: f.rows.map((r) => ({ productId: r.productId, sku: r.sku.trim() || null, description: r.description.trim() || "-", details: r.details.trim() || null, recurrence: r.recurrence, quantityX100: toQtyX100(r.qty), unitPriceCents: toCents(r.unit), unitCostCents: toCents(r.cost), taxable: r.taxable, optional: r.optional })),
+  lines: f.rows.map((r) => ({ productId: r.productId, serviceId: r.serviceId, discountX100: toPct(r.discount), sku: r.sku.trim() || null, description: r.description.trim() || "-", details: r.details.trim() || null, recurrence: r.recurrence, quantityX100: toQtyX100(r.qty), unitPriceCents: toCents(r.unit), unitCostCents: toCents(r.cost), taxable: r.taxable, optional: r.optional })),
 });
 
-const rowMoney = (r: Row) => ({ quantityX100: toQtyX100(r.qty), unitPriceCents: toCents(r.unit), unitCostCents: toCents(r.cost), taxable: r.taxable, optional: r.optional, recurrence: r.recurrence });
+const rowMoney = (r: Row) => ({ quantityX100: toQtyX100(r.qty), unitPriceCents: toCents(r.unit), unitCostCents: toCents(r.cost), discountX100: toPct(r.discount), taxable: r.taxable, optional: r.optional, recurrence: r.recurrence });
 
 function errorText(t: (k: string, o?: Record<string, unknown>) => string, e: unknown) {
   if (e instanceof ApiError) return t(`quotes.errors.${e.code}`, { defaultValue: t("common.error") });
@@ -111,14 +112,27 @@ export function QuoteEditor() {
   const staff = useQuoteStaff();
   const [form, setForm] = useState<Form>(() => blank(startKind, me.id));
   const [saved, setSaved] = useState<string>(() => JSON.stringify(payload(blank(startKind, me.id))));
-  const [tab, setTab] = useState<"survey" | "quote">("quote");
-  const [showCosts, setShowCosts] = useState(() => {
+  const [tab, setTab] = useState<"survey" | "quote" | "margins">("quote");
+  // "Face au client": no cost, margin or internal note on screen; "Interne": costs, margins and the Marges tab (remembered on this browser)
+  const [mode, setModeState] = useState<"client" | "internal">(() => {
     try {
-      return localStorage.getItem("akab.quotes.costs") === "1";
+      return localStorage.getItem("akab.quotes.mode") === "internal" ? "internal" : "client";
     } catch {
-      return false;
+      return "client";
     }
   });
+  const setMode = (m: "client" | "internal") => {
+    setModeState(m);
+    if (m === "client" && tab === "margins") setTab("quote");
+    try {
+      localStorage.setItem("akab.quotes.mode", m);
+    } catch {
+      /* the choice just is not remembered */
+    }
+  };
+  const internal = mode === "internal";
+  const tabs = [...(form.kind === "site_visit" ? (["survey", "quote"] as const) : []), ...(internal ? (form.kind === "site_visit" ? (["margins"] as const) : (["quote", "margins"] as const)) : [])];
+  const shownTab = tab === "margins" && !internal ? "quote" : tab;
   const [toInventory, setToInventory] = useState<Row | null>(null);
   const [preview, setPreview] = useState(false);
   const project = useToProject();
@@ -162,9 +176,16 @@ export function QuoteEditor() {
       // the same product again adds one to its line
       const same = f.rows.find((r) => r.productId === p.id && !r.optional && r.recurrence === "once");
       if (same) return { ...f, rows: f.rows.map((r) => (r === same ? { ...r, qty: String(parseNum(r.qty) + 1).replace(".", ",") } : r)) };
-      return { ...f, rows: [...f.rows, { key: key(), productId: p.id, sku: p.sku ?? "", description: p.name, details: p.description?.trim() ?? "", recurrence: "once", qty: "1", unit: fromCents(p.priceCents), cost: fromCents(p.costCents), taxable: true, optional: false }] };
+      return { ...f, rows: [...f.rows, { key: key(), productId: p.id, serviceId: null, discount: "0", sku: p.sku ?? "", description: p.name, details: p.description?.trim() ?? "", recurrence: "once", qty: "1", unit: fromCents(p.priceCents), cost: fromCents(p.costCents), taxable: true, optional: false }] };
     });
-  const addFree = (text: string) => setForm((f) => ({ ...f, rows: [...f.rows, { key: key(), productId: null, sku: "", description: text, details: "", recurrence: "once", qty: "1", unit: "0,00", cost: "0,00", taxable: true, optional: false }] }));
+  const addFree = (text: string) => setForm((f) => ({ ...f, rows: [...f.rows, { key: key(), productId: null, serviceId: null, discount: "0", sku: "", description: text, details: "", recurrence: "once", qty: "1", unit: "0,00", cost: "0,00", taxable: true, optional: false }] }));
+  // a service of Inventory › Services: monthly / yearly as the service is, its price, cost, taxes and description
+  const addService = (s: QuoteService) =>
+    setForm((f) => {
+      const same = f.rows.find((r) => r.serviceId === s.id && !r.optional);
+      if (same) return { ...f, rows: f.rows.map((r) => (r === same ? { ...r, qty: String(parseNum(r.qty) + 1).replace(".", ",") } : r)) };
+      return { ...f, rows: [...f.rows, { key: key(), productId: null, serviceId: s.id, discount: "0", sku: s.sku ?? "", description: s.name, details: s.description?.trim() ?? "", recurrence: s.recurrence, qty: "1", unit: fromCents(s.priceCents), cost: fromCents(s.costCents), taxable: s.taxable, optional: false }] };
+    });
   const move = (k: string, d: -1 | 1) =>
     setForm((f) => {
       const i = f.rows.findIndex((r) => r.key === k);
@@ -285,28 +306,47 @@ export function QuoteEditor() {
             </p>
           )}
         </div>
-        {dirty && !locked && <span className="rounded-full border border-amber-500/40 bg-amber-500/10 px-3 py-1 text-xs text-amber-300">{t("quotes.editor.unsaved")}</span>}
+        <div className="flex flex-wrap items-center gap-3">
+          {dirty && !locked && <span className="rounded-full border border-amber-500/40 bg-amber-500/10 px-3 py-1 text-xs text-amber-300">{t("quotes.editor.unsaved")}</span>}
+          <div role="radiogroup" aria-label={t("quotes.mode.label")} className="glass inline-flex rounded-xl border p-1">
+            {(["client", "internal"] as const).map((m) => (
+              <button
+                key={m}
+                type="button"
+                role="radio"
+                aria-checked={mode === m}
+                title={t(`quotes.mode.${m}Help`)}
+                onClick={() => setMode(m)}
+                className={cn("inline-flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-sm font-medium transition-colors", mode === m ? "bg-[color:var(--gold)]/15 text-foreground" : "text-muted-foreground hover:text-foreground")}
+              >
+                {m === "client" ? <Eye className="size-4" /> : <Lock className="size-4" />}
+                {t(`quotes.mode.${m}`)}
+              </button>
+            ))}
+          </div>
+        </div>
       </div>
 
       {!isNew && locked && manage && <p className="rounded-xl border border-amber-500/30 bg-amber-500/10 px-4 py-3 text-sm text-amber-200">{t("quotes.editor.locked", { status: t(`quotes.status.${status}`).toLowerCase() })}</p>}
 
       <div className="grid items-start gap-6 xl:grid-cols-[minmax(0,1fr)_22rem]">
         <div className="min-w-0 space-y-4">
-        {form.kind === "site_visit" && (
+        {tabs.length > 1 && (
           <div role="tablist" className="glass inline-flex rounded-xl border p-1">
-            {(["survey", "quote"] as const).map((k) => (
-              <button key={k} type="button" role="tab" aria-selected={tab === k} onClick={() => setTab(k)} className={cn("rounded-lg px-4 py-1.5 text-sm font-medium transition-colors", tab === k ? "bg-[color:var(--gold)]/15 text-foreground" : "text-muted-foreground hover:text-foreground")}>
-                {t(`quotes.survey.tab.${k}`)}
+            {tabs.map((k) => (
+              <button key={k} type="button" role="tab" aria-selected={shownTab === k} onClick={() => setTab(k)} className={cn("rounded-lg px-4 py-1.5 text-sm font-medium transition-colors", shownTab === k ? "bg-[color:var(--gold)]/15 text-foreground" : "text-muted-foreground hover:text-foreground")}>
+                {k === "margins" ? t("quotes.margins.tab") : t(`quotes.survey.tab.${k}`)}
               </button>
             ))}
           </div>
         )}
         {form.kind === "site_visit" && (
-          <div className={cn(tab !== "survey" && "hidden")}>
+          <div className={cn(shownTab !== "survey" && "hidden")}>
             <SurveyPanel answers={form.survey} onChange={setAnswer} disabled={locked} />
           </div>
         )}
-        <fieldset disabled={locked} className={cn("min-w-0 space-y-6", form.kind === "site_visit" && tab === "survey" && "hidden")}>
+        {internal && shownTab === "margins" && <MarginsPanel rows={form.rows.map((r) => ({ key: r.key, name: r.description, ...rowMoney(r) }))} totals={totals} />}
+        <fieldset disabled={locked} className={cn("min-w-0 space-y-6", shownTab !== "quote" && "hidden")}>
           <section className="glass space-y-4 rounded-2xl border p-5">
             <h2 className="text-lg font-semibold">{t("quotes.editor.who")}</h2>
             <div className="grid gap-4 md:grid-cols-2">
@@ -359,22 +399,9 @@ export function QuoteEditor() {
           </section>
 
           <section className="glass space-y-4 rounded-2xl border p-5">
-            <div className="flex flex-wrap items-center justify-between gap-3">
-              <h2 className="text-lg font-semibold">{t("quotes.editor.linesTitle")}</h2>
-              <label className="flex cursor-pointer items-center gap-2 text-sm text-muted-foreground">
-                <Switch checked={showCosts} onCheckedChange={(v) => {
-                  setShowCosts(v);
-                  try {
-                    localStorage.setItem("akab.quotes.costs", v ? "1" : "0");
-                  } catch {
-                    /* the choice just is not remembered */
-                  }
-                }} />
-                {t("quotes.editor.showCosts")}
-              </label>
-            </div>
+            <h2 className="text-lg font-semibold">{t("quotes.editor.linesTitle")}</h2>
 
-            {!locked && <LineAdder onProduct={addProduct} onFree={addFree} />}
+            {!locked && <LineAdder onProduct={addProduct} onService={addService} onFree={addFree} />}
 
             {form.rows.length === 0 ? (
               <div className="rounded-xl border border-dashed px-6 py-10 text-center">
@@ -384,10 +411,12 @@ export function QuoteEditor() {
             ) : (
               <ul className="divide-y">
                 {form.rows.map((r, i) => {
-                  const amount = Math.round((toQtyX100(r.qty) * toCents(r.unit)) / 100);
+                  const m = rowMoney(r);
+                  const amount = lineAmount(m);
+                  const gross = lineGross(m);
                   return (
-                    <li key={r.key} className={cn("grid gap-x-3 gap-y-2 py-3 md:grid-cols-[minmax(0,1fr)_4.5rem_7.5rem_8rem]", showCosts && "md:grid-cols-[minmax(0,1fr)_4.5rem_7.5rem_7rem_8rem]")}>
-                      <div className="min-w-0 space-y-1.5 md:col-span-1">
+                    <li key={r.key} className="space-y-2.5 py-4">
+                      <div className="min-w-0 space-y-1.5">
                         <Input aria-label={t("quotes.editor.item")} value={r.description} onChange={(e) => setRow(r.key, { description: e.target.value })} className="h-9 bg-background/40 font-medium" />
                         <Textarea
                           aria-label={t("quotes.editor.details")}
@@ -399,7 +428,12 @@ export function QuoteEditor() {
                           className="min-h-9 resize-none bg-background/40 py-1.5 text-sm"
                         />
                         <div className="flex flex-wrap items-center gap-1.5 text-xs">
-                          {r.productId ? (
+                          {r.serviceId ? (
+                            <span className="rounded-md border border-sky-500/40 bg-sky-500/10 px-1.5 py-0.5 text-sky-300">
+                              {t("quotes.editor.service")}
+                              {r.sku && <span className="ml-1 font-mono">{r.sku}</span>}
+                            </span>
+                          ) : r.productId ? (
                             <span className="rounded-md border px-1.5 py-0.5 font-mono text-muted-foreground">{r.sku || t("quotes.editor.fromInventory")}</span>
                           ) : (
                             <span className="rounded-md border border-dashed px-1.5 py-0.5 text-muted-foreground">{t("quotes.editor.freeLine")}</span>
@@ -420,7 +454,7 @@ export function QuoteEditor() {
                           </div>
                           <Chip on={r.taxable} onClick={() => setRow(r.key, { taxable: !r.taxable })} label={t("quotes.editor.taxable")} />
                           <Chip on={r.optional} onClick={() => setRow(r.key, { optional: !r.optional })} label={t("quotes.editor.optional")} title={t("quotes.editor.optionalHelp")} />
-                          {!r.productId && manage && can("store.manage") && (
+                          {!r.productId && !r.serviceId && manage && can("store.manage") && (
                             <button type="button" className="inline-flex items-center gap-1 rounded-md px-1.5 py-0.5 text-primary hover:bg-primary/10" onClick={() => (r.id ? setToInventory(r) : toast.info(t("quotes.editor.saveFirst")))}>
                               <PackagePlus className="size-3.5" /> {t("quotes.editor.toInventory")}
                             </button>
@@ -440,13 +474,20 @@ export function QuoteEditor() {
                           )}
                         </div>
                       </div>
-                      <NumField label={t("quotes.editor.qty")} value={r.qty} onChange={(v) => setRow(r.key, { qty: v })} />
-                      <NumField label={t("quotes.editor.unit")} value={r.unit} onChange={(v) => setRow(r.key, { unit: v })} money />
-                      {showCosts && <NumField label={t("quotes.editor.cost")} value={r.cost} onChange={(v) => setRow(r.key, { cost: v })} money />}
-                      <div className="text-right">
-                        <p className="text-xs text-muted-foreground md:hidden">{t("quotes.editor.amount")}</p>
-                        <p className={cn("whitespace-nowrap pt-1.5 text-sm font-semibold tabular-nums", r.optional && "text-muted-foreground line-through decoration-1")}>{money(amount, i18n.language)}</p>
-                        {r.recurrence !== "once" && <p className="text-xs text-muted-foreground">{t(`quotes.recurrence.per.${r.recurrence}`)}</p>}
+                      {/* the figures on their own row, under the name and description (which keep the full width) */}
+                      <div className={cn("grid grid-cols-2 items-end gap-2 sm:grid-cols-[5rem_8rem_6rem_minmax(0,1fr)]", internal && "sm:grid-cols-[5rem_8rem_6rem_8rem_minmax(0,1fr)]")}>
+                        <NumField label={t("quotes.editor.qty")} value={r.qty} onChange={(v) => setRow(r.key, { qty: v })} />
+                        <NumField label={t("quotes.editor.unit")} value={r.unit} onChange={(v) => setRow(r.key, { unit: v })} money />
+                        <NumField label={t("quotes.editor.discount")} value={r.discount} onChange={(v) => setRow(r.key, { discount: v })} suffix="%" />
+                        {internal && <NumField label={t("quotes.editor.cost")} value={r.cost} onChange={(v) => setRow(r.key, { cost: v })} money />}
+                        <div className="text-right">
+                          <p className="text-xs text-muted-foreground">{t("quotes.editor.amount")}</p>
+                          <p className="flex h-9 items-center justify-end gap-2 whitespace-nowrap tabular-nums">
+                            {gross !== amount && <span className="text-xs text-muted-foreground line-through decoration-1">{money(gross, i18n.language)}</span>}
+                            <span className={cn("text-sm font-semibold", r.optional && "text-muted-foreground line-through decoration-1")}>{money(amount, i18n.language)}</span>
+                            {r.recurrence !== "once" && <span className="text-xs text-muted-foreground">{t(`quotes.recurrence.per.${r.recurrence}`)}</span>}
+                          </p>
+                        </div>
                       </div>
                     </li>
                   );
@@ -455,16 +496,18 @@ export function QuoteEditor() {
             )}
           </section>
 
-          <section className="glass grid gap-4 rounded-2xl border p-5 md:grid-cols-2">
+          <section className={cn("glass grid gap-4 rounded-2xl border p-5", internal && "md:grid-cols-2")}>
             <div className="space-y-1.5">
               <Label htmlFor="q-notes">{t("quotes.editor.notes")}</Label>
               <Textarea id="q-notes" rows={5} value={form.notes} onChange={(e) => set("notes", e.target.value)} placeholder={t("quotes.editor.notesPlaceholder")} className="bg-background/40" />
             </div>
-            <div className="space-y-1.5">
-              <Label htmlFor="q-internal">{t("quotes.editor.internalNotes")}</Label>
-              <Textarea id="q-internal" rows={5} value={form.internalNotes} onChange={(e) => set("internalNotes", e.target.value)} className="bg-background/40" />
-              <p className="text-xs text-muted-foreground">{t("quotes.editor.internalHelp")}</p>
-            </div>
+            {internal && (
+              <div className="space-y-1.5">
+                <Label htmlFor="q-internal">{t("quotes.editor.internalNotes")}</Label>
+                <Textarea id="q-internal" rows={5} value={form.internalNotes} onChange={(e) => set("internalNotes", e.target.value)} className="bg-background/40" />
+                <p className="text-xs text-muted-foreground">{t("quotes.editor.internalHelp")}</p>
+              </div>
+            )}
           </section>
         </fieldset>
         </div>
@@ -491,14 +534,14 @@ export function QuoteEditor() {
                       <span className="text-xs text-muted-foreground"> {t(`quotes.recurrence.per.${k}`)}</span>
                       <span className="block text-xs text-muted-foreground tabular-nums">
                         {form.taxes ? t("quotes.recurrence.beforeTaxes", { amount: money(totals[k].subtotalCents, i18n.language) }) : null}
-                        {showCosts ? `${form.taxes ? "  ·  " : ""}${t("quotes.editor.margin")} ${money(totals[k].marginCents, i18n.language)}` : null}
+                        {internal ? `${form.taxes ? "  ·  " : ""}${t("quotes.editor.margin")} ${money(totals[k].marginCents, i18n.language)}` : null}
                       </span>
                     </dd>
                   </div>
                 ) : null,
               )}
               {totals.optionalCents > 0 && <Total label={t("quotes.editor.optionalTotal")} value={money(totals.optionalCents, i18n.language)} muted />}
-              {showCosts && (
+              {internal && (
                 <div className="flex items-baseline justify-between border-t pt-2.5">
                   <dt className="text-muted-foreground">{t("quotes.editor.margin")}</dt>
                   <dd className="text-right tabular-nums">
@@ -585,13 +628,14 @@ function Chip({ on, onClick, label, title }: { on: boolean; onClick: () => void;
   );
 }
 
-function NumField({ label, value, onChange, money: isMoney }: { label: string; value: string; onChange: (v: string) => void; money?: boolean }) {
+function NumField({ label, value, onChange, money: isMoney, suffix }: { label: string; value: string; onChange: (v: string) => void; money?: boolean; suffix?: string }) {
+  const unit = isMoney ? "$" : suffix;
   return (
     <div>
-      <Label className="text-xs text-muted-foreground md:sr-only">{label}</Label>
+      <Label className="mb-1 block text-xs text-muted-foreground">{label}</Label>
       <div className="relative">
-        <Input inputMode="decimal" aria-label={label} value={value} onChange={(e) => onChange(e.target.value)} onFocus={(e) => e.currentTarget.select()} className={cn("h-9 bg-background/40 text-right tabular-nums", isMoney && "pr-6")} />
-        {isMoney && <span className="pointer-events-none absolute right-2.5 top-1/2 -translate-y-1/2 text-xs text-muted-foreground">$</span>}
+        <Input inputMode="decimal" aria-label={label} title={label} value={value} onChange={(e) => onChange(e.target.value)} onFocus={(e) => e.currentTarget.select()} className={cn("h-9 bg-background/40 text-right tabular-nums", unit && "pr-6")} />
+        {unit && <span className="pointer-events-none absolute right-2.5 top-1/2 -translate-y-1/2 text-xs text-muted-foreground">{unit}</span>}
       </div>
     </div>
   );

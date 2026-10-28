@@ -785,6 +785,13 @@
       "when": 1793210006321,
       "tag": "0111_bored_tarot",
       "breakpoints": true
+    },
+    {
+      "idx": 112,
+      "version": "7",
+      "when": 1793212702524,
+      "tag": "0112_stiff_havok",
+      "breakpoints": true
     }
   ]
 }

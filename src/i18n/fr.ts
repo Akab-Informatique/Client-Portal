@@ -778,6 +778,28 @@ const fr = {
     },
   },
   quotes: {
+    mode: {
+      label: "Affichage",
+      client: "Face au client",
+      internal: "Interne",
+      clientHelp: "Pour montrer l'écran au client : aucun coût, aucune marge, aucune note interne.",
+      internalHelp: "Pour vous : coûts, marges et l'onglet Marges.",
+    },
+    margins: {
+      tab: "Marges",
+      line: "Ligne",
+      sold: "Vendu",
+      cost: "Coût",
+      margin: "Marge",
+      firstYear: "Première année",
+      onSales: "{{pct}} sur {{amount}}",
+      discount: "rabais {{pct}} %",
+      noCost: "aucun coût saisi",
+      options: "Options (non comptées)",
+      note: "Marge = vendu (après rabais, avant taxes) moins le coût. Première année = implantation + 12 mois du mensuel + l'annuel. En rouge : perte ; en orange : sous 15 %.",
+      empty: "Aucune ligne pour l'instant",
+      emptyText: "Ajoutez des appareils ou des services dans l'onglet Soumission pour voir leurs marges.",
+    },
     recurrence: {
       once: "Unique",
       monthly: "Mensuel",
@@ -805,6 +827,7 @@ const fr = {
       badge: "Projet {{number}}",
     },
     doc: {
+      discount: "Rabais {{pct}} % (−{{amount}})",
       preparedBy: "Préparé par",
       title: "Soumission",
       open: "Aperçu, imprimer ou PDF",
@@ -851,6 +874,9 @@ const fr = {
     status: { draft: "Brouillon", sent: "Envoyée", accepted: "Acceptée", declined: "Non retenue", expired: "Expirée" },
     summary: { open: "En attente", accepted: "Acceptées", draft: "Brouillons" },
     editor: {
+      discount: "Rabais (%)",
+      service: "Service",
+      services: "Services",
       preparedBy: "Préparé par",
       preparedByPick: "Choisir un technicien…",
       preparedByHelp: "Son nom est sur la soumission imprimée et gardé dans l'historique.",
@@ -936,6 +962,7 @@ const fr = {
       by: "Par {{name}}",
     },
     errors: {
+      service_not_found: "Un service de la soumission n'existe plus.",
       already_project: "Cette soumission est déjà devenue un projet.",
       project_needs_client: "Choisissez un client du CRM : un prospect ne peut pas avoir de billet.",
       project_no_priority: "Aucune priorité de billet n'est disponible.",
