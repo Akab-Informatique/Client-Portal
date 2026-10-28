@@ -7827,19 +7827,24 @@ describe("contracts: services when made, charges, activity, stop instead of dele
       expect((await admin.post(`/api/crm/invoices/${made.id}/quickbooks`)).json).toMatchObject({ quickbooksId: "810" });
       const sent = calls.find((c) => c.url.includes("/invoice?"))!.body.Line;
       expect(sent.map((l: any) => l.SalesItemLineDetail.ItemRef.value).sort()).toEqual(["21", "322"]);
-      // a line with no service and no default item (labour): it goes on the general "Services" item, made in QuickBooks the first time
+      // a line with no service and no default item (labour): its item is "Main-d'œuvre", made in QuickBooks the first time — when the invoice is made, never an error
       calls.length = 0;
       const bad = (await admin.post("/api/billables/invoice", { clientId: client!.id, itemIds: [l3.id] })).json;
+      expect(calls.find((c) => c.url.includes("/item?"))!.body).toMatchObject({ Name: "Main-d'œuvre", Type: "Service" });
+      const badLines = await db().select().from(schema.invoiceLines).where(eq(schema.invoiceLines.invoiceId, bad.id));
+      expect(badLines[0].qbItemId).toEqual(expect.any(String));
+      calls.length = 0;
       const general = (await admin.post(`/api/crm/invoices/${bad.id}/quickbooks`)).json;
       expect(general.error).toBeUndefined();
       expect(general.quickbooksId).toEqual(expect.any(String));
-      expect(calls.find((c) => c.url.includes("/item?"))!.body).toMatchObject({ Name: "Services", Type: "Service" });
       const sentGeneral = calls.find((c) => c.url.includes("/invoice?"))!.body.Line;
       expect(sentGeneral).toHaveLength(1);
-      expect(sentGeneral[0].SalesItemLineDetail.ItemRef.value).toEqual(expect.any(String));
-      // sent again: the same item, nothing made twice
+      expect(sentGeneral[0].SalesItemLineDetail.ItemRef.value).toBe(badLines[0].qbItemId);
+      // the same kind of line again: the same item, nothing made twice
+      const l4 = await mk(4, "ptime:test-no-service-2", "labour", "Heures de plus", 100, 9000);
       calls.length = 0;
-      await admin.post(`/api/crm/invoices/${bad.id}/quickbooks`);
+      const again = (await admin.post("/api/billables/invoice", { clientId: client!.id, itemIds: [l4.id] })).json;
+      expect(again.id).toBeTruthy();
       expect(calls.filter((c) => c.url.includes("/item?"))).toHaveLength(0);
     } finally {
       vi.unstubAllGlobals();

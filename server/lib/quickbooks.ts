@@ -399,7 +399,7 @@ export async function autoTaxCodes(): Promise<{ taxable: string | null; exempt: 
  * (a Service item on the income account of the default charges account), and kept in our copy of the items.
  * One that already exists (same name) is used, never doubled.
  */
-export async function createQbItem(p: { name: string; sku?: string | null; priceCents?: number | null }): Promise<{ id: string; name: string; created: boolean }> {
+export async function createQbItem(p: { name: string; sku?: string | null; priceCents?: number | null; /** false: no one-time service made in the portal for it (a product, an expense type) */ portalService?: boolean }): Promise<{ id: string; name: string; created: boolean }> {
   const d = db();
   const name = p.name.replace(/[:\t\n]/g, " ").replace(/\s+/g, " ").trim().slice(0, 100);
   if (!name) throw new QuickBooksError("api", "name");
@@ -429,6 +429,7 @@ export async function createQbItem(p: { name: string; sku?: string | null; price
       qbId = again.Id;
     }
   }
+  if (p.portalService === false) return { id: qbId, name, created };
   // the same item in the portal's services (no doubles by name)
   const [svc] = await d.select({ id: schema.services.id, q: schema.services.quickbooksItemId }).from(schema.services).where(ilike(schema.services.name, name)).limit(1);
   if (!svc) await d.insert(schema.services).values({ name, kind: "one_time", priceCents: p.priceCents ?? 0, sku: sku && !(await d.select({ id: schema.services.id }).from(schema.services).where(eq(schema.services.sku, sku)).limit(1)).length ? sku : null, quickbooksItemId: qbId });
@@ -442,7 +443,7 @@ export async function createQbItem(p: { name: string; sku?: string | null; price
  * (a charge). A line with no service or product gets none here (the invoice's or the default item is used). Nothing
  * happens when QuickBooks is not connected. Returns billing item id → QuickBooks item id.
  */
-export async function qbItemsForBillingItems(items: { id: string; sourceId: string | null; description?: string }[]): Promise<Map<string, string>> {
+export async function qbItemsForBillingItems(items: { id: string; sourceId: string | null; kind?: string | null; description?: string }[], opts: { /** false: an item is already chosen for the invoice (or a default is set): a line with no service or product leaves it be */ kindFallback?: boolean } = {}): Promise<Map<string, string>> {
   const out = new Map<string, string>();
   const s = await quickbooksSettings();
   if (!s.refreshToken || !s.realmId || !items.length) return out;
@@ -452,33 +453,47 @@ export async function qbItemsForBillingItems(items: { id: string; sourceId: stri
   const copy = await d.select().from(schema.quickbooksItems).where(and(eq(schema.quickbooksItems.active, true), inArray(schema.quickbooksItems.type, ["Service", "NonInventory", "Inventory"])));
   const byName = new Map(copy.map((i) => [norm(i.name), i.quickbooksId]));
   const bySku = new Map(copy.filter((i) => i.sku).map((i) => [skuKey(i.sku), i.quickbooksId]));
+  /** The item named so: the one QuickBooks has, else made (never an error, never doubled) */
+  const named = async (name: string, extra: { sku?: string | null; priceCents?: number | null; portalService?: boolean } = {}) => {
+    const have = byName.get(norm(name)) ?? (extra.sku ? bySku.get(skuKey(extra.sku)) : undefined);
+    if (have) return have;
+    const made = await createQbItem({ name, ...extra });
+    byName.set(norm(made.name), made.id);
+    return made.id;
+  };
+  // what a line is called in QuickBooks when no service or product names it: by kind of work
+  const KIND_NAME: Record<string, string> = { labour: "Main-d'œuvre", charge: "Matériel", expense: "Dépenses", contract: "Services récurrents", milestone: "Projets", project: "Projets" };
   for (const it of items) {
     try {
       const src = it.sourceId ?? "";
-      // a recurring contract line: its service
+      let id: string | null = null;
       if (src.startsWith("contract:")) {
+        // a recurring contract line: its service
         const serviceRowId = src.split(":")[2];
         const [row] = serviceRowId ? await d.select().from(schema.contractServices).where(eq(schema.contractServices.id, serviceRowId)) : [];
-        if (!row) continue;
-        const [svc] = row.serviceId ? await d.select().from(schema.services).where(eq(schema.services.id, row.serviceId)) : [];
-        let id = svc?.quickbooksItemId ?? bySku.get(skuKey(svc?.sku)) ?? byName.get(norm(row.name)) ?? null;
-        if (!id) id = (await createQbItem({ name: row.name, sku: svc?.sku ?? null, priceCents: row.priceCents })).id;
-        if (svc && svc.quickbooksItemId !== id) await d.update(schema.services).set({ quickbooksItemId: id, updatedAt: new Date() }).where(eq(schema.services.id, svc.id));
-        out.set(it.id, id);
-        continue;
-      }
-      // a charge on a ticket: its inventory product
-      if (src.startsWith("pcharge:")) {
-        const [charge] = await d.select({ productId: schema.ticketCharges.productId }).from(schema.ticketCharges).where(eq(schema.ticketCharges.id, src.slice("pcharge:".length)));
-        if (!charge?.productId || !/^[0-9a-f-]{36}$/.test(charge.productId)) continue;
-        const [p] = await d.select().from(schema.storeProducts).where(eq(schema.storeProducts.id, charge.productId));
-        if (!p) continue;
-        const id = p.quickbooksItemId ?? bySku.get(skuKey(p.sku)) ?? null;
-        if (id) {
-          if (p.quickbooksItemId !== id) await d.update(schema.storeProducts).set({ quickbooksItemId: id, updatedAt: new Date() }).where(eq(schema.storeProducts.id, p.id));
-          out.set(it.id, id);
+        if (row) {
+          const [svc] = row.serviceId ? await d.select().from(schema.services).where(eq(schema.services.id, row.serviceId)) : [];
+          id = svc?.quickbooksItemId ?? bySku.get(skuKey(svc?.sku)) ?? byName.get(norm(row.name)) ?? null;
+          if (!id) id = await named(row.name, { sku: svc?.sku ?? null, priceCents: row.priceCents });
+          if (svc && svc.quickbooksItemId !== id) await d.update(schema.services).set({ quickbooksItemId: id, updatedAt: new Date() }).where(eq(schema.services.id, svc.id));
         }
+      } else if (src.startsWith("pcharge:")) {
+        // a charge on a ticket: its inventory product (made in QuickBooks with the product's name and SKU when missing), else the charge's own name
+        const [charge] = await d.select({ productId: schema.ticketCharges.productId, name: schema.ticketCharges.name }).from(schema.ticketCharges).where(eq(schema.ticketCharges.id, src.slice("pcharge:".length)));
+        const [p] = charge?.productId && /^[0-9a-f-]{36}$/.test(charge.productId) ? await d.select().from(schema.storeProducts).where(eq(schema.storeProducts.id, charge.productId)) : [];
+        if (p) {
+          id = p.quickbooksItemId ?? bySku.get(skuKey(p.sku)) ?? byName.get(norm(p.name)) ?? null;
+          if (!id) id = await named(p.name, { sku: p.sku, priceCents: p.priceCents, portalService: false });
+          if (p.quickbooksItemId !== id) await d.update(schema.storeProducts).set({ quickbooksItemId: id, updatedAt: new Date() }).where(eq(schema.storeProducts.id, p.id));
+        } else if (charge?.name) id = await named(charge.name, { portalService: false });
+      } else if (src.startsWith("expense:")) {
+        // an expense billed back: its expense type ("Stationnement", "Kilométrage"…)
+        const [x] = await d.select({ type: schema.expenseTypes.name }).from(schema.expenses).innerJoin(schema.expenseTypes, eq(schema.expenseTypes.id, schema.expenses.typeId)).where(eq(schema.expenses.id, src.slice("expense:".length)));
+        id = await named(x?.type || KIND_NAME.expense, { portalService: false });
       }
+      // the rest (labour, a project…): the item of that kind of work
+      if (!id && opts.kindFallback !== false && it.kind && KIND_NAME[it.kind]) id = await named(KIND_NAME[it.kind]!, { portalService: false });
+      if (id) out.set(it.id, id);
     } catch (e) {
       console.warn("[quickbooks] item for a line:", e instanceof Error ? e.message : e);
     }
@@ -554,7 +569,7 @@ async function pushInvoiceNow(invoiceId: string): Promise<{ quickbooksId: string
     // a line with no item yet (the invoice was made before one was chosen): the item of its portal service or product, made if needed
     const missing = own.filter((l) => !l.qbItemId && l.billingItemId);
     if (missing.length) {
-      const found = await qbItemsForBillingItems((await d.select({ id: schema.billingItems.id, sourceId: schema.billingItems.sourceId }).from(schema.billingItems).where(inArray(schema.billingItems.id, missing.map((l) => l.billingItemId!)))));
+      const found = await qbItemsForBillingItems((await d.select({ id: schema.billingItems.id, sourceId: schema.billingItems.sourceId, kind: schema.billingItems.kind }).from(schema.billingItems).where(inArray(schema.billingItems.id, missing.map((l) => l.billingItemId!)))), { kindFallback: !itemId });
       for (const l of missing) {
         const id = found.get(l.billingItemId!);
         if (id) {

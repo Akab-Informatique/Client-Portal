@@ -427,7 +427,7 @@ export function createInvoice(actorId: string, p: InvoiceDraft) {
     const invoiceItem = p.qbItemId || qbDefaults.itemId || null;
     const invoiceTax = p.qbTaxCodeId || qbDefaults.taxCodeId || (qbDefaults.itemId || p.qbItemId ? (await autoTaxCodes().catch(() => null))?.taxable : null) || null;
     // the QuickBooks item of each line, from its portal service or product (made in QuickBooks when missing): outside the transaction (it talks to QuickBooks)
-    const autoItems = await qbItemsForBillingItems(draft.items.map((i) => ({ id: i.id, sourceId: i.sourceId }))).catch(() => new Map<string, string>());
+    const autoItems = await qbItemsForBillingItems(draft.items.map((i) => ({ id: i.id, sourceId: i.sourceId, kind: i.kind })), { kindFallback: !invoiceItem }).catch(() => new Map<string, string>());
     const number = draft.number;
     // all or nothing: the invoice, its lines and the items posted (a crash never leaves items to bill twice)
     const inv = await db().transaction(async (tx) => {
