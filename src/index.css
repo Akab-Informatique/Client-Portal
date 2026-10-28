@@ -518,26 +518,39 @@
   }
 }
 
-/* Printing a product label (Inventory › Étiquette): only the 4 in × 2 in label, at the top left of the page */
+/* Printing labels (Inventory, ticket charges): the .labels-print sheet only, one label a page, nothing else in the
+   page (display: none, not visibility: the rest of the page must take no room, or it prints as blank labels) */
+.labels-print {
+  display: none;
+}
 @media print {
-  html.printing-label body * {
-    visibility: hidden !important;
+  html.printing-labels body > *:not(.labels-print) {
+    display: none !important;
   }
-  html.printing-label #akab-label,
-  html.printing-label #akab-label * {
-    visibility: visible !important;
+  html.printing-labels,
+  html.printing-labels body {
+    height: auto !important;
+    min-height: 0 !important;
+    overflow: visible !important;
+    margin: 0 !important;
+    padding: 0 !important;
   }
-  html.printing-label #akab-label {
-    position: fixed !important;
-    left: 0 !important;
-    top: 0 !important;
+  html.printing-labels .labels-print {
+    display: block;
+  }
+  html.printing-labels .labels-print-page {
+    break-after: page;
+    break-inside: avoid;
     margin: 0 !important;
     box-shadow: none !important;
     print-color-adjust: exact;
     -webkit-print-color-adjust: exact;
   }
-  html.printing-label,
-  html.printing-label body {
+  html.printing-labels .labels-print-page:last-child {
+    break-after: auto;
+  }
+  html.printing-labels,
+  html.printing-labels body {
     background: #fff !important;
   }
 }

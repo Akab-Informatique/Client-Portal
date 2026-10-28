@@ -2,7 +2,7 @@ import { useEffect, useState, type FormEvent } from "react";
 import { useTranslation } from "react-i18next";
 import { keepPreviousData, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
-import { Boxes, ChevronDown, Loader2, PackagePlus, Plus, Receipt, Search, Wallet, Warehouse, X } from "lucide-react";
+import { Boxes, ChevronDown, Loader2, PackagePlus, Plus, Receipt, Search, Tag, Wallet, Warehouse, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { AiTextarea } from "@/components/AiPolish";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
@@ -17,6 +17,7 @@ import { currentLocale } from "@/i18n";
 import { cn } from "@/lib/utils";
 import { ticketErrorText, type TicketDetail } from "./shared";
 import { SerialChecklist } from "@/pages/store/SerialChecklist";
+import { ChargeLabelDialog } from "./ChargeLabel";
 
 export type Charge = {
   id: string;
@@ -98,8 +99,9 @@ export function ChargeButtons({ tk, editable, partial }: { tk: TicketDetail; edi
   );
 }
 
-function ChargesList({ list }: { list: Charge[] }) {
+function ChargesList({ list, tk }: { list: Charge[]; tk: TicketDetail }) {
   const { t } = useTranslation();
+  const [label, setLabel] = useState<Charge | null>(null);
   return (
     <div className="space-y-1.5 text-sm">
       <ul className="max-h-40 space-y-1.5 overflow-y-auto">
@@ -110,6 +112,19 @@ function ChargesList({ list }: { list: Charge[] }) {
                 {c.name}
               </span>
               <span className="shrink-0 font-mono text-xs">{c.unitPrice !== null ? money(c.quantity * c.unitPrice) : "—"}</span>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <button
+                    type="button"
+                    onClick={() => setLabel(c)}
+                    className="shrink-0 self-center rounded p-1 text-muted-foreground hover:bg-accent hover:text-primary"
+                    aria-label={t("tickets.charges.label.button")}
+                  >
+                    <Tag className="size-3.5" />
+                  </button>
+                </TooltipTrigger>
+                <TooltipContent>{t("tickets.charges.label.button")}</TooltipContent>
+              </Tooltip>
             </div>
             <div className="mt-0.5 flex flex-wrap items-center gap-x-2 text-[11px] text-muted-foreground">
               <span>
@@ -127,6 +142,7 @@ function ChargesList({ list }: { list: Charge[] }) {
         <span className="text-muted-foreground">{t("tickets.charges.total")}</span>
         <span className="font-mono font-semibold text-primary">{money(billableTotal(list))}</span>
       </p>
+      {label && <ChargeLabelDialog charge={label} ticket={tk} onClose={() => setLabel(null)} />}
     </div>
   );
 }
@@ -240,7 +256,7 @@ function ChargesDialog({ tk, editable, onClose }: { tk: TicketDetail; editable: 
           </DialogDescription>
         </DialogHeader>
 
-        {isLoading ? <Skeleton className="h-12" /> : list && list.length > 0 ? <ChargesList list={list} /> : <p className="text-sm text-muted-foreground">{t("tickets.charges.none")}</p>}
+        {isLoading ? <Skeleton className="h-12" /> : list && list.length > 0 ? <ChargesList list={list} tk={tk} /> : <p className="text-sm text-muted-foreground">{t("tickets.charges.none")}</p>}
 
         {editable && (
           <form

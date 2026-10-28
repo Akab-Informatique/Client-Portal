@@ -22,7 +22,7 @@ import {
   Tag,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { LabelDialog } from "./LabelDialog";
+import { BulkLabelsDialog, LabelDialog } from "./LabelDialog";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { Input } from "@/components/ui/input";
@@ -100,7 +100,7 @@ export function StorePage() {
   const [q, setQ] = useState("");
   const [filter, setFilter] = useState<Filter>("all");
   const [dialog, setDialog] = useState<
-    { kind: "product"; product: Product | null } | { kind: "stock"; product: Product; mode: "receive" | "adjust" } | { kind: "history"; product: Product } | { kind: "label"; product: Product } | { kind: "locations" } | null
+    { kind: "product"; product: Product | null } | { kind: "stock"; product: Product; mode: "receive" | "adjust" } | { kind: "history"; product: Product } | { kind: "label"; product: Product } | { kind: "labels" } | { kind: "locations" } | null
   >(null);
 
   const shown = useMemo(() => {
@@ -123,16 +123,21 @@ export function StorePage() {
           </h1>
           <p className="text-sm text-muted-foreground">{t("store.subtitle")}</p>
         </div>
-        {manage && (
-          <div className="flex gap-2">
+        <div className="flex gap-2">
+          <Button variant="outline" size="sm" className="h-9" disabled={shown.length === 0} onClick={() => setDialog({ kind: "labels" })}>
+            <Tag className="size-4" /> {t("store.label.bulkButton")}
+          </Button>
+          {manage && (
+            <>
             <Button variant="outline" size="sm" className="h-9" onClick={() => setDialog({ kind: "locations" })}>
               <MapPin className="size-4" /> {t("store.locations")}
             </Button>
             <Button size="sm" className="h-9 bg-grad-gold font-semibold text-[#1a1204] glow-gold hover:brightness-105" onClick={() => setDialog({ kind: "product", product: null })}>
               <Plus className="size-4" /> {t("store.newProduct")}
             </Button>
-          </div>
-        )}
+            </>
+          )}
+        </div>
       </div>
 
       {/* Key numbers */}
@@ -218,6 +223,7 @@ export function StorePage() {
       )}
       {dialog?.kind === "stock" && data && dialog.mode === "adjust" && <AdjustDialog product={dialog.product} locations={data.locations} onClose={() => setDialog(null)} />}
       {dialog?.kind === "label" && <LabelDialog product={dialog.product} onClose={() => setDialog(null)} />}
+      {dialog?.kind === "labels" && <BulkLabelsDialog products={shown} onClose={() => setDialog(null)} />}
       {dialog?.kind === "history" && <HistoryDialog product={dialog.product} onClose={() => setDialog(null)} />}
       {dialog?.kind === "locations" && data && <LocationsDialog locations={data.locations} onClose={() => setDialog(null)} />}
     </div>
