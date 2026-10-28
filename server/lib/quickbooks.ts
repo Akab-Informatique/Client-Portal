@@ -506,6 +506,21 @@ export async function voidInvoiceInQb(quickbooksId: string): Promise<void> {
   await qb("POST", "invoice?operation=void", { Id: cur.Invoice.Id, SyncToken: cur.Invoice.SyncToken });
 }
 
+/**
+ * The item for a line that has none and when no default item is set: an existing general one (named like Services, Main-d'œuvre,
+ * Labour, Support), else a "Services" item made in QuickBooks (and in the portal's services, no doubles). Null when QuickBooks
+ * cannot make it (no income account).
+ */
+export async function fallbackItemId(): Promise<string | null> {
+  const { items } = await invoiceChoices();
+  const general = items.filter((i) => i.type === "Service");
+  for (const re of [/^services?$/i, /^main[- ]?d.?[œo]euvre$/i, /^labou?r$/i, /^support/i, /services?/i]) {
+    const hit = general.find((i) => re.test(i.name));
+    if (hit) return hit.id;
+  }
+  return (await createQbItem({ name: "Services" })).id;
+}
+
 /** Send one invoice (or its changes) to QuickBooks. The client must be mapped to a customer. */
 export async function pushInvoice(invoiceId: string): Promise<{ quickbooksId: string; warning?: string }> {
   const r = await once(`invoice:${invoiceId}`, () => pushInvoiceNow(invoiceId));
@@ -548,10 +563,14 @@ async function pushInvoiceNow(invoiceId: string): Promise<{ quickbooksId: string
         }
       }
     }
-    // every line needs an item: its own, else the invoice's, else the default; the error says which line has none
-    const noItem = own.find((l) => !l.qbItemId && !itemId);
+    // every line needs an item: its own, else the invoice's, else the default; with none of these (labour, no default set) the
+    // company's general Services item is used, made in QuickBooks the first time. The error only comes when even that cannot be had.
+    let fallback: string | null = null;
+    if (!itemId && (!own.length || own.some((l) => !l.qbItemId))) fallback = await fallbackItemId().catch(() => null);
+    const defaultItem = itemId || fallback;
+    const noItem = own.find((l) => !l.qbItemId && !defaultItem);
     if (noItem) throw new QuickBooksError("no_item", noItem.description.slice(0, 120));
-    if (!own.length && !itemId) throw new QuickBooksError("no_item");
+    if (!own.length && !defaultItem) throw new QuickBooksError("no_item");
     // QuickBooks Canada refuses a line with no GST/HST code: say which one before asking
     const noCode = own.find((l) => !(exempt || !l.taxable ? exemptCode : l.qbTaxCodeId || taxCode));
     if (noCode) throw new QuickBooksError("no_tax_code", noCode.description.slice(0, 120));
@@ -563,7 +582,7 @@ async function pushInvoiceNow(invoiceId: string): Promise<{ quickbooksId: string
         DetailType: "SalesItemLineDetail",
         Amount: amount,
         Description: description.slice(0, 4000),
-        SalesItemLineDetail: { ItemRef: { value: (own?.qbItemId || itemId)! }, Qty: qty, UnitPrice: unit, ...(code ? { TaxCodeRef: { value: code } } : {}) },
+        SalesItemLineDetail: { ItemRef: { value: (own?.qbItemId || defaultItem)! }, Qty: qty, UnitPrice: unit, ...(code ? { TaxCodeRef: { value: code } } : {}) },
       };
     };
     const body = {

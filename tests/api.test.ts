@@ -7779,6 +7779,7 @@ describe("contracts: services when made, charges, activity, stop instead of dele
     await db().delete(schema.quickbooksItems);
     const [client] = await db().insert(schema.clients).values({ name: "Lignes QB inc.", autotaskId: 987654380, quickbooksId: "762" }).returning();
     const calls: { method: string; url: string; body: any }[] = [];
+    let invoiceSends = 0;
     const json = (b: unknown) => new Response(JSON.stringify(b), { status: 200, headers: { "content-type": "application/json" } });
     vi.stubGlobal(
       "fetch",
@@ -7792,7 +7793,8 @@ describe("contracts: services when made, charges, activity, stop instead of dele
         if (url.includes("select * from TaxCode")) return json({ QueryResponse: { TaxCode: [{ Id: "5", Name: "GST/QST" }] } });
         if (url.includes("select * from Invoice")) return json({ QueryResponse: {} });
         if (url.includes("/item?")) return json({ Item: { Id: "322", Name: body.Name, Type: "Service", IncomeAccountRef: body.IncomeAccountRef, Active: true } });
-        if (url.includes("/invoice?")) return json({ Invoice: { Id: "810" } });
+        // each new invoice is a new QuickBooks record (810, then 811…)
+        if (url.includes("/invoice?")) return json({ Invoice: { Id: body?.Id ?? String(invoiceSends++ === 0 ? 810 : 7000 + invoiceSends) } });
         return new Response(JSON.stringify({ Fault: { Error: [{ Message: `unexpected ${url}` }] } }), { status: 400 });
       }),
     );
@@ -7825,10 +7827,20 @@ describe("contracts: services when made, charges, activity, stop instead of dele
       expect((await admin.post(`/api/crm/invoices/${made.id}/quickbooks`)).json).toMatchObject({ quickbooksId: "810" });
       const sent = calls.find((c) => c.url.includes("/invoice?"))!.body.Line;
       expect(sent.map((l: any) => l.SalesItemLineDetail.ItemRef.value).sort()).toEqual(["21", "322"]);
-      // a line with no service and no default: the error names it
+      // a line with no service and no default item (labour): it goes on the general "Services" item, made in QuickBooks the first time
+      calls.length = 0;
       const bad = (await admin.post("/api/billables/invoice", { clientId: client!.id, itemIds: [l3.id] })).json;
-      const refused = (await admin.post(`/api/crm/invoices/${bad.id}/quickbooks`)).json;
-      expect(refused.error).toBe("quickbooks_no_item");
+      const general = (await admin.post(`/api/crm/invoices/${bad.id}/quickbooks`)).json;
+      expect(general.error).toBeUndefined();
+      expect(general.quickbooksId).toEqual(expect.any(String));
+      expect(calls.find((c) => c.url.includes("/item?"))!.body).toMatchObject({ Name: "Services", Type: "Service" });
+      const sentGeneral = calls.find((c) => c.url.includes("/invoice?"))!.body.Line;
+      expect(sentGeneral).toHaveLength(1);
+      expect(sentGeneral[0].SalesItemLineDetail.ItemRef.value).toEqual(expect.any(String));
+      // sent again: the same item, nothing made twice
+      calls.length = 0;
+      await admin.post(`/api/crm/invoices/${bad.id}/quickbooks`);
+      expect(calls.filter((c) => c.url.includes("/item?"))).toHaveLength(0);
     } finally {
       vi.unstubAllGlobals();
     }
