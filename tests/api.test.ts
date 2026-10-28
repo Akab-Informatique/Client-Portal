@@ -7781,6 +7781,9 @@ describe("contracts: services when made, charges, activity, stop instead of dele
     // the portal on its own (the lines come from the portal's own data)
     const [prev] = await db().select().from(schema.integrations).where(eq(schema.integrations.provider, "tickets"));
     await db().insert(schema.integrations).values({ provider: "tickets", enabled: true, config: { mode: "local" } }).onConflictDoUpdate({ target: schema.integrations.provider, set: { enabled: true, config: { mode: "local" } } });
+    // the mode is kept in memory: forget it, or a test that read it before leaves the import on the sample data
+    const { resetTicketMode } = await import("../server/lib/localTickets.ts");
+    resetTicketMode();
     try {
       const today = new Date().toLocaleDateString("en-CA", { timeZone: "America/Toronto" });
       const first = `${addDaysYmd(today.slice(0, 7) + "-01", -62).slice(0, 7)}-01`;
@@ -7843,6 +7846,7 @@ describe("contracts: services when made, charges, activity, stop instead of dele
     } finally {
       if (prev) await db().update(schema.integrations).set({ enabled: prev.enabled, config: prev.config }).where(eq(schema.integrations.provider, "tickets"));
       else await db().delete(schema.integrations).where(eq(schema.integrations.provider, "tickets"));
+      resetTicketMode();
     }
   });
 
