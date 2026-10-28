@@ -14,6 +14,7 @@ import { forgetPasswordLinks, sendPasswordLink } from "../lib/passwordLinks.ts";
 import { ticketSource } from "../lib/ticketSource.ts";
 import { rememberContact } from "../lib/crm.ts";
 import { provisionPortalUsers } from "../lib/portalUsers.ts";
+import { ensureClientRoles } from "../lib/clientRoles.ts";
 import { body, zEmail, zName, zOptText, zPhone, zUuid } from "../lib/validate.ts";
 import {
   effectivePermissions,
@@ -147,10 +148,18 @@ function assertCanManage(perms: PermissionKey[], kind: Audience) {
   if (!perms.includes(needed)) throw new HTTPException(403, { message: "Forbidden" });
 }
 
-async function assertRoleFor(roleId: string | null | undefined, audience: Audience) {
+/** A technician role is managed with the roles right; a client's role with the clients right (or the roles right). */
+function assertCanManageRole(perms: PermissionKey[], role: { audience: Audience }) {
+  const ok = role.audience === "staff" ? perms.includes("admin.roles") : perms.includes("admin.clients") || perms.includes("admin.roles");
+  if (!ok) throw new HTTPException(403, { message: "Forbidden" });
+}
+
+/** The role fits the person: a technician role for a technician; for a client user, a role of that same client. */
+async function assertRoleFor(roleId: string | null | undefined, audience: Audience, clientId?: string | null) {
   if (!roleId) return;
   const [r] = await db().select().from(schema.roles).where(eq(schema.roles.id, roleId));
   if (!r || r.audience !== audience) throw new HTTPException(400, { message: "invalid_role" });
+  if (audience === "client" ? r.clientId !== (clientId ?? null) : r.clientId != null) throw new HTTPException(400, { message: "invalid_role" });
 }
 
 async function emailTaken(email: string, exceptId?: string): Promise<boolean> {
@@ -225,7 +234,7 @@ async function createUser(
   c?: Context,
 ) {
   if (await emailTaken(p.email)) throw new HTTPException(409, { message: "email_taken" });
-  await assertRoleFor(p.roleId, kind);
+  await assertRoleFor(p.roleId, kind, clientId);
   const password = temporaryPassword();
   const [u] = await db()
     .insert(schema.users)
@@ -318,6 +327,7 @@ export const adminRoutes = new Hono<AppEnv>()
       }),
     );
     const [row] = await db().insert(schema.clients).values(p).returning();
+    await ensureClientRoles(row.id);
     await audit(auth(c).user.id, "client.created", row.id, { name: row.name });
     return c.json({ ...row, userCount: 0 }, 201);
   })
@@ -391,7 +401,7 @@ export const adminRoutes = new Hono<AppEnv>()
       }),
     );
     if (p.email && (await emailTaken(p.email, target.id))) throw new HTTPException(409, { message: "email_taken" });
-    if (p.roleId !== undefined) await assertRoleFor(p.roleId, target.kind);
+    if (p.roleId !== undefined) await assertRoleFor(p.roleId, target.kind, target.clientId);
     await assertMasterGuard(a, { roleId: p.roleId });
     if (target.id === a.user.id && p.active === false) throw new HTTPException(409, { message: "cannot_disable_self" });
     if (target.kind === "staff" && (p.active !== undefined || p.roleId !== undefined)) {
@@ -603,29 +613,59 @@ export const adminRoutes = new Hono<AppEnv>()
       .orderBy(desc(schema.roles.isSystem), asc(schema.roles.name));
     return c.json(rows.map((r) => ({ ...r.role, userCount: r.userCount })));
   })
-  .post("/roles", requirePermission("admin.roles"), async (c) => {
+  /** A client's own roles (made from the built-in ones the first time), with how many people hold each. */
+  .get("/clients/:id/roles", requirePermission("admin.clients"), async (c) => {
+    const id = zUuid.parse(c.req.param("id"));
+    const [client] = await db().select({ id: schema.clients.id }).from(schema.clients).where(eq(schema.clients.id, id));
+    if (!client) throw new HTTPException(404, { message: "not_found" });
+    await ensureClientRoles(id);
+    const rows = await db()
+      .select({ role: schema.roles, userCount: sql<number>`(select count(*)::int from users u where u.role_id = "roles"."id")` })
+      .from(schema.roles)
+      .where(eq(schema.roles.clientId, id))
+      .orderBy(desc(schema.roles.isSystem), asc(schema.roles.name));
+    return c.json(rows.map((r) => ({ ...r.role, userCount: r.userCount })));
+  })
+  .post("/roles", requirePermission("admin.roles", "admin.clients"), async (c) => {
+    const a = auth(c);
     const p = await body(
       c,
       z.object({
         name: zName,
         description: zOptText(300),
         audience: z.enum(["staff", "client"]),
+        /** A client role belongs to one client */
+        clientId: zUuid.optional(),
         permissions: z.array(z.string()).max(200),
       }),
     );
+    // technician roles: who manages roles · a client's roles: who manages clients
+    if (p.audience === "staff") {
+      if (!a.permissions.includes("admin.roles")) throw new HTTPException(403, { message: "Forbidden" });
+      if (p.clientId) throw new HTTPException(400, { message: "invalid_role" });
+    } else {
+      if (!a.permissions.includes("admin.clients")) throw new HTTPException(403, { message: "Forbidden" });
+      if (!p.clientId) throw new HTTPException(400, { message: "invalid_role" });
+    }
+    if (p.clientId) {
+      const [client] = await db().select({ id: schema.clients.id }).from(schema.clients).where(eq(schema.clients.id, p.clientId));
+      if (!client) throw new HTTPException(404, { message: "not_found" });
+    }
     const allowed = new Set<string>(permissionsFor(p.audience));
     if (p.permissions.some((k) => !allowed.has(k))) throw new HTTPException(400, { message: "invalid_permission" });
     const [row] = await db()
       .insert(schema.roles)
-      .values({ name: p.name, description: p.description ?? null, audience: p.audience, permissions: [...new Set(p.permissions)] })
+      .values({ name: p.name, description: p.description ?? null, audience: p.audience, clientId: p.clientId ?? null, permissions: [...new Set(p.permissions)] })
       .returning();
-    await audit(auth(c).user.id, "role.created", row.id, { name: row.name, permissions: row.permissions });
+    await audit(a.user.id, "role.created", row.id, { name: row.name, permissions: row.permissions, clientId: row.clientId });
     return c.json({ ...row, userCount: 0 }, 201);
   })
-  .patch("/roles/:id", requirePermission("admin.roles"), async (c) => {
+  .patch("/roles/:id", requirePermission("admin.roles", "admin.clients"), async (c) => {
+    const a = auth(c);
     const id = zUuid.parse(c.req.param("id"));
     const [role] = await db().select().from(schema.roles).where(eq(schema.roles.id, id));
     if (!role) throw new HTTPException(404, { message: "not_found" });
+    assertCanManageRole(a.permissions, role);
     if (role.locked) throw new HTTPException(409, { message: "role_locked" });
     const p = await body(
       c,
@@ -646,13 +686,15 @@ export const adminRoutes = new Hono<AppEnv>()
       .set({ ...p, updatedAt: new Date() })
       .where(eq(schema.roles.id, id))
       .returning();
-    await audit(auth(c).user.id, "role.updated", id, p);
+    await audit(a.user.id, "role.updated", id, { ...p, clientId: role.clientId });
     return c.json(row);
   })
-  .delete("/roles/:id", requirePermission("admin.roles"), async (c) => {
+  .delete("/roles/:id", requirePermission("admin.roles", "admin.clients"), async (c) => {
+    const a = auth(c);
     const id = zUuid.parse(c.req.param("id"));
     const [role] = await db().select().from(schema.roles).where(eq(schema.roles.id, id));
     if (!role) throw new HTTPException(404, { message: "not_found" });
+    assertCanManageRole(a.permissions, role);
     if (role.isSystem) throw new HTTPException(409, { message: "role_system" });
     const [{ n }] = await db()
       .select({ n: sql<number>`count(*)::int` })
@@ -660,10 +702,9 @@ export const adminRoutes = new Hono<AppEnv>()
       .where(eq(schema.users.roleId, id));
     if (n > 0) throw new HTTPException(409, { message: "role_in_use" });
     await db().delete(schema.roles).where(and(eq(schema.roles.id, id), eq(schema.roles.isSystem, false)));
-    await audit(auth(c).user.id, "role.deleted", id, { name: role.name });
+    await audit(a.user.id, "role.deleted", id, { name: role.name, clientId: role.clientId });
     return c.json({ ok: true });
   })
-
   // Activity
   .get("/audit", requirePermission("admin.roles", "admin.staff", "admin.clients", "admin.integrations", "admin.email"), async (c) => {
     const rows = await db()

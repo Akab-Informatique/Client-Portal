@@ -535,7 +535,11 @@ describe("permissions", () => {
     const admin = await signIn("admin@akab.local");
     const roles = (await admin.get("/api/admin/roles")).json;
     expect(roles.find((r: any) => r.slug === "administrator").userCount).toBeGreaterThanOrEqual(1);
-    expect(roles.find((r: any) => r.slug === "client-user").userCount).toBe(3);
+    // every client has its own "client user" role, held by its one employee
+    const userRoles = roles.filter((r: any) => r.slug === "client-user");
+    expect(userRoles.length).toBeGreaterThanOrEqual(3);
+    expect(userRoles.every((r: any) => r.clientId)).toBe(true);
+    expect(userRoles.reduce((n: number, r: any) => n + r.userCount, 0)).toBe(3);
     const clients = (await admin.get("/api/admin/clients")).json;
     expect(clients.every((c: any) => c.userCount === 2)).toBe(true);
     const options = (await admin.get("/api/messages/client-options")).json;
@@ -563,6 +567,9 @@ describe("permissions", () => {
     // a client role cannot be given to a technician
     const clientRole = roles.find((r: any) => r.slug === "client-user");
     expect((await admin.post("/api/admin/staff", { email: "x2@akab.local", name: "X", roleId: clientRole.id })).json.error).toBe("invalid_role");
+    // a technician role cannot be given to a client user
+    const someClient = (await admin.get("/api/admin/clients")).json[0];
+    expect((await admin.post(`/api/admin/clients/${someClient.id}/users`, { email: "x3@client.example", name: "X3", roleId: techRole.id })).json.error).toBe("invalid_role");
 
     const fresh = new Agent();
     const login = await fresh.post("/api/auth/login", { email: "new.tech@akab.local", password: r.json.temporaryPassword });
@@ -4639,7 +4646,10 @@ describe("client portal: sections, default roles and per-user rights", () => {
   it("client companies get Admin, Accounting and Tech roles by default", async () => {
     resetRateLimit("login:ip:unknown");
     const admin = await signIn("admin@akab.local");
-    const roles = (await admin.get("/api/admin/roles")).json.filter((r: any) => r.audience === "client");
+    // the roles of one client (every client has its own copy)
+    const firstClient = (await admin.get("/api/admin/clients")).json[0];
+    const roles = (await admin.get(`/api/admin/clients/${firstClient.id}/roles`)).json;
+    expect(roles.every((r: any) => r.audience === "client" && r.clientId === firstClient.id)).toBe(true);
     const bySlug = Object.fromEntries(roles.map((r: any) => [r.slug, r.permissions.slice().sort()]));
     expect(bySlug["client-admin"]).toEqual(["board.ticket", "board.view", "clientAdmin.company", "clientAdmin.users", "clientDevices.view", "clientDocs.view", "clientInvoices.view", "clientQuotes.view", "clientTickets.all", "clientTickets.attach", "clientTickets.comment", "clientTickets.escalate", "clientTickets.view"]);
     expect(bySlug["client-accounting"]).toEqual(["board.ticket", "board.view", "clientInvoices.view", "clientQuotes.view", "clientTickets.attach", "clientTickets.comment", "clientTickets.escalate", "clientTickets.view"]);
@@ -8343,12 +8353,13 @@ describe("admin: client users and their rights", () => {
   it("a user added to a client is also a contact; the clients right alone manages a client user's granular rights, never a technician's", async () => {
     resetRateLimit("login:ip:unknown");
     const admin = await signIn("admin@akab.local");
-    const roles = (await admin.get("/api/admin/roles")).json;
-    const clientUser = roles.find((r: any) => r.slug === "client-user");
-    const ticketsAdmin = roles.find((r: any) => r.slug === "client-tickets-admin");
-    const globalAdmin = roles.find((r: any) => r.slug === "global-admin");
+    const globalAdmin = (await admin.get("/api/admin/roles")).json.find((r: any) => r.slug === "global-admin");
     const client = (await admin.post("/api/crm/clients", { name: "Atelier Accès Test", phone: "450-555-0188" })).json;
     expect(client.portalEnabled).toBe(false);
+    // the client's own roles (made with the client)
+    const clientRoles = (await admin.get(`/api/admin/clients/${client.id}/roles`)).json;
+    const clientUser = clientRoles.find((r: any) => r.slug === "client-user");
+    const ticketsAdmin = clientRoles.find((r: any) => r.slug === "client-tickets-admin");
 
     // the portal is closed: the account is made, linked to a new contact, and no welcome goes out
     const closed = await admin.post(`/api/admin/clients/${client.id}/users`, { email: "dora@atelier.example", name: "Dora Tremblay", roleId: clientUser.id, sendWelcome: true });
@@ -8388,5 +8399,99 @@ describe("admin: client users and their rights", () => {
     const open = await admin.post(`/api/admin/clients/${client.id}/users`, { email: "eric@atelier.example", name: "Éric Roy", roleId: clientUser.id, sendWelcome: false });
     expect(open.json.dormant).toBe(false);
     expect((await admin.get(`/api/crm/clients/${client.id}/contacts`)).json.some((x: any) => x.email === "eric@atelier.example" && x.userId === open.json.user.id)).toBe(true);
+  });
+});
+describe("client roles are separate for each client", () => {
+  it("editing a client's role changes nothing at another client; a role of one client cannot be given at another; custom roles stay in their client; technician roles stay apart", async () => {
+    resetRateLimit("login:ip:unknown");
+    const admin = await signIn("admin@akab.local");
+    // the clients of two demo administrators (found by their users: names change in other tests)
+    const clientOf = async (email: string) => ({ id: (await db().select().from(schema.users).where(eq(schema.users.email, email)))[0].clientId! });
+    const a = await clientOf("responsable1@client.example");
+    const b = await clientOf("responsable2@client.example");
+    const rolesOf = async (id: string) => (await admin.get(`/api/admin/clients/${id}/roles`)).json;
+    const adminA = (await rolesOf(a.id)).find((r: any) => r.slug === "client-admin");
+    const adminB = (await rolesOf(b.id)).find((r: any) => r.slug === "client-admin");
+    expect(adminA.id).not.toBe(adminB.id);
+
+    // client A's administrators lose invoices; client B's keep them
+    const without = adminA.permissions.filter((k: string) => k !== "clientInvoices.view");
+    expect((await admin.patch(`/api/admin/roles/${adminA.id}`, { permissions: without })).status).toBe(200);
+    expect((await rolesOf(a.id)).find((r: any) => r.slug === "client-admin").permissions).not.toContain("clientInvoices.view");
+    expect((await rolesOf(b.id)).find((r: any) => r.slug === "client-admin").permissions).toContain("clientInvoices.view");
+
+    // the right a person really gets follows their own client's role
+    const marieA = (await admin.get(`/api/admin/clients/${a.id}/users`)).json.find((u: any) => u.roleId === adminA.id);
+    expect(marieA).toBeTruthy();
+    const email = marieA.email;
+    resetRateLimit("login:ip:unknown");
+    resetRateLimit(`login:email:${email}`);
+    expect((await (await signIn(email)).get("/api/me")).json.permissions).not.toContain("clientInvoices.view");
+
+    // a role of client B cannot be given to a user of client A
+    const userA = (await admin.get(`/api/admin/clients/${a.id}/users`)).json[0];
+    expect((await admin.patch(`/api/admin/users/${userA.id}`, { roleId: adminB.id })).json.error).toBe("invalid_role");
+
+    // a custom role belongs to the client it was made for (and the technicians' list does not show it)
+    const custom = await admin.post("/api/admin/roles", { name: "Comptabilité A", audience: "client", clientId: a.id, permissions: ["board.view", "clientInvoices.view"] });
+    expect(custom.status).toBe(201);
+    expect(custom.json.clientId).toBe(a.id);
+    expect((await rolesOf(b.id)).some((r: any) => r.id === custom.json.id)).toBe(false);
+    expect((await admin.patch(`/api/admin/users/${userA.id}`, { roleId: custom.json.id })).status).toBe(200);
+    // a client role needs a client, a technician role must not have one
+    expect((await admin.post("/api/admin/roles", { name: "Sans client", audience: "client", permissions: ["board.view"] })).status).toBe(400);
+    expect((await admin.post("/api/admin/roles", { name: "Tech avec client", audience: "staff", clientId: a.id, permissions: ["dashboard.view"] })).status).toBe(400);
+    // in use: cannot be deleted; once the person moves back it can
+    expect((await admin.del(`/api/admin/roles/${custom.json.id}`)).json.error).toBe("role_in_use");
+    await admin.patch(`/api/admin/users/${userA.id}`, { roleId: userA.roleId });
+    expect((await admin.del(`/api/admin/roles/${custom.json.id}`)).status).toBe(200);
+    // the built-in ones stay
+    expect((await admin.del(`/api/admin/roles/${adminA.id}`)).json.error).toBe("role_system");
+    // restore, so the other tests see the usual rights
+    await admin.patch(`/api/admin/roles/${adminA.id}`, { permissions: adminA.permissions });
+
+    // the technicians' roles list holds no client role of a client (the roles screen shows technician roles only)
+    const all = (await admin.get("/api/admin/roles")).json;
+    expect(all.filter((r: any) => r.audience === "staff").every((r: any) => r.clientId === null)).toBe(true);
+  });
+});
+describe("ticket boards (Kanban view)", () => {
+  it("the team makes boards and sorts tickets on them (shared, kept apart from the tickets); a client user has none of it", async () => {
+    resetRateLimit("login:ip:unknown");
+    const tech = await signIn("tech@akab.local");
+    expect((await tech.get("/api/ticket-boards")).json).toEqual({ boards: [], cards: [] });
+    const todo = (await tech.post("/api/ticket-boards", { name: "À faire cette semaine" })).json;
+    const wait = (await tech.post("/api/ticket-boards", { name: "En attente" })).json;
+    expect([todo.position, wait.position]).toEqual([0, 1]);
+    expect((await tech.post("/api/ticket-boards", { name: "" })).status).toBe(400);
+
+    // tickets on boards, in order; "before" puts one ahead of another
+    expect((await tech.put("/api/ticket-boards/cards/101", { boardId: todo.id })).status).toBe(200);
+    await tech.put("/api/ticket-boards/cards/102", { boardId: todo.id });
+    const r = (await tech.put("/api/ticket-boards/cards/103", { boardId: todo.id, before: 101 })).json;
+    expect(r.cards.filter((c: any) => c.boardId === todo.id).sort((a: any, b: any) => a.position - b.position).map((c: any) => c.ticketId)).toEqual([103, 101, 102]);
+    // moved to another board, then taken off
+    const moved = (await tech.put("/api/ticket-boards/cards/101", { boardId: wait.id })).json;
+    expect(moved.cards.find((c: any) => c.ticketId === 101)).toMatchObject({ boardId: wait.id, position: 0 });
+    expect(moved.cards.filter((c: any) => c.boardId === todo.id).map((c: any) => c.ticketId).sort()).toEqual([102, 103]);
+    expect((await tech.put("/api/ticket-boards/cards/102", { boardId: null })).json.cards.some((c: any) => c.ticketId === 102)).toBe(false);
+    expect((await tech.put("/api/ticket-boards/cards/104", { boardId: "00000000-0000-4000-8000-000000000000" })).status).toBe(404);
+
+    // rename, reorder, delete (its tickets go back to "not sorted")
+    expect((await tech.patch(`/api/ticket-boards/${wait.id}`, { name: "Attente client" })).status).toBe(200);
+    expect((await tech.put("/api/ticket-boards/order", { ids: [wait.id, todo.id] })).json.boards.map((b: any) => b.name)).toEqual(["Attente client", "À faire cette semaine"]);
+    expect((await tech.del(`/api/ticket-boards/${wait.id}`)).status).toBe(200);
+    const after = (await tech.get("/api/ticket-boards")).json;
+    expect(after.boards.map((b: any) => b.id)).toEqual([todo.id]);
+    expect(after.cards.some((c: any) => c.ticketId === 101)).toBe(false);
+    // the ticket list carries no board field
+    expect(JSON.stringify((await tech.get("/api/tickets?view=all")).json.items[0])).not.toMatch(/board/i);
+    await tech.del(`/api/ticket-boards/${todo.id}`);
+
+    // client users: the standard list only, no boards at all
+    const jean = await signIn("employe1@client.example");
+    expect((await jean.get("/api/ticket-boards")).status).toBe(403);
+    expect((await jean.post("/api/ticket-boards", { name: "x" })).status).toBe(403);
+    expect((await jean.put("/api/ticket-boards/cards/101", { boardId: null })).status).toBe(403);
   });
 });

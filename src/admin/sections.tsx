@@ -111,10 +111,8 @@ export function RolesSection() {
   const { t } = useTranslation();
   const { data: roles = [], isLoading } = useRoles();
   const [editing, setEditing] = useState<Role | "new" | null>(null);
-  const groups: { audience: Audience; title: string }[] = [
-    { audience: "staff", title: t("admin.roles.staffRoles") },
-    { audience: "client", title: t("admin.roles.clientRoles") },
-  ];
+  // technician roles only: each client's roles are managed in Clients (they are separate for every client)
+  const staffRoles = roles.filter((r) => r.audience === "staff" && !r.clientId);
   return (
     <div>
       <SectionHeader
@@ -126,24 +124,19 @@ export function RolesSection() {
           </Button>
         }
       />
-      <div className="space-y-8">
-        {groups.map((g) => (
-          <div key={g.audience}>
-            <h3 className="mb-3 text-xs font-semibold uppercase tracking-[0.14em] text-muted-foreground">{g.title}</h3>
-            <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
-              {isLoading
-                ? [0, 1].map((i) => <Skeleton key={i} className="h-32 rounded-2xl" />)
-                : roles.filter((r) => r.audience === g.audience).map((r) => <RoleCard key={r.id} role={r} onEdit={() => setEditing(r)} />)}
-            </div>
-          </div>
-        ))}
+      <div>
+        <h3 className="mb-3 text-xs font-semibold uppercase tracking-[0.14em] text-muted-foreground">{t("admin.roles.staffRoles")}</h3>
+        <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
+          {isLoading ? [0, 1].map((i) => <Skeleton key={i} className="h-32 rounded-2xl" />) : staffRoles.map((r) => <RoleCard key={r.id} role={r} onEdit={() => setEditing(r)} />)}
+        </div>
+        <p className="mt-6 text-xs text-muted-foreground">{t("admin.roles.clientRolesElsewhere")}</p>
       </div>
-      <RoleDialog role={editing} roles={roles} onClose={() => setEditing(null)} />
+      <RoleDialog role={editing} roles={staffRoles} onClose={() => setEditing(null)} />
     </div>
   );
 }
 
-function RoleCard({ role, onEdit }: { role: Role; onEdit: () => void }) {
+export function RoleCard({ role, onEdit }: { role: Role; onEdit: () => void }) {
   const { t } = useTranslation();
   const roleName = useRoleName();
   const roleDesc = useRoleDescription();
@@ -173,7 +166,11 @@ function RoleCard({ role, onEdit }: { role: Role; onEdit: () => void }) {
   );
 }
 
-function RoleDialog({ role, roles, onClose }: { role: Role | "new" | null; roles: Role[]; onClose: () => void }) {
+/**
+ * Make or edit a role. Without `clientId` it is a technician role; with it, a
+ * role of that one client (client roles are separate for every client).
+ */
+export function RoleDialog({ role, roles, clientId, onClose }: { role: Role | "new" | null; roles: Role[]; clientId?: string; onClose: () => void }) {
   const { t } = useTranslation();
   const confirm = useConfirm();
   const qc = useQueryClient();
@@ -183,14 +180,14 @@ function RoleDialog({ role, roles, onClose }: { role: Role | "new" | null; roles
   const existing = role && role !== "new" ? role : null;
   const [name, setName] = useState("");
   const [description, setDescription] = useState("");
-  const [audience, setAudience] = useState<Audience>("staff");
+  const [audience, setAudience] = useState<Audience>(clientId ? "client" : "staff");
   const [permissions, setPermissions] = useState<string[]>([]);
   useEffect(() => {
     if (!role) return;
     if (role === "new") {
       setName("");
       setDescription("");
-      setAudience("staff");
+      setAudience(clientId ? "client" : "staff");
       setPermissions([]);
     } else {
       setName(roleName(role));
@@ -204,7 +201,7 @@ function RoleDialog({ role, roles, onClose }: { role: Role | "new" | null; roles
   const save = useMutation({
     mutationFn: () =>
       isNew
-        ? api.post<Role>("/admin/roles", { name, description, audience, permissions })
+        ? api.post<Role>("/admin/roles", { name, description, audience, permissions, ...(clientId ? { clientId } : {}) })
         : api.patch<Role>(`/admin/roles/${existing!.id}`, existing!.isSystem ? { permissions } : { name, description, permissions }),
     onSuccess: () => {
       void qc.invalidateQueries({ queryKey: ["admin"] });
@@ -247,23 +244,7 @@ function RoleDialog({ role, roles, onClose }: { role: Role | "new" | null; roles
               <Label>{t("admin.roles.name")}</Label>
               <Input required disabled={Boolean(existing?.isSystem)} value={name} onChange={(e) => setName(e.target.value)} />
             </div>
-            <div className="space-y-2">
-              <Label>{t("admin.roles.audience")}</Label>
-              <Select
-                value={audience}
-                disabled={!isNew}
-                onValueChange={(v) => {
-                  setAudience(v as Audience);
-                  setPermissions([]);
-                }}
-              >
-                <SelectTrigger className="w-full"><SelectValue /></SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="staff">{t("admin.roles.audienceStaff")}</SelectItem>
-                  <SelectItem value="client">{t("admin.roles.audienceClient")}</SelectItem>
-                </SelectContent>
-              </Select>
-            </div>
+
             <div className="space-y-2 sm:col-span-2">
               <Label>{t("admin.roles.description")}</Label>
               <Input disabled={Boolean(existing?.isSystem)} value={description} onChange={(e) => setDescription(e.target.value)} />

@@ -33,6 +33,7 @@ import { dashboardsRoutes } from "./routes/dashboards.ts";
 import { viewAsRoutes } from "./routes/viewAs.ts";
 import { notificationRoutes } from "./routes/notifications.ts";
 import { ticketRoutes } from "./routes/tickets.ts";
+import { ticketBoardRoutes } from "./routes/ticketBoards.ts";
 import { quoteRoutes } from "./routes/quotes.ts";
 import { storeRoutes } from "./routes/store.ts";
 import { pipelineRoutes } from "./routes/pipeline.ts";
@@ -142,6 +143,9 @@ export function createApp() {
   api.use("/tickets/*", requireStaff);
   api.use("/tickets", requireStaff);
   api.route("/tickets", ticketRoutes);
+  api.use("/ticket-boards/*", requireStaff);
+  api.use("/ticket-boards", requireStaff);
+  api.route("/ticket-boards", ticketBoardRoutes);
   api.use("/dashboards/*", requireStaff);
   api.use("/dashboards", requireStaff);
   api.route("/dashboards", dashboardsRoutes);

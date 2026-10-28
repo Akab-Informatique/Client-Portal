@@ -54,6 +54,7 @@ import { PRIORITY_STYLE, STATUS_STYLE, shortDate, ticketErrorText } from "@/page
 import { crmErrorText, money, useCrmClients, type CrmInvoice, type CrmInvoices, type InvoiceStatus, type CrmClient, type CrmContact, type CrmContract, type CrmDetail, type CrmTicket, type InvoiceSettings } from "./shared";
 import { ContractWindow, NewContractDialog } from "./ContractDialog";
 import { ClientUsersPanel } from "@/admin/ClientAccess";
+import { ContactWindow } from "./ContactWindow";
 
 const TABS = ["info", "tickets", "invoices", "contacts", "portal", "contracts", "invoice"] as const;
 type Tab = (typeof TABS)[number];
@@ -809,6 +810,8 @@ function ContactsTab({ client }: { client: CrmDetail }) {
   const { data: contacts = [], isLoading } = useQuery({ queryKey: key, queryFn: () => api.get<CrmContact[]>(`/crm/clients/${client.id}/contacts`) });
   const [adding, setAdding] = useState(false);
   const [editing, setEditing] = useState<string | null>(null);
+  // a contact opens as a page of its own (card, rights, access, preferences)
+  const [openContact, setOpenContact] = useState<string | null>(null);
   const [showInactive, setShowInactive] = useState(false);
   const refresh = () => {
     void qc.invalidateQueries({ queryKey: key });
@@ -848,6 +851,7 @@ function ContactsTab({ client }: { client: CrmDetail }) {
           }}
         />
       )}
+      {openContact && <ContactWindow client={client} contactId={openContact} onClose={() => setOpenContact(null)} onChange={refresh} />}
       {isLoading && <Loader2 className="mx-auto size-5 animate-spin text-muted-foreground" />}
       {!isLoading && shown.length === 0 && !adding && <p className="py-6 text-center text-sm text-muted-foreground">{t("crm.contacts.none")}</p>}
       <ul className="grid gap-2 md:grid-cols-2 xl:grid-cols-3">
@@ -864,7 +868,15 @@ function ContactsTab({ client }: { client: CrmDetail }) {
               />
             </li>
           ) : (
-            <li key={c.id} className={cn("group rounded-xl border bg-background/30 p-3", !c.active && "opacity-60")}>
+            <li
+              key={c.id}
+              className={cn("group cursor-pointer rounded-xl border bg-background/30 p-3 transition-colors hover:border-[color:var(--gold)]/40", !c.active && "opacity-60")}
+              onClick={(e) => {
+                // a link, a button or a menu inside the card does its own thing
+                if ((e.target as HTMLElement).closest("a,button,[role=menuitem],[role=menu]")) return;
+                setOpenContact(c.id);
+              }}
+            >
               <div className="flex items-start gap-2.5">
                 <span className="grid size-8 shrink-0 place-items-center rounded-full border bg-card">
                   <UserRound className="size-4 text-muted-foreground" />

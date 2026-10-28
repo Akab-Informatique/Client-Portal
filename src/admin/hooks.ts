@@ -5,6 +5,19 @@ import type { AdminUser, AuditEntry, Client, Role } from "@/lib/types";
 import { SYSTEM_ROLES } from "@shared/permissions";
 
 export const useRoles = () => useQuery({ queryKey: ["admin", "roles"], queryFn: () => api.get<Role[]>("/admin/roles") });
+/** A client's own roles (made from the built-in ones the first time they are asked for). The key starts with ["admin","roles"] so a role change refreshes it. */
+export const useClientRoles = (clientId: string | null | undefined) =>
+  useQuery({
+    queryKey: ["admin", "roles", "client", clientId],
+    queryFn: () => api.get<Role[]>(`/admin/clients/${clientId}/roles`),
+    enabled: Boolean(clientId),
+  });
+/** The roles one can give to a person: a technician's, or the ones of their own client. */
+export function useRolesFor(kind: "staff" | "client", clientId?: string | null): Role[] {
+  const staff = useRoles();
+  const client = useClientRoles(kind === "client" ? clientId : null);
+  return kind === "client" ? (client.data ?? []) : (staff.data ?? []).filter((r) => r.audience === "staff" && !r.clientId);
+}
 export const useStaff = () => useQuery({ queryKey: ["admin", "staff"], queryFn: () => api.get<AdminUser[]>("/admin/staff") });
 export const useClients = () => useQuery({ queryKey: ["admin", "clients"], queryFn: () => api.get<Client[]>("/admin/clients") });
 export const useClientUsers = (clientId: string | null) =>

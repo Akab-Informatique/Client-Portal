@@ -418,12 +418,19 @@ export const roles = pgTable(
     permissions: jsonb("permissions").$type<string[]>().notNull().default(sql`'[]'::jsonb`),
     isSystem: boolean("is_system").notNull().default(false),
     locked: boolean("locked").notNull().default(false),
+    /**
+     * Client roles belong to one client: every client has its own copy of the
+     * built-in ones (same `slug`) and its own custom ones, edited apart. Null:
+     * a technician role.
+     */
+    clientId: uuid("client_id").references((): AnyPgColumn => clients.id, { onDelete: "cascade" }),
     /** Built-in roles: the default rights already given (new defaults are added once, removals kept) */
     defaultsApplied: jsonb("defaults_applied").$type<string[]>(),
     createdAt: created(),
     updatedAt: updated(),
   },
-  (t) => [uniqueIndex("roles_slug_unique").on(t.slug)],
+  // a slug is unique among the technician roles, and within one client for the client roles
+  (t) => [uniqueIndex("roles_slug_unique").on(sql`coalesce(${t.clientId}::text, '')`, t.slug), index("roles_client_idx").on(t.clientId)],
 );
 
 /** Technicians (kind=staff) and client users (kind=client, with client_id). */
@@ -1735,6 +1742,32 @@ export const expenseFavorites = pgTable(
     createdAt: created(),
   },
   (t) => [index("expense_favorites_user_idx").on(t.userId)],
+);
+
+/**
+ * Kanban boards of the Tickets page: columns the team makes to sort tickets
+ * (shared by everyone). A ticket sits on at most one board, and only in the
+ * Kanban view: the ticket itself is untouched (no field, no list column).
+ */
+export const ticketBoards = pgTable("ticket_boards", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  name: text("name").notNull(),
+  position: integer("position").notNull().default(0),
+  createdBy: uuid("created_by").references(() => users.id, { onDelete: "set null" }),
+  createdAt: created(),
+});
+
+export const ticketBoardCards = pgTable(
+  "ticket_board_cards",
+  {
+    ticketId: bigint("ticket_id", { mode: "number" }).primaryKey(),
+    boardId: uuid("board_id")
+      .notNull()
+      .references(() => ticketBoards.id, { onDelete: "cascade" }),
+    position: integer("position").notNull().default(0),
+    updatedAt: updated(),
+  },
+  (t) => [index("ticket_board_cards_board_idx").on(t.boardId)],
 );
 
 /** A client user's saved filter on the portal's tickets page: the people of their company to show. */

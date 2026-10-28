@@ -1,4 +1,5 @@
-import { eq, sql } from "drizzle-orm";
+import { and, eq, isNull, sql } from "drizzle-orm";
+import { clientRoleId, ensureAllClientRoles } from "../lib/clientRoles.ts";
 import { db, schema } from "./index.ts";
 import { config } from "../config.ts";
 import { hashPassword, temporaryPassword, passwordProblem } from "../lib/crypto.ts";
@@ -24,7 +25,9 @@ export const BUILTIN_DASHBOARDS = [
 export async function seed(): Promise<void> {
   const d = db();
   for (const r of SYSTEM_ROLES) {
-    const [existing] = await d.select().from(schema.roles).where(eq(schema.roles.slug, r.slug));
+    // client roles are per client (made by ensureAllClientRoles below): these are only their starting point
+    if (r.audience === "client") continue;
+    const [existing] = await d.select().from(schema.roles).where(and(eq(schema.roles.slug, r.slug), isNull(schema.roles.clientId)));
     if (!existing) {
       await d.insert(schema.roles).values({
         slug: r.slug,
@@ -55,6 +58,9 @@ export async function seed(): Promise<void> {
       }
     }
   }
+
+  // every client has its own client roles (and users of the old shared ones move to them)
+  await ensureAllClientRoles();
 
   // Built-in dashboards: empty, administrators only until an admin shares them
   for (const b of BUILTIN_DASHBOARDS) {
@@ -96,7 +102,7 @@ export async function seed(): Promise<void> {
 }
 
 async function roleBySlug(slug: string): Promise<string> {
-  const [r] = await db().select({ id: schema.roles.id }).from(schema.roles).where(eq(schema.roles.slug, slug));
+  const [r] = await db().select({ id: schema.roles.id }).from(schema.roles).where(and(eq(schema.roles.slug, slug), isNull(schema.roles.clientId)));
   if (!r) throw new Error(`role ${slug} missing`);
   return r.id;
 }
@@ -105,8 +111,6 @@ async function seedDemo(adminRoleId: string): Promise<void> {
   const d = db();
   const devPassword = await hashPassword("akab-dev-password");
   const tech = await roleBySlug("technician");
-  const clientAdmin = await roleBySlug("client-admin");
-  const clientUser = await roleBySlug("client-user");
   void adminRoleId;
 
   await d.insert(schema.users).values({
@@ -125,6 +129,9 @@ async function seedDemo(adminRoleId: string): Promise<void> {
   ];
   const created = await d.insert(schema.clients).values(demoClients).returning();
   for (const [i, cl] of created.entries()) {
+    // each client has its own roles
+    const clientAdmin = await clientRoleId(cl.id, "client-admin");
+    const clientUser = await clientRoleId(cl.id, "client-user");
     await d.insert(schema.users).values([
       {
         email: `responsable${i + 1}@client.example`,

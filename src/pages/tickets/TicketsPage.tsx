@@ -76,6 +76,7 @@ import { GlobalSearch } from "./GlobalSearch";
 import { AgendaCard } from "./Planning";
 import { SmsInboxDialog, SmsTile } from "@/pages/sms/SmsPage";
 import { AiSetupHint, InlinePick, useAiError } from "./TicketPanel";
+import { CompactList, KanbanBoard, LayoutSwitch, useTicketLayout } from "./Layouts";
 
 type Saved = { id: string; name: string; query: string; pinned?: boolean };
 type SetFn = (patch: Record<string, string | null>) => void;
@@ -98,6 +99,8 @@ export function TicketsPage() {
   const can = useCan();
   const ws = useTicketWorkspace();
   const cols = useColumns();
+  // standard (the table) · kanban (team boards) · compact (one line per ticket): how the list is shown, remembered here
+  const [layout, setLayout] = useTicketLayout();
   const [params, setParams] = useSearchParams();
   const view = (VIEWS.includes(params.get("view") as View) ? params.get("view") : "mine") as View;
   const { data, isLoading, dataUpdatedAt, isFetching, refetch } = useTickets(view, params);
@@ -244,7 +247,8 @@ export function TicketsPage() {
           <SlidersHorizontal className="size-4 shrink-0 text-primary" />
           <span className="text-sm font-semibold">{t("tickets.filtersTitle")}</span>
           <ViewMenu view={view} counts={data?.counts} params={params} apply={apply} />
-          <div className="ml-auto">
+          <div className="ml-auto flex flex-wrap items-center gap-2">
+            <LayoutSwitch value={layout} onChange={setLayout} />
             <SortMenu value={params.get("sort") ?? "due"} aiPlan={data?.aiPlan ?? null} onChange={(v) => set({ sort: v === "due" ? null : v })} />
           </div>
         </div>
@@ -307,7 +311,7 @@ export function TicketsPage() {
 
       {/* List */}
       <div className="glass overflow-hidden rounded-2xl border xl:overflow-x-auto" style={cols.vars as React.CSSProperties}>
-        <ColumnHeader
+        {layout === "standard" && <ColumnHeader
           cols={cols}
           selection={
             data && data.items.length > 0
@@ -332,18 +336,23 @@ export function TicketsPage() {
             assignee: t("tickets.fields.assignee"),
             secondary: t("tickets.fields.secondary"),
           }}
-        />
+        />}
         {isLoading || !data ? (
           <div className="space-y-2 p-4">
             {[0, 1, 2, 3, 4].map((i) => (
               <Skeleton key={i} className="h-14 rounded-lg" />
             ))}
           </div>
+        ) : layout === "kanban" ? (
+          // boards of the team: the tickets of this list, sorted on columns (only in this view)
+          <KanbanBoard items={data.items} canEdit={can("tickets.edit")} onOpen={(id) => ws.open(id)} />
         ) : data.items.length === 0 ? (
           <div className="flex flex-col items-center gap-2 px-6 py-16 text-center text-sm text-muted-foreground">
             <Inbox className="size-8 opacity-50" />
             {activeFilters.length || params.get("q") ? t("tickets.emptyFiltered") : t(`tickets.empty.${view}`)}
           </div>
+        ) : layout === "compact" ? (
+          <CompactList items={data.items} activeIds={new Set([...(ws.openId ? [ws.openId] : []), ...ws.docked.map((d) => d.id)])} onOpen={(id) => ws.open(id)} />
         ) : (
           <ul className="divide-y divide-[color:var(--glass-border)]">
             {data.items.map((tk, i) => (

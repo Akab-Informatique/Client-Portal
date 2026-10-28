@@ -1,8 +1,8 @@
 import type { Context } from "hono";
-import { and, eq, isNotNull, isNull, sql } from "drizzle-orm";
-import { db, schema } from "../db/index.ts";
+import { and, eq, isNotNull, isNull, sql } from "drizzle-orm";import { db, schema } from "../db/index.ts";
 import { hashPassword, temporaryPassword } from "./crypto.ts";
 import { sendPasswordLink } from "./passwordLinks.ts";
+import { clientRoleId } from "./clientRoles.ts";
 
 /**
  * Client portal accounts follow the contacts: every active contact with an
@@ -16,7 +16,12 @@ import { sendPasswordLink } from "./passwordLinks.ts";
  */
 export async function provisionPortalUsers(clientId?: string): Promise<number> {
   const d = db();
-  const [role] = await d.select({ id: schema.roles.id }).from(schema.roles).where(eq(schema.roles.slug, "client-user"));
+  // each client has its own "Usager client" role
+  const roleOf = new Map<string, string | null>();
+  const roleFor = async (id: string) => {
+    if (!roleOf.has(id)) roleOf.set(id, await clientRoleId(id, "client-user"));
+    return roleOf.get(id) ?? null;
+  };
   const contacts = await d
     .select({ c: schema.clientContacts })
     .from(schema.clientContacts)
@@ -41,7 +46,7 @@ export async function provisionPortalUsers(clientId?: string): Promise<number> {
       const name = `${c.firstName} ${c.lastName}`.trim() || email;
       const [u] = await d
         .insert(schema.users)
-        .values({ email, name, kind: "client", clientId: c.clientId, roleId: role?.id ?? null, title: c.title, phone: c.mobile ?? c.phone, passwordHash, mustChangePassword: true })
+        .values({ email, name, kind: "client", clientId: c.clientId, roleId: await roleFor(c.clientId), title: c.title, phone: c.mobile ?? c.phone, passwordHash, mustChangePassword: true })
         .returning({ id: schema.users.id });
       userId = u.id;
       made++;

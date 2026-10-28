@@ -9,6 +9,7 @@ import { auth, requirePermission, requireStaff, revokeUserSessions, type AppEnv 
 import { hashPassword, temporaryPassword } from "../lib/crypto.ts";
 import { forgetPasswordLinks, sendPasswordLink } from "../lib/passwordLinks.ts";
 import { provisionPortalUsers, sendPortalWelcomes } from "../lib/portalUsers.ts";
+import { clientRoleId, ensureClientRoles } from "../lib/clientRoles.ts";
 import { audit } from "../lib/audit.ts";
 import { rateLimit } from "../lib/http.ts";
 import { body, zEmail, zOptText, zUuid } from "../lib/validate.ts";
@@ -166,6 +167,7 @@ export const crmRoutes = new Hono<AppEnv>()
     const src = await ticketSource();
     const company = await run(() => src.addCompany(p, a));
     const id = await rememberCompany({ ...company, phone: p.phone });
+    await ensureClientRoles(id);
     await audit(a.user.id, "crm.client_created", id, { name: p.name });
     return c.json(view(await clientOr404(id)), 201);
   })
@@ -339,6 +341,15 @@ export const crmRoutes = new Hono<AppEnv>()
       await run(() => src.updateContact(contact.autotaskId!, p, a));
     }
     if (contact.userId) {
+      // the person's account follows their contact card (name, title, phone)
+      const first = p.firstName ?? contact.firstName;
+      const last = p.lastName ?? contact.lastName;
+      const mirror = {
+        ...(p.firstName !== undefined || p.lastName !== undefined ? { name: `${first} ${last}`.trim() } : {}),
+        ...(p.title !== undefined ? { title: p.title ?? null } : {}),
+        ...(p.phone !== undefined || p.mobile !== undefined ? { phone: (p.mobile !== undefined ? p.mobile : contact.mobile) ?? (p.phone !== undefined ? p.phone : contact.phone) ?? null } : {}),
+      };
+      if (Object.keys(mirror).length) await db().update(schema.users).set({ ...mirror, updatedAt: new Date() }).where(eq(schema.users.id, contact.userId));
       if (p.email && p.email.toLowerCase() !== (contact.email ?? "").toLowerCase()) {
         await db().update(schema.users).set({ email: p.email, updatedAt: new Date() }).where(eq(schema.users.id, contact.userId));
         await forgetPasswordLinks(contact.userId);
@@ -412,7 +423,8 @@ export const crmRoutes = new Hono<AppEnv>()
     if (!client.active || !contact.active) throw new HTTPException(409, { message: "portal_inactive" });
     const email = contact.email?.trim().toLowerCase();
     if (!email) throw new HTTPException(400, { message: "portal_no_email" });
-    const [role] = await d.select({ id: schema.roles.id }).from(schema.roles).where(eq(schema.roles.slug, p.role));
+    // this client's own role (roles are per client)
+    const role = { id: await clientRoleId(client.id, p.role) };
     let [user] = contact.userId ? await d.select().from(schema.users).where(eq(schema.users.id, contact.userId)) : [];
     if (!user) {
       const [same] = await d.select().from(schema.users).where(sql`lower(${schema.users.email}) = ${email}`);

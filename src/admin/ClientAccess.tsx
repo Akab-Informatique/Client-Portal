@@ -1,8 +1,8 @@
-import { useMemo, useState } from "react";
+import { useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
-import { Building2, ChevronDown, ChevronRight, KeyRound, Loader2, Search, ShieldCheck, UserPlus } from "lucide-react";
+import { Building2, ChevronDown, ChevronRight, KeyRound, Loader2, Plus, Search, ShieldCheck, UserPlus } from "lucide-react";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -16,9 +16,8 @@ import { relativeTime } from "@/lib/format";
 import { useCan } from "@/lib/session";
 import type { AdminUser, Role } from "@/lib/types";
 import { cn, initials } from "@/lib/utils";
-import { MODULES } from "@shared/permissions";
-import { useClients, useClientUsers, useRoleName, useRoles } from "./hooks";
-import { SectionHeader } from "./sections";
+import { useClients, useClientRoles, useClientUsers, useRoleName } from "./hooks";
+import { RoleCard, RoleDialog, SectionHeader } from "./sections";
 import { NewUserDialog, UserSheet, UserStatusBadges } from "./UserPanels";
 
 /** What the panels need to know of a client. */
@@ -76,58 +75,43 @@ export function CompanyPortalSwitch({ client, ready, noEmail = 0, onChange }: { 
   );
 }
 
-/** Label of a right, in the UI language, from the rights table. */
-function useRightLabel() {
-  const { i18n } = useTranslation();
-  const labels = useMemo(() => new Map(MODULES.flatMap((m) => m.permissions.map((p) => [p.key as string, p.label] as const))), []);
-  return (key: string) => {
-    const l = labels.get(key);
-    return l ? (i18n.language === "en" ? l.en : l.fr) : key;
-  };
-}
-
-/** The client roles and what each one allows (read only; edited in Roles and access). */
-function RoleRights({ roles }: { roles: Role[] }) {
+/**
+ * This client's own roles: the built-in ones (copied for the client, so changing
+ * one changes nothing at another client) and the custom ones made for it.
+ */
+function ClientRolesPanel({ client, roles }: { client: ClientRef; roles: Role[] }) {
   const { t } = useTranslation();
-  const roleName = useRoleName();
-  const label = useRightLabel();
-  const [open, setOpen] = useState(false);
-  const [more, setMore] = useState<string | null>(null);
-  const list = roles.filter((r) => r.audience === "client");
+  const can = useCan();
+  const [open, setOpen] = useState(true);
+  const [editing, setEditing] = useState<Role | "new" | null>(null);
   return (
     <div className="rounded-xl border bg-card/40">
-      <button type="button" onClick={() => setOpen((v) => !v)} aria-expanded={open} className="flex w-full items-center gap-2 px-3 py-2.5 text-left">
-        <ShieldCheck className="size-4 text-primary" />
-        <span className="flex-1 text-sm font-medium">{t("admin.clientAccess.rolesTitle")}</span>
-        <ChevronDown className={cn("size-4 text-muted-foreground transition-transform", !open && "-rotate-90")} />
-      </button>
+      <div className="flex items-center gap-2 px-3 py-2.5">
+        <button type="button" onClick={() => setOpen((v) => !v)} aria-expanded={open} className="flex flex-1 items-center gap-2 text-left">
+          <ShieldCheck className="size-4 text-primary" />
+          <span className="text-sm font-medium">{t("admin.clientAccess.rolesTitle", { name: client.name })}</span>
+          <ChevronDown className={cn("size-4 text-muted-foreground transition-transform", !open && "-rotate-90")} />
+        </button>
+        {can("admin.clients") && (
+          <Button size="sm" variant="outline" onClick={() => setEditing("new")}>
+            <Plus className="size-3.5" /> {t("admin.clientAccess.newRole")}
+          </Button>
+        )}
+      </div>
       {open && (
-        <ul className="space-y-1 border-t p-2">
-          {list.map((r) => (
-            <li key={r.id} className="rounded-lg px-2 py-1.5">
-              <button type="button" onClick={() => setMore(more === r.id ? null : r.id)} className="flex w-full items-center gap-2 text-left">
-                <span className="text-sm font-semibold">{roleName(r)}</span>
-                <span className="font-mono text-[11px] text-muted-foreground">{t("admin.clientAccess.rights", { count: r.permissions.length })}</span>
-                <ChevronRight className={cn("ml-auto size-3.5 text-muted-foreground transition-transform", more === r.id && "rotate-90")} />
-              </button>
-              {more === r.id && (
-                <ul className="mt-1.5 flex flex-wrap gap-1.5">
-                  {r.permissions.map((k) => (
-                    <li key={k} className="rounded-md border bg-background/40 px-1.5 py-0.5 text-[11px] text-muted-foreground">
-                      {label(k)}
-                    </li>
-                  ))}
-                  {!r.permissions.length && <li className="text-xs text-muted-foreground">{t("admin.clientAccess.noRights")}</li>}
-                </ul>
-              )}
-            </li>
-          ))}
-        </ul>
+        <div className="space-y-2 border-t p-3">
+          <p className="text-xs text-muted-foreground">{t("admin.clientAccess.rolesHint")}</p>
+          <div className="grid gap-3 md:grid-cols-2">
+            {roles.map((r) => (
+              <RoleCard key={r.id} role={r} onEdit={() => setEditing(r)} />
+            ))}
+          </div>
+        </div>
       )}
+      <RoleDialog role={editing} roles={roles} clientId={client.id} onClose={() => setEditing(null)} />
     </div>
   );
 }
-
 function ClientUserRow({ u, role, portalOpen, onClick }: { u: AdminUser; role: Role | undefined; portalOpen: boolean; onClick: () => void }) {
   const { t } = useTranslation();
   const roleName = useRoleName();
@@ -174,7 +158,7 @@ export function ClientUsersPanel({ client }: { client: ClientRef }) {
   const { t } = useTranslation();
   const can = useCan();
   const { data: users = [], isLoading } = useClientUsers(client.id);
-  const { data: roles = [] } = useRoles();
+  const { data: roles = [] } = useClientRoles(client.id);
   const [q, setQ] = useState("");
   const [creating, setCreating] = useState(false);
   const [openId, setOpenId] = useState<string | null>(null);
@@ -204,7 +188,7 @@ export function ClientUsersPanel({ client }: { client: ClientRef }) {
           <p className="rounded-xl border border-dashed p-6 text-center text-sm text-muted-foreground">{t("admin.clientAccess.none")}</p>
         )}
       </div>
-      <RoleRights roles={roles} />
+      <ClientRolesPanel client={client} roles={roles} />
       <NewUserDialog open={creating} onOpenChange={setCreating} kind="client" clientId={client.id} />
       <UserSheet user={users.find((u) => u.id === openId) ?? null} onClose={() => setOpenId(null)} />
     </div>

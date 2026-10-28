@@ -19,7 +19,7 @@ import { dateTime } from "@/lib/format";
 import type { AdminUser, Role } from "@/lib/types";
 import { cn, initials } from "@/lib/utils";
 import type { Audience } from "@shared/permissions";
-import { useAdminError, useRoleName, useRoles } from "./hooks";
+import { useAdminError, useRoleName, useRolesFor } from "./hooks";
 import { OverridesEditor, type OverrideMap } from "./PermissionMatrix";
 import { useConfirm } from "@/components/ConfirmDialog";
 import { O365Panel } from "./CalendarLinks";
@@ -116,7 +116,7 @@ export function NewUserDialog({
   const { t } = useTranslation();
   const qc = useQueryClient();
   const errText = useAdminError();
-  const { data: roles = [] } = useRoles();
+  const roles = useRolesFor(kind, clientId);
   const defaultRole = roles.find((r) => r.slug === (kind === "staff" ? "technician" : "client-user"))?.id ?? null;
   const empty = { email: "", name: "", title: "", phone: "", roleId: defaultRole, locale: "fr" as "fr" | "en", notifyEmail: true, sendWelcome: true };
   const [form, setForm] = useState(empty);
@@ -220,11 +220,55 @@ export function NewUserDialog({
   );
 }
 
+/** A person's preferences: the language of their emails and screens, and whether they get email copies. */
+export function PreferencesTab({ user }: { user: AdminUser }) {
+  const { t } = useTranslation();
+  const qc = useQueryClient();
+  const errText = useAdminError();
+  const [locale, setLocale] = useState(user.locale);
+  const [notifyEmail, setNotifyEmail] = useState(user.notifyEmail);
+  const dirty = locale !== user.locale || notifyEmail !== user.notifyEmail;
+  const save = useMutation({
+    mutationFn: () => api.patch<AdminUser>(`/admin/users/${user.id}`, { locale, notifyEmail }),
+    onSuccess: () => {
+      invalidateUsers(qc);
+      toast.success(t("common.saved"));
+    },
+    onError: (e) => toast.error(errText(e)),
+  });
+  return (
+    <div className="max-w-xl space-y-4">
+      <div className="space-y-2">
+        <Label>{t("common.language")}</Label>
+        <Select value={locale} onValueChange={(v) => setLocale(v as "fr" | "en")}>
+          <SelectTrigger className="w-full"><SelectValue /></SelectTrigger>
+          <SelectContent>
+            <SelectItem value="fr">Français</SelectItem>
+            <SelectItem value="en">English</SelectItem>
+          </SelectContent>
+        </Select>
+      </div>
+      <label className="flex items-center justify-between gap-4 rounded-lg border p-3 text-sm">
+        <span>
+          <span className="block">{t("admin.users.notify")}</span>
+          <span className="block text-xs text-muted-foreground">{t("admin.users.notifyHint")}</span>
+        </span>
+        <Switch checked={notifyEmail} onCheckedChange={setNotifyEmail} />
+      </label>
+      <div className="flex justify-end border-t pt-4">
+        <Button onClick={() => save.mutate()} disabled={!dirty || save.isPending}>
+          {save.isPending && <Loader2 className="size-4 animate-spin" />} {t("common.save")}
+        </Button>
+      </div>
+    </div>
+  );
+}
+
 // ── User detail (profile / access / security) ────────────────────────────────
 export function UserSheet({ user, onClose }: { user: AdminUser | null; onClose: () => void }) {
   const { t } = useTranslation();
   const roleName = useRoleName();
-  const { data: roles = [] } = useRoles();
+  const roles = useRolesFor(user?.kind ?? "staff", user?.clientId);
   const role = roles.find((r) => r.id === user?.roleId);
   return (
     <Sheet open={Boolean(user)} onOpenChange={(o) => !o && onClose()}>
@@ -376,7 +420,7 @@ function ProfileTab({ user }: { user: AdminUser }) {
   );
 }
 
-function AccessTab({ user, roles }: { user: AdminUser; roles: Role[] }) {
+export function AccessTab({ user, roles }: { user: AdminUser; roles: Role[] }) {
   const { t } = useTranslation();
   const qc = useQueryClient();
   const can = useCan();
@@ -425,7 +469,7 @@ function AccessTab({ user, roles }: { user: AdminUser; roles: Role[] }) {
   );
 }
 
-function SecurityTab({ user }: { user: AdminUser }) {
+export function SecurityTab({ user }: { user: AdminUser }) {
   const { t } = useTranslation();
   const confirm = useConfirm();
   const qc = useQueryClient();

@@ -75,6 +75,8 @@ export type Role = {
   id: string;
   slug: string | null;
   audience: Audience;
+  /** A client role belongs to one client (null: a technician role) */
+  clientId: string | null;
   name: string;
   description: string | null;
   permissions: string[];
