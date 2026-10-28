@@ -42,9 +42,9 @@ export function LineAdder({ onProduct, onService, onFree }: { onProduct: (p: Quo
     placeholderData: (prev) => prev,
     staleTime: 15_000,
   });
-  // services first, then the inventory; with nothing typed, a few of each
-  const svc = (services.data ?? []).slice(0, typed ? 15 : 6);
-  const prod = (products.data ?? []).slice(0, typed ? 25 : 8);
+  // every service first (the list scrolls), then the inventory
+  const svc = services.data ?? [];
+  const prod = products.data ?? [];
   const found: Choice[] = [...svc.map((s) => ({ kind: "service" as const, s })), ...prod.map((p) => ({ kind: "product" as const, p }))];
   const free = text.trim();
   const showFree = free.length > 0;
@@ -134,7 +134,7 @@ export function LineAdder({ onProduct, onService, onFree }: { onProduct: (p: Quo
       {/* solid background (not glass): the lines under the list must not show through */}
       {open && count > 0 && (
         <ul id="quote-line-suggestions" role="listbox" className="absolute inset-x-0 top-12 z-40 max-h-96 overflow-y-auto rounded-xl border bg-popover p-1 text-popover-foreground shadow-2xl ring-1 ring-black/40">
-          {svc.length > 0 && heading(t("quotes.editor.services"))}
+          {svc.length > 0 && heading(`${t("quotes.editor.services")} (${svc.length})`)}
           {svc.map((s, i) =>
             row(
               i,

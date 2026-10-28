@@ -1696,6 +1696,13 @@ describe("tickets: client and contact", () => {
     expect(found).toEqual([expect.objectContaining({ id: backup.id, name: "Sauvegarde Veeam M365", description: "Par utilisateur", recurrence: "monthly", priceCents: 600, costCents: 350, taxable: true })]);
     expect((await admin.get("/api/quotes/services?q=licence")).json[0]).toMatchObject({ id: licence.id, recurrence: "yearly", taxable: false });
     expect((await admin.get("/api/quotes/services?q=retir")).json).toEqual([]);
+    // word by word, accents and punctuation ignored; every active service is listed (not only the first few)
+    const exchange = (await admin.post("/api/services", { name: "Exchange Online (Plan 1) P1M", kind: "recurring", priceCents: 550 })).json;
+    for (const q of ["exchange plan 1", "Plan 1 exchange", "p1m", "EXCHANGE online (plan"]) expect((await admin.get(`/api/quotes/services?q=${encodeURIComponent(q)}`)).json.map((s: any) => s.id)).toContain(exchange.id);
+    await admin.post("/api/services", { name: "Équipe de soutien prioritaire", kind: "recurring", priceCents: 100 });
+    expect((await admin.get("/api/quotes/services?q=equipe")).json.map((s: any) => s.name)).toContain("Équipe de soutien prioritaire");
+    for (let i = 0; i < 45; i++) await admin.post("/api/services", { name: `Licence lot ${i}`, kind: "recurring", priceCents: 100 });
+    expect((await admin.get("/api/quotes/services")).json.length).toBeGreaterThan(45);
     expect((await tech.get("/api/quotes/services")).status).toBe(403);
 
     // a service line, a discounted line; an unknown service or a discount over 100 % is refused

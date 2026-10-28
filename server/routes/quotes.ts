@@ -14,6 +14,23 @@ import { lineAmount, quoteTotals } from "../../shared/quotes.ts";
 import { getQuote, listQuotes, nextQuoteNumber, saveLines, todayQc } from "../lib/quotes.ts";
 import { QUOTE_KINDS, QUOTE_RECURRENCES, QUOTE_STATUSES, recurrenceOf } from "../../shared/quotes.ts";
 
+/** Lower case, no accents, punctuation as spaces: "Exchange Online (Plan 1)" → "exchange online plan 1" */
+const fold = (s: string) =>
+  s
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, " ")
+    .trim();
+/** Every word typed is somewhere in the text, in any order ("exchange plan 1" finds "Exchange Online (Plan 1) P1M") */
+const matcher = (q: string) => {
+  const words = fold(q).split(" ").filter(Boolean);
+  return (text: string) => {
+    const hay = ` ${fold(text)} `;
+    return words.every((w) => hay.includes(w));
+  };
+};
+
 const zDate = z.string().regex(/^\d{4}-\d{2}-\d{2}$/);
 const zCents = z.number().int().min(0).max(1_000_000_000);
 const text = (max: number) => z.string().trim().max(max).transform((s) => s || null).nullable().default(null);
@@ -125,7 +142,7 @@ export const quoteRoutes = new Hono<AppEnv>()
    * Only what a quote needs (no stock per location), so it needs no inventory right.
    */
   .get("/products", async (c) => {
-    const q = (c.req.query("q") ?? "").trim().toLowerCase();
+    const matches = matcher(c.req.query("q") ?? "");
     const [products, used] = await Promise.all([
       productsWithStock(),
       db()
@@ -137,7 +154,7 @@ export const quoteRoutes = new Hono<AppEnv>()
     const uses = new Map(used.map((u) => [u.productId, u.n]));
     const shown = products
       .filter((p) => p.active)
-      .filter((p) => !q || `${p.sku ?? ""} ${p.name} ${p.manufacturer ?? ""} ${p.category ?? ""}`.toLowerCase().includes(q))
+      .filter((p) => matches(`${p.sku ?? ""} ${p.name} ${p.manufacturer ?? ""} ${p.category ?? ""}`))
       .sort((a, b) => (uses.get(b.id) ?? 0) - (uses.get(a.id) ?? 0) || a.name.localeCompare(b.name))
       .slice(0, 40)
       .map((p) => ({
@@ -156,11 +173,12 @@ export const quoteRoutes = new Hono<AppEnv>()
   })
 
   /**
-   * The services (Inventory › Services), for adding lines: the active ones, the most quoted first.
+   * The services (Inventory › Services), for adding lines: every active one, the most quoted first, then by name;
+   * the search is word by word, accents and punctuation ignored.
    * A monthly / yearly service becomes a monthly / yearly line. Needs no services right, like the inventory.
    */
   .get("/services", async (c) => {
-    const q = (c.req.query("q") ?? "").trim().toLowerCase();
+    const matches = matcher(c.req.query("q") ?? "");
     const [rows, used] = await Promise.all([
       db().select().from(schema.services).where(eq(schema.services.active, true)),
       db()
@@ -173,9 +191,10 @@ export const quoteRoutes = new Hono<AppEnv>()
     const recurrence = (kind: string) => (kind === "recurring" ? "monthly" : kind === "recurring_yearly" ? "yearly" : "once");
     return c.json(
       rows
-        .filter((s) => !q || `${s.sku ?? ""} ${s.name} ${s.description}`.toLowerCase().includes(q))
-        .sort((a, b) => (uses.get(b.id) ?? 0) - (uses.get(a.id) ?? 0) || a.name.localeCompare(b.name))
-        .slice(0, 40)
+        .filter((s) => matches(`${s.sku ?? ""} ${s.name} ${s.description} ${s.vendorSku ?? ""}`))
+        .sort((a, b) => (uses.get(b.id) ?? 0) - (uses.get(a.id) ?? 0) || a.name.localeCompare(b.name, "fr"))
+        // every active service (the catalogue is not that long); a cap only against a runaway list
+        .slice(0, 1000)
         .map((s) => ({ id: s.id, sku: s.sku, name: s.name, description: s.description, recurrence: recurrence(s.kind), priceCents: s.priceCents, costCents: s.costCents, taxable: s.taxable, uses: uses.get(s.id) ?? 0 })),
     );
   })
