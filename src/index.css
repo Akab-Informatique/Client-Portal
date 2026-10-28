@@ -569,6 +569,11 @@
     background: none !important;
     padding: 0 !important;
   }
+  /* one-time costs and recurring services: each sheet on its own page */
+  html.printing-quote .quote-sheet-next {
+    break-before: page;
+    margin-top: 0 !important;
+  }
   html.printing-quote .quote-sheet {
     max-width: none !important;
     border-radius: 0 !important;

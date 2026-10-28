@@ -134,7 +134,16 @@ export function QuotesPage() {
                       {x.validUntil && <p>{t("quotes.validUntil", { date: shortDate(x.validUntil) })}</p>}
                     </div>
                     <span className={cn("rounded-full border px-2.5 py-0.5 text-xs", STATUS_STYLE[shown])}>{t(`quotes.status.${shown}`)}</span>
-                    <span className="w-28 text-right font-semibold tabular-nums">{money(x.totals.totalCents, i18n.language)}</span>
+                    <span className="w-28 text-right font-semibold tabular-nums">
+                      {money(x.totals.totalCents, i18n.language)}
+                      {(["monthly", "yearly"] as const).map((k) =>
+                        x.totals[k].subtotalCents > 0 ? (
+                          <span key={k} className="block whitespace-nowrap text-xs font-normal text-muted-foreground">
+                            + {money(x.totals[k].totalCents, i18n.language)} {t(`quotes.recurrence.per.${k}`)}
+                          </span>
+                        ) : null,
+                      )}
+                    </span>
                   </Link>
                   {x.status !== "declined" && can("quotes.manage") && (
                     <div className="flex w-full shrink-0 flex-wrap items-center justify-end gap-2 px-4 pb-3 sm:w-auto sm:flex-nowrap sm:px-3 sm:pb-0">

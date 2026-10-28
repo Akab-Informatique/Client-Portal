@@ -12,7 +12,7 @@ import { queues } from "../lib/queues.ts";
 import { run } from "./tickets.ts";
 import { lineAmount, quoteTotals } from "../../shared/quotes.ts";
 import { getQuote, listQuotes, nextQuoteNumber, saveLines, todayQc } from "../lib/quotes.ts";
-import { QUOTE_KINDS, QUOTE_STATUSES } from "../../shared/quotes.ts";
+import { QUOTE_KINDS, QUOTE_RECURRENCES, QUOTE_STATUSES, recurrenceOf } from "../../shared/quotes.ts";
 
 const zDate = z.string().regex(/^\d{4}-\d{2}-\d{2}$/);
 const zCents = z.number().int().min(0).max(1_000_000_000);
@@ -22,11 +22,13 @@ const zLine = z.object({
   productId: zUuid.nullable().default(null),
   sku: z.string().trim().max(60).transform((s) => s || null).nullable().default(null),
   description: z.string().trim().min(1).max(2000),
+  details: text(2000),
   quantityX100: z.number().int().min(1).max(100_000_000).default(100),
   unitPriceCents: zCents.default(0),
   unitCostCents: zCents.default(0),
   taxable: z.boolean().default(true),
   optional: z.boolean().default(false),
+  recurrence: z.enum(QUOTE_RECURRENCES).default("once"),
 });
 
 const zQuote = z.object({
@@ -276,7 +278,7 @@ await audit(a.user.id, "quote.updated", id, { number: cur.number, lines: p.lines
       await saveLines(
         tx,
         row.id,
-        (cur.lines ?? []).map(({ productId, sku, description, quantityX100, unitPriceCents, unitCostCents, taxable, optional }) => ({ productId, sku, description, quantityX100, unitPriceCents, unitCostCents, taxable, optional })),
+        (cur.lines ?? []).map(({ productId, sku, description, details, quantityX100, unitPriceCents, unitCostCents, taxable, optional, recurrence }) => ({ productId, sku, description, details, quantityX100, unitPriceCents, unitCostCents, taxable, optional, recurrence: recurrenceOf({ recurrence }) })),
       );
       return row.id;
     });
@@ -324,7 +326,8 @@ await audit(a.user.id, "quote.updated", id, { number: cur.number, lines: p.lines
 
     const t = quoteTotals(q.lines ?? [], q.taxes, q.rates!);
     const fmt = (cents: number) => new Intl.NumberFormat("fr-CA", { style: "currency", currency: "CAD" }).format(cents / 100);
-    const bullets = (q.lines ?? []).map((l) => `- ${l.quantityX100 / 100} × ${l.description}${l.sku ? ` (${l.sku})` : ""}${l.optional ? " [option]" : ""}: ${fmt(lineAmount(l))}`);
+    const per = { once: "", monthly: " / mois", yearly: " / an" };
+    const bullets = (q.lines ?? []).map((l) => `- ${l.quantityX100 / 100} × ${l.description}${l.sku ? ` (${l.sku})` : ""}${l.optional ? " [option]" : ""}: ${fmt(lineAmount(l))}${per[recurrenceOf(l)]}${l.details ? `\n  ${l.details.replace(/\n/g, "\n  ")}` : ""}`);
     const name = q.title || q.number;
     const description = [
       `Projet issu de la soumission ${q.number}${q.title ? ` « ${q.title} »` : ""} pour ${client.name}.`,
@@ -333,6 +336,8 @@ await audit(a.user.id, "quote.updated", id, { number: cur.number, lines: p.lines
       ...bullets,
       "",
       `Total: ${fmt(t.totalCents)} (sous-total ${fmt(t.subtotalCents)}${q.taxes ? ", taxes en sus" : ", sans taxes"})`,
+      ...(t.monthly.subtotalCents ? [`Mensuel: ${fmt(t.monthly.totalCents)} / mois`] : []),
+      ...(t.yearly.subtotalCents ? [`Annuel: ${fmt(t.yearly.totalCents)} / an`] : []),
       q.notes ? `\nNotes pour le client:\n${q.notes}` : "",
       q.internalNotes ? `\nNotes internes:\n${q.internalNotes}` : "",
     ]

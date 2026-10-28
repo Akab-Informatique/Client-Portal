@@ -2,7 +2,7 @@ import { and, desc, eq, inArray, like, sql } from "drizzle-orm";
 import { alias } from "drizzle-orm/pg-core";
 import { db, schema } from "../db/index.ts";
 import { billingSettings, DEFAULT_BILLING } from "./billing.ts";
-import { quoteTotals } from "../../shared/quotes.ts";
+import { quoteTotals, type QuoteRecurrence } from "../../shared/quotes.ts";
 
 export const todayQc = () => new Date().toLocaleDateString("en-CA", { timeZone: "America/Toronto" });
 
@@ -17,11 +17,13 @@ export type QuoteLineInput = {
   productId: string | null;
   sku: string | null;
   description: string;
+  details: string | null;
   quantityX100: number;
   unitPriceCents: number;
   unitCostCents: number;
   taxable: boolean;
   optional: boolean;
+  recurrence: QuoteRecurrence;
 };
 
 /** Replace the lines of a quote, in the order given. */

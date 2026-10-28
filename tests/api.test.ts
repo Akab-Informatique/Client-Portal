@@ -1648,6 +1648,42 @@ describe("tickets: client and contact", () => {
     expect((await admin.get(`/api/quotes/${copy.id}`)).status).toBe(404);
   });
 
+  it("quotes: a line has its own description, and monthly or yearly lines have their own totals", async () => {
+    const admin = await session("admin@akab.local");
+    const made = await admin.post("/api/quotes", {
+      prospectName: "Clinique Lavallée",
+      lines: [
+        { description: "Installation du pare-feu", details: "  Configuration, VPN des 3 succursales\net documentation  ", quantityX100: 100, unitPriceCents: 150000 },
+        { description: "Surveillance des postes", details: "", quantityX100: 1000, unitPriceCents: 1500, recurrence: "monthly" },
+        { description: "Licence pare-feu", quantityX100: 100, unitPriceCents: 60000, recurrence: "yearly", taxable: false },
+        { description: "Sauvegarde infonuagique (option)", quantityX100: 100, unitPriceCents: 5000, recurrence: "monthly", optional: true },
+      ],
+    });
+    expect(made.status).toBe(201);
+    const q = made.json;
+    // the description is trimmed and kept with its line breaks; empty = none; one-time by default
+    expect(q.lines.map((l: any) => [l.details, l.recurrence])).toEqual([
+      ["Configuration, VPN des 3 succursales\net documentation", "once"],
+      [null, "monthly"],
+      [null, "yearly"],
+      [null, "monthly"],
+    ]);
+    // the implementation is the one-time lines only; monthly and yearly apart (taxes on the taxable ones), the option never counted
+    expect(q.totals).toMatchObject({ subtotalCents: 150000, totalCents: 150000 + 7500 + 14963, optionalCents: 5000 });
+    expect(q.totals.monthly).toMatchObject({ subtotalCents: 15000, gstCents: 750, qstCents: 1496, totalCents: 17246 });
+    expect(q.totals.yearly).toMatchObject({ subtotalCents: 60000, gstCents: 0, qstCents: 0, totalCents: 60000 });
+
+    // too long, or an unknown recurrence, is refused
+    expect((await admin.put(`/api/quotes/${q.id}`, { prospectName: "Clinique Lavallée", lines: [{ description: "X", details: "a".repeat(2001) }] })).status).toBe(400);
+    expect((await admin.put(`/api/quotes/${q.id}`, { prospectName: "Clinique Lavallée", lines: [{ description: "X", recurrence: "weekly" }] })).status).toBe(400);
+
+    // changed and read back; a copy keeps both
+    await admin.put(`/api/quotes/${q.id}`, { prospectName: "Clinique Lavallée", lines: [{ description: "Pare-feu", details: "Modèle FG-60F", quantityX100: 100, unitPriceCents: 1, recurrence: "yearly" }] });
+    expect((await admin.get(`/api/quotes/${q.id}`)).json.lines[0]).toMatchObject({ details: "Modèle FG-60F", recurrence: "yearly" });
+    const copy = (await admin.post(`/api/quotes/${q.id}/duplicate`, {})).json;
+    expect(copy.lines[0]).toMatchObject({ details: "Modèle FG-60F", recurrence: "yearly" });
+  });
+
   it("serialized products: received by serial number, the ones taken are chosen on the ticket", async () => {
     const admin = await session("admin@akab.local");
     const tech = await session("tech@akab.local");

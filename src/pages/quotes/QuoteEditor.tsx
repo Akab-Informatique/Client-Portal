@@ -20,7 +20,7 @@ import { useCan, useMe } from "@/lib/session";
 import { cn } from "@/lib/utils";
 import { money } from "@/pages/crm/shared";
 import { longDateTime } from "@/pages/tickets/shared";
-import { quoteTotals, type QuoteKind } from "@shared/quotes";
+import { QUOTE_RECURRENCES, quoteTotals, recurrenceOf, type QuoteKind, type QuoteRecurrence } from "@shared/quotes";
 import { SurveyPanel } from "./SurveyPanel";
 import { QuoteDocument, type DocData } from "./QuoteDocument";
 import { useToProject } from "./useToProject";
@@ -28,7 +28,7 @@ import { LineAdder } from "./LineAdder";
 import { fromCents, fromQty, parseNum, STATUS_STYLE, toCents, toQtyX100, useQuoteClients, useQuoteStaff, type Quote, type QuoteProduct } from "./shared";
 
 /** A line as it is typed: numbers stay text until saved, so "12," and "1 299" can be written. */
-type Row = { key: string; id?: string; productId: string | null; sku: string; description: string; qty: string; unit: string; cost: string; taxable: boolean; optional: boolean };
+type Row = { key: string; id?: string; productId: string | null; sku: string; description: string; details: string; recurrence: QuoteRecurrence; qty: string; unit: string; cost: string; taxable: boolean; optional: boolean };
 
 type Form = {
   preparedById: string | null;
@@ -68,7 +68,7 @@ const fromQuote = (q: Quote): Form => ({
   taxes: q.taxes,
   notes: q.notes ?? "",
   internalNotes: q.internalNotes ?? "",
-  rows: q.lines.map((l) => ({ key: key(), id: l.id, productId: l.productId, sku: l.sku ?? "", description: l.description, qty: fromQty(l.quantityX100), unit: fromCents(l.unitPriceCents), cost: fromCents(l.unitCostCents), taxable: l.taxable, optional: l.optional })),
+  rows: q.lines.map((l) => ({ key: key(), id: l.id, productId: l.productId, sku: l.sku ?? "", description: l.description, details: l.details ?? "", recurrence: recurrenceOf(l), qty: fromQty(l.quantityX100), unit: fromCents(l.unitPriceCents), cost: fromCents(l.unitCostCents), taxable: l.taxable, optional: l.optional })),
 });
 
 const payload = (f: Form) => ({
@@ -85,10 +85,10 @@ const payload = (f: Form) => ({
   taxes: f.taxes,
   notes: f.notes.trim() || null,
   internalNotes: f.internalNotes.trim() || null,
-  lines: f.rows.map((r) => ({ productId: r.productId, sku: r.sku.trim() || null, description: r.description.trim() || "-", quantityX100: toQtyX100(r.qty), unitPriceCents: toCents(r.unit), unitCostCents: toCents(r.cost), taxable: r.taxable, optional: r.optional })),
+  lines: f.rows.map((r) => ({ productId: r.productId, sku: r.sku.trim() || null, description: r.description.trim() || "-", details: r.details.trim() || null, recurrence: r.recurrence, quantityX100: toQtyX100(r.qty), unitPriceCents: toCents(r.unit), unitCostCents: toCents(r.cost), taxable: r.taxable, optional: r.optional })),
 });
 
-const rowMoney = (r: Row) => ({ quantityX100: toQtyX100(r.qty), unitPriceCents: toCents(r.unit), unitCostCents: toCents(r.cost), taxable: r.taxable, optional: r.optional });
+const rowMoney = (r: Row) => ({ quantityX100: toQtyX100(r.qty), unitPriceCents: toCents(r.unit), unitCostCents: toCents(r.cost), taxable: r.taxable, optional: r.optional, recurrence: r.recurrence });
 
 function errorText(t: (k: string, o?: Record<string, unknown>) => string, e: unknown) {
   if (e instanceof ApiError) return t(`quotes.errors.${e.code}`, { defaultValue: t("common.error") });
@@ -160,11 +160,11 @@ export function QuoteEditor() {
   const addProduct = (p: QuoteProduct) =>
     setForm((f) => {
       // the same product again adds one to its line
-      const same = f.rows.find((r) => r.productId === p.id && !r.optional);
+      const same = f.rows.find((r) => r.productId === p.id && !r.optional && r.recurrence === "once");
       if (same) return { ...f, rows: f.rows.map((r) => (r === same ? { ...r, qty: String(parseNum(r.qty) + 1).replace(".", ",") } : r)) };
-      return { ...f, rows: [...f.rows, { key: key(), productId: p.id, sku: p.sku ?? "", description: p.name, qty: "1", unit: fromCents(p.priceCents), cost: fromCents(p.costCents), taxable: true, optional: false }] };
+      return { ...f, rows: [...f.rows, { key: key(), productId: p.id, sku: p.sku ?? "", description: p.name, details: p.description?.trim() ?? "", recurrence: "once", qty: "1", unit: fromCents(p.priceCents), cost: fromCents(p.costCents), taxable: true, optional: false }] };
     });
-  const addFree = (text: string) => setForm((f) => ({ ...f, rows: [...f.rows, { key: key(), productId: null, sku: "", description: text, qty: "1", unit: "0,00", cost: "0,00", taxable: true, optional: false }] }));
+  const addFree = (text: string) => setForm((f) => ({ ...f, rows: [...f.rows, { key: key(), productId: null, sku: "", description: text, details: "", recurrence: "once", qty: "1", unit: "0,00", cost: "0,00", taxable: true, optional: false }] }));
   const move = (k: string, d: -1 | 1) =>
     setForm((f) => {
       const i = f.rows.findIndex((r) => r.key === k);
@@ -250,7 +250,7 @@ export function QuoteEditor() {
         forName: clientName ?? form.prospectName.trim(),
         contactName: form.contactName.trim(),
         contactEmail: form.contactEmail.trim(),
-        rows: form.rows.map((r) => ({ sku: r.sku.trim(), description: r.description.trim(), ...rowMoney(r) })),
+        rows: form.rows.map((r) => ({ sku: r.sku.trim(), description: r.description.trim(), details: r.details.trim(), ...rowMoney(r) })),
         taxes: form.taxes,
         rates,
         notes: form.notes.trim(),
@@ -261,6 +261,7 @@ export function QuoteEditor() {
         preparedByTitle: staff.data?.find((s) => s.id === form.preparedById)?.title ?? "",
       }
     : null;
+  const recurring = totals.monthly.subtotalCents > 0 || totals.yearly.subtotalCents > 0;
   const marginPct = totals.subtotalCents > 0 ? Math.round((totals.marginCents / totals.subtotalCents) * 100) : 0;
   const busy = save.isPending || changeStatus.isPending;
   const shownStatus = quote?.expired ? "expired" : status;
@@ -387,13 +388,36 @@ export function QuoteEditor() {
                   return (
                     <li key={r.key} className={cn("grid gap-x-3 gap-y-2 py-3 md:grid-cols-[minmax(0,1fr)_4.5rem_7.5rem_8rem]", showCosts && "md:grid-cols-[minmax(0,1fr)_4.5rem_7.5rem_7rem_8rem]")}>
                       <div className="min-w-0 space-y-1.5 md:col-span-1">
-                        <Input aria-label={t("quotes.editor.description")} value={r.description} onChange={(e) => setRow(r.key, { description: e.target.value })} className="h-9 bg-background/40" />
+                        <Input aria-label={t("quotes.editor.item")} value={r.description} onChange={(e) => setRow(r.key, { description: e.target.value })} className="h-9 bg-background/40 font-medium" />
+                        <Textarea
+                          aria-label={t("quotes.editor.details")}
+                          rows={1}
+                          maxLength={2000}
+                          value={r.details}
+                          onChange={(e) => setRow(r.key, { details: e.target.value })}
+                          placeholder={t("quotes.editor.detailsPlaceholder")}
+                          className="min-h-9 resize-none bg-background/40 py-1.5 text-sm"
+                        />
                         <div className="flex flex-wrap items-center gap-1.5 text-xs">
                           {r.productId ? (
                             <span className="rounded-md border px-1.5 py-0.5 font-mono text-muted-foreground">{r.sku || t("quotes.editor.fromInventory")}</span>
                           ) : (
                             <span className="rounded-md border border-dashed px-1.5 py-0.5 text-muted-foreground">{t("quotes.editor.freeLine")}</span>
                           )}
+                          <div role="radiogroup" aria-label={t("quotes.editor.recurrence")} className="inline-flex rounded-md border p-px">
+                            {QUOTE_RECURRENCES.map((k) => (
+                              <button
+                                key={k}
+                                type="button"
+                                role="radio"
+                                aria-checked={r.recurrence === k}
+                                onClick={() => setRow(r.key, { recurrence: k })}
+                                className={cn("rounded-[5px] px-1.5 py-0.5 transition-colors", r.recurrence === k ? "bg-[color:var(--gold)]/15 text-foreground" : "text-muted-foreground hover:text-foreground")}
+                              >
+                                {t(`quotes.recurrence.${k}`)}
+                              </button>
+                            ))}
+                          </div>
                           <Chip on={r.taxable} onClick={() => setRow(r.key, { taxable: !r.taxable })} label={t("quotes.editor.taxable")} />
                           <Chip on={r.optional} onClick={() => setRow(r.key, { optional: !r.optional })} label={t("quotes.editor.optional")} title={t("quotes.editor.optionalHelp")} />
                           {!r.productId && manage && can("store.manage") && (
@@ -422,6 +446,7 @@ export function QuoteEditor() {
                       <div className="text-right">
                         <p className="text-xs text-muted-foreground md:hidden">{t("quotes.editor.amount")}</p>
                         <p className={cn("whitespace-nowrap pt-1.5 text-sm font-semibold tabular-nums", r.optional && "text-muted-foreground line-through decoration-1")}>{money(amount, i18n.language)}</p>
+                        {r.recurrence !== "once" && <p className="text-xs text-muted-foreground">{t(`quotes.recurrence.per.${r.recurrence}`)}</p>}
                       </div>
                     </li>
                   );
@@ -444,7 +469,9 @@ export function QuoteEditor() {
         </fieldset>
         </div>
 
-        <aside className="space-y-4 xl:sticky xl:top-4">
+        {/* below the top bar, and scrolls on its own when taller than the screen (the buttons stay reachable, clear of the dock at the bottom right) */}
+        <aside className="space-y-4 xl:sticky xl:top-20 xl:-mr-2 xl:max-h-[calc(100dvh-6rem)] xl:overflow-y-auto xl:overscroll-contain xl:pb-24 xl:pr-2">
+
           <section className="glass space-y-3 rounded-2xl border p-5">
             <h2 className="text-lg font-semibold">{t("quotes.editor.totals")}</h2>
             <dl className="space-y-1.5 text-sm">
@@ -452,9 +479,24 @@ export function QuoteEditor() {
               <Total label={`${t("quotes.editor.gst")} (${rates.gstRate} %)`} value={money(totals.gstCents, i18n.language)} muted={!form.taxes} />
               <Total label={`${t("quotes.editor.qst")} (${rates.qstRate} %)`} value={money(totals.qstCents, i18n.language)} muted={!form.taxes} />
               <div className="flex items-baseline justify-between border-t pt-2.5">
-                <dt className="font-semibold">{t("quotes.editor.total")}</dt>
+                <dt className="font-semibold">{recurring ? t("quotes.recurrence.totalOnce") : t("quotes.editor.total")}</dt>
                 <dd className="text-2xl font-bold tabular-nums">{money(totals.totalCents, i18n.language)}</dd>
               </div>
+              {(["monthly", "yearly"] as const).map((k) =>
+                totals[k].subtotalCents > 0 ? (
+                  <div key={k} className="flex items-baseline justify-between border-t pt-2.5">
+                    <dt className="font-semibold">{t(`quotes.recurrence.total.${k}`)}</dt>
+                    <dd className="text-right">
+                      <span className="text-lg font-bold tabular-nums">{money(totals[k].totalCents, i18n.language)}</span>
+                      <span className="text-xs text-muted-foreground"> {t(`quotes.recurrence.per.${k}`)}</span>
+                      <span className="block text-xs text-muted-foreground tabular-nums">
+                        {form.taxes ? t("quotes.recurrence.beforeTaxes", { amount: money(totals[k].subtotalCents, i18n.language) }) : null}
+                        {showCosts ? `${form.taxes ? "  ·  " : ""}${t("quotes.editor.margin")} ${money(totals[k].marginCents, i18n.language)}` : null}
+                      </span>
+                    </dd>
+                  </div>
+                ) : null,
+              )}
               {totals.optionalCents > 0 && <Total label={t("quotes.editor.optionalTotal")} value={money(totals.optionalCents, i18n.language)} muted />}
               {showCosts && (
                 <div className="flex items-baseline justify-between border-t pt-2.5">

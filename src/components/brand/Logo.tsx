@@ -1,5 +1,6 @@
 import type { CSSProperties } from "react";
 import logoUrl from "@/assets/akab-logo.webp";
+import logoPillUrl from "@/assets/akab-logo-pill.png";
 import { cn } from "@/lib/utils";
 
 /**
@@ -89,6 +90,15 @@ export function BrandWord({ word, className }: { word: string; className?: strin
       ))}
     </svg>
   );
+}
+
+/**
+ * The full logo in its black pill (src/assets/akab-logo-pill.png, 1000 × 290, the same image as the
+ * invoice PDF's): the dark background is part of the image, so it prints right on white paper
+ * even when the browser leaves backgrounds out (the white hexagon and INFORMATIQUE stay visible).
+ */
+export function LogoPill({ className }: { className?: string }) {
+  return <img src={logoPillUrl} alt="AKAB Informatique" draggable={false} className={cn("h-12 w-auto shrink-0 select-none", className)} />;
 }
 
 /** The full logo, with INFORMATIQUE (top left of the portal). */

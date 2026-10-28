@@ -1,8 +1,9 @@
 import { useQuery } from "@tanstack/react-query";
 import { api } from "@/lib/api";
-import type { QuoteKind, QuoteStatus } from "@shared/quotes";
+import type { QuoteKind, QuoteRecurrence, QuoteStatus, quoteTotals } from "@shared/quotes";
 
-export type QuoteTotals = { subtotalCents: number; gstCents: number; qstCents: number; totalCents: number; costCents: number; marginCents: number; optionalCents: number };
+/** The implementation (one-time lines) at the top level; monthly and yearly lines apart. */
+export type QuoteTotals = ReturnType<typeof quoteTotals>;
 
 export type QuoteListItem = {
   id: string;
@@ -33,6 +34,8 @@ export type QuoteLine = {
   productId: string | null;
   sku: string | null;
   description: string;
+  details: string | null;
+  recurrence: QuoteRecurrence;
   quantityX100: number;
   unitPriceCents: number;
   unitCostCents: number;

@@ -2277,8 +2277,12 @@ export const quoteLines = pgTable(
     productId: uuid("product_id").references(() => storeProducts.id, { onDelete: "set null" }),
     sku: text("sku"),
     description: text("description").notNull(),
+    /** More about the line, under its name on the sheet (free text) */
+    details: text("details"),
     quantityX100: integer("quantity_x100").notNull().default(100),
     unitPriceCents: bigint("unit_price_cents", { mode: "number" }).notNull().default(0),
+    /** once (implementation, paid now) | monthly | yearly: each has its own total */
+    recurrence: text("recurrence").notNull().default("once"),
     /** What it costs AKAB, for the margin (internal) */
     unitCostCents: bigint("unit_cost_cents", { mode: "number" }).notNull().default(0),
     taxable: boolean("taxable").notNull().default(true),
