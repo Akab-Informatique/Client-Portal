@@ -7083,6 +7083,47 @@ describe("ITCloud: vendor, clients matched, services kept on contracts", () => {
   });
 });
 
+describe("a recurring contract sold as a bundle", () => {
+  it("one price and a quantity for the package, the services listed with no price of their own", async () => {
+    resetRateLimit("login:ip:unknown");
+    const admin = await signIn("admin@akab.local");
+    // a client of its own, so the other tests' work to bill on the sample client is left as it was
+    const client = (await admin.post("/api/crm/clients", { name: "Client du forfait", phone: "450-555-7777" })).json;
+    const types = (await admin.get("/api/crm/contract-types")).json;
+    const typeKey = types.find((x: any) => x.kind === "recurring").key;
+    const hourlyKey = types.find((x: any) => x.kind === "hourly").key;
+    const base = `/api/crm/clients/${client.id}/contracts`;
+    const a = (await admin.post("/api/services", { name: "Courriel géré", kind: "recurring", priceCents: 1_200 })).json;
+    const b = (await admin.post("/api/services", { name: "Sauvegarde", kind: "recurring", priceCents: 2_500 })).json;
+    const y = new Date().getFullYear() - 1;
+    const today = new Date().toLocaleDateString("en-CA", { timeZone: "America/Toronto" });
+    const made = await admin.post(base, { name: "Forfait PME", typeKey, startDate: `${y}-01-01`, endDate: `${y + 3}-12-31`, bundlePrice: 100, bundleQuantity: 2, services: [{ serviceId: a.id, addedOn: `${y}-01-01`, quantity: 5 }, { serviceId: b.id, addedOn: `${y}-01-01`, quantity: 5 }] });
+    expect(made.status).toBe(201);
+    expect(made.json).toMatchObject({ bundlePriceCents: 10_000, bundleQuantity: 2 });
+    const kid = made.json.id;
+    // what is charged is the package (2 × 100 $ a month), not the sum of the services (5 × 12 + 5 × 25)
+    const detail = (await admin.get(`${base}/${kid}`)).json;
+    expect(detail.services).toHaveLength(2);
+    expect(detail.summary.perPeriodCents).toBe(20_000);
+    expect(detail.monthlyRateCents).toBe(20_000);
+    // in Approbation: one line for the package, quantity 2 × 100 $, never a line per service
+    const { contractBillables } = await import("../server/lib/contractBills.ts");
+    const lines = (await contractBillables("2000-01-01")).filter((l) => l.contractSourceId === detail.autotaskId);
+    expect(lines.length).toBeGreaterThan(0);
+    expect(lines.every((l) => l.description.startsWith("Forfait PME"))).toBe(true);
+    expect(lines.filter((l) => !l.description.includes("prorata")).every((l) => l.quantity === 2 && l.unitPriceCents === 10_000)).toBe(true);
+    // off again: the services are charged one by one (5 × 12 $ + 5 × 25 $ = 185 $)
+    expect((await admin.patch(`${base}/${kid}`, { bundlePrice: null })).status).toBe(200);
+    expect((await admin.get(`${base}/${kid}`)).json.summary.perPeriodCents).toBe(5 * 1_200 + 5 * 2_500);
+    // yearly: the bundle price is per year
+    expect((await admin.patch(`${base}/${kid}`, { bundlePrice: 1_000, bundleQuantity: 1, billingPeriod: "yearly" })).json.bundlePriceCents).toBe(100_000);
+    expect((await admin.get(`${base}/${kid}`)).json.summary.perPeriodCents).toBe(100_000);
+    // only a recurring services contract has a bundle
+    expect((await admin.post(base, { name: "Taux horaire", typeKey: hourlyKey, startDate: `${y}-01-01`, endDate: `${y}-12-31`, bundlePrice: 100 })).json.error).toBe("bundle_not_recurring");
+    expect(today).toBeTruthy();
+  });
+});
+
 describe("service prices and the contracts that use them", () => {
   it("a price changed on a service, or on a contract line, asks how far it goes", async () => {
     resetRateLimit("login:ip:unknown");
@@ -7678,9 +7719,12 @@ describe("contracts: services when made, charges, activity, stop instead of dele
       await db().insert(schema.billingItems).values([old(1, "pending"), { ...old(2, "approved"), approvedBy: adminRow!.id, approvedAt: new Date() }]);
       // into Approbation: refreshed and checked line by line
       // a sync already running when the contract was made would not have it: the second import starts a fresh one
-      expect((await admin.post("/api/billables/import", {})).status).toBe(200);
-      expect((await admin.post("/api/billables/import", {})).status).toBe(200);
-      const list = (await admin.get(`/api/billables?kind=contract&clientId=${client!.id}`)).json;
+      // (a background import can be running at the same moment: import again until the contract's lines are in)
+      let list: any[] = [];
+      for (let i = 0; i < 6 && !list.some((x: any) => x.description.startsWith("Aide")); i++) {
+        expect((await admin.post("/api/billables/import", {})).status).toBe(200);
+        list = (await admin.get(`/api/billables?kind=contract&clientId=${client!.id}`)).json;
+      }
       const aideRow = list.find((x: any) => x.description.startsWith("Aide"));
       expect(aideRow).toMatchObject({ quantityX100: 1000, unitPriceCents: 4500, amountCents: 45000, contractName: "Soutien", status: "pending" });
       expect(list.some((x: any) => x.sourceId === "legacy-contract-1")).toBe(false);

@@ -21,7 +21,7 @@ import { InvoiceMailError, invoicePdfFor, sendInvoiceMail, sendStatement, sendSt
 import { applyAutoApprove } from "../lib/billables.ts";
 import { BILLING_MODES, KIND_MODE, contractTypes, usedHoursOf, type ContractKind } from "../lib/contracts.ts";
 import { prorata, type ServicePeriod } from "../../shared/prorata.ts";
-import { chargesOn, contractCharges, type ChargeLine } from "../../shared/contractCharges.ts";
+import { chargesOn, contractCharges, linesForCharges, type ChargeLine } from "../../shared/contractCharges.ts";
 import { contractCharged, contractEventsOf, recordContractEvent, syncMonthlyRate } from "../lib/contractEvents.ts";
 import { todayQc } from "../lib/timesheets.ts";
 import { billingSettings } from "../lib/billing.ts";
@@ -89,7 +89,8 @@ type ServiceRow = typeof schema.contractServices.$inferSelect;
 const chargeLines = (rows: ServiceRow[]): ChargeLine[] => rows.map((r) => ({ id: r.id, name: r.name, kind: r.kind === "recurring_yearly" ? "recurring_yearly" : "recurring", priceCents: r.priceCents, quantity: r.quantity, addedOn: r.addedOn }));
 /** What a contract charges (per full period, over its term) and what comes next, from its services */
 function summaryOf(k: ContractRow, rows: ServiceRow[], today: string) {
-  const ch = contractCharges({ startDate: k.startDate, endDate: k.endDate, endedOn: k.endedOn, billingPeriod: k.billingPeriod === "yearly" ? "yearly" : "monthly" }, chargeLines(rows));
+  const period = k.billingPeriod === "yearly" ? "yearly" : "monthly";
+  const ch = contractCharges({ startDate: k.startDate, endDate: k.endDate, endedOn: k.endedOn, billingPeriod: period }, linesForCharges({ name: k.name, startDate: k.startDate, billingPeriod: period, bundlePriceCents: k.bundlePriceCents, bundleQuantity: k.bundleQuantity }, chargeLines(rows)));
   const on = chargesOn(ch, today, k.billedThrough);
   return {
     billedThrough: k.billedThrough ?? null,
@@ -443,6 +444,9 @@ export const crmRoutes = new Hono<AppEnv>()
         monthlyRate: z.number().min(0).max(1_000_000).nullable().optional(),
         fixedPrice: z.number().min(0).max(10_000_000).nullable().optional(),
         bankedHours: z.number().min(0).max(100_000).nullable().optional(),
+        /** A recurring contract sold as a bundle: its price (dollars, per billing period) and quantity; the services carry no price of their own */
+        bundlePrice: z.number().min(0).max(10_000_000).nullable().optional(),
+        bundleQuantity: z.number().int().min(1).max(100_000).optional(),
         /** Recurring services added as the contract is made */
         services: z
           .array(z.object({ serviceId: zUuid, addedOn: zDay, quantity: z.number().int().min(1).max(100_000).default(1), priceCents: z.number().int().min(0).max(100_000_000).optional() }))
@@ -455,6 +459,7 @@ export const crmRoutes = new Hono<AppEnv>()
     if (p.endDate < p.startDate) throw new HTTPException(400, { message: "contract_dates" });
     const cents = (v: number | null | undefined) => (v == null ? null : Math.round(v * 100));
     const mode = KIND_MODE[type.kind as ContractKind];
+    if (p.bundlePrice != null && type.kind !== "recurring") throw new HTTPException(400, { message: "bundle_not_recurring" });
     // the services, checked before anything is written
     const catalog = p.services.length ? await db().select().from(schema.services).where(inArray(schema.services.id, [...new Set(p.services.map((s) => s.serviceId))])) : [];
     const lines = p.services.map((s) => {
@@ -486,6 +491,8 @@ export const crmRoutes = new Hono<AppEnv>()
           monthlyRateCents: type.kind === "recurring" ? null : cents(p.monthlyRate),
           fixedPriceCents: cents(p.fixedPrice),
           bankedHoursX100: p.bankedHours == null ? null : Math.round(p.bankedHours * 100),
+          bundlePriceCents: cents(p.bundlePrice) ?? null,
+          bundleQuantity: p.bundleQuantity ?? 1,
           syncedAt: new Date(),
         })
         .returning();
@@ -891,6 +898,9 @@ export const crmRoutes = new Hono<AppEnv>()
         endDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).nullable().optional(),
         fixedPrice: z.number().min(0).max(10_000_000).nullable().optional(),
         bankedHours: z.number().min(0).max(100_000).nullable().optional(),
+        /** The bundle price (dollars, per billing period; null: no bundle, the services are charged one by one) and its quantity */
+        bundlePrice: z.number().min(0).max(10_000_000).nullable().optional(),
+        bundleQuantity: z.number().int().min(1).max(100_000).optional(),
         billingPeriod: z.enum(["monthly", "yearly"]).optional(),
         billedThrough: zDay.nullable().optional(),
         active: z.boolean().optional(),
@@ -914,12 +924,17 @@ export const crmRoutes = new Hono<AppEnv>()
       ...(p.startDate !== undefined ? { startDate: p.startDate } : {}),
       ...(p.endDate !== undefined ? { endDate: p.endDate } : {}),
       ...(p.fixedPrice !== undefined ? { fixedPriceCents: cents(p.fixedPrice) } : {}),
+      ...(p.bundlePrice !== undefined ? { bundlePriceCents: cents(p.bundlePrice) } : {}),
+      ...(p.bundleQuantity !== undefined ? { bundleQuantity: p.bundleQuantity } : {}),
       ...(p.bankedHours !== undefined ? { bankedHoursX100: p.bankedHours === null ? null : Math.round(p.bankedHours * 100) } : {}),
       ...(p.billingPeriod ? { billingPeriod: p.billingPeriod } : {}),
       ...(p.billedThrough !== undefined ? { billedThrough: p.billedThrough } : {}),
       // stopping a contract keeps what was charged: it is charged up to today; starting it again clears the stop
       ...(p.active !== undefined && p.active !== before.active ? (p.active ? { active: true, endedOn: null } : { active: false, endedOn: before.startDate && todayQc() < before.startDate ? before.startDate : todayQc(), supportDefault: false }) : {}),
     };
+    // only a recurring services contract has a bundle
+    const kindNow = type ? type.kind : (await contractTypes()).find((t) => t.key === before.typeKey)?.kind;
+    if (p.bundlePrice != null && kindNow !== "recurring") throw new HTTPException(400, { message: "bundle_not_recurring" });
     // the term cannot leave a service out
     if ((p.startDate !== undefined || p.endDate !== undefined) && (before.startDate || before.endDate)) {
       const start = p.startDate !== undefined ? p.startDate : before.startDate;
@@ -943,12 +958,12 @@ export const crmRoutes = new Hono<AppEnv>()
     const setAside = row.billedThrough ? await excludeBilledThrough(row.id, row.billedThrough) : 0;
     await audit(a.user.id, "crm.contract_updated", row.id, { ...set, approved });
     // the activity: what changed, and a stop or a restart on its own
-    const watched = ["name", "type", "startDate", "endDate", "billingPeriod", "billingMode", "hourlyRateCents", "monthlyRateCents", "ticketRateCents", "fixedPriceCents", "bankedHoursX100", "autoApprove", "billedThrough"] as const;
+    const watched = ["name", "type", "startDate", "endDate", "billingPeriod", "billingMode", "hourlyRateCents", "monthlyRateCents", "ticketRateCents", "fixedPriceCents", "bankedHoursX100", "bundlePriceCents", "bundleQuantity", "autoApprove", "billedThrough"] as const;
     const changes: Record<string, [unknown, unknown]> = {};
     for (const key of watched) if (key in set && before[key] !== row[key]) changes[key] = [before[key], row[key]];
     if (Object.keys(changes).length) await recordContractEvent(row.id, "updated", { changes }, { userId: a.user.id });
     if (p.active !== undefined && p.active !== before.active) await recordContractEvent(row.id, p.active ? "resumed" : "stopped", p.active ? {} : { on: row.endedOn }, { userId: a.user.id });
-    if (p.typeKey || p.billingMode) await syncMonthlyRate(row.id);
+    if (p.typeKey || p.billingMode || p.bundlePrice !== undefined || p.bundleQuantity !== undefined || p.billingPeriod) await syncMonthlyRate(row.id);
     return c.json({ ...row, approved, setAside });
   })
 

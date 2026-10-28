@@ -101,6 +101,9 @@ export type CrmContract = {
   typeKey: string | null;
   bankedHoursX100: number | null;
   fixedPriceCents: number | null;
+  /** A recurring contract sold as a bundle: one price per billing period and a quantity (none: the services are charged one by one) */
+  bundlePriceCents?: number | null;
+  bundleQuantity?: number;
   /** Hours worked under it */
   usedHours: number;
   hourlyRateCents: number | null;

@@ -43,8 +43,13 @@ export async function contractCharged(contractId: string, today: string): Promis
 
 /** A recurring contract shows its monthly charge where the portal used to ask for it: the monthly services plus a twelfth of the yearly ones */
 export async function syncMonthlyRate(contractId: string): Promise<void> {
-  const [k] = await db().select({ mode: schema.clientContracts.billingMode }).from(schema.clientContracts).where(eq(schema.clientContracts.id, contractId));
+  const [k] = await db().select({ mode: schema.clientContracts.billingMode, period: schema.clientContracts.billingPeriod, bundle: schema.clientContracts.bundlePriceCents, qty: schema.clientContracts.bundleQuantity }).from(schema.clientContracts).where(eq(schema.clientContracts.id, contractId));
   if (!k || k.mode !== "monthly") return;
+  // a bundle: its price per period, as a monthly figure
+  if (k.bundle != null) {
+    await db().update(schema.clientContracts).set({ monthlyRateCents: k.period === "yearly" ? Math.round((k.bundle * k.qty) / 12) : k.bundle * k.qty, updatedAt: new Date() }).where(eq(schema.clientContracts.id, contractId));
+    return;
+  }
   const rows = await db().select({ kind: schema.contractServices.kind, price: schema.contractServices.priceCents, qty: schema.contractServices.quantity }).from(schema.contractServices).where(eq(schema.contractServices.contractId, contractId));
   const monthly = rows.filter((r) => r.kind === "recurring").reduce((n, r) => n + r.price * r.qty, 0);
   const yearly = rows.filter((r) => r.kind === "recurring_yearly").reduce((n, r) => n + r.price * r.qty, 0);

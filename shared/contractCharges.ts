@@ -35,6 +35,19 @@ export type ContractCharges = {
 
 const DAY_RE = /^\d{4}-\d{2}-\d{2}$/;
 
+/**
+ * A recurring contract can be sold as a **bundle**: one price and a quantity for the whole package, per billing period
+ * (per month on a monthly contract, per year on a yearly one). Its services stay listed on the contract but carry no price of
+ * their own: what is charged is the bundle, from the contract's start day. Without a bundle, the services are charged one by one.
+ */
+export type BundleOf = { name: string; startDate: string | null; billingPeriod: BillingPeriod; bundlePriceCents?: number | null; bundleQuantity?: number | null };
+export const hasBundle = (c: { bundlePriceCents?: number | null }) => c.bundlePriceCents != null;
+/** The lines the charges are worked out from: the bundle alone when there is one, else the services */
+export function linesForCharges(c: BundleOf, services: ChargeLine[]): ChargeLine[] {
+  if (!hasBundle(c) || !c.startDate) return services;
+  return [{ id: "bundle", name: c.name, kind: c.billingPeriod === "yearly" ? "recurring_yearly" : "recurring", priceCents: c.bundlePriceCents!, quantity: Math.max(1, c.bundleQuantity ?? 1), addedOn: c.startDate }];
+}
+
 export function contractCharges(
   c: { startDate: string | null; endDate: string | null; endedOn?: string | null; billingPeriod: BillingPeriod },
   lines: ChargeLine[],

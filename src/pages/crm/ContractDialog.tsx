@@ -13,7 +13,7 @@ import { ScopeDialog } from "@/components/ScopeDialog";
 import { api, ApiError } from "@/lib/api";
 import { useCan } from "@/lib/session";
 import { cn } from "@/lib/utils";
-import { contractCharges, chargesOn, type BillingPeriod, type ChargeLine } from "@shared/contractCharges";
+import { contractCharges, chargesOn, linesForCharges, type BillingPeriod, type ChargeLine } from "@shared/contractCharges";
 import { prorata } from "@shared/prorata";
 import { shortDate, ticketErrorText } from "@/pages/tickets/shared";
 import { MapItcloudDialog, NewServiceDialog, type Unmapped } from "./ContractServices";
@@ -87,7 +87,7 @@ function Figures({ summary, period, lang }: { summary: Summary; period: BillingP
 }
 
 /** Picks a recurring service, a quantity, a day and optionally a price; shows the prorata as it goes. */
-function ServiceAdder({ term, onAdd, busy, heading = true }: { term: { start: string; end: string } | null; onAdd: (p: { service: CatalogItem; quantity: number; addedOn: string; priceCents?: number }) => void; busy?: boolean; heading?: boolean }) {
+function ServiceAdder({ term, onAdd, busy, heading = true, bundled = false }: { term: { start: string; end: string } | null; onAdd: (p: { service: CatalogItem; quantity: number; addedOn: string; priceCents?: number }) => void; busy?: boolean; heading?: boolean; bundled?: boolean }) {
   const { t, i18n } = useTranslation();
   const can = useCan();
   // a service that does not exist yet is made right here (a popup), then added
@@ -134,7 +134,7 @@ function ServiceAdder({ term, onAdd, busy, heading = true }: { term: { start: st
         </p>
       )}
       {maker}
-      <div className="grid gap-2 sm:grid-cols-[1fr_5rem_9rem_7rem]">
+      <div className={cn("grid gap-2", bundled ? "sm:grid-cols-[1fr_5rem_9rem]" : "sm:grid-cols-[1fr_5rem_9rem_7rem]")}>
         <label className="space-y-1 text-xs">
           <span className="text-muted-foreground">{t("crm.contracts.service")}</span>
           <select value={svc?.id ?? ""} onChange={(e) => (e.target.value === "__new" ? setMaking(true) : setServiceId(e.target.value))} className="h-9 w-full rounded-md border bg-transparent px-2 text-sm outline-none focus:ring-2 focus:ring-[color:var(--gold)]/40">
@@ -154,16 +154,19 @@ function ServiceAdder({ term, onAdd, busy, heading = true }: { term: { start: st
           <span className="text-muted-foreground">{t("crm.contracts.startsOn")}</span>
           <Input type="date" value={addedOn} min={term?.start} max={term?.end} onChange={(e) => setAddedOn(e.target.value)} className="h-9" />
         </label>
-        <label className="space-y-1 text-xs">
-          <span className="text-muted-foreground">{t("crm.contracts.window.unitPrice")}</span>
-          <Input value={price} inputMode="decimal" placeholder={svc ? String(svc.priceCents / 100) : ""} onChange={(e) => setPrice(e.target.value)} className="h-9 text-right font-mono" />
-        </label>
+        {!bundled && (
+          <label className="space-y-1 text-xs">
+            <span className="text-muted-foreground">{t("crm.contracts.window.unitPrice")}</span>
+            <Input value={price} inputMode="decimal" placeholder={svc ? String(svc.priceCents / 100) : ""} onChange={(e) => setPrice(e.target.value)} className="h-9 text-right font-mono" />
+          </label>
+        )}
       </div>
+      {bundled && <p className="text-[11px] text-muted-foreground">{t("crm.contracts.bundle.noPrice")}</p>}
       {!term && <p className="text-[11px] text-amber-300">{t("crm.contracts.needTerm")}</p>}
       {term && plan === "outside" && <p className="text-[11px] text-amber-300">{t("crm.contracts.outsideTerm", { from: shortDate(term.start), to: shortDate(term.end) })}</p>}
       <div className="flex flex-wrap items-center justify-between gap-2">
         <p className="text-xs text-muted-foreground">
-          {ok && (
+          {ok && !bundled && (
             <>
               {t("crm.contracts.firstCharge")} <span className="font-mono text-foreground">{money(plan.firstCents, i18n.language)}</span>
               {!plan.periods[0].full && <span className="ml-1 text-amber-300">({t("crm.contracts.prorata", { days: plan.periods[0].days, of: plan.periods[0].periodDays })})</span>} · {t("crm.contracts.termTotal")} <span className="font-mono text-foreground">{money(plan.totalCents, i18n.language)}</span>
@@ -195,12 +198,14 @@ type Draft = { serviceId: string; name: string; kind: "recurring" | "recurring_y
 export function NewContractDialog({ client, onClose }: { client: CrmDetail; onClose: () => void }) {
   const { t, i18n } = useTranslation();
   const qc = useQueryClient();
-  const { data: types = [] } = useContractTypes();
+  // a new contract is never a fixed price one any more
+  const { data: allTypes = [] } = useContractTypes();
+  const types = allTypes.filter((x) => x.kind !== "fixed");
   const [f, setF] = useState(() => {
     const now = new Date();
     const end = new Date(now.getFullYear() + 1, now.getMonth(), now.getDate() - 1, 12);
     const day = (d: Date) => new Date(d.getTime() - d.getTimezoneOffset() * 60_000).toISOString().slice(0, 10);
-    return { name: "", typeKey: "", startDate: day(now), endDate: day(end), figure: "", rate: "", billingPeriod: "monthly" as BillingPeriod, billedThrough: "", supportDefault: false };
+    return { name: "", typeKey: "", startDate: day(now), endDate: day(end), figure: "", rate: "", billingPeriod: "monthly" as BillingPeriod, billedThrough: "", supportDefault: false, bundleOn: false, bundlePrice: "", bundleQty: "1" };
   });
   const [lines, setLines] = useState<Draft[]>([]);
   // the hourly rate starts at the usual one of Admin › Facturation; typing another changes it, 0 means no hourly rate (included)
@@ -211,16 +216,26 @@ export function NewContractDialog({ client, onClose }: { client: CrmDetail; onCl
   const termOk = Boolean(f.startDate && f.endDate && f.endDate >= f.startDate);
   const term = termOk ? { start: f.startDate, end: f.endDate } : null;
   // what the services will charge, live
+  const bundled = type?.kind === "recurring" && f.bundleOn;
+  const bundleCents = toCents(f.bundlePrice);
+  const bundleQty = Math.max(1, Math.round(Number(f.bundleQty) || 1));
   const charges = useMemo(
-    () => contractCharges({ startDate: f.startDate, endDate: f.endDate, billingPeriod: f.billingPeriod }, lines.map((l, i): ChargeLine => ({ id: String(i), name: l.name, kind: l.kind, priceCents: l.priceCents, quantity: l.quantity, addedOn: l.addedOn }))),
-    [f.startDate, f.endDate, f.billingPeriod, lines],
+    () =>
+      contractCharges(
+        { startDate: f.startDate, endDate: f.endDate, billingPeriod: f.billingPeriod },
+        linesForCharges(
+          { name: f.name || "—", startDate: f.startDate, billingPeriod: f.billingPeriod, bundlePriceCents: bundled ? (bundleCents ?? 0) : null, bundleQuantity: bundleQty },
+          lines.map((l, i): ChargeLine => ({ id: String(i), name: l.name, kind: l.kind, priceCents: l.priceCents, quantity: l.quantity, addedOn: l.addedOn })),
+        ),
+      ),
+    [f.startDate, f.endDate, f.billingPeriod, f.name, lines, bundled, bundleCents, bundleQty],
   );
   const on = chargesOn(charges, todayYmd(), f.billedThrough || null);
   const create = useMutation({
     mutationFn: () => {
       const n = f.figure.trim() === "" ? null : Number(f.figure.replace(",", "."));
       // a recurring services contract has no typed charge: it comes from its services
-      const figure = type?.kind === "fixed" ? { fixedPrice: n } : type?.kind === "banked" ? { bankedHours: n } : {};
+      const figure = type?.kind === "banked" ? { bankedHours: n } : {};
       const hourlyRate = rate.trim() === "" ? undefined : Number(rate.replace(",", "."));
       return api.post(`/crm/clients/${client.id}/contracts`, {
         name: f.name.trim(),
@@ -232,7 +247,8 @@ export function NewContractDialog({ client, onClose }: { client: CrmDetail; onCl
         ...(f.supportDefault ? { supportDefault: true } : {}),
         ...(hourlyRate !== undefined && Number.isFinite(hourlyRate) ? { hourlyRate } : {}),
         ...figure,
-        services: lines.map((l) => ({ serviceId: l.serviceId, addedOn: l.addedOn, quantity: l.quantity, ...(l.unitCustom ? { priceCents: l.priceCents } : {}) })),
+        ...(bundled ? { bundlePrice: (bundleCents ?? 0) / 100, bundleQuantity: bundleQty } : {}),
+        services: lines.map((l) => ({ serviceId: l.serviceId, addedOn: l.addedOn, quantity: l.quantity, ...(l.unitCustom && !bundled ? { priceCents: l.priceCents } : {}) })),
       });
     },
     onSuccess: () => {
@@ -309,9 +325,31 @@ export function NewContractDialog({ client, onClose }: { client: CrmDetail; onCl
             </div>
           </section>
 
+          {type?.kind === "recurring" && (
+            <section className="space-y-3 rounded-xl border bg-background/30 p-3">
+              <label className="flex items-center gap-2 text-sm font-medium">
+                <Switch checked={f.bundleOn} onCheckedChange={(v) => setF((x) => ({ ...x, bundleOn: v }))} /> {t("crm.contracts.bundle.toggle")}
+              </label>
+              <p className="text-xs text-muted-foreground">{t("crm.contracts.bundle.hint")}</p>
+              {f.bundleOn && (
+                <div className="grid gap-3 sm:grid-cols-[6rem_9rem_1fr]">
+                  <Field label={t("crm.contracts.window.quantity")}>
+                    <Input value={f.bundleQty} inputMode="numeric" onChange={set("bundleQty")} className="text-right font-mono" />
+                  </Field>
+                  <Field label={f.billingPeriod === "yearly" ? t("crm.contracts.bundle.priceYear") : t("crm.contracts.bundle.priceMonth")}>
+                    <Input value={f.bundlePrice} inputMode="decimal" placeholder="0" onChange={set("bundlePrice")} className="text-right font-mono" />
+                  </Field>
+                  <p className="self-end pb-2 text-xs text-muted-foreground">
+                    {t("crm.contracts.bundle.total")} <span className="font-mono text-sm text-foreground">{money((bundleCents ?? 0) * bundleQty, lang)}</span> {f.billingPeriod === "yearly" ? t("services.perYear") : t("services.perMonth")}
+                  </p>
+                </div>
+              )}
+            </section>
+          )}
+
           <section className="space-y-3">
             <h4 className="flex items-center gap-1.5 text-sm font-semibold">
-              <Wrench className="size-4 text-primary" /> {t("crm.contracts.services")} ({lines.length})
+              <Wrench className="size-4 text-primary" /> {bundled ? t("crm.contracts.bundle.included") : t("crm.contracts.services")} ({lines.length})
             </h4>
             {lines.length > 0 && (
               <ul className="divide-y divide-border/50 rounded-lg border bg-background/30 text-sm">
@@ -322,7 +360,7 @@ export function NewContractDialog({ client, onClose }: { client: CrmDetail; onCl
                         {l.name} {l.quantity > 1 && <span className="font-mono text-xs text-muted-foreground">× {l.quantity}</span>}
                       </span>
                       <span className="block text-[11px] text-muted-foreground">
-                        {money(l.priceCents, lang)} {l.kind === "recurring_yearly" ? t("services.perYear") : t("services.perMonth")} · {t("crm.contracts.addedOn", { date: shortDate(l.addedOn) })}
+                        {bundled ? t("crm.contracts.bundle.inPackage") : `${money(l.priceCents, lang)} ${l.kind === "recurring_yearly" ? t("services.perYear") : t("services.perMonth")} · ${t("crm.contracts.addedOn", { date: shortDate(l.addedOn) })}`}
                       </span>
                     </span>
                     <Button type="button" size="icon" variant="ghost" className="size-7 text-muted-foreground hover:text-destructive" onClick={() => setLines((x) => x.filter((_, j) => j !== i))} aria-label={t("common.delete")}>
@@ -335,6 +373,7 @@ export function NewContractDialog({ client, onClose }: { client: CrmDetail; onCl
             <ServiceAdder
               term={term}
               heading={false}
+              bundled={bundled}
               onAdd={(p) => setLines((x) => [...x, { serviceId: p.service.id, name: p.service.name, kind: p.service.kind, priceCents: p.priceCents ?? p.service.priceCents, quantity: p.quantity, addedOn: p.addedOn, unitCustom: p.priceCents !== undefined }])}
             />
           </section>
@@ -449,7 +488,15 @@ function ServicesTab({ client, k, editable, onChanged }: { client: CrmDetail; k:
     return d.toISOString().slice(0, 10);
   })();
   const periodAt = (l: Line) => l.periods.find((p) => p.from <= asOf && asOf <= p.to) ?? null;
-  const totalAt = k.services.reduce((n, l) => n + (periodAt(l)?.amountCents ?? 0), 0);
+  // a bundle: what is charged is the package; the services under it carry no price of their own
+  const bundled = k.bundlePriceCents != null;
+  const bundleLines = linesForCharges({ name: k.name, startDate: k.startDate, billingPeriod: k.billingPeriod ?? "monthly", bundlePriceCents: k.bundlePriceCents, bundleQuantity: k.bundleQuantity }, []);
+  const bundlePiece = bundled
+    ? contractCharges({ startDate: k.startDate, endDate: k.endDate, endedOn: k.endedOn, billingPeriod: k.billingPeriod ?? "monthly" }, bundleLines)
+        .entries.flatMap((e) => e.pieces)
+        .find((p) => p.from <= asOf && asOf <= p.to) ?? null
+    : null;
+  const totalAt = bundled ? (bundlePiece?.amountCents ?? 0) : k.services.reduce((n, l) => n + (periodAt(l)?.amountCents ?? 0), 0);
   const { data: waiting = [] } = useQuery({ queryKey: ["crm", "client", client.id, "itcloud-unmapped", k.id], queryFn: () => api.get<Unmapped[]>(`${base}/itcloud-services`), enabled: editable && k.active });
   const qc = useQueryClient();
   const add = useMutation({
@@ -482,6 +529,14 @@ function ServicesTab({ client, k, editable, onChanged }: { client: CrmDetail; k:
   });
   return (
     <div className="space-y-3">
+      {bundled && (
+        <div className="rounded-lg border border-[color:var(--gold)]/40 bg-[color:var(--gold)]/[0.06] px-3 py-2 text-sm">
+          <p className="font-medium">
+            {t("crm.contracts.bundle.title")} — {k.bundleQuantity ?? 1} × {money(k.bundlePriceCents ?? 0, i18n.language)} = <span className="font-mono">{money((k.bundlePriceCents ?? 0) * (k.bundleQuantity ?? 1), i18n.language)}</span> {k.billingPeriod === "yearly" ? t("services.perYear") : t("services.perMonth")}
+          </p>
+          <p className="text-xs text-muted-foreground">{t("crm.contracts.bundle.shown")}</p>
+        </div>
+      )}
       {k.services.length === 0 && <p className="rounded-lg border border-dashed py-6 text-center text-sm text-muted-foreground">{t("crm.contracts.window.noLines")}</p>}
       {k.services.length > 0 && (
         <div className="flex flex-wrap items-center gap-2 rounded-lg border bg-background/30 px-3 py-2 text-sm">
@@ -513,7 +568,8 @@ function ServicesTab({ client, k, editable, onChanged }: { client: CrmDetail; k:
                     {money(l.priceCents, i18n.language)} {l.kind === "recurring_yearly" ? t("services.perYear") : t("services.perMonth")} · {t("crm.contracts.addedOn", { date: shortDate(l.addedOn) })}
                   </span>
                 </span>
-                {l.firstCents !== null && (
+                {bundled && <span className="text-right text-[11px] text-muted-foreground">{t("crm.contracts.bundle.inPackage")}</span>}
+                {!bundled && l.firstCents !== null && (
                   <span className="text-right text-[11px] text-muted-foreground">
                     {(() => {
                       const p = periodAt(l);
@@ -557,7 +613,7 @@ function ServicesTab({ client, k, editable, onChanged }: { client: CrmDetail; k:
       )}
       {editable && k.active && (
         <>
-          <ServiceAdder term={term} busy={add.isPending} onAdd={(p) => add.mutate(p)} />
+          <ServiceAdder term={term} busy={add.isPending} bundled={bundled} onAdd={(p) => add.mutate(p)} />
           {waiting.length > 0 && (
             <Button type="button" size="sm" variant="outline" className="h-8 gap-1.5 border-sky-500/40 text-xs text-sky-300" onClick={() => setMapping(true)}>
               <Cloud className="size-3.5" /> {t("crm.contracts.mapItcloud", { count: waiting.length })}
@@ -639,7 +695,7 @@ function ChargesTab({ k, lang }: { k: Detail; lang: string }) {
   const { t } = useTranslation();
   const today = todayYmd();
   const ch = useMemo(
-    () => contractCharges({ startDate: k.startDate, endDate: k.endDate, endedOn: k.endedOn, billingPeriod: k.billingPeriod }, k.services.map((l): ChargeLine => ({ id: l.id, name: l.name, kind: l.kind, priceCents: l.priceCents, quantity: l.quantity, addedOn: l.addedOn }))),
+    () => contractCharges({ startDate: k.startDate, endDate: k.endDate, endedOn: k.endedOn, billingPeriod: k.billingPeriod }, linesForCharges({ name: k.name, startDate: k.startDate, billingPeriod: k.billingPeriod ?? "monthly", bundlePriceCents: k.bundlePriceCents, bundleQuantity: k.bundleQuantity }, k.services.map((l): ChargeLine => ({ id: l.id, name: l.name, kind: l.kind, priceCents: l.priceCents, quantity: l.quantity, addedOn: l.addedOn })))),
     [k],
   );
   const on = chargesOn(ch, today, k.billedThrough);
@@ -764,6 +820,10 @@ function OverviewTab({ client, k, editable, onChanged, onClose }: { client: CrmD
   const rateNow = show(k.hourlyRateCents ?? (k.billingMode === "hourly" ? k.usualRateCents : 0));
   const [rate, setRate] = useState(rateNow);
   useEffect(() => setRate(rateNow), [rateNow]);
+  // the bundle of a recurring contract: on when it has a price
+  const bundleNow = { on: k.bundlePriceCents != null, price: show(k.bundlePriceCents ?? null), qty: String(k.bundleQuantity ?? 1) };
+  const [bundle, setBundle] = useState(bundleNow);
+  useEffect(() => setBundle(bundleNow), [bundleNow.on, bundleNow.price, bundleNow.qty]); // eslint-disable-line react-hooks/exhaustive-deps
   const [f, setF] = useState({ name: k.name, typeKey: k.typeKey ?? "", startDate: k.startDate ?? "", endDate: k.endDate ?? "", billingPeriod: k.billingPeriod, billedThrough: k.billedThrough ?? "", figure: show(figureValue) });
   useEffect(() => setF({ name: k.name, typeKey: k.typeKey ?? "", startDate: k.startDate ?? "", endDate: k.endDate ?? "", billingPeriod: k.billingPeriod, billedThrough: k.billedThrough ?? "", figure: show(figureValue) }), [k.name, k.typeKey, k.startDate, k.endDate, k.billingPeriod, k.billedThrough, figureValue]); // eslint-disable-line react-hooks/exhaustive-deps
   const patch = useMutation({
@@ -783,7 +843,7 @@ function OverviewTab({ client, k, editable, onChanged, onClose }: { client: CrmD
     },
     onError: (e) => toast.error(contractError(t, e)),
   });
-  const dirty = f.name.trim() !== k.name || f.typeKey !== (k.typeKey ?? "") || f.startDate !== (k.startDate ?? "") || f.endDate !== (k.endDate ?? "") || f.billingPeriod !== k.billingPeriod || f.billedThrough !== (k.billedThrough ?? "") || (figureField !== null && (toCents(f.figure) ?? null) !== (figureValue ?? null)) || rate !== rateNow;
+  const dirty = f.name.trim() !== k.name || f.typeKey !== (k.typeKey ?? "") || f.startDate !== (k.startDate ?? "") || f.endDate !== (k.endDate ?? "") || f.billingPeriod !== k.billingPeriod || f.billedThrough !== (k.billedThrough ?? "") || (figureField !== null && (toCents(f.figure) ?? null) !== (figureValue ?? null)) || rate !== rateNow || bundle.on !== bundleNow.on || (bundle.on && (bundle.price !== bundleNow.price || bundle.qty !== bundleNow.qty));
   const save = () => {
     const p: Record<string, unknown> = {};
     if (f.name.trim() !== k.name) p.name = f.name.trim();
@@ -793,6 +853,10 @@ function OverviewTab({ client, k, editable, onChanged, onClose }: { client: CrmD
     if (f.billingPeriod !== k.billingPeriod) p.billingPeriod = f.billingPeriod;
     if (f.billedThrough !== (k.billedThrough ?? "")) p.billedThrough = f.billedThrough || null;
     if (rate !== rateNow) p.hourlyRate = rate.trim() === "" ? 0 : Number(rate.replace(",", "."));
+    if (bundle.on !== bundleNow.on || (bundle.on && (bundle.price !== bundleNow.price || bundle.qty !== bundleNow.qty))) {
+      p.bundlePrice = bundle.on ? Number(bundle.price.replace(",", ".")) || 0 : null;
+      if (bundle.on) p.bundleQuantity = Math.max(1, Math.round(Number(bundle.qty) || 1));
+    }
     if (figureField && (toCents(f.figure) ?? null) !== (figureValue ?? null)) {
       const n = f.figure.trim() === "" ? null : Number(f.figure.replace(",", "."));
       p[figureField] = n;
@@ -847,6 +911,24 @@ function OverviewTab({ client, k, editable, onChanged, onClose }: { client: CrmD
           </Field>
         )}
       </div>
+      {k.billingMode === "monthly" && (
+        <div className="space-y-3 rounded-xl border bg-background/30 p-3">
+          <label className="flex items-center gap-2 text-sm font-medium">
+            <Switch checked={bundle.on} disabled={!editable} onCheckedChange={(v) => setBundle({ ...bundle, on: v })} /> {t("crm.contracts.bundle.toggle")}
+          </label>
+          <p className="text-xs text-muted-foreground">{t("crm.contracts.bundle.hint")}</p>
+          {bundle.on && (
+            <div className="grid gap-3 sm:grid-cols-[6rem_9rem]">
+              <Field label={t("crm.contracts.window.quantity")}>
+                <Input value={bundle.qty} disabled={!editable} inputMode="numeric" onChange={(e) => setBundle({ ...bundle, qty: e.target.value })} className="text-right font-mono" />
+              </Field>
+              <Field label={f.billingPeriod === "yearly" ? t("crm.contracts.bundle.priceYear") : t("crm.contracts.bundle.priceMonth")}>
+                <Input value={bundle.price} disabled={!editable} inputMode="decimal" placeholder="0" onChange={(e) => setBundle({ ...bundle, price: e.target.value })} className="text-right font-mono" />
+              </Field>
+            </div>
+          )}
+        </div>
+      )}
       {k.billingMode === "banked" ? <p className="text-xs text-muted-foreground">{t("crm.contracts.bankBalance", { used: k.usedHours, total: (k.bankedHoursX100 ?? 0) / 100, left: Math.max(0, (k.bankedHoursX100 ?? 0) / 100 - k.usedHours) })}</p> : null}
       {editable && (
         <div className="flex flex-wrap items-center gap-4">

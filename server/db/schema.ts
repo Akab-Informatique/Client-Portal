@@ -153,6 +153,9 @@ export const clientContracts = pgTable(
     endedOn: text("ended_on"),
     /** YYYY-MM-DD: already invoiced in the old system up to this day (included): what falls on or before it is never billed here */
     billedThrough: text("billed_through"),
+    /** A recurring contract sold as a bundle: one price (per billing period) and a quantity, instead of the services' own prices (none: charged service by service) */
+    bundlePriceCents: integer("bundle_price_cents"),
+    bundleQuantity: integer("bundle_quantity").notNull().default(1),
     syncedAt: timestamp("synced_at", { withTimezone: true }),
     createdAt: created(),
     updatedAt: updated(),
