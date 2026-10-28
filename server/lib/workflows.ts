@@ -151,7 +151,9 @@ async function replyTo(key: WorkflowKey, t: NTicket): Promise<boolean> {
     const [account] = await db()
       .select({ locale: schema.users.locale })
       .from(schema.users)
-      .where(and(eq(schema.users.kind, "client"), eq(schema.users.active, true), sql`lower(${schema.users.email}) = ${email}`));
+      .innerJoin(schema.clients, eq(schema.clients.id, schema.users.clientId))
+      // only when their company's portal is open: otherwise the link would lead nowhere
+      .where(and(eq(schema.users.kind, "client"), eq(schema.users.active, true), eq(schema.clients.portalEnabled, true), sql`lower(${schema.users.email}) = ${email}`));
     const locale: Locale = account?.locale === "en" ? "en" : "fr";
     const base = config.publicUrl;
     const vars = {

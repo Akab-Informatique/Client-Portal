@@ -289,9 +289,11 @@ export interface TicketSource {
   /**
    * A text (or any message) from the client arrived: the ticket goes to its
    * "needs attention" status, like a new client reply, unless it is complete.
-   * Done by the portal itself (no technician). Returns whether it changed.
+   * With `reopen` (the client answered in the portal) a complete ticket is
+   * reopened too — never a merged one. Done by the portal itself (no
+   * technician). Returns whether it changed.
    */
-  markNeedsAttention(ticketId: number): Promise<boolean>;
+  markNeedsAttention(ticketId: number, opts?: { reopen?: boolean }): Promise<boolean>;
   /** Work types for time entries; empty when not used */
   workTypes(): Promise<{ value: string; label: string }[]>;
   addTimeEntry(ticketId: number, p: NewTimeEntry, a: AuthContext): Promise<void>;
@@ -686,9 +688,9 @@ const demoSource: TicketSource = {
     await this.list();
     addDemoNote(ticketId, { author: "Texto", text: `${SMS_NOTE_TAG} ${title}\n${text}`, internal: true });
   },
-  async markNeedsAttention(ticketId) {
+  async markNeedsAttention(ticketId, opts) {
     const t = (await this.list()).find((x) => x.id === ticketId);
-    if (!t || t.status === "complete" || t.status === "needsAttention") return false;
+    if (!t || (t.status === "complete" && !opts?.reopen) || t.status === "needsAttention") return false;
     return updateDemoTicket(ticketId, { status: "needsAttention" });
   },
   async createSystem(p) {

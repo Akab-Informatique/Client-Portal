@@ -50,6 +50,8 @@ async function emailRecipients(audience: "all" | "selected", clientIds: string[]
     eq(schema.users.active, true),
     eq(schema.users.notifyEmail, true),
     eq(schema.clients.active, true),
+    // a company whose portal is not open yet gets nothing
+    eq(schema.clients.portalEnabled, true),
   ];
   if (audience === "selected") {
     if (!clientIds.length) return [];

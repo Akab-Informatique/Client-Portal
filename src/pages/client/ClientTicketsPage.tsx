@@ -5,6 +5,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { AnimatePresence, motion } from "motion/react";
 import {
+  Bookmark,
   Building2,
   CheckCircle2,
   ChevronDown,
@@ -20,6 +21,7 @@ import {
   Send,
   Siren,
   Ticket,
+  Trash2,
   UploadCloud,
   User,
   UserCheck,
@@ -30,10 +32,10 @@ import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import {
   DropdownMenu,
+  DropdownMenuCheckboxItem,
   DropdownMenuContent,
+  DropdownMenuItem,
   DropdownMenuLabel,
-  DropdownMenuRadioGroup,
-  DropdownMenuRadioItem,
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
@@ -118,17 +120,18 @@ export function ClientTicketsPage() {
       { replace: true },
     );
   const status = (FILTERS.includes(params.get("status") as StatusFilter) ? params.get("status") : "open") as StatusFilter;
-  // mine (default) · company · one contact of the company (only with "see all the company's tickets")
+  // mine (default) · company · some contacts of the company (only with "see all the company's tickets")
   const who = params.get("who");
-  const scope = params.get("scope") === "company" ? "company" : who ? "contact" : "mine";
+  const whoIds = who ? who.split(",").filter(Boolean) : [];
+  const scope = params.get("scope") === "company" ? "company" : whoIds.length ? "contact" : "mine";
   const q = params.get("q") ?? "";
   const openId = Number(params.get("t")) || null;
 
   const { data, isLoading, isError } = useQuery({
-    queryKey: ["portal", "tickets", scope, who],
+    queryKey: ["portal", "tickets", scope, scope === "contact" ? whoIds.join(",") : null],
     queryFn: () =>
       api.get<{ linked: boolean; canSeeAll: boolean; contacts: { id: string; name: string }[]; items: ClientTicket[] }>(
-        `/portal/tickets${scope === "company" ? "?scope=company" : scope === "contact" ? `?scope=contact&contact=${encodeURIComponent(who!)}` : ""}`,
+        `/portal/tickets${scope === "company" ? "?scope=company" : scope === "contact" ? `?scope=contact&contact=${encodeURIComponent(whoIds.join(","))}` : ""}`,
       ),
     refetchInterval: 60_000,
   });
@@ -163,7 +166,7 @@ export function ClientTicketsPage() {
           scope === "company"
             ? t("client.tickets.subtitleCompany")
             : scope === "contact"
-              ? t("client.tickets.subtitleContact", { name: data?.contacts.find((x) => x.id === who)?.name ?? "…" })
+              ? t("client.tickets.subtitleContacts", { names: whoIds.map((id) => data?.contacts.find((x) => x.id === id)?.name ?? "…").join(", ") })
               : t("client.tickets.subtitle")
         }
       />
@@ -207,9 +210,16 @@ export function ClientTicketsPage() {
             {data?.canSeeAll && (
               <WhoMenu
                 scope={scope}
-                who={who}
+                whoIds={whoIds}
                 contacts={data.contacts}
-                onChange={(next) => set({ scope: next.scope === "company" ? "company" : null, who: next.scope === "contact" ? (next.who ?? null) : null })}
+                // a saved filter starts again from the open tickets
+                onChange={(next, fresh) =>
+                  set({
+                    scope: next.scope === "company" ? "company" : null,
+                    who: next.scope === "contact" && next.who?.length ? next.who.join(",") : null,
+                    ...(fresh ? { status: null } : {}),
+                  })
+                }
               />
             )}
           </Pane>
@@ -306,46 +316,114 @@ function Tile({ icon: Icon, label, value, hint, alert, active, onClick }: { icon
 }
 
 /**
- * Whose tickets: mine, the whole company, or one contact of the company.
+ * Whose tickets: mine, the whole company, or the people of the company that
+ * are ticked (several at once), and the filters saved with such a selection.
  * Only shown to whom has "see all the company's tickets".
  */
+type SavedFilter = { id: string; name: string; contactIds: string[] };
+type WhoChange = { scope: "mine" | "company" | "contact"; who?: string[] };
+
 function WhoMenu({
   scope,
-  who,
+  whoIds,
   contacts,
   onChange,
 }: {
   scope: "mine" | "company" | "contact";
-  who: string | null;
+  whoIds: string[];
   contacts: { id: string; name: string }[];
-  onChange: (v: { scope: "mine" | "company" | "contact"; who?: string }) => void;
+  onChange: (v: WhoChange, fresh?: boolean) => void;
 }) {
   const { t } = useTranslation();
+  const qc = useQueryClient();
   const [filter, setFilter] = useState("");
+  const [naming, setNaming] = useState(false);
+  const [name, setName] = useState("");
+  const { data: saved = [] } = useQuery({ queryKey: ["portal", "ticket-filters"], queryFn: () => api.get<SavedFilter[]>("/portal/ticket-filters") });
+  const save = useMutation({
+    mutationFn: () => api.post<SavedFilter>("/portal/ticket-filters", { name, contactIds: whoIds }),
+    onSuccess: () => {
+      toast.success(t("client.tickets.scope.savedOk"));
+      setNaming(false);
+      setName("");
+      void qc.invalidateQueries({ queryKey: ["portal", "ticket-filters"] });
+    },
+    onError: () => toast.error(t("common.error")),
+  });
+  const remove = useMutation({
+    mutationFn: (id: string) => api.del(`/portal/ticket-filters/${id}`),
+    onSuccess: () => {
+      toast.success(t("client.tickets.scope.removedOk"));
+      void qc.invalidateQueries({ queryKey: ["portal", "ticket-filters"] });
+    },
+    onError: () => toast.error(t("common.error")),
+  });
+
+  const names = (ids: string[]) => ids.map((id) => contacts.find((x) => x.id === id)?.name ?? "…");
+  const same = (a: string[], b: string[]) => a.length === b.length && a.every((x) => b.includes(x));
+  const current = scope === "contact" ? saved.find((f) => same(f.contactIds, whoIds)) : undefined;
   const label =
-    scope === "company" ? t("client.tickets.scope.company") : scope === "contact" ? (contacts.find((x) => x.id === who)?.name ?? "…") : t("client.tickets.scope.mine");
+    scope === "company"
+      ? t("client.tickets.scope.company")
+      : scope === "contact"
+        ? (current?.name ?? (whoIds.length === 1 ? names(whoIds)[0] : t("client.tickets.scope.n", { count: whoIds.length })))
+        : t("client.tickets.scope.mine");
   const shown = contacts.filter((x) => x.name.toLowerCase().includes(filter.trim().toLowerCase()));
+  const toggle = (id: string) => {
+    const next = whoIds.includes(id) ? whoIds.filter((x) => x !== id) : [...whoIds, id];
+    onChange(next.length ? { scope: "contact", who: next } : { scope: "mine" });
+  };
+  // keep the menu open while people are ticked
+  const stay = (e: Event) => e.preventDefault();
+
   return (
-    <DropdownMenu onOpenChange={(o) => !o && setFilter("")}>
-      <DropdownMenuTrigger asChild>
-        <Button
-          variant="ghost"
-          size="sm"
-          className="h-9 gap-2 rounded-xl border border-[color:var(--glass-border)] bg-background/30 hover:bg-foreground/[0.05] data-[state=open]:border-[color:var(--gold)]/50"
-        >
-          {scope === "company" ? <Building2 className="size-4 text-primary" /> : scope === "contact" ? <User className="size-4 text-primary" /> : <UserCheck className="size-4 text-primary" />}
-          <span className="max-w-44 truncate">{label}</span>
-          <ChevronDown className="size-4 opacity-60" />
-        </Button>
-      </DropdownMenuTrigger>
-      <DropdownMenuContent align="end" className="glass-strong w-72">
-        <DropdownMenuRadioGroup value={scope === "contact" ? `c:${who}` : scope} onValueChange={(v) => (v.startsWith("c:") ? onChange({ scope: "contact", who: v.slice(2) }) : onChange({ scope: v as "mine" | "company" }))}>
-          <DropdownMenuRadioItem value="mine">
+    <>
+      <DropdownMenu onOpenChange={(o) => !o && setFilter("")}>
+        <DropdownMenuTrigger asChild>
+          <Button
+            variant="ghost"
+            size="sm"
+            className="h-9 gap-2 rounded-xl border border-[color:var(--glass-border)] bg-background/30 hover:bg-foreground/[0.05] data-[state=open]:border-[color:var(--gold)]/50"
+          >
+            {scope === "company" ? <Building2 className="size-4 text-primary" /> : scope === "contact" ? <User className="size-4 text-primary" /> : <UserCheck className="size-4 text-primary" />}
+            <span className="max-w-44 truncate">{label}</span>
+            <ChevronDown className="size-4 opacity-60" />
+          </Button>
+        </DropdownMenuTrigger>
+        <DropdownMenuContent align="end" className="glass-strong w-80">
+          {saved.length > 0 && (
+            <>
+              <DropdownMenuLabel className="text-xs font-normal text-muted-foreground">{t("client.tickets.scope.saved")}</DropdownMenuLabel>
+              {saved.map((f) => (
+                <DropdownMenuItem key={f.id} onSelect={() => onChange({ scope: "contact", who: f.contactIds }, true)} className={cn("gap-2", current?.id === f.id && "bg-[color:var(--gold)]/10")}>
+                  <Bookmark className={cn("size-4", current?.id === f.id && "fill-current text-primary")} />
+                  <span className="min-w-0 flex-1 truncate">{f.name}</span>
+                  <span className="shrink-0 text-xs text-muted-foreground">{t("client.tickets.scope.n", { count: f.contactIds.length })}</span>
+                  <button
+                    type="button"
+                    aria-label={t("client.tickets.scope.remove")}
+                    title={t("client.tickets.scope.remove")}
+                    onClick={(e) => {
+                      e.preventDefault();
+                      e.stopPropagation();
+                      remove.mutate(f.id);
+                    }}
+                    onPointerDown={(e) => e.stopPropagation()}
+                    className="shrink-0 rounded p-1 text-muted-foreground hover:text-destructive"
+                  >
+                    <Trash2 className="size-3.5" />
+                  </button>
+                </DropdownMenuItem>
+              ))}
+              <DropdownMenuSeparator />
+            </>
+          )}
+          <DropdownMenuCheckboxItem checked={scope === "mine"} onSelect={() => onChange({ scope: "mine" })}>
             <UserCheck className="size-4" /> {t("client.tickets.scope.mine")}
-          </DropdownMenuRadioItem>
-          <DropdownMenuRadioItem value="company">
+          </DropdownMenuCheckboxItem>
+          <DropdownMenuCheckboxItem checked={scope === "company"} onSelect={() => onChange({ scope: "company" })}>
             <Building2 className="size-4" /> {t("client.tickets.scope.company")}
-          </DropdownMenuRadioItem>
+          </DropdownMenuCheckboxItem>
           {contacts.length > 0 && (
             <>
               <DropdownMenuSeparator />
@@ -357,16 +435,60 @@ function WhoMenu({
               )}
               <div className="max-h-64 overflow-y-auto">
                 {shown.map((x) => (
-                  <DropdownMenuRadioItem key={x.id} value={`c:${x.id}`}>
+                  <DropdownMenuCheckboxItem
+                    key={x.id}
+                    checked={scope === "contact" && whoIds.includes(x.id)}
+                    onSelect={(e) => {
+                      stay(e);
+                      toggle(x.id);
+                    }}
+                  >
                     <User className="size-4" /> <span className="truncate">{x.name}</span>
-                  </DropdownMenuRadioItem>
+                  </DropdownMenuCheckboxItem>
                 ))}
               </div>
+              {scope === "contact" && (
+                <>
+                  <DropdownMenuSeparator />
+                  {!current && (
+                    <DropdownMenuItem onSelect={() => setNaming(true)}>
+                      <Bookmark className="size-4" /> {t("client.tickets.scope.save")}
+                    </DropdownMenuItem>
+                  )}
+                  <DropdownMenuItem onSelect={() => onChange({ scope: "mine" })}>
+                    <X className="size-4" /> {t("client.tickets.scope.clear")}
+                  </DropdownMenuItem>
+                </>
+              )}
             </>
           )}
-        </DropdownMenuRadioGroup>
-      </DropdownMenuContent>
-    </DropdownMenu>
+        </DropdownMenuContent>
+      </DropdownMenu>
+
+      <Dialog open={naming} onOpenChange={setNaming}>
+        <DialogContent className="max-w-md">
+          <DialogTitle>{t("client.tickets.scope.saveTitle")}</DialogTitle>
+          <DialogDescription>{t("client.tickets.scope.saveHint", { names: names(whoIds).join(", ") })}</DialogDescription>
+          <form
+            className="space-y-4"
+            onSubmit={(e: FormEvent) => {
+              e.preventDefault();
+              if (name.trim() && !save.isPending) save.mutate();
+            }}
+          >
+            <Input autoFocus maxLength={60} value={name} onChange={(e) => setName(e.target.value)} placeholder={t("client.tickets.scope.name")} />
+            <div className="flex justify-end gap-2">
+              <Button type="button" variant="ghost" onClick={() => setNaming(false)}>
+                {t("common.cancel")}
+              </Button>
+              <Button type="submit" disabled={!name.trim() || save.isPending}>
+                {save.isPending && <Loader2 className="size-4 animate-spin" />} {t("client.tickets.scope.saveDo")}
+              </Button>
+            </div>
+          </form>
+        </DialogContent>
+      </Dialog>
+    </>
   );
 }
 

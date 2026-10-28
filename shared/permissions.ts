@@ -660,6 +660,17 @@ export const SYSTEM_ROLES: Array<{
     locked: false,
   },
   {
+    slug: "client-tickets-admin",
+    audience: "client",
+    name: { fr: "Admin des billets client", en: "Client tickets admin" },
+    description: {
+      fr: "Babillard et tous les billets de l'entreprise (filtres par usager), sans les paramètres admin du portail",
+      en: "Message board and every ticket of the company (filters by user), without the portal's admin settings",
+    },
+    permissions: ["board.view", "board.ticket", "clientTickets.view", "clientTickets.all", "clientTickets.comment", "clientTickets.attach", "clientTickets.escalate"],
+    locked: false,
+  },
+  {
     slug: "client-tech",
     audience: "client",
     name: { fr: "Technique client", en: "Client technical" },

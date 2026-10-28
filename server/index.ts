@@ -17,9 +17,12 @@ import { runIntake } from "./lib/mailIntake.ts";
 import { workflowTick } from "./lib/workflows.ts";
 import { pipelineTick } from "./lib/pipeline.ts";
 import { reminderTick } from "./lib/invoiceMail.ts";
+import { provisionPortalUsers } from "./lib/portalUsers.ts";
 
 await initDb();
 await seed();
+// every contact with an email has a client account (dormant until its company's portal is switched on)
+await provisionPortalUsers().catch((e) => console.warn("[portal] accounts:", e instanceof Error ? e.message : e));
 
 const app = createApp();
 const smtp = await smtpSettings();

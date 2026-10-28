@@ -3210,25 +3210,26 @@ describe("billing: settings, chart of accounts, QuickBooks, Stripe, payments", (
 });
 
 describe("client portal access for contacts", () => {
-  it("none by default; given: an account to set up at first sign-in; removed: turned off", async () => {
+  it("every contact has a dormant account (the company's portal is closed); given by hand: still dormant, no email; removed: turned off", async () => {
     resetRateLimit("login:ip:unknown");
     const admin = await signIn("admin@akab.local");
     const tech = await signIn("tech@akab.local");
     const client = (await admin.get("/api/crm/clients")).json.find((c: any) => c.autotaskId === 304);
     const contacts = (await admin.get(`/api/crm/clients/${client.id}/contacts`)).json;
-    expect(contacts.every((x: any) => x.portal === null)).toBe(true);
-    const ct = contacts[0];
+    // the sample contacts with an email were given their account, none can sign in while the company's portal is closed
+    expect(contacts.filter((x: any) => x.email && x.active).every((x: any) => x.portal?.dormant === true)).toBe(true);
+    const ct = contacts.find((x: any) => x.email && x.active);
     // giving access is an admin right (it creates a sign-in)
     expect((await tech.put(`/api/crm/clients/${client.id}/contacts/${ct.id}/portal`, { enabled: true })).status).toBe(403);
-    const r = await admin.put(`/api/crm/clients/${client.id}/contacts/${ct.id}/portal`, { enabled: true });
+    const r = await admin.put(`/api/crm/clients/${client.id}/contacts/${ct.id}/portal`, { enabled: true, role: "client-admin" });
     expect(r.status).toBe(200);
-    expect(r.json.enabled).toBe(true);
+    expect(r.json).toMatchObject({ enabled: true, dormant: true, welcomeSent: false });
     const [u] = await db().select().from(schema.users).where(sql`lower(${schema.users.email}) = ${ct.email.toLowerCase()}`);
     expect(u).toMatchObject({ kind: "client", clientId: client.id, active: true, mustChangePassword: true });
     expect(u.passwordHash).toBeTruthy();
-    const [link] = await db().select().from(schema.passwordTokens).where(eq(schema.passwordTokens.userId, u.id));
-    expect(link).toBeTruthy(); // the welcome email's "choose your password" link
-    expect((await admin.get(`/api/crm/clients/${client.id}/contacts`)).json.find((x: any) => x.id === ct.id).portal).toMatchObject({ pending: true, role: "client-user" });
+    // no welcome link while the company's portal is closed: it goes out when it is opened
+    expect(await db().select().from(schema.passwordTokens).where(eq(schema.passwordTokens.userId, u.id))).toEqual([]);
+    expect((await admin.get(`/api/crm/clients/${client.id}/contacts`)).json.find((x: any) => x.id === ct.id).portal).toMatchObject({ pending: true, role: "client-admin", dormant: true });
 
     // no email, or an address already used by someone else: refused
     const noMail = await admin.post(`/api/crm/clients/${client.id}/contacts`, { firstName: "Sans", lastName: "Courriel" });
@@ -4559,6 +4560,8 @@ describe("client portal: sections, default roles and per-user rights", () => {
     expect(bySlug["client-accounting"]).toEqual(["board.ticket", "board.view", "clientInvoices.view", "clientQuotes.view", "clientTickets.attach", "clientTickets.comment", "clientTickets.escalate", "clientTickets.view"]);
     expect(bySlug["client-tech"]).toEqual(["board.ticket", "board.view", "clientDevices.view", "clientDocs.view", "clientTickets.all", "clientTickets.attach", "clientTickets.comment", "clientTickets.escalate", "clientTickets.view"]);
     expect(bySlug["client-user"]).toEqual(["board.ticket", "board.view", "clientTickets.attach", "clientTickets.comment", "clientTickets.escalate", "clientTickets.view"]);
+    // every ticket of the company, but none of the portal's admin settings
+    expect(bySlug["client-tickets-admin"]).toEqual(["board.ticket", "board.view", "clientTickets.all", "clientTickets.attach", "clientTickets.comment", "clientTickets.escalate", "clientTickets.view"]);
     expect(bySlug["client-config"]).toEqual(["board.ticket", "board.view", "clientAdmin.company", "clientAdmin.users", "clientTickets.attach", "clientTickets.comment", "clientTickets.escalate", "clientTickets.view"]);
   });
 
@@ -4644,6 +4647,32 @@ describe("client portal: tickets", () => {
     expect(all.items.map((t: any) => t.id)).toEqual(expect.arrayContaining([his.id, other.id]));
     expect((await marie.get(`/api/portal/tickets/${other.id}`)).status).toBe(200);
 
+    // filter by several people of the company, and keep it as a saved filter
+    const luc = (await tech.post(`/api/tickets/companies/${co.id}/contacts`, { firstName: "Luc", lastName: "Tremblay", email: "luc.tremblay@client.example" })).json;
+    const lucs = (await tech.post("/api/tickets", { ...base, title: "Courriel de Luc", contactId: luc.id })).json;
+    const two = (await marie.get(`/api/portal/tickets?scope=contact&contact=${contact.id},${luc.id}`)).json.items.map((t: any) => t.id);
+    expect(two).toEqual(expect.arrayContaining([his.id, lucs.id]));
+    expect(two).not.toContain(other.id);
+    const onlyLuc = (await marie.get(`/api/portal/tickets?scope=contact&contact=${luc.id}`)).json.items.map((t: any) => t.id);
+    expect(onlyLuc).toContain(lucs.id);
+    expect(onlyLuc).not.toContain(his.id);
+    expect((await marie.get("/api/portal/tickets?scope=contact&contact=nobody")).status).toBe(404);
+    expect((await jean.get(`/api/portal/tickets?scope=contact&contact=${luc.id}`)).status).toBe(403);
+
+    const saved = await marie.post("/api/portal/ticket-filters", { name: "Équipe comptabilité", contactIds: [contact.id, luc.id, "not-in-company"] });
+    expect(saved.status).toBe(201);
+    expect(saved.json.contactIds.sort()).toEqual([contact.id, luc.id].sort());
+    expect((await marie.post("/api/portal/ticket-filters", { name: "Personne", contactIds: ["not-in-company"] })).status).toBe(400);
+    expect((await marie.get("/api/portal/ticket-filters")).json.map((f: any) => f.name)).toEqual(["Équipe comptabilité"]);
+    // a filter is private to who made it, and needs the see-everything right
+    expect((await jean.get("/api/portal/ticket-filters")).status).toBe(403);
+    expect((await jean.post("/api/portal/ticket-filters", { name: "x", contactIds: [luc.id] })).status).toBe(403);
+    const elsewhere0 = await signIn("responsable2@client.example");
+    expect((await elsewhere0.get("/api/portal/ticket-filters")).json).toEqual([]);
+    expect((await elsewhere0.del(`/api/portal/ticket-filters/${saved.json.id}`)).status).toBe(404);
+    expect((await marie.del(`/api/portal/ticket-filters/${saved.json.id}`)).status).toBe(200);
+    expect((await marie.get("/api/portal/ticket-filters")).json).toEqual([]);
+
     // another company never sees them; technicians use their own Tickets page
     const elsewhere = await signIn("responsable2@client.example");
     const theirs = (await elsewhere.get("/api/portal/tickets?scope=company")).json.items.map((t: any) => t.id);
@@ -4691,7 +4720,15 @@ describe("client portal: working on a ticket", () => {
     expect((await jean.get(`/api/portal/tickets/${tk.id}`)).json.technicians[0].viewing).toBe(false);
     await tech.post(`/api/tickets/${tk.id}/presence`);
 
+    // the technician had it "in progress": the client's answer puts it back on the team's attention
+    await tech.patch(`/api/tickets/${tk.id}`, { status: (await tech.get("/api/tickets?view=all")).json.facets.statuses.find((s: any) => s.kind === "inProgress").value });
+    expect((await jean.get(`/api/portal/tickets/${tk.id}`)).json.statusKind).toBe("inProgress");
     expect((await jean.post(`/api/portal/tickets/${tk.id}/comments`, { text: "Oui, l'écran reste noir même après redémarrage." })).status).toBe(201);
+    expect((await jean.get(`/api/portal/tickets/${tk.id}`)).json.statusKind).toBe("needsAttention");
+    // the client changes nothing else of the ticket: priority, dates, status, assignee… are staff routes
+    expect((await jean.patch(`/api/tickets/${tk.id}`, { priority: 1, dueAt: "2026-12-24T17:00:00" })).status).toBe(403);
+    expect((await jean.put(`/api/tickets/${tk.id}/start-date`, { startDate: "2026-11-01" })).status).toBe(403);
+    expect((await jean.put(`/api/tickets/${tk.id}/estimate`, { minutes: 5 })).status).toBe(403);
     const file = { name: "photo-ecran.jpg", contentType: "image/jpeg", data: Buffer.from("fake-jpeg").toString("base64") };
     expect((await jean.post(`/api/portal/tickets/${tk.id}/attachments`, file)).status).toBe(201);
     expect((await jean.post(`/api/portal/tickets/${tk.id}/escalate`, { reason: "Tout le service est bloqué" })).status).toBe(201);
@@ -4706,6 +4743,13 @@ describe("client portal: working on a ticket", () => {
     const feed = (await tech.get("/api/notifications")).json.items.filter((n: any) => n.type === "ticket.client" && n.data.number === tk.number);
     expect(feed.map((n: any) => n.data.kind).sort()).toEqual(["comment", "escalation", "file"]);
     expect(feed[0].link).toBe(`/tickets?ticket=${tk.id}`);
+
+    // an answer on a completed ticket reopens it and asks for attention again
+    const done = (await tech.get("/api/tickets?view=all")).json.facets.statuses.find((s: any) => s.kind === "complete").value;
+    expect((await tech.patch(`/api/tickets/${tk.id}`, { status: done })).status).toBe(200);
+    expect((await jean.get(`/api/portal/tickets/${tk.id}`)).json.statusKind).toBe("complete");
+    expect((await jean.post(`/api/portal/tickets/${tk.id}/comments`, { text: "Le problème est revenu ce matin." })).status).toBe(201);
+    expect((await jean.get(`/api/portal/tickets/${tk.id}`)).json.statusKind).toBe("needsAttention");
   });
 
   it("needs the rights, only on their tickets, and never from the client view", async () => {
@@ -8153,5 +8197,56 @@ describe("tickets list: milestone column and sort, a team member shows their ope
     const sorted = (await tech.get("/api/tickets?view=all&sort=milestone")).json.items;
     expect(sorted.slice(0, 2).map((x: any) => [x.id, x.milestoneDate])).toEqual([[b.id, "2026-12-05"], [a.id, "2026-12-20"]]);
     expect(sorted.find((x: any) => x.id === c.id).milestoneDate).toBeNull();
+  });
+});
+
+describe("client portal: the company-wide switch", () => {
+  it("every contact with an email has a dormant account; nobody signs in until the company's portal is opened, and closing it closes everyone", async () => {
+    resetRateLimit("login:ip:unknown");
+    const admin = await signIn("admin@akab.local");
+    const tech = await signIn("tech@akab.local");
+    const [ref] = await db().select().from(schema.users).where(eq(schema.users.email, "employe1@client.example"));
+    const client = (await admin.post("/api/crm/clients", { name: "Dépanneur Portail Test", phone: "450-555-0199" })).json;
+    expect(client.portalEnabled).toBe(false);
+    const anne = (await admin.post(`/api/crm/clients/${client.id}/contacts`, { firstName: "Anne", lastName: "Lavoie", email: "anne@depanneur.example" })).json;
+    await admin.post(`/api/crm/clients/${client.id}/contacts`, { firstName: "Bob", lastName: "Sansmail" });
+
+    // the account exists (role Usager client, nobody knows the password), but only for who has an email
+    const made = await db().select().from(schema.users).where(eq(schema.users.clientId, client.id));
+    expect(made.map((u) => u.email)).toEqual(["anne@depanneur.example"]);
+    expect(made[0]).toMatchObject({ kind: "client", active: true, mustChangePassword: true });
+    const [role] = await db().select().from(schema.roles).where(eq(schema.roles.id, made[0].roleId!));
+    expect(role.slug).toBe("client-user");
+    const listed = (await admin.get(`/api/crm/clients/${client.id}/contacts`)).json;
+    expect(listed.find((x: any) => x.id === anne.id).portal).toMatchObject({ dormant: true, pending: true });
+
+    // closed: even with a known password, the person cannot sign in
+    await db().update(schema.users).set({ passwordHash: ref.passwordHash, mustChangePassword: false }).where(eq(schema.users.id, made[0].id));
+    resetRateLimit("login:ip:unknown");
+    expect((await new Agent().post("/api/auth/login", { email: "anne@depanneur.example", password: PASSWORD })).status).toBe(401);
+
+    // only whoever manages client access opens it
+    expect((await tech.put(`/api/crm/clients/${client.id}/portal`, { enabled: true })).status).toBe(403);
+    expect((await admin.put(`/api/crm/clients/${client.id}/portal`, { enabled: true, sendWelcome: false })).json).toMatchObject({ enabled: true });
+    expect((await admin.get(`/api/crm/clients/${client.id}`)).json.portalEnabled).toBe(true);
+    const anneSession = await signIn("anne@depanneur.example");
+    expect((await anneSession.get("/api/portal/tickets")).status).toBe(200);
+
+    // a contact added later gets their account at once, ready for the open portal
+    await admin.post(`/api/crm/clients/${client.id}/contacts`, { firstName: "Carl", lastName: "Dubé", email: "carl@depanneur.example" });
+    expect((await db().select().from(schema.users).where(eq(schema.users.email, "carl@depanneur.example"))).length).toBe(1);
+    // an email added to a contact that had none
+    const bob = (await admin.get(`/api/crm/clients/${client.id}/contacts`)).json.find((x: any) => x.firstName === "Bob");
+    await admin.patch(`/api/crm/clients/${client.id}/contacts/${bob.id}`, { email: "bob@depanneur.example" });
+    expect((await db().select().from(schema.users).where(eq(schema.users.email, "bob@depanneur.example"))).length).toBe(1);
+
+    // closing it ends everyone's session and keeps the accounts
+    expect((await admin.put(`/api/crm/clients/${client.id}/portal`, { enabled: false })).json).toEqual({ enabled: false });
+    expect((await anneSession.get("/api/portal/tickets")).status).toBe(401);
+    resetRateLimit("login:ip:unknown");
+    expect((await new Agent().post("/api/auth/login", { email: "anne@depanneur.example", password: PASSWORD })).status).toBe(401);
+    expect((await db().select().from(schema.users).where(eq(schema.users.clientId, client.id))).length).toBe(3);
+    // opening again with the welcome emails never breaks (the mail server may be missing here)
+    expect((await admin.put(`/api/crm/clients/${client.id}/portal`, { enabled: true })).status).toBe(200);
   });
 });

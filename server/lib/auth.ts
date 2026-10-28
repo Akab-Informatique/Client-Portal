@@ -124,13 +124,16 @@ export const loadAuth: MiddlewareHandler<AppEnv> = async (c, next) => {
   await next();
 };
 
-/** An active account — and, for a client user, an active client (a client turned off closes its users' access). */
+/**
+ * An active account — and, for a client user, an active client whose portal is
+ * open (a client turned off, or its portal switched off, closes its users' access).
+ */
 export async function accountUsable(u: { active: boolean; kind: string; clientId: string | null }) {
   if (!u.active) return false;
   if (u.kind !== "client") return true;
   if (!u.clientId) return false;
-  const [cl] = await db().select({ active: schema.clients.active }).from(schema.clients).where(eq(schema.clients.id, u.clientId));
-  return Boolean(cl?.active);
+  const [cl] = await db().select({ active: schema.clients.active, portal: schema.clients.portalEnabled }).from(schema.clients).where(eq(schema.clients.id, u.clientId));
+  return Boolean(cl?.active && cl.portal);
 }
 
 /**

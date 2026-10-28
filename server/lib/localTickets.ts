@@ -346,12 +346,18 @@ export function localTicketSource(base: TicketSource): TicketSource {
         .values({ ticketId, author: from.name || from.address, text: `${text}\n\n— ${from.name || from.address} (client, par courriel)`.slice(0, 8000), internal: false });
       await touch(ticketId);
     },
-    async markNeedsAttention(ticketId) {
+    async markNeedsAttention(ticketId, opts) {
       const cur = await one(ticketId);
       const o = await options();
       const attention = o.statuses.find((s) => s.kind === "needsAttention");
-      if (!attention || cur.status === attention.value || (await isComplete(cur.status))) return false;
-      await db().update(schema.tickets).set({ status: attention.value, updatedAt: new Date() }).where(eq(schema.tickets.id, ticketId));
+      if (!attention || cur.status === attention.value) return false;
+      const done = await isComplete(cur.status);
+      // a complete ticket is only brought back by the client answering, and a merged one never
+      if (done && (!opts?.reopen || cur.mergedIntoId != null)) return false;
+      await db()
+        .update(schema.tickets)
+        .set({ status: attention.value, ...(done ? { completedAt: null } : {}), updatedAt: new Date() })
+        .where(eq(schema.tickets.id, ticketId));
       return true;
     },
     async history(since): Promise<HistoryTicket[]> {

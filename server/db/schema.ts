@@ -56,6 +56,12 @@ export const clients = pgTable(
     website: text("website"),
     notes: text("notes"),
     active: boolean("active").notNull().default(true),
+    /**
+     * Client portal open for the whole company. Every contact with an email has
+     * a client account (made by `provisionPortalUsers`), but nobody of the
+     * company can sign in until this is on (CRM › Contacts, `admin.clients`).
+     */
+    portalEnabled: boolean("portal_enabled").notNull().default(false),
     /** Autotask company id (null: only in the portal) */
     autotaskId: integer("autotask_id"),
     parentId: uuid("parent_id").references((): AnyPgColumn => clients.id, { onDelete: "set null" }),
@@ -1729,6 +1735,22 @@ export const expenseFavorites = pgTable(
     createdAt: created(),
   },
   (t) => [index("expense_favorites_user_idx").on(t.userId)],
+);
+
+/** A client user's saved filter on the portal's tickets page: the people of their company to show. */
+export const clientTicketFilters = pgTable(
+  "client_ticket_filters",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    userId: uuid("user_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    name: text("name").notNull(),
+    /** Ticket-side contact ids */
+    contactIds: jsonb("contact_ids").$type<string[]>().notNull().default(sql`'[]'::jsonb`),
+    createdAt: created(),
+  },
+  (t) => [index("client_ticket_filters_user_idx").on(t.userId)],
 );
 
 /** A technician's week (Monday), submitted then approved. */

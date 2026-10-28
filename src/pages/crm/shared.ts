@@ -19,6 +19,8 @@ export type CrmClient = {
   autotaskId: number | null;
   parentId: string | null;
   classKey: string | null;
+  /** The client portal is open for the whole company */
+  portalEnabled: boolean;
   syncedAt: string | null;
 };
 export type CrmListItem = CrmClient & { parentName: string | null; children: number; contacts: number; openTickets: number };
@@ -54,7 +56,7 @@ export type CrmContact = {
   active: boolean;
   userId: string | null;
   /** Client portal access (null: none) */
-  portal: { lastLoginAt: string | null; pending: boolean; role: string | null } | null;
+  portal: { lastLoginAt: string | null; pending: boolean; role: string | null; /** account ready, the company's portal not open yet */ dormant: boolean } | null;
 };
 export type InvoiceStatus = "paid" | "partial" | "due" | "overdue" | "voided";
 export type InvoicePayment = { id: string; amountCents: number; paidOn: string; method: string; reference: string | null; note: string | null; source: string; by: string | null };

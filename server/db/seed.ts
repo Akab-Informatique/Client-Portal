@@ -119,9 +119,9 @@ async function seedDemo(adminRoleId: string): Promise<void> {
   });
 
   const demoClients = [
-    { name: "Boulangerie Lanaudière", code: "BLAN", email: "info@boulangerie.example", phone: "450-555-0101" },
-    { name: "Clinique Rawdon", code: "CRAW", email: "admin@clinique.example", phone: "450-555-0102" },
-    { name: "Transport Joliette", code: "TJOL", email: "it@transport.example", phone: "450-555-0103" },
+    { name: "Boulangerie Lanaudière", code: "BLAN", email: "info@boulangerie.example", phone: "450-555-0101", portalEnabled: true },
+    { name: "Clinique Rawdon", code: "CRAW", email: "admin@clinique.example", phone: "450-555-0102", portalEnabled: true },
+    { name: "Transport Joliette", code: "TJOL", email: "it@transport.example", phone: "450-555-0103", portalEnabled: true },
   ];
   const created = await d.insert(schema.clients).values(demoClients).returning();
   for (const [i, cl] of created.entries()) {

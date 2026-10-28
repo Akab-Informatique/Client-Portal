@@ -8,6 +8,7 @@ import { db, schema } from "../db/index.ts";
 import { auth, requirePermission, requireStaff, revokeUserSessions, type AppEnv } from "../lib/auth.ts";
 import { hashPassword, temporaryPassword } from "../lib/crypto.ts";
 import { forgetPasswordLinks, sendPasswordLink } from "../lib/passwordLinks.ts";
+import { provisionPortalUsers, sendPortalWelcomes } from "../lib/portalUsers.ts";
 import { audit } from "../lib/audit.ts";
 import { rateLimit } from "../lib/http.ts";
 import { body, zEmail, zOptText, zUuid } from "../lib/validate.ts";
@@ -66,6 +67,7 @@ const view = (c: Client) => ({
   autotaskId: c.autotaskId,
   parentId: c.parentId,
   classKey: c.classKey,
+  portalEnabled: c.portalEnabled,
   syncedAt: c.syncedAt,
 });
 
@@ -271,7 +273,8 @@ export const crmRoutes = new Hono<AppEnv>()
       .orderBy(asc(schema.clientContacts.lastName), asc(schema.clientContacts.firstName));
     return c.json(
       rows
-        .map(({ c: x, u }) => ({ ...x, portal: u?.active ? { lastLoginAt: u.lastLoginAt, pending: u.mustChangePassword, role: u.roleSlug } : null }))
+        // dormant: the account is ready but the company's portal is not open yet
+        .map(({ c: x, u }) => ({ ...x, portal: u?.active ? { lastLoginAt: u.lastLoginAt, pending: u.mustChangePassword, role: u.roleSlug, dormant: !client.portalEnabled } : null }))
         .sort((x, y) => Number(y.active) - Number(x.active)),
     );
   })
@@ -297,6 +300,7 @@ export const crmRoutes = new Hono<AppEnv>()
     } else {
       await db().insert(schema.clientContacts).values({ clientId: client.id, ...fields });
     }
+    await provisionPortalUsers(client.id);
     await audit(a.user.id, "crm.contact_created", client.id, { name: `${p.firstName} ${p.lastName}` });
     const [row] = await db()
       .select()
@@ -346,8 +350,36 @@ export const crmRoutes = new Hono<AppEnv>()
       }
     }
     const [row] = await db().update(schema.clientContacts).set({ ...p, updatedAt: new Date() }).where(eq(schema.clientContacts.id, contact.id)).returning();
+    // an email just added, or a contact brought back: its account is made
+    if (!contact.userId && (p.email || p.active === true)) await provisionPortalUsers(client.id);
     await audit(a.user.id, "crm.contact_updated", client.id, { contact: contact.id, fields: Object.keys(p) });
     return c.json(row);
+  })
+
+  /**
+   * The client portal for the whole company (admin.clients). Every contact with
+   * an email already has an account (dormant); switching it on makes the ones
+   * missing and — unless told not to — emails each person who has not signed in
+   * a link to choose a password. Switching it off closes everyone's access at
+   * once (sessions end); the accounts and their roles are kept.
+   */
+  .put("/clients/:id/portal", requirePermission("admin.clients"), async (c) => {
+    const a = auth(c);
+    const client = await clientOr404(c.req.param("id"));
+    const p = await body(c, z.object({ enabled: z.boolean(), sendWelcome: z.boolean().default(true) }));
+    const d = db();
+    if (!p.enabled) {
+      await d.update(schema.clients).set({ portalEnabled: false, updatedAt: new Date() }).where(eq(schema.clients.id, client.id));
+      for (const u of await d.select({ id: schema.users.id }).from(schema.users).where(and(eq(schema.users.clientId, client.id), eq(schema.users.kind, "client")))) await revokeUserSessions(u.id);
+      await audit(a.user.id, "crm.portal_closed", client.id, {});
+      return c.json({ enabled: false });
+    }
+    if (!client.active) throw new HTTPException(409, { message: "portal_inactive" });
+    await d.update(schema.clients).set({ portalEnabled: true, updatedAt: new Date() }).where(eq(schema.clients.id, client.id));
+    const made = await provisionPortalUsers(client.id);
+    const mail = p.sendWelcome ? await sendPortalWelcomes(client.id, c) : { sent: 0, failed: 0 };
+    await audit(a.user.id, "crm.portal_opened", client.id, { made, welcomeSent: mail.sent, welcomeFailed: mail.failed });
+    return c.json({ enabled: true, made, ...mail });
   })
 
   /**
@@ -407,9 +439,11 @@ export const crmRoutes = new Hono<AppEnv>()
         .returning();
     }
     await d.update(schema.clientContacts).set({ userId: user.id, updatedAt: new Date() }).where(eq(schema.clientContacts.id, contact.id));
-    const welcomeSent = await sendPasswordLink(user, "welcome", c);
-    await audit(a.user.id, "crm.portal_access_given", user.id, { contact: contact.id, clientId: client.id, role: p.role, welcomeSent });
-    return c.json({ enabled: true, welcomeSent });
+    // the company's portal still closed: the account is ready, the welcome goes out when it opens
+    const dormant = !client.portalEnabled;
+    const welcomeSent = dormant ? false : await sendPasswordLink(user, "welcome", c);
+    await audit(a.user.id, "crm.portal_access_given", user.id, { contact: contact.id, clientId: client.id, role: p.role, welcomeSent, dormant });
+    return c.json({ enabled: true, welcomeSent, dormant });
   })
 
   // ── contract types (Admin › Types de contrats), for the contract forms

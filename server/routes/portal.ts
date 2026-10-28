@@ -89,10 +89,12 @@ export const portalRoutes = new Hono<AppEnv>()
     let keep: (t: NTicket) => boolean = ctx.mine;
     if (scope === "company") keep = () => true;
     if (scope === "contact") {
-      const who = c.req.query("contact") ?? "";
-      if (!contacts.some((x) => x.id === who)) throw new HTTPException(404, { message: "not_found" });
-      const others = new Set(await ctx.src.ticketsWithOtherContact(who));
-      keep = (t) => t.contactId === who || others.has(t.id);
+      // one or several people of the company (comma separated); one no longer there is ignored
+      const known = new Set(contacts.map((x) => x.id));
+      const who = [...new Set((c.req.query("contact") ?? "").split(",").map((x) => x.trim()).filter((x) => known.has(x)))].slice(0, 50);
+      if (!who.length) throw new HTTPException(404, { message: "not_found" });
+      const others = new Set((await Promise.all(who.map((id) => ctx.src.ticketsWithOtherContact(id)))).flat());
+      keep = (t) => (t.contactId != null && who.includes(t.contactId)) || others.has(t.id);
     }
     // recent tickets from the list, plus every older resolved one of the company
     const [recent, history] = await Promise.all([ctx.src.list(), ctx.src.companyHistory(ctx.companyId)]);
@@ -115,6 +117,48 @@ export const portalRoutes = new Hono<AppEnv>()
         updatedAt: t.updatedAt,
       }));
     return c.json({ linked: true, canSeeAll: all, contacts, items });
+  })
+
+  /**
+   * Saved filters of the tickets page: a name and the people of the company
+   * whose tickets to show. Each person keeps their own (only for whom may see
+   * the whole company's tickets).
+   */
+  .get("/ticket-filters", requirePermission("clientTickets.all"), async (c) => {
+    const rows = await db()
+      .select({ id: schema.clientTicketFilters.id, name: schema.clientTicketFilters.name, contactIds: schema.clientTicketFilters.contactIds })
+      .from(schema.clientTicketFilters)
+      .where(eq(schema.clientTicketFilters.userId, auth(c).user.id))
+      .orderBy(asc(schema.clientTicketFilters.name));
+    return c.json(rows);
+  })
+
+  .post(
+    "/ticket-filters",
+    requirePermission("clientTickets.all"),
+    async (c) => {
+      const a = auth(c);
+      const p = await body(c, z.object({ name: z.string().trim().min(1).max(60), contactIds: z.array(z.string().max(60)).min(1).max(50) }));
+      const mine = await db().select({ id: schema.clientTicketFilters.id }).from(schema.clientTicketFilters).where(eq(schema.clientTicketFilters.userId, a.user.id));
+      if (mine.length >= 30) throw new HTTPException(400, { message: "filters_limit" });
+      // only people of their own company
+      const ctx = await ticketContext(a, companyOf(a));
+      const known = new Set((ctx ? await ctx.src.contacts(ctx.companyId).catch(() => []) : []).map((x) => x.id));
+      const contactIds = [...new Set(p.contactIds)].filter((id) => known.has(id));
+      if (!contactIds.length) throw new HTTPException(400, { message: "filter_no_people" });
+      const [row] = await db().insert(schema.clientTicketFilters).values({ userId: a.user.id, name: p.name, contactIds }).returning({ id: schema.clientTicketFilters.id, name: schema.clientTicketFilters.name, contactIds: schema.clientTicketFilters.contactIds });
+      return c.json(row, 201);
+    },
+  )
+
+  .delete("/ticket-filters/:id", requirePermission("clientTickets.all"), async (c) => {
+    const a = auth(c);
+    const gone = await db()
+      .delete(schema.clientTicketFilters)
+      .where(and(eq(schema.clientTicketFilters.id, c.req.param("id")), eq(schema.clientTicketFilters.userId, a.user.id)))
+      .returning({ id: schema.clientTicketFilters.id });
+    if (!gone.length) throw new HTTPException(404, { message: "not_found" });
+    return c.json({ ok: true });
   })
 
   /** One ticket, with its public activity only, and who at AKAB has it open. */
@@ -152,6 +196,8 @@ export const portalRoutes = new Hono<AppEnv>()
     const { ctx, t } = await ownTicket(a, c.req.param("id"));
     limit(a, "comment", 30);
     await run(() => ctx.src.addNote(t.id, { text, internal: false }, a));
+    // the client answered: the ticket asks for the team's attention, and a complete one is reopened
+    await ctx.src.markNeedsAttention(t.id, { reopen: true }).catch(() => false);
     await audit(a.user.id, "portal.ticket_comment", String(t.id));
     await tellTechnicians(t, a, "comment", text);
     return c.json({ ok: true }, 201);
@@ -171,6 +217,7 @@ export const portalRoutes = new Hono<AppEnv>()
     const { ctx, t } = await ownTicket(a, c.req.param("id"));
     limit(a, "file", 20);
     await run(() => ctx.src.addAttachment(t.id, p, a));
+    await ctx.src.markNeedsAttention(t.id, { reopen: true }).catch(() => false);
     await audit(a.user.id, "portal.ticket_file", String(t.id), { name: p.name, bytes: Math.floor((p.data.length * 3) / 4) });
     await tellTechnicians(t, a, "file", p.name);
     return c.json({ ok: true }, 201);
@@ -188,6 +235,7 @@ export const portalRoutes = new Hono<AppEnv>()
     if (ctx.L.statusKind(t.status) === "complete") throw new HTTPException(409, { message: "portal_ticket_closed" });
     if (!rateLimit(`portal-escalate:${a.user.id}:${t.id}`, 1, 4 * 3600_000).ok) throw new HTTPException(429, { message: "portal_already_escalated" });
     await run(() => ctx.src.addNote(t.id, { text: `Demande d'escalade de priorité par le client :\n${reason}`, internal: false }, a));
+    await ctx.src.markNeedsAttention(t.id).catch(() => false);
     await audit(a.user.id, "portal.ticket_escalation", String(t.id));
     await tellTechnicians(t, a, "escalation", reason, true);
     return c.json({ ok: true }, 201);

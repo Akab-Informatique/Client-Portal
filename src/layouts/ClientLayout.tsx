@@ -156,8 +156,8 @@ function Sidebar({ collapsed, onToggle }: { collapsed: boolean; onToggle?: () =>
   const isActive = (path: string) => (path === "/" ? location.pathname === "/" : location.pathname.startsWith(path));
   const groups = CLIENT_NAV_SECTIONS.map((s) => ({
     ...s,
-    // the right decides, even for pages not built yet
-    items: CLIENT_MODULES.filter((m) => m.section === s.key && (!m.permission || can(m.permission))),
+    // only what is live for clients for now: upcoming pages stay out of the menu
+    items: CLIENT_MODULES.filter((m) => !m.upcoming && m.section === s.key && (!m.permission || can(m.permission))),
   })).filter((g) => g.items.length > 0);
 
   return (
