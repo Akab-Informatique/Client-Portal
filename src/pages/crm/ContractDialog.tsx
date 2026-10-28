@@ -16,7 +16,7 @@ import { cn } from "@/lib/utils";
 import { contractCharges, chargesOn, type BillingPeriod, type ChargeLine } from "@shared/contractCharges";
 import { prorata } from "@shared/prorata";
 import { shortDate, ticketErrorText } from "@/pages/tickets/shared";
-import { MapItcloudDialog, type Unmapped } from "./ContractServices";
+import { MapItcloudDialog, NewServiceDialog, type Unmapped } from "./ContractServices";
 import { money, useContractTypes, type CrmContract, type CrmDetail } from "./shared";
 
 /**
@@ -87,8 +87,12 @@ function Figures({ summary, period, lang }: { summary: Summary; period: BillingP
 }
 
 /** Picks a recurring service, a quantity, a day and optionally a price; shows the prorata as it goes. */
-function ServiceAdder({ term, onAdd, busy }: { term: { start: string; end: string } | null; onAdd: (p: { service: CatalogItem; quantity: number; addedOn: string; priceCents?: number }) => void; busy?: boolean }) {
+function ServiceAdder({ term, onAdd, busy, heading = true }: { term: { start: string; end: string } | null; onAdd: (p: { service: CatalogItem; quantity: number; addedOn: string; priceCents?: number }) => void; busy?: boolean; heading?: boolean }) {
   const { t, i18n } = useTranslation();
+  const can = useCan();
+  // a service that does not exist yet is made right here (a popup), then added
+  const [making, setMaking] = useState(false);
+  const canMake = can("services.manage");
   const { data: catalog = [] } = useQuery({ queryKey: ["crm", "services-catalog"], queryFn: () => api.get<CatalogItem[]>("/crm/services-catalog") });
   const inside = (d: string) => (term ? (d < term.start ? term.start : d > term.end ? term.end : d) : d);
   const [serviceId, setServiceId] = useState("");
@@ -102,22 +106,44 @@ function ServiceAdder({ term, onAdd, busy }: { term: { start: string; end: strin
   const qty = Math.max(1, Math.round(Number(quantity) || 1));
   const unit = toCents(price) ?? svc?.priceCents ?? 0;
   const plan = useMemo(() => (svc && term ? prorata({ period: svc.kind === "recurring_yearly" ? "yearly" : "monthly", priceCents: unit * qty, addedOn, start: term.start, end: term.end }) : null), [svc, term, unit, qty, addedOn]);
-  if (!catalog.length) return <p className="text-xs text-muted-foreground">{t("crm.contracts.noServices")}</p>;
+  const maker = making && (
+    <NewServiceDialog
+      term={term}
+      defaultDay={addedOn}
+      onClose={() => setMaking(false)}
+      onCreated={(service, quantity, day) => onAdd({ service, quantity, addedOn: day })}
+    />
+  );
+  if (!catalog.length)
+    return canMake ? (
+      <div>
+        <Button type="button" size="sm" variant="outline" onClick={() => setMaking(true)}>
+          <Plus className="size-3.5" /> {t("crm.contracts.newService")}
+        </Button>
+        {maker}
+      </div>
+    ) : (
+      <p className="text-xs text-muted-foreground">{t("crm.contracts.noServices")}</p>
+    );
   const ok = svc && term && plan && typeof plan !== "string";
   return (
     <div className="space-y-3 rounded-xl border bg-background/30 p-3">
-      <p className="flex items-center gap-1.5 text-xs font-medium">
-        <Plus className="size-3.5 text-primary" /> {t("crm.contracts.addService")}
-      </p>
+      {heading && (
+        <p className="flex items-center gap-1.5 text-xs font-medium">
+          <Plus className="size-3.5 text-primary" /> {t("crm.contracts.addService")}
+        </p>
+      )}
+      {maker}
       <div className="grid gap-2 sm:grid-cols-[1fr_5rem_9rem_7rem]">
         <label className="space-y-1 text-xs">
           <span className="text-muted-foreground">{t("crm.contracts.service")}</span>
-          <select value={svc?.id ?? ""} onChange={(e) => setServiceId(e.target.value)} className="h-9 w-full rounded-md border bg-transparent px-2 text-sm outline-none focus:ring-2 focus:ring-[color:var(--gold)]/40">
+          <select value={svc?.id ?? ""} onChange={(e) => (e.target.value === "__new" ? setMaking(true) : setServiceId(e.target.value))} className="h-9 w-full rounded-md border bg-transparent px-2 text-sm outline-none focus:ring-2 focus:ring-[color:var(--gold)]/40">
             {catalog.map((x) => (
               <option key={x.id} value={x.id}>
                 {x.name} — {money(x.priceCents, i18n.language)} {x.kind === "recurring_yearly" ? t("services.perYear") : t("services.perMonth")}
               </option>
             ))}
+            {canMake && <option value="__new">+ {t("crm.contracts.newService")}</option>}
           </select>
         </label>
         <label className="space-y-1 text-xs">
@@ -308,6 +334,7 @@ export function NewContractDialog({ client, onClose }: { client: CrmDetail; onCl
             )}
             <ServiceAdder
               term={term}
+              heading={false}
               onAdd={(p) => setLines((x) => [...x, { serviceId: p.service.id, name: p.service.name, kind: p.service.kind, priceCents: p.priceCents ?? p.service.priceCents, quantity: p.quantity, addedOn: p.addedOn, unitCustom: p.priceCents !== undefined }])}
             />
           </section>
