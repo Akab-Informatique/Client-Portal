@@ -65,6 +65,8 @@ export type Client = {
   address: string | null;
   notes: string | null;
   active: boolean;
+  /** The client portal is open for the whole company */
+  portalEnabled: boolean;
   userCount: number;
   createdAt: string;
 };

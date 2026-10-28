@@ -53,8 +53,9 @@ import { cn } from "@/lib/utils";
 import { PRIORITY_STYLE, STATUS_STYLE, shortDate, ticketErrorText } from "@/pages/tickets/shared";
 import { crmErrorText, money, useCrmClients, type CrmInvoice, type CrmInvoices, type InvoiceStatus, type CrmClient, type CrmContact, type CrmContract, type CrmDetail, type CrmTicket, type InvoiceSettings } from "./shared";
 import { ContractWindow, NewContractDialog } from "./ContractDialog";
+import { ClientUsersPanel } from "@/admin/ClientAccess";
 
-const TABS = ["info", "tickets", "invoices", "contacts", "contracts", "invoice"] as const;
+const TABS = ["info", "tickets", "invoices", "contacts", "portal", "contracts", "invoice"] as const;
 type Tab = (typeof TABS)[number];
 
 /** One client: info (with its group of companies), tickets, contacts, contracts, invoicing. */
@@ -130,6 +131,11 @@ export function ClientPage() {
           <TabsTrigger value="contacts">
             <UsersRound className="size-4" /> {t("crm.tabs.contacts")}
           </TabsTrigger>
+          {can("admin.clients") && (
+            <TabsTrigger value="portal">
+              <KeyRound className="size-4" /> {t("crm.tabs.portal")}
+            </TabsTrigger>
+          )}
           <TabsTrigger value="contracts">
             <FileText className="size-4" /> {t("crm.tabs.contracts")}
           </TabsTrigger>
@@ -151,6 +157,11 @@ export function ClientPage() {
         <TabsContent value="contacts" className="mt-4">
           <ContactsTab client={client} />
         </TabsContent>
+        {can("admin.clients") && (
+          <TabsContent value="portal" className="mt-4">
+            <ClientUsersPanel client={{ id: client.id, name: client.name, active: client.active, portalEnabled: client.portalEnabled }} />
+          </TabsContent>
+        )}
         <TabsContent value="contracts" className="mt-4">
           <ContractsTab client={client} />
         </TabsContent>
@@ -828,7 +839,6 @@ function ContactsTab({ client }: { client: CrmDetail }) {
         )
       }
     >
-      {can("admin.clients") && <CompanyPortalSwitch client={client} contacts={contacts} onChange={refresh} />}
       {adding && (
         <ContactForm
           clientId={client.id}
@@ -905,59 +915,6 @@ function ContactsTab({ client }: { client: CrmDetail }) {
         </button>
       )}
     </Card>
-  );
-}
-
-/**
- * The client portal for the whole company. Every contact with an email already
- * has an account; nobody can sign in until this is switched on, which also sends
- * each of them the welcome email (unless unticked). Off again closes everyone.
- */
-function CompanyPortalSwitch({ client, contacts, onChange }: { client: CrmDetail; contacts: CrmContact[]; onChange: () => void }) {
-  const { t } = useTranslation();
-  const confirm = useConfirm();
-  const qc = useQueryClient();
-  const [welcome, setWelcome] = useState(true);
-  const ready = contacts.filter((c) => c.active && c.portal).length;
-  const noEmail = contacts.filter((c) => c.active && !c.email).length;
-  const set = useMutation({
-    mutationFn: (enabled: boolean) => api.put<{ enabled: boolean; sent?: number; failed?: number }>(`/crm/clients/${client.id}/portal`, { enabled, sendWelcome: welcome }),
-    onSuccess: (r) => {
-      void qc.invalidateQueries({ queryKey: ["crm", "client", client.id] });
-      onChange();
-      if (!r.enabled) toast.success(t("crm.portal.company.closed"));
-      else if (r.failed) toast.warning(t("crm.portal.company.openedMailFailed", { sent: r.sent ?? 0, failed: r.failed }));
-      else toast.success(t("crm.portal.company.opened", { count: r.sent ?? 0 }));
-    },
-    onError: (e) => toast.error(e instanceof ApiError && e.code === "portal_inactive" ? t("crm.portal.errors.portal_inactive") : t("common.error")),
-  });
-  const change = async (on: boolean) => {
-    const ok = await confirm(
-      on
-        ? { title: t("crm.portal.company.openTitle", { name: client.name }), description: t("crm.portal.company.openText", { count: ready }), confirmLabel: t("crm.portal.company.open") }
-        : { title: t("crm.portal.company.closeTitle", { name: client.name }), description: t("crm.portal.company.closeText"), confirmLabel: t("crm.portal.company.close"), destructive: true },
-    );
-    if (ok) set.mutate(on);
-  };
-  return (
-    <div className={cn("mb-3 rounded-xl border p-3", client.portalEnabled ? "border-emerald-500/40 bg-emerald-500/[0.06]" : "bg-background/30")}>
-      <div className="flex items-start gap-3">
-        <KeyRound className={cn("mt-0.5 size-4 shrink-0", client.portalEnabled ? "text-emerald-400" : "text-muted-foreground")} />
-        <div className="min-w-0 flex-1">
-          <p className="text-sm font-medium">{t("crm.portal.company.title")}</p>
-          <p className="mt-0.5 text-xs text-muted-foreground">
-            {client.portalEnabled ? t("crm.portal.company.onText", { count: ready }) : t("crm.portal.company.offText", { count: ready })}
-            {noEmail > 0 && <span className="text-amber-400"> {t("crm.portal.company.noEmail", { count: noEmail })}</span>}
-          </p>
-          {!client.portalEnabled && (
-            <label className="mt-2 flex items-center gap-2 text-xs text-muted-foreground">
-              <Checkbox checked={welcome} onCheckedChange={(v) => setWelcome(v === true)} /> {t("crm.portal.company.sendWelcome")}
-            </label>
-          )}
-        </div>
-        {set.isPending ? <Loader2 className="size-4 animate-spin text-muted-foreground" /> : <Switch checked={client.portalEnabled} onCheckedChange={(v) => void change(v)} aria-label={t("crm.portal.company.title")} disabled={!client.active} />}
-      </div>
-    </div>
   );
 }
 

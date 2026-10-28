@@ -11,6 +11,9 @@ import { hashPassword, temporaryPassword } from "../lib/crypto.ts";
 import { audit } from "../lib/audit.ts";
 import { mailConfigured } from "../lib/mail.ts";
 import { forgetPasswordLinks, sendPasswordLink } from "../lib/passwordLinks.ts";
+import { ticketSource } from "../lib/ticketSource.ts";
+import { rememberContact } from "../lib/crm.ts";
+import { provisionPortalUsers } from "../lib/portalUsers.ts";
 import { body, zEmail, zName, zOptText, zPhone, zUuid } from "../lib/validate.ts";
 import {
   effectivePermissions,
@@ -246,6 +249,38 @@ async function createUser(
   return { user: publicUser(u), temporaryPassword: password, welcomeSent };
 }
 
+/**
+ * A client user made by hand is also a contact of the company (so tickets can
+ * name them), tied to the account. An existing contact with that email is
+ * linked instead; a failure never undoes the account.
+ */
+async function linkContactOf(client: typeof schema.clients.$inferSelect, user: UserRow, a: AuthContext) {
+  try {
+    const d = db();
+    const email = user.email.toLowerCase();
+    const [hit] = await d
+      .select()
+      .from(schema.clientContacts)
+      .where(and(eq(schema.clientContacts.clientId, client.id), sql`lower(${schema.clientContacts.email}) = ${email}`));
+    if (hit) {
+      if (!hit.userId) await d.update(schema.clientContacts).set({ userId: user.id, updatedAt: new Date() }).where(eq(schema.clientContacts.id, hit.id));
+      return;
+    }
+    const [first, ...rest] = user.name.trim().split(/\s+/);
+    const fields = { firstName: first || email, lastName: rest.join(" ") || first || email, email, phone: user.phone ?? null, mobile: user.mobile ?? null, title: user.title ?? null };
+    if (client.autotaskId != null) {
+      const made = await (await ticketSource()).addContact(client.autotaskId, fields, a);
+      await rememberContact(client.autotaskId, { id: made.id, ...fields });
+    } else {
+      await d.insert(schema.clientContacts).values({ clientId: client.id, ...fields });
+    }
+    // the account that was just made is the one the new contact is tied to
+    await provisionPortalUsers(client.id);
+  } catch (e) {
+    console.warn("[admin] contact of a client user:", e instanceof Error ? e.message : e);
+  }
+}
+
 // ── routes ───────────────────────────────────────────────────────────────────
 export const adminRoutes = new Hono<AppEnv>()
   // Technicians
@@ -326,7 +361,11 @@ export const adminRoutes = new Hono<AppEnv>()
     const [client] = await db().select().from(schema.clients).where(eq(schema.clients.id, id));
     if (!client) throw new HTTPException(404, { message: "not_found" });
     const p = await body(c, z.object(userInput));
-    return c.json(await createUser(auth(c).user.id, "client", id, p, c), 201);
+    // while the company's portal is closed nobody can use a link: the welcome waits for the switch
+    const made = await createUser(auth(c).user.id, "client", id, { ...p, sendWelcome: p.sendWelcome && client.portalEnabled }, c);
+    const [row] = await db().select().from(schema.users).where(eq(schema.users.id, made.user.id));
+    if (row) await linkContactOf(client, row, auth(c));
+    return c.json({ ...made, dormant: !client.portalEnabled }, 201);
   })
 
   // Any user (technician or client user)
@@ -521,10 +560,12 @@ export const adminRoutes = new Hono<AppEnv>()
   })
 
   /** Rights granted or denied directly to this user (on top of the role). */
-  .put("/users/:id/permissions", requirePermission("admin.roles"), async (c) => {
+  .put("/users/:id/permissions", requirePermission("admin.roles", "admin.clients"), async (c) => {
     const a = auth(c);
     const target = await getUser(zUuid.parse(c.req.param("id")));
     assertCanManage(a.permissions, target.kind);
+    // a technician's rights are for who manages roles; a client user's, for who manages the clients
+    if (target.kind === "staff" && !a.permissions.includes("admin.roles")) throw new HTTPException(403, { message: "Forbidden" });
     await assertMasterGuard(a, { target });
     const { overrides } = await body(
       c,

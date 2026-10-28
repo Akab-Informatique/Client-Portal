@@ -128,15 +128,17 @@ export function NewUserDialog({
 
   const create = useMutation({
     mutationFn: () =>
-      api.post<{ user: AdminUser; temporaryPassword: string; welcomeSent: boolean }>(
+      api.post<{ user: AdminUser; temporaryPassword: string; welcomeSent: boolean; dormant?: boolean }>(
         kind === "staff" ? "/admin/staff" : `/admin/clients/${clientId}/users`,
         form,
       ),
     onSuccess: (r) => {
       invalidateUsers(qc);
       onOpenChange(false);
+      // the company's portal is closed: the account waits, the welcome goes out when it opens
+      if (r.dormant) toast.info(t("crm.portal.givenDormant"));
       // With the welcome email the person chooses their own password; otherwise show the temporary one
-      if (r.welcomeSent) toast.success(t("admin.users.welcomeSent", { email: r.user.email }));
+      else if (r.welcomeSent) toast.success(t("admin.users.welcomeSent", { email: r.user.email }));
       else {
         if (form.sendWelcome) toast.error(t("admin.users.welcomeFailed"));
         setTemp({ password: r.temporaryPassword, email: r.user.email });
@@ -383,7 +385,8 @@ function AccessTab({ user, roles }: { user: AdminUser; roles: Role[] }) {
   const initial = useMemo(() => Object.fromEntries(user.overrides.map((o) => [o.permission, o.effect])) as OverrideMap, [user.overrides]);
   const [overrides, setOverrides] = useState<OverrideMap>(initial);
   const role = roles.find((r) => r.id === roleId);
-  const canOverride = can("admin.roles");
+  // a technician's granular rights need the roles right; a client user's, the clients right
+  const canOverride = user.kind === "client" ? can("admin.roles") || can("admin.clients") : can("admin.roles");
 
   const save = useMutation({
     mutationFn: async () => {

@@ -8250,3 +8250,54 @@ describe("client portal: the company-wide switch", () => {
     expect((await admin.put(`/api/crm/clients/${client.id}/portal`, { enabled: true })).status).toBe(200);
   });
 });
+describe("admin: client users and their rights", () => {
+  it("a user added to a client is also a contact; the clients right alone manages a client user's granular rights, never a technician's", async () => {
+    resetRateLimit("login:ip:unknown");
+    const admin = await signIn("admin@akab.local");
+    const roles = (await admin.get("/api/admin/roles")).json;
+    const clientUser = roles.find((r: any) => r.slug === "client-user");
+    const ticketsAdmin = roles.find((r: any) => r.slug === "client-tickets-admin");
+    const globalAdmin = roles.find((r: any) => r.slug === "global-admin");
+    const client = (await admin.post("/api/crm/clients", { name: "Atelier Accès Test", phone: "450-555-0188" })).json;
+    expect(client.portalEnabled).toBe(false);
+
+    // the portal is closed: the account is made, linked to a new contact, and no welcome goes out
+    const closed = await admin.post(`/api/admin/clients/${client.id}/users`, { email: "dora@atelier.example", name: "Dora Tremblay", roleId: clientUser.id, sendWelcome: true });
+    expect(closed.status).toBe(201);
+    expect(closed.json).toMatchObject({ dormant: true, welcomeSent: false });
+    const contacts = (await admin.get(`/api/crm/clients/${client.id}/contacts`)).json;
+    const dora = contacts.find((x: any) => x.email === "dora@atelier.example");
+    expect(dora).toMatchObject({ firstName: "Dora", lastName: "Tremblay", userId: closed.json.user.id });
+    expect(dora.portal).toMatchObject({ dormant: true });
+    // the same email again is refused (edit the existing person instead)
+    expect((await admin.post(`/api/admin/clients/${client.id}/users`, { email: "dora@atelier.example", name: "Dora Bis", roleId: clientUser.id })).json.error).toBe("email_taken");
+    // the client's people, with their rights, are listed
+    const list = (await admin.get(`/api/admin/clients/${client.id}/users`)).json;
+    expect(list.map((u: any) => u.email)).toEqual(["dora@atelier.example"]);
+
+    // someone who manages clients but not roles (Administrateur global)
+    await admin.post("/api/admin/staff", { email: "gadmin@akab.local", name: "Gabrielle Admin", roleId: globalAdmin.id, sendWelcome: false });
+    const [ref] = await db().select().from(schema.users).where(eq(schema.users.email, "employe1@client.example"));
+    await db().update(schema.users).set({ passwordHash: ref.passwordHash, mustChangePassword: false }).where(eq(schema.users.email, "gadmin@akab.local"));
+    const gadmin = await signIn("gadmin@akab.local");
+    const target = closed.json.user.id;
+    // role and granular rights of a client user
+    expect((await gadmin.patch(`/api/admin/users/${target}`, { roleId: ticketsAdmin.id })).status).toBe(200);
+    expect((await gadmin.put(`/api/admin/users/${target}/permissions`, { overrides: [{ key: "clientInvoices.view", effect: "allow" }, { key: "board.ticket", effect: "deny" }] })).status).toBe(200);
+    const after = (await admin.get(`/api/admin/clients/${client.id}/users`)).json[0];
+    expect(after.roleId).toBe(ticketsAdmin.id);
+    expect(after.overrides.map((o: any) => `${o.permission}:${o.effect}`).sort()).toEqual(["board.ticket:deny", "clientInvoices.view:allow"]);
+    // never a technician's rights
+    const tech = (await admin.get("/api/admin/staff")).json.find((u: any) => u.email === "tech@akab.local");
+    expect((await gadmin.put(`/api/admin/users/${tech.id}/permissions`, { overrides: [] })).status).toBe(403);
+    // and a technician (no clients right) cannot touch client users
+    const techSession = await signIn("tech@akab.local");
+    expect((await techSession.put(`/api/admin/users/${target}/permissions`, { overrides: [] })).status).toBe(403);
+
+    // opened: a user added now gets the welcome email attempt (the mail server may be missing here)
+    expect((await admin.put(`/api/crm/clients/${client.id}/portal`, { enabled: true, sendWelcome: false })).status).toBe(200);
+    const open = await admin.post(`/api/admin/clients/${client.id}/users`, { email: "eric@atelier.example", name: "Éric Roy", roleId: clientUser.id, sendWelcome: false });
+    expect(open.json.dormant).toBe(false);
+    expect((await admin.get(`/api/crm/clients/${client.id}/contacts`)).json.some((x: any) => x.email === "eric@atelier.example" && x.userId === open.json.user.id)).toBe(true);
+  });
+});

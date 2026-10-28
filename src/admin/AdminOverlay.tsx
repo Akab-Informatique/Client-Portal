@@ -3,7 +3,7 @@ import { useSearchParams } from "react-router-dom";
 import { useTranslation } from "react-i18next";
 import { AnimatePresence, motion } from "motion/react";
 import { Dialog as DialogPrimitive } from "radix-ui";
-import { Briefcase, ChevronDown, Clock, Inbox, PanelLeftClose, PanelLeftOpen, History, FileText, ListChecks, ListOrdered, Mail, Tags, Truck, Ticket, PlugZap, Receipt, ShieldCheck, Users, Workflow, X, type LucideIcon } from "lucide-react";
+import { Briefcase, Building2, ChevronDown, Clock, Inbox, PanelLeftClose, PanelLeftOpen, History, FileText, ListChecks, ListOrdered, Mail, Tags, Truck, Ticket, PlugZap, Receipt, ShieldCheck, Users, Workflow, X, type LucideIcon } from "lucide-react";
 import { LogoMark } from "@/components/brand/Logo";
 import { TechBackground } from "@/components/brand/TechBackground";
 import { useCan } from "@/lib/session";
@@ -23,11 +23,13 @@ import { ClassesSection } from "./ClassesSection";
 import { TicketSetupSection } from "./TicketSetupSection";
 import { MailIntakeSection } from "./MailIntakeSection";
 import { PipelineSection } from "./PipelineSection";
+import { ClientAccessSection } from "./ClientAccess";
 
 type Section = { key: string; labelKey: string; icon: LucideIcon; permission: PermissionKey[]; render: () => React.ReactNode };
 
 const SECTIONS: Section[] = [
   { key: "staff", labelKey: "admin.sections.staff", icon: Users, permission: ["admin.staff"], render: () => <StaffSection /> },
+  { key: "clients", labelKey: "admin.sections.clients", icon: Building2, permission: ["admin.clients"], render: () => <ClientAccessSection /> },
   { key: "billing", labelKey: "admin.sections.billing", icon: Receipt, permission: ["admin.billing"], render: () => <BillingSection /> },
   { key: "contracttypes", labelKey: "admin.sections.contracttypes", icon: FileText, permission: ["admin.billing"], render: () => <ContractTypesSection /> },
   { key: "vendors", labelKey: "admin.sections.vendors", icon: Truck, permission: ["admin.billing"], render: () => <VendorsSection /> },
@@ -58,7 +60,7 @@ const SECTIONS: Section[] = [
  */
 type Entry = { kind: "item"; key: string } | { kind: "group"; id: string; labelKey: string; icon: LucideIcon; keys: string[] };
 const MENU: Entry[] = [
-  { kind: "group", id: "people", labelKey: "admin.groups.people", icon: Users, keys: ["staff", "roles"] },
+  { kind: "group", id: "people", labelKey: "admin.groups.people", icon: Users, keys: ["staff", "clients", "roles"] },
   { kind: "item", key: "integrations" },
   { kind: "item", key: "billing" },
   { kind: "item", key: "contracttypes" },
