@@ -88,6 +88,23 @@ function serviceLine(r: typeof schema.contractServices.$inferSelect, k: Contract
 }
 
 const zDay = z.string().regex(/^\d{4}-\d{2}-\d{2}$/);
+/** Counts for deleting a client: invoices and tickets block it; the rest goes with the client */
+async function deleteCheck(client: { id: string; autotaskId: number | null }) {
+  const d = db();
+  const count = async (q: Promise<{ n: number }[]>) => (await q)[0]?.n ?? 0;
+  const n = sql<number>`count(*)::int`;
+  const [invoices, tickets, contacts, contracts, portalUsers, workToBill, projects, quotes] = await Promise.all([
+    count(d.select({ n }).from(schema.clientInvoices).where(eq(schema.clientInvoices.clientId, client.id))),
+    client.autotaskId == null ? 0 : count(d.select({ n }).from(schema.tickets).where(eq(schema.tickets.companyId, client.autotaskId))),
+    count(d.select({ n }).from(schema.clientContacts).where(eq(schema.clientContacts.clientId, client.id))),
+    count(d.select({ n }).from(schema.clientContracts).where(eq(schema.clientContracts.clientId, client.id))),
+    count(d.select({ n }).from(schema.users).where(eq(schema.users.clientId, client.id))),
+    count(d.select({ n }).from(schema.billingItems).where(eq(schema.billingItems.clientId, client.id))),
+    count(d.select({ n }).from(schema.projects).where(eq(schema.projects.clientId, client.id))),
+    count(d.select({ n }).from(schema.quotes).where(eq(schema.quotes.clientId, client.id))),
+  ]);
+  return { invoices, tickets, contacts, contracts, portalUsers, workToBill, projects, quotes };
+}
 type ServiceRow = typeof schema.contractServices.$inferSelect;
 const chargeLines = (rows: ServiceRow[]): ChargeLine[] => rows.map((r) => ({ id: r.id, name: r.name, kind: r.kind === "recurring_yearly" ? "recurring_yearly" : "recurring", priceCents: r.priceCents, quantity: r.quantity, addedOn: r.addedOn }));
 /** What a contract charges (per full period, over its term) and what comes next, from its services */
@@ -181,6 +198,22 @@ export const crmRoutes = new Hono<AppEnv>()
     return c.json({ ...view(client), parent: parent ?? null, children, invoice: a.permissions.includes("crm.billing") ? client.invoice : null });
   })
 
+  /** What deleting a client would remove, and what stops it (invoices and tickets are never lost) */
+  .get("/clients/:id/delete-check", requirePermission("crm.delete"), async (c) => {
+    const client = await clientOr404(c.req.param("id"));
+    return c.json(await deleteCheck(client));
+  })
+  /** Delete a client with no invoice and no ticket: its contacts, contracts (and their services), portal accesses and work to bill go with it */
+  .delete("/clients/:id", requirePermission("crm.delete"), async (c) => {
+    const a = auth(c);
+    const client = await clientOr404(c.req.param("id"));
+    const check = await deleteCheck(client);
+    if (check.invoices > 0) throw new HTTPException(409, { message: "client_has_invoices" });
+    if (check.tickets > 0) throw new HTTPException(409, { message: "client_has_tickets" });
+    await db().delete(schema.clients).where(eq(schema.clients.id, client.id));
+    await audit(a.user.id, "crm.client_deleted", client.id, { name: client.name, ...check });
+    return c.json({ deleted: true, removed: check });
+  })
   .patch("/clients/:id", requirePermission("crm.edit"), async (c) => {
     const a = auth(c);
     const client = await clientOr404(c.req.param("id"));

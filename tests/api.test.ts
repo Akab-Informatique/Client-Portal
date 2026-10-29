@@ -7293,6 +7293,35 @@ describe("ITCloud: vendor, clients matched, services kept on contracts", () => {
   });
 });
 
+describe("deleting a client", () => {
+  it("administrators delete a client with no invoice or ticket, with its contacts and contracts; one with invoices stays", async () => {
+    resetRateLimit("login:ip:unknown");
+    const admin = await signIn("admin@akab.local");
+    const tech = await signIn("tech@akab.local");
+    const typeKey = (await admin.get("/api/crm/contract-types")).json.find((x: any) => x.kind === "recurring").key;
+    const mk = async (name: string) => {
+      const cl = (await admin.post("/api/crm/clients", { name, phone: "450-555-8800" })).json;
+      await db().insert(schema.clientContacts).values({ clientId: cl.id, firstName: "Ana", lastName: "Test", email: `ana@${name.replace(/W/g, "").toLowerCase()}.test` });
+      await admin.post(`/api/crm/clients/${cl.id}/contracts`, { name: "Contrat", typeKey, startDate: "2030-01-01", endDate: "2030-12-31" });
+      return cl;
+    };
+    const gone = await mk("Client a supprimer");
+    // only administrators
+    expect((await tech.get(`/api/crm/clients/${gone.id}/delete-check`)).status).toBe(403);
+    expect((await tech.del(`/api/crm/clients/${gone.id}`)).status).toBe(403);
+    expect((await admin.get(`/api/crm/clients/${gone.id}/delete-check`)).json).toMatchObject({ invoices: 0, tickets: 0, contacts: 1, contracts: 1 });
+    expect((await admin.del(`/api/crm/clients/${gone.id}`)).json).toMatchObject({ deleted: true, removed: { contacts: 1, contracts: 1 } });
+    expect((await admin.get(`/api/crm/clients/${gone.id}`)).status).toBe(404);
+    expect(await db().select().from(schema.clientContacts).where(eq(schema.clientContacts.clientId, gone.id))).toHaveLength(0);
+    expect(await db().select().from(schema.clientContracts).where(eq(schema.clientContracts.clientId, gone.id))).toHaveLength(0);
+    // invoices are never lost: the client stays
+    const kept = await mk("Client avec facture");
+    await db().insert(schema.clientInvoices).values({ clientId: kept.id, number: "99001", issuedOn: "2026-10-01", totalCents: 1_000, taxCents: 0 });
+    expect((await admin.del(`/api/crm/clients/${kept.id}`)).json.error).toBe("client_has_invoices");
+    expect((await admin.get(`/api/crm/clients/${kept.id}`)).status).toBe(200);
+  });
+});
+
 describe("services: the vendor we buy from (internal)", () => {
   it("a service can be tied to a vendor and their reference; ITCloud ones keep the sync's", async () => {
     resetRateLimit("login:ip:unknown");

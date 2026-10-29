@@ -110,6 +110,11 @@ export const MODULES = [
         description: { fr: "Nouveau client, coordonnées, compagnie mère, contacts", en: "New client, details, parent company, contacts" },
       },
       { key: "crm.billing", label: { fr: "Paramètres de facturation", en: "Invoice settings" }, description: { fr: "Courriel de facturation, modalités, taxes, taux", en: "Billing email, terms, taxes, rate" } },
+      {
+        key: "crm.delete",
+        label: { fr: "Supprimer des clients", en: "Delete clients" },
+        description: { fr: "Supprimer un client sans facture ni billet, avec ses contacts, contrats et accès au portail", en: "Delete a client that has no invoice or ticket, with its contacts, contracts and portal access" },
+      },
     ],
   },
   {

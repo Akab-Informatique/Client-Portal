@@ -355,6 +355,16 @@ const fr = {
   },
 
   crm: {
+    delete: {
+      button: "Supprimer le client",
+      title: "Supprimer {{name}} ?",
+      text: "Seront supprimés avec lui : {{contacts}} contact(s), {{contracts}} contrat(s) et leurs services, {{users}} accès au portail client, {{items}} élément(s) à facturer, {{projects}} projet(s) retiré(s) du client et {{quotes}} soumission(s) détachée(s). Cette action ne peut pas être annulée.",
+      confirm: "Supprimer le client",
+      done: "Client supprimé.",
+      blocked: "Ce client ne peut pas être supprimé : il a {{invoices}} facture(s) et {{tickets}} billet(s), qu'on ne perd jamais. Désactivez-le plutôt.",
+      client_has_invoices: "Ce client a des factures : il ne peut pas être supprimé.",
+      client_has_tickets: "Ce client a des billets : il ne peut pas être supprimé.",
+    },
     title: "Clients",
     subtitle: "Toutes les compagnies servies par AKAB, avec leurs contacts, contrats et billets.",
     search: "Rechercher un client, une ville, un téléphone…",

@@ -357,6 +357,16 @@ const en: Dict = {
   },
 
   crm: {
+    delete: {
+      button: "Delete client",
+      title: "Delete {{name}}?",
+      text: "Deleted with it: {{contacts}} contact(s), {{contracts}} contract(s) and their services, {{users}} client portal access(es), {{items}} item(s) to bill; {{projects}} project(s) are detached from the client and {{quotes}} quote(s) too. This cannot be undone.",
+      confirm: "Delete the client",
+      done: "Client deleted.",
+      blocked: "This client cannot be deleted: it has {{invoices}} invoice(s) and {{tickets}} ticket(s), which are never lost. Turn it off instead.",
+      client_has_invoices: "This client has invoices: it cannot be deleted.",
+      client_has_tickets: "This client has tickets: it cannot be deleted.",
+    },
     title: "Clients",
     subtitle: "Every company AKAB serves, with their contacts, contracts and tickets.",
     search: "Search a client, a city, a phone…",

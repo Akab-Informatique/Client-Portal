@@ -1,6 +1,6 @@
 import { useEffect, useState, type FormEvent, type ReactNode } from "react";
 import { useTranslation } from "react-i18next";
-import { Link, useParams, useSearchParams } from "react-router-dom";
+import { Link, useNavigate, useParams, useSearchParams } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import {
@@ -29,6 +29,7 @@ import {
   Smartphone,
   KeyRound,
   Ticket,
+  Trash2,
   UserRound,
   UsersRound,
   X,
@@ -63,7 +64,29 @@ type Tab = (typeof TABS)[number];
 export function ClientPage() {
   const { t } = useTranslation();
   const can = useCan();
+  const confirm = useConfirm();
+  const navigate = useNavigate();
+  const qc = useQueryClient();
   const { id = "" } = useParams();
+  // deleting a client (administrators): invoices and tickets stop it; contacts, contracts and portal accesses go with it
+  const remove = useMutation({
+    mutationFn: () => api.del<{ deleted: boolean }>(`/crm/clients/${id}`),
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: ["crm"] });
+      toast.success(t("crm.delete.done"));
+      navigate("/crm");
+    },
+    onError: (e) => toast.error(e instanceof ApiError && (e.code === "client_has_invoices" || e.code === "client_has_tickets") ? t(`crm.delete.${e.code}`) : t("common.error")),
+  });
+  const askDelete = async (name: string) => {
+    const c = await api.get<{ invoices: number; tickets: number; contacts: number; contracts: number; portalUsers: number; workToBill: number; projects: number; quotes: number }>(`/crm/clients/${id}/delete-check`);
+    if (c.invoices > 0 || c.tickets > 0) {
+      toast.error(t("crm.delete.blocked", { invoices: c.invoices, tickets: c.tickets }), { duration: 12000 });
+      return;
+    }
+    const ok = await confirm({ title: t("crm.delete.title", { name }), description: t("crm.delete.text", { contacts: c.contacts, contracts: c.contracts, users: c.portalUsers, items: c.workToBill, projects: c.projects, quotes: c.quotes }), confirmLabel: t("crm.delete.confirm"), destructive: true });
+    if (ok) remove.mutate();
+  };
   const [params, setParams] = useSearchParams();
   const tab = (TABS as readonly string[]).includes(params.get("tab") ?? "") ? (params.get("tab") as Tab) : "info";
   const { data: client, isLoading, isError } = useQuery({ queryKey: ["crm", "client", id], queryFn: () => api.get<CrmDetail>(`/crm/clients/${id}`) });
@@ -106,6 +129,11 @@ export function ClientPage() {
             )}
           </div>
         </div>
+        {can("crm.delete") && (
+          <Button type="button" variant="ghost" size="sm" className="gap-1.5 text-muted-foreground hover:text-destructive" disabled={remove.isPending} onClick={() => void askDelete(client.name)}>
+            <Trash2 className="size-4" /> {t("crm.delete.button")}
+          </Button>
+        )}
       </div>
 
       <Tabs
