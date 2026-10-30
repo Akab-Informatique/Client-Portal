@@ -57,3 +57,6 @@ sandbox/
 
 # Local dev database (PGlite) and generated dev secret
 .data/
+
+# Customer data handed over for one-off imports (emails, Autotask exports) — never commit
+import-data/
