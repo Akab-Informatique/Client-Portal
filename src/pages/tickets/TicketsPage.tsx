@@ -1455,7 +1455,7 @@ const TICKET_COLUMNS = ["ticket", "status", "company", "start", "milestone", "du
 type ColumnId = (typeof TICKET_COLUMNS)[number];
 const COLS_KEY = "akab.tickets.columns.v2";
 /** Usual widths (px); the ticket column is elastic (at least this, takes the rest) */
-const DEFAULT_WIDTHS: Record<ColumnId, number> = { ticket: 220, status: 144, company: 140, start: 64, milestone: 72, due: 104, priority: 86, assignee: 132, secondary: 64 };
+const DEFAULT_WIDTHS: Record<ColumnId, number> = { ticket: 220, status: 144, company: 140, start: 64, milestone: 124, due: 104, priority: 86, assignee: 132, secondary: 64 };
 const COL_MIN = 56;
 const COL_MAX = 480;
 type ColumnPrefs = { order: ColumnId[]; widths: Partial<Record<ColumnId, number>> };
