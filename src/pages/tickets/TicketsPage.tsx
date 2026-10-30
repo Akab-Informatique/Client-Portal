@@ -1023,7 +1023,9 @@ function TicketRow({
           </span>
           {/* the goal date between the start and the final due date (changed in the ticket's Planning) */}
           <span className="min-w-0 xl:[order:var(--o-milestone)]" title={t("tickets.milestone.hint")}>
-            <CheckpointCell tk={tk} editable={editable} />
+            <Stop>
+              <CheckpointCell tk={tk} editable={editable} />
+            </Stop>
           </span>
           <span className="min-w-0 xl:[order:var(--o-due)]">
             {(() => {
