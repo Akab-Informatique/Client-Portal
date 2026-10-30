@@ -216,7 +216,7 @@ export function TicketsPage() {
         </div>
         <div className="flex w-full flex-wrap items-center gap-2 sm:w-auto">
           <GlobalSearch demo={Boolean(data?.demo)} />
-          {can("tickets.ai") && data && (data.ai ? <AiPlanButton /> : <AiSetupHint label={t("tickets.ai.plan")} />)}
+          {can("tickets.ai") && data && (data.ai ? <AiPlanButton visibleIds={data.items.map((x) => x.id)} /> : <AiSetupHint label={t("tickets.ai.plan")} />)}
           {can("tickets.edit") && data && <PendingMails facets={data.facets} onCreated={(id) => ws.open(id)} />}
           {can("tickets.edit") && (
             <Button size="sm" onClick={() => setCreating(true)} className="h-9 bg-grad-gold font-semibold text-[#1a1204] glow-gold hover:brightness-105">
@@ -1669,7 +1669,7 @@ type PlanItem = {
 };
 type Plan = { overview: string; source: "ai" | "rules"; items: PlanItem[]; late: number; unscheduled: number };
 
-function AiPlanButton() {
+function AiPlanButton({ visibleIds }: { visibleIds: number[] }) {
   const { t } = useTranslation();
   const qc = useQueryClient();
   const [, setParams] = useSearchParams();
@@ -1727,7 +1727,7 @@ function AiPlanButton() {
       <Button variant="outline" size="icon" onClick={() => setAssistant(true)} disabled={run.isPending} className="border-violet-500/40 bg-violet-500/10 text-violet-200 hover:bg-violet-500/20" aria-label={t("tickets.assistant.title")} title={t("tickets.assistant.title")}>
         {run.isPending ? <Loader2 className="size-4 animate-spin" /> : <Sparkles className="size-4" />}
       </Button>
-      {assistant && <AssistantDialog onClose={() => setAssistant(false)} onPlan={() => run.mutate()} onSort={(v) => setParams((q) => { if (v === "milestone") q.delete("sort"); else q.set("sort", v); return q; }, { replace: true })} />}
+      {assistant && <AssistantDialog visibleIds={visibleIds} onClose={() => setAssistant(false)} onPlan={() => run.mutate()} onSort={(v) => setParams((q) => { if (v === "milestone") q.delete("sort"); else q.set("sort", v); return q; }, { replace: true })} />}
       <Dialog open={Boolean(plan)} onOpenChange={(o) => !o && setPlan(null)}>
         <DialogContent className="sm:max-w-2xl">
           <DialogHeader>

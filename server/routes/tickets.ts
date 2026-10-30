@@ -722,6 +722,8 @@ export const ticketRoutes = new Hono<AppEnv>()
         message: z.string().trim().min(1).max(2000),
         /** the conversation so far: what the person said, what the assistant answered (and proposed) */
         history: z.array(z.object({ role: z.enum(["user", "assistant"]), text: z.string().max(3000) })).max(16).default([]),
+        /** the tickets on the person's screen (the list as filtered): they are in view too, whoever they are assigned to */
+        visible: z.array(z.number().int().positive()).max(200).default([]),
       }),
     );
     const can = (k: string) => a.permissions.includes(k as never);
@@ -731,7 +733,8 @@ export const ticketRoutes = new Hono<AppEnv>()
     const open = all.filter((x) => L.statusKind(x.status) !== "complete");
     // what the AI sees: the person's own open tickets, and the ones named in the request
     const named = new Set([...p.history.filter((h) => h.role === "user").map((h) => h.text), p.message].flatMap((x) => x.match(/T\d{8}\.\d{4}/g) ?? []).slice(0, 10));
-    const shown = [...open.filter((x) => meId && (x.assignee?.id === meId || x.secondary.some((s) => s.id === meId))).slice(0, 80), ...open.filter((x) => !x.assignee).slice(0, 40), ...all.filter((x) => named.has(x.number))].filter((x, i, arr) => arr.findIndex((y) => y.id === x.id) === i);
+    const onScreen = new Set(p.visible);
+    const shown = [...open.filter((x) => meId && (x.assignee?.id === meId || x.secondary.some((s) => s.id === meId))).slice(0, 80), ...all.filter((x) => onScreen.has(x.id)), ...open.filter((x) => !x.assignee).slice(0, 40), ...all.filter((x) => named.has(x.number))].filter((x, i, arr) => arr.findIndex((y) => y.id === x.id) === i).slice(0, 220);
     const starts = await startDates(shown.map((x) => x.id));
     const known = new Map(shown.map((x) => [x.id, x]));
     const today = new Date().toLocaleDateString("en-CA", { timeZone: "America/Toronto" });
@@ -772,7 +775,7 @@ export const ticketRoutes = new Hono<AppEnv>()
         userId: a.user.id,
         model,
         maxTokens: 12000,
-        prompt: `Actions permises :\n${allowed.length ? allowed.join("\n") : "(aucune : la personne peut seulement lire)"}\n\nBillets que la personne peut voir :\n${lines.length ? lines.join("\n") : "(aucun)"}\n\n${p.history.length ? `Conversation jusqu'ici :\n${p.history.map((h) => `${h.role === "user" ? "Personne" : "Assistant"} : ${h.text}`).join("\n")}\n\n` : ""}Dernier message de la personne : ${p.message}${extra}`,
+        prompt: `Actions permises :\n${allowed.length ? allowed.join("\n") : "(aucune : la personne peut seulement lire)"}\n\nBillets que la personne peut voir (ceux affichés à l'écran, ses billets et les billets sans technicien — quel que soit le technicien assigné) :\n${lines.length ? lines.join("\n") : "(aucun)"}\n\n${p.history.length ? `Conversation jusqu'ici :\n${p.history.map((h) => `${h.role === "user" ? "Personne" : "Assistant"} : ${h.text}`).join("\n")}\n\n` : ""}Dernier message de la personne : ${p.message}${extra}`,
       });
     } catch (e) {
       throw aiHttpError(e);

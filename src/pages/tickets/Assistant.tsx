@@ -25,7 +25,7 @@ type Turn = { role: "user"; text: string } | { role: "assistant"; text: string; 
  * proposes actions: it only knows the tickets you can see and only proposes what your rights allow; nothing is done until you
  * tick and apply, and each action goes through the usual routes, which check your rights again.
  */
-export function AssistantDialog({ onClose, onPlan, onSort }: { onClose: () => void; onPlan: () => void; onSort: (sort: string) => void }) {
+export function AssistantDialog({ onClose, onPlan, onSort, visibleIds }: { onClose: () => void; onPlan: () => void; onSort: (sort: string) => void; visibleIds: number[] }) {
   const { t } = useTranslation();
   const qc = useQueryClient();
   const confirm = useConfirm();
@@ -48,7 +48,7 @@ export function AssistantDialog({ onClose, onPlan, onSort }: { onClose: () => vo
         : { role: "assistant" as const, text: [x.text, ...(x.actions.length ? [`Actions proposées (${x.applied ? "appliquées" : "pas encore appliquées"}) : ${x.actions.map((a) => a.label).join(" ; ")}`] : [])].join("\n") },
     );
   const ask = useMutation({
-    mutationFn: ({ message, before }: { message: string; before: Turn[] }) => api.post<Answer>("/tickets/ai/assistant", { message, history: history(before), ...model.body }),
+    mutationFn: ({ message, before }: { message: string; before: Turn[] }) => api.post<Answer>("/tickets/ai/assistant", { message, history: history(before), visible: visibleIds.slice(0, 200), ...model.body }),
     onSuccess: (r) =>
       setTurns((list) => [
         ...list,

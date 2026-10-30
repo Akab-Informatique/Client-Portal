@@ -8842,6 +8842,9 @@ describe("the AI assistant of the tickets page: only what the person may do, not
       expect(sent[sent.length - 1].messages[0].content).not.toContain("delete_ticket {");
       expect(asTech.actions.map((a: any) => a.type)).toEqual(["set_due", "sort_list", "set_estimate", "set_checkpoint", "update_ticket"]);
       expect(asTech.refused.length).toBeGreaterThan(0);
+      // the tickets on the screen are in view too, whoever they belong to (and an id that does not exist is ignored)
+      await tech.post("/api/tickets/ai/assistant", { message: "trie", visible: [target.id, 987654321] });
+      expect(sent[sent.length - 1].messages[0].content).toContain(target.number);
       // a conversation: the earlier turns go back to the AI, so it can ask a question and continue with the answer
       await tech.post("/api/tickets/ai/assistant", { message: "demain", history: [{ role: "user", text: "Pousse mon billet" }, { role: "assistant", text: "Quel billet ?" }] });
       const lastPrompt = sent[sent.length - 1].messages[0].content;
