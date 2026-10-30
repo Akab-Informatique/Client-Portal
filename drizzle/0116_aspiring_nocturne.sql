@@ -1,0 +1,1 @@
+ALTER TABLE "ticket_meta" ADD COLUMN "milestone_time" text;

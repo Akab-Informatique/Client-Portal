@@ -1695,6 +1695,12 @@ const en: Dict = {
       quickbooks_api: "QuickBooks refused: {{detail}}",
     },
   },
+  quickAdd: {
+    title: "Add",
+    ticket: "New ticket",
+    charge: "New charge",
+    pickTicket: "Pick the ticket to add the charge to.",
+  },
   hr: {
     title: "Human resources",
     subtitle: "Employees, their hourly rate and their balances: hours bank and vacation (in $), sick days (in hours). Click an employee to open their file.",
@@ -4103,7 +4109,8 @@ const en: Dict = {
     startTimeHint: "Optional: the start time that day (the restriction applies until then).",
     startClear: "Remove",
     milestone: {
-      label: "Milestone",
+      label: "Checkpoint",
+      time: "Checkpoint time",
       hint: "Goal date between the start and the final due date: where the work should be done by. The technician and the AI plan in steps.",
     },
     startLock: {
@@ -4123,7 +4130,7 @@ const en: Dict = {
       kanban: "Kanban",
       kanbanHint: "Boards (columns) to sort tickets on, shared with the team",
       compact: "Compact",
-      compactHint: "One line per ticket: name, priority, milestone, due date and status",
+      compactHint: "One line per ticket: name, priority, checkpoint, due date and status",
     },
     kanban: {
       notSorted: "Not sorted",
@@ -4175,6 +4182,9 @@ const en: Dict = {
     },
     expenses: { button: "Expense", soon: "Coming soon: expenses (mileage, meals, purchases…)." },
     charges: {
+      mode: {"inventory":"Inventory item","oneTime":"One-time charge"},
+      oneTimeName: "Charge name",
+      oneTimePlaceholder: "E.g. Travel fee, licence…",
       whichSerials: "Which serial numbers?",
       label: { button: "Label", title: "Charge label", size: "1 in × 3.5 in (Dymo): product, price, description, client, ticket number and title.", print: "Print" },
       from: "Take from",
@@ -4542,7 +4552,7 @@ const en: Dict = {
       planConflicts_other: "{{count}} tickets cannot be finished before their due date.",
       planMinutes: "{{time}} planned",
       planDefaultEstimate: "default length",
-      planMilestone: "Milestone",
+      planMilestone: "Checkpoint",
       planFinish: "Finish",
       planLate: "Past its due date ({{due}})",
       planNoRoom: "No room in the next 4 weeks",
@@ -4620,7 +4630,7 @@ const en: Dict = {
     quick: { today: "Today", week: "7 days", clear: "Clear" },
     clear: "Clear",
     clearFilters: "Clear filters",
-    sort: { due: "Due date", priorities: "My priorities first", priority: "Priority", start: "Start date", milestone: "Milestone date", updated: "Recent activity", ai: "AI planned", aiAt: "Last plan: {{when}} · {{count}} tickets", aiNone: "Run \"Plan my tickets\" and apply the plan" },
+    sort: { due: "Due date", priorities: "My priorities first", priority: "Priority", start: "Start date", milestone: "Checkpoint", updated: "Recent activity", ai: "AI planned", aiAt: "Last plan: {{when}} · {{count}} tickets", aiNone: "Run \"Plan my tickets\" and apply the plan" },
     fields: {
       secondary: "Secondary",
       technician: "Technician",
@@ -4633,7 +4643,7 @@ const en: Dict = {
       queue: "Queue",
       assignee: "Assigned to",
       start: "Start",
-      milestone: "Milestone",
+      milestone: "Checkpoint",
       due: "Due",
       source: "Source",
       created: "Created",

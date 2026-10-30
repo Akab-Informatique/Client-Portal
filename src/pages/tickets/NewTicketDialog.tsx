@@ -333,9 +333,8 @@ export function NewTicketDialog({
                 <Input
                   type="time"
                   className="w-32 shrink-0"
-                  disabled={!f.startDate}
                   value={f.startTime}
-                  onChange={(e) => setF({ ...f, startTime: e.target.value })}
+                  onChange={(e) => setF({ ...f, startTime: e.target.value, startDate: f.startDate || (e.target.value ? new Date().toLocaleDateString("en-CA") : "") })}
                   aria-label={t("tickets.startTime")}
                 />
               </div>

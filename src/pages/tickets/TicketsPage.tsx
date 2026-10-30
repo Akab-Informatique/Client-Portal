@@ -249,7 +249,7 @@ export function TicketsPage() {
           <ViewMenu view={view} counts={data?.counts} params={params} apply={apply} />
           <div className="ml-auto flex flex-wrap items-center gap-2">
             <LayoutSwitch value={layout} onChange={setLayout} />
-            <SortMenu value={params.get("sort") ?? "due"} aiPlan={data?.aiPlan ?? null} onChange={(v) => set({ sort: v === "due" ? null : v })} />
+            <SortMenu value={params.get("sort") ?? "milestone"} aiPlan={data?.aiPlan ?? null} onChange={(v) => set({ sort: v === "milestone" ? null : v })} />
           </div>
         </div>
         {/* 2. search */}
@@ -1028,7 +1028,7 @@ function TicketRow({
                 tk.milestoneDate && tk.statusKind !== "complete" && tk.milestoneDate < new Date().toLocaleDateString("en-CA") ? "text-destructive" : "text-muted-foreground",
               )}
             >
-              {tk.milestoneDate ? shortDate(tk.milestoneDate) : "—"}
+              {tk.milestoneDate ? `${shortDate(tk.milestoneDate)}${tk.milestoneTime ? ` ${tk.milestoneTime}` : ""}` : "—"}
             </span>
           </span>
           <span className="min-w-0 xl:[order:var(--o-due)]">
@@ -1347,7 +1347,7 @@ function SortMenu({ value, onChange, aiPlan }: { value: string; onChange: (v: st
         </Button>
       </PopoverTrigger>
       <PopoverContent align="end" className="w-48 p-1">
-        {["due", "priorities", "priority", "start", "milestone", "updated"].map((s) => (
+        {["milestone", "due", "priorities", "priority", "start", "updated"].map((s) => (
           <button
             key={s}
             type="button"
@@ -1664,6 +1664,7 @@ type PlanItem = {
   endDate: string | null;
   endTime: string | null;
   milestoneDate: string | null;
+  milestoneTime?: string | null;
   dueAt: string;
   late: boolean;
   /** "YYYY-MM-DD HH:MM" (Québec): the earliest due date the plan can keep */
@@ -1705,6 +1706,7 @@ function AiPlanButton() {
             startDate: i.startDate,
             startTime: i.startTime,
             milestoneDate: i.milestoneDate,
+            milestoneTime: i.milestoneTime ?? null,
             ...(moveDue && i.late && i.suggestedDue ? { dueAt: new Date(i.suggestedDue.replace(" ", "T")).toISOString() } : {}),
           })),
         plan: true,

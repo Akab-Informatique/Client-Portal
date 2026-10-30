@@ -247,11 +247,13 @@ function TicketBody({
     startTime: tk.startTime ?? null,
     startLocked: Boolean(tk.startLocked),
     milestoneDate: tk.milestoneDate ?? null,
+    milestoneTime: tk.milestoneTime ?? null,
   };
   const stage = (p: Staged) => {
     const next: Staged = { ...p };
     // no day, no time nor restriction
     if (p.startDate === null) Object.assign(next, { startTime: null, startLocked: false });
+    if (p.milestoneDate === null) Object.assign(next, { milestoneTime: null });
     for (const k of Object.keys(next) as (keyof Staged)[]) if (next[k] === original[k]) delete next[k];
     if (!Object.keys(next).length) return;
     setStaged((s) => ({ ...s, ...next }));
@@ -261,10 +263,10 @@ function TicketBody({
   const changed = (k: keyof Staged) => k in staged;
   const saveAll = useMutation({
     mutationFn: async (changes: Staged) => {
-      const { startDate, startTime, startLocked, milestoneDate, ...patch } = changes;
+      const { startDate, startTime, startLocked, milestoneDate, milestoneTime, ...patch } = changes;
       let next: TicketDetail | null = null;
       if (Object.keys(patch).length) next = await api.patch<TicketDetail>(`/tickets/${tk.id}`, patch);
-      const start = { startDate, startTime, startLocked, milestoneDate };
+      const start = { startDate, startTime, startLocked, milestoneDate, milestoneTime };
       if (Object.values(start).some((x) => x !== undefined)) await api.put(`/tickets/${tk.id}/start-date`, start);
       return next;
     },
@@ -531,7 +533,7 @@ function TicketBody({
                 value: shortDate(view.dueAt),
                 more: [
                   `${t("tickets.fields.start")} : ${tk.startDate ? shortDate(tk.startDate) + (tk.startTime ? ` ${tk.startTime}` : "") : "—"}`,
-                  `${t("tickets.milestone.label")} : ${tk.milestoneDate ? shortDate(tk.milestoneDate) : "—"}`,
+                  `${t("tickets.milestone.label")} : ${tk.milestoneDate ? `${shortDate(tk.milestoneDate)}${tk.milestoneTime ? ` ${tk.milestoneTime}` : ""}` : "—"}`,
                   `${t("tickets.fields.hours")} : ${partial ? "…" : t("tickets.hoursValue", { hours: tk.hours.toLocaleString() })}`,
                   `${t("tickets.estimate.short")} : ${tk.estimate ? hm(tk.estimate.minutes / 60) : "—"}`,
                 ],
@@ -1538,7 +1540,7 @@ export function StartTimeInput({
     <Input
       type="time"
       className={cn("mt-1 h-8 w-32", className)}
-      disabled={disabled || !tk.startDate}
+      disabled={disabled}
       value={v}
       onChange={(e) => setV(e.target.value)}
       onBlur={commit}
@@ -1566,8 +1568,8 @@ function StartDate({
   onChange,
 }: {
   tk: TicketDetail;
-  value: { startDate: string | null; startTime: string | null; startLocked: boolean; milestoneDate: string | null };
-  onChange: (p: { startDate?: string | null; startTime?: string | null; startLocked?: boolean; milestoneDate?: string | null }) => void;
+  value: { startDate: string | null; startTime: string | null; startLocked: boolean; milestoneDate: string | null; milestoneTime: string | null };
+  onChange: (p: { startDate?: string | null; startTime?: string | null; startLocked?: boolean; milestoneDate?: string | null; milestoneTime?: string | null }) => void;
 }) {
   const { t } = useTranslation();
   const can = useCan();
@@ -1597,7 +1599,7 @@ function StartDate({
           <StartTimeInput
             tk={{ ...tk, startDate: value.startDate, startTime: value.startTime }}
             disabled={off}
-            onSave={(startTime) => onChange({ startTime })}
+            onSave={(startTime) => onChange(startTime && !value.startDate ? { startDate: todayLocal(), startTime } : { startTime })}
           />
           {/* Restriction: nobody works on it before that day (off by default) */}
           <label
@@ -1627,6 +1629,14 @@ function StartDate({
             value={value.milestoneDate ?? ""}
             onChange={(e) => onChange({ milestoneDate: e.target.value || null })}
           />
+          <Input
+            type="time"
+            className="mt-1 h-8 w-32"
+            disabled={off}
+            value={value.milestoneTime ?? ""}
+            aria-label={t("tickets.milestone.time")}
+            onChange={(e) => onChange(e.target.value && !value.milestoneDate ? { milestoneDate: value.startDate ?? todayLocal(), milestoneTime: e.target.value } : { milestoneTime: e.target.value || null })}
+          />
         </dd>
       </div>
     </div>
@@ -1643,6 +1653,7 @@ type Staged = {
   startTime?: string | null;
   startLocked?: boolean;
   milestoneDate?: string | null;
+  milestoneTime?: string | null;
 };
 /** A field changed but not saved yet */
 export const MODIFIED = "ring-2 ring-[color:var(--gold)]/80 ring-offset-1 ring-offset-background";

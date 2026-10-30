@@ -148,12 +148,15 @@ function ChargesList({ list, tk }: { list: Charge[]; tk: TicketDetail }) {
 }
 
 /** The ticket's charges and the form: a product of the portal inventory → a charge on the ticket. */
-function ChargesDialog({ tk, editable, onClose }: { tk: TicketDetail; editable: boolean; onClose: () => void }) {
+export function ChargesDialog({ tk, editable, onClose }: { tk: TicketDetail; editable: boolean; onClose: () => void }) {
   const { t } = useTranslation();
   const qc = useQueryClient();
   const { data: list, isLoading } = useCharges(tk.id, true);
   const { data: o } = useQuery({ queryKey: ["tickets", "charge-options"], queryFn: () => api.get<ChargeOptions>("/tickets/charge-options"), staleTime: 10 * 60_000, enabled: editable });
   const [product, setProduct] = useState<StoreProduct | null>(null);
+  // an item of the inventory, or a one-time charge typed on the spot (a name and a price; nothing in the inventory)
+  const [mode, setMode] = useState<"inventory" | "oneTime">("inventory");
+  const [oneName, setOneName] = useState("");
   const [from, setFrom] = useState(NO_STOCK);
   const [more, setMore] = useState(false);
   const [serialIds, setSerialIds] = useState<string[]>([]);
@@ -181,16 +184,19 @@ function ChargesDialog({ tk, editable, onClose }: { tk: TicketDetail; editable: 
     queryFn: () => api.get<{ id: string; serial: string }[]>(`/tickets/store-products/${product!.id}/serials?locationId=${from}`),
     enabled: bySerial,
   });
-  const qty = bySerial ? serialIds.length : num(f.quantity);
+  const qty = bySerial && mode === "inventory" ? serialIds.length : num(f.quantity);
   const price = num(f.unitPrice);
   const onHand = product?.stock.find((s) => s.locationId === from)?.quantity ?? null;
   const tooMany = onHand !== null && qty !== null && qty > onHand;
-  const valid = product && qty !== null && qty > 0 && (price === null || price >= 0) && (from === NO_STOCK || (Number.isInteger(qty) && !tooMany));
+  const valid =
+    mode === "oneTime"
+      ? oneName.trim().length > 0 && qty !== null && qty > 0 && price !== null && price >= 0
+      : product && qty !== null && qty > 0 && (price === null || price >= 0) && (from === NO_STOCK || (Number.isInteger(qty) && !tooMany));
 
   const save = useMutation({
     mutationFn: () =>
       api.post<Charge[]>(`/tickets/${tk.id}/charges`, {
-        name: product!.name.slice(0, 100),
+        name: (mode === "oneTime" ? oneName.trim() : product!.name).slice(0, 100),
         description: f.description.trim(),
         quantity: qty,
         unitPrice: price,
@@ -200,9 +206,9 @@ function ChargesDialog({ tk, editable, onClose }: { tk: TicketDetail; editable: 
         statusId: f.statusId || null,
         materialCodeId: f.materialCodeId || null,
         date: f.date || null,
-        storeProductId: product!.id,
-        locationId: from === NO_STOCK ? null : from,
-        serialIds: bySerial ? serialIds : [],
+        storeProductId: mode === "oneTime" ? null : product!.id,
+        locationId: mode === "oneTime" || from === NO_STOCK ? null : from,
+        serialIds: mode === "oneTime" ? [] : bySerial ? serialIds : [],
       }),
     onSuccess: (next) => {
       qc.setQueryData(["tickets", "charges", tk.id], next);
@@ -210,7 +216,8 @@ function ChargesDialog({ tk, editable, onClose }: { tk: TicketDetail; editable: 
       void qc.invalidateQueries({ queryKey: ["store"] });
       toast.success(t("tickets.charges.added"));
       setProduct(null);
-      setF((x) => ({ ...x, quantity: "1", description: "" }));
+      setOneName("");
+      setF((x) => ({ ...x, quantity: "1", description: "", unitPrice: mode === "oneTime" ? "" : x.unitPrice, unitCost: mode === "oneTime" ? "" : x.unitCost }));
     },
     onError: (e) => toast.error(ticketErrorText(t, e)),
   });
@@ -267,7 +274,20 @@ function ChargesDialog({ tk, editable, onClose }: { tk: TicketDetail; editable: 
             }}
           >
             <p className="text-sm font-semibold">{t("tickets.charges.new")}</p>
-            {product ? (
+            <div className="grid grid-cols-2 gap-1 rounded-lg border p-0.5 text-xs" role="tablist">
+              {(["inventory", "oneTime"] as const).map((m) => (
+                <button key={m} type="button" role="tab" aria-selected={mode === m} onClick={() => setMode(m)} className={cn("rounded-md px-2 py-1.5 font-medium", mode === m ? "bg-grad-gold text-[#1a1204]" : "text-muted-foreground hover:text-foreground")}>
+                  {t(`tickets.charges.mode.${m}`)}
+                </button>
+              ))}
+            </div>
+            {mode === "oneTime" && (
+              <div className="space-y-1.5">
+                <Label htmlFor="ch-name">{t("tickets.charges.oneTimeName")}</Label>
+                <Input id="ch-name" maxLength={100} value={oneName} onChange={(e) => setOneName(e.target.value)} placeholder={t("tickets.charges.oneTimePlaceholder")} />
+              </div>
+            )}
+            {mode === "oneTime" ? null : product ? (
               <div className="flex items-center gap-3 rounded-xl border border-[color:var(--gold)]/40 bg-[color:var(--gold)]/5 px-3 py-2 text-sm">
                 <Boxes className="size-4 shrink-0 text-primary" />
                 <span className="min-w-0 flex-1">
@@ -284,8 +304,9 @@ function ChargesDialog({ tk, editable, onClose }: { tk: TicketDetail; editable: 
               <LocalProductSearch onPick={choose} />
             )}
 
-            {product && (
+            {(mode === "oneTime" || product) && (
               <>
+                {product && mode === "inventory" && (
                 <div className="space-y-1.5">
                   <Label>{t("tickets.charges.from")}</Label>
                   <Select
@@ -308,7 +329,8 @@ function ChargesDialog({ tk, editable, onClose }: { tk: TicketDetail; editable: 
                     </SelectContent>
                   </Select>
                 </div>
-                {bySerial && (
+                )}
+                {bySerial && mode === "inventory" && (
                   <div className="space-y-1.5">
                     <Label>{t("tickets.charges.whichSerials")}</Label>
                     {serials ? <SerialChecklist serials={serials} picked={serialIds} onChange={setSerialIds} empty={t("store.noSerialHere")} /> : <Skeleton className="h-20" />}
@@ -317,7 +339,7 @@ function ChargesDialog({ tk, editable, onClose }: { tk: TicketDetail; editable: 
                 <div className="grid grid-cols-2 gap-3">
                   <div className="space-y-1.5">
                     <Label htmlFor="ch-qty">{t("tickets.charges.quantity")}</Label>
-                    <Input id="ch-qty" inputMode="decimal" value={bySerial ? String(serialIds.length) : f.quantity} disabled={bySerial} onChange={(e) => set("quantity")(e.target.value)} />
+                    <Input id="ch-qty" inputMode="decimal" value={bySerial && mode === "inventory" ? String(serialIds.length) : f.quantity} disabled={bySerial && mode === "inventory"} onChange={(e) => set("quantity")(e.target.value)} />
                   </div>
                   <div className="space-y-1.5">
                     <Label htmlFor="ch-price">{t("tickets.charges.unitPrice")}</Label>

@@ -264,9 +264,6 @@ function PointRow({
           {manage && (
             <>
               <LaterButton onPick={(day) => actions.patch.mutate({ id: p.id, snoozeUntil: day })} />
-              <IconButton label={t("meetings.points.archive")} onClick={() => actions.patch.mutate({ id: p.id, archived: true })}>
-                <Archive className="size-4" />
-              </IconButton>
               <IconButton label={t("common.delete")} danger onClick={() => actions.remove.mutate(p.id)}>
                 <Trash2 className="size-4" />
               </IconButton>

@@ -790,6 +790,8 @@ export const ticketMeta = pgTable("ticket_meta", {
   startLocked: boolean("start_locked").notNull().default(false),
   /** The goal date between the start and the final due date (YYYY-MM-DD): where the work should be done by; none = no milestone */
   milestoneDate: text("milestone_date"),
+  /** HH:MM of the checkpoint (the goal date has a time too) */
+  milestoneTime: text("milestone_time"),
   /** The portal's own queue (ticket_queues.key); none: worked out from the source, else the default queue */
   queue: text("queue"),
   /** A device of the portal's own (local_assets.id) linked to the ticket when the RMM / Autotask has none */

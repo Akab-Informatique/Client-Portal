@@ -1693,6 +1693,12 @@ const fr = {
       quickbooks_api: "QuickBooks a refusé : {{detail}}",
     },
   },
+  quickAdd: {
+    title: "Ajouter",
+    ticket: "Nouveau billet",
+    charge: "Nouvelle charge",
+    pickTicket: "Choisissez le billet sur lequel ajouter la charge.",
+  },
   hr: {
     title: "Ressources humaines",
     subtitle: "Les employés, leur taux horaire et leurs soldes : banque d'heures et vacances (en $), jours de maladie (en heures). Cliquez sur un employé pour ouvrir son dossier.",
@@ -4101,7 +4107,8 @@ const fr = {
     startTimeHint: "Facultatif : l'heure de début ce jour-là (la restriction s'applique jusqu'à cette heure).",
     startClear: "Retirer",
     milestone: {
-      label: "Jalon",
+      label: "Checkpoint",
+      time: "Heure du checkpoint",
       hint: "Date visée entre le début et l'échéance finale : où le travail devrait être terminé. Le technicien et l'IA planifient par étapes.",
     },
     startLock: {
@@ -4121,7 +4128,7 @@ const fr = {
       kanban: "Kanban",
       kanbanHint: "Des tableaux (colonnes) où classer les billets, partagés avec l'équipe",
       compact: "Compact",
-      compactHint: "Une ligne par billet : nom, priorité, jalon, échéance et statut",
+      compactHint: "Une ligne par billet : nom, priorité, checkpoint, échéance et statut",
     },
     kanban: {
       notSorted: "Non classés",
@@ -4173,6 +4180,9 @@ const fr = {
     },
     expenses: { button: "Dépense", soon: "Bientôt : les dépenses (kilométrage, repas, achats…)." },
     charges: {
+      mode: {"inventory":"Article de l'inventaire","oneTime":"Frais ponctuel"},
+      oneTimeName: "Nom du frais",
+      oneTimePlaceholder: "Ex. : Frais de déplacement, licence…",
       whichSerials: "Quels numéros de série ?",
       label: { button: "Étiquette", title: "Étiquette du frais", size: "Format 1 po × 3,5 po (Dymo) : produit, prix, description, client, numéro et titre du billet.", print: "Imprimer" },
       from: "Prélever de",
@@ -4540,7 +4550,7 @@ const fr = {
       planConflicts_other: "{{count}} billets ne peuvent pas être terminés avant leur échéance.",
       planMinutes: "{{time}} prévu",
       planDefaultEstimate: "durée par défaut",
-      planMilestone: "Jalon",
+      planMilestone: "Checkpoint",
       planFinish: "Fin",
       planLate: "En retard sur l'échéance ({{due}})",
       planNoRoom: "Pas de place dans les 4 prochaines semaines",
@@ -4618,7 +4628,7 @@ const fr = {
     quick: { today: "Aujourd'hui", week: "7 jours", clear: "Effacer" },
     clear: "Effacer",
     clearFilters: "Effacer les filtres",
-    sort: { due: "Échéance", priorities: "Mes priorités d'abord", priority: "Priorité", start: "Date de début", milestone: "Date du jalon", updated: "Activité récente", ai: "Planifié par l'IA", aiAt: "Dernier plan : {{when}} · {{count}} billets", aiNone: "Lancez « Planifier mes billets » et appliquez le plan" },
+    sort: { due: "Échéance", priorities: "Mes priorités d'abord", priority: "Priorité", start: "Date de début", milestone: "Checkpoint", updated: "Activité récente", ai: "Planifié par l'IA", aiAt: "Dernier plan : {{when}} · {{count}} billets", aiNone: "Lancez « Planifier mes billets » et appliquez le plan" },
     fields: {
       secondary: "Assigné secondaire",
       technician: "Technicien",
@@ -4631,7 +4641,7 @@ const fr = {
       queue: "File d'attente",
       assignee: "Assigné à",
       start: "Début",
-      milestone: "Jalon",
+      milestone: "Checkpoint",
       due: "Échéance",
       source: "Source",
       created: "Créé",

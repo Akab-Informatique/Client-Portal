@@ -198,8 +198,15 @@ export const meetingRoutes = new Hono<AppEnv>()
     const set: Partial<typeof schema.meetingPoints.$inferInsert> = {};
     if (v.text !== undefined) set.text = v.text;
     if (v.details !== undefined) set.details = v.details || null;
-    if (v.done !== undefined) set.doneAt = v.done ? new Date() : null;
-    if (v.archived !== undefined) set.archivedAt = v.archived ? new Date() : null;
+    // checking a point settles it and sends it to the archive; unchecking (or restoring it) puts it back on the list
+    if (v.done !== undefined) {
+      set.doneAt = v.done ? new Date() : null;
+      set.archivedAt = v.done ? new Date() : null;
+    }
+    if (v.archived !== undefined) {
+      set.archivedAt = v.archived ? new Date() : null;
+      if (!v.archived) set.doneAt = null;
+    }
     if (v.snoozeUntil !== undefined) set.snoozeUntil = v.snoozeUntil;
     // restored from the archive: on the list again, not put off
     if (v.archived === false) set.snoozeUntil = null;

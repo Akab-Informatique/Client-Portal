@@ -289,8 +289,13 @@ describe("permissions", () => {
     expect(list.map((p: any) => p.text)).toEqual(["Les paies doivent être envoyées avant mardi", "Camille sera absente"]);
     expect(list[0].authorName).toBe("Administrateur AKAB");
     expect((await admin.patch(`/api/meetings/points/${a.json.id}`, { done: true })).status).toBe(200);
+    // checked: settled and sent to the archive, off the list
     list = (await admin.get("/api/meetings/points")).json;
-    expect(list.find((p: any) => p.id === a.json.id).doneAt).toBeTruthy();
+    expect(list.find((p: any) => p.id === a.json.id)).toBeUndefined();
+    expect((await admin.get("/api/meetings/points/archive")).json.find((p: any) => p.id === a.json.id).doneAt).toBeTruthy();
+    expect((await admin.patch(`/api/meetings/points/${a.json.id}`, { done: false })).status).toBe(200);
+    list = (await admin.get("/api/meetings/points")).json;
+    expect(list.find((p: any) => p.id === a.json.id).doneAt).toBeNull();
     const tech = await signIn("tech@akab.local");
     expect((await tech.get("/api/meetings/points")).status).toBe(403);
     expect((await tech.post("/api/meetings/points", { text: "x" })).status).toBe(403);
@@ -8703,5 +8708,49 @@ describe("ticket boards (Kanban view)", () => {
     expect((await jean.get("/api/ticket-boards")).status).toBe(403);
     expect((await jean.post("/api/ticket-boards", { name: "x" })).status).toBe(403);
     expect((await jean.put("/api/ticket-boards/cards/101", { boardId: null })).status).toBe(403);
+  });
+});
+describe("checkpoint with a time, default sort, one-time charge, meeting points sent to the archive when checked", () => {
+  it("checking a point of the weekly meeting settles it and sends it to the archive; unchecking brings it back", async () => {
+    resetRateLimit("login:ip:unknown");
+    const admin = await signIn("admin@akab.local");
+    const made = await admin.post("/api/meetings/points", { text: "Point à cocher" });
+    const id = made.json.id;
+    const open = async () => (await admin.get("/api/meetings/points")).json.map((p: any) => p.id);
+    expect(await open()).toContain(id);
+    expect((await admin.patch(`/api/meetings/points/${id}`, { done: true })).status).toBe(200);
+    expect(await open()).not.toContain(id);
+    const archived = (await admin.get("/api/meetings/points/archive")).json.find((p: any) => p.id === id);
+    expect(archived).toMatchObject({ id });
+    expect(archived.doneAt).toBeTruthy();
+    expect((await admin.patch(`/api/meetings/points/${id}`, { done: false })).status).toBe(200);
+    expect(await open()).toContain(id);
+    // restored from the archive: open again, not settled
+    await admin.patch(`/api/meetings/points/${id}`, { done: true });
+    await admin.patch(`/api/meetings/points/${id}`, { archived: false });
+    const back = (await admin.get("/api/meetings/points")).json.find((p: any) => p.id === id);
+    expect(back.doneAt).toBeNull();
+  });
+
+  it("a ticket's checkpoint has a time; the list is sorted by checkpoint by default; a one-time charge needs no inventory item", async () => {
+    resetRateLimit("login:ip:unknown");
+    const tech = await signIn("tech@akab.local");
+    const [a, b, c] = (await tech.get("/api/tickets?view=all")).json.items.filter((x: any) => x.statusKind !== "complete").slice(0, 3);
+    const set = (id: number, body: object) => tech.put(`/api/tickets/${id}/start-date`, body);
+    expect((await set(a.id, { milestoneDate: "2030-01-10", milestoneTime: "15:30" })).json).toMatchObject({ milestoneDate: "2030-01-10", milestoneTime: "15:30" });
+    expect((await set(b.id, { milestoneDate: "2030-01-10", milestoneTime: "09:00" })).status).toBe(200);
+    expect((await set(c.id, { milestoneDate: "2030-01-09" })).status).toBe(200);
+    expect((await tech.get(`/api/tickets/${a.id}`)).json).toMatchObject({ milestoneDate: "2030-01-10", milestoneTime: "15:30" });
+    // the default order is the checkpoint, date then time
+    const order = (await tech.get("/api/tickets?view=all")).json.items.map((x: any) => x.id);
+    expect(order.slice(0, 3)).toEqual([c.id, b.id, a.id]);
+    // a time on the same day as the start cannot come before the start's
+    expect((await set(a.id, { startDate: "2030-01-10", startTime: "16:00" })).status).toBe(400);
+    // no day, no time
+    expect((await set(a.id, { milestoneDate: null })).json.milestoneTime).toBeNull();
+    // a one-time charge: a name and a price, no inventory item
+    const charge = await tech.post(`/api/tickets/${b.id}/charges`, { name: "Frais de déplacement", quantity: 1, unitPrice: 85, billable: true });
+    expect(charge.status).toBe(201);
+    expect(JSON.stringify(charge.json)).toContain("Frais de déplacement");
   });
 });
