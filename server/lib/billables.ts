@@ -3,7 +3,7 @@ import { db, schema } from "../db/index.ts";
 import { alignNumbering, autoTaxCodes, qbItemsForBillingItems, voidInvoiceInQb } from "./quickbooks.ts";
 import { dueAfterSent } from "../../shared/invoiceDue.ts";
 import { taxesOfLines } from "../../shared/invoiceTax.ts";
-import { hourlyRateOf } from "./contracts.ts";
+import { hourlyRateOf, NO_CONTRACT_HOURLY_CENTS } from "./contracts.ts";
 import { billingSettings, formatInvoiceNumber, quickbooksSettings, saveBillingSettings, type BillingSettings } from "./billing.ts";
 import { ensureCrm } from "./crm.ts";
 import { ticketSource, type BillableKind } from "./ticketSource.ts";
@@ -27,9 +27,22 @@ export async function billablesState(): Promise<BillablesState> {
 
 const amountOf = (quantityX100: number, unitPriceCents: number) => Math.round((quantityX100 * unitPriceCents) / 100);
 
-/** Approved by a rule: the client approves this kind, or the contract approves everything under it. */
-const ruled = (item: { kind: string; contractId: string | null }, client: { invoice: Client["invoice"] | null }, autoContracts: Set<string>) =>
+/**
+ * Approved by a rule: the client approves this kind, or the contract approves everything under it.
+ * Time under no contract at all (none of its own, and the client has no default one) is never approved by a rule:
+ * someone approves it by hand.
+ */
+export const ruled = (item: { kind: string; contractId: string | null }, client: { invoice: Client["invoice"] | null }, autoContracts: Set<string>, underContract = true) =>
+  !(item.kind === "labour" && !item.contractId && !underContract) &&
   Boolean(client.invoice?.autoApprove?.includes(item.kind)) || Boolean(item.contractId && autoContracts.has(item.contractId));
+
+/** The clients that have a default support contract (the one picked, the source's, or their only active one) */
+async function clientsWithDefaultContract() {
+  const rows = await db().select({ clientId: schema.clientContracts.clientId, supportDefault: schema.clientContracts.supportDefault, isDefault: schema.clientContracts.isDefault }).from(schema.clientContracts).where(eq(schema.clientContracts.active, true));
+  const by = new Map<string, typeof rows>();
+  for (const k of rows) by.set(k.clientId, [...(by.get(k.clientId) ?? []), k]);
+  return new Set([...by].filter(([, ks]) => ks.some((k) => k.supportDefault || k.isDefault) || ks.length === 1).map(([id]) => id));
+}
 
 async function autoContracts() {
   return new Set((await db().select({ id: schema.clientContracts.id }).from(schema.clientContracts).where(eq(schema.clientContracts.autoApprove, true))).map((r) => r.id));
@@ -44,7 +57,8 @@ export async function applyAutoApprove(clientId?: string) {
     .select()
     .from(schema.billingItems)
     .where(and(eq(schema.billingItems.status, "pending"), clientId ? eq(schema.billingItems.clientId, clientId) : undefined));
-  const ids = pending.filter((i) => ruled(i, clients.get(i.clientId) ?? { invoice: null }, contracts)).map((i) => i.id);
+  const withDefault = await clientsWithDefaultContract();
+  const ids = pending.filter((i) => ruled(i, clients.get(i.clientId) ?? { invoice: null }, contracts, withDefault.has(i.clientId))).map((i) => i.id);
   if (ids.length) await d.update(schema.billingItems).set({ status: "approved", approvedAt: new Date(), approvedBy: null, updatedAt: new Date() }).where(inArray(schema.billingItems.id, ids));
   return ids.length;
 }
@@ -83,7 +97,10 @@ export function syncBillables(): Promise<BillablesState> {
       counts[it.kind] = (counts[it.kind] ?? 0) + 1;
       // the contract the work is under: an hourly rate typed on it wins, then the source's rate, then the client's, then the usual one;
       // under a monthly / per ticket / included contract the hours are not billed (left out, never billed by the hour)
-      const contract = it.contractSourceId ? contractsById.get(contractIds.get(it.contractSourceId) ?? "") : undefined;
+      const named = it.contractSourceId ? contractsById.get(contractIds.get(it.contractSourceId) ?? "") : undefined;
+      // under no contract of its own, the work takes the client's default support contract (if it has one)
+      const active = contractRows.filter((k) => k.clientId === client.id && k.active);
+      const contract = named ?? (it.kind === "labour" ? (active.find((k) => k.supportDefault) ?? active.find((k) => k.isDefault) ?? (active.length === 1 ? active[0] : undefined)) : undefined);
       // the contract's own rate bills the hours (above 0); a rate of 0 means they are included, never billed
       const contractRate = contract ? hourlyRateOf(contract, s.rates.hourly) : null;
       const notBilled = it.kind === "labour" && contract != null && contractRate == null;
@@ -91,7 +108,7 @@ export function syncBillables(): Promise<BillablesState> {
         ? 0
         : it.kind === "labour" && contractRate != null
           ? contractRate
-          : (it.unitPriceCents ?? (it.kind === "labour" ? Math.round((client.invoice?.hourlyRate ?? s.rates.hourly) * 100) : 0));
+          : (it.unitPriceCents ?? (it.kind === "labour" ? (client.invoice?.hourlyRate != null ? Math.round(client.invoice.hourlyRate * 100) : NO_CONTRACT_HOURLY_CENTS) : 0));
       const quantityX100 = Math.round(it.quantity * 100);
       const values = {
         clientId: client.id,
@@ -112,7 +129,7 @@ export function syncBillables(): Promise<BillablesState> {
       const hit = existing.get(it.id);
       if (!hit) {
         // new: approved right away when a rule says so
-        const auto = !notBilled && ruled(values, client, autoK);
+        const auto = !notBilled && ruled(values, client, autoK, Boolean(contract));
         await d.insert(schema.billingItems).values({ ...values, source: "autotask", sourceId: it.id, status: notBilled ? "excluded" : auto ? "approved" : "pending", approvedAt: auto ? now : null });
       } else if ((hit.status === "pending" || (notBilled && hit.status === "excluded")) && !hit.edited)
         await d.update(schema.billingItems).set({ ...values, ...(notBilled ? { status: "excluded" } : {}), updatedAt: now }).where(eq(schema.billingItems.id, hit.id));
@@ -169,7 +186,6 @@ export async function listBillables(kind: BillableKind | null, status: string | 
 export async function refreshLabourRates(period?: Period) {
   const d = db();
   const s = await billingSettings();
-  const usualCents = Math.round(s.rates.hourly * 100);
   const b = schema.billingItems;
   const items = await d
     .select()
@@ -194,7 +210,7 @@ export async function refreshLabourRates(period?: Period) {
     const own = it.contractId ? byId.get(it.contractId) : undefined;
     const contract = own ?? defaults.get(it.clientId) ?? null;
     const clientRate = clients.get(it.clientId)?.invoice?.hourlyRate;
-    const rate = contract ? hourlyRateOf(contract, s.rates.hourly) : clientRate != null ? Math.round(clientRate * 100) : usualCents;
+    const rate = contract ? hourlyRateOf(contract, s.rates.hourly) : clientRate != null ? Math.round(clientRate * 100) : NO_CONTRACT_HOURLY_CENTS;
     const included = rate == null;
     const unit = rate ?? 0;
     const wasIncluded = it.status === "excluded";

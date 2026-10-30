@@ -68,6 +68,9 @@ export type ContractView = {
   fixedPriceCents: number | null;
 };
 
+/** What an hour is billed at when the work is under no contract at all (the client has none, or none by default): 100 $ */
+export const NO_CONTRACT_HOURLY_CENTS = 10_000;
+
 const modeOf = (v: string): BillingMode => ((BILLING_MODES as readonly string[]).includes(v) ? (v as BillingMode) : "hourly");
 
 /**

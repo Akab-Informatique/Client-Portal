@@ -325,6 +325,10 @@ Sidebar: **Projets** is an entry of the Centre de commande now (still "upcoming"
 - An email's plain text is cleaned before it becomes a ticket description or note (`cleanEmailText` in `server/lib/emailClean.ts`, used by `messageText` in `server/lib/outlook.ts`, so the support-mailbox intake, Outlook › "Create a ticket" and "Add to a ticket" all get it): the Inky phishing-filter banner (from "Mise en garde / Caution :" to the AKAB protection line, with the mail system's preview line above it), `<mailto:…>` / `<tel:…>` / `<https://…>` written after a name or link, links over 90 characters (shortened to "[lien : site]"), `[Logo image]` / `[Footer image]` / `[cid:…]` lines and the confidentiality notice at the end. Tickets already made keep their text. Test: `tests/emailClean.test.ts`.
 - `Textarea` (`src/components/ui/textarea.tsx`) grows with its text (`field-sizing-content`) but stops at 50 % of the screen height and scrolls, never wider than its box — a long pasted email used to stretch the New ticket window over the whole page.
 
+## Time under no contract (latest)
+
+- Labour under **no contract at all** (none on the time entry or ticket, and the client has no default support contract) is billed **100 $ an hour** (`NO_CONTRACT_HOURLY_CENTS` in `server/lib/contracts.ts`) — or the client's own hourly rate when set — instead of the usual rate of Admin › Facturation (that rate still applies to a legacy hourly contract with no rate typed). `syncBillables` and "Mettre à jour les taux" (`refreshLabourRates`) both use it, and `syncBillables` gives labour the client's default support contract when its own has none. Such time is **never approved by a rule** (`ruled(…, underContract)` in `server/lib/billables.ts`, also in `applyAutoApprove`): it waits in Approbation for someone to approve it. Test: `tests/noContract.test.ts`.
+
 ## Production
 
 Docker Compose on a Debian server; Nginx Proxy Manager on another server terminates HTTPS and forwards to port 3000. Owner runs deployments (see INSTALL.md). Never `docker compose down -v`.
