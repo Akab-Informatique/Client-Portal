@@ -5847,6 +5847,8 @@ describe("timesheet: paid hours, the RH file, bank, vacation, sick days, holiday
     const theirs = (await admin.get(`/api/time/week?start=2027-04-05&userId=${u.id}`)).json;
     expect(theirs.pay).toMatchObject({ holidayCents: 9600, wageCents: 3000 });
     expect((await admin.get(`/api/time/report?from=2027-04-01&to=2027-04-30&userId=${u.id}`)).json.holidayCents).toBe(9600);
+    // an administrator looking at their OWN timesheet gets the employee copy too: complete figures only for someone else's
+    expect((await admin.get("/api/time/week?start=2027-04-05")).json.pay).toMatchObject({ wageCents: null, holidayCents: 0 });
   });
 
   it("billable and non billable hours are kept per client; the productivity is billable over the work day; a billable trip is work to bill", async () => {

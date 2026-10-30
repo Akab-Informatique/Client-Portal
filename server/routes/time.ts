@@ -63,8 +63,8 @@ async function timesheetOwner(a: AuthContext, asked: string | undefined): Promis
 }
 
 const isManager = (a: AuthContext) => a.permissions.includes("timesheets.manage");
-/** Amounts, vacation and balances are for accounting, HR and the managers of timesheets — never the employee */
-const seesMoney = (a: AuthContext) => (["timesheets.manage", "timesheets.approve", "accounting.manage", "hr.manage"] as const).some((k) => a.permissions.includes(k));
+/** Amounts, vacation and balances are for accounting, HR and the managers of timesheets looking at SOMEONE ELSE's timesheet — never on one's own, whatever one's role */
+const seesMoney = (a: AuthContext, owner: string) => owner !== a.user.id && (["timesheets.manage", "timesheets.approve", "accounting.manage", "hr.manage"] as const).some((k) => a.permissions.includes(k));
 
 /**
  * Before an entry of a week is added, changed or removed. A week still open (draft or sent back): fine. Once the week is sent
@@ -422,7 +422,7 @@ export const timeRoutes = new Hono<AppEnv>()
     const weekStart = weekStartOf(c.req.query("start") ? zDay.parse(c.req.query("start")) : todayQc());
     const sheet = await sheetOf(owner, weekStart);
     const rows = await weekEntries(owner, weekStart);
-    const money = seesMoney(a);
+    const money = seesMoney(a, owner);
     const pay = await weekPay(owner, weekStart);
     const [me] = await db().select({ required: schema.users.timesheetRequired }).from(schema.users).where(eq(schema.users.id, owner));
     return c.json({
@@ -503,7 +503,7 @@ export const timeRoutes = new Hono<AppEnv>()
       vacationHours: h(sum.vacation),
       sickHours: h(sum.sick),
       holidayHours: h(sum.holiday),
-      holidayCents: seesMoney(a) ? sum.holidayCents : 0,
+      holidayCents: seesMoney(a, owner) ? sum.holidayCents : 0,
       bankPaidHours: h(sum.bankPaid),
       /** Time entered on tickets and by hand (training, meetings, trips) */
       enteredHours: h(sum.entered),
@@ -667,7 +667,7 @@ export const timeRoutes = new Hono<AppEnv>()
     const owner = !asked || asked === a.user.id ? a.user.id : zUuid.parse(asked);
     if (owner !== a.user.id && !(["timesheets.manage", "timesheets.approve", "accounting.manage"] as const).some((k) => a.permissions.includes(k))) throw new HTTPException(403, { message: "Forbidden" });
     // an employee gets hours only; accounting and those who manage or approve get the complete report
-    const pdf = await timesheetPdf(owner, weekStartOf(zDay.parse(c.req.query("start") ?? todayQc())), { forEmployee: !seesMoney(a) });
+    const pdf = await timesheetPdf(owner, weekStartOf(zDay.parse(c.req.query("start") ?? todayQc())), { forEmployee: !seesMoney(a, owner) });
     if (!pdf) throw new HTTPException(404, { message: "not_found" });
     return new Response(new Uint8Array(pdf.content), { headers: { "content-type": "application/pdf", "content-disposition": `inline; filename="${pdf.filename}"`, "cache-control": "no-store" } });
   })
