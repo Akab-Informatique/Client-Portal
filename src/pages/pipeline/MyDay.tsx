@@ -18,7 +18,7 @@ import { taskError, usePeople } from "./TaskDialog";
 import { DayProjects, MyTickets, Priorities } from "./DayLists";
 
 /** The hours shown on the timeline: from an hour before the day starts to an hour after it ends */
-const HOUR_PX = 60;
+const DEFAULT_HOUR_PX = 60;
 
 /**
  * Ma journée: what is on the plate today, laid out as a suggestion (blocks of time, not a booking) with the AI's
@@ -34,6 +34,32 @@ export function MyDay({ onOpenTask }: { onOpenTask: (id: string) => void }) {
   const [date, setDate] = useState(todayYmd());
   const [userId, setUserId] = useState<string>(me.id);
   const [quick, setQuick] = useState("");
+  // the height of the blocks of the day: dragged by the bar under them (pixels an hour), kept on this computer
+  const [hourPx, setHourPx] = useState(() => {
+    const v = Number(localStorage.getItem("akab.pipeline.hourPx"));
+    return v >= 36 && v <= 160 ? v : DEFAULT_HOUR_PX;
+  });
+  const startResize = (e: React.PointerEvent) => {
+    e.preventDefault();
+    const y0 = e.clientY;
+    const h0 = hourPx;
+    let last = h0;
+    const move = (ev: PointerEvent) => {
+      last = Math.round(Math.min(160, Math.max(36, h0 + (ev.clientY - y0) / 12)));
+      setHourPx(last);
+    };
+    const up = () => {
+      window.removeEventListener("pointermove", move);
+      window.removeEventListener("pointerup", up);
+      try {
+        localStorage.setItem("akab.pipeline.hourPx", String(last));
+      } catch {
+        /* not kept */
+      }
+    };
+    window.addEventListener("pointermove", move);
+    window.addEventListener("pointerup", up);
+  };
   // the width of the left side (percent), dragged with the mouse and kept on this computer
   const box = useRef<HTMLDivElement>(null);
   const [split, setSplit] = useState(() => {
@@ -240,7 +266,10 @@ export function MyDay({ onOpenTask }: { onOpenTask: (id: string) => void }) {
                   ))}
               </div>
             )}
-            {isLoading || !data ? <Skeleton className="h-96 w-full" /> : <Timeline data={data} onOpen={(b) => (b.kind === "ticket" ? ws.open(Number(b.refId)) : b.refId && onOpenTask(b.refId))} />}
+            {isLoading || !data ? <Skeleton className="h-96 w-full" /> : <Timeline data={data} hourPx={hourPx} onOpen={(b) => (b.kind === "ticket" ? ws.open(Number(b.refId)) : b.refId && onOpenTask(b.refId))} />}
+            <div role="separator" aria-orientation="horizontal" title={t("pipeline.day.resizeHeight")} aria-label={t("pipeline.day.resizeHeight")} onPointerDown={startResize} onDoubleClick={() => setHourPx(DEFAULT_HOUR_PX)} className="group mt-2 flex h-3 cursor-row-resize touch-none items-center justify-center">
+              <span className="h-0.5 w-16 rounded-full bg-[color:var(--glass-border)] transition-colors group-hover:bg-[color:var(--gold)]/60 group-active:bg-[color:var(--gold)]" />
+            </div>
             <p className="mt-3 text-[11px] text-muted-foreground">{t("pipeline.day.suggestion")}</p>
           </section>
         </div>
@@ -258,9 +287,6 @@ export function MyDay({ onOpenTask }: { onOpenTask: (id: string) => void }) {
         </div>
 
         <div className="min-w-0 space-y-4">
-          <Priorities items={data?.items ?? []} horizon="week" onOpen={open} />
-          <MyTickets userId={userId} mine={userId === me.id} onOpen={(id) => ws.open(id)} />
-          {userId === me.id && can("projects.view") && <DayProjects />}
           {can("pipeline.edit") && (
             <form
               className="glass flex gap-2 rounded-2xl border p-2.5"
@@ -276,6 +302,9 @@ export function MyDay({ onOpenTask }: { onOpenTask: (id: string) => void }) {
               </Button>
             </form>
           )}
+          <Priorities items={data?.items ?? []} horizon="week" onOpen={open} />
+          <MyTickets userId={userId} mine={userId === me.id} onOpen={(id) => ws.open(id)} />
+          {userId === me.id && can("projects.view") && <DayProjects />}
           <ItemList title={t("pipeline.day.tasksToday")} icon={Workflow} items={tasks} loading={isLoading} onOpen={open} onComplete={can("pipeline.edit") ? (i) => complete.mutate(i.refId) : undefined} empty={t("pipeline.day.noTasks")} />
         </div>
       </div>
@@ -321,21 +350,21 @@ function ItemList({ title, icon: Icon, items, loading, onOpen, onComplete, empty
 }
 
 /** The day from the start of work to its end, an hour on each side; the blocks are placed by their time. */
-function Timeline({ data, onOpen }: { data: DayData; onOpen: (b: Block) => void }) {
+function Timeline({ data, onOpen, hourPx }: { data: DayData; onOpen: (b: Block) => void; hourPx: number }) {
   const { t } = useTranslation();
   const startH = Math.max(0, Math.floor(toMinutes(data.workHours.start) / 60) - 1);
   const endH = Math.min(24, Math.ceil(toMinutes(data.workHours.end) / 60) + 1);
   const hours = Array.from({ length: endH - startH }, (_, i) => startH + i);
   const placed = data.plan.blocks.filter((b) => !b.overflow && !b.allDay && b.start);
   const overflow = data.plan.blocks.filter((b) => b.overflow);
-  const top = (m: number) => ((m - startH * 60) / 60) * HOUR_PX;
+  const top = (m: number) => ((m - startH * 60) / 60) * hourPx;
   const now = new Date();
   const nowM = data.date === todayYmd() ? now.getHours() * 60 + now.getMinutes() : null;
   return (
     <div className="space-y-3">
-      <div className="relative" style={{ height: hours.length * HOUR_PX }}>
+      <div className="relative" style={{ height: hours.length * hourPx }}>
         {hours.map((h) => (
-          <div key={h} className="absolute inset-x-0 flex items-start border-t border-[color:var(--glass-border)]" style={{ top: (h - startH) * HOUR_PX, height: HOUR_PX }}>
+          <div key={h} className="absolute inset-x-0 flex items-start border-t border-[color:var(--glass-border)]" style={{ top: (h - startH) * hourPx, height: hourPx }}>
             <span className="-mt-2 w-12 shrink-0 bg-transparent pr-2 text-right font-mono text-[10px] text-muted-foreground">{String(h).padStart(2, "0")}:00</span>
           </div>
         ))}
@@ -343,7 +372,7 @@ function Timeline({ data, onOpen }: { data: DayData; onOpen: (b: Block) => void 
           {placed.map((b, i) => {
             const s = toMinutes(b.start);
             const e = toMinutes(b.end);
-            const h = Math.max(((e - s) / 60) * HOUR_PX - 3, 22);
+            const h = Math.max(((e - s) / 60) * hourPx - 3, 22);
             if (b.kind === "break")
               return (
                 <div key={`br${i}`} className="absolute inset-x-0 flex items-center justify-center gap-1.5 rounded-lg border border-dashed border-muted-foreground/30 bg-[repeating-linear-gradient(135deg,transparent,transparent_6px,rgba(255,255,255,0.03)_6px,rgba(255,255,255,0.03)_12px)] text-[11px] text-muted-foreground" style={{ top: top(s) + 1, height: h }}>

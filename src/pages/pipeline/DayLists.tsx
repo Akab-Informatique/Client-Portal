@@ -1,4 +1,6 @@
+import { useState } from "react";
 import { useTranslation } from "react-i18next";
+import { Pager } from "@/components/Pager";
 import { useQuery } from "@tanstack/react-query";
 import { useNavigate } from "react-router-dom";
 import { FolderKanban, Star, Ticket as TicketIcon } from "lucide-react";
@@ -21,13 +23,18 @@ export function MyTickets({ userId, mine, onOpen }: { userId: string; mine: bool
     queryFn: () => api.get<TicketList>(mine ? "/tickets?view=mine" : `/tickets?view=all&assignee=${userId}`),
     refetchInterval: 60_000,
   });
-  const items = (data?.items ?? []).filter((x) => x.statusKind !== "complete");
+  const all = (data?.items ?? []).filter((x) => x.statusKind !== "complete");
+  // not stretched over the page: 10 at first, the others on the next pages
+  const [page, setPage] = useState(1);
+  const [size, setSize] = useState(10);
+  const items = all.slice((Math.min(page, Math.max(1, Math.ceil(all.length / size))) - 1) * size, Math.min(page, Math.max(1, Math.ceil(all.length / size))) * size);
   return (
     <section className="glass rounded-2xl border">
       <h3 className="flex items-center gap-1.5 px-4 pb-2 pt-3 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
-        <TicketIcon className="size-3.5" /> {t("pipeline.day.myTickets")} <span className="font-mono normal-case opacity-70">{items.length}</span>
+        <TicketIcon className="size-3.5" /> {t("pipeline.day.myTickets")} <span className="font-mono normal-case opacity-70">{all.length}</span>
       </h3>
-      {isLoading ? <Skeleton className="m-4 h-20" /> : items.length === 0 ? <p className="px-4 pb-4 text-sm text-muted-foreground">{t("pipeline.day.noTickets")}</p> : <div className="max-h-[32rem] overflow-y-auto"><CompactList items={items} activeIds={new Set()} onOpen={onOpen} facets={data?.facets} /></div>}
+      {isLoading ? <Skeleton className="m-4 h-20" /> : all.length === 0 ? <p className="px-4 pb-4 text-sm text-muted-foreground">{t("pipeline.day.noTickets")}</p> : <CompactList items={items} activeIds={new Set()} onOpen={onOpen} facets={data?.facets} />}
+      {all.length > size && <Pager total={all.length} page={page} size={size} onPage={setPage} onSize={(n) => (setSize(n), setPage(1))} />}
     </section>
   );
 }
