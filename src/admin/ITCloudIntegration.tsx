@@ -261,7 +261,7 @@ function Step({ n, title, hint, children, action }: { n: number; title: string; 
 }
 
 // ── 1. customers ↔ clients ──
-type ClientRow = { itcloudId: number; code: string; company: string; email: string; status: string; clientId: string | null; clientName: string | null; contractId: string | null; contracts: { id: string; name: string }[]; suggestion: { clientId: string; name: string; reason: "name" | "email" } | null };
+type ClientRow = { itcloudId: number; code: string; company: string; email: string; status: string; clientId: string | null; clientName: string | null; contractId: string | null; directBilled: boolean; contracts: { id: string; name: string }[]; suggestion: { clientId: string; name: string; reason: "name" | "email" } | null };
 
 function ClientsStep() {
   const { t } = useTranslation();
@@ -277,6 +277,14 @@ function ClientsStep() {
       toast.success(t("integrations.itcloud.clients.saved", { count: r.changed }));
       void qc.invalidateQueries({ queryKey: [...KEY, "clients"] });
       void qc.invalidateQueries({ queryKey: [...KEY, "services"] });
+    },
+    onError: (e) => toast.error(errorText(t, e)),
+  });
+  const setDirect = useMutation({
+    mutationFn: (p: { itcloudId: number; directBilled: boolean }) => api.put(`/admin/itcloud/clients/${p.itcloudId}/direct`, { directBilled: p.directBilled }),
+    onSuccess: () => {
+      toast.success(t("integrations.itcloud.clients.directSaved"));
+      void qc.invalidateQueries({ queryKey: [...KEY, "clients"] });
     },
     onError: (e) => toast.error(errorText(t, e)),
   });
@@ -340,8 +348,13 @@ function ClientsStep() {
                     <Badge variant="outline" className="gap-1 border-emerald-500/40 text-emerald-400">
                       <Link2 className="size-3" /> {r.clientName}
                     </Badge>
+                    <label className="flex items-center gap-1.5 text-xs text-muted-foreground" title={t("integrations.itcloud.clients.directHint")}>
+                      <Checkbox checked={r.directBilled} disabled={setDirect.isPending} onCheckedChange={(v) => setDirect.mutate({ itcloudId: r.itcloudId, directBilled: Boolean(v) })} />
+                      {t("integrations.itcloud.clients.direct")}
+                    </label>
                     {/* the contract that carries this customer's services: the portal's choice, or one picked by hand */}
                     <select
+                      hidden={r.directBilled}
                       value={r.contractId ?? ""}
                       disabled={pickContract.isPending}
                       onChange={(e) => pickContract.mutate({ itcloudId: r.itcloudId, contractId: e.target.value || null })}
@@ -554,7 +567,7 @@ function ServicesStep() {
 
 // ── 3. the sync: each customer's services and the contract that carries them ──
 type Row = { serviceId: number; clientName: string; productGroup: string; product: string; status: string; billingCycle: string; quantity: number; amountCents: number; state: string; contractName: string | null; contractId: string | null; customerContractId: string | null; contracts: { id: string; name: string }[] };
-const STATES = ["synced", "client_unlinked", "product_unmatched", "no_contract", "inactive"] as const;
+const STATES = ["synced", "client_unlinked", "product_unmatched", "no_contract", "direct_billed", "inactive"] as const;
 
 function SyncStep() {
   const { t, i18n } = useTranslation();

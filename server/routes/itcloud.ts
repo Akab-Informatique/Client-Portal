@@ -17,6 +17,7 @@ import {
   ItcloudError,
   saveItcloudSettings,
   setCustomerContract,
+  setCustomerDirect,
   setServiceContract,
   serviceStates,
   servicePlan,
@@ -117,6 +118,22 @@ export const itcloudRoutes = new Hono<AppEnv>()
       throw e;
     }
     await audit(a.user.id, "itcloud.contract_picked", String(id), { contractId: p.contractId });
+    return c.json({ ok: true });
+  })
+
+  /** ITCloud bills this customer itself: its services stay off the contracts */
+  .put("/clients/:id/direct", async (c) => {
+    const a = auth(c);
+    const id = Number(c.req.param("id"));
+    if (!Number.isInteger(id) || id <= 0) throw new HTTPException(400, { message: "invalid_id" });
+    const p = await body(c, z.object({ directBilled: z.boolean() }));
+    try {
+      await setCustomerDirect(id, p.directBilled);
+    } catch (e) {
+      if (e instanceof ItcloudError) throw new HTTPException(e.code === "customer_not_matched" ? 404 : 400, { message: e.code });
+      throw e;
+    }
+    await audit(a.user.id, "itcloud.direct_billed", String(id), { directBilled: p.directBilled });
     return c.json({ ok: true });
   })
 

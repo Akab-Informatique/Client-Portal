@@ -7424,6 +7424,24 @@ describe("ITCloud: vendor, clients matched, services kept on contracts", () => {
     expect(after).toHaveLength(1);
     expect(after[0]).toMatchObject({ quantity: 5, costCents: 500 });
     expect((await admin.post("/api/admin/itcloud/sync", {})).json.counts).toMatchObject({ created: 0, updated: 0, removed: 0 });
+
+    // a customer ITCloud bills directly: its lines leave the contract and nothing of it comes back
+    expect((await tech.put("/api/admin/itcloud/clients/777/direct", { directBilled: true })).status).toBe(403);
+    expect((await admin.put("/api/admin/itcloud/clients/888/direct", { directBilled: true })).json.error).toBe("customer_not_matched");
+    expect((await admin.put("/api/admin/itcloud/clients/777/direct", { directBilled: true })).status).toBe(200);
+    expect((await admin.get("/api/admin/itcloud/clients")).json.find((r: any) => r.itcloudId === 777).directBilled).toBe(true);
+    expect((await admin.put("/api/admin/itcloud/services/9001/contract", { contractId: contract.id })).json.error).toBe("customer_direct_billed");
+    // the sync route allows 6 a minute per person: this test has used them
+    const [me] = await db().select({ id: schema.users.id }).from(schema.users).where(eq(schema.users.email, "admin@akab.local"));
+    resetRateLimit(`itcloud-sync:${me.id}`);
+    const direct = (await admin.post("/api/admin/itcloud/sync", {})).json.counts;
+    expect(direct).toMatchObject({ created: 0, removed: 1, noContract: 0 });
+    expect((await admin.get(svcUrl)).json).toHaveLength(0);
+    expect((await admin.get("/api/admin/itcloud/services")).json.rows.find((r: any) => r.serviceId === 9001).state).toBe("direct_billed");
+    expect((await admin.get(waitUrl)).json).toHaveLength(0);
+    // switched off again, the next sync takes it up like any customer (it waits for a contract)
+    expect((await admin.put("/api/admin/itcloud/clients/777/direct", { directBilled: false })).status).toBe(200);
+    expect((await admin.post("/api/admin/itcloud/sync", {})).json.counts).toMatchObject({ noContract: 1 });
     vi.unstubAllGlobals();
   });
 });

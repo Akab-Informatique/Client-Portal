@@ -1,0 +1,1 @@
+ALTER TABLE "itcloud_clients" ADD COLUMN "direct_billed" boolean DEFAULT false NOT NULL;

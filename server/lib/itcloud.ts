@@ -221,6 +221,8 @@ export type ClientRow = {
   clientName: string | null;
   /** The contract picked by hand for this customer's services (null: automatic) */
   contractId: string | null;
+  /** ITCloud bills this customer directly: nothing of it goes on a contract here */
+  directBilled: boolean;
   /** The client's active contracts, to pick from */
   contracts: { id: string; name: string }[];
   /** A match to review (only when not tied yet) */
@@ -251,6 +253,7 @@ export async function clientPlan(s: ItcloudSettings): Promise<ClientRow[]> {
   for (const x of contacts) addEmail(x.email, x.clientId);
   const linked = new Map(links.map((l) => [l.itcloudId, l.clientId]));
   const picked = new Map(links.map((l) => [l.itcloudId, l.contractId]));
+  const direct = new Set(links.filter((l) => l.directBilled).map((l) => l.itcloudId));
   const linkedClients = [...new Set(links.map((l) => l.clientId))];
   const kontracts = linkedClients.length
     ? await db().select({ id: schema.clientContracts.id, clientId: schema.clientContracts.clientId, name: schema.clientContracts.name }).from(schema.clientContracts).where(and(inArray(schema.clientContracts.clientId, linkedClients), eq(schema.clientContracts.active, true))).orderBy(asc(schema.clientContracts.name))
@@ -268,7 +271,7 @@ export async function clientPlan(s: ItcloudSettings): Promise<ClientRow[]> {
       }
       const contracts = clientId ? kontracts.filter((k) => k.clientId === clientId).map((k) => ({ id: k.id, name: k.name })) : [];
       const contractId = picked.get(c.clientId) && contracts.some((k) => k.id === picked.get(c.clientId)) ? (picked.get(c.clientId) ?? null) : null;
-      return { itcloudId: c.clientId, code: c.clientCode, company: c.companyName, email: c.email, status: c.status, clientId, clientName: clientId ? (nameOf.get(clientId) ?? null) : null, contractId, contracts, suggestion };
+      return { itcloudId: c.clientId, code: c.clientCode, company: c.companyName, email: c.email, status: c.status, clientId, clientName: clientId ? (nameOf.get(clientId) ?? null) : null, contractId, directBilled: direct.has(c.clientId), contracts, suggestion };
     })
     .sort((a, b) => Number(Boolean(a.clientId)) - Number(Boolean(b.clientId)) || a.company.localeCompare(b.company));
 }
@@ -282,6 +285,17 @@ export async function setCustomerContract(itcloudId: number, contractId: string 
     if (!k) throw new ItcloudError("contract_not_found");
   }
   await db().update(schema.itcloudClients).set({ contractId }).where(eq(schema.itcloudClients.itcloudId, itcloudId));
+}
+
+/** Mark (or unmark) an ITCloud customer as billed directly by ITCloud: its services are left off the contracts at the next sync (its lines leave then) */
+export async function setCustomerDirect(itcloudId: number, directBilled: boolean): Promise<void> {
+  const [link] = await db().select().from(schema.itcloudClients).where(eq(schema.itcloudClients.itcloudId, itcloudId));
+  if (!link) throw new ItcloudError("customer_not_matched");
+  await db().update(schema.itcloudClients).set({ directBilled }).where(eq(schema.itcloudClients.itcloudId, itcloudId));
+  if (directBilled) {
+    const ids = (await db().select({ id: schema.itcloudServices.serviceId }).from(schema.itcloudServices).where(eq(schema.itcloudServices.itcloudClientId, itcloudId))).map((x) => x.id);
+    if (ids.length) await db().delete(schema.itcloudServiceContracts).where(inArray(schema.itcloudServiceContracts.serviceId, ids));
+  }
 }
 
 /** Tie (or untie, clientId null) ITCloud customers to clients. Returns how many changed. */
@@ -539,6 +553,7 @@ export async function syncItcloud(actorId: string | null = null): Promise<SyncRe
     }));
     const [links, svcs] = await Promise.all([db().select().from(schema.itcloudClients), db().select().from(schema.services).where(eq(schema.services.vendorId, vendorId))]);
     const clientOf = new Map(links.map((l) => [l.itcloudId, l.clientId]));
+    const directBilled = new Set(links.filter((l) => l.directBilled).map((l) => l.itcloudId));
     const pickedContract = new Map(links.map((l) => [l.itcloudId, l.contractId]));
     const perService = new Map((await db().select().from(schema.itcloudServiceContracts)).map((x) => [x.serviceId, x.contractId]));
     const svcBySku = new Map(svcs.filter((x) => x.vendorSku).map((x) => [x.vendorSku!, x]));
@@ -554,6 +569,11 @@ export async function syncItcloud(actorId: string | null = null): Promise<SyncRe
       if (!clientId) {
         counts.clientUnlinked++;
         r.state = "client_unlinked";
+        continue;
+      }
+      if (directBilled.has(r.itcloudClientId)) {
+        // ITCloud bills them itself: nothing to charge here, and a line it had is not kept
+        r.state = "direct_billed";
         continue;
       }
       const pid = productOf(r.productGroup, r.product);
@@ -646,6 +666,7 @@ export async function setServiceContract(serviceId: number, contractId: string |
   if (!row) throw new ItcloudError("service_not_found");
   const [link] = await db().select().from(schema.itcloudClients).where(eq(schema.itcloudClients.itcloudId, row.itcloudClientId));
   if (!link) throw new ItcloudError("customer_not_matched");
+  if (link.directBilled) throw new ItcloudError("customer_direct_billed");
   if (onlyClient && link.clientId !== onlyClient) throw new ItcloudError("service_not_found");
   if (contractId) {
     const [k] = await db().select({ id: schema.clientContracts.id }).from(schema.clientContracts).where(and(eq(schema.clientContracts.id, contractId), eq(schema.clientContracts.clientId, link.clientId), eq(schema.clientContracts.active, true)));
