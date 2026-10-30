@@ -748,6 +748,7 @@ export const ticketRoutes = new Hono<AppEnv>()
             `assign {"id","assigneeId":"<value>"|null} : technicians: ${techs.map((x) => `${x.id}=${x.name}`).join(", ")}`,
             'add_note {"id","text","internal":true|false} : add a note (internal = team only)',
             'set_estimate {"id","minutes":number|null} : the estimated time to resolve, in minutes',
+            'update_ticket {"id","start"?:"YYYY-MM-DD"|null,"checkpointDate"?:"YYYY-MM-DD"|null,"checkpointTime"?:"HH:MM","due"?:"YYYY-MM-DD","priority"?,"status"?,"assigneeId"?,"estimateMinutes"?} : SEVERAL changes of ONE ticket in one action — prefer it when many tickets get several changes (one action per ticket); only the fields that change; "id" is the number after "id" in the list of tickets',
           ]
         : []),
       ...(can("tickets.delete") ? ['delete_ticket {"id"} : delete the ticket (irreversible)'] : []),
@@ -760,6 +761,9 @@ export const ticketRoutes = new Hono<AppEnv>()
       return `- id ${x.id} · ${x.number} · « ${x.title} » · client ${x.company.name} · priorité ${L.priorityLabel(x.priority) ?? L.priorityKind(x.priority)} · statut ${L.statusLabel(x.status) ?? L.statusKind(x.status)} · assigné ${x.assignee?.name ?? "personne"} · échéance ${x.dueAt.slice(0, 10)} · début ${starts.get(x.id) ?? "aucun"} · checkpoint ${m ? `${m}${starts.milestoneTimes.get(x.id) ? ` ${starts.milestoneTimes.get(x.id)}` : ""}` : "aucun"}`;
     });
     const model = await askedModel(c);
+    const en = a.user.locale === "en";
+    /** one question to the AI and what comes of it: the proposals are checked one by one (nothing it says is trusted) */
+    const round = async (extra: string) => {
     let raw = "";
     try {
       raw = await askClaude({
@@ -768,7 +772,7 @@ export const ticketRoutes = new Hono<AppEnv>()
         userId: a.user.id,
         model,
         maxTokens: 12000,
-        prompt: `Actions permises :\n${allowed.length ? allowed.join("\n") : "(aucune : la personne peut seulement lire)"}\n\nBillets que la personne peut voir :\n${lines.length ? lines.join("\n") : "(aucun)"}\n\n${p.history.length ? `Conversation jusqu'ici :\n${p.history.map((h) => `${h.role === "user" ? "Personne" : "Assistant"} : ${h.text}`).join("\n")}\n\n` : ""}Dernier message de la personne : ${p.message}`,
+        prompt: `Actions permises :\n${allowed.length ? allowed.join("\n") : "(aucune : la personne peut seulement lire)"}\n\nBillets que la personne peut voir :\n${lines.length ? lines.join("\n") : "(aucun)"}\n\n${p.history.length ? `Conversation jusqu'ici :\n${p.history.map((h) => `${h.role === "user" ? "Personne" : "Assistant"} : ${h.text}`).join("\n")}\n\n` : ""}Dernier message de la personne : ${p.message}${extra}`,
       });
     } catch (e) {
       throw aiHttpError(e);
@@ -791,10 +795,30 @@ export const ticketRoutes = new Hono<AppEnv>()
       },
     };
     if (!parsed.data.reply && !parsed.data.actions.length) throw new HTTPException(502, { message: "ai_bad_output" });
+    // tolerant reading: an id may be a number as text or a ticket number, a date may carry a time, a time may be "9h30"
+    const byNumber = new Map(shown.map((x) => [x.number, x.id]));
+    const day = (v: unknown) => (typeof v === "string" && /^\d{4}-\d{2}-\d{2}/.test(v) ? v.slice(0, 10) : v);
+    const clock = (v: unknown) => {
+      if (typeof v !== "string") return v ?? undefined;
+      const m = v.trim().match(/^(\d{1,2})\s*[h:]?\s*(\d{2})?/i);
+      return m ? `${m[1].padStart(2, "0")}:${m[2] ?? "00"}` : v;
+    };
+    const tidy = (r: unknown) => {
+      if (!r || typeof r !== "object") return r;
+      const x = { ...(r as Record<string, unknown>) };
+      if (typeof x.id === "string") x.id = byNumber.get(x.id.trim()) ?? Number(x.id.replace(/\D/g, ""));
+      if (typeof x.ticket === "string" && x.id === undefined) x.id = byNumber.get(x.ticket.trim());
+      for (const k of ["date", "start", "due", "checkpointDate"]) if (k in x) x[k] = day(x[k]);
+      if ("time" in x) x.time = clock(x.time);
+      if ("checkpointTime" in x) x.checkpointTime = clock(x.checkpointTime);
+      return x;
+    };
     const zId = z.number().int().positive();
     const zA = z.discriminatedUnion("type", [
       z.object({ type: z.literal("set_due"), id: zId, date: zDate }),
-      z.object({ type: z.literal("set_checkpoint"), id: zId, date: zDate.nullable(), time: z.preprocess((v) => { if (typeof v !== "string") return v ?? undefined; const m = v.trim().match(/^(\d{1,2})\s*[h:]?\s*(\d{2})?$/i); return m ? `${m[1].padStart(2, "0")}:${m[2] ?? "00"}` : v; }, zTime.nullable().optional()) }),
+      z.object({ type: z.literal("set_checkpoint"), id: zId, date: zDate.nullable(), time: zTime.nullable().optional() }),
+      // several changes of one ticket at once (a long list stays short)
+      z.object({ type: z.literal("update_ticket"), id: zId, start: zDate.nullable().optional(), checkpointDate: zDate.nullable().optional(), checkpointTime: zTime.nullable().optional(), due: zDate.optional(), priority: z.string().max(40).optional(), status: z.string().max(40).optional(), assigneeId: z.string().max(60).nullable().optional(), estimateMinutes: z.number().int().min(1).max(9999).nullable().optional() }),
       z.object({ type: z.literal("set_start"), id: zId, date: zDate.nullable() }),
       z.object({ type: z.literal("set_priority"), id: zId, priority: z.string().max(40) }),
       z.object({ type: z.literal("set_status"), id: zId, status: z.string().max(40) }),
@@ -805,12 +829,15 @@ export const ticketRoutes = new Hono<AppEnv>()
       z.object({ type: z.literal("sort_list"), sort: z.enum(["milestone", "due", "priority", "start", "updated", "ai"]) }),
       z.object({ type: z.literal("set_estimate"), id: zId, minutes: z.number().int().min(1).max(9999).nullable() }),
     ]);
-    const en = a.user.locale === "en";
-    const actions: { type: string; id?: number; sort?: string; label: string; request: { method: "PATCH" | "PUT" | "POST" | "DELETE"; path: string; body?: unknown } | null }[] = [];
+    const actions: { type: string; id?: number; sort?: string; label: string; request: { method: "PATCH" | "PUT" | "POST" | "DELETE"; path: string; body?: unknown } | null; then?: { method: "PATCH" | "PUT"; path: string; body: unknown }[] }[] = [];
     const refused: string[] = [];
+    let dropped = 0;
     for (const raw of parsed.data.actions) {
-      const r = zA.safeParse(raw);
-      if (!r.success) continue;
+      const r = zA.safeParse(tidy(raw));
+      if (!r.success) {
+        dropped++;
+        continue;
+      }
       const x = r.data;
       if (x.type === "plan_my_tickets") {
         if (edit) actions.push({ type: x.type, label: en ? "Plan my tickets" : "Planifier mes billets", request: null });
@@ -824,12 +851,63 @@ export const ticketRoutes = new Hono<AppEnv>()
       const tk = known.get(x.id);
       const name = tk ? `${tk.number} « ${tk.title} »` : String(x.id);
       // a ticket the person was not shown, or an action their rights do not cover: dropped
-      if (!tk) continue;
+      if (!tk) {
+        dropped++;
+        continue;
+      }
       if (x.type === "delete_ticket" ? !can("tickets.delete") : !edit) {
         refused.push(name);
         continue;
       }
       const id = x.id;
+      if (x.type === "update_ticket") {
+        const parts: string[] = [];
+        const start: Record<string, unknown> = {};
+        if (x.start !== undefined) {
+          start.startDate = x.start;
+          parts.push(en ? `start ${x.start ?? "none"}` : `début ${x.start ?? "aucun"}`);
+        }
+        if (x.checkpointDate !== undefined) {
+          start.milestoneDate = x.checkpointDate;
+          start.milestoneTime = x.checkpointDate ? (x.checkpointTime ?? null) : null;
+          parts.push(`checkpoint ${x.checkpointDate ?? (en ? "none" : "aucun")}${x.checkpointDate && x.checkpointTime ? ` ${x.checkpointTime}` : ""}`);
+        }
+        const patch: Record<string, unknown> = {};
+        if (x.due !== undefined) {
+          patch.dueDate = x.due;
+          parts.push(en ? `due ${x.due}` : `échéance ${x.due}`);
+        }
+        const pr = x.priority !== undefined ? o.priorities.find((q) => q.value === x.priority) : undefined;
+        if (pr) {
+          patch.priority = pr.value;
+          parts.push(`${en ? "priority" : "priorité"} ${pr.label}`);
+        }
+        const st = x.status !== undefined ? o.statuses.find((q) => q.value === x.status && !q.hidden) : undefined;
+        if (st) {
+          patch.status = st.value;
+          parts.push(`${en ? "status" : "statut"} ${st.label}`);
+        }
+        if (x.assigneeId !== undefined) {
+          const who = x.assigneeId === null ? null : techs.find((q) => q.id === x.assigneeId);
+          if (x.assigneeId === null || who) {
+            patch.assigneeId = x.assigneeId;
+            parts.push(en ? `assigned to ${who?.name ?? "nobody"}` : `assigné à ${who?.name ?? "personne"}`);
+          }
+        }
+        const calls: { method: "PATCH" | "PUT"; path: string; body: unknown }[] = [];
+        if (Object.keys(start).length) calls.push({ method: "PUT", path: `/tickets/${id}/start-date`, body: start });
+        if (Object.keys(patch).length) calls.push({ method: "PATCH", path: `/tickets/${id}`, body: patch });
+        if (x.estimateMinutes !== undefined) {
+          calls.push({ method: "PUT", path: `/tickets/${id}/estimate`, body: { minutes: x.estimateMinutes } });
+          parts.push(`${en ? "estimate" : "estimé"} ${x.estimateMinutes ?? (en ? "none" : "aucun")}`);
+        }
+        if (!calls.length) {
+          dropped++;
+          continue;
+        }
+        actions.push({ type: x.type, id, label: `${name} : ${parts.join(", ")}`, request: calls[0], then: calls.slice(1) });
+        continue;
+      }
       if (x.type === "set_due") actions.push({ type: x.type, id, label: en ? `${name}: due ${x.date}` : `${name} : échéance ${x.date}`, request: { method: "PATCH", path: `/tickets/${id}`, body: { dueDate: x.date } } });
       else if (x.type === "set_checkpoint") actions.push({ type: x.type, id, label: en ? `${name}: checkpoint ${x.date ?? "none"}${x.time ? ` ${x.time}` : ""}` : `${name} : checkpoint ${x.date ?? "aucun"}${x.time ? ` ${x.time}` : ""}`, request: { method: "PUT", path: `/tickets/${id}/start-date`, body: { milestoneDate: x.date, milestoneTime: x.date ? (x.time ?? null) : null } } });
       else if (x.type === "set_start") actions.push({ type: x.type, id, label: en ? `${name}: start ${x.date ?? "none"}` : `${name} : début ${x.date ?? "aucun"}`, request: { method: "PUT", path: `/tickets/${id}/start-date`, body: { startDate: x.date } } });
@@ -846,8 +924,16 @@ export const ticketRoutes = new Hono<AppEnv>()
       else if (x.type === "set_estimate") actions.push({ type: x.type, id, label: en ? `${name}: estimate ${x.minutes ?? "none"} min` : `${name} : estimé ${x.minutes ?? "aucun"} min`, request: { method: "PUT", path: `/tickets/${id}/estimate`, body: { minutes: x.minutes } } });
       else if (x.type === "delete_ticket") actions.push({ type: x.type, id, label: en ? `${name}: DELETE the ticket` : `${name} : SUPPRIMER le billet`, request: { method: "DELETE", path: `/tickets/${id}` } });
     }
-    await audit(a.user.id, "ticket.ai_assistant", null, { asked: p.message.slice(0, 200), proposed: actions.length, refused: refused.length });
-    return c.json({ reply: parsed.data.reply, actions: actions.slice(0, 120), refused });
+    return { reply: parsed.data.reply, actions, refused, dropped };
+    };
+    let res = await round("");
+    // the AI described changes but listed none (or only invalid ones): ask it once more, for the list only
+    if (!res.actions.length && !res.refused.length && p.history.length && !res.reply.trim().endsWith("?")) {
+      const again = await round("\n\n(Rappel : ta réponse précédente ne contenait aucune action valide. Renvoie MAINTENANT le JSON avec la liste complète \"actions\" — de préférence une action update_ticket par billet — avec un \"reply\" très court.)");
+      if (again.actions.length) res = again;
+    }
+    await audit(a.user.id, "ticket.ai_assistant", null, { asked: p.message.slice(0, 200), proposed: res.actions.length, refused: res.refused.length, dropped: res.dropped });
+    return c.json({ reply: res.reply, actions: res.actions.slice(0, 120), refused: res.refused, dropped: res.dropped });
   })
 
   .post("/ai/plan", requirePermission("tickets.ai"), async (c) => {

@@ -14,10 +14,10 @@ import { cn } from "@/lib/utils";
 import { useAiError } from "./TicketPanel";
 import { ticketErrorText } from "./shared";
 
-type Action = { type: string; id?: number; sort?: string; label: string; request: { method: "PATCH" | "PUT" | "POST" | "DELETE"; path: string; body?: unknown } | null };
-type Answer = { reply: string; actions: Action[]; refused: string[] };
+type Action = { type: string; id?: number; sort?: string; label: string; request: { method: "PATCH" | "PUT" | "POST" | "DELETE"; path: string; body?: unknown } | null; then?: { method: "PATCH" | "PUT"; path: string; body: unknown }[] };
+type Answer = { reply: string; actions: Action[]; refused: string[]; dropped?: number };
 /** One turn of the conversation: what the person said, or what the assistant answered with the actions it proposes */
-type Turn = { role: "user"; text: string } | { role: "assistant"; text: string; actions: Action[]; refused: string[]; picked: Set<number>; results: Record<number, "ok" | string>; applied: boolean };
+type Turn = { role: "user"; text: string } | { role: "assistant"; text: string; actions: Action[]; refused: string[]; dropped: number; picked: Set<number>; results: Record<number, "ok" | string>; applied: boolean };
 
 /**
  * The AI assistant of the tickets page, as a conversation. You write what you want; the AI answers, and when it needs more
@@ -53,7 +53,7 @@ export function AssistantDialog({ onClose, onPlan, onSort }: { onClose: () => vo
       setTurns((list) => [
         ...list,
         // proposed actions start ticked, except a deletion (it has to be chosen on purpose)
-        { role: "assistant", text: r.reply, actions: r.actions, refused: r.refused, picked: new Set(r.actions.map((a, i) => (a.type === "delete_ticket" ? -1 : i)).filter((i) => i >= 0)), results: {}, applied: false },
+        { role: "assistant", text: r.reply, actions: r.actions, refused: r.refused, dropped: r.dropped ?? 0, picked: new Set(r.actions.map((a, i) => (a.type === "delete_ticket" ? -1 : i)).filter((i) => i >= 0)), results: {}, applied: false },
       ]),
     onError: (e) => toast.error(aiError(e), { description: e instanceof ApiError ? e.code : undefined }),
   });
@@ -86,10 +86,12 @@ export function AssistantDialog({ onClose, onPlan, onSort }: { onClose: () => vo
         }
         if (!a.request) continue;
         try {
-          if (a.request.method === "PATCH") await api.patch(a.request.path, a.request.body);
-          else if (a.request.method === "PUT") await api.put(a.request.path, a.request.body);
-          else if (a.request.method === "POST") await api.post(a.request.path, a.request.body);
-          else await api.del(a.request.path);
+          for (const r of [a.request, ...(a.then ?? [])]) {
+            if (r.method === "PATCH") await api.patch(r.path, r.body);
+            else if (r.method === "PUT") await api.put(r.path, r.body);
+            else if (r.method === "POST") await api.post(r.path, r.body);
+            else await api.del(r.path);
+          }
           out[i] = "ok";
         } catch (e) {
           out[i] = ticketErrorText(t, e);
@@ -158,6 +160,7 @@ export function AssistantDialog({ onClose, onPlan, onSort }: { onClose: () => vo
             ) : (
               <div key={index} className="space-y-2">
                 {turn.text && <p className="max-w-[92%] whitespace-pre-wrap rounded-2xl bg-violet-500/10 px-3 py-2 text-sm leading-relaxed">{turn.text}</p>}
+                {turn.dropped > 0 && <p className="rounded-lg border border-orange-400/30 bg-orange-400/10 px-3 py-2 text-xs text-orange-200">{t("tickets.assistant.dropped", { count: turn.dropped })}</p>}
                 {turn.refused.length > 0 && <p className="rounded-lg border border-orange-400/30 bg-orange-400/10 px-3 py-2 text-xs text-orange-200">{t("tickets.assistant.refused", { list: turn.refused.join(", ") })}</p>}
                 {turn.actions.length > 0 && (
                   <div className="space-y-2">
