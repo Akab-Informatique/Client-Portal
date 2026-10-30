@@ -8926,3 +8926,21 @@ describe("tickets: tags, notes that notify colleagues, texts kept in their ticke
     expect(plain("<p>Bonjour <b>Alex</b><br>à 15 h &amp; plus</p>", "html")).toBe("Bonjour Alex\nà 15 h & plus");
   });
 });
+
+describe("a checkpoint always has a time", () => {
+  it("17:00 when none is given; applying a plan keeps the time it carries", async () => {
+    resetRateLimit("login:ip:unknown");
+    const tech = await signIn("tech@akab.local");
+    const [a, b] = (await tech.get("/api/tickets?view=all")).json.items.filter((x: any) => x.statusKind !== "complete").slice(0, 2);
+    // cleared first (an earlier time would be kept), then a day alone gets 17:00
+    await tech.put(`/api/tickets/${a.id}/start-date`, { milestoneDate: null });
+    const first = (await tech.put(`/api/tickets/${a.id}/start-date`, { milestoneDate: "2031-03-04" })).json;
+    expect(first).toMatchObject({ milestoneDate: "2031-03-04", milestoneTime: "17:00" });
+    expect((await tech.put(`/api/tickets/${a.id}/start-date`, { milestoneTime: "08:30" })).json.milestoneTime).toBe("08:30");
+    // a plan applied: the time of each item is kept (17:00 for one without)
+    expect((await tech.post("/api/tickets/start-dates", { items: [{ id: a.id, startDate: "2031-03-03", milestoneDate: "2031-03-05", milestoneTime: "09:15" }, { id: b.id, startDate: "2031-03-03", milestoneDate: "2031-03-06" }], plan: true })).status).toBe(200);
+    const list = (await tech.get("/api/tickets?view=all")).json.items;
+    expect(list.find((x: any) => x.id === a.id)).toMatchObject({ milestoneDate: "2031-03-05", milestoneTime: "09:15" });
+    expect(list.find((x: any) => x.id === b.id)).toMatchObject({ milestoneDate: "2031-03-06", milestoneTime: "17:00" });
+  });
+});

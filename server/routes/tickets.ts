@@ -791,7 +791,7 @@ export const ticketRoutes = new Hono<AppEnv>()
     const zId = z.number().int().positive();
     const zA = z.discriminatedUnion("type", [
       z.object({ type: z.literal("set_due"), id: zId, date: zDate }),
-      z.object({ type: z.literal("set_checkpoint"), id: zId, date: zDate.nullable(), time: zTime.nullable().optional() }),
+      z.object({ type: z.literal("set_checkpoint"), id: zId, date: zDate.nullable(), time: z.preprocess((v) => { if (typeof v !== "string") return v ?? undefined; const m = v.trim().match(/^(d{1,2})s*[h:]?s*(d{2})?$/i); return m ? `${m[1].padStart(2, "0")}:${m[2] ?? "00"}` : v; }, zTime.nullable().optional()) }),
       z.object({ type: z.literal("set_start"), id: zId, date: zDate.nullable() }),
       z.object({ type: z.literal("set_priority"), id: zId, priority: z.string().max(40) }),
       z.object({ type: z.literal("set_status"), id: zId, status: z.string().max(40) }),
@@ -949,6 +949,7 @@ export const ticketRoutes = new Hono<AppEnv>()
               startDate: zDate.nullable(),
               startTime: zTime.nullable().optional(),
               milestoneDate: zDate.nullable().optional(),
+              milestoneTime: zTime.nullable().optional(),
               dueAt: z.string().datetime({ offset: true }).optional(),
             }),
           )
@@ -971,7 +972,8 @@ export const ticketRoutes = new Hono<AppEnv>()
       const set = {
         startDate: it.startDate,
         startTime: it.startDate ? (it.startTime ?? null) : null,
-        ...(it.milestoneDate !== undefined ? { milestoneDate: it.milestoneDate } : {}),
+        // a checkpoint has a day AND a time (17:00 when none is given); no day, no time
+        ...(it.milestoneDate !== undefined ? { milestoneDate: it.milestoneDate, milestoneTime: it.milestoneDate ? (it.milestoneTime ?? "17:00") : null } : {}),
         updatedBy: a.user.id,
         updatedAt: new Date(),
       };
@@ -1861,7 +1863,7 @@ export const ticketRoutes = new Hono<AppEnv>()
     const set = {
       ...(p.milestoneDate !== undefined ? { milestoneDate: p.milestoneDate } : {}),
       // no checkpoint day: no time either
-      ...(p.milestoneTime !== undefined ? { milestoneTime: p.milestoneTime } : p.milestoneDate === null ? { milestoneTime: null } : {}),
+      ...(p.milestoneTime !== undefined ? { milestoneTime: p.milestoneDate === null ? null : (p.milestoneTime ?? before?.milestoneTime ?? "17:00") } : p.milestoneDate === null ? { milestoneTime: null } : p.milestoneDate && !before?.milestoneTime ? { milestoneTime: "17:00" } : {}),
       ...(p.startDate !== undefined ? { startDate: p.startDate } : {}),
       // no day: no time either
       ...(p.startTime !== undefined ? { startTime: p.startTime } : p.startDate === null ? { startTime: null } : {}),
@@ -1869,7 +1871,7 @@ export const ticketRoutes = new Hono<AppEnv>()
     };
     const [row] = await db()
       .insert(schema.ticketMeta)
-      .values({ ticketId: id, startDate: p.startDate ?? null, startTime: p.startDate ? (p.startTime ?? null) : null, startLocked: p.startLocked ?? false, milestoneDate: p.milestoneDate ?? null, milestoneTime: p.milestoneDate ? (p.milestoneTime ?? null) : null, updatedBy: a.user.id })
+      .values({ ticketId: id, startDate: p.startDate ?? null, startTime: p.startDate ? (p.startTime ?? null) : null, startLocked: p.startLocked ?? false, milestoneDate: p.milestoneDate ?? null, milestoneTime: p.milestoneDate ? (p.milestoneTime ?? "17:00") : null, updatedBy: a.user.id })
       .onConflictDoUpdate({ target: schema.ticketMeta.ticketId, set: { ...set, updatedBy: a.user.id, updatedAt: new Date() } })
       .returning();
     if (p.startLocked !== undefined) await audit(a.user.id, p.startLocked ? "ticket.start_locked" : "ticket.start_unlocked", String(id), { startDate: row.startDate });
