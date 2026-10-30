@@ -36,7 +36,7 @@ import {
   ExternalLink,
   UserRound,
   UserX,
-  Wand2,
+
   X,
   type LucideIcon, Star, Lock, GitMerge, ListChecks, Flag, AlertTriangle } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -60,8 +60,8 @@ import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip
 import { Switch } from "@/components/ui/switch";
 import { useConfirm } from "@/components/ConfirmDialog";
 import { api } from "@/lib/api";
-import { AiModelButton, useAiModel } from "@/components/AiModelPicker";
-import { AiDirection, useAiDirection } from "@/components/AiDirection";
+import { useAiModel } from "@/components/AiModelPicker";
+import { useAiDirection } from "@/components/AiDirection";
 import { relativeTime } from "@/lib/format";
 import { useCan, useMe } from "@/lib/session";
 import { cn, initials } from "@/lib/utils";
@@ -76,6 +76,7 @@ import { GlobalSearch } from "./GlobalSearch";
 import { AgendaCard } from "./Planning";
 import { SmsInboxDialog, SmsTile } from "@/pages/sms/SmsPage";
 import { AiSetupHint, InlinePick, useAiError } from "./TicketPanel";
+import { AssistantDialog } from "./Assistant";
 import { CompactList, KanbanBoard, LayoutSwitch, useTicketLayout } from "./Layouts";
 
 type Saved = { id: string; name: string; query: string; pinned?: boolean };
@@ -1672,6 +1673,7 @@ function AiPlanButton() {
   const [, setParams] = useSearchParams();
   const aiError = useAiError();
   const [plan, setPlan] = useState<Plan | null>(null);
+  const [assistant, setAssistant] = useState(false);
   // the due dates that the plan cannot keep: moved to the planned finish when ticked
   const [moveDue, setMoveDue] = useState(false);
   const planModel = useAiModel("tickets.plan");
@@ -1719,13 +1721,11 @@ function AiPlanButton() {
   });
   return (
     <>
-      <span className="inline-flex items-center">
-        <Button variant="outline" onClick={() => run.mutate()} disabled={run.isPending} className="gap-2 border-violet-500/40 bg-violet-500/10 text-violet-200 hover:bg-violet-500/20">
-          {run.isPending ? <Loader2 className="size-4 animate-spin" /> : <Wand2 className="size-4" />} {t("tickets.ai.plan")}
-        </Button>
-        <AiDirection id="tickets.plan" />
-        <AiModelButton feature="tickets.plan" m={planModel} />
-      </span>
+      {/* one icon: the AI assistant (ask in words; planning my tickets is one of the things it does) */}
+      <Button variant="outline" size="icon" onClick={() => setAssistant(true)} disabled={run.isPending} className="border-violet-500/40 bg-violet-500/10 text-violet-200 hover:bg-violet-500/20" aria-label={t("tickets.assistant.title")} title={t("tickets.assistant.title")}>
+        {run.isPending ? <Loader2 className="size-4 animate-spin" /> : <Sparkles className="size-4" />}
+      </Button>
+      {assistant && <AssistantDialog onClose={() => setAssistant(false)} onPlan={() => run.mutate()} />}
       <Dialog open={Boolean(plan)} onOpenChange={(o) => !o && setPlan(null)}>
         <DialogContent className="sm:max-w-2xl">
           <DialogHeader>

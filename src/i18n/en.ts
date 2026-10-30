@@ -3974,6 +3974,7 @@ const en: Dict = {
         ticket_analyze: "Ticket: analysis",
         ticket_reply: "Ticket: suggested reply",
         tickets_plan: "Tickets: planning",
+        tickets_assistant: "Tickets: assistant",
         meetings_week: "Meeting: week ahead summary",
         pipeline_day: "Pipeline: the morning day plan",
         text_polish: "Texts: correction (language and structure)",
@@ -4109,6 +4110,7 @@ const en: Dict = {
     startTime: "Start time",
     startTimeHint: "Optional: the start time that day (the restriction applies until then).",
     startClear: "Remove",
+    assistant: {"title":"AI assistant","hint":"Ask in your own words: change a due date, a checkpoint, a status, assign, add a note, plan your tickets… The AI only proposes what your rights allow and only sees the tickets you can see.","placeholder":"E.g. Move the due date of my Pubco tickets to Friday, and assign the new tickets to Marc.","send":"Send","proposed":"Proposed actions","apply":"Apply ({{count}})","done":"{{count}} action(s) applied.","someFailed":"{{count}} action(s) refused or failed (see the list).","refused":"Not proposed (ticket or right not allowed): {{list}}","safety":"Nothing is done without your confirmation, and every action goes through the same rights checks as if you did it yourself. The AI has no access to billing, accounting or any other module.","deleteTitle":"Delete {{count}} ticket(s)?","example":{"plan":"Plan my tickets","overdue":"Push the due date of my overdue tickets to tomorrow","week":"Set a checkpoint on Friday 3 pm on my tickets of the week"}},
     quickClear: "Clear",
     milestone: {
       label: "Checkpoint",

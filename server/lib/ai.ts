@@ -16,7 +16,7 @@ export type AiModel = (typeof AI_MODELS)[number];
  * an admin chose another one for it; a technician may pick another one for
  * one request when allowed. A new AI feature: add it here (and its label).
  */
-export const AI_FEATURE_KEYS = ["ticket.analyze", "ticket.reply", "tickets.plan", "text.polish", "pipeline.day", "meetings.week"] as const;
+export const AI_FEATURE_KEYS = ["ticket.analyze", "ticket.reply", "tickets.plan", "tickets.assistant", "text.polish", "pipeline.day", "meetings.week"] as const;
 export type AiFeature = (typeof AI_FEATURE_KEYS)[number];
 
 /** US dollars per million tokens (Anthropic API prices). */

@@ -3972,6 +3972,7 @@ const fr = {
         ticket_analyze: "Billet : analyse",
         ticket_reply: "Billet : réponse suggérée",
         tickets_plan: "Billets : planification",
+        tickets_assistant: "Billets : assistant",
         meetings_week: "Réunion : résumé de la semaine",
         pipeline_day: "Pipeline : journée du matin",
         text_polish: "Textes : correction (langue et structure)",
@@ -4107,6 +4108,7 @@ const fr = {
     startTime: "Heure de début",
     startTimeHint: "Facultatif : l'heure de début ce jour-là (la restriction s'applique jusqu'à cette heure).",
     startClear: "Retirer",
+    assistant: {"title":"Assistant IA","hint":"Demandez en vos mots : changer une échéance, un checkpoint, un statut, assigner, ajouter une note, planifier vos billets… L'IA ne propose que ce que vos droits permettent et ne voit que les billets que vous voyez.","placeholder":"Ex. : Reporte à vendredi l'échéance de mes billets de Pubco, et assigne les nouveaux billets à Marc.","send":"Envoyer","proposed":"Actions proposées","apply":"Appliquer ({{count}})","done":"{{count}} action(s) appliquée(s).","someFailed":"{{count}} action(s) refusée(s) ou en échec (voir la liste).","refused":"Non proposé (billet ou droit non permis) : {{list}}","safety":"Rien n'est fait sans votre confirmation, et chaque action passe par les mêmes contrôles de droits que si vous la faisiez vous-même. L'IA n'a accès ni à la facturation, ni à la comptabilité, ni aux autres modules.","deleteTitle":"Supprimer {{count}} billet(s) ?","example":{"plan":"Planifie mes billets","overdue":"Repousse à demain l'échéance de mes billets en retard","week":"Mets un checkpoint à vendredi 15 h sur mes billets de la semaine"}},
     quickClear: "Effacer",
     milestone: {
       label: "Checkpoint",

@@ -8797,3 +8797,52 @@ describe("the day of a technician: tickets by checkpoint or due date; meeting po
     expect((await tech.put("/api/meetings/points/order", { ids: [a] })).status).toBe(403);
   });
 });
+
+describe("the AI assistant of the tickets page: only what the person may do, nothing done by the AI", () => {
+  it("proposes actions limited to the person's rights and to the tickets shown; a deletion only for who may delete", async () => {
+    resetRateLimit("login:ip:unknown");
+    const admin = await signIn("admin@akab.local");
+    const tech = await signIn("tech@akab.local");
+    const [t1] = await db().select().from(schema.users).where(eq(schema.users.email, "tech@akab.local"));
+    // a technician has no AI right by default
+    expect((await tech.post("/api/tickets/ai/assistant", { message: "Planifie mes billets" })).status).toBe(403);
+    await admin.put("/api/admin/integrations/ai", { apiKey: "sk-ant-test-secret", enabled: true, model: "claude-haiku-5-5" });
+    expect((await admin.put(`/api/admin/users/${t1.id}/permissions`, { overrides: [{ key: "tickets.ai", effect: "allow" }] })).status).toBe(200);
+    const target = (await admin.get("/api/tickets?view=all")).json.items.find((x: any) => x.statusKind !== "complete");
+    const sent: any[] = [];
+    vi.stubGlobal("fetch", vi.fn(async (_url: unknown, init: RequestInit = {}) => {
+      sent.push(JSON.parse(String(init.body)));
+      const text = JSON.stringify({
+        reply: "Voici ce que je propose.",
+        actions: [
+          { type: "set_due", id: target.id, date: "2031-05-02" },
+          { type: "delete_ticket", id: target.id },
+          { type: "set_due", id: 987654321, date: "2031-05-02" },
+          { type: "refund_invoice", id: target.id },
+        ],
+      });
+      return new Response(JSON.stringify({ content: [{ type: "text", text }] }), { status: 200 });
+    }));
+    try {
+      // an administrator may delete: the action is offered, with the request the screen will send (and which checks again)
+      const asAdmin = (await admin.post("/api/tickets/ai/assistant", { message: `Pousse ${target.number} au 2 mai 2031 et supprime-le` })).json;
+      expect(asAdmin.actions.map((a: any) => a.type)).toEqual(["set_due", "delete_ticket"]);
+      expect(asAdmin.actions[0].request).toMatchObject({ method: "PATCH", path: `/tickets/${target.id}`, body: { dueDate: "2031-05-02" } });
+      // a technician with the AI right but not the right to delete: the AI is not even told about deleting, and a deletion it invents is dropped
+      const asTech = (await tech.post("/api/tickets/ai/assistant", { message: `Pousse ${target.number} au 2 mai 2031 et supprime-le` })).json;
+      expect(sent[sent.length - 1].messages[0].content).not.toContain("delete_ticket {");
+      expect(asTech.actions.map((a: any) => a.type)).toEqual(["set_due"]);
+      expect(asTech.refused.length).toBeGreaterThan(0);
+      // unknown ticket and unknown action types never come back
+      expect(JSON.stringify(asTech)).not.toContain("987654321");
+      expect(JSON.stringify(asTech)).not.toContain("refund");
+      // and the actual deletion still needs the right on the route itself
+      expect((await tech.del(`/api/tickets/${target.id}`)).status).toBe(403);
+      // nothing was changed by asking
+      expect((await admin.get(`/api/tickets/${target.id}`)).json.dueAt.slice(0, 4)).not.toBe("2031");
+    } finally {
+      vi.unstubAllGlobals();
+      await admin.put(`/api/admin/users/${t1.id}/permissions`, { overrides: [] });
+    }
+  });
+});
