@@ -24,11 +24,11 @@ export type PayrollRow = {
   active: boolean;
 };
 
-/** Active staff who are paid through the portal: they fill a timesheet, or already have a wage or a plan. */
+/** Every active staff member, the owners included (they may not fill a timesheet, but still have a pay to plan). */
 export async function payrollTable(today: string): Promise<PayrollRow[]> {
   const d = db();
   const staff = await d
-    .select({ id: schema.users.id, name: schema.users.name, required: schema.users.timesheetRequired })
+    .select({ id: schema.users.id, name: schema.users.name })
     .from(schema.users)
     .where(and(eq(schema.users.kind, "staff"), eq(schema.users.active, true)));
   const ids = staff.map((s) => s.id);
@@ -40,7 +40,6 @@ export async function payrollTable(today: string): Promise<PayrollRow[]> {
   for (const s of staff) {
     const plan = plans.get(s.id);
     const wage = wages.get(s.id) ?? null;
-    if (!s.required && wage === null && !plan) continue;
     const paid: number[] = [];
     let last: number | null = null;
     for (let i = 0; i < AVERAGE_WEEKS && wage !== null; i++) {
