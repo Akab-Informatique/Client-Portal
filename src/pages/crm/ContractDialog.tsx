@@ -130,9 +130,16 @@ function ServiceAdder({ term, onAdd, busy, heading = true, bundled = false }: { 
   return (
     <div className="space-y-3 rounded-xl border bg-background/30 p-3">
       {heading && (
-        <p className="flex items-center gap-1.5 text-xs font-medium">
-          <Plus className="size-3.5 text-primary" /> {t("crm.contracts.addService")}
-        </p>
+        <div className="flex items-center justify-between gap-2">
+          <p className="flex items-center gap-1.5 text-xs font-medium">
+            <Plus className="size-3.5 text-primary" /> {t("crm.contracts.addService")}
+          </p>
+          {canMake && (
+            <Button type="button" size="sm" variant="outline" onClick={() => setMaking(true)}>
+              <Plus className="size-3.5" /> {t("crm.contracts.newService")}
+            </Button>
+          )}
+        </div>
       )}
       {maker}
       <div className={cn("grid gap-2", bundled ? "sm:grid-cols-[1fr_5rem_9rem]" : "sm:grid-cols-[1fr_5rem_9rem_7rem]")}>
