@@ -320,6 +320,11 @@ Sidebar: **Projets** is an entry of the Centre de commande now (still "upcoming"
 - Nobody approves their own timesheet or expense. Invoice creation is one transaction. QuickBooks creations carry a `requestid` (idempotent) and run one at a time.
 - One app instance only (in-process locks, numbering, background jobs).
 
+## Email text in tickets (latest)
+
+- An email's plain text is cleaned before it becomes a ticket description or note (`cleanEmailText` in `server/lib/emailClean.ts`, used by `messageText` in `server/lib/outlook.ts`, so the support-mailbox intake, Outlook › "Create a ticket" and "Add to a ticket" all get it): the Inky phishing-filter banner (from "Mise en garde / Caution :" to the AKAB protection line, with the mail system's preview line above it), `<mailto:…>` / `<tel:…>` / `<https://…>` written after a name or link, links over 90 characters (shortened to "[lien : site]"), `[Logo image]` / `[Footer image]` / `[cid:…]` lines and the confidentiality notice at the end. Tickets already made keep their text. Test: `tests/emailClean.test.ts`.
+- `Textarea` (`src/components/ui/textarea.tsx`) grows with its text (`field-sizing-content`) but stops at 50 % of the screen height and scrolls, never wider than its box — a long pasted email used to stretch the New ticket window over the whole page.
+
 ## Production
 
 Docker Compose on a Debian server; Nginx Proxy Manager on another server terminates HTTPS and forwards to port 3000. Owner runs deployments (see INSTALL.md). Never `docker compose down -v`.

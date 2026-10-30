@@ -1,4 +1,5 @@
 import { GRAPH_BASE, graph, O365Error, user } from "./o365.ts";
+import { cleanEmailText } from "./emailClean.ts";
 
 /**
  * Outlook module: AKAB Microsoft 365 mailboxes through Microsoft Graph,
@@ -241,10 +242,7 @@ export async function messageText(mailbox: string, id: string): Promise<MailMess
     html: "",
     attachments: [],
     folderId: "",
-    text: (m.body?.content ?? "")
-      .replace(/\r\n/g, "\n")
-      .replace(/\n{3,}/g, "\n\n")
-      .trim(),
+    text: cleanEmailText(m.body?.content ?? ""),
   };
 }
 

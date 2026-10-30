@@ -124,7 +124,7 @@ export function NewTicketDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="sm:max-w-2xl">
+      <DialogContent className="max-h-[92vh] overflow-y-auto sm:max-w-2xl">
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
             <Ticket className="size-5 text-primary" /> {t("tickets.new")}
@@ -166,7 +166,7 @@ export function NewTicketDialog({
           </div>
           <div className="space-y-2">
             <Label htmlFor="nt-desc">{t("tickets.description")}</Label>
-            <AiTextarea id="nt-desc" rows={4} value={f.description} onChange={(e) => setF({ ...f, description: e.target.value })} />
+            <AiTextarea id="nt-desc" rows={6} className="max-h-72 break-words" value={f.description} onChange={(e) => setF({ ...f, description: e.target.value })} />
           </div>
 
           <div className="space-y-2">
