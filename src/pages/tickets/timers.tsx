@@ -374,12 +374,12 @@ function TimeEntryDialog({ timer, position, onLater }: { timer: Timer; position:
   const txt = useChoiceText();
   // the ticket's status and due date can change with the time entered
   const [statusNew, setStatusNew] = useState("");
-  const [dueNew, setDueNew] = useState("");
-  const [dueChanged, setDueChanged] = useState(false);
-  const localInput = (iso: string) => {
-    const d = new Date(iso);
-    return Number.isNaN(d.getTime()) ? "" : new Date(d.getTime() - d.getTimezoneOffset() * 60_000).toISOString().slice(0, 16);
-  };
+  // the checkpoint (a day and a time) can move with the work; the due date is not asked here
+  const [cpDate, setCpDate] = useState<string | null>(null);
+  const [cpTime, setCpTime] = useState<string | null>(null);
+  const cpDay = cpDate ?? ticket?.milestoneDate ?? "";
+  const cpClock = cpTime ?? ticket?.milestoneTime ?? (cpDay ? "17:00" : "");
+  const cpChanged = cpDate !== null || cpTime !== null;
   const [workType, setWorkType] = useState("");
   // billed to the client, and the hours worked but not billed
   const [billableOn, setBillableOn] = useState(true);
@@ -406,8 +406,8 @@ function TimeEntryDialog({ timer, position, onLater }: { timer: Timer; position:
     void qc.invalidateQueries({ queryKey: ["tickets"] });
   };
   const submit = useMutation({
-    mutationFn: () =>
-      api.post<{ notified?: number; notifyFailed?: number; noContactEmail?: boolean }>(`/tickets/timers/${timer.id}/submit`, {
+    mutationFn: async () => {
+      const r = await api.post<{ notified?: number; notifyFailed?: number; noContactEmail?: boolean }>(`/tickets/timers/${timer.id}/submit`, {
         hours: h,
         summary,
         internal,
@@ -418,9 +418,18 @@ function TimeEntryDialog({ timer, position, onLater }: { timer: Timer; position:
         contractId: contract?.id ?? null,
         // what changes on the ticket with this time: its status and due date, only when changed
         ...(statusNew && statusNew !== ticket?.status ? { status: statusNew } : {}),
-        ...(dueChanged && dueNew ? { dueAt: new Date(dueNew).toISOString() } : {}),
         notify: { contact: notifyContact, others },
-      }),
+      });
+      // the checkpoint, when it was changed (the time is saved first: a failure here is told, not lost)
+      if (cpChanged) {
+        try {
+          await api.put(`/tickets/${timer.ticketId}/start-date`, cpDay ? { milestoneDate: cpDay, milestoneTime: cpClock || "17:00" } : { milestoneDate: null });
+        } catch (e) {
+          toast.error(ticketErrorText(t, e));
+        }
+      }
+      return r;
+    },
     onSuccess: (r: { notified?: number; notifyFailed?: number; noContactEmail?: boolean }) => {
       toast.success(t("tickets.timer.saved"));
       if (r?.notified) toast.success(t("tickets.timer.notified", { count: r.notified }));
@@ -578,7 +587,7 @@ function TimeEntryDialog({ timer, position, onLater }: { timer: Timer; position:
                   : t("tickets.timer.notBilled")}
             </p>
           </div>
-          {/* what the ticket becomes with this work: its status and its due date */}
+          {/* what the ticket becomes with this work: its status and its checkpoint */}
           {ticket && (
             <div className="grid gap-3 sm:grid-cols-2">
               <div className="space-y-1.5">
@@ -599,8 +608,11 @@ function TimeEntryDialog({ timer, position, onLater }: { timer: Timer; position:
                 </select>
               </div>
               <div className="space-y-1.5">
-                <Label htmlFor="te-due">{t("tickets.fields.due")}</Label>
-                <Input id="te-due" type="datetime-local" value={dueNew || localInput(ticket.dueAt)} onChange={(e) => (setDueNew(e.target.value), setDueChanged(true))} />
+                <Label htmlFor="te-cp">{t("tickets.milestone.label")}</Label>
+                <div className="flex gap-2">
+                  <Input id="te-cp" type="date" className="min-w-0 flex-1" value={cpDay} min={ticket.startDate ?? undefined} onChange={(e) => (setCpDate(e.target.value), e.target.value && !cpClock && setCpTime("17:00"))} />
+                  <Input type="time" className="w-28 shrink-0" value={cpClock} disabled={!cpDay} aria-label={t("tickets.milestone.time")} onChange={(e) => setCpTime(e.target.value)} />
+                </div>
               </div>
             </div>
           )}
