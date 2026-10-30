@@ -7479,6 +7479,17 @@ describe("billing contact", () => {
     // a contact of another client is refused; removing keeps the address
     await admin.put(`/api/crm/clients/${cl.id}/billing-contact`, { contactId: ana.id });
     expect((await admin.put(`/api/crm/clients/${cl.id}/billing-contact`, { contactId: null })).json).toMatchObject({ billingContactId: null, billingEmail: "ana@nouveau.test" });
+    // a client with a single contact: it is the main one and the billing one
+    const solo = (await admin.post("/api/crm/clients", { name: "Client un seul contact", phone: "450-555-8803" })).json;
+    const made = (await admin.post(`/api/crm/clients/${solo.id}/contacts`, { firstName: "Seul", lastName: "Contact", email: "seul@solo.test" })).json;
+    expect((await admin.get(`/api/crm/clients/${solo.id}`)).json.invoice).toMatchObject({ billingContactId: made.id, billingEmail: "seul@solo.test" });
+    expect((await admin.get(`/api/crm/clients/${solo.id}/contacts`)).json[0]).toMatchObject({ isPrimary: true, billing: true });
+    // a second contact changes nothing by itself; the main contact is picked (one at most)
+    const second = (await admin.post(`/api/crm/clients/${solo.id}/contacts`, { firstName: "Deux", lastName: "Contact", email: "deux@solo.test" })).json;
+    expect((await admin.put(`/api/crm/clients/${solo.id}/primary-contact`, { contactId: second.id })).json.primaryContactId).toBe(second.id);
+    expect((await admin.get(`/api/crm/clients/${solo.id}/contacts`)).json.map((x: any) => [x.firstName, x.isPrimary]).sort()).toEqual([["Deux", true], ["Seul", false]]);
+    expect((await admin.put(`/api/crm/clients/${solo.id}/primary-contact`, { contactId: null })).json.primaryContactId).toBeNull();
+    expect((await admin.put(`/api/crm/clients/${cl.id}/primary-contact`, { contactId: second.id })).status).toBe(404);
     const other = (await admin.post("/api/crm/clients", { name: "Autre client facturation", phone: "450-555-8802" })).json;
     expect((await admin.put(`/api/crm/clients/${other.id}/billing-contact`, { contactId: ana.id })).status).toBe(404);
   });

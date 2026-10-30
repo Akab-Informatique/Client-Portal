@@ -12,6 +12,7 @@ import { provisionPortalUsers, sendPortalWelcomes } from "../lib/portalUsers.ts"
 import { clientRoleId, ensureClientRoles } from "../lib/clientRoles.ts";
 import { audit } from "../lib/audit.ts";
 import { rateLimit } from "../lib/http.ts";
+import { ensureSoleContact } from "../lib/contactDefaults.ts";
 import { body, zEmail, zOptText, zUuid } from "../lib/validate.ts";
 import { ticketSource, type NTicket } from "../lib/ticketSource.ts";
 import { crmState, descendantsOf, ensureCrm, rememberCompany, rememberContact, syncCrm } from "../lib/crm.ts";
@@ -342,6 +343,7 @@ export const crmRoutes = new Hono<AppEnv>()
       await db().insert(schema.clientContacts).values({ clientId: client.id, ...fields });
     }
     await provisionPortalUsers(client.id);
+    await ensureSoleContact(client.id);
     await audit(a.user.id, "crm.contact_created", client.id, { name: `${p.firstName} ${p.lastName}` });
     const [row] = await db()
       .select()
@@ -412,8 +414,28 @@ export const crmRoutes = new Hono<AppEnv>()
     }
     // an email just added, or a contact brought back: its account is made
     if (!contact.userId && (p.email || p.active === true)) await provisionPortalUsers(client.id);
+    if (p.active !== undefined || p.email !== undefined) await ensureSoleContact(client.id);
     await audit(a.user.id, "crm.contact_updated", client.id, { contact: contact.id, fields: Object.keys(p) });
     return c.json(row);
+  })
+
+  /** The client's main contact (one at most; null: none). */
+  .put("/clients/:id/primary-contact", requirePermission("crm.edit"), async (c) => {
+    const a = auth(c);
+    const client = await clientOr404(c.req.param("id"));
+    const p = await body(c, z.object({ contactId: zUuid.nullable() }));
+    const d = db();
+    if (p.contactId !== null) {
+      const [contact] = await d.select().from(schema.clientContacts).where(and(eq(schema.clientContacts.id, p.contactId), eq(schema.clientContacts.clientId, client.id)));
+      if (!contact) throw new HTTPException(404, { message: "not_found" });
+      if (!contact.active) throw new HTTPException(409, { message: "contact_inactive" });
+    }
+    await d.transaction(async (tx) => {
+      await tx.update(schema.clientContacts).set({ isPrimary: false }).where(and(eq(schema.clientContacts.clientId, client.id), eq(schema.clientContacts.isPrimary, true)));
+      if (p.contactId !== null) await tx.update(schema.clientContacts).set({ isPrimary: true, updatedAt: new Date() }).where(eq(schema.clientContacts.id, p.contactId));
+    });
+    await audit(a.user.id, "crm.primary_contact_set", client.id, { contact: p.contactId });
+    return c.json({ primaryContactId: p.contactId });
   })
 
   /** The contact invoices go to by default: their address becomes the client's billing email (null: no default contact, the address stays). */

@@ -27,6 +27,7 @@ import {
   RefreshCw,
   Search,
   Smartphone,
+  Star,
   KeyRound,
   Ticket,
   Trash2,
@@ -857,6 +858,14 @@ function ContactsTab({ client }: { client: CrmDetail }) {
     },
     onError: (e) => toast.error(ticketErrorText(t, e)),
   });
+  const primaryContact = useMutation({
+    mutationFn: (c: CrmContact) => api.put(`/crm/clients/${client.id}/primary-contact`, { contactId: c.isPrimary ? null : c.id }),
+    onSuccess: (_r, c) => {
+      refresh();
+      toast.success(c.isPrimary ? t("crm.contacts.primaryCleared") : t("crm.contacts.primaryDone", { name: `${c.firstName} ${c.lastName}`.trim() }));
+    },
+    onError: (e) => toast.error(ticketErrorText(t, e)),
+  });
   const canBilling = can("crm.billing");
   const toggle = useMutation({
     mutationFn: (c: CrmContact) => api.patch(`/crm/clients/${client.id}/contacts/${c.id}`, { active: !c.active }),
@@ -910,7 +919,8 @@ function ContactsTab({ client }: { client: CrmDetail }) {
               key={c.id}
               className={cn(
                 "group cursor-pointer rounded-xl border bg-background/30 p-3 transition-colors hover:border-[color:var(--gold)]/40",
-                c.billing && "border-emerald-500/50 bg-emerald-500/[0.07] hover:border-emerald-400/70",
+                c.billing && !c.isPrimary && "border-emerald-500/50 bg-emerald-500/[0.07] hover:border-emerald-400/70",
+                c.isPrimary && "border-[color:var(--gold)]/60 bg-[color:var(--gold)]/[0.08] hover:border-[color:var(--gold)]/80",
                 !c.active && "opacity-60",
               )}
               onClick={(e) => {
@@ -920,13 +930,18 @@ function ContactsTab({ client }: { client: CrmDetail }) {
               }}
             >
               <div className="flex items-start gap-2.5">
-                <span className={cn("grid size-8 shrink-0 place-items-center rounded-full border bg-card", c.billing && "border-emerald-500/60 bg-emerald-500/15")}>
-                  {c.billing ? <Receipt className="size-4 text-emerald-400" /> : <UserRound className="size-4 text-muted-foreground" />}
+                <span className={cn("grid size-8 shrink-0 place-items-center rounded-full border bg-card", c.billing && "border-emerald-500/60 bg-emerald-500/15", c.isPrimary && "border-[color:var(--gold)]/70 bg-[color:var(--gold)]/15")}>
+                  {c.isPrimary ? <Star className="size-4 fill-[color:var(--gold)] text-primary" /> : c.billing ? <Receipt className="size-4 text-emerald-400" /> : <UserRound className="size-4 text-muted-foreground" />}
                 </span>
                 <div className="min-w-0 flex-1">
                   <p className="truncate text-sm font-medium">
                     {c.firstName} {c.lastName}
                     {!c.active && <span className="ml-2 text-[10px] font-normal text-muted-foreground">{t("crm.contacts.inactive")}</span>}
+                    {c.isPrimary && (
+                      <span className="ml-2 rounded-full border border-[color:var(--gold)]/50 bg-[color:var(--gold)]/15 px-1.5 py-0.5 align-middle text-[10px] font-semibold text-primary" title={t("crm.contacts.primaryHint")}>
+                        {t("crm.contacts.primary")}
+                      </span>
+                    )}
                     {c.billing && (
                       <span className="ml-2 rounded-full border border-emerald-500/40 bg-emerald-500/15 px-1.5 py-0.5 align-middle text-[10px] font-semibold text-emerald-300" title={t("crm.contacts.billingHint")}>
                         {t("crm.contacts.billing")}
@@ -955,6 +970,18 @@ function ContactsTab({ client }: { client: CrmDetail }) {
                 </div>
                 {editable && (
                   <div className="flex shrink-0 flex-col items-end gap-1 opacity-0 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100">
+                    {c.active && (
+                      <button
+                        type="button"
+                        onClick={() => primaryContact.mutate(c)}
+                        disabled={primaryContact.isPending}
+                        className={cn("rounded p-1 hover:bg-accent", c.isPrimary ? "text-primary" : "text-muted-foreground hover:text-primary")}
+                        aria-label={c.isPrimary ? t("crm.contacts.primaryUnset") : t("crm.contacts.primarySet")}
+                        title={c.isPrimary ? t("crm.contacts.primaryUnset") : t("crm.contacts.primarySet")}
+                      >
+                        <Star className={cn("size-3.5", c.isPrimary && "fill-[color:var(--gold)]")} />
+                      </button>
+                    )}
                     {canBilling && c.active && (c.email || c.billing) && (
                       <button
                         type="button"

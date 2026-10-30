@@ -5,6 +5,7 @@ import { isLocalId, NATIVE_ID_START } from "./ids.ts";
 import { billingSettings } from "./billing.ts";
 import { revokeUserSessions } from "./auth.ts";
 import { forgetPasswordLinks } from "./passwordLinks.ts";
+import { ensureSoleContact } from "./contactDefaults.ts";
 import { provisionPortalUsers } from "./portalUsers.ts";
 
 /**
@@ -226,6 +227,7 @@ export async function rememberContact(companyId: number, c: { id: string; firstN
     .values({ clientId: client.id, autotaskId: c.id, firstName: c.firstName, lastName: c.lastName, email: c.email, phone: c.phone, mobile: c.mobile ?? null, title: c.title ?? null, syncedAt: new Date() })
     .onConflictDoNothing();
   await provisionPortalUsers(client.id);
+  await ensureSoleContact(client.id);
 }
 
 // ── Reads for the tickets (clients, contacts, contracts by source id) ──

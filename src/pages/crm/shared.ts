@@ -56,6 +56,8 @@ export type CrmContact = {
   active: boolean;
   /** The contact invoices go to by default */
   billing?: boolean;
+  /** The client's main contact */
+  isPrimary?: boolean;
   userId: string | null;
   /** Client portal access (null: none) */
   portal: { lastLoginAt: string | null; pending: boolean; role: string | null; /** account ready, the company's portal not open yet */ dormant: boolean } | null;

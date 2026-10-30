@@ -109,13 +109,15 @@ export const clientContacts = pgTable(
     mobile: text("mobile"),
     title: text("title"),
     active: boolean("active").notNull().default(true),
+    /** The client's main contact (one at most per client) */
+    isPrimary: boolean("is_primary").notNull().default(false),
     /** Their client portal account, once access was given */
     userId: uuid("user_id").references(() => users.id, { onDelete: "set null" }),
     syncedAt: timestamp("synced_at", { withTimezone: true }),
     createdAt: created(),
     updatedAt: updated(),
   },
-  (t) => [uniqueIndex("client_contacts_autotask_idx").on(t.autotaskId), index("client_contacts_client_idx").on(t.clientId), uniqueIndex("client_contacts_user_idx").on(t.userId)],
+  (t) => [uniqueIndex("client_contacts_autotask_idx").on(t.autotaskId), index("client_contacts_client_idx").on(t.clientId), uniqueIndex("client_contacts_user_idx").on(t.userId), uniqueIndex("client_contacts_primary_idx").on(t.clientId).where(sql`${t.isPrimary}`)],
 );
 
 /** A client's contracts (Autotask Contracts). */
