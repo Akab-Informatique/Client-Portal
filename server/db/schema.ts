@@ -2717,3 +2717,30 @@ export const salesOpportunities = pgTable(
   },
   (t) => [index("sales_opps_stage_idx").on(t.stage, t.closedOn), index("sales_opps_owner_idx").on(t.ownerId), index("sales_opps_follow_idx").on(t.nextFollowUp)],
 );
+
+/** Bills from the company's vendors, copied from QuickBooks (Accounting › Paiements fournisseurs): what is due and when */
+export const vendorBills = pgTable(
+  "vendor_bills",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    /** The Bill in QuickBooks */
+    quickbooksId: text("quickbooks_id").notNull(),
+    /** The portal vendor tied to the QuickBooks vendor, when there is one */
+    vendorId: uuid("vendor_id").references(() => vendors.id, { onDelete: "set null" }),
+    qbVendorId: text("qb_vendor_id"),
+    vendorName: text("vendor_name").notNull(),
+    docNumber: text("doc_number"),
+    /** YYYY-MM-DD */
+    issuedOn: text("issued_on").notNull(),
+    dueOn: text("due_on"),
+    totalCents: bigint("total_cents", { mode: "number" }).notNull().default(0),
+    /** What is still to pay (0 = paid) */
+    balanceCents: bigint("balance_cents", { mode: "number" }).notNull().default(0),
+    memo: text("memo"),
+    qbUpdatedAt: timestamp("qb_updated_at", { withTimezone: true }),
+    syncedAt: timestamp("synced_at", { withTimezone: true }).notNull().defaultNow(),
+    createdAt: created(),
+    updatedAt: updated(),
+  },
+  (t) => [uniqueIndex("vendor_bills_quickbooks_idx").on(t.quickbooksId), index("vendor_bills_due_idx").on(t.dueOn), index("vendor_bills_vendor_idx").on(t.vendorId)],
+);

@@ -34,7 +34,7 @@ type QuickBooks = {
   realmId: string | null;
   companyName: string | null;
   connectedAt: string | null;
-  sync: { invoices: boolean; invoicesIn: boolean; payments: boolean; customers: boolean; accounts: boolean; vendors: boolean; timesheets: boolean; expenses: boolean };
+  sync: { invoices: boolean; invoicesIn: boolean; payments: boolean; customers: boolean; accounts: boolean; vendors: boolean; bills: boolean; timesheets: boolean; expenses: boolean };
   runs: { clients?: SyncRun; accounts?: SyncRun; vendors?: SyncRun };
   invoicesFromNumber: number;
   invoicesFromDate: string | null;
@@ -227,7 +227,7 @@ function QuickBooksTab() {
 
       <Card title={t("billing.qb.sync")} text={t("billing.qb.syncText")} aside={<Switch checked={q.enabled} disabled={!q.connected} onCheckedChange={(v) => toggle.mutate({ enabled: v })} aria-label={t("billing.enabled")} />}>
         <div className="grid gap-2 sm:grid-cols-3">
-          {(["customers", "accounts", "vendors", "invoicesIn", "invoices", "payments", "timesheets", "expenses"] as const).map((k) => (
+          {(["customers", "accounts", "vendors", "bills", "invoicesIn", "invoices", "payments", "timesheets", "expenses"] as const).map((k) => (
             <label key={k} className="flex items-start gap-2 rounded-xl border p-3 text-sm">
               {/* timesheets and expenses are paused (accounting marks them paid in the portal) */}
               <Switch

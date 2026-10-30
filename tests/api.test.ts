@@ -8956,3 +8956,65 @@ describe("a checkpoint always has a time", () => {
     expect(list.find((x: any) => x.id === b.id)).toMatchObject({ milestoneDate: "2031-03-06", milestoneTime: "17:00" });
   });
 });
+
+describe("vendor payments: the vendors' bills of QuickBooks on a calendar", () => {
+  let bills: any[] = [];
+  const json = (b: unknown) => new Response(JSON.stringify(b), { status: 200, headers: { "content-type": "application/json" } });
+  const day = (n: number) => new Date(Date.now() + n * 86_400_000).toLocaleDateString("en-CA", { timeZone: "America/Toronto" });
+  const bill = (Id: string, name: string, due: string | null, total: number, balance: number) => ({ Id, DocNumber: `F-${Id}`, TxnDate: day(-30), DueDate: due ?? undefined, TotalAmt: total, Balance: balance, VendorRef: { value: `v-${name}`, name }, MetaData: { LastUpdatedTime: new Date().toISOString() } });
+  beforeAll(async () => {
+    const { saveQuickBooksSettings } = await import("../server/lib/billing.ts");
+    // a new app id first (it resets the connection), then the connection itself
+    await saveQuickBooksSettings(null, { clientId: "ABvb", environment: "sandbox" });
+    await saveQuickBooksSettings(null, { clientId: "ABvb", clientSecret: "qb-secret", environment: "sandbox", realmId: "9131", refreshToken: "qb-refresh", connectedAt: new Date().toISOString(), enabled: true });
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: unknown) => {
+        const url = decodeURIComponent(String(input));
+        if (url.startsWith("https://oauth.platform.intuit.com/")) return json({ access_token: "qb-access", refresh_token: "qb-refresh" });
+        if (!url.includes("select * from Bill")) return json({ QueryResponse: {} });
+        let rows = bills;
+        if (url.includes("Balance > '0'")) rows = bills.filter((b) => b.Balance > 0);
+        const ids = url.match(/Id IN \(([^)]*)\)/)?.[1];
+        if (ids) rows = bills.filter((b) => ids.includes(`'${b.Id}'`));
+        return json({ QueryResponse: rows.length ? { Bill: rows } : {} });
+      }),
+    );
+  });
+  afterAll(() => vi.unstubAllGlobals());
+
+  it("copies the bills, sums what is due and when, and follows a payment or a deletion made in QuickBooks", async () => {
+    const admin = await signIn("admin@akab.local");
+    const tech = await signIn("tech@akab.local");
+    bills = [bill("1", "Distributeur TI", day(-5), 1000, 1000), bill("2", "Bureau en gros", day(3), 250, 100), bill("3", "Hydro", day(20), 500, 500), bill("4", "Déjà payé", day(-2), 90, 0), bill("5", "Sans date", null, 70, 70)];
+
+    const first = await admin.post("/api/vendor-payments/sync");
+    expect(first.status).toBe(200);
+    expect(first.json).toMatchObject({ added: 5, updated: 0, removed: 0 });
+    // read only for the rest: a second pass changes nothing
+    expect((await admin.post("/api/vendor-payments/sync")).json).toMatchObject({ added: 0, updated: 0 });
+
+    const summary = (await admin.get("/api/vendor-payments/summary")).json;
+    expect(summary.overdue).toEqual({ count: 1, cents: 100000 });
+    expect(summary.next7).toEqual({ count: 1, cents: 10000 });
+    expect(summary.next30).toEqual({ count: 2, cents: 60000 });
+    expect(summary.noDue).toEqual({ count: 1, cents: 7000 });
+
+    const open = (await admin.get("/api/vendor-payments/bills?status=open")).json;
+    expect(open.bills.map((b: any) => b.vendor)).toEqual(["Distributeur TI", "Bureau en gros", "Hydro", "Sans date"]);
+    expect(open.bills.find((b: any) => b.vendor === "Distributeur TI")).toMatchObject({ status: "overdue", daysLate: 5, balanceCents: 100000 });
+    expect(open.bills.find((b: any) => b.vendor === "Bureau en gros")).toMatchObject({ status: "open", totalCents: 25000, balanceCents: 10000 });
+    expect((await admin.get("/api/vendor-payments/bills?status=paid")).json.bills.map((b: any) => b.vendor)).toEqual(["Déjà payé"]);
+    expect((await admin.get(`/api/vendor-payments/bills?status=open&from=${day(0)}&to=${day(10)}`)).json.bills.map((b: any) => b.vendor)).toEqual(["Bureau en gros"]);
+
+    // QuickBooks: the first is paid, the second deleted
+    bills = [bill("1", "Distributeur TI", day(-5), 1000, 0), bill("3", "Hydro", day(20), 500, 500), bill("4", "Déjà payé", day(-2), 90, 0), bill("5", "Sans date", null, 70, 70)];
+    const next = await admin.post("/api/vendor-payments/sync");
+    expect(next.json).toMatchObject({ updated: 1, removed: 1 });
+    expect((await admin.get("/api/vendor-payments/summary")).json.overdue).toEqual({ count: 0, cents: 0 });
+
+    // rights: a technician has no accounting
+    expect((await tech.get("/api/vendor-payments/summary")).status).toBe(403);
+    expect((await tech.post("/api/vendor-payments/sync")).status).toBe(403);
+  });
+});

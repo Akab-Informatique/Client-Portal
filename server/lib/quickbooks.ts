@@ -3,6 +3,7 @@ import { and, asc, desc, eq, ilike, inArray, isNotNull, isNull } from "drizzle-o
 import { db, schema } from "../db/index.ts";
 import { addDays, linkDefaultAccounts, typesById, weekByDayAndType } from "./timesheets.ts";
 import { syncAll } from "./qbSync.ts";
+import { pullBills } from "./vendorBills.ts";
 import { billingSettings, saveBillingSettings, ledger, qbApi, qbToken, quickbooksSettings, saveQuickBooksSettings, type LedgerType, type QuickBooksSettings } from "./billing.ts";
 
 /**
@@ -1027,6 +1028,7 @@ async function tickNow() {
   await syncAll(null).catch(warn("sync"));
   if (s.sync.invoicesIn) await pullInvoices(null).catch(warn("invoices in"));
   if (s.sync.payments) await pullPayments(null).catch(warn("payments"));
+  if (s.sync.bills) await pullBills(null).catch(warn("bills"));
   const d = db();
   if (s.sync.invoices) {
     const rows = await d.select({ id: schema.clientInvoices.id }).from(schema.clientInvoices).where(and(eq(schema.clientInvoices.source, "portal"), isNull(schema.clientInvoices.quickbooksId), eq(schema.clientInvoices.voided, false)));

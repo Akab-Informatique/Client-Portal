@@ -25,6 +25,7 @@ export const pageLoaders = {
   accounting: () => import("@/pages/accounting/AccountingPage"),
   approvals: () => import("@/pages/accounting/ApprovalsPage"),
   payments: () => import("@/pages/accounting/PaymentsPage"),
+  vendorPayments: () => import("@/pages/accounting/VendorPaymentsPage"),
   sales: () => import("@/pages/sales/SalesPage"),
   quotes: () => import("@/pages/quotes/QuotesPage"),
   quote: () => import("@/pages/quotes/QuoteEditor"),
@@ -51,6 +52,7 @@ const byPath: Record<string, () => Promise<unknown>> = {
   "/accounting/quotes": pageLoaders.quotes,
   "/accounting/approvals": pageLoaders.approvals,
   "/accounting/payments": pageLoaders.payments,
+  "/accounting/vendor-payments": pageLoaders.vendorPayments,
   "/timesheets": pageLoaders.timesheet,
   "/expenses": pageLoaders.expenses,
 };

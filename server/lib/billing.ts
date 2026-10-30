@@ -185,7 +185,7 @@ export type QuickBooksSettings = {
   companyName: string | null;
   connectedAt: string | null;
   /** invoices: portal invoices sent to QuickBooks · invoicesIn: QuickBooks invoices (and their status) brought in */
-  sync: { invoices: boolean; invoicesIn: boolean; payments: boolean; customers: boolean; accounts: boolean; vendors: boolean; timesheets: boolean; expenses: boolean };
+  sync: { invoices: boolean; invoicesIn: boolean; payments: boolean; customers: boolean; accounts: boolean; vendors: boolean; bills: boolean; timesheets: boolean; expenses: boolean };
   /** QuickBooks invoices are brought in from this invoice number on (mode "number") or from this day on (mode "date") */
   invoicesFromNumber: number;
   invoicesFromDate: string | null;
@@ -199,6 +199,7 @@ export type QuickBooksSettings = {
     accounts?: { at: string; matched: number; created: number };
     items?: { at: string; items: number; categories: number; products: number };
     invoices?: { at: string; added: number; updated: number; unmapped: number; total: number };
+    bills?: { at: string; added: number; updated: number; removed: number; total: number };
   };
   /** The last two-way pass of each part (clients, accounts, vendors); accounts also keeps when it started (accounts made here since are made in QuickBooks too) */
   runs: { clients?: SyncRun; accounts?: SyncRun & { since?: string }; vendors?: SyncRun };
@@ -223,7 +224,7 @@ export async function quickbooksSettings(): Promise<QuickBooksSettings> {
     realmId: c.realmId ?? null,
     companyName: c.companyName ?? null,
     connectedAt: c.connectedAt ?? null,
-    sync: { invoices: true, invoicesIn: true, payments: true, customers: true, accounts: true, vendors: true, timesheets: true, expenses: true, ...c.sync },
+    sync: { invoices: true, invoicesIn: true, payments: true, customers: true, accounts: true, vendors: true, bills: true, timesheets: true, expenses: true, ...c.sync },
     invoicesFromNumber: c.invoicesFromNumber ?? 10000,
     invoicesFromDate: c.invoicesFromDate ?? null,
     invoicesMode: c.invoicesMode === "date" ? "date" : "number",
