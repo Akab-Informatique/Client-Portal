@@ -8833,6 +8833,11 @@ describe("the AI assistant of the tickets page: only what the person may do, not
       expect(sent[sent.length - 1].messages[0].content).not.toContain("delete_ticket {");
       expect(asTech.actions.map((a: any) => a.type)).toEqual(["set_due"]);
       expect(asTech.refused.length).toBeGreaterThan(0);
+      // a conversation: the earlier turns go back to the AI, so it can ask a question and continue with the answer
+      await tech.post("/api/tickets/ai/assistant", { message: "demain", history: [{ role: "user", text: "Pousse mon billet" }, { role: "assistant", text: "Quel billet ?" }] });
+      const lastPrompt = sent[sent.length - 1].messages[0].content;
+      expect(lastPrompt).toContain("Quel billet ?");
+      expect(lastPrompt).toContain("Dernier message de la personne : demain");
       // unknown ticket and unknown action types never come back
       expect(JSON.stringify(asTech)).not.toContain("987654321");
       expect(JSON.stringify(asTech)).not.toContain("refund");

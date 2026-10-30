@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
@@ -15,11 +15,14 @@ import { ticketErrorText } from "./shared";
 
 type Action = { type: string; id?: number; label: string; request: { method: "PATCH" | "PUT" | "POST" | "DELETE"; path: string; body?: unknown } | null };
 type Answer = { reply: string; actions: Action[]; refused: string[] };
+/** One turn of the conversation: what the person said, or what the assistant answered with the actions it proposes */
+type Turn = { role: "user"; text: string } | { role: "assistant"; text: string; actions: Action[]; refused: string[]; picked: Set<number>; results: Record<number, "ok" | string>; applied: boolean };
 
 /**
- * The AI assistant of the tickets page. You write what you want ("move the due date of T… to Friday", "assign my new tickets to
- * Marc", "plan my week"); the AI answers and proposes actions. It only knows the tickets you can see and only proposes what your
- * rights allow; nothing is done until you tick and apply, and each action goes through the usual routes, which check your rights again.
+ * The AI assistant of the tickets page, as a conversation. You write what you want; the AI answers, and when it needs more
+ * ("which ticket?", "what date?") it asks and you answer — it keeps the whole discussion in mind. When the request is clear it
+ * proposes actions: it only knows the tickets you can see and only proposes what your rights allow; nothing is done until you
+ * tick and apply, and each action goes through the usual routes, which check your rights again.
  */
 export function AssistantDialog({ onClose, onPlan }: { onClose: () => void; onPlan: () => void }) {
   const { t } = useTranslation();
@@ -27,25 +30,47 @@ export function AssistantDialog({ onClose, onPlan }: { onClose: () => void; onPl
   const confirm = useConfirm();
   const aiError = useAiError();
   const [text, setText] = useState("");
-  const [answer, setAnswer] = useState<Answer | null>(null);
-  const [picked, setPicked] = useState<Set<number>>(new Set());
-  const [results, setResults] = useState<Record<number, "ok" | string>>({});
+  const [turns, setTurns] = useState<Turn[]>([]);
+  const bottom = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    // (braces: an effect must return nothing)
+    bottom.current?.scrollIntoView({ block: "end" });
+  }, [turns.length]);
+
+  /** What the assistant is told of the earlier turns (its own proposals, and whether they were applied) */
+  const history = (list: Turn[]) =>
+    list.slice(-14).map((x) =>
+      x.role === "user"
+        ? { role: "user" as const, text: x.text }
+        : { role: "assistant" as const, text: [x.text, ...(x.actions.length ? [`Actions proposées (${x.applied ? "appliquées" : "pas encore appliquées"}) : ${x.actions.map((a) => a.label).join(" ; ")}`] : [])].join("\n") },
+    );
   const ask = useMutation({
-    mutationFn: () => api.post<Answer>("/tickets/ai/assistant", { message: text }),
-    onSuccess: (r) => {
-      setAnswer(r);
-      setResults({});
-      // proposed actions start ticked, except a deletion (it has to be chosen on purpose)
-      setPicked(new Set(r.actions.map((a, i) => (a.type === "delete_ticket" ? -1 : i)).filter((i) => i >= 0)));
-    },
+    mutationFn: ({ message, before }: { message: string; before: Turn[] }) => api.post<Answer>("/tickets/ai/assistant", { message, history: history(before) }),
+    onSuccess: (r) =>
+      setTurns((list) => [
+        ...list,
+        // proposed actions start ticked, except a deletion (it has to be chosen on purpose)
+        { role: "assistant", text: r.reply, actions: r.actions, refused: r.refused, picked: new Set(r.actions.map((a, i) => (a.type === "delete_ticket" ? -1 : i)).filter((i) => i >= 0)), results: {}, applied: false },
+      ]),
     onError: (e) => toast.error(aiError(e)),
   });
+  const send = (message: string) => {
+    const m = message.trim();
+    if (!m || ask.isPending) return;
+    const before = turns;
+    setTurns([...before, { role: "user", text: m }]);
+    setText("");
+    ask.mutate({ message: m, before });
+  };
+
   const apply = useMutation({
-    mutationFn: async () => {
+    mutationFn: async (index: number) => {
+      const turn = turns[index];
+      if (turn?.role !== "assistant") return { index, out: {} as Record<number, "ok" | string>, plan: false };
       const out: Record<number, "ok" | string> = {};
       let plan = false;
-      for (const [i, a] of (answer?.actions ?? []).entries()) {
-        if (!picked.has(i)) continue;
+      for (const [i, a] of turn.actions.entries()) {
+        if (!turn.picked.has(i)) continue;
         if (a.type === "plan_my_tickets") {
           plan = true;
           out[i] = "ok";
@@ -53,20 +78,19 @@ export function AssistantDialog({ onClose, onPlan }: { onClose: () => void; onPl
         }
         if (!a.request) continue;
         try {
-          const path = a.request.path;
-          if (a.request.method === "PATCH") await api.patch(path, a.request.body);
-          else if (a.request.method === "PUT") await api.put(path, a.request.body);
-          else if (a.request.method === "POST") await api.post(path, a.request.body);
-          else await api.del(path);
+          if (a.request.method === "PATCH") await api.patch(a.request.path, a.request.body);
+          else if (a.request.method === "PUT") await api.put(a.request.path, a.request.body);
+          else if (a.request.method === "POST") await api.post(a.request.path, a.request.body);
+          else await api.del(a.request.path);
           out[i] = "ok";
         } catch (e) {
           out[i] = ticketErrorText(t, e);
         }
       }
-      return { out, plan };
+      return { index, out, plan };
     },
-    onSuccess: ({ out, plan }) => {
-      setResults(out);
+    onSuccess: ({ index, out, plan }) => {
+      setTurns((list) => list.map((x, i) => (i === index && x.role === "assistant" ? { ...x, results: out, applied: true } : x)));
       void qc.invalidateQueries({ queryKey: ["tickets"] });
       const failed = Object.values(out).filter((v) => v !== "ok").length;
       if (failed) toast.warning(t("tickets.assistant.someFailed", { count: failed }));
@@ -77,42 +101,36 @@ export function AssistantDialog({ onClose, onPlan }: { onClose: () => void; onPl
       }
     },
   });
-  const run = async () => {
-    const del = (answer?.actions ?? []).filter((a, i) => picked.has(i) && a.type === "delete_ticket");
+  const run = async (index: number) => {
+    const turn = turns[index];
+    if (turn?.role !== "assistant") return;
+    const del = turn.actions.filter((a, i) => turn.picked.has(i) && a.type === "delete_ticket");
     if (del.length && !(await confirm({ title: t("tickets.assistant.deleteTitle", { count: del.length }), description: del.map((d) => d.label).join("\n"), confirmLabel: t("tickets.delete.confirm"), destructive: true }))) return;
-    apply.mutate();
+    apply.mutate(index);
   };
+  const toggle = (index: number, i: number, on: boolean) =>
+    setTurns((list) =>
+      list.map((x, k) => {
+        if (k !== index || x.role !== "assistant") return x;
+        const picked = new Set(x.picked);
+        if (on) picked.add(i);
+        else picked.delete(i);
+        return { ...x, picked };
+      }),
+    );
+
   return (
     <Dialog open onOpenChange={(o) => !o && onClose()}>
-      <DialogContent className="max-h-[88vh] overflow-y-auto sm:max-w-2xl">
+      <DialogContent className="flex max-h-[88vh] flex-col sm:max-w-2xl">
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
             <Sparkles className="size-5 text-violet-300" /> {t("tickets.assistant.title")}
           </DialogTitle>
           <DialogDescription>{t("tickets.assistant.hint")}</DialogDescription>
         </DialogHeader>
-        <form
-          className="space-y-2"
-          onSubmit={(e) => {
-            e.preventDefault();
-            if (text.trim().length >= 2) ask.mutate();
-          }}
-        >
-          <Textarea
-            autoFocus
-            rows={3}
-            maxLength={2000}
-            value={text}
-            onChange={(e) => setText(e.target.value)}
-            placeholder={t("tickets.assistant.placeholder")}
-            onKeyDown={(e) => {
-              if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) {
-                e.preventDefault();
-                if (text.trim().length >= 2) ask.mutate();
-              }
-            }}
-          />
-          <div className="flex flex-wrap items-center justify-between gap-2">
+
+        <div className="min-h-32 flex-1 space-y-3 overflow-y-auto pr-1">
+          {turns.length === 0 && (
             <div className="flex flex-wrap gap-1.5">
               {["plan", "overdue", "week"].map((k) => (
                 <button key={k} type="button" onClick={() => setText(t(`tickets.assistant.example.${k}`))} className="rounded-full border px-2.5 py-0.5 text-[11px] text-muted-foreground hover:border-[color:var(--gold)]/50 hover:text-foreground">
@@ -120,43 +138,89 @@ export function AssistantDialog({ onClose, onPlan }: { onClose: () => void; onPl
                 </button>
               ))}
             </div>
-            <Button type="submit" disabled={text.trim().length < 2 || ask.isPending} className="gap-2 bg-grad-gold font-semibold text-[#1a1204]">
-              {ask.isPending ? <Loader2 className="size-4 animate-spin" /> : <Send className="size-4" />} {t("tickets.assistant.send")}
+          )}
+          {turns.map((turn, index) =>
+            turn.role === "user" ? (
+              <div key={index} className="flex justify-end">
+                <p className="max-w-[85%] whitespace-pre-wrap rounded-2xl bg-[color:var(--gold)]/15 px-3 py-2 text-sm">{turn.text}</p>
+              </div>
+            ) : (
+              <div key={index} className="space-y-2">
+                {turn.text && <p className="max-w-[92%] whitespace-pre-wrap rounded-2xl bg-violet-500/10 px-3 py-2 text-sm leading-relaxed">{turn.text}</p>}
+                {turn.refused.length > 0 && <p className="rounded-lg border border-orange-400/30 bg-orange-400/10 px-3 py-2 text-xs text-orange-200">{t("tickets.assistant.refused", { list: turn.refused.join(", ") })}</p>}
+                {turn.actions.length > 0 && (
+                  <div className="space-y-2">
+                    <p className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">{t("tickets.assistant.proposed")}</p>
+                    <ul className="divide-y rounded-xl border">
+                      {turn.actions.map((a, i) => (
+                        <li key={i} className="flex items-center gap-2.5 px-3 py-2 text-sm">
+                          <Checkbox checked={turn.picked.has(i)} disabled={apply.isPending || turn.applied} onCheckedChange={(v) => toggle(index, i, v === true)} />
+                          <span className={cn("min-w-0 flex-1", a.type === "delete_ticket" && "text-destructive")}>{a.label}</span>
+                          {turn.results[i] === "ok" && <Check className="size-4 text-emerald-400" />}
+                          {turn.results[i] && turn.results[i] !== "ok" && (
+                            <span className="flex items-center gap-1 text-xs text-destructive">
+                              <X className="size-3.5" /> {turn.results[i]}
+                            </span>
+                          )}
+                        </li>
+                      ))}
+                    </ul>
+                    {!turn.applied && (
+                      <div className="flex justify-end">
+                        <Button size="sm" disabled={!turn.picked.size || apply.isPending} onClick={() => void run(index)} className="gap-2 bg-grad-gold font-semibold text-[#1a1204]">
+                          {apply.isPending && <Loader2 className="size-4 animate-spin" />} {t("tickets.assistant.apply", { count: turn.picked.size })}
+                        </Button>
+                      </div>
+                    )}
+                  </div>
+                )}
+              </div>
+            ),
+          )}
+          {ask.isPending && (
+            <p className="flex items-center gap-2 text-sm text-muted-foreground">
+              <Loader2 className="size-4 animate-spin" /> {t("tickets.assistant.thinking")}
+            </p>
+          )}
+          <div ref={bottom} />
+        </div>
+
+        <form
+          className="space-y-1.5 border-t pt-3"
+          onSubmit={(e) => {
+            e.preventDefault();
+            send(text);
+          }}
+        >
+          <div className="flex items-end gap-2">
+            <Textarea
+              autoFocus
+              rows={2}
+              maxLength={2000}
+              value={text}
+              onChange={(e) => setText(e.target.value)}
+              placeholder={turns.length ? t("tickets.assistant.reply") : t("tickets.assistant.placeholder")}
+              onKeyDown={(e) => {
+                // Enter sends, Shift+Enter makes a new line
+                if (e.key === "Enter" && !e.shiftKey) {
+                  e.preventDefault();
+                  send(text);
+                }
+              }}
+            />
+            <Button type="submit" size="icon" disabled={!text.trim() || ask.isPending} className="size-10 shrink-0 bg-grad-gold text-[#1a1204]" aria-label={t("tickets.assistant.send")}>
+              {ask.isPending ? <Loader2 className="size-4 animate-spin" /> : <Send className="size-4" />}
             </Button>
           </div>
-        </form>
-
-        {answer && (
-          <div className="space-y-3 border-t pt-3">
-            {answer.reply && <p className="whitespace-pre-wrap text-sm leading-relaxed">{answer.reply}</p>}
-            {answer.refused.length > 0 && <p className="rounded-lg border border-orange-400/30 bg-orange-400/10 px-3 py-2 text-xs text-orange-200">{t("tickets.assistant.refused", { list: answer.refused.join(", ") })}</p>}
-            {answer.actions.length > 0 && (
-              <>
-                <p className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">{t("tickets.assistant.proposed")}</p>
-                <ul className="divide-y rounded-xl border">
-                  {answer.actions.map((a, i) => (
-                    <li key={i} className="flex items-center gap-2.5 px-3 py-2 text-sm">
-                      <Checkbox checked={picked.has(i)} disabled={apply.isPending || results[i] === "ok"} onCheckedChange={(v) => setPicked((s) => { const n = new Set(s); if (v === true) n.add(i); else n.delete(i); return n; })} />
-                      <span className={cn("min-w-0 flex-1", a.type === "delete_ticket" && "text-destructive")}>{a.label}</span>
-                      {results[i] === "ok" && <Check className="size-4 text-emerald-400" />}
-                      {results[i] && results[i] !== "ok" && (
-                        <span className="flex items-center gap-1 text-xs text-destructive">
-                          <X className="size-3.5" /> {results[i]}
-                        </span>
-                      )}
-                    </li>
-                  ))}
-                </ul>
-                <div className="flex justify-end">
-                  <Button disabled={!picked.size || apply.isPending} onClick={() => void run()} className="gap-2 bg-grad-gold font-semibold text-[#1a1204]">
-                    {apply.isPending && <Loader2 className="size-4 animate-spin" />} {t("tickets.assistant.apply", { count: picked.size })}
-                  </Button>
-                </div>
-              </>
-            )}
+          <div className="flex items-center justify-between gap-2">
             <p className="text-[11px] text-muted-foreground">{t("tickets.assistant.safety")}</p>
+            {turns.length > 0 && (
+              <button type="button" onClick={() => setTurns([])} className="shrink-0 text-[11px] text-muted-foreground hover:text-foreground">
+                {t("tickets.assistant.newTalk")}
+              </button>
+            )}
           </div>
-        )}
+        </form>
       </DialogContent>
     </Dialog>
   );
