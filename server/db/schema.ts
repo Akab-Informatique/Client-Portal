@@ -2744,3 +2744,45 @@ export const vendorBills = pgTable(
   },
   (t) => [uniqueIndex("vendor_bills_quickbooks_idx").on(t.quickbooksId), index("vendor_bills_due_idx").on(t.dueOn), index("vendor_bills_vendor_idx").on(t.vendorId)],
 );
+
+/** The company's recurring payments (rent, insurance, subscriptions, payroll…): money out that is not a QuickBooks bill, for the cash forecast */
+export const recurringPayments = pgTable(
+  "recurring_payments",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    name: text("name").notNull(),
+    /** none = the amount is not known yet: left out of the forecast until typed */
+    amountCents: bigint("amount_cents", { mode: "number" }),
+    /** weekly | monthly | yearly */
+    frequency: text("frequency").notNull().default("monthly"),
+    /** monthly and yearly: the day of the month (1–31, short months use their last day) */
+    dayOfMonth: integer("day_of_month"),
+    /** weekly: ISO weekday, 1 = Monday … 7 = Sunday */
+    weekday: integer("weekday"),
+    /** yearly: the month, 1–12 */
+    month: integer("month"),
+    /** Where the money comes from: Compte AKAB, Carte de crédit, Marge de crédit… */
+    account: text("account"),
+    /** How it is paid: Prélèvement, Virement, Carte de crédit… */
+    method: text("method"),
+    notes: text("notes"),
+    /** Already a bill in QuickBooks (counted there): not counted again here */
+    inQuickbooks: boolean("in_quickbooks").notNull().default(false),
+    active: boolean("active").notNull().default(true),
+    createdAt: created(),
+    updatedAt: updated(),
+  },
+  (t) => [index("recurring_payments_name_idx").on(t.name)],
+);
+
+/** What the company plans to pay each employee per week (typed by hand): counted as payroll in the cash forecast */
+export const payrollPlans = pgTable("payroll_plans", {
+  userId: uuid("user_id")
+    .primaryKey()
+    .references(() => users.id, { onDelete: "cascade" }),
+  /** The weekly amount planned (cents), whatever the average says; none = not planned */
+  weeklyCents: bigint("weekly_cents", { mode: "number" }),
+  /** Left out of the forecast while off (a person who left, a leave) */
+  active: boolean("active").notNull().default(true),
+  updatedAt: updated(),
+});

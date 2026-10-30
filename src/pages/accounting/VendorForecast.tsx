@@ -155,7 +155,7 @@ export function VendorForecast() {
                       <tr key={`${x.date}-${e.ref}-${e.kind}`}>
                         <td className="px-3 py-1.5 align-top text-muted-foreground">{i === 0 ? shortDate(x.date) : ""}</td>
                         <td className="px-3 py-1.5">
-                          {e.label}
+                          {e.ref === "payroll" ? t("vendorBills.forecast.payroll", { count: Number(e.label) }) : e.ref?.startsWith("r:") ? <>{e.label}<span className="ml-2 text-[10px] text-muted-foreground">{t("vendorBills.forecast.recurringTag")}</span></> : e.label}
                           {e.late && <span className="ml-2 rounded-full border border-red-500/40 px-1.5 text-[10px] text-red-300">{t(e.kind === "in" ? "vendorBills.forecast.lateIn" : "vendorBills.forecast.lateOut")}</span>}
                         </td>
                         <td className={cn("px-3 py-1.5 text-right tabular-nums", e.kind === "in" ? "text-emerald-300" : "text-red-300")}>{money(e.kind === "in" ? e.cents : -e.cents, lang)}</td>

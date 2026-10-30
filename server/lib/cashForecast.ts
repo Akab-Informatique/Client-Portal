@@ -1,5 +1,7 @@
 import { and, eq, inArray } from "drizzle-orm";
 import { db, schema } from "../db/index.ts";
+import { plannedWeekly } from "./payroll.ts";
+import { occurrences, type Frequency } from "./recurringPayments.ts";
 
 /**
  * Cash forecast (Accounting › Paiements fournisseurs): the money in (the portal's unpaid client invoices, on their due
@@ -14,10 +16,12 @@ export type ForecastSettings = {
   payDelayDays: number;
   /** An invoice already late is counted as collected this many days from today */
   lateDelayDays: number;
+  /** Payday, every week: ISO weekday, 1 = Monday … 7 = Sunday (Friday by default) */
+  payrollWeekday: number;
 };
 
 const PROVIDER = "vendor.forecast";
-const DEFAULTS: ForecastSettings = { balanceCents: 0, balanceOn: null, payDelayDays: 0, lateDelayDays: 14 };
+const DEFAULTS: ForecastSettings = { balanceCents: 0, balanceOn: null, payDelayDays: 0, lateDelayDays: 14, payrollWeekday: 5 };
 
 export async function forecastSettings(): Promise<ForecastSettings> {
   const [r] = await db().select().from(schema.integrations).where(eq(schema.integrations.provider, PROVIDER));
@@ -27,7 +31,7 @@ export async function forecastSettings(): Promise<ForecastSettings> {
 export async function saveForecastSettings(actorId: string | null, p: Partial<ForecastSettings>) {
   const cur = await forecastSettings();
   const n = { ...cur, ...p };
-  const config = { balanceCents: n.balanceCents, balanceOn: n.balanceOn, payDelayDays: n.payDelayDays, lateDelayDays: n.lateDelayDays };
+  const config = { balanceCents: n.balanceCents, balanceOn: n.balanceOn, payDelayDays: n.payDelayDays, lateDelayDays: n.lateDelayDays, payrollWeekday: n.payrollWeekday };
   const set = { config, updatedBy: actorId, updatedAt: new Date() };
   await db()
     .insert(schema.integrations)
@@ -86,6 +90,27 @@ export async function cashForecast(days: number, today = todayQc()) {
     events.push({ kind: "out", date: late ? today : b.dueOn, cents: b.balanceCents, label: `${b.vendorName}${b.docNumber ? ` · #${b.docNumber}` : ""}`, ref: b.id, late });
   }
 
+  // money out: the recurring payments (rent, insurance, subscriptions, payroll…) on the days they fall, from today on
+  let noAmount = 0;
+  let noDay = 0;
+  for (const r of await d.select().from(schema.recurringPayments).where(and(eq(schema.recurringPayments.active, true), eq(schema.recurringPayments.inQuickbooks, false)))) {
+    const days = occurrences({ frequency: r.frequency as Frequency, dayOfMonth: r.dayOfMonth, weekday: r.weekday, month: r.month }, today, horizon);
+    if (r.amountCents === null || r.amountCents <= 0) {
+      noAmount++;
+      continue;
+    }
+    if (days.length === 0 && r.frequency !== "weekly" && (!r.dayOfMonth || (r.frequency === "yearly" && !r.month))) noDay++;
+    for (const date of days) events.push({ kind: "out", date, cents: r.amountCents, label: r.name, ref: `r:${r.id}`, late: false });
+  }
+
+  // money out: payroll, the planned weekly amounts of all the employees together, on payday every week
+  const payroll = await plannedWeekly();
+  if (payroll.cents > 0) {
+    for (const date of occurrences({ frequency: "weekly", dayOfMonth: null, weekday: s.payrollWeekday, month: null }, today, horizon)) {
+      events.push({ kind: "out", date, cents: payroll.cents, label: String(payroll.people), ref: "payroll", late: false });
+    }
+  }
+
   const inside = events.filter((e) => e.date <= horizon).sort((a, b) => a.date.localeCompare(b.date) || (a.kind === "in" ? -1 : 1));
   const series: ForecastDay[] = [];
   let balance = s.balanceCents;
@@ -106,6 +131,7 @@ export async function cashForecast(days: number, today = todayQc()) {
     today,
     days,
     settings: s,
+    payroll,
     startCents: s.balanceCents,
     inCents: sum("in"),
     outCents: sum("out"),
@@ -114,7 +140,7 @@ export async function cashForecast(days: number, today = todayQc()) {
     /** the first day the balance goes below zero: the money to find, and when */
     shortfall,
     /** what is not on the line: no due date, or beyond the horizon */
-    leftOut: { noDueIn, noDueOut, beyondIn: events.filter((e) => e.kind === "in" && e.date > horizon).reduce((x, e) => x + e.cents, 0), beyondOut: events.filter((e) => e.kind === "out" && e.date > horizon).reduce((x, e) => x + e.cents, 0) },
+    leftOut: { noAmount, noDay, noDueIn, noDueOut, beyondIn: events.filter((e) => e.kind === "in" && e.date > horizon).reduce((x, e) => x + e.cents, 0), beyondOut: events.filter((e) => e.kind === "out" && e.date > horizon).reduce((x, e) => x + e.cents, 0) },
     series,
     events: inside,
   };

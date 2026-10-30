@@ -9060,4 +9060,66 @@ describe("vendor payments: the vendors' bills of QuickBooks on a calendar", () =
       if (others.length) await db().update(schema.clientInvoices).set({ voided: false }).where(inArray(schema.clientInvoices.id, others));
     }
   });
+
+  it("recurring payments and payroll are money out in the forecast", async () => {
+    const admin = await signIn("admin@akab.local");
+    const tech = await signIn("tech@akab.local");
+    const sheet = ["Date de facture\tFournisseur\tMontant\tCompte\tPayé par\tFréquence\tNotes", "1er\tLoyer test\t2 000,00 $\tCompte A\tPrélèvement\tMensuel\t", "\tMasse Salariale\t2400\tCompte A\tVirement\tHebdomadaire\t", "Annuel\tAdhésion sans mois\t172\tCarte\tCarte\tAnnuel\t"].join("\n");
+    // a technician cannot touch them (money out and everyone's pay)
+    expect((await tech.post("/api/vendor-payments/recurring/import", { text: sheet })).status).toBe(403);
+    expect((await tech.get("/api/vendor-payments/payroll")).status).toBe(403);
+
+    // the preview adds nothing; the payroll line is left to the Paie tab; the second import does not double
+    const preview = await admin.post("/api/vendor-payments/recurring/import", { text: sheet });
+    expect(preview.json).toMatchObject({ applied: false, added: 0, payrollSkipped: 1 });
+    expect(preview.json.rows.map((r: any) => r.name)).toEqual(["Loyer test", "Adhésion sans mois"]);
+    expect((await admin.post("/api/vendor-payments/recurring/import", { text: sheet, apply: true })).json.added).toBe(2);
+    expect((await admin.post("/api/vendor-payments/recurring/import", { text: sheet, apply: true })).json).toMatchObject({ added: 0, alreadyThere: 2 });
+    const list = (await admin.get("/api/vendor-payments/recurring")).json;
+    const rent = list.find((r: any) => r.name === "Loyer test");
+    expect(rent).toMatchObject({ amountCents: 200000, frequency: "monthly", dayOfMonth: 1 });
+
+    // make the day simple: the forecast starts with nothing else in the way
+    const others = (await db().select({ id: schema.clientInvoices.id }).from(schema.clientInvoices).where(sql`${schema.clientInvoices.voided} = false and ${schema.clientInvoices.paidOn} is null`)).map((r) => r.id);
+    if (others.length) await db().update(schema.clientInvoices).set({ voided: true }).where(inArray(schema.clientInvoices.id, others));
+    await db().delete(schema.vendorBills);
+    try {
+      const f1 = (await admin.get("/api/vendor-payments/forecast?days=90")).json;
+      const rents = f1.events.filter((e: any) => e.label === "Loyer test");
+      expect(rents.length).toBeGreaterThanOrEqual(2);
+      expect(rents.every((e: any) => e.kind === "out" && e.cents === 200000 && e.date.endsWith("-01"))).toBe(true);
+      // the yearly one has no month yet: not counted
+      expect(f1.events.some((e: any) => e.label === "Adhésion sans mois")).toBe(false);
+      expect(f1.leftOut.noDay).toBeGreaterThanOrEqual(1);
+
+      // "already in QuickBooks" or off: not counted
+      await admin.patch(`/api/vendor-payments/recurring/${rent.id}`, { inQuickbooks: true });
+      expect((await admin.get("/api/vendor-payments/forecast?days=90")).json.events.some((e: any) => e.label === "Loyer test")).toBe(false);
+      await admin.patch(`/api/vendor-payments/recurring/${rent.id}`, { inQuickbooks: false, active: false });
+      expect((await admin.get("/api/vendor-payments/forecast?days=90")).json.events.some((e: any) => e.label === "Loyer test")).toBe(false);
+
+      // payroll: planned per employee, counted together every payday
+      const [staff] = await db().select({ id: schema.users.id }).from(schema.users).where(eq(schema.users.email, "tech@akab.local"));
+      const table = (await admin.get("/api/vendor-payments/payroll")).json;
+      expect(table).toMatchObject({ weekday: 5, plannedCents: 0 });
+      expect(table.employees.find((e: any) => e.userId === staff.id)).toMatchObject({ planCents: null, active: true, avgWeeklyCents: null });
+      expect((await admin.put(`/api/vendor-payments/payroll/${staff.id}`, { weeklyCents: 150000 })).status).toBe(200);
+      expect((await admin.get("/api/vendor-payments/payroll")).json.plannedCents).toBe(150000);
+      const f2 = (await admin.get("/api/vendor-payments/forecast?days=30")).json;
+      const pays = f2.events.filter((e: any) => e.ref === "payroll");
+      expect(f2.payroll).toEqual({ cents: 150000, people: 1 });
+      expect(pays.length).toBeGreaterThanOrEqual(4);
+      expect(pays.every((e: any) => new Date(`${e.date}T12:00:00Z`).getUTCDay() === 5 && e.cents === 150000)).toBe(true);
+      // payday moved to Monday; the employee switched off: nothing
+      await admin.put("/api/vendor-payments/payroll-day", { weekday: 1 });
+      expect((await admin.get("/api/vendor-payments/forecast?days=30")).json.events.filter((e: any) => e.ref === "payroll").every((e: any) => new Date(`${e.date}T12:00:00Z`).getUTCDay() === 1)).toBe(true);
+      await admin.put(`/api/vendor-payments/payroll/${staff.id}`, { active: false });
+      expect((await admin.get("/api/vendor-payments/forecast?days=30")).json.events.some((e: any) => e.ref === "payroll")).toBe(false);
+      expect((await tech.put(`/api/vendor-payments/payroll/${staff.id}`, { weeklyCents: 1 })).status).toBe(403);
+    } finally {
+      if (others.length) await db().update(schema.clientInvoices).set({ voided: false }).where(inArray(schema.clientInvoices.id, others));
+      await db().delete(schema.recurringPayments);
+    }
+    expect((await admin.get("/api/vendor-payments/recurring")).json).toEqual([]);
+  });
 });

@@ -11,6 +11,10 @@ import { useCan } from "@/lib/session";
 import { cn } from "@/lib/utils";
 import { money } from "@/pages/crm/shared";
 import { shortDate, longDateTime } from "@/pages/tickets/shared";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { useSearchParams } from "react-router-dom";
+import { PayrollPlan } from "./PayrollPlan";
+import { RecurringPayments } from "./RecurringPayments";
 import { VendorForecast } from "./VendorForecast";
 
 type Bill = { id: string; vendor: string; number: string | null; issuedOn: string; dueOn: string | null; totalCents: number; balanceCents: number; memo: string | null; status: "open" | "overdue" | "paid"; daysLate: number };
@@ -27,6 +31,9 @@ export function VendorPaymentsPage() {
   const can = useCan();
   const qc = useQueryClient();
   const lang = i18n.language;
+  const [sp, setSp] = useSearchParams();
+  const tabs = ['calendar', 'forecast', 'recurring', ...(can('hr.manage') ? ['payroll'] : [])];
+  const tab = tabs.includes(sp.get('tab') ?? '') ? sp.get('tab')! : 'calendar';
   const [cursor, setCursor] = useState(() => {
     const n = new Date();
     return { y: n.getFullYear(), m: n.getMonth() };
@@ -95,6 +102,16 @@ export function VendorPaymentsPage() {
         )}
       </div>
 
+      <Tabs value={tab} onValueChange={(v) => setSp((p) => { const n = new URLSearchParams(p); n.set("tab", v); return n; }, { replace: true })}>
+        <TabsList>
+          {tabs.map((k) => (
+            <TabsTrigger key={k} value={k}>
+              {t(`vendorBills.tabs.${k}`)}
+            </TabsTrigger>
+          ))}
+        </TabsList>
+
+        <TabsContent value="calendar" className="space-y-6">
       {status.data && !status.data.connected && (
         <div className="glass rounded-2xl border border-dashed p-4 text-sm">
           <p className="font-semibold">{t("vendorBills.notConnected")}</p>
@@ -175,8 +192,20 @@ export function VendorPaymentsPage() {
           {noDue.length > 0 && <BillList title={t("vendorBills.noDueTitle", { count: noDue.length })} bills={noDue} empty="" lang={lang} />}
         </section>
       </div>
+        </TabsContent>
 
-      <VendorForecast />
+        <TabsContent value="forecast">
+          <VendorForecast />
+        </TabsContent>
+        <TabsContent value="recurring">
+          <RecurringPayments />
+        </TabsContent>
+        {tabs.includes("payroll") && (
+          <TabsContent value="payroll">
+            <PayrollPlan />
+          </TabsContent>
+        )}
+      </Tabs>
     </div>
   );
 }
