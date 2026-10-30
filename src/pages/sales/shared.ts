@@ -87,7 +87,7 @@ export function useSalesFilters() {
       { replace: true },
     );
   return {
-    tab: (sp.get("tab") ?? "dashboard") as "dashboard" | "pipeline" | "list",
+    tab: (sp.get("tab") ?? "dashboard") as "dashboard" | "pipeline" | "list" | "contracts",
     period,
     day: sp.get("day"),
     owner: sp.get("owner") ?? "all",

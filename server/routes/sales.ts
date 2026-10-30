@@ -1,6 +1,6 @@
 import { Hono } from "hono";
 import { HTTPException } from "hono/http-exception";
-import { and, asc, eq } from "drizzle-orm";
+import { and, asc, desc, eq, gte, lt } from "drizzle-orm";
 import { z } from "zod";
 import { db, schema } from "../db/index.ts";
 import { auth, requirePermission, requireStaff, type AppEnv } from "../lib/auth.ts";
@@ -213,6 +213,76 @@ export const salesRoutes = new Hono<AppEnv>()
     if (!row) throw new HTTPException(404, { message: "not_found" });
     await audit(a.user.id, "sales.opportunity_deleted", id, { company: row.companyName });
     return c.json({ ok: true });
+  })
+
+  /**
+   * Ventes › Contrats: the contracts of the clients and what happened to them in the period (made, a service added,
+   * changed or removed, a price moved, stopped, started again), from the contracts' own activity. `period` / `day` as
+   * the dashboard; the contracts listed are the running ones, with the monthly figure of the recurring ones.
+   */
+  .get("/contracts", async (c) => {
+    const today = todayQc();
+    const q = c.req.query();
+    const period: SalesPeriod = (SALES_PERIODS as readonly string[]).includes(q.period ?? "") ? (q.period as SalesPeriod) : "month";
+    const day = q.day && zDate.safeParse(q.day).success ? q.day : today;
+    const { from, to } = periodRange(period, day);
+    // the period's days in Québec time: from the start of the first day to the start of the day after the last
+    const start = new Date(`${from}T00:00:00-05:00`);
+    const end = new Date(new Date(`${to}T00:00:00-05:00`).getTime() + 86_400_000);
+    const d = db();
+
+    const events = await d
+      .select({ e: schema.contractEvents, actor: schema.users.name, contract: schema.clientContracts.name, clientId: schema.clientContracts.clientId, client: schema.clients.name })
+      .from(schema.contractEvents)
+      .innerJoin(schema.clientContracts, eq(schema.clientContracts.id, schema.contractEvents.contractId))
+      .innerJoin(schema.clients, eq(schema.clients.id, schema.clientContracts.clientId))
+      .leftJoin(schema.users, eq(schema.users.id, schema.contractEvents.actorId))
+      .where(and(gte(schema.contractEvents.createdAt, start), lt(schema.contractEvents.createdAt, end)))
+      .orderBy(desc(schema.contractEvents.createdAt))
+      .limit(500);
+
+    const types = new Map((await d.select({ key: schema.contractTypes.key, name: schema.contractTypes.name }).from(schema.contractTypes)).map((t) => [t.key, t.name]));
+    const rows = await d
+      .select({ k: schema.clientContracts, client: schema.clients.name })
+      .from(schema.clientContracts)
+      .innerJoin(schema.clients, eq(schema.clients.id, schema.clientContracts.clientId))
+      .orderBy(asc(schema.clients.name), asc(schema.clientContracts.name));
+    const last = new Map<string, Date>();
+    for (const r of await d.select({ id: schema.contractEvents.contractId, at: schema.contractEvents.createdAt }).from(schema.contractEvents).orderBy(asc(schema.contractEvents.createdAt))) last.set(r.id, r.at);
+
+    const contracts = rows.map(({ k, client }) => ({
+      id: k.id,
+      clientId: k.clientId,
+      client,
+      name: k.name,
+      type: (k.typeKey && types.get(k.typeKey)) || null,
+      active: k.active,
+      billingMode: k.billingMode,
+      billingPeriod: k.billingPeriod,
+      // only a recurring services contract has a monthly figure
+      monthlyCents: k.billingMode === "monthly" ? (k.monthlyRateCents ?? 0) : null,
+      startDate: k.startDate,
+      endDate: k.endDate,
+      lastChange: last.get(k.id)?.toISOString() ?? null,
+    }));
+    const running = contracts.filter((k) => k.active);
+    const count = (kind: string) => events.filter((x) => x.e.kind === kind).length;
+    return c.json({
+      period,
+      from,
+      to,
+      summary: {
+        running: running.length,
+        recurring: running.filter((k) => k.monthlyCents !== null).length,
+        mrrCents: running.reduce((n, k) => n + (k.monthlyCents ?? 0), 0),
+        created: count("created"),
+        stopped: count("stopped"),
+        changes: events.filter((x) => x.e.kind !== "created" && x.e.kind !== "stopped").length,
+        events: events.length,
+      },
+      events: events.map((x) => ({ id: x.e.id, kind: x.e.kind, source: x.e.source, detail: x.e.detail, at: x.e.createdAt.toISOString(), actor: x.actor ?? null, contractId: x.e.contractId, contract: x.contract, clientId: x.clientId, client: x.client })),
+      contracts,
+    });
   })
 
   /**

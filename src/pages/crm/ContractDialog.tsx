@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { useTranslation } from "react-i18next";
+import type { TFunction } from "i18next";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { Ban, CalendarClock, CalendarDays, Cloud, FilePen, FilePlus2, FileText, History, Loader2, Minus, Pencil, Play, Plus, Receipt, Star, Trash2, TrendingUp, Wrench } from "lucide-react";
@@ -40,7 +41,7 @@ type Line = {
 type Summary = { billedThrough?: string | null; billedCents?: number; revenueCents: number; perPeriodCents: number; yearlyExtraCents: number; endsOn: string | null; dueCents: number; next: { date: string; amountCents: number; prorated: boolean } | null };
 type Detail = CrmContract & { billingPeriod: BillingPeriod; endedOn: string | null; billedThrough: string | null; services: Line[]; summary: Summary; charged: { has: boolean; billingItems: number; timeEntries: number; servicesStarted: number } };
 type CatalogItem = { id: string; name: string; kind: "recurring" | "recurring_yearly"; priceCents: number; costCents: number };
-type Event = { id: string; kind: string; source: string; detail: Record<string, any>; at: string; actor: string | null };
+export type Event = { id: string; kind: string; source: string; detail: Record<string, any>; at: string; actor: string | null };
 
 const todayYmd = () => new Date().toLocaleDateString("en-CA", { timeZone: "America/Toronto" });
 const toCents = (v: string) => (v.trim() === "" ? null : Math.round((Number(v.replace(",", ".")) || 0) * 100));
@@ -756,14 +757,10 @@ const FIELD_LABEL: Record<string, string> = {
   autoApprove: "crm.contracts.auto",
 };
 
-function ActivityTab({ client, k, lang }: { client: CrmDetail; k: Detail; lang: string }) {
-  const { t } = useTranslation();
-  const { data = [], isLoading } = useQuery({ queryKey: ["crm", "client", client.id, "contract-activity", k.id], queryFn: () => api.get<Event[]>(`/crm/clients/${client.id}/contracts/${k.id}/activity`) });
-  if (isLoading) return <Loader2 className="mx-auto my-6 size-5 animate-spin text-muted-foreground" />;
-  if (!data.length) return <p className="rounded-lg border border-dashed py-6 text-center text-sm text-muted-foreground">{t("crm.contracts.window.noActivity")}</p>;
-  const icon = (kind: string) =>
+export const contractEventIcon = (kind: string) =>
     kind === "service_added" ? <Plus className="size-3.5 text-emerald-300" /> : kind === "service_removed" ? <Minus className="size-3.5 text-destructive" /> : kind === "service_changed" ? <Pencil className="size-3.5 text-sky-300" /> : kind === "stopped" ? <Ban className="size-3.5 text-amber-300" /> : kind === "resumed" ? <Play className="size-3.5 text-emerald-300" /> : kind === "created" ? <FilePlus2 className="size-3.5 text-primary" /> : <FilePen className="size-3.5 text-muted-foreground" />;
-  const text = (e: Event) => {
+
+export const contractEventText = (t: TFunction, e: Event, lang: string) => {
     const d = e.detail;
     const per = (kind: string) => (kind === "recurring_yearly" ? t("services.perYear") : t("services.perMonth"));
     switch (e.kind) {
@@ -789,6 +786,14 @@ function ActivityTab({ client, k, lang }: { client: CrmDetail; k: Detail; lang: 
       }
     }
   };
+
+function ActivityTab({ client, k, lang }: { client: CrmDetail; k: Detail; lang: string }) {
+  const { t } = useTranslation();
+  const { data = [], isLoading } = useQuery({ queryKey: ["crm", "client", client.id, "contract-activity", k.id], queryFn: () => api.get<Event[]>(`/crm/clients/${client.id}/contracts/${k.id}/activity`) });
+  if (isLoading) return <Loader2 className="mx-auto my-6 size-5 animate-spin text-muted-foreground" />;
+  if (!data.length) return <p className="rounded-lg border border-dashed py-6 text-center text-sm text-muted-foreground">{t("crm.contracts.window.noActivity")}</p>;
+  const icon = contractEventIcon;
+  const text = (e: Event) => contractEventText(t, e, lang);
   return (
     <ol className="space-y-1.5">
       {data.map((e) => (

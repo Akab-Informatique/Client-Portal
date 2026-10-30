@@ -9210,3 +9210,37 @@ describe("quotes feed the sales pipeline", () => {
     expect(dup.opp.stage).toBe("meeting");
   });
 });
+
+describe("sales: the Contrats tab", () => {
+  it("shows the contracts made or adjusted in the period, with the recurring figure", async () => {
+    const admin = await signIn("admin@akab.local");
+    const tech = await signIn("tech@akab.local");
+    const [client] = await db().select().from(schema.clients).limit(1);
+    const term = { startDate: "2026-10-01", endDate: "2027-09-30" };
+    const hourly = (await admin.post(`/api/crm/clients/${client.id}/contracts`, { ...term, name: "Onglet horaire", typeKey: "hourly", hourlyRate: 120 })).json;
+    const recurringType = (await admin.get("/api/crm/contract-types")).json.find((x: any) => x.kind === "recurring").key;
+    const monthly = (await admin.post(`/api/crm/clients/${client.id}/contracts`, { ...term, name: "Onglet mensuel", typeKey: recurringType, monthlyRate: 450 })).json;
+    expect(monthly.billingMode).toBe("monthly");
+    // a change after it was made
+    expect((await admin.patch(`/api/crm/clients/${client.id}/contracts/${hourly.id}`, { hourlyRate: 130 })).status).toBe(200);
+
+    // the page's rights are the pipeline's
+    expect((await tech.get("/api/sales/contracts")).status).toBe(403);
+
+    const r = (await admin.get("/api/sales/contracts?period=month")).json;
+    const mine = r.events.filter((e: any) => e.contract === "Onglet horaire" || e.contract === "Onglet mensuel");
+    expect(mine.map((e: any) => `${e.contract}:${e.kind}`).sort()).toEqual(["Onglet horaire:created", "Onglet horaire:updated", "Onglet mensuel:created"]);
+    expect(mine.every((e: any) => e.client === client.name && e.clientId === client.id && e.actor)).toBe(true);
+    expect(r.summary.created).toBeGreaterThanOrEqual(2);
+    expect(r.summary.changes).toBeGreaterThanOrEqual(1);
+    const k = r.contracts.find((c: any) => c.id === monthly.id);
+    expect(k).toMatchObject({ client: client.name, active: true, monthlyCents: monthly.monthlyRateCents ?? 0, billingMode: "monthly" });
+    expect(r.contracts.find((c: any) => c.id === hourly.id)).toMatchObject({ monthlyCents: null, billingMode: "hourly" });
+    expect(r.summary.mrrCents).toBe(r.contracts.filter((c: any) => c.active && c.monthlyCents !== null).reduce((n: number, c: any) => n + c.monthlyCents, 0));
+
+    // another period (a year back): none of today's changes are in it
+    const old = (await admin.get(`/api/sales/contracts?period=month&day=2020-05-10`)).json;
+    expect(old.events.some((e: any) => e.contract === "Onglet horaire")).toBe(false);
+    expect(old.from).toBe("2020-05-01");
+  });
+});

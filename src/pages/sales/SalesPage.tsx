@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useQuery } from "@tanstack/react-query";
-import { ChevronLeft, ChevronRight, Columns3, LayoutDashboard, List, Plus, TrendingUp } from "lucide-react";
+import { ChevronLeft, ChevronRight, Columns3, FileSignature, LayoutDashboard, List, Plus, TrendingUp } from "lucide-react";
 import { GlassBackdrop } from "@/components/brand/GlassBackdrop";
 import { Button } from "@/components/ui/button";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
@@ -10,6 +10,7 @@ import { useCan, useMe } from "@/lib/session";
 import { cn } from "@/lib/utils";
 import { SALES_PERIODS, periodRange, shiftPeriod, type SalesStage } from "@shared/sales";
 import { Board } from "./Board";
+import { ContractsTab } from "./ContractsTab";
 import { Dashboard } from "./Dashboard";
 import { OpportunityDialog } from "./OpportunityDialog";
 import { OpportunityList } from "./OpportunityList";
@@ -53,6 +54,7 @@ export function SalesPage() {
     { key: "dashboard", icon: LayoutDashboard, label: t("sales.tab.dashboard") },
     { key: "pipeline", icon: Columns3, label: t("sales.tab.pipeline") },
     { key: "list", icon: List, label: t("sales.tab.list") },
+    { key: "contracts", icon: FileSignature, label: t("sales.tab.contracts") },
   ] as const;
 
   return (
@@ -143,6 +145,7 @@ export function SalesPage() {
         ) : (
           <Board list={list} from={range.from} to={range.to} onOpen={(opp) => setEditing({ opp })} onNew={(stage) => setEditing({ stage })} />
         ))}
+      {tab === "contracts" && <ContractsTab period={period} day={day} />}
       {tab === "list" && <OpportunityList list={list} from={range.from} to={range.to} onOpen={(opp) => setEditing({ opp })} />}
 
       {editing && <OpportunityDialog opp={editing.opp} stage={editing.stage} onClose={() => setEditing(null)} />}
