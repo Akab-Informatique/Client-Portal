@@ -1034,7 +1034,7 @@ function TicketRow({
                     editable && "hover:bg-accent/60",
                   )}
                 >
-                  {shortDateTime(tk.dueAt)}
+                  {shortDate(tk.dueAt)}
                 </span>
               );
               return editable ? (
@@ -1759,7 +1759,7 @@ function AiPlanButton() {
                       {i.late && (
                         <span className="mt-1 flex flex-wrap items-center gap-1.5 text-xs text-amber-300">
                           <AlertTriangle className="size-3.5" />
-                          {i.unscheduled ? t("tickets.ai.planNoRoom") : t("tickets.ai.planLate", { due: shortDateTime(i.dueAt) })}
+                          {i.unscheduled ? t("tickets.ai.planNoRoom") : t("tickets.ai.planLate", { due: shortDate(i.dueAt) })}
                           {i.suggestedDue && <span className="text-muted-foreground">· {t("tickets.ai.planMoveDue", { date: shortDate(i.suggestedDue.slice(0, 10)) })}</span>}
                         </span>
                       )}

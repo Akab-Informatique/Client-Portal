@@ -65,6 +65,7 @@ import {
   type TicketSummary,
   hm,
   parseHm,
+  fullDate,
 } from "./shared";
 
 const SOURCE_ICON: Record<string, LucideIcon> = { email: Mail, phone: Phone, portal: Inbox, monitoring: MonitorCog };
@@ -478,10 +479,10 @@ function TicketBody({
                           : "text-muted-foreground",
                       editable && "cursor-pointer hover:border-[color:var(--gold)]/60",
                     )}
-                    title={editable ? t("tickets.due.change") : longDateTime(view.dueAt)}
+                    title={editable ? t("tickets.due.change") : fullDate(view.dueAt)}
                   >
                     <CalendarClock className="size-3.5" />
-                    {t("tickets.fields.due")} · {longDateTime(view.dueAt)}
+                    {t("tickets.fields.due")} · {fullDate(view.dueAt)}
                   </span>
                 );
                 return editable ? (
@@ -493,7 +494,7 @@ function TicketBody({
                     </PopoverTrigger>
                     <PopoverContent align="start" className="w-80 space-y-2">
                       <p className="text-sm font-semibold">{t("tickets.fields.due")}</p>
-                      <p className="text-xs text-muted-foreground">{longDateTime(view.dueAt)}</p>
+                      <p className="text-xs text-muted-foreground">{fullDate(view.dueAt)}</p>
                       <DueEditor dueAt={view.dueAt} quick autoFocus onSave={(dueAt) => stage({ dueAt })} />
                     </PopoverContent>
                   </Popover>
@@ -637,7 +638,7 @@ function TicketBody({
                             <DueEditor dueAt={view.dueAt} onSave={(dueAt) => stage({ dueAt })} />
                           </div>
                         ) : (
-                          longDateTime(tk.dueAt)
+                          fullDate(tk.dueAt)
                         )}
                       </Detail>
                       <Detail icon={Clock3} label={t("tickets.fields.hours")}>

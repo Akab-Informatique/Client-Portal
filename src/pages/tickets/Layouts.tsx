@@ -12,7 +12,8 @@ import { Input } from "@/components/ui/input";
 import { useConfirm } from "@/components/ConfirmDialog";
 import { api } from "@/lib/api";
 import { cn, initials } from "@/lib/utils";
-import { dueState, PRIORITY_STYLE, shortDate, shortDateTime, STATUS_STYLE, ticketErrorText, useChoiceText, type TicketSummary } from "./shared";
+import { useCan } from "@/lib/session";
+import { dueState, PRIORITY_STYLE, shortDate, STATUS_STYLE, ticketErrorText, useChoiceText, type TicketList, type TicketSummary } from "./shared";
 
 // ── The three ways to look at the list ───────────────────────────────────────────
 /** standard: the table as it always was · kanban: boards the team sorts tickets on · compact: one short line per ticket */
@@ -73,16 +74,29 @@ export function LayoutSwitch({ value, onChange }: { value: Layout; onChange: (l:
 // ── Compact: one short line per ticket ───────────────────────────────────────────
 const COMPACT_GRID = "grid grid-cols-[minmax(0,1fr)_5.5rem_4.5rem_6.5rem_9rem] items-center gap-x-3";
 
-/** Name, priority, milestone, due date and status — nothing else, one line each. */
 export type CompactTicket = Pick<TicketSummary, "id" | "number" | "title" | "company" | "priorityKind" | "priorityLabel" | "milestoneDate" | "milestoneTime" | "dueAt" | "statusKind" | "statusLabel">;
-export function CompactList({ items, activeIds, onOpen }: { items: CompactTicket[]; activeIds: Set<number>; onOpen: (id: number) => void }) {
+
+/** Name, priority, checkpoint, due date and status — nothing else, one line each. With `facets`, each of them is changed in place. */
+export function CompactList({ items, activeIds, onOpen, facets }: { items: CompactTicket[]; activeIds: Set<number>; onOpen: (id: number) => void; facets?: TicketList["facets"] }) {
   const { t } = useTranslation();
   const txt = useChoiceText();
+  const qc = useQueryClient();
+  const can = useCan();
+  const edit = Boolean(facets) && can("tickets.edit");
+  const grid = edit ? "grid grid-cols-[minmax(0,1fr)_7rem_11rem_8.5rem_9.5rem] items-center gap-x-3" : COMPACT_GRID;
   const today = new Date().toLocaleDateString("en-CA");
+  const refresh = () => void qc.invalidateQueries({ queryKey: ["tickets"] });
+  const patch = useMutation({ mutationFn: ({ id, ...p }: { id: number; priority?: string; status?: string; dueAt?: string }) => api.patch(`/tickets/${id}`, p), onSuccess: refresh, onError: (e) => toast.error(ticketErrorText(t, e)) });
+  const checkpoint = useMutation({
+    mutationFn: ({ id, date, time }: { id: number; date: string | null; time: string | null }) => api.put(`/tickets/${id}/start-date`, { milestoneDate: date, milestoneTime: date ? time : null }),
+    onSuccess: refresh,
+    onError: (e) => toast.error(ticketErrorText(t, e)),
+  });
+  const select = "h-7 w-full min-w-0 rounded-md border border-transparent bg-transparent px-1 text-xs outline-none hover:border-border focus:border-[color:var(--gold)]/60";
   return (
     <div className="overflow-x-auto">
-      <div className="min-w-[44rem]">
-        <div className={cn(COMPACT_GRID, "border-b border-[color:var(--glass-border)] bg-white/[0.02] px-4 py-1.5 font-mono text-[10px] uppercase tracking-[0.12em] text-muted-foreground")}>
+      <div className={edit ? "min-w-[52rem]" : "min-w-[44rem]"}>
+        <div className={cn(grid, "border-b border-[color:var(--glass-border)] bg-white/[0.02] px-4 py-1.5 font-mono text-[10px] uppercase tracking-[0.12em] text-muted-foreground")}>
           <span>{t("tickets.fields.ticket")}</span>
           <span>{t("tickets.fields.priority")}</span>
           <span>{t("tickets.fields.milestone")}</span>
@@ -93,25 +107,67 @@ export function CompactList({ items, activeIds, onOpen }: { items: CompactTicket
           {items.map((tk) => {
             const due = dueState(tk.dueAt, tk.statusKind);
             const open = tk.statusKind !== "complete";
+            const title = (
+              <span className="flex min-w-0 items-baseline gap-2">
+                <span className="shrink-0 font-mono text-[11px] text-muted-foreground">{tk.number}</span>
+                <span className="truncate font-medium" title={`${tk.title} · ${tk.company.name}`}>
+                  {tk.title}
+                </span>
+              </span>
+            );
+            const rowClass = cn(grid, "w-full px-4 py-1 text-left text-sm transition-colors hover:bg-[linear-gradient(90deg,rgba(255,206,26,0.07),transparent_60%)]", activeIds.has(tk.id) && "bg-[linear-gradient(90deg,rgba(255,206,26,0.1),transparent_60%)]");
+            if (edit && facets) {
+              const dueDay = new Date(tk.dueAt);
+              const dueValue = `${dueDay.getFullYear()}-${String(dueDay.getMonth() + 1).padStart(2, "0")}-${String(dueDay.getDate()).padStart(2, "0")}`;
+              return (
+                <li key={tk.id} className={rowClass}>
+                  <button type="button" onClick={() => onOpen(tk.id)} className="min-w-0 text-left">
+                    {title}
+                  </button>
+                  <select className={cn(select, PRIORITY_STYLE[tk.priorityKind].text)} value={facets.priorities.find((p) => p.kind === tk.priorityKind && (p.label ?? "") === (tk.priorityLabel ?? ""))?.value ?? facets.priorities.find((p) => p.kind === tk.priorityKind)?.value ?? ""} onChange={(e) => patch.mutate({ id: tk.id, priority: e.target.value })} aria-label={t("tickets.fields.priority")}>
+                    {facets.priorities.map((p) => (
+                      <option key={p.value} value={p.value}>
+                        {txt.priority(p)}
+                      </option>
+                    ))}
+                  </select>
+                  <input
+                    type="datetime-local"
+                    className={cn(select, "font-mono tabular-nums", tk.milestoneDate && open && tk.milestoneDate < today ? "text-destructive" : "text-muted-foreground")}
+                    value={tk.milestoneDate ? `${tk.milestoneDate}T${tk.milestoneTime ?? "00:00"}` : ""}
+                    onChange={(e) => {
+                      const [date, time] = e.target.value.split("T");
+                      checkpoint.mutate({ id: tk.id, date: date || null, time: time || null });
+                    }}
+                    aria-label={t("tickets.milestone.label")}
+                  />
+                  <input
+                    type="date"
+                    className={cn(select, "font-mono tabular-nums", due === "overdue" ? "text-destructive" : due === "today" ? "text-orange-400" : "text-muted-foreground")}
+                    value={dueValue}
+                    onChange={(e) => e.target.value && patch.mutate({ id: tk.id, dueAt: new Date(`${e.target.value}T${String(dueDay.getHours()).padStart(2, "0")}:${String(dueDay.getMinutes()).padStart(2, "0")}:00`).toISOString() })}
+                    aria-label={t("tickets.fields.due")}
+                  />
+                  <select className={cn(select, "rounded-full border-current px-2", STATUS_STYLE[tk.statusKind])} value={facets.statuses.find((s) => s.kind === tk.statusKind && (s.label ?? "") === (tk.statusLabel ?? ""))?.value ?? facets.statuses.find((s) => s.kind === tk.statusKind)?.value ?? ""} onChange={(e) => patch.mutate({ id: tk.id, status: e.target.value })} aria-label={t("tickets.fields.status")}>
+                    {facets.statuses.map((s) => (
+                      <option key={s.value} value={s.value}>
+                        {txt.status(s)}
+                      </option>
+                    ))}
+                  </select>
+                </li>
+              );
+            }
             return (
               <li key={tk.id}>
-                <button
-                  type="button"
-                  onClick={() => onOpen(tk.id)}
-                  className={cn(COMPACT_GRID, "w-full px-4 py-1 text-left text-sm transition-colors hover:bg-[linear-gradient(90deg,rgba(255,206,26,0.07),transparent_60%)]", activeIds.has(tk.id) && "bg-[linear-gradient(90deg,rgba(255,206,26,0.1),transparent_70%)]")}
-                >
-                  <span className="flex min-w-0 items-baseline gap-2">
-                    <span className="shrink-0 font-mono text-[11px] text-muted-foreground">{tk.number}</span>
-                    <span className="truncate font-medium" title={`${tk.title} · ${tk.company.name}`}>
-                      {tk.title}
-                    </span>
-                  </span>
+                <button type="button" onClick={() => onOpen(tk.id)} className={rowClass}>
+                  {title}
                   <span className={cn("flex items-center gap-1.5 text-xs font-medium", PRIORITY_STYLE[tk.priorityKind].text)}>
                     <span className={cn("size-2 shrink-0 rounded-full", PRIORITY_STYLE[tk.priorityKind].dot)} />
                     <span className="truncate">{txt.priority({ label: tk.priorityLabel, kind: tk.priorityKind })}</span>
                   </span>
                   <span className={cn("whitespace-nowrap font-mono text-xs tabular-nums", tk.milestoneDate && open && tk.milestoneDate < today ? "text-destructive" : "text-muted-foreground")}>{tk.milestoneDate ? `${shortDate(tk.milestoneDate)}${tk.milestoneTime ? ` ${tk.milestoneTime}` : ""}` : "—"}</span>
-                  <span className={cn("whitespace-nowrap font-mono text-xs font-medium tabular-nums", due === "overdue" ? "text-destructive" : due === "today" ? "text-orange-400" : due === "soon" ? "text-primary" : "text-muted-foreground")}>{shortDateTime(tk.dueAt)}</span>
+                  <span className={cn("whitespace-nowrap font-mono text-xs font-medium tabular-nums", due === "overdue" ? "text-destructive" : due === "today" ? "text-orange-400" : due === "soon" ? "text-primary" : "text-muted-foreground")}>{shortDate(tk.dueAt)}</span>
                   <span className={cn("inline-flex max-w-full items-center gap-1.5 truncate rounded-full border px-2 py-0.5 text-[11px] font-medium leading-tight", STATUS_STYLE[tk.statusKind])}>
                     <span className="size-1.5 shrink-0 rounded-full bg-current" />
                     <span className="truncate">{txt.status({ label: tk.statusLabel, kind: tk.statusKind })}</span>
@@ -411,7 +467,7 @@ function KanbanCard({ tk, canEdit, onOpen }: { tk: TicketSummary; canEdit: boole
           <span className={cn("size-1.5 rounded-full", PRIORITY_STYLE[tk.priorityKind].dot)} />
           {txt.priority({ label: tk.priorityLabel, kind: tk.priorityKind })}
         </span>
-        <span className={cn("font-mono tabular-nums", due === "overdue" ? "text-destructive" : due === "today" ? "text-orange-400" : "text-muted-foreground")}>{shortDateTime(tk.dueAt)}</span>
+        <span className={cn("font-mono tabular-nums", due === "overdue" ? "text-destructive" : due === "today" ? "text-orange-400" : "text-muted-foreground")}>{shortDate(tk.dueAt)}</span>
         {tk.assignee && <span className="ml-auto flex size-5 items-center justify-center rounded-full border bg-background/60 text-[9px] font-semibold" title={tk.assignee.name}>{initials(tk.assignee.name)}</span>}
       </div>
       <span className={cn("mt-2 inline-flex items-center gap-1.5 rounded-full border px-2 py-0.5 text-[10px] font-medium leading-tight", STATUS_STYLE[tk.statusKind])}>

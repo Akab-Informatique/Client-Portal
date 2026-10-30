@@ -119,13 +119,13 @@ export function MeetingsPage() {
         <p className="text-sm text-muted-foreground">{t("meetings.subtitle")}</p>
       </div>
 
-      {/* the week ahead, written for the meeting */}
-      <WeekBrief />
-
+      {/* first row: the points to discuss and the week; second row: the week ahead, written for the meeting */}
       <div className="grid items-start gap-6 xl:grid-cols-2">
         <PointsSection />
         <WeekSection />
       </div>
+
+      <WeekBrief />
 
       <section className="space-y-3">
         <div className="flex flex-wrap items-center justify-between gap-2">

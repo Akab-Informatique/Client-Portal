@@ -27,7 +27,7 @@ export function MyTickets({ userId, mine, onOpen }: { userId: string; mine: bool
       <h3 className="flex items-center gap-1.5 px-4 pb-2 pt-3 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
         <TicketIcon className="size-3.5" /> {t("pipeline.day.myTickets")} <span className="font-mono normal-case opacity-70">{items.length}</span>
       </h3>
-      {isLoading ? <Skeleton className="m-4 h-20" /> : items.length === 0 ? <p className="px-4 pb-4 text-sm text-muted-foreground">{t("pipeline.day.noTickets")}</p> : <div className="max-h-[32rem] overflow-y-auto"><CompactList items={items} activeIds={new Set()} onOpen={onOpen} /></div>}
+      {isLoading ? <Skeleton className="m-4 h-20" /> : items.length === 0 ? <p className="px-4 pb-4 text-sm text-muted-foreground">{t("pipeline.day.noTickets")}</p> : <div className="max-h-[32rem] overflow-y-auto"><CompactList items={items} activeIds={new Set()} onOpen={onOpen} facets={data?.facets} /></div>}
     </section>
   );
 }

@@ -244,6 +244,8 @@ export function useChoiceText() {
 }
 
 const loc = () => (currentLocale() === "en" ? "en-CA" : "fr-CA");
+/** A day with its year, no time (the due date is a day) */
+export const fullDate = (iso: string) => new Intl.DateTimeFormat(loc(), { day: "numeric", month: "long", year: "numeric" }).format(new Date(iso.length === 10 ? `${iso}T12:00:00` : iso));
 export const shortDate = (iso: string) => new Intl.DateTimeFormat(loc(), { day: "numeric", month: "short" }).format(new Date(iso.length === 10 ? `${iso}T12:00:00` : iso));
 /** "16 oct. 17 h 00" / "Oct 16, 5:00 PM": the day and the time, short */
 export const shortDateTime = (iso: string) => new Intl.DateTimeFormat(loc(), { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit", hourCycle: "h23" }).format(new Date(iso));
