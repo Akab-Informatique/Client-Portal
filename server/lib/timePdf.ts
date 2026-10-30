@@ -147,7 +147,12 @@ export type Model = {
   /** A sentence under the figures, when there is something more to say */
   note?: string;
   sections: { heading: string; head: string[]; cols: Col[]; rows: string[][]; boldLast?: boolean }[];
+  /** A sentence printed in bold at the top and at the end of the report */
+  disclaimer?: string;
 };
+
+/** Said in bold at the top and at the end of every timesheet report */
+export const TIMESHEET_DISCLAIMER = "Ceci est un calcul fait pour validation avec la comptabilité. Tout montant est sujet à modification. Pour le montant exact, voir avec la direction ou sur vos talons de paie.";
 
 /** An expense report: what to pay back to the person, the kilometres and what they come to, by classification, then every line. */
 export async function expenseReportModel(reportId: string): Promise<Model | null> {
@@ -249,6 +254,7 @@ export async function timesheetModel(userId: string, weekStart: string): Promise
   const line = (label: string, h: number, amount?: string): string[] => [label, `${num(h)} h`, amount ?? money(h)];
   return {
     title: "Feuille de temps",
+    disclaimer: TIMESHEET_DISCLAIMER,
     filename: `Feuille_de_temps_${slug(who.name)}_${weekStart}.pdf`,
     employee: who.name,
     lines: [`Semaine du ${dmy(weekStart)} au ${dmy(end)}`, sheet?.submittedAt ? `Envoyée le ${dmy(sheet.submittedAt.toISOString().slice(0, 10))}` : ""].filter(Boolean),
@@ -300,7 +306,13 @@ export async function timesheetModel(userId: string, weekStart: string): Promise
 export async function renderPdf(m: Model): Promise<Pdf> {
   const p = start(m.title, m.employee, m.lines);
   const { doc, font } = p;
-  let y = figures(doc, font, p.y, m.figures);
+  let top = p.y;
+  if (m.disclaimer) {
+    const h = font(true, 10, "#000000").heightOfString(m.disclaimer, { width: RIGHT - LEFT });
+    font(true, 10, "#000000").text(m.disclaimer, LEFT, top, { width: RIGHT - LEFT });
+    top += h + 10;
+  }
+  let y = figures(doc, font, top, m.figures);
   if (m.note) {
     font(false, 9, "#444444").text(m.note, LEFT, y - 8, { width: RIGHT - LEFT });
     y += 8;
@@ -308,6 +320,13 @@ export async function renderPdf(m: Model): Promise<Pdf> {
   for (const sec of m.sections) {
     y = heading(doc, font, y, sec.heading);
     y = table(doc, font, y, sec.head, sec.cols, sec.rows, sec.boldLast ? { bold: (r) => r === sec.rows.length - 1 } : {});
+  }
+  if (m.disclaimer) {
+    if (y > BOTTOM - 50) {
+      doc.addPage();
+      y = 40;
+    }
+    font(true, 10, "#000000").text(m.disclaimer, LEFT, y + 8, { width: RIGHT - LEFT });
   }
   return { filename: m.filename, content: await finish(doc, font, p.done, m.employee) };
 }
@@ -330,21 +349,24 @@ export function renderHtml(m: Model): string {
     )
     .join("");
   return `<div style="font-family:Arial,Helvetica,sans-serif;color:#000;max-width:720px">
+${m.disclaimer ? `<p style="font-weight:bold;font-size:13px">${esc(m.disclaimer)}</p>` : ""}
 <h2 style="margin:0 0 4px;font-size:20px">${esc(m.title)}</h2>
 <div style="font-size:13px;color:#444">${m.lines.map(esc).join(" · ")}</div>
 <div style="margin:14px 0;padding:10px 14px;border:2px solid #000;background:#f3f3f3"><div style="font-size:11px;color:#555">EMPLOYÉ</div><div style="font-size:24px;font-weight:bold">${esc(m.employee || "—")}</div></div>
 <table style="border-collapse:separate;width:100%"><tr>${figs}</tr></table>
 ${m.note ? `<p style="font-size:13px;color:#444">${esc(m.note)}</p>` : ""}
 ${sections}
+${m.disclaimer ? `<p style="margin-top:20px;font-weight:bold;font-size:13px">${esc(m.disclaimer)}</p>` : ""}
 <p style="margin-top:20px;font-size:12px;color:#666">Le même rapport est en pièce jointe (PDF).</p>
 </div>`;
 }
 
 /** The model as plain text (the other half of the email). */
 export function renderText(m: Model): string {
-  const out = [m.title.toUpperCase(), `Employé : ${m.employee}`, ...m.lines, "", ...m.figures.map((f) => `${f.label} : ${f.value}`)];
+  const out = [...(m.disclaimer ? [m.disclaimer, ""] : []), m.title.toUpperCase(), `Employé : ${m.employee}`, ...m.lines, "", ...m.figures.map((f) => `${f.label} : ${f.value}`)];
   if (m.note) out.push(m.note);
   for (const sec of m.sections) out.push("", sec.heading.toUpperCase(), ...sec.rows.map((r) => r.filter(Boolean).join(" | ")));
+  if (m.disclaimer) out.push("", m.disclaimer);
   return out.join("\n");
 }
 
