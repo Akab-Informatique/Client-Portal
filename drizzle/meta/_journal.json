@@ -862,6 +862,13 @@
       "when": 1793372795090,
       "tag": "0122_odd_natasha_romanoff",
       "breakpoints": true
+    },
+    {
+      "idx": 123,
+      "version": "7",
+      "when": 1793375297126,
+      "tag": "0123_faulty_giant_girl",
+      "breakpoints": true
     }
   ]
 }

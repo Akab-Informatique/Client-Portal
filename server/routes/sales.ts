@@ -66,7 +66,7 @@ async function clientExists(id: string) {
  * the quote, won / lost dates the closing (today unless given), an open stage clears it;
  * a lost deal needs its reason.
  */
-function settle(cur: Partial<Row> | null, patch: Partial<OppInput>, today: string): Partial<OppInput> {
+export function settle(cur: Partial<Row> | null, patch: Partial<OppInput>, today: string): Partial<OppInput> {
   const prevStage = (cur?.stage ?? null) as SalesStage | null;
   const stage = (patch.stage ?? prevStage ?? "lead") as SalesStage;
   const out: Partial<OppInput> = { ...patch };

@@ -1,3 +1,4 @@
+import { syncQuoteToPipeline } from "../lib/quoteSales.ts";
 import { Hono } from "hono";
 import { HTTPException } from "hono/http-exception";
 import { and, asc, eq, inArray, isNotNull, sql } from "drizzle-orm";
@@ -240,6 +241,7 @@ export const quoteRoutes = new Hono<AppEnv>()
       await saveLines(tx, row.id, p.lines);
       return row.id;
     });
+    await syncQuoteToPipeline(id, a.user.id);
     const q = await getQuote(id);
     await audit(a.user.id, "quote.created", id, { number: q?.number, clientId: p.clientId, preparedBy });
     return c.json(q, 201);
@@ -279,6 +281,7 @@ export const quoteRoutes = new Hono<AppEnv>()
       await saveLines(tx, id, p.lines);
     });
 await audit(a.user.id, "quote.updated", id, { number: cur.number, lines: p.lines.length, ...(p.preparedById && p.preparedById !== cur.preparedById ? { preparedBy: p.preparedById } : {}) });
+    await syncQuoteToPipeline(id, a.user.id);
     return c.json(await getQuote(id));
   })
 
@@ -300,6 +303,7 @@ await audit(a.user.id, "quote.updated", id, { number: cur.number, lines: p.lines
       })
       .where(eq(schema.quotes.id, id));
     await audit(a.user.id, "quote.status", id, { number: cur.number, from: cur.status, to: status });
+    await syncQuoteToPipeline(id, a.user.id);
     return c.json(await getQuote(id));
   })
 
@@ -337,6 +341,7 @@ await audit(a.user.id, "quote.updated", id, { number: cur.number, lines: p.lines
       );
       return row.id;
     });
+    await syncQuoteToPipeline(id, a.user.id);
     const q = await getQuote(id);
     await audit(a.user.id, "quote.duplicated", id, { from: cur.number, number: q?.number });
     return c.json(q, 201);

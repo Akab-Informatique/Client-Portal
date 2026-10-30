@@ -69,6 +69,7 @@ const quoteColumns = {
   projectTicketId: schema.quotes.projectTicketId,
   projectTicketNumber: schema.quotes.projectTicketNumber,
   projectAt: schema.quotes.projectAt,
+  opportunityId: schema.quotes.opportunityId,
   sentAt: schema.quotes.sentAt,
   decidedAt: schema.quotes.decidedAt,
   createdAt: schema.quotes.createdAt,

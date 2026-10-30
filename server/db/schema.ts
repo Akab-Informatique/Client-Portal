@@ -2353,6 +2353,8 @@ export const quotes = pgTable(
     projectTicketNumber: text("project_ticket_number"),
     meetingPointId: uuid("meeting_point_id").references(() => meetingPoints.id, { onDelete: "set null" }),
     projectAt: timestamp("project_at", { withTimezone: true }),
+    /** The opportunity of the sales pipeline made from this quote (Vente › Ventes): follows the quote's status and amounts */
+    opportunityId: uuid("opportunity_id").references(() => salesOpportunities.id, { onDelete: "set null" }),
     sentAt: timestamp("sent_at", { withTimezone: true }),
     decidedAt: timestamp("decided_at", { withTimezone: true }),
     createdAt: created(),

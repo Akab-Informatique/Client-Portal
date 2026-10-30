@@ -1746,6 +1746,8 @@ describe("tickets: client and contact", () => {
   });
 
   it("sales: opportunities move through the pipeline, and the dashboard counts MRR, follow-ups and conversion", async () => {
+    // quotes made by the tests before this one have their own cards in the pipeline: this one counts its own
+    await db().delete(schema.salesOpportunities);
     const admin = await session("admin@akab.local");
     const tech = await session("tech@akab.local");
     const { todayQc } = await import("../server/lib/quotes.ts");
@@ -9129,5 +9131,82 @@ describe("vendor payments: the vendors' bills of QuickBooks on a calendar", () =
       await db().delete(schema.recurringPayments);
     }
     expect((await admin.get("/api/vendor-payments/recurring")).json).toEqual([]);
+  });
+});
+
+describe("quotes feed the sales pipeline", () => {
+  const find = async (admin: Agent, quoteId: string) => {
+    const q = (await admin.get(`/api/quotes/${quoteId}`)).json;
+    const opps = (await admin.get("/api/sales/opportunities")).json as any[];
+    const all = Array.isArray(opps) ? opps : (opps as any).items;
+    return { quote: q, opp: all.find((o: any) => o.id === q.opportunityId) };
+  };
+
+  it("a new quote makes an opportunity that follows its status and amounts", async () => {
+    const admin = await signIn("admin@akab.local");
+    const lines = [
+      { description: "Support géré", quantityX100: 1000, unitPriceCents: 5000, recurrence: "monthly", taxable: true },
+      { description: "Licence annuelle", quantityX100: 100, unitPriceCents: 120000, recurrence: "yearly", taxable: true },
+      { description: "Installation", quantityX100: 100, unitPriceCents: 80000, recurrence: "once", taxable: true },
+      { description: "Option", quantityX100: 100, unitPriceCents: 999999, recurrence: "once", taxable: true, optional: true },
+    ];
+    const made = await admin.post("/api/quotes", { prospectName: "Pipeline Inc.", contactName: "Marie", contactEmail: "marie@pipeline.example", title: "Parc de postes", lines });
+    expect(made.status).toBe(201);
+    // made with the quote: a meeting, recurring = 10 × 50 $ + a twelfth of the yearly 1 200 $, one time = 800 $ (no options, no taxes)
+    let { opp } = await find(admin, made.json.id);
+    expect(opp).toMatchObject({ companyName: "Pipeline Inc.", contactName: "Marie", contactEmail: "marie@pipeline.example", stage: "meeting", probability: 35, kind: "recurring", monthlyCents: 60000, oneTimeCents: 80000 });
+    expect(opp.notes).toContain(made.json.number);
+
+    // changing the quote changes the card while it is open
+    const lines2 = lines.map((l, i) => (i === 0 ? { ...l, quantityX100: 2000 } : l));
+    expect((await admin.put(`/api/quotes/${made.json.id}`, { prospectName: "Pipeline Inc.", title: "Parc de postes", lines: lines2 })).status).toBe(200);
+    ({ opp } = await find(admin, made.json.id));
+    expect(opp.monthlyCents).toBe(110000);
+
+    // sent, then accepted
+    expect((await admin.post(`/api/quotes/${made.json.id}/status`, { status: "sent" })).status).toBe(200);
+    ({ opp } = await find(admin, made.json.id));
+    expect(opp).toMatchObject({ stage: "quote_sent", probability: 50 });
+    expect(opp.quoteSentOn).toBeTruthy();
+    // back to a draft: the card stays where it is
+    await admin.post(`/api/quotes/${made.json.id}/status`, { status: "draft" });
+    expect((await find(admin, made.json.id)).opp.stage).toBe("quote_sent");
+    await admin.post(`/api/quotes/${made.json.id}/status`, { status: "accepted" });
+    ({ opp } = await find(admin, made.json.id));
+    expect(opp).toMatchObject({ stage: "won", probability: 100 });
+    expect(opp.closedOn).toBeTruthy();
+
+    // one card per quote: nothing else was made by these changes
+    const all = (await admin.get("/api/sales/opportunities")).json as any;
+    const list = Array.isArray(all) ? all : all.items;
+    expect(list.filter((o: any) => o.companyName === "Pipeline Inc.")).toHaveLength(1);
+  });
+
+  it("declined = lost, a one-time quote is a one-time sale, a duplicate has its own card, and a card moved by hand is not pulled back", async () => {
+    const admin = await signIn("admin@akab.local");
+    const line = { description: "Écran", quantityX100: 200, unitPriceCents: 25000, recurrence: "once", taxable: true };
+    const made = await admin.post("/api/quotes", { prospectName: "Écrans Inc.", title: "Écrans", lines: [line] });
+    let { opp } = await find(admin, made.json.id);
+    expect(opp).toMatchObject({ kind: "one_time", oneTimeCents: 50000, monthlyCents: 0, stage: "meeting" });
+
+    // moved by hand to "quote sent": a draft does not pull it back
+    await admin.patch(`/api/sales/opportunities/${opp.id}`, { stage: "quote_sent" });
+    await admin.put(`/api/quotes/${made.json.id}`, { prospectName: "Écrans Inc.", title: "Écrans", lines: [line] });
+    expect((await find(admin, made.json.id)).opp.stage).toBe("quote_sent");
+
+    await admin.post(`/api/quotes/${made.json.id}/status`, { status: "sent" });
+    await admin.post(`/api/quotes/${made.json.id}/status`, { status: "declined" });
+    ({ opp } = await find(admin, made.json.id));
+    expect(opp).toMatchObject({ stage: "lost", lostReason: "other", probability: 0 });
+    // the card is closed: a change of the quote's lines does not touch its amounts
+    // brought back to a draft: the card is open again
+    await admin.post(`/api/quotes/${made.json.id}/status`, { status: "draft" });
+    expect((await find(admin, made.json.id)).opp).toMatchObject({ stage: "meeting", lostReason: null, closedOn: null });
+
+    const copy = await admin.post(`/api/quotes/${made.json.id}/duplicate`, {});
+    const dup = await find(admin, copy.json.id);
+    expect(dup.opp.id).toBeTruthy();
+    expect(dup.opp.id).not.toBe(opp.id);
+    expect(dup.opp.stage).toBe("meeting");
   });
 });
