@@ -330,13 +330,6 @@ export function NewTicketDialog({
               </Label>
               <div className="flex gap-2">
                 <Input id="nt-start" type="date" className="min-w-0 flex-1" value={f.startDate} onChange={(e) => setF({ ...f, startDate: e.target.value })} />
-                <Input
-                  type="time"
-                  className="w-32 shrink-0"
-                  value={f.startTime}
-                  onChange={(e) => setF({ ...f, startTime: e.target.value, startDate: f.startDate || (e.target.value ? new Date().toLocaleDateString("en-CA") : "") })}
-                  aria-label={t("tickets.startTime")}
-                />
               </div>
             </div>
             <div className="space-y-2">

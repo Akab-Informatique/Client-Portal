@@ -165,6 +165,12 @@ To-do page: **Ma journée** (the dashboard) and **Liste d'équipe** (shared task
 - **+ button of the top bar** (`src/components/QuickAdd.tsx`, `tickets.edit`): **Nouveau billet** (the usual creation window) or **Nouvelle charge** (pick the ticket, then the ticket's charge window, now with two modes: an **inventory item** or a **one-time charge** typed on the spot — name, quantity, price, cost, billable; no inventory item, `storeProductId` null).
 - **Weekly meeting points**: ticking a point **settles it and sends it to the archive** (`done: true` sets `archived_at` too); unticking, or restoring from the archive, puts it back open. The per-point archive button is gone (the "settled stay 7 days" rule above no longer applies). Test: "checkpoint with a time…".
 
+## Pipeline layout, dates on tickets, meeting order (latest)
+
+- **Ma journée** (`MyDay.tsx`, `DayLists.tsx`): left = the **compact view of tickets** (`CompactList` of the Tickets page, fed by the day's tickets), **my open projects** (compact, `DayProjects`, own day only) then the **tasks**; right = the **timeline** with every ticket and task planned during the day. **A ticket is on the day by its checkpoint (today or already passed) or its due date (by the end of the day)**, or when pinned (`dayItems`); the order uses the checkpoint before the due date.
+- **Dates on a ticket**: **start and due are a day only** (no time input anywhere: ticket window, list popovers, New ticket; a due keeps the time it already has, 17:00 by default); only the **Checkpoint** has a day **and a time**. Quick edits: the ticket window header (Start, Checkpoint with time, Due) and the list popovers (Start, Checkpoint with ✓, Due).
+- **Meeting points order** (`meeting_points.position`, migration `0117`): drag the grip of a point to the order you want (`PUT /api/meetings/points/order { ids }`, `meetings.manage`); a new point goes last. Test: "the day of a technician…".
+
 ## Workflows (Admin › Flux de travail)
 
 - Right `admin.workflows` (administrators; not master-only). Section `src/admin/WorkflowsSection.tsx`, API `/api/admin/workflows` (`server/routes/workflows.ts`: list, `PUT /:key {enabled}`, `GET /:key/runs`, `POST /:key/test` = the sample message to your own address), engine `server/lib/workflows.ts` (`workflowTick` every minute from `server/index.ts`). Each workflow has an on/off switch stored as `integrations` row `workflow:<key>` (`enabled`, `config.enabledAt`); **all start OFF**, and switching on in production needs a mail server (`mail_not_configured`).

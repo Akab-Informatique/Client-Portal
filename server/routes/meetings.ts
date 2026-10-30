@@ -1,6 +1,6 @@
 import { Hono } from "hono";
 import { HTTPException } from "hono/http-exception";
-import { and, asc, desc, eq, gt, gte, inArray, isNotNull, isNull, lt, lte, or } from "drizzle-orm";
+import { and, asc, desc, eq, gt, gte, inArray, isNotNull, isNull, lt, lte, or, sql } from "drizzle-orm";
 import { z } from "zod";
 import { db, schema } from "../db/index.ts";
 import { auth, requirePermission, requireStaff, type AppEnv } from "../lib/auth.ts";
@@ -147,7 +147,7 @@ export const meetingRoutes = new Hono<AppEnv>()
           or(isNull(p.doneAt), gt(p.doneAt, new Date(Date.now() - 7 * 86_400_000))),
         ),
       )
-      .orderBy(asc(p.createdAt))
+      .orderBy(asc(p.position), asc(p.createdAt))
       .limit(300);
     return c.json(await withNotes(rows));
   })
@@ -174,11 +174,21 @@ export const meetingRoutes = new Hono<AppEnv>()
   .post("/points", requirePermission("meetings.manage"), async (c) => {
     const a = auth(c);
     const v = await body(c, z.object({ text: z.string().trim().min(1).max(2000), details: z.string().trim().max(8000).nullable().optional() }));
+    // a new point goes to the end of the list
+    const [last] = await db().select({ m: sql<number>`coalesce(max(${schema.meetingPoints.position}), 0)::int` }).from(schema.meetingPoints);
     const [row] = await db()
       .insert(schema.meetingPoints)
-      .values({ text: v.text, details: v.details || null, authorId: a.user.id, authorName: a.user.name })
+      .values({ text: v.text, details: v.details || null, authorId: a.user.id, authorName: a.user.name, position: (last?.m ?? 0) + 1 })
       .returning({ id: schema.meetingPoints.id });
     return c.json({ id: row.id }, 201);
+  })
+  /** The order the team wants the points discussed in: the ids, first to last */
+  .put("/points/order", requirePermission("meetings.manage"), async (c) => {
+    const v = await body(c, z.object({ ids: z.array(z.uuid()).min(1).max(500) }));
+    await db().transaction(async (tx) => {
+      for (const [i, id] of v.ids.entries()) await tx.update(schema.meetingPoints).set({ position: i + 1 }).where(eq(schema.meetingPoints.id, id));
+    });
+    return c.json({ ok: true });
   })
 
   .patch("/points/:id", requirePermission("meetings.manage"), async (c) => {

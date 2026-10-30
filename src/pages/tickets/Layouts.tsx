@@ -74,7 +74,8 @@ export function LayoutSwitch({ value, onChange }: { value: Layout; onChange: (l:
 const COMPACT_GRID = "grid grid-cols-[minmax(0,1fr)_5.5rem_4.5rem_6.5rem_9rem] items-center gap-x-3";
 
 /** Name, priority, milestone, due date and status — nothing else, one line each. */
-export function CompactList({ items, activeIds, onOpen }: { items: TicketSummary[]; activeIds: Set<number>; onOpen: (id: number) => void }) {
+export type CompactTicket = Pick<TicketSummary, "id" | "number" | "title" | "company" | "priorityKind" | "priorityLabel" | "milestoneDate" | "milestoneTime" | "dueAt" | "statusKind" | "statusLabel">;
+export function CompactList({ items, activeIds, onOpen }: { items: CompactTicket[]; activeIds: Set<number>; onOpen: (id: number) => void }) {
   const { t } = useTranslation();
   const txt = useChoiceText();
   const today = new Date().toLocaleDateString("en-CA");

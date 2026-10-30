@@ -86,6 +86,14 @@ export type DayItem = {
   masked?: boolean;
   pin?: "day" | "week";
   pinNote?: string | null;
+  checkpoint?: string | null;
+  checkpointTime?: string | null;
+  dueAt?: string;
+  priorityKind?: string;
+  priorityLabel?: string | null;
+  statusKind?: string;
+  statusLabel?: string | null;
+  companyName?: string;
 };
 
 export type DayData = {

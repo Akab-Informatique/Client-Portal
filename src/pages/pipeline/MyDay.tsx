@@ -2,7 +2,7 @@ import { useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
-import { AlertTriangle, CalendarDays, Star, CalendarOff, CheckCircle2, EyeOff, ChevronLeft, ChevronRight, Coffee, Loader2, Lock, MessageSquareText, Plus, RefreshCw, Sparkles, Ticket as TicketIcon, Workflow } from "lucide-react";
+import { AlertTriangle, CalendarDays, Star, CalendarOff, CheckCircle2, EyeOff, ChevronLeft, ChevronRight, Coffee, Loader2, Lock, MessageSquareText, Plus, RefreshCw, Sparkles, Workflow } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { AiDirection, useAiDirection } from "@/components/AiDirection";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -15,6 +15,7 @@ import { cn } from "@/lib/utils";
 import { useTicketWorkspace } from "@/pages/tickets/workspace";
 import { PRIORITY_STYLE, addDays, dayLabel, hm, longDay, todayYmd, toMinutes, type Block, type DayData, type DayItem } from "./shared";
 import { taskError, usePeople } from "./TaskDialog";
+import { DayProjects, DayTickets } from "./DayLists";
 
 /** The hours shown on the timeline: from an hour before the day starts to an hour after it ends */
 const HOUR_PX = 60;
@@ -190,9 +191,31 @@ export function MyDay({ onOpenTask }: { onOpenTask: (id: string) => void }) {
         )}
       </section>
 
+      {/* left: what is on the plate (tickets as the Tickets page's compact view, my projects, tasks); right: the day, hour by hour */}
       <div className="grid gap-4 xl:grid-cols-[minmax(0,1.15fr)_minmax(0,1fr)]">
-        {/* the blocks of the day */}
-        <section className="glass rounded-2xl border p-4">
+        <div className="min-w-0 space-y-4">
+          {can("pipeline.edit") && (
+            <form
+              className="glass flex gap-2 rounded-2xl border p-2.5"
+              onSubmit={(e) => {
+                e.preventDefault();
+                if (quick.trim()) add.mutate(quick.trim());
+              }}
+            >
+              <Plus className="my-auto ml-2 size-4 shrink-0 text-primary" />
+              <Input value={quick} onChange={(e) => setQuick(e.target.value)} placeholder={t("pipeline.day.quickAdd")} className="h-9 border-transparent bg-transparent shadow-none focus-visible:border-input" maxLength={200} />
+              <Button type="submit" size="sm" disabled={!quick.trim() || add.isPending} className="h-9 bg-grad-gold font-semibold text-[#1a1204]">
+                {t("pipeline.add")}
+              </Button>
+            </form>
+          )}
+          <DayTickets items={tickets} loading={isLoading} onOpen={(id) => ws.open(id)} />
+          {userId === me.id && can("projects.view") && <DayProjects />}
+          <ItemList title={t("pipeline.day.tasksToday")} icon={Workflow} items={tasks} loading={isLoading} onOpen={open} onComplete={can("pipeline.edit") ? (i) => complete.mutate(i.refId) : undefined} empty={t("pipeline.day.noTasks")} />
+        </div>
+
+        {/* every ticket and task planned during the day */}
+        <section className="glass h-fit rounded-2xl border p-4">
           <h3 className="mb-3 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">{t("pipeline.day.timeline")}</h3>
           {data && data.plan.blocks.some((b) => b.allDay) && (
             <div className="mb-3 flex flex-wrap items-center gap-1.5">
@@ -209,27 +232,6 @@ export function MyDay({ onOpenTask }: { onOpenTask: (id: string) => void }) {
           {isLoading || !data ? <Skeleton className="h-96 w-full" /> : <Timeline data={data} onOpen={(b) => (b.kind === "ticket" ? ws.open(Number(b.refId)) : b.refId && onOpenTask(b.refId))} />}
           <p className="mt-3 text-[11px] text-muted-foreground">{t("pipeline.day.suggestion")}</p>
         </section>
-
-        {/* the lists */}
-        <div className="space-y-4">
-          {can("pipeline.edit") && (
-            <form
-              className="glass flex gap-2 rounded-2xl border p-2.5"
-              onSubmit={(e) => {
-                e.preventDefault();
-                if (quick.trim()) add.mutate(quick.trim());
-              }}
-            >
-              <Plus className="my-auto ml-2 size-4 shrink-0 text-primary" />
-              <Input value={quick} onChange={(e) => setQuick(e.target.value)} placeholder={t("pipeline.day.quickAdd")} className="h-9 border-transparent bg-transparent shadow-none focus-visible:border-input" maxLength={200} />
-              <Button type="submit" size="sm" disabled={!quick.trim() || add.isPending} className="h-9 bg-grad-gold font-semibold text-[#1a1204]">
-                {t("pipeline.add")}
-              </Button>
-            </form>
-          )}
-          <ItemList title={t("pipeline.day.ticketsToday")} icon={TicketIcon} items={tickets} loading={isLoading} onOpen={open} empty={t("pipeline.day.noTickets")} />
-          <ItemList title={t("pipeline.day.tasksToday")} icon={Workflow} items={tasks} loading={isLoading} onOpen={open} onComplete={can("pipeline.edit") ? (i) => complete.mutate(i.refId) : undefined} empty={t("pipeline.day.noTasks")} />
-        </div>
       </div>
     </div>
   );

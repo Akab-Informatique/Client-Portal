@@ -107,22 +107,6 @@ export function DueEditor({
             save(e.target.value, v.time);
           }}
         />
-        <Input
-          type="time"
-          className="h-8 w-32 shrink-0"
-          value={v.time}
-          disabled={saving}
-          aria-label={t("tickets.due.time")}
-          onChange={(e) => setV({ ...v, time: e.target.value })}
-          onBlur={() => save(v.date, v.time)}
-          onKeyDown={(e) => {
-            if (e.key === "Enter") {
-              e.preventDefault();
-              if (confirmMode) commit(v.date, v.time);
-              else save(v.date, v.time);
-            }
-          }}
-        />
       </div>
       {quick && (
         <div className="flex flex-wrap gap-1">
@@ -139,20 +123,6 @@ export function DueEditor({
               className={cn("rounded-full border px-2 py-0.5 text-[11px] text-muted-foreground hover:border-[color:var(--gold)]/50 hover:text-foreground", v.date === ymd(d) && "border-[color:var(--gold)]/60 text-foreground")}
             >
               {label}
-            </button>
-          ))}
-          {["09:00", "12:00", "17:00"].map((time) => (
-            <button
-              key={time}
-              type="button"
-              disabled={saving}
-              onClick={() => {
-                setV({ ...v, time });
-                save(v.date, time);
-              }}
-              className={cn("rounded-full border px-2 py-0.5 text-[11px] text-muted-foreground hover:border-[color:var(--gold)]/50 hover:text-foreground", v.time === time && "border-[color:var(--gold)]/60 text-foreground")}
-            >
-              {time}
             </button>
           ))}
         </div>

@@ -501,7 +501,24 @@ function TicketBody({
                   badge
                 );
               })()}
-
+              {/* quick edits: the start and the checkpoint (a day and a time) */}
+              <QuickDate
+                icon={CalendarPlus}
+                label={t("tickets.fields.start")}
+                date={view.startDate}
+                disabled={!editable}
+                onSave={(date) => stage({ startDate: date })}
+              />
+              <QuickDate
+                icon={Flag}
+                label={t("tickets.milestone.label")}
+                date={view.milestoneDate}
+                time={view.milestoneTime}
+                withTime
+                disabled={!editable}
+                min={view.startDate}
+                onSave={(date, time) => stage({ milestoneDate: date, milestoneTime: date ? time : null })}
+              />
             </div>
             </div>
             <div className="mt-3 lg:mt-1 lg:shrink-0">
@@ -532,7 +549,7 @@ function TicketBody({
                 label: t("tickets.sections.planning"),
                 value: shortDate(view.dueAt),
                 more: [
-                  `${t("tickets.fields.start")} : ${tk.startDate ? shortDate(tk.startDate) + (tk.startTime ? ` ${tk.startTime}` : "") : "—"}`,
+                  `${t("tickets.fields.start")} : ${tk.startDate ? shortDate(tk.startDate) : "—"}`,
                   `${t("tickets.milestone.label")} : ${tk.milestoneDate ? `${shortDate(tk.milestoneDate)}${tk.milestoneTime ? ` ${tk.milestoneTime}` : ""}` : "—"}`,
                   `${t("tickets.fields.hours")} : ${partial ? "…" : t("tickets.hoursValue", { hours: tk.hours.toLocaleString() })}`,
                   `${t("tickets.estimate.short")} : ${tk.estimate ? hm(tk.estimate.minutes / 60) : "—"}`,
@@ -613,7 +630,7 @@ function TicketBody({
                 )}
                 {key === "planning" && (
                   <dl className="space-y-3">
-                      <StartDate tk={tk} value={view} onChange={stage} />
+                      <StartDate value={view} onChange={stage} />
                       <Detail icon={CalendarClock} label={t("tickets.fields.due")}>
                         {editable ? (
                           <div className={cn("mt-0.5 rounded-lg")}>
@@ -687,7 +704,7 @@ function TicketBody({
           {tk.startLocked && tk.startDate && tk.startDate > todayLocal() && (
             <p className="flex items-start gap-2 rounded-xl border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-xs text-amber-200">
               <Lock className="mt-0.5 size-3.5 shrink-0" />{" "}
-              {t("tickets.startLock.notice", { date: tk.startTime ? `${shortDate(tk.startDate)} ${tk.startTime}` : shortDate(tk.startDate) })}
+              {t("tickets.startLock.notice", { date: shortDate(tk.startDate) })}
             </p>
           )}
         </div>
@@ -1563,11 +1580,9 @@ const todayLocal = () => {
 };
 
 function StartDate({
-  tk,
   value,
   onChange,
 }: {
-  tk: TicketDetail;
   value: { startDate: string | null; startTime: string | null; startLocked: boolean; milestoneDate: string | null; milestoneTime: string | null };
   onChange: (p: { startDate?: string | null; startTime?: string | null; startLocked?: boolean; milestoneDate?: string | null; milestoneTime?: string | null }) => void;
 }) {
@@ -1595,11 +1610,6 @@ function StartDate({
             disabled={off}
             value={value.startDate ?? ""}
             onChange={(e) => onChange({ startDate: e.target.value || null })}
-          />
-          <StartTimeInput
-            tk={{ ...tk, startDate: value.startDate, startTime: value.startTime }}
-            disabled={off}
-            onSave={(startTime) => onChange(startTime && !value.startDate ? { startDate: todayLocal(), startTime } : { startTime })}
           />
           {/* Restriction: nobody works on it before that day (off by default) */}
           <label
@@ -1640,6 +1650,54 @@ function StartDate({
         </dd>
       </div>
     </div>
+  );
+}
+
+/** A day (and, for the checkpoint, a time) changed in place from the ticket's header */
+function QuickDate({ icon: Icon, label, date, time, withTime, disabled, min, onSave }: { icon: LucideIcon; label: string; date: string | null; time?: string | null; withTime?: boolean; disabled: boolean; min?: string | null; onSave: (date: string | null, time: string | null) => void }) {
+  const { t } = useTranslation();
+  const [d, setD] = useState(date ?? "");
+  const [h, setH] = useState(time ?? "");
+  useEffect(() => setD(date ?? ""), [date]);
+  useEffect(() => setH(time ?? ""), [time]);
+  const shown = date ? shortDate(date) + (withTime && time ? ` ${time}` : "") : "—";
+  const badge = (
+    <span className={cn("flex items-center gap-1 rounded-full border px-2.5 py-0.5 text-xs font-medium text-muted-foreground", !disabled && "cursor-pointer hover:border-[color:var(--gold)]/60")}>
+      <Icon className="size-3.5" />
+      {label} · {shown}
+    </span>
+  );
+  if (disabled) return badge;
+  return (
+    <Popover>
+      <PopoverTrigger asChild>
+        <button type="button" aria-label={label}>
+          {badge}
+        </button>
+      </PopoverTrigger>
+      <PopoverContent align="start" className="w-72 space-y-2">
+        <p className="text-sm font-semibold">{label}</p>
+        <div className="flex gap-2">
+          <Input type="date" className="h-8 min-w-0 flex-1" value={d} min={min ?? undefined} onChange={(e) => (setD(e.target.value), !withTime && onSave(e.target.value || null, null))} />
+          {withTime && <Input type="time" className="h-8 w-28 shrink-0" value={h} aria-label={t("tickets.milestone.time")} onChange={(e) => setH(e.target.value)} />}
+        </div>
+        {withTime && (
+          <div className="flex justify-between gap-2">
+            <Button type="button" variant="ghost" size="sm" onClick={() => onSave(null, null)}>
+              {t("tickets.quickClear")}
+            </Button>
+            <Button type="button" size="sm" disabled={!d} onClick={() => onSave(d, h || null)}>
+              {t("common.save")}
+            </Button>
+          </div>
+        )}
+        {!withTime && date && (
+          <Button type="button" variant="ghost" size="sm" onClick={() => onSave(null, null)}>
+            {t("tickets.quickClear")}
+          </Button>
+        )}
+      </PopoverContent>
+    </Popover>
   );
 }
 

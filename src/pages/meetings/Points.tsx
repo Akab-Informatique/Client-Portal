@@ -2,7 +2,10 @@ import { useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
-import { Archive, ArchiveRestore, CalendarClock, ChevronDown, MessageSquareText, Plus, StickyNote, Trash2, Undo2, X } from "lucide-react";
+import { DndContext, PointerSensor, closestCenter, useSensor, useSensors, type DragEndEvent } from "@dnd-kit/core";
+import { SortableContext, arrayMove, useSortable, verticalListSortingStrategy } from "@dnd-kit/sortable";
+import { CSS } from "@dnd-kit/utilities";
+import { Archive, ArchiveRestore, CalendarClock, ChevronDown, GripVertical, MessageSquareText, Plus, StickyNote, Trash2, Undo2, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
@@ -128,6 +131,20 @@ export function PointsSection() {
 
   const open = (data ?? []).filter((p) => !p.doneAt);
   const points = [...open, ...(data ?? []).filter((p) => p.doneAt)];
+  // the order the team wants: drag a point (the grip on its left) to where it should be discussed
+  const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 6 } }));
+  const reorder = useMutation({
+    mutationFn: (ids: string[]) => api.put("/meetings/points/order", { ids }),
+    onError: () => toast.error(t("common.error")),
+    onSettled: () => void qc.invalidateQueries({ queryKey: ["meetings", "points"] }),
+  });
+  const onDragEnd = (e: DragEndEvent) => {
+    if (!e.over || e.active.id === e.over.id) return;
+    const ids = points.map((p) => p.id);
+    const next = arrayMove(ids, ids.indexOf(String(e.active.id)), ids.indexOf(String(e.over.id)));
+    qc.setQueryData<Point[]>(["meetings", "points"], (old) => (old ? next.map((id) => old.find((p) => p.id === id)!).filter(Boolean) : old));
+    reorder.mutate(next);
+  };
 
   return (
     <section className="space-y-3">
@@ -201,18 +218,22 @@ export function PointsSection() {
             ) : points.length === 0 ? (
               <p className="p-6 text-center text-sm text-muted-foreground">{t("meetings.points.empty")}</p>
             ) : (
-              <ul className="max-h-[36rem] divide-y overflow-y-auto">
-                {points.map((p) => (
-                  <PointRow
-                    key={p.id}
-                    p={p}
-                    manage={manage}
-                    expanded={openId === p.id}
-                    onToggle={() => setOpenId((v) => (v === p.id ? null : p.id))}
-                    actions={actions}
-                  />
-                ))}
-              </ul>
+              <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={onDragEnd}>
+                <SortableContext items={points.map((p) => p.id)} strategy={verticalListSortingStrategy}>
+                  <ul className="max-h-[36rem] divide-y overflow-y-auto">
+                    {points.map((p) => (
+                      <PointRow
+                        key={p.id}
+                        p={p}
+                        manage={manage}
+                        expanded={openId === p.id}
+                        onToggle={() => setOpenId((v) => (v === p.id ? null : p.id))}
+                        actions={actions}
+                      />
+                    ))}
+                  </ul>
+                </SortableContext>
+              </DndContext>
             )}
           </>
         )}
@@ -235,9 +256,15 @@ function PointRow({
   actions: ReturnType<typeof usePointActions>;
 }) {
   const { t } = useTranslation();
+  const sort = useSortable({ id: p.id, disabled: !manage });
   return (
-    <li className={cn("group", expanded && "bg-muted/30")}>
+    <li ref={sort.setNodeRef} style={{ transform: CSS.Transform.toString(sort.transform), transition: sort.transition }} className={cn("group bg-background", expanded && "bg-muted/30", sort.isDragging && "relative z-10 shadow-lg")}>
       <div className="flex items-start gap-3 px-4 py-2.5">
+        {manage && (
+          <button type="button" className="mt-0.5 shrink-0 cursor-grab touch-none text-muted-foreground/60 hover:text-foreground active:cursor-grabbing" aria-label={t("meetings.points.drag")} {...sort.attributes} {...sort.listeners}>
+            <GripVertical className="size-4" />
+          </button>
+        )}
         <Checkbox
           className="mt-0.5"
           checked={Boolean(p.doneAt)}

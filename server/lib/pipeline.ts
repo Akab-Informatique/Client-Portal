@@ -99,6 +99,16 @@ export type DayItem = {
   pin?: "day" | "week";
   pinRank?: number;
   pinNote?: string | null;
+  /** A ticket's checkpoint date (the goal day): it decides, with the due date, which day the ticket is on */
+  checkpoint?: string | null;
+  checkpointTime?: string | null;
+  /** A ticket: what the compact list shows */
+  dueAt?: string;
+  priorityKind?: string;
+  priorityLabel?: string | null;
+  statusKind?: string;
+  statusLabel?: string | null;
+  companyName?: string;
 };
 type Busy = { start: number; end: number; title: string; o365?: boolean; allDay?: boolean };
 const RANK = { urgent: 0, high: 1, normal: 2, low: 3 } as const;
@@ -171,7 +181,22 @@ export async function dayItems(userId: string, date: string, viewerId: string = 
   for (const p of [...pins].sort((a, b) => (a.horizon === "week" ? 1 : 0) - (b.horizon === "week" ? 1 : 0))) if (!pinOf.has(p.ticketId)) pinOf.set(p.ticketId, p);
   const endOfDay = new Date(`${nextDay(date)}T00:00:00-05:00`).getTime();
   // the ones assigned to the technician and due by the end of the day, and every ticket pinned to them (even one assigned to someone else)
-  const mine = all.filter((t) => kindOf.get(t.status) !== "complete" && (pinOf.has(t.id) || (t.assignee?.id === userId && new Date(t.dueAt).getTime() < endOfDay)));
+  // a ticket is on the day by its checkpoint (the goal date, today or already passed) or by its due date (due by the end of the day)
+  const assigned = all.filter((t) => kindOf.get(t.status) !== "complete" && t.assignee?.id === userId);
+  const checks = assigned.length
+    ? await d.select({ id: schema.ticketMeta.ticketId, m: schema.ticketMeta.milestoneDate, time: schema.ticketMeta.milestoneTime }).from(schema.ticketMeta).where(inArray(schema.ticketMeta.ticketId, assigned.map((t) => t.id)))
+    : [];
+  const checkpoint = new Map(checks.filter((r) => r.m).map((r) => [r.id, r.m as string]));
+  const checkpointTime = new Map(checks.filter((r) => r.m && r.time).map((r) => [r.id, r.time as string]));
+  // a pinned ticket of someone else has no checkpoint read above
+  const pinnedOnly = [...pinOf.keys()].filter((id) => !checkpoint.has(id) && !assigned.some((t) => t.id === id));
+  if (pinnedOnly.length) {
+    for (const r of await d.select({ id: schema.ticketMeta.ticketId, m: schema.ticketMeta.milestoneDate, time: schema.ticketMeta.milestoneTime }).from(schema.ticketMeta).where(inArray(schema.ticketMeta.ticketId, pinnedOnly))) {
+      if (r.m) checkpoint.set(r.id, r.m);
+      if (r.m && r.time) checkpointTime.set(r.id, r.time);
+    }
+  }
+  const mine = all.filter((t) => kindOf.get(t.status) !== "complete" && (pinOf.has(t.id) || (t.assignee?.id === userId && (new Date(t.dueAt).getTime() < endOfDay || (checkpoint.get(t.id) ?? "9999") <= date))));
   const est = mine.length
     ? await d.select({ id: schema.ticketMeta.ticketId, m: schema.ticketMeta.estimateMinutes }).from(schema.ticketMeta).where(inArray(schema.ticketMeta.ticketId, mine.map((t) => t.id)))
     : [];
@@ -189,6 +214,14 @@ export async function dayItems(userId: string, date: string, viewerId: string = 
       minutes: estimate.get(t.id) ?? 45,
       ticketNumber: t.number,
       client: t.company.name,
+      checkpoint: checkpoint.get(t.id) ?? null,
+      checkpointTime: checkpointTime.get(t.id) ?? null,
+      dueAt: t.dueAt,
+      priorityKind: prio.get(t.priority) ?? "medium",
+      priorityLabel: o.priorities.find((p) => p.value === t.priority)?.label ?? null,
+      statusKind: kindOf.get(t.status) ?? "new",
+      statusLabel: o.statuses.find((s) => s.value === t.status)?.label ?? null,
+      companyName: t.company.name,
       ...(pinOf.has(t.id) ? { pin: pinOf.get(t.id)!.horizon, pinRank: pinOf.get(t.id)!.rank, pinNote: pinOf.get(t.id)!.note || null } : {}),
     });
   }
@@ -198,7 +231,7 @@ export async function dayItems(userId: string, date: string, viewerId: string = 
 }
 
 // the priorities of the day first (in their rank), then what is late, then the priorities of the week, then the rest
-const score = (i: DayItem) => [i.pin === "day" ? 0 : 1, i.pin === "day" ? (i.pinRank ?? 99) : 0, i.overdue ? 0 : 1, i.pin === "week" ? 0 : 1, RANK[i.priority], i.due ?? "9999", i.dueTime ?? "99:99", i.kind === "ticket" ? 0 : 1] as const;
+const score = (i: DayItem) => [i.pin === "day" ? 0 : 1, i.pin === "day" ? (i.pinRank ?? 99) : 0, i.overdue ? 0 : 1, i.pin === "week" ? 0 : 1, RANK[i.priority], i.checkpoint ?? i.due ?? "9999", i.dueTime ?? "99:99", i.kind === "ticket" ? 0 : 1] as const;
 export function byUrgency(a: DayItem, b: DayItem): number {
   const x = score(a);
   const y = score(b);

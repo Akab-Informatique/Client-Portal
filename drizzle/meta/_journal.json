@@ -820,6 +820,13 @@
       "when": 1793322032106,
       "tag": "0116_aspiring_nocturne",
       "breakpoints": true
+    },
+    {
+      "idx": 117,
+      "version": "7",
+      "when": 1793323036327,
+      "tag": "0117_spooky_vulture",
+      "breakpoints": true
     }
   ]
 }

@@ -1022,14 +1022,7 @@ function TicketRow({
           </span>
           {/* the goal date between the start and the final due date (changed in the ticket's Planning) */}
           <span className="min-w-0 xl:[order:var(--o-milestone)]" title={t("tickets.milestone.hint")}>
-            <span
-              className={cn(
-                "block whitespace-nowrap font-mono text-xs tabular-nums",
-                tk.milestoneDate && tk.statusKind !== "complete" && tk.milestoneDate < new Date().toLocaleDateString("en-CA") ? "text-destructive" : "text-muted-foreground",
-              )}
-            >
-              {tk.milestoneDate ? `${shortDate(tk.milestoneDate)}${tk.milestoneTime ? ` ${tk.milestoneTime}` : ""}` : "—"}
-            </span>
+            <CheckpointCell tk={tk} editable={editable} />
           </span>
           <span className="min-w-0 xl:[order:var(--o-due)]">
             {(() => {
@@ -1858,7 +1851,7 @@ function StartCell({ tk, editable }: { tk: TicketSummary; editable: boolean }) {
   };
   const label = (
     <span className={cn("flex items-center gap-1 whitespace-nowrap rounded px-0.5 font-mono text-xs tabular-nums text-muted-foreground", editable && "hover:bg-accent/60")}>
-      {tk.startDate ? (tk.startTime ? `${shortDate(tk.startDate)} ${tk.startTime}` : shortDate(tk.startDate)) : "—"}
+      {tk.startDate ? shortDate(tk.startDate) : "—"}
       {tk.startLocked && <Lock className="size-3 shrink-0 text-amber-300" aria-label={t("tickets.startLock.on")} />}
     </span>
   );
@@ -1904,14 +1897,6 @@ function StartCell({ tk, editable }: { tk: TicketSummary; editable: boolean }) {
             </Button>
           )}
         </div>
-        <Input
-          type="time"
-          className="h-8 w-32"
-          disabled={save.isPending || !draft.startDate}
-          value={draft.startTime ?? ""}
-          onChange={(e) => setDraft((d) => ({ ...d, startTime: e.target.value || null }))}
-          aria-label={t("tickets.startTime")}
-        />
         <label className={cn("flex items-center gap-2 text-xs", !draft.startDate && "opacity-60")} title={t("tickets.startLock.hint")}>
           <Switch
             checked={draft.startLocked}
@@ -1924,6 +1909,56 @@ function StartCell({ tk, editable }: { tk: TicketSummary; editable: boolean }) {
         </label>
         {!draft.startDate && <p className="text-[10px] text-muted-foreground">{t("tickets.startLock.needsDate")}</p>}
         <ConfirmRow saving={save.isPending} onSave={confirm} onCancel={() => setOpen(false)} />
+      </PopoverContent>
+    </Popover>
+  );
+}
+
+/** The checkpoint from the list: a day and a time, saved by ✓. */
+function CheckpointCell({ tk, editable }: { tk: TicketSummary; editable: boolean }) {
+  const { t } = useTranslation();
+  const qc = useQueryClient();
+  const [open, setOpen] = useState(false);
+  const current = { date: tk.milestoneDate ?? "", time: tk.milestoneTime ?? "" };
+  const [draft, setDraft] = useState(current);
+  const save = useMutation({
+    mutationFn: () => api.put(`/tickets/${tk.id}/start-date`, { milestoneDate: draft.date || null, milestoneTime: draft.date ? draft.time || null : null }),
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: ["tickets"] });
+      toast.success(t("common.saved"));
+      setOpen(false);
+    },
+    onError: (e) => toast.error(ticketErrorText(t, e)),
+  });
+  const late = tk.milestoneDate && tk.statusKind !== "complete" && tk.milestoneDate < new Date().toLocaleDateString("en-CA");
+  const label = (
+    <span className={cn("block whitespace-nowrap rounded px-0.5 font-mono text-xs tabular-nums", late ? "text-destructive" : "text-muted-foreground", editable && "hover:bg-accent/60")}>
+      {tk.milestoneDate ? `${shortDate(tk.milestoneDate)}${tk.milestoneTime ? ` ${tk.milestoneTime}` : ""}` : "—"}
+    </span>
+  );
+  if (!editable) return label;
+  return (
+    <Popover
+      open={open}
+      onOpenChange={(o) => {
+        if (o) setDraft(current);
+        setOpen(o);
+      }}
+    >
+      <PopoverTrigger asChild>
+        <button type="button" className="text-left" aria-label={t("tickets.milestone.label")} title={t("tickets.milestone.hint")}>
+          {label}
+        </button>
+      </PopoverTrigger>
+      <PopoverContent align="start" className="w-72 space-y-2">
+        <p className="text-sm font-semibold">
+          {t("tickets.milestone.label")} · <span className="font-mono text-xs text-muted-foreground">{tk.number}</span>
+        </p>
+        <div className="flex gap-2">
+          <Input type="date" className="h-8 min-w-0 flex-1" autoFocus disabled={save.isPending} value={draft.date} min={tk.startDate ?? undefined} onChange={(e) => setDraft((d) => ({ ...d, date: e.target.value, time: e.target.value ? d.time : "" }))} aria-label={t("tickets.milestone.label")} />
+          <Input type="time" className="h-8 w-28 shrink-0" disabled={save.isPending} value={draft.time} onChange={(e) => setDraft((d) => ({ ...d, time: e.target.value, date: d.date || (e.target.value ? new Date().toLocaleDateString("en-CA") : "") }))} aria-label={t("tickets.milestone.time")} />
+        </div>
+        <ConfirmRow saving={save.isPending} onSave={() => save.mutate()} onCancel={() => setOpen(false)} />
       </PopoverContent>
     </Popover>
   );

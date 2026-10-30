@@ -8754,3 +8754,38 @@ describe("checkpoint with a time, default sort, one-time charge, meeting points 
     expect(JSON.stringify(charge.json)).toContain("Frais de déplacement");
   });
 });
+
+describe("the day of a technician: tickets by checkpoint or due date; meeting points in the order the team wants", () => {
+  it("a ticket is on the day by its checkpoint or its due date; points are reordered and a new one goes last", async () => {
+    resetRateLimit("login:ip:unknown");
+    const admin = await signIn("admin@akab.local");
+    const tech = await signIn("tech@akab.local");
+    const [me] = await db().select().from(schema.users).where(eq(schema.users.email, "tech@akab.local"));
+    // a ticket of mine with a far due date: not on the day, until its checkpoint is today
+    const mine = (await tech.get("/api/tickets?view=mine")).json.items.find((x: any) => x.statusKind !== "complete" && x.dueAt > "2031");
+    const far = mine ?? (await tech.get("/api/tickets?view=mine")).json.items.find((x: any) => x.statusKind !== "complete");
+    expect(far).toBeTruthy();
+    await db().update(schema.ticketMeta).set({ milestoneDate: null, startDate: null, startTime: null }).where(eq(schema.ticketMeta.ticketId, far.id));
+    await tech.patch(`/api/tickets/${far.id}`, { dueAt: "2035-01-01T17:00:00.000Z" });
+    const today = new Date().toLocaleDateString("en-CA", { timeZone: "America/Toronto" });
+    const ids = async () => (await tech.get(`/api/pipeline/day?date=${today}`)).json.items.filter((i: any) => i.kind === "ticket").map((i: any) => i.refId);
+    expect(await ids()).not.toContain(String(far.id));
+    expect((await tech.put(`/api/tickets/${far.id}/start-date`, { milestoneDate: today, milestoneTime: "10:00" })).status).toBe(200);
+    const item = (await tech.get(`/api/pipeline/day?date=${today}`)).json.items.find((i: any) => i.refId === String(far.id));
+    expect(item).toMatchObject({ checkpoint: today, checkpointTime: "10:00" });
+    expect(item.statusKind).toBeTruthy();
+    expect(me.id).toBeTruthy();
+
+    // the weekly meeting's points: dragged into the order wanted, a new one at the end
+    const a = (await admin.post("/api/meetings/points", { text: "Ordre A" })).json.id;
+    const b = (await admin.post("/api/meetings/points", { text: "Ordre B" })).json.id;
+    const c = (await admin.post("/api/meetings/points", { text: "Ordre C" })).json.id;
+    const order = async () => (await admin.get("/api/meetings/points")).json.map((p: any) => p.id).filter((id: string) => [a, b, c].includes(id));
+    expect(await order()).toEqual([a, b, c]);
+    expect((await admin.put("/api/meetings/points/order", { ids: [c, a, b] })).status).toBe(200);
+    expect(await order()).toEqual([c, a, b]);
+    const d = (await admin.post("/api/meetings/points", { text: "Ordre D" })).json.id;
+    expect((await admin.get("/api/meetings/points")).json.map((p: any) => p.id).slice(-1)[0]).toBe(d);
+    expect((await tech.put("/api/meetings/points/order", { ids: [a] })).status).toBe(403);
+  });
+});

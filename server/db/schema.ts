@@ -1457,6 +1457,8 @@ export const meetingPoints = pgTable("meeting_points", {
   snoozeUntil: text("snooze_until"),
   authorId: uuid("author_id").references(() => users.id, { onDelete: "set null" }),
   authorName: text("author_name").notNull(),
+  /** The order of the list, as the team arranged it (drag and drop) */
+  position: integer("position").notNull().default(0),
   createdAt: created(),
 });
 
