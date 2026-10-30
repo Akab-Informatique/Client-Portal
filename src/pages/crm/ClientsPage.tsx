@@ -92,10 +92,11 @@ export function ClientsPage() {
       </div>
 
       <div className="glass overflow-hidden rounded-2xl border">
-        <div className="hidden grid-cols-[minmax(0,2.4fr)_minmax(0,1fr)_minmax(0,1fr)_90px_110px] gap-3 border-b px-4 py-2 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground md:grid">
+        <div className="hidden grid-cols-[minmax(0,2.4fr)_minmax(0,1fr)_minmax(0,1fr)_minmax(0,1.4fr)_90px_110px] gap-3 border-b px-4 py-2 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground md:grid">
           <span>{t("crm.col.client")}</span>
           <span>{t("crm.col.city")}</span>
           <span>{t("crm.col.phone")}</span>
+          <span>{t("crm.col.billingEmail")}</span>
           <span className="text-right">{t("crm.col.contacts")}</span>
           <span className="text-right">{t("crm.col.tickets")}</span>
         </div>
@@ -106,7 +107,7 @@ export function ClientsPage() {
             <li key={c.id}>
               <Link
                 to={`/crm/${c.id}`}
-                className="grid grid-cols-1 gap-x-3 gap-y-1 px-4 py-2.5 transition-colors hover:bg-accent/40 md:grid-cols-[minmax(0,2.4fr)_minmax(0,1fr)_minmax(0,1fr)_90px_110px] md:items-center"
+                className="grid grid-cols-1 gap-x-3 gap-y-1 px-4 py-2.5 transition-colors hover:bg-accent/40 md:grid-cols-[minmax(0,2.4fr)_minmax(0,1fr)_minmax(0,1fr)_minmax(0,1.4fr)_90px_110px] md:items-center"
               >
                 <span className="flex min-w-0 items-center gap-2" style={{ paddingLeft: depth * 22 }}>
                   {depth > 0 ? <CornerDownRight className="size-3.5 shrink-0 text-muted-foreground" /> : <Building2 className="size-4 shrink-0 text-muted-foreground" />}
@@ -124,6 +125,15 @@ export function ClientsPage() {
                 <span className="flex items-center gap-1.5 truncate text-sm text-muted-foreground">
                   <Phone className="size-3.5 shrink-0 md:hidden" />
                   {c.phone || "—"}
+                </span>
+                <span className="truncate text-sm" title={c.billingEmail ?? c.email ?? undefined}>
+                  {c.billingEmail ? (
+                    <span className="text-muted-foreground">{c.billingEmail}</span>
+                  ) : c.email ? (
+                    <span className="italic text-muted-foreground/60">{c.email}</span>
+                  ) : (
+                    <span className="text-red-400">{t("crm.col.noBillingEmail")}</span>
+                  )}
                 </span>
                 <span className="flex items-center gap-1 text-sm text-muted-foreground md:justify-end">
                   <UsersRound className="size-3.5 md:hidden" /> <span className="font-mono">{c.contacts}</span>

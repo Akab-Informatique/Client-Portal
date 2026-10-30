@@ -392,6 +392,8 @@ const en: Dict = {
       city: "City",
       phone: "Phone",
       contacts: "Contacts",
+      billingEmail: "Billing email",
+      noBillingEmail: "None",
       tickets: "Open tickets",
     },
     childOf: "Subsidiary of {{name}}",

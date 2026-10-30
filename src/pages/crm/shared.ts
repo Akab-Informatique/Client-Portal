@@ -23,7 +23,7 @@ export type CrmClient = {
   portalEnabled: boolean;
   syncedAt: string | null;
 };
-export type CrmListItem = CrmClient & { parentName: string | null; children: number; contacts: number; openTickets: number };
+export type CrmListItem = CrmClient & { parentName: string | null; children: number; contacts: number; billingEmail: string | null; openTickets: number };
 export type InvoiceSettings = {
   billingEmail?: string;
   termsDays?: number;

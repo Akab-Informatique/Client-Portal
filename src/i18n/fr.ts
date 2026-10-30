@@ -390,6 +390,8 @@ const fr = {
       city: "Ville",
       phone: "Téléphone",
       contacts: "Contacts",
+      billingEmail: "Courriel de facturation",
+      noBillingEmail: "Aucun",
       tickets: "Billets ouverts",
     },
     childOf: "Filiale de {{name}}",

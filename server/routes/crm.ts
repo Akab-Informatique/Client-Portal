@@ -169,6 +169,7 @@ export const crmRoutes = new Hono<AppEnv>()
         parentName: r.parentId ? (names.get(r.parentId) ?? null) : null,
         children: rows.filter((x) => x.parentId === r.id).length,
         contacts: nContacts.get(r.id) ?? 0,
+        billingEmail: r.invoice?.billingEmail?.trim() || null,
         openTickets: r.autotaskId != null ? (open.get(r.autotaskId) ?? 0) : 0,
       })),
     );
