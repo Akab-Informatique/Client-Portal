@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
@@ -15,7 +15,7 @@ import { cn } from "@/lib/utils";
 import { useTicketWorkspace } from "@/pages/tickets/workspace";
 import { PRIORITY_STYLE, addDays, dayLabel, hm, longDay, todayYmd, toMinutes, type Block, type DayData, type DayItem } from "./shared";
 import { taskError, usePeople } from "./TaskDialog";
-import { DayProjects, DayTickets } from "./DayLists";
+import { DayProjects, MyTickets, Priorities } from "./DayLists";
 
 /** The hours shown on the timeline: from an hour before the day starts to an hour after it ends */
 const HOUR_PX = 60;
@@ -34,6 +34,37 @@ export function MyDay({ onOpenTask }: { onOpenTask: (id: string) => void }) {
   const [date, setDate] = useState(todayYmd());
   const [userId, setUserId] = useState<string>(me.id);
   const [quick, setQuick] = useState("");
+  // the width of the left side (percent), dragged with the mouse and kept on this computer
+  const box = useRef<HTMLDivElement>(null);
+  const [split, setSplit] = useState(() => {
+    const v = Number(localStorage.getItem("akab.pipeline.split"));
+    return v >= 25 && v <= 75 ? v : 46;
+  });
+  const setSplitSaved = (v: number) => {
+    setSplit(v);
+    try {
+      localStorage.setItem("akab.pipeline.split", String(v));
+    } catch {
+      /* not kept */
+    }
+  };
+  const startDrag = (e: React.PointerEvent) => {
+    e.preventDefault();
+    const rect = box.current?.getBoundingClientRect();
+    if (!rect) return;
+    let last = split;
+    const move = (ev: PointerEvent) => {
+      last = Math.min(75, Math.max(25, ((ev.clientX - rect.left) / rect.width) * 100));
+      setSplit(last);
+    };
+    const up = () => {
+      window.removeEventListener("pointermove", move);
+      window.removeEventListener("pointerup", up);
+      setSplitSaved(last);
+    };
+    window.addEventListener("pointermove", move);
+    window.addEventListener("pointerup", up);
+  };
   const direction = useAiDirection(`pipeline.day:${date}:${userId}`);
   const key = ["pipeline", "day", date, userId];
   const { data, isLoading } = useQuery({
@@ -191,9 +222,45 @@ export function MyDay({ onOpenTask }: { onOpenTask: (id: string) => void }) {
         )}
       </section>
 
-      {/* left: what is on the plate (tickets as the Tickets page's compact view, my projects, tasks); right: the day, hour by hour */}
-      <div className="grid gap-4 xl:grid-cols-[minmax(0,1.15fr)_minmax(0,1fr)]">
+      {/* left: the blocks of the day (and the priorities of the day); right: the priorities of the week, all my tickets (compact), projects, tasks. The bar between them is dragged to give one side more room. */}
+      <div ref={box} className="grid gap-4 xl:gap-0 xl:grid-cols-[var(--split)_12px_minmax(0,1fr)]" style={{ "--split": `${split}%` } as React.CSSProperties}>
         <div className="min-w-0 space-y-4">
+          <Priorities items={data?.items ?? []} horizon="day" onOpen={open} />
+          <section className="glass h-fit rounded-2xl border p-4">
+            <h3 className="mb-3 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">{t("pipeline.day.timeline")}</h3>
+            {data && data.plan.blocks.some((b) => b.allDay) && (
+              <div className="mb-3 flex flex-wrap items-center gap-1.5">
+                <span className="text-[11px] uppercase tracking-wide text-muted-foreground">{t("pipeline.day.allDay")}</span>
+                {data.plan.blocks
+                  .filter((b) => b.allDay)
+                  .map((b, i) => (
+                    <span key={i} className="rounded-full border border-sky-400/30 bg-sky-500/10 px-2.5 py-0.5 text-xs text-sky-200">
+                      {b.title}
+                    </span>
+                  ))}
+              </div>
+            )}
+            {isLoading || !data ? <Skeleton className="h-96 w-full" /> : <Timeline data={data} onOpen={(b) => (b.kind === "ticket" ? ws.open(Number(b.refId)) : b.refId && onOpenTask(b.refId))} />}
+            <p className="mt-3 text-[11px] text-muted-foreground">{t("pipeline.day.suggestion")}</p>
+          </section>
+        </div>
+
+        <div
+          role="separator"
+          aria-orientation="vertical"
+          aria-label={t("pipeline.day.resize")}
+          title={t("pipeline.day.resize")}
+          onPointerDown={startDrag}
+          onDoubleClick={() => setSplitSaved(46)}
+          className="group hidden cursor-col-resize touch-none items-stretch justify-center xl:flex"
+        >
+          <span className="my-2 w-0.5 rounded-full bg-[color:var(--glass-border)] transition-colors group-hover:bg-[color:var(--gold)]/60 group-active:bg-[color:var(--gold)]" />
+        </div>
+
+        <div className="min-w-0 space-y-4">
+          <Priorities items={data?.items ?? []} horizon="week" onOpen={open} />
+          <MyTickets userId={userId} mine={userId === me.id} onOpen={(id) => ws.open(id)} />
+          {userId === me.id && can("projects.view") && <DayProjects />}
           {can("pipeline.edit") && (
             <form
               className="glass flex gap-2 rounded-2xl border p-2.5"
@@ -209,29 +276,8 @@ export function MyDay({ onOpenTask }: { onOpenTask: (id: string) => void }) {
               </Button>
             </form>
           )}
-          <DayTickets items={tickets} loading={isLoading} onOpen={(id) => ws.open(id)} />
-          {userId === me.id && can("projects.view") && <DayProjects />}
           <ItemList title={t("pipeline.day.tasksToday")} icon={Workflow} items={tasks} loading={isLoading} onOpen={open} onComplete={can("pipeline.edit") ? (i) => complete.mutate(i.refId) : undefined} empty={t("pipeline.day.noTasks")} />
         </div>
-
-        {/* every ticket and task planned during the day */}
-        <section className="glass h-fit rounded-2xl border p-4">
-          <h3 className="mb-3 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">{t("pipeline.day.timeline")}</h3>
-          {data && data.plan.blocks.some((b) => b.allDay) && (
-            <div className="mb-3 flex flex-wrap items-center gap-1.5">
-              <span className="text-[11px] uppercase tracking-wide text-muted-foreground">{t("pipeline.day.allDay")}</span>
-              {data.plan.blocks
-                .filter((b) => b.allDay)
-                .map((b, i) => (
-                  <span key={i} className="rounded-full border border-sky-400/30 bg-sky-500/10 px-2.5 py-0.5 text-xs text-sky-200">
-                    {b.title}
-                  </span>
-                ))}
-            </div>
-          )}
-          {isLoading || !data ? <Skeleton className="h-96 w-full" /> : <Timeline data={data} onOpen={(b) => (b.kind === "ticket" ? ws.open(Number(b.refId)) : b.refId && onOpenTask(b.refId))} />}
-          <p className="mt-3 text-[11px] text-muted-foreground">{t("pipeline.day.suggestion")}</p>
-        </section>
       </div>
     </div>
   );

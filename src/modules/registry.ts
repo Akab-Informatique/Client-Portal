@@ -40,7 +40,7 @@ export const NAV_GROUPS = { security: { labelKey: "nav.security" } } as const;
 export const STAFF_MODULES: NavModule[] = [
   { key: "dashboard", path: "/", labelKey: "nav.dashboard", icon: LayoutDashboard, section: "team", permission: "dashboard.view" },
   { key: "messages", path: "/messages", labelKey: "nav.messages", icon: Megaphone, section: "command", permission: "messages.view" },
-  { key: "pipeline", path: "/pipeline", labelKey: "nav.pipeline", icon: Workflow, section: "tools", permission: "pipeline.view" },
+  { key: "pipeline", path: "/pipeline", labelKey: "nav.pipeline", icon: Workflow, section: "command", permission: "pipeline.view" },
   { key: "outlook", path: "/outlook", labelKey: "nav.outlook", icon: Mail, section: "tools", permission: "outlook.view", optIn: "outlook" },
   { key: "timesheets", path: "/timesheets", labelKey: "nav.timesheets", icon: Clock, section: "tools", permission: "timesheets.use", orRight: "timesheets.manage", rule: "timesheetRequired" },
   { key: "expenses", path: "/expenses", labelKey: "nav.expenses", icon: Wallet, section: "tools", permission: "timesheets.use" },
