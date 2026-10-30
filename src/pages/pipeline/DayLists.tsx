@@ -1,9 +1,10 @@
 import { useState } from "react";
 import { useTranslation } from "react-i18next";
 import { Pager } from "@/components/Pager";
-import { useQuery } from "@tanstack/react-query";
+import { keepPreviousData, useQuery } from "@tanstack/react-query";
 import { useNavigate } from "react-router-dom";
-import { FolderKanban, Star, Ticket as TicketIcon } from "lucide-react";
+import { BellRing, Eye, FolderKanban, Siren, Sparkles, Star, Ticket as TicketIcon, UserRound, UserX, type LucideIcon } from "lucide-react";
+import { SmsInboxDialog, SmsTile } from "@/pages/sms/SmsPage";
 import { Skeleton } from "@/components/ui/skeleton";
 import { api } from "@/lib/api";
 import { cn } from "@/lib/utils";
@@ -18,11 +19,25 @@ import type { DayItem } from "./shared";
  */
 export function MyTickets({ userId, mine, onOpen }: { userId: string; mine: boolean; onOpen: (id: number) => void }) {
   const { t } = useTranslation();
+  // the same buttons as the Tickets page, small: my tickets, texts, new, unassigned, needs attention, and my saved filters
+  const [filter, setFilter] = useState("view=mine");
+  const [sms, setSms] = useState(false);
+  const query = mine ? filter : `view=all&assignee=${userId}`;
   const { data, isLoading } = useQuery({
-    queryKey: ["tickets", "pipeline", mine ? "mine" : userId],
-    queryFn: () => api.get<TicketList>(mine ? "/tickets?view=mine" : `/tickets?view=all&assignee=${userId}`),
+    queryKey: ["tickets", "pipeline", mine ? query : userId],
+    queryFn: () => api.get<TicketList>(`/tickets?${query}`),
     refetchInterval: 60_000,
+    placeholderData: keepPreviousData,
   });
+  const m = data?.metrics;
+  const chips: { key: string; icon: LucideIcon; tone: string; label: string; count: number | undefined; query: string }[] = [
+    { key: "mine", icon: UserRound, tone: "text-primary", label: t("tickets.metrics.mine"), count: m?.mine, query: "view=mine" },
+    { key: "fresh", icon: Sparkles, tone: "text-emerald-400", label: t("tickets.metrics.fresh"), count: m?.fresh, query: "view=unassigned&statusKind=new" },
+    { key: "unassigned", icon: UserX, tone: "text-sky-400", label: t("tickets.metrics.unassigned"), count: m?.unassigned, query: "view=unassigned" },
+    { key: "statusAttention", icon: BellRing, tone: "text-amber-300", label: t("tickets.metrics.statusAttention"), count: m?.statusAttention, query: "view=all&statusKind=needsAttention" },
+    { key: "attention", icon: Siren, tone: "text-red-400", label: t("tickets.metrics.attention"), count: m?.attention, query: "view=all&attention=1" },
+    ...(data?.buttons ?? []).map((b) => ({ key: `b:${b.id}`, icon: Eye, tone: "text-muted-foreground", label: b.name, count: b.count as number | undefined, query: b.query })),
+  ];
   const all = (data?.items ?? []).filter((x) => x.statusKind !== "complete");
   // not stretched over the page: 10 at first, the others on the next pages
   const [page, setPage] = useState(1);
@@ -30,6 +45,22 @@ export function MyTickets({ userId, mine, onOpen }: { userId: string; mine: bool
   const items = all.slice((Math.min(page, Math.max(1, Math.ceil(all.length / size))) - 1) * size, Math.min(page, Math.max(1, Math.ceil(all.length / size))) * size);
   return (
     <section className="glass rounded-2xl border">
+      {mine && (
+        <div className="flex items-center gap-1 overflow-x-auto px-3 pt-3 scrollbar-thin">
+          {chips.map((c) => {
+            const on = filter === c.query;
+            return (
+              <button key={c.key} type="button" onClick={() => (setFilter(c.query), setPage(1))} className={cn("flex h-7 shrink-0 items-center gap-1.5 rounded-lg border px-2 text-xs transition-colors hover:border-[color:var(--gold)]/40", on ? "border-[color:var(--gold)]/60 bg-[color:var(--gold)]/10 text-foreground" : "border-[color:var(--glass-border)] text-muted-foreground")}>
+                <c.icon className={cn("size-3.5", c.tone)} />
+                <span className="font-medium">{c.label}</span>
+                <span className="font-mono tabular-nums">{c.count ?? "…"}</span>
+              </button>
+            );
+          })}
+          <SmsTile onOpen={() => setSms(true)} compact />
+        </div>
+      )}
+      {sms && <SmsInboxDialog initialId={null} onClose={() => setSms(false)} />}
       <h3 className="flex items-center gap-1.5 px-4 pb-2 pt-3 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
         <TicketIcon className="size-3.5" /> {t("pipeline.day.myTickets")} <span className="font-mono normal-case opacity-70">{all.length}</span>
       </h3>
