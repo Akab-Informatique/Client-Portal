@@ -157,7 +157,7 @@ export function AssistantDialog({ onClose, onPlan }: { onClose: () => void; onPl
                 {turn.actions.length > 0 && (
                   <div className="space-y-2">
                     <p className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">{t("tickets.assistant.proposed")}</p>
-                    <ul className="divide-y rounded-xl border">
+                    <ul className="max-h-72 divide-y overflow-y-auto rounded-xl border">
                       {turn.actions.map((a, i) => (
                         <li key={i} className="flex items-center gap-2.5 px-3 py-2 text-sm">
                           <Checkbox checked={turn.picked.has(i)} disabled={apply.isPending || turn.applied} onCheckedChange={(v) => toggle(index, i, v === true)} />
