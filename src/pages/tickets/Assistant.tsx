@@ -14,7 +14,7 @@ import { cn } from "@/lib/utils";
 import { useAiError } from "./TicketPanel";
 import { ticketErrorText } from "./shared";
 
-type Action = { type: string; id?: number; label: string; request: { method: "PATCH" | "PUT" | "POST" | "DELETE"; path: string; body?: unknown } | null };
+type Action = { type: string; id?: number; sort?: string; label: string; request: { method: "PATCH" | "PUT" | "POST" | "DELETE"; path: string; body?: unknown } | null };
 type Answer = { reply: string; actions: Action[]; refused: string[] };
 /** One turn of the conversation: what the person said, or what the assistant answered with the actions it proposes */
 type Turn = { role: "user"; text: string } | { role: "assistant"; text: string; actions: Action[]; refused: string[]; picked: Set<number>; results: Record<number, "ok" | string>; applied: boolean };
@@ -25,7 +25,7 @@ type Turn = { role: "user"; text: string } | { role: "assistant"; text: string; 
  * proposes actions: it only knows the tickets you can see and only proposes what your rights allow; nothing is done until you
  * tick and apply, and each action goes through the usual routes, which check your rights again.
  */
-export function AssistantDialog({ onClose, onPlan }: { onClose: () => void; onPlan: () => void }) {
+export function AssistantDialog({ onClose, onPlan, onSort }: { onClose: () => void; onPlan: () => void; onSort: (sort: string) => void }) {
   const { t } = useTranslation();
   const qc = useQueryClient();
   const confirm = useConfirm();
@@ -76,6 +76,11 @@ export function AssistantDialog({ onClose, onPlan }: { onClose: () => void; onPl
         if (!turn.picked.has(i)) continue;
         if (a.type === "plan_my_tickets") {
           plan = true;
+          out[i] = "ok";
+          continue;
+        }
+        if (a.type === "sort_list" && a.sort) {
+          onSort(a.sort);
           out[i] = "ok";
           continue;
         }

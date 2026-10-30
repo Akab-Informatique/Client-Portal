@@ -8819,6 +8819,9 @@ describe("the AI assistant of the tickets page: only what the person may do, not
           { type: "delete_ticket", id: target.id },
           { type: "set_due", id: 987654321, date: "2031-05-02" },
           { type: "refund_invoice", id: target.id },
+          { type: "sort_list", sort: "due" },
+          { type: "set_estimate", id: target.id, minutes: 45 },
+          { type: "set_checkpoint", id: target.id, date: "2031-05-02", time: "9h30" },
         ],
       });
       return new Response(JSON.stringify({ content: [{ type: "text", text }] }), { status: 200 });
@@ -8826,12 +8829,14 @@ describe("the AI assistant of the tickets page: only what the person may do, not
     try {
       // an administrator may delete: the action is offered, with the request the screen will send (and which checks again)
       const asAdmin = (await admin.post("/api/tickets/ai/assistant", { message: `Pousse ${target.number} au 2 mai 2031 et supprime-le` })).json;
-      expect(asAdmin.actions.map((a: any) => a.type)).toEqual(["set_due", "delete_ticket"]);
+      expect(asAdmin.actions.map((a: any) => a.type)).toEqual(["set_due", "delete_ticket", "sort_list", "set_estimate", "set_checkpoint"]);
+      expect(asAdmin.actions[2]).toMatchObject({ sort: "due", request: null });
+      expect(asAdmin.actions[4].request.body).toMatchObject({ milestoneDate: "2031-05-02", milestoneTime: "09:30" });
       expect(asAdmin.actions[0].request).toMatchObject({ method: "PATCH", path: `/tickets/${target.id}`, body: { dueDate: "2031-05-02" } });
       // a technician with the AI right but not the right to delete: the AI is not even told about deleting, and a deletion it invents is dropped
       const asTech = (await tech.post("/api/tickets/ai/assistant", { message: `Pousse ${target.number} au 2 mai 2031 et supprime-le` })).json;
       expect(sent[sent.length - 1].messages[0].content).not.toContain("delete_ticket {");
-      expect(asTech.actions.map((a: any) => a.type)).toEqual(["set_due"]);
+      expect(asTech.actions.map((a: any) => a.type)).toEqual(["set_due", "sort_list", "set_estimate", "set_checkpoint"]);
       expect(asTech.refused.length).toBeGreaterThan(0);
       // a conversation: the earlier turns go back to the AI, so it can ask a question and continue with the answer
       await tech.post("/api/tickets/ai/assistant", { message: "demain", history: [{ role: "user", text: "Pousse mon billet" }, { role: "assistant", text: "Quel billet ?" }] });

@@ -1727,7 +1727,7 @@ function AiPlanButton() {
       <Button variant="outline" size="icon" onClick={() => setAssistant(true)} disabled={run.isPending} className="border-violet-500/40 bg-violet-500/10 text-violet-200 hover:bg-violet-500/20" aria-label={t("tickets.assistant.title")} title={t("tickets.assistant.title")}>
         {run.isPending ? <Loader2 className="size-4 animate-spin" /> : <Sparkles className="size-4" />}
       </Button>
-      {assistant && <AssistantDialog onClose={() => setAssistant(false)} onPlan={() => run.mutate()} />}
+      {assistant && <AssistantDialog onClose={() => setAssistant(false)} onPlan={() => run.mutate()} onSort={(v) => setParams((q) => { if (v === "milestone") q.delete("sort"); else q.set("sort", v); return q; }, { replace: true })} />}
       <Dialog open={Boolean(plan)} onOpenChange={(o) => !o && setPlan(null)}>
         <DialogContent className="sm:max-w-2xl">
           <DialogHeader>
