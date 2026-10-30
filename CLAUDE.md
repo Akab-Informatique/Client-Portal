@@ -318,3 +318,7 @@ Sidebar: **Projets** is an entry of the Centre de commande now (still "upcoming"
 ## Production
 
 Docker Compose on a Debian server; Nginx Proxy Manager on another server terminates HTTPS and forwards to port 3000. Owner runs deployments (see INSTALL.md). Never `docker compose down -v`.
+
+## Ma journée: done blocks and AI refresh (latest)
+
+- A planned block whose ticket or task is no longer on the day's list (done, or taken off) comes back from `GET /api/pipeline/day` with `done: true` and is shown **struck out and faded** in the blocks of the day. A **sparkles icon in the header of "Blocs de la journée"** (`pipeline.edit`) reorganises the rest of the day with the AI (`POST /day/plan`, same as Replanifier): when the day is today the plan is laid out **from the next quarter hour** (`fromNow`, `layout(..., after)`), so the morning already gone is not offered again; the morning run still plans the whole day. Tests: `tests/pipeline.test.ts`.

@@ -253,7 +253,19 @@ export function MyDay({ onOpenTask }: { onOpenTask: (id: string) => void }) {
         <div className="min-w-0 space-y-4">
           <Priorities items={data?.items ?? []} horizon="day" onOpen={open} />
           <section className="glass h-fit rounded-2xl border p-4">
-            <h3 className="mb-3 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">{t("pipeline.day.timeline")}</h3>
+            <div className="mb-3 flex items-center justify-between gap-2">
+              <h3 className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">{t("pipeline.day.timeline")}</h3>
+              {can("pipeline.edit") && (
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <Button type="button" variant="ghost" size="icon" className="size-7 text-violet-300 hover:bg-violet-500/15" disabled={replan.isPending} onClick={() => replan.mutate()} aria-label={t("pipeline.day.aiRefresh")}>
+                      {replan.isPending ? <Loader2 className="size-4 animate-spin" /> : <Sparkles className="size-4" />}
+                    </Button>
+                  </TooltipTrigger>
+                  <TooltipContent>{t("pipeline.day.aiRefresh")}</TooltipContent>
+                </Tooltip>
+              )}
+            </div>
             {data && data.plan.blocks.some((b) => b.allDay) && (
               <div className="mb-3 flex flex-wrap items-center gap-1.5">
                 <span className="text-[11px] uppercase tracking-wide text-muted-foreground">{t("pipeline.day.allDay")}</span>
@@ -389,6 +401,7 @@ function Timeline({ data, onOpen, hourPx }: { data: DayData; onOpen: (b: Block) 
                 onClick={() => onOpen(b)}
                 className={cn(
                   "absolute inset-x-0 overflow-hidden rounded-lg border px-2.5 py-1 text-left transition-all enabled:hover:brightness-110",
+                  b.done && "opacity-40 saturate-50",
                   event
                     ? b.o365
                       ? "border-sky-400/40 bg-sky-500/10 text-sky-100"
@@ -411,7 +424,7 @@ function Timeline({ data, onOpen, hourPx }: { data: DayData; onOpen: (b: Block) 
                   {b.o365 && <span className="flex items-center gap-0.5 text-[10px] font-semibold uppercase tracking-wide text-sky-300"><CalendarDays className="size-2.5" /> Outlook</span>}
                   {b.masked && <EyeOff className="size-3 text-muted-foreground" />}
                 </span>
-                <span className="block truncate text-[13px] font-medium leading-tight">{b.title || t("pipeline.private")}</span>
+                <span className={cn("block truncate text-[13px] font-medium leading-tight", b.done && "line-through")}>{b.title || t("pipeline.private")}</span>
                 {b.note && h > 50 && <span className="block truncate text-[11px] text-muted-foreground">{b.note}</span>}
               </button>
             );

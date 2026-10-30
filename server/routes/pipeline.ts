@@ -221,13 +221,16 @@ export const pipelineRoutes = new Hono<AppEnv>()
     // someone else's day: their private tasks and the details of their calendar are not shown
     const viewing = userId !== a.user.id;
     const hidden = new Set(view.items.filter((i) => i.masked).map((i) => i.refId));
+    // a planned block whose work is no longer on the day's list was done (or taken off): shown struck out
+    const live = new Set(view.items.map((i) => i.key));
+    const withDone = (bl: typeof stored.blocks) => bl.map((b) => ((b.kind === "task" || b.kind === "ticket") && b.refId && !live.has(`${b.kind}:${b.refId}`) ? { ...b, done: true } : b));
     const plan = viewing
       ? {
           ...stored,
           summary: hidden.size ? "" : stored.summary,
-          blocks: stored.blocks.map((b) => (b.kind === "task" && b.refId && hidden.has(b.refId) ? { ...b, title: "", ticketNumber: null, note: null, masked: true } : b.kind === "event" && b.o365 ? { ...b, title: "Occupé", masked: true } : b)),
+          blocks: withDone(stored.blocks).map((b) => (b.kind === "task" && b.refId && hidden.has(b.refId) ? { ...b, title: "", ticketNumber: null, note: null, masked: true } : b.kind === "event" && b.o365 ? { ...b, title: "Occupé", masked: true } : b)),
         }
-      : stored;
+      : { ...stored, blocks: withDone(stored.blocks) };
     // the AI's plan does not follow the list: tell when something to do is not in it
     const planned = new Set(plan.blocks.filter((b) => (b.kind === "task" || b.kind === "ticket") && b.refId).map((b) => `${b.kind}:${b.refId}`));
     // also when the Outlook calendar changed (a meeting added or moved)
@@ -242,7 +245,7 @@ export const pipelineRoutes = new Hono<AppEnv>()
     aiLimit(a.user.id);
     const p = await body(c, z.object({ date: zDate.optional(), userId: zUuid.optional(), direction: z.string().max(2000).optional() }));
     const userId = p.userId && p.userId !== a.user.id ? (a.permissions.includes("pipeline.manage") ? p.userId : (() => { throw new HTTPException(403, { message: "forbidden" }); })()) : a.user.id;
-    const out = await buildPlan(userId, p.date ?? todayQc(), { ai: true, direction: cleanDirection(p.direction) });
+    const out = await buildPlan(userId, p.date ?? todayQc(), { ai: true, fromNow: true, direction: cleanDirection(p.direction) });
     await audit(a.user.id, "pipeline.day_planned", userId, { source: out.plan.source, aiError: out.aiError });
     return c.json(out);
   })

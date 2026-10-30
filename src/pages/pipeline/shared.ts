@@ -68,6 +68,8 @@ export type Block = {
   o365?: boolean;
   allDay?: boolean;
   masked?: boolean;
+  /** The work of this block is done (or no longer on the day's list) */
+  done?: boolean;
 };
 
 export type DayItem = {

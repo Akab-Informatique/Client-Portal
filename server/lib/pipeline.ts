@@ -297,13 +297,13 @@ export async function calendarOfDay(userId: string, date: string): Promise<{ sta
 }
 
 /** Lay the items out in the free hours of the day (in the order given), splitting a long one across the lunch hour. */
-export function layout(items: DayItem[], s: Pick<PipelineSettings, "workStart" | "workEnd" | "lunchStart" | "lunchEnd">, busy: Busy[], notes: Map<string, string> = new Map()) {
+export function layout(items: DayItem[], s: Pick<PipelineSettings, "workStart" | "workEnd" | "lunchStart" | "lunchEnd">, busy: Busy[], notes: Map<string, string> = new Map(), after?: number) {
   const work = [
     { start: mins(s.workStart), end: mins(s.lunchStart) },
     { start: mins(s.lunchEnd), end: mins(s.workEnd) },
   ];
   // free segments: work hours less the events
-  let free = work.filter((w) => w.end > w.start);
+  let free = work.map((w) => ({ start: after === undefined ? w.start : Math.max(w.start, after), end: w.end })).filter((w) => w.end > w.start);
   for (const b of busy.filter((x) => !x.allDay)) {
     free = free.flatMap((f) => {
       if (b.end <= f.start || b.start >= f.end) return [f];
@@ -397,7 +397,7 @@ function rulesSummary(items: DayItem[], cap: number, planned: number, overflow: 
 }
 
 /** Plan one technician's day and keep it. The AI orders the work and writes the summary; the hours are laid out here. */
-export async function buildPlan(userId: string, date: string, opts: { ai: boolean; locale?: "fr" | "en"; by?: string | null; direction?: string } = { ai: false }) {
+export async function buildPlan(userId: string, date: string, opts: { ai: boolean; locale?: "fr" | "en"; by?: string | null; direction?: string; fromNow?: boolean } = { ai: false }) {
   const settings = await pipelineSettings();
   const [user] = await db().select({ name: schema.users.name, locale: schema.users.locale }).from(schema.users).where(eq(schema.users.id, userId));
   const locale = opts.locale ?? user?.locale ?? "fr";
@@ -409,6 +409,12 @@ export async function buildPlan(userId: string, date: string, opts: { ai: boolea
   const busy: Busy[] = [...day.busy, ...calEvents.map((e) => ({ start: e.start, end: e.end, title: e.title, o365: true, allDay: e.allDay }))];
   // a holiday or a weekend: a day off, nothing is planned
   const holiday = day.holiday || !isWorkday(date);
+  // replanning during the day: what is left is laid out from the next quarter hour (Québec time), not from the morning
+  let after: number | undefined;
+  if (opts.fromNow && date === new Date().toLocaleDateString("en-CA", { timeZone: "America/Toronto" })) {
+    const [h, m] = new Date().toLocaleTimeString("en-GB", { timeZone: "America/Toronto", hour: "2-digit", minute: "2-digit", hour12: false }).split(":").map(Number);
+    after = Math.ceil((h * 60 + m) / 15) * 15;
+  }
   const planable = absent || holiday ? [] : items.filter((i) => !i.blocked).sort(byUrgency);
   let ordered = planable;
   let notes = new Map<string, string>();
@@ -421,7 +427,7 @@ export async function buildPlan(userId: string, date: string, opts: { ai: boolea
       try {
         const lines = planable.map((i) => `- ${i.key} · ${i.kind === "ticket" ? `billet ${i.ticketNumber ?? ""}` : "tâche"} · « ${i.title} »${i.client ? ` · client ${i.client}` : ""} · priorité ${i.priority} · échéance ${i.due ?? "aucune"}${i.dueTime ? ` ${i.dueTime}` : ""}${i.overdue ? " (EN RETARD)" : ""}${i.pin ? ` · PRIORITÉ ${i.pin === "day" ? "DU JOUR" : "DE LA SEMAINE"}${i.pinNote ? ` (directive : ${i.pinNote})` : ""}` : ""}${i.notBefore !== undefined ? ` · pas avant ${hhmm(i.notBefore)}` : ""} · ${i.minutes} min`);
         const agenda = calEvents.filter((e) => !e.allDay).map((e) => `- ${hhmm(e.start)}–${hhmm(e.end)} ${e.title}`);
-        const free = layout([], settings, busy).capacityMinutes;
+        const free = layout([], settings, busy, new Map(), after).capacityMinutes;
         const out = await askClaudeJson<{ summary?: unknown; order?: { ref?: unknown; note?: unknown }[] }>({
           system: `Tu es l'assistant de planification d'AKAB Informatique (services TI, Québec). Réponds en ${locale === "en" ? "anglais" : "français québécois"}, ton direct et chaleureux, tutoiement. Tu prépares la journée d'un technicien : c'est une suggestion, pas un horaire fixe.`,
           feature: "pipeline.day",
@@ -451,7 +457,7 @@ export async function buildPlan(userId: string, date: string, opts: { ai: boolea
       }
     } else aiError = s.apiKey ? "disabled" : "not_configured";
   }
-  const lay = layout(ordered, settings, busy, notes);
+  const lay = layout(ordered, settings, busy, notes, after);
   // the blocked ones are listed after, so they are not forgotten
   for (const i of absent || holiday ? [] : items.filter((x) => x.blocked)) lay.blocks.push({ start: "", end: "", title: i.title, kind: i.kind, refId: i.refId, ticketNumber: i.ticketNumber ?? null, priority: i.priority, note: locale === "en" ? "Waiting on another task" : "En attente d'une autre tâche", overflow: true });
   const cap = absent || holiday ? 0 : lay.capacityMinutes;

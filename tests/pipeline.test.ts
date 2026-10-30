@@ -16,6 +16,12 @@ describe("pipeline: the day laid out in blocks", () => {
     expect(lay.blocks.some((b) => b.kind === "break" && b.start === "12:00")).toBe(true);
   });
 
+  it("replanning during the day lays the rest out from now on (the morning is not offered again)", () => {
+    const lay = layout([item({ key: "a", minutes: 120 })], S, [], new Map(), 10 * 60 + 15);
+    expect(lay.capacityMinutes).toBe(105 + 240);
+    expect(lay.blocks.filter((b) => b.kind === "task").map((b) => [b.start, b.end])).toEqual([["10:15", "12:00"], ["13:00", "13:15"]]);
+  });
+
   it("works around events", () => {
     const lay = layout([item({ key: "a", minutes: 120 })], S, [{ start: 9 * 60, end: 10 * 60, title: "Réunion" }]);
     expect(lay.capacityMinutes).toBe(420);
