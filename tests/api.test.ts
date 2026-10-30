@@ -7457,6 +7457,33 @@ describe("deleting a client", () => {
   });
 });
 
+describe("billing contact", () => {
+  it("a contact is picked as the default billing contact: its address is the billing email and follows it", async () => {
+    resetRateLimit("login:ip:unknown");
+    const admin = await signIn("admin@akab.local");
+    const cl = (await admin.post("/api/crm/clients", { name: "Client contact facturation", phone: "450-555-8801" })).json;
+    const [ana] = await db().insert(schema.clientContacts).values({ clientId: cl.id, firstName: "Ana", lastName: "Test", email: "ana@fact.test" }).returning();
+    const [bob] = await db().insert(schema.clientContacts).values({ clientId: cl.id, firstName: "Bob", lastName: "SansCourriel" }).returning();
+    // no email: refused
+    expect((await admin.put(`/api/crm/clients/${cl.id}/billing-contact`, { contactId: bob.id })).json.error).toBe("contact_no_email");
+    expect((await admin.put(`/api/crm/clients/${cl.id}/billing-contact`, { contactId: ana.id })).json).toMatchObject({ billingContactId: ana.id, billingEmail: "ana@fact.test" });
+    const flags = async () => (await admin.get(`/api/crm/clients/${cl.id}/contacts`)).json.map((x: any) => [x.firstName, x.billing]);
+    expect(await flags()).toEqual(expect.arrayContaining([["Ana", true], ["Bob", false]]));
+    // the contact's address changes: the billing email follows
+    await admin.patch(`/api/crm/clients/${cl.id}/contacts/${ana.id}`, { email: "ana@nouveau.test" });
+    expect((await admin.get(`/api/crm/clients/${cl.id}`)).json.invoice).toMatchObject({ billingContactId: ana.id, billingEmail: "ana@nouveau.test" });
+    // another address typed by hand frees the link
+    await admin.put(`/api/crm/clients/${cl.id}/invoice`, { billingEmail: "autre@fact.test" });
+    expect((await admin.get(`/api/crm/clients/${cl.id}`)).json.invoice.billingContactId).toBeUndefined();
+    expect(await flags()).toEqual(expect.arrayContaining([["Ana", false]]));
+    // a contact of another client is refused; removing keeps the address
+    await admin.put(`/api/crm/clients/${cl.id}/billing-contact`, { contactId: ana.id });
+    expect((await admin.put(`/api/crm/clients/${cl.id}/billing-contact`, { contactId: null })).json).toMatchObject({ billingContactId: null, billingEmail: "ana@nouveau.test" });
+    const other = (await admin.post("/api/crm/clients", { name: "Autre client facturation", phone: "450-555-8802" })).json;
+    expect((await admin.put(`/api/crm/clients/${other.id}/billing-contact`, { contactId: ana.id })).status).toBe(404);
+  });
+});
+
 describe("services: the vendor we buy from (internal)", () => {
   it("a service can be tied to a vendor and their reference; ITCloud ones keep the sync's", async () => {
     resetRateLimit("login:ip:unknown");

@@ -21,6 +21,8 @@ const updated = () => timestamp("updated_at", { withTimezone: true }).notNull().
 /** Invoice settings of a client (portal only, used by Accounting). */
 export type ClientInvoiceSettings = {
   billingEmail?: string;
+  /** The contact whose email is the billing email (kept in step with it) */
+  billingContactId?: string;
   /** Payment terms, in days (0: on receipt) */
   termsDays?: number;
   delivery?: "email" | "mail";

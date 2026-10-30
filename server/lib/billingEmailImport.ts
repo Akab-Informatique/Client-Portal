@@ -106,12 +106,14 @@ export async function importBillingEmails(rows: BillingRow[], opts: { apply: boo
     const client = active.length === 1 ? active[0] : hits[0];
     const have = await d.select().from(schema.clientContacts).where(eq(schema.clientContacts.clientId, client.id));
     const made: string[] = [];
+    let billingContactId: string | undefined = have.find((c) => (c.email ?? "").trim().toLowerCase() === r.emails[0].toLowerCase())?.id;
     for (const email of r.emails) {
       if (have.some((c) => (c.email ?? "").trim().toLowerCase() === email.toLowerCase())) continue;
       made.push(email);
       if (opts.apply) {
         const n = contactNameOf(email);
-        await d.insert(schema.clientContacts).values({ clientId: client.id, autotaskId: `local-${crypto.randomUUID()}`, firstName: n.firstName, lastName: n.lastName, email, title: "Facturation", syncedAt: new Date() });
+        const [row] = await d.insert(schema.clientContacts).values({ clientId: client.id, autotaskId: `local-${crypto.randomUUID()}`, firstName: n.firstName, lastName: n.lastName, email, title: "Facturation", syncedAt: new Date() }).returning({ id: schema.clientContacts.id });
+        if (email === r.emails[0]) billingContactId = row.id;
       }
     }
     const email = r.emails[0];
@@ -123,7 +125,7 @@ export async function importBillingEmails(rows: BillingRow[], opts: { apply: boo
       status = "kept";
       note = `already ${current}`;
     } else if (opts.apply) {
-      await d.update(schema.clients).set({ invoice: { ...client.invoice, billingEmail: email }, updatedAt: new Date() }).where(eq(schema.clients.id, client.id));
+      await d.update(schema.clients).set({ invoice: { ...client.invoice, billingEmail: email, ...(billingContactId ? { billingContactId } : {}) }, updatedAt: new Date() }).where(eq(schema.clients.id, client.id));
     }
     if (opts.apply && made.length) await provisionPortalUsers(client.id);
     out.push({ client: client.name, status, email, contactMade: made, note });

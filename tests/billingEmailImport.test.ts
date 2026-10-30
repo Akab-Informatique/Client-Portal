@@ -42,11 +42,16 @@ describe("billing emails: contacts and default billing address from the hand-ove
     await importBillingEmails(rows, { apply: true });
     const contactsOf = async (id: string) => (await d.select().from(schema.clientContacts).where(eq(schema.clientContacts.clientId, id))).map((c) => c.email?.toLowerCase()).sort();
     const billing = async (id: string) => (await d.select().from(schema.clients).where(eq(schema.clients.id, id)))[0].invoice?.billingEmail;
+    const billingContact = async (id: string) => (await d.select().from(schema.clients).where(eq(schema.clients.id, id)))[0].invoice?.billingContactId;
     expect(await contactsOf(acme.id)).toEqual(["marilyne.rondeau@acme.ca"]);
     expect(await billing(acme.id)).toBe("marilyne.rondeau@acme.ca");
     // the contact with that address was already there: only the other one is made
     expect(await contactsOf(beta.id)).toEqual(["info@beta.ca", "jean@beta.ca"]);
     expect(await billing(beta.id)).toBe("info@beta.ca");
+    // the contact is the default billing contact (the one that already existed for Beta)
+    const [betaInfo] = await d.select().from(schema.clientContacts).where(eq(schema.clientContacts.firstName, "Déjà"));
+    expect(await billingContact(beta.id)).toBe(betaInfo.id);
+    expect(await billingContact(acme.id)).toBeTruthy();
     // a billing email already set is kept
     expect(await billing(gamma.id)).toBe("ancien@gamma.ca");
 

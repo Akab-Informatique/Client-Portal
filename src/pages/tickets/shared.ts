@@ -355,6 +355,7 @@ export function ticketErrorText(t: (k: string, o?: Record<string, unknown>) => s
     if (e.code === "serial_unavailable" || e.code === "serials_required") return t(`tickets.errors.${e.code}`);
     if (e.code === "invalid_contact") return t("tickets.errors.invalidContact");
     if (e.code === "invalid_contract") return t("tickets.errors.invalidContract");
+    if (e.code === "contact_no_email") return t("crm.contacts.billingNoEmail");
     if (e.code === "company_exists") return t("tickets.errors.companyExists");
   }
   return t("common.error");

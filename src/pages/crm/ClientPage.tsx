@@ -848,6 +848,16 @@ function ContactsTab({ client }: { client: CrmDetail }) {
   };
   const inactive = contacts.filter((c) => !c.active);
   const shown = contacts.filter((c) => c.active || showInactive);
+  const billingContact = useMutation({
+    mutationFn: (c: CrmContact) => api.put(`/crm/clients/${client.id}/billing-contact`, { contactId: c.billing ? null : c.id }),
+    onSuccess: (_r, c) => {
+      refresh();
+      void qc.invalidateQueries({ queryKey: ["crm", "client", client.id] });
+      toast.success(c.billing ? t("crm.contacts.billingCleared") : t("crm.contacts.billingDone", { name: `${c.firstName} ${c.lastName}`.trim() }));
+    },
+    onError: (e) => toast.error(ticketErrorText(t, e)),
+  });
+  const canBilling = can("crm.billing");
   const toggle = useMutation({
     mutationFn: (c: CrmContact) => api.patch(`/crm/clients/${client.id}/contacts/${c.id}`, { active: !c.active }),
     onSuccess: () => {
@@ -898,7 +908,11 @@ function ContactsTab({ client }: { client: CrmDetail }) {
           ) : (
             <li
               key={c.id}
-              className={cn("group cursor-pointer rounded-xl border bg-background/30 p-3 transition-colors hover:border-[color:var(--gold)]/40", !c.active && "opacity-60")}
+              className={cn(
+                "group cursor-pointer rounded-xl border bg-background/30 p-3 transition-colors hover:border-[color:var(--gold)]/40",
+                c.billing && "border-emerald-500/50 bg-emerald-500/[0.07] hover:border-emerald-400/70",
+                !c.active && "opacity-60",
+              )}
               onClick={(e) => {
                 // a link, a button or a menu inside the card does its own thing
                 if ((e.target as HTMLElement).closest("a,button,[role=menuitem],[role=menu]")) return;
@@ -906,13 +920,18 @@ function ContactsTab({ client }: { client: CrmDetail }) {
               }}
             >
               <div className="flex items-start gap-2.5">
-                <span className="grid size-8 shrink-0 place-items-center rounded-full border bg-card">
-                  <UserRound className="size-4 text-muted-foreground" />
+                <span className={cn("grid size-8 shrink-0 place-items-center rounded-full border bg-card", c.billing && "border-emerald-500/60 bg-emerald-500/15")}>
+                  {c.billing ? <Receipt className="size-4 text-emerald-400" /> : <UserRound className="size-4 text-muted-foreground" />}
                 </span>
                 <div className="min-w-0 flex-1">
                   <p className="truncate text-sm font-medium">
                     {c.firstName} {c.lastName}
                     {!c.active && <span className="ml-2 text-[10px] font-normal text-muted-foreground">{t("crm.contacts.inactive")}</span>}
+                    {c.billing && (
+                      <span className="ml-2 rounded-full border border-emerald-500/40 bg-emerald-500/15 px-1.5 py-0.5 align-middle text-[10px] font-semibold text-emerald-300" title={t("crm.contacts.billingHint")}>
+                        {t("crm.contacts.billing")}
+                      </span>
+                    )}
                   </p>
                   {c.title && <p className="truncate text-xs text-muted-foreground">{c.title}</p>}
                   <div className="mt-1.5 space-y-0.5 text-xs text-muted-foreground">
@@ -936,6 +955,18 @@ function ContactsTab({ client }: { client: CrmDetail }) {
                 </div>
                 {editable && (
                   <div className="flex shrink-0 flex-col items-end gap-1 opacity-0 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100">
+                    {canBilling && c.active && (c.email || c.billing) && (
+                      <button
+                        type="button"
+                        onClick={() => billingContact.mutate(c)}
+                        disabled={billingContact.isPending}
+                        className={cn("rounded p-1 hover:bg-accent", c.billing ? "text-emerald-400" : "text-muted-foreground hover:text-emerald-300")}
+                        aria-label={c.billing ? t("crm.contacts.billingUnset") : t("crm.contacts.billingSet")}
+                        title={c.billing ? t("crm.contacts.billingUnset") : t("crm.contacts.billingSet")}
+                      >
+                        <Receipt className="size-3.5" />
+                      </button>
+                    )}
                     <button type="button" onClick={() => setEditing(c.id)} className="rounded p-1 text-muted-foreground hover:bg-accent hover:text-foreground" aria-label={t("crm.contacts.edit")} title={t("crm.contacts.edit")}>
                       <Pencil className="size-3.5" />
                     </button>

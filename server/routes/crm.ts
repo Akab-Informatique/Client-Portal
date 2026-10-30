@@ -289,7 +289,12 @@ export const crmRoutes = new Hono<AppEnv>()
     );
     const before = client.invoice?.autoApprove ?? [];
     if ((p.autoApprove ?? []).some((k) => !before.includes(k)) && !a.permissions.includes("accounting.manage")) throw new HTTPException(403, { message: "accounting_manage_only" });
-    const [row] = await db().update(schema.clients).set({ invoice: { ...client.invoice, ...p }, updatedAt: new Date() }).where(eq(schema.clients.id, client.id)).returning();
+    const next = { ...client.invoice, ...p };
+    if (p.billingEmail !== undefined && next.billingContactId) {
+      const [bc] = await db().select({ email: schema.clientContacts.email }).from(schema.clientContacts).where(eq(schema.clientContacts.id, next.billingContactId));
+      if ((bc?.email ?? "").toLowerCase() !== p.billingEmail.toLowerCase()) delete next.billingContactId;
+    }
+    const [row] = await db().update(schema.clients).set({ invoice: next, updatedAt: new Date() }).where(eq(schema.clients.id, client.id)).returning();
     if (p.billingEmail !== undefined) void pushSoon("clients", client.id);
     // what waits already follows the new rule
     const approved = p.autoApprove?.length ? await applyAutoApprove(client.id) : 0;
@@ -310,7 +315,7 @@ export const crmRoutes = new Hono<AppEnv>()
     return c.json(
       rows
         // dormant: the account is ready but the company's portal is not open yet
-        .map(({ c: x, u }) => ({ ...x, portal: u?.active ? { lastLoginAt: u.lastLoginAt, pending: u.mustChangePassword, role: u.roleSlug, dormant: !client.portalEnabled } : null }))
+        .map(({ c: x, u }) => ({ ...x, billing: client.invoice?.billingContactId === x.id, portal: u?.active ? { lastLoginAt: u.lastLoginAt, pending: u.mustChangePassword, role: u.roleSlug, dormant: !client.portalEnabled } : null }))
         .sort((x, y) => Number(y.active) - Number(x.active)),
     );
   })
@@ -395,10 +400,44 @@ export const crmRoutes = new Hono<AppEnv>()
       }
     }
     const [row] = await db().update(schema.clientContacts).set({ ...p, updatedAt: new Date() }).where(eq(schema.clientContacts.id, contact.id)).returning();
+    // the billing contact's address is the client's billing email
+    if (client.invoice?.billingContactId === contact.id && p.email !== undefined) {
+      const inv = { ...client.invoice, ...(p.email ? { billingEmail: p.email } : {}) };
+      if (!p.email) {
+        delete inv.billingContactId;
+        delete inv.billingEmail;
+      }
+      await db().update(schema.clients).set({ invoice: inv, updatedAt: new Date() }).where(eq(schema.clients.id, client.id));
+      void pushSoon("clients", client.id);
+    }
     // an email just added, or a contact brought back: its account is made
     if (!contact.userId && (p.email || p.active === true)) await provisionPortalUsers(client.id);
     await audit(a.user.id, "crm.contact_updated", client.id, { contact: contact.id, fields: Object.keys(p) });
     return c.json(row);
+  })
+
+  /** The contact invoices go to by default: their address becomes the client's billing email (null: no default contact, the address stays). */
+  .put("/clients/:id/billing-contact", requirePermission("crm.billing"), async (c) => {
+    const a = auth(c);
+    const client = await clientOr404(c.req.param("id"));
+    const p = await body(c, z.object({ contactId: zUuid.nullable() }));
+    const inv = { ...client.invoice };
+    if (p.contactId === null) {
+      delete inv.billingContactId;
+    } else {
+      const [contact] = await db()
+        .select()
+        .from(schema.clientContacts)
+        .where(and(eq(schema.clientContacts.id, p.contactId), eq(schema.clientContacts.clientId, client.id)));
+      if (!contact) throw new HTTPException(404, { message: "not_found" });
+      if (!contact.email?.trim()) throw new HTTPException(409, { message: "contact_no_email" });
+      inv.billingContactId = contact.id;
+      inv.billingEmail = contact.email.trim();
+    }
+    await db().update(schema.clients).set({ invoice: inv, updatedAt: new Date() }).where(eq(schema.clients.id, client.id));
+    void pushSoon("clients", client.id);
+    await audit(a.user.id, "crm.billing_contact_set", client.id, { contact: p.contactId });
+    return c.json({ billingContactId: inv.billingContactId ?? null, billingEmail: inv.billingEmail ?? null });
   })
 
   /**
