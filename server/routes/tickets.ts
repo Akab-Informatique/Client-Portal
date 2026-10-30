@@ -1862,18 +1862,18 @@ export const ticketRoutes = new Hono<AppEnv>()
     const a = auth(c);
     const id = Number(c.req.param("id"));
     // email: a reply to the client is also emailed to the ticket's contact unless the technician says not to, and to other addresses if asked
-    const p = await body(c, z.object({ text: z.string().trim().min(1).max(8000), internal: z.boolean(), email: z.boolean().optional(), others: z.array(zEmail).max(10).default([]), /** files of this ticket (uploaded just before) that go with the email */ attachmentIds: z.array(zUuid).max(10).default([]), /** colleagues told about an internal note: the bell and an email with the note */ notifyUserIds: z.array(zUuid).max(20).default([]) }));
+    const p = await body(c, z.object({ text: z.string().trim().min(1).max(8000), internal: z.boolean(), email: z.boolean().optional(), others: z.array(zEmail).max(10).default([]), /** files of this ticket (uploaded just before) that go with the email */ attachmentIds: z.array(zUuid).max(10).default([]), /** colleagues told about an internal note: the bell and an email with the note */ notifyUserIds: z.array(zUuid).max(20).default([]), /** how they are told: the bell, an email, a Teams chat message (bell and email by default) */ notifyChannels: z.object({ bell: z.boolean().default(true), email: z.boolean().default(true), chat: z.boolean().default(false) }).default({ bell: true, email: true, chat: false }) }));
     const src = await ticketSource();
     await run(() => src.addNote(id, { text: p.text, internal: p.internal }, a));
     // an internal note can tell colleagues: each gets the bell and an email with the note
     let told: Awaited<ReturnType<typeof notifyTechs>> = [];
     if (p.internal && p.notifyUserIds.length) {
       const tk = await run(() => src.get(id));
-      if (tk) told = await notifyTechs(tk, { id: a.user.id, name: a.realUser.name }, p.notifyUserIds, p.text, { email: true, sms: false, teams: false });
-      await audit(a.user.id, "ticket.note_notified", String(id), { to: told.map((x) => x.id) });
+      if (tk) told = await notifyTechs(tk, { id: a.user.id, name: a.realUser.name }, p.notifyUserIds, p.text, { email: p.notifyChannels.email, sms: false, teams: false, bell: p.notifyChannels.bell, chat: p.notifyChannels.chat });
+      await audit(a.user.id, "ticket.note_notified", String(id), { to: told.map((x) => x.id), channels: p.notifyChannels });
     }
     const mail = !p.internal && (p.email !== false || p.others.length) ? await emailReply(src, id, p.text, a, { contact: p.email !== false, others: p.others }, p.attachmentIds) : null;
-    return c.json({ ok: true, ...(mail ?? {}), ...(told.length ? { notified: told.length, notifyFailed: told.filter((x) => x.email === "failed" || x.email === "no_address").length } : {}) }, 201);
+    return c.json({ ok: true, ...(mail ?? {}), ...(told.length ? { notified: told.length, notifyFailed: told.filter((x) => x.email === "failed" || x.email === "no_address" || x.chat === "failed" || x.chat === "not_ready").length, ...(told.some((x) => x.chat === "not_ready") ? { chatNotReady: true } : {}) } : {}) }, 201);
   })
 
   /**

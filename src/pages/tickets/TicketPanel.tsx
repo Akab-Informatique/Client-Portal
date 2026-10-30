@@ -1873,6 +1873,7 @@ function NoteComposer({
   // an internal note can tell colleagues: the bell and an email with the note
   const me = useMe();
   const [tell, setTell] = useState<string[]>([]);
+  const [tellHow, setTellHow] = useState({ bell: true, email: true, chat: false });
   const colleagues = tk.options.technicians.filter((p) => p.id !== me.id);
   // files: kept on the ticket, and sent with the reply when it goes by email
   const [files, setFiles] = useState<File[]>([]);
@@ -1893,7 +1894,7 @@ function NoteComposer({
         const r = await api.post<{ id: string | null }>(`/tickets/${tk.id}/attachments`, { name: f.name, contentType: f.type || "application/octet-stream", data: await fileToBase64(f), source: byEmail ? "email_out" : "upload" });
         if (r.id) ids.push(r.id);
       }
-      return api.post<{ emailed?: boolean; to?: string | null; noContactEmail?: boolean }>(`/tickets/${tk.id}/notes`, { text, internal, ...(internal ? { notifyUserIds: tell } : { email: emailIt, others: mailOthers, attachmentIds: ids }) });
+      return api.post<{ emailed?: boolean; to?: string | null; noContactEmail?: boolean }>(`/tickets/${tk.id}/notes`, { text, internal, ...(internal ? { notifyUserIds: tell, notifyChannels: tellHow } : { email: emailIt, others: mailOthers, attachmentIds: ids }) });
     },
     onSuccess: (r) => {
       setText("");
@@ -1905,6 +1906,7 @@ function NoteComposer({
         toast.success(t("tickets.noteAdded"));
         const n = (r as { notified?: number }).notified;
         if (n) toast.success(t("tickets.noteNotified", { count: n }));
+        if ((r as { chatNotReady?: boolean }).chatNotReady) toast.warning(t("tickets.noteTell.chatNotReady"));
       }
       else if (r.emailed) toast.success(t("tickets.replySentEmail", { to: r.to ?? "" }));
       else if (emailIt && r.noContactEmail) toast.warning(t("tickets.replyNoEmail"));
@@ -1949,18 +1951,45 @@ function NoteComposer({
         className="resize-y transition-[height]"
       />
       {internal && colleagues.length > 0 && (
-        <div className="mt-2 flex flex-wrap items-center gap-1.5">
-          <span className="flex items-center gap-1 text-[11px] text-muted-foreground">
-            <BellRing className="size-3" /> {t("tickets.noteNotify")}
-          </span>
-          {colleagues.map((p) => {
-            const on = tell.includes(p.id);
-            return (
-              <button key={p.id} type="button" onClick={() => setTell((x) => (on ? x.filter((i) => i !== p.id) : [...x, p.id]))} className={cn("rounded-full border px-2 py-0.5 text-[11px]", on ? "border-violet-400/60 bg-violet-500/15 text-violet-200" : "text-muted-foreground hover:text-foreground")}>
-                {p.name}
+        <div className="mt-2 flex flex-wrap items-center gap-2">
+          <Popover>
+            <PopoverTrigger asChild>
+              <button type="button" className={cn("flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-[11px]", tell.length ? "border-violet-400/60 bg-violet-500/15 text-violet-200" : "text-muted-foreground hover:text-foreground")}>
+                <BellRing className="size-3" />
+                {tell.length ? t("tickets.noteTell.count", { count: tell.length }) : t("tickets.noteTell.pick")}
+                <ChevronDown className="size-3" />
               </button>
-            );
-          })}
+            </PopoverTrigger>
+            <PopoverContent align="start" className="w-64 p-1">
+              <ul className="max-h-64 overflow-y-auto">
+                {colleagues.map((p) => {
+                  const on = tell.includes(p.id);
+                  return (
+                    <li key={p.id}>
+                      <button type="button" onClick={() => setTell((x) => (on ? x.filter((i) => i !== p.id) : [...x, p.id]))} className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-sm hover:bg-accent">
+                        <span className={cn("flex size-4 items-center justify-center rounded border", on ? "border-violet-400 bg-violet-500/30" : "border-muted-foreground/40")}>{on && <Check className="size-3" />}</span>
+                        {p.name}
+                      </button>
+                    </li>
+                  );
+                })}
+              </ul>
+              {tell.length > 0 && (
+                <button type="button" onClick={() => setTell([])} className="mt-1 w-full rounded-md px-2 py-1 text-left text-xs text-muted-foreground hover:bg-accent">
+                  {t("tickets.noteTell.clear")}
+                </button>
+              )}
+            </PopoverContent>
+          </Popover>
+          {tell.length > 0 && (
+            <div className="flex items-center gap-1" role="group" aria-label={t("tickets.noteTell.how")}>
+              {([["bell", BellRing, "tickets.noteTell.bell"], ["email", Mail, "tickets.noteTell.email"], ["chat", MessagesSquare, "tickets.noteTell.chat"]] as const).map(([k, Icon, label]) => (
+                <button key={k} type="button" aria-pressed={tellHow[k]} onClick={() => setTellHow((h) => ({ ...h, [k]: !h[k] }))} className={cn("flex items-center gap-1 rounded-full border px-2 py-1 text-[11px]", tellHow[k] ? "border-violet-400/60 bg-violet-500/15 text-violet-200" : "text-muted-foreground hover:text-foreground")}>
+                  <Icon className="size-3" /> {t(label)}
+                </button>
+              ))}
+            </div>
+          )}
         </div>
       )}
       {!internal && (

@@ -4118,6 +4118,16 @@ const en: Dict = {
     startClear: "Remove",
     assistant: {
       dropped: "{{count}} change(s) proposed by the AI could not be read and were ignored — ask again.","reply":"Reply…","newTalk":"New conversation","thinking":"The assistant is thinking…","title":"AI assistant","hint":"Ask in your own words: change a due date, a checkpoint, a status, assign, add a note, plan your tickets… The AI only proposes what your rights allow and only sees the tickets you can see.","placeholder":"E.g. Move the due date of my Pubco tickets to Friday, and assign the new tickets to Marc.","send":"Send","proposed":"Proposed actions","apply":"Apply ({{count}})","done":"{{count}} action(s) applied.","someFailed":"{{count}} action(s) refused or failed (see the list).","refused":"Not proposed (ticket or right not allowed): {{list}}","safety":"Nothing is done without your confirmation, and every action goes through the same rights checks as if you did it yourself. The AI has no access to billing, accounting or any other module.","deleteTitle":"Delete {{count}} ticket(s)?","example":{"plan":"Plan my tickets","overdue":"Push the due date of my overdue tickets to tomorrow","week":"Set a checkpoint on Friday 3 pm on my tickets of the week"}},
+    noteTell: {
+      pick: "Notify colleagues…",
+      count: "{{count}} to notify",
+      clear: "Remove all",
+      how: "How",
+      bell: "Bell",
+      email: "Email",
+      chat: "Teams",
+      chatNotReady: "Teams message not sent: sign in with your Microsoft account (Profile › Microsoft 365) and allow the chat permission.",
+    },
     noteNotify: "Notify colleagues (bell + email with the note):",
     noteNotified: "{{count}} colleague(s) told by the bell and by email.",
     tags: {"title":"Tags","none":"No tags.","add":"Add a tag (Enter)…"},

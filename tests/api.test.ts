@@ -8886,6 +8886,14 @@ describe("tickets: tags, notes that notify colleagues, texts kept in their ticke
     const bell = await db().select().from(schema.notifications).where(eq(schema.notifications.userId, adm.id));
     expect(bell.some((n) => n.type === "ticket.notify" && JSON.stringify(n.data).includes("À voir avec toi"))).toBe(true);
 
+    // the sender picks how: no bell, no email, a Teams chat message only — which needs their own Microsoft sign-in
+    const before = (await db().select().from(schema.notifications).where(eq(schema.notifications.userId, adm.id))).length;
+    const viaChat = await tech.post(`/api/tickets/${tk.id}/notes`, { text: "Teams seulement", internal: true, notifyUserIds: [adm.id], notifyChannels: { bell: false, email: false, chat: true } });
+    expect(viaChat.status).toBe(201);
+    expect(viaChat.json.notified).toBe(1);
+    expect((await db().select().from(schema.notifications).where(eq(schema.notifications.userId, adm.id))).length).toBe(before);
+    expect(viaChat.json.chatNotReady).toBe(true);
+
     // a text followed in a ticket is not in the general inbox
     await db().insert(schema.smsConversations).values([{ phone: "4505550001", status: "open" }, { phone: "4505550002", status: "ticket", ticketId: tk.id, ticketNumber: tk.number }]);
     const inbox = (await admin.get("/api/sms/conversations")).json.map((x: any) => x.phone);
