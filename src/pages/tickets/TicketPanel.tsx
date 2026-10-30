@@ -468,11 +468,29 @@ function TicketBody({
                 }
               />
               {(update.isPending || saveAll.isPending) && <Loader2 className="size-4 animate-spin text-muted-foreground" />}
+              {/* quick edits: the start and the checkpoint (a day and a time) */}
+              <QuickDate
+                icon={CalendarPlus}
+                label={t("tickets.fields.start")}
+                date={view.startDate}
+                disabled={!editable}
+                onSave={(date) => stage({ startDate: date })}
+              />
+              <QuickDate
+                icon={Flag}
+                label={t("tickets.milestone.label")}
+                date={view.milestoneDate}
+                time={view.milestoneTime}
+                withTime
+                disabled={!editable}
+                min={view.startDate}
+                onSave={(date, time) => stage({ milestoneDate: date, milestoneTime: date ? time : null })}
+              />
               {(() => {
                 const badge = (
                   <span
                     className={cn(
-                      "flex items-center gap-1 rounded-full border px-2.5 py-0.5 text-xs font-medium",
+                      "flex items-center gap-1 rounded-full border px-2 py-0.5 text-[11px] font-medium",
                       due === "overdue"
                         ? "border-destructive/50 text-destructive"
                         : due === "today"
@@ -480,10 +498,10 @@ function TicketBody({
                           : "text-muted-foreground",
                       editable && "cursor-pointer hover:border-[color:var(--gold)]/60",
                     )}
-                    title={editable ? t("tickets.due.change") : fullDate(view.dueAt)}
+                    title={`${t("tickets.fields.due")} · ${fullDate(view.dueAt)}`}
                   >
-                    <CalendarClock className="size-3.5" />
-                    {t("tickets.fields.due")} · {fullDate(view.dueAt)}
+                    <CalendarClock className="size-3" />
+                    {shortDate(view.dueAt)}
                   </span>
                 );
                 return editable ? (
@@ -503,24 +521,6 @@ function TicketBody({
                   badge
                 );
               })()}
-              {/* quick edits: the start and the checkpoint (a day and a time) */}
-              <QuickDate
-                icon={CalendarPlus}
-                label={t("tickets.fields.start")}
-                date={view.startDate}
-                disabled={!editable}
-                onSave={(date) => stage({ startDate: date })}
-              />
-              <QuickDate
-                icon={Flag}
-                label={t("tickets.milestone.label")}
-                date={view.milestoneDate}
-                time={view.milestoneTime}
-                withTime
-                disabled={!editable}
-                min={view.startDate}
-                onSave={(date, time) => stage({ milestoneDate: date, milestoneTime: date ? time : null })}
-              />
             </div>
             </div>
             <div className="mt-3 lg:mt-1 lg:shrink-0">
@@ -1724,9 +1724,9 @@ function QuickDate({ icon: Icon, label, date, time, withTime, disabled, min, onS
   useEffect(() => setH(time ?? ""), [time]);
   const shown = date ? shortDate(date) + (withTime && time ? ` ${time}` : "") : "—";
   const badge = (
-    <span className={cn("flex items-center gap-1 rounded-full border px-2.5 py-0.5 text-xs font-medium text-muted-foreground", !disabled && "cursor-pointer hover:border-[color:var(--gold)]/60")}>
-      <Icon className="size-3.5" />
-      {label} · {shown}
+    <span title={label} className={cn("flex items-center gap-1 rounded-full border px-2 py-0.5 text-[11px] font-medium text-muted-foreground", !disabled && "cursor-pointer hover:border-[color:var(--gold)]/60")}>
+      <Icon className="size-3" />
+      {shown}
     </span>
   );
   if (disabled) return badge;
