@@ -2,7 +2,7 @@ import { useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
-import { Ban, BellRing, Download, ExternalLink, Eye, FileText, Loader2, Mail, Search, Send } from "lucide-react";
+import { Ban, BellRing, Download, ExternalLink, Eye, FileText, Loader2, Mail, MailWarning, Search, Send } from "lucide-react";
 import { useConfirm } from "@/components/ConfirmDialog";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -218,7 +218,7 @@ export function StatementsDialog({ onClose }: { onClose: () => void }) {
 }
 
 /** The two emails of an invoice: the invoice itself, and (when it is past due) a reminder that follows how late it is. */
-export function InvoiceMailButtons({ invoice, compact }: { invoice: { id: string; number: string; late: boolean; balanceCents: number; status: string }; compact?: boolean }) {
+export function InvoiceMailButtons({ invoice, compact }: { invoice: { id: string; number: string; late: boolean; balanceCents: number; status: string; noEmail?: boolean }; compact?: boolean }) {
   const { t } = useTranslation();
   const can = useCan();
   const confirm = useConfirm();
@@ -233,8 +233,16 @@ export function InvoiceMailButtons({ invoice, compact }: { invoice: { id: string
   };
   return (
     <span className="inline-flex items-center gap-1">
-      <Button type="button" size={compact ? "icon" : "sm"} variant="ghost" className={compact ? "size-7" : "h-7 text-xs"} disabled={send.isPending} onClick={() => void ask("sent")} title={t("statements.sendInvoice")}>
-        <Mail className="size-3.5" /> {!compact && t("statements.sendInvoice")}
+      <Button
+        type="button"
+        size={compact ? "icon" : "sm"}
+        variant="ghost"
+        className={cn(compact ? "size-7" : "h-7 text-xs", invoice.noEmail && "text-red-400 hover:text-red-300")}
+        disabled={send.isPending}
+        onClick={() => (invoice.noEmail ? toast.error(t("statements.noEmailInvoice")) : void ask("sent"))}
+        title={invoice.noEmail ? t("statements.noEmailInvoice") : t("statements.sendInvoice")}
+      >
+        {invoice.noEmail ? <MailWarning className="size-3.5" /> : <Mail className="size-3.5" />} {!compact && t("statements.sendInvoice")}
       </Button>
       {invoice.late && invoice.balanceCents > 0 && (
         <Button type="button" size={compact ? "icon" : "sm"} variant="ghost" className={compact ? "size-7 text-red-300" : "h-7 text-xs text-red-300"} disabled={send.isPending} onClick={() => void ask("reminder")} title={t("statements.sendReminder")}>

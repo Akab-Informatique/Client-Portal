@@ -1111,6 +1111,14 @@ async function invoiceViews(rows: (typeof schema.clientInvoices.$inferSelect)[],
     }
   }
   const today = new Date().toLocaleDateString("en-CA", { timeZone: "America/Toronto" });
+  // clients with no address to send invoices to (billing email, else the client's own)
+  const cids = [...new Set(rows.map((r) => r.clientId))];
+  const noEmail = new Set<string>();
+  if (cids.length) {
+    for (const c of await d.select({ id: schema.clients.id, email: schema.clients.email, invoice: schema.clients.invoice }).from(schema.clients).where(inArray(schema.clients.id, cids))) {
+      if (!(c.invoice?.billingEmail || c.email || "").trim()) noEmail.add(c.id);
+    }
+  }
   // an invoice of the portal, with no payment, whose taxes are not the line-by-line ones: how much they would change
   const taxFix = new Map<string, number>();
   if (opts.lines) {
@@ -1146,6 +1154,7 @@ async function invoiceViews(rows: (typeof schema.clientInvoices.$inferSelect)[],
       notes: v.notes,
       poNumber: v.poNumber,
       emailedAt: v.emailedAt,
+      noEmail: noEmail.has(v.clientId),
       taxFixCents: taxFix.get(v.id) ?? 0,
       lines: (lines.get(v.id) ?? []).map((l) => ({ id: l.id, kind: l.kind, description: l.description, quantity: l.quantityX100 / 100, unitPriceCents: l.unitPriceCents, amountCents: l.amountCents, taxable: l.taxable })),
       quickbooks: v.quickbooksId || v.quickbooksError ? { id: v.quickbooksId, syncedAt: v.quickbooksSyncedAt, error: v.quickbooksError } : null,
