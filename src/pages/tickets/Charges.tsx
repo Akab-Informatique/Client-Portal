@@ -2,7 +2,7 @@ import { useEffect, useState, type FormEvent } from "react";
 import { useTranslation } from "react-i18next";
 import { keepPreviousData, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
-import { Boxes, ChevronDown, Loader2, PackagePlus, Plus, Receipt, Search, Tag, Wallet, Warehouse, X } from "lucide-react";
+import { Boxes, ChevronDown, Loader2, PackagePlus, Plus, Receipt, Search, Tag, Trash2, Wallet, Warehouse, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { AiTextarea } from "@/components/AiPolish";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
@@ -99,9 +99,18 @@ export function ChargeButtons({ tk, editable, partial }: { tk: TicketDetail; edi
   );
 }
 
-function ChargesList({ list, tk }: { list: Charge[]; tk: TicketDetail }) {
+function ChargesList({ list, tk, editable }: { list: Charge[]; tk: TicketDetail; editable: boolean }) {
   const { t } = useTranslation();
+  const qc = useQueryClient();
   const [label, setLabel] = useState<Charge | null>(null);
+  const remove = useMutation({
+    mutationFn: (c: Charge) => api.del<Charge[]>(`/tickets/${tk.id}/charges/${c.id}`),
+    onSuccess: (next) => {
+      qc.setQueryData(["tickets", "charges", tk.id], next);
+      toast.success(t("tickets.charges.removed"));
+    },
+    onError: (e) => toast.error(e instanceof ApiError && e.code === "charge_billed" ? t("tickets.charges.errors.charge_billed") : ticketErrorText(t, e)),
+  });
   return (
     <div className="space-y-1.5 text-sm">
       <ul className="max-h-40 space-y-1.5 overflow-y-auto">
@@ -125,6 +134,22 @@ function ChargesList({ list, tk }: { list: Charge[]; tk: TicketDetail }) {
                 </TooltipTrigger>
                 <TooltipContent>{t("tickets.charges.label.button")}</TooltipContent>
               </Tooltip>
+              {editable && (
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <button
+                      type="button"
+                      disabled={remove.isPending}
+                      onClick={() => window.confirm(t("tickets.charges.removeConfirm", { name: c.name })) && remove.mutate(c)}
+                      className="shrink-0 self-center rounded p-1 text-muted-foreground hover:bg-accent hover:text-destructive disabled:opacity-50"
+                      aria-label={t("tickets.charges.remove")}
+                    >
+                      <Trash2 className="size-3.5" />
+                    </button>
+                  </TooltipTrigger>
+                  <TooltipContent>{t("tickets.charges.remove")}</TooltipContent>
+                </Tooltip>
+              )}
             </div>
             <div className="mt-0.5 flex flex-wrap items-center gap-x-2 text-[11px] text-muted-foreground">
               <span>
@@ -263,7 +288,7 @@ export function ChargesDialog({ tk, editable, onClose }: { tk: TicketDetail; edi
           </DialogDescription>
         </DialogHeader>
 
-        {isLoading ? <Skeleton className="h-12" /> : list && list.length > 0 ? <ChargesList list={list} tk={tk} /> : <p className="text-sm text-muted-foreground">{t("tickets.charges.none")}</p>}
+        {isLoading ? <Skeleton className="h-12" /> : list && list.length > 0 ? <ChargesList list={list} tk={tk} editable={editable} /> : <p className="text-sm text-muted-foreground">{t("tickets.charges.none")}</p>}
 
         {editable && (
           <form

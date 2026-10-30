@@ -70,6 +70,7 @@ export const localBase: TicketSource = {
   addAttachment: none,
   addTimeEntry: none,
   addCharge: none,
+  removeCharge: none,
   addSmsNote: none,
   addMailReply: none,
   createSystem: none,

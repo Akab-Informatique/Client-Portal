@@ -279,6 +279,8 @@ export interface TicketSource {
   charges(ticketId: number): Promise<Charge[]>;
   chargeOptions(): Promise<ChargeOptions>;
   addCharge(ticketId: number, p: NewCharge, a: AuthContext): Promise<void>;
+  /** Remove a charge of the ticket (false: no such charge) */
+  removeCharge(ticketId: number, chargeId: string): Promise<boolean>;
   /** Catalogue products matching the words (name, SKU, manufacturer part) */
   products(q: string): Promise<Product[]>;
   /** The contact with this phone or mobile number (10 digits), with their client */
@@ -668,6 +670,12 @@ const demoSource: TicketSource = {
       author: a.user.name,
     });
     demoCharges.set(ticketId, list);
+  },
+  async removeCharge(ticketId, chargeId) {
+    const list = demoCharges.get(ticketId) ?? [];
+    const next = list.filter((c) => c.id !== chargeId);
+    demoCharges.set(ticketId, next);
+    return next.length !== list.length;
   },
   async workTypes() {
     return [];

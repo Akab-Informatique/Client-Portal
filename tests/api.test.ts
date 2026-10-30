@@ -1499,6 +1499,15 @@ describe("tickets: client and contact", () => {
     expect((await tech.get("/api/tickets/products?q=s")).json).toEqual([]);
     expect((await tech.post(`/api/tickets/${tk.id}/charges`, { name: found[0].name, quantity: 1, unitPrice: found[0].unitPrice, productId: found[0].id })).status).toBe(201);
     expect((await tech.post(`/api/tickets/${tk.id}/charges`, { name: "x", quantity: 1, productId: "nope" })).json.error).toBe("invalid_value");
+
+    // a charge can be deleted
+    const before = (await tech.get(`/api/tickets/${tk.id}/charges`)).json;
+    const gone = before[before.length - 1];
+    const del = await tech.del(`/api/tickets/${tk.id}/charges/${gone.id}`);
+    expect(del.status).toBe(200);
+    expect(del.json.map((c: any) => c.id)).not.toContain(gone.id);
+    expect(del.json).toHaveLength(before.length - 1);
+    expect((await tech.del(`/api/tickets/${tk.id}/charges/${gone.id}`)).status).toBe(404);
   });
 
   it("store inventory: admins manage it; technicians take stock on a ticket charge", async () => {

@@ -4288,6 +4288,10 @@ const en: Dict = {
       total: "Billable total",
       save: "Add the charge",
       added: "Charge added to the ticket.",
+      remove: "Delete the charge",
+      removed: "Charge deleted.",
+      removeConfirm: "Delete the charge \"{{name}}\" from the ticket? The matching work to bill will be removed.",
+      errors: { charge_billed: "This charge is already on an invoice: cancel the invoice first." },
     },
     sections: {
       client: "Client and contact",

@@ -322,6 +322,19 @@ export function localTicketSource(base: TicketSource): TicketSource {
         });
       await touch(ticketId);
     },
+    async removeCharge(ticketId, chargeId) {
+      if (!/^[0-9a-f-]{36}$/i.test(chargeId)) return false;
+      const [row] = await db().select({ id: schema.ticketCharges.id, externalId: schema.ticketCharges.externalId }).from(schema.ticketCharges).where(and(eq(schema.ticketCharges.id, chargeId), eq(schema.ticketCharges.ticketId, ticketId)));
+      if (!row) return false;
+      const sourceId = row.externalId ?? `pcharge:${row.id}`;
+      await db().transaction(async (tx) => {
+        // the work to bill made from it goes too (never one already on an invoice: the route refuses before)
+        await tx.delete(schema.billingItems).where(and(eq(schema.billingItems.sourceId, sourceId), inArray(schema.billingItems.status, ["pending", "approved", "excluded"])));
+        await tx.delete(schema.ticketCharges).where(eq(schema.ticketCharges.id, row.id));
+      });
+      await touch(ticketId);
+      return true;
+    },
     workTypes: () => base.workTypes(),
     async addTimeEntry(ticketId, p, a) {
       await one(ticketId);

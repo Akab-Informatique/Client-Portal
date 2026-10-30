@@ -1,4 +1,4 @@
-import { Fragment, useEffect, useMemo, useRef, useState, type FormEvent, type ReactNode } from "react";
+import { forwardRef, Fragment, useEffect, useMemo, useRef, useState, type FormEvent, type ReactNode } from "react";
 import { ConfirmRow, DueEditor } from "./DueEditor";
 import { useSearchParams } from "react-router-dom";
 import { useTranslation } from "react-i18next";
@@ -256,10 +256,10 @@ export function TicketsPage() {
         {/* 2. search */}
         <div className="relative">
           <Search className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
-          <Input
+          <SearchInput
             ref={searchRef}
             value={params.get("q") ?? ""}
-            onChange={(e) => set({ q: e.target.value || null })}
+            onCommit={(v) => set({ q: v || null })}
             placeholder={t("tickets.search")}
             className="h-9 rounded-xl border-[color:var(--glass-border)] bg-background/40 pl-9 pr-8 text-sm"
           />
@@ -1232,6 +1232,29 @@ function FilterButton({
 type Option = { value: string; label: string; dot?: string };
 
 /** Checkbox list for one URL parameter (comma-separated values). */
+/** The search box: typed text stays local (instant), the address and the list follow 300 ms after the last key */
+const SearchInput = forwardRef<HTMLInputElement, { value: string; onCommit: (v: string) => void; placeholder: string; className?: string }>(function SearchInput({ value, onCommit, placeholder, className }, ref) {
+  const [text, setText] = useState(value);
+  const last = useRef(value);
+  // changed from elsewhere (a tile, a saved filter, cleared): follow it
+  useEffect(() => {
+    if (value !== last.current) {
+      last.current = value;
+      setText(value);
+    }
+  }, [value]);
+  useEffect(() => {
+    if (text === last.current) return;
+    const id = setTimeout(() => {
+      last.current = text;
+      onCommit(text);
+    }, 300);
+    return () => clearTimeout(id);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [text]);
+  return <Input ref={ref} value={text} onChange={(e) => setText(e.target.value)} placeholder={placeholder} className={className} />;
+});
+
 function Checklist({ param, options, params, set, searchable, max = "max-h-72" }: { param: string; options: Option[]; params: URLSearchParams; set: SetFn; searchable?: boolean; max?: string }) {
   const { t } = useTranslation();
   const selected = useMemo(() => (params.get(param) ?? "").split(",").filter(Boolean), [params, param]);

@@ -4286,6 +4286,10 @@ const fr = {
       total: "Total facturable",
       save: "Ajouter les frais",
       added: "Frais ajoutés au billet.",
+      remove: "Supprimer le frais",
+      removed: "Frais supprimé.",
+      removeConfirm: "Supprimer le frais « {{name}} » du billet ? Le travail à facturer correspondant sera retiré.",
+      errors: { charge_billed: "Ce frais est déjà sur une facture : annulez d'abord la facture." },
     },
     sections: {
       client: "Client et contact",

@@ -1797,6 +1797,22 @@ export const ticketRoutes = new Hono<AppEnv>()
     await audit(a.user.id, "ticket.charge_added", String(id), { name: p.name, quantity: p.quantity, unitPrice: p.unitPrice, billable: p.billable, productId: p.productId });
     return c.json(await run(() => src.charges(id)), 201);
   })
+  .delete("/:id/charges/:chargeId", requirePermission("tickets.edit"), async (c) => {
+    const a = auth(c);
+    const id = Number(c.req.param("id"));
+    const chargeId = c.req.param("chargeId");
+    if (!Number.isInteger(id)) throw new HTTPException(400, { message: "invalid_id" });
+    const src = await ticketSource();
+    const [line] = await db().select({ status: schema.billingItems.status }).from(schema.billingItems).where(eq(schema.billingItems.sourceId, `pcharge:${chargeId}`));
+    // a charge already on an invoice stays (cancel the invoice first)
+    if (line && line.status === "posted") throw new HTTPException(409, { message: "charge_billed" });
+    const [own] = /^[0-9a-f-]{36}$/i.test(chargeId) ? await db().select({ billed: schema.ticketCharges.billed }).from(schema.ticketCharges).where(eq(schema.ticketCharges.id, chargeId)) : [];
+    if (own?.billed) throw new HTTPException(409, { message: "charge_billed" });
+    const removed = await run(() => src.removeCharge(id, chargeId));
+    if (!removed) throw new HTTPException(404, { message: "not_found" });
+    await audit(a.user.id, "ticket.charge_removed", String(id), { chargeId });
+    return c.json(await run(() => src.charges(id)));
+  })
 
   /**
    * Notify technicians about a ticket (tickets.edit): the bell for each, always, and — as ticked — an email, a
