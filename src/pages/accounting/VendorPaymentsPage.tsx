@@ -11,6 +11,7 @@ import { useCan } from "@/lib/session";
 import { cn } from "@/lib/utils";
 import { money } from "@/pages/crm/shared";
 import { shortDate, longDateTime } from "@/pages/tickets/shared";
+import { VendorForecast } from "./VendorForecast";
 
 type Bill = { id: string; vendor: string; number: string | null; issuedOn: string; dueOn: string | null; totalCents: number; balanceCents: number; memo: string | null; status: "open" | "overdue" | "paid"; daysLate: number };
 type Bucket = { count: number; cents: number };
@@ -174,6 +175,8 @@ export function VendorPaymentsPage() {
           {noDue.length > 0 && <BillList title={t("vendorBills.noDueTitle", { count: noDue.length })} bills={noDue} empty="" lang={lang} />}
         </section>
       </div>
+
+      <VendorForecast />
     </div>
   );
 }

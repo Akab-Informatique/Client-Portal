@@ -23,7 +23,7 @@ process.env.REQUIRE_MFA = "true";
 const { initDb, db, schema } = await import("../server/db/index.ts");
 const { seed } = await import("../server/db/seed.ts");
 const { createApp } = await import("../server/app.ts");
-const { eq, sql, isNotNull } = await import("drizzle-orm");
+const { eq, sql, isNotNull, inArray } = await import("drizzle-orm");
 const { resetRateLimit } = await import("../server/lib/http.ts");
 
 let app: ReturnType<typeof createApp>;
@@ -9016,5 +9016,48 @@ describe("vendor payments: the vendors' bills of QuickBooks on a calendar", () =
     // rights: a technician has no accounting
     expect((await tech.get("/api/vendor-payments/summary")).status).toBe(403);
     expect((await tech.post("/api/vendor-payments/sync")).status).toBe(403);
+  });
+
+  it("forecasts the cash: client invoices in, vendor bills out, and the first day the money runs out", async () => {
+    const admin = await signIn("admin@akab.local");
+    const tech = await signIn("tech@akab.local");
+    const [client] = await db().select().from(schema.clients).limit(1);
+    // the invoices other tests left unpaid are not part of this forecast: set them aside, put them back at the end
+    const others = (await db().select({ id: schema.clientInvoices.id }).from(schema.clientInvoices).where(sql`${schema.clientInvoices.voided} = false and ${schema.clientInvoices.paidOn} is null`)).map((r) => r.id);
+    if (others.length) await db().update(schema.clientInvoices).set({ voided: true }).where(inArray(schema.clientInvoices.id, others));
+    await db().delete(schema.vendorBills);
+    bills = [bill("11", "Fournisseur A", day(2), 400, 400), bill("12", "Fournisseur B", day(15), 300, 300), bill("13", "Fournisseur C", day(-3), 100, 100)];
+    await admin.post("/api/vendor-payments/sync");
+    const made = await db()
+      .insert(schema.clientInvoices)
+      .values([
+        { clientId: client.id, number: "FC-1", issuedOn: day(-20), dueOn: day(10), totalCents: 30000, source: "portal" },
+        // already late: counted as collected in 14 days
+        { clientId: client.id, number: "FC-2", issuedOn: day(-60), dueOn: day(-30), totalCents: 20000, source: "portal" },
+        // voided and paid ones are not money to come
+        { clientId: client.id, number: "FC-3", issuedOn: day(-20), dueOn: day(5), totalCents: 99900, source: "portal", voided: true },
+        { clientId: client.id, number: "FC-4", issuedOn: day(-20), dueOn: day(5), totalCents: 88800, source: "portal", paidOn: day(-1) },
+      ])
+      .returning({ id: schema.clientInvoices.id });
+    try {
+      expect((await tech.put("/api/vendor-payments/forecast/settings", { balance: 300 })).status).toBe(403);
+      expect((await admin.put("/api/vendor-payments/forecast/settings", { balance: 300, payDelayDays: 0, lateDelayDays: 14 })).status).toBe(200);
+      const f = (await admin.get("/api/vendor-payments/forecast?days=60")).json;
+      expect(f).toMatchObject({ startCents: 30000, inCents: 50000, outCents: 80000, endCents: 0, shortfall: { date: day(2), balanceCents: -20000 }, lowest: { date: day(2), balanceCents: -20000 } });
+      // the late bill is paid today, the late invoice comes in 14 days from today
+      expect(f.events.find((e: any) => e.label.startsWith("Fournisseur C"))).toMatchObject({ kind: "out", date: day(0), late: true });
+      expect(f.events.find((e: any) => e.label.includes("FC-2"))).toMatchObject({ kind: "in", date: day(14), late: true });
+      expect(f.events.some((e: any) => e.label.includes("FC-3") || e.label.includes("FC-4"))).toBe(false);
+
+      // more in the bank: everything can be paid
+      await admin.put("/api/vendor-payments/forecast/settings", { balance: 1000 });
+      const ok = (await admin.get("/api/vendor-payments/forecast?days=30")).json;
+      expect(ok.shortfall).toBeNull();
+      expect(ok.lowest.balanceCents).toBeGreaterThanOrEqual(0);
+      expect((await admin.get("/api/vendor-payments/forecast?days=5")).json.days).toBe(14);
+    } finally {
+      await db().delete(schema.clientInvoices).where(inArray(schema.clientInvoices.id, made.map((m) => m.id)));
+      if (others.length) await db().update(schema.clientInvoices).set({ voided: false }).where(inArray(schema.clientInvoices.id, others));
+    }
   });
 });
