@@ -527,6 +527,8 @@ export const userPreferences = pgTable("user_preferences", {
   emailSignature: text("email_signature"),
   /** Hours worked go to the hours bank by default (each entry can still say otherwise) */
   bankHoursDefault: boolean("bank_hours_default").notNull().default(false),
+  /** The way the tickets list is shown by default: standard | kanban | compact (null: standard) */
+  ticketLayout: text("ticket_layout"),
   /** The channels ticked by default when notifying a technician from a ticket (the bell is always on) */
   /** The lock screen of the phone shows the detail of a notification (number, title, text); off = only its kind */
   pushDetails: boolean("push_details").notNull().default(false),
@@ -792,6 +794,8 @@ export const ticketMeta = pgTable("ticket_meta", {
   milestoneDate: text("milestone_date"),
   /** HH:MM of the checkpoint (the goal date has a time too) */
   milestoneTime: text("milestone_time"),
+  /** Labels added to the ticket to find it back (searched with the ticket) */
+  tags: jsonb("tags").$type<string[]>().notNull().default(sql`'[]'::jsonb`),
   /** The portal's own queue (ticket_queues.key); none: worked out from the source, else the default queue */
   queue: text("queue"),
   /** A device of the portal's own (local_assets.id) linked to the ticket when the RMM / Autotask has none */
@@ -1757,6 +1761,8 @@ export const expenseFavorites = pgTable(
  */
 export const ticketBoards = pgTable("ticket_boards", {
   id: uuid("id").primaryKey().defaultRandom(),
+  /** Whose board it is: each technician has their own (nobody else sees or changes it) */
+  userId: uuid("user_id").references(() => users.id, { onDelete: "cascade" }),
   name: text("name").notNull(),
   position: integer("position").notNull().default(0),
   createdBy: uuid("created_by").references(() => users.id, { onDelete: "set null" }),
@@ -1766,14 +1772,16 @@ export const ticketBoards = pgTable("ticket_boards", {
 export const ticketBoardCards = pgTable(
   "ticket_board_cards",
   {
-    ticketId: bigint("ticket_id", { mode: "number" }).primaryKey(),
+    /** Whose card: a ticket can sit on a different board for each technician */
+    userId: uuid("user_id").notNull(),
+    ticketId: bigint("ticket_id", { mode: "number" }).notNull(),
     boardId: uuid("board_id")
       .notNull()
       .references(() => ticketBoards.id, { onDelete: "cascade" }),
     position: integer("position").notNull().default(0),
     updatedAt: updated(),
   },
-  (t) => [index("ticket_board_cards_board_idx").on(t.boardId)],
+  (t) => [primaryKey({ columns: [t.userId, t.ticketId] }), index("ticket_board_cards_board_idx").on(t.boardId)],
 );
 
 /** A client user's saved filter on the portal's tickets page: the people of their company to show. */

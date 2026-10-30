@@ -173,7 +173,8 @@ export function localTicketSource(base: TicketSource): TicketSource {
         ...times.map((x) => ({
           id: `t-${x.id}`,
           author: x.author,
-          at: x.startedAt.toISOString(),
+          // in the order things were added (not the hour the work started), so the activity reads as it happened
+          at: x.createdAt.toISOString(),
           text: x.summary,
           internal: false,
           kind: "time" as const,

@@ -12,7 +12,7 @@ import { Input } from "@/components/ui/input";
 import { useConfirm } from "@/components/ConfirmDialog";
 import { api } from "@/lib/api";
 import { cn, initials } from "@/lib/utils";
-import { useCan } from "@/lib/session";
+import { useCan, useMe } from "@/lib/session";
 import { dueState, PRIORITY_STYLE, shortDate, STATUS_STYLE, ticketErrorText, useChoiceText, type TicketList, type TicketSummary } from "./shared";
 
 // ── The three ways to look at the list ───────────────────────────────────────────
@@ -24,7 +24,11 @@ const ICON = { standard: LayoutList, kanban: Columns3, compact: Rows3 } as const
 
 /** The view chosen on this computer (remembered). */
 export function useTicketLayout(): [Layout, (l: Layout) => void] {
+  const me = useMe();
+  const qc = useQueryClient();
+  // the person's own default (kept on their account, so it follows them to any computer), else what this computer remembered
   const [layout, setLayout] = useState<Layout>(() => {
+    if (me.preferences.ticketLayout) return me.preferences.ticketLayout;
     try {
       const v = localStorage.getItem(KEY);
       return (LAYOUTS as readonly string[]).includes(v ?? "") ? (v as Layout) : "standard";
@@ -39,8 +43,10 @@ export function useTicketLayout(): [Layout, (l: Layout) => void] {
       try {
         localStorage.setItem(KEY, l);
       } catch {
-        /* the choice just is not remembered */
+        /* the choice just is not remembered here */
       }
+      // the view picked becomes their default
+      void api.put("/me/preferences", { ticketLayout: l }).then(() => qc.invalidateQueries({ queryKey: ["auth"] }));
     },
   ];
 }
@@ -199,12 +205,133 @@ function moveCard(cards: Card[], ticketId: number, boardId: string | null, befor
   return [...rest.filter((c) => c.boardId !== boardId), ...target.map((id, i) => ({ ticketId: id, boardId, position: i }))];
 }
 
+// ── Kanban, three ways: by status, by checkpoint date, or on my own boards ───────
+type KanbanBy = "status" | "checkpoint" | "custom";
+const KANBAN_BY = ["status", "checkpoint", "custom"] as const;
+const BY_KEY = "akab.tickets.kanbanBy";
+
+/** The Kanban: the columns are the statuses, the checkpoint dates, or boards the technician made (their own). */
+export function KanbanBoard({ items, canEdit, onOpen, facets }: { items: TicketSummary[]; canEdit: boolean; onOpen: (id: number) => void; facets?: TicketList["facets"] }) {
+  const { t } = useTranslation();
+  const [by, setByState] = useState<KanbanBy>(() => {
+    try {
+      const v = localStorage.getItem(BY_KEY);
+      return (KANBAN_BY as readonly string[]).includes(v ?? "") ? (v as KanbanBy) : "status";
+    } catch {
+      return "status";
+    }
+  });
+  const setBy = (v: KanbanBy) => {
+    setByState(v);
+    try {
+      localStorage.setItem(BY_KEY, v);
+    } catch {
+      /* not remembered */
+    }
+  };
+  return (
+    <div>
+      <div className="flex items-center gap-2 border-b px-3 py-2 text-xs text-muted-foreground">
+        <span>{t("tickets.kanban.by")}</span>
+        <div className="flex items-center rounded-lg border bg-background/40 p-0.5" role="group">
+          {KANBAN_BY.map((k) => (
+            <button key={k} type="button" aria-pressed={by === k} onClick={() => setBy(k)} className={cn("rounded-md px-2.5 py-1 font-medium transition-colors", by === k ? "bg-[color:var(--gold)]/15 text-primary" : "hover:text-foreground")}>
+              {t(`tickets.kanban.by_${k}`)}
+            </button>
+          ))}
+        </div>
+        {by === "custom" && <span className="hidden sm:inline">{t("tickets.kanban.mineOnly")}</span>}
+      </div>
+      {by === "custom" ? <CustomBoards items={items} canEdit={canEdit} onOpen={onOpen} /> : <FieldBoard by={by} items={items} canEdit={canEdit} onOpen={onOpen} facets={facets} />}
+    </div>
+  );
+}
+
+const ymdOf = (d: Date) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+const plus = (n: number) => {
+  const d = new Date();
+  d.setDate(d.getDate() + n);
+  return d;
+};
+type FieldColumn = { id: string; label: string; items: TicketSummary[]; apply: (id: number) => Promise<unknown> | null };
+
+/** Columns that are the tickets' own fields: dropping a card changes the ticket (its status, or its checkpoint date). */
+function FieldBoard({ by, items, canEdit, onOpen, facets }: { by: "status" | "checkpoint"; items: TicketSummary[]; canEdit: boolean; onOpen: (id: number) => void; facets?: TicketList["facets"] }) {
+  const { t } = useTranslation();
+  const txt = useChoiceText();
+  const qc = useQueryClient();
+  const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 6 } }));
+  const today = ymdOf(new Date());
+  const tomorrow = ymdOf(plus(1));
+  const sunday = ymdOf(plus((7 - new Date().getDay()) % 7));
+  const friday = ymdOf(plus(Math.max(2, (5 - new Date().getDay() + 7) % 7)));
+  const checkpoint = (date: string | null) => (id: number) => api.put(`/tickets/${id}/start-date`, { milestoneDate: date });
+  const columns: FieldColumn[] = useMemo(() => {
+    const byDue = (a: TicketSummary, b: TicketSummary) => (a.milestoneDate ?? "9999").localeCompare(b.milestoneDate ?? "9999") || a.dueAt.localeCompare(b.dueAt);
+    if (by === "status")
+      return (facets?.statuses ?? [])
+        .filter((s) => !s.hidden)
+        .map((s) => ({ id: s.value, label: txt.status(s), items: items.filter((x) => x.status === s.value).sort(byDue), apply: (id: number) => api.patch(`/tickets/${id}`, { status: s.value }) }));
+    const bucket = (x: TicketSummary) => (!x.milestoneDate ? "none" : x.milestoneDate < today ? "late" : x.milestoneDate === today ? "today" : x.milestoneDate === tomorrow ? "tomorrow" : x.milestoneDate <= sunday ? "week" : "later");
+    const defs: [string, string | null, ((id: number) => Promise<unknown>) | null][] = [
+      ["late", null, null],
+      ["today", today, checkpoint(today)],
+      ["tomorrow", tomorrow, checkpoint(tomorrow)],
+      ["week", friday, checkpoint(friday)],
+      ["later", ymdOf(plus(14)), checkpoint(ymdOf(plus(14)))],
+      ["none", null, checkpoint(null)],
+    ];
+    return defs.map(([id, , apply]) => ({ id, label: t(`tickets.kanban.cp_${id}`), items: items.filter((x) => bucket(x) === id).sort(byDue), apply: apply as FieldColumn["apply"] }));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [by, items, facets, today]);
+  const move = useMutation({
+    mutationFn: ({ id, col }: { id: number; col: FieldColumn }) => col.apply(id) ?? Promise.resolve(),
+    onSettled: () => void qc.invalidateQueries({ queryKey: ["tickets"] }),
+    onError: (e) => toast.error(ticketErrorText(t, e)),
+  });
+  const onDragEnd = ({ active, over }: DragEndEvent) => {
+    if (!over || !canEdit) return;
+    const id = Number(String(active.id).slice(1));
+    const overId = String(over.id);
+    const target = overId.startsWith("col:") ? columns.find((c) => c.id === overId.slice(4)) : columns.find((c) => c.items.some((x) => x.id === Number(overId.slice(1))));
+    if (!target || target.items.some((x) => x.id === id) || !target.apply) return;
+    move.mutate({ id, col: target });
+  };
+  return (
+    <DndContext sensors={sensors} collisionDetection={closestCorners} onDragEnd={onDragEnd}>
+      <div className="flex items-start gap-3 overflow-x-auto p-3 scrollbar-thin">
+        {columns.map((col) => (
+          <FieldColumnView key={col.id} col={col} canEdit={canEdit && Boolean(col.apply)} onOpen={onOpen} />
+        ))}
+      </div>
+    </DndContext>
+  );
+}
+
+function FieldColumnView({ col, canEdit, onOpen }: { col: FieldColumn; canEdit: boolean; onOpen: (id: number) => void }) {
+  const { setNodeRef, isOver } = useDroppable({ id: `col:${col.id}` });
+  return (
+    <section className={cn("flex max-h-[70vh] w-72 shrink-0 flex-col rounded-xl border bg-card/40", isOver && canEdit && "border-[color:var(--gold)]/50 bg-[color:var(--gold)]/[0.04]")}>
+      <header className="flex items-center gap-2 border-b px-3 py-2">
+        <h3 className="min-w-0 flex-1 truncate text-sm font-semibold">{col.label}</h3>
+        <span className="rounded-full bg-foreground/[0.07] px-1.5 font-mono text-[11px] text-muted-foreground">{col.items.length}</span>
+      </header>
+      <div ref={setNodeRef} className="min-h-24 flex-1 space-y-2 overflow-y-auto p-2 scrollbar-thin">
+        <SortableContext items={col.items.map((x) => `t${x.id}`)} strategy={verticalListSortingStrategy}>
+          {col.items.map((tk) => (
+            <KanbanCard key={tk.id} tk={tk} canEdit={canEdit || true} onOpen={() => onOpen(tk.id)} />
+          ))}
+        </SortableContext>
+      </div>
+    </section>
+  );
+}
+
 /**
- * The tickets of the list on boards (columns) made by the team. A board only
- * sorts tickets here, in this view: nothing is written on the ticket and the
- * other views show no board. What is not on a board stays in "Not sorted".
+ * The tickets of the list on MY boards (columns I made). A board only sorts tickets here, in this view: nothing is written on
+ * the ticket and the other views show no board; the boards and their order are mine alone. What is not on a board stays in "Not sorted".
  */
-export function KanbanBoard({ items, canEdit, onOpen }: { items: TicketSummary[]; canEdit: boolean; onOpen: (id: number) => void }) {
+function CustomBoards({ items, canEdit, onOpen }: { items: TicketSummary[]; canEdit: boolean; onOpen: (id: number) => void }) {
   const { t } = useTranslation();
   const qc = useQueryClient();
   const confirm = useConfirm();

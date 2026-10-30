@@ -51,6 +51,7 @@ import { billingRoutes, stripeHookRoutes } from "./routes/billing.ts";
 import { billablesRoutes } from "./routes/billables.ts";
 import { timeRoutes } from "./routes/time.ts";
 import { hrRoutes } from "./routes/hr.ts";
+import { chatRoutes } from "./routes/chat.ts";
 
 export function createApp() {
   const app = new Hono<AppEnv>();
@@ -139,6 +140,7 @@ export function createApp() {
   api.route("/billables", billablesRoutes);
   api.route("/time", timeRoutes);
   api.route("/hr", hrRoutes);
+  api.route("/chat", chatRoutes);
   api.route("/messages", messageRoutes);
   api.route("/board", boardRoutes);
   api.route("/portal", portalRoutes);

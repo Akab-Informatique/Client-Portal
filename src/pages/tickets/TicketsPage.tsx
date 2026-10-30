@@ -346,7 +346,7 @@ export function TicketsPage() {
           </div>
         ) : layout === "kanban" ? (
           // boards of the team: the tickets of this list, sorted on columns (only in this view)
-          <KanbanBoard items={data.items} canEdit={can("tickets.edit")} onOpen={(id) => ws.open(id)} />
+          <KanbanBoard items={data.items} canEdit={can("tickets.edit")} onOpen={(id) => ws.open(id)} facets={data.facets} />
         ) : data.items.length === 0 ? (
           <div className="flex flex-col items-center gap-2 px-6 py-16 text-center text-sm text-muted-foreground">
             <Inbox className="size-8 opacity-50" />

@@ -8846,3 +8846,78 @@ describe("the AI assistant of the tickets page: only what the person may do, not
     }
   });
 });
+
+describe("tickets: tags, notes that notify colleagues, texts kept in their ticket, default view, own Kanban boards, Teams chat", () => {
+  it("tags are found by search; texts attached to a ticket leave the general inbox; the default view is per person; boards are each person's own", async () => {
+    resetRateLimit("login:ip:unknown");
+    const admin = await signIn("admin@akab.local");
+    const tech = await signIn("tech@akab.local");
+    const tech2 = await signIn("tech2@akab.local");
+    const [adm] = await db().select().from(schema.users).where(eq(schema.users.email, "admin@akab.local"));
+    const tk = (await tech.get("/api/tickets?view=all")).json.items.find((x: any) => x.statusKind !== "complete");
+    // tags
+    expect((await tech.put(`/api/tickets/${tk.id}/tags`, { tags: ["Imprimante", "imprimante", "VPN-Zyxel"] })).json.tags).toEqual(["Imprimante", "VPN-Zyxel"]);
+    expect((await tech.get(`/api/tickets/${tk.id}`)).json.tags).toEqual(["Imprimante", "VPN-Zyxel"]);
+    expect((await tech.get("/api/tickets/search?q=zyxel")).json.items.map((x: any) => x.id)).toContain(tk.id);
+    expect((await tech.get("/api/tickets?view=all&q=vpn-zyxel")).json.items.map((x: any) => x.id)).toContain(tk.id);
+    expect((await tech.put(`/api/tickets/${tk.id}/tags`, { tags: Array.from({ length: 13 }, (_, i) => `t${i}`) })).status).toBe(400);
+
+    // an internal note that tells a colleague: the bell, and the note by email
+    const note = await tech.post(`/api/tickets/${tk.id}/notes`, { text: "À voir avec toi pour le VPN", internal: true, notifyUserIds: [adm.id] });
+    expect(note.status).toBe(201);
+    expect(note.json.notified).toBe(1);
+    const bell = await db().select().from(schema.notifications).where(eq(schema.notifications.userId, adm.id));
+    expect(bell.some((n) => n.type === "ticket.notify" && JSON.stringify(n.data).includes("À voir avec toi"))).toBe(true);
+
+    // a text followed in a ticket is not in the general inbox
+    await db().insert(schema.smsConversations).values([{ phone: "4505550001", status: "open" }, { phone: "4505550002", status: "ticket", ticketId: tk.id, ticketNumber: tk.number }]);
+    const inbox = (await admin.get("/api/sms/conversations")).json.map((x: any) => x.phone);
+    expect(inbox).toContain("4505550001");
+    expect(inbox).not.toContain("4505550002");
+
+    // the default view is the person's own
+    expect((await tech.put("/api/me/preferences", { ticketLayout: "kanban" })).status).toBe(200);
+    expect((await tech.get("/api/me")).json.preferences.ticketLayout).toBe("kanban");
+    expect((await tech2.get("/api/me")).json.preferences.ticketLayout).toBeNull();
+    expect((await tech.put("/api/me/preferences", { ticketLayout: "cards" })).status).toBe(400);
+
+    // Kanban boards: each person's own
+    const mine = await tech.post("/api/ticket-boards", { name: "Mon tableau" });
+    expect(mine.status).toBe(201);
+    expect((await tech.put(`/api/ticket-boards/cards/${tk.id}`, { boardId: mine.json.id })).json.cards).toHaveLength(1);
+    expect((await tech2.get("/api/ticket-boards")).json).toEqual({ boards: [], cards: [] });
+    expect((await tech2.patch(`/api/ticket-boards/${mine.json.id}`, { name: "Volé" })).status).toBe(404);
+    expect((await tech2.del(`/api/ticket-boards/${mine.json.id}`)).status).toBe(404);
+    expect((await tech2.put(`/api/ticket-boards/cards/${tk.id}`, { boardId: mine.json.id })).status).toBe(404);
+    expect((await tech.get("/api/ticket-boards")).json.boards.map((b: any) => b.name)).toContain("Mon tableau");
+  });
+
+  it("the Teams chat only uses the person's own Microsoft sign-in, with the chat permission", async () => {
+    resetRateLimit("login:ip:unknown");
+    const tech = await signIn("tech@akab.local");
+    const tech2 = await signIn("tech2@akab.local");
+    const [u] = await db().select().from(schema.users).where(eq(schema.users.email, "tech@akab.local"));
+    await db().delete(schema.msConnections).where(eq(schema.msConnections.userId, u.id));
+    // nothing without one's own Microsoft sign-in (the organisation access is never used for a chat)
+    expect((await tech.get("/api/chat/chats")).json.error).toBe("chat_sign_in_first");
+    expect((await tech.get("/api/chat/status")).json).toMatchObject({ signedIn: false });
+    // the colleagues: the other active staff, never oneself
+    const people = (await tech.get("/api/chat/colleagues")).json;
+    expect(people.some((p: any) => p.id === u.id)).toBe(false);
+    expect(people.length).toBeGreaterThan(0);
+    // signed in before chat existed: one more sign-in is asked
+    await db().insert(schema.msConnections).values({ userId: u.id, msUserId: "ms-1", email: "tech@akab.local", refreshToken: "x", scopes: "User.Read Mail.ReadWrite" });
+    expect((await tech.get("/api/chat/status")).json).toMatchObject({ signedIn: true, needsReconnect: true });
+    expect((await tech.get("/api/chat/chats")).json.error).toBe("chat_reconnect");
+    expect((await tech.post("/api/chat/chats", { colleagueId: people[0].id })).json.error).toBe("chat_reconnect");
+    // another person has nothing of it, and a chat id that is not Teams' is refused
+    expect((await tech2.get("/api/chat/status")).json.email).not.toBe("tech@akab.local");
+    await db().update(schema.msConnections).set({ scopes: "User.Read Chat.ReadWrite" }).where(eq(schema.msConnections.userId, u.id));
+    expect((await tech.get("/api/chat/chats/../../me/messages")).status).toBeGreaterThanOrEqual(400);
+    expect((await tech.get(`/api/chat/chats/${encodeURIComponent("not-a-chat")}/messages`)).json.error).toBe("invalid_id");
+    await db().delete(schema.msConnections).where(eq(schema.msConnections.userId, u.id));
+    // Teams' HTML is shown as plain text
+    const { plain } = await import("../server/routes/chat.ts");
+    expect(plain("<p>Bonjour <b>Alex</b><br>à 15 h &amp; plus</p>", "html")).toBe("Bonjour Alex\nà 15 h & plus");
+  });
+});

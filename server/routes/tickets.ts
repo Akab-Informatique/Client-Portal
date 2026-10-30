@@ -162,6 +162,12 @@ function viewersOf(ticketId: number, exceptUserId?: string) {
   return [...m].filter(([id]) => id !== exceptUserId).map(([userId, v]) => ({ userId, name: v.name }));
 }
 
+/** The tags of every ticket that has some (to find a ticket back by them) */
+async function allTags() {
+  const rows = await db().select({ id: schema.ticketMeta.ticketId, tags: schema.ticketMeta.tags }).from(schema.ticketMeta).where(sql`jsonb_array_length(${schema.ticketMeta.tags}) > 0`);
+  return new Map(rows.map((r) => [r.id, r.tags]));
+}
+
 /** Start dates set in the portal (and the tickets restricted until then). */
 async function startDates(ids: number[]) {
   const out = new Map<number, string>() as Map<number, string> & { locked: Set<number>; times: Map<number, string>; milestones: Map<number, string>; milestoneTimes: Map<number, string> };
@@ -433,6 +439,7 @@ async function detailOf(src: TicketSource, id: number, a: AuthContext) {
   return {
     ...summary(t, lookup(o), starts.get(id), a.user.id, starts.locked.has(id), starts.times.get(id), starts.milestones.get(id), starts.milestoneTimes.get(id)),
     description: t.description,
+    tags: (await allTags()).get(id) ?? [],
     source: t.source,
     hours: t.hours,
     notes: t.notes,
@@ -504,6 +511,7 @@ export const ticketRoutes = new Hono<AppEnv>()
     };
     const inRange = (v: string | undefined, from?: string, to?: string) =>
       (!from && !to) || (v !== undefined && (!from || v.slice(0, 10) >= from) && (!to || v.slice(0, 10) <= to));
+    const tagsOf = await allTags();
     /** The tickets a set of list parameters selects (the list, and the saved filters' buttons). */
     const select = (q: Record<string, string | undefined>) => {
       const view = ((q.view ?? "") in views ? q.view : "mine") as keyof typeof views;
@@ -524,7 +532,7 @@ export const ticketRoutes = new Hono<AppEnv>()
       .filter((t) => !queue.length || queue.includes(t.queue))
       .filter((t) => !company.length || company.includes(t.company.id))
       .filter((t) => !assignee.length || assignee.includes(t.assignee?.id ?? "none"))
-      .filter((t) => !text || `${t.number} ${t.title} ${t.company.name} ${t.contact}`.toLowerCase().includes(text))
+      .filter((t) => !text || `${t.number} ${t.title} ${t.company.name} ${t.contact} ${(tagsOf.get(t.id) ?? []).join(" ")}`.toLowerCase().includes(text))
       .filter((t) => inRange(t.dueAt, q.dueFrom, q.dueTo))
       // Tiles: "due=overdue|today" (to the minute) and "created=today"
       .filter((t) => (q.due === "overdue" ? isOverdue(t) : q.due === "today" ? isDueToday(t) : q.due === "week" ? isDueThisWeek(t) : true))
@@ -1062,11 +1070,12 @@ export const ticketRoutes = new Hono<AppEnv>()
     const src = await ticketSource();
     const [all, o] = await run(() => Promise.all([src.list(), src.options()]));
     const words = fold(q).split(/\s+/).filter(Boolean);
+    const tagsOf = await allTags();
     const scored = all
       .map((t) => {
         const num = fold(t.number);
         const title = fold(t.title);
-        const hay = `${num} ${title} ${fold(t.company.name)} ${fold(t.contact)} ${fold(t.description)}`;
+        const hay = `${num} ${title} ${fold(t.company.name)} ${fold(t.contact)} ${fold(t.description)} ${fold((tagsOf.get(t.id) ?? []).join(" "))}`;
         if (!words.every((w) => hay.includes(w))) return null;
         const score = (num === fold(q) ? 100 : num.includes(fold(q)) ? 50 : 0) + words.filter((w) => title.includes(w)).length * 10 + (L_OPEN(o, t) ? 5 : 0);
         return { t, score };
@@ -1726,11 +1735,18 @@ export const ticketRoutes = new Hono<AppEnv>()
     const a = auth(c);
     const id = Number(c.req.param("id"));
     // email: a reply to the client is also emailed to the ticket's contact unless the technician says not to, and to other addresses if asked
-    const p = await body(c, z.object({ text: z.string().trim().min(1).max(8000), internal: z.boolean(), email: z.boolean().optional(), others: z.array(zEmail).max(10).default([]), /** files of this ticket (uploaded just before) that go with the email */ attachmentIds: z.array(zUuid).max(10).default([]) }));
+    const p = await body(c, z.object({ text: z.string().trim().min(1).max(8000), internal: z.boolean(), email: z.boolean().optional(), others: z.array(zEmail).max(10).default([]), /** files of this ticket (uploaded just before) that go with the email */ attachmentIds: z.array(zUuid).max(10).default([]), /** colleagues told about an internal note: the bell and an email with the note */ notifyUserIds: z.array(zUuid).max(20).default([]) }));
     const src = await ticketSource();
     await run(() => src.addNote(id, { text: p.text, internal: p.internal }, a));
+    // an internal note can tell colleagues: each gets the bell and an email with the note
+    let told: Awaited<ReturnType<typeof notifyTechs>> = [];
+    if (p.internal && p.notifyUserIds.length) {
+      const tk = await run(() => src.get(id));
+      if (tk) told = await notifyTechs(tk, { id: a.user.id, name: a.realUser.name }, p.notifyUserIds, p.text, { email: true, sms: false, teams: false });
+      await audit(a.user.id, "ticket.note_notified", String(id), { to: told.map((x) => x.id) });
+    }
     const mail = !p.internal && (p.email !== false || p.others.length) ? await emailReply(src, id, p.text, a, { contact: p.email !== false, others: p.others }, p.attachmentIds) : null;
-    return c.json({ ok: true, ...(mail ?? {}) }, 201);
+    return c.json({ ok: true, ...(mail ?? {}), ...(told.length ? { notified: told.length, notifyFailed: told.filter((x) => x.email === "failed" || x.email === "no_address").length } : {}) }, 201);
   })
 
   /**
@@ -1833,6 +1849,21 @@ export const ticketRoutes = new Hono<AppEnv>()
       .returning();
     if (p.startLocked !== undefined) await audit(a.user.id, p.startLocked ? "ticket.start_locked" : "ticket.start_unlocked", String(id), { startDate: row.startDate });
     return c.json({ ok: true, startDate: row.startDate, startTime: row.startDate ? row.startTime : null, startLocked: Boolean(row.startDate && row.startLocked), milestoneDate: row.milestoneDate, milestoneTime: row.milestoneDate ? row.milestoneTime : null });
+  })
+
+  /** The tags of a ticket (labels to find it back): at most 12, each short, no doubles */
+  .put("/:id/tags", requirePermission("tickets.edit"), async (c) => {
+    const a = auth(c);
+    const id = Number(c.req.param("id"));
+    if (!Number.isInteger(id) || id <= 0) throw new HTTPException(400, { message: "invalid_id" });
+    const p = await body(c, z.object({ tags: z.array(z.string().trim().min(1).max(30)).max(12) }));
+    const seen = new Set<string>();
+    const tags = p.tags.filter((x) => (seen.has(x.toLowerCase()) ? false : (seen.add(x.toLowerCase()), true)));
+    await db()
+      .insert(schema.ticketMeta)
+      .values({ ticketId: id, tags, updatedBy: a.user.id })
+      .onConflictDoUpdate({ target: schema.ticketMeta.ticketId, set: { tags, updatedBy: a.user.id, updatedAt: new Date() } });
+    return c.json({ tags });
   })
 
   /** The contract the ticket's work is billed on (null: back to the client's default support contract). */

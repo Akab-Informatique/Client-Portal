@@ -121,7 +121,7 @@ async function userAccessToken(userId: string): Promise<string> {
 }
 
 /** What a technician's sign-in asks for (delegated permissions). */
-export const DELEGATED_SCOPES = ["openid", "profile", "email", "offline_access", "User.Read", "Mail.ReadWrite", "Mail.Send", "Mail.ReadWrite.Shared", "Mail.Send.Shared", "Calendars.ReadWrite"];
+export const DELEGATED_SCOPES = ["openid", "profile", "email", "offline_access", "User.Read", "Mail.ReadWrite", "Mail.Send", "Mail.ReadWrite.Shared", "Mail.Send.Shared", "Calendars.ReadWrite", "Chat.ReadWrite"];
 /** Delegated scope needed to open a mailbox shared with the technician */
 export const SHARED_MAIL_SCOPE = "Mail.ReadWrite.Shared";
 

@@ -5,7 +5,7 @@ import { useMutation, useQuery, useQueryClient, type QueryClient } from "@tansta
 import { AnimatePresence, motion } from "motion/react";
 import { toast } from "sonner";
 import { Dialog as DialogPrimitive } from "radix-ui";
-import { AlertTriangle, Flag, Paperclip, Bot, Building2, CalendarClock, CalendarPlus, Check, BookOpen, ChevronDown, ListOrdered, ChevronUp, Clock3, Eye, FileText, HardDrive, HelpCircle, Inbox, ListChecks, Loader2, Lock, Mail, Minus, MonitorCog, MonitorPlay, NotebookPen, Pencil, Phone, RefreshCw, Send, Sparkles, Timer, Star, UserCheck, UserRound, Users, X, type LucideIcon, MessageSquareReply, MessageSquareText, Trash2, GitMerge } from "lucide-react";
+import { AlertTriangle, BellRing, Flag, MessagesSquare, Tag, Paperclip, Bot, Building2, CalendarClock, CalendarPlus, Check, BookOpen, ChevronDown, ListOrdered, ChevronUp, Clock3, Eye, FileText, HardDrive, HelpCircle, Inbox, ListChecks, Loader2, Lock, Mail, Minus, MonitorCog, MonitorPlay, NotebookPen, Pencil, Phone, RefreshCw, Send, Sparkles, Timer, Star, UserCheck, UserRound, Users, X, type LucideIcon, MessageSquareReply, MessageSquareText, Trash2, GitMerge } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { useConfirm } from "@/components/ConfirmDialog";
 import { AiTextarea } from "@/components/AiPolish";
@@ -28,6 +28,7 @@ import { AiModelSub, AiTodayLine, useAiModel } from "@/components/AiModelPicker"
 import { AiDirection, useAiDirection } from "@/components/AiDirection";
 import { useCan, useMe } from "@/lib/session";
 import { EditTimeDialog, type TimeNote } from "./EditTime";
+import { TicketChat } from "./TicketChat";
 import { DueEditor } from "./DueEditor";
 import { cn, initials } from "@/lib/utils";
 import { GlassBackdrop } from "@/components/brand/GlassBackdrop";
@@ -831,6 +832,18 @@ function TicketBody({
           <Section id="kb" icon={BookOpen} title={t("tickets.kb.title")} badge={t("tickets.kb.soon")}>
             <p className="text-sm text-muted-foreground">{t("tickets.kb.empty")}</p>
           </Section>
+
+          {/* labels to find the ticket back: searched with the ticket */}
+          <Section id="tags" icon={Tag} title={t("tickets.tags.title")} badge={tk.tags?.length ? String(tk.tags.length) : undefined}>
+            <TicketTags tk={tk} editable={editable} />
+          </Section>
+
+          {/* a small chat with a colleague (their Teams chat with me) */}
+          {can("chat.use") && (
+            <Section id="chat" icon={MessagesSquare} title={t("chat.title")} defaultOpen={false}>
+              <TicketChat tk={tk} />
+            </Section>
+          )}
         </aside>
       </div>
       <OpenedByOthers viewers={viewers} />
@@ -842,6 +855,54 @@ function TicketBody({
 }
 
 /** A tool in the quick-action bar: a button, or a link (new tab for web pages). */
+/** The tags of a ticket: chips to remove, a field to add one (Enter); they are searched with the ticket. */
+function TicketTags({ tk, editable }: { tk: TicketDetail; editable: boolean }) {
+  const { t } = useTranslation();
+  const qc = useQueryClient();
+  const [text, setText] = useState("");
+  const tags = tk.tags ?? [];
+  const save = useMutation({
+    mutationFn: (next: string[]) => api.put<{ tags: string[] }>(`/tickets/${tk.id}/tags`, { tags: next }),
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: ["tickets"] });
+      setText("");
+    },
+    onError: (e) => toast.error(ticketErrorText(t, e)),
+  });
+  return (
+    <div className="space-y-2">
+      <div className="flex flex-wrap gap-1.5">
+        {tags.map((x) => (
+          <span key={x} className="flex items-center gap-1 rounded-full border border-[color:var(--gold)]/40 bg-[color:var(--gold)]/10 px-2 py-0.5 text-xs">
+            {x}
+            {editable && (
+              <button type="button" onClick={() => save.mutate(tags.filter((y) => y !== x))} className="text-muted-foreground hover:text-destructive" aria-label={t("common.delete")}>
+                <X className="size-3" />
+              </button>
+            )}
+          </span>
+        ))}
+        {!tags.length && <span className="text-xs text-muted-foreground">{t("tickets.tags.none")}</span>}
+      </div>
+      {editable && (
+        <Input
+          value={text}
+          maxLength={30}
+          className="h-8"
+          placeholder={t("tickets.tags.add")}
+          onChange={(e) => setText(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === "Enter" && text.trim()) {
+              e.preventDefault();
+              save.mutate([...tags, text.trim()]);
+            }
+          }}
+        />
+      )}
+    </div>
+  );
+}
+
 /** The contract the ticket's work is billed on: the client's default support contract unless another is picked. */
 function ContractField({ tk, editable }: { tk: TicketDetail; editable: boolean }) {
   const { t, i18n } = useTranslation();
@@ -1809,6 +1870,10 @@ function NoteComposer({
   const contactEmail = tk.contactInfo?.email ?? null;
   const [emailIt, setEmailIt] = useState(true);
   const [mailOthers, setMailOthers] = useState<string[]>([]);
+  // an internal note can tell colleagues: the bell and an email with the note
+  const me = useMe();
+  const [tell, setTell] = useState<string[]>([]);
+  const colleagues = tk.options.technicians.filter((p) => p.id !== me.id);
   // files: kept on the ticket, and sent with the reply when it goes by email
   const [files, setFiles] = useState<File[]>([]);
   const pick = useRef<HTMLInputElement>(null);
@@ -1828,14 +1893,19 @@ function NoteComposer({
         const r = await api.post<{ id: string | null }>(`/tickets/${tk.id}/attachments`, { name: f.name, contentType: f.type || "application/octet-stream", data: await fileToBase64(f), source: byEmail ? "email_out" : "upload" });
         if (r.id) ids.push(r.id);
       }
-      return api.post<{ emailed?: boolean; to?: string | null; noContactEmail?: boolean }>(`/tickets/${tk.id}/notes`, { text, internal, ...(internal ? {} : { email: emailIt, others: mailOthers, attachmentIds: ids }) });
+      return api.post<{ emailed?: boolean; to?: string | null; noContactEmail?: boolean }>(`/tickets/${tk.id}/notes`, { text, internal, ...(internal ? { notifyUserIds: tell } : { email: emailIt, others: mailOthers, attachmentIds: ids }) });
     },
     onSuccess: (r) => {
       setText("");
       setFiles([]);
       setEmailIt(true);
+      setTell([]);
       void qc.invalidateQueries({ queryKey: ["tickets", "detail", tk.id] });
-      if (internal) toast.success(t("tickets.noteAdded"));
+      if (internal) {
+        toast.success(t("tickets.noteAdded"));
+        const n = (r as { notified?: number }).notified;
+        if (n) toast.success(t("tickets.noteNotified", { count: n }));
+      }
       else if (r.emailed) toast.success(t("tickets.replySentEmail", { to: r.to ?? "" }));
       else if (emailIt && r.noContactEmail) toast.warning(t("tickets.replyNoEmail"));
       else if (emailIt && r.to) toast.error(t("tickets.replyEmailFailed", { to: r.to }));
@@ -1878,6 +1948,21 @@ function NoteComposer({
         placeholder={internal ? t("tickets.notePlaceholderInternal") : t("tickets.notePlaceholder")}
         className="resize-y transition-[height]"
       />
+      {internal && colleagues.length > 0 && (
+        <div className="mt-2 flex flex-wrap items-center gap-1.5">
+          <span className="flex items-center gap-1 text-[11px] text-muted-foreground">
+            <BellRing className="size-3" /> {t("tickets.noteNotify")}
+          </span>
+          {colleagues.map((p) => {
+            const on = tell.includes(p.id);
+            return (
+              <button key={p.id} type="button" onClick={() => setTell((x) => (on ? x.filter((i) => i !== p.id) : [...x, p.id]))} className={cn("rounded-full border px-2 py-0.5 text-[11px]", on ? "border-violet-400/60 bg-violet-500/15 text-violet-200" : "text-muted-foreground hover:text-foreground")}>
+                {p.name}
+              </button>
+            );
+          })}
+        </div>
+      )}
       {!internal && (
         <div className="mt-2">
           <EmailSend ticket={tk} contact={emailIt && Boolean(contactEmail)} onContact={setEmailIt} others={mailOthers} onOthers={setMailOthers} contactLabel={(name, email) => t("tickets.replyEmailTo", { name, email })} idPrefix="reply" />

@@ -140,6 +140,18 @@ export const MODULES = [
     ],
   },
   {
+    key: "chat",
+    audience: "staff",
+    label: { fr: "Clavardage (Microsoft Teams)", en: "Chat (Microsoft Teams)" },
+    permissions: [
+      {
+        key: "chat.use",
+        label: { fr: "Clavarder avec les collègues (Teams)", en: "Chat with colleagues (Teams)" },
+        description: { fr: "Voir et écrire dans ses propres conversations Microsoft Teams depuis le portail, avec son propre compte Microsoft seulement", en: "See and write in one's own Microsoft Teams chats from the portal, with one's own Microsoft account only" },
+      },
+    ],
+  },
+  {
     key: "hr",
     audience: "staff",
     label: { fr: "Ressources humaines", en: "Human resources" },
@@ -572,7 +584,7 @@ export type ModuleKey = (typeof MODULES)[number]["key"];
  */
 export const ACCESS_LAYOUT: { key: string; audience: Audience; label: Localized; modules: ModuleKey[] }[] = [
   { key: "team", audience: "staff", label: { fr: "Équipe", en: "Team" }, modules: ["dashboard", "meetings", "breakroom"] },
-  { key: "tools", audience: "staff", label: { fr: "Mes outils", en: "My tools" }, modules: ["outlook", "timesheets"] },
+  { key: "tools", audience: "staff", label: { fr: "Mes outils", en: "My tools" }, modules: ["outlook", "timesheets", "chat"] },
   { key: "command", audience: "staff", label: { fr: "Centre de commande", en: "Command center" }, modules: ["messages", "tickets", "pipeline", "projects", "sms", "passbolt"] },
   { key: "management", audience: "staff", label: { fr: "Gestion", en: "Management" }, modules: ["crm", "clientview", "store", "services", "hr"] },
   { key: "sales", audience: "staff", label: { fr: "Vente", en: "Sales" }, modules: ["opportunities", "quotes"] },
@@ -658,6 +670,7 @@ export const SYSTEM_ROLES: Array<{
       "sms.view",
       "outlook.view",
       "outlook.send",
+      "chat.use",
       "messages.view",
       "messages.post",
       "messages.pin",

@@ -42,7 +42,7 @@ export async function loadMe(a: AuthContext) {
     features: { passbolt: await passboltMenuShown() },
     /** Fills in a weekly timesheet (otherwise the Timesheets entry is hidden, unless they manage everyone's) */
     timesheetRequired: u.timesheetRequired,
-    preferences: { dashboard: prefs?.dashboard ?? null, theme: prefs?.theme ?? "dark", outlook: prefs?.outlook ?? false, bankHours: prefs?.bankHoursDefault ?? false, notify: prefs?.notifyDefaults ?? { email: true, sms: false, teams: false }, pushDetails: prefs?.pushDetails ?? false },
+    preferences: { dashboard: prefs?.dashboard ?? null, theme: prefs?.theme ?? "dark", outlook: prefs?.outlook ?? false, bankHours: prefs?.bankHoursDefault ?? false, ticketLayout: prefs?.ticketLayout ?? null, notify: prefs?.notifyDefaults ?? { email: true, sms: false, teams: false }, pushDetails: prefs?.pushDetails ?? false },
   };
 }
 
@@ -90,6 +90,8 @@ export const meRoutes = new Hono<AppEnv>()
         notify: z.object({ email: z.boolean(), sms: z.boolean(), teams: z.boolean() }).optional(),
         /** The phone's lock screen shows the detail of a notification */
         pushDetails: z.boolean().optional(),
+        /** The tickets list's default view */
+        ticketLayout: z.enum(["standard", "kanban", "compact"]).optional(),
       }),
     );
     if (p.outlook && !a.permissions.includes("outlook.view")) throw new HTTPException(403, { message: "forbidden" });
@@ -105,6 +107,7 @@ export const meRoutes = new Hono<AppEnv>()
           ...(p.bankHours !== undefined ? { bankHoursDefault: p.bankHours } : {}),
           ...(p.notify !== undefined ? { notifyDefaults: p.notify } : {}),
           ...(p.pushDetails !== undefined ? { pushDetails: p.pushDetails } : {}),
+          ...(p.ticketLayout !== undefined ? { ticketLayout: p.ticketLayout } : {}),
           updatedAt: new Date(),
         },
       });

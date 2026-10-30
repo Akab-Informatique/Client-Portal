@@ -1,6 +1,6 @@
 import { Hono } from "hono";
 import { HTTPException } from "hono/http-exception";
-import { and, asc, desc, eq, inArray, ne, sql } from "drizzle-orm";
+import { and, asc, desc, eq, inArray, isNull, ne, sql } from "drizzle-orm";
 import { z } from "zod";
 import { db, schema } from "../db/index.ts";
 import { auth, requirePermission, requireStaff, type AppEnv } from "../lib/auth.ts";
@@ -66,7 +66,9 @@ export const smsRoutes = new Hono<AppEnv>()
         open: sql<number>`count(*) filter (where ${schema.smsConversations.status} in ('waiting', 'open'))`.mapWith(Number),
         next: sql<string | null>`min(${schema.smsConversations.autoTicketAt}) filter (where ${schema.smsConversations.status} = 'waiting')`,
       })
-      .from(schema.smsConversations);
+      .from(schema.smsConversations)
+      // a text followed in a ticket stays in the ticket: it is not counted in the general inbox
+      .where(isNull(schema.smsConversations.ticketId));
     return c.json({ ...r, ready: await smsReady(), longAsMms: (await smsSettings()).longAsMms });
   })
 
@@ -77,7 +79,8 @@ export const smsRoutes = new Hono<AppEnv>()
       await db()
         .select()
         .from(schema.smsConversations)
-        .where(all ? undefined : ne(schema.smsConversations.status, "closed"))
+        // the general inbox: what is not attached to a ticket (those are followed in their ticket)
+        .where(and(isNull(schema.smsConversations.ticketId), all ? undefined : ne(schema.smsConversations.status, "closed")))
         .orderBy(desc(schema.smsConversations.lastMessageAt))
         .limit(200),
     );

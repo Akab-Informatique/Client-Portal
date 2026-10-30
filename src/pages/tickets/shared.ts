@@ -45,6 +45,7 @@ export type TicketSummary = {
   /** The goal date between the start and the final due date (YYYY-MM-DD) */
   milestoneDate?: string | null;
   milestoneTime?: string | null;
+  tags?: string[];
   viewers: Viewer[];
   /** This ticket is one of my priorities (given by an admin) */
   myPriority?: "day" | "week";
