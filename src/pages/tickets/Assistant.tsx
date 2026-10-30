@@ -8,7 +8,8 @@ import { Checkbox } from "@/components/ui/checkbox";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Textarea } from "@/components/ui/textarea";
 import { useConfirm } from "@/components/ConfirmDialog";
-import { api } from "@/lib/api";
+import { AiModelButton, useAiModel } from "@/components/AiModelPicker";
+import { api, ApiError } from "@/lib/api";
 import { cn } from "@/lib/utils";
 import { useAiError } from "./TicketPanel";
 import { ticketErrorText } from "./shared";
@@ -29,6 +30,8 @@ export function AssistantDialog({ onClose, onPlan }: { onClose: () => void; onPl
   const qc = useQueryClient();
   const confirm = useConfirm();
   const aiError = useAiError();
+  // the AI model for this talk (Sonnet, Opus, Haiku…): the part's own unless one is picked here
+  const model = useAiModel("tickets.assistant");
   const [text, setText] = useState("");
   const [turns, setTurns] = useState<Turn[]>([]);
   const bottom = useRef<HTMLDivElement>(null);
@@ -45,14 +48,14 @@ export function AssistantDialog({ onClose, onPlan }: { onClose: () => void; onPl
         : { role: "assistant" as const, text: [x.text, ...(x.actions.length ? [`Actions proposées (${x.applied ? "appliquées" : "pas encore appliquées"}) : ${x.actions.map((a) => a.label).join(" ; ")}`] : [])].join("\n") },
     );
   const ask = useMutation({
-    mutationFn: ({ message, before }: { message: string; before: Turn[] }) => api.post<Answer>("/tickets/ai/assistant", { message, history: history(before) }),
+    mutationFn: ({ message, before }: { message: string; before: Turn[] }) => api.post<Answer>("/tickets/ai/assistant", { message, history: history(before), ...model.body }),
     onSuccess: (r) =>
       setTurns((list) => [
         ...list,
         // proposed actions start ticked, except a deletion (it has to be chosen on purpose)
         { role: "assistant", text: r.reply, actions: r.actions, refused: r.refused, picked: new Set(r.actions.map((a, i) => (a.type === "delete_ticket" ? -1 : i)).filter((i) => i >= 0)), results: {}, applied: false },
       ]),
-    onError: (e) => toast.error(aiError(e)),
+    onError: (e) => toast.error(aiError(e), { description: e instanceof ApiError ? e.code : undefined }),
   });
   const send = (message: string) => {
     const m = message.trim();
@@ -125,6 +128,9 @@ export function AssistantDialog({ onClose, onPlan }: { onClose: () => void; onPl
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
             <Sparkles className="size-5 text-violet-300" /> {t("tickets.assistant.title")}
+            <span className="ml-auto pr-6">
+              <AiModelButton feature="tickets.assistant" m={model} />
+            </span>
           </DialogTitle>
           <DialogDescription>{t("tickets.assistant.hint")}</DialogDescription>
         </DialogHeader>

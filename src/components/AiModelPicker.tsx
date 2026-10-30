@@ -24,7 +24,7 @@ import { currentLocale } from "@/i18n";
  * admin turned the choice off.
  */
 type AiOptions = { models: string[]; allowChoice: boolean; features: Record<string, string>; today: { spentUsd: number; limitUsd: number | null } };
-export type AiFeature = "ticket.analyze" | "ticket.reply" | "tickets.plan";
+export type AiFeature = "ticket.analyze" | "ticket.reply" | "tickets.plan" | "tickets.assistant";
 
 export function useAiOptions() {
   const can = useCan();
