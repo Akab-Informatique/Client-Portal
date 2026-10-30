@@ -13,16 +13,16 @@ type Report = {
   from: string;
   to: string;
   workdayHours: number;
-  workedHours: number;
-  billableHours: number;
-  nonBillableHours: number;
-  billableRatio: number | null;
   bankedHours: number;
-  paidHours: number;
+  vacationHours: number;
+  sickHours: number;
+  holidayHours: number;
+  holidayCents: number;
   bankPaidHours: number;
-  bankBalanceHours: number;
-  types: { type: string; kind: string; hours: number; billableHours: number; bankedHours: number }[];
-  weeks: { weekStart: string; workedHours: number; billableHours: number; bankedHours: number; workdayHours: number }[];
+  enteredHours: number;
+  paidHours: number;
+  types: { type: string; kind: string; hours: number }[];
+  weeks: { weekStart: string; workdayHours: number; bankedHours: number; paidHours: number; enteredHours: number }[];
 };
 type Person = { id: string; name: string };
 
@@ -47,9 +47,9 @@ function periodOf(key: string): { from: string; to: string } {
 }
 
 /**
- * A person's time report over a period (their profile): hours worked, billable ones
- * and the ratio, what was banked instead of paid, the bank so far, per type and per
- * week. Managers can pick anyone's.
+ * A person's time report over a period (their profile): the hours PAID — work days (less what is put in the bank), vacation,
+ * sick days, holidays and hours paid out of the bank — per type and per week. Billable time is not part of it. Managers can
+ * pick anyone's.
  */
 export function TimeReportCard() {
   const { t, i18n } = useTranslation();
@@ -63,7 +63,7 @@ export function TimeReportCard() {
   const { data, isLoading } = useQuery({ queryKey: ["time", "report", who, from, to], queryFn: () => api.get<Report>(`/time/report?${q}`) });
   const loc = i18n.language === "en" ? "en-CA" : "fr-CA";
   const h = (n: number) => n.toLocaleString(loc, { maximumFractionDigits: 2 });
-  const pct = (a: number, b: number) => (b ? `${((a / b) * 100).toLocaleString(loc, { maximumFractionDigits: 0 })} %` : "—");
+  const money = (cents: number) => new Intl.NumberFormat(loc, { style: "currency", currency: "CAD" }).format(cents / 100);
   return (
     <div className="space-y-3">
       {manager && people && (
@@ -92,38 +92,24 @@ export function TimeReportCard() {
       ) : (
         <>
           <div className="grid grid-cols-3 gap-2 text-center">
-            <Tile label={t("timesheet.worked")} value={`${h(data.workedHours)} h`} />
-            <Tile label={t("timesheet.billable")} value={`${h(data.billableHours)} h`} tone="text-emerald-300" />
-            <Tile label={t("timesheet.nonBillable")} value={`${h(data.nonBillableHours)} h`} tone="text-muted-foreground" />
+            <Tile label={t("timesheet.workdays")} value={`${h(data.workdayHours)} h`} />
+            <Tile label={t("timesheet.bankedWeek")} value={`${h(data.bankedHours)} h`} tone="text-sky-300" icon />
+            <Tile label={t("timesheet.paidTotal")} value={`${h(data.paidHours)} h`} tone="text-emerald-300" />
           </div>
-          <div className="space-y-1">
-            <div className="flex items-center justify-between text-xs text-muted-foreground">
-              <span>{t("timesheet.ratio")}</span>
-              <span className="font-mono text-sm font-semibold text-foreground">{data.billableRatio === null ? "—" : `${data.billableRatio.toLocaleString(loc, { maximumFractionDigits: 1 })} %`}</span>
-            </div>
-            <div className="h-2 overflow-hidden rounded-full bg-muted/60">
-              <div className="h-full rounded-full bg-gradient-to-r from-emerald-400 to-emerald-300" style={{ width: `${data.workedHours ? Math.min(100, (data.billableHours / data.workedHours) * 100) : 0}%` }} />
-            </div>
-          </div>
-          <div className="grid grid-cols-2 gap-2 rounded-xl border border-sky-400/25 bg-sky-500/[0.06] p-2 text-center sm:grid-cols-4">
-            <Tile label={t("timesheet.bankedPeriod")} value={`+${h(data.bankedHours)} h`} tone="text-sky-300" small />
-            <Tile label={t("timesheet.bankPaidPeriod")} value={`−${h(data.bankPaidHours)} h`} tone="text-sky-300" small />
-            <Tile label={t("timesheet.paidPeriod")} value={`${h(data.paidHours)} h`} small />
-            <Tile label={t("timesheet.bankBalance")} value={`${h(data.bankBalanceHours)} h`} tone="text-sky-300" small icon />
-          </div>
-          {data.workdayHours > 0 && (
-            <p className="text-[11px] text-muted-foreground">
-              {t("timesheet.workdays")} : <span className="font-mono text-foreground">{h(data.workdayHours)} h</span> · {t("timesheet.workdayNote")}
-            </p>
+          {(data.vacationHours > 0 || data.sickHours > 0 || data.holidayHours > 0 || data.bankPaidHours > 0) && (
+            <ul className="space-y-1 rounded-xl border bg-card/40 p-2.5 text-sm">
+              {data.vacationHours > 0 && <Line label={t("timesheet.paidVacation")} value={`${h(data.vacationHours)} h`} />}
+              {data.sickHours > 0 && <Line label={t("timesheet.paidSick")} value={`${h(data.sickHours)} h`} />}
+              {data.holidayHours > 0 && <Line label={t("timesheet.paidHoliday")} value={`${h(data.holidayHours)} h (${money(data.holidayCents)})`} />}
+              {data.bankPaidHours > 0 && <Line label={t("timesheet.paidBank")} value={`${h(data.bankPaidHours)} h`} />}
+            </ul>
           )}
           {data.types.length > 0 && (
             <ul className="space-y-1 text-sm">
               {data.types.map((x) => (
                 <li key={x.type} className="flex items-center gap-2">
                   <span className="min-w-0 flex-1 truncate">{x.type}</span>
-                  <span className="w-10 text-right text-[11px] text-muted-foreground">{pct(x.hours, data.workedHours)}</span>
                   <span className="w-16 text-right font-mono">{h(x.hours)} h</span>
-                  {x.bankedHours > 0 && <span className="rounded-full border border-sky-400/40 bg-sky-500/10 px-1.5 py-px text-[10px] text-sky-300">{t("timesheet.bankTag")} {h(x.bankedHours)}</span>}
                 </li>
               ))}
             </ul>
@@ -135,25 +121,33 @@ export function TimeReportCard() {
                 {data.weeks.map((w) => (
                   <li key={w.weekStart} className="flex items-center gap-2">
                     <span className="w-24 text-muted-foreground">{new Intl.DateTimeFormat(loc, { day: "numeric", month: "short" }).format(new Date(`${w.weekStart}T12:00:00`))}</span>
-                    <span className="flex-1 font-mono">{h(w.workedHours)} h</span>
-                    <span className="font-mono text-emerald-300">{h(w.billableHours)}</span>
+                    <span className="flex-1 font-mono">{h(w.paidHours)} h</span>
                     {w.bankedHours > 0 && <span className="font-mono text-sky-300">{h(w.bankedHours)}</span>}
                   </li>
                 ))}
               </ul>
             </div>
           )}
-          {!data.workedHours && !data.workdayHours && <p className="text-xs text-muted-foreground">{t("timesheet.empty")}</p>}
+          {!data.paidHours && !data.workdayHours && !data.enteredHours && <p className="text-xs text-muted-foreground">{t("timesheet.empty")}</p>}
         </>
       )}
     </div>
   );
 }
 
-function Tile({ label, value, tone, small, icon }: { label: string; value: string; tone?: string; small?: boolean; icon?: boolean }) {
+function Line({ label, value }: { label: string; value: string }) {
+  return (
+    <li className="flex justify-between gap-2">
+      <span>{label}</span>
+      <span className="font-mono">{value}</span>
+    </li>
+  );
+}
+
+function Tile({ label, value, tone, icon }: { label: string; value: string; tone?: string; icon?: boolean }) {
   return (
     <div>
-      <p className={cn("flex items-center justify-center gap-1 font-mono font-semibold", small ? "text-sm" : "text-base", tone)}>
+      <p className={cn("flex items-center justify-center gap-1 font-mono text-base font-semibold", tone)}>
         {icon && <PiggyBank className="size-3.5" />} {value}
       </p>
       <p className="text-[10px] text-muted-foreground">{label}</p>

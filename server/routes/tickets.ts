@@ -25,7 +25,8 @@ import { searchProducts, serialsOf, StoreError, takeForTicket, undoTake } from "
 import { storeHttp } from "./store.ts";
 import { rememberCompany, rememberContact } from "../lib/crm.ts";
 import { fridayEnd } from "./meetings.ts";
-import { addTicketTime } from "../lib/timesheets.ts";
+import { addTicketTime, editable, sheetOf, weekStartOf } from "../lib/timesheets.ts";
+import { refreshAccrual, splitBillable } from "../lib/hr.ts";
 import { cleanDirection, directionPrompt } from "../lib/aiDirection.ts";
 import { quebecStamp, scheduleTickets, type SchedIn } from "../lib/ticketSchedule.ts";
 
@@ -1117,10 +1118,10 @@ export const ticketRoutes = new Hono<AppEnv>()
         workTypeId: z.string().max(40).nullable().default(null),
         billable: z.boolean().default(true),
         offsetHours: z.number().min(0).max(24).default(0),
+        // the hours billed when they are not "worked minus the offset": more can be billed than was worked
+        billedHours: z.number().min(0).max(100).optional(),
         // the contract the time is logged on (none: the ticket's contract)
         contractId: z.uuid().nullable().optional(),
-        // banked instead of paid (none: the technician's profile says)
-        banked: z.boolean().optional(),
         // what the ticket becomes with this time: its status and due date
         status: z.string().max(60).optional(),
         dueAt: z
@@ -1145,6 +1146,9 @@ export const ticketRoutes = new Hono<AppEnv>()
     // the offset cannot exceed the hours worked; it means nothing when nothing is billed
     if (p.offsetHours > p.hours) throw new HTTPException(400, { message: "offset_too_large" });
     if (!p.billable) p.offsetHours = 0;
+    // hours billed: the ones typed (they can be more than the hours worked), else worked minus the offset; nothing when not billed
+    const billedHours = p.billable ? (p.billedHours ?? Math.max(0, p.hours - p.offsetHours)) : 0;
+    if (p.billable && p.billedHours !== undefined) p.offsetHours = Math.max(0, p.hours - p.billedHours);
     if (submitting.has(timer.id)) throw new HTTPException(409, { message: "timer_busy" });
     submitting.add(timer.id);
     try {
@@ -1153,20 +1157,22 @@ export const ticketRoutes = new Hono<AppEnv>()
     // the ticket's status and due date, when the technician changed them with this time (checked before the time is kept)
     if (p.status && !(await run(() => src.options())).statuses.some((x) => x.value === p.status)) throw new HTTPException(400, { message: "Validation failed" });
     if (p.status || p.dueAt) await run(() => src.update(timer.ticketId, { ...(p.status ? { status: p.status } : {}), ...(p.dueAt ? { dueAt: new Date(p.dueAt).toISOString() } : {}) }, a));
-    await run(() => src.addTimeEntry(timer.ticketId, { ...p, contractSourceId: contract?.sourceId ?? null, startedAt: new Date(endedAt.getTime() - p.hours * 3_600_000), endedAt }, a));
-    // on the technician's timesheet too, with the ticket
+    const startedAt = new Date(endedAt.getTime() - p.hours * 3_600_000);
+    const made = await run(() => src.addTimeEntry(timer.ticketId, { ...p, billedHours: p.billable && p.billedHours !== undefined ? p.billedHours : undefined, contractSourceId: contract?.sourceId ?? null, startedAt, endedAt }, a));
+    // on the technician's timesheet too, with the ticket and its client
     const tk = await src.get(timer.ticketId).catch(() => null);
     await addTicketTime(a.realUser.id, {
       ticketId: timer.ticketId,
       ticketNumber: tk?.number ?? null,
       ticketTitle: tk?.title ?? null,
+      companyId: tk?.company.id ?? null,
       hours: p.hours,
       date: endedAt.toLocaleDateString("en-CA", { timeZone: "America/Toronto" }),
       note: p.summary,
       contractId: contract?.id ?? null,
-      // what counts as billable time in the timesheet stats: worked minus the offset, nothing when not billed
-      billableHours: p.billable ? Math.max(0, p.hours - p.offsetHours) : 0,
-      banked: p.banked,
+      // billable hours, kept per client (they can be more than the hours worked); the rest is non billable
+      billableHours: billedHours,
+      ticketTimeId: made && "id" in made ? made.id : null,
     });
     await db().delete(schema.ticketTimers).where(eq(schema.ticketTimers.id, timer.id));
     const notified = await notifyWork(src, tk, p.summary, p.notify, a);
@@ -1175,6 +1181,70 @@ export const ticketRoutes = new Hono<AppEnv>()
     } finally {
       submitting.delete(timer.id);
     }
+  })
+  /**
+   * Change a time entry of a ticket: its hours, billed hours, note, whether it is billable. Its technician can while their week
+   * is not sent and the entry is not approved for invoicing; a manager (timesheets.manage) can any time, except once invoicing
+   * has it. The same entry on the timesheet follows.
+   */
+  .patch("/:id/time/:entryId", requirePermission("tickets.edit"), async (c) => {
+    const a = auth(c);
+    const ticketId = Number(c.req.param("id"));
+    const entryId = zUuid.parse(c.req.param("entryId"));
+    const p = await body(
+      c,
+      z.object({
+        hours: z.number().positive().max(24).optional(),
+        summary: z.string().trim().min(1).max(8000).optional(),
+        internal: z.string().trim().max(8000).optional(),
+        billable: z.boolean().optional(),
+        offsetHours: z.number().min(0).max(24).optional(),
+        billedHours: z.number().min(0).max(100).optional(),
+      }),
+    );
+    const manager = a.permissions.includes("timesheets.manage");
+    const [e] = await db().select().from(schema.ticketTimeEntries).where(and(eq(schema.ticketTimeEntries.id, entryId), eq(schema.ticketTimeEntries.ticketId, ticketId)));
+    if (!e || (!manager && e.userId !== a.realUser.id)) throw new HTTPException(404, { message: "not_found" });
+    if (e.billed) throw new HTTPException(409, { message: "entry_billed" });
+    // the work to bill made from it: once approved (or invoiced) the entry is settled
+    const [line] = await db().select({ status: schema.billingItems.status }).from(schema.billingItems).where(eq(schema.billingItems.sourceId, `ptime:${e.id}`));
+    if (line && (line.status === "approved" || line.status === "posted")) throw new HTTPException(409, { message: "entry_billed" });
+    // the timesheet entry it mirrors (found by its link; older ones by the same technician, ticket, day and hours)
+    const day = e.startedAt.toLocaleDateString("en-CA", { timeZone: "America/Toronto" });
+    const mirrors = await db().select().from(schema.timesheetEntries).where(and(eq(schema.timesheetEntries.source, "ticket"), eq(schema.timesheetEntries.ticketId, ticketId), eq(schema.timesheetEntries.userId, e.userId ?? a.realUser.id)));
+    const mirror = mirrors.find((m) => m.ticketTimeId === e.id) ?? mirrors.find((m) => !m.ticketTimeId && m.date === day && m.hoursX100 === Math.round((e.minutes / 60) * 100));
+    if (mirror) {
+      const sheet = await sheetOf(mirror.userId, weekStartOf(mirror.date));
+      if (!editable(sheet.status) && !manager) throw new HTTPException(409, { message: "timesheet_locked" });
+    }
+    const hours = p.hours ?? e.minutes / 60;
+    const billable = p.billable ?? e.billable;
+    let offset = p.offsetHours ?? e.offsetMinutes / 60;
+    if (offset > hours) throw new HTTPException(400, { message: "offset_too_large" });
+    if (!billable) offset = 0;
+    const billedHours = billable ? (p.billedHours ?? (p.hours !== undefined || p.offsetHours !== undefined || e.billedMinutes == null ? Math.max(0, hours - offset) : e.billedMinutes / 60)) : 0;
+    if (billable && p.billedHours !== undefined) offset = Math.max(0, hours - p.billedHours);
+    await db()
+      .update(schema.ticketTimeEntries)
+      .set({
+        minutes: Math.round(hours * 60),
+        offsetMinutes: Math.round(offset * 60),
+        billedMinutes: billable && billedHours > hours ? Math.round(billedHours * 60) : null,
+        billable,
+        ...(p.summary !== undefined ? { summary: p.summary } : {}),
+        ...(p.internal !== undefined ? { internalText: p.internal } : {}),
+      })
+      .where(eq(schema.ticketTimeEntries.id, e.id));
+    if (mirror) {
+      const hoursX100 = Math.round(hours * 100);
+      await db()
+        .update(schema.timesheetEntries)
+        .set({ hoursX100, ticketTimeId: e.id, ...splitBillable(hoursX100, Math.round(billedHours * 100)), ...(p.summary !== undefined ? { note: p.summary.slice(0, 500) } : {}) })
+        .where(eq(schema.timesheetEntries.id, mirror.id));
+      await refreshAccrual(mirror.userId, weekStartOf(mirror.date));
+    }
+    await audit(a.user.id, "ticket.time_entry_changed", String(ticketId), { entry: e.id, hours, billable, billedHours });
+    return c.json({ ok: true });
   })
   /** "Later": a stopped timer goes back to paused; it resumes when the ticket is opened again. */
   .post("/timers/:timerId/later", requirePermission("tickets.edit"), async (c) => {

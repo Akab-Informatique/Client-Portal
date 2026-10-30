@@ -390,6 +390,8 @@ function TimeEntryDialog({ timer, position, onLater }: { timer: Timer; position:
   // only an hourly contract bills the hours; monthly, per ticket and included ones never do
   const billable = billableOn && (contract ? contract.billed : true);
   const [offset, setOffset] = useState("");
+  // hours billed when they are not "worked minus the offset": more can be billed than was worked
+  const [billedText, setBilledText] = useState("");
   const { data: workTypes = [] } = useQuery({
     queryKey: ["tickets", "work-types"],
     queryFn: () => api.get<{ value: string; label: string }[]>("/tickets/work-types"),
@@ -411,7 +413,8 @@ function TimeEntryDialog({ timer, position, onLater }: { timer: Timer; position:
         internal,
         workTypeId: workType || null,
         billable,
-        offsetHours: billable ? off : 0,
+        offsetHours: billable ? (billedOverride !== null ? Math.max(0, h - billedOverride) : off) : 0,
+        ...(billable && billedOverride !== null ? { billedHours: billedOverride } : {}),
         contractId: contract?.id ?? null,
         // what changes on the ticket with this time: its status and due date, only when changed
         ...(statusNew && statusNew !== ticket?.status ? { status: statusNew } : {}),
@@ -439,10 +442,13 @@ function TimeEntryDialog({ timer, position, onLater }: { timer: Timer; position:
   const h = parseHm(hours) ?? 0;
   const hoursOk = parseHm(hours) !== null && h > 0 && h <= 24;
   const off = offset.trim() ? (parseHm(offset) ?? Number.NaN) : 0;
-  const offsetOk = !billable || (Number.isFinite(off) && off >= 0 && off <= h);
-  const billed = Math.max(0, Math.round((h - (billable ? off : h)) * 100) / 100);
+  const billedParsed = billedText.trim() ? (parseHm(billedText) ?? Number.NaN) : null;
+  const billedOverride = billable && billedParsed !== null && Number.isFinite(billedParsed) && billedParsed >= 0 && billedParsed <= 100 ? billedParsed : null;
+  const billedOk = !billable || billedParsed === null || billedOverride !== null;
+  const offsetOk = !billable || billedOverride !== null || (Number.isFinite(off) && off >= 0 && off <= h);
+  const billed = billable && billedOverride !== null ? billedOverride : Math.max(0, Math.round((h - (billable ? off : h)) * 100) / 100);
   const othersOk = others.every(isAddress);
-  const valid = hoursOk && summary.trim().length > 0 && offsetOk && othersOk;
+  const valid = hoursOk && summary.trim().length > 0 && offsetOk && billedOk && othersOk;
   // a short timer is closed without asking; a longer one is confirmed first
   const closeWithoutTime = () =>
     minutes <= 5 ? discard.mutate() : void confirm({ title: t("tickets.timer.discardConfirm"), destructive: true }).then((ok) => ok && discard.mutate());
@@ -548,6 +554,18 @@ function TimeEntryDialog({ timer, position, onLater }: { timer: Timer; position:
                     value={offset}
                     onChange={(e) => setOffset(e.target.value)}
                     onBlur={() => offset.trim() && Number.isFinite(off) && setOffset(hm(off))}
+                  />
+                  <Label htmlFor="te-billed" className="text-sm text-muted-foreground">
+                    {t("tickets.timer.billedField")}
+                  </Label>
+                  <Input
+                    id="te-billed"
+                    inputMode="numeric"
+                    className={cn("h-8 w-20 font-mono", !billedOk && "border-destructive")}
+                    placeholder={hm(Math.max(0, h - (Number.isFinite(off) ? off : 0)))}
+                    value={billedText}
+                    onChange={(e) => setBilledText(e.target.value)}
+                    onBlur={() => billedText.trim() && billedParsed !== null && Number.isFinite(billedParsed) && setBilledText(hm(billedParsed))}
                   />
                 </div>
               )}

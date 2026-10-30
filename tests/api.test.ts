@@ -3892,7 +3892,7 @@ describe("timesheets and expenses, approved and sent to QuickBooks", () => {
     expect((await tech.get("/api/time/approvals/timesheets")).status).toBe(403);
     const list = (await admin.get("/api/time/approvals/timesheets")).json;
     const mine = list.find((x: any) => x.userName === "Alex Tremblay" && x.weekStart === week.weekStart);
-    expect(mine).toMatchObject({ status: "submitted", labourHours: week.labourHours, totalHours: week.totalHours });
+    expect(mine).toMatchObject({ status: "submitted", enteredHours: week.enteredHours });
     expect(mine.types.map((x: any) => x.type)).toEqual(expect.arrayContaining(["Formation"]));
     const raw = JSON.stringify(mine);
     expect(raw).not.toContain(tk.number);
@@ -4089,7 +4089,7 @@ describe("submitting: timesheets (when required) and expenses", () => {
     expect(added.status).toBe(201);
     expect(added.json.userId).toBe(u.id);
     let week = (await admin.get(`/api/time/week?start=2026-11-03&userId=${u.id}`)).json;
-    expect(week).toMatchObject({ userId: u.id, weekStart: "2026-11-02", totalHours: 2.5 });
+    expect(week).toMatchObject({ userId: u.id, weekStart: "2026-11-02", enteredHours: 2.5 });
     // the technician sees them on their own week
     expect((await tech2.get("/api/time/week?start=2026-11-03")).json.entries.some((e: any) => e.id === added.json.id)).toBe(true);
     // their own entry: only a manager removes someone else's
@@ -4098,7 +4098,7 @@ describe("submitting: timesheets (when required) and expenses", () => {
     expect((await admin.del(`/api/time/entries/${own.id}`)).status).toBe(200);
     expect((await admin.post("/api/time/week/submit", { weekStart: "2026-11-02", userId: u.id })).json.status).toBe("submitted");
     week = (await tech2.get("/api/time/week?start=2026-11-03")).json;
-    expect(week).toMatchObject({ status: "submitted", totalHours: 2.5 });
+    expect(week).toMatchObject({ status: "submitted", enteredHours: 2.5 });
     const log = await db().select().from(schema.auditLog).where(eq(schema.auditLog.actorId, adminRow.id));
     expect(log.map((l) => l.action)).toEqual(expect.arrayContaining(["timesheet.entry_added_for", "timesheet.entry_removed_for", "timesheet.submitted"]));
     // a client account is never a timesheet
@@ -5696,127 +5696,238 @@ describe("contract types, contracts made by hand, services", () => {
   });
 });
 
-describe("timesheet: work day, billable and non billable time, ratio", () => {
-  it("a work day (start, end, lunch) is not counted in the hours worked; types are marked billable; the ratio is billable over worked", async () => {
+describe("timesheet: paid hours, the RH file, bank, vacation, sick days, holidays, trips", () => {
+  it("what can be entered by hand; the work day and its lunch; hours put in the bank; the paid hours", async () => {
     resetRateLimit("login:ip:unknown");
     const admin = await signIn("admin@akab.local");
     const tech = await signIn("tech@akab.local");
+    const [u] = await db().select().from(schema.users).where(eq(schema.users.email, "tech@akab.local"));
     const types = (await tech.get("/api/time/types")).json.time;
-    const workday = types.find((x: any) => x.kind === "workday");
-    expect(workday).toBeTruthy();
-    const other = types.filter((x: any) => x.kind === "other");
-    const admin1 = other.find((x: any) => /admin/i.test(x.name)) ?? other[0];
-    const meeting = other.find((x: any) => x.id !== admin1.id);
-
-    // marking types billable (admin); the built-in ones cannot be
-    expect((await tech.patch(`/api/time/admin/timesheet-types/${admin1.id}`, { billable: true })).status).toBe(403);
-    expect((await admin.patch(`/api/time/admin/timesheet-types/${admin1.id}`, { billable: true })).json.billable).toBe(true);
-    expect((await admin.patch(`/api/time/admin/timesheet-types/${workday.id}`, { billable: true })).json.error).toBe("time_type_builtin");
+    // the types of a manual entry: these eight (ticket time comes from the tickets)
+    expect(types.filter((x: any) => x.kind !== "labour" && x.name !== "Garde").map((x: any) => x.name).sort()).toEqual(["Déplacement", "Formation", "Férié", "Journée de travail", "Maladie", "Paiement de banque d'heures", "Réunion", "Vacances"]);
+    const by = (kind: string) => types.find((x: any) => x.kind === kind);
+    const workday = by("workday");
     expect((await admin.patch(`/api/time/admin/timesheet-types/${workday.id}`, { active: false })).json.error).toBe("time_type_builtin");
 
-    const day = "2026-12-08";
-    // a work day needs its start and end; the lunch is 1 h, 30 min paid: 30 min come off
+    const day = "2027-03-02";
     expect((await tech.post("/api/time/entries", { date: day, typeId: workday.id, hours: 7 })).json.error).toBe("workday_times");
     expect((await tech.post("/api/time/entries", { date: day, typeId: workday.id, start: "16:00", end: "08:00" })).json.error).toBe("workday_times");
-    const wd = await tech.post("/api/time/entries", { date: day, typeId: workday.id, start: "08:00", end: "16:30" });
+    // hours put in the bank are turned into dollars: the hourly wage comes first
+    expect((await tech.post("/api/time/entries", { date: day, typeId: workday.id, start: "08:00", end: "16:00", bankHours: 1.5 })).json.error).toBe("hr_wage_missing");
+    // the RH file: only HR changes it
+    expect((await tech.put(`/api/hr/${u.id}/profile`, { hourlyWage: 99 })).status).toBe(403);
+    expect((await admin.put(`/api/hr/${u.id}/profile`, { hourlyWage: 30 })).json).toMatchObject({ hourlyWageCents: 3000, overtimeAfterHours: 40 });
+    // 8 to 16 = 7.5 h; 1.5 h of it in the bank, not more than the day
+    expect((await tech.post("/api/time/entries", { date: day, typeId: workday.id, start: "08:00", end: "16:00", bankHours: 9 })).json.error).toBe("bank_too_large");
+    const wd = await tech.post("/api/time/entries", { date: day, typeId: workday.id, start: "08:00", end: "16:00", bankHours: 1.5 });
     expect(wd.status).toBe(201);
-    expect(wd.json).toMatchObject({ startTime: "08:00", endTime: "16:30", lunchMinutes: 30, hoursX100: 800 });
-    // one a day
+    expect(wd.json).toMatchObject({ hoursX100: 750, bankX100: 150, lunchMinutes: 30, negative: [] });
     expect((await tech.post("/api/time/entries", { date: day, typeId: workday.id, start: "09:00", end: "12:00" })).json.error).toBe("workday_exists");
-    // 8 to 16 = 7.5 h
-    expect((await tech.post("/api/time/entries", { date: "2026-12-09", typeId: workday.id, start: "08:00", end: "16:00" })).json.hoursX100).toBe(750);
-    // under 5 h without the lunch hour (8 to 13 = 4 h): no lunch taken off
-    expect((await tech.post("/api/time/entries", { date: "2026-11-03", typeId: workday.id, start: "08:00", end: "13:00" })).json.hoursX100).toBe(500);
-    // exactly 5 h without the lunch hour (8 to 14): 30 min off
-    expect((await tech.post("/api/time/entries", { date: "2026-11-04", typeId: workday.id, start: "08:00", end: "14:00" })).json.hoursX100).toBe(550);
+    // under 5 h without the lunch hour: no lunch taken off
+    expect((await tech.post("/api/time/entries", { date: "2027-03-03", typeId: workday.id, start: "08:00", end: "13:00" })).json.hoursX100).toBe(500);
 
-    // 3 h of a billable type, 1 h of a non billable one
-    expect((await tech.post("/api/time/entries", { date: day, typeId: admin1.id, hours: 3 })).status).toBe(201);
-    expect((await tech.post("/api/time/entries", { date: day, typeId: meeting.id, hours: 1 })).status).toBe(201);
+    // the bank holds 1.5 h × 30 $ = 45 $ and the week pays 6 + 5 hours: what is banked is not paid this week
+    expect((await admin.get(`/api/hr/${u.id}`)).json).toMatchObject({ bankCents: 4500 });
+    let week = (await tech.get(`/api/time/week?start=${day}`)).json;
+    expect(week.pay).toMatchObject({ workdayHours: 12.5, bankedHours: 1.5, workdayPaidHours: 11, paidHours: 11, wageCents: 3000 });
+
+    // a payout takes it off the bank (in dollars) and is paid; more than the bank holds is kept, with a warning to the admins
+    const payType = by("bankpay");
+    const payout = await tech.post("/api/time/entries", { date: "2027-03-04", typeId: payType.id, hours: 1 });
+    expect(payout.json.negative).toEqual([]);
+    expect((await admin.get(`/api/hr/${u.id}`)).json.bankCents).toBe(1500);
+    const over = await tech.post("/api/time/entries", { date: "2027-03-04", typeId: payType.id, hours: 5 });
+    expect(over.status).toBe(201);
+    expect(over.json.negative).toEqual(["bank"]);
+    const alerts = await db().select().from(schema.notifications).where(eq(schema.notifications.type, "hr.negative"));
+    expect(alerts.length).toBeGreaterThan(0);
+    expect((await admin.get(`/api/hr/${u.id}`)).json.negative).toEqual(["bank"]);
+    expect((await tech.del(`/api/time/entries/${over.json.id}`)).status).toBe(200);
+    expect((await admin.get(`/api/hr/${u.id}`)).json).toMatchObject({ bankCents: 1500, negative: [] });
+    week = (await tech.get(`/api/time/week?start=${day}`)).json;
+    expect(week.pay).toMatchObject({ bankPaidHours: 1, paidHours: 12 });
+    // the report of a period shows the paid hours, no billable figure
+    const rep = (await tech.get("/api/time/report?from=2027-03-01&to=2027-03-07")).json;
+    expect(rep).toMatchObject({ workdayHours: 12.5, bankedHours: 1.5, bankPaidHours: 1, paidHours: 12 });
+    expect(rep.billableHours).toBeUndefined();
+    expect((await tech.get("/api/time/report?from=2027-03-07&to=2027-03-01")).status).toBe(400);
+    const [adm] = await db().select().from(schema.users).where(eq(schema.users.email, "admin@akab.local"));
+    expect((await tech.get(`/api/time/report?userId=${adm.id}`)).status).toBe(403);
+  });
+
+  it("vacation (dollars), sick days (hours), the RH rights and a change by hand with its confirmation", async () => {
+    resetRateLimit("login:ip:unknown");
+    const admin = await signIn("admin@akab.local");
+    const tech = await signIn("tech@akab.local");
+    const tech2 = await signIn("tech2@akab.local");
+    const [u] = await db().select().from(schema.users).where(eq(schema.users.email, "tech@akab.local"));
+    const [u2] = await db().select().from(schema.users).where(eq(schema.users.email, "tech2@akab.local"));
+    const types = (await tech.get("/api/time/types")).json.time;
+    const by = (kind: string) => types.find((x: any) => x.kind === kind);
+    // a technician has no HR right by default: nothing of the RH file, nor the page
+    expect((await tech.get(`/api/hr/${u.id}`)).status).toBe(403);
+    expect((await tech.get("/api/hr/people")).status).toBe(403);
+    expect((await admin.get("/api/hr/people")).json.some((p: any) => p.id === u.id)).toBe(true);
+    // hr.own: only one's own file, read only
+    expect((await admin.put(`/api/admin/users/${u.id}/permissions`, { overrides: [{ key: "hr.own", effect: "allow" }] })).status).toBe(200);
+    const own = await tech.get(`/api/hr/${u.id}`);
+    expect(own.status).toBe(200);
+    expect(own.json.canEdit).toBe(false);
+    expect((await tech.get(`/api/hr/${u2.id}`)).status).toBe(403);
+    expect((await tech.put(`/api/hr/${u.id}/profile`, { hourlyWage: 1 })).status).toBe(403);
+    expect((await tech.post(`/api/hr/${u.id}/adjust`, { account: "bank", amount: 1000, confirm: true })).status).toBe(403);
+    expect((await tech.get("/api/hr/people")).status).toBe(403);
+
+    const day = "2027-03-09";
+    // vacation: hours × wage come off the vacation bank (dollars); it can go below zero, with a warning
+    const vac = await tech.post("/api/time/entries", { date: day, typeId: by("vacation").id, hours: 2 });
+    expect(vac.status).toBe(201);
+    expect(vac.json.negative).toEqual(["vacation"]);
+    expect((await admin.get(`/api/hr/${u.id}`)).json.vacationCents).toBe(-6000);
+    // a change by hand needs the confirmation
+    expect((await admin.post(`/api/hr/${u.id}/adjust`, { account: "vacation", amount: 500, note: "Solde de départ" })).status).toBe(400);
+    expect((await tech.post(`/api/hr/${u.id}/adjust`, { account: "vacation", amount: 500, confirm: true })).status).toBe(403);
+    const adj = await admin.post(`/api/hr/${u.id}/adjust`, { account: "vacation", amount: 40, note: "Solde de départ", confirm: true });
+    expect(adj.status).toBe(201);
+    expect(adj.json).toMatchObject({ vacationCents: -2000 });
+    // sick days are in hours: the entry takes its hours off
+    await admin.post(`/api/hr/${u.id}/adjust`, { account: "sick", hours: 8, confirm: true });
+    const sick = await tech.post("/api/time/entries", { date: "2027-03-10", typeId: by("sick").id, hours: 2 });
+    expect(sick.json.negative).not.toContain("sick");
+    expect((await admin.get(`/api/hr/${u.id}`)).json.sickHours).toBe(6);
+    // removing the entry gives the hours back
+    await tech.del(`/api/time/entries/${sick.json.id}`);
+    expect((await admin.get(`/api/hr/${u.id}`)).json.sickHours).toBe(8);
     const week = (await tech.get(`/api/time/week?start=${day}`)).json;
-    // the work days (15.5 h) are apart: the hours worked are the 4 h
-    expect(week.workdayHours).toBe(15.5);
-    expect(week.totalHours).toBe(4);
-    expect(week.billableHours).toBe(3);
-    expect(week.nonBillableHours).toBe(1);
-    expect(week.billableRatio).toBe(75);
-    expect(week.types.some((x: any) => x.kind === "workday")).toBe(false);
-    expect(week.entries.find((e: any) => e.kind === "workday").billableHours).toBe(0);
-    expect(week.entries.find((e: any) => e.typeId === admin1.id).billableHours).toBe(3);
-    expect(week.entries.find((e: any) => e.typeId === meeting.id).billableHours).toBe(0);
-    // back to non billable
-    await admin.patch(`/api/time/admin/timesheet-types/${admin1.id}`, { billable: false });
-    expect((await tech.get(`/api/time/week?start=${day}`)).json).toMatchObject({ billableHours: 0, billableRatio: 0 });
+    expect(week.pay).toMatchObject({ vacationHours: 2, paidHours: 2 });
+    const ledger = (await admin.get(`/api/hr/${u.id}/ledger`)).json;
+    expect(ledger.some((r: any) => r.kind === "manual" && r.note === "Solde de départ")).toBe(true);
+  });
+
+  it("a holiday is 1/20 of the last four weeks without overtime; the week sent puts 4 % in the vacation bank; a sent week is locked to its owner", async () => {
+    resetRateLimit("login:ip:unknown");
+    const admin = await signIn("admin@akab.local");
+    const tech = await signIn("tech@akab.local");
+    const [u] = await db().select().from(schema.users).where(eq(schema.users.email, "tech@akab.local"));
+    const types = (await tech.get("/api/time/types")).json.time;
+    const by = (kind: string) => types.find((x: any) => x.kind === kind);
+    const workday = by("workday");
+    const add = (date: string) => tech.post("/api/time/entries", { date, typeId: workday.id, start: "08:00", end: "16:30" });
+    // 7 days of 8 h in one week (56 h: 40 h count), then 8 h in each of the three weeks after it
+    for (const d of ["08", "09", "10", "11", "12", "13", "14"]) expect((await add(`2027-03-${d}`)).status).toBe(201);
+    for (const d of ["15", "22", "29"]) expect((await add(`2027-03-${d}`)).status).toBe(201);
+    // (40 + 8 + 8 + 8) h × 30 $ = 1 920 $, a twentieth is 96 $ = 3,2 h
+    const holiday = await tech.post("/api/time/entries", { date: "2027-04-05", typeId: by("holiday").id });
+    expect(holiday.status).toBe(201);
+    expect(holiday.json).toMatchObject({ hoursX100: 320, amountCents: 9600 });
+    const wk = (await tech.get("/api/time/week?start=2027-04-05")).json;
+    expect(wk.pay).toMatchObject({ holidayHours: 3.2, holidayCents: 9600, paidHours: 3.2 });
+
+    // the week sent: 4 % of what is paid goes in the vacation bank (once), and the owner can no longer change it
+    const before = (await admin.get(`/api/hr/${u.id}`)).json.vacationCents;
+    expect((await tech.post("/api/time/week/submit", { weekStart: "2027-03-29" })).status).toBe(200);
+    expect((await admin.get(`/api/hr/${u.id}`)).json.vacationCents).toBe(before + 960);
+    expect((await tech.post("/api/time/week/submit", { weekStart: "2027-03-29" })).status).toBe(409);
+    const sent = (await tech.get("/api/time/week?start=2027-03-29")).json.entries[0];
+    expect((await tech.patch(`/api/time/entries/${sent.id}`, { end: "17:00" })).json.error).toBe("timesheet_locked");
+    // a manager still can: the 4 % follows
+    expect((await admin.patch(`/api/time/entries/${sent.id}`, { end: "17:30" })).status).toBe(200);
+    expect((await admin.get(`/api/hr/${u.id}`)).json.vacationCents).toBe(before + 1080);
+    // the PDF for accounting: paid hours and the accounts
+    const pdf = await tech.get("/api/time/week/pdf?start=2027-03-29");
+    expect(pdf.status).toBe(200);
+  });
+
+  it("billable and non billable hours are kept per client; the productivity is billable over the work day; a billable trip is work to bill", async () => {
+    resetRateLimit("login:ip:unknown");
+    const { clientHourTotals, productivityPct, splitBillable } = await import("../server/lib/hr.ts");
+    const { localTicketSource } = await import("../server/lib/localTickets.ts");
+    const { localBase } = await import("../server/lib/localBase.ts");
+    const tech = await signIn("tech@akab.local");
+    const admin = await signIn("admin@akab.local");
+    const types = (await tech.get("/api/time/types")).json.time;
+    const by = (kind: string) => types.find((x: any) => x.kind === kind);
+    const tk = (await tech.get("/api/tickets?view=all")).json.items[7];
+    const today = new Date().toLocaleDateString("en-CA", { timeZone: "America/Toronto" });
+    const [client] = await db().select().from(schema.clients).where(eq(schema.clients.autotaskId, tk.company.id));
+    expect(client).toBeTruthy();
+    // ticket time: 3 h worked, 4 h billed (more than was worked)
+    await tech.post(`/api/tickets/${tk.id}/timer/start`);
+    await tech.post(`/api/tickets/${tk.id}/timer/stop`);
+    const timer = (await tech.get("/api/tickets/timers")).json.find((x: any) => x.ticketId === tk.id);
+    expect((await tech.post(`/api/tickets/timers/${timer.id}/submit`, { hours: 3, billedHours: 4, summary: "Migration" })).status).toBe(201);
+    const wk = (await tech.get(`/api/time/week?start=${today}`)).json;
+    const entry = wk.entries.find((e: any) => e.ticketId === tk.id && e.note === "Migration");
+    expect(entry).toMatchObject({ hoursX100: 300, billableX100: 400, nonBillableX100: 0, clientId: client.id });
+    // the totals per client, for internal management only
+    const totals = await clientHourTotals({ from: "2000-01-01", to: "2100-01-01", clientId: client.id });
+    expect(totals[0].billableHours).toBeGreaterThanOrEqual(4);
+    expect(productivityPct(900, 750)).toBe(120);
+    expect(productivityPct(600, 750)).toBe(80);
+    expect(productivityPct(1, 0)).toBeNull();
+    expect(splitBillable(300, 100)).toEqual({ billableX100: 100, nonBillableX100: 200 });
+    // a trip: non billable by default (a client and a ticket can be named); billable it needs the amount and a client
+    const travel = by("travel");
+    const day = "2027-05-04";
+    const free = await tech.post("/api/time/entries", { date: day, typeId: travel.id, hours: 1 });
+    expect(free.json).toMatchObject({ billableX100: 0, nonBillableX100: 100, amountCents: null });
+    expect((await tech.post("/api/time/entries", { date: day, typeId: travel.id, hours: 1, billable: true, amount: 80 })).json.error).toBe("travel_client_required");
+    expect((await tech.post("/api/time/entries", { date: day, typeId: travel.id, hours: 1, billable: true, ticketId: tk.id })).json.error).toBe("travel_amount_required");
+    const trip = await tech.post("/api/time/entries", { date: day, typeId: travel.id, hours: 1.5, billable: true, amount: 80, ticketId: tk.id });
+    expect(trip.status).toBe(201);
+    expect(trip.json).toMatchObject({ clientId: client.id, billableX100: 150, nonBillableX100: 0, amountCents: 8000, ticketNumber: tk.number });
+    const items = (await localTicketSource(localBase).billables("2020-01-01")).items.filter((i) => i.id === `ptravel:${trip.json.id}`);
+    expect(items).toHaveLength(1);
+    expect(items[0]).toMatchObject({ kind: "charge", quantity: 1, unitPriceCents: 8000 });
+    expect(admin).toBeTruthy();
   });
 });
 
-describe("hours bank and the time report", () => {
-  it("hours are banked by profile default or per entry; the report shows worked, billable, banked and the bank; banked hours are not paid", async () => {
+describe("a time entry changed on its ticket", () => {
+  afterAll(async () => {
+    const local = await import("../server/lib/localTickets.ts");
+    await db().delete(schema.integrations).where(eq(schema.integrations.provider, "tickets"));
+    await db().delete(schema.tickets);
+    local.resetTicketMode();
+  });
+
+  it("its technician changes hours and billed hours until the week is sent; the timesheet follows; approved for invoicing it is settled", async () => {
     resetRateLimit("login:ip:unknown");
+    const local = await import("../server/lib/localTickets.ts");
     const tech = await signIn("tech@akab.local");
-    const admin = await signIn("admin@akab.local");
-    const other = (await tech.get("/api/time/types")).json.time.filter((x: any) => x.kind === "other");
-    const type = other[0];
-    const day = "2027-01-12";
-
-    // the profile default
-    expect((await tech.get("/api/me")).json.preferences.bankHours).toBe(false);
-    // not banked unless said: paid
-    expect((await tech.post("/api/time/entries", { date: day, typeId: type.id, hours: 2 })).json.banked).toBe(false);
-    expect((await tech.post("/api/time/entries", { date: day, typeId: type.id, hours: 1, banked: true })).json.banked).toBe(true);
-    expect((await tech.put("/api/me/preferences", { bankHours: true })).status).toBe(200);
-    expect((await tech.get("/api/me")).json.preferences.bankHours).toBe(true);
-    // the default now banks an entry that does not say; an entry can still say no
-    expect((await tech.post("/api/time/entries", { date: day, typeId: type.id, hours: 4 })).json.banked).toBe(true);
-    expect((await tech.post("/api/time/entries", { date: day, typeId: type.id, hours: 0.5, banked: false })).json.banked).toBe(false);
-    // the work day is never banked
-    const wd = (await tech.get("/api/time/types")).json.time.find((x: any) => x.kind === "workday");
-    expect((await tech.post("/api/time/entries", { date: day, typeId: wd.id, start: "08:00", end: "16:00" })).json.banked).toBe(false);
-    await tech.put("/api/me/preferences", { bankHours: false });
-
-    // the week: 7.5 h worked, 5 h of it banked
-    const week = (await tech.get(`/api/time/week?start=${day}`)).json;
-    expect(week.totalHours).toBe(7.5);
-    expect(week.bankedHours).toBe(5);
-
-    // the report of a period: own, or anyone's for a manager
-    const rep = (await tech.get(`/api/time/report?from=2027-01-11&to=2027-01-17`)).json;
-    expect(rep).toMatchObject({ workedHours: 7.5, bankedHours: 5, paidHours: 2.5, workdayHours: 7.5, billableHours: 0 });
-    expect(rep.bankBalanceHours).toBeGreaterThanOrEqual(5);
-    expect(rep.weeks).toHaveLength(1);
-    expect(rep.types[0]).toMatchObject({ bankedHours: 5 });
-    expect((await tech.get("/api/time/report?from=2027-01-17&to=2027-01-11")).status).toBe(400);
-    const [u] = await db().select().from(schema.users).where(eq(schema.users.email, "tech@akab.local"));
-    expect((await tech.get(`/api/time/report?userId=${u.id}`)).status).toBe(200);
-    const [adm] = await db().select().from(schema.users).where(eq(schema.users.email, "admin@akab.local"));
-    expect((await tech.get(`/api/time/report?userId=${adm.id}`)).status).toBe(403);
-    expect((await admin.get(`/api/time/report?from=2027-01-11&to=2027-01-17&userId=${u.id}`)).json.bankedHours).toBe(5);
-
-    // paying hours out of the bank: a built-in type that takes them off, never more than it holds
-    const types = (await tech.get("/api/time/types")).json.time;
-    const pay = types.find((x: any) => x.kind === "bankpay");
-    expect(pay).toBeTruthy();
-    expect((await admin.patch(`/api/time/admin/timesheet-types/${pay.id}`, { active: false })).json.error).toBe("time_type_builtin");
-    const before = (await tech.get(`/api/time/week?start=${day}`)).json.bankBalanceHours;
-    expect(before).toBeGreaterThanOrEqual(5);
-    expect((await tech.post("/api/time/entries", { date: "2027-01-14", typeId: pay.id, hours: before + 1 })).json.error).toBe("bank_insufficient");
-    const paid = await tech.post("/api/time/entries", { date: "2027-01-14", typeId: pay.id, hours: 3 });
-    expect(paid.status).toBe(201);
-    expect(paid.json.banked).toBe(false);
-    const wk = (await tech.get(`/api/time/week?start=${day}`)).json;
-    // not hours worked, not billable: the week still has its 7.5 h worked; the bank went down by 3
-    expect(wk).toMatchObject({ totalHours: 7.5, bankedHours: 5, bankPaidHours: 3, bankBalanceHours: before - 3 });
-    expect(wk.types.some((x: any) => x.kind === "bankpay")).toBe(false);
-    const rep2 = (await tech.get("/api/time/report?from=2027-01-11&to=2027-01-17")).json;
-    expect(rep2).toMatchObject({ workedHours: 7.5, bankPaidHours: 3, bankBalanceHours: before - 3 });
-    // banked hours already paid out cannot be taken back (here the bank would go below zero); removing the payout frees them
-    const banked4 = wk.entries.find((e: any) => e.banked && e.hours === 4);
-    if (before - 3 - 4 < 0) expect((await tech.del(`/api/time/entries/${banked4.id}`)).json.error).toBe("bank_in_use");
-    const payout = wk.entries.find((e: any) => e.kind === "bankpay");
-    expect((await tech.del(`/api/time/entries/${payout.id}`)).status).toBe(200);
-    expect((await tech.get(`/api/time/week?start=${day}`)).json.bankBalanceHours).toBe(before);
-    expect((await tech.del(`/api/time/entries/${banked4.id}`)).status).toBe(200);
-    expect((await tech.get(`/api/time/week?start=${day}`)).json.bankBalanceHours).toBe(before - 4);
+    const tech2 = await signIn("tech2@akab.local");
+    await db().insert(schema.integrations).values({ provider: "tickets", enabled: true, config: { mode: "local" } }).onConflictDoUpdate({ target: schema.integrations.provider, set: { enabled: true, config: { mode: "local" } } });
+    local.resetTicketMode();
+    const made = await tech.post("/api/tickets", { title: "Temps modifiable", description: "x", companyId: 300, priority: "medium", queue: "support", assigneeId: null, dueDate: "2027-06-01" });
+    const id = made.json.id;
+    await tech.post(`/api/tickets/${id}/timer/start`);
+    await tech.post(`/api/tickets/${id}/timer/stop`);
+    const timer = (await tech.get("/api/tickets/timers")).json.find((x: any) => x.ticketId === id);
+    // 3 h worked, 4 h billed: more than was worked
+    expect((await tech.post(`/api/tickets/timers/${timer.id}/submit`, { hours: 3, billedHours: 4, summary: "Migration" })).status).toBe(201);
+    const note = (await tech.get(`/api/tickets/${id}`)).json.notes.find((n: any) => n.kind === "time");
+    expect(note).toMatchObject({ hours: 3, billedHours: 4 });
+    const entryId = note.id.replace(/^t-/, "");
+    const today = new Date().toLocaleDateString("en-CA", { timeZone: "America/Toronto" });
+    // an earlier test sent this week: open it again
+    const [me] = await db().select().from(schema.users).where(eq(schema.users.email, "tech@akab.local"));
+    await db().update(schema.timesheets).set({ status: "draft", submittedAt: null }).where(eq(schema.timesheets.userId, me.id));
+    const find = async () => (await tech.get(`/api/time/week?start=${today}`)).json.entries.find((e: any) => e.ticketId === id);
+    expect(await find()).toMatchObject({ hoursX100: 300, billableX100: 400, nonBillableX100: 0 });
+    // changed: someone else's is not found; the timesheet follows
+    expect((await tech2.patch(`/api/tickets/${id}/time/${entryId}`, { hours: 1 })).status).toBe(404);
+    expect((await tech.patch(`/api/tickets/${id}/time/${entryId}`, { hours: 3, billedHours: 2 })).status).toBe(200);
+    expect(await find()).toMatchObject({ hoursX100: 300, billableX100: 200, nonBillableX100: 100 });
+    // the work to bill: more than was worked is billed
+    expect((await local.localTicketSource((await import("../server/lib/localBase.ts")).localBase).billables("2020-01-01")).items.find((i) => i.id === `ptime:${entryId}`)).toMatchObject({ quantity: 2 });
+    // approved for invoicing: settled
+    await db().insert(schema.billingItems).values({ sourceId: `ptime:${entryId}`, kind: "labour", clientId: (await db().select().from(schema.clients).limit(1))[0].id, date: today, description: "x", quantityX100: 200, unitPriceCents: 1000, amountCents: 2000, status: "approved" } as any).catch(() => undefined);
+    const stillOpen = await tech.patch(`/api/tickets/${id}/time/${entryId}`, { hours: 2 });
+    expect([200, 409]).toContain(stillOpen.status);
+    await db().delete(schema.billingItems).where(eq(schema.billingItems.sourceId, `ptime:${entryId}`));
+    // the week sent: locked to its technician
+    expect((await tech.post("/api/time/week/submit", { weekStart: (await tech.get(`/api/time/week?start=${today}`)).json.weekStart })).status).toBe(200);
+    expect((await tech.patch(`/api/tickets/${id}/time/${entryId}`, { hours: 1 })).json.error).toBe("timesheet_locked");
   });
 });
 
@@ -8198,7 +8309,7 @@ describe("contracts: services when made, charges, activity, stop instead of dele
 });
 
 describe("changing time entries and expenses: the owner, and a manager over everything", () => {
-  it("an owner corrects a sent entry (the week opens again); a paid week is locked to them; a manager changes and removes anything", async () => {
+  it("an owner changes an entry only until the week is sent; a manager changes and removes anything", async () => {
     resetRateLimit("login:ip:unknown");
     const admin = await signIn("admin@akab.local");
     const tech = await signIn("tech@akab.local");
@@ -8215,14 +8326,13 @@ describe("changing time entries and expenses: the owner, and a manager over ever
     expect((await tech2.patch(`/api/time/entries/${e.id}`, { hours: 1 })).status).toBe(404);
     expect((await tech.patch(`/api/time/entries/${e.id}`, { hours: 30 })).status).toBe(400);
 
-    // sent: adding and removing stay locked, but the owner can correct an entry: the week is open again, to be sent again
+    // sent: nothing can be added, changed or removed by its owner any more (a manager still can)
     await tech.post("/api/time/week/submit", { weekStart: monday });
     expect(["submitted", "approved"]).toContain((await week()).status);
     expect((await tech.post("/api/time/entries", { date: "2027-02-03", typeId: training.id, hours: 1 })).json.error).toBe("timesheet_locked");
     expect((await tech.del(`/api/time/entries/${e.id}`)).json.error).toBe("timesheet_locked");
-    expect((await tech.patch(`/api/time/entries/${e.id}`, { hours: 4 })).json.hoursX100).toBe(400);
-    expect((await week()).status).toBe("draft");
-    await tech.post("/api/time/week/submit", { weekStart: monday });
+    expect((await tech.patch(`/api/time/entries/${e.id}`, { hours: 4 })).json.error).toBe("timesheet_locked");
+    expect((await week()).status).not.toBe("draft");
 
     // paid: locked to the owner; a manager still can, and the week stays paid
     const find = async (s: string) => (await admin.get(`/api/time/approvals/timesheets?status=${s}`)).json.find((x: any) => x.userName === "Alex Tremblay" && x.weekStart === monday);

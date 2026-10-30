@@ -71,7 +71,7 @@ export type TicketDetail = Omit<TicketSummary, "checklist"> & {
   /** Notes and time entries (work done), oldest first */
   /** Every file of the ticket (no content): came with an email, went with our reply, added by a technician or by the client */
   attachments?: TicketFile[];
-  notes: { id: string; author: string; at: string; text: string; internal: boolean; kind?: "note" | "time"; hours?: number; internalText?: string; billable?: boolean; offsetHours?: number; system?: boolean; by?: "client" | "tech"; mergedFrom?: string }[];
+  notes: { id: string; author: string; at: string; text: string; internal: boolean; kind?: "note" | "time"; hours?: number; internalText?: string; billable?: boolean; offsetHours?: number; billedHours?: number; userId?: string | null; system?: boolean; by?: "client" | "tech"; mergedFrom?: string }[];
   /** AI assistant available to me */
   ai: boolean;
   /** The ticket device (absent while the full ticket loads) */

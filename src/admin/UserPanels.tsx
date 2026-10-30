@@ -23,6 +23,7 @@ import { useAdminError, useRoleName, useRolesFor } from "./hooks";
 import { OverridesEditor, type OverrideMap } from "./PermissionMatrix";
 import { useConfirm } from "@/components/ConfirmDialog";
 import { O365Panel } from "./CalendarLinks";
+import { HrFile } from "@/components/HrFile";
 
 function invalidateUsers(qc: ReturnType<typeof useQueryClient>) {
   void qc.invalidateQueries({ queryKey: ["admin"] });
@@ -267,6 +268,7 @@ export function PreferencesTab({ user }: { user: AdminUser }) {
 // ── User detail (profile / access / security) ────────────────────────────────
 export function UserSheet({ user, onClose }: { user: AdminUser | null; onClose: () => void }) {
   const { t } = useTranslation();
+  const can = useCan();
   const roleName = useRoleName();
   const roles = useRolesFor(user?.kind ?? "staff", user?.clientId);
   const role = roles.find((r) => r.id === user?.roleId);
@@ -295,6 +297,7 @@ export function UserSheet({ user, onClose }: { user: AdminUser | null; onClose: 
                 <TabsTrigger value="profile">{t("admin.users.profile")}</TabsTrigger>
                 <TabsTrigger value="access">{t("admin.users.access")}</TabsTrigger>
                 <TabsTrigger value="security">{t("admin.users.security")}</TabsTrigger>
+                {user.kind === "staff" && can("hr.manage") && <TabsTrigger value="hr">{t("hr.tab")}</TabsTrigger>}
               </TabsList>
               <TabsContent value="profile" className="pt-4">
                 <ProfileTab key={user.id} user={user} />
@@ -302,6 +305,11 @@ export function UserSheet({ user, onClose }: { user: AdminUser | null; onClose: 
               <TabsContent value="access" className="pt-4">
                 <AccessTab key={user.id} user={user} roles={roles} />
               </TabsContent>
+              {user.kind === "staff" && can("hr.manage") && (
+                <TabsContent value="hr" className="pt-4">
+                  <HrFile key={user.id} userId={user.id} />
+                </TabsContent>
+              )}
               <TabsContent value="security" className="pt-4">
                 <SecurityTab user={user} />
               </TabsContent>

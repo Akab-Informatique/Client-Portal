@@ -12,7 +12,7 @@ import { api } from "@/lib/api";
 import { cn } from "@/lib/utils";
 import { SectionHeader } from "./sections";
 
-type TimeType = { id: string; name: string; kind: "labour" | "workday" | "bankpay" | "other"; active: boolean; billable: boolean; quickbooksItemId: string | null };
+type TimeType = { id: string; name: string; kind: "labour" | "workday" | "bankpay" | "vacation" | "sick" | "holiday" | "travel" | "other"; active: boolean; billable: boolean; quickbooksItemId: string | null };
 type ExpenseType = { id: string; name: string; ledgerAccountId: string | null; unit: string | null; unitPriceCents: number | null; billable: boolean; active: boolean };
 type Account = { id: string; number: string; name: string; type: string; active: boolean };
 const KEY = ["admin", "time-types"];
@@ -112,7 +112,7 @@ export function TimeExpenseSection() {
                 </>
               ) : (
                 <span className="flex items-center gap-1 text-[11px] text-muted-foreground" title={t("timeAdmin.builtinHint")}>
-                  <Lock className="size-3" /> {x.kind === "workday" ? t("timeAdmin.workdayKind") : x.kind === "bankpay" ? t("timeAdmin.bankpayKind") : t("timeAdmin.labourKind")}
+                  <Lock className="size-3" /> {t(`timeAdmin.kinds.${x.kind}`)}
                 </span>
               )}
             </li>

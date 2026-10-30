@@ -140,6 +140,23 @@ export const MODULES = [
     ],
   },
   {
+    key: "hr",
+    audience: "staff",
+    label: { fr: "Ressources humaines", en: "Human resources" },
+    permissions: [
+      {
+        key: "hr.manage",
+        label: { fr: "RH : voir et gérer le dossier de tous les employés", en: "HR: see and manage every employee's file" },
+        description: { fr: "La page RH et l'onglet RH de chaque employé : salaire horaire, banque d'heures, jours de maladie, vacances", en: "The HR page and every employee's HR tab: hourly wage, hours bank, sick days, vacation" },
+      },
+      {
+        key: "hr.own",
+        label: { fr: "RH : voir son propre dossier", en: "HR: see one's own file" },
+        description: { fr: "L'onglet RH du profil, pour soi seulement (soldes de banque d'heures, de maladie et de vacances)", en: "The HR tab of one's profile, for oneself only (hours bank, sick and vacation balances)" },
+      },
+    ],
+  },
+  {
     key: "accounting",
     audience: "staff",
     label: { fr: "Factures, soumissions et approbation", en: "Invoices, quotes and approvals" },
@@ -562,7 +579,7 @@ export const ACCESS_LAYOUT: { key: string; audience: Audience; label: Localized;
   { key: "team", audience: "staff", label: { fr: "Équipe", en: "Team" }, modules: ["dashboard", "meetings", "breakroom"] },
   { key: "tools", audience: "staff", label: { fr: "Mes outils", en: "My tools" }, modules: ["pipeline", "outlook", "timesheets"] },
   { key: "command", audience: "staff", label: { fr: "Centre de commande", en: "Command center" }, modules: ["messages", "tickets", "projects", "sms", "passbolt"] },
-  { key: "management", audience: "staff", label: { fr: "Gestion", en: "Management" }, modules: ["crm", "clientview", "store", "services"] },
+  { key: "management", audience: "staff", label: { fr: "Gestion", en: "Management" }, modules: ["crm", "clientview", "store", "services", "hr"] },
   { key: "sales", audience: "staff", label: { fr: "Vente", en: "Sales" }, modules: ["opportunities", "quotes"] },
   { key: "accounting", audience: "staff", label: { fr: "Comptabilité", en: "Accounting" }, modules: ["accounting"] },
   { key: "admin", audience: "staff", label: { fr: "Paramètres admin", en: "Admin settings" }, modules: ["admin"] },

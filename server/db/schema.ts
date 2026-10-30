@@ -713,6 +713,8 @@ export const ticketTimeEntries = pgTable(
     startedAt: timestamp("started_at", { withTimezone: true }).notNull(),
     minutes: integer("minutes").notNull(),
     offsetMinutes: integer("offset_minutes").notNull().default(0),
+    /** Minutes billed when they are not "worked minus the offset" (more can be billed than was worked) */
+    billedMinutes: integer("billed_minutes"),
     summary: text("summary").notNull().default(""),
     internalText: text("internal_text").notNull().default(""),
     billable: boolean("billable").notNull().default(true),
@@ -1847,9 +1849,57 @@ export const timesheetEntries = pgTable(
     taskId: uuid("task_id"),
     /** ticket | manual | project */
     source: text("source").notNull().default("manual"),
+    /** The client this time was spent on (a ticket's, a project's, or picked on a trip): billable and non billable hours are kept per client */
+    clientId: uuid("client_id").references(() => clients.id, { onDelete: "set null" }),
+    /** The hours of this entry that are not billable (hours less billable, never below 0); kept per client for internal management */
+    nonBillableX100: integer("non_billable_x100"),
+    /** A work day: the hours of the day put in the hours bank instead of being paid this week */
+    bankX100: integer("bank_x100").notNull().default(0),
+    /** A trip billed to the client: the amount to bill; a holiday: the holiday pay worked out (1/20 of the last 4 weeks) */
+    amountCents: bigint("amount_cents", { mode: "number" }),
+    /** The ticket time entry (ticket_time_entries.id) this row mirrors, so a change on either follows on the other */
+    ticketTimeId: uuid("ticket_time_id"),
     createdAt: created(),
   },
-  (t) => [index("timesheet_entries_user_date_idx").on(t.userId, t.date)],
+  (t) => [index("timesheet_entries_user_date_idx").on(t.userId, t.date), index("timesheet_entries_client_idx").on(t.clientId)],
+);
+
+/** Human resources file of an employee (the RH tab): hourly wage, and the weekly hours after which time counts as overtime. */
+export const hrProfiles = pgTable("hr_profiles", {
+  userId: uuid("user_id")
+    .primaryKey()
+    .references(() => users.id, { onDelete: "cascade" }),
+  hourlyWageCents: integer("hourly_wage_cents"),
+  /** Hours a week after which paid hours are overtime (×100; 40 h by default): left out of the holiday pay base */
+  overtimeAfterX100: integer("overtime_after_x100").notNull().default(4000),
+  updatedAt: updated(),
+});
+
+/**
+ * What goes in and out of an employee's three accounts: the hours bank (cents), the vacation bank (cents) and the sick days
+ * (hours ×100). A row tied to an entry (entry_id) goes away with it; manual rows and the weekly 4 % vacation accrual stay.
+ */
+export const hrLedger = pgTable(
+  "hr_ledger",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    userId: uuid("user_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    /** bank | vacation | sick */
+    account: text("account").notNull(),
+    cents: bigint("cents", { mode: "number" }),
+    hoursX100: integer("hours_x100"),
+    /** manual | banked | payout | used | accrual */
+    kind: text("kind").notNull(),
+    entryId: uuid("entry_id").references(() => timesheetEntries.id, { onDelete: "cascade" }),
+    /** The Monday of the week (accrual rows, one a week) */
+    weekStart: text("week_start"),
+    note: text("note"),
+    createdBy: uuid("created_by").references(() => users.id, { onDelete: "set null" }),
+    createdAt: created(),
+  },
+  (t) => [index("hr_ledger_user_idx").on(t.userId, t.account), index("hr_ledger_entry_idx").on(t.entryId), uniqueIndex("hr_ledger_accrual_idx").on(t.userId, t.weekStart).where(sql`${t.kind} = 'accrual'`)],
 );
 
 /** An expense claim (with its receipt), approved then reimbursed; billable ones go on the client's invoice. */

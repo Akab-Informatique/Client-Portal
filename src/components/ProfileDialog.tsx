@@ -16,7 +16,7 @@ import {
   Loader2,
   Mail,
   PenLine,
-  PiggyBank,
+  HeartHandshake,
   Plus,
   Smartphone,
   Timer,
@@ -34,6 +34,7 @@ import { api, ApiError } from "@/lib/api";
 import { useCan, useMe } from "@/lib/session";
 import { LinkMailboxDialog } from "@/pages/outlook/dialogs";
 import { TimeReportCard } from "@/pages/time/TimeReport";
+import { HrFile } from "@/components/HrFile";
 import { RichEditor, type RichEditorHandle } from "@/pages/outlook/RichEditor";
 import { PhoneSignInCard } from "@/components/PhoneSignInCard";
 import { KEY, outlookErrorText, statusKey, type MailAccount, type OutlookStatus } from "@/pages/outlook/shared";
@@ -182,6 +183,7 @@ export function ProfileDialog({ open, onOpenChange }: { open: boolean; onOpenCha
           {staff && (
             <div className="space-y-4">
               <HoursCard />
+              <HrCard />
               <NotifyCard />
               <Microsoft365Card onNavigate={() => onOpenChange(false)} />
             </div>
@@ -232,33 +234,27 @@ function NotifyCard() {
   );
 }
 
-/** My hours: whether they are banked instead of paid by default, and my time report (managers: anyone's). */
+/** My hours: my time report (the hours I am paid; managers: anyone's). */
 function HoursCard() {
   const { t } = useTranslation();
-  const me = useMe();
   const can = useCan();
-  const qc = useQueryClient();
-  const bank = useMutation({
-    mutationFn: (bankHours: boolean) => api.put("/me/preferences", { bankHours }),
-    onSuccess: (_r, v) => {
-      void qc.invalidateQueries({ queryKey: ["auth"] });
-      toast.success(v ? t("profile.hours.bankOn") : t("profile.hours.bankOff"));
-    },
-    onError: () => toast.error(t("common.error")),
-  });
   if (!can("timesheets.use") && !can("timesheets.manage")) return null;
   return (
     <Card icon={Timer} title={t("profile.hours.title")} className="space-y-3">
-      <label className="flex items-start justify-between gap-4 rounded-lg border p-3 text-sm">
-        <span className="space-y-0.5">
-          <span className="flex items-center gap-1.5 font-medium">
-            <PiggyBank className="size-4 text-sky-300" /> {t("profile.hours.bankDefault")}
-          </span>
-          <span className="block text-xs text-muted-foreground">{t("profile.hours.bankDefaultHint")}</span>
-        </span>
-        <Switch checked={me.preferences.bankHours} disabled={bank.isPending} onCheckedChange={(v) => bank.mutate(v)} aria-label={t("profile.hours.bankDefault")} />
-      </label>
       <TimeReportCard />
+    </Card>
+  );
+}
+
+/** My HR file (hr.own, or hr.manage): my hourly wage, hours bank, vacation and sick days — only mine, read only. */
+function HrCard() {
+  const { t } = useTranslation();
+  const me = useMe();
+  const can = useCan();
+  if (!can("hr.own") && !can("hr.manage")) return null;
+  return (
+    <Card icon={HeartHandshake} title={t("hr.tab")} className="space-y-3">
+      <HrFile userId={me.id} />
     </Card>
   );
 }

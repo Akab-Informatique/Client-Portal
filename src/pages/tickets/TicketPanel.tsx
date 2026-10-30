@@ -27,6 +27,7 @@ import { api, ApiError } from "@/lib/api";
 import { AiModelSub, AiTodayLine, useAiModel } from "@/components/AiModelPicker";
 import { AiDirection, useAiDirection } from "@/components/AiDirection";
 import { useCan, useMe } from "@/lib/session";
+import { EditTimeDialog, type TimeNote } from "./EditTime";
 import { DueEditor } from "./DueEditor";
 import { cn, initials } from "@/lib/utils";
 import { GlassBackdrop } from "@/components/brand/GlassBackdrop";
@@ -1093,7 +1094,11 @@ type ActivityFilter = "all" | "reply" | "internal" | "time" | "merged";
  */
 function Activity({ tk, partial }: { tk: TicketDetail; partial: boolean }) {
   const { t } = useTranslation();
+  const me = useMe();
+  const can = useCan();
   const [filter, setFilter] = useState<ActivityFilter>("all");
+  // a time entry changed in place: its technician, until their week is submitted and the time approved for invoicing
+  const [editing, setEditing] = useState<TimeNote | null>(null);
   type Item = TicketDetail["notes"][number];
   const kindOf = (n: Item): Exclude<ActivityFilter, "all" | "merged"> => (n.kind === "time" ? "time" : n.internal ? "internal" : "reply");
   // the client's own words: told by the source, else by the name of the ticket's contact
@@ -1186,8 +1191,16 @@ function Activity({ tk, partial }: { tk: TicketDetail; partial: boolean }) {
                           {t("tickets.timer.billedAfterOffset", { billed: hm(Math.max(0, (n.hours ?? 0) - (n.offsetHours ?? 0))), offset: hm(n.offsetHours ?? 0) })}
                         </span>
                       )}
+                      {time && n.billedHours != null && n.billedHours > (n.hours ?? 0) + 0.001 && (
+                        <span className="rounded-full bg-emerald-500/15 px-1.5 text-[10px] font-medium text-emerald-300">{t("tickets.timer.billedMore", { billed: hm(n.billedHours) })}</span>
+                      )}
                       {mergedChip(n)}
                       {head}
+                      {time && can("tickets.edit") && (n.userId === me.id || can("timesheets.manage")) && (
+                        <button type="button" title={t("tickets.timer.editEntry")} aria-label={t("tickets.timer.editEntry")} onClick={() => setEditing(n)} className="ml-auto rounded p-1 text-muted-foreground hover:text-foreground">
+                          <Pencil className="size-3.5" />
+                        </button>
+                      )}
                     </div>
                     {n.text && <p className="mt-1.5 whitespace-pre-wrap text-sm">{n.text}</p>}
                     {n.internalText && (
@@ -1230,6 +1243,7 @@ function Activity({ tk, partial }: { tk: TicketDetail; partial: boolean }) {
           })}
         </ol>
       )}
+      {editing && <EditTimeDialog ticketId={tk.id} note={editing} onClose={() => setEditing(null)} />}
     </section>
   );
 }

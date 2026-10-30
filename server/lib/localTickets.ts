@@ -181,6 +181,8 @@ export function localTicketSource(base: TicketSource): TicketSource {
           internalText: x.internalText || undefined,
           billable: x.billable,
           offsetHours: x.offsetMinutes ? Math.round((x.offsetMinutes / 60) * 10_000) / 10_000 : undefined,
+          ...(x.billedMinutes != null ? { billedHours: Math.round((x.billedMinutes / 60) * 10_000) / 10_000 } : {}),
+          userId: x.userId,
           ...(x.mergedFrom ? { mergedFrom: x.mergedFrom } : {}),
         })),
       ].sort((a, b) => a.at.localeCompare(b.at));
@@ -322,7 +324,7 @@ export function localTicketSource(base: TicketSource): TicketSource {
     workTypes: () => base.workTypes(),
     async addTimeEntry(ticketId, p, a) {
       await one(ticketId);
-      await db()
+      const [made] = await db()
         .insert(schema.ticketTimeEntries)
         .values({
           ticketId,
@@ -331,13 +333,16 @@ export function localTicketSource(base: TicketSource): TicketSource {
           startedAt: p.startedAt,
           minutes: minutesOf(p.hours),
           offsetMinutes: minutesOf(p.offsetHours),
+          billedMinutes: p.billedHours === undefined ? null : minutesOf(p.billedHours),
           summary: p.summary,
           internalText: p.internal,
           billable: p.billable,
           workType: p.workTypeId,
           contractId: p.contractSourceId ?? null,
-        });
+        })
+        .returning({ id: schema.ticketTimeEntries.id });
       await touch(ticketId);
+      return { id: made.id };
     },
     async addMailReply(ticketId, from, text) {
       await one(ticketId);
@@ -389,7 +394,7 @@ export function localTicketSource(base: TicketSource): TicketSource {
         .innerJoin(schema.tickets, eq(schema.tickets.id, schema.ticketTimeEntries.ticketId))
         .where(and(eq(schema.ticketTimeEntries.billable, true), eq(schema.ticketTimeEntries.billed, false), gte(schema.ticketTimeEntries.startedAt, d)));
       for (const { e, number, companyId, ticketContract } of times) {
-        const billed = Math.max(0, e.minutes - e.offsetMinutes);
+        const billed = Math.max(0, e.billedMinutes ?? e.minutes - e.offsetMinutes);
         if (!billed) continue;
         const contract = e.contractId ?? ticketContract;
         items.push({
@@ -447,6 +452,29 @@ export function localTicketSource(base: TicketSource): TicketSource {
           resourceName: who,
           quantity: (e.billableX100 ?? e.hoursX100) / 100,
           unitPriceCents: rate,
+          taxable: true,
+        });
+      }
+      // a trip billed to a client (Timesheet › Déplacement, billable with an amount): one charge for the amount typed
+      const trips = await db()
+        .select({ e: schema.timesheetEntries, companyId: schema.clients.autotaskId, who: schema.users.name })
+        .from(schema.timesheetEntries)
+        .innerJoin(schema.timesheetTypes, eq(schema.timesheetTypes.id, schema.timesheetEntries.typeId))
+        .innerJoin(schema.clients, eq(schema.clients.id, schema.timesheetEntries.clientId))
+        .innerJoin(schema.users, eq(schema.users.id, schema.timesheetEntries.userId))
+        .where(and(eq(schema.timesheetTypes.kind, "travel"), sql`${schema.timesheetEntries.amountCents} > 0`, sql`${schema.timesheetEntries.billableX100} > 0`, gte(schema.timesheetEntries.date, since)));
+      for (const { e, companyId, who } of trips) {
+        if (companyId == null) continue;
+        items.push({
+          id: `ptravel:${e.id}`,
+          kind: "charge",
+          companyId,
+          date: e.date,
+          description: ["Déplacement", e.ticketTitle, e.note].filter(Boolean).join(" — ").slice(0, 2000),
+          ticketNumber: e.ticketNumber,
+          resourceName: who,
+          quantity: 1,
+          unitPriceCents: e.amountCents,
           taxable: true,
         });
       }

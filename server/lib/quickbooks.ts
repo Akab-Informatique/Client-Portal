@@ -486,6 +486,9 @@ export async function qbItemsForBillingItems(items: { id: string; sourceId: stri
           if (!id) id = await named(p.name, { sku: p.sku, priceCents: p.priceCents, portalService: false });
           if (p.quickbooksItemId !== id) await d.update(schema.storeProducts).set({ quickbooksItemId: id, updatedAt: new Date() }).where(eq(schema.storeProducts.id, p.id));
         } else if (charge?.name) id = await named(charge.name, { portalService: false });
+      } else if (src.startsWith("ptravel:")) {
+        // a trip billed to the client
+        id = await named("Déplacement", { portalService: false });
       } else if (src.startsWith("expense:")) {
         // an expense billed back: its expense type ("Stationnement", "Kilométrage"…)
         const [x] = await d.select({ type: schema.expenseTypes.name }).from(schema.expenses).innerJoin(schema.expenseTypes, eq(schema.expenseTypes.id, schema.expenses.typeId)).where(eq(schema.expenses.id, src.slice("expense:".length)));

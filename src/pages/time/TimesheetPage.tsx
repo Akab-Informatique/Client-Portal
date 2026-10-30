@@ -2,7 +2,7 @@ import { useMemo, useState, type FormEvent } from "react";
 import { useTranslation } from "react-i18next";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
-import { BarChart3, ChevronDown, ChevronLeft, ChevronRight, ChevronsDownUp, ChevronsUpDown, Clock, FileText, ListTree, Loader2, PiggyBank, Pencil, Plus, Send, Sun, Ticket, Trash2, UserCog } from "lucide-react";
+import { BarChart3, Car, ChevronDown, ChevronLeft, ChevronRight, ChevronsDownUp, ChevronsUpDown, Clock, FileText, ListTree, Loader2, PartyPopper, PiggyBank, Pencil, Plus, Send, Sun, Thermometer, Ticket, Trash2, TreePalm, UserCog, Users, type LucideIcon } from "lucide-react";
 import { GlassBackdrop } from "@/components/brand/GlassBackdrop";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
@@ -14,17 +14,17 @@ import { api, ApiError } from "@/lib/api";
 import { useCan, useMe } from "@/lib/session";
 import { cn } from "@/lib/utils";
 import { useTicketWorkspace } from "@/pages/tickets/workspace";
+import { TicketSearch } from "@/pages/tickets/TicketSearch";
 
-export type TimeType = { id: string; name: string; kind: "labour" | "workday" | "bankpay" | "other"; active: boolean; billable: boolean };
+export type TimeKind = "labour" | "workday" | "bankpay" | "vacation" | "sick" | "holiday" | "travel" | "other";
+export type TimeType = { id: string; name: string; kind: TimeKind; active: boolean; billable: boolean };
 type Entry = {
   id: string;
   date: string;
   typeId: string;
   type: string;
-  kind: string;
+  kind: TimeKind;
   hours: number;
-  /** The hours of it that count as billable time */
-  billableHours: number;
   note: string | null;
   ticketId: number | null;
   ticketNumber: string | null;
@@ -32,11 +32,27 @@ type Entry = {
   startTime: string | null;
   endTime: string | null;
   lunchMinutes: number | null;
-  /** Banked instead of paid */
-  banked: boolean;
-  source: "ticket" | "manual";
+  /** A work day: hours (×100) put in the hours bank instead of being paid */
+  bankX100: number;
+  /** A trip billed to a client, or the holiday pay worked out */
+  amountCents: number | null;
+  billableX100: number | null;
+  clientId: string | null;
+  source: "ticket" | "manual" | "project";
 };
 type Person = { id: string; name: string; email: string; timesheetRequired: boolean };
+type Pay = {
+  wageCents: number | null;
+  workdayHours: number;
+  bankedHours: number;
+  workdayPaidHours: number;
+  vacationHours: number;
+  sickHours: number;
+  holidayHours: number;
+  holidayCents: number;
+  bankPaidHours: number;
+  paidHours: number;
+};
 type Week = {
   userId: string;
   required: boolean;
@@ -45,21 +61,10 @@ type Week = {
   status: "draft" | "submitted" | "approved" | "rejected" | "paid";
   comment: string | null;
   entries: Entry[];
-  types: { type: string; kind: string; hours: number; billableHours: number }[];
-  labourHours: number;
-  labourBilledHours: number;
-  /** The hours worked: every type but the work day */
-  totalHours: number;
-  billableHours: number;
-  nonBillableHours: number;
-  billableRatio: number | null;
-  workdayHours: number;
-  /** Hours banked instead of paid (part of the hours worked) */
-  bankedHours: number;
-  /** Hours paid out of the bank this week (not hours worked) */
-  bankPaidHours: number;
-  /** What the bank holds: every hour banked, less the ones paid out of it */
-  bankBalanceHours: number;
+  types: { type: string; kind: string; hours: number }[];
+  /** Time entered on tickets and by hand (training, meetings, trips) */
+  enteredHours: number;
+  pay: Pay;
 };
 
 const STATUS_STYLE: Record<Week["status"], string> = {
@@ -69,30 +74,25 @@ const STATUS_STYLE: Record<Week["status"], string> = {
   rejected: "border-red-500/40 bg-red-500/10 text-red-300",
   paid: "border-[color:var(--gold)]/40 bg-[color:var(--gold)]/10 text-primary",
 };
+const KIND_ICON: Record<string, { icon: LucideIcon; tone: string }> = {
+  workday: { icon: Sun, tone: "text-amber-300" },
+  bankpay: { icon: PiggyBank, tone: "text-sky-300" },
+  vacation: { icon: TreePalm, tone: "text-emerald-300" },
+  sick: { icon: Thermometer, tone: "text-rose-300" },
+  holiday: { icon: PartyPopper, tone: "text-violet-300" },
+  travel: { icon: Car, tone: "text-primary" },
+  labour: { icon: Ticket, tone: "text-primary" },
+  other: { icon: Users, tone: "text-muted-foreground" },
+};
 const addDays = (day: string, n: number) => {
   const d = new Date(`${day}T12:00:00Z`);
   d.setUTCDate(d.getUTCDate() + n);
   return d.toISOString().slice(0, 10);
 };
 const minutesOf = (t: string) => (t.length >= 5 ? Number(t.slice(0, 2)) * 60 + Number(t.slice(3, 5)) : NaN);
-
-/** Billed / not billed, on an entry. */
-function BillTag({ e }: { e: Entry }) {
-  const { t } = useTranslation();
-  if (e.kind === "workday" || e.kind === "bankpay") return null;
-  const full = e.billableHours >= e.hours - 0.001;
-  const none = e.billableHours <= 0.001;
-  return (
-    <span
-      className={cn(
-        "shrink-0 rounded-full border px-1.5 py-px text-[10px] font-medium",
-        none ? "border-border text-muted-foreground" : full ? "border-emerald-400/40 bg-emerald-500/10 text-emerald-300" : "border-amber-400/40 bg-amber-500/10 text-amber-300",
-      )}
-    >
-      {none ? t("timesheet.notBilled") : full ? t("timesheet.billed") : t("timesheet.partlyBilled")}
-    </span>
-  );
-}
+/** The hours of an entry that are paid to the employee: the work day less what is banked, vacation, sick days, holidays and bank payouts. The rest is time entered inside the work day. */
+const paidOf = (e: Entry) => (e.kind === "workday" ? Math.max(0, e.hours - e.bankX100 / 100) : ["vacation", "sick", "holiday", "bankpay"].includes(e.kind) ? e.hours : 0);
+const isEntered = (e: Entry) => ["labour", "other", "travel"].includes(e.kind);
 
 /** A figure of a day: a small label over its value */
 function Figure({ label, value, tone }: { label: string; value: string; tone?: "good" | "muted" }) {
@@ -104,22 +104,30 @@ function Figure({ label, value, tone }: { label: string; value: string; tone?: "
   );
 }
 
-/** Banked instead of paid. */
-function BankTag() {
+/** What went wrong, in words */
+function useErrorText() {
   const { t } = useTranslation();
-  return (
-    <span className="flex shrink-0 items-center gap-1 rounded-full border border-sky-400/40 bg-sky-500/10 px-1.5 py-px text-[10px] font-medium text-sky-300">
-      <PiggyBank className="size-2.5" /> {t("timesheet.bankTag")}
-    </span>
-  );
+  return (e: unknown) => {
+    const code = e instanceof ApiError ? e.code : "";
+    const known: Record<string, string> = {
+      timesheet_locked: "timesheet.locked",
+      workday_exists: "timesheet.workdayExists",
+      workday_times: "timesheet.workdayTimes",
+      bank_too_large: "timesheet.bankTooLarge",
+      hr_wage_missing: "timesheet.wageMissing",
+      travel_amount_required: "timesheet.travelAmountRequired",
+      travel_client_required: "timesheet.travelClientRequired",
+      entry_billed: "timesheet.entryBilled",
+    };
+    return t(known[code] ?? "common.error");
+  };
 }
 
 /**
- * My tools › Timesheet: the week. Time logged on tickets is already there
- * (with the ticket; a click opens it); other hours are added by type, the
- * work day with its start, end and lunch; then the week is sent for approval.
- * The side shows the hours per type, the time worked (the work day is not
- * counted in it) and how much of it is billable.
+ * My tools › Timesheet: the week. Time logged on tickets is already there (with the ticket; a click opens it); the other
+ * entries are added by type: work day (start, end, hours put in the bank), hours paid out of the bank, training, meeting, trip,
+ * vacation, sick day, holiday. The side shows the hours that are PAID this week (work days, vacation, sick days, holidays,
+ * bank payouts); billable and non billable time are kept per client and are not shown here.
  */
 export function TimesheetPage() {
   const { t, i18n } = useTranslation();
@@ -127,6 +135,7 @@ export function TimesheetPage() {
   const me = useMe();
   const can = useCan();
   const ws = useTicketWorkspace();
+  const errorText = useErrorText();
   // managers pick whose timesheet (their own by default)
   const manager = can("timesheets.manage");
   const [who, setWho] = useState(me.id);
@@ -147,7 +156,7 @@ export function TimesheetPage() {
   const remove = useMutation({
     mutationFn: (id: string) => api.del(`/time/entries/${id}`),
     onSuccess: refresh,
-    onError: (e) => toast.error(e instanceof ApiError && e.code === "bank_in_use" ? t("timesheet.bankInUse") : t("common.error")),
+    onError: (e) => toast.error(errorText(e)),
   });
   const submit = useMutation({
     mutationFn: () => api.post("/time/week/submit", { weekStart: week!.weekStart, ...(others ? { userId: who } : {}) }),
@@ -160,8 +169,11 @@ export function TimesheetPage() {
   const dayName = (d: string) => new Intl.DateTimeFormat(loc, { weekday: "long", day: "numeric", month: "short" }).format(new Date(`${d}T12:00:00`));
   const days = week ? Array.from({ length: 7 }, (_, i) => addDays(week.weekStart, i)) : [];
   const hours = (n: number) => n.toLocaleString(loc, { maximumFractionDigits: 2 });
+  const money = (cents: number) => new Intl.NumberFormat(loc, { style: "currency", currency: "CAD" }).format(cents / 100);
   const workdays = week?.entries.filter((e) => e.kind === "workday") ?? [];
   const allOpen = days.length > 0 && days.every((d) => open[d]);
+  // an entry made by hand: its owner changes it until the week is sent; a manager any time
+  const canChange = (e: Entry) => e.source === "manual" && (editable || manager);
 
   return (
     <div className="relative isolate space-y-5">
@@ -212,7 +224,7 @@ export function TimesheetPage() {
       {isLoading && <Loader2 className="mx-auto my-10 size-6 animate-spin text-muted-foreground" />}
       {week && (
         <div className="flex flex-wrap items-center gap-2">
-          {editable && (
+          {(editable || manager) && (
             <Button className="bg-grad-gold font-semibold text-[#1a1204] hover:brightness-105" onClick={() => setAdding(true)}>
               <Plus className="size-4" /> {t("timesheet.addEntry")}
             </Button>
@@ -220,17 +232,22 @@ export function TimesheetPage() {
           <Button variant="outline" onClick={() => setReport(true)}>
             <BarChart3 className="size-4" /> {t("timesheet.report")}
           </Button>
-          {week && week.status !== "draft" && (
+          {week.status !== "draft" && (
             <Button variant="outline" asChild>
               <a href={`/api/time/week/pdf?start=${week.weekStart}${others ? `&userId=${who}` : ""}`} target="_blank" rel="noreferrer">
                 <FileText className="size-4" /> {t("timesheet.pdf")}
               </a>
             </Button>
           )}
-          <Button variant="ghost" size="sm" className="ml-auto gap-1.5 text-muted-foreground" onClick={() => {
+          <Button
+            variant="ghost"
+            size="sm"
+            className="ml-auto gap-1.5 text-muted-foreground"
+            onClick={() => {
               setOpen(allOpen ? {} : Object.fromEntries(days.map((d) => [d, true])));
               if (allOpen) setDetail({});
-            }}>
+            }}
+          >
             {allOpen ? <ChevronsDownUp className="size-4" /> : <ChevronsUpDown className="size-4" />} {allOpen ? t("timesheet.collapseAll") : t("timesheet.expandAll")}
           </Button>
         </div>
@@ -240,15 +257,12 @@ export function TimesheetPage() {
           <div className="space-y-3">
             {days.map((d) => {
               const list = week.entries.filter((e) => e.date === d);
-              const worked = list.filter((e) => e.kind !== "workday" && e.kind !== "bankpay").reduce((x, e) => x + e.hours, 0);
+              const entered = list.filter(isEntered).reduce((x, e) => x + e.hours, 0);
               const wd = list.filter((e) => e.kind === "workday").reduce((x, e) => x + e.hours, 0);
-              const paidFromBank = list.filter((e) => e.kind === "bankpay").reduce((x, e) => x + e.hours, 0);
+              const banked = list.filter((e) => e.kind === "workday").reduce((x, e) => x + e.bankX100 / 100, 0);
+              const paid = list.reduce((x, e) => x + paidOf(e), 0);
               const isOpen = Boolean(open[d]);
               const showDetail = Boolean(detail[d]);
-              // the day in three figures: what was worked, what of it is billable, what is not
-              const real = list.filter((e) => e.kind !== "workday" && e.kind !== "bankpay");
-              const billable = real.reduce((x, e) => x + Math.min(e.billableHours, e.hours), 0);
-              const nonBillable = Math.max(0, worked - billable);
               return (
                 <section key={d} className={cn("glass rounded-2xl border", !list.length && "opacity-70")}>
                   <button type="button" aria-expanded={isOpen} onClick={() => setOpen((c) => ({ ...c, [d]: !c[d] }))} className="flex w-full items-center gap-3 px-4 py-2 text-left">
@@ -259,12 +273,14 @@ export function TimesheetPage() {
                         <Sun className="size-3" /> {hours(wd)} h
                       </span>
                     )}
-                    {paidFromBank > 0 && (
-                      <span className="flex items-center gap-1 rounded-full border border-sky-400/30 bg-sky-500/10 px-2 py-px text-[11px] text-sky-300" title={t("timesheet.bankPay")}>
-                        <PiggyBank className="size-3" /> −{hours(paidFromBank)} h
+                    {banked > 0 && (
+                      <span className="flex items-center gap-1 rounded-full border border-sky-400/30 bg-sky-500/10 px-2 py-px text-[11px] text-sky-300" title={t("timesheet.bankedWeek")}>
+                        <PiggyBank className="size-3" /> {hours(banked)} h
                       </span>
                     )}
-                    <span className="font-mono text-sm">{worked ? `${hours(worked)} h` : "—"}</span>
+                    <span className="font-mono text-sm" title={t("timesheet.paidDay")}>
+                      {paid ? `${hours(paid)} h` : "—"}
+                    </span>
                   </button>
                   {isOpen && (
                     <div className="space-y-2 border-t px-4 py-2.5">
@@ -274,9 +290,9 @@ export function TimesheetPage() {
                         <>
                           {/* the figures of the day, and the way to its details */}
                           <div className="flex flex-wrap items-center gap-x-6 gap-y-1.5 text-sm">
-                            <Figure label={t("timesheet.worked")} value={`${hours(worked)} h`} />
-                            <Figure label={t("timesheet.billable")} value={`${hours(billable)} h`} tone="good" />
-                            <Figure label={t("timesheet.nonBillable")} value={`${hours(nonBillable)} h`} tone={nonBillable > 0 ? "muted" : undefined} />
+                            <Figure label={t("timesheet.workday")} value={`${hours(wd)} h`} />
+                            <Figure label={t("timesheet.entered")} value={`${hours(entered)} h`} tone={entered < wd - 0.001 ? "muted" : undefined} />
+                            <Figure label={t("timesheet.paidDay")} value={`${hours(paid)} h`} tone="good" />
                             <button
                               type="button"
                               onClick={() => setDetail((c) => ({ ...c, [d]: !c[d] }))}
@@ -292,20 +308,17 @@ export function TimesheetPage() {
                                 <tr className="border-b text-left text-[10px] uppercase tracking-wide text-muted-foreground">
                                   <th className="py-1 pr-2 font-medium">{t("timesheet.colEntry")}</th>
                                   <th className="w-20 py-1 text-right font-medium">{t("timesheet.colHours")}</th>
-                                  <th className="w-24 py-1 text-right font-medium">{t("timesheet.billable")}</th>
-                                  <th className="w-24 py-1 text-right font-medium">{t("timesheet.nonBillable")}</th>
-                                  <th className="w-7" />
+                                  <th className="w-16 py-1" />
                                 </tr>
                               </thead>
                               <tbody className="divide-y divide-border/50">
                                 {list.map((e) => {
-                                  const openTicket = e.source === "ticket" && e.ticketId != null && can("tickets.view");
-                                  const paid = e.kind !== "workday" && e.kind !== "bankpay";
-                                  const bill = paid ? Math.min(e.billableHours, e.hours) : 0;
-                                  const name = e.kind === "workday" ? (e.startTime && e.endTime ? `${e.type} · ${e.startTime}–${e.endTime}` : e.type) : e.source === "ticket" ? null : e.type;
+                                  const openTicket = e.ticketId != null && e.kind === "labour" && can("tickets.view");
+                                  const { icon: Icon, tone } = KIND_ICON[e.kind] ?? KIND_ICON.other;
+                                  const name = e.kind === "workday" ? (e.startTime && e.endTime ? `${e.type} · ${e.startTime}–${e.endTime}` : e.type) : e.source === "ticket" ? null : e.ticketNumber && e.kind === "travel" ? `${e.type} · ${e.ticketNumber}` : e.type;
                                   const label = (
                                     <span className="flex min-w-0 items-center gap-2">
-                                      {e.kind === "workday" ? <Sun className="size-3.5 shrink-0 text-amber-300" /> : e.kind === "bankpay" ? <PiggyBank className="size-3.5 shrink-0 text-sky-300" /> : e.source === "ticket" ? <Ticket className="size-3.5 shrink-0 text-primary" /> : <Clock className="size-3.5 shrink-0 text-muted-foreground" />}
+                                      <Icon className={cn("size-3.5 shrink-0", tone)} />
                                       {name === null ? (
                                         <span className="min-w-0 truncate">
                                           <span className="font-mono text-xs text-muted-foreground">{e.ticketNumber}</span> {e.ticketTitle}
@@ -313,7 +326,13 @@ export function TimesheetPage() {
                                       ) : (
                                         <span className="min-w-0 truncate">{name}</span>
                                       )}
-                                      {e.banked && <BankTag />}
+                                      {e.kind === "workday" && e.bankX100 > 0 && (
+                                        <span className="flex shrink-0 items-center gap-1 rounded-full border border-sky-400/40 bg-sky-500/10 px-1.5 py-px text-[10px] font-medium text-sky-300">
+                                          <PiggyBank className="size-2.5" /> {hours(e.bankX100 / 100)} h
+                                        </span>
+                                      )}
+                                      {e.kind === "holiday" && e.amountCents != null && <span className="shrink-0 text-[10px] text-violet-300">{money(e.amountCents)}</span>}
+                                      {e.kind === "travel" && e.amountCents != null && <span className="shrink-0 text-[10px] text-emerald-300">{t("timesheet.travelBilled", { amount: money(e.amountCents) })}</span>}
                                     </span>
                                   );
                                   return (
@@ -328,16 +347,13 @@ export function TimesheetPage() {
                                         )}
                                       </td>
                                       <td className="py-1.5 text-right font-mono">{e.kind === "bankpay" ? `−${hours(e.hours)}` : hours(e.hours)}</td>
-                                      <td className="py-1.5 text-right font-mono text-emerald-300">{paid ? hours(bill) : "—"}</td>
-                                      <td className="py-1.5 text-right font-mono text-muted-foreground">{paid ? hours(Math.max(0, e.hours - bill)) : "—"}</td>
                                       <td className="py-1.5 text-right">
-                                        {/* an entry made by hand: its owner changes it until the week is paid (a sent week opens again), a manager changes or removes anything */}
-                                        {e.source === "manual" && (editable || manager || week.status !== "paid") && (
+                                        {canChange(e) && (
                                           <button type="button" onClick={() => setChanging(e)} className="rounded p-1 text-muted-foreground opacity-0 hover:text-foreground group-hover:opacity-100" aria-label={t("timesheet.change")}>
                                             <Pencil className="size-3.5" />
                                           </button>
                                         )}
-                                        {e.source === "manual" && (editable || manager) && (
+                                        {canChange(e) && (
                                           <button type="button" onClick={() => remove.mutate(e.id)} className="rounded p-1 text-muted-foreground opacity-0 hover:text-destructive group-hover:opacity-100" aria-label={t("timesheet.remove")}>
                                             <Trash2 className="size-3.5" />
                                           </button>
@@ -366,13 +382,13 @@ export function TimesheetPage() {
               </div>
               {week.status === "rejected" && week.comment && <p className="rounded-lg border border-red-500/30 bg-red-500/10 p-2 text-xs text-red-200">{week.comment}</p>}
 
-              {/* the work days: apart, not part of the hours worked */}
+              {/* the work days: start to end, lunch taken off */}
               <div className="rounded-xl border border-amber-400/25 bg-amber-500/[0.06] p-3">
                 <div className="flex items-center justify-between text-sm">
                   <span className="flex items-center gap-1.5 font-medium">
                     <Sun className="size-3.5 text-amber-300" /> {t("timesheet.workdays")}
                   </span>
-                  <span className="font-mono">{hours(week.workdayHours)} h</span>
+                  <span className="font-mono">{hours(week.pay.workdayHours)} h</span>
                 </div>
                 {workdays.length > 0 ? (
                   <ul className="mt-1.5 space-y-0.5 text-[11px] text-muted-foreground">
@@ -388,67 +404,64 @@ export function TimesheetPage() {
                 ) : (
                   <p className="mt-1 text-[11px] text-muted-foreground">{t("timesheet.noWorkday")}</p>
                 )}
-                <p className="mt-1.5 text-[10px] text-muted-foreground">{t("timesheet.workdayNote")}</p>
               </div>
 
-              {/* hours per type: ticket time split into billed and not billed */}
+              {/* hours per type */}
               <ul className="space-y-1 text-sm">
-                {week.types.flatMap((x) =>
-                  x.kind === "labour"
-                    ? [
-                        { key: `${x.type}-b`, label: `${x.type} · ${t("timesheet.billed").toLowerCase()}`, hours: x.billableHours, on: true, bold: true },
-                        { key: `${x.type}-n`, label: `${x.type} · ${t("timesheet.notBilled").toLowerCase()}`, hours: x.hours - x.billableHours, on: false, bold: true },
-                      ]
-                    : [{ key: x.type, label: x.type, hours: x.hours, on: x.billableHours > 0, bold: false }],
-                ).map((r) => (
-                  <li key={r.key} className="flex items-center justify-between gap-2">
-                    <span className={cn("flex min-w-0 items-center gap-1.5", r.bold && "font-medium")}>
-                      <span className={cn("size-1.5 shrink-0 rounded-full", r.on ? "bg-emerald-400" : "bg-muted-foreground/40")} />
-                      <span className="truncate">{r.label}</span>
-                    </span>
-                    <span className="font-mono">{hours(r.hours)} h</span>
+                {week.types.map((x) => (
+                  <li key={x.type} className="flex items-center justify-between gap-2">
+                    <span className="truncate">{x.type}</span>
+                    <span className="font-mono">{hours(x.hours)} h</span>
                   </li>
                 ))}
                 {!week.types.length && <li className="text-xs text-muted-foreground">{t("timesheet.empty")}</li>}
               </ul>
 
-              {/* the totals: what was worked, what of it is billable, and the ratio */}
-              <div className="space-y-1.5 border-t pt-2 text-sm">
-                <div className="flex justify-between font-semibold">
-                  <span>{t("timesheet.worked")}</span>
-                  <span className="font-mono">{hours(week.totalHours)} h</span>
+              {/* what is PAID this week */}
+              <div className="space-y-1.5 rounded-xl border border-emerald-400/25 bg-emerald-500/[0.05] p-3 text-sm">
+                <p className="text-[11px] font-semibold uppercase tracking-wide text-emerald-300">{t("timesheet.paid")}</p>
+                <div className="flex justify-between">
+                  <span>{t("timesheet.paidWorkdays")}</span>
+                  <span className="font-mono">{hours(week.pay.workdayPaidHours)} h</span>
                 </div>
-                <div className="flex justify-between text-emerald-300">
-                  <span>{t("timesheet.billable")}</span>
-                  <span className="font-mono">{hours(week.billableHours)} h</span>
-                </div>
-                <div className="flex justify-between text-muted-foreground">
-                  <span>{t("timesheet.nonBillable")}</span>
-                  <span className="font-mono">{hours(week.nonBillableHours)} h</span>
-                </div>
-                <Ratio worked={week.totalHours} billable={week.billableHours} ratio={week.billableRatio} label={t("timesheet.ratio")} />
-              </div>
-
-              {/* the hours bank: what it holds, what went in and what was paid out of it this week */}
-              <div className="space-y-1 rounded-xl border border-sky-400/25 bg-sky-500/[0.06] p-3 text-sm">
-                <div className="flex items-center justify-between">
-                  <span className="flex items-center gap-1.5 font-medium text-sky-300">
-                    <PiggyBank className="size-3.5" /> {t("timesheet.bankBalance")}
-                  </span>
-                  <span className="font-mono font-semibold">{hours(week.bankBalanceHours)} h</span>
-                </div>
-                {week.bankedHours > 0 && (
+                {week.pay.bankedHours > 0 && (
                   <div className="flex justify-between text-xs text-muted-foreground">
-                    <span>{t("timesheet.bankedWeek")}</span>
-                    <span className="font-mono text-sky-300">+{hours(week.bankedHours)} h</span>
+                    <span className="flex items-center gap-1">
+                      <PiggyBank className="size-3 text-sky-300" /> {t("timesheet.bankedWeek")}
+                    </span>
+                    <span className="font-mono text-sky-300">{hours(week.pay.bankedHours)} h</span>
                   </div>
                 )}
-                {week.bankPaidHours > 0 && (
-                  <div className="flex justify-between text-xs text-muted-foreground">
-                    <span>{t("timesheet.bankPaidWeek")}</span>
-                    <span className="font-mono text-sky-300">−{hours(week.bankPaidHours)} h</span>
+                {week.pay.vacationHours > 0 && (
+                  <div className="flex justify-between">
+                    <span>{t("timesheet.paidVacation")}</span>
+                    <span className="font-mono">{hours(week.pay.vacationHours)} h</span>
                   </div>
                 )}
+                {week.pay.sickHours > 0 && (
+                  <div className="flex justify-between">
+                    <span>{t("timesheet.paidSick")}</span>
+                    <span className="font-mono">{hours(week.pay.sickHours)} h</span>
+                  </div>
+                )}
+                {week.pay.holidayHours > 0 && (
+                  <div className="flex justify-between">
+                    <span>{t("timesheet.paidHoliday")}</span>
+                    <span className="font-mono">
+                      {hours(week.pay.holidayHours)} h <span className="text-[11px] text-violet-300">({money(week.pay.holidayCents)})</span>
+                    </span>
+                  </div>
+                )}
+                {week.pay.bankPaidHours > 0 && (
+                  <div className="flex justify-between">
+                    <span>{t("timesheet.paidBank")}</span>
+                    <span className="font-mono">{hours(week.pay.bankPaidHours)} h</span>
+                  </div>
+                )}
+                <div className="flex justify-between border-t pt-1.5 font-semibold">
+                  <span>{t("timesheet.paidTotal")}</span>
+                  <span className="font-mono">{hours(week.pay.paidHours)} h</span>
+                </div>
               </div>
 
               {!week.required && <p className="rounded-lg border bg-background/40 p-2 text-xs text-muted-foreground">{t("timesheet.notRequired")}</p>}
@@ -463,117 +476,22 @@ export function TimesheetPage() {
         </div>
       )}
 
-      {week && changing && <ChangeEntryDialog entry={changing} days={days} dayName={dayName} sent={!editable && !manager} onClose={() => setChanging(null)} onDone={refresh} />}
-      {week && editable && <EntryDialog open={adding} onOpenChange={setAdding} week={week} days={days} dayName={dayName} userId={others ? who : null} onDone={refresh} />}
+      {week && changing && <EntryDialog key={changing.id} entry={changing} onOpenChange={(o) => !o && setChanging(null)} week={week} days={days} dayName={dayName} userId={others ? who : null} onDone={refresh} />}
+      {week && adding && <EntryDialog key="new" onOpenChange={setAdding} week={week} days={days} dayName={dayName} userId={others ? who : null} onDone={refresh} />}
       {week && <ReportDialog open={report} onOpenChange={setReport} week={week} days={days} dayName={dayName} hours={hours} personName={others && person ? person.name : me.name} />}
     </div>
   );
 }
 
-/** Billable time over the time worked: a bar and a percentage. */
-function Ratio({ worked, billable, ratio, label }: { worked: number; billable: number; ratio: number | null; label: string }) {
-  return (
-    <div className="space-y-1 pt-1">
-      <div className="flex items-center justify-between text-xs text-muted-foreground">
-        <span>{label}</span>
-        <span className="font-mono text-sm font-semibold text-foreground">{ratio === null ? "—" : `${ratio.toLocaleString(undefined, { maximumFractionDigits: 1 })} %`}</span>
-      </div>
-      <div className="h-2 overflow-hidden rounded-full bg-muted/60" role="progressbar" aria-valuenow={ratio ?? 0} aria-valuemin={0} aria-valuemax={100}>
-        <div className="h-full rounded-full bg-gradient-to-r from-emerald-400 to-emerald-300 transition-all" style={{ width: `${worked ? Math.min(100, (billable / worked) * 100) : 0}%` }} />
-      </div>
-    </div>
-  );
-}
+type TicketPick = { id: number; number: string; title: string };
 
-/** Change an entry made by hand: hours (or start and end of a work day), note, day. On a week already sent, the week opens again. */
-function ChangeEntryDialog({ entry, days, dayName, sent, onClose, onDone }: { entry: Entry; days: string[]; dayName: (d: string) => string; sent: boolean; onClose: () => void; onDone: () => void }) {
-  const { t } = useTranslation();
-  const isWorkday = entry.kind === "workday";
-  const [f, setF] = useState({ date: entry.date, hours: String(entry.hours), note: entry.note ?? "", start: entry.startTime ?? "08:00", end: entry.endTime ?? "16:30", banked: entry.banked });
-  const asked = Number(f.hours.replace(",", "."));
-  const span = minutesOf(f.end) - minutesOf(f.start) - unpaidLunch(minutesOf(f.start), minutesOf(f.end));
-  const valid = isWorkday ? Number.isFinite(span) && span > 0 && span <= 24 * 60 : asked > 0 && asked <= 24;
-  const save = useMutation({
-    mutationFn: () => api.patch(`/time/entries/${entry.id}`, { date: f.date, note: f.note, ...(isWorkday ? { start: f.start, end: f.end } : { hours: asked }), ...(entry.kind === "bankpay" || isWorkday ? {} : { banked: f.banked }) }),
-    onSuccess: () => {
-      toast.success(sent ? t("timesheet.changedReopened") : t("common.saved"));
-      onDone();
-      onClose();
-    },
-    onError: (e) =>
-      toast.error(
-        e instanceof ApiError && e.code === "timesheet_locked" ? t("timesheet.locked") : e instanceof ApiError && e.code === "workday_exists" ? t("timesheet.workdayExists") : e instanceof ApiError && e.code === "bank_insufficient" ? t("timesheet.bankInsufficient") : e instanceof ApiError && e.code === "bank_in_use" ? t("timesheet.bankInUse") : t("common.error"),
-      ),
-  });
-  return (
-    <Dialog open onOpenChange={(o) => !o && onClose()}>
-      <DialogContent className="sm:max-w-md">
-        <DialogHeader>
-          <DialogTitle className="flex items-center gap-2">
-            <Pencil className="size-5 text-primary" /> {t("timesheet.change")} — {entry.type}
-          </DialogTitle>
-          <DialogDescription>{sent ? t("timesheet.changeSentHint") : t("timesheet.changeHint")}</DialogDescription>
-        </DialogHeader>
-        <form
-          className="space-y-3"
-          onSubmit={(e: FormEvent) => {
-            e.preventDefault();
-            if (valid) save.mutate();
-          }}
-        >
-          <label className="block space-y-1 text-xs">
-            <span className="text-muted-foreground">{t("timesheet.day")}</span>
-            <select value={f.date} onChange={(e) => setF({ ...f, date: e.target.value })} className="h-9 w-full rounded-md border bg-transparent px-2 text-sm capitalize">
-              {days.map((d) => (
-                <option key={d} value={d}>
-                  {dayName(d)}
-                </option>
-              ))}
-            </select>
-          </label>
-          {isWorkday ? (
-            <div className="grid grid-cols-2 gap-3">
-              <label className="space-y-1 text-xs">
-                <span className="text-muted-foreground">{t("timesheet.startTime")}</span>
-                <Input type="time" value={f.start} onChange={(e) => setF({ ...f, start: e.target.value })} />
-              </label>
-              <label className="space-y-1 text-xs">
-                <span className="text-muted-foreground">{t("timesheet.endTime")}</span>
-                <Input type="time" value={f.end} onChange={(e) => setF({ ...f, end: e.target.value })} />
-              </label>
-            </div>
-          ) : (
-            <label className="block space-y-1 text-xs">
-              <span className="text-muted-foreground">{t("timesheet.hours")}</span>
-              <Input value={f.hours} inputMode="decimal" onChange={(e) => setF({ ...f, hours: e.target.value })} className="font-mono" />
-            </label>
-          )}
-          <label className="block space-y-1 text-xs">
-            <span className="text-muted-foreground">{t("timesheet.note")}</span>
-            <Input value={f.note} maxLength={500} onChange={(e) => setF({ ...f, note: e.target.value })} />
-          </label>
-          {entry.kind !== "bankpay" && !isWorkday && (
-            <label className="flex items-center gap-2 text-xs">
-              <Switch checked={f.banked} onCheckedChange={(v) => setF({ ...f, banked: v })} /> {t("timesheet.bankEntry")}
-            </label>
-          )}
-          <div className="flex justify-end gap-2">
-            <Button type="button" variant="ghost" onClick={onClose}>
-              {t("common.cancel")}
-            </Button>
-            <Button type="submit" disabled={!valid || save.isPending} className="bg-grad-gold font-semibold text-[#1a1204]">
-              {save.isPending && <Loader2 className="size-4 animate-spin" />} {t("common.save")}
-            </Button>
-          </div>
-        </form>
-      </DialogContent>
-    </Dialog>
-  );
-}
-
-/** "Add a time entry": a centered window over the page. The work day takes its start, end and lunch. */
+/**
+ * Add an entry, or change one made by hand (`entry`). What it asks depends on the type: a work day takes its start and end
+ * (lunch taken off) and the hours put in the hours bank; a holiday is worked out for you; a trip can name a client and a
+ * ticket and be billed with an amount; everything else is hours.
+ */
 function EntryDialog({
-  open,
+  entry,
   onOpenChange,
   week,
   days,
@@ -581,7 +499,7 @@ function EntryDialog({
   userId,
   onDone,
 }: {
-  open: boolean;
+  entry?: Entry;
   onOpenChange: (o: boolean) => void;
   week: Week;
   days: string[];
@@ -590,56 +508,70 @@ function EntryDialog({
   onDone: () => void;
 }) {
   const { t } = useTranslation();
-  const me = useMe();
+  const errorText = useErrorText();
   const { data: types } = useQuery({ queryKey: ["time", "types"], queryFn: () => api.get<{ time: TimeType[] }>("/time/types") });
-  // banked instead of paid: what the profile says, for each entry
-  const [banked, setBanked] = useState<boolean | null>(null);
-  const bankOn = banked ?? me.preferences.bankHours;
+  // only what a person can enter by hand: ticket time comes from the tickets
   const manual = (types?.time ?? []).filter((x) => x.kind !== "labour");
-  const [f, setF] = useState({ date: "", typeId: "", hours: "", note: "", start: "08:00", end: "16:30" });
+  const [f, setF] = useState({
+    date: entry?.date ?? week.weekStart,
+    typeId: entry?.typeId ?? "",
+    hours: entry && entry.kind !== "workday" ? String(entry.hours) : "",
+    note: entry?.note ?? "",
+    start: entry?.startTime ?? "08:00",
+    end: entry?.endTime ?? "16:30",
+    bank: entry && entry.bankX100 ? String(entry.bankX100 / 100) : "",
+    clientId: entry?.clientId ?? "",
+    billable: (entry?.billableX100 ?? 0) > 0,
+    amount: entry?.amountCents != null && entry.kind === "travel" ? String(entry.amountCents / 100) : "",
+  });
+  const [ticket, setTicket] = useState<TicketPick | null>(entry?.ticketId ? { id: entry.ticketId, number: entry.ticketNumber ?? "", title: entry.ticketTitle ?? "" } : null);
   const type = manual.find((x) => x.id === f.typeId);
-  const isWorkday = type?.kind === "workday";
-  const isBankPay = type?.kind === "bankpay";
-  const hoursAsked = Number(f.hours.replace(",", "."));
+  const kind = type?.kind ?? entry?.kind;
+  const num = (v: string) => Number(v.replace(",", "."));
   const span = minutesOf(f.end) - minutesOf(f.start) - unpaidLunch(minutesOf(f.start), minutesOf(f.end));
   const workdayOk = Number.isFinite(span) && span > 0 && span <= 24 * 60;
-  const add = useMutation({
-    mutationFn: () =>
-      api.post("/time/entries", {
-        date: f.date || week.weekStart,
-        typeId: f.typeId,
-        note: f.note || undefined,
-        ...(isWorkday ? { start: f.start, end: f.end } : { hours: hoursAsked, ...(isBankPay ? {} : { banked: bankOn }) }),
-        ...(userId ? { userId } : {}),
-      }),
-    onSuccess: () => {
+  const bankAsked = f.bank ? num(f.bank) : 0;
+  const { data: clients } = useQuery({ queryKey: ["crm", "clients", "pick"], queryFn: () => api.get<{ id: string; name: string }[]>("/crm/clients"), enabled: kind === "travel" });
+  const hoursAsked = num(f.hours);
+  const save = useMutation({
+    mutationFn: () => {
+      const body = {
+        date: f.date,
+        note: entry ? f.note : f.note || undefined,
+        ...(kind === "workday" ? { start: f.start, end: f.end, bankHours: bankAsked } : kind === "holiday" ? {} : { hours: hoursAsked }),
+        ...(kind === "travel" ? { ticketId: ticket?.id ?? null, clientId: ticket ? null : f.clientId || null, billable: f.billable, ...(f.billable ? { amount: num(f.amount) } : {}) } : {}),
+      };
+      return entry ? api.patch<{ negative?: string[] }>(`/time/entries/${entry.id}`, body) : api.post<{ negative?: string[] }>("/time/entries", { ...body, typeId: f.typeId, ...(userId ? { userId } : {}) });
+    },
+    onSuccess: (r) => {
       onDone();
-      setF((x) => ({ ...x, hours: "", note: "" }));
-      setBanked(null);
+      if (r?.negative?.length) toast.warning(t("timesheet.negative"));
       onOpenChange(false);
     },
-    onError: (e) => toast.error(e instanceof ApiError && e.code === "timesheet_locked" ? t("timesheet.locked") : e instanceof ApiError && e.code === "workday_exists" ? t("timesheet.workdayExists") : e instanceof ApiError && e.code === "workday_times" ? t("timesheet.workdayTimes") : e instanceof ApiError && e.code === "bank_insufficient" ? t("timesheet.bankInsufficient") : t("common.error")),
+    onError: (e) => toast.error(errorText(e)),
   });
-  const overBank = isBankPay && hoursAsked > week.bankBalanceHours + 0.001;
-  const valid = f.typeId && (isWorkday ? workdayOk : hoursAsked > 0 && !overBank);
+  const valid =
+    Boolean(f.typeId) &&
+    (kind === "workday" ? workdayOk && bankAsked >= 0 && bankAsked <= span / 60 : kind === "holiday" ? true : hoursAsked > 0 && hoursAsked <= 24) &&
+    (kind !== "travel" || !f.billable || (num(f.amount) > 0 && Boolean(ticket || f.clientId)));
   return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="sm:max-w-md">
+    <Dialog open onOpenChange={onOpenChange}>
+      <DialogContent className="max-h-[90vh] overflow-y-auto sm:max-w-md">
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
-            <Plus className="size-5 text-primary" /> {t("timesheet.add")}
+            {entry ? <Pencil className="size-5 text-primary" /> : <Plus className="size-5 text-primary" />} {entry ? `${t("timesheet.change")} — ${entry.type}` : t("timesheet.add")}
           </DialogTitle>
-          <DialogDescription>{t("timesheet.addHint")}</DialogDescription>
+          <DialogDescription>{entry ? t("timesheet.changeHint") : t("timesheet.addHint")}</DialogDescription>
         </DialogHeader>
         <form
           className="space-y-3"
           onSubmit={(e: FormEvent) => {
             e.preventDefault();
-            if (valid) add.mutate();
+            if (valid) save.mutate();
           }}
         >
-          <Select value={f.date || week.weekStart} onValueChange={(v) => setF({ ...f, date: v })}>
-            <SelectTrigger className="w-full">
+          <Select value={f.date} onValueChange={(v) => setF({ ...f, date: v })}>
+            <SelectTrigger className="w-full" aria-label={t("timesheet.day")}>
               <SelectValue />
             </SelectTrigger>
             <SelectContent>
@@ -650,7 +582,7 @@ function EntryDialog({
               ))}
             </SelectContent>
           </Select>
-          <Select value={f.typeId} onValueChange={(v) => setF({ ...f, typeId: v })}>
+          <Select value={f.typeId} onValueChange={(v) => setF({ ...f, typeId: v })} disabled={Boolean(entry)}>
             <SelectTrigger className="w-full">
               <SelectValue placeholder={t("timesheet.type")} />
             </SelectTrigger>
@@ -662,7 +594,8 @@ function EntryDialog({
               ))}
             </SelectContent>
           </Select>
-          {isWorkday ? (
+
+          {kind === "workday" && (
             <div className="space-y-3 rounded-xl border border-amber-400/25 bg-amber-500/[0.05] p-3">
               <div className="grid grid-cols-2 gap-3">
                 <label className="space-y-1 text-xs text-muted-foreground">
@@ -675,34 +608,63 @@ function EntryDialog({
                 </label>
               </div>
               <p className="text-xs text-muted-foreground">{t("timesheet.lunchRule")}</p>
-              <p className={cn("text-sm", workdayOk ? "text-foreground" : "text-destructive")}>
-                {workdayOk ? t("timesheet.workdayTotal", { hours: (span / 60).toLocaleString(undefined, { maximumFractionDigits: 2 }) }) : t("timesheet.workdayTimes")}
-              </p>
+              <p className={cn("text-sm", workdayOk ? "text-foreground" : "text-destructive")}>{workdayOk ? t("timesheet.workdayTotal", { hours: (span / 60).toLocaleString(undefined, { maximumFractionDigits: 2 }) }) : t("timesheet.workdayTimes")}</p>
+              <label className="block space-y-1 rounded-lg border border-sky-400/25 bg-sky-500/[0.05] p-2.5 text-xs">
+                <span className="flex items-center gap-1.5 font-medium text-sky-300">
+                  <PiggyBank className="size-3.5" /> {t("timesheet.bankHours")}
+                </span>
+                <Input value={f.bank} inputMode="decimal" placeholder="0" onChange={(e) => setF({ ...f, bank: e.target.value })} className="font-mono" />
+                <span className="block text-muted-foreground">{workdayOk && bankAsked > span / 60 ? t("timesheet.bankTooLarge") : t("timesheet.bankHoursHint")}</span>
+              </label>
             </div>
-          ) : (
-            <div className="space-y-1.5">
-              <Input required inputMode="decimal" placeholder={t("timesheet.hours")} value={f.hours} onChange={(e) => setF({ ...f, hours: e.target.value })} />
-              {isBankPay && (
-                <p className={cn("flex items-center gap-1.5 text-xs", overBank ? "text-destructive" : "text-sky-300")}>
-                  <PiggyBank className="size-3.5" /> {overBank ? t("timesheet.bankInsufficient") : t("timesheet.bankAvailable", { hours: week.bankBalanceHours.toLocaleString(undefined, { maximumFractionDigits: 2 }) })}
-                </p>
+          )}
+          {kind === "holiday" && <p className="rounded-xl border border-violet-400/25 bg-violet-500/[0.05] p-3 text-xs text-muted-foreground">{t("timesheet.holidayHint")}</p>}
+          {kind && kind !== "workday" && kind !== "holiday" && <Input required inputMode="decimal" placeholder={t("timesheet.hours")} value={f.hours} onChange={(e) => setF({ ...f, hours: e.target.value })} className="font-mono" />}
+
+          {kind === "travel" && (
+            <div className="space-y-3 rounded-xl border bg-card/40 p-3">
+              <div className="space-y-1">
+                <span className="text-xs text-muted-foreground">{t("timesheet.travelTicket")}</span>
+                {ticket ? (
+                  <div className="flex items-center gap-2 rounded-md border px-2 py-1.5 text-sm">
+                    <span className="font-mono text-[10px] text-muted-foreground">{ticket.number}</span>
+                    <span className="min-w-0 flex-1 truncate">{ticket.title}</span>
+                    <button type="button" className="text-xs text-muted-foreground hover:text-foreground" onClick={() => setTicket(null)}>
+                      ✕
+                    </button>
+                  </div>
+                ) : (
+                  <TicketSearch autoFocus={false} onPick={setTicket} />
+                )}
+              </div>
+              {!ticket && (
+                <label className="block space-y-1 text-xs">
+                  <span className="text-muted-foreground">{t("timesheet.travelClient")}</span>
+                  <select value={f.clientId} onChange={(e) => setF({ ...f, clientId: e.target.value })} className="h-9 w-full rounded-md border bg-transparent px-2 text-sm">
+                    <option value="">{t("timesheet.noClient")}</option>
+                    {(clients ?? []).map((c) => (
+                      <option key={c.id} value={c.id}>
+                        {c.name}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+              )}
+              <label className="flex items-center gap-2 text-sm">
+                <Switch checked={f.billable} onCheckedChange={(v) => setF({ ...f, billable: v })} /> {t("timesheet.travelBillable")}
+              </label>
+              {f.billable && (
+                <label className="block space-y-1 text-xs">
+                  <span className="text-muted-foreground">{t("timesheet.travelAmount")}</span>
+                  <Input value={f.amount} inputMode="decimal" onChange={(e) => setF({ ...f, amount: e.target.value })} className="font-mono" />
+                  {!(ticket || f.clientId) && <span className="block text-destructive">{t("timesheet.travelClientRequired")}</span>}
+                </label>
               )}
             </div>
           )}
           <Input placeholder={t("timesheet.note")} maxLength={500} value={f.note} onChange={(e) => setF({ ...f, note: e.target.value })} />
-          {!isWorkday && !isBankPay && (
-            <label className="flex items-center justify-between gap-3 rounded-lg border border-sky-400/25 bg-sky-500/[0.05] p-3 text-sm">
-              <span className="space-y-0.5">
-                <span className="flex items-center gap-1.5 font-medium">
-                  <PiggyBank className="size-4 text-sky-300" /> {t("timesheet.bankEntry")}
-                </span>
-                <span className="block text-xs text-muted-foreground">{t("timesheet.bankEntryHint")}</span>
-              </span>
-              <Switch checked={bankOn} onCheckedChange={setBanked} aria-label={t("timesheet.bankEntry")} />
-            </label>
-          )}
-          <Button type="submit" className="w-full bg-grad-gold font-semibold text-[#1a1204] hover:brightness-105" disabled={!valid || add.isPending}>
-            {add.isPending ? <Loader2 className="size-4 animate-spin" /> : <Plus className="size-4" />} {t("timesheet.addButton")}
+          <Button type="submit" className="w-full bg-grad-gold font-semibold text-[#1a1204] hover:brightness-105" disabled={!valid || save.isPending}>
+            {save.isPending ? <Loader2 className="size-4 animate-spin" /> : entry ? <Pencil className="size-4" /> : <Plus className="size-4" />} {entry ? t("common.save") : t("timesheet.addButton")}
           </Button>
         </form>
       </DialogContent>
@@ -711,8 +673,8 @@ function EntryDialog({
 }
 
 /**
- * The week's report, short and easy to read: compact (a line per day, the totals
- * by type and the billable ratio) or detailed (every entry of every day).
+ * The week's report, short and easy to read: compact (a line per day: the work day, the time entered, the hours paid, and the
+ * paid hours by kind) or detailed (every entry of every day).
  */
 function ReportDialog({
   open,
@@ -737,27 +699,17 @@ function ReportDialog({
     () =>
       days.map((d) => {
         const list = week.entries.filter((e) => e.date === d);
-        const work = list.filter((e) => e.kind !== "workday" && e.kind !== "bankpay");
         return {
           d,
           list,
           workday: list.filter((e) => e.kind === "workday").reduce((x, e) => x + e.hours, 0),
-          worked: work.reduce((x, e) => x + e.hours, 0),
-          billable: work.reduce((x, e) => x + e.billableHours, 0),
+          entered: list.filter(isEntered).reduce((x, e) => x + e.hours, 0),
+          paid: list.reduce((x, e) => x + paidOf(e), 0),
         };
       }),
     [days, week.entries],
   );
-  const pct = (a: number, b: number) => (b ? `${((a / b) * 100).toLocaleString(undefined, { maximumFractionDigits: 0 })} %` : "—");
-  // by type: ticket time billed and not billed apart, the other types with their own mark
-  const rows = week.types.flatMap((x) =>
-    x.kind === "labour"
-      ? [
-          { key: `${x.type}-b`, label: `${x.type} · ${t("timesheet.billed").toLowerCase()}`, hours: x.billableHours, billable: true },
-          { key: `${x.type}-n`, label: `${x.type} · ${t("timesheet.notBilled").toLowerCase()}`, hours: x.hours - x.billableHours, billable: false },
-        ]
-      : [{ key: x.type, label: x.type, hours: x.hours, billable: x.billableHours > 0 }],
-  );
+  const p = week.pay;
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="max-h-[88vh] overflow-y-auto sm:max-w-2xl">
@@ -784,9 +736,8 @@ function ReportDialog({
                 <tr className="border-b text-left text-[11px] uppercase tracking-wide text-muted-foreground">
                   <th className="py-1.5 font-medium">{t("timesheet.day")}</th>
                   <th className="py-1.5 text-right font-medium">{t("timesheet.workday")}</th>
-                  <th className="py-1.5 text-right font-medium">{t("timesheet.worked")}</th>
-                  <th className="py-1.5 text-right font-medium">{t("timesheet.billable")}</th>
-                  <th className="py-1.5 text-right font-medium">%</th>
+                  <th className="py-1.5 text-right font-medium">{t("timesheet.entered")}</th>
+                  <th className="py-1.5 text-right font-medium">{t("timesheet.paidDay")}</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-border/50">
@@ -794,47 +745,27 @@ function ReportDialog({
                   <tr key={r.d} className={cn(!r.list.length && "text-muted-foreground/60")}>
                     <td className="py-1.5 capitalize">{dayName(r.d)}</td>
                     <td className="py-1.5 text-right font-mono">{r.workday ? hours(r.workday) : "—"}</td>
-                    <td className="py-1.5 text-right font-mono">{r.worked ? hours(r.worked) : "—"}</td>
-                    <td className="py-1.5 text-right font-mono text-emerald-300">{r.billable ? hours(r.billable) : "—"}</td>
-                    <td className="py-1.5 text-right font-mono text-muted-foreground">{pct(r.billable, r.worked)}</td>
+                    <td className="py-1.5 text-right font-mono">{r.entered ? hours(r.entered) : "—"}</td>
+                    <td className="py-1.5 text-right font-mono">{r.paid ? hours(r.paid) : "—"}</td>
                   </tr>
                 ))}
               </tbody>
               <tfoot>
                 <tr className="border-t-2 font-semibold">
                   <td className="py-2">{t("timesheet.weekTotal")}</td>
-                  <td className="py-2 text-right font-mono">{hours(week.workdayHours)}</td>
-                  <td className="py-2 text-right font-mono">{hours(week.totalHours)}</td>
-                  <td className="py-2 text-right font-mono text-emerald-300">{hours(week.billableHours)}</td>
-                  <td className="py-2 text-right font-mono">{week.billableRatio === null ? "—" : `${week.billableRatio.toLocaleString(undefined, { maximumFractionDigits: 0 })} %`}</td>
+                  <td className="py-2 text-right font-mono">{hours(p.workdayHours)}</td>
+                  <td className="py-2 text-right font-mono">{hours(week.enteredHours)}</td>
+                  <td className="py-2 text-right font-mono">{hours(p.paidHours)}</td>
                 </tr>
               </tfoot>
             </table>
 
-            <div>
-              <p className="mb-1.5 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">{t("timesheet.byType")}</p>
-              <ul className="space-y-1 text-sm">
-                {rows.map((r) => (
-                  <li key={r.key} className="flex items-center gap-2">
-                    <span className={cn("size-1.5 shrink-0 rounded-full", r.billable ? "bg-emerald-400" : "bg-muted-foreground/40")} />
-                    <span className="min-w-0 flex-1 truncate">{r.label}</span>
-                    <span className="w-14 text-right text-xs text-muted-foreground">{pct(r.hours, week.totalHours)}</span>
-                    <span className="w-16 text-right font-mono">{hours(r.hours)} h</span>
-                    <span className={cn("w-24 text-right text-[11px]", r.billable ? "text-emerald-300" : "text-muted-foreground")}>{r.billable ? t("timesheet.billable") : t("timesheet.nonBillable")}</span>
-                  </li>
-                ))}
-                {!rows.length && <li className="text-xs text-muted-foreground">{t("timesheet.empty")}</li>}
-              </ul>
-            </div>
-
             <div className="rounded-xl border bg-card/50 p-3">
-              <div className={cn("grid gap-3 text-center", week.bankedHours > 0 ? "grid-cols-4" : "grid-cols-3")}>
-                <Stat label={t("timesheet.worked")} value={`${hours(week.totalHours)} h`} />
-                <Stat label={t("timesheet.billable")} value={`${hours(week.billableHours)} h`} tone="text-emerald-300" />
-                <Stat label={t("timesheet.nonBillable")} value={`${hours(week.nonBillableHours)} h`} tone="text-muted-foreground" />
-                {week.bankedHours > 0 && <Stat label={t("timesheet.bankedWeek")} value={`${hours(week.bankedHours)} h`} tone="text-sky-300" />}
+              <div className={cn("grid gap-3 text-center", p.bankedHours > 0 ? "grid-cols-3" : "grid-cols-2")}>
+                <Stat label={t("timesheet.workdays")} value={`${hours(p.workdayHours)} h`} />
+                {p.bankedHours > 0 && <Stat label={t("timesheet.bankedWeek")} value={`${hours(p.bankedHours)} h`} tone="text-sky-300" />}
+                <Stat label={t("timesheet.paidTotal")} value={`${hours(p.paidHours)} h`} tone="text-emerald-300" />
               </div>
-              <Ratio worked={week.totalHours} billable={week.billableHours} ratio={week.billableRatio} label={t("timesheet.ratio")} />
             </div>
           </div>
         ) : (
@@ -845,8 +776,7 @@ function ReportDialog({
                   <span className="text-sm font-semibold capitalize">{dayName(r.d)}</span>
                   <span className="text-xs text-muted-foreground">
                     {r.workday > 0 && <span className="mr-3 text-amber-300">{t("timesheet.workday")} {hours(r.workday)} h</span>}
-                    <span className="font-mono text-foreground">{r.worked ? `${hours(r.worked)} h` : "—"}</span>
-                    {r.billable > 0 && <span className="ml-2 font-mono text-emerald-300">{hours(r.billable)} h {t("timesheet.billable").toLowerCase()}</span>}
+                    <span className="font-mono text-foreground">{r.paid ? `${hours(r.paid)} h` : "—"}</span>
                   </span>
                 </div>
                 {r.list.length > 0 && (
@@ -864,7 +794,6 @@ function ReportDialog({
                             e.type
                           )}
                         </span>
-                        <BillTag e={e} />
                         <span className="w-16 text-right font-mono">{hours(e.hours)} h</span>
                       </li>
                     ))}
@@ -874,9 +803,9 @@ function ReportDialog({
             ))}
             <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl border bg-card/50 p-3 text-sm">
               <span className="font-semibold">{t("timesheet.weekTotal")}</span>
-              <span className="font-mono">{hours(week.totalHours)} h</span>
-              <span className="font-mono text-emerald-300">{hours(week.billableHours)} h {t("timesheet.billable").toLowerCase()}</span>
-              <span className="font-mono font-semibold">{week.billableRatio === null ? "—" : `${week.billableRatio.toLocaleString(undefined, { maximumFractionDigits: 1 })} %`}</span>
+              <span className="font-mono">
+                {hours(p.paidHours)} h {t("timesheet.paidDay").toLowerCase()}
+              </span>
             </div>
           </div>
         )}

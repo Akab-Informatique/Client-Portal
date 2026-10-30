@@ -120,7 +120,7 @@ export function syncBillables(): Promise<BillablesState> {
     // gone from the source: untouched ones go too — only for kinds read without error. On its own the portal drops the lines
     // of its own tickets and contracts that are no longer due, and the unapproved contract lines imported long ago (not made by the portal)
     const gone = [...existing.values()]
-      .filter((x) => !seen.has(x.sourceId!) && (!alone || /^(p(r?time|charge):|contract:)/.test(x.sourceId!) || (x.kind === "contract" && !x.sourceId!.startsWith("contract:"))) && (x.status === "pending" || (x.status === "approved" && !x.approvedBy)) && !x.edited && !data.errors[x.kind as BillableKind])
+      .filter((x) => !seen.has(x.sourceId!) && (!alone || /^(p(r?time|charge|travel):|contract:)/.test(x.sourceId!) || (x.kind === "contract" && !x.sourceId!.startsWith("contract:"))) && (x.status === "pending" || (x.status === "approved" && !x.approvedBy)) && !x.edited && !data.errors[x.kind as BillableKind])
       .map((x) => x.id);
     if (gone.length) await d.delete(schema.billingItems).where(inArray(schema.billingItems.id, gone));
     const state: BillablesState = { at: now.toISOString(), counts, errors: data.errors, skipped };

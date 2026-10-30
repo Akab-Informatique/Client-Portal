@@ -56,6 +56,10 @@ export type Note = {
   /** A time entry: billed to the client or not, and the hours not billed (offset) */
   billable?: boolean;
   offsetHours?: number;
+  /** A time entry: the hours billed when they are not "worked minus the offset" (more can be billed than was worked) */
+  billedHours?: number;
+  /** A time entry: the technician it is of */
+  userId?: string | null;
   /** Written by the system itself (workflow rule, forward, merge…), not by a technician or the client */
   system?: boolean;
   /** Who wrote it: the client (a contact, or a reply made in the client portal) or a technician. Absent: told by the name. */
@@ -213,6 +217,8 @@ export type NewTimeEntry = {
   billable: boolean;
   /** Hours worked but not billed: 4 h worked with an offset of 2 bills 2 h */
   offsetHours: number;
+  /** Hours billed, when they are not worked minus the offset (can be more than the hours worked) */
+  billedHours?: number;
   /** The contract's id in the source, when the time is logged on one */
   contractSourceId?: string | null;
 };
@@ -296,7 +302,8 @@ export interface TicketSource {
   markNeedsAttention(ticketId: number, opts?: { reopen?: boolean }): Promise<boolean>;
   /** Work types for time entries; empty when not used */
   workTypes(): Promise<{ value: string; label: string }[]>;
-  addTimeEntry(ticketId: number, p: NewTimeEntry, a: AuthContext): Promise<void>;
+  /** The id of the time entry made, when the source keeps its own */
+  addTimeEntry(ticketId: number, p: NewTimeEntry, a: AuthContext): Promise<{ id: string } | void>;
 }
 
 /** New charges are approved unless another status is chosen ("Approved" / "Approuvé"). */

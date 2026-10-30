@@ -5,7 +5,8 @@ import { z } from "zod";
 import { db, schema } from "../db/index.ts";
 import { auth, requirePermission, requireStaff, type AppEnv } from "../lib/auth.ts";
 import { audit } from "../lib/audit.ts";
-import { addDays, bankByDefault, editable, labourType, sheetOf, todayQc, weekStartOf } from "../lib/timesheets.ts";
+import { splitBillable } from "../lib/hr.ts";
+import { addDays, editable, labourType, sheetOf, todayQc, weekStartOf } from "../lib/timesheets.ts";
 import { billingSettings } from "../lib/billing.ts";
 import { escapeHtml, sendMail } from "../lib/mail.ts";
 import { body, zUuid } from "../lib/validate.ts";
@@ -733,7 +734,7 @@ export const projectsRoutes = new Hono<AppEnv>()
     }
     await db()
       .update(schema.timesheetEntries)
-      .set({ ...(o.billable !== undefined ? { billableX100: o.billable ? e.hoursX100 : 0 } : {}), ...(o.note !== undefined ? { note: o.note || null } : {}) })
+      .set({ ...(o.billable !== undefined ? splitBillable(e.hoursX100, o.billable ? e.hoursX100 : 0) : {}), ...(o.note !== undefined ? { note: o.note || null } : {}) })
       .where(eq(schema.timesheetEntries.id, e.id));
     return c.json({ ok: true });
   });
@@ -774,7 +775,6 @@ async function logTime(
   const type = await labourType();
   const hoursX100 = Math.round(t.hours * 100);
   const billable = t.billable ?? p.billingMode === "hourly";
-  const banked = await bankByDefault(userId);
   const [row] = await db()
     .insert(schema.timesheetEntries)
     .values({
@@ -788,8 +788,8 @@ async function logTime(
       projectId: p.id,
       milestoneId: ms?.id ?? null,
       taskId: task?.id ?? null,
-      billableX100: billable ? hoursX100 : 0,
-      banked,
+      ...splitBillable(hoursX100, billable ? hoursX100 : 0),
+      clientId: p.clientId,
       source: "project",
     })
     .returning();

@@ -82,6 +82,8 @@ function useView(n: Notification): { icon: LucideIcon; title: string; body: stri
       return { icon: Swords, title: t("notifications.complotsInvite", { from: n.data.from ?? "" }), body: t("notifications.complotsInviteBody"), tone: "gold" };
     case "breakroom.invite":
       return { icon: Swords, title: t("notifications.breakroomInvite", { from: n.data.from ?? "" }), body: t("notifications.breakroomInviteBody"), tone: "gold" };
+    case "hr.negative":
+      return { icon: ShieldAlert, title: t("notifications.hrNegative", { name: n.data.name ?? "" }), body: t(`hr.account.${n.data.account ?? "bank"}`), tone: "alert" };
     case "timer.pending":
       return { icon: Timer, title: t("notifications.timerPending"), body: t("notifications.timerPendingBody", { number: n.data.number ?? "", minutes: n.data.minutes ?? "", title: n.data.title ?? "" }), tone: "alert" };
     default:

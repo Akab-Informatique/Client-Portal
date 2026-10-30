@@ -3,7 +3,8 @@ import PDFDocument from "pdfkit";
 import { and, asc, eq } from "drizzle-orm";
 import { db, schema } from "../db/index.ts";
 import { isMileageUnit } from "../../shared/mileage.ts";
-import { weekEntries, weekTotals, addDays } from "./timesheets.ts";
+import { weekEntries, addDays } from "./timesheets.ts";
+import { balances, moneyOf, weekPay } from "./hr.ts";
 
 /**
  * The one-page reports accounting gets when a timesheet or an expense report is sent: the figures to pay come first, big
@@ -208,57 +209,88 @@ export async function expenseReportModel(reportId: string): Promise<Model | null
   };
 }
 
-/** A week's timesheet: the hours to pay first, by type, then day by day (types and hours only: no ticket, no note). */
+/**
+ * A week's timesheet, for accounting: the hours PAID first (work days less what is put in the hours bank, vacation, sick days,
+ * holidays, hours paid out of the bank), what they come to, the 4 % put aside for vacation, the accounts, then day by day (types
+ * and hours only: no ticket, no note). Billable and non billable time are not in it: they are kept per client, shown nowhere yet.
+ */
 export async function timesheetModel(userId: string, weekStart: string): Promise<Model | null> {
   const d = db();
   const [who] = await d.select({ name: schema.users.name }).from(schema.users).where(eq(schema.users.id, userId));
   if (!who) return null;
   const [sheet] = await d.select().from(schema.timesheets).where(and(eq(schema.timesheets.userId, userId), eq(schema.timesheets.weekStart, weekStart)));
-  const tot = await weekTotals(userId, weekStart);
+  const pay = await weekPay(userId, weekStart);
+  const bal = await balances(userId);
   const entries = await weekEntries(userId, weekStart);
-  const toPay = Math.round((tot.totalHours - tot.bankedHours + tot.bankPaidHours) * 100) / 100;
   const end = addDays(weekStart, 6);
+  const wage = pay.wageCents;
+  const money = (h: number) => (wage == null ? "—" : cad(moneyOf(Math.round(h * 100), wage)));
+  const others = Math.round((pay.vacationHours + pay.sickHours + pay.holidayHours + pay.bankPaidHours) * 100) / 100;
+  const warnings: string[] = [];
+  if (bal.bankCents < 0) warnings.push(`la banque d'heures est négative (${cad(bal.bankCents)})`);
+  if (bal.vacationCents < 0) warnings.push(`la banque de vacances est négative (${cad(bal.vacationCents)})`);
+  if (bal.sickHoursX100 < 0) warnings.push(`les jours de maladie sont négatifs (${num(bal.sickHoursX100 / 100)} h)`);
+  if (wage == null) warnings.push("aucun salaire horaire dans le dossier RH : les montants ne peuvent pas être calculés");
 
-  const byDay = new Map<string, { worked: number; banked: number; parts: Map<string, number> }>();
-  for (let i = 0; i < 7; i++) byDay.set(addDays(weekStart, i), { worked: 0, banked: 0, parts: new Map() });
+  const byDay = new Map<string, { paid: number; banked: number; parts: Map<string, number> }>();
+  for (let i = 0; i < 7; i++) byDay.set(addDays(weekStart, i), { paid: 0, banked: 0, parts: new Map() });
   for (const r of entries) {
-    if (r.kind === "workday") continue;
     const day = byDay.get(r.e.date);
     if (!day) continue;
     const h = r.e.hoursX100 / 100;
-    if (r.kind !== "bankpay") day.worked += h;
-    if (r.e.banked) day.banked += h;
-    const label = r.kind === "bankpay" ? `${r.type} (banque)` : r.type;
+    if (r.kind === "workday") {
+      day.paid += Math.max(0, r.e.hoursX100 - r.e.bankX100) / 100;
+      day.banked += r.e.bankX100 / 100;
+    } else if (["vacation", "sick", "holiday", "bankpay"].includes(r.kind)) day.paid += h;
+    const label = r.kind === "workday" && r.e.startTime && r.e.endTime ? `${r.type} ${r.e.startTime}–${r.e.endTime}` : r.kind === "bankpay" ? `${r.type} (banque)` : r.type;
     day.parts.set(label, (day.parts.get(label) ?? 0) + h);
   }
   const loc = new Intl.DateTimeFormat("fr-CA", { weekday: "long", timeZone: "UTC" });
+  const line = (label: string, h: number, amount?: string): string[] => [label, `${num(h)} h`, amount ?? money(h)];
   return {
     title: "Feuille de temps",
     filename: `Feuille_de_temps_${slug(who.name)}_${weekStart}.pdf`,
     employee: who.name,
     lines: [`Semaine du ${dmy(weekStart)} au ${dmy(end)}`, sheet?.submittedAt ? `Envoyée le ${dmy(sheet.submittedAt.toISOString().slice(0, 10))}` : ""].filter(Boolean),
     figures: [
-      { label: "Heures travaillées", value: `${num(tot.totalHours)} h` },
-      { label: "Facturables", value: `${num(tot.billableHours)} h` },
-      { label: "Mises en banque", value: `${num(tot.bankedHours)} h` },
-      { label: "Heures à payer", value: `${num(toPay)} h`, strong: true },
+      { label: "Journées de travail", value: `${num(pay.workdayHours)} h` },
+      { label: "Mises en banque", value: `${num(pay.bankedHours)} h` },
+      { label: "Congés et banque payée", value: `${num(others)} h` },
+      { label: "Heures à payer", value: `${num(pay.paidHours)} h`, strong: true },
     ],
-    ...(tot.bankPaidHours ? { note: `Dont ${num(tot.bankPaidHours)} h payées à même la banque d'heures.` } : {}),
+    ...(warnings.length ? { note: `À régler : ${warnings.join(" ; ")}.` } : {}),
     sections: [
       {
-        heading: "Heures par type",
-        head: ["Type", "Heures", "Facturables"],
+        heading: "Heures payées",
+        head: ["Type", "Heures", "Montant"],
         cols: [{ w: 296 }, { w: 110, align: "right" }, { w: 110, align: "right" }],
-        rows: tot.types.map((t) => [t.type, `${num(t.hours)} h`, `${num(t.billableHours)} h`]).concat([["Total", `${num(tot.totalHours)} h`, `${num(tot.billableHours)} h`]]),
+        rows: [
+          line("Journées de travail (moins les heures mises en banque)", pay.workdayPaidHours),
+          line("Vacances", pay.vacationHours),
+          line("Maladie", pay.sickHours),
+          line("Jours fériés (1/20 des 4 dernières semaines)", pay.holidayHours, pay.holidayHours ? cad(pay.holidayCents) : money(0)),
+          line("Paiement de banque d'heures", pay.bankPaidHours),
+          ["Total à payer", `${num(pay.paidHours)} h`, pay.paidCents == null ? "—" : cad(pay.paidCents)],
+        ],
         boldLast: true,
       },
       {
+        heading: "Vacances et banques",
+        head: ["", "Cette semaine", "Solde"],
+        cols: [{ w: 296 }, { w: 110, align: "right" }, { w: 110, align: "right" }],
+        rows: [
+          ["Vacances accumulées (4 % du brut)", pay.vacationAccrualCents == null ? "—" : cad(pay.vacationAccrualCents), cad(bal.vacationCents)],
+          ["Banque d'heures", pay.bankedHours || pay.bankPaidHours ? `${num(pay.bankedHours - pay.bankPaidHours)} h` : "", cad(bal.bankCents)],
+          ["Jours de maladie", pay.sickHours ? `-${num(pay.sickHours)} h` : "", `${num(bal.sickHoursX100 / 100)} h`],
+        ],
+      },
+      {
         heading: "Jour par jour",
-        head: ["Jour", "Heures", "En banque", "Détail"],
+        head: ["Jour", "Payées", "En banque", "Détail"],
         cols: [{ w: 110 }, { w: 60, align: "right" }, { w: 70, align: "right" }, { w: 276 }],
         rows: [...byDay.entries()]
           .filter(([, v]) => v.parts.size)
-          .map(([date, v]) => [`${loc.format(new Date(`${date}T12:00:00Z`))} ${dmy(date)}`, `${num(v.worked)} h`, v.banked ? `${num(v.banked)} h` : "", [...v.parts.entries()].map(([k, h]) => `${k} ${num(h)} h`).join(" · ")]),
+          .map(([date, v]) => [`${loc.format(new Date(`${date}T12:00:00Z`))} ${dmy(date)}`, `${num(v.paid)} h`, v.banked ? `${num(v.banked)} h` : "", [...v.parts.entries()].map(([k, h]) => `${k} ${num(h)} h`).join(" · ")]),
       },
     ],
   };
