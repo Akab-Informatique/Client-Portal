@@ -149,11 +149,6 @@ export const MODULES = [
         label: { fr: "RH : voir et gérer le dossier de tous les employés", en: "HR: see and manage every employee's file" },
         description: { fr: "La page RH et l'onglet RH de chaque employé : salaire horaire, banque d'heures, jours de maladie, vacances", en: "The HR page and every employee's HR tab: hourly wage, hours bank, sick days, vacation" },
       },
-      {
-        key: "hr.own",
-        label: { fr: "RH : voir son propre dossier", en: "HR: see one's own file" },
-        description: { fr: "L'onglet RH du profil, pour soi seulement (soldes de banque d'heures, de maladie et de vacances)", en: "The HR tab of one's profile, for oneself only (hours bank, sick and vacation balances)" },
-      },
     ],
   },
   {

@@ -100,7 +100,7 @@ export function TimeReportCard() {
             <ul className="space-y-1 rounded-xl border bg-card/40 p-2.5 text-sm">
               {data.vacationHours > 0 && <Line label={t("timesheet.paidVacation")} value={`${h(data.vacationHours)} h`} />}
               {data.sickHours > 0 && <Line label={t("timesheet.paidSick")} value={`${h(data.sickHours)} h`} />}
-              {data.holidayHours > 0 && <Line label={t("timesheet.paidHoliday")} value={`${h(data.holidayHours)} h (${money(data.holidayCents)})`} />}
+              {data.holidayHours > 0 && <Line label={t("timesheet.paidHoliday")} value={data.holidayCents ? `${h(data.holidayHours)} h (${money(data.holidayCents)})` : `${h(data.holidayHours)} h`} />}
               {data.bankPaidHours > 0 && <Line label={t("timesheet.paidBank")} value={`${h(data.bankPaidHours)} h`} />}
             </ul>
           )}

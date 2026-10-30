@@ -219,7 +219,7 @@ export async function expenseReportModel(reportId: string): Promise<Model | null
  * holidays, hours paid out of the bank), what they come to, the 4 % put aside for vacation, the accounts, then day by day (types
  * and hours only: no ticket, no note). Billable and non billable time are not in it: they are kept per client, shown nowhere yet.
  */
-export async function timesheetModel(userId: string, weekStart: string): Promise<Model | null> {
+export async function timesheetModel(userId: string, weekStart: string, opts: { forEmployee?: boolean } = {}): Promise<Model | null> {
   const d = db();
   const [who] = await d.select({ name: schema.users.name }).from(schema.users).where(eq(schema.users.id, userId));
   if (!who) return null;
@@ -228,6 +228,46 @@ export async function timesheetModel(userId: string, weekStart: string): Promise
   const bal = await balances(userId);
   const entries = await weekEntries(userId, weekStart);
   const end = addDays(weekStart, 6);
+  // the employee's own copy: strictly hours — what was entered, by type and day by day, and the total; no money, no vacation, no balances
+  if (opts.forEmployee) {
+    const types = new Map<string, number>();
+    const days = new Map<string, Map<string, number>>();
+    let enteredH = 0;
+    for (const r of entries) {
+      const h = r.e.hoursX100 / 100;
+      types.set(r.type, (types.get(r.type) ?? 0) + h);
+      const day = days.get(r.e.date) ?? new Map<string, number>();
+      day.set(r.type, (day.get(r.type) ?? 0) + h);
+      days.set(r.e.date, day);
+      if (["labour", "other", "travel"].includes(r.kind)) enteredH += h;
+    }
+    const dayName = new Intl.DateTimeFormat("fr-CA", { weekday: "long", timeZone: "UTC" });
+    return {
+      title: "Feuille de temps",
+      filename: `Feuille_de_temps_${slug(who.name)}_${weekStart}.pdf`,
+      employee: who.name,
+      lines: [`Semaine du ${dmy(weekStart)} au ${dmy(end)}`, sheet?.submittedAt ? `Envoyée le ${dmy(sheet.submittedAt.toISOString().slice(0, 10))}` : ""].filter(Boolean),
+      figures: [
+        { label: "Journées de travail", value: `${num(pay.workdayHours)} h` },
+        { label: "Heures saisies", value: `${num(enteredH)} h` },
+        { label: "Heures à payer", value: `${num(pay.paidHours)} h`, strong: true },
+      ],
+      sections: [
+        {
+          heading: "Heures par type",
+          head: ["Type", "Heures"],
+          cols: [{ w: 406 }, { w: 110, align: "right" }],
+          rows: [...types.entries()].map(([k, h]) => [k, `${num(h)} h`]),
+        },
+        {
+          heading: "Jour par jour",
+          head: ["Jour", "Détail"],
+          cols: [{ w: 130 }, { w: 386 }],
+          rows: [...days.entries()].sort(([x], [y]) => x.localeCompare(y)).map(([date, parts]) => [`${dayName.format(new Date(`${date}T12:00:00Z`))} ${dmy(date)}`, [...parts.entries()].map(([k, h]) => `${k} ${num(h)} h`).join(" · ")]),
+        },
+      ],
+    };
+  }
   const wage = pay.wageCents;
   const money = (h: number) => (wage == null ? "—" : cad(moneyOf(Math.round(h * 100), wage)));
   const others = Math.round((pay.vacationHours + pay.sickHours + pay.holidayHours + pay.bankPaidHours) * 100) / 100;
@@ -375,7 +415,7 @@ export async function expenseReportPdf(reportId: string): Promise<Pdf | null> {
   const m = await expenseReportModel(reportId);
   return m ? renderPdf(m) : null;
 }
-export async function timesheetPdf(userId: string, weekStart: string): Promise<Pdf | null> {
-  const m = await timesheetModel(userId, weekStart);
+export async function timesheetPdf(userId: string, weekStart: string, opts: { forEmployee?: boolean } = {}): Promise<Pdf | null> {
+  const m = await timesheetModel(userId, weekStart, opts);
   return m ? renderPdf(m) : null;
 }

@@ -16,7 +16,6 @@ import {
   Loader2,
   Mail,
   PenLine,
-  HeartHandshake,
   Plus,
   Smartphone,
   Timer,
@@ -34,7 +33,6 @@ import { api, ApiError } from "@/lib/api";
 import { useCan, useMe } from "@/lib/session";
 import { LinkMailboxDialog } from "@/pages/outlook/dialogs";
 import { TimeReportCard } from "@/pages/time/TimeReport";
-import { HrFile } from "@/components/HrFile";
 import { RichEditor, type RichEditorHandle } from "@/pages/outlook/RichEditor";
 import { PhoneSignInCard } from "@/components/PhoneSignInCard";
 import { KEY, outlookErrorText, statusKey, type MailAccount, type OutlookStatus } from "@/pages/outlook/shared";
@@ -183,7 +181,6 @@ export function ProfileDialog({ open, onOpenChange }: { open: boolean; onOpenCha
           {staff && (
             <div className="space-y-4">
               <HoursCard />
-              <HrCard />
               <NotifyCard />
               <Microsoft365Card onNavigate={() => onOpenChange(false)} />
             </div>
@@ -242,19 +239,6 @@ function HoursCard() {
   return (
     <Card icon={Timer} title={t("profile.hours.title")} className="space-y-3">
       <TimeReportCard />
-    </Card>
-  );
-}
-
-/** My HR file (hr.own, or hr.manage): my hourly wage, hours bank, vacation and sick days — only mine, read only. */
-function HrCard() {
-  const { t } = useTranslation();
-  const me = useMe();
-  const can = useCan();
-  if (!can("hr.own") && !can("hr.manage")) return null;
-  return (
-    <Card icon={HeartHandshake} title={t("hr.tab")} className="space-y-3">
-      <HrFile userId={me.id} />
     </Card>
   );
 }

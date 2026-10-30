@@ -331,7 +331,7 @@ export function TimesheetPage() {
                                           <PiggyBank className="size-2.5" /> {hours(e.bankX100 / 100)} h
                                         </span>
                                       )}
-                                      {e.kind === "holiday" && e.amountCents != null && <span className="shrink-0 text-[10px] text-violet-300">{money(e.amountCents)}</span>}
+                                      {e.kind === "holiday" && e.amountCents != null && week.pay.wageCents != null && <span className="shrink-0 text-[10px] text-violet-300">{money(e.amountCents)}</span>}
                                       {e.kind === "travel" && e.amountCents != null && <span className="shrink-0 text-[10px] text-emerald-300">{t("timesheet.travelBilled", { amount: money(e.amountCents) })}</span>}
                                     </span>
                                   );
@@ -448,7 +448,7 @@ export function TimesheetPage() {
                   <div className="flex justify-between">
                     <span>{t("timesheet.paidHoliday")}</span>
                     <span className="font-mono">
-                      {hours(week.pay.holidayHours)} h <span className="text-[11px] text-violet-300">({money(week.pay.holidayCents)})</span>
+                      {hours(week.pay.holidayHours)} h {week.pay.wageCents != null && <span className="text-[11px] text-violet-300">({money(week.pay.holidayCents)})</span>}
                     </span>
                   </div>
                 )}

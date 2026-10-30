@@ -63,6 +63,8 @@ async function timesheetOwner(a: AuthContext, asked: string | undefined): Promis
 }
 
 const isManager = (a: AuthContext) => a.permissions.includes("timesheets.manage");
+/** Amounts, vacation and balances are for accounting, HR and the managers of timesheets — never the employee */
+const seesMoney = (a: AuthContext) => (["timesheets.manage", "timesheets.approve", "accounting.manage", "hr.manage"] as const).some((k) => a.permissions.includes(k));
 
 /**
  * Before an entry of a week is added, changed or removed. A week still open (draft or sent back): fine. Once the week is sent
@@ -420,6 +422,8 @@ export const timeRoutes = new Hono<AppEnv>()
     const weekStart = weekStartOf(c.req.query("start") ? zDay.parse(c.req.query("start")) : todayQc());
     const sheet = await sheetOf(owner, weekStart);
     const rows = await weekEntries(owner, weekStart);
+    const money = seesMoney(a);
+    const pay = await weekPay(owner, weekStart);
     const [me] = await db().select({ required: schema.users.timesheetRequired }).from(schema.users).where(eq(schema.users.id, owner));
     return c.json({
       userId: owner,
@@ -429,10 +433,10 @@ export const timeRoutes = new Hono<AppEnv>()
       weekEnd: addDays(weekStart, 6),
       status: sheet.status,
       comment: sheet.comment,
-      entries: rows.map((r) => ({ ...r.e, hours: r.e.hoursX100 / 100, type: r.type, kind: r.kind })),
+      entries: rows.map((r) => ({ ...r.e, ...(money ? {} : { amountCents: r.kind === "holiday" ? null : r.e.amountCents }), hours: r.e.hoursX100 / 100, type: r.type, kind: r.kind })),
       ...(await weekTotals(owner, weekStart)),
-      /** What is paid this week: work days less the hours banked, vacation, sick, holidays, bank payouts */
-      pay: await weekPay(owner, weekStart),
+      /** What is paid this week, in hours: work days less the hours banked, vacation, sick, holidays, bank payouts (amounts only for accounting, HR and managers) */
+      pay: money ? pay : { ...pay, wageCents: null, holidayCents: 0, paidCents: null, vacationAccrualCents: null },
     });
   })
   /**
@@ -499,7 +503,7 @@ export const timeRoutes = new Hono<AppEnv>()
       vacationHours: h(sum.vacation),
       sickHours: h(sum.sick),
       holidayHours: h(sum.holiday),
-      holidayCents: sum.holidayCents,
+      holidayCents: seesMoney(a) ? sum.holidayCents : 0,
       bankPaidHours: h(sum.bankPaid),
       /** Time entered on tickets and by hand (training, meetings, trips) */
       enteredHours: h(sum.entered),
@@ -662,7 +666,8 @@ export const timeRoutes = new Hono<AppEnv>()
     const asked = c.req.query("userId");
     const owner = !asked || asked === a.user.id ? a.user.id : zUuid.parse(asked);
     if (owner !== a.user.id && !(["timesheets.manage", "timesheets.approve", "accounting.manage"] as const).some((k) => a.permissions.includes(k))) throw new HTTPException(403, { message: "Forbidden" });
-    const pdf = await timesheetPdf(owner, weekStartOf(zDay.parse(c.req.query("start") ?? todayQc())));
+    // an employee gets hours only; accounting and those who manage or approve get the complete report
+    const pdf = await timesheetPdf(owner, weekStartOf(zDay.parse(c.req.query("start") ?? todayQc())), { forEmployee: !seesMoney(a) });
     if (!pdf) throw new HTTPException(404, { message: "not_found" });
     return new Response(new Uint8Array(pdf.content), { headers: { "content-type": "application/pdf", "content-disposition": `inline; filename="${pdf.filename}"`, "cache-control": "no-store" } });
   })

@@ -9,18 +9,14 @@ import { body, zUuid } from "../lib/validate.ts";
 import { balances, hrProfile, moneyOf, hoursOf, negativeAccounts, warnNegative } from "../lib/hr.ts";
 
 /**
- * Human resources: the RH tab of an employee. `hr.manage` (administrators) sees and changes everyone's; `hr.own` only
+ * Human resources: the RH tab of an employee. `hr.manage` (administrators) sees and changes everyone's; 
  * one's own file, read only. The hours bank and the vacation bank are in dollars, the sick days in hours.
  */
 const canAll = (a: AuthContext) => a.permissions.includes("hr.manage");
 
-/** Whose file: one's own (hr.own or hr.manage), or anyone's active or former staff member for hr.manage */
+/** Whose file: anyone's (staff), for hr.manage only — an employee never sees their own HR file */
 async function fileOf(a: AuthContext, asked: string): Promise<string> {
   const id = zUuid.parse(asked);
-  if (id === a.user.id) {
-    if (!a.permissions.includes("hr.own") && !canAll(a)) throw new HTTPException(403, { message: "Forbidden" });
-    return id;
-  }
   if (!canAll(a)) throw new HTTPException(403, { message: "Forbidden" });
   const [u] = await db().select({ kind: schema.users.kind }).from(schema.users).where(eq(schema.users.id, id));
   if (!u || u.kind !== "staff") throw new HTTPException(404, { message: "not_found" });
@@ -57,13 +53,13 @@ export const hrRoutes = new Hono<AppEnv>()
     for (const u of users) out.push({ ...u, ...(await fileView(u.id)) });
     return c.json(out);
   })
-  .get("/:userId", requirePermission("hr.manage", "hr.own"), async (c) => {
+  .get("/:userId", requirePermission("hr.manage"), async (c) => {
     const a = auth(c);
     const id = await fileOf(a, c.req.param("userId"));
     return c.json({ ...(await fileView(id)), canEdit: canAll(a) });
   })
   /** What moved the accounts, newest first */
-  .get("/:userId/ledger", requirePermission("hr.manage", "hr.own"), async (c) => {
+  .get("/:userId/ledger", requirePermission("hr.manage"), async (c) => {
     const id = await fileOf(auth(c), c.req.param("userId"));
     const rows = await db()
       .select({ l: schema.hrLedger, by: schema.users.name })

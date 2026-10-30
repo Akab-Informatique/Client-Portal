@@ -5734,7 +5734,7 @@ describe("timesheet: paid hours, the RH file, bank, vacation, sick days, holiday
     // the bank holds 1.5 h × 30 $ = 45 $ and the week pays 6 + 5 hours: what is banked is not paid this week
     expect((await admin.get(`/api/hr/${u.id}`)).json).toMatchObject({ bankCents: 4500 });
     let week = (await tech.get(`/api/time/week?start=${day}`)).json;
-    expect(week.pay).toMatchObject({ workdayHours: 12.5, bankedHours: 1.5, workdayPaidHours: 11, paidHours: 11, wageCents: 3000 });
+    expect(week.pay).toMatchObject({ workdayHours: 12.5, bankedHours: 1.5, workdayPaidHours: 11, paidHours: 11 });
 
     // a payout takes it off the bank (in dollars) and is paid; more than the bank holds is kept, with a warning to the admins
     const payType = by("bankpay");
@@ -5773,11 +5773,8 @@ describe("timesheet: paid hours, the RH file, bank, vacation, sick days, holiday
     expect((await tech.get(`/api/hr/${u.id}`)).status).toBe(403);
     expect((await tech.get("/api/hr/people")).status).toBe(403);
     expect((await admin.get("/api/hr/people")).json.some((p: any) => p.id === u.id)).toBe(true);
-    // hr.own: only one's own file, read only
-    expect((await admin.put(`/api/admin/users/${u.id}/permissions`, { overrides: [{ key: "hr.own", effect: "allow" }] })).status).toBe(200);
-    const own = await tech.get(`/api/hr/${u.id}`);
-    expect(own.status).toBe(200);
-    expect(own.json.canEdit).toBe(false);
+    // an employee never sees their own HR file, nor anyone's, even if asked for
+    expect((await tech.get(`/api/hr/${u.id}`)).status).toBe(403);
     expect((await tech.get(`/api/hr/${u2.id}`)).status).toBe(403);
     expect((await tech.put(`/api/hr/${u.id}/profile`, { hourlyWage: 1 })).status).toBe(403);
     expect((await tech.post(`/api/hr/${u.id}/adjust`, { account: "bank", amount: 1000, confirm: true })).status).toBe(403);
@@ -5826,7 +5823,7 @@ describe("timesheet: paid hours, the RH file, bank, vacation, sick days, holiday
     expect(holiday.status).toBe(201);
     expect(holiday.json).toMatchObject({ hoursX100: 320, amountCents: 9600 });
     const wk = (await tech.get("/api/time/week?start=2027-04-05")).json;
-    expect(wk.pay).toMatchObject({ holidayHours: 3.2, holidayCents: 9600, paidHours: 3.2 });
+    expect(wk.pay).toMatchObject({ holidayHours: 3.2, paidHours: 3.2 });
 
     // the week sent: 4 % of what is paid goes in the vacation bank (once), and the owner can no longer change it
     const before = (await admin.get(`/api/hr/${u.id}`)).json.vacationCents;
@@ -5841,6 +5838,15 @@ describe("timesheet: paid hours, the RH file, bank, vacation, sick days, holiday
     // the PDF for accounting: paid hours and the accounts
     const pdf = await tech.get("/api/time/week/pdf?start=2027-03-29");
     expect(pdf.status).toBe(200);
+    // the employee's own week and report carry no money; accounting and admins keep the complete figures
+    const mine = (await tech.get("/api/time/week?start=2027-04-05")).json;
+    expect(mine.pay).toMatchObject({ wageCents: null, holidayCents: 0, paidCents: null, vacationAccrualCents: null });
+    expect(mine.pay.holidayHours).toBe(3.2);
+    expect(mine.entries.find((e: any) => e.kind === "holiday").amountCents).toBeNull();
+    expect((await tech.get("/api/time/report?from=2027-04-01&to=2027-04-30")).json.holidayCents).toBe(0);
+    const theirs = (await admin.get(`/api/time/week?start=2027-04-05&userId=${u.id}`)).json;
+    expect(theirs.pay).toMatchObject({ holidayCents: 9600, wageCents: 3000 });
+    expect((await admin.get(`/api/time/report?from=2027-04-01&to=2027-04-30&userId=${u.id}`)).json.holidayCents).toBe(9600);
   });
 
   it("billable and non billable hours are kept per client; the productivity is billable over the work day; a billable trip is work to bill", async () => {
