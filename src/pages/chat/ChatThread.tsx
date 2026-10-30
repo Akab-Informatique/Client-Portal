@@ -26,14 +26,19 @@ export function ChatThread({ chatId, prefill, compact }: { chatId: string; prefi
   const { t } = useTranslation();
   const qc = useQueryClient();
   const [text, setText] = useState(prefill ?? "");
-  useEffect(() => setText(prefill ?? ""), [chatId, prefill]);
+  useEffect(() => {
+    setText(prefill ?? "");
+  }, [chatId, prefill]);
   const bottom = useRef<HTMLDivElement>(null);
   const { data, isLoading, error } = useQuery({
     queryKey: ["chat", "messages", chatId],
     queryFn: () => api.get<ChatMessage[]>(`/chat/chats/${encodeURIComponent(chatId)}/messages`),
     refetchInterval: 5_000,
   });
-  useEffect(() => bottom.current?.scrollIntoView({ block: "end" }), [data?.length, chatId]);
+  useEffect(() => {
+    // (braces: an effect must return nothing, and scrollIntoView may answer something)
+    bottom.current?.scrollIntoView({ block: "end" });
+  }, [data?.length, chatId]);
   const send = useMutation({
     mutationFn: () => api.post(`/chat/chats/${encodeURIComponent(chatId)}/messages`, { text }),
     onSuccess: () => {

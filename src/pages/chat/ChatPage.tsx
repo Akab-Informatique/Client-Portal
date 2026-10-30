@@ -4,7 +4,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { Loader2, MessageSquarePlus, MessagesSquare, Users } from "lucide-react";
 import { GlassBackdrop } from "@/components/brand/GlassBackdrop";
-import { api } from "@/lib/api";
+import { api, ApiError } from "@/lib/api";
 import { cn } from "@/lib/utils";
 import { ChatNotice, ChatThread, useChatStatus } from "./ChatThread";
 
@@ -32,6 +32,8 @@ export function ChatPage() {
     onError: () => toast.error(t("common.error")),
   });
   const current = chats.data?.find((c) => c.id === picked);
+  /** Why Teams refused, in words (the usual cause: the Microsoft permission for chats was not granted yet) */
+  const reason = (e: unknown) => (e instanceof ApiError && e.code === "chat_forbidden" ? t("chat.forbidden") : e instanceof ApiError && e.code === "chat_reconnect" ? t("chat.reconnect") : t("chat.loadFailed"));
   return (
     <div className="relative isolate space-y-5">
       <GlassBackdrop className="-inset-x-8 -top-6" />
@@ -63,6 +65,7 @@ export function ChatPage() {
               </select>
             </label>
             {chats.isLoading && <Loader2 className="mx-auto size-4 animate-spin text-muted-foreground" />}
+            {chats.error && <p className="rounded-lg border border-destructive/40 bg-destructive/10 p-2 text-xs text-destructive">{reason(chats.error)}</p>}
             <ul className="max-h-[60vh] space-y-1 overflow-y-auto">
               {(chats.data ?? []).map((c) => (
                 <li key={c.id}>
