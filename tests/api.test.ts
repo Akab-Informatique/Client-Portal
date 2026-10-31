@@ -9341,11 +9341,6 @@ describe("hours bank contracts", () => {
     expect(rebated.bank.rateCents).toBe(10800);
     await admin.patch(`${base}/${k.id}`, { rebate: 0 });
 
-    // the potential profit over the term, per contract: administrators only
-    expect(detail.profit).toMatchObject({ revenueCents: expect.any(Number), serviceCostCents: 0, labourCostCents: 0 });
-    expect(detail.profit.profitCents).toBe(detail.profit.revenueCents - detail.profit.serviceCostCents - detail.profit.labourCostCents);
-    expect((await tech.get(`${base}/${k.id}`)).json.profit ?? null).toBeNull();
-    expect((await admin.get(base)).json.find((x: any) => x.id === k.id).profit.revenueCents).toBe(detail.profit.revenueCents);
     // administrators see what the ticket's contract earns or loses this month; technicians do not
     expect((await tech.get(`/api/tickets/${t0.id}/contract-profit`)).status).toBe(403);
     const profit = (await admin.get(`/api/tickets/${t0.id}/contract-profit`)).json;

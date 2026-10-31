@@ -1185,12 +1185,6 @@ function ContractsTab({ client }: { client: CrmDetail }) {
                         {k.bank.over > 0 ? ` · ${t("crm.contracts.bank.overHint", { over: k.bank.over })}` : ""}
                       </span>
                     ) : null}
-                    {k.profit && (
-                      <span className={cn("block text-[11px] font-medium", k.profit.profitCents >= 0 ? "text-emerald-300" : "text-red-300")}>
-                        {t("crm.contracts.profit.inList")} {k.profit.profitCents >= 0 ? "" : "−"}
-                        {money(Math.abs(k.profit.profitCents), i18n.language)}
-                      </span>
-                    )}
                     <span className="block text-[11px] text-muted-foreground">
                       {t("crm.contracts.window.revenue")} {money(k.summary.revenueCents, i18n.language)}
                     </span>

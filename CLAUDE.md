@@ -347,8 +347,6 @@ A price can carry a **rebate in percent** (kept as basis points, `shared/rebate.
 
 A small green / red chip under the client-hours ring of the ticket window shows what **the ticket's contract earns or loses this month** (`GET /api/tickets/:id/contract-profit`, right `hr.manage` only — it uses the HR wages; `server/lib/contractProfit.ts`, `src/pages/tickets/ContractProfit.tsx`): billed under the contract this month (`billing_items` of the contract, not set aside) less the recurring services' cost and the hours worked under it at each technician's hourly wage; a click gives the breakdown, and technicians with no wage on file are counted apart (`missingWages`). Test: "hours bank contracts".
 
-**Potential profit per contract** (administrators, `hr.manage`): `profit` on `GET /api/crm/clients/:id/contracts` and `…/:kid` (`potentialProfit` in `server/lib/contractProfit.ts`) = everything the contract charges over its term (`summary.revenueCents`, after rebates) − its services' cost over the same term − the labour already worked under it (hours × each technician's HR wage); the hours still to come are not estimated. Shown as a green / red card (`ProfitCard`) under the figures of the contract window, with the margin %, and as a line in the contracts list. Not sent to anyone without the right.
-
 ## Production
 
 Docker Compose on a Debian server; Nginx Proxy Manager on another server terminates HTTPS and forwards to port 3000. Owner runs deployments (see INSTALL.md). Never `docker compose down -v`.

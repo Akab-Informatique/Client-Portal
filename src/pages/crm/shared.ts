@@ -106,8 +106,6 @@ export type CrmContract = {
   billingMode: "hourly" | "monthly" | "per_ticket" | "none" | "banked" | "fixed";
   typeKey: string | null;
   bankedHoursX100: number | null;
-  /** Administrators only: what the contract can still earn over its term (after rebates), less its services' cost and the labour worked so far */
-  profit?: { revenueCents: number; serviceCostCents: number; labourCostCents: number; hours: number; missingWages: number; profitCents: number; marginPct: number | null } | null;
   /** A rebate on everything the contract charges (percent × 100) */
   rebateBps?: number;
   /** Hours bank: the price of an hour, what becomes of the hours not used in a month, and where it stands this month */
