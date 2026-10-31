@@ -1173,11 +1173,17 @@ function ContractsTab({ client }: { client: CrmDetail }) {
                 <span className="w-44 text-xs text-muted-foreground">
                   {k.startDate ? shortDate(k.startDate) : "…"} → {k.endDate ? shortDate(k.endDate) : t("crm.contracts.noEnd")}
                 </span>
-                {k.summary && (k.serviceCount ?? 0) > 0 ? (
+                {k.summary && ((k.serviceCount ?? 0) > 0 || k.bank) ? (
                   <span className="w-48 text-right text-xs">
                     <span className="block font-mono font-semibold">
                       {money(k.summary.perPeriodCents, i18n.language)} <span className="font-sans font-normal text-muted-foreground">{k.billingPeriod === "yearly" ? t("services.perYear") : t("services.perMonth")}</span>
                     </span>
+                    {k.bank ? (
+                      <span className={cn("block text-[11px] font-medium", k.bank.left > 0 ? "text-sky-300" : "text-amber-300")}>
+                        {t("crm.contracts.bank.inList", { left: k.bank.left, available: k.bank.available })}
+                        {k.bank.over > 0 ? ` · ${t("crm.contracts.bank.overHint", { over: k.bank.over })}` : ""}
+                      </span>
+                    ) : null}
                     <span className="block text-[11px] text-muted-foreground">
                       {t("crm.contracts.window.revenue")} {money(k.summary.revenueCents, i18n.language)}
                     </span>

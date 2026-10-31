@@ -1,6 +1,7 @@
 import { and, asc, eq, inArray } from "drizzle-orm";
 import { db, schema } from "../db/index.ts";
 import { billingSettings } from "./billing.ts";
+import { bankMonths, bankNow, bankRollover, type BankMonth, type BankRollover } from "../../shared/bank.ts";
 
 /**
  * A client's contracts as the ticket view and the time entry see them.
@@ -65,6 +66,8 @@ export type ContractView = {
   /** Banked hours: hours bought and hours worked under the contract */
   bankedHours: number | null;
   usedHours: number;
+  /** Hours bank: what the portal works out for the current month (hours available incl. carried, used, left) */
+  bank?: { hours: number; rateCents: number | null; rollover: BankRollover; available: number; used: number; left: number; over: number } | null;
   fixedPriceCents: number | null;
 };
 
@@ -80,6 +83,8 @@ const modeOf = (v: string): BillingMode => ((BILLING_MODES as readonly string[])
  * rate of Admin › Facturation, any other does not bill hours.
  */
 export function hourlyRateOf(k: { billingMode: string; hourlyRateCents: number | null }, usualHourlyDollars: number): number | null {
+  // an hours bank is bought up front: the hours worked are drawn from it, never billed one by one
+  if (modeOf(k.billingMode) === "banked") return null;
   if (k.hourlyRateCents != null) return k.hourlyRateCents > 0 ? k.hourlyRateCents : null;
   return modeOf(k.billingMode) === "hourly" ? Math.round(usualHourlyDollars * 100) : null;
 }
@@ -98,6 +103,7 @@ export async function contractsOfCompany(companyAt: number): Promise<ContractVie
   const usual = (await billingSettings()).rates.hourly;
   const chosen = rows.find((k) => k.supportDefault) ?? rows.find((k) => k.isDefault) ?? (rows.length === 1 ? rows[0] : null);
   const used = await usedHoursOf(rows);
+  const bank = await banksOf(rows);
   return rows.map((k) => {
     const mode = modeOf(k.billingMode);
     return {
@@ -113,8 +119,9 @@ export async function contractsOfCompany(companyAt: number): Promise<ContractVie
       isDefault: chosen?.id === k.id,
       billed: hourlyRateOf(k, usual) != null,
       typeKey: k.typeKey,
-      bankedHours: k.bankedHoursX100 == null ? null : k.bankedHoursX100 / 100,
-      usedHours: used.get(k.id) ?? 0,
+      bankedHours: bank.get(k.id)?.available ?? (k.bankedHoursX100 == null ? null : k.bankedHoursX100 / 100),
+      usedHours: bank.get(k.id)?.used ?? used.get(k.id) ?? 0,
+      bank: bank.get(k.id) ?? null,
       fixedPriceCents: k.fixedPriceCents,
     };
   });
@@ -129,6 +136,45 @@ export async function usedHoursOf(contracts: { id: string; autotaskId: string | 
   for (const r of rows) {
     const id = r.id ? bySource.get(r.id) : undefined;
     if (id) out.set(id, Math.round(((out.get(id) ?? 0) + r.minutes / 60) * 100) / 100);
+  }
+  return out;
+}
+
+/** Hours worked under each contract, month by month (YYYY-MM, Québec time). Keyed by the contract's id. */
+export async function usedByMonthOf(contracts: { id: string; autotaskId: string | null }[]): Promise<Map<string, Map<string, number>>> {
+  const out = new Map<string, Map<string, number>>();
+  const bySource = new Map(contracts.filter((k) => k.autotaskId).map((k) => [k.autotaskId!, k.id]));
+  if (!bySource.size) return out;
+  const rows = await db().select({ id: schema.ticketTimeEntries.contractId, minutes: schema.ticketTimeEntries.minutes, at: schema.ticketTimeEntries.startedAt, overMinutes: schema.ticketTimeEntries.bankOverMinutes, overMode: schema.ticketTimeEntries.bankOverMode }).from(schema.ticketTimeEntries).where(inArray(schema.ticketTimeEntries.contractId, [...bySource.keys()]));
+  for (const r of rows) {
+    const id = r.id ? bySource.get(r.id) : undefined;
+    if (!id) continue;
+    // minutes past the bank that were billed, bought as extra hours or given are not drawn from it (only "debt" ones are)
+    const counted = r.minutes - (r.overMode && r.overMode !== "debt" ? Math.min(r.minutes, r.overMinutes) : 0);
+    const month = r.at.toLocaleDateString("en-CA", { timeZone: "America/Toronto" }).slice(0, 7);
+    const m = out.get(id) ?? new Map<string, number>();
+    m.set(month, (m.get(month) ?? 0) + counted / 60);
+    out.set(id, m);
+  }
+  return out;
+}
+
+type BankRow = { id: string; autotaskId: string | null; billingMode: string; bankedHoursX100: number | null; bankRateCents: number | null; bankRollover: string; startDate: string | null; endDate: string | null; endedOn: string | null };
+const todayQuebec = () => new Date().toLocaleDateString("en-CA", { timeZone: "America/Toronto" });
+/** The month-by-month bank of one contract (empty when it is not an hours bank) */
+export function bankRowsOf(k: BankRow, used: Map<string, number> | undefined, today = todayQuebec()): BankMonth[] {
+  if (modeOf(k.billingMode) !== "banked" || !k.bankedHoursX100) return [];
+  return bankMonths({ hours: k.bankedHoursX100 / 100, rollover: bankRollover(k.bankRollover), start: k.startDate, end: k.endDate, endedOn: k.endedOn, today, used: used ?? new Map() });
+}
+/** Where each hours bank stands this month (only the banked contracts are in the map) */
+export async function banksOf(contracts: BankRow[], today = todayQuebec()): Promise<Map<string, NonNullable<ContractView["bank"]>>> {
+  const out = new Map<string, NonNullable<ContractView["bank"]>>();
+  const banked = contracts.filter((k) => modeOf(k.billingMode) === "banked" && k.bankedHoursX100);
+  if (!banked.length) return out;
+  const used = await usedByMonthOf(banked);
+  for (const k of banked) {
+    const now = bankNow(bankRowsOf(k, used.get(k.id), today), today);
+    out.set(k.id, { hours: k.bankedHoursX100! / 100, rateCents: k.bankRateCents, rollover: bankRollover(k.bankRollover), ...(now ?? { available: k.bankedHoursX100! / 100, used: 0, left: k.bankedHoursX100! / 100, over: 0 }) });
   }
   return out;
 }

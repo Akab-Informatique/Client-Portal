@@ -106,6 +106,10 @@ export type CrmContract = {
   billingMode: "hourly" | "monthly" | "per_ticket" | "none" | "banked" | "fixed";
   typeKey: string | null;
   bankedHoursX100: number | null;
+  /** Hours bank: the price of an hour, what becomes of the hours not used in a month, and where it stands this month */
+  bankRateCents?: number | null;
+  bankRollover?: "lose" | "carry" | "topup";
+  bank?: { hours: number; rateCents: number | null; rollover: "lose" | "carry" | "topup"; available: number; used: number; left: number; over: number } | null;
   fixedPriceCents: number | null;
   /** A recurring contract sold as a bundle: one price per billing period and a quantity (none: the services are charged one by one) */
   bundlePriceCents?: number | null;

@@ -150,6 +150,9 @@ export const clientContracts = pgTable(
     typeKey: text("type_key"),
     /** Banked hours: the block of hours bought (x100) */
     bankedHoursX100: integer("banked_hours_x100"),
+    /** Hours bank: what an hour of the bank costs (cents), and what happens to the hours not used in a month: carry (they add to next month) | topup (next month only buys what tops it off) | lose */
+    bankRateCents: integer("bank_rate_cents"),
+    bankRollover: text("bank_rollover").notNull().default("lose"),
     /** Fixed price in cents */
     fixedPriceCents: integer("fixed_price_cents"),
     /** The client's default support contract, chosen in the portal (else the source's default) */
@@ -721,6 +724,10 @@ export const ticketTimeEntries = pgTable(
     offsetMinutes: integer("offset_minutes").notNull().default(0),
     /** Minutes billed when they are not "worked minus the offset" (more can be billed than was worked) */
     billedMinutes: integer("billed_minutes"),
+    /** Time on an hours bank that went past what was left: the minutes over, what became of them (bill | extra | free | debt) and the rate billed for bill / extra */
+    bankOverMinutes: integer("bank_over_minutes").notNull().default(0),
+    bankOverMode: text("bank_over_mode"),
+    bankOverRateCents: integer("bank_over_rate_cents"),
     summary: text("summary").notNull().default(""),
     internalText: text("internal_text").notNull().default(""),
     billable: boolean("billable").notNull().default(true),

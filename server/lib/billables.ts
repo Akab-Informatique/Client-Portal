@@ -103,10 +103,13 @@ export function syncBillables(): Promise<BillablesState> {
       const contract = named ?? (it.kind === "labour" ? (active.find((k) => k.supportDefault) ?? active.find((k) => k.isDefault) ?? (active.length === 1 ? active[0] : undefined)) : undefined);
       // the contract's own rate bills the hours (above 0); a rate of 0 means they are included, never billed
       const contractRate = contract ? hourlyRateOf(contract, s.rates.hourly) : null;
-      const notBilled = it.kind === "labour" && contract != null && contractRate == null;
-      const rate = notBilled
-        ? 0
-        : it.kind === "labour" && contractRate != null
+      const overage = it.overageRateCents != null;
+      const notBilled = !overage && it.kind === "labour" && contract != null && contractRate == null;
+      const rate = overage
+        ? it.overageRateCents!
+        : notBilled
+          ? 0
+          : it.kind === "labour" && contractRate != null
           ? contractRate
           : (it.unitPriceCents ?? (it.kind === "labour" ? (client.invoice?.hourlyRate != null ? Math.round(client.invoice.hourlyRate * 100) : NO_CONTRACT_HOURLY_CENTS) : 0));
       const quantityX100 = Math.round(it.quantity * 100);
@@ -202,8 +205,10 @@ export async function refreshLabourRates(period?: Period) {
     if (pick) defaults.set(clientId, pick);
   }
   const out = { updated: 0, unchanged: 0, skipped: 0, included: 0, billedAgain: 0 };
+  // hours past an hours bank billed at their own rate are never repriced by the contract
+  const overage = new Set((await d.select({ id: schema.ticketTimeEntries.id }).from(schema.ticketTimeEntries).where(inArray(schema.ticketTimeEntries.bankOverMode, ["bill", "extra"]))).map((r) => `ptime:${r.id}`));
   for (const it of items) {
-    if (it.edited) {
+    if (it.edited || (it.sourceId && overage.has(it.sourceId))) {
       out.skipped++;
       continue;
     }

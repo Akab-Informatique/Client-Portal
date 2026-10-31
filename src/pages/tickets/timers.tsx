@@ -21,6 +21,7 @@ import { cn } from "@/lib/utils";
 import { longDateTime, ticketErrorText, hm, parseHm, useChoiceText } from "./shared";
 import { EmailSend } from "./EmailSend";
 import { contractNote } from "./contract";
+import { money } from "@/pages/crm/shared";
 
 /**
  * Work timers on tickets. Opening a ticket starts (or resumes) its timer;
@@ -389,6 +390,8 @@ function TimeEntryDialog({ timer, position, onLater }: { timer: Timer; position:
   const contract = contracts.find((k) => k.id === (contractPick || ticket?.contract?.id)) ?? null;
   // only an hourly contract bills the hours; monthly, per ticket and included ones never do
   const billable = billableOn && (contract ? contract.billed : true);
+  // an hours bank: past what is left, what becomes of the extra hours
+  const [overage, setOverage] = useState<"bill" | "extra" | "free" | "debt" | "">("");
   const [offset, setOffset] = useState("");
   // hours billed when they are not "worked minus the offset": more can be billed than was worked
   const [billedText, setBilledText] = useState("");
@@ -416,6 +419,7 @@ function TimeEntryDialog({ timer, position, onLater }: { timer: Timer; position:
         offsetHours: billable ? (billedOverride !== null ? Math.max(0, h - billedOverride) : off) : 0,
         ...(billable && billedOverride !== null ? { billedHours: billedOverride } : {}),
         contractId: contract?.id ?? null,
+        ...(overHours > 0 && overage ? { overage } : {}),
         // what changes on the ticket with this time: its status and due date, only when changed
         ...(statusNew && statusNew !== ticket?.status ? { status: statusNew } : {}),
         notify: { contact: notifyContact, others },
@@ -450,6 +454,8 @@ function TimeEntryDialog({ timer, position, onLater }: { timer: Timer; position:
   });
   const h = parseHm(hours) ?? 0;
   const hoursOk = parseHm(hours) !== null && h > 0 && h <= 24;
+  // hours past what is left in an hours bank
+  const overHours = contract?.mode === "banked" && contract.bank ? Math.max(0, Math.round((h - contract.bank.left) * 100) / 100) : 0;
   const off = offset.trim() ? (parseHm(offset) ?? Number.NaN) : 0;
   const billedParsed = billedText.trim() ? (parseHm(billedText) ?? Number.NaN) : null;
   const billedOverride = billable && billedParsed !== null && Number.isFinite(billedParsed) && billedParsed >= 0 && billedParsed <= 100 ? billedParsed : null;
@@ -457,7 +463,7 @@ function TimeEntryDialog({ timer, position, onLater }: { timer: Timer; position:
   const offsetOk = !billable || billedOverride !== null || (Number.isFinite(off) && off >= 0 && off <= h);
   const billed = billable && billedOverride !== null ? billedOverride : Math.max(0, Math.round((h - (billable ? off : h)) * 100) / 100);
   const othersOk = others.every(isAddress);
-  const valid = hoursOk && summary.trim().length > 0 && offsetOk && billedOk && othersOk;
+  const valid = hoursOk && summary.trim().length > 0 && offsetOk && billedOk && othersOk && (overHours === 0 || overage !== "");
   // a short timer is closed without asking; a longer one is confirmed first
   const closeWithoutTime = () =>
     minutes <= 5 ? discard.mutate() : void confirm({ title: t("tickets.timer.discardConfirm"), destructive: true }).then((ok) => ok && discard.mutate());
@@ -541,6 +547,28 @@ function TimeEntryDialog({ timer, position, onLater }: { timer: Timer; position:
                 </SelectContent>
               </Select>
               <p className="text-[11px] text-muted-foreground">{contractNote(t, i18n.language, contract)}</p>
+              {contract?.mode === "banked" && contract.bank && (
+                <div className="space-y-1.5 rounded-lg border border-sky-500/30 bg-sky-500/[0.06] p-2.5 text-xs">
+                  <p>
+                    {t("tickets.bank.left", { left: contract.bank.left, available: contract.bank.available })}
+                    {overHours > 0 ? <span className="ml-1 font-semibold text-amber-300">{t("tickets.bank.over", { over: overHours })}</span> : <span className="ml-1 text-muted-foreground">{t("tickets.bank.after", { after: Math.round((contract.bank.left - h) * 100) / 100 })}</span>}
+                  </p>
+                  {overHours > 0 && (
+                    <fieldset className="space-y-1">
+                      <legend className="text-[11px] text-amber-300">{t("tickets.bank.choose")}</legend>
+                      {(["bill", "extra", "free", "debt"] as const).map((o) => (
+                        <label key={o} className="flex cursor-pointer items-start gap-2 rounded-md border px-2 py-1.5 has-[:checked]:border-[color:var(--gold)]/50 has-[:checked]:bg-[color:var(--gold)]/[0.06]">
+                          <input type="radio" name="bank-over" checked={overage === o} onChange={() => setOverage(o)} className="mt-0.5 accent-[color:var(--gold)]" />
+                          <span>
+                            <span className="block font-medium">{t(`tickets.bank.${o}`)}</span>
+                            <span className="block text-[11px] text-muted-foreground">{t(`tickets.bank.${o}Hint`, { rate: money(o === "extra" ? (contract.bank?.rateCents ?? 0) : 0, i18n.language) })}</span>
+                          </span>
+                        </label>
+                      ))}
+                    </fieldset>
+                  )}
+                </div>
+              )}
             </div>
           )}
           {/* billing: billed or not, and an offset (hours worked but not billed) */}

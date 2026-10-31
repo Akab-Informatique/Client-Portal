@@ -29,6 +29,7 @@ import { addTicketTime, editable, sheetOf, weekStartOf } from "../lib/timesheets
 import { refreshAccrual, splitBillable } from "../lib/hr.ts";
 import { cleanDirection, directionPrompt } from "../lib/aiDirection.ts";
 import { quebecStamp, scheduleTickets, type SchedIn } from "../lib/ticketSchedule.ts";
+import { billingSettings } from "../lib/billing.ts";
 
 /**
  * Tickets (staff). Data come from the ticket source: the portal's database,
@@ -1369,6 +1370,8 @@ export const ticketRoutes = new Hono<AppEnv>()
         billedHours: z.number().min(0).max(100).optional(),
         // the contract the time is logged on (none: the ticket's contract)
         contractId: z.uuid().nullable().optional(),
+        // time past what is left in an hours bank: bill the extra hours at the usual rate, the client buys them for his bank, no charge, or go negative (taken from next month)
+        overage: z.enum(["bill", "extra", "free", "debt"]).optional(),
         // what the ticket becomes with this time: its status and due date
         status: z.string().max(60).optional(),
         dueAt: z
@@ -1390,6 +1393,23 @@ export const ticketRoutes = new Hono<AppEnv>()
       if (p.contractId && !contract) throw new HTTPException(400, { message: "invalid_contract" });
     }
     if (contract && !contract.billed) p.billable = false;
+    // an hours bank: the hours are drawn from it; past what is left, the technician chooses what becomes of the extra ones
+    let bankOver: { minutes: number; mode: "bill" | "extra" | "free" | "debt"; rateCents: number | null } | undefined;
+    if (contract?.mode === "banked" && contract.bank) {
+      const overHours = Math.max(0, Math.round((p.hours - contract.bank.left) * 100) / 100);
+      if (overHours > 0) {
+        if (!p.overage) throw new HTTPException(400, { message: "bank_over_choice_required" });
+        const usual = Math.round((await billingSettings()).rates.hourly * 100);
+        const rateCents = p.overage === "bill" ? usual : p.overage === "extra" ? (contract.bank.rateCents ?? usual) : null;
+        if (rateCents === 0) throw new HTTPException(400, { message: "bank_over_no_rate" });
+        bankOver = { minutes: Math.min(Math.round(p.hours * 60), Math.round(overHours * 60)), mode: p.overage, rateCents };
+        // only the hours past the bank are billed (bill / extra): the bank's own hours never are
+        if (p.overage === "bill" || p.overage === "extra") {
+          p.billable = true;
+          p.billedHours = bankOver.minutes / 60;
+        }
+      }
+    }
     // the offset cannot exceed the hours worked; it means nothing when nothing is billed
     if (p.offsetHours > p.hours) throw new HTTPException(400, { message: "offset_too_large" });
     if (!p.billable) p.offsetHours = 0;
@@ -1405,7 +1425,7 @@ export const ticketRoutes = new Hono<AppEnv>()
     if (p.status && !(await run(() => src.options())).statuses.some((x) => x.value === p.status)) throw new HTTPException(400, { message: "Validation failed" });
     if (p.status || p.dueAt) await run(() => src.update(timer.ticketId, { ...(p.status ? { status: p.status } : {}), ...(p.dueAt ? { dueAt: new Date(p.dueAt).toISOString() } : {}) }, a));
     const startedAt = new Date(endedAt.getTime() - p.hours * 3_600_000);
-    const made = await run(() => src.addTimeEntry(timer.ticketId, { ...p, billedHours: p.billable && p.billedHours !== undefined ? p.billedHours : undefined, contractSourceId: contract?.sourceId ?? null, startedAt, endedAt }, a));
+    const made = await run(() => src.addTimeEntry(timer.ticketId, { ...p, billedHours: p.billable && p.billedHours !== undefined ? p.billedHours : undefined, contractSourceId: contract?.sourceId ?? null, ...(bankOver ? { bankOver } : {}), startedAt, endedAt }, a));
     // on the technician's timesheet too, with the ticket and its client
     const tk = await src.get(timer.ticketId).catch(() => null);
     await addTicketTime(a.realUser.id, {

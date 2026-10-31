@@ -9309,3 +9309,39 @@ describe("sales: the Contrats tab", () => {
     expect(old.from).toBe("2020-05-01");
   });
 });
+
+describe("hours bank contracts", () => {
+  it("is bought by the month (hours × price), has no services, shows its balance, and asks what to do with hours past it", async () => {
+    resetRateLimit("login:ip:unknown");
+    const admin = await signIn("admin@akab.local");
+    const tech = await signIn("tech@akab.local");
+    const [t0] = (await tech.get("/api/tickets?view=all")).json.items;
+    const clients = (await admin.get("/api/crm/clients")).json;
+    const client = (clients.items ?? clients).find((x: any) => x.autotaskId === t0.company.id);
+    const base = `/api/crm/clients/${client.id}/contracts`;
+    const k = (
+      await admin.post(base, { name: "Banque 1 h", typeKey: "banked", startDate: "2026-01-01", endDate: "2026-12-31", bankedHours: 1, bankedRate: 120, bankRollover: "topup", supportDefault: true, hourlyRate: 115, billingPeriod: "yearly", services: [] })
+    ).json;
+    // 1 h at 120 $ a month, always monthly, charged like a bundle; the hours worked are never billed one by one
+    expect(k).toMatchObject({ billingMode: "banked", billingPeriod: "monthly", bankedHoursX100: 100, bankRateCents: 12000, bankRollover: "topup", bundlePriceCents: 12000, bundleQuantity: 1 });
+    const detail = (await admin.get(`${base}/${k.id}`)).json;
+    expect(detail.bank).toMatchObject({ hours: 1, rateCents: 12000, rollover: "topup", used: 0 });
+    expect(detail.bank.left).toBe(detail.bank.available);
+    expect(detail.summary.perPeriodCents).toBe(12000);
+    expect((await admin.get(base)).json.find((x: any) => x.id === k.id).bank.hours).toBe(1);
+    // changing the hours or the rate moves the monthly charge
+    const moved = (await admin.patch(`${base}/${k.id}`, { bankedHours: 10, bankedRate: 100, bankRollover: "carry" })).json;
+    expect(moved).toMatchObject({ bankedHoursX100: 1000, bundlePriceCents: 10000, bundleQuantity: 10, bankRollover: "carry" });
+    await admin.patch(`${base}/${k.id}`, { bankedHours: 1, bankedRate: 120, bankRollover: "lose" });
+
+    // the time entry: past what is left, a choice is required, then it is kept as chosen
+    await tech.post(`/api/tickets/${t0.id}/timer/start`);
+    const timer = (await tech.get("/api/tickets/timers")).json.find((x: any) => x.ticketId === t0.id);
+    await tech.post(`/api/tickets/${t0.id}/timer/stop`);
+    const pending = (await tech.get("/api/tickets/timers")).json.find((x: any) => x.ticketId === t0.id) ?? timer;
+    const entry = { hours: 2, summary: "Dépassement de la banque", contractId: k.id };
+    const first = await tech.post(`/api/tickets/timers/${pending.id}/submit`, entry);
+    expect(first.json.error).toBe("bank_over_choice_required");
+    expect((await tech.post(`/api/tickets/timers/${pending.id}/submit`, { ...entry, overage: "free" })).status).toBe(201);
+  });
+});

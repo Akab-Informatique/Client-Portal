@@ -101,6 +101,8 @@ export type Billable = {
   /** null: no rate known (the client's or the usual one is used) */
   unitPriceCents: number | null;
   taxable: boolean;
+  /** Hours past an hours bank that are billed at this rate, whatever the contract says (the bank's own hours are never billed) */
+  overageRateCents?: number | null;
 };
 export type BillableExport = { items: Billable[]; errors: Partial<Record<BillableKind, string>> };
 
@@ -221,6 +223,8 @@ export type NewTimeEntry = {
   billedHours?: number;
   /** The contract's id in the source, when the time is logged on one */
   contractSourceId?: string | null;
+  /** Time on an hours bank that went past what was left: the minutes over, what became of them and the rate billed (bill / extra) */
+  bankOver?: { minutes: number; mode: "bill" | "extra" | "free" | "debt"; rateCents: number | null };
 };
 export type NewTicket = {
   title: string;

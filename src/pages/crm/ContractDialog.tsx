@@ -16,6 +16,7 @@ import { useCan } from "@/lib/session";
 import { cn } from "@/lib/utils";
 import { contractCharges, chargesOn, linesForCharges, type BillingPeriod, type ChargeLine } from "@shared/contractCharges";
 import { prorata } from "@shared/prorata";
+import { bankBundle, type BankMonth, type BankRollover } from "@shared/bank";
 import { shortDate, ticketErrorText } from "@/pages/tickets/shared";
 import { MapItcloudDialog, NewServiceDialog, type Unmapped } from "./ContractServices";
 import { money, useContractTypes, type CrmContract, type CrmDetail } from "./shared";
@@ -39,7 +40,7 @@ type Line = {
   periods: { from: string; to: string; days: number; periodDays: number; full: boolean; amountCents: number }[];
 };
 type Summary = { billedThrough?: string | null; billedCents?: number; revenueCents: number; perPeriodCents: number; yearlyExtraCents: number; endsOn: string | null; dueCents: number; next: { date: string; amountCents: number; prorated: boolean } | null };
-type Detail = CrmContract & { billingPeriod: BillingPeriod; endedOn: string | null; billedThrough: string | null; services: Line[]; summary: Summary; charged: { has: boolean; billingItems: number; timeEntries: number; servicesStarted: number } };
+type Detail = CrmContract & { billingPeriod: BillingPeriod; endedOn: string | null; billedThrough: string | null; services: Line[]; bankMonths?: BankMonth[]; summary: Summary; charged: { has: boolean; billingItems: number; timeEntries: number; servicesStarted: number } };
 type CatalogItem = { id: string; name: string; kind: "recurring" | "recurring_yearly"; priceCents: number; costCents: number };
 export type Event = { id: string; kind: string; source: string; detail: Record<string, any>; at: string; actor: string | null };
 
@@ -200,6 +201,25 @@ function Field({ label, children, className, hint }: { label: string; children: 
   );
 }
 
+/** What becomes of the hours of the bank that are not used in a month */
+function RolloverPicker({ value, onChange, disabled }: { value: BankRollover; onChange: (v: BankRollover) => void; disabled?: boolean }) {
+  const { t } = useTranslation();
+  return (
+    <fieldset className="space-y-1.5" disabled={disabled}>
+      <legend className="text-xs text-muted-foreground">{t("crm.contracts.bank.rollover")}</legend>
+      {(["lose", "carry", "topup"] as const).map((r) => (
+        <label key={r} className="flex cursor-pointer items-start gap-2 rounded-lg border px-3 py-2 text-xs has-[:checked]:border-[color:var(--gold)]/50 has-[:checked]:bg-[color:var(--gold)]/[0.06]">
+          <input type="radio" name="bank-rollover" checked={value === r} onChange={() => onChange(r)} className="mt-0.5 accent-[color:var(--gold)]" />
+          <span>
+            <span className="block font-medium">{t(`crm.contracts.bank.${r}`)}</span>
+            <span className="block text-[11px] text-muted-foreground">{t(`crm.contracts.bank.${r}Hint`)}</span>
+          </span>
+        </label>
+      ))}
+    </fieldset>
+  );
+}
+
 // ── making a contract ──
 type Draft = { serviceId: string; name: string; kind: "recurring" | "recurring_yearly"; priceCents: number; quantity: number; addedOn: string; unitCustom: boolean };
 
@@ -213,7 +233,7 @@ export function NewContractDialog({ client, onClose }: { client: CrmDetail; onCl
     const now = new Date();
     const end = new Date(now.getFullYear() + 1, now.getMonth(), now.getDate() - 1, 12);
     const day = (d: Date) => new Date(d.getTime() - d.getTimezoneOffset() * 60_000).toISOString().slice(0, 10);
-    return { name: "", typeKey: "", startDate: day(now), endDate: day(end), figure: "", rate: "", billingPeriod: "monthly" as BillingPeriod, billedThrough: "", supportDefault: false, bundleOn: false, bundlePrice: "", bundleQty: "1" };
+    return { name: "", typeKey: "", startDate: day(now), endDate: day(end), figure: "", rate: "", billingPeriod: "monthly" as BillingPeriod, billedThrough: "", supportDefault: false, bundleOn: false, bundlePrice: "", bundleQty: "1", bankRate: "", bankRollover: "lose" as BankRollover };
   });
   const [lines, setLines] = useState<Draft[]>([]);
   // the hourly rate starts at the usual one of Admin › Facturation; typing another changes it, 0 means no hourly rate (included)
@@ -224,9 +244,13 @@ export function NewContractDialog({ client, onClose }: { client: CrmDetail; onCl
   const termOk = Boolean(f.startDate && f.endDate && f.endDate >= f.startDate);
   const term = termOk ? { start: f.startDate, end: f.endDate } : null;
   // what the services will charge, live
-  const bundled = type?.kind === "recurring" && f.bundleOn;
-  const bundleCents = toCents(f.bundlePrice);
-  const bundleQty = Math.max(1, Math.round(Number(f.bundleQty) || 1));
+  const isBank = type?.kind === "banked";
+  const bankHours = Number(f.figure.replace(",", ".")) || 0;
+  const bankRateCents = toCents(f.bankRate) ?? 0;
+  const bankPlan = isBank && bankHours > 0 ? bankBundle(bankHours, bankRateCents) : null;
+  const bundled = (type?.kind === "recurring" && f.bundleOn) || Boolean(bankPlan);
+  const bundleCents = bankPlan ? bankPlan.priceCents : toCents(f.bundlePrice);
+  const bundleQty = bankPlan ? bankPlan.quantity : Math.max(1, Math.round(Number(f.bundleQty) || 1));
   const charges = useMemo(
     () =>
       contractCharges(
@@ -243,20 +267,20 @@ export function NewContractDialog({ client, onClose }: { client: CrmDetail; onCl
     mutationFn: () => {
       const n = f.figure.trim() === "" ? null : Number(f.figure.replace(",", "."));
       // a recurring services contract has no typed charge: it comes from its services
-      const figure = type?.kind === "banked" ? { bankedHours: n } : {};
-      const hourlyRate = rate.trim() === "" ? undefined : Number(rate.replace(",", "."));
+      const figure = isBank ? { bankedHours: n, bankedRate: bankRateCents / 100, bankRollover: f.bankRollover } : {};
+      const hourlyRate = isBank ? undefined : rate.trim() === "" ? undefined : Number(rate.replace(",", "."));
       return api.post(`/crm/clients/${client.id}/contracts`, {
         name: f.name.trim(),
         typeKey: type!.key,
         startDate: f.startDate,
         endDate: f.endDate,
-        billingPeriod: f.billingPeriod,
+        billingPeriod: isBank ? "monthly" : f.billingPeriod,
         ...(f.billedThrough ? { billedThrough: f.billedThrough } : {}),
         ...(f.supportDefault ? { supportDefault: true } : {}),
         ...(hourlyRate !== undefined && Number.isFinite(hourlyRate) ? { hourlyRate } : {}),
         ...figure,
-        ...(bundled ? { bundlePrice: (bundleCents ?? 0) / 100, bundleQuantity: bundleQty } : {}),
-        services: lines.map((l) => ({ serviceId: l.serviceId, addedOn: l.addedOn, quantity: l.quantity, ...(l.unitCustom && !bundled ? { priceCents: l.priceCents } : {}) })),
+        ...(bundled && !isBank ? { bundlePrice: (bundleCents ?? 0) / 100, bundleQuantity: bundleQty } : {}),
+        services: (isBank ? [] : lines).map((l) => ({ serviceId: l.serviceId, addedOn: l.addedOn, quantity: l.quantity, ...(l.unitCustom && !bundled ? { priceCents: l.priceCents } : {}) })),
       });
     },
     onSuccess: () => {
@@ -305,18 +329,22 @@ export function NewContractDialog({ client, onClose }: { client: CrmDetail; onCl
               <Field label={t("crm.contracts.end")}>
                 <Input type="date" required min={f.startDate || undefined} value={f.endDate} onChange={set("endDate")} className={cn(f.endDate && f.startDate && f.endDate < f.startDate && "border-destructive")} />
               </Field>
-              <Field label={t("crm.contracts.window.chargedBy")}>
-                <select value={f.billingPeriod} onChange={set("billingPeriod")} className={field}>
-                  <option value="monthly">{t("crm.contracts.window.monthly")}</option>
-                  <option value="yearly">{t("crm.contracts.window.yearly")}</option>
-                </select>
-              </Field>
+              {!isBank && (
+                <Field label={t("crm.contracts.window.chargedBy")}>
+                  <select value={f.billingPeriod} onChange={set("billingPeriod")} className={field}>
+                    <option value="monthly">{t("crm.contracts.window.monthly")}</option>
+                    <option value="yearly">{t("crm.contracts.window.yearly")}</option>
+                  </select>
+                </Field>
+              )}
               <Field label={t("crm.contracts.billedThrough")} hint={t("crm.contracts.billedThroughText")}>
                 <Input type="date" value={f.billedThrough} onChange={set("billedThrough")} />
               </Field>
-              <Field label={t("crm.contracts.hourlyRate")} hint={t("crm.contracts.hourlyRateHint")}>
-                <Input value={rate} onChange={(e) => setF((x) => ({ ...x, rate: e.target.value }))} inputMode="decimal" placeholder={usualRate || "$"} className="text-right font-mono" />
-              </Field>
+              {!isBank && (
+                <Field label={t("crm.contracts.hourlyRate")} hint={t("crm.contracts.hourlyRateHint")}>
+                  <Input value={rate} onChange={(e) => setF((x) => ({ ...x, rate: e.target.value }))} inputMode="decimal" placeholder={usualRate || "$"} className="text-right font-mono" />
+                </Field>
+              )}
               <label className="flex items-center gap-2 self-end pb-2 text-xs">
                 <input type="checkbox" checked={f.supportDefault} onChange={(e) => setF((x) => ({ ...x, supportDefault: e.target.checked }))} className="size-4 accent-[color:var(--gold)]" />
                 <span>
@@ -325,13 +353,32 @@ export function NewContractDialog({ client, onClose }: { client: CrmDetail; onCl
                 </span>
               </label>
               {/* the recurring services contract asks no charge here: it comes from its services */}
-              {type && type.kind !== "recurring" && type.kind !== "hourly" && (
+              {type && type.kind !== "recurring" && type.kind !== "hourly" && !isBank && (
                 <Field label={t(`crm.contracts.figure_${type.kind}`)}>
                   <Input value={f.figure} onChange={set("figure")} inputMode="decimal" placeholder={type.kind === "banked" ? "h" : "$"} />
                 </Field>
               )}
             </div>
           </section>
+
+          {isBank && (
+            <section className="space-y-3 rounded-xl border bg-background/30 p-3">
+              <h4 className="text-sm font-semibold">{t("crm.contracts.bank.title")}</h4>
+              <p className="text-xs text-muted-foreground">{t("crm.contracts.bank.hint")}</p>
+              <div className="grid gap-3 sm:grid-cols-3">
+                <Field label={t("crm.contracts.bank.hours")}>
+                  <Input value={f.figure} onChange={set("figure")} inputMode="decimal" placeholder="h" className="text-right font-mono" />
+                </Field>
+                <Field label={t("crm.contracts.bank.rate")}>
+                  <Input value={f.bankRate} onChange={set("bankRate")} inputMode="decimal" placeholder="$" className="text-right font-mono" />
+                </Field>
+                <p className="self-end pb-2 text-xs text-muted-foreground">
+                  {t("crm.contracts.bundle.total")} <span className="font-mono text-sm text-foreground">{money(Math.round(bankHours * bankRateCents), lang)}</span> {t("services.perMonth")}
+                </p>
+              </div>
+              <RolloverPicker value={f.bankRollover} onChange={(v) => setF((x) => ({ ...x, bankRollover: v }))} />
+            </section>
+          )}
 
           {type?.kind === "recurring" && (
             <section className="space-y-3 rounded-xl border bg-background/30 p-3">
@@ -355,6 +402,7 @@ export function NewContractDialog({ client, onClose }: { client: CrmDetail; onCl
             </section>
           )}
 
+          {!isBank && (
           <section className="space-y-3">
             <h4 className="flex items-center gap-1.5 text-sm font-semibold">
               <Wrench className="size-4 text-primary" /> {bundled ? t("crm.contracts.bundle.included") : t("crm.contracts.services")} ({lines.length})
@@ -385,6 +433,7 @@ export function NewContractDialog({ client, onClose }: { client: CrmDetail; onCl
               onAdd={(p) => setLines((x) => [...x, { serviceId: p.service.id, name: p.service.name, kind: p.service.kind, priceCents: p.priceCents ?? p.service.priceCents, quantity: p.quantity, addedOn: p.addedOn, unitCustom: p.priceCents !== undefined }])}
             />
           </section>
+          )}
 
           <Figures summary={{ billedThrough: f.billedThrough || null, billedCents: on.billedCents, revenueCents: charges.revenueCents, perPeriodCents: charges.perPeriodCents, yearlyExtraCents: charges.yearlyExtraCents, endsOn: charges.endsOn, dueCents: on.dueCents, next: on.next ? { date: on.next.date, amountCents: on.next.amountCents, prorated: on.next.prorated } : null }} period={f.billingPeriod} lang={lang} />
 
@@ -447,7 +496,7 @@ export function ContractWindow({ client, contractId, onClose }: { client: CrmDet
             <Tabs defaultValue="services" className="mt-2">
               <TabsList className="flex-wrap">
                 <TabsTrigger value="services" className="gap-1.5">
-                  <Wrench className="size-3.5" /> {t("crm.contracts.window.tabServices")} ({k.services.length})
+                  <Wrench className="size-3.5" /> {k.billingMode === "banked" ? t("crm.contracts.bank.tab") : `${t("crm.contracts.window.tabServices")} (${k.services.length})`}
                 </TabsTrigger>
                 <TabsTrigger value="charges" className="gap-1.5">
                   <CalendarClock className="size-3.5" /> {t("crm.contracts.window.tabCharges")}
@@ -460,7 +509,7 @@ export function ContractWindow({ client, contractId, onClose }: { client: CrmDet
                 </TabsTrigger>
               </TabsList>
               <TabsContent value="services" className="pt-3">
-                <ServicesTab client={client} k={k} editable={editable} onChanged={refresh} />
+                {k.billingMode === "banked" ? <BankTab k={k} /> : <ServicesTab client={client} k={k} editable={editable} onChanged={refresh} />}
               </TabsContent>
               <TabsContent value="charges" className="pt-3">
                 <ChargesTab k={k} lang={lang} />
@@ -480,6 +529,52 @@ export function ContractWindow({ client, contractId, onClose }: { client: CrmDet
 }
 
 // ── services ──
+/** An hours bank: where it stands this month and month by month what was available, used, left and bought */
+function BankTab({ k }: { k: Detail }) {
+  const { t, i18n } = useTranslation();
+  const rows = [...(k.bankMonths ?? [])].reverse();
+  const h = (n: number) => `${n.toLocaleString(i18n.language, { maximumFractionDigits: 2 })} h`;
+  return (
+    <div className="space-y-3">
+      {k.bank ? (
+        <div className="grid gap-2 sm:grid-cols-4">
+          <Kpi icon={<CalendarDays className="size-3.5" />} label={t("crm.contracts.bank.monthHours")} value={h(k.bank.hours)} hint={`${money(k.bank.rateCents ?? 0, i18n.language)} / h`} />
+          <Kpi icon={<Receipt className="size-3.5" />} label={t("crm.contracts.bank.availableNow")} value={h(k.bank.available)} />
+          <Kpi icon={<Minus className="size-3.5" />} label={t("crm.contracts.bank.usedNow")} value={h(k.bank.used)} tone="sky" />
+          <Kpi icon={<TrendingUp className="size-3.5" />} label={t("crm.contracts.bank.leftNow")} value={h(k.bank.left)} tone={k.bank.left > 0 ? "gold" : "amber"} hint={k.bank.over > 0 ? t("crm.contracts.bank.overHint", { over: k.bank.over }) : undefined} />
+        </div>
+      ) : (
+        <p className="text-sm text-muted-foreground">{t("crm.contracts.bank.notSet")}</p>
+      )}
+      <p className="text-xs text-muted-foreground">{t(`crm.contracts.bank.${k.bankRollover ?? "lose"}Hint`)}</p>
+      {rows.length > 0 && (
+        <table className="w-full text-sm">
+          <thead className="text-left text-[11px] uppercase text-muted-foreground">
+            <tr>
+              <th className="py-1">{t("crm.contracts.bank.month")}</th>
+              <th className="text-right">{t("crm.contracts.bank.available")}</th>
+              <th className="text-right">{t("crm.contracts.bank.used")}</th>
+              <th className="text-right">{t("crm.contracts.bank.left")}</th>
+              <th className="text-right">{t("crm.contracts.bank.bought")}</th>
+            </tr>
+          </thead>
+          <tbody className="divide-y divide-border/50 font-mono">
+            {rows.map((r) => (
+              <tr key={r.month}>
+                <td className="py-1.5 font-sans">{r.month}</td>
+                <td className="text-right">{h(r.available)}</td>
+                <td className="text-right">{h(r.used)}</td>
+                <td className={cn("text-right", r.over > 0 && "text-amber-300")}>{r.over > 0 ? `−${h(r.over)}` : h(r.left)}</td>
+                <td className="text-right">{h(r.charge)}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      )}
+    </div>
+  );
+}
+
 function ServicesTab({ client, k, editable, onChanged }: { client: CrmDetail; k: Detail; editable: boolean; onChanged: () => void }) {
   const { t, i18n } = useTranslation();
   const confirm = useConfirm();
@@ -825,6 +920,13 @@ function OverviewTab({ client, k, editable, onChanged, onClose }: { client: CrmD
   const can = useCan();
   const { data: types = [] } = useContractTypes();
   const base = `/crm/clients/${client.id}/contracts/${k.id}`;
+  const isBank = k.billingMode === "banked";
+  const [bankRate, setBankRate] = useState(String((k.bankRateCents ?? 0) / 100));
+  const [rollover, setRollover] = useState<BankRollover>((k.bankRollover ?? "lose") as BankRollover);
+  useEffect(() => {
+    setBankRate(String((k.bankRateCents ?? 0) / 100));
+    setRollover((k.bankRollover ?? "lose") as BankRollover);
+  }, [k.bankRateCents, k.bankRollover]);
   const figureField = k.billingMode === "hourly" ? null : k.billingMode === "per_ticket" ? "ticketRate" : k.billingMode === "fixed" ? "fixedPrice" : k.billingMode === "banked" ? "bankedHours" : null;
   const figureValue = k.billingMode === "hourly" ? null : k.billingMode === "per_ticket" ? k.ticketRateCents : k.billingMode === "fixed" ? k.fixedPriceCents : k.billingMode === "banked" ? k.bankedHoursX100 : null;
   const show = (v: number | null) => (v == null ? "" : String(v / 100));
@@ -855,7 +957,7 @@ function OverviewTab({ client, k, editable, onChanged, onClose }: { client: CrmD
     },
     onError: (e) => toast.error(contractError(t, e)),
   });
-  const dirty = f.name.trim() !== k.name || f.typeKey !== (k.typeKey ?? "") || f.startDate !== (k.startDate ?? "") || f.endDate !== (k.endDate ?? "") || f.billingPeriod !== k.billingPeriod || f.billedThrough !== (k.billedThrough ?? "") || (figureField !== null && (toCents(f.figure) ?? null) !== (figureValue ?? null)) || rate !== rateNow || bundle.on !== bundleNow.on || (bundle.on && (bundle.price !== bundleNow.price || bundle.qty !== bundleNow.qty));
+  const dirty = f.name.trim() !== k.name || f.typeKey !== (k.typeKey ?? "") || f.startDate !== (k.startDate ?? "") || f.endDate !== (k.endDate ?? "") || f.billingPeriod !== k.billingPeriod || f.billedThrough !== (k.billedThrough ?? "") || (figureField !== null && (toCents(f.figure) ?? null) !== (figureValue ?? null)) || rate !== rateNow || (isBank && (toCents(bankRate) !== (k.bankRateCents ?? 0) || rollover !== (k.bankRollover ?? "lose"))) || bundle.on !== bundleNow.on || (bundle.on && (bundle.price !== bundleNow.price || bundle.qty !== bundleNow.qty));
   const save = () => {
     const p: Record<string, unknown> = {};
     if (f.name.trim() !== k.name) p.name = f.name.trim();
@@ -872,6 +974,10 @@ function OverviewTab({ client, k, editable, onChanged, onClose }: { client: CrmD
     if (figureField && (toCents(f.figure) ?? null) !== (figureValue ?? null)) {
       const n = f.figure.trim() === "" ? null : Number(f.figure.replace(",", "."));
       p[figureField] = n;
+    }
+    if (isBank) {
+      if (toCents(bankRate) !== (k.bankRateCents ?? 0)) p.bankedRate = (toCents(bankRate) ?? 0) / 100;
+      if (rollover !== (k.bankRollover ?? "lose")) p.bankRollover = rollover;
     }
     patch.mutate(p);
   };
@@ -905,24 +1011,34 @@ function OverviewTab({ client, k, editable, onChanged, onClose }: { client: CrmD
         <Field label={t("crm.contracts.end")}>
           <Input type="date" value={f.endDate} min={f.startDate || undefined} disabled={!editable} onChange={(e) => setF({ ...f, endDate: e.target.value })} />
         </Field>
-        <Field label={t("crm.contracts.window.chargedBy")}>
-          <select value={f.billingPeriod} disabled={!editable} onChange={(e) => setF({ ...f, billingPeriod: e.target.value as BillingPeriod })} className={field}>
-            <option value="monthly">{t("crm.contracts.window.monthly")}</option>
-            <option value="yearly">{t("crm.contracts.window.yearly")}</option>
-          </select>
-        </Field>
+        {!isBank && (
+          <Field label={t("crm.contracts.window.chargedBy")}>
+            <select value={f.billingPeriod} disabled={!editable} onChange={(e) => setF({ ...f, billingPeriod: e.target.value as BillingPeriod })} className={field}>
+              <option value="monthly">{t("crm.contracts.window.monthly")}</option>
+              <option value="yearly">{t("crm.contracts.window.yearly")}</option>
+            </select>
+          </Field>
+        )}
         <Field label={t("crm.contracts.billedThrough")} hint={t("crm.contracts.billedThroughText")}>
           <Input type="date" value={f.billedThrough} disabled={!editable} onChange={(e) => setF({ ...f, billedThrough: e.target.value })} />
         </Field>
-        <Field label={t("crm.contracts.hourlyRate")} hint={t("crm.contracts.hourlyRateHint")}>
-          <Input value={rate} disabled={!editable} inputMode="decimal" placeholder={String(k.usualRateCents / 100)} onChange={(e) => setRate(e.target.value)} className="text-right font-mono" />
-        </Field>
+        {!isBank && (
+          <Field label={t("crm.contracts.hourlyRate")} hint={t("crm.contracts.hourlyRateHint")}>
+            <Input value={rate} disabled={!editable} inputMode="decimal" placeholder={String(k.usualRateCents / 100)} onChange={(e) => setRate(e.target.value)} className="text-right font-mono" />
+          </Field>
+        )}
+        {isBank && (
+          <Field label={t("crm.contracts.bank.rate")}>
+            <Input value={bankRate} disabled={!editable} inputMode="decimal" onChange={(e) => setBankRate(e.target.value)} className="text-right font-mono" />
+          </Field>
+        )}
         {figureField && (
-          <Field label={t(`crm.contracts.figure_${k.billingMode}`)}>
+          <Field label={t(isBank ? "crm.contracts.bank.hours" : `crm.contracts.figure_${k.billingMode}`)}>
             <Input value={f.figure} disabled={!editable} inputMode="decimal" placeholder={k.billingMode === "hourly" ? String(k.usualRateCents / 100) : "0"} onChange={(e) => setF({ ...f, figure: e.target.value })} className="text-right font-mono" />
           </Field>
         )}
       </div>
+      {isBank && <RolloverPicker value={rollover} onChange={setRollover} disabled={!editable} />}
       {k.billingMode === "monthly" && (
         <div className="space-y-3 rounded-xl border bg-background/30 p-3">
           <label className="flex items-center gap-2 text-sm font-medium">
@@ -941,7 +1057,6 @@ function OverviewTab({ client, k, editable, onChanged, onClose }: { client: CrmD
           )}
         </div>
       )}
-      {k.billingMode === "banked" ? <p className="text-xs text-muted-foreground">{t("crm.contracts.bankBalance", { used: k.usedHours, total: (k.bankedHoursX100 ?? 0) / 100, left: Math.max(0, (k.bankedHoursX100 ?? 0) / 100 - k.usedHours) })}</p> : null}
       {editable && (
         <div className="flex flex-wrap items-center gap-4">
           <label className="flex items-center gap-2 text-xs text-muted-foreground" title={t("crm.contracts.autoHint")}>

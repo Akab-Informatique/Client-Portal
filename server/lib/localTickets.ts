@@ -353,6 +353,9 @@ export function localTicketSource(base: TicketSource): TicketSource {
           billable: p.billable,
           workType: p.workTypeId,
           contractId: p.contractSourceId ?? null,
+          bankOverMinutes: p.bankOver?.minutes ?? 0,
+          bankOverMode: p.bankOver?.mode ?? null,
+          bankOverRateCents: p.bankOver?.rateCents ?? null,
         })
         .returning({ id: schema.ticketTimeEntries.id });
       await touch(ticketId);
@@ -423,6 +426,7 @@ export function localTicketSource(base: TicketSource): TicketSource {
           quantity: Math.round((billed / 60) * 100) / 100,
           unitPriceCents: null,
           taxable: true,
+          ...(e.bankOverMode === "bill" || e.bankOverMode === "extra" ? { overageRateCents: e.bankOverRateCents ?? 0 } : {}),
         });
       }
       const charges = await db()

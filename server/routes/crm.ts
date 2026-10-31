@@ -22,7 +22,8 @@ import { DraftError, recalcInvoiceTaxes, taxesByLine } from "../lib/billables.ts
 import { applyToLines, contractsIn, runningLinesOf } from "../lib/servicePrices.ts";
 import { InvoiceMailError, invoicePdfFor, sendInvoiceMail, sendStatement, sendStatements, statementOf, statementTargets } from "../lib/invoiceMail.ts";
 import { applyAutoApprove } from "../lib/billables.ts";
-import { BILLING_MODES, KIND_MODE, contractTypes, usedHoursOf, type ContractKind } from "../lib/contracts.ts";
+import { BILLING_MODES, KIND_MODE, bankRowsOf, banksOf, contractTypes, usedByMonthOf, usedHoursOf, type ContractKind } from "../lib/contracts.ts";
+import { BANK_ROLLOVERS, bankBundle } from "../../shared/bank.ts";
 import { prorata, type ServicePeriod } from "../../shared/prorata.ts";
 import { chargesOn, contractCharges, linesForCharges, type ChargeLine } from "../../shared/contractCharges.ts";
 import { contractCharged, contractEventsOf, recordContractEvent, syncMonthlyRate } from "../lib/contractEvents.ts";
@@ -585,6 +586,9 @@ export const crmRoutes = new Hono<AppEnv>()
         monthlyRate: z.number().min(0).max(1_000_000).nullable().optional(),
         fixedPrice: z.number().min(0).max(10_000_000).nullable().optional(),
         bankedHours: z.number().min(0).max(100_000).nullable().optional(),
+        /** Hours bank: the price of one hour of the bank (dollars) and what becomes of the hours not used in a month */
+        bankedRate: z.number().min(0).max(100_000).nullable().optional(),
+        bankRollover: z.enum(BANK_ROLLOVERS).optional(),
         /** A recurring contract sold as a bundle: its price (dollars, per billing period) and quantity; the services carry no price of their own */
         bundlePrice: z.number().min(0).max(10_000_000).nullable().optional(),
         bundleQuantity: z.number().int().min(1).max(100_000).optional(),
@@ -611,6 +615,11 @@ export const crmRoutes = new Hono<AppEnv>()
       if (typeof plan === "string") throw new HTTPException(400, { message: plan === "outside" ? "service_outside_term" : "contract_dates" });
       return { svc, s };
     });
+    // an hours bank is bought by the month: hours × the price of an hour, charged like a bundle; it has no services
+    const banked = type.kind === "banked";
+    const bankHours = banked ? (p.bankedHours ?? 0) : null;
+    const bankRate = banked && p.bankedRate != null ? Math.round(p.bankedRate * 100) : null;
+    const bank = banked && bankHours && bankRate != null ? bankBundle(bankHours, bankRate) : null;
     const row = await db().transaction(async (tx) => {
       if (p.supportDefault) await tx.update(schema.clientContracts).set({ supportDefault: false }).where(eq(schema.clientContracts.clientId, client.id));
       const [k] = await tx
@@ -622,7 +631,7 @@ export const crmRoutes = new Hono<AppEnv>()
           type: type.name,
           typeKey: type.key,
           billingMode: mode,
-          billingPeriod: p.billingPeriod,
+          billingPeriod: banked ? "monthly" : p.billingPeriod,
           billedThrough: p.billedThrough ?? null,
           startDate: p.startDate,
           endDate: p.endDate,
@@ -632,12 +641,14 @@ export const crmRoutes = new Hono<AppEnv>()
           monthlyRateCents: type.kind === "recurring" ? null : cents(p.monthlyRate),
           fixedPriceCents: cents(p.fixedPrice),
           bankedHoursX100: p.bankedHours == null ? null : Math.round(p.bankedHours * 100),
-          bundlePriceCents: cents(p.bundlePrice) ?? null,
-          bundleQuantity: p.bundleQuantity ?? 1,
+          bundlePriceCents: bank ? bank.priceCents : (cents(p.bundlePrice) ?? null),
+          bundleQuantity: bank ? bank.quantity : (p.bundleQuantity ?? 1),
+          bankRateCents: bankRate,
+          bankRollover: banked ? (p.bankRollover ?? "lose") : "lose",
           syncedAt: new Date(),
         })
         .returning();
-      for (const { svc, s } of lines) {
+      for (const { svc, s } of banked ? [] : lines) {
         await tx.insert(schema.contractServices).values({ contractId: k.id, serviceId: svc.id, name: svc.name, kind: svc.kind, priceCents: s.priceCents ?? svc.priceCents, costCents: svc.costCents, addedOn: s.addedOn, quantity: s.quantity, createdBy: a.user.id });
       }
       return k;
@@ -760,8 +771,10 @@ export const crmRoutes = new Hono<AppEnv>()
     const rows = await servicesOf(k.id);
     const today = todayQc();
     const used = await usedHoursOf([k]);
+    const bank = (await banksOf([k])).get(k.id) ?? null;
+    const bankMonths = bank ? bankRowsOf(k, (await usedByMonthOf([k])).get(k.id), today) : [];
     const usual = Math.round((await billingSettings()).rates.hourly * 100);
-    return c.json({ ...k, usedHours: used.get(k.id) ?? 0, usualRateCents: usual, services: rows.map((r) => serviceLine(r, k)), summary: summaryOf(k, rows, today), charged: await contractCharged(k.id, today) });
+    return c.json({ ...k, bank, bankMonths, usedHours: used.get(k.id) ?? 0, usualRateCents: usual, services: rows.map((r) => serviceLine(r, k)), summary: summaryOf(k, rows, today), charged: await contractCharged(k.id, today) });
   })
   /** What happened on a contract: added, changed, removed, stopped (newest first) */
   .get("/clients/:id/contracts/:kid/activity", async (c) => {
@@ -803,9 +816,10 @@ export const crmRoutes = new Hono<AppEnv>()
     const used = await usedHoursOf(rows);
     const allLines = rows.length ? await db().select().from(schema.contractServices).where(inArray(schema.contractServices.contractId, rows.map((k) => k.id))) : [];
     const today = todayQc();
+    const banks = await banksOf(rows);
     return c.json(
       rows
-        .map((k) => ({ ...k, isSupportDefault: chosen?.id === k.id, usualRateCents: usual, usedHours: used.get(k.id) ?? 0, serviceCount: allLines.filter((l) => l.contractId === k.id).length, summary: summaryOf(k, allLines.filter((l) => l.contractId === k.id), today) }))
+        .map((k) => ({ ...k, bank: banks.get(k.id) ?? null, isSupportDefault: chosen?.id === k.id, usualRateCents: usual, usedHours: used.get(k.id) ?? 0, serviceCount: allLines.filter((l) => l.contractId === k.id).length, summary: summaryOf(k, allLines.filter((l) => l.contractId === k.id), today) }))
         .sort((x, y) => Number(y.active) - Number(x.active) || Number(y.isSupportDefault) - Number(x.isSupportDefault) || x.name.localeCompare(y.name)),
     );
   })
@@ -1039,6 +1053,8 @@ export const crmRoutes = new Hono<AppEnv>()
         endDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).nullable().optional(),
         fixedPrice: z.number().min(0).max(10_000_000).nullable().optional(),
         bankedHours: z.number().min(0).max(100_000).nullable().optional(),
+        bankedRate: z.number().min(0).max(100_000).nullable().optional(),
+        bankRollover: z.enum(BANK_ROLLOVERS).optional(),
         /** The bundle price (dollars, per billing period; null: no bundle, the services are charged one by one) and its quantity */
         bundlePrice: z.number().min(0).max(10_000_000).nullable().optional(),
         bundleQuantity: z.number().int().min(1).max(100_000).optional(),
@@ -1076,6 +1092,18 @@ export const crmRoutes = new Hono<AppEnv>()
     // only a recurring services contract has a bundle
     const kindNow = type ? type.kind : (await contractTypes()).find((t) => t.key === before.typeKey)?.kind;
     if (p.bundlePrice != null && kindNow !== "recurring") throw new HTTPException(400, { message: "bundle_not_recurring" });
+    // an hours bank: hours × the price of an hour is its monthly bundle (charged like one); its hours and rate move together
+    const wasBank = before.billingMode === "banked";
+    if (kindNow === "banked") {
+      const hours = p.bankedHours !== undefined ? p.bankedHours : before.bankedHoursX100 == null ? null : before.bankedHoursX100 / 100;
+      const rate = p.bankedRate !== undefined ? (p.bankedRate === null ? null : Math.round(p.bankedRate * 100)) : before.bankRateCents;
+      Object.assign(set, { billingPeriod: "monthly", bankRateCents: rate });
+      if (p.bankRollover) Object.assign(set, { bankRollover: p.bankRollover });
+      if (hours && rate != null) {
+        const b = bankBundle(hours, rate);
+        Object.assign(set, { bundlePriceCents: b.priceCents, bundleQuantity: b.quantity });
+      }
+    } else if (wasBank && kindNow !== undefined) Object.assign(set, { bundlePriceCents: null, bundleQuantity: 1, bankRateCents: null, bankRollover: "lose" });
     // the term cannot leave a service out
     if ((p.startDate !== undefined || p.endDate !== undefined) && (before.startDate || before.endDate)) {
       const start = p.startDate !== undefined ? p.startDate : before.startDate;
@@ -1099,12 +1127,12 @@ export const crmRoutes = new Hono<AppEnv>()
     const setAside = row.billedThrough ? await excludeBilledThrough(row.id, row.billedThrough) : 0;
     await audit(a.user.id, "crm.contract_updated", row.id, { ...set, approved });
     // the activity: what changed, and a stop or a restart on its own
-    const watched = ["name", "type", "startDate", "endDate", "billingPeriod", "billingMode", "hourlyRateCents", "monthlyRateCents", "ticketRateCents", "fixedPriceCents", "bankedHoursX100", "bundlePriceCents", "bundleQuantity", "autoApprove", "billedThrough"] as const;
+    const watched = ["name", "type", "startDate", "endDate", "billingPeriod", "billingMode", "hourlyRateCents", "monthlyRateCents", "ticketRateCents", "fixedPriceCents", "bankedHoursX100", "bankRateCents", "bankRollover", "bundlePriceCents", "bundleQuantity", "autoApprove", "billedThrough"] as const;
     const changes: Record<string, [unknown, unknown]> = {};
     for (const key of watched) if (key in set && before[key] !== row[key]) changes[key] = [before[key], row[key]];
     if (Object.keys(changes).length) await recordContractEvent(row.id, "updated", { changes }, { userId: a.user.id });
     if (p.active !== undefined && p.active !== before.active) await recordContractEvent(row.id, p.active ? "resumed" : "stopped", p.active ? {} : { on: row.endedOn }, { userId: a.user.id });
-    if (p.typeKey || p.billingMode || p.bundlePrice !== undefined || p.bundleQuantity !== undefined || p.billingPeriod) await syncMonthlyRate(row.id);
+    if (p.typeKey || p.billingMode || p.bundlePrice !== undefined || p.bankedHours !== undefined || p.bankedRate !== undefined || p.bundleQuantity !== undefined || p.billingPeriod) await syncMonthlyRate(row.id);
     return c.json({ ...row, approved, setAside });
   })
 

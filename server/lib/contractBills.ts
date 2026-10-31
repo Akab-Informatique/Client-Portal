@@ -1,6 +1,7 @@
 import { and, asc, eq, isNotNull } from "drizzle-orm";
 import { db, schema } from "../db/index.ts";
 import { contractCharges, hasBundle, linesForCharges, type ChargeLine } from "../../shared/contractCharges.ts";
+import { bankRowsOf, usedByMonthOf } from "./contracts.ts";
 import type { Billable } from "./ticketSource.ts";
 
 /**
@@ -28,6 +29,7 @@ export async function contractBillables(since: string): Promise<Billable[]> {
     .leftJoin(schema.services, eq(schema.services.id, schema.contractServices.serviceId))
     .orderBy(asc(schema.contractServices.addedOn), asc(schema.contractServices.name));
   const out: Billable[] = [];
+  const usedBy = await usedByMonthOf(contracts.filter(({ k }) => k.billingMode === "banked").map(({ k }) => k));
   for (const { k, companyId } of contracts) {
     const mine = rows.filter((r) => r.s.contractId === k.id);
     // a bundle is charged even with no service listed under it
@@ -38,26 +40,39 @@ export async function contractBillables(since: string): Promise<Billable[]> {
     // a bundle replaces the services' own prices: one line for the package, its price and quantity
     const lines = linesForCharges({ name: k.name, startDate: k.startDate, billingPeriod: period, bundlePriceCents: k.bundlePriceCents, bundleQuantity: k.bundleQuantity }, services);
     const charges = contractCharges({ startDate: k.startDate, endDate: k.endDate, endedOn: k.endedOn, billingPeriod: period }, lines);
+    // an hours bank that tops up each month only buys what the month before left unused
+    const bankMonths = k.billingMode === "banked" && k.bankRollover === "topup" ? new Map(bankRowsOf(k, usedBy.get(k.id), today).map((r) => [r.month, r.charge])) : null;
     for (const e of charges.entries) {
       if (e.date > today || e.date < since || (k.billedThrough && e.date <= k.billedThrough)) continue;
       for (const p of e.pieces) {
         const svc = byId.get(p.lineId);
         const bundled = p.lineId === "bundle";
         if (!svc && !bundled) continue;
-        const qty = Math.max(1, bundled ? k.bundleQuantity : svc!.s.quantity);
-        // a whole period: quantity × unit price; a part period: one line, quantity 1, the prorated total
-        const whole = !p.prorated && p.amountCents % qty === 0;
+        let qty = Math.max(1, bundled ? k.bundleQuantity : svc!.s.quantity);
+        let amountCents = p.amountCents;
+        let whole = !p.prorated && amountCents % qty === 0;
+        let name = p.name;
+        if (bundled && bankMonths && !p.prorated && k.bankRateCents != null) {
+          const hours = bankMonths.get(e.date.slice(0, 7));
+          if (hours !== undefined) {
+            if (hours <= 0) continue;
+            amountCents = Math.round(hours * k.bankRateCents);
+            qty = Number.isInteger(hours) ? hours : 1;
+            whole = Number.isInteger(hours);
+            name = `${p.name} — ${hours} h`;
+          }
+        }
         out.push({
           id: `contract:${k.id}:${bundled ? "bundle" : svc!.s.id}:${e.date}`,
           kind: "contract",
           companyId: companyId!,
           date: e.date,
           dateEnd: p.to,
-          description: `${p.name}${p.prorated ? ` (prorata ${p.days}/${p.periodDays} j)` : ""} — ${dmy(p.from)} – ${dmy(p.to)}`,
+          description: `${name}${p.prorated ? ` (prorata ${p.days}/${p.periodDays} j)` : ""} — ${dmy(p.from)} – ${dmy(p.to)}`,
           contractName: k.name,
           contractSourceId: k.autotaskId,
           quantity: whole ? qty : 1,
-          unitPriceCents: whole ? p.amountCents / qty : p.amountCents,
+          unitPriceCents: whole ? amountCents / qty : amountCents,
           taxable: bundled ? true : (svc!.taxable ?? true),
         });
       }
