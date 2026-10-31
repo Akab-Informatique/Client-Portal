@@ -343,6 +343,10 @@ A price can carry a **rebate in percent** (kept as basis points, `shared/rebate.
 - **Ticket charge** (`ticket_charges.rebate_bps`, `rebate` on `POST /api/tickets/:id/charges`, the charge window has the rebate fields): the work to bill carries the price after the rebate and "rabais X % sur N $" in its description; the charge list shows the regular price struck out and the badge.
 - Quote lines already had their own discount ("Rabais (%)", see Quotes). Tests: `tests/rebate.test.ts`, "hours bank contracts" in `tests/api.test.ts`.
 
+## Contract profit in the ticket header (administrators)
+
+A small green / red chip under the client-hours ring of the ticket window shows what **the ticket's contract earns or loses this month** (`GET /api/tickets/:id/contract-profit`, right `hr.manage` only — it uses the HR wages; `server/lib/contractProfit.ts`, `src/pages/tickets/ContractProfit.tsx`): billed under the contract this month (`billing_items` of the contract, not set aside) less the recurring services' cost and the hours worked under it at each technician's hourly wage; a click gives the breakdown, and technicians with no wage on file are counted apart (`missingWages`). Test: "hours bank contracts".
+
 ## Production
 
 Docker Compose on a Debian server; Nginx Proxy Manager on another server terminates HTTPS and forwards to port 3000. Owner runs deployments (see INSTALL.md). Never `docker compose down -v`.

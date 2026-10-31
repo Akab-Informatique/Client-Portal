@@ -4391,6 +4391,17 @@ const fr = {
       debt: "Passer en négatif",
       debtHint: "Les heures en trop sont retirées tout de suite de la banque du mois prochain.",
     },
+    profit: {
+      title: "Contrat « {{name}} »",
+      month: "Ce mois-ci ({{month}}) — visible par les administrateurs seulement",
+      revenue: "Facturé sous ce contrat",
+      services: "Coût des services",
+      labour: "Main-d'œuvre ({{hours}} h au salaire)",
+      gain: "Profit",
+      loss: "Perte",
+      missing: "{{count}} technicien(s) sans salaire au dossier RH : leurs heures ne comptent pas.",
+      hint: "Facturé = le travail à facturer du contrat ce mois-ci (non mis de côté), moins le coût des services et les heures travaillées au salaire de chaque technicien.",
+    },
     contractBilling: {
       includedNote: "Taux horaire à 0 $ : le temps est inclus, rien n'est facturé.",
       bankedNote: "Banque d'heures : {{used}} h utilisées sur {{total}} h ({{left}} h restantes) ; les heures ne sont pas facturées.",

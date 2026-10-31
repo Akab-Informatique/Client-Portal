@@ -30,6 +30,7 @@ import { refreshAccrual, splitBillable } from "../lib/hr.ts";
 import { cleanDirection, directionPrompt } from "../lib/aiDirection.ts";
 import { quebecStamp, scheduleTickets, type SchedIn } from "../lib/ticketSchedule.ts";
 import { billingSettings } from "../lib/billing.ts";
+import { contractProfit } from "../lib/contractProfit.ts";
 
 /**
  * Tickets (staff). Data come from the ticket source: the portal's database,
@@ -1751,6 +1752,15 @@ export const ticketRoutes = new Hono<AppEnv>()
   })
 
   /** Charges on the ticket (material, expenses…). */
+  /** What the ticket's contract earns or loses this month (administrators only: it uses the HR wages) */
+  .get("/:id/contract-profit", requirePermission("hr.manage"), async (c) => {
+    const id = Number(c.req.param("id"));
+    if (!Number.isInteger(id)) throw new HTTPException(400, { message: "invalid_id" });
+    const t = await (await ticketSource()).get(id).catch(() => null);
+    if (!t) throw new HTTPException(404, { message: "not_found" });
+    const { contract } = await contractOfTicket(id, t.company.id);
+    return c.json(contract ? await contractProfit(contract.id) : null);
+  })
   .get("/:id/charges", async (c) => {
     const id = Number(c.req.param("id"));
     if (!Number.isInteger(id)) throw new HTTPException(400, { message: "invalid_id" });
