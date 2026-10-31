@@ -233,7 +233,7 @@ function ProfitCard({ p, lang }: { p: NonNullable<CrmContract["profit"]>; lang: 
         <dt className="text-muted-foreground">{t("crm.contracts.profit.labour", { hours: p.hours })}</dt>
         <dd className="text-right font-mono">−{money(p.labourCostCents, lang)}</dd>
       </dl>
-      <p className="basis-full text-[11px] text-muted-foreground">{t("crm.contracts.profit.hint")}{p.missingWages > 0 ? ` ${t("tickets.profit.missing", { count: p.missingWages })}` : ""}</p>
+      <p className="basis-full text-[11px] text-muted-foreground">{t("crm.contracts.profit.hint")}{p.missingWages > 0 ? ` ${t("crm.contracts.profit.missing", { count: p.missingWages })}` : ""}</p>
     </div>
   );
 }
