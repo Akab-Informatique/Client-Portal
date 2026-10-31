@@ -172,7 +172,10 @@ export type Charge = {
   name: string;
   description: string;
   quantity: number;
+  /** The regular price; what is charged is this less the rebate */
   unitPrice: number | null;
+  /** A rebate on the price, in percent */
+  rebate?: number;
   unitCost: number | null;
   billable: boolean;
   type: string | null;
@@ -186,6 +189,8 @@ export type NewCharge = {
   description: string;
   quantity: number;
   unitPrice: number | null;
+  /** A rebate on the price, in percent */
+  rebate?: number;
   unitCost: number | null;
   billable: boolean;
   typeId: string | null;

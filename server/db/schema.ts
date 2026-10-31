@@ -153,6 +153,8 @@ export const clientContracts = pgTable(
     /** Hours bank: what an hour of the bank costs (cents), and what happens to the hours not used in a month: carry (they add to next month) | topup (next month only buys what tops it off) | lose */
     bankRateCents: integer("bank_rate_cents"),
     bankRollover: text("bank_rollover").notNull().default("lose"),
+    /** A rebate on everything the contract charges (hourly rate, bank, services): percent × 100, 0–10000 */
+    rebateBps: integer("rebate_bps").notNull().default(0),
     /** Fixed price in cents */
     fixedPriceCents: integer("fixed_price_cents"),
     /** The client's default support contract, chosen in the portal (else the source's default) */
@@ -216,6 +218,8 @@ export const contractServices = pgTable(
     addedOn: text("added_on").notNull(),
     /** How many (price is per unit): kept from the vendor for a vendor line */
     quantity: integer("quantity").notNull().default(1),
+    /** A rebate on this line's price: percent × 100 */
+    rebateBps: integer("rebate_bps").notNull().default(0),
     /** Where the line comes from when a vendor keeps it in step (itcloud), and its id there; none: added by hand */
     source: text("source"),
     externalId: text("external_id"),
@@ -756,6 +760,8 @@ export const ticketCharges = pgTable(
     description: text("description").notNull().default(""),
     quantityX100: integer("quantity_x100").notNull().default(100),
     unitPriceCents: bigint("unit_price_cents", { mode: "number" }),
+    /** A rebate on the price (the regular price stays in unit_price_cents): percent × 100 */
+    rebateBps: integer("rebate_bps").notNull().default(0),
     unitCostCents: bigint("unit_cost_cents", { mode: "number" }),
     billable: boolean("billable").notNull().default(true),
     type: text("type"),

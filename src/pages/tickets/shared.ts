@@ -119,6 +119,8 @@ export type TicketContract = {
   fixedPriceCents?: number | null;
   /** The rate typed on the contract (null: the usual rate applies) */
   hourlyRateCents: number | null;
+  /** The contract's rebate (percent × 100): rateCents is already after it */
+  rebateBps?: number;
   /** What an hour is billed at (null: the hours are not billed under this contract) */
   rateCents: number | null;
   monthlyRateCents: number | null;

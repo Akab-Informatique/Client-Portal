@@ -1,4 +1,5 @@
 import { addYears, prorata, type ServicePeriod } from "./prorata.ts";
+import { combineBps, netCents } from "./rebate.ts";
 
 /**
  * What the recurring services of a contract will charge, period by period (the portal and the API use the same rule).
@@ -9,8 +10,8 @@ import { addYears, prorata, type ServicePeriod } from "./prorata.ts";
  * here bills anything: it is the schedule, shown on the contract.
  */
 export type BillingPeriod = "monthly" | "yearly";
-export type ChargeLine = { id: string; name: string; kind: "recurring" | "recurring_yearly"; priceCents: number; quantity: number; addedOn: string };
-export type ChargePiece = { lineId: string; name: string; amountCents: number; prorated: boolean; days: number; periodDays: number; from: string; to: string };
+export type ChargeLine = { id: string; name: string; kind: "recurring" | "recurring_yearly"; priceCents: number; quantity: number; addedOn: string; /** A rebate on the price (percent × 100): what is charged is the price after it */ rebateBps?: number };
+export type ChargePiece = { lineId: string; name: string; /** The rebate this piece carries (percent × 100) */ rebateBps?: number; amountCents: number; prorated: boolean; days: number; periodDays: number; from: string; to: string };
 export type ChargeEntry = {
   /** The day it is charged */
   date: string;
@@ -40,12 +41,12 @@ const DAY_RE = /^\d{4}-\d{2}-\d{2}$/;
  * (per month on a monthly contract, per year on a yearly one). Its services stay listed on the contract but carry no price of
  * their own: what is charged is the bundle, from the contract's start day. Without a bundle, the services are charged one by one.
  */
-export type BundleOf = { name: string; startDate: string | null; billingPeriod: BillingPeriod; bundlePriceCents?: number | null; bundleQuantity?: number | null };
+export type BundleOf = { name: string; startDate: string | null; billingPeriod: BillingPeriod; bundlePriceCents?: number | null; bundleQuantity?: number | null; /** The contract's own rebate (percent × 100), on top of each line's */ rebateBps?: number | null };
 export const hasBundle = (c: { bundlePriceCents?: number | null }) => c.bundlePriceCents != null;
 /** The lines the charges are worked out from: the bundle alone when there is one, else the services */
 export function linesForCharges(c: BundleOf, services: ChargeLine[]): ChargeLine[] {
-  if (!hasBundle(c) || !c.startDate) return services;
-  return [{ id: "bundle", name: c.name, kind: c.billingPeriod === "yearly" ? "recurring_yearly" : "recurring", priceCents: c.bundlePriceCents!, quantity: Math.max(1, c.bundleQuantity ?? 1), addedOn: c.startDate }];
+  if (!hasBundle(c) || !c.startDate) return services.map((l) => ({ ...l, rebateBps: combineBps(l.rebateBps, c.rebateBps) }));
+  return [{ id: "bundle", name: c.name, kind: c.billingPeriod === "yearly" ? "recurring_yearly" : "recurring", priceCents: c.bundlePriceCents!, quantity: Math.max(1, c.bundleQuantity ?? 1), addedOn: c.startDate, rebateBps: c.rebateBps ?? 0 }];
 }
 
 export function contractCharges(
@@ -68,9 +69,10 @@ export function contractCharges(
   };
   for (const l of lines) {
     const period: ServicePeriod = l.kind === "recurring_yearly" ? "yearly" : "monthly";
-    const plan = prorata({ period, priceCents: l.priceCents * Math.max(1, l.quantity), addedOn: l.addedOn, start, end: endsOn });
+    const unit = netCents(l.priceCents, l.rebateBps);
+    const plan = prorata({ period, priceCents: unit * Math.max(1, l.quantity), addedOn: l.addedOn, start, end: endsOn });
     if (typeof plan === "string") continue;
-    const piece = (p: (typeof plan.periods)[number]): ChargePiece => ({ lineId: l.id, name: l.name, amountCents: p.amountCents, prorated: !p.full, days: p.days, periodDays: p.periodDays, from: p.from, to: p.to });
+    const piece = (p: (typeof plan.periods)[number]): ChargePiece => ({ lineId: l.id, name: l.name, rebateBps: l.rebateBps ?? 0, amountCents: p.amountCents, prorated: !p.full, days: p.days, periodDays: p.periodDays, from: p.from, to: p.to });
     if (c.billingPeriod === "monthly" || period === "yearly") {
       // one charge per period of the service
       for (const p of plan.periods) add(p.from, piece(p));
@@ -91,6 +93,7 @@ export function contractCharges(
         add(first.from, {
           lineId: l.id,
           name: l.name,
+          rebateBps: l.rebateBps ?? 0,
           amountCents: ps.reduce((n, p) => n + p.amountCents, 0),
           prorated: ps.some((p) => !p.full),
           days: ps.reduce((n, p) => n + p.days, 0),
@@ -102,8 +105,8 @@ export function contractCharges(
     }
   }
   const entries = [...byDate.values()].sort((a, b) => a.date.localeCompare(b.date));
-  const monthly = lines.filter((l) => l.kind === "recurring").reduce((n, l) => n + l.priceCents * Math.max(1, l.quantity), 0);
-  const yearly = lines.filter((l) => l.kind === "recurring_yearly").reduce((n, l) => n + l.priceCents * Math.max(1, l.quantity), 0);
+  const monthly = lines.filter((l) => l.kind === "recurring").reduce((n, l) => n + netCents(l.priceCents, l.rebateBps) * Math.max(1, l.quantity), 0);
+  const yearly = lines.filter((l) => l.kind === "recurring_yearly").reduce((n, l) => n + netCents(l.priceCents, l.rebateBps) * Math.max(1, l.quantity), 0);
   return {
     endsOn,
     revenueCents: entries.reduce((n, e) => n + e.amountCents, 0),

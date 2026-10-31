@@ -9334,6 +9334,13 @@ describe("hours bank contracts", () => {
     expect(moved).toMatchObject({ bankedHoursX100: 1000, bundlePriceCents: 10000, bundleQuantity: 10, bankRollover: "carry" });
     await admin.patch(`${base}/${k.id}`, { bankedHours: 1, bankedRate: 120, bankRollover: "lose" });
 
+    // a rebate on the contract: the regular price is kept, what is charged is after it
+    expect((await admin.patch(`${base}/${k.id}`, { rebate: 10 })).json).toMatchObject({ rebateBps: 1000, bankRateCents: 12000 });
+    const rebated = (await admin.get(`${base}/${k.id}`)).json;
+    expect(rebated.summary.perPeriodCents).toBe(10800);
+    expect(rebated.bank.rateCents).toBe(10800);
+    await admin.patch(`${base}/${k.id}`, { rebate: 0 });
+
     // the time entry: past what is left, a choice is required, then it is kept as chosen
     await tech.post(`/api/tickets/${t0.id}/timer/start`);
     const timer = (await tech.get("/api/tickets/timers")).json.find((x: any) => x.ticketId === t0.id);

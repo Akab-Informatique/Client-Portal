@@ -1768,6 +1768,8 @@ export const ticketRoutes = new Hono<AppEnv>()
         description: z.string().trim().max(2000).default(""),
         quantity: z.number().positive().max(100_000),
         unitPrice: z.number().min(0).max(1_000_000).nullable().default(null),
+        // a rebate on the price, in percent (the regular price is kept)
+        rebate: z.number().min(0).max(100).default(0),
         unitCost: z.number().min(0).max(1_000_000).nullable().default(null),
         billable: z.boolean().default(true),
         typeId: z.string().max(20).nullable().default(null),

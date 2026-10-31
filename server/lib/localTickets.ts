@@ -1,3 +1,4 @@
+import { bpsOfPercent, netCents, percentText } from "../../shared/rebate.ts";
 import { config } from "../config.ts";
 import { and, asc, desc, eq, gte, ilike, inArray, or, sql, type SQL } from "drizzle-orm";
 import { db, schema } from "../db/index.ts";
@@ -286,6 +287,7 @@ export function localTicketSource(base: TicketSource): TicketSource {
           description: c.description,
           quantity: c.quantityX100 / 100,
           unitPrice: c.unitPriceCents == null ? null : c.unitPriceCents / 100,
+          rebate: c.rebateBps / 100,
           unitCost: c.unitCostCents == null ? null : c.unitCostCents / 100,
           billable: c.billable,
           type: c.type,
@@ -311,6 +313,7 @@ export function localTicketSource(base: TicketSource): TicketSource {
           description: p.description,
           quantityX100: Math.round(p.quantity * 100),
           unitPriceCents: cents(p.unitPrice),
+          rebateBps: bpsOfPercent(p.rebate ?? 0),
           unitCostCents: cents(p.unitCost),
           billable: p.billable,
           type: label(o.types, p.typeId) ?? o.types[0]?.label ?? null,
@@ -442,11 +445,11 @@ export function localTicketSource(base: TicketSource): TicketSource {
           kind: "charge",
           companyId,
           date,
-          description: [c.name, c.description].filter(Boolean).join(" — ").slice(0, 2000),
+          description: [c.name, c.description, c.rebateBps ? `rabais ${percentText(c.rebateBps)}${c.unitPriceCents != null ? ` sur ${(c.unitPriceCents / 100).toFixed(2)} $` : ""}` : ""].filter(Boolean).join(" — ").slice(0, 2000),
           ticketNumber: number,
           contractSourceId: c.contractId,
           quantity: c.quantityX100 / 100,
-          unitPriceCents: c.unitPriceCents,
+          unitPriceCents: c.unitPriceCents == null ? null : netCents(c.unitPriceCents, c.rebateBps),
           taxable: true,
         });
       }

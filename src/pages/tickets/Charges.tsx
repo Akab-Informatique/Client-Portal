@@ -18,6 +18,7 @@ import { cn } from "@/lib/utils";
 import { ticketErrorText, type TicketDetail } from "./shared";
 import { SerialChecklist } from "@/pages/store/SerialChecklist";
 import { ChargeLabelDialog } from "./ChargeLabel";
+import { RebateInput, afterRebate, percentOf } from "@/components/RebateInput";
 
 export type Charge = {
   id: string;
@@ -25,6 +26,8 @@ export type Charge = {
   description: string;
   quantity: number;
   unitPrice: number | null;
+  /** A rebate on the price, in percent */
+  rebate?: number;
   unitCost: number | null;
   billable: boolean;
   type: string | null;
@@ -63,7 +66,9 @@ export function useCharges(ticketId: number, enabled: boolean) {
   });
 }
 
-const billableTotal = (list: Charge[]) => list.filter((c) => c.billable).reduce((s, c) => s + c.quantity * (c.unitPrice ?? 0), 0);
+/** What a charge costs the client: quantity × the price after its rebate */
+const netUnit = (c: Charge) => (c.unitPrice === null ? null : afterRebate(c.unitPrice, c.rebate ?? 0));
+const billableTotal = (list: Charge[]) => list.filter((c) => c.billable).reduce((s, c) => s + c.quantity * (netUnit(c) ?? 0), 0);
 
 /**
  * Small buttons above the note box: Charges (count · total; opens the list
@@ -120,7 +125,7 @@ function ChargesList({ list, tk, editable }: { list: Charge[]; tk: TicketDetail;
               <span className="min-w-0 flex-1 truncate font-medium" title={c.description || c.name}>
                 {c.name}
               </span>
-              <span className="shrink-0 font-mono text-xs">{c.unitPrice !== null ? money(c.quantity * c.unitPrice) : "—"}</span>
+              <span className="shrink-0 font-mono text-xs">{netUnit(c) !== null ? money(c.quantity * netUnit(c)!) : "—"}</span>
               <Tooltip>
                 <TooltipTrigger asChild>
                   <button
@@ -153,8 +158,13 @@ function ChargesList({ list, tk, editable }: { list: Charge[]; tk: TicketDetail;
             </div>
             <div className="mt-0.5 flex flex-wrap items-center gap-x-2 text-[11px] text-muted-foreground">
               <span>
-                {c.quantity.toLocaleString()} × {c.unitPrice !== null ? money(c.unitPrice) : "—"}
+                {c.quantity.toLocaleString()} × {c.unitPrice !== null ? money(netUnit(c)!) : "—"}
               </span>
+              {(c.rebate ?? 0) > 0 && c.unitPrice !== null && (
+                <span className="rounded-full bg-emerald-500/15 px-1.5 py-px text-[10px] font-medium text-emerald-300">
+                  {t("rebate.applied", { pct: (c.rebate ?? 0).toLocaleString(undefined, { maximumFractionDigits: 2 }) })} · <span className="line-through">{money(c.unitPrice)}</span>
+                </span>
+              )}
               {c.author && <span>· {c.author}</span>}
               <span className={cn("rounded-full px-1.5 py-px text-[10px] font-medium", c.billable ? "bg-emerald-500/15 text-emerald-300" : "bg-muted text-muted-foreground")}>
                 {c.billable ? t("tickets.charges.billable") : t("tickets.charges.notBillable")}
@@ -185,7 +195,7 @@ export function ChargesDialog({ tk, editable, onClose }: { tk: TicketDetail; edi
   const [from, setFrom] = useState(NO_STOCK);
   const [more, setMore] = useState(false);
   const [serialIds, setSerialIds] = useState<string[]>([]);
-  const [f, setF] = useState({ quantity: "1", unitPrice: "", unitCost: "", billable: true, description: "", typeId: "", statusId: "", materialCodeId: "", date: new Date().toISOString().slice(0, 10) });
+  const [f, setF] = useState({ quantity: "1", unitPrice: "", rebate: "", unitCost: "", billable: true, description: "", typeId: "", statusId: "", materialCodeId: "", date: new Date().toISOString().slice(0, 10) });
   const set = (k: keyof typeof f) => (v: string | boolean) => setF((x) => ({ ...x, [k]: v }));
 
   const choose = (p: StoreProduct) => {
@@ -225,6 +235,7 @@ export function ChargesDialog({ tk, editable, onClose }: { tk: TicketDetail; edi
         description: f.description.trim(),
         quantity: qty,
         unitPrice: price,
+        ...(percentOf(f.rebate) > 0 ? { rebate: percentOf(f.rebate) } : {}),
         unitCost: num(f.unitCost),
         billable: f.billable,
         typeId: f.typeId || null,
@@ -242,7 +253,7 @@ export function ChargesDialog({ tk, editable, onClose }: { tk: TicketDetail; edi
       toast.success(t("tickets.charges.added"));
       setProduct(null);
       setOneName("");
-      setF((x) => ({ ...x, quantity: "1", description: "", unitPrice: mode === "oneTime" ? "" : x.unitPrice, unitCost: mode === "oneTime" ? "" : x.unitCost }));
+      setF((x) => ({ ...x, quantity: "1", description: "", rebate: "", unitPrice: mode === "oneTime" ? "" : x.unitPrice, unitCost: mode === "oneTime" ? "" : x.unitCost }));
     },
     onError: (e) => toast.error(ticketErrorText(t, e)),
   });
@@ -371,10 +382,11 @@ export function ChargesDialog({ tk, editable, onClose }: { tk: TicketDetail; edi
                     <Input id="ch-price" inputMode="decimal" value={f.unitPrice} onChange={(e) => set("unitPrice")(e.target.value)} />
                   </div>
                 </div>
+                <RebateInput id="ch-rebate" regular={price} percent={f.rebate} onPercent={(v) => set("rebate")(v)} unit="/ unité" />
                 {tooMany && <p className="-mt-2 text-xs text-orange-300">{t("tickets.charges.moreThanStock", { count: onHand ?? 0 })}</p>}
                 {qty !== null && price !== null && qty > 0 && (
                   <p className="-mt-2 text-right text-xs text-muted-foreground">
-                    {t("tickets.charges.lineTotal")} : <span className="font-mono text-foreground">{money(qty * price)}</span>
+                    {t("tickets.charges.lineTotal")} : <span className="font-mono text-foreground">{money(qty * afterRebate(price, percentOf(f.rebate)))}</span>
                   </p>
                 )}
                 <label className="flex items-center justify-between gap-3 rounded-lg border px-3 py-2 text-sm">

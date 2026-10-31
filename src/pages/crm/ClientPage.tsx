@@ -1167,6 +1167,7 @@ function ContractsTab({ client }: { client: CrmDetail }) {
               <button type="button" onClick={() => setOpenId(k.id)} className={cn("flex w-full flex-wrap items-center gap-x-4 gap-y-1 px-3 py-2.5 text-left transition-colors hover:bg-accent/40", !k.active && "opacity-60")}>
                 <FileText className="size-4 shrink-0 text-muted-foreground" />
                 <span className="min-w-0 flex-1 truncate text-sm font-medium">{k.name}</span>
+                {(k.rebateBps ?? 0) > 0 && <span className="rounded-md border border-emerald-500/40 bg-emerald-500/10 px-1.5 py-0.5 text-[10px] font-semibold text-emerald-300">{t("rebate.onContract", { pct: (k.rebateBps ?? 0) / 100 })}</span>}
                 {k.isSupportDefault && <span className="rounded-md border border-[color:var(--gold)]/40 bg-[color:var(--gold)]/10 px-1.5 py-0.5 text-[10px] font-semibold text-primary">{t("crm.contracts.supportDefault")}</span>}
                 {!k.active && <span className="text-[11px] text-muted-foreground">{k.endedOn ? t("crm.contracts.window.stoppedOn", { date: shortDate(k.endedOn) }) : t("crm.contracts.inactive")}</span>}
                 <span className="w-32 truncate text-xs text-muted-foreground">{k.type ?? "—"}</span>

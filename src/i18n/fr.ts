@@ -358,6 +358,15 @@ const fr = {
     deleteText: "Le service est retiré de la liste. Cette action est définitive.",
   },
 
+  rebate: {
+    percent: "Rabais (%)",
+    final: "Prix avec rabais ($)",
+    applied: "Rabais de {{pct}} %",
+    onContract: "Rabais contrat {{pct}} %",
+    contract: "Rabais sur le contrat",
+    contractHint: "Un rabais en % sur tout ce que ce contrat facture (taux horaire, banque d'heures, services). Un service peut aussi avoir son propre rabais ; les deux se cumulent. Le prix normal est conservé : tapez le rabais en % ou le prix après rabais.",
+    hourlyNote: "(rabais de {{pct}} % sur {{regular}} / h)",
+  },
   crm: {
     delete: {
       button: "Supprimer le client",

@@ -2,6 +2,7 @@ import { and, asc, eq, isNotNull } from "drizzle-orm";
 import { db, schema } from "../db/index.ts";
 import { contractCharges, hasBundle, linesForCharges, type ChargeLine } from "../../shared/contractCharges.ts";
 import { bankRowsOf, usedByMonthOf } from "./contracts.ts";
+import { netCents, percentText } from "../../shared/rebate.ts";
 import type { Billable } from "./ticketSource.ts";
 
 /**
@@ -36,9 +37,9 @@ export async function contractBillables(since: string): Promise<Billable[]> {
     if (!mine.length && !hasBundle(k)) continue;
     const byId = new Map(mine.map((r) => [r.s.id, r]));
     const period = k.billingPeriod === "yearly" ? "yearly" : "monthly";
-    const services: ChargeLine[] = mine.map(({ s }) => ({ id: s.id, name: s.name, kind: s.kind === "recurring_yearly" ? "recurring_yearly" : "recurring", priceCents: s.priceCents, quantity: s.quantity, addedOn: s.addedOn }));
+    const services: ChargeLine[] = mine.map(({ s }) => ({ id: s.id, name: s.name, kind: s.kind === "recurring_yearly" ? "recurring_yearly" : "recurring", priceCents: s.priceCents, quantity: s.quantity, addedOn: s.addedOn, rebateBps: s.rebateBps }));
     // a bundle replaces the services' own prices: one line for the package, its price and quantity
-    const lines = linesForCharges({ name: k.name, startDate: k.startDate, billingPeriod: period, bundlePriceCents: k.bundlePriceCents, bundleQuantity: k.bundleQuantity }, services);
+    const lines = linesForCharges({ name: k.name, startDate: k.startDate, billingPeriod: period, bundlePriceCents: k.bundlePriceCents, bundleQuantity: k.bundleQuantity, rebateBps: k.rebateBps }, services);
     const charges = contractCharges({ startDate: k.startDate, endDate: k.endDate, endedOn: k.endedOn, billingPeriod: period }, lines);
     // an hours bank that tops up each month only buys what the month before left unused
     const bankMonths = k.billingMode === "banked" && k.bankRollover === "topup" ? new Map(bankRowsOf(k, usedBy.get(k.id), today).map((r) => [r.month, r.charge])) : null;
@@ -56,7 +57,7 @@ export async function contractBillables(since: string): Promise<Billable[]> {
           const hours = bankMonths.get(e.date.slice(0, 7));
           if (hours !== undefined) {
             if (hours <= 0) continue;
-            amountCents = Math.round(hours * k.bankRateCents);
+            amountCents = Math.round(hours * netCents(k.bankRateCents, k.rebateBps));
             qty = Number.isInteger(hours) ? hours : 1;
             whole = Number.isInteger(hours);
             name = `${p.name} — ${hours} h`;
@@ -68,7 +69,7 @@ export async function contractBillables(since: string): Promise<Billable[]> {
           companyId: companyId!,
           date: e.date,
           dateEnd: p.to,
-          description: `${name}${p.prorated ? ` (prorata ${p.days}/${p.periodDays} j)` : ""} — ${dmy(p.from)} – ${dmy(p.to)}`,
+          description: `${name}${p.rebateBps ? ` (rabais ${percentText(p.rebateBps)})` : ""}${p.prorated ? ` (prorata ${p.days}/${p.periodDays} j)` : ""} — ${dmy(p.from)} – ${dmy(p.to)}`,
           contractName: k.name,
           contractSourceId: k.autotaskId,
           quantity: whole ? qty : 1,

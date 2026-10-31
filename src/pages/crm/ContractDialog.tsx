@@ -16,6 +16,8 @@ import { useCan } from "@/lib/session";
 import { cn } from "@/lib/utils";
 import { contractCharges, chargesOn, linesForCharges, type BillingPeriod, type ChargeLine } from "@shared/contractCharges";
 import { prorata } from "@shared/prorata";
+import { combineBps, netCents } from "@shared/rebate";
+import { RebateInput, percentOf } from "@/components/RebateInput";
 import { bankBundle, type BankMonth, type BankRollover } from "@shared/bank";
 import { shortDate, ticketErrorText } from "@/pages/tickets/shared";
 import { MapItcloudDialog, NewServiceDialog, type Unmapped } from "./ContractServices";
@@ -31,6 +33,10 @@ type Line = {
   name: string;
   kind: "recurring" | "recurring_yearly";
   priceCents: number;
+  /** The line's own rebate and the contract's (percent × 100); netPriceCents is the unit price after both */
+  rebateBps: number;
+  contractRebateBps?: number;
+  netPriceCents?: number;
   costCents: number;
   quantity: number;
   source: string | null;
@@ -89,7 +95,7 @@ function Figures({ summary, period, lang }: { summary: Summary; period: BillingP
 }
 
 /** Picks a recurring service, a quantity, a day and optionally a price; shows the prorata as it goes. */
-function ServiceAdder({ term, onAdd, busy, heading = true, bundled = false }: { term: { start: string; end: string } | null; onAdd: (p: { service: CatalogItem; quantity: number; addedOn: string; priceCents?: number }) => void; busy?: boolean; heading?: boolean; bundled?: boolean }) {
+function ServiceAdder({ term, onAdd, busy, heading = true, bundled = false, contractRebateBps = 0 }: { term: { start: string; end: string } | null; onAdd: (p: { service: CatalogItem; quantity: number; addedOn: string; priceCents?: number; rebate?: number }) => void; busy?: boolean; heading?: boolean; bundled?: boolean; contractRebateBps?: number }) {
   const { t, i18n } = useTranslation();
   const can = useCan();
   // a service that does not exist yet is made right here (a popup), then added
@@ -102,12 +108,14 @@ function ServiceAdder({ term, onAdd, busy, heading = true, bundled = false }: { 
   // a service starts with the contract unless another day is picked
   const [addedOn, setAddedOn] = useState(() => term?.start ?? inside(todayYmd()));
   const [price, setPrice] = useState("");
+  const [rebate, setRebate] = useState("");
   // the day follows the term when it changes
   useEffect(() => setAddedOn((d) => inside(d)), [term?.start, term?.end]); // eslint-disable-line react-hooks/exhaustive-deps
   const svc = catalog.find((x) => x.id === (serviceId || catalog[0]?.id));
   const qty = Math.max(1, Math.round(Number(quantity) || 1));
   const unit = toCents(price) ?? svc?.priceCents ?? 0;
-  const plan = useMemo(() => (svc && term ? prorata({ period: svc.kind === "recurring_yearly" ? "yearly" : "monthly", priceCents: unit * qty, addedOn, start: term.start, end: term.end }) : null), [svc, term, unit, qty, addedOn]);
+  const rebateBps = Math.round(percentOf(rebate) * 100);
+  const plan = useMemo(() => (svc && term ? prorata({ period: svc.kind === "recurring_yearly" ? "yearly" : "monthly", priceCents: netCents(unit, combineBps(rebateBps, contractRebateBps)) * qty, addedOn, start: term.start, end: term.end }) : null), [svc, term, unit, qty, addedOn, rebateBps, contractRebateBps]);
   const maker = making && (
     <NewServiceDialog
       term={term}
@@ -170,6 +178,7 @@ function ServiceAdder({ term, onAdd, busy, heading = true, bundled = false }: { 
           </label>
         )}
       </div>
+      {!bundled && <RebateInput regular={unit / 100} percent={rebate} onPercent={setRebate} unit={svc?.kind === "recurring_yearly" ? t("services.perYear") : t("services.perMonth")} />}
       {bundled && <p className="text-[11px] text-muted-foreground">{t("crm.contracts.bundle.noPrice")}</p>}
       {!term && <p className="text-[11px] text-amber-300">{t("crm.contracts.needTerm")}</p>}
       {term && plan === "outside" && <p className="text-[11px] text-amber-300">{t("crm.contracts.outsideTerm", { from: shortDate(term.start), to: shortDate(term.end) })}</p>}
@@ -182,7 +191,7 @@ function ServiceAdder({ term, onAdd, busy, heading = true, bundled = false }: { 
             </>
           )}
         </p>
-        <Button type="button" size="sm" disabled={!ok || busy} onClick={() => ok && onAdd({ service: svc, quantity: qty, addedOn, ...(price.trim() !== "" ? { priceCents: unit } : {}) })} className="bg-grad-gold font-semibold text-[#1a1204]">
+        <Button type="button" size="sm" disabled={!ok || busy} onClick={() => ok && onAdd({ service: svc, quantity: qty, addedOn, ...(price.trim() !== "" ? { priceCents: unit } : {}), ...(rebateBps > 0 ? { rebate: rebateBps / 100 } : {}) })} className="bg-grad-gold font-semibold text-[#1a1204]">
           {busy ? <Loader2 className="size-3.5 animate-spin" /> : <Plus className="size-3.5" />} {t("crm.contracts.window.addLine")}
         </Button>
       </div>
@@ -221,7 +230,7 @@ function RolloverPicker({ value, onChange, disabled }: { value: BankRollover; on
 }
 
 // ── making a contract ──
-type Draft = { serviceId: string; name: string; kind: "recurring" | "recurring_yearly"; priceCents: number; quantity: number; addedOn: string; unitCustom: boolean };
+type Draft = { serviceId: string; name: string; kind: "recurring" | "recurring_yearly"; priceCents: number; quantity: number; addedOn: string; unitCustom: boolean; rebate: number };
 
 export function NewContractDialog({ client, onClose }: { client: CrmDetail; onClose: () => void }) {
   const { t, i18n } = useTranslation();
@@ -233,7 +242,7 @@ export function NewContractDialog({ client, onClose }: { client: CrmDetail; onCl
     const now = new Date();
     const end = new Date(now.getFullYear() + 1, now.getMonth(), now.getDate() - 1, 12);
     const day = (d: Date) => new Date(d.getTime() - d.getTimezoneOffset() * 60_000).toISOString().slice(0, 10);
-    return { name: "", typeKey: "", startDate: day(now), endDate: day(end), figure: "", rate: "", billingPeriod: "monthly" as BillingPeriod, billedThrough: "", supportDefault: false, bundleOn: false, bundlePrice: "", bundleQty: "1", bankRate: "", bankRollover: "lose" as BankRollover };
+    return { name: "", typeKey: "", startDate: day(now), endDate: day(end), figure: "", rate: "", billingPeriod: "monthly" as BillingPeriod, billedThrough: "", supportDefault: false, bundleOn: false, bundlePrice: "", bundleQty: "1", bankRate: "", bankRollover: "lose" as BankRollover, rebate: "" };
   });
   const [lines, setLines] = useState<Draft[]>([]);
   // the hourly rate starts at the usual one of Admin › Facturation; typing another changes it, 0 means no hourly rate (included)
@@ -256,11 +265,11 @@ export function NewContractDialog({ client, onClose }: { client: CrmDetail; onCl
       contractCharges(
         { startDate: f.startDate, endDate: f.endDate, billingPeriod: f.billingPeriod },
         linesForCharges(
-          { name: f.name || "—", startDate: f.startDate, billingPeriod: f.billingPeriod, bundlePriceCents: bundled ? (bundleCents ?? 0) : null, bundleQuantity: bundleQty },
-          lines.map((l, i): ChargeLine => ({ id: String(i), name: l.name, kind: l.kind, priceCents: l.priceCents, quantity: l.quantity, addedOn: l.addedOn })),
+          { name: f.name || "—", startDate: f.startDate, billingPeriod: f.billingPeriod, bundlePriceCents: bundled ? (bundleCents ?? 0) : null, bundleQuantity: bundleQty, rebateBps: Math.round(percentOf(f.rebate) * 100) },
+          lines.map((l, i): ChargeLine => ({ id: String(i), name: l.name, kind: l.kind, priceCents: l.priceCents, quantity: l.quantity, addedOn: l.addedOn, rebateBps: Math.round(l.rebate * 100) })),
         ),
       ),
-    [f.startDate, f.endDate, f.billingPeriod, f.name, lines, bundled, bundleCents, bundleQty],
+    [f.startDate, f.endDate, f.billingPeriod, f.name, lines, bundled, bundleCents, bundleQty, f.rebate],
   );
   const on = chargesOn(charges, todayYmd(), f.billedThrough || null);
   const create = useMutation({
@@ -279,8 +288,9 @@ export function NewContractDialog({ client, onClose }: { client: CrmDetail; onCl
         ...(f.supportDefault ? { supportDefault: true } : {}),
         ...(hourlyRate !== undefined && Number.isFinite(hourlyRate) ? { hourlyRate } : {}),
         ...figure,
+        ...(percentOf(f.rebate) > 0 ? { rebate: percentOf(f.rebate) } : {}),
         ...(bundled && !isBank ? { bundlePrice: (bundleCents ?? 0) / 100, bundleQuantity: bundleQty } : {}),
-        services: (isBank ? [] : lines).map((l) => ({ serviceId: l.serviceId, addedOn: l.addedOn, quantity: l.quantity, ...(l.unitCustom && !bundled ? { priceCents: l.priceCents } : {}) })),
+        services: (isBank ? [] : lines).map((l) => ({ serviceId: l.serviceId, addedOn: l.addedOn, quantity: l.quantity, ...(l.unitCustom && !bundled ? { priceCents: l.priceCents } : {}), ...(l.rebate > 0 ? { rebate: l.rebate } : {}) })),
       });
     },
     onSuccess: () => {
@@ -361,6 +371,14 @@ export function NewContractDialog({ client, onClose }: { client: CrmDetail; onCl
             </div>
           </section>
 
+          {type && type.kind !== "fixed" && (
+            <section className="space-y-2 rounded-xl border bg-background/30 p-3">
+              <h4 className="text-sm font-semibold">{t("rebate.contract")}</h4>
+              <p className="text-xs text-muted-foreground">{t("rebate.contractHint")}</p>
+              <RebateInput regular={isBank ? bankRateCents / 100 : type.kind === "hourly" ? Number(rate.replace(",", ".")) || 0 : null} percent={f.rebate} onPercent={(v) => setF((x) => ({ ...x, rebate: v }))} unit={isBank || type.kind === "hourly" ? "/ h" : undefined} />
+            </section>
+          )}
+
           {isBank && (
             <section className="space-y-3 rounded-xl border bg-background/30 p-3">
               <h4 className="text-sm font-semibold">{t("crm.contracts.bank.title")}</h4>
@@ -416,7 +434,7 @@ export function NewContractDialog({ client, onClose }: { client: CrmDetail; onCl
                         {l.name} {l.quantity > 1 && <span className="font-mono text-xs text-muted-foreground">× {l.quantity}</span>}
                       </span>
                       <span className="block text-[11px] text-muted-foreground">
-                        {bundled ? t("crm.contracts.bundle.inPackage") : `${money(l.priceCents, lang)} ${l.kind === "recurring_yearly" ? t("services.perYear") : t("services.perMonth")} · ${t("crm.contracts.addedOn", { date: shortDate(l.addedOn) })}`}
+                        {bundled ? t("crm.contracts.bundle.inPackage") : `${l.rebate > 0 ? `${money(netCents(l.priceCents, Math.round(l.rebate * 100)), lang)} (${t("rebate.applied", { pct: l.rebate })}) ` : `${money(l.priceCents, lang)} `}${l.kind === "recurring_yearly" ? t("services.perYear") : t("services.perMonth")} · ${t("crm.contracts.addedOn", { date: shortDate(l.addedOn) })}`}
                       </span>
                     </span>
                     <Button type="button" size="icon" variant="ghost" className="size-7 text-muted-foreground hover:text-destructive" onClick={() => setLines((x) => x.filter((_, j) => j !== i))} aria-label={t("common.delete")}>
@@ -430,7 +448,8 @@ export function NewContractDialog({ client, onClose }: { client: CrmDetail; onCl
               term={term}
               heading={false}
               bundled={bundled}
-              onAdd={(p) => setLines((x) => [...x, { serviceId: p.service.id, name: p.service.name, kind: p.service.kind, priceCents: p.priceCents ?? p.service.priceCents, quantity: p.quantity, addedOn: p.addedOn, unitCustom: p.priceCents !== undefined }])}
+              contractRebateBps={Math.round(percentOf(f.rebate) * 100)}
+              onAdd={(p) => setLines((x) => [...x, { serviceId: p.service.id, name: p.service.name, kind: p.service.kind, priceCents: p.priceCents ?? p.service.priceCents, quantity: p.quantity, addedOn: p.addedOn, unitCustom: p.priceCents !== undefined, rebate: p.rebate ?? 0 }])}
             />
           </section>
           )}
@@ -486,6 +505,7 @@ export function ContractWindow({ client, contractId, onClose }: { client: CrmDet
                 ) : (
                   <span className="rounded-md border border-amber-500/40 bg-amber-500/10 px-1.5 py-0.5 text-[10px] font-semibold uppercase text-amber-300">{k.endedOn ? t("crm.contracts.window.stoppedOn", { date: shortDate(k.endedOn) }) : t("crm.contracts.inactive")}</span>
                 )}
+                {(k.rebateBps ?? 0) > 0 && <span className="rounded-md border border-emerald-500/40 bg-emerald-500/10 px-1.5 py-0.5 text-[10px] font-semibold text-emerald-300">{t("rebate.onContract", { pct: (k.rebateBps ?? 0) / 100 })}</span>}
                 {k.isSupportDefault && <span className="rounded-md border border-[color:var(--gold)]/40 bg-[color:var(--gold)]/10 px-1.5 py-0.5 text-[10px] font-semibold text-primary">{t("crm.contracts.supportDefault")}</span>}
               </DialogTitle>
               <DialogDescription>
@@ -593,7 +613,7 @@ function ServicesTab({ client, k, editable, onChanged }: { client: CrmDetail; k:
   const periodAt = (l: Line) => l.periods.find((p) => p.from <= asOf && asOf <= p.to) ?? null;
   // a bundle: what is charged is the package; the services under it carry no price of their own
   const bundled = k.bundlePriceCents != null;
-  const bundleLines = linesForCharges({ name: k.name, startDate: k.startDate, billingPeriod: k.billingPeriod ?? "monthly", bundlePriceCents: k.bundlePriceCents, bundleQuantity: k.bundleQuantity }, []);
+  const bundleLines = linesForCharges({ name: k.name, startDate: k.startDate, billingPeriod: k.billingPeriod ?? "monthly", bundlePriceCents: k.bundlePriceCents, bundleQuantity: k.bundleQuantity, rebateBps: k.rebateBps }, []);
   const bundlePiece = bundled
     ? contractCharges({ startDate: k.startDate, endDate: k.endDate, endedOn: k.endedOn, billingPeriod: k.billingPeriod ?? "monthly" }, bundleLines)
         .entries.flatMap((e) => e.pieces)
@@ -603,7 +623,7 @@ function ServicesTab({ client, k, editable, onChanged }: { client: CrmDetail; k:
   const { data: waiting = [] } = useQuery({ queryKey: ["crm", "client", client.id, "itcloud-unmapped", k.id], queryFn: () => api.get<Unmapped[]>(`${base}/itcloud-services`), enabled: editable && k.active });
   const qc = useQueryClient();
   const add = useMutation({
-    mutationFn: (p: { service: CatalogItem; quantity: number; addedOn: string; priceCents?: number }) => api.post(`${base}/services`, { serviceId: p.service.id, quantity: p.quantity, addedOn: p.addedOn, ...(p.priceCents !== undefined ? { priceCents: p.priceCents } : {}) }),
+    mutationFn: (p: { service: CatalogItem; quantity: number; addedOn: string; priceCents?: number; rebate?: number }) => api.post(`${base}/services`, { serviceId: p.service.id, quantity: p.quantity, addedOn: p.addedOn, ...(p.priceCents !== undefined ? { priceCents: p.priceCents } : {}), ...(p.rebate ? { rebate: p.rebate } : {}) }),
     onSuccess: () => {
       toast.success(t("crm.contracts.serviceAdded"));
       onChanged();
@@ -616,9 +636,9 @@ function ServicesTab({ client, k, editable, onChanged }: { client: CrmDetail; k:
     onError: (e) => toast.error(contractError(t, e)),
   });
   // a changed price: "only this contract" or "the service and every running contract" — the server asks (and says how many others)
-  const [scope, setScope] = useState<{ edit: { id: string; quantity: number; priceCents: number; addedOn: string }; others: number } | null>(null);
+  const [scope, setScope] = useState<{ edit: { id: string; quantity: number; priceCents: number; addedOn: string; rebate: number }; others: number } | null>(null);
   const change = useMutation({
-    mutationFn: (p: { id: string; quantity: number; priceCents: number; addedOn: string; scope?: "line" | "service" | "all" }) => api.patch(`${base}/services/${p.id}`, { quantity: p.quantity, priceCents: p.priceCents, addedOn: p.addedOn, ...(p.scope ? { scope: p.scope } : {}) }),
+    mutationFn: (p: { id: string; quantity: number; priceCents: number; addedOn: string; rebate: number; scope?: "line" | "service" | "all" }) => api.patch(`${base}/services/${p.id}`, { quantity: p.quantity, priceCents: p.priceCents, addedOn: p.addedOn, rebate: p.rebate, ...(p.scope ? { scope: p.scope } : {}) }),
     onSuccess: () => {
       setEditing(null);
       setScope(null);
@@ -626,7 +646,7 @@ function ServicesTab({ client, k, editable, onChanged }: { client: CrmDetail; k:
       void qc.invalidateQueries({ queryKey: ["services"] });
     },
     onError: (e, v) => {
-      if (e instanceof ApiError && e.code === "price_scope_required") setScope({ edit: { id: v.id, quantity: v.quantity, priceCents: v.priceCents, addedOn: v.addedOn }, others: Number(e.fields?.find((x) => x.path === "contracts")?.message ?? 0) });
+      if (e instanceof ApiError && e.code === "price_scope_required") setScope({ edit: { id: v.id, quantity: v.quantity, priceCents: v.priceCents, addedOn: v.addedOn, rebate: v.rebate }, others: Number(e.fields?.find((x) => x.path === "contracts")?.message ?? 0) });
       else toast.error(contractError(t, e));
     },
   });
@@ -635,7 +655,7 @@ function ServicesTab({ client, k, editable, onChanged }: { client: CrmDetail; k:
       {bundled && (
         <div className="rounded-lg border border-[color:var(--gold)]/40 bg-[color:var(--gold)]/[0.06] px-3 py-2 text-sm">
           <p className="font-medium">
-            {t("crm.contracts.bundle.title")} — {k.bundleQuantity ?? 1} × {money(k.bundlePriceCents ?? 0, i18n.language)} = <span className="font-mono">{money((k.bundlePriceCents ?? 0) * (k.bundleQuantity ?? 1), i18n.language)}</span> {k.billingPeriod === "yearly" ? t("services.perYear") : t("services.perMonth")}
+            {t("crm.contracts.bundle.title")} — {k.bundleQuantity ?? 1} × {money(k.bundlePriceCents ?? 0, i18n.language)} = <span className="font-mono">{money(netCents(k.bundlePriceCents ?? 0, k.rebateBps) * (k.bundleQuantity ?? 1), i18n.language)}</span> {k.billingPeriod === "yearly" ? t("services.perYear") : t("services.perMonth")}
           </p>
           <p className="text-xs text-muted-foreground">{t("crm.contracts.bundle.shown")}</p>
         </div>
@@ -668,7 +688,10 @@ function ServicesTab({ client, k, editable, onChanged }: { client: CrmDetail; k:
                     {l.source && <span className="rounded border border-sky-400/40 px-1 text-[9px] font-semibold uppercase text-sky-300" title={t("crm.contracts.fromVendorHint")}>{l.source === "itcloud" ? "ITCloud" : l.source}</span>}
                   </span>
                   <span className="block text-[11px] text-muted-foreground">
-                    {money(l.priceCents, i18n.language)} {l.kind === "recurring_yearly" ? t("services.perYear") : t("services.perMonth")} · {t("crm.contracts.addedOn", { date: shortDate(l.addedOn) })}
+                    {(l.rebateBps > 0 || (l.contractRebateBps ?? 0) > 0) && <span className="mr-1 text-muted-foreground line-through">{money(l.priceCents, i18n.language)}</span>}
+                    {money(l.netPriceCents ?? l.priceCents, i18n.language)} {l.kind === "recurring_yearly" ? t("services.perYear") : t("services.perMonth")} · {t("crm.contracts.addedOn", { date: shortDate(l.addedOn) })}
+                    {l.rebateBps > 0 && <span className="ml-1.5 rounded-full bg-emerald-500/15 px-1.5 py-px text-[10px] font-medium text-emerald-300">{t("rebate.applied", { pct: l.rebateBps / 100 })}</span>}
+                    {(l.contractRebateBps ?? 0) > 0 && <span className="ml-1 rounded-full bg-emerald-500/15 px-1.5 py-px text-[10px] font-medium text-emerald-300">{t("rebate.onContract", { pct: (l.contractRebateBps ?? 0) / 100 })}</span>}
                   </span>
                 </span>
                 {bundled && <span className="text-right text-[11px] text-muted-foreground">{t("crm.contracts.bundle.inPackage")}</span>}
@@ -709,14 +732,14 @@ function ServicesTab({ client, k, editable, onChanged }: { client: CrmDetail; k:
                   </span>
                 )}
               </div>
-              {editing === l.id && <LineEditor l={l} term={term} fromVendor={Boolean(l.source)} busy={change.isPending} onSave={(p) => change.mutate({ id: l.id, ...p })} onCancel={() => setEditing(null)} />}
+              {editing === l.id && <LineEditor l={l} term={term} fromVendor={Boolean(l.source)} busy={change.isPending} contractRebateBps={k.rebateBps ?? 0} onSave={(p) => change.mutate({ id: l.id, ...p })} onCancel={() => setEditing(null)} />}
             </li>
           ))}
         </ul>
       )}
       {editable && k.active && (
         <>
-          <ServiceAdder term={term} busy={add.isPending} bundled={bundled} onAdd={(p) => add.mutate(p)} />
+          <ServiceAdder term={term} busy={add.isPending} bundled={bundled} contractRebateBps={k.rebateBps ?? 0} onAdd={(p) => add.mutate(p)} />
           {waiting.length > 0 && (
             <Button type="button" size="sm" variant="outline" className="h-8 gap-1.5 border-sky-500/40 text-xs text-sky-300" onClick={() => setMapping(true)}>
               <Cloud className="size-3.5" /> {t("crm.contracts.mapItcloud", { count: waiting.length })}
@@ -755,14 +778,15 @@ function ServicesTab({ client, k, editable, onChanged }: { client: CrmDetail; k:
 }
 
 /** Changes a line: its quantity, its price per unit, the day it starts (the prorata is shown as it goes) */
-function LineEditor({ l, term, fromVendor, busy, onSave, onCancel }: { l: Line; fromVendor?: boolean; term: { start: string; end: string } | null; busy: boolean; onSave: (p: { quantity: number; priceCents: number; addedOn: string }) => void; onCancel: () => void }) {
+function LineEditor({ l, term, fromVendor, busy, onSave, onCancel, contractRebateBps = 0 }: { l: Line; fromVendor?: boolean; term: { start: string; end: string } | null; busy: boolean; onSave: (p: { quantity: number; priceCents: number; addedOn: string; rebate: number }) => void; onCancel: () => void; contractRebateBps?: number }) {
   const { t, i18n } = useTranslation();
   const [quantity, setQuantity] = useState(String(l.quantity));
   const [price, setPrice] = useState(String(l.priceCents / 100));
   const [addedOn, setAddedOn] = useState(l.addedOn);
+  const [rebate, setRebate] = useState(l.rebateBps ? String(l.rebateBps / 100) : "");
   const qty = Math.max(1, Math.round(Number(quantity) || 1));
   const unit = toCents(price) ?? l.priceCents;
-  const plan = term ? prorata({ period: l.kind === "recurring_yearly" ? "yearly" : "monthly", priceCents: unit * qty, addedOn, start: term.start, end: term.end }) : "dates";
+  const plan = term ? prorata({ period: l.kind === "recurring_yearly" ? "yearly" : "monthly", priceCents: netCents(unit, combineBps(Math.round(percentOf(rebate) * 100), contractRebateBps)) * qty, addedOn, start: term.start, end: term.end }) : "dates";
   return (
     <div className="mt-2 flex flex-wrap items-end gap-2 rounded-lg border bg-background/40 p-2">
       <Field label={t("crm.contracts.window.quantity")}>
@@ -774,6 +798,9 @@ function LineEditor({ l, term, fromVendor, busy, onSave, onCancel }: { l: Line; 
       <Field label={t("crm.contracts.startsOn")}>
         <Input type="date" value={addedOn} min={term?.start} max={term?.end} disabled={fromVendor} onChange={(e) => setAddedOn(e.target.value)} className="h-8" />
       </Field>
+      <div className="basis-full">
+        <RebateInput regular={unit / 100} percent={rebate} onPercent={setRebate} />
+      </div>
       <span className="pb-2 text-[11px] text-muted-foreground">
         {typeof plan !== "string" && (
           <>
@@ -785,7 +812,7 @@ function LineEditor({ l, term, fromVendor, busy, onSave, onCancel }: { l: Line; 
         <Button type="button" size="sm" variant="ghost" onClick={onCancel}>
           {t("common.cancel")}
         </Button>
-        <Button type="button" size="sm" disabled={busy || typeof plan === "string"} onClick={() => onSave({ quantity: qty, priceCents: unit, addedOn })} className="bg-grad-gold font-semibold text-[#1a1204]">
+        <Button type="button" size="sm" disabled={busy || typeof plan === "string"} onClick={() => onSave({ quantity: qty, priceCents: unit, addedOn, rebate: percentOf(rebate) })} className="bg-grad-gold font-semibold text-[#1a1204]">
           {busy && <Loader2 className="size-3.5 animate-spin" />} {t("common.save")}
         </Button>
       </span>
@@ -798,7 +825,7 @@ function ChargesTab({ k, lang }: { k: Detail; lang: string }) {
   const { t } = useTranslation();
   const today = todayYmd();
   const ch = useMemo(
-    () => contractCharges({ startDate: k.startDate, endDate: k.endDate, endedOn: k.endedOn, billingPeriod: k.billingPeriod }, linesForCharges({ name: k.name, startDate: k.startDate, billingPeriod: k.billingPeriod ?? "monthly", bundlePriceCents: k.bundlePriceCents, bundleQuantity: k.bundleQuantity }, k.services.map((l): ChargeLine => ({ id: l.id, name: l.name, kind: l.kind, priceCents: l.priceCents, quantity: l.quantity, addedOn: l.addedOn })))),
+    () => contractCharges({ startDate: k.startDate, endDate: k.endDate, endedOn: k.endedOn, billingPeriod: k.billingPeriod }, linesForCharges({ name: k.name, startDate: k.startDate, billingPeriod: k.billingPeriod ?? "monthly", bundlePriceCents: k.bundlePriceCents, bundleQuantity: k.bundleQuantity, rebateBps: k.rebateBps }, k.services.map((l): ChargeLine => ({ id: l.id, name: l.name, kind: l.kind, priceCents: l.priceCents, quantity: l.quantity, addedOn: l.addedOn, rebateBps: l.rebateBps })))),
     [k],
   );
   const on = chargesOn(ch, today, k.billedThrough);
@@ -921,6 +948,8 @@ function OverviewTab({ client, k, editable, onChanged, onClose }: { client: CrmD
   const { data: types = [] } = useContractTypes();
   const base = `/crm/clients/${client.id}/contracts/${k.id}`;
   const isBank = k.billingMode === "banked";
+  const [rebate, setRebate] = useState(k.rebateBps ? String(k.rebateBps / 100) : "");
+  useEffect(() => setRebate(k.rebateBps ? String(k.rebateBps / 100) : ""), [k.rebateBps]);
   const [bankRate, setBankRate] = useState(String((k.bankRateCents ?? 0) / 100));
   const [rollover, setRollover] = useState<BankRollover>((k.bankRollover ?? "lose") as BankRollover);
   useEffect(() => {
@@ -957,7 +986,7 @@ function OverviewTab({ client, k, editable, onChanged, onClose }: { client: CrmD
     },
     onError: (e) => toast.error(contractError(t, e)),
   });
-  const dirty = f.name.trim() !== k.name || f.typeKey !== (k.typeKey ?? "") || f.startDate !== (k.startDate ?? "") || f.endDate !== (k.endDate ?? "") || f.billingPeriod !== k.billingPeriod || f.billedThrough !== (k.billedThrough ?? "") || (figureField !== null && (toCents(f.figure) ?? null) !== (figureValue ?? null)) || rate !== rateNow || (isBank && (toCents(bankRate) !== (k.bankRateCents ?? 0) || rollover !== (k.bankRollover ?? "lose"))) || bundle.on !== bundleNow.on || (bundle.on && (bundle.price !== bundleNow.price || bundle.qty !== bundleNow.qty));
+  const dirty = f.name.trim() !== k.name || f.typeKey !== (k.typeKey ?? "") || f.startDate !== (k.startDate ?? "") || f.endDate !== (k.endDate ?? "") || f.billingPeriod !== k.billingPeriod || f.billedThrough !== (k.billedThrough ?? "") || (figureField !== null && (toCents(f.figure) ?? null) !== (figureValue ?? null)) || rate !== rateNow || Math.round(percentOf(rebate) * 100) !== (k.rebateBps ?? 0) || (isBank && (toCents(bankRate) !== (k.bankRateCents ?? 0) || rollover !== (k.bankRollover ?? "lose"))) || bundle.on !== bundleNow.on || (bundle.on && (bundle.price !== bundleNow.price || bundle.qty !== bundleNow.qty));
   const save = () => {
     const p: Record<string, unknown> = {};
     if (f.name.trim() !== k.name) p.name = f.name.trim();
@@ -975,6 +1004,7 @@ function OverviewTab({ client, k, editable, onChanged, onClose }: { client: CrmD
       const n = f.figure.trim() === "" ? null : Number(f.figure.replace(",", "."));
       p[figureField] = n;
     }
+    if (Math.round(percentOf(rebate) * 100) !== (k.rebateBps ?? 0)) p.rebate = percentOf(rebate);
     if (isBank) {
       if (toCents(bankRate) !== (k.bankRateCents ?? 0)) p.bankedRate = (toCents(bankRate) ?? 0) / 100;
       if (rollover !== (k.bankRollover ?? "lose")) p.bankRollover = rollover;
@@ -1038,6 +1068,13 @@ function OverviewTab({ client, k, editable, onChanged, onClose }: { client: CrmD
           </Field>
         )}
       </div>
+      {k.billingMode !== "fixed" && (
+        <div className="space-y-2 rounded-xl border bg-background/30 p-3">
+          <p className="text-sm font-semibold">{t("rebate.contract")}</p>
+          <p className="text-xs text-muted-foreground">{t("rebate.contractHint")}</p>
+          <RebateInput regular={isBank ? (toCents(bankRate) ?? 0) / 100 : k.billingMode === "hourly" ? Number(rate.replace(",", ".")) || 0 : null} percent={rebate} onPercent={setRebate} unit={isBank || k.billingMode === "hourly" ? "/ h" : undefined} />
+        </div>
+      )}
       {isBank && <RolloverPicker value={rollover} onChange={setRollover} disabled={!editable} />}
       {k.billingMode === "monthly" && (
         <div className="space-y-3 rounded-xl border bg-background/30 p-3">

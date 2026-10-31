@@ -360,6 +360,15 @@ const en: Dict = {
     deleteText: "The service is removed from the list. This is final.",
   },
 
+  rebate: {
+    percent: "Rebate (%)",
+    final: "Price after rebate ($)",
+    applied: "{{pct}} % rebate",
+    onContract: "Contract rebate {{pct}} %",
+    contract: "Rebate on the contract",
+    contractHint: "A rebate in % on everything this contract charges (hourly rate, hours bank, services). A service can also have its own rebate; the two add up. The regular price is kept: type the rebate in % or the price after the rebate.",
+    hourlyNote: "({{pct}} % rebate on {{regular}} / h)",
+  },
   crm: {
     delete: {
       button: "Delete client",

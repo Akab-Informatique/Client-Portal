@@ -6,7 +6,7 @@ import type { TicketContract } from "./shared";
 export function contractNote(t: TFunction, lang: string, k: TicketContract | null | undefined): string {
   if (!k) return t("tickets.contractBilling.none");
   // the contract's hourly rate bills the hours; a rate of 0 means they are included
-  if (k.billed && k.rateCents != null) return t("tickets.contractBilling.hourlyNote", { rate: money(k.rateCents, lang) });
+  if (k.billed && k.rateCents != null) return t("tickets.contractBilling.hourlyNote", { rate: money(k.rateCents, lang) }) + ((k.rebateBps ?? 0) > 0 && k.hourlyRateCents ? ` ${t("rebate.hourlyNote", { pct: (k.rebateBps ?? 0) / 100, regular: money(k.hourlyRateCents, lang) })}` : "");
   if (k.mode === "hourly") return t("tickets.contractBilling.includedNote");
   if (k.mode === "monthly") return t("tickets.contractBilling.monthlyNote", { rate: k.monthlyRateCents != null ? money(k.monthlyRateCents, lang) : "—" });
   if (k.mode === "per_ticket") return t("tickets.contractBilling.ticketNote", { rate: k.ticketRateCents != null ? money(k.ticketRateCents, lang) : "—" });

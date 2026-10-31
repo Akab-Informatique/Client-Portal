@@ -1,6 +1,7 @@
 import { and, asc, eq, inArray } from "drizzle-orm";
 import { db, schema } from "../db/index.ts";
 import { billingSettings } from "./billing.ts";
+import { netCents } from "../../shared/rebate.ts";
 import { bankMonths, bankNow, bankRollover, type BankMonth, type BankRollover } from "../../shared/bank.ts";
 
 /**
@@ -53,6 +54,8 @@ export type ContractView = {
   mode: BillingMode;
   /** The rate typed on the contract (none: the usual rate applies) */
   hourlyRateCents: number | null;
+  /** The contract's rebate (percent × 100): rateCents is already after it */
+  rebateBps: number;
   /** What an hour is billed at under this contract: null when hours are not billed */
   rateCents: number | null;
   monthlyRateCents: number | null;
@@ -82,11 +85,12 @@ const modeOf = (v: string): BillingMode => ((BILLING_MODES as readonly string[])
  * A contract with no rate typed (made before every contract had one) keeps its old rule: an hourly one bills the usual
  * rate of Admin › Facturation, any other does not bill hours.
  */
-export function hourlyRateOf(k: { billingMode: string; hourlyRateCents: number | null }, usualHourlyDollars: number): number | null {
+export function hourlyRateOf(k: { billingMode: string; hourlyRateCents: number | null; rebateBps?: number | null }, usualHourlyDollars: number): number | null {
   // an hours bank is bought up front: the hours worked are drawn from it, never billed one by one
   if (modeOf(k.billingMode) === "banked") return null;
-  if (k.hourlyRateCents != null) return k.hourlyRateCents > 0 ? k.hourlyRateCents : null;
-  return modeOf(k.billingMode) === "hourly" ? Math.round(usualHourlyDollars * 100) : null;
+  // the rebate of the contract is taken off the hourly rate
+  if (k.hourlyRateCents != null) return k.hourlyRateCents > 0 ? netCents(k.hourlyRateCents, k.rebateBps) : null;
+  return modeOf(k.billingMode) === "hourly" ? netCents(Math.round(usualHourlyDollars * 100), k.rebateBps) : null;
 }
 
 /** The client's active contracts (by the ticket-side company id), the default one flagged. */
@@ -113,6 +117,7 @@ export async function contractsOfCompany(companyAt: number): Promise<ContractVie
       type: k.type,
       mode,
       hourlyRateCents: k.hourlyRateCents,
+      rebateBps: k.rebateBps,
       rateCents: hourlyRateOf(k, usual),
       monthlyRateCents: k.monthlyRateCents,
       ticketRateCents: k.ticketRateCents,
@@ -159,7 +164,7 @@ export async function usedByMonthOf(contracts: { id: string; autotaskId: string 
   return out;
 }
 
-type BankRow = { id: string; autotaskId: string | null; billingMode: string; bankedHoursX100: number | null; bankRateCents: number | null; bankRollover: string; startDate: string | null; endDate: string | null; endedOn: string | null };
+type BankRow = { rebateBps?: number; id: string; autotaskId: string | null; billingMode: string; bankedHoursX100: number | null; bankRateCents: number | null; bankRollover: string; startDate: string | null; endDate: string | null; endedOn: string | null };
 const todayQuebec = () => new Date().toLocaleDateString("en-CA", { timeZone: "America/Toronto" });
 /** The month-by-month bank of one contract (empty when it is not an hours bank) */
 export function bankRowsOf(k: BankRow, used: Map<string, number> | undefined, today = todayQuebec()): BankMonth[] {
@@ -174,7 +179,7 @@ export async function banksOf(contracts: BankRow[], today = todayQuebec()): Prom
   const used = await usedByMonthOf(banked);
   for (const k of banked) {
     const now = bankNow(bankRowsOf(k, used.get(k.id), today), today);
-    out.set(k.id, { hours: k.bankedHoursX100! / 100, rateCents: k.bankRateCents, rollover: bankRollover(k.bankRollover), ...(now ?? { available: k.bankedHoursX100! / 100, used: 0, left: k.bankedHoursX100! / 100, over: 0 }) });
+    out.set(k.id, { hours: k.bankedHoursX100! / 100, rateCents: k.bankRateCents == null ? null : netCents(k.bankRateCents, k.rebateBps), rollover: bankRollover(k.bankRollover), ...(now ?? { available: k.bankedHoursX100! / 100, used: 0, left: k.bankedHoursX100! / 100, over: 0 }) });
   }
   return out;
 }
