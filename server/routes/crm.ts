@@ -26,7 +26,6 @@ import { BILLING_MODES, KIND_MODE, bankRowsOf, banksOf, contractTypes, usedByMon
 import { BANK_ROLLOVERS, bankBundle } from "../../shared/bank.ts";
 import { bpsOfPercent, combineBps, netCents } from "../../shared/rebate.ts";
 import { potentialProfit } from "../lib/contractProfit.ts";
-import { clientProfitability } from "../lib/clientProfit.ts";
 import { prorata, type ServicePeriod } from "../../shared/prorata.ts";
 import { chargesOn, contractCharges, linesForCharges, type ChargeLine } from "../../shared/contractCharges.ts";
 import { contractCharged, contractEventsOf, recordContractEvent, syncMonthlyRate } from "../lib/contractEvents.ts";
@@ -206,17 +205,6 @@ export const crmRoutes = new Hono<AppEnv>()
   })
 
   /** What deleting a client would remove, and what stops it (invoices and tickets are never lost) */
-  /**
-   * How profitable the client is for us (shared/profitability.ts). **Administrators only, very strict**: the right hr.manage,
-   * a staff account, never while looking "as a client" — no technician, no client user (a client administrator included).
-   */
-  .get("/clients/:id/profitability", requirePermission("hr.manage"), async (c) => {
-    const a = auth(c);
-    if (a.user.kind !== "staff" || a.user.id !== a.realUser.id) throw new HTTPException(403, { message: "forbidden" });
-    const client = await clientOr404(c.req.param("id"));
-    const days = [30, 90, 180, 365].includes(Number(c.req.query("days"))) ? Number(c.req.query("days")) : 90;
-    return c.json(await clientProfitability(client, days));
-  })
   .get("/clients/:id/delete-check", requirePermission("crm.delete"), async (c) => {
     const client = await clientOr404(c.req.param("id"));
     return c.json(await deleteCheck(client));
@@ -838,9 +826,12 @@ export const crmRoutes = new Hono<AppEnv>()
     const allLines = rows.length ? await db().select().from(schema.contractServices).where(inArray(schema.contractServices.contractId, rows.map((k) => k.id))) : [];
     const today = todayQc();
     const banks = await banksOf(rows);
+    const admin = auth(c).permissions.includes("hr.manage");
+    const profits = new Map<string, Awaited<ReturnType<typeof potentialProfit>>>();
+    if (admin) for (const k of rows) profits.set(k.id, await potentialProfit(k, allLines.filter((l) => l.contractId === k.id), summaryOf(k, allLines.filter((l) => l.contractId === k.id), today).revenueCents));
     return c.json(
       rows
-        .map((k) => ({ ...k, bank: banks.get(k.id) ?? null, isSupportDefault: chosen?.id === k.id, usualRateCents: usual, usedHours: used.get(k.id) ?? 0, serviceCount: allLines.filter((l) => l.contractId === k.id).length, summary: summaryOf(k, allLines.filter((l) => l.contractId === k.id), today) }))
+        .map((k) => ({ ...k, profit: profits.get(k.id) ?? null, bank: banks.get(k.id) ?? null, isSupportDefault: chosen?.id === k.id, usualRateCents: usual, usedHours: used.get(k.id) ?? 0, serviceCount: allLines.filter((l) => l.contractId === k.id).length, summary: summaryOf(k, allLines.filter((l) => l.contractId === k.id), today) }))
         .sort((x, y) => Number(y.active) - Number(x.active) || Number(y.isSupportDefault) - Number(x.isSupportDefault) || x.name.localeCompare(y.name)),
     );
   })

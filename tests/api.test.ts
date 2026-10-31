@@ -9334,12 +9334,6 @@ describe("hours bank contracts", () => {
     expect(moved).toMatchObject({ bankedHoursX100: 1000, bundlePriceCents: 10000, bundleQuantity: 10, bankRollover: "carry" });
     await admin.patch(`${base}/${k.id}`, { bankedHours: 1, bankedRate: 120, bankRollover: "lose" });
 
-    // how profitable the client is: administrators only, no technician (and the server never gives it to client users)
-    expect((await tech.get(`/api/crm/clients/${client.id}/profitability`)).status).toBe(403);
-    const prof = (await admin.get(`/api/crm/clients/${client.id}/profitability?days=30`)).json;
-    expect(prof).toMatchObject({ days: 30, revenueCents: expect.any(Number), costCents: expect.any(Number) });
-    expect(prof.profitCents).toBe(prof.revenueCents - prof.costCents);
-    expect((await admin.get(`/api/crm/clients/${client.id}/profitability?days=7`)).json.days).toBe(90);
     // a rebate on the contract: the regular price is kept, what is charged is after it
     expect((await admin.patch(`${base}/${k.id}`, { rebate: 10 })).json).toMatchObject({ rebateBps: 1000, bankRateCents: 12000 });
     const rebated = (await admin.get(`${base}/${k.id}`)).json;
@@ -9351,8 +9345,13 @@ describe("hours bank contracts", () => {
     expect(detail.profit).toMatchObject({ revenueCents: expect.any(Number), serviceCostCents: 0, labourCostCents: 0 });
     expect(detail.profit.profitCents).toBe(detail.profit.revenueCents - detail.profit.serviceCostCents - detail.profit.labourCostCents);
     expect((await tech.get(`${base}/${k.id}`)).json.profit ?? null).toBeNull();
-    // never in the list, nor on the ticket
-    expect((await admin.get(base)).json.find((x: any) => x.id === k.id).profit ?? null).toBeNull();
+    expect((await admin.get(base)).json.find((x: any) => x.id === k.id).profit.revenueCents).toBe(detail.profit.revenueCents);
+    // administrators see what the ticket's contract earns or loses this month; technicians do not
+    expect((await tech.get(`/api/tickets/${t0.id}/contract-profit`)).status).toBe(403);
+    const profit = (await admin.get(`/api/tickets/${t0.id}/contract-profit`)).json;
+    expect(profit).toMatchObject({ contractId: k.id, name: "Banque 1 h", revenueCents: expect.any(Number), profitCents: expect.any(Number) });
+    expect(profit.profitCents).toBe(profit.revenueCents - profit.serviceCostCents - profit.labourCostCents);
+
     // the time entry: past what is left, a choice is required, then it is kept as chosen
     await tech.post(`/api/tickets/${t0.id}/timer/start`);
     const timer = (await tech.get("/api/tickets/timers")).json.find((x: any) => x.ticketId === t0.id);
