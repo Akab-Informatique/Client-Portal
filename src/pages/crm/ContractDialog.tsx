@@ -210,6 +210,34 @@ function Field({ label, children, className, hint }: { label: string; children: 
   );
 }
 
+/** Administrators only: the profit the contract can still make over its term, and where it comes from */
+function ProfitCard({ p, lang }: { p: NonNullable<CrmContract["profit"]>; lang: string }) {
+  const { t } = useTranslation();
+  const up = p.profitCents >= 0;
+  return (
+    <div className={cn("mt-2 flex flex-wrap items-center gap-x-6 gap-y-2 rounded-xl border px-3 py-2.5", up ? "border-emerald-500/30 bg-emerald-500/[0.06]" : "border-red-500/30 bg-red-500/[0.06]")}>
+      <div>
+        <p className="flex items-center gap-1.5 text-[11px] uppercase tracking-wide text-muted-foreground">
+          {up ? <TrendingUp className="size-3.5 text-emerald-300" /> : <TrendingUp className="size-3.5 rotate-180 text-red-300" />} {t("crm.contracts.profit.title")}
+        </p>
+        <p className={cn("font-mono text-lg font-semibold", up ? "text-emerald-300" : "text-red-300")}>
+          {up ? "" : "−"}
+          {money(Math.abs(p.profitCents), lang)} {p.marginPct != null && <span className="font-sans text-xs font-normal text-muted-foreground">({p.marginPct} %)</span>}
+        </p>
+      </div>
+      <dl className="grid grid-cols-[auto_auto] gap-x-4 text-xs">
+        <dt className="text-muted-foreground">{t("crm.contracts.profit.revenue")}</dt>
+        <dd className="text-right font-mono">{money(p.revenueCents, lang)}</dd>
+        <dt className="text-muted-foreground">{t("crm.contracts.profit.services")}</dt>
+        <dd className="text-right font-mono">−{money(p.serviceCostCents, lang)}</dd>
+        <dt className="text-muted-foreground">{t("crm.contracts.profit.labour", { hours: p.hours })}</dt>
+        <dd className="text-right font-mono">−{money(p.labourCostCents, lang)}</dd>
+      </dl>
+      <p className="basis-full text-[11px] text-muted-foreground">{t("crm.contracts.profit.hint")}{p.missingWages > 0 ? ` ${t("tickets.profit.missing", { count: p.missingWages })}` : ""}</p>
+    </div>
+  );
+}
+
 /** What becomes of the hours of the bank that are not used in a month */
 function RolloverPicker({ value, onChange, disabled }: { value: BankRollover; onChange: (v: BankRollover) => void; disabled?: boolean }) {
   const { t } = useTranslation();
@@ -513,6 +541,7 @@ export function ContractWindow({ client, contractId, onClose }: { client: CrmDet
               </DialogDescription>
             </DialogHeader>
             <Figures summary={k.summary} period={k.billingPeriod} lang={lang} />
+            {k.profit && <ProfitCard p={k.profit} lang={lang} />}
             <Tabs defaultValue="services" className="mt-2">
               <TabsList className="flex-wrap">
                 <TabsTrigger value="services" className="gap-1.5">

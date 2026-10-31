@@ -777,6 +777,14 @@ const fr = {
       figure_per_ticket: "Tarif par billet",
       figure_fixed: "Prix fixe",
       figure_banked: "Heures dans la banque",
+      profit: {
+        title: "Profit potentiel du contrat",
+        revenue: "Revenu sur le terme",
+        services: "Coût des services sur le terme",
+        labour: "Main-d'œuvre déjà travaillée ({{hours}} h)",
+        inList: "Profit potentiel",
+        hint: "Visible par les administrateurs seulement : tout ce que le contrat facturera sur son terme (après rabais), moins le coût de ses services et les heures déjà travaillées au salaire de chaque technicien. Les heures à venir ne sont pas estimées.",
+      },
       bank: {
         tab: "Banque d'heures",
         title: "Banque d'heures",

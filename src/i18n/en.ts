@@ -779,6 +779,14 @@ const en: Dict = {
       figure_per_ticket: "Rate per ticket",
       figure_fixed: "Fixed price",
       figure_banked: "Hours in the bank",
+      profit: {
+        title: "Potential profit of the contract",
+        revenue: "Revenue over the term",
+        services: "Cost of the services over the term",
+        labour: "Labour already worked ({{hours}} h)",
+        inList: "Potential profit",
+        hint: "Administrators only: everything the contract will charge over its term (after rebates), less the cost of its services and the hours already worked at each technician's wage. Hours still to come are not estimated.",
+      },
       bank: {
         tab: "Hours bank",
         title: "Hours bank",

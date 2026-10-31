@@ -25,6 +25,7 @@ import { applyAutoApprove } from "../lib/billables.ts";
 import { BILLING_MODES, KIND_MODE, bankRowsOf, banksOf, contractTypes, usedByMonthOf, usedHoursOf, type ContractKind } from "../lib/contracts.ts";
 import { BANK_ROLLOVERS, bankBundle } from "../../shared/bank.ts";
 import { bpsOfPercent, combineBps, netCents } from "../../shared/rebate.ts";
+import { potentialProfit } from "../lib/contractProfit.ts";
 import { prorata, type ServicePeriod } from "../../shared/prorata.ts";
 import { chargesOn, contractCharges, linesForCharges, type ChargeLine } from "../../shared/contractCharges.ts";
 import { contractCharged, contractEventsOf, recordContractEvent, syncMonthlyRate } from "../lib/contractEvents.ts";
@@ -779,7 +780,10 @@ export const crmRoutes = new Hono<AppEnv>()
     const bank = (await banksOf([k])).get(k.id) ?? null;
     const bankMonths = bank ? bankRowsOf(k, (await usedByMonthOf([k])).get(k.id), today) : [];
     const usual = Math.round((await billingSettings()).rates.hourly * 100);
-    return c.json({ ...k, bank, bankMonths, usedHours: used.get(k.id) ?? 0, usualRateCents: usual, services: rows.map((r) => serviceLine(r, k)), summary: summaryOf(k, rows, today), charged: await contractCharged(k.id, today) });
+    const summary = summaryOf(k, rows, today);
+    // what the contract can still earn over its term: for administrators only (it uses the HR wages)
+    const profit = auth(c).permissions.includes("hr.manage") ? await potentialProfit(k, rows, summary.revenueCents) : null;
+    return c.json({ ...k, bank, bankMonths, profit, usedHours: used.get(k.id) ?? 0, usualRateCents: usual, services: rows.map((r) => serviceLine(r, k)), summary, charged: await contractCharged(k.id, today) });
   })
   /** What happened on a contract: added, changed, removed, stopped (newest first) */
   .get("/clients/:id/contracts/:kid/activity", async (c) => {
@@ -822,9 +826,12 @@ export const crmRoutes = new Hono<AppEnv>()
     const allLines = rows.length ? await db().select().from(schema.contractServices).where(inArray(schema.contractServices.contractId, rows.map((k) => k.id))) : [];
     const today = todayQc();
     const banks = await banksOf(rows);
+    const admin = auth(c).permissions.includes("hr.manage");
+    const profits = new Map<string, Awaited<ReturnType<typeof potentialProfit>>>();
+    if (admin) for (const k of rows) profits.set(k.id, await potentialProfit(k, allLines.filter((l) => l.contractId === k.id), summaryOf(k, allLines.filter((l) => l.contractId === k.id), today).revenueCents));
     return c.json(
       rows
-        .map((k) => ({ ...k, bank: banks.get(k.id) ?? null, isSupportDefault: chosen?.id === k.id, usualRateCents: usual, usedHours: used.get(k.id) ?? 0, serviceCount: allLines.filter((l) => l.contractId === k.id).length, summary: summaryOf(k, allLines.filter((l) => l.contractId === k.id), today) }))
+        .map((k) => ({ ...k, profit: profits.get(k.id) ?? null, bank: banks.get(k.id) ?? null, isSupportDefault: chosen?.id === k.id, usualRateCents: usual, usedHours: used.get(k.id) ?? 0, serviceCount: allLines.filter((l) => l.contractId === k.id).length, summary: summaryOf(k, allLines.filter((l) => l.contractId === k.id), today) }))
         .sort((x, y) => Number(y.active) - Number(x.active) || Number(y.isSupportDefault) - Number(x.isSupportDefault) || x.name.localeCompare(y.name)),
     );
   })
