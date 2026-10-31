@@ -36,7 +36,6 @@ import { CompanyPicker, ContactPicker, useCompanies } from "./pickers";
 import { TimerControl } from "./timers";
 import { AssetContent, AssetPicker } from "./AssetCard";
 import { ClientHoursGauge } from "./ClientHoursGauge";
-import { ContractProfit } from "./ContractProfit";
 import { AcceptDialog } from "./AcceptDialog";
 import { MergeDialog } from "./MergeDialog";
 import { NotifyTech } from "./NotifyTech";
@@ -687,10 +686,7 @@ function TicketBody({
             </Popover>
           ))}
           </div>
-          <div className="flex flex-col items-center gap-1.5">
-            <ClientHoursGauge info={tk.client ?? null} big={tilesOpen} />
-            <ContractProfit ticketId={tk.id} />
-          </div>
+          <ClientHoursGauge info={tk.client ?? null} big={tilesOpen} />
         </div>
             </div>
             <div className="mt-3 flex flex-wrap items-center gap-1.5 lg:mt-12 lg:justify-end lg:justify-self-end">

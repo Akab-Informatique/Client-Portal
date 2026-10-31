@@ -4393,17 +4393,6 @@ const en: Dict = {
       debt: "Go negative",
       debtHint: "The extra hours are taken right away from next month's bank.",
     },
-    profit: {
-      title: "Contract \"{{name}}\"",
-      month: "This month ({{month}}) — administrators only",
-      revenue: "Billed under this contract",
-      services: "Cost of the services",
-      labour: "Labour ({{hours}} h at wage)",
-      gain: "Profit",
-      loss: "Loss",
-      missing: "{{count}} technician(s) with no wage on the HR file: their hours are not counted.",
-      hint: "Billed = this month's work to bill under the contract (not set aside), less the cost of the services and the hours worked at each technician's wage.",
-    },
     contractBilling: {
       includedNote: "Hourly rate of $0: the time is included, nothing is billed.",
       bankedNote: "Banked hours: {{used}} h used of {{total}} h ({{left}} h left); the hours are not billed.",
