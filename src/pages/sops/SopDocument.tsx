@@ -5,6 +5,10 @@ import { Download, Printer, X } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { LogoPill } from "@/components/brand/Logo";
+import logoPillUrl from "@/assets/akab-logo-pill.png";
+import displayFont from "@fontsource-variable/bricolage-grotesque/files/bricolage-grotesque-latin-wght-normal.woff2?inline";
+import sans400 from "@fontsource/instrument-sans/files/instrument-sans-latin-400-normal.woff2?inline";
+import sans600 from "@fontsource/instrument-sans/files/instrument-sans-latin-600-normal.woff2?inline";
 import { longDate } from "@/lib/format";
 import { cn } from "@/lib/utils";
 import { StepImage } from "./StepImage";
@@ -15,15 +19,16 @@ export function SopSheet({ sop, className }: { sop: SopDetail; className?: strin
   const { t } = useTranslation();
   return (
     <article className={cn("sop-sheet mx-auto max-w-[860px] overflow-hidden rounded-lg bg-white text-[14px] leading-relaxed text-neutral-900 shadow-2xl", className)}>
-      <header className="flex flex-wrap items-center justify-between gap-4 border-b-2 border-neutral-900 px-8 py-6">
+      <header className="flex flex-wrap items-center justify-between gap-4 bg-[#0a0a0b] px-8 py-5" style={{ printColorAdjust: "exact", WebkitPrintColorAdjust: "exact" }}>
         <LogoPill className="h-12" />
-        <div className="text-right text-xs text-neutral-600">
+        <div className="text-right text-xs text-[#a8a8a3]">
           {sop.author && <p>{t("sops.doc.by", { name: sop.author })}</p>}
           <p>{longDate(new Date(sop.updatedAt))}</p>
         </div>
       </header>
+      <div className="h-1.5" style={{ background: "linear-gradient(90deg,#ffe24a,#ffce1a 55%,#f59410)", printColorAdjust: "exact", WebkitPrintColorAdjust: "exact" }} />
       <div className="px-8 pb-8 pt-6">
-        <h1 className="font-display text-3xl font-bold leading-tight">{sop.title}</h1>
+        <h1 className="font-display text-3xl font-bold leading-tight tracking-tight">{sop.title}</h1>
         {sop.description && <p className="mt-3 whitespace-pre-wrap text-neutral-700">{sop.description}</p>}
         <p className="mt-2 text-xs text-neutral-500">{t("sops.doc.stepCount", { count: sop.steps.length })}</p>
         <ol className="mt-6 space-y-7">
@@ -43,6 +48,10 @@ export function SopSheet({ sop, className }: { sop: SopDetail; className?: strin
           ))}
         </ol>
       </div>
+      <footer className="flex items-center justify-between gap-3 bg-[#0a0a0b] px-8 py-3 text-[11px] text-[#a8a8a3]" style={{ printColorAdjust: "exact", WebkitPrintColorAdjust: "exact" }}>
+        <span>{t("sops.doc.exported")}</span>
+        <span className="font-semibold text-[#ffce1a]">akab.ca</span>
+      </footer>
     </article>
   );
 }
@@ -98,7 +107,9 @@ function marksHtml(marks: Mark[]) {
 }
 
 /** One self-contained HTML file: the pictures are inside it, so it can be emailed or opened anywhere */
-export function buildHtml(sop: SopDetail, pictures: Record<string, string>, w: { step: string; by: (name: string) => string; stepCount: string; date: string; exported: string }) {
+export type Brand = { logo: string; display: string; sans400: string; sans600: string };
+
+export function buildHtml(sop: SopDetail, pictures: Record<string, string>, brand: Brand, w: { step: string; by: (name: string) => string; stepCount: string; date: string; exported: string }) {
   const steps = sop.steps
     .map((s, i) => {
       const name = s.title.trim() || `${w.step} ${i + 1}`;
@@ -109,25 +120,33 @@ export function buildHtml(sop: SopDetail, pictures: Record<string, string>, w: {
   return `<!doctype html>
 <html lang="fr"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${esc(sop.title)}</title>
 <style>
+@font-face{font-family:"Bricolage Grotesque";font-weight:200 800;src:url(${brand.display}) format("woff2")}
+@font-face{font-family:"Instrument Sans";font-weight:400;src:url(${brand.sans400}) format("woff2")}
+@font-face{font-family:"Instrument Sans";font-weight:600;src:url(${brand.sans600}) format("woff2")}
 *{box-sizing:border-box}body{margin:0;background:#f4f4f1;color:#0a0a0b;font:15px/1.55 "Instrument Sans","Segoe UI",system-ui,sans-serif}
-main{max-width:880px;margin:0 auto;background:#fff;padding:36px 40px}
-h1{font-size:30px;line-height:1.15;margin:0 0 6px}.meta{color:#666;font-size:12px;margin:0 0 4px}.desc{white-space:pre-wrap;color:#333}
+main{max-width:900px;margin:0 auto;background:#fff;box-shadow:0 10px 40px rgba(0,0,0,.15)}
+.top{background:#0a0a0b;padding:18px 40px;display:flex;align-items:center;justify-content:space-between;gap:16px;print-color-adjust:exact;-webkit-print-color-adjust:exact}.top img{height:46px;display:block}.top span{color:#a8a8a3;font-size:12px;text-align:right}
+.rule{height:6px;background:linear-gradient(90deg,#ffe24a,#ffce1a 55%,#f59410);print-color-adjust:exact;-webkit-print-color-adjust:exact}
+.body{padding:30px 40px 34px}
+h1{font-family:"Bricolage Grotesque","Segoe UI",system-ui,sans-serif;font-size:32px;line-height:1.12;letter-spacing:-.01em;margin:0 0 6px}.meta{color:#666;font-size:12px;margin:0 0 4px}.desc{white-space:pre-wrap;color:#333}
 ol{list-style:none;padding:0;margin:28px 0 0}li{margin:0 0 30px;break-inside:avoid}
-.head{display:flex;gap:12px;align-items:flex-start}.n{flex:none;width:32px;height:32px;border-radius:50%;background:#0a0a0b;color:#ffce1a;font-weight:700;display:grid;place-items:center;print-color-adjust:exact;-webkit-print-color-adjust:exact}
-h2{font-size:18px;margin:2px 0 2px}.head p{margin:2px 0 0;white-space:pre-wrap;color:#333}
+.head{display:flex;gap:12px;align-items:flex-start}.n{flex:none;width:34px;height:34px;border-radius:50%;background:#0a0a0b;color:#ffce1a;font-weight:600;display:grid;place-items:center;print-color-adjust:exact;-webkit-print-color-adjust:exact}
+h2{font-family:"Bricolage Grotesque","Segoe UI",system-ui,sans-serif;font-size:19px;margin:3px 0 2px}.head p{margin:2px 0 0;white-space:pre-wrap;color:#333}
 .shot{position:relative;margin-top:12px;border:1px solid #d4d4d4;border-radius:8px;overflow:hidden}.shot img{display:block;width:100%}
 .box{position:absolute;border:3px solid #ffce1a;border-radius:6px;background:rgba(255,206,26,.12)}
-.pin{position:absolute;width:36px;height:36px;margin:-18px 0 0 -18px;border:3px solid #ffce1a;border-radius:50%;background:rgba(255,206,26,.35);display:grid;place-items:center;font-weight:700;font-size:13px}
-footer{margin-top:30px;color:#888;font-size:11px;border-top:1px solid #e5e5e5;padding-top:10px}
-@media print{body{background:#fff}main{padding:0;max-width:none}@page{size:letter;margin:12mm}}
+.pin{position:absolute;width:36px;height:36px;margin:-18px 0 0 -18px;border:3px solid #ffce1a;border-radius:50%;background:rgba(255,206,26,.35);display:grid;place-items:center;font-weight:600;font-size:13px}
+footer{background:#0a0a0b;color:#a8a8a3;font-size:11px;padding:12px 40px;display:flex;justify-content:space-between;print-color-adjust:exact;-webkit-print-color-adjust:exact}footer b{color:#ffce1a}
+@media print{body{background:#fff}main{box-shadow:none;max-width:none}@page{size:letter;margin:10mm}}
 </style></head><body><main>
+<div class="top"><img src="${brand.logo}" alt="AKAB Informatique"><span>${[sop.author ? esc(w.by(sop.author)) : "", esc(w.date)].filter(Boolean).join("<br>")}</span></div><div class="rule"></div>
+<div class="body">
 <h1>${esc(sop.title)}</h1>
-<p class="meta">${[sop.author ? esc(w.by(sop.author)) : "", esc(w.date), esc(w.stepCount)].filter(Boolean).join(" · ")}</p>
+<p class="meta">${esc(w.stepCount)}</p>
 ${sop.description ? `<p class="desc">${esc(sop.description)}</p>` : ""}
 <ol>
 ${steps}
-</ol>
-<footer>${esc(w.exported)}</footer>
+</ol></div>
+<footer><span>${esc(w.exported)}</span><b>akab.ca</b></footer>
 </main></body></html>`;
 }
 
@@ -146,7 +165,17 @@ export async function downloadHtml(sop: SopDetail, t: (k: string, o?: Record<str
       r.readAsDataURL(blob);
     });
   }
-  const html = buildHtml(sop, pictures, {
+  const asData = async (url: string) => {
+    const blob = await (await fetch(url)).blob();
+    return new Promise<string>((resolve, reject) => {
+      const r = new FileReader();
+      r.onload = () => resolve(String(r.result));
+      r.onerror = () => reject(r.error);
+      r.readAsDataURL(blob);
+    });
+  };
+  const brand: Brand = { logo: await asData(logoPillUrl), display: displayFont, sans400, sans600 };
+  const html = buildHtml(sop, pictures, brand, {
     step: t("sops.step"),
     by: (name) => t("sops.doc.by", { name }),
     stepCount: t("sops.doc.stepCount", { count: sop.steps.length }),

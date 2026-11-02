@@ -1,13 +1,14 @@
 import { useCallback, useEffect, useReducer, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { toast } from "sonner";
-import { AppWindow, Camera, CheckCircle2, Download, Loader2, MonitorUp, Pause, Play, Square, Trash2, Zap } from "lucide-react";
+import { AppWindow, Camera, CheckCircle2, Clapperboard, Download, Loader2, MonitorUp, Pause, Play, Square, Trash2, Zap } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
 import { api, ApiError } from "@/lib/api";
+import { makeMontage } from "@/lib/sop/montage";
 import { floatingSupported, openFloating, ScreenRecorder, type Floating } from "@/lib/sop/recorder";
 import { addPictureStep, fileName, saveAs, type SopCard } from "./shared";
 
@@ -18,7 +19,7 @@ type Phase = "setup" | "recording" | "saving" | "done";
  * or more steps for one that exists. The browser asks which screen, window or tab to record; a small window above
  * every other application takes the steps while the person works.
  */
-export function RecorderDialog({ open, sopId, onClose, onDone }: { open: boolean; sopId?: string; onClose: () => void; onDone: (sopId: string) => void }) {
+export function RecorderDialog({ open, sopId, sopTitle, onClose, onDone }: { open: boolean; sopId?: string; sopTitle?: string; onClose: () => void; onDone: (sopId: string) => void }) {
   const { t } = useTranslation();
   const [, redraw] = useReducer((n: number) => n + 1, 0);
   const [phase, setPhase] = useState<Phase>("setup");
@@ -30,6 +31,10 @@ export function RecorderDialog({ open, sopId, onClose, onDone }: { open: boolean
   const [videoFile, setVideoFile] = useState<Blob | null>(null);
   const [savedId, setSavedId] = useState<string | null>(null);
   const [failed, setFailed] = useState(false);
+  // the automatic edit of the video: progress (0–1) while it is made, then the finished file
+  const [montage, setMontage] = useState<number | null>(null);
+  const [edited, setEdited] = useState<{ blob: Blob; url: string } | null>(null);
+  const montageAbort = useRef<AbortController | null>(null);
   // what already reached the server, so a second try goes on where the first stopped (never twice the same step)
   const created = useRef<{ id: string | null; sent: number }>({ id: null, sent: 0 });
   const rec = useRef<ScreenRecorder | null>(null);
@@ -70,6 +75,12 @@ export function RecorderDialog({ open, sopId, onClose, onDone }: { open: boolean
     setVideoFile(null);
     setSavedId(null);
     setFailed(false);
+    montageAbort.current?.abort();
+    setMontage(null);
+    setEdited((e) => {
+      if (e) URL.revokeObjectURL(e.url);
+      return null;
+    });
     created.current = { id: null, sent: 0 };
   }, [closeFloat]);
 
@@ -156,6 +167,22 @@ export function RecorderDialog({ open, sopId, onClose, onDone }: { open: boolean
       // the browser wants a click for this: the button in the window does it
       setFloatOpen(false);
       if (manual) toast.error(t("sops.rec.floatFailed"));
+    }
+  };
+
+  /** Intro with the logo, the recording, the logo and a thank-you: made here, on this computer */
+  const edit = async () => {
+    if (!videoFile) return;
+    const ctl = new AbortController();
+    montageAbort.current = ctl;
+    setMontage(0);
+    try {
+      const blob = await makeMontage(videoFile, { title: (sopTitle || title).trim(), thanks: t("sops.rec.montage.thanks"), site: "akab.ca", onProgress: setMontage, signal: ctl.signal });
+      setEdited({ blob, url: URL.createObjectURL(blob) });
+    } catch (e) {
+      if (!(e instanceof DOMException && e.name === "AbortError")) toast.error(t("sops.rec.montage.failed"));
+    } finally {
+      setMontage(null);
     }
   };
 
@@ -293,6 +320,44 @@ export function RecorderDialog({ open, sopId, onClose, onDone }: { open: boolean
                 </Button>
               )}
             </div>
+            {videoFile && (
+              <div className="space-y-3 rounded-lg border bg-muted/30 p-3 text-left">
+                <p className="flex items-center gap-1.5 text-sm font-medium">
+                  <Clapperboard className="size-4 text-primary" /> {t("sops.rec.montage.title")}
+                </p>
+                <p className="text-xs text-muted-foreground">{t("sops.rec.montage.text")}</p>
+                {montage !== null ? (
+                  <div className="space-y-2">
+                    <div className="h-2 overflow-hidden rounded-full bg-muted">
+                      <div className="h-full bg-primary transition-all" style={{ width: `${Math.round(montage * 100)}%` }} />
+                    </div>
+                    <div className="flex items-center justify-between gap-2 text-xs text-muted-foreground">
+                      <span>{t("sops.rec.montage.working", { pct: Math.round(montage * 100) })}</span>
+                      <Button size="sm" variant="ghost" onClick={() => montageAbort.current?.abort()}>
+                        {t("common.cancel")}
+                      </Button>
+                    </div>
+                  </div>
+                ) : edited ? (
+                  <div className="space-y-2">
+                    <video src={edited.url} controls className="w-full rounded-md bg-black" />
+                    <Button
+                      size="sm"
+                      onClick={() => {
+                        saveAs(`${fileName(sopTitle || title || "enregistrement")}.webm`, edited.blob);
+                        toast.success(t("sops.rec.videoSaved"));
+                      }}
+                    >
+                      <Download className="size-4" /> {t("sops.rec.montage.download", { size: Math.max(1, Math.round(edited.blob.size / 1048576)) })}
+                    </Button>
+                  </div>
+                ) : (
+                  <Button size="sm" variant="outline" onClick={() => void edit()}>
+                    <Clapperboard className="size-4" /> {t("sops.rec.montage.start")}
+                  </Button>
+                )}
+              </div>
+            )}
             {videoFile && <p className="text-xs text-muted-foreground">{t("sops.rec.videoNote")}</p>}
           </div>
         )}

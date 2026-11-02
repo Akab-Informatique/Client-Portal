@@ -184,6 +184,7 @@ export function SopEditor({ id, onBack }: { id: string; onBack: () => void }) {
       <RecorderDialog
         open={recording}
         sopId={id}
+        sopTitle={sop.title}
         onClose={() => setRecording(false)}
         onDone={() => {
           setRecording(false);
