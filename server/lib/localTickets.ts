@@ -1,4 +1,4 @@
-import { bpsOfPercent, netCents, percentText } from "../../shared/rebate.ts";
+import { bpsOfPercent, netCents, percentText, rebateNote } from "../../shared/rebate.ts";
 import { config } from "../config.ts";
 import { and, asc, desc, eq, gte, ilike, inArray, or, sql, type SQL } from "drizzle-orm";
 import { db, schema } from "../db/index.ts";
@@ -445,7 +445,7 @@ export function localTicketSource(base: TicketSource): TicketSource {
           kind: "charge",
           companyId,
           date,
-          description: [c.name, c.description, c.rebateBps ? `rabais ${percentText(c.rebateBps)}${c.unitPriceCents != null ? ` sur ${(c.unitPriceCents / 100).toFixed(2)} $` : ""}` : ""].filter(Boolean).join(" — ").slice(0, 2000),
+          description: [c.name, c.description, c.rebateBps && c.unitPriceCents != null ? rebateNote(c.unitPriceCents, c.rebateBps) : c.rebateBps ? `rabais ${percentText(c.rebateBps)}` : ""].filter(Boolean).join(" — ").slice(0, 2000),
           ticketNumber: number,
           contractSourceId: c.contractId,
           quantity: c.quantityX100 / 100,

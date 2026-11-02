@@ -92,6 +92,15 @@ function serviceLine(r: typeof schema.contractServices.$inferSelect, k: Contract
 }
 
 const zDay = z.string().regex(/^\d{4}-\d{2}-\d{2}$/);
+/** The tabs of a client's page, in the order they come by default */
+const CLIENT_TABS = ["info", "tickets", "invoices", "contacts", "portal", "contracts", "invoice"] as const;
+/** The saved order, with any tab it does not name added at the end (so a new tab always shows) */
+async function clientTabOrder(): Promise<string[]> {
+  const [row] = await db().select({ config: schema.integrations.config }).from(schema.integrations).where(eq(schema.integrations.provider, "crm.layout"));
+  const saved = (row?.config as { order?: string[] | null } | undefined)?.order;
+  const known = Array.isArray(saved) ? saved.filter((k) => (CLIENT_TABS as readonly string[]).includes(k)) : [];
+  return [...known, ...CLIENT_TABS.filter((k) => !known.includes(k))];
+}
 /** Counts for deleting a client: invoices and tickets block it; the rest goes with the client */
 async function deleteCheck(client: { id: string; autotaskId: number | null }) {
   const d = db();
@@ -159,13 +168,16 @@ export const crmRoutes = new Hono<AppEnv>()
   .get("/clients", async (c) => {
     await ensureCrm();
     const d = db();
-    const [rows, contacts, open] = await Promise.all([
+    const [rows, contacts, contracts, open] = await Promise.all([
       d.select().from(schema.clients).orderBy(asc(schema.clients.name)),
       d.select({ clientId: schema.clientContacts.clientId }).from(schema.clientContacts).where(eq(schema.clientContacts.active, true)),
+      d.select({ clientId: schema.clientContracts.clientId }).from(schema.clientContracts).where(eq(schema.clientContracts.active, true)),
       openTicketsByCompany().catch(() => new Map<number, number>()),
     ]);
     const nContacts = new Map<string, number>();
     for (const x of contacts) nContacts.set(x.clientId, (nContacts.get(x.clientId) ?? 0) + 1);
+    const nContracts = new Map<string, number>();
+    for (const x of contracts) nContracts.set(x.clientId, (nContracts.get(x.clientId) ?? 0) + 1);
     const names = new Map(rows.map((r) => [r.id, r.name]));
     return c.json(
       rows.map((r) => ({
@@ -173,6 +185,7 @@ export const crmRoutes = new Hono<AppEnv>()
         parentName: r.parentId ? (names.get(r.parentId) ?? null) : null,
         children: rows.filter((x) => x.parentId === r.id).length,
         contacts: nContacts.get(r.id) ?? 0,
+        contracts: nContracts.get(r.id) ?? 0,
         billingEmail: r.invoice?.billingEmail?.trim() || null,
         openTickets: r.autotaskId != null ? (open.get(r.autotaskId) ?? 0) : 0,
       })),
@@ -203,6 +216,19 @@ export const crmRoutes = new Hono<AppEnv>()
     return c.json({ ...view(client), parent: parent ?? null, children, invoice: a.permissions.includes("crm.billing") ? client.invoice : null });
   })
 
+  /** The order of the tabs of a client's page, the same for everyone (set by whoever holds crm.layout) */
+  .get("/tab-order", async (c) => c.json({ order: await clientTabOrder() }))
+  .put("/tab-order", requirePermission("crm.layout"), async (c) => {
+    const a = auth(c);
+    const v = await body(c, z.object({ order: z.array(z.enum(CLIENT_TABS)).max(CLIENT_TABS.length).nullable() }));
+    const config = { order: v.order ? [...new Set(v.order)] : null };
+    await db()
+      .insert(schema.integrations)
+      .values({ provider: "crm.layout", enabled: true, config, updatedBy: a.user.id })
+      .onConflictDoUpdate({ target: schema.integrations.provider, set: { config, updatedBy: a.user.id, updatedAt: new Date() } });
+    await audit(a.user.id, "crm.tab_order", null, { order: config.order });
+    return c.json({ order: await clientTabOrder() });
+  })
   /** What deleting a client would remove, and what stops it (invoices and tickets are never lost) */
   .get("/clients/:id/delete-check", requirePermission("crm.delete"), async (c) => {
     const client = await clientOr404(c.req.param("id"));
@@ -798,6 +824,14 @@ export const crmRoutes = new Hono<AppEnv>()
     const k = await contractOr404(client.id, c.req.param("kid"));
     const today = todayQc();
     const charged = await contractCharged(k.id, today);
+    // force: an inactive contract goes even when billing started (administrators); invoiced work keeps its record, detached from it
+    if (c.req.query("force") === "1") {
+      if (!a.permissions.includes("crm.delete")) throw new HTTPException(403, { message: "forbidden" });
+      if (k.active) throw new HTTPException(409, { message: "contract_active" });
+      await db().delete(schema.clientContracts).where(eq(schema.clientContracts.id, k.id));
+      await audit(a.user.id, "crm.contract_force_deleted", k.id, { name: k.name, ...charged });
+      return c.json({ deleted: true, deactivated: false, forced: true });
+    }
     if (!charged.has) {
       await db().delete(schema.clientContracts).where(eq(schema.clientContracts.id, k.id));
       await audit(a.user.id, "crm.contract_deleted", k.id, { name: k.name });
@@ -826,6 +860,41 @@ export const crmRoutes = new Hono<AppEnv>()
       rows
         .map((k) => ({ ...k, bank: banks.get(k.id) ?? null, isSupportDefault: chosen?.id === k.id, usualRateCents: usual, usedHours: used.get(k.id) ?? 0, serviceCount: allLines.filter((l) => l.contractId === k.id).length, summary: summaryOf(k, allLines.filter((l) => l.contractId === k.id), today) }))
         .sort((x, y) => Number(y.active) - Number(x.active) || Number(y.isSupportDefault) - Number(x.isSupportDefault) || x.name.localeCompare(y.name)),
+    );
+  })
+
+  /** Every contract of every client (Accounting › Contrats), with what each charges */
+  .get("/contracts", requirePermission("accounting.view"), async (c) => {
+    const d = db();
+    const [rows, allLines, clients] = await Promise.all([
+      d.select().from(schema.clientContracts).orderBy(asc(schema.clientContracts.name)),
+      d.select().from(schema.contractServices),
+      d.select({ id: schema.clients.id, name: schema.clients.name }).from(schema.clients),
+    ]);
+    const names = new Map(clients.map((x) => [x.id, x.name]));
+    const today = todayQc();
+    const banks = await banksOf(rows);
+    return c.json(
+      rows.map((k) => {
+        const lines = allLines.filter((l) => l.contractId === k.id);
+        return {
+          id: k.id,
+          clientId: k.clientId,
+          clientName: names.get(k.clientId) ?? "—",
+          name: k.name,
+          type: k.type,
+          active: k.active,
+          startDate: k.startDate,
+          endDate: k.endDate,
+          endedOn: k.endedOn,
+          billingMode: k.billingMode,
+          billingPeriod: k.billingPeriod,
+          rebateBps: k.rebateBps,
+          serviceCount: lines.length,
+          bank: banks.get(k.id) ?? null,
+          summary: summaryOf(k, lines, today),
+        };
+      }),
     );
   })
 

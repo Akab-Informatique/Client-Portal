@@ -978,7 +978,7 @@ function OverviewTab({ client, k, editable, onChanged, onClose }: { client: CrmD
     onError: (e) => toast.error(contractError(t, e)),
   });
   const del = useMutation({
-    mutationFn: () => api.del<{ deleted: boolean; deactivated: boolean }>(base),
+    mutationFn: (force?: boolean) => api.del<{ deleted: boolean; deactivated: boolean }>(force ? `${base}?force=1` : base),
     onSuccess: (r) => {
       toast.success(r.deleted ? t("crm.contracts.window.deleted") : t("crm.contracts.window.stopped"));
       onChanged();
@@ -1017,7 +1017,12 @@ function OverviewTab({ client, k, editable, onChanged, onClose }: { client: CrmD
         ? { title: t("crm.contracts.window.stopTitle", { name: k.name }), description: t("crm.contracts.window.stopText", { items: k.charged.billingItems, time: k.charged.timeEntries, services: k.charged.servicesStarted }), confirmLabel: t("crm.contracts.window.stop"), destructive: true }
         : { title: t("crm.contracts.window.deleteTitle", { name: k.name }), description: t("crm.contracts.window.deleteText"), confirmLabel: t("common.delete"), destructive: true },
     );
-    if (ok) del.mutate();
+    if (ok) del.mutate(false);
+  };
+  // an inactive contract can be deleted for good, even when billing started (administrators)
+  const askForce = async () => {
+    const ok = await confirm({ title: t("crm.contracts.window.forceTitle", { name: k.name }), description: t("crm.contracts.window.forceText", { items: k.charged.billingItems, time: k.charged.timeEntries, services: k.services.length }), confirmLabel: t("crm.contracts.window.force"), destructive: true });
+    if (ok) del.mutate(true);
   };
   return (
     <div className="space-y-5">
@@ -1127,6 +1132,11 @@ function OverviewTab({ client, k, editable, onChanged, onClose }: { client: CrmD
             ) : (
               <Button type="button" variant="outline" size="sm" disabled={patch.isPending} onClick={() => patch.mutate({ active: true })} className="gap-1.5">
                 <Play className="size-3.5" /> {t("crm.contracts.window.resume")}
+              </Button>
+            )}
+            {!k.active && can("crm.delete") && (
+              <Button type="button" variant="outline" size="sm" disabled={del.isPending} onClick={() => void askForce()} className="gap-1.5 border-destructive/50 text-destructive hover:bg-destructive/10">
+                <Trash2 className="size-3.5" /> {t("crm.contracts.window.force")}
               </Button>
             )}
           </div>

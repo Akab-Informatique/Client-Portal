@@ -3,7 +3,7 @@ import { useTranslation } from "react-i18next";
 import { Link, useNavigate } from "react-router-dom";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
-import { Building2, CornerDownRight, Loader2, Network, Phone, Plus, Search, Ticket, UsersRound } from "lucide-react";
+import { ArrowDown, ArrowUp, Building2, CornerDownRight, FileText, Loader2, Network, Phone, Plus, Search, Ticket, UsersRound } from "lucide-react";
 import { GlassBackdrop } from "@/components/brand/GlassBackdrop";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
@@ -25,6 +25,8 @@ export function ClientsPage() {
   const [q, setQ] = useState("");
   const [filter, setFilter] = useState<Filter>("active");
   const [creating, setCreating] = useState(false);
+  // sort by the number of contracts: a click goes high → low, then low → high, then the usual order
+  const [byContracts, setByContracts] = useState<"desc" | "asc" | null>(null);
 
   const rows = useMemo(() => {
     const words = q.toLowerCase().split(/\s+/).filter(Boolean);
@@ -34,6 +36,7 @@ export function ClientsPage() {
       const hay = `${c.name} ${c.city ?? ""} ${c.phone ?? ""} ${c.code ?? ""} ${c.parentName ?? ""}`.toLowerCase();
       return words.every((w) => hay.includes(w));
     });
+    if (byContracts) return [...shown].sort((a, b) => (byContracts === "desc" ? b.contracts - a.contracts : a.contracts - b.contracts) || a.name.localeCompare(b.name)).map((c) => ({ c, depth: 0 }));
     // no search: each subsidiary right under its parent company
     if (words.length || filter === "parents") return shown.map((c) => ({ c, depth: 0 }));
     const ids = new Set(shown.map((c) => c.id));
@@ -46,7 +49,7 @@ export function ClientsPage() {
     };
     walk(null, 0);
     return out;
-  }, [clients, q, filter]);
+  }, [clients, q, filter, byContracts]);
 
   const counts = { active: clients.filter((c) => c.active).length, inactive: clients.filter((c) => !c.active).length, parents: clients.filter((c) => c.active && c.children > 0).length };
 
@@ -92,12 +95,15 @@ export function ClientsPage() {
       </div>
 
       <div className="glass overflow-hidden rounded-2xl border">
-        <div className="hidden grid-cols-[minmax(0,2.4fr)_minmax(0,1fr)_minmax(0,1fr)_minmax(0,1.4fr)_90px_110px] gap-3 border-b px-4 py-2 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground md:grid">
+        <div className="hidden grid-cols-[minmax(0,2.4fr)_minmax(0,1fr)_minmax(0,1fr)_minmax(0,1.4fr)_90px_90px_110px] gap-3 border-b px-4 py-2 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground md:grid">
           <span>{t("crm.col.client")}</span>
           <span>{t("crm.col.city")}</span>
           <span>{t("crm.col.phone")}</span>
           <span>{t("crm.col.billingEmail")}</span>
           <span className="text-right">{t("crm.col.contacts")}</span>
+          <button type="button" onClick={() => setByContracts(byContracts === null ? "desc" : byContracts === "desc" ? "asc" : null)} className="flex items-center justify-end gap-1 uppercase tracking-wider hover:text-foreground" title={t("crm.col.sortContracts")}>
+            {t("crm.col.contracts2")} {byContracts === "desc" ? <ArrowDown className="size-3" /> : byContracts === "asc" ? <ArrowUp className="size-3" /> : null}
+          </button>
           <span className="text-right">{t("crm.col.tickets")}</span>
         </div>
         {isLoading && <Loader2 className="mx-auto my-10 size-5 animate-spin text-muted-foreground" />}
@@ -107,7 +113,7 @@ export function ClientsPage() {
             <li key={c.id}>
               <Link
                 to={`/crm/${c.id}`}
-                className="grid grid-cols-1 gap-x-3 gap-y-1 px-4 py-2.5 transition-colors hover:bg-accent/40 md:grid-cols-[minmax(0,2.4fr)_minmax(0,1fr)_minmax(0,1fr)_minmax(0,1.4fr)_90px_110px] md:items-center"
+                className="grid grid-cols-1 gap-x-3 gap-y-1 px-4 py-2.5 transition-colors hover:bg-accent/40 md:grid-cols-[minmax(0,2.4fr)_minmax(0,1fr)_minmax(0,1fr)_minmax(0,1.4fr)_90px_90px_110px] md:items-center"
               >
                 <span className="flex min-w-0 items-center gap-2" style={{ paddingLeft: depth * 22 }}>
                   {depth > 0 ? <CornerDownRight className="size-3.5 shrink-0 text-muted-foreground" /> : <Building2 className="size-4 shrink-0 text-muted-foreground" />}
@@ -137,6 +143,9 @@ export function ClientsPage() {
                 </span>
                 <span className="flex items-center gap-1 text-sm text-muted-foreground md:justify-end">
                   <UsersRound className="size-3.5 md:hidden" /> <span className="font-mono">{c.contacts}</span>
+                </span>
+                <span className="flex items-center gap-1 text-sm text-muted-foreground md:justify-end">
+                  <FileText className="size-3.5 md:hidden" /> <span className={cn("font-mono", c.contracts > 0 && "text-foreground")}>{c.contracts}</span>
                 </span>
                 <span className="flex items-center gap-1 md:justify-end">
                   <Ticket className="size-3.5 text-muted-foreground md:hidden" />

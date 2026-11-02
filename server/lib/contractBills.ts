@@ -2,7 +2,7 @@ import { and, asc, eq, isNotNull } from "drizzle-orm";
 import { db, schema } from "../db/index.ts";
 import { contractCharges, hasBundle, linesForCharges, type ChargeLine } from "../../shared/contractCharges.ts";
 import { bankRowsOf, usedByMonthOf } from "./contracts.ts";
-import { netCents, percentText } from "../../shared/rebate.ts";
+import { netCents, rebateNote } from "../../shared/rebate.ts";
 import type { Billable } from "./ticketSource.ts";
 
 /**
@@ -69,7 +69,7 @@ export async function contractBillables(since: string): Promise<Billable[]> {
           companyId: companyId!,
           date: e.date,
           dateEnd: p.to,
-          description: `${name}${p.rebateBps ? ` (rabais ${percentText(p.rebateBps)})` : ""}${p.prorated ? ` (prorata ${p.days}/${p.periodDays} j)` : ""} — ${dmy(p.from)} – ${dmy(p.to)}`,
+          description: `${name}${p.rebateBps ? ` (${rebateNote(Math.round(p.amountCents / (1 - Math.min(p.rebateBps, 9999) / 10000)), p.rebateBps)})` : ""}${p.prorated ? ` (prorata ${p.days}/${p.periodDays} j)` : ""} — ${dmy(p.from)} – ${dmy(p.to)}`,
           contractName: k.name,
           contractSourceId: k.autotaskId,
           quantity: whole ? qty : 1,

@@ -7727,6 +7727,13 @@ describe("contracts: services when made, charges, activity, stop instead of dele
     expect((await admin.get(`${base}/${live.id}/activity`)).json.map((e: any) => e.kind)).toContain("resumed");
     // stopped from the window too (the same rule)
     expect((await admin.patch(`${base}/${live.id}`, { active: false })).json).toMatchObject({ active: false, endedOn: today });
+    // force delete: only an inactive one, only with the delete right, even though billing started
+    expect((await tech.del(`${base}/${live.id}?force=1`)).status).toBe(403);
+    await admin.patch(`${base}/${live.id}`, { active: true });
+    expect((await admin.del(`${base}/${live.id}?force=1`)).json.error).toBe("contract_active");
+    await admin.patch(`${base}/${live.id}`, { active: false });
+    expect((await admin.del(`${base}/${live.id}?force=1`)).json).toMatchObject({ deleted: true, forced: true });
+    expect((await admin.get(`${base}/${live.id}`)).status).toBe(404);
   });
 
   it("temporary clean-up: recurring contract lines set aside, timesheets and expenses back to drafts", async () => {
@@ -9350,5 +9357,29 @@ describe("hours bank contracts", () => {
     const first = await tech.post(`/api/tickets/timers/${pending.id}/submit`, entry);
     expect(first.json.error).toBe("bank_over_choice_required");
     expect((await tech.post(`/api/tickets/timers/${pending.id}/submit`, { ...entry, overage: "free" })).status).toBe(201);
+  });
+});
+
+describe("clients: contract count, all contracts, shared tab order", () => {
+  it("counts active contracts per client, lists them for accounting, and keeps one tab order for everyone", async () => {
+    resetRateLimit("login:ip:unknown");
+    const admin = await signIn("admin@akab.local");
+    const tech = await signIn("tech@akab.local");
+    const [client] = await db().select().from(schema.clients).limit(1);
+    const before = (await admin.get("/api/crm/clients")).json.find((x: any) => x.id === client.id).contracts;
+    const made = (await admin.post(`/api/crm/clients/${client.id}/contracts`, { name: "Compté", typeKey: "hourly", hourlyRate: 100, startDate: "2026-10-01", endDate: "2027-09-30" })).json;
+    expect((await admin.get("/api/crm/clients")).json.find((x: any) => x.id === client.id).contracts).toBe(before + 1);
+    // every contract, with its client, for accounting
+    const all = (await admin.get("/api/crm/contracts")).json;
+    expect(all.find((x: any) => x.id === made.id)).toMatchObject({ clientId: client.id, clientName: client.name, active: true });
+    // the tab order: everyone reads it, only whoever holds crm.layout changes it
+    expect((await tech.get("/api/crm/tab-order")).json.order[0]).toBe("info");
+    expect((await tech.put("/api/crm/tab-order", { order: ["contracts"] })).status).toBe(403);
+    const set = await admin.put("/api/crm/tab-order", { order: ["contracts", "tickets"] });
+    expect(set.json.order.slice(0, 3)).toEqual(["contracts", "tickets", "info"]);
+    expect(set.json.order).toHaveLength(7);
+    expect((await tech.get("/api/crm/tab-order")).json.order[0]).toBe("contracts");
+    expect((await admin.put("/api/crm/tab-order", { order: ["nope"] })).status).toBe(400);
+    expect((await admin.put("/api/crm/tab-order", { order: null })).json.order[0]).toBe("info");
   });
 });

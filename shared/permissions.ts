@@ -111,6 +111,11 @@ export const MODULES = [
       },
       { key: "crm.billing", label: { fr: "Paramètres de facturation", en: "Invoice settings" }, description: { fr: "Courriel de facturation, modalités, taxes, taux", en: "Billing email, terms, taxes, rate" } },
       {
+        key: "crm.layout",
+        label: { fr: "Ordre des onglets d'un client", en: "Order of a client's tabs" },
+        description: { fr: "Choisir l'ordre des onglets de la fiche client, le même pour tout le monde", en: "Choose the order of the client page's tabs, the same for everyone" },
+      },
+      {
         key: "crm.delete",
         label: { fr: "Supprimer des clients", en: "Delete clients" },
         description: { fr: "Supprimer un client sans facture ni billet, avec ses contacts, contrats et accès au portail", en: "Delete a client that has no invoice or ticket, with its contacts, contracts and portal access" },

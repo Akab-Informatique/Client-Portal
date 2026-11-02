@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { bpsOfPercent, bpsOfPrices, combineBps, netCents } from "../shared/rebate.ts";
+import { bpsOfPercent, bpsOfPrices, combineBps, netCents, rebateNote } from "../shared/rebate.ts";
 import { contractCharges, linesForCharges } from "../shared/contractCharges.ts";
 import { hourlyRateOf } from "../server/lib/contracts.ts";
 
@@ -31,5 +31,12 @@ describe("rebates", () => {
     expect(hourlyRateOf({ billingMode: "hourly", hourlyRateCents: null, rebateBps: 1000 }, 100)).toBe(9000);
     expect(hourlyRateOf({ billingMode: "hourly", hourlyRateCents: 0, rebateBps: 1000 }, 100)).toBeNull();
     expect(hourlyRateOf({ billingMode: "banked", hourlyRateCents: 12000, rebateBps: 0 }, 100)).toBeNull();
+  });
+});
+
+describe("rebate wording on an invoice line", () => {
+  it("shows the regular amount, the percent and what it saved", () => {
+    expect(rebateNote(5000, 1000)).toBe("prix régulier 50,00 $, rabais 10 % (−5,00 $)");
+    expect(rebateNote(5000, 0)).toBe("");
   });
 });

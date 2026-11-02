@@ -1,4 +1,4 @@
-import { FilePlus2, HeartHandshake, MessagesSquare, History, Workflow, Coffee, BarChart3, BookOpen, FolderKanban, ClipboardCheck, Building2, CalendarCheck, Clock, FileSignature, LayoutDashboard, Mail, Megaphone, MonitorSmartphone, CalendarClock, Receipt, KeyRound, Store, Target, Ticket, Wallet, TrendingUp, Wrench, type LucideIcon } from "lucide-react";
+import { FilePlus2, FileText, HeartHandshake, MessagesSquare, History, Workflow, Coffee, BarChart3, BookOpen, FolderKanban, ClipboardCheck, Building2, CalendarCheck, Clock, FileSignature, LayoutDashboard, Mail, Megaphone, MonitorSmartphone, CalendarClock, Receipt, KeyRound, Store, Target, Ticket, Wallet, TrendingUp, Wrench, type LucideIcon } from "lucide-react";
 import type { PermissionKey } from "@shared/permissions";
 
 /**
@@ -48,6 +48,7 @@ export const STAFF_MODULES: NavModule[] = [
   { key: "tickets", path: "/tickets", labelKey: "nav.tickets", icon: Ticket, section: "command", permission: "tickets.view" },
   { key: "crm", path: "/crm", labelKey: "nav.crmClients", icon: Building2, section: "management", permission: "crm.view" },
   { key: "invoices", path: "/accounting/invoices", labelKey: "nav.invoices", icon: Receipt, section: "accounting", permission: "accounting.view" },
+  { key: "contracts", path: "/accounting/contracts", labelKey: "nav.contracts", icon: FileText, section: "accounting", permission: "accounting.view" },
   { key: "vendorPayments", path: "/accounting/vendor-payments", labelKey: "nav.vendorPayments", icon: CalendarClock, section: "accounting", permission: "accounting.view" },
   { key: "approvals", path: "/accounting/approvals", labelKey: "nav.approvals", icon: ClipboardCheck, section: "accounting", permission: "accounting.view" },
   { key: "sales", path: "/sales", labelKey: "nav.salesDashboard", icon: TrendingUp, section: "sales", permission: "opportunities.view" },
@@ -55,7 +56,7 @@ export const STAFF_MODULES: NavModule[] = [
   { key: "marketing", path: "/marketing", labelKey: "nav.marketing", icon: Target, section: "sales", upcoming: true },
   { key: "quotesNew", path: "/accounting/quotes/new", labelKey: "nav.quotesNew", icon: FilePlus2, section: "sales", permission: "quotes.manage" },
   { key: "store", path: "/store", labelKey: "nav.store", icon: Store, section: "management", permission: "store.view" },
-  { key: "hr", path: "/hr", labelKey: "nav.hr", icon: HeartHandshake, section: "management", permission: "hr.manage" },
+  { key: "hr", path: "/hr", labelKey: "nav.hr", icon: HeartHandshake, section: "accounting", permission: "hr.manage" },
   { key: "services", path: "/services", labelKey: "nav.services", icon: Wrench, section: "management", permission: "services.view" },
   { key: "projects", path: "/projects", labelKey: "nav.projects", icon: FolderKanban, section: "command", permission: "projects.view" },
   { key: "passbolt", path: "/security/passbolt", labelKey: "nav.passbolt", icon: KeyRound, section: "command", group: "security", permission: "passbolt.use", rule: "passbolt" },

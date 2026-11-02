@@ -5,6 +5,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import {
   ArrowLeft,
+  ArrowRight,
   AlertTriangle,
   Building2,
   Calculator,
@@ -26,6 +27,7 @@ import {
   Receipt,
   RefreshCw,
   Search,
+  Settings2,
   Smartphone,
   Star,
   KeyRound,
@@ -60,6 +62,15 @@ import { ContactWindow } from "./ContactWindow";
 
 const TABS = ["info", "tickets", "invoices", "contacts", "portal", "contracts", "invoice"] as const;
 type Tab = (typeof TABS)[number];
+const TAB_ICONS: Record<Tab, ReactNode> = {
+  info: <Building2 className="size-4" />,
+  tickets: <Ticket className="size-4" />,
+  invoices: <Receipt className="size-4" />,
+  contacts: <UsersRound className="size-4" />,
+  portal: <KeyRound className="size-4" />,
+  contracts: <FileText className="size-4" />,
+  invoice: <Receipt className="size-4" />,
+};
 
 /** One client: info (with its group of companies), tickets, contacts, contracts, invoicing. */
 export function ClientPage() {
@@ -89,7 +100,27 @@ export function ClientPage() {
     if (ok) remove.mutate();
   };
   const [params, setParams] = useSearchParams();
-  const tab = (TABS as readonly string[]).includes(params.get("tab") ?? "") ? (params.get("tab") as Tab) : "info";
+  // the order of the tabs is one for everyone; whoever holds crm.layout can change it
+  const { data: orderData } = useQuery({ queryKey: ["crm", "tab-order"], queryFn: () => api.get<{ order: Tab[] }>("/crm/tab-order"), staleTime: 60_000 });
+  const [arranging, setArranging] = useState(false);
+  const saveOrder = useMutation({
+    mutationFn: (order: Tab[] | null) => api.put<{ order: Tab[] }>("/crm/tab-order", { order }),
+    onSuccess: (r) => qc.setQueryData(["crm", "tab-order"], r),
+    onError: () => toast.error(t("common.error")),
+  });
+  const shown = (orderData?.order ?? [...TABS]).filter((k) => k === "invoices" ? can("accounting.view") : k === "portal" ? can("admin.clients") : true);
+  const firstTab: Tab = shown[0] ?? "info";
+  const move = (k: Tab, by: -1 | 1) => {
+    const all = [...(orderData?.order ?? TABS)];
+    const i = all.indexOf(k);
+    // swap with the next tab that is visible to this person, so a hidden one never blocks the move
+    let j = i + by;
+    while (j >= 0 && j < all.length && !shown.includes(all[j]!)) j += by;
+    if (j < 0 || j >= all.length) return;
+    [all[i], all[j]] = [all[j]!, all[i]!];
+    saveOrder.mutate(all);
+  };
+  const tab = (TABS as readonly string[]).includes(params.get("tab") ?? "") ? (params.get("tab") as Tab) : firstTab;
   const { data: client, isLoading, isError } = useQuery({ queryKey: ["crm", "client", id], queryFn: () => api.get<CrmDetail>(`/crm/clients/${id}`) });
 
   if (isLoading) return <Loader2 className="mx-auto mt-16 size-6 animate-spin text-muted-foreground" />;
@@ -141,38 +172,42 @@ export function ClientPage() {
         value={tab}
         onValueChange={(v) => {
           const next = new URLSearchParams(params);
-          if (v === "info") next.delete("tab");
+          if (v === firstTab) next.delete("tab");
           else next.set("tab", v);
           setParams(next, { replace: true });
         }}
       >
-        <TabsList className="h-auto flex-wrap justify-start">
-          <TabsTrigger value="info">
-            <Building2 className="size-4" /> {t("crm.tabs.info")}
-          </TabsTrigger>
-          <TabsTrigger value="tickets">
-            <Ticket className="size-4" /> {t("crm.tabs.tickets")}
-          </TabsTrigger>
-          {can("accounting.view") && (
-            <TabsTrigger value="invoices">
-              <Receipt className="size-4" /> {t("crm.tabs.invoices")}
-            </TabsTrigger>
+        <div className="flex flex-wrap items-center gap-2">
+          <TabsList className="h-auto flex-wrap justify-start">
+            {shown.map((k, i) => (
+              <span key={k} className="inline-flex items-center">
+                {arranging && (
+                  <button type="button" disabled={i === 0 || saveOrder.isPending} onClick={() => move(k, -1)} className="px-0.5 text-muted-foreground hover:text-foreground disabled:opacity-30" aria-label={t("crm.tabs.moveLeft")}>
+                    <ArrowLeft className="size-3" />
+                  </button>
+                )}
+                <TabsTrigger value={k}>
+                  {TAB_ICONS[k]} {t(`crm.tabs.${k}`)}
+                </TabsTrigger>
+                {arranging && (
+                  <button type="button" disabled={i === shown.length - 1 || saveOrder.isPending} onClick={() => move(k, 1)} className="px-0.5 text-muted-foreground hover:text-foreground disabled:opacity-30" aria-label={t("crm.tabs.moveRight")}>
+                    <ArrowRight className="size-3" />
+                  </button>
+                )}
+              </span>
+            ))}
+          </TabsList>
+          {can("crm.layout") && (
+            <Button type="button" variant={arranging ? "default" : "ghost"} size="sm" className="gap-1.5 text-muted-foreground" onClick={() => setArranging(!arranging)} title={t("crm.tabs.arrangeHint")}>
+              <Settings2 className="size-4" /> {arranging ? t("crm.tabs.arrangeDone") : t("crm.tabs.arrange")}
+            </Button>
           )}
-          <TabsTrigger value="contacts">
-            <UsersRound className="size-4" /> {t("crm.tabs.contacts")}
-          </TabsTrigger>
-          {can("admin.clients") && (
-            <TabsTrigger value="portal">
-              <KeyRound className="size-4" /> {t("crm.tabs.portal")}
-            </TabsTrigger>
+          {arranging && (
+            <Button type="button" variant="ghost" size="sm" className="text-muted-foreground" disabled={saveOrder.isPending} onClick={() => saveOrder.mutate(null)}>
+              {t("crm.tabs.arrangeReset")}
+            </Button>
           )}
-          <TabsTrigger value="contracts">
-            <FileText className="size-4" /> {t("crm.tabs.contracts")}
-          </TabsTrigger>
-          <TabsTrigger value="invoice">
-            <Receipt className="size-4" /> {t("crm.tabs.invoice")}
-          </TabsTrigger>
-        </TabsList>
+        </div>
         <TabsContent value="info" className="mt-4">
           <InfoTab client={client} />
         </TabsContent>

@@ -13,3 +13,10 @@ export const bpsOfPercent = (v: string | number) => clampBps((typeof v === "numb
 /** The rebate that takes a regular price to a price after it (both in cents; 0 when they do not make sense) */
 export const bpsOfPrices = (regularCents: number, finalCents: number) => (regularCents > 0 && finalCents >= 0 && finalCents <= regularCents ? clampBps(((regularCents - finalCents) / regularCents) * MAX_REBATE_BPS) : 0);
 export const percentText = (bps: number) => `${(clampBps(bps) / 100).toLocaleString("fr-CA", { maximumFractionDigits: 2 })} %`;
+/** What an invoice line says about a rebate, so the client sees it: the regular amount, the percent and what it saved */
+export const rebateNote = (regularCents: number, bps: number | null | undefined) => {
+  const b = clampBps(bps ?? 0);
+  if (!b) return "";
+  const money = (c: number) => `${(c / 100).toFixed(2).replace(".", ",")} $`;
+  return `prix régulier ${money(regularCents)}, rabais ${percentText(b)} (−${money(regularCents - netCents(regularCents, b))})`;
+};
