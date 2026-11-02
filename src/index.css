@@ -590,3 +590,30 @@
     margin: 10mm;
   }
 }
+
+/* A procedure (SOP) printed or saved as PDF: only the white sheet, steps kept whole across pages */
+@media print {
+  html.printing-sop body > *:not(.sop-overlay) {
+    display: none !important;
+  }
+  html.printing-sop .no-print {
+    display: none !important;
+  }
+  html.printing-sop .sop-overlay {
+    position: static !important;
+    overflow: visible !important;
+    background: none !important;
+    padding: 0 !important;
+  }
+  html.printing-sop .sop-sheet {
+    max-width: none !important;
+    border-radius: 0 !important;
+    box-shadow: none !important;
+    print-color-adjust: exact;
+    -webkit-print-color-adjust: exact;
+  }
+  html.printing-sop,
+  html.printing-sop body {
+    background: #fff !important;
+  }
+}

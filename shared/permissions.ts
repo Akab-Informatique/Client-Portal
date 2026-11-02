@@ -157,6 +157,16 @@ export const MODULES = [
     ],
   },
   {
+    key: "sops",
+    audience: "staff",
+    label: { fr: "Procédures (SOP)", en: "Procedures (SOP)" },
+    permissions: [
+      { key: "sops.view", label: { fr: "Voir les procédures", en: "See the procedures" }, description: { fr: "Lire les procédures publiées par l'équipe", en: "Read the procedures the team published" } },
+      { key: "sops.edit", label: { fr: "Créer et modifier des procédures", en: "Create and edit procedures" }, description: { fr: "Enregistrer son écran pour faire un guide étape par étape, le modifier, le publier", en: "Record one's screen to make a step-by-step guide, edit it, publish it" } },
+      { key: "sops.manage", label: { fr: "Gérer toutes les procédures", en: "Manage every procedure" }, description: { fr: "Voir les brouillons des autres, modifier et supprimer les procédures des autres", en: "See other people's drafts, edit and delete other people's procedures" } },
+    ],
+  },
+  {
     key: "hr",
     audience: "staff",
     label: { fr: "Ressources humaines", en: "Human resources" },
@@ -589,7 +599,7 @@ export type ModuleKey = (typeof MODULES)[number]["key"];
  */
 export const ACCESS_LAYOUT: { key: string; audience: Audience; label: Localized; modules: ModuleKey[] }[] = [
   { key: "team", audience: "staff", label: { fr: "Équipe", en: "Team" }, modules: ["dashboard", "meetings", "breakroom"] },
-  { key: "tools", audience: "staff", label: { fr: "Mes outils", en: "My tools" }, modules: ["outlook", "timesheets", "chat"] },
+  { key: "tools", audience: "staff", label: { fr: "Mes outils", en: "My tools" }, modules: ["outlook", "timesheets", "chat", "sops"] },
   { key: "command", audience: "staff", label: { fr: "Centre de commande", en: "Command center" }, modules: ["messages", "tickets", "pipeline", "projects", "sms", "passbolt"] },
   { key: "management", audience: "staff", label: { fr: "Gestion", en: "Management" }, modules: ["crm", "clientview", "store", "services", "hr"] },
   { key: "sales", audience: "staff", label: { fr: "Vente", en: "Sales" }, modules: ["opportunities", "quotes"] },
@@ -676,6 +686,8 @@ export const SYSTEM_ROLES: Array<{
       "outlook.view",
       "outlook.send",
       "chat.use",
+      "sops.view",
+      "sops.edit",
       "messages.view",
       "messages.post",
       "messages.pin",

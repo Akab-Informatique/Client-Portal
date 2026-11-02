@@ -39,6 +39,7 @@ import { salesRoutes } from "./routes/sales.ts";
 import { vendorPaymentRoutes } from "./routes/vendorPayments.ts";
 import { storeRoutes } from "./routes/store.ts";
 import { pipelineRoutes } from "./routes/pipeline.ts";
+import { sopRoutes } from "./routes/sops.ts";
 import { projectsRoutes } from "./routes/projects.ts";
 import { planningRoutes } from "./routes/planning.ts";
 import { smsHookRoutes, smsRoutes } from "./routes/sms.ts";
@@ -88,7 +89,7 @@ export function createApp() {
   // Small JSON everywhere; Outlook sends and ticket attachments carry files
   const smallBody = bodyLimit({ maxSize: 256 * 1024 });
   const mailBody = bodyLimit({ maxSize: 7 * 1024 * 1024 });
-  api.use("*", (c, next) => (c.req.path.startsWith("/api/outlook/") || c.req.path.startsWith("/api/time/expenses") || /^\/api\/(tickets|portal\/tickets)\/\d+\/attachments$/.test(c.req.path) || /^\/api\/pipeline\/tasks\/[0-9a-f-]{36}\/files$/.test(c.req.path) ? mailBody(c, next) : smallBody(c, next)));
+  api.use("*", (c, next) => (c.req.path.startsWith("/api/outlook/") || c.req.path.startsWith("/api/time/expenses") || /^\/api\/(tickets|portal\/tickets)\/\d+\/attachments$/.test(c.req.path) || /^\/api\/pipeline\/tasks\/[0-9a-f-]{36}\/files$/.test(c.req.path) || /^\/api\/sops\/[0-9a-f-]{36}\/steps/.test(c.req.path) ? mailBody(c, next) : smallBody(c, next)));
   api.use("*", sameOriginJson);
   api.use("*", loadAuth);
   api.use("*", readOnlyViewAs);
@@ -121,6 +122,7 @@ export function createApp() {
   api.route("/sales", salesRoutes);
   api.route("/vendor-payments", vendorPaymentRoutes);
   api.route("/pipeline", pipelineRoutes);
+  api.route("/sops", sopRoutes);
   api.route("/projects", projectsRoutes);
   api.route("/services", serviceRoutes);
   api.route("/passbolt", passboltRoutes);

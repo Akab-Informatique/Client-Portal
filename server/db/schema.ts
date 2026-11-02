@@ -2807,3 +2807,47 @@ export const payrollPlans = pgTable("payroll_plans", {
   active: boolean("active").notNull().default(true),
   updatedAt: updated(),
 });
+
+/** A procedure (SOP): a step-by-step guide made by recording a screen. Drafts are the author's (and managers'), published ones the team's. */
+export const sops = pgTable(
+  "sops",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    title: text("title").notNull(),
+    description: text("description").notNull().default(""),
+    /** draft | published */
+    status: text("status").notNull().default("draft"),
+    tags: jsonb("tags").$type<string[]>().notNull().default([]),
+    createdBy: uuid("created_by").references(() => users.id, { onDelete: "set null" }),
+    createdAt: created(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [index("sops_status_idx").on(t.status, t.updatedAt)],
+);
+
+/** A mark drawn over a step's picture (fractions of its width and height, 0–1); the picture itself is never changed by them */
+export type SopMark = { kind: "pin" | "box"; x: number; y: number; w?: number; h?: number };
+
+/** One step of a procedure: a title, a few words, and the screenshot (JPEG or PNG, base64) with its marks */
+export const sopSteps = pgTable(
+  "sop_steps",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    sopId: uuid("sop_id")
+      .notNull()
+      .references(() => sops.id, { onDelete: "cascade" }),
+    position: integer("position").notNull().default(0),
+    title: text("title").notNull().default(""),
+    description: text("description").notNull().default(""),
+    image: text("image"),
+    imageType: text("image_type"),
+    imageWidth: integer("image_width"),
+    imageHeight: integer("image_height"),
+    marks: jsonb("marks").$type<SopMark[]>().notNull().default([]),
+    /** How it was captured: manual | auto | paste | upload | text (no picture) */
+    source: text("source").notNull().default("manual"),
+    createdAt: created(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [index("sop_steps_sop_idx").on(t.sopId, t.position)],
+);

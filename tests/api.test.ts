@@ -9383,3 +9383,96 @@ describe("clients: contract count, all contracts, shared tab order", () => {
     expect((await admin.put("/api/crm/tab-order", { order: null })).json.order[0]).toBe("info");
   });
 });
+
+describe("procedures (SOP)", () => {
+  // a 1 × 1 PNG
+  const PNG = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==";
+  const image = { type: "image/png", data: PNG, width: 1, height: 1 };
+
+  it("steps with pictures and marks, in order; a draft is its author's until published", async () => {
+    resetRateLimit("login:ip:unknown");
+    const admin = await signIn("admin@akab.local");
+    const tech = await signIn("tech@akab.local");
+
+    const sop = (await tech.post("/api/sops", { title: "Créer un compte M365", description: "Pour un nouvel employé" })).json;
+    expect(sop).toMatchObject({ status: "draft", mine: true, stepCount: 0 });
+    const base = `/api/sops/${sop.id}`;
+
+    // an empty procedure cannot be published
+    expect((await tech.patch(base, { status: "published" })).json.error).toBe("sop_empty");
+
+    const a = (await tech.post(`${base}/steps`, { source: "auto", image, title: "Ouvrir le centre d'administration", marks: [{ kind: "pin", x: 0.5, y: 0.25 }] })).json;
+    const b = (await tech.post(`${base}/steps`, { source: "text", title: "Remplir le formulaire", description: "Nom, courriel, licence" })).json;
+    // inserted right after the first one
+    const mid = (await tech.post(`${base}/steps`, { source: "paste", image, after: a.id })).json;
+    let detail = (await tech.get(base)).json;
+    expect(detail.steps.map((s: any) => s.id)).toEqual([a.id, mid.id, b.id]);
+    expect(detail.steps.map((s: any) => s.position)).toEqual([0, 1, 2]);
+    expect(detail.steps[0]).toMatchObject({ hasImage: true, imageWidth: 1, marks: [{ kind: "pin", x: 0.5, y: 0.25 }] });
+    expect(detail.steps[2].hasImage).toBe(false);
+    // the list carries the count and the cover
+    const listed = (await tech.get("/api/sops")).json.find((x: any) => x.id === sop.id);
+    expect(listed).toMatchObject({ stepCount: 3, coverStepId: a.id });
+
+    // bad pictures and bad marks are refused: the bytes must be what the type says, fractions between 0 and 1
+    expect((await tech.post(`${base}/steps`, { image: { ...image, data: Buffer.from("<script>alert(1)</script>").toString("base64") } })).json.error).toBe("bad_image");
+    expect((await tech.post(`${base}/steps`, { marks: [{ kind: "pin", x: 2, y: 0 }] })).status).toBe(400);
+    expect((await tech.post(`${base}/steps`, { image: { ...image, type: "image/svg+xml" } })).status).toBe(400);
+
+    // a step's text and marks change; a picture can be replaced (the blur tool)
+    const patched = (await tech.patch(`${base}/steps/${b.id}`, { title: "Remplir", marks: [{ kind: "box", x: 0.1, y: 0.1, w: 0.3, h: 0.2 }] })).json;
+    expect(patched).toMatchObject({ title: "Remplir", marks: [{ kind: "box", w: 0.3 }] });
+    expect((await tech.patch(`${base}/steps/${mid.id}`, { image })).status).toBe(200);
+
+    // the picture is served with the type the server knows
+    const img = await tech.get(`${base}/steps/${a.id}/image`);
+    expect(img.status).toBe(200);
+    expect(img.headers.get("content-type")).toBe("image/png");
+    expect(img.headers.get("x-content-type-options")).toBe("nosniff");
+    expect((await tech.get(`${base}/steps/${b.id}/image`)).status).toBe(404);
+
+    // the order: every id once, no more, no less
+    expect((await tech.put(`${base}/steps/order`, { ids: [b.id, a.id] })).status).toBe(400);
+    expect((await tech.put(`${base}/steps/order`, { ids: [b.id, mid.id, a.id] })).status).toBe(200);
+    detail = (await tech.get(base)).json;
+    expect(detail.steps.map((s: any) => s.id)).toEqual([b.id, mid.id, a.id]);
+
+    // deleting a step closes the gap
+    expect((await tech.del(`${base}/steps/${mid.id}`)).status).toBe(200);
+    detail = (await tech.get(base)).json;
+    expect(detail.steps.map((s: any) => [s.id, s.position])).toEqual([[b.id, 0], [a.id, 1]]);
+
+    // a draft is its author's: another editor does not see it (an administrator with sops.manage does)
+    const adminView = (await admin.get("/api/sops")).json;
+    expect(adminView.some((x: any) => x.id === sop.id)).toBe(true);
+    const other = (await admin.post("/api/sops", { title: "Brouillon de l'administrateur" })).json;
+    expect((await tech.get("/api/sops")).json.some((x: any) => x.id === other.id)).toBe(false);
+    expect((await tech.get(`/api/sops/${other.id}`)).status).toBe(404);
+    // published: everyone with sops.view reads it, only its author (or a manager) changes it
+    await admin.post(`/api/sops/${other.id}/steps`, { source: "text", title: "Seule étape" });
+    expect((await admin.patch(`/api/sops/${other.id}`, { status: "published" })).status).toBe(200);
+    expect((await tech.get(`/api/sops/${other.id}`)).json).toMatchObject({ canEdit: false, status: "published" });
+    expect((await tech.patch(`/api/sops/${other.id}`, { title: "Pris" })).status).toBe(403);
+    expect((await tech.post(`/api/sops/${other.id}/steps`, { source: "text" })).status).toBe(403);
+    expect((await tech.del(`/api/sops/${other.id}`)).status).toBe(403);
+    // a manager changes anyone's
+    expect((await admin.patch(`${base}`, { status: "published" })).status).toBe(200);
+
+    // deleting the procedure takes its steps with it
+    expect((await tech.del(base)).status).toBe(200);
+    expect((await tech.get(base)).status).toBe(404);
+    expect(await db().select().from(schema.sopSteps).where(eq(schema.sopSteps.sopId, sop.id))).toHaveLength(0);
+    await admin.del(`/api/sops/${other.id}`);
+  });
+
+  it("needs the rights: nothing without sops.view, nothing changed without sops.edit", async () => {
+    resetRateLimit("login:ip:unknown");
+    const viewer = await signIn("viewer@akab.local");
+    expect((await viewer.get("/api/sops")).status).toBe(403);
+    expect((await viewer.post("/api/sops", { title: "Non" })).status).toBe(403);
+    // the technician role has both view and edit; the manager right is the administrators'
+    const me = (await (await signIn("tech@akab.local")).get("/api/me")).json;
+    expect(me.permissions).toEqual(expect.arrayContaining(["sops.view", "sops.edit"]));
+    expect(me.permissions).not.toContain("sops.manage");
+  });
+});
