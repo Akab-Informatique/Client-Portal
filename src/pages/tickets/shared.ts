@@ -216,9 +216,19 @@ export function priorityGlow(kind: PriorityKind, strength = 1): CSSProperties {
 /** Due-date colour: overdue, due today, within 2 days, on time, done. */
 const DUE_RGB = { overdue: "239, 68, 68", today: "249, 115, 22", soon: "255, 206, 26", later: "16, 185, 129", done: "100, 116, 139" } as const;
 
-/** The glowing hue from the due date (how urgent the ticket is now). */
-export function dueGlow(dueAt: string, status: StatusKind, strength = 1): CSSProperties {
-  return glow(DUE_RGB[status === "complete" ? "done" : dueState(dueAt, status)], strength * (status === "complete" ? 0.6 : 1));
+/** The checkpoint as a moment (17:00 when it has no time); the due date when the ticket has no checkpoint. */
+export function heatMoment(dueAt: string, cp?: { milestoneDate?: string | null; milestoneTime?: string | null }): string {
+  return cp?.milestoneDate ? `${cp.milestoneDate}T${cp.milestoneTime || "17:00"}` : dueAt;
+}
+
+/** How urgent a ticket is now, from its checkpoint (else its due date). */
+export function heatState(dueAt: string, status: StatusKind, cp?: { milestoneDate?: string | null; milestoneTime?: string | null }) {
+  return dueState(heatMoment(dueAt, cp), status);
+}
+
+/** The glowing hue from the checkpoint moment (how urgent the ticket is now); the due date when there is no checkpoint. */
+export function dueGlow(dueAt: string, status: StatusKind, strength = 1, cp?: { milestoneDate?: string | null; milestoneTime?: string | null }): CSSProperties {
+  return glow(DUE_RGB[status === "complete" ? "done" : heatState(dueAt, status, cp)], strength * (status === "complete" ? 0.6 : 1));
 }
 
 function glow(c: string, strength: number): CSSProperties {

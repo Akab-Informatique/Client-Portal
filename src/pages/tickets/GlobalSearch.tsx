@@ -149,7 +149,7 @@ function Row({ tk, active, onHover, onPick, statusText }: { tk: TicketSummary; a
         onClick={onPick}
         className={cn("relative isolate flex w-full items-start gap-3 px-4 py-2 text-left", active && "bg-[linear-gradient(90deg,rgba(255,206,26,0.1),transparent_70%)]")}
       >
-        <span aria-hidden className="pointer-events-none absolute inset-y-0 left-0 -z-10 w-56" style={dueGlow(tk.dueAt, tk.statusKind, 0.85)} />
+        <span aria-hidden className="pointer-events-none absolute inset-y-0 left-0 -z-10 w-56" style={dueGlow(tk.dueAt, tk.statusKind, 0.85, tk)} />
         <span className="min-w-0 flex-1">
           <span className="flex items-baseline gap-2">
             <span className="shrink-0 font-mono text-[11px] text-muted-foreground">{tk.number}</span>

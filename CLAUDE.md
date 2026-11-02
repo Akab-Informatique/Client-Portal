@@ -363,3 +363,7 @@ Docker Compose on a Debian server; Nginx Proxy Manager on another server termina
 ## Ma journée: done blocks and AI refresh (latest)
 
 - A planned block whose ticket or task is no longer on the day's list (done, or taken off) comes back from `GET /api/pipeline/day` with `done: true` and is shown **struck out and faded** in the blocks of the day. A **sparkles icon in the header of "Blocs de la journée"** (`pipeline.edit`) reorganises the rest of the day with the AI (`POST /day/plan`, same as Replanifier): when the day is today the plan is laid out **from the next quarter hour** (`fromNow`, `layout(..., after)`), so the morning already gone is not offered again; the morning run still plans the whole day. Tests: `tests/pipeline.test.ts`.
+
+## Ticket hue from the checkpoint (latest)
+
+- The coloured hue at the start of a ticket (glow behind the row in the Tickets list, the global search, the minimized ticket in the dock, and the line on the row's left edge) follows the **checkpoint moment** — day + time, 17:00 when it has none — instead of the due date: red once passed, orange today, gold within 2 days, green later, grey when complete. A ticket with no checkpoint falls back to its due date (`heatMoment` / `heatState` / `dueGlow(…, cp)` in `src/pages/tickets/shared.ts`). The Due column's own text colour still follows the due date.

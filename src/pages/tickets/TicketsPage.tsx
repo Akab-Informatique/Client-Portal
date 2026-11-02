@@ -70,7 +70,7 @@ import { NewTicketDialog } from "./NewTicketDialog";
 import { AcceptDialog } from "./AcceptDialog";
 import { MergeDialog } from "./MergeDialog";
 import { PendingMails } from "./PendingMails";
-import { dueState, FILTER_KEYS, PRIORITY_STYLE, dueGlow, useChoiceText, shortDate, shortDateTime, hm, STATUS_STYLE, useTickets, useShowSecondary, VIEWS, type Tally, type TicketList, type TicketSummary, type View, ticketErrorText } from "./shared";
+import { dueState, heatState, FILTER_KEYS, PRIORITY_STYLE, dueGlow, useChoiceText, shortDate, shortDateTime, hm, STATUS_STYLE, useTickets, useShowSecondary, VIEWS, type Tally, type TicketList, type TicketSummary, type View, ticketErrorText } from "./shared";
 import { useTicketWorkspace } from "./workspace";
 import { GlobalSearch } from "./GlobalSearch";
 import { AgendaCard } from "./Planning";
@@ -864,6 +864,7 @@ function TicketRow({
   const txt = useChoiceText();
   const me = useMe();
   const due = dueState(tk.dueAt, tk.statusKind);
+  const heat = heatState(tk.dueAt, tk.statusKind, tk);
   const [dueOpen, setDueOpen] = useState(false);
   const used = tk.statusKind === "complete" ? 0 : slaUsed(tk);
   // Load the ticket ahead only when the pointer rests on it (not when it just passes over)
@@ -901,7 +902,7 @@ function TicketRow({
         <span className="absolute left-[18px] top-1/2 z-10 -translate-y-1/2" onClick={(e) => e.stopPropagation()} onKeyDown={(e) => e.stopPropagation()}>
           <Checkbox checked={picked} onCheckedChange={onPick} aria-label={t("tickets.bulk.pick", { number: tk.number })} className="size-3.5 rounded-[4px] border-muted-foreground/50" />
         </span>
-        {/* The line on the left: it glows with the due state and opens the row's menu (accept the ticket, open it, delete it) */}
+        {/* The line on the left: it glows with the checkpoint moment (the due date when there is none) and opens the row's menu (accept the ticket, open it, delete it) */}
         {(editable || onDelete || onMerge) && (
           // out of the grid (absolute): it must not take a column of the row
           <span className="absolute inset-y-0 left-0 z-10 flex" onClick={(e) => e.stopPropagation()} onKeyDown={(e) => e.stopPropagation()}>
@@ -917,7 +918,7 @@ function TicketRow({
                     aria-hidden
                     className={cn(
                       "block h-[70%] w-[3px] rounded-r-full transition-all duration-200 group-hover/line:h-[88%] group-hover/line:w-[6px] group-data-[state=open]/line:h-[88%] group-data-[state=open]/line:w-[6px]",
-                      due === "overdue" ? "bg-red-400 shadow-[0_0_12px_2px_rgba(248,113,113,0.65)]" : due === "today" ? "bg-orange-400 shadow-[0_0_12px_2px_rgba(251,146,60,0.6)]" : "bg-[color:var(--gold)] shadow-[0_0_12px_2px_rgba(255,206,26,0.5)]",
+                      heat === "overdue" ? "bg-red-400 shadow-[0_0_12px_2px_rgba(248,113,113,0.65)]" : heat === "today" ? "bg-orange-400 shadow-[0_0_12px_2px_rgba(251,146,60,0.6)]" : "bg-[color:var(--gold)] shadow-[0_0_12px_2px_rgba(255,206,26,0.5)]",
                     )}
                   />
                 </button>
@@ -973,7 +974,7 @@ function TicketRow({
           </span>
         )}
         {/* Due date: a glowing hue fading out behind the number and title */}
-        <span aria-hidden className="pointer-events-none absolute inset-y-0 left-0 -z-10 w-72 opacity-80 transition-opacity group-hover:opacity-100" style={dueGlow(tk.dueAt, tk.statusKind)} />
+        <span aria-hidden className="pointer-events-none absolute inset-y-0 left-0 -z-10 w-72 opacity-80 transition-opacity group-hover:opacity-100" style={dueGlow(tk.dueAt, tk.statusKind, 1, tk)} />
         <span className="min-w-0 xl:[order:var(--o-ticket)]">
           <span className="flex flex-wrap items-baseline gap-x-2">
             <span className="shrink-0 font-mono text-[11px] text-muted-foreground group-hover:text-primary">{tk.number}</span>
