@@ -12,7 +12,7 @@ import { provisionPortalUsers, sendPortalWelcomes } from "../lib/portalUsers.ts"
 import { clientRoleId, ensureClientRoles } from "../lib/clientRoles.ts";
 import { audit } from "../lib/audit.ts";
 import { rateLimit } from "../lib/http.ts";
-import { ensureSoleContact } from "../lib/contactDefaults.ts";
+import { ensureSoleContact, syncContactRoles } from "../lib/contactDefaults.ts";
 import { body, zEmail, zOptText, zUuid } from "../lib/validate.ts";
 import { ticketSource, type NTicket } from "../lib/ticketSource.ts";
 import { crmState, descendantsOf, ensureCrm, rememberCompany, rememberContact, syncCrm } from "../lib/crm.ts";
@@ -465,6 +465,7 @@ export const crmRoutes = new Hono<AppEnv>()
       await tx.update(schema.clientContacts).set({ isPrimary: false }).where(and(eq(schema.clientContacts.clientId, client.id), eq(schema.clientContacts.isPrimary, true)));
       if (p.contactId !== null) await tx.update(schema.clientContacts).set({ isPrimary: true, updatedAt: new Date() }).where(eq(schema.clientContacts.id, p.contactId));
     });
+    await syncContactRoles(client.id);
     await audit(a.user.id, "crm.primary_contact_set", client.id, { contact: p.contactId });
     return c.json({ primaryContactId: p.contactId });
   })
@@ -489,6 +490,7 @@ export const crmRoutes = new Hono<AppEnv>()
     }
     await db().update(schema.clients).set({ invoice: inv, updatedAt: new Date() }).where(eq(schema.clients.id, client.id));
     void pushSoon("clients", client.id);
+    await syncContactRoles(client.id);
     await audit(a.user.id, "crm.billing_contact_set", client.id, { contact: p.contactId });
     return c.json({ billingContactId: inv.billingContactId ?? null, billingEmail: inv.billingEmail ?? null });
   })
@@ -517,6 +519,41 @@ export const crmRoutes = new Hono<AppEnv>()
     const mail = p.sendWelcome ? await sendPortalWelcomes(client.id, c) : { sent: 0, failed: 0 };
     await audit(a.user.id, "crm.portal_opened", client.id, { made, welcomeSent: mail.sent, welcomeFailed: mail.failed });
     return c.json({ enabled: true, made, ...mail });
+  })
+
+  /**
+   * The client portal of every company at once (admin.clients): each active company that has at least one active
+   * contact with an email is opened, the missing accounts are made and each person who never signed in gets the
+   * link to choose a password (unless sendWelcome is false). Companies already open are left as they are.
+   */
+  .post("/portal/open-all", requirePermission("admin.clients"), async (c) => {
+    const a = auth(c);
+    const p = await body(c, z.object({ sendWelcome: z.boolean().default(true) }));
+    const d = db();
+    const closed = await d
+      .select({ id: schema.clients.id })
+      .from(schema.clients)
+      .where(
+        and(
+          eq(schema.clients.active, true),
+          eq(schema.clients.portalEnabled, false),
+          sql`exists (select 1 from client_contacts cc where cc.client_id = ${schema.clients.id} and cc.active and cc.email is not null and cc.email <> '')`,
+        ),
+      );
+    let made = 0;
+    let sent = 0;
+    let failed = 0;
+    for (const { id } of closed) {
+      await d.update(schema.clients).set({ portalEnabled: true, updatedAt: new Date() }).where(eq(schema.clients.id, id));
+      made += await provisionPortalUsers(id);
+      if (p.sendWelcome) {
+        const m = await sendPortalWelcomes(id, c);
+        sent += m.sent;
+        failed += m.failed;
+      }
+    }
+    await audit(a.user.id, "crm.portal_opened_all", null, { companies: closed.length, made, welcomeSent: sent, welcomeFailed: failed });
+    return c.json({ companies: closed.length, made, sent, failed });
   })
 
   /**

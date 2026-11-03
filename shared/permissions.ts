@@ -572,6 +572,19 @@ export const MODULES = [
     permissions: [{ key: "clientInvoices.view", label: { fr: "Voir les factures de l'entreprise", en: "See the company's invoices" } }],
   },
   {
+    key: "clientContracts",
+    audience: "client",
+    label: { fr: "Contrats", en: "Contracts" },
+    permissions: [
+      { key: "clientContracts.view", label: { fr: "Voir les contrats de l'entreprise", en: "See the company's contracts" } },
+      {
+        key: "clientContracts.autopay",
+        label: { fr: "Gérer le paiement automatique par carte", en: "Manage automatic card payment" },
+        description: { fr: "Activer, remplacer la carte ou retirer le paiement automatique des contrats", en: "Turn on, replace the card or turn off the contracts' automatic payment" },
+      },
+    ],
+  },
+  {
     key: "clientQuotes",
     audience: "client",
     label: { fr: "Soumissions", en: "Quotes" },
@@ -607,7 +620,7 @@ export const ACCESS_LAYOUT: { key: string; audience: Audience; label: Localized;
   { key: "admin", audience: "staff", label: { fr: "Paramètres admin", en: "Admin settings" }, modules: ["admin"] },
   { key: "clientBoard", audience: "client", label: { fr: "Babillard", en: "Message board" }, modules: ["board"] },
   { key: "clientOperations", audience: "client", label: { fr: "Opérations", en: "Operations" }, modules: ["clientTickets", "clientDevices", "clientDocs"] },
-  { key: "clientAccounting", audience: "client", label: { fr: "Comptabilité", en: "Accounting" }, modules: ["clientInvoices", "clientQuotes"] },
+  { key: "clientAccounting", audience: "client", label: { fr: "Comptabilité", en: "Accounting" }, modules: ["clientInvoices", "clientContracts", "clientQuotes"] },
   { key: "clientSettings", audience: "client", label: { fr: "Paramètres admin", en: "Admin settings" }, modules: ["clientAdmin"] },
 ];
 
@@ -716,7 +729,7 @@ export const SYSTEM_ROLES: Array<{
     audience: "client",
     name: { fr: "Comptabilité client", en: "Client accounting" },
     description: { fr: "Babillard, factures et soumissions", en: "Message board, invoices and quotes" },
-    permissions: ["board.view", "board.ticket", "clientTickets.view", "clientTickets.comment", "clientTickets.attach", "clientTickets.escalate", "clientInvoices.view", "clientQuotes.view"],
+    permissions: ["board.view", "board.ticket", "clientTickets.view", "clientTickets.comment", "clientTickets.attach", "clientTickets.escalate", "clientInvoices.view", "clientContracts.view", "clientContracts.autopay", "clientQuotes.view"],
     locked: false,
   },
   {

@@ -136,6 +136,34 @@ export async function revokeAutopay(actorId: string, contractId: string) {
   return rows.length;
 }
 
+/**
+ * What a contract charges, as the client reads it: its lines after rebates (or its bundle), the amount per month or per
+ * year, the yearly services of a monthly contract apart, and the next charge (the contract's own schedule: a yearly
+ * contract is charged once a year, on its renewal day).
+ */
+export async function contractTerms(k: typeof schema.clientContracts.$inferSelect) {
+  const rows = await db().select().from(schema.contractServices).where(eq(schema.contractServices.contractId, k.id)).orderBy(asc(schema.contractServices.name));
+  const lines = rows.map((l) => ({ name: l.name, quantity: l.quantity, yearly: l.kind === "recurring_yearly", unitCents: netCents(l.priceCents, combineBps(l.rebateBps, k.rebateBps)) }));
+  const bundle = k.bundlePriceCents != null ? { quantity: k.bundleQuantity ?? 1, unitCents: netCents(k.bundlePriceCents, k.rebateBps) } : null;
+  const period: "monthly" | "yearly" = k.billingPeriod === "yearly" ? "yearly" : "monthly";
+  const services: ChargeLine[] = rows.map((l) => ({ id: l.id, name: l.name, kind: l.kind === "recurring_yearly" ? "recurring_yearly" : "recurring", priceCents: l.priceCents, quantity: l.quantity, addedOn: l.addedOn, rebateBps: l.rebateBps }));
+  const ch = k.startDate && k.endDate ? contractCharges({ startDate: k.startDate, endDate: k.endDate, endedOn: k.endedOn, billingPeriod: period }, linesForCharges({ name: k.name, startDate: k.startDate, billingPeriod: period, bundlePriceCents: k.bundlePriceCents, bundleQuantity: k.bundleQuantity, rebateBps: k.rebateBps }, services)) : null;
+  const next = ch ? chargesOn(ch, today(), k.billedThrough).next : null;
+  return {
+    id: k.id,
+    name: k.name,
+    period,
+    startDate: k.startDate,
+    endDate: k.endDate,
+    perPeriodCents: ch ? ch.perPeriodCents : (k.monthlyRateCents ?? null),
+    yearlyExtraCents: ch?.yearlyExtraCents ?? 0,
+    monthlyCents: k.monthlyRateCents ?? null,
+    next: next ? { date: next.date, amountCents: next.amountCents } : null,
+    bundle,
+    lines: bundle ? [] : lines,
+  };
+}
+
 /** What the client sees before accepting: each contract, its lines after rebates, what it charges, and the card fee */
 export async function autopaySummary(id: string) {
   await refreshFromStripe(id).catch(() => undefined);
@@ -145,30 +173,7 @@ export async function autopaySummary(id: string) {
   const { client } = await contractOf(row.contractId);
   const s = await billingSettings();
   const contracts = [];
-  for (const r of rows) {
-    const { k } = await contractOf(r.contractId);
-    const lines = (await db().select().from(schema.contractServices).where(eq(schema.contractServices.contractId, k.id)).orderBy(asc(schema.contractServices.name)))
-      .map((l) => ({ name: l.name, quantity: l.quantity, yearly: l.kind === "recurring_yearly", unitCents: netCents(l.priceCents, combineBps(l.rebateBps, k.rebateBps)) }));
-    const bundle = k.bundlePriceCents != null ? { quantity: k.bundleQuantity ?? 1, unitCents: netCents(k.bundlePriceCents, k.rebateBps) } : null;
-    // what is charged and when: the contract's own schedule (a yearly contract is charged once a year, on its renewal day)
-    const period = k.billingPeriod === "yearly" ? "yearly" : "monthly";
-    const services: ChargeLine[] = (await db().select().from(schema.contractServices).where(eq(schema.contractServices.contractId, k.id))).map((l) => ({ id: l.id, name: l.name, kind: l.kind === "recurring_yearly" ? "recurring_yearly" : "recurring", priceCents: l.priceCents, quantity: l.quantity, addedOn: l.addedOn, rebateBps: l.rebateBps }));
-    const ch = k.startDate && k.endDate ? contractCharges({ startDate: k.startDate, endDate: k.endDate, endedOn: k.endedOn, billingPeriod: period }, linesForCharges({ name: k.name, startDate: k.startDate, billingPeriod: period, bundlePriceCents: k.bundlePriceCents, bundleQuantity: k.bundleQuantity, rebateBps: k.rebateBps }, services)) : null;
-    const next = ch ? chargesOn(ch, today(), k.billedThrough).next : null;
-    contracts.push({
-      name: k.name,
-      period,
-      startDate: k.startDate,
-      endDate: k.endDate,
-      // per month on a monthly contract, per year on a yearly one; yearly services of a monthly contract apart
-      perPeriodCents: ch ? ch.perPeriodCents : (k.monthlyRateCents ?? null),
-      yearlyExtraCents: ch?.yearlyExtraCents ?? 0,
-      monthlyCents: k.monthlyRateCents ?? null,
-      next: next ? { date: next.date, amountCents: next.amountCents } : null,
-      bundle,
-      lines: bundle ? [] : lines,
-    });
-  }
+  for (const r of rows) contracts.push(await contractTerms((await contractOf(r.contractId)).k));
   const lang = s.template.language;
   const names = contractNames(contracts.map((x) => x.name), lang);
   return {

@@ -86,6 +86,7 @@ export const CLIENT_MODULES: ClientNavModule[] = [
   { key: "tickets", path: "/tickets", labelKey: "client.nav.tickets", icon: Ticket, section: "operations", permission: "clientTickets.view" },
   { key: "devices", path: "/devices", labelKey: "client.nav.devices", icon: MonitorSmartphone, section: "operations", permission: "clientDevices.view", upcoming: true },
   { key: "documentation", path: "/documentation", labelKey: "client.nav.documentation", icon: BookOpen, section: "operations", permission: "clientDocs.view", upcoming: true },
-  { key: "invoices", path: "/invoices", labelKey: "client.nav.invoices", icon: Receipt, section: "accounting", permission: "clientInvoices.view", upcoming: true },
+  { key: "invoices", path: "/invoices", labelKey: "client.nav.invoices", icon: Receipt, section: "accounting", permission: "clientInvoices.view" },
+  { key: "contracts", path: "/contracts", labelKey: "client.nav.contracts", icon: FileText, section: "accounting", permission: "clientContracts.view" },
   { key: "quotes", path: "/quotes", labelKey: "client.nav.quotes", icon: FileSignature, section: "accounting", permission: "clientQuotes.view", upcoming: true },
 ];

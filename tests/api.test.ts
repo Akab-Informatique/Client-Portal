@@ -589,6 +589,92 @@ describe("permissions", () => {
   });
 });
 
+describe("client portal: invoices and contracts of one's own company only", () => {
+  it("main and billing contacts see their company's invoices and contracts and manage card payment, never another company's", async () => {
+    resetRateLimit("login:ip:unknown");
+    const admin = await signIn("admin@akab.local");
+    const { hashPassword } = await import("../server/lib/crypto.ts");
+    const { provisionPortalUsers } = await import("../server/lib/portalUsers.ts");
+    const { saveStripeSettings } = await import("../server/lib/billing.ts");
+    const { config: appConfig } = await import("../server/config.ts");
+    const [adminRow] = await db().select().from(schema.users).where(eq(schema.users.email, "admin@akab.local"));
+    const [A] = await db().insert(schema.clients).values({ name: "Zz Portail A inc.", portalEnabled: true }).returning();
+    const [B] = await db().insert(schema.clients).values({ name: "Zz Portail B inc.", portalEnabled: true }).returning();
+    const [ca, cb] = await db()
+      .insert(schema.clientContacts)
+      .values([
+        { clientId: A.id, firstName: "Alice", lastName: "Main", email: "alice@portail-a.example" },
+        { clientId: A.id, firstName: "Arno", lastName: "Employe", email: "arno@portail-a.example" },
+      ])
+      .returning();
+    await db().insert(schema.clientContacts).values({ clientId: B.id, firstName: "Béa", lastName: "Main", email: "bea@portail-b.example", isPrimary: true });
+    await provisionPortalUsers(A.id);
+    await provisionPortalUsers(B.id);
+    // every contact has an account; the main contact gets the accounting role, a plain employee does not
+    expect((await admin.put(`/api/crm/clients/${A.id}/primary-contact`, { contactId: ca.id })).status).toBe(200);
+    const roleOf = async (email: string) => {
+      const [u] = await db().select({ slug: schema.roles.slug }).from(schema.users).innerJoin(schema.roles, eq(schema.roles.id, schema.users.roleId)).where(eq(schema.users.email, email));
+      return u?.slug;
+    };
+    expect(await roleOf("alice@portail-a.example")).toBe("client-accounting");
+    expect(await roleOf("arno@portail-a.example")).toBe("client-user");
+    expect(await roleOf("bea@portail-b.example")).toBe("client-accounting");
+    // the billing contact too
+    await admin.put(`/api/crm/clients/${A.id}/billing-contact`, { contactId: cb.id });
+    expect(await roleOf("arno@portail-a.example")).toBe("client-accounting");
+    const passwordHash = await hashPassword(PASSWORD);
+    await db().update(schema.users).set({ passwordHash, mustChangePassword: false }).where(inArray(schema.users.email, ["alice@portail-a.example", "bea@portail-b.example"]));
+    const [invA] = await db().insert(schema.clientInvoices).values({ clientId: A.id, number: "ZZ-A1", issuedOn: "2026-10-01", dueOn: "2026-10-31", totalCents: 11498, taxCents: 1498, source: "portal" }).returning();
+    const [invB] = await db().insert(schema.clientInvoices).values({ clientId: B.id, number: "ZZ-B1", issuedOn: "2026-10-01", dueOn: "2026-10-31", totalCents: 5000, taxCents: 0, source: "portal" }).returning();
+    const [kA] = await db().insert(schema.clientContracts).values({ clientId: A.id, name: "Soutien A" }).returning();
+    const [kB] = await db().insert(schema.clientContracts).values({ clientId: B.id, name: "Soutien B" }).returning();
+
+    const alice = await signIn("alice@portail-a.example");
+    const inv = (await alice.get("/api/client-billing/invoices")).json as any[];
+    expect(inv.map((x) => x.number)).toEqual(["ZZ-A1"]);
+    expect(inv[0]).toMatchObject({ balanceCents: 11498, status: "overdue" });
+    expect((await alice.get(`/api/client-billing/invoices/${invB.id}/pdf`)).status).toBe(404);
+    expect((await alice.get(`/api/client-billing/invoices/${invA.id}/pdf`)).status).toBe(200);
+    const ks = (await alice.get("/api/client-billing/contracts")).json;
+    expect(ks.contracts.map((x: any) => x.name)).toEqual(["Soutien A"]);
+    // another company's contract is never reachable
+    expect((await alice.post("/api/client-billing/contracts/autopay", { contractIds: [kB.id] })).status).toBe(404);
+    expect((await alice.post("/api/client-billing/contracts/autopay", { contractIds: [kA.id, kB.id] })).status).toBe(404);
+    expect((await alice.del(`/api/client-billing/contracts/${kB.id}/autopay`)).status).toBe(404);
+    // Stripe ready: a link to the card page for the company's own contract
+    const publicBefore = appConfig.publicUrl;
+    (appConfig as { publicUrl: string }).publicUrl = "https://portail.test";
+    const [stripeBefore] = await db().select().from(schema.integrations).where(eq(schema.integrations.provider, "stripe"));
+    await saveStripeSettings(adminRow!.id, { enabled: true, publishableKey: "pk_test_x", paymentLinks: true, secretKey: "sk_test_x", webhookSecret: "whsec_x" });
+    try {
+      const go = (await alice.post("/api/client-billing/contracts/autopay", { contractIds: [kA.id] })).json;
+      expect(go.path).toMatch(/^\/carte\//);
+      expect((await alice.get("/api/client-billing/contracts")).json.contracts[0].autopay).toMatchObject({ status: "pending" });
+      expect((await alice.del(`/api/client-billing/contracts/${kA.id}/autopay`)).json.revoked).toBe(1);
+      expect((await db().select().from(schema.notifications).where(eq(schema.notifications.type, "billing.autopay_client_off"))).length).toBeGreaterThan(0);
+    } finally {
+      // back exactly as it was (a later test expects no Stripe keys at all)
+      if (stripeBefore) await db().update(schema.integrations).set({ enabled: stripeBefore.enabled, config: stripeBefore.config, secret: stripeBefore.secret }).where(eq(schema.integrations.provider, "stripe"));
+      else await db().delete(schema.integrations).where(eq(schema.integrations.provider, "stripe"));
+      (appConfig as { publicUrl: string }).publicUrl = publicBefore;
+    }
+    // Béa (company B) sees only B
+    const bea = await signIn("bea@portail-b.example");
+    expect(((await bea.get("/api/client-billing/invoices")).json as any[]).map((x) => x.number)).toEqual(["ZZ-B1"]);
+    expect((await bea.get(`/api/client-billing/invoices/${invA.id}/pdf`)).status).toBe(404);
+    // staff are not clients here
+    expect((await admin.get("/api/client-billing/invoices")).status).toBe(403);
+
+    // every company at once: the closed ones with a contact are opened
+    const [C] = await db().insert(schema.clients).values({ name: "Zz Portail C inc." }).returning();
+    await db().insert(schema.clientContacts).values({ clientId: C.id, firstName: "Cé", lastName: "Main", email: "ce@portail-c.example", isPrimary: true });
+    const opened = (await admin.post("/api/crm/portal/open-all", { sendWelcome: false })).json;
+    expect(opened.companies).toBeGreaterThanOrEqual(1);
+    expect((await db().select().from(schema.clients).where(eq(schema.clients.id, C.id)))[0]!.portalEnabled).toBe(true);
+    expect(await roleOf("ce@portail-c.example")).toBe("client-accounting");
+  });
+});
+
 describe("message board: main and billing contacts", () => {
   it("emails the main contact and the billing address of each client targeted, each address once", async () => {
     const admin = await signIn("admin@akab.local");
@@ -4766,8 +4852,8 @@ describe("client portal: sections, default roles and per-user rights", () => {
     const roles = (await admin.get(`/api/admin/clients/${firstClient.id}/roles`)).json;
     expect(roles.every((r: any) => r.audience === "client" && r.clientId === firstClient.id)).toBe(true);
     const bySlug = Object.fromEntries(roles.map((r: any) => [r.slug, r.permissions.slice().sort()]));
-    expect(bySlug["client-admin"]).toEqual(["board.ticket", "board.view", "clientAdmin.company", "clientAdmin.users", "clientDevices.view", "clientDocs.view", "clientInvoices.view", "clientQuotes.view", "clientTickets.all", "clientTickets.attach", "clientTickets.comment", "clientTickets.escalate", "clientTickets.view"]);
-    expect(bySlug["client-accounting"]).toEqual(["board.ticket", "board.view", "clientInvoices.view", "clientQuotes.view", "clientTickets.attach", "clientTickets.comment", "clientTickets.escalate", "clientTickets.view"]);
+    expect(bySlug["client-admin"]).toEqual(["board.ticket", "board.view", "clientAdmin.company", "clientAdmin.users", "clientContracts.autopay", "clientContracts.view", "clientDevices.view", "clientDocs.view", "clientInvoices.view", "clientQuotes.view", "clientTickets.all", "clientTickets.attach", "clientTickets.comment", "clientTickets.escalate", "clientTickets.view"]);
+    expect(bySlug["client-accounting"]).toEqual(["board.ticket", "board.view", "clientContracts.autopay", "clientContracts.view", "clientInvoices.view", "clientQuotes.view", "clientTickets.attach", "clientTickets.comment", "clientTickets.escalate", "clientTickets.view"]);
     expect(bySlug["client-tech"]).toEqual(["board.ticket", "board.view", "clientDevices.view", "clientDocs.view", "clientTickets.all", "clientTickets.attach", "clientTickets.comment", "clientTickets.escalate", "clientTickets.view"]);
     expect(bySlug["client-user"]).toEqual(["board.ticket", "board.view", "clientTickets.attach", "clientTickets.comment", "clientTickets.escalate", "clientTickets.view"]);
     // every ticket of the company, but none of the portal's admin settings
@@ -8880,7 +8966,8 @@ describe("client portal: the company-wide switch", () => {
     expect(made.map((u) => u.email)).toEqual(["anne@depanneur.example"]);
     expect(made[0]).toMatchObject({ kind: "client", active: true, mustChangePassword: true });
     const [role] = await db().select().from(schema.roles).where(eq(schema.roles.id, made[0].roleId!));
-    expect(role.slug).toBe("client-user");
+    // the company's only contact is its main contact: the accounting role (invoices and contracts)
+    expect(role.slug).toBe("client-accounting");
     const listed = (await admin.get(`/api/crm/clients/${client.id}/contacts`)).json;
     expect(listed.find((x: any) => x.id === anne.id).portal).toMatchObject({ dormant: true, pending: true });
 

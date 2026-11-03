@@ -3,6 +3,7 @@ import { and, eq, isNotNull, isNull, sql } from "drizzle-orm";import { db, schem
 import { hashPassword, temporaryPassword } from "./crypto.ts";
 import { sendPasswordLink } from "./passwordLinks.ts";
 import { clientRoleId } from "./clientRoles.ts";
+import { syncContactRoles } from "./contactDefaults.ts";
 
 /**
  * Client portal accounts follow the contacts: every active contact with an
@@ -53,6 +54,7 @@ export async function provisionPortalUsers(clientId?: string): Promise<number> {
     }
     await d.update(schema.clientContacts).set({ userId, updatedAt: new Date() }).where(eq(schema.clientContacts.id, c.id));
   }
+  for (const id of new Set(contacts.map(({ c }) => c.clientId))) await syncContactRoles(id);
   return made;
 }
 

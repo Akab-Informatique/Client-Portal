@@ -46,6 +46,8 @@ const ClientHome = lazy(() => import("@/pages/client/ClientHome").then((m) => ({
 const ClientLayout = lazy(() => import("@/layouts/ClientLayout").then((m) => ({ default: m.ClientLayout })));
 const ClientTicketsPage = lazy(() => import("@/pages/client/ClientTicketsPage").then((m) => ({ default: m.ClientTicketsPage })));
 const ClientSettingsPage = lazy(() => import("@/pages/client/ClientSettingsPage").then((m) => ({ default: m.ClientSettingsPage })));
+const ClientInvoicesPage = lazy(() => import("@/pages/client/ClientBillingPages").then((m) => ({ default: m.ClientInvoicesPage })));
+const ClientContractsPage = lazy(() => import("@/pages/client/ClientBillingPages").then((m) => ({ default: m.ClientContractsPage })));
 
 function Splash() {
   return (
@@ -162,6 +164,8 @@ function Root() {
               <Route index element={<ClientHome />} />
               <Route path="settings" element={<ClientSettingsPage />} />
               <Route path="tickets" element={<Guard permission="clientTickets.view"><ClientTicketsPage /></Guard>} />
+              <Route path="invoices" element={<Guard permission="clientInvoices.view"><ClientInvoicesPage /></Guard>} />
+              <Route path="contracts" element={<Guard permission="clientContracts.view"><ClientContractsPage /></Guard>} />
               <Route path="*" element={<Navigate to="/" replace />} />
             </Route>
           </Routes>

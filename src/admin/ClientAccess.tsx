@@ -2,7 +2,7 @@ import { useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
-import { Building2, ChevronDown, ChevronRight, KeyRound, Loader2, Plus, Search, ShieldCheck, UserPlus } from "lucide-react";
+import { Building2, ChevronDown, ChevronRight, DoorOpen, KeyRound, Loader2, Plus, Search, ShieldCheck, UserPlus } from "lucide-react";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -196,6 +196,37 @@ export function ClientUsersPanel({ client }: { client: ClientRef }) {
 }
 
 /** Admin › Roles and users › Clients: pick a client, see and manage its users, roles and rights. */
+/**
+ * Open the client portal of every company in one click: the accounts of all their contacts can sign in, and each
+ * person who never signed in gets the link to choose a password. Companies already open are left as they are.
+ */
+function OpenAllPortals({ closed }: { closed: number }) {
+  const { t } = useTranslation();
+  const qc = useQueryClient();
+  const confirm = useConfirm();
+  const can = useCan();
+  const run = useMutation({
+    mutationFn: () => api.post<{ companies: number; made: number; sent: number; failed: number }>("/crm/portal/open-all", { sendWelcome: true }),
+    onSuccess: (r) => {
+      void qc.invalidateQueries();
+      toast.success(t("admin.clientAccess.openAllDone", { companies: r.companies, sent: r.sent }));
+      if (r.failed) toast.warning(t("admin.clientAccess.openAllFailed", { count: r.failed }));
+    },
+    onError: () => toast.error(t("common.error")),
+  });
+  if (!can("admin.clients") || closed === 0) return null;
+  return (
+    <Button
+      type="button"
+      disabled={run.isPending}
+      className="bg-grad-gold font-semibold text-[#1a1204] hover:brightness-105"
+      onClick={() => void confirm({ title: t("admin.clientAccess.openAllTitle", { count: closed }), description: t("admin.clientAccess.openAllText"), confirmLabel: t("admin.clientAccess.openAll") }).then((ok) => ok && run.mutate())}
+    >
+      {run.isPending ? <Loader2 className="size-4 animate-spin" /> : <DoorOpen className="size-4" />} {t("admin.clientAccess.openAll")}
+    </Button>
+  );
+}
+
 export function ClientAccessSection() {
   const { t } = useTranslation();
   const { data: clients = [], isLoading } = useClients();
@@ -205,7 +236,7 @@ export function ClientAccessSection() {
   const client = clients.find((c) => c.id === selected) ?? null;
   return (
     <div>
-      <SectionHeader title={t("admin.clientAccess.title")} subtitle={t("admin.clientAccess.subtitle")} />
+      <SectionHeader title={t("admin.clientAccess.title")} subtitle={t("admin.clientAccess.subtitle")} action={<OpenAllPortals closed={clients.filter((c) => c.active && !c.portalEnabled).length} />} />
       <div className="grid gap-5 lg:grid-cols-[18rem_minmax(0,1fr)]">
         <aside className="space-y-2">
           <div className="relative">

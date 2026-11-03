@@ -28,6 +28,7 @@ const TITLES: Record<NotificationType, { fr: string; en: string }> = {
   "breakroom.complots": { fr: "Invitation à jouer", en: "Game invitation" },
   "hr.negative": { fr: "Solde RH négatif", en: "Negative HR balance" },
   "billing.card_failed": { fr: "Prélèvement par carte refusé", en: "Card charge declined" },
+  "billing.autopay_client_off": { fr: "Paiement automatique retiré par un client", en: "Automatic payment turned off by a client" },
 };
 const GENERIC = { fr: "Touchez pour ouvrir le portail.", en: "Tap to open the portal." };
 

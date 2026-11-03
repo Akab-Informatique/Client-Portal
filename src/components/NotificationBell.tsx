@@ -84,6 +84,8 @@ function useView(n: Notification): { icon: LucideIcon; title: string; body: stri
       return { icon: Swords, title: t("notifications.breakroomInvite", { from: n.data.from ?? "" }), body: t("notifications.breakroomInviteBody"), tone: "gold" };
     case "hr.negative":
       return { icon: ShieldAlert, title: t("notifications.hrNegative", { name: n.data.name ?? "" }), body: t(`hr.account.${n.data.account ?? "bank"}`), tone: "alert" };
+    case "billing.autopay_client_off":
+      return { icon: ShieldAlert, title: t("notifications.autopayClientOff", { client: n.data.client ?? "" }), body: [n.data.contract, n.data.by].filter(Boolean).join(" · "), tone: "alert" };
     case "billing.card_failed":
       return { icon: ShieldAlert, title: t("notifications.cardFailed", { number: n.data.number ?? "" }), body: [n.data.client, n.data.why].filter(Boolean).join(" — "), tone: "alert" };
     case "timer.pending":

@@ -28,6 +28,7 @@ import { emailRoutes } from "./routes/email.ts";
 import { billingMailRoutes } from "./routes/billingMail.ts";
 import { payRoutes } from "./routes/pay.ts";
 import { autopayRoutes } from "./routes/autopay.ts";
+import { clientBillingRoutes } from "./routes/clientBilling.ts";
 import { boardRoutes, messageRoutes } from "./routes/messages.ts";
 import { dashboardRoutes } from "./routes/dashboard.ts";
 import { dashboardsRoutes } from "./routes/dashboards.ts";
@@ -142,6 +143,8 @@ export function createApp() {
   api.route("/pay", payRoutes);
   // the automatic card payment of a contract: its public page (signed link) and the staff routes
   api.route("/autopay", autopayRoutes);
+  // the client portal: its own company's invoices and contracts
+  api.route("/client-billing", clientBillingRoutes);
   api.route("/billing/email", billingMailRoutes);
   api.route("/billing", billingRoutes);
   api.route("/billables", billablesRoutes);
