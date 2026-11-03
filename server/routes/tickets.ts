@@ -1863,7 +1863,8 @@ export const ticketRoutes = new Hono<AppEnv>()
     // a charge already on an invoice stays (cancel the invoice first)
     if (line && line.status === "posted") throw new HTTPException(409, { message: "charge_billed" });
     const [own] = /^[0-9a-f-]{36}$/i.test(chargeId) ? await db().select({ billed: schema.ticketCharges.billed }).from(schema.ticketCharges).where(eq(schema.ticketCharges.id, chargeId)) : [];
-    if (own?.billed) throw new HTTPException(409, { message: "charge_billed" });
+    // flagged as billed before the portal (no invoice of ours): only someone who may delete tickets removes it
+    if (own?.billed && !a.permissions.includes("tickets.delete")) throw new HTTPException(409, { message: "charge_billed" });
     const removed = await run(() => src.removeCharge(id, chargeId));
     if (!removed) throw new HTTPException(404, { message: "not_found" });
     await audit(a.user.id, "ticket.charge_removed", String(id), { chargeId });

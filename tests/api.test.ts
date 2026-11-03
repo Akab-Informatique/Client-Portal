@@ -9520,6 +9520,9 @@ describe("ticket charges are work to bill at once", () => {
     const both = (await admin.get(`/api/tickets/${id}/charges`)).json;
     expect(both.find((x: any) => x.id === old.id).billing.invoice).toMatchObject({ number: invoice.number });
     expect(both.find((x: any) => x.id === prior.id).billing).toEqual({ status: "billed_before", invoice: null });
+    // billed before the portal, no invoice of ours: a technician cannot remove it, an administrator can
+    expect((await tech.del(`/api/tickets/${id}/charges/${prior.id}`)).json.error).toBe("charge_billed");
+    expect((await admin.del(`/api/tickets/${id}/charges/${prior.id}`)).status).toBe(200);
     // a charge on an invoice cannot be deleted from the ticket
     expect((await tech.del(`/api/tickets/${id}/charges/${mouse.id}`)).json.error).toBe("charge_billed");
     // removed: off the list (a pending line goes when its charge is gone)
