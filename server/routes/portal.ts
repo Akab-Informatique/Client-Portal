@@ -183,7 +183,8 @@ export const portalRoutes = new Hono<AppEnv>()
       ...onTicket(t),
       attachments: (t.attachments ?? []).filter((f) => !f.internal).map((f) => ({ id: f.id, name: f.name, size: f.size, at: f.at, author: f.author })),
       activity: t.notes
-        .filter((n) => !n.internal && n.text.trim() && !isSmsNote(n.text))
+        // never an internal note, nor what the system wrote itself (merges, forwards…): only what was said to the client
+        .filter((n) => !n.internal && !n.system && n.text.trim() && !isSmsNote(n.text))
         .map((n) => ({ id: n.id, author: n.author, at: n.at, text: n.text, work: n.kind === "time" }))
         .sort((x, y) => x.at.localeCompare(y.at)),
     });

@@ -23,7 +23,7 @@ process.env.REQUIRE_MFA = "true";
 const { initDb, db, schema } = await import("../server/db/index.ts");
 const { seed } = await import("../server/db/seed.ts");
 const { createApp } = await import("../server/app.ts");
-const { eq, sql, isNotNull, inArray } = await import("drizzle-orm");
+const { eq, sql, isNotNull, isNull, inArray } = await import("drizzle-orm");
 const { resetRateLimit } = await import("../server/lib/http.ts");
 
 let app: ReturnType<typeof createApp>;
@@ -589,6 +589,57 @@ describe("permissions", () => {
   });
 });
 
+describe("client portal: a portal ticket shows the client only what was said to them", () => {
+  it("never an internal note nor a system note, on the portal's own tickets", async () => {
+    resetRateLimit("login:ip:unknown");
+    const tech = await signIn("tech@akab.local");
+    const { hashPassword } = await import("../server/lib/crypto.ts");
+    const { resetTicketMode } = await import("../server/lib/localTickets.ts");
+    const [prev] = await db().select().from(schema.integrations).where(eq(schema.integrations.provider, "tickets"));
+    // the portal's own tickets give an id to the clients that had none: put back as they were afterwards
+    const noId = (await db().select({ id: schema.clients.id }).from(schema.clients).where(isNull(schema.clients.autotaskId))).map((x) => x.id);
+    await db().insert(schema.integrations).values({ provider: "tickets", enabled: true, config: { mode: "local" } }).onConflictDoUpdate({ target: schema.integrations.provider, set: { enabled: true, config: { mode: "local" } } });
+    resetTicketMode();
+    let ticketId: number | null = null;
+    let clientId: string | null = null;
+    try {
+      const [client] = await db().insert(schema.clients).values({ name: "Zz Notes cachées inc.", autotaskId: 987654399, portalEnabled: true }).returning();
+      clientId = client.id;
+      const [user] = await db().insert(schema.users).values({ email: "nora@notes.example", name: "Nora Client", kind: "client", clientId: client.id, passwordHash: await hashPassword(PASSWORD) }).returning();
+      const { clientRoleId } = await import("../server/lib/clientRoles.ts");
+      await db().update(schema.users).set({ roleId: await clientRoleId(client.id, "client-user") }).where(eq(schema.users.id, user.id));
+      await db().insert(schema.clientContacts).values({ clientId: client.id, autotaskId: "local-nora", firstName: "Nora", lastName: "Client", email: "nora@notes.example", userId: user.id });
+      const facets = (await tech.get("/api/tickets?view=all")).json.facets;
+      const t = (await tech.post("/api/tickets", { companyId: 987654399, contactId: "local-nora", title: "Courriel bloqué", priority: facets.priorities[0].value, queue: facets.queues[0].value, assigneeId: null, dueDate: "2026-12-01" })).json;
+      expect(t.id).toBeTruthy();
+      ticketId = t.id;
+      await tech.post(`/api/tickets/${t.id}/notes`, { text: "Nous regardons la boîte ce matin.", internal: false, email: false });
+      await tech.post(`/api/tickets/${t.id}/notes`, { text: "INTERNE ne pas montrer", internal: true });
+      await db().insert(schema.ticketNotes).values({ ticketId: t.id, text: "SYSTEME fusion de billets", system: true });
+      const nora = await signIn("nora@notes.example");
+      const detail = (await nora.get(`/api/portal/tickets/${t.id}`)).json;
+      expect(detail.activity.map((n: any) => n.text)).toContain("Nous regardons la boîte ce matin.");
+      expect(JSON.stringify(detail)).not.toContain("INTERNE");
+      expect(JSON.stringify(detail)).not.toContain("SYSTEME");
+    } finally {
+      // nothing left behind: later tests count the clients and the portal's tickets
+      if (ticketId) {
+        const admin = await signIn("admin@akab.local");
+        await admin.del(`/api/tickets/${ticketId}`);
+        await db().delete(schema.deletedTickets).where(eq(schema.deletedTickets.ticketId, ticketId)).catch(() => undefined);
+      }
+      if (clientId) {
+        await db().delete(schema.users).where(eq(schema.users.clientId, clientId));
+        await db().delete(schema.clients).where(eq(schema.clients.id, clientId));
+      }
+      if (noId.length) await db().update(schema.clients).set({ autotaskId: null }).where(inArray(schema.clients.id, noId));
+      if (prev) await db().update(schema.integrations).set({ enabled: prev.enabled, config: prev.config }).where(eq(schema.integrations.provider, "tickets"));
+      else await db().delete(schema.integrations).where(eq(schema.integrations.provider, "tickets"));
+      resetTicketMode();
+    }
+  });
+});
+
 describe("client portal: invoices and contracts of one's own company only", () => {
   it("main and billing contacts see their company's invoices and contracts and manage card payment, never another company's", async () => {
     resetRateLimit("login:ip:unknown");
@@ -630,6 +681,11 @@ describe("client portal: invoices and contracts of one's own company only", () =
     const [kB] = await db().insert(schema.clientContracts).values({ clientId: B.id, name: "Soutien B" }).returning();
 
     const alice = await signIn("alice@portail-a.example");
+    // the main contact sees every ticket of the company; a plain employee only their own
+    expect((await alice.get("/api/portal/tickets?scope=company")).status).toBe(200);
+    const employee = await signIn("employe1@client.example");
+    expect((await employee.get("/api/portal/tickets?scope=company")).status).toBe(403);
+    expect((await employee.get("/api/portal/tickets")).status).toBe(200);
     const inv = (await alice.get("/api/client-billing/invoices")).json as any[];
     expect(inv.map((x) => x.number)).toEqual(["ZZ-A1"]);
     expect(inv[0]).toMatchObject({ balanceCents: 11498, status: "overdue" });
@@ -4853,7 +4909,7 @@ describe("client portal: sections, default roles and per-user rights", () => {
     expect(roles.every((r: any) => r.audience === "client" && r.clientId === firstClient.id)).toBe(true);
     const bySlug = Object.fromEntries(roles.map((r: any) => [r.slug, r.permissions.slice().sort()]));
     expect(bySlug["client-admin"]).toEqual(["board.ticket", "board.view", "clientAdmin.company", "clientAdmin.users", "clientContracts.autopay", "clientContracts.view", "clientDevices.view", "clientDocs.view", "clientInvoices.view", "clientQuotes.view", "clientTickets.all", "clientTickets.attach", "clientTickets.comment", "clientTickets.escalate", "clientTickets.view"]);
-    expect(bySlug["client-accounting"]).toEqual(["board.ticket", "board.view", "clientContracts.autopay", "clientContracts.view", "clientInvoices.view", "clientQuotes.view", "clientTickets.attach", "clientTickets.comment", "clientTickets.escalate", "clientTickets.view"]);
+    expect(bySlug["client-accounting"]).toEqual(["board.ticket", "board.view", "clientContracts.autopay", "clientContracts.view", "clientInvoices.view", "clientQuotes.view", "clientTickets.all", "clientTickets.attach", "clientTickets.comment", "clientTickets.escalate", "clientTickets.view"]);
     expect(bySlug["client-tech"]).toEqual(["board.ticket", "board.view", "clientDevices.view", "clientDocs.view", "clientTickets.all", "clientTickets.attach", "clientTickets.comment", "clientTickets.escalate", "clientTickets.view"]);
     expect(bySlug["client-user"]).toEqual(["board.ticket", "board.view", "clientTickets.attach", "clientTickets.comment", "clientTickets.escalate", "clientTickets.view"]);
     // every ticket of the company, but none of the portal's admin settings

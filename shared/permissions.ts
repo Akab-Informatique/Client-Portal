@@ -729,7 +729,8 @@ export const SYSTEM_ROLES: Array<{
     audience: "client",
     name: { fr: "Comptabilité client", en: "Client accounting" },
     description: { fr: "Babillard, factures et soumissions", en: "Message board, invoices and quotes" },
-    permissions: ["board.view", "board.ticket", "clientTickets.view", "clientTickets.comment", "clientTickets.attach", "clientTickets.escalate", "clientInvoices.view", "clientContracts.view", "clientContracts.autopay", "clientQuotes.view"],
+    // the main and billing contacts get this role: their company's invoices, contracts and every ticket of the company
+    permissions: ["board.view", "board.ticket", "clientTickets.view", "clientTickets.all", "clientTickets.comment", "clientTickets.attach", "clientTickets.escalate", "clientInvoices.view", "clientContracts.view", "clientContracts.autopay", "clientQuotes.view"],
     locked: false,
   },
   {
