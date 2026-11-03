@@ -4,11 +4,13 @@ import { z } from "zod";
 import { auth, requirePermission, requireStaff, type AppEnv } from "../lib/auth.ts";
 import { audit } from "../lib/audit.ts";
 import { body, zUuid } from "../lib/validate.ts";
-import { approvedSpan, BILLABLE_KINDS, refreshLabourRates, billableCounts, billablesState, createInvoice, DraftError, draftInvoice, editBillable, invoiceableClients, listBillables, postInvoices, postPreview, setBillableStatus, syncBillables, unpostInvoice } from "../lib/billables.ts";
+import { approvedSpan, quickInvoice, BILLABLE_KINDS, refreshLabourRates, billableCounts, billablesState, createInvoice, DraftError, draftInvoice, editBillable, invoiceableClients, listBillables, postInvoices, postPreview, setBillableStatus, syncBillables, unpostInvoice } from "../lib/billables.ts";
 import type { BillableKind } from "../lib/ticketSource.ts";
 import { autoSync, createQbItem, invoiceChoices } from "../lib/quickbooks.ts";
 import { quickbooksSettings } from "../lib/billing.ts";
-import { autoSendInvoice } from "../lib/invoiceMail.ts";
+import { autoSendInvoice, sendInvoiceMail } from "../lib/invoiceMail.ts";
+import { asc } from "drizzle-orm";
+import { db, schema } from "../db/index.ts";
 import { quickbooksHttp } from "./billing.ts";
 
 /**
@@ -155,6 +157,37 @@ export const billablesRoutes = new Hono<AppEnv>()
     await autoSync("invoices", made.id);
     await autoSendInvoice(made.id, a.user.id);
     return c.json(made, 201);
+  })
+
+  /** An invoice typed by hand: its lines, then the usual invoice (and, asked, emailed at once) */
+  .get("/quick-clients", async (c) => {
+    const rows = await db().select({ id: schema.clients.id, name: schema.clients.name, email: schema.clients.email, invoice: schema.clients.invoice, active: schema.clients.active }).from(schema.clients).orderBy(asc(schema.clients.name));
+    return c.json(rows.filter((r) => r.active !== false).map((r) => ({ id: r.id, name: r.name, email: (r.invoice?.billingEmail || r.email || "").trim() || null, exempt: r.invoice?.taxes === false, payOnline: r.invoice?.payOnline ?? null })));
+  })
+  .post("/quick-invoice", requirePermission("accounting.manage"), async (c) => {
+    const a = auth(c);
+    const p = await body(
+      c,
+      zDraft.omit({ itemIds: true, kinds: true, from: true, to: true }).extend({
+        lines: z.array(z.object({ description: z.string().trim().min(1).max(500), quantity: z.number().positive().max(100_000), unitPrice: z.number().min(-1_000_000).max(1_000_000), taxable: z.boolean().default(true) })).min(1).max(50),
+        send: z.boolean().default(false),
+      }),
+    );
+    const { lines, send, ...draft } = p;
+    const made = await drafted(() => quickInvoice(a.user.id, { ...draft, lines: lines.map((l) => ({ description: l.description, quantity: l.quantity, unitPriceCents: Math.round(l.unitPrice * 100), taxable: l.taxable })) }));
+    await audit(a.user.id, "billing.invoice_created", made.id, { number: made.number, totalCents: made.totalCents, manual: true });
+    await autoSync("invoices", made.id);
+    // sent now when asked (the usual email, its PDF and the pay link), else the automatic sending applies as usual
+    let emailed: string | null = null;
+    let mailError: string | null = null;
+    if (send) {
+      try {
+        emailed = (await sendInvoiceMail(made.id, "sent", a.user.id)).to;
+      } catch (e) {
+        mailError = e instanceof Error ? e.message : "mail_failed";
+      }
+    } else await autoSendInvoice(made.id, a.user.id);
+    return c.json({ ...made, emailed, mailError }, 201);
   })
 
   /** What posting the approved items would make (per client). */

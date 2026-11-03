@@ -5662,6 +5662,32 @@ describe("the Stripe pay link chosen on each invoice", () => {
   });
 });
 
+describe("an invoice typed by hand", () => {
+  it("makes the usual invoice from its lines, and voiding it drops them instead of giving them back to bill", async () => {
+    resetRateLimit("login:ip:unknown");
+    const admin = await signIn("admin@akab.local");
+    const tech = await signIn("tech@akab.local");
+    const [c] = await db().insert(schema.clients).values({ name: "Facture rapide inc.", email: "rapide@example.com" }).returning();
+    expect(((await admin.get("/api/billables/quick-clients")).json as any[]).find((x) => x.id === c.id)).toMatchObject({ email: "rapide@example.com" });
+    const body = { clientId: c.id, lines: [{ description: "Petit dépannage", quantity: 1, unitPrice: 5, taxable: true }, { description: "Câble", quantity: 2, unitPrice: 2.5, taxable: false }] };
+    expect((await tech.post("/api/billables/quick-invoice", body)).status).toBe(403);
+    expect((await admin.post("/api/billables/quick-invoice", { clientId: c.id, lines: [] })).status).toBe(400);
+    const made = (await admin.post("/api/billables/quick-invoice", body)).json;
+    expect(made.number).toBeTruthy();
+    const [inv] = await db().select().from(schema.clientInvoices).where(eq(schema.clientInvoices.id, made.id));
+    // 5 $ taxable (GST 0,25 + QST 0,50) + 5 $ not taxable
+    expect(inv).toMatchObject({ source: "portal", totalCents: 1075, taxCents: 75 });
+    const lines = await db().select().from(schema.invoiceLines).where(eq(schema.invoiceLines.invoiceId, made.id));
+    expect(lines.map((l) => [l.description, l.amountCents])).toEqual([["Petit dépannage", 500], ["Câble", 500]]);
+    const items = await db().select().from(schema.billingItems).where(eq(schema.billingItems.invoiceId, made.id));
+    expect(items.every((i) => i.source === "manual" && i.status === "posted")).toBe(true);
+    // voided: nothing comes back to bill
+    expect((await admin.post("/api/billables/unpost", { invoiceId: made.id })).json).toMatchObject({ items: 0 });
+    expect(await db().select().from(schema.billingItems).where(eq(schema.billingItems.clientId, c.id))).toHaveLength(0);
+    expect((await db().select().from(schema.invoiceLines).where(eq(schema.invoiceLines.invoiceId, made.id))).length).toBe(2);
+  });
+});
+
 describe("the logo at the top of the emails", () => {
   it("is the AKAB logo picture sent inline with the message, shown inline in the preview", async () => {
     resetRateLimit("login:ip:unknown");

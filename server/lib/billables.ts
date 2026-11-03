@@ -566,6 +566,9 @@ export async function unpostInvoice(actorId: string, invoiceId: string): Promise
   const now = new Date();
   const items = await db().transaction(async (tx) => {
     await tx.update(schema.clientInvoices).set({ voided: true, quickbooksError: null, quickbooksSyncedAt: inv.quickbooksId ? now : null, updatedAt: now }).where(eq(schema.clientInvoices.id, invoiceId));
+    // the lines of an invoice typed by hand were never work to bill: they go with it
+    await tx.update(schema.invoiceLines).set({ billingItemId: null }).where(and(eq(schema.invoiceLines.invoiceId, invoiceId), inArray(schema.invoiceLines.billingItemId, tx.select({ id: schema.billingItems.id }).from(schema.billingItems).where(and(eq(schema.billingItems.invoiceId, invoiceId), eq(schema.billingItems.source, "manual"))))));
+    await tx.delete(schema.billingItems).where(and(eq(schema.billingItems.invoiceId, invoiceId), eq(schema.billingItems.source, "manual")));
     const back = await tx
       .update(schema.billingItems)
       .set({ status: "approved", invoiceId: null, postedAt: null, approvedBy: actorId, approvedAt: now, updatedAt: now })
@@ -586,6 +589,48 @@ export async function approvedSpan() {
     .from(b)
     .where(eq(b.status, "approved"));
   return { count: r?.n ?? 0, from: r?.from ?? null, to: r?.to ?? null };
+}
+
+/**
+ * An invoice typed by hand (Comptabilité › Factures › Nouvelle facture): its lines become approved work to bill of their
+ * own (source "manual"), then the usual invoice is made from them — the same numbering, taxes, QuickBooks and emails.
+ * Nothing is left behind when the invoice cannot be made; voiding it later drops these lines (they were never work).
+ */
+export type QuickLine = { description: string; quantity: number; unitPriceCents: number; taxable: boolean };
+export async function quickInvoice(actorId: string, p: Omit<InvoiceDraft, "itemIds" | "kinds" | "from" | "to"> & { lines: QuickLine[] }) {
+  const day = p.issuedOn ?? todayQc();
+  const now = new Date();
+  const items = await db()
+    .insert(schema.billingItems)
+    .values(
+      p.lines.map((l) => {
+        const quantityX100 = Math.round(l.quantity * 100);
+        return {
+          clientId: p.clientId,
+          kind: "charge",
+          source: "manual",
+          sourceId: `manual:${crypto.randomUUID()}`,
+          date: day,
+          description: l.description,
+          quantityX100,
+          unitPriceCents: l.unitPriceCents,
+          amountCents: amountOf(quantityX100, l.unitPriceCents),
+          taxable: l.taxable,
+          status: "approved",
+          approvedBy: actorId,
+          approvedAt: now,
+          edited: true,
+        };
+      }),
+    )
+    .returning({ id: schema.billingItems.id });
+  const { lines: _lines, ...draft } = p;
+  try {
+    return await createInvoice(actorId, { ...draft, itemIds: items.map((i) => i.id) });
+  } catch (e) {
+    await db().delete(schema.billingItems).where(inArray(schema.billingItems.id, items.map((i) => i.id)));
+    throw e;
+  }
 }
 
 /** What invoicing every client at once would make (their defaults). */

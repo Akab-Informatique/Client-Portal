@@ -3,7 +3,8 @@ import { Link, useSearchParams } from "react-router-dom";
 import { useTranslation } from "react-i18next";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
-import { AlertTriangle, ArrowDown, ArrowUp, ArrowUpDown, CircleCheck, CircleDashed, Clock, FileText, FileX, Loader2, Mail, MailX, RotateCcw, Search, type LucideIcon } from "lucide-react";
+import { AlertTriangle, ArrowDown, ArrowUp, ArrowUpDown, CircleCheck, CircleDashed, Clock, FilePlus2, FileText, FileX, Loader2, Mail, MailX, RotateCcw, Search, type LucideIcon } from "lucide-react";
+import { QuickInvoiceDialog } from "./QuickInvoice";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
@@ -183,6 +184,7 @@ export function AllInvoices() {
   );
   const manage = can("accounting.manage");
   const [statements, setStatements] = useState(false);
+  const [quick, setQuick] = useState(false);
   const active = (Object.keys(KEYS) as Filter[]).some((k) => (k === "status" ? get(k) !== "open" : get(k))) || params.has("isort");
 
   // quick date ranges on the issue date
@@ -299,12 +301,18 @@ export function AllInvoices() {
       </div>
 
       {/* Account statements: for every client that owes something, or the ones chosen */}
-      <div className="flex justify-end">
+      <div className="flex justify-end gap-2">
+        {can("accounting.manage") && (
+          <Button type="button" size="sm" onClick={() => setQuick(true)} className="bg-grad-gold font-semibold text-[#1a1204] hover:brightness-105">
+            <FilePlus2 className="size-3.5" /> {t("quickInvoice.open")}
+          </Button>
+        )}
         <Button type="button" size="sm" variant="outline" onClick={() => setStatements(true)}>
           <FileText className="size-3.5" /> {t("statements.bulkTitle")}
         </Button>
       </div>
       {statements && <StatementsDialog onClose={() => setStatements(false)} />}
+      {quick && <QuickInvoiceDialog onClose={() => setQuick(false)} />}
 
       {/* Totals of what is shown */}
       {data && (
