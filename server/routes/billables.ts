@@ -4,7 +4,7 @@ import { z } from "zod";
 import { auth, requirePermission, requireStaff, type AppEnv } from "../lib/auth.ts";
 import { audit } from "../lib/audit.ts";
 import { body, zUuid } from "../lib/validate.ts";
-import { BILLABLE_KINDS, refreshLabourRates, billableCounts, billablesState, createInvoice, DraftError, draftInvoice, editBillable, invoiceableClients, listBillables, postInvoices, postPreview, setBillableStatus, syncBillables, unpostInvoice } from "../lib/billables.ts";
+import { approvedSpan, BILLABLE_KINDS, refreshLabourRates, billableCounts, billablesState, createInvoice, DraftError, draftInvoice, editBillable, invoiceableClients, listBillables, postInvoices, postPreview, setBillableStatus, syncBillables, unpostInvoice } from "../lib/billables.ts";
 import type { BillableKind } from "../lib/ticketSource.ts";
 import { autoSync, createQbItem, invoiceChoices } from "../lib/quickbooks.ts";
 import { quickbooksSettings } from "../lib/billing.ts";
@@ -141,6 +141,7 @@ export const billablesRoutes = new Hono<AppEnv>()
 
   // ── Créer des factures: a client, the kinds or lines, dates, terms, notes ──
   .get("/clients", async (c) => c.json(await invoiceableClients(periodOf((k) => c.req.query(k)))))
+  .get("/approved-span", async (c) => c.json(await approvedSpan()))
   .post("/invoice/preview", async (c) => {
     const p = await body(c, zDraft);
     return c.json(await drafted(() => draftInvoice(p)));

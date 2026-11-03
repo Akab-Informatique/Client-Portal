@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
+import { useNavigate } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { Ban, BellRing, Download, ExternalLink, Eye, FileText, Loader2, Mail, MailWarning, Search, Send } from "lucide-react";
@@ -331,11 +332,16 @@ export function InvoiceVoidButton({ invoice, compact }: { invoice: { id: string;
   const can = useCan();
   const confirm = useConfirm();
   const qc = useQueryClient();
+  const navigate = useNavigate();
   const run = useMutation({
-    mutationFn: () => api.post<{ number: string; items: number; quickbooks: boolean }>("/billables/unpost", { invoiceId: invoice.id }),
+    mutationFn: () => api.post<{ number: string; items: number; quickbooks: boolean; from: string | null; to: string | null }>("/billables/unpost", { invoiceId: invoice.id }),
     onSuccess: (r) => {
       void qc.invalidateQueries();
-      toast.success(t(r.quickbooks ? "statements.voidedQb" : "statements.voided", { number: r.number, count: r.items }));
+      // Éléments à facturer lists one time frame: open it on the days of the work given back
+      toast.success(t(r.quickbooks ? "statements.voidedQb" : "statements.voided", { number: r.number, count: r.items }), {
+        duration: 10000,
+        ...(r.from && r.to ? { action: { label: t("statements.voidedSee"), onClick: () => navigate(`/accounting/invoices?tab=items&period=custom&from=${r.from}&to=${r.to}`) } } : {}),
+      });
     },
     onError: (e) => {
       const code = e instanceof ApiError ? e.code : "";

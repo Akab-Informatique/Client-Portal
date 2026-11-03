@@ -5616,8 +5616,14 @@ describe("un-post: take back an invoice made by the portal", () => {
     // accounting only
     expect((await tech.post("/api/billables/unpost", { invoiceId: made.id })).status).toBe(403);
     const back = await admin.post("/api/billables/unpost", { invoiceId: made.id });
-    expect(back.json).toMatchObject({ number: made.number, items: 1 });
+    // the answer gives the days of the work given back (Éléments à facturer opens on them)
+    expect(back.json).toMatchObject({ number: made.number, items: 1, from: "2026-10-10", to: "2026-10-10" });
     expect((await db().select().from(schema.billingItems).where(eq(schema.billingItems.id, it.id)))[0]).toMatchObject({ status: "approved", invoiceId: null, postedAt: null });
+    // waiting for an invoice whatever the time frame: counted by the span, listed once the days are shown
+    const span = (await admin.get("/api/billables/approved-span")).json;
+    expect(span.count).toBeGreaterThanOrEqual(1);
+    expect(span.from <= "2026-10-10" && span.to >= "2026-10-10").toBe(true);
+    expect((await admin.get("/api/billables/clients?from=2026-10-10&to=2026-10-10")).json.some((g: any) => g.client.id === c.id)).toBe(true);
     expect((await db().select().from(schema.clientInvoices).where(eq(schema.clientInvoices.id, made.id)))[0]).toMatchObject({ voided: true, number: made.number });
     expect((await admin.post("/api/billables/unpost", { invoiceId: made.id })).json.error).toBe("invoice_voided");
     // the items can be invoiced again

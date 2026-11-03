@@ -542,7 +542,7 @@ export function createInvoice(actorId: string, p: InvoiceDraft) {
  * Take back an invoice made by the portal: it is voided (its number stays, shown as voided) and its items are
  * approved again, ready for another invoice. Refused once money was received, or the invoice is in QuickBooks.
  */
-export async function unpostInvoice(actorId: string, invoiceId: string): Promise<{ number: string; items: number; quickbooks: boolean }> {
+export async function unpostInvoice(actorId: string, invoiceId: string): Promise<{ number: string; items: number; quickbooks: boolean; from: string | null; to: string | null }> {
   const [inv] = await db().select().from(schema.clientInvoices).where(eq(schema.clientInvoices.id, invoiceId));
   if (!inv) throw new DraftError("not_found");
   if (inv.source !== "portal") throw new DraftError("invoice_not_portal");
@@ -564,10 +564,22 @@ export async function unpostInvoice(actorId: string, invoiceId: string): Promise
       .update(schema.billingItems)
       .set({ status: "approved", invoiceId: null, postedAt: null, approvedBy: actorId, approvedAt: now, updatedAt: now })
       .where(and(eq(schema.billingItems.invoiceId, invoiceId), eq(schema.billingItems.status, "posted")))
-      .returning({ id: schema.billingItems.id });
-    return back.length;
+      .returning({ id: schema.billingItems.id, date: schema.billingItems.date });
+    return back;
   });
-  return { number: inv.number, items, quickbooks: Boolean(inv.quickbooksId) };
+  // the days of the work given back: Éléments à facturer opens on them (it lists one time frame only)
+  const days = items.map((i) => i.date).sort();
+  return { number: inv.number, items: items.length, quickbooks: Boolean(inv.quickbooksId), from: days[0] ?? null, to: days.at(-1) ?? null };
+}
+
+/** Every approved item waiting for an invoice, whatever its day: how many, and the first and last day. */
+export async function approvedSpan() {
+  const b = schema.billingItems;
+  const [r] = await db()
+    .select({ n: sql<number>`count(*)::int`, from: sql<string | null>`min(${b.date})`, to: sql<string | null>`max(${b.date})` })
+    .from(b)
+    .where(eq(b.status, "approved"));
+  return { count: r?.n ?? 0, from: r?.from ?? null, to: r?.to ?? null };
 }
 
 /** What invoicing every client at once would make (their defaults). */

@@ -91,8 +91,9 @@ export function ItemsToInvoice() {
           ) : (
             <>
               <PeriodBar period={period} onChange={set} />
+              <OutsidePeriod ready={ready} onShow={(from, to) => set({ unit: "custom", from, to })} />
               <InvoiceFolder lang={i18n.language} period={period} />
-              <MadeInvoices lang={i18n.language} period={period} />
+              <MadeInvoices lang={i18n.language} period={period} onBack={(from, to) => set({ unit: "custom", from, to })} />
             </>
           )}
         </div>
@@ -103,8 +104,31 @@ export function ItemsToInvoice() {
 
 type Made = { id: string; number: string; company: string; issuedOn: string; totalCents: number; paidCents: number; status: string; quickbooks: { id: string | null } | null };
 
+/**
+ * Approved work outside the time frame (a voided invoice of last month gives its work back on its own days):
+ * said, with a click to widen the time frame to every day that has some.
+ */
+function OutsidePeriod({ ready, onShow }: { ready: Ready[]; onShow: (from: string, to: string) => void }) {
+  const { t } = useTranslation();
+  const { data: span } = useQuery({
+    queryKey: [...KEY, "approved-span"],
+    queryFn: () => api.get<{ count: number; from: string | null; to: string | null }>("/billables/approved-span"),
+  });
+  const inside = ready.reduce((n, g) => n + g.kinds.reduce((m, k) => m + k.count, 0), 0);
+  const outside = (span?.count ?? 0) - inside;
+  if (outside <= 0 || !span?.from || !span.to) return null;
+  return (
+    <div className="flex flex-wrap items-center justify-between gap-2 rounded-xl border border-amber-400/30 bg-amber-400/10 px-3 py-2 text-sm text-amber-200">
+      <span>{t("invoicing.outside", { count: outside })}</span>
+      <Button type="button" size="sm" variant="outline" className="h-7 text-xs" onClick={() => onShow(span.from!, span.to!)}>
+        {t("invoicing.outsideShow")}
+      </Button>
+    </div>
+  );
+}
+
 /** Invoices made by the portal in the time frame: take one back and its items are approved again */
-function MadeInvoices({ lang, period }: { lang: string; period: Period }) {
+function MadeInvoices({ lang, period, onBack }: { lang: string; period: Period; onBack: (from: string, to: string) => void }) {
   const { t } = useTranslation();
   const can = useCan();
   const qc = useQueryClient();
@@ -114,10 +138,12 @@ function MadeInvoices({ lang, period }: { lang: string; period: Period }) {
     queryFn: () => api.get<{ items: Made[] }>(`/crm/invoices?source=portal&from=${period.from}&to=${period.to}`),
   });
   const unpost = useMutation({
-    mutationFn: (id: string) => api.post<{ number: string; items: number }>("/billables/unpost", { invoiceId: id }),
+    mutationFn: (id: string) => api.post<{ number: string; items: number; from: string | null; to: string | null }>("/billables/unpost", { invoiceId: id }),
     onSuccess: (r) => {
       void qc.invalidateQueries({ queryKey: KEY });
       void qc.invalidateQueries({ queryKey: ["crm"] });
+      // the work given back may be of other days than the time frame shown: show them
+      if (r.from && r.to && (r.from < period.from || r.to > period.to)) onBack(r.from < period.from ? r.from : period.from, r.to > period.to ? r.to : period.to);
       toast.success(t("invoicing.unposted", { number: r.number, count: r.items }));
     },
     onError: (e: unknown) => {
