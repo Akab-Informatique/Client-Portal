@@ -10,16 +10,21 @@ import { Input } from "@/components/ui/input";
 import { api, ApiError } from "@/lib/api";
 import { money } from "@/pages/crm/shared";
 
-type Summary = {
-  status: "pending" | "active";
-  client: string;
-  contract: string;
+type Contract = {
+  name: string;
   period: "monthly" | "yearly";
   startDate: string | null;
   endDate: string | null;
   monthlyCents: number | null;
   bundle: { quantity: number; unitCents: number } | null;
   lines: { name: string; quantity: number; yearly: boolean; unitCents: number }[];
+};
+type Summary = {
+  status: "pending" | "active";
+  client: string;
+  /** The contracts' names, as one phrase */
+  contract: string;
+  contracts: Contract[];
   taxes: { gst: number; qst: number } | null;
   cardFee: number | null;
   text: string;
@@ -81,41 +86,45 @@ export function CardAutopayPage() {
             }}
           >
             <div className="space-y-1">
-              <h1 className="text-2xl font-bold leading-tight">{t("cardPage.title")}</h1>
+              <h1 className="text-2xl font-bold leading-tight">{t("cardPage.title", { count: data.contracts.length })}</h1>
               <p className="text-sm text-muted-foreground">{t("cardPage.subtitle", { client: data.client })}</p>
             </div>
             {q.has("annule") && <p className="rounded-xl border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-sm text-amber-200">{t("cardPage.cancelled")}</p>}
 
             <section className="space-y-3 rounded-2xl border bg-card/60 p-4">
-              <div className="flex flex-wrap items-baseline justify-between gap-2">
-                <p className="font-semibold">{data.contract}</p>
-                {data.monthlyCents != null && (
-                  <p className="text-sm">
-                    <span className="font-mono text-lg font-bold text-primary">{m(data.monthlyCents)}</span> <span className="text-muted-foreground">{t("cardPage.perMonth")}</span>
-                  </p>
-                )}
-              </div>
-              {(data.bundle || data.lines.length > 0) && (
-                <ul className="space-y-1 text-sm">
-                  {data.bundle ? (
-                    <li className="flex justify-between gap-3">
-                      <span>{t("cardPage.bundle", { qty: data.bundle.quantity })}</span>
-                      <span className="font-mono">{m(data.bundle.unitCents * data.bundle.quantity)}</span>
-                    </li>
-                  ) : (
-                    data.lines.map((l, i) => (
-                      <li key={i} className="flex justify-between gap-3">
-                        <span className="min-w-0">
-                          {l.name} {l.quantity > 1 && <span className="text-muted-foreground">× {l.quantity}</span>}
-                        </span>
-                        <span className="shrink-0 font-mono">
-                          {m(l.unitCents * l.quantity)} <span className="text-xs text-muted-foreground">{t(l.yearly ? "cardPage.yearly" : "cardPage.monthly")}</span>
-                        </span>
-                      </li>
-                    ))
+              {data.contracts.map((k, n) => (
+                <div key={n} className={n > 0 ? "space-y-2 border-t pt-3" : "space-y-2"}>
+                  <div className="flex flex-wrap items-baseline justify-between gap-2">
+                    <p className="font-semibold">{k.name}</p>
+                    {k.monthlyCents != null && (
+                      <p className="text-sm">
+                        <span className="font-mono text-lg font-bold text-primary">{m(k.monthlyCents)}</span> <span className="text-muted-foreground">{t("cardPage.perMonth")}</span>
+                      </p>
+                    )}
+                  </div>
+                  {(k.bundle || k.lines.length > 0) && (
+                    <ul className="space-y-1 text-sm">
+                      {k.bundle ? (
+                        <li className="flex justify-between gap-3">
+                          <span>{t("cardPage.bundle", { qty: k.bundle.quantity })}</span>
+                          <span className="font-mono">{m(k.bundle.unitCents * k.bundle.quantity)}</span>
+                        </li>
+                      ) : (
+                        k.lines.map((l, i) => (
+                          <li key={i} className="flex justify-between gap-3">
+                            <span className="min-w-0">
+                              {l.name} {l.quantity > 1 && <span className="text-muted-foreground">× {l.quantity}</span>}
+                            </span>
+                            <span className="shrink-0 font-mono">
+                              {m(l.unitCents * l.quantity)} <span className="text-xs text-muted-foreground">{t(l.yearly ? "cardPage.yearly" : "cardPage.monthly")}</span>
+                            </span>
+                          </li>
+                        ))
+                      )}
+                    </ul>
                   )}
-                </ul>
-              )}
+                </div>
+              ))}
               <p className="text-xs text-muted-foreground">
                 {data.taxes ? t("cardPage.taxes") : t("cardPage.exempt")}
                 {data.cardFee != null && ` ${t("cardPage.fee", { pct: data.cardFee.toLocaleString(i18n.language === "en" ? "en-CA" : "fr-CA") })}`}

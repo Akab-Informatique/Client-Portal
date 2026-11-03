@@ -1,0 +1,1 @@
+ALTER TABLE "contract_autopay" ADD COLUMN "batch_id" uuid;

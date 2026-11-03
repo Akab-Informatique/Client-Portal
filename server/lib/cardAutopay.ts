@@ -34,10 +34,10 @@ type Row = typeof schema.contractAutopay.$inferSelect;
 const today = () => new Date().toLocaleDateString("en-CA", { timeZone: "America/Toronto" });
 
 /** The words the client agrees to (kept as they were, with the acceptance) */
-export function authorizationText(lang: "fr" | "en", contract: string, client: string) {
+export function authorizationText(lang: "fr" | "en", contract: string, client: string, count = 1) {
   return lang === "en"
-    ? `I authorize AKAB Informatique to charge to the card I save the invoices of the contract "${contract}" of ${client}, on the day each one is made. The amount follows the contract and may change when services are added or removed. Each invoice is emailed to us. This authorization can be cancelled at any time by writing to AKAB Informatique.`
-    : `J'autorise AKAB Informatique à prélever sur la carte que j'enregistre les factures du contrat « ${contract} » de ${client}, le jour où chacune est faite. Le montant suit le contrat et peut changer si des services sont ajoutés ou retirés. Chaque facture nous est envoyée par courriel. Cette autorisation peut être annulée en tout temps en écrivant à AKAB Informatique.`;
+    ? `I authorize AKAB Informatique to charge to the card I save the invoices of the ${count > 1 ? "contracts" : "contract"} "${contract}" of ${client}, on the day each one is made. The amount follows the contract and may change when services are added or removed. Each invoice is emailed to us. This authorization can be cancelled at any time by writing to AKAB Informatique.`
+    : `J'autorise AKAB Informatique à prélever sur la carte que j'enregistre les factures ${count > 1 ? "des contrats" : "du contrat"} « ${contract} » de ${client}, le jour où chacune est faite. Le montant suit le contrat et peut changer si des services sont ajoutés ou retirés. Chaque facture nous est envoyée par courriel. Cette autorisation peut être annulée en tout temps en écrivant à AKAB Informatique.`;
 }
 
 /** Stripe can save a card and charge it (no payment links or webhook needed: the result is read back from Stripe) */
@@ -69,19 +69,61 @@ async function contractOf(contractId: string) {
   return { k, client };
 }
 
-/** A link to send: a new waiting authorization (an older waiting one is dropped; an active card stays until the new one is saved) */
-export async function requestAutopay(actorId: string, contractId: string, email: string | null) {
-  const { k, client } = await contractOf(contractId);
-  if (!k.active) throw new AutopayError("contract_inactive");
-  const to = (email || client.invoice?.billingEmail || client.email || "").trim() || null;
-  await db()
-    .update(schema.contractAutopay)
-    .set({ status: "revoked", revokedAt: new Date() })
-    .where(and(eq(schema.contractAutopay.contractId, k.id), eq(schema.contractAutopay.status, "pending")));
-  const [row] = await db().insert(schema.contractAutopay).values({ clientId: client.id, contractId: k.id, email: to, requestedBy: actorId }).returning();
-  await audit(actorId, "billing.autopay_requested", k.id, { client: client.name, contract: k.name, to });
-  return { row, url: autopayUrl(row.id), client, contract: k };
+/** "A", "A et B", "A, B et C" */
+const listOf = (names: string[], lang: "fr" | "en") => (names.length < 2 ? (names[0] ?? "") : `${names.slice(0, -1).join(", ")} ${lang === "en" ? "and" : "et"} ${names.at(-1)}`);
+
+/** The authorizations sent together with this one (one link, one acceptance, one card), this one first */
+async function batchOf(row: Row): Promise<Row[]> {
+  if (!row.batchId) return [row];
+  const rows = await db()
+    .select()
+    .from(schema.contractAutopay)
+    .where(and(eq(schema.contractAutopay.batchId, row.batchId), ne(schema.contractAutopay.status, "revoked")))
+    .orderBy(asc(schema.contractAutopay.createdAt));
+  return [row, ...rows.filter((r) => r.id !== row.id)];
 }
+
+/**
+ * Links to send: one per client, for all of that client's contracts given (one acceptance and one card cover them).
+ * An older link waiting for the same contract is dropped; an active card stays until the new one is saved.
+ */
+export async function requestAutopays(actorId: string, contractIds: string[], email: string | null) {
+  const contracts = contractIds.length ? await db().select().from(schema.clientContracts).where(inArray(schema.clientContracts.id, contractIds)) : [];
+  if (contracts.length !== new Set(contractIds).size) throw new AutopayError("not_found");
+  const byClient = new Map<string, typeof contracts>();
+  for (const k of contracts) byClient.set(k.clientId, [...(byClient.get(k.clientId) ?? []), k]);
+  const out: { client: typeof schema.clients.$inferSelect; contracts: typeof contracts; lead: Row; url: string; skipped: string[] }[] = [];
+  for (const [clientId, ks] of byClient) {
+    const [client] = await db().select().from(schema.clients).where(eq(schema.clients.id, clientId));
+    if (!client) continue;
+    const live = ks.filter((k) => k.active);
+    if (!live.length) throw new AutopayError("contract_inactive");
+    const to = (email || client.invoice?.billingEmail || client.email || "").trim() || null;
+    await db()
+      .update(schema.contractAutopay)
+      .set({ status: "revoked", revokedAt: new Date() })
+      .where(and(inArray(schema.contractAutopay.contractId, live.map((k) => k.id)), eq(schema.contractAutopay.status, "pending")));
+    const batchId = live.length > 1 ? crypto.randomUUID() : null;
+    const rows = await db()
+      .insert(schema.contractAutopay)
+      .values(live.map((k) => ({ clientId, contractId: k.id, email: to, requestedBy: actorId, batchId })))
+      .returning();
+    const lead = rows.find((r) => r.contractId === live[0]!.id)!;
+    await audit(actorId, "billing.autopay_requested", live[0]!.id, { client: client.name, contracts: live.map((k) => k.name), to });
+    out.push({ client, contracts: live, lead, url: autopayUrl(lead.id), skipped: ks.filter((k) => !k.active).map((k) => k.name) });
+  }
+  return out;
+}
+
+/** A link for one contract */
+export async function requestAutopay(actorId: string, contractId: string, email: string | null) {
+  const [r] = await requestAutopays(actorId, [contractId], email);
+  if (!r) throw new AutopayError("not_found");
+  return { row: r.lead, url: r.url, client: r.client, contract: r.contracts[0]! };
+}
+
+/** The names of the contracts a link covers, as the client reads them */
+export const contractNames = (names: string[], lang: "fr" | "en") => listOf(names, lang);
 
 export async function revokeAutopay(actorId: string, contractId: string) {
   const rows = await db()
@@ -93,30 +135,32 @@ export async function revokeAutopay(actorId: string, contractId: string) {
   return rows.length;
 }
 
-/** What the client sees before accepting: the contract, its lines after rebates, what it charges and the card fee */
+/** What the client sees before accepting: each contract, its lines after rebates, what it charges, and the card fee */
 export async function autopaySummary(id: string) {
   await refreshFromStripe(id).catch(() => undefined);
   const [row] = await db().select().from(schema.contractAutopay).where(eq(schema.contractAutopay.id, id));
   if (!row || row.status === "revoked") return null;
-  const { k, client } = await contractOf(row.contractId);
+  const rows = await batchOf(row);
+  const { client } = await contractOf(row.contractId);
   const s = await billingSettings();
-  const lines = (await db().select().from(schema.contractServices).where(eq(schema.contractServices.contractId, k.id)).orderBy(asc(schema.contractServices.name)))
-    .map((l) => ({ name: l.name, quantity: l.quantity, yearly: l.kind === "recurring_yearly", unitCents: netCents(l.priceCents, combineBps(l.rebateBps, k.rebateBps)) }));
-  const bundle = k.bundlePriceCents != null ? { quantity: k.bundleQuantity ?? 1, unitCents: netCents(k.bundlePriceCents, k.rebateBps) } : null;
+  const contracts = [];
+  for (const r of rows) {
+    const { k } = await contractOf(r.contractId);
+    const lines = (await db().select().from(schema.contractServices).where(eq(schema.contractServices.contractId, k.id)).orderBy(asc(schema.contractServices.name)))
+      .map((l) => ({ name: l.name, quantity: l.quantity, yearly: l.kind === "recurring_yearly", unitCents: netCents(l.priceCents, combineBps(l.rebateBps, k.rebateBps)) }));
+    const bundle = k.bundlePriceCents != null ? { quantity: k.bundleQuantity ?? 1, unitCents: netCents(k.bundlePriceCents, k.rebateBps) } : null;
+    contracts.push({ name: k.name, period: k.billingPeriod === "yearly" ? "yearly" : "monthly", startDate: k.startDate, endDate: k.endDate, monthlyCents: k.monthlyRateCents ?? null, bundle, lines: bundle ? [] : lines });
+  }
   const lang = s.template.language;
+  const names = contractNames(contracts.map((x) => x.name), lang);
   return {
     status: row.status,
     client: client.name,
-    contract: k.name,
-    period: k.billingPeriod === "yearly" ? "yearly" : "monthly",
-    startDate: k.startDate,
-    endDate: k.endDate,
-    monthlyCents: k.monthlyRateCents ?? null,
-    bundle,
-    lines: bundle ? [] : lines,
+    contract: names,
+    contracts,
     taxes: client.invoice?.taxes === false ? null : { gst: s.taxes.gstRate, qst: s.taxes.qstRate },
     cardFee: s.cardFee.enabled && !client.invoice?.consumer ? s.cardFee.percent : null,
-    text: authorizationText(lang, k.name, client.name),
+    text: authorizationText(lang, names, client.name, contracts.length),
     card: row.status === "active" ? { brand: row.cardBrand, last4: row.cardLast4, expMonth: row.cardExpMonth, expYear: row.cardExpYear } : null,
     accepted: Boolean(row.acceptedAt),
   };
@@ -125,22 +169,24 @@ export async function autopaySummary(id: string) {
 type SetupSession = { id: string; url?: string | null; status?: string; customer?: string | null; livemode?: boolean; setup_intent?: string | { id: string; status?: string; payment_method?: string | PaymentMethod } | null };
 type PaymentMethod = { id: string; card?: { brand?: string; last4?: string; exp_month?: number; exp_year?: number; funding?: string } };
 
-/** The client accepts: the acceptance is kept, then Stripe's page to save the card (its address is returned) */
+/** The client accepts: the acceptance is kept on every contract of the link, then Stripe's page to save the card (its address is returned) */
 export async function acceptAutopay(id: string, name: string, ip: string | null) {
   const [row] = await db().select().from(schema.contractAutopay).where(eq(schema.contractAutopay.id, id));
   if (!row || row.status === "revoked") throw new AutopayError("not_found");
   if (row.status === "active") throw new AutopayError("already_active");
   if (!(await autopayReady())) throw new AutopayError("stripe_not_ready");
   const key = await stripeKey();
-  const { k, client } = await contractOf(row.contractId);
+  const rows = await batchOf(row);
+  const { client } = await contractOf(row.contractId);
+  const ks = await db().select().from(schema.clientContracts).where(inArray(schema.clientContracts.id, rows.map((r) => r.contractId)));
   const s = await billingSettings();
+  const names = contractNames(rows.map((r) => ks.find((k) => k.id === r.contractId)?.name ?? ""), s.template.language);
   let customer = row.stripeCustomerId;
   if (!customer) {
     const c = await stripeCall<{ id: string }>(key, "POST", "/customers", {
       name: client.name.slice(0, 250),
       ...(row.email ? { email: row.email } : {}),
       "metadata[client_id]": client.id,
-      "metadata[contract_id]": k.id,
     }, `autopay-customer-${row.id}`);
     customer = c.id;
   }
@@ -153,35 +199,38 @@ export async function acceptAutopay(id: string, name: string, ip: string | null)
     "payment_method_types[0]": "card",
     "metadata[autopay_id]": row.id,
     "setup_intent_data[metadata][autopay_id]": row.id,
-    "setup_intent_data[description]": `Paiement automatique - ${k.name}`.slice(0, 250),
+    "setup_intent_data[description]": `Paiement automatique - ${names}`.slice(0, 250),
     success_url: `${base}/carte/${token}?ok=1`,
     cancel_url: `${base}/carte/${token}?annule=1`,
   });
   if (!session.url) throw new StripeError("api", "no_url");
   await db()
     .update(schema.contractAutopay)
-    .set({ acceptedName: name, acceptedAt: new Date(), acceptedIp: ip, acceptedText: authorizationText(s.template.language, k.name, client.name), stripeCustomerId: customer, setupSessionId: session.id, live: Boolean(session.livemode) })
-    .where(eq(schema.contractAutopay.id, row.id));
-  await audit(null, "billing.autopay_accepted", k.id, { client: client.name, contract: k.name, name, ip });
+    .set({ acceptedName: name, acceptedAt: new Date(), acceptedIp: ip, acceptedText: authorizationText(s.template.language, names, client.name, rows.length), stripeCustomerId: customer, setupSessionId: session.id, live: Boolean(session.livemode) })
+    .where(inArray(schema.contractAutopay.id, rows.map((r) => r.id)));
+  await audit(null, "billing.autopay_accepted", row.contractId, { client: client.name, contracts: names, name, ip });
   return session.url;
 }
 
-/** A setup session that is done: the card is read back (brand, last 4, expiry, credit or debit) and made the active one */
+/** A setup session that is done: the card is read back (brand, last 4, expiry, credit or debit) and made the active one on every contract of the link */
 export async function completeSetup(sessionId: string) {
-  const [row] = await db().select().from(schema.contractAutopay).where(eq(schema.contractAutopay.setupSessionId, sessionId));
-  if (!row || row.status !== "pending") return "ignored";
+  const rows = await db()
+    .select()
+    .from(schema.contractAutopay)
+    .where(and(eq(schema.contractAutopay.setupSessionId, sessionId), eq(schema.contractAutopay.status, "pending")));
+  if (!rows.length) return "ignored";
   const key = await stripeKey();
   const session = await stripeCall<SetupSession>(key, "GET", `/checkout/sessions/${encodeURIComponent(sessionId)}?expand[]=setup_intent.payment_method`);
   const si = typeof session.setup_intent === "object" ? session.setup_intent : null;
   const pm = si && typeof si.payment_method === "object" ? si.payment_method : null;
   if (session.status !== "complete" || !pm?.card) return "waiting";
-  const customer = session.customer ?? row.stripeCustomerId;
+  const customer = session.customer ?? rows[0]!.stripeCustomerId;
   if (customer) await stripeCall(key, "POST", `/customers/${encodeURIComponent(customer)}`, { "invoice_settings[default_payment_method]": pm.id }).catch(() => undefined);
-  // the new card replaces the one that was active on this contract
+  // the new card replaces the one that was active on these contracts
   await db()
     .update(schema.contractAutopay)
     .set({ status: "revoked", revokedAt: new Date() })
-    .where(and(eq(schema.contractAutopay.contractId, row.contractId), eq(schema.contractAutopay.status, "active")));
+    .where(and(inArray(schema.contractAutopay.contractId, rows.map((r) => r.contractId)), eq(schema.contractAutopay.status, "active")));
   await db()
     .update(schema.contractAutopay)
     .set({
@@ -196,9 +245,9 @@ export async function completeSetup(sessionId: string) {
       live: Boolean(session.livemode),
       lastError: null,
     })
-    .where(eq(schema.contractAutopay.id, row.id));
-  await audit(null, "billing.autopay_card_saved", row.contractId, { brand: pm.card.brand, last4: pm.card.last4, funding: pm.card.funding });
-  // what was already approved for this contract is charged now
+    .where(inArray(schema.contractAutopay.id, rows.map((r) => r.id)));
+  for (const r of rows) await audit(null, "billing.autopay_card_saved", r.contractId, { brand: pm.card.brand, last4: pm.card.last4, funding: pm.card.funding });
+  // what was already approved for these contracts is charged now
   await runContractAutopay(null).catch(() => undefined);
   return "active";
 }

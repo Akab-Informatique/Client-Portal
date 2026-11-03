@@ -1,12 +1,13 @@
 import { Hono } from "hono";
 import { HTTPException } from "hono/http-exception";
 import { z } from "zod";
-import { eq } from "drizzle-orm";
+import { eq, inArray } from "drizzle-orm";
+import { billingSettings } from "../lib/billing.ts";
 import { db, schema } from "../db/index.ts";
 import { auth, requirePermission, requireStaff, type AppEnv } from "../lib/auth.ts";
 import { clientIp, rateLimit } from "../lib/http.ts";
 import { body, zEmail, zUuid } from "../lib/validate.ts";
-import { acceptAutopay, autopayOfContract, autopayOfToken, autopayReady, autopaySummary, AutopayError, autopayUrl, requestAutopay, revokeAutopay } from "../lib/cardAutopay.ts";
+import { acceptAutopay, autopayOfContract, autopayOfToken, autopayReady, autopaySummary, AutopayError, autopayUrl, contractNames, requestAutopay, requestAutopays, revokeAutopay } from "../lib/cardAutopay.ts";
 import { InvoiceMailError, sendAutopayRequest } from "../lib/invoiceMail.ts";
 import { StripeError } from "../lib/stripe.ts";
 
@@ -43,9 +44,14 @@ export const autopayRoutes = new Hono<AppEnv>()
 
   .use("/contracts/*", requireStaff)
   .get("/contracts/:contractId", requirePermission("crm.view"), async (c) => {
-    const row = await autopayOfContract(zUuid.parse(c.req.param("contractId")));
+    const contractId = zUuid.parse(c.req.param("contractId"));
+    const row = await autopayOfContract(contractId);
+    // where the link goes when no address is typed: the client's billing email, else its own
+    const [client] = await db().select({ email: schema.clients.email, invoice: schema.clients.invoice }).from(schema.clients).innerJoin(schema.clientContracts, eq(schema.clientContracts.clientId, schema.clients.id)).where(eq(schema.clientContracts.id, contractId));
+    const defaultEmail = (client?.invoice?.billingEmail || client?.email || "").trim() || null;
     return c.json({
       ready: await autopayReady(),
+      defaultEmail,
       autopay: row
         ? {
             id: row.id,
@@ -79,6 +85,41 @@ export const autopayRoutes = new Hono<AppEnv>()
     } catch (e) {
       return fail(e);
     }
+  })
+  /** Several contracts at once (Accounting › Contrats): one link and one email per client, for all its contracts picked */
+  .post("/send-many", requireStaff, requirePermission("crm.billing"), async (c) => {
+    const a = auth(c);
+    const p = await body(c, z.object({ contractIds: z.array(zUuid).min(1).max(300), send: z.boolean().default(true) }));
+    if (!(await autopayReady())) throw new HTTPException(409, { message: "stripe_not_ready" });
+    const out: { client: string; contracts: string[]; url: string | null; emailed: string | null; error: string | null }[] = [];
+    // each client on its own: one client's problem never stops the others
+    const ks = await db().select({ id: schema.clientContracts.id, clientId: schema.clientContracts.clientId }).from(schema.clientContracts).where(inArray(schema.clientContracts.id, p.contractIds));
+    const byClient = new Map<string, string[]>();
+    for (const k of ks) byClient.set(k.clientId, [...(byClient.get(k.clientId) ?? []), k.id]);
+    for (const ids of byClient.values()) {
+      try {
+        const [r] = await requestAutopays(a.user.id, ids, null);
+        if (!r) continue;
+        const names = r.contracts.map((k) => k.name);
+        let emailed: string | null = null;
+        let error: string | null = null;
+        if (p.send) {
+          if (!r.lead.email) error = "no_email";
+          else {
+            try {
+              emailed = await sendAutopayRequest({ to: r.lead.email, client: r.client, contract: contractNames(names, (await billingSettings()).template.language), link: r.url });
+            } catch (e) {
+              error = e instanceof InvoiceMailError ? e.message : "mail_failed";
+            }
+          }
+        }
+        out.push({ client: r.client.name, contracts: names, url: r.url, emailed, error });
+      } catch (e) {
+        const [k] = await db().select({ name: schema.clients.name }).from(schema.clients).innerJoin(schema.clientContracts, eq(schema.clientContracts.clientId, schema.clients.id)).where(eq(schema.clientContracts.id, ids[0]!));
+        out.push({ client: k?.name ?? "", contracts: [], url: null, emailed: null, error: e instanceof AutopayError ? e.message : "failed" });
+      }
+    }
+    return c.json({ results: out }, 201);
   })
   .delete("/contracts/:contractId", requirePermission("crm.billing"), async (c) => {
     const a = auth(c);

@@ -23,7 +23,7 @@ type Autopay = {
   lastError: string | null;
   url: string | null;
 };
-type State = { ready: boolean; autopay: Autopay | null };
+type State = { ready: boolean; defaultEmail: string | null; autopay: Autopay | null };
 
 export const autopayKey = (contractId: string) => ["crm", "autopay", contractId];
 export const brandName = (b: string | null | undefined) => (b ? b.charAt(0).toUpperCase() + b.slice(1) : "");
@@ -46,13 +46,15 @@ export function ContractAutopay({ contractId }: { contractId: string }) {
   const editable = can("crm.billing");
   const { data, isLoading } = useContractAutopay(contractId);
   const [email, setEmail] = useState("");
+  // the billing email by default; another address only when asked
+  const [other, setOther] = useState(false);
   const refresh = () => void qc.invalidateQueries({ queryKey: autopayKey(contractId) });
   const err = (e: unknown) => {
     const code = e instanceof ApiError ? e.code : "";
     toast.error(["stripe_not_ready", "no_email", "contract_inactive", "mail_not_configured", "mail_failed", "stripe_failed"].includes(code) ? t(`autopay.error.${code}`) : t("common.error"));
   };
   const send = useMutation({
-    mutationFn: (p: { send: boolean }) => api.post<{ url: string; emailed: string | null }>(`/autopay/contracts/${contractId}/send`, { send: p.send, ...(email.trim() ? { email: email.trim() } : {}) }),
+    mutationFn: (p: { send: boolean }) => api.post<{ url: string; emailed: string | null }>(`/autopay/contracts/${contractId}/send`, { send: p.send, ...(other && email.trim() ? { email: email.trim() } : {}) }),
     onSuccess: async (r) => {
       refresh();
       if (r.emailed) toast.success(t("autopay.sent", { to: r.emailed }));
@@ -140,12 +142,27 @@ export function ContractAutopay({ contractId }: { contractId: string }) {
 
       {editable && (
         <section className="space-y-2">
-          <label className="block max-w-md space-y-1.5 text-xs">
-            <span className="text-muted-foreground">{t("autopay.email")}</span>
-            <Input type="email" value={email} placeholder={t("autopay.emailHint")} onChange={(e) => setEmail(e.target.value)} />
-          </label>
+          {other || !data.defaultEmail ? (
+            <label className="block max-w-md space-y-1.5 text-xs">
+              <span className="text-muted-foreground">{t("autopay.email")}</span>
+              <Input type="email" value={email} autoFocus={other} placeholder={data.defaultEmail ?? t("autopay.emailHint")} onChange={(e) => setEmail(e.target.value)} />
+              {!data.defaultEmail && <span className="block text-amber-300">{t("autopay.noBillingEmail")}</span>}
+              {other && data.defaultEmail && (
+                <button type="button" className="text-primary hover:underline" onClick={() => { setOther(false); setEmail(""); }}>
+                  {t("autopay.useBilling", { to: data.defaultEmail })}
+                </button>
+              )}
+            </label>
+          ) : (
+            <p className="text-sm">
+              {t("autopay.sendsTo")} <span className="font-medium">{data.defaultEmail}</span> <span className="text-xs text-muted-foreground">{t("autopay.billingEmail")}</span>{" "}
+              <button type="button" className="text-xs text-primary hover:underline" onClick={() => setOther(true)}>
+                {t("autopay.change")}
+              </button>
+            </p>
+          )}
           <div className="flex flex-wrap gap-2">
-            <Button type="button" size="sm" disabled={!data.ready || send.isPending} onClick={() => send.mutate({ send: true })} className="bg-grad-gold font-semibold text-[#1a1204] hover:brightness-105">
+            <Button type="button" size="sm" disabled={!data.ready || send.isPending || (!data.defaultEmail && !email.trim()) || (other && !email.trim())} onClick={() => send.mutate({ send: true })} className="bg-grad-gold font-semibold text-[#1a1204] hover:brightness-105">
               {send.isPending ? <Loader2 className="size-3.5 animate-spin" /> : <Send className="size-3.5" />} {t(a?.status === "active" ? "autopay.replace" : a ? "autopay.resend" : "autopay.send")}
             </Button>
             <Button type="button" size="sm" variant="outline" disabled={!data.ready || send.isPending} onClick={() => send.mutate({ send: false })}>

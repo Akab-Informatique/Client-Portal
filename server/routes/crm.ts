@@ -954,6 +954,11 @@ export const crmRoutes = new Hono<AppEnv>()
     const names = new Map(clients.map((x) => [x.id, x.name]));
     const today = todayQc();
     const banks = await banksOf(rows);
+    // automatic card payment: active wins over a link waiting for the client
+    const autopay = new Map<string, string>();
+    for (const a of await d.select({ contractId: schema.contractAutopay.contractId, status: schema.contractAutopay.status }).from(schema.contractAutopay).where(ne(schema.contractAutopay.status, "revoked"))) {
+      if (autopay.get(a.contractId) !== "active") autopay.set(a.contractId, a.status);
+    }
     return c.json(
       rows.map((k) => {
         const lines = allLines.filter((l) => l.contractId === k.id);
@@ -972,6 +977,7 @@ export const crmRoutes = new Hono<AppEnv>()
           rebateBps: k.rebateBps,
           serviceCount: lines.length,
           bank: banks.get(k.id) ?? null,
+          autopay: autopay.get(k.id) ?? null,
           summary: summaryOf(k, lines, today),
         };
       }),

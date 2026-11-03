@@ -5706,7 +5706,7 @@ describe("a contract paid automatically by card", () => {
       // the public page (no sign-in): a bad signature is refused
       expect((await anon.get(`/api/autopay/public/${token.slice(0, -1)}${token.endsWith("a") ? "b" : "a"}`)).status).toBe(404);
       const page = (await anon.get(`/api/autopay/public/${token}`)).json;
-      expect(page).toMatchObject({ status: "pending", client: "Carte auto inc.", contract: "Soutien mensuel", monthlyCents: 10000, cardFee: null });
+      expect(page).toMatchObject({ status: "pending", client: "Carte auto inc.", contract: "Soutien mensuel", contracts: [{ name: "Soutien mensuel", monthlyCents: 10000 }], cardFee: null });
       expect(page.text).toContain("Soutien mensuel");
       expect((await anon.post(`/api/autopay/public/${token}/accept`, { name: "Jo", agree: false })).status).toBe(400);
       expect((await anon.post(`/api/autopay/public/${token}/accept`, { name: "Josée Client", agree: true })).json.url).toBe("https://checkout.stripe.test/cs_setup_1");
@@ -5749,6 +5749,28 @@ describe("a contract paid automatically by card", () => {
       expect(devOutbox.some((m) => m.subject.startsWith("Facture") && !m.subject.includes("payée"))).toBe(true);
       const bell = await db().select().from(schema.notifications).where(eq(schema.notifications.type, "billing.card_failed"));
       expect(bell.length).toBeGreaterThan(0);
+
+      // several contracts at once: one email and one link per client, one acceptance and one card for all of them
+      const [c2] = await db().insert(schema.clients).values({ name: "Deux contrats inc.", invoice: { billingEmail: "factures@deux.example" } }).returning();
+      const [ka, kb] = await db().insert(schema.clientContracts).values([{ clientId: c2.id, name: "Soutien" }, { clientId: c2.id, name: "Sauvegardes" }]).returning();
+      const [noMail] = await db().insert(schema.clients).values({ name: "Sans courriel inc." }).returning();
+      const [kc] = await db().insert(schema.clientContracts).values({ clientId: noMail.id, name: "Soutien" }).returning();
+      devOutbox.length = 0;
+      const many = (await admin.post("/api/autopay/send-many", { contractIds: [ka.id, kb.id, kc.id] })).json.results as any[];
+      expect(many).toHaveLength(2);
+      expect(many.find((r) => r.client === "Deux contrats inc.")).toMatchObject({ emailed: "factures@deux.example", contracts: ["Soutien", "Sauvegardes"] });
+      expect(many.find((r) => r.client === "Sans courriel inc.")).toMatchObject({ emailed: null, error: "no_email" });
+      expect(devOutbox.filter((m) => m.to === "factures@deux.example")).toHaveLength(1);
+      const t2 = many.find((r) => r.client === "Deux contrats inc.").url.split("/carte/")[1];
+      const page2 = (await anon.get(`/api/autopay/public/${t2}`)).json;
+      expect(page2.contracts.map((x: any) => x.name)).toEqual(["Soutien", "Sauvegardes"]);
+      expect(page2.text).toContain("des contrats");
+      await anon.post(`/api/autopay/public/${t2}/accept`, { name: "Luc Deux", agree: true });
+      expect((await anon.get(`/api/autopay/public/${t2}`)).json.status).toBe("active");
+      for (const id of [ka.id, kb.id]) expect((await admin.get(`/api/autopay/contracts/${id}`)).json.autopay).toMatchObject({ status: "active", acceptedName: "Luc Deux", card: { last4: "4242" } });
+      // the contract tab says where a link would go by default: the billing email
+      expect((await admin.get(`/api/autopay/contracts/${ka.id}`)).json.defaultEmail).toBe("factures@deux.example");
+      expect(((await admin.get("/api/crm/contracts")).json as any[]).find((x) => x.id === kb.id).autopay).toBe("active");
 
       // taken off: approved lines wait for a normal invoice again
       expect((await admin.del(`/api/autopay/contracts/${k.id}`)).json.revoked).toBe(1);

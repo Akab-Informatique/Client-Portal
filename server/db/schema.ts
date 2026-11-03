@@ -2102,6 +2102,8 @@ export const contractAutopay = pgTable(
     contractId: uuid("contract_id")
       .notNull()
       .references(() => clientContracts.id, { onDelete: "cascade" }),
+    /** Several contracts of a client sent together share one link, one acceptance and one card */
+    batchId: uuid("batch_id"),
     /** pending (link sent, not accepted) | active (card saved) | revoked */
     status: text("status").notNull().default("pending"),
     email: text("email"),
