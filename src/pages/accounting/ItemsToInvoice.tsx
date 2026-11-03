@@ -11,7 +11,7 @@ import { AiTextarea } from "@/components/AiPolish";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
-import { InvoiceSheet } from "@/components/InvoiceSheet";
+import { InvoiceSheet, type PayToggle } from "@/components/InvoiceSheet";
 import { api, ApiError } from "@/lib/api";
 import { useCan } from "@/lib/session";
 import { cn } from "@/lib/utils";
@@ -203,6 +203,9 @@ type Draft = {
   company: { legalName: string; address: string; phone: string; email: string; website: string };
   taxes: { gstNumber: string; qstNumber: string; gstRate: number; qstRate: number };
   template: { language: "fr" | "en"; footer: string; paymentInstructions: string; showPaymentLink: boolean };
+  /** The pay link of this invoice (its choice, else the client's, else the template's) and whether Stripe can take it */
+  payOnline: boolean;
+  payReady: boolean;
 };
 const INVOICE_KINDS: Kind[] = ["labour", "charge", "contract", "milestone", "expense", "project"];
 
@@ -271,6 +274,8 @@ function InvoiceEditor({ ready, lang, period }: { ready: Ready; lang: string; pe
   const [left, setLeft] = useState<Set<string>>(new Set());
   const [open, setOpen] = useState<Kind | null>(null);
   const [f, setF] = useState({ issuedOn: today, due: "terms" as "terms" | "date", termsDays: "", dueOn: "", poNumber: "", notes: "" });
+  // the Stripe pay link of this invoice: null = the client's choice, else the template's
+  const [pay, setPay] = useState<boolean | null>(null);
   // the QuickBooks item and tax code sent on every line of this invoice (filled in from the defaults, changed here when needed)
   const { data: qbCodes } = useQuery({
     queryKey: [...KEY, "qb-codes"],
@@ -297,6 +302,7 @@ function InvoiceEditor({ ready, lang, period }: { ready: Ready; lang: string; pe
     ...(f.due === "terms" && f.termsDays !== "" ? { termsDays: Number(f.termsDays) } : {}),
     poNumber: f.poNumber || null,
     notes: f.notes || null,
+    ...(pay !== null ? { payOnline: pay } : {}),
     // only the work of the time frame
     from: period.from,
     to: period.to,
@@ -521,15 +527,15 @@ function InvoiceEditor({ ready, lang, period }: { ready: Ready; lang: string; pe
           {t("approvals.invoice.preview")} {isFetching && <Loader2 className="size-3 animate-spin" />}
         </p>
         {!itemIds.length && <p className="rounded-2xl border border-dashed p-10 text-center text-sm text-muted-foreground">{t("approvals.invoice.pick")}</p>}
-        {itemIds.length > 0 && pv && <InvoicePaper d={pv} />}
+        {itemIds.length > 0 && pv && <InvoicePaper d={pv} payToggle={can("accounting.manage") ? { on: pv.payOnline, ready: pv.payReady, onChange: setPay } : undefined} />}
       </div>
     </div>
   );
 }
 
 /** The invoice as the client will see it (the same sheet as the template preview in Admin › Facturation). */
-function InvoicePaper({ d }: { d: Draft }) {
-  return <InvoiceSheet d={d} />;
+function InvoicePaper({ d, payToggle }: { d: Draft; payToggle?: PayToggle }) {
+  return <InvoiceSheet d={d} payToggle={payToggle} />;
 }
 
 /** What posting will make, client by client; then the invoices are made. */

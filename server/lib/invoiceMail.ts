@@ -102,7 +102,7 @@ export async function invoiceSender(): Promise<{ from: { name: string; address: 
 
 /** The PDF copy of an invoice and, when paying online is on for its client, the link to pay (in the email and in the PDF). */
 async function invoiceExtras(inv: Invoice, client: Client, balanceCents: number): Promise<{ payUrl: string; attachments: NonNullable<Mail["attachments"]> }> {
-  const payUrl = balanceCents > 0 && (await payOnlineFor(client)) ? payUrlOf(inv.id) : "";
+  const payUrl = balanceCents > 0 && (await payOnlineFor(client, inv)) ? payUrlOf(inv.id) : "";
   const pdf = await invoicePdf(inv.id, payUrl || null).catch((e) => {
     console.warn("[invoice mail] PDF not made:", e instanceof Error ? e.message : e);
     return null;

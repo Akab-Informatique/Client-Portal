@@ -286,6 +286,8 @@ export const clientInvoices = pgTable(
     qbTaxCodeId: text("qb_tax_code_id"),
     /** Sent to the client by email (marked by hand until the portal emails invoices) */
     emailedAt: timestamp("emailed_at", { withTimezone: true }),
+    /** "Pay online" (Stripe) in this invoice's emails: chosen when it was made; null = the client's choice, else the template's */
+    payOnline: boolean("pay_online"),
     syncedAt: timestamp("synced_at", { withTimezone: true }),
     createdAt: created(),
     updatedAt: updated(),

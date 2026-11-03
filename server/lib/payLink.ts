@@ -23,12 +23,20 @@ export function invoiceOfToken(token: string): string | null {
   return got.length === good.length && crypto.timingSafeEqual(got, good) ? id : null;
 }
 
-/** Is paying online on for this client: its own choice, else the default of the invoice template (and Stripe set up). */
-export async function payOnlineFor(client: { invoice: { payOnline?: boolean | null } | null }): Promise<boolean> {
-  const wanted = client.invoice?.payOnline ?? (await billingSettings()).template.showPaymentLink;
-  if (!wanted || !config.publicUrl) return false;
+/** Can an email carry a pay link at all: Stripe on with its keys, payment links and webhook, and the portal's public address. */
+export async function stripePayReady(): Promise<boolean> {
+  if (!config.publicUrl) return false;
   const s = await stripeSettings();
   return Boolean(s.enabled && s.secretKey && s.paymentLinks && s.webhookSecret);
+}
+
+/**
+ * Is paying online on: the invoice's own choice (made when it was made), else the client's, else the default of the invoice
+ * template — and Stripe set up.
+ */
+export async function payOnlineFor(client: { invoice: { payOnline?: boolean | null } | null }, invoice?: { payOnline?: boolean | null } | null): Promise<boolean> {
+  const wanted = invoice?.payOnline ?? client.invoice?.payOnline ?? (await billingSettings()).template.showPaymentLink;
+  return wanted ? stripePayReady() : false;
 }
 
 /** Where a click on the pay link goes: a Stripe page for the balance (one still open for long enough is reused), or null. */

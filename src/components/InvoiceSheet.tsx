@@ -1,6 +1,8 @@
 import { Fragment } from "react";
 import { useTranslation } from "react-i18next";
+import { CreditCard } from "lucide-react";
 import { Logo } from "@/components/brand/Logo";
+import { cn } from "@/lib/utils";
 import { money } from "@/pages/crm/shared";
 
 export type SheetData = {
@@ -23,6 +25,29 @@ export type SheetData = {
   template: { language: "fr" | "en"; footer: string; paymentInstructions: string; showPaymentLink: boolean };
 };
 
+/** The Stripe switch beside the payment instructions, while an invoice is made (never on the invoice itself) */
+export type PayToggle = { on: boolean; ready: boolean; onChange: (on: boolean) => void };
+
+function PayButton({ on, ready, onChange }: PayToggle) {
+  const { t } = useTranslation();
+  const title = !ready ? t("invoicing.payNotReady") : on ? t("invoicing.payOn") : t("invoicing.payOff");
+  return (
+    <button
+      type="button"
+      onClick={() => onChange(!on)}
+      title={title}
+      aria-label={title}
+      aria-pressed={on}
+      className={cn(
+        "flex size-7 flex-none items-center justify-center rounded-full border transition-colors print:hidden",
+        on && ready ? "border-[#635bff] bg-[#635bff] text-white" : on ? "border-amber-500 bg-amber-100 text-amber-700" : "border-black/25 bg-white text-black/40 hover:text-black/70",
+      )}
+    >
+      <CreditCard className="size-3.5" />
+    </button>
+  );
+}
+
 const dmy = (ymd: string) => {
   const [y, m, d] = ymd.split("-");
   return y && m && d ? `${d}/${m}/${y}` : ymd;
@@ -32,7 +57,7 @@ const dmy = (ymd: string) => {
  * The invoice as the client sees it: the logo on top, the company and the dated boxes, the bill-to box, the lines in a
  * ruled table, the totals on the right with the payment instructions beside them, and the conditions at the foot.
  */
-export function InvoiceSheet({ d }: { d: SheetData }) {
+export function InvoiceSheet({ d, payToggle }: { d: SheetData; payToggle?: PayToggle }) {
   const { t } = useTranslation();
   const lng = d.template.language;
   const L = (k: string, o?: Record<string, unknown>) => t(`invoiceSheet.${k}`, { lng, ...o });
@@ -151,7 +176,12 @@ export function InvoiceSheet({ d }: { d: SheetData }) {
       <div className="mt-3 flex flex-wrap gap-x-6 gap-y-4">
         <div className="min-w-[14rem] flex-1 whitespace-pre-line">
           <p className="tracking-widest text-black/50">{"=".repeat(38)}</p>
-          {d.template.paymentInstructions && <p className="mt-1">{d.template.paymentInstructions}</p>}
+          {(d.template.paymentInstructions || payToggle) && (
+            <div className="mt-1 flex items-start gap-2">
+              <p className="flex-1">{d.template.paymentInstructions}</p>
+              {payToggle && <PayButton {...payToggle} />}
+            </div>
+          )}
           {(d.taxes.gstNumber || d.taxes.qstNumber) && (
             <p className="mt-2">
               {[d.taxes.gstNumber && `TPS: ${d.taxes.gstNumber}`, d.taxes.qstNumber && `TVQ: ${d.taxes.qstNumber}`].filter(Boolean).join("   ")}

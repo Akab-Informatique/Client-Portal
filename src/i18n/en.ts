@@ -1349,6 +1349,9 @@ const en: Dict = {
     unposted: "Invoice {{number}} voided: {{count}} item(s) given back",
     outside: "{{count}} approved item(s) wait for an invoice outside this time frame (for example those of a voided invoice).",
     outsideShow: "Show every date",
+    payOn: "Stripe pay link added to this invoice’s email (click to remove it)",
+    payOff: "No Stripe pay link for this invoice (click to add it)",
+    payNotReady: "Stripe is not ready (Admin › Integrations › Stripe): no link will be sent",
     unpostError: {
       invoice_has_payments: "A payment was already received on this invoice.",
       quickbooks_void_failed: "QuickBooks could not void the invoice: nothing was changed.",

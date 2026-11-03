@@ -1347,6 +1347,9 @@ const fr = {
     unposted: "Facture {{number}} annulée : {{count}} élément(s) remis à facturer",
     outside: "{{count}} élément(s) approuvé(s) attendent une facture en dehors de cette période (par exemple ceux d’une facture annulée).",
     outsideShow: "Afficher toutes les dates",
+    payOn: "Lien de paiement Stripe ajouté au courriel de cette facture (cliquer pour l’enlever)",
+    payOff: "Pas de lien de paiement Stripe pour cette facture (cliquer pour l’ajouter)",
+    payNotReady: "Stripe n’est pas prêt (Admin › Intégrations › Stripe) : aucun lien ne sera envoyé",
     unpostError: {
       invoice_has_payments: "Un paiement est déjà reçu sur cette facture.",
       quickbooks_void_failed: "QuickBooks n'a pas pu annuler la facture : rien n'a été changé.",

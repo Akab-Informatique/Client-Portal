@@ -5631,6 +5631,30 @@ describe("un-post: take back an invoice made by the portal", () => {
   });
 });
 
+describe("the Stripe pay link chosen on each invoice", () => {
+  it("is kept on the invoice when it is made and wins over the client's and the template's choice", async () => {
+    resetRateLimit("login:ip:unknown");
+    const admin = await signIn("admin@akab.local");
+    const { payOnlineFor } = await import("../server/lib/payLink.ts");
+    const [c] = await db().insert(schema.clients).values({ name: "Paie en ligne inc.", invoice: { payOnline: true } }).returning();
+    const item = async (n: number) =>
+      (await db().insert(schema.billingItems).values({ clientId: c.id, kind: "charge", source: "portal", sourceId: `test:pay:${n}`, date: "2026-10-12", description: "Pièce", quantityX100: 100, unitPriceCents: 2000, amountCents: 2000, status: "approved", approvedAt: new Date() }).returning())[0];
+    const a = await item(1);
+    // the preview follows the client until the invoice says otherwise
+    expect((await admin.post("/api/billables/invoice/preview", { clientId: c.id, itemIds: [a.id] })).json).toMatchObject({ payOnline: true, payReady: false });
+    expect((await admin.post("/api/billables/invoice/preview", { clientId: c.id, itemIds: [a.id], payOnline: false })).json).toMatchObject({ payOnline: false, template: { showPaymentLink: false } });
+    const off = (await admin.post("/api/billables/invoice", { clientId: c.id, itemIds: [a.id], payOnline: false })).json;
+    const [offRow] = await db().select().from(schema.clientInvoices).where(eq(schema.clientInvoices.id, off.id));
+    expect(offRow.payOnline).toBe(false);
+    // the invoice's own "no" wins over the client's "yes" (Stripe set up or not)
+    expect(await payOnlineFor({ invoice: { payOnline: true } }, offRow)).toBe(false);
+    // none chosen: nothing stored, the client's choice applies
+    const b = await item(2);
+    const plain = (await admin.post("/api/billables/invoice", { clientId: c.id, itemIds: [b.id] })).json;
+    expect((await db().select().from(schema.clientInvoices).where(eq(schema.clientInvoices.id, plain.id)))[0].payOnline).toBeNull();
+  });
+});
+
 describe("un-post ready items", () => {
   it("approved items go back to pending without any invoice", async () => {
     resetRateLimit("login:ip:unknown");

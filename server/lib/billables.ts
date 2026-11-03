@@ -6,6 +6,7 @@ import { taxesOfLines } from "../../shared/invoiceTax.ts";
 import { defaultSupport, hourlyRateOf, NO_CONTRACT_HOURLY_CENTS, payerOf } from "./contracts.ts";
 import { billingSettings, formatInvoiceNumber, quickbooksSettings, saveBillingSettings, type BillingSettings } from "./billing.ts";
 import { ensureCrm } from "./crm.ts";
+import { stripePayReady } from "./payLink.ts";
 import { ticketSource, type BillableKind } from "./ticketSource.ts";
 
 /**
@@ -341,6 +342,8 @@ export type InvoiceDraft = {
   /** The QuickBooks item and tax code sent on every line (none: the defaults) */
   qbItemId?: string | null;
   qbTaxCodeId?: string | null;
+  /** "Pay online" (Stripe) in this invoice's emails; none: the client's choice, else the template's */
+  payOnline?: boolean | null;
   /** Only the work of these days (an item outside makes the draft invalid) */
   from?: string | null;
   to?: string | null;
@@ -449,8 +452,10 @@ export async function draftInvoice(p: InvoiceDraft) {
     totalCents: subtotal + gst + qst,
     company: s.company,
     taxes: s.taxes,
-    // the pay button shows only when this client pays online (its own choice, else the template default)
-    template: { ...s.template, showPaymentLink: client.invoice?.payOnline ?? s.template.showPaymentLink },
+    // the pay button: this invoice's choice, else the client's, else the template default (shown only when Stripe can take it)
+    payOnline: p.payOnline ?? client.invoice?.payOnline ?? s.template.showPaymentLink,
+    payReady: await stripePayReady(),
+    template: { ...s.template, showPaymentLink: p.payOnline ?? client.invoice?.payOnline ?? s.template.showPaymentLink },
   };
 }
 
@@ -500,6 +505,7 @@ export function createInvoice(actorId: string, p: InvoiceDraft) {
           poNumber: draft.poNumber,
           qbItemId: invoiceItem,
           qbTaxCodeId: invoiceTax,
+          payOnline: p.payOnline ?? null,
         })
         .returning();
       await tx.insert(schema.invoiceLines).values(

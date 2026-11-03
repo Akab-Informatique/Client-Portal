@@ -1,0 +1,1 @@
+ALTER TABLE "client_invoices" ADD COLUMN "pay_online" boolean;
