@@ -918,6 +918,13 @@
       "when": 1793668575924,
       "tag": "0130_romantic_imperial_guard",
       "breakpoints": true
+    },
+    {
+      "idx": 131,
+      "version": "7",
+      "when": 1793715071646,
+      "tag": "0131_equal_power_pack",
+      "breakpoints": true
     }
   ]
 }
