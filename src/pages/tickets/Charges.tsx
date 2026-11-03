@@ -2,6 +2,7 @@ import { useEffect, useState, type FormEvent } from "react";
 import { useTranslation } from "react-i18next";
 import { keepPreviousData, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
+import { Link } from "react-router-dom";
 import { Boxes, ChevronDown, Loader2, PackagePlus, Plus, Receipt, Search, Tag, Trash2, Wallet, Warehouse, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { AiTextarea } from "@/components/AiPolish";
@@ -35,6 +36,8 @@ export type Charge = {
   materialCode: string | null;
   date: string | null;
   author: string | null;
+  /** Where it stands in billing: waiting, approved, set aside, or on an invoice (a link for whoever may see invoices) */
+  billing?: { status: string; invoice: { id: string; number: string; visible: boolean } | null } | null;
 };
 type Choice = { value: string; label: string };
 type ChargeOptions = { types: Choice[]; statuses: Choice[]; materialCodes: Choice[] };
@@ -169,6 +172,21 @@ function ChargesList({ list, tk, editable }: { list: Charge[]; tk: TicketDetail;
               <span className={cn("rounded-full px-1.5 py-px text-[10px] font-medium", c.billable ? "bg-emerald-500/15 text-emerald-300" : "bg-muted text-muted-foreground")}>
                 {c.billable ? t("tickets.charges.billable") : t("tickets.charges.notBillable")}
               </span>
+              {c.billing && (
+                c.billing.invoice ? (
+                  c.billing.invoice.visible ? (
+                    <Link to={`/accounting/invoices?istatus=all&iq=${encodeURIComponent(c.billing.invoice.number)}`} className="inline-flex items-center gap-1 rounded-full bg-sky-500/15 px-1.5 py-px text-[10px] font-medium text-sky-300 hover:bg-sky-500/25" title={t("tickets.charges.billing.openInvoice")}>
+                      <Receipt className="size-3" /> {t("tickets.charges.billing.onInvoice", { number: c.billing.invoice.number })}
+                    </Link>
+                  ) : (
+                    <span className="inline-flex items-center gap-1 rounded-full bg-sky-500/15 px-1.5 py-px text-[10px] font-medium text-sky-300">
+                      <Receipt className="size-3" /> {t("tickets.charges.billing.onInvoice", { number: c.billing.invoice.number })}
+                    </span>
+                  )
+                ) : (
+                  <span className="rounded-full bg-amber-500/15 px-1.5 py-px text-[10px] font-medium text-amber-300">{t(`tickets.charges.billing.${c.billing.status}`)}</span>
+                )
+              )}
             </div>
           </li>
         ))}

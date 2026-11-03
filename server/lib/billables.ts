@@ -157,6 +157,21 @@ export function syncBillables(): Promise<BillablesState> {
   return running;
 }
 
+/**
+ * Copy the work to bill now, for something that was just added or removed (a ticket charge): waits for a copy already running
+ * (it may have started before the change) and runs a fresh one. Never fails the caller.
+ */
+export async function syncBillablesNow(): Promise<void> {
+  try {
+    // only the portal's own tickets feed the work to bill; sample data (development) is copied on its own schedule
+    if (!(await (await import("./localTickets.ts")).ticketsLocal())) return;
+    await running?.catch(() => undefined);
+    await syncBillables();
+  } catch (e) {
+    console.warn("[billing] work to bill not copied:", e instanceof Error ? e.message : e);
+  }
+}
+
 /** A time frame (YYYY-MM-DD, both days included): only the work of those days is listed, counted and invoiced. */
 export type Period = { from?: string | null; to?: string | null };
 const inPeriod = (p?: Period) =>

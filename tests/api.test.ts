@@ -3109,6 +3109,7 @@ describe("Outlook (Microsoft 365 mail)", () => {
 
     // the address book: added and named by hand, only for its owner
     const added = await tech.post("/api/outlook/contacts", { address: "Luc@Fournisseur.ca", name: "Luc Gagnon" });
+    expect(added.json).not.toHaveProperty("error");
     expect(added.status).toBe(201);
     expect((await tech.get("/api/outlook/contacts?q=gagnon")).json).toEqual([expect.objectContaining({ address: "luc@fournisseur.ca", name: "Luc Gagnon", source: "manual" })]);
     expect((await tech.patch(`/api/outlook/contacts/${added.json.id}`, { name: "Luc G." })).status).toBe(200);
@@ -3297,6 +3298,7 @@ describe("billing: settings, chart of accounts, QuickBooks, Stripe, payments", (
     expect(settings.accounts.receivable).toBe(ledger.find((x: any) => x.number === "1200").id);
     expect((await admin.post("/api/billing/ledger", { number: "1200", name: "Doublon", type: "asset" })).json.error).toBe("billing_account_exists");
     const added = await admin.post("/api/billing/ledger", { number: "4300", name: "Revenus — projets", type: "revenue" });
+    expect(added.json).not.toHaveProperty("error");
     expect(added.status).toBe(201);
     expect((await admin.patch(`/api/billing/ledger/${settings.accounts.receivable}`, { active: false })).json.error).toBe("billing_account_in_use");
     expect((await admin.patch(`/api/billing/ledger/${added.json.id}`, { active: false })).json.active).toBe(false);
@@ -4102,6 +4104,7 @@ describe("submitting: timesheets (when required) and expenses", () => {
 
     // the admin adds hours on the technician's week, removes them, then submits it for them
     const added = await admin.post("/api/time/entries", { date: "2026-11-03", typeId, hours: 2.5, note: "Formation Fortinet", userId: u.id });
+    expect(added.json).not.toHaveProperty("error");
     expect(added.status).toBe(201);
     expect(added.json.userId).toBe(u.id);
     let week = (await admin.get(`/api/time/week?start=2026-11-03&userId=${u.id}`)).json;
@@ -6054,6 +6057,7 @@ describe("services on a contract, with their prorata", () => {
 
     // monthly, added on 16 October: 16/31 of October, then November, then 15 days of December
     const added = await admin.post(base, { serviceId: monthly.id, addedOn: "2026-10-16" });
+    expect(added.json).not.toHaveProperty("error");
     expect(added.status).toBe(201);
     expect(added.json.firstCents).toBe(15_484);
     expect(added.json.totalCents).toBe(60_000);
@@ -9471,6 +9475,54 @@ describe("hours bank adjusted by hand, parent and child companies", () => {
     } finally {
       await db().delete(schema.billingItems).where(sql`${schema.billingItems.sourceId} like 'test:parent:%'`);
       await admin.patch(`/api/crm/clients/${child.id}`, { parentId: null });
+    }
+  });
+});
+
+describe("ticket charges are work to bill at once", () => {
+  it("a billable charge is in Approbation right away, waiting for approval; removing it takes it off", async () => {
+    resetRateLimit("login:ip:unknown");
+    const tech = await signIn("tech@akab.local");
+    const admin = await signIn("admin@akab.local");
+    // a client of its own, so nothing else is touched
+    const [company] = await db().insert(schema.clients).values({ name: "Client des frais (test)", autotaskId: 9_100_001 }).returning();
+    await db().insert(schema.integrations).values({ provider: "tickets", enabled: true, config: { mode: "local" } }).onConflictDoUpdate({ target: schema.integrations.provider, set: { enabled: true, config: { mode: "local" } } });
+    (await import("../server/lib/localTickets.ts")).resetTicketMode();
+    try {
+    const made = await tech.post("/api/tickets", { title: "Billet avec frais", description: "x", companyId: company.autotaskId, priority: "medium", queue: "support", assigneeId: null, dueDate: "2026-12-05" });
+    expect(made.json).not.toHaveProperty("error");
+    const id = made.json.id;
+    const added = await tech.post(`/api/tickets/${id}/charges`, { name: "Câble réseau", quantity: 2, unitPrice: 15, billable: true });
+    expect(added.json).not.toHaveProperty("error");
+    expect(added.status).toBe(201);
+    const chargeId = added.json[0].id;
+    const find = async () => (await admin.get("/api/billables?kind=charge")).json.find((i: any) => i.sourceId === `pcharge:${chargeId}`);
+    // no wait for the next copy: it is there, pending (no rule approves it), at 2 × 15 $
+    expect(await find()).toMatchObject({ status: "pending", amountCents: 3000 });
+    // a charge that is not billable is never work to bill
+    const free = await tech.post(`/api/tickets/${id}/charges`, { name: "Geste", quantity: 1, unitPrice: 5, billable: false });
+    expect((await admin.get("/api/billables?kind=charge")).json.some((i: any) => i.description.startsWith("Geste"))).toBe(false);
+    expect(free.status).toBe(201);
+    // the ticket shows where each charge stands, and the invoice once it is on one
+    const listed = (await admin.get(`/api/tickets/${id}/charges`)).json;
+    expect(listed.find((x: any) => x.id === chargeId).billing).toEqual({ status: "pending", invoice: null });
+    expect(listed.find((x: any) => x.name === "Geste").billing).toBeNull();
+    const mouse = (await tech.post(`/api/tickets/${id}/charges`, { name: "Souris", quantity: 1, unitPrice: 20, billable: true })).json.find((x: any) => x.name === "Souris");
+    const item = (await admin.get("/api/billables?kind=charge")).json.find((i: any) => i.sourceId === `pcharge:${mouse.id}`);
+    await admin.post("/api/billables/status", { ids: [item.id], status: "approved" });
+    const invoice = (await admin.post("/api/billables/invoice", { clientId: company.id, itemIds: [item.id] })).json;
+    const onInvoice = (await admin.get(`/api/tickets/${id}/charges`)).json.find((x: any) => x.id === mouse.id).billing;
+    expect(onInvoice).toMatchObject({ status: "posted", invoice: { id: invoice.id, number: invoice.number, clientId: company.id, visible: true } });
+    // a charge on an invoice cannot be deleted from the ticket
+    expect((await tech.del(`/api/tickets/${id}/charges/${mouse.id}`)).json.error).toBe("charge_billed");
+    // removed: off the list (a pending line goes when its charge is gone)
+    expect((await tech.del(`/api/tickets/${id}/charges/${chargeId}`)).status).toBe(200);
+    expect(await find()).toBeUndefined();
+    } finally {
+      // back to the sample tickets for the tests that follow
+      await db().delete(schema.integrations).where(eq(schema.integrations.provider, "tickets"));
+      await db().delete(schema.clients).where(eq(schema.clients.id, company.id));
+      (await import("../server/lib/localTickets.ts")).resetTicketMode();
     }
   });
 });

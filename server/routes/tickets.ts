@@ -3,6 +3,7 @@ import { HTTPException } from "hono/http-exception";
 import { localAssets } from "../lib/queues.ts";
 import { clientInfo } from "../lib/clientHours.ts";
 import { intakeSettings } from "../lib/mailIntake.ts";
+import { syncBillablesNow } from "../lib/billables.ts";
 import { contractOfTicket, contractsOfCompany, setTicketContract, type ContractView } from "../lib/contracts.ts";
 import { and, asc, desc, eq, inArray, isNull, or, sql } from "drizzle-orm";
 import { z } from "zod";
@@ -463,6 +464,32 @@ async function detailOf(src: TicketSource, id: number, a: AuthContext) {
     ai: Boolean(ai?.enabled && ai.apiKey),
     options: { statuses: o.statuses, priorities: o.priorities, queues: o.queues, sources: o.ticketSources ?? [], technicians },
   };
+}
+
+/** Whoever can look at invoices sees which one a charge is on (the number is a link to it) */
+const canSeeInvoices = (c: Context<AppEnv>) => auth(c).permissions.includes("accounting.view");
+
+/**
+ * A ticket's charges with where each stands in billing: waiting for approval, approved, set aside, or on an invoice
+ * (its id and number, only for those who may see invoices). A charge that is not billable has none.
+ */
+async function withBilling<T extends { id: string; billable: boolean }>(list: T[], withInvoice: boolean) {
+  const keys = list.flatMap((x) => [`pcharge:${x.id}`, x.id]);
+  const rows = keys.length
+    ? await db()
+        .select({ sourceId: schema.billingItems.sourceId, status: schema.billingItems.status, invoiceId: schema.billingItems.invoiceId, number: schema.clientInvoices.number, clientId: schema.clientInvoices.clientId })
+        .from(schema.billingItems)
+        .leftJoin(schema.clientInvoices, eq(schema.clientInvoices.id, schema.billingItems.invoiceId))
+        .where(inArray(schema.billingItems.sourceId, keys))
+    : [];
+  const by = new Map(rows.map((r) => [r.sourceId!, r]));
+  return list.map((x) => {
+    const r = by.get(`pcharge:${x.id}`) ?? by.get(x.id);
+    return {
+      ...x,
+      billing: r ? { status: r.status, invoice: r.invoiceId && r.number ? { id: r.invoiceId, number: r.number, clientId: withInvoice ? r.clientId : null, visible: withInvoice } : null } : null,
+    };
+  });
 }
 
 /** Timers being validated (a double click makes one time entry) */
@@ -1755,7 +1782,7 @@ export const ticketRoutes = new Hono<AppEnv>()
     const id = Number(c.req.param("id"));
     if (!Number.isInteger(id)) throw new HTTPException(400, { message: "invalid_id" });
     const src = await ticketSource();
-    return c.json(await run(() => src.charges(id)));
+    return c.json(await withBilling(await run(() => src.charges(id)), canSeeInvoices(c)));
   })
   .post("/:id/charges", requirePermission("tickets.edit"), async (c) => {
     const a = auth(c);
@@ -1817,7 +1844,9 @@ export const ticketRoutes = new Hono<AppEnv>()
       throw e;
     }
     await audit(a.user.id, "ticket.charge_added", String(id), { name: p.name, quantity: p.quantity, unitPrice: p.unitPrice, billable: p.billable, productId: p.productId });
-    return c.json(await run(() => src.charges(id)), 201);
+    // a billable charge is work to bill: it is in Approbation at once (waiting for approval, or approved by the client's / contract's rule)
+    if (p.billable) await syncBillablesNow();
+    return c.json(await withBilling(await run(() => src.charges(id)), canSeeInvoices(c)), 201);
   })
   .delete("/:id/charges/:chargeId", requirePermission("tickets.edit"), async (c) => {
     const a = auth(c);
@@ -1833,7 +1862,8 @@ export const ticketRoutes = new Hono<AppEnv>()
     const removed = await run(() => src.removeCharge(id, chargeId));
     if (!removed) throw new HTTPException(404, { message: "not_found" });
     await audit(a.user.id, "ticket.charge_removed", String(id), { chargeId });
-    return c.json(await run(() => src.charges(id)));
+    await syncBillablesNow();
+    return c.json(await withBilling(await run(() => src.charges(id)), canSeeInvoices(c)));
   })
 
   /**
