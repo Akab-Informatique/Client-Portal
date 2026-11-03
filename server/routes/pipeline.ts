@@ -96,6 +96,8 @@ async function cards(rows: Task[], viewerId: string) {
       dueTime: t.dueTime,
       startDate: t.startDate,
       startTime: t.startTime,
+      checkpointDate: t.checkpointDate,
+      checkpointTime: t.checkpointTime,
       estimateMinutes: t.estimateMinutes,
       tags: t.tags,
       visibility: t.visibility,
@@ -181,6 +183,8 @@ async function spawnNext(done: Task, by: string): Promise<string | null> {
       dueTime: done.dueTime,
       startDate,
       startTime: startDate ? done.startTime : null,
+      checkpointDate: done.checkpointDate && done.dueDate ? plusDays(due, -dayDiff(done.dueDate, done.checkpointDate)) : null,
+      checkpointTime: done.checkpointDate && done.dueDate ? done.checkpointTime : null,
       estimateMinutes: done.estimateMinutes,
       tags: done.tags,
       visibility: done.visibility,
@@ -317,6 +321,8 @@ export const pipelineRoutes = new Hono<AppEnv>()
         dueTime: zHm.nullable().default(null),
         startDate: zDate.nullable().default(null),
         startTime: zHm.nullable().default(null),
+        checkpointDate: zDate.nullable().default(null),
+        checkpointTime: zHm.nullable().default(null),
         estimateMinutes: zMinutes.nullable().default(null),
         tags: zTags.default([]),
         visibility: zVisibility.default("team"),
@@ -333,7 +339,7 @@ export const pipelineRoutes = new Hono<AppEnv>()
     const [{ max }] = await db().select({ max: sql<number>`coalesce(max(${schema.pipelineTasks.position}), 0)`.mapWith(Number) }).from(schema.pipelineTasks);
     const [row] = await db()
       .insert(schema.pipelineTasks)
-      .values({ title: p.title, notes: p.notes, priority: p.priority, assigneeId: p.assigneeId, createdBy: a.user.id, parentId: p.parentId, blockedById: p.blockedById, dueDate: p.dueDate, dueTime: p.dueDate ? p.dueTime : null, startDate: p.startDate, startTime: p.startDate ? p.startTime : null, estimateMinutes: p.estimateMinutes, tags: [...new Set(p.tags)], visibility: p.visibility, recurrence: p.recurrence, ...ticket, position: max + 1 })
+      .values({ title: p.title, notes: p.notes, priority: p.priority, assigneeId: p.assigneeId, createdBy: a.user.id, parentId: p.parentId, blockedById: p.blockedById, dueDate: p.dueDate, dueTime: p.dueDate ? p.dueTime : null, startDate: p.startDate, startTime: p.startDate ? p.startTime : null, checkpointDate: p.checkpointDate, checkpointTime: p.checkpointDate ? (p.checkpointTime ?? "17:00") : null, estimateMinutes: p.estimateMinutes, tags: [...new Set(p.tags)], visibility: p.visibility, recurrence: p.recurrence, ...ticket, position: max + 1 })
       .returning();
     if (p.visibility === "selected") await setViewers(row.id, p.viewerIds);
     if (p.recurrence) await db().update(schema.pipelineTasks).set({ seriesId: row.id }).where(eq(schema.pipelineTasks.id, row.id));
@@ -360,6 +366,8 @@ export const pipelineRoutes = new Hono<AppEnv>()
         dueTime: zHm.nullable().optional(),
         startDate: zDate.nullable().optional(),
         startTime: zHm.nullable().optional(),
+        checkpointDate: zDate.nullable().optional(),
+        checkpointTime: zHm.nullable().optional(),
         estimateMinutes: zMinutes.nullable().optional(),
         tags: zTags.optional(),
         visibility: zVisibility.optional(),
@@ -386,6 +394,11 @@ export const pipelineRoutes = new Hono<AppEnv>()
       if (p.startDate === null) set.startTime = null;
     }
     if (p.startTime !== undefined) set.startTime = (set.startDate !== undefined ? set.startDate : cur.startDate) ? p.startTime : null;
+    // the checkpoint: a day and a time (17:00 when none is given); no day, no time
+    if (p.checkpointDate !== undefined) {
+      set.checkpointDate = p.checkpointDate;
+      set.checkpointTime = p.checkpointDate ? (p.checkpointTime ?? cur.checkpointTime ?? "17:00") : null;
+    } else if (p.checkpointTime !== undefined) set.checkpointTime = cur.checkpointDate ? (p.checkpointTime ?? "17:00") : null;
     if (p.tags !== undefined) set.tags = [...new Set(p.tags)];
     if (p.visibility !== undefined) set.visibility = p.visibility;
     if (p.recurrence !== undefined) {

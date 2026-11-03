@@ -152,7 +152,7 @@ export async function dayItems(userId: string, date: string, viewerId: string = 
     const due = t.dueDate;
     // not to be started yet: its start day is later
     if (t.startDate && t.startDate > date && t.status !== "doing") continue;
-    const relevant = t.status === "doing" || t.priority === "urgent" || (due !== null && due <= date);
+    const relevant = t.status === "doing" || t.priority === "urgent" || (due !== null && due <= date) || (t.checkpointDate !== null && t.checkpointDate <= date);
     if (!relevant) continue;
     const masked = viewing && t.visibility !== "team" && t.createdBy !== viewerId && !(t.visibility === "selected" && shared.has(t.id));
     items.push({
@@ -165,6 +165,8 @@ export async function dayItems(userId: string, date: string, viewerId: string = 
       notBefore: t.startDate === date && t.startTime ? mins(t.startTime) : undefined,
       priority: t.priority,
       due,
+      checkpoint: t.checkpointDate,
+      checkpointTime: t.checkpointDate ? t.checkpointTime : null,
       overdue: due !== null && due < date,
       minutes: t.estimateMinutes ?? 30,
       ticketNumber: masked ? null : t.ticketNumber,

@@ -6229,6 +6229,20 @@ describe("my tickets: secondary technician", () => {
 });
 
 describe("pipeline: shared to-dos and the day", () => {
+  it("a task has a checkpoint with a time (17:00 by default) and appears in the open list", async () => {
+    resetRateLimit("login:ip:unknown");
+    const tech = await signIn("tech@akab.local");
+    const t = (await tech.post("/api/pipeline/tasks", { title: "Avec checkpoint", checkpointDate: "2026-12-01", dueDate: "2026-12-10" })).json;
+    expect(t).toMatchObject({ checkpointDate: "2026-12-01", checkpointTime: "17:00" });
+    const moved = (await tech.patch(`/api/pipeline/tasks/${t.id}`, { checkpointTime: "09:30" })).json;
+    expect(moved).toMatchObject({ checkpointDate: "2026-12-01", checkpointTime: "09:30" });
+    const cleared = (await tech.patch(`/api/pipeline/tasks/${t.id}`, { checkpointDate: null })).json;
+    expect(cleared).toMatchObject({ checkpointDate: null, checkpointTime: null });
+    // a time with no day is dropped
+    const none = (await tech.post("/api/pipeline/tasks", { title: "Sans jour", checkpointTime: "08:00" })).json;
+    expect(none).toMatchObject({ checkpointDate: null, checkpointTime: null });
+  });
+
   it("tasks: assign, checklist, subtasks and waiting-for rules, notes", async () => {
     resetRateLimit("login:ip:unknown");
     const admin = await signIn("admin@akab.local");

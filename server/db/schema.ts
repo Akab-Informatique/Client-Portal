@@ -2226,6 +2226,9 @@ export const pipelineTasks = pgTable(
     /** Not to be started before this day (YYYY-MM-DD) and time (HH:MM), optional */
     startDate: text("start_date"),
     startTime: text("start_time"),
+    /** The goal day (YYYY-MM-DD) and time (HH:MM, 17:00 when none is given) before the due day */
+    checkpointDate: text("checkpoint_date"),
+    checkpointTime: text("checkpoint_time"),
     estimateMinutes: integer("estimate_minutes"),
     /** Free labels, to find and filter */
     tags: jsonb("tags").$type<string[]>().notNull().default(sql`'[]'::jsonb`),

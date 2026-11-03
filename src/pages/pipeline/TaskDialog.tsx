@@ -93,7 +93,7 @@ export function TaskDialog({ taskId, defaults, onClose, onOpenTask }: { taskId: 
   }, [task?.id, task?.updatedAt]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // ── a new task ──
-  const [f, setF] = useState({ title: "", notes: "", assigneeId: defaults?.assigneeId ?? me.id, dueDate: defaults?.dueDate ?? "", dueTime: "", startDate: "", startTime: "", priority: "normal" as TaskPriority, estimate: "", parentId: defaults?.parentId ?? "", checklist: "", tags: [] as string[], recurrence: null as Recurrence | null, visibility: "team" as Visibility, viewerIds: [] as string[] });
+  const [f, setF] = useState({ title: "", notes: "", assigneeId: defaults?.assigneeId ?? me.id, dueDate: defaults?.dueDate ?? "", startDate: "", checkpointDate: "", checkpointTime: "", priority: "normal" as TaskPriority, estimate: "", parentId: defaults?.parentId ?? "", checklist: "", tags: [] as string[], recurrence: null as Recurrence | null, visibility: "team" as Visibility, viewerIds: [] as string[] });
   const [staged, setStaged] = useState<File[]>([]);
   const create = useMutation({
     mutationFn: () => {
@@ -104,9 +104,9 @@ export function TaskDialog({ taskId, defaults, onClose, onOpenTask }: { taskId: 
         priority: f.priority,
         assigneeId: f.assigneeId || null,
         dueDate: f.dueDate || null,
-        dueTime: f.dueDate && f.dueTime ? f.dueTime : null,
         startDate: f.startDate || null,
-        startTime: f.startDate && f.startTime ? f.startTime : null,
+        checkpointDate: f.checkpointDate || null,
+        checkpointTime: f.checkpointDate && f.checkpointTime ? f.checkpointTime : null,
         tags: f.tags,
         recurrence: f.recurrence,
         visibility: f.visibility,
@@ -198,11 +198,11 @@ export function TaskDialog({ taskId, defaults, onClose, onOpenTask }: { taskId: 
             <Field label={t("pipeline.startDate")} icon={PlayCircle}>
               <Input type="date" value={f.startDate} onChange={(e) => setF({ ...f, startDate: e.target.value })} />
             </Field>
-            <Field label={t("pipeline.startTime")}>
-              <Input type="time" disabled={!f.startDate} value={f.startTime} onChange={(e) => setF({ ...f, startTime: e.target.value })} />
+            <Field label={t("pipeline.checkpoint")} icon={CalendarClock}>
+              <Input type="date" value={f.checkpointDate} onChange={(e) => setF({ ...f, checkpointDate: e.target.value })} />
             </Field>
-            <Field label={t("pipeline.dueTime")}>
-              <Input type="time" disabled={!f.dueDate} value={f.dueTime} onChange={(e) => setF({ ...f, dueTime: e.target.value })} />
+            <Field label={t("pipeline.checkpointTime")}>
+              <Input type="time" disabled={!f.checkpointDate} value={f.checkpointTime} onChange={(e) => setF({ ...f, checkpointTime: e.target.value })} placeholder="17:00" />
             </Field>
           </div>
           <Field label={t("pipeline.parent")} icon={Link2}>
@@ -520,11 +520,11 @@ export function TaskDialog({ taskId, defaults, onClose, onOpenTask }: { taskId: 
             <Field label={t("pipeline.startDate")} icon={PlayCircle}>
               <Input type="date" disabled={!editable} value={task.startDate ?? ""} onChange={(e) => patch.mutate({ startDate: e.target.value || null })} />
             </Field>
-            <Field label={t("pipeline.startTime")}>
-              <Input type="time" disabled={!editable || !task.startDate} value={task.startTime ?? ""} onChange={(e) => patch.mutate({ startTime: e.target.value || null })} />
+            <Field label={t("pipeline.checkpoint")} icon={CalendarClock}>
+              <Input type="date" disabled={!editable} value={task.checkpointDate ?? ""} onChange={(e) => patch.mutate({ checkpointDate: e.target.value || null })} />
             </Field>
-            <Field label={t("pipeline.dueTime")}>
-              <Input type="time" disabled={!editable || !task.dueDate} value={task.dueTime ?? ""} onChange={(e) => patch.mutate({ dueTime: e.target.value || null })} />
+            <Field label={t("pipeline.checkpointTime")}>
+              <Input type="time" disabled={!editable || !task.checkpointDate} value={task.checkpointTime ?? ""} onChange={(e) => patch.mutate({ checkpointTime: e.target.value || null })} />
             </Field>
           </div>
           <Field label={t("pipeline.parent")} icon={Link2}>

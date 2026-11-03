@@ -27,6 +27,8 @@ export type TaskCard = {
   dueTime: string | null;
   startDate: string | null;
   startTime: string | null;
+  checkpointDate: string | null;
+  checkpointTime: string | null;
   estimateMinutes: number | null;
   tags: string[];
   visibility: Visibility;
