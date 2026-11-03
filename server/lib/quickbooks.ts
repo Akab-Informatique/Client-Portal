@@ -654,6 +654,49 @@ async function pushInvoiceNow(invoiceId: string): Promise<{ quickbooksId: string
 // ── payments: QuickBooks → portal ──
 type RawPayment = { Id: string; TxnDate: string; PaymentRefNum?: string; PaymentMethodRef?: { name?: string }; PrivateNote?: string; Line?: { Amount: number; LinkedTxn?: { TxnId: string; TxnType: string }[] }[]; MetaData?: { LastUpdatedTime?: string } };
 
+/**
+ * A card payment received through Stripe (a pay link, or a contract's saved card) sent to QuickBooks as a Payment of
+ * the client's customer, tied to its invoice — so the invoice shows paid there too. The invoice is sent first when it
+ * is not in QuickBooks yet, or sent again when a card fee line was added to it. Once: the payment keeps the id.
+ */
+export async function pushPayment(paymentId: string): Promise<{ quickbooksId: string } | undefined> {
+  return once(`payment:${paymentId}`, async () => {
+    const d = db();
+    const [p] = await d.select().from(schema.invoicePayments).where(eq(schema.invoicePayments.id, paymentId));
+    if (!p || p.quickbooksId || p.source !== "stripe") return p?.quickbooksId ? { quickbooksId: p.quickbooksId } : undefined;
+    try {
+      const [inv] = await d.select().from(schema.clientInvoices).where(eq(schema.clientInvoices.id, p.invoiceId));
+      if (!inv) throw new QuickBooksError("api", "invoice_missing");
+      const [client] = await d.select({ quickbooksId: schema.clients.quickbooksId }).from(schema.clients).where(eq(schema.clients.id, inv.clientId));
+      if (!client?.quickbooksId) throw new QuickBooksError("not_mapped");
+      // the invoice as the portal has it now (a portal invoice: sent, or sent again with a card fee line added since)
+      const qbInvoice = inv.source === "portal" ? (await pushInvoice(inv.id)).quickbooksId : inv.quickbooksId;
+      if (!qbInvoice) throw new QuickBooksError("api", "invoice_not_in_quickbooks");
+      const body = {
+        CustomerRef: { value: client.quickbooksId },
+        TotalAmt: p.amountCents / 100,
+        TxnDate: p.paidOn,
+        PaymentRefNum: (p.reference ?? "").slice(-21) || undefined,
+        PrivateNote: `Paiement par carte (Stripe) ${p.reference ?? ""} — portail AKAB`.slice(0, 4000),
+        Line: [{ Amount: p.amountCents / 100, LinkedTxn: [{ TxnId: qbInvoice, TxnType: "Invoice" }] }],
+      };
+      const r = await qb<{ Payment: { Id: string } }>("POST", `payment?requestid=${requestId(`payment:${p.id}`)}`, body);
+      await d.update(schema.invoicePayments).set({ quickbooksId: r.Payment.Id, quickbooksError: null }).where(eq(schema.invoicePayments.id, p.id));
+      return { quickbooksId: r.Payment.Id };
+    } catch (e) {
+      await d.update(schema.invoicePayments).set({ quickbooksError: errText(e).slice(0, 300) }).where(eq(schema.invoicePayments.id, p.id));
+      throw e;
+    }
+  });
+}
+
+/** A card payment goes to QuickBooks right away when the sync of payments is on; the 15-minute run retries what failed. */
+export async function autoSyncPayment(paymentId: string) {
+  const s = await quickbooksSettings();
+  if (!s.enabled || !s.refreshToken || !s.realmId || !s.sync.payments) return;
+  await pushPayment(paymentId).catch((e) => console.warn(`[quickbooks] payment ${paymentId}:`, errText(e)));
+}
+
 /** Payments made or changed in QuickBooks since the last time, put on their invoices. */
 export async function pullPayments(actorId: string | null, from?: string) {
   const s = await quickbooksSettings();
@@ -666,7 +709,10 @@ export async function pullPayments(actorId: string | null, from?: string) {
   );
   let added = 0;
   let updated = 0;
+  // the card payments the portal sent itself are already on their invoices
+  const ours = new Set((await d.select({ q: schema.invoicePayments.quickbooksId }).from(schema.invoicePayments).where(isNotNull(schema.invoicePayments.quickbooksId))).map((x) => x.q!));
   for (const p of rows) {
+    if (ours.has(p.Id)) continue;
     for (const line of p.Line ?? []) {
       for (const link of line.LinkedTxn ?? []) {
         if (link.TxnType !== "Invoice") continue;
@@ -1027,7 +1073,12 @@ async function tickNow() {
   // clients, chart of accounts and chosen vendors, both ways
   await syncAll(null).catch(warn("sync"));
   if (s.sync.invoicesIn) await pullInvoices(null).catch(warn("invoices in"));
-  if (s.sync.payments) await pullPayments(null).catch(warn("payments"));
+  if (s.sync.payments) {
+    // card payments not in QuickBooks yet (sent when received; retried here)
+    const out = await db().select({ id: schema.invoicePayments.id }).from(schema.invoicePayments).where(and(eq(schema.invoicePayments.source, "stripe"), isNull(schema.invoicePayments.quickbooksId)));
+    for (const r of out) await pushPayment(r.id).catch(warn("card payment"));
+    await pullPayments(null).catch(warn("payments"));
+  }
   if (s.sync.bills) await pullBills(null).catch(warn("bills"));
   const d = db();
   if (s.sync.invoices) {

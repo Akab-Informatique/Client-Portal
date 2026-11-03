@@ -6,6 +6,7 @@ import { CreditCard, Download, ExternalLink, Eye, FileText, Loader2, Receipt, Sh
 import { useConfirm } from "@/components/ConfirmDialog";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
+import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Skeleton } from "@/components/ui/skeleton";
 import { api, ApiError } from "@/lib/api";
 import { useCan } from "@/lib/session";
@@ -14,7 +15,7 @@ import { money } from "@/pages/crm/shared";
 import { shortDate } from "@/pages/tickets/shared";
 import { PageHeader, Pane } from "./ui";
 
-type Invoice = { id: string; number: string; issuedOn: string; dueOn: string | null; totalCents: number; balanceCents: number; status: "due" | "overdue" | "partial" | "paid" | "voided"; paidByCard: boolean; payUrl: string | null };
+type Invoice = { id: string; number: string; issuedOn: string; dueOn: string | null; totalCents: number; balanceCents: number; status: "due" | "overdue" | "partial" | "paid" | "voided"; paidByCard: boolean; payUrl: string | null; cardFee: { percent: number; feeCents: number; taxCents: number } | null };
 type Terms = {
   id: string;
   name: string;
@@ -42,6 +43,7 @@ const brandName = (b: string | null | undefined) => (b ? b.charAt(0).toUpperCase
 export function ClientInvoicesPage() {
   const { t, i18n } = useTranslation();
   const { data = [], isLoading } = useQuery({ queryKey: ["client-billing", "invoices"], queryFn: () => api.get<Invoice[]>("/client-billing/invoices") });
+  const [paying, setPaying] = useState<Invoice | null>(null);
   const [filter, setFilter] = useState<"open" | "all">("open");
   const shown = data.filter((v) => (filter === "open" ? v.balanceCents > 0 && v.status !== "voided" : true));
   const owed = data.filter((v) => v.status !== "voided").reduce((n, v) => n + v.balanceCents, 0);
@@ -94,10 +96,8 @@ export function ClientInvoicesPage() {
                   </td>
                   <td className="whitespace-nowrap px-3 py-2.5 text-right">
                     {v.payUrl && (
-                      <Button asChild size="sm" className="h-7 bg-grad-gold text-xs font-semibold text-[#1a1204] hover:brightness-105">
-                        <a href={v.payUrl} target="_blank" rel="noopener noreferrer">
-                          <CreditCard className="size-3.5" /> {t("clientBilling.pay")}
-                        </a>
+                      <Button size="sm" className="h-7 bg-grad-gold text-xs font-semibold text-[#1a1204] hover:brightness-105" onClick={() => setPaying(v)}>
+                        <CreditCard className="size-3.5" /> {t("clientBilling.pay")}
                       </Button>
                     )}
                     <Button asChild size="icon" variant="ghost" className="size-7" title={t("clientBilling.view")}>
@@ -117,7 +117,54 @@ export function ClientInvoicesPage() {
           </table>
         </Pane>
       )}
+      {paying && <PayDialog invoice={paying} onClose={() => setPaying(null)} />}
     </div>
+  );
+}
+
+/** Before Stripe's page: what will be paid, and the credit card fee said plainly (refunded with a debit card) */
+function PayDialog({ invoice, onClose }: { invoice: Invoice; onClose: () => void }) {
+  const { t, i18n } = useTranslation();
+  const m = (c: number) => money(c, i18n.language);
+  const fee = invoice.cardFee && invoice.cardFee.feeCents > 0 ? invoice.cardFee : null;
+  const feeTotal = fee ? fee.feeCents + fee.taxCents : 0;
+  const pct = fee ? fee.percent.toLocaleString(i18n.language === "en" ? "en-CA" : "fr-CA", { maximumFractionDigits: 2 }) : "";
+  return (
+    <Dialog open onOpenChange={(o) => !o && onClose()}>
+      <DialogContent className="sm:max-w-md">
+        <DialogHeader>
+          <DialogTitle>{t("clientBilling.payTitle", { number: invoice.number })}</DialogTitle>
+          <DialogDescription>{t("clientBilling.payText")}</DialogDescription>
+        </DialogHeader>
+        <dl className="space-y-1.5 text-sm">
+          <div className="flex justify-between gap-3">
+            <dt className="text-muted-foreground">{t("clientBilling.payBalance")}</dt>
+            <dd className="font-mono">{m(invoice.balanceCents)}</dd>
+          </div>
+          {fee && (
+            <div className="flex justify-between gap-3">
+              <dt className="text-muted-foreground">{t(fee.taxCents ? "clientBilling.payFeeTaxed" : "clientBilling.payFee", { pct })}</dt>
+              <dd className="font-mono">{m(feeTotal)}</dd>
+            </div>
+          )}
+          <div className="flex justify-between gap-3 border-t pt-1.5 font-semibold">
+            <dt>{t("clientBilling.payTotal")}</dt>
+            <dd className="font-mono text-primary">{m(invoice.balanceCents + feeTotal)}</dd>
+          </div>
+        </dl>
+        {fee && <p className="rounded-xl border border-[color:var(--gold)]/30 bg-[color:var(--gold)]/5 p-3 text-xs text-muted-foreground">{t("clientBilling.payFeeNote", { pct })}</p>}
+        <div className="flex justify-end gap-2">
+          <Button variant="ghost" onClick={onClose}>
+            {t("common.cancel")}
+          </Button>
+          <Button asChild className="bg-grad-gold font-semibold text-[#1a1204] hover:brightness-105">
+            <a href={invoice.payUrl!} onClick={() => setTimeout(onClose, 300)}>
+              <CreditCard className="size-4" /> {t("clientBilling.payGo")}
+            </a>
+          </Button>
+        </div>
+      </DialogContent>
+    </Dialog>
   );
 }
 

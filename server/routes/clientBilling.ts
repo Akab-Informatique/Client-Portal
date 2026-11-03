@@ -8,8 +8,8 @@ import { audit } from "../lib/audit.ts";
 import { rateLimit } from "../lib/http.ts";
 import { notify, usersWith } from "../lib/notify.ts";
 import { body, zUuid } from "../lib/validate.ts";
-import { balanceOf } from "../lib/stripe.ts";
-import { payOnlineFor, payUrlOf } from "../lib/payLink.ts";
+import { balanceOf, cardFeeFor } from "../lib/stripe.ts";
+import { payUrlOf, stripePayReady } from "../lib/payLink.ts";
 import { invoicePdfFor } from "../lib/invoiceMail.ts";
 import { autopayOfContract, autopayReady, autopayToken, AutopayError, contractTerms, requestAutopays, revokeAutopay } from "../lib/cardAutopay.ts";
 
@@ -33,7 +33,8 @@ async function ownContracts(clientId: string, ids: string[]) {
 export const clientBillingRoutes = new Hono<AppEnv>()
   .get("/invoices", requirePermission("clientInvoices.view"), async (c) => {
     const clientId = companyOf(auth(c));
-    const [client] = await db().select().from(schema.clients).where(eq(schema.clients.id, clientId));
+    // paying by card from the portal: whenever Stripe takes payments (the invoice email's own link follows the client's setting)
+    const canPay = await stripePayReady();
     const rows = await db().select().from(schema.clientInvoices).where(eq(schema.clientInvoices.clientId, clientId)).orderBy(desc(schema.clientInvoices.issuedOn), desc(schema.clientInvoices.number)).limit(200);
     const out = [];
     for (const v of rows) {
@@ -49,7 +50,9 @@ export const clientBillingRoutes = new Hono<AppEnv>()
         balanceCents,
         status,
         paidByCard: v.cardChargeStatus === "charged",
-        payUrl: balanceCents > 0 && client && (await payOnlineFor(client, v)) ? payUrlOf(v.id) : null,
+        payUrl: balanceCents > 0 && canPay ? payUrlOf(v.id) : null,
+        // the credit card fee that would be added (said before paying)
+        cardFee: balanceCents > 0 && canPay ? await cardFeeFor(clientId, balanceCents) : null,
       });
     }
     return c.json(out);

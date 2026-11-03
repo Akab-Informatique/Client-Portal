@@ -5246,6 +5246,75 @@ describe("Stripe card payments (Accounting › Paiements)", () => {
       vi.unstubAllGlobals();
     }
   });
+
+  it("paying by card adds the credit card fee to the invoice (refunded with a debit card), and the payment goes to QuickBooks", async () => {
+    const admin = await signIn("admin@akab.local");
+    const { saveBillingSettings, saveQuickBooksSettings } = await import("../server/lib/billing.ts");
+    const { forgetQuickBooksToken } = await import("../server/lib/quickbooks.ts");
+    const [adminRow] = await db().select().from(schema.users).where(eq(schema.users.email, "admin@akab.local"));
+    expect((await admin.put("/api/billing/stripe", { enabled: true, publishableKey: "pk_test_abc", secretKey: "sk_test_abc123", webhookSecret: SECRET })).status).toBe(200);
+    await saveBillingSettings(adminRow!.id, { cardFee: { enabled: true, percent: 2.4, taxable: true } });
+    const [c] = await db().insert(schema.clients).values({ name: "Frais carte inc.", quickbooksId: "777" }).returning();
+    // in QuickBooks already (copied from it): only the payment is sent
+    const [inv] = await db().insert(schema.clientInvoices).values({ clientId: c.id, number: "FC-1", issuedOn: "2026-10-01", dueOn: "2026-10-31", totalCents: 10000, taxCents: 0, source: "quickbooks", quickbooksId: "Q-501" }).returning();
+    const [inv2] = await db().insert(schema.clientInvoices).values({ clientId: c.id, number: "FC-2", issuedOn: "2026-10-01", dueOn: "2026-10-31", totalCents: 10000, taxCents: 0, source: "quickbooks", quickbooksId: "Q-502" }).returning();
+    let funding = "credit";
+    const calls: { url: string; body: string }[] = [];
+    const json = (o: unknown) => new Response(JSON.stringify(o), { headers: { "content-type": "application/json" } });
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: unknown, init: RequestInit = {}) => {
+        const url = decodeURIComponent(String(input));
+        calls.push({ url, body: String(init.body ?? "") });
+        if (url === "https://api.stripe.com/v1/checkout/sessions") return json({ id: `cs_fee_${calls.length}`, url: "https://checkout.stripe.com/c/pay/fee", livemode: false, expires_at: Math.floor(Date.now() / 1000) + 82_800 });
+        if (url.startsWith("https://api.stripe.com/v1/payment_intents/")) return json({ id: url.split("/").pop()!.split("?")[0], payment_method: { card: { funding } } });
+        if (url === "https://api.stripe.com/v1/refunds") return json({ id: "re_1" });
+        if (url.startsWith("https://oauth.platform.intuit.com/")) return json({ access_token: "qb-access", refresh_token: "qb-refresh" });
+        if (url.includes("/v3/company/9130/payment")) return json({ Payment: { Id: "QP-9" } });
+        return new Response("{}", { status: 500 });
+      }),
+    );
+    // the app first (a new app forgets the connection), then the connection
+    await saveQuickBooksSettings(null, { clientId: "ABqb", clientSecret: "qb-secret", environment: "sandbox" });
+    await saveQuickBooksSettings(null, { realmId: "9130", refreshToken: "qb-refresh", enabled: true, sync: { payments: true } as never });
+    forgetQuickBooksToken();
+    try {
+      // the Stripe page carries the invoice and the fee as its own line: 100 $ + 2,40 $ + taxes 0,36 $ = 2,76 $
+      const link = await admin.post("/api/billing/payments/checkouts", { invoiceId: inv.id });
+      expect(link.status).toBe(201);
+      const asked = Object.fromEntries(new URLSearchParams(calls.find((x) => x.url === "https://api.stripe.com/v1/checkout/sessions")!.body));
+      expect(asked).toMatchObject({ "line_items[0][price_data][unit_amount]": "10000", "line_items[1][price_data][unit_amount]": "276" });
+      expect(asked["custom_text[submit][message]"]).toContain("débit");
+      const sid = (await db().select().from(schema.stripeCheckouts).where(eq(schema.stripeCheckouts.invoiceId, inv.id)))[0]!.sessionId;
+      // paid with a credit card: the fee becomes a line of the invoice, the invoice is paid in full, QuickBooks gets the payment
+      expect((await hook(event("checkout.session.completed", session(sid, { payment_status: "paid", amount_total: 10276, mode: "payment" })))).status).toBe(200);
+      const [after] = await db().select().from(schema.clientInvoices).where(eq(schema.clientInvoices.id, inv.id));
+      expect(after).toMatchObject({ totalCents: 10276, taxCents: 36 });
+      expect((await db().select().from(schema.invoiceLines).where(eq(schema.invoiceLines.invoiceId, inv.id))).map((l) => l.description)).toEqual(["Frais de carte de crédit (2,4 %)"]);
+      const [pay] = await db().select().from(schema.invoicePayments).where(eq(schema.invoicePayments.invoiceId, inv.id));
+      expect(pay).toMatchObject({ amountCents: 10276, source: "stripe", quickbooksId: "QP-9" });
+      const qbPay = JSON.parse(calls.find((x) => x.url.includes("/payment?"))!.body);
+      expect(qbPay).toMatchObject({ CustomerRef: { value: "777" }, TotalAmt: 102.76, Line: [{ Amount: 102.76, LinkedTxn: [{ TxnId: "Q-501", TxnType: "Invoice" }] }] });
+      expect((await admin.get("/api/crm/invoices?q=FC-1&istatus=all")).json.items[0]).toMatchObject({ balanceCents: 0 });
+
+      // paid with a debit card: the fee is refunded at once, nothing is added to the invoice
+      funding = "debit";
+      await admin.post("/api/billing/payments/checkouts", { invoiceId: inv2.id });
+      const sid2 = (await db().select().from(schema.stripeCheckouts).where(eq(schema.stripeCheckouts.invoiceId, inv2.id)))[0]!.sessionId;
+      await hook(event("checkout.session.completed", session(sid2, { payment_status: "paid", amount_total: 10276, mode: "payment" })));
+      expect(calls.find((x) => x.url === "https://api.stripe.com/v1/refunds")!.body).toContain("amount=276");
+      expect((await db().select().from(schema.clientInvoices).where(eq(schema.clientInvoices.id, inv2.id)))[0]).toMatchObject({ totalCents: 10000 });
+      expect((await db().select().from(schema.invoicePayments).where(eq(schema.invoicePayments.invoiceId, inv2.id)))[0]).toMatchObject({ amountCents: 10000 });
+      // the same event again changes nothing
+      await hook(event("checkout.session.completed", session(sid, { payment_status: "paid", amount_total: 10276, mode: "payment" })));
+      expect(await db().select().from(schema.invoicePayments).where(eq(schema.invoicePayments.invoiceId, inv.id))).toHaveLength(1);
+    } finally {
+      vi.unstubAllGlobals();
+      await saveBillingSettings(adminRow!.id, { cardFee: { enabled: false } });
+      await saveQuickBooksSettings(null, { enabled: false, refreshToken: null, realmId: null });
+      await db().delete(schema.integrations).where(eq(schema.integrations.provider, "stripe"));
+    }
+  });
 });
 
 describe("local devices (made in the portal)", () => {

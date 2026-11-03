@@ -403,6 +403,9 @@ export const invoicePayments = pgTable(
     source: text("source").notNull().default("portal"),
     /** Id in the source (QuickBooks: payment id + invoice id) */
     externalId: text("external_id"),
+    /** An online payment sent to QuickBooks (its Payment id), or why it could not be */
+    quickbooksId: text("quickbooks_id"),
+    quickbooksError: text("quickbooks_error"),
     createdBy: uuid("created_by").references(() => users.id, { onDelete: "set null" }),
     createdAt: created(),
   },
@@ -2077,6 +2080,9 @@ export const stripeCheckouts = pgTable(
     amountCents: bigint("amount_cents", { mode: "number" }).notNull(),
     /** open | paid | expired | failed */
     status: text("status").notNull().default("open"),
+    /** The credit card fee asked with it (before and with its taxes): put on the invoice once paid by a credit card, refunded otherwise */
+    feeCents: integer("fee_cents").notNull().default(0),
+    feeTaxCents: integer("fee_tax_cents").notNull().default(0),
     /** Made with a live key (real money) or a test key */
     live: boolean("live").notNull().default(false),
     expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),

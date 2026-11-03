@@ -1,8 +1,9 @@
 import crypto from "node:crypto";
-import { and, eq, inArray } from "drizzle-orm";
+import { and, eq, inArray, sql } from "drizzle-orm";
 import { db, schema } from "../db/index.ts";
 import { audit } from "./audit.ts";
-import { stripeSettings } from "./billing.ts";
+import { billingSettings, stripeSettings } from "./billing.ts";
+import { taxesOfLines } from "../../shared/invoiceTax.ts";
 
 /**
  * Card payments on invoices with Stripe Checkout (Accounting › Paiements).
@@ -67,7 +68,21 @@ type Session = {
   metadata?: Record<string, string>;
 };
 
-/** A payment link for an invoice: the whole balance, or part of it. */
+/**
+ * The credit card fee on a payment of this amount for this client (Admin › Facturation: on, at most 2.4 %, never for a
+ * consumer), with its taxes when it is taxable and the client is not exempt. Zero when it does not apply.
+ */
+export async function cardFeeFor(clientId: string, amountCents: number): Promise<{ percent: number; feeCents: number; taxCents: number }> {
+  const s = await billingSettings();
+  const [client] = await db().select({ invoice: schema.clients.invoice }).from(schema.clients).where(eq(schema.clients.id, clientId));
+  if (!s.cardFee.enabled || s.cardFee.percent <= 0 || !client || client.invoice?.consumer) return { percent: 0, feeCents: 0, taxCents: 0 };
+  const percent = Math.min(s.cardFee.percent, 2.4);
+  const feeCents = Math.round((amountCents * percent) / 100);
+  const t = s.cardFee.taxable && client.invoice?.taxes !== false ? taxesOfLines([feeCents], s.taxes.gstRate, s.taxes.qstRate) : { gst: 0, qst: 0 };
+  return { percent, feeCents, taxCents: t.gst + t.qst };
+}
+
+/** A payment link for an invoice: the whole balance, or part of it (with the credit card fee as a line of its own when it applies). */
 export async function createCheckout(p: { invoiceId: string; amountCents?: number; actorId: string | null; baseUrl: string }) {
   const s = await stripeSettings();
   if (!s.enabled || !s.secretKey || !s.paymentLinks) throw new StripeError("not_configured");
@@ -81,6 +96,9 @@ export async function createCheckout(p: { invoiceId: string; amountCents?: numbe
   const amount = p.amountCents ?? balance;
   if (!Number.isInteger(amount) || amount > balance || amount < Math.min(MIN_CENTS, balance)) throw new StripeError("amount", String(balance));
   const [client] = await db().select({ name: schema.clients.name }).from(schema.clients).where(eq(schema.clients.id, inv.clientId));
+  // the fee is shown on Stripe's page as a line of its own; refunded by itself if the card turns out to be a debit card
+  const fee = await cardFeeFor(inv.clientId, amount);
+  const pct = fee.percent.toLocaleString("fr-CA", { maximumFractionDigits: 2 });
 
   const id = crypto.randomUUID();
   const expiresAt = Math.floor(Date.now() / 1000) + LINK_HOURS * 3600;
@@ -95,10 +113,21 @@ export async function createCheckout(p: { invoiceId: string; amountCents?: numbe
       "line_items[0][price_data][product_data][name]": `Facture ${inv.number} - AKAB Informatique`.slice(0, 250),
       "line_items[0][price_data][product_data][description]": (client?.name ?? "").slice(0, 250) || "AKAB Informatique",
       "line_items[0][quantity]": "1",
+      ...(fee.feeCents > 0
+        ? {
+            "line_items[1][price_data][currency]": "cad",
+            "line_items[1][price_data][unit_amount]": String(fee.feeCents + fee.taxCents),
+            "line_items[1][price_data][product_data][name]": `Frais de carte de crédit (${pct} %)${fee.taxCents ? " taxes incluses" : ""}`,
+            "line_items[1][quantity]": "1",
+            "custom_text[submit][message]": `Des frais de ${pct} % s'appliquent aux cartes de crédit. Payée avec une carte de débit ou prépayée, ces frais vous sont remboursés automatiquement.`,
+          }
+        : {}),
       client_reference_id: inv.id,
       "metadata[invoice_id]": inv.id,
       "metadata[invoice_number]": inv.number,
       "metadata[checkout_id]": id,
+      "metadata[fee_cents]": String(fee.feeCents),
+      "payment_intent_data[metadata][invoice_id]": inv.id,
       "payment_intent_data[description]": `Facture ${inv.number}`.slice(0, 250),
       "payment_intent_data[metadata][invoice_number]": inv.number,
       expires_at: String(expiresAt),
@@ -110,7 +139,7 @@ export async function createCheckout(p: { invoiceId: string; amountCents?: numbe
   if (!session.url) throw new StripeError("api", "no_url");
   const [row] = await db()
     .insert(schema.stripeCheckouts)
-    .values({ id, invoiceId: inv.id, sessionId: session.id, url: session.url, amountCents: amount, live: Boolean(session.livemode), expiresAt: new Date((session.expires_at ?? expiresAt) * 1000), createdBy: p.actorId })
+    .values({ id, invoiceId: inv.id, sessionId: session.id, url: session.url, amountCents: amount, feeCents: fee.feeCents, feeTaxCents: fee.taxCents, live: Boolean(session.livemode), expiresAt: new Date((session.expires_at ?? expiresAt) * 1000), createdBy: p.actorId })
     .returning();
   await audit(p.actorId, "billing.stripe.checkout_created", inv.id, { number: inv.number, amountCents: amount, live: row.live });
   return row;
@@ -153,18 +182,49 @@ export function verifySignature(raw: string, header: string | undefined, secret:
 
 type StripeEvent = { id: string; type: string; data: { object: Session } };
 
+/**
+ * The fee of a paid session: a credit card keeps it — it becomes a line of the invoice (its total and taxes grow) —, a
+ * debit or prepaid card gets it back at once (a Stripe refund of the fee only). Returns what stays paid on the invoice.
+ */
+async function settleFee(row: typeof schema.stripeCheckouts.$inferSelect, session: Session, paid: number): Promise<number> {
+  const feeTotal = row.feeCents + row.feeTaxCents;
+  if (!feeTotal || !session.payment_intent) return paid;
+  const s = await stripeSettings();
+  if (!s.secretKey) return paid;
+  const pi = await stripeCall<{ id: string; payment_method?: { card?: { funding?: string } } | string | null }>(s.secretKey, "GET", `/payment_intents/${encodeURIComponent(session.payment_intent)}?expand[]=payment_method`);
+  const funding = typeof pi.payment_method === "object" ? pi.payment_method?.card?.funding : undefined;
+  if (funding !== "credit") {
+    await stripeCall(s.secretKey, "POST", "/refunds", { payment_intent: pi.id, amount: String(feeTotal), "metadata[reason]": "card_fee_not_credit" }, `portal-fee-refund-${row.id}`);
+    await audit(null, "billing.stripe.fee_refunded", row.invoiceId, { feeCents: feeTotal, funding: funding ?? "unknown" });
+    return paid - feeTotal;
+  }
+  const s2 = await billingSettings();
+  const pct = Math.min(s2.cardFee.percent, 2.4).toLocaleString("fr-CA", { maximumFractionDigits: 2 });
+  const [last] = await db().select({ n: sql<number>`coalesce(max(${schema.invoiceLines.position}), 0)::int` }).from(schema.invoiceLines).where(eq(schema.invoiceLines.invoiceId, row.invoiceId));
+  await db().insert(schema.invoiceLines).values({ invoiceId: row.invoiceId, kind: "charge", description: `Frais de carte de crédit (${pct} %)`, quantityX100: 100, unitPriceCents: row.feeCents, amountCents: row.feeCents, taxable: row.feeTaxCents > 0, position: (last?.n ?? 0) + 1 });
+  await db()
+    .update(schema.clientInvoices)
+    .set({ totalCents: sql`${schema.clientInvoices.totalCents} + ${feeTotal}`, taxCents: sql`${schema.clientInvoices.taxCents} + ${row.feeTaxCents}`, updatedAt: new Date() })
+    .where(eq(schema.clientInvoices.id, row.invoiceId));
+  await audit(null, "billing.stripe.fee_added", row.invoiceId, { feeCents: row.feeCents, taxCents: row.feeTaxCents });
+  return paid;
+}
+
 /** A paid session becomes a payment on its invoice (once: the session id is the key). */
 async function recordPaid(session: Session) {
   const [row] = await db().select().from(schema.stripeCheckouts).where(eq(schema.stripeCheckouts.sessionId, session.id));
   // a session this portal did not create is not ours
   if (!row || row.status === "paid") return "ignored";
-  const amount = session.amount_total ?? row.amountCents;
+  // closed first: a second delivery of the same event finds it paid
+  const [claimed] = await db().update(schema.stripeCheckouts).set({ status: "paid", paidAt: new Date() }).where(and(eq(schema.stripeCheckouts.id, row.id), inArray(schema.stripeCheckouts.status, ["open", "expired", "failed"]))).returning({ id: schema.stripeCheckouts.id });
+  if (!claimed) return "ignored";
+  const amount = await settleFee(row, session, session.amount_total ?? row.amountCents + row.feeCents + row.feeTaxCents);
   const [inv] = await db().select().from(schema.clientInvoices).where(eq(schema.clientInvoices.id, row.invoiceId));
   if (!inv) return "ignored";
   const balance = await balanceOf(inv);
   const today = new Date().toLocaleDateString("en-CA", { timeZone: "America/Toronto" });
   // the money is received whatever happened meanwhile: kept, and flagged when it exceeds the balance
-  await db()
+  const payment = await db()
     .insert(schema.invoicePayments)
     .values({
       invoiceId: inv.id,
@@ -176,9 +236,11 @@ async function recordPaid(session: Session) {
       source: "stripe",
       externalId: `stripe:${session.id}`,
     })
-    .onConflictDoNothing();
-  await db().update(schema.stripeCheckouts).set({ status: "paid", paidAt: new Date() }).where(eq(schema.stripeCheckouts.id, row.id));
+    .onConflictDoNothing()
+    .returning({ id: schema.invoicePayments.id });
   await audit(null, "billing.stripe.payment_received", inv.id, { number: inv.number, amountCents: amount, live: Boolean(session.livemode) });
+  // QuickBooks: the invoice (with the fee line, when one was added) and the payment, tied to it
+  if (payment[0]) await (await import("./quickbooks.ts")).autoSyncPayment(payment[0].id);
   return "paid";
 }
 

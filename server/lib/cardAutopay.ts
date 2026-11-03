@@ -366,10 +366,12 @@ export async function chargeInvoice(invoiceId: string, a: Row): Promise<boolean>
       `autopay-charge-${inv.id}`,
     );
     if (pi.status !== "succeeded") throw new StripeError("api", pi.last_payment_error?.message ?? pi.status);
-    await db()
+    const [pay] = await db()
       .insert(schema.invoicePayments)
       .values({ invoiceId: inv.id, amountCents: balance, paidOn: today(), method: "stripe", reference: pi.id.slice(0, 100), note: `Carte ${a.cardBrand ?? ""} •••• ${a.cardLast4 ?? ""}`.trim(), source: "stripe", externalId: `stripe:${pi.id}` })
-      .onConflictDoNothing();
+      .onConflictDoNothing()
+      .returning({ id: schema.invoicePayments.id });
+    if (pay) await (await import("./quickbooks.ts")).autoSyncPayment(pay.id);
     await db().update(schema.clientInvoices).set({ cardChargeStatus: "charged", cardChargeError: null, updatedAt: new Date() }).where(eq(schema.clientInvoices.id, inv.id));
     await db().update(schema.contractAutopay).set({ lastChargeAt: new Date(), lastError: null }).where(eq(schema.contractAutopay.id, a.id));
     await audit(null, "billing.autopay_charged", inv.id, { number: inv.number, amountCents: balance });
