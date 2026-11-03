@@ -73,11 +73,11 @@ export function createApp() {
         // only our own pages frame our pages (the invoice PDF preview window)
         frameAncestors: ["'self'"],
         // the coffee break videos (youtube-nocookie: no tracking cookie until played)
-        frameSrc: ["'self'", "https://www.youtube-nocookie.com"],
+        frameSrc: ["'self'", "blob:", "https://www.youtube-nocookie.com"],
         baseUri: ["'self'"],
         formAction: ["'self'"],
         // the browser's PDF viewer (invoice preview) shows a PDF of ours inside the window
-        objectSrc: ["'self'"],
+        objectSrc: ["'self'", "blob:"],
       },
       strictTransportSecurity: config.production ? "max-age=31536000; includeSubDomains" : false,
       referrerPolicy: "strict-origin-when-cross-origin",

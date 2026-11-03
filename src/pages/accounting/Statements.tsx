@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
@@ -257,6 +257,24 @@ export function InvoiceMailButtons({ invoice, compact }: { invoice: { id: string
 export function InvoicePdfDialog({ invoice, onClose }: { invoice: { id: string; number: string }; onClose: () => void }) {
   const { t } = useTranslation();
   const src = `/api/crm/invoices/${invoice.id}/pdf`;
+  // the PDF is read here and shown from a local blob address: a proxy's frame header (X-Frame-Options) cannot block it
+  const [blobUrl, setBlobUrl] = useState<string | null>(null);
+  const [failed, setFailed] = useState(false);
+  useEffect(() => {
+    let url: string | null = null;
+    let live = true;
+    fetch(src, { credentials: "same-origin" })
+      .then((r) => (r.ok ? r.blob() : Promise.reject(new Error(String(r.status)))))
+      .then((b) => {
+        url = URL.createObjectURL(new Blob([b], { type: "application/pdf" }));
+        if (live) setBlobUrl(url);
+      })
+      .catch(() => live && setFailed(true));
+    return () => {
+      live = false;
+      if (url) URL.revokeObjectURL(url);
+    };
+  }, [src]);
   return (
     <Dialog open onOpenChange={(o) => !o && onClose()}>
       <DialogContent className="flex h-[90vh] max-h-[90vh] flex-col gap-3 sm:max-w-4xl">
@@ -278,7 +296,13 @@ export function InvoicePdfDialog({ invoice, onClose }: { invoice: { id: string; 
           </DialogTitle>
           <DialogDescription className="sr-only">{t("statements.pdfTitle", { number: invoice.number })}</DialogDescription>
         </DialogHeader>
-        <iframe src={src} title={invoice.number} className="min-h-0 w-full flex-1 rounded-lg border bg-white" />
+        {failed ? (
+          <p className="py-10 text-center text-sm text-muted-foreground">{t("common.error")}</p>
+        ) : blobUrl ? (
+          <iframe src={blobUrl} title={invoice.number} className="min-h-0 w-full flex-1 rounded-lg border bg-white" />
+        ) : (
+          <div className="flex flex-1 items-center justify-center"><Loader2 className="size-5 animate-spin text-muted-foreground" /></div>
+        )}
       </DialogContent>
     </Dialog>
   );
