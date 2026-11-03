@@ -834,6 +834,9 @@ describe("view as client", () => {
 
     const board = (await admin.get("/api/board")).json;
     expect(board.some((m: any) => m.title === "Seulement client 2")).toBe(false);
+    // the client's tickets are there: the technician is nobody's contact, so every ticket of the company shows (as its main contact sees them)
+    const viewTickets = (await admin.get("/api/portal/tickets")).json;
+    if (viewTickets.linked) expect(viewTickets.items.every((t: any) => t.mine)).toBe(true);
     // staff areas are closed while viewing as a client
     expect((await admin.get("/api/admin/staff")).status).toBe(403);
     expect((await admin.get("/api/messages")).status).toBe(403);
@@ -4991,6 +4994,14 @@ describe("client portal: tickets", () => {
     expect(detail.activity.map((n: any) => n.text)).toContain("Pièce commandée, installation jeudi.");
     expect(JSON.stringify(detail)).not.toContain("SECRET");
     expect(JSON.stringify(detail)).not.toMatch(/"hours"|internalText/);
+
+    // a technician viewing the portal as this client sees every ticket of the company (they are nobody's contact)
+    const viewer = await signIn("admin@akab.local");
+    expect((await viewer.post("/api/view-as", { clientId: company.id })).status).toBe(200);
+    const asClient = (await viewer.get("/api/portal/tickets")).json.items.map((t: any) => t.id);
+    expect(asClient).toEqual(expect.arrayContaining([his.id, other.id]));
+    expect((await viewer.get(`/api/portal/tickets/${other.id}`)).status).toBe(200);
+    await viewer.del("/api/view-as");
 
     // the client admin sees the whole company with the filter
     const marie = await signIn("responsable1@client.example");

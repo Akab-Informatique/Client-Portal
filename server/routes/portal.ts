@@ -275,9 +275,9 @@ async function ticketContext(a: AuthContext, clientId: string) {
     companyId: company.id,
     companyName: company.name,
     visible: (t: NTicket) => t.company.id === company.id && !alert(t),
-    // their tickets: they opened it (the contact) or are one of its other contacts;
-    // not a contact yet: by name
-    mine: (t: NTicket) => (contactId ? t.contactId === contactId || others.has(t.id) : t.contact.trim().toLowerCase() === name),
+    // their tickets: they opened it (the contact) or are one of its other contacts; not a contact yet: by name.
+    // A technician viewing the portal as the client is nobody's contact: every ticket of the company (as its main contact sees them)
+    mine: (t: NTicket) => (a.viewAs ? true : contactId ? t.contactId === contactId || others.has(t.id) : t.contact.trim().toLowerCase() === name),
   };
 }
 
