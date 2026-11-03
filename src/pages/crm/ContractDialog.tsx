@@ -3,7 +3,7 @@ import { useTranslation } from "react-i18next";
 import type { TFunction } from "i18next";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
-import { Ban, CalendarClock, CalendarDays, Cloud, FilePen, FilePlus2, FileText, History, Loader2, Minus, Pencil, Play, Plus, Receipt, Star, Trash2, TrendingUp, Wrench } from "lucide-react";
+import { Ban, Building2, CalendarClock, CalendarDays, Cloud, FilePen, FilePlus2, FileText, History, Loader2, Minus, Pencil, Play, Plus, Receipt, Star, Trash2, TrendingUp, Wrench } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
@@ -46,7 +46,7 @@ type Line = {
   periods: { from: string; to: string; days: number; periodDays: number; full: boolean; amountCents: number }[];
 };
 type Summary = { billedThrough?: string | null; billedCents?: number; revenueCents: number; perPeriodCents: number; yearlyExtraCents: number; endsOn: string | null; dueCents: number; next: { date: string; amountCents: number; prorated: boolean } | null };
-type Detail = CrmContract & { billingPeriod: BillingPeriod; endedOn: string | null; billedThrough: string | null; services: Line[]; bankMonths?: BankMonth[]; summary: Summary; charged: { has: boolean; billingItems: number; timeEntries: number; servicesStarted: number } };
+type Detail = CrmContract & { billingPeriod: BillingPeriod; endedOn: string | null; billedThrough: string | null; services: Line[]; bankMonths?: BankMonth[]; bankUsage?: { company: string; month: string; hours: number }[]; summary: Summary; charged: { has: boolean; billingItems: number; timeEntries: number; servicesStarted: number } };
 type CatalogItem = { id: string; name: string; kind: "recurring" | "recurring_yearly"; priceCents: number; costCents: number };
 export type Event = { id: string; kind: string; source: string; detail: Record<string, any>; at: string; actor: string | null };
 
@@ -54,7 +54,7 @@ const todayYmd = () => new Date().toLocaleDateString("en-CA", { timeZone: "Ameri
 const toCents = (v: string) => (v.trim() === "" ? null : Math.round((Number(v.replace(",", ".")) || 0) * 100));
 
 function contractError(t: (k: string, o?: Record<string, unknown>) => string, e: unknown) {
-  if (e instanceof ApiError && ["contract_dates", "contract_dates_services", "service_outside_term", "service_from_vendor", "service_not_recurring", "contract_no_term", "contract_inactive", "invalid_type"].includes(e.code)) return t(`crm.contracts.errors.${e.code}`);
+  if (e instanceof ApiError && ["contract_dates", "contract_dates_services", "service_outside_term", "service_from_vendor", "service_not_recurring", "contract_no_term", "contract_inactive", "invalid_type", "no_parent", "not_banked"].includes(e.code)) return t(`crm.contracts.errors.${e.code}`);
   return ticketErrorText(t, e);
 }
 
@@ -242,7 +242,7 @@ export function NewContractDialog({ client, onClose }: { client: CrmDetail; onCl
     const now = new Date();
     const end = new Date(now.getFullYear() + 1, now.getMonth(), now.getDate() - 1, 12);
     const day = (d: Date) => new Date(d.getTime() - d.getTimezoneOffset() * 60_000).toISOString().slice(0, 10);
-    return { name: "", typeKey: "", startDate: day(now), endDate: day(end), figure: "", rate: "", billingPeriod: "monthly" as BillingPeriod, billedThrough: "", supportDefault: false, bundleOn: false, bundlePrice: "", bundleQty: "1", bankRate: "", bankRollover: "lose" as BankRollover, rebate: "" };
+    return { name: "", typeKey: "", startDate: day(now), endDate: day(end), figure: "", rate: "", billingPeriod: "monthly" as BillingPeriod, billedThrough: "", supportDefault: false, sharedWithChildren: false, billedToParent: false, bundleOn: false, bundlePrice: "", bundleQty: "1", bankRate: "", bankRollover: "lose" as BankRollover, rebate: "" };
   });
   const [lines, setLines] = useState<Draft[]>([]);
   // the hourly rate starts at the usual one of Admin › Facturation; typing another changes it, 0 means no hourly rate (included)
@@ -286,6 +286,8 @@ export function NewContractDialog({ client, onClose }: { client: CrmDetail; onCl
         billingPeriod: isBank ? "monthly" : f.billingPeriod,
         ...(f.billedThrough ? { billedThrough: f.billedThrough } : {}),
         ...(f.supportDefault ? { supportDefault: true } : {}),
+        ...(f.sharedWithChildren ? { sharedWithChildren: true } : {}),
+        ...(f.billedToParent ? { billedToParent: true } : {}),
         ...(hourlyRate !== undefined && Number.isFinite(hourlyRate) ? { hourlyRate } : {}),
         ...figure,
         ...(percentOf(f.rebate) > 0 ? { rebate: percentOf(f.rebate) } : {}),
@@ -362,6 +364,24 @@ export function NewContractDialog({ client, onClose }: { client: CrmDetail; onCl
                   <span className="block text-[10px] text-muted-foreground">{t("crm.contracts.supportDefaultHint")}</span>
                 </span>
               </label>
+              {client.children.length > 0 && (
+                <label className="flex items-center gap-2 self-end pb-2 text-xs">
+                  <input type="checkbox" checked={f.sharedWithChildren} onChange={(e) => setF((x) => ({ ...x, sharedWithChildren: e.target.checked }))} className="size-4 accent-[color:var(--gold)]" />
+                  <span>
+                    <span className="block font-medium">{t("crm.contracts.shareChildren")}</span>
+                    <span className="block text-[10px] text-muted-foreground">{t("crm.contracts.shareChildrenHint")}</span>
+                  </span>
+                </label>
+              )}
+              {client.parent && (
+                <label className="flex items-center gap-2 self-end pb-2 text-xs">
+                  <input type="checkbox" checked={f.billedToParent} onChange={(e) => setF((x) => ({ ...x, billedToParent: e.target.checked }))} className="size-4 accent-[color:var(--gold)]" />
+                  <span>
+                    <span className="block font-medium">{t("crm.contracts.billedToParent", { name: client.parent.name })}</span>
+                    <span className="block text-[10px] text-muted-foreground">{t("crm.contracts.billedToParentHint")}</span>
+                  </span>
+                </label>
+              )}
               {/* the recurring services contract asks no charge here: it comes from its services */}
               {type && type.kind !== "recurring" && type.kind !== "hourly" && !isBank && (
                 <Field label={t(`crm.contracts.figure_${type.kind}`)}>
@@ -506,6 +526,8 @@ export function ContractWindow({ client, contractId, onClose }: { client: CrmDet
                   <span className="rounded-md border border-amber-500/40 bg-amber-500/10 px-1.5 py-0.5 text-[10px] font-semibold uppercase text-amber-300">{k.endedOn ? t("crm.contracts.window.stoppedOn", { date: shortDate(k.endedOn) }) : t("crm.contracts.inactive")}</span>
                 )}
                 {(k.rebateBps ?? 0) > 0 && <span className="rounded-md border border-emerald-500/40 bg-emerald-500/10 px-1.5 py-0.5 text-[10px] font-semibold text-emerald-300">{t("rebate.onContract", { pct: (k.rebateBps ?? 0) / 100 })}</span>}
+                {k.sharedWithChildren && <span className="flex items-center gap-1 rounded-md border border-sky-500/40 bg-sky-500/10 px-1.5 py-0.5 text-[10px] font-semibold text-sky-300"><Building2 className="size-3" /> {t("crm.contracts.sharedBadge")}</span>}
+                {k.billedToParent && <span className="flex items-center gap-1 rounded-md border border-sky-500/40 bg-sky-500/10 px-1.5 py-0.5 text-[10px] font-semibold text-sky-300"><Building2 className="size-3" /> {t("crm.contracts.parentPaysBadge")}</span>}
                 {k.isSupportDefault && <span className="rounded-md border border-[color:var(--gold)]/40 bg-[color:var(--gold)]/10 px-1.5 py-0.5 text-[10px] font-semibold text-primary">{t("crm.contracts.supportDefault")}</span>}
               </DialogTitle>
               <DialogDescription>
@@ -529,7 +551,7 @@ export function ContractWindow({ client, contractId, onClose }: { client: CrmDet
                 </TabsTrigger>
               </TabsList>
               <TabsContent value="services" className="pt-3">
-                {k.billingMode === "banked" ? <BankTab k={k} /> : <ServicesTab client={client} k={k} editable={editable} onChanged={refresh} />}
+                {k.billingMode === "banked" ? <BankTab client={client} k={k} editable={editable} onChanged={refresh} /> : <ServicesTab client={client} k={k} editable={editable} onChanged={refresh} />}
               </TabsContent>
               <TabsContent value="charges" className="pt-3">
                 <ChargesTab k={k} lang={lang} />
@@ -550,10 +572,35 @@ export function ContractWindow({ client, contractId, onClose }: { client: CrmDet
 
 // ── services ──
 /** An hours bank: where it stands this month and month by month what was available, used, left and bought */
-function BankTab({ k }: { k: Detail }) {
+function BankTab({ client, k, editable, onChanged }: { client: CrmDetail; k: Detail; editable: boolean; onChanged: () => void }) {
   const { t, i18n } = useTranslation();
+  const can = useCan();
   const rows = [...(k.bankMonths ?? [])].reverse();
   const h = (n: number) => `${n.toLocaleString(i18n.language, { maximumFractionDigits: 2 })} h`;
+  const base = `/crm/clients/${client.id}/contracts/${k.id}/bank-adjustments`;
+  const qc = useQueryClient();
+  const key = ["crm", "bank-adjustments", k.id];
+  const { data: adjustments = [] } = useQuery({ queryKey: key, queryFn: () => api.get<{ id: string; day: string; hours: number; note: string; by: string | null }[]>(base) });
+  const today = new Date().toLocaleDateString("en-CA", { timeZone: "America/Toronto" });
+  const [form, setForm] = useState({ hours: "", day: today, note: "" });
+  const done = () => {
+    void qc.invalidateQueries({ queryKey: key });
+    onChanged();
+  };
+  const add = useMutation({
+    mutationFn: () => api.post(base, { hours: Number(form.hours.replace(",", ".")), day: form.day, note: form.note }),
+    onSuccess: () => {
+      setForm({ hours: "", day: today, note: "" });
+      toast.success(t("crm.contracts.bank.adjustSaved"));
+      done();
+    },
+    onError: (e) => toast.error(contractError(t, e)),
+  });
+  const remove = useMutation({ mutationFn: (id: string) => api.del(`${base}/${id}`), onSuccess: done, onError: (e) => toast.error(contractError(t, e)) });
+  const hoursNum = Number(form.hours.replace(",", "."));
+  // who used the hours: this month and in all (several companies when a parent shares its bank with its children)
+  const thisMonth = today.slice(0, 7);
+  const byCompany = [...(k.bankUsage ?? []).reduce((m, u) => m.set(u.company, { company: u.company, now: (m.get(u.company)?.now ?? 0) + (u.month === thisMonth ? u.hours : 0), total: (m.get(u.company)?.total ?? 0) + u.hours }), new Map<string, { company: string; now: number; total: number }>()).values()].sort((x, y) => y.total - x.total);
   return (
     <div className="space-y-3">
       {k.bank ? (
@@ -567,12 +614,72 @@ function BankTab({ k }: { k: Detail }) {
         <p className="text-sm text-muted-foreground">{t("crm.contracts.bank.notSet")}</p>
       )}
       <p className="text-xs text-muted-foreground">{t(`crm.contracts.bank.${k.bankRollover ?? "lose"}Hint`)}</p>
+      {editable && can("crm.billing") && (
+        <div className="space-y-2 rounded-xl border bg-background/30 p-3">
+          <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">{t("crm.contracts.bank.adjustTitle")}</p>
+          <div className="grid gap-2 sm:grid-cols-[8rem_9rem_1fr_auto]">
+            <Field label={t("crm.contracts.bank.adjustHours")} hint={t("crm.contracts.bank.adjustHoursHint")}>
+              <Input value={form.hours} inputMode="decimal" placeholder="+2 / −1,5" onChange={(e) => setForm({ ...form, hours: e.target.value })} className="text-right font-mono" />
+            </Field>
+            <Field label={t("crm.contracts.bank.adjustDay")}>
+              <Input type="date" value={form.day} onChange={(e) => setForm({ ...form, day: e.target.value })} />
+            </Field>
+            <Field label={t("crm.contracts.bank.adjustNote")}>
+              <Input value={form.note} maxLength={300} onChange={(e) => setForm({ ...form, note: e.target.value })} />
+            </Field>
+            <Button type="button" size="sm" className="self-end" disabled={add.isPending || !Number.isFinite(hoursNum) || hoursNum === 0 || !form.day} onClick={() => add.mutate()}>
+              {add.isPending && <Loader2 className="size-3.5 animate-spin" />} {t("crm.contracts.bank.adjustAdd")}
+            </Button>
+          </div>
+        </div>
+      )}
+      {adjustments.length > 0 && (
+        <ul className="divide-y divide-border/50 rounded-xl border text-sm">
+          {adjustments.map((a) => (
+            <li key={a.id} className="flex items-center gap-3 px-3 py-1.5">
+              <span className="w-24 text-xs text-muted-foreground">{a.day}</span>
+              <span className={cn("w-20 text-right font-mono", a.hours < 0 ? "text-amber-300" : "text-emerald-300")}>{a.hours > 0 ? "+" : "−"}{h(Math.abs(a.hours))}</span>
+              <span className="min-w-0 flex-1 truncate">{a.note || "—"}</span>
+              <span className="text-xs text-muted-foreground">{a.by}</span>
+              {editable && can("crm.billing") && (
+                <button type="button" aria-label={t("common.delete")} disabled={remove.isPending} onClick={() => remove.mutate(a.id)} className="text-muted-foreground hover:text-destructive">
+                  <Trash2 className="size-3.5" />
+                </button>
+              )}
+            </li>
+          ))}
+        </ul>
+      )}
+      {byCompany.length > 1 && (
+        <div className="space-y-1.5 rounded-xl border bg-background/30 p-3">
+          <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">{t("crm.contracts.bank.whoUsed")}</p>
+          <table className="w-full text-sm">
+            <thead className="text-left text-[11px] uppercase text-muted-foreground">
+              <tr>
+                <th className="py-1">{t("crm.contracts.bank.company")}</th>
+                <th className="text-right">{t("crm.contracts.bank.thisMonth")}</th>
+                <th className="text-right">{t("crm.contracts.bank.total")}</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-border/50 font-mono">
+              {byCompany.map((c) => (
+                <tr key={c.company}>
+                  <td className="py-1.5 font-sans">{c.company}</td>
+                  <td className="text-right">{h(c.now)}</td>
+                  <td className="text-right">{h(c.total)}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
       {rows.length > 0 && (
         <table className="w-full text-sm">
           <thead className="text-left text-[11px] uppercase text-muted-foreground">
             <tr>
               <th className="py-1">{t("crm.contracts.bank.month")}</th>
               <th className="text-right">{t("crm.contracts.bank.available")}</th>
+              <th className="text-right">{t("crm.contracts.bank.adjusted")}</th>
               <th className="text-right">{t("crm.contracts.bank.used")}</th>
               <th className="text-right">{t("crm.contracts.bank.left")}</th>
               <th className="text-right">{t("crm.contracts.bank.bought")}</th>
@@ -583,6 +690,7 @@ function BankTab({ k }: { k: Detail }) {
               <tr key={r.month}>
                 <td className="py-1.5 font-sans">{r.month}</td>
                 <td className="text-right">{h(r.available)}</td>
+                <td className={cn("text-right", r.adjusted < 0 && "text-amber-300", r.adjusted > 0 && "text-emerald-300")}>{r.adjusted ? `${r.adjusted > 0 ? "+" : "−"}${h(Math.abs(r.adjusted))}` : "—"}</td>
                 <td className="text-right">{h(r.used)}</td>
                 <td className={cn("text-right", r.over > 0 && "text-amber-300")}>{r.over > 0 ? `−${h(r.over)}` : h(r.left)}</td>
                 <td className="text-right">{h(r.charge)}</td>
@@ -1104,6 +1212,16 @@ function OverviewTab({ client, k, editable, onChanged, onClose }: { client: CrmD
           <label className="flex items-center gap-2 text-xs text-muted-foreground" title={t("crm.contracts.autoHint")}>
             <Switch checked={k.autoApprove} disabled={patch.isPending || !can("accounting.manage")} onCheckedChange={(v) => patch.mutate({ autoApprove: v })} /> {t("crm.contracts.auto")}
           </label>
+          {client.children.length > 0 && (
+            <label className="flex items-center gap-2 text-xs text-muted-foreground" title={t("crm.contracts.shareChildrenHint")}>
+              <Switch checked={Boolean(k.sharedWithChildren)} disabled={patch.isPending} onCheckedChange={(v) => patch.mutate({ sharedWithChildren: v })} /> {t("crm.contracts.shareChildren")}
+            </label>
+          )}
+          {client.parent && (
+            <label className="flex items-center gap-2 text-xs text-muted-foreground" title={t("crm.contracts.billedToParentHint")}>
+              <Switch checked={Boolean(k.billedToParent)} disabled={patch.isPending} onCheckedChange={(v) => patch.mutate({ billedToParent: v })} /> {t("crm.contracts.billedToParent", { name: client.parent.name })}
+            </label>
+          )}
           {!k.isSupportDefault && k.active && (
             <Button type="button" variant="ghost" size="sm" className="h-8 gap-1 text-xs" disabled={patch.isPending} onClick={() => patch.mutate({ supportDefault: true })}>
               <Star className="size-3" /> {t("crm.contracts.makeDefault")}

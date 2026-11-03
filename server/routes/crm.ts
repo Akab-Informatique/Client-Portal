@@ -22,7 +22,7 @@ import { DraftError, recalcInvoiceTaxes, taxesByLine } from "../lib/billables.ts
 import { applyToLines, contractsIn, runningLinesOf } from "../lib/servicePrices.ts";
 import { InvoiceMailError, invoicePdfFor, sendInvoiceMail, sendStatement, sendStatements, statementOf, statementTargets } from "../lib/invoiceMail.ts";
 import { applyAutoApprove } from "../lib/billables.ts";
-import { BILLING_MODES, KIND_MODE, bankRowsOf, banksOf, contractTypes, usedByMonthOf, usedHoursOf, type ContractKind } from "../lib/contracts.ts";
+import { BILLING_MODES, KIND_MODE, adjustmentsOf, usageByCompanyOf, bankRowsOf, banksOf, contractTypes, usedByMonthOf, usedHoursOf, type ContractKind } from "../lib/contracts.ts";
 import { BANK_ROLLOVERS, bankBundle } from "../../shared/bank.ts";
 import { bpsOfPercent, combineBps, netCents } from "../../shared/rebate.ts";
 import { prorata, type ServicePeriod } from "../../shared/prorata.ts";
@@ -609,6 +609,10 @@ export const crmRoutes = new Hono<AppEnv>()
         billedThrough: zDay.nullable().optional(),
         /** The client's default support contract (the one tickets are logged on unless another is picked) */
         supportDefault: z.boolean().optional(),
+        /** A parent company's contract its children can use (their work under it is billed to the parent) */
+        sharedWithChildren: z.boolean().optional(),
+        /** A child company's contract that the parent company pays (its charges go on the parent's invoice) */
+        billedToParent: z.boolean().optional(),
         /** Dollars */
         hourlyRate: z.number().min(0).max(100_000).nullable().optional(),
         monthlyRate: z.number().min(0).max(1_000_000).nullable().optional(),
@@ -632,6 +636,7 @@ export const crmRoutes = new Hono<AppEnv>()
     const type = (await contractTypes()).find((t) => t.key === p.typeKey && t.active);
     if (!type) throw new HTTPException(400, { message: "invalid_type" });
     if (p.endDate < p.startDate) throw new HTTPException(400, { message: "contract_dates" });
+    if (p.billedToParent && !client.parentId) throw new HTTPException(400, { message: "no_parent" });
     const cents = (v: number | null | undefined) => (v == null ? null : Math.round(v * 100));
     const mode = KIND_MODE[type.kind as ContractKind];
     if (p.bundlePrice != null && type.kind !== "recurring") throw new HTTPException(400, { message: "bundle_not_recurring" });
@@ -651,7 +656,11 @@ export const crmRoutes = new Hono<AppEnv>()
     const bankRate = banked && p.bankedRate != null ? Math.round(p.bankedRate * 100) : null;
     const bank = banked && bankHours && bankRate != null ? bankBundle(bankHours, bankRate) : null;
     const row = await db().transaction(async (tx) => {
-      if (p.supportDefault) await tx.update(schema.clientContracts).set({ supportDefault: false }).where(eq(schema.clientContracts.clientId, client.id));
+      if (p.supportDefault) {
+        await tx.update(schema.clientContracts).set({ supportDefault: false }).where(eq(schema.clientContracts.clientId, client.id));
+        // an own default replaces a shared parent contract picked as the default
+        await tx.update(schema.clients).set({ supportContractId: null }).where(eq(schema.clients.id, client.id));
+      }
       const [k] = await tx
         .insert(schema.clientContracts)
         .values({
@@ -667,6 +676,8 @@ export const crmRoutes = new Hono<AppEnv>()
           endDate: p.endDate,
           hourlyRateCents: cents(p.hourlyRate),
           supportDefault: Boolean(p.supportDefault),
+          sharedWithChildren: Boolean(p.sharedWithChildren),
+          billedToParent: Boolean(p.billedToParent),
           // a recurring services contract has no typed charge: it comes from its services
           monthlyRateCents: type.kind === "recurring" ? null : cents(p.monthlyRate),
           fixedPriceCents: cents(p.fixedPrice),
@@ -803,9 +814,10 @@ export const crmRoutes = new Hono<AppEnv>()
     const today = todayQc();
     const used = await usedHoursOf([k]);
     const bank = (await banksOf([k])).get(k.id) ?? null;
-    const bankMonths = bank ? bankRowsOf(k, (await usedByMonthOf([k])).get(k.id), today) : [];
+    const bankMonths = bank ? bankRowsOf(k, (await usedByMonthOf([k])).get(k.id), today, (await adjustmentsOf([k.id])).get(k.id)) : [];
     const usual = Math.round((await billingSettings()).rates.hourly * 100);
-    return c.json({ ...k, bank, bankMonths, usedHours: used.get(k.id) ?? 0, usualRateCents: usual, services: rows.map((r) => serviceLine(r, k)), summary: summaryOf(k, rows, today), charged: await contractCharged(k.id, today) });
+    const bankUsage = bank ? ((await usageByCompanyOf([k])).get(k.id) ?? []) : [];
+    return c.json({ ...k, bank, bankMonths, bankUsage, usedHours: used.get(k.id) ?? 0, usualRateCents: usual, services: rows.map((r) => serviceLine(r, k)), summary: summaryOf(k, rows, today), charged: await contractCharged(k.id, today) });
   })
   /** What happened on a contract: added, changed, removed, stopped (newest first) */
   .get("/clients/:id/contracts/:kid/activity", async (c) => {
@@ -850,7 +862,9 @@ export const crmRoutes = new Hono<AppEnv>()
     const rows = await db().select().from(schema.clientContracts).where(eq(schema.clientContracts.clientId, client.id)).orderBy(asc(schema.clientContracts.name));
     // the client's default support contract: the one picked here, else the source's, else its only active one
     const active = rows.filter((k) => k.active);
-    const chosen = active.find((k) => k.supportDefault) ?? active.find((k) => k.isDefault) ?? (active.length === 1 ? active[0] : null);
+    // a shared parent contract picked as the default (still shared and active) replaces the client's own
+    const [pointed] = client.supportContractId && client.parentId ? await db().select({ id: schema.clientContracts.id }).from(schema.clientContracts).where(and(eq(schema.clientContracts.id, client.supportContractId), eq(schema.clientContracts.clientId, client.parentId), eq(schema.clientContracts.sharedWithChildren, true), eq(schema.clientContracts.active, true))) : [];
+    const chosen = pointed ? null : (active.find((k) => k.supportDefault) ?? active.find((k) => k.isDefault) ?? (active.length === 1 ? active[0] : null));
     const usual = Math.round((await billingSettings()).rates.hourly * 100);
     const used = await usedHoursOf(rows);
     const allLines = rows.length ? await db().select().from(schema.contractServices).where(inArray(schema.contractServices.contractId, rows.map((k) => k.id))) : [];
@@ -861,6 +875,70 @@ export const crmRoutes = new Hono<AppEnv>()
         .map((k) => ({ ...k, bank: banks.get(k.id) ?? null, isSupportDefault: chosen?.id === k.id, usualRateCents: usual, usedHours: used.get(k.id) ?? 0, serviceCount: allLines.filter((l) => l.contractId === k.id).length, summary: summaryOf(k, allLines.filter((l) => l.contractId === k.id), today) }))
         .sort((x, y) => Number(y.active) - Number(x.active) || Number(y.isSupportDefault) - Number(x.isSupportDefault) || x.name.localeCompare(y.name)),
     );
+  })
+
+  /** The contracts its parent company shares with its children: a child can use one as its default support contract */
+  .get("/clients/:id/parent-contracts", async (c) => {
+    const client = await clientOr404(c.req.param("id"));
+    if (!client.parentId) return c.json({ parent: null, contracts: [] });
+    const [parent] = await db().select({ id: schema.clients.id, name: schema.clients.name }).from(schema.clients).where(eq(schema.clients.id, client.parentId));
+    const rows = await db()
+      .select()
+      .from(schema.clientContracts)
+      .where(and(eq(schema.clientContracts.clientId, client.parentId), eq(schema.clientContracts.sharedWithChildren, true), eq(schema.clientContracts.active, true)))
+      .orderBy(asc(schema.clientContracts.name));
+    const banks = await banksOf(rows);
+    return c.json({ parent: parent ?? null, contracts: rows.map((k) => ({ id: k.id, name: k.name, type: k.type, billingMode: k.billingMode, bank: banks.get(k.id) ?? null, isSupportDefault: client.supportContractId === k.id })) });
+  })
+  /** Use one of the parent's shared contracts as this client's default support contract (none: its own default again) */
+  .put("/clients/:id/support-contract", requirePermission("crm.billing"), async (c) => {
+    const a = auth(c);
+    const client = await clientOr404(c.req.param("id"));
+    const p = await body(c, z.object({ contractId: zUuid.nullable() }));
+    if (p.contractId) {
+      const [k] = await db().select().from(schema.clientContracts).where(eq(schema.clientContracts.id, p.contractId));
+      if (!k || !client.parentId || k.clientId !== client.parentId || !k.sharedWithChildren || !k.active) throw new HTTPException(400, { message: "contract_not_shared" });
+    }
+    await db().update(schema.clients).set({ supportContractId: p.contractId, updatedAt: new Date() }).where(eq(schema.clients.id, client.id));
+    // a shared contract replaces the client's own default: only one default at a time
+    if (p.contractId) await db().update(schema.clientContracts).set({ supportDefault: false }).where(eq(schema.clientContracts.clientId, client.id));
+    await audit(a.user.id, "crm.support_contract_set", client.id, { contractId: p.contractId });
+    return c.json({ ok: true });
+  })
+  /** The hours put on or taken off an hours bank by hand */
+  .get("/clients/:id/contracts/:kid/bank-adjustments", async (c) => {
+    const client = await clientOr404(c.req.param("id"));
+    const k = await contractOr404(client.id, c.req.param("kid"));
+    const rows = await db()
+      .select({ a: schema.contractBankAdjustments, by: schema.users.name })
+      .from(schema.contractBankAdjustments)
+      .leftJoin(schema.users, eq(schema.users.id, schema.contractBankAdjustments.actorId))
+      .where(eq(schema.contractBankAdjustments.contractId, k.id))
+      .orderBy(desc(schema.contractBankAdjustments.day), desc(schema.contractBankAdjustments.createdAt));
+    return c.json(rows.map(({ a, by }) => ({ id: a.id, day: a.day, hours: a.hoursX100 / 100, note: a.note, by, createdAt: a.createdAt })));
+  })
+  .post("/clients/:id/contracts/:kid/bank-adjustments", requirePermission("crm.billing"), async (c) => {
+    const a = auth(c);
+    const client = await clientOr404(c.req.param("id"));
+    const k = await contractOr404(client.id, c.req.param("kid"));
+    if (k.billingMode !== "banked") throw new HTTPException(400, { message: "not_banked" });
+    const p = await body(c, z.object({ hours: z.number().min(-10_000).max(10_000), day: zDay.optional(), note: z.string().trim().max(300).default("") }));
+    const hoursX100 = Math.round(p.hours * 100);
+    if (hoursX100 === 0) throw new HTTPException(400, { message: "invalid_value" });
+    const [row] = await db().insert(schema.contractBankAdjustments).values({ contractId: k.id, day: p.day ?? todayQc(), hoursX100, note: p.note, actorId: a.user.id }).returning();
+    await audit(a.user.id, "crm.bank_adjusted", k.id, { hours: p.hours, day: row.day, note: p.note });
+    const bank = (await banksOf([k])).get(k.id) ?? null;
+    return c.json({ id: row.id, bank }, 201);
+  })
+  .delete("/clients/:id/contracts/:kid/bank-adjustments/:aid", requirePermission("crm.billing"), async (c) => {
+    const a = auth(c);
+    const client = await clientOr404(c.req.param("id"));
+    const k = await contractOr404(client.id, c.req.param("kid"));
+    const aid = zUuid.parse(c.req.param("aid"));
+    const gone = await db().delete(schema.contractBankAdjustments).where(and(eq(schema.contractBankAdjustments.id, aid), eq(schema.contractBankAdjustments.contractId, k.id))).returning({ id: schema.contractBankAdjustments.id });
+    if (!gone.length) throw new HTTPException(404, { message: "not_found" });
+    await audit(a.user.id, "crm.bank_adjustment_removed", k.id, { id: aid });
+    return c.json({ ok: true, bank: (await banksOf([k])).get(k.id) ?? null });
   })
 
   /** Every contract of every client (Accounting › Contrats), with what each charges */
@@ -1121,6 +1199,8 @@ export const crmRoutes = new Hono<AppEnv>()
         monthlyRate: zRate,
         ticketRate: zRate,
         supportDefault: z.literal(true).optional(),
+        sharedWithChildren: z.boolean().optional(),
+        billedToParent: z.boolean().optional(),
         name: z.string().trim().min(1).max(120).optional(),
         typeKey: z.string().trim().min(1).max(60).optional(),
         startDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).nullable().optional(),
@@ -1143,8 +1223,11 @@ export const crmRoutes = new Hono<AppEnv>()
     if (p.typeKey && !type) throw new HTTPException(400, { message: "invalid_type" });
     if (p.autoApprove && !a.permissions.includes("accounting.manage")) throw new HTTPException(403, { message: "accounting_manage_only" });
     const kid = zUuid.parse(c.req.param("kid"));
+    if (p.billedToParent && !client.parentId) throw new HTTPException(400, { message: "no_parent" });
     const cents = (v: number | null | undefined) => (v === undefined ? undefined : v === null ? null : Math.round(v * 100));
     const set = {
+      ...(p.sharedWithChildren !== undefined ? { sharedWithChildren: p.sharedWithChildren } : {}),
+      ...(p.billedToParent !== undefined ? { billedToParent: p.billedToParent } : {}),
       ...(p.autoApprove !== undefined ? { autoApprove: p.autoApprove } : {}),
       ...(p.billingMode ? { billingMode: p.billingMode } : {}),
       ...(p.hourlyRate !== undefined ? { hourlyRateCents: cents(p.hourlyRate) } : {}),
@@ -1189,7 +1272,10 @@ export const crmRoutes = new Hono<AppEnv>()
       if (lines.some((l) => (start && l.addedOn < start) || (end && l.addedOn > end))) throw new HTTPException(400, { message: "contract_dates_services" });
     }
     const row = await db().transaction(async (tx) => {
-      if (p.supportDefault) await tx.update(schema.clientContracts).set({ supportDefault: false }).where(and(eq(schema.clientContracts.clientId, client.id), ne(schema.clientContracts.id, kid)));
+      if (p.supportDefault) {
+        await tx.update(schema.clientContracts).set({ supportDefault: false }).where(and(eq(schema.clientContracts.clientId, client.id), ne(schema.clientContracts.id, kid)));
+        await tx.update(schema.clients).set({ supportContractId: null }).where(eq(schema.clients.id, client.id));
+      }
       const [r] = await tx
         .update(schema.clientContracts)
         .set({ ...set, updatedAt: new Date() })
@@ -1203,7 +1289,7 @@ export const crmRoutes = new Hono<AppEnv>()
     const setAside = row.billedThrough ? await excludeBilledThrough(row.id, row.billedThrough) : 0;
     await audit(a.user.id, "crm.contract_updated", row.id, { ...set, approved });
     // the activity: what changed, and a stop or a restart on its own
-    const watched = ["name", "type", "startDate", "endDate", "billingPeriod", "billingMode", "hourlyRateCents", "monthlyRateCents", "ticketRateCents", "fixedPriceCents", "bankedHoursX100", "bankRateCents", "bankRollover", "rebateBps", "bundlePriceCents", "bundleQuantity", "autoApprove", "billedThrough"] as const;
+    const watched = ["name", "type", "startDate", "endDate", "billingPeriod", "billingMode", "hourlyRateCents", "monthlyRateCents", "ticketRateCents", "fixedPriceCents", "bankedHoursX100", "bankRateCents", "bankRollover", "rebateBps", "bundlePriceCents", "bundleQuantity", "autoApprove", "billedThrough", "sharedWithChildren", "billedToParent"] as const;
     const changes: Record<string, [unknown, unknown]> = {};
     for (const key of watched) if (key in set && before[key] !== row[key]) changes[key] = [before[key], row[key]];
     if (Object.keys(changes).length) await recordContractEvent(row.id, "updated", { changes }, { userId: a.user.id });
@@ -1321,7 +1407,7 @@ async function invoiceViews(rows: (typeof schema.clientInvoices.$inferSelect)[],
       emailedAt: v.emailedAt,
       noEmail: noEmail.has(v.clientId),
       taxFixCents: taxFix.get(v.id) ?? 0,
-      lines: (lines.get(v.id) ?? []).map((l) => ({ id: l.id, kind: l.kind, description: l.description, quantity: l.quantityX100 / 100, unitPriceCents: l.unitPriceCents, amountCents: l.amountCents, taxable: l.taxable })),
+      lines: (lines.get(v.id) ?? []).map((l) => ({ id: l.id, kind: l.kind, sectionName: l.sectionName, description: l.description, quantity: l.quantityX100 / 100, unitPriceCents: l.unitPriceCents, amountCents: l.amountCents, taxable: l.taxable })),
       quickbooks: v.quickbooksId || v.quickbooksError ? { id: v.quickbooksId, syncedAt: v.quickbooksSyncedAt, error: v.quickbooksError } : null,
       payments: mine.map((x) => ({ id: x.p.id, amountCents: x.p.amountCents, paidOn: x.p.paidOn, method: x.p.method, reference: x.p.reference, note: x.p.note, source: x.p.source, by: x.by })),
     };

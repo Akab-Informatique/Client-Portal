@@ -930,6 +930,7 @@ function ContractField({ tk, editable }: { tk: TicketDetail; editable: boolean }
         {contracts.map((k) => (
           <option key={k.id} value={k.id}>
             {k.name}
+            {k.shared && k.ownerName ? ` (${k.ownerName})` : ""}
             {k.isDefault ? ` · ${t("tickets.contractBilling.default")}` : ""}
           </option>
         ))}

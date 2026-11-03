@@ -121,6 +121,9 @@ export type CrmContract = {
   hourlyRateCents: number | null;
   monthlyRateCents: number | null;
   ticketRateCents: number | null;
+  /** A parent company's contract its children can use; a child's contract the parent pays */
+  sharedWithChildren?: boolean;
+  billedToParent?: boolean;
   /** The client's default support contract */
   isSupportDefault: boolean;
   /** The usual hourly rate of Admin › Facturation, in cents */

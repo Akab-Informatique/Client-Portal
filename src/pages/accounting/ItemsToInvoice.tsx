@@ -169,7 +169,7 @@ type Draft = {
   notes: string | null;
   poRequired: boolean;
   exempt: boolean;
-  lines: { itemId: string; date?: string | null; contractName?: string | null; kind: Kind; description: string; quantity: number; unitPriceCents: number; amountCents: number; taxable: boolean }[];
+  lines: { itemId: string; sectionName?: string | null; date?: string | null; contractName?: string | null; kind: Kind; description: string; quantity: number; unitPriceCents: number; amountCents: number; taxable: boolean }[];
   subtotalCents: number;
   gstCents: number;
   qstCents: number;

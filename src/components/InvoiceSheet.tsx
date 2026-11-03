@@ -1,3 +1,4 @@
+import { Fragment } from "react";
 import { useTranslation } from "react-i18next";
 import { Logo } from "@/components/brand/Logo";
 import { money } from "@/pages/crm/shared";
@@ -11,7 +12,7 @@ export type SheetData = {
   poNumber: string | null;
   notes: string | null;
   client: { name: string; address: string | null; city: string | null; province: string | null; postalCode: string | null; email: string | null };
-  lines: { date?: string | null; description: string; contractName?: string | null; kind: string; quantity: number; unitPriceCents: number; amountCents: number }[];
+  lines: { sectionName?: string | null; date?: string | null; description: string; contractName?: string | null; kind: string; quantity: number; unitPriceCents: number; amountCents: number }[];
   subtotalCents: number;
   gstCents: number;
   qstCents: number;
@@ -40,6 +41,15 @@ export function InvoiceSheet({ d }: { d: SheetData }) {
   const terms = d.termsDays == null ? null : d.termsDays === 0 ? L("onReceipt") : L("net", { days: d.termsDays });
   const place = [d.client.city, d.client.province].filter(Boolean).join(", ");
   const cell = "border border-black/70 px-1.5 py-1";
+  // a parent company and its children: each company's charges in its own block, the parent first, with its subtotal
+  const sectioned = d.lines.some((l) => l.sectionName);
+  const groups: { name: string | null; lines: SheetData["lines"] }[] = [];
+  for (const l of d.lines) {
+    const name = sectioned ? (l.sectionName ?? "") : null;
+    const last = groups[groups.length - 1];
+    if (last && last.name === name) last.lines.push(l);
+    else groups.push({ name, lines: [l] });
+  }
   return (
     <div className="rounded-2xl bg-white p-8 text-[11px] leading-snug text-black shadow-xl">
       {/* the logo (made for a dark background) in its black pill */}
@@ -104,18 +114,36 @@ export function InvoiceSheet({ d }: { d: SheetData }) {
           </tr>
         </thead>
         <tbody>
-          {d.lines.map((l, i) => (
-            <tr key={i} className="align-top">
-              <td className={`${cell} whitespace-nowrap`}>{l.date ? dmy(l.date) : ""}</td>
-              <td className={cell}>
-                {l.description}
-                {l.contractName && <span className="block">{L("contract", { name: l.contractName })}</span>}
-              </td>
-              <td className={`${cell} text-right`}>{l.kind === "labour" ? l.quantity.toFixed(2) : ""}</td>
-              <td className={`${cell} text-right`}>{l.quantity.toFixed(2)}</td>
-              <td className={`${cell} whitespace-nowrap text-right`}>{(l.unitPriceCents / 100).toFixed(2)}</td>
-              <td className={`${cell} whitespace-nowrap text-right`}>{(l.amountCents / 100).toFixed(2)}</td>
-            </tr>
+          {groups.map((g, gi) => (
+            <Fragment key={gi}>
+              {g.name !== null && (
+                <tr>
+                  <td colSpan={6} className={`${cell} bg-black/5 font-semibold`}>
+                    {g.name}
+                  </td>
+                </tr>
+              )}
+              {g.lines.map((l, i) => (
+                <tr key={i} className="align-top">
+                  <td className={`${cell} whitespace-nowrap`}>{l.date ? dmy(l.date) : ""}</td>
+                  <td className={cell}>
+                    {l.description}
+                    {l.contractName && <span className="block">{L("contract", { name: l.contractName })}</span>}
+                  </td>
+                  <td className={`${cell} text-right`}>{l.kind === "labour" ? l.quantity.toFixed(2) : ""}</td>
+                  <td className={`${cell} text-right`}>{l.quantity.toFixed(2)}</td>
+                  <td className={`${cell} whitespace-nowrap text-right`}>{(l.unitPriceCents / 100).toFixed(2)}</td>
+                  <td className={`${cell} whitespace-nowrap text-right`}>{(l.amountCents / 100).toFixed(2)}</td>
+                </tr>
+              ))}
+              {g.name !== null && (
+                <tr>
+                  <td colSpan={6} className={`${cell} text-right font-semibold`}>
+                    {g.name} : {mm(g.lines.reduce((n, l) => n + l.amountCents, 0))}
+                  </td>
+                </tr>
+              )}
+            </Fragment>
           ))}
         </tbody>
       </table>

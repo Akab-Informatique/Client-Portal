@@ -541,6 +541,7 @@ function TimeEntryDialog({ timer, position, onLater }: { timer: Timer; position:
                   {contracts.map((k) => (
                     <SelectItem key={k.id} value={k.id}>
                       {k.name}
+                      {k.shared && k.ownerName ? ` (${k.ownerName})` : ""}
                       {k.isDefault ? ` · ${t("tickets.contractBilling.default")}` : ""}
                     </SelectItem>
                   ))}

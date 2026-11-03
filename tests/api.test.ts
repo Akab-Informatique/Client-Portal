@@ -9384,6 +9384,97 @@ describe("clients: contract count, all contracts, shared tab order", () => {
   });
 });
 
+describe("hours bank adjusted by hand, parent and child companies", () => {
+  it("adds and takes off hours of an hours bank by hand, in its month, and shows them", async () => {
+    resetRateLimit("login:ip:unknown");
+    const admin = await signIn("admin@akab.local");
+    const [client] = await db().select().from(schema.clients).limit(1);
+    const base = `/api/crm/clients/${client.id}/contracts`;
+    const k = (await admin.post(base, { name: "Banque ajustée", typeKey: "banked", startDate: "2026-01-01", endDate: "2026-12-31", bankedHours: 5, bankedRate: 100, bankRollover: "lose", services: [] })).json;
+    const left = async () => (await admin.get(`${base}/${k.id}`)).json.bank.left;
+    expect(await left()).toBe(5);
+    const add = await admin.post(`${base}/${k.id}/bank-adjustments`, { hours: 3, note: "Geste commercial" });
+    expect(add.status).toBe(201);
+    expect(add.json.bank).toMatchObject({ available: 8, left: 8 });
+    // taking hours off, and the month shows what was adjusted
+    expect((await admin.post(`${base}/${k.id}/bank-adjustments`, { hours: -1.5, note: "Erreur" })).status).toBe(201);
+    expect(await left()).toBe(6.5);
+    const detail = (await admin.get(`${base}/${k.id}`)).json;
+    expect(detail.bankMonths.at(-1).adjusted).toBe(1.5);
+    expect(Array.isArray(detail.bankUsage)).toBe(true);
+    const list = (await admin.get(`${base}/${k.id}/bank-adjustments`)).json;
+    expect(list).toHaveLength(2);
+    expect(list.map((x: any) => x.hours).sort()).toEqual([-1.5, 3]);
+    // a zero adjustment is refused; so is any contract that is not an hours bank
+    expect((await admin.post(`${base}/${k.id}/bank-adjustments`, { hours: 0 })).status).toBe(400);
+    const hourly = (await admin.post(base, { name: "Taux", typeKey: "hourly", hourlyRate: 100, startDate: "2026-01-01", endDate: "2026-12-31" })).json;
+    expect((await admin.post(`${base}/${hourly.id}/bank-adjustments`, { hours: 1 })).json.error).toBe("not_banked");
+    // removing one gives the hours back
+    const removed = await admin.del(`${base}/${k.id}/bank-adjustments/${list.find((x: any) => x.hours === 3).id}`);
+    expect(removed.json.bank.left).toBe(3.5);
+  });
+
+  it("lets a child company use its parent's shared contract by default, and bills it to the parent in the child's own section", async () => {
+    resetRateLimit("login:ip:unknown");
+    const admin = await signIn("admin@akab.local");
+    const tech = await signIn("tech@akab.local");
+    const [parent, child] = await db().select().from(schema.clients).orderBy(schema.clients.name).limit(2);
+    expect((await admin.patch(`/api/crm/clients/${child.id}`, { parentId: parent.id })).status).toBe(200);
+    try {
+      const pbase = `/api/crm/clients/${parent.id}/contracts`;
+      const shared = (await admin.post(pbase, { name: "Soutien groupe", typeKey: "hourly", hourlyRate: 100, startDate: "2026-01-01", endDate: "2026-12-31", sharedWithChildren: true })).json;
+      expect(shared.sharedWithChildren).toBe(true);
+      const own = (await admin.post(pbase, { name: "Soutien parent seul", typeKey: "hourly", hourlyRate: 90, startDate: "2026-01-01", endDate: "2026-12-31" })).json;
+      // only a shared contract of the parent is offered to the child, and only the child's own parent can share
+      const offered = (await admin.get(`/api/crm/clients/${child.id}/parent-contracts`)).json;
+      expect(offered.parent.id).toBe(parent.id);
+      expect(offered.contracts.map((x: any) => x.id)).toEqual([shared.id]);
+      expect((await admin.put(`/api/crm/clients/${child.id}/support-contract`, { contractId: own.id })).json.error).toBe("contract_not_shared");
+      expect((await tech.put(`/api/crm/clients/${child.id}/support-contract`, { contractId: shared.id })).status).toBe(403);
+      expect((await admin.put(`/api/crm/clients/${child.id}/support-contract`, { contractId: shared.id })).status).toBe(200);
+      expect((await admin.get(`/api/crm/clients/${child.id}/parent-contracts`)).json.contracts[0].isSupportDefault).toBe(true);
+      // a contract the parent pays needs a parent
+      expect((await admin.post(`/api/crm/clients/${parent.id}/contracts`, { name: "x", typeKey: "hourly", startDate: "2026-01-01", endDate: "2026-12-31", billedToParent: true })).json.error).toBe("no_parent");
+      const paid = (await admin.post(`/api/crm/clients/${child.id}/contracts`, { name: "Payé par le parent", typeKey: "hourly", hourlyRate: 80, startDate: "2026-01-01", endDate: "2026-12-31", billedToParent: true })).json;
+      expect(paid.billedToParent).toBe(true);
+
+      // an invoice with the parent's own charges on top, then the child's, one section each; the child's work is invoiced to the parent
+      const before = (await admin.get("/api/billables/clients")).json;
+      const item = (clientId: string, payerClientId: string | null, sourceId: string, description: string, cents: number) => ({ clientId, payerClientId, kind: "charge", source: "portal", sourceId, date: "2026-10-15", description, quantityX100: 100, unitPriceCents: cents, amountCents: cents, status: "approved", approvedAt: new Date() });
+      await db().insert(schema.billingItems).values([item(child.id, parent.id, "test:parent:c1", "Travail de l'enfant", 20000), item(parent.id, null, "test:parent:p1", "Travail du parent", 10000), item(child.id, parent.id, "test:parent:c2", "Autre travail de l'enfant", 5000)] as any);
+      const groups = (await admin.get("/api/billables/clients")).json;
+      const g = groups.find((x: any) => x.client.id === parent.id);
+      expect(g.cents).toBe(35000 + (before.find((x: any) => x.client.id === parent.id)?.cents ?? 0));
+      // the child's own approved work stays its own; what the parent pays is not counted on the child
+      expect(groups.find((x: any) => x.client.id === child.id)?.cents ?? 0).toBe(before.find((x: any) => x.client.id === child.id)?.cents ?? 0);
+      const draft = (await admin.post("/api/billables/invoice/preview", { clientId: parent.id })).json;
+      expect(draft.grouped).toBe(true);
+      expect(draft.client.id).toBe(parent.id);
+      expect(draft.lines.map((l: any) => [l.sectionName, l.description])).toEqual([
+        [parent.name, "Travail du parent"],
+        [child.name, "Travail de l'enfant"],
+        [child.name, "Autre travail de l'enfant"],
+      ]);
+      expect(draft.subtotalCents).toBe(35000);
+      const made = (await admin.post("/api/billables/invoice", { clientId: parent.id })).json;
+      const inv = (await admin.get(`/api/crm/clients/${parent.id}/invoices`)).json.items.find((v: any) => v.id === made.id);
+      expect(inv.totalCents).toBe(made.totalCents);
+      expect(inv.lines.map((l: any) => l.sectionName)).toEqual([parent.name, child.name, child.name]);
+      // the PDF is made with the sections
+      const pdf = await admin.get(`/api/crm/invoices/${made.id}/pdf`);
+      expect(pdf.status).toBe(200);
+      // a parent with no work of its own: only the child's section; one company alone: no sections at all
+      await db().insert(schema.billingItems).values([item(parent.id, null, "test:parent:p2", "Seul", 1000)] as any);
+      const solo = (await admin.post("/api/billables/invoice/preview", { clientId: parent.id })).json;
+      expect(solo.grouped).toBe(false);
+      expect(solo.lines.every((l: any) => l.sectionName === null)).toBe(true);
+    } finally {
+      await db().delete(schema.billingItems).where(sql`${schema.billingItems.sourceId} like 'test:parent:%'`);
+      await admin.patch(`/api/crm/clients/${child.id}`, { parentId: null });
+    }
+  });
+});
+
 describe("procedures (SOP)", () => {
   // a 1 × 1 PNG
   const PNG = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==";

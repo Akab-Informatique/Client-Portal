@@ -1179,6 +1179,22 @@ function ContractsTab({ client }: { client: CrmDetail }) {
   const { data: contracts = [], isLoading } = useQuery({ queryKey: ["crm", "client", client.id, "contracts"], queryFn: () => api.get<CrmContract[]>(`/crm/clients/${client.id}/contracts`) });
   const [adding, setAdding] = useState(false);
   const [openId, setOpenId] = useState<string | null>(null);
+  // a child company: the contracts its parent shares with its children, one of which can be its default
+  const qc = useQueryClient();
+  const sharedKey = ["crm", "client", client.id, "parent-contracts"];
+  const { data: shared } = useQuery({
+    queryKey: sharedKey,
+    enabled: Boolean(client.parent),
+    queryFn: () => api.get<{ parent: { id: string; name: string } | null; contracts: { id: string; name: string; type: string | null; bank: { left: number; available: number } | null; isSupportDefault: boolean }[] }>(`/crm/clients/${client.id}/parent-contracts`),
+  });
+  const useShared = useMutation({
+    mutationFn: (contractId: string | null) => api.put(`/crm/clients/${client.id}/support-contract`, { contractId }),
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: sharedKey });
+      void qc.invalidateQueries({ queryKey: ["crm", "client", client.id, "contracts"] });
+    },
+    onError: () => toast.error(t("common.error")),
+  });
   return (
     <Card
       title={t("crm.tabs.contracts")}
@@ -1193,8 +1209,28 @@ function ContractsTab({ client }: { client: CrmDetail }) {
     >
       {adding && <NewContractDialog client={client} onClose={() => setAdding(false)} />}
       {openId && <ContractWindow client={client} contractId={openId} onClose={() => setOpenId(null)} />}
+      {shared && shared.contracts.length > 0 && (
+        <div className="mb-3 space-y-1.5 rounded-xl border border-sky-500/30 bg-sky-500/[0.05] p-3">
+          <p className="text-xs font-semibold uppercase tracking-wide text-sky-300">{t("crm.contracts.parentShared", { name: shared.parent?.name ?? "" })}</p>
+          <p className="text-[11px] text-muted-foreground">{t("crm.contracts.parentSharedHint")}</p>
+          <ul className="divide-y divide-border/50">
+            {shared.contracts.map((k) => (
+              <li key={k.id} className="flex items-center gap-3 py-1.5 text-sm">
+                <span className="min-w-0 flex-1 truncate font-medium">{k.name}</span>
+                {k.bank && <span className="text-xs text-muted-foreground">{t("crm.contracts.bank.inList", { left: k.bank.left, available: k.bank.available })}</span>}
+                {k.isSupportDefault && <span className="rounded-md border border-[color:var(--gold)]/40 bg-[color:var(--gold)]/10 px-1.5 py-0.5 text-[10px] font-semibold text-primary">{t("crm.contracts.supportDefault")}</span>}
+                {can("crm.billing") && (
+                  <Button type="button" size="sm" variant="ghost" className="h-7 text-xs" disabled={useShared.isPending} onClick={() => useShared.mutate(k.isSupportDefault ? null : k.id)}>
+                    {k.isSupportDefault ? t("crm.contracts.parentStopDefault") : t("crm.contracts.makeDefault")}
+                  </Button>
+                )}
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
       {isLoading && <Loader2 className="mx-auto size-5 animate-spin text-muted-foreground" />}
-      {!isLoading && contracts.length === 0 && <p className="py-6 text-center text-sm text-muted-foreground">{t("crm.contracts.none")}</p>}
+      {!isLoading && contracts.length === 0 && !(shared && shared.contracts.length) && <p className="py-6 text-center text-sm text-muted-foreground">{t("crm.contracts.none")}</p>}
       {contracts.length > 0 && (
         <ul className="divide-y divide-border/60 overflow-hidden rounded-xl border">
           {contracts.map((k) => (

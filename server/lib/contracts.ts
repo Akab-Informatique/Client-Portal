@@ -1,4 +1,4 @@
-import { and, asc, eq, inArray } from "drizzle-orm";
+import { and, asc, eq, inArray, or } from "drizzle-orm";
 import { db, schema } from "../db/index.ts";
 import { billingSettings } from "./billing.ts";
 import { netCents } from "../../shared/rebate.ts";
@@ -45,6 +45,31 @@ export async function contractTypes(): Promise<(typeof schema.contractTypes.$inf
   return d.select().from(schema.contractTypes).orderBy(asc(schema.contractTypes.position), asc(schema.contractTypes.name));
 }
 
+type DefaultRow = { id: string; clientId: string; active: boolean; supportDefault: boolean; isDefault: boolean; sharedWithChildren: boolean };
+/**
+ * A client's default support contract among every contract row: a child company can point to one of its parent's shared
+ * contracts (`clients.support_contract_id`); otherwise the one picked in the portal, the source's, or its only active one.
+ */
+export function defaultSupport<T extends DefaultRow>(client: { id: string; parentId: string | null; supportContractId: string | null }, all: T[]): T | null {
+  const shared = client.supportContractId ? all.find((k) => k.id === client.supportContractId && k.active && k.sharedWithChildren && k.clientId === client.parentId) : undefined;
+  if (shared) return shared;
+  const own = all.filter((k) => k.clientId === client.id && k.active);
+  return own.find((k) => k.supportDefault) ?? own.find((k) => k.isDefault) ?? (own.length === 1 ? own[0]! : null);
+}
+
+/**
+ * Who is invoiced for work done under a contract when that is not the client it is for (null: the client itself):
+ * the parent company owning a contract it shares with its children, or the parent of a child whose contract the parent pays.
+ */
+export function payerOf(clientId: string, contract: { clientId: string; sharedWithChildren: boolean; billedToParent: boolean } | null | undefined, parentOf: (id: string) => string | null | undefined): string | null {
+  if (!contract) return null;
+  const parent = parentOf(clientId) ?? null;
+  if (!parent) return null;
+  if (contract.clientId === parent && contract.sharedWithChildren) return parent;
+  if (contract.clientId === clientId && contract.billedToParent) return parent;
+  return null;
+}
+
 export type ContractView = {
   id: string;
   /** The contract's id in the source, when it has one */
@@ -62,6 +87,14 @@ export type ContractView = {
   ticketRateCents: number | null;
   /** The client's default support contract */
   isDefault: boolean;
+  /** One of the parent company's contracts, shared with its children (billed to the parent) */
+  shared: boolean;
+  /** The company that owns the contract (when it is not the client itself) */
+  ownerName: string | null;
+  /** A child's own contract that the parent company pays */
+  billedToParent: boolean;
+  /** A parent's contract its children can use */
+  sharedWithChildren: boolean;
   /** Hours worked under it are billed */
   billed: boolean;
   /** The contract type (Admin › Types de contrats) */
@@ -96,16 +129,18 @@ export function hourlyRateOf(k: { billingMode: string; hourlyRateCents: number |
 /** The client's active contracts (by the ticket-side company id), the default one flagged. */
 export async function contractsOfCompany(companyAt: number): Promise<ContractView[]> {
   const d = db();
-  const [client] = await d.select({ id: schema.clients.id }).from(schema.clients).where(eq(schema.clients.autotaskId, companyAt));
+  const [client] = await d.select({ id: schema.clients.id, parentId: schema.clients.parentId, supportContractId: schema.clients.supportContractId }).from(schema.clients).where(eq(schema.clients.autotaskId, companyAt));
   if (!client) return [];
+  // its own active contracts, and the ones its parent company shares with its children
   const rows = await d
     .select()
     .from(schema.clientContracts)
-    .where(and(eq(schema.clientContracts.clientId, client.id), eq(schema.clientContracts.active, true)))
+    .where(and(eq(schema.clientContracts.active, true), client.parentId ? or(eq(schema.clientContracts.clientId, client.id), and(eq(schema.clientContracts.clientId, client.parentId), eq(schema.clientContracts.sharedWithChildren, true))) : eq(schema.clientContracts.clientId, client.id)))
     .orderBy(asc(schema.clientContracts.name));
   if (!rows.length) return [];
+  const owners = new Map((await d.select({ id: schema.clients.id, name: schema.clients.name }).from(schema.clients).where(inArray(schema.clients.id, [...new Set(rows.map((k) => k.clientId))]))).map((o) => [o.id, o.name]));
   const usual = (await billingSettings()).rates.hourly;
-  const chosen = rows.find((k) => k.supportDefault) ?? rows.find((k) => k.isDefault) ?? (rows.length === 1 ? rows[0] : null);
+  const chosen = defaultSupport(client, rows);
   const used = await usedHoursOf(rows);
   const bank = await banksOf(rows);
   return rows.map((k) => {
@@ -122,6 +157,10 @@ export async function contractsOfCompany(companyAt: number): Promise<ContractVie
       monthlyRateCents: k.monthlyRateCents,
       ticketRateCents: k.ticketRateCents,
       isDefault: chosen?.id === k.id,
+      shared: k.clientId !== client.id,
+      ownerName: k.clientId !== client.id ? (owners.get(k.clientId) ?? null) : null,
+      billedToParent: k.billedToParent,
+      sharedWithChildren: k.sharedWithChildren,
       billed: hourlyRateOf(k, usual) != null,
       typeKey: k.typeKey,
       bankedHours: bank.get(k.id)?.available ?? (k.bankedHoursX100 == null ? null : k.bankedHoursX100 / 100),
@@ -164,12 +203,48 @@ export async function usedByMonthOf(contracts: { id: string; autotaskId: string 
   return out;
 }
 
+/** Who used a contract's hours: hours by company and month (a parent company and its children can share one hours bank). Keyed by the contract's id. */
+export async function usageByCompanyOf(contracts: { id: string; autotaskId: string | null }[]): Promise<Map<string, { company: string; month: string; hours: number }[]>> {
+  const out = new Map<string, Map<string, number>>();
+  const bySource = new Map(contracts.filter((k) => k.autotaskId).map((k) => [k.autotaskId!, k.id]));
+  if (!bySource.size) return new Map();
+  const rows = await db()
+    .select({ id: schema.ticketTimeEntries.contractId, minutes: schema.ticketTimeEntries.minutes, at: schema.ticketTimeEntries.startedAt, overMinutes: schema.ticketTimeEntries.bankOverMinutes, overMode: schema.ticketTimeEntries.bankOverMode, company: schema.tickets.companyName })
+    .from(schema.ticketTimeEntries)
+    .innerJoin(schema.tickets, eq(schema.tickets.id, schema.ticketTimeEntries.ticketId))
+    .where(inArray(schema.ticketTimeEntries.contractId, [...bySource.keys()]));
+  for (const r of rows) {
+    const id = r.id ? bySource.get(r.id) : undefined;
+    if (!id) continue;
+    // the same hours the bank counts: minutes past it that were billed, bought or given are not drawn from it
+    const counted = r.minutes - (r.overMode && r.overMode !== "debt" ? Math.min(r.minutes, r.overMinutes) : 0);
+    const month = r.at.toLocaleDateString("en-CA", { timeZone: "America/Toronto" }).slice(0, 7);
+    const m = out.get(id) ?? new Map<string, number>();
+    const key = `${month}|${r.company}`;
+    m.set(key, (m.get(key) ?? 0) + counted / 60);
+    out.set(id, m);
+  }
+  return new Map([...out].map(([id, m]) => [id, [...m].map(([key, hours]) => ({ month: key.slice(0, 7), company: key.slice(8), hours: Math.round(hours * 100) / 100 })).sort((x, y) => (x.month < y.month ? 1 : x.month > y.month ? -1 : x.company.localeCompare(y.company)))]));
+}
+
 type BankRow = { rebateBps?: number; id: string; autotaskId: string | null; billingMode: string; bankedHoursX100: number | null; bankRateCents: number | null; bankRollover: string; startDate: string | null; endDate: string | null; endedOn: string | null };
 const todayQuebec = () => new Date().toLocaleDateString("en-CA", { timeZone: "America/Toronto" });
 /** The month-by-month bank of one contract (empty when it is not an hours bank) */
-export function bankRowsOf(k: BankRow, used: Map<string, number> | undefined, today = todayQuebec()): BankMonth[] {
+export function bankRowsOf(k: BankRow, used: Map<string, number> | undefined, today = todayQuebec(), adjust?: Map<string, number>): BankMonth[] {
   if (modeOf(k.billingMode) !== "banked" || !k.bankedHoursX100) return [];
-  return bankMonths({ hours: k.bankedHoursX100 / 100, rollover: bankRollover(k.bankRollover), start: k.startDate, end: k.endDate, endedOn: k.endedOn, today, used: used ?? new Map() });
+  return bankMonths({ hours: k.bankedHoursX100 / 100, rollover: bankRollover(k.bankRollover), start: k.startDate, end: k.endDate, endedOn: k.endedOn, today, used: used ?? new Map(), adjust });
+}
+/** Hours put on or taken off each hours bank by hand, month by month (YYYY-MM). Keyed by the contract's id. */
+export async function adjustmentsOf(contractIds: string[]): Promise<Map<string, Map<string, number>>> {
+  const out = new Map<string, Map<string, number>>();
+  if (!contractIds.length) return out;
+  const rows = await db().select({ id: schema.contractBankAdjustments.contractId, day: schema.contractBankAdjustments.day, h: schema.contractBankAdjustments.hoursX100 }).from(schema.contractBankAdjustments).where(inArray(schema.contractBankAdjustments.contractId, contractIds));
+  for (const r of rows) {
+    const m = out.get(r.id) ?? new Map<string, number>();
+    m.set(r.day.slice(0, 7), (m.get(r.day.slice(0, 7)) ?? 0) + r.h / 100);
+    out.set(r.id, m);
+  }
+  return out;
 }
 /** Where each hours bank stands this month (only the banked contracts are in the map) */
 export async function banksOf(contracts: BankRow[], today = todayQuebec()): Promise<Map<string, NonNullable<ContractView["bank"]>>> {
@@ -177,8 +252,9 @@ export async function banksOf(contracts: BankRow[], today = todayQuebec()): Prom
   const banked = contracts.filter((k) => modeOf(k.billingMode) === "banked" && k.bankedHoursX100);
   if (!banked.length) return out;
   const used = await usedByMonthOf(banked);
+  const adjust = await adjustmentsOf(banked.map((k) => k.id));
   for (const k of banked) {
-    const now = bankNow(bankRowsOf(k, used.get(k.id), today), today);
+    const now = bankNow(bankRowsOf(k, used.get(k.id), today, adjust.get(k.id)), today);
     out.set(k.id, { hours: k.bankedHoursX100! / 100, rateCents: k.bankRateCents == null ? null : netCents(k.bankRateCents, k.rebateBps), rollover: bankRollover(k.bankRollover), ...(now ?? { available: k.bankedHoursX100! / 100, used: 0, left: k.bankedHoursX100! / 100, over: 0 }) });
   }
   return out;

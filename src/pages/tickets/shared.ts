@@ -106,6 +106,9 @@ export type TicketDetail = Omit<TicketSummary, "checklist"> & {
 /** A client's contract as the ticket and the time entry see it: how its support is billed. */
 export type TicketContract = {
   id: string;
+  /** One of the parent company's contracts shared with its children, and the company that owns it */
+  shared?: boolean;
+  ownerName?: string | null;
   sourceId: string | null;
   name: string;
   type: string | null;

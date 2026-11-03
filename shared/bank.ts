@@ -12,8 +12,10 @@ export const bankRollover = (v: string | null | undefined): BankRollover => ((BA
 
 export type BankMonth = {
   month: string;
-  /** Hours that can be used this month (the bank, plus what was carried when the hours roll over) */
+  /** Hours that can be used this month (the bank, plus what was carried when the hours roll over, plus what was added or taken off by hand) */
   available: number;
+  /** Hours added (+) or taken off (−) by hand this month */
+  adjusted: number;
   used: number;
   /** Hours left at the end of the month (never below 0) */
   left: number;
@@ -31,7 +33,7 @@ export function bankBundle(hours: number, rateCents: number): { priceCents: numb
 }
 
 /** Month by month from the contract's first month to `today`'s (or its last), with what is left and what each month buys */
-export function bankMonths(p: { hours: number; rollover: BankRollover; start: string | null; end?: string | null; endedOn?: string | null; today: string; used: Map<string, number> }): BankMonth[] {
+export function bankMonths(p: { hours: number; rollover: BankRollover; start: string | null; end?: string | null; endedOn?: string | null; today: string; used: Map<string, number>; adjust?: Map<string, number> }): BankMonth[] {
   if (!p.start || !(p.hours > 0)) return [];
   const last = [p.today, p.end, p.endedOn].filter((d): d is string => Boolean(d)).reduce((a, b) => (b < a ? b : a)).slice(0, 7);
   const rows: BankMonth[] = [];
@@ -42,12 +44,13 @@ export function bankMonths(p: { hours: number; rollover: BankRollover; start: st
     const month = `${y}-${String(m).padStart(2, "0")}`;
     if (month > last) break;
     // hours worked beyond the bank (the technician chose to go negative) are taken right away from next month
-    const available = (p.rollover === "carry" ? p.hours + leftover : p.hours) - debt;
+    const adjusted = round2(p.adjust?.get(month) ?? 0);
+    const available = (p.rollover === "carry" ? p.hours + leftover : p.hours) - debt + adjusted;
     const charge = p.rollover === "topup" ? Math.max(0, p.hours - leftover) : p.hours;
     const used = round2(p.used.get(month) ?? 0);
     const left = Math.max(0, round2(available - used));
     const over = Math.max(0, round2(used - available));
-    rows.push({ month, available: round2(available), used, left, over, charge: round2(charge) });
+    rows.push({ month, available: round2(available), adjusted, used, left, over, charge: round2(charge) });
     leftover = left;
     debt = over;
     if (++m > 12) [y, m] = [y + 1, 1];

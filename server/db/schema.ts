@@ -67,6 +67,8 @@ export const clients = pgTable(
     /** Autotask company id (null: only in the portal) */
     autotaskId: integer("autotask_id"),
     parentId: uuid("parent_id").references((): AnyPgColumn => clients.id, { onDelete: "set null" }),
+    /** A child company's default support contract when it is one of its parent's shared contracts (none: its own default applies) */
+    supportContractId: uuid("support_contract_id").references((): AnyPgColumn => clientContracts.id, { onDelete: "set null" }),
     invoice: jsonb("invoice").$type<ClientInvoiceSettings>().notNull().default({}),
     /** The matching QuickBooks customer (never two clients on the same one) */
     quickbooksId: text("quickbooks_id"),
@@ -171,11 +173,34 @@ export const clientContracts = pgTable(
     /** A recurring contract sold as a bundle: one price (per billing period) and a quantity, instead of the services' own prices (none: charged service by service) */
     bundlePriceCents: integer("bundle_price_cents"),
     bundleQuantity: integer("bundle_quantity").notNull().default(1),
+    /** A parent company's contract its child companies can use: their work under it is billed to this client, in the child's own section of the invoice */
+    sharedWithChildren: boolean("shared_with_children").notNull().default(false),
+    /** A child company's own contract that its parent pays: its charges go on the parent's invoice, in the child's section */
+    billedToParent: boolean("billed_to_parent").notNull().default(false),
     syncedAt: timestamp("synced_at", { withTimezone: true }),
     createdAt: created(),
     updatedAt: updated(),
   },
   (t) => [uniqueIndex("client_contracts_autotask_idx").on(t.autotaskId), index("client_contracts_client_idx").on(t.clientId)],
+);
+
+/** Hours put on or taken off an hours bank by hand (+ or −), counted in the month of the day they were made */
+export const contractBankAdjustments = pgTable(
+  "contract_bank_adjustments",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    contractId: uuid("contract_id")
+      .notNull()
+      .references(() => clientContracts.id, { onDelete: "cascade" }),
+    /** YYYY-MM-DD */
+    day: text("day").notNull(),
+    /** Hours × 100, positive = added to the bank, negative = taken off */
+    hoursX100: integer("hours_x100").notNull(),
+    note: text("note").notNull().default(""),
+    actorId: uuid("actor_id").references(() => users.id, { onDelete: "set null" }),
+    createdAt: created(),
+  },
+  (t) => [index("contract_bank_adjustments_contract_idx").on(t.contractId, t.day)],
 );
 
 /** What happened on a contract: made, changed, a service added / changed / removed, stopped, started again (also by the vendor sync) */
@@ -311,6 +336,8 @@ export const billingItems = pgTable(
     /** The QuickBooks item and tax code of this line (none: those of the invoice, then the defaults) */
     qbItemId: text("qb_item_id"),
     qbTaxCodeId: text("qb_tax_code_id"),
+    /** Who is invoiced for it when that is not the client the work is for (the parent company paying for a child): none = the client */
+    payerClientId: uuid("payer_client_id").references(() => clients.id, { onDelete: "set null" }),
     invoiceId: uuid("invoice_id").references(() => clientInvoices.id, { onDelete: "set null" }),
     approvedBy: uuid("approved_by").references(() => users.id, { onDelete: "set null" }),
     approvedAt: timestamp("approved_at", { withTimezone: true }),
@@ -341,6 +368,9 @@ export const invoiceLines = pgTable(
     /** Sent to QuickBooks on this line (none: those of the invoice, then the defaults) */
     qbItemId: text("qb_item_id"),
     qbTaxCodeId: text("qb_tax_code_id"),
+    /** On an invoice with a parent company and its children: the company the line is for (the invoice's own client, or a child) */
+    sectionClientId: uuid("section_client_id").references(() => clients.id, { onDelete: "set null" }),
+    sectionName: text("section_name"),
     position: integer("position").notNull().default(0),
   },
   (t) => [index("invoice_lines_invoice_idx").on(t.invoiceId, t.position)],

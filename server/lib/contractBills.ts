@@ -1,7 +1,7 @@
 import { and, asc, eq, isNotNull } from "drizzle-orm";
 import { db, schema } from "../db/index.ts";
 import { contractCharges, hasBundle, linesForCharges, type ChargeLine } from "../../shared/contractCharges.ts";
-import { bankRowsOf, usedByMonthOf } from "./contracts.ts";
+import { adjustmentsOf, bankRowsOf, usedByMonthOf } from "./contracts.ts";
 import { netCents, rebateNote } from "../../shared/rebate.ts";
 import type { Billable } from "./ticketSource.ts";
 
@@ -31,6 +31,7 @@ export async function contractBillables(since: string): Promise<Billable[]> {
     .orderBy(asc(schema.contractServices.addedOn), asc(schema.contractServices.name));
   const out: Billable[] = [];
   const usedBy = await usedByMonthOf(contracts.filter(({ k }) => k.billingMode === "banked").map(({ k }) => k));
+  const adjusted = await adjustmentsOf(contracts.filter(({ k }) => k.billingMode === "banked").map(({ k }) => k.id));
   for (const { k, companyId } of contracts) {
     const mine = rows.filter((r) => r.s.contractId === k.id);
     // a bundle is charged even with no service listed under it
@@ -42,7 +43,7 @@ export async function contractBillables(since: string): Promise<Billable[]> {
     const lines = linesForCharges({ name: k.name, startDate: k.startDate, billingPeriod: period, bundlePriceCents: k.bundlePriceCents, bundleQuantity: k.bundleQuantity, rebateBps: k.rebateBps }, services);
     const charges = contractCharges({ startDate: k.startDate, endDate: k.endDate, endedOn: k.endedOn, billingPeriod: period }, lines);
     // an hours bank that tops up each month only buys what the month before left unused
-    const bankMonths = k.billingMode === "banked" && k.bankRollover === "topup" ? new Map(bankRowsOf(k, usedBy.get(k.id), today).map((r) => [r.month, r.charge])) : null;
+    const bankMonths = k.billingMode === "banked" && k.bankRollover === "topup" ? new Map(bankRowsOf(k, usedBy.get(k.id), today, adjusted.get(k.id)).map((r) => [r.month, r.charge])) : null;
     for (const e of charges.entries) {
       if (e.date > today || e.date < since || (k.billedThrough && e.date <= k.billedThrough)) continue;
       for (const p of e.pieces) {

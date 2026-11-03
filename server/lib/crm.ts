@@ -262,6 +262,16 @@ export async function localContracts(companyId: number, force = false) {
     .from(schema.clientContracts)
     .innerJoin(schema.clients, eq(schema.clients.id, schema.clientContracts.clientId))
     .where(and(eq(schema.clients.autotaskId, companyId), eq(schema.clientContracts.active, true), isNotNull(schema.clientContracts.autotaskId)));
+  // a child company can also work under the contracts its parent company shares with its children
+  const [self] = await db().select({ parentId: schema.clients.parentId }).from(schema.clients).where(eq(schema.clients.autotaskId, companyId));
+  if (self?.parentId) {
+    rows.push(
+      ...(await db()
+        .select({ k: schema.clientContracts })
+        .from(schema.clientContracts)
+        .where(and(eq(schema.clientContracts.clientId, self.parentId), eq(schema.clientContracts.sharedWithChildren, true), eq(schema.clientContracts.active, true), isNotNull(schema.clientContracts.autotaskId)))),
+    );
+  }
   return rows
     .map(({ k }) => ({ id: k.autotaskId!, name: k.name, isDefault: k.isDefault, endDate: k.endDate }))
     .sort((x, y) => Number(y.isDefault) - Number(x.isDefault) || x.name.localeCompare(y.name));

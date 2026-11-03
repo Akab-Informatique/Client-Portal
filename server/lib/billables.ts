@@ -3,7 +3,7 @@ import { db, schema } from "../db/index.ts";
 import { alignNumbering, autoTaxCodes, qbItemsForBillingItems, voidInvoiceInQb } from "./quickbooks.ts";
 import { dueAfterSent } from "../../shared/invoiceDue.ts";
 import { taxesOfLines } from "../../shared/invoiceTax.ts";
-import { hourlyRateOf, NO_CONTRACT_HOURLY_CENTS } from "./contracts.ts";
+import { defaultSupport, hourlyRateOf, NO_CONTRACT_HOURLY_CENTS, payerOf } from "./contracts.ts";
 import { billingSettings, formatInvoiceNumber, quickbooksSettings, saveBillingSettings, type BillingSettings } from "./billing.ts";
 import { ensureCrm } from "./crm.ts";
 import { ticketSource, type BillableKind } from "./ticketSource.ts";
@@ -38,10 +38,9 @@ export const ruled = (item: { kind: string; contractId: string | null }, client:
 
 /** The clients that have a default support contract (the one picked, the source's, or their only active one) */
 async function clientsWithDefaultContract() {
-  const rows = await db().select({ clientId: schema.clientContracts.clientId, supportDefault: schema.clientContracts.supportDefault, isDefault: schema.clientContracts.isDefault }).from(schema.clientContracts).where(eq(schema.clientContracts.active, true));
-  const by = new Map<string, typeof rows>();
-  for (const k of rows) by.set(k.clientId, [...(by.get(k.clientId) ?? []), k]);
-  return new Set([...by].filter(([, ks]) => ks.some((k) => k.supportDefault || k.isDefault) || ks.length === 1).map(([id]) => id));
+  const rows = await db().select().from(schema.clientContracts);
+  const clients = await db().select({ id: schema.clients.id, parentId: schema.clients.parentId, supportContractId: schema.clients.supportContractId }).from(schema.clients);
+  return new Set(clients.filter((c) => defaultSupport(c, rows)).map((c) => c.id));
 }
 
 async function autoContracts() {
@@ -77,8 +76,9 @@ export function syncBillables(): Promise<BillablesState> {
     const d = db();
     const now = new Date();
     const clients = new Map(
-      (await d.select({ id: schema.clients.id, at: schema.clients.autotaskId, invoice: schema.clients.invoice }).from(schema.clients)).filter((c) => c.at != null).map((c) => [c.at!, c]),
+      (await d.select({ id: schema.clients.id, at: schema.clients.autotaskId, invoice: schema.clients.invoice, parentId: schema.clients.parentId, supportContractId: schema.clients.supportContractId }).from(schema.clients)).filter((c) => c.at != null).map((c) => [c.at!, c]),
     );
+    const parentOf = new Map([...clients.values()].map((c) => [c.id, c.parentId]));
     const contractRows = await d.select().from(schema.clientContracts).where(isNotNull(schema.clientContracts.autotaskId));
     const contractIds = new Map(contractRows.map((k) => [k.autotaskId!, k.id]));
     const contractsById = new Map(contractRows.map((k) => [k.id, k]));
@@ -99,8 +99,9 @@ export function syncBillables(): Promise<BillablesState> {
       // under a monthly / per ticket / included contract the hours are not billed (left out, never billed by the hour)
       const named = it.contractSourceId ? contractsById.get(contractIds.get(it.contractSourceId) ?? "") : undefined;
       // under no contract of its own, the work takes the client's default support contract (if it has one)
-      const active = contractRows.filter((k) => k.clientId === client.id && k.active);
-      const contract = named ?? (it.kind === "labour" ? (active.find((k) => k.supportDefault) ?? active.find((k) => k.isDefault) ?? (active.length === 1 ? active[0] : undefined)) : undefined);
+      const contract = named ?? (it.kind === "labour" ? (defaultSupport(client, contractRows) ?? undefined) : undefined);
+      // a parent company's shared contract, or a child's contract its parent pays: the parent is invoiced, the child's name stays on the line
+      const payerClientId = payerOf(client.id, contract, (id) => parentOf.get(id));
       // the contract's own rate bills the hours (above 0); a rate of 0 means they are included, never billed
       const contractRate = contract ? hourlyRateOf(contract, s.rates.hourly) : null;
       const overage = it.overageRateCents != null;
@@ -122,6 +123,7 @@ export function syncBillables(): Promise<BillablesState> {
         ticketNumber: it.ticketNumber ?? null,
         contractName: it.contractName ?? null,
         contractId: it.contractSourceId ? (contractIds.get(it.contractSourceId) ?? null) : null,
+        payerClientId,
         resourceName: it.resourceName ?? null,
         quantityX100,
         unitPriceCents: rate,
@@ -177,7 +179,9 @@ export async function listBillables(kind: BillableKind | null, status: string | 
       ),
     )
     .orderBy(asc(schema.clients.name), asc(schema.billingItems.date));
-  return rows.map(({ b, client, invoice }) => ({ ...b, clientName: client, invoiceNumber: invoice, autoApproved: b.status !== "pending" && b.approvedAt != null && !b.approvedBy && b.status !== "excluded" }));
+  const payerIds = [...new Set(rows.map((r) => r.b.payerClientId).filter((x): x is string => Boolean(x)))];
+  const payers = new Map((payerIds.length ? await db().select({ id: schema.clients.id, name: schema.clients.name }).from(schema.clients).where(inArray(schema.clients.id, payerIds)) : []).map((p) => [p.id, p.name]));
+  return rows.map(({ b, client, invoice }) => ({ ...b, clientName: client, payerName: b.payerClientId ? (payers.get(b.payerClientId) ?? null) : null, invoiceNumber: invoice, autoApproved: b.status !== "pending" && b.approvedAt != null && !b.approvedBy && b.status !== "excluded" }));
 }
 
 /**
@@ -194,14 +198,13 @@ export async function refreshLabourRates(period?: Period) {
     .select()
     .from(b)
     .where(and(eq(b.kind, "labour"), or(inArray(b.status, ["pending", "approved"]), and(eq(b.status, "excluded"), eq(b.excludedReason, "included"))), inPeriod(period)));
-  const clients = new Map((await d.select({ id: schema.clients.id, invoice: schema.clients.invoice }).from(schema.clients)).map((c) => [c.id, c]));
+  const clients = new Map((await d.select({ id: schema.clients.id, invoice: schema.clients.invoice, parentId: schema.clients.parentId, supportContractId: schema.clients.supportContractId }).from(schema.clients)).map((c) => [c.id, c]));
   const contracts = await d.select().from(schema.clientContracts);
   const byId = new Map(contracts.map((k) => [k.id, k]));
-  // each client's default support contract: the one picked, else the source's, else its only active one
+  // each client's default support contract: a shared parent contract it points to, the one picked, else the source's, else its only active one
   const defaults = new Map<string, (typeof contracts)[number]>();
-  for (const [clientId] of clients) {
-    const active = contracts.filter((k) => k.clientId === clientId && k.active);
-    const pick = active.find((k) => k.supportDefault) ?? active.find((k) => k.isDefault) ?? (active.length === 1 ? active[0] : null);
+  for (const [clientId, c] of clients) {
+    const pick = defaultSupport(c, contracts);
     if (pick) defaults.set(clientId, pick);
   }
   const out = { updated: 0, unchanged: 0, skipped: 0, included: 0, billedAgain: 0 };
@@ -222,7 +225,7 @@ export async function refreshLabourRates(period?: Period) {
     const next: { unitPriceCents: number; amountCents: number; contractId?: string; contractName?: string; status?: string; excludedReason?: string | null; approvedBy?: null; approvedAt?: null } = {
       unitPriceCents: unit,
       amountCents: amountOf(it.quantityX100, unit),
-      ...(contract && !own ? { contractId: contract.id, contractName: contract.name } : {}),
+      ...(contract && !own ? { contractId: contract.id, contractName: contract.name, payerClientId: payerOf(it.clientId, contract, (id) => clients.get(id)?.parentId) } : {}),
       ...(included ? { status: "excluded", excludedReason: "included", approvedBy: null, approvedAt: null } : wasIncluded ? { status: "pending", excludedReason: null } : {}),
     };
     const same = it.unitPriceCents === next.unitPriceCents && it.amountCents === next.amountCents && (next.status ?? it.status) === it.status && (!("contractId" in next) || next.contractId === it.contractId);
@@ -291,12 +294,14 @@ function taxesOf(s: BillingSettings, taxableLinesCents: number[], exempt: boolea
 
 /** Per client: the approved items of the time frame, by kind (what can be invoiced). */
 export async function invoiceableClients(period?: Period) {
+  // the company invoiced: the one that pays (a parent company for its children's work), else the client itself
+  const payer = sql<string>`coalesce(${schema.billingItems.payerClientId}, ${schema.billingItems.clientId})`;
   const rows = await db()
-    .select({ clientId: schema.billingItems.clientId, name: schema.clients.name, kind: schema.billingItems.kind, n: sql<number>`count(*)::int`, cents: sql<number>`sum(${schema.billingItems.amountCents})::bigint` })
+    .select({ clientId: payer, name: schema.clients.name, kind: schema.billingItems.kind, n: sql<number>`count(*)::int`, cents: sql<number>`sum(${schema.billingItems.amountCents})::bigint` })
     .from(schema.billingItems)
-    .innerJoin(schema.clients, eq(schema.clients.id, schema.billingItems.clientId))
+    .innerJoin(schema.clients, eq(schema.clients.id, payer))
     .where(and(eq(schema.billingItems.status, "approved"), inPeriod(period)))
-    .groupBy(schema.billingItems.clientId, schema.clients.name, schema.billingItems.kind);
+    .groupBy(payer, schema.clients.name, schema.billingItems.kind);
   const m = new Map<string, { client: { id: string; name: string }; kinds: { kind: string; count: number; cents: number }[]; cents: number }>();
   for (const r of rows) {
     const g = m.get(r.clientId) ?? { client: { id: r.clientId, name: r.name }, kinds: [], cents: 0 };
@@ -367,7 +372,7 @@ export async function draftInvoice(p: InvoiceDraft) {
   const approved = await d
     .select()
     .from(schema.billingItems)
-    .where(and(eq(schema.billingItems.clientId, client.id), eq(schema.billingItems.status, "approved"), inPeriod(p)))
+    .where(and(or(eq(schema.billingItems.clientId, client.id), eq(schema.billingItems.payerClientId, client.id)), eq(schema.billingItems.status, "approved"), inPeriod(p)))
     .orderBy(asc(schema.billingItems.kind), asc(schema.billingItems.date));
   let items: Item[];
   if (p.itemIds) {
@@ -377,6 +382,17 @@ export async function draftInvoice(p: InvoiceDraft) {
     if (items.length !== wanted.size) throw new DraftError("billing_items_invalid");
   } else items = approved.filter((i) => !p.kinds || p.kinds.includes(i.kind as BillableKind));
   if (!items.length) throw new DraftError("billing_nothing");
+  // a parent company and its children on one invoice: the parent's own charges on top, then each child's, one section each
+  const companyIds = [...new Set(items.map((i) => i.clientId))];
+  const names = new Map((await d.select({ id: schema.clients.id, name: schema.clients.name }).from(schema.clients).where(inArray(schema.clients.id, companyIds))).map((c) => [c.id, c.name]));
+  const grouped = items.some((i) => i.clientId !== client.id);
+  if (grouped) {
+    const rank = (i: Item) => (i.clientId === client.id ? "" : (names.get(i.clientId) ?? "").toLowerCase());
+    items = items
+      .map((i, n) => ({ i, n }))
+      .sort((x, y) => (rank(x.i) < rank(y.i) ? -1 : rank(x.i) > rank(y.i) ? 1 : x.n - y.n))
+      .map(({ i }) => i);
+  }
   const issuedOn = p.issuedOn ?? todayQc();
   const termsDays = p.termsDays ?? client.invoice?.termsDays ?? s.template.termsDays;
   let dueOn = p.dueOn;
@@ -396,8 +412,11 @@ export async function draftInvoice(p: InvoiceDraft) {
     poRequired: Boolean(client.invoice?.poRequired),
     exempt,
     items,
+    grouped,
     lines: items.map((i) => ({
       itemId: i.id,
+      sectionClientId: grouped ? i.clientId : null,
+      sectionName: grouped ? (names.get(i.clientId) ?? null) : null,
       date: i.date,
       contractName: i.contractName ?? null,
       kind: i.kind,
@@ -481,6 +500,8 @@ export function createInvoice(actorId: string, p: InvoiceDraft) {
           // its own pick, else its portal service or product, else the invoice's item (the default)
           qbItemId: l.qbItemId || autoItems.get(l.itemId) || invoiceItem,
           qbTaxCodeId: l.qbTaxCodeId || invoiceTax,
+          sectionClientId: l.sectionClientId,
+          sectionName: l.sectionName,
           ledgerAccountId: s.accounts[ACCOUNT_OF[l.kind as BillableKind] ?? "labour"] ?? null,
           position: n,
         })),
