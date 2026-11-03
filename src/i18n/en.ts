@@ -4402,6 +4402,7 @@ const en: Dict = {
         approved: "Approved, to invoice",
         excluded: "Set aside",
         posted: "Invoiced",
+        billed_before: "Already invoiced (old system)",
         onInvoice: "Invoice {{number}}",
         openInvoice: "Open the invoice",
       },

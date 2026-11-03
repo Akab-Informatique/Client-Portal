@@ -4400,6 +4400,7 @@ const fr = {
         approved: "Approuvé, à facturer",
         excluded: "Mis de côté",
         posted: "Facturé",
+        billed_before: "Déjà facturé (ancien système)",
         onInvoice: "Facture {{number}}",
         openInvoice: "Ouvrir la facture",
       },

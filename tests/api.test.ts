@@ -9513,6 +9513,13 @@ describe("ticket charges are work to bill at once", () => {
     const invoice = (await admin.post("/api/billables/invoice", { clientId: company.id, itemIds: [item.id] })).json;
     const onInvoice = (await admin.get(`/api/tickets/${id}/charges`)).json.find((x: any) => x.id === mouse.id).billing;
     expect(onInvoice).toMatchObject({ status: "posted", invoice: { id: invoice.id, number: invoice.number, clientId: company.id, visible: true } });
+    // a charge copied from the old system (its own reference) shows its invoice too; one billed before the portal says so
+    const [old] = await db().insert(schema.ticketCharges).values({ ticketId: id, name: "Ancien frais", quantityX100: 100, unitPriceCents: 1000, billable: true, externalId: "old:charge:1" }).returning();
+    await db().insert(schema.billingItems).values({ clientId: company.id, kind: "charge", source: "portal", sourceId: "old:charge:1", date: "2026-10-10", description: "Ancien frais", quantityX100: 100, unitPriceCents: 1000, amountCents: 1000, status: "posted", invoiceId: invoice.id } as any);
+    const [prior] = await db().insert(schema.ticketCharges).values({ ticketId: id, name: "Avant le portail", quantityX100: 100, unitPriceCents: 1000, billable: true, billed: true }).returning();
+    const both = (await admin.get(`/api/tickets/${id}/charges`)).json;
+    expect(both.find((x: any) => x.id === old.id).billing.invoice).toMatchObject({ number: invoice.number });
+    expect(both.find((x: any) => x.id === prior.id).billing).toEqual({ status: "billed_before", invoice: null });
     // a charge on an invoice cannot be deleted from the ticket
     expect((await tech.del(`/api/tickets/${id}/charges/${mouse.id}`)).json.error).toBe("charge_billed");
     // removed: off the list (a pending line goes when its charge is gone)

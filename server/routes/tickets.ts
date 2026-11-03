@@ -474,7 +474,10 @@ const canSeeInvoices = (c: Context<AppEnv>) => auth(c).permissions.includes("acc
  * (its id and number, only for those who may see invoices). A charge that is not billable has none.
  */
 async function withBilling<T extends { id: string; billable: boolean }>(list: T[], withInvoice: boolean) {
-  const keys = list.flatMap((x) => [`pcharge:${x.id}`, x.id]);
+  // a charge copied from the old system keeps its own reference (external id): its work to bill is under that one
+  const own = list.length ? await db().select({ id: schema.ticketCharges.id, externalId: schema.ticketCharges.externalId, billed: schema.ticketCharges.billed }).from(schema.ticketCharges).where(inArray(schema.ticketCharges.id, list.map((x) => x.id).filter((i) => /^[0-9a-f-]{36}$/i.test(i)))) : [];
+  const meta = new Map(own.map((r) => [r.id, r]));
+  const keys = list.flatMap((x) => [`pcharge:${x.id}`, x.id, ...(meta.get(x.id)?.externalId ? [meta.get(x.id)!.externalId!] : [])]);
   const rows = keys.length
     ? await db()
         .select({ sourceId: schema.billingItems.sourceId, status: schema.billingItems.status, invoiceId: schema.billingItems.invoiceId, number: schema.clientInvoices.number, clientId: schema.clientInvoices.clientId })
@@ -484,10 +487,12 @@ async function withBilling<T extends { id: string; billable: boolean }>(list: T[
     : [];
   const by = new Map(rows.map((r) => [r.sourceId!, r]));
   return list.map((x) => {
-    const r = by.get(`pcharge:${x.id}`) ?? by.get(x.id);
+    const m = meta.get(x.id);
+    const r = by.get(`pcharge:${x.id}`) ?? by.get(x.id) ?? (m?.externalId ? by.get(m.externalId) : undefined);
     return {
       ...x,
-      billing: r ? { status: r.status, invoice: r.invoiceId && r.number ? { id: r.invoiceId, number: r.number, clientId: withInvoice ? r.clientId : null, visible: withInvoice } : null } : null,
+      // billed before the portal took over (no invoice of ours): said as such, there is no invoice to open
+      billing: !r && m?.billed ? { status: "billed_before", invoice: null } : r ? { status: r.status, invoice: r.invoiceId && r.number ? { id: r.invoiceId, number: r.number, clientId: withInvoice ? r.clientId : null, visible: withInvoice } : null } : null,
     };
   });
 }
