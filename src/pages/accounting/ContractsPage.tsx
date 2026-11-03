@@ -1,6 +1,7 @@
 import { useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { Link } from "react-router-dom";
+import { Link, useSearchParams } from "react-router-dom";
+import { CardAutopays } from "./CardAutopays";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { ChevronDown, ChevronRight, Copy, CreditCard, FileText, Loader2, Search, Send, X } from "lucide-react";
@@ -107,6 +108,18 @@ export function ContractsPage() {
   const counts = { active: rows.filter((r) => r.active).length, inactive: rows.filter((r) => !r.active).length, all: rows.length };
   const monthlyOf = (rs: Row[]) => rs.filter((r) => r.active).reduce((s, r) => s + (r.billingPeriod === "yearly" ? r.summary.perPeriodCents / 12 : r.summary.perPeriodCents) + r.summary.yearlyExtraCents / 12, 0);
   const lang = i18n.language;
+  // two tabs: the contracts, and the automatic card payments (?tab=cards)
+  const [params, setParams] = useSearchParams();
+  const tab = params.get("tab") === "cards" ? "cards" : "list";
+  const goTab = (k: "list" | "cards") =>
+    setParams(
+      (p) => {
+        if (k === "cards") p.set("tab", "cards");
+        else p.delete("tab");
+        return p;
+      },
+      { replace: true },
+    );
 
   return (
     <div className="relative isolate space-y-5">
@@ -118,19 +131,43 @@ export function ContractsPage() {
           </h1>
           <p className="text-sm text-muted-foreground">{t("acctContracts.subtitle")}</p>
         </div>
-        <Button variant="outline" size="sm" onClick={() => save(new Set(groups.map((g) => g.id)))}>
-          {t("acctContracts.expandAll")}
-        </Button>
-        <Button variant="outline" size="sm" onClick={() => save(new Set())}>
-          {t("acctContracts.collapseAll")}
-        </Button>
-        {canSend && (
+        {tab === "list" && (
+          <>
+            <Button variant="outline" size="sm" onClick={() => save(new Set(groups.map((g) => g.id)))}>
+              {t("acctContracts.expandAll")}
+            </Button>
+            <Button variant="outline" size="sm" onClick={() => save(new Set())}>
+              {t("acctContracts.collapseAll")}
+            </Button>
+          </>
+        )}
+        {tab === "list" && canSend && (
           // every active contract shown (the search and filter apply), without one already paid by card
           <Button variant="outline" size="sm" onClick={() => pick(groups.flatMap((g) => g.rows.filter((r) => r.active && r.autopay !== "active").map((r) => r.id)), true)}>
             <CreditCard className="size-3.5" /> {t("acctContracts.pickAll")}
           </Button>
         )}
       </div>
+
+      <div className="flex gap-1" role="tablist">
+        {(["list", "cards"] as const).map((k) => (
+          <button
+            key={k}
+            type="button"
+            role="tab"
+            aria-selected={tab === k}
+            onClick={() => goTab(k)}
+            className={cn("flex h-9 items-center gap-1.5 rounded-xl border px-3 text-sm transition-colors", tab === k ? "border-[color:var(--gold)]/50 bg-[color:var(--gold)]/10 font-medium text-foreground" : "text-muted-foreground hover:bg-accent/50 hover:text-foreground")}
+          >
+            {k === "cards" ? <CreditCard className="size-4" /> : <FileText className="size-4" />} {t(k === "cards" ? "cardList.tab" : "acctContracts.tabList")}
+          </button>
+        ))}
+      </div>
+
+      {tab === "cards" ? (
+        <CardAutopays />
+      ) : (
+        <>
 
       <div className="glass flex flex-wrap items-center gap-2 rounded-2xl border p-2">
         <div className="relative min-w-56 flex-1">
@@ -229,6 +266,8 @@ export function ContractsPage() {
       </div>
       <p className="text-xs text-muted-foreground">{t("acctContracts.clients", { count: groups.length })}</p>
       {results && <SendResults results={results} onClose={() => setResults(null)} />}
+        </>
+      )}
     </div>
   );
 }

@@ -1,7 +1,7 @@
 import { Hono } from "hono";
 import { HTTPException } from "hono/http-exception";
 import { z } from "zod";
-import { eq, inArray } from "drizzle-orm";
+import { desc, eq, inArray } from "drizzle-orm";
 import { billingSettings } from "../lib/billing.ts";
 import { db, schema } from "../db/index.ts";
 import { auth, requirePermission, requireStaff, type AppEnv } from "../lib/auth.ts";
@@ -85,6 +85,44 @@ export const autopayRoutes = new Hono<AppEnv>()
     } catch (e) {
       return fail(e);
     }
+  })
+  /**
+   * Every card authorization (Accounting › Contrats › Paiements par carte): one row per link (the contracts it covers
+   * together), its state, who accepted and when (with the IP and the exact text: the proof), the card, the last charge.
+   */
+  .get("/overview", requireStaff, requirePermission("accounting.view"), async (c) => {
+    const rows = await db()
+      .select({ a: schema.contractAutopay, contract: schema.clientContracts.name, client: schema.clients.name })
+      .from(schema.contractAutopay)
+      .innerJoin(schema.clientContracts, eq(schema.clientContracts.id, schema.contractAutopay.contractId))
+      .innerJoin(schema.clients, eq(schema.clients.id, schema.contractAutopay.clientId))
+      .orderBy(desc(schema.contractAutopay.requestedAt));
+    const groups = new Map<string, { lead: (typeof rows)[number]; contracts: { id: string; name: string }[] }>();
+    for (const r of rows) {
+      const key = r.a.batchId ?? r.a.id;
+      const g = groups.get(key);
+      if (g) g.contracts.push({ id: r.a.contractId, name: r.contract });
+      else groups.set(key, { lead: r, contracts: [{ id: r.a.contractId, name: r.contract }] });
+    }
+    return c.json(
+      [...groups.values()].map(({ lead: { a, client }, contracts }) => ({
+        id: a.id,
+        clientId: a.clientId,
+        client,
+        contracts,
+        // a card that was refused at its last charge is shown as such until a charge goes through
+        status: a.status === "active" && a.lastError ? "failed" : a.status,
+        email: a.email,
+        requestedAt: a.requestedAt,
+        revokedAt: a.revokedAt,
+        accepted: a.acceptedAt ? { name: a.acceptedName, at: a.acceptedAt, ip: a.acceptedIp, text: a.acceptedText } : null,
+        card: a.cardLast4 ? { brand: a.cardBrand, last4: a.cardLast4, expMonth: a.cardExpMonth, expYear: a.cardExpYear, funding: a.cardFunding } : null,
+        live: a.live,
+        lastChargeAt: a.lastChargeAt,
+        lastError: a.lastError,
+        url: a.status === "pending" ? autopayUrl(a.id) : null,
+      })),
+    );
   })
   /** Several contracts at once (Accounting › Contrats): one link and one email per client, for all its contracts picked */
   .post("/send-many", requireStaff, requirePermission("crm.billing"), async (c) => {

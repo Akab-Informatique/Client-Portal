@@ -5810,6 +5810,17 @@ describe("a contract paid automatically by card", () => {
       expect(yPage.contracts[0].next.date.slice(5)).toBe("03-10");
       expect(yPage.contracts[0].next.date > new Date().toLocaleDateString("en-CA", { timeZone: "America/Toronto" })).toBe(true);
 
+      // the overview: one row per link, who accepted, when, from which IP, the exact text, the card
+      const overview = (await admin.get("/api/autopay/overview")).json as any[];
+      const two = overview.find((r) => r.client === "Deux contrats inc." && r.status === "active");
+      expect(two.contracts.map((x: any) => x.name).sort()).toEqual(["Sauvegardes", "Soutien"]);
+      expect(two.accepted).toMatchObject({ name: "Luc Deux" });
+      expect(two.accepted.text).toContain("des contrats");
+      expect(two.card).toMatchObject({ last4: "4242", funding: "credit" });
+      expect(overview.find((r) => r.contracts.some((x: any) => x.id === kd.id))).toMatchObject({ status: "pending", accepted: null });
+      // the first card was declined at its last charge: shown as such
+      expect(overview.find((r) => r.client === "Carte auto inc." && r.status !== "revoked")).toMatchObject({ status: "failed" });
+
       // taken off: approved lines wait for a normal invoice again
       expect((await admin.del(`/api/autopay/contracts/${k.id}`)).json.revoked).toBe(1);
       const l3 = await line(3);
