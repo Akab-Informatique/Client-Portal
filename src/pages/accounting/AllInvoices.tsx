@@ -12,7 +12,7 @@ import { api } from "@/lib/api";
 import { useCan } from "@/lib/session";
 import { cn } from "@/lib/utils";
 import { Pager, pageSizeOf } from "@/components/Pager";
-import { InvoiceMailButtons, InvoicePdfButton, InvoiceVoidButton, StatementsDialog } from "./Statements";
+import { InvoiceMailButtons, InvoicePayButton, InvoicePdfButton, InvoiceVoidButton, StatementsDialog } from "./Statements";
 import { money } from "@/pages/crm/shared";
 import { shortDate } from "@/pages/tickets/shared";
 
@@ -34,6 +34,9 @@ type Invoice = {
   source: "portal" | "autotask" | "quickbooks";
   poNumber: string | null;
   emailedAt: string | null;
+  payOnline?: boolean;
+  payOwn?: boolean | null;
+  payReady?: boolean;
   quickbooks: { id: string | null; syncedAt: string | null; error: string | null } | null;
 };
 type List = {
@@ -401,6 +404,7 @@ export function AllInvoices() {
                       )}
                     </td>
                     <td className="whitespace-nowrap px-3 py-2 text-right">
+                      <InvoicePayButton invoice={v} />
                       <InvoiceMailButtons invoice={v} compact />
                       <InvoicePdfButton invoice={v} compact />
                       <InvoiceVoidButton invoice={v} compact />

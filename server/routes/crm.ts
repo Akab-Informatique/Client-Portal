@@ -30,6 +30,7 @@ import { chargesOn, contractCharges, linesForCharges, type ChargeLine } from "..
 import { contractCharged, contractEventsOf, recordContractEvent, syncMonthlyRate } from "../lib/contractEvents.ts";
 import { todayQc } from "../lib/timesheets.ts";
 import { billingSettings } from "../lib/billing.ts";
+import { stripePayReady } from "../lib/payLink.ts";
 import { quickbooksHttp } from "./billing.ts";
 
 /**
@@ -1074,6 +1075,20 @@ export const crmRoutes = new Hono<AppEnv>()
     return c.json(row);
   })
 
+  /** "Pay online" (Stripe) in this invoice's emails: yes, no, or null = the client's / template's choice (accounting.manage) */
+  .put("/invoices/:iid/pay-online", requirePermission("accounting.manage"), async (c) => {
+    const a = auth(c);
+    const p = await body(c, z.object({ payOnline: z.boolean().nullable() }));
+    const [row] = await db()
+      .update(schema.clientInvoices)
+      .set({ payOnline: p.payOnline, updatedAt: new Date() })
+      .where(eq(schema.clientInvoices.id, zUuid.parse(c.req.param("iid"))))
+      .returning({ id: schema.clientInvoices.id, number: schema.clientInvoices.number, payOnline: schema.clientInvoices.payOnline });
+    if (!row) throw new HTTPException(404, { message: "not_found" });
+    await audit(a.user.id, "billing.invoice_pay_online", row.id, { number: row.number, payOnline: row.payOnline });
+    return c.json(row);
+  })
+
   /** The invoice as a PDF, shown in the preview window (or opened / downloaded): accounting.view */
   .get("/invoices/:iid/pdf", requirePermission("accounting.view"), async (c) => {
     try {
@@ -1365,11 +1380,16 @@ async function invoiceViews(rows: (typeof schema.clientInvoices.$inferSelect)[],
   // clients with no address to send invoices to (billing email, else the client's own)
   const cids = [...new Set(rows.map((r) => r.clientId))];
   const noEmail = new Set<string>();
+  // the pay link: the invoice's own choice, else its client's, else the invoice template's; sent only when Stripe can take it
+  const clientPay = new Map<string, boolean | null>();
   if (cids.length) {
     for (const c of await d.select({ id: schema.clients.id, email: schema.clients.email, invoice: schema.clients.invoice }).from(schema.clients).where(inArray(schema.clients.id, cids))) {
       if (!(c.invoice?.billingEmail || c.email || "").trim()) noEmail.add(c.id);
+      clientPay.set(c.id, c.invoice?.payOnline ?? null);
     }
   }
+  const templatePay = (await billingSettings()).template.showPaymentLink;
+  const payReady = await stripePayReady();
   // an invoice of the portal, with no payment, whose taxes are not the line-by-line ones: how much they would change
   const taxFix = new Map<string, number>();
   if (opts.lines) {
@@ -1406,6 +1426,9 @@ async function invoiceViews(rows: (typeof schema.clientInvoices.$inferSelect)[],
       poNumber: v.poNumber,
       emailedAt: v.emailedAt,
       noEmail: noEmail.has(v.clientId),
+      payOnline: v.payOnline ?? clientPay.get(v.clientId) ?? templatePay,
+      payOwn: v.payOnline,
+      payReady,
       taxFixCents: taxFix.get(v.id) ?? 0,
       lines: (lines.get(v.id) ?? []).map((l) => ({ id: l.id, kind: l.kind, sectionName: l.sectionName, description: l.description, quantity: l.quantityX100 / 100, unitPriceCents: l.unitPriceCents, amountCents: l.amountCents, taxable: l.taxable })),
       quickbooks: v.quickbooksId || v.quickbooksError ? { id: v.quickbooksId, syncedAt: v.quickbooksSyncedAt, error: v.quickbooksError } : null,

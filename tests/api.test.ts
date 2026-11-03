@@ -5652,6 +5652,13 @@ describe("the Stripe pay link chosen on each invoice", () => {
     const b = await item(2);
     const plain = (await admin.post("/api/billables/invoice", { clientId: c.id, itemIds: [b.id] })).json;
     expect((await db().select().from(schema.clientInvoices).where(eq(schema.clientInvoices.id, plain.id)))[0].payOnline).toBeNull();
+    // changed later from Toutes les factures: accounting.manage only, shown on the list
+    const list = async () => ((await admin.get(`/api/crm/invoices?clientId=${c.id}&istatus=all`)).json.items as any[]).find((v) => v.id === plain.id);
+    expect(await list()).toMatchObject({ payOnline: true, payOwn: null, payReady: false });
+    const tech = await signIn("tech@akab.local");
+    expect((await tech.put(`/api/crm/invoices/${plain.id}/pay-online`, { payOnline: false })).status).toBe(403);
+    expect((await admin.put(`/api/crm/invoices/${plain.id}/pay-online`, { payOnline: false })).json).toMatchObject({ payOnline: false });
+    expect(await list()).toMatchObject({ payOnline: false, payOwn: false });
   });
 });
 

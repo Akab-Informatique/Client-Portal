@@ -3,7 +3,7 @@ import { useTranslation } from "react-i18next";
 import { useNavigate } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
-import { Ban, BellRing, Download, ExternalLink, Eye, FileText, Loader2, Mail, MailWarning, Search, Send } from "lucide-react";
+import { Ban, BellRing, CreditCard, Download, ExternalLink, Eye, FileText, Loader2, Mail, MailWarning, Search, Send } from "lucide-react";
 import { useConfirm } from "@/components/ConfirmDialog";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -215,6 +215,42 @@ export function StatementsDialog({ onClose }: { onClose: () => void }) {
         )}
       </DialogContent>
     </Dialog>
+  );
+}
+
+/**
+ * The Stripe pay link of an invoice: on, the emails of this invoice (the invoice, its reminders) carry a "Pay online" button
+ * for the balance; a click turns it on or off for this invoice only (the client's or the template's choice applies until then).
+ */
+export function InvoicePayButton({ invoice }: { invoice: { id: string; status: string; balanceCents: number; payOnline?: boolean; payOwn?: boolean | null; payReady?: boolean } }) {
+  const { t } = useTranslation();
+  const can = useCan();
+  const qc = useQueryClient();
+  const run = useMutation({
+    mutationFn: (payOnline: boolean) => api.put(`/crm/invoices/${invoice.id}/pay-online`, { payOnline }),
+    onSuccess: (_r, on) => {
+      void qc.invalidateQueries();
+      toast.success(t(on ? "statements.payAdded" : "statements.payRemoved"));
+    },
+    onError: () => toast.error(t("common.error")),
+  });
+  if (invoice.payOnline === undefined || invoice.status === "voided" || invoice.balanceCents <= 0) return null;
+  const on = invoice.payOnline;
+  const title = [t(on ? "statements.payOn" : "statements.payOff"), !invoice.payReady && t("statements.payNotReady"), invoice.payOwn == null && t("statements.payInherited")].filter(Boolean).join(" · ");
+  return (
+    <Button
+      type="button"
+      size="icon"
+      variant="ghost"
+      className={cn("size-7", on && invoice.payReady ? "text-[#8b85ff]" : on ? "text-amber-300" : "text-muted-foreground/50")}
+      disabled={!can("accounting.manage") || run.isPending}
+      aria-pressed={on}
+      onClick={() => run.mutate(!on)}
+      title={title}
+      aria-label={title}
+    >
+      {run.isPending ? <Loader2 className="size-3.5 animate-spin" /> : <CreditCard className="size-3.5" />}
+    </Button>
   );
 }
 
