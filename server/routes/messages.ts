@@ -64,12 +64,51 @@ async function emailRecipients(audience: "all" | "selected", clientIds: string[]
     .where(and(...conds));
 }
 
-async function sendCopies(message: MessageRow, clientIds: string[]): Promise<number> {
-  const recipients = await emailRecipients(message.audience, clientIds);
-  let sent = 0;
+/**
+ * The main contact and the billing address of each client targeted (active clients; portal or not): one email each,
+ * the same address only once. A billing address with no contact behind it is greeted with the company's name.
+ */
+export async function contactRecipients(audience: "all" | "selected", clientIds: string[]) {
+  if (audience === "selected" && !clientIds.length) return [];
+  const d = db();
+  const clients = await d
+    .select({ id: schema.clients.id, name: schema.clients.name, invoice: schema.clients.invoice })
+    .from(schema.clients)
+    .where(and(eq(schema.clients.active, true), audience === "selected" ? inArray(schema.clients.id, clientIds) : undefined));
+  if (!clients.length) return [];
+  const contacts = await d
+    .select()
+    .from(schema.clientContacts)
+    .where(and(inArray(schema.clientContacts.clientId, clients.map((c) => c.id)), eq(schema.clientContacts.active, true)));
+  const out = new Map<string, { email: string; name: string; locale: string; clientId: string }>();
+  const add = (email: string | null | undefined, name: string, clientId: string) => {
+    const e = (email ?? "").trim();
+    if (e && e.includes("@") && !out.has(e.toLowerCase())) out.set(e.toLowerCase(), { email: e, name, locale: "fr", clientId });
+  };
+  const fullName = (c: (typeof contacts)[number]) => `${c.firstName} ${c.lastName}`.trim();
+  for (const c of clients) {
+    const mine = contacts.filter((x) => x.clientId === c.id);
+    const main = mine.find((x) => x.isPrimary);
+    if (main) add(main.email, fullName(main) || c.name, c.id);
+    const billing = mine.find((x) => x.id === c.invoice?.billingContactId);
+    add(c.invoice?.billingEmail, billing ? fullName(billing) || c.name : c.name, c.id);
+  }
+  return [...out.values()];
+}
+
+async function sendCopies(message: MessageRow, clientIds: string[], to: { portalUsers: boolean; contacts: boolean }): Promise<number> {
   const portal = config.publicUrl ? `${config.publicUrl}/` : "";
+  // portal users get the button to the portal; main and billing contacts get the message itself (they may have no account)
+  const recipients = [
+    ...(to.portalUsers ? (await emailRecipients(message.audience, clientIds)).map((r) => ({ ...r, portalUrl: portal })) : []),
+    ...(to.contacts ? (await contactRecipients(message.audience, clientIds)).map((r) => ({ ...r, portalUrl: "" })) : []),
+  ];
+  const seen = new Set<string>();
+  let sent = 0;
   for (const r of recipients) {
-    const ok = await sendTemplate("boardMessage", r, { name: r.name, title: message.title, body: message.body, portalUrl: portal });
+    if (seen.has(r.email.toLowerCase())) continue;
+    seen.add(r.email.toLowerCase());
+    const ok = await sendTemplate("boardMessage", r, { name: r.name, title: message.title, body: message.body, portalUrl: r.portalUrl });
     if (ok) sent++;
   }
   await db().update(schema.messages).set({ emailSent: sent }).where(eq(schema.messages.id, message.id));
@@ -83,6 +122,8 @@ const messageInput = z.object({
   audience: z.enum(["all", "selected"]),
   clientIds: z.array(zUuid).max(1000).default([]),
   emailCopy: z.boolean().default(false),
+  /** Also email the main contact and the billing address of each client targeted */
+  emailContacts: z.boolean().default(false),
 });
 
 // ── Staff side ───────────────────────────────────────────────────────────────
@@ -108,14 +149,16 @@ export const messageRoutes = new Hono<AppEnv>()
       .from(schema.clients)
       .where(eq(schema.clients.active, true))
       .orderBy(asc(schema.clients.name));
-    return c.json(rows);
+    // how many main / billing addresses each client has (the second email option)
+    const contacts = await contactRecipients("all", []);
+    return c.json(rows.map((r) => ({ ...r, contactCount: contacts.filter((x) => x.clientId === r.id).length })));
   })
 
   .post("/", requirePermission("messages.post"), async (c) => {
     const a = auth(c);
     const p = await body(c, messageInput);
     if (p.pinned && !a.permissions.includes("messages.pin")) throw new HTTPException(403, { message: "Forbidden" });
-    if (p.emailCopy && !a.permissions.includes("messages.email")) throw new HTTPException(403, { message: "Forbidden" });
+    if ((p.emailCopy || p.emailContacts) && !a.permissions.includes("messages.email")) throw new HTTPException(403, { message: "Forbidden" });
     const clientIds = p.audience === "selected" ? [...new Set(p.clientIds)] : [];
     if (p.audience === "selected") {
       if (!clientIds.length) throw new HTTPException(400, { message: "no_clients" });
@@ -124,14 +167,14 @@ export const messageRoutes = new Hono<AppEnv>()
     }
     const [m] = await db()
       .insert(schema.messages)
-      .values({ title: p.title, body: p.body, pinned: p.pinned, audience: p.audience, authorId: a.user.id, emailCopy: p.emailCopy })
+      .values({ title: p.title, body: p.body, pinned: p.pinned, audience: p.audience, authorId: a.user.id, emailCopy: p.emailCopy || p.emailContacts })
       .returning();
     if (clientIds.length) {
       await db().insert(schema.messageTargets).values(clientIds.map((clientId) => ({ messageId: m.id, clientId })));
     }
-    await audit(a.user.id, "message.posted", m.id, { audience: p.audience, clients: clientIds.length, emailCopy: p.emailCopy });
+    await audit(a.user.id, "message.posted", m.id, { audience: p.audience, clients: clientIds.length, emailCopy: p.emailCopy, emailContacts: p.emailContacts });
     // Email copies go out in the background; the count is stored on the message.
-    if (p.emailCopy) void sendCopies(m, clientIds).catch((e) => console.error("[messages] email copies failed", e));
+    if (p.emailCopy || p.emailContacts) void sendCopies(m, clientIds, { portalUsers: p.emailCopy, contacts: p.emailContacts }).catch((e) => console.error("[messages] email copies failed", e));
     // Bell notifications for the targeted clients and the other technicians
     await notifyMessagePosted(m, clientIds, a.user.id, a.user.name);
     return c.json((await decorate([m]))[0], 201);

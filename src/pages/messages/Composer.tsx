@@ -26,6 +26,7 @@ export function Composer({ open, onOpenChange }: { open: boolean; onOpenChange: 
   const [search, setSearch] = useState("");
   const [pinned, setPinned] = useState(false);
   const [emailCopy, setEmailCopy] = useState(false);
+  const [emailContacts, setEmailContacts] = useState(false);
 
   const { data: clients } = useQuery({
     queryKey: ["client-options"],
@@ -37,14 +38,18 @@ export function Composer({ open, onOpenChange }: { open: boolean; onOpenChange: 
     const pool = audience === "all" ? (clients ?? []) : (clients ?? []).filter((c) => selected.includes(c.id));
     return pool.reduce((n, c) => n + c.notifyCount, 0);
   }, [clients, audience, selected]);
+  const contactRecipients = useMemo(() => {
+    const pool = audience === "all" ? (clients ?? []) : (clients ?? []).filter((c) => selected.includes(c.id));
+    return pool.reduce((n, c) => n + (c.contactCount ?? 0), 0);
+  }, [clients, audience, selected]);
 
   const filtered = (clients ?? []).filter((c) => `${c.name} ${c.code ?? ""}`.toLowerCase().includes(search.toLowerCase()));
 
   const send = useMutation({
     mutationFn: () =>
-      api.post<Message>("/messages", { title, body, audience, clientIds: audience === "selected" ? selected : [], pinned, emailCopy }),
+      api.post<Message>("/messages", { title, body, audience, clientIds: audience === "selected" ? selected : [], pinned, emailCopy, emailContacts }),
     onSuccess: () => {
-      toast.success(emailCopy ? t("messages.sentEmail") : t("messages.sent"));
+      toast.success(emailCopy || emailContacts ? t("messages.sentEmail") : t("messages.sent"));
       void qc.invalidateQueries({ queryKey: ["messages"] });
       void qc.invalidateQueries({ queryKey: ["dashboard"] });
       setTitle("");
@@ -53,6 +58,7 @@ export function Composer({ open, onOpenChange }: { open: boolean; onOpenChange: 
       setSelected([]);
       setPinned(false);
       setEmailCopy(false);
+      setEmailContacts(false);
       onOpenChange(false);
     },
     onError: (e) => toast.error(e instanceof ApiError && e.code === "no_clients" ? t("messages.noClients") : t("common.error")),
@@ -156,6 +162,16 @@ export function Composer({ open, onOpenChange }: { open: boolean; onOpenChange: 
                   <Switch checked={emailCopy} onCheckedChange={setEmailCopy} />
                 </label>
               )}
+              {can("messages.email") && (
+                <label className="flex items-start gap-3 rounded-xl border p-3">
+                  <Mail className="mt-0.5 size-4 text-primary" />
+                  <span className="flex-1">
+                    <span className="block text-sm font-medium">{t("messages.emailContacts")}</span>
+                    <span className="block text-xs text-muted-foreground">{t("messages.emailContactsHint", { count: contactRecipients })}</span>
+                  </span>
+                  <Switch checked={emailContacts} onCheckedChange={setEmailContacts} />
+                </label>
+              )}
             </div>
           )}
 
@@ -177,7 +193,7 @@ export function Composer({ open, onOpenChange }: { open: boolean; onOpenChange: 
               {t("common.cancel")}
             </Button>
             <Button type="submit" disabled={send.isPending} className="bg-grad-gold font-semibold text-[#1a1204] glow-gold hover:brightness-105">
-              {send.isPending ? <Loader2 className="size-4 animate-spin" /> : emailCopy ? <Mail className="size-4" /> : <Send className="size-4" />}
+              {send.isPending ? <Loader2 className="size-4 animate-spin" /> : emailCopy || emailContacts ? <Mail className="size-4" /> : <Send className="size-4" />}
               {send.isPending ? t("messages.sending") : t("messages.send")}
               {!send.isPending && audience === "selected" && selected.length > 0 && (
                 <span className="ml-1 inline-flex items-center gap-0.5 rounded bg-black/10 px-1.5 text-xs">

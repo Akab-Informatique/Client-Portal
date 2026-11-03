@@ -589,6 +589,31 @@ describe("permissions", () => {
   });
 });
 
+describe("message board: main and billing contacts", () => {
+  it("emails the main contact and the billing address of each client targeted, each address once", async () => {
+    const admin = await signIn("admin@akab.local");
+    const { devOutbox } = await import("../server/lib/mail.ts");
+    const [a] = await db().insert(schema.clients).values({ name: "Zz Babillard A inc.", invoice: { billingEmail: "factures@a.example" } }).returning();
+    const [b] = await db().insert(schema.clients).values({ name: "Zz Babillard B inc.", invoice: { billingEmail: "Patron@b.example" } }).returning();
+    await db().insert(schema.clientContacts).values([
+      { clientId: a.id, firstName: "Ana", lastName: "Principale", email: "ana@a.example", isPrimary: true },
+      { clientId: a.id, firstName: "Autre", lastName: "Contact", email: "autre@a.example" },
+      // the main contact is also the billing address: one email only
+      { clientId: b.id, firstName: "Bob", lastName: "Patron", email: "patron@b.example", isPrimary: true },
+    ]);
+    const { contactRecipients } = await import("../server/routes/messages.ts");
+    const to = (await contactRecipients("selected", [a.id, b.id])).map((r) => r.email.toLowerCase()).sort();
+    expect(to).toEqual(["ana@a.example", "factures@a.example", "patron@b.example"]);
+    expect(((await admin.get("/api/messages/client-options")).json as any[]).find((c) => c.id === a.id).contactCount).toBe(2);
+    devOutbox.length = 0;
+    const post = await admin.post("/api/messages", { title: "Nouveauté", body: "Le paiement par carte est offert.", audience: "selected", clientIds: [a.id, b.id], emailContacts: true });
+    expect(post.status).toBe(201);
+    for (let i = 0; i < 50 && devOutbox.length < 3; i++) await new Promise((r) => setTimeout(r, 20));
+    expect(devOutbox.map((m) => m.to.toLowerCase()).sort()).toEqual(["ana@a.example", "factures@a.example", "patron@b.example"]);
+    expect(devOutbox.find((m) => m.to === "ana@a.example")!.text).toContain("Bonjour Ana Principale");
+  });
+});
+
 describe("message board", () => {
   it("targets selected clients only, and pin/email need their rights", async () => {
     const admin = await signIn("admin@akab.local");
@@ -5771,6 +5796,19 @@ describe("a contract paid automatically by card", () => {
       // the contract tab says where a link would go by default: the billing email
       expect((await admin.get(`/api/autopay/contracts/${ka.id}`)).json.defaultEmail).toBe("factures@deux.example");
       expect(((await admin.get("/api/crm/contracts")).json as any[]).find((x) => x.id === kb.id).autopay).toBe("active");
+
+      // a yearly contract (a domain name): charged once a year, on its renewal day, never by the month
+      const { contractCharges } = await import("../shared/contractCharges.ts");
+      const yearly = contractCharges({ startDate: "2026-03-10", endDate: "2029-03-09", billingPeriod: "yearly" }, [{ id: "d", name: "Nom de domaine", kind: "recurring_yearly", priceCents: 3000, quantity: 1, addedOn: "2026-03-10" }]);
+      expect(yearly.entries.map((e) => [e.date, e.amountCents])).toEqual([["2026-03-10", 3000], ["2027-03-10", 3000], ["2028-03-10", 3000]]);
+      const [kd] = await db().insert(schema.clientContracts).values({ clientId: c2.id, name: "Nom de domaine", billingPeriod: "yearly", startDate: "2026-03-10", endDate: "2099-03-09" }).returning();
+      await db().insert(schema.contractServices).values({ contractId: kd.id, name: "Nom de domaine", kind: "recurring_yearly", priceCents: 3000, addedOn: "2026-03-10" });
+      const yr = (await admin.post(`/api/autopay/contracts/${kd.id}/send`, { send: false })).json;
+      const yPage = (await anon.get(`/api/autopay/public/${yr.url.split("/carte/")[1]}`)).json;
+      expect(yPage.contracts[0]).toMatchObject({ period: "yearly", perPeriodCents: 3000, next: { amountCents: 3000 } });
+      // the next charge is the next renewal day (March 10), whatever today is
+      expect(yPage.contracts[0].next.date.slice(5)).toBe("03-10");
+      expect(yPage.contracts[0].next.date > new Date().toLocaleDateString("en-CA", { timeZone: "America/Toronto" })).toBe(true);
 
       // taken off: approved lines wait for a normal invoice again
       expect((await admin.del(`/api/autopay/contracts/${k.id}`)).json.revoked).toBe(1);

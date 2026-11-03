@@ -10,12 +10,18 @@ import { Input } from "@/components/ui/input";
 import { api, ApiError } from "@/lib/api";
 import { money } from "@/pages/crm/shared";
 
+const longDay = (ymd: string, lang: string) => new Date(`${ymd}T12:00:00`).toLocaleDateString(lang === "en" ? "en-CA" : "fr-CA", { day: "numeric", month: "long", year: "numeric" });
+
 type Contract = {
   name: string;
   period: "monthly" | "yearly";
   startDate: string | null;
   endDate: string | null;
   monthlyCents: number | null;
+  /** Per month on a monthly contract, per year on a yearly one (charged once a year, on its renewal day) */
+  perPeriodCents: number | null;
+  yearlyExtraCents: number;
+  next: { date: string; amountCents: number } | null;
   bundle: { quantity: number; unitCents: number } | null;
   lines: { name: string; quantity: number; yearly: boolean; unitCents: number }[];
 };
@@ -96,12 +102,19 @@ export function CardAutopayPage() {
                 <div key={n} className={n > 0 ? "space-y-2 border-t pt-3" : "space-y-2"}>
                   <div className="flex flex-wrap items-baseline justify-between gap-2">
                     <p className="font-semibold">{k.name}</p>
-                    {k.monthlyCents != null && (
+                    {k.perPeriodCents != null && (
                       <p className="text-sm">
-                        <span className="font-mono text-lg font-bold text-primary">{m(k.monthlyCents)}</span> <span className="text-muted-foreground">{t("cardPage.perMonth")}</span>
+                        <span className="font-mono text-lg font-bold text-primary">{m(k.perPeriodCents)}</span>{" "}
+                        <span className="text-muted-foreground">{t(k.period === "yearly" ? "cardPage.perYear" : "cardPage.perMonth")}</span>
                       </p>
                     )}
                   </div>
+                  {k.yearlyExtraCents > 0 && <p className="text-xs text-muted-foreground">{t("cardPage.yearlyExtra", { amount: m(k.yearlyExtraCents) })}</p>}
+                  {k.next && (
+                    <p className="text-xs text-muted-foreground">
+                      {t(k.period === "yearly" ? "cardPage.nextYearly" : "cardPage.next", { date: longDay(k.next.date, i18n.language), amount: m(k.next.amountCents) })}
+                    </p>
+                  )}
                   {(k.bundle || k.lines.length > 0) && (
                     <ul className="space-y-1 text-sm">
                       {k.bundle ? (

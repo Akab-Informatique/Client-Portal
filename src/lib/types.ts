@@ -101,7 +101,7 @@ export type Message = {
   updatedAt: string;
 };
 
-export type ClientOption = { id: string; name: string; code: string | null; notifyCount: number };
+export type ClientOption = { id: string; name: string; code: string | null; notifyCount: number; /** Main contact and billing addresses (the second email option) */ contactCount?: number };
 
 export type AuditEntry = {
   id: number;
