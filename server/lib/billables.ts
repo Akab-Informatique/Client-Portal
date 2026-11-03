@@ -60,7 +60,13 @@ export async function applyAutoApprove(clientId?: string) {
   const withDefault = await clientsWithDefaultContract();
   const ids = pending.filter((i) => ruled(i, clients.get(i.clientId) ?? { invoice: null }, contracts, withDefault.has(i.clientId))).map((i) => i.id);
   if (ids.length) await d.update(schema.billingItems).set({ status: "approved", approvedAt: new Date(), approvedBy: null, updatedAt: new Date() }).where(inArray(schema.billingItems.id, ids));
+  if (ids.length) await contractAutopay(null);
   return ids.length;
+}
+
+/** Approved lines of a contract paid by card are invoiced and charged at once (never fails the caller) */
+async function contractAutopay(actorId: string | null) {
+  await (await import("./cardAutopay.ts")).runContractAutopay(actorId).catch((e) => console.warn("[autopay]", e instanceof Error ? e.message : e));
 }
 
 let running: Promise<BillablesState> | null = null;
@@ -146,6 +152,7 @@ export function syncBillables(): Promise<BillablesState> {
       .filter((x) => !seen.has(x.sourceId!) && (!alone || /^(p(r?time|charge|travel):|contract:)/.test(x.sourceId!) || (x.kind === "contract" && !x.sourceId!.startsWith("contract:"))) && (x.status === "pending" || (x.status === "approved" && !x.approvedBy)) && !x.edited && !data.errors[x.kind as BillableKind])
       .map((x) => x.id);
     if (gone.length) await d.delete(schema.billingItems).where(inArray(schema.billingItems.id, gone));
+    await contractAutopay(null);
     const state: BillablesState = { at: now.toISOString(), counts, errors: data.errors, skipped };
     await d
       .insert(schema.syncState)
@@ -277,6 +284,7 @@ export async function setBillableStatus(actorId: string, ids: string[], status: 
     .set({ status, excludedReason: status === "excluded" ? reason : null, approvedBy: status === "approved" ? actorId : null, approvedAt: status === "approved" ? new Date() : null, updatedAt: new Date() })
     .where(and(inArray(schema.billingItems.id, ids), sql`${schema.billingItems.status} <> 'posted'`))
     .returning({ id: schema.billingItems.id });
+  if (status === "approved" && rows.length) await contractAutopay(actorId);
   return rows.length;
 }
 
@@ -400,6 +408,9 @@ export async function draftInvoice(p: InvoiceDraft) {
     if (items.length !== wanted.size) throw new DraftError("billing_items_invalid");
   } else items = approved.filter((i) => !p.kinds || p.kinds.includes(i.kind as BillableKind));
   if (!items.length) throw new DraftError("billing_nothing");
+  // the card fee of an invoice paid by card always comes last
+  const isFee = (i: Item) => Boolean(i.sourceId?.startsWith("cardfee:"));
+  items = [...items.filter((i) => !isFee(i)), ...items.filter(isFee)];
   // a parent company and its children on one invoice: the parent's own charges on top, then each child's, one section each
   const companyIds = [...new Set(items.map((i) => i.clientId))];
   const names = new Map((await d.select({ id: schema.clients.id, name: schema.clients.name }).from(schema.clients).where(inArray(schema.clients.id, companyIds))).map((c) => [c.id, c.name]));
@@ -478,7 +489,7 @@ async function peekNumber(): Promise<string> {
 }
 
 /** Make the invoice of a draft: the number, the lines; the items are posted. One at a time (numbers never repeat). */
-export function createInvoice(actorId: string, p: InvoiceDraft) {
+export function createInvoice(actorId: string | null, p: InvoiceDraft) {
   const run = numbering.then(async () => {
     const draft = await draftInvoice(p);
     const s = await billingSettings();

@@ -23,6 +23,11 @@ export type BillingSettings = {
   autotask: { invoicesSince: string; invoiceMinNumber: number | null; itemsSince: string };
   /** Default accounts (ledger account ids) used for invoice lines and payments */
   accounts: { receivable: string | null; bank: string | null; labour: string | null; charges: string | null; contracts: string | null; gst: string | null; qst: string | null };
+  /**
+   * The fee added to an invoice charged automatically to a saved credit card (never a debit or prepaid card, never a
+   * consumer): off until the 30 days' notice to the card networks is done; at most 2.4 % (Visa / Mastercard Canada).
+   */
+  cardFee: { enabled: boolean; percent: number; taxable: boolean };
 };
 
 export const DEFAULT_BILLING: BillingSettings = {
@@ -34,6 +39,7 @@ export const DEFAULT_BILLING: BillingSettings = {
   accounts: { receivable: null, bank: null, labour: null, charges: null, contracts: null, gst: null, qst: null },
   autotask: { invoicesSince: "2026-09-01", invoiceMinNumber: 10000, itemsSince: "2026-09-01" },
   rates: { hourly: 115 },
+  cardFee: { enabled: false, percent: 2.4, taxable: true },
 };
 
 async function row(provider: string) {
@@ -58,6 +64,7 @@ export async function billingSettings(): Promise<BillingSettings> {
     accounts: { ...DEFAULT_BILLING.accounts, ...c.accounts },
     autotask: { ...DEFAULT_BILLING.autotask, ...c.autotask },
     rates: { ...DEFAULT_BILLING.rates, ...c.rates },
+    cardFee: { ...DEFAULT_BILLING.cardFee, ...c.cardFee },
   };
 }
 
@@ -74,6 +81,7 @@ export async function saveBillingSettings(actorId: string | null, p: BillingPatc
     accounts: { ...cur.accounts, ...p.accounts },
     autotask: { ...cur.autotask, ...p.autotask },
     rates: { ...cur.rates, ...p.rates },
+    cardFee: { ...cur.cardFee, ...p.cardFee },
   };
   await save("billing", actorId, { enabled: true, config: next as unknown as Record<string, unknown> });
   return next;

@@ -144,7 +144,7 @@ async function invoiceMail(invoiceId: string) {
   return { inv, client, balanceCents: owed?.balanceCents ?? 0, daysLate: owed?.daysLate ?? 0 };
 }
 
-function invoiceVars(inv: Invoice, client: Client, balanceCents: number, daysLate: number, l: Locale, payUrl = ""): Record<string, string> {
+function invoiceVars(inv: Invoice, client: Client, balanceCents: number, daysLate: number, l: Locale, payUrl = "", card = ""): Record<string, string> {
   return {
     name: client.name,
     company: client.name,
@@ -157,6 +157,7 @@ function invoiceVars(inv: Invoice, client: Client, balanceCents: number, daysLat
     poNumber: inv.poNumber ?? "",
     portalUrl: config.publicUrl,
     payUrl,
+    card,
   };
 }
 
@@ -167,12 +168,24 @@ export async function sendInvoiceMail(invoiceId: string, kind: "sent" | "reminde
   // a reminder is for an invoice that is past due and not paid
   if (kind === "reminder" && (balanceCents <= 0 || daysLate <= 0)) throw new InvoiceMailError("nothing_due");
   const locale = await languageOf();
-  const template: TemplateKey = kind === "sent" ? "invoiceSent" : templateFor(daysLate);
+  // an invoice its contract's saved card paid says so (no pay link)
+  const paidByCard = kind === "sent" && inv.cardChargeStatus === "charged";
+  const template: TemplateKey = paidByCard ? "invoiceCardPaid" : kind === "sent" ? "invoiceSent" : templateFor(daysLate);
   const extras = await invoiceExtras(inv, client, balanceCents);
-  const to = await deliver(template, client, invoiceVars(inv, client, balanceCents, daysLate, locale, extras.payUrl), locale, extras.attachments);
+  const card = paidByCard ? await (await import("./cardAutopay.ts")).cardOfInvoice(inv) : "";
+  const to = await deliver(template, client, invoiceVars(inv, client, balanceCents, daysLate, locale, extras.payUrl, card), locale, extras.attachments);
   if (kind === "sent" && !inv.emailedAt) await db().update(schema.clientInvoices).set({ emailedAt: new Date(), updatedAt: new Date() }).where(eq(schema.clientInvoices.id, inv.id));
   await audit(actorId, kind === "sent" ? "billing.invoice_mailed" : "billing.invoice_reminded", inv.id, { number: inv.number, to, template });
   return { to, template };
+}
+
+/** The link to accept a contract's automatic card payment, emailed to the client (from the invoicing address) */
+export async function sendAutopayRequest(p: { to: string; client: Client; contract: string; link: string }) {
+  const locale = await languageOf();
+  const r = await renderTemplate("cardAutopayRequest", locale, { name: p.client.name, company: p.client.name, contract: p.contract, link: p.link, portalUrl: config.publicUrl });
+  if (config.production && !(await mailConfigured())) throw new InvoiceMailError("mail_not_configured");
+  if (!(await sendMail({ to: p.to, ...r, ...(await invoiceSender()) }))) throw new InvoiceMailError("mail_failed");
+  return p.to;
 }
 
 /** After an invoice is made: emailed to the client when "send each invoice by email" is on. Never fails the invoice. */

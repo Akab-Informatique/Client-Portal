@@ -32,6 +32,7 @@ export type InvoiceSettings = {
   taxNumber?: string;
   poRequired?: boolean;
   payOnline?: boolean | null;
+  consumer?: boolean;
   hourlyRate?: number | null;
   notes?: string;
   /** Kinds of work approved automatically when imported */

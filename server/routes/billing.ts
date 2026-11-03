@@ -290,6 +290,7 @@ export const billingRoutes = new Hono<AppEnv>()
           .partial()
           .optional(),
         rates: z.object({ hourly: z.number().min(0).max(10_000) }).partial().optional(),
+        cardFee: z.object({ enabled: z.boolean(), percent: z.number().min(0).max(2.4), taxable: z.boolean() }).partial().optional(),
         autotask: z
           .object({ invoicesSince: z.string().regex(/^\d{4}-\d{2}-\d{2}$/), invoiceMinNumber: z.number().int().min(0).max(999_999_999).nullable(), itemsSince: z.string().regex(/^\d{4}-\d{2}-\d{2}$/) })
           .partial()

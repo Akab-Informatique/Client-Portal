@@ -3,7 +3,8 @@ import { useTranslation } from "react-i18next";
 import type { TFunction } from "i18next";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
-import { Ban, Building2, CalendarClock, CalendarDays, Cloud, FilePen, FilePlus2, FileText, History, Loader2, Minus, Pencil, Play, Plus, Receipt, Star, Trash2, TrendingUp, Wrench } from "lucide-react";
+import { Ban, Building2, CalendarClock, CalendarDays, Cloud, CreditCard, FilePen, FilePlus2, FileText, History, Loader2, Minus, Pencil, Play, Plus, Receipt, Star, Trash2, TrendingUp, Wrench } from "lucide-react";
+import { brandName, ContractAutopay, useContractAutopay } from "./ContractAutopay";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
@@ -505,6 +506,8 @@ export function ContractWindow({ client, contractId, onClose }: { client: CrmDet
     void qc.invalidateQueries({ queryKey: ["tickets"] });
   };
   const lang = i18n.language;
+  const { data: autopay } = useContractAutopay(contractId);
+  const card = autopay?.autopay?.status === "active" ? autopay.autopay.card : null;
   return (
     <Dialog open onOpenChange={(o) => !o && onClose()}>
       <DialogContent className="max-h-[92vh] sm:max-w-5xl overflow-y-auto">
@@ -528,6 +531,7 @@ export function ContractWindow({ client, contractId, onClose }: { client: CrmDet
                 {(k.rebateBps ?? 0) > 0 && <span className="rounded-md border border-emerald-500/40 bg-emerald-500/10 px-1.5 py-0.5 text-[10px] font-semibold text-emerald-300">{t("rebate.onContract", { pct: (k.rebateBps ?? 0) / 100 })}</span>}
                 {k.sharedWithChildren && <span className="flex items-center gap-1 rounded-md border border-sky-500/40 bg-sky-500/10 px-1.5 py-0.5 text-[10px] font-semibold text-sky-300"><Building2 className="size-3" /> {t("crm.contracts.sharedBadge")}</span>}
                 {k.billedToParent && <span className="flex items-center gap-1 rounded-md border border-sky-500/40 bg-sky-500/10 px-1.5 py-0.5 text-[10px] font-semibold text-sky-300"><Building2 className="size-3" /> {t("crm.contracts.parentPaysBadge")}</span>}
+                {card && <span className="flex items-center gap-1 rounded-md border border-emerald-500/40 bg-emerald-500/10 px-1.5 py-0.5 text-[10px] font-semibold text-emerald-300"><CreditCard className="size-3" /> {t("autopay.badge", { card: `${brandName(card.brand)} •••• ${card.last4}` })}</span>}
                 {k.isSupportDefault && <span className="rounded-md border border-[color:var(--gold)]/40 bg-[color:var(--gold)]/10 px-1.5 py-0.5 text-[10px] font-semibold text-primary">{t("crm.contracts.supportDefault")}</span>}
               </DialogTitle>
               <DialogDescription>
@@ -549,6 +553,9 @@ export function ContractWindow({ client, contractId, onClose }: { client: CrmDet
                 <TabsTrigger value="overview" className="gap-1.5">
                   <FilePen className="size-3.5" /> {t("crm.contracts.window.tabOverview")}
                 </TabsTrigger>
+                <TabsTrigger value="card" className="gap-1.5">
+                  <CreditCard className="size-3.5" /> {t("autopay.tab")}
+                </TabsTrigger>
               </TabsList>
               <TabsContent value="services" className="pt-3">
                 {k.billingMode === "banked" ? <BankTab client={client} k={k} editable={editable} onChanged={refresh} /> : <ServicesTab client={client} k={k} editable={editable} onChanged={refresh} />}
@@ -558,6 +565,9 @@ export function ContractWindow({ client, contractId, onClose }: { client: CrmDet
               </TabsContent>
               <TabsContent value="activity" className="pt-3">
                 <ActivityTab client={client} k={k} lang={lang} />
+              </TabsContent>
+              <TabsContent value="card" className="pt-3">
+                <ContractAutopay contractId={contractId} />
               </TabsContent>
               <TabsContent value="overview" className="pt-3">
                 <OverviewTab client={client} k={k} editable={editable} onChanged={refresh} onClose={onClose} />

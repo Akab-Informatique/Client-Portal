@@ -32,6 +32,8 @@ export type ClientInvoiceSettings = {
   poRequired?: boolean;
   /** "Pay online" link in the invoice email: its own choice (none: the default of the invoice template) */
   payOnline?: boolean | null;
+  /** A person, not a business: no card fee is ever added (Québec forbids it to consumers) */
+  consumer?: boolean;
   hourlyRate?: number | null;
   /** Kinds of work approved automatically when imported (labour, charge, contract, milestone, project) */
   autoApprove?: string[];
@@ -288,6 +290,10 @@ export const clientInvoices = pgTable(
     emailedAt: timestamp("emailed_at", { withTimezone: true }),
     /** "Pay online" (Stripe) in this invoice's emails: chosen when it was made; null = the client's choice, else the template's */
     payOnline: boolean("pay_online"),
+    /** Paid automatically by a contract's saved card: the authorization used, and how the charge went (charged | failed) */
+    autopayId: uuid("autopay_id"),
+    cardChargeStatus: text("card_charge_status"),
+    cardChargeError: text("card_charge_error"),
     syncedAt: timestamp("synced_at", { withTimezone: true }),
     createdAt: created(),
     updatedAt: updated(),
@@ -2079,6 +2085,48 @@ export const stripeCheckouts = pgTable(
     createdAt: created(),
   },
   (t) => [uniqueIndex("stripe_checkouts_session_idx").on(t.sessionId), index("stripe_checkouts_invoice_idx").on(t.invoiceId)],
+);
+
+/**
+ * A client contract paid automatically by card: the client accepted it through a signed link (name, day, IP, the text
+ * agreed to) and saved a card with Stripe (only the customer / payment method ids and the card's brand, last 4 digits,
+ * expiry and kind are kept here). Approving the contract's lines then makes its invoice and charges the card at once.
+ */
+export const contractAutopay = pgTable(
+  "contract_autopay",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    clientId: uuid("client_id")
+      .notNull()
+      .references(() => clients.id, { onDelete: "cascade" }),
+    contractId: uuid("contract_id")
+      .notNull()
+      .references(() => clientContracts.id, { onDelete: "cascade" }),
+    /** pending (link sent, not accepted) | active (card saved) | revoked */
+    status: text("status").notNull().default("pending"),
+    email: text("email"),
+    requestedBy: uuid("requested_by").references(() => users.id, { onDelete: "set null" }),
+    requestedAt: timestamp("requested_at", { withTimezone: true }).notNull().defaultNow(),
+    acceptedName: text("accepted_name"),
+    acceptedAt: timestamp("accepted_at", { withTimezone: true }),
+    acceptedIp: text("accepted_ip"),
+    acceptedText: text("accepted_text"),
+    stripeCustomerId: text("stripe_customer_id"),
+    stripePaymentMethodId: text("stripe_payment_method_id"),
+    setupSessionId: text("setup_session_id"),
+    cardBrand: text("card_brand"),
+    cardLast4: text("card_last4"),
+    cardExpMonth: integer("card_exp_month"),
+    cardExpYear: integer("card_exp_year"),
+    /** credit | debit | prepaid | unknown: the card fee only applies to credit cards */
+    cardFunding: text("card_funding"),
+    live: boolean("live").notNull().default(false),
+    lastChargeAt: timestamp("last_charge_at", { withTimezone: true }),
+    lastError: text("last_error"),
+    revokedAt: timestamp("revoked_at", { withTimezone: true }),
+    createdAt: created(),
+  },
+  (t) => [index("contract_autopay_contract_idx").on(t.contractId), index("contract_autopay_client_idx").on(t.clientId)],
 );
 
 /** Contract types set up in Admin › Types de contrats: a name over one of four ways to bill (kind) */

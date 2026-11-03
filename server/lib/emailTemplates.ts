@@ -33,7 +33,9 @@ export type TemplateKey =
   | "invoiceReminder30"
   | "invoiceReminder60"
   | "invoiceReminder90"
-  | "accountStatement";
+  | "accountStatement"
+  | "invoiceCardPaid"
+  | "cardAutopayRequest";
 
 const SIGN = { fr: "L'équipe AKAB Informatique", en: "The AKAB Informatique team" };
 const sampleBase = (l: Locale) => ({
@@ -221,9 +223,9 @@ ${SIGN.en}`,
 /** Days past due at which a reminder goes out (the last one means "and more") */
 export const REMINDER_LEVELS = [5, 15, 20, 30, 60, 90] as const;
 export const reminderKey = (level: number) => `invoiceReminder${level}` as TemplateKey;
-export const BILLING_TEMPLATE_KEYS: TemplateKey[] = ["invoiceSent", "invoicePastDue", ...REMINDER_LEVELS.map(reminderKey), "accountStatement"];
+export const BILLING_TEMPLATE_KEYS: TemplateKey[] = ["invoiceSent", "invoiceCardPaid", "invoicePastDue", ...REMINDER_LEVELS.map(reminderKey), "accountStatement", "cardAutopayRequest"];
 
-const invoiceVars = ["name", "company", "number", "issuedOn", "dueOn", "total", "balance", "daysLate", "poNumber", "portalUrl", "payUrl"];
+const invoiceVars = ["name", "company", "number", "issuedOn", "dueOn", "total", "balance", "daysLate", "poNumber", "portalUrl", "payUrl", "card"];
 const invoiceSample = (l: Locale, daysLate: string) => ({
   ...sampleBase(l),
   company: "Boulangerie Lanaudière",
@@ -235,6 +237,7 @@ const invoiceSample = (l: Locale, daysLate: string) => ({
   daysLate,
   poNumber: "PO-778",
   payUrl: `${config.publicUrl || "https://portail.akab.ca"}/api/pay/…`,
+  card: "Visa •••• 4242",
 });
 const REMINDER_TEXT: Record<number, { fr: [string, string]; en: [string, string] }> = {
   5: {
@@ -311,6 +314,71 @@ TEMPLATES.push(
       },
     },
     sample: { fr: invoiceSample("fr", "2"), en: invoiceSample("en", "2") },
+  },
+  {
+    key: "invoiceCardPaid",
+    linkVar: null,
+    variables: invoiceVars,
+    defaults: {
+      fr: {
+        subject: "Facture {{number}} d'AKAB Informatique — payée par carte",
+        body: `Bonjour {{name}},
+
+Voici votre facture {{number}} du {{issuedOn}}, d'un montant de {{total}}. Elle a été payée automatiquement par votre carte {{card}}, comme convenu : vous n'avez rien à faire.
+
+Pour toute question au sujet de cette facture, répondez simplement à ce courriel en mentionnant le numéro {{number}}.
+
+Merci de votre confiance,
+${SIGN.fr}`,
+        action: "",
+      },
+      en: {
+        subject: "Invoice {{number}} from AKAB Informatique — paid by card",
+        body: `Hello {{name}},
+
+Here is your invoice {{number}} dated {{issuedOn}}, for {{total}}. It was paid automatically with your card {{card}}, as agreed: there is nothing for you to do.
+
+For any question about this invoice, simply reply to this email and mention number {{number}}.
+
+Thank you for your business,
+${SIGN.en}`,
+        action: "",
+      },
+    },
+    sample: { fr: invoiceSample("fr", "0"), en: invoiceSample("en", "0") },
+  },
+  {
+    key: "cardAutopayRequest",
+    linkVar: "link",
+    variables: ["name", "company", "contract", "link", "portalUrl"],
+    defaults: {
+      fr: {
+        subject: "Paiement automatique de votre contrat « {{contract}} »",
+        body: `Bonjour {{name}},
+
+Pour simplifier le paiement de votre contrat « {{contract}} », nous vous proposons de le régler automatiquement par carte de crédit : chaque facture du contrat sera payée le jour où elle est faite, et vous la recevrez par courriel comme d'habitude.
+
+Le lien ci-dessous vous montre le contrat et son montant. Si tout est conforme, acceptez-le et enregistrez votre carte sur la page sécurisée de notre fournisseur de paiement (Stripe). Nous ne voyons jamais le numéro de votre carte.
+
+${SIGN.fr}`,
+        action: "Voir le contrat et enregistrer ma carte",
+      },
+      en: {
+        subject: "Automatic payment of your contract \"{{contract}}\"",
+        body: `Hello {{name}},
+
+To make paying your contract "{{contract}}" simpler, we suggest paying it automatically by credit card: each invoice of the contract will be paid on the day it is made, and you will still receive it by email.
+
+The link below shows the contract and its amount. If everything is right, accept it and save your card on the secure page of our payment provider (Stripe). We never see your card number.
+
+${SIGN.en}`,
+        action: "See the contract and save my card",
+      },
+    },
+    sample: {
+      fr: { ...sampleBase("fr"), company: "Boulangerie Lanaudière", contract: "Soutien informatique", link: `${config.publicUrl || "https://portail.akab.ca"}/carte/…` },
+      en: { ...sampleBase("en"), company: "Boulangerie Lanaudière", contract: "IT support", link: `${config.publicUrl || "https://portail.akab.ca"}/carte/…` },
+    },
   },
   {
     key: "accountStatement",

@@ -27,6 +27,7 @@ const TITLES: Record<NotificationType, { fr: string; en: string }> = {
   "breakroom.invite": { fr: "Invitation à jouer", en: "Game invitation" },
   "breakroom.complots": { fr: "Invitation à jouer", en: "Game invitation" },
   "hr.negative": { fr: "Solde RH négatif", en: "Negative HR balance" },
+  "billing.card_failed": { fr: "Prélèvement par carte refusé", en: "Card charge declined" },
 };
 const GENERIC = { fr: "Touchez pour ouvrir le portail.", en: "Tap to open the portal." };
 

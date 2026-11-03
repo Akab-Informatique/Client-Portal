@@ -1284,6 +1284,7 @@ function InvoiceTab({ client }: { client: CrmDetail }) {
     taxNumber: s?.taxNumber ?? "",
     poRequired: s?.poRequired ?? false,
     payOnline: s?.payOnline ?? null,
+    consumer: s?.consumer ?? false,
     hourlyRate: s?.hourlyRate ?? null,
     notes: s?.notes ?? "",
     autoApprove: s?.autoApprove ?? [],
@@ -1378,6 +1379,9 @@ function InvoiceTab({ client }: { client: CrmDetail }) {
             </label>
             <label className="flex items-center gap-2 text-sm">
               <Switch checked={f.poRequired} onCheckedChange={(v) => setF({ ...f, poRequired: v })} /> {t("crm.invoice.po")}
+            </label>
+            <label className="flex items-center gap-2 text-sm" title={t("crm.invoice.consumerHint")}>
+              <Switch checked={f.consumer} onCheckedChange={(v) => setF({ ...f, consumer: v })} /> {t("crm.invoice.consumer")}
             </label>
           </div>
           <Field label={t("crm.invoice.autoApprove")} className="sm:col-span-2 lg:col-span-3">

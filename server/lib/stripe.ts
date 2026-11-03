@@ -24,7 +24,7 @@ export const MIN_CENTS = 50;
 const LINK_HOURS = 23;
 
 /** Form-encoded call to the Stripe API with the account's secret key. */
-async function stripeCall<T>(key: string, method: "GET" | "POST", path: string, params?: Record<string, string>, idempotencyKey?: string): Promise<T> {
+export async function stripeCall<T>(key: string, method: "GET" | "POST", path: string, params?: Record<string, string>, idempotencyKey?: string): Promise<T> {
   let res: Response;
   try {
     res = await fetch(`https://api.stripe.com/v1${path}`, {
@@ -63,6 +63,7 @@ type Session = {
   currency?: string | null;
   payment_status?: string;
   payment_intent?: string | null;
+  mode?: string;
   metadata?: Record<string, string>;
 };
 
@@ -194,6 +195,8 @@ export async function handleEvent(ev: StripeEvent): Promise<string> {
   if (!o?.id) return "ignored";
   switch (ev.type) {
     case "checkout.session.completed":
+      // a card saved for a contract's automatic payment (setup mode): read back and made active
+      if (o.mode === "setup") return (await import("./cardAutopay.ts")).completeSetup(o.id);
       // cards are paid at once; bank debits come later (async_payment_succeeded)
       return o.payment_status === "paid" ? recordPaid(o) : "waiting";
     case "checkout.session.async_payment_succeeded":

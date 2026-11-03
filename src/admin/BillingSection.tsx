@@ -27,6 +27,7 @@ type Settings = {
   template: { language: "fr" | "en"; termsDays: number; footer: string; paymentInstructions: string; showPaymentLink: boolean };
   accounts: Record<AccountUse, string | null>;
   rates: { hourly: number };
+  cardFee: { enabled: boolean; percent: number; taxable: boolean };
   preview: string;
 };
 type AccountUse = "receivable" | "bank" | "labour" | "charges" | "contracts" | "gst" | "qst";
@@ -151,9 +152,9 @@ function GeneralTab() {
   const { t } = useTranslation();
   const { data } = useSettings();
   const save = useSaveSettings();
-  const [f, setF] = useState<Pick<Settings, "numbering" | "taxes" | "company" | "rates"> | null>(null);
+  const [f, setF] = useState<Pick<Settings, "numbering" | "taxes" | "company" | "rates" | "cardFee"> | null>(null);
   useEffect(() => {
-    if (data) setF({ numbering: data.numbering, taxes: data.taxes, company: data.company, rates: data.rates });
+    if (data) setF({ numbering: data.numbering, taxes: data.taxes, company: data.company, rates: data.rates, cardFee: data.cardFee });
   }, [data]);
   if (!f) return <Loader2 className="size-5 animate-spin text-muted-foreground" />;
   const preview = `${f.numbering.prefix}${String(f.numbering.next || 0).padStart(f.numbering.digits || 1, "0")}`;
@@ -202,6 +203,21 @@ function GeneralTab() {
           <Field label={t("billing.import.hourly")} hint={t("billing.import.hourlyHint")}>
             <Input type="number" min={0} step="0.01" value={f.rates.hourly} onChange={(e) => set("rates", { hourly: Number(e.target.value) })} />
           </Field>
+        </div>
+      </Card>
+
+      {/* the fee on invoices charged automatically to a saved credit card (Québec: never to consumers, at most 2.4 %) */}
+      <Card title={t("billing.cardFee.title")} text={t("billing.cardFee.text")}>
+        <div className="grid gap-3 sm:grid-cols-3">
+          <label className="flex items-center gap-2 text-sm sm:col-span-3">
+            <Switch checked={f.cardFee.enabled} onCheckedChange={(v) => set("cardFee", { enabled: v })} /> {t("billing.cardFee.enabled")}
+          </label>
+          <Field label={t("billing.cardFee.percent")} hint={t("billing.cardFee.percentHint")}>
+            <Input type="number" min={0} max={2.4} step="0.01" value={f.cardFee.percent} onChange={(e) => set("cardFee", { percent: Math.min(2.4, Math.max(0, Number(e.target.value))) })} />
+          </Field>
+          <label className="flex items-center gap-2 self-end pb-2 text-sm sm:col-span-2">
+            <Switch checked={f.cardFee.taxable} onCheckedChange={(v) => set("cardFee", { taxable: v })} /> {t("billing.cardFee.taxable")}
+          </label>
         </div>
       </Card>
 

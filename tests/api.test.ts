@@ -5662,6 +5662,108 @@ describe("the Stripe pay link chosen on each invoice", () => {
   });
 });
 
+describe("a contract paid automatically by card", () => {
+  it("link → accepted → card saved by Stripe → approving the contract's lines makes its own invoice and charges the card (fee, decline)", async () => {
+    resetRateLimit("login:ip:unknown");
+    const admin = await signIn("admin@akab.local");
+    const anon = new Agent();
+    const { devOutbox } = await import("../server/lib/mail.ts");
+    const { saveStripeSettings, saveBillingSettings } = await import("../server/lib/billing.ts");
+    const { config: appConfig } = await import("../server/config.ts");
+    const publicBefore = appConfig.publicUrl;
+    const [adminRow] = await db().select().from(schema.users).where(eq(schema.users.email, "admin@akab.local"));
+    const [c] = await db().insert(schema.clients).values({ name: "Carte auto inc.", email: "compta@carte.example" }).returning();
+    const [k] = await db().insert(schema.clientContracts).values({ clientId: c.id, name: "Soutien mensuel", billingMode: "monthly", monthlyRateCents: 10000, startDate: "2026-01-01", endDate: "2026-12-31" }).returning();
+    const line = async (n: number, extra: Partial<typeof schema.billingItems.$inferInsert> = {}) =>
+      (await db().insert(schema.billingItems).values({ clientId: c.id, kind: "contract", source: "autotask", sourceId: `contract:${k.id}:test:${n}`, contractId: k.id, date: "2026-11-01", description: `Soutien ${n}`, quantityX100: 100, unitPriceCents: 10000, amountCents: 10000, taxable: true, status: "pending", ...extra }).returning())[0];
+
+    // Stripe not set up: no link
+    expect((await admin.post(`/api/autopay/contracts/${k.id}/send`, {})).json.error).toBe("stripe_not_ready");
+    (appConfig as { publicUrl: string }).publicUrl = "https://portail.test";
+    await saveStripeSettings(adminRow!.id, { enabled: true, publishableKey: "pk_test_x", paymentLinks: true, secretKey: "sk_test_x", webhookSecret: "whsec_x" });
+    let decline = false;
+    const calls: { url: string; body: string }[] = [];
+    vi.stubGlobal("fetch", vi.fn(async (url: unknown, init: RequestInit = {}) => {
+      const u = String(url);
+      calls.push({ url: u, body: String(init.body ?? "") });
+      const json = (o: unknown, status = 200) => new Response(JSON.stringify(o), { status });
+      if (u === "https://api.stripe.com/v1/customers") return json({ id: "cus_1" });
+      if (u === "https://api.stripe.com/v1/checkout/sessions") return json({ id: "cs_setup_1", url: "https://checkout.stripe.test/cs_setup_1", livemode: false });
+      if (u.startsWith("https://api.stripe.com/v1/checkout/sessions/cs_setup_1"))
+        return json({ id: "cs_setup_1", status: "complete", customer: "cus_1", livemode: false, setup_intent: { id: "seti_1", payment_method: { id: "pm_1", card: { brand: "visa", last4: "4242", exp_month: 12, exp_year: 2030, funding: "credit" } } } });
+      if (u === "https://api.stripe.com/v1/customers/cus_1") return json({ id: "cus_1" });
+      if (u === "https://api.stripe.com/v1/payment_intents") return decline ? json({ error: { message: "Your card was declined." } }, 402) : json({ id: `pi_${calls.length}`, status: "succeeded" });
+      return json({ error: { message: `unexpected ${u}` } }, 500);
+    }));
+    try {
+      // the link, emailed to the billing address
+      devOutbox.length = 0;
+      const sent = (await admin.post(`/api/autopay/contracts/${k.id}/send`, {})).json;
+      expect(sent.emailed).toBe("compta@carte.example");
+      const token = sent.url.split("/carte/")[1];
+      expect(devOutbox[0]!.text).toContain(`/carte/${token}`);
+      expect((await admin.get(`/api/autopay/contracts/${k.id}`)).json.autopay).toMatchObject({ status: "pending" });
+      // the public page (no sign-in): a bad signature is refused
+      expect((await anon.get(`/api/autopay/public/${token.slice(0, -1)}${token.endsWith("a") ? "b" : "a"}`)).status).toBe(404);
+      const page = (await anon.get(`/api/autopay/public/${token}`)).json;
+      expect(page).toMatchObject({ status: "pending", client: "Carte auto inc.", contract: "Soutien mensuel", monthlyCents: 10000, cardFee: null });
+      expect(page.text).toContain("Soutien mensuel");
+      expect((await anon.post(`/api/autopay/public/${token}/accept`, { name: "Jo", agree: false })).status).toBe(400);
+      expect((await anon.post(`/api/autopay/public/${token}/accept`, { name: "Josée Client", agree: true })).json.url).toBe("https://checkout.stripe.test/cs_setup_1");
+      expect(calls.find((x) => x.url === "https://api.stripe.com/v1/checkout/sessions")!.body).toContain("mode=setup");
+      // back from Stripe: the card is read back and saved
+      const back = (await anon.get(`/api/autopay/public/${token}`)).json;
+      expect(back).toMatchObject({ status: "active", card: { brand: "visa", last4: "4242" } });
+      const [auto] = await db().select().from(schema.contractAutopay).where(eq(schema.contractAutopay.contractId, k.id));
+      expect(auto).toMatchObject({ status: "active", acceptedName: "Josée Client", cardFunding: "credit", stripePaymentMethodId: "pm_1" });
+
+      // other work of the client is never charged
+      const [other] = await db().insert(schema.billingItems).values({ clientId: c.id, kind: "labour", source: "autotask", sourceId: `test:autopay:labour`, date: "2026-11-02", description: "Heures", quantityX100: 100, unitPriceCents: 10000, amountCents: 10000, taxable: true, status: "pending" }).returning();
+      // the fee is on: 2,4 % on what the contract charges, its own line
+      await saveBillingSettings(adminRow!.id, { cardFee: { enabled: true, percent: 2.4, taxable: true } });
+      const l1 = await line(1);
+      devOutbox.length = 0;
+      expect((await admin.post("/api/billables/status", { ids: [l1.id, other.id], status: "approved" })).json.changed).toBe(2);
+      const invs = await db().select().from(schema.clientInvoices).where(eq(schema.clientInvoices.clientId, c.id));
+      expect(invs).toHaveLength(1);
+      const inv = invs[0]!;
+      // 100 $ + 2,40 $ fee, taxed line by line: 102,40 + 5,12 + (9,98 + 0,24) = 117,74 $
+      expect(inv).toMatchObject({ cardChargeStatus: "charged", autopayId: auto!.id, totalCents: 11774 });
+      const lines = await db().select().from(schema.invoiceLines).where(eq(schema.invoiceLines.invoiceId, inv.id));
+      expect(lines.map((x) => [x.description, x.amountCents])).toEqual([["Soutien 1", 10000], ["Frais de carte de crédit (2,4 %)", 240]]);
+      expect((await db().select().from(schema.invoicePayments).where(eq(schema.invoicePayments.invoiceId, inv.id)))[0]).toMatchObject({ amountCents: 11774, source: "stripe" });
+      expect(calls.find((x) => x.url === "https://api.stripe.com/v1/payment_intents")!.body).toContain("off_session=true");
+      expect(devOutbox.some((m) => m.subject.includes("payée par carte") && m.text.includes("Visa •••• 4242"))).toBe(true);
+      expect((await db().select().from(schema.billingItems).where(eq(schema.billingItems.id, other.id)))[0]).toMatchObject({ status: "approved", invoiceId: null });
+
+      // a consumer never pays the fee; a declined card leaves the invoice unpaid and tells accounting
+      await admin.put(`/api/crm/clients/${c.id}/invoice`, { consumer: true });
+      decline = true;
+      const l2 = await line(2);
+      devOutbox.length = 0;
+      await admin.post("/api/billables/status", { ids: [l2.id], status: "approved" });
+      const inv2 = (await db().select().from(schema.clientInvoices).where(eq(schema.clientInvoices.clientId, c.id))).find((x) => x.id !== inv.id)!;
+      expect(inv2).toMatchObject({ cardChargeStatus: "failed", totalCents: 11498 });
+      expect(inv2.cardChargeError).toContain("declined");
+      expect(await db().select().from(schema.invoicePayments).where(eq(schema.invoicePayments.invoiceId, inv2.id))).toHaveLength(0);
+      expect(devOutbox.some((m) => m.subject.startsWith("Facture") && !m.subject.includes("payée"))).toBe(true);
+      const bell = await db().select().from(schema.notifications).where(eq(schema.notifications.type, "billing.card_failed"));
+      expect(bell.length).toBeGreaterThan(0);
+
+      // taken off: approved lines wait for a normal invoice again
+      expect((await admin.del(`/api/autopay/contracts/${k.id}`)).json.revoked).toBe(1);
+      const l3 = await line(3);
+      await admin.post("/api/billables/status", { ids: [l3.id], status: "approved" });
+      expect((await db().select().from(schema.billingItems).where(eq(schema.billingItems.id, l3.id)))[0]).toMatchObject({ status: "approved", invoiceId: null });
+    } finally {
+      vi.unstubAllGlobals();
+      await saveStripeSettings(adminRow!.id, { enabled: false });
+      await saveBillingSettings(adminRow!.id, { cardFee: { enabled: false } });
+      (appConfig as { publicUrl: string }).publicUrl = publicBefore;
+    }
+  });
+});
+
 describe("an invoice typed by hand", () => {
   it("makes the usual invoice from its lines, and voiding it drops them instead of giving them back to bill", async () => {
     resetRateLimit("login:ip:unknown");
