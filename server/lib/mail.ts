@@ -3,7 +3,7 @@ import { eq } from "drizzle-orm";
 import { config } from "../config.ts";
 import { db, schema } from "../db/index.ts";
 import { seal, unseal } from "./crypto.ts";
-import { renderTemplate, type Locale, type TemplateKey } from "./emailTemplates.ts";
+import { EMAIL_LOGO_CID, emailLogoPng, renderTemplate, type Locale, type TemplateKey } from "./emailTemplates.ts";
 
 export { escapeHtml } from "./emailTemplates.ts";
 export type Mail = {
@@ -16,7 +16,7 @@ export type Mail = {
   /** Sent from this sender instead of the mail server's (the accounting address for invoices); the same server carries it */
   from?: { name: string; address: string };
   /** Files sent with it (the PDF copy of an invoice) */
-  attachments?: { filename: string; content: Buffer; contentType?: string }[];
+  attachments?: { filename: string; content: Buffer; contentType?: string; cid?: string }[];
 };
 
 /**
@@ -161,8 +161,10 @@ export async function sendMail(mail: Mail): Promise<boolean> {
     transporter?.t.close();
     transporter = { key, t: createTransport(s) };
   }
+  // the logo of the email header goes with the message as an inline picture
+  const attachments = [...(mail.attachments ?? []), ...(mail.html.includes(`cid:${EMAIL_LOGO_CID}`) ? [{ filename: "akab.png", content: emailLogoPng(), contentType: "image/png", cid: EMAIL_LOGO_CID }] : [])];
   try {
-    await transporter.t.sendMail({ from: mail.from ?? { name: s.fromName, address: s.from }, to: mail.to, ...(mail.replyTo ? { replyTo: mail.replyTo } : {}), subject: mail.subject, text: mail.text, html: mail.html, ...(mail.attachments?.length ? { attachments: mail.attachments } : {}) });
+    await transporter.t.sendMail({ from: mail.from ?? { name: s.fromName, address: s.from }, to: mail.to, ...(mail.replyTo ? { replyTo: mail.replyTo } : {}), subject: mail.subject, text: mail.text, html: mail.html, ...(attachments.length ? { attachments } : {}) });
     return true;
   } catch (e) {
     console.error(`[mail] send failed:`, e instanceof Error ? e.message : e);

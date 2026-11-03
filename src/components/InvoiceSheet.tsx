@@ -1,7 +1,7 @@
 import { Fragment } from "react";
 import { useTranslation } from "react-i18next";
 import { CreditCard } from "lucide-react";
-import { Logo } from "@/components/brand/Logo";
+import invoiceLogoUrl from "@/assets/akab-logo-invoice.png";
 import { cn } from "@/lib/utils";
 import { money } from "@/pages/crm/shared";
 
@@ -77,10 +77,8 @@ export function InvoiceSheet({ d, payToggle }: { d: SheetData; payToggle?: PayTo
   }
   return (
     <div className="rounded-2xl bg-white p-8 text-[11px] leading-snug text-black shadow-xl">
-      {/* the logo (made for a dark background) in its black pill */}
-      <span className="inline-flex items-center rounded-full bg-[#0a0a0b] px-7 py-2.5">
-        <Logo className="h-12" />
-      </span>
+      {/* the invoice's logo: AKAB Informatique in its black pill (the same picture as the PDF's) */}
+      <img src={invoiceLogoUrl} alt="AKAB Informatique" className="h-[72px] w-auto" />
 
       <div className="mt-6 grid grid-cols-[1fr_auto] gap-6">
         <div className="whitespace-pre-line">

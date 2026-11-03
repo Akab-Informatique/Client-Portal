@@ -10,7 +10,8 @@ import { taxesOfLines } from "../../shared/invoiceTax.ts";
  * company and the boxed date, the bill-to box, the ruled table of lines, the totals with the payment instructions
  * beside them, the conditions at the foot and a page number. Letter size, built-in fonts (no file to install).
  */
-const LOGO = path.join(import.meta.dirname, "..", "assets", "akab-logo-pill.png");
+// the invoice's own logo: AKAB Informatique in its black pill (server/assets/akab-logo-invoice.png, 1000 × 361)
+const LOGO = path.join(import.meta.dirname, "..", "assets", "akab-logo-invoice.png");
 const LEFT = 48;
 const RIGHT = 564;
 const BOTTOM = 742;

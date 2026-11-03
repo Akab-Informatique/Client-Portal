@@ -6,7 +6,7 @@ import { db, schema } from "../db/index.ts";
 import { auth, type AppEnv } from "../lib/auth.ts";
 import { audit } from "../lib/audit.ts";
 import { sendMail, type Mail } from "../lib/mail.ts";
-import { render, TEMPLATES, templateDef, templateText, type Locale, type TemplateDef } from "../lib/emailTemplates.ts";
+import { emailLogoForPreview, render, TEMPLATES, templateDef, templateText, type Locale, type TemplateDef } from "../lib/emailTemplates.ts";
 import { rateLimit } from "../lib/http.ts";
 import { body } from "../lib/validate.ts";
 
@@ -79,7 +79,7 @@ export function templateRoutes(allowed: (key: string) => boolean = () => true, s
     const locale = zLocale.parse(c.req.param("locale"));
     const p = await body(c, zTemplateText);
     const r = render(def, locale, p, def.sample[locale]);
-    return c.json({ subject: r.subject, html: r.html });
+    return c.json({ subject: r.subject, html: emailLogoForPreview(r.html) });
   })
 
   /** Send the (unsaved) text, with sample values, to the signed-in admin. */

@@ -1,3 +1,5 @@
+import fs from "node:fs";
+import path from "node:path";
 import { and, eq } from "drizzle-orm";
 import { db, schema } from "../db/index.ts";
 import { config } from "../config.ts";
@@ -368,6 +370,21 @@ const fill = (s: string, vars: Record<string, string>, map: (v: string) => strin
 
 export type Rendered = { subject: string; text: string; html: string };
 
+/**
+ * The logo at the top of every email: the AKAB logo in its black pill (server/assets/akab-logo-pill.png, the invoice PDF's),
+ * sent with the message as an inline picture (`cid:`) so mail programs show it without "download pictures"; sendMail
+ * attaches it to any message that names it, and a preview shows it from `emailLogoForPreview`.
+ */
+export const EMAIL_LOGO_CID = "akab-logo@akab.ca";
+const EMAIL_LOGO_SRC = `cid:${EMAIL_LOGO_CID}`;
+let logoPng: Buffer | null = null;
+export function emailLogoPng(): Buffer {
+  logoPng ??= fs.readFileSync(path.join(import.meta.dirname, "..", "assets", "akab-logo-pill.png"));
+  return logoPng;
+}
+/** The same message with the logo inlined, for a preview in the browser (which cannot read `cid:`) */
+export const emailLogoForPreview = (html: string) => html.split(EMAIL_LOGO_SRC).join(`data:image/png;base64,${emailLogoPng().toString("base64")}`);
+
 export function render(def: TemplateDef, locale: Locale, tpl: TemplateText, vars: Record<string, string>): Rendered {
   const subject = fill(tpl.subject, vars).replace(/[\r\n]+/g, " ").trim();
   const link = def.linkVar ? vars[def.linkVar] : "";
@@ -393,8 +410,8 @@ export function render(def: TemplateDef, locale: Locale, tpl: TemplateText, vars
 <body style="margin:0;padding:0;background:#f4f4f1">
 <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="background:#f4f4f1;padding:32px 12px"><tr><td align="center">
 <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="max-width:560px;background:#ffffff;border-radius:18px;overflow:hidden;border:1px solid #e6e6e1">
-<tr><td style="background:#0a0a0b;padding:20px 28px;font-family:Arial,Helvetica,sans-serif;font-size:20px;font-weight:800;color:#ffffff">
-<span style="color:#ffce1a">AKAB</span> Informatique</td></tr>
+<tr><td style="background:#0a0a0b;padding:16px 22px;font-family:Arial,Helvetica,sans-serif;font-size:20px;font-weight:800;color:#ffffff">
+<img src="${EMAIL_LOGO_SRC}" width="207" height="60" alt="AKAB Informatique" style="display:block;border:0;outline:none;width:207px;height:60px;color:#ffce1a"></td></tr>
 <tr><td style="height:3px;background:#ffce1a;background-image:linear-gradient(90deg,#ffe24a,#ffce1a,#f59410)"></td></tr>
 <tr><td style="padding:28px;font-family:Arial,Helvetica,sans-serif;font-size:15px;color:#16171b">
 ${paragraphs}

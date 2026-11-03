@@ -5662,6 +5662,20 @@ describe("the Stripe pay link chosen on each invoice", () => {
   });
 });
 
+describe("the logo at the top of the emails", () => {
+  it("is the AKAB logo picture sent inline with the message, shown inline in the preview", async () => {
+    resetRateLimit("login:ip:unknown");
+    const admin = await signIn("admin@akab.local");
+    const { renderTemplate, EMAIL_LOGO_CID } = await import("../server/lib/emailTemplates.ts");
+    const r = await renderTemplate("invoiceSent", "fr", { name: "Marie", number: "F-1", total: "1 $", payUrl: "" });
+    expect(r.html).toContain(`src="cid:${EMAIL_LOGO_CID}"`);
+    expect(r.html).toContain('alt="AKAB Informatique"');
+    const pv = (await admin.post("/api/billing/email/templates/invoiceSent/fr/preview", { subject: "Facture {{number}}", body: "Bonjour {{name}}", action: "Payer en ligne" })).json;
+    expect(pv.html).toContain("data:image/png;base64,");
+    expect(pv.html).not.toContain("cid:");
+  });
+});
+
 describe("un-post ready items", () => {
   it("approved items go back to pending without any invoice", async () => {
     resetRateLimit("login:ip:unknown");
