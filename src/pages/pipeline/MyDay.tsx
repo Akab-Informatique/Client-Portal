@@ -269,7 +269,7 @@ export function MyDay({ onOpenTask }: { onOpenTask: (id: string) => void }) {
       {/* left: the blocks of the day (and the priorities of the day); right: the priorities of the week, all my tickets (compact), projects, tasks. The bar between them is dragged to give one side more room. */}
       <div ref={box} className="grid gap-4 xl:gap-0 xl:grid-cols-[var(--split)_12px_minmax(0,1fr)]" style={{ "--split": `${split}%` } as React.CSSProperties}>
         <div className="min-w-0 space-y-4">
-          <Priorities items={data?.items ?? []} horizon="day" onOpen={open} />
+          <Priorities items={data?.items ?? []} horizon="day" onOpen={open} canRemove={userId === me.id && can("pipeline.edit")} />
           <section className="glass h-fit rounded-2xl border p-4">
             <div className="mb-3 flex items-center justify-between gap-2">
               <h3 className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">{t("pipeline.day.timeline")}</h3>

@@ -11,7 +11,7 @@ import { audit } from "../lib/audit.ts";
 import { aiSettings } from "../lib/ai.ts";
 import { rateLimit } from "../lib/http.ts";
 import { notify, usersWith } from "../lib/notify.ts";
-import { calendarOfDay, buildPipelineView, maskPhone, morningRun, phoneOf, PipelineError, pipelineSettings, planOf, buildPlan, savePipelineSettings, sendTestSms, type PipelineSettings, resetDailyTasks } from "../lib/pipeline.ts";
+import { calendarOfDay, buildPipelineView, maskPhone, morningRun, phoneOf, PipelineError, pipelineSettings, planOf, buildPlan, savePipelineSettings, sendTestSms, type PipelineSettings, resetDailyTasks, resetDayAdds } from "../lib/pipeline.ts";
 import { ticketSource } from "../lib/ticketSource.ts";
 import { todayQc } from "../lib/timesheets.ts";
 import { body, zUuid } from "../lib/validate.ts";
@@ -251,6 +251,43 @@ export const pipelineRoutes = new Hono<AppEnv>()
     const cal = plan.source === "ai" ? await calendarOfDay(userId, date).catch(() => null) : null;
     const stale = plan.source === "ai" && (view.items.some((i) => !i.blocked && !planned.has(i.key)) || (cal !== null && cal.events.filter((e) => !e.free).length !== plan.calendarEvents));
     return c.json({ date, userId, plan, stale, ...view, workHours: { start: s.workStart, end: s.workEnd, lunchStart: s.lunchStart, lunchEnd: s.lunchEnd }, ai: Boolean(ai.enabled && ai.apiKey) });
+  })
+
+  // ── Tickets put on my day by hand (today only, an optional time to do it before; the ticket itself does not change) ──
+  .get("/day/tickets/:ticketId", async (c) => {
+    const a = auth(c);
+    const id = Number(c.req.param("ticketId"));
+    if (!Number.isInteger(id)) throw new HTTPException(400, { message: "invalid_id" });
+    await resetDayAdds();
+    const [row] = await db().select().from(schema.ticketDayAdds).where(and(eq(schema.ticketDayAdds.ticketId, id), eq(schema.ticketDayAdds.userId, a.user.id), eq(schema.ticketDayAdds.forDate, todayQc())));
+    return c.json({ added: Boolean(row), dueTime: row?.dueTime ?? null });
+  })
+
+  .put("/day/tickets/:ticketId", requirePermission("pipeline.edit"), requirePermission("tickets.view"), async (c) => {
+    const a = auth(c);
+    const id = Number(c.req.param("ticketId"));
+    if (!Number.isInteger(id)) throw new HTTPException(400, { message: "invalid_id" });
+    const p = await body(c, z.object({ time: zHm.nullable().default(null) }));
+    const src = await ticketSource();
+    const [t, o] = await Promise.all([src.get(id).catch(() => null), src.options()]);
+    if (!t) throw new HTTPException(404, { message: "not_found" });
+    if (o.statuses.find((s) => s.value === t.status)?.kind === "complete") throw new HTTPException(409, { message: "ticket_complete" });
+    const forDate = todayQc();
+    await db()
+      .insert(schema.ticketDayAdds)
+      .values({ ticketId: id, userId: a.user.id, forDate, dueTime: p.time })
+      .onConflictDoUpdate({ target: [schema.ticketDayAdds.ticketId, schema.ticketDayAdds.userId, schema.ticketDayAdds.forDate], set: { dueTime: p.time } });
+    await audit(a.user.id, "pipeline.ticket_day_added", String(id), { time: p.time });
+    return c.json({ added: true, dueTime: p.time });
+  })
+
+  .delete("/day/tickets/:ticketId", requirePermission("pipeline.edit"), async (c) => {
+    const a = auth(c);
+    const id = Number(c.req.param("ticketId"));
+    if (!Number.isInteger(id)) throw new HTTPException(400, { message: "invalid_id" });
+    await db().delete(schema.ticketDayAdds).where(and(eq(schema.ticketDayAdds.ticketId, id), eq(schema.ticketDayAdds.userId, a.user.id)));
+    await audit(a.user.id, "pipeline.ticket_day_removed", String(id), {});
+    return c.json({ added: false, dueTime: null });
   })
 
   /** Plan the day again (the AI when it is set up, else the portal's own rules). */

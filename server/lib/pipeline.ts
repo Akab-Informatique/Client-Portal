@@ -98,6 +98,8 @@ export type DayItem = {
   masked?: boolean;
   /** A priority pinned for the technician (Planning): of the day, or of the week, with its rank and the direction given */
   pin?: "day" | "week";
+  /** A ticket the technician put on this day by hand (with an optional time) */
+  added?: boolean;
   pinRank?: number;
   pinNote?: string | null;
   /** A continuous task with a reminder: checking it off keeps it open */
@@ -132,15 +134,22 @@ export async function resetDailyTasks(today: string = todayQc()): Promise<number
   return rows.length;
 }
 
+/** Tickets put on a day by hand are for that day only: the ones of earlier days are dropped (the reset at the end of the day). */
+export async function resetDayAdds(today: string = todayQc()): Promise<number> {
+  const rows = await db().delete(schema.ticketDayAdds).where(lt(schema.ticketDayAdds.forDate, today)).returning({ id: schema.ticketDayAdds.id });
+  return rows.length;
+}
+
 export async function dayItems(userId: string, date: string, viewerId: string = userId): Promise<{ items: DayItem[]; busy: Busy[]; absent: boolean; holiday: boolean }> {
   await resetDailyTasks();
+  await resetDayAdds();
   const d = db();
   // who may see which private task: the one who made it, the one who has it, the people chosen
   const viewing = viewerId !== userId;
   const shared = viewing ? new Set((await d.select({ taskId: schema.pipelineTaskViewers.taskId }).from(schema.pipelineTaskViewers).where(eq(schema.pipelineTaskViewers.userId, viewerId))).map((r) => r.taskId)) : new Set<string>();
   const dayStart = new Date(`${date}T00:00:00-05:00`);
   const dayEnd = new Date(dayStart.getTime() + 36 * 3_600_000);
-  const [tasks, children, absences, blocks, pins] = await Promise.all([
+  const [tasks, children, absences, blocks, pins, adds] = await Promise.all([
     d
       .select()
       .from(schema.pipelineTasks)
@@ -159,7 +168,10 @@ export async function dayItems(userId: string, date: string, viewerId: string = 
           sql`${schema.ticketPins.doneAt} is null`,
         ),
       ),
+    // the tickets the technician put on this day themselves
+    d.select().from(schema.ticketDayAdds).where(and(eq(schema.ticketDayAdds.userId, userId), eq(schema.ticketDayAdds.forDate, date))),
   ]);
+  const addOf = new Map(adds.map((x) => [x.ticketId, x]));
   const hasOpenChildren = new Set(children.map((c) => c.parentId));
   // the earliest open checklist item day of each task: an item due makes the task due
   const itemDays = tasks.length
@@ -218,14 +230,14 @@ export async function dayItems(userId: string, date: string, viewerId: string = 
   const checkpoint = new Map(checks.filter((r) => r.m).map((r) => [r.id, r.m as string]));
   const checkpointTime = new Map(checks.filter((r) => r.m && r.time).map((r) => [r.id, r.time as string]));
   // a pinned ticket of someone else has no checkpoint read above
-  const pinnedOnly = [...pinOf.keys()].filter((id) => !checkpoint.has(id) && !assigned.some((t) => t.id === id));
+  const pinnedOnly = [...pinOf.keys(), ...addOf.keys()].filter((id) => !checkpoint.has(id) && !assigned.some((t) => t.id === id));
   if (pinnedOnly.length) {
     for (const r of await d.select({ id: schema.ticketMeta.ticketId, m: schema.ticketMeta.milestoneDate, time: schema.ticketMeta.milestoneTime }).from(schema.ticketMeta).where(inArray(schema.ticketMeta.ticketId, pinnedOnly))) {
       if (r.m) checkpoint.set(r.id, r.m);
       if (r.m && r.time) checkpointTime.set(r.id, r.time);
     }
   }
-  const mine = all.filter((t) => kindOf.get(t.status) !== "complete" && (pinOf.has(t.id) || (t.assignee?.id === userId && (new Date(t.dueAt).getTime() < endOfDay || (checkpoint.get(t.id) ?? "9999") <= date))));
+  const mine = all.filter((t) => kindOf.get(t.status) !== "complete" && (pinOf.has(t.id) || addOf.has(t.id) || (t.assignee?.id === userId && (new Date(t.dueAt).getTime() < endOfDay || (checkpoint.get(t.id) ?? "9999") <= date))));
   const est = mine.length
     ? await d.select({ id: schema.ticketMeta.ticketId, m: schema.ticketMeta.estimateMinutes }).from(schema.ticketMeta).where(inArray(schema.ticketMeta.ticketId, mine.map((t) => t.id)))
     : [];
@@ -251,7 +263,9 @@ export async function dayItems(userId: string, date: string, viewerId: string = 
       statusKind: kindOf.get(t.status) ?? "new",
       statusLabel: o.statuses.find((s) => s.value === t.status)?.label ?? null,
       companyName: t.company.name,
-      ...(pinOf.has(t.id) ? { pin: pinOf.get(t.id)!.horizon, pinRank: pinOf.get(t.id)!.rank, pinNote: pinOf.get(t.id)!.note || null } : {}),
+      // put on the day by hand: shown with the day's priorities, with its time (nothing on the ticket changes)
+      ...(addOf.has(t.id) ? { added: true, dueTime: addOf.get(t.id)!.dueTime, pin: "day" as const, pinRank: 0 } : {}),
+      ...(pinOf.has(t.id) && !addOf.has(t.id) ? { pin: pinOf.get(t.id)!.horizon, pinRank: pinOf.get(t.id)!.rank, pinNote: pinOf.get(t.id)!.note || null } : {}),
     });
   }
   const busy = blocks.map((b) => ({ start: minutesOnDay(b.startsAt, date), end: minutesOnDay(b.endsAt, date), title: b.title }));

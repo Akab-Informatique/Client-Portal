@@ -1,9 +1,9 @@
 import { useState } from "react";
 import { useTranslation } from "react-i18next";
 import { Pager } from "@/components/Pager";
-import { keepPreviousData, useQuery } from "@tanstack/react-query";
+import { keepPreviousData, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useNavigate } from "react-router-dom";
-import { BellRing, Eye, FolderKanban, Siren, Sparkles, Star, Ticket as TicketIcon, UserRound, UserX, type LucideIcon } from "lucide-react";
+import { BellRing, Eye, FolderKanban, Siren, Sparkles, Star, Ticket as TicketIcon, UserRound, UserX, X, type LucideIcon } from "lucide-react";
 import { SmsInboxDialog, SmsTile } from "@/pages/sms/SmsPage";
 import { Skeleton } from "@/components/ui/skeleton";
 import { api } from "@/lib/api";
@@ -71,8 +71,14 @@ export function MyTickets({ userId, mine, onOpen }: { userId: string; mine: bool
 }
 
 /** The priorities pinned in Planning: of the day (beside the blocks) or of the week (beside the tickets). */
-export function Priorities({ items, horizon, onOpen }: { items: DayItem[]; horizon: "day" | "week"; onOpen: (i: DayItem) => void }) {
+export function Priorities({ items, horizon, onOpen, canRemove }: { items: DayItem[]; horizon: "day" | "week"; onOpen: (i: DayItem) => void; canRemove?: boolean }) {
   const { t } = useTranslation();
+  const qc = useQueryClient();
+  // a ticket put on the day by hand leaves it with one click (nothing on the ticket changes)
+  const remove = useMutation({
+    mutationFn: (i: DayItem) => api.del(`/pipeline/day/tickets/${i.refId}`),
+    onSuccess: () => void qc.invalidateQueries({ queryKey: ["pipeline"] }),
+  });
   const list = items.filter((i) => i.pin === horizon);
   return (
     <section className="glass rounded-2xl border p-4">
@@ -84,13 +90,19 @@ export function Priorities({ items, horizon, onOpen }: { items: DayItem[]; horiz
       ) : (
         <ul className="divide-y divide-[color:var(--glass-border)]">
           {list.map((i) => (
-            <li key={i.key}>
-              <button type="button" onClick={() => onOpen(i)} className="flex w-full items-baseline gap-2 py-1.5 text-left">
+            <li key={i.key} className="flex items-center gap-1">
+              <button type="button" onClick={() => onOpen(i)} className="flex min-w-0 flex-1 items-baseline gap-2 py-1.5 text-left">
                 {i.ticketNumber && <span className="shrink-0 font-mono text-[11px] text-primary">{i.ticketNumber}</span>}
                 <span className="min-w-0 flex-1 truncate text-sm font-medium">{i.title}</span>
                 {i.client && <span className="hidden shrink-0 truncate text-xs text-muted-foreground sm:block">{i.client}</span>}
                 {i.pinNote && <span className="max-w-40 shrink-0 truncate text-xs text-muted-foreground">· {i.pinNote}</span>}
+                {i.added && i.dueTime && <span className="shrink-0 font-mono text-[10px] text-orange-300">{t("pipeline.before", { time: i.dueTime })}</span>}
               </button>
+              {i.added && canRemove && (
+                <button type="button" onClick={() => remove.mutate(i)} disabled={remove.isPending} title={t("tickets.addDay.remove")} aria-label={t("tickets.addDay.remove")} className="shrink-0 rounded p-1 text-muted-foreground hover:text-destructive">
+                  <X className="size-3.5" />
+                </button>
+              )}
             </li>
           ))}
         </ul>

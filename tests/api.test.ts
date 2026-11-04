@@ -6701,6 +6701,40 @@ describe("my tickets: secondary technician", () => {
 });
 
 describe("pipeline: shared to-dos and the day", () => {
+  it("a ticket put on my day by hand: a time, nothing changes on the ticket, gone the next day", async () => {
+    resetRateLimit("login:ip:unknown");
+    const tech = await signIn("tech@akab.local");
+    const me = (await tech.get("/api/me")).json.id as string;
+    const { resetDayAdds } = await import("../server/lib/pipeline.ts");
+    const list = (await tech.get("/api/tickets?view=all")).json.items as any[];
+    const tk = list.find((x) => x.statusKind !== "complete" && x.assignee?.id !== me)!;
+    const before = (await tech.get(`/api/tickets/${tk.id}`)).json;
+    expect((await tech.get(`/api/pipeline/day/tickets/${tk.id}`)).json).toEqual({ added: false, dueTime: null });
+    // a bad time is refused
+    expect((await tech.put(`/api/pipeline/day/tickets/${tk.id}`, { time: "25:00" })).status).toBe(400);
+    expect((await tech.put(`/api/pipeline/day/tickets/${tk.id}`, { time: "14:30" })).json).toEqual({ added: true, dueTime: "14:30" });
+    // on today's list with its time, in the day's priorities
+    const item = (await tech.get("/api/pipeline/day")).json.items.find((i: any) => i.key === `ticket:${tk.id}`);
+    expect(item).toMatchObject({ added: true, dueTime: "14:30", pin: "day" });
+    // the ticket itself is untouched: due date, checkpoint, assignee
+    const after = (await tech.get(`/api/tickets/${tk.id}`)).json;
+    expect([after.dueAt, after.milestoneDate, after.assignee?.id ?? null]).toEqual([before.dueAt, before.milestoneDate, before.assignee?.id ?? null]);
+    // changing the time keeps one row; the day of someone else does not show it
+    expect((await tech.put(`/api/pipeline/day/tickets/${tk.id}`, { time: null })).json).toEqual({ added: true, dueTime: null });
+    const admin = await signIn("admin@akab.local");
+    expect((await admin.get("/api/pipeline/day")).json.items.some((i: any) => i.key === `ticket:${tk.id}` && i.added)).toBe(false);
+    // removed by hand
+    expect((await tech.del(`/api/pipeline/day/tickets/${tk.id}`)).json).toEqual({ added: false, dueTime: null });
+    expect((await tech.get("/api/pipeline/day")).json.items.some((i: any) => i.key === `ticket:${tk.id}` && i.added)).toBe(false);
+    // the reset at the end of the day: an add of an earlier day is dropped, today's stays
+    await db().insert(schema.ticketDayAdds).values([
+      { ticketId: tk.id, userId: me, forDate: "2000-01-01", dueTime: "10:00" },
+      { ticketId: tk.id, userId: me, forDate: "2999-01-01", dueTime: null },
+    ]);
+    expect(await resetDayAdds()).toBe(1);
+    expect(await resetDayAdds()).toBe(0);
+  });
+
   it("a daily task starts again every day: reopened, checklist unchecked, notes kept", async () => {
     resetRateLimit("login:ip:unknown");
     const tech = await signIn("tech@akab.local");

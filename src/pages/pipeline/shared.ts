@@ -100,6 +100,8 @@ export type DayItem = {
   masked?: boolean;
   pin?: "day" | "week";
   pinNote?: string | null;
+  /** A ticket put on this day by hand (with its time in dueTime) */
+  added?: boolean;
   checkpoint?: string | null;
   checkpointTime?: string | null;
   dueAt?: string;

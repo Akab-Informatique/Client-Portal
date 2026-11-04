@@ -1336,6 +1336,27 @@ export const ticketPins = pgTable(
   (t) => [uniqueIndex("ticket_pins_ticket_tech_unique").on(t.ticketId, t.technicianId), index("ticket_pins_tech_idx").on(t.technicianId)],
 );
 
+/**
+ * A ticket a technician put on their own day (Ma journée), optionally with a time to do it before.
+ * It changes nothing on the ticket (due date, checkpoint) and is only for that day: the next day it is gone.
+ */
+export const ticketDayAdds = pgTable(
+  "ticket_day_adds",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    ticketId: bigint("ticket_id", { mode: "number" }).notNull(),
+    userId: uuid("user_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    /** The day (YYYY-MM-DD, Québec) */
+    forDate: text("for_date").notNull(),
+    /** Do it before this time (HH:MM), none = any time that day */
+    dueTime: text("due_time"),
+    createdAt: created(),
+  },
+  (t) => [uniqueIndex("ticket_day_adds_unique").on(t.ticketId, t.userId, t.forDate), index("ticket_day_adds_user_idx").on(t.userId, t.forDate)],
+);
+
 /** Time reserved by an admin on a technician's calendar (for a pinned ticket, or a reserved slot). */
 export const calendarBlocks = pgTable(
   "calendar_blocks",

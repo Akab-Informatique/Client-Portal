@@ -38,7 +38,7 @@ import {
   UserX,
 
   X,
-  type LucideIcon, Star, Lock, GitMerge, ListChecks, Flag, AlertTriangle } from "lucide-react";
+  type LucideIcon, CalendarPlus, Star, Lock, GitMerge, ListChecks, Flag, AlertTriangle } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
@@ -68,6 +68,7 @@ import { cn, initials } from "@/lib/utils";
 import { GlassBackdrop } from "@/components/brand/GlassBackdrop";
 import { NewTicketDialog } from "./NewTicketDialog";
 import { AcceptDialog } from "./AcceptDialog";
+import { AddToDayDialog } from "./AddToDayDialog";
 import { MergeDialog } from "./MergeDialog";
 import { PendingMails } from "./PendingMails";
 import { dueState, heatState, FILTER_KEYS, PRIORITY_STYLE, dueGlow, useChoiceText, shortDate, shortDateTime, hm, STATUS_STYLE, useTickets, useShowSecondary, VIEWS, type Tally, type TicketList, type TicketSummary, type View, ticketErrorText } from "./shared";
@@ -149,6 +150,7 @@ export function TicketsPage() {
   });
   const confirm = useConfirm();
   const [accepting, setAccepting] = useState<TicketSummary | null>(null);
+  const [addingDay, setAddingDay] = useState<TicketSummary | null>(null);
   const [merging, setMerging] = useState<TicketSummary | null>(null);
   // delete for good (administrators): from the row's menu
   const deleteTicket = useMutation({
@@ -377,6 +379,7 @@ export function TicketsPage() {
                   })
                 }
                 onMerge={can("tickets.edit") && tk.statusKind !== "complete" ? () => setMerging(tk) : undefined}
+                onAddDay={can("pipeline.edit") && tk.statusKind !== "complete" ? () => setAddingDay(tk) : undefined}
                 onDelete={
                   can("tickets.delete")
                     ? () => void confirm({ title: t("tickets.delete.title", { number: tk.number }), description: t("tickets.delete.text"), confirmLabel: t("tickets.delete.confirm"), destructive: true }).then((ok) => ok && deleteTicket.mutate({ id: tk.id, number: tk.number }))
@@ -395,6 +398,7 @@ export function TicketsPage() {
       </div>
 
       {merging && <MergeDialog open onOpenChange={(o) => !o && setMerging(null)} tk={merging} onDone={(into) => ws.open(into.id)} />}
+      {addingDay && <AddToDayDialog open onOpenChange={(o) => !o && setAddingDay(null)} tk={addingDay} />}
       {data && accepting && <AcceptDialog open onOpenChange={(o) => !o && setAccepting(null)} tk={accepting} statuses={data.facets.statuses} />}
       {data && <NewTicketDialog open={creating} onOpenChange={setCreating} facets={data.facets} onCreated={(id) => ws.open(id)} />}
     </div>
@@ -840,6 +844,7 @@ function TicketRow({
   picked,
   onPick,
   onMerge,
+  onAddDay,
   onDelete,
   onHover,
 }: {
@@ -856,6 +861,8 @@ function TicketRow({
   onPick: () => void;
   /** Merge into another ticket of the client (open tickets, tickets.edit) */
   onMerge?: () => void;
+  /** Put the ticket on my day (pipeline.edit) */
+  onAddDay?: () => void;
   /** Only for those who may delete tickets */
   onDelete?: () => void;
   onHover: () => void;
@@ -903,7 +910,7 @@ function TicketRow({
           <Checkbox checked={picked} onCheckedChange={onPick} aria-label={t("tickets.bulk.pick", { number: tk.number })} className="size-3.5 rounded-[4px] border-muted-foreground/50" />
         </span>
         {/* The line on the left: it glows with the checkpoint moment (the due date when there is none) and opens the row's menu (accept the ticket, open it, delete it) */}
-        {(editable || onDelete || onMerge) && (
+        {(editable || onDelete || onMerge || onAddDay) && (
           // out of the grid (absolute): it must not take a column of the row
           <span className="absolute inset-y-0 left-0 z-10 flex" onClick={(e) => e.stopPropagation()} onKeyDown={(e) => e.stopPropagation()}>
             <DropdownMenu>
@@ -952,6 +959,11 @@ function TicketRow({
                       )}
                     </DropdownMenuSubContent>
                   </DropdownMenuSub>
+                )}
+                {onAddDay && (
+                  <DropdownMenuItem onSelect={onAddDay}>
+                    <CalendarPlus className="size-4 text-primary" /> {t("tickets.rowMenu.addToDay")}
+                  </DropdownMenuItem>
                 )}
                 {onMerge && (
                   <DropdownMenuItem onSelect={onMerge}>
