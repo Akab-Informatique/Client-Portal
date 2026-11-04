@@ -7,14 +7,13 @@ import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
-import { Switch } from "@/components/ui/switch";
 import { Textarea } from "@/components/ui/textarea";
 import { useConfirm } from "@/components/ConfirmDialog";
 import { api, ApiError } from "@/lib/api";
 import { useCan, useMe } from "@/lib/session";
 import { cn } from "@/lib/utils";
 import { hm as hmHours, parseHm } from "@shared/duration";
-import { PRIORITIES, PRIORITY_STYLE, STATUSES, STATUS_STYLE, dayLabel, fileToBase64, hm, type Person, type Recurrence, type TaskCard, type TaskFull, type TaskPriority, type Visibility } from "./shared";
+import { PRIORITIES, PRIORITY_STYLE, STATUSES, STATUS_STYLE, dayLabel, fileToBase64, hm, type Person, type Recurrence, type TaskCard, type TaskFull, type TaskKind, type TaskPriority, type Visibility } from "./shared";
 import { FilesBox, RecurrenceEditor, TagsEditor, VisibilityEditor } from "./TaskParts";
 
 const selectCls = "h-9 w-full rounded-md border bg-transparent px-2 text-sm outline-none focus:ring-2 focus:ring-[color:var(--gold)]/40";
@@ -30,6 +29,32 @@ export function useOpenTasks() {
 export function taskError(t: (k: string, o?: Record<string, unknown>) => string, e: unknown): string {
   if (e instanceof ApiError && ["task_blocked", "task_open_children", "task_cycle", "invalid_assignee", "invalid_ticket", "forbidden"].includes(e.code)) return t(`pipeline.errors.${e.code}`);
   return t("common.error");
+}
+
+/** Normal, continuous or daily: three cards, the chosen one lit */
+function KindPicker({ value, onChange, disabled, stacked }: { value: TaskKind; onChange: (k: TaskKind) => void; disabled?: boolean; stacked?: boolean }) {
+  const { t } = useTranslation();
+  return (
+    <div className="space-y-1.5">
+      <span className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">{t("pipeline.kind")}</span>
+      <div className={cn("grid gap-2", !stacked && "sm:grid-cols-3")} role="radiogroup" aria-label={t("pipeline.kind")}>
+        {(["normal", "continuous", "daily"] as const).map((k) => (
+          <button
+            key={k}
+            type="button"
+            role="radio"
+            aria-checked={value === k}
+            disabled={disabled}
+            onClick={() => onChange(k)}
+            className={cn("rounded-xl border p-2.5 text-left transition-colors disabled:cursor-not-allowed disabled:opacity-60", value === k ? "border-[color:var(--gold)]/60 bg-[color:var(--gold)]/10" : "bg-muted/30 hover:bg-accent/40")}
+          >
+            <span className="block text-sm font-medium">{t(`pipeline.kinds.${k}`)}</span>
+            <span className="mt-0.5 block text-[11px] leading-snug text-muted-foreground">{t(`pipeline.kinds.${k}Hint`)}</span>
+          </button>
+        ))}
+      </div>
+    </div>
+  );
 }
 
 function Field({ label, icon: Icon, children }: { label: string; icon?: typeof Clock3; children: ReactNode }) {
@@ -94,7 +119,7 @@ export function TaskDialog({ taskId, defaults, onClose, onOpenTask }: { taskId: 
   }, [task?.id, task?.updatedAt]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // ── a new task ──
-  const [f, setF] = useState({ title: "", notes: "", assigneeId: defaults?.assigneeId ?? me.id, dueDate: defaults?.dueDate ?? "", startDate: "", checkpointDate: "", checkpointTime: "", continuous: false, remind: "", priority: "normal" as TaskPriority, estimate: "", parentId: defaults?.parentId ?? "", checklist: "", tags: [] as string[], recurrence: null as Recurrence | null, visibility: "team" as Visibility, viewerIds: [] as string[] });
+  const [f, setF] = useState({ title: "", notes: "", assigneeId: defaults?.assigneeId ?? me.id, dueDate: defaults?.dueDate ?? "", startDate: "", checkpointDate: "", checkpointTime: "", kind: "normal" as TaskKind, remind: "", priority: "normal" as TaskPriority, estimate: "", parentId: defaults?.parentId ?? "", checklist: [] as { text: string; priority: TaskPriority; dueDate: string; dueTime: string }[], tags: [] as string[], recurrence: null as Recurrence | null, visibility: "team" as Visibility, viewerIds: [] as string[] });
   const [staged, setStaged] = useState<File[]>([]);
   const create = useMutation({
     mutationFn: () => {
@@ -104,19 +129,19 @@ export function TaskDialog({ taskId, defaults, onClose, onOpenTask }: { taskId: 
         notes: f.notes,
         priority: f.priority,
         assigneeId: f.assigneeId || null,
-        dueDate: f.continuous ? null : f.dueDate || null,
-        continuous: f.continuous,
-        remindEveryDays: f.continuous && f.remind ? Number(f.remind) : null,
+        dueDate: f.kind !== "normal" ? null : f.dueDate || null,
+        kind: f.kind,
+        remindEveryDays: f.kind === "continuous" && f.remind ? Number(f.remind) : null,
         startDate: f.startDate || null,
         checkpointDate: f.checkpointDate || null,
         checkpointTime: f.checkpointDate && f.checkpointTime ? f.checkpointTime : null,
         tags: f.tags,
-        recurrence: f.recurrence,
+        recurrence: f.kind === "normal" ? f.recurrence : null,
         visibility: f.visibility,
         viewerIds: f.viewerIds,
         parentId: f.parentId || null,
         estimateMinutes: minutes && minutes >= 5 ? minutes : null,
-        checklist: f.checklist.split("\n").map((x) => x.trim()).filter(Boolean),
+        checklist: f.checklist.filter((x) => x.text.trim()).map((x) => ({ text: x.text.trim(), priority: x.priority, dueDate: x.dueDate || null, dueTime: x.dueDate && x.dueTime ? x.dueTime : null })),
       });
     },
     onSuccess: async (r) => {
@@ -170,14 +195,8 @@ export function TaskDialog({ taskId, defaults, onClose, onOpenTask }: { taskId: 
         </div>
         <div className="min-h-0 flex-1 space-y-4 overflow-y-auto px-6 py-5">
           <Input autoFocus value={f.title} onChange={(e) => setF({ ...f, title: e.target.value })} placeholder={t("pipeline.titlePlaceholder")} className="h-12 text-lg font-medium" maxLength={200} />
-          <label className="flex items-start gap-3 rounded-xl border bg-muted/30 p-3">
-            <Switch checked={f.continuous} onCheckedChange={(v) => setF({ ...f, continuous: v })} className="mt-0.5" />
-            <span className="space-y-0.5">
-              <span className="block text-sm font-medium">{t("pipeline.continuous")}</span>
-              <span className="block text-xs text-muted-foreground">{t("pipeline.continuousHint")}</span>
-            </span>
-          </label>
-          {f.continuous && (
+          <KindPicker value={f.kind} onChange={(kind) => setF({ ...f, kind })} />
+          {f.kind === "continuous" && (
             <Field label={t("pipeline.remind")} icon={Repeat}>
               <select className={selectCls} value={f.remind} onChange={(e) => setF({ ...f, remind: e.target.value })}>
                 <option value="">{t("pipeline.remindNone")}</option>
@@ -200,7 +219,7 @@ export function TaskDialog({ taskId, defaults, onClose, onOpenTask }: { taskId: 
                 ))}
               </select>
             </Field>
-            {!f.continuous && (
+            {f.kind === "normal" && (
               <Field label={t("pipeline.due")} icon={CalendarClock}>
                 <Input type="date" value={f.dueDate} onChange={(e) => setF({ ...f, dueDate: e.target.value })} />
               </Field>
@@ -243,15 +262,38 @@ export function TaskDialog({ taskId, defaults, onClose, onOpenTask }: { taskId: 
             <Textarea value={f.notes} onChange={(e) => setF({ ...f, notes: e.target.value })} rows={5} placeholder={t("pipeline.instructionsPlaceholder")} maxLength={8000} />
           </Field>
           <Field label={t("pipeline.checklist")} icon={ListChecks}>
-            <Textarea value={f.checklist} onChange={(e) => setF({ ...f, checklist: e.target.value })} rows={f.continuous ? 8 : 4} placeholder={t("pipeline.checklistPlaceholder")} />
+            <div className="space-y-1.5">
+              {f.checklist.map((it, i) => (
+                <div key={i} className="flex flex-wrap items-center gap-1.5 rounded-lg border bg-background/40 p-1.5">
+                  <Input value={it.text} onChange={(e) => setF({ ...f, checklist: f.checklist.map((x, j) => (j === i ? { ...x, text: e.target.value } : x)) })} className="h-8 min-w-48 flex-1" maxLength={300} />
+                  <select className={cn(selectCls, "h-8 w-28 text-xs")} value={it.priority} onChange={(e) => setF({ ...f, checklist: f.checklist.map((x, j) => (j === i ? { ...x, priority: e.target.value as TaskPriority } : x)) })} aria-label={t("pipeline.priority.label")}>
+                    {PRIORITIES.map((p) => (
+                      <option key={p} value={p}>
+                        {t(`pipeline.priority.${p}`)}
+                      </option>
+                    ))}
+                  </select>
+                  <Input type="date" value={it.dueDate} title={t("pipeline.itemDue")} onChange={(e) => setF({ ...f, checklist: f.checklist.map((x, j) => (j === i ? { ...x, dueDate: e.target.value } : x)) })} className="h-8 w-36 px-2 text-xs" />
+                  <Input type="time" disabled={!it.dueDate} value={it.dueTime} title={t("pipeline.itemDueTime")} onChange={(e) => setF({ ...f, checklist: f.checklist.map((x, j) => (j === i ? { ...x, dueTime: e.target.value } : x)) })} className="h-8 w-24 px-2 text-xs" />
+                  <button type="button" onClick={() => setF({ ...f, checklist: f.checklist.filter((_, j) => j !== i) })} aria-label={t("common.delete")}>
+                    <Trash2 className="size-3.5 text-muted-foreground hover:text-destructive" />
+                  </button>
+                </div>
+              ))}
+              <Button type="button" variant="outline" size="sm" className="h-8" onClick={() => setF({ ...f, checklist: [...f.checklist, { text: "", priority: "normal", dueDate: "", dueTime: "" }] })}>
+                <Plus className="size-3.5" /> {t("pipeline.addItem")}
+              </Button>
+            </div>
           </Field>
           <div className="grid gap-4 md:grid-cols-2">
-            <div className="space-y-1">
-              <span className="flex items-center gap-1.5 text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
-                <Repeat className="size-3" /> {t("pipeline.recurring")}
-              </span>
-              <RecurrenceEditor value={f.recurrence} onChange={(r) => setF({ ...f, recurrence: r })} />
-            </div>
+            {f.kind === "normal" && (
+              <div className="space-y-1">
+                <span className="flex items-center gap-1.5 text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
+                  <Repeat className="size-3" /> {t("pipeline.recurring")}
+                </span>
+                <RecurrenceEditor value={f.recurrence} onChange={(r) => setF({ ...f, recurrence: r })} />
+              </div>
+            )}
             <div className="space-y-1">
               <span className="flex items-center gap-1.5 text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
                 <Eye className="size-3" /> {t("pipeline.whoSees")}
@@ -377,6 +419,13 @@ export function TaskDialog({ taskId, defaults, onClose, onOpenTask }: { taskId: 
                 <li key={c.id} className="group flex items-center gap-2 rounded-lg px-1.5 py-1 hover:bg-accent/30">
                   <Checkbox checked={c.done} disabled={!editable} onCheckedChange={(v) => void sub(() => api.patch(`/pipeline/tasks/${task.id}/checklist/${c.id}`, { done: v === true }))} />
                   <span className={cn("min-w-0 flex-1 text-sm", c.done && "text-muted-foreground line-through")}>{c.text}</span>
+                  <select className={cn(selectCls, "h-7 w-24 text-xs")} disabled={!editable} value={c.priority} aria-label={t("pipeline.priority.label")} onChange={(e) => void sub(() => api.patch(`/pipeline/tasks/${task.id}/checklist/${c.id}`, { priority: e.target.value }))}>
+                    {PRIORITIES.map((p) => (
+                      <option key={p} value={p}>
+                        {t(`pipeline.priority.${p}`)}
+                      </option>
+                    ))}
+                  </select>
                   <Input type="date" disabled={!editable} value={c.dueDate ?? ""} title={t("pipeline.itemDue")} className={cn("h-7 w-36 px-2 text-xs", !c.dueDate && "opacity-50")} onChange={(e) => void sub(() => api.patch(`/pipeline/tasks/${task.id}/checklist/${c.id}`, { dueDate: e.target.value || null }))} />
                   <Input type="time" disabled={!editable || !c.dueDate} value={c.dueTime ?? ""} title={t("pipeline.itemDueTime")} className="h-7 w-24 px-2 text-xs" onChange={(e) => void sub(() => api.patch(`/pipeline/tasks/${task.id}/checklist/${c.id}`, { dueTime: e.target.value || null }))} />
                   {editable && (
@@ -522,14 +571,8 @@ export function TaskDialog({ taskId, defaults, onClose, onOpenTask }: { taskId: 
               ))}
             </div>
           </Field>
-          <label className="flex items-start gap-3 rounded-xl border bg-muted/30 p-3">
-            <Switch checked={task.continuous} disabled={!editable} onCheckedChange={(v) => patch.mutate({ continuous: v })} className="mt-0.5" />
-            <span className="space-y-0.5">
-              <span className="block text-sm font-medium">{t("pipeline.continuous")}</span>
-              <span className="block text-xs text-muted-foreground">{t("pipeline.continuousHint")}</span>
-            </span>
-          </label>
-          {task.continuous && (
+          <KindPicker value={task.kind} onChange={(kind) => patch.mutate({ kind })} disabled={!editable} stacked />
+          {task.kind === "continuous" && (
             <div className="flex flex-wrap items-end gap-3">
               <Field label={t("pipeline.remind")} icon={Repeat}>
                 <select className={selectCls} disabled={!editable} value={task.remindEveryDays ?? ""} onChange={(e) => patch.mutate({ remindEveryDays: e.target.value ? Number(e.target.value) : null })}>
@@ -549,7 +592,7 @@ export function TaskDialog({ taskId, defaults, onClose, onOpenTask }: { taskId: 
             </div>
           )}
           <div className="grid grid-cols-2 gap-3">
-            {!task.continuous && (
+            {task.kind === "normal" && (
               <Field label={t("pipeline.due")} icon={CalendarClock}>
                 <Input type="date" disabled={!editable} value={task.dueDate ?? ""} onChange={(e) => patch.mutate({ dueDate: e.target.value || null })} />
               </Field>
@@ -608,12 +651,14 @@ export function TaskDialog({ taskId, defaults, onClose, onOpenTask }: { taskId: 
             </span>
             <TagsEditor value={task.tags} disabled={!editable} onChange={(tags) => patch.mutate({ tags })} />
           </div>
-          <div className="space-y-1">
-            <span className="flex items-center gap-1.5 text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
-              <Repeat className="size-3" /> {t("pipeline.recurring")}
-            </span>
-            <RecurrenceEditor value={task.recurrence} disabled={!editable} onChange={(recurrence) => patch.mutate({ recurrence })} />
-          </div>
+          {task.kind === "normal" && (
+            <div className="space-y-1">
+              <span className="flex items-center gap-1.5 text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
+                <Repeat className="size-3" /> {t("pipeline.recurring")}
+              </span>
+              <RecurrenceEditor value={task.recurrence} disabled={!editable} onChange={(recurrence) => patch.mutate({ recurrence })} />
+            </div>
+          )}
           <div className="space-y-1">
             <span className="flex items-center gap-1.5 text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
               <Eye className="size-3" /> {t("pipeline.whoSees")}

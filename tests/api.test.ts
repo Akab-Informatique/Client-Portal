@@ -6701,10 +6701,37 @@ describe("my tickets: secondary technician", () => {
 });
 
 describe("pipeline: shared to-dos and the day", () => {
+  it("a daily task starts again every day: reopened, checklist unchecked, notes kept", async () => {
+    resetRateLimit("login:ip:unknown");
+    const tech = await signIn("tech@akab.local");
+    const { resetDailyTasks } = await import("../server/lib/pipeline.ts");
+    const t = (await tech.post("/api/pipeline/tasks", { title: "Tournée du matin", kind: "daily", dueDate: "2026-12-10", recurrence: { freq: "daily", interval: 1 }, notes: "Notes gardées", checklist: ["Serveurs", { text: "Sauvegardes", priority: "high" }] })).json;
+    // no due day and no repeat rule on a daily task
+    expect(t).toMatchObject({ kind: "daily", dueDate: null, recurrence: null });
+    expect((await tech.patch(`/api/pipeline/tasks/${t.id}`, { dueDate: "2026-12-20" })).status).toBe(400);
+    // do everything today
+    const full = (await tech.get(`/api/pipeline/tasks/${t.id}`)).json;
+    for (const it of full.checklistItems) await tech.patch(`/api/pipeline/tasks/${t.id}/checklist/${it.id}`, { done: true });
+    expect((await tech.patch(`/api/pipeline/tasks/${t.id}`, { status: "done" })).json.status).toBe("done");
+    // the same day: nothing restarts
+    expect(await resetDailyTasks()).toBe(0);
+    // the next day: reopened, checklist back to not done, notes kept
+    expect(await resetDailyTasks("2999-01-01")).toBeGreaterThanOrEqual(1);
+    const next = (await tech.get(`/api/pipeline/tasks/${t.id}`)).json;
+    expect(next).toMatchObject({ status: "todo", notes: "Notes gardées" });
+    expect(next.checklistItems.every((it: any) => it.done === false)).toBe(true);
+    expect(next.checklistItems.map((it: any) => it.priority).sort()).toEqual(["high", "normal"]);
+    // a normal task is never touched
+    const plain = (await tech.post("/api/pipeline/tasks", { title: "Normale" })).json;
+    await tech.patch(`/api/pipeline/tasks/${plain.id}`, { status: "done" });
+    await resetDailyTasks("2999-01-02");
+    expect((await tech.get(`/api/pipeline/tasks/${plain.id}`)).json.status).toBe("done");
+  });
+
   it("a continuous task can remind every 1, 2, 5 or 10 days until it is checked", async () => {
     resetRateLimit("login:ip:unknown");
     const tech = await signIn("tech@akab.local");
-    const t = (await tech.post("/api/pipeline/tasks", { title: "Vérifier les sauvegardes", continuous: true, remindEveryDays: 5 })).json;
+    const t = (await tech.post("/api/pipeline/tasks", { title: "Vérifier les sauvegardes", kind: "continuous", remindEveryDays: 5 })).json;
     expect(t).toMatchObject({ continuous: true, remindEveryDays: 5, lastCheckedOn: expect.any(String) });
     // only 1, 2, 5 or 10
     expect((await tech.patch(`/api/pipeline/tasks/${t.id}`, { remindEveryDays: 3 })).status).toBe(400);
@@ -6714,13 +6741,13 @@ describe("pipeline: shared to-dos and the day", () => {
     expect(plain.remindEveryDays).toBeNull();
     expect((await tech.post(`/api/pipeline/tasks/${plain.id}/check`, {})).status).toBe(409);
     // switching it off clears the reminder
-    expect((await tech.patch(`/api/pipeline/tasks/${t.id}`, { continuous: false })).json).toMatchObject({ continuous: false, remindEveryDays: null, lastCheckedOn: null });
+    expect((await tech.patch(`/api/pipeline/tasks/${t.id}`, { kind: "normal" })).json).toMatchObject({ kind: "normal", remindEveryDays: null, lastCheckedOn: null });
   });
 
   it("a continuous task has no due day, and checklist items can have a day and time", async () => {
     resetRateLimit("login:ip:unknown");
     const tech = await signIn("tech@akab.local");
-    const t = (await tech.post("/api/pipeline/tasks", { title: "Suivi continu", continuous: true, dueDate: "2026-12-10", checkpointDate: "2026-12-01", checklist: ["Un", "Deux"] })).json;
+    const t = (await tech.post("/api/pipeline/tasks", { title: "Suivi continu", kind: "continuous", dueDate: "2026-12-10", checkpointDate: "2026-12-01", checklist: ["Un", "Deux"] })).json;
     expect(t).toMatchObject({ continuous: true, dueDate: null, dueTime: null, checkpointDate: "2026-12-01" });
     // a due day cannot be put on it
     expect((await tech.patch(`/api/pipeline/tasks/${t.id}`, { dueDate: "2026-12-20" })).status).toBe(400);
@@ -6732,7 +6759,7 @@ describe("pipeline: shared to-dos and the day", () => {
     const cleared = (await tech.patch(`/api/pipeline/tasks/${t.id}/checklist/${item.id}`, { dueDate: null })).json;
     expect(cleared).toMatchObject({ dueDate: null, dueTime: null });
     // turning it off lets a due day be set again
-    expect((await tech.patch(`/api/pipeline/tasks/${t.id}`, { continuous: false, dueDate: "2026-12-20" })).json).toMatchObject({ continuous: false, dueDate: "2026-12-20" });
+    expect((await tech.patch(`/api/pipeline/tasks/${t.id}`, { kind: "normal", dueDate: "2026-12-20" })).json).toMatchObject({ kind: "normal", dueDate: "2026-12-20" });
   });
 
   it("a task has a checkpoint with a time (17:00 by default) and appears in the open list", async () => {

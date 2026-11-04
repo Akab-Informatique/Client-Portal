@@ -2287,7 +2287,11 @@ export const pipelineTasks = pgTable(
     /** The goal day (YYYY-MM-DD) and time (HH:MM, 17:00 when none is given) before the due day */
     checkpointDate: text("checkpoint_date"),
     checkpointTime: text("checkpoint_time"),
-    /** A continuous task: no due day, only a checkpoint, and its checklist is the work */
+    /** normal | continuous (no due day, only a checkpoint, the checklist is the work) | daily (starts again every day) */
+    kind: text("kind", { enum: ["normal", "continuous", "daily"] }).notNull().default("normal"),
+    /** The day a daily task was last started again (YYYY-MM-DD) */
+    lastResetOn: text("last_reset_on"),
+    /** Replaced by kind (migration 0137 copied it); no longer read */
     continuous: boolean("continuous").notNull().default(false),
     /** A continuous task comes back on Ma journée every 1 / 2 / 5 / 10 days until it is checked (last_checked_on) */
     remindEveryDays: integer("remind_every_days"),
@@ -2326,6 +2330,7 @@ export const pipelineChecklist = pgTable(
     /** A day (YYYY-MM-DD) and time (HH:MM) for this item, optional */
     dueDate: text("due_date"),
     dueTime: text("due_time"),
+    priority: text("priority", { enum: ["low", "normal", "high", "urgent"] }).notNull().default("normal"),
     position: integer("position").notNull().default(0),
     createdAt: created(),
   },

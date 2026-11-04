@@ -1,4 +1,4 @@
-import { and, eq, inArray, ne, or, sql } from "drizzle-orm";
+import { and, eq, inArray, isNull, lt, ne, or, sql } from "drizzle-orm";
 import { db, schema } from "../db/index.ts";
 import type { PipelineBlock } from "../db/schema.ts";
 import { config } from "../config.ts";
@@ -117,7 +117,23 @@ type Busy = { start: number; end: number; title: string; o365?: boolean; allDay?
 const RANK = { urgent: 0, high: 1, normal: 2, low: 3 } as const;
 const ticketPriority = (kind: string): DayItem["priority"] => (kind === "critical" ? "urgent" : kind === "high" ? "high" : kind === "low" ? "low" : "normal");
 
+/**
+ * A daily task starts again every day: reopened, its checklist put back to not done, even when everything was done
+ * the day before (its notes and comments are kept). Runs before the lists are read; only touches tasks not yet reset today.
+ */
+export async function resetDailyTasks(today: string = todayQc()): Promise<number> {
+  const d = db();
+  const rows = await d
+    .update(schema.pipelineTasks)
+    .set({ status: "todo", completedAt: null, completedBy: null, lastResetOn: today, updatedAt: new Date() })
+    .where(and(eq(schema.pipelineTasks.kind, "daily"), or(isNull(schema.pipelineTasks.lastResetOn), lt(schema.pipelineTasks.lastResetOn, today))))
+    .returning({ id: schema.pipelineTasks.id });
+  if (rows.length) await d.update(schema.pipelineChecklist).set({ done: false }).where(inArray(schema.pipelineChecklist.taskId, rows.map((r) => r.id)));
+  return rows.length;
+}
+
 export async function dayItems(userId: string, date: string, viewerId: string = userId): Promise<{ items: DayItem[]; busy: Busy[]; absent: boolean; holiday: boolean }> {
+  await resetDailyTasks();
   const d = db();
   // who may see which private task: the one who made it, the one who has it, the people chosen
   const viewing = viewerId !== userId;
@@ -161,8 +177,8 @@ export async function dayItems(userId: string, date: string, viewerId: string = 
     // not to be started yet: its start day is later
     if (t.startDate && t.startDate > date && t.status !== "doing") continue;
     // a continuous task checked off comes back after its number of days
-    const remind = t.continuous && t.remindEveryDays && t.lastCheckedOn ? plusDaysOf(t.lastCheckedOn, t.remindEveryDays) <= date : false;
-    const relevant = remind || t.status === "doing" || t.priority === "urgent" || (due !== null && due <= date) || (t.checkpointDate !== null && t.checkpointDate <= date);
+    const remind = t.kind === "continuous" && t.remindEveryDays && t.lastCheckedOn ? plusDaysOf(t.lastCheckedOn, t.remindEveryDays) <= date : false;
+    const relevant = remind || t.kind === "daily" || t.status === "doing" || t.priority === "urgent" || (due !== null && due <= date) || (t.checkpointDate !== null && t.checkpointDate <= date);
     if (!relevant) continue;
     const masked = viewing && t.visibility !== "team" && t.createdBy !== viewerId && !(t.visibility === "selected" && shared.has(t.id));
     items.push({
@@ -176,7 +192,7 @@ export async function dayItems(userId: string, date: string, viewerId: string = 
       priority: t.priority,
       due,
       checkpoint: t.checkpointDate,
-      reminder: Boolean(t.continuous && t.remindEveryDays),
+      reminder: Boolean(t.kind === "continuous" && t.remindEveryDays),
       checkpointTime: t.checkpointDate ? t.checkpointTime : null,
       overdue: due !== null && due < date,
       minutes: t.estimateMinutes ?? 30,

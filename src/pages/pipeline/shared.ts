@@ -6,6 +6,7 @@ export const STATUSES: TaskStatus[] = ["todo", "doing", "blocked", "done"];
 export const PRIORITIES: TaskPriority[] = ["urgent", "high", "normal", "low"];
 
 export type Recurrence = { freq: "daily" | "weekly" | "monthly" | "yearly"; interval: number; weekdays?: number[]; until?: string | null };
+export type TaskKind = "normal" | "continuous" | "daily";
 export type Visibility = "team" | "private" | "selected";
 
 export type TaskCard = {
@@ -30,6 +31,8 @@ export type TaskCard = {
   checkpointDate: string | null;
   checkpointTime: string | null;
   /** No due day: only a checkpoint, the checklist is the work */
+  kind: TaskKind;
+  /** kind is continuous */
   continuous: boolean;
   /** Comes back every 1 / 2 / 5 / 10 days until checked off */
   remindEveryDays: number | null;
@@ -52,7 +55,7 @@ export type TaskCard = {
 
 export type TaskFull = TaskCard & {
   notes: string;
-  checklistItems: { id: string; text: string; done: boolean; position: number; dueDate: string | null; dueTime: string | null }[];
+  checklistItems: { id: string; text: string; done: boolean; position: number; dueDate: string | null; dueTime: string | null; priority: TaskPriority }[];
   comments: { id: string; author: string; text: string; createdAt: string }[];
   subtaskList: TaskCard[];
   fileList: { id: string; name: string; size: number; contentType: string; createdAt: string; by: string | null }[];
