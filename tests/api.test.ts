@@ -6726,6 +6726,20 @@ describe("pipeline: shared to-dos and the day", () => {
     // removed by hand
     expect((await tech.del(`/api/pipeline/day/tickets/${tk.id}`)).json).toEqual({ added: false, dueTime: null });
     expect((await tech.get("/api/pipeline/day")).json.items.some((i: any) => i.key === `ticket:${tk.id}` && i.added)).toBe(false);
+    // an administrator puts a ticket and a task on someone else's day; a technician cannot do it for others
+    expect((await tech.put(`/api/pipeline/day/tickets/${tk.id}`, { time: "09:00", userId: (await admin.get("/api/me")).json.id })).status).toBe(403);
+    const adminId = (await admin.get("/api/me")).json.id as string;
+    expect((await admin.put(`/api/pipeline/day/tickets/${tk.id}`, { time: "09:00", userId: me })).status).toBe(200);
+    const mineNow = (await tech.get("/api/pipeline/day")).json.items.find((i: any) => i.key === `ticket:${tk.id}`);
+    expect(mineNow).toMatchObject({ added: true, dueTime: "09:00" });
+    const task = (await admin.post("/api/pipeline/tasks", { title: "Pour toi", assigneeId: adminId, startDate: "2999-01-01" })).json;
+    expect((await admin.put(`/api/pipeline/day/tasks/${task.id}`, { time: "10:30", userId: me })).status).toBe(200);
+    expect((await tech.get(`/api/pipeline/day/tasks/${task.id}`)).json).toEqual({ added: true, dueTime: "10:30" });
+    expect((await tech.get("/api/pipeline/day")).json.items.find((i: any) => i.key === `task:${task.id}`)).toMatchObject({ added: true, dueTime: "10:30", pin: "day" });
+    expect((await admin.del(`/api/pipeline/day/tasks/${task.id}?userId=${me}`)).status).toBe(200);
+    expect((await tech.get("/api/pipeline/day")).json.items.some((i: any) => i.key === `task:${task.id}`)).toBe(false);
+    expect((await admin.put(`/api/pipeline/day/tasks/${task.id}`, { time: null, userId: "00000000-0000-4000-8000-000000000000" })).status).toBe(400);
+    await admin.del(`/api/pipeline/day/tickets/${tk.id}?userId=${me}`);
     // the reset at the end of the day: an add of an earlier day is dropped, today's stays
     await db().insert(schema.ticketDayAdds).values([
       { ticketId: tk.id, userId: me, forDate: "2000-01-01", dueTime: "10:00" },

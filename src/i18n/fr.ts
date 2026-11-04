@@ -4725,7 +4725,7 @@ const fr = {
     secondary: {"hide":"Masquer les billets secondaires","label":"Inclure les billets où je suis secondaire","on":"Mes billets incluent ceux où je suis secondaire","off":"Mes billets n'incluent pas ceux où je suis secondaire"},
     bulk: {"selected":"{{count}} sélectionné(s)","all":"Tout sélectionner","pick":"Sélectionner {{number}}","assign":"Assigner","clear":"Désélectionner","done":"{{count}} billet(s) modifié(s).","partial":"{{ok}} billet(s) modifié(s), {{failed}} en échec.","deleteTitle":"Supprimer {{count}} billet(s) ?"},
     rowMenu: {"assign":"Assigner à…","assignMe":"{{name}} (moi)","title":"Actions du billet","accept":"Accepter le billet (me l'assigner)","open":"Ouvrir le billet","addToDay":"Ajouter à ma journée…","inMyDay":"Dans ma journée (modifier)…"},
-    addDay: {"title":"Ajouter à ma journée","text":"Le billet s'ajoute à vos blocs de travail d'aujourd'hui seulement. L'échéance et le point de contrôle du billet ne changent pas, et il disparaît de votre journée à la fin du jour.","time":"À faire avant (facultatif)","noTime":"Sans heure précise","add":"Ajouter à ma journée","update":"Enregistrer l'heure","remove":"Retirer de ma journée","added":"{{number}} ajouté à votre journée.","removed":"{{number}} retiré de votre journée.","in":"Dans ma journée","inBefore":"Dans ma journée · avant {{time}}","complete":"Ce billet est terminé."},
+    addDay: {"title":"Ajouter à ma journée","text":"Le billet s'ajoute à vos blocs de travail d'aujourd'hui seulement. L'échéance et le point de contrôle du billet ne changent pas, et il disparaît de votre journée à la fin du jour.","time":"À faire avant (facultatif)","noTime":"Sans heure précise","add":"Ajouter à ma journée","update":"Enregistrer l'heure","remove":"Retirer de ma journée","added":"{{number}} ajouté à votre journée.","removed":"{{number}} retiré de votre journée.","in":"Dans ma journée","inBefore":"Dans ma journée · avant {{time}}","addedFor":"{{number}} ajouté à la journée de {{name}}.","forWho":"Pour","me":"{{name}} (moi)","complete":"Ce billet ou cette tâche est terminé(e)."},
     tileBar: {
       collapse: "Réduire les carrés",
       expand: "Agrandir les carrés",
@@ -5403,6 +5403,7 @@ const fr = {
     signinDenied: "Une connexion a été refusée depuis votre téléphone",
     deviceAdded: "Un téléphone a été ajouté pour approuver vos connexions",
     pipelineAssigned: "{{by}} vous a assigné une tâche",
+    pipelineDayAdded: "{{by}} a ajouté un élément à votre journée",
     pipelineComment: "{{by}} a commenté une de vos tâches",
     workDone: "{{from}} a travaillé sur votre billet",
     clientFile: "{{from}} a joint un document",

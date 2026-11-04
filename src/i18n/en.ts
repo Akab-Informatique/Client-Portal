@@ -4727,7 +4727,7 @@ const en: Dict = {
     secondary: {"hide":"Hide secondary tickets","label":"Include tickets where I am secondary","on":"My tickets include those where I am secondary","off":"My tickets leave out those where I am secondary"},
     bulk: {"selected":"{{count}} selected","all":"Select all","pick":"Select {{number}}","assign":"Assign","clear":"Clear selection","done":"{{count}} ticket(s) updated.","partial":"{{ok}} ticket(s) updated, {{failed}} failed.","deleteTitle":"Delete {{count}} ticket(s)?"},
     rowMenu: {"assign":"Assign to…","assignMe":"{{name}} (me)","title":"Ticket actions","accept":"Accept the ticket (assign it to me)","open":"Open the ticket","addToDay":"Add to my day…","inMyDay":"In my day (change)…"},
-    addDay: {"title":"Add to my day","text":"The ticket is added to your work blocks for today only. Its due date and checkpoint do not change, and it leaves your day when the day ends.","time":"Do it before (optional)","noTime":"No set time","add":"Add to my day","update":"Save the time","remove":"Remove from my day","added":"{{number}} added to your day.","removed":"{{number}} removed from your day.","in":"In my day","inBefore":"In my day · before {{time}}","complete":"This ticket is complete."},
+    addDay: {"title":"Add to my day","text":"The ticket is added to your work blocks for today only. Its due date and checkpoint do not change, and it leaves your day when the day ends.","time":"Do it before (optional)","noTime":"No set time","add":"Add to my day","update":"Save the time","remove":"Remove from my day","added":"{{number}} added to your day.","removed":"{{number}} removed from your day.","in":"In my day","inBefore":"In my day · before {{time}}","addedFor":"{{number}} added to {{name}}'s day.","forWho":"For","me":"{{name}} (me)","complete":"This ticket or task is complete."},
     tileBar: {
       collapse: "Collapse the squares",
       expand: "Expand the squares",
@@ -5405,6 +5405,7 @@ const en: Dict = {
     signinDenied: "A sign-in was refused from your phone",
     deviceAdded: "A phone was added to approve your sign-ins",
     pipelineAssigned: "{{by}} assigned you a task",
+    pipelineDayAdded: "{{by}} added an item to your day",
     pipelineComment: "{{by}} commented on one of your tasks",
     workDone: "{{from}} worked on your ticket",
     clientFile: "{{from}} attached a document",

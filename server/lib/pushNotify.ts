@@ -23,6 +23,7 @@ const TITLES: Record<NotificationType, { fr: string; en: string }> = {
   "ticket.work": { fr: "Travail sur votre billet", en: "Work on your ticket" },
   "ticket.notify": { fr: "On vous signale un billet", en: "A ticket for you" },
   "pipeline.assigned": { fr: "Tâche pour vous", en: "Task for you" },
+  "pipeline.day_added": { fr: "Ajouté à votre journée", en: "Added to your day" },
   "security.alert": { fr: "Alerte de sécurité", en: "Security alert" },
   "breakroom.invite": { fr: "Invitation à jouer", en: "Game invitation" },
   "breakroom.complots": { fr: "Invitation à jouer", en: "Game invitation" },

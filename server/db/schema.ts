@@ -1344,17 +1344,21 @@ export const ticketDayAdds = pgTable(
   "ticket_day_adds",
   {
     id: uuid("id").primaryKey().defaultRandom(),
-    ticketId: bigint("ticket_id", { mode: "number" }).notNull(),
+    /** A ticket or (the other one) a Pipeline task is put on the day */
+    ticketId: bigint("ticket_id", { mode: "number" }),
+    taskId: uuid("task_id").references(() => pipelineTasks.id, { onDelete: "cascade" }),
     userId: uuid("user_id")
       .notNull()
       .references(() => users.id, { onDelete: "cascade" }),
+    /** Who put it there (an administrator can do it for someone else) */
+    addedBy: uuid("added_by").references(() => users.id, { onDelete: "set null" }),
     /** The day (YYYY-MM-DD, Québec) */
     forDate: text("for_date").notNull(),
     /** Do it before this time (HH:MM), none = any time that day */
     dueTime: text("due_time"),
     createdAt: created(),
   },
-  (t) => [uniqueIndex("ticket_day_adds_unique").on(t.ticketId, t.userId, t.forDate), index("ticket_day_adds_user_idx").on(t.userId, t.forDate)],
+  (t) => [uniqueIndex("ticket_day_adds_unique").on(t.ticketId, t.userId, t.forDate), uniqueIndex("ticket_day_adds_task_unique").on(t.taskId, t.userId, t.forDate), index("ticket_day_adds_user_idx").on(t.userId, t.forDate)],
 );
 
 /** Time reserved by an admin on a technician's calendar (for a pinned ticket, or a reserved slot). */

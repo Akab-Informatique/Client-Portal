@@ -71,12 +71,12 @@ export function MyTickets({ userId, mine, onOpen }: { userId: string; mine: bool
 }
 
 /** The priorities pinned in Planning: of the day (beside the blocks) or of the week (beside the tickets). */
-export function Priorities({ items, horizon, onOpen, canRemove }: { items: DayItem[]; horizon: "day" | "week"; onOpen: (i: DayItem) => void; canRemove?: boolean }) {
+export function Priorities({ items, horizon, onOpen, canRemove, forUser }: { items: DayItem[]; horizon: "day" | "week"; onOpen: (i: DayItem) => void; canRemove?: boolean; forUser?: string }) {
   const { t } = useTranslation();
   const qc = useQueryClient();
   // a ticket put on the day by hand leaves it with one click (nothing on the ticket changes)
   const remove = useMutation({
-    mutationFn: (i: DayItem) => api.del(`/pipeline/day/tickets/${i.refId}`),
+    mutationFn: (i: DayItem) => api.del(`/pipeline/day/${i.kind}s/${i.refId}${forUser ? `?userId=${forUser}` : ""}`),
     onSuccess: () => void qc.invalidateQueries({ queryKey: ["pipeline"] }),
   });
   const list = items.filter((i) => i.pin === horizon);

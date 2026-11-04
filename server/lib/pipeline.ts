@@ -171,7 +171,11 @@ export async function dayItems(userId: string, date: string, viewerId: string = 
     // the tickets the technician put on this day themselves
     d.select().from(schema.ticketDayAdds).where(and(eq(schema.ticketDayAdds.userId, userId), eq(schema.ticketDayAdds.forDate, date))),
   ]);
-  const addOf = new Map(adds.map((x) => [x.ticketId, x]));
+  const addOf = new Map(adds.filter((x) => x.ticketId !== null).map((x) => [x.ticketId as number, x]));
+  // tasks put on this day (even someone else's task, by an administrator)
+  const taskAdd = new Map(adds.filter((x) => x.taskId !== null).map((x) => [x.taskId as string, x]));
+  const extra = [...taskAdd.keys()].filter((id) => !tasks.some((t) => t.id === id));
+  if (extra.length) tasks.push(...(await d.select().from(schema.pipelineTasks).where(and(inArray(schema.pipelineTasks.id, extra), ne(schema.pipelineTasks.status, "done")))));
   const hasOpenChildren = new Set(children.map((c) => c.parentId));
   // the earliest open checklist item day of each task: an item due makes the task due
   const itemDays = tasks.length
@@ -187,10 +191,11 @@ export async function dayItems(userId: string, date: string, viewerId: string = 
     if (hasOpenChildren.has(t.id)) continue;
     const due = t.dueDate ?? itemDue.get(t.id) ?? null;
     // not to be started yet: its start day is later
-    if (t.startDate && t.startDate > date && t.status !== "doing") continue;
+    if (t.startDate && t.startDate > date && t.status !== "doing" && !taskAdd.has(t.id)) continue;
     // a continuous task checked off comes back after its number of days
     const remind = t.kind === "continuous" && t.remindEveryDays && t.lastCheckedOn ? plusDaysOf(t.lastCheckedOn, t.remindEveryDays) <= date : false;
-    const relevant = remind || t.kind === "daily" || t.status === "doing" || t.priority === "urgent" || (due !== null && due <= date) || (t.checkpointDate !== null && t.checkpointDate <= date);
+    const put = taskAdd.get(t.id);
+    const relevant = Boolean(put) || remind || t.kind === "daily" || t.status === "doing" || t.priority === "urgent" || (due !== null && due <= date) || (t.checkpointDate !== null && t.checkpointDate <= date);
     if (!relevant) continue;
     const masked = viewing && t.visibility !== "team" && t.createdBy !== viewerId && !(t.visibility === "selected" && shared.has(t.id));
     items.push({
@@ -199,7 +204,8 @@ export async function dayItems(userId: string, date: string, viewerId: string = 
       refId: t.id,
       title: masked ? "" : t.title,
       masked,
-      dueTime: t.dueDate === date ? t.dueTime : null,
+      dueTime: put ? put.dueTime : t.dueDate === date ? t.dueTime : null,
+      ...(put ? { added: true, pin: "day" as const, pinRank: 0 } : {}),
       notBefore: t.startDate === date && t.startTime ? mins(t.startTime) : undefined,
       priority: t.priority,
       due,

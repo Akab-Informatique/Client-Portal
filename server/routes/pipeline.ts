@@ -46,6 +46,16 @@ type Task = typeof schema.pipelineTasks.$inferSelect;
 const seenBy = (userId: string) =>
   sql<boolean>`(${schema.pipelineTasks.visibility} = 'team' or ${schema.pipelineTasks.createdBy} = ${userId} or ${schema.pipelineTasks.assigneeId} = ${userId} or (${schema.pipelineTasks.visibility} = 'selected' and exists (select 1 from pipeline_task_viewers v where v.task_id = ${schema.pipelineTasks.id} and v.user_id = ${userId})))`;
 
+/** Whose day it is about: one's own, or (pipeline.manage) another active staff member's. */
+async function dayTarget(a: ReturnType<typeof auth>, asked?: string | null): Promise<string> {
+  if (!asked || asked === a.user.id) return a.user.id;
+  if (!a.permissions.includes("pipeline.manage")) throw new HTTPException(403, { message: "forbidden" });
+  const id = zUuid.parse(asked);
+  const [u] = await db().select({ id: schema.users.id }).from(schema.users).where(and(eq(schema.users.id, id), eq(schema.users.kind, "staff"), eq(schema.users.active, true)));
+  if (!u) throw new HTTPException(400, { message: "person_invalid" });
+  return id;
+}
+
 /** Tasks shaped for the screen: names, checklist progress, subtasks, and whether it is waiting on another task. */
 async function cards(rows: Task[], viewerId: string) {
   if (!rows.length) return [];
@@ -253,13 +263,15 @@ export const pipelineRoutes = new Hono<AppEnv>()
     return c.json({ date, userId, plan, stale, ...view, workHours: { start: s.workStart, end: s.workEnd, lunchStart: s.lunchStart, lunchEnd: s.lunchEnd }, ai: Boolean(ai.enabled && ai.apiKey) });
   })
 
-  // ── Tickets put on my day by hand (today only, an optional time to do it before; the ticket itself does not change) ──
+  // ── Tickets and tasks put on a day by hand (today only, an optional time to do it before; the ticket or task itself does not change) ──
+  // an administrator (pipeline.manage) can do it for someone else: ?userId= / { userId }
   .get("/day/tickets/:ticketId", async (c) => {
     const a = auth(c);
     const id = Number(c.req.param("ticketId"));
     if (!Number.isInteger(id)) throw new HTTPException(400, { message: "invalid_id" });
+    const who = await dayTarget(a, c.req.query("userId"));
     await resetDayAdds();
-    const [row] = await db().select().from(schema.ticketDayAdds).where(and(eq(schema.ticketDayAdds.ticketId, id), eq(schema.ticketDayAdds.userId, a.user.id), eq(schema.ticketDayAdds.forDate, todayQc())));
+    const [row] = await db().select().from(schema.ticketDayAdds).where(and(eq(schema.ticketDayAdds.ticketId, id), eq(schema.ticketDayAdds.userId, who), eq(schema.ticketDayAdds.forDate, todayQc())));
     return c.json({ added: Boolean(row), dueTime: row?.dueTime ?? null });
   })
 
@@ -267,7 +279,8 @@ export const pipelineRoutes = new Hono<AppEnv>()
     const a = auth(c);
     const id = Number(c.req.param("ticketId"));
     if (!Number.isInteger(id)) throw new HTTPException(400, { message: "invalid_id" });
-    const p = await body(c, z.object({ time: zHm.nullable().default(null) }));
+    const p = await body(c, z.object({ time: zHm.nullable().default(null), userId: zUuid.optional() }));
+    const who = await dayTarget(a, p.userId);
     const src = await ticketSource();
     const [t, o] = await Promise.all([src.get(id).catch(() => null), src.options()]);
     if (!t) throw new HTTPException(404, { message: "not_found" });
@@ -275,9 +288,10 @@ export const pipelineRoutes = new Hono<AppEnv>()
     const forDate = todayQc();
     await db()
       .insert(schema.ticketDayAdds)
-      .values({ ticketId: id, userId: a.user.id, forDate, dueTime: p.time })
-      .onConflictDoUpdate({ target: [schema.ticketDayAdds.ticketId, schema.ticketDayAdds.userId, schema.ticketDayAdds.forDate], set: { dueTime: p.time } });
-    await audit(a.user.id, "pipeline.ticket_day_added", String(id), { time: p.time });
+      .values({ ticketId: id, userId: who, forDate, dueTime: p.time, addedBy: a.user.id })
+      .onConflictDoUpdate({ target: [schema.ticketDayAdds.ticketId, schema.ticketDayAdds.userId, schema.ticketDayAdds.forDate], set: { dueTime: p.time, addedBy: a.user.id } });
+    await audit(a.user.id, "pipeline.ticket_day_added", String(id), { time: p.time, userId: who });
+    if (who !== a.user.id) await notify([who], { type: "pipeline.day_added", data: { title: `${t.number} ${t.title}`.slice(0, 200), by: a.user.name, time: p.time }, link: `/tickets?t=${id}` });
     return c.json({ added: true, dueTime: p.time });
   })
 
@@ -285,10 +299,49 @@ export const pipelineRoutes = new Hono<AppEnv>()
     const a = auth(c);
     const id = Number(c.req.param("ticketId"));
     if (!Number.isInteger(id)) throw new HTTPException(400, { message: "invalid_id" });
-    await db().delete(schema.ticketDayAdds).where(and(eq(schema.ticketDayAdds.ticketId, id), eq(schema.ticketDayAdds.userId, a.user.id)));
-    await audit(a.user.id, "pipeline.ticket_day_removed", String(id), {});
+    const who = await dayTarget(a, c.req.query("userId"));
+    await db().delete(schema.ticketDayAdds).where(and(eq(schema.ticketDayAdds.ticketId, id), eq(schema.ticketDayAdds.userId, who)));
+    await audit(a.user.id, "pipeline.ticket_day_removed", String(id), { userId: who });
     return c.json({ added: false, dueTime: null });
   })
+
+  .get("/day/tasks/:taskId", async (c) => {
+    const a = auth(c);
+    const id = zUuid.parse(c.req.param("taskId"));
+    const who = await dayTarget(a, c.req.query("userId"));
+    await resetDayAdds();
+    const [row] = await db().select().from(schema.ticketDayAdds).where(and(eq(schema.ticketDayAdds.taskId, id), eq(schema.ticketDayAdds.userId, who), eq(schema.ticketDayAdds.forDate, todayQc())));
+    return c.json({ added: Boolean(row), dueTime: row?.dueTime ?? null });
+  })
+
+  .put("/day/tasks/:taskId", requirePermission("pipeline.edit"), async (c) => {
+    const a = auth(c);
+    const id = zUuid.parse(c.req.param("taskId"));
+    const p = await body(c, z.object({ time: zHm.nullable().default(null), userId: zUuid.optional() }));
+    const who = await dayTarget(a, p.userId);
+    // a task the caller may not see (private) is not there for them
+    const [t] = await db().select().from(schema.pipelineTasks).where(and(eq(schema.pipelineTasks.id, id), seenBy(a.user.id)));
+    if (!t) throw new HTTPException(404, { message: "not_found" });
+    if (t.status === "done") throw new HTTPException(409, { message: "task_done" });
+    const forDate = todayQc();
+    await db()
+      .insert(schema.ticketDayAdds)
+      .values({ taskId: id, userId: who, forDate, dueTime: p.time, addedBy: a.user.id })
+      .onConflictDoUpdate({ target: [schema.ticketDayAdds.taskId, schema.ticketDayAdds.userId, schema.ticketDayAdds.forDate], set: { dueTime: p.time, addedBy: a.user.id } });
+    await audit(a.user.id, "pipeline.task_day_added", id, { time: p.time, userId: who });
+    if (who !== a.user.id) await notify([who], { type: "pipeline.day_added", data: { title: t.title.slice(0, 200), by: a.user.name, time: p.time }, link: `/pipeline?task=${id}` });
+    return c.json({ added: true, dueTime: p.time });
+  })
+
+  .delete("/day/tasks/:taskId", requirePermission("pipeline.edit"), async (c) => {
+    const a = auth(c);
+    const id = zUuid.parse(c.req.param("taskId"));
+    const who = await dayTarget(a, c.req.query("userId"));
+    await db().delete(schema.ticketDayAdds).where(and(eq(schema.ticketDayAdds.taskId, id), eq(schema.ticketDayAdds.userId, who)));
+    await audit(a.user.id, "pipeline.task_day_removed", id, { userId: who });
+    return c.json({ added: false, dueTime: null });
+  })
+
 
   /** Plan the day again (the AI when it is set up, else the portal's own rules). */
   .post("/day/plan", requirePermission("pipeline.edit"), async (c) => {

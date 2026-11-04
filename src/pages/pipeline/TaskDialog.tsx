@@ -2,8 +2,9 @@ import { useEffect, useState, type ReactNode } from "react";
 import { useTranslation } from "react-i18next";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
-import { CalendarClock, CheckCircle2, CircleDashed, Clock3, ListChecks, Loader2, Lock, MessageSquare, Paperclip, PlayCircle, Plus, Repeat, Tag, Trash2, UserRound, Workflow, Ticket as TicketIcon, Link2, Eye } from "lucide-react";
+import { CalendarClock, CalendarPlus, CheckCircle2, CircleDashed, Clock3, ListChecks, Loader2, Lock, MessageSquare, Paperclip, PlayCircle, Plus, Repeat, Tag, Trash2, UserRound, Workflow, Ticket as TicketIcon, Link2, Eye } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { AddToDayDialog } from "@/pages/tickets/AddToDayDialog";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
@@ -78,6 +79,7 @@ export function TaskDialog({ taskId, defaults, onClose, onOpenTask }: { taskId: 
   const qc = useQueryClient();
   const me = useMe();
   const can = useCan();
+  const [addingDay, setAddingDay] = useState(false);
   const confirm = useConfirm();
   const editable = can("pipeline.edit");
   const people = usePeople();
@@ -692,6 +694,11 @@ export function TaskDialog({ taskId, defaults, onClose, onOpenTask }: { taskId: 
             {task.dueDate && <p>{dayLabel(task.dueDate)}</p>}
             {task.estimateMinutes ? <p>{hm(task.estimateMinutes)}</p> : null}
           </div>
+          {can("pipeline.edit") && task.status !== "done" && (
+            <Button variant="ghost" size="sm" className="w-full justify-start text-muted-foreground hover:text-primary" onClick={() => setAddingDay(true)}>
+              <CalendarPlus className="size-4" /> {t("tickets.addDay.title")}
+            </Button>
+          )}
           {editable && canDelete && (
             <Button
               variant="ghost"
@@ -704,6 +711,7 @@ export function TaskDialog({ taskId, defaults, onClose, onOpenTask }: { taskId: 
           )}
         </aside>
       </div>
+      {addingDay && <AddToDayDialog open onOpenChange={(o) => !o && setAddingDay(false)} tk={{ id: task.id, title: task.title }} kind="task" />}
     </>,
   );
 }

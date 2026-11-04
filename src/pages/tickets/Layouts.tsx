@@ -1,11 +1,11 @@
-import { useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
+import { useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from "react";
 import { useTranslation } from "react-i18next";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { DndContext, KeyboardSensor, PointerSensor, closestCorners, useDroppable, useSensor, useSensors, type DragEndEvent } from "@dnd-kit/core";
 import { SortableContext, sortableKeyboardCoordinates, useSortable, verticalListSortingStrategy } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
-import { ArrowLeft, ArrowRight, Columns3, LayoutList, MoreHorizontal, Pencil, Plus, Rows3, Trash2 } from "lucide-react";
+import { ArrowLeft, ArrowRight, Columns3, LayoutList, MoreHorizontal, Pencil, Plus, RotateCcw, Rows3, Trash2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { Input } from "@/components/ui/input";
@@ -78,18 +78,170 @@ export function LayoutSwitch({ value, onChange }: { value: Layout; onChange: (l:
 }
 
 // ── Compact: one short line per ticket ───────────────────────────────────────────
-const COMPACT_GRID = "grid grid-cols-[minmax(0,1fr)_5.5rem_4.5rem_6.5rem_9rem] items-center gap-x-3";
-
 export type CompactTicket = Pick<TicketSummary, "id" | "number" | "title" | "company" | "priorityKind" | "priorityLabel" | "milestoneDate" | "milestoneTime" | "dueAt" | "statusKind" | "statusLabel">;
 
-/** Name, priority, checkpoint, due date and status — nothing else, one line each. With `facets`, each of them is changed in place. */
+// Its columns, like the standard view's: moved and resized from the titles, kept on this computer
+const COMPACT_COLUMNS = ["ticket", "company", "priority", "milestone", "due", "status"] as const;
+type CompactCol = (typeof COMPACT_COLUMNS)[number];
+const COMPACT_KEY = "akab.tickets.compact.columns.v1";
+const COMPACT_WIDTHS: Record<CompactCol, number> = { ticket: 240, company: 150, priority: 112, milestone: 176, due: 136, status: 152 };
+type CompactPrefs = { order: CompactCol[]; widths: Partial<Record<CompactCol, number>> };
+
+function readCompact(): CompactPrefs {
+  try {
+    const v = JSON.parse(localStorage.getItem(COMPACT_KEY) ?? "null") as CompactPrefs | null;
+    if (v && Array.isArray(v.order) && v.order.length === COMPACT_COLUMNS.length && COMPACT_COLUMNS.every((c) => v.order.includes(c))) return { order: v.order, widths: v.widths ?? {} };
+  } catch {
+    /* defaults */
+  }
+  return { order: [...COMPACT_COLUMNS], widths: {} };
+}
+
+function useCompactColumns() {
+  const [prefs, setPrefs] = useState<CompactPrefs>(readCompact);
+  const keep = (p: CompactPrefs) => {
+    try {
+      localStorage.setItem(COMPACT_KEY, JSON.stringify(p));
+    } catch {
+      /* for this page only */
+    }
+  };
+  const width = (c: CompactCol) => prefs.widths[c] ?? COMPACT_WIDTHS[c];
+  // the ticket column takes the rest until a width is chosen for it
+  const ticketFixed = prefs.widths.ticket !== undefined;
+  const template = prefs.order.map((c) => (c === "ticket" && !ticketFixed ? `minmax(${width(c)}px,1fr)` : `${width(c)}px`)).join(" ");
+  const minWidth = prefs.order.reduce((n, c) => n + width(c), 0) + 12 * prefs.order.length + 32;
+  return {
+    order: prefs.order,
+    template,
+    minWidth,
+    changed: prefs.order.some((c, i) => c !== COMPACT_COLUMNS[i]) || Object.keys(prefs.widths).length > 0,
+    resize: (c: CompactCol, w: number) => setPrefs((p) => ({ ...p, widths: { ...p.widths, [c]: Math.min(c === "ticket" ? 1200 : 480, Math.max(56, Math.round(w))) } })),
+    resized: () => setPrefs((p) => (keep(p), p)),
+    resetWidth: (c: CompactCol) =>
+      setPrefs((p) => {
+        const widths = { ...p.widths };
+        delete widths[c];
+        const n = { ...p, widths };
+        keep(n);
+        return n;
+      }),
+    move: (c: CompactCol, to: number) =>
+      setPrefs((p) => {
+        const rest = p.order.filter((x) => x !== c);
+        const n = { ...p, order: [...rest.slice(0, to), c, ...rest.slice(to)] };
+        keep(n);
+        return n;
+      }),
+    resetAll: () => {
+      setPrefs({ order: [...COMPACT_COLUMNS], widths: {} });
+      try {
+        localStorage.removeItem(COMPACT_KEY);
+      } catch {
+        /* ignore */
+      }
+    },
+  };
+}
+
+/** The titles: drag one left / right to move the column, drag the line between two to resize (double-click: usual width). */
+function CompactHeader({ cols, labels, style }: { cols: ReturnType<typeof useCompactColumns>; labels: Record<CompactCol, string>; style: CSSProperties }) {
+  const { t } = useTranslation();
+  const row = useRef<HTMLDivElement>(null);
+  const [moving, setMoving] = useState<{ id: CompactCol; x: number } | null>(null);
+  const press = useRef<{ id: CompactCol; x: number; moved: boolean } | null>(null);
+  const resizing = useRef<{ id: CompactCol; x: number; w: number } | null>(null);
+  const target = (id: CompactCol, clientX: number) => {
+    const cells = [...(row.current?.querySelectorAll<HTMLElement>("[data-col]") ?? [])].filter((el) => el.dataset.col !== id);
+    let to = cells.length;
+    for (let i = 0; i < cells.length; i++) {
+      const r = cells[i].getBoundingClientRect();
+      if (clientX < r.left + r.width / 2) {
+        to = i;
+        break;
+      }
+    }
+    const box = row.current!.getBoundingClientRect();
+    const edge = to < cells.length ? cells[to].getBoundingClientRect().left - 6 : cells.at(-1)!.getBoundingClientRect().right + 6;
+    return { to, x: edge - box.left };
+  };
+  return (
+    <div ref={row} style={style} className="relative grid select-none items-center gap-x-3 border-b border-[color:var(--glass-border)] bg-white/[0.02] px-4 font-mono text-[10px] uppercase tracking-[0.12em] text-muted-foreground">
+      {cols.order.map((id, i) => (
+        <div
+          key={id}
+          data-col={id}
+          className={cn("relative flex min-w-0 cursor-grab items-center gap-1 py-1.5 active:cursor-grabbing", moving?.id === id && "opacity-50")}
+          title={t("tickets.columns.move")}
+          onPointerDown={(e) => {
+            if (e.button !== 0 || (e.target as HTMLElement).closest("[data-resize]")) return;
+            press.current = { id, x: e.clientX, moved: false };
+            e.currentTarget.setPointerCapture(e.pointerId);
+          }}
+          onPointerMove={(e) => {
+            const p = press.current;
+            if (!p) return;
+            if (!p.moved && Math.abs(e.clientX - p.x) < 6) return;
+            p.moved = true;
+            setMoving({ id, x: target(id, e.clientX).x });
+          }}
+          onPointerUp={(e) => {
+            const p = press.current;
+            press.current = null;
+            if (p?.moved) cols.move(id, target(id, e.clientX).to);
+            setMoving(null);
+          }}
+          onPointerCancel={() => ((press.current = null), setMoving(null))}
+        >
+          <span className="min-w-0 break-words leading-tight">{labels[id]}</span>
+          {i < cols.order.length - 1 && (
+            <span
+              data-resize
+              role="separator"
+              aria-orientation="vertical"
+              aria-label={t("tickets.columns.resize")}
+              title={t("tickets.columns.resize")}
+              onPointerDown={(e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                resizing.current = { id, x: e.clientX, w: (e.currentTarget.closest("[data-col]") as HTMLElement).getBoundingClientRect().width };
+                e.currentTarget.setPointerCapture(e.pointerId);
+              }}
+              onPointerMove={(e) => {
+                const r = resizing.current;
+                if (r) cols.resize(r.id, r.w + e.clientX - r.x);
+              }}
+              onPointerUp={() => {
+                if (!resizing.current) return;
+                resizing.current = null;
+                cols.resized();
+              }}
+              onDoubleClick={() => cols.resetWidth(id)}
+              className="group/rs absolute -right-[11px] inset-y-0 z-10 flex w-[10px] cursor-col-resize touch-none justify-center"
+            >
+              <span className="my-1 w-px bg-border/70 transition-all group-hover/rs:w-[3px] group-hover/rs:bg-[color:var(--gold)]" />
+            </span>
+          )}
+        </div>
+      ))}
+      {cols.changed && (
+        <button type="button" onClick={cols.resetAll} title={t("tickets.columns.reset")} aria-label={t("tickets.columns.reset")} className="absolute right-1 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground">
+          <RotateCcw className="size-3" />
+        </button>
+      )}
+    </div>
+  );
+}
+
+/** Name, client, priority, checkpoint, due date and status — one line each. With `facets`, each of them is changed in place. */
 export function CompactList({ items, activeIds, onOpen, facets }: { items: CompactTicket[]; activeIds: Set<number>; onOpen: (id: number) => void; facets?: TicketList["facets"] }) {
   const { t } = useTranslation();
   const txt = useChoiceText();
   const qc = useQueryClient();
   const can = useCan();
+  const cols = useCompactColumns();
   const edit = Boolean(facets) && can("tickets.edit");
-  const grid = edit ? "grid grid-cols-[minmax(0,1fr)_7rem_11rem_8.5rem_9.5rem] items-center gap-x-3" : COMPACT_GRID;
+  const gridStyle: CSSProperties = { gridTemplateColumns: cols.template };
   const today = new Date().toLocaleDateString("en-CA");
   const refresh = () => void qc.invalidateQueries({ queryKey: ["tickets"] });
   const patch = useMutation({ mutationFn: ({ id, ...p }: { id: number; priority?: string; status?: string; dueAt?: string }) => api.patch(`/tickets/${id}`, p), onSuccess: refresh, onError: (e) => toast.error(ticketErrorText(t, e)) });
@@ -99,16 +251,11 @@ export function CompactList({ items, activeIds, onOpen, facets }: { items: Compa
     onError: (e) => toast.error(ticketErrorText(t, e)),
   });
   const select = "h-7 w-full min-w-0 rounded-md border border-transparent bg-transparent px-1 text-xs outline-none hover:border-border focus:border-[color:var(--gold)]/60";
+  const labels: Record<CompactCol, string> = { ticket: t("tickets.fields.ticket"), company: t("tickets.fields.company"), priority: t("tickets.fields.priority"), milestone: t("tickets.fields.milestone"), due: t("tickets.fields.due"), status: t("tickets.fields.status") };
   return (
     <div className="overflow-x-auto">
-      <div className={edit ? "min-w-[52rem]" : "min-w-[44rem]"}>
-        <div className={cn(grid, "border-b border-[color:var(--glass-border)] bg-white/[0.02] px-4 py-1.5 font-mono text-[10px] uppercase tracking-[0.12em] text-muted-foreground")}>
-          <span>{t("tickets.fields.ticket")}</span>
-          <span>{t("tickets.fields.priority")}</span>
-          <span>{t("tickets.fields.milestone")}</span>
-          <span>{t("tickets.fields.due")}</span>
-          <span>{t("tickets.fields.status")}</span>
-        </div>
+      <div style={{ minWidth: cols.minWidth }}>
+        <CompactHeader cols={cols} labels={labels} style={gridStyle} />
         <ul className="divide-y divide-[color:var(--glass-border)]">
           {items.map((tk) => {
             const due = dueState(tk.dueAt, tk.statusKind);
@@ -121,15 +268,23 @@ export function CompactList({ items, activeIds, onOpen, facets }: { items: Compa
                 </span>
               </span>
             );
-            const rowClass = cn(grid, "w-full px-4 py-1 text-left text-sm transition-colors hover:bg-[linear-gradient(90deg,rgba(255,206,26,0.07),transparent_60%)]", activeIds.has(tk.id) && "bg-[linear-gradient(90deg,rgba(255,206,26,0.1),transparent_60%)]");
+            const client = (
+              <span className="truncate text-xs text-muted-foreground" title={tk.company.name}>
+                {tk.company.name}
+              </span>
+            );
+            const rowClass = cn("grid w-full items-center gap-x-3 px-4 py-1 text-left text-sm transition-colors hover:bg-[linear-gradient(90deg,rgba(255,206,26,0.07),transparent_60%)]", activeIds.has(tk.id) && "bg-[linear-gradient(90deg,rgba(255,206,26,0.1),transparent_60%)]");
             if (edit && facets) {
               const dueDay = new Date(tk.dueAt);
               const dueValue = `${dueDay.getFullYear()}-${String(dueDay.getMonth() + 1).padStart(2, "0")}-${String(dueDay.getDate()).padStart(2, "0")}`;
-              return (
-                <li key={tk.id} className={rowClass}>
+              const cells: Record<CompactCol, ReactNode> = {
+                ticket: (
                   <button type="button" onClick={() => onOpen(tk.id)} className="min-w-0 text-left">
                     {title}
                   </button>
+                ),
+                company: client,
+                priority: (
                   <select className={cn(select, PRIORITY_STYLE[tk.priorityKind].text)} value={facets.priorities.find((p) => p.kind === tk.priorityKind && (p.label ?? "") === (tk.priorityLabel ?? ""))?.value ?? facets.priorities.find((p) => p.kind === tk.priorityKind)?.value ?? ""} onChange={(e) => patch.mutate({ id: tk.id, priority: e.target.value })} aria-label={t("tickets.fields.priority")}>
                     {facets.priorities.map((p) => (
                       <option key={p.value} value={p.value}>
@@ -137,6 +292,8 @@ export function CompactList({ items, activeIds, onOpen, facets }: { items: Compa
                       </option>
                     ))}
                   </select>
+                ),
+                milestone: (
                   <input
                     type="datetime-local"
                     className={cn(select, "font-mono tabular-nums", tk.milestoneDate && open && tk.milestoneDate < today ? "text-destructive" : "text-muted-foreground")}
@@ -147,6 +304,8 @@ export function CompactList({ items, activeIds, onOpen, facets }: { items: Compa
                     }}
                     aria-label={t("tickets.milestone.label")}
                   />
+                ),
+                due: (
                   <input
                     type="date"
                     className={cn(select, "font-mono tabular-nums", due === "overdue" ? "text-destructive" : due === "today" ? "text-orange-400" : "text-muted-foreground")}
@@ -154,6 +313,8 @@ export function CompactList({ items, activeIds, onOpen, facets }: { items: Compa
                     onChange={(e) => e.target.value && patch.mutate({ id: tk.id, dueAt: new Date(`${e.target.value}T${String(dueDay.getHours()).padStart(2, "0")}:${String(dueDay.getMinutes()).padStart(2, "0")}:00`).toISOString() })}
                     aria-label={t("tickets.fields.due")}
                   />
+                ),
+                status: (
                   <select className={cn(select, "rounded-full border-current px-2", STATUS_STYLE[tk.statusKind])} value={facets.statuses.find((s) => s.kind === tk.statusKind && (s.label ?? "") === (tk.statusLabel ?? ""))?.value ?? facets.statuses.find((s) => s.kind === tk.statusKind)?.value ?? ""} onChange={(e) => patch.mutate({ id: tk.id, status: e.target.value })} aria-label={t("tickets.fields.status")}>
                     {facets.statuses.map((s) => (
                       <option key={s.value} value={s.value}>
@@ -161,23 +322,44 @@ export function CompactList({ items, activeIds, onOpen, facets }: { items: Compa
                       </option>
                     ))}
                   </select>
+                ),
+              };
+              return (
+                <li key={tk.id} style={gridStyle} className={rowClass}>
+                  {cols.order.map((c) => (
+                    <div key={c} className="min-w-0">
+                      {cells[c]}
+                    </div>
+                  ))}
                 </li>
               );
             }
+            const cells: Record<CompactCol, ReactNode> = {
+              ticket: title,
+              company: client,
+              priority: (
+                <span className={cn("flex items-center gap-1.5 text-xs font-medium", PRIORITY_STYLE[tk.priorityKind].text)}>
+                  <span className={cn("size-2 shrink-0 rounded-full", PRIORITY_STYLE[tk.priorityKind].dot)} />
+                  <span className="truncate">{txt.priority({ label: tk.priorityLabel, kind: tk.priorityKind })}</span>
+                </span>
+              ),
+              milestone: <span className={cn("whitespace-nowrap font-mono text-xs tabular-nums", tk.milestoneDate && open && tk.milestoneDate < today ? "text-destructive" : "text-muted-foreground")}>{tk.milestoneDate ? `${shortDate(tk.milestoneDate)}${tk.milestoneTime ? ` ${tk.milestoneTime}` : ""}` : "—"}</span>,
+              due: <span className={cn("whitespace-nowrap font-mono text-xs font-medium tabular-nums", due === "overdue" ? "text-destructive" : due === "today" ? "text-orange-400" : due === "soon" ? "text-primary" : "text-muted-foreground")}>{shortDate(tk.dueAt)}</span>,
+              status: (
+                <span className={cn("inline-flex max-w-full items-center gap-1.5 truncate rounded-full border px-2 py-0.5 text-[11px] font-medium leading-tight", STATUS_STYLE[tk.statusKind])}>
+                  <span className="size-1.5 shrink-0 rounded-full bg-current" />
+                  <span className="truncate">{txt.status({ label: tk.statusLabel, kind: tk.statusKind })}</span>
+                </span>
+              ),
+            };
             return (
               <li key={tk.id}>
-                <button type="button" onClick={() => onOpen(tk.id)} className={rowClass}>
-                  {title}
-                  <span className={cn("flex items-center gap-1.5 text-xs font-medium", PRIORITY_STYLE[tk.priorityKind].text)}>
-                    <span className={cn("size-2 shrink-0 rounded-full", PRIORITY_STYLE[tk.priorityKind].dot)} />
-                    <span className="truncate">{txt.priority({ label: tk.priorityLabel, kind: tk.priorityKind })}</span>
-                  </span>
-                  <span className={cn("whitespace-nowrap font-mono text-xs tabular-nums", tk.milestoneDate && open && tk.milestoneDate < today ? "text-destructive" : "text-muted-foreground")}>{tk.milestoneDate ? `${shortDate(tk.milestoneDate)}${tk.milestoneTime ? ` ${tk.milestoneTime}` : ""}` : "—"}</span>
-                  <span className={cn("whitespace-nowrap font-mono text-xs font-medium tabular-nums", due === "overdue" ? "text-destructive" : due === "today" ? "text-orange-400" : due === "soon" ? "text-primary" : "text-muted-foreground")}>{shortDate(tk.dueAt)}</span>
-                  <span className={cn("inline-flex max-w-full items-center gap-1.5 truncate rounded-full border px-2 py-0.5 text-[11px] font-medium leading-tight", STATUS_STYLE[tk.statusKind])}>
-                    <span className="size-1.5 shrink-0 rounded-full bg-current" />
-                    <span className="truncate">{txt.status({ label: tk.statusLabel, kind: tk.statusKind })}</span>
-                  </span>
+                <button type="button" onClick={() => onOpen(tk.id)} style={gridStyle} className={rowClass}>
+                  {cols.order.map((c) => (
+                    <div key={c} className="min-w-0">
+                      {cells[c]}
+                    </div>
+                  ))}
                 </button>
               </li>
             );
