@@ -137,8 +137,16 @@ export function MyDay({ onOpenTask }: { onOpenTask: (id: string) => void }) {
   });
   const today = todayYmd();
   const taskItems: DayItem[] = (allTasks.data ?? [])
-    .map((k): DayItem => ({ key: `task:${k.id}`, kind: "task", refId: k.id, title: k.title, priority: k.priority, due: k.checkpointDate ?? k.dueDate, overdue: Boolean(k.dueDate && k.dueDate < today), minutes: k.estimateMinutes ?? 30, ticketNumber: k.ticketNumber, blocked: k.waiting || k.status === "blocked" }))
+    .map((k): DayItem => ({ key: `task:${k.id}`, kind: "task", refId: k.id, title: k.title, priority: k.priority, due: k.checkpointDate ?? k.dueDate, overdue: Boolean(k.dueDate && k.dueDate < today), minutes: k.estimateMinutes ?? 30, ticketNumber: k.ticketNumber, blocked: k.waiting || k.status === "blocked", reminder: Boolean(k.continuous && k.remindEveryDays) }))
     .sort((a, b) => Number(b.overdue) - Number(a.overdue) || (a.due ?? "9999").localeCompare(b.due ?? "9999") || a.title.localeCompare(b.title));
+  const check = useMutation({
+    mutationFn: (id: string) => api.post(`/pipeline/tasks/${id}/check`, {}),
+    onSuccess: () => {
+      toast.success(t("pipeline.checked"));
+      refresh();
+    },
+    onError: (e) => toast.error(taskError(t, e)),
+  });
   const open = (i: DayItem) => (i.kind === "ticket" ? ws.open(Number(i.refId)) : onOpenTask(i.refId));
   const when = plan ? new Date(plan.updatedAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }) : "";
 
@@ -327,7 +335,7 @@ export function MyDay({ onOpenTask }: { onOpenTask: (id: string) => void }) {
           <Priorities items={data?.items ?? []} horizon="week" onOpen={open} />
           <MyTickets userId={userId} mine={userId === me.id} onOpen={(id) => ws.open(id)} />
           {userId === me.id && can("projects.view") && <DayProjects />}
-          <ItemList title={t("pipeline.day.tasksToday")} icon={Workflow} items={taskItems} loading={allTasks.isLoading} onOpen={open} onComplete={can("pipeline.edit") ? (i) => complete.mutate(i.refId) : undefined} empty={t("pipeline.day.noTasks")} />
+          <ItemList title={t("pipeline.day.tasksToday")} icon={Workflow} items={taskItems} loading={allTasks.isLoading} onOpen={open} onComplete={can("pipeline.edit") ? (i) => (i.reminder ? check.mutate(i.refId) : complete.mutate(i.refId)) : undefined} empty={t("pipeline.day.noTasks")} />
         </div>
       </div>
     </div>

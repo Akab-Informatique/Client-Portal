@@ -2287,6 +2287,11 @@ export const pipelineTasks = pgTable(
     /** The goal day (YYYY-MM-DD) and time (HH:MM, 17:00 when none is given) before the due day */
     checkpointDate: text("checkpoint_date"),
     checkpointTime: text("checkpoint_time"),
+    /** A continuous task: no due day, only a checkpoint, and its checklist is the work */
+    continuous: boolean("continuous").notNull().default(false),
+    /** A continuous task comes back on Ma journée every 1 / 2 / 5 / 10 days until it is checked (last_checked_on) */
+    remindEveryDays: integer("remind_every_days"),
+    lastCheckedOn: text("last_checked_on"),
     estimateMinutes: integer("estimate_minutes"),
     /** Free labels, to find and filter */
     tags: jsonb("tags").$type<string[]>().notNull().default(sql`'[]'::jsonb`),
@@ -2318,6 +2323,9 @@ export const pipelineChecklist = pgTable(
       .references(() => pipelineTasks.id, { onDelete: "cascade" }),
     text: text("text").notNull(),
     done: boolean("done").notNull().default(false),
+    /** A day (YYYY-MM-DD) and time (HH:MM) for this item, optional */
+    dueDate: text("due_date"),
+    dueTime: text("due_time"),
     position: integer("position").notNull().default(0),
     createdAt: created(),
   },

@@ -24,6 +24,7 @@ const zPriority = z.enum(["low", "normal", "high", "urgent"]);
 const zTitle = z.string().trim().min(1).max(200);
 const zNotes = z.string().trim().max(8000);
 const zMinutes = z.number().int().min(5).max(24 * 60);
+const zRemind = z.union([z.literal(1), z.literal(2), z.literal(5), z.literal(10)]);
 const zVisibility = z.enum(["team", "private", "selected"]);
 const zTags = z.array(z.string().trim().min(1).max(30)).max(8);
 const zRecurrence = z.object({
@@ -98,6 +99,9 @@ async function cards(rows: Task[], viewerId: string) {
       startTime: t.startTime,
       checkpointDate: t.checkpointDate,
       checkpointTime: t.checkpointTime,
+      continuous: t.continuous,
+      remindEveryDays: t.remindEveryDays,
+      lastCheckedOn: t.lastCheckedOn,
       estimateMinutes: t.estimateMinutes,
       tags: t.tags,
       visibility: t.visibility,
@@ -179,7 +183,10 @@ async function spawnNext(done: Task, by: string): Promise<string | null> {
       assigneeId: done.assigneeId,
       createdBy: done.createdBy,
       parentId: done.parentId,
-      dueDate: due,
+      dueDate: done.continuous ? null : due,
+      continuous: done.continuous,
+      remindEveryDays: done.remindEveryDays,
+      lastCheckedOn: done.remindEveryDays ? todayQc() : null,
       dueTime: done.dueTime,
       startDate,
       startTime: startDate ? done.startTime : null,
@@ -323,6 +330,8 @@ export const pipelineRoutes = new Hono<AppEnv>()
         startTime: zHm.nullable().default(null),
         checkpointDate: zDate.nullable().default(null),
         checkpointTime: zHm.nullable().default(null),
+        continuous: z.boolean().default(false),
+        remindEveryDays: zRemind.nullable().default(null),
         estimateMinutes: zMinutes.nullable().default(null),
         tags: zTags.default([]),
         visibility: zVisibility.default("team"),
@@ -339,7 +348,7 @@ export const pipelineRoutes = new Hono<AppEnv>()
     const [{ max }] = await db().select({ max: sql<number>`coalesce(max(${schema.pipelineTasks.position}), 0)`.mapWith(Number) }).from(schema.pipelineTasks);
     const [row] = await db()
       .insert(schema.pipelineTasks)
-      .values({ title: p.title, notes: p.notes, priority: p.priority, assigneeId: p.assigneeId, createdBy: a.user.id, parentId: p.parentId, blockedById: p.blockedById, dueDate: p.dueDate, dueTime: p.dueDate ? p.dueTime : null, startDate: p.startDate, startTime: p.startDate ? p.startTime : null, checkpointDate: p.checkpointDate, checkpointTime: p.checkpointDate ? (p.checkpointTime ?? "17:00") : null, estimateMinutes: p.estimateMinutes, tags: [...new Set(p.tags)], visibility: p.visibility, recurrence: p.recurrence, ...ticket, position: max + 1 })
+      .values({ title: p.title, notes: p.notes, priority: p.priority, assigneeId: p.assigneeId, createdBy: a.user.id, parentId: p.parentId, blockedById: p.blockedById, dueDate: p.continuous ? null : p.dueDate, dueTime: p.dueDate && !p.continuous ? p.dueTime : null, continuous: p.continuous, remindEveryDays: p.continuous ? p.remindEveryDays : null, lastCheckedOn: p.continuous && p.remindEveryDays ? todayQc() : null, startDate: p.startDate, startTime: p.startDate ? p.startTime : null, checkpointDate: p.checkpointDate, checkpointTime: p.checkpointDate ? (p.checkpointTime ?? "17:00") : null, estimateMinutes: p.estimateMinutes, tags: [...new Set(p.tags)], visibility: p.visibility, recurrence: p.recurrence, ...ticket, position: max + 1 })
       .returning();
     if (p.visibility === "selected") await setViewers(row.id, p.viewerIds);
     if (p.recurrence) await db().update(schema.pipelineTasks).set({ seriesId: row.id }).where(eq(schema.pipelineTasks.id, row.id));
@@ -368,6 +377,8 @@ export const pipelineRoutes = new Hono<AppEnv>()
         startTime: zHm.nullable().optional(),
         checkpointDate: zDate.nullable().optional(),
         checkpointTime: zHm.nullable().optional(),
+        continuous: z.boolean().optional(),
+        remindEveryDays: zRemind.nullable().optional(),
         estimateMinutes: zMinutes.nullable().optional(),
         tags: zTags.optional(),
         visibility: zVisibility.optional(),
@@ -383,6 +394,24 @@ export const pipelineRoutes = new Hono<AppEnv>()
     if (p.title !== undefined) set.title = p.title;
     if (p.notes !== undefined) set.notes = p.notes;
     if (p.priority !== undefined) set.priority = p.priority;
+    // a continuous task has no due day: only a checkpoint
+    if (p.continuous !== undefined) {
+      set.continuous = p.continuous;
+      if (p.continuous) {
+        set.dueDate = null;
+        set.dueTime = null;
+      }
+    }
+    // the reminder belongs to a continuous task; a new value starts counting today
+    if (set.continuous === false) {
+      set.remindEveryDays = null;
+      set.lastCheckedOn = null;
+    } else if (p.remindEveryDays !== undefined) {
+      if (p.remindEveryDays && !(set.continuous ?? cur.continuous)) throw new HTTPException(400, { message: "reminder_needs_continuous" });
+      set.remindEveryDays = p.remindEveryDays;
+      set.lastCheckedOn = p.remindEveryDays ? todayQc() : null;
+    }
+    if ((set.continuous ?? cur.continuous) && (p.dueDate || p.dueTime)) throw new HTTPException(400, { message: "continuous_no_due" });
     if (p.dueDate !== undefined) {
       set.dueDate = p.dueDate;
       // no day: no time either
@@ -466,22 +495,34 @@ export const pipelineRoutes = new Hono<AppEnv>()
     return c.json({ ok: true });
   })
 
+  /** Checked off for now: a continuous task with a reminder stays open and comes back after its number of days */
+  .post("/tasks/:id/check", requirePermission("pipeline.edit"), async (c) => {
+    const t = await taskOr404(c, zUuid.parse(c.req.param("id")));
+    if (!t.continuous || !t.remindEveryDays) throw new HTTPException(409, { message: "no_reminder" });
+    const [row] = await db().update(schema.pipelineTasks).set({ lastCheckedOn: todayQc(), updatedAt: new Date() }).where(eq(schema.pipelineTasks.id, t.id)).returning();
+    return c.json((await cards([row], auth(c).user.id))[0]);
+  })
+
   // ── Checklist and notes ──
   .post("/tasks/:id/checklist", requirePermission("pipeline.edit"), async (c) => {
     const t = await taskOr404(c, zUuid.parse(c.req.param("id")));
-    const p = await body(c, z.object({ text: z.string().trim().min(1).max(300) }));
+    const p = await body(c, z.object({ text: z.string().trim().min(1).max(300), dueDate: zDate.nullable().default(null), dueTime: zHm.nullable().default(null) }));
     const [{ max }] = await db().select({ max: sql<number>`coalesce(max(${schema.pipelineChecklist.position}), 0)`.mapWith(Number) }).from(schema.pipelineChecklist).where(eq(schema.pipelineChecklist.taskId, t.id));
-    const [row] = await db().insert(schema.pipelineChecklist).values({ taskId: t.id, text: p.text, position: max + 1 }).returning();
+    const [row] = await db().insert(schema.pipelineChecklist).values({ taskId: t.id, text: p.text, dueDate: p.dueDate, dueTime: p.dueDate ? (p.dueTime ?? "17:00") : null, position: max + 1 }).returning();
     await db().update(schema.pipelineTasks).set({ updatedAt: new Date() }).where(eq(schema.pipelineTasks.id, t.id));
     return c.json(row, 201);
   })
   .patch("/tasks/:id/checklist/:cid", requirePermission("pipeline.edit"), async (c) => {
     const t = await taskOr404(c, zUuid.parse(c.req.param("id")));
     const cid = zUuid.parse(c.req.param("cid"));
-    const p = await body(c, z.object({ text: z.string().trim().min(1).max(300).optional(), done: z.boolean().optional() }));
+    const p = await body(c, z.object({ text: z.string().trim().min(1).max(300).optional(), done: z.boolean().optional(), dueDate: zDate.nullable().optional(), dueTime: zHm.nullable().optional() }));
+    const [before] = await db().select().from(schema.pipelineChecklist).where(and(eq(schema.pipelineChecklist.id, cid), eq(schema.pipelineChecklist.taskId, t.id)));
+    // a time only goes with a day (17:00 when none is given)
+    const dayNow = p.dueDate !== undefined ? p.dueDate : (before?.dueDate ?? null);
+    const timeSet = p.dueDate === null || (p.dueDate === undefined && p.dueTime === undefined && !dayNow) ? { dueTime: null } : p.dueTime !== undefined || p.dueDate ? { dueTime: dayNow ? (p.dueTime ?? before?.dueTime ?? "17:00") : null } : {};
     const [row] = await db()
       .update(schema.pipelineChecklist)
-      .set({ ...(p.text !== undefined ? { text: p.text } : {}), ...(p.done !== undefined ? { done: p.done } : {}) })
+      .set({ ...(p.text !== undefined ? { text: p.text } : {}), ...(p.done !== undefined ? { done: p.done } : {}), ...(p.dueDate !== undefined ? { dueDate: p.dueDate } : {}), ...timeSet })
       .where(and(eq(schema.pipelineChecklist.id, cid), eq(schema.pipelineChecklist.taskId, t.id)))
       .returning();
     if (!row) throw new HTTPException(404, { message: "not_found" });

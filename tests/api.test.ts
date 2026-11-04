@@ -6701,6 +6701,40 @@ describe("my tickets: secondary technician", () => {
 });
 
 describe("pipeline: shared to-dos and the day", () => {
+  it("a continuous task can remind every 1, 2, 5 or 10 days until it is checked", async () => {
+    resetRateLimit("login:ip:unknown");
+    const tech = await signIn("tech@akab.local");
+    const t = (await tech.post("/api/pipeline/tasks", { title: "Vérifier les sauvegardes", continuous: true, remindEveryDays: 5 })).json;
+    expect(t).toMatchObject({ continuous: true, remindEveryDays: 5, lastCheckedOn: expect.any(String) });
+    // only 1, 2, 5 or 10
+    expect((await tech.patch(`/api/pipeline/tasks/${t.id}`, { remindEveryDays: 3 })).status).toBe(400);
+    expect((await tech.post(`/api/pipeline/tasks/${t.id}/check`, {})).json.remindEveryDays).toBe(5);
+    // a task that is not continuous has no reminder and cannot be checked
+    const plain = (await tech.post("/api/pipeline/tasks", { title: "Normale", remindEveryDays: 2 })).json;
+    expect(plain.remindEveryDays).toBeNull();
+    expect((await tech.post(`/api/pipeline/tasks/${plain.id}/check`, {})).status).toBe(409);
+    // switching it off clears the reminder
+    expect((await tech.patch(`/api/pipeline/tasks/${t.id}`, { continuous: false })).json).toMatchObject({ continuous: false, remindEveryDays: null, lastCheckedOn: null });
+  });
+
+  it("a continuous task has no due day, and checklist items can have a day and time", async () => {
+    resetRateLimit("login:ip:unknown");
+    const tech = await signIn("tech@akab.local");
+    const t = (await tech.post("/api/pipeline/tasks", { title: "Suivi continu", continuous: true, dueDate: "2026-12-10", checkpointDate: "2026-12-01", checklist: ["Un", "Deux"] })).json;
+    expect(t).toMatchObject({ continuous: true, dueDate: null, dueTime: null, checkpointDate: "2026-12-01" });
+    // a due day cannot be put on it
+    expect((await tech.patch(`/api/pipeline/tasks/${t.id}`, { dueDate: "2026-12-20" })).status).toBe(400);
+    // an item with a day gets 17:00 when no time is given, and the time follows its day
+    const item = (await tech.post(`/api/pipeline/tasks/${t.id}/checklist`, { text: "Trois", dueDate: "2026-12-05" })).json;
+    expect(item).toMatchObject({ dueDate: "2026-12-05", dueTime: "17:00" });
+    const timed = (await tech.patch(`/api/pipeline/tasks/${t.id}/checklist/${item.id}`, { dueTime: "09:30" })).json;
+    expect(timed).toMatchObject({ dueDate: "2026-12-05", dueTime: "09:30" });
+    const cleared = (await tech.patch(`/api/pipeline/tasks/${t.id}/checklist/${item.id}`, { dueDate: null })).json;
+    expect(cleared).toMatchObject({ dueDate: null, dueTime: null });
+    // turning it off lets a due day be set again
+    expect((await tech.patch(`/api/pipeline/tasks/${t.id}`, { continuous: false, dueDate: "2026-12-20" })).json).toMatchObject({ continuous: false, dueDate: "2026-12-20" });
+  });
+
   it("a task has a checkpoint with a time (17:00 by default) and appears in the open list", async () => {
     resetRateLimit("login:ip:unknown");
     const tech = await signIn("tech@akab.local");

@@ -29,6 +29,11 @@ export type TaskCard = {
   startTime: string | null;
   checkpointDate: string | null;
   checkpointTime: string | null;
+  /** No due day: only a checkpoint, the checklist is the work */
+  continuous: boolean;
+  /** Comes back every 1 / 2 / 5 / 10 days until checked off */
+  remindEveryDays: number | null;
+  lastCheckedOn: string | null;
   estimateMinutes: number | null;
   tags: string[];
   visibility: Visibility;
@@ -47,7 +52,7 @@ export type TaskCard = {
 
 export type TaskFull = TaskCard & {
   notes: string;
-  checklistItems: { id: string; text: string; done: boolean; position: number }[];
+  checklistItems: { id: string; text: string; done: boolean; position: number; dueDate: string | null; dueTime: string | null }[];
   comments: { id: string; author: string; text: string; createdAt: string }[];
   subtaskList: TaskCard[];
   fileList: { id: string; name: string; size: number; contentType: string; createdAt: string; by: string | null }[];
@@ -86,6 +91,8 @@ export type DayItem = {
   ticketNumber?: string | null;
   client?: string | null;
   blocked?: boolean;
+  /** A continuous task with a reminder: ticking it checks it off, the task stays open */
+  reminder?: boolean;
   dueTime?: string | null;
   masked?: boolean;
   pin?: "day" | "week";

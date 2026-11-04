@@ -73,6 +73,7 @@ export const mondayOf = (date: string) => {
   const back = (d.getUTCDay() + 6) % 7;
   return new Date(d.getTime() - back * 86_400_000).toISOString().slice(0, 10);
 };
+const plusDaysOf = (date: string, n: number) => new Date(new Date(`${date}T12:00:00Z`).getTime() + n * 86_400_000).toISOString().slice(0, 10);
 const nextDay = (date: string) => new Date(new Date(`${date}T12:00:00Z`).getTime() + 86_400_000).toISOString().slice(0, 10);
 
 // ── what is on the day ──
@@ -99,6 +100,8 @@ export type DayItem = {
   pin?: "day" | "week";
   pinRank?: number;
   pinNote?: string | null;
+  /** A continuous task with a reminder: checking it off keeps it open */
+  reminder?: boolean;
   /** A ticket's checkpoint date (the goal day): it decides, with the due date, which day the ticket is on */
   checkpoint?: string | null;
   checkpointTime?: string | null;
@@ -142,6 +145,11 @@ export async function dayItems(userId: string, date: string, viewerId: string = 
       ),
   ]);
   const hasOpenChildren = new Set(children.map((c) => c.parentId));
+  // the earliest open checklist item day of each task: an item due makes the task due
+  const itemDays = tasks.length
+    ? await d.select({ taskId: schema.pipelineChecklist.taskId, day: sql<string>`min(${schema.pipelineChecklist.dueDate})` }).from(schema.pipelineChecklist).where(and(inArray(schema.pipelineChecklist.taskId, tasks.map((t) => t.id)), eq(schema.pipelineChecklist.done, false), sql`${schema.pipelineChecklist.dueDate} is not null`)).groupBy(schema.pipelineChecklist.taskId)
+    : [];
+  const itemDue = new Map(itemDays.map((r) => [r.taskId, r.day]));
   const openIds = new Set(
     (await d.select({ id: schema.pipelineTasks.id }).from(schema.pipelineTasks).where(ne(schema.pipelineTasks.status, "done"))).map((r) => r.id),
   );
@@ -149,10 +157,12 @@ export async function dayItems(userId: string, date: string, viewerId: string = 
   for (const t of tasks) {
     // a parent is done through its subtasks: they are planned, not the parent
     if (hasOpenChildren.has(t.id)) continue;
-    const due = t.dueDate;
+    const due = t.dueDate ?? itemDue.get(t.id) ?? null;
     // not to be started yet: its start day is later
     if (t.startDate && t.startDate > date && t.status !== "doing") continue;
-    const relevant = t.status === "doing" || t.priority === "urgent" || (due !== null && due <= date) || (t.checkpointDate !== null && t.checkpointDate <= date);
+    // a continuous task checked off comes back after its number of days
+    const remind = t.continuous && t.remindEveryDays && t.lastCheckedOn ? plusDaysOf(t.lastCheckedOn, t.remindEveryDays) <= date : false;
+    const relevant = remind || t.status === "doing" || t.priority === "urgent" || (due !== null && due <= date) || (t.checkpointDate !== null && t.checkpointDate <= date);
     if (!relevant) continue;
     const masked = viewing && t.visibility !== "team" && t.createdBy !== viewerId && !(t.visibility === "selected" && shared.has(t.id));
     items.push({
@@ -166,6 +176,7 @@ export async function dayItems(userId: string, date: string, viewerId: string = 
       priority: t.priority,
       due,
       checkpoint: t.checkpointDate,
+      reminder: Boolean(t.continuous && t.remindEveryDays),
       checkpointTime: t.checkpointDate ? t.checkpointTime : null,
       overdue: due !== null && due < date,
       minutes: t.estimateMinutes ?? 30,

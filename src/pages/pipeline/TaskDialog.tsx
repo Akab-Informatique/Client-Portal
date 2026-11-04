@@ -7,6 +7,7 @@ import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
+import { Switch } from "@/components/ui/switch";
 import { Textarea } from "@/components/ui/textarea";
 import { useConfirm } from "@/components/ConfirmDialog";
 import { api, ApiError } from "@/lib/api";
@@ -93,7 +94,7 @@ export function TaskDialog({ taskId, defaults, onClose, onOpenTask }: { taskId: 
   }, [task?.id, task?.updatedAt]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // ── a new task ──
-  const [f, setF] = useState({ title: "", notes: "", assigneeId: defaults?.assigneeId ?? me.id, dueDate: defaults?.dueDate ?? "", startDate: "", checkpointDate: "", checkpointTime: "", priority: "normal" as TaskPriority, estimate: "", parentId: defaults?.parentId ?? "", checklist: "", tags: [] as string[], recurrence: null as Recurrence | null, visibility: "team" as Visibility, viewerIds: [] as string[] });
+  const [f, setF] = useState({ title: "", notes: "", assigneeId: defaults?.assigneeId ?? me.id, dueDate: defaults?.dueDate ?? "", startDate: "", checkpointDate: "", checkpointTime: "", continuous: false, remind: "", priority: "normal" as TaskPriority, estimate: "", parentId: defaults?.parentId ?? "", checklist: "", tags: [] as string[], recurrence: null as Recurrence | null, visibility: "team" as Visibility, viewerIds: [] as string[] });
   const [staged, setStaged] = useState<File[]>([]);
   const create = useMutation({
     mutationFn: () => {
@@ -103,7 +104,9 @@ export function TaskDialog({ taskId, defaults, onClose, onOpenTask }: { taskId: 
         notes: f.notes,
         priority: f.priority,
         assigneeId: f.assigneeId || null,
-        dueDate: f.dueDate || null,
+        dueDate: f.continuous ? null : f.dueDate || null,
+        continuous: f.continuous,
+        remindEveryDays: f.continuous && f.remind ? Number(f.remind) : null,
         startDate: f.startDate || null,
         checkpointDate: f.checkpointDate || null,
         checkpointTime: f.checkpointDate && f.checkpointTime ? f.checkpointTime : null,
@@ -167,6 +170,25 @@ export function TaskDialog({ taskId, defaults, onClose, onOpenTask }: { taskId: 
         </div>
         <div className="min-h-0 flex-1 space-y-4 overflow-y-auto px-6 py-5">
           <Input autoFocus value={f.title} onChange={(e) => setF({ ...f, title: e.target.value })} placeholder={t("pipeline.titlePlaceholder")} className="h-12 text-lg font-medium" maxLength={200} />
+          <label className="flex items-start gap-3 rounded-xl border bg-muted/30 p-3">
+            <Switch checked={f.continuous} onCheckedChange={(v) => setF({ ...f, continuous: v })} className="mt-0.5" />
+            <span className="space-y-0.5">
+              <span className="block text-sm font-medium">{t("pipeline.continuous")}</span>
+              <span className="block text-xs text-muted-foreground">{t("pipeline.continuousHint")}</span>
+            </span>
+          </label>
+          {f.continuous && (
+            <Field label={t("pipeline.remind")} icon={Repeat}>
+              <select className={selectCls} value={f.remind} onChange={(e) => setF({ ...f, remind: e.target.value })}>
+                <option value="">{t("pipeline.remindNone")}</option>
+                {[1, 2, 5, 10].map((n) => (
+                  <option key={n} value={n}>
+                    {t("pipeline.remindEvery", { count: n })}
+                  </option>
+                ))}
+              </select>
+            </Field>
+          )}
           <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
             <Field label={t("pipeline.assignee")} icon={UserRound}>
               <select className={selectCls} value={f.assigneeId} onChange={(e) => setF({ ...f, assigneeId: e.target.value })}>
@@ -178,9 +200,11 @@ export function TaskDialog({ taskId, defaults, onClose, onOpenTask }: { taskId: 
                 ))}
               </select>
             </Field>
-            <Field label={t("pipeline.due")} icon={CalendarClock}>
-              <Input type="date" value={f.dueDate} onChange={(e) => setF({ ...f, dueDate: e.target.value })} />
-            </Field>
+            {!f.continuous && (
+              <Field label={t("pipeline.due")} icon={CalendarClock}>
+                <Input type="date" value={f.dueDate} onChange={(e) => setF({ ...f, dueDate: e.target.value })} />
+              </Field>
+            )}
             <Field label={t("pipeline.priority.label")}>
               <select className={selectCls} value={f.priority} onChange={(e) => setF({ ...f, priority: e.target.value as TaskPriority })}>
                 {PRIORITIES.map((p) => (
@@ -219,7 +243,7 @@ export function TaskDialog({ taskId, defaults, onClose, onOpenTask }: { taskId: 
             <Textarea value={f.notes} onChange={(e) => setF({ ...f, notes: e.target.value })} rows={5} placeholder={t("pipeline.instructionsPlaceholder")} maxLength={8000} />
           </Field>
           <Field label={t("pipeline.checklist")} icon={ListChecks}>
-            <Textarea value={f.checklist} onChange={(e) => setF({ ...f, checklist: e.target.value })} rows={4} placeholder={t("pipeline.checklistPlaceholder")} />
+            <Textarea value={f.checklist} onChange={(e) => setF({ ...f, checklist: e.target.value })} rows={f.continuous ? 8 : 4} placeholder={t("pipeline.checklistPlaceholder")} />
           </Field>
           <div className="grid gap-4 md:grid-cols-2">
             <div className="space-y-1">
@@ -353,6 +377,8 @@ export function TaskDialog({ taskId, defaults, onClose, onOpenTask }: { taskId: 
                 <li key={c.id} className="group flex items-center gap-2 rounded-lg px-1.5 py-1 hover:bg-accent/30">
                   <Checkbox checked={c.done} disabled={!editable} onCheckedChange={(v) => void sub(() => api.patch(`/pipeline/tasks/${task.id}/checklist/${c.id}`, { done: v === true }))} />
                   <span className={cn("min-w-0 flex-1 text-sm", c.done && "text-muted-foreground line-through")}>{c.text}</span>
+                  <Input type="date" disabled={!editable} value={c.dueDate ?? ""} title={t("pipeline.itemDue")} className={cn("h-7 w-36 px-2 text-xs", !c.dueDate && "opacity-50")} onChange={(e) => void sub(() => api.patch(`/pipeline/tasks/${task.id}/checklist/${c.id}`, { dueDate: e.target.value || null }))} />
+                  <Input type="time" disabled={!editable || !c.dueDate} value={c.dueTime ?? ""} title={t("pipeline.itemDueTime")} className="h-7 w-24 px-2 text-xs" onChange={(e) => void sub(() => api.patch(`/pipeline/tasks/${task.id}/checklist/${c.id}`, { dueTime: e.target.value || null }))} />
                   {editable && (
                     <button type="button" className="opacity-0 transition-opacity group-hover:opacity-100" onClick={() => void sub(() => api.del(`/pipeline/tasks/${task.id}/checklist/${c.id}`))} aria-label={t("common.delete")}>
                       <Trash2 className="size-3.5 text-muted-foreground hover:text-destructive" />
@@ -496,10 +522,38 @@ export function TaskDialog({ taskId, defaults, onClose, onOpenTask }: { taskId: 
               ))}
             </div>
           </Field>
+          <label className="flex items-start gap-3 rounded-xl border bg-muted/30 p-3">
+            <Switch checked={task.continuous} disabled={!editable} onCheckedChange={(v) => patch.mutate({ continuous: v })} className="mt-0.5" />
+            <span className="space-y-0.5">
+              <span className="block text-sm font-medium">{t("pipeline.continuous")}</span>
+              <span className="block text-xs text-muted-foreground">{t("pipeline.continuousHint")}</span>
+            </span>
+          </label>
+          {task.continuous && (
+            <div className="flex flex-wrap items-end gap-3">
+              <Field label={t("pipeline.remind")} icon={Repeat}>
+                <select className={selectCls} disabled={!editable} value={task.remindEveryDays ?? ""} onChange={(e) => patch.mutate({ remindEveryDays: e.target.value ? Number(e.target.value) : null })}>
+                <option value="">{t("pipeline.remindNone")}</option>
+                {[1, 2, 5, 10].map((n) => (
+                  <option key={n} value={n}>
+                    {t("pipeline.remindEvery", { count: n })}
+                  </option>
+                ))}
+              </select>
+              </Field>
+              {task.remindEveryDays && editable && (
+                <Button type="button" variant="outline" size="sm" className="h-9" onClick={() => void sub(() => api.post(`/pipeline/tasks/${task.id}/check`, {}))}>
+                  <CheckCircle2 className="size-4" /> {t("pipeline.checkNow")}
+                </Button>
+              )}
+            </div>
+          )}
           <div className="grid grid-cols-2 gap-3">
-            <Field label={t("pipeline.due")} icon={CalendarClock}>
-              <Input type="date" disabled={!editable} value={task.dueDate ?? ""} onChange={(e) => patch.mutate({ dueDate: e.target.value || null })} />
-            </Field>
+            {!task.continuous && (
+              <Field label={t("pipeline.due")} icon={CalendarClock}>
+                <Input type="date" disabled={!editable} value={task.dueDate ?? ""} onChange={(e) => patch.mutate({ dueDate: e.target.value || null })} />
+              </Field>
+            )}
             <Field label={t("pipeline.estimate")} icon={Clock3}>
               <Input
                 disabled={!editable}
