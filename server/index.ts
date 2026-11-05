@@ -16,6 +16,7 @@ import { autoTickets } from "./lib/sms.ts";
 import { runIntake } from "./lib/mailIntake.ts";
 import { workflowTick } from "./lib/workflows.ts";
 import { pipelineTick } from "./lib/pipeline.ts";
+import { projectTick } from "./lib/projectTick.ts";
 import { reminderTick } from "./lib/invoiceMail.ts";
 import { provisionPortalUsers } from "./lib/portalUsers.ts";
 
@@ -62,6 +63,7 @@ setInterval(() => void runIntake().catch((e) => console.warn("[mail-intake] pass
 // Automatic workflows (switched on in Admin › Flux de travail): the new tickets get their reply
 setInterval(() => void workflowTick().catch((e) => console.warn("[workflow] tick:", e instanceof Error ? e.message : e)), 60_000).unref();
 // Pipeline: each morning (at the chosen time, work days) everyone's day is planned and texted
+setInterval(() => void projectTick().catch((e) => console.warn("[projects] tick:", e instanceof Error ? e.message : e)), 60_000).unref();
 setInterval(() => void pipelineTick().catch((e) => console.warn("[pipeline] tick:", e instanceof Error ? e.message : e)), 60_000).unref();
 setInterval(() => void reminderTick().catch((e) => console.warn("[invoice reminders] tick:", e instanceof Error ? e.message : e)), 60_000).unref();
 

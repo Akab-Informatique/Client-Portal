@@ -23,6 +23,7 @@ const TITLES: Record<NotificationType, { fr: string; en: string }> = {
   "ticket.work": { fr: "Travail sur votre billet", en: "Work on your ticket" },
   "ticket.notify": { fr: "On vous signale un billet", en: "A ticket for you" },
   "pipeline.assigned": { fr: "Tâche pour vous", en: "Task for you" },
+  "project.reminder": { fr: "Rappel de projet", en: "Project reminder" },
   "pipeline.day_added": { fr: "Ajouté à votre journée", en: "Added to your day" },
   "security.alert": { fr: "Alerte de sécurité", en: "Security alert" },
   "breakroom.invite": { fr: "Invitation à jouer", en: "Game invitation" },
@@ -53,6 +54,9 @@ export function pushText(type: NotificationType, data: Record<string, unknown>, 
       break;
     case "calendar.reminder":
       body = join(data.number, data.title, data.company);
+      break;
+    case "project.reminder":
+      body = join(data.number, data.name, data.text);
       break;
     case "pipeline.assigned":
       body = join(data.by, data.title, data.message);

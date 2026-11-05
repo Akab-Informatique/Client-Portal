@@ -1,6 +1,7 @@
 import { useQuery } from "@tanstack/react-query";
 import { api } from "@/lib/api";
 
+export type BillingMode = "contract" | "hourly" | "special" | "fixed";
 export type Status = "planning" | "active" | "on_hold" | "done" | "cancelled";
 export type MsStatus = "todo" | "doing" | "done";
 export const STATUSES: Status[] = ["planning", "active", "on_hold", "done", "cancelled"];
@@ -40,7 +41,7 @@ export type Task = {
 export type TaskDetail = {
   id: string;
   projectId: string;
-  project: { id: string; number: string; name: string; clientId: string | null; status: Status; billingMode: "hourly" | "fixed"; hourlyRate: number | null };
+  project: { id: string; number: string; name: string; clientId: string | null; status: Status; billingMode: BillingMode; hourlyRate: number | null };
   milestone: { id: string; name: string };
   title: string;
   description: string;
@@ -62,6 +63,7 @@ export type Milestone = {
   name: string;
   notes: string;
   status: MsStatus;
+  startDate: string | null;
   dueDate: string | null;
   late: boolean;
   budgetHours: number | null;
@@ -83,10 +85,16 @@ export type Project = {
   startDate: string | null;
   dueDate: string | null;
   budgetHours: number | null;
-  billingMode: "hourly" | "fixed";
+  billingMode: BillingMode;
   /** Dollars */
   hourlyRate: number | null;
   fixedPrice: number | null;
+  /** The contract the time is billed under, with what an hour costs under it (null: the hours are included) */
+  contract: { id: string; name: string; hourlyRate: number | null } | null;
+  /** Follow up every N days; the next follow-up day and the last one done */
+  checkpointEveryDays: number | null;
+  checkpointDate: string | null;
+  lastFollowupOn: string | null;
   hours: number;
   following: boolean;
   mine: boolean;
@@ -96,7 +104,9 @@ export type Project = {
   milestones: Milestone[];
   updatedAt: string;
 };
+export type Reminder = { id: string; remindOn: string; text: string; done: boolean; userId: string | null; user: string | null };
 export type ProjectDetail = Project & {
+  reminders: Reminder[];
   notes: { id: string; text: string; createdAt: string; authorId: string | null; author: string | null }[];
   time: {
     byPerson: { userId: string; name: string; hours: number }[];
@@ -144,4 +154,4 @@ export function clock(seconds: number): string {
   return `${Math.floor(s / 3600)}:${String(Math.floor((s % 3600) / 60)).padStart(2, "0")}:${String(s % 60).padStart(2, "0")}`;
 }
 
-export const apiMessage = (code: string | undefined, t: (k: string) => string) => (code && ["project_open_milestones", "project_dates", "person_invalid", "project_closed", "timesheet_locked", "client_unknown", "milestone_has_tasks", "timer_not_running", "time_billed", "project_no_client", "reply_needs_recipient"].includes(code) ? t(`projects.errors.${code}`) : t("common.error"));
+export const apiMessage = (code: string | undefined, t: (k: string) => string) => (code && ["project_open_milestones", "project_dates", "person_invalid", "project_closed", "timesheet_locked", "client_unknown", "milestone_has_tasks", "timer_not_running", "time_billed", "project_no_client", "reply_needs_recipient", "contract_required", "contract_invalid", "contract_needs_client", "rate_required", "no_followup"].includes(code) ? t(`projects.errors.${code}`) : t("common.error"));

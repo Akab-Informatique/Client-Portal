@@ -78,6 +78,8 @@ function useView(n: Notification): { icon: LucideIcon; title: string; body: stri
       };
     case "pipeline.assigned":
       return { icon: Workflow, title: t(n.data.notice ? "notifications.pipelineNotice" : n.data.comment ? "notifications.pipelineComment" : "notifications.pipelineAssigned", { by: n.data.by ?? "" }), body: [n.data.title, n.data.message].filter(Boolean).join(" — "), tone: "gold" };
+    case "project.reminder":
+      return { icon: Workflow, title: t(n.data.kind === "followup" ? "notifications.projectFollowup" : "notifications.projectReminder"), body: [n.data.number, n.data.name, n.data.text].filter(Boolean).join(" · "), tone: "gold" };
     case "pipeline.day_added":
       return { icon: Workflow, title: t("notifications.pipelineDayAdded", { by: n.data.by ?? "" }), body: [n.data.title, n.data.time ? t("pipeline.before", { time: n.data.time }) : null].filter(Boolean).join(" · "), tone: "gold" };
     case "breakroom.complots":

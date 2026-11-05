@@ -1,3 +1,5 @@
+import { billingSettings } from "./billing.ts";
+import { hourlyRateOf } from "./contracts.ts";
 import { bpsOfPercent, netCents, percentText, rebateNote } from "../../shared/rebate.ts";
 import { config } from "../config.ts";
 import { and, asc, desc, eq, gte, ilike, inArray, or, sql, type SQL } from "drizzle-orm";
@@ -455,14 +457,19 @@ export function localTicketSource(base: TicketSource): TicketSource {
       }
       // the billable time logged on projects (Projets › Temps): billed at the project's hourly rate; the entries left included are not work to bill
       const onProjects = await db()
-        .select({ e: schema.timesheetEntries, number: schema.projects.number, rate: schema.projects.hourlyRateCents, companyId: schema.clients.autotaskId, who: schema.users.name })
+        .select({ e: schema.timesheetEntries, number: schema.projects.number, rate: schema.projects.hourlyRateCents, mode: schema.projects.billingMode, contract: schema.clientContracts, companyId: schema.clients.autotaskId, who: schema.users.name })
         .from(schema.timesheetEntries)
         .innerJoin(schema.projects, eq(schema.projects.id, schema.timesheetEntries.projectId))
         .innerJoin(schema.clients, eq(schema.clients.id, schema.projects.clientId))
         .innerJoin(schema.users, eq(schema.users.id, schema.timesheetEntries.userId))
+        .leftJoin(schema.clientContracts, eq(schema.clientContracts.id, schema.projects.contractId))
         .where(and(sql`${schema.timesheetEntries.billableX100} > 0`, gte(schema.timesheetEntries.date, since)));
-      for (const { e, number, rate, companyId, who } of onProjects) {
+      const usual = (await billingSettings()).rates.hourly;
+      for (const { e, number, rate: projectRate, mode, contract, companyId, who } of onProjects) {
         if (companyId == null) continue;
+        // under a contract the hour costs what the contract says (none: the hours are included, nothing to bill)
+        const rate = mode === "contract" && contract ? hourlyRateOf(contract, usual) : projectRate;
+        if (mode === "contract" && contract && rate == null) continue;
         items.push({
           id: `prtime:${e.id}`,
           kind: "labour",
@@ -471,6 +478,7 @@ export function localTicketSource(base: TicketSource): TicketSource {
           description: [e.ticketTitle, e.note].filter(Boolean).join(" — ").slice(0, 2000),
           ticketNumber: number,
           resourceName: who,
+          contractSourceId: mode === "contract" && contract ? contract.id : undefined,
           quantity: (e.billableX100 ?? e.hoursX100) / 100,
           unitPriceCents: rate,
           taxable: true,

@@ -82,7 +82,7 @@ export function TaskDialog({ projectId, taskId, onClose, onMinimize }: { project
     onError: fail,
   });
   const closed = tk ? tk.project.status === "done" || tk.project.status === "cancelled" : false;
-  const hourly = tk?.project.billingMode === "hourly";
+  const hourly = tk ? tk.project.billingMode !== "fixed" : false;
 
   return (
     <Dialog open onOpenChange={(o) => !o && onClose()}>

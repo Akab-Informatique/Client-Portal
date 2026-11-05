@@ -4311,6 +4311,68 @@ describe("submitting: timesheets (when required) and expenses", () => {
     expect((await tech2.get(`/api/time/expense-reports?userId=${adminRow.id}`)).status).toBe(403);
   });
 
+  it("projects: billing under a contract or at a special rate, the follow-up checkpoint, reminders, phases with a start day", async () => {
+    resetRateLimit("login:ip:unknown");
+    const tech = await signIn("tech@akab.local");
+    const [t1] = await db().select().from(schema.users).where(eq(schema.users.email, "tech@akab.local"));
+    const [cl] = await db().insert(schema.clients).values({ name: "Projets inc." }).returning();
+    const [other] = await db().insert(schema.clients).values({ name: "Autre inc." }).returning();
+    const [k] = await db().insert(schema.clientContracts).values({ clientId: cl.id, name: "Soutien projets", billingMode: "hourly", hourlyRateCents: 12500, startDate: "2026-01-01", endDate: "2036-12-31" }).returning();
+    const [kOther] = await db().insert(schema.clientContracts).values({ clientId: other.id, name: "Pas le sien", billingMode: "hourly", hourlyRateCents: 9900 }).returning();
+    // the contracts a project can be billed under, with the hourly rate under each
+    expect((await tech.get(`/api/projects/client-contracts/${cl.id}`)).json).toEqual([{ id: k.id, name: "Soutien projets", hourlyRate: 125 }]);
+    // contract mode needs the client's own contract; special needs a rate
+    expect((await tech.post("/api/projects", { name: "x", clientId: cl.id, billingMode: "contract" })).json.error).toBe("contract_required");
+    expect((await tech.post("/api/projects", { name: "x", clientId: cl.id, billingMode: "contract", contractId: kOther.id })).json.error).toBe("contract_invalid");
+    expect((await tech.post("/api/projects", { name: "x", billingMode: "contract", contractId: k.id })).json.error).toBe("contract_needs_client");
+    expect((await tech.post("/api/projects", { name: "x", billingMode: "special" })).json.error).toBe("rate_required");
+    const made = await tech.post("/api/projects", { name: "Refonte", clientId: cl.id, leadId: t1.id, startDate: "2026-01-05", dueDate: "2026-06-30", budgetHours: 40, billingMode: "contract", contractId: k.id, checkpointEveryDays: 7 });
+    expect(made.status).toBe(201);
+    expect(made.json).toMatchObject({ billingMode: "contract", contract: { id: k.id, name: "Soutien projets", hourlyRate: 125 }, checkpointEveryDays: 7, hourlyRate: null });
+    expect(made.json.checkpointDate).toMatch(/^\d{4}-\d{2}-\d{2}$/);
+    const id = made.json.id as string;
+    // billable time under the contract is work to bill at the contract's rate
+    const ms = (await tech.post(`/api/projects/${id}/milestones`, { name: "Phase 1", startDate: "2026-02-01", dueDate: "2026-01-01" })).json;
+    expect(ms.error).toBe("project_dates");
+    const phase = (await tech.post(`/api/projects/${id}/milestones`, { name: "Phase 1", startDate: "2026-01-05", dueDate: "2026-02-01", notes: "Préparation" })).json;
+    expect((await tech.get(`/api/projects/${id}`)).json.milestones[0]).toMatchObject({ name: "Phase 1", startDate: "2026-01-05", dueDate: "2026-02-01" });
+    expect((await tech.patch(`/api/projects/${id}/milestones/${phase.id}`, { startDate: "2026-03-01" })).json.error).toBe("project_dates");
+    // switching to a special rate
+    expect((await tech.patch(`/api/projects/${id}`, { billingMode: "special" })).json.error).toBe("rate_required");
+    const sp = await tech.patch(`/api/projects/${id}`, { billingMode: "special", hourlyRate: 90 });
+    expect(sp.json).toMatchObject({ billingMode: "special", hourlyRate: 90, contract: null });
+    await tech.patch(`/api/projects/${id}`, { billingMode: "contract", contractId: k.id });
+
+    // the follow-up: when it is due the project asks for attention, and marking it done moves it N days on
+    await tech.patch(`/api/projects/${id}`, { checkpointDate: "2020-01-01" });
+    expect((await tech.get(`/api/projects/${id}`)).json.attention).toContain("followup_due");
+    const { projectTick } = await import("../server/lib/projectTick.ts");
+    await projectTick();
+    const rings = async () => (await tech.get("/api/notifications")).json.items.filter((n: any) => n.type === "project.reminder");
+    expect((await rings()).length).toBe(1);
+    await projectTick();
+    expect((await rings()).length).toBe(1); // once per follow-up day
+    const done = await tech.post(`/api/projects/${id}/followup`, { note: "Appel avec le client" });
+    expect(done.status).toBe(200);
+    expect(done.json.checkpointDate > "2020-01-01").toBe(true);
+    expect(done.json.lastFollowupOn).toMatch(/^\d{4}/);
+    expect((await tech.get(`/api/projects/${id}`)).json.notes[0].text).toBe("Appel avec le client");
+    expect(done.json.attention).not.toContain("followup_due");
+    expect((await tech.patch(`/api/projects/${id}`, { checkpointEveryDays: null })).json.checkpointDate).toBeNull();
+    expect((await tech.post(`/api/projects/${id}/followup`, {})).json.error).toBe("no_followup");
+
+    // reminders: the bell rings on the day, once, for the person (else the lead); a done one never rings
+    const r = (await tech.post(`/api/projects/${id}/reminders`, { remindOn: "2020-01-02", text: "Relancer le fournisseur" })).json;
+    expect(r).toHaveLength(1);
+    const r2 = (await tech.post(`/api/projects/${id}/reminders`, { remindOn: "2020-01-03", text: "Déjà fait" })).json;
+    await tech.patch(`/api/projects/${id}/reminders/${r2.find((x: any) => x.text === "Déjà fait").id}`, { done: true });
+    const before = (await rings()).length;
+    await projectTick();
+    expect((await rings()).length).toBe(before + 1);
+    expect((await tech.get(`/api/projects/${id}`)).json.reminders.map((x: any) => [x.text, x.done])).toEqual([["Relancer le fournisseur", false], ["Déjà fait", true]]);
+    expect((await tech.del(`/api/projects/${id}/reminders/${r[0].id}`)).json).toHaveLength(1);
+  });
+
   it("projects: milestones and tasks, my / attention / watch views, time on the timesheet, closing, rights", async () => {
     resetRateLimit("login:ip:unknown");
     const admin = await signIn("admin@akab.local");

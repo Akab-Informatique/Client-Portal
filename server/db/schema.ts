@@ -2693,7 +2693,15 @@ export const projects = pgTable(
     /** Hours planned for the whole project, in hundredths; none = no budget */
     budgetHoursX100: integer("budget_hours_x100"),
     /** How the project is billed: by the hour, or for a fixed price. It only sets whether time entries start billable (hourly) or included (fixed); each entry can be changed. */
-    billingMode: text("billing_mode", { enum: ["hourly", "fixed"] }).notNull().default("hourly"),
+    billingMode: text("billing_mode", { enum: ["hourly", "fixed", "contract", "special"] }).notNull().default("hourly"),
+    /** billing_mode contract: the client contract the time is billed under */
+    contractId: uuid("contract_id").references(() => clientContracts.id, { onDelete: "set null" }),
+    /** Follow up on the project every N days; the next follow-up day, and the last one done */
+    checkpointEveryDays: integer("checkpoint_every_days"),
+    checkpointDate: text("checkpoint_date"),
+    lastFollowupOn: text("last_followup_on"),
+    /** The checkpoint day the team was already told about (so the bell rings once per follow-up) */
+    checkpointNotifiedFor: text("checkpoint_notified_for"),
     /** The hourly rate of billable time on this project (none: the client's, else the usual one) */
     hourlyRateCents: integer("hourly_rate_cents"),
     /** The agreed price of a fixed-price project */
@@ -2748,6 +2756,7 @@ export const projectMilestones = pgTable(
     notes: text("notes").notNull().default(""),
     status: text("status", { enum: ["todo", "doing", "done"] }).notNull().default("todo"),
     /** YYYY-MM-DD */
+    startDate: text("start_date"),
     dueDate: text("due_date"),
     budgetHoursX100: integer("budget_hours_x100"),
     position: integer("position").notNull().default(0),
@@ -2818,6 +2827,25 @@ export const projectTaskTimers = pgTable(
     startedAt: timestamp("started_at", { withTimezone: true }).notNull().defaultNow(),
   },
   (t) => [primaryKey({ columns: [t.taskId, t.userId] })],
+);
+
+/** A reminder on a project: a day, a person to remind, a few words; the bell rings that day */
+export const projectReminders = pgTable(
+  "project_reminders",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    projectId: uuid("project_id")
+      .notNull()
+      .references(() => projects.id, { onDelete: "cascade" }),
+    userId: uuid("user_id").references(() => users.id, { onDelete: "cascade" }),
+    remindOn: text("remind_on").notNull(),
+    text: text("text").notNull(),
+    doneAt: timestamp("done_at", { withTimezone: true }),
+    notifiedAt: timestamp("notified_at", { withTimezone: true }),
+    createdBy: uuid("created_by").references(() => users.id, { onDelete: "set null" }),
+    createdAt: created(),
+  },
+  (t) => [index("project_reminders_project_idx").on(t.projectId, t.remindOn)],
 );
 
 /** The thread of a project: what was said and done, newest first */

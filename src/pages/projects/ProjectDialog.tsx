@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type FormEvent, type ReactNode } from "react";
+import { useEffect, useRef, useState, type FormEvent } from "react";
 import { useTranslation } from "react-i18next";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
@@ -15,10 +15,12 @@ import { api, ApiError } from "@/lib/api";
 import { useCan, useMe } from "@/lib/session";
 import { cn } from "@/lib/utils";
 import { hm, parseHm } from "@shared/duration";
-import { useCrmClients } from "@/pages/crm/shared";
 import { shortDate, shortDateTime } from "@/pages/tickets/shared";
 import { useProjectWorkspace } from "./ProjectWorkspace";
-import { apiMessage, dueTone, hoursText, KEY, MS_TONE, PRIORITY_DOT, STATUSES, STATUS_STYLE, TASK_STYLE, TONE_TEXT, today, useProjectPeople, type Milestone, type ProjectDetail, type Status } from "./shared";
+import { Overview } from "./Overview";
+import { PhaseDialog } from "./PhaseDialog";
+import { Card, Text } from "./ui";
+import { apiMessage, dueTone, hoursText, KEY, MS_TONE, PRIORITY_DOT, STATUS_STYLE, TASK_STYLE, TONE_TEXT, today, type Milestone, type ProjectDetail } from "./shared";
 
 const TABS = [
   { key: "overview", icon: Info },
@@ -27,28 +29,6 @@ const TABS = [
   { key: "notes", icon: MessageSquare },
 ] as const;
 type TabKey = (typeof TABS)[number]["key"];
-
-/** A text that is saved when you leave it (Enter too), not at every key */
-function Text({ value, onSave, multiline, className, ...rest }: { value: string; onSave: (v: string) => void; multiline?: boolean; className?: string; placeholder?: string; maxLength?: number; "aria-label"?: string }) {
-  const [v, setV] = useState(value);
-  useEffect(() => setV(value), [value]);
-  const commit = () => v.trim() !== value && onSave(v.trim());
-  return multiline ? (
-    <Textarea value={v} rows={4} className={className} onChange={(e) => setV(e.target.value)} onBlur={commit} {...rest} />
-  ) : (
-    <Input
-      value={v}
-      className={className}
-      onChange={(e) => setV(e.target.value)}
-      onBlur={commit}
-      onKeyDown={(e) => {
-        if (e.key === "Enter") (e.target as HTMLInputElement).blur();
-        if (e.key === "Escape") setV(value);
-      }}
-      {...rest}
-    />
-  );
-}
 
 /** The project as a folder: a header, then tabs — overview, milestones, time, notes. Everything is saved as it is changed. */
 export function ProjectDialog({ id, onClose, tab, milestone, onTab }: { id: string; onClose: () => void; tab: string | null; milestone: string | null; onTab: (tab: string) => void }) {
@@ -77,7 +57,7 @@ export function ProjectDialog({ id, onClose, tab, milestone, onTab }: { id: stri
 
   return (
     <Dialog open onOpenChange={(o) => !o && onClose()}>
-      <DialogContent showCloseButton={false} className="flex h-[min(92dvh,58rem)] flex-col gap-0 overflow-hidden p-0 sm:max-w-5xl">
+      <DialogContent showCloseButton={false} className="flex h-[min(96dvh,64rem)] flex-col gap-0 overflow-hidden p-0 sm:max-w-[min(97vw,92rem)]">
         {/* the folder's header */}
         <header className="flex items-start gap-3 border-b bg-gradient-to-b from-[color:var(--gold)]/[0.07] to-transparent px-5 pb-0 pt-4">
           <span className="mt-0.5 flex size-11 shrink-0 items-center justify-center rounded-xl bg-[color:var(--gold)]/10 text-primary">
@@ -144,6 +124,10 @@ export function ProjectDialog({ id, onClose, tab, milestone, onTab }: { id: stri
               p={p}
               edit={edit}
               save={(patch) => save.mutate(patch)}
+              onTask={onTask}
+              onTab={onTab}
+              onChanged={refresh}
+              fail={fail}
               onDelete={
                 can("projects.manage")
                   ? () => void confirm({ title: t("projects.deleteTitle", { number: p.number }), description: t("projects.deleteText") }).then((ok) => ok && remove.mutate())
@@ -160,245 +144,12 @@ export function ProjectDialog({ id, onClose, tab, milestone, onTab }: { id: stri
   );
 }
 
-const Card = ({ title, children, className }: { title: string; children: ReactNode; className?: string }) => (
-  <section className={cn("rounded-2xl border bg-card/40 p-4", className)}>
-    <h3 className="mb-3 text-xs font-semibold uppercase tracking-wider text-muted-foreground">{title}</h3>
-    {children}
-  </section>
-);
-
-function Bar({ value, max, over }: { value: number; max: number; over?: boolean }) {
-  const pct = max > 0 ? Math.min(100, Math.round((value / max) * 100)) : 0;
-  return (
-    <span className="block h-2 overflow-hidden rounded-full bg-foreground/10">
-      <span className={cn("block h-full rounded-full", over ? "bg-red-500" : "bg-grad-gold")} style={{ width: `${pct}%` }} />
-    </span>
-  );
-}
-
-// ── Overview ──
-function Overview({ p, edit, save, onDelete }: { p: ProjectDetail; edit: boolean; save: (patch: Record<string, unknown>) => void; onDelete?: () => void }) {
-  const { t } = useTranslation();
-  const { data: people = [] } = useProjectPeople();
-  const { data: clients = [] } = useCrmClients();
-  const memberIds = p.members.map((m) => m.id);
-  const over = p.budgetHours != null && p.hours > p.budgetHours;
-  const none = "none";
-  const tone = dueTone(p.dueDate, p.status === "done" || p.status === "cancelled");
-  return (
-    <div className="grid gap-4 lg:grid-cols-[minmax(0,1.3fr)_minmax(0,1fr)]">
-      <div className="space-y-4">
-        <Card title={t("projects.tabs.overview")}>
-          <div className="space-y-3">
-            <div className="space-y-1.5">
-              <Label>{t("projects.f.name")}</Label>
-              <Text value={p.name} onSave={(v) => v && save({ name: v })} maxLength={200} aria-label={t("projects.f.name")} className={cn(!edit && "pointer-events-none")} />
-            </div>
-            <div className="grid gap-3 sm:grid-cols-2">
-              <div className="space-y-1.5">
-                <Label>{t("projects.f.client")}</Label>
-                <Select disabled={!edit} value={p.client?.id ?? none} onValueChange={(v) => save({ clientId: v === none ? null : v })}>
-                  <SelectTrigger>
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent className="max-h-72">
-                    <SelectItem value={none}>{t("projects.f.noClient")}</SelectItem>
-                    {clients.map((c) => (
-                      <SelectItem key={c.id} value={c.id}>
-                        {c.name}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              </div>
-              <div className="space-y-1.5">
-                <Label>{t("projects.f.status")}</Label>
-                <Select disabled={!edit} value={p.status} onValueChange={(v) => save({ status: v as Status })}>
-                  <SelectTrigger>
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {STATUSES.map((s) => (
-                      <SelectItem key={s} value={s}>
-                        {t(`projects.status.${s}`)}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              </div>
-              <div className="space-y-1.5">
-                <Label>{t("projects.f.lead")}</Label>
-                <Select disabled={!edit} value={p.lead?.id ?? none} onValueChange={(v) => save({ leadId: v === none ? null : v })}>
-                  <SelectTrigger>
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value={none}>{t("projects.f.noLead")}</SelectItem>
-                    {people.map((m) => (
-                      <SelectItem key={m.id} value={m.id}>
-                        {m.name}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              </div>
-              <div className="space-y-1.5">
-                <Label>{t("projects.f.budget")}</Label>
-                <Text
-                  value={p.budgetHours == null ? "" : String(p.budgetHours)}
-                  onSave={(v) => {
-                    const n = Number(v.replace(",", "."));
-                    if (!v) save({ budgetHours: null });
-                    else if (Number.isFinite(n) && n >= 0) save({ budgetHours: n });
-                  }}
-                  aria-label={t("projects.f.budget")}
-                  className={cn(!edit && "pointer-events-none")}
-                />
-              </div>
-              <div className="space-y-1.5">
-                <Label>{t("projects.f.start")}</Label>
-                <Input type="date" disabled={!edit} value={p.startDate ?? ""} onChange={(e) => save({ startDate: e.target.value || null })} />
-              </div>
-              <div className="space-y-1.5">
-                <Label>{t("projects.f.due")}</Label>
-                <Input type="date" disabled={!edit} value={p.dueDate ?? ""} min={p.startDate ?? undefined} onChange={(e) => save({ dueDate: e.target.value || null })} className={TONE_TEXT[tone]} />
-              </div>
-            </div>
-            <div className="space-y-1.5">
-              <Label>{t("projects.f.description")}</Label>
-              <Text multiline value={p.description} onSave={(v) => save({ description: v })} placeholder={t("projects.f.descriptionPlaceholder")} maxLength={8000} className={cn(!edit && "pointer-events-none")} />
-            </div>
-          </div>
-        </Card>
-      </div>
-
-      <div className="space-y-4">
-        <Card title={t("projects.progress")}>
-          <div className="space-y-4 text-sm">
-            <div className="space-y-1.5">
-              <div className="flex items-baseline justify-between">
-                <span>{t("projects.milestonesDone")}</span>
-                <span className="font-mono">
-                  {p.progress.done} / {p.progress.total}
-                </span>
-              </div>
-              <Bar value={p.progress.done} max={p.progress.total} />
-            </div>
-            <div className="space-y-1.5">
-              <div className="flex items-baseline justify-between">
-                <span>{t("projects.hoursLogged")}</span>
-                <span className={cn("font-mono", over && "text-red-400")}>
-                  {hoursText(p.hours)}
-                  {p.budgetHours != null && <span className="text-muted-foreground"> / {hoursText(p.budgetHours)}</span>}
-                </span>
-              </div>
-              {p.budgetHours != null ? <Bar value={p.hours} max={p.budgetHours} over={over} /> : <p className="text-xs text-muted-foreground">{t("projects.noBudget")}</p>}
-            </div>
-            {p.nextMilestone && (
-              <div className="rounded-xl border bg-background/40 p-3">
-                <p className="text-[11px] uppercase tracking-wide text-muted-foreground">{t("projects.nextMilestone")}</p>
-                <p className="font-medium">{p.nextMilestone.name}</p>
-                <p className={cn("text-xs", TONE_TEXT[dueTone(p.nextMilestone.dueDate, false)])}>{p.nextMilestone.dueDate ? shortDate(p.nextMilestone.dueDate) : t("projects.noDate")}</p>
-              </div>
-            )}
-          </div>
-        </Card>
-        <Card title={t("projects.f.team")}>
-          <div className="flex flex-wrap items-center gap-1.5">
-            {p.members.map((m) => (
-              <span key={m.id} className="inline-flex items-center gap-1 rounded-full border bg-card/60 py-0.5 pl-2.5 pr-1.5 text-xs">
-                {m.name}
-                {m.id === p.lead?.id ? <span className="text-[10px] text-primary">★</span> : edit && (
-                  <button type="button" aria-label={t("common.delete")} className="rounded-full p-0.5 text-muted-foreground hover:text-destructive" onClick={() => save({ memberIds: memberIds.filter((x) => x !== m.id && x !== p.lead?.id) })}>
-                    <X className="size-3" />
-                  </button>
-                )}
-              </span>
-            ))}
-            {edit && (
-              <Select value="" onValueChange={(v) => v && save({ memberIds: [...memberIds.filter((x) => x !== p.lead?.id), v] })}>
-                <SelectTrigger className="h-7 w-44 text-xs">
-                  <SelectValue placeholder={t("projects.f.addMember")} />
-                </SelectTrigger>
-                <SelectContent>
-                  {people.filter((m) => !memberIds.includes(m.id)).map((m) => (
-                    <SelectItem key={m.id} value={m.id}>
-                      {m.name}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            )}
-          </div>
-        </Card>
-        <Card title={t("projects.billing")}>
-          <div className="space-y-3 text-sm">
-            <div className="space-y-1.5">
-              <Label>{t("projects.billingMode")}</Label>
-              <Select disabled={!edit} value={p.billingMode} onValueChange={(v) => save({ billingMode: v })}>
-                <SelectTrigger>
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="hourly">{t("projects.mode.hourly")}</SelectItem>
-                  <SelectItem value="fixed">{t("projects.mode.fixed")}</SelectItem>
-                </SelectContent>
-              </Select>
-              <p className="text-xs text-muted-foreground">{p.billingMode === "hourly" ? t("projects.modeHintHourly") : t("projects.modeHintFixed")}</p>
-            </div>
-            <div className="grid grid-cols-2 gap-3">
-              <div className="space-y-1.5">
-                <Label className="text-xs">{t("projects.hourlyRate")}</Label>
-                <Text
-                  value={p.hourlyRate == null ? "" : String(p.hourlyRate)}
-                  onSave={(v) => {
-                    const n = Number(v.replace(",", "."));
-                    if (!v) save({ hourlyRate: null });
-                    else if (Number.isFinite(n) && n >= 0) save({ hourlyRate: n });
-                  }}
-                  aria-label={t("projects.hourlyRate")}
-                  className={cn(!edit && "pointer-events-none")}
-                />
-              </div>
-              {p.billingMode === "fixed" && (
-                <div className="space-y-1.5">
-                  <Label className="text-xs">{t("projects.fixedPrice")}</Label>
-                  <Text
-                    value={p.fixedPrice == null ? "" : String(p.fixedPrice)}
-                    onSave={(v) => {
-                      const n = Number(v.replace(",", "."));
-                      if (!v) save({ fixedPrice: null });
-                      else if (Number.isFinite(n) && n >= 0) save({ fixedPrice: n });
-                    }}
-                    aria-label={t("projects.fixedPrice")}
-                    className={cn(!edit && "pointer-events-none")}
-                  />
-                </div>
-              )}
-            </div>
-          </div>
-        </Card>
-        {onDelete && (
-          <Button variant="ghost" size="sm" className="text-muted-foreground hover:text-destructive" onClick={onDelete}>
-            <Trash2 className="size-3.5" /> {t("projects.delete")}
-          </Button>
-        )}
-      </div>
-    </div>
-  );
-}
-
 // ── Milestones and their tasks ──
 function Milestones({ p, edit, focus, onChanged, fail, onTask }: { p: ProjectDetail; edit: boolean; focus: string | null; onChanged: () => void; fail: (e: unknown) => void; onTask: (id: string | null) => void }) {
   const { t } = useTranslation();
   const [open, setOpen] = useState<Set<string>>(new Set(focus ? [focus] : []));
-  const [name, setName] = useState("");
+  const [adding, setAdding] = useState(false);
   const toggle = (id: string) => setOpen((s) => (s.has(id) ? new Set([...s].filter((x) => x !== id)) : new Set([...s, id])));
-  const add = useMutation({
-    mutationFn: () => api.post(`/projects/${p.id}/milestones`, { name: name.trim() }),
-    onSuccess: () => (setName(""), onChanged()),
-    onError: fail,
-  });
   const reorder = useMutation({ mutationFn: (ids: string[]) => api.post(`/projects/${p.id}/milestones/reorder`, { ids }), onSuccess: onChanged, onError: fail });
   const move = (i: number, d: -1 | 1) => {
     const ids = p.milestones.map((m) => m.id);
@@ -419,20 +170,11 @@ function Milestones({ p, edit, focus, onChanged, fail, onTask }: { p: ProjectDet
         ))}
       </ul>
       {edit && (
-        <form
-          className="flex items-center gap-2 rounded-xl border border-dashed px-3 py-2"
-          onSubmit={(e: FormEvent) => {
-            e.preventDefault();
-            if (name.trim()) add.mutate();
-          }}
-        >
-          <Plus className="size-4 text-muted-foreground" />
-          <input value={name} onChange={(e) => setName(e.target.value)} placeholder={t("projects.addMilestone")} maxLength={200} className="h-8 flex-1 bg-transparent text-sm outline-none placeholder:text-muted-foreground/70" />
-          <Button type="submit" size="sm" disabled={!name.trim() || add.isPending}>
-            {t("projects.add")}
-          </Button>
-        </form>
+        <Button variant="outline" className="w-full border-dashed" onClick={() => setAdding(true)}>
+          <Plus className="size-4" /> {t("projects.newPhase")}
+        </Button>
       )}
+      {adding && <PhaseDialog projectId={p.id} project={{ startDate: p.startDate, dueDate: p.dueDate }} onClose={() => setAdding(false)} onCreated={() => (setAdding(false), onChanged())} />}
     </div>
   );
 }
@@ -501,8 +243,12 @@ function MilestoneRow({ p, m, edit, isOpen, onToggle, onChanged, fail, onUp, onD
         </div>
         {isOpen && (
           <div className="space-y-3 border-t px-4 py-3">
-            <div className="grid gap-3 sm:grid-cols-[1fr_9rem]">
+            <div className="grid gap-3 sm:grid-cols-[1fr_9rem_9rem]">
               <Text multiline value={m.notes} onSave={(v) => patch.mutate({ notes: v })} placeholder={t("projects.milestoneNotes")} maxLength={8000} className={cn("min-h-16", !edit && "pointer-events-none")} />
+              <div className="space-y-1.5">
+                <Label className="text-xs">{t("projects.f.start")}</Label>
+                <Input type="date" disabled={!edit} value={m.startDate ?? ""} max={m.dueDate ?? undefined} onChange={(e) => patch.mutate({ startDate: e.target.value || null })} className="h-8" />
+              </div>
               <div className="space-y-1.5">
                 <Label className="text-xs">{t("projects.f.budget")}</Label>
                 <Text
@@ -569,7 +315,7 @@ function TimeTab({ p, edit, onChanged, fail }: { p: ProjectDetail; edit: boolean
   const can = useCan();
   const qc = useQueryClient();
   const closed = p.status === "done" || p.status === "cancelled";
-  const hourly = p.billingMode === "hourly";
+  const hourly = p.billingMode !== "fixed";
   const [f, setF] = useState({ date: today(), duration: "", milestoneId: "", taskId: "", note: "", billable: hourly });
   useEffect(() => setF((s) => ({ ...s, billable: hourly })), [hourly]);
   const hours = parseHm(f.duration);

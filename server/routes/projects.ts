@@ -8,6 +8,7 @@ import { audit } from "../lib/audit.ts";
 import { splitBillable } from "../lib/hr.ts";
 import { addDays, editable, labourType, sheetOf, todayQc, weekStartOf } from "../lib/timesheets.ts";
 import { billingSettings } from "../lib/billing.ts";
+import { hourlyRateOf } from "../lib/contracts.ts";
 import { escapeHtml, sendMail } from "../lib/mail.ts";
 import { body, zUuid } from "../lib/validate.ts";
 
@@ -62,13 +63,26 @@ async function clientExists(id: string): Promise<void> {
   if (!c) throw new HTTPException(400, { message: "client_unknown" });
 }
 
+/** The contract a project is billed under: one of the client's own, active (null with none picked) */
+async function contractOf(clientId: string | null, contractId: string | null | undefined) {
+  if (!contractId) return null;
+  if (!clientId) throw new HTTPException(400, { message: "contract_needs_client" });
+  const [k] = await db().select().from(schema.clientContracts).where(and(eq(schema.clientContracts.id, contractId), eq(schema.clientContracts.clientId, clientId)));
+  if (!k) throw new HTTPException(400, { message: "contract_invalid" });
+  return k;
+}
+
+/** The day of the next follow-up: N days after the later of today and the start */
+const nextCheckpoint = (every: number, start: string | null) => addDays(start && start > todayQc() ? start : todayQc(), every);
+
 /** The cards: milestones with their task and time figures, the team, whether I follow it, what needs attention. */
 async function cards(rows: Project[], me: string, withTasks = false) {
   if (!rows.length) return [];
   const d = db();
   const ids = rows.map((r) => r.id);
   const today = todayQc();
-  const [milestones, tasks, members, followers, hours, clients, users] = await Promise.all([
+  const [milestones, tasks, members, followers, hours, clients, users, contracts] = await Promise.all([
+    // (the contracts of the projects billed under one are read last)
     d.select().from(schema.projectMilestones).where(inArray(schema.projectMilestones.projectId, ids)).orderBy(asc(schema.projectMilestones.position), asc(schema.projectMilestones.createdAt)),
     d.select().from(schema.projectTasks).where(inArray(schema.projectTasks.projectId, ids)).orderBy(asc(schema.projectTasks.position), asc(schema.projectTasks.createdAt)),
     d.select({ projectId: schema.projectMembers.projectId, userId: schema.projectMembers.userId }).from(schema.projectMembers).where(inArray(schema.projectMembers.projectId, ids)),
@@ -80,7 +94,9 @@ async function cards(rows: Project[], me: string, withTasks = false) {
       .groupBy(schema.timesheetEntries.projectId, schema.timesheetEntries.milestoneId, schema.timesheetEntries.taskId),
     d.select({ id: schema.clients.id, name: schema.clients.name }).from(schema.clients).where(inArray(schema.clients.id, rows.map((r) => r.clientId).filter((x): x is string => Boolean(x)).concat("00000000-0000-0000-0000-000000000000"))),
     d.select({ id: schema.users.id, name: schema.users.name }).from(schema.users).where(eq(schema.users.kind, "staff")),
+    d.select().from(schema.clientContracts).where(inArray(schema.clientContracts.id, rows.map((r) => r.contractId).filter((x): x is string => Boolean(x)).concat("00000000-0000-0000-0000-000000000000"))),
   ]);
+  const usual = (await billingSettings()).rates.hourly;
   const clientName = new Map(clients.map((c) => [c.id, c.name]));
   const userName = new Map(users.map((u) => [u.id, u.name]));
   return rows.map((p) => {
@@ -95,6 +111,7 @@ async function cards(rows: Project[], me: string, withTasks = false) {
         name: m.name,
         notes: m.notes,
         status: m.status,
+        startDate: m.startDate,
         dueDate: m.dueDate,
         late: m.status !== "done" && Boolean(m.dueDate && m.dueDate < today),
         budgetHours: m.budgetHoursX100 == null ? null : m.budgetHoursX100 / 100,
@@ -125,6 +142,7 @@ async function cards(rows: Project[], me: string, withTasks = false) {
       if (p.dueDate && p.dueDate < today) attention.push("late");
       if (milestoneViews.some((m) => m.late)) attention.push("milestone_late");
       if (p.budgetHoursX100 != null && totalHours > p.budgetHoursX100) attention.push("over_budget");
+      if (p.checkpointEveryDays && p.checkpointDate && p.checkpointDate <= today) attention.push("followup_due");
     }
     const memberIds = [...new Set([...(p.leadId ? [p.leadId] : []), ...members.filter((m) => m.projectId === p.id).map((m) => m.userId)])];
     return {
@@ -141,6 +159,15 @@ async function cards(rows: Project[], me: string, withTasks = false) {
       budgetHours: p.budgetHoursX100 == null ? null : p.budgetHoursX100 / 100,
       billingMode: p.billingMode,
       hourlyRate: p.hourlyRateCents == null ? null : p.hourlyRateCents / 100,
+      contract: (() => {
+        const k = contracts.find((x) => x.id === p.contractId);
+        if (!k) return null;
+        const r = hourlyRateOf(k, usual);
+        return { id: k.id, name: k.name, hourlyRate: r == null ? null : r / 100 };
+      })(),
+      checkpointEveryDays: p.checkpointEveryDays,
+      checkpointDate: p.checkpointDate,
+      lastFollowupOn: p.lastFollowupOn,
       fixedPrice: p.fixedPriceCents == null ? null : p.fixedPriceCents / 100,
       hours: totalHours / 100,
       following: followers.some((f) => f.projectId === p.id),
@@ -153,6 +180,17 @@ async function cards(rows: Project[], me: string, withTasks = false) {
       updatedAt: p.updatedAt,
     };
   });
+}
+
+/** The reminders of a project, open ones first by day, then the done ones */
+async function remindersOf(projectId: string) {
+  const rows = await db()
+    .select({ id: schema.projectReminders.id, remindOn: schema.projectReminders.remindOn, text: schema.projectReminders.text, doneAt: schema.projectReminders.doneAt, userId: schema.projectReminders.userId, user: schema.users.name })
+    .from(schema.projectReminders)
+    .leftJoin(schema.users, eq(schema.users.id, schema.projectReminders.userId))
+    .where(eq(schema.projectReminders.projectId, projectId))
+    .orderBy(asc(schema.projectReminders.remindOn));
+  return [...rows.filter((r) => !r.doneAt), ...rows.filter((r) => r.doneAt)].map((r) => ({ id: r.id, remindOn: r.remindOn, text: r.text, done: Boolean(r.doneAt), userId: r.userId, user: r.user ?? null }));
 }
 
 /** A project's team, from the lead and the members given */
@@ -181,7 +219,12 @@ const zProject = z.object({
   startDate: zDay.nullable().optional(),
   dueDate: zDay.nullable().optional(),
   budgetHours: zHours.nullable().optional(),
-  billingMode: z.enum(["hourly", "fixed"]).optional(),
+  billingMode: z.enum(["hourly", "fixed", "contract", "special"]).optional(),
+  /** The client contract the time is billed under (billingMode contract) */
+  contractId: zUuid.nullable().optional(),
+  /** Follow up every N days, from this day (none: N days from now) */
+  checkpointEveryDays: z.number().int().min(1).max(365).nullable().optional(),
+  checkpointDate: zDay.nullable().optional(),
   /** Dollars */
   hourlyRate: zMoney.nullable().optional(),
   fixedPrice: zMoney.nullable().optional(),
@@ -317,6 +360,12 @@ export const projectsRoutes = new Hono<AppEnv>()
     const leadId = p.leadId === undefined ? a.user.id : p.leadId;
     await activeStaff([...(leadId ? [leadId] : []), ...(p.memberIds ?? [])]);
     if (p.clientId) await clientExists(p.clientId);
+    const mode = p.billingMode ?? "hourly";
+    if (mode === "contract") {
+      if (!p.contractId) throw new HTTPException(400, { message: "contract_required" });
+      await contractOf(p.clientId ?? null, p.contractId);
+    }
+    if (mode === "special" && (p.hourlyRate == null || p.hourlyRate <= 0)) throw new HTTPException(400, { message: "rate_required" });
     // the number and the usual rate are read before the transaction (one connection: nothing else may run inside it)
     const number = await nextNumber();
     const defaultRate = (await billingSettings()).rates.hourly;
@@ -333,8 +382,11 @@ export const projectsRoutes = new Hono<AppEnv>()
           startDate: p.startDate ?? null,
           dueDate: p.dueDate ?? null,
           budgetHoursX100: x100(p.budgetHours),
-          billingMode: p.billingMode ?? "hourly",
-          hourlyRateCents: cents(p.hourlyRate === undefined ? defaultRate : p.hourlyRate),
+          billingMode: mode,
+          contractId: mode === "contract" ? p.contractId! : null,
+          checkpointEveryDays: p.checkpointEveryDays ?? null,
+          checkpointDate: p.checkpointEveryDays ? (p.checkpointDate ?? nextCheckpoint(p.checkpointEveryDays, p.startDate ?? null)) : (p.checkpointDate ?? null),
+          hourlyRateCents: mode === "contract" ? null : cents(p.hourlyRate === undefined ? defaultRate : p.hourlyRate),
           fixedPriceCents: cents(p.fixedPrice),
           createdBy: a.user.id,
         })
@@ -353,6 +405,7 @@ export const projectsRoutes = new Hono<AppEnv>()
     const p = await loadProject(c.req.param("id"));
     const d = db();
     const [card] = await cards([p], a.user.id, true);
+    const reminders = await remindersOf(p.id);
     const [notes, entries, byPerson] = await Promise.all([
       d
         .select({ id: schema.projectNotes.id, text: schema.projectNotes.text, createdAt: schema.projectNotes.createdAt, authorId: schema.projectNotes.authorId, author: schema.users.name })
@@ -379,12 +432,69 @@ export const projectsRoutes = new Hono<AppEnv>()
     const msName = new Map(card.milestones.map((m) => [m.id, m.name]));
     return c.json({
       ...card,
+      reminders,
       notes: notes.map((n) => ({ id: n.id, text: n.text, createdAt: n.createdAt, authorId: n.authorId, author: n.author ?? null })),
       time: {
         byPerson: byPerson.map((x) => ({ userId: x.userId, name: x.user, hours: x.h / 100 })),
         entries: entries.map((e) => ({ id: e.id, date: e.date, hours: e.hoursX100 / 100, billableHours: (e.billableX100 ?? e.hoursX100) / 100, note: e.note, milestoneId: e.milestoneId, milestone: e.milestoneId ? (msName.get(e.milestoneId) ?? null) : null, userId: e.userId, user: e.user })),
       },
     });
+  })
+
+  /** The reminders of a project: mine and the team's, open ones first */
+  .get("/:id/reminders", requirePermission("projects.view"), async (c) => {
+    const p = await loadProject(c.req.param("id"));
+    return c.json(await remindersOf(p.id));
+  })
+  .post("/:id/reminders", requirePermission("projects.edit"), async (c) => {
+    const a = auth(c);
+    const p = await loadProject(c.req.param("id"));
+    const r = await body(c, z.object({ remindOn: zDay, text: z.string().trim().min(1).max(500), userId: zUuid.nullable().optional() }));
+    const who = r.userId === undefined ? a.user.id : r.userId;
+    if (who) await activeStaff([who]);
+    await db().insert(schema.projectReminders).values({ projectId: p.id, userId: who, remindOn: r.remindOn, text: r.text, createdBy: a.user.id });
+    await audit(a.user.id, "project.reminder_added", p.id, { remindOn: r.remindOn });
+    return c.json(await remindersOf(p.id), 201);
+  })
+  .patch("/:id/reminders/:rid", requirePermission("projects.edit"), async (c) => {
+    const p = await loadProject(c.req.param("id"));
+    const r = await body(c, z.object({ done: z.boolean().optional(), remindOn: zDay.optional(), text: z.string().trim().min(1).max(500).optional() }));
+    const [row] = await db()
+      .update(schema.projectReminders)
+      .set({ ...(r.done !== undefined ? { doneAt: r.done ? new Date() : null } : {}), ...(r.remindOn !== undefined ? { remindOn: r.remindOn, notifiedAt: null } : {}), ...(r.text !== undefined ? { text: r.text } : {}) })
+      .where(and(eq(schema.projectReminders.id, zUuid.parse(c.req.param("rid"))), eq(schema.projectReminders.projectId, p.id)))
+      .returning();
+    if (!row) throw new HTTPException(404, { message: "not_found" });
+    return c.json(await remindersOf(p.id));
+  })
+  .delete("/:id/reminders/:rid", requirePermission("projects.edit"), async (c) => {
+    const p = await loadProject(c.req.param("id"));
+    await db().delete(schema.projectReminders).where(and(eq(schema.projectReminders.id, zUuid.parse(c.req.param("rid"))), eq(schema.projectReminders.projectId, p.id)));
+    return c.json(await remindersOf(p.id));
+  })
+
+  /** The follow-up was done: the next one is N days from today; a few words go to the project's notes */
+  .post("/:id/followup", requirePermission("projects.edit"), async (c) => {
+    const a = auth(c);
+    const p = await loadProject(c.req.param("id"));
+    const r = await body(c, z.object({ note: z.string().trim().max(4000).optional() }));
+    if (!p.checkpointEveryDays) throw new HTTPException(409, { message: "no_followup" });
+    const [row] = await db()
+      .update(schema.projects)
+      .set({ lastFollowupOn: todayQc(), checkpointDate: addDays(todayQc(), p.checkpointEveryDays), updatedAt: new Date() })
+      .where(eq(schema.projects.id, p.id))
+      .returning();
+    if (r.note) await db().insert(schema.projectNotes).values({ projectId: p.id, authorId: a.user.id, text: `${r.note}` });
+    await audit(a.user.id, "project.followup_done", p.id, {});
+    return c.json((await cards([row], a.user.id, true))[0]);
+  })
+
+  /** The client's contracts a project can be billed under, with what an hour costs under each */
+  .get("/client-contracts/:clientId", requirePermission("projects.view"), async (c) => {
+    const clientId = zUuid.parse(c.req.param("clientId"));
+    const usual = (await billingSettings()).rates.hourly;
+    const rows = await db().select().from(schema.clientContracts).where(and(eq(schema.clientContracts.clientId, clientId), eq(schema.clientContracts.active, true))).orderBy(asc(schema.clientContracts.name));
+    return c.json(rows.map((k) => ({ id: k.id, name: k.name, hourlyRate: ((r) => (r == null ? null : r / 100))(hourlyRateOf(k, usual)) })));
   })
 
   /** The client's contacts with an email address (who a reply to the client can go to) */
@@ -406,6 +516,14 @@ export const projectsRoutes = new Hono<AppEnv>()
     if (p.leadId) await activeStaff([p.leadId]);
     if (p.memberIds) await activeStaff(p.memberIds);
     if (p.clientId) await clientExists(p.clientId);
+    const modeNow = p.billingMode ?? cur.billingMode;
+    const clientNow = p.clientId !== undefined ? p.clientId : cur.clientId;
+    const contractNow = p.contractId !== undefined ? p.contractId : cur.contractId;
+    if (modeNow === "contract") {
+      if (!contractNow) throw new HTTPException(400, { message: "contract_required" });
+      await contractOf(clientNow, contractNow);
+    }
+    if (modeNow === "special" && (p.hourlyRate !== undefined ? p.hourlyRate : cur.hourlyRateCents == null ? null : cur.hourlyRateCents / 100) == null) throw new HTTPException(400, { message: "rate_required" });
     // a project is finished once every milestone is
     if (p.status === "done" && cur.status !== "done") {
       const [open] = await db().select({ id: schema.projectMilestones.id }).from(schema.projectMilestones).where(and(eq(schema.projectMilestones.projectId, cur.id), sql`${schema.projectMilestones.status} <> 'done'`)).limit(1);
@@ -423,6 +541,9 @@ export const projectsRoutes = new Hono<AppEnv>()
         ...(p.dueDate !== undefined ? { dueDate: p.dueDate } : {}),
         ...(p.budgetHours !== undefined ? { budgetHoursX100: x100(p.budgetHours) } : {}),
         ...(p.billingMode !== undefined ? { billingMode: p.billingMode } : {}),
+        ...(p.contractId !== undefined || p.billingMode !== undefined ? { contractId: modeNow === "contract" ? contractNow : null } : {}),
+        ...(p.checkpointEveryDays !== undefined ? { checkpointEveryDays: p.checkpointEveryDays, ...(p.checkpointEveryDays === null ? { checkpointDate: null } : p.checkpointDate === undefined && !cur.checkpointDate ? { checkpointDate: nextCheckpoint(p.checkpointEveryDays, cur.startDate) } : {}) } : {}),
+        ...(p.checkpointDate !== undefined ? { checkpointDate: p.checkpointDate } : {}),
         ...(p.hourlyRate !== undefined ? { hourlyRateCents: cents(p.hourlyRate) } : {}),
         ...(p.fixedPrice !== undefined ? { fixedPriceCents: cents(p.fixedPrice) } : {}),
         updatedAt: new Date(),
@@ -459,11 +580,12 @@ export const projectsRoutes = new Hono<AppEnv>()
   // ── milestones ──
   .post("/:id/milestones", requirePermission("projects.edit"), async (c) => {
     const p = await loadProject(c.req.param("id"));
-    const m = await body(c, z.object({ name: zName, dueDate: zDay.nullable().optional(), notes: zText.optional(), budgetHours: zHours.nullable().optional() }));
+    const m = await body(c, z.object({ name: zName, startDate: zDay.nullable().optional(), dueDate: zDay.nullable().optional(), notes: zText.optional(), budgetHours: zHours.nullable().optional() }));
+    checkDays(m.startDate, m.dueDate);
     const [{ n }] = await db().select({ n: sql<number>`coalesce(max(${schema.projectMilestones.position}), -1)::int` }).from(schema.projectMilestones).where(eq(schema.projectMilestones.projectId, p.id));
     const [row] = await db()
       .insert(schema.projectMilestones)
-      .values({ projectId: p.id, name: m.name, dueDate: m.dueDate ?? null, notes: m.notes ?? "", budgetHoursX100: x100(m.budgetHours), position: n + 1 })
+      .values({ projectId: p.id, name: m.name, startDate: m.startDate ?? null, dueDate: m.dueDate ?? null, notes: m.notes ?? "", budgetHoursX100: x100(m.budgetHours), position: n + 1 })
       .returning();
     await db().update(schema.projects).set({ updatedAt: new Date() }).where(eq(schema.projects.id, p.id));
     return c.json(row, 201);
@@ -471,7 +593,8 @@ export const projectsRoutes = new Hono<AppEnv>()
   .patch("/:id/milestones/:mid", requirePermission("projects.edit"), async (c) => {
     const p = await loadProject(c.req.param("id"));
     const cur = await loadMilestone(p.id, c.req.param("mid"));
-    const m = await body(c, z.object({ name: zName.optional(), notes: zText.optional(), status: zMsStatus.optional(), dueDate: zDay.nullable().optional(), budgetHours: zHours.nullable().optional() }));
+    const m = await body(c, z.object({ name: zName.optional(), notes: zText.optional(), status: zMsStatus.optional(), startDate: zDay.nullable().optional(), dueDate: zDay.nullable().optional(), budgetHours: zHours.nullable().optional() }));
+    checkDays(m.startDate === undefined ? cur.startDate : m.startDate, m.dueDate === undefined ? cur.dueDate : m.dueDate);
     // a milestone is reached when its tasks are done: its status follows them. Only one with no task is marked by hand.
     if (m.status !== undefined) {
       const [{ n }] = await db().select({ n: sql<number>`count(*)::int` }).from(schema.projectTasks).where(eq(schema.projectTasks.milestoneId, cur.id));
@@ -483,6 +606,7 @@ export const projectsRoutes = new Hono<AppEnv>()
         ...(m.name !== undefined ? { name: m.name } : {}),
         ...(m.notes !== undefined ? { notes: m.notes } : {}),
         ...(m.status !== undefined ? { status: m.status, doneAt: m.status === "done" ? (cur.doneAt ?? new Date()) : null } : {}),
+        ...(m.startDate !== undefined ? { startDate: m.startDate } : {}),
         ...(m.dueDate !== undefined ? { dueDate: m.dueDate } : {}),
         ...(m.budgetHours !== undefined ? { budgetHoursX100: x100(m.budgetHours) } : {}),
         updatedAt: new Date(),
@@ -774,7 +898,9 @@ async function logTime(
   if (!editable(sheet.status)) throw new HTTPException(409, { message: "timesheet_locked" });
   const type = await labourType();
   const hoursX100 = Math.round(t.hours * 100);
-  const billable = t.billable ?? p.billingMode === "hourly";
+  const contract = p.billingMode === "contract" ? await contractOf(p.clientId, p.contractId) : null;
+  // billed unless the project is a fixed price, or its contract includes the hours (no hourly rate)
+  const billable = t.billable ?? (p.billingMode === "fixed" ? false : contract ? hourlyRateOf(contract, (await billingSettings()).rates.hourly) != null : true);
   const [row] = await db()
     .insert(schema.timesheetEntries)
     .values({
