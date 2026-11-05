@@ -113,7 +113,6 @@ export function TaskDialog({ taskId, defaults, onClose, onOpenTask }: { taskId: 
   const [notes, setNotes] = useState("");
   const [estimate, setEstimate] = useState("");
   const [item, setItem] = useState("");
-  const [subTitle, setSubTitle] = useState("");
   const [comment, setComment] = useState("");
   useEffect(() => {
     if (!task) return;
@@ -176,7 +175,7 @@ export function TaskDialog({ taskId, defaults, onClose, onOpenTask }: { taskId: 
 
   const body = (children: ReactNode) => (
     <Dialog open onOpenChange={(o) => !o && onClose()}>
-      <DialogContent className="flex h-[min(92vh,900px)] w-[min(96vw,1100px)] max-w-none flex-col gap-0 overflow-hidden p-0 sm:max-w-none">
+      <DialogContent className="flex h-[min(96vh,1100px)] w-[min(98vw,1500px)] max-w-none flex-col gap-0 overflow-hidden p-0 sm:max-w-none">
         <DialogTitle className="sr-only">{t("pipeline.task")}</DialogTitle>
         <DialogDescription className="sr-only">{t("pipeline.taskHint")}</DialogDescription>
         {children}
@@ -252,16 +251,6 @@ export function TaskDialog({ taskId, defaults, onClose, onOpenTask }: { taskId: 
               <Input type="time" disabled={!f.checkpointDate} value={f.checkpointTime} onChange={(e) => setF({ ...f, checkpointTime: e.target.value })} placeholder="17:00" />
             </Field>
           </div>
-          <Field label={t("pipeline.parent")} icon={Link2}>
-            <select className={selectCls} value={f.parentId} onChange={(e) => setF({ ...f, parentId: e.target.value })}>
-              <option value="">{t("pipeline.noParent")}</option>
-              {(open.data ?? []).map((p) => (
-                <option key={p.id} value={p.id}>
-                  {p.title}
-                </option>
-              ))}
-            </select>
-          </Field>
           <Field label={t("pipeline.instructions")}>
             <Textarea value={f.notes} onChange={(e) => setF({ ...f, notes: e.target.value })} rows={5} placeholder={t("pipeline.instructionsPlaceholder")} maxLength={8000} />
           </Field>
@@ -393,7 +382,7 @@ export function TaskDialog({ taskId, defaults, onClose, onOpenTask }: { taskId: 
         </div>
       </div>
 
-      <div className="grid min-h-0 flex-1 gap-0 lg:grid-cols-[minmax(0,1fr)_320px]">
+      <div className="grid min-h-0 flex-1 gap-0 lg:grid-cols-[minmax(0,1fr)_380px]">
         {/* the work: instructions, checklist, subtasks, comments */}
         <div className="min-h-0 space-y-6 overflow-y-auto px-6 py-5">
           <section className="space-y-1.5">
@@ -448,17 +437,6 @@ export function TaskDialog({ taskId, defaults, onClose, onOpenTask }: { taskId: 
                   </select>
                   <Input type="date" disabled={!editable} value={c.dueDate ?? ""} title={t("pipeline.itemDue")} className={cn("h-7 w-36 px-2 text-xs", !c.dueDate && "opacity-50")} onChange={(e) => void sub(() => api.patch(`/pipeline/tasks/${task.id}/checklist/${c.id}`, { dueDate: e.target.value || null }))} />
                   <Input type="time" disabled={!editable || !c.dueDate} value={c.dueTime ?? ""} title={t("pipeline.itemDueTime")} className="h-7 w-24 px-2 text-xs" onChange={(e) => void sub(() => api.patch(`/pipeline/tasks/${task.id}/checklist/${c.id}`, { dueTime: e.target.value || null }))} />
-                  {c.childTaskId ? (
-                    <button type="button" className="shrink-0 rounded border px-1.5 py-0.5 text-[10px] text-primary hover:bg-accent/40" onClick={() => onOpenTask?.(c.childTaskId!)}>
-                      {t("pipeline.itemOpenTask")}
-                    </button>
-                  ) : (
-                    editable && (
-                      <button type="button" className="shrink-0 rounded border px-1.5 py-0.5 text-[10px] text-muted-foreground hover:text-foreground" onClick={() => void sub(() => api.post(`/pipeline/tasks/${task.id}/checklist/${c.id}/task`, {}))}>
-                        {t("pipeline.itemMakeTask")}
-                      </button>
-                    )
-                  )}
                   {editable && (
                     <button type="button" className="opacity-0 transition-opacity group-hover:opacity-100" onClick={() => void sub(() => api.del(`/pipeline/tasks/${task.id}/checklist/${c.id}`))} aria-label={t("common.delete")}>
                       <Trash2 className="size-3.5 text-muted-foreground hover:text-destructive" />
@@ -500,47 +478,6 @@ export function TaskDialog({ taskId, defaults, onClose, onOpenTask }: { taskId: 
                 })
               }
             />
-          </section>
-
-          <section className="space-y-2">
-            <h3 className="flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
-              <Workflow className="size-3.5" /> {t("pipeline.subtasks")}
-              {task.subtasks.total > 0 && (
-                <span className="font-normal normal-case">
-                  {task.subtasks.done}/{task.subtasks.total}
-                </span>
-              )}
-            </h3>
-            <ul className="space-y-1">
-              {task.subtaskList.map((s) => (
-                <li key={s.id} className="flex items-center gap-2 rounded-lg px-1.5 py-1 hover:bg-accent/30">
-                  <Checkbox
-                    checked={s.status === "done"}
-                    disabled={!editable}
-                    onCheckedChange={(v) => void sub(() => api.patch(`/pipeline/tasks/${s.id}`, { status: v === true ? "done" : "todo" }))}
-                  />
-                  <button type="button" className={cn("min-w-0 flex-1 truncate text-left text-sm hover:underline", s.status === "done" && "text-muted-foreground line-through")} onClick={() => onOpenTask?.(s.id)}>
-                    {s.title}
-                  </button>
-                  {s.assignee && <span className="text-xs text-muted-foreground">{s.assignee}</span>}
-                </li>
-              ))}
-            </ul>
-            {editable && (
-              <form
-                className="flex gap-2"
-                onSubmit={(e) => {
-                  e.preventDefault();
-                  if (!subTitle.trim()) return;
-                  void sub(() => api.post("/pipeline/tasks", { title: subTitle.trim(), parentId: task.id, assigneeId: task.assigneeId, dueDate: task.dueDate })).then(() => setSubTitle(""));
-                }}
-              >
-                <Input value={subTitle} onChange={(e) => setSubTitle(e.target.value)} placeholder={t("pipeline.addSubtask")} className="h-9" maxLength={200} />
-                <Button type="submit" variant="outline" size="icon" className="size-9 shrink-0" disabled={!subTitle.trim()} aria-label={t("pipeline.addSubtask")}>
-                  <Plus className="size-4" />
-                </Button>
-              </form>
-            )}
           </section>
 
           <section className="space-y-2">
