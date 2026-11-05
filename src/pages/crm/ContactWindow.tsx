@@ -202,7 +202,7 @@ function NoAccount({ client, contact, onChange }: { client: CrmDetail; contact: 
   const { t } = useTranslation();
   const qc = useQueryClient();
   const make = useMutation({
-    mutationFn: () => api.put(`/crm/clients/${client.id}/contacts/${contact.id}/portal`, { enabled: true, role: "client-user" }),
+    mutationFn: (mode: "invite" | "create") => api.put(`/crm/clients/${client.id}/contacts/${contact.id}/portal`, { enabled: true, role: "client-user", mode }),
     onSuccess: () => {
       void qc.invalidateQueries({ queryKey: ["crm", "client", client.id] });
       void qc.invalidateQueries({ queryKey: ["admin"] });
@@ -215,9 +215,14 @@ function NoAccount({ client, contact, onChange }: { client: CrmDetail; contact: 
     <div className="max-w-xl rounded-2xl border border-dashed p-8 text-center">
       <p className="text-sm text-muted-foreground">{contact.email ? t("crm.contactWindow.noAccount") : t("crm.contactWindow.noEmail")}</p>
       {contact.email && (
-        <Button className="mt-4" disabled={make.isPending || !contact.active} onClick={() => make.mutate()}>
-          {make.isPending && <Loader2 className="size-4 animate-spin" />} {t("crm.contactWindow.makeAccount")}
-        </Button>
+        <div className="mt-4 flex flex-wrap justify-center gap-2">
+          <Button disabled={make.isPending || !contact.active} onClick={() => make.mutate("invite")}>
+            {make.isPending && <Loader2 className="size-4 animate-spin" />} {t("crm.contactWindow.makeAccount")}
+          </Button>
+          <Button variant="outline" disabled={make.isPending || !contact.active} onClick={() => make.mutate("create")}>
+            {t("crm.contactWindow.makeAccountQuiet")}
+          </Button>
+        </div>
       )}
     </div>
   );

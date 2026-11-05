@@ -645,7 +645,6 @@ describe("client portal: invoices and contracts of one's own company only", () =
     resetRateLimit("login:ip:unknown");
     const admin = await signIn("admin@akab.local");
     const { hashPassword } = await import("../server/lib/crypto.ts");
-    const { provisionPortalUsers } = await import("../server/lib/portalUsers.ts");
     const { saveStripeSettings } = await import("../server/lib/billing.ts");
     const { config: appConfig } = await import("../server/config.ts");
     const [adminRow] = await db().select().from(schema.users).where(eq(schema.users.email, "admin@akab.local"));
@@ -659,9 +658,8 @@ describe("client portal: invoices and contracts of one's own company only", () =
       ])
       .returning();
     await db().insert(schema.clientContacts).values({ clientId: B.id, firstName: "Béa", lastName: "Main", email: "bea@portail-b.example", isPrimary: true });
-    await provisionPortalUsers(A.id);
-    await provisionPortalUsers(B.id);
-    // every contact has an account; the main contact gets the accounting role, a plain employee does not
+    // accounts made by hand, one contact at a time (no email sent); the main contact gets the accounting role, a plain employee does not
+    for (const [cl, cc] of [[A.id, ca.id], [A.id, cb.id], [B.id, (await db().select().from(schema.clientContacts).where(eq(schema.clientContacts.clientId, B.id)))[0].id]] as const) expect((await admin.put(`/api/crm/clients/${cl}/contacts/${cc}/portal`, { enabled: true, mode: "create" })).status).toBe(200);
     expect((await admin.put(`/api/crm/clients/${A.id}/primary-contact`, { contactId: ca.id })).status).toBe(200);
     const roleOf = async (email: string) => {
       const [u] = await db().select({ slug: schema.roles.slug }).from(schema.users).innerJoin(schema.roles, eq(schema.roles.id, schema.users.roleId)).where(eq(schema.users.email, email));
@@ -721,13 +719,16 @@ describe("client portal: invoices and contracts of one's own company only", () =
     // staff are not clients here
     expect((await admin.get("/api/client-billing/invoices")).status).toBe(403);
 
-    // every company at once: the closed ones with a contact are opened
+    // every company at once: the closed ones that already have an account are opened — none is made
     const [C] = await db().insert(schema.clients).values({ name: "Zz Portail C inc." }).returning();
-    await db().insert(schema.clientContacts).values({ clientId: C.id, firstName: "Cé", lastName: "Main", email: "ce@portail-c.example", isPrimary: true });
+    const [D] = await db().insert(schema.clients).values({ name: "Zz Portail D inc." }).returning();
+    await db().insert(schema.users).values({ email: "ce@portail-c.example", name: "Cé Main", kind: "client", clientId: C.id, passwordHash: "x", mustChangePassword: true });
+    await db().insert(schema.clientContacts).values({ clientId: D.id, firstName: "Dé", lastName: "Main", email: "de@portail-d.example" });
     const opened = (await admin.post("/api/crm/portal/open-all", { sendWelcome: false })).json;
     expect(opened.companies).toBeGreaterThanOrEqual(1);
     expect((await db().select().from(schema.clients).where(eq(schema.clients.id, C.id)))[0]!.portalEnabled).toBe(true);
-    expect(await roleOf("ce@portail-c.example")).toBe("client-accounting");
+    expect((await db().select().from(schema.clients).where(eq(schema.clients.id, D.id)))[0]!.portalEnabled).toBe(false);
+    expect(await db().select().from(schema.users).where(eq(schema.users.email, "de@portail-d.example"))).toEqual([]);
   });
 });
 
@@ -3561,26 +3562,31 @@ describe("billing: settings, chart of accounts, QuickBooks, Stripe, payments", (
 });
 
 describe("client portal access for contacts", () => {
-  it("every contact has a dormant account (the company's portal is closed); given by hand: still dormant, no email; removed: turned off", async () => {
+  it("no account is made for a contact by itself; access is given by hand (invite or create) and opens the company's door; removed: turned off", async () => {
     resetRateLimit("login:ip:unknown");
     const admin = await signIn("admin@akab.local");
     const tech = await signIn("tech@akab.local");
     const client = (await admin.get("/api/crm/clients")).json.find((c: any) => c.autotaskId === 304);
     const contacts = (await admin.get(`/api/crm/clients/${client.id}/contacts`)).json;
-    // the sample contacts with an email were given their account, none can sign in while the company's portal is closed
-    expect(contacts.filter((x: any) => x.email && x.active).every((x: any) => x.portal?.dormant === true)).toBe(true);
+    // nobody was given an account on their own
+    expect(contacts.filter((x: any) => x.email && x.active).every((x: any) => x.portal == null)).toBe(true);
     const ct = contacts.find((x: any) => x.email && x.active);
     // giving access is an admin right (it creates a sign-in)
     expect((await tech.put(`/api/crm/clients/${client.id}/contacts/${ct.id}/portal`, { enabled: true })).status).toBe(403);
-    const r = await admin.put(`/api/crm/clients/${client.id}/contacts/${ct.id}/portal`, { enabled: true, role: "client-admin" });
+    // "create": the account, no email at all; the company's door opens
+    const r = await admin.put(`/api/crm/clients/${client.id}/contacts/${ct.id}/portal`, { enabled: true, role: "client-admin", mode: "create" });
     expect(r.status).toBe(200);
-    expect(r.json).toMatchObject({ enabled: true, dormant: true, welcomeSent: false });
+    expect(r.json).toMatchObject({ enabled: true, created: true, welcomeSent: false, dormant: false });
+    expect((await admin.get(`/api/crm/clients/${client.id}`)).json.portalEnabled).toBe(true);
     const [u] = await db().select().from(schema.users).where(sql`lower(${schema.users.email}) = ${ct.email.toLowerCase()}`);
     expect(u).toMatchObject({ kind: "client", clientId: client.id, active: true, mustChangePassword: true });
     expect(u.passwordHash).toBeTruthy();
-    // no welcome link while the company's portal is closed: it goes out when it is opened
     expect(await db().select().from(schema.passwordTokens).where(eq(schema.passwordTokens.userId, u.id))).toEqual([]);
-    expect((await admin.get(`/api/crm/clients/${client.id}/contacts`)).json.find((x: any) => x.id === ct.id).portal).toMatchObject({ pending: true, role: "client-admin", dormant: true });
+    expect((await admin.get(`/api/crm/clients/${client.id}/contacts`)).json.find((x: any) => x.id === ct.id).portal).toMatchObject({ pending: true, role: "client-admin" });
+    // "invite" (the default) sends the welcome link: the answer says whether it went (the mail server may be missing here)
+    const again = await admin.put(`/api/crm/clients/${client.id}/contacts/${ct.id}/portal`, { enabled: true, role: "client-user" });
+    expect(again.json).toMatchObject({ enabled: true, created: false });
+    expect(typeof again.json.welcomeSent).toBe("boolean");
 
     // no email, or an address already used by someone else: refused
     const noMail = await admin.post(`/api/crm/clients/${client.id}/contacts`, { firstName: "Sans", lastName: "Courriel" });
@@ -9321,7 +9327,7 @@ describe("tickets list: milestone column and sort, a team member shows their ope
 });
 
 describe("client portal: the company-wide switch", () => {
-  it("every contact with an email has a dormant account; nobody signs in until the company's portal is opened, and closing it closes everyone", async () => {
+  it("opening a company's portal makes no account; people are created one by one; closing it closes everyone", async () => {
     resetRateLimit("login:ip:unknown");
     const admin = await signIn("admin@akab.local");
     const tech = await signIn("tech@akab.local");
@@ -9330,45 +9336,40 @@ describe("client portal: the company-wide switch", () => {
     expect(client.portalEnabled).toBe(false);
     const anne = (await admin.post(`/api/crm/clients/${client.id}/contacts`, { firstName: "Anne", lastName: "Lavoie", email: "anne@depanneur.example" })).json;
     await admin.post(`/api/crm/clients/${client.id}/contacts`, { firstName: "Bob", lastName: "Sansmail" });
+    // contacts, even with an email, get no account
+    expect(await db().select().from(schema.users).where(eq(schema.users.clientId, client.id))).toEqual([]);
 
-    // the account exists (role Usager client, nobody knows the password), but only for who has an email
+    // only whoever manages client access opens the door; opening makes no account and sends nothing
+    expect((await tech.put(`/api/crm/clients/${client.id}/portal`, { enabled: true })).status).toBe(403);
+    expect((await admin.put(`/api/crm/clients/${client.id}/portal`, { enabled: true })).json).toMatchObject({ enabled: true, sent: 0, failed: 0 });
+    expect(await db().select().from(schema.users).where(eq(schema.users.clientId, client.id))).toEqual([]);
+    // the whole-company opening only takes companies that already have an account
+    expect((await admin.post("/api/crm/portal/open-all", {})).json).toMatchObject({ failed: 0 });
+
+    // Anne is created by hand (no email); once she has a password she signs in
+    expect((await admin.put(`/api/crm/clients/${client.id}/contacts/${anne.id}/portal`, { enabled: true, mode: "create" })).json).toMatchObject({ created: true, welcomeSent: false });
     const made = await db().select().from(schema.users).where(eq(schema.users.clientId, client.id));
     expect(made.map((u) => u.email)).toEqual(["anne@depanneur.example"]);
-    expect(made[0]).toMatchObject({ kind: "client", active: true, mustChangePassword: true });
     const [role] = await db().select().from(schema.roles).where(eq(schema.roles.id, made[0].roleId!));
-    // the company's only contact is its main contact: the accounting role (invoices and contracts)
     expect(role.slug).toBe("client-accounting");
-    const listed = (await admin.get(`/api/crm/clients/${client.id}/contacts`)).json;
-    expect(listed.find((x: any) => x.id === anne.id).portal).toMatchObject({ dormant: true, pending: true });
-
-    // closed: even with a known password, the person cannot sign in
     await db().update(schema.users).set({ passwordHash: ref.passwordHash, mustChangePassword: false }).where(eq(schema.users.id, made[0].id));
-    resetRateLimit("login:ip:unknown");
-    expect((await new Agent().post("/api/auth/login", { email: "anne@depanneur.example", password: PASSWORD })).status).toBe(401);
-
-    // only whoever manages client access opens it
-    expect((await tech.put(`/api/crm/clients/${client.id}/portal`, { enabled: true })).status).toBe(403);
-    expect((await admin.put(`/api/crm/clients/${client.id}/portal`, { enabled: true, sendWelcome: false })).json).toMatchObject({ enabled: true });
-    expect((await admin.get(`/api/crm/clients/${client.id}`)).json.portalEnabled).toBe(true);
     const anneSession = await signIn("anne@depanneur.example");
     expect((await anneSession.get("/api/portal/tickets")).status).toBe(200);
 
-    // a contact added later gets their account at once, ready for the open portal
+    // a contact added later, or an email added to one, makes no account
     await admin.post(`/api/crm/clients/${client.id}/contacts`, { firstName: "Carl", lastName: "Dubé", email: "carl@depanneur.example" });
-    expect((await db().select().from(schema.users).where(eq(schema.users.email, "carl@depanneur.example"))).length).toBe(1);
-    // an email added to a contact that had none
     const bob = (await admin.get(`/api/crm/clients/${client.id}/contacts`)).json.find((x: any) => x.firstName === "Bob");
     await admin.patch(`/api/crm/clients/${client.id}/contacts/${bob.id}`, { email: "bob@depanneur.example" });
-    expect((await db().select().from(schema.users).where(eq(schema.users.email, "bob@depanneur.example"))).length).toBe(1);
+    expect((await db().select().from(schema.users).where(eq(schema.users.clientId, client.id))).length).toBe(1);
 
     // closing it ends everyone's session and keeps the accounts
     expect((await admin.put(`/api/crm/clients/${client.id}/portal`, { enabled: false })).json).toEqual({ enabled: false });
     expect((await anneSession.get("/api/portal/tickets")).status).toBe(401);
     resetRateLimit("login:ip:unknown");
     expect((await new Agent().post("/api/auth/login", { email: "anne@depanneur.example", password: PASSWORD })).status).toBe(401);
-    expect((await db().select().from(schema.users).where(eq(schema.users.clientId, client.id))).length).toBe(3);
-    // opening again with the welcome emails never breaks (the mail server may be missing here)
-    expect((await admin.put(`/api/crm/clients/${client.id}/portal`, { enabled: true })).status).toBe(200);
+    expect((await db().select().from(schema.users).where(eq(schema.users.clientId, client.id))).length).toBe(1);
+    // opening again, asking for the welcome emails: never breaks (the mail server may be missing here)
+    expect((await admin.put(`/api/crm/clients/${client.id}/portal`, { enabled: true, sendWelcome: true })).status).toBe(200);
   });
 });
 describe("admin: client users and their rights", () => {

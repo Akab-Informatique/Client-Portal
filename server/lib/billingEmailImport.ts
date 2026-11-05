@@ -2,7 +2,6 @@ import crypto from "node:crypto";
 import { eq } from "drizzle-orm";
 import { db, schema } from "../db/index.ts";
 import { ensureSoleContact } from "./contactDefaults.ts";
-import { provisionPortalUsers } from "./portalUsers.ts";
 
 /** One line of the hand-over sheet: a client and the address(es) invoices go to. */
 export type BillingRow = { client: string; emails: string[] };
@@ -128,7 +127,6 @@ export async function importBillingEmails(rows: BillingRow[], opts: { apply: boo
     } else if (opts.apply) {
       await d.update(schema.clients).set({ invoice: { ...client.invoice, billingEmail: email, ...(billingContactId ? { billingContactId } : {}) }, updatedAt: new Date() }).where(eq(schema.clients.id, client.id));
     }
-    if (opts.apply && made.length) await provisionPortalUsers(client.id);
     if (opts.apply) await ensureSoleContact(client.id);
     out.push({ client: client.name, status, email, contactMade: made, note });
   }

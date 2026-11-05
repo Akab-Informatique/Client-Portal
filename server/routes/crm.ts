@@ -8,7 +8,7 @@ import { db, schema } from "../db/index.ts";
 import { auth, requirePermission, requireStaff, revokeUserSessions, type AppEnv } from "../lib/auth.ts";
 import { hashPassword, temporaryPassword } from "../lib/crypto.ts";
 import { forgetPasswordLinks, sendPasswordLink } from "../lib/passwordLinks.ts";
-import { provisionPortalUsers, sendPortalWelcomes } from "../lib/portalUsers.ts";
+import { sendPortalWelcomes } from "../lib/portalUsers.ts";
 import { clientRoleId, ensureClientRoles } from "../lib/clientRoles.ts";
 import { audit } from "../lib/audit.ts";
 import { rateLimit } from "../lib/http.ts";
@@ -373,7 +373,6 @@ export const crmRoutes = new Hono<AppEnv>()
     } else {
       await db().insert(schema.clientContacts).values({ clientId: client.id, ...fields });
     }
-    await provisionPortalUsers(client.id);
     await ensureSoleContact(client.id);
     await audit(a.user.id, "crm.contact_created", client.id, { name: `${p.firstName} ${p.lastName}` });
     const [row] = await db()
@@ -444,7 +443,6 @@ export const crmRoutes = new Hono<AppEnv>()
       void pushSoon("clients", client.id);
     }
     // an email just added, or a contact brought back: its account is made
-    if (!contact.userId && (p.email || p.active === true)) await provisionPortalUsers(client.id);
     if (p.active !== undefined || p.email !== undefined) await ensureSoleContact(client.id);
     await audit(a.user.id, "crm.contact_updated", client.id, { contact: contact.id, fields: Object.keys(p) });
     return c.json(row);
@@ -496,16 +494,15 @@ export const crmRoutes = new Hono<AppEnv>()
   })
 
   /**
-   * The client portal for the whole company (admin.clients). Every contact with
-   * an email already has an account (dormant); switching it on makes the ones
-   * missing and — unless told not to — emails each person who has not signed in
-   * a link to choose a password. Switching it off closes everyone's access at
-   * once (sessions end); the accounts and their roles are kept.
+   * The client portal for the whole company (admin.clients): the door. Switching it on makes NO account — people are
+   * invited or created one by one on their contact — and, only when asked (`sendWelcome`, off by default), emails the
+   * accounts that already exist and never signed in a link to choose a password. Switching it off closes everyone's
+   * access at once (sessions end); the accounts and their roles are kept.
    */
   .put("/clients/:id/portal", requirePermission("admin.clients"), async (c) => {
     const a = auth(c);
     const client = await clientOr404(c.req.param("id"));
-    const p = await body(c, z.object({ enabled: z.boolean(), sendWelcome: z.boolean().default(true) }));
+    const p = await body(c, z.object({ enabled: z.boolean(), sendWelcome: z.boolean().default(false) }));
     const d = db();
     if (!p.enabled) {
       await d.update(schema.clients).set({ portalEnabled: false, updatedAt: new Date() }).where(eq(schema.clients.id, client.id));
@@ -515,20 +512,19 @@ export const crmRoutes = new Hono<AppEnv>()
     }
     if (!client.active) throw new HTTPException(409, { message: "portal_inactive" });
     await d.update(schema.clients).set({ portalEnabled: true, updatedAt: new Date() }).where(eq(schema.clients.id, client.id));
-    const made = await provisionPortalUsers(client.id);
     const mail = p.sendWelcome ? await sendPortalWelcomes(client.id, c) : { sent: 0, failed: 0 };
-    await audit(a.user.id, "crm.portal_opened", client.id, { made, welcomeSent: mail.sent, welcomeFailed: mail.failed });
-    return c.json({ enabled: true, made, ...mail });
+    await audit(a.user.id, "crm.portal_opened", client.id, { welcomeSent: mail.sent, welcomeFailed: mail.failed });
+    return c.json({ enabled: true, ...mail });
   })
 
   /**
-   * The client portal of every company at once (admin.clients): each active company that has at least one active
-   * contact with an email is opened, the missing accounts are made and each person who never signed in gets the
-   * link to choose a password (unless sendWelcome is false). Companies already open are left as they are.
+   * The client portal of every company at once (admin.clients): each closed active company that already has a client
+   * account is opened (no account is made); the welcome email only goes out when `sendWelcome` is true (off by
+   * default). Companies already open are left as they are.
    */
   .post("/portal/open-all", requirePermission("admin.clients"), async (c) => {
     const a = auth(c);
-    const p = await body(c, z.object({ sendWelcome: z.boolean().default(true) }));
+    const p = await body(c, z.object({ sendWelcome: z.boolean().default(false) }));
     const d = db();
     const closed = await d
       .select({ id: schema.clients.id })
@@ -537,31 +533,28 @@ export const crmRoutes = new Hono<AppEnv>()
         and(
           eq(schema.clients.active, true),
           eq(schema.clients.portalEnabled, false),
-          sql`exists (select 1 from client_contacts cc where cc.client_id = ${schema.clients.id} and cc.active and cc.email is not null and cc.email <> '')`,
+          sql`exists (select 1 from users u where u.client_id = ${schema.clients.id} and u.kind = 'client' and u.active)`,
         ),
       );
-    let made = 0;
     let sent = 0;
     let failed = 0;
     for (const { id } of closed) {
       await d.update(schema.clients).set({ portalEnabled: true, updatedAt: new Date() }).where(eq(schema.clients.id, id));
-      made += await provisionPortalUsers(id);
       if (p.sendWelcome) {
         const m = await sendPortalWelcomes(id, c);
         sent += m.sent;
         failed += m.failed;
       }
     }
-    await audit(a.user.id, "crm.portal_opened_all", null, { companies: closed.length, made, welcomeSent: sent, welcomeFailed: failed });
-    return c.json({ companies: closed.length, made, sent, failed });
+    await audit(a.user.id, "crm.portal_opened_all", null, { companies: closed.length, welcomeSent: sent, welcomeFailed: failed });
+    return c.json({ companies: closed.length, sent, failed });
   })
 
   /**
-   * Client portal access for a contact (none by default). Given: an account
-   * with their email and a random password to change at first sign-in; they
-   * get the welcome email (a link to choose their password — the password
-   * itself is never emailed). Removed: the account is turned off, its
-   * sessions end.
+   * Client portal access for a contact (none by default), made by hand: `mode` "invite" (default) makes the account and
+   * sends the welcome email (a link to choose a password — the password itself is never emailed); "create" makes the
+   * account with no email (the link can be sent later). Giving access opens the company's portal when it was closed.
+   * Removed: the account is turned off, its sessions end.
    */
   .put("/clients/:id/contacts/:cid/portal", requirePermission("admin.clients"), async (c) => {
     const a = auth(c);
@@ -572,7 +565,7 @@ export const crmRoutes = new Hono<AppEnv>()
       .from(schema.clientContacts)
       .where(and(eq(schema.clientContacts.id, zUuid.parse(c.req.param("cid"))), eq(schema.clientContacts.clientId, client.id)));
     if (!contact) throw new HTTPException(404, { message: "not_found" });
-    const p = await body(c, z.object({ enabled: z.boolean(), role: z.enum(["client-user", "client-admin"]).default("client-user") }));
+    const p = await body(c, z.object({ enabled: z.boolean(), role: z.enum(["client-user", "client-admin"]).default("client-user"), mode: z.enum(["invite", "create"]).default("invite") }));
 
     if (!p.enabled) {
       if (contact.userId) {
@@ -614,11 +607,16 @@ export const crmRoutes = new Hono<AppEnv>()
         .returning();
     }
     await d.update(schema.clientContacts).set({ userId: user.id, updatedAt: new Date() }).where(eq(schema.clientContacts.id, contact.id));
-    // the company's portal still closed: the account is ready, the welcome goes out when it opens
-    const dormant = !client.portalEnabled;
-    const welcomeSent = dormant ? false : await sendPasswordLink(user, "welcome", c);
-    await audit(a.user.id, "crm.portal_access_given", user.id, { contact: contact.id, clientId: client.id, role: p.role, welcomeSent, dormant });
-    return c.json({ enabled: true, welcomeSent, dormant });
+    // the main and the billing contact get the accounting role
+    await syncContactRoles(client.id);
+    // giving a person access opens the company's door when it was closed
+    if (!client.portalEnabled) {
+      await d.update(schema.clients).set({ portalEnabled: true, updatedAt: new Date() }).where(eq(schema.clients.id, client.id));
+      await audit(a.user.id, "crm.portal_opened", client.id, { by: "contact", contact: contact.id });
+    }
+    const welcomeSent = p.mode === "invite" ? await sendPasswordLink(user, "welcome", c) : false;
+    await audit(a.user.id, "crm.portal_access_given", user.id, { contact: contact.id, clientId: client.id, role: p.role, mode: p.mode, welcomeSent });
+    return c.json({ enabled: true, welcomeSent, created: p.mode === "create", dormant: false });
   })
 
   // ── contract types (Admin › Types de contrats), for the contract forms

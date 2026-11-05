@@ -6,7 +6,6 @@ import { billingSettings } from "./billing.ts";
 import { revokeUserSessions } from "./auth.ts";
 import { forgetPasswordLinks } from "./passwordLinks.ts";
 import { ensureSoleContact } from "./contactDefaults.ts";
-import { provisionPortalUsers } from "./portalUsers.ts";
 
 /**
  * The CRM: the portal's own copy of the clients, their contacts and their
@@ -199,7 +198,6 @@ async function apply(data: CrmExport) {
   }
 
   // contacts brought in by the copy get their (dormant) client account
-  await provisionPortalUsers();
   return { clients: data.companies.length, contacts: nContacts, contracts: nContracts, invoices: nInvoices };
 }
 
@@ -226,7 +224,6 @@ export async function rememberContact(companyId: number, c: { id: string; firstN
     .insert(schema.clientContacts)
     .values({ clientId: client.id, autotaskId: c.id, firstName: c.firstName, lastName: c.lastName, email: c.email, phone: c.phone, mobile: c.mobile ?? null, title: c.title ?? null, syncedAt: new Date() })
     .onConflictDoNothing();
-  await provisionPortalUsers(client.id);
   await ensureSoleContact(client.id);
 }
 

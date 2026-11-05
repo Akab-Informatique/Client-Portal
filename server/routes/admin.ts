@@ -1,7 +1,7 @@
 import { revokeDevices } from "../lib/pushAuth.ts";
 import { Hono, type Context } from "hono";
 import { HTTPException } from "hono/http-exception";
-import { and, asc, desc, eq, inArray, sql } from "drizzle-orm";
+import { and, asc, desc, eq, inArray, isNull, sql } from "drizzle-orm";
 import { z } from "zod";
 import { db, schema } from "../db/index.ts";
 import { config } from "../config.ts";
@@ -13,7 +13,6 @@ import { mailConfigured } from "../lib/mail.ts";
 import { forgetPasswordLinks, sendPasswordLink } from "../lib/passwordLinks.ts";
 import { ticketSource } from "../lib/ticketSource.ts";
 import { rememberContact } from "../lib/crm.ts";
-import { provisionPortalUsers } from "../lib/portalUsers.ts";
 import { ensureClientRoles } from "../lib/clientRoles.ts";
 import { body, zEmail, zName, zOptText, zPhone, zUuid } from "../lib/validate.ts";
 import {
@@ -284,7 +283,7 @@ async function linkContactOf(client: typeof schema.clients.$inferSelect, user: U
       await d.insert(schema.clientContacts).values({ clientId: client.id, ...fields });
     }
     // the account that was just made is the one the new contact is tied to
-    await provisionPortalUsers(client.id);
+    await d.update(schema.clientContacts).set({ userId: user.id, updatedAt: new Date() }).where(and(eq(schema.clientContacts.clientId, client.id), sql`lower(${schema.clientContacts.email}) = ${email}`, isNull(schema.clientContacts.userId)));
   } catch (e) {
     console.warn("[admin] contact of a client user:", e instanceof Error ? e.message : e);
   }

@@ -24,15 +24,14 @@ import { NewUserDialog, UserSheet, UserStatusBadges } from "./UserPanels";
 export type ClientRef = { id: string; name: string; active: boolean; portalEnabled: boolean };
 
 /**
- * The client portal for the whole company. Every contact with an email already
- * has an account; nobody can sign in until this is switched on, which also sends
- * each of them the welcome email (unless unticked). Off again closes everyone.
+ * The client portal for the whole company: the door. Opening it makes no account (people are invited or created
+ * one by one from their contact) and sends no email unless ticked; off again closes everyone.
  */
-export function CompanyPortalSwitch({ client, ready, noEmail = 0, onChange }: { client: ClientRef; ready: number; noEmail?: number; onChange?: () => void }) {
+export function CompanyPortalSwitch({ client, ready, onChange }: { client: ClientRef; ready: number; onChange?: () => void }) {
   const { t } = useTranslation();
   const confirm = useConfirm();
   const qc = useQueryClient();
-  const [welcome, setWelcome] = useState(true);
+  const [welcome, setWelcome] = useState(false);
   const set = useMutation({
     mutationFn: (enabled: boolean) => api.put<{ enabled: boolean; sent?: number; failed?: number }>(`/crm/clients/${client.id}/portal`, { enabled, sendWelcome: welcome }),
     onSuccess: (r) => {
@@ -41,7 +40,7 @@ export function CompanyPortalSwitch({ client, ready, noEmail = 0, onChange }: { 
       onChange?.();
       if (!r.enabled) toast.success(t("crm.portal.company.closed"));
       else if (r.failed) toast.warning(t("crm.portal.company.openedMailFailed", { sent: r.sent ?? 0, failed: r.failed }));
-      else toast.success(t("crm.portal.company.opened", { count: r.sent ?? 0 }));
+      else toast.success(r.sent ? t("crm.portal.company.opened", { count: r.sent }) : t("crm.portal.company.openedPlain"));
     },
     onError: (e) => toast.error(e instanceof ApiError && e.code === "portal_inactive" ? t("crm.portal.errors.portal_inactive") : t("common.error")),
   });
@@ -61,7 +60,6 @@ export function CompanyPortalSwitch({ client, ready, noEmail = 0, onChange }: { 
           <p className="text-sm font-medium">{t("crm.portal.company.title")}</p>
           <p className="mt-0.5 text-xs text-muted-foreground">
             {client.portalEnabled ? t("crm.portal.company.onText", { count: ready }) : t("crm.portal.company.offText", { count: ready })}
-            {noEmail > 0 && <span className="text-amber-400"> {t("crm.portal.company.noEmail", { count: noEmail })}</span>}
           </p>
           {!client.portalEnabled && (
             <label className="mt-2 flex items-center gap-2 text-xs text-muted-foreground">
@@ -206,7 +204,7 @@ function OpenAllPortals({ closed }: { closed: number }) {
   const confirm = useConfirm();
   const can = useCan();
   const run = useMutation({
-    mutationFn: () => api.post<{ companies: number; made: number; sent: number; failed: number }>("/crm/portal/open-all", { sendWelcome: true }),
+    mutationFn: () => api.post<{ companies: number; made: number; sent: number; failed: number }>("/crm/portal/open-all", { sendWelcome: false }),
     onSuccess: (r) => {
       void qc.invalidateQueries();
       toast.success(t("admin.clientAccess.openAllDone", { companies: r.companies, sent: r.sent }));

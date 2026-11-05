@@ -15,7 +15,6 @@ import { LOCAL_PREFIX, NATIVE_ID_START } from "./ids.ts";
 import { SourceError, defaultChargeOptions, sourceOptions, type Company, type Contact, type Product, type TicketSource } from "./ticketSource.ts";
 import { localCompanies, localContacts, localContracts } from "./crm.ts";
 import { ensureSoleContact } from "./contactDefaults.ts";
-import { provisionPortalUsers } from "./portalUsers.ts";
 
 const digits = (s: string | null | undefined) => (s ?? "").replace(/\D/g, "");
 const newContactId = () => `${LOCAL_PREFIX}${crypto.randomUUID()}`;
@@ -114,7 +113,6 @@ export const localBase: TicketSource = {
     await db()
       .insert(schema.clientContacts)
       .values({ clientId: client.id, autotaskId: id, firstName: p.firstName, lastName: p.lastName, email: p.email, phone: p.phone, mobile: p.mobile ?? null, title: p.title ?? null, syncedAt: new Date() });
-    await provisionPortalUsers(client.id);
     await ensureSoleContact(client.id);
     return { id, companyId, name: `${p.firstName} ${p.lastName}`.trim(), email: p.email, phone: p.phone };
   },

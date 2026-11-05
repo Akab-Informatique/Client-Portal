@@ -1057,20 +1057,21 @@ function PortalAccess({ clientId, contact: c, onChange }: { clientId: string; co
   const can = useCan();
   const confirm = useConfirm();
   const set = useMutation({
-    mutationFn: (p: { enabled: boolean; role?: string }) => api.put<{ enabled: boolean; welcomeSent?: boolean; dormant?: boolean }>(`/crm/clients/${clientId}/contacts/${c.id}/portal`, p),
+    mutationFn: (p: { enabled: boolean; role?: string; mode?: "invite" | "create" }) => api.put<{ enabled: boolean; welcomeSent?: boolean; dormant?: boolean; created?: boolean }>(`/crm/clients/${clientId}/contacts/${c.id}/portal`, p),
     onSuccess: (r) => {
       onChange();
       if (!r.enabled) toast.success(t("crm.portal.removed"));
-      else if (r.dormant) toast.info(t("crm.portal.givenDormant"));
+      else if (r.created) toast.success(t("crm.portal.created", { email: c.email }));
       else if (r.welcomeSent) toast.success(t("crm.portal.given", { email: c.email }));
       else toast.warning(t("crm.portal.givenNoEmail"));
     },
     onError: (e) => toast.error(e instanceof ApiError && ["portal_no_email", "email_taken", "portal_inactive"].includes(e.code) ? t(`crm.portal.errors.${e.code}`) : t("common.error")),
   });
   const manage = can("admin.clients") && c.active;
-  const give = async (role: string) => {
-    if (await confirm({ title: t("crm.portal.giveTitle", { name: `${c.firstName} ${c.lastName}` }), description: t("crm.portal.giveText", { email: c.email ?? "—" }), confirmLabel: t("crm.portal.give") }))
-      set.mutate({ enabled: true, role });
+  const give = async (role: string, mode: "invite" | "create" = "invite") => {
+    const name = `${c.firstName} ${c.lastName}`;
+    if (await confirm(mode === "invite" ? { title: t("crm.portal.giveTitle", { name }), description: t("crm.portal.giveText", { email: c.email ?? "—" }), confirmLabel: t("crm.portal.give") } : { title: t("crm.portal.createTitle", { name }), description: t("crm.portal.createText", { email: c.email ?? "—" }), confirmLabel: t("crm.portal.createUser") }))
+      set.mutate({ enabled: true, role, mode });
   };
   if (!c.portal && !manage) return null;
   return (
@@ -1105,6 +1106,13 @@ function PortalAccess({ clientId, contact: c, onChange }: { clientId: string; co
             <DropdownMenuLabel className="text-xs">{t("crm.portal.title")}</DropdownMenuLabel>
             <DropdownMenuItem onSelect={() => void give("client-user")}>{c.portal ? t("crm.portal.resendUser") : t("crm.portal.asUser")}</DropdownMenuItem>
             <DropdownMenuItem onSelect={() => void give("client-admin")}>{c.portal ? t("crm.portal.resendAdmin") : t("crm.portal.asAdmin")}</DropdownMenuItem>
+            {!c.portal && (
+              <>
+                <DropdownMenuSeparator />
+                <DropdownMenuItem onSelect={() => void give("client-user", "create")}>{t("crm.portal.createUser")}</DropdownMenuItem>
+                <DropdownMenuItem onSelect={() => void give("client-admin", "create")}>{t("crm.portal.createAdmin")}</DropdownMenuItem>
+              </>
+            )}
             {c.portal && (
               <>
                 <DropdownMenuSeparator />
