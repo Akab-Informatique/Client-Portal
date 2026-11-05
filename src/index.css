@@ -509,21 +509,34 @@
     --timer-angle: 360deg;
   }
 }
-/* The drawer arrow of the minimized tickets: minimal, and an electric edge runs around it while something is inside */
-.dock-arrow {
+/* The floating logo of the minimized tickets: plain when empty, a soft ring of light when it holds tickets, the electric edge when a timer runs */
+.dock-logo-plain {
+  box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.08);
+}
+.dock-logo-calm {
+  box-shadow: 0 0 0 1.5px rgba(255, 206, 26, 0.55), 0 0 14px 2px rgba(255, 206, 26, 0.3);
+  animation: dock-calm 3s ease-in-out infinite;
+}
+@keyframes dock-calm {
+  50% {
+    box-shadow: 0 0 0 1.5px rgba(255, 206, 26, 0.3), 0 0 8px 1px rgba(255, 206, 26, 0.15);
+  }
+}
+.dock-logo-live {
   position: fixed;
 }
-.dock-arrow-live::before {
+.dock-logo-live::before {
   content: "";
   position: absolute;
-  inset: -1.5px -1.5px -1.5px 0;
-  border-radius: 0 10px 10px 0;
+  inset: -2px;
+  border-radius: 18px;
   background: conic-gradient(from var(--timer-angle, 0deg), transparent 0 18%, #ffe24a 26%, transparent 34% 52%, #7dd3fc 58%, transparent 66%);
-  filter: drop-shadow(0 0 5px rgba(255, 206, 26, 0.85)) drop-shadow(0 0 10px rgba(125, 211, 252, 0.4));
+  filter: drop-shadow(0 0 6px rgba(255, 206, 26, 0.85)) drop-shadow(0 0 12px rgba(125, 211, 252, 0.45));
   animation: timer-flicker 1.7s ease-in-out infinite, timer-angle 1.4s linear infinite;
 }
 @media (prefers-reduced-motion: reduce) {
-  .dock-arrow-live::before {
+  .dock-logo-calm,
+  .dock-logo-live::before {
     animation: none;
   }
 }

@@ -1,9 +1,10 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent, type ReactNode } from "react";
 import { useTranslation } from "react-i18next";
 import { AnimatePresence, motion } from "motion/react";
-import { ChevronRight, Hexagon, Maximize2, PanelBottom, RectangleHorizontal, Ticket, X } from "lucide-react";
+import { Hexagon, Maximize2, PanelBottom, RectangleHorizontal, Ticket, X } from "lucide-react";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { cn } from "@/lib/utils";
+import { LogoMark } from "@/components/brand/Logo";
 import { TicketOverlay } from "./TicketPanel";
 import { CLOSE_TICKET_EVENT, DockTimer, TimersProvider, useTicketTimerAuto, useTimers, type Timer } from "./timers";
 import { ReminderWatcher } from "./Planning";
@@ -175,7 +176,7 @@ function Dock({
     window.addEventListener("keydown", on);
     return () => window.removeEventListener("keydown", on);
   }, [drawer]);
-  if (hidden || items.length === 0) return null;
+  if (hidden) return null;
   const item = (d: Docked) => {
     const timer = list.find((x) => x.ticketId === d.id);
     const p = places[d.id] ?? {};
@@ -200,24 +201,12 @@ function Dock({
   // glows electric while there is something in it.
   return (
     <>
-      <button
-        type="button"
-        onClick={() => setDrawer((o) => !o)}
-        aria-expanded={drawer}
-        aria-label={t("tickets.dockDrawer", { count: items.length })}
-        title={t("tickets.dockDrawer", { count: items.length })}
-        className={cn("dock-arrow group fixed bottom-6 left-0 z-[42] h-11 w-[18px] transition-transform", !drawer && "dock-arrow-live", drawer && "translate-x-0")}
-      >
-        <span className="relative flex size-full items-center justify-center rounded-r-lg border border-l-0 border-[color:var(--gold)]/40 bg-popover/95 text-primary backdrop-blur">
-          <ChevronRight className={cn("size-3.5 transition-transform duration-200", drawer && "rotate-90")} />
-        </span>
-        {!drawer && items.length > 1 && <span className="absolute -right-1 -top-1 flex size-3.5 items-center justify-center rounded-full bg-primary font-mono text-[9px] font-bold leading-none text-[#1a1204]">{items.length}</span>}
-      </button>
-      {drawer && <button type="button" aria-hidden tabIndex={-1} className="fixed inset-0 z-[39] cursor-default" onClick={() => setDrawer(false)} />}
+      <DockLogo count={items.length} running={list.some((x) => x.state === "running")} open={drawer} onToggle={() => items.length > 0 && setDrawer((o) => !o)} label={t("tickets.dockDrawer", { count: items.length })} />
+      {drawer && items.length > 0 && <button type="button" aria-hidden tabIndex={-1} className="fixed inset-0 z-[39] cursor-default" onClick={() => setDrawer(false)} />}
       <div
         className={cn(
           "pointer-events-none fixed inset-x-0 bottom-0 z-40 transition-transform duration-300 ease-out",
-          drawer ? "translate-y-0" : "translate-y-full",
+          drawer && items.length > 0 ? "translate-y-0" : "translate-y-full",
         )}
         aria-label={t("tickets.dock")}
         aria-hidden={!drawer}
@@ -405,6 +394,74 @@ function DockItem({
         </div>
       )}
     </motion.div>
+  );
+}
+
+/**
+ * The AKAB logo, floating: drag it wherever you want (kept on this computer); a click opens or closes the drawer of
+ * minimized tickets. Plain when the drawer is empty, a soft ring of light when it holds tickets, and the electric
+ * edge of a running timer when one of them has its timer going.
+ */
+const LOGO_KEY = "akab.tickets.dock.logo";
+function DockLogo({ count, running, open, onToggle, label }: { count: number; running: boolean; open: boolean; onToggle: () => void; label: string }) {
+  const [pos, setPos] = useState<{ x: number; y: number }>(() => {
+    try {
+      const v = JSON.parse(localStorage.getItem(LOGO_KEY) ?? "null") as { x: number; y: number } | null;
+      if (v && Number.isFinite(v.x) && Number.isFinite(v.y)) return v;
+    } catch {
+      /* default place */
+    }
+    return { x: 14, y: Math.max(8, window.innerHeight - 84) };
+  });
+  const ref = useRef<HTMLButtonElement>(null);
+  const drag = useRef<{ dx: number; dy: number; sx: number; sy: number; moved: boolean } | null>(null);
+  const [, redraw] = useState(0);
+  useEffect(() => {
+    const on = () => redraw((n) => n + 1);
+    window.addEventListener("resize", on);
+    return () => window.removeEventListener("resize", on);
+  }, []);
+  const at = clamp(pos.x, pos.y, 64, 44);
+  return (
+    <button
+      ref={ref}
+      type="button"
+      title={label}
+      aria-label={label}
+      aria-expanded={open}
+      onPointerDown={(e) => {
+        if (e.button !== 0) return;
+        const r = ref.current!.getBoundingClientRect();
+        drag.current = { dx: e.clientX - r.left, dy: e.clientY - r.top, sx: e.clientX, sy: e.clientY, moved: false };
+        e.currentTarget.setPointerCapture(e.pointerId);
+      }}
+      onPointerMove={(e) => {
+        const g = drag.current;
+        if (!g || (!g.moved && Math.hypot(e.clientX - g.sx, e.clientY - g.sy) < 5)) return;
+        g.moved = true;
+        setPos(clamp(e.clientX - g.dx, e.clientY - g.dy, 64, 44));
+      }}
+      onPointerUp={() => {
+        const g = drag.current;
+        drag.current = null;
+        if (!g) return;
+        if (g.moved) {
+          try {
+            localStorage.setItem(LOGO_KEY, JSON.stringify(pos));
+          } catch {
+            /* this page only */
+          }
+        } else onToggle();
+      }}
+      onPointerCancel={() => (drag.current = null)}
+      style={{ left: at.x, top: at.y }}
+      className={cn("fixed z-[43] flex h-11 w-16 touch-none select-none items-center justify-center rounded-2xl transition-shadow", count > 0 ? "cursor-pointer" : "cursor-grab", running ? "dock-logo-live" : count > 0 ? "dock-logo-calm" : "dock-logo-plain")}
+    >
+      <span className="relative flex size-full items-center justify-center rounded-2xl bg-popover/90 backdrop-blur">
+        <LogoMark className={cn("h-6 w-auto", count === 0 && "opacity-70")} />
+      </span>
+      {count > 1 && <span className="absolute -right-1 -top-1 flex size-4 items-center justify-center rounded-full bg-primary font-mono text-[10px] font-bold leading-none text-[#1a1204]">{count}</span>}
+    </button>
   );
 }
 
