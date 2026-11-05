@@ -2357,6 +2357,9 @@ export const pipelineChecklist = pgTable(
     dueTime: text("due_time"),
     priority: text("priority", { enum: ["low", "normal", "high", "urgent"] }).notNull().default("normal"),
     /** Who this item is for (they are told), and the subtask made from it, if any */
+    /** A day before which the item cannot be ticked, and the item it waits for (same task) */
+    startDate: text("start_date"),
+    dependsOnId: uuid("depends_on_id").references((): AnyPgColumn => pipelineChecklist.id, { onDelete: "set null" }),
     assigneeId: uuid("assignee_id").references(() => users.id, { onDelete: "set null" }),
     childTaskId: uuid("child_task_id").references(() => pipelineTasks.id, { onDelete: "set null" }),
     position: integer("position").notNull().default(0),

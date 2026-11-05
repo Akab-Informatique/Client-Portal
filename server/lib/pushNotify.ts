@@ -55,7 +55,7 @@ export function pushText(type: NotificationType, data: Record<string, unknown>, 
       body = join(data.number, data.title, data.company);
       break;
     case "pipeline.assigned":
-      body = join(data.by, data.title);
+      body = join(data.by, data.title, data.message);
       break;
     case "message.new":
       body = join(data.author, data.title);

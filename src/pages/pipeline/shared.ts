@@ -55,7 +55,7 @@ export type TaskCard = {
 
 export type TaskFull = TaskCard & {
   notes: string;
-  checklistItems: { id: string; text: string; done: boolean; position: number; dueDate: string | null; dueTime: string | null; priority: TaskPriority; assigneeId: string | null; childTaskId: string | null }[];
+  checklistItems: { id: string; text: string; done: boolean; position: number; dueDate: string | null; dueTime: string | null; priority: TaskPriority; assigneeId: string | null; startDate: string | null; dependsOnId: string | null }[];
   comments: { id: string; author: string; text: string; createdAt: string }[];
   subtaskList: TaskCard[];
   fileList: { id: string; name: string; size: number; contentType: string; createdAt: string; by: string | null }[];

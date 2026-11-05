@@ -14,6 +14,14 @@ import { notify, usersWith } from "../lib/notify.ts";
 import { calendarOfDay, buildPipelineView, maskPhone, morningRun, phoneOf, PipelineError, pipelineSettings, planOf, buildPlan, savePipelineSettings, sendTestSms, type PipelineSettings, resetDailyTasks, resetDayAdds } from "../lib/pipeline.ts";
 import { ticketSource } from "../lib/ticketSource.ts";
 import { todayQc } from "../lib/timesheets.ts";
+import { notifyTechs } from "../lib/techNotify.ts";
+
+/** An item of this task, or 400 */
+async function itemOf(taskId: string, itemId: string) {
+  const [it] = await db().select().from(schema.pipelineChecklist).where(and(eq(schema.pipelineChecklist.id, itemId), eq(schema.pipelineChecklist.taskId, taskId)));
+  if (!it) throw new HTTPException(400, { message: "item_invalid" });
+  return it;
+}
 import { body, zUuid } from "../lib/validate.ts";
 import { nextAfter, type Recurrence } from "../../shared/recurrence.ts";
 
@@ -214,7 +222,19 @@ async function spawnNext(done: Task, by: string): Promise<string | null> {
     })
     .returning();
   const items = await db().select().from(schema.pipelineChecklist).where(eq(schema.pipelineChecklist.taskId, done.id)).orderBy(asc(schema.pipelineChecklist.position));
-  if (items.length) await db().insert(schema.pipelineChecklist).values(items.map((i, n) => ({ taskId: row.id, text: i.text, priority: i.priority, position: n })));
+  if (items.length) {
+    // the steps come back fresh, with their person, and their days moved by as much as the task's due day
+    const shift = done.dueDate ? dayDiff(due, done.dueDate) : 0;
+    const move = (d: string | null) => (d && shift ? plusDays(d, shift) : d);
+    const made = await db()
+      .insert(schema.pipelineChecklist)
+      .values(items.map((i, n) => ({ taskId: row.id, text: i.text, priority: i.priority, assigneeId: i.assigneeId, startDate: move(i.startDate), dueDate: move(i.dueDate), dueTime: i.dueDate ? i.dueTime : null, position: n })))
+      .returning({ id: schema.pipelineChecklist.id });
+    for (const [n, i] of items.entries()) {
+      const at = i.dependsOnId ? items.findIndex((x) => x.id === i.dependsOnId) : -1;
+      if (at >= 0) await db().update(schema.pipelineChecklist).set({ dependsOnId: made[at].id }).where(eq(schema.pipelineChecklist.id, made[n].id));
+    }
+  }
   const viewers = await db().select({ id: schema.pipelineTaskViewers.userId }).from(schema.pipelineTaskViewers).where(eq(schema.pipelineTaskViewers.taskId, done.id));
   if (viewers.length) await db().insert(schema.pipelineTaskViewers).values(viewers.map((v) => ({ taskId: row.id, userId: v.id })));
   await audit(by, "pipeline.task_recurred", row.id, { from: done.id, due });
@@ -432,7 +452,7 @@ export const pipelineRoutes = new Hono<AppEnv>()
         viewerIds: z.array(zUuid).max(30).default([]),
         recurrence: zRecurrence.nullable().default(null),
         ticketId: z.number().int().positive().nullable().default(null),
-        checklist: z.array(z.union([z.string().trim().min(1).max(300), z.object({ text: z.string().trim().min(1).max(300), priority: zPriority.default("normal"), dueDate: zDate.nullable().default(null), dueTime: zHm.nullable().default(null), assigneeId: zUuid.nullable().default(null) })])).max(60).default([]),
+        checklist: z.array(z.union([z.string().trim().min(1).max(300), z.object({ text: z.string().trim().min(1).max(300), priority: zPriority.default("normal"), dueDate: zDate.nullable().default(null), dueTime: zHm.nullable().default(null), assigneeId: zUuid.nullable().default(null), startDate: zDate.nullable().default(null), dependsOn: z.number().int().min(0).nullable().default(null) })])).max(60).default([]),
       }),
     );
     if (p.assigneeId) await activeStaff(p.assigneeId);
@@ -443,11 +463,18 @@ export const pipelineRoutes = new Hono<AppEnv>()
     const [{ max }] = await db().select({ max: sql<number>`coalesce(max(${schema.pipelineTasks.position}), 0)`.mapWith(Number) }).from(schema.pipelineTasks);
     const [row] = await db()
       .insert(schema.pipelineTasks)
-      .values({ title: p.title, notes: p.notes, priority: p.priority, assigneeId: p.assigneeId, createdBy: a.user.id, parentId: p.parentId, blockedById: p.blockedById, dueDate: p.kind === "normal" ? p.dueDate : null, dueTime: p.dueDate && p.kind === "normal" ? p.dueTime : null, kind: p.kind, lastResetOn: p.kind === "daily" ? todayQc() : null, remindEveryDays: p.kind === "continuous" ? p.remindEveryDays : null, lastCheckedOn: p.kind === "continuous" && p.remindEveryDays ? todayQc() : null, startDate: p.startDate, startTime: p.startDate ? p.startTime : null, checkpointDate: p.checkpointDate, checkpointTime: p.checkpointDate ? (p.checkpointTime ?? "17:00") : null, estimateMinutes: p.estimateMinutes, tags: [...new Set(p.tags)], visibility: p.visibility, recurrence: p.kind === "normal" ? p.recurrence : null, ...ticket, position: max + 1 })
+      .values({ title: p.title, notes: p.notes, priority: p.priority, assigneeId: p.assigneeId, createdBy: a.user.id, parentId: p.parentId, blockedById: p.blockedById, dueDate: p.kind === "normal" ? p.dueDate : null, dueTime: p.dueDate && p.kind === "normal" ? p.dueTime : null, kind: p.kind, lastResetOn: p.kind === "daily" ? todayQc() : null, remindEveryDays: p.kind === "continuous" ? p.remindEveryDays : null, lastCheckedOn: p.kind === "continuous" && p.remindEveryDays ? todayQc() : null, startDate: p.startDate, startTime: p.startDate ? p.startTime : null, checkpointDate: p.checkpointDate, checkpointTime: p.checkpointDate ? (p.checkpointTime ?? "17:00") : null, estimateMinutes: p.kind === "continuous" ? null : p.estimateMinutes, tags: [...new Set(p.tags)], visibility: p.visibility, recurrence: p.kind === "normal" ? p.recurrence : null, ...ticket, position: max + 1 })
       .returning();
     if (p.visibility === "selected") await setViewers(row.id, p.viewerIds);
     if (row.recurrence) await db().update(schema.pipelineTasks).set({ seriesId: row.id }).where(eq(schema.pipelineTasks.id, row.id));
-    if (p.checklist.length) await db().insert(schema.pipelineChecklist).values(p.checklist.map((it, i) => (typeof it === "string" ? { taskId: row.id, text: it, position: i } : { taskId: row.id, text: it.text, priority: it.priority, dueDate: it.dueDate, dueTime: it.dueDate ? (it.dueTime ?? "17:00") : null, assigneeId: it.assigneeId, position: i })));
+    if (p.checklist.length) {
+      const made = await db()
+        .insert(schema.pipelineChecklist)
+        .values(p.checklist.map((it, i) => (typeof it === "string" ? { taskId: row.id, text: it, position: i } : { taskId: row.id, text: it.text, priority: it.priority, dueDate: it.dueDate, dueTime: it.dueDate ? (it.dueTime ?? "17:00") : null, startDate: it.startDate, assigneeId: it.assigneeId, position: i })))
+        .returning({ id: schema.pipelineChecklist.id });
+      // an item can wait for an EARLIER one of the same list
+      for (const [i, it] of p.checklist.entries()) if (typeof it !== "string" && it.dependsOn !== null && it.dependsOn < i) await db().update(schema.pipelineChecklist).set({ dependsOnId: made[it.dependsOn].id }).where(eq(schema.pipelineChecklist.id, made[i].id));
+    }
     for (const it of p.checklist) if (typeof it !== "string" && it.assigneeId && it.assigneeId !== a.user.id && it.assigneeId !== row.assigneeId) await notify([it.assigneeId], { type: "pipeline.assigned", data: { by: a.user.name, title: it.text, taskId: row.id }, link: `/pipeline?task=${row.id}` });
     if (row.assigneeId && row.assigneeId !== a.user.id) await notify([row.assigneeId], { type: "pipeline.assigned", data: { by: a.user.name, title: row.title, taskId: row.id }, link: `/pipeline?task=${row.id}` });
     await audit(a.user.id, "pipeline.task_created", row.id, { title: row.title, assignee: row.assigneeId });
@@ -500,6 +527,7 @@ export const pipelineRoutes = new Hono<AppEnv>()
         set.recurrence = null;
       }
       if (p.kind === "daily") set.lastResetOn = todayQc();
+      if (p.kind === "continuous") set.estimateMinutes = null;
     }
     // the reminder belongs to a continuous task; a new value starts counting today
     if (kindNow !== "continuous") {
@@ -536,7 +564,7 @@ export const pipelineRoutes = new Hono<AppEnv>()
       set.recurrence = p.recurrence;
       if (p.recurrence && !cur.seriesId) set.seriesId = cur.id;
     }
-    if (p.estimateMinutes !== undefined) set.estimateMinutes = p.estimateMinutes;
+    if (p.estimateMinutes !== undefined) set.estimateMinutes = kindNow === "continuous" ? null : p.estimateMinutes;
     if (p.assigneeId !== undefined) {
       if (p.assigneeId) await activeStaff(p.assigneeId);
       set.assigneeId = p.assigneeId;
@@ -570,6 +598,9 @@ export const pipelineRoutes = new Hono<AppEnv>()
           .from(schema.pipelineTasks)
           .where(and(eq(schema.pipelineTasks.parentId, id), ne(schema.pipelineTasks.status, "done")));
         if (open.n > 0) throw new HTTPException(409, { message: "task_open_children" });
+        // the steps are the work: the task is done when every one is
+        const [steps] = await db().select({ n: sql<number>`count(*)`.mapWith(Number) }).from(schema.pipelineChecklist).where(and(eq(schema.pipelineChecklist.taskId, id), eq(schema.pipelineChecklist.done, false)));
+        if (steps.n > 0) throw new HTTPException(409, { message: "checklist_open" });
         set.completedAt = new Date();
         set.completedBy = a.user.id;
       } else if (cur.status === "done") {
@@ -609,10 +640,11 @@ export const pipelineRoutes = new Hono<AppEnv>()
   .post("/tasks/:id/checklist", requirePermission("pipeline.edit"), async (c) => {
     const a = auth(c);
     const t = await taskOr404(c, zUuid.parse(c.req.param("id")));
-    const p = await body(c, z.object({ text: z.string().trim().min(1).max(300), priority: zPriority.default("normal"), dueDate: zDate.nullable().default(null), dueTime: zHm.nullable().default(null), assigneeId: zUuid.nullable().default(null) }));
+    const p = await body(c, z.object({ text: z.string().trim().min(1).max(300), priority: zPriority.default("normal"), dueDate: zDate.nullable().default(null), dueTime: zHm.nullable().default(null), assigneeId: zUuid.nullable().default(null), startDate: zDate.nullable().default(null), dependsOnId: zUuid.nullable().default(null) }));
     if (p.assigneeId) await activeStaff(p.assigneeId);
+    if (p.dependsOnId) await itemOf(t.id, p.dependsOnId);
     const [{ max }] = await db().select({ max: sql<number>`coalesce(max(${schema.pipelineChecklist.position}), 0)`.mapWith(Number) }).from(schema.pipelineChecklist).where(eq(schema.pipelineChecklist.taskId, t.id));
-    const [row] = await db().insert(schema.pipelineChecklist).values({ taskId: t.id, text: p.text, priority: p.priority, dueDate: p.dueDate, dueTime: p.dueDate ? (p.dueTime ?? "17:00") : null, assigneeId: p.assigneeId, position: max + 1 }).returning();
+    const [row] = await db().insert(schema.pipelineChecklist).values({ taskId: t.id, text: p.text, priority: p.priority, dueDate: p.dueDate, dueTime: p.dueDate ? (p.dueTime ?? "17:00") : null, assigneeId: p.assigneeId, startDate: p.startDate, dependsOnId: p.dependsOnId, position: max + 1 }).returning();
     await db().update(schema.pipelineTasks).set({ updatedAt: new Date() }).where(eq(schema.pipelineTasks.id, t.id));
     if (p.assigneeId && p.assigneeId !== a.user.id) await notify([p.assigneeId], { type: "pipeline.assigned", data: { by: a.user.name, title: p.text, taskId: t.id }, link: `/pipeline?task=${t.id}` });
     return c.json(row, 201);
@@ -621,21 +653,61 @@ export const pipelineRoutes = new Hono<AppEnv>()
     const a = auth(c);
     const t = await taskOr404(c, zUuid.parse(c.req.param("id")));
     const cid = zUuid.parse(c.req.param("cid"));
-    const p = await body(c, z.object({ text: z.string().trim().min(1).max(300).optional(), done: z.boolean().optional(), priority: zPriority.optional(), dueDate: zDate.nullable().optional(), dueTime: zHm.nullable().optional(), assigneeId: zUuid.nullable().optional() }));
+    const p = await body(c, z.object({ text: z.string().trim().min(1).max(300).optional(), done: z.boolean().optional(), priority: zPriority.optional(), dueDate: zDate.nullable().optional(), dueTime: zHm.nullable().optional(), assigneeId: zUuid.nullable().optional(), startDate: zDate.nullable().optional(), dependsOnId: zUuid.nullable().optional() }));
     if (p.assigneeId) await activeStaff(p.assigneeId);
     const [before] = await db().select().from(schema.pipelineChecklist).where(and(eq(schema.pipelineChecklist.id, cid), eq(schema.pipelineChecklist.taskId, t.id)));
+    if (before && p.dependsOnId) {
+      await itemOf(t.id, p.dependsOnId);
+      // an item cannot wait for itself or, through others, for something that waits for it
+      let walk: string | null = p.dependsOnId;
+      for (let i = 0; walk && i < 100; i++) {
+        if (walk === cid) throw new HTTPException(409, { message: "item_cycle" });
+        const [n] = await db().select({ d: schema.pipelineChecklist.dependsOnId }).from(schema.pipelineChecklist).where(eq(schema.pipelineChecklist.id, walk));
+        walk = n?.d ?? null;
+      }
+    }
+    if (before && p.done === true && !before.done) {
+      const waits = p.dependsOnId !== undefined ? p.dependsOnId : before.dependsOnId;
+      if (waits) {
+        const [d] = await db().select({ done: schema.pipelineChecklist.done }).from(schema.pipelineChecklist).where(eq(schema.pipelineChecklist.id, waits));
+        if (d && !d.done) throw new HTTPException(409, { message: "item_blocked" });
+      }
+      const from = p.startDate !== undefined ? p.startDate : before.startDate;
+      if (from && from > todayQc()) throw new HTTPException(409, { message: "item_not_started" });
+    }
+    if (before && p.done === false && before.done) {
+      const [later] = await db().select({ id: schema.pipelineChecklist.id }).from(schema.pipelineChecklist).where(and(eq(schema.pipelineChecklist.dependsOnId, cid), eq(schema.pipelineChecklist.done, true)));
+      if (later) throw new HTTPException(409, { message: "item_has_done_dependents" });
+    }
     // a time only goes with a day (17:00 when none is given)
     const dayNow = p.dueDate !== undefined ? p.dueDate : (before?.dueDate ?? null);
     const timeSet = p.dueDate === null || (p.dueDate === undefined && p.dueTime === undefined && !dayNow) ? { dueTime: null } : p.dueTime !== undefined || p.dueDate ? { dueTime: dayNow ? (p.dueTime ?? before?.dueTime ?? "17:00") : null } : {};
     const [row] = await db()
       .update(schema.pipelineChecklist)
-      .set({ ...(p.text !== undefined ? { text: p.text } : {}), ...(p.done !== undefined ? { done: p.done } : {}), ...(p.priority !== undefined ? { priority: p.priority } : {}), ...(p.dueDate !== undefined ? { dueDate: p.dueDate } : {}), ...(p.assigneeId !== undefined ? { assigneeId: p.assigneeId } : {}), ...timeSet })
+      .set({ ...(p.text !== undefined ? { text: p.text } : {}), ...(p.done !== undefined ? { done: p.done } : {}), ...(p.priority !== undefined ? { priority: p.priority } : {}), ...(p.dueDate !== undefined ? { dueDate: p.dueDate } : {}), ...(p.assigneeId !== undefined ? { assigneeId: p.assigneeId } : {}), ...(p.startDate !== undefined ? { startDate: p.startDate } : {}), ...(p.dependsOnId !== undefined ? { dependsOnId: p.dependsOnId } : {}), ...timeSet })
       .where(and(eq(schema.pipelineChecklist.id, cid), eq(schema.pipelineChecklist.taskId, t.id)))
       .returning();
     if (!row) throw new HTTPException(404, { message: "not_found" });
     await db().update(schema.pipelineTasks).set({ updatedAt: new Date() }).where(eq(schema.pipelineTasks.id, t.id));
     if (p.assigneeId && p.assigneeId !== before?.assigneeId && p.assigneeId !== a.user.id) await notify([p.assigneeId], { type: "pipeline.assigned", data: { by: a.user.name, title: row.text, taskId: t.id }, link: `/pipeline?task=${t.id}` });
     return c.json(row);
+  })
+  // tell colleagues about the task: the bell always, and an email, a text and a Teams message as ticked
+  .post("/tasks/:id/notify", requirePermission("pipeline.edit"), async (c) => {
+    const a = auth(c);
+    if (!rateLimit(`pipeline-notify:${a.user.id}`, 30, 60_000).ok) throw new HTTPException(429, { message: "rate_limited" });
+    const t = await taskOr404(c, zUuid.parse(c.req.param("id")));
+    const p = await body(c, z.object({ userIds: z.array(zUuid).min(1).max(20), message: z.string().trim().max(1000).default(""), channels: z.object({ email: z.boolean(), sms: z.boolean(), teams: z.boolean() }) }));
+    // only people who can see the task are told about it (a private task is not leaked by a notification)
+    const viewers = t.visibility === "selected" ? (await db().select({ id: schema.pipelineTaskViewers.userId }).from(schema.pipelineTaskViewers).where(eq(schema.pipelineTaskViewers.taskId, t.id))).map((v) => v.id) : [];
+    const seen = p.userIds.filter((uid) => t.visibility === "team" || uid === t.createdBy || uid === t.assigneeId || viewers.includes(uid));
+    if (!seen.length) throw new HTTPException(400, { message: "no_recipient" });
+    const link = `/pipeline?task=${t.id}`;
+    const people = await notifyTechs({ id: 0, number: "Tâche", title: t.title, company: { name: "" }, link, head: `vous signale la tâche « ${t.title} »` }, { id: a.user.id, name: a.realUser.name }, seen, p.message, { ...p.channels, bell: false });
+    if (!people.length) throw new HTTPException(400, { message: "no_recipient" });
+    await notify(people.map((x) => x.id), { type: "pipeline.assigned", data: { by: a.user.name, title: t.title, message: p.message.slice(0, 300), notice: true }, link });
+    await audit(a.user.id, "pipeline.task_notified", t.id, { to: people.map((x) => x.id), channels: p.channels });
+    return c.json({ people });
   })
   // an item becomes a subtask of its own (same words, person, day and priority), linked to the item
   .post("/tasks/:id/checklist/:cid/task", requirePermission("pipeline.edit"), async (c) => {

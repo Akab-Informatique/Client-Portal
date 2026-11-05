@@ -1,0 +1,3 @@
+ALTER TABLE "pipeline_checklist" ADD COLUMN "start_date" text;--> statement-breakpoint
+ALTER TABLE "pipeline_checklist" ADD COLUMN "depends_on_id" uuid;--> statement-breakpoint
+ALTER TABLE "pipeline_checklist" ADD CONSTRAINT "pipeline_checklist_depends_on_id_pipeline_checklist_id_fk" FOREIGN KEY ("depends_on_id") REFERENCES "public"."pipeline_checklist"("id") ON DELETE set null ON UPDATE no action;

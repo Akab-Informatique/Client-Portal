@@ -6847,6 +6847,10 @@ describe("pipeline: shared to-dos and the day", () => {
     expect((await tech.patch(`/api/pipeline/tasks/${sub.id}`, { blockedById: wait.id })).json.error).toBe("task_cycle");
     expect((await tech.patch(`/api/pipeline/tasks/${sub.id}`, { status: "done" })).status).toBe(200);
     expect((await tech.patch(`/api/pipeline/tasks/${wait.id}`, { status: "doing" })).status).toBe(200);
+    // ...and only when every step of its checklist is
+    expect((await tech.patch(`/api/pipeline/tasks/${parent.id}`, { status: "done" })).json.error).toBe("checklist_open");
+    for (const it of (await tech.get(`/api/pipeline/tasks/${parent.id}`)).json.checklistItems) await tech.patch(`/api/pipeline/tasks/${parent.id}/checklist/${it.id}`, { done: true });
+    await tech.patch(`/api/pipeline/tasks/${parent.id}`, { status: "doing" });
     expect((await tech.patch(`/api/pipeline/tasks/${parent.id}`, { status: "done" })).status).toBe(200);
 
     // the checklist and the notes
@@ -6856,7 +6860,7 @@ describe("pipeline: shared to-dos and the day", () => {
     expect((await tech.patch(`/api/pipeline/tasks/${parent.id}/checklist/${full.checklistItems[0].id}`, { done: true })).json.done).toBe(true);
     expect((await tech.post(`/api/pipeline/tasks/${parent.id}/checklist`, { text: "Valider" })).status).toBe(201);
     expect((await tech.post(`/api/pipeline/tasks/${parent.id}/notes`, { text: "Fait hier soir" })).status).toBe(201);
-    expect((await tech.get(`/api/pipeline/tasks/${parent.id}`)).json).toMatchObject({ checklist: { done: 1, total: 3 }, comments: [expect.objectContaining({ text: "Fait hier soir" })] });
+    expect((await tech.get(`/api/pipeline/tasks/${parent.id}`)).json).toMatchObject({ checklist: { done: 2, total: 3 }, comments: [expect.objectContaining({ text: "Fait hier soir" })] });
 
     // the shared list: mine / team, open / done
     const mine = (await tech.get("/api/pipeline/tasks?scope=mine&status=all")).json.map((x: any) => x.title);
@@ -6949,7 +6953,9 @@ describe("pipeline: times, files, recurring and private tasks", () => {
     const rec = (await tech.post("/api/pipeline/tasks", { title: "Vérifier les sauvegardes", assigneeId: me, dueDate: "2020-01-06", dueTime: "09:00", recurrence: { freq: "weekly", interval: 1, weekdays: [1] }, checklist: ["Serveur", "NAS"] })).json;
     expect(rec.recurrence).toMatchObject({ freq: "weekly", interval: 1 });
     const first = (await tech.get(`/api/pipeline/tasks/${rec.id}`)).json;
-    await tech.patch(`/api/pipeline/tasks/${rec.id}/checklist/${first.checklistItems[0].id}`, { done: true });
+    // a task is completed only when every step is done
+    expect((await tech.patch(`/api/pipeline/tasks/${rec.id}`, { status: "done" })).status).toBe(409);
+    for (const it of first.checklistItems) await tech.patch(`/api/pipeline/tasks/${rec.id}/checklist/${it.id}`, { done: true });
     const done = (await tech.patch(`/api/pipeline/tasks/${rec.id}`, { status: "done" })).json;
     expect(done.next).toEqual(expect.any(String));
     const next = (await tech.get(`/api/pipeline/tasks/${done.next}`)).json;
@@ -6986,6 +6992,37 @@ describe("pipeline: times, files, recurring and private tasks", () => {
     const after = (await tech.get(`/api/pipeline/tasks/${d.json.id}`)).json;
     expect(after.checklistItems[0].childTaskId).toBe(child.json.id);
     expect((await tech.post(`/api/pipeline/tasks/${d.json.id}/checklist/${item.id}/task`, {})).status).toBe(409);
+  });
+
+  it("task steps: wait for another step, a start day, one person each; the task is done when every step is; notify colleagues", async () => {
+    resetRateLimit("login:ip:unknown");
+    const tech = await signIn("tech@akab.local");
+    const admin = await signIn("admin@akab.local");
+    const me = (await tech.get("/api/me")).json.id as string;
+    const boss = (await admin.get("/api/me")).json.id as string;
+    const t = (await tech.post("/api/pipeline/tasks", { title: "Projet", assigneeId: me, kind: "continuous", estimateMinutes: 60, checklist: [{ text: "Un" }, { text: "Deux", dependsOn: 0, assigneeId: boss }, { text: "Trois", startDate: "2999-01-01" }] })).json;
+    expect(t.estimateMinutes).toBeNull();
+    const full = (await tech.get(`/api/pipeline/tasks/${t.id}`)).json;
+    const [one, two, three] = full.checklistItems;
+    expect(two).toMatchObject({ dependsOnId: one.id, assigneeId: boss });
+    const tick = (id: string, done = true) => tech.patch(`/api/pipeline/tasks/${t.id}/checklist/${id}`, { done });
+    expect((await tick(two.id)).status).toBe(409); // waits for "Un"
+    expect((await tick(three.id)).status).toBe(409); // not started
+    expect((await tech.patch(`/api/pipeline/tasks/${t.id}/checklist/${one.id}`, { dependsOnId: two.id })).status).toBe(409); // a loop
+    expect((await tick(one.id)).status).toBe(200);
+    expect((await tick(two.id)).status).toBe(200);
+    expect((await tick(one.id, false)).status).toBe(409); // "Deux" is done and waited for it
+    expect((await tech.patch(`/api/pipeline/tasks/${t.id}`, { status: "done" })).status).toBe(409); // "Trois" is open
+    await tech.patch(`/api/pipeline/tasks/${t.id}/checklist/${three.id}`, { startDate: null });
+    await tick(three.id);
+    expect((await tech.patch(`/api/pipeline/tasks/${t.id}`, { status: "done" })).status).toBe(200);
+    // a continuous task has no estimate
+    expect((await tech.patch(`/api/pipeline/tasks/${t.id}`, { estimateMinutes: 90 })).json.estimateMinutes).toBeNull();
+    // notify a colleague (the bell; the other channels are off)
+    const n = await tech.post(`/api/pipeline/tasks/${t.id}/notify`, { userIds: [boss], message: "Regarde ça", channels: { email: false, sms: false, teams: false } });
+    expect(n.status).toBe(200);
+    expect(n.json.people.map((p: any) => p.id)).toEqual([boss]);
+    expect((await tech.post(`/api/pipeline/tasks/${t.id}/notify`, { userIds: [me], message: "", channels: { email: false, sms: false, teams: false } })).status).toBe(400);
   });
 
   it("private tasks: only who made it, who has it and the people chosen — not even a manager", async () => {

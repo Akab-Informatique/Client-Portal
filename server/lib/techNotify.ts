@@ -21,7 +21,7 @@ export type PersonResult = { id: string; name: string; bell: true; email?: Outco
 const esc = (s: string) => s.replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]!);
 
 export async function notifyTechs(
-  tk: { id: number; number: string; title: string; company: { name: string } },
+  tk: { id: number; number: string; title: string; company: { name: string }; /** another page of the portal (a task), with its own opening line */ link?: string; head?: string },
   from: { id: string; name: string },
   userIds: string[],
   message: string,
@@ -34,7 +34,7 @@ export async function notifyTechs(
     .from(schema.users)
     .where(and(inArray(schema.users.id, ids), eq(schema.users.kind, "staff"), eq(schema.users.active, true)));
   if (!people.length) return [];
-  const path = `/tickets?t=${tk.id}`;
+  const path = tk.link ?? `/tickets?t=${tk.id}`;
   const url = config.publicUrl ? `${config.publicUrl.replace(/\/+$/, "")}${path}` : null;
   // the bell (unless the sender unticked it)
   if (ch.bell !== false)
@@ -48,10 +48,10 @@ export async function notifyTechs(
   const out: PersonResult[] = [];
   for (const p of people) {
     const r: PersonResult = { id: p.id, name: p.name, bell: true };
-    const head = `${from.name} vous signale le billet ${tk.number} (${tk.title}, ${tk.company.name})`;
+    const head = tk.head ? `${from.name} ${tk.head}` : `${from.name} vous signale le billet ${tk.number} (${tk.title}, ${tk.company.name})`;
     if (ch.email) {
       const text = [`Bonjour ${p.name},`, "", `${head}.`, ...(message ? ["", message] : []), ...(url ? ["", url] : []), "", "—", "AKAB Informatique"].join("\n");
-      const html = `<p>Bonjour ${esc(p.name)},</p><p>${esc(head)}.</p>${message ? `<p style="white-space:pre-wrap;border-left:3px solid #ffce1a;padding-left:10px">${esc(message)}</p>` : ""}${url ? `<p><a href="${esc(url)}">Ouvrir le billet</a></p>` : ""}<p>—<br>AKAB Informatique</p>`;
+      const html = `<p>Bonjour ${esc(p.name)},</p><p>${esc(head)}.</p>${message ? `<p style="white-space:pre-wrap;border-left:3px solid #ffce1a;padding-left:10px">${esc(message)}</p>` : ""}${url ? `<p><a href="${esc(url)}">${tk.link ? "Ouvrir" : "Ouvrir le billet"}</a></p>` : ""}<p>—<br>AKAB Informatique</p>`;
       r.email = p.email ? ((await sendMail({ to: p.email, subject, text, html }).catch(() => false)) ? "sent" : "failed") : "no_address";
     }
     if (ch.sms) {
@@ -59,7 +59,7 @@ export async function notifyTechs(
       if (!smsOn) r.sms = "not_ready";
       else if (!to) r.sms = "no_address";
       else {
-        const text = `${from.name}: ${tk.number} ${tk.title.slice(0, 60)} (${tk.company.name.slice(0, 40)})${message ? ` — ${message.slice(0, 120)}` : ""}${url ? ` ${url}` : ""}`;
+        const text = `${from.name}: ${tk.number} ${tk.title.slice(0, 60)}${tk.company.name ? ` (${tk.company.name.slice(0, 40)})` : ""}${message ? ` — ${message.slice(0, 120)}` : ""}${url ? ` ${url}` : ""}`;
         r.sms = (await sendSms(to, text).then(() => true).catch(() => false)) ? "sent" : "failed";
       }
     }

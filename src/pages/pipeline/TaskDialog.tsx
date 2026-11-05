@@ -1,11 +1,10 @@
-import { useEffect, useState, type ReactNode } from "react";
+import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { useTranslation } from "react-i18next";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
-import { CalendarClock, CalendarPlus, CheckCircle2, CircleDashed, Clock3, ListChecks, Loader2, Lock, MessageSquare, Paperclip, PlayCircle, Plus, Repeat, Tag, Trash2, UserRound, Workflow, Ticket as TicketIcon, Link2, Eye } from "lucide-react";
+import { BellRing, CalendarClock, CalendarPlus, CheckCircle2, CircleDashed, Clock3, ListChecks, Loader2, Lock, MessageSquare, Paperclip, PlayCircle, Repeat, Tag, Trash2, UserRound, Workflow, Ticket as TicketIcon, Eye } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { AddToDayDialog } from "@/pages/tickets/AddToDayDialog";
-import { Checkbox } from "@/components/ui/checkbox";
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
@@ -14,51 +13,48 @@ import { api, ApiError } from "@/lib/api";
 import { useCan, useMe } from "@/lib/session";
 import { cn } from "@/lib/utils";
 import { hm as hmHours, parseHm } from "@shared/duration";
-import { PRIORITIES, PRIORITY_STYLE, STATUSES, STATUS_STYLE, dayLabel, fileToBase64, hm, type Person, type Recurrence, type TaskCard, type TaskFull, type TaskKind, type TaskPriority, type Visibility } from "./shared";
+import { PRIORITIES, PRIORITY_STYLE, STATUSES, STATUS_STYLE, dayLabel, fileToBase64, hm, todayYmd, type Person, type Recurrence, type TaskCard, type TaskFull, type TaskKind, type TaskPriority, type Visibility } from "./shared";
 import { FilesBox, RecurrenceEditor, TagsEditor, VisibilityEditor } from "./TaskParts";
+import { newStep, TaskSteps, type Step } from "./TaskSteps";
+import { TaskNotify } from "./TaskNotify";
 
 const selectCls = "h-9 w-full rounded-md border bg-transparent px-2 text-sm outline-none focus:ring-2 focus:ring-[color:var(--gold)]/40";
+const KNOWN_ERRORS = ["task_blocked", "task_open_children", "task_cycle", "invalid_assignee", "invalid_ticket", "forbidden", "checklist_open", "item_blocked", "item_not_started", "item_cycle", "item_has_done_dependents", "item_invalid", "no_recipient"];
 
 export function usePeople() {
   return useQuery({ queryKey: ["pipeline", "people"], queryFn: () => api.get<Person[]>("/pipeline/people"), staleTime: 60_000 });
 }
-/** Every open task, for the parent / waiting-for pickers */
+/** Every open task, for the "waits for" picker */
 export function useOpenTasks() {
   return useQuery({ queryKey: ["pipeline", "tasks", "pick"], queryFn: () => api.get<TaskCard[]>("/pipeline/tasks?status=open"), staleTime: 15_000 });
 }
 
 export function taskError(t: (k: string, o?: Record<string, unknown>) => string, e: unknown): string {
-  if (e instanceof ApiError && ["task_blocked", "task_open_children", "task_cycle", "invalid_assignee", "invalid_ticket", "forbidden"].includes(e.code)) return t(`pipeline.errors.${e.code}`);
+  if (e instanceof ApiError && KNOWN_ERRORS.includes(e.code)) return t(`pipeline.errors.${e.code}`);
   // keep the reason visible: a bare "something went wrong" says nothing about a server that is not up to date
   if (e instanceof ApiError && e.code && e.code !== "error") return `${t("common.error")} (${e.code})`;
   return t("common.error");
 }
 
-/** Normal, continuous or daily: three cards, the chosen one lit */
-function KindPicker({ value, onChange, disabled, stacked }: { value: TaskKind; onChange: (k: TaskKind) => void; disabled?: boolean; stacked?: boolean }) {
-  const { t } = useTranslation();
-  return (
-    <div className="space-y-1.5">
-      <span className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">{t("pipeline.kind")}</span>
-      <div className={cn("grid gap-2", !stacked && "sm:grid-cols-3")} role="radiogroup" aria-label={t("pipeline.kind")}>
-        {(["normal", "continuous", "daily"] as const).map((k) => (
-          <button
-            key={k}
-            type="button"
-            role="radio"
-            aria-checked={value === k}
-            disabled={disabled}
-            onClick={() => onChange(k)}
-            className={cn("rounded-xl border p-2.5 text-left transition-colors disabled:cursor-not-allowed disabled:opacity-60", value === k ? "border-[color:var(--gold)]/60 bg-[color:var(--gold)]/10" : "bg-muted/30 hover:bg-accent/40")}
-          >
-            <span className="block text-sm font-medium">{t(`pipeline.kinds.${k}`)}</span>
-            <span className="mt-0.5 block text-[11px] leading-snug text-muted-foreground">{t(`pipeline.kinds.${k}Hint`)}</span>
-          </button>
-        ))}
-      </div>
-    </div>
-  );
-}
+type Schedule = "simple" | "recurring" | "continuous" | "daily";
+const scheduleOf = (kind: TaskKind, recurrence: Recurrence | null): Schedule => (kind === "continuous" ? "continuous" : kind === "daily" ? "daily" : recurrence ? "recurring" : "simple");
+
+/** The values that are the same whether the task is new (kept in the form) or open (saved as changed) */
+type Values = {
+  kind: TaskKind;
+  recurrence: Recurrence | null;
+  remindEveryDays: number | null;
+  dueDate: string | null;
+  startDate: string | null;
+  checkpointDate: string | null;
+  checkpointTime: string | null;
+  estimateMinutes: number | null;
+  tags: string[];
+  visibility: Visibility;
+  viewerIds: string[];
+  assigneeId: string | null;
+  priority: TaskPriority;
+};
 
 function Field({ label, icon: Icon, children }: { label: string; icon?: typeof Clock3; children: ReactNode }) {
   return (
@@ -71,25 +67,33 @@ function Field({ label, icon: Icon, children }: { label: string; icon?: typeof C
   );
 }
 
+function Heading({ icon: Icon, children, extra }: { icon: typeof Clock3; children: ReactNode; extra?: ReactNode }) {
+  return (
+    <h3 className="flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
+      <Icon className="size-3.5" /> {children} {extra}
+    </h3>
+  );
+}
+
 /**
- * A task, full screen over the page: its title, status, who has it, when it is due and how long it takes, the
- * instructions, the checklist, the subtasks, the task it waits for, the ticket it is about, and the comments.
- * Everything saves as it is changed. With no id it is the form of a new task.
+ * A task, nearly full screen. Left: the description, the steps (the checklist — the only subtasks, folded rows
+ * inside this one window), the files and the team's notes. Right: how it is planned (simple, recurring or
+ * continuous), who has it, who sees it. Open, everything saves as it is changed; with no id it is the form of a new task.
  */
 export function TaskDialog({ taskId, defaults, onClose, onOpenTask }: { taskId: string | null; defaults?: { assigneeId?: string | null; dueDate?: string | null; parentId?: string | null }; onClose: () => void; onOpenTask?: (id: string) => void }) {
   const { t } = useTranslation();
   const qc = useQueryClient();
   const me = useMe();
   const can = useCan();
-  const [addingDay, setAddingDay] = useState(false);
   const confirm = useConfirm();
+  const isNew = !taskId;
   const editable = can("pipeline.edit");
   const people = usePeople();
   const open = useOpenTasks();
+  const [addingDay, setAddingDay] = useState(false);
+  const [notifying, setNotifying] = useState(false);
   const { data: task, isLoading } = useQuery({ queryKey: ["pipeline", "task", taskId], queryFn: () => api.get<TaskFull>(`/pipeline/tasks/${taskId}`), enabled: Boolean(taskId) });
-  const refresh = () => {
-    void qc.invalidateQueries({ queryKey: ["pipeline"] });
-  };
+  const refresh = () => void qc.invalidateQueries({ queryKey: ["pipeline"] });
   const patch = useMutation({
     mutationFn: (p: Record<string, unknown>) => api.patch(`/pipeline/tasks/${taskId}`, p),
     onSuccess: refresh,
@@ -98,6 +102,7 @@ export function TaskDialog({ taskId, defaults, onClose, onOpenTask }: { taskId: 
       refresh();
     },
   });
+  /** A change on the open task, done at once; an error is shown and the screen reloaded */
   const sub = <T,>(fn: () => Promise<T>) =>
     fn().then(
       (r) => {
@@ -106,13 +111,15 @@ export function TaskDialog({ taskId, defaults, onClose, onOpenTask }: { taskId: 
       },
       (e) => {
         toast.error(taskError(t, e));
+        refresh();
         return undefined;
       },
     );
+
+  // ── what is typed ──
   const [title, setTitle] = useState("");
   const [notes, setNotes] = useState("");
   const [estimate, setEstimate] = useState("");
-  const [item, setItem] = useState("");
   const [comment, setComment] = useState("");
   useEffect(() => {
     if (!task) return;
@@ -121,34 +128,79 @@ export function TaskDialog({ taskId, defaults, onClose, onOpenTask }: { taskId: 
     setEstimate(task.estimateMinutes ? hmHours(task.estimateMinutes / 60) : "");
   }, [task?.id, task?.updatedAt]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // ── a new task ──
-  const [f, setF] = useState({ title: "", notes: "", assigneeId: defaults?.assigneeId ?? me.id, dueDate: defaults?.dueDate ?? "", startDate: "", checkpointDate: "", checkpointTime: "", kind: "normal" as TaskKind, remind: "", priority: "normal" as TaskPriority, estimate: "", parentId: defaults?.parentId ?? "", checklist: [] as { text: string; priority: TaskPriority; dueDate: string; dueTime: string; assigneeId: string }[], tags: [] as string[], recurrence: null as Recurrence | null, visibility: "team" as Visibility, viewerIds: [] as string[] });
+  // ── a new task: its values and steps stay here until "Create" ──
+  const [f, setF] = useState<Values & { waitsOn: string }>({ kind: "normal", recurrence: null, remindEveryDays: null, dueDate: defaults?.dueDate ?? null, startDate: null, checkpointDate: null, checkpointTime: null, estimateMinutes: null, tags: [], visibility: "team", viewerIds: [], assigneeId: defaults?.assigneeId ?? me.id, priority: "normal", waitsOn: "" });
+  const [newSteps, setNewSteps] = useState<Step[]>([]);
   const [staged, setStaged] = useState<File[]>([]);
+  const [counter, setCounter] = useState(0);
+
+  const v: Values = task
+    ? { kind: task.kind, recurrence: task.recurrence, remindEveryDays: task.remindEveryDays, dueDate: task.dueDate, startDate: task.startDate, checkpointDate: task.checkpointDate, checkpointTime: task.checkpointTime, estimateMinutes: task.estimateMinutes, tags: task.tags, visibility: task.visibility, viewerIds: task.viewerIds, assigneeId: task.assigneeId, priority: task.priority }
+    : f;
+  const set = (p: Partial<Values>) => (isNew ? setF((old) => ({ ...old, ...p })) : patch.mutate(p));
+  const schedule = scheduleOf(v.kind, v.recurrence);
+  const setSchedule = (s: Schedule) => {
+    if (s === schedule) return;
+    if (s === "simple") set({ kind: "normal", recurrence: null });
+    else if (s === "recurring") set({ kind: "normal", recurrence: v.recurrence ?? { freq: "weekly", interval: 1, weekdays: [], until: null }, dueDate: v.dueDate ?? todayYmd() });
+    else set({ kind: "continuous", recurrence: null, dueDate: null, estimateMinutes: null });
+    if (s === "continuous") setEstimate("");
+  };
+  const commitEstimate = () => {
+    if (!estimate.trim()) return v.estimateMinutes ? set({ estimateMinutes: null }) : undefined;
+    const h = parseHm(estimate);
+    const m = h === null ? null : Math.round(h * 60);
+    if (m === null || m < 5) return setEstimate(v.estimateMinutes ? hmHours(v.estimateMinutes / 60) : "");
+    if (m !== v.estimateMinutes) set({ estimateMinutes: m });
+  };
+
+  const steps: Step[] = useMemo(
+    () => (task ? task.checklistItems.map((c) => ({ id: c.id, text: c.text, done: c.done, priority: c.priority, assigneeId: c.assigneeId, startDate: c.startDate, dueDate: c.dueDate, dueTime: c.dueTime, dependsOnId: c.dependsOnId })) : newSteps),
+    [task, newSteps],
+  );
+  const stepHandlers = {
+    onAdd: (text: string) => {
+      if (task) void sub(() => api.post(`/pipeline/tasks/${task.id}/checklist`, { text }));
+      else {
+        setNewSteps((l) => [...l, newStep(`n${counter}`, text)]);
+        setCounter((n) => n + 1);
+      }
+    },
+    onChange: (id: string, p: Partial<Step>) => {
+      if (task) void sub(() => api.patch(`/pipeline/tasks/${task.id}/checklist/${id}`, p));
+      else setNewSteps((l) => l.map((s) => (s.id === id ? { ...s, ...p } : s)));
+    },
+    onRemove: (id: string) => {
+      if (task) void sub(() => api.del(`/pipeline/tasks/${task.id}/checklist/${id}`));
+      else setNewSteps((l) => l.filter((s) => s.id !== id).map((s) => (s.dependsOnId === id ? { ...s, dependsOnId: null } : s)));
+    },
+  };
+
   const create = useMutation({
-    mutationFn: () => {
-      const minutes = f.estimate.trim() ? Math.round((parseHm(f.estimate) ?? 0) * 60) : null;
-      return api.post<TaskCard>("/pipeline/tasks", {
-        title: f.title,
-        notes: f.notes,
+    mutationFn: () =>
+      api.post<TaskCard>("/pipeline/tasks", {
+        title,
+        notes,
         priority: f.priority,
         assigneeId: f.assigneeId || null,
-        dueDate: f.kind !== "normal" ? null : f.dueDate || null,
+        dueDate: f.kind !== "normal" ? null : f.dueDate,
         kind: f.kind,
-        remindEveryDays: f.kind === "continuous" && f.remind ? Number(f.remind) : null,
-        startDate: f.startDate || null,
-        checkpointDate: f.checkpointDate || null,
-        checkpointTime: f.checkpointDate && f.checkpointTime ? f.checkpointTime : null,
+        remindEveryDays: f.kind === "continuous" ? f.remindEveryDays : null,
+        startDate: f.startDate,
+        checkpointDate: f.checkpointDate,
+        checkpointTime: f.checkpointDate ? f.checkpointTime : null,
         tags: f.tags,
         recurrence: f.kind === "normal" ? f.recurrence : null,
         visibility: f.visibility,
         viewerIds: f.viewerIds,
-        parentId: f.parentId || null,
-        estimateMinutes: minutes && minutes >= 5 ? minutes : null,
-        checklist: f.checklist.filter((x) => x.text.trim()).map((x) => ({ text: x.text.trim(), priority: x.priority, dueDate: x.dueDate || null, dueTime: x.dueDate && x.dueTime ? x.dueTime : null, assigneeId: x.assigneeId || null })),
-      });
-    },
+        parentId: defaults?.parentId ?? null,
+        blockedById: f.waitsOn || null,
+        estimateMinutes: f.kind === "continuous" ? null : v.estimateMinutes,
+        checklist: newSteps
+          .filter((s) => s.text.trim())
+          .map((s) => ({ text: s.text.trim(), priority: s.priority, dueDate: s.dueDate, dueTime: s.dueDate ? s.dueTime : null, assigneeId: s.assigneeId, startDate: s.startDate, dependsOn: s.dependsOnId ? newSteps.filter((x) => x.text.trim()).findIndex((x) => x.id === s.dependsOnId) : null })),
+      }),
     onSuccess: async (r) => {
-      // the files, one at a time, once the task exists
       for (const x of staged) {
         try {
           await api.post(`/pipeline/tasks/${r.id}/files`, { name: x.name, contentType: x.type || "application/octet-stream", data: await fileToBase64(x) });
@@ -173,9 +225,9 @@ export function TaskDialog({ taskId, defaults, onClose, onOpenTask }: { taskId: 
     onError: (e) => toast.error(taskError(t, e)),
   });
 
-  const body = (children: ReactNode) => (
+  const shell = (children: ReactNode) => (
     <Dialog open onOpenChange={(o) => !o && onClose()}>
-      <DialogContent className="flex h-[min(96vh,1100px)] w-[min(98vw,1500px)] max-w-none flex-col gap-0 overflow-hidden p-0 sm:max-w-none">
+      <DialogContent className="flex h-[min(97vh,1200px)] w-[min(99vw,1760px)] max-w-none flex-col gap-0 overflow-hidden p-0 sm:max-w-none">
         <DialogTitle className="sr-only">{t("pipeline.task")}</DialogTitle>
         <DialogDescription className="sr-only">{t("pipeline.taskHint")}</DialogDescription>
         {children}
@@ -183,25 +235,146 @@ export function TaskDialog({ taskId, defaults, onClose, onOpenTask }: { taskId: 
     </Dialog>
   );
 
-  if (!taskId) {
-    return body(
-      <form
-        className="flex min-h-0 flex-1 flex-col"
-        onSubmit={(e) => {
-          e.preventDefault();
-          if (f.title.trim() && !create.isPending) create.mutate();
-        }}
-      >
-        <div className="flex items-center gap-2 border-b px-6 py-4">
-          <Workflow className="size-5 text-primary" />
-          <h2 className="text-lg font-semibold">{t("pipeline.newTask")}</h2>
+  if (!isNew && (isLoading || !task)) {
+    return shell(
+      <div className="flex flex-1 items-center justify-center">
+        <Loader2 className="size-6 animate-spin text-muted-foreground" />
+      </div>,
+    );
+  }
+
+  const others = (open.data ?? []).filter((x) => x.id !== task?.id);
+  const canDelete = task ? task.createdById === me.id || can("pipeline.manage") : false;
+  const locked = !editable;
+  const total = steps.length;
+  const doneCount = steps.filter((s) => s.done).length;
+  const pct = total ? Math.round((doneCount / total) * 100) : 0;
+  const openSteps = total - doneCount;
+  const saveTitle = () => {
+    const next = title.trim();
+    if (!task) return;
+    if (next && next !== task.title) patch.mutate({ title: next });
+    else setTitle(task.title);
+  };
+
+  const SCHEDULES: Schedule[] = schedule === "daily" ? ["simple", "recurring", "continuous", "daily"] : ["simple", "recurring", "continuous"];
+
+  const left = (
+    <div className="min-h-0 space-y-7 overflow-y-auto px-7 py-6">
+      <section className="space-y-1.5">
+        <Heading icon={Workflow}>{t("pipeline.description")}</Heading>
+        <Textarea
+          value={notes}
+          disabled={locked}
+          onChange={(e) => setNotes(e.target.value)}
+          onBlur={() => task && notes !== task.notes && patch.mutate({ notes })}
+          rows={5}
+          placeholder={t("pipeline.instructionsPlaceholder")}
+          maxLength={8000}
+          className="resize-y bg-background/40"
+        />
+      </section>
+
+      <section className="space-y-2">
+        <Heading
+          icon={ListChecks}
+          extra={
+            total > 0 ? (
+              <>
+                <span className="font-normal normal-case">{t("pipeline.steps.progress", { done: doneCount, total })}</span>
+                <span className="h-1.5 w-28 overflow-hidden rounded-full bg-muted">
+                  <span className="block h-full rounded-full bg-grad-gold transition-all" style={{ width: `${pct}%` }} />
+                </span>
+              </>
+            ) : null
+          }
+        >
+          {t("pipeline.steps.title")}
+        </Heading>
+        <p className="text-xs text-muted-foreground">{t("pipeline.steps.hint")}</p>
+        <TaskSteps steps={steps} people={people.data ?? []} disabled={locked} creating={isNew} {...stepHandlers} />
+      </section>
+
+      <section className="space-y-2">
+        <Heading icon={Paperclip} extra={task && task.fileList.length > 0 ? <span className="font-normal normal-case">{task.fileList.length}</span> : null}>
+          {t("pipeline.files.title")}
+        </Heading>
+        {task ? (
+          <FilesBox
+            stored={task.fileList}
+            disabled={locked}
+            downloadUrl={(id) => `/api/pipeline/tasks/${task.id}/files/${id}`}
+            onRemove={(id) => void sub(() => api.del(`/pipeline/tasks/${task.id}/files/${id}`))}
+            onAdd={(x) =>
+              void sub(async () => {
+                await api.post(`/pipeline/tasks/${task.id}/files`, { name: x.name, contentType: x.type || "application/octet-stream", data: await fileToBase64(x) });
+              })
+            }
+          />
+        ) : (
+          <FilesBox staged={staged} onAdd={(x) => setStaged((old) => (old.some((o) => o.name === x.name && o.size === x.size) ? old : [...old, x]))} onRemoveStaged={(x) => setStaged((old) => old.filter((o) => o !== x))} />
+        )}
+      </section>
+
+      {task && (
+        <section className="space-y-2">
+          <Heading icon={MessageSquare}>{t("pipeline.teamNotes")}</Heading>
+          <ul className="space-y-2">
+            {task.comments.map((c) => (
+              <li key={c.id} className="rounded-xl border bg-muted/30 px-3 py-2">
+                <p className="text-xs">
+                  <span className="font-semibold">{c.author}</span> <span className="text-muted-foreground">{new Date(c.createdAt).toLocaleString()}</span>
+                </p>
+                <p className="mt-1 whitespace-pre-wrap text-sm">{c.text}</p>
+              </li>
+            ))}
+          </ul>
+          {editable && (
+            <form
+              className="space-y-2"
+              onSubmit={(e) => {
+                e.preventDefault();
+                if (!comment.trim()) return;
+                void sub(() => api.post(`/pipeline/tasks/${task.id}/notes`, { text: comment.trim() })).then(() => setComment(""));
+              }}
+            >
+              <Textarea value={comment} onChange={(e) => setComment(e.target.value)} rows={2} placeholder={t("pipeline.teamNotesPlaceholder")} maxLength={4000} />
+              <Button type="submit" size="sm" variant="outline" disabled={!comment.trim()}>
+                {t("pipeline.addComment")}
+              </Button>
+            </form>
+          )}
+        </section>
+      )}
+    </div>
+  );
+
+  const aside = (
+    <aside className="min-h-0 space-y-5 overflow-y-auto border-t bg-muted/20 px-5 py-6 lg:border-l lg:border-t-0">
+      {/* how it is planned */}
+      <div className="space-y-2">
+        <span className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">{t("pipeline.schedule.title")}</span>
+        <div className={cn("grid gap-1.5", SCHEDULES.length === 4 ? "grid-cols-2" : "grid-cols-1")} role="radiogroup" aria-label={t("pipeline.schedule.title")}>
+          {SCHEDULES.map((k) => (
+            <button
+              key={k}
+              type="button"
+              role="radio"
+              aria-checked={schedule === k}
+              disabled={locked || (k === "daily" && schedule !== "daily")}
+              onClick={() => setSchedule(k)}
+              className={cn("rounded-xl border px-3 py-2 text-left transition-colors disabled:cursor-not-allowed disabled:opacity-60", schedule === k ? "border-[color:var(--gold)]/60 bg-[color:var(--gold)]/10" : "bg-muted/30 hover:bg-accent/40")}
+            >
+              <span className="block text-sm font-medium">{t(`pipeline.schedule.${k}`)}</span>
+              <span className="block text-[11px] leading-snug text-muted-foreground">{t(`pipeline.schedule.${k}Hint`)}</span>
+            </button>
+          ))}
         </div>
-        <div className="min-h-0 flex-1 space-y-4 overflow-y-auto px-6 py-5">
-          <Input autoFocus value={f.title} onChange={(e) => setF({ ...f, title: e.target.value })} placeholder={t("pipeline.titlePlaceholder")} className="h-12 text-lg font-medium" maxLength={200} />
-          <KindPicker value={f.kind} onChange={(kind) => setF({ ...f, kind })} />
-          {f.kind === "continuous" && (
+        {schedule === "recurring" && <RecurrenceEditor value={v.recurrence} disabled={locked} onChange={(recurrence) => recurrence && set({ recurrence })} />}
+        {schedule === "continuous" && (
+          <div className="flex flex-wrap items-end gap-3">
             <Field label={t("pipeline.remind")} icon={Repeat}>
-              <select className={selectCls} value={f.remind} onChange={(e) => setF({ ...f, remind: e.target.value })}>
+              <select className={selectCls} disabled={locked} value={v.remindEveryDays ?? ""} onChange={(e) => set({ remindEveryDays: e.target.value ? Number(e.target.value) : null })}>
                 <option value="">{t("pipeline.remindNone")}</option>
                 {[1, 2, 5, 10].map((n) => (
                   <option key={n} value={n}>
@@ -210,118 +383,140 @@ export function TaskDialog({ taskId, defaults, onClose, onOpenTask }: { taskId: 
                 ))}
               </select>
             </Field>
-          )}
-          <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
-            <Field label={t("pipeline.assignee")} icon={UserRound}>
-              <select className={selectCls} value={f.assigneeId} onChange={(e) => setF({ ...f, assigneeId: e.target.value })}>
-                <option value="">{t("pipeline.unassigned")}</option>
-                {(people.data ?? []).map((p) => (
-                  <option key={p.id} value={p.id}>
-                    {p.name}
-                  </option>
-                ))}
-              </select>
-            </Field>
-            {f.kind === "normal" && (
-              <Field label={t("pipeline.due")} icon={CalendarClock}>
-                <Input type="date" value={f.dueDate} onChange={(e) => setF({ ...f, dueDate: e.target.value })} />
-              </Field>
-            )}
-            <Field label={t("pipeline.priority.label")}>
-              <select className={selectCls} value={f.priority} onChange={(e) => setF({ ...f, priority: e.target.value as TaskPriority })}>
-                {PRIORITIES.map((p) => (
-                  <option key={p} value={p}>
-                    {t(`pipeline.priority.${p}`)}
-                  </option>
-                ))}
-              </select>
-            </Field>
-            <Field label={t("pipeline.estimate")} icon={Clock3}>
-              <Input value={f.estimate} onChange={(e) => setF({ ...f, estimate: e.target.value })} placeholder="1:30" inputMode="text" />
-            </Field>
-          </div>
-          <div className="grid gap-3 sm:grid-cols-3">
-            <Field label={t("pipeline.startDate")} icon={PlayCircle}>
-              <Input type="date" value={f.startDate} onChange={(e) => setF({ ...f, startDate: e.target.value })} />
-            </Field>
-            <Field label={t("pipeline.checkpoint")} icon={CalendarClock}>
-              <Input type="date" value={f.checkpointDate} onChange={(e) => setF({ ...f, checkpointDate: e.target.value })} />
-            </Field>
-            <Field label={t("pipeline.checkpointTime")}>
-              <Input type="time" disabled={!f.checkpointDate} value={f.checkpointTime} onChange={(e) => setF({ ...f, checkpointTime: e.target.value })} placeholder="17:00" />
-            </Field>
-          </div>
-          <Field label={t("pipeline.instructions")}>
-            <Textarea value={f.notes} onChange={(e) => setF({ ...f, notes: e.target.value })} rows={5} placeholder={t("pipeline.instructionsPlaceholder")} maxLength={8000} />
-          </Field>
-          <Field label={t("pipeline.checklist")} icon={ListChecks}>
-            <div className="space-y-1.5">
-              {f.checklist.map((it, i) => (
-                <div key={i} className="flex flex-wrap items-center gap-1.5 rounded-lg border bg-background/40 p-1.5">
-                  <Input value={it.text} onChange={(e) => setF({ ...f, checklist: f.checklist.map((x, j) => (j === i ? { ...x, text: e.target.value } : x)) })} className="h-8 min-w-48 flex-1" maxLength={300} />
-                  <select className={cn(selectCls, "h-8 w-28 text-xs")} value={it.priority} onChange={(e) => setF({ ...f, checklist: f.checklist.map((x, j) => (j === i ? { ...x, priority: e.target.value as TaskPriority } : x)) })} aria-label={t("pipeline.priority.label")}>
-                    {PRIORITIES.map((p) => (
-                      <option key={p} value={p}>
-                        {t(`pipeline.priority.${p}`)}
-                      </option>
-                    ))}
-                  </select>
-                  <select className={cn(selectCls, "h-8 w-36 text-xs")} value={it.assigneeId} aria-label={t("pipeline.itemAssignee")} onChange={(e) => setF({ ...f, checklist: f.checklist.map((x, j) => (j === i ? { ...x, assigneeId: e.target.value } : x)) })}>
-                    <option value="">{t("pipeline.itemNobody")}</option>
-                    {(people.data ?? []).map((p) => (
-                      <option key={p.id} value={p.id}>
-                        {p.name}
-                      </option>
-                    ))}
-                  </select>
-                  <Input type="date" value={it.dueDate} title={t("pipeline.itemDue")} onChange={(e) => setF({ ...f, checklist: f.checklist.map((x, j) => (j === i ? { ...x, dueDate: e.target.value } : x)) })} className="h-8 w-36 px-2 text-xs" />
-                  <Input type="time" disabled={!it.dueDate} value={it.dueTime} title={t("pipeline.itemDueTime")} onChange={(e) => setF({ ...f, checklist: f.checklist.map((x, j) => (j === i ? { ...x, dueTime: e.target.value } : x)) })} className="h-8 w-24 px-2 text-xs" />
-                  <button type="button" onClick={() => setF({ ...f, checklist: f.checklist.filter((_, j) => j !== i) })} aria-label={t("common.delete")}>
-                    <Trash2 className="size-3.5 text-muted-foreground hover:text-destructive" />
-                  </button>
-                </div>
-              ))}
-              <Button type="button" variant="outline" size="sm" className="h-8" onClick={() => setF({ ...f, checklist: [...f.checklist, { text: "", priority: "normal", dueDate: "", dueTime: "", assigneeId: "" }] })}>
-                <Plus className="size-3.5" /> {t("pipeline.addItem")}
+            {task && v.remindEveryDays && editable && (
+              <Button type="button" variant="outline" size="sm" className="h-9" onClick={() => void sub(() => api.post(`/pipeline/tasks/${task.id}/check`, {}))}>
+                <CheckCircle2 className="size-4" /> {t("pipeline.checkNow")}
               </Button>
-            </div>
-          </Field>
-          <div className="grid gap-4 md:grid-cols-2">
-            {f.kind === "normal" && (
-              <div className="space-y-1">
-                <span className="flex items-center gap-1.5 text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
-                  <Repeat className="size-3" /> {t("pipeline.recurring")}
-                </span>
-                <RecurrenceEditor value={f.recurrence} onChange={(r) => setF({ ...f, recurrence: r })} />
-              </div>
             )}
-            <div className="space-y-1">
-              <span className="flex items-center gap-1.5 text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
-                <Eye className="size-3" /> {t("pipeline.whoSees")}
-              </span>
-              <VisibilityEditor value={f.visibility} viewerIds={f.viewerIds} people={people.data ?? []} meId={me.id} onChange={(v, ids) => setF({ ...f, visibility: v, viewerIds: ids })} />
-            </div>
           </div>
-          <div className="grid gap-4 md:grid-cols-2">
-            <div className="space-y-1">
-              <span className="flex items-center gap-1.5 text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
-                <Tag className="size-3" /> {t("pipeline.tags")}
-              </span>
-              <TagsEditor value={f.tags} onChange={(tags) => setF({ ...f, tags })} />
-            </div>
-            <div className="space-y-1">
-              <span className="flex items-center gap-1.5 text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
-                <Paperclip className="size-3" /> {t("pipeline.files.title")}
-              </span>
-              <FilesBox staged={staged} onAdd={(x) => setStaged((old) => (old.some((o) => o.name === x.name && o.size === x.size) ? old : [...old, x]))} onRemoveStaged={(x) => setStaged((old) => old.filter((o) => o !== x))} />
-            </div>
-          </div>
+        )}
+      </div>
+
+      <div className="grid grid-cols-2 gap-3">
+        <Field label={t("pipeline.startDate")} icon={PlayCircle}>
+          <Input type="date" disabled={locked} value={v.startDate ?? ""} onChange={(e) => set({ startDate: e.target.value || null })} />
+        </Field>
+        {schedule !== "continuous" && schedule !== "daily" && (
+          <Field label={schedule === "recurring" ? t("pipeline.firstDue") : t("pipeline.due")} icon={CalendarClock}>
+            <Input type="date" disabled={locked} value={v.dueDate ?? ""} onChange={(e) => set({ dueDate: e.target.value || null })} />
+          </Field>
+        )}
+        <Field label={t("pipeline.checkpoint")} icon={CalendarClock}>
+          <Input type="date" disabled={locked} value={v.checkpointDate ?? ""} onChange={(e) => set({ checkpointDate: e.target.value || null })} />
+        </Field>
+        <Field label={t("pipeline.checkpointTime")}>
+          <Input type="time" disabled={locked || !v.checkpointDate} value={v.checkpointTime ?? ""} onChange={(e) => set({ checkpointTime: e.target.value || null })} />
+        </Field>
+        {schedule !== "continuous" && (
+          <Field label={t("pipeline.estimate")} icon={Clock3}>
+            <Input disabled={locked} value={estimate} onChange={(e) => setEstimate(e.target.value)} onBlur={commitEstimate} placeholder="1:30" inputMode="text" />
+          </Field>
+        )}
+      </div>
+
+      {/* who */}
+      <Field label={t("pipeline.assignee")} icon={UserRound}>
+        <select className={selectCls} disabled={locked} value={v.assigneeId ?? ""} onChange={(e) => set({ assigneeId: e.target.value || null })}>
+          <option value="">{t("pipeline.unassigned")}</option>
+          {(people.data ?? []).map((p) => (
+            <option key={p.id} value={p.id}>
+              {p.name}
+            </option>
+          ))}
+        </select>
+      </Field>
+      <div className="space-y-1">
+        <span className="flex items-center gap-1.5 text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
+          <Eye className="size-3" /> {t("pipeline.whoSees")}
+        </span>
+        <VisibilityEditor
+          value={v.visibility}
+          viewerIds={v.viewerIds}
+          people={people.data ?? []}
+          meId={me.id}
+          disabled={locked || Boolean(task && task.createdById !== me.id && task.assigneeId !== me.id)}
+          onChange={(visibility, viewerIds) => set({ visibility, viewerIds })}
+        />
+      </div>
+
+      <Field label={t("pipeline.priority.label")}>
+        <div className="flex gap-1">
+          {PRIORITIES.map((p) => (
+            <button key={p} type="button" disabled={locked} onClick={() => p !== v.priority && set({ priority: p })} className={cn("flex-1 rounded-md border px-1 py-1.5 text-[11px] font-medium transition-colors", v.priority === p ? PRIORITY_STYLE[p].chip : "border-transparent text-muted-foreground hover:bg-accent/50")}>
+              {t(`pipeline.priority.${p}`)}
+            </button>
+          ))}
         </div>
-        <div className="flex items-center justify-end gap-2 border-t px-6 py-3">
+      </Field>
+
+      <div className="space-y-1">
+        <span className="flex items-center gap-1.5 text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
+          <Tag className="size-3" /> {t("pipeline.tags")}
+        </span>
+        <TagsEditor value={v.tags} disabled={locked} onChange={(tags) => set({ tags })} />
+      </div>
+
+      <Field label={t("pipeline.waitsFor")} icon={Lock}>
+        <select className={selectCls} disabled={locked} value={task ? (task.blockedById ?? "") : f.waitsOn} onChange={(e) => (task ? patch.mutate({ blockedById: e.target.value || null }) : setF((old) => ({ ...old, waitsOn: e.target.value })))}>
+          <option value="">{t("pipeline.noWait")}</option>
+          {others.map((p) => (
+            <option key={p.id} value={p.id}>
+              {p.title}
+            </option>
+          ))}
+        </select>
+        <span className="block text-[11px] text-muted-foreground">{t("pipeline.waitsHint")}</span>
+      </Field>
+
+      {task?.ticketNumber ? (
+        <div className="rounded-xl border bg-background/40 p-3 text-sm">
+          <p className="flex items-center gap-1.5 text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
+            <TicketIcon className="size-3" /> {t("pipeline.ticket")}
+          </p>
+          <p className="mt-1 font-mono text-xs text-primary">{task.ticketNumber}</p>
+          <p className="truncate text-xs text-muted-foreground">{task.ticketTitle}</p>
+          {editable && (
+            <button type="button" className="mt-1 text-xs text-muted-foreground hover:text-destructive" onClick={() => patch.mutate({ ticketId: null })}>
+              {t("pipeline.unlink")}
+            </button>
+          )}
+        </div>
+      ) : null}
+
+      {task && (
+        <div className="space-y-0.5 border-t pt-3 text-[11px] text-muted-foreground">
+          {task.createdBy && <p>{t("pipeline.createdBy", { name: task.createdBy })}</p>}
+          {task.completedAt && <p>{t("pipeline.completedOn", { date: new Date(task.completedAt).toLocaleDateString() })}</p>}
+          {task.dueDate && <p>{dayLabel(task.dueDate)}</p>}
+          {task.estimateMinutes ? <p>{hm(task.estimateMinutes)}</p> : null}
+        </div>
+      )}
+    </aside>
+  );
+
+  // ── a new task ──
+  if (isNew) {
+    return shell(
+      <form
+        className="flex min-h-0 flex-1 flex-col"
+        onSubmit={(e) => {
+          e.preventDefault();
+          if (title.trim() && !create.isPending) create.mutate();
+        }}
+      >
+        <div className="flex items-center gap-2 border-b px-7 pb-4 pt-5">
+          <Workflow className="size-5 shrink-0 text-primary" />
+          <Input autoFocus value={title} onChange={(e) => setTitle(e.target.value)} placeholder={t("pipeline.titlePlaceholder")} className="h-12 flex-1 text-lg font-medium" maxLength={200} />
+        </div>
+        <div className="grid min-h-0 flex-1 lg:grid-cols-[minmax(0,1fr)_400px]">
+          {left}
+          {aside}
+        </div>
+        <div className="flex items-center justify-end gap-2 border-t px-7 py-3">
           <Button type="button" variant="outline" onClick={onClose}>
             {t("common.cancel")}
           </Button>
-          <Button type="submit" disabled={!f.title.trim() || create.isPending} className="bg-grad-gold font-semibold text-[#1a1204]">
+          <Button type="submit" disabled={!title.trim() || create.isPending} className="bg-grad-gold font-semibold text-[#1a1204]">
             {create.isPending && <Loader2 className="size-4 animate-spin" />} {t("pipeline.create")}
           </Button>
         </div>
@@ -329,355 +524,87 @@ export function TaskDialog({ taskId, defaults, onClose, onOpenTask }: { taskId: 
     );
   }
 
-  if (isLoading || !task) {
-    return body(
-      <div className="flex flex-1 items-center justify-center">
-        <Loader2 className="size-6 animate-spin text-muted-foreground" />
-      </div>,
-    );
-  }
-
-  const pct = task.checklist.total ? Math.round((task.checklist.done / task.checklist.total) * 100) : 0;
-  const others = (open.data ?? []).filter((x) => x.id !== task.id);
-  const canDelete = task.createdById === me.id || can("pipeline.manage");
-  const saveText = () => {
-    const next = title.trim();
-    if (next && next !== task.title) patch.mutate({ title: next });
-    else setTitle(task.title);
-  };
-
-  return body(
+  // ── an open task ──
+  const t0 = task!;
+  return shell(
     <>
-      {/* header: the title and the status */}
-      <div className="space-y-3 border-b px-6 pb-4 pt-5">
-        <div className="flex items-start gap-3">
+      <div className="space-y-3 border-b px-7 pb-4 pt-5">
+        <div className="flex items-start gap-3 pr-8">
           <Input
             value={title}
-            disabled={!editable}
+            disabled={locked}
             onChange={(e) => setTitle(e.target.value)}
-            onBlur={saveText}
+            onBlur={saveTitle}
             onKeyDown={(e) => e.key === "Enter" && (e.currentTarget.blur(), e.preventDefault())}
             maxLength={200}
-            className={cn("h-11 border-transparent bg-transparent px-1 text-xl font-semibold shadow-none focus-visible:border-input", task.status === "done" && "text-muted-foreground line-through")}
+            className={cn("h-11 border-transparent bg-transparent px-1 text-xl font-semibold shadow-none focus-visible:border-input", t0.status === "done" && "text-muted-foreground line-through")}
           />
-        </div>
-        <div className="flex flex-wrap items-center gap-1.5">
-          {STATUSES.map((s) => (
-            <button
-              key={s}
-              type="button"
-              disabled={!editable || patch.isPending}
-              onClick={() => s !== task.status && patch.mutate({ status: s })}
-              className={cn("flex items-center gap-1 rounded-full border px-3 py-1 text-xs font-medium transition-all", task.status === s ? STATUS_STYLE[s] : "border-transparent text-muted-foreground hover:bg-accent/50")}
-            >
-              {s === "done" ? <CheckCircle2 className="size-3.5" /> : s === "blocked" ? <Lock className="size-3.5" /> : <CircleDashed className="size-3.5" />}
-              {t(`pipeline.status.${s}`)}
-            </button>
-          ))}
-          {task.waiting && (
-            <span className="ml-1 flex items-center gap-1 rounded-full border border-fuchsia-400/40 bg-fuchsia-400/10 px-2.5 py-1 text-xs text-fuchsia-300">
-              <Lock className="size-3" /> {t("pipeline.waitingFor", { title: task.blockedByTitle ?? "" })}
-            </span>
-          )}
-        </div>
-      </div>
-
-      <div className="grid min-h-0 flex-1 gap-0 lg:grid-cols-[minmax(0,1fr)_380px]">
-        {/* the work: instructions, checklist, subtasks, comments */}
-        <div className="min-h-0 space-y-6 overflow-y-auto px-6 py-5">
-          <section className="space-y-1.5">
-            <h3 className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">{t("pipeline.instructions")}</h3>
-            <Textarea
-              value={notes}
-              disabled={!editable}
-              onChange={(e) => setNotes(e.target.value)}
-              onBlur={() => notes !== task.notes && patch.mutate({ notes })}
-              rows={6}
-              placeholder={t("pipeline.instructionsPlaceholder")}
-              maxLength={8000}
-              className="resize-y bg-background/40"
-            />
-          </section>
-
-          <section className="space-y-2">
-            <div className="flex items-center gap-2">
-              <h3 className="flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
-                <ListChecks className="size-3.5" /> {t("pipeline.checklist")}
-              </h3>
-              {task.checklist.total > 0 && (
-                <>
-                  <span className="text-xs text-muted-foreground">
-                    {task.checklist.done}/{task.checklist.total}
-                  </span>
-                  <span className="h-1.5 w-24 overflow-hidden rounded-full bg-muted">
-                    <span className="block h-full rounded-full bg-grad-gold transition-all" style={{ width: `${pct}%` }} />
-                  </span>
-                </>
-              )}
-            </div>
-            <ul className="space-y-1">
-              {task.checklistItems.map((c) => (
-                <li key={c.id} className="group flex items-center gap-2 rounded-lg px-1.5 py-1 hover:bg-accent/30">
-                  <Checkbox checked={c.done} disabled={!editable} onCheckedChange={(v) => void sub(() => api.patch(`/pipeline/tasks/${task.id}/checklist/${c.id}`, { done: v === true }))} />
-                  <span className={cn("min-w-0 flex-1 text-sm", c.done && "text-muted-foreground line-through")}>{c.text}</span>
-                  <select className={cn(selectCls, "h-7 w-24 text-xs")} disabled={!editable} value={c.priority} aria-label={t("pipeline.priority.label")} onChange={(e) => void sub(() => api.patch(`/pipeline/tasks/${task.id}/checklist/${c.id}`, { priority: e.target.value }))}>
-                    {PRIORITIES.map((p) => (
-                      <option key={p} value={p}>
-                        {t(`pipeline.priority.${p}`)}
-                      </option>
-                    ))}
-                  </select>
-                  <select className={cn(selectCls, "h-7 w-32 text-xs")} value={c.assigneeId ?? ""} disabled={!editable} aria-label={t("pipeline.itemAssignee")} onChange={(e) => void sub(() => api.patch(`/pipeline/tasks/${task.id}/checklist/${c.id}`, { assigneeId: e.target.value || null }))}>
-                    <option value="">{t("pipeline.itemNobody")}</option>
-                    {(people.data ?? []).map((p) => (
-                      <option key={p.id} value={p.id}>
-                        {p.name}
-                      </option>
-                    ))}
-                  </select>
-                  <Input type="date" disabled={!editable} value={c.dueDate ?? ""} title={t("pipeline.itemDue")} className={cn("h-7 w-36 px-2 text-xs", !c.dueDate && "opacity-50")} onChange={(e) => void sub(() => api.patch(`/pipeline/tasks/${task.id}/checklist/${c.id}`, { dueDate: e.target.value || null }))} />
-                  <Input type="time" disabled={!editable || !c.dueDate} value={c.dueTime ?? ""} title={t("pipeline.itemDueTime")} className="h-7 w-24 px-2 text-xs" onChange={(e) => void sub(() => api.patch(`/pipeline/tasks/${task.id}/checklist/${c.id}`, { dueTime: e.target.value || null }))} />
-                  {editable && (
-                    <button type="button" className="opacity-0 transition-opacity group-hover:opacity-100" onClick={() => void sub(() => api.del(`/pipeline/tasks/${task.id}/checklist/${c.id}`))} aria-label={t("common.delete")}>
-                      <Trash2 className="size-3.5 text-muted-foreground hover:text-destructive" />
-                    </button>
-                  )}
-                </li>
-              ))}
-            </ul>
+          <div className="flex shrink-0 items-center gap-1">
             {editable && (
-              <form
-                className="flex gap-2"
-                onSubmit={(e) => {
-                  e.preventDefault();
-                  if (!item.trim()) return;
-                  void sub(() => api.post(`/pipeline/tasks/${task.id}/checklist`, { text: item.trim() })).then(() => setItem(""));
-                }}
-              >
-                <Input value={item} onChange={(e) => setItem(e.target.value)} placeholder={t("pipeline.addItem")} className="h-9" maxLength={300} />
-                <Button type="submit" variant="outline" size="icon" className="size-9 shrink-0" disabled={!item.trim()} aria-label={t("pipeline.addItem")}>
-                  <Plus className="size-4" />
-                </Button>
-              </form>
+              <Button variant="outline" size="sm" className="h-9" onClick={() => setNotifying(true)}>
+                <BellRing className="size-4" /> {t("pipeline.notify")}
+              </Button>
             )}
-          </section>
-
-          <section className="space-y-2">
-            <h3 className="flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
-              <Paperclip className="size-3.5" /> {t("pipeline.files.title")}
-              {task.fileList.length > 0 && <span className="font-normal normal-case">{task.fileList.length}</span>}
-            </h3>
-            <FilesBox
-              stored={task.fileList}
-              disabled={!editable}
-              downloadUrl={(id) => `/api/pipeline/tasks/${task.id}/files/${id}`}
-              onRemove={(id) => void sub(() => api.del(`/pipeline/tasks/${task.id}/files/${id}`))}
-              onAdd={(x) =>
-                void sub(async () => {
-                  await api.post(`/pipeline/tasks/${task.id}/files`, { name: x.name, contentType: x.type || "application/octet-stream", data: await fileToBase64(x) });
-                })
-              }
-            />
-          </section>
-
-          <section className="space-y-2">
-            <h3 className="flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
-              <MessageSquare className="size-3.5" /> {t("pipeline.comments")}
-            </h3>
-            <ul className="space-y-2">
-              {task.comments.map((c) => (
-                <li key={c.id} className="rounded-xl border bg-muted/30 px-3 py-2">
-                  <p className="text-xs">
-                    <span className="font-semibold">{c.author}</span> <span className="text-muted-foreground">{new Date(c.createdAt).toLocaleString()}</span>
-                  </p>
-                  <p className="mt-1 whitespace-pre-wrap text-sm">{c.text}</p>
-                </li>
-              ))}
-            </ul>
-            {editable && (
-              <form
-                className="space-y-2"
-                onSubmit={(e) => {
-                  e.preventDefault();
-                  if (!comment.trim()) return;
-                  void sub(() => api.post(`/pipeline/tasks/${task.id}/notes`, { text: comment.trim() })).then(() => setComment(""));
-                }}
-              >
-                <Textarea value={comment} onChange={(e) => setComment(e.target.value)} rows={2} placeholder={t("pipeline.commentPlaceholder")} maxLength={4000} />
-                <Button type="submit" size="sm" variant="outline" disabled={!comment.trim()}>
-                  {t("pipeline.addComment")}
-                </Button>
-              </form>
+            {can("pipeline.edit") && t0.status !== "done" && (
+              <Button variant="outline" size="sm" className="h-9" onClick={() => setAddingDay(true)}>
+                <CalendarPlus className="size-4" /> {t("tickets.addDay.title")}
+              </Button>
             )}
-          </section>
+            {editable && canDelete && (
+              <Button
+                variant="ghost"
+                size="icon"
+                className="size-9 text-muted-foreground hover:text-destructive"
+                aria-label={t("pipeline.delete")}
+                title={t("pipeline.delete")}
+                onClick={() => void confirm({ title: t("pipeline.deleteTitle"), description: t("pipeline.deleteText"), confirmLabel: t("common.delete"), destructive: true }).then((ok) => ok && remove.mutate())}
+              >
+                <Trash2 className="size-4" />
+              </Button>
+            )}
+          </div>
         </div>
-
-        {/* the properties */}
-        <aside className="min-h-0 space-y-4 overflow-y-auto border-t bg-muted/20 px-5 py-5 lg:border-l lg:border-t-0">
-          <Field label={t("pipeline.assignee")} icon={UserRound}>
-            <select className={selectCls} disabled={!editable} value={task.assigneeId ?? ""} onChange={(e) => patch.mutate({ assigneeId: e.target.value || null })}>
-              <option value="">{t("pipeline.unassigned")}</option>
-              {(people.data ?? []).map((p) => (
-                <option key={p.id} value={p.id}>
-                  {p.name}
-                </option>
-              ))}
-            </select>
-          </Field>
-          <Field label={t("pipeline.priority.label")}>
-            <div className="flex gap-1">
-              {PRIORITIES.map((p) => (
+        <div className="flex flex-wrap items-center gap-x-5 gap-y-2">
+          <div className="flex flex-wrap items-center gap-1.5">
+            {STATUSES.map((s) => {
+              const blockedDone = s === "done" && openSteps > 0 && t0.status !== "done";
+              return (
                 <button
-                  key={p}
+                  key={s}
                   type="button"
-                  disabled={!editable}
-                  onClick={() => p !== task.priority && patch.mutate({ priority: p })}
-                  className={cn("flex-1 rounded-md border px-1 py-1.5 text-[11px] font-medium transition-colors", task.priority === p ? PRIORITY_STYLE[p].chip : "border-transparent text-muted-foreground hover:bg-accent/50")}
+                  disabled={locked || patch.isPending || blockedDone}
+                  title={blockedDone ? t("pipeline.errors.checklist_open") : undefined}
+                  onClick={() => s !== t0.status && patch.mutate({ status: s })}
+                  className={cn("flex items-center gap-1 rounded-full border px-3 py-1 text-xs font-medium transition-all disabled:cursor-not-allowed disabled:opacity-50", t0.status === s ? STATUS_STYLE[s] : "border-transparent text-muted-foreground hover:bg-accent/50")}
                 >
-                  {t(`pipeline.priority.${p}`)}
+                  {s === "done" ? <CheckCircle2 className="size-3.5" /> : s === "blocked" ? <Lock className="size-3.5" /> : <CircleDashed className="size-3.5" />}
+                  {t(`pipeline.status.${s}`)}
                 </button>
-              ))}
-            </div>
-          </Field>
-          <KindPicker value={task.kind} onChange={(kind) => patch.mutate({ kind })} disabled={!editable} stacked />
-          {task.kind === "continuous" && (
-            <div className="flex flex-wrap items-end gap-3">
-              <Field label={t("pipeline.remind")} icon={Repeat}>
-                <select className={selectCls} disabled={!editable} value={task.remindEveryDays ?? ""} onChange={(e) => patch.mutate({ remindEveryDays: e.target.value ? Number(e.target.value) : null })}>
-                <option value="">{t("pipeline.remindNone")}</option>
-                {[1, 2, 5, 10].map((n) => (
-                  <option key={n} value={n}>
-                    {t("pipeline.remindEvery", { count: n })}
-                  </option>
-                ))}
-              </select>
-              </Field>
-              {task.remindEveryDays && editable && (
-                <Button type="button" variant="outline" size="sm" className="h-9" onClick={() => void sub(() => api.post(`/pipeline/tasks/${task.id}/check`, {}))}>
-                  <CheckCircle2 className="size-4" /> {t("pipeline.checkNow")}
-                </Button>
-              )}
-            </div>
-          )}
-          <div className="grid grid-cols-2 gap-3">
-            {task.kind === "normal" && (
-              <Field label={t("pipeline.due")} icon={CalendarClock}>
-                <Input type="date" disabled={!editable} value={task.dueDate ?? ""} onChange={(e) => patch.mutate({ dueDate: e.target.value || null })} />
-              </Field>
-            )}
-            <Field label={t("pipeline.estimate")} icon={Clock3}>
-              <Input
-                disabled={!editable}
-                value={estimate}
-                onChange={(e) => setEstimate(e.target.value)}
-                onBlur={() => {
-                  if (!estimate.trim()) return task.estimateMinutes ? patch.mutate({ estimateMinutes: null }) : undefined;
-                  const h = parseHm(estimate);
-                  const m = h === null ? null : Math.round(h * 60);
-                  if (m === null || m < 5) return setEstimate(task.estimateMinutes ? hmHours(task.estimateMinutes / 60) : "");
-                  if (m !== task.estimateMinutes) patch.mutate({ estimateMinutes: m });
-                }}
-                placeholder="1:30"
-              />
-            </Field>
-          </div>
-          <div className="grid grid-cols-2 gap-3">
-            <Field label={t("pipeline.startDate")} icon={PlayCircle}>
-              <Input type="date" disabled={!editable} value={task.startDate ?? ""} onChange={(e) => patch.mutate({ startDate: e.target.value || null })} />
-            </Field>
-            <Field label={t("pipeline.checkpoint")} icon={CalendarClock}>
-              <Input type="date" disabled={!editable} value={task.checkpointDate ?? ""} onChange={(e) => patch.mutate({ checkpointDate: e.target.value || null })} />
-            </Field>
-            <Field label={t("pipeline.checkpointTime")}>
-              <Input type="time" disabled={!editable || !task.checkpointDate} value={task.checkpointTime ?? ""} onChange={(e) => patch.mutate({ checkpointTime: e.target.value || null })} />
-            </Field>
-          </div>
-          <Field label={t("pipeline.parent")} icon={Link2}>
-            <select className={selectCls} disabled={!editable} value={task.parentId ?? ""} onChange={(e) => patch.mutate({ parentId: e.target.value || null })}>
-              <option value="">{t("pipeline.noParent")}</option>
-              {others.map((p) => (
-                <option key={p.id} value={p.id}>
-                  {p.title}
-                </option>
-              ))}
-            </select>
-          </Field>
-          <Field label={t("pipeline.waitsFor")} icon={Lock}>
-            <select className={selectCls} disabled={!editable} value={task.blockedById ?? ""} onChange={(e) => patch.mutate({ blockedById: e.target.value || null })}>
-              <option value="">{t("pipeline.noWait")}</option>
-              {others.map((p) => (
-                <option key={p.id} value={p.id}>
-                  {p.title}
-                </option>
-              ))}
-            </select>
-            <span className="block text-[11px] text-muted-foreground">{t("pipeline.waitsHint")}</span>
-          </Field>
-          <div className="space-y-1">
-            <span className="flex items-center gap-1.5 text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
-              <Tag className="size-3" /> {t("pipeline.tags")}
-            </span>
-            <TagsEditor value={task.tags} disabled={!editable} onChange={(tags) => patch.mutate({ tags })} />
-          </div>
-          {task.kind === "normal" && (
-            <div className="space-y-1">
-              <span className="flex items-center gap-1.5 text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
-                <Repeat className="size-3" /> {t("pipeline.recurring")}
+              );
+            })}
+            {t0.waiting && (
+              <span className="ml-1 flex items-center gap-1 rounded-full border border-fuchsia-400/40 bg-fuchsia-400/10 px-2.5 py-1 text-xs text-fuchsia-300">
+                <Lock className="size-3" /> {t("pipeline.waitingFor", { title: t0.blockedByTitle ?? "" })}
               </span>
-              <RecurrenceEditor value={task.recurrence} disabled={!editable} onChange={(recurrence) => patch.mutate({ recurrence })} />
+            )}
+          </div>
+          {total > 0 && (
+            <div className="flex min-w-56 items-center gap-2 text-xs text-muted-foreground">
+              <span className="h-2 w-40 overflow-hidden rounded-full bg-muted">
+                <span className="block h-full rounded-full bg-grad-gold transition-all" style={{ width: `${pct}%` }} />
+              </span>
+              <span className="font-mono">{pct}%</span>
+              <span>{t("pipeline.steps.progress", { done: doneCount, total })}</span>
             </div>
           )}
-          <div className="space-y-1">
-            <span className="flex items-center gap-1.5 text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
-              <Eye className="size-3" /> {t("pipeline.whoSees")}
-            </span>
-            <VisibilityEditor
-              value={task.visibility}
-              viewerIds={task.viewerIds}
-              people={people.data ?? []}
-              meId={me.id}
-              disabled={!editable || (task.createdById !== me.id && task.assigneeId !== me.id)}
-              onChange={(visibility, viewerIds) => patch.mutate({ visibility, viewerIds })}
-            />
-          </div>
-          {task.ticketNumber ? (
-            <div className="rounded-xl border bg-background/40 p-3 text-sm">
-              <p className="flex items-center gap-1.5 text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
-                <TicketIcon className="size-3" /> {t("pipeline.ticket")}
-              </p>
-              <p className="mt-1 font-mono text-xs text-primary">{task.ticketNumber}</p>
-              <p className="truncate text-xs text-muted-foreground">{task.ticketTitle}</p>
-              {editable && (
-                <button type="button" className="mt-1 text-xs text-muted-foreground hover:text-destructive" onClick={() => patch.mutate({ ticketId: null })}>
-                  {t("pipeline.unlink")}
-                </button>
-              )}
-            </div>
-          ) : null}
-          <div className="space-y-0.5 border-t pt-3 text-[11px] text-muted-foreground">
-            {task.createdBy && <p>{t("pipeline.createdBy", { name: task.createdBy })}</p>}
-            {task.completedAt && <p>{t("pipeline.completedOn", { date: new Date(task.completedAt).toLocaleDateString() })}</p>}
-            {task.dueDate && <p>{dayLabel(task.dueDate)}</p>}
-            {task.estimateMinutes ? <p>{hm(task.estimateMinutes)}</p> : null}
-          </div>
-          {can("pipeline.edit") && task.status !== "done" && (
-            <Button variant="ghost" size="sm" className="w-full justify-start text-muted-foreground hover:text-primary" onClick={() => setAddingDay(true)}>
-              <CalendarPlus className="size-4" /> {t("tickets.addDay.title")}
-            </Button>
-          )}
-          {editable && canDelete && (
-            <Button
-              variant="ghost"
-              size="sm"
-              className="w-full justify-start text-muted-foreground hover:text-destructive"
-              onClick={() => void confirm({ title: t("pipeline.deleteTitle"), description: t("pipeline.deleteText"), confirmLabel: t("common.delete"), destructive: true }).then((ok) => ok && remove.mutate())}
-            >
-              <Trash2 className="size-4" /> {t("pipeline.delete")}
-            </Button>
-          )}
-        </aside>
+        </div>
       </div>
-      {addingDay && <AddToDayDialog open onOpenChange={(o) => !o && setAddingDay(false)} tk={{ id: task.id, title: task.title }} kind="task" />}
+      <div className="grid min-h-0 flex-1 lg:grid-cols-[minmax(0,1fr)_400px]">
+        {left}
+        {aside}
+      </div>
+      {addingDay && <AddToDayDialog open onOpenChange={(o) => !o && setAddingDay(false)} tk={{ id: t0.id, title: t0.title }} kind="task" />}
+      {notifying && <TaskNotify task={{ id: t0.id, title: t0.title }} people={people.data ?? []} onClose={() => setNotifying(false)} />}
     </>,
   );
 }
