@@ -428,3 +428,8 @@ A technician can **add any open ticket to their own day** with a time to do it b
 ## Compact ticket view columns (latest)
 
 The **Compact** view (`CompactList` in `src/pages/tickets/Layouts.tsx`, also the tickets lists of Ma journée) now has a **Client** column right after the ticket name and, like the standard table, its columns can be **moved** (drag a title) and **resized** (drag the line between two titles, double-click for the usual width, a reset arrow when changed), kept on this computer (`akab.tickets.compact.columns.v1`, separate from the standard view's). Priority, checkpoint, due date and status stay editable in place with `tickets.edit`.
+
+## Pipeline: checklist items you can assign, and make into subtasks (latest)
+
+- A checklist item has a person (`pipeline_checklist.assignee_id`, active staff, `invalid_assignee`-style 400 otherwise; they get the `pipeline.assigned` bell, also when the item is assigned later) and can become a **subtask** (`child_task_id`, migration `0140`; `POST /api/pipeline/tasks/:id/checklist/:cid/task`, `pipeline.edit`, once per item: 409 `item_has_task`): a real task with the item's words, priority, day and person (else the parent's), the parent's visibility (team, else private), `parentId` = the task, linked to the item (button "Créer une sous-tâche" → "Ouvrir la sous-tâche"). The assignee select is on every item of both windows (`assigneeId` on `POST /tasks` items, `POST` / `PATCH /tasks/:id/checklist`). The item itself is still ticked by hand.
+- The task window's error toast now carries the server's code when it is not a known one ("Something went wrong (code)"), so a creation failing on a server that is not up to date shows why. Test: "a recurring task is created as the screen sends it…".

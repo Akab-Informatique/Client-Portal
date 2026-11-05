@@ -1,0 +1,4 @@
+ALTER TABLE "pipeline_checklist" ADD COLUMN "assignee_id" uuid;--> statement-breakpoint
+ALTER TABLE "pipeline_checklist" ADD COLUMN "child_task_id" uuid;--> statement-breakpoint
+ALTER TABLE "pipeline_checklist" ADD CONSTRAINT "pipeline_checklist_assignee_id_users_id_fk" FOREIGN KEY ("assignee_id") REFERENCES "public"."users"("id") ON DELETE set null ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE "pipeline_checklist" ADD CONSTRAINT "pipeline_checklist_child_task_id_pipeline_tasks_id_fk" FOREIGN KEY ("child_task_id") REFERENCES "public"."pipeline_tasks"("id") ON DELETE set null ON UPDATE no action;

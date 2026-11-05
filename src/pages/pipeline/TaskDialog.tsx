@@ -29,6 +29,8 @@ export function useOpenTasks() {
 
 export function taskError(t: (k: string, o?: Record<string, unknown>) => string, e: unknown): string {
   if (e instanceof ApiError && ["task_blocked", "task_open_children", "task_cycle", "invalid_assignee", "invalid_ticket", "forbidden"].includes(e.code)) return t(`pipeline.errors.${e.code}`);
+  // keep the reason visible: a bare "something went wrong" says nothing about a server that is not up to date
+  if (e instanceof ApiError && e.code && e.code !== "error") return `${t("common.error")} (${e.code})`;
   return t("common.error");
 }
 
@@ -121,7 +123,7 @@ export function TaskDialog({ taskId, defaults, onClose, onOpenTask }: { taskId: 
   }, [task?.id, task?.updatedAt]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // ── a new task ──
-  const [f, setF] = useState({ title: "", notes: "", assigneeId: defaults?.assigneeId ?? me.id, dueDate: defaults?.dueDate ?? "", startDate: "", checkpointDate: "", checkpointTime: "", kind: "normal" as TaskKind, remind: "", priority: "normal" as TaskPriority, estimate: "", parentId: defaults?.parentId ?? "", checklist: [] as { text: string; priority: TaskPriority; dueDate: string; dueTime: string }[], tags: [] as string[], recurrence: null as Recurrence | null, visibility: "team" as Visibility, viewerIds: [] as string[] });
+  const [f, setF] = useState({ title: "", notes: "", assigneeId: defaults?.assigneeId ?? me.id, dueDate: defaults?.dueDate ?? "", startDate: "", checkpointDate: "", checkpointTime: "", kind: "normal" as TaskKind, remind: "", priority: "normal" as TaskPriority, estimate: "", parentId: defaults?.parentId ?? "", checklist: [] as { text: string; priority: TaskPriority; dueDate: string; dueTime: string; assigneeId: string }[], tags: [] as string[], recurrence: null as Recurrence | null, visibility: "team" as Visibility, viewerIds: [] as string[] });
   const [staged, setStaged] = useState<File[]>([]);
   const create = useMutation({
     mutationFn: () => {
@@ -143,7 +145,7 @@ export function TaskDialog({ taskId, defaults, onClose, onOpenTask }: { taskId: 
         viewerIds: f.viewerIds,
         parentId: f.parentId || null,
         estimateMinutes: minutes && minutes >= 5 ? minutes : null,
-        checklist: f.checklist.filter((x) => x.text.trim()).map((x) => ({ text: x.text.trim(), priority: x.priority, dueDate: x.dueDate || null, dueTime: x.dueDate && x.dueTime ? x.dueTime : null })),
+        checklist: f.checklist.filter((x) => x.text.trim()).map((x) => ({ text: x.text.trim(), priority: x.priority, dueDate: x.dueDate || null, dueTime: x.dueDate && x.dueTime ? x.dueTime : null, assigneeId: x.assigneeId || null })),
       });
     },
     onSuccess: async (r) => {
@@ -275,6 +277,14 @@ export function TaskDialog({ taskId, defaults, onClose, onOpenTask }: { taskId: 
                       </option>
                     ))}
                   </select>
+                  <select className={cn(selectCls, "h-8 w-36 text-xs")} value={it.assigneeId} aria-label={t("pipeline.itemAssignee")} onChange={(e) => setF({ ...f, checklist: f.checklist.map((x, j) => (j === i ? { ...x, assigneeId: e.target.value } : x)) })}>
+                    <option value="">{t("pipeline.itemNobody")}</option>
+                    {(people.data ?? []).map((p) => (
+                      <option key={p.id} value={p.id}>
+                        {p.name}
+                      </option>
+                    ))}
+                  </select>
                   <Input type="date" value={it.dueDate} title={t("pipeline.itemDue")} onChange={(e) => setF({ ...f, checklist: f.checklist.map((x, j) => (j === i ? { ...x, dueDate: e.target.value } : x)) })} className="h-8 w-36 px-2 text-xs" />
                   <Input type="time" disabled={!it.dueDate} value={it.dueTime} title={t("pipeline.itemDueTime")} onChange={(e) => setF({ ...f, checklist: f.checklist.map((x, j) => (j === i ? { ...x, dueTime: e.target.value } : x)) })} className="h-8 w-24 px-2 text-xs" />
                   <button type="button" onClick={() => setF({ ...f, checklist: f.checklist.filter((_, j) => j !== i) })} aria-label={t("common.delete")}>
@@ -282,7 +292,7 @@ export function TaskDialog({ taskId, defaults, onClose, onOpenTask }: { taskId: 
                   </button>
                 </div>
               ))}
-              <Button type="button" variant="outline" size="sm" className="h-8" onClick={() => setF({ ...f, checklist: [...f.checklist, { text: "", priority: "normal", dueDate: "", dueTime: "" }] })}>
+              <Button type="button" variant="outline" size="sm" className="h-8" onClick={() => setF({ ...f, checklist: [...f.checklist, { text: "", priority: "normal", dueDate: "", dueTime: "", assigneeId: "" }] })}>
                 <Plus className="size-3.5" /> {t("pipeline.addItem")}
               </Button>
             </div>
@@ -428,8 +438,27 @@ export function TaskDialog({ taskId, defaults, onClose, onOpenTask }: { taskId: 
                       </option>
                     ))}
                   </select>
+                  <select className={cn(selectCls, "h-7 w-32 text-xs")} value={c.assigneeId ?? ""} disabled={!editable} aria-label={t("pipeline.itemAssignee")} onChange={(e) => void sub(() => api.patch(`/pipeline/tasks/${task.id}/checklist/${c.id}`, { assigneeId: e.target.value || null }))}>
+                    <option value="">{t("pipeline.itemNobody")}</option>
+                    {(people.data ?? []).map((p) => (
+                      <option key={p.id} value={p.id}>
+                        {p.name}
+                      </option>
+                    ))}
+                  </select>
                   <Input type="date" disabled={!editable} value={c.dueDate ?? ""} title={t("pipeline.itemDue")} className={cn("h-7 w-36 px-2 text-xs", !c.dueDate && "opacity-50")} onChange={(e) => void sub(() => api.patch(`/pipeline/tasks/${task.id}/checklist/${c.id}`, { dueDate: e.target.value || null }))} />
                   <Input type="time" disabled={!editable || !c.dueDate} value={c.dueTime ?? ""} title={t("pipeline.itemDueTime")} className="h-7 w-24 px-2 text-xs" onChange={(e) => void sub(() => api.patch(`/pipeline/tasks/${task.id}/checklist/${c.id}`, { dueTime: e.target.value || null }))} />
+                  {c.childTaskId ? (
+                    <button type="button" className="shrink-0 rounded border px-1.5 py-0.5 text-[10px] text-primary hover:bg-accent/40" onClick={() => onOpenTask?.(c.childTaskId!)}>
+                      {t("pipeline.itemOpenTask")}
+                    </button>
+                  ) : (
+                    editable && (
+                      <button type="button" className="shrink-0 rounded border px-1.5 py-0.5 text-[10px] text-muted-foreground hover:text-foreground" onClick={() => void sub(() => api.post(`/pipeline/tasks/${task.id}/checklist/${c.id}/task`, {}))}>
+                        {t("pipeline.itemMakeTask")}
+                      </button>
+                    )
+                  )}
                   {editable && (
                     <button type="button" className="opacity-0 transition-opacity group-hover:opacity-100" onClick={() => void sub(() => api.del(`/pipeline/tasks/${task.id}/checklist/${c.id}`))} aria-label={t("common.delete")}>
                       <Trash2 className="size-3.5 text-muted-foreground hover:text-destructive" />

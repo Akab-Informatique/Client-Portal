@@ -6962,6 +6962,32 @@ describe("pipeline: times, files, recurring and private tasks", () => {
     expect((await tech.patch(`/api/pipeline/tasks/${plain.id}`, { status: "done" })).json.next).toBeNull();
   });
 
+  it("a recurring task is created as the screen sends it; checklist items can be assigned and become subtasks", async () => {
+    resetRateLimit("login:ip:unknown");
+    const tech = await signIn("tech@akab.local");
+    const admin = await signIn("admin@akab.local");
+    const me = (await tech.get("/api/me")).json.id as string;
+    const boss = (await admin.get("/api/me")).json.id as string;
+    // exactly the body of the new-task window, a weekly rule with no day chosen and no end
+    const r = await tech.post("/api/pipeline/tasks", { title: "Récurrente", notes: "", priority: "normal", assigneeId: me, dueDate: null, kind: "normal", remindEveryDays: null, startDate: null, checkpointDate: null, checkpointTime: null, tags: [], recurrence: { freq: "weekly", interval: 1, weekdays: [], until: null }, visibility: "team", viewerIds: [], parentId: null, estimateMinutes: null, checklist: [] });
+    expect(r.status).toBe(201);
+    const d = await tech.post("/api/pipeline/tasks", { title: "Récurrente 2", assigneeId: me, dueDate: "2030-01-07", kind: "normal", recurrence: { freq: "monthly", interval: 2, until: "2031-01-01" }, checklist: [{ text: "Un", priority: "high", dueDate: null, dueTime: null, assigneeId: boss }] });
+    expect(d.status).toBe(201);
+    const full = (await tech.get(`/api/pipeline/tasks/${d.json.id}`)).json;
+    expect(full.checklistItems[0]).toMatchObject({ text: "Un", assigneeId: boss, childTaskId: null });
+    // assign an item later, then make it a subtask
+    const item = full.checklistItems[0];
+    expect((await tech.patch(`/api/pipeline/tasks/${d.json.id}/checklist/${item.id}`, { assigneeId: null })).json.assigneeId).toBeNull();
+    expect((await tech.patch(`/api/pipeline/tasks/${d.json.id}/checklist/${item.id}`, { assigneeId: "00000000-0000-4000-8000-000000000000" })).status).toBe(400);
+    await tech.patch(`/api/pipeline/tasks/${d.json.id}/checklist/${item.id}`, { assigneeId: boss });
+    const child = await tech.post(`/api/pipeline/tasks/${d.json.id}/checklist/${item.id}/task`, {});
+    expect(child.status).toBe(201);
+    expect(child.json).toMatchObject({ title: "Un", assigneeId: boss, parentId: d.json.id, priority: "high" });
+    const after = (await tech.get(`/api/pipeline/tasks/${d.json.id}`)).json;
+    expect(after.checklistItems[0].childTaskId).toBe(child.json.id);
+    expect((await tech.post(`/api/pipeline/tasks/${d.json.id}/checklist/${item.id}/task`, {})).status).toBe(409);
+  });
+
   it("private tasks: only who made it, who has it and the people chosen — not even a manager", async () => {
     resetRateLimit("login:ip:unknown");
     const admin = await signIn("admin@akab.local");
