@@ -5077,6 +5077,8 @@ const en: Dict = {
     minimizeHint: "Minimize to the dock (you stay on the ticket)",
     restore: "Reopen",
     dock: "Minimized tickets",
+    dockDrawer_one: "Minimized tickets ({{count}}): open the drawer",
+    dockDrawer_other: "Minimized tickets ({{count}}): open the drawer",
     dueFilter: { overdue: "Overdue", today: "Today" },
     metrics: {
       fresh: "New",

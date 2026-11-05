@@ -5075,6 +5075,8 @@ const fr = {
     minimizeHint: "Réduire dans le dock (vous restez sur le billet)",
     restore: "Rouvrir",
     dock: "Billets réduits",
+    dockDrawer_one: "Billets réduits ({{count}}) : ouvrir le tiroir",
+    dockDrawer_other: "Billets réduits ({{count}}) : ouvrir le tiroir",
     dueFilter: { overdue: "En retard", today: "Aujourd'hui" },
     metrics: {
       fresh: "Nouveaux",

@@ -509,6 +509,24 @@
     --timer-angle: 360deg;
   }
 }
+/* The drawer arrow of the minimized tickets: minimal, and an electric edge runs around it while something is inside */
+.dock-arrow {
+  position: fixed;
+}
+.dock-arrow-live::before {
+  content: "";
+  position: absolute;
+  inset: -1.5px -1.5px -1.5px 0;
+  border-radius: 0 10px 10px 0;
+  background: conic-gradient(from var(--timer-angle, 0deg), transparent 0 18%, #ffe24a 26%, transparent 34% 52%, #7dd3fc 58%, transparent 66%);
+  filter: drop-shadow(0 0 5px rgba(255, 206, 26, 0.85)) drop-shadow(0 0 10px rgba(125, 211, 252, 0.4));
+  animation: timer-flicker 1.7s ease-in-out infinite, timer-angle 1.4s linear infinite;
+}
+@media (prefers-reduced-motion: reduce) {
+  .dock-arrow-live::before {
+    animation: none;
+  }
+}
 @media (prefers-reduced-motion: reduce) {
   .timer-field,
   .timer-field-hex::before,

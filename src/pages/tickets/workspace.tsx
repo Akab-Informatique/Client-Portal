@@ -1,7 +1,7 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent, type ReactNode } from "react";
 import { useTranslation } from "react-i18next";
 import { AnimatePresence, motion } from "motion/react";
-import { Hexagon, Maximize2, PanelBottom, RectangleHorizontal, Ticket, X } from "lucide-react";
+import { ChevronRight, Hexagon, Maximize2, PanelBottom, RectangleHorizontal, Ticket, X } from "lucide-react";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { cn } from "@/lib/utils";
 import { TicketOverlay } from "./TicketPanel";
@@ -168,6 +168,13 @@ function Dock({
       .filter((x) => x.state !== "pending" && !docked.some((d) => d.id === x.ticketId))
       .map((x) => ({ id: x.ticketId, number: x.ticketNumber, title: x.ticketTitle })),
   ];
+  const [drawer, setDrawer] = useState(false);
+  useEffect(() => {
+    if (!drawer) return;
+    const on = (e: KeyboardEvent) => e.key === "Escape" && setDrawer(false);
+    window.addEventListener("keydown", on);
+    return () => window.removeEventListener("keydown", on);
+  }, [drawer]);
   if (hidden || items.length === 0) return null;
   const item = (d: Docked) => {
     const timer = list.find((x) => x.ticketId === d.id);
@@ -189,17 +196,36 @@ function Dock({
       />
     );
   };
-  const free = items.filter((d) => places[d.id]?.x !== undefined);
-  const stacked = items.filter((d) => places[d.id]?.x === undefined);
+  // Minimized tickets live in a drawer along the bottom, out of the way: a thin arrow on the left edge opens it, and
+  // glows electric while there is something in it.
   return (
     <>
-      <div
-        className="pointer-events-none fixed bottom-4 right-4 z-40 flex max-w-[calc(100vw-2rem)] flex-wrap-reverse items-end justify-end gap-2"
-        aria-label={t("tickets.dock")}
+      <button
+        type="button"
+        onClick={() => setDrawer((o) => !o)}
+        aria-expanded={drawer}
+        aria-label={t("tickets.dockDrawer", { count: items.length })}
+        title={t("tickets.dockDrawer", { count: items.length })}
+        className={cn("dock-arrow group fixed bottom-6 left-0 z-[42] h-11 w-[18px] transition-transform", !drawer && "dock-arrow-live", drawer && "translate-x-0")}
       >
-        <AnimatePresence>{stacked.map(item)}</AnimatePresence>
+        <span className="relative flex size-full items-center justify-center rounded-r-lg border border-l-0 border-[color:var(--gold)]/40 bg-popover/95 text-primary backdrop-blur">
+          <ChevronRight className={cn("size-3.5 transition-transform duration-200", drawer && "rotate-90")} />
+        </span>
+        {!drawer && items.length > 1 && <span className="absolute -right-1 -top-1 flex size-3.5 items-center justify-center rounded-full bg-primary font-mono text-[9px] font-bold leading-none text-[#1a1204]">{items.length}</span>}
+      </button>
+      {drawer && <button type="button" aria-hidden tabIndex={-1} className="fixed inset-0 z-[39] cursor-default" onClick={() => setDrawer(false)} />}
+      <div
+        className={cn(
+          "pointer-events-none fixed inset-x-0 bottom-0 z-40 transition-transform duration-300 ease-out",
+          drawer ? "translate-y-0" : "translate-y-full",
+        )}
+        aria-label={t("tickets.dock")}
+        aria-hidden={!drawer}
+      >
+        <div className="pointer-events-auto flex flex-wrap items-end gap-2 border-t border-[color:var(--gold)]/25 bg-popover/90 px-10 pb-3 pt-12 shadow-[0_-12px_40px_-16px_rgba(0,0,0,0.7)] backdrop-blur-xl">
+          <AnimatePresence>{items.map(item)}</AnimatePresence>
+        </div>
       </div>
-      <AnimatePresence>{free.map(item)}</AnimatePresence>
     </>
   );
 }
@@ -212,7 +238,9 @@ function DockItem({
   onPlace,
   onRestore,
   onClose,
+  draggable = false,
 }: {
+  draggable?: boolean;
   d: Docked;
   timer?: Timer;
   at: number;
@@ -230,7 +258,8 @@ function DockItem({
   const [live, setLive] = useState<{ x: number; y: number } | null>(null);
   const suppressClick = useRef(false);
   const onPointerDown = (e: ReactPointerEvent<HTMLDivElement>) => {
-    if (e.button !== 0 || (e.target as HTMLElement).closest("[data-nodrag]")) return;
+    // (the drawer is a fixed row: a cell is no longer dragged about the page)
+    if (e.button !== 0 || (e.target as HTMLElement).closest("[data-nodrag]") || !draggable) return;
     const r = ref.current!.getBoundingClientRect();
     drag.current = { dx: e.clientX - r.left, dy: e.clientY - r.top, sx: e.clientX, sy: e.clientY, moved: false };
     e.currentTarget.setPointerCapture(e.pointerId);
@@ -261,7 +290,7 @@ function DockItem({
   };
   // a honeycomb cell by default; a tab when asked
   const compact = place.compact !== false;
-  const pos = live ?? (place.x !== undefined && place.y !== undefined ? place : null);
+  const pos = draggable ? (live ?? (place.x !== undefined && place.y !== undefined ? place : null)) : null;
   const size = compact ? { w: 104, h: 116 } : { w: 288, h: 52 };
   const at2 = pos ? clamp(pos.x!, pos.y!, size.w, size.h) : null;
   const glow = d.dueAt && d.statusKind ? dueGlow(d.dueAt, d.statusKind, 0.9, d) : priorityGlow(d.priority ?? "medium", 0.9);
@@ -276,7 +305,7 @@ function DockItem({
       <IconBtn label={compact ? t("tickets.dockTab.normal") : t("tickets.dockTab.compact")} onClick={() => onPlace({ compact: !compact })}>
         {compact ? <RectangleHorizontal className="size-3.5" /> : <Hexagon className="size-3.5" />}
       </IconBtn>
-      {pos && (
+      {pos && draggable && (
         <IconBtn label={t("tickets.dockTab.back")} onClick={() => onPlace({ x: undefined, y: undefined })}>
           <PanelBottom className="size-3.5" />
         </IconBtn>
