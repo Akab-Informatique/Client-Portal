@@ -2864,6 +2864,25 @@ export const projectTasks = pgTable(
   (t) => [index("project_tasks_milestone_idx").on(t.milestoneId, t.position)],
 );
 
+/** Files of a project (base64, 5 MB each): what a ticket brought when it became a project, and what the team adds */
+export const projectFiles = pgTable(
+  "project_files",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    projectId: uuid("project_id")
+      .notNull()
+      .references(() => projects.id, { onDelete: "cascade" }),
+    name: text("name").notNull(),
+    contentType: text("content_type").notNull().default("application/octet-stream"),
+    size: integer("size").notNull().default(0),
+    data: text("data").notNull(),
+    /** Who added it (a name, kept when the ticket it came from is gone) */
+    author: text("author").notNull().default(""),
+    createdAt: created(),
+  },
+  (t) => [index("project_files_project_idx").on(t.projectId)],
+);
+
 /** The thread of a task: comments, newest first */
 export const projectTaskNotes = pgTable(
   "project_task_notes",

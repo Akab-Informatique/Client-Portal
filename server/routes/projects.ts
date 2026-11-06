@@ -51,6 +51,8 @@ async function loadProject(id: string): Promise<Project> {
 }
 
 /** Active staff only: a lead, a member or an assignee is always someone who can sign in */
+const PROJECT_FILE_BYTES = 5 * 1024 * 1024;
+
 async function activeStaff(ids: string[]): Promise<void> {
   const want = [...new Set(ids)];
   if (!want.length) return;
@@ -922,6 +924,37 @@ export const projectsRoutes = new Hono<AppEnv>()
     if (!cur) throw new HTTPException(404, { message: "not_found" });
     if (cur.authorId !== a.user.id && !a.permissions.includes("projects.manage")) throw new HTTPException(403, { message: "Forbidden" });
     await db().delete(schema.projectNotes).where(eq(schema.projectNotes.id, cur.id));
+    return c.json({ ok: true });
+  })
+
+  // ── files of the project (a ticket turned into a project brings its files; the team adds more) ──
+  .get("/:id/files", requirePermission("projects.view"), async (c) => {
+    const p = await loadProject(c.req.param("id"));
+    const f = schema.projectFiles;
+    return c.json(await db().select({ id: f.id, name: f.name, size: f.size, author: f.author, createdAt: f.createdAt }).from(f).where(eq(f.projectId, p.id)).orderBy(asc(f.createdAt)));
+  })
+  .post("/:id/files", requirePermission("projects.edit"), async (c) => {
+    const a = auth(c);
+    const p = await loadProject(c.req.param("id"));
+    const t = await body(c, z.object({ name: z.string().trim().min(1).max(200), contentType: z.string().max(120).default("application/octet-stream"), data: z.string().regex(/^[A-Za-z0-9+/]*={0,2}$/).max(Math.ceil(PROJECT_FILE_BYTES / 3) * 4) }));
+    if (!t.data) throw new HTTPException(400, { message: "Validation failed" });
+    const size = Math.floor((t.data.length * 3) / 4) - (t.data.endsWith("==") ? 2 : t.data.endsWith("=") ? 1 : 0);
+    const [row] = await db().insert(schema.projectFiles).values({ projectId: p.id, name: t.name, contentType: t.contentType, size, data: t.data, author: a.user.name }).returning({ id: schema.projectFiles.id, name: schema.projectFiles.name, size: schema.projectFiles.size });
+    await audit(a.user.id, "project.file_added", p.id, { name: t.name, bytes: size });
+    return c.json(row, 201);
+  })
+  /** A file of a project (always a download, never shown in the page) */
+  .get("/:id/files/:fid", requirePermission("projects.view"), async (c) => {
+    const p = await loadProject(c.req.param("id"));
+    const [f] = await db().select().from(schema.projectFiles).where(and(eq(schema.projectFiles.id, zUuid.parse(c.req.param("fid"))), eq(schema.projectFiles.projectId, p.id)));
+    if (!f) throw new HTTPException(404, { message: "not_found" });
+    return new Response(Buffer.from(f.data, "base64"), { headers: { "content-type": "application/octet-stream", "content-disposition": `attachment; filename*=UTF-8''${encodeURIComponent(f.name)}`, "x-content-type-options": "nosniff", "cache-control": "private, no-store" } });
+  })
+  .delete("/:id/files/:fid", requirePermission("projects.edit"), async (c) => {
+    const a = auth(c);
+    const p = await loadProject(c.req.param("id"));
+    await db().delete(schema.projectFiles).where(and(eq(schema.projectFiles.id, zUuid.parse(c.req.param("fid"))), eq(schema.projectFiles.projectId, p.id)));
+    await audit(a.user.id, "project.file_removed", p.id, { file: c.req.param("fid") });
     return c.json({ ok: true });
   })
 

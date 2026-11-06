@@ -10726,6 +10726,11 @@ describe("a ticket turned into a project", () => {
       const tk = (await tech.post("/api/tickets", { title: "Migration serveur", description: "Gros chantier", companyId: co.autotaskId, priority: "medium", queue: "support", assigneeId: null, dueDate: "2026-12-05" })).json;
       await tech.post(`/api/tickets/${tk.id}/notes`, { text: "Discussion avec le client", internal: false, email: false });
       await tech.post(`/api/tickets/${tk.id}/notes`, { text: "Note pour l'équipe", internal: true });
+      // a checklist (one item done, one waiting for the first), a file, tags and a start day
+      const [first] = await db().insert(schema.ticketChecklist).values({ ticketId: tk.id, text: "Sauvegarder", position: 0, done: true }).returning();
+      await db().insert(schema.ticketChecklist).values({ ticketId: tk.id, text: "Migrer", position: 1, dependsOnId: first.id });
+      await db().insert(schema.ticketAttachments).values({ ticketId: tk.id, name: "plan.txt", contentType: "text/plain", size: 5, data: Buffer.from("salut").toString("base64"), author: "Tech" });
+      await db().insert(schema.ticketMeta).values({ ticketId: tk.id, startDate: "2026-11-09", tags: ["serveur"], estimateMinutes: 120 }).onConflictDoUpdate({ target: schema.ticketMeta.ticketId, set: { startDate: "2026-11-09", tags: ["serveur"], estimateMinutes: 120 } });
       // two time entries: one still pending, one already approved (stays)
       const type = await (await import("../server/lib/timesheets.ts")).labourType();
       const mkTime = async (minutes: number) => {
@@ -10745,12 +10750,20 @@ describe("a ticket turned into a project", () => {
       const approvedLine = (await admin.get("/api/billables?kind=charge")).json.find((i: any) => i.sourceId === `pcharge:${c2}`);
       await admin.post("/api/billables/status", { ids: [approvedLine.id], status: "approved" });
 
-      expect((await tech.get(`/api/tickets/${tk.id}/to-project`)).json).toEqual({ notes: 2, time: { moved: 1, stays: 1 }, charges: { moved: 1, stays: 1 } });
+      expect((await tech.get(`/api/tickets/${tk.id}/to-project`)).json).toEqual({ notes: 2, checklist: 2, files: 1, time: { moved: 1, stays: 1 }, charges: { moved: 1, stays: 1 } });
       const r = await tech.post(`/api/tickets/${tk.id}/to-project`, {});
       expect(r.status).toBe(200);
-      expect(r.json).toMatchObject({ ok: true, notes: 2, time: { moved: 1, stays: 1 }, charges: { moved: 1, stays: 1 } });
+      expect(r.json).toMatchObject({ ok: true, notes: 2, checklist: 2, files: 1, time: { moved: 1, stays: 1 }, charges: { moved: 1, stays: 1 } });
       const project = (await admin.get(`/api/projects/${r.json.project.id}`)).json;
-      expect(project).toMatchObject({ name: "Migration serveur", client: { id: co.id } });
+      expect(project).toMatchObject({ name: "Migration serveur", client: { id: co.id }, startDate: "2026-11-09", dueDate: "2026-12-05", budgetHours: 2 });
+      // the checklist is a phase "Transfert" with a task per item; the ticket has none left
+      const phase = project.milestones.find((m: any) => m.name === `Transfert depuis ${tk.number}`);
+      expect(phase.tasks.map((x: any) => [x.title, x.status])).toEqual([["Sauvegarder", "done"], ["Migrer", "todo"]]);
+      expect(await db().select().from(schema.ticketChecklist).where(eq(schema.ticketChecklist.ticketId, tk.id))).toEqual([]);
+      // the file moved; the first note keeps the ticket's tags
+      expect((await tech.get(`/api/projects/${project.id}/files`)).json.map((f: any) => f.name)).toEqual(["plan.txt"]);
+      expect(await db().select().from(schema.ticketAttachments).where(eq(schema.ticketAttachments.ticketId, tk.id))).toEqual([]);
+      expect(project.notes.map((n: any) => n.text).join(" ")).toContain("Étiquettes : serveur");
       // the notes are in the project, each saying where it came from
       expect(project.notes.map((n: any) => n.text).join("\n")).toContain("Discussion avec le client");
       expect(project.notes.map((n: any) => n.text).join("\n")).toContain(`[${tk.number}`);

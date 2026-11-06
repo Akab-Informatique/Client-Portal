@@ -10,7 +10,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { api, ApiError } from "@/lib/api";
 
-type Preview = { notes: number; time: { moved: number; stays: number }; charges: { moved: number; stays: number } };
+type Preview = { notes: number; checklist: number; files: number; time: { moved: number; stays: number }; charges: { moved: number; stays: number } };
 
 /**
  * "Transformer en projet": the ticket becomes a project. Notes are copied, the time and charges not approved or billed
@@ -59,6 +59,8 @@ export function ToProjectDialog({ tk, onClose, onDone }: { tk: { id: number; num
           p && (
             <ul className="space-y-1 rounded-lg border bg-background/30 p-3 text-sm">
               <li>{t("tickets.toProject.notes", { count: p.notes })}</li>
+              <li>{t("tickets.toProject.checklist", { count: p.checklist })}</li>
+              <li>{t("tickets.toProject.files", { count: p.files })}</li>
               <li>{t("tickets.toProject.time", { moved: p.time.moved, stays: p.time.stays })}</li>
               <li>{t("tickets.toProject.charges", { moved: p.charges.moved, stays: p.charges.stays })}</li>
             </ul>

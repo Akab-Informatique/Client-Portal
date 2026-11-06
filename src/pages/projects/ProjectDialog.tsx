@@ -19,6 +19,8 @@ import { hm, parseHm } from "@shared/duration";
 import { shortDate, shortDateTime } from "@/pages/tickets/shared";
 import { useProjectWorkspace } from "./ProjectWorkspace";
 import { Overview } from "./Overview";
+import { FilesBox } from "@/pages/pipeline/TaskParts";
+import { fileToBase64 } from "@/pages/pipeline/shared";
 import { PhaseDialog } from "./PhaseDialog";
 import { Card, Text } from "./ui";
 import { apiMessage, dueTone, hoursText, KEY, MS_TONE, useProjectPeople, PRIORITY_DOT, STATUS_STYLE, TASK_STYLE, TONE_TEXT, today, type Milestone, type ProjectDetail } from "./shared";
@@ -556,6 +558,25 @@ function TimeTab({ p, edit, onChanged, fail }: { p: ProjectDetail; edit: boolean
   );
 }
 
+// ── Files of the project (what a ticket brought, and what the team adds) ──
+function ProjectFiles({ p, edit, fail }: { p: ProjectDetail; edit: boolean; fail: (e: unknown) => void }) {
+  const { t } = useTranslation();
+  const { data: files = [], refetch } = useQuery({ queryKey: [...KEY, "files", p.id], queryFn: () => api.get<{ id: string; name: string; size: number; author: string }[]>(`/projects/${p.id}/files`) });
+  const add = useMutation({
+    mutationFn: async (x: File) => api.post(`/projects/${p.id}/files`, { name: x.name, contentType: x.type || "application/octet-stream", data: await fileToBase64(x) }),
+    onSuccess: () => void refetch(),
+    onError: fail,
+  });
+  const del = useMutation({ mutationFn: (id: string) => api.del(`/projects/${p.id}/files/${id}`), onSuccess: () => void refetch(), onError: fail });
+  if (!edit && files.length === 0) return null;
+  return (
+    <section className="space-y-2">
+      <h3 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">{t("pipeline.files.title")}</h3>
+      <FilesBox stored={files.map((f) => ({ id: f.id, name: f.name, size: f.size, by: f.author }))} disabled={!edit} downloadUrl={(id) => `/api/projects/${p.id}/files/${id}`} onRemove={(id) => del.mutate(id)} onAdd={(x) => add.mutate(x)} />
+    </section>
+  );
+}
+
 // ── Notes ──
 function Notes({ p, edit, onChanged, fail }: { p: ProjectDetail; edit: boolean; onChanged: () => void; fail: (e: unknown) => void }) {
   const { t } = useTranslation();
@@ -582,6 +603,7 @@ function Notes({ p, edit, onChanged, fail }: { p: ProjectDetail; edit: boolean; 
           </div>
         </form>
       )}
+      <ProjectFiles p={p} edit={edit} fail={fail} />
       {p.notes.length === 0 && <p className="py-10 text-center text-sm text-muted-foreground">{t("projects.noNotes")}</p>}
       <ul className="space-y-3">
         {p.notes.map((n) => (
