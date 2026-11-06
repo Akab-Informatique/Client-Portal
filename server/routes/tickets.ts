@@ -5,6 +5,7 @@ import { clientInfo } from "../lib/clientHours.ts";
 import { intakeSettings } from "../lib/mailIntake.ts";
 import { syncBillablesNow } from "../lib/billables.ts";
 import { moveCharge } from "../lib/chargeMove.ts";
+import { transformPreview, transformTicket, TransformError } from "../lib/ticketToProject.ts";
 import { moveTicketClient } from "../lib/ticketClient.ts";
 import { contractOfTicket, contractsOfCompany, setTicketContract, type ContractView } from "../lib/contracts.ts";
 import { and, asc, desc, eq, inArray, isNull, or, sql } from "drizzle-orm";
@@ -2003,6 +2004,35 @@ export const ticketRoutes = new Hono<AppEnv>()
     if (!(await ticketsLocal())) throw new HTTPException(409, { message: "tickets_not_local" });
     const r = await run(() => mergeTickets(id, p.intoId, a));
     return c.json({ ok: true, ...r });
+  })
+
+  /** What turning this ticket into a project would move (notes, time and charges not approved yet) and what stays */
+  .get("/:id/to-project", requirePermission("tickets.edit"), async (c) => {
+    const id = Number(c.req.param("id"));
+    if (!Number.isInteger(id) || id <= 0) throw new HTTPException(400, { message: "invalid_id" });
+    return c.json(await transformPreview(id));
+  })
+  /**
+   * The ticket becomes a project (tickets.edit + projects.edit, portal tickets only): its notes are copied to the project,
+   * the time and charges not approved or billed yet move to it (the ticket's time is then not billable), what is approved
+   * or invoiced stays, and the ticket is closed with the status "transformed" and a note naming the project.
+   */
+  .post("/:id/to-project", requirePermission("tickets.edit"), async (c) => {
+    const a = auth(c);
+    const id = Number(c.req.param("id"));
+    if (!Number.isInteger(id) || id <= 0) throw new HTTPException(400, { message: "invalid_id" });
+    if (!a.permissions.includes("projects.edit")) throw new HTTPException(403, { message: "Forbidden" });
+    const p = await body(c, z.object({ name: z.string().trim().min(1).max(200).optional() }));
+    if (!(await ticketsLocal())) throw new HTTPException(409, { message: "tickets_not_local" });
+    try {
+      const r = await transformTicket(id, { id: a.user.id, name: a.user.name }, p);
+      await audit(a.user.id, "ticket.to_project", String(id), { project: r.project.number, ...r.time, notes: r.notes });
+      await syncBillablesNow();
+      return c.json({ ok: true, ...r });
+    } catch (e) {
+      if (e instanceof TransformError) throw new HTTPException(e.status, { message: e.code });
+      throw e;
+    }
   })
 
   /** A file attached to a ticket of the portal (always a download, never shown in the page) */

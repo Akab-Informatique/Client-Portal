@@ -10712,3 +10712,70 @@ describe("a charge not approved yet goes to another ticket or a project; an admi
     }
   });
 });
+
+describe("a ticket turned into a project", () => {
+  it("copies the notes, moves the time and charges not approved yet, keeps the approved ones, and closes the ticket", async () => {
+    resetRateLimit("login:ip:unknown");
+    const tech = await signIn("tech@akab.local");
+    const admin = await signIn("admin@akab.local");
+    const [techUser] = await db().select().from(schema.users).where(eq(schema.users.email, "tech@akab.local"));
+    const [co] = await db().insert(schema.clients).values({ name: "Zz Transformé (test)", autotaskId: 9_100_051 }).returning();
+    await db().insert(schema.integrations).values({ provider: "tickets", enabled: true, config: { mode: "local" } }).onConflictDoUpdate({ target: schema.integrations.provider, set: { enabled: true, config: { mode: "local" } } });
+    (await import("../server/lib/localTickets.ts")).resetTicketMode();
+    try {
+      const tk = (await tech.post("/api/tickets", { title: "Migration serveur", description: "Gros chantier", companyId: co.autotaskId, priority: "medium", queue: "support", assigneeId: null, dueDate: "2026-12-05" })).json;
+      await tech.post(`/api/tickets/${tk.id}/notes`, { text: "Discussion avec le client", internal: false, email: false });
+      await tech.post(`/api/tickets/${tk.id}/notes`, { text: "Note pour l'équipe", internal: true });
+      // two time entries: one still pending, one already approved (stays)
+      const type = await (await import("../server/lib/timesheets.ts")).labourType();
+      const mkTime = async (minutes: number) => {
+        const [e] = await db().insert(schema.ticketTimeEntries).values({ ticketId: tk.id, userId: techUser.id, author: "Tech", startedAt: new Date("2026-11-02T14:00:00Z"), minutes, summary: "Travail", billable: true }).returning();
+        await db().insert(schema.timesheetEntries).values({ userId: techUser.id, date: "2026-11-02", typeId: type.id, hoursX100: minutes * 100 / 60, ticketId: tk.id, ticketNumber: tk.number, ticketTitle: tk.title, ticketTimeId: e.id, billableX100: minutes * 100 / 60, clientId: co.id, source: "ticket" });
+        return e;
+      };
+      const pending = await mkTime(60);
+      const approved = await mkTime(30);
+      // the copy into Approbation makes both lines (pending); one is approved
+      await (await import("../server/lib/billables.ts")).syncBillablesNow();
+      const labour = (await admin.get("/api/billables?kind=labour")).json;
+      await admin.post("/api/billables/status", { ids: [labour.find((i: any) => i.sourceId === `ptime:${approved.id}`).id], status: "approved" });
+      // two charges: one pending, one approved
+      const c1 = (await tech.post(`/api/tickets/${tk.id}/charges`, { name: "Switch", quantity: 1, unitPrice: 100, billable: true })).json[0].id;
+      const c2 = (await tech.post(`/api/tickets/${tk.id}/charges`, { name: "Câble", quantity: 1, unitPrice: 10, billable: true })).json.find((x: any) => x.name === "Câble").id;
+      const approvedLine = (await admin.get("/api/billables?kind=charge")).json.find((i: any) => i.sourceId === `pcharge:${c2}`);
+      await admin.post("/api/billables/status", { ids: [approvedLine.id], status: "approved" });
+
+      expect((await tech.get(`/api/tickets/${tk.id}/to-project`)).json).toEqual({ notes: 2, time: { moved: 1, stays: 1 }, charges: { moved: 1, stays: 1 } });
+      const r = await tech.post(`/api/tickets/${tk.id}/to-project`, {});
+      expect(r.status).toBe(200);
+      expect(r.json).toMatchObject({ ok: true, notes: 2, time: { moved: 1, stays: 1 }, charges: { moved: 1, stays: 1 } });
+      const project = (await admin.get(`/api/projects/${r.json.project.id}`)).json;
+      expect(project).toMatchObject({ name: "Migration serveur", client: { id: co.id } });
+      // the notes are in the project, each saying where it came from
+      expect(project.notes.map((n: any) => n.text).join("\n")).toContain("Discussion avec le client");
+      expect(project.notes.map((n: any) => n.text).join("\n")).toContain(`[${tk.number}`);
+      // the pending time is the project's (1 h); the ticket's copy is no longer billable and its line is gone; the approved one stays
+      expect(project.hours).toBe(1);
+      const [tp] = await db().select().from(schema.ticketTimeEntries).where(eq(schema.ticketTimeEntries.id, pending.id));
+      expect(tp.billable).toBe(false);
+      const [ta] = await db().select().from(schema.ticketTimeEntries).where(eq(schema.ticketTimeEntries.id, approved.id));
+      expect(ta.billable).toBe(true);
+      const items = (await admin.get("/api/billables")).json;
+      expect(items.some((i: any) => i.sourceId === `ptime:${pending.id}`)).toBe(false);
+      expect(items.find((i: any) => i.sourceId === `ptime:${approved.id}`)).toMatchObject({ status: "approved" });
+      // charges: the pending one is on the project, the approved one is still on the ticket
+      expect((await tech.get(`/api/projects/${project.id}/charges`)).json.map((x: any) => x.id)).toEqual([c1]);
+      expect((await tech.get(`/api/tickets/${tk.id}/charges`)).json.map((x: any) => x.id)).toEqual([c2]);
+      // the ticket is closed with a note naming the project
+      const after = (await tech.get(`/api/tickets/${tk.id}`)).json;
+      expect(after.completedAt ?? after.status).toBeTruthy();
+      expect(after.status).toBe("transformed");
+      expect(JSON.stringify(after.notes)).toContain(`Transformé en projet ${project.number}`);
+      // once only
+      expect((await tech.post(`/api/tickets/${tk.id}/to-project`, {})).json.error).toBe("ticket_complete");
+    } finally {
+      await db().delete(schema.integrations).where(eq(schema.integrations.provider, "tickets"));
+      (await import("../server/lib/localTickets.ts")).resetTicketMode();
+    }
+  });
+});

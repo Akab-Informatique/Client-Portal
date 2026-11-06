@@ -5,7 +5,7 @@ import { useMutation, useQuery, useQueryClient, type QueryClient } from "@tansta
 import { AnimatePresence, motion } from "motion/react";
 import { toast } from "sonner";
 import { Dialog as DialogPrimitive } from "radix-ui";
-import { AlertTriangle, BellRing, Flag, MessagesSquare, Tag, Paperclip, Bot, Building2, CalendarClock, CalendarPlus, Check, BookOpen, ChevronDown, ListOrdered, ChevronUp, Clock3, Eye, FileText, HardDrive, HelpCircle, Inbox, ListChecks, Loader2, Lock, Mail, Minus, MonitorCog, MonitorPlay, NotebookPen, Pencil, Phone, RefreshCw, Send, Sparkles, Timer, Star, UserCheck, UserRound, Users, X, type LucideIcon, MessageSquareReply, MessageSquareText, Trash2, GitMerge } from "lucide-react";
+import { AlertTriangle, BellRing, Flag, MessagesSquare, Tag, Paperclip, Bot, Building2, CalendarClock, CalendarPlus, Check, BookOpen, ChevronDown, ListOrdered, ChevronUp, Clock3, Eye, FileText, HardDrive, HelpCircle, Inbox, ListChecks, Loader2, Lock, Mail, Minus, MonitorCog, MonitorPlay, NotebookPen, Pencil, Phone, RefreshCw, Send, Sparkles, Timer, Star, UserCheck, UserRound, Users, X, type LucideIcon, MessageSquareReply, MessageSquareText, Trash2, GitMerge, FolderKanban } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { useConfirm } from "@/components/ConfirmDialog";
 import { AiTextarea } from "@/components/AiPolish";
@@ -39,6 +39,7 @@ import { ClientHoursGauge } from "./ClientHoursGauge";
 import { AcceptDialog } from "./AcceptDialog";
 import { AddToDayDialog, useDayTicket } from "./AddToDayDialog";
 import { MergeDialog } from "./MergeDialog";
+import { ToProjectDialog } from "./ToProjectDialog";
 import { NotifyTech } from "./NotifyTech";
 import { ChecklistCard } from "./Checklist";
 import { fileToBase64 } from "@/pages/outlook/shared";
@@ -320,6 +321,7 @@ function TicketBody({
   const dayState = useDayTicket(tk.id, can("pipeline.edit"));
   const [accepting, setAccepting] = useState(false);
   const [merging, setMerging] = useState(false);
+  const [toProject, setToProject] = useState(false);
   // the three squares: full size, or collapsed to small icons (kept per browser)
   const [tilesOpen, setTilesOpen] = useState(() => {
     try {
@@ -726,6 +728,7 @@ function TicketBody({
               {remote && <QuickAction icon={MonitorPlay} label={t("tickets.asset.remote")} href={remote} accent />}
               {editable && !partial && tk.assignee?.id !== me.id && statusKind !== "complete" && <QuickAction icon={UserCheck} label={t("tickets.accept.button")} onClick={() => setAccepting(true)} accent />}
               {editable && !partial && tk.local && statusKind !== "complete" && <QuickAction icon={GitMerge} label={t("tickets.merge.button")} onClick={() => setMerging(true)} />}
+              {editable && !partial && tk.local && statusKind !== "complete" && can("projects.edit") && <QuickAction icon={FolderKanban} label={t("tickets.toProject.button")} onClick={() => setToProject(true)} />}
               {can("pipeline.edit") && !partial && statusKind !== "complete" && (
                 <QuickAction icon={CalendarPlus} label={dayState.data?.added ? (dayState.data.dueTime ? t("tickets.addDay.inBefore", { time: dayState.data.dueTime }) : t("tickets.addDay.in")) : t("tickets.addDay.title")} onClick={() => setAddingDay(true)} accent={dayState.data?.added} />
               )}
@@ -884,6 +887,7 @@ function TicketBody({
       </div>
       <OpenedByOthers viewers={viewers} />
       {merging && <MergeDialog open onOpenChange={(o) => !o && setMerging(false)} tk={tk} onDone={() => onClose()} />}
+      {toProject && <ToProjectDialog tk={tk} onClose={() => setToProject(false)} onDone={() => (setToProject(false), onClose())} />}
       {addingDay && <AddToDayDialog open onOpenChange={(o) => !o && setAddingDay(false)} tk={tk} />}
       {accepting && <AcceptDialog open onOpenChange={(o) => !o && setAccepting(false)} tk={tk} statuses={tk.options.statuses} />}
       {giving && <PriorityDialog priority={null} ticket={{ id: tk.id, number: tk.number, title: tk.title }} onClose={() => setGiving(false)} />}
