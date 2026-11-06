@@ -276,5 +276,5 @@ export async function invoicePdf(invoiceId: string, payUrl: string | null = null
     font(false, 9).fillColor("#000000").text(String(i + 1), LEFT, 758, { width: RIGHT - LEFT, align: "center", lineBreak: false });
   }
   doc.end();
-  return { filename: `Facture_${inv.number}.pdf`.replace(/[^A-Za-z0-9._-]/g, "_"), content: await done };
+  return { filename: `Facture-AKAB-${inv.number}.pdf`.replace(/[^A-Za-z0-9._-]/g, "_"), content: await done };
 }

@@ -16,6 +16,7 @@ import { useCrmClients } from "@/pages/crm/shared";
 import { shortDate, shortDateTime } from "@/pages/tickets/shared";
 import { dueTone, hoursText, MS_TONE, PRIORITY_DOT, STATUSES, TASK_STATUSES, TASK_STYLE, TONE_TEXT, today, useProjectPeople, type BillingMode, type ProjectDetail, type Status } from "./shared";
 import { Bar, Card, Gauge, Text, type GaugeTone } from "./ui";
+import { LinkedTickets, SoldPanel } from "./SoldPanel";
 
 const dayNumber = (ymd: string) => Math.round(Date.parse(`${ymd}T12:00:00Z`) / 86_400_000);
 
@@ -67,7 +68,11 @@ export function Overview({ p, edit, save, onDelete, onTask, onTab, onChanged, fa
         </div>
       </Card>
 
+      {/* sold against worked, and the billing of the price sold */}
+      <SoldPanel p={p} onChanged={onChanged} />
+
       <div className="grid gap-4 lg:grid-cols-2">
+        <LinkedTickets p={p} edit={edit} onChanged={onChanged} />
         {/* tasks at a glance */}
         <Card title={t("projects.ov.tasks")} action={<button type="button" className="text-xs text-primary hover:underline" onClick={() => onTab("milestones")}>{t("projects.ov.seePhases")}</button>}>
           <div className="space-y-3 text-sm">

@@ -457,12 +457,15 @@ function TimeTab({ p, edit, onChanged, fail }: { p: ProjectDetail; edit: boolean
               <li key={e.id} className="grid grid-cols-[4.5rem_minmax(0,1fr)_4rem_auto_auto] items-center gap-3 py-2 text-sm md:grid-cols-[4.5rem_9rem_minmax(0,1fr)_minmax(0,1fr)_4rem_5.5rem_auto]">
                 <span className="text-xs text-muted-foreground">{shortDate(e.date)}</span>
                 <span className="hidden truncate md:block">{e.user}</span>
-                <span className="truncate text-muted-foreground">{e.milestone ?? t("projects.noMilestone")}</span>
+                <span className="truncate text-muted-foreground" title={e.ticket ? `${e.ticket.number} · ${e.ticket.title ?? ""}` : undefined}>
+                  {e.ticket ? <span className="font-mono text-xs text-primary">{e.ticket.number}</span> : (e.milestone ?? t("projects.noMilestone"))}
+                  {e.task && <span className="text-xs"> · {e.task}</span>}
+                </span>
                 <span className="hidden truncate text-muted-foreground md:block">{e.note}</span>
                 <span className="text-right font-mono">{hm(e.hours)}</span>
                 <button
                   type="button"
-                  disabled={!(e.userId === me.id || can("projects.manage"))}
+                  disabled={Boolean(e.ticket) || !(e.userId === me.id || can("projects.manage"))}
                   onClick={() => toggle.mutate({ id: e.id, billable: e.billableHours <= 0 })}
                   title={t("projects.toggleBillable")}
                   className={cn("rounded-full border px-2 py-0.5 text-[10px] font-medium", e.billableHours > 0 ? "border-emerald-500/40 bg-emerald-500/10 text-emerald-300" : "border-slate-500/40 bg-slate-500/10 text-slate-300")}
@@ -470,7 +473,7 @@ function TimeTab({ p, edit, onChanged, fail }: { p: ProjectDetail; edit: boolean
                   {e.billableHours > 0 ? t("projects.billable") : t("projects.included")}
                 </button>
                 <span className="w-7">
-                  {(e.userId === me.id || can("projects.manage")) && (
+                  {!e.ticket && (e.userId === me.id || can("projects.manage")) && (
                     <button type="button" aria-label={t("common.delete")} onClick={() => del.mutate(e.id)} className="rounded p-1 text-muted-foreground hover:text-destructive">
                       <Trash2 className="size-3.5" />
                     </button>

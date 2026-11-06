@@ -852,6 +852,8 @@ export const ticketMeta = pgTable("ticket_meta", {
   milestoneDate: text("milestone_date"),
   /** HH:MM of the checkpoint (the goal date has a time too) */
   milestoneTime: text("milestone_time"),
+  /** The project (Projets) this ticket's time counts in (support tickets of a project); none = on its own */
+  projectId: uuid("project_id"),
   /** Labels added to the ticket to find it back (searched with the ticket) */
   tags: jsonb("tags").$type<string[]>().notNull().default(sql`'[]'::jsonb`),
   /** The portal's own queue (ticket_queues.key); none: worked out from the source, else the default queue */
@@ -2509,6 +2511,8 @@ export const quotes = pgTable(
     projectAt: timestamp("project_at", { withTimezone: true }),
     /** The opportunity of the sales pipeline made from this quote (Vente › Ventes): follows the quote's status and amounts */
     opportunityId: uuid("opportunity_id").references(() => salesOpportunities.id, { onDelete: "set null" }),
+    /** The project (Projets) made from this quote */
+    projectId: uuid("project_id"),
     /** The deposit invoice made when the quote was accepted (a share of the implementation), and that share in percent ×100 */
     depositInvoiceId: uuid("deposit_invoice_id").references(() => clientInvoices.id, { onDelete: "set null" }),
     depositPercentX100: integer("deposit_percent_x100"),
@@ -2709,6 +2713,10 @@ export const projects = pgTable(
     hourlyRateCents: integer("hourly_rate_cents"),
     /** The agreed price of a fixed-price project */
     fixedPriceCents: integer("fixed_price_cents"),
+    /** The quote it was made from (Vente › Soumissions) */
+    quoteId: uuid("quote_id"),
+    /** When the sold price went to Approbation (once; "Facturer le projet") */
+    invoicedAt: timestamp("invoiced_at", { withTimezone: true }),
     createdBy: uuid("created_by").references(() => users.id, { onDelete: "set null" }),
     closedAt: timestamp("closed_at", { withTimezone: true }),
     createdAt: created(),

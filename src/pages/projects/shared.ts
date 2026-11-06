@@ -110,8 +110,16 @@ export type ProjectDetail = Project & {
   notes: { id: string; text: string; createdAt: string; authorId: string | null; author: string | null }[];
   time: {
     byPerson: { userId: string; name: string; hours: number }[];
-    entries: { id: string; date: string; hours: number; billableHours: number; note: string | null; milestoneId: string | null; milestone: string | null; userId: string; user: string }[];
+    entries: { id: string; date: string; hours: number; billableHours: number; note: string | null; milestoneId: string | null; milestone: string | null; task: string | null; ticket: { number: string | null; title: string | null } | null; userId: string; user: string }[];
   };
+  /** The quote it was made from */
+  quote: { id: string; number: string } | null;
+  /** Sold against worked (hours and money); the hours of its tied tickets included */
+  sold: { hours: number | null; priceCents: number | null; rateCents: number | null; workedHours: number; ticketHours: number; diffHours: number | null; workedValueCents: number | null; diffCents: number | null };
+  /** The tickets tied to the project (their time counts in it) */
+  tickets: { id: number; number: string; title: string; status: string; done: boolean; hours: number }[];
+  /** The price sold sent to Approbation (once), and the quote's deposit taken off it */
+  billing: { invoicedAt: string | null; lines: { id: string; description: string; amountCents: number; status: string; invoiceId: string | null; number: string | null }[]; deposit: { number: string; invoiceId: string; subtotalCents: number } | null };
 };
 export type Summary = { open: number; mine: number; attention: number; watch: number };
 export type WeekDay = { date: string; milestones: { id: string; name: string; status: string; projectId: string; number: string; project: string }[]; projects: { id: string; number: string; name: string }[]; hours: number };

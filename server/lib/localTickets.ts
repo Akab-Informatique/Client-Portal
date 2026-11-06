@@ -2,7 +2,7 @@ import { billingSettings } from "./billing.ts";
 import { hourlyRateOf } from "./contracts.ts";
 import { bpsOfPercent, netCents, percentText, rebateNote } from "../../shared/rebate.ts";
 import { config } from "../config.ts";
-import { and, asc, desc, eq, gte, ilike, inArray, or, sql, type SQL } from "drizzle-orm";
+import { and, asc, desc, eq, gte, ilike, inArray, isNull, or, sql, type SQL } from "drizzle-orm";
 import { db, schema } from "../db/index.ts";
 import type { AuthContext } from "./auth.ts";
 import { audit } from "./audit.ts";
@@ -411,11 +411,15 @@ export function localTicketSource(base: TicketSource): TicketSource {
       const items: Billable[] = from.items.filter((x) => x.kind !== "labour" && x.kind !== "charge");
       const d = new Date(`${since}T00:00:00`);
       const times = await db()
-        .select({ e: schema.ticketTimeEntries, number: schema.tickets.number, companyId: schema.tickets.companyId, ticketContract: schema.tickets.contractId })
+        .select({ e: schema.ticketTimeEntries, number: schema.tickets.number, companyId: schema.tickets.companyId, ticketContract: schema.tickets.contractId, projectMode: schema.projects.billingMode })
         .from(schema.ticketTimeEntries)
         .innerJoin(schema.tickets, eq(schema.tickets.id, schema.ticketTimeEntries.ticketId))
+        .leftJoin(schema.ticketMeta, eq(schema.ticketMeta.ticketId, schema.ticketTimeEntries.ticketId))
+        .leftJoin(schema.projects, eq(schema.projects.id, schema.ticketMeta.projectId))
         .where(and(eq(schema.ticketTimeEntries.billable, true), eq(schema.ticketTimeEntries.billed, false), gte(schema.ticketTimeEntries.startedAt, d)));
-      for (const { e, number, companyId, ticketContract } of times) {
+      for (const { e, number, companyId, ticketContract, projectMode } of times) {
+        // a ticket of a project sold as a package: its hours are in the price sold, never billed on their own
+        if (projectMode === "fixed") continue;
         const billed = Math.max(0, e.billedMinutes ?? e.minutes - e.offsetMinutes);
         if (!billed) continue;
         const contract = e.contractId ?? ticketContract;
@@ -463,7 +467,8 @@ export function localTicketSource(base: TicketSource): TicketSource {
         .innerJoin(schema.clients, eq(schema.clients.id, schema.projects.clientId))
         .innerJoin(schema.users, eq(schema.users.id, schema.timesheetEntries.userId))
         .leftJoin(schema.clientContracts, eq(schema.clientContracts.id, schema.projects.contractId))
-        .where(and(sql`${schema.timesheetEntries.billableX100} > 0`, gte(schema.timesheetEntries.date, since)));
+        // ticket time counted in a project is billed through its ticket (ptime:), never twice
+        .where(and(sql`${schema.timesheetEntries.billableX100} > 0`, isNull(schema.timesheetEntries.ticketTimeId), gte(schema.timesheetEntries.date, since)));
       const usual = (await billingSettings()).rates.hourly;
       for (const { e, number, rate: projectRate, mode, contract, companyId, who } of onProjects) {
         if (companyId == null) continue;

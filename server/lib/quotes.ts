@@ -70,6 +70,8 @@ const quoteColumns = {
   projectTicketNumber: schema.quotes.projectTicketNumber,
   projectAt: schema.quotes.projectAt,
   opportunityId: schema.quotes.opportunityId,
+  projectId: schema.quotes.projectId,
+  projectNumber: sql<string | null>`(select ${schema.projects.number} from ${schema.projects} where ${schema.projects.id} = ${schema.quotes.projectId})`,
   depositInvoiceId: schema.quotes.depositInvoiceId,
   depositPercentX100: schema.quotes.depositPercentX100,
   depositNumber: sql<string | null>`(select ${schema.clientInvoices.number} from ${schema.clientInvoices} where ${schema.clientInvoices.id} = ${schema.quotes.depositInvoiceId})`,

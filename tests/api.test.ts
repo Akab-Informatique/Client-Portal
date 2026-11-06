@@ -1803,8 +1803,18 @@ describe("tickets: client and contact", () => {
     // the printed sheet takes AKAB's address and phone from the set-up (or its default)
     expect(handed.json.company).toMatchObject({ phone: "450-834-3344", address: expect.stringContaining("J0K 3H0") });
 
-    // quote → project: a ticket in the Projets queue and a point for the weekly meeting, once
-    const proj = (await admin.post("/api/quotes", { clientId: client.id, title: "Migration du bureau", lines: [{ description: "Portable", quantityX100: 200, unitPriceCents: 100000 }] })).json;
+    // quote → project: a project of Projets sold as a package (hours and price of the hour lines) and a point for the weekly meeting, once
+    const proj = (
+      await admin.post("/api/quotes", {
+        clientId: client.id,
+        title: "Migration du bureau",
+        lines: [
+          { description: "Portable", quantityX100: 200, unitPriceCents: 100000 },
+          { description: "Main-d'œuvre : migration", quantityX100: 3000, unitPriceCents: 12000 },
+          { description: "Surveillance", quantityX100: 100, unitPriceCents: 5000, recurrence: "monthly" },
+        ],
+      })
+    ).json;
     expect(proj.clientId ?? proj).toBe(client.id);
     expect((await tech.post(`/api/quotes/${proj.id}/to-project`, {})).status).toBe(403);
     expect((await admin.post(`/api/quotes/${(await admin.post("/api/quotes", { prospectName: "Sans client", lines: [{ description: "x", unitPriceCents: 1 }] })).json.id}/to-project`, {})).json.error).toBe("project_needs_client");
@@ -1814,15 +1824,16 @@ describe("tickets: client and contact", () => {
     await db().update(schema.clients).set({ autotaskId: tk0.company.id }).where(eq(schema.clients.id, client.id));
     const made2 = await admin.post(`/api/quotes/${proj.id}/to-project`, {});
     expect(made2.status).toBe(201);
-    expect(made2.json).toMatchObject({ ticketId: expect.any(Number), ticketNumber: expect.any(String), meetingPointId: expect.any(String) });
+    expect(made2.json).toMatchObject({ projectId: expect.any(String), projectNumber: expect.stringMatching(/^P-\d+$/), meetingPointId: expect.any(String) });
     expect((await admin.post(`/api/quotes/${proj.id}/to-project`, {})).json.error).toBe("already_project");
-    expect((await admin.get(`/api/quotes/${proj.id}`)).json).toMatchObject({ projectTicketId: made2.json.ticketId, projectTicketNumber: made2.json.ticketNumber });
+    expect((await admin.get(`/api/quotes/${proj.id}`)).json).toMatchObject({ projectId: made2.json.projectId, projectNumber: made2.json.projectNumber });
+    // 30 h sold at 120 $ (the hour line), sold as a package, in Projets
+    const pj = (await admin.get(`/api/projects/${made2.json.projectId}`)).json;
+    expect(pj).toMatchObject({ name: "Migration du bureau", billingMode: "fixed", budgetHours: 30, fixedPrice: 3600, client: { id: client.id }, quote: { id: proj.id }, sold: { hours: 30, priceCents: 360000, rateCents: 12000, workedHours: 0 } });
     const pts = (await admin.get("/api/meetings/points")).json;
     expect(pts.length).toBe(pointsBefore + 1);
     expect(pts.find((x: any) => x.id === made2.json.meetingPointId)).toMatchObject({ text: expect.stringContaining("Migration du bureau") });
-    const tk2 = (await admin.get(`/api/tickets/${made2.json.ticketId}`)).json;
-    expect(tk2.title).toBe("Projet: Migration du bureau");
-    expect(tk2.queue).toBe("projects");
+    await admin.del(`/api/projects/${made2.json.projectId}`);
 
     // a new client's site visit: the checklist answers are kept with the quote, sent with it only, and copied
     const visit = (await admin.post("/api/quotes", { kind: "site_visit", prospectName: "Clinique du Nord", survey: { "general.users": "14", "devices.laptop.qty": "9", "security.mfa_admin": "no" } })).json;
@@ -8759,7 +8770,7 @@ describe("contracts: services when made, charges, activity, stop instead of dele
     expect(devOutbox[0]!.subject).toBe("Votre facture R-1");
     // the PDF copy goes with it; no pay link while Stripe is not set up
     expect(devOutbox[0]!.attachments).toHaveLength(1);
-    expect(devOutbox[0]!.attachments![0]).toMatchObject({ filename: "Facture_R-1.pdf", contentType: "application/pdf" });
+    expect(devOutbox[0]!.attachments![0]).toMatchObject({ filename: "Facture-AKAB-R-1.pdf", contentType: "application/pdf" });
     expect(devOutbox[0]!.attachments![0]!.content.subarray(0, 5).toString()).toBe("%PDF-");
     expect(devOutbox[0]!.text).not.toContain("/api/pay/");
     // Stripe set up: the "Pay online" link follows the template setting, and each client can say yes or no
@@ -10316,6 +10327,81 @@ describe("ticket charges are work to bill at once", () => {
       // back to the sample tickets for the tests that follow
       await db().delete(schema.integrations).where(eq(schema.integrations.provider, "tickets"));
       await db().delete(schema.clients).where(eq(schema.clients.id, company.id));
+      (await import("../server/lib/localTickets.ts")).resetTicketMode();
+    }
+  });
+});
+
+describe("a project sold from a quote", () => {
+  it("tickets tied to it count their time in it, are not billed on their own, and the project is invoiced as sold less the deposit", async () => {
+    resetRateLimit("login:ip:unknown");
+    const tech = await signIn("tech@akab.local");
+    const admin = await signIn("admin@akab.local");
+    const [cl] = await db().insert(schema.clients).values({ name: "Zz Projet vendu (test)", autotaskId: 9_100_031 }).returning();
+    const [other] = await db().insert(schema.clients).values({ name: "Zz Autre client (test)", autotaskId: 9_100_032 }).returning();
+    const [billingRow] = await db().select().from(schema.integrations).where(eq(schema.integrations.provider, "billing"));
+    await db().insert(schema.integrations).values({ provider: "tickets", enabled: true, config: { mode: "local" } }).onConflictDoUpdate({ target: schema.integrations.provider, set: { enabled: true, config: { mode: "local" } } });
+    (await import("../server/lib/localTickets.ts")).resetTicketMode();
+    let projectId = "";
+    try {
+      // a quote of 10 hours at 100 $, accepted, its 50 % deposit invoiced
+      const q = (await admin.post("/api/quotes", { clientId: cl.id, title: "Réseau neuf", lines: [{ description: "Heures de configuration", quantityX100: 1000, unitPriceCents: 10000 }] })).json;
+      await admin.post(`/api/quotes/${q.id}/status`, { status: "sent" });
+      await admin.post(`/api/quotes/${q.id}/status`, { status: "accepted" });
+      const dep = (await admin.post(`/api/quotes/${q.id}/deposit`, { percent: 50, send: false })).json;
+      expect(dep.invoice).toBeTruthy();
+      // the project: 10 h sold for 1 000 $
+      const made = (await admin.post(`/api/quotes/${q.id}/to-project`, {})).json;
+      projectId = made.projectId;
+      expect((await admin.get(`/api/projects/${projectId}`)).json.sold).toMatchObject({ hours: 10, priceCents: 100000, rateCents: 10000 });
+
+      // a support ticket of the client, with 2 h logged before it is tied
+      const tk = (await tech.post("/api/tickets", { title: "Soutien du projet", description: "x", companyId: cl.autotaskId, priority: "medium", queue: "support", assigneeId: null, dueDate: "2026-12-05" })).json;
+      const log = async (hours: number) => {
+        await tech.post(`/api/tickets/${tk.id}/timer/start`);
+        const timer = (await tech.get("/api/tickets/timers")).json.find((x: any) => x.ticketId === tk.id);
+        expect((await tech.post(`/api/tickets/timers/${timer.id}/submit`, { hours, summary: "Configuration", billable: true })).status).toBe(201);
+      };
+      await log(2);
+      // a ticket of another client cannot be tied
+      const foreign = (await tech.post("/api/tickets", { title: "Ailleurs", description: "x", companyId: other.autotaskId, priority: "medium", queue: "support", assigneeId: null, dueDate: "2026-12-05" })).json;
+      expect((await tech.post(`/api/projects/${projectId}/tickets`, { ticket: foreign.id })).json.error).toBe("ticket_other_client");
+      // tied by its number: the 2 h already logged come with it, then 1,5 h more
+      expect((await tech.post(`/api/projects/${projectId}/tickets`, { ticket: tk.number })).status).toBe(201);
+      await log(1.5);
+      const pj = (await admin.get(`/api/projects/${projectId}`)).json;
+      expect(pj.tickets).toEqual([expect.objectContaining({ id: tk.id, number: tk.number, hours: 3.5 })]);
+      expect(pj.sold).toMatchObject({ workedHours: 3.5, ticketHours: 3.5, diffHours: 6.5, workedValueCents: 35000, diffCents: 65000 });
+      expect(pj.time.entries.every((e: any) => e.ticket?.number === tk.number)).toBe(true);
+      // sold as a package: the ticket's hours are never work to bill on their own
+      await admin.post("/api/billables/import", {});
+      const ptime = (await db().select().from(schema.billingItems).where(eq(schema.billingItems.clientId, cl.id))).filter((i) => i.sourceId?.startsWith("ptime:"));
+      expect(ptime).toEqual([]);
+
+      // invoicing: one line as sold (10 h, 1 000 $), less the 500 $ deposit; once only
+      expect((await tech.post(`/api/projects/${projectId}/bill`, {})).status).toBe(403);
+      const billed = await admin.post(`/api/projects/${projectId}/bill`, {});
+      expect(billed.status).toBe(201);
+      expect(billed.json).toMatchObject({ lines: 2, totalCents: 50000, deposit: { number: dep.invoice.number } });
+      const lines = await db().select().from(schema.billingItems).where(eq(schema.billingItems.clientId, cl.id));
+      const main = lines.find((i) => i.sourceId === `project:${projectId}`)!;
+      expect(main).toMatchObject({ kind: "project", status: "pending", quantityX100: 1000, amountCents: 100000 });
+      expect(main.description).toContain("10 h");
+      expect(lines.find((i) => i.sourceId === `project:${projectId}:deposit:0`)).toMatchObject({ amountCents: -50000, taxable: true });
+      expect((await admin.post(`/api/projects/${projectId}/bill`, {})).json.error).toBe("project_billed");
+
+      // untied: its time leaves the project
+      await tech.del(`/api/projects/${projectId}/tickets/${tk.id}`);
+      expect((await admin.get(`/api/projects/${projectId}`)).json.sold.workedHours).toBe(0);
+    } finally {
+      if (projectId) await admin.del(`/api/projects/${projectId}`);
+      await db().delete(schema.integrations).where(eq(schema.integrations.provider, "tickets"));
+      await db().update(schema.quotes).set({ depositInvoiceId: null }).where(eq(schema.quotes.clientId, cl.id));
+      await db().delete(schema.quotes).where(eq(schema.quotes.clientId, cl.id));
+      await db().delete(schema.billingItems).where(inArray(schema.billingItems.clientId, [cl.id, other.id]));
+      await db().delete(schema.clientInvoices).where(eq(schema.clientInvoices.clientId, cl.id));
+      await db().delete(schema.clients).where(inArray(schema.clients.id, [cl.id, other.id]));
+      if (billingRow) await db().update(schema.integrations).set({ config: billingRow.config }).where(eq(schema.integrations.provider, "billing"));
       (await import("../server/lib/localTickets.ts")).resetTicketMode();
     }
   });

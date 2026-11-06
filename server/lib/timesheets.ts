@@ -130,6 +130,8 @@ export async function addTicketTime(userId: string, p: { ticketId: number; ticke
       nonBillableX100: split.nonBillableX100,
       clientId: await clientOfCompany(p.companyId),
       ticketTimeId: p.ticketTimeId ?? null,
+      // a ticket tied to a project (Projets): its time counts in the project
+      projectId: (await db().select({ p: schema.ticketMeta.projectId }).from(schema.ticketMeta).where(eq(schema.ticketMeta.ticketId, p.ticketId)))[0]?.p ?? null,
       source: "ticket",
     });
 }

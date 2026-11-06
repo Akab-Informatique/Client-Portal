@@ -590,11 +590,15 @@ export function QuoteEditor() {
                 </Button>
               )}
               {quote?.status === "accepted" && !quote.clientId && can("accounting.manage") && !quote.depositInvoiceId && <p className="text-xs text-muted-foreground">{t("quotes.deposit.needsClient")}</p>}
-              {quote?.projectTicketNumber && (
+              {quote?.projectId ? (
+                <a href={`/projects?project=${quote.projectId}&tab=overview`} className="flex items-center gap-2 rounded-lg border border-emerald-500/30 bg-emerald-500/10 px-3 py-2 text-sm text-emerald-300 hover:bg-emerald-500/20">
+                  <FolderKanban className="size-4 shrink-0" /> {t("quotes.project.badge", { number: quote.projectNumber })}
+                </a>
+              ) : quote?.projectTicketNumber ? (
                 <p className="flex items-center gap-2 rounded-lg border border-emerald-500/30 bg-emerald-500/10 px-3 py-2 text-sm text-emerald-300">
                   <FolderKanban className="size-4 shrink-0" /> {t("quotes.project.badge", { number: quote.projectTicketNumber })}
                 </p>
-              )}
+              ) : null}
               {doc && (
                 <Button variant="outline" className="w-full" disabled={form.rows.length === 0} onClick={() => setPreview(true)}>
                   <FileText className="size-4" /> {t("quotes.doc.open")}
@@ -635,6 +639,7 @@ export function QuoteEditor() {
         </aside>
       </div>
 
+      {project.dialog}
       {deposit && quote && <DepositDialog quote={quote} onClose={() => setDeposit(false)} onDone={(q) => { apply(q); setDeposit(false); }} />}
       {preview && doc && <QuoteDocument data={doc} onClose={() => setPreview(false)} />}
       {toInventory && quote && <ToInventoryDialog quoteId={quote.id} row={toInventory} onClose={() => setToInventory(null)} onDone={(pid, sku) => setRow(toInventory.key, { productId: pid, sku: sku ?? "" })} />}

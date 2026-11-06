@@ -147,7 +147,11 @@ export function QuotesPage() {
                   </Link>
                   {x.status !== "declined" && can("quotes.manage") && (
                     <div className="flex w-full shrink-0 flex-wrap items-center justify-end gap-2 px-4 pb-3 sm:w-auto sm:flex-nowrap sm:px-3 sm:pb-0">
-                      {x.projectTicketNumber ? (
+                      {x.projectId ? (
+                        <Link to={`/projects?project=${x.projectId}&tab=overview`} className="inline-flex items-center gap-1.5 rounded-full border border-emerald-500/40 bg-emerald-500/10 px-2.5 py-1 text-xs text-emerald-300 hover:bg-emerald-500/20" title={t("quotes.project.doneTitle")}>
+                          <FolderKanban className="size-3.5" /> {t("quotes.project.badge", { number: x.projectNumber })}
+                        </Link>
+                      ) : x.projectTicketNumber ? (
                         <span className="inline-flex items-center gap-1.5 rounded-full border border-emerald-500/40 bg-emerald-500/10 px-2.5 py-1 text-xs text-emerald-300" title={t("quotes.project.doneTitle")}>
                           <FolderKanban className="size-3.5" /> {t("quotes.project.badge", { number: x.projectTicketNumber })}
                         </span>
@@ -181,6 +185,7 @@ export function QuotesPage() {
           </ul>
         )}
       </div>
+      {project.dialog}
     </div>
   );
 }

@@ -8,10 +8,8 @@ import { auth, requirePermission, requireStaff, type AppEnv } from "../lib/auth.
 import { audit } from "../lib/audit.ts";
 import { body, zUuid } from "../lib/validate.ts";
 import { productsWithStock } from "../lib/store.ts";
-import { ticketSource } from "../lib/ticketSource.ts";
-import { queues } from "../lib/queues.ts";
-import { run } from "./tickets.ts";
-import { depositOf, lineAmount, quoteTotals } from "../../shared/quotes.ts";
+import { depositOf, lineAmount, quoteTotals, soldOfQuote } from "../../shared/quotes.ts";
+import { nextProjectNumber } from "../lib/projectLinks.ts";
 import { DraftError, quickInvoice } from "../lib/billables.ts";
 import { billingSettings } from "../lib/billing.ts";
 import { autoSync } from "../lib/quickbooks.ts";
@@ -422,33 +420,33 @@ await audit(a.user.id, "quote.updated", id, { number: cur.number, lines: p.lines
    * Quote → project: a ticket in the Projets queue for the client (what the quote says is in its
    * description), and a point to discuss at the weekly meeting. Done once per quote.
    */
-  .post("/:id/to-project", requirePermission("quotes.manage"), requirePermission("tickets.edit"), async (c) => {
+  .post("/:id/to-project", requirePermission("quotes.manage"), requirePermission("projects.edit"), async (c) => {
     const a = auth(c);
     const id = zUuid.parse(c.req.param("id"));
     const q = await getQuote(id);
     if (!q) throw new HTTPException(404, { message: "not_found" });
-    if (q.projectTicketId) throw new HTTPException(409, { message: "already_project" });
+    if (q.projectTicketId || q.projectId) throw new HTTPException(409, { message: "already_project" });
     if (!q.clientId) throw new HTTPException(409, { message: "project_needs_client" });
     if (!q.lines?.length) throw new HTTPException(409, { message: "quote_empty" });
-    const [client] = await db().select({ name: schema.clients.name, companyId: schema.clients.autotaskId }).from(schema.clients).where(eq(schema.clients.id, q.clientId));
+    const sold = soldOfQuote(q.lines);
+    const p = await body(
+      c,
+      z.object({
+        /** Hours sold (none: what the quote's hour lines add up to) */
+        hours: z.number().min(0).max(100000).nullable().optional(),
+        /** Price sold, before taxes, in dollars (none: the hour lines, else the implementation) */
+        price: z.number().min(0).max(10_000_000).nullable().optional(),
+        dueDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).nullable().optional(),
+      }),
+    );
+    const [client] = await db().select({ name: schema.clients.name }).from(schema.clients).where(eq(schema.clients.id, q.clientId));
     if (!client) throw new HTTPException(409, { message: "project_needs_client" });
-
-    const src = await ticketSource();
-    // the ticket source's company: tied by id, else the one with the same name
-    const companyId = client.companyId ?? (await run(() => src.companies())).find((x) => x.name.trim().toLowerCase() === client.name.trim().toLowerCase())?.id;
-    if (companyId == null) throw new HTTPException(409, { message: "project_needs_client" });
-    const o = await run(() => src.options());
-    const priority = (o.priorities.find((x) => x.kind === "medium") ?? o.priorities[0])?.value;
-    if (!priority) throw new HTTPException(409, { message: "project_no_priority" });
-    // the technician who prepared it leads the project, when the ticket source knows them
-    const people = await run(() => src.technicians());
-    const lead = q.preparedById ? people.find((p) => p.id === q.preparedById) : undefined;
 
     const t = quoteTotals(q.lines ?? [], q.taxes, q.rates!);
     const fmt = (cents: number) => new Intl.NumberFormat("fr-CA", { style: "currency", currency: "CAD" }).format(cents / 100);
     const per = { once: "", monthly: " / mois", yearly: " / an" };
     const bullets = (q.lines ?? []).map((l) => `- ${l.quantityX100 / 100} × ${l.description}${l.sku ? ` (${l.sku})` : ""}${l.optional ? " [option]" : ""}${l.discountX100 ? ` (rabais ${l.discountX100 / 100} %)` : ""}: ${fmt(lineAmount(l))}${per[recurrenceOf(l)]}${l.details ? `\n  ${l.details.replace(/\n/g, "\n  ")}` : ""}`);
-    const name = q.title || q.number;
+    const name = (q.title || q.number).slice(0, 200);
     const description = [
       `Projet issu de la soumission ${q.number}${q.title ? ` « ${q.title} »` : ""} pour ${client.name}.`,
       q.preparedBy ? `Préparée par ${q.preparedBy}.` : "",
@@ -456,38 +454,50 @@ await audit(a.user.id, "quote.updated", id, { number: cur.number, lines: p.lines
       ...bullets,
       "",
       `Total: ${fmt(t.totalCents)} (sous-total ${fmt(t.subtotalCents)}${q.taxes ? ", taxes en sus" : ", sans taxes"})`,
-      ...(t.monthly.subtotalCents ? [`Mensuel: ${fmt(t.monthly.totalCents)} / mois`] : []),
-      ...(t.yearly.subtotalCents ? [`Annuel: ${fmt(t.yearly.totalCents)} / an`] : []),
       q.notes ? `\nNotes pour le client:\n${q.notes}` : "",
       q.internalNotes ? `\nNotes internes:\n${q.internalNotes}` : "",
     ]
       .filter((x, i, all) => x !== "" || all[i - 1] !== "")
       .join("\n")
       .slice(0, 8000);
-    const due = new Date(Date.now() + 30 * 86_400_000).toLocaleDateString("en-CA", { timeZone: "America/Toronto" });
-    const ticketId = await run(() => src.create({ title: `Projet: ${name}`.slice(0, 250), description, companyId, contactId: null, priority, queue: "", assigneeId: lead?.id ?? null, dueDate: due }, a));
-    const queue = (await queues()).find((x) => x.key === "projects") ?? (await queues()).find((x) => /projet|project/i.test(x.name));
-    if (queue) {
-      await db()
-        .insert(schema.ticketMeta)
-        .values({ ticketId, queue: queue.key, updatedBy: a.user.id })
-        .onConflictDoUpdate({ target: schema.ticketMeta.ticketId, set: { queue: queue.key, updatedBy: a.user.id, updatedAt: new Date() } });
-    }
-    const made = await run(() => src.get(ticketId));
-    const number = made?.number ?? String(ticketId);
+    const hours = p.hours === undefined ? sold.hours : p.hours;
+    const priceCents = p.price === undefined || p.price === null ? sold.priceCents : Math.round(p.price * 100);
+    // the one who prepared the quote leads the project (when still active staff)
+    const [lead] = q.preparedById ? await db().select({ id: schema.users.id }).from(schema.users).where(and(eq(schema.users.id, q.preparedById), eq(schema.users.kind, "staff"), eq(schema.users.active, true))) : [];
+    const number = await nextProjectNumber();
+    const [project] = await db()
+      .insert(schema.projects)
+      .values({
+        number,
+        name,
+        clientId: q.clientId,
+        description,
+        status: "planning",
+        leadId: lead?.id ?? a.user.id,
+        startDate: todayQc(),
+        dueDate: p.dueDate ?? null,
+        // sold as a package: the hours sold are the budget, the price sold is billed as one line
+        budgetHoursX100: hours == null ? null : Math.round(hours * 100),
+        billingMode: "fixed",
+        fixedPriceCents: priceCents,
+        quoteId: q.id,
+        createdBy: a.user.id,
+      })
+      .returning();
+    await db().insert(schema.projectMembers).values({ projectId: project.id, userId: project.leadId! }).onConflictDoNothing();
 
     const [point] = await db()
       .insert(schema.meetingPoints)
       .values({
         text: `Projet ${client.name}: ${name} (${number})`.slice(0, 2000),
-        details: [`Soumission ${q.number}, total ${fmt(t.totalCents)}${q.preparedBy ? `, préparée par ${q.preparedBy}` : ""}.`, `Billet de projet ${number}.`, "", ...bullets].join("\n").slice(0, 8000),
+        details: [`Soumission ${q.number}, total ${fmt(t.totalCents)}${q.preparedBy ? `, préparée par ${q.preparedBy}` : ""}.`, `Projet ${number}${hours ? `, ${hours} h vendues` : ""}.`, "", ...bullets].join("\n").slice(0, 8000),
         authorId: a.user.id,
         authorName: a.user.name,
       })
       .returning({ id: schema.meetingPoints.id });
-    await db().update(schema.quotes).set({ projectTicketId: ticketId, projectTicketNumber: number, meetingPointId: point.id, projectAt: new Date(), updatedAt: new Date() }).where(eq(schema.quotes.id, id));
-    await audit(a.user.id, "quote.to_project", id, { number: q.number, ticketId, ticketNumber: number, queue: queue?.key ?? null });
-    return c.json({ ticketId, ticketNumber: number, meetingPointId: point.id }, 201);
+    await db().update(schema.quotes).set({ projectId: project.id, meetingPointId: point.id, projectAt: new Date(), updatedAt: new Date() }).where(eq(schema.quotes.id, id));
+    await audit(a.user.id, "quote.to_project", id, { number: q.number, project: number, hours, priceCents });
+    return c.json({ projectId: project.id, projectNumber: number, meetingPointId: point.id }, 201);
   })
 
   /** A line typed on the spot becomes an inventory product (and the line is tied to it): next time it is one search away. */

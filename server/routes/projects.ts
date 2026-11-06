@@ -1,6 +1,6 @@
 import { Hono } from "hono";
 import { HTTPException } from "hono/http-exception";
-import { and, asc, desc, eq, gte, ilike, inArray, isNotNull, lte, or, sql } from "drizzle-orm";
+import { and, asc, desc, eq, gte, ilike, inArray, isNotNull, isNull, lte, or, sql } from "drizzle-orm";
 import { z } from "zod";
 import { db, schema } from "../db/index.ts";
 import { auth, requirePermission, requireStaff, type AppEnv } from "../lib/auth.ts";
@@ -11,6 +11,7 @@ import { billingSettings } from "../lib/billing.ts";
 import { hourlyRateOf } from "../lib/contracts.ts";
 import { escapeHtml, sendMail } from "../lib/mail.ts";
 import { body, zUuid } from "../lib/validate.ts";
+import { billProject, depositOfProject, linkTicket, ProjectBillError, projectBilling, projectOfTicket, ticketsOfProject } from "../lib/projectLinks.ts";
 
 /**
  * Centre de commande › Projets: a project is a folder — milestones (jalons) with their tasks, the team, the time logged
@@ -415,7 +416,7 @@ export const projectsRoutes = new Hono<AppEnv>()
         .orderBy(desc(schema.projectNotes.createdAt))
         .limit(200),
       d
-        .select({ id: schema.timesheetEntries.id, date: schema.timesheetEntries.date, hoursX100: schema.timesheetEntries.hoursX100, billableX100: schema.timesheetEntries.billableX100, note: schema.timesheetEntries.note, milestoneId: schema.timesheetEntries.milestoneId, userId: schema.timesheetEntries.userId, user: schema.users.name })
+        .select({ id: schema.timesheetEntries.id, date: schema.timesheetEntries.date, hoursX100: schema.timesheetEntries.hoursX100, billableX100: schema.timesheetEntries.billableX100, note: schema.timesheetEntries.note, milestoneId: schema.timesheetEntries.milestoneId, taskId: schema.timesheetEntries.taskId, userId: schema.timesheetEntries.userId, user: schema.users.name, ticketTimeId: schema.timesheetEntries.ticketTimeId, ticketNumber: schema.timesheetEntries.ticketNumber, ticketTitle: schema.timesheetEntries.ticketTitle })
         .from(schema.timesheetEntries)
         .innerJoin(schema.users, eq(schema.users.id, schema.timesheetEntries.userId))
         .where(eq(schema.timesheetEntries.projectId, p.id))
@@ -430,13 +431,39 @@ export const projectsRoutes = new Hono<AppEnv>()
         .orderBy(desc(sql`sum(${schema.timesheetEntries.hoursX100})`)),
     ]);
     const msName = new Map(card.milestones.map((m) => [m.id, m.name]));
+    const taskName = new Map(card.milestones.flatMap((m) => (m.tasks ?? []).map((t) => [t.id, t.title] as const)));
+    const [tickets, billing, deposit, quote] = await Promise.all([
+      ticketsOfProject(p.id),
+      projectBilling(p.id),
+      depositOfProject(p),
+      p.quoteId ? d.select({ id: schema.quotes.id, number: schema.quotes.number }).from(schema.quotes).where(eq(schema.quotes.id, p.quoteId)).then((r) => r[0] ?? null) : Promise.resolve(null),
+    ]);
+    // sold against worked: hours sold (the budget) and the price sold, against every hour logged (tasks and tickets)
+    const soldHours = card.budgetHours;
+    const soldCents = p.fixedPriceCents;
+    const rateCents = soldHours && soldCents ? Math.round(soldCents / soldHours) : null;
+    const sold = {
+      hours: soldHours,
+      priceCents: soldCents,
+      rateCents,
+      workedHours: card.hours,
+      ticketHours: Math.round(tickets.reduce((n, x) => n + x.hours, 0) * 100) / 100,
+      // positive: hours left (under what was sold); negative: worked over it
+      diffHours: soldHours == null ? null : Math.round((soldHours - card.hours) * 100) / 100,
+      workedValueCents: rateCents == null ? null : Math.round(card.hours * rateCents),
+      diffCents: rateCents == null || soldCents == null ? null : soldCents - Math.round(card.hours * rateCents),
+    };
     return c.json({
       ...card,
+      quote,
+      sold,
+      tickets,
+      billing: { invoicedAt: p.invoicedAt, lines: billing, deposit: deposit ? { number: deposit.number, invoiceId: deposit.invoiceId, subtotalCents: deposit.subtotalCents } : null },
       reminders,
       notes: notes.map((n) => ({ id: n.id, text: n.text, createdAt: n.createdAt, authorId: n.authorId, author: n.author ?? null })),
       time: {
         byPerson: byPerson.map((x) => ({ userId: x.userId, name: x.user, hours: x.h / 100 })),
-        entries: entries.map((e) => ({ id: e.id, date: e.date, hours: e.hoursX100 / 100, billableHours: (e.billableX100 ?? e.hoursX100) / 100, note: e.note, milestoneId: e.milestoneId, milestone: e.milestoneId ? (msName.get(e.milestoneId) ?? null) : null, userId: e.userId, user: e.user })),
+        entries: entries.map((e) => ({ id: e.id, date: e.date, hours: e.hoursX100 / 100, billableHours: (e.billableX100 ?? e.hoursX100) / 100, note: e.note, milestoneId: e.milestoneId, milestone: e.milestoneId ? (msName.get(e.milestoneId) ?? null) : null, task: e.taskId ? (taskName.get(e.taskId) ?? null) : null, ticket: e.ticketTimeId ? { number: e.ticketNumber, title: e.ticketTitle } : null, userId: e.userId, user: e.user })),
       },
     });
   })
@@ -563,9 +590,73 @@ export const projectsRoutes = new Hono<AppEnv>()
     const cur = await loadProject(c.req.param("id"));
     // the hours stay on the timesheets, no longer tied to a project
     await db().update(schema.timesheetEntries).set({ projectId: null, milestoneId: null }).where(eq(schema.timesheetEntries.projectId, cur.id));
+    await db().update(schema.ticketMeta).set({ projectId: null }).where(eq(schema.ticketMeta.projectId, cur.id));
     await db().delete(schema.projects).where(eq(schema.projects.id, cur.id));
     await audit(a.user.id, "project.deleted", cur.id, { number: cur.number, name: cur.name });
     return c.json({ ok: true });
+  })
+
+  // ── tickets of the project (their time counts in it) ──
+  /** Open tickets of the project's client (to pick one), searched by number or title */
+  .get("/:id/ticket-candidates", requirePermission("projects.view"), async (c) => {
+    const p = await loadProject(c.req.param("id"));
+    const q = (c.req.query("q") ?? "").trim().toLowerCase();
+    const [client] = p.clientId ? await db().select({ at: schema.clients.autotaskId }).from(schema.clients).where(eq(schema.clients.id, p.clientId)) : [];
+    const rows = await db()
+      .select({ id: schema.tickets.id, number: schema.tickets.number, title: schema.tickets.title, company: schema.tickets.companyName, projectId: schema.ticketMeta.projectId })
+      .from(schema.tickets)
+      .leftJoin(schema.ticketMeta, eq(schema.ticketMeta.ticketId, schema.tickets.id))
+      .where(and(isNull(schema.tickets.completedAt), client?.at != null ? eq(schema.tickets.companyId, client.at) : undefined))
+      .orderBy(desc(schema.tickets.createdAt))
+      .limit(500);
+    return c.json(
+      rows
+        .filter((r) => r.projectId !== p.id && (!q || `${r.number} ${r.title}`.toLowerCase().includes(q)))
+        .slice(0, 30)
+        .map((r) => ({ id: r.id, number: r.number, title: r.title, company: r.company, otherProject: Boolean(r.projectId) })),
+    );
+  })
+  /** Tie a ticket to the project (by its id or its number): its time, before and after, counts in the project */
+  .post("/:id/tickets", requirePermission("projects.edit"), async (c) => {
+    const a = auth(c);
+    const p = await loadProject(c.req.param("id"));
+    const r = await body(c, z.object({ ticket: z.union([z.number().int().positive(), z.string().trim().min(1).max(40)]) }));
+    const [t] = await db()
+      .select({ id: schema.tickets.id, number: schema.tickets.number, companyId: schema.tickets.companyId })
+      .from(schema.tickets)
+      .where(typeof r.ticket === "number" ? eq(schema.tickets.id, r.ticket) : sql`upper(${schema.tickets.number}) = ${r.ticket.toUpperCase()}`);
+    if (!t) throw new HTTPException(404, { message: "ticket_not_found" });
+    if (p.clientId) {
+      const [client] = await db().select({ at: schema.clients.autotaskId }).from(schema.clients).where(eq(schema.clients.id, p.clientId));
+      if (client?.at != null && client.at !== t.companyId) throw new HTTPException(409, { message: "ticket_other_client" });
+    }
+    const was = await projectOfTicket(t.id);
+    await linkTicket(t.id, p.id);
+    await audit(a.user.id, "project.ticket_linked", p.id, { number: p.number, ticket: t.number, ...(was && was !== p.id ? { from: was } : {}) });
+    return c.json(await ticketsOfProject(p.id), 201);
+  })
+  .delete("/:id/tickets/:ticketId", requirePermission("projects.edit"), async (c) => {
+    const a = auth(c);
+    const p = await loadProject(c.req.param("id"));
+    const ticketId = Number(c.req.param("ticketId"));
+    if (!Number.isInteger(ticketId) || (await projectOfTicket(ticketId)) !== p.id) throw new HTTPException(404, { message: "not_found" });
+    await linkTicket(ticketId, null);
+    await audit(a.user.id, "project.ticket_unlinked", p.id, { number: p.number, ticketId });
+    return c.json(await ticketsOfProject(p.id));
+  })
+
+  /** The price sold goes to Approbation (one line as the client sees it, less the deposit): accounting.manage */
+  .post("/:id/bill", requirePermission("projects.edit"), requirePermission("accounting.manage"), async (c) => {
+    const a = auth(c);
+    const p = await loadProject(c.req.param("id"));
+    try {
+      const r = await billProject(a.user.id, p.id);
+      await audit(a.user.id, "project.billed", p.id, { number: p.number, totalCents: r.totalCents, deposit: r.deposit?.number ?? null });
+      return c.json({ lines: r.lines, totalCents: r.totalCents, deposit: r.deposit }, 201);
+    } catch (e) {
+      if (e instanceof ProjectBillError) throw new HTTPException(e.message === "not_found" ? 404 : 409, { message: e.message });
+      throw e;
+    }
   })
 
   .put("/:id/follow", requirePermission("projects.view"), async (c) => {

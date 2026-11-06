@@ -58,3 +58,17 @@ export function depositOf(lines: QuoteLineMoney[], percentX100: number) {
   const exemptCents = share(once.filter((l) => !l.taxable).reduce((n, l) => n + lineAmount(l), 0));
   return { taxableCents, exemptCents, subtotalCents: taxableCents + exemptCents };
 }
+
+/** A line that sells hours of work (by its words: heures, h, main-d'œuvre, labour, hours) */
+export const isHourLine = (l: { description: string; details?: string | null }) => /\b(heures?|hrs?|h|main[- ]d['’]?\s*(oe|œ)uvre|labou?r|hours?)\b/i.test(`${l.description} ${l.details ?? ""}`);
+
+/**
+ * What a quote sells as a project: the hours of its one-time hour lines and their price (after discounts);
+ * no hour line: no hours, and the price of the whole implementation.
+ */
+export function soldOfQuote(lines: (QuoteLineMoney & { description: string; details?: string | null })[]) {
+  const once = lines.filter((l) => !l.optional && recurrenceOf(l) === "once");
+  const hourLines = once.filter(isHourLine);
+  if (!hourLines.length) return { hours: null as number | null, priceCents: once.reduce((n, l) => n + lineAmount(l), 0) };
+  return { hours: hourLines.reduce((n, l) => n + l.quantityX100, 0) / 100, priceCents: hourLines.reduce((n, l) => n + lineAmount(l), 0) };
+}

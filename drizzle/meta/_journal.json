@@ -1016,6 +1016,13 @@
       "when": 1793981744675,
       "tag": "0144_quote_deposit",
       "breakpoints": true
+    },
+    {
+      "idx": 145,
+      "version": "7",
+      "when": 1793984612142,
+      "tag": "0145_projects_from_quotes",
+      "breakpoints": true
     }
   ]
 }
