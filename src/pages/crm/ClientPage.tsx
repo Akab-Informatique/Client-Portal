@@ -36,6 +36,7 @@ import {
   UserRound,
   UsersRound,
   X,
+  Hash,
 } from "lucide-react";
 import { GlassBackdrop } from "@/components/brand/GlassBackdrop";
 import { Button } from "@/components/ui/button";
@@ -704,6 +705,17 @@ function QuickBooksLine({ invoice: v, clientId }: { invoice: CrmInvoice; clientI
     },
     onSettled: () => void qc.invalidateQueries({ queryKey: ["crm", "client", clientId, "invoices"] }),
   });
+  const confirm = useConfirm();
+  // the number is already used in QuickBooks (a credit memo or an invoice typed there): the next free number, sent again
+  const renumber = useMutation({
+    mutationFn: () => api.post<{ from: string; number: string; quickbooks: { quickbooksId?: string; error?: string } }>(`/crm/invoices/${v.id}/renumber`),
+    onSuccess: (r) => (r.quickbooks?.quickbooksId ? toast.success(t("crm.invoices.qb.renumbered", { from: r.from, to: r.number })) : toast.warning(t("crm.invoices.qb.renumberedNotSent", { from: r.from, to: r.number }))),
+    onError: (e) => toast.error(t(`crm.invoices.qb.errors.${e instanceof ApiError ? e.code : ""}`, { defaultValue: t("crm.invoices.qb.failed") })),
+    onSettled: () => {
+      void qc.invalidateQueries({ queryKey: ["crm", "client", clientId, "invoices"] });
+      void qc.invalidateQueries({ queryKey: ["crm", "invoices"] });
+    },
+  });
   if (!v.quickbooks && !can("accounting.manage")) return null;
   const qb = v.quickbooks;
   return (
@@ -722,8 +734,20 @@ function QuickBooksLine({ invoice: v, clientId }: { invoice: CrmInvoice; clientI
           <AlertTriangle className="size-3.5" /> {t(`crm.invoices.qb.errors.quickbooks_${qb.error.split(":")[0]}`, { defaultValue: qb.error })}
         </span>
       )}
+      {can("accounting.manage") && v.status !== "voided" && qb?.error && !qb.id && v.source === "portal" && (
+        <Button
+          size="sm"
+          variant="outline"
+          className="ml-auto h-7 text-xs"
+          disabled={renumber.isPending}
+          title={t("crm.invoices.qb.renumberHelp")}
+          onClick={() => void confirm({ title: t("crm.invoices.qb.renumberTitle", { number: v.number }), description: t("crm.invoices.qb.renumberText"), confirmLabel: t("crm.invoices.qb.renumber") }).then((ok) => ok && renumber.mutate())}
+        >
+          {renumber.isPending ? <Loader2 className="size-3.5 animate-spin" /> : <Hash className="size-3.5" />} {t("crm.invoices.qb.renumber")}
+        </Button>
+      )}
       {can("accounting.manage") && v.status !== "voided" && (
-        <Button size="sm" variant="outline" className="ml-auto h-7 text-xs" disabled={send.isPending} onClick={() => send.mutate()}>
+        <Button size="sm" variant="outline" className={cn("h-7 text-xs", !(qb?.error && !qb.id && v.source === "portal") && "ml-auto")} disabled={send.isPending} onClick={() => send.mutate()}>
           {send.isPending ? <Loader2 className="size-3.5 animate-spin" /> : <RefreshCw className="size-3.5" />} {qb?.id ? t("crm.invoices.qb.resend") : t("crm.invoices.qb.send")}
         </Button>
       )}

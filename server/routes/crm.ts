@@ -18,7 +18,7 @@ import { ticketSource, type NTicket } from "../lib/ticketSource.ts";
 import { crmState, descendantsOf, ensureCrm, rememberCompany, rememberContact, syncCrm } from "../lib/crm.ts";
 import { lookup, run } from "./tickets.ts";
 import { pushInvoice } from "../lib/quickbooks.ts";
-import { DraftError, recalcInvoiceTaxes, taxesByLine } from "../lib/billables.ts";
+import { DraftError, recalcInvoiceTaxes, renumberInvoice, taxesByLine } from "../lib/billables.ts";
 import { applyToLines, contractsIn, runningLinesOf } from "../lib/servicePrices.ts";
 import { InvoiceMailError, invoicePdfFor, sendInvoiceMail, sendStatement, sendStatements, statementOf, statementTargets } from "../lib/invoiceMail.ts";
 import { applyAutoApprove } from "../lib/billables.ts";
@@ -1229,6 +1229,19 @@ export const crmRoutes = new Hono<AppEnv>()
       return c.json(r);
     } catch (e) {
       return quickbooksHttp(e);
+    }
+  })
+  /** The number is already used in QuickBooks (a credit memo or an invoice typed there): the next free number, then sent again */
+  .post("/invoices/:iid/renumber", requirePermission("accounting.manage"), async (c) => {
+    const a = auth(c);
+    const id = zUuid.parse(c.req.param("iid"));
+    try {
+      const r = await renumberInvoice(a.user.id, id);
+      await audit(a.user.id, "billing.invoice_renumbered", id, { from: r.from, to: r.number });
+      return c.json(r);
+    } catch (e) {
+      if (e instanceof DraftError) throw new HTTPException(e.message === "not_found" ? 404 : 409, { message: e.message });
+      throw e;
     }
   })
   .delete("/invoices/:iid/payments/:pid", requirePermission("accounting.manage"), async (c) => {

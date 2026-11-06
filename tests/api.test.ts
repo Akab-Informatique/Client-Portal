@@ -7202,7 +7202,7 @@ describe("pipeline: times, files, recurring and private tasks", () => {
 
 describe("QuickBooks: clients, chart of accounts and vendors kept in step both ways", () => {
   type Rec = Record<string, any>;
-  const store = { Customer: new Map<string, Rec>(), Account: new Map<string, Rec>(), Vendor: new Map<string, Rec>(), Invoice: new Map<string, Rec>() };
+  const store = { Customer: new Map<string, Rec>(), Account: new Map<string, Rec>(), Vendor: new Map<string, Rec>(), Invoice: new Map<string, Rec>(), CreditMemo: new Map<string, Rec>(), SalesReceipt: new Map<string, Rec>(), RefundReceipt: new Map<string, Rec>() };
   const real = globalThis.fetch;
   let seq = 100;
   // a change on either side is later than the last sync, by a clear margin
@@ -7221,7 +7221,8 @@ describe("QuickBooks: clients, chart of accounts and vendors kept in step both w
       const entity = /from (\w+)/.exec(url.searchParams.get("query") ?? "")![1] as keyof typeof store;
       // the one filter the portal uses on invoices: from a day on
       const since = /TxnDate >= '([0-9]{4}-[0-9]{2}-[0-9]{2})'/.exec(url.searchParams.get("query") ?? "")?.[1];
-      const rows = [...store[entity].values()].filter((r) => !since || r.TxnDate >= since);
+      const doc = /DocNumber = '([^']*)'/.exec(url.searchParams.get("query") ?? "")?.[1];
+      const rows = [...store[entity].values()].filter((r) => (!since || r.TxnDate >= since) && (doc === undefined || r.DocNumber === doc));
       return Response.json({ QueryResponse: { [entity]: rows } });
     }
     const [what, id] = path.split("/");
@@ -7380,6 +7381,23 @@ describe("QuickBooks: clients, chart of accounts and vendors kept in step both w
       expect((await tech.post("/api/billing/quickbooks/numbering/align", {})).status).toBe(403);
       expect((await admin.post("/api/billing/quickbooks/numbering/align", {})).json).toMatchObject({ portalNext: 20009, raised: true });
       expect((await admin.get("/api/billing/quickbooks/numbering")).json).toMatchObject({ status: "aligned" });
+      // a credit memo typed in QuickBooks takes a number of the same sequence: it counts too
+      store.CreditMemo.set("cm1", stamp({ Id: "cm1", DocNumber: "20012", TxnDate: "2026-03-12", TotalAmt: 50, CustomerRef: { value: "880" } }));
+      expect((await admin.post("/api/billing/quickbooks/numbering/align", {})).json).toMatchObject({ portalNext: 20013, qbHighest: 20012, raised: true });
+      const qbLib = await import("../server/lib/quickbooks.ts");
+      expect(await qbLib.qbNumberTaken("20012")).toBe(true);
+      expect(await qbLib.qbNumberTaken("20013")).toBe(false);
+      // an invoice of the portal stuck on a number QuickBooks has: it takes the next free one
+      const [stuck] = await db().insert(schema.clientInvoices).values({ clientId: cl.id, number: "20012", issuedOn: "2026-03-12", dueOn: "2026-03-12", subtotalCents: 1000, taxCents: 0, totalCents: 1000, source: "portal", quickbooksError: "Duplicate Document Number Error" } as any).returning();
+      expect((await tech.post(`/api/crm/invoices/${stuck.id}/renumber`, {})).status).toBe(403);
+      const re = (await admin.post(`/api/crm/invoices/${stuck.id}/renumber`, {})).json;
+      // the next number free in the portal and in QuickBooks (the portal's own invoices may already be higher)
+      expect(re.from).toBe("20012");
+      expect(Number(re.number)).toBeGreaterThan(20012);
+      expect((await db().select().from(schema.clientInvoices).where(eq(schema.clientInvoices.id, stuck.id)))[0]).toMatchObject({ number: re.number });
+      await db().delete(schema.clientInvoices).where(eq(schema.clientInvoices.id, stuck.id));
+      store.CreditMemo.clear();
+      for (const [k, r] of store.Invoice) if (r.DocNumber === re.number) store.Invoice.delete(k);
       // already ahead: never lowered
       await billing.saveBillingSettings(null, { numbering: { next: 30000 } });
       expect((await admin.post("/api/billing/quickbooks/numbering/align", {})).json).toMatchObject({ portalNext: 30000, raised: false });

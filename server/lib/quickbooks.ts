@@ -801,11 +801,34 @@ export async function previewInvoices() {
  * already has. Looked at again at most every 2 minutes unless forced.
  */
 let numberingSeen: { at: number; qbNext: number } | null = null;
+
+/**
+ * QuickBooks numbers its sales forms in one sequence: an invoice, a credit memo, a sales receipt or a refund made
+ * directly in QuickBooks all take a number an invoice of the portal could otherwise take. Every one of them is read.
+ */
+const SALES_FORMS = ["Invoice", "CreditMemo", "SalesReceipt", "RefundReceipt"] as const;
+async function qbHighestNumber(): Promise<number> {
+  let highest = 0;
+  for (const entity of SALES_FORMS) {
+    const rows = await query<{ DocNumber?: string }>(entity);
+    highest = rows.reduce((m, r) => Math.max(m, numberOf(r.DocNumber) ?? 0), highest);
+  }
+  return highest;
+}
+
+/** A number already used in QuickBooks by any sales form (false when QuickBooks is not connected) */
+export async function qbNumberTaken(number: string): Promise<boolean> {
+  const s = await quickbooksSettings();
+  if (!s.refreshToken || !s.realmId) return false;
+  const doc = number.slice(0, 21).replace(/[^A-Za-z0-9.-]/g, "");
+  if (!doc) return false;
+  for (const entity of SALES_FORMS) if ((await query<{ Id: string }>(entity, `DocNumber = '${doc}'`)).length) return true;
+  return false;
+}
 export async function alignNumbering(force = false, actorId: string | null = null): Promise<{ portalNext: number; qbNext: number; qbHighest: number; raised: boolean }> {
   const bs = await billingSettings();
   if (!force && numberingSeen && Date.now() - numberingSeen.at < 120_000) return { portalNext: bs.numbering.next, qbNext: numberingSeen.qbNext, qbHighest: numberingSeen.qbNext - 1, raised: false };
-  const all = await query<RawInvoice>("Invoice");
-  const highest = all.reduce((m, r) => Math.max(m, numberOf(r.DocNumber) ?? 0), 0);
+  const highest = await qbHighestNumber();
   numberingSeen = { at: Date.now(), qbNext: highest + 1 };
   let raised = false;
   let next = bs.numbering.next;
@@ -820,8 +843,7 @@ export async function alignNumbering(force = false, actorId: string | null = nul
 /** Where the two numberings stand (nothing is changed): equal, the portal behind (it will be raised) or ahead (invoices not sent yet) */
 export async function numberingStatus() {
   const bs = await billingSettings();
-  const all = await query<RawInvoice>("Invoice");
-  const highest = all.reduce((m, r) => Math.max(m, numberOf(r.DocNumber) ?? 0), 0);
+  const highest = await qbHighestNumber();
   const portalNext = bs.numbering.next;
   return { portalNext, qbNext: highest + 1, qbHighest: highest, status: portalNext === highest + 1 ? "aligned" : portalNext < highest + 1 ? "behind" : "ahead" } as const;
 }

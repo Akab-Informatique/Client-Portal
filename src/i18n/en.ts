@@ -661,6 +661,12 @@ const en: Dict = {
         taxes: "GST + QST",
       },
       qb: {
+        renumber: "Take a new number",
+        renumberHelp: "The number is already used in QuickBooks (a credit memo or an invoice made there): the invoice takes the next free number and goes to QuickBooks.",
+        renumberTitle: "Change the number of invoice {{number}}?",
+        renumberText: "The invoice takes the next number free in the portal and in QuickBooks, then it is sent to QuickBooks. If the client already received it, tell them the number changed (send it again).",
+        renumbered: "Invoice {{from}} is now {{to}} and it is in QuickBooks.",
+        renumberedNotSent: "Invoice {{from}} is now {{to}}, but QuickBooks refused it again: see the error.",
         sent: "Invoice sent to QuickBooks",
         failed: "Sending to QuickBooks failed",
         send: "Send to QuickBooks",

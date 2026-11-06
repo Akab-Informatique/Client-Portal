@@ -1,6 +1,6 @@
 import { and, asc, eq, gte, inArray, isNotNull, lte, or, sql } from "drizzle-orm";
 import { db, schema } from "../db/index.ts";
-import { alignNumbering, autoTaxCodes, qbItemsForBillingItems, voidInvoiceInQb } from "./quickbooks.ts";
+import { alignNumbering, autoTaxCodes, pushInvoice, qbItemsForBillingItems, qbNumberTaken, voidInvoiceInQb } from "./quickbooks.ts";
 import { dueAfterSent } from "../../shared/invoiceDue.ts";
 import { taxesOfLines } from "../../shared/invoiceTax.ts";
 import { defaultSupport, hourlyRateOf, NO_CONTRACT_HOURLY_CENTS, payerOf } from "./contracts.ts";
@@ -485,7 +485,37 @@ async function peekNumber(): Promise<string> {
   }, 0);
   let value = Math.max(s.numbering.next, highest + 1);
   while (used.has(formatInvoiceNumber(s.numbering, value))) value++;
+  // checked in QuickBooks too, right before the invoice is made: a credit memo or an invoice typed there takes numbers
+  // from the same sequence (a QuickBooks that does not answer never blocks an invoice)
+  for (let tries = 0; tries < 50; tries++) {
+    const taken = await qbNumberTaken(formatInvoiceNumber(s.numbering, value)).catch(() => false);
+    if (!taken) break;
+    value++;
+    while (used.has(formatInvoiceNumber(s.numbering, value))) value++;
+  }
   return formatInvoiceNumber(s.numbering, value);
+}
+
+/**
+ * An invoice the portal made whose number QuickBooks already has (a credit memo or an invoice typed there): it takes
+ * the next number free in both, and is sent to QuickBooks again. Only one not in QuickBooks yet, not voided.
+ */
+export function renumberInvoice(actorId: string, invoiceId: string) {
+  const run = numbering.then(async () => {
+    const [inv] = await db().select().from(schema.clientInvoices).where(eq(schema.clientInvoices.id, invoiceId));
+    if (!inv) throw new DraftError("not_found");
+    if (inv.voided) throw new DraftError("invoice_voided");
+    if (inv.quickbooksId) throw new DraftError("invoice_in_quickbooks");
+    if (inv.source !== "portal") throw new DraftError("invoice_not_portal");
+    const number = await peekNumber();
+    const s = await billingSettings();
+    await db().update(schema.clientInvoices).set({ number, quickbooksError: null, updatedAt: new Date() }).where(eq(schema.clientInvoices.id, inv.id));
+    const digits = number.slice(s.numbering.prefix.length);
+    if (/^\d+$/.test(digits)) await saveBillingSettings(actorId, { numbering: { next: Number(digits) + 1 } });
+    return { from: inv.number, number };
+  });
+  numbering = run.catch(() => undefined);
+  return run.then(async (r) => ({ ...r, quickbooks: await pushInvoice(invoiceId).catch((e) => ({ error: e instanceof Error ? e.message : "quickbooks_failed" })) }));
 }
 
 /** Make the invoice of a draft: the number, the lines; the items are posted. One at a time (numbers never repeat). */

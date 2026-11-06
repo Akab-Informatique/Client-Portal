@@ -659,6 +659,12 @@ const fr = {
         taxes: "TPS + TVQ",
       },
       qb: {
+        renumber: "Prendre un nouveau numéro",
+        renumberHelp: "Le numéro est déjà pris dans QuickBooks (une note de crédit ou une facture faite là-bas) : la facture prend le prochain numéro libre et part dans QuickBooks.",
+        renumberTitle: "Changer le numéro de la facture {{number}} ?",
+        renumberText: "La facture prend le prochain numéro libre dans le portail et dans QuickBooks, puis elle est envoyée à QuickBooks. Si le client a déjà reçu la facture, dites-lui qu'elle a changé de numéro (renvoyez-la).",
+        renumbered: "La facture {{from}} est devenue {{to}} et elle est dans QuickBooks.",
+        renumberedNotSent: "La facture {{from}} est devenue {{to}}, mais QuickBooks l'a encore refusée : voyez l'erreur.",
         sent: "Facture envoyée à QuickBooks",
         failed: "L'envoi à QuickBooks a échoué",
         send: "Envoyer à QuickBooks",
