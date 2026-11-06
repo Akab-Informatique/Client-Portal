@@ -846,9 +846,10 @@ export const ticketCharges = pgTable(
   "ticket_charges",
   {
     id: uuid("id").primaryKey().defaultRandom(),
-    ticketId: bigint("ticket_id", { mode: "number" })
-      .notNull()
-      .references(() => tickets.id, { onDelete: "cascade" }),
+    /** The ticket it is on; none when it was moved onto a project (`projectId`) */
+    ticketId: bigint("ticket_id", { mode: "number" }).references(() => tickets.id, { onDelete: "cascade" }),
+    /** A charge moved onto a project (until it is approved, it can go to another ticket or project) */
+    projectId: uuid("project_id").references((): AnyPgColumn => projects.id, { onDelete: "cascade" }),
     /** "charge:45": an Autotask charge */
     externalId: text("external_id"),
     name: text("name").notNull(),

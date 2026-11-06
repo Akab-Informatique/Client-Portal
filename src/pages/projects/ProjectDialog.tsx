@@ -2,8 +2,9 @@ import { useEffect, useRef, useState, type FormEvent } from "react";
 import { useTranslation } from "react-i18next";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
-import { ArrowDown, ArrowUp, ChevronDown, Clock, FileText, Flag, FolderOpen, Info, ListChecks, Loader2, MessageSquare, Plus, Star, Trash2, X } from "lucide-react";
+import { ArrowDown, ArrowUp, ChevronDown, Clock, FileText, Flag, FolderOpen, Info, ArrowRightLeft, ListChecks, Loader2, MessageSquare, Plus, Star, Trash2, X } from "lucide-react";
 import { useConfirm } from "@/components/ConfirmDialog";
+import { MoveChargeDialog } from "@/components/MoveChargeDialog";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
@@ -20,7 +21,7 @@ import { useProjectWorkspace } from "./ProjectWorkspace";
 import { Overview } from "./Overview";
 import { PhaseDialog } from "./PhaseDialog";
 import { Card, Text } from "./ui";
-import { apiMessage, dueTone, hoursText, KEY, MS_TONE, PRIORITY_DOT, STATUS_STYLE, TASK_STYLE, TONE_TEXT, today, type Milestone, type ProjectDetail } from "./shared";
+import { apiMessage, dueTone, hoursText, KEY, MS_TONE, useProjectPeople, PRIORITY_DOT, STATUS_STYLE, TASK_STYLE, TONE_TEXT, today, type Milestone, type ProjectDetail } from "./shared";
 
 const TABS = [
   { key: "overview", icon: Info },
@@ -316,13 +317,27 @@ function TimeTab({ p, edit, onChanged, fail }: { p: ProjectDetail; edit: boolean
   const qc = useQueryClient();
   const closed = p.status === "done" || p.status === "cancelled";
   const hourly = p.billingMode !== "fixed";
-  const [f, setF] = useState({ date: today(), duration: "", milestoneId: "", taskId: "", note: "", billable: hourly });
+  const [f, setF] = useState({ date: today(), duration: "", milestoneId: "", taskId: "", note: "", billable: hourly, userId: "" });
   useEffect(() => setF((s) => ({ ...s, billable: hourly })), [hourly]);
   const hours = parseHm(f.duration);
+  // a manager gives the time to anyone, and changes whose an entry is
+  const manager = can("projects.manage");
+  const { data: people = [] } = useProjectPeople();
+  const [moving, setMoving] = useState<{ id: string; name: string } | null>(null);
+  const { data: charges = [], refetch: refetchCharges } = useQuery({ queryKey: [...KEY, "charges", p.id], queryFn: () => api.get<{ id: string; name: string; quantity: number; unitPrice: number | null; rebate: number; billable: boolean; date: string | null; billing: string | null; movable: boolean }[]>(`/projects/${p.id}/charges`) });
+  const reassign = useMutation({
+    mutationFn: (v: { id: string; userId: string }) => api.patch(`/projects/${p.id}/time/${v.id}`, { userId: v.userId }),
+    onSuccess: (_r, v) => {
+      onChanged();
+      void qc.invalidateQueries({ queryKey: ["time"] });
+      toast.success(t("timeFor.changed", { name: people.find((x) => x.id === v.userId)?.name ?? "" }));
+    },
+    onError: fail,
+  });
   const tasks = p.milestones.flatMap((m) => (m.tasks ?? []).map((k) => ({ ...k, milestone: m.name })));
   const toggle = useMutation({ mutationFn: (v: { id: string; billable: boolean }) => api.patch(`/projects/${p.id}/time/${v.id}`, { billable: v.billable }), onSuccess: onChanged, onError: fail });
   const add = useMutation({
-    mutationFn: () => api.post(`/projects/${p.id}/time`, { date: f.date, hours, ...(f.taskId ? { taskId: f.taskId } : { milestoneId: f.milestoneId || null }), note: f.note.trim() || undefined, billable: f.billable }),
+    mutationFn: () => api.post(`/projects/${p.id}/time`, { date: f.date, hours, ...(f.taskId ? { taskId: f.taskId } : { milestoneId: f.milestoneId || null }), note: f.note.trim() || undefined, billable: f.billable, ...(f.userId && f.userId !== me.id ? { userId: f.userId } : {}) }),
     onSuccess: () => {
       setF((s) => ({ ...s, duration: "", note: "" }));
       onChanged();
@@ -381,7 +396,7 @@ function TimeTab({ p, edit, onChanged, fail }: { p: ProjectDetail; edit: boolean
         </Card>
       </div>
 
-      {edit && can("timesheets.use") && !closed && (
+      {edit && (can("timesheets.use") || manager) && !closed && (
         <Card title={t("projects.addTime")}>
           <form
             className="grid gap-3 sm:grid-cols-[9rem_6rem_minmax(0,1fr)_minmax(0,1fr)_minmax(0,1.2fr)_auto]"
@@ -435,6 +450,23 @@ function TimeTab({ p, edit, onChanged, fail }: { p: ProjectDetail; edit: boolean
               <Input value={f.note} onChange={(e) => setF((s) => ({ ...s, note: e.target.value }))} maxLength={500} />
             </div>
             <div className="flex items-end gap-3">
+              {manager && (
+                <div className="space-y-1.5">
+                  <Label className="text-xs">{t("timeFor.person")}</Label>
+                  <Select value={f.userId || me.id} onValueChange={(v) => setF((s) => ({ ...s, userId: v }))}>
+                    <SelectTrigger className="w-40">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {people.map((x) => (
+                        <SelectItem key={x.id} value={x.id}>
+                          {x.id === me.id ? t("timeFor.myself") : x.name}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+              )}
               <label className="flex h-9 items-center gap-2 text-xs text-muted-foreground">
                 <Switch checked={f.billable} onCheckedChange={(v) => setF((s) => ({ ...s, billable: v }))} /> {f.billable ? t("projects.billable") : t("projects.included")}
               </label>
@@ -456,7 +488,22 @@ function TimeTab({ p, edit, onChanged, fail }: { p: ProjectDetail; edit: boolean
             {p.time.entries.map((e) => (
               <li key={e.id} className="grid grid-cols-[4.5rem_minmax(0,1fr)_4rem_auto_auto] items-center gap-3 py-2 text-sm md:grid-cols-[4.5rem_9rem_minmax(0,1fr)_minmax(0,1fr)_4rem_5.5rem_auto]">
                 <span className="text-xs text-muted-foreground">{shortDate(e.date)}</span>
-                <span className="hidden truncate md:block">{e.user}</span>
+                {manager && !e.ticket ? (
+                  <Select value={e.userId} onValueChange={(v) => v !== e.userId && reassign.mutate({ id: e.id, userId: v })} disabled={reassign.isPending}>
+                    <SelectTrigger className="hidden h-7 border-transparent bg-transparent px-1 text-sm md:flex" aria-label={t("timeFor.change")} title={t("timeFor.change")}>
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {people.map((x) => (
+                        <SelectItem key={x.id} value={x.id}>
+                          {x.name}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                ) : (
+                  <span className="hidden truncate md:block">{e.user}</span>
+                )}
                 <span className="truncate text-muted-foreground" title={e.ticket ? `${e.ticket.number} · ${e.ticket.title ?? ""}` : undefined}>
                   {e.ticket ? <span className="font-mono text-xs text-primary">{e.ticket.number}</span> : (e.milestone ?? t("projects.noMilestone"))}
                   {e.task && <span className="text-xs"> · {e.task}</span>}
@@ -484,6 +531,27 @@ function TimeTab({ p, edit, onChanged, fail }: { p: ProjectDetail; edit: boolean
           </ul>
         )}
       </Card>
+
+      {charges.length > 0 && (
+        <Card title={t("chargeMove.projectCharges")}>
+          <ul className="divide-y divide-border/60">
+            {charges.map((c) => (
+              <li key={c.id} className="flex items-center gap-3 py-2 text-sm">
+                <span className="min-w-0 flex-1 truncate">{c.name}</span>
+                <span className="font-mono text-xs text-muted-foreground">{c.quantity.toLocaleString()} × {c.unitPrice != null ? c.unitPrice.toFixed(2) : "—"}</span>
+                {edit && c.movable ? (
+                  <button type="button" onClick={() => setMoving({ id: c.id, name: c.name })} title={t("chargeMove.button")} aria-label={t("chargeMove.button")} className="rounded p-1 text-muted-foreground hover:text-primary">
+                    <ArrowRightLeft className="size-3.5" />
+                  </button>
+                ) : (
+                  <span className="text-[10px] text-muted-foreground">{t("chargeMove.locked")}</span>
+                )}
+              </li>
+            ))}
+          </ul>
+        </Card>
+      )}
+      {moving && <MoveChargeDialog name={moving.name} path={`/projects/${p.id}/charges/${moving.id}/move`} exclude={{ projectId: p.id }} onClose={() => setMoving(null)} onMoved={() => void refetchCharges()} />}
     </div>
   );
 }

@@ -8,6 +8,8 @@ import { audit } from "../lib/audit.ts";
 import { splitBillable } from "../lib/hr.ts";
 import { addDays, editable, labourType, sheetOf, todayQc, weekStartOf } from "../lib/timesheets.ts";
 import { billingSettings } from "../lib/billing.ts";
+import { syncBillablesNow } from "../lib/billables.ts";
+import { chargesOfProject, moveCharge } from "../lib/chargeMove.ts";
 import { hourlyRateOf } from "../lib/contracts.ts";
 import { escapeHtml, sendMail } from "../lib/mail.ts";
 import { body, zUuid } from "../lib/validate.ts";
@@ -923,16 +925,40 @@ export const projectsRoutes = new Hono<AppEnv>()
     return c.json({ ok: true });
   })
 
+  // ── charges put on the project (moved from a ticket, or onto another ticket / project while not approved) ──
+  .get("/:id/charges", requirePermission("projects.view"), async (c) => {
+    const p = await loadProject(c.req.param("id"));
+    return c.json(await chargesOfProject(p.id));
+  })
+  .post("/:id/charges/:chargeId/move", requirePermission("projects.edit"), async (c) => {
+    const a = auth(c);
+    const p = await loadProject(c.req.param("id"));
+    const to = await body(c, z.object({ ticketId: z.number().int().positive().optional(), projectId: zUuid.optional() }).refine((v) => (v.ticketId == null) !== (v.projectId == null)));
+    if (to.ticketId && !a.permissions.includes("tickets.edit")) throw new HTTPException(403, { message: "Forbidden" });
+    const chargeId = c.req.param("chargeId");
+    const moved = await moveCharge(chargeId, { projectId: p.id }, to.projectId ? { projectId: to.projectId } : { ticketId: to.ticketId! });
+    await audit(a.user.id, "project.charge_moved", p.id, { chargeId, to: to.projectId ? `project:${to.projectId}` : `ticket:${to.ticketId}`, number: moved.number });
+    await syncBillablesNow();
+    return c.json({ moved: true, to: moved.number, kind: moved.kind, charges: await chargesOfProject(p.id) });
+  })
+
   // ── time: an entry of the person's own timesheet, tied to the project (and a milestone, and a task) ──
   .post("/:id/time", requirePermission("projects.edit"), async (c) => {
     const a = auth(c);
-    if (!a.permissions.includes("timesheets.use")) throw new HTTPException(403, { message: "Forbidden" });
     const p = await loadProject(c.req.param("id"));
     if (p.status === "done" || p.status === "cancelled") throw new HTTPException(409, { message: "project_closed" });
-    const t = await body(c, z.object({ date: zDay, hours: z.number().min(0.05).max(24), milestoneId: zUuid.nullable().optional(), taskId: zUuid.nullable().optional(), note: z.string().trim().max(500).optional(), billable: z.boolean().optional() }));
+    const t = await body(c, z.object({ date: zDay, hours: z.number().min(0.05).max(24), milestoneId: zUuid.nullable().optional(), taskId: zUuid.nullable().optional(), note: z.string().trim().max(500).optional(), billable: z.boolean().optional(), userId: zUuid.optional() }));
+    // time for someone else: a manager only (it goes on that person's timesheet)
+    const forOther = t.userId && t.userId !== a.user.id;
+    if (forOther) {
+      if (!a.permissions.includes("projects.manage")) throw new HTTPException(403, { message: "Forbidden" });
+      await activeStaff([t.userId!]);
+    } else if (!a.permissions.includes("timesheets.use")) throw new HTTPException(403, { message: "Forbidden" });
     const task = t.taskId ? await loadTask(p.id, t.taskId) : null;
     const ms = task ? await loadMilestone(p.id, task.milestoneId) : t.milestoneId ? await loadMilestone(p.id, t.milestoneId) : null;
-    return c.json(await logTime(a.user.id, p, task, { date: t.date, hours: t.hours, note: t.note, billable: t.billable }, ms), 201);
+    const made = await logTime(forOther ? t.userId! : a.user.id, p, task, { date: t.date, hours: t.hours, note: t.note, billable: t.billable }, ms);
+    if (forOther) await audit(a.user.id, "project.time_added_for", p.id, { entry: made.id, userId: t.userId });
+    return c.json(made, 201);
   })
   /** Change one entry of time on this project: billable (or included), its note. Its owner, or a manager. */
   .patch("/:id/time/:eid", requirePermission("projects.edit"), async (c) => {
@@ -941,7 +967,21 @@ export const projectsRoutes = new Hono<AppEnv>()
     const [e] = await db().select().from(schema.timesheetEntries).where(and(eq(schema.timesheetEntries.id, zUuid.parse(c.req.param("eid"))), eq(schema.timesheetEntries.projectId, p.id)));
     if (!e) throw new HTTPException(404, { message: "not_found" });
     if (e.userId !== a.user.id && !a.permissions.includes("projects.manage")) throw new HTTPException(403, { message: "Forbidden" });
-    const o = await body(c, z.object({ billable: z.boolean().optional(), note: z.string().trim().max(500).nullable().optional() }));
+    const o = await body(c, z.object({ billable: z.boolean().optional(), note: z.string().trim().max(500).nullable().optional(), userId: zUuid.optional() }));
+    // whose time it is: a manager changes it (it moves to that person's timesheet)
+    const moveTo = o.userId && o.userId !== e.userId ? o.userId : null;
+    if (moveTo) {
+      if (!a.permissions.includes("projects.manage")) throw new HTTPException(403, { message: "Forbidden" });
+      await activeStaff([moveTo]);
+      // ticket time counted in a project belongs to its ticket
+      if (e.ticketTimeId) throw new HTTPException(409, { message: "time_from_ticket" });
+      // both weeks must still be open (the old person's total changes too)
+      for (const [uid, day] of [[e.userId, e.date], [moveTo, e.date]] as const) {
+        if (!editable((await sheetOf(uid, weekStartOf(day))).status)) throw new HTTPException(409, { message: "timesheet_locked" });
+      }
+      const [billed] = await db().select({ id: schema.billingItems.id }).from(schema.billingItems).where(and(eq(schema.billingItems.sourceId, `prtime:${e.id}`), eq(schema.billingItems.status, "posted"))).limit(1);
+      if (billed) throw new HTTPException(409, { message: "time_billed" });
+    }
     // billed already: the work to bill is settled
     if (o.billable !== undefined) {
       const [billed] = await db().select({ id: schema.billingItems.id }).from(schema.billingItems).where(and(eq(schema.billingItems.sourceId, `prtime:${e.id}`), inArray(schema.billingItems.status, ["posted"]))).limit(1);
@@ -949,8 +989,13 @@ export const projectsRoutes = new Hono<AppEnv>()
     }
     await db()
       .update(schema.timesheetEntries)
-      .set({ ...(o.billable !== undefined ? splitBillable(e.hoursX100, o.billable ? e.hoursX100 : 0) : {}), ...(o.note !== undefined ? { note: o.note || null } : {}) })
+      .set({ ...(o.billable !== undefined ? splitBillable(e.hoursX100, o.billable ? e.hoursX100 : 0) : {}), ...(o.note !== undefined ? { note: o.note || null } : {}), ...(moveTo ? { userId: moveTo } : {}) })
       .where(eq(schema.timesheetEntries.id, e.id));
+    if (moveTo) {
+      await audit(a.user.id, "project.time_person_changed", p.id, { entry: e.id, from: e.userId, to: moveTo });
+      // the line to bill carries the person's name: refreshed (a pending one, not edited by hand)
+      await syncBillablesNow();
+    }
     return c.json({ ok: true });
   });
 

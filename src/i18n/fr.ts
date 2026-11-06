@@ -577,6 +577,35 @@ const fr = {
     deleteText: "Le service est retiré de la liste. Cette action est définitive.",
   },
 
+  chargeMove: {
+    button: "Mettre sur un autre billet ou projet",
+    title: "Déplacer le frais",
+    text: "« {{name}} » n'est pas encore approuvé : il peut aller sur un autre billet ou sur un projet. Le travail à facturer le suit.",
+    tabTicket: "Billet",
+    tabProject: "Projet",
+    searchTicket: "Numéro, titre ou client du billet (2 lettres au moins)",
+    searchProject: "Numéro ou nom du projet",
+    none: "Aucun résultat",
+    move: "Déplacer ici",
+    moved: "Frais déplacé vers {{to}}",
+    locked: "Déjà approuvé : il ne peut plus être déplacé.",
+    projectCharges: "Frais mis sur ce projet",
+    errors: {
+      charge_approved: "Ce frais est déjà approuvé (ou facturé) : il ne peut plus être déplacé.",
+      same_target: "Il est déjà là.",
+      not_found: "Introuvable.",
+      target_merged: "Ce billet a été fusionné dans un autre.",
+      project_closed: "Ce projet est terminé ou annulé.",
+      project_needs_client: "Ce projet n'a pas de client.",
+      Forbidden: "Vous n'avez pas le droit de le mettre là.",
+    },
+  },
+  timeFor: {
+    person: "Pour",
+    myself: "Moi",
+    change: "Changer la personne",
+    changed: "Temps attribué à {{name}}",
+  },
   rebate: {
     percent: "Rabais (%)",
     final: "Prix avec rabais ($)",
@@ -2636,6 +2665,7 @@ const fr = {
       "milestone_has_tasks": "L'état d'un jalon suit ses tâches : terminez-les.",
       "timer_not_running": "Aucun minuteur en marche sur cette tâche.",
       "time_billed": "Ce temps est déjà facturé : on ne peut plus changer s'il est facturable.",
+      "time_from_ticket": "Ce temps vient d'un billet : changez-le sur le billet.",
       "project_no_client": "Ce projet n'a pas de client.",
       "reply_needs_recipient": "Choisissez au moins une adresse."
     },

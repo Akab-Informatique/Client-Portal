@@ -4,6 +4,7 @@ import { localAssets } from "../lib/queues.ts";
 import { clientInfo } from "../lib/clientHours.ts";
 import { intakeSettings } from "../lib/mailIntake.ts";
 import { syncBillablesNow } from "../lib/billables.ts";
+import { moveCharge } from "../lib/chargeMove.ts";
 import { moveTicketClient } from "../lib/ticketClient.ts";
 import { contractOfTicket, contractsOfCompany, setTicketContract, type ContractView } from "../lib/contracts.ts";
 import { and, asc, desc, eq, inArray, isNull, or, sql } from "drizzle-orm";
@@ -1861,6 +1862,23 @@ export const ticketRoutes = new Hono<AppEnv>()
     // a billable charge is work to bill: it is in Approbation at once (waiting for approval, or approved by the client's / contract's rule)
     if (p.billable) await syncBillablesNow();
     return c.json(await withBilling(await run(() => src.charges(id)), canSeeInvoices(c)), 201);
+  })
+  /**
+   * Puts a charge of this ticket on another ticket or on a project, as long as it is not approved
+   * (`{ ticketId }` or `{ projectId }`; a project needs `projects.edit`).
+   */
+  .post("/:id/charges/:chargeId/move", requirePermission("tickets.edit"), async (c) => {
+    const a = auth(c);
+    const id = Number(c.req.param("id"));
+    if (!Number.isInteger(id)) throw new HTTPException(400, { message: "invalid_id" });
+    const p = await body(c, z.object({ ticketId: z.number().int().positive().optional(), projectId: z.uuid().optional() }).refine((v) => (v.ticketId == null) !== (v.projectId == null)));
+    if (p.projectId && !a.permissions.includes("projects.edit")) throw new HTTPException(403, { message: "Forbidden" });
+    const chargeId = c.req.param("chargeId");
+    const moved = await moveCharge(chargeId, { ticketId: id }, p.projectId ? { projectId: p.projectId } : { ticketId: p.ticketId! });
+    await audit(a.user.id, "ticket.charge_moved", String(id), { chargeId, to: p.projectId ? `project:${p.projectId}` : `ticket:${p.ticketId}`, number: moved.number });
+    await syncBillablesNow();
+    const src = await ticketSource();
+    return c.json({ moved: true, to: moved.number, kind: moved.kind, charges: await withBilling(await run(() => src.charges(id)), canSeeInvoices(c)) });
   })
   .delete("/:id/charges/:chargeId", requirePermission("tickets.edit"), async (c) => {
     const a = auth(c);

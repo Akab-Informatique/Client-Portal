@@ -1037,6 +1037,13 @@
       "when": 1793989426580,
       "tag": "0147_deposit_lines",
       "breakpoints": true
+    },
+    {
+      "idx": 148,
+      "version": "7",
+      "when": 1794002071675,
+      "tag": "0148_charge_on_project",
+      "breakpoints": true
     }
   ]
 }

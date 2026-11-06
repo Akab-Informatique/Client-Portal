@@ -10646,3 +10646,69 @@ describe("procedures (SOP)", () => {
     expect(me.permissions).not.toContain("sops.manage");
   });
 });
+
+describe("a charge not approved yet goes to another ticket or a project; an administrator changes whose project time it is", () => {
+  it("moves the charge and its work to bill, refuses once approved; the time can be given to someone else", async () => {
+    resetRateLimit("login:ip:unknown");
+    const tech = await signIn("tech@akab.local");
+    const admin = await signIn("admin@akab.local");
+    const [techUser] = await db().select().from(schema.users).where(eq(schema.users.email, "tech@akab.local"));
+    const [adminUser] = await db().select().from(schema.users).where(eq(schema.users.email, "admin@akab.local"));
+    const [a] = await db().insert(schema.clients).values({ name: "Zz Frais A (test)", autotaskId: 9_100_041 }).returning();
+    const [b] = await db().insert(schema.clients).values({ name: "Zz Frais B (test)", autotaskId: 9_100_042 }).returning();
+    await db().insert(schema.integrations).values({ provider: "tickets", enabled: true, config: { mode: "local" } }).onConflictDoUpdate({ target: schema.integrations.provider, set: { enabled: true, config: { mode: "local" } } });
+    (await import("../server/lib/localTickets.ts")).resetTicketMode();
+    try {
+      const mk = async (title: string, companyId: number | null) => (await tech.post("/api/tickets", { title, description: "x", companyId, priority: "medium", queue: "support", assigneeId: null, dueDate: "2026-12-05" })).json;
+      const tA = await mk("Billet A", a.autotaskId);
+      const tB = await mk("Billet B", b.autotaskId);
+      const project = (await tech.post("/api/projects", { name: "Projet des frais", clientId: a.id, billingMode: "hourly" })).json;
+      expect(project.id).toBeTruthy();
+      const cid = (await tech.post(`/api/tickets/${tA.id}/charges`, { name: "Câble", quantity: 2, unitPrice: 15, billable: true })).json[0].id;
+      const line = async () => (await admin.get("/api/billables?kind=charge")).json.find((i: any) => i.sourceId === `pcharge:${cid}`);
+      expect(await line()).toMatchObject({ status: "pending", clientId: a.id, ticketNumber: tA.number });
+
+      // to another ticket (another client): the work to bill follows
+      expect((await tech.post(`/api/tickets/${tA.id}/charges/${cid}/move`, { ticketId: tA.id })).json.error).toBe("same_target");
+      const toB = await tech.post(`/api/tickets/${tA.id}/charges/${cid}/move`, { ticketId: tB.id });
+      expect(toB.status).toBe(200);
+      expect(toB.json).toMatchObject({ moved: true, to: tB.number, kind: "ticket" });
+      expect((await tech.get(`/api/tickets/${tA.id}/charges`)).json).toEqual([]);
+      expect((await tech.get(`/api/tickets/${tB.id}/charges`)).json.map((x: any) => x.id)).toEqual([cid]);
+      expect(await line()).toMatchObject({ status: "pending", clientId: b.id, ticketNumber: tB.number });
+
+      // to a project (its client's): listed there, still waiting for approval
+      const toP = await tech.post(`/api/tickets/${tB.id}/charges/${cid}/move`, { projectId: project.id });
+      expect(toP.status).toBe(200);
+      expect(toP.json).toMatchObject({ kind: "project", to: project.number });
+      expect((await tech.get(`/api/projects/${project.id}/charges`)).json).toMatchObject([{ id: cid, name: "Câble", movable: true }]);
+      expect(await line()).toMatchObject({ status: "pending", clientId: a.id, ticketNumber: project.number, amountCents: 3000 });
+      // and back to a ticket from the project
+      expect((await tech.post(`/api/projects/${project.id}/charges/${cid}/move`, { ticketId: tA.id })).status).toBe(200);
+      expect((await tech.get(`/api/projects/${project.id}/charges`)).json).toEqual([]);
+      await tech.post(`/api/tickets/${tA.id}/charges/${cid}/move`, { projectId: project.id });
+
+      // approved: it stays where it is
+      await admin.post("/api/billables/status", { ids: [(await line()).id], status: "approved" });
+      expect((await tech.post(`/api/projects/${project.id}/charges/${cid}/move`, { ticketId: tA.id })).json.error).toBe("charge_approved");
+      expect((await tech.get(`/api/projects/${project.id}/charges`)).json[0].movable).toBe(false);
+
+      // the time of a project: only a manager gives it to someone else, or changes whose it is
+      const day = "2026-11-02";
+      expect((await tech.post(`/api/projects/${project.id}/time`, { date: day, hours: 1, userId: adminUser.id })).status).toBe(403);
+      const given = await admin.post(`/api/projects/${project.id}/time`, { date: day, hours: 1.5, userId: techUser.id, billable: true });
+      expect(given.status).toBe(201);
+      const [row] = await db().select().from(schema.timesheetEntries).where(eq(schema.timesheetEntries.id, given.json.id));
+      expect(row.userId).toBe(techUser.id);
+      expect((await tech.patch(`/api/projects/${project.id}/time/${given.json.id}`, { userId: adminUser.id })).status).toBe(403);
+      expect((await admin.patch(`/api/projects/${project.id}/time/${given.json.id}`, { userId: "00000000-0000-4000-8000-000000000000" })).json.error).toBe("person_invalid");
+      expect((await admin.patch(`/api/projects/${project.id}/time/${given.json.id}`, { userId: adminUser.id })).status).toBe(200);
+      const [after] = await db().select().from(schema.timesheetEntries).where(eq(schema.timesheetEntries.id, given.json.id));
+      expect(after.userId).toBe(adminUser.id);
+      expect((await admin.get(`/api/projects/${project.id}`)).json.time.entries.find((e: any) => e.id === given.json.id).userId).toBe(adminUser.id);
+    } finally {
+      await db().delete(schema.integrations).where(eq(schema.integrations.provider, "tickets"));
+      (await import("../server/lib/localTickets.ts")).resetTicketMode();
+    }
+  });
+});

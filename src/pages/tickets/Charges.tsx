@@ -3,7 +3,7 @@ import { useTranslation } from "react-i18next";
 import { keepPreviousData, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { Link } from "react-router-dom";
-import { Boxes, ChevronDown, Loader2, PackagePlus, Plus, Receipt, Search, Tag, Trash2, Wallet, Warehouse, X } from "lucide-react";
+import { ArrowRightLeft, Boxes, ChevronDown, Loader2, PackagePlus, Plus, Receipt, Search, Tag, Trash2, Wallet, Warehouse, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { AiTextarea } from "@/components/AiPolish";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
@@ -19,6 +19,7 @@ import { cn } from "@/lib/utils";
 import { ticketErrorText, type TicketDetail } from "./shared";
 import { SerialChecklist } from "@/pages/store/SerialChecklist";
 import { ChargeLabelDialog } from "./ChargeLabel";
+import { MoveChargeDialog } from "@/components/MoveChargeDialog";
 import { RebateInput, afterRebate, percentOf } from "@/components/RebateInput";
 
 export type Charge = {
@@ -111,6 +112,7 @@ function ChargesList({ list, tk, editable }: { list: Charge[]; tk: TicketDetail;
   const { t } = useTranslation();
   const qc = useQueryClient();
   const [label, setLabel] = useState<Charge | null>(null);
+  const [moving, setMoving] = useState<Charge | null>(null);
   const remove = useMutation({
     mutationFn: (c: Charge) => api.del<Charge[]>(`/tickets/${tk.id}/charges/${c.id}`),
     onSuccess: (next) => {
@@ -142,6 +144,16 @@ function ChargesList({ list, tk, editable }: { list: Charge[]; tk: TicketDetail;
                 </TooltipTrigger>
                 <TooltipContent>{t("tickets.charges.label.button")}</TooltipContent>
               </Tooltip>
+              {editable && (!c.billing || c.billing.status === "pending") && (
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <button type="button" onClick={() => setMoving(c)} className="shrink-0 self-center rounded p-1 text-muted-foreground hover:bg-accent hover:text-primary" aria-label={t("chargeMove.button")}>
+                      <ArrowRightLeft className="size-3.5" />
+                    </button>
+                  </TooltipTrigger>
+                  <TooltipContent>{t("chargeMove.button")}</TooltipContent>
+                </Tooltip>
+              )}
               {editable && (
                 <Tooltip>
                   <TooltipTrigger asChild>
@@ -195,6 +207,7 @@ function ChargesList({ list, tk, editable }: { list: Charge[]; tk: TicketDetail;
         <span className="text-muted-foreground">{t("tickets.charges.total")}</span>
         <span className="font-mono font-semibold text-primary">{money(billableTotal(list))}</span>
       </p>
+      {moving && <MoveChargeDialog name={moving.name} path={`/tickets/${tk.id}/charges/${moving.id}/move`} exclude={{ ticketId: tk.id }} onClose={() => setMoving(null)} onMoved={() => void qc.invalidateQueries({ queryKey: ["tickets", "charges", tk.id] })} />}
       {label && <ChargeLabelDialog charge={label} ticket={tk} onClose={() => setLabel(null)} />}
     </div>
   );

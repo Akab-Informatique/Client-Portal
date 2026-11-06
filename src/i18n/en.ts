@@ -579,6 +579,35 @@ const en: Dict = {
     deleteText: "The service is removed from the list. This is final.",
   },
 
+  chargeMove: {
+    button: "Put on another ticket or project",
+    title: "Move the charge",
+    text: "“{{name}}” is not approved yet: it can go to another ticket or to a project. Its work to bill follows.",
+    tabTicket: "Ticket",
+    tabProject: "Project",
+    searchTicket: "Ticket number, title or client (2 letters at least)",
+    searchProject: "Project number or name",
+    none: "No result",
+    move: "Move here",
+    moved: "Charge moved to {{to}}",
+    locked: "Already approved: it can no longer be moved.",
+    projectCharges: "Charges put on this project",
+    errors: {
+      charge_approved: "This charge is already approved (or invoiced): it can no longer be moved.",
+      same_target: "It is already there.",
+      not_found: "Not found.",
+      target_merged: "This ticket was merged into another one.",
+      project_closed: "This project is finished or cancelled.",
+      project_needs_client: "This project has no client.",
+      Forbidden: "You may not put it there.",
+    },
+  },
+  timeFor: {
+    person: "For",
+    myself: "Me",
+    change: "Change the person",
+    changed: "Time given to {{name}}",
+  },
   rebate: {
     percent: "Rebate (%)",
     final: "Price after rebate ($)",
@@ -2638,6 +2667,7 @@ const en: Dict = {
       "milestone_has_tasks": "A milestone's state follows its tasks: finish them.",
       "timer_not_running": "No timer is running on this task.",
       "time_billed": "This time is already billed: whether it is billable can no longer change.",
+      "time_from_ticket": "This time comes from a ticket: change it on the ticket.",
       "project_no_client": "This project has no client.",
       "reply_needs_recipient": "Pick at least one address."
     },
