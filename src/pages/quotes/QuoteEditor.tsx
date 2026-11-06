@@ -237,7 +237,7 @@ export function QuoteEditor() {
   });
   const [deposit, setDeposit] = useState(false);
   /** A deposit can be invoiced: accepted, a CRM client, something to pay now, none made yet (or it was voided) */
-  const canDeposit = (q: Quote) => can("accounting.manage") && q.status === "accepted" && Boolean(q.clientId) && q.totals.subtotalCents > 0 && (!q.depositInvoiceId || Boolean(q.depositVoided));
+  const canDeposit = (q: Quote) => can("accounting.manage") && q.status === "accepted" && q.totals.subtotalCents > 0 && (!q.depositInvoiceId || Boolean(q.depositVoided));
 
   const copy = useMutation({
     mutationFn: () => api.post<Quote>(`/quotes/${id}/duplicate`, {}),
@@ -576,20 +576,6 @@ export function QuoteEditor() {
                   {project.pending ? <Loader2 className="size-4 animate-spin" /> : <FolderKanban className="size-4" />} {t("quotes.project.action")}
                 </Button>
               )}
-              {quote?.depositNumber && !quote.depositVoided && (
-                <a
-                  href={`/accounting/invoices?istatus=all&iq=${encodeURIComponent(quote.depositNumber)}`}
-                  className="flex items-center gap-2 rounded-lg border border-[color:var(--gold)]/30 bg-[color:var(--gold)]/10 px-3 py-2 text-sm text-primary hover:bg-[color:var(--gold)]/15"
-                >
-                  <Receipt className="size-4 shrink-0" /> {t("quotes.deposit.badge", { pct: (quote.depositPercentX100 ?? 0) / 100, number: quote.depositNumber, total: money(quote.depositTotalCents ?? 0, i18n.language) })}
-                </a>
-              )}
-              {quote && canDeposit(quote) && (
-                <Button variant="outline" className="w-full" disabled={busy} onClick={() => setDeposit(true)}>
-                  <Receipt className="size-4" /> {quote.depositVoided ? t("quotes.deposit.again") : t("quotes.deposit.action")}
-                </Button>
-              )}
-              {quote?.status === "accepted" && !quote.clientId && can("accounting.manage") && !quote.depositInvoiceId && <p className="text-xs text-muted-foreground">{t("quotes.deposit.needsClient")}</p>}
               {quote?.projectId ? (
                 <a href={`/projects?project=${quote.projectId}&tab=overview`} className="flex items-center gap-2 rounded-lg border border-emerald-500/30 bg-emerald-500/10 px-3 py-2 text-sm text-emerald-300 hover:bg-emerald-500/20">
                   <FolderKanban className="size-4 shrink-0" /> {t("quotes.project.badge", { number: quote.projectNumber })}
@@ -602,6 +588,19 @@ export function QuoteEditor() {
               {doc && (
                 <Button variant="outline" className="w-full" disabled={form.rows.length === 0} onClick={() => setPreview(true)}>
                   <FileText className="size-4" /> {t("quotes.doc.open")}
+                </Button>
+              )}
+              {quote?.depositNumber && !quote.depositVoided && (
+                <a
+                  href={`/accounting/invoices?istatus=all&iq=${encodeURIComponent(quote.depositNumber)}`}
+                  className="flex items-center gap-2 rounded-lg border border-[color:var(--gold)]/30 bg-[color:var(--gold)]/10 px-3 py-2 text-sm text-primary hover:bg-[color:var(--gold)]/15"
+                >
+                  <Receipt className="size-4 shrink-0" /> {t("quotes.deposit.badge", { pct: (quote.depositPercentX100 ?? 0) / 100, number: quote.depositNumber, total: money(quote.depositTotalCents ?? 0, i18n.language) })}
+                </a>
+              )}
+              {quote && canDeposit(quote) && (
+                <Button variant="outline" className="w-full" disabled={busy} onClick={() => setDeposit(true)}>
+                  <Receipt className="size-4" /> {quote.depositVoided ? t("quotes.deposit.again") : t("quotes.deposit.action")}
                 </Button>
               )}
               {!isNew && status === "draft" && (

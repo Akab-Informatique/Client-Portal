@@ -412,6 +412,60 @@ export const invoicePayments = pgTable(
   (t) => [index("invoice_payments_invoice_idx").on(t.invoiceId), uniqueIndex("invoice_payments_external_idx").on(t.externalId)],
 );
 
+/**
+ * A credit note (note de crédit) on an invoice: lines credited (taken from the invoice, or a free amount), its taxes,
+ * the part put on the invoice's balance (an `invoice_payments` row, method "credit"), and its CreditMemo in QuickBooks
+ * (applied to the invoice there by a zero payment). Numbers come from the invoices' sequence (QuickBooks shares it).
+ */
+export const creditNotes = pgTable(
+  "credit_notes",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    number: text("number").notNull(),
+    clientId: uuid("client_id")
+      .notNull()
+      .references(() => clients.id, { onDelete: "restrict" }),
+    invoiceId: uuid("invoice_id").references(() => clientInvoices.id, { onDelete: "set null" }),
+    /** YYYY-MM-DD */
+    issuedOn: text("issued_on").notNull(),
+    reason: text("reason"),
+    subtotalCents: bigint("subtotal_cents", { mode: "number" }).notNull(),
+    gstCents: bigint("gst_cents", { mode: "number" }).notNull().default(0),
+    qstCents: bigint("qst_cents", { mode: "number" }).notNull().default(0),
+    totalCents: bigint("total_cents", { mode: "number" }).notNull(),
+    /** What was taken off the invoice's balance (the rest stays a credit of the client) */
+    appliedCents: bigint("applied_cents", { mode: "number" }).notNull().default(0),
+    paymentId: uuid("payment_id"),
+    quickbooksId: text("quickbooks_id"),
+    /** The zero payment that applies it to the invoice in QuickBooks */
+    quickbooksApplyId: text("quickbooks_apply_id"),
+    quickbooksError: text("quickbooks_error"),
+    quickbooksSyncedAt: timestamp("quickbooks_synced_at", { withTimezone: true }),
+    createdBy: uuid("created_by").references(() => users.id, { onDelete: "set null" }),
+    createdAt: created(),
+  },
+  (t) => [uniqueIndex("credit_notes_number_unique").on(t.number), index("credit_notes_client_idx").on(t.clientId), index("credit_notes_invoice_idx").on(t.invoiceId)],
+);
+
+export const creditNoteLines = pgTable(
+  "credit_note_lines",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    creditNoteId: uuid("credit_note_id")
+      .notNull()
+      .references(() => creditNotes.id, { onDelete: "cascade" }),
+    position: integer("position").notNull().default(0),
+    description: text("description").notNull(),
+    quantityX100: integer("quantity_x100").notNull().default(100),
+    unitPriceCents: bigint("unit_price_cents", { mode: "number" }).notNull(),
+    amountCents: bigint("amount_cents", { mode: "number" }).notNull(),
+    taxable: boolean("taxable").notNull().default(true),
+    qbItemId: text("qb_item_id"),
+    qbTaxCodeId: text("qb_tax_code_id"),
+  },
+  (t) => [index("credit_note_lines_note_idx").on(t.creditNoteId, t.position)],
+);
+
 /** The chart of accounts (plan comptable), for invoices and the QuickBooks sync. */
 export const ledgerAccounts = pgTable(
   "ledger_accounts",

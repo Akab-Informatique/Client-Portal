@@ -12,7 +12,8 @@ import { api, ApiError } from "@/lib/api";
 import { cn } from "@/lib/utils";
 import { money } from "@/pages/crm/shared";
 import { depositOf } from "@shared/quotes";
-import type { Quote } from "./shared";
+import { useCan } from "@/lib/session";
+import { useQuoteClients, type Quote } from "./shared";
 
 const today = () => new Date().toLocaleDateString("en-CA", { timeZone: "America/Toronto" });
 
@@ -28,6 +29,23 @@ export function DepositDialog({ quote, onClose, onDone }: { quote: Quote; onClos
   const [day, setDay] = useState(today());
   const [send, setSend] = useState(true);
   const [pay, setPay] = useState(true);
+  // a quote made for a prospect: the CRM client is picked (or made) here
+  const can = useCan();
+  const clients = useQuoteClients();
+  const [clientId, setClientId] = useState("");
+  const [find, setFind] = useState(quote.prospectName ?? "");
+  const [phone, setPhone] = useState("");
+  const needsClient = !quote.clientId;
+  const matches = (clients.data ?? []).filter((c) => !find.trim() || c.name.toLowerCase().includes(find.trim().toLowerCase())).slice(0, 8);
+  const makeClient = useMutation({
+    mutationFn: () => api.post<{ id: string }>("/crm/clients", { name: find.trim(), phone: phone.trim() }),
+    onSuccess: (c) => {
+      void qc.invalidateQueries({ queryKey: ["quotes", "clients"] });
+      setClientId(c.id);
+      toast.success(t("quotes.deposit.clientMade", { name: find.trim() }));
+    },
+    onError: (e) => toast.error(e instanceof ApiError ? t(`quotes.errors.${e.code}`, { defaultValue: t("common.error") }) : t("common.error")),
+  });
   const percent = Number(pct.replace(",", "."));
   const valid = Number.isFinite(percent) && percent >= 1 && percent <= 100;
   const dep = depositOf(quote.lines, valid ? Math.round(percent * 100) : 0);
@@ -37,7 +55,7 @@ export function DepositDialog({ quote, onClose, onDone }: { quote: Quote; onClos
   const base = quote.totals.subtotalCents;
 
   const make = useMutation({
-    mutationFn: () => api.post<{ invoice: { number: string; totalCents: number }; payLink: boolean; emailed: string | null; mailError: string | null; quote: Quote }>(`/quotes/${quote.id}/deposit`, { percent, issuedOn: day, send, payOnline: pay }),
+    mutationFn: () => api.post<{ invoice: { number: string; totalCents: number }; payLink: boolean; emailed: string | null; mailError: string | null; quote: Quote }>(`/quotes/${quote.id}/deposit`, { percent, issuedOn: day, send, payOnline: pay, ...(needsClient ? { clientId } : {}) }),
     onSuccess: (r) => {
       void qc.invalidateQueries({ queryKey: ["quotes"] });
       void qc.invalidateQueries({ queryKey: ["crm"] });
@@ -60,6 +78,29 @@ export function DepositDialog({ quote, onClose, onDone }: { quote: Quote; onClos
         </DialogHeader>
 
         <div className="space-y-3">
+          {needsClient && (
+            <div className="space-y-2 rounded-xl border border-amber-400/40 bg-amber-400/5 p-3">
+              <p className="text-xs">{t("quotes.deposit.pickClient", { name: quote.prospectName ?? "" })}</p>
+              <Input value={find} onChange={(e) => setFind(e.target.value)} placeholder={t("quotes.deposit.searchClient")} className="h-8" />
+              <ul className="max-h-40 overflow-y-auto">
+                {matches.map((c) => (
+                  <li key={c.id}>
+                    <button type="button" onClick={() => setClientId(c.id)} className={cn("w-full rounded-lg px-2 py-1 text-left text-sm hover:bg-accent/40", clientId === c.id && "bg-[color:var(--gold)]/15 text-primary")}>
+                      {c.name}
+                    </button>
+                  </li>
+                ))}
+              </ul>
+              {can("crm.edit") && find.trim().length >= 2 && !(clients.data ?? []).some((c) => c.name.trim().toLowerCase() === find.trim().toLowerCase()) && (
+                <div className="flex items-center gap-2 border-t pt-2">
+                  <Input value={phone} onChange={(e) => setPhone(e.target.value)} placeholder={t("quotes.deposit.phone")} className="h-8 w-40" />
+                  <Button size="sm" variant="outline" className="h-8 text-xs" disabled={phone.trim().length < 7 || makeClient.isPending} onClick={() => makeClient.mutate()}>
+                    {makeClient.isPending && <Loader2 className="size-3.5 animate-spin" />} {t("quotes.deposit.makeClient", { name: find.trim() })}
+                  </Button>
+                </div>
+              )}
+            </div>
+          )}
           <div className="space-y-1.5">
             <Label htmlFor="dep-pct">{t("quotes.deposit.percent")}</Label>
             <div className="flex items-center gap-2">
@@ -130,7 +171,7 @@ export function DepositDialog({ quote, onClose, onDone }: { quote: Quote; onClos
           <Button variant="ghost" onClick={onClose}>
             {t("quotes.deposit.later")}
           </Button>
-          <Button className="bg-grad-gold font-semibold text-[#1a1204] hover:brightness-105" disabled={!valid || dep.subtotalCents <= 0 || make.isPending} onClick={() => make.mutate()}>
+          <Button className="bg-grad-gold font-semibold text-[#1a1204] hover:brightness-105" disabled={!valid || dep.subtotalCents <= 0 || make.isPending || (needsClient && !clientId)} onClick={() => make.mutate()}>
             {make.isPending ? <Loader2 className="size-4 animate-spin" /> : <Receipt className="size-4" />} {t("quotes.deposit.make")}
           </Button>
         </div>

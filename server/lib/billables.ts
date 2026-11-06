@@ -477,7 +477,8 @@ async function peekNumber(): Promise<string> {
   // with QuickBooks connected, its numbering is looked at first (at most every 2 minutes): never a number it already has
   await alignNumbering().catch(() => undefined);
   const s = await billingSettings();
-  const all = await db().select({ number: schema.clientInvoices.number }).from(schema.clientInvoices);
+  // invoices and credit notes share one sequence (QuickBooks numbers its sales forms together)
+  const all = [...(await db().select({ number: schema.clientInvoices.number }).from(schema.clientInvoices)), ...(await db().select({ number: schema.creditNotes.number }).from(schema.creditNotes))];
   const used = new Set(all.map((x) => x.number));
   const highest = all.reduce((m, x) => {
     const digits = x.number.startsWith(s.numbering.prefix) ? x.number.slice(s.numbering.prefix.length) : "";
@@ -494,6 +495,23 @@ async function peekNumber(): Promise<string> {
     while (used.has(formatInvoiceNumber(s.numbering, value))) value++;
   }
   return formatInvoiceNumber(s.numbering, value);
+}
+
+/**
+ * Something that takes the next number of the invoices' sequence (a credit note): run in the same queue as the
+ * invoices, so two never get the same number, and the numbering moves on after it.
+ */
+export function withNextNumber<T>(actorId: string | null, fn: (number: string) => Promise<T>): Promise<T> {
+  const run = numbering.then(async () => {
+    const number = await peekNumber();
+    const s = await billingSettings();
+    const out = await fn(number);
+    const digits = number.slice(s.numbering.prefix.length);
+    if (/^\d+$/.test(digits)) await saveBillingSettings(actorId, { numbering: { next: Number(digits) + 1 } });
+    return out;
+  });
+  numbering = run.catch(() => undefined);
+  return run;
 }
 
 /**

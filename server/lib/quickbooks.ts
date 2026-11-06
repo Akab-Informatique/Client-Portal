@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { and, asc, desc, eq, ilike, inArray, isNotNull, isNull } from "drizzle-orm";
+import { and, asc, desc, eq, ilike, inArray, isNotNull, isNull, or, sql } from "drizzle-orm";
 import { db, schema } from "../db/index.ts";
 import { addDays, linkDefaultAccounts, typesById, weekByDayAndType } from "./timesheets.ts";
 import { syncAll } from "./qbSync.ts";
@@ -1098,6 +1098,12 @@ async function tickNow() {
   // clients, chart of accounts and chosen vendors, both ways
   await syncAll(null).catch(warn("sync"));
   if (s.sync.invoicesIn) await pullInvoices(null).catch(warn("invoices in"));
+  // credit notes not in QuickBooks yet, or not applied to their invoice there (before the payments are read back)
+  {
+    const { pushCreditNote } = await import("./creditNotes.ts");
+    const todo = await db().select({ id: schema.creditNotes.id }).from(schema.creditNotes).where(or(isNull(schema.creditNotes.quickbooksId), and(sql`${schema.creditNotes.appliedCents} > 0`, isNull(schema.creditNotes.quickbooksApplyId))));
+    for (const r of todo) await pushCreditNote(r.id).catch(warn("credit note"));
+  }
   if (s.sync.payments) {
     // card payments not in QuickBooks yet (sent when received; retried here)
     const out = await db().select({ id: schema.invoicePayments.id }).from(schema.invoicePayments).where(and(eq(schema.invoicePayments.source, "stripe"), isNull(schema.invoicePayments.quickbooksId)));

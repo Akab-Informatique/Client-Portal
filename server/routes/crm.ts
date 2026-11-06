@@ -32,6 +32,8 @@ import { todayQc } from "../lib/timesheets.ts";
 import { billingSettings } from "../lib/billing.ts";
 import { stripePayReady } from "../lib/payLink.ts";
 import { invoiceMatcher } from "../../shared/invoiceSearch.ts";
+import { autoSyncCreditNote, createCreditNote, CreditNoteError, creditNotesOf, pushCreditNote } from "../lib/creditNotes.ts";
+import { balanceOf } from "../lib/stripe.ts";
 import { quickbooksHttp } from "./billing.ts";
 
 /**
@@ -1226,6 +1228,66 @@ export const crmRoutes = new Hono<AppEnv>()
     try {
       const r = await pushInvoice(id);
       await audit(a.user.id, "billing.quickbooks.invoice_sent", id, r);
+      return c.json(r);
+    } catch (e) {
+      return quickbooksHttp(e);
+    }
+  })
+  /** What a credit note window needs: the invoice, its lines, what is left to credit, its credit notes */
+  .get("/invoices/:iid/credit-info", requirePermission("accounting.view"), async (c) => {
+    const id = zUuid.parse(c.req.param("iid"));
+    const [inv] = await db().select().from(schema.clientInvoices).where(eq(schema.clientInvoices.id, id));
+    if (!inv) throw new HTTPException(404, { message: "not_found" });
+    const [client] = await db().select({ name: schema.clients.name, invoice: schema.clients.invoice }).from(schema.clients).where(eq(schema.clients.id, inv.clientId));
+    const lines = await db().select().from(schema.invoiceLines).where(eq(schema.invoiceLines.invoiceId, inv.id)).orderBy(asc(schema.invoiceLines.position));
+    const notes = await creditNotesOf({ invoiceId: inv.id });
+    const s = await billingSettings();
+    return c.json({
+      invoice: { id: inv.id, number: inv.number, client: client?.name ?? "", totalCents: inv.totalCents, voided: inv.voided, balanceCents: await balanceOf(inv) },
+      exempt: client?.invoice?.taxes === false,
+      rates: { gstRate: s.taxes.gstRate, qstRate: s.taxes.qstRate },
+      lines: lines.map((l) => ({ id: l.id, description: l.description, quantityX100: l.quantityX100, unitPriceCents: l.unitPriceCents, amountCents: l.amountCents, taxable: l.taxable })),
+      creditedCents: notes.reduce((n, x) => n + x.totalCents, 0),
+      notes,
+    });
+  })
+  /** Credit notes (notes de crédit): of one invoice, or every one (of a client) */
+  .get("/invoices/:iid/credit-notes", requirePermission("accounting.view"), async (c) => c.json(await creditNotesOf({ invoiceId: zUuid.parse(c.req.param("iid")) })))
+  .get("/credit-notes", requirePermission("accounting.view"), async (c) => {
+    const clientId = c.req.query("clientId");
+    return c.json(await creditNotesOf({ clientId: clientId ? zUuid.parse(clientId) : undefined }));
+  })
+  /** A credit note on an invoice: lines taken from it (or a free amount), its taxes; taken off the balance and sent to QuickBooks */
+  .post("/invoices/:iid/credit-notes", requirePermission("accounting.manage"), async (c) => {
+    const a = auth(c);
+    const invoiceId = zUuid.parse(c.req.param("iid"));
+    const p = await body(
+      c,
+      z.object({
+        issuedOn: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
+        reason: z.string().trim().max(1000).nullable().optional(),
+        lines: z
+          .array(z.object({ invoiceLineId: zUuid.nullable().optional(), description: z.string().trim().min(1).max(2000), quantity: z.number().positive().max(100_000), unitPrice: z.number().positive().max(10_000_000), taxable: z.boolean().optional() }))
+          .min(1)
+          .max(100),
+      }),
+    );
+    try {
+      const note = await createCreditNote(a.user.id, { invoiceId, issuedOn: p.issuedOn, reason: p.reason ?? null, lines: p.lines.map((l) => ({ ...l, unitPriceCents: Math.round(l.unitPrice * 100) })) });
+      await audit(a.user.id, "billing.credit_note_created", note.id, { number: note.number, invoiceId, totalCents: note.totalCents, appliedCents: note.appliedCents });
+      await autoSyncCreditNote(note.id);
+      return c.json((await creditNotesOf({ invoiceId })).find((x) => x.id === note.id), 201);
+    } catch (e) {
+      if (e instanceof CreditNoteError) throw new HTTPException(e.message === "not_found" ? 404 : 409, { message: e.message });
+      throw e;
+    }
+  })
+  .post("/credit-notes/:id/quickbooks", requirePermission("accounting.manage"), async (c) => {
+    const a = auth(c);
+    const id = zUuid.parse(c.req.param("id"));
+    try {
+      const r = await pushCreditNote(id);
+      await audit(a.user.id, "billing.quickbooks.credit_note_sent", id, r);
       return c.json(r);
     } catch (e) {
       return quickbooksHttp(e);

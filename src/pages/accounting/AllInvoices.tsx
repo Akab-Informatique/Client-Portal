@@ -14,6 +14,8 @@ import { useCan } from "@/lib/session";
 import { cn } from "@/lib/utils";
 import { Pager, pageSizeOf } from "@/components/Pager";
 import { InvoiceMailButtons, InvoicePayButton, InvoicePdfButton, InvoiceVoidButton, StatementsDialog } from "./Statements";
+import { InvoiceCreditButton } from "./CreditNote";
+import { QbErrorBadge } from "./QbFix";
 import { money } from "@/pages/crm/shared";
 import { shortDate } from "@/pages/tickets/shared";
 
@@ -402,9 +404,7 @@ export function AllInvoices() {
                     </td>
                     <td className="px-3 py-2 text-center">
                       {v.quickbooks?.error ? (
-                        <span className="rounded border border-red-500/30 px-1.5 py-0.5 text-[10px] text-red-300" title={v.quickbooks.error}>
-                          {t("allInvoices.qbErrorShort")}
-                        </span>
+                        <QbErrorBadge invoice={v} />
                       ) : v.quickbooks?.id ? (
                         <span className="rounded border border-emerald-500/30 px-1.5 py-0.5 text-[10px] text-emerald-300">{t("allInvoices.qbSyncedShort")}</span>
                       ) : (
@@ -415,6 +415,7 @@ export function AllInvoices() {
                       <InvoicePayButton invoice={v} />
                       <InvoiceMailButtons invoice={v} compact />
                       <InvoicePdfButton invoice={v} compact />
+                      <InvoiceCreditButton invoice={v} compact />
                       <InvoiceVoidButton invoice={v} compact />
                     </td>
                   </tr>

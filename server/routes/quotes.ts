@@ -318,10 +318,18 @@ await audit(a.user.id, "quote.updated", id, { number: cur.number, lines: p.lines
   .post("/:id/deposit", requirePermission("quotes.manage"), requirePermission("accounting.manage"), async (c) => {
     const a = auth(c);
     const id = zUuid.parse(c.req.param("id"));
-    const p = await body(c, z.object({ percent: z.number().min(1).max(100).default(50), issuedOn: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(), send: z.boolean().default(true), payOnline: z.boolean().default(true) }));
-    const q = await getQuote(id);
+    const p = await body(c, z.object({ percent: z.number().min(1).max(100).default(50), issuedOn: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(), send: z.boolean().default(true), payOnline: z.boolean().default(true), clientId: zUuid.optional() }));
+    let q = await getQuote(id);
     if (!q) throw new HTTPException(404, { message: "not_found" });
     if (q.status !== "accepted") throw new HTTPException(409, { message: "quote_not_accepted" });
+    // a quote made for a prospect: the CRM client picked in the deposit window becomes the quote's client
+    if (!q.clientId && p.clientId) {
+      const [cl] = await db().select({ id: schema.clients.id, invoice: schema.clients.invoice }).from(schema.clients).where(eq(schema.clients.id, p.clientId));
+      if (!cl) throw new HTTPException(400, { message: "client_unknown" });
+      await db().update(schema.quotes).set({ clientId: cl.id, taxes: cl.invoice?.taxes !== false, updatedAt: new Date() }).where(eq(schema.quotes.id, id));
+      await audit(a.user.id, "quote.client_set", id, { number: q.number, clientId: cl.id });
+      q = (await getQuote(id))!;
+    }
     if (!q.clientId) throw new HTTPException(409, { message: "deposit_needs_client" });
     if (q.depositInvoiceId && !q.depositVoided) throw new HTTPException(409, { message: "deposit_exists" });
     const percentX100 = Math.round(p.percent * 100);

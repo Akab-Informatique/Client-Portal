@@ -1897,12 +1897,37 @@ describe("tickets: client and contact", () => {
       expect(again.status).toBe(201);
       expect(again.json.quote.depositPercentX100).toBe(5000);
       expect((await db().select().from(schema.clientInvoices).where(eq(schema.clientInvoices.id, again.json.invoice.id)))[0].payOnline).toBe(false);
-      // a prospect cannot be invoiced
+      // a quote for a prospect: the CRM client is picked in the deposit window and becomes the quote's client
       const p = (await admin.post("/api/quotes", { prospectName: "Prospect", lines: [{ description: "X", quantityX100: 100, unitPriceCents: 1000 }] })).json;
       await admin.post(`/api/quotes/${p.id}/status`, { status: "accepted" });
       expect((await admin.post(`/api/quotes/${p.id}/deposit`, { send: false })).json.error).toBe("deposit_needs_client");
-      await admin.del(`/api/quotes/${p.id}`);
+      const withClient = await admin.post(`/api/quotes/${p.id}/deposit`, { send: false, clientId: cl.id });
+      expect(withClient.status).toBe(201);
+      expect(withClient.json.quote.clientId).toBe(cl.id);
+
+      // a credit note on the deposit invoice: part of a line, taken off the balance, never more than the invoice
+      const iid = again.json.invoice.id;
+      const info = (await admin.get(`/api/crm/invoices/${iid}/credit-info`)).json;
+      expect(info.invoice.balanceCents).toBe(again.json.invoice.totalCents);
+      const taxed = info.lines.find((l: any) => l.taxable);
+      expect((await (await session("tech@akab.local")).post(`/api/crm/invoices/${iid}/credit-notes`, { lines: [{ invoiceLineId: taxed.id, description: "x", quantity: 1, unitPrice: 10 }] })).status).toBe(403);
+      const cn = await admin.post(`/api/crm/invoices/${iid}/credit-notes`, { reason: "Geste commercial", lines: [{ invoiceLineId: taxed.id, description: taxed.description, quantity: 1, unitPrice: 100 }] });
+      expect(cn.status).toBe(201);
+      // 100 $ taxable: 5 $ GST + 9,98 $ QST, all taken off the balance
+      expect(cn.json).toMatchObject({ subtotalCents: 10000, taxCents: 500 + 998, totalCents: 11498, appliedCents: 11498, invoiceNumber: again.json.invoice.number });
+      const after = (await admin.get(`/api/crm/invoices/${iid}/credit-info`)).json;
+      expect(after.invoice.balanceCents).toBe(again.json.invoice.totalCents - 11498);
+      expect(after.creditedCents).toBe(11498);
+      const [pay] = await db().select().from(schema.invoicePayments).where(eq(schema.invoicePayments.invoiceId, iid));
+      expect(pay).toMatchObject({ method: "credit", source: "credit", amountCents: 11498, reference: cn.json.number });
+      // its number is the next of the invoices' sequence
+      expect(Number(cn.json.number)).toBeGreaterThan(Number(withClient.json.invoice.number));
+      // more than what is left to credit: refused; a line of another invoice: refused
+      expect((await admin.post(`/api/crm/invoices/${iid}/credit-notes`, { lines: [{ description: "Trop", quantity: 1, unitPrice: 999999 }] })).json.error).toBe("credit_over_invoice");
+      expect((await admin.post(`/api/crm/invoices/${iid}/credit-notes`, { lines: [{ invoiceLineId: "00000000-0000-4000-8000-000000000000", description: "x", quantity: 1, unitPrice: 1 }] })).json.error).toBe("credit_line_invalid");
+      expect((await admin.get(`/api/crm/credit-notes?clientId=${cl.id}`)).json.map((x: any) => x.number)).toEqual([cn.json.number]);
     } finally {
+      await db().delete(schema.creditNotes).where(eq(schema.creditNotes.clientId, cl.id));
       await db().update(schema.quotes).set({ depositInvoiceId: null }).where(eq(schema.quotes.clientId, cl.id));
       await db().delete(schema.quotes).where(eq(schema.quotes.clientId, cl.id));
       await db().delete(schema.billingItems).where(eq(schema.billingItems.clientId, cl.id));
@@ -7202,7 +7227,7 @@ describe("pipeline: times, files, recurring and private tasks", () => {
 
 describe("QuickBooks: clients, chart of accounts and vendors kept in step both ways", () => {
   type Rec = Record<string, any>;
-  const store = { Customer: new Map<string, Rec>(), Account: new Map<string, Rec>(), Vendor: new Map<string, Rec>(), Invoice: new Map<string, Rec>(), CreditMemo: new Map<string, Rec>(), SalesReceipt: new Map<string, Rec>(), RefundReceipt: new Map<string, Rec>() };
+  const store = { Customer: new Map<string, Rec>(), Account: new Map<string, Rec>(), Vendor: new Map<string, Rec>(), Invoice: new Map<string, Rec>(), CreditMemo: new Map<string, Rec>(), SalesReceipt: new Map<string, Rec>(), RefundReceipt: new Map<string, Rec>(), Payment: new Map<string, Rec>(), Item: new Map<string, Rec>(), TaxCode: new Map<string, Rec>() };
   const real = globalThis.fetch;
   let seq = 100;
   // a change on either side is later than the last sync, by a clear margin
@@ -7226,7 +7251,7 @@ describe("QuickBooks: clients, chart of accounts and vendors kept in step both w
       return Response.json({ QueryResponse: { [entity]: rows } });
     }
     const [what, id] = path.split("/");
-    const entity = (what[0].toUpperCase() + what.slice(1)) as keyof typeof store;
+    const entity = (what === "creditmemo" ? "CreditMemo" : what[0].toUpperCase() + what.slice(1)) as keyof typeof store;
     if (init?.method === "POST") {
       const b = JSON.parse(init.body);
       if (b.Id) {
@@ -7395,8 +7420,22 @@ describe("QuickBooks: clients, chart of accounts and vendors kept in step both w
       expect(re.from).toBe("20012");
       expect(Number(re.number)).toBeGreaterThan(20012);
       expect((await db().select().from(schema.clientInvoices).where(eq(schema.clientInvoices.id, stuck.id)))[0]).toMatchObject({ number: re.number });
+      // a credit note on that invoice: a CreditMemo of the customer, then a payment of 0 that applies it to the invoice
+      const billingLib = await import("../server/lib/billing.ts");
+      await billingLib.saveQuickBooksSettings(null, { invoice: { itemId: "it1", taxCodeId: "5", exemptTaxCodeId: "6" } } as any);
+      const { createCreditNote, pushCreditNote } = await import("../server/lib/creditNotes.ts");
+      const note = await createCreditNote((await db().select().from(schema.users).where(eq(schema.users.email, "admin@akab.local")))[0].id, { invoiceId: stuck.id, reason: "Erreur", lines: [{ description: "Crédit", quantity: 1, unitPriceCents: 500, taxable: false }] });
+      const pushed = await pushCreditNote(note.id);
+      const memo = store.CreditMemo.get(pushed.quickbooksId)!;
+      expect(memo).toMatchObject({ DocNumber: note.number, CustomerRef: { value: "880" }, Line: [expect.objectContaining({ Amount: 5, SalesItemLineDetail: expect.objectContaining({ ItemRef: { value: "it1" }, TaxCodeRef: { value: "6" } }) })] });
+      const apply = store.Payment.get(pushed.applyId!)!;
+      expect(apply).toMatchObject({ TotalAmt: 0, Line: [{ Amount: 5, LinkedTxn: [{ TxnType: "Invoice" }] }, { Amount: 5, LinkedTxn: [{ TxnId: pushed.quickbooksId, TxnType: "CreditMemo" }] }] });
+      // the credit's payment row carries the QuickBooks payment (so reading payments back never doubles it)
+      expect((await db().select().from(schema.invoicePayments).where(eq(schema.invoicePayments.id, note.paymentId!)))[0].quickbooksId).toBe(pushed.applyId);
+      await db().delete(schema.creditNotes).where(eq(schema.creditNotes.id, note.id));
       await db().delete(schema.clientInvoices).where(eq(schema.clientInvoices.id, stuck.id));
       store.CreditMemo.clear();
+      store.Payment.clear();
       for (const [k, r] of store.Invoice) if (r.DocNumber === re.number) store.Invoice.delete(k);
       // already ahead: never lowered
       await billing.saveBillingSettings(null, { numbering: { next: 30000 } });
