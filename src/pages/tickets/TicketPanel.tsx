@@ -352,6 +352,29 @@ function TicketBody({
   const phone = tk.contactInfo?.phone ?? null;
   const email = tk.contactInfo?.email ?? null;
 
+  /** A ticket put on the wrong client: said plainly before it moves (header and Client card) */
+  const changeClient = async (c: { id: number; name: string }) => {
+    if (c.id === tk.company.id) return;
+    const ok = await confirm({
+      title: t("tickets.moveClient.title", { name: c.name }),
+      description: t("tickets.moveClient.text", { from: tk.company.name, to: c.name }),
+      confirmLabel: t("tickets.moveClient.confirm"),
+    });
+    if (!ok) return;
+    update.mutate(
+      { companyId: c.id },
+      {
+        onSuccess: (r) => {
+          const m = (r as TicketDetail & { clientMove?: { moved: number; invoiced: number } }).clientMove;
+          toast.info(t("tickets.moveClient.done", { name: c.name }), {
+            description: [m?.moved ? t("tickets.moveClient.moved", { count: m.moved }) : "", m?.invoiced ? t("tickets.moveClient.invoiced", { count: m.invoiced }) : "", t("tickets.moveClient.pickContact")].filter(Boolean).join(" "),
+            duration: 9000,
+          });
+        },
+      },
+    );
+  };
+
   // R = reply, I = internal note (when not typing)
   useEffect(() => {
     if (!editable) return;
@@ -379,9 +402,16 @@ function TicketBody({
             <span className="rounded-md border border-[color:var(--gold)]/30 bg-[color:var(--gold)]/10 px-2 py-0.5 font-mono text-xs text-primary">
               {tk.number}
             </span>
-            <span className="truncate text-xs text-muted-foreground">
-              {tk.company.name}
-              {tk.contact && ` · ${tk.contact}`}
+            <span className="flex min-w-0 items-center gap-1 text-xs text-muted-foreground">
+              {/* a click on the client's name changes the ticket's client (a mistake fixed) */}
+              <CompanyPicker
+                disabled={!editable || partial}
+                value={tk.company}
+                companies={companies}
+                onChange={changeClient}
+                triggerClassName="w-auto max-w-[22rem] px-1 -mx-1 hover:text-foreground"
+              />
+              {tk.contact && <span className="truncate">· {tk.contact}</span>}
             </span>
             <span className="ml-auto">
               <PresenceLight viewers={viewers} />
@@ -801,28 +831,7 @@ function TicketBody({
                   disabled={!editable}
                   value={tk.company}
                   companies={companies}
-                  onChange={async (c) => {
-                    if (c.id === tk.company.id) return;
-                    // a ticket put on the wrong client: said plainly before it moves
-                    const ok = await confirm({
-                      title: t("tickets.moveClient.title", { name: c.name }),
-                      description: t("tickets.moveClient.text", { from: tk.company.name, to: c.name }),
-                      confirmLabel: t("tickets.moveClient.confirm"),
-                    });
-                    if (!ok) return;
-                    update.mutate(
-                      { companyId: c.id },
-                      {
-                        onSuccess: (r) => {
-                          const m = (r as TicketDetail & { clientMove?: { moved: number; invoiced: number } }).clientMove;
-                          toast.info(t("tickets.moveClient.done", { name: c.name }), {
-                            description: [m?.moved ? t("tickets.moveClient.moved", { count: m.moved }) : "", m?.invoiced ? t("tickets.moveClient.invoiced", { count: m.invoiced }) : "", t("tickets.moveClient.pickContact")].filter(Boolean).join(" "),
-                            duration: 9000,
-                          });
-                        },
-                      },
-                    );
-                  }}
+                  onChange={changeClient}
                 />
               </Detail>
               <Detail icon={UserRound} label={t("tickets.fields.contact")}>
