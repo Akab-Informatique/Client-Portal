@@ -25,6 +25,12 @@ export type QuoteListItem = {
   projectTicketId: number | null;
   projectTicketNumber: string | null;
   projectAt: string | null;
+  /** The deposit invoice made when it was accepted */
+  depositInvoiceId: string | null;
+  depositPercentX100: number | null;
+  depositNumber: string | null;
+  depositVoided: boolean | null;
+  depositTotalCents: number | null;
   lineCount: number;
   totals: QuoteTotals;
 };

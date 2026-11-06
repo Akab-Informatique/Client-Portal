@@ -1009,6 +1009,13 @@
       "when": 1793914987812,
       "tag": "0143_portal_accounts_by_hand",
       "breakpoints": true
+    },
+    {
+      "idx": 144,
+      "version": "7",
+      "when": 1793981744675,
+      "tag": "0144_quote_deposit",
+      "breakpoints": true
     }
   ]
 }

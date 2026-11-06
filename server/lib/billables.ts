@@ -607,7 +607,7 @@ export async function approvedSpan() {
  * own (source "manual"), then the usual invoice is made from them — the same numbering, taxes, QuickBooks and emails.
  * Nothing is left behind when the invoice cannot be made; voiding it later drops these lines (they were never work).
  */
-export type QuickLine = { description: string; quantity: number; unitPriceCents: number; taxable: boolean };
+export type QuickLine = { description: string; quantity: number; unitPriceCents: number; taxable: boolean; /** its own source id ("deposit:<quote>:…"), else a manual one */ sourceId?: string };
 export async function quickInvoice(actorId: string, p: Omit<InvoiceDraft, "itemIds" | "kinds" | "from" | "to"> & { lines: QuickLine[] }) {
   const day = p.issuedOn ?? todayQc();
   const now = new Date();
@@ -620,7 +620,7 @@ export async function quickInvoice(actorId: string, p: Omit<InvoiceDraft, "itemI
           clientId: p.clientId,
           kind: "charge",
           source: "manual",
-          sourceId: `manual:${crypto.randomUUID()}`,
+          sourceId: l.sourceId ?? `manual:${crypto.randomUUID()}`,
           date: day,
           description: l.description,
           quantityX100,

@@ -11,7 +11,12 @@ import { productsWithStock } from "../lib/store.ts";
 import { ticketSource } from "../lib/ticketSource.ts";
 import { queues } from "../lib/queues.ts";
 import { run } from "./tickets.ts";
-import { lineAmount, quoteTotals } from "../../shared/quotes.ts";
+import { depositOf, lineAmount, quoteTotals } from "../../shared/quotes.ts";
+import { DraftError, quickInvoice } from "../lib/billables.ts";
+import { billingSettings } from "../lib/billing.ts";
+import { autoSync } from "../lib/quickbooks.ts";
+import { sendInvoiceMail } from "../lib/invoiceMail.ts";
+import { stripePayReady } from "../lib/payLink.ts";
 import { getQuote, listQuotes, nextQuoteNumber, saveLines, todayQc } from "../lib/quotes.ts";
 import { QUOTE_KINDS, QUOTE_RECURRENCES, QUOTE_STATUSES, recurrenceOf } from "../../shared/quotes.ts";
 
@@ -305,6 +310,61 @@ await audit(a.user.id, "quote.updated", id, { number: cur.number, lines: p.lines
     await audit(a.user.id, "quote.status", id, { number: cur.number, from: cur.status, to: status });
     await syncQuoteToPipeline(id, a.user.id);
     return c.json(await getQuote(id));
+  })
+
+  /**
+   * The deposit invoice of an accepted quote: a share of the implementation (50 % unless another is
+   * chosen), one line per tax treatment, made like any invoice (numbering, taxes of the client, QuickBooks
+   * with the item "Dépôt client") and emailed when asked. One per quote — a voided one can be made again.
+   */
+  .post("/:id/deposit", requirePermission("quotes.manage"), requirePermission("accounting.manage"), async (c) => {
+    const a = auth(c);
+    const id = zUuid.parse(c.req.param("id"));
+    const p = await body(c, z.object({ percent: z.number().min(1).max(100).default(50), issuedOn: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(), send: z.boolean().default(true), payOnline: z.boolean().default(true) }));
+    const q = await getQuote(id);
+    if (!q) throw new HTTPException(404, { message: "not_found" });
+    if (q.status !== "accepted") throw new HTTPException(409, { message: "quote_not_accepted" });
+    if (!q.clientId) throw new HTTPException(409, { message: "deposit_needs_client" });
+    if (q.depositInvoiceId && !q.depositVoided) throw new HTTPException(409, { message: "deposit_exists" });
+    const percentX100 = Math.round(p.percent * 100);
+    const dep = depositOf(q.lines ?? [], percentX100);
+    if (dep.subtotalCents <= 0) throw new HTTPException(409, { message: "deposit_nothing" });
+    const lang = (await billingSettings()).template.language;
+    const pct = (percentX100 / 100).toLocaleString(lang === "en" ? "en-CA" : "fr-CA", { maximumFractionDigits: 2 });
+    const text = lang === "en" ? `Deposit of ${pct}% — Quote ${q.number}${q.title ? `: ${q.title}` : ""}` : `Dépôt de ${pct} % — Soumission ${q.number}${q.title ? ` : ${q.title}` : ""}`;
+    const parts = [
+      { cents: dep.taxableCents, taxable: true },
+      { cents: dep.exemptCents, taxable: false },
+    ].filter((x) => x.cents > 0);
+    const lines = parts.map((x, i) => ({
+      description: (parts.length > 1 && !x.taxable ? `${text} (${lang === "en" ? "not taxable" : "non taxable"})` : text).slice(0, 500),
+      quantity: 1,
+      unitPriceCents: x.cents,
+      taxable: x.taxable,
+      sourceId: `deposit:${q.id}:${i}:${crypto.randomUUID()}`,
+    }));
+    let made: Awaited<ReturnType<typeof quickInvoice>>;
+    try {
+      made = await quickInvoice(a.user.id, { clientId: q.clientId, issuedOn: p.issuedOn, termsDays: 0, notes: lang === "en" ? `Deposit on quote ${q.number}.` : `Dépôt sur la soumission ${q.number}.`, lines });
+    } catch (e) {
+      if (e instanceof DraftError) throw new HTTPException(409, { message: e.message });
+      throw e;
+    }
+    // the Stripe pay link for the deposit (its balance), in the email and the PDF, whatever the client's usual choice
+    await db().update(schema.clientInvoices).set({ payOnline: p.payOnline }).where(eq(schema.clientInvoices.id, made.id));
+    await db().update(schema.quotes).set({ depositInvoiceId: made.id, depositPercentX100: percentX100, updatedAt: new Date() }).where(eq(schema.quotes.id, id));
+    await audit(a.user.id, "quote.deposit_invoiced", id, { number: q.number, invoice: made.number, percent: p.percent, totalCents: made.totalCents });
+    await autoSync("invoices", made.id);
+    let emailed: string | null = null;
+    let mailError: string | null = null;
+    if (p.send) {
+      try {
+        emailed = (await sendInvoiceMail(made.id, "sent", a.user.id)).to;
+      } catch (e) {
+        mailError = e instanceof Error ? e.message : "mail_failed";
+      }
+    }
+    return c.json({ invoice: { id: made.id, number: made.number, totalCents: made.totalCents }, payLink: p.payOnline && (await stripePayReady()), emailed, mailError, quote: await getQuote(id) }, 201);
   })
 
   /** A copy as a new draft (same client and lines), for a similar quote. */

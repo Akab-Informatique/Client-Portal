@@ -1840,6 +1840,68 @@ describe("tickets: client and contact", () => {
     expect((await admin.get(`/api/quotes/${copy.id}`)).status).toBe(404);
   });
 
+  it("quotes: an accepted quote makes its deposit invoice (50 % or another share of the implementation)", async () => {
+    const admin = await session("admin@akab.local");
+    const [cl] = await db().insert(schema.clients).values({ name: "Zz Dépôt soumission (test)", autotaskId: 9_100_021 }).returning();
+    // the invoice numbering is put back after (the tests that follow read it)
+    const [billingRow] = await db().select().from(schema.integrations).where(eq(schema.integrations.provider, "billing"));
+    try {
+      const q = (
+        await admin.post("/api/quotes", {
+          clientId: cl.id,
+          title: "Nouveau serveur",
+          lines: [
+            { description: "Serveur", quantityX100: 100, unitPriceCents: 300000 },
+            { description: "Formation", quantityX100: 100, unitPriceCents: 40000, taxable: false },
+            { description: "Option", quantityX100: 100, unitPriceCents: 99900, optional: true },
+            { description: "Surveillance", quantityX100: 100, unitPriceCents: 9900, recurrence: "monthly" },
+          ],
+        })
+      ).json;
+      // not accepted yet
+      expect((await admin.post(`/api/quotes/${q.id}/deposit`, { percent: 50, send: false })).json.error).toBe("quote_not_accepted");
+      await admin.post(`/api/quotes/${q.id}/status`, { status: "sent" });
+      await admin.post(`/api/quotes/${q.id}/status`, { status: "accepted" });
+      // a technician without accounting cannot invoice
+      expect((await (await session("tech@akab.local")).post(`/api/quotes/${q.id}/deposit`, { percent: 50 })).status).toBe(403);
+
+      const r = await admin.post(`/api/quotes/${q.id}/deposit`, { percent: 30, send: false });
+      expect(r.status).toBe(201);
+      // 30 % of the implementation (3 000 $ taxable + 400 $ not taxable), options and monthly lines left out
+      const lines = await db().select().from(schema.invoiceLines).innerJoin(schema.clientInvoices, eq(schema.clientInvoices.id, schema.invoiceLines.invoiceId)).where(eq(schema.clientInvoices.id, r.json.invoice.id));
+      expect(lines.map((x) => [x.invoice_lines.amountCents, x.invoice_lines.taxable]).sort()).toEqual([[12000, false], [90000, true]]);
+      expect(lines[0].invoice_lines.description).toContain(q.number);
+      // taxes only on the taxable part: 900 $ × (5 % + 9,975 %)
+      expect(r.json.invoice.totalCents).toBe(102000 + 4500 + 8978);
+      // its work to bill is a deposit (QuickBooks item "Dépôt client"), already on the invoice
+      const items = await db().select().from(schema.billingItems).where(eq(schema.billingItems.invoiceId, r.json.invoice.id));
+      expect(items.every((i) => i.sourceId!.startsWith(`deposit:${q.id}:`) && i.status === "posted")).toBe(true);
+      // the quote shows it; a second one is refused until it is voided
+      expect(r.json.quote).toMatchObject({ depositInvoiceId: r.json.invoice.id, depositPercentX100: 3000, depositNumber: r.json.invoice.number, depositVoided: false });
+      // the Stripe pay link is on for the deposit, whatever the client's usual choice
+      expect((await db().select().from(schema.clientInvoices).where(eq(schema.clientInvoices.id, r.json.invoice.id)))[0].payOnline).toBe(true);
+      expect((await admin.post(`/api/quotes/${q.id}/deposit`, { percent: 50, send: false })).json.error).toBe("deposit_exists");
+      expect((await admin.post("/api/billables/unpost", { invoiceId: r.json.invoice.id })).status).toBe(200);
+      const again = await admin.post(`/api/quotes/${q.id}/deposit`, { send: false, payOnline: false });
+      expect(again.status).toBe(201);
+      expect(again.json.quote.depositPercentX100).toBe(5000);
+      expect((await db().select().from(schema.clientInvoices).where(eq(schema.clientInvoices.id, again.json.invoice.id)))[0].payOnline).toBe(false);
+      // a prospect cannot be invoiced
+      const p = (await admin.post("/api/quotes", { prospectName: "Prospect", lines: [{ description: "X", quantityX100: 100, unitPriceCents: 1000 }] })).json;
+      await admin.post(`/api/quotes/${p.id}/status`, { status: "accepted" });
+      expect((await admin.post(`/api/quotes/${p.id}/deposit`, { send: false })).json.error).toBe("deposit_needs_client");
+      await admin.del(`/api/quotes/${p.id}`);
+    } finally {
+      await db().update(schema.quotes).set({ depositInvoiceId: null }).where(eq(schema.quotes.clientId, cl.id));
+      await db().delete(schema.quotes).where(eq(schema.quotes.clientId, cl.id));
+      await db().delete(schema.billingItems).where(eq(schema.billingItems.clientId, cl.id));
+      await db().delete(schema.clientInvoices).where(eq(schema.clientInvoices.clientId, cl.id));
+      await db().delete(schema.clients).where(eq(schema.clients.id, cl.id));
+      if (billingRow) await db().update(schema.integrations).set({ config: billingRow.config }).where(eq(schema.integrations.provider, "billing"));
+      else await db().delete(schema.integrations).where(eq(schema.integrations.provider, "billing"));
+    }
+  });
+
   it("quotes: a line has its own description, and monthly or yearly lines have their own totals", async () => {
     const admin = await session("admin@akab.local");
     const made = await admin.post("/api/quotes", {

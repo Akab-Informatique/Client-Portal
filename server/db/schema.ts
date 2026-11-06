@@ -2509,6 +2509,9 @@ export const quotes = pgTable(
     projectAt: timestamp("project_at", { withTimezone: true }),
     /** The opportunity of the sales pipeline made from this quote (Vente › Ventes): follows the quote's status and amounts */
     opportunityId: uuid("opportunity_id").references(() => salesOpportunities.id, { onDelete: "set null" }),
+    /** The deposit invoice made when the quote was accepted (a share of the implementation), and that share in percent ×100 */
+    depositInvoiceId: uuid("deposit_invoice_id").references(() => clientInvoices.id, { onDelete: "set null" }),
+    depositPercentX100: integer("deposit_percent_x100"),
     sentAt: timestamp("sent_at", { withTimezone: true }),
     decidedAt: timestamp("decided_at", { withTimezone: true }),
     createdAt: created(),

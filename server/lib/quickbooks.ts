@@ -487,6 +487,9 @@ export async function qbItemsForBillingItems(items: { id: string; sourceId: stri
           if (!id) id = await named(p.name, { sku: p.sku, priceCents: p.priceCents, portalService: false });
           if (p.quickbooksItemId !== id) await d.update(schema.storeProducts).set({ quickbooksItemId: id, updatedAt: new Date() }).where(eq(schema.storeProducts.id, p.id));
         } else if (charge?.name) id = await named(charge.name, { portalService: false });
+      } else if (src.startsWith("deposit:")) {
+        // a deposit asked when a quote is accepted: always the same item (its account can be set once in QuickBooks, e.g. customer deposits)
+        id = await named("Dépôt client", { portalService: false });
       } else if (src.startsWith("ptravel:")) {
         // a trip billed to the client
         id = await named("Déplacement", { portalService: false });

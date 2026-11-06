@@ -3,7 +3,7 @@ import { useTranslation } from "react-i18next";
 import { useNavigate, useParams, useSearchParams } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
-import { ArrowDown, ArrowLeft, ArrowUp, Check, ChevronsUpDown, ClipboardList, Copy, Eye, FileSignature, FileText, FolderKanban, Loader2, Lock, PackagePlus, Save, Send, Trash2, Undo2, X } from "lucide-react";
+import { ArrowDown, ArrowLeft, ArrowUp, Check, Receipt, ChevronsUpDown, ClipboardList, Copy, Eye, FileSignature, FileText, FolderKanban, Loader2, Lock, PackagePlus, Save, Send, Trash2, Undo2, X } from "lucide-react";
 import { GlassBackdrop } from "@/components/brand/GlassBackdrop";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
@@ -26,6 +26,7 @@ import { QuoteDocument, type DocData } from "./QuoteDocument";
 import { useToProject } from "./useToProject";
 import { LineAdder } from "./LineAdder";
 import { MarginsPanel } from "./Margins";
+import { DepositDialog } from "./DepositDialog";
 import { fromCents, fromPct, fromQty, parseNum, STATUS_STYLE, toCents, toPct, toQtyX100, useQuoteClients, useQuoteStaff, type Quote, type QuoteProduct, type QuoteService } from "./shared";
 
 /** A line as it is typed: numbers stay text until saved, so "12," and "1 299" can be written. */
@@ -226,12 +227,17 @@ export function QuoteEditor() {
       if (dirty && !locked) await api.put<Quote>(`/quotes/${id}`, payload(form));
       return api.post<Quote>(`/quotes/${id}/status`, { status: to });
     },
-    onSuccess: (q) => {
+    onSuccess: (q, to) => {
       apply(q);
       void qc.invalidateQueries({ queryKey: ["quotes"] });
+      // accepted: offer the deposit invoice at once
+      if (to === "accepted" && canDeposit(q)) setDeposit(true);
     },
     onError: (e) => toast.error(errorText(t, e)),
   });
+  const [deposit, setDeposit] = useState(false);
+  /** A deposit can be invoiced: accepted, a CRM client, something to pay now, none made yet (or it was voided) */
+  const canDeposit = (q: Quote) => can("accounting.manage") && q.status === "accepted" && Boolean(q.clientId) && q.totals.subtotalCents > 0 && (!q.depositInvoiceId || Boolean(q.depositVoided));
 
   const copy = useMutation({
     mutationFn: () => api.post<Quote>(`/quotes/${id}/duplicate`, {}),
@@ -570,6 +576,20 @@ export function QuoteEditor() {
                   {project.pending ? <Loader2 className="size-4 animate-spin" /> : <FolderKanban className="size-4" />} {t("quotes.project.action")}
                 </Button>
               )}
+              {quote?.depositNumber && !quote.depositVoided && (
+                <a
+                  href={`/accounting/invoices?istatus=all&iq=${encodeURIComponent(quote.depositNumber)}`}
+                  className="flex items-center gap-2 rounded-lg border border-[color:var(--gold)]/30 bg-[color:var(--gold)]/10 px-3 py-2 text-sm text-primary hover:bg-[color:var(--gold)]/15"
+                >
+                  <Receipt className="size-4 shrink-0" /> {t("quotes.deposit.badge", { pct: (quote.depositPercentX100 ?? 0) / 100, number: quote.depositNumber, total: money(quote.depositTotalCents ?? 0, i18n.language) })}
+                </a>
+              )}
+              {quote && canDeposit(quote) && (
+                <Button variant="outline" className="w-full" disabled={busy} onClick={() => setDeposit(true)}>
+                  <Receipt className="size-4" /> {quote.depositVoided ? t("quotes.deposit.again") : t("quotes.deposit.action")}
+                </Button>
+              )}
+              {quote?.status === "accepted" && !quote.clientId && can("accounting.manage") && !quote.depositInvoiceId && <p className="text-xs text-muted-foreground">{t("quotes.deposit.needsClient")}</p>}
               {quote?.projectTicketNumber && (
                 <p className="flex items-center gap-2 rounded-lg border border-emerald-500/30 bg-emerald-500/10 px-3 py-2 text-sm text-emerald-300">
                   <FolderKanban className="size-4 shrink-0" /> {t("quotes.project.badge", { number: quote.projectTicketNumber })}
@@ -615,6 +635,7 @@ export function QuoteEditor() {
         </aside>
       </div>
 
+      {deposit && quote && <DepositDialog quote={quote} onClose={() => setDeposit(false)} onDone={(q) => { apply(q); setDeposit(false); }} />}
       {preview && doc && <QuoteDocument data={doc} onClose={() => setPreview(false)} />}
       {toInventory && quote && <ToInventoryDialog quoteId={quote.id} row={toInventory} onClose={() => setToInventory(null)} onDone={(pid, sku) => setRow(toInventory.key, { productId: pid, sku: sku ?? "" })} />}
     </div>
