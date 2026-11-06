@@ -1483,7 +1483,7 @@ const fr = {
     sourceOld: "Ancien système",
     tab: "Toutes les factures",
     subtitle: "Toutes vos factures : filtrez par statut, client, dates, numéro, envoi par courriel et QuickBooks.",
-    search: "Numéro de facture ou bon de commande…",
+    search: "Client, numéro, bon de commande ou montant…",
     client: "Client",
     allClients: "Tous les clients",
     emailed: "Envoi par courriel",
@@ -4474,6 +4474,17 @@ const fr = {
     },
   },
   tickets: {
+    moveClient: {
+      title: "Changer le client pour {{name}} ?",
+      text: "Le billet passe de {{from}} à {{to}}. Le contact, l'appareil et le contrat choisis sont retirés (le contrat par défaut de {{to}} s'applique). Le temps et les frais pas encore facturés suivent le nouveau client et reviennent à approuver ; ce qui est déjà sur une facture ne bouge pas.",
+      confirm: "Changer le client",
+      done: "Billet déplacé chez {{name}}.",
+      moved_one: "{{count}} élément à facturer suit le nouveau client.",
+      moved_other: "{{count}} éléments à facturer suivent le nouveau client.",
+      invoiced_one: "{{count}} élément déjà facturé reste sur sa facture.",
+      invoiced_other: "{{count}} éléments déjà facturés restent sur leur facture.",
+      pickContact: "Choisissez maintenant le contact.",
+    },
     files: {
       tab: "Pièces jointes",
       add: "Ajouter un fichier",

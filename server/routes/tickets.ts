@@ -4,6 +4,7 @@ import { localAssets } from "../lib/queues.ts";
 import { clientInfo } from "../lib/clientHours.ts";
 import { intakeSettings } from "../lib/mailIntake.ts";
 import { syncBillablesNow } from "../lib/billables.ts";
+import { moveTicketClient } from "../lib/ticketClient.ts";
 import { contractOfTicket, contractsOfCompany, setTicketContract, type ContractView } from "../lib/contracts.ts";
 import { and, asc, desc, eq, inArray, isNull, or, sql } from "drizzle-orm";
 import { z } from "zod";
@@ -1777,9 +1778,17 @@ export const ticketRoutes = new Hono<AppEnv>()
       if (p.priority && !o.priorities.some((s) => s.value === p.priority)) throw new HTTPException(400, { message: "Validation failed" });
       if (p.queue && !o.queues.some((s) => s.value === p.queue)) throw new HTTPException(400, { message: "Validation failed" });
     }
+    // a change of client (a mistake fixed): what was tied to the old client follows the new one
+    const before = p.companyId !== undefined ? await run(() => src.get(id)) : null;
     await run(() => src.update(id, p, a));
+    let clientMove: { moved: number; invoiced: number } | null = null;
+    if (before && p.companyId !== before.company.id) {
+      clientMove = await moveTicketClient(id, p.companyId!);
+      await syncBillablesNow();
+      await audit(a.user.id, "ticket.client_changed", String(id), { number: before.number, from: before.company.name, fromId: before.company.id, toId: p.companyId, ...clientMove });
+    }
     await audit(a.user.id, "ticket.updated", String(id), { fields: Object.keys(p) });
-    return c.json(await run(() => detailOf(src, id, a)));
+    return c.json({ ...(await run(() => detailOf(src, id, a))), ...(clientMove ? { clientMove } : {}) });
   })
 
   /** Charges on the ticket (material, expenses…). */

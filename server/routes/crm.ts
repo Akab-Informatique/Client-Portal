@@ -2,7 +2,7 @@ import { pushSoon } from "../lib/qbSync.ts";
 import { ItcloudError, setServiceContract, unmappedServices } from "../lib/itcloud.ts";
 import { Hono } from "hono";
 import { HTTPException } from "hono/http-exception";
-import { and, asc, desc, eq, gte, ilike, inArray, isNotNull, isNull, lte, ne, or, sql } from "drizzle-orm";
+import { and, asc, desc, eq, gte, inArray, isNotNull, isNull, lte, ne, sql } from "drizzle-orm";
 import { z } from "zod";
 import { db, schema } from "../db/index.ts";
 import { auth, requirePermission, requireStaff, revokeUserSessions, type AppEnv } from "../lib/auth.ts";
@@ -31,6 +31,7 @@ import { contractCharged, contractEventsOf, recordContractEvent, syncMonthlyRate
 import { todayQc } from "../lib/timesheets.ts";
 import { billingSettings } from "../lib/billing.ts";
 import { stripePayReady } from "../lib/payLink.ts";
+import { invoiceMatcher } from "../../shared/invoiceSearch.ts";
 import { quickbooksHttp } from "./billing.ts";
 
 /**
@@ -1065,8 +1066,6 @@ export const crmRoutes = new Hono<AppEnv>()
     if (!q.success) throw new HTTPException(400, { message: "invalid_filter" });
     const f = q.data;
     const v = schema.clientInvoices;
-    // the number or PO contains the text (% and _ taken literally)
-    const words = (f.q ?? "").replace(/[\\%_]/g, "\\$&");
     const rows = await db()
       .select()
       .from(v)
@@ -1075,19 +1074,25 @@ export const crmRoutes = new Hono<AppEnv>()
           f.clientId ? eq(v.clientId, f.clientId) : undefined,
           f.from ? gte(v.issuedOn, f.from) : undefined,
           f.to ? lte(v.issuedOn, f.to) : undefined,
-          words ? or(ilike(v.number, `%${words}%`), ilike(v.poNumber, `%${words}%`)) : undefined,
           f.emailed === "yes" ? isNotNull(v.emailedAt) : f.emailed === "no" ? isNull(v.emailedAt) : undefined,
           f.quickbooks === "synced" ? isNotNull(v.quickbooksId) : f.quickbooks === "unsynced" ? isNull(v.quickbooksId) : f.quickbooks === "error" ? isNotNull(v.quickbooksError) : undefined,
           f.source ? eq(v.source, f.source) : undefined,
         ),
       )
       .orderBy(desc(v.issuedOn), desc(v.number))
-      .limit(2000);
+      .limit(f.q ? 20000 : 2000);
     const clients = await db().select({ id: schema.clients.id, name: schema.clients.name }).from(schema.clients).orderBy(asc(schema.clients.name));
     const names = new Map(clients.map((x) => [x.id, x.name]));
     const all = await invoiceViews(rows, names, { lines: false });
+    // the search box: a client's name, a number / PO or an amount, and what looks like it (shared/invoiceSearch.ts);
     // the status needs the payments: filtered once known
-    const items = all.filter((x) => !f.status || (f.status === "open" ? x.balanceCents > 0 : x.status === f.status));
+    const matches = invoiceMatcher(f.q ?? "");
+    const clientOf = new Map(rows.map((r) => [r.id, r.clientId]));
+    const items = all.filter(
+      (x) =>
+        (!f.status || (f.status === "open" ? x.balanceCents > 0 : x.status === f.status)) &&
+        (!f.q || matches({ number: x.number, poNumber: x.poNumber ?? null, clientName: names.get(clientOf.get(x.id)!) ?? "", totalCents: x.totalCents, balanceCents: x.balanceCents })),
+    );
     const sum = (k: "totalCents" | "balanceCents" | "paidCents", w: (x: (typeof items)[number]) => boolean = () => true) => items.filter(w).reduce((t, x) => t + x[k], 0);
     return c.json({
       summary: {

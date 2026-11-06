@@ -23,7 +23,7 @@ process.env.REQUIRE_MFA = "true";
 const { initDb, db, schema } = await import("../server/db/index.ts");
 const { seed } = await import("../server/db/seed.ts");
 const { createApp } = await import("../server/app.ts");
-const { eq, sql, isNotNull, isNull, inArray } = await import("drizzle-orm");
+const { and, eq, sql, isNotNull, isNull, inArray } = await import("drizzle-orm");
 const { resetRateLimit } = await import("../server/lib/http.ts");
 
 let app: ReturnType<typeof createApp>;
@@ -10254,6 +10254,53 @@ describe("ticket charges are work to bill at once", () => {
       // back to the sample tickets for the tests that follow
       await db().delete(schema.integrations).where(eq(schema.integrations.provider, "tickets"));
       await db().delete(schema.clients).where(eq(schema.clients.id, company.id));
+      (await import("../server/lib/localTickets.ts")).resetTicketMode();
+    }
+  });
+});
+
+describe("a ticket moved to another client", () => {
+  it("its contract and unbilled work follow the new client; what is invoiced stays", async () => {
+    resetRateLimit("login:ip:unknown");
+    const tech = await signIn("tech@akab.local");
+    const admin = await signIn("admin@akab.local");
+    const [wrong] = await db().insert(schema.clients).values({ name: "Zz Mauvais client (test)", autotaskId: 9_100_011 }).returning();
+    const [right] = await db().insert(schema.clients).values({ name: "Zz Bon client (test)", autotaskId: 9_100_012 }).returning();
+    const [k] = await db().insert(schema.clientContracts).values({ clientId: wrong.id, name: "Soutien du mauvais", billingMode: "hourly", hourlyRateCents: 9000, startDate: "2026-01-01", endDate: "2036-12-31" }).returning();
+    await db().insert(schema.integrations).values({ provider: "tickets", enabled: true, config: { mode: "local" } }).onConflictDoUpdate({ target: schema.integrations.provider, set: { enabled: true, config: { mode: "local" } } });
+    (await import("../server/lib/localTickets.ts")).resetTicketMode();
+    try {
+      const id = (await tech.post("/api/tickets", { title: "Mauvais client", description: "x", companyId: wrong.autotaskId, priority: "medium", queue: "support", assigneeId: null, dueDate: "2026-12-05" })).json.id;
+      expect((await tech.put(`/api/tickets/${id}/contract`, { contractId: k.id })).status).toBe(200);
+      const charge = async (name: string) => (await tech.post(`/api/tickets/${id}/charges`, { name, quantity: 1, unitPrice: 10, billable: true })).json.find((x: any) => x.name === name);
+      const a = await charge("Câble");
+      const b = await charge("Souris");
+      const c2 = await charge("Clavier");
+      const item = async (cid: string) => (await db().select().from(schema.billingItems).where(eq(schema.billingItems.sourceId, `pcharge:${cid}`)))[0];
+      // one approved, one invoiced, one pending
+      await admin.post("/api/billables/status", { ids: [(await item(b.id)).id], status: "approved" });
+      const inv = (await admin.post("/api/billables/status", { ids: [(await item(c2.id)).id], status: "approved" }), (await admin.post("/api/billables/invoice", { clientId: wrong.id, itemIds: [(await item(c2.id)).id] })).json);
+      expect(inv).not.toHaveProperty("error");
+
+      const moved = await tech.patch(`/api/tickets/${id}`, { companyId: right.autotaskId });
+      expect(moved.status).toBe(200);
+      expect(moved.json).toMatchObject({ company: { id: right.autotaskId }, contactId: null, clientMove: { moved: 2, invoiced: 1 } });
+      // the old client's contract is gone from the ticket
+      expect((await db().select().from(schema.ticketMeta).where(eq(schema.ticketMeta.ticketId, id)))[0].contractId).toBeNull();
+      // the unbilled work is the new client's, back to approval; the invoiced line stays on its invoice
+      expect(await item(a.id)).toMatchObject({ clientId: right.id, status: "pending", contractId: null });
+      expect(await item(b.id)).toMatchObject({ clientId: right.id, status: "pending" });
+      expect(await item(c2.id)).toMatchObject({ clientId: wrong.id, status: "posted", invoiceId: inv.id });
+      // written in the activity log
+      const [log] = await db().select().from(schema.auditLog).where(and(eq(schema.auditLog.action, "ticket.client_changed"), eq(schema.auditLog.target, String(id))));
+      expect(log.details).toMatchObject({ from: wrong.name, toId: right.autotaskId });
+      // the same client again changes nothing
+      expect((await tech.patch(`/api/tickets/${id}`, { companyId: right.autotaskId })).json).not.toHaveProperty("clientMove");
+    } finally {
+      await db().delete(schema.integrations).where(eq(schema.integrations.provider, "tickets"));
+      await db().delete(schema.billingItems).where(inArray(schema.billingItems.clientId, [wrong.id, right.id]));
+      await db().delete(schema.clientInvoices).where(eq(schema.clientInvoices.clientId, wrong.id));
+      await db().delete(schema.clients).where(inArray(schema.clients.id, [wrong.id, right.id]));
       (await import("../server/lib/localTickets.ts")).resetTicketMode();
     }
   });

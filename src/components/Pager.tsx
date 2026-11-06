@@ -4,8 +4,8 @@ import { Button } from "@/components/ui/button";
 
 export const PAGE_SIZES = [10, 25, 50, 100] as const;
 
-/** The size picked in the address (10 when none or not one of the choices). */
-export const pageSizeOf = (v: string | null) => (PAGE_SIZES as readonly number[]).includes(Number(v)) ? Number(v) : 10;
+/** The size picked in the address (`fallback`, 100 by default, when none or not one of the choices). */
+export const pageSizeOf = (v: string | null, fallback = 100) => (PAGE_SIZES as readonly number[]).includes(Number(v)) ? Number(v) : fallback;
 
 /**
  * The foot of a long list: which rows are shown, a choice of how many per page (10, 25, 50, 100) and the previous / next

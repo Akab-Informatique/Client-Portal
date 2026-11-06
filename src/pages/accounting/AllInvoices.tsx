@@ -131,7 +131,7 @@ export function AllInvoices() {
     setParams(
       (p) => {
         if (patch.size !== undefined) {
-          if (patch.size === 10) p.delete("isize");
+          if (patch.size === 100) p.delete("isize");
           else p.set("isize", String(patch.size));
           p.delete("ipage");
         }

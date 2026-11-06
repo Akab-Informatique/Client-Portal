@@ -801,7 +801,28 @@ function TicketBody({
                   disabled={!editable}
                   value={tk.company}
                   companies={companies}
-                  onChange={(c) => c.id !== tk.company.id && update.mutate({ companyId: c.id })}
+                  onChange={async (c) => {
+                    if (c.id === tk.company.id) return;
+                    // a ticket put on the wrong client: said plainly before it moves
+                    const ok = await confirm({
+                      title: t("tickets.moveClient.title", { name: c.name }),
+                      description: t("tickets.moveClient.text", { from: tk.company.name, to: c.name }),
+                      confirmLabel: t("tickets.moveClient.confirm"),
+                    });
+                    if (!ok) return;
+                    update.mutate(
+                      { companyId: c.id },
+                      {
+                        onSuccess: (r) => {
+                          const m = (r as TicketDetail & { clientMove?: { moved: number; invoiced: number } }).clientMove;
+                          toast.info(t("tickets.moveClient.done", { name: c.name }), {
+                            description: [m?.moved ? t("tickets.moveClient.moved", { count: m.moved }) : "", m?.invoiced ? t("tickets.moveClient.invoiced", { count: m.invoiced }) : "", t("tickets.moveClient.pickContact")].filter(Boolean).join(" "),
+                            duration: 9000,
+                          });
+                        },
+                      },
+                    );
+                  }}
                 />
               </Detail>
               <Detail icon={UserRound} label={t("tickets.fields.contact")}>

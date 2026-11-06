@@ -1485,7 +1485,7 @@ const en: Dict = {
     sourceOld: "Old system",
     tab: "All invoices",
     subtitle: "Every invoice: filter by status, client, dates, number, email and QuickBooks.",
-    search: "Invoice or PO number…",
+    search: "Client, number, PO or amount…",
     client: "Client",
     allClients: "All clients",
     emailed: "Sent by email",
@@ -4476,6 +4476,17 @@ const en: Dict = {
     },
   },
   tickets: {
+    moveClient: {
+      title: "Change the client to {{name}}?",
+      text: "The ticket moves from {{from}} to {{to}}. The contact, device and chosen contract are cleared ({{to}}'s default contract applies). Time and charges not invoiced yet follow the new client and go back to approval; anything already on an invoice stays put.",
+      confirm: "Change the client",
+      done: "Ticket moved to {{name}}.",
+      moved_one: "{{count}} item to bill follows the new client.",
+      moved_other: "{{count}} items to bill follow the new client.",
+      invoiced_one: "{{count}} item already invoiced stays on its invoice.",
+      invoiced_other: "{{count}} items already invoiced stay on their invoice.",
+      pickContact: "Now pick the contact.",
+    },
     files: {
       tab: "Attachments",
       add: "Add a file",
