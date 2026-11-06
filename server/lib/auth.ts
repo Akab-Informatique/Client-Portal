@@ -62,19 +62,25 @@ export async function createSession(c: Context, userId: string, mfaVerified: boo
       userAgent: (c.req.header("user-agent") || "").slice(0, 300),
       expiresAt: new Date(Date.now() + SESSION_HOURS * 3600_000),
     });
-  setCookie(c, SESSION_COOKIE, token, {
-    httpOnly: true,
-    secure: config.cookieSecure,
-    sameSite: "Lax",
-    path: "/",
-    maxAge: SESSION_HOURS * 3600,
-  });
+  setCookie(c, SESSION_COOKIE, token, { ...cookieSite(), httpOnly: true, path: "/", maxAge: SESSION_HOURS * 3600 });
+}
+
+/**
+ * Where the session cookie may travel. Lax (the default): only on the portal's own site. When another site shows
+ * the portal in a frame (EMBED_ORIGINS + EMBED_CROSS_SITE_COOKIE) it must travel in that frame: SameSite=None,
+ * Secure, Partitioned (kept apart per embedding site, so it is never a tracking cookie). Cross-site writes stay
+ * refused by `sameOriginJson` (the Origin must be the portal's, and the body must be JSON).
+ */
+function cookieSite() {
+  return config.embedCrossSiteCookie
+    ? ({ secure: true, sameSite: "None", partitioned: true } as const)
+    : ({ secure: config.cookieSecure, sameSite: "Lax" } as const);
 }
 
 export async function destroySession(c: Context, opts: { keepCookie?: boolean } = {}): Promise<void> {
   const token = getCookie(c, SESSION_COOKIE);
   if (token) await db().delete(schema.sessions).where(eq(schema.sessions.id, sha256(token)));
-  if (!opts.keepCookie) deleteCookie(c, SESSION_COOKIE, { path: "/", secure: config.cookieSecure });
+  if (!opts.keepCookie) deleteCookie(c, SESSION_COOKIE, { path: "/", ...cookieSite() });
 }
 
 /** Revoke every session of a user (password change, deactivation, MFA reset). */

@@ -70,6 +70,32 @@ function dbConfig() {
   };
 }
 
+/**
+ * The only other sites allowed to show the portal inside a frame (EMBED_ORIGINS,
+ * separated by commas or spaces). Each must be an exact origin — https://host or
+ * https://host:port, no path, no wildcard; http only for localhost outside
+ * production. Anything else is ignored with a warning, so a typo can never open
+ * the portal to every site. Empty = nobody (only the portal's own pages).
+ */
+export function parseEmbedOrigins(raw: string, prod: boolean): string[] {
+  const out = new Set<string>();
+  for (const part of raw.split(/[\s,]+/).filter(Boolean)) {
+    let ok = false;
+    try {
+      const u = new URL(part);
+      const local = u.hostname === "localhost" || u.hostname === "127.0.0.1";
+      ok = (u.protocol === "https:" || (u.protocol === "http:" && local && !prod)) && !u.username && !u.password && u.pathname === "/" && !u.search && !u.hash && !part.includes("*");
+      if (ok) out.add(u.origin);
+    } catch {
+      /* not a URL */
+    }
+    if (!ok) console.warn(`[config] EMBED_ORIGINS: "${part}" ignored (an exact https origin is needed, e.g. https://imago.example.com)`);
+  }
+  return [...out];
+}
+const embedOrigins = parseEmbedOrigins(env("EMBED_ORIGINS"), production);
+const cookieSecure = bool("COOKIE_SECURE", production);
+
 export const config = {
   root: ROOT,
   production,
@@ -78,7 +104,11 @@ export const config = {
   port: Number(production ? env("PORT") || 3000 : env("API_PORT") || 3001),
   publicUrl: env("PUBLIC_URL").replace(/\/+$/, ""),
   appSecret: appSecret(),
-  cookieSecure: bool("COOKIE_SECURE", production),
+  cookieSecure,
+  embedOrigins,
+  // Only when the embedding site is on another site (another registrable domain): the session cookie must then
+  // travel inside the frame (SameSite=None; Secure; Partitioned). Off by default; needs HTTPS and EMBED_ORIGINS.
+  embedCrossSiteCookie: bool("EMBED_CROSS_SITE_COOKIE", false) && embedOrigins.length > 0 && cookieSecure,
   // Sécurité › Passbolt is a spike: on in development and tests, off in production unless PASSBOLT_SPIKE=true
   passboltEnabled: bool("PASSBOLT_SPIKE", !production),
   // MFA: always on in production by default; off for local development

@@ -72,8 +72,8 @@ export function createApp() {
         imgSrc: ["'self'", "data:", "https://i.ytimg.com"],
         fontSrc: ["'self'", "data:"],
         connectSrc: ["'self'"],
-        // only our own pages frame our pages (the invoice PDF preview window)
-        frameAncestors: ["'self'"],
+        // only our own pages frame our pages (the invoice PDF preview window) — and the sites listed in EMBED_ORIGINS, if any
+        frameAncestors: ["'self'", ...config.embedOrigins],
         // the coffee break videos (youtube-nocookie: no tracking cookie until played)
         frameSrc: ["'self'", "blob:", "https://www.youtube-nocookie.com"],
         baseUri: ["'self'"],
@@ -81,6 +81,8 @@ export function createApp() {
         // the browser's PDF viewer (invoice preview) shows a PDF of ours inside the window
         objectSrc: ["'self'", "blob:"],
       },
+      // X-Frame-Options cannot name a second site: with embedding allowed, frame-ancestors above is the rule
+      xFrameOptions: config.embedOrigins.length ? false : "SAMEORIGIN",
       strictTransportSecurity: config.production ? "max-age=31536000; includeSubDomains" : false,
       referrerPolicy: "strict-origin-when-cross-origin",
       crossOriginEmbedderPolicy: false,
