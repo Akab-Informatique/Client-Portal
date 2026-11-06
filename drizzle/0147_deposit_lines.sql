@@ -1,0 +1,1 @@
+ALTER TABLE "quotes" ADD COLUMN "deposit_line_ids" jsonb;

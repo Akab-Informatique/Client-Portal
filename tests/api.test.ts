@@ -1938,6 +1938,49 @@ describe("tickets: client and contact", () => {
     }
   });
 
+  it("quotes: the deposit is taken on the lines ticked (equipment only), and the project invoice takes off only the deposit on its hours", async () => {
+    const admin = await session("admin@akab.local");
+    const [cl] = await db().insert(schema.clients).values({ name: "Zz Dépôt équipement (test)", autotaskId: 9_100_041 }).returning();
+    const [billingRow] = await db().select().from(schema.integrations).where(eq(schema.integrations.provider, "billing"));
+    let projectId = "";
+    try {
+      const q = (
+        await admin.post("/api/quotes", {
+          clientId: cl.id,
+          title: "Serveur et installation",
+          lines: [
+            { description: "Serveur Dell", quantityX100: 100, unitPriceCents: 200000 },
+            { description: "Heures d'installation", quantityX100: 1000, unitPriceCents: 10000 },
+          ],
+        })
+      ).json;
+      await admin.post(`/api/quotes/${q.id}/status`, { status: "accepted" });
+      const server = q.lines.find((l: any) => l.description === "Serveur Dell");
+      // a line that is not one of the quote's: refused
+      expect((await admin.post(`/api/quotes/${q.id}/deposit`, { send: false, lineIds: ["00000000-0000-4000-8000-000000000000"] })).json.error).toBe("deposit_lines_invalid");
+      // 50 % of the server only: 1 000 $ before taxes
+      const dep = await admin.post(`/api/quotes/${q.id}/deposit`, { percent: 50, send: false, lineIds: [server.id] });
+      expect(dep.status).toBe(201);
+      expect(dep.json.quote.depositLineIds).toEqual([server.id]);
+      const lines = await db().select().from(schema.invoiceLines).where(eq(schema.invoiceLines.invoiceId, dep.json.invoice.id));
+      expect(lines.map((l) => l.amountCents)).toEqual([100000]);
+      expect(lines[0].description).toContain("Serveur Dell");
+      // the project sells the 10 hours; its invoice takes nothing off (the deposit was on the equipment)
+      projectId = (await admin.post(`/api/quotes/${q.id}/to-project`, {})).json.projectId;
+      const billed = (await admin.post(`/api/projects/${projectId}/bill`, {})).json;
+      expect(billed).toMatchObject({ lines: 1, totalCents: 100000 });
+    } finally {
+      if (projectId) await admin.del(`/api/projects/${projectId}`);
+      await db().update(schema.quotes).set({ depositInvoiceId: null }).where(eq(schema.quotes.clientId, cl.id));
+      await db().delete(schema.quotes).where(eq(schema.quotes.clientId, cl.id));
+      await db().delete(schema.billingItems).where(eq(schema.billingItems.clientId, cl.id));
+      await db().delete(schema.clientInvoices).where(eq(schema.clientInvoices.clientId, cl.id));
+      await db().delete(schema.clients).where(eq(schema.clients.id, cl.id));
+      if (billingRow) await db().update(schema.integrations).set({ config: billingRow.config }).where(eq(schema.integrations.provider, "billing"));
+      else await db().delete(schema.integrations).where(eq(schema.integrations.provider, "billing"));
+    }
+  });
+
   it("quotes: a line has its own description, and monthly or yearly lines have their own totals", async () => {
     const admin = await session("admin@akab.local");
     const made = await admin.post("/api/quotes", {

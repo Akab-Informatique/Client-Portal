@@ -74,6 +74,7 @@ const quoteColumns = {
   projectNumber: sql<string | null>`(select ${schema.projects.number} from ${schema.projects} where ${schema.projects.id} = ${schema.quotes.projectId})`,
   depositInvoiceId: schema.quotes.depositInvoiceId,
   depositPercentX100: schema.quotes.depositPercentX100,
+  depositLineIds: schema.quotes.depositLineIds,
   depositNumber: sql<string | null>`(select ${schema.clientInvoices.number} from ${schema.clientInvoices} where ${schema.clientInvoices.id} = ${schema.quotes.depositInvoiceId})`,
   depositVoided: sql<boolean | null>`(select ${schema.clientInvoices.voided} from ${schema.clientInvoices} where ${schema.clientInvoices.id} = ${schema.quotes.depositInvoiceId})`,
   depositTotalCents: sql<number | null>`(select ${schema.clientInvoices.totalCents} from ${schema.clientInvoices} where ${schema.clientInvoices.id} = ${schema.quotes.depositInvoiceId})`,

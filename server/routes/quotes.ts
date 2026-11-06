@@ -318,7 +318,7 @@ await audit(a.user.id, "quote.updated", id, { number: cur.number, lines: p.lines
   .post("/:id/deposit", requirePermission("quotes.manage"), requirePermission("accounting.manage"), async (c) => {
     const a = auth(c);
     const id = zUuid.parse(c.req.param("id"));
-    const p = await body(c, z.object({ percent: z.number().min(1).max(100).default(50), issuedOn: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(), send: z.boolean().default(true), payOnline: z.boolean().default(true), clientId: zUuid.optional() }));
+    const p = await body(c, z.object({ percent: z.number().min(1).max(100).default(50), issuedOn: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(), send: z.boolean().default(true), payOnline: z.boolean().default(true), clientId: zUuid.optional(), lineIds: z.array(zUuid).min(1).max(200).optional() }));
     let q = await getQuote(id);
     if (!q) throw new HTTPException(404, { message: "not_found" });
     if (q.status !== "accepted") throw new HTTPException(409, { message: "quote_not_accepted" });
@@ -333,11 +333,16 @@ await audit(a.user.id, "quote.updated", id, { number: cur.number, lines: p.lines
     if (!q.clientId) throw new HTTPException(409, { message: "deposit_needs_client" });
     if (q.depositInvoiceId && !q.depositVoided) throw new HTTPException(409, { message: "deposit_exists" });
     const percentX100 = Math.round(p.percent * 100);
-    const dep = depositOf(q.lines ?? [], percentX100);
+    // only the lines ticked (e.g. the equipment); none given: every one-time line
+    const onceLines = (q.lines ?? []).filter((l) => !l.optional && recurrenceOf(l) === "once");
+    if (p.lineIds?.some((lid) => !onceLines.some((l) => l.id === lid))) throw new HTTPException(400, { message: "deposit_lines_invalid" });
+    const lineIds = p.lineIds && p.lineIds.length < onceLines.length ? [...new Set(p.lineIds)] : null;
+    const dep = depositOf(q.lines ?? [], percentX100, lineIds);
     if (dep.subtotalCents <= 0) throw new HTTPException(409, { message: "deposit_nothing" });
     const lang = (await billingSettings()).template.language;
     const pct = (percentX100 / 100).toLocaleString(lang === "en" ? "en-CA" : "fr-CA", { maximumFractionDigits: 2 });
-    const text = lang === "en" ? `Deposit of ${pct}% — Quote ${q.number}${q.title ? `: ${q.title}` : ""}` : `Dépôt de ${pct} % — Soumission ${q.number}${q.title ? ` : ${q.title}` : ""}`;
+    const on = lineIds ? onceLines.filter((l) => lineIds.includes(l.id)).map((l) => l.description).join(", ") : "";
+    const text = (lang === "en" ? `Deposit of ${pct}% — Quote ${q.number}${q.title ? `: ${q.title}` : ""}${on ? ` — on: ${on}` : ""}` : `Dépôt de ${pct} % — Soumission ${q.number}${q.title ? ` : ${q.title}` : ""}${on ? ` — sur : ${on}` : ""}`).slice(0, 480);
     const parts = [
       { cents: dep.taxableCents, taxable: true },
       { cents: dep.exemptCents, taxable: false },
@@ -358,7 +363,7 @@ await audit(a.user.id, "quote.updated", id, { number: cur.number, lines: p.lines
     }
     // the Stripe pay link for the deposit (its balance), in the email and the PDF, whatever the client's usual choice
     await db().update(schema.clientInvoices).set({ payOnline: p.payOnline }).where(eq(schema.clientInvoices.id, made.id));
-    await db().update(schema.quotes).set({ depositInvoiceId: made.id, depositPercentX100: percentX100, updatedAt: new Date() }).where(eq(schema.quotes.id, id));
+    await db().update(schema.quotes).set({ depositInvoiceId: made.id, depositPercentX100: percentX100, depositLineIds: lineIds, updatedAt: new Date() }).where(eq(schema.quotes.id, id));
     await audit(a.user.id, "quote.deposit_invoiced", id, { number: q.number, invoice: made.number, percent: p.percent, totalCents: made.totalCents });
     await autoSync("invoices", made.id);
     let emailed: string | null = null;

@@ -48,11 +48,12 @@ export function quoteTotals(lines: QuoteLineMoney[], taxes: boolean, rates: { gs
 
 /**
  * The deposit asked when a quote is accepted: a share (percent ×100; 50 % = 5000) of the implementation
- * (one-time lines, options left out), before taxes, split into its taxable and non-taxable parts so the
+ * (one-time lines, options left out — or only the lines ticked), before taxes, split into its taxable and non-taxable parts so the
  * invoice taxes exactly what the quote taxes. Monthly and yearly lines are never part of it.
  */
-export function depositOf(lines: QuoteLineMoney[], percentX100: number) {
-  const once = lines.filter((l) => !l.optional && recurrenceOf(l) === "once");
+export function depositOf(lines: (QuoteLineMoney & { id?: string })[], percentX100: number, lineIds?: string[] | null) {
+  // only the lines ticked (e.g. the equipment): the rest is invoiced later, at delivery
+  const once = lines.filter((l) => !l.optional && recurrenceOf(l) === "once" && (!lineIds || (l.id != null && lineIds.includes(l.id))));
   const share = (cents: number) => Math.round((cents * Math.min(Math.max(percentX100, 0), 10_000)) / 10_000);
   const taxableCents = share(once.filter((l) => l.taxable).reduce((n, l) => n + lineAmount(l), 0));
   const exemptCents = share(once.filter((l) => !l.taxable).reduce((n, l) => n + lineAmount(l), 0));

@@ -11,7 +11,8 @@ import { Switch } from "@/components/ui/switch";
 import { api, ApiError } from "@/lib/api";
 import { cn } from "@/lib/utils";
 import { money } from "@/pages/crm/shared";
-import { depositOf } from "@shared/quotes";
+import { depositOf, isHourLine, lineAmount, recurrenceOf } from "@shared/quotes";
+import { Checkbox } from "@/components/ui/checkbox";
 import { useCan } from "@/lib/session";
 import { useQuoteClients, type Quote } from "./shared";
 
@@ -48,14 +49,18 @@ export function DepositDialog({ quote, onClose, onDone }: { quote: Quote; onClos
   });
   const percent = Number(pct.replace(",", "."));
   const valid = Number.isFinite(percent) && percent >= 1 && percent <= 100;
-  const dep = depositOf(quote.lines, valid ? Math.round(percent * 100) : 0);
+  // the one-time lines the deposit is taken on (all by default; e.g. the equipment only, the rest invoiced at delivery)
+  const once = quote.lines.filter((l) => !l.optional && recurrenceOf(l) === "once");
+  const [picked, setPicked] = useState<string[]>(() => once.map((l) => l.id));
+  const pickOnly = (keep: (l: (typeof once)[number]) => boolean) => setPicked(once.filter(keep).map((l) => l.id));
+  const dep = depositOf(quote.lines, valid ? Math.round(percent * 100) : 0, picked);
   const taxed = quote.taxes ? dep.taxableCents : 0;
   const gst = Math.round((taxed * quote.rates.gstRate) / 100);
   const qst = Math.round((taxed * quote.rates.qstRate) / 100);
-  const base = quote.totals.subtotalCents;
+  const base = once.filter((l) => picked.includes(l.id)).reduce((n, l) => n + lineAmount(l), 0);
 
   const make = useMutation({
-    mutationFn: () => api.post<{ invoice: { number: string; totalCents: number }; payLink: boolean; emailed: string | null; mailError: string | null; quote: Quote }>(`/quotes/${quote.id}/deposit`, { percent, issuedOn: day, send, payOnline: pay, ...(needsClient ? { clientId } : {}) }),
+    mutationFn: () => api.post<{ invoice: { number: string; totalCents: number }; payLink: boolean; emailed: string | null; mailError: string | null; quote: Quote }>(`/quotes/${quote.id}/deposit`, { percent, issuedOn: day, send, payOnline: pay, lineIds: picked, ...(needsClient ? { clientId } : {}) }),
     onSuccess: (r) => {
       void qc.invalidateQueries({ queryKey: ["quotes"] });
       void qc.invalidateQueries({ queryKey: ["crm"] });
@@ -99,6 +104,34 @@ export function DepositDialog({ quote, onClose, onDone }: { quote: Quote; onClos
                   </Button>
                 </div>
               )}
+            </div>
+          )}
+          {once.length > 1 && (
+            <div className="space-y-1.5">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <Label>{t("quotes.deposit.on")}</Label>
+                <div className="flex gap-1 text-xs">
+                  <Chip on={picked.length === once.length} onClick={() => pickOnly(() => true)} label={t("quotes.deposit.onAll")} />
+                  {once.some((l) => !isHourLine(l)) && once.some(isHourLine) && (
+                    <>
+                      <Chip on={picked.length > 0 && once.every((l) => picked.includes(l.id) === !isHourLine(l))} onClick={() => pickOnly((l) => !isHourLine(l))} label={t("quotes.deposit.onEquipment")} />
+                      <Chip on={picked.length > 0 && once.every((l) => picked.includes(l.id) === isHourLine(l))} onClick={() => pickOnly(isHourLine)} label={t("quotes.deposit.onHours")} />
+                    </>
+                  )}
+                </div>
+              </div>
+              <ul className="max-h-48 space-y-1 overflow-y-auto rounded-xl border p-2">
+                {once.map((l) => (
+                  <li key={l.id}>
+                    <label className="flex cursor-pointer items-center gap-2 rounded-lg px-1 py-0.5 text-sm hover:bg-accent/30">
+                      <Checkbox checked={picked.includes(l.id)} onCheckedChange={(v) => setPicked((cur) => (v ? [...cur, l.id] : cur.filter((x) => x !== l.id)))} />
+                      <span className="min-w-0 flex-1 truncate">{l.description}</span>
+                      <span className="font-mono text-xs text-muted-foreground">{m(lineAmount(l))}</span>
+                    </label>
+                  </li>
+                ))}
+              </ul>
+              {picked.length < once.length && <p className="text-xs text-muted-foreground">{t("quotes.deposit.restLater")}</p>}
             </div>
           )}
           <div className="space-y-1.5">
@@ -171,11 +204,19 @@ export function DepositDialog({ quote, onClose, onDone }: { quote: Quote; onClos
           <Button variant="ghost" onClick={onClose}>
             {t("quotes.deposit.later")}
           </Button>
-          <Button className="bg-grad-gold font-semibold text-[#1a1204] hover:brightness-105" disabled={!valid || dep.subtotalCents <= 0 || make.isPending || (needsClient && !clientId)} onClick={() => make.mutate()}>
+          <Button className="bg-grad-gold font-semibold text-[#1a1204] hover:brightness-105" disabled={!valid || dep.subtotalCents <= 0 || picked.length === 0 || make.isPending || (needsClient && !clientId)} onClick={() => make.mutate()}>
             {make.isPending ? <Loader2 className="size-4 animate-spin" /> : <Receipt className="size-4" />} {t("quotes.deposit.make")}
           </Button>
         </div>
       </DialogContent>
     </Dialog>
+  );
+}
+
+function Chip({ on, onClick, label }: { on: boolean; onClick: () => void; label: string }) {
+  return (
+    <button type="button" onClick={onClick} className={cn("rounded-full border px-2.5 py-0.5 transition", on ? "border-[color:var(--gold)]/60 bg-[color:var(--gold)]/15 text-primary" : "text-muted-foreground hover:text-foreground")}>
+      {label}
+    </button>
   );
 }

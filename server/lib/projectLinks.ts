@@ -1,6 +1,7 @@
 import { and, eq, inArray, isNotNull, like, sql } from "drizzle-orm";
 import { db, schema } from "../db/index.ts";
 import { todayQc } from "./timesheets.ts";
+import { isHourLine, lineAmount, recurrenceOf } from "../../shared/quotes.ts";
 
 /**
  * Tickets tied to a project (Projets): a support ticket of the project counts its time in the project.
@@ -46,12 +47,19 @@ export async function ticketsOfProject(projectId: string) {
 /** A project's deposit (the deposit invoice of the quote it came from), when there is one not voided */
 export async function depositOfProject(p: { quoteId: string | null }) {
   if (!p.quoteId) return null;
-  const [q] = await db().select({ number: schema.quotes.number, invoiceId: schema.quotes.depositInvoiceId }).from(schema.quotes).where(eq(schema.quotes.id, p.quoteId));
+  const [q] = await db().select({ number: schema.quotes.number, invoiceId: schema.quotes.depositInvoiceId, lineIds: schema.quotes.depositLineIds }).from(schema.quotes).where(eq(schema.quotes.id, p.quoteId));
   if (!q?.invoiceId) return null;
   const [inv] = await db().select().from(schema.clientInvoices).where(eq(schema.clientInvoices.id, q.invoiceId));
   if (!inv || inv.voided) return null;
   const lines = await db().select().from(schema.invoiceLines).where(eq(schema.invoiceLines.invoiceId, inv.id));
-  return { quoteNumber: q.number, invoiceId: inv.id, number: inv.number, subtotalCents: lines.reduce((n, l) => n + l.amountCents, 0), lines: lines.map((l) => ({ amountCents: l.amountCents, taxable: l.taxable })) };
+  // the share of the deposit taken on the hours the project sells (the deposit on equipment is settled with the equipment)
+  const quoteLines = await db().select().from(schema.quoteLines).where(eq(schema.quoteLines.quoteId, p.quoteId));
+  const covered = quoteLines.filter((l) => !l.optional && recurrenceOf(l) === "once" && (!q.lineIds || q.lineIds.includes(l.id)));
+  const all = covered.reduce((n, l) => n + lineAmount(l), 0);
+  const hours = covered.filter(isHourLine).reduce((n, l) => n + lineAmount(l), 0);
+  const share = all > 0 ? hours / all : 0;
+  const scaled = lines.map((l) => ({ amountCents: Math.round(l.amountCents * share), taxable: l.taxable })).filter((l) => l.amountCents > 0);
+  return { quoteNumber: q.number, invoiceId: inv.id, number: inv.number, subtotalCents: scaled.reduce((n, l) => n + l.amountCents, 0), depositCents: lines.reduce((n, l) => n + l.amountCents, 0), lines: scaled };
 }
 
 /** P-1001, P-1002… (the highest + 1) */
@@ -109,7 +117,7 @@ export async function billProject(actorId: string, projectId: string) {
         source: "portal",
         sourceId: `project:${p.id}:deposit:${i}`,
         date: day,
-        description: `Moins le dépôt déjà facturé (facture ${dep!.number}, soumission ${dep!.quoteNumber})${dep!.lines.length > 1 && !l.taxable ? " — non taxable" : ""}`,
+        description: `Moins le dépôt déjà facturé sur ces heures (facture ${dep!.number}, soumission ${dep!.quoteNumber})${dep!.lines.length > 1 && !l.taxable ? " — non taxable" : ""}`,
         ticketNumber: p.number,
         quantityX100: 100,
         unitPriceCents: -l.amountCents,

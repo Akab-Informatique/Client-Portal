@@ -31,6 +31,7 @@ export type QuoteListItem = {
   /** The deposit invoice made when it was accepted */
   depositInvoiceId: string | null;
   depositPercentX100: number | null;
+  depositLineIds: string[] | null;
   depositNumber: string | null;
   depositVoided: boolean | null;
   depositTotalCents: number | null;

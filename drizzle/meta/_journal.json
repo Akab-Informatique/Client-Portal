@@ -1030,6 +1030,13 @@
       "when": 1793986934513,
       "tag": "0146_credit_notes",
       "breakpoints": true
+    },
+    {
+      "idx": 147,
+      "version": "7",
+      "when": 1793989426580,
+      "tag": "0147_deposit_lines",
+      "breakpoints": true
     }
   ]
 }

@@ -2570,6 +2570,8 @@ export const quotes = pgTable(
     /** The deposit invoice made when the quote was accepted (a share of the implementation), and that share in percent ×100 */
     depositInvoiceId: uuid("deposit_invoice_id").references(() => clientInvoices.id, { onDelete: "set null" }),
     depositPercentX100: integer("deposit_percent_x100"),
+    /** The quote lines the deposit was taken on (null: every one-time line) */
+    depositLineIds: jsonb("deposit_line_ids").$type<string[] | null>(),
     sentAt: timestamp("sent_at", { withTimezone: true }),
     decidedAt: timestamp("decided_at", { withTimezone: true }),
     createdAt: created(),
