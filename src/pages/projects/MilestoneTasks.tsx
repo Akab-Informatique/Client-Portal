@@ -1,7 +1,7 @@
 import { useState, type FormEvent, type ReactNode } from "react";
 import { useTranslation } from "react-i18next";
 import { useMutation } from "@tanstack/react-query";
-import { DndContext, KeyboardSensor, PointerSensor, closestCenter, useSensor, useSensors, type DragEndEvent } from "@dnd-kit/core";
+import { DndContext, KeyboardSensor, PointerSensor, closestCenter, pointerWithin, useDroppable, useSensor, useSensors, type CollisionDetection, type DragEndEvent } from "@dnd-kit/core";
 import { SortableContext, arrayMove, sortableKeyboardCoordinates, useSortable, verticalListSortingStrategy } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
 import { ArrowDownUp, Check, ChevronDown, Folder, FolderInput, FolderOpen, FolderPlus, GripVertical, Lock, Pencil, Trash2, X } from "lucide-react";
@@ -49,15 +49,33 @@ export function MilestoneTasks({ projectId, m, onTask, edit, onChanged, fail }: 
         });
   const groupOf = (k: Task) => (k.groupId && groups.some((g) => g.id === k.groupId) ? k.groupId : null);
   const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 5 } }), useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates }));
+  const [dragging, setDragging] = useState(false);
+  // what is under the pointer first (a task row, else the group box), the nearest one otherwise
+  const collide: CollisionDetection = (args) => {
+    const hit = pointerWithin(args);
+    return hit.length ? hit : closestCenter(args);
+  };
   const onEnd = (e: DragEndEvent) => {
+    setDragging(false);
     if (!e.over || e.active.id === e.over.id) return;
-    const ids = ordered.map((k) => k.id);
     const a = ordered.find((k) => k.id === e.active.id);
-    const o = ordered.find((k) => k.id === e.over!.id);
-    if (!a || !o || groupOf(a) !== groupOf(o)) return;
-    save(arrayMove(ids, ids.indexOf(String(e.active.id)), ids.indexOf(String(e.over.id))));
-    // moving a task by hand in any sort puts the list in the technician's own order, starting from what they saw
-    if (sort !== "custom") setSort("custom");
+    if (!a) return;
+    const overId = String(e.over.id);
+    const zone = overId.startsWith("group:") ? (overId === "group:none" ? null : overId.slice(6)) : undefined;
+    const o = zone === undefined ? ordered.find((k) => k.id === overId) : undefined;
+    const target = zone !== undefined ? zone : o ? groupOf(o) : undefined;
+    if (target === undefined) return;
+    if (groupOf(a) !== target) {
+      // dropped in another group (or out of its group): it moves there, and takes the place of the task it was dropped on
+      if (!edit) return;
+      moveTask.mutate({ id: a.id, groupId: target });
+    }
+    if (o) {
+      const ids = ordered.map((k) => k.id);
+      save(arrayMove(ids, ids.indexOf(a.id), ids.indexOf(o.id)));
+      // moving a task by hand in any sort puts the list in the technician's own order, starting from what they saw
+      if (sort !== "custom") setSort("custom");
+    }
   };
   // groups: made here, folded or not (kept on this computer), renamed, deleted (their tasks stay)
   const [closed, setClosed] = useState(readClosed);
@@ -139,7 +157,7 @@ export function MilestoneTasks({ projectId, m, onTask, edit, onChanged, fail }: 
         </form>
       )}
       {tasks.length === 0 && groups.length === 0 && <p className="py-1 text-xs text-muted-foreground">{t("projects.noTasks")}</p>}
-      <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={onEnd}>
+      <DndContext sensors={sensors} collisionDetection={collide} onDragStart={() => setDragging(true)} onDragCancel={() => setDragging(false)} onDragEnd={onEnd}>
         <div className="space-y-2">
           {groups.map((g) => {
             const inside = ordered.filter((k) => groupOf(k) === g.id);
@@ -150,7 +168,13 @@ export function MilestoneTasks({ projectId, m, onTask, edit, onChanged, fail }: 
               </GroupBox>
             );
           })}
-          {loose.length > 0 && rows(loose)}
+          {groups.length > 0 && (loose.length > 0 || dragging) ? (
+            <LooseZone empty={loose.length === 0} dragging={dragging}>
+              {loose.length > 0 && rows(loose)}
+            </LooseZone>
+          ) : (
+            loose.length > 0 && rows(loose)
+          )}
         </div>
       </DndContext>
     </div>
@@ -162,13 +186,14 @@ function GroupBox({ g, count, done, open, edit, onToggle, onRename, onDelete, ch
   const { t } = useTranslation();
   const [editing, setEditing] = useState(false);
   const [text, setText] = useState(g.name);
+  const { setNodeRef, isOver } = useDroppable({ id: `group:${g.id}` });
   const commit = () => {
     setEditing(false);
     if (text.trim() && text.trim() !== g.name) onRename(text.trim());
     else setText(g.name);
   };
   return (
-    <div className="rounded-xl border border-violet-400/25 bg-violet-500/[0.04]">
+    <div ref={setNodeRef} className={cn("rounded-xl border bg-violet-500/[0.04] transition-colors", isOver ? "border-violet-300/70 bg-violet-500/[0.12]" : "border-violet-400/25")}>
       <div className="flex items-center gap-1.5 px-2 py-1.5">
         <button type="button" onClick={onToggle} aria-expanded={open} aria-label={t("projects.group.toggle")} title={t("projects.group.toggle")} className="rounded-md p-0.5 text-muted-foreground hover:text-foreground">
           <ChevronDown className={cn("size-4 transition-transform", !open && "-rotate-90")} />
@@ -254,5 +279,16 @@ function TaskRow({ k, onTask, groups, onGroup }: { k: Task; onTask: (id: string)
         )}
       </div>
     </li>
+  );
+}
+
+/** The loose tasks of a milestone with groups: also a drop zone (a task dragged out of its group comes here) */
+function LooseZone({ empty, dragging, children }: { empty: boolean; dragging: boolean; children: ReactNode }) {
+  const { t } = useTranslation();
+  const { setNodeRef, isOver } = useDroppable({ id: "group:none" });
+  return (
+    <div ref={setNodeRef} className={cn("rounded-xl transition-colors", isOver && "bg-foreground/[0.05] ring-1 ring-foreground/20", empty && dragging && "border border-dashed border-muted-foreground/40 px-3 py-3 text-center text-xs text-muted-foreground")}>
+      {empty ? t("projects.group.none") : children}
+    </div>
   );
 }
