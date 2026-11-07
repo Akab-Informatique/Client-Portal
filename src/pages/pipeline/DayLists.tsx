@@ -13,6 +13,9 @@ import { shortDate, type TicketList } from "@/pages/tickets/shared";
 import type { Project } from "@/pages/projects/shared";
 import type { DayItem } from "./shared";
 import { DayEdge, ProjectEdge } from "./DayEdge";
+import { usePeople } from "./TaskDialog";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { useMe } from "@/lib/session";
 
 /**
  * A technician's tickets, as the compact view of the Tickets page with the "My tickets" filter (all of them, not only today's);
@@ -20,12 +23,18 @@ import { DayEdge, ProjectEdge } from "./DayEdge";
  */
 export function MyTickets({ userId, mine, onOpen }: { userId: string; mine: boolean; onOpen: (id: number) => void }) {
   const { t } = useTranslation();
+  const me = useMe();
+  const people = usePeople();
+  // whose tickets: the person of the day by default; any technician, or everyone's, from the title (open tickets only, always)
+  const [pick, setPick] = useState<string | null>(null);
+  const who = pick ?? userId;
+  const own = who === userId && mine;
   // the same buttons as the Tickets page, small: my tickets, texts, new, unassigned, needs attention, and my saved filters
   const [filter, setFilter] = useState("view=mine");
   const [sms, setSms] = useState(false);
-  const query = mine ? filter : `view=all&assignee=${userId}`;
+  const query = own ? filter : who === "all" ? "view=all" : `view=all&assignee=${who}`;
   const { data, isLoading } = useQuery({
-    queryKey: ["tickets", "pipeline", mine ? query : userId],
+    queryKey: ["tickets", "pipeline", query],
     queryFn: () => api.get<TicketList>(`/tickets?${query}`),
     refetchInterval: 60_000,
     placeholderData: keepPreviousData,
@@ -46,7 +55,7 @@ export function MyTickets({ userId, mine, onOpen }: { userId: string; mine: bool
   const items = all.slice((Math.min(page, Math.max(1, Math.ceil(all.length / size))) - 1) * size, Math.min(page, Math.max(1, Math.ceil(all.length / size))) * size);
   return (
     <section className="glass rounded-2xl border">
-      {mine && (
+      {own && (
         <div className="flex items-center gap-1 overflow-x-auto px-3 pt-3 scrollbar-thin">
           {chips.map((c) => {
             const on = filter === c.query;
@@ -63,7 +72,25 @@ export function MyTickets({ userId, mine, onOpen }: { userId: string; mine: bool
       )}
       {sms && <SmsInboxDialog initialId={null} onClose={() => setSms(false)} />}
       <h3 className="flex items-center gap-1.5 px-4 pb-2 pt-3 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
-        <TicketIcon className="size-3.5" /> {t("pipeline.day.myTickets")} <span className="font-mono normal-case opacity-70">{all.length}</span>
+        <TicketIcon className="size-3.5" />
+        <Select value={who} onValueChange={(v) => (setPick(v === userId ? null : v), setPage(1))}>
+          <SelectTrigger className="h-7 w-auto gap-1.5 border-transparent bg-transparent px-1.5 text-[11px] font-semibold uppercase tracking-wide shadow-none hover:border-[color:var(--glass-border)]" aria-label={t("pipeline.day.ticketsOf")}>
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent position="popper">
+            <SelectItem value="all" className="text-xs">
+              {t("pipeline.day.ticketsAll")}
+            </SelectItem>
+            {[...(people.data ?? [])]
+              .sort((a, b) => (a.id === me.id ? -1 : b.id === me.id ? 1 : a.name.localeCompare(b.name)))
+              .map((p) => (
+                <SelectItem key={p.id} value={p.id} className="text-xs">
+                  {p.id === me.id ? t("pipeline.day.ticketsMine") : p.name}
+                </SelectItem>
+              ))}
+          </SelectContent>
+        </Select>
+        <span className="font-mono normal-case opacity-70">{all.length}</span>
       </h3>
       {isLoading ? <Skeleton className="m-4 h-20" /> : all.length === 0 ? <p className="px-4 pb-4 text-sm text-muted-foreground">{t("pipeline.day.noTickets")}</p> : <CompactList items={items} activeIds={new Set()} onOpen={onOpen} facets={data?.facets} />}
       {all.length > size && <Pager total={all.length} page={page} size={size} onPage={setPage} onSize={(n) => (setSize(n), setPage(1))} />}
