@@ -59,7 +59,7 @@ export function PipelinePage() {
               <Settings2 className="size-4" /> {t("pipeline.settings.button")}
             </Button>
           )}
-          {can("pipeline.edit") && (
+          {can("pipeline.edit") && tab === "todo" && (
             <Button size="sm" className="h-9 bg-grad-gold font-semibold text-[#1a1204] glow-gold hover:brightness-105" onClick={() => setOpen("new")}>
               <Plus className="size-4" /> {t("pipeline.newTask")}
             </Button>

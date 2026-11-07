@@ -317,6 +317,10 @@ export function MyDay({ onOpenTask }: { onOpenTask: (id: string) => void }) {
         </div>
 
         <div className="min-w-0 space-y-4">
+          <Priorities items={data?.items ?? []} horizon="week" onOpen={open} />
+          <MyTickets userId={userId} mine={userId === me.id} onOpen={(id) => ws.open(id)} />
+          {userId === me.id && can("projects.view") && <DayProjects />}
+          <ItemList title={t("pipeline.day.tasksToday")} icon={Workflow} items={taskItems} loading={allTasks.isLoading} onOpen={open} onComplete={can("pipeline.edit") ? (i) => (i.reminder ? check.mutate(i.refId) : complete.mutate(i.refId)) : undefined} empty={t("pipeline.day.noTasks")} />
           {can("pipeline.edit") && (
             <form
               className="glass flex gap-2 rounded-2xl border p-2.5"
@@ -332,10 +336,6 @@ export function MyDay({ onOpenTask }: { onOpenTask: (id: string) => void }) {
               </Button>
             </form>
           )}
-          <Priorities items={data?.items ?? []} horizon="week" onOpen={open} />
-          <MyTickets userId={userId} mine={userId === me.id} onOpen={(id) => ws.open(id)} />
-          {userId === me.id && can("projects.view") && <DayProjects />}
-          <ItemList title={t("pipeline.day.tasksToday")} icon={Workflow} items={taskItems} loading={allTasks.isLoading} onOpen={open} onComplete={can("pipeline.edit") ? (i) => (i.reminder ? check.mutate(i.refId) : complete.mutate(i.refId)) : undefined} empty={t("pipeline.day.noTasks")} />
         </div>
       </div>
     </div>
