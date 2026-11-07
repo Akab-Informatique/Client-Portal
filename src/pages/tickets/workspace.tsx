@@ -165,6 +165,8 @@ function Dock({
       return next;
     });
   const bus = useDockBus();
+  // a stable callback: an inline one is called again (null, then the element) on every render and would loop through the bus
+  const setSlot = useCallback((el: HTMLElement | null) => dockBus.set({ slot: el }), []);
   const items: Docked[] = [
     ...docked,
     ...list
@@ -217,7 +219,7 @@ function Dock({
         <div className="pointer-events-auto flex flex-wrap items-end gap-2 border-t border-[color:var(--gold)]/25 bg-popover/90 px-10 pb-3 pt-12 shadow-[0_-12px_40px_-16px_rgba(0,0,0,0.7)] backdrop-blur-xl">
           <AnimatePresence>{items.map(item)}</AnimatePresence>
           {/* the minimized projects (their task, timer going) are drawn here by the project workspace */}
-          <div ref={(el) => dockBus.set({ slot: el })} className="contents" />
+          <div ref={setSlot} className="contents" />
         </div>
       </div>
     </>
