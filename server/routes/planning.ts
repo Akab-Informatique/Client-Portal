@@ -360,7 +360,15 @@ export const planningRoutes = new Hono<AppEnv>()
       .from(schema.calendarBlocks)
       .where(and(eq(schema.calendarBlocks.technicianId, techId), lt(schema.calendarBlocks.startsAt, to), gt(schema.calendarBlocks.endsAt, from)))
       .orderBy(asc(schema.calendarBlocks.startsAt));
-    return c.json(rows.map((b) => asSeen(b, full)));
+    // a block on a ticket that is done (complete) says so: the week panels leave it out
+    const doneIds = new Set<number>();
+    if (rows.some((b) => b.ticketId)) {
+      const src = await ticketSource();
+      const [list, o] = await Promise.all([src.list().catch(() => []), src.options().catch(() => null)]);
+      const complete = new Set((o?.statuses ?? []).filter((s) => s.kind === "complete").map((s) => s.value));
+      for (const t of list) if (complete.has(t.status)) doneIds.add(t.id);
+    }
+    return c.json(rows.map((b) => ({ ...asSeen(b, full), ...(b.ticketId && doneIds.has(b.ticketId) ? { done: true } : {}) })));
   })
 
   /** Everyone's reserved time for a week (the team calendar), each as this viewer may see it. */

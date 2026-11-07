@@ -17,6 +17,7 @@ import { PRIORITY_STYLE, addDays, dayLabel, hm, longDay, todayYmd, toMinutes, ty
 import { taskError, usePeople } from "./TaskDialog";
 import { DayProjects, MyTickets, Priorities } from "./DayLists";
 import { DayEdge } from "./DayEdge";
+import { AgendaCard } from "@/pages/tickets/Planning";
 import { DayBlockDialog, type DayBlockDraft } from "./DayBlockDialog";
 import { DndContext, KeyboardSensor, PointerSensor, closestCenter, useSensor, useSensors, type DragEndEvent } from "@dnd-kit/core";
 import { SortableContext, arrayMove, sortableKeyboardCoordinates, useSortable, verticalListSortingStrategy } from "@dnd-kit/sortable";
@@ -360,7 +361,8 @@ export function MyDay({ onOpenTask }: { onOpenTask: (id: string) => void }) {
         </div>
 
         <div className="min-w-0 space-y-4">
-          <Priorities items={data?.items ?? []} horizon="week" onOpen={open} />
+          {/* the week, as on the Tickets page: a small square per day, and the priorities of the day picked below */}
+          <AgendaCard compact filterTech={userId === me.id ? null : userId} />
           <MyTickets userId={userId} mine={userId === me.id} onOpen={(id) => ws.open(id)} />
           {userId === me.id && can("projects.view") && <DayProjects />}
           {projectTasks.length > 0 && <ItemList title={t("pipeline.day.projectTasks")} icon={Workflow} items={projectTasks} loading={false} onOpen={open} empty="" sortView="projectTasks" />}

@@ -79,6 +79,8 @@ type Block = {
   endsAt: string;
   /** A colleague's time: only that they are busy (no details) */
   busy?: boolean;
+  /** Its ticket is done */
+  done?: boolean;
 };
 /** An Outlook event of a calendar in this planning; masked: only "busy" may be shown to this viewer */
 type OutlookEvent = { id: string; title: string; startsAt: string; endsAt: string; allDay: boolean; location: string | null; calendar?: string; masked?: boolean };
@@ -169,7 +171,7 @@ function monthGridStart(month: Date) {
   return mondayOf(new Date(month.getFullYear(), month.getMonth(), 1));
 }
 
-export function AgendaCard({ filterTech }: { filterTech?: string | null }) {
+export function AgendaCard({ filterTech, compact }: { filterTech?: string | null; compact?: boolean }) {
   const { t } = useTranslation();
   const me = useMe();
   const can = useCan();
@@ -206,11 +208,12 @@ export function AgendaCard({ filterTech }: { filterTech?: string | null }) {
     staleTime: 60_000,
   });
   const { data: pins } = usePriorities(techId, day);
-  const toDo = (pins ?? []).filter((p) => !p.doneAt);
+  // what is done (the pin ticked, or its ticket complete) is not shown
+  const toDo = (pins ?? []).filter((p) => !p.doneAt && p.status?.kind !== "complete");
   const days = Array.from({ length: gridDays }, (_, i) => addDays(gridStart, i));
   const today = ymd(new Date());
   const loc = currentLocale() === "en" ? "en-CA" : "fr-CA";
-  const countOn = (d: Date) => blocks.filter((b) => ymd(new Date(b.startsAt)) === ymd(d)).length + (outlook?.events ?? []).filter((x) => !x.allDay && ymd(new Date(x.startsAt)) === ymd(d)).length;
+  const countOn = (d: Date) => blocks.filter((b) => !b.done && ymd(new Date(b.startsAt)) === ymd(d)).length + (outlook?.events ?? []).filter((x) => !x.allDay && ymd(new Date(x.startsAt)) === ymd(d)).length;
   const pick = (d: Date) => {
     setDay(ymd(d));
     if (monthView && d.getMonth() !== month.getMonth()) setMonth(new Date(d.getFullYear(), d.getMonth(), 1));
@@ -221,7 +224,7 @@ export function AgendaCard({ filterTech }: { filterTech?: string | null }) {
   const shiftWeek = (n: number) => setDay(ymd(addDays(dayDate, n * 7)));
   return (
     <>
-      <div className="glass flex min-w-0 flex-col gap-2 overflow-hidden rounded-2xl border border-[color:var(--gold)]/35 p-2.5 shadow-[0_0_30px_-16px_rgba(255,206,26,0.5)] lg:h-0 lg:min-h-full">
+      <div className={cn("glass flex min-w-0 flex-col gap-2 overflow-hidden rounded-2xl border border-[color:var(--gold)]/35 p-2.5 shadow-[0_0_30px_-16px_rgba(255,206,26,0.5)]", !compact && "lg:h-0 lg:min-h-full")}>
         <div className="flex flex-wrap items-center gap-2 px-1">
           <CalendarRange className="size-4 shrink-0 text-primary" />
           <span className="text-sm font-semibold">{monthView ? month.toLocaleDateString(loc, { month: "long", year: "numeric" }) : mine ? t("planning.myWeek") : t("planning.weekOfName", { name: who.name.split(" ")[0] })}</span>
@@ -318,7 +321,7 @@ export function AgendaCard({ filterTech }: { filterTech?: string | null }) {
             })}
           </div>
         ) : (
-          <div className="grid grid-cols-5 gap-1.5">
+          <div className={cn("grid grid-cols-5", compact ? "gap-1" : "gap-1.5")}>
             {days.map((d) => {
               const n = countOn(d);
               const isToday = ymd(d) === today;
@@ -329,7 +332,8 @@ export function AgendaCard({ filterTech }: { filterTech?: string | null }) {
                   type="button"
                   onClick={() => pick(d)}
                   className={cn(
-                    "group/day relative flex flex-col items-center gap-0.5 rounded-xl border py-1.5 transition hover:border-[color:var(--gold)]/50",
+                    "group/day relative flex flex-col items-center gap-0.5 rounded-xl border transition hover:border-[color:var(--gold)]/50",
+                    compact ? "py-0.5" : "py-1.5",
                     chosen ? "border-[color:var(--gold)]/70 bg-[color:var(--gold)]/12" : "bg-background/40",
                   )}
                   aria-pressed={chosen}
@@ -356,8 +360,8 @@ export function AgendaCard({ filterTech }: { filterTech?: string | null }) {
                     </span>
                   )}
                   <span className={cn("text-[10px] font-medium uppercase", isToday ? "text-primary" : "text-muted-foreground")}>{d.toLocaleDateString(loc, { weekday: "short" }).replace(".", "")}</span>
-                  <span className={cn("font-mono text-lg font-semibold leading-none", isToday && "text-primary")}>{d.getDate()}</span>
-                  <span className={cn("text-[10px] leading-none", n ? "text-foreground" : "text-muted-foreground/50")}>{n ? t("planning.items", { count: n }) : "—"}</span>
+                  <span className={cn("font-mono font-semibold leading-none", compact ? "text-sm" : "text-lg", isToday && "text-primary")}>{d.getDate()}</span>
+                  <span className={cn("leading-none", compact ? "text-[9px]" : "text-[10px]", n ? "text-foreground" : "text-muted-foreground/50")}>{n ? (compact ? n : t("planning.items", { count: n })) : "—"}</span>
                 </button>
               );
             })}
@@ -365,7 +369,7 @@ export function AgendaCard({ filterTech }: { filterTech?: string | null }) {
         )}
 
         {/* the priorities of the day chosen: the rest of the height */}
-        <div className="flex min-h-24 flex-1 flex-col border-t pt-1.5">
+        <div className={cn("flex flex-1 flex-col border-t pt-1.5", compact ? "min-h-10" : "min-h-24")}>
           <p className="flex items-center gap-1 px-1 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
             <Star className="size-3 fill-[color:var(--gold)] text-[color:var(--gold)]" />
             {t("planning.prioritiesOn", { date: dayDate.toLocaleDateString(loc, { weekday: "short", day: "numeric", month: "short" }) })}
@@ -375,7 +379,7 @@ export function AgendaCard({ filterTech }: { filterTech?: string | null }) {
           {toDo.length === 0 ? (
             <p className="px-1 py-1 text-[11px] text-muted-foreground">{t("planning.noPrioritiesShort")}</p>
           ) : (
-            <ul className="mt-0.5 max-h-56 min-h-0 flex-1 space-y-0.5 overflow-y-auto lg:max-h-none">
+            <ul className={cn("mt-0.5 min-h-0 flex-1 space-y-0.5 overflow-y-auto", compact ? "max-h-40" : "max-h-56 lg:max-h-none")}>
               {toDo.map((p) => (
                 <li key={p.id}>
                   <button type="button" onClick={() => ws.open(p.ticketId)} className="flex w-full items-center gap-2 rounded-lg px-1 py-0.5 text-left text-[11px] hover:bg-accent/40" title={p.note || p.ticketTitle}>
