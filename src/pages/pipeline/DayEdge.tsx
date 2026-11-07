@@ -2,7 +2,7 @@ import { useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
-import { CalendarPlus, ExternalLink, GitMerge, Trash2, UserCheck, UserRoundPlus, UserX } from "lucide-react";
+import { CalendarPlus, ExternalLink, GitMerge, Star, Trash2, UserCheck, UserRoundPlus, UserX } from "lucide-react";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuSub, DropdownMenuSubContent, DropdownMenuSubTrigger, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { api } from "@/lib/api";
 import { useCan, useMe } from "@/lib/session";
@@ -129,5 +129,33 @@ export function DayEdge({ kind, id, number, title, urgent, onOpen, className }: 
       {dialog === "accept" && detail && <AcceptDialog open onOpenChange={(o) => !o && (setDialog(null), refresh())} tk={detail} statuses={detail.options.statuses} />}
       {dialog === "merge" && detail && <MergeDialog open onOpenChange={(o) => !o && (setDialog(null), refresh())} tk={detail} onDone={refresh} />}
     </>
+  );
+}
+
+/** The same edge line before a project of the day's list: open it, follow it (the star of the Projects page) or stop following it. */
+export function ProjectEdge({ id, following, onOpen, className }: { id: string; following: boolean; onOpen: () => void; className?: string }) {
+  const { t } = useTranslation();
+  const qc = useQueryClient();
+  const follow = () =>
+    api.put(`/projects/${id}/follow`, { follow: !following }).then(
+      () => void qc.invalidateQueries({ queryKey: ["projects"] }),
+      (e) => toast.error(ticketErrorText(t, e)),
+    );
+  return (
+    <DropdownMenu>
+      <DropdownMenuTrigger asChild>
+        <button type="button" title={t("pipeline.day.projectMenu")} aria-label={t("pipeline.day.projectMenu")} onClick={(e) => e.stopPropagation()} className={cn("group/line flex w-3.5 shrink-0 items-center justify-start self-stretch outline-none", className)}>
+          <span aria-hidden className="block h-[70%] w-[3px] rounded-r-full bg-teal-400 shadow-[0_0_10px_2px_rgba(45,212,191,0.45)] transition-all duration-200 group-hover/line:h-[88%] group-hover/line:w-[6px] group-data-[state=open]/line:h-[88%] group-data-[state=open]/line:w-[6px]" />
+        </button>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="start" side="right" className="min-w-48" onClick={(e) => e.stopPropagation()}>
+        <DropdownMenuItem onSelect={() => void follow()}>
+          <Star className={cn("size-4", following ? "fill-current text-primary" : "")} /> {t(following ? "projects.unfollow" : "projects.follow")}
+        </DropdownMenuItem>
+        <DropdownMenuItem onSelect={onOpen}>
+          <ExternalLink className="size-4" /> {t("pipeline.day.openItem")}
+        </DropdownMenuItem>
+      </DropdownMenuContent>
+    </DropdownMenu>
   );
 }

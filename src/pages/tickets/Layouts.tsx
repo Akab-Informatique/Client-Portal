@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from "react";
+import { DayEdge } from "@/pages/pipeline/DayEdge";
 import { useTranslation } from "react-i18next";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
@@ -270,7 +271,7 @@ export function CompactList({ items, activeIds, onOpen, facets }: { items: Compa
                 {tk.company.name}
               </span>
             );
-            const rowClass = cn("grid w-full items-center gap-x-3 px-4 py-1 text-left text-sm transition-colors hover:bg-[linear-gradient(90deg,rgba(255,206,26,0.07),transparent_60%)]", activeIds.has(tk.id) && "bg-[linear-gradient(90deg,rgba(255,206,26,0.1),transparent_60%)]");
+            const rowClass = cn("relative grid w-full items-center gap-x-3 px-4 py-1 text-left text-sm transition-colors hover:bg-[linear-gradient(90deg,rgba(255,206,26,0.07),transparent_60%)]", activeIds.has(tk.id) && "bg-[linear-gradient(90deg,rgba(255,206,26,0.1),transparent_60%)]");
             if (edit && facets) {
               const dueDay = new Date(tk.dueAt);
               const dueValue = `${dueDay.getFullYear()}-${String(dueDay.getMonth() + 1).padStart(2, "0")}-${String(dueDay.getDate()).padStart(2, "0")}`;
@@ -323,6 +324,7 @@ export function CompactList({ items, activeIds, onOpen, facets }: { items: Compa
               };
               return (
                 <li key={tk.id} style={gridStyle} className={rowClass}>
+                  <DayEdge kind="ticket" id={String(tk.id)} number={tk.number} title={tk.title} urgent={tk.priorityKind === "critical"} onOpen={() => onOpen(tk.id)} className="absolute left-0 top-0 z-10 h-full" />
                   {cols.order.map((c) => (
                     <div key={c} className="min-w-0">
                       {cells[c]}
@@ -350,7 +352,8 @@ export function CompactList({ items, activeIds, onOpen, facets }: { items: Compa
               ),
             };
             return (
-              <li key={tk.id}>
+              <li key={tk.id} className="relative">
+                <DayEdge kind="ticket" id={String(tk.id)} number={tk.number} title={tk.title} urgent={tk.priorityKind === "critical"} onOpen={() => onOpen(tk.id)} className="absolute left-0 top-0 z-10 h-full" />
                 <button type="button" onClick={() => onOpen(tk.id)} style={gridStyle} className={rowClass}>
                   {cols.order.map((c) => (
                     <div key={c} className="min-w-0">

@@ -12,7 +12,7 @@ import { CompactList } from "@/pages/tickets/Layouts";
 import { shortDate, type TicketList } from "@/pages/tickets/shared";
 import type { Project } from "@/pages/projects/shared";
 import type { DayItem } from "./shared";
-import { DayEdge } from "./DayEdge";
+import { DayEdge, ProjectEdge } from "./DayEdge";
 
 /**
  * A technician's tickets, as the compact view of the Tickets page with the "My tickets" filter (all of them, not only today's);
@@ -141,7 +141,8 @@ export function DayProjects() {
             </div>
             <ul className="divide-y divide-[color:var(--glass-border)]">
               {data.map((p) => (
-                <li key={p.id}>
+                <li key={p.id} className="relative">
+                  <ProjectEdge id={p.id} following={p.following} onOpen={() => navigate(`/projects?project=${p.id}`)} className="absolute left-0 top-0 z-10 h-full" />
                   <button type="button" onClick={() => navigate(`/projects?project=${p.id}`)} className={cn(GRID, "w-full px-4 py-1 text-left text-sm transition-colors hover:bg-[linear-gradient(90deg,rgba(255,206,26,0.07),transparent_60%)]")}>
                     <span className="flex min-w-0 items-baseline gap-2">
                       <span className="shrink-0 font-mono text-[11px] text-muted-foreground">{p.number}</span>
