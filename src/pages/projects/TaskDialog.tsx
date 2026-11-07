@@ -188,6 +188,14 @@ export function TaskDialog({ projectId, taskId, onClose, onMinimize }: { project
                     </div>
                     <div className="grid grid-cols-2 gap-3">
                       <div className="space-y-1.5">
+                        <Label className="text-xs">{t("pipeline.checkpoint")}</Label>
+                        <Input type="date" disabled={!edit} value={tk.checkpointDate ?? ""} onChange={(e) => patch.mutate({ checkpointDate: e.target.value || null })} />
+                      </div>
+                      <div className="space-y-1.5">
+                        <Label className="text-xs">{t("pipeline.checkpointTime")}</Label>
+                        <Input type="time" disabled={!edit || !tk.checkpointDate} value={tk.checkpointTime ?? ""} onChange={(e) => patch.mutate({ checkpointTime: e.target.value || null })} />
+                      </div>
+                      <div className="space-y-1.5">
                         <Label className="text-xs">{t("projects.f.due")}</Label>
                         <Input type="date" disabled={!edit} value={tk.dueDate ?? ""} onChange={(e) => patch.mutate({ dueDate: e.target.value || null })} />
                       </div>

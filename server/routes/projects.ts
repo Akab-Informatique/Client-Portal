@@ -734,12 +734,12 @@ export const projectsRoutes = new Hono<AppEnv>()
   .post("/:id/milestones/:mid/tasks", requirePermission("projects.edit"), async (c) => {
     const p = await loadProject(c.req.param("id"));
     const m = await loadMilestone(p.id, c.req.param("mid"));
-    const t = await body(c, z.object({ title: zName, description: zText.optional(), priority: zPriority.optional(), assigneeId: zUuid.nullable().optional(), dueDate: zDay.nullable().optional(), estimateHours: zHours.nullable().optional() }));
+    const t = await body(c, z.object({ title: zName, description: zText.optional(), priority: zPriority.optional(), assigneeId: zUuid.nullable().optional(), dueDate: zDay.nullable().optional(), checkpointDate: zDay.nullable().optional(), checkpointTime: z.string().regex(/^d{2}:d{2}$/).nullable().optional(), estimateHours: zHours.nullable().optional() }));
     if (t.assigneeId) await activeStaff([t.assigneeId]);
     const [{ n }] = await db().select({ n: sql<number>`coalesce(max(${schema.projectTasks.position}), -1)::int` }).from(schema.projectTasks).where(eq(schema.projectTasks.milestoneId, m.id));
     const [row] = await db()
       .insert(schema.projectTasks)
-      .values({ projectId: p.id, milestoneId: m.id, title: t.title, description: t.description ?? "", priority: t.priority ?? "normal", assigneeId: t.assigneeId ?? null, dueDate: t.dueDate ?? null, estimateMinutes: t.estimateHours == null ? null : Math.round(t.estimateHours * 60), position: n + 1 })
+      .values({ projectId: p.id, milestoneId: m.id, title: t.title, description: t.description ?? "", priority: t.priority ?? "normal", assigneeId: t.assigneeId ?? null, dueDate: t.dueDate ?? null, checkpointDate: t.checkpointDate ?? null, checkpointTime: t.checkpointDate ? (t.checkpointTime ?? "17:00") : null, estimateMinutes: t.estimateHours == null ? null : Math.round(t.estimateHours * 60), position: n + 1 })
       .returning();
     await syncMilestone(m.id);
     await db().update(schema.projects).set({ updatedAt: new Date() }).where(eq(schema.projects.id, p.id));
@@ -780,6 +780,8 @@ export const projectsRoutes = new Hono<AppEnv>()
       assigneeId: task.assigneeId,
       assigneeName: assignee[0]?.name ?? null,
       dueDate: task.dueDate,
+      checkpointDate: task.checkpointDate,
+      checkpointTime: task.checkpointTime,
       estimateHours: task.estimateMinutes == null ? null : task.estimateMinutes / 60,
       doneAt: task.doneAt,
       createdAt: task.createdAt,
@@ -802,6 +804,9 @@ export const projectsRoutes = new Hono<AppEnv>()
         done: z.boolean().optional(),
         assigneeId: zUuid.nullable().optional(),
         dueDate: zDay.nullable().optional(),
+        /** Goal day and time (17:00 when a day has no time; no day = no time) */
+        checkpointDate: zDay.nullable().optional(),
+        checkpointTime: z.string().regex(/^d{2}:d{2}$/).nullable().optional(),
         estimateHours: zHours.nullable().optional(),
         /** Move the task to another milestone of the same project */
         milestoneId: zUuid.optional(),
@@ -819,6 +824,7 @@ export const projectsRoutes = new Hono<AppEnv>()
         ...(t.priority !== undefined ? { priority: t.priority } : {}),
         ...(t.assigneeId !== undefined ? { assigneeId: t.assigneeId } : {}),
         ...(t.dueDate !== undefined ? { dueDate: t.dueDate } : {}),
+        ...(t.checkpointDate !== undefined || t.checkpointTime !== undefined ? (() => { const day = t.checkpointDate === undefined ? cur.checkpointDate : t.checkpointDate; return { checkpointDate: day, checkpointTime: day ? (t.checkpointTime ?? cur.checkpointTime ?? "17:00") : null }; })() : {}),
         ...(t.estimateHours !== undefined ? { estimateMinutes: t.estimateHours == null ? null : Math.round(t.estimateHours * 60) } : {}),
         ...(target ? { milestoneId: target.id } : {}),
         updatedAt: new Date(),

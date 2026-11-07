@@ -1086,6 +1086,13 @@
       "when": 1794074271508,
       "tag": "0154_day_allocations",
       "breakpoints": true
+    },
+    {
+      "idx": 155,
+      "version": "7",
+      "when": 1794075405709,
+      "tag": "0155_project_task_checkpoint",
+      "breakpoints": true
     }
   ]
 }

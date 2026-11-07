@@ -50,6 +50,8 @@ export type TaskDetail = {
   assigneeId: string | null;
   assigneeName: string | null;
   dueDate: string | null;
+  checkpointDate: string | null;
+  checkpointTime: string | null;
   estimateHours: number | null;
   doneAt: string | null;
   createdAt: string;

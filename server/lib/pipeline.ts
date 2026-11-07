@@ -232,7 +232,7 @@ export async function dayItems(userId: string, date: string, viewerId: string = 
     .where(and(eq(schema.projectTasks.assigneeId, userId), ne(schema.projectTasks.status, "done"), inArray(schema.projects.status, ["planning", "active"])));
   for (const r of ptasks) {
     const t = r.t;
-    if (!(t.status === "doing" || t.priority === "urgent" || (t.dueDate !== null && t.dueDate <= date))) continue;
+    if (!(t.status === "doing" || t.priority === "urgent" || (t.dueDate !== null && t.dueDate <= date) || (t.checkpointDate !== null && t.checkpointDate <= date))) continue;
     items.push({
       key: `ptask:${t.id}`,
       kind: "ptask",
@@ -241,6 +241,8 @@ export async function dayItems(userId: string, date: string, viewerId: string = 
       title: t.title,
       priority: t.priority,
       due: t.dueDate,
+      checkpoint: t.checkpointDate,
+      checkpointTime: t.checkpointDate ? (t.checkpointTime ?? "17:00") : null,
       overdue: t.dueDate !== null && t.dueDate < date,
       minutes: t.estimateMinutes ?? 60,
       ticketNumber: r.pnum,
@@ -310,11 +312,13 @@ export async function dayItems(userId: string, date: string, viewerId: string = 
 }
 
 // the priorities of the day first (in their rank), then what is late, then the priorities of the week, then the rest
-const score = (i: DayItem) => [i.pin === "day" ? 0 : 1, i.pin === "day" ? (i.pinRank ?? 99) : 0, i.overdue ? 0 : 1, i.pin === "week" ? 0 : 1, RANK[i.priority], i.checkpoint ?? i.due ?? "9999", i.dueTime ?? "99:99", i.kind === "ticket" ? 0 : 1] as const;
+// the checkpoint (day, then time; 17:00 when none) comes first, the due day when there is no checkpoint
+const moment = (i: DayItem) => `${i.checkpoint ?? i.due ?? "9999-99-99"} ${i.checkpoint ? (i.checkpointTime ?? "17:00") : (i.dueTime ?? "23:59")}`;
+const score = (i: DayItem) => [i.pin === "day" ? 0 : 1, i.pin === "day" ? (i.pinRank ?? 99) : 0, i.pin === "week" ? 0 : 1, moment(i), i.overdue ? 0 : 1, RANK[i.priority], i.kind === "ticket" ? 0 : 1] as const;
 export function byUrgency(a: DayItem, b: DayItem): number {
   const x = score(a);
   const y = score(b);
-  return x[0] - y[0] || x[1] - y[1] || x[2] - y[2] || x[3] - y[3] || x[4] - y[4] || x[5].localeCompare(y[5]) || x[6].localeCompare(y[6]) || x[7] - y[7];
+  return x[0] - y[0] || x[1] - y[1] || x[2] - y[2] || x[3].localeCompare(y[3]) || x[4] - y[4] || x[5] - y[5] || x[6] - y[6];
 }
 
 // ── the technician's Microsoft 365 calendar ──

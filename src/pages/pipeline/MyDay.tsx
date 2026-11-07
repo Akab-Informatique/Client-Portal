@@ -140,8 +140,8 @@ export function MyDay({ onOpenTask }: { onOpenTask: (id: string) => void }) {
   });
   const today = todayYmd();
   const taskItems: DayItem[] = (allTasks.data ?? [])
-    .map((k): DayItem => ({ key: `task:${k.id}`, kind: "task", refId: k.id, title: k.title, priority: k.priority, due: k.checkpointDate ?? k.dueDate, overdue: Boolean(k.dueDate && k.dueDate < today), minutes: k.estimateMinutes ?? 30, ticketNumber: k.ticketNumber, blocked: k.waiting || k.status === "blocked", reminder: Boolean(k.continuous && k.remindEveryDays) }))
-    .sort((a, b) => Number(b.overdue) - Number(a.overdue) || (a.due ?? "9999").localeCompare(b.due ?? "9999") || a.title.localeCompare(b.title));
+    .map((k): DayItem => ({ key: `task:${k.id}`, kind: "task", refId: k.id, title: k.title, priority: k.priority, due: k.checkpointDate ? `${k.checkpointDate} ${k.checkpointTime ?? "17:00"}` : k.dueDate ? `${k.dueDate} 23:59` : null, overdue: Boolean(k.dueDate && k.dueDate < today), minutes: k.estimateMinutes ?? 30, ticketNumber: k.ticketNumber, blocked: k.waiting || k.status === "blocked", reminder: Boolean(k.continuous && k.remindEveryDays) }))
+    .sort((a, b) => (a.due ?? "9999-99-99 ").localeCompare(b.due ?? "9999-99-99 ") || a.title.localeCompare(b.title));
   const check = useMutation({
     mutationFn: (id: string) => api.post(`/pipeline/tasks/${id}/check`, {}),
     onSuccess: () => {

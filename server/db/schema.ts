@@ -2886,6 +2886,9 @@ export const projectTasks = pgTable(
     done: boolean("done").notNull().default(false),
     assigneeId: uuid("assignee_id").references(() => users.id, { onDelete: "set null" }),
     dueDate: text("due_date"),
+    /** The goal day and time (17:00 when none is typed): the task is on Ma journée from then on, and lists sort by it */
+    checkpointDate: text("checkpoint_date"),
+    checkpointTime: text("checkpoint_time"),
     estimateMinutes: integer("estimate_minutes"),
     position: integer("position").notNull().default(0),
     doneAt: timestamp("done_at", { withTimezone: true }),

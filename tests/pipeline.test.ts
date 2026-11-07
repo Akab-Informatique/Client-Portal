@@ -55,6 +55,11 @@ describe("pipeline: the day laid out in blocks", () => {
     expect(list.sort(byUrgency).map((i) => i.key)).toEqual(["late", "urgent", "high", "low"]);
   });
 
+  it("orders by the checkpoint (day, then time) first, whatever the priority", () => {
+    const list = [item({ key: "later", priority: "urgent", checkpoint: "2026-11-10" }), item({ key: "pm", checkpoint: "2026-11-09", checkpointTime: "15:00" }), item({ key: "am", checkpoint: "2026-11-09", checkpointTime: "09:00", priority: "low" }), item({ key: "due", due: "2026-11-09" })];
+    expect(list.sort(byUrgency).map((i) => i.key)).toEqual(["am", "pm", "due", "later"]);
+  });
+
   it("the morning text: counts, a few blocks, short", () => {
     const lay = layout([item({ key: "a", kind: "ticket", title: "Licence Adobe", ticketNumber: "T1", minutes: 45 }), item({ key: "b", title: "Appeler le fournisseur", minutes: 30 })], S, []);
     const sms = planSms("Jonathan Boisvert", { ...lay, plannedMinutes: lay.plannedMinutes }, "fr")!;

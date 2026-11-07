@@ -6959,6 +6959,12 @@ describe("pipeline: shared to-dos and the day", () => {
     expect((await tech.put("/api/pipeline/day/alloc", { date: day, key: `ptask:${pt.id}`, minutes: 60 })).status).toBe(200);
     expect((await blocksOf()).plan.blocks.find((b: any) => b.refId === pt.id)).toMatchObject({ allocated: 60, need: 120, partial: true });
     await tech.put("/api/pipeline/day/alloc", { date: day, key: `ptask:${pt.id}`, minutes: null });
+    // a project task with only a checkpoint (17:00 when no time) is on the day by it, like a task or a ticket
+    const pc = (await tech.post(`/api/projects/${proj.id}/milestones/${proj.milestones[0].id}/tasks`, { title: "Point de contrôle seul", assigneeId: me, checkpointDate: day })).json;
+    expect(pc).toMatchObject({ checkpointDate: day, checkpointTime: "17:00" });
+    expect((await blocksOf()).items.find((i: any) => i.key === `ptask:${pc.id}`)).toMatchObject({ kind: "ptask", checkpoint: day, checkpointTime: "17:00" });
+    expect((await tech.patch(`/api/projects/${proj.id}/tasks/${pc.id}`, { checkpointDate: null })).json.checkpointTime).toBeNull();
+    expect((await blocksOf()).items.some((i: any) => i.key === `ptask:${pc.id}`)).toBe(false);
   });
 
   it("a ticket put on my day by hand: a time, nothing changes on the ticket, gone the next day", async () => {
