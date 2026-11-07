@@ -5,7 +5,7 @@ import { clientInfo } from "../lib/clientHours.ts";
 import { intakeSettings } from "../lib/mailIntake.ts";
 import { syncBillablesNow } from "../lib/billables.ts";
 import { moveCharge } from "../lib/chargeMove.ts";
-import { transformPreview, transformTicket, TransformError } from "../lib/ticketToProject.ts";
+import { mergeTargets, transformPreview, transformTicket, TransformError } from "../lib/ticketToProject.ts";
 import { moveTicketClient } from "../lib/ticketClient.ts";
 import { contractOfTicket, contractsOfCompany, setTicketContract, type ContractView } from "../lib/contracts.ts";
 import { and, asc, desc, eq, inArray, isNull, or, sql } from "drizzle-orm";
@@ -2006,6 +2006,17 @@ export const ticketRoutes = new Hono<AppEnv>()
     return c.json({ ok: true, ...r });
   })
 
+  /** The open projects of this ticket's client: where it can be merged instead of making a new project */
+  .get("/:id/to-project/targets", requirePermission("tickets.edit"), async (c) => {
+    const id = Number(c.req.param("id"));
+    if (!Number.isInteger(id) || id <= 0) throw new HTTPException(400, { message: "invalid_id" });
+    try {
+      return c.json(await mergeTargets(id));
+    } catch (e) {
+      if (e instanceof TransformError) throw new HTTPException(e.status, { message: e.code });
+      throw e;
+    }
+  })
   /** What turning this ticket into a project would move (notes, time and charges not approved yet) and what stays */
   .get("/:id/to-project", requirePermission("tickets.edit"), async (c) => {
     const id = Number(c.req.param("id"));
@@ -2022,11 +2033,11 @@ export const ticketRoutes = new Hono<AppEnv>()
     const id = Number(c.req.param("id"));
     if (!Number.isInteger(id) || id <= 0) throw new HTTPException(400, { message: "invalid_id" });
     if (!a.permissions.includes("projects.edit")) throw new HTTPException(403, { message: "Forbidden" });
-    const p = await body(c, z.object({ name: z.string().trim().min(1).max(200).optional() }));
+    const p = await body(c, z.object({ name: z.string().trim().min(1).max(200).optional(), /** merge into this existing project (same client) instead of making a new one */ intoProjectId: zUuid.optional() }));
     if (!(await ticketsLocal())) throw new HTTPException(409, { message: "tickets_not_local" });
     try {
       const r = await transformTicket(id, { id: a.user.id, name: a.user.name }, p);
-      await audit(a.user.id, "ticket.to_project", String(id), { project: r.project.number, ...r.time, notes: r.notes });
+      await audit(a.user.id, p.intoProjectId ? "ticket.merged_into_project" : "ticket.to_project", String(id), { project: r.project.number, ...r.time, notes: r.notes });
       await syncBillablesNow();
       return c.json({ ok: true, ...r });
     } catch (e) {

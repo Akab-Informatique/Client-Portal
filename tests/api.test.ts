@@ -10602,6 +10602,50 @@ describe("project notes: internal or public, and the client's projects page", ()
   });
 });
 
+describe("a ticket merged into an existing project", () => {
+  it("lists the client's open projects, adds the ticket's notes and checklist to the chosen one, and closes the ticket; another client's or a finished project is refused", async () => {
+    resetRateLimit("login:ip:unknown");
+    const tech = await signIn("tech@akab.local");
+    const [co] = await db().insert(schema.clients).values({ name: "Zz Fusion projet (test)", autotaskId: 9_100_061 }).returning();
+    const [other] = await db().insert(schema.clients).values({ name: "Zz Autre client (test)", autotaskId: 9_100_062 }).returning();
+    await db().insert(schema.integrations).values({ provider: "tickets", enabled: true, config: { mode: "local" } }).onConflictDoUpdate({ target: schema.integrations.provider, set: { enabled: true, config: { mode: "local" } } });
+    (await import("../server/lib/localTickets.ts")).resetTicketMode();
+    try {
+      const tk = (await tech.post("/api/tickets", { title: "Ajouter un poste", description: "x", companyId: co.autotaskId, priority: "medium", queue: "support", assigneeId: null, dueDate: "2026-12-05" })).json;
+      await tech.post(`/api/tickets/${tk.id}/notes`, { text: "Le client veut un poste de plus", internal: false, email: false });
+      await db().insert(schema.ticketChecklist).values({ ticketId: tk.id, text: "Commander le poste", position: 0 });
+      const mine = (await tech.post("/api/projects", { name: "Déploiement postes", clientId: co.id, milestones: [{ name: "Phase 1" }] })).json;
+      const finished = (await tech.post("/api/projects", { name: "Vieux projet", clientId: co.id })).json;
+      await db().update(schema.projects).set({ status: "done" }).where(eq(schema.projects.id, finished.id));
+      const theirs = (await tech.post("/api/projects", { name: "Projet d'un autre", clientId: other.id })).json;
+      // only this client's open projects are offered
+      const targets = (await tech.get(`/api/tickets/${tk.id}/to-project/targets`)).json;
+      expect(targets.map((x: any) => x.id)).toEqual([mine.id]);
+      // another client's project, a finished one, and an unknown one are refused
+      expect((await tech.post(`/api/tickets/${tk.id}/to-project`, { intoProjectId: theirs.id })).json.error).toBe("project_other_client");
+      expect((await tech.post(`/api/tickets/${tk.id}/to-project`, { intoProjectId: finished.id })).json.error).toBe("project_closed");
+      expect((await tech.post(`/api/tickets/${tk.id}/to-project`, { intoProjectId: "00000000-0000-4000-8000-000000000000" })).json.error).toBe("project_not_found");
+      // merged: nothing new is made, the project keeps its name; notes, summary and a phase are added; the ticket closes
+      const before = (await tech.get("/api/projects?status=all")).json.length;
+      const r = await tech.post(`/api/tickets/${tk.id}/to-project`, { intoProjectId: mine.id });
+      expect(r.status).toBe(200);
+      expect(r.json).toMatchObject({ merged: true, project: { id: mine.id, number: mine.number, name: "Déploiement postes" }, notes: 1, checklist: 1 });
+      expect((await tech.get("/api/projects?status=all")).json).toHaveLength(before);
+      const detail = (await tech.get(`/api/projects/${mine.id}`)).json;
+      expect(detail.name).toBe("Déploiement postes");
+      expect(detail.notes.some((n: any) => n.text.includes("Le client veut un poste de plus"))).toBe(true);
+      expect(detail.notes.some((n: any) => n.text.includes("fusionné dans ce projet"))).toBe(true);
+      expect(detail.milestones.map((m: any) => m.name)).toEqual(["Phase 1", `Transfert depuis ${tk.number}`]);
+      const closed = (await tech.get(`/api/tickets/${tk.id}`)).json;
+      expect(closed.notes.some((n: any) => n.text.includes(`Fusionné dans le projet ${mine.number}`))).toBe(true);
+      expect((await tech.post(`/api/tickets/${tk.id}/to-project`, { intoProjectId: mine.id })).json.error).toBe("ticket_complete");
+    } finally {
+      await db().delete(schema.integrations).where(eq(schema.integrations.provider, "tickets"));
+      (await import("../server/lib/localTickets.ts")).resetTicketMode();
+    }
+  });
+});
+
 describe("procedures (SOP)", () => {
   // a 1 × 1 PNG
   const PNG = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==";

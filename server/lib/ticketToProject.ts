@@ -1,4 +1,4 @@
-import { and, asc, eq, inArray, isNotNull, sql } from "drizzle-orm";
+import { and, asc, eq, inArray, isNotNull, ne, sql } from "drizzle-orm";
 import { db, schema } from "../db/index.ts";
 import { billingSettings } from "./billing.ts";
 import { moveCharge } from "./chargeMove.ts";
@@ -50,8 +50,12 @@ export async function transformPreview(ticketId: number) {
  * notes; the checklist becomes a phase "Transfert" with a task per item; the files move; the time not yet approved or
  * billed moves (and is marked not billable on the ticket, so it is never billed twice) and so do the charges not yet
  * approved. What is approved or invoiced stays on the ticket. The ticket is then closed with a note naming the project.
+ *
+ * With `intoProjectId` the ticket is **merged into a project that already exists** (same client, not finished or cancelled):
+ * the same things move, but nothing is made — the project keeps its name, description, dates and contract; its team gains the
+ * ticket's people, the checklist becomes one more phase, the notes and the summary are added to its notes.
  */
-export async function transformTicket(ticketId: number, actor: { id: string; name: string }, opts: { name?: string } = {}) {
+export async function transformTicket(ticketId: number, actor: { id: string; name: string }, opts: { name?: string; intoProjectId?: string } = {}) {
   const d = db();
   const [tk] = await d.select().from(schema.tickets).where(eq(schema.tickets.id, ticketId));
   if (!tk) throw new TransformError("not_found", 404);
@@ -61,8 +65,16 @@ export async function transformTicket(ticketId: number, actor: { id: string; nam
   if (tk.status === "transformed" || tm?.projectId) throw new TransformError("ticket_already_project");
   const [client] = await d.select({ id: schema.clients.id }).from(schema.clients).where(eq(schema.clients.autotaskId, tk.companyId));
   if (!client) throw new TransformError("project_needs_client", 400);
+  // merging into a project that exists: the same client's, and still open
+  let into: typeof schema.projects.$inferSelect | null = null;
+  if (opts.intoProjectId) {
+    [into = null] = await d.select().from(schema.projects).where(eq(schema.projects.id, opts.intoProjectId));
+    if (!into) throw new TransformError("project_not_found", 404);
+    if (into.clientId !== client.id) throw new TransformError("project_other_client");
+    if (into.status === "done" || into.status === "cancelled") throw new TransformError("project_closed");
+  }
 
-  const number = await nextProjectNumber();
+  const number = into ? into.number : await nextProjectNumber();
   const rate = (await billingSettings()).rates.hourly;
   // the ticket's contract, when it is one of this client's active ones: the project is billed under it
   const wanted = tm?.contractId ?? (tk.contractId && /^[0-9a-f-]{36}$/i.test(tk.contractId) ? tk.contractId : null);
@@ -73,7 +85,7 @@ export async function transformTicket(ticketId: number, actor: { id: string; nam
   const ids = [tk.assigneeId, ...(tk.secondary ?? []).map((x) => x.id)].filter((x): x is string => Boolean(x && /^[0-9a-f-]{36}$/i.test(x)));
   const team = ids.length ? await d.select({ id: schema.users.id }).from(schema.users).where(and(inArray(schema.users.id, ids), eq(schema.users.kind, "staff"), eq(schema.users.active, true))) : [];
 
-  const [project] = await d
+  const project = into ?? (await d
     .insert(schema.projects)
     .values({
       number,
@@ -90,8 +102,11 @@ export async function transformTicket(ticketId: number, actor: { id: string; nam
       hourlyRateCents: contract ? null : Math.round(rate),
       createdBy: actor.id,
     })
-    .returning();
-  await d.insert(schema.projectMembers).values([...new Set([actor.id, ...team.map((x) => x.id)])].map((userId) => ({ projectId: project.id, userId })));
+    .returning())[0]!;
+  // a new project: the person and the ticket's people; an existing one: the ticket's people join it
+  const people = [...new Set([...(into ? [] : [actor.id]), ...team.map((x) => x.id)])];
+  if (people.length) await d.insert(schema.projectMembers).values(people.map((userId) => ({ projectId: project.id, userId }))).onConflictDoNothing();
+  if (into) await d.update(schema.projects).set({ updatedAt: new Date() }).where(eq(schema.projects.id, project.id));
 
   // notes and discussions: copied, oldest first, each saying where it came from
   const notes = await d.select().from(schema.ticketNotes).where(and(eq(schema.ticketNotes.ticketId, ticketId), eq(schema.ticketNotes.system, false))).orderBy(asc(schema.ticketNotes.createdAt));
@@ -104,7 +119,7 @@ export async function transformTicket(ticketId: number, actor: { id: string; nam
   // a first note keeps what the ticket was (the project has no such fields)
   const [{ n: texts }] = await d.select({ n: sql<number>`count(*)`.mapWith(Number) }).from(schema.smsConversations).where(eq(schema.smsConversations.ticketId, ticketId));
   const summary = [
-    `Billet d'origine ${tk.number} — ${tk.title}`,
+    into ? `Billet ${tk.number} fusionné dans ce projet — ${tk.title}` : `Billet d'origine ${tk.number} — ${tk.title}`,
     `Contact : ${tk.contactName || "—"} · Priorité : ${tk.priority} · File : ${tk.queue || "—"} · Source : ${tm?.source ?? tk.source}`,
     `Technicien : ${tk.assigneeName || "—"}${tk.secondary?.length ? ` · Autres : ${tk.secondary.map((x) => x.name).join(", ")}` : ""}`,
     `Échéance du billet : ${dueDay ?? "—"}${tm?.milestoneDate ? ` · Jalon : ${tm.milestoneDate}${tm.milestoneTime ? ` ${tm.milestoneTime}` : ""}` : ""}${tm?.startDate ? ` · Début : ${tm.startDate}` : ""}`,
@@ -120,6 +135,7 @@ export async function transformTicket(ticketId: number, actor: { id: string; nam
   const items = await d.select().from(schema.ticketChecklist).where(eq(schema.ticketChecklist.ticketId, ticketId)).orderBy(asc(schema.ticketChecklist.position), asc(schema.ticketChecklist.createdAt));
   if (items.length) {
     const doneCount = items.filter((i) => i.done).length;
+    const [{ max }] = await d.select({ max: sql<number>`coalesce(max(${schema.projectMilestones.position}), -1)`.mapWith(Number) }).from(schema.projectMilestones).where(eq(schema.projectMilestones.projectId, project.id));
     const [phase] = await d
       .insert(schema.projectMilestones)
       .values({
@@ -128,7 +144,7 @@ export async function transformTicket(ticketId: number, actor: { id: string; nam
         notes: `Liste de contrôle du billet ${tk.number}, transférée telle quelle. À organiser par l'équipe.`,
         status: doneCount === items.length ? "done" : doneCount > 0 ? "doing" : "todo",
         doneAt: doneCount === items.length ? new Date() : null,
-        position: 0,
+        position: into ? max + 1 : 0,
       })
       .returning();
     await d.insert(schema.projectTasks).values(
@@ -187,7 +203,7 @@ export async function transformTicket(ticketId: number, actor: { id: string; nam
 
   // the ticket: tied to the project, closed, with a note anyone reads
   await d.insert(schema.ticketMeta).values({ ticketId, projectId: project.id }).onConflictDoUpdate({ target: schema.ticketMeta.ticketId, set: { projectId: project.id, updatedAt: new Date() } });
-  await d.insert(schema.ticketNotes).values({ ticketId, author: actor.name, userId: actor.id, internal: true, system: false, text: `Transformé en projet ${project.number} — ${project.name}` });
+  await d.insert(schema.ticketNotes).values({ ticketId, author: actor.name, userId: actor.id, internal: true, system: false, text: into ? `Fusionné dans le projet ${project.number} — ${project.name}` : `Transformé en projet ${project.number} — ${project.name}` });
   await d.update(schema.tickets).set({ status: "transformed", completedAt: new Date(), updatedAt: new Date() }).where(eq(schema.tickets.id, ticketId));
   await d.delete(schema.ticketTimers).where(eq(schema.ticketTimers.ticketId, ticketId));
   // a closed ticket is no longer on anyone's day or priorities
@@ -196,6 +212,7 @@ export async function transformTicket(ticketId: number, actor: { id: string; nam
 
   return {
     project: { id: project.id, number: project.number, name: project.name },
+    merged: Boolean(into),
     notes: notes.length,
     checklist: items.length,
     files: files.length,
@@ -203,4 +220,18 @@ export async function transformTicket(ticketId: number, actor: { id: string; nam
     time: { moved: moved.length, stays: times.length - moved.length },
     charges: { moved: chargesMoved, stays: charges.length - chargesMoved },
   };
+}
+
+/** The open projects of the ticket's client: where the ticket can be merged (the picker of the dialog) */
+export async function mergeTargets(ticketId: number) {
+  const d = db();
+  const [tk] = await d.select({ companyId: schema.tickets.companyId }).from(schema.tickets).where(eq(schema.tickets.id, ticketId));
+  if (!tk) throw new TransformError("not_found", 404);
+  const [client] = await d.select({ id: schema.clients.id }).from(schema.clients).where(eq(schema.clients.autotaskId, tk.companyId));
+  if (!client) return [];
+  return d
+    .select({ id: schema.projects.id, number: schema.projects.number, name: schema.projects.name, status: schema.projects.status })
+    .from(schema.projects)
+    .where(and(eq(schema.projects.clientId, client.id), ne(schema.projects.status, "done"), ne(schema.projects.status, "cancelled")))
+    .orderBy(asc(schema.projects.number));
 }
