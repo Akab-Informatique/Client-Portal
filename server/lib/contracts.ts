@@ -1,4 +1,4 @@
-import { and, asc, eq, inArray, or } from "drizzle-orm";
+import { and, asc, eq, inArray, isNull, or } from "drizzle-orm";
 import { db, schema } from "../db/index.ts";
 import { billingSettings } from "./billing.ts";
 import { netCents } from "../../shared/rebate.ts";
@@ -171,10 +171,23 @@ export async function contractsOfCompany(companyAt: number): Promise<ContractVie
   });
 }
 
+/** Hours worked on project tasks under these contracts (by contract, day and client); ticket time shown in a project is counted through its ticket */
+async function projectTimeOf(contractIds: string[]): Promise<{ id: string; date: string; hours: number; company: string }[]> {
+  if (!contractIds.length) return [];
+  const rows = await db()
+    .select({ id: schema.timesheetEntries.contractId, date: schema.timesheetEntries.date, h: schema.timesheetEntries.hoursX100, company: schema.clients.name })
+    .from(schema.timesheetEntries)
+    .leftJoin(schema.clients, eq(schema.clients.id, schema.timesheetEntries.clientId))
+    .where(and(inArray(schema.timesheetEntries.contractId, contractIds), eq(schema.timesheetEntries.source, "project"), isNull(schema.timesheetEntries.ticketTimeId)));
+  return rows.filter((r) => r.id).map((r) => ({ id: r.id!, date: r.date, hours: r.h / 100, company: r.company ?? "" }));
+}
+
 /** Hours worked under each contract (ticket time entries, which carry the contract's source id). Keyed by the contract's id. */
 export async function usedHoursOf(contracts: { id: string; autotaskId: string | null }[]): Promise<Map<string, number>> {
   const out = new Map<string, number>();
   const bySource = new Map(contracts.filter((k) => k.autotaskId).map((k) => [k.autotaskId!, k.id]));
+  // hours worked on project tasks under the contract count like a ticket's
+  for (const r of await projectTimeOf(contracts.map((k) => k.id))) out.set(r.id, Math.round(((out.get(r.id) ?? 0) + r.hours) * 100) / 100);
   if (!bySource.size) return out;
   const rows = await db().select({ id: schema.ticketTimeEntries.contractId, minutes: schema.ticketTimeEntries.minutes }).from(schema.ticketTimeEntries).where(inArray(schema.ticketTimeEntries.contractId, [...bySource.keys()]));
   for (const r of rows) {
@@ -188,6 +201,12 @@ export async function usedHoursOf(contracts: { id: string; autotaskId: string | 
 export async function usedByMonthOf(contracts: { id: string; autotaskId: string | null }[]): Promise<Map<string, Map<string, number>>> {
   const out = new Map<string, Map<string, number>>();
   const bySource = new Map(contracts.filter((k) => k.autotaskId).map((k) => [k.autotaskId!, k.id]));
+  // time worked on project tasks under the contract is drawn from the bank too, like a ticket's
+  for (const r of await projectTimeOf(contracts.map((k) => k.id))) {
+    const m = out.get(r.id) ?? new Map<string, number>();
+    m.set(r.date.slice(0, 7), (m.get(r.date.slice(0, 7)) ?? 0) + r.hours);
+    out.set(r.id, m);
+  }
   if (!bySource.size) return out;
   const rows = await db().select({ id: schema.ticketTimeEntries.contractId, minutes: schema.ticketTimeEntries.minutes, at: schema.ticketTimeEntries.startedAt, overMinutes: schema.ticketTimeEntries.bankOverMinutes, overMode: schema.ticketTimeEntries.bankOverMode }).from(schema.ticketTimeEntries).where(inArray(schema.ticketTimeEntries.contractId, [...bySource.keys()]));
   for (const r of rows) {
@@ -207,7 +226,13 @@ export async function usedByMonthOf(contracts: { id: string; autotaskId: string 
 export async function usageByCompanyOf(contracts: { id: string; autotaskId: string | null }[]): Promise<Map<string, { company: string; month: string; hours: number }[]>> {
   const out = new Map<string, Map<string, number>>();
   const bySource = new Map(contracts.filter((k) => k.autotaskId).map((k) => [k.autotaskId!, k.id]));
-  if (!bySource.size) return new Map();
+  for (const r of await projectTimeOf(contracts.map((k) => k.id))) {
+    const m = out.get(r.id) ?? new Map<string, number>();
+    const key = `${r.date.slice(0, 7)}|${r.company}`;
+    m.set(key, (m.get(key) ?? 0) + r.hours);
+    out.set(r.id, m);
+  }
+  if (!bySource.size && !out.size) return new Map();
   const rows = await db()
     .select({ id: schema.ticketTimeEntries.contractId, minutes: schema.ticketTimeEntries.minutes, at: schema.ticketTimeEntries.startedAt, overMinutes: schema.ticketTimeEntries.bankOverMinutes, overMode: schema.ticketTimeEntries.bankOverMode, company: schema.tickets.companyName })
     .from(schema.ticketTimeEntries)

@@ -4467,7 +4467,7 @@ describe("submitting: timesheets (when required) and expenses", () => {
     const [k] = await db().insert(schema.clientContracts).values({ clientId: cl.id, name: "Soutien projets", billingMode: "hourly", hourlyRateCents: 12500, startDate: "2026-01-01", endDate: "2036-12-31" }).returning();
     const [kOther] = await db().insert(schema.clientContracts).values({ clientId: other.id, name: "Pas le sien", billingMode: "hourly", hourlyRateCents: 9900 }).returning();
     // the contracts a project can be billed under, with the hourly rate under each
-    expect((await tech.get(`/api/projects/client-contracts/${cl.id}`)).json).toEqual([{ id: k.id, name: "Soutien projets", hourlyRate: 125 }]);
+    expect((await tech.get(`/api/projects/client-contracts/${cl.id}`)).json).toEqual([{ id: k.id, name: "Soutien projets", hourlyRate: 125, bankLeft: null }]);
     // contract mode needs the client's own contract; special needs a rate
     expect((await tech.post("/api/projects", { name: "x", clientId: cl.id, billingMode: "contract" })).json.error).toBe("contract_required");
     expect((await tech.post("/api/projects", { name: "x", clientId: cl.id, billingMode: "contract", contractId: kOther.id })).json.error).toBe("contract_invalid");
@@ -10319,6 +10319,68 @@ describe("hours bank contracts", () => {
     const first = await tech.post(`/api/tickets/timers/${pending.id}/submit`, entry);
     expect(first.json.error).toBe("bank_over_choice_required");
     expect((await tech.post(`/api/tickets/timers/${pending.id}/submit`, { ...entry, overage: "free" })).status).toBe(201);
+  });
+});
+
+describe("project tasks: a contract, waiting for another task, sorting that is the technician's own", () => {
+  it("time on a task draws from its banked contract; a task waits for another; defaults and custom order are per person", async () => {
+    resetRateLimit("login:ip:unknown");
+    const admin = await signIn("admin@akab.local");
+    const tech = await signIn("tech@akab.local");
+    const [t0] = (await tech.get("/api/tickets?view=all")).json.items;
+    const clients = (await admin.get("/api/crm/clients")).json;
+    const client = (clients.items ?? clients).find((x: any) => x.autotaskId === t0.company.id);
+    const me = (await tech.get("/api/me")).json.id as string;
+    const bank = (await admin.post(`/api/crm/clients/${client.id}/contracts`, { name: "Banque projets", typeKey: "banked", startDate: "2026-01-01", endDate: "2026-12-31", bankedHours: 10, bankedRate: 100, bankRollover: "lose", services: [] })).json;
+    const proj = (await tech.post("/api/projects", { name: "Projet banque", clientId: client.id, hourlyRate: 120, milestones: [{ name: "Phase 1" }] })).json;
+    const ms = proj.milestones[0].id;
+    const first = (await tech.post(`/api/projects/${proj.id}/milestones/${ms}/tasks`, { title: "D'abord", assigneeId: me })).json;
+    const second = (await tech.post(`/api/projects/${proj.id}/milestones/${ms}/tasks`, { title: "Ensuite", assigneeId: me, contractId: bank.id, dependsOnId: first.id })).json;
+    expect(second).toMatchObject({ contractId: bank.id, dependsOnId: first.id });
+    // a contract of another client is refused; the contracts list says what is left of a bank
+    const listed = (await tech.get(`/api/projects/client-contracts/${client.id}`)).json.find((k: any) => k.id === bank.id);
+    expect(listed.bankLeft).toBe(10);
+    // waiting: cannot be started (status or timer) until the first is done; loops and itself are refused
+    expect((await tech.patch(`/api/projects/${proj.id}/tasks/${second.id}`, { status: "doing" })).json.error).toBe("task_blocked");
+    expect((await tech.post(`/api/projects/${proj.id}/tasks/${second.id}/timer/start`)).json.error).toBe("task_blocked");
+    expect((await tech.patch(`/api/projects/${proj.id}/tasks/${first.id}`, { dependsOnId: second.id })).json.error).toBe("task_cycle");
+    expect((await tech.patch(`/api/projects/${proj.id}/tasks/${first.id}`, { dependsOnId: first.id })).json.error).toBe("task_cycle");
+    const card = (await tech.get(`/api/projects/${proj.id}`)).json.milestones[0].tasks.find((k: any) => k.id === second.id);
+    expect(card).toMatchObject({ waiting: true, dependsOnId: first.id });
+    // it is waiting on the day too (planned apart)
+    expect((await tech.patch(`/api/projects/${proj.id}/tasks/${first.id}`, { status: "done" })).status).toBe(200);
+    expect((await tech.patch(`/api/projects/${proj.id}/tasks/${second.id}`, { status: "doing" })).status).toBe(200);
+    // time on the task under the bank: not billed one by one, taken from the bank (like a ticket's)
+    const logged = await tech.post(`/api/projects/${proj.id}/time`, { date: new Date().toLocaleDateString("en-CA", { timeZone: "America/Toronto" }), hours: 3, taskId: second.id });
+    expect(logged.status).toBe(201);
+    expect(logged.json.billable).toBe(false);
+    const after = (await admin.get(`/api/crm/clients/${client.id}/contracts/${bank.id}`)).json;
+    expect(after.bank.used).toBeGreaterThanOrEqual(3);
+    expect((await tech.get(`/api/projects/client-contracts/${client.id}`)).json.find((k: any) => k.id === bank.id).bankLeft).toBeLessThan(10);
+
+    // the phases move in the order wanted
+    const ms2 = (await tech.post(`/api/projects/${proj.id}/milestones`, { name: "Phase 2" })).json;
+    expect((await tech.post(`/api/projects/${proj.id}/milestones/reorder`, { ids: [ms2.id, ms] })).status).toBe(200);
+    expect((await tech.get(`/api/projects/${proj.id}`)).json.milestones.map((x: any) => x.id)).toEqual([ms2.id, ms]);
+
+    // the default sort of a view is each person's own
+    expect((await tech.get("/api/me")).json.preferences.sortDefaults).toEqual({});
+    expect((await tech.put("/api/me/preferences", { sortDefaults: { "projects.tasks": "custom", "tickets.list": "due" } })).status).toBe(200);
+    expect((await tech.get("/api/me")).json.preferences.sortDefaults).toEqual({ "projects.tasks": "custom", "tickets.list": "due" });
+    expect((await tech.put("/api/me/preferences", { sortDefaults: { "tickets.list": null } })).status).toBe(200);
+    expect((await tech.get("/api/me")).json.preferences.sortDefaults).toEqual({ "projects.tasks": "custom" });
+    expect((await admin.get("/api/me")).json.preferences.sortDefaults).toEqual({});
+    expect((await tech.put("/api/me/preferences", { sortDefaults: { "Bad Key!": "x" } })).status).toBe(400);
+    await tech.put("/api/me/preferences", { sortDefaults: { "projects.tasks": null } });
+
+    // the custom order of a list is the person's own: saved, read back, replaced, invisible to others
+    const scope = `project:${proj.id}:ms:${ms}`;
+    expect((await tech.get(`/api/me/sort-order?scope=${encodeURIComponent(scope)}`)).json.keys).toEqual([]);
+    expect((await tech.put("/api/me/sort-order", { scope, keys: [second.id, first.id] })).status).toBe(200);
+    expect((await tech.get(`/api/me/sort-order?scope=${encodeURIComponent(scope)}`)).json.keys).toEqual([second.id, first.id]);
+    expect((await admin.get(`/api/me/sort-order?scope=${encodeURIComponent(scope)}`)).json.keys).toEqual([]);
+    expect((await tech.put("/api/me/sort-order", { scope, keys: [first.id] })).status).toBe(200);
+    expect((await tech.get(`/api/me/sort-order?scope=${encodeURIComponent(scope)}`)).json.keys).toEqual([first.id]);
   });
 });
 

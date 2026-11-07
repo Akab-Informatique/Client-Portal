@@ -230,6 +230,9 @@ export async function dayItems(userId: string, date: string, viewerId: string = 
     .innerJoin(schema.projects, eq(schema.projects.id, schema.projectTasks.projectId))
     .innerJoin(schema.projectMilestones, eq(schema.projectMilestones.id, schema.projectTasks.milestoneId))
     .where(and(eq(schema.projectTasks.assigneeId, userId), ne(schema.projectTasks.status, "done"), inArray(schema.projects.status, ["planning", "active"])));
+  // a project task waits for the one it depends on until that one is done
+  const waitIds = ptasks.map((r) => r.t.dependsOnId).filter((x): x is string => Boolean(x));
+  const undone = new Set(waitIds.length ? (await d.select({ id: schema.projectTasks.id }).from(schema.projectTasks).where(and(inArray(schema.projectTasks.id, waitIds), ne(schema.projectTasks.status, "done")))).map((x) => x.id) : []);
   for (const r of ptasks) {
     const t = r.t;
     if (!(t.status === "doing" || t.priority === "urgent" || (t.dueDate !== null && t.dueDate <= date) || (t.checkpointDate !== null && t.checkpointDate <= date))) continue;
@@ -247,7 +250,7 @@ export async function dayItems(userId: string, date: string, viewerId: string = 
       minutes: t.estimateMinutes ?? 60,
       ticketNumber: r.pnum,
       client: `${r.pname} · ${r.ms}`,
-      blocked: t.status === "blocked",
+      blocked: t.status === "blocked" || Boolean(t.dependsOnId && undone.has(t.dependsOnId)),
     });
   }
   // the technician's open tickets due by the end of the day, and the ones pinned for the day

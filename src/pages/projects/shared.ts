@@ -34,6 +34,12 @@ export type Task = {
   assigneeId: string | null;
   assigneeName: string | null;
   dueDate: string | null;
+  checkpointDate: string | null;
+  checkpointTime: string | null;
+  contractId: string | null;
+  dependsOnId: string | null;
+  /** Waits for another task that is not done yet */
+  waiting: boolean;
   late: boolean;
   estimateHours: number | null;
   hours: number;
@@ -52,6 +58,9 @@ export type TaskDetail = {
   dueDate: string | null;
   checkpointDate: string | null;
   checkpointTime: string | null;
+  contractId: string | null;
+  dependsOnId: string | null;
+  dependsOn: { id: string; title: string; done: boolean } | null;
   estimateHours: number | null;
   doneAt: string | null;
   createdAt: string;
@@ -166,4 +175,4 @@ export function clock(seconds: number): string {
   return `${Math.floor(s / 3600)}:${String(Math.floor((s % 3600) / 60)).padStart(2, "0")}:${String(s % 60).padStart(2, "0")}`;
 }
 
-export const apiMessage = (code: string | undefined, t: (k: string) => string) => (code && ["project_open_milestones", "project_dates", "person_invalid", "project_closed", "timesheet_locked", "client_unknown", "milestone_has_tasks", "timer_not_running", "time_billed", "project_no_client", "reply_needs_recipient", "contract_required", "contract_invalid", "contract_needs_client", "rate_required", "no_followup"].includes(code) ? t(`projects.errors.${code}`) : t("common.error"));
+export const apiMessage = (code: string | undefined, t: (k: string) => string) => (code && ["project_open_milestones", "project_dates", "person_invalid", "project_closed", "timesheet_locked", "client_unknown", "milestone_has_tasks", "timer_not_running", "time_billed", "project_no_client", "reply_needs_recipient", "contract_required", "contract_invalid", "contract_needs_client", "rate_required", "no_followup", "task_blocked", "task_cycle", "task_invalid"].includes(code) ? t(`projects.errors.${code}`) : t("common.error"));

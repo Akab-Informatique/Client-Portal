@@ -1,7 +1,7 @@
 import { passboltMenuShown } from "../lib/passbolt.ts";
 import { Hono } from "hono";
 import { HTTPException } from "hono/http-exception";
-import { eq } from "drizzle-orm";
+import { and, asc, eq } from "drizzle-orm";
 import { z } from "zod";
 import { db, schema } from "../db/index.ts";
 import { auth, requireAuth, type AppEnv, type AuthContext } from "../lib/auth.ts";
@@ -42,7 +42,7 @@ export async function loadMe(a: AuthContext) {
     features: { passbolt: await passboltMenuShown() },
     /** Fills in a weekly timesheet (otherwise the Timesheets entry is hidden, unless they manage everyone's) */
     timesheetRequired: u.timesheetRequired,
-    preferences: { dashboard: prefs?.dashboard ?? null, theme: prefs?.theme ?? "dark", outlook: prefs?.outlook ?? false, bankHours: prefs?.bankHoursDefault ?? false, ticketLayout: prefs?.ticketLayout ?? null, notify: prefs?.notifyDefaults ?? { email: true, sms: false, teams: false }, pushDetails: prefs?.pushDetails ?? false },
+    preferences: { sortDefaults: prefs?.sortDefaults ?? {}, dashboard: prefs?.dashboard ?? null, theme: prefs?.theme ?? "dark", outlook: prefs?.outlook ?? false, bankHours: prefs?.bankHoursDefault ?? false, ticketLayout: prefs?.ticketLayout ?? null, notify: prefs?.notifyDefaults ?? { email: true, sms: false, teams: false }, pushDetails: prefs?.pushDetails ?? false },
   };
 }
 
@@ -92,12 +92,22 @@ export const meRoutes = new Hono<AppEnv>()
         pushDetails: z.boolean().optional(),
         /** The tickets list's default view */
         ticketLayout: z.enum(["standard", "kanban", "compact"]).optional(),
+        /** The sort a list opens on, by view (a null value goes back to the default, the checkpoint) */
+        sortDefaults: z.record(z.string().regex(/^[a-z][a-zA-Z0-9.:_-]{0,59}$/), z.string().max(40).nullable()).optional(),
       }),
     );
     if (p.outlook && !a.permissions.includes("outlook.view")) throw new HTTPException(403, { message: "forbidden" });
+    let sortDefaults: Record<string, string> | undefined;
+    if (p.sortDefaults) {
+      const [cur] = await db().select({ s: schema.userPreferences.sortDefaults }).from(schema.userPreferences).where(eq(schema.userPreferences.userId, a.user.id));
+      sortDefaults = { ...(cur?.s ?? {}) };
+      for (const [k, v] of Object.entries(p.sortDefaults)) if (v === null) delete sortDefaults[k];
+      else sortDefaults[k] = v;
+      if (Object.keys(sortDefaults).length > 60) throw new HTTPException(400, { message: "too_many" });
+    }
     await db()
       .insert(schema.userPreferences)
-      .values({ userId: a.user.id, dashboard: p.dashboard ?? null, theme: p.theme ?? null, outlook: p.outlook ?? false, bankHoursDefault: p.bankHours ?? false, ...(p.notify ? { notifyDefaults: p.notify } : {}), ...(p.pushDetails !== undefined ? { pushDetails: p.pushDetails } : {}) })
+      .values({ userId: a.user.id, dashboard: p.dashboard ?? null, theme: p.theme ?? null, outlook: p.outlook ?? false, bankHoursDefault: p.bankHours ?? false, ...(p.notify ? { notifyDefaults: p.notify } : {}), ...(p.pushDetails !== undefined ? { pushDetails: p.pushDetails } : {}), ...(sortDefaults ? { sortDefaults } : {}) })
       .onConflictDoUpdate({
         target: schema.userPreferences.userId,
         set: {
@@ -108,8 +118,26 @@ export const meRoutes = new Hono<AppEnv>()
           ...(p.notify !== undefined ? { notifyDefaults: p.notify } : {}),
           ...(p.pushDetails !== undefined ? { pushDetails: p.pushDetails } : {}),
           ...(p.ticketLayout !== undefined ? { ticketLayout: p.ticketLayout } : {}),
+          ...(sortDefaults ? { sortDefaults } : {}),
           updatedAt: new Date(),
         },
       });
     return c.json({ ok: true });
+  })
+  /** The order the person put the items of a list in (their own "custom" sort): keys, first to last */
+  .get("/sort-order", async (c) => {
+    const a = auth(c);
+    const scope = z.string().min(1).max(120).parse(c.req.query("scope"));
+    const rows = await db().select({ k: schema.userSortOrders.itemKey }).from(schema.userSortOrders).where(and(eq(schema.userSortOrders.userId, a.user.id), eq(schema.userSortOrders.scope, scope))).orderBy(asc(schema.userSortOrders.position));
+    return c.json({ keys: rows.map((r) => r.k) });
+  })
+  .put("/sort-order", async (c) => {
+    const a = auth(c);
+    const p = await body(c, z.object({ scope: z.string().min(1).max(120), keys: z.array(z.string().min(1).max(80)).max(500) }));
+    const keys = [...new Set(p.keys)];
+    await db().transaction(async (tx) => {
+      await tx.delete(schema.userSortOrders).where(and(eq(schema.userSortOrders.userId, a.user.id), eq(schema.userSortOrders.scope, p.scope)));
+      if (keys.length) await tx.insert(schema.userSortOrders).values(keys.map((itemKey, position) => ({ userId: a.user.id, scope: p.scope, itemKey, position })));
+    });
+    return c.json({ keys });
   });

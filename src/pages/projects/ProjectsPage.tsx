@@ -4,9 +4,11 @@ import { useTranslation } from "react-i18next";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { motion } from "motion/react";
 import { toast } from "sonner";
-import { AlertTriangle, BellRing, CalendarDays, ChevronDown, ChevronLeft, ChevronRight, ChevronsDownUp, ChevronsUpDown, Eye, Flag, Folder, FolderOpen, Loader2, Plus, Search, SlidersHorizontal, Star, UserRound, X, type LucideIcon } from "lucide-react";
+import { AlertTriangle, BellRing, CalendarDays, ChevronDown, ChevronLeft, ChevronRight, ChevronsDownUp, ChevronsUpDown, Eye, Flag, Folder, FolderOpen, ArrowDownUp, Loader2, Plus, Search, SlidersHorizontal, Star, UserRound, X, type LucideIcon } from "lucide-react";
 import { GlassBackdrop } from "@/components/brand/GlassBackdrop";
 import { Button } from "@/components/ui/button";
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
+import { useSortDefault } from "@/lib/sortPrefs";
 import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
@@ -35,6 +37,8 @@ const readOpened = (): Set<string> => {
 };
 
 /** Centre de commande › Projets: the same tiles, filters and weekly panel as Tickets, with a folder per project. */
+const SORTS = ["checkpoint", "due", "name", "number", "client"] as const;
+
 export function ProjectsPage() {
   const { t } = useTranslation();
   const me = useMe();
@@ -82,7 +86,20 @@ export function ProjectsPage() {
       }
       return next;
     });
-  const ids = (list ?? []).map((p) => p.id);
+  // the sort the technician chose for this list (the checkpoint of the next task by default; kept on their account)
+  const [sort, setSort] = useSortDefault<(typeof SORTS)[number]>("projects.list", "checkpoint", SORTS);
+  const shown = useMemo(() => {
+    const l = [...(list ?? [])];
+    const cmp: Record<(typeof SORTS)[number], (a: Project, b: Project) => number> = {
+      checkpoint: (a, b) => (a.nextCheckpoint ?? "9999").localeCompare(b.nextCheckpoint ?? "9999") || (a.dueDate ?? "9999").localeCompare(b.dueDate ?? "9999"),
+      due: (a, b) => (a.dueDate ?? "9999").localeCompare(b.dueDate ?? "9999"),
+      name: (a, b) => a.name.localeCompare(b.name),
+      number: (a, b) => b.number.localeCompare(a.number),
+      client: (a, b) => (a.client?.name ?? "\uffff").localeCompare(b.client?.name ?? "\uffff") || a.name.localeCompare(b.name),
+    };
+    return l.sort(cmp[sort]);
+  }, [list, sort]);
+  const ids = shown.map((p) => p.id);
   const allOpen = ids.length > 0 && ids.every((id) => opened.has(id));
 
   const refresh = () => void qc.invalidateQueries({ queryKey: KEY });
@@ -228,7 +245,22 @@ export function ProjectsPage() {
           >
             {allOpen ? <ChevronsDownUp className="size-4" /> : <ChevronsUpDown className="size-4" />}
           </button>
-          <span className="flex-1 pl-12">{t("projects.col.project")}</span>
+          <span className="flex flex-1 items-center gap-2 pl-12">
+            {t("projects.col.project")}
+            <DropdownMenu>
+              <DropdownMenuTrigger className="flex items-center gap-1 rounded-md px-1.5 py-0.5 normal-case tracking-normal text-muted-foreground hover:text-foreground">
+                <ArrowDownUp className="size-3" /> {t(`projects.listSort.${sort}`)}
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="start">
+                {SORTS.map((s) => (
+                  <DropdownMenuItem key={s} onClick={() => setSort(s === "checkpoint" ? null : s)} className={cn(s === sort && "font-semibold text-primary")}>
+                    {t(`projects.listSort.${s}`)}
+                  </DropdownMenuItem>
+                ))}
+                <p className="max-w-56 px-2 py-1.5 text-[10px] normal-case text-muted-foreground">{t("projects.sort.hint")}</p>
+              </DropdownMenuContent>
+            </DropdownMenu>
+          </span>
           <span className="hidden w-28 md:block">{t("projects.col.status")}</span>
           <span className="hidden w-40 lg:block">{t("projects.col.client")}</span>
           <span className="hidden w-32 md:block">{t("projects.col.progress")}</span>
@@ -240,7 +272,7 @@ export function ProjectsPage() {
         {isLoading && <Loader2 className="mx-auto my-10 size-6 animate-spin text-muted-foreground" />}
         {!isLoading && !list?.length && <p className="py-14 text-center text-sm text-muted-foreground">{filtered || view !== "all" ? t("projects.noneFiltered") : t("projects.none")}</p>}
         <ul className="divide-y divide-border/60">
-          {(list ?? []).map((p) => {
+          {shown.map((p) => {
             const isOpen = opened.has(p.id);
             const finished = p.status === "done" || p.status === "cancelled";
             const tone = dueTone(p.dueDate, finished);

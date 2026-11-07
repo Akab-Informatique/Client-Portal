@@ -83,6 +83,10 @@ export function TaskDialog({ projectId, taskId, onClose, onMinimize }: { project
   });
   const closed = tk ? tk.project.status === "done" || tk.project.status === "cancelled" : false;
   const hourly = tk ? tk.project.billingMode !== "fixed" : false;
+  // the client's contracts (a bank of hours is drawn from like a ticket's) and the other tasks of the project (the one this waits for)
+  const clientId = tk?.project.clientId ?? null;
+  const { data: contracts = [] } = useQuery({ queryKey: [...KEY, "client-contracts", clientId], enabled: Boolean(clientId), queryFn: () => api.get<{ id: string; name: string; hourlyRate: number | null; bankLeft: number | null }[]>(`/projects/client-contracts/${clientId}`) });
+  const others = (project?.milestones ?? []).flatMap((m) => (m.tasks ?? []).filter((x) => x.id !== taskId).map((x) => ({ id: x.id, title: x.title, phase: m.name, done: x.done })));
 
   return (
     <Dialog open onOpenChange={(o) => !o && onClose()}>
@@ -185,6 +189,44 @@ export function TaskDialog({ projectId, taskId, onClose, onMinimize }: { project
                           ))}
                         </SelectContent>
                       </Select>
+                    </div>
+                    {clientId && (
+                      <div className="space-y-1.5">
+                        <Label className="text-xs">{t("projects.taskContract")}</Label>
+                        <Select disabled={!edit} value={tk.contractId ?? "none"} onValueChange={(v) => patch.mutate({ contractId: v === "none" ? null : v })}>
+                          <SelectTrigger>
+                            <SelectValue />
+                          </SelectTrigger>
+                          <SelectContent>
+                            <SelectItem value="none">{t("projects.taskContractProject")}</SelectItem>
+                            {contracts.map((k) => (
+                              <SelectItem key={k.id} value={k.id}>
+                                {k.name}
+                                {k.bankLeft != null ? ` · ${t("projects.bankLeft", { time: hoursText(Math.max(0, k.bankLeft)) })}` : ""}
+                              </SelectItem>
+                            ))}
+                          </SelectContent>
+                        </Select>
+                        {tk.contractId && contracts.find((k) => k.id === tk.contractId)?.bankLeft != null && <p className="text-[11px] text-muted-foreground">{t("projects.taskContractBank")}</p>}
+                      </div>
+                    )}
+                    <div className="space-y-1.5">
+                      <Label className="text-xs">{t("projects.waitsFor")}</Label>
+                      <Select disabled={!edit} value={tk.dependsOnId ?? "none"} onValueChange={(v) => patch.mutate({ dependsOnId: v === "none" ? null : v })}>
+                        <SelectTrigger>
+                          <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="none">{t("projects.waitsNone")}</SelectItem>
+                          {others.map((x) => (
+                            <SelectItem key={x.id} value={x.id}>
+                              {x.phase} · {x.title}
+                              {x.done ? " ✓" : ""}
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                      {tk.dependsOn && !tk.dependsOn.done && <p className="text-[11px] text-fuchsia-300">{t("projects.waitsBlocked", { title: tk.dependsOn.title })}</p>}
                     </div>
                     <div className="grid grid-cols-2 gap-3">
                       <div className="space-y-1.5">

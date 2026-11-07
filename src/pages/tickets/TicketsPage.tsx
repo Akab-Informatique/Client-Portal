@@ -64,6 +64,7 @@ import { useAiModel } from "@/components/AiModelPicker";
 import { useAiDirection } from "@/components/AiDirection";
 import { relativeTime } from "@/lib/format";
 import { useCan, useMe } from "@/lib/session";
+import { useSortDefault } from "@/lib/sortPrefs";
 import { cn, initials } from "@/lib/utils";
 import { GlassBackdrop } from "@/components/brand/GlassBackdrop";
 import { NewTicketDialog } from "./NewTicketDialog";
@@ -105,6 +106,15 @@ export function TicketsPage() {
   const [layout, setLayout] = useTicketLayout();
   const [params, setParams] = useSearchParams();
   const view = (VIEWS.includes(params.get("view") as View) ? params.get("view") : "mine") as View;
+  // the sort this person opens the list on (the checkpoint unless they chose another; kept on their account)
+  const [sortDefault, setSortDefault] = useSortDefault<string>("tickets.list", "milestone");
+  useEffect(() => {
+    if (sortDefault === "milestone" || params.get("sort")) return;
+    setParams((q) => {
+      q.set("sort", sortDefault);
+      return q;
+    }, { replace: true });
+  }, [sortDefault, params, setParams]);
   const { data, isLoading, dataUpdatedAt, isFetching, refetch } = useTickets(view, params);
   const [creating, setCreating] = useState(false);
   // tickets ticked in the list (several at a time: the bar above the filters)
@@ -252,7 +262,10 @@ export function TicketsPage() {
           <ViewMenu view={view} counts={data?.counts} params={params} apply={apply} />
           <div className="ml-auto flex flex-wrap items-center gap-2">
             <LayoutSwitch value={layout} onChange={setLayout} />
-            <SortMenu value={params.get("sort") ?? "milestone"} aiPlan={data?.aiPlan ?? null} onChange={(v) => set({ sort: v === "milestone" ? null : v })} />
+            <SortMenu value={params.get("sort") ?? "milestone"} aiPlan={data?.aiPlan ?? null} onChange={(v) => {
+                set({ sort: v === "milestone" ? null : v });
+                setSortDefault(v === "milestone" ? null : v);
+              }} />
           </div>
         </div>
         {/* 2. search */}

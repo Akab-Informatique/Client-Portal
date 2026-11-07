@@ -635,6 +635,8 @@ export const userPreferences = pgTable("user_preferences", {
   bankHoursDefault: boolean("bank_hours_default").notNull().default(false),
   /** The way the tickets list is shown by default: standard | kanban | compact (null: standard) */
   ticketLayout: text("ticket_layout"),
+  /** The sort each list opens on, per view ({ "tickets": "due", "projects.list": "name" }): the technician picks it, the default is the checkpoint */
+  sortDefaults: jsonb("sort_defaults").$type<Record<string, string>>().notNull().default(sql`'{}'::jsonb`),
   /** The channels ticked by default when notifying a technician from a ticket (the bell is always on) */
   /** The lock screen of the phone shows the detail of a notification (number, title, text); off = only its kind */
   pushDetails: boolean("push_details").notNull().default(false),
@@ -2525,6 +2527,22 @@ export const pipelineDayAlloc = pgTable(
   (t) => [uniqueIndex("pipeline_day_alloc_unique").on(t.userId, t.date, t.key, t.source)],
 );
 
+/** The order a technician put items in, by hand, in a list ("custom" sort): one row per person, list and item */
+export const userSortOrders = pgTable(
+  "user_sort_orders",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    userId: uuid("user_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    /** Which list: project:<id>:ms:<milestone id>, day:tasks… */
+    scope: text("scope").notNull(),
+    itemKey: text("item_key").notNull(),
+    position: integer("position").notNull(),
+  },
+  (t) => [uniqueIndex("user_sort_orders_unique").on(t.userId, t.scope, t.itemKey), index("user_sort_orders_scope_idx").on(t.userId, t.scope, t.position)],
+);
+
 export type PipelineBlock = {
   start: string;
   end: string;
@@ -2886,6 +2904,10 @@ export const projectTasks = pgTable(
     done: boolean("done").notNull().default(false),
     assigneeId: uuid("assignee_id").references(() => users.id, { onDelete: "set null" }),
     dueDate: text("due_date"),
+    /** The contract the task's time is worked under (a bank of hours is drawn from like a ticket's); none: the project's */
+    contractId: uuid("contract_id").references(() => clientContracts.id, { onDelete: "set null" }),
+    /** The task that must be done first (same project): this one cannot be started or finished before */
+    dependsOnId: uuid("depends_on_id"),
     /** The goal day and time (17:00 when none is typed): the task is on Ma journée from then on, and lists sort by it */
     checkpointDate: text("checkpoint_date"),
     checkpointTime: text("checkpoint_time"),

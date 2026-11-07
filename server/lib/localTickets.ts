@@ -474,15 +474,17 @@ export function localTicketSource(base: TicketSource): TicketSource {
         .innerJoin(schema.projects, eq(schema.projects.id, schema.timesheetEntries.projectId))
         .innerJoin(schema.clients, eq(schema.clients.id, schema.projects.clientId))
         .innerJoin(schema.users, eq(schema.users.id, schema.timesheetEntries.userId))
-        .leftJoin(schema.clientContracts, eq(schema.clientContracts.id, schema.projects.contractId))
+        // the contract the time was worked under (a task's own, else the project's)
+        .leftJoin(schema.clientContracts, eq(schema.clientContracts.id, sql`coalesce(${schema.timesheetEntries.contractId}, ${schema.projects.contractId})`))
         // ticket time counted in a project is billed through its ticket (ptime:), never twice
         .where(and(sql`${schema.timesheetEntries.billableX100} > 0`, isNull(schema.timesheetEntries.ticketTimeId), gte(schema.timesheetEntries.date, since)));
       const usual = (await billingSettings()).rates.hourly;
       for (const { e, number, rate: projectRate, mode, contract, companyId, who } of onProjects) {
         if (companyId == null) continue;
         // under a contract the hour costs what the contract says (none: the hours are included, nothing to bill)
-        const rate = mode === "contract" && contract ? hourlyRateOf(contract, usual) : projectRate;
-        if (mode === "contract" && contract && rate == null) continue;
+        const underContract = Boolean(contract) && (mode === "contract" || Boolean(e.contractId));
+        const rate = underContract ? hourlyRateOf(contract!, usual) : projectRate;
+        if (underContract && rate == null) continue;
         items.push({
           id: `prtime:${e.id}`,
           kind: "labour",
@@ -491,7 +493,7 @@ export function localTicketSource(base: TicketSource): TicketSource {
           description: [e.ticketTitle, e.note].filter(Boolean).join(" — ").slice(0, 2000),
           ticketNumber: number,
           resourceName: who,
-          contractSourceId: mode === "contract" && contract ? contract.id : undefined,
+          contractSourceId: underContract ? contract!.id : undefined,
           quantity: (e.billableX100 ?? e.hoursX100) / 100,
           unitPriceCents: rate,
           taxable: true,

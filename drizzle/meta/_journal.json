@@ -1093,6 +1093,13 @@
       "when": 1794075405709,
       "tag": "0155_project_task_checkpoint",
       "breakpoints": true
+    },
+    {
+      "idx": 156,
+      "version": "7",
+      "when": 1794076845760,
+      "tag": "0156_project_task_contract_order",
+      "breakpoints": true
     }
   ]
 }

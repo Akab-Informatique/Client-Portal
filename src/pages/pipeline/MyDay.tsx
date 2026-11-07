@@ -2,7 +2,7 @@ import { useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
-import { AlertTriangle, CalendarDays, Star, CalendarOff, CheckCircle2, EyeOff, ChevronLeft, ChevronRight, Coffee, Loader2, Lock, MessageSquareText, Plus, RefreshCw, Sparkles, Workflow } from "lucide-react";
+import { AlertTriangle, ArrowDownUp, GripVertical, CalendarDays, Star, CalendarOff, CheckCircle2, EyeOff, ChevronLeft, ChevronRight, Coffee, Loader2, Lock, MessageSquareText, Plus, RefreshCw, Sparkles, Workflow } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { AiDirection, useAiDirection } from "@/components/AiDirection";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -17,6 +17,11 @@ import { PRIORITY_STYLE, addDays, dayLabel, hm, longDay, todayYmd, toMinutes, ty
 import { taskError, usePeople } from "./TaskDialog";
 import { DayProjects, MyTickets, Priorities } from "./DayLists";
 import { TimeShare } from "./TimeShare";
+import { DndContext, KeyboardSensor, PointerSensor, closestCenter, useSensor, useSensors, type DragEndEvent } from "@dnd-kit/core";
+import { SortableContext, arrayMove, sortableKeyboardCoordinates, useSortable, verticalListSortingStrategy } from "@dnd-kit/sortable";
+import { CSS } from "@dnd-kit/utilities";
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
+import { byCustom, useCustomOrder, useSortDefault } from "@/lib/sortPrefs";
 import { useProjectWorkspace } from "@/pages/projects/ProjectWorkspace";
 
 /** The hours shown on the timeline: from an hour before the day starts to an hour after it ends */
@@ -325,8 +330,8 @@ export function MyDay({ onOpenTask }: { onOpenTask: (id: string) => void }) {
           <Priorities items={data?.items ?? []} horizon="week" onOpen={open} />
           <MyTickets userId={userId} mine={userId === me.id} onOpen={(id) => ws.open(id)} />
           {userId === me.id && can("projects.view") && <DayProjects />}
-          {projectTasks.length > 0 && <ItemList title={t("pipeline.day.projectTasks")} icon={Workflow} items={projectTasks} loading={false} onOpen={open} empty="" />}
-          <ItemList title={t("pipeline.day.tasksToday")} icon={Workflow} items={taskItems} loading={allTasks.isLoading} onOpen={open} onComplete={can("pipeline.edit") ? (i) => (i.reminder ? check.mutate(i.refId) : complete.mutate(i.refId)) : undefined} empty={t("pipeline.day.noTasks")} />
+          {projectTasks.length > 0 && <ItemList title={t("pipeline.day.projectTasks")} icon={Workflow} items={projectTasks} loading={false} onOpen={open} empty="" sortView="projectTasks" />}
+          <ItemList title={t("pipeline.day.tasksToday")} icon={Workflow} items={taskItems} loading={allTasks.isLoading} onOpen={open} onComplete={can("pipeline.edit") ? (i) => (i.reminder ? check.mutate(i.refId) : complete.mutate(i.refId)) : undefined} empty={t("pipeline.day.noTasks")} sortView="tasks" />
           {can("pipeline.edit") && (
             <form
               className="glass flex gap-2 rounded-2xl border p-2.5"
@@ -348,40 +353,89 @@ export function MyDay({ onOpenTask }: { onOpenTask: (id: string) => void }) {
   );
 }
 
-function ItemList({ title, icon: Icon, items, loading, onOpen, onComplete, empty }: { title: string; icon: typeof Workflow; items: DayItem[]; loading: boolean; onOpen: (i: DayItem) => void; onComplete?: (i: DayItem) => void; empty: string }) {
+const LIST_SORTS = ["checkpoint", "priority", "name", "custom"] as const;
+type ListSort = (typeof LIST_SORTS)[number];
+const PRIO_RANK = { urgent: 0, high: 1, normal: 2, low: 3 } as const;
+
+/** A list of tasks of the day: checkpoint order by default; the technician picks the sort (their default for this list) or drags their own order. */
+function ItemList({ title, icon: Icon, items, loading, onOpen, onComplete, empty, sortView }: { title: string; icon: typeof Workflow; items: DayItem[]; loading: boolean; onOpen: (i: DayItem) => void; onComplete?: (i: DayItem) => void; empty: string; sortView: string }) {
   const { t } = useTranslation();
+  const [sort, setSort] = useSortDefault<ListSort>(`day.${sortView}`, "checkpoint", LIST_SORTS);
+  const { keys, save } = useCustomOrder(`day:${sortView}`, sort === "custom");
+  // "checkpoint": the order the list comes in (checkpoint day and time, then the due day)
+  const shown = sort === "custom" ? byCustom(items, (i) => i.key, keys) : sort === "priority" ? [...items].sort((a, b) => PRIO_RANK[a.priority] - PRIO_RANK[b.priority]) : sort === "name" ? [...items].sort((a, b) => a.title.localeCompare(b.title)) : items;
+  const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 5 } }), useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates }));
+  const onEnd = (e: DragEndEvent) => {
+    if (!e.over || e.active.id === e.over.id) return;
+    const ids = shown.map((i) => i.key);
+    save(arrayMove(ids, ids.indexOf(String(e.active.id)), ids.indexOf(String(e.over.id))));
+  };
   return (
     <section className="glass rounded-2xl border p-4">
-      <h3 className="mb-2 flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
-        <Icon className="size-3.5" /> {title} <span className="font-mono normal-case opacity-70">{items.length}</span>
-      </h3>
+      <div className="mb-2 flex items-center justify-between gap-2">
+        <h3 className="flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
+          <Icon className="size-3.5" /> {title} <span className="font-mono normal-case opacity-70">{items.length}</span>
+        </h3>
+        {items.length > 1 && (
+          <DropdownMenu>
+            <DropdownMenuTrigger className="flex items-center gap-1 rounded-md px-1.5 py-0.5 text-[11px] text-muted-foreground hover:text-foreground">
+              <ArrowDownUp className="size-3" /> {t(`pipeline.day.listSort.${sort}`)}
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end">
+              {LIST_SORTS.map((s) => (
+                <DropdownMenuItem key={s} onClick={() => setSort(s === "checkpoint" ? null : s)} className={cn(s === sort && "font-semibold text-primary")}>
+                  {t(`pipeline.day.listSort.${s}`)}
+                </DropdownMenuItem>
+              ))}
+              <p className="max-w-56 px-2 py-1.5 text-[10px] text-muted-foreground">{t("projects.sort.hint")}</p>
+            </DropdownMenuContent>
+          </DropdownMenu>
+        )}
+      </div>
       {loading ? (
         <Skeleton className="h-20 w-full" />
       ) : items.length === 0 ? (
         <p className="py-3 text-sm text-muted-foreground">{empty}</p>
       ) : (
-        <ul className="divide-y divide-[color:var(--glass-border)]">
-          {items.map((i) => (
-            <li key={i.key} className="flex items-center gap-2.5 py-2">
-              {onComplete && <Checkbox disabled={i.blocked} onCheckedChange={() => onComplete(i)} aria-label={t("pipeline.complete")} />}
-              <span className={cn("size-2 shrink-0 rounded-full", PRIORITY_STYLE[i.priority].dot)} />
-              <button type="button" onClick={() => onOpen(i)} className="min-w-0 flex-1 text-left">
-                <span className="flex items-baseline gap-2">
-                  {i.pin && <Star className={cn("size-3 shrink-0 fill-current", i.pin === "day" ? "text-primary" : "text-muted-foreground")} aria-label={t(`pipeline.day.pin.${i.pin}`)} />}
-                  {i.ticketNumber && <span className="shrink-0 font-mono text-[11px] text-primary">{i.ticketNumber}</span>}
-                  <span className={cn("truncate text-sm font-medium", i.masked && "italic text-muted-foreground")}>{i.title || t("pipeline.private")}</span>
-                </span>
-                {(i.client || i.pinNote) && <span className="block truncate text-xs text-muted-foreground">{[i.client, i.pinNote].filter(Boolean).join(" · ")}</span>}
-              </button>
-              {i.blocked && <Lock className="size-3.5 shrink-0 text-fuchsia-300" />}
-              {i.overdue && <span className="shrink-0 rounded-full bg-red-500/15 px-1.5 text-[10px] font-medium text-red-300">{t("pipeline.late")}</span>}
-              {i.dueTime && <span className="shrink-0 font-mono text-[10px] text-orange-300">{t("pipeline.before", { time: i.dueTime })}</span>}
-              <span className="shrink-0 font-mono text-[11px] text-muted-foreground">{hm(i.minutes)}</span>
-            </li>
-          ))}
-        </ul>
+        <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={onEnd}>
+          <SortableContext items={shown.map((i) => i.key)} strategy={verticalListSortingStrategy}>
+            <ul className="divide-y divide-[color:var(--glass-border)]">
+              {shown.map((i) => (
+                <ItemRow key={i.key} i={i} custom={sort === "custom"} onOpen={onOpen} onComplete={onComplete} />
+              ))}
+            </ul>
+          </SortableContext>
+        </DndContext>
       )}
     </section>
+  );
+}
+
+function ItemRow({ i, custom, onOpen, onComplete }: { i: DayItem; custom: boolean; onOpen: (i: DayItem) => void; onComplete?: (i: DayItem) => void }) {
+  const { t } = useTranslation();
+  const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id: i.key, disabled: !custom });
+  return (
+    <li ref={setNodeRef} style={{ transform: CSS.Transform.toString(transform), transition }} className={cn("flex items-center gap-2.5 py-2", isDragging && "relative z-10 bg-background/80 opacity-80")}>
+      {custom && (
+        <button type="button" aria-label={t("projects.sort.drag")} className="cursor-grab touch-none text-muted-foreground hover:text-foreground active:cursor-grabbing" {...attributes} {...listeners}>
+          <GripVertical className="size-4" />
+        </button>
+      )}
+      {onComplete && <Checkbox disabled={i.blocked} onCheckedChange={() => onComplete(i)} aria-label={t("pipeline.complete")} />}
+      <span className={cn("size-2 shrink-0 rounded-full", PRIORITY_STYLE[i.priority].dot)} />
+      <button type="button" onClick={() => onOpen(i)} className="min-w-0 flex-1 text-left">
+        <span className="flex items-baseline gap-2">
+          {i.pin && <Star className={cn("size-3 shrink-0 fill-current", i.pin === "day" ? "text-primary" : "text-muted-foreground")} aria-label={t(`pipeline.day.pin.${i.pin}`)} />}
+          {i.ticketNumber && <span className="shrink-0 font-mono text-[11px] text-primary">{i.ticketNumber}</span>}
+          <span className={cn("truncate text-sm font-medium", i.masked && "italic text-muted-foreground")}>{i.title || t("pipeline.private")}</span>
+        </span>
+        {(i.client || i.pinNote) && <span className="block truncate text-xs text-muted-foreground">{[i.client, i.pinNote].filter(Boolean).join(" · ")}</span>}
+      </button>
+      {i.blocked && <Lock className="size-3.5 shrink-0 text-fuchsia-300" />}
+      {i.overdue && <span className="shrink-0 rounded-full bg-red-500/15 px-1.5 text-[10px] font-medium text-red-300">{t("pipeline.late")}</span>}
+      {i.dueTime && <span className="shrink-0 font-mono text-[10px] text-orange-300">{t("pipeline.before", { time: i.dueTime })}</span>}
+      <span className="shrink-0 font-mono text-[11px] text-muted-foreground">{hm(i.minutes)}</span>
+    </li>
   );
 }
 

@@ -12,7 +12,7 @@ import { addDays, editable, labourType, sheetOf, todayQc, weekStartOf } from "..
 import { billingSettings } from "../lib/billing.ts";
 import { syncBillablesNow } from "../lib/billables.ts";
 import { chargesOfProject, moveCharge } from "../lib/chargeMove.ts";
-import { hourlyRateOf } from "../lib/contracts.ts";
+import { banksOf, hourlyRateOf } from "../lib/contracts.ts";
 import { escapeHtml, sendMail } from "../lib/mail.ts";
 import { body, zUuid } from "../lib/validate.ts";
 import { billProject, depositOfProject, linkTicket, ProjectBillError, projectBilling, projectOfTicket, ticketsOfProject } from "../lib/projectLinks.ts";
@@ -23,6 +23,7 @@ import { billProject, depositOfProject, linkTicket, ProjectBillError, projectBil
  * My projects, Needs attention, To watch.
  */
 const zDay = z.string().regex(/^\d{4}-\d{2}-\d{2}$/);
+const zHm = z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/);
 const zStatus = z.enum(["planning", "active", "on_hold", "done", "cancelled"]);
 const zMsStatus = z.enum(["todo", "doing", "done"]);
 const zName = z.string().trim().min(1).max(200);
@@ -136,6 +137,12 @@ async function cards(rows: Project[], me: string, withTasks = false) {
                 assigneeId: t.assigneeId,
                 assigneeName: t.assigneeId ? (userName.get(t.assigneeId) ?? null) : null,
                 dueDate: t.dueDate,
+                checkpointDate: t.checkpointDate,
+                checkpointTime: t.checkpointDate ? (t.checkpointTime ?? "17:00") : null,
+                contractId: t.contractId,
+                dependsOnId: t.dependsOnId,
+                /** Waits for another task that is not done yet */
+                waiting: Boolean(t.dependsOnId && !tasks.find((x) => x.id === t.dependsOnId)?.done),
                 late: !t.done && Boolean(t.dueDate && t.dueDate < today),
                 estimateHours: t.estimateMinutes == null ? null : t.estimateMinutes / 60,
                 hours: logged.filter((h) => h.taskId === t.id).reduce((n, h) => n + h.h, 0) / 100,
@@ -539,7 +546,8 @@ export const projectsRoutes = new Hono<AppEnv>()
     const clientId = zUuid.parse(c.req.param("clientId"));
     const usual = (await billingSettings()).rates.hourly;
     const rows = await db().select().from(schema.clientContracts).where(and(eq(schema.clientContracts.clientId, clientId), eq(schema.clientContracts.active, true))).orderBy(asc(schema.clientContracts.name));
-    return c.json(rows.map((k) => ({ id: k.id, name: k.name, hourlyRate: ((r) => (r == null ? null : r / 100))(hourlyRateOf(k, usual)) })));
+    const bank = await banksOf(rows);
+    return c.json(rows.map((k) => ({ id: k.id, name: k.name, hourlyRate: ((r) => (r == null ? null : r / 100))(hourlyRateOf(k, usual)), bankLeft: bank.get(k.id)?.left ?? null })));
   })
 
   /** The client's contacts with an email address (who a reply to the client can go to) */
@@ -746,12 +754,14 @@ export const projectsRoutes = new Hono<AppEnv>()
   .post("/:id/milestones/:mid/tasks", requirePermission("projects.edit"), async (c) => {
     const p = await loadProject(c.req.param("id"));
     const m = await loadMilestone(p.id, c.req.param("mid"));
-    const t = await body(c, z.object({ title: zName, description: zText.optional(), priority: zPriority.optional(), assigneeId: zUuid.nullable().optional(), dueDate: zDay.nullable().optional(), checkpointDate: zDay.nullable().optional(), checkpointTime: z.string().regex(/^d{2}:d{2}$/).nullable().optional(), estimateHours: zHours.nullable().optional() }));
+    const t = await body(c, z.object({ title: zName, description: zText.optional(), priority: zPriority.optional(), assigneeId: zUuid.nullable().optional(), dueDate: zDay.nullable().optional(), checkpointDate: zDay.nullable().optional(), checkpointTime: zHm.nullable().optional(), estimateHours: zHours.nullable().optional(), contractId: zUuid.nullable().optional(), dependsOnId: zUuid.nullable().optional() }));
     if (t.assigneeId) await activeStaff([t.assigneeId]);
+    if (t.contractId) await contractOf(p.clientId, t.contractId);
+    if (t.dependsOnId) await loadTask(p.id, t.dependsOnId).catch(() => { throw new HTTPException(400, { message: "task_invalid" }); });
     const [{ n }] = await db().select({ n: sql<number>`coalesce(max(${schema.projectTasks.position}), -1)::int` }).from(schema.projectTasks).where(eq(schema.projectTasks.milestoneId, m.id));
     const [row] = await db()
       .insert(schema.projectTasks)
-      .values({ projectId: p.id, milestoneId: m.id, title: t.title, description: t.description ?? "", priority: t.priority ?? "normal", assigneeId: t.assigneeId ?? null, dueDate: t.dueDate ?? null, checkpointDate: t.checkpointDate ?? null, checkpointTime: t.checkpointDate ? (t.checkpointTime ?? "17:00") : null, estimateMinutes: t.estimateHours == null ? null : Math.round(t.estimateHours * 60), position: n + 1 })
+      .values({ projectId: p.id, milestoneId: m.id, title: t.title, description: t.description ?? "", priority: t.priority ?? "normal", assigneeId: t.assigneeId ?? null, dueDate: t.dueDate ?? null, checkpointDate: t.checkpointDate ?? null, checkpointTime: t.checkpointDate ? (t.checkpointTime ?? "17:00") : null, contractId: t.contractId ?? null, dependsOnId: t.dependsOnId ?? null, estimateMinutes: t.estimateHours == null ? null : Math.round(t.estimateHours * 60), position: n + 1 })
       .returning();
     await syncMilestone(m.id);
     await db().update(schema.projects).set({ updatedAt: new Date() }).where(eq(schema.projects.id, p.id));
@@ -764,6 +774,7 @@ export const projectsRoutes = new Hono<AppEnv>()
     const task = await loadTask(p.id, c.req.param("tid"));
     const d = db();
     const [m] = await d.select().from(schema.projectMilestones).where(eq(schema.projectMilestones.id, task.milestoneId));
+    const [dependsOn] = task.dependsOnId ? await d.select().from(schema.projectTasks).where(eq(schema.projectTasks.id, task.dependsOnId)) : [];
     const [notes, entries, timer, assignee] = await Promise.all([
       d
         .select({ id: schema.projectTaskNotes.id, text: schema.projectTaskNotes.text, kind: schema.projectTaskNotes.kind, emailedTo: schema.projectTaskNotes.emailedTo, createdAt: schema.projectTaskNotes.createdAt, authorId: schema.projectTaskNotes.authorId, author: schema.users.name })
@@ -794,6 +805,9 @@ export const projectsRoutes = new Hono<AppEnv>()
       dueDate: task.dueDate,
       checkpointDate: task.checkpointDate,
       checkpointTime: task.checkpointTime,
+      contractId: task.contractId,
+      dependsOnId: task.dependsOnId,
+      dependsOn: dependsOn ? { id: dependsOn.id, title: dependsOn.title, done: dependsOn.done } : null,
       estimateHours: task.estimateMinutes == null ? null : task.estimateMinutes / 60,
       doneAt: task.doneAt,
       createdAt: task.createdAt,
@@ -818,13 +832,37 @@ export const projectsRoutes = new Hono<AppEnv>()
         dueDate: zDay.nullable().optional(),
         /** Goal day and time (17:00 when a day has no time; no day = no time) */
         checkpointDate: zDay.nullable().optional(),
-        checkpointTime: z.string().regex(/^d{2}:d{2}$/).nullable().optional(),
+        checkpointTime: zHm.nullable().optional(),
         estimateHours: zHours.nullable().optional(),
+        /** The contract the time is worked under (a bank of hours is drawn from), none = the project's */
+        contractId: zUuid.nullable().optional(),
+        /** The task that must be done first */
+        dependsOnId: zUuid.nullable().optional(),
         /** Move the task to another milestone of the same project */
         milestoneId: zUuid.optional(),
       }),
     );
     if (t.assigneeId) await activeStaff([t.assigneeId]);
+    if (t.contractId) await contractOf(p.clientId, t.contractId);
+    if (t.dependsOnId) {
+      if (t.dependsOnId === cur.id) throw new HTTPException(409, { message: "task_cycle" });
+      await loadTask(p.id, t.dependsOnId).catch(() => {
+        throw new HTTPException(400, { message: "task_invalid" });
+      });
+      // a loop (A waits for B which waits for A) is refused
+      const all = await db().select({ id: schema.projectTasks.id, dep: schema.projectTasks.dependsOnId }).from(schema.projectTasks).where(eq(schema.projectTasks.projectId, p.id));
+      const dep = new Map(all.map((x) => [x.id, x.dep]));
+      for (let at: string | null | undefined = t.dependsOnId, n = 0; at && n < 200; at = dep.get(at), n++) if (at === cur.id) throw new HTTPException(409, { message: "task_cycle" });
+    }
+    // not started or finished before the task it waits for is done
+    {
+      const waitsOn = t.dependsOnId !== undefined ? t.dependsOnId : cur.dependsOnId;
+      const want = t.status ?? (t.done === undefined ? undefined : t.done ? "done" : undefined);
+      if (waitsOn && (want === "doing" || want === "done")) {
+        const [first] = await db().select({ done: schema.projectTasks.done }).from(schema.projectTasks).where(eq(schema.projectTasks.id, waitsOn));
+        if (first && !first.done) throw new HTTPException(409, { message: "task_blocked" });
+      }
+    }
     const target = t.milestoneId && t.milestoneId !== cur.milestoneId ? await loadMilestone(p.id, t.milestoneId) : null;
     const status = t.status ?? (t.done === undefined ? undefined : t.done ? "done" : cur.status === "done" ? "todo" : cur.status);
     const [row] = await db()
@@ -838,6 +876,8 @@ export const projectsRoutes = new Hono<AppEnv>()
         ...(t.dueDate !== undefined ? { dueDate: t.dueDate } : {}),
         ...(t.checkpointDate !== undefined || t.checkpointTime !== undefined ? (() => { const day = t.checkpointDate === undefined ? cur.checkpointDate : t.checkpointDate; return { checkpointDate: day, checkpointTime: day ? (t.checkpointTime ?? cur.checkpointTime ?? "17:00") : null }; })() : {}),
         ...(t.estimateHours !== undefined ? { estimateMinutes: t.estimateHours == null ? null : Math.round(t.estimateHours * 60) } : {}),
+        ...(t.contractId !== undefined ? { contractId: t.contractId } : {}),
+        ...(t.dependsOnId !== undefined ? { dependsOnId: t.dependsOnId } : {}),
         ...(target ? { milestoneId: target.id } : {}),
         updatedAt: new Date(),
       })
@@ -900,6 +940,10 @@ export const projectsRoutes = new Hono<AppEnv>()
     const p = await loadProject(c.req.param("id"));
     if (p.status === "done" || p.status === "cancelled") throw new HTTPException(409, { message: "project_closed" });
     const task = await loadTask(p.id, c.req.param("tid"));
+    if (task.dependsOnId) {
+      const [first] = await db().select({ done: schema.projectTasks.done }).from(schema.projectTasks).where(eq(schema.projectTasks.id, task.dependsOnId));
+      if (first && !first.done) throw new HTTPException(409, { message: "task_blocked" });
+    }
     await db().insert(schema.projectTaskTimers).values({ taskId: task.id, userId: a.user.id }).onConflictDoNothing();
     // work has begun
     if (task.status === "todo") {
@@ -1102,7 +1146,7 @@ async function syncMilestone(milestoneId: string) {
 async function logTime(
   userId: string,
   p: Project,
-  task: { id: string; milestoneId: string; title: string } | null,
+  task: { id: string; milestoneId: string; title: string; contractId?: string | null } | null,
   t: { date: string; hours: number; note?: string; billable?: boolean },
   milestone?: { id: string; name: string } | null,
 ) {
@@ -1111,7 +1155,8 @@ async function logTime(
   if (!editable(sheet.status)) throw new HTTPException(409, { message: "timesheet_locked" });
   const type = await labourType();
   const hoursX100 = Math.round(t.hours * 100);
-  const contract = p.billingMode === "contract" ? await contractOf(p.clientId, p.contractId) : null;
+  // the task's own contract wins over the project's; a bank of hours is drawn from (the time is not billed one by one)
+  const contract = task?.contractId ? await contractOf(p.clientId, task.contractId) : p.billingMode === "contract" ? await contractOf(p.clientId, p.contractId) : null;
   // billed unless the project is a fixed price, or its contract includes the hours (no hourly rate)
   const billable = t.billable ?? (p.billingMode === "fixed" ? false : contract ? hourlyRateOf(contract, (await billingSettings()).rates.hourly) != null : true);
   const [row] = await db()
@@ -1129,6 +1174,7 @@ async function logTime(
       taskId: task?.id ?? null,
       ...splitBillable(hoursX100, billable ? hoursX100 : 0),
       clientId: p.clientId,
+      contractId: contract?.id ?? null,
       source: "project",
     })
     .returning();

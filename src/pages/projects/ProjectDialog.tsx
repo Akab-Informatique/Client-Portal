@@ -2,7 +2,7 @@ import { useEffect, useRef, useState, type FormEvent } from "react";
 import { useTranslation } from "react-i18next";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
-import { ArrowDown, ArrowUp, BellRing, Check, Globe, Lock, ChevronDown, Clock, FileText, Flag, FolderOpen, Info, ArrowRightLeft, ListChecks, Loader2, Mail, MessageSquare, MessagesSquare, Plus, Star, Trash2, X } from "lucide-react";
+import { ArrowDown, ArrowUp, GripVertical, BellRing, Check, Globe, Lock, ChevronDown, Clock, FileText, Flag, FolderOpen, Info, ArrowRightLeft, ListChecks, Loader2, Mail, MessageSquare, MessagesSquare, Plus, Star, Trash2, X } from "lucide-react";
 import { useConfirm } from "@/components/ConfirmDialog";
 import { MoveChargeDialog } from "@/components/MoveChargeDialog";
 import { Button } from "@/components/ui/button";
@@ -23,8 +23,12 @@ import { Overview } from "./Overview";
 import { FilesBox } from "@/pages/pipeline/TaskParts";
 import { fileToBase64 } from "@/pages/pipeline/shared";
 import { PhaseDialog } from "./PhaseDialog";
+import { MilestoneTasks } from "./MilestoneTasks";
+import { DndContext, KeyboardSensor, PointerSensor, closestCenter, useSensor, useSensors, type DragEndEvent } from "@dnd-kit/core";
+import { SortableContext, arrayMove, sortableKeyboardCoordinates, useSortable, verticalListSortingStrategy } from "@dnd-kit/sortable";
+import { CSS } from "@dnd-kit/utilities";
 import { Card, Text } from "./ui";
-import { apiMessage, dueTone, hoursText, KEY, MS_TONE, useProjectPeople, PRIORITY_DOT, STATUS_STYLE, TASK_STYLE, TONE_TEXT, today, type Milestone, type ProjectDetail } from "./shared";
+import { apiMessage, dueTone, hoursText, KEY, MS_TONE, useProjectPeople, STATUS_STYLE, TONE_TEXT, today, type Milestone, type ProjectDetail } from "./shared";
 
 const TABS = [
   { key: "overview", icon: Info },
@@ -160,6 +164,12 @@ function Milestones({ p, edit, focus, onChanged, fail, onTask }: { p: ProjectDet
     [ids[i], ids[i + d]] = [ids[i + d], ids[i]];
     reorder.mutate(ids);
   };
+  const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 6 } }), useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates }));
+  const onEnd = (e: DragEndEvent) => {
+    if (!e.over || e.active.id === e.over.id) return;
+    const ids = p.milestones.map((m) => m.id);
+    reorder.mutate(arrayMove(ids, ids.indexOf(String(e.active.id)), ids.indexOf(String(e.over.id))));
+  };
   return (
     <div className="space-y-3">
       <div className="flex justify-end">
@@ -168,11 +178,15 @@ function Milestones({ p, edit, focus, onChanged, fail, onTask }: { p: ProjectDet
         </Button>
       </div>
       {p.milestones.length === 0 && <p className="rounded-2xl border border-dashed py-10 text-center text-sm text-muted-foreground">{t("projects.noMilestones")}</p>}
+      <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={onEnd}>
+      <SortableContext items={p.milestones.map((m) => m.id)} strategy={verticalListSortingStrategy}>
       <ul className="space-y-2">
         {p.milestones.map((m, i) => (
           <MilestoneRow key={m.id} p={p} m={m} edit={edit} isOpen={open.has(m.id)} onToggle={() => toggle(m.id)} onChanged={onChanged} fail={fail} onUp={i > 0 ? () => move(i, -1) : undefined} onDown={i < p.milestones.length - 1 ? () => move(i, 1) : undefined} focus={focus === m.id} onTask={onTask} last={i === p.milestones.length - 1} />
         ))}
       </ul>
+      </SortableContext>
+      </DndContext>
       {edit && (
         <Button variant="outline" className="w-full border-dashed" onClick={() => setAdding(true)}>
           <Plus className="size-4" /> {t("projects.newPhase")}
@@ -186,7 +200,8 @@ function Milestones({ p, edit, focus, onChanged, fail, onTask }: { p: ProjectDet
 function MilestoneRow({ p, m, edit, isOpen, onToggle, onChanged, fail, onUp, onDown, focus, onTask, last }: { p: ProjectDetail; m: Milestone; edit: boolean; isOpen: boolean; onToggle: () => void; onChanged: () => void; fail: (e: unknown) => void; onUp?: () => void; onDown?: () => void; focus: boolean; onTask: (id: string | null) => void; last: boolean }) {
   const { t } = useTranslation();
   const confirm = useConfirm();
-  const ref = useRef<HTMLLIElement>(null);
+  const ref = useRef<HTMLLIElement | null>(null);
+  const sortable = useSortable({ id: m.id, disabled: !edit });
   useEffect(() => {
     if (focus) ref.current?.scrollIntoView({ block: "center" });
   }, [focus]);
@@ -197,7 +212,14 @@ function MilestoneRow({ p, m, edit, isOpen, onToggle, onChanged, fail, onUp, onD
   const tone = dueTone(m.dueDate, m.status === "done");
   const pct = m.tasksTotal ? Math.round((m.tasksDone / m.tasksTotal) * 100) : m.status === "done" ? 100 : 0;
   return (
-    <li ref={ref} className="relative pl-12">
+    <li
+      ref={(el) => {
+        ref.current = el;
+        sortable.setNodeRef(el);
+      }}
+      style={{ transform: CSS.Transform.toString(sortable.transform), transition: sortable.transition }}
+      className={cn("relative pl-12", sortable.isDragging && "z-10 opacity-80")}
+    >
       {/* the line of the project, and this milestone's flag on it */}
       {!last && <span className="absolute bottom-[-0.5rem] left-[1.15rem] top-9 w-px bg-border" aria-hidden />}
       <span
@@ -208,6 +230,11 @@ function MilestoneRow({ p, m, edit, isOpen, onToggle, onChanged, fail, onUp, onD
       </span>
       <div className={cn("rounded-2xl border bg-card/40 transition-colors", focus && "border-[color:var(--gold)]/50", m.status === "done" && "border-emerald-500/20")}>
         <div className="flex flex-wrap items-center gap-2 px-3 py-2.5">
+          {edit && (
+            <button type="button" aria-label={t("projects.sort.drag")} title={t("projects.sort.dragPhase")} className="cursor-grab touch-none rounded p-1 text-muted-foreground hover:text-foreground active:cursor-grabbing" {...sortable.attributes} {...sortable.listeners}>
+              <GripVertical className="size-4" />
+            </button>
+          )}
           <button type="button" onClick={onToggle} aria-expanded={isOpen} aria-label={isOpen ? t("projects.collapse") : t("projects.expand")} className="rounded-md p-1 text-muted-foreground hover:text-foreground">
             <ChevronDown className={cn("size-4 transition-transform", !isOpen && "-rotate-90")} />
           </button>
@@ -267,24 +294,9 @@ function MilestoneRow({ p, m, edit, isOpen, onToggle, onChanged, fail, onUp, onD
                 />
               </div>
             </div>
-            {/* the tasks: each opens in its own window, like a ticket */}
+            {/* the tasks: each opens in its own window, like a ticket; sorted as the technician chose (checkpoint by default) */}
             <div>
-              <p className="mb-1 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">{t("projects.tasks")}</p>
-              {(m.tasks ?? []).length === 0 && <p className="py-1 text-xs text-muted-foreground">{t("projects.noTasks")}</p>}
-              <ul className="space-y-1">
-                {(m.tasks ?? []).map((k) => (
-                  <li key={k.id}>
-                    <button type="button" onClick={() => onTask(k.id)} className="flex w-full items-center gap-3 rounded-xl border bg-background/40 px-3 py-2 text-left text-sm transition-colors hover:border-[color:var(--gold)]/40">
-                      <span className={cn("size-2 shrink-0 rounded-full", PRIORITY_DOT[k.priority])} title={t(`projects.priority.${k.priority}`)} />
-                      <span className={cn("min-w-0 flex-1 truncate", k.status === "done" && "text-muted-foreground line-through")}>{k.title}</span>
-                      <span className={cn("shrink-0 rounded-full border px-2 py-0.5 text-[10px] font-medium", TASK_STYLE[k.status])}>{t(`projects.taskStatus.${k.status}`)}</span>
-                      <span className="hidden w-28 shrink-0 truncate text-xs text-muted-foreground sm:block">{k.assigneeName ?? t("projects.unassigned")}</span>
-                      <span className="hidden w-16 shrink-0 text-right font-mono text-[11px] text-muted-foreground sm:block">{k.hours ? hoursText(k.hours) : ""}</span>
-                      <span className={cn("w-14 shrink-0 text-right text-xs", k.late ? "text-red-400" : "text-muted-foreground")}>{k.dueDate ? shortDate(k.dueDate) : ""}</span>
-                    </button>
-                  </li>
-                ))}
-              </ul>
+              <MilestoneTasks projectId={p.id} m={m} onTask={onTask} />
               {edit && (
                 <form
                   className="mt-2 flex items-center gap-2"
