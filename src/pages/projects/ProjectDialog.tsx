@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type FormEvent } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent } from "react";
 import { useTranslation } from "react-i18next";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
@@ -24,7 +24,8 @@ import { FilesBox } from "@/pages/pipeline/TaskParts";
 import { fileToBase64 } from "@/pages/pipeline/shared";
 import { PhaseDialog } from "./PhaseDialog";
 import { MilestoneTasks } from "./MilestoneTasks";
-import { DndContext, KeyboardSensor, PointerSensor, closestCenter, useSensor, useSensors, type DragEndEvent } from "@dnd-kit/core";
+import { DndContext, KeyboardSensor, PointerSensor, closestCenter, pointerWithin, useSensor, useSensors, type CollisionDetection, type DragEndEvent } from "@dnd-kit/core";
+import { TaskDndCtx } from "./taskDnd";
 import { SortableContext, arrayMove, sortableKeyboardCoordinates, useSortable, verticalListSortingStrategy } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
 import { Card, Text } from "./ui";
@@ -165,11 +166,35 @@ function Milestones({ p, edit, focus, onChanged, fail, onTask }: { p: ProjectDet
     reorder.mutate(ids);
   };
   const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 6 } }), useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates }));
-  const onEnd = (e: DragEndEvent) => {
-    if (!e.over || e.active.id === e.over.id) return;
-    const ids = p.milestones.map((m) => m.id);
-    reorder.mutate(arrayMove(ids, ids.indexOf(String(e.active.id)), ids.indexOf(String(e.over.id))));
+  // one drag area for the phases AND their tasks: a phase is reordered, a task is moved inside its phase or to another one
+  const handlers = useRef(new Map<string, (e: DragEndEvent) => void>());
+  const register = useCallback((id: string, fn: (e: DragEndEvent) => void) => {
+    handlers.current.set(id, fn);
+    return () => void handlers.current.delete(id);
+  }, []);
+  const [draggingTask, setDraggingTask] = useState(false);
+  const crossMove = useMutation({ mutationFn: (v: { id: string; milestoneId: string; groupId: string | null }) => api.patch(`/projects/${p.id}/tasks/${v.id}`, { milestoneId: v.milestoneId, groupId: v.groupId }), onSuccess: onChanged, onError: fail });
+  const collide: CollisionDetection = (args) => {
+    // a phase goes among the phases; a task: what is under the pointer first (a task row, a group, the phase), else the nearest
+    if (args.active.data.current?.type === "phase") return closestCenter({ ...args, droppableContainers: args.droppableContainers.filter((c) => c.data.current?.type === "phase") });
+    const hit = pointerWithin(args);
+    return hit.length ? hit : closestCenter(args);
   };
+  const onEnd = (e: DragEndEvent) => {
+    setDraggingTask(false);
+    if (!e.over || e.active.id === e.over.id) return;
+    if (e.active.data.current?.type === "phase") {
+      const ids = p.milestones.map((m) => m.id);
+      reorder.mutate(arrayMove(ids, ids.indexOf(String(e.active.id)), ids.indexOf(String(e.over.id))));
+      return;
+    }
+    const from = e.active.data.current as { milestoneId?: string } | undefined;
+    const to = e.over.data.current as { milestoneId?: string; groupId?: string | null } | undefined;
+    if (!from?.milestoneId || !to?.milestoneId) return;
+    if (from.milestoneId === to.milestoneId) handlers.current.get(from.milestoneId)?.(e);
+    else if (edit) crossMove.mutate({ id: String(e.active.id), milestoneId: to.milestoneId, groupId: to.groupId ?? null });
+  };
+  const dndValue = useMemo(() => ({ register, dragging: draggingTask }), [register, draggingTask]);
   return (
     <div className="space-y-3">
       <div className="flex justify-end">
@@ -178,7 +203,8 @@ function Milestones({ p, edit, focus, onChanged, fail, onTask }: { p: ProjectDet
         </Button>
       </div>
       {p.milestones.length === 0 && <p className="rounded-2xl border border-dashed py-10 text-center text-sm text-muted-foreground">{t("projects.noMilestones")}</p>}
-      <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={onEnd}>
+      <TaskDndCtx.Provider value={dndValue}>
+      <DndContext sensors={sensors} collisionDetection={collide} onDragStart={(e) => setDraggingTask(e.active.data.current?.type === "task")} onDragCancel={() => setDraggingTask(false)} onDragEnd={onEnd}>
       <SortableContext items={p.milestones.map((m) => m.id)} strategy={verticalListSortingStrategy}>
       <ul className="space-y-2">
         {p.milestones.map((m, i) => (
@@ -187,6 +213,7 @@ function Milestones({ p, edit, focus, onChanged, fail, onTask }: { p: ProjectDet
       </ul>
       </SortableContext>
       </DndContext>
+      </TaskDndCtx.Provider>
       {edit && (
         <Button variant="outline" className="w-full border-dashed" onClick={() => setAdding(true)}>
           <Plus className="size-4" /> {t("projects.newPhase")}
@@ -201,7 +228,7 @@ function MilestoneRow({ p, m, edit, isOpen, onToggle, onChanged, fail, onUp, onD
   const { t } = useTranslation();
   const confirm = useConfirm();
   const ref = useRef<HTMLLIElement | null>(null);
-  const sortable = useSortable({ id: m.id, disabled: !edit });
+  const sortable = useSortable({ id: m.id, disabled: !edit, data: { type: "phase", milestoneId: m.id, groupId: null } });
   useEffect(() => {
     if (focus) ref.current?.scrollIntoView({ block: "center" });
   }, [focus]);

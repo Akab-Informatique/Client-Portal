@@ -1,8 +1,8 @@
-import { useState, type FormEvent, type ReactNode } from "react";
+import { useEffect, useRef, useState, type FormEvent, type ReactNode } from "react";
 import { useTranslation } from "react-i18next";
 import { useMutation } from "@tanstack/react-query";
-import { DndContext, KeyboardSensor, PointerSensor, closestCenter, pointerWithin, useDroppable, useSensor, useSensors, type CollisionDetection, type DragEndEvent } from "@dnd-kit/core";
-import { SortableContext, arrayMove, sortableKeyboardCoordinates, useSortable, verticalListSortingStrategy } from "@dnd-kit/sortable";
+import { useDroppable, type DragEndEvent } from "@dnd-kit/core";
+import { SortableContext, arrayMove, useSortable, verticalListSortingStrategy } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
 import { ArrowDownUp, Check, ChevronDown, Folder, FolderInput, FolderOpen, FolderPlus, GripVertical, Lock, Pencil, Trash2, X } from "lucide-react";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
@@ -11,6 +11,7 @@ import { byCustom, useCustomOrder, useSortDefault } from "@/lib/sortPrefs";
 import { cn } from "@/lib/utils";
 import { shortDate } from "@/pages/tickets/shared";
 import { hoursText, PRIORITY_DOT, TASK_STYLE, type Milestone } from "./shared";
+import { useTaskDnd } from "./taskDnd";
 
 const SORTS = ["checkpoint", "due", "status", "custom"] as const;
 type Sort = (typeof SORTS)[number];
@@ -48,21 +49,16 @@ export function MilestoneTasks({ projectId, m, onTask, edit, onChanged, fail }: 
           return at(a).localeCompare(at(b)) || (a.dueDate ?? "9999").localeCompare(b.dueDate ?? "9999");
         });
   const groupOf = (k: Task) => (k.groupId && groups.some((g) => g.id === k.groupId) ? k.groupId : null);
-  const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 5 } }), useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates }));
-  const [dragging, setDragging] = useState(false);
-  // what is under the pointer first (a task row, else the group box), the nearest one otherwise
-  const collide: CollisionDetection = (args) => {
-    const hit = pointerWithin(args);
-    return hit.length ? hit : closestCenter(args);
-  };
+  const { dragging, register } = useTaskDnd();
+  // a drop inside this phase (the drag area is the project's, shared by all the phases): reorder, or move to a group / out of it
   const onEnd = (e: DragEndEvent) => {
-    setDragging(false);
     if (!e.over || e.active.id === e.over.id) return;
     const a = ordered.find((k) => k.id === e.active.id);
     if (!a) return;
-    const overId = String(e.over.id);
-    const zone = overId.startsWith("group:") ? (overId === "group:none" ? null : overId.slice(6)) : undefined;
-    const o = zone === undefined ? ordered.find((k) => k.id === overId) : undefined;
+    const over = e.over.data.current as { type?: string; groupId?: string | null } | undefined;
+    // on a group: that group; on the loose zone or the phase itself: out of any group; on a task: where that task is
+    const zone = over?.type === "group" ? (over.groupId ?? null) : over?.type === "loose" || over?.type === "phase" ? null : undefined;
+    const o = zone === undefined ? ordered.find((k) => k.id === String(e.over!.id)) : undefined;
     const target = zone !== undefined ? zone : o ? groupOf(o) : undefined;
     if (target === undefined) return;
     if (groupOf(a) !== target) {
@@ -78,6 +74,9 @@ export function MilestoneTasks({ projectId, m, onTask, edit, onChanged, fail }: 
     }
   };
   // groups: made here, folded or not (kept on this computer), renamed, deleted (their tasks stay)
+  const latest = useRef(onEnd);
+  latest.current = onEnd;
+  useEffect(() => register(m.id, (e) => latest.current(e)), [m.id, register]);
   const [closed, setClosed] = useState(readClosed);
   const toggle = (id: string) =>
     setClosed((c) => {
@@ -105,7 +104,7 @@ export function MilestoneTasks({ projectId, m, onTask, edit, onChanged, fail }: 
     <SortableContext items={list.map((k) => k.id)} strategy={verticalListSortingStrategy}>
       <ul className="space-y-1">
         {list.map((k) => (
-          <TaskRow key={k.id} k={k} onTask={onTask} groups={edit ? groups : []} onGroup={(groupId) => moveTask.mutate({ id: k.id, groupId })} />
+          <TaskRow key={k.id} k={k} milestoneId={m.id} onTask={onTask} groups={edit ? groups : []} onGroup={(groupId) => moveTask.mutate({ id: k.id, groupId })} />
         ))}
       </ul>
     </SortableContext>
@@ -157,36 +156,36 @@ export function MilestoneTasks({ projectId, m, onTask, edit, onChanged, fail }: 
         </form>
       )}
       {tasks.length === 0 && groups.length === 0 && <p className="py-1 text-xs text-muted-foreground">{t("projects.noTasks")}</p>}
-      <DndContext sensors={sensors} collisionDetection={collide} onDragStart={() => setDragging(true)} onDragCancel={() => setDragging(false)} onDragEnd={onEnd}>
+      <div>
         <div className="space-y-2">
           {groups.map((g) => {
             const inside = ordered.filter((k) => groupOf(k) === g.id);
             const open = !closed.has(g.id);
             return (
-              <GroupBox key={g.id} g={g} count={inside.length} done={inside.filter((k) => k.done).length} open={open} edit={edit} onToggle={() => toggle(g.id)} onRename={(n) => rename.mutate({ id: g.id, name: n })} onDelete={() => delGroup.mutate(g.id)}>
+              <GroupBox key={g.id} g={g} milestoneId={m.id} count={inside.length} done={inside.filter((k) => k.done).length} open={open} edit={edit} onToggle={() => toggle(g.id)} onRename={(n) => rename.mutate({ id: g.id, name: n })} onDelete={() => delGroup.mutate(g.id)}>
                 {inside.length === 0 ? <p className="px-2 py-1 text-xs text-muted-foreground">{t("projects.group.empty")}</p> : rows(inside)}
               </GroupBox>
             );
           })}
           {groups.length > 0 && (loose.length > 0 || dragging) ? (
-            <LooseZone empty={loose.length === 0} dragging={dragging}>
+            <LooseZone milestoneId={m.id} empty={loose.length === 0} dragging={dragging}>
               {loose.length > 0 && rows(loose)}
             </LooseZone>
           ) : (
             loose.length > 0 && rows(loose)
           )}
         </div>
-      </DndContext>
+      </div>
     </div>
   );
 }
 
 /** One group: a folder with an arrow (folds the tasks inside), its name (renamed in place), how many are done, delete */
-function GroupBox({ g, count, done, open, edit, onToggle, onRename, onDelete, children }: { g: Group; count: number; done: number; open: boolean; edit: boolean; onToggle: () => void; onRename: (name: string) => void; onDelete: () => void; children: ReactNode }) {
+function GroupBox({ g, milestoneId, count, done, open, edit, onToggle, onRename, onDelete, children }: { g: Group; milestoneId: string; count: number; done: number; open: boolean; edit: boolean; onToggle: () => void; onRename: (name: string) => void; onDelete: () => void; children: ReactNode }) {
   const { t } = useTranslation();
   const [editing, setEditing] = useState(false);
   const [text, setText] = useState(g.name);
-  const { setNodeRef, isOver } = useDroppable({ id: `group:${g.id}` });
+  const { setNodeRef, isOver } = useDroppable({ id: `group:${g.id}`, data: { type: "group", milestoneId, groupId: g.id } });
   const commit = () => {
     setEditing(false);
     if (text.trim() && text.trim() !== g.name) onRename(text.trim());
@@ -236,9 +235,9 @@ function GroupBox({ g, count, done, open, edit, onToggle, onRename, onDelete, ch
   );
 }
 
-function TaskRow({ k, onTask, groups, onGroup }: { k: Task; onTask: (id: string) => void; groups: Group[]; onGroup: (groupId: string | null) => void }) {
+function TaskRow({ k, milestoneId, onTask, groups, onGroup }: { k: Task; milestoneId: string; onTask: (id: string) => void; groups: Group[]; onGroup: (groupId: string | null) => void }) {
   const { t } = useTranslation();
-  const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id: k.id });
+  const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id: k.id, data: { type: "task", milestoneId, groupId: k.groupId } });
   return (
     <li ref={setNodeRef} style={{ transform: CSS.Transform.toString(transform), transition }} className={cn(isDragging && "relative z-10 opacity-80")}>
       <div className="flex items-center gap-1">
@@ -283,9 +282,9 @@ function TaskRow({ k, onTask, groups, onGroup }: { k: Task; onTask: (id: string)
 }
 
 /** The loose tasks of a milestone with groups: also a drop zone (a task dragged out of its group comes here) */
-function LooseZone({ empty, dragging, children }: { empty: boolean; dragging: boolean; children: ReactNode }) {
+function LooseZone({ milestoneId, empty, dragging, children }: { milestoneId: string; empty: boolean; dragging: boolean; children: ReactNode }) {
   const { t } = useTranslation();
-  const { setNodeRef, isOver } = useDroppable({ id: "group:none" });
+  const { setNodeRef, isOver } = useDroppable({ id: `loose:${milestoneId}`, data: { type: "loose", milestoneId, groupId: null } });
   return (
     <div ref={setNodeRef} className={cn("rounded-xl transition-colors", isOver && "bg-foreground/[0.05] ring-1 ring-foreground/20", empty && dragging && "border border-dashed border-muted-foreground/40 px-3 py-3 text-center text-xs text-muted-foreground")}>
       {empty ? t("projects.group.none") : children}
