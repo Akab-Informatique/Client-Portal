@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState, type FormEvent, type ReactNode } from "react";
+import { useEffect, useMemo, useRef, useState, type FormEvent, type ReactNode } from "react";
 import { useTranslation } from "react-i18next";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
@@ -20,7 +20,7 @@ import { shortDate, shortDateTime } from "@/pages/tickets/shared";
 import { apiMessage, clock, hoursText, KEY, PRIORITIES, PRIORITY_DOT, TASK_STATUSES, TASK_STYLE, today, useProjectPeople, type ProjectDetail, type TaskDetail, type TaskStatus } from "./shared";
 
 /** What a minimized task keeps to be shown in the dock */
-export type DockedTask = { projectId: string; taskId: string; number: string; title: string; milestone: string; status: TaskStatus };
+export type DockedTask = { projectId: string; taskId: string; number: string; project?: string; title: string; milestone: string; status: TaskStatus };
 
 /** A text saved when you leave it (Enter too for a single line) */
 function Saved({ value, onSave, multiline, className, ...rest }: { value: string; onSave: (v: string) => void; multiline?: boolean; className?: string; placeholder?: string; maxLength?: number; rows?: number; "aria-label"?: string }) {
@@ -82,6 +82,20 @@ export function TaskDialog({ projectId, taskId, onClose, onMinimize }: { project
     onError: fail,
   });
   const closed = tk ? tk.project.status === "done" || tk.project.status === "cancelled" : false;
+  // like a ticket: opening the task starts its timer (once), closing it with the timer going asks for the time
+  const canTime = Boolean(tk) && edit && can("timesheets.use") && !closed;
+  const [askStop, setAskStop] = useState(0);
+  const autoStarted = useRef(false);
+  useEffect(() => {
+    if (!tk || autoStarted.current || !canTime || tk.timer || tk.status === "done" || tk.dependsOn?.done === false) return;
+    autoStarted.current = true;
+    api.post(`${base}/timer/start`).then(refresh, () => undefined);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [tk?.id, canTime]);
+  const requestClose = () => {
+    if (tk?.timer && canTime) setAskStop((n) => n + 1);
+    else onClose();
+  };
   const hourly = tk ? tk.project.billingMode !== "fixed" : false;
   // the client's contracts (a bank of hours is drawn from like a ticket's) and the other tasks of the project (the one this waits for)
   const clientId = tk?.project.clientId ?? null;
@@ -89,7 +103,7 @@ export function TaskDialog({ projectId, taskId, onClose, onMinimize }: { project
   const others = (project?.milestones ?? []).flatMap((m) => (m.tasks ?? []).filter((x) => x.id !== taskId).map((x) => ({ id: x.id, title: x.title, phase: m.name, done: x.done })));
 
   return (
-    <Dialog open onOpenChange={(o) => !o && onClose()}>
+    <Dialog open onOpenChange={(o) => !o && requestClose()}>
       <DialogContent showCloseButton={false} className="flex h-[min(95dvh,66rem)] flex-col gap-0 overflow-hidden border-violet-400/30 p-0 sm:max-w-[min(96vw,96rem)]">
         <header className="space-y-2 border-b bg-gradient-to-b from-violet-500/[0.10] to-transparent px-5 pb-3 pt-4">
           <div className="flex items-start gap-3">
@@ -141,7 +155,7 @@ export function TaskDialog({ projectId, taskId, onClose, onMinimize }: { project
                 </Select>
                 <button
                   type="button"
-                  onClick={() => onMinimize({ projectId, taskId, number: tk.project.number, title: tk.title, milestone: tk.milestone.name, status: tk.status })}
+                  onClick={() => onMinimize({ projectId, taskId, number: tk.project.number, project: tk.project.name, title: tk.title, milestone: tk.milestone.name, status: tk.status })}
                   aria-label={t("projects.minimize")}
                   title={t("projects.minimize")}
                   className="rounded-md p-2 text-muted-foreground hover:bg-foreground/[0.06] hover:text-foreground"
@@ -150,7 +164,7 @@ export function TaskDialog({ projectId, taskId, onClose, onMinimize }: { project
                 </button>
               </>
             )}
-            <button type="button" onClick={onClose} aria-label={t("common.close")} className="rounded-md p-2 text-muted-foreground hover:bg-foreground/[0.06] hover:text-foreground">
+            <button type="button" onClick={requestClose} aria-label={t("common.close")} className="rounded-md p-2 text-muted-foreground hover:bg-foreground/[0.06] hover:text-foreground">
               <X className="size-5" />
             </button>
           </div>
@@ -280,7 +294,7 @@ export function TaskDialog({ projectId, taskId, onClose, onMinimize }: { project
                   </div>
                 </Panel>
 
-                <TimerPanel tk={tk} projectId={projectId} canLog={edit && can("timesheets.use") && !closed} hourly={Boolean(hourly)} onChanged={refresh} fail={fail} />
+                <TimerPanel tk={tk} projectId={projectId} canLog={edit && can("timesheets.use") && !closed} hourly={Boolean(hourly)} onChanged={refresh} fail={fail} askStop={askStop} onStopped={askStop > 0 ? onClose : undefined} />
 
                 {edit && (
                   <Button variant="ghost" size="sm" className="text-muted-foreground hover:text-destructive" onClick={() => void confirm({ title: t("projects.removeTaskTitle", { name: tk.title }), description: t("projects.removeTaskText") }).then((ok) => ok && remove.mutate())}>
@@ -536,7 +550,7 @@ function Activity({ tk, projectId, onChanged, fail }: { tk: TaskDetail; projectI
 }
 
 /** The timer of the task and what it comes to. It keeps running when the window is minimized or closed. */
-function TimerPanel({ tk, projectId, canLog, hourly, onChanged, fail }: { tk: TaskDetail; projectId: string; canLog: boolean; hourly: boolean; onChanged: () => void; fail: (e: unknown) => void }) {
+function TimerPanel({ tk, projectId, canLog, hourly, onChanged, fail, askStop, onStopped }: { tk: TaskDetail; projectId: string; canLog: boolean; hourly: boolean; onChanged: () => void; fail: (e: unknown) => void; askStop: number; onStopped?: () => void }) {
   const { t } = useTranslation();
   const qc = useQueryClient();
   const base = `/projects/${projectId}`;
@@ -557,9 +571,15 @@ function TimerPanel({ tk, projectId, canLog, hourly, onChanged, fail }: { tk: Ta
       onChanged();
       void qc.invalidateQueries({ queryKey: ["time"] });
       if (!v.discard) toast.success(t("projects.timeAdded"));
+      onStopped?.();
     },
     onError: fail,
   });
+  // the window was closed with the timer going: ask for the time now (like a ticket)
+  useEffect(() => {
+    if (askStop > 0 && started != null) setStopping({ duration: hm(Math.max(0.05, Math.round(((Date.now() - started) / 3600000) * 100) / 100)), note: "", billable: hourly });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [askStop]);
   const rate = tk.project.hourlyRate;
   return (
     <Panel title={t("projects.tabs.time")}>

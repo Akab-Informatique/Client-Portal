@@ -5,6 +5,7 @@ import { Hexagon, Maximize2, PanelBottom, RectangleHorizontal, Ticket, X } from 
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { cn } from "@/lib/utils";
 import { LogoMark } from "@/components/brand/Logo";
+import { dockBus, useDockBus } from "@/lib/dockBus";
 import { TicketOverlay } from "./TicketPanel";
 import { CLOSE_TICKET_EVENT, DockTimer, TimersProvider, useTicketTimerAuto, useTimers, type Timer } from "./timers";
 import { ReminderWatcher } from "./Planning";
@@ -163,6 +164,7 @@ function Dock({
       else next[id] = { ...next[id], ...p };
       return next;
     });
+  const bus = useDockBus();
   const items: Docked[] = [
     ...docked,
     ...list
@@ -176,6 +178,7 @@ function Dock({
     window.addEventListener("keydown", on);
     return () => window.removeEventListener("keydown", on);
   }, [drawer]);
+  const total = items.length + bus.projects;
   if (hidden) return null;
   const item = (d: Docked) => {
     const timer = list.find((x) => x.ticketId === d.id);
@@ -201,18 +204,20 @@ function Dock({
   // glows electric while there is something in it.
   return (
     <>
-      <DockLogo count={items.length} running={list.some((x) => x.state === "running")} open={drawer} onToggle={() => items.length > 0 && setDrawer((o) => !o)} label={t("tickets.dockDrawer", { count: items.length })} />
-      {drawer && items.length > 0 && <button type="button" aria-hidden tabIndex={-1} className="fixed inset-0 z-[39] cursor-default" onClick={() => setDrawer(false)} />}
+      <DockLogo count={total} running={list.some((x) => x.state === "running") || bus.projectRunning} open={drawer} onToggle={() => total > 0 && setDrawer((o) => !o)} label={t("tickets.dockDrawer", { count: total })} />
+      {drawer && total > 0 && <button type="button" aria-hidden tabIndex={-1} className="fixed inset-0 z-[39] cursor-default" onClick={() => setDrawer(false)} />}
       <div
         className={cn(
           "pointer-events-none fixed inset-x-0 bottom-0 z-40 transition-transform duration-300 ease-out",
-          drawer && items.length > 0 ? "translate-y-0" : "translate-y-full",
+          drawer && total > 0 ? "translate-y-0" : "translate-y-full",
         )}
         aria-label={t("tickets.dock")}
         aria-hidden={!drawer}
       >
         <div className="pointer-events-auto flex flex-wrap items-end gap-2 border-t border-[color:var(--gold)]/25 bg-popover/90 px-10 pb-3 pt-12 shadow-[0_-12px_40px_-16px_rgba(0,0,0,0.7)] backdrop-blur-xl">
           <AnimatePresence>{items.map(item)}</AnimatePresence>
+          {/* the minimized projects (their task, timer going) are drawn here by the project workspace */}
+          <div ref={(el) => dockBus.set({ slot: el })} className="contents" />
         </div>
       </div>
     </>

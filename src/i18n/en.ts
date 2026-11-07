@@ -2810,6 +2810,7 @@ const en: Dict = {
     "reopenMilestone": "Reopen the milestone",
     "followsTasks": "The milestone is reached when all its tasks are done.",
     "noTask": "No task",
+    "dockBadge": "Project",
     "taskBadge": "Task",
     "minimize": "Minimize to the bar at the bottom",
     "dock": "Minimized tasks",

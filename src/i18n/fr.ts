@@ -2808,6 +2808,7 @@ const fr = {
     "reopenMilestone": "Rouvrir le jalon",
     "followsTasks": "Le jalon est atteint quand toutes ses tâches sont terminées.",
     "noTask": "Sans tâche",
+    "dockBadge": "Projet",
     "taskBadge": "Tâche",
     "minimize": "Réduire dans la barre du bas",
     "dock": "Tâches réduites",

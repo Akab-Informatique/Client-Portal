@@ -268,7 +268,7 @@ export const projectsRoutes = new Hono<AppEnv>()
   .get("/timers", requirePermission("projects.view"), async (c) => {
     const a = auth(c);
     const rows = await db()
-      .select({ taskId: schema.projectTaskTimers.taskId, startedAt: schema.projectTaskTimers.startedAt, title: schema.projectTasks.title, projectId: schema.projects.id, number: schema.projects.number, milestone: schema.projectMilestones.name })
+      .select({ taskId: schema.projectTaskTimers.taskId, startedAt: schema.projectTaskTimers.startedAt, title: schema.projectTasks.title, projectId: schema.projects.id, number: schema.projects.number, project: schema.projects.name, milestone: schema.projectMilestones.name })
       .from(schema.projectTaskTimers)
       .innerJoin(schema.projectTasks, eq(schema.projectTasks.id, schema.projectTaskTimers.taskId))
       .innerJoin(schema.projects, eq(schema.projects.id, schema.projectTasks.projectId))
