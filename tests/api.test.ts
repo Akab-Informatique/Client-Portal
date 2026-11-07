@@ -10656,6 +10656,38 @@ describe("a ticket merged into an existing project", () => {
   });
 });
 
+describe("knowledge base", () => {
+  it("articles: a draft is its author's until published, only the author or a manager changes one", async () => {
+    resetRateLimit("login:ip:unknown");
+    const tech = await signIn("tech@akab.local");
+    const tech2 = await signIn("tech2@akab.local");
+    const admin = await signIn("admin@akab.local");
+    const made = await tech.post("/api/kb", { title: "Imprimante Ricoh : vider la file", category: "Imprimantes", body: "1. Ouvrir les services\n2. Redémarrer le spouleur", tags: ["ricoh", "spouleur"] });
+    expect(made.status).toBe(201);
+    const id = made.json.id;
+    // a draft: its author and a manager see it, nobody else
+    expect((await tech.get("/api/kb")).json.find((x: any) => x.id === id)).toMatchObject({ published: false, mine: true, category: "Imprimantes", tags: ["ricoh", "spouleur"] });
+    expect((await tech2.get("/api/kb")).json.some((x: any) => x.id === id)).toBe(false);
+    expect((await tech2.get(`/api/kb/${id}`)).status).toBe(404);
+    expect((await admin.get(`/api/kb/${id}`)).json.body).toContain("Redémarrer le spouleur");
+    // published: everyone with the right reads it; the list carries an excerpt, not the body
+    expect((await tech.patch(`/api/kb/${id}`, { published: true })).status).toBe(200);
+    const listed = (await tech2.get("/api/kb")).json.find((x: any) => x.id === id);
+    expect(listed).toMatchObject({ title: "Imprimante Ricoh : vider la file", mine: false });
+    expect(listed.excerpt).toContain("Ouvrir les services");
+    expect(listed.body).toBeUndefined();
+    expect((await tech2.get(`/api/kb/${id}`)).json.body).toContain("spouleur");
+    // only the author or a manager changes or deletes it
+    expect((await tech2.patch(`/api/kb/${id}`, { title: "Piraté" })).status).toBe(403);
+    expect((await tech2.del(`/api/kb/${id}`)).status).toBe(403);
+    expect((await admin.patch(`/api/kb/${id}`, { category: "Réseau" })).status).toBe(200);
+    expect((await tech.get(`/api/kb/${id}`)).json).toMatchObject({ category: "Réseau", title: "Imprimante Ricoh : vider la file" });
+    expect((await tech.post("/api/kb", { title: " " })).status).toBe(400);
+    expect((await tech.del(`/api/kb/${id}`)).status).toBe(200);
+    expect((await tech.get(`/api/kb/${id}`)).status).toBe(404);
+  });
+});
+
 describe("procedures (SOP)", () => {
   // a 1 × 1 PNG
   const PNG = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==";

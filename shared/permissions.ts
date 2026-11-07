@@ -167,6 +167,16 @@ export const MODULES = [
     ],
   },
   {
+    key: "kb",
+    audience: "staff",
+    label: { fr: "Base de connaissances", en: "Knowledge base" },
+    permissions: [
+      { key: "kb.view", label: { fr: "Lire la base de connaissances", en: "Read the knowledge base" }, description: { fr: "Lire les articles publiés par l'équipe", en: "Read the articles the team published" } },
+      { key: "kb.edit", label: { fr: "Écrire des articles", en: "Write articles" }, description: { fr: "Créer, modifier et publier ses propres articles", en: "Create, edit and publish one's own articles" } },
+      { key: "kb.manage", label: { fr: "Gérer tous les articles", en: "Manage every article" }, description: { fr: "Voir les brouillons des autres, modifier et supprimer les articles des autres", en: "See other people's drafts, edit and delete other people's articles" } },
+    ],
+  },
+  {
     key: "hr",
     audience: "staff",
     label: { fr: "Ressources humaines", en: "Human resources" },
@@ -344,11 +354,11 @@ export const MODULES = [
   {
     key: "pipeline",
     audience: "staff",
-    label: { fr: "Pipeline", en: "Pipeline" },
+    label: { fr: "Mon travail", en: "My work" },
     permissions: [
       {
         key: "pipeline.view",
-        label: { fr: "Voir le Pipeline", en: "See the Pipeline" },
+        label: { fr: "Voir Mon travail", en: "See My work" },
         description: { fr: "Sa journée planifiée et la liste de tâches de l'équipe; le texto du matin", en: "Their planned day and the team's to-do list; the morning text" },
       },
       {
@@ -358,7 +368,7 @@ export const MODULES = [
       },
       {
         key: "pipeline.manage",
-        label: { fr: "Gérer le Pipeline", en: "Manage the Pipeline" },
+        label: { fr: "Gérer Mon travail", en: "Manage My work" },
         description: { fr: "Heure du plan du matin et des textos, voir la journée des autres, supprimer les tâches des autres", en: "Time of the morning plan and texts, see other people's day, delete other people's tasks" },
       },
     ],
@@ -621,7 +631,7 @@ export type ModuleKey = (typeof MODULES)[number]["key"];
  */
 export const ACCESS_LAYOUT: { key: string; audience: Audience; label: Localized; modules: ModuleKey[] }[] = [
   { key: "team", audience: "staff", label: { fr: "Équipe", en: "Team" }, modules: ["dashboard", "meetings", "breakroom"] },
-  { key: "tools", audience: "staff", label: { fr: "Mes outils", en: "My tools" }, modules: ["outlook", "timesheets", "chat", "sops"] },
+  { key: "tools", audience: "staff", label: { fr: "Mes outils", en: "My tools" }, modules: ["outlook", "timesheets", "chat", "sops", "kb"] },
   { key: "command", audience: "staff", label: { fr: "Centre de commande", en: "Command center" }, modules: ["messages", "tickets", "pipeline", "projects", "sms", "passbolt"] },
   { key: "management", audience: "staff", label: { fr: "Gestion", en: "Management" }, modules: ["crm", "clientview", "store", "services", "hr"] },
   { key: "sales", audience: "staff", label: { fr: "Vente", en: "Sales" }, modules: ["opportunities", "quotes"] },
@@ -710,6 +720,8 @@ export const SYSTEM_ROLES: Array<{
       "chat.use",
       "sops.view",
       "sops.edit",
+      "kb.view",
+      "kb.edit",
       "messages.view",
       "messages.post",
       "messages.pin",

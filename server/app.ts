@@ -42,6 +42,7 @@ import { vendorPaymentRoutes } from "./routes/vendorPayments.ts";
 import { storeRoutes } from "./routes/store.ts";
 import { pipelineRoutes } from "./routes/pipeline.ts";
 import { sopRoutes } from "./routes/sops.ts";
+import { kbRoutes } from "./routes/kb.ts";
 import { projectsRoutes } from "./routes/projects.ts";
 import { planningRoutes } from "./routes/planning.ts";
 import { smsHookRoutes, smsRoutes } from "./routes/sms.ts";
@@ -127,6 +128,7 @@ export function createApp() {
   api.route("/vendor-payments", vendorPaymentRoutes);
   api.route("/pipeline", pipelineRoutes);
   api.route("/sops", sopRoutes);
+  api.route("/kb", kbRoutes);
   api.route("/projects", projectsRoutes);
   api.route("/services", serviceRoutes);
   api.route("/passbolt", passboltRoutes);

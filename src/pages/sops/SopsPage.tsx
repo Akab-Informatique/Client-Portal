@@ -20,7 +20,7 @@ import { coverUrl, type SopCard } from "./shared";
 type Filter = "all" | "published" | "mine";
 
 /** Procedures (SOP): step-by-step guides the team makes by recording a screen */
-export function SopsPage() {
+export function SopsPage({ embedded = false }: { embedded?: boolean } = {}) {
   const { t } = useTranslation();
   const can = useCan();
   const qc = useQueryClient();
@@ -55,13 +55,19 @@ export function SopsPage() {
 
   return (
     <div className="relative isolate space-y-5">
-      <GlassBackdrop className="-inset-x-8 -top-6" />
+      {!embedded && <GlassBackdrop className="-inset-x-8 -top-6" />}
       <div className="flex flex-wrap items-end justify-between gap-3">
         <div>
-          <h1 className="flex items-center gap-2 text-2xl font-bold">
-            <ListChecks className="size-6 text-primary" /> {t("sops.title")}
-          </h1>
-          <p className="mt-1 max-w-2xl text-sm text-muted-foreground">{t("sops.subtitle")}</p>
+          {embedded ? (
+            <p className="max-w-2xl text-sm text-muted-foreground">{t("sops.subtitle")}</p>
+          ) : (
+            <>
+              <h1 className="flex items-center gap-2 text-2xl font-bold">
+                <ListChecks className="size-6 text-primary" /> {t("sops.title")}
+              </h1>
+              <p className="mt-1 max-w-2xl text-sm text-muted-foreground">{t("sops.subtitle")}</p>
+            </>
+          )}
         </div>
         {edit && (
           <div className="flex flex-wrap gap-2">

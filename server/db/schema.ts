@@ -2952,6 +2952,26 @@ export const projectNotes = pgTable(
   (t) => [index("project_notes_project_idx").on(t.projectId, t.createdAt)],
 );
 
+/** Documentation › Base de connaissances: articles the team writes and reads (a draft is its author's until published) */
+export const kbArticles = pgTable(
+  "kb_articles",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    title: text("title").notNull(),
+    /** Free text, to group articles (Microsoft 365, Réseau, Imprimantes…) */
+    category: text("category").notNull().default(""),
+    /** Plain text, shown as written (paragraphs and lines kept) */
+    body: text("body").notNull().default(""),
+    tags: text("tags").array().notNull().default(sql`'{}'::text[]`),
+    published: boolean("published").notNull().default(false),
+    createdBy: uuid("created_by").references(() => users.id, { onDelete: "set null" }),
+    updatedBy: uuid("updated_by").references(() => users.id, { onDelete: "set null" }),
+    createdAt: created(),
+    updatedAt: updated(),
+  },
+  (t) => [index("kb_articles_category_idx").on(t.category), index("kb_articles_updated_idx").on(t.updatedAt)],
+);
+
 /** Vente › Ventes: a sales opportunity, from the first lead to won or lost (shared/sales.ts) */
 export const salesOpportunities = pgTable(
   "sales_opportunities",

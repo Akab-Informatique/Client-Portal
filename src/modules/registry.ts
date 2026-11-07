@@ -1,4 +1,4 @@
-import { ListChecks, FilePlus2, FileText, HeartHandshake, MessagesSquare, History, Workflow, Coffee, BarChart3, BookOpen, FolderKanban, ClipboardCheck, Building2, CalendarCheck, Clock, FileSignature, LayoutDashboard, Mail, Megaphone, MonitorSmartphone, CalendarClock, Receipt, KeyRound, Store, Target, Ticket, Wallet, TrendingUp, Wrench, type LucideIcon } from "lucide-react";
+import { FilePlus2, FileText, HeartHandshake, MessagesSquare, History, Workflow, Coffee, BarChart3, BookOpen, FolderKanban, ClipboardCheck, Building2, CalendarCheck, Clock, FileSignature, LayoutDashboard, Mail, Megaphone, MonitorSmartphone, CalendarClock, Receipt, KeyRound, Store, Target, Ticket, Wallet, TrendingUp, Wrench, type LucideIcon } from "lucide-react";
 import type { PermissionKey } from "@shared/permissions";
 
 /**
@@ -42,7 +42,6 @@ export const STAFF_MODULES: NavModule[] = [
   { key: "messages", path: "/messages", labelKey: "nav.messages", icon: Megaphone, section: "command", permission: "messages.view" },
   { key: "pipeline", path: "/pipeline", labelKey: "nav.pipeline", icon: Workflow, section: "command", permission: "pipeline.view" },
   { key: "chat", path: "/chat", labelKey: "nav.chat", icon: MessagesSquare, section: "tools", permission: "chat.use" },
-  { key: "sops", path: "/sops", labelKey: "nav.sops", icon: ListChecks, section: "tools", permission: "sops.view" },
   { key: "outlook", path: "/outlook", labelKey: "nav.outlook", icon: Mail, section: "tools", permission: "outlook.view", optIn: "outlook" },
   { key: "timesheets", path: "/timesheets", labelKey: "nav.timesheets", icon: Clock, section: "tools", permission: "timesheets.use", orRight: "timesheets.manage", rule: "timesheetRequired" },
   { key: "expenses", path: "/expenses", labelKey: "nav.expenses", icon: Wallet, section: "tools", permission: "timesheets.use" },
@@ -65,7 +64,7 @@ export const STAFF_MODULES: NavModule[] = [
   { key: "meetings", path: "/meetings", labelKey: "nav.meetings", icon: CalendarCheck, section: "team", permission: "meetings.view" },
   { key: "breakroom", path: "/breakroom", labelKey: "nav.breakroom", icon: Coffee, section: "team", permission: "breakroom.use" },
   { key: "devices", path: "/devices", labelKey: "nav.devices", icon: MonitorSmartphone, section: "command", upcoming: true },
-  { key: "documentation", path: "/documentation", labelKey: "nav.documentation", icon: BookOpen, section: "command", upcoming: true },
+  { key: "documentation", path: "/documentation", labelKey: "nav.documentation", icon: BookOpen, section: "command", permission: "sops.view", orRight: "kb.view" },
 ];
 
 /**
