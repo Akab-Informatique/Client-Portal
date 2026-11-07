@@ -6963,6 +6963,12 @@ describe("pipeline: shared to-dos and the day", () => {
     const pc = (await tech.post(`/api/projects/${proj.id}/milestones/${proj.milestones[0].id}/tasks`, { title: "Point de contrôle seul", assigneeId: me, checkpointDate: day })).json;
     expect(pc).toMatchObject({ checkpointDate: day, checkpointTime: "17:00" });
     expect((await blocksOf()).items.find((i: any) => i.key === `ptask:${pc.id}`)).toMatchObject({ kind: "ptask", checkpoint: day, checkpointTime: "17:00" });
+    // the projects list is sorted by the checkpoint of the next open task
+    const plist = (await tech.get("/api/projects?view=all&status=all")).json as any[];
+    expect(plist.find((x) => x.id === proj.id).nextCheckpoint).toBe(`${day} 17:00`);
+    const withCp = plist.filter((x) => x.nextCheckpoint).map((x) => x.nextCheckpoint);
+    expect(withCp).toEqual([...withCp].sort());
+    expect(plist.findIndex((x) => !x.nextCheckpoint)).toBeGreaterThan(plist.findLastIndex((x) => x.nextCheckpoint));
     expect((await tech.patch(`/api/projects/${proj.id}/tasks/${pc.id}`, { checkpointDate: null })).json.checkpointTime).toBeNull();
     expect((await blocksOf()).items.some((i: any) => i.key === `ptask:${pc.id}`)).toBe(false);
   });

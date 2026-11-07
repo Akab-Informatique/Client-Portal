@@ -1,6 +1,6 @@
 import { Hono } from "hono";
 import { HTTPException } from "hono/http-exception";
-import { and, asc, desc, eq, gte, ilike, inArray, isNotNull, isNull, lte, or, sql } from "drizzle-orm";
+import { and, asc, desc, eq, gte, ilike, inArray, isNotNull, isNull, lte, ne, or, sql } from "drizzle-orm";
 import { z } from "zod";
 import { db, schema } from "../db/index.ts";
 import { auth, requirePermission, requireStaff, type AppEnv } from "../lib/auth.ts";
@@ -354,6 +354,18 @@ export const projectsRoutes = new Hono<AppEnv>()
       .orderBy(asc(sql`coalesce(${p.dueDate}, '9999-12-31')`), desc(p.createdAt))
       .limit(500);
     let list = await cards(rows, a.user.id);
+    // sorted by the checkpoint of the next open task (day, then time); a project with none follows, by its due day
+    const next = rows.length
+      ? await db()
+          .select({ projectId: schema.projectTasks.projectId, at: sql<string>`min(${schema.projectTasks.checkpointDate} || ' ' || coalesce(${schema.projectTasks.checkpointTime}, '17:00'))` })
+          .from(schema.projectTasks)
+          .where(and(inArray(schema.projectTasks.projectId, rows.map((r) => r.id)), ne(schema.projectTasks.status, "done"), sql`${schema.projectTasks.checkpointDate} is not null`))
+          .groupBy(schema.projectTasks.projectId)
+      : [];
+    const nextAt = new Map(next.map((n) => [n.projectId, n.at]));
+    list = list
+      .map((x) => ({ ...x, nextCheckpoint: nextAt.get(x.id) ?? null }))
+      .sort((x, y) => (x.nextCheckpoint ?? "9999-99-99").localeCompare(y.nextCheckpoint ?? "9999-99-99") || (x.dueDate ?? "9999-99-99").localeCompare(y.dueDate ?? "9999-99-99"));
     if (q.view === "mine") list = list.filter((x) => x.mine);
     else if (q.view === "attention") list = list.filter((x) => x.attention.length);
     else if (q.view === "watch") list = list.filter((x) => x.following);

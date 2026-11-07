@@ -2647,7 +2647,7 @@ const fr = {
     "noTime": "Aucun temps inscrit sur ce projet.",
     "notePlaceholder": "Une mise à jour, une décision, un appel avec le client…",
     "addNote": "Ajouter la note",
-    "noNotes": "Aucune note pour l'instant.",
+    "nextCheckpoint":"Point de contrôle de la prochaine tâche","noNotes": "Aucune note pour l'instant.",
     "errors": {
       ticket_not_found: "Billet introuvable.",
       ticket_other_client: "Ce billet est à un autre client que le projet.",

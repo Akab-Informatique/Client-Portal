@@ -2649,7 +2649,7 @@ const en: Dict = {
     "noTime": "No time logged on this project.",
     "notePlaceholder": "An update, a decision, a call with the client…",
     "addNote": "Add the note",
-    "noNotes": "No note yet.",
+    "nextCheckpoint":"Next task checkpoint","noNotes": "No note yet.",
     "errors": {
       ticket_not_found: "Ticket not found.",
       ticket_other_client: "This ticket belongs to another client than the project.",

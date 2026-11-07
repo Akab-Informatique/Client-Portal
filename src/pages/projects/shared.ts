@@ -99,6 +99,8 @@ export type Project = {
   lastFollowupOn: string | null;
   hours: number;
   following: boolean;
+  /** Checkpoint of the next open task (YYYY-MM-DD HH:MM), the list is sorted by it */
+  nextCheckpoint?: string | null;
   mine: boolean;
   progress: { done: number; total: number };
   attention: string[];

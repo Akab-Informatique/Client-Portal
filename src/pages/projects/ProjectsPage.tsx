@@ -290,6 +290,7 @@ export function ProjectsPage() {
                     {hoursText(p.hours)}
                     {p.budgetHours != null && <span className="text-muted-foreground"> / {hoursText(p.budgetHours)}</span>}
                   </span>
+                  <span className="hidden w-24 text-right text-xs text-muted-foreground lg:block" title={t("projects.nextCheckpoint")}>{p.nextCheckpoint ? `${shortDate(p.nextCheckpoint.slice(0, 10))} ${p.nextCheckpoint.slice(11)}` : "—"}</span>
                   <span className={cn("hidden w-20 text-right text-xs md:block", TONE_TEXT[tone])}>{p.dueDate ? shortDate(p.dueDate) : "—"}</span>
                   <span className="hidden w-32 truncate text-sm xl:block">{p.lead?.name ?? "—"}</span>
                   <button
