@@ -10411,6 +10411,29 @@ describe("project tasks: a contract, waiting for another task, sorting that is t
   });
 });
 
+describe("the search of the top bar", () => {
+  it("finds clients, contacts, projects and tasks, each only for what the person may see; too short answers nothing", async () => {
+    resetRateLimit("login:ip:unknown");
+    const admin = await signIn("admin@akab.local");
+    const tech = await signIn("tech@akab.local");
+    const clients = (await admin.get("/api/crm/clients")).json as any[];
+    const c0 = clients[0];
+    const hits = async (who: any, q: string) => (await who.get(`/api/search?q=${encodeURIComponent(q)}`)).json as any[];
+    expect(await hits(admin, "a")).toEqual([]);
+    const word = c0.name.split(" ")[0];
+    const found = await hits(admin, word);
+    expect(found.find((h) => h.kind === "client" && h.id === c0.id)).toMatchObject({ path: `/crm/${c0.id}` });
+    // a project, by its name and by its number
+    const proj = (await tech.post("/api/projects", { name: "Recherche globale du portail", clientId: c0.id, hourlyRate: 120, milestones: [{ name: "Phase" }] })).json;
+    expect((await hits(tech, "globale du portail")).find((h) => h.kind === "project")).toMatchObject({ id: proj.id, path: `/projects?project=${proj.id}` });
+    expect((await hits(tech, proj.number)).some((h) => h.kind === "project" && h.id === proj.id)).toBe(true);
+    // a private task is found by its owner only
+    const priv = (await tech.post("/api/pipeline/tasks", { title: "Dossier secret xyzzy", visibility: "private" })).json;
+    expect((await hits(tech, "xyzzy")).some((h) => h.kind === "task" && h.id === priv.id)).toBe(true);
+    expect((await hits(admin, "xyzzy")).some((h) => h.kind === "task")).toBe(false);
+  });
+});
+
 describe("clients: contract count, all contracts, shared tab order", () => {
   it("counts active contracts per client, lists them for accounting, and keeps one tab order for everyone", async () => {
     resetRateLimit("login:ip:unknown");

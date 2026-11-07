@@ -25,6 +25,7 @@ import { ViewSwitcher } from "@/components/ViewSwitcher";
 import { NotificationBell } from "@/components/NotificationBell";
 import { SyncBadge } from "@/components/SyncBadge";
 import { QuickAdd } from "@/components/QuickAdd";
+import { TopSearch } from "@/components/TopSearch";
 import { ProfileDialog } from "@/components/ProfileDialog";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import { Badge } from "@/components/ui/badge";
@@ -354,6 +355,7 @@ function TopBar({ onMenu }: { onMenu: () => void }) {
       </Button>
       {can("clientview.use") && <ViewSwitcher />}
       <div className="ml-auto flex items-center gap-3">
+        <TopSearch />
         <QuickAdd />
         <SyncBadge />
         <NotificationBell />

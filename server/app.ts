@@ -43,6 +43,7 @@ import { storeRoutes } from "./routes/store.ts";
 import { pipelineRoutes } from "./routes/pipeline.ts";
 import { sopRoutes } from "./routes/sops.ts";
 import { kbRoutes } from "./routes/kb.ts";
+import { searchRoutes } from "./routes/search.ts";
 import { dattoAdminRoutes, rmmDeviceRoutes } from "./routes/rmmDatto.ts";
 import { projectsRoutes } from "./routes/projects.ts";
 import { planningRoutes } from "./routes/planning.ts";
@@ -132,6 +133,8 @@ export function createApp() {
   api.route("/pipeline", pipelineRoutes);
   api.route("/sops", sopRoutes);
   api.route("/kb", kbRoutes);
+  api.use("/search", requireStaff);
+  api.route("/search", searchRoutes);
   api.route("/projects", projectsRoutes);
   api.route("/services", serviceRoutes);
   api.route("/passbolt", passboltRoutes);

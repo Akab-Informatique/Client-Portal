@@ -1,14 +1,15 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { Pager } from "@/components/Pager";
 import { keepPreviousData, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useNavigate } from "react-router-dom";
-import { BellRing, Eye, FolderKanban, Siren, Sparkles, Star, Ticket as TicketIcon, UserRound, UserX, X, type LucideIcon } from "lucide-react";
+import { BellRing, Columns3, Eye, Rows3, Search, FolderKanban, Siren, Sparkles, Star, Ticket as TicketIcon, UserRound, UserX, X, type LucideIcon } from "lucide-react";
 import { SmsInboxDialog, SmsTile } from "@/pages/sms/SmsPage";
 import { Skeleton } from "@/components/ui/skeleton";
 import { api } from "@/lib/api";
 import { cn } from "@/lib/utils";
-import { CompactList } from "@/pages/tickets/Layouts";
+import { CompactList, KanbanBoard } from "@/pages/tickets/Layouts";
+import { useCan } from "@/lib/session";
 import { shortDate, type TicketList } from "@/pages/tickets/shared";
 import type { Project } from "@/pages/projects/shared";
 import type { DayItem } from "./shared";
@@ -29,10 +30,34 @@ export function MyTickets({ userId, mine, onOpen }: { userId: string; mine: bool
   const [pick, setPick] = useState<string | null>(null);
   const who = pick ?? userId;
   const own = who === userId && mine;
+  // the view (compact list or kanban boards) and a search of the tickets shown
+  const can = useCan();
+  const [view, setView] = useState<"compact" | "kanban">(() => {
+    try {
+      return localStorage.getItem("akab.pipeline.ticketsView") === "kanban" ? "kanban" : "compact";
+    } catch {
+      return "compact";
+    }
+  });
+  const pickView = (v: "compact" | "kanban") => {
+    setView(v);
+    try {
+      localStorage.setItem("akab.pipeline.ticketsView", v);
+    } catch {
+      /* not kept */
+    }
+  };
+  const [text, setText] = useState("");
+  const [search, setSearch] = useState("");
+  useEffect(() => {
+    const id = setTimeout(() => setSearch(text.trim()), 250);
+    return () => clearTimeout(id);
+  }, [text]);
   // the same buttons as the Tickets page, small: my tickets, texts, new, unassigned, needs attention, and my saved filters
   const [filter, setFilter] = useState("view=mine");
   const [sms, setSms] = useState(false);
-  const query = own ? filter : who === "all" ? "view=all" : `view=all&assignee=${who}`;
+  const base = own ? filter : who === "all" ? "view=all" : `view=all&assignee=${who}`;
+  const query = search ? `${base}&q=${encodeURIComponent(search)}` : base;
   const { data, isLoading } = useQuery({
     queryKey: ["tickets", "pipeline", query],
     queryFn: () => api.get<TicketList>(`/tickets?${query}`),
@@ -53,6 +78,22 @@ export function MyTickets({ userId, mine, onOpen }: { userId: string; mine: bool
   const [page, setPage] = useState(1);
   const [size, setSize] = useState(10);
   const items = all.slice((Math.min(page, Math.max(1, Math.ceil(all.length / size))) - 1) * size, Math.min(page, Math.max(1, Math.ceil(all.length / size))) * size);
+  const tools = (
+    <div className="ml-auto flex shrink-0 items-center gap-1.5">
+      <div className="relative">
+        <Search className="pointer-events-none absolute left-2 top-1/2 size-3.5 -translate-y-1/2 text-muted-foreground" />
+        <input value={text} onChange={(e) => (setText(e.target.value), setPage(1))} placeholder={t("pipeline.day.searchTickets")} aria-label={t("pipeline.day.searchTickets")} className="h-7 w-36 rounded-lg border border-[color:var(--glass-border)] bg-background/40 pl-7 pr-2 text-xs outline-none focus:border-[color:var(--gold)]/50" />
+      </div>
+      <div className="flex items-center rounded-lg border border-[color:var(--glass-border)] p-0.5" role="group" aria-label={t("tickets.layout.title")}>
+        {([["compact", Rows3], ["kanban", Columns3]] as const).map(([v, Icon]) => (
+          <button key={v} type="button" aria-pressed={view === v} title={t(`tickets.layout.${v}Hint`)} onClick={() => pickView(v)} className={cn("flex h-6 items-center gap-1 rounded-md px-1.5 text-xs", view === v ? "bg-[color:var(--gold)]/15 text-primary" : "text-muted-foreground hover:text-foreground")}>
+            <Icon className="size-3.5" />
+            <span className="hidden xl:inline">{t(`tickets.layout.${v}`)}</span>
+          </button>
+        ))}
+      </div>
+    </div>
+  );
   return (
     <section className="glass rounded-2xl border">
       {own && (
@@ -68,8 +109,10 @@ export function MyTickets({ userId, mine, onOpen }: { userId: string; mine: bool
             );
           })}
           <SmsTile onOpen={() => setSms(true)} compact />
+          {tools}
         </div>
       )}
+      {!own && <div className="flex items-center gap-2 px-3 pt-3">{tools}</div>}
       {sms && <SmsInboxDialog initialId={null} onClose={() => setSms(false)} />}
       <h3 className="flex items-center gap-1.5 px-4 pb-2 pt-3 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
         <TicketIcon className="size-3.5" />
@@ -92,8 +135,8 @@ export function MyTickets({ userId, mine, onOpen }: { userId: string; mine: bool
         </Select>
         <span className="font-mono normal-case opacity-70">{all.length}</span>
       </h3>
-      {isLoading ? <Skeleton className="m-4 h-20" /> : all.length === 0 ? <p className="px-4 pb-4 text-sm text-muted-foreground">{t("pipeline.day.noTickets")}</p> : <CompactList items={items} activeIds={new Set()} onOpen={onOpen} facets={data?.facets} />}
-      {all.length > size && <Pager total={all.length} page={page} size={size} onPage={setPage} onSize={(n) => (setSize(n), setPage(1))} />}
+      {isLoading ? <Skeleton className="m-4 h-20" /> : all.length === 0 ? <p className="px-4 pb-4 text-sm text-muted-foreground">{t("pipeline.day.noTickets")}</p> : view === "kanban" ? <KanbanBoard items={all} canEdit={can("tickets.edit")} onOpen={onOpen} facets={data?.facets} /> : <CompactList items={items} activeIds={new Set()} onOpen={onOpen} facets={data?.facets} />}
+      {view === "compact" && all.length > size && <Pager total={all.length} page={page} size={size} onPage={setPage} onSize={(n) => (setSize(n), setPage(1))} />}
     </section>
   );
 }
