@@ -27,6 +27,13 @@ export type Stripe = {
 const STRIPE_KEY = [...KEY, "stripe"];
 
 /** The card on Admin › Intégrations: connected or not, test or live. */
+/** The state of the integration (the same rules as its badge) */
+export function useStripeState(): string | null {
+  const { data } = useQuery({ queryKey: STRIPE_KEY, queryFn: () => api.get<Stripe>("/billing/stripe") });
+  if (!data) return null;
+  return !data.hasSecretKey ? "notConfigured" : !data.enabled ? "disabled" : data.lastTest?.ok === false ? "error" : "connected";
+}
+
 export function StripeStatus() {
   const { t } = useTranslation();
   const { data } = useQuery({ queryKey: STRIPE_KEY, queryFn: () => api.get<Stripe>("/billing/stripe") });

@@ -38,6 +38,13 @@ const errorText = (t: (k: string, o?: Record<string, unknown>) => string, e: unk
   return code.startsWith("itcloud_") ? t(`integrations.itcloud.errors.${code}`, { defaultValue: t("common.error") }) : t("common.error");
 };
 
+/** The state of the integration (the same rules as its badge) */
+export function useITCloudState(): string | null {
+  const { data } = useQuery({ queryKey: KEY, queryFn: () => api.get<View>("/admin/itcloud") });
+  if (!data) return null;
+  return data.enabled && data.hasKey ? "connected" : data.hasKey ? "disabled" : "notConfigured";
+}
+
 export function ITCloudStatus() {
   const { t } = useTranslation();
   const { data } = useQuery({ queryKey: KEY, queryFn: () => api.get<View>("/admin/itcloud") });

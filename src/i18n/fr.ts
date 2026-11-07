@@ -4641,6 +4641,8 @@ const fr = {
     title: "Intégrations",
     subtitle: "Connexions aux outils externes d'AKAB",
     connection: "Connexion",
+    groups: { active: "Activées", inactive: "Non activées" },
+    setUp: "Mettre en place",
     configure: "Configurer",
     enabled: "Activée",
     test: "Tester la connexion",

@@ -51,6 +51,13 @@ type Mapping = { customers: QbCustomer[]; clients: { id: string; name: string; e
 type InvoiceDefaults = { items: { id: string; name: string; sku: string | null; type: string }[]; taxCodes: { id: string; name: string; description: string | null }[]; chosen: QuickBooks["invoice"] };
 
 /** The card of the integrations list: where the connection stands */
+/** The state of the integration (the same rules as its badge) */
+export function useQuickBooksState(): string | null {
+  const { data } = useQuery({ queryKey: [...KEY, "quickbooks"], queryFn: () => api.get<QuickBooks>("/billing/quickbooks") });
+  if (!data) return null;
+  return !data.connected ? "notConfigured" : !data.enabled ? "disabled" : data.lastTest?.ok === false ? "error" : "connected";
+}
+
 export function QuickBooksStatus() {
   const { t } = useTranslation();
   const { data } = useQuery({ queryKey: [...KEY, "quickbooks"], queryFn: () => api.get<QuickBooks>("/billing/quickbooks") });

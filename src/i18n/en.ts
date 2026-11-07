@@ -4643,6 +4643,8 @@ const en: Dict = {
     title: "Integrations",
     subtitle: "Connections to AKAB's external tools",
     connection: "Connection",
+    groups: { active: "Activated", inactive: "Not activated" },
+    setUp: "Set up",
     configure: "Configure",
     enabled: "Enabled",
     test: "Test connection",

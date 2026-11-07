@@ -18,9 +18,9 @@ import { cn } from "@/lib/utils";
 import type { PermissionKey } from "@shared/permissions";
 import { useCan } from "@/lib/session";
 import { SectionHeader } from "./sections";
-import { StripePage, StripeStatus } from "./StripeIntegration";
-import { QuickBooksPage, QuickBooksStatus } from "./QuickBooksIntegration";
-import { ITCloudPage, ITCloudStatus } from "./ITCloudIntegration";
+import { StripePage, StripeStatus, useStripeState } from "./StripeIntegration";
+import { QuickBooksPage, QuickBooksStatus, useQuickBooksState } from "./QuickBooksIntegration";
+import { ITCloudPage, ITCloudStatus, useITCloudState } from "./ITCloudIntegration";
 import { AI_USAGE_KEY, AiUsagePanel } from "./AiUsage";
 import { shortModel } from "@/components/AiModelPicker";
 
@@ -28,20 +28,20 @@ import { shortModel } from "@/components/AiModelPicker";
  * Available integrations. To add one: an entry here, its page component,
  * a Status component (badge on the card) and its texts under integrations.<key>.
  */
-type Integration = { key: string; name: string; icon: LucideIcon; Status: () => ReactNode; Page: () => ReactNode; /** An extra right needed to see it */ needs?: PermissionKey };
+type Integration = { key: string; name: string; icon: LucideIcon; /** Its state: connected | error (on but failing) | disabled | notConfigured, null while loading */ useState: () => string | null; Status: () => ReactNode; Page: () => ReactNode; /** An extra right needed to see it */ needs?: PermissionKey };
 const INTEGRATIONS: Integration[] = [
-  { key: "ai", name: "Claude (Anthropic)", icon: Sparkles, Status: AiStatus, Page: AiPage },
-  { key: "o365", name: "Microsoft 365", icon: CalendarDays, Status: O365Status, Page: O365Page },
-  { key: "voipms", name: "VoIP.ms (SMS)", icon: MessageSquareText, Status: VoipmsStatus, Page: VoipmsPage },
+  { key: "ai", useState: useAiState, name: "Claude (Anthropic)", icon: Sparkles, Status: AiStatus, Page: AiPage },
+  { key: "o365", useState: useO365State, name: "Microsoft 365", icon: CalendarDays, Status: O365Status, Page: O365Page },
+  { key: "voipms", useState: useVoipmsState, name: "VoIP.ms (SMS)", icon: MessageSquareText, Status: VoipmsStatus, Page: VoipmsPage },
   // card payments on invoices: master administrators (the API needs billing and integrations)
-  { key: "stripe", name: "Stripe", icon: CreditCard, Status: StripeStatus, Page: StripePage, needs: "admin.billing" },
+  { key: "stripe", useState: useStripeState, name: "Stripe", icon: CreditCard, Status: StripeStatus, Page: StripePage, needs: "admin.billing" },
   // clients, chart of accounts and vendors kept in step, and invoices and payments (the API needs billing and integrations)
-  { key: "quickbooks", name: "QuickBooks Online", icon: RefreshCw, Status: QuickBooksStatus, Page: QuickBooksPage, needs: "admin.billing" },
+  { key: "quickbooks", useState: useQuickBooksState, name: "QuickBooks Online", icon: RefreshCw, Status: QuickBooksStatus, Page: QuickBooksPage, needs: "admin.billing" },
   // a vendor: its customers matched to clients, its products as services, its services kept on contracts
-  { key: "itcloud", name: "ITCloud", icon: Cloud, Status: ITCloudStatus, Page: ITCloudPage },
-  { key: "passbolt", name: "Passbolt", icon: KeyRound, Status: PassboltStatus, Page: PassboltAdminPage },
-  { key: "teams", name: "Microsoft Teams", icon: Users, Status: TeamsStatus, Page: TeamsPage },
-  { key: "rmm", name: "RMM", icon: MonitorPlay, Status: RmmStatus, Page: RmmPage },
+  { key: "itcloud", useState: useITCloudState, name: "ITCloud", icon: Cloud, Status: ITCloudStatus, Page: ITCloudPage },
+  { key: "passbolt", useState: usePassboltState, name: "Passbolt", icon: KeyRound, Status: PassboltStatus, Page: PassboltAdminPage },
+  { key: "teams", useState: useTeamsState, name: "Microsoft Teams", icon: Users, Status: TeamsStatus, Page: TeamsPage },
+  { key: "rmm", useState: useRmmState, name: "RMM", icon: MonitorPlay, Status: RmmStatus, Page: RmmPage },
 ];
 
 /** List of integrations; opening one shows its page (?integration=<key>). */
@@ -50,6 +50,8 @@ export function IntegrationsSection() {
   const [params, setParams] = useSearchParams();
   const can = useCan();
   const shownIntegrations = INTEGRATIONS.filter((i) => !i.needs || can(i.needs));
+  // each one's state, to sort the cards: the list never changes, so the hooks always run in the same order
+  const states = Object.fromEntries(INTEGRATIONS.map((i) => [i.key, i.useState()])); // eslint-disable-line react-hooks/rules-of-hooks
   const open = shownIntegrations.find((i) => i.key === params.get("integration")) ?? null;
   const go = (key: string | null) =>
     setParams((p) => {
@@ -75,30 +77,47 @@ export function IntegrationsSection() {
   return (
     <div>
       <SectionHeader title={t("integrations.title")} subtitle={t("integrations.subtitle")} />
-      <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
-        {shownIntegrations.map((i) => (
-          <button
-            key={i.key}
-            type="button"
-            onClick={() => go(i.key)}
-            className="group flex flex-col gap-4 rounded-2xl border bg-card/80 p-5 text-left transition-all hover:-translate-y-0.5 hover:border-[color:var(--gold)]/40 hover:shadow-lg"
-          >
-            <div className="flex items-start justify-between gap-3">
-              <span className="flex size-11 items-center justify-center rounded-xl bg-grad-gold text-[#1a1204] glow-gold">
-                <i.icon className="size-5" />
-              </span>
-              <i.Status />
-            </div>
-            <div>
-              <h3 className="font-display text-lg font-semibold">{i.name}</h3>
-              {t(`integrations.${i.key}.description`) && <p className="mt-1 text-sm text-muted-foreground">{t(`integrations.${i.key}.description`)}</p>}
-            </div>
-            <span className="mt-auto flex items-center gap-1 text-sm font-medium text-primary">
-              {t("integrations.configure")} <ChevronRight className="size-4 transition-transform group-hover:translate-x-0.5" />
-            </span>
-          </button>
-        ))}
-      </div>
+      {(
+        [
+          ["active", shownIntegrations.filter((i) => states[i.key] === "connected" || states[i.key] === "error")],
+          ["inactive", shownIntegrations.filter((i) => states[i.key] !== "connected" && states[i.key] !== "error")],
+        ] as const
+      ).map(
+        ([group, list]) =>
+          list.length > 0 && (
+            <section key={group} className="mb-8 space-y-3">
+              <h3 className="flex items-center gap-2 text-sm font-semibold uppercase tracking-wide text-muted-foreground">
+                <span className={cn("size-2 rounded-full", group === "active" ? "bg-emerald-400" : "bg-muted-foreground/50")} />
+                {t(`integrations.groups.${group}`)}
+                <span className="font-mono text-xs normal-case opacity-70">{list.length}</span>
+              </h3>
+              <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
+                {list.map((i) => (
+                  <button
+                    key={i.key}
+                    type="button"
+                    onClick={() => go(i.key)}
+                    className={cn("group flex flex-col gap-4 rounded-2xl border bg-card/80 p-5 text-left transition-all hover:-translate-y-0.5 hover:border-[color:var(--gold)]/40 hover:shadow-lg", group === "inactive" && "opacity-80 hover:opacity-100")}
+                  >
+                    <div className="flex items-start justify-between gap-3">
+                      <span className={cn("flex size-11 items-center justify-center rounded-xl", group === "active" ? "bg-grad-gold text-[#1a1204] glow-gold" : "bg-muted text-muted-foreground")}>
+                        <i.icon className="size-5" />
+                      </span>
+                      <i.Status />
+                    </div>
+                    <div>
+                      <h3 className="font-display text-lg font-semibold">{i.name}</h3>
+                      {t(`integrations.${i.key}.description`) && <p className="mt-1 text-sm text-muted-foreground">{t(`integrations.${i.key}.description`)}</p>}
+                    </div>
+                    <span className="mt-auto flex items-center gap-1 text-sm font-medium text-primary">
+                      {t(group === "active" ? "integrations.configure" : "integrations.setUp")} <ChevronRight className="size-4 transition-transform group-hover:translate-x-0.5" />
+                    </span>
+                  </button>
+                ))}
+              </div>
+            </section>
+          ),
+      )}
     </div>
   );
 }
@@ -139,6 +158,12 @@ type AiSettingsView = {
   prices: Record<string, { input: number; output: number }>;
 };
 const AI_KEY = ["admin", "integrations", "ai"];
+
+function useAiState(): string | null {
+  const { data } = useQuery({ queryKey: AI_KEY, queryFn: () => api.get<AiSettingsView>("/admin/integrations/ai") });
+  if (!data) return null;
+  return !data.hasKey ? "notConfigured" : !data.enabled ? "disabled" : data.lastTest?.ok === false ? "error" : "connected";
+}
 
 function AiStatus() {
   const { t } = useTranslation();
@@ -339,6 +364,12 @@ function AiPage() {
 type PassboltView = { enabled: boolean; baseUrl: string; hideMenu: boolean; lastTest: { ok: boolean; at: string; error?: string } | null; spikeAllowed: boolean };
 const PASSBOLT_KEY = ["admin", "integrations", "passbolt"];
 
+function usePassboltState(): string | null {
+  const { data } = useQuery({ queryKey: PASSBOLT_KEY, queryFn: () => api.get<PassboltView>("/admin/integrations/passbolt") });
+  if (!data) return null;
+  return data.enabled && data.baseUrl ? "connected" : data.baseUrl ? "disabled" : "notConfigured";
+}
+
 function PassboltStatus() {
   const { t } = useTranslation();
   const { data } = useQuery({ queryKey: PASSBOLT_KEY, queryFn: () => api.get<PassboltView>("/admin/integrations/passbolt") });
@@ -440,6 +471,12 @@ function PassboltAdminPage() {
 type TeamsView = { enabled: boolean; hasUrl: boolean; lastTest: { ok: boolean; at: string; error?: string } | null };
 const TEAMS_KEY = ["admin", "integrations", "teams"];
 
+function useTeamsState(): string | null {
+  const { data } = useQuery({ queryKey: TEAMS_KEY, queryFn: () => api.get<TeamsView>("/admin/integrations/teams") });
+  if (!data) return null;
+  return data.enabled && data.hasUrl ? "connected" : data.hasUrl ? "disabled" : "notConfigured";
+}
+
 function TeamsStatus() {
   const { t } = useTranslation();
   const { data } = useQuery({ queryKey: TEAMS_KEY, queryFn: () => api.get<TeamsView>("/admin/integrations/teams") });
@@ -539,6 +576,12 @@ function TeamsPage() {
 // ── RMM: links to the device page and the web remote control ──
 type RmmView = { enabled: boolean; name: string; deviceUrl: string; remoteUrl: string; placeholders: string[] };
 const RMM_KEY = ["admin", "integrations", "rmm"];
+
+function useRmmState(): string | null {
+  const { data } = useQuery({ queryKey: RMM_KEY, queryFn: () => api.get<RmmView>("/admin/integrations/rmm") });
+  if (!data) return null;
+  return data.enabled && (data.deviceUrl || data.remoteUrl) ? "connected" : data.deviceUrl || data.remoteUrl ? "disabled" : "notConfigured";
+}
 
 function RmmStatus() {
   const { t } = useTranslation();
@@ -643,6 +686,12 @@ function RmmPage() {
 // ── Microsoft 365: technicians' Outlook calendars (Microsoft Graph) ──
 type O365View = { enabled: boolean; tenantId: string; clientId: string; hasSecret: boolean; lastTest: { ok: boolean; at: string; error?: string } | null; redirectUri?: string | null };
 const O365_KEY = ["admin", "integrations", "o365"];
+
+function useO365State(): string | null {
+  const { data } = useQuery({ queryKey: O365_KEY, queryFn: () => api.get<O365View>("/admin/integrations/o365") });
+  if (!data) return null;
+  return !(data.tenantId && data.clientId && data.hasSecret) ? "notConfigured" : !data.enabled ? "disabled" : data.lastTest?.ok === false ? "error" : "connected";
+}
 
 function O365Status() {
   const { t } = useTranslation();
@@ -805,6 +854,12 @@ type VoipmsView = {
   publicUrlSet: boolean;
 };
 const VOIPMS_KEY = ["admin", "integrations", "voipms"];
+
+function useVoipmsState(): string | null {
+  const { data } = useQuery({ queryKey: VOIPMS_KEY, queryFn: () => api.get<VoipmsView>("/admin/integrations/voipms") });
+  if (!data) return null;
+  return !(data.username && data.hasPassword && data.did) ? "notConfigured" : !data.enabled ? "disabled" : data.lastTest?.ok === false ? "error" : "connected";
+}
 
 function VoipmsStatus() {
   const { t } = useTranslation();
