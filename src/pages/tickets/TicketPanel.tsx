@@ -53,7 +53,7 @@ import { ChargeButtons } from "./Charges";
 import { PriorityDialog, TicketPriorities } from "./Planning";
 import { TicketSmsPanel, useTicketSms } from "@/pages/sms/SmsPage";
 import {
-  dueState,
+  heatState,
   longDateTime,
   shortDate,
   PRIORITY_STYLE,
@@ -312,7 +312,8 @@ function TicketBody({
       ? (tk.options.technicians.find((p) => p.id === view.assigneeId)?.name ?? "")
       : null
     : (tk.assignee?.name ?? null);
-  const due = dueState(view.dueAt, statusKind);
+  // the checkpoint is what matters: it sets the hue (red passed, orange today, gold soon, green later); the due date stays quiet
+  const cpHeat = statusKind === "complete" ? "done" : view.milestoneDate ? heatState(view.dueAt, statusKind, { milestoneDate: view.milestoneDate, milestoneTime: view.milestoneTime }) : "none";
   const [draft, setDraft] = useState<{ text: string; internal: boolean } | null>(null);
   // Quick actions put the note box in a mode and bring it into view
   const [focusNote, setFocusNote] = useState<{ internal: boolean; at: number } | null>(null);
@@ -517,6 +518,7 @@ function TicketBody({
                 date={view.milestoneDate}
                 time={view.milestoneTime}
                 withTime
+                tone={cpHeat}
                 disabled={!editable}
                 min={view.startDate}
                 onSave={(date, time) => stage({ milestoneDate: date, milestoneTime: date ? time : null })}
@@ -525,13 +527,8 @@ function TicketBody({
                 const badge = (
                   <span
                     className={cn(
-                      "flex items-center gap-1 rounded-full border px-2 py-0.5 text-[11px] font-medium",
-                      due === "overdue"
-                        ? "border-destructive/50 text-destructive"
-                        : due === "today"
-                          ? "border-orange-500/50 text-orange-400"
-                          : "text-muted-foreground",
-                      editable && "cursor-pointer hover:border-[color:var(--gold)]/60",
+                      "flex items-center gap-1 rounded-full border border-transparent px-1.5 py-0.5 text-[10px] font-normal text-muted-foreground/70",
+                      editable && "cursor-pointer hover:border-[color:var(--gold)]/60 hover:text-muted-foreground",
                     )}
                     title={`${t("tickets.fields.due")} · ${fullDate(view.dueAt)}`}
                   >
@@ -584,10 +581,10 @@ function TicketBody({
                 key: "planning",
                 icon: CalendarClock,
                 label: t("tickets.sections.planning"),
-                value: shortDate(view.dueAt),
+                value: tk.milestoneDate ? `${shortDate(tk.milestoneDate)}${tk.milestoneTime ? ` ${tk.milestoneTime}` : ""}` : shortDate(view.dueAt),
                 more: [
                   `${t("tickets.fields.start")} : ${tk.startDate ? shortDate(tk.startDate) : "—"}`,
-                  `${t("tickets.milestone.label")} : ${tk.milestoneDate ? `${shortDate(tk.milestoneDate)}${tk.milestoneTime ? ` ${tk.milestoneTime}` : ""}` : "—"}`,
+                  `${t("tickets.fields.due")} : ${shortDate(view.dueAt)}`,
                   `${t("tickets.fields.hours")} : ${partial ? "…" : t("tickets.hoursValue", { hours: tk.hours.toLocaleString() })}`,
                   `${t("tickets.estimate.short")} : ${tk.estimate ? hm(tk.estimate.minutes / 60) : "—"}`,
                 ],
@@ -1759,7 +1756,15 @@ function StartDate({
 }
 
 /** A day (and, for the checkpoint, a time) changed in place from the ticket's header */
-function QuickDate({ icon: Icon, label, date, time, withTime, disabled, min, onSave }: { icon: LucideIcon; label: string; date: string | null; time?: string | null; withTime?: boolean; disabled: boolean; min?: string | null; onSave: (date: string | null, time: string | null) => void }) {
+const CP_TONE: Record<string, string> = {
+  overdue: "border-destructive/70 bg-destructive/15 text-red-300",
+  today: "border-orange-500/70 bg-orange-500/15 text-orange-300",
+  soon: "border-[color:var(--gold)]/70 bg-[color:var(--gold)]/15 text-primary",
+  later: "border-emerald-500/50 bg-emerald-500/10 text-emerald-300",
+  none: "border-[color:var(--gold)]/40 bg-[color:var(--gold)]/[0.06] text-primary",
+  done: "border-muted-foreground/30 bg-muted/40 text-muted-foreground",
+};
+function QuickDate({ icon: Icon, label, date, time, withTime, tone, disabled, min, onSave }: { tone?: string; icon: LucideIcon; label: string; date: string | null; time?: string | null; withTime?: boolean; disabled: boolean; min?: string | null; onSave: (date: string | null, time: string | null) => void }) {
   const { t } = useTranslation();
   const [d, setD] = useState(date ?? "");
   const [h, setH] = useState(time ?? "");
@@ -1767,8 +1772,16 @@ function QuickDate({ icon: Icon, label, date, time, withTime, disabled, min, onS
   useEffect(() => setH(time ?? ""), [time]);
   const shown = date ? shortDate(date) + (withTime && time ? ` ${time}` : "") : "—";
   const badge = (
-    <span title={label} className={cn("flex items-center gap-1 rounded-full border px-2 py-0.5 text-[11px] font-medium text-muted-foreground", !disabled && "cursor-pointer hover:border-[color:var(--gold)]/60")}>
-      <Icon className="size-3" />
+    <span
+      title={label}
+      className={cn(
+        "flex items-center gap-1 rounded-full border px-2 py-0.5 text-[11px] font-medium text-muted-foreground",
+        tone && cn("gap-1.5 border-2 px-3 py-1 text-sm font-semibold shadow-sm", CP_TONE[tone] ?? CP_TONE.none),
+        !disabled && "cursor-pointer hover:border-[color:var(--gold)]/60",
+      )}
+    >
+      <Icon className={tone ? "size-4" : "size-3"} />
+      {tone && <span className="text-[10px] font-medium uppercase tracking-wide opacity-80">{label}</span>}
       {shown}
     </span>
   );

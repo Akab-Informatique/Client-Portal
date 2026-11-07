@@ -402,6 +402,8 @@ Docker Compose on a Debian server; Nginx Proxy Manager on another server termina
 
 ## Ticket hue from the checkpoint (latest)
 
+- **In the ticket window the checkpoint leads, the due date is quiet**: the header chip of the **Checkpoint** (day + time) is the big one — larger, with its label, a thick border and the hue of its state (red passed, orange today, gold within 2 days, green later, gold outline when none, grey when complete; `cpHeat` in `TicketPanel.tsx`, `QuickDate` `tone`) — while the **Due** chip is small and muted (never red or orange). The Planning tile shows the checkpoint as its value, with the start and the due date under it.
+
 - The coloured hue at the start of a ticket (glow behind the row in the Tickets list, the global search, the minimized ticket in the dock, and the line on the row's left edge) follows the **checkpoint moment** — day + time, 17:00 when it has none — instead of the due date: red once passed, orange today, gold within 2 days, green later, grey when complete. A ticket with no checkpoint falls back to its due date (`heatMoment` / `heatState` / `dueGlow(…, cp)` in `src/pages/tickets/shared.ts`). The Due column's own text colour still follows the due date.
 
 ## Pipeline tasks: checkpoint, no times, all tasks (latest)
