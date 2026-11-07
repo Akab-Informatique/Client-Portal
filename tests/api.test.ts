@@ -6920,6 +6920,36 @@ describe("my tickets: secondary technician", () => {
 });
 
 describe("pipeline: shared to-dos and the day", () => {
+  it("the time given to each item of the day: a slider in quarter hours, partial is fine, the grid follows", async () => {
+    resetRateLimit("login:ip:unknown");
+    const tech = await signIn("tech@akab.local");
+    const me = (await tech.get("/api/me")).json.id as string;
+    const day = "2026-11-09"; // a Monday
+    const task = (await tech.post("/api/pipeline/tasks", { title: "Gros dossier du lundi", assigneeId: me, dueDate: day, estimateMinutes: 100 })).json;
+    const key = `task:${task.id}`;
+    const blocksOf = async () => (await tech.get(`/api/pipeline/day?date=${day}`)).json as any;
+    let d = await blocksOf();
+    let first = d.plan.blocks.find((b: any) => b.refId === task.id);
+    expect(first).toMatchObject({ allocated: 105, need: 105 });
+    expect(d.allocations[key]).toBeUndefined();
+    // a slider change: 50 min is rounded to a quarter hour; the block is partial and starts on a quarter
+    expect((await tech.put("/api/pipeline/day/alloc", { date: day, key, minutes: 50 })).status).toBe(200);
+    d = await blocksOf();
+    first = d.plan.blocks.find((b: any) => b.refId === task.id);
+    expect(first).toMatchObject({ allocated: 45, need: 105, partial: true });
+    expect(d.allocations[key]).toEqual({ minutes: 45, source: "manual" });
+    expect(Number(first.start.slice(3)) % 15).toBe(0);
+    // refused: not on the day, not a quarter-hour range, someone else's day without the right
+    expect((await tech.put("/api/pipeline/day/alloc", { date: day, key: "task:00000000-0000-4000-8000-000000000000", minutes: 30 })).status).toBe(404);
+    expect((await tech.put("/api/pipeline/day/alloc", { date: day, key, minutes: 5 })).status).toBe(400);
+    expect((await tech.put("/api/pipeline/day/alloc", { date: day, key, minutes: 30, userId: "00000000-0000-4000-8000-000000000001" })).status).toBe(403);
+    // back to automatic
+    expect((await tech.put("/api/pipeline/day/alloc", { date: day, key, minutes: null })).status).toBe(200);
+    d = await blocksOf();
+    expect(d.plan.blocks.find((b: any) => b.refId === task.id)).toMatchObject({ allocated: 105, need: 105 });
+    expect(d.allocations[key]).toBeUndefined();
+  });
+
   it("a ticket put on my day by hand: a time, nothing changes on the ticket, gone the next day", async () => {
     resetRateLimit("login:ip:unknown");
     const tech = await signIn("tech@akab.local");

@@ -87,6 +87,8 @@ export type DayItem = {
   due: string | null;
   overdue: boolean;
   minutes: number;
+  /** What the item needs in full (minutes) when less is given today */
+  need?: number;
   ticketNumber?: string | null;
   client?: string | null;
   /** Waits for another task: not planned */
@@ -346,6 +348,8 @@ export async function calendarOfDay(userId: string, date: string): Promise<{ sta
   return value;
 }
 
+const ceil15 = (m: number) => Math.ceil(m / 15) * 15;
+
 /** Lay the items out in the free hours of the day (in the order given), splitting a long one across the lunch hour. */
 export function layout(items: DayItem[], s: Pick<PipelineSettings, "workStart" | "workEnd" | "lunchStart" | "lunchEnd">, busy: Busy[], notes: Map<string, string> = new Map(), after?: number) {
   const work = [
@@ -363,6 +367,8 @@ export function layout(items: DayItem[], s: Pick<PipelineSettings, "workStart" |
       return out;
     });
   }
+  // blocks start and end on quarter hours: a free stretch begins at the next quarter and ends on the last one
+  free = free.map((f) => ({ start: ceil15(f.start), end: Math.floor(f.end / 15) * 15 })).filter((f) => f.end > f.start);
   const capacityMinutes = free.reduce((n, f) => n + (f.end - f.start), 0);
   const blocks: PipelineBlock[] = [];
   let seg = 0;
@@ -388,12 +394,14 @@ export function layout(items: DayItem[], s: Pick<PipelineSettings, "workStart" |
       if (at < 0) at = 0;
     }
     const it = queue.splice(at, 1)[0];
-    if (it.notBefore !== undefined && seg < free.length) moveTo(it.notBefore);
-    let left = it.minutes;
+    if (it.notBefore !== undefined && seg < free.length) moveTo(ceil15(it.notBefore));
+    const total = Math.max(15, ceil15(it.minutes));
+    const partial = it.need !== undefined && total < ceil15(it.need);
+    let left = total;
     let first = true;
     while (left > 0 && seg < free.length) {
       const room = free[seg].end - cursor;
-      if (room < 10) {
+      if (room < 15) {
         seg++;
         cursor = free[seg]?.start ?? 0;
         continue;
@@ -409,6 +417,7 @@ export function layout(items: DayItem[], s: Pick<PipelineSettings, "workStart" |
         priority: it.priority,
         ...(it.pin ? { pinned: it.pin } : {}),
         note: first ? (notes.get(it.key) ?? (it.pinNote ? `${it.pinNote}` : null)) : null,
+        ...(first ? { allocated: total, need: ceil15(it.need ?? total), ...(partial ? { partial: true } : {}) } : {}),
       });
       cursor += take;
       left -= take;
@@ -417,7 +426,7 @@ export function layout(items: DayItem[], s: Pick<PipelineSettings, "workStart" |
     }
     if (left > 0) {
       overflowMinutes += left;
-      blocks.push({ start: "", end: "", title: it.title, kind: it.kind, refId: it.refId, ticketNumber: it.ticketNumber ?? null, priority: it.priority, ...(it.pin ? { pinned: it.pin } : {}), note: notes.get(it.key) ?? it.pinNote ?? null, overflow: true });
+      blocks.push({ start: "", end: "", title: it.title, kind: it.kind, refId: it.refId, ticketNumber: it.ticketNumber ?? null, priority: it.priority, ...(it.pin ? { pinned: it.pin } : {}), note: notes.get(it.key) ?? it.pinNote ?? null, overflow: true, allocated: total, need: ceil15(it.need ?? total) });
     }
   }
   for (const b of busy) {
@@ -446,8 +455,18 @@ function rulesSummary(items: DayItem[], cap: number, planned: number, overflow: 
   return `${t} billet${t > 1 ? "s" : ""} et ${k} tâche${k > 1 ? "s" : ""} aujourd'hui, environ ${hours(planned + overflow)} de travail pour ${hours(cap)} de disponible.${over ? ` ${over} déjà en retard.` : ""}${pins ? ` ${pins} priorité${pins > 1 ? "s" : ""} épinglée${pins > 1 ? "s" : ""} en premier.` : ""} ${enough ? "Ça entre dans la journée." : `Environ ${hours(overflow)} ne rentreront pas : déplacez ou déléguez quelque chose.`}`;
 }
 
+/** The time given to each item of a day: by the person (manual) and by the AI (with its order and reason) */
+export async function allocOf(userId: string, date: string) {
+  const rows = await db().select().from(schema.pipelineDayAlloc).where(and(eq(schema.pipelineDayAlloc.userId, userId), eq(schema.pipelineDayAlloc.date, date)));
+  return {
+    manual: new Map(rows.filter((r) => r.source === "manual").map((r) => [r.key, r.minutes])),
+    ai: new Map(rows.filter((r) => r.source === "ai").map((r) => [r.key, r])),
+  };
+}
+const clamp15 = (m: number) => Math.min(480, Math.max(15, Math.round(m / 15) * 15));
+
 /** Plan one technician's day and keep it. The AI orders the work and writes the summary; the hours are laid out here. */
-export async function buildPlan(userId: string, date: string, opts: { ai: boolean; locale?: "fr" | "en"; by?: string | null; direction?: string; fromNow?: boolean } = { ai: false }) {
+export async function buildPlan(userId: string, date: string, opts: { ai: boolean; locale?: "fr" | "en"; by?: string | null; direction?: string; fromNow?: boolean; reuse?: boolean } = { ai: false }) {
   const settings = await pipelineSettings();
   const [user] = await db().select({ name: schema.users.name, locale: schema.users.locale }).from(schema.users).where(eq(schema.users.id, userId));
   const locale = opts.locale ?? user?.locale ?? "fr";
@@ -465,37 +484,64 @@ export async function buildPlan(userId: string, date: string, opts: { ai: boolea
     const [h, m] = new Date().toLocaleTimeString("en-GB", { timeZone: "America/Toronto", hour: "2-digit", minute: "2-digit", hour12: false }).split(":").map(Number);
     after = Math.ceil((h * 60 + m) / 15) * 15;
   }
-  const planable = absent || holiday ? [] : items.filter((i) => !i.blocked).sort(byUrgency);
+  // the time each item gets today: what the person set, else what the AI gave, else what it needs (in quarter hours)
+  const alloc = await allocOf(userId, date);
+  const [existing] = opts.reuse ? await db().select().from(schema.pipelineDayPlans).where(and(eq(schema.pipelineDayPlans.userId, userId), eq(schema.pipelineDayPlans.date, date))) : [];
+  const keepAi = Boolean(existing && existing.source === "ai");
+  const withTime = (i: DayItem): DayItem => {
+    const need = clamp15(i.minutes);
+    const given = alloc.manual.get(i.key) ?? (keepAi || opts.ai ? alloc.ai.get(i.key)?.minutes : undefined);
+    return { ...i, need, minutes: given ?? need };
+  };
+  const planable = absent || holiday ? [] : items.filter((i) => !i.blocked).sort(byUrgency).map(withTime);
   let ordered = planable;
   let notes = new Map<string, string>();
   let summary = "";
   let source: "ai" | "rules" = "rules";
+  // changing the time of one item keeps the AI's order, notes and summary
+  if (keepAi) {
+    const pos = (i: DayItem) => alloc.ai.get(i.key)?.position ?? 9999;
+    ordered = [...planable].sort((a, b) => pos(a) - pos(b));
+    for (const i of ordered) {
+      const n = alloc.ai.get(i.key)?.note;
+      if (n) notes.set(i.key, n);
+    }
+    summary = existing!.summary;
+    source = "ai";
+  }
   let aiError: string | null = null;
   if (opts.ai && planable.length) {
     const s = await aiSettings();
     if (s.enabled && s.apiKey) {
       try {
-        const lines = planable.map((i) => `- ${i.key} · ${i.kind === "ticket" ? `billet ${i.ticketNumber ?? ""}` : "tâche"} · « ${i.title} »${i.client ? ` · client ${i.client}` : ""} · priorité ${i.priority} · échéance ${i.due ?? "aucune"}${i.dueTime ? ` ${i.dueTime}` : ""}${i.overdue ? " (EN RETARD)" : ""}${i.pin ? ` · PRIORITÉ ${i.pin === "day" ? "DU JOUR" : "DE LA SEMAINE"}${i.pinNote ? ` (directive : ${i.pinNote})` : ""}` : ""}${i.notBefore !== undefined ? ` · pas avant ${hhmm(i.notBefore)}` : ""} · ${i.minutes} min`);
+        const lines = planable.map((i) => `- ${i.key} · ${i.kind === "ticket" ? `billet ${i.ticketNumber ?? ""}` : "tâche"} · « ${i.title} »${i.client ? ` · client ${i.client}` : ""} · priorité ${i.priority} · échéance ${i.due ?? "aucune"}${i.dueTime ? ` ${i.dueTime}` : ""}${i.overdue ? " (EN RETARD)" : ""}${i.pin ? ` · PRIORITÉ ${i.pin === "day" ? "DU JOUR" : "DE LA SEMAINE"}${i.pinNote ? ` (directive : ${i.pinNote})` : ""}` : ""}${i.notBefore !== undefined ? ` · pas avant ${hhmm(i.notBefore)}` : ""} · estimation ${i.need ?? i.minutes} min${alloc.manual.has(i.key) ? ` · TEMPS IMPOSÉ PAR LE TECHNICIEN : ${alloc.manual.get(i.key)} min` : ""}`);
         const agenda = calEvents.filter((e) => !e.allDay).map((e) => `- ${hhmm(e.start)}–${hhmm(e.end)} ${e.title}`);
         const free = layout([], settings, busy, new Map(), after).capacityMinutes;
-        const out = await askClaudeJson<{ summary?: unknown; order?: { ref?: unknown; note?: unknown }[] }>({
+        const out = await askClaudeJson<{ summary?: unknown; order?: { ref?: unknown; note?: unknown; minutes?: unknown }[] }>({
           system: `Tu es l'assistant de planification d'AKAB Informatique (services TI, Québec). Réponds en ${locale === "en" ? "anglais" : "français québécois"}, ton direct et chaleureux, tutoiement. Tu prépares la journée d'un technicien : c'est une suggestion, pas un horaire fixe.`,
           feature: "pipeline.day",
           userId,
-          prompt: `Date : ${date}. Heures de travail ${settings.workStart}–${settings.workEnd} (dîner ${settings.lunchStart}–${settings.lunchEnd}), ${hours(free)} libres après les événements.${agenda.length ? ` Déjà à son agenda Outlook :\n${agenda.join("\n")}\n` : ""} Voici ce qui est à faire :\n${lines.join("\n")}\n\nLes priorités du jour passent en premier. Respecte « pas avant » et garde ce qui a une heure d'échéance avant cette heure. Choisis l'ordre de traitement (les retards et les urgences d'abord, regroupe ce qui va ensemble, garde les tâches longues pour le début de la matinée ou de l'après-midi). Donne un résumé de 2 à 4 phrases de la journée : ce qui compte le plus, si le temps est suffisant, ce qu'il faudrait déplacer ou déléguer sinon. Format : {"summary": "...", "order": [{"ref": "task:... ou ticket:...", "note": "raison en 12 mots ou moins"}]}${directionPrompt(opts.direction ?? "")}`,
+          prompt: `Date : ${date}. Heures de travail ${settings.workStart}–${settings.workEnd} (dîner ${settings.lunchStart}–${settings.lunchEnd}), ${hours(free)} libres après les événements.${agenda.length ? ` Déjà à son agenda Outlook :\n${agenda.join("\n")}\n` : ""} Voici ce qui est à faire :\n${lines.join("\n")}\n\nLes priorités du jour passent en premier. Respecte « pas avant » et garde ce qui a une heure d'échéance avant cette heure. Choisis l'ordre de traitement (les retards et les urgences d'abord, regroupe ce qui va ensemble, garde les tâches longues pour le début de la matinée ou de l'après-midi). Pour chaque élément, analyse le temps dont il a vraiment besoin (titre, client, priorité; l'estimation est donnée à titre indicatif et peut être fausse) et donne « minutes » : le temps à y consacrer AUJOURD'HUI, multiple de 15 (15 à 480). Le total ne doit pas dépasser les heures libres. Si tout ne tient pas, ne termine pas tout : donne à certains éléments seulement une partie du temps (on avance, puis le technicien déplacera le point de contrôle plus tard) en gardant le temps complet aux retards, aux priorités du jour et aux échéances les plus proches. Respecte le temps imposé par le technicien. Donne un résumé de 2 à 4 phrases de la journée : ce qui compte le plus, ce qui ne sera avancé qu'en partie, ce qu'il faudrait déplacer ou déléguer. Format : {"summary": "...", "order": [{"ref": "task:... ou ticket:...", "minutes": 60, "note": "raison en 12 mots ou moins"}]}${directionPrompt(opts.direction ?? "")}`,
           maxTokens: 4000,
         });
         const byKey = new Map(planable.map((i) => [i.key, i]));
         const seen = new Set<string>();
         const picked: DayItem[] = [];
+        const rows: { key: string; minutes: number; position: number; note: string | null }[] = [];
         for (const o of Array.isArray(out.order) ? out.order : []) {
           const key = typeof o.ref === "string" ? o.ref : "";
           const it = byKey.get(key);
           if (!it || seen.has(key)) continue;
           seen.add(key);
-          picked.push(it);
-          if (typeof o.note === "string" && o.note.trim()) notes.set(key, o.note.trim().slice(0, 160));
+          const note = typeof o.note === "string" && o.note.trim() ? o.note.trim().slice(0, 160) : null;
+          const given = alloc.manual.get(key) ?? (typeof o.minutes === "number" && Number.isFinite(o.minutes) ? clamp15(o.minutes) : it.minutes);
+          picked.push({ ...it, minutes: given });
+          if (note) notes.set(key, note);
+          rows.push({ key, minutes: typeof o.minutes === "number" && Number.isFinite(o.minutes) ? clamp15(o.minutes) : clamp15(it.need ?? it.minutes), position: rows.length, note });
         }
+        // keep what the AI gave (its order, time and reason), so a later change of one item's time does not lose them
+        await db().delete(schema.pipelineDayAlloc).where(and(eq(schema.pipelineDayAlloc.userId, userId), eq(schema.pipelineDayAlloc.date, date), eq(schema.pipelineDayAlloc.source, "ai")));
+        if (rows.length) await db().insert(schema.pipelineDayAlloc).values(rows.map((r) => ({ userId, date, key: r.key, minutes: r.minutes, source: "ai" as const, position: r.position, note: r.note })));
         // whatever the AI left out follows, by urgency
         ordered = [...picked, ...planable.filter((i) => !seen.has(i.key))];
         if (typeof out.summary === "string" && out.summary.trim()) summary = out.summary.trim().slice(0, 900);

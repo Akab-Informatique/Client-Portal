@@ -22,6 +22,16 @@ describe("pipeline: the day laid out in blocks", () => {
     expect(lay.blocks.filter((b) => b.kind === "task").map((b) => [b.start, b.end])).toEqual([["10:15", "12:00"], ["13:00", "13:15"]]);
   });
 
+  it("blocks start and end on quarter hours, even after an event that ends at an odd minute, and an item gets at least 15 min", () => {
+    const lay = layout([item({ key: "a", minutes: 20, need: 90 }), item({ key: "b", minutes: 5 })], S, [{ start: 8 * 60, end: 8 * 60 + 40, title: "Appel" }]);
+    const blocks = lay.blocks.filter((b) => b.kind === "task");
+    expect(blocks.map((b) => [b.refId, b.start, b.end])).toEqual([["a", "08:45", "09:15"], ["b", "09:15", "09:30"]]);
+    for (const b of lay.blocks.filter((x) => x.start && x.kind === "task")) expect(Number(b.start.slice(3)) % 15 === 0 && Number(b.end.slice(3)) % 15 === 0).toBe(true);
+    // less than it needs: marked partial, with what it needs
+    expect(blocks[0]).toMatchObject({ allocated: 30, need: 90, partial: true });
+    expect(blocks[1].partial).toBeUndefined();
+  });
+
   it("works around events", () => {
     const lay = layout([item({ key: "a", minutes: 120 })], S, [{ start: 9 * 60, end: 10 * 60, title: "Réunion" }]);
     expect(lay.capacityMinutes).toBe(420);

@@ -82,6 +82,10 @@ export type Block = {
   masked?: boolean;
   /** The work of this block is done (or no longer on the day's list) */
   done?: boolean;
+  /** First block of an item: the time given today and what it needs; partial when less is given */
+  allocated?: number;
+  need?: number;
+  partial?: boolean;
 };
 
 export type DayItem = {
@@ -121,6 +125,8 @@ export type DayData = {
   items: DayItem[];
   /** The AI's plan is older than the list: something to do is not in it */
   stale: boolean;
+  /** The time given to each item today (by the person, else by the AI) */
+  allocations: Record<string, { minutes: number; source: "manual" | "ai" }>;
   absent: boolean;
   holiday: boolean;
   events: number;

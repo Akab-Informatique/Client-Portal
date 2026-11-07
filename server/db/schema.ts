@@ -2500,6 +2500,31 @@ export const pipelineDayPlans = pgTable(
   (t) => [uniqueIndex("pipeline_day_plans_user_date_unique").on(t.userId, t.date)],
 );
 
+/**
+ * The time given to an item of a day's plan (in minutes, a multiple of 15): by the person (manual, always wins) or by the AI
+ * (with the order it chose and its reason). Less than what the item needs is fine: some time goes in, the checkpoint moves later.
+ */
+export const pipelineDayAlloc = pgTable(
+  "pipeline_day_alloc",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    userId: uuid("user_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    date: text("date").notNull(),
+    /** ticket:<id> or task:<uuid> */
+    key: text("key").notNull(),
+    minutes: integer("minutes").notNull(),
+    source: text("source", { enum: ["manual", "ai"] }).notNull(),
+    /** The AI's order (0 first) */
+    position: integer("position"),
+    note: text("note"),
+    createdAt: created(),
+    updatedAt: updated(),
+  },
+  (t) => [uniqueIndex("pipeline_day_alloc_unique").on(t.userId, t.date, t.key, t.source)],
+);
+
 export type PipelineBlock = {
   start: string;
   end: string;
@@ -2513,6 +2538,10 @@ export type PipelineBlock = {
   note?: string | null;
   /** Did not fit in the day */
   overflow?: boolean;
+  /** On the first block of an item: the time given today, and what it needs; partial when less is given */
+  allocated?: number;
+  need?: number;
+  partial?: boolean;
   /** A priority pinned for the technician: of the day, or of the week */
   pinned?: "day" | "week";
   /** An event of the technician's Microsoft 365 calendar (not one the portal reserved) */

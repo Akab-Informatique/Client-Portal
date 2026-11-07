@@ -16,6 +16,7 @@ import { useTicketWorkspace } from "@/pages/tickets/workspace";
 import { PRIORITY_STYLE, addDays, dayLabel, hm, longDay, todayYmd, toMinutes, type Block, type DayData, type DayItem, type TaskCard } from "./shared";
 import { taskError, usePeople } from "./TaskDialog";
 import { DayProjects, MyTickets, Priorities } from "./DayLists";
+import { TimeShare } from "./TimeShare";
 
 /** The hours shown on the timeline: from an hour before the day starts to an hour after it ends */
 const DEFAULT_HOUR_PX = 60;
@@ -300,6 +301,7 @@ export function MyDay({ onOpenTask }: { onOpenTask: (id: string) => void }) {
             <div role="separator" aria-orientation="horizontal" title={t("pipeline.day.resizeHeight")} aria-label={t("pipeline.day.resizeHeight")} onPointerDown={startResize} onDoubleClick={() => setHourPx(DEFAULT_HOUR_PX)} className="group mt-2 flex h-3 cursor-row-resize touch-none items-center justify-center">
               <span className="h-0.5 w-16 rounded-full bg-[color:var(--glass-border)] transition-colors group-hover:bg-[color:var(--gold)]/60 group-active:bg-[color:var(--gold)]" />
             </div>
+            {data && !isLoading && <TimeShare data={data} canEdit={can("pipeline.edit") && (userId === me.id || can("pipeline.manage"))} forUser={userId === me.id ? undefined : userId} onOpen={(k, id) => (k === "ticket" ? ws.open(Number(id)) : onOpenTask(id))} onSaved={refresh} />}
             <p className="mt-3 text-[11px] text-muted-foreground">{t("pipeline.day.suggestion")}</p>
           </section>
         </div>
@@ -438,6 +440,7 @@ function Timeline({ data, onOpen, hourPx }: { data: DayData; onOpen: (b: Block) 
                     {b.start}–{b.end}
                   </span>
                   {b.pinned && <Star className={cn("size-2.5 fill-current", b.pinned === "day" ? "text-primary" : "text-muted-foreground")} />}
+                  {b.partial && <span className="rounded-full bg-orange-400/15 px-1.5 text-[9px] font-semibold uppercase tracking-wide text-orange-300">{t("pipeline.day.share.partial")}</span>}
                   {b.ticketNumber && <span className="font-mono text-[10px] text-primary">{b.ticketNumber}</span>}
                   {b.o365 && <span className="flex items-center gap-0.5 text-[10px] font-semibold uppercase tracking-wide text-sky-300"><CalendarDays className="size-2.5" /> Outlook</span>}
                   {b.masked && <EyeOff className="size-3 text-muted-foreground" />}

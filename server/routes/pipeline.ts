@@ -11,7 +11,7 @@ import { audit } from "../lib/audit.ts";
 import { aiSettings } from "../lib/ai.ts";
 import { rateLimit } from "../lib/http.ts";
 import { notify, usersWith } from "../lib/notify.ts";
-import { calendarOfDay, buildPipelineView, maskPhone, morningRun, phoneOf, PipelineError, pipelineSettings, planOf, buildPlan, savePipelineSettings, sendTestSms, type PipelineSettings, resetDailyTasks, resetDayAdds } from "../lib/pipeline.ts";
+import { calendarOfDay, buildPipelineView, maskPhone, morningRun, phoneOf, PipelineError, pipelineSettings, planOf, buildPlan, savePipelineSettings, sendTestSms, type PipelineSettings, resetDailyTasks, resetDayAdds, allocOf, dayItems } from "../lib/pipeline.ts";
 import { ticketSource } from "../lib/ticketSource.ts";
 import { todayQc } from "../lib/timesheets.ts";
 import { notifyTechs } from "../lib/techNotify.ts";
@@ -288,7 +288,12 @@ export const pipelineRoutes = new Hono<AppEnv>()
     // also when the Outlook calendar changed (a meeting added or moved)
     const cal = plan.source === "ai" ? await calendarOfDay(userId, date).catch(() => null) : null;
     const stale = plan.source === "ai" && (view.items.some((i) => !i.blocked && !planned.has(i.key)) || (cal !== null && cal.events.filter((e) => !e.free).length !== plan.calendarEvents));
-    return c.json({ date, userId, plan, stale, ...view, workHours: { start: s.workStart, end: s.workEnd, lunchStart: s.lunchStart, lunchEnd: s.lunchEnd }, ai: Boolean(ai.enabled && ai.apiKey) });
+    // the time given to each item today (by the person, else by the AI): the sliders of the day
+    const al = await allocOf(userId, date);
+    const allocations: Record<string, { minutes: number; source: "manual" | "ai" }> = {};
+    for (const [k, r] of al.ai) allocations[k] = { minutes: r.minutes, source: "ai" };
+    for (const [k, m] of al.manual) allocations[k] = { minutes: m, source: "manual" };
+    return c.json({ date, userId, plan, stale, allocations, ...view, workHours: { start: s.workStart, end: s.workEnd, lunchStart: s.lunchStart, lunchEnd: s.lunchEnd }, ai: Boolean(ai.enabled && ai.apiKey) });
   })
 
   // ── Tickets and tasks put on a day by hand (today only, an optional time to do it before; the ticket or task itself does not change) ──
@@ -380,6 +385,32 @@ export const pipelineRoutes = new Hono<AppEnv>()
     const out = await buildPlan(userId, p.date ?? todayQc(), { ai: true, fromNow: true, direction: cleanDirection(p.direction) });
     await audit(a.user.id, "pipeline.day_planned", userId, { source: out.plan.source, aiError: out.aiError });
     return c.json(out);
+  })
+
+  /**
+   * The time to give an item today, in quarter hours (null = back to automatic). The day is laid out again at once;
+   * an AI plan keeps its order, notes and summary. Less than the item needs is fine: some time goes in, the checkpoint moves later.
+   */
+  .put("/day/alloc", requirePermission("pipeline.edit"), async (c) => {
+    const a = auth(c);
+    const p = await body(c, z.object({ date: zDate.optional(), userId: zUuid.optional(), key: z.string().regex(/^(ticket:\d+|task:[0-9a-f-]{36})$/), minutes: z.number().int().min(15).max(480).nullable() }));
+    const who = await dayTarget(a, p.userId);
+    const date = p.date ?? todayQc();
+    const view = await dayItems(who, date, a.user.id);
+    const it = view.items.find((i) => i.key === p.key && !i.masked);
+    if (!it) throw new HTTPException(404, { message: "not_found" });
+    const d = db();
+    const where = and(eq(schema.pipelineDayAlloc.userId, who), eq(schema.pipelineDayAlloc.date, date), eq(schema.pipelineDayAlloc.key, p.key), eq(schema.pipelineDayAlloc.source, "manual"));
+    if (p.minutes === null) await d.delete(schema.pipelineDayAlloc).where(where);
+    else {
+      const minutes = Math.round(p.minutes / 15) * 15;
+      await d
+        .insert(schema.pipelineDayAlloc)
+        .values({ userId: who, date, key: p.key, minutes, source: "manual" })
+        .onConflictDoUpdate({ target: [schema.pipelineDayAlloc.userId, schema.pipelineDayAlloc.date, schema.pipelineDayAlloc.key, schema.pipelineDayAlloc.source], set: { minutes, updatedAt: new Date() } });
+    }
+    const out = await buildPlan(who, date, { ai: false, reuse: true, fromNow: true });
+    return c.json({ ok: true, plan: out.plan });
   })
 
   // ── The team's list ──
