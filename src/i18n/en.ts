@@ -2746,7 +2746,7 @@ const en: Dict = {
     "waitsNone": "None",
     "waitsBlocked": "Locked until \"{{title}}\" is done.",
     "sort": { "checkpoint": "Checkpoint (default)", "due": "Due day", "status": "Status", "custom": "My order", "hint": "Your choice becomes your default sort. \"My order\": drag the tasks, it is yours only.", "drag": "Drag to move", "dragPhase": "Drag to change the order of the phases" },
-    "listSort": { "checkpoint": "Next checkpoint (default)", "due": "Due day", "name": "Name", "number": "Number", "client": "Client" },
+    "listSort": { "checkpoint": "Next checkpoint (default)", "due": "Due day", "name": "Name", "number": "Number", "client": "Client", "custom": "My order" },
     "newPhase": "New phase",
     "newPhaseText": "A phase (milestone) is a step of the project. The tasks of a phase work like tickets.",
     "phaseNamePlaceholder": "E.g. Preparation, Migration, Go-live",

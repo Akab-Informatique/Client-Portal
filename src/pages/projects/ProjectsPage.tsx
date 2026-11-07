@@ -1,4 +1,4 @@
-import { Fragment, useEffect, useMemo, useState } from "react";
+import { Fragment, useEffect, useMemo, useState, type ReactNode } from "react";
 import { useSearchParams } from "react-router-dom";
 import { useTranslation } from "react-i18next";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
@@ -8,7 +8,11 @@ import { AlertTriangle, BellRing, CalendarDays, ChevronDown, ChevronLeft, Chevro
 import { GlassBackdrop } from "@/components/brand/GlassBackdrop";
 import { Button } from "@/components/ui/button";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
-import { useSortDefault } from "@/lib/sortPrefs";
+import { useSortDefault, useCustomOrder, byCustom } from "@/lib/sortPrefs";
+import { DndContext, KeyboardSensor, PointerSensor, closestCenter, useSensor, useSensors, type DragEndEvent } from "@dnd-kit/core";
+import { SortableContext, arrayMove, sortableKeyboardCoordinates, useSortable, verticalListSortingStrategy } from "@dnd-kit/sortable";
+import { CSS } from "@dnd-kit/utilities";
+import { GripVertical } from "lucide-react";
 import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
@@ -37,7 +41,7 @@ const readOpened = (): Set<string> => {
 };
 
 /** Centre de commande › Projets: the same tiles, filters and weekly panel as Tickets, with a folder per project. */
-const SORTS = ["checkpoint", "due", "name", "number", "client"] as const;
+const SORTS = ["checkpoint", "due", "name", "number", "client", "custom"] as const;
 
 export function ProjectsPage() {
   const { t } = useTranslation();
@@ -88,9 +92,12 @@ export function ProjectsPage() {
     });
   // the sort the technician chose for this list (the checkpoint of the next task by default; kept on their account)
   const [sort, setSort] = useSortDefault<(typeof SORTS)[number]>("projects.list", "checkpoint", SORTS);
+  // the technician's own order of the projects (dragged by hand; theirs only)
+  const { keys: customKeys, save: saveOrder } = useCustomOrder("projects:list", sort === "custom");
   const shown = useMemo(() => {
     const l = [...(list ?? [])];
-    const cmp: Record<(typeof SORTS)[number], (a: Project, b: Project) => number> = {
+    if (sort === "custom") return byCustom(l, (p) => p.id, customKeys);
+    const cmp: Record<Exclude<(typeof SORTS)[number], "custom">, (a: Project, b: Project) => number> = {
       checkpoint: (a, b) => (a.nextCheckpoint ?? "9999").localeCompare(b.nextCheckpoint ?? "9999") || (a.dueDate ?? "9999").localeCompare(b.dueDate ?? "9999"),
       due: (a, b) => (a.dueDate ?? "9999").localeCompare(b.dueDate ?? "9999"),
       name: (a, b) => a.name.localeCompare(b.name),
@@ -98,7 +105,15 @@ export function ProjectsPage() {
       client: (a, b) => (a.client?.name ?? "\uffff").localeCompare(b.client?.name ?? "\uffff") || a.name.localeCompare(b.name),
     };
     return l.sort(cmp[sort]);
-  }, [list, sort]);
+  }, [list, sort, customKeys]);
+  const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 5 } }), useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates }));
+  const onDragEnd = (e: DragEndEvent) => {
+    if (!e.over || e.active.id === e.over.id) return;
+    const order = shown.map((p) => p.id);
+    saveOrder(arrayMove(order, order.indexOf(String(e.active.id)), order.indexOf(String(e.over.id))));
+    // moving a project by hand in any sort puts the list in the technician's own order, starting from what they saw
+    if (sort !== "custom") setSort("custom");
+  };
   const ids = shown.map((p) => p.id);
   const allOpen = ids.length > 0 && ids.every((id) => opened.has(id));
 
@@ -271,6 +286,8 @@ export function ProjectsPage() {
         </div>
         {isLoading && <Loader2 className="mx-auto my-10 size-6 animate-spin text-muted-foreground" />}
         {!isLoading && !list?.length && <p className="py-14 text-center text-sm text-muted-foreground">{filtered || view !== "all" ? t("projects.noneFiltered") : t("projects.none")}</p>}
+        <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={onDragEnd}>
+        <SortableContext items={ids} strategy={verticalListSortingStrategy}>
         <ul className="divide-y divide-border/60">
           {shown.map((p) => {
             const isOpen = opened.has(p.id);
@@ -278,9 +295,12 @@ export function ProjectsPage() {
             const tone = dueTone(p.dueDate, finished);
             const pct = p.progress.total ? Math.round((p.progress.done / p.progress.total) * 100) : 0;
             return (
-              <li key={p.id} className="group/row relative">
+              <SortRow key={p.id} id={p.id} className="group/row relative">
+                {(grip) => (
+                <>
                 <span className={cn("absolute inset-y-0 left-0 w-0.5 transition-all group-hover/row:w-1", p.attention.length ? "bg-red-500/80" : finished ? "bg-muted-foreground/30" : "bg-[color:var(--gold)]/70")} />
                 <div className="flex items-center gap-2 px-4 py-3 hover:bg-foreground/[0.03]">
+                  {grip}
                   <button type="button" aria-label={isOpen ? t("projects.collapse") : t("projects.expand")} aria-expanded={isOpen} onClick={() => toggle([p.id], isOpen)} className="rounded-md p-1 text-muted-foreground hover:bg-foreground/[0.06] hover:text-foreground">
                     <ChevronDown className={cn("size-4 transition-transform", !isOpen && "-rotate-90")} />
                   </button>
@@ -369,10 +389,14 @@ export function ProjectsPage() {
                     {canEdit && <QuickMilestone project={p} onDone={refresh} />}
                   </div>
                 )}
-              </li>
+                </>
+                )}
+              </SortRow>
             );
           })}
         </ul>
+        </SortableContext>
+        </DndContext>
       </div>
 
       {creating && (
@@ -497,3 +521,19 @@ function WeekPanel({ onOpen }: { onOpen: (projectId: string) => void }) {
   );
 }
 
+
+/** A row of the projects list that can be dragged by its grip (the technician's own order) */
+function SortRow({ id, className, children }: { id: string; className?: string; children: (grip: ReactNode) => ReactNode }) {
+  const { t } = useTranslation();
+  const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id });
+  const grip = (
+    <button type="button" aria-label={t("projects.sort.drag")} title={t("projects.sort.drag")} className="cursor-grab touch-none rounded p-1 text-muted-foreground/60 hover:text-foreground active:cursor-grabbing" {...attributes} {...listeners}>
+      <GripVertical className="size-4" />
+    </button>
+  );
+  return (
+    <li ref={setNodeRef} style={{ transform: CSS.Transform.toString(transform), transition }} className={cn(className, isDragging && "relative z-10 bg-background/80 opacity-80")}>
+      {children(grip)}
+    </li>
+  );
+}

@@ -2744,7 +2744,7 @@ const fr = {
     "waitsNone": "Aucune",
     "waitsBlocked": "Verrouillée jusqu'à ce que « {{title}} » soit terminée.",
     "sort": { "checkpoint": "Point de contrôle (défaut)", "due": "Échéance", "status": "Statut", "custom": "Mon ordre", "hint": "Votre choix devient votre tri par défaut. « Mon ordre » : glissez les tâches, c'est à vous seulement.", "drag": "Glisser pour déplacer", "dragPhase": "Glisser pour changer l'ordre des phases" },
-    "listSort": { "checkpoint": "Prochain point de contrôle (défaut)", "due": "Échéance", "name": "Nom", "number": "Numéro", "client": "Client" },
+    "listSort": { "checkpoint": "Prochain point de contrôle (défaut)", "due": "Échéance", "name": "Nom", "number": "Numéro", "client": "Client", "custom": "Mon ordre" },
     "newPhase": "Nouvelle phase",
     "newPhaseText": "Une phase (jalon) est une étape du projet. Les tâches de la phase se font au même endroit que des billets.",
     "phaseNamePlaceholder": "Ex. : Préparation, Migration, Mise en production",
