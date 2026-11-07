@@ -2,7 +2,7 @@ import { useEffect, useRef, useState, type FormEvent } from "react";
 import { useTranslation } from "react-i18next";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
-import { ArrowDown, ArrowUp, BellRing, Check, ChevronDown, Clock, FileText, Flag, FolderOpen, Info, ArrowRightLeft, ListChecks, Loader2, Mail, MessageSquare, MessagesSquare, Plus, Star, Trash2, X } from "lucide-react";
+import { ArrowDown, ArrowUp, BellRing, Check, Globe, Lock, ChevronDown, Clock, FileText, Flag, FolderOpen, Info, ArrowRightLeft, ListChecks, Loader2, Mail, MessageSquare, MessagesSquare, Plus, Star, Trash2, X } from "lucide-react";
 import { useConfirm } from "@/components/ConfirmDialog";
 import { MoveChargeDialog } from "@/components/MoveChargeDialog";
 import { Button } from "@/components/ui/button";
@@ -590,8 +590,10 @@ function Notes({ p, edit, onChanged, fail }: { p: ProjectDetail; edit: boolean; 
   const team = [...new Set([p.lead?.id, ...p.members.map((m) => m.id)].filter((x): x is string => Boolean(x) && x !== me.id))];
   const [tell, setTell] = useState<string[]>([]);
   const [how, setHow] = useState({ bell: true, email: true, chat: false });
+  // internal = staff only; public = also the client (client portal › Projets)
+  const [isPublic, setIsPublic] = useState(false);
   const add = useMutation({
-    mutationFn: () => api.post<{ notified?: number; chatNotReady?: boolean; notifyFailed?: number }>(`/projects/${p.id}/notes`, { text: text.trim(), ...(tell.length ? { notifyUserIds: tell, notifyChannels: how } : {}) }),
+    mutationFn: () => api.post<{ notified?: number; chatNotReady?: boolean; notifyFailed?: number }>(`/projects/${p.id}/notes`, { text: text.trim(), internal: !isPublic, ...(tell.length ? { notifyUserIds: tell, notifyChannels: how } : {}) }),
     onSuccess: (r) => {
       setText("");
       setTell([]);
@@ -614,6 +616,16 @@ function Notes({ p, edit, onChanged, fail }: { p: ProjectDetail; edit: boolean; 
           }}
         >
           <Textarea rows={3} value={text} onChange={(e) => setText(e.target.value)} placeholder={t("projects.notePlaceholder")} maxLength={8000} />
+          <div className="flex flex-wrap items-center gap-2">
+            <div className="flex overflow-hidden rounded-full border text-[11px]" role="group" aria-label={t("projects.noteKind.label")}>
+              {([false, true] as const).map((pub) => (
+                <button key={String(pub)} type="button" aria-pressed={isPublic === pub} onClick={() => setIsPublic(pub)} className={cn("flex items-center gap-1 px-3 py-1", isPublic === pub ? (pub ? "bg-sky-500/20 text-sky-200" : "bg-violet-500/20 text-violet-200") : "text-muted-foreground hover:text-foreground")}>
+                  {pub ? <Globe className="size-3" /> : <Lock className="size-3" />} {t(pub ? "projects.noteKind.public" : "projects.noteKind.internal")}
+                </button>
+              ))}
+            </div>
+            <span className="text-[11px] text-muted-foreground">{t(isPublic ? "projects.noteKind.publicHint" : "projects.noteKind.internalHint")}</span>
+          </div>
           {colleagues.length > 0 && (
             <div className="flex flex-wrap items-center gap-2">
               <Popover>
@@ -677,6 +689,17 @@ function Notes({ p, edit, onChanged, fail }: { p: ProjectDetail; edit: boolean; 
             <div className="mb-1 flex items-center gap-2 text-xs text-muted-foreground">
               <span className="font-medium text-foreground">{n.author ?? "—"}</span>
               <span>{shortDateTime(n.createdAt)}</span>
+              {n.fromClient ? (
+                <span className="rounded-full border border-[color:var(--gold)]/40 bg-[color:var(--gold)]/10 px-1.5 py-px text-[10px] font-medium text-primary">{t("projects.noteKind.fromClient")}</span>
+              ) : n.internal ? (
+                <span className="flex items-center gap-1 rounded-full bg-violet-500/15 px-1.5 py-px text-[10px] font-medium text-violet-200">
+                  <Lock className="size-2.5" /> {t("projects.noteKind.internal")}
+                </span>
+              ) : (
+                <span className="flex items-center gap-1 rounded-full bg-sky-500/15 px-1.5 py-px text-[10px] font-medium text-sky-200">
+                  <Globe className="size-2.5" /> {t("projects.noteKind.public")}
+                </span>
+              )}
               {(n.authorId === me.id || can("projects.manage")) && (
                 <button type="button" aria-label={t("common.delete")} onClick={() => del.mutate(n.id)} className="ml-auto rounded p-1 hover:text-destructive">
                   <Trash2 className="size-3.5" />

@@ -585,6 +585,15 @@ export const MODULES = [
     ],
   },
   {
+    key: "clientProjects",
+    audience: "client",
+    label: { fr: "Projets", en: "Projects" },
+    permissions: [
+      { key: "clientProjects.view", label: { fr: "Voir les projets de l'entreprise", en: "See the company's projects" }, description: { fr: "L'avancement et les notes publiques des projets menés pour l'entreprise", en: "Progress and public notes of the projects run for the company" } },
+      { key: "clientProjects.comment", label: { fr: "Écrire des notes publiques sur un projet", en: "Write public notes on a project" } },
+    ],
+  },
+  {
     key: "clientQuotes",
     audience: "client",
     label: { fr: "Soumissions", en: "Quotes" },
@@ -619,7 +628,7 @@ export const ACCESS_LAYOUT: { key: string; audience: Audience; label: Localized;
   { key: "accounting", audience: "staff", label: { fr: "Comptabilité", en: "Accounting" }, modules: ["accounting"] },
   { key: "admin", audience: "staff", label: { fr: "Paramètres admin", en: "Admin settings" }, modules: ["admin"] },
   { key: "clientBoard", audience: "client", label: { fr: "Babillard", en: "Message board" }, modules: ["board"] },
-  { key: "clientOperations", audience: "client", label: { fr: "Opérations", en: "Operations" }, modules: ["clientTickets", "clientDevices", "clientDocs"] },
+  { key: "clientOperations", audience: "client", label: { fr: "Opérations", en: "Operations" }, modules: ["clientTickets", "clientProjects", "clientDevices", "clientDocs"] },
   { key: "clientAccounting", audience: "client", label: { fr: "Comptabilité", en: "Accounting" }, modules: ["clientInvoices", "clientContracts", "clientQuotes"] },
   { key: "clientSettings", audience: "client", label: { fr: "Paramètres admin", en: "Admin settings" }, modules: ["clientAdmin"] },
 ];
@@ -730,7 +739,7 @@ export const SYSTEM_ROLES: Array<{
     name: { fr: "Comptabilité client", en: "Client accounting" },
     description: { fr: "Babillard, factures et soumissions", en: "Message board, invoices and quotes" },
     // the main and billing contacts get this role: their company's invoices, contracts and every ticket of the company
-    permissions: ["board.view", "board.ticket", "clientTickets.view", "clientTickets.all", "clientTickets.comment", "clientTickets.attach", "clientTickets.escalate", "clientInvoices.view", "clientContracts.view", "clientContracts.autopay", "clientQuotes.view"],
+    permissions: ["board.view", "board.ticket", "clientTickets.view", "clientTickets.all", "clientTickets.comment", "clientTickets.attach", "clientTickets.escalate", "clientInvoices.view", "clientContracts.view", "clientContracts.autopay", "clientQuotes.view", "clientProjects.view", "clientProjects.comment"],
     locked: false,
   },
   {
@@ -741,7 +750,7 @@ export const SYSTEM_ROLES: Array<{
       fr: "Babillard et tous les billets de l'entreprise (filtres par usager), sans les paramètres admin du portail",
       en: "Message board and every ticket of the company (filters by user), without the portal's admin settings",
     },
-    permissions: ["board.view", "board.ticket", "clientTickets.view", "clientTickets.all", "clientTickets.comment", "clientTickets.attach", "clientTickets.escalate"],
+    permissions: ["board.view", "board.ticket", "clientTickets.view", "clientTickets.all", "clientTickets.comment", "clientTickets.attach", "clientTickets.escalate", "clientProjects.view", "clientProjects.comment"],
     locked: false,
   },
   {

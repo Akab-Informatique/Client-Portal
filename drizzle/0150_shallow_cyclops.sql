@@ -1,0 +1,1 @@
+ALTER TABLE "project_notes" ADD COLUMN "internal" boolean DEFAULT true NOT NULL;

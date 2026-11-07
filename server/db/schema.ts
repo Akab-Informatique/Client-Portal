@@ -2945,6 +2945,8 @@ export const projectNotes = pgTable(
       .references(() => projects.id, { onDelete: "cascade" }),
     authorId: uuid("author_id").references(() => users.id, { onDelete: "set null" }),
     text: text("text").notNull(),
+    /** Internal = staff only (the default; older notes too); public = also the project's client (client portal › Projets) */
+    internal: boolean("internal").notNull().default(true),
     createdAt: created(),
   },
   (t) => [index("project_notes_project_idx").on(t.projectId, t.createdAt)],

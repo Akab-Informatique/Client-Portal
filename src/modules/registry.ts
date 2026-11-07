@@ -84,6 +84,7 @@ export type ClientNavModule = Omit<NavModule, "section" | "optIn"> & { section: 
 export const CLIENT_MODULES: ClientNavModule[] = [
   { key: "board", path: "/", labelKey: "client.nav.board", icon: Megaphone, section: "board", permission: "board.view" },
   { key: "tickets", path: "/tickets", labelKey: "client.nav.tickets", icon: Ticket, section: "operations", permission: "clientTickets.view" },
+  { key: "projects", path: "/projects", labelKey: "client.nav.projects", icon: FolderKanban, section: "operations", permission: "clientProjects.view" },
   { key: "devices", path: "/devices", labelKey: "client.nav.devices", icon: MonitorSmartphone, section: "operations", permission: "clientDevices.view", upcoming: true },
   { key: "documentation", path: "/documentation", labelKey: "client.nav.documentation", icon: BookOpen, section: "operations", permission: "clientDocs.view", upcoming: true },
   { key: "invoices", path: "/invoices", labelKey: "client.nav.invoices", icon: Receipt, section: "accounting", permission: "clientInvoices.view" },

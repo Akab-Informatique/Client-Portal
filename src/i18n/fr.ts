@@ -2887,7 +2887,15 @@ const fr = {
       to: "Au",
       type: "Type",
       note: "Note",
-      noteTell: {
+      noteKind: {
+      label: "Visibilité de la note",
+      internal: "Interne",
+      public: "Publique",
+      internalHint: "Seulement l'équipe (le personnel) la voit.",
+      publicHint: "Toute personne ayant accès au projet la voit, le client compris.",
+      fromClient: "Client",
+    },
+    noteTell: {
       team: "Ajouter l'équipe du projet",
       inTeam: "équipe",
       done: "{{count}} collègue(s) avisé(s).",
@@ -5717,6 +5725,20 @@ const fr = {
     as: "Connecté en tant que {{name}}",
     back: "Revenir à la vue technicien",
   },
+  clientProjects: {
+    title: "Projets",
+    subtitle: "Les projets menés pour votre entreprise : l'avancement et les notes partagées avec vous.",
+    none: "Aucun projet pour le moment.",
+    progress: "{{done}} / {{total}} jalons",
+    due: "pour le {{date}}",
+    milestones: "Jalons",
+    notes: "Notes",
+    notePlaceholder: "Écrire une note à l'équipe du projet…",
+    send: "Envoyer",
+    noteSent: "Note envoyée à l'équipe.",
+    noNotes: "Aucune note partagée pour l'instant.",
+    status: { planning: "En préparation", active: "En cours", on_hold: "En pause", done: "Terminé", cancelled: "Annulé" },
+  },
   client: {
     tickets: {
       technicians: "Techniciens",
@@ -5832,6 +5854,7 @@ const fr = {
       accountingSection: "Comptabilité",
       board: "Messages d'AKAB",
       tickets: "Billets",
+      projects: "Projets",
       devices: "Appareils",
       documentation: "Documentation",
       invoices: "Factures",

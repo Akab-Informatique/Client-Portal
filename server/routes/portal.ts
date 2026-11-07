@@ -1,6 +1,6 @@
 import { Hono } from "hono";
 import { HTTPException } from "hono/http-exception";
-import { and, asc, eq } from "drizzle-orm";
+import { and, asc, desc, eq, inArray, ne } from "drizzle-orm";
 import { z } from "zod";
 import { db, schema } from "../db/index.ts";
 import { auth, requirePermission, type AppEnv, type AuthContext } from "../lib/auth.ts";
@@ -21,6 +21,16 @@ import { isAlert, lookup, techniciansViewing } from "./tickets.ts";
 function companyOf(a: AuthContext): string {
   if (a.user.kind !== "client" || !a.user.clientId) throw new HTTPException(403, { message: "Forbidden" });
   return a.user.clientId;
+}
+
+/** One of the signed-in client's own projects (never an id from another company) */
+async function ownProject(a: AuthContext, id: string) {
+  const clientId = companyOf(a);
+  const parsed = z.string().uuid().safeParse(id);
+  if (!parsed.success) throw new HTTPException(404, { message: "not_found" });
+  const [p] = await db().select().from(schema.projects).where(and(eq(schema.projects.id, parsed.data), eq(schema.projects.clientId, clientId)));
+  if (!p || p.status === "cancelled") throw new HTTPException(404, { message: "not_found" });
+  return p;
 }
 
 export const portalRoutes = new Hono<AppEnv>()
@@ -162,6 +172,60 @@ export const portalRoutes = new Hono<AppEnv>()
   })
 
   /** One ticket, with its public activity only, and who at AKAB has it open. */
+  // ── Projects run for the client's company: progress and the public notes (never the internal ones, the time or the money)
+  .get("/projects", requirePermission("clientProjects.view"), async (c) => {
+    const clientId = companyOf(auth(c));
+    const rows = await db().select().from(schema.projects).where(and(eq(schema.projects.clientId, clientId), ne(schema.projects.status, "cancelled"))).orderBy(asc(schema.projects.status), desc(schema.projects.createdAt));
+    const ms = rows.length ? await db().select({ projectId: schema.projectMilestones.projectId, status: schema.projectMilestones.status }).from(schema.projectMilestones).where(inArray(schema.projectMilestones.projectId, rows.map((r) => r.id))) : [];
+    const lead = new Map((rows.length ? await db().select({ id: schema.users.id, name: schema.users.name }).from(schema.users).where(inArray(schema.users.id, rows.map((r) => r.leadId).filter((x): x is string => Boolean(x)))) : []).map((u) => [u.id, u.name]));
+    return c.json(
+      rows.map((p) => {
+        const mine = ms.filter((m) => m.projectId === p.id);
+        return { id: p.id, number: p.number, name: p.name, status: p.status, startDate: p.startDate, dueDate: p.dueDate, lead: p.leadId ? (lead.get(p.leadId) ?? null) : null, milestones: { done: mine.filter((m) => m.status === "done").length, total: mine.length } };
+      }),
+    );
+  })
+  .get("/projects/:id", requirePermission("clientProjects.view"), async (c) => {
+    const p = await ownProject(auth(c), c.req.param("id"));
+    const [milestones, notes] = await Promise.all([
+      db().select().from(schema.projectMilestones).where(eq(schema.projectMilestones.projectId, p.id)).orderBy(asc(schema.projectMilestones.position)),
+      db()
+        .select({ id: schema.projectNotes.id, text: schema.projectNotes.text, createdAt: schema.projectNotes.createdAt, author: schema.users.name, authorKind: schema.users.kind })
+        .from(schema.projectNotes)
+        .leftJoin(schema.users, eq(schema.users.id, schema.projectNotes.authorId))
+        .where(and(eq(schema.projectNotes.projectId, p.id), eq(schema.projectNotes.internal, false)))
+        .orderBy(desc(schema.projectNotes.createdAt))
+        .limit(200),
+    ]);
+    const [lead] = p.leadId ? await db().select({ name: schema.users.name }).from(schema.users).where(eq(schema.users.id, p.leadId)) : [];
+    return c.json({
+      id: p.id,
+      number: p.number,
+      name: p.name,
+      description: p.description,
+      status: p.status,
+      startDate: p.startDate,
+      dueDate: p.dueDate,
+      lead: lead?.name ?? null,
+      milestones: milestones.map((m) => ({ id: m.id, name: m.name, status: m.status, dueDate: m.dueDate })),
+      notes: notes.map((n) => ({ id: n.id, text: n.text, createdAt: n.createdAt, author: n.author ?? null, fromClient: n.authorKind === "client" })),
+    });
+  })
+  /** A public note in the client's name: the project's lead and team are told */
+  .post("/projects/:id/notes", requirePermission("clientProjects.comment"), async (c) => {
+    const a = auth(c);
+    const { text } = await body(c, z.object({ text: z.string().trim().min(1).max(6000) }));
+    const p = await ownProject(a, c.req.param("id"));
+    limit(a, "project-note", 30);
+    await db().insert(schema.projectNotes).values({ projectId: p.id, authorId: a.user.id, text, internal: false });
+    await db().update(schema.projects).set({ updatedAt: new Date() }).where(eq(schema.projects.id, p.id));
+    const members = await db().select({ id: schema.projectMembers.userId }).from(schema.projectMembers).where(eq(schema.projectMembers.projectId, p.id));
+    const team = [...new Set([...(p.leadId ? [p.leadId] : []), ...members.map((m) => m.id)])];
+    if (team.length) await notify(team, { type: "project.note", data: { by: `${a.user.name} (client)`, number: p.number, name: p.name, message: text.slice(0, 300) }, link: `/projects?project=${p.id}&tab=notes` });
+    await audit(a.user.id, "portal.project_note", p.id);
+    return c.json({ ok: true }, 201);
+  })
+
   .get("/tickets/:id", requirePermission("clientTickets.view"), async (c) => {
     const a = auth(c);
     const { ctx, t } = await ownTicket(a, c.req.param("id"));

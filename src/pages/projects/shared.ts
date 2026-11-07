@@ -107,7 +107,7 @@ export type Project = {
 export type Reminder = { id: string; remindOn: string; text: string; done: boolean; userId: string | null; user: string | null };
 export type ProjectDetail = Project & {
   reminders: Reminder[];
-  notes: { id: string; text: string; createdAt: string; authorId: string | null; author: string | null }[];
+  notes: { id: string; text: string; internal: boolean; fromClient: boolean; createdAt: string; authorId: string | null; author: string | null }[];
   time: {
     byPerson: { userId: string; name: string; hours: number }[];
     entries: { id: string; date: string; hours: number; billableHours: number; note: string | null; milestoneId: string | null; milestone: string | null; task: string | null; ticket: { number: string | null; title: string | null } | null; userId: string; user: string }[];

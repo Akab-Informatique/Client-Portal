@@ -5130,12 +5130,12 @@ describe("client portal: sections, default roles and per-user rights", () => {
     const roles = (await admin.get(`/api/admin/clients/${firstClient.id}/roles`)).json;
     expect(roles.every((r: any) => r.audience === "client" && r.clientId === firstClient.id)).toBe(true);
     const bySlug = Object.fromEntries(roles.map((r: any) => [r.slug, r.permissions.slice().sort()]));
-    expect(bySlug["client-admin"]).toEqual(["board.ticket", "board.view", "clientAdmin.company", "clientAdmin.users", "clientContracts.autopay", "clientContracts.view", "clientDevices.view", "clientDocs.view", "clientInvoices.view", "clientQuotes.view", "clientTickets.all", "clientTickets.attach", "clientTickets.comment", "clientTickets.escalate", "clientTickets.view"]);
-    expect(bySlug["client-accounting"]).toEqual(["board.ticket", "board.view", "clientContracts.autopay", "clientContracts.view", "clientInvoices.view", "clientQuotes.view", "clientTickets.all", "clientTickets.attach", "clientTickets.comment", "clientTickets.escalate", "clientTickets.view"]);
+    expect(bySlug["client-admin"]).toEqual(["board.ticket", "board.view", "clientAdmin.company", "clientAdmin.users", "clientContracts.autopay", "clientContracts.view", "clientDevices.view", "clientDocs.view", "clientInvoices.view", "clientProjects.comment", "clientProjects.view", "clientQuotes.view", "clientTickets.all", "clientTickets.attach", "clientTickets.comment", "clientTickets.escalate", "clientTickets.view"]);
+    expect(bySlug["client-accounting"]).toEqual(["board.ticket", "board.view", "clientContracts.autopay", "clientContracts.view", "clientInvoices.view", "clientProjects.comment", "clientProjects.view", "clientQuotes.view", "clientTickets.all", "clientTickets.attach", "clientTickets.comment", "clientTickets.escalate", "clientTickets.view"]);
     expect(bySlug["client-tech"]).toEqual(["board.ticket", "board.view", "clientDevices.view", "clientDocs.view", "clientTickets.all", "clientTickets.attach", "clientTickets.comment", "clientTickets.escalate", "clientTickets.view"]);
     expect(bySlug["client-user"]).toEqual(["board.ticket", "board.view", "clientTickets.attach", "clientTickets.comment", "clientTickets.escalate", "clientTickets.view"]);
     // every ticket of the company, but none of the portal's admin settings
-    expect(bySlug["client-tickets-admin"]).toEqual(["board.ticket", "board.view", "clientTickets.all", "clientTickets.attach", "clientTickets.comment", "clientTickets.escalate", "clientTickets.view"]);
+    expect(bySlug["client-tickets-admin"]).toEqual(["board.ticket", "board.view", "clientProjects.comment", "clientProjects.view", "clientTickets.all", "clientTickets.attach", "clientTickets.comment", "clientTickets.escalate", "clientTickets.view"]);
     expect(bySlug["client-config"]).toEqual(["board.ticket", "board.view", "clientAdmin.company", "clientAdmin.users", "clientTickets.attach", "clientTickets.comment", "clientTickets.escalate", "clientTickets.view"]);
   });
 
@@ -10561,6 +10561,44 @@ describe("a ticket moved to another client", () => {
       await db().delete(schema.clients).where(inArray(schema.clients.id, [wrong.id, right.id]));
       (await import("../server/lib/localTickets.ts")).resetTicketMode();
     }
+  });
+});
+
+describe("project notes: internal or public, and the client's projects page", () => {
+  it("an internal note is staff only; a public one is read by the client's people, who can answer; other companies see nothing", async () => {
+    resetRateLimit("login:ip:unknown");
+    const tech = await signIn("tech@akab.local");
+    const boss = await signIn("responsable1@client.example");
+    const employee = await signIn("employe1@client.example");
+    const other = await signIn("responsable2@client.example");
+    const [bossUser] = await db().select().from(schema.users).where(eq(schema.users.email, "responsable1@client.example"));
+    const co = { id: bossUser.clientId! };
+    const made = await tech.post("/api/projects", { name: "Refonte du réseau (client)", clientId: co.id, milestones: [{ name: "Audit" }] });
+    expect(made.status).toBe(201);
+    const id = made.json.id;
+    // internal by default; public when asked
+    expect((await tech.post(`/api/projects/${id}/notes`, { text: "Marge serrée, à surveiller" })).status).toBe(201);
+    expect((await tech.post(`/api/projects/${id}/notes`, { text: "L'audit commence lundi", internal: false })).status).toBe(201);
+    const staffView = (await tech.get(`/api/projects/${id}`)).json.notes;
+    expect(staffView.map((n: any) => [n.text, n.internal])).toEqual(expect.arrayContaining([["Marge serrée, à surveiller", true], ["L'audit commence lundi", false]]));
+    // the client's administrator sees the project, its milestones and only the public note
+    const list = (await boss.get("/api/portal/projects")).json;
+    expect(list.find((x: any) => x.id === id)).toMatchObject({ name: "Refonte du réseau (client)", milestones: { done: 0, total: 1 } });
+    const detail = (await boss.get(`/api/portal/projects/${id}`)).json;
+    expect(detail.milestones.map((m: any) => m.name)).toEqual(["Audit"]);
+    expect(detail.notes.map((n: any) => n.text)).toEqual(["L'audit commence lundi"]);
+    expect(JSON.stringify(detail)).not.toContain("Marge serrée");
+    // a plain employee has no right to projects, another company's administrator cannot open it
+    expect((await employee.get("/api/portal/projects")).status).toBe(403);
+    expect((await other.get(`/api/portal/projects/${id}`)).status).toBe(404);
+    expect((await other.get("/api/portal/projects")).json.some((x: any) => x.id === id)).toBe(false);
+    // the client answers: a public note, the lead is told
+    expect((await boss.post(`/api/portal/projects/${id}/notes`, { text: "Parfait, merci" })).status).toBe(201);
+    expect((await boss.get(`/api/portal/projects/${id}`)).json.notes[0]).toMatchObject({ text: "Parfait, merci", fromClient: true });
+    expect((await tech.get(`/api/projects/${id}`)).json.notes.find((n: any) => n.text === "Parfait, merci")).toMatchObject({ internal: false, fromClient: true });
+    expect((await tech.get("/api/notifications")).json.items.some((n: any) => n.type === "project.note" && n.data.message === "Parfait, merci")).toBe(true);
+    // a client never writes an internal note, nor reaches the staff routes
+    expect((await boss.post(`/api/projects/${id}/notes`, { text: "x", internal: false })).status).toBe(403);
   });
 });
 

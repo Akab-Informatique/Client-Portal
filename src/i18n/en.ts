@@ -2889,7 +2889,15 @@ const en: Dict = {
       to: "To",
       type: "Type",
       note: "Note",
-      noteTell: {
+      noteKind: {
+      label: "Note visibility",
+      internal: "Internal",
+      public: "Public",
+      internalHint: "Only the team (staff) sees it.",
+      publicHint: "Anyone with access to the project sees it, the client included.",
+      fromClient: "Client",
+    },
+    noteTell: {
       team: "Add the project team",
       inTeam: "team",
       done: "{{count}} colleague(s) notified.",
@@ -5719,6 +5727,20 @@ const en: Dict = {
     as: "Signed in as {{name}}",
     back: "Back to technician view",
   },
+  clientProjects: {
+    title: "Projects",
+    subtitle: "The projects run for your company: progress and the notes shared with you.",
+    none: "No project yet.",
+    progress: "{{done}} / {{total}} milestones",
+    due: "due {{date}}",
+    milestones: "Milestones",
+    notes: "Notes",
+    notePlaceholder: "Write a note to the project team…",
+    send: "Send",
+    noteSent: "Note sent to the team.",
+    noNotes: "No shared note yet.",
+    status: { planning: "Planning", active: "Under way", on_hold: "On hold", done: "Done", cancelled: "Cancelled" },
+  },
   client: {
     tickets: {
       technicians: "Technicians",
@@ -5834,6 +5856,7 @@ const en: Dict = {
       accountingSection: "Accounting",
       board: "Messages from AKAB",
       tickets: "Tickets",
+      projects: "Projects",
       devices: "Devices",
       documentation: "Documentation",
       invoices: "Invoices",

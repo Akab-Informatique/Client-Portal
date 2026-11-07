@@ -415,7 +415,7 @@ export const projectsRoutes = new Hono<AppEnv>()
     const reminders = await remindersOf(p.id);
     const [notes, entries, byPerson] = await Promise.all([
       d
-        .select({ id: schema.projectNotes.id, text: schema.projectNotes.text, createdAt: schema.projectNotes.createdAt, authorId: schema.projectNotes.authorId, author: schema.users.name })
+        .select({ id: schema.projectNotes.id, text: schema.projectNotes.text, internal: schema.projectNotes.internal, createdAt: schema.projectNotes.createdAt, authorId: schema.projectNotes.authorId, author: schema.users.name, authorKind: schema.users.kind })
         .from(schema.projectNotes)
         .leftJoin(schema.users, eq(schema.users.id, schema.projectNotes.authorId))
         .where(eq(schema.projectNotes.projectId, p.id))
@@ -466,7 +466,7 @@ export const projectsRoutes = new Hono<AppEnv>()
       tickets,
       billing: { invoicedAt: p.invoicedAt, lines: billing, deposit: deposit ? { number: deposit.number, invoiceId: deposit.invoiceId, subtotalCents: deposit.subtotalCents } : null },
       reminders,
-      notes: notes.map((n) => ({ id: n.id, text: n.text, createdAt: n.createdAt, authorId: n.authorId, author: n.author ?? null })),
+      notes: notes.map((n) => ({ id: n.id, text: n.text, internal: n.internal, fromClient: n.authorKind === "client", createdAt: n.createdAt, authorId: n.authorId, author: n.author ?? null })),
       time: {
         byPerson: byPerson.map((x) => ({ userId: x.userId, name: x.user, hours: x.h / 100 })),
         entries: entries.map((e) => ({ id: e.id, date: e.date, hours: e.hoursX100 / 100, billableHours: (e.billableX100 ?? e.hoursX100) / 100, note: e.note, milestoneId: e.milestoneId, milestone: e.milestoneId ? (msName.get(e.milestoneId) ?? null) : null, task: e.taskId ? (taskName.get(e.taskId) ?? null) : null, ticket: e.ticketTimeId ? { number: e.ticketNumber, title: e.ticketTitle } : null, userId: e.userId, user: e.user })),
@@ -917,12 +917,14 @@ export const projectsRoutes = new Hono<AppEnv>()
       c,
       z.object({
         text: z.string().trim().min(1).max(8000),
+        /** internal: staff only (the default); public: also the project's client, in the client portal */
+        internal: z.boolean().default(true),
         /** colleagues told about the note: the bell, an email with the note, a Teams chat message (bell and email by default) */
         notifyUserIds: z.array(zUuid).max(20).default([]),
         notifyChannels: z.object({ bell: z.boolean().default(true), email: z.boolean().default(true), chat: z.boolean().default(false) }).default({ bell: true, email: true, chat: false }),
       }),
     );
-    const [row] = await db().insert(schema.projectNotes).values({ projectId: p.id, authorId: a.user.id, text: n.text }).returning();
+    const [row] = await db().insert(schema.projectNotes).values({ projectId: p.id, authorId: a.user.id, text: n.text, internal: n.internal }).returning();
     await db().update(schema.projects).set({ updatedAt: new Date() }).where(eq(schema.projects.id, p.id));
     // tell colleagues (active staff only, never oneself): the bell, and as ticked an email and a Teams chat message
     let told: Awaited<ReturnType<typeof notifyTechs>> = [];
