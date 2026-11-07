@@ -16,7 +16,6 @@ import { useTicketWorkspace } from "@/pages/tickets/workspace";
 import { PRIORITY_STYLE, addDays, dayLabel, hm, longDay, todayYmd, toMinutes, type Block, type DayData, type DayItem, type TaskCard } from "./shared";
 import { taskError, usePeople } from "./TaskDialog";
 import { DayProjects, MyTickets, Priorities } from "./DayLists";
-import { TimeShare } from "./TimeShare";
 import { DndContext, KeyboardSensor, PointerSensor, closestCenter, useSensor, useSensors, type DragEndEvent } from "@dnd-kit/core";
 import { SortableContext, arrayMove, sortableKeyboardCoordinates, useSortable, verticalListSortingStrategy } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
@@ -25,7 +24,8 @@ import { byCustom, useCustomOrder, useSortDefault } from "@/lib/sortPrefs";
 import { useProjectWorkspace } from "@/pages/projects/ProjectWorkspace";
 
 /** The hours shown on the timeline: from an hour before the day starts to an hour after it ends */
-const DEFAULT_HOUR_PX = 60;
+const DEFAULT_HOUR_PX = 100;
+const HOUR_PX_KEY = "akab.pipeline.hourPx.v2";
 
 /**
  * Ma journée: what is on the plate today, laid out as a suggestion (blocks of time, not a booking) with the AI's
@@ -44,8 +44,8 @@ export function MyDay({ onOpenTask }: { onOpenTask: (id: string) => void }) {
   const [quick, setQuick] = useState("");
   // the height of the blocks of the day: dragged by the bar under them (pixels an hour), kept on this computer
   const [hourPx, setHourPx] = useState(() => {
-    const v = Number(localStorage.getItem("akab.pipeline.hourPx"));
-    return v >= 36 && v <= 160 ? v : DEFAULT_HOUR_PX;
+    const v = Number(localStorage.getItem(HOUR_PX_KEY));
+    return v >= 60 && v <= 200 ? v : DEFAULT_HOUR_PX;
   });
   const startResize = (e: React.PointerEvent) => {
     e.preventDefault();
@@ -53,14 +53,14 @@ export function MyDay({ onOpenTask }: { onOpenTask: (id: string) => void }) {
     const h0 = hourPx;
     let last = h0;
     const move = (ev: PointerEvent) => {
-      last = Math.round(Math.min(160, Math.max(36, h0 + (ev.clientY - y0) / 12)));
+      last = Math.round(Math.min(200, Math.max(60, h0 + (ev.clientY - y0) / 8)));
       setHourPx(last);
     };
     const up = () => {
       window.removeEventListener("pointermove", move);
       window.removeEventListener("pointerup", up);
       try {
-        localStorage.setItem("akab.pipeline.hourPx", String(last));
+        localStorage.setItem(HOUR_PX_KEY, String(last));
       } catch {
         /* not kept */
       }
@@ -305,11 +305,10 @@ export function MyDay({ onOpenTask }: { onOpenTask: (id: string) => void }) {
                   ))}
               </div>
             )}
-            {isLoading || !data ? <Skeleton className="h-96 w-full" /> : <Timeline data={data} hourPx={hourPx} onOpen={(b) => (b.kind === "ticket" ? ws.open(Number(b.refId)) : b.kind === "ptask" ? b.projectId && b.refId && pws.openTask(b.projectId, b.refId) : b.refId && onOpenTask(b.refId))} />}
+            {isLoading || !data ? <Skeleton className="h-96 w-full" /> : <Timeline data={data} hourPx={hourPx} canEdit={can("pipeline.edit") && (userId === me.id || can("pipeline.manage"))} forUser={userId === me.id ? undefined : userId} onSaved={refresh} onOpen={(b) => (b.kind === "ticket" ? ws.open(Number(b.refId)) : b.kind === "ptask" ? b.projectId && b.refId && pws.openTask(b.projectId, b.refId) : b.refId && onOpenTask(b.refId))} />}
             <div role="separator" aria-orientation="horizontal" title={t("pipeline.day.resizeHeight")} aria-label={t("pipeline.day.resizeHeight")} onPointerDown={startResize} onDoubleClick={() => setHourPx(DEFAULT_HOUR_PX)} className="group mt-2 flex h-3 cursor-row-resize touch-none items-center justify-center">
               <span className="h-0.5 w-16 rounded-full bg-[color:var(--glass-border)] transition-colors group-hover:bg-[color:var(--gold)]/60 group-active:bg-[color:var(--gold)]" />
             </div>
-            {data && !isLoading && <TimeShare data={data} canEdit={can("pipeline.edit") && (userId === me.id || can("pipeline.manage"))} forUser={userId === me.id ? undefined : userId} onOpen={(k, id, projectId) => (k === "ticket" ? ws.open(Number(id)) : k === "ptask" ? projectId && pws.openTask(projectId, id) : onOpenTask(id))} onSaved={refresh} />}
             <p className="mt-3 text-[11px] text-muted-foreground">{t("pipeline.day.suggestion")}</p>
           </section>
         </div>
@@ -439,8 +438,42 @@ function ItemRow({ i, onOpen, onComplete }: { i: DayItem; onOpen: (i: DayItem) =
 }
 
 /** The day from the start of work to its end, an hour on each side; the blocks are placed by their time. */
-function Timeline({ data, onOpen, hourPx }: { data: DayData; onOpen: (b: Block) => void; hourPx: number }) {
+function Timeline({ data, onOpen, hourPx, canEdit, forUser, onSaved }: { data: DayData; onOpen: (b: Block) => void; hourPx: number; canEdit: boolean; forUser?: string; onSaved: () => void }) {
   const { t } = useTranslation();
+  // a block is stretched or shrunk by its top or bottom edge, in quarter hours (the time given to that ticket / task)
+  const [drag, setDrag] = useState<{ i: number; edge: "top" | "bottom"; delta: number } | null>(null);
+  const saveTime = useMutation({
+    mutationFn: (v: { key: string; minutes: number }) => api.put("/pipeline/day/alloc", { date: data.date, key: v.key, minutes: v.minutes, ...(forUser ? { userId: forUser } : {}) }),
+    onSuccess: onSaved,
+    onError: () => toast.error(t("common.error")),
+  });
+  const totals = new Map<string, number>();
+  for (const b of data.plan.blocks) {
+    if (!b.overflow && b.start && b.end && b.refId && (b.kind === "ticket" || b.kind === "task" || b.kind === "ptask")) {
+      const k = `${b.kind}:${b.refId}`;
+      totals.set(k, (totals.get(k) ?? 0) + toMinutes(b.end) - toMinutes(b.start));
+    }
+  }
+  const startDrag = (e: React.PointerEvent, i: number, key: string, own: number, edge: "top" | "bottom") => {
+    e.preventDefault();
+    e.stopPropagation();
+    const y0 = e.clientY;
+    const total = totals.get(key) ?? own;
+    let delta = 0;
+    const move = (ev: PointerEvent) => {
+      const q = Math.round((ev.clientY - y0) / (hourPx / 60) / 15) * 15 * (edge === "top" ? -1 : 1);
+      delta = Math.max(15 - total, Math.min(480 - total, q));
+      setDrag({ i, edge, delta });
+    };
+    const up = () => {
+      window.removeEventListener("pointermove", move);
+      window.removeEventListener("pointerup", up);
+      setDrag(null);
+      if (delta !== 0) saveTime.mutate({ key, minutes: total + delta });
+    };
+    window.addEventListener("pointermove", move);
+    window.addEventListener("pointerup", up);
+  };
   // the usual hours, widened to hold anything planned outside them (an evening, a weekend)
   const shown = data.plan.blocks.filter((b) => b.start && b.end && !b.overflow && !b.allDay);
   const lo = Math.min(toMinutes(data.workHours.start), ...shown.map((b) => toMinutes(b.start)));
@@ -461,11 +494,24 @@ function Timeline({ data, onOpen, hourPx }: { data: DayData; onOpen: (b: Block) 
             <span className="-mt-2 w-12 shrink-0 bg-transparent pr-2 text-right font-mono text-[10px] text-muted-foreground">{String(h).padStart(2, "0")}:00</span>
           </div>
         ))}
+        {/* the quarter hours: a faint line each, with its time when there is room for it */}
+        {hours.flatMap((h) =>
+          [15, 30, 45].map((m) => (
+            <div key={`${h}:${m}`} className="absolute inset-x-0 flex items-start border-t border-dashed border-[color:var(--glass-border)]/50" style={{ top: (h - startH) * hourPx + (m / 60) * hourPx }}>
+              {hourPx / 4 >= 22 || (m === 30 && hourPx / 2 >= 22) ? <span className="-mt-1.5 w-12 shrink-0 pr-2 text-right font-mono text-[9px] text-muted-foreground/60">{String(h).padStart(2, "0")}:{m}</span> : null}
+            </div>
+          )),
+        )}
         <div className="absolute inset-y-0 left-14 right-0">
           {placed.map((b, i) => {
             const s = toMinutes(b.start);
             const e = toMinutes(b.end);
-            const h = Math.max(((e - s) / 60) * hourPx - 3, 22);
+            const own = e - s;
+            const key = `${b.kind}:${b.refId}`;
+            const live = drag && drag.i === i ? drag : null;
+            const h = Math.max(((own + (live?.delta ?? 0)) / 60) * hourPx - 3, 18);
+            const shift = live?.edge === "top" ? -(live.delta / 60) * hourPx : 0;
+            const stretch = canEdit && !b.done && !b.masked && (b.kind === "ticket" || b.kind === "task" || b.kind === "ptask");
             if (b.kind === "break")
               return (
                 <div key={`br${i}`} className="absolute inset-x-0 flex items-center justify-center gap-1.5 rounded-lg border border-dashed border-muted-foreground/30 bg-[repeating-linear-gradient(135deg,transparent,transparent_6px,rgba(255,255,255,0.03)_6px,rgba(255,255,255,0.03)_12px)] text-[11px] text-muted-foreground" style={{ top: top(s) + 1, height: h }}>
@@ -476,13 +522,13 @@ function Timeline({ data, onOpen, hourPx }: { data: DayData; onOpen: (b: Block) 
             const ptask = b.kind === "ptask";
             const event = b.kind === "event";
             return (
+              <div key={`${b.refId}${i}`} className={cn("absolute inset-x-0", live && "z-20")} style={{ top: top(s) + 1 + shift, height: h }}>
               <button
-                key={`${b.refId}${i}`}
                 type="button"
                 disabled={event}
                 onClick={() => onOpen(b)}
                 className={cn(
-                  "absolute inset-x-0 overflow-hidden rounded-lg border px-2.5 py-1 text-left transition-all enabled:hover:brightness-110",
+                  "h-full w-full overflow-hidden rounded-lg border px-2.5 py-1 text-left transition-all enabled:hover:brightness-110",
                   b.done && "opacity-40 saturate-50",
                   event
                     ? b.o365
@@ -496,12 +542,12 @@ function Timeline({ data, onOpen, hourPx }: { data: DayData; onOpen: (b: Block) 
                         ? "border-red-400/50 bg-red-500/10"
                         : "border-[color:var(--gold)]/40 bg-[color:var(--gold)]/10",
                 )}
-                style={{ top: top(s) + 1, height: h }}
                 title={b.note ?? undefined}
               >
                 <span className="flex items-baseline gap-2">
                   <span className="font-mono text-[10px] text-muted-foreground">
                     {b.start}–{b.end}
+                    {live && live.delta !== 0 && <span className="ml-1 text-primary">{live.delta > 0 ? "+" : "−"}{hm(Math.abs(live.delta))}</span>}
                   </span>
                   {b.pinned && <Star className={cn("size-2.5 fill-current", b.pinned === "day" ? "text-primary" : "text-muted-foreground")} />}
                   {b.partial && <span className="rounded-full bg-orange-400/15 px-1.5 text-[9px] font-semibold uppercase tracking-wide text-orange-300">{t("pipeline.day.share.partial")}</span>}
@@ -513,6 +559,13 @@ function Timeline({ data, onOpen, hourPx }: { data: DayData; onOpen: (b: Block) 
                 <span className={cn("block truncate text-[13px] font-medium leading-tight", b.done && "line-through")}>{b.title || t("pipeline.private")}</span>
                 {b.note && h > 50 && <span className="block truncate text-[11px] text-muted-foreground">{b.note}</span>}
               </button>
+              {stretch &&
+                (["top", "bottom"] as const).map((edge) => (
+                  <div key={edge} role="separator" aria-orientation="horizontal" title={t("pipeline.day.resizeBlock")} onPointerDown={(ev) => startDrag(ev, i, key, own, edge)} className={cn("group/h absolute inset-x-3 z-10 flex h-2 cursor-ns-resize touch-none items-center justify-center", edge === "top" ? "top-0" : "bottom-0")}>
+                    <span className="h-0.5 w-8 rounded-full bg-transparent transition-colors group-hover/h:bg-[color:var(--gold)]/70" />
+                  </div>
+                ))}
+              </div>
             );
           })}
           {nowM !== null && nowM >= startH * 60 && nowM <= endH * 60 && (
