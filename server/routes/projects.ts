@@ -5,6 +5,8 @@ import { z } from "zod";
 import { db, schema } from "../db/index.ts";
 import { auth, requirePermission, requireStaff, type AppEnv } from "../lib/auth.ts";
 import { audit } from "../lib/audit.ts";
+import { notify } from "../lib/notify.ts";
+import { notifyTechs } from "../lib/techNotify.ts";
 import { splitBillable } from "../lib/hr.ts";
 import { addDays, editable, labourType, sheetOf, todayQc, weekStartOf } from "../lib/timesheets.ts";
 import { billingSettings } from "../lib/billing.ts";
@@ -911,10 +913,32 @@ export const projectsRoutes = new Hono<AppEnv>()
   .post("/:id/notes", requirePermission("projects.edit"), async (c) => {
     const a = auth(c);
     const p = await loadProject(c.req.param("id"));
-    const n = await body(c, z.object({ text: z.string().trim().min(1).max(8000) }));
+    const n = await body(
+      c,
+      z.object({
+        text: z.string().trim().min(1).max(8000),
+        /** colleagues told about the note: the bell, an email with the note, a Teams chat message (bell and email by default) */
+        notifyUserIds: z.array(zUuid).max(20).default([]),
+        notifyChannels: z.object({ bell: z.boolean().default(true), email: z.boolean().default(true), chat: z.boolean().default(false) }).default({ bell: true, email: true, chat: false }),
+      }),
+    );
     const [row] = await db().insert(schema.projectNotes).values({ projectId: p.id, authorId: a.user.id, text: n.text }).returning();
     await db().update(schema.projects).set({ updatedAt: new Date() }).where(eq(schema.projects.id, p.id));
-    return c.json(row, 201);
+    // tell colleagues (active staff only, never oneself): the bell, and as ticked an email and a Teams chat message
+    let told: Awaited<ReturnType<typeof notifyTechs>> = [];
+    if (n.notifyUserIds.length) {
+      const link = `/projects?project=${p.id}&tab=notes`;
+      told = await notifyTechs(
+        { id: 0, number: p.number, title: p.name, company: { name: "" }, link, head: `vous signale une note du projet ${p.number} (${p.name})` },
+        { id: a.user.id, name: a.realUser.name },
+        n.notifyUserIds,
+        n.text,
+        { email: n.notifyChannels.email, sms: false, teams: false, bell: false, chat: n.notifyChannels.chat },
+      );
+      if (n.notifyChannels.bell && told.length) await notify(told.map((x) => x.id), { type: "project.note", data: { by: a.realUser.name, number: p.number, name: p.name, message: n.text.slice(0, 300) }, link });
+      await audit(a.user.id, "project.note_notified", p.id, { to: told.map((x) => x.id), channels: n.notifyChannels });
+    }
+    return c.json({ ...row, notified: told.length, chatNotReady: told.some((x) => x.chat === "not_ready"), notifyFailed: told.filter((x) => x.email === "failed" || x.email === "no_address" || x.chat === "failed").length }, 201);
   })
   .delete("/:id/notes/:nid", requirePermission("projects.edit"), async (c) => {
     const a = auth(c);

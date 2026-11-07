@@ -2,13 +2,14 @@ import { useEffect, useRef, useState, type FormEvent } from "react";
 import { useTranslation } from "react-i18next";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
-import { ArrowDown, ArrowUp, ChevronDown, Clock, FileText, Flag, FolderOpen, Info, ArrowRightLeft, ListChecks, Loader2, MessageSquare, Plus, Star, Trash2, X } from "lucide-react";
+import { ArrowDown, ArrowUp, BellRing, Check, ChevronDown, Clock, FileText, Flag, FolderOpen, Info, ArrowRightLeft, ListChecks, Loader2, Mail, MessageSquare, MessagesSquare, Plus, Star, Trash2, X } from "lucide-react";
 import { useConfirm } from "@/components/ConfirmDialog";
 import { MoveChargeDialog } from "@/components/MoveChargeDialog";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Switch } from "@/components/ui/switch";
 import { Textarea } from "@/components/ui/textarea";
@@ -583,7 +584,24 @@ function Notes({ p, edit, onChanged, fail }: { p: ProjectDetail; edit: boolean; 
   const me = useMe();
   const can = useCan();
   const [text, setText] = useState("");
-  const add = useMutation({ mutationFn: () => api.post(`/projects/${p.id}/notes`, { text: text.trim() }), onSuccess: () => (setText(""), onChanged()), onError: fail });
+  // colleagues told about the note: the bell, an email with the note, a Teams chat message
+  const { data: people = [] } = useProjectPeople();
+  const colleagues = people.filter((x) => x.id !== me.id);
+  const team = [...new Set([p.lead?.id, ...p.members.map((m) => m.id)].filter((x): x is string => Boolean(x) && x !== me.id))];
+  const [tell, setTell] = useState<string[]>([]);
+  const [how, setHow] = useState({ bell: true, email: true, chat: false });
+  const add = useMutation({
+    mutationFn: () => api.post<{ notified?: number; chatNotReady?: boolean; notifyFailed?: number }>(`/projects/${p.id}/notes`, { text: text.trim(), ...(tell.length ? { notifyUserIds: tell, notifyChannels: how } : {}) }),
+    onSuccess: (r) => {
+      setText("");
+      setTell([]);
+      if (r.notified) toast.success(t("projects.noteTell.done", { count: r.notified }));
+      if (r.chatNotReady) toast.warning(t("tickets.noteTell.chatNotReady"));
+      else if (r.notifyFailed) toast.warning(t("projects.noteTell.failed", { count: r.notifyFailed }));
+      onChanged();
+    },
+    onError: fail,
+  });
   const del = useMutation({ mutationFn: (id: string) => api.del(`/projects/${p.id}/notes/${id}`), onSuccess: onChanged, onError: fail });
   return (
     <div className="mx-auto max-w-3xl space-y-4">
@@ -596,6 +614,54 @@ function Notes({ p, edit, onChanged, fail }: { p: ProjectDetail; edit: boolean; 
           }}
         >
           <Textarea rows={3} value={text} onChange={(e) => setText(e.target.value)} placeholder={t("projects.notePlaceholder")} maxLength={8000} />
+          {colleagues.length > 0 && (
+            <div className="flex flex-wrap items-center gap-2">
+              <Popover>
+                <PopoverTrigger asChild>
+                  <button type="button" className={cn("flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-[11px]", tell.length ? "border-violet-400/60 bg-violet-500/15 text-violet-200" : "text-muted-foreground hover:text-foreground")}>
+                    <BellRing className="size-3" />
+                    {tell.length ? t("tickets.noteTell.count", { count: tell.length }) : t("tickets.noteTell.pick")}
+                    <ChevronDown className="size-3" />
+                  </button>
+                </PopoverTrigger>
+                <PopoverContent align="start" className="w-64 p-1">
+                  {team.length > 0 && (
+                    <button type="button" onClick={() => setTell((x) => [...new Set([...x, ...team])])} className="mb-1 w-full rounded-md px-2 py-1 text-left text-xs text-primary hover:bg-accent">
+                      {t("projects.noteTell.team")}
+                    </button>
+                  )}
+                  <ul className="max-h-64 overflow-y-auto">
+                    {colleagues.map((x) => {
+                      const on = tell.includes(x.id);
+                      return (
+                        <li key={x.id}>
+                          <button type="button" onClick={() => setTell((v) => (on ? v.filter((i) => i !== x.id) : [...v, x.id]))} className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-sm hover:bg-accent">
+                            <span className={cn("flex size-4 items-center justify-center rounded border", on ? "border-violet-400 bg-violet-500/30" : "border-muted-foreground/40")}>{on && <Check className="size-3" />}</span>
+                            {x.name}
+                            {team.includes(x.id) && <span className="ml-auto text-[10px] text-muted-foreground">{t("projects.noteTell.inTeam")}</span>}
+                          </button>
+                        </li>
+                      );
+                    })}
+                  </ul>
+                  {tell.length > 0 && (
+                    <button type="button" onClick={() => setTell([])} className="mt-1 w-full rounded-md px-2 py-1 text-left text-xs text-muted-foreground hover:bg-accent">
+                      {t("tickets.noteTell.clear")}
+                    </button>
+                  )}
+                </PopoverContent>
+              </Popover>
+              {tell.length > 0 && (
+                <div className="flex items-center gap-1" role="group" aria-label={t("tickets.noteTell.how")}>
+                  {([["bell", BellRing, "tickets.noteTell.bell"], ["email", Mail, "tickets.noteTell.email"], ["chat", MessagesSquare, "tickets.noteTell.chat"]] as const).map(([k, Icon, label]) => (
+                    <button key={k} type="button" aria-pressed={how[k]} onClick={() => setHow((h) => ({ ...h, [k]: !h[k] }))} className={cn("flex items-center gap-1 rounded-full border px-2 py-1 text-[11px]", how[k] ? "border-violet-400/60 bg-violet-500/15 text-violet-200" : "text-muted-foreground hover:text-foreground")}>
+                      <Icon className="size-3" /> {t(label)}
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
           <div className="flex justify-end">
             <Button type="submit" disabled={!text.trim() || add.isPending} className="bg-grad-gold font-semibold text-[#1a1204] hover:brightness-105">
               <FileText className="size-4" /> {t("projects.addNote")}

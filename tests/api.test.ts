@@ -4591,6 +4591,16 @@ describe("submitting: timesheets (when required) and expenses", () => {
     expect((await tech2.del(`/api/projects/${id}/notes/${note.id}`)).status).toBe(403);
     expect((await tech.get(`/api/projects/${id}`)).json.notes[0]).toMatchObject({ text: "Client prévenu", author: t1.name });
     expect((await tech.del(`/api/projects/${id}/notes/${note.id}`)).status).toBe(200);
+    // a note can tell colleagues: the bell (and an email) for each, never for oneself, only active staff
+    const [t2user] = await db().select().from(schema.users).where(eq(schema.users.email, "tech2@akab.local"));
+    const told = await tech.post(`/api/projects/${id}/notes`, { text: "À voir avant jeudi", notifyUserIds: [t2user.id, t1.id, client.id], notifyChannels: { bell: true, email: false, chat: false } });
+    expect(told.status).toBe(201);
+    expect(told.json.notified).toBe(1);
+    const bell = (await tech2.get("/api/notifications")).json.items.find((n: any) => n.type === "project.note");
+    expect(bell).toMatchObject({ data: { number: made.json.number, message: "À voir avant jeudi" }, link: `/projects?project=${id}&tab=notes` });
+    expect((await tech.get("/api/notifications")).json.items.some((n: any) => n.type === "project.note")).toBe(false);
+    // no one picked: just a note
+    expect((await tech.post(`/api/projects/${id}/notes`, { text: "Sans avis" })).json.notified).toBe(0);
 
     // closing: every milestone first; nothing more is logged on a closed project
     expect((await tech.patch(`/api/projects/${id}`, { status: "done" })).json.error).toBe("project_open_milestones");
