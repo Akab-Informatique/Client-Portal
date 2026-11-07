@@ -30,6 +30,10 @@ export type NavModule = {
   orRight?: PermissionKey;
   rule?: "timesheetRequired" | "passbolt";
   upcoming?: boolean;
+  /** Not listed in the sidebar (its page is a tab of another one; still found by search and by its address) */
+  hideInNav?: boolean;
+  /** Other addresses that light this entry up (the pages shown as its tabs) */
+  alsoPaths?: string[];
   /** A collapsible sub-menu inside its section (the entries of one group sit under its header) */
   group?: "security";
 };
@@ -40,12 +44,12 @@ export const NAV_GROUPS = { security: { labelKey: "nav.security" } } as const;
 export const STAFF_MODULES: NavModule[] = [
   { key: "dashboard", path: "/", labelKey: "nav.dashboard", icon: LayoutDashboard, section: "team", permission: "dashboard.view" },
   { key: "messages", path: "/messages", labelKey: "nav.messages", icon: Megaphone, section: "command", permission: "messages.view" },
-  { key: "pipeline", path: "/pipeline", labelKey: "nav.pipeline", icon: Workflow, section: "command", permission: "pipeline.view" },
+  { key: "pipeline", path: "/pipeline", labelKey: "nav.pipeline", icon: Workflow, section: "command", permission: "pipeline.view", alsoPaths: ["/tickets", "/projects"] },
   { key: "chat", path: "/chat", labelKey: "nav.chat", icon: MessagesSquare, section: "tools", permission: "chat.use" },
   { key: "outlook", path: "/outlook", labelKey: "nav.outlook", icon: Mail, section: "tools", permission: "outlook.view", optIn: "outlook" },
   { key: "timesheets", path: "/timesheets", labelKey: "nav.timesheets", icon: Clock, section: "tools", permission: "timesheets.use", orRight: "timesheets.manage", rule: "timesheetRequired" },
   { key: "expenses", path: "/expenses", labelKey: "nav.expenses", icon: Wallet, section: "tools", permission: "timesheets.use" },
-  { key: "tickets", path: "/tickets", labelKey: "nav.tickets", icon: Ticket, section: "command", permission: "tickets.view" },
+  { key: "tickets", path: "/tickets", labelKey: "nav.tickets", icon: Ticket, section: "command", permission: "tickets.view", hideInNav: true },
   { key: "crm", path: "/crm", labelKey: "nav.crmClients", icon: Building2, section: "management", permission: "crm.view" },
   { key: "invoices", path: "/accounting/invoices", labelKey: "nav.invoices", icon: Receipt, section: "accounting", permission: "accounting.view" },
   { key: "contracts", path: "/accounting/contracts", labelKey: "nav.contracts", icon: FileText, section: "accounting", permission: "accounting.view" },
@@ -58,7 +62,7 @@ export const STAFF_MODULES: NavModule[] = [
   { key: "store", path: "/store", labelKey: "nav.store", icon: Store, section: "management", permission: "store.view" },
   { key: "hr", path: "/hr", labelKey: "nav.hr", icon: HeartHandshake, section: "accounting", permission: "hr.manage" },
   { key: "services", path: "/services", labelKey: "nav.services", icon: Wrench, section: "management", permission: "services.view" },
-  { key: "projects", path: "/projects", labelKey: "nav.projects", icon: FolderKanban, section: "command", permission: "projects.view" },
+  { key: "projects", path: "/projects", labelKey: "nav.projects", icon: FolderKanban, section: "command", permission: "projects.view", hideInNav: true },
   { key: "passbolt", path: "/security/passbolt", labelKey: "nav.passbolt", icon: KeyRound, section: "command", group: "security", permission: "passbolt.use", rule: "passbolt" },
   { key: "reports", path: "/reports", labelKey: "nav.reports", icon: BarChart3, section: "management", upcoming: true },
   { key: "meetings", path: "/meetings", labelKey: "nav.meetings", icon: CalendarCheck, section: "team", permission: "meetings.view" },

@@ -354,11 +354,11 @@ export const MODULES = [
   {
     key: "pipeline",
     audience: "staff",
-    label: { fr: "Mon travail", en: "My work" },
+    label: { fr: "Opérations", en: "Operations" },
     permissions: [
       {
         key: "pipeline.view",
-        label: { fr: "Voir Mon travail", en: "See My work" },
+        label: { fr: "Voir Opérations", en: "See Operations" },
         description: { fr: "Sa journée planifiée et la liste de tâches de l'équipe; le texto du matin", en: "Their planned day and the team's to-do list; the morning text" },
       },
       {
@@ -368,7 +368,7 @@ export const MODULES = [
       },
       {
         key: "pipeline.manage",
-        label: { fr: "Gérer Mon travail", en: "Manage My work" },
+        label: { fr: "Gérer Opérations", en: "Manage Operations" },
         description: { fr: "Heure du plan du matin et des textos, voir la journée des autres, supprimer les tâches des autres", en: "Time of the morning plan and texts, see other people's day, delete other people's tasks" },
       },
     ],

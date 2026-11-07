@@ -229,17 +229,19 @@ function SidebarContent({ collapsed, onToggle }: { collapsed: boolean; onToggle?
     if (!location.pathname.startsWith(path)) return false;
     return !STAFF_MODULES.some((x) => !x.upcoming && x.path.length > path.length && x.path.startsWith(path) && location.pathname.startsWith(x.path));
   };
+  // an entry is lit by its own address and by the pages it shows as tabs (Tickets and Projects light up Opérations)
+  const isOn = (m: NavModule) => isActive(m.path) || (m.alsoPaths ?? []).some((p) => location.pathname === p || location.pathname.startsWith(`${p}/`));
   // Each section shows its modules; upcoming ones greyed out, after the live ones
   const groups = [
     ...NAV_SECTIONS.map((s) => ({
       key: s.key,
       labelKey: s.labelKey,
-      items: STAFF_MODULES.filter((m) => m.section === s.key && visible(m)),
+      items: STAFF_MODULES.filter((m) => m.section === s.key && !m.hideInNav && visible(m)),
     })),
   ].filter((g) => g.items.length > 0);
   const [open, setOpen] = useOpenSections();
   // the section of the page shown opens by itself (it can be closed again)
-  const current = groups.find((g) => g.items.some((m) => !m.upcoming && isActive(m.path)))?.key;
+  const current = groups.find((g) => g.items.some((m) => !m.upcoming && isOn(m)))?.key;
   useEffect(() => {
     if (current && !open.has(current)) setOpen(new Set([...open, current]));
   }, [current]); // eslint-disable-line react-hooks/exhaustive-deps
@@ -283,7 +285,7 @@ function SidebarContent({ collapsed, onToggle }: { collapsed: boolean; onToggle?
                     .filter((m) => !m.group)
                     .map((m) => (
                       <li key={m.key}>
-                        <NavItem m={m} collapsed={collapsed} active={!m.upcoming && isActive(m.path)} />
+                        <NavItem m={m} collapsed={collapsed} active={!m.upcoming && isOn(m)} />
                       </li>
                     ))}
                   {/* a sub-menu inside the section (Sécurité): collapsible too, remembered with the sections */}
@@ -291,7 +293,7 @@ function SidebarContent({ collapsed, onToggle }: { collapsed: boolean; onToggle?
                     const sub = g.items.filter((m) => m.group === gk);
                     if (!sub.length) return null;
                     const subKey = `${g.key}/${gk}`;
-                    const subOpen = collapsed || open.has(subKey) || sub.some((m) => !m.upcoming && isActive(m.path));
+                    const subOpen = collapsed || open.has(subKey) || sub.some((m) => !m.upcoming && isOn(m));
                     return (
                       <li key={gk}>
                         {!collapsed && (
@@ -309,7 +311,7 @@ function SidebarContent({ collapsed, onToggle }: { collapsed: boolean; onToggle?
                         <ul className={cn("space-y-1 overflow-hidden", !collapsed && "ml-3 border-l pl-2", !collapsed && !subOpen && "hidden")} inert={!subOpen}>
                           {sub.map((m) => (
                             <li key={m.key}>
-                              <NavItem m={m} collapsed={collapsed} active={!m.upcoming && isActive(m.path)} />
+                              <NavItem m={m} collapsed={collapsed} active={!m.upcoming && isOn(m)} />
                             </li>
                           ))}
                         </ul>
