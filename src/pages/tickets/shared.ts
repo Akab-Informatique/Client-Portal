@@ -229,6 +229,22 @@ export function heatState(dueAt: string, status: StatusKind, cp?: { milestoneDat
   return dueState(heatMoment(dueAt, cp), status);
 }
 
+/** The tone of a checkpoint chip / cell from its state (red passed, orange today, gold within 2 days, green later), soft: a pill, not a shout */
+export const CP_TONE: Record<string, string> = {
+  overdue: "border-destructive/60 bg-destructive/10 text-red-300",
+  today: "border-orange-500/60 bg-orange-500/10 text-orange-300",
+  soon: "border-[color:var(--gold)]/60 bg-[color:var(--gold)]/10 text-primary",
+  later: "border-emerald-500/40 bg-emerald-500/[0.08] text-emerald-300",
+  none: "border-[color:var(--gold)]/30 bg-[color:var(--gold)]/[0.05] text-primary",
+  done: "border-muted-foreground/30 bg-muted/40 text-muted-foreground",
+};
+/** The state of a ticket's checkpoint now ("none" without one, "done" when complete) */
+export function cpState(tk: { milestoneDate?: string | null; milestoneTime?: string | null; dueAt: string; statusKind: StatusKind }): string {
+  if (tk.statusKind === "complete") return "done";
+  if (!tk.milestoneDate) return "none";
+  return heatState(tk.dueAt, tk.statusKind, tk);
+}
+
 /** The glowing hue from the checkpoint moment (how urgent the ticket is now); the due date when there is no checkpoint. */
 export function dueGlow(dueAt: string, status: StatusKind, strength = 1, cp?: { milestoneDate?: string | null; milestoneTime?: string | null }): CSSProperties {
   return glow(DUE_RGB[status === "complete" ? "done" : heatState(dueAt, status, cp)], strength * (status === "complete" ? 0.6 : 1));

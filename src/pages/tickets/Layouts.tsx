@@ -13,7 +13,7 @@ import { useConfirm } from "@/components/ConfirmDialog";
 import { api } from "@/lib/api";
 import { cn, initials } from "@/lib/utils";
 import { useCan, useMe } from "@/lib/session";
-import { dueState, PRIORITY_STYLE, shortDate, STATUS_STYLE, ticketErrorText, useChoiceText, type TicketList, type TicketSummary } from "./shared";
+import { cpState, CP_TONE, PRIORITY_STYLE, shortDate, STATUS_STYLE, ticketErrorText, useChoiceText, type TicketList, type TicketSummary } from "./shared";
 
 // ── The three ways to look at the list ───────────────────────────────────────────
 /** standard: the table as it always was · kanban: boards the team sorts tickets on · compact: one short line per ticket */
@@ -242,7 +242,6 @@ export function CompactList({ items, activeIds, onOpen, facets }: { items: Compa
   const cols = useCompactColumns();
   const edit = Boolean(facets) && can("tickets.edit");
   const gridStyle: CSSProperties = { gridTemplateColumns: cols.template };
-  const today = new Date().toLocaleDateString("en-CA");
   const refresh = () => void qc.invalidateQueries({ queryKey: ["tickets"] });
   const patch = useMutation({ mutationFn: ({ id, ...p }: { id: number; priority?: string; status?: string; dueAt?: string }) => api.patch(`/tickets/${id}`, p), onSuccess: refresh, onError: (e) => toast.error(ticketErrorText(t, e)) });
   const checkpoint = useMutation({
@@ -258,8 +257,6 @@ export function CompactList({ items, activeIds, onOpen, facets }: { items: Compa
         <CompactHeader cols={cols} labels={labels} style={gridStyle} />
         <ul className="divide-y divide-[color:var(--glass-border)]">
           {items.map((tk) => {
-            const due = dueState(tk.dueAt, tk.statusKind);
-            const open = tk.statusKind !== "complete";
             const title = (
               <span className="flex min-w-0 items-baseline gap-2">
                 <span className="shrink-0 font-mono text-[11px] text-muted-foreground">{tk.number}</span>
@@ -296,7 +293,7 @@ export function CompactList({ items, activeIds, onOpen, facets }: { items: Compa
                 milestone: (
                   <input
                     type="datetime-local"
-                    className={cn(select, "font-mono tabular-nums", tk.milestoneDate && open && tk.milestoneDate < today ? "text-destructive" : "text-muted-foreground")}
+                    className={cn(select, "font-mono font-semibold tabular-nums", tk.milestoneDate ? CP_TONE[cpState(tk)] : "text-muted-foreground")}
                     value={tk.milestoneDate ? `${tk.milestoneDate}T${tk.milestoneTime ?? "00:00"}` : ""}
                     onChange={(e) => {
                       const [date, time] = e.target.value.split("T");
@@ -308,7 +305,7 @@ export function CompactList({ items, activeIds, onOpen, facets }: { items: Compa
                 due: (
                   <input
                     type="date"
-                    className={cn(select, "font-mono tabular-nums", due === "overdue" ? "text-destructive" : due === "today" ? "text-orange-400" : "text-muted-foreground")}
+                    className={cn(select, "font-mono tabular-nums text-muted-foreground/70")}
                     value={dueValue}
                     onChange={(e) => e.target.value && patch.mutate({ id: tk.id, dueAt: new Date(`${e.target.value}T${String(dueDay.getHours()).padStart(2, "0")}:${String(dueDay.getMinutes()).padStart(2, "0")}:00`).toISOString() })}
                     aria-label={t("tickets.fields.due")}
@@ -343,8 +340,8 @@ export function CompactList({ items, activeIds, onOpen, facets }: { items: Compa
                   <span className="truncate">{txt.priority({ label: tk.priorityLabel, kind: tk.priorityKind })}</span>
                 </span>
               ),
-              milestone: <span className={cn("whitespace-nowrap font-mono text-xs tabular-nums", tk.milestoneDate && open && tk.milestoneDate < today ? "text-destructive" : "text-muted-foreground")}>{tk.milestoneDate ? `${shortDate(tk.milestoneDate)}${tk.milestoneTime ? ` ${tk.milestoneTime}` : ""}` : "—"}</span>,
-              due: <span className={cn("whitespace-nowrap font-mono text-xs font-medium tabular-nums", due === "overdue" ? "text-destructive" : due === "today" ? "text-orange-400" : due === "soon" ? "text-primary" : "text-muted-foreground")}>{shortDate(tk.dueAt)}</span>,
+              milestone: <span className={cn("whitespace-nowrap rounded-full border px-2 py-0.5 font-mono text-xs font-semibold tabular-nums", tk.milestoneDate ? CP_TONE[cpState(tk)] : "border-transparent font-normal text-muted-foreground")}>{tk.milestoneDate ? `${shortDate(tk.milestoneDate)}${tk.milestoneTime ? ` ${tk.milestoneTime}` : ""}` : "—"}</span>,
+              due: <span className="whitespace-nowrap font-mono text-[11px] tabular-nums text-muted-foreground/70">{shortDate(tk.dueAt)}</span>,
               status: (
                 <span className={cn("inline-flex max-w-full items-center gap-1.5 truncate rounded-full border px-2 py-0.5 text-[11px] font-medium leading-tight", STATUS_STYLE[tk.statusKind])}>
                   <span className="size-1.5 shrink-0 rounded-full bg-current" />
@@ -755,7 +752,6 @@ function Column({
 function KanbanCard({ tk, canEdit, onOpen }: { tk: TicketSummary; canEdit: boolean; onOpen: () => void }) {
   const txt = useChoiceText();
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id: `t${tk.id}`, disabled: !canEdit });
-  const due = dueState(tk.dueAt, tk.statusKind);
   const style: CSSProperties = { transform: CSS.Transform.toString(transform), transition, opacity: isDragging ? 0.5 : 1 };
   return (
     <div
@@ -776,7 +772,7 @@ function KanbanCard({ tk, canEdit, onOpen }: { tk: TicketSummary; canEdit: boole
           <span className={cn("size-1.5 rounded-full", PRIORITY_STYLE[tk.priorityKind].dot)} />
           {txt.priority({ label: tk.priorityLabel, kind: tk.priorityKind })}
         </span>
-        <span className={cn("font-mono tabular-nums", due === "overdue" ? "text-destructive" : due === "today" ? "text-orange-400" : "text-muted-foreground")}>{shortDate(tk.dueAt)}</span>
+        <span className="font-mono tabular-nums text-muted-foreground/70">{shortDate(tk.dueAt)}</span>
         {tk.assignee && <span className="ml-auto flex size-5 items-center justify-center rounded-full border bg-background/60 text-[9px] font-semibold" title={tk.assignee.name}>{initials(tk.assignee.name)}</span>}
       </div>
       <span className={cn("mt-2 inline-flex items-center gap-1.5 rounded-full border px-2 py-0.5 text-[10px] font-medium leading-tight", STATUS_STYLE[tk.statusKind])}>

@@ -71,7 +71,7 @@ import { AcceptDialog } from "./AcceptDialog";
 import { AddToDayDialog } from "./AddToDayDialog";
 import { MergeDialog } from "./MergeDialog";
 import { PendingMails } from "./PendingMails";
-import { dueState, heatState, FILTER_KEYS, PRIORITY_STYLE, dueGlow, useChoiceText, shortDate, shortDateTime, hm, STATUS_STYLE, useTickets, useShowSecondary, VIEWS, type Tally, type TicketList, type TicketSummary, type View, ticketErrorText } from "./shared";
+import { cpState, CP_TONE, heatState, FILTER_KEYS, PRIORITY_STYLE, dueGlow, useChoiceText, shortDate, shortDateTime, hm, STATUS_STYLE, useTickets, useShowSecondary, VIEWS, type Tally, type TicketList, type TicketSummary, type View, ticketErrorText } from "./shared";
 import { useTicketWorkspace } from "./workspace";
 import { GlobalSearch } from "./GlobalSearch";
 import { AgendaCard } from "./Planning";
@@ -870,7 +870,6 @@ function TicketRow({
   const { t } = useTranslation();
   const txt = useChoiceText();
   const me = useMe();
-  const due = dueState(tk.dueAt, tk.statusKind);
   const heat = heatState(tk.dueAt, tk.statusKind, tk);
   const [dueOpen, setDueOpen] = useState(false);
   const used = tk.statusKind === "complete" ? 0 : slaUsed(tk);
@@ -1044,11 +1043,7 @@ function TicketRow({
             {(() => {
               const label = (
                 <span
-                  className={cn(
-                    "block whitespace-nowrap rounded px-0.5 font-mono text-xs font-medium tabular-nums",
-                    due === "overdue" ? "text-destructive" : due === "today" ? "text-orange-400" : due === "soon" ? "text-primary" : "text-muted-foreground",
-                    editable && "hover:bg-accent/60",
-                  )}
+                  className={cn("block whitespace-nowrap rounded px-0.5 font-mono text-[11px] tabular-nums text-muted-foreground/70", editable && "hover:bg-accent/60 hover:text-muted-foreground")}
                 >
                   {shortDate(tk.dueAt)}
                 </span>
@@ -1968,9 +1963,8 @@ function CheckpointCell({ tk, editable }: { tk: TicketSummary; editable: boolean
     },
     onError: (e) => toast.error(ticketErrorText(t, e)),
   });
-  const late = tk.milestoneDate && tk.statusKind !== "complete" && tk.milestoneDate < new Date().toLocaleDateString("en-CA");
   const label = (
-    <span className={cn("block whitespace-nowrap rounded px-0.5 font-mono text-xs tabular-nums", late ? "text-destructive" : "text-muted-foreground", editable && "hover:bg-accent/60")}>
+    <span className={cn("block w-fit whitespace-nowrap rounded-full border px-2 py-0.5 font-mono text-xs font-semibold tabular-nums", tk.milestoneDate ? CP_TONE[cpState(tk)] : "border-transparent font-normal text-muted-foreground", editable && "hover:brightness-125")}>
       {tk.milestoneDate ? `${shortDate(tk.milestoneDate)}${tk.milestoneTime ? ` ${tk.milestoneTime}` : ""}` : "—"}
     </span>
   );

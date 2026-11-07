@@ -54,6 +54,7 @@ import { PriorityDialog, TicketPriorities } from "./Planning";
 import { TicketSmsPanel, useTicketSms } from "@/pages/sms/SmsPage";
 import {
   heatState,
+  CP_TONE,
   longDateTime,
   shortDate,
   PRIORITY_STYLE,
@@ -1749,15 +1750,15 @@ function CheckpointField({ value, tone, onChange }: { value: { startDate: string
   const can = useCan();
   const off = !can("tickets.edit");
   return (
-    <div className={cn("rounded-xl border-2 p-3", CP_TONE[tone] ?? CP_TONE.none)} title={t("tickets.milestone.hint")}>
-      <label htmlFor="milestone-date" className="flex items-center gap-2 text-sm font-semibold">
-        <Flag className="size-4" /> {t("tickets.milestone.label")}
+    <div className={cn("rounded-xl border p-2.5", CP_TONE[tone] ?? CP_TONE.none)} title={t("tickets.milestone.hint")}>
+      <label htmlFor="milestone-date" className="flex items-center gap-1.5 text-xs font-semibold">
+        <Flag className="size-3.5" /> {t("tickets.milestone.label")}
       </label>
       <div className="mt-2 flex flex-wrap gap-2">
         <Input
           id="milestone-date"
           type="date"
-          className="h-10 min-w-0 flex-1 text-base font-semibold"
+          className="h-9 min-w-0 flex-1 text-sm font-medium"
           disabled={off}
           min={value.startDate ?? undefined}
           value={value.milestoneDate ?? ""}
@@ -1765,7 +1766,7 @@ function CheckpointField({ value, tone, onChange }: { value: { startDate: string
         />
         <Input
           type="time"
-          className="h-10 w-32 text-base font-semibold"
+          className="h-9 w-32 text-sm font-medium"
           disabled={off}
           value={value.milestoneTime ?? ""}
           aria-label={t("tickets.milestone.time")}
@@ -1777,14 +1778,6 @@ function CheckpointField({ value, tone, onChange }: { value: { startDate: string
 }
 
 /** A day (and, for the checkpoint, a time) changed in place from the ticket's header */
-const CP_TONE: Record<string, string> = {
-  overdue: "border-destructive/70 bg-destructive/15 text-red-300",
-  today: "border-orange-500/70 bg-orange-500/15 text-orange-300",
-  soon: "border-[color:var(--gold)]/70 bg-[color:var(--gold)]/15 text-primary",
-  later: "border-emerald-500/50 bg-emerald-500/10 text-emerald-300",
-  none: "border-[color:var(--gold)]/40 bg-[color:var(--gold)]/[0.06] text-primary",
-  done: "border-muted-foreground/30 bg-muted/40 text-muted-foreground",
-};
 function QuickDate({ icon: Icon, label, date, time, withTime, tone, disabled, min, onSave }: { tone?: string; icon: LucideIcon; label: string; date: string | null; time?: string | null; withTime?: boolean; disabled: boolean; min?: string | null; onSave: (date: string | null, time: string | null) => void }) {
   const { t } = useTranslation();
   const [d, setD] = useState(date ?? "");
@@ -1797,12 +1790,12 @@ function QuickDate({ icon: Icon, label, date, time, withTime, tone, disabled, mi
       title={label}
       className={cn(
         "flex items-center gap-1 rounded-full border px-2 py-0.5 text-[11px] font-medium text-muted-foreground",
-        tone && cn("gap-1.5 border-2 px-3 py-1 text-sm font-semibold shadow-sm", CP_TONE[tone] ?? CP_TONE.none),
+        tone && cn("gap-1.5 px-2.5 py-0.5 text-xs font-semibold", CP_TONE[tone] ?? CP_TONE.none),
         !disabled && "cursor-pointer hover:border-[color:var(--gold)]/60",
       )}
     >
-      <Icon className={tone ? "size-4" : "size-3"} />
-      {tone && <span className="text-[10px] font-medium uppercase tracking-wide opacity-80">{label}</span>}
+      <Icon className="size-3" />
+      {tone && <span className="text-[10px] font-medium uppercase tracking-wide opacity-70">{label}</span>}
       {shown}
     </span>
   );
