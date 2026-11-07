@@ -665,15 +665,21 @@ function TicketBody({
                 {key === "planning" && (
                   <dl className="space-y-3">
                       <StartDate value={view} onChange={stage} />
-                      <Detail icon={CalendarClock} label={t("tickets.fields.due")}>
-                        {editable ? (
-                          <div className={cn("mt-0.5 rounded-lg")}>
-                            <DueEditor dueAt={view.dueAt} onSave={(dueAt) => stage({ dueAt })} />
-                          </div>
-                        ) : (
-                          fullDate(tk.dueAt)
-                        )}
-                      </Detail>
+                      <CheckpointField value={view} tone={cpHeat} onChange={stage} />
+                      {/* the due date: the quiet one, the checkpoint is what counts */}
+                      <div className="flex gap-3 text-xs text-muted-foreground opacity-80">
+                        <CalendarClock className="mt-0.5 size-3.5 shrink-0" />
+                        <div className="min-w-0 flex-1">
+                          <p className="text-[10px]">{t("tickets.fields.due")}</p>
+                          {editable ? (
+                            <div className="mt-0.5 rounded-lg">
+                              <DueEditor dueAt={view.dueAt} onSave={(dueAt) => stage({ dueAt })} />
+                            </div>
+                          ) : (
+                            fullDate(tk.dueAt)
+                          )}
+                        </div>
+                      </div>
                       <Detail icon={Clock3} label={t("tickets.fields.hours")}>
                         {partial ? "…" : t("tickets.hoursValue", { hours: tk.hours.toLocaleString() })}
                       </Detail>
@@ -1728,28 +1734,43 @@ function StartDate({
             {t("tickets.startLock.label")}
           </label>
           {!value.startDate && <p className="mt-0.5 text-[10px] text-muted-foreground">{t("tickets.startLock.needsDate")}</p>}
-          {/* the goal date: between the start and the final due date, so the technician and the AI plan in steps */}
-          <label htmlFor="milestone-date" className="mt-2 flex items-center gap-1.5 text-[11px] text-muted-foreground" title={t("tickets.milestone.hint")}>
-            <Flag className="size-3 text-primary" /> {t("tickets.milestone.label")}
-          </label>
-          <Input
-            id="milestone-date"
-            type="date"
-            className="mt-0.5 h-8"
-            disabled={off}
-            min={value.startDate ?? undefined}
-            value={value.milestoneDate ?? ""}
-            onChange={(e) => onChange({ milestoneDate: e.target.value || null })}
-          />
-          <Input
-            type="time"
-            className="mt-1 h-8 w-32"
-            disabled={off}
-            value={value.milestoneTime ?? ""}
-            aria-label={t("tickets.milestone.time")}
-            onChange={(e) => onChange(e.target.value && !value.milestoneDate ? { milestoneDate: value.startDate ?? todayLocal(), milestoneTime: e.target.value } : { milestoneTime: e.target.value || null })}
-          />
         </dd>
+      </div>
+    </div>
+  );
+}
+
+/**
+ * The checkpoint (the goal day and time, between the start and the due date): the date that matters most, so it is the
+ * big one of the Planning panel, with the hue of its state.
+ */
+function CheckpointField({ value, tone, onChange }: { value: { startDate: string | null; milestoneDate: string | null; milestoneTime: string | null }; tone: string; onChange: (p: { milestoneDate?: string | null; milestoneTime?: string | null }) => void }) {
+  const { t } = useTranslation();
+  const can = useCan();
+  const off = !can("tickets.edit");
+  return (
+    <div className={cn("rounded-xl border-2 p-3", CP_TONE[tone] ?? CP_TONE.none)} title={t("tickets.milestone.hint")}>
+      <label htmlFor="milestone-date" className="flex items-center gap-2 text-sm font-semibold">
+        <Flag className="size-4" /> {t("tickets.milestone.label")}
+      </label>
+      <div className="mt-2 flex flex-wrap gap-2">
+        <Input
+          id="milestone-date"
+          type="date"
+          className="h-10 min-w-0 flex-1 text-base font-semibold"
+          disabled={off}
+          min={value.startDate ?? undefined}
+          value={value.milestoneDate ?? ""}
+          onChange={(e) => onChange({ milestoneDate: e.target.value || null })}
+        />
+        <Input
+          type="time"
+          className="h-10 w-32 text-base font-semibold"
+          disabled={off}
+          value={value.milestoneTime ?? ""}
+          aria-label={t("tickets.milestone.time")}
+          onChange={(e) => onChange(e.target.value && !value.milestoneDate ? { milestoneDate: value.startDate ?? todayLocal(), milestoneTime: e.target.value } : { milestoneTime: e.target.value || null })}
+        />
       </div>
     </div>
   );
