@@ -18,15 +18,15 @@ type Preview = { notes: number; checklist: number; files: number; time: { moved:
  * "Transformer en projet": the ticket becomes a project. Notes are copied, the time and charges not approved or billed
  * yet move (the ticket's time is then not billable), what is approved or invoiced stays, and the ticket is closed.
  */
-export function ToProjectDialog({ tk, onClose, onDone }: { tk: { id: number; number: string; title: string }; onClose: () => void; onDone: () => void }) {
+export function ToProjectDialog({ tk, initialMode = "new", onClose, onDone }: { tk: { id: number; number: string; title: string }; initialMode?: "new" | "existing"; onClose: () => void; onDone: () => void }) {
   const { t } = useTranslation();
   const qc = useQueryClient();
   const navigate = useNavigate();
   const [name, setName] = useState(tk.title);
   // a new project, or one of this client's open projects (the ticket is merged into it)
-  const [mode, setMode] = useState<"new" | "existing">("new");
+  const [mode, setMode] = useState<"new" | "existing">(initialMode);
   const [into, setInto] = useState("");
-  const targets = useQuery({ queryKey: ["tickets", "to-project-targets", tk.id], queryFn: () => api.get<{ id: string; number: string; name: string; status: string }[]>(`/tickets/${tk.id}/to-project/targets`) });
+  const targets = useQuery({ queryKey: ["tickets", "to-project-targets", tk.id], queryFn: () => api.get<{ id: string; number: string; name: string; status: string; noClient: boolean }[]>(`/tickets/${tk.id}/to-project/targets`) });
   const choices = targets.data ?? [];
   const preview = useQuery({ queryKey: ["tickets", "to-project", tk.id], queryFn: () => api.get<Preview>(`/tickets/${tk.id}/to-project`) });
   const go = useMutation({
@@ -82,7 +82,7 @@ export function ToProjectDialog({ tk, onClose, onDone }: { tk: { id: number; num
                 <SelectContent position="popper">
                   {choices.map((x) => (
                     <SelectItem key={x.id} value={x.id}>
-                      {x.number} · {x.name}
+                      {x.number} · {x.name}{x.noClient ? ` (${t("tickets.toProject.noClient")})` : ""}
                     </SelectItem>
                   ))}
                 </SelectContent>

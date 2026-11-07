@@ -1,4 +1,4 @@
-import { and, asc, eq, inArray, isNotNull, ne, sql } from "drizzle-orm";
+import { and, asc, eq, inArray, isNotNull, isNull, ne, or, sql } from "drizzle-orm";
 import { db, schema } from "../db/index.ts";
 import { billingSettings } from "./billing.ts";
 import { moveCharge } from "./chargeMove.ts";
@@ -70,7 +70,12 @@ export async function transformTicket(ticketId: number, actor: { id: string; nam
   if (opts.intoProjectId) {
     [into = null] = await d.select().from(schema.projects).where(eq(schema.projects.id, opts.intoProjectId));
     if (!into) throw new TransformError("project_not_found", 404);
-    if (into.clientId !== client.id) throw new TransformError("project_other_client");
+    // a project of another client is refused; one with no client yet takes the ticket's client
+    if (into.clientId && into.clientId !== client.id) throw new TransformError("project_other_client");
+    if (!into.clientId) {
+      await d.update(schema.projects).set({ clientId: client.id }).where(eq(schema.projects.id, into.id));
+      into = { ...into, clientId: client.id };
+    }
     if (into.status === "done" || into.status === "cancelled") throw new TransformError("project_closed");
   }
 
@@ -229,9 +234,10 @@ export async function mergeTargets(ticketId: number) {
   if (!tk) throw new TransformError("not_found", 404);
   const [client] = await d.select({ id: schema.clients.id }).from(schema.clients).where(eq(schema.clients.autotaskId, tk.companyId));
   if (!client) return [];
+  // this client's open projects, and the open ones that have no client yet (they take this ticket's client)
   return d
-    .select({ id: schema.projects.id, number: schema.projects.number, name: schema.projects.name, status: schema.projects.status })
+    .select({ id: schema.projects.id, number: schema.projects.number, name: schema.projects.name, status: schema.projects.status, noClient: sql<boolean>`${schema.projects.clientId} is null` })
     .from(schema.projects)
-    .where(and(eq(schema.projects.clientId, client.id), ne(schema.projects.status, "done"), ne(schema.projects.status, "cancelled")))
+    .where(and(or(eq(schema.projects.clientId, client.id), isNull(schema.projects.clientId)), ne(schema.projects.status, "done"), ne(schema.projects.status, "cancelled")))
     .orderBy(asc(schema.projects.number));
 }

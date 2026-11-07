@@ -10618,9 +10618,15 @@ describe("a ticket merged into an existing project", () => {
       const finished = (await tech.post("/api/projects", { name: "Vieux projet", clientId: co.id })).json;
       await db().update(schema.projects).set({ status: "done" }).where(eq(schema.projects.id, finished.id));
       const theirs = (await tech.post("/api/projects", { name: "Projet d'un autre", clientId: other.id })).json;
+      const orphan = (await tech.post("/api/projects", { name: "Projet sans client" })).json;
       // only this client's open projects are offered
       const targets = (await tech.get(`/api/tickets/${tk.id}/to-project/targets`)).json;
-      expect(targets.map((x: any) => x.id)).toEqual([mine.id]);
+      // (other tests leave projects with no client around: only ours are checked)
+      const ids = targets.map((x: any) => x.id);
+      expect(ids).toEqual(expect.arrayContaining([mine.id, orphan.id]));
+      expect(ids).not.toContain(theirs.id);
+      expect(ids).not.toContain(finished.id);
+      expect(targets.find((x: any) => x.id === orphan.id).noClient).toBe(true);
       // another client's project, a finished one, and an unknown one are refused
       expect((await tech.post(`/api/tickets/${tk.id}/to-project`, { intoProjectId: theirs.id })).json.error).toBe("project_other_client");
       expect((await tech.post(`/api/tickets/${tk.id}/to-project`, { intoProjectId: finished.id })).json.error).toBe("project_closed");
@@ -10631,6 +10637,10 @@ describe("a ticket merged into an existing project", () => {
       expect(r.status).toBe(200);
       expect(r.json).toMatchObject({ merged: true, project: { id: mine.id, number: mine.number, name: "Déploiement postes" }, notes: 1, checklist: 1 });
       expect((await tech.get("/api/projects?status=all")).json).toHaveLength(before);
+      // a project with no client yet can take a ticket too, and then has that client
+      const tk2 = (await tech.post("/api/tickets", { title: "Autre billet", description: "x", companyId: co.autotaskId, priority: "medium", queue: "support", assigneeId: null, dueDate: "2026-12-05" })).json;
+      expect((await tech.post(`/api/tickets/${tk2.id}/to-project`, { intoProjectId: orphan.id })).status).toBe(200);
+      expect((await tech.get(`/api/projects/${orphan.id}`)).json.client).toMatchObject({ id: co.id });
       const detail = (await tech.get(`/api/projects/${mine.id}`)).json;
       expect(detail.name).toBe("Déploiement postes");
       expect(detail.notes.some((n: any) => n.text.includes("Le client veut un poste de plus"))).toBe(true);
