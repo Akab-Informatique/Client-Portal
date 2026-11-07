@@ -2,7 +2,7 @@ import { useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
-import { AlertTriangle, ArrowDownUp, GripVertical, CalendarDays, Star, CalendarOff, CheckCircle2, EyeOff, ChevronLeft, ChevronRight, Coffee, Loader2, Lock, MessageSquareText, Plus, RefreshCw, Sparkles, Workflow } from "lucide-react";
+import { AlertTriangle, ArrowDownUp, GripVertical, CalendarClock, CalendarDays, Star, CalendarOff, CheckCircle2, EyeOff, ChevronLeft, ChevronRight, Coffee, Loader2, Lock, MessageSquareText, Plus, RefreshCw, Sparkles, Workflow } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { AiDirection, useAiDirection } from "@/components/AiDirection";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -16,12 +16,19 @@ import { useTicketWorkspace } from "@/pages/tickets/workspace";
 import { PRIORITY_STYLE, addDays, dayLabel, hm, longDay, todayYmd, toMinutes, type Block, type DayData, type DayItem, type TaskCard } from "./shared";
 import { taskError, usePeople } from "./TaskDialog";
 import { DayProjects, MyTickets, Priorities } from "./DayLists";
+import { DayEdge } from "./DayEdge";
+import { DayBlockDialog, type DayBlockDraft } from "./DayBlockDialog";
 import { DndContext, KeyboardSensor, PointerSensor, closestCenter, useSensor, useSensors, type DragEndEvent } from "@dnd-kit/core";
 import { SortableContext, arrayMove, sortableKeyboardCoordinates, useSortable, verticalListSortingStrategy } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { byCustom, useCustomOrder, useSortDefault } from "@/lib/sortPrefs";
 import { useProjectWorkspace } from "@/pages/projects/ProjectWorkspace";
+
+const addMin = (hhmm: string, plus: number) => {
+  const m = Math.min(23 * 60 + 45, Number(hhmm.slice(0, 2)) * 60 + Number(hhmm.slice(3, 5)) + plus);
+  return `${String(Math.floor(m / 60)).padStart(2, "0")}:${String(m % 60).padStart(2, "0")}`;
+};
 
 /** The hours shown on the timeline: from an hour before the day starts to an hour after it ends */
 const DEFAULT_HOUR_PX = 100;
@@ -107,6 +114,8 @@ export function MyDay({ onOpenTask }: { onOpenTask: (id: string) => void }) {
     refetchInterval: 60_000,
   });
   const refresh = () => void qc.invalidateQueries({ queryKey: ["pipeline"] });
+  // a slot of time blocked by hand (new, or an existing one being edited)
+  const [blockDraft, setBlockDraft] = useState<DayBlockDraft | null>(null)
   const replan = useMutation({
     mutationFn: () => api.post<{ aiError: string | null }>("/pipeline/day/plan", { date, ...(userId !== me.id ? { userId } : {}), ...direction.body }),
     onSuccess: (r) => {
@@ -275,6 +284,7 @@ export function MyDay({ onOpenTask }: { onOpenTask: (id: string) => void }) {
         )}
       </section>
 
+      {blockDraft && <DayBlockDialog key={blockDraft.id ?? "new"} draft={blockDraft} date={date} forUser={userId === me.id ? undefined : userId} onClose={() => setBlockDraft(null)} onSaved={refresh} />}
       {/* left: the blocks of the day (and the priorities of the day); right: the priorities of the week, all my tickets (compact), projects, tasks. The bar between them is dragged to give one side more room. */}
       <div ref={box} className="grid gap-4 xl:gap-0 xl:grid-cols-[var(--split)_12px_minmax(0,1fr)]" style={{ "--split": `${split}%` } as React.CSSProperties}>
         <div className="min-w-0 space-y-4">
@@ -282,6 +292,17 @@ export function MyDay({ onOpenTask }: { onOpenTask: (id: string) => void }) {
           <section className="glass h-fit rounded-2xl border p-4">
             <div className="mb-3 flex items-center justify-between gap-2">
               <h3 className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">{t("pipeline.day.timeline")}</h3>
+              <div className="flex items-center gap-1">
+              {can("pipeline.edit") && (userId === me.id || can("pipeline.manage")) && (
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <Button type="button" variant="ghost" size="icon" className="size-7 text-pink-300 hover:bg-pink-500/15" onClick={() => setBlockDraft({ start: "09:00", end: "10:00", title: "", note: "" })} aria-label={t("pipeline.day.block.title")}>
+                      <CalendarClock className="size-4" />
+                    </Button>
+                  </TooltipTrigger>
+                  <TooltipContent>{t("pipeline.day.block.title")}</TooltipContent>
+                </Tooltip>
+              )}
               {can("pipeline.edit") && (
                 <Tooltip>
                   <TooltipTrigger asChild>
@@ -292,6 +313,19 @@ export function MyDay({ onOpenTask }: { onOpenTask: (id: string) => void }) {
                   <TooltipContent>{t("pipeline.day.aiRefresh")}</TooltipContent>
                 </Tooltip>
               )}
+              </div>
+            </div>
+            <div className="mb-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-[10px] text-muted-foreground">
+              {[
+                ["bg-[color:var(--gold)]/60", "pipeline.day.legend.ticket"],
+                ["bg-violet-400/70", "pipeline.day.legend.task"],
+                ["bg-teal-400/70", "pipeline.day.legend.project"],
+                ["bg-pink-400/70", "pipeline.day.legend.local"],
+              ].map(([c, k]) => (
+                <span key={k} className="flex items-center gap-1">
+                  <span className={cn("size-2 rounded-sm", c)} /> {t(k)}
+                </span>
+              ))}
             </div>
             {data && data.plan.blocks.some((b) => b.allDay) && (
               <div className="mb-3 flex flex-wrap items-center gap-1.5">
@@ -305,7 +339,7 @@ export function MyDay({ onOpenTask }: { onOpenTask: (id: string) => void }) {
                   ))}
               </div>
             )}
-            {isLoading || !data ? <Skeleton className="h-96 w-full" /> : <Timeline data={data} hourPx={hourPx} canEdit={can("pipeline.edit") && (userId === me.id || can("pipeline.manage"))} forUser={userId === me.id ? undefined : userId} onSaved={refresh} onOpen={(b) => (b.kind === "ticket" ? ws.open(Number(b.refId)) : b.kind === "ptask" ? b.projectId && b.refId && pws.openTask(b.projectId, b.refId) : b.refId && onOpenTask(b.refId))} />}
+            {isLoading || !data ? <Skeleton className="h-96 w-full" /> : <Timeline data={data} hourPx={hourPx} onBlock={(b, start) => setBlockDraft(b ? { id: b.refId ?? undefined, start: b.start, end: b.end, title: b.title, note: b.detail ?? "" } : { start: start ?? "09:00", end: start ? addMin(start, 60) : "10:00", title: "", note: "" })} canEdit={can("pipeline.edit") && (userId === me.id || can("pipeline.manage"))} forUser={userId === me.id ? undefined : userId} onSaved={refresh} onOpen={(b) => (b.kind === "ticket" ? ws.open(Number(b.refId)) : b.kind === "ptask" ? b.projectId && b.refId && pws.openTask(b.projectId, b.refId) : b.refId && onOpenTask(b.refId))} />}
             <div role="separator" aria-orientation="horizontal" title={t("pipeline.day.resizeHeight")} aria-label={t("pipeline.day.resizeHeight")} onPointerDown={startResize} onDoubleClick={() => setHourPx(DEFAULT_HOUR_PX)} className="group mt-2 flex h-3 cursor-row-resize touch-none items-center justify-center">
               <span className="h-0.5 w-16 rounded-full bg-[color:var(--glass-border)] transition-colors group-hover:bg-[color:var(--gold)]/60 group-active:bg-[color:var(--gold)]" />
             </div>
@@ -419,6 +453,7 @@ function ItemRow({ i, onOpen, onComplete }: { i: DayItem; onOpen: (i: DayItem) =
       <button type="button" aria-label={t("projects.sort.drag")} title={t("projects.sort.drag")} className="cursor-grab touch-none text-muted-foreground hover:text-foreground active:cursor-grabbing" {...attributes} {...listeners}>
         <GripVertical className="size-4" />
       </button>
+      {!i.masked && (i.kind === "ticket" || i.kind === "task" || i.kind === "ptask") && <DayEdge kind={i.kind} id={i.refId} number={i.ticketNumber} title={i.title} urgent={i.priority === "urgent"} onOpen={() => onOpen(i)} />}
       {onComplete && <Checkbox disabled={i.blocked} onCheckedChange={() => onComplete(i)} aria-label={t("pipeline.complete")} />}
       <span className={cn("size-2 shrink-0 rounded-full", PRIORITY_STYLE[i.priority].dot)} />
       <button type="button" onClick={() => onOpen(i)} className="min-w-0 flex-1 text-left">
@@ -438,12 +473,21 @@ function ItemRow({ i, onOpen, onComplete }: { i: DayItem; onOpen: (i: DayItem) =
 }
 
 /** The day from the start of work to its end, an hour on each side; the blocks are placed by their time. */
-function Timeline({ data, onOpen, hourPx, canEdit, forUser, onSaved }: { data: DayData; onOpen: (b: Block) => void; hourPx: number; canEdit: boolean; forUser?: string; onSaved: () => void }) {
+function Timeline({ data, onOpen, onBlock, hourPx, canEdit, forUser, onSaved }: { data: DayData; onOpen: (b: Block) => void; onBlock: (b?: Block, start?: string) => void; hourPx: number; canEdit: boolean; forUser?: string; onSaved: () => void }) {
   const { t } = useTranslation();
   // a block is stretched or shrunk by its top or bottom edge, in quarter hours (the time given to that ticket / task)
   const [drag, setDrag] = useState<{ i: number; edge: "top" | "bottom"; delta: number } | null>(null);
   const saveTime = useMutation({
     mutationFn: (v: { key: string; minutes: number }) => api.put("/pipeline/day/alloc", { date: data.date, key: v.key, minutes: v.minutes, ...(forUser ? { userId: forUser } : {}) }),
+    onSuccess: onSaved,
+    onError: () => toast.error(t("common.error")),
+  });
+  // a block is dragged up or down to change its place in the day: the others follow in the order given
+  const [move, setMove] = useState<{ i: number; dy: number } | null>(null);
+  const lane = useRef<HTMLDivElement>(null);
+  const justMoved = useRef(false);
+  const saveOrder = useMutation({
+    mutationFn: (keys: string[]) => api.put("/pipeline/day/order", { date: data.date, keys, ...(forUser ? { userId: forUser } : {}) }),
     onSuccess: onSaved,
     onError: () => toast.error(t("common.error")),
   });
@@ -454,6 +498,40 @@ function Timeline({ data, onOpen, hourPx, canEdit, forUser, onSaved }: { data: D
       totals.set(k, (totals.get(k) ?? 0) + toMinutes(b.end) - toMinutes(b.start));
     }
   }
+  const startMove = (e: React.PointerEvent, i: number, key: string) => {
+    if (e.button !== 0) return;
+    const y0 = e.clientY;
+    let moved = false;
+    const mv = (ev: PointerEvent) => {
+      if (!moved && Math.abs(ev.clientY - y0) < 6) return;
+      moved = true;
+      setMove({ i, dy: ev.clientY - y0 });
+    };
+    const up = (ev: PointerEvent) => {
+      window.removeEventListener("pointermove", mv);
+      window.removeEventListener("pointerup", up);
+      setMove(null);
+      if (!moved || !lane.current) return;
+      justMoved.current = true;
+      setTimeout(() => (justMoved.current = false), 80);
+      // where it was dropped (minutes of the day), against the middle of each other item's first block
+      const minute = startH * 60 + ((ev.clientY - lane.current.getBoundingClientRect().top) / hourPx) * 60;
+      const seq: { key: string; mid: number }[] = [];
+      for (const x of [...placed].sort((a, b2) => a.start.localeCompare(b2.start))) {
+        if (!x.refId || !(x.kind === "ticket" || x.kind === "task" || x.kind === "ptask")) continue;
+        const k = `${x.kind}:${x.refId}`;
+        if (!seq.some((q) => q.key === k)) seq.push({ key: k, mid: toMinutes(x.start) + (totals.get(k) ?? 0) / 2 });
+      }
+      const before = seq.map((q) => q.key);
+      const rest = seq.filter((q) => q.key !== key);
+      const at = rest.findIndex((q) => minute < q.mid);
+      const next = rest.map((q) => q.key);
+      next.splice(at < 0 ? next.length : at, 0, key);
+      if (next.join() !== before.join()) saveOrder.mutate(next);
+    };
+    window.addEventListener("pointermove", mv);
+    window.addEventListener("pointerup", up);
+  };
   const startDrag = (e: React.PointerEvent, i: number, key: string, own: number, edge: "top" | "bottom") => {
     e.preventDefault();
     e.stopPropagation();
@@ -502,7 +580,16 @@ function Timeline({ data, onOpen, hourPx, canEdit, forUser, onSaved }: { data: D
             </div>
           )),
         )}
-        <div className="absolute inset-y-0 left-14 right-0">
+        <div
+          ref={lane}
+          className="absolute inset-y-0 left-14 right-0"
+          onClick={(e) => {
+            // a click on free space blocks time there (from that quarter hour, an hour long)
+            if (e.target !== e.currentTarget || !canEdit) return;
+            const m = Math.floor((startH * 60 + ((e.clientY - e.currentTarget.getBoundingClientRect().top) / hourPx) * 60) / 15) * 15;
+            onBlock(undefined, `${String(Math.floor(m / 60)).padStart(2, "0")}:${String(m % 60).padStart(2, "0")}`);
+          }}
+        >
           {placed.map((b, i) => {
             const s = toMinutes(b.start);
             const e = toMinutes(b.end);
@@ -522,25 +609,28 @@ function Timeline({ data, onOpen, hourPx, canEdit, forUser, onSaved }: { data: D
             const ptask = b.kind === "ptask";
             const event = b.kind === "event";
             return (
-              <div key={`${b.refId}${i}`} className={cn("absolute inset-x-0", live && "z-20")} style={{ top: top(s) + 1 + shift, height: h }}>
+              <div key={`${b.refId}${i}`} className={cn("absolute inset-x-0", (live || move?.i === i) && "z-20")} style={{ top: top(s) + 1 + shift, height: h, ...(move?.i === i ? { transform: `translateY(${move.dy}px)`, opacity: 0.85, pointerEvents: "none" as const } : {}) }}>
               <button
                 type="button"
-                disabled={event}
-                onClick={() => onOpen(b)}
+                disabled={event && !b.local}
+                onClick={() => (justMoved.current ? (justMoved.current = false) : b.local ? (canEdit ? onBlock(b) : undefined) : onOpen(b))}
+                onPointerDown={stretch ? (ev) => startMove(ev, i, key) : undefined}
                 className={cn(
-                  "h-full w-full overflow-hidden rounded-lg border px-2.5 py-1 text-left transition-all enabled:hover:brightness-110",
+                  "h-full w-full overflow-hidden rounded-lg border py-1 pr-2.5 text-left transition-all enabled:hover:brightness-110",
+                  event ? "pl-2.5" : "pl-4",
+                  stretch && "cursor-grab touch-none active:cursor-grabbing",
                   b.done && "opacity-40 saturate-50",
                   event
-                    ? b.o365
-                      ? "border-sky-400/40 bg-sky-500/10 text-sky-100"
-                      : "border-slate-400/30 bg-slate-500/10 text-slate-300"
+                    ? b.local
+                      ? "border-pink-400/50 bg-pink-500/15 text-pink-100"
+                      : b.o365
+                        ? "border-sky-400/40 bg-sky-500/10 text-sky-100"
+                        : "border-slate-400/30 bg-slate-500/10 text-slate-300"
                     : ptask
                       ? "border-teal-400/50 bg-teal-500/10"
                       : task
                       ? "border-violet-400/40 bg-violet-500/10"
-                      : b.priority === "urgent"
-                        ? "border-red-400/50 bg-red-500/10"
-                        : "border-[color:var(--gold)]/40 bg-[color:var(--gold)]/10",
+                      : "border-[color:var(--gold)]/40 bg-[color:var(--gold)]/10",
                 )}
                 title={b.note ?? undefined}
               >
@@ -559,6 +649,9 @@ function Timeline({ data, onOpen, hourPx, canEdit, forUser, onSaved }: { data: D
                 <span className={cn("block truncate text-[13px] font-medium leading-tight", b.done && "line-through")}>{b.title || t("pipeline.private")}</span>
                 {b.note && h > 50 && <span className="block truncate text-[11px] text-muted-foreground">{b.note}</span>}
               </button>
+              {!event && !b.masked && !b.done && b.refId && (b.kind === "ticket" || b.kind === "task" || b.kind === "ptask") && (
+                <DayEdge kind={b.kind} id={b.refId} number={b.ticketNumber} title={b.title} urgent={b.priority === "urgent"} onOpen={() => onOpen(b)} className="absolute left-0 top-0 z-10 h-full" />
+              )}
               {stretch &&
                 (["top", "bottom"] as const).map((edge) => (
                   <div key={edge} role="separator" aria-orientation="horizontal" title={t("pipeline.day.resizeBlock")} onPointerDown={(ev) => startDrag(ev, i, key, own, edge)} className={cn("group/h absolute inset-x-3 z-10 flex h-2 cursor-ns-resize touch-none items-center justify-center", edge === "top" ? "top-0" : "bottom-0")}>

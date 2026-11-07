@@ -2517,14 +2517,34 @@ export const pipelineDayAlloc = pgTable(
     /** ticket:<id> or task:<uuid> */
     key: text("key").notNull(),
     minutes: integer("minutes").notNull(),
-    source: text("source", { enum: ["manual", "ai"] }).notNull(),
-    /** The AI's order (0 first) */
+    source: text("source", { enum: ["manual", "ai", "order"] }).notNull(),
+    /** The AI's order (0 first); for source "order": the order the person gave the day by hand */
     position: integer("position"),
     note: text("note"),
     createdAt: created(),
     updatedAt: updated(),
   },
   (t) => [uniqueIndex("pipeline_day_alloc_unique").on(t.userId, t.date, t.key, t.source)],
+);
+
+/** A slot of time a technician blocked in their day by hand (local work, an errand…): not a ticket, shown in its own color */
+export const pipelineDayBlocks = pgTable(
+  "pipeline_day_blocks",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    userId: uuid("user_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    date: text("date").notNull(),
+    startTime: text("start_time").notNull(),
+    endTime: text("end_time").notNull(),
+    title: text("title").notNull(),
+    note: text("note"),
+    createdBy: uuid("created_by").references(() => users.id, { onDelete: "set null" }),
+    createdAt: created(),
+    updatedAt: updated(),
+  },
+  (t) => [index("pipeline_day_blocks_user_date").on(t.userId, t.date)],
 );
 
 /** The order a technician put items in, by hand, in a list ("custom" sort): one row per person, list and item */
@@ -2566,6 +2586,10 @@ export type PipelineBlock = {
   pinned?: "day" | "week";
   /** An event of the technician's Microsoft 365 calendar (not one the portal reserved) */
   o365?: boolean;
+  /** A slot the person blocked by hand (refId is its id): own color, editable */
+  local?: boolean;
+  /** The note of a slot blocked by hand */
+  detail?: string | null;
   /** An event that lasts the whole day (it does not take hours off) */
   allDay?: boolean;
   /** Not shown in detail to this viewer (a private event or task) */

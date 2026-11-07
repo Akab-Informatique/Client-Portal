@@ -1100,6 +1100,13 @@
       "when": 1794076845760,
       "tag": "0156_project_task_contract_order",
       "breakpoints": true
+    },
+    {
+      "idx": 157,
+      "version": "7",
+      "when": 1794086988725,
+      "tag": "0157_day_blocks",
+      "breakpoints": true
     }
   ]
 }

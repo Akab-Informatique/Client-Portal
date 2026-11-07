@@ -82,6 +82,9 @@ export type Block = {
   o365?: boolean;
   allDay?: boolean;
   masked?: boolean;
+  /** A slot blocked by hand (refId is its id) and its note */
+  local?: boolean;
+  detail?: string | null;
   /** The work of this block is done (or no longer on the day's list) */
   done?: boolean;
   /** First block of an item: the time given today and what it needs; partial when less is given */

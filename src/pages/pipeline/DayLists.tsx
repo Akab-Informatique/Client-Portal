@@ -12,6 +12,7 @@ import { CompactList } from "@/pages/tickets/Layouts";
 import { shortDate, type TicketList } from "@/pages/tickets/shared";
 import type { Project } from "@/pages/projects/shared";
 import type { DayItem } from "./shared";
+import { DayEdge } from "./DayEdge";
 
 /**
  * A technician's tickets, as the compact view of the Tickets page with the "My tickets" filter (all of them, not only today's);
@@ -91,6 +92,7 @@ export function Priorities({ items, horizon, onOpen, canRemove, forUser }: { ite
         <ul className="divide-y divide-[color:var(--glass-border)]">
           {list.map((i) => (
             <li key={i.key} className="flex items-center gap-1">
+              {!i.masked && (i.kind === "ticket" || i.kind === "task" || i.kind === "ptask") && <DayEdge kind={i.kind} id={i.refId} number={i.ticketNumber} title={i.title} urgent={i.priority === "urgent"} onOpen={() => onOpen(i)} />}
               <button type="button" onClick={() => onOpen(i)} className="flex min-w-0 flex-1 items-baseline gap-2 py-1.5 text-left">
                 {i.ticketNumber && <span className="shrink-0 font-mono text-[11px] text-primary">{i.ticketNumber}</span>}
                 <span className="min-w-0 flex-1 truncate text-sm font-medium">{i.title}</span>

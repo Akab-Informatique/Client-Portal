@@ -413,6 +413,58 @@ export const pipelineRoutes = new Hono<AppEnv>()
     return c.json({ ok: true, plan: out.plan });
   })
 
+  // a slot of time blocked by hand in the day (own color; it takes its hours off what can be planned)
+  .post("/day/blocks", requirePermission("pipeline.edit"), async (c) => {
+    const a = auth(c);
+    const p = await body(c, z.object({ date: zDate.optional(), userId: zUuid.optional(), start: zHm, end: zHm, title: z.string().trim().min(1).max(120), note: z.string().trim().max(500).optional() }));
+    const who = await dayTarget(a, p.userId);
+    const date = p.date ?? todayQc();
+    if (p.end <= p.start) throw new HTTPException(400, { message: "block_times" });
+    const [row] = await db().insert(schema.pipelineDayBlocks).values({ userId: who, date, startTime: p.start, endTime: p.end, title: p.title, note: p.note || null, createdBy: a.user.id }).returning();
+    const out = await buildPlan(who, date, { ai: false, reuse: true, fromNow: true });
+    return c.json({ id: row.id, plan: out.plan }, 201);
+  })
+  .patch("/day/blocks/:id", requirePermission("pipeline.edit"), async (c) => {
+    const a = auth(c);
+    const id = zUuid.parse(c.req.param("id"));
+    const p = await body(c, z.object({ start: zHm.optional(), end: zHm.optional(), title: z.string().trim().min(1).max(120).optional(), note: z.string().trim().max(500).nullable().optional() }));
+    const [row] = await db().select().from(schema.pipelineDayBlocks).where(eq(schema.pipelineDayBlocks.id, id));
+    if (!row) throw new HTTPException(404, { message: "not_found" });
+    await dayTarget(a, row.userId);
+    const start = p.start ?? row.startTime;
+    const end = p.end ?? row.endTime;
+    if (end <= start) throw new HTTPException(400, { message: "block_times" });
+    await db().update(schema.pipelineDayBlocks).set({ startTime: start, endTime: end, ...(p.title ? { title: p.title } : {}), ...(p.note !== undefined ? { note: p.note || null } : {}), updatedAt: new Date() }).where(eq(schema.pipelineDayBlocks.id, id));
+    const out = await buildPlan(row.userId, row.date, { ai: false, reuse: true, fromNow: true });
+    return c.json({ ok: true, plan: out.plan });
+  })
+  .delete("/day/blocks/:id", requirePermission("pipeline.edit"), async (c) => {
+    const a = auth(c);
+    const id = zUuid.parse(c.req.param("id"));
+    const [row] = await db().select().from(schema.pipelineDayBlocks).where(eq(schema.pipelineDayBlocks.id, id));
+    if (!row) throw new HTTPException(404, { message: "not_found" });
+    await dayTarget(a, row.userId);
+    await db().delete(schema.pipelineDayBlocks).where(eq(schema.pipelineDayBlocks.id, id));
+    const out = await buildPlan(row.userId, row.date, { ai: false, reuse: true, fromNow: true });
+    return c.json({ ok: true, plan: out.plan });
+  })
+
+  // the order of the day, given by dragging the blocks: the keys, first to last (kept for that day)
+  .put("/day/order", requirePermission("pipeline.edit"), async (c) => {
+    const a = auth(c);
+    const p = await body(c, z.object({ date: zDate.optional(), userId: zUuid.optional(), keys: z.array(z.string().regex(/^(ticket:\d+|task:[0-9a-f-]{36}|ptask:[0-9a-f-]{36})$/)).max(200) }));
+    const who = await dayTarget(a, p.userId);
+    const date = p.date ?? todayQc();
+    const view = await dayItems(who, date, a.user.id);
+    const known = new Set(view.items.filter((i) => !i.masked).map((i) => i.key));
+    const keys = [...new Set(p.keys)].filter((k) => known.has(k));
+    const d = db();
+    await d.delete(schema.pipelineDayAlloc).where(and(eq(schema.pipelineDayAlloc.userId, who), eq(schema.pipelineDayAlloc.date, date), eq(schema.pipelineDayAlloc.source, "order")));
+    if (keys.length) await d.insert(schema.pipelineDayAlloc).values(keys.map((key, position) => ({ userId: who, date, key, minutes: 15, source: "order" as const, position })));
+    const out = await buildPlan(who, date, { ai: false, reuse: true, fromNow: true });
+    return c.json({ ok: true, plan: out.plan });
+  })
+
   // ── The team's list ──
   .get("/people", async (c) => {
     const ids = await usersWith("staff", "pipeline.view");

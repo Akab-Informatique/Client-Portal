@@ -120,7 +120,7 @@ export type DayItem = {
   statusLabel?: string | null;
   companyName?: string;
 };
-type Busy = { start: number; end: number; title: string; o365?: boolean; allDay?: boolean };
+type Busy = { start: number; end: number; title: string; o365?: boolean; allDay?: boolean; id?: string; local?: boolean; detail?: string | null };
 const RANK = { urgent: 0, high: 1, normal: 2, low: 3 } as const;
 const ticketPriority = (kind: string): DayItem["priority"] => (kind === "critical" ? "urgent" : kind === "high" ? "high" : kind === "low" ? "low" : "normal");
 
@@ -309,7 +309,10 @@ export async function dayItems(userId: string, date: string, viewerId: string = 
       ...(pinOf.has(t.id) && !addOf.has(t.id) ? { pin: pinOf.get(t.id)!.horizon, pinRank: pinOf.get(t.id)!.rank, pinNote: pinOf.get(t.id)!.note || null } : {}),
     });
   }
-  const busy = blocks.map((b) => ({ start: minutesOnDay(b.startsAt, date), end: minutesOnDay(b.endsAt, date), title: b.title }));
+  const busy: Busy[] = blocks.map((b) => ({ start: minutesOnDay(b.startsAt, date), end: minutesOnDay(b.endsAt, date), title: b.title }));
+  // the slots the person blocked by hand take their hours off the day, like an event
+  const handBlocks = await d.select().from(schema.pipelineDayBlocks).where(and(eq(schema.pipelineDayBlocks.userId, userId), eq(schema.pipelineDayBlocks.date, date)));
+  for (const m of handBlocks) busy.push({ start: mins(m.startTime), end: mins(m.endTime), title: m.title, id: m.id, local: true, detail: m.note });
   const absent = absences.length > 0;
   return { items, busy, absent, holiday: holidaysBetween(date, date).has(date) };
 }
@@ -466,7 +469,7 @@ export function layout(items: DayItem[], s: Pick<PipelineSettings, "workStart" |
   }
   for (const b of busy) {
     if (b.allDay) blocks.push({ start: "", end: "", title: b.title, kind: "event", refId: null, allDay: true, o365: Boolean(b.o365) });
-    else if (b.end > b.start) blocks.push({ start: hhmm(b.start), end: hhmm(b.end), title: b.title, kind: "event", refId: null, o365: Boolean(b.o365) });
+    else if (b.end > b.start) blocks.push({ start: hhmm(b.start), end: hhmm(b.end), title: b.title, kind: "event", refId: b.id ?? null, o365: Boolean(b.o365), ...(b.local ? { local: true, detail: b.detail ?? null } : {}) });
   }
   if (mins(s.lunchEnd) > mins(s.lunchStart)) blocks.push({ start: s.lunchStart, end: s.lunchEnd, title: "", kind: "break", refId: null });
   blocks.sort((a, b) => (a.overflow ? 1 : 0) - (b.overflow ? 1 : 0) || (a.allDay ? 0 : 1) - (b.allDay ? 0 : 1) || a.start.localeCompare(b.start));
@@ -495,6 +498,8 @@ export async function allocOf(userId: string, date: string) {
   const rows = await db().select().from(schema.pipelineDayAlloc).where(and(eq(schema.pipelineDayAlloc.userId, userId), eq(schema.pipelineDayAlloc.date, date)));
   return {
     manual: new Map(rows.filter((r) => r.source === "manual").map((r) => [r.key, r.minutes])),
+    /** the order the person gave the day by dragging (key → position) */
+    order: new Map(rows.filter((r) => r.source === "order" && r.position !== null).map((r) => [r.key, r.position as number])),
     ai: new Map(rows.filter((r) => r.source === "ai").map((r) => [r.key, r])),
   };
 }
@@ -521,6 +526,11 @@ export async function buildPlan(userId: string, date: string, opts: { ai: boolea
   }
   // the time each item gets today: what the person set, else what the AI gave, else what it needs (in quarter hours)
   const alloc = await allocOf(userId, date);
+  // asking the AI to plan again puts the day in its order: the order given by hand is let go
+  if (opts.ai && alloc.order.size) {
+    await db().delete(schema.pipelineDayAlloc).where(and(eq(schema.pipelineDayAlloc.userId, userId), eq(schema.pipelineDayAlloc.date, date), eq(schema.pipelineDayAlloc.source, "order")));
+    alloc.order.clear();
+  }
   const [existing] = opts.reuse ? await db().select().from(schema.pipelineDayPlans).where(and(eq(schema.pipelineDayPlans.userId, userId), eq(schema.pipelineDayPlans.date, date))) : [];
   const keepAi = Boolean(existing && existing.source === "ai");
   const withTime = (i: DayItem): DayItem => {
@@ -591,6 +601,11 @@ export async function buildPlan(userId: string, date: string, opts: { ai: boolea
   // replanning after the end of the workday (evening): the rest of the day is open, from the next quarter hour
   const late = after !== undefined && after >= mins(settings.workEnd);
   const laySettings = late ? { ...settings, workStart: hhmm(after!), lunchStart: hhmm(after!), lunchEnd: hhmm(after!), workEnd: "23:45" } : settings;
+  // the order given by hand (drag and drop) wins over the AI's and the portal's; what it does not name follows
+  if (alloc.order.size) {
+    const pos = (k: string) => alloc.order.get(k) ?? 1e6;
+    ordered = ordered.map((i, n) => ({ i, n })).sort((a, b) => pos(a.i.key) - pos(b.i.key) || a.n - b.n).map((x) => x.i);
+  }
   const lay = layout(ordered, laySettings, busy, notes, after);
   // the blocked ones are listed after, so they are not forgotten
   for (const i of absent ? [] : items.filter((x) => x.blocked)) lay.blocks.push({ start: "", end: "", title: i.title, kind: i.kind, refId: i.refId, ...(i.projectId ? { projectId: i.projectId } : {}), ticketNumber: i.ticketNumber ?? null, priority: i.priority, note: locale === "en" ? "Waiting on another task" : "En attente d'une autre tâche", overflow: true });

@@ -6959,6 +6959,32 @@ describe("pipeline: shared to-dos and the day", () => {
     expect((await tech.put("/api/pipeline/day/alloc", { date: day, key: `ptask:${pt.id}`, minutes: 60 })).status).toBe(200);
     expect((await blocksOf()).plan.blocks.find((b: any) => b.refId === pt.id)).toMatchObject({ allocated: 60, need: 120, partial: true });
     await tech.put("/api/pipeline/day/alloc", { date: day, key: `ptask:${pt.id}`, minutes: null });
+    // dragging a block puts the day in the order given: the dragged item goes last, then first; a replan by the AI lets it go
+    const order = (keys: string[]) => tech.put("/api/pipeline/day/order", { date: day, keys });
+    const seq = async () => [...new Set((await blocksOf()).plan.blocks.filter((b: any) => b.refId && b.start).map((b: any) => `${b.kind}:${b.refId}`))] as string[];
+    const base = await seq();
+    expect(base.length).toBeGreaterThanOrEqual(2);
+    expect((await order([...base.filter((k) => k !== base[0]), base[0]])).status).toBe(200);
+    expect((await seq()).at(-1)).toBe(base[0]);
+    expect((await order([base[0]])).status).toBe(200);
+    expect((await seq())[0]).toBe(base[0]);
+    expect((await tech.put("/api/pipeline/day/order", { date: day, keys: ["task:00000000-0000-4000-8000-000000000000", "bad"] })).status).toBe(400);
+    expect((await tech.put("/api/pipeline/day/order", { date: day, keys: [base[0]], userId: "00000000-0000-4000-8000-000000000001" })).status).toBe(403);
+    await tech.put("/api/pipeline/day/order", { date: day, keys: [] });
+    // time blocked by hand: own block, takes its hours off the day, editable and removable by its owner
+    const capBefore = (await blocksOf()).plan.capacityMinutes as number;
+    const blk = await tech.post("/api/pipeline/day/blocks", { date: day, start: "09:00", end: "10:30", title: "Installation chez le client", note: "Sur place" });
+    expect(blk.status).toBe(201);
+    let withBlock = (await blocksOf()).plan;
+    expect(withBlock.blocks.find((b: any) => b.local)).toMatchObject({ kind: "event", refId: blk.json.id, start: "09:00", end: "10:30", title: "Installation chez le client", detail: "Sur place" });
+    expect(withBlock.capacityMinutes).toBe(capBefore - 90);
+    expect((await tech.post("/api/pipeline/day/blocks", { date: day, start: "11:00", end: "10:00", title: "x" })).status).toBe(400);
+    expect((await tech.post("/api/pipeline/day/blocks", { date: day, start: "09:00", end: "10:00", title: "x", userId: "00000000-0000-4000-8000-000000000001" })).status).toBe(403);
+    expect((await tech.patch(`/api/pipeline/day/blocks/${blk.json.id}`, { end: "09:30" })).status).toBe(200);
+    expect((await blocksOf()).plan.capacityMinutes).toBe(capBefore - 30);
+    expect((await tech.del(`/api/pipeline/day/blocks/${blk.json.id}`)).status).toBe(200);
+    expect((await blocksOf()).plan.capacityMinutes).toBe(capBefore);
+    expect((await tech.del(`/api/pipeline/day/blocks/${blk.json.id}`)).status).toBe(404);
     // a project task with only a checkpoint (17:00 when no time) is on the day by it, like a task or a ticket
     const pc = (await tech.post(`/api/projects/${proj.id}/milestones/${proj.milestones[0].id}/tasks`, { title: "Point de contrôle seul", assigneeId: me, checkpointDate: day })).json;
     expect(pc).toMatchObject({ checkpointDate: day, checkpointTime: "17:00" });
