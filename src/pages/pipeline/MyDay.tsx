@@ -245,7 +245,7 @@ export function MyDay({ onOpenTask }: { onOpenTask: (id: string) => void }) {
               <div className="h-2.5 overflow-hidden rounded-full bg-muted">
                 <div className={cn("h-full rounded-full transition-all", short > 0 ? "bg-gradient-to-r from-orange-400 to-red-500" : "bg-grad-gold")} style={{ width: `${plan.capacityMinutes ? pct : 0}%` }} />
               </div>
-              {data.absent || data.holiday || plan.capacityMinutes === 0 ? (
+              {data.absent ? (
                 <p className="flex items-center gap-1.5 text-sm text-muted-foreground">
                   <CalendarOff className="size-4" /> {t("pipeline.day.dayOff")}
                 </p>
@@ -369,6 +369,7 @@ function ItemList({ title, icon: Icon, items, loading, onOpen, onComplete, empty
     if (!e.over || e.active.id === e.over.id) return;
     const ids = shown.map((i) => i.key);
     save(arrayMove(ids, ids.indexOf(String(e.active.id)), ids.indexOf(String(e.over.id))));
+    if (sort !== "custom") setSort("custom");
   };
   return (
     <section className="glass rounded-2xl border p-4">
@@ -401,7 +402,7 @@ function ItemList({ title, icon: Icon, items, loading, onOpen, onComplete, empty
           <SortableContext items={shown.map((i) => i.key)} strategy={verticalListSortingStrategy}>
             <ul className="divide-y divide-[color:var(--glass-border)]">
               {shown.map((i) => (
-                <ItemRow key={i.key} i={i} custom={sort === "custom"} onOpen={onOpen} onComplete={onComplete} />
+                <ItemRow key={i.key} i={i} onOpen={onOpen} onComplete={onComplete} />
               ))}
             </ul>
           </SortableContext>
@@ -411,16 +412,14 @@ function ItemList({ title, icon: Icon, items, loading, onOpen, onComplete, empty
   );
 }
 
-function ItemRow({ i, custom, onOpen, onComplete }: { i: DayItem; custom: boolean; onOpen: (i: DayItem) => void; onComplete?: (i: DayItem) => void }) {
+function ItemRow({ i, onOpen, onComplete }: { i: DayItem; onOpen: (i: DayItem) => void; onComplete?: (i: DayItem) => void }) {
   const { t } = useTranslation();
-  const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id: i.key, disabled: !custom });
+  const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id: i.key });
   return (
     <li ref={setNodeRef} style={{ transform: CSS.Transform.toString(transform), transition }} className={cn("flex items-center gap-2.5 py-2", isDragging && "relative z-10 bg-background/80 opacity-80")}>
-      {custom && (
-        <button type="button" aria-label={t("projects.sort.drag")} className="cursor-grab touch-none text-muted-foreground hover:text-foreground active:cursor-grabbing" {...attributes} {...listeners}>
-          <GripVertical className="size-4" />
-        </button>
-      )}
+      <button type="button" aria-label={t("projects.sort.drag")} title={t("projects.sort.drag")} className="cursor-grab touch-none text-muted-foreground hover:text-foreground active:cursor-grabbing" {...attributes} {...listeners}>
+        <GripVertical className="size-4" />
+      </button>
       {onComplete && <Checkbox disabled={i.blocked} onCheckedChange={() => onComplete(i)} aria-label={t("pipeline.complete")} />}
       <span className={cn("size-2 shrink-0 rounded-full", PRIORITY_STYLE[i.priority].dot)} />
       <button type="button" onClick={() => onOpen(i)} className="min-w-0 flex-1 text-left">
@@ -442,8 +441,12 @@ function ItemRow({ i, custom, onOpen, onComplete }: { i: DayItem; custom: boolea
 /** The day from the start of work to its end, an hour on each side; the blocks are placed by their time. */
 function Timeline({ data, onOpen, hourPx }: { data: DayData; onOpen: (b: Block) => void; hourPx: number }) {
   const { t } = useTranslation();
-  const startH = Math.max(0, Math.floor(toMinutes(data.workHours.start) / 60) - 1);
-  const endH = Math.min(24, Math.ceil(toMinutes(data.workHours.end) / 60) + 1);
+  // the usual hours, widened to hold anything planned outside them (an evening, a weekend)
+  const shown = data.plan.blocks.filter((b) => b.start && b.end && !b.overflow && !b.allDay);
+  const lo = Math.min(toMinutes(data.workHours.start), ...shown.map((b) => toMinutes(b.start)));
+  const hi = Math.max(toMinutes(data.workHours.end), ...shown.map((b) => toMinutes(b.end)));
+  const startH = Math.max(0, Math.floor(lo / 60) - 1);
+  const endH = Math.min(24, Math.ceil(hi / 60) + 1);
   const hours = Array.from({ length: endH - startH }, (_, i) => startH + i);
   const placed = data.plan.blocks.filter((b) => !b.overflow && !b.allDay && b.start);
   const overflow = data.plan.blocks.filter((b) => b.overflow);

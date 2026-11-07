@@ -1,6 +1,7 @@
 import { createPortal } from "react-dom";
 import { createContext, useCallback, useContext, useEffect, useMemo, useState, type ReactNode } from "react";
 import { useTranslation } from "react-i18next";
+import { useLocation, useNavigate } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
 import { AnimatePresence, motion } from "motion/react";
 import { FolderKanban, ListTodo, Maximize2, X } from "lucide-react";
@@ -34,21 +35,48 @@ export function ProjectWorkspaceProvider({ enabled, children }: { enabled: boole
       /* the dock works without it */
     }
   }, [docked]);
+  const navigate = useNavigate();
+  const location = useLocation();
   const openTask = useCallback((projectId: string, taskId: string) => {
     setDocked((d) => d.filter((x) => x.taskId !== taskId));
     setCurrent({ projectId, taskId });
   }, []);
+  // restoring a task that was minimized with its project folder open brings the folder back behind it
+  const restore = useCallback(
+    (projectId: string, taskId: string) => {
+      const d = docked.find((x) => x.taskId === taskId);
+      if (d?.folder) {
+        // the folder first, then the task on top of it (a window opened later is drawn above the earlier one)
+        navigate(`/projects?project=${projectId}&tab=milestones`);
+        setTimeout(() => openTask(projectId, taskId), 250);
+      } else openTask(projectId, taskId);
+    },
+    [docked, navigate, openTask],
+  );
   const closeTask = useCallback(() => setCurrent(null), []);
-  const minimize = useCallback((t: DockedTask) => {
-    setDocked((d) => [...d.filter((x) => x.taskId !== t.taskId), t].slice(-6));
-    setCurrent(null);
-  }, []);
+  // minimizing a task also minimizes the project folder it was opened from (the whole project goes into the drawer)
+  const minimize = useCallback(
+    (t: DockedTask) => {
+      const q = new URLSearchParams(location.search);
+      const folder = q.get("project") === t.projectId;
+      setDocked((d) => [...d.filter((x) => x.taskId !== t.taskId), { ...t, folder }].slice(-6));
+      setCurrent(null);
+      if (folder) {
+        q.delete("project");
+        q.delete("tab");
+        q.delete("milestone");
+        q.delete("task");
+        navigate({ pathname: location.pathname, search: q.toString() }, { replace: true });
+      }
+    },
+    [location.pathname, location.search, navigate],
+  );
   const value = useMemo(() => ({ openTask, closeTask, current }), [openTask, closeTask, current]);
   return (
     <Ctx.Provider value={value}>
       {children}
       {enabled && current && <TaskDialog key={current.taskId} projectId={current.projectId} taskId={current.taskId} onClose={closeTask} onMinimize={minimize} />}
-      {enabled && <TaskDock docked={docked} onRestore={openTask} onDismiss={(id) => setDocked((d) => d.filter((x) => x.taskId !== id))} />}
+      {enabled && <TaskDock docked={docked} onRestore={restore} onDismiss={(id) => setDocked((d) => d.filter((x) => x.taskId !== id))} />}
     </Ctx.Provider>
   );
 }
@@ -88,7 +116,7 @@ function TaskDock({ docked, onRestore, onDismiss }: { docked: DockedTask[]; onRe
         const running = Boolean(d.timer);
         return (
           <motion.div key={d.taskId} layout initial={{ opacity: 0, y: 16, scale: 0.95 }} animate={{ opacity: 1, y: 0, scale: 1 }} exit={{ opacity: 0, y: 16, scale: 0.95 }} className="pointer-events-auto">
-            <div className={cn("group relative flex w-72 items-center gap-2 overflow-hidden rounded-xl border border-violet-400/40 bg-popover/95 py-1.5 pl-1.5 pr-1 shadow-[0_12px_40px_-12px_rgba(0,0,0,0.6),0_0_24px_-10px_rgba(167,139,250,0.45)]", running && "timer-field-tab border-violet-300/80")}>
+            <div className={cn("group relative flex w-72 items-center gap-2 overflow-hidden rounded-xl border border-violet-400/40 bg-popover/95 py-1.5 pl-1.5 pr-1 shadow-[0_12px_40px_-12px_rgba(0,0,0,0.6),0_0_24px_-10px_rgba(167,139,250,0.45)]", running && "project-live border-violet-300/80")}>
               <span aria-hidden className="absolute inset-y-0 left-0 w-1 bg-violet-400" />
               <button type="button" onClick={() => onRestore(d.projectId, d.taskId)} title={`${d.number} ${d.project ?? ""} — ${d.title}`} className="flex min-w-0 flex-1 items-center gap-2 pl-1.5 text-left">
                 <span className="flex size-9 shrink-0 items-center justify-center rounded-lg bg-violet-500/15 text-violet-300">

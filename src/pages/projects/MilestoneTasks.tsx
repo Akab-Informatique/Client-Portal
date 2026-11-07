@@ -38,6 +38,8 @@ export function MilestoneTasks({ projectId, m, onTask }: { projectId: string; m:
     if (!e.over || e.active.id === e.over.id) return;
     const ids = ordered.map((k) => k.id);
     save(arrayMove(ids, ids.indexOf(String(e.active.id)), ids.indexOf(String(e.over.id))));
+    // moving a task by hand in any sort puts the list in the technician's own order, starting from what they saw
+    if (sort !== "custom") setSort("custom");
   };
   return (
     <div>
@@ -64,7 +66,7 @@ export function MilestoneTasks({ projectId, m, onTask }: { projectId: string; m:
         <SortableContext items={ordered.map((k) => k.id)} strategy={verticalListSortingStrategy}>
           <ul className="space-y-1">
             {ordered.map((k) => (
-              <TaskRow key={k.id} k={k} custom={sort === "custom"} onTask={onTask} />
+              <TaskRow key={k.id} k={k} onTask={onTask} />
             ))}
           </ul>
         </SortableContext>
@@ -73,17 +75,15 @@ export function MilestoneTasks({ projectId, m, onTask }: { projectId: string; m:
   );
 }
 
-function TaskRow({ k, custom, onTask }: { k: Task; custom: boolean; onTask: (id: string) => void }) {
+function TaskRow({ k, onTask }: { k: Task; onTask: (id: string) => void }) {
   const { t } = useTranslation();
-  const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id: k.id, disabled: !custom });
+  const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id: k.id });
   return (
     <li ref={setNodeRef} style={{ transform: CSS.Transform.toString(transform), transition }} className={cn(isDragging && "relative z-10 opacity-80")}>
       <div className="flex items-center gap-1">
-        {custom && (
-          <button type="button" aria-label={t("projects.sort.drag")} className="cursor-grab touch-none rounded p-1 text-muted-foreground hover:text-foreground active:cursor-grabbing" {...attributes} {...listeners}>
-            <GripVertical className="size-4" />
-          </button>
-        )}
+        <button type="button" aria-label={t("projects.sort.drag")} title={t("projects.sort.drag")} className="cursor-grab touch-none rounded p-1 text-muted-foreground hover:text-foreground active:cursor-grabbing" {...attributes} {...listeners}>
+          <GripVertical className="size-4" />
+        </button>
         <button type="button" onClick={() => onTask(k.id)} className="flex min-w-0 flex-1 items-center gap-3 rounded-xl border bg-background/40 px-3 py-2 text-left text-sm transition-colors hover:border-[color:var(--gold)]/40">
           <span className={cn("size-2 shrink-0 rounded-full", PRIORITY_DOT[k.priority])} title={t(`projects.priority.${k.priority}`)} />
           {k.waiting && <Lock className="size-3.5 shrink-0 text-fuchsia-300" aria-label={t("projects.waitsFor")} />}

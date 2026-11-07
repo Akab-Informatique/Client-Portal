@@ -480,7 +480,7 @@ function rulesSummary(items: DayItem[], cap: number, planned: number, overflow: 
   const t = items.filter((i) => i.kind === "ticket").length;
   const k = items.filter((i) => i.kind !== "ticket").length;
   if (absent) return locale === "en" ? "You are marked absent today: nothing is planned." : "Vous êtes marqué absent aujourd'hui : rien n'est planifié.";
-  if (holiday) return locale === "en" ? "Today is a day off: nothing is planned." : "Aujourd'hui est un jour de congé : rien n'est planifié.";
+  if (holiday && !items.length) return locale === "en" ? "Today is a day off: nothing is due." : "Aujourd'hui est un jour de congé : rien n'est échu.";
   if (!items.length) return locale === "en" ? "Nothing due today. A good day to move the backlog forward." : "Rien d'échu aujourd'hui. Bonne journée pour faire avancer le reste.";
   const over = items.filter((i) => i.overdue).length;
   const pins = items.filter((i) => i.pin).length;
@@ -511,7 +511,7 @@ export async function buildPlan(userId: string, date: string, opts: { ai: boolea
   const cal = await calendarOfDay(userId, date);
   const calEvents = cal.events.filter((e) => !e.free);
   const busy: Busy[] = [...day.busy, ...calEvents.map((e) => ({ start: e.start, end: e.end, title: e.title, o365: true, allDay: e.allDay }))];
-  // a holiday or a weekend: a day off, nothing is planned
+  // a holiday or a weekend is a day off, but what is due (a checkpoint today…) is still laid out in the usual hours; only an absence plans nothing
   const holiday = day.holiday || !isWorkday(date);
   // replanning during the day: what is left is laid out from the next quarter hour (Québec time), not from the morning
   let after: number | undefined;
@@ -528,7 +528,7 @@ export async function buildPlan(userId: string, date: string, opts: { ai: boolea
     const given = alloc.manual.get(i.key) ?? (keepAi || opts.ai ? alloc.ai.get(i.key)?.minutes : undefined);
     return { ...i, need, minutes: given ?? need };
   };
-  const planable = absent || holiday ? [] : items.filter((i) => !i.blocked).sort(byUrgency).map(withTime);
+  const planable = absent ? [] : items.filter((i) => !i.blocked).sort(byUrgency).map(withTime);
   let ordered = planable;
   let notes = new Map<string, string>();
   let summary = "";
@@ -588,10 +588,13 @@ export async function buildPlan(userId: string, date: string, opts: { ai: boolea
       }
     } else aiError = s.apiKey ? "disabled" : "not_configured";
   }
-  const lay = layout(ordered, settings, busy, notes, after);
+  // replanning after the end of the workday (evening): the rest of the day is open, from the next quarter hour
+  const late = after !== undefined && after >= mins(settings.workEnd);
+  const laySettings = late ? { ...settings, workStart: hhmm(after!), lunchStart: hhmm(after!), lunchEnd: hhmm(after!), workEnd: "23:45" } : settings;
+  const lay = layout(ordered, laySettings, busy, notes, after);
   // the blocked ones are listed after, so they are not forgotten
-  for (const i of absent || holiday ? [] : items.filter((x) => x.blocked)) lay.blocks.push({ start: "", end: "", title: i.title, kind: i.kind, refId: i.refId, ...(i.projectId ? { projectId: i.projectId } : {}), ticketNumber: i.ticketNumber ?? null, priority: i.priority, note: locale === "en" ? "Waiting on another task" : "En attente d'une autre tâche", overflow: true });
-  const cap = absent || holiday ? 0 : lay.capacityMinutes;
+  for (const i of absent ? [] : items.filter((x) => x.blocked)) lay.blocks.push({ start: "", end: "", title: i.title, kind: i.kind, refId: i.refId, ...(i.projectId ? { projectId: i.projectId } : {}), ticketNumber: i.ticketNumber ?? null, priority: i.priority, note: locale === "en" ? "Waiting on another task" : "En attente d'une autre tâche", overflow: true });
+  const cap = absent ? 0 : lay.capacityMinutes;
   if (!summary) summary = rulesSummary(planable, cap, lay.plannedMinutes, lay.overflowMinutes, locale, absent, holiday);
   const values = { userId, date, summary, blocks: lay.blocks, capacityMinutes: cap, plannedMinutes: lay.plannedMinutes + lay.overflowMinutes, source, calendar: cal.status, calendarEvents: calEvents.length, updatedAt: new Date() };
   const [row] = await db()

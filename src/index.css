@@ -488,7 +488,30 @@
   animation-duration: 0.9s;
   animation-direction: reverse;
 }
-/* the tab form: the same field along its border */
+/* a minimized project whose timer runs: a calm violet glow that breathes (no moving light) */
+.project-live {
+  animation: project-breathe 2.6s ease-in-out infinite;
+}
+@keyframes project-breathe {
+  0%,
+  100% {
+    box-shadow: 0 12px 40px -12px rgba(0, 0, 0, 0.6), 0 0 6px 0 rgba(167, 139, 250, 0.25);
+  }
+  50% {
+    box-shadow: 0 12px 40px -12px rgba(0, 0, 0, 0.6), 0 0 18px 2px rgba(167, 139, 250, 0.6);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .project-live {
+    animation: none;
+  }
+}
+/* the tab form: the same field along its border (it must never catch a click meant for the card under it) */
+.timer-field-tab::before,
+.timer-field-hex::before,
+.timer-field-hex::after {
+  pointer-events: none;
+}
 .timer-field-tab::before {
   content: "";
   position: absolute;

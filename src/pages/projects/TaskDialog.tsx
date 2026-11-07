@@ -20,7 +20,7 @@ import { shortDate, shortDateTime } from "@/pages/tickets/shared";
 import { apiMessage, clock, hoursText, KEY, PRIORITIES, PRIORITY_DOT, TASK_STATUSES, TASK_STYLE, today, useProjectPeople, type ProjectDetail, type TaskDetail, type TaskStatus } from "./shared";
 
 /** What a minimized task keeps to be shown in the dock */
-export type DockedTask = { projectId: string; taskId: string; number: string; project?: string; title: string; milestone: string; status: TaskStatus };
+export type DockedTask = { folder?: boolean; projectId: string; taskId: string; number: string; project?: string; title: string; milestone: string; status: TaskStatus };
 
 /** A text saved when you leave it (Enter too for a single line) */
 function Saved({ value, onSave, multiline, className, ...rest }: { value: string; onSave: (v: string) => void; multiline?: boolean; className?: string; placeholder?: string; maxLength?: number; rows?: number; "aria-label"?: string }) {

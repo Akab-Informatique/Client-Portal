@@ -7164,9 +7164,10 @@ describe("pipeline: shared to-dos and the day", () => {
     const again = (await tech.post("/api/pipeline/day/plan", { date: "2026-03-04" })).json;
     expect(again.plan.source).toBe("rules");
     expect(["not_configured", "disabled"]).toContain(again.aiError);
-    // a weekend or a holiday plans nothing
+    // a weekend or a holiday still lays out what is due (a checkpoint that day), in the usual hours
     const sat = (await tech.get("/api/pipeline/day?date=2026-03-07")).json;
-    expect(sat.plan.blocks.filter((b: any) => b.kind === "task")).toEqual([]);
+    expect(sat.plan.capacityMinutes).toBe(480);
+    expect(sat.plan.blocks.some((b: any) => b.title === "Appeler le fournisseur" && b.start === "08:00")).toBe(true);
     // someone else's day: managers only
     expect((await tech.get(`/api/pipeline/day?userId=${(await admin.get("/api/me")).json.id}`)).status).toBe(403);
     expect((await admin.get(`/api/pipeline/day?userId=${me}`)).status).toBe(200);
