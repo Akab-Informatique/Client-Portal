@@ -7,26 +7,26 @@ import { api } from "@/lib/api";
 import { cn } from "@/lib/utils";
 import { PRIORITY_STYLE, hm, type DayData } from "./shared";
 
-type Row = { key: string; kind: "ticket" | "task"; refId: string; title: string; ticketNumber?: string | null; priority: string; given: number; need: number; overflow: boolean; manual: boolean };
+type Row = { key: string; kind: "ticket" | "task" | "ptask"; projectId?: string; refId: string; title: string; ticketNumber?: string | null; priority: string; given: number; need: number; overflow: boolean; manual: boolean };
 
 /**
  * The time given to each item of the day, in the order of the grid: one slider per ticket or task, in quarter hours.
  * Giving less than what an item needs is fine (some time goes in, the checkpoint is moved later when it is done).
  * The grid is laid out again at each change, so one sees at once whether everything fits.
  */
-export function TimeShare({ data, canEdit, forUser, onOpen, onSaved }: { data: DayData; canEdit: boolean; forUser?: string; onOpen: (kind: "ticket" | "task", id: string) => void; onSaved: () => void }) {
+export function TimeShare({ data, canEdit, forUser, onOpen, onSaved }: { data: DayData; canEdit: boolean; forUser?: string; onOpen: (kind: "ticket" | "task" | "ptask", id: string, projectId?: string) => void; onSaved: () => void }) {
   const { t } = useTranslation();
   // the items in the order of the grid (the first block of each), then the ones that did not fit
   const seen = new Set<string>();
   const rows: Row[] = [];
   for (const b of [...data.plan.blocks.filter((x) => !x.overflow), ...data.plan.blocks.filter((x) => x.overflow)]) {
-    if ((b.kind !== "ticket" && b.kind !== "task") || !b.refId || b.done) continue;
+    if ((b.kind !== "ticket" && b.kind !== "task" && b.kind !== "ptask") || !b.refId || b.done) continue;
     const key = `${b.kind}:${b.refId}`;
     if (seen.has(key)) continue;
     seen.add(key);
     const item = data.items.find((i) => i.key === key);
     if (!item) continue;
-    rows.push({ key, kind: b.kind, refId: b.refId, title: item.masked ? "" : item.title, ticketNumber: item.ticketNumber, priority: item.priority, given: b.allocated ?? item.minutes, need: b.need ?? item.minutes, overflow: Boolean(b.overflow), manual: data.allocations[key]?.source === "manual" });
+    rows.push({ key, kind: b.kind, projectId: b.projectId, refId: b.refId, title: item.masked ? "" : item.title, ticketNumber: item.ticketNumber, priority: item.priority, given: b.allocated ?? item.minutes, need: b.need ?? item.minutes, overflow: Boolean(b.overflow), manual: data.allocations[key]?.source === "manual" });
   }
   if (!rows.length) return null;
   const total = rows.reduce((n, r) => n + r.given, 0);
@@ -53,7 +53,7 @@ export function TimeShare({ data, canEdit, forUser, onOpen, onSaved }: { data: D
   );
 }
 
-function ShareRow({ r, date, canEdit, forUser, onOpen, onSaved }: { r: Row; date: string; canEdit: boolean; forUser?: string; onOpen: (kind: "ticket" | "task", id: string) => void; onSaved: () => void }) {
+function ShareRow({ r, date, canEdit, forUser, onOpen, onSaved }: { r: Row; date: string; canEdit: boolean; forUser?: string; onOpen: (kind: "ticket" | "task" | "ptask", id: string, projectId?: string) => void; onSaved: () => void }) {
   const { t } = useTranslation();
   const [value, setValue] = useState(r.given);
   const timer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
@@ -74,9 +74,10 @@ function ShareRow({ r, date, canEdit, forUser, onOpen, onSaved }: { r: Row; date
   const partial = value < r.need;
   return (
     <li className="grid grid-cols-[minmax(0,1fr)_auto] items-center gap-x-3 gap-y-0.5 rounded-lg px-1.5 py-1 hover:bg-muted/30 sm:grid-cols-[minmax(0,1.2fr)_minmax(120px,1fr)_auto]">
-      <button type="button" onClick={() => onOpen(r.kind, r.refId)} className="flex min-w-0 items-baseline gap-2 text-left">
+      <button type="button" onClick={() => onOpen(r.kind, r.refId, r.projectId)} className="flex min-w-0 items-baseline gap-2 text-left">
         <span className={cn("size-2 shrink-0 translate-y-px rounded-full", PRIORITY_STYLE[r.priority as keyof typeof PRIORITY_STYLE]?.dot)} />
-        {r.ticketNumber && <span className="shrink-0 font-mono text-[11px] text-primary">{r.ticketNumber}</span>}
+        {r.kind === "ptask" && <span className="shrink-0 rounded-full bg-teal-400/15 px-1.5 text-[9px] font-semibold uppercase tracking-wide text-teal-300">{t("pipeline.day.share.project")}</span>}
+        {r.ticketNumber && <span className={cn("shrink-0 font-mono text-[11px]", r.kind === "ptask" ? "text-teal-300" : "text-primary")}>{r.ticketNumber}</span>}
         <span className={cn("truncate text-[13px]", r.overflow && "text-muted-foreground")}>{r.title || t("pipeline.private")}</span>
       </button>
       <input

@@ -275,7 +275,7 @@ export const pipelineRoutes = new Hono<AppEnv>()
     const hidden = new Set(view.items.filter((i) => i.masked).map((i) => i.refId));
     // a planned block whose work is no longer on the day's list was done (or taken off): shown struck out
     const live = new Set(view.items.map((i) => i.key));
-    const withDone = (bl: typeof stored.blocks) => bl.map((b) => ((b.kind === "task" || b.kind === "ticket") && b.refId && !live.has(`${b.kind}:${b.refId}`) ? { ...b, done: true } : b));
+    const withDone = (bl: typeof stored.blocks) => bl.map((b) => ((b.kind === "task" || b.kind === "ptask" || b.kind === "ticket") && b.refId && !live.has(`${b.kind}:${b.refId}`) ? { ...b, done: true } : b));
     const plan = viewing
       ? {
           ...stored,
@@ -284,7 +284,7 @@ export const pipelineRoutes = new Hono<AppEnv>()
         }
       : { ...stored, blocks: withDone(stored.blocks) };
     // the AI's plan does not follow the list: tell when something to do is not in it
-    const planned = new Set(plan.blocks.filter((b) => (b.kind === "task" || b.kind === "ticket") && b.refId).map((b) => `${b.kind}:${b.refId}`));
+    const planned = new Set(plan.blocks.filter((b) => (b.kind === "task" || b.kind === "ptask" || b.kind === "ticket") && b.refId).map((b) => `${b.kind}:${b.refId}`));
     // also when the Outlook calendar changed (a meeting added or moved)
     const cal = plan.source === "ai" ? await calendarOfDay(userId, date).catch(() => null) : null;
     const stale = plan.source === "ai" && (view.items.some((i) => !i.blocked && !planned.has(i.key)) || (cal !== null && cal.events.filter((e) => !e.free).length !== plan.calendarEvents));
@@ -393,7 +393,7 @@ export const pipelineRoutes = new Hono<AppEnv>()
    */
   .put("/day/alloc", requirePermission("pipeline.edit"), async (c) => {
     const a = auth(c);
-    const p = await body(c, z.object({ date: zDate.optional(), userId: zUuid.optional(), key: z.string().regex(/^(ticket:\d+|task:[0-9a-f-]{36})$/), minutes: z.number().int().min(15).max(480).nullable() }));
+    const p = await body(c, z.object({ date: zDate.optional(), userId: zUuid.optional(), key: z.string().regex(/^(ticket:\d+|task:[0-9a-f-]{36}|ptask:[0-9a-f-]{36})$/), minutes: z.number().int().min(15).max(480).nullable() }));
     const who = await dayTarget(a, p.userId);
     const date = p.date ?? todayQc();
     const view = await dayItems(who, date, a.user.id);

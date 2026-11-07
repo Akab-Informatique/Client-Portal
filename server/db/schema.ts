@@ -2529,7 +2529,9 @@ export type PipelineBlock = {
   start: string;
   end: string;
   title: string;
-  kind: "task" | "ticket" | "event" | "break";
+  kind: "task" | "ptask" | "ticket" | "event" | "break";
+  /** For a project task: its project (the id opens it) */
+  projectId?: string;
   /** The task id, or the ticket id */
   refId: string | null;
   ticketNumber?: string | null;

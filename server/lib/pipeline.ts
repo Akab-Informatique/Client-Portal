@@ -80,7 +80,9 @@ const nextDay = (date: string) => new Date(new Date(`${date}T12:00:00Z`).getTime
 // ── what is on the day ──
 export type DayItem = {
   key: string;
-  kind: "task" | "ticket";
+  kind: "task" | "ptask" | "ticket";
+  /** A project task: its project (number and name go in ticketNumber and client) */
+  projectId?: string;
   refId: string;
   title: string;
   priority: "urgent" | "high" | "normal" | "low";
@@ -219,6 +221,31 @@ export async function dayItems(userId: string, date: string, viewerId: string = 
       minutes: t.estimateMinutes ?? 30,
       ticketNumber: masked ? null : t.ticketNumber,
       blocked: t.status === "blocked" || (t.blockedById !== null && openIds.has(t.blockedById)),
+    });
+  }
+  // tasks of projects given to the technician: due by the day, under way or urgent (marked with their project)
+  const ptasks = await d
+    .select({ t: schema.projectTasks, pid: schema.projects.id, pnum: schema.projects.number, pname: schema.projects.name, ms: schema.projectMilestones.name })
+    .from(schema.projectTasks)
+    .innerJoin(schema.projects, eq(schema.projects.id, schema.projectTasks.projectId))
+    .innerJoin(schema.projectMilestones, eq(schema.projectMilestones.id, schema.projectTasks.milestoneId))
+    .where(and(eq(schema.projectTasks.assigneeId, userId), ne(schema.projectTasks.status, "done"), inArray(schema.projects.status, ["planning", "active"])));
+  for (const r of ptasks) {
+    const t = r.t;
+    if (!(t.status === "doing" || t.priority === "urgent" || (t.dueDate !== null && t.dueDate <= date))) continue;
+    items.push({
+      key: `ptask:${t.id}`,
+      kind: "ptask",
+      refId: t.id,
+      projectId: r.pid,
+      title: t.title,
+      priority: t.priority,
+      due: t.dueDate,
+      overdue: t.dueDate !== null && t.dueDate < date,
+      minutes: t.estimateMinutes ?? 60,
+      ticketNumber: r.pnum,
+      client: `${r.pname} · ${r.ms}`,
+      blocked: t.status === "blocked",
     });
   }
   // the technician's open tickets due by the end of the day, and the ones pinned for the day
@@ -413,6 +440,7 @@ export function layout(items: DayItem[], s: Pick<PipelineSettings, "workStart" |
         title: first ? it.title : `${it.title}`,
         kind: it.kind,
         refId: it.refId,
+        ...(it.projectId ? { projectId: it.projectId } : {}),
         ticketNumber: it.ticketNumber ?? null,
         priority: it.priority,
         ...(it.pin ? { pinned: it.pin } : {}),
@@ -426,7 +454,7 @@ export function layout(items: DayItem[], s: Pick<PipelineSettings, "workStart" |
     }
     if (left > 0) {
       overflowMinutes += left;
-      blocks.push({ start: "", end: "", title: it.title, kind: it.kind, refId: it.refId, ticketNumber: it.ticketNumber ?? null, priority: it.priority, ...(it.pin ? { pinned: it.pin } : {}), note: notes.get(it.key) ?? it.pinNote ?? null, overflow: true, allocated: total, need: ceil15(it.need ?? total) });
+      blocks.push({ start: "", end: "", title: it.title, kind: it.kind, refId: it.refId, ...(it.projectId ? { projectId: it.projectId } : {}), ticketNumber: it.ticketNumber ?? null, priority: it.priority, ...(it.pin ? { pinned: it.pin } : {}), note: notes.get(it.key) ?? it.pinNote ?? null, overflow: true, allocated: total, need: ceil15(it.need ?? total) });
     }
   }
   for (const b of busy) {
@@ -443,7 +471,7 @@ const hours = (m: number) => `${Math.floor(m / 60)} h${m % 60 ? ` ${String(m % 6
 /** The summary written by the portal's own rules (AI off, or it failed) */
 function rulesSummary(items: DayItem[], cap: number, planned: number, overflow: number, locale: "fr" | "en", absent: boolean, holiday: boolean): string {
   const t = items.filter((i) => i.kind === "ticket").length;
-  const k = items.filter((i) => i.kind === "task").length;
+  const k = items.filter((i) => i.kind !== "ticket").length;
   if (absent) return locale === "en" ? "You are marked absent today: nothing is planned." : "Vous êtes marqué absent aujourd'hui : rien n'est planifié.";
   if (holiday) return locale === "en" ? "Today is a day off: nothing is planned." : "Aujourd'hui est un jour de congé : rien n'est planifié.";
   if (!items.length) return locale === "en" ? "Nothing due today. A good day to move the backlog forward." : "Rien d'échu aujourd'hui. Bonne journée pour faire avancer le reste.";
@@ -514,7 +542,7 @@ export async function buildPlan(userId: string, date: string, opts: { ai: boolea
     const s = await aiSettings();
     if (s.enabled && s.apiKey) {
       try {
-        const lines = planable.map((i) => `- ${i.key} · ${i.kind === "ticket" ? `billet ${i.ticketNumber ?? ""}` : "tâche"} · « ${i.title} »${i.client ? ` · client ${i.client}` : ""} · priorité ${i.priority} · échéance ${i.due ?? "aucune"}${i.dueTime ? ` ${i.dueTime}` : ""}${i.overdue ? " (EN RETARD)" : ""}${i.pin ? ` · PRIORITÉ ${i.pin === "day" ? "DU JOUR" : "DE LA SEMAINE"}${i.pinNote ? ` (directive : ${i.pinNote})` : ""}` : ""}${i.notBefore !== undefined ? ` · pas avant ${hhmm(i.notBefore)}` : ""} · estimation ${i.need ?? i.minutes} min${alloc.manual.has(i.key) ? ` · TEMPS IMPOSÉ PAR LE TECHNICIEN : ${alloc.manual.get(i.key)} min` : ""}`);
+        const lines = planable.map((i) => `- ${i.key} · ${i.kind === "ticket" ? `billet ${i.ticketNumber ?? ""}` : i.kind === "ptask" ? `tâche du projet ${i.ticketNumber ?? ""}` : "tâche"} · « ${i.title} »${i.client ? ` · client ${i.client}` : ""} · priorité ${i.priority} · échéance ${i.due ?? "aucune"}${i.dueTime ? ` ${i.dueTime}` : ""}${i.overdue ? " (EN RETARD)" : ""}${i.pin ? ` · PRIORITÉ ${i.pin === "day" ? "DU JOUR" : "DE LA SEMAINE"}${i.pinNote ? ` (directive : ${i.pinNote})` : ""}` : ""}${i.notBefore !== undefined ? ` · pas avant ${hhmm(i.notBefore)}` : ""} · estimation ${i.need ?? i.minutes} min${alloc.manual.has(i.key) ? ` · TEMPS IMPOSÉ PAR LE TECHNICIEN : ${alloc.manual.get(i.key)} min` : ""}`);
         const agenda = calEvents.filter((e) => !e.allDay).map((e) => `- ${hhmm(e.start)}–${hhmm(e.end)} ${e.title}`);
         const free = layout([], settings, busy, new Map(), after).capacityMinutes;
         const out = await askClaudeJson<{ summary?: unknown; order?: { ref?: unknown; note?: unknown; minutes?: unknown }[] }>({
@@ -555,7 +583,7 @@ export async function buildPlan(userId: string, date: string, opts: { ai: boolea
   }
   const lay = layout(ordered, settings, busy, notes, after);
   // the blocked ones are listed after, so they are not forgotten
-  for (const i of absent || holiday ? [] : items.filter((x) => x.blocked)) lay.blocks.push({ start: "", end: "", title: i.title, kind: i.kind, refId: i.refId, ticketNumber: i.ticketNumber ?? null, priority: i.priority, note: locale === "en" ? "Waiting on another task" : "En attente d'une autre tâche", overflow: true });
+  for (const i of absent || holiday ? [] : items.filter((x) => x.blocked)) lay.blocks.push({ start: "", end: "", title: i.title, kind: i.kind, refId: i.refId, ...(i.projectId ? { projectId: i.projectId } : {}), ticketNumber: i.ticketNumber ?? null, priority: i.priority, note: locale === "en" ? "Waiting on another task" : "En attente d'une autre tâche", overflow: true });
   const cap = absent || holiday ? 0 : lay.capacityMinutes;
   if (!summary) summary = rulesSummary(planable, cap, lay.plannedMinutes, lay.overflowMinutes, locale, absent, holiday);
   const values = { userId, date, summary, blocks: lay.blocks, capacityMinutes: cap, plannedMinutes: lay.plannedMinutes + lay.overflowMinutes, source, calendar: cal.status, calendarEvents: calEvents.length, updatedAt: new Date() };
@@ -587,7 +615,7 @@ export async function buildPipelineView(userId: string, date: string, viewerId: 
 
 // ── the morning text ──
 export function planSms(name: string, plan: { blocks: PipelineBlock[]; capacityMinutes: number; plannedMinutes: number }, locale: "fr" | "en"): string | null {
-  const work = plan.blocks.filter((b) => b.kind === "task" || b.kind === "ticket");
+  const work = plan.blocks.filter((b) => b.kind === "task" || b.kind === "ptask" || b.kind === "ticket");
   const seen = new Set<string>();
   const unique = work.filter((b) => {
     const k = `${b.kind}:${b.refId}`;

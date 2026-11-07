@@ -6948,6 +6948,17 @@ describe("pipeline: shared to-dos and the day", () => {
     d = await blocksOf();
     expect(d.plan.blocks.find((b: any) => b.refId === task.id)).toMatchObject({ allocated: 105, need: 105 });
     expect(d.allocations[key]).toBeUndefined();
+    // a task of a project is on the day too, marked with its project, and its time can be given like the others
+    const proj = (await tech.post("/api/projects", { name: "Migration du jour", milestones: [{ name: "Phase A" }] })).json;
+    const pt = (await tech.post(`/api/projects/${proj.id}/milestones/${proj.milestones[0].id}/tasks`, { title: "Préparer le serveur", assigneeId: me, dueDate: day, estimateHours: 2 })).json;
+    d = await blocksOf();
+    const item = d.items.find((i: any) => i.key === `ptask:${pt.id}`);
+    expect(item).toMatchObject({ kind: "ptask", projectId: proj.id, ticketNumber: proj.number, minutes: 120 });
+    expect(item.client).toContain("Migration du jour");
+    expect(d.plan.blocks.find((b: any) => b.refId === pt.id)).toMatchObject({ kind: "ptask", projectId: proj.id, allocated: 120 });
+    expect((await tech.put("/api/pipeline/day/alloc", { date: day, key: `ptask:${pt.id}`, minutes: 60 })).status).toBe(200);
+    expect((await blocksOf()).plan.blocks.find((b: any) => b.refId === pt.id)).toMatchObject({ allocated: 60, need: 120, partial: true });
+    await tech.put("/api/pipeline/day/alloc", { date: day, key: `ptask:${pt.id}`, minutes: null });
   });
 
   it("a ticket put on my day by hand: a time, nothing changes on the ticket, gone the next day", async () => {

@@ -68,7 +68,9 @@ export type Block = {
   start: string;
   end: string;
   title: string;
-  kind: "task" | "ticket" | "event" | "break";
+  kind: "task" | "ptask" | "ticket" | "event" | "break";
+  /** A project task: its project */
+  projectId?: string;
   refId: string | null;
   ticketNumber?: string | null;
   priority?: string | null;
@@ -90,7 +92,9 @@ export type Block = {
 
 export type DayItem = {
   key: string;
-  kind: "task" | "ticket";
+  kind: "task" | "ptask" | "ticket";
+  /** A project task: its project (number in ticketNumber, name and phase in client) */
+  projectId?: string;
   refId: string;
   title: string;
   priority: TaskPriority;

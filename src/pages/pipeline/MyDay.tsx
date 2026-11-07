@@ -17,6 +17,7 @@ import { PRIORITY_STYLE, addDays, dayLabel, hm, longDay, todayYmd, toMinutes, ty
 import { taskError, usePeople } from "./TaskDialog";
 import { DayProjects, MyTickets, Priorities } from "./DayLists";
 import { TimeShare } from "./TimeShare";
+import { useProjectWorkspace } from "@/pages/projects/ProjectWorkspace";
 
 /** The hours shown on the timeline: from an hour before the day starts to an hour after it ends */
 const DEFAULT_HOUR_PX = 60;
@@ -31,6 +32,7 @@ export function MyDay({ onOpenTask }: { onOpenTask: (id: string) => void }) {
   const can = useCan();
   const qc = useQueryClient();
   const ws = useTicketWorkspace();
+  const pws = useProjectWorkspace();
   const people = usePeople();
   const [date, setDate] = useState(todayYmd());
   const [userId, setUserId] = useState<string>(me.id);
@@ -148,7 +150,8 @@ export function MyDay({ onOpenTask }: { onOpenTask: (id: string) => void }) {
     },
     onError: (e) => toast.error(taskError(t, e)),
   });
-  const open = (i: DayItem) => (i.kind === "ticket" ? ws.open(Number(i.refId)) : onOpenTask(i.refId));
+  const open = (i: DayItem) => (i.kind === "ticket" ? ws.open(Number(i.refId)) : i.kind === "ptask" ? i.projectId && pws.openTask(i.projectId, i.refId) : onOpenTask(i.refId));
+  const projectTasks = (data?.items ?? []).filter((i) => i.kind === "ptask");
   const when = plan ? new Date(plan.updatedAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }) : "";
 
   return (
@@ -297,11 +300,11 @@ export function MyDay({ onOpenTask }: { onOpenTask: (id: string) => void }) {
                   ))}
               </div>
             )}
-            {isLoading || !data ? <Skeleton className="h-96 w-full" /> : <Timeline data={data} hourPx={hourPx} onOpen={(b) => (b.kind === "ticket" ? ws.open(Number(b.refId)) : b.refId && onOpenTask(b.refId))} />}
+            {isLoading || !data ? <Skeleton className="h-96 w-full" /> : <Timeline data={data} hourPx={hourPx} onOpen={(b) => (b.kind === "ticket" ? ws.open(Number(b.refId)) : b.kind === "ptask" ? b.projectId && b.refId && pws.openTask(b.projectId, b.refId) : b.refId && onOpenTask(b.refId))} />}
             <div role="separator" aria-orientation="horizontal" title={t("pipeline.day.resizeHeight")} aria-label={t("pipeline.day.resizeHeight")} onPointerDown={startResize} onDoubleClick={() => setHourPx(DEFAULT_HOUR_PX)} className="group mt-2 flex h-3 cursor-row-resize touch-none items-center justify-center">
               <span className="h-0.5 w-16 rounded-full bg-[color:var(--glass-border)] transition-colors group-hover:bg-[color:var(--gold)]/60 group-active:bg-[color:var(--gold)]" />
             </div>
-            {data && !isLoading && <TimeShare data={data} canEdit={can("pipeline.edit") && (userId === me.id || can("pipeline.manage"))} forUser={userId === me.id ? undefined : userId} onOpen={(k, id) => (k === "ticket" ? ws.open(Number(id)) : onOpenTask(id))} onSaved={refresh} />}
+            {data && !isLoading && <TimeShare data={data} canEdit={can("pipeline.edit") && (userId === me.id || can("pipeline.manage"))} forUser={userId === me.id ? undefined : userId} onOpen={(k, id, projectId) => (k === "ticket" ? ws.open(Number(id)) : k === "ptask" ? projectId && pws.openTask(projectId, id) : onOpenTask(id))} onSaved={refresh} />}
             <p className="mt-3 text-[11px] text-muted-foreground">{t("pipeline.day.suggestion")}</p>
           </section>
         </div>
@@ -322,6 +325,7 @@ export function MyDay({ onOpenTask }: { onOpenTask: (id: string) => void }) {
           <Priorities items={data?.items ?? []} horizon="week" onOpen={open} />
           <MyTickets userId={userId} mine={userId === me.id} onOpen={(id) => ws.open(id)} />
           {userId === me.id && can("projects.view") && <DayProjects />}
+          {projectTasks.length > 0 && <ItemList title={t("pipeline.day.projectTasks")} icon={Workflow} items={projectTasks} loading={false} onOpen={open} empty="" />}
           <ItemList title={t("pipeline.day.tasksToday")} icon={Workflow} items={taskItems} loading={allTasks.isLoading} onOpen={open} onComplete={can("pipeline.edit") ? (i) => (i.reminder ? check.mutate(i.refId) : complete.mutate(i.refId)) : undefined} empty={t("pipeline.day.noTasks")} />
           {can("pipeline.edit") && (
             <form
@@ -412,6 +416,7 @@ function Timeline({ data, onOpen, hourPx }: { data: DayData; onOpen: (b: Block) 
                 </div>
               );
             const task = b.kind === "task";
+            const ptask = b.kind === "ptask";
             const event = b.kind === "event";
             return (
               <button
@@ -426,7 +431,9 @@ function Timeline({ data, onOpen, hourPx }: { data: DayData; onOpen: (b: Block) 
                     ? b.o365
                       ? "border-sky-400/40 bg-sky-500/10 text-sky-100"
                       : "border-slate-400/30 bg-slate-500/10 text-slate-300"
-                    : task
+                    : ptask
+                      ? "border-teal-400/50 bg-teal-500/10"
+                      : task
                       ? "border-violet-400/40 bg-violet-500/10"
                       : b.priority === "urgent"
                         ? "border-red-400/50 bg-red-500/10"
@@ -441,7 +448,8 @@ function Timeline({ data, onOpen, hourPx }: { data: DayData; onOpen: (b: Block) 
                   </span>
                   {b.pinned && <Star className={cn("size-2.5 fill-current", b.pinned === "day" ? "text-primary" : "text-muted-foreground")} />}
                   {b.partial && <span className="rounded-full bg-orange-400/15 px-1.5 text-[9px] font-semibold uppercase tracking-wide text-orange-300">{t("pipeline.day.share.partial")}</span>}
-                  {b.ticketNumber && <span className="font-mono text-[10px] text-primary">{b.ticketNumber}</span>}
+                  {ptask && <span className="rounded-full bg-teal-400/15 px-1.5 text-[9px] font-semibold uppercase tracking-wide text-teal-300">{t("pipeline.day.share.project")}</span>}
+                  {b.ticketNumber && <span className={cn("font-mono text-[10px]", ptask ? "text-teal-300" : "text-primary")}>{b.ticketNumber}</span>}
                   {b.o365 && <span className="flex items-center gap-0.5 text-[10px] font-semibold uppercase tracking-wide text-sky-300"><CalendarDays className="size-2.5" /> Outlook</span>}
                   {b.masked && <EyeOff className="size-3 text-muted-foreground" />}
                 </span>
