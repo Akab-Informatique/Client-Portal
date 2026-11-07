@@ -89,7 +89,7 @@ async function cards(rows: Project[], me: string, withTasks = false) {
   const d = db();
   const ids = rows.map((r) => r.id);
   const today = todayQc();
-  const [milestones, tasks, members, followers, hours, clients, users, contracts] = await Promise.all([
+  const [milestones, tasks, members, followers, hours, clients, users, contracts, groups] = await Promise.all([
     // (the contracts of the projects billed under one are read last)
     d.select().from(schema.projectMilestones).where(inArray(schema.projectMilestones.projectId, ids)).orderBy(asc(schema.projectMilestones.position), asc(schema.projectMilestones.createdAt)),
     d.select().from(schema.projectTasks).where(inArray(schema.projectTasks.projectId, ids)).orderBy(asc(schema.projectTasks.position), asc(schema.projectTasks.createdAt)),
@@ -103,6 +103,7 @@ async function cards(rows: Project[], me: string, withTasks = false) {
     d.select({ id: schema.clients.id, name: schema.clients.name }).from(schema.clients).where(inArray(schema.clients.id, rows.map((r) => r.clientId).filter((x): x is string => Boolean(x)).concat("00000000-0000-0000-0000-000000000000"))),
     d.select({ id: schema.users.id, name: schema.users.name }).from(schema.users).where(eq(schema.users.kind, "staff")),
     d.select().from(schema.clientContracts).where(inArray(schema.clientContracts.id, rows.map((r) => r.contractId).filter((x): x is string => Boolean(x)).concat("00000000-0000-0000-0000-000000000000"))),
+    d.select().from(schema.projectTaskGroups).where(inArray(schema.projectTaskGroups.projectId, ids)).orderBy(asc(schema.projectTaskGroups.position), asc(schema.projectTaskGroups.createdAt)),
   ]);
   const usual = (await billingSettings()).rates.hourly;
   const clientName = new Map(clients.map((c) => [c.id, c.name]));
@@ -126,6 +127,7 @@ async function cards(rows: Project[], me: string, withTasks = false) {
         hours: (logged.filter((h) => h.milestoneId === m.id).reduce((n, h) => n + h.h, 0)) / 100,
         tasksDone: mine.filter((t) => t.done).length,
         tasksTotal: mine.length,
+        groups: groups.filter((g) => g.milestoneId === m.id).map((g) => ({ id: g.id, name: g.name })),
         ...(withTasks
           ? {
               tasks: mine.map((t) => ({
@@ -141,6 +143,7 @@ async function cards(rows: Project[], me: string, withTasks = false) {
                 checkpointTime: t.checkpointDate ? (t.checkpointTime ?? "17:00") : null,
                 contractId: t.contractId,
                 dependsOnId: t.dependsOnId,
+                groupId: t.groupId,
                 /** Waits for another task that is not done yet */
                 waiting: Boolean(t.dependsOnId && !tasks.find((x) => x.id === t.dependsOnId)?.done),
                 late: !t.done && Boolean(t.dueDate && t.dueDate < today),
@@ -213,6 +216,14 @@ async function setMembers(projectId: string, leadId: string | null, memberIds: s
   await d.delete(schema.projectMembers).where(eq(schema.projectMembers.projectId, projectId));
   const all = [...new Set([...(leadId ? [leadId] : []), ...memberIds])];
   if (all.length) await d.insert(schema.projectMembers).values(all.map((userId) => ({ projectId, userId })));
+}
+
+async function loadGroup(projectId: string, id: string) {
+  const r = zUuid.safeParse(id);
+  if (!r.success) throw new HTTPException(404, { message: "not_found" });
+  const [g] = await db().select().from(schema.projectTaskGroups).where(and(eq(schema.projectTaskGroups.id, r.data), eq(schema.projectTaskGroups.projectId, projectId)));
+  if (!g) throw new HTTPException(404, { message: "not_found" });
+  return g;
 }
 
 async function loadMilestone(projectId: string, id: string) {
@@ -750,18 +761,48 @@ export const projectsRoutes = new Hono<AppEnv>()
     return c.json({ ok: true });
   })
 
+  // ── groups of tasks inside a milestone: only a way to keep some tasks together ──
+  .post("/:id/milestones/:mid/groups", requirePermission("projects.edit"), async (c) => {
+    const p = await loadProject(c.req.param("id"));
+    const m = await loadMilestone(p.id, c.req.param("mid"));
+    const { name } = await body(c, z.object({ name: zName }));
+    const [{ n }] = await db().select({ n: sql<number>`coalesce(max(${schema.projectTaskGroups.position}), -1)::int` }).from(schema.projectTaskGroups).where(eq(schema.projectTaskGroups.milestoneId, m.id));
+    const [row] = await db().insert(schema.projectTaskGroups).values({ projectId: p.id, milestoneId: m.id, name, position: n + 1 }).returning();
+    await db().update(schema.projects).set({ updatedAt: new Date() }).where(eq(schema.projects.id, p.id));
+    return c.json({ id: row.id, name: row.name }, 201);
+  })
+  .patch("/:id/groups/:gid", requirePermission("projects.edit"), async (c) => {
+    const p = await loadProject(c.req.param("id"));
+    const g = await loadGroup(p.id, c.req.param("gid"));
+    const { name } = await body(c, z.object({ name: zName }));
+    await db().update(schema.projectTaskGroups).set({ name, updatedAt: new Date() }).where(eq(schema.projectTaskGroups.id, g.id));
+    return c.json({ id: g.id, name });
+  })
+  /** Deleting a group keeps its tasks: they go back to the milestone, loose */
+  .delete("/:id/groups/:gid", requirePermission("projects.edit"), async (c) => {
+    const p = await loadProject(c.req.param("id"));
+    const g = await loadGroup(p.id, c.req.param("gid"));
+    await db().update(schema.projectTasks).set({ groupId: null }).where(eq(schema.projectTasks.groupId, g.id));
+    await db().delete(schema.projectTaskGroups).where(eq(schema.projectTaskGroups.id, g.id));
+    return c.json({ ok: true });
+  })
+
   // ── tasks of a milestone: each one is a small ticket (description, status, priority, person, day, thread, time and a timer) ──
   .post("/:id/milestones/:mid/tasks", requirePermission("projects.edit"), async (c) => {
     const p = await loadProject(c.req.param("id"));
     const m = await loadMilestone(p.id, c.req.param("mid"));
-    const t = await body(c, z.object({ title: zName, description: zText.optional(), priority: zPriority.optional(), assigneeId: zUuid.nullable().optional(), dueDate: zDay.nullable().optional(), checkpointDate: zDay.nullable().optional(), checkpointTime: zHm.nullable().optional(), estimateHours: zHours.nullable().optional(), contractId: zUuid.nullable().optional(), dependsOnId: zUuid.nullable().optional() }));
+    const t = await body(c, z.object({ title: zName, description: zText.optional(), priority: zPriority.optional(), assigneeId: zUuid.nullable().optional(), dueDate: zDay.nullable().optional(), checkpointDate: zDay.nullable().optional(), checkpointTime: zHm.nullable().optional(), estimateHours: zHours.nullable().optional(), contractId: zUuid.nullable().optional(), dependsOnId: zUuid.nullable().optional(), groupId: zUuid.nullable().optional() }));
     if (t.assigneeId) await activeStaff([t.assigneeId]);
     if (t.contractId) await contractOf(p.clientId, t.contractId);
     if (t.dependsOnId) await loadTask(p.id, t.dependsOnId).catch(() => { throw new HTTPException(400, { message: "task_invalid" }); });
+    if (t.groupId) {
+      const g = await loadGroup(p.id, t.groupId).catch(() => { throw new HTTPException(400, { message: "group_invalid" }); });
+      if (g.milestoneId !== m.id) throw new HTTPException(400, { message: "group_invalid" });
+    }
     const [{ n }] = await db().select({ n: sql<number>`coalesce(max(${schema.projectTasks.position}), -1)::int` }).from(schema.projectTasks).where(eq(schema.projectTasks.milestoneId, m.id));
     const [row] = await db()
       .insert(schema.projectTasks)
-      .values({ projectId: p.id, milestoneId: m.id, title: t.title, description: t.description ?? "", priority: t.priority ?? "normal", assigneeId: t.assigneeId ?? null, dueDate: t.dueDate ?? null, checkpointDate: t.checkpointDate ?? null, checkpointTime: t.checkpointDate ? (t.checkpointTime ?? "17:00") : null, contractId: t.contractId ?? null, dependsOnId: t.dependsOnId ?? null, estimateMinutes: t.estimateHours == null ? null : Math.round(t.estimateHours * 60), position: n + 1 })
+      .values({ projectId: p.id, milestoneId: m.id, title: t.title, description: t.description ?? "", priority: t.priority ?? "normal", assigneeId: t.assigneeId ?? null, dueDate: t.dueDate ?? null, checkpointDate: t.checkpointDate ?? null, checkpointTime: t.checkpointDate ? (t.checkpointTime ?? "17:00") : null, contractId: t.contractId ?? null, dependsOnId: t.dependsOnId ?? null, groupId: t.groupId ?? null, estimateMinutes: t.estimateHours == null ? null : Math.round(t.estimateHours * 60), position: n + 1 })
       .returning();
     await syncMilestone(m.id);
     await db().update(schema.projects).set({ updatedAt: new Date() }).where(eq(schema.projects.id, p.id));
@@ -840,6 +881,8 @@ export const projectsRoutes = new Hono<AppEnv>()
         dependsOnId: zUuid.nullable().optional(),
         /** Move the task to another milestone of the same project */
         milestoneId: zUuid.optional(),
+        /** The group of its milestone (null: loose) */
+        groupId: zUuid.nullable().optional(),
       }),
     );
     if (t.assigneeId) await activeStaff([t.assigneeId]);
@@ -864,6 +907,12 @@ export const projectsRoutes = new Hono<AppEnv>()
       }
     }
     const target = t.milestoneId && t.milestoneId !== cur.milestoneId ? await loadMilestone(p.id, t.milestoneId) : null;
+    // a group belongs to one milestone: a task moved to another one leaves its group
+    let groupId = t.groupId;
+    if (groupId) {
+      const g = await loadGroup(p.id, groupId).catch(() => { throw new HTTPException(400, { message: "group_invalid" }); });
+      if (g.milestoneId !== (target?.id ?? cur.milestoneId)) throw new HTTPException(400, { message: "group_invalid" });
+    } else if (target && groupId === undefined) groupId = null;
     const status = t.status ?? (t.done === undefined ? undefined : t.done ? "done" : cur.status === "done" ? "todo" : cur.status);
     const [row] = await db()
       .update(schema.projectTasks)
@@ -878,6 +927,7 @@ export const projectsRoutes = new Hono<AppEnv>()
         ...(t.estimateHours !== undefined ? { estimateMinutes: t.estimateHours == null ? null : Math.round(t.estimateHours * 60) } : {}),
         ...(t.contractId !== undefined ? { contractId: t.contractId } : {}),
         ...(t.dependsOnId !== undefined ? { dependsOnId: t.dependsOnId } : {}),
+        ...(groupId !== undefined ? { groupId } : {}),
         ...(target ? { milestoneId: target.id } : {}),
         updatedAt: new Date(),
       })

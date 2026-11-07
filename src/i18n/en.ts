@@ -2814,6 +2814,7 @@ const en: Dict = {
     "hourlyRate": "Hourly rate ($/h)",
     "fixedPrice": "Fixed price ($)",
     "tasks": "Tasks",
+    "group": { "new": "New group", "name": "Group name", "none": "No group", "move": "Put in a group", "rename": "Rename", "delete": "Delete the group (tasks stay)", "empty": "No task in this group: put some with a task's folder icon.", "toggle": "Fold / unfold the group" },
     "noTasks": "No task in this milestone.",
     "markReached": "Mark the milestone reached",
     "reopenMilestone": "Reopen the milestone",

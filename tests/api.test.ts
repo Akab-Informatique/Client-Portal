@@ -10411,6 +10411,44 @@ describe("project tasks: a contract, waiting for another task, sorting that is t
   });
 });
 
+describe("projects: groups of tasks inside a milestone", () => {
+  it("a group keeps tasks together (no subtasks): made, renamed, filled, emptied, deleted; tasks stay", async () => {
+    resetRateLimit("login:ip:unknown");
+    const tech = await signIn("tech@akab.local");
+    const me = (await tech.get("/api/me")).json.id as string;
+    const proj = (await tech.post("/api/projects", { name: "Projet à groupes", milestones: [{ name: "Phase 1" }, { name: "Phase 2" }] })).json;
+    const [m1, m2] = proj.milestones;
+    const detail = async () => (await tech.get(`/api/projects/${proj.id}`)).json.milestones as any[];
+    const g = (await tech.post(`/api/projects/${proj.id}/milestones/${m1.id}/groups`, { name: "Serveur" })).json;
+    expect(g.name).toBe("Serveur");
+    const t1 = (await tech.post(`/api/projects/${proj.id}/milestones/${m1.id}/tasks`, { title: "Installer", assigneeId: me, groupId: g.id })).json;
+    const t2 = (await tech.post(`/api/projects/${proj.id}/milestones/${m1.id}/tasks`, { title: "Configurer", assigneeId: me })).json;
+    let ms = await detail();
+    expect(ms[0].groups).toEqual([{ id: g.id, name: "Serveur" }]);
+    expect(ms[0].tasks.find((k: any) => k.id === t1.id).groupId).toBe(g.id);
+    expect(ms[0].tasks.find((k: any) => k.id === t2.id).groupId).toBeNull();
+    // a loose task is put in the group, then taken out
+    expect((await tech.patch(`/api/projects/${proj.id}/tasks/${t2.id}`, { groupId: g.id })).status).toBe(200);
+    expect((await detail())[0].tasks.filter((k: any) => k.groupId === g.id)).toHaveLength(2);
+    expect((await tech.patch(`/api/projects/${proj.id}/tasks/${t2.id}`, { groupId: null })).status).toBe(200);
+    // a group is of one milestone: another milestone's group is refused; moving a task to another milestone frees it
+    const other = (await tech.post(`/api/projects/${proj.id}/milestones/${m2.id}/groups`, { name: "Autre phase" })).json;
+    expect((await tech.patch(`/api/projects/${proj.id}/tasks/${t1.id}`, { groupId: other.id })).json.error).toBe("group_invalid");
+    expect((await tech.post(`/api/projects/${proj.id}/milestones/${m1.id}/tasks`, { title: "x", groupId: other.id })).json.error).toBe("group_invalid");
+    expect((await tech.patch(`/api/projects/${proj.id}/tasks/${t1.id}`, { milestoneId: m2.id })).status).toBe(200);
+    ms = await detail();
+    expect(ms[1].tasks.find((k: any) => k.id === t1.id).groupId).toBeNull();
+    // renamed; deleted: the tasks stay, loose
+    expect((await tech.patch(`/api/projects/${proj.id}/groups/${g.id}`, { name: "Serveur Dell" })).json.name).toBe("Serveur Dell");
+    await tech.patch(`/api/projects/${proj.id}/tasks/${t2.id}`, { groupId: g.id });
+    expect((await tech.del(`/api/projects/${proj.id}/groups/${g.id}`)).status).toBe(200);
+    ms = await detail();
+    expect(ms[0].groups).toEqual([]);
+    expect(ms[0].tasks.find((k: any) => k.id === t2.id).groupId).toBeNull();
+    expect((await tech.del(`/api/projects/${proj.id}/groups/${g.id}`)).status).toBe(404);
+  });
+});
+
 describe("the search of the top bar", () => {
   it("finds clients, contacts, projects and tasks, each only for what the person may see; too short answers nothing", async () => {
     resetRateLimit("login:ip:unknown");

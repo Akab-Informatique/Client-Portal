@@ -2909,6 +2909,25 @@ export const projectMilestones = pgTable(
 );
 
 /** A task of a milestone: a line to tick, with a person and a day */
+/** A simple group of tasks inside a milestone (a way to keep some together: not a task with subtasks) */
+export const projectTaskGroups = pgTable(
+  "project_task_groups",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    projectId: uuid("project_id")
+      .notNull()
+      .references(() => projects.id, { onDelete: "cascade" }),
+    milestoneId: uuid("milestone_id")
+      .notNull()
+      .references(() => projectMilestones.id, { onDelete: "cascade" }),
+    name: text("name").notNull(),
+    position: integer("position").notNull().default(0),
+    createdAt: created(),
+    updatedAt: updated(),
+  },
+  (t) => [index("project_task_groups_milestone_idx").on(t.milestoneId, t.position)],
+);
+
 export const projectTasks = pgTable(
   "project_tasks",
   {
@@ -2932,6 +2951,8 @@ export const projectTasks = pgTable(
     contractId: uuid("contract_id").references(() => clientContracts.id, { onDelete: "set null" }),
     /** The task that must be done first (same project): this one cannot be started or finished before */
     dependsOnId: uuid("depends_on_id"),
+    /** The group of the milestone it sits in (none: loose) */
+    groupId: uuid("group_id").references(() => projectTaskGroups.id, { onDelete: "set null" }),
     /** The goal day and time (17:00 when none is typed): the task is on Ma journée from then on, and lists sort by it */
     checkpointDate: text("checkpoint_date"),
     checkpointTime: text("checkpoint_time"),

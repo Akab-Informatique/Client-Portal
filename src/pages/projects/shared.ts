@@ -38,6 +38,7 @@ export type Task = {
   checkpointTime: string | null;
   contractId: string | null;
   dependsOnId: string | null;
+  groupId: string | null;
   /** Waits for another task that is not done yet */
   waiting: boolean;
   late: boolean;
@@ -81,6 +82,8 @@ export type Milestone = {
   hours: number;
   tasksDone: number;
   tasksTotal: number;
+  /** Simple groups of tasks inside the milestone */
+  groups?: { id: string; name: string }[];
   tasks?: Task[];
 };
 export type Person = { id: string; name: string };

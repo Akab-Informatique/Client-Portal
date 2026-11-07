@@ -296,7 +296,7 @@ function MilestoneRow({ p, m, edit, isOpen, onToggle, onChanged, fail, onUp, onD
             </div>
             {/* the tasks: each opens in its own window, like a ticket; sorted as the technician chose (checkpoint by default) */}
             <div>
-              <MilestoneTasks projectId={p.id} m={m} onTask={onTask} />
+              <MilestoneTasks projectId={p.id} m={m} onTask={onTask} edit={edit} onChanged={onChanged} fail={fail} />
               {edit && (
                 <form
                   className="mt-2 flex items-center gap-2"

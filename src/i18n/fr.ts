@@ -2812,6 +2812,7 @@ const fr = {
     "hourlyRate": "Taux horaire ($/h)",
     "fixedPrice": "Prix fixe ($)",
     "tasks": "Tâches",
+    "group": { "new": "Nouveau groupe", "name": "Nom du groupe", "none": "Sans groupe", "move": "Mettre dans un groupe", "rename": "Renommer", "delete": "Supprimer le groupe (les tâches restent)", "empty": "Aucune tâche dans ce groupe : mettez-en avec l'icône dossier d'une tâche.", "toggle": "Plier / déplier le groupe" },
     "noTasks": "Aucune tâche dans ce jalon.",
     "markReached": "Marquer le jalon atteint",
     "reopenMilestone": "Rouvrir le jalon",
