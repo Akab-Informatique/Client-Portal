@@ -97,7 +97,7 @@ function serviceLine(r: typeof schema.contractServices.$inferSelect, k: Contract
 
 const zDay = z.string().regex(/^\d{4}-\d{2}-\d{2}$/);
 /** The tabs of a client's page, in the order they come by default */
-const CLIENT_TABS = ["info", "tickets", "invoices", "contacts", "portal", "contracts", "invoice"] as const;
+const CLIENT_TABS = ["info", "tickets", "invoices", "contacts", "portal", "contracts", "invoice", "devices"] as const;
 /** The saved order, with any tab it does not name added at the end (so a new tab always shows) */
 async function clientTabOrder(): Promise<string[]> {
   const [row] = await db().select({ config: schema.integrations.config }).from(schema.integrations).where(eq(schema.integrations.provider, "crm.layout"));

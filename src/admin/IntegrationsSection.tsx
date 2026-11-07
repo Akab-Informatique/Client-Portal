@@ -21,6 +21,7 @@ import { SectionHeader } from "./sections";
 import { StripePage, StripeStatus, useStripeState } from "./StripeIntegration";
 import { QuickBooksPage, QuickBooksStatus, useQuickBooksState } from "./QuickBooksIntegration";
 import { ITCloudPage, ITCloudStatus, useITCloudState } from "./ITCloudIntegration";
+import { DattoPanel } from "./DattoRmm";
 import { AI_USAGE_KEY, AiUsagePanel } from "./AiUsage";
 import { shortModel } from "@/components/AiModelPicker";
 
@@ -574,20 +575,20 @@ function TeamsPage() {
 }
 
 // ── RMM: links to the device page and the web remote control ──
-type RmmView = { enabled: boolean; name: string; deviceUrl: string; remoteUrl: string; placeholders: string[] };
+type RmmView = { enabled: boolean; name: string; deviceUrl: string; remoteUrl: string; placeholders: string[]; api?: { ready: boolean } };
 const RMM_KEY = ["admin", "integrations", "rmm"];
 
 function useRmmState(): string | null {
   const { data } = useQuery({ queryKey: RMM_KEY, queryFn: () => api.get<RmmView>("/admin/integrations/rmm") });
   if (!data) return null;
-  return data.enabled && (data.deviceUrl || data.remoteUrl) ? "connected" : data.deviceUrl || data.remoteUrl ? "disabled" : "notConfigured";
+  return data.api?.ready || (data.enabled && (data.deviceUrl || data.remoteUrl)) ? "connected" : data.deviceUrl || data.remoteUrl ? "disabled" : "notConfigured";
 }
 
 function RmmStatus() {
   const { t } = useTranslation();
   const { data } = useQuery({ queryKey: RMM_KEY, queryFn: () => api.get<RmmView>("/admin/integrations/rmm") });
   if (!data) return null;
-  const on = data.enabled && Boolean(data.deviceUrl || data.remoteUrl);
+  const on = Boolean(data.api?.ready) || (data.enabled && Boolean(data.deviceUrl || data.remoteUrl));
   return (
     <Badge variant="outline" className={cn("gap-1.5", on ? "border-emerald-500/40 text-emerald-400" : "text-muted-foreground")}>
       <span className="size-1.5 rounded-full bg-current" />
@@ -636,6 +637,8 @@ function RmmPage() {
     </div>
   );
   return (
+    <div className="space-y-6">
+    <DattoPanel />
     <section className="overflow-hidden rounded-2xl border bg-card/80">
       <div className="flex flex-wrap items-center gap-4 border-b px-6 py-5">
         <span className="flex size-11 items-center justify-center rounded-xl bg-grad-gold text-[#1a1204]">
@@ -680,6 +683,7 @@ function RmmPage() {
         </Button>
       </form>
     </section>
+    </div>
   );
 }
 

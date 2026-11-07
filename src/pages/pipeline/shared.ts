@@ -16,6 +16,8 @@ export type TaskCard = {
   priority: TaskPriority;
   assigneeId: string | null;
   assignee: string | null;
+  /** Everyone it is assigned to, the main one first */
+  assignees: { id: string; name: string }[];
   createdById: string | null;
   createdBy: string | null;
   parentId: string | null;

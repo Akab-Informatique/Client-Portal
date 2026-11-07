@@ -1,4 +1,5 @@
 import { and, eq, inArray, isNull, lt, ne, or, sql } from "drizzle-orm";
+import { assignedTo } from "./pipelineAssign.ts";
 import { db, schema } from "../db/index.ts";
 import type { PipelineBlock } from "../db/schema.ts";
 import { config } from "../config.ts";
@@ -153,7 +154,7 @@ export async function dayItems(userId: string, date: string, viewerId: string = 
     d
       .select()
       .from(schema.pipelineTasks)
-      .where(and(eq(schema.pipelineTasks.assigneeId, userId), ne(schema.pipelineTasks.status, "done"))),
+      .where(and(assignedTo(userId), ne(schema.pipelineTasks.status, "done"))),
     d.select({ parentId: schema.pipelineTasks.parentId }).from(schema.pipelineTasks).where(and(ne(schema.pipelineTasks.status, "done"), sql`${schema.pipelineTasks.parentId} is not null`)),
     d.select().from(schema.meetingAbsences).where(and(eq(schema.meetingAbsences.userId, userId), sql`${schema.meetingAbsences.startDate} <= ${date} and ${schema.meetingAbsences.endDate} >= ${date}`)),
     d.select().from(schema.calendarBlocks).where(and(eq(schema.calendarBlocks.technicianId, userId), sql`${schema.calendarBlocks.startsAt} < ${dayEnd} and ${schema.calendarBlocks.endsAt} > ${dayStart}`)),
@@ -534,7 +535,7 @@ export async function buildPipelineView(userId: string, date: string, viewerId: 
   const doneToday = await db()
     .select({ n: sql<number>`count(*)`.mapWith(Number) })
     .from(schema.pipelineTasks)
-    .where(and(eq(schema.pipelineTasks.assigneeId, userId), eq(schema.pipelineTasks.status, "done"), sql`(${schema.pipelineTasks.completedAt} at time zone 'America/Toronto')::date = ${date}::date`));
+    .where(and(assignedTo(userId), eq(schema.pipelineTasks.status, "done"), sql`(${schema.pipelineTasks.completedAt} at time zone 'America/Toronto')::date = ${date}::date`));
   return { items: [...items].sort(byUrgency), absent, holiday, events: busy.length, doneToday: doneToday[0]?.n ?? 0 };
 }
 

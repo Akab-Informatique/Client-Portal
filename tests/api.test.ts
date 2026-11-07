@@ -10286,7 +10286,7 @@ describe("clients: contract count, all contracts, shared tab order", () => {
     expect((await tech.put("/api/crm/tab-order", { order: ["contracts"] })).status).toBe(403);
     const set = await admin.put("/api/crm/tab-order", { order: ["contracts", "tickets"] });
     expect(set.json.order.slice(0, 3)).toEqual(["contracts", "tickets", "info"]);
-    expect(set.json.order).toHaveLength(7);
+    expect(set.json.order).toHaveLength(8);
     expect((await tech.get("/api/crm/tab-order")).json.order[0]).toBe("contracts");
     expect((await admin.put("/api/crm/tab-order", { order: ["nope"] })).status).toBe(400);
     expect((await admin.put("/api/crm/tab-order", { order: null })).json.order[0]).toBe("info");
@@ -10685,6 +10685,132 @@ describe("knowledge base", () => {
     expect((await tech.post("/api/kb", { title: " " })).status).toBe(400);
     expect((await tech.del(`/api/kb/${id}`)).status).toBe(200);
     expect((await tech.get(`/api/kb/${id}`)).status).toBe(404);
+  });
+});
+
+describe("Datto RMM (read only)", () => {
+  it("connects with a key and a secret, copies the sites and devices, matches a site to a client, and shows a client's devices", async () => {
+    resetRateLimit("login:ip:unknown");
+    const admin = await signIn("admin@akab.local");
+    const tech = await signIn("tech@akab.local");
+    const [co] = await db().insert(schema.clients).values({ name: "Zz Datto Client inc. (test)" }).returning();
+    const calls: { url: string; auth: string | null }[] = [];
+    const device = (n: number, over: Record<string, unknown> = {}) => ({
+      uid: `dev-${n}`, siteUid: "site-1", hostname: `PC-${n}`, description: "Poste", intIpAddress: `10.0.0.${n}`, operatingSystem: "Windows 11 Pro", lastLoggedInUser: "jean", deviceType: { category: "Laptop", type: "Workstation" },
+      online: n === 1, rebootRequired: false, lastSeen: Date.now() - n * 86_400_000, patchManagement: { patchStatus: "FullyPatched", patchesApprovedPending: 0 }, antivirus: { antivirusProduct: "Datto AV", antivirusStatus: "RunningAndUpToDate" },
+      portalUrl: `https://pinotage-concord.centrastage.net/device/${n}`, webRemoteUrl: `https://pinotage-concord.centrastage.net/remote/${n}`, ...over,
+    });
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: unknown, init: RequestInit = {}) => {
+        const u = String(url);
+        calls.push({ url: u, auth: (init.headers as Record<string, string> | undefined)?.authorization ?? null });
+        if (u.endsWith("/auth/oauth/token")) {
+          expect(String(init.body)).toContain("grant_type=password");
+          expect(String(init.body)).toContain("username=KEY123");
+          return new Response(JSON.stringify({ access_token: "tok-1", expires_in: 360000 }), { status: 200 });
+        }
+        if (u.includes("/api/v2/account/sites")) return new Response(JSON.stringify({ pageDetails: { nextPageUrl: null }, sites: [{ uid: "site-1", name: "Zz Datto Client (test)" }, { uid: "site-2", name: "Site inconnu" }] }), { status: 200 });
+        if (u.includes("/api/v2/account/devices")) return new Response(JSON.stringify({ pageDetails: { nextPageUrl: null }, devices: [device(1), device(2), device(3, { portalUrl: "https://evil.example.com/x", webRemoteUrl: "javascript:alert(1)" }), device(4, { siteUid: "site-2" })] }), { status: 200 });
+        return new Response("{}", { status: 404 });
+      }),
+    );
+    try {
+      // the API address is Datto's own host, the secret is sealed and never sent back
+      const bad = await admin.put("/api/admin/rmm-datto", { enabled: true, apiUrl: "https://evil.example.com", apiKey: "KEY123", apiSecret: "SEC" });
+      expect(bad.status).toBe(400);
+      expect((await tech.get("/api/admin/rmm-datto")).status).toBe(403);
+      const saved = await admin.put("/api/admin/rmm-datto", { enabled: true, apiUrl: "https://pinotage-api.centrastage.net/", apiKey: "KEY123", apiSecret: "SEC-SECRET", autoSync: true });
+      expect(saved.json).toMatchObject({ enabled: true, apiUrl: "https://pinotage-api.centrastage.net", apiKey: "KEY123", hasSecret: true, ready: true });
+      expect(JSON.stringify(saved.json)).not.toContain("SEC-SECRET");
+      expect((await admin.post("/api/admin/rmm-datto/test")).json).toMatchObject({ ok: true, sites: 2 });
+      // the sync copies sites and devices
+      const sync = (await admin.post("/api/admin/rmm-datto/sync")).json;
+      expect(sync).toMatchObject({ ok: true, counts: { sites: 2, devices: 4, online: 1, removed: 0 } });
+      expect(calls.some((x) => x.auth === "Bearer tok-1")).toBe(true);
+      // the site with the client's name (accents, "inc." and case ignored) is proposed, not applied; the other has none
+      const plan = (await admin.get("/api/admin/rmm-datto/sites")).json;
+      expect(plan.sites.find((x: any) => x.uid === "site-1")).toMatchObject({ devices: 3, clientId: null, proposedId: co.id, proposedName: co.name });
+      expect(plan.sites.find((x: any) => x.uid === "site-2").proposedId).toBeNull();
+      // nothing is tied until accepted
+      expect((await tech.get(`/api/rmm/clients/${co.id}/devices`)).json).toMatchObject({ connected: true, sites: 0, devices: [] });
+      expect((await admin.post("/api/admin/rmm-datto/sites/accept", {})).json.accepted).toBe(1);
+      const devs = (await tech.get(`/api/rmm/clients/${co.id}/devices`)).json;
+      expect(devs).toMatchObject({ connected: true, sites: 1 });
+      expect(devs.devices.map((d: any) => d.hostname)).toEqual(["PC-1", "PC-2", "PC-3"]);
+      expect(devs.devices[0]).toMatchObject({ online: true, os: "Windows 11 Pro", lastUser: "jean", kind: "Workstation", patchStatus: "FullyPatched", antivirus: "Datto AV", portalUrl: "https://pinotage-concord.centrastage.net/device/1" });
+      // a link that is not on Datto's own hosts is never shown
+      expect(devs.devices[2].portalUrl).toBeNull();
+      expect(devs.devices[2].remoteUrl).toBeNull();
+      // a device Datto no longer lists is dropped at the next sync
+      vi.stubGlobal("fetch", vi.fn(async (url: unknown) => {
+        const u = String(url);
+        if (u.endsWith("/auth/oauth/token")) return new Response(JSON.stringify({ access_token: "tok-2", expires_in: 360000 }), { status: 200 });
+        if (u.includes("/account/sites")) return new Response(JSON.stringify({ sites: [{ uid: "site-1", name: "Zz Datto Client (test)" }] }), { status: 200 });
+        return new Response(JSON.stringify({ devices: [device(1)] }), { status: 200 });
+      }));
+      expect((await admin.post("/api/admin/rmm-datto/sync")).json.counts).toMatchObject({ devices: 1, removed: 3 });
+      expect((await tech.get(`/api/rmm/clients/${co.id}/devices`)).json.devices).toHaveLength(1);
+      // a wrong key says so
+      vi.stubGlobal("fetch", vi.fn(async () => new Response("{}", { status: 401 })));
+      expect((await admin.post("/api/admin/rmm-datto/test")).json).toMatchObject({ ok: false, error: "rmm_unauthorized" });
+      // untie it by hand
+      expect((await admin.put("/api/admin/rmm-datto/sites/site-1/client", { clientId: null })).status).toBe(200);
+      expect((await tech.get(`/api/rmm/clients/${co.id}/devices`)).json.devices).toEqual([]);
+    } finally {
+      vi.unstubAllGlobals();
+      await db().delete(schema.rmmDevices);
+      await db().delete(schema.rmmSites);
+      await db().delete(schema.integrations).where(eq(schema.integrations.provider, "rmm.datto"));
+      await db().delete(schema.clients).where(eq(schema.clients.id, co.id));
+      (await import("../server/lib/dattoRmm.ts")).forgetDattoToken();
+    }
+  });
+});
+
+describe("a to-do task for several people", () => {
+  it("is assigned to one or several people, who all see it, have it on their day and are told; the list can be changed", async () => {
+    resetRateLimit("login:ip:unknown");
+    const tech = await signIn("tech@akab.local");
+    const tech2 = await signIn("tech2@akab.local");
+    const admin = await signIn("admin@akab.local");
+    const [u1] = await db().select().from(schema.users).where(eq(schema.users.email, "tech@akab.local"));
+    const [u2] = await db().select().from(schema.users).where(eq(schema.users.email, "tech2@akab.local"));
+    const [boss] = await db().select().from(schema.users).where(eq(schema.users.email, "admin@akab.local"));
+    const [client] = await db().select().from(schema.users).where(eq(schema.users.kind, "client"));
+    const today = new Date().toLocaleDateString("en-CA", { timeZone: "America/Toronto" });
+    // a private task for two people: both see it, nobody else
+    const made = await admin.post("/api/pipeline/tasks", { title: "Changer les cartouches", assigneeIds: [u1.id, u2.id], visibility: "private", dueDate: today });
+    expect(made.status).toBe(201);
+    expect(made.json.assignees.map((x: any) => x.id)).toEqual([u1.id, u2.id]);
+    expect(made.json.assigneeId).toBe(u1.id);
+    const id = made.json.id;
+    expect((await tech.get(`/api/pipeline/tasks/${id}`)).status).toBe(200);
+    expect((await tech2.get(`/api/pipeline/tasks/${id}`)).status).toBe(200);
+    // "mine" holds it for both, and it is on both days
+    expect((await tech2.get("/api/pipeline/tasks?scope=mine&status=open")).json.some((x: any) => x.id === id)).toBe(true);
+    expect((await tech.get("/api/pipeline/tasks?scope=mine&status=open")).json.some((x: any) => x.id === id)).toBe(true);
+    expect((await tech2.get(`/api/pipeline/day?date=${today}`)).json.items.some((i: any) => i.refId === id)).toBe(true);
+    // both are told (the maker is not)
+    expect((await tech2.get("/api/notifications")).json.items.some((n: any) => n.type === "pipeline.assigned" && n.data.taskId === id)).toBe(true);
+    expect((await admin.get("/api/notifications")).json.items.some((n: any) => n.type === "pipeline.assigned" && n.data.taskId === id)).toBe(false);
+    // only active staff
+    expect((await admin.patch(`/api/pipeline/tasks/${id}`, { assigneeIds: [u1.id, client.id] })).json.error).toBe("invalid_assignee");
+    // the list is replaced: the maker joins, the second person leaves; the one who left no longer sees the private task
+    const changed = await admin.patch(`/api/pipeline/tasks/${id}`, { assigneeIds: [u1.id, boss.id] });
+    expect(changed.json.assignees.map((x: any) => x.id)).toEqual([u1.id, boss.id]);
+    expect((await tech2.get(`/api/pipeline/tasks/${id}`)).status).toBe(404);
+    expect((await tech2.get("/api/pipeline/tasks?scope=mine&status=open")).json.some((x: any) => x.id === id)).toBe(false);
+    // a co-assignee changes who sees the task (as the main one could); one person only still works (assigneeId)
+    expect((await admin.patch(`/api/pipeline/tasks/${id}`, { assigneeId: u2.id })).json.assignees.map((x: any) => x.id)).toEqual([u2.id]);
+    expect((await admin.patch(`/api/pipeline/tasks/${id}`, { assigneeIds: [] })).json.assignees).toEqual([]);
+    // a recurring task keeps all its people when the next one is made
+    const rec = await admin.post("/api/pipeline/tasks", { title: "Vérifier les sauvegardes", assigneeIds: [u1.id, u2.id], visibility: "team", dueDate: today, recurrence: { freq: "weekly", interval: 1, weekdays: [new Date().getDay()] } });
+    expect(rec.status).toBe(201);
+    const done = await admin.patch(`/api/pipeline/tasks/${rec.json.id}`, { status: "done" });
+    expect(done.json.next).toBeTruthy();
+    const next = (await admin.get(`/api/pipeline/tasks/${done.json.next}`)).json;
+    expect(next.assignees.map((x: any) => x.id)).toEqual([u1.id, u2.id]);
   });
 });
 

@@ -43,6 +43,7 @@ import { storeRoutes } from "./routes/store.ts";
 import { pipelineRoutes } from "./routes/pipeline.ts";
 import { sopRoutes } from "./routes/sops.ts";
 import { kbRoutes } from "./routes/kb.ts";
+import { dattoAdminRoutes, rmmDeviceRoutes } from "./routes/rmmDatto.ts";
 import { projectsRoutes } from "./routes/projects.ts";
 import { planningRoutes } from "./routes/planning.ts";
 import { smsHookRoutes, smsRoutes } from "./routes/sms.ts";
@@ -116,6 +117,8 @@ export function createApp() {
   api.route("/admin/contract-types", contractTypeRoutes);
   api.route("/admin/vendors", vendorRoutes);
   api.route("/admin/itcloud", itcloudRoutes);
+  api.route("/admin/rmm-datto", dattoAdminRoutes);
+  api.route("/rmm", rmmDeviceRoutes);
   api.route("/admin/client-classes", classRoutes);
   api.route("/admin/ticket-setup", ticketSetupRoutes);
   api.route("/admin/mail-intake", mailIntakeAdminRoutes);

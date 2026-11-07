@@ -37,6 +37,7 @@ import {
   UsersRound,
   X,
   Hash,
+  MonitorSmartphone,
 } from "lucide-react";
 import { GlassBackdrop } from "@/components/brand/GlassBackdrop";
 import { Button } from "@/components/ui/button";
@@ -61,8 +62,9 @@ import { crmErrorText, money, useCrmClients, type CrmInvoice, type CrmInvoices, 
 import { ContractWindow, NewContractDialog } from "./ContractDialog";
 import { ClientUsersPanel } from "@/admin/ClientAccess";
 import { ContactWindow } from "./ContactWindow";
+import { ClientDevicesTab, useClientDevices } from "./ClientDevices";
 
-const TABS = ["info", "tickets", "invoices", "contacts", "portal", "contracts", "invoice"] as const;
+const TABS = ["info", "tickets", "invoices", "contacts", "portal", "contracts", "invoice", "devices"] as const;
 type Tab = (typeof TABS)[number];
 const TAB_ICONS: Record<Tab, ReactNode> = {
   info: <Building2 className="size-4" />,
@@ -72,6 +74,7 @@ const TAB_ICONS: Record<Tab, ReactNode> = {
   portal: <KeyRound className="size-4" />,
   contracts: <FileText className="size-4" />,
   invoice: <Receipt className="size-4" />,
+  devices: <MonitorSmartphone className="size-4" />,
 };
 
 /** One client: info (with its group of companies), tickets, contacts, contracts, invoicing. */
@@ -110,7 +113,9 @@ export function ClientPage() {
     onSuccess: (r) => qc.setQueryData(["crm", "tab-order"], r),
     onError: () => toast.error(t("common.error")),
   });
-  const shown = (orderData?.order ?? [...TABS]).filter((k) => k === "invoices" ? can("accounting.view") : k === "portal" ? can("admin.clients") : true);
+  // the devices tab shows for a client whose RMM site is matched
+  const rmm = useClientDevices(id);
+  const shown = (orderData?.order ?? [...TABS]).filter((k) => (k === "invoices" ? can("accounting.view") : k === "portal" ? can("admin.clients") : k === "devices" ? (rmm.data?.sites ?? 0) > 0 : true));
   const firstTab: Tab = shown[0] ?? "info";
   const move = (k: Tab, by: -1 | 1) => {
     const all = [...(orderData?.order ?? TABS)];
@@ -235,6 +240,11 @@ export function ClientPage() {
         <TabsContent value="invoice" className="mt-4">
           <InvoiceTab client={client} />
         </TabsContent>
+        {(rmm.data?.sites ?? 0) > 0 && (
+          <TabsContent value="devices" className="mt-4">
+            <ClientDevicesTab clientId={client.id} />
+          </TabsContent>
+        )}
       </Tabs>
     </div>
   );

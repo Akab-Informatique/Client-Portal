@@ -2,7 +2,7 @@ import { useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
-import { CalendarClock, CheckCircle2, Columns3, Eye, ListChecks, Lock, Paperclip, Repeat, Rows3, Search, Ticket as TicketIcon, UserRound, Workflow } from "lucide-react";
+import { CalendarClock, Check, CheckCircle2, Columns3, Eye, ListChecks, Lock, Paperclip, Repeat, Rows3, Search, Ticket as TicketIcon, UserRound, Workflow } from "lucide-react";
 import { Checkbox } from "@/components/ui/checkbox";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { Input } from "@/components/ui/input";
@@ -243,10 +243,17 @@ function TaskRow({ task, child, editable, onOpen, onPatch, people }: { task: Tas
       <DropdownMenu>
         <DropdownMenuTrigger asChild disabled={!editable}>
           <button type="button" className="flex shrink-0 items-center gap-1.5 rounded-full border border-transparent px-1 py-0.5 hover:border-[color:var(--gold)]/40" aria-label={t("pipeline.assignee")}>
-            {task.assignee ? (
+            {task.assignees.length > 0 ? (
               <>
-                <span className="flex size-6 items-center justify-center rounded-full bg-grad-gold text-[10px] font-bold text-[#1a1204]">{initials(task.assignee)}</span>
-                <span className="hidden max-w-24 truncate text-xs text-muted-foreground md:inline">{task.assignee.split(/\s+/)[0]}</span>
+                <span className="flex -space-x-1.5">
+                  {task.assignees.slice(0, 3).map((x) => (
+                    <span key={x.id} title={x.name} className="flex size-6 items-center justify-center rounded-full bg-grad-gold text-[10px] font-bold text-[#1a1204] ring-2 ring-background">
+                      {initials(x.name)}
+                    </span>
+                  ))}
+                  {task.assignees.length > 3 && <span className="flex size-6 items-center justify-center rounded-full bg-muted text-[10px] font-bold ring-2 ring-background">+{task.assignees.length - 3}</span>}
+                </span>
+                <span className="hidden max-w-28 truncate text-xs text-muted-foreground md:inline">{task.assignees.length > 1 ? `${task.assignees[0]!.name.split(/\s+/)[0]} +${task.assignees.length - 1}` : task.assignees[0]!.name.split(/\s+/)[0]}</span>
               </>
             ) : (
               <span className="flex items-center gap-1 rounded-full border border-dashed px-2 py-0.5 text-[11px] text-muted-foreground">
@@ -256,15 +263,27 @@ function TaskRow({ task, child, editable, onOpen, onPatch, people }: { task: Tas
           </button>
         </DropdownMenuTrigger>
         <DropdownMenuContent align="end" className="max-h-72 min-w-44 overflow-y-auto">
-          {people.map((p) => (
-            <DropdownMenuItem key={p.id} onSelect={() => onPatch({ assigneeId: p.id })}>
-              {p.name}
-            </DropdownMenuItem>
-          ))}
-          {task.assignee && (
+          {people.map((p) => {
+            const on = task.assignees.some((x) => x.id === p.id);
+            // a tick toggles the person; the menu stays open to pick several
+            return (
+              <DropdownMenuItem
+                key={p.id}
+                onSelect={(e) => {
+                  e.preventDefault();
+                  const ids = task.assignees.map((x) => x.id);
+                  onPatch({ assigneeIds: on ? ids.filter((x) => x !== p.id) : [...ids, p.id] });
+                }}
+              >
+                <span className="flex w-4 justify-center">{on && <Check className="size-3.5 text-primary" />}</span>
+                {p.name}
+              </DropdownMenuItem>
+            );
+          })}
+          {task.assignees.length > 0 && (
             <>
               <DropdownMenuSeparator />
-              <DropdownMenuItem onSelect={() => onPatch({ assigneeId: null })}>{t("pipeline.unassigned")}</DropdownMenuItem>
+              <DropdownMenuItem onSelect={() => onPatch({ assigneeIds: [] })}>{t("pipeline.unassigned")}</DropdownMenuItem>
             </>
           )}
         </DropdownMenuContent>
@@ -285,7 +304,7 @@ function Card({ task, editable, onOpen, onStatus }: { task: TaskCard; editable: 
         <Meta task={task} />
       </button>
       <div className="mt-2 flex items-center justify-between gap-2">
-        <span className="truncate text-xs text-muted-foreground">{task.assignee ?? t("pipeline.unassigned")}</span>
+        <span className="truncate text-xs text-muted-foreground">{task.assignees.length ? task.assignees.map((x) => x.name.split(/\s+/)[0]).join(", ") : t("pipeline.unassigned")}</span>
         {editable && (
           <select value={task.status} onChange={(e) => onStatus(e.target.value as TaskStatus)} className="h-7 rounded-md border bg-transparent px-1 text-[11px]" aria-label={t("pipeline.statusLabel")}>
             {STATUSES.map((s) => (

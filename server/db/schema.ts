@@ -2952,6 +2952,69 @@ export const projectNotes = pgTable(
   (t) => [index("project_notes_project_idx").on(t.projectId, t.createdAt)],
 );
 
+/** Datto RMM: its sites (one per customer company), each tied to a portal client once accepted */
+export const rmmSites = pgTable(
+  "rmm_sites",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    uid: text("uid").notNull(),
+    name: text("name").notNull(),
+    description: text("description").notNull().default(""),
+    clientId: uuid("client_id").references(() => clients.id, { onDelete: "set null" }),
+    deviceCount: integer("device_count").notNull().default(0),
+    syncedAt: timestamp("synced_at", { withTimezone: true }),
+  },
+  (t) => [uniqueIndex("rmm_sites_uid_idx").on(t.uid), index("rmm_sites_client_idx").on(t.clientId)],
+);
+
+/** Datto RMM: the devices it manages, copied every 15 minutes (read only) */
+export const rmmDevices = pgTable(
+  "rmm_devices",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    uid: text("uid").notNull(),
+    siteUid: text("site_uid").notNull(),
+    hostname: text("hostname").notNull().default(""),
+    description: text("description").notNull().default(""),
+    ip: text("ip").notNull().default(""),
+    externalIp: text("external_ip").notNull().default(""),
+    os: text("os").notNull().default(""),
+    lastUser: text("last_user").notNull().default(""),
+    /** Datto's device type: category (Desktop, Laptop, Server…) and type (Workstation…) */
+    category: text("category").notNull().default(""),
+    kind: text("kind").notNull().default(""),
+    online: boolean("online").notNull().default(false),
+    rebootRequired: boolean("reboot_required").notNull().default(false),
+    lastSeen: timestamp("last_seen", { withTimezone: true }),
+    lastReboot: timestamp("last_reboot", { withTimezone: true }),
+    lastAudit: timestamp("last_audit", { withTimezone: true }),
+    patchStatus: text("patch_status").notNull().default(""),
+    patchesPending: integer("patches_pending").notNull().default(0),
+    antivirus: text("antivirus").notNull().default(""),
+    antivirusStatus: text("antivirus_status").notNull().default(""),
+    warrantyDate: text("warranty_date").notNull().default(""),
+    portalUrl: text("portal_url"),
+    remoteUrl: text("remote_url"),
+    syncedAt: timestamp("synced_at", { withTimezone: true }),
+  },
+  (t) => [uniqueIndex("rmm_devices_uid_idx").on(t.uid), index("rmm_devices_site_idx").on(t.siteUid)],
+);
+
+/** The other people a to-do task is assigned to (the first one is `pipeline_tasks.assignee_id`): a task has one or several */
+export const pipelineTaskAssignees = pgTable(
+  "pipeline_task_assignees",
+  {
+    taskId: uuid("task_id")
+      .notNull()
+      .references(() => pipelineTasks.id, { onDelete: "cascade" }),
+    userId: uuid("user_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    createdAt: created(),
+  },
+  (t) => [primaryKey({ columns: [t.taskId, t.userId] }), index("pipeline_task_assignees_user_idx").on(t.userId)],
+);
+
 /** Documentation › Base de connaissances: articles the team writes and reads (a draft is its author's until published) */
 export const kbArticles = pgTable(
   "kb_articles",

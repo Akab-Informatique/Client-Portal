@@ -2,11 +2,12 @@ import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { useTranslation } from "react-i18next";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
-import { BellRing, CalendarClock, CalendarPlus, CheckCircle2, CircleDashed, Clock3, ListChecks, Loader2, Lock, MessageSquare, Paperclip, PlayCircle, Repeat, Tag, Trash2, UserRound, Workflow, Ticket as TicketIcon, Eye } from "lucide-react";
+import { BellRing, Check, CalendarClock, CalendarPlus, CheckCircle2, CircleDashed, Clock3, ListChecks, Loader2, Lock, MessageSquare, Paperclip, PlayCircle, Repeat, Tag, Trash2, UserRound, Workflow, Ticket as TicketIcon, Eye } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { AddToDayDialog } from "@/pages/tickets/AddToDayDialog";
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Textarea } from "@/components/ui/textarea";
 import { useConfirm } from "@/components/ConfirmDialog";
 import { api, ApiError } from "@/lib/api";
@@ -53,6 +54,8 @@ type Values = {
   visibility: Visibility;
   viewerIds: string[];
   assigneeId: string | null;
+  /** The people it is assigned to (one or several, the first the main one) */
+  assigneeIds: string[];
   priority: TaskPriority;
 };
 
@@ -129,13 +132,13 @@ export function TaskDialog({ taskId, defaults, onClose, onOpenTask }: { taskId: 
   }, [task?.id, task?.updatedAt]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // ── a new task: its values and steps stay here until "Create" ──
-  const [f, setF] = useState<Values & { waitsOn: string }>({ kind: "normal", recurrence: null, remindEveryDays: null, dueDate: defaults?.dueDate ?? null, startDate: null, checkpointDate: null, checkpointTime: null, estimateMinutes: null, tags: [], visibility: "team", viewerIds: [], assigneeId: defaults?.assigneeId ?? me.id, priority: "normal", waitsOn: "" });
+  const [f, setF] = useState<Values & { waitsOn: string }>({ kind: "normal", recurrence: null, remindEveryDays: null, dueDate: defaults?.dueDate ?? null, startDate: null, checkpointDate: null, checkpointTime: null, estimateMinutes: null, tags: [], visibility: "team", viewerIds: [], assigneeId: defaults?.assigneeId ?? me.id, assigneeIds: defaults?.assigneeId === null ? [] : [defaults?.assigneeId ?? me.id], priority: "normal", waitsOn: "" });
   const [newSteps, setNewSteps] = useState<Step[]>([]);
   const [staged, setStaged] = useState<File[]>([]);
   const [counter, setCounter] = useState(0);
 
   const v: Values = task
-    ? { kind: task.kind, recurrence: task.recurrence, remindEveryDays: task.remindEveryDays, dueDate: task.dueDate, startDate: task.startDate, checkpointDate: task.checkpointDate, checkpointTime: task.checkpointTime, estimateMinutes: task.estimateMinutes, tags: task.tags, visibility: task.visibility, viewerIds: task.viewerIds, assigneeId: task.assigneeId, priority: task.priority }
+    ? { kind: task.kind, recurrence: task.recurrence, remindEveryDays: task.remindEveryDays, dueDate: task.dueDate, startDate: task.startDate, checkpointDate: task.checkpointDate, checkpointTime: task.checkpointTime, estimateMinutes: task.estimateMinutes, tags: task.tags, visibility: task.visibility, viewerIds: task.viewerIds, assigneeId: task.assigneeId, assigneeIds: task.assignees.map((x) => x.id), priority: task.priority }
     : f;
   const set = (p: Partial<Values>) => (isNew ? setF((old) => ({ ...old, ...p })) : patch.mutate(p));
   const schedule = scheduleOf(v.kind, v.recurrence);
@@ -182,7 +185,7 @@ export function TaskDialog({ taskId, defaults, onClose, onOpenTask }: { taskId: 
         title,
         notes,
         priority: f.priority,
-        assigneeId: f.assigneeId || null,
+        assigneeIds: f.assigneeIds,
         dueDate: f.kind !== "normal" ? null : f.dueDate,
         kind: f.kind,
         remindEveryDays: f.kind === "continuous" ? f.remindEveryDays : null,
@@ -416,14 +419,7 @@ export function TaskDialog({ taskId, defaults, onClose, onOpenTask }: { taskId: 
 
       {/* who */}
       <Field label={t("pipeline.assignee")} icon={UserRound}>
-        <select className={selectCls} disabled={locked} value={v.assigneeId ?? ""} onChange={(e) => set({ assigneeId: e.target.value || null })}>
-          <option value="">{t("pipeline.unassigned")}</option>
-          {(people.data ?? []).map((p) => (
-            <option key={p.id} value={p.id}>
-              {p.name}
-            </option>
-          ))}
-        </select>
+        <PeoplePick value={v.assigneeIds} people={people.data ?? []} disabled={locked} onChange={(assigneeIds) => set({ assigneeIds })} />
       </Field>
       <div className="space-y-1">
         <span className="flex items-center gap-1.5 text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
@@ -434,7 +430,7 @@ export function TaskDialog({ taskId, defaults, onClose, onOpenTask }: { taskId: 
           viewerIds={v.viewerIds}
           people={people.data ?? []}
           meId={me.id}
-          disabled={locked || Boolean(task && task.createdById !== me.id && task.assigneeId !== me.id)}
+          disabled={locked || Boolean(task && task.createdById !== me.id && !task.assignees.some((x) => x.id === me.id))}
           onChange={(visibility, viewerIds) => set({ visibility, viewerIds })}
         />
       </div>
@@ -606,5 +602,49 @@ export function TaskDialog({ taskId, defaults, onClose, onOpenTask }: { taskId: 
       {addingDay && <AddToDayDialog open onOpenChange={(o) => !o && setAddingDay(false)} tk={{ id: t0.id, title: t0.title }} kind="task" />}
       {notifying && <TaskNotify task={{ id: t0.id, title: t0.title }} people={people.data ?? []} onClose={() => setNotifying(false)} />}
     </>,
+  );
+}
+
+/** One or several people for a task: a list with a tick for each; the first one ticked is the main one */
+function PeoplePick({ value, people, disabled, onChange }: { value: string[]; people: { id: string; name: string }[]; disabled: boolean; onChange: (ids: string[]) => void }) {
+  const { t } = useTranslation();
+  const names = value.map((id) => people.find((p) => p.id === id)?.name ?? "—");
+  return (
+    <Popover>
+      <PopoverTrigger asChild disabled={disabled}>
+        <button type="button" disabled={disabled} className="flex min-h-9 w-full flex-wrap items-center gap-1.5 rounded-md border bg-transparent px-2 py-1 text-left text-sm disabled:opacity-60">
+          {names.length === 0 ? (
+            <span className="text-muted-foreground">{t("pipeline.unassigned")}</span>
+          ) : (
+            names.map((n, i) => (
+              <span key={value[i]} className={cn("rounded-full border px-2 py-0.5 text-xs", i === 0 ? "border-[color:var(--gold)]/50 bg-[color:var(--gold)]/10 text-primary" : "text-muted-foreground")}>
+                {n}
+              </span>
+            ))
+          )}
+        </button>
+      </PopoverTrigger>
+      <PopoverContent align="start" className="w-64 p-1">
+        <ul className="max-h-64 overflow-y-auto">
+          {people.map((p) => {
+            const on = value.includes(p.id);
+            return (
+              <li key={p.id}>
+                <button type="button" onClick={() => onChange(on ? value.filter((x) => x !== p.id) : [...value, p.id])} className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-sm hover:bg-accent">
+                  <span className={cn("flex size-4 items-center justify-center rounded border", on ? "border-[color:var(--gold)] bg-[color:var(--gold)]/30" : "border-muted-foreground/40")}>{on && <Check className="size-3" />}</span>
+                  {p.name}
+                </button>
+              </li>
+            );
+          })}
+        </ul>
+        {value.length > 0 && (
+          <button type="button" onClick={() => onChange([])} className="mt-1 w-full rounded-md px-2 py-1 text-left text-xs text-muted-foreground hover:bg-accent">
+            {t("pipeline.unassigned")}
+          </button>
+        )}
+        <p className="px-2 pb-1 pt-1.5 text-[10px] text-muted-foreground">{t("pipeline.manyHint")}</p>
+      </PopoverContent>
+    </Popover>
   );
 }

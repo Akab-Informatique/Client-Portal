@@ -9,6 +9,7 @@ import { smtpSettings } from "./lib/mail.ts";
 import { CRM_SYNC_EVERY, syncCrm } from "./lib/crm.ts";
 import { quickbooksTick } from "./lib/quickbooks.ts";
 import { itcloudTick } from "./lib/itcloud.ts";
+import { dattoTick } from "./lib/dattoRmm.ts";
 import { syncBillables } from "./lib/billables.ts";
 import { sweepTimers } from "./lib/timers.ts";
 import { sendReminders } from "./lib/planning.ts";
@@ -38,6 +39,8 @@ setInterval(() => void syncAll(), CRM_SYNC_EVERY).unref();
 setInterval(() => void quickbooksTick(), 15 * 60_000).unref();
 // ITCloud: the services of the matched customers kept on their contracts
 setInterval(() => void itcloudTick().catch((e) => console.warn("[itcloud] tick:", e instanceof Error ? e.message : e)), 15 * 60_000).unref();
+// Datto RMM: the devices of the matched sites, read only
+setInterval(() => void dattoTick().catch((e) => console.warn("[rmm] tick:", e instanceof Error ? e.message : e)), 15 * 60_000).unref();
 
 
 const server = serve({ fetch: app.fetch, port: config.port, hostname: host }, (info) => {
