@@ -99,6 +99,8 @@ export type DayItem = {
   dueTime?: string | null;
   /** Not before this time today (minutes since midnight) */
   notBefore?: number;
+  /** Today's checkpoint time: the item is put at this time (or in the next free slot after it) before the others are laid out */
+  startAt?: number;
   /** A private task the viewer may not see in detail */
   masked?: boolean;
   /** A priority pinned for the technician (Planning): of the day, or of the week, with its rank and the direction given */
@@ -314,6 +316,8 @@ export async function dayItems(userId: string, date: string, viewerId: string = 
   const handBlocks = await d.select().from(schema.pipelineDayBlocks).where(and(eq(schema.pipelineDayBlocks.userId, userId), eq(schema.pipelineDayBlocks.date, date)));
   for (const m of handBlocks) busy.push({ start: mins(m.startTime), end: mins(m.endTime), title: m.title, id: m.id, local: true, detail: m.note });
   const absent = absences.length > 0;
+  // an item whose checkpoint is today starts at the checkpoint's time
+  for (const i of items) if (i.checkpoint === date && i.checkpointTime) i.startAt = mins(i.checkpointTime);
   return { items, busy, absent, holiday: holidaysBetween(date, date).has(date) };
 }
 
@@ -407,13 +411,17 @@ export function layout(items: DayItem[], s: Pick<PipelineSettings, "workStart" |
   // blocks start and end on quarter hours: a free stretch begins at the next quarter and ends on the last one
   free = free.map((f) => ({ start: ceil15(f.start), end: Math.floor(f.end / 15) * 15 })).filter((f) => f.end > f.start);
   const capacityMinutes = free.reduce((n, f) => n + (f.end - f.start), 0);
+  type Seg = { start: number; end: number };
   const blocks: PipelineBlock[] = [];
-  let seg = 0;
-  let cursor = free[0]?.start ?? 0;
   let planned = 0;
   let overflowMinutes = 0;
+  const run = (list: DayItem[], free: Seg[], held: boolean) => {
+  const got: PipelineBlock[] = [];
+  const rejected: DayItem[] = [];
+  let seg = 0;
+  let cursor = free[0]?.start ?? 0;
   // an item that must not start before a time waits for it; the others fill the gap meanwhile
-  const queue = [...items];
+  const queue = [...list];
   const moveTo = (minute: number) => {
     while (seg < free.length && free[seg].end <= minute) {
       seg++;
@@ -444,7 +452,7 @@ export function layout(items: DayItem[], s: Pick<PipelineSettings, "workStart" |
         continue;
       }
       const take = Math.min(left, room);
-      blocks.push({
+      got.push({
         start: hhmm(cursor),
         end: hhmm(cursor + take),
         title: first ? it.title : `${it.title}`,
@@ -459,14 +467,37 @@ export function layout(items: DayItem[], s: Pick<PipelineSettings, "workStart" |
       });
       cursor += take;
       left -= take;
-      planned += take;
       first = false;
+    }
+    if (left > 0 && held) {
+      rejected.push(it);
+      continue;
     }
     if (left > 0) {
       overflowMinutes += left;
-      blocks.push({ start: "", end: "", title: it.title, kind: it.kind, refId: it.refId, ...(it.projectId ? { projectId: it.projectId } : {}), ticketNumber: it.ticketNumber ?? null, priority: it.priority, ...(it.pin ? { pinned: it.pin } : {}), note: notes.get(it.key) ?? it.pinNote ?? null, overflow: true, allocated: total, need: ceil15(it.need ?? total) });
+      got.push({ start: "", end: "", title: it.title, kind: it.kind, refId: it.refId, ...(it.projectId ? { projectId: it.projectId } : {}), ticketNumber: it.ticketNumber ?? null, priority: it.priority, ...(it.pin ? { pinned: it.pin } : {}), note: notes.get(it.key) ?? it.pinNote ?? null, overflow: true, allocated: total, need: ceil15(it.need ?? total) });
     }
   }
+  return { got, rejected };
+  };
+  // the items whose checkpoint is today go first, at the checkpoint's time (or the next free slot after it); the others fill what is left
+  const lastEnd = free.length ? free[free.length - 1].end : 0;
+  const timed = items.filter((i) => i.startAt !== undefined && i.startAt < lastEnd && !i.blocked).sort((x, y) => x.startAt! - y.startAt!);
+  const rest = items.filter((i) => !timed.includes(i));
+  let left = free;
+  if (timed.length) {
+    const first = run(timed.map((i) => ({ ...i, notBefore: Math.max(i.notBefore ?? 0, i.startAt!) })), free, true);
+    const keep = first.got.filter((g) => !first.rejected.some((r) => r.refId === g.refId && r.kind === g.kind));
+    blocks.push(...keep);
+    for (const k of keep) {
+      const bs = mins(k.start), be = mins(k.end);
+      left = left.flatMap((f) => (be <= f.start || bs >= f.end ? [f] : [...(bs > f.start ? [{ start: f.start, end: bs }] : []), ...(be < f.end ? [{ start: be, end: f.end }] : [])]));
+    }
+    rest.push(...first.rejected.map((r) => items.find((i) => i.key === r.key) ?? r));
+  }
+  const second = run(rest, left, false);
+  blocks.push(...second.got);
+  planned = blocks.reduce((n, k) => (k.start && !k.overflow ? n + (mins(k.end) - mins(k.start)) : n), 0);
   for (const b of busy) {
     if (b.allDay) blocks.push({ start: "", end: "", title: b.title, kind: "event", refId: null, allDay: true, o365: Boolean(b.o365) });
     else if (b.end > b.start) blocks.push({ start: hhmm(b.start), end: hhmm(b.end), title: b.title, kind: "event", refId: b.id ?? null, o365: Boolean(b.o365), ...(b.local ? { local: true, detail: b.detail ?? null } : {}) });

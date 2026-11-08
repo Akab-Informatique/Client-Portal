@@ -39,6 +39,22 @@ describe("pipeline: the day laid out in blocks", () => {
     expect(lay.blocks.find((b) => b.kind === "event")).toMatchObject({ start: "09:00", end: "10:00", title: "Réunion" });
   });
 
+  it("an item whose checkpoint is today starts at the checkpoint's time, the others fill around it; an event pushes it to the next free slot", () => {
+    const lay = layout([item({ key: "a", minutes: 120 }), item({ key: "cp", minutes: 60, startAt: 10 * 60 })], S, []);
+    const placed = lay.blocks.filter((b) => b.kind === "task").map((b) => [b.refId, b.start, b.end]);
+    expect(placed).toEqual([["a", "08:00", "10:00"], ["cp", "10:00", "11:00"]]);
+    // the others go around it
+    const around = layout([item({ key: "a", minutes: 180 }), item({ key: "cp", minutes: 60, startAt: 9 * 60 + 30 })], S, []);
+    expect(around.blocks.filter((b) => b.kind === "task").map((b) => [b.refId, b.start, b.end])).toEqual([["a", "08:00", "09:30"], ["cp", "09:30", "10:30"], ["a", "10:30", "12:00"]]);
+    // an event at that time: the next free slot after it
+    const busy = layout([item({ key: "cp", minutes: 60, startAt: 10 * 60 })], S, [{ start: 10 * 60, end: 11 * 60, title: "Réunion" }]);
+    expect(busy.blocks.find((b) => b.refId === "cp")).toMatchObject({ start: "11:00", end: "12:00" });
+    // a checkpoint at the end of the day with no room is laid out like the rest, not lost
+    const late = layout([item({ key: "cp", minutes: 60, startAt: 16 * 60 + 30 })], S, []);
+    expect(late.overflowMinutes).toBe(0);
+    expect(late.blocks.find((b) => b.refId === "cp")).toMatchObject({ start: "08:00" });
+  });
+
   it("an item with a start time waits for it while the others fill the gap; all-day events take no hours", () => {
     const lay = layout([item({ key: "late-start", minutes: 60, notBefore: 10 * 60 }), item({ key: "b", minutes: 60 }), item({ key: "c", minutes: 120 })], S, [{ start: 0, end: 1440, title: "Congrès", allDay: true, o365: true }]);
     expect(lay.capacityMinutes).toBe(480);
