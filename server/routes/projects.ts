@@ -123,6 +123,7 @@ async function cards(rows: Project[], me: string, withTasks = false) {
         startDate: m.startDate,
         dueDate: m.dueDate,
         late: m.status !== "done" && Boolean(m.dueDate && m.dueDate < today),
+        sentToApprovalAt: m.sentToApprovalAt?.toISOString() ?? null,
         budgetHours: m.budgetHoursX100 == null ? null : m.budgetHoursX100 / 100,
         hours: (logged.filter((h) => h.milestoneId === m.id).reduce((n, h) => n + h.h, 0)) / 100,
         tasksDone: mine.filter((t) => t.done).length,
@@ -743,6 +744,30 @@ export const projectsRoutes = new Hono<AppEnv>()
       .returning();
     await db().update(schema.projects).set({ updatedAt: new Date() }).where(eq(schema.projects.id, p.id));
     return c.json(row);
+  })
+  // a done milestone is sent to Accounting › Approbation (its time becomes work to bill, under Jalons); it can be taken back until approved
+  .post("/:id/milestones/:mid/send-approval", requirePermission("projects.edit"), async (c) => {
+    const p = await loadProject(c.req.param("id"));
+    const cur = await loadMilestone(p.id, c.req.param("mid"));
+    if (cur.status !== "done") throw new HTTPException(409, { message: "milestone_not_done" });
+    await db().update(schema.projectMilestones).set({ sentToApprovalAt: cur.sentToApprovalAt ?? new Date(), updatedAt: new Date() }).where(eq(schema.projectMilestones.id, cur.id));
+    await audit(auth(c).user.id, "project.milestone_sent_to_approval", cur.id, { project: p.number });
+    await syncBillablesNow();
+    return c.json({ ok: true });
+  })
+  .delete("/:id/milestones/:mid/send-approval", requirePermission("projects.edit"), async (c) => {
+    const p = await loadProject(c.req.param("id"));
+    const cur = await loadMilestone(p.id, c.req.param("mid"));
+    const entries = await db().select({ id: schema.timesheetEntries.id }).from(schema.timesheetEntries).where(eq(schema.timesheetEntries.milestoneId, cur.id));
+    const ids = entries.map((e) => `prtime:${e.id}`);
+    if (ids.length) {
+      const [moved] = await db().select({ id: schema.billingItems.id }).from(schema.billingItems).where(and(inArray(schema.billingItems.sourceId, ids), ne(schema.billingItems.status, "pending"))).limit(1);
+      if (moved) throw new HTTPException(409, { message: "milestone_billed" });
+    }
+    await db().update(schema.projectMilestones).set({ sentToApprovalAt: null, updatedAt: new Date() }).where(eq(schema.projectMilestones.id, cur.id));
+    await audit(auth(c).user.id, "project.milestone_approval_withdrawn", cur.id, { project: p.number });
+    await syncBillablesNow();
+    return c.json({ ok: true });
   })
   .delete("/:id/milestones/:mid", requirePermission("projects.edit"), async (c) => {
     const p = await loadProject(c.req.param("id"));

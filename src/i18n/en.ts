@@ -1826,7 +1826,7 @@ const en: Dict = {
       payOnline: "Pay online",
     },
     title: "Approve and post",
-    subtitle: "The work to bill (tickets, charges, contracts): approve or exclude it, adjust if needed, for the chosen period. Invoices are then made in Invoices › Items to invoice.",
+    subtitle: "The work to bill (tickets, charges, contracts): approve or exclude it, adjust if needed, month by month (only months with work still to approve are shown). Invoices are then made in Invoices › Items to invoice.",
     tabs: {
       labour: "Labour",
       charge: "Charges",
@@ -2816,7 +2816,7 @@ const en: Dict = {
     "tasks": "Tasks",
     "group": { "new": "New group", "name": "Group name", "none": "No group", "move": "Put in a group", "rename": "Rename", "delete": "Delete the group (tasks stay)", "empty": "No task in this group: put some with a task's folder icon.", "toggle": "Fold / unfold the group" },
     "noTasks": "No task in this milestone.",
-    "markReached": "Mark the milestone reached",
+    "sendToApproval":"Send to approval","sendApprovalNeedsDone":"The milestone must be done before it is sent to approval.","sentToApproval":"Milestone sent to approval (Accounting › Approval › Milestones).","approvalWithdrawn":"Milestone taken back from approval.","sentToApprovalOn":"Sent to approval on {{date}}","withdrawApproval":"Take back","markReached": "Mark the milestone reached",
     "reopenMilestone": "Reopen the milestone",
     "followsTasks": "The milestone is reached when all its tasks are done.",
     "noTask": "No task",

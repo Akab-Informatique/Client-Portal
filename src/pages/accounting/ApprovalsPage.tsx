@@ -36,7 +36,6 @@ import { useCan } from "@/lib/session";
 import { cn } from "@/lib/utils";
 import { money } from "@/pages/crm/shared";
 import { shortDate } from "@/pages/tickets/shared";
-import { PeriodBar, usePeriod } from "./period";
 import { useConfirm } from "@/components/ConfirmDialog";
 
 export type Kind = "labour" | "charge" | "expense" | "contract" | "milestone" | "project";
@@ -116,7 +115,8 @@ export function ApprovalsPage() {
   const qc = useQueryClient();
   const navigate = useNavigate();
   const [params, setParams] = useSearchParams();
-  const { period, set: setPeriod, query: pq } = usePeriod();
+  // no time frame: the work is sectioned by month, the months that still have something to approve
+  const pq = "";
   // invoices moved to Factures › Éléments à facturer (old links follow)
   const legacyInvoice = params.get("folder") === "invoice";
   useEffect(() => {
@@ -183,9 +183,6 @@ export function ApprovalsPage() {
           ))}
         </div>
       )}
-
-      {/* the time frame: only the work of these days */}
-      <PeriodBar period={period} onChange={setPeriod} />
 
       {/* folders */}
       <div>
@@ -284,11 +281,30 @@ function KindTab({ kind, counts, lang, pq }: { kind: Kind; counts: (s: Status) =
     queryKey: [...KEY, kind, status, pq],
     queryFn: () => api.get<Item[]>(`/billables?kind=${kind}&status=${status}&${pq}`),
   });
-  const groups = useMemo(() => {
-    const m = new Map<string, { name: string; items: Item[] }>();
-    for (const i of items) m.set(i.clientId, { name: i.clientName, items: [...(m.get(i.clientId)?.items ?? []), i] });
-    return [...m.entries()];
+  // a section per month (the newest first), and in it a folder per client
+  const months = useMemo(() => {
+    const byMonth = new Map<string, Item[]>();
+    for (const i of items) byMonth.set(i.date.slice(0, 7), [...(byMonth.get(i.date.slice(0, 7)) ?? []), i]);
+    return [...byMonth.entries()]
+      .sort((a, b) => b[0].localeCompare(a[0]))
+      .map(([ym, list]) => {
+        const m = new Map<string, { name: string; items: Item[] }>();
+        for (const i of list) m.set(i.clientId, { name: i.clientName, items: [...(m.get(i.clientId)?.items ?? []), i] });
+        return { ym, items: list, groups: [...m.entries()] };
+      });
   }, [items]);
+  const [closedMonths, setClosedMonths] = useState<Set<string>>(new Set());
+  const toggleMonth = (ym: string) =>
+    setClosedMonths((c) => {
+      const n = new Set(c);
+      if (n.has(ym)) n.delete(ym);
+      else n.add(ym);
+      return n;
+    });
+  const monthName = (ym: string) => {
+    const name = new Date(`${ym}-01T12:00:00`).toLocaleDateString(lang === "en" ? "en-CA" : "fr-CA", { month: "long", year: "numeric" });
+    return name.charAt(0).toUpperCase() + name.slice(1);
+  };
   const manage = can("accounting.manage") && status !== "posted";
   const setMany = (ids: string[], on: boolean) => setSel((s) => (on ? new Set([...s, ...ids]) : new Set([...s].filter((x) => !ids.includes(x)))));
   const move = useMutation({
@@ -304,8 +320,7 @@ function KindTab({ kind, counts, lang, pq }: { kind: Kind; counts: (s: Status) =
   const confirm = useConfirm();
   const updateRates = useMutation({
     mutationFn: () => {
-      const q = new URLSearchParams(pq);
-      return api.post<{ updated: number; unchanged: number; skipped: number; included: number; billedAgain: number }>("/billables/rates", { from: q.get("from"), to: q.get("to") });
+      return api.post<{ updated: number; unchanged: number; skipped: number; included: number; billedAgain: number }>("/billables/rates", { from: null, to: null });
     },
     onSuccess: (r) => {
       void qc.invalidateQueries({ queryKey: KEY });
@@ -326,7 +341,7 @@ function KindTab({ kind, counts, lang, pq }: { kind: Kind; counts: (s: Status) =
   });
   const m = (c: number) => money(c, lang);
   const total = items.reduce((x, i) => x + i.amountCents, 0);
-  const allSections = groups.flatMap(([id, g]) => [id, ...(kind === "contract" ? byContract(g.items).map((cg) => `${id}|${cg.key}`) : [])]);
+  const allSections = months.flatMap((mo) => mo.groups.flatMap(([id, g]) => [`${mo.ym}|${id}`, ...(kind === "contract" ? byContract(g.items).map((cg) => `${mo.ym}|${id}|${cg.key}`) : [])]));
   const renderItem = (i: Item) => (
     <li
       key={i.id}
@@ -422,7 +437,7 @@ function KindTab({ kind, counts, lang, pq }: { kind: Kind; counts: (s: Status) =
             {t(`approvals.status.${s}`)} <span className="font-mono text-[10px] text-muted-foreground">{counts(s)}</span>
           </button>
         ))}
-        {groups.length > 1 && (
+        {items.length > 1 && (
           <span className="ml-2 flex gap-1">
             <Button
               size="sm"
@@ -493,7 +508,30 @@ function KindTab({ kind, counts, lang, pq }: { kind: Kind; counts: (s: Status) =
       {!isLoading && items.length === 0 && (
         <p className="glass rounded-2xl border border-dashed py-12 text-center text-sm text-muted-foreground">{t(`approvals.none.${status}`)}</p>
       )}
-      {groups.map(([clientId, g]) => {
+      {months.map((mo) => {
+        const monthIds = mo.items.map((i) => i.id);
+        const monthOpen = !closedMonths.has(mo.ym);
+        return (
+          <section key={mo.ym} className="space-y-2 rounded-2xl border border-[color:var(--gold)]/25 bg-background/20 p-2">
+            <div className="flex items-center gap-3 px-2 py-1">
+              {manage && (
+                <Checkbox
+                  checked={monthIds.every((x) => sel.has(x)) ? true : monthIds.some((x) => sel.has(x)) ? "indeterminate" : false}
+                  onCheckedChange={(v) => setMany(monthIds, Boolean(v))}
+                  aria-label={monthName(mo.ym)}
+                />
+              )}
+              <button type="button" onClick={() => toggleMonth(mo.ym)} aria-expanded={monthOpen} className="flex min-w-0 flex-1 items-center gap-2 text-left">
+                <ChevronRight className={cn("size-4 shrink-0 text-primary transition-transform", monthOpen && "rotate-90")} />
+                <span className="text-base font-bold">{monthName(mo.ym)}</span>
+                <span className="ml-auto shrink-0 text-xs text-muted-foreground">{t("approvals.items", { count: mo.items.length })}</span>
+              </button>
+              <span className="font-mono text-sm font-semibold">{m(mo.items.reduce((x, i) => x + i.amountCents, 0))}</span>
+            </div>
+            {monthOpen && (
+              <div className="space-y-3">
+          {mo.groups.map(([clientId0, g]) => {
+        const clientId = `${mo.ym}|${clientId0}`;
         const ids = g.items.map((i) => i.id);
         const sub = g.items.reduce((x, i) => x + i.amountCents, 0);
         const closed = !opened.has(clientId);
@@ -563,6 +601,11 @@ function KindTab({ kind, counts, lang, pq }: { kind: Kind; counts: (s: Status) =
                     ))
                   : g.items.map(renderItem)}
               </ul>
+            )}
+          </section>
+        );
+          })}
+              </div>
             )}
           </section>
         );

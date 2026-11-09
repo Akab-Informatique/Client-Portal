@@ -1824,7 +1824,7 @@ const fr = {
       payOnline: "Payer en ligne",
     },
     title: "Approbation et publication",
-    subtitle: "Le travail à facturer (billets, frais, contrats) : approuvez-le ou excluez-le, ajustez au besoin, pour la période choisie. Les factures se créent ensuite dans Factures › Éléments à facturer.",
+    subtitle: "Le travail à facturer (billets, frais, contrats) : approuvez-le ou excluez-le, ajustez au besoin, mois par mois (seuls les mois qui ont encore du travail à approuver sont affichés). Les factures se créent ensuite dans Factures › Éléments à facturer.",
     tabs: {
       labour: "Main-d'œuvre",
       charge: "Frais",
@@ -2814,7 +2814,7 @@ const fr = {
     "tasks": "Tâches",
     "group": { "new": "Nouveau groupe", "name": "Nom du groupe", "none": "Sans groupe", "move": "Mettre dans un groupe", "rename": "Renommer", "delete": "Supprimer le groupe (les tâches restent)", "empty": "Aucune tâche dans ce groupe : mettez-en avec l'icône dossier d'une tâche.", "toggle": "Plier / déplier le groupe" },
     "noTasks": "Aucune tâche dans ce jalon.",
-    "markReached": "Marquer le jalon atteint",
+    "sendToApproval":"Envoyer à l'approbation","sendApprovalNeedsDone":"Le jalon doit être terminé avant d'être envoyé à l'approbation.","sentToApproval":"Jalon envoyé à l'approbation (Comptabilité › Approbation › Jalons).","approvalWithdrawn":"Jalon retiré de l'approbation.","sentToApprovalOn":"Envoyé à l'approbation le {{date}}","withdrawApproval":"Retirer de l'approbation","markReached": "Marquer le jalon atteint",
     "reopenMilestone": "Rouvrir le jalon",
     "followsTasks": "Le jalon est atteint quand toutes ses tâches sont terminées.",
     "noTask": "Sans tâche",

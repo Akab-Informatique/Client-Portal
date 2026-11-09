@@ -78,6 +78,8 @@ export type Milestone = {
   startDate: string | null;
   dueDate: string | null;
   late: boolean;
+  /** Sent to Accounting › Approbation (a done milestone): its time is work to bill under Jalons */
+  sentToApprovalAt: string | null;
   budgetHours: number | null;
   hours: number;
   tasksDone: number;

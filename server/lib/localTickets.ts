@@ -469,9 +469,10 @@ export function localTicketSource(base: TicketSource): TicketSource {
       }
       // the billable time logged on projects (Projets › Temps): billed at the project's hourly rate; the entries left included are not work to bill
       const onProjects = await db()
-        .select({ e: schema.timesheetEntries, number: schema.projects.number, rate: schema.projects.hourlyRateCents, mode: schema.projects.billingMode, contract: schema.clientContracts, companyId: schema.clients.autotaskId, who: schema.users.name })
+        .select({ e: schema.timesheetEntries, number: schema.projects.number, rate: schema.projects.hourlyRateCents, mode: schema.projects.billingMode, contract: schema.clientContracts, companyId: schema.clients.autotaskId, who: schema.users.name, msStatus: schema.projectMilestones.status, msSent: schema.projectMilestones.sentToApprovalAt })
         .from(schema.timesheetEntries)
         .innerJoin(schema.projects, eq(schema.projects.id, schema.timesheetEntries.projectId))
+        .leftJoin(schema.projectMilestones, eq(schema.projectMilestones.id, schema.timesheetEntries.milestoneId))
         .innerJoin(schema.clients, eq(schema.clients.id, schema.projects.clientId))
         .innerJoin(schema.users, eq(schema.users.id, schema.timesheetEntries.userId))
         // the contract the time was worked under (a task's own, else the project's)
@@ -479,15 +480,17 @@ export function localTicketSource(base: TicketSource): TicketSource {
         // ticket time counted in a project is billed through its ticket (ptime:), never twice
         .where(and(sql`${schema.timesheetEntries.billableX100} > 0`, isNull(schema.timesheetEntries.ticketTimeId), gte(schema.timesheetEntries.date, since)));
       const usual = (await billingSettings()).rates.hourly;
-      for (const { e, number, rate: projectRate, mode, contract, companyId, who } of onProjects) {
+      for (const { e, number, rate: projectRate, mode, contract, companyId, who, msStatus, msSent } of onProjects) {
         if (companyId == null) continue;
+        // time on a milestone is not labour: it is work to bill under "Jalons", only once the milestone is done and sent to approval
+        if (e.milestoneId && !(msStatus === "done" && msSent)) continue;
         // under a contract the hour costs what the contract says (none: the hours are included, nothing to bill)
         const underContract = Boolean(contract) && (mode === "contract" || Boolean(e.contractId));
         const rate = underContract ? hourlyRateOf(contract!, usual) : projectRate;
         if (underContract && rate == null) continue;
         items.push({
           id: `prtime:${e.id}`,
-          kind: "labour",
+          kind: e.milestoneId ? "milestone" : "labour",
           companyId,
           date: e.date,
           description: [e.ticketTitle, e.note].filter(Boolean).join(" — ").slice(0, 2000),

@@ -2907,6 +2907,8 @@ export const projectMilestones = pgTable(
     budgetHoursX100: integer("budget_hours_x100"),
     position: integer("position").notNull().default(0),
     doneAt: timestamp("done_at", { withTimezone: true }),
+    /** Sent to Accounting › Approbation (only once the milestone is done): its time becomes work to bill under "Jalons" */
+    sentToApprovalAt: timestamp("sent_to_approval_at", { withTimezone: true }),
     createdAt: created(),
     updatedAt: updated(),
   },

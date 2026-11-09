@@ -1,0 +1,1 @@
+ALTER TABLE "project_milestones" ADD COLUMN "sent_to_approval_at" timestamp with time zone;

@@ -4697,7 +4697,16 @@ describe("submitting: timesheets (when required) and expenses", () => {
     // work to bill: only the billable time, at the project's hourly rate, for its client
     const { localTicketSource } = await import("../server/lib/localTickets.ts");
     const { localBase } = await import("../server/lib/localBase.ts");
-    const items = (await localTicketSource(localBase).billables("2020-01-01")).items.filter((i) => i.id.startsWith("prtime:"));
+    const billablesNow = async () => (await localTicketSource(localBase).billables("2020-01-01")).items.filter((i) => i.id.startsWith("prtime:"));
+    // time on a milestone is not labour: nothing to bill until the milestone is done AND sent to approval
+    expect((await billablesNow()).filter((i) => i.ticketNumber === hourly.number || i.ticketNumber === fixed.number)).toEqual([]);
+    expect((await tech.post(`/api/projects/${hourly.id}/milestones/${hourly.milestones[0].id}/send-approval`, {})).json.error).toBe("milestone_not_done");
+    for (const [pr, tk] of [[hourly, task], [fixed, ftask]] as const) {
+      expect((await tech.patch(`/api/projects/${pr.id}/tasks/${tk.id}`, { status: "done" })).status).toBe(200);
+      expect((await tech.post(`/api/projects/${pr.id}/milestones/${pr.milestones[0].id}/send-approval`, {})).status).toBe(200);
+    }
+    const items = await billablesNow();
+    expect(items.filter((i) => i.ticketNumber === hourly.number).every((i) => i.kind === "milestone")).toBe(true);
     const mine = items.filter((i) => i.ticketNumber === hourly.number || i.ticketNumber === fixed.number);
     expect(mine.map((i) => [i.ticketNumber, i.quantity, i.unitPriceCents]).sort()).toEqual(
       [

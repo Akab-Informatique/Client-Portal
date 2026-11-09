@@ -232,7 +232,17 @@ function MilestoneRow({ p, m, edit, isOpen, onToggle, onChanged, fail, onUp, onD
   useEffect(() => {
     if (focus) ref.current?.scrollIntoView({ block: "center" });
   }, [focus]);
+  const can = useCan();
   const patch = useMutation({ mutationFn: (v: Record<string, unknown>) => api.patch(`/projects/${p.id}/milestones/${m.id}`, v), onSuccess: onChanged, onError: fail });
+  // a done milestone goes to Accounting › Approbation (Jalons) when it is sent; it can be taken back until approved
+  const sendApproval = useMutation({
+    mutationFn: (send: boolean) => (send ? api.post(`/projects/${p.id}/milestones/${m.id}/send-approval`, {}) : api.del(`/projects/${p.id}/milestones/${m.id}/send-approval`)),
+    onSuccess: (_r, send) => {
+      toast.success(t(send ? "projects.sentToApproval" : "projects.approvalWithdrawn"));
+      onChanged();
+    },
+    onError: fail,
+  });
   const del = useMutation({ mutationFn: () => api.del(`/projects/${p.id}/milestones/${m.id}`), onSuccess: onChanged, onError: fail });
   const [task, setTask] = useState("");
   const addTask = useMutation({ mutationFn: () => api.post(`/projects/${p.id}/milestones/${m.id}/tasks`, { title: task.trim() }), onSuccess: () => (setTask(""), onChanged()), onError: fail });
@@ -344,6 +354,22 @@ function MilestoneRow({ p, m, edit, isOpen, onToggle, onChanged, fail, onUp, onD
               </Button>
             )}
             {m.tasksTotal > 0 && <p className="text-xs text-muted-foreground">{t("projects.followsTasks")}</p>}
+            {edit && can("accounting.manage") && (
+              <div className="flex flex-wrap items-center gap-2 border-t pt-2">
+                {m.sentToApprovalAt ? (
+                  <>
+                    <span className="flex items-center gap-1 text-xs text-emerald-300"><Flag className="size-3.5" /> {t("projects.sentToApprovalOn", { date: shortDate(m.sentToApprovalAt) })}</span>
+                    <Button variant="ghost" size="sm" disabled={sendApproval.isPending} onClick={() => sendApproval.mutate(false)}>
+                      {t("projects.withdrawApproval")}
+                    </Button>
+                  </>
+                ) : (
+                  <Button variant="outline" size="sm" disabled={m.status !== "done" || sendApproval.isPending} onClick={() => sendApproval.mutate(true)} title={m.status !== "done" ? t("projects.sendApprovalNeedsDone") : undefined}>
+                    <Flag className="size-3.5" /> {t("projects.sendToApproval")}
+                  </Button>
+                )}
+              </div>
+            )}
           </div>
         )}
       </div>
