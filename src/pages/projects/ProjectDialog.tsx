@@ -1,10 +1,11 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent } from "react";
+import { useSearchParams } from "react-router-dom";
 import { useTranslation } from "react-i18next";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { AiTextarea } from "@/components/AiPolish";
 import { PhasePanel } from "./PhasePanel";
-import { ArrowDown, ArrowUp, GripVertical, BellRing, Check, Globe, Lock, ChevronDown, Clock, FileText, Flag, FolderOpen, Info, ArrowRightLeft, ListChecks, Loader2, Mail, MessageSquare, MessagesSquare, Plus, Star, Trash2, X } from "lucide-react";
+import { ArrowDown, ArrowUp, GripVertical, BellRing, Check, Globe, Lock, ChevronDown, Clock, FileText, Flag, FolderOpen, Info, ArrowRightLeft, ListChecks, Loader2, Mail, MessageSquare, MessagesSquare, Minus, Plus, Star, Trash2, X } from "lucide-react";
 import { useConfirm } from "@/components/ConfirmDialog";
 import { MoveChargeDialog } from "@/components/MoveChargeDialog";
 import { Button } from "@/components/ui/button";
@@ -45,6 +46,7 @@ type TabKey = (typeof TABS)[number]["key"];
 export function ProjectDialog({ id, onClose, tab, milestone, onTab }: { id: string; onClose: () => void; tab: string | null; milestone: string | null; onTab: (tab: string) => void }) {
   const ws = useProjectWorkspace();
   const onTask = (taskId: string | null) => taskId && ws.openTask(id, taskId);
+  const [, setSearch] = useSearchParams();
   const { t } = useTranslation();
   const can = useCan();
   const qc = useQueryClient();
@@ -64,10 +66,37 @@ export function ProjectDialog({ id, onClose, tab, milestone, onTab }: { id: stri
     onError: fail,
   });
   const edit = can("projects.edit");
+  // a phase timer running in this project: closing the folder asks what to do with the time; minimizing keeps everything running
+  const { data: runs = [] } = useQuery({ queryKey: [...KEY, "timers"], queryFn: () => api.get<{ taskId: string; startedAt: string; title: string; projectId: string; kind?: "phase" }[]>("/projects/timers"), refetchInterval: 30_000 });
+  const running = runs.filter((x) => x.kind === "phase" && x.projectId === id);
+  const [closing, setClosing] = useState(false);
+  const requestClose = () => (running.length ? setClosing(true) : onClose());
+  const minimize = () => {
+    if (p) ws.minimizeProject({ projectId: id, number: p.number, name: p.name });
+    onClose();
+  };
+  // "enter the time" opens that phase with its time window
+  const enterTime = (milestoneId: string) => {
+    setClosing(false);
+    setSearch((q) => {
+      q.set("tab", "milestones");
+      q.set("milestone", milestoneId);
+      q.set("time", milestoneId);
+      return q;
+    }, { replace: true });
+  };
+  const discardAll = useMutation({
+    mutationFn: () => Promise.all(running.map((x) => api.post(`/projects/${id}/milestones/${x.taskId}/timer/stop`, { discard: true }))),
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: [...KEY, "timers"] });
+      onClose();
+    },
+    onError: fail,
+  });
   const counts: Record<TabKey, number | null> = { overview: null, milestones: p?.milestones.length ?? null, time: p?.time.entries.length ?? null, notes: p?.notes.length ?? null };
 
   return (
-    <Dialog open onOpenChange={(o) => !o && onClose()}>
+    <Dialog open onOpenChange={(o) => !o && requestClose()}>
       <DialogContent showCloseButton={false} className="flex h-[min(96dvh,64rem)] flex-col gap-0 overflow-hidden p-0 sm:max-w-[min(97vw,92rem)]">
         {/* the folder's header */}
         <header className="flex items-start gap-3 border-b bg-gradient-to-b from-[color:var(--gold)]/[0.07] to-transparent px-5 pb-0 pt-4">
@@ -99,10 +128,42 @@ export function ProjectDialog({ id, onClose, tab, milestone, onTab }: { id: stri
               <Star className={cn("size-5", p.following && "fill-current")} />
             </button>
           )}
-          <button type="button" onClick={onClose} aria-label={t("common.close")} className="rounded-md p-2 text-muted-foreground hover:bg-foreground/[0.06] hover:text-foreground">
+          <button type="button" onClick={minimize} aria-label={t("projects.minimize")} title={t("projects.minimize")} className="rounded-md p-2 text-muted-foreground hover:bg-foreground/[0.06] hover:text-foreground">
+            <Minus className="size-5" />
+          </button>
+          <button type="button" onClick={requestClose} aria-label={t("common.close")} className="rounded-md p-2 text-muted-foreground hover:bg-foreground/[0.06] hover:text-foreground">
             <X className="size-5" />
           </button>
         </header>
+        {closing && (
+          <Dialog open onOpenChange={(o) => !o && setClosing(false)}>
+            <DialogContent className="sm:max-w-md">
+              <DialogTitle className="flex items-center gap-2">
+                <Clock className="size-5 text-emerald-300" /> {t("projects.phase.projectCloseTitle")}
+              </DialogTitle>
+              <DialogDescription>{t("projects.phase.closeText")}</DialogDescription>
+              <ul className="space-y-1.5">
+                {running.map((x) => (
+                  <li key={x.taskId} className="flex items-center gap-2 rounded-lg border px-3 py-2 text-sm">
+                    <Flag className="size-4 shrink-0 text-violet-300" />
+                    <span className="min-w-0 flex-1 truncate">{x.title}</span>
+                    <Button size="sm" className="h-8 bg-sky-500 text-white hover:bg-sky-400" onClick={() => enterTime(x.taskId)}>
+                      {t("projects.phase.enterNow")}
+                    </Button>
+                  </li>
+                ))}
+              </ul>
+              <div className="grid gap-2">
+                <Button variant="outline" className="justify-start gap-2" onClick={() => (setClosing(false), onClose())}>
+                  <Minus className="size-4" /> {t("projects.phase.later")}
+                </Button>
+                <Button variant="ghost" className="justify-start gap-2 text-muted-foreground hover:text-destructive" disabled={discardAll.isPending} onClick={() => discardAll.mutate()}>
+                  <Trash2 className="size-4" /> {t("projects.phase.closeNoTime")}
+                </Button>
+              </div>
+            </DialogContent>
+          </Dialog>
+        )}
         {/* the folder's tabs */}
         <div className="flex flex-wrap items-end gap-1 border-b px-4 pt-2" role="tablist">
           {TABS.map((x) => {

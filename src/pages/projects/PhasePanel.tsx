@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState, type FormEvent } from "react";
 import { useTranslation } from "react-i18next";
+import { useSearchParams } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { BellRing, Check, ChevronDown, Clock, Loader2, Lock, Mail, MessagesSquare, Minus, Send, StickyNote, Square, Trash2, X } from "lucide-react";
@@ -66,6 +67,13 @@ export function PhasePanel({ p, m, edit, onChanged, fail, onCollapse }: { p: Pro
   const elapsed = data?.timer ? Math.max(0, Math.floor((now - new Date(data.timer.startedAt).getTime()) / 1000)) : 0;
 
   const [dialog, setDialog] = useState<null | { fromTimer: boolean }>(null);
+  // "enter the time" from the project's closing question: ?time=<this phase> opens the time window once
+  const [search, setSearch] = useSearchParams();
+  useEffect(() => {
+    if (search.get("time") !== m.id || !data) return;
+    setDialog({ fromTimer: Boolean(data.timer) });
+    setSearch((q) => (q.delete("time"), q), { replace: true });
+  }, [search, m.id, data, setSearch]);
   // closing the section with the timer running asks what to do with the time
   const [closing, setClosing] = useState(false);
   const discard = useMutation({
