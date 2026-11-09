@@ -1470,6 +1470,15 @@ const fr = {
       contactEmail: "Courriel du contact",
       subject: "Titre",
       subjectPlaceholder: "Remplacement des postes du bureau",
+      saleType: "Type de vente",
+      saleTypeFixed: "Prix fixe",
+      saleTypeBank: "Banque d'heures",
+      saleTypeHourly: "Taux horaire",
+      saleTypeHint: {
+        fixed: "Un prix pour tout. Un dépôt (50 % par défaut) peut être perçu à l'acceptation; le reste est facturé avec le projet.",
+        bank: "Des heures payées au complet à l'acceptation. Les heures travaillées sont déduites de la banque.",
+        hourly: "Rien n'est facturé d'avance. Le temps est facturé au taux horaire quand un jalon est terminé et envoyé à l'approbation.",
+      },
       issuedOn: "Date",
       validUntil: "Valide jusqu'au",
       taxes: "Taxes (TPS et TVQ)",
@@ -1544,6 +1553,7 @@ const fr = {
       client_unknown: "Client introuvable.",
       deposit_needs_client: "Choisissez un client du CRM : un prospect ne peut pas être facturé.",
       deposit_exists: "La facture de dépôt de cette soumission est déjà faite.",
+      deposit_not_allowed: "Une soumission à taux horaire ne se facture pas d'avance : le travail est facturé quand un jalon est terminé.",
       deposit_nothing: "Rien à payer maintenant : l'implantation est à 0 $.",
       deposit_lines_invalid: "Une ligne choisie n'est pas une ligne unique de la soumission.",
       service_not_found: "Un service de la soumission n'existe plus.",
@@ -2476,6 +2486,7 @@ const fr = {
   },
   projects: {
     sold: {
+      bankLeft: "Heures restantes dans la banque",
       title: "Vendu vs travaillé",
       fromQuote: "Soumission {{number}}",
       sold: "Vendu",
@@ -2721,17 +2732,21 @@ const fr = {
     "toggleBillable": "Cliquer pour changer : facturable ou inclus",
     "billing": "Facturation",
     "billingMode": "Facturation du projet",
+    "bankPrice": "Prix payé pour la banque ($)",
+    "bankNeedsHours": "Indiquez les heures de la banque dans « Heures prévues ».",
     "mode": {
       "contract": "Sous un contrat",
       "hourly": "Taux horaire",
       "special": "Taux spécial",
-      "fixed": "Prix fixe"
+      "fixed": "Prix fixe",
+      "bank": "Banque d'heures"
     },
     "modeHint": {
+      "bank": "Des heures achetées et payées au complet. Chaque entrée de temps est déduite de la banque.",
       "contract": "Le temps est facturé au taux horaire du contrat du client (ou inclus s'il n'a pas de taux).",
       "hourly": "Le temps est facturé au taux horaire fixé ici (le taux habituel au départ).",
       "special": "Un taux négocié pour ce projet, différent du taux habituel.",
-      "fixed": "Prix fixe : le temps commence inclus dans le prix."
+      "fixed": "Un prix pour tout le projet : le temps de chaque entrée est calculé mais jamais facturé à l'unité. Une seule facture pour le projet (un dépôt est possible)."
     },
     "contract": "Contrat",
     "pickContract": "Choisir un contrat",

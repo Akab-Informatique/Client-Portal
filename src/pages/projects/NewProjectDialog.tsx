@@ -15,7 +15,7 @@ import { useMe } from "@/lib/session";
 import { useCrmClients } from "@/pages/crm/shared";
 import { apiMessage, useProjectPeople, type BillingMode, type Project } from "./shared";
 
-const MODES: BillingMode[] = ["contract", "hourly", "special"];
+const MODES: BillingMode[] = ["fixed", "bank", "hourly", "contract", "special"];
 
 /**
  * New project: its name, the client, the leader, the team (the tasks are given to them), the start and due days, the
@@ -28,7 +28,7 @@ export function NewProjectDialog({ onClose, onCreated }: { onClose: () => void; 
   const { data: people = [] } = useProjectPeople();
   const { data: clients = [] } = useCrmClients();
   const { data: defaults } = useQuery({ queryKey: ["projects", "defaults"], queryFn: () => api.get<{ hourlyRate: number }>("/projects/defaults"), staleTime: 60_000 });
-  const [f, setF] = useState({ name: "", clientId: "", leadId: me.id, startDate: "", dueDate: "", budget: "", every: "", checkpointDate: "", description: "", mode: "hourly" as BillingMode, contractId: "", rate: "", special: "" });
+  const [f, setF] = useState({ name: "", clientId: "", leadId: me.id, startDate: "", dueDate: "", budget: "", every: "", checkpointDate: "", description: "", mode: "hourly" as BillingMode, contractId: "", rate: "", special: "", price: "" });
   const [team, setTeam] = useState<string[]>([]);
   const { data: contracts = [] } = useQuery({ queryKey: ["projects", "client-contracts", f.clientId], queryFn: () => api.get<{ id: string; name: string; hourlyRate: number | null }[]>(`/projects/client-contracts/${f.clientId}`), enabled: Boolean(f.clientId), staleTime: 30_000 });
   const num = (v: string) => (v.trim() ? Number(v.replace(",", ".")) : null);
@@ -49,7 +49,8 @@ export function NewProjectDialog({ onClose, onCreated }: { onClose: () => void; 
         checkpointDate: every && f.checkpointDate ? f.checkpointDate : undefined,
         billingMode: f.mode,
         contractId: f.mode === "contract" ? f.contractId : null,
-        hourlyRate: f.mode === "contract" ? null : f.mode === "special" ? rate : (rate ?? defaults?.hourlyRate ?? null),
+        hourlyRate: f.mode === "contract" || f.mode === "fixed" || f.mode === "bank" ? null : f.mode === "special" ? rate : (rate ?? defaults?.hourlyRate ?? null),
+        fixedPrice: f.mode === "fixed" || f.mode === "bank" ? num(f.price) : undefined,
         description: f.description.trim(),
       }),
     onSuccess: (p) => {
@@ -58,7 +59,7 @@ export function NewProjectDialog({ onClose, onCreated }: { onClose: () => void; 
     },
     onError: (e) => toast.error(apiMessage(e instanceof ApiError ? e.code : undefined, t)),
   });
-  const billingOk = f.mode === "contract" ? Boolean(f.clientId && f.contractId) : f.mode === "special" ? rate != null && rate > 0 : rate === null || rate >= 0;
+  const billingOk = f.mode === "fixed" ? (num(f.price) ?? 0) > 0 : f.mode === "bank" ? (budget ?? 0) > 0 : f.mode === "contract" ? Boolean(f.clientId && f.contractId) : f.mode === "special" ? rate != null && rate > 0 : rate === null || rate >= 0;
   const valid = f.name.trim().length > 0 && (budget === null || (Number.isFinite(budget) && budget >= 0)) && (every === null || (Number.isInteger(every) && every >= 1 && every <= 365)) && !(f.startDate && f.dueDate && f.dueDate < f.startDate) && billingOk;
   const set = (k: keyof typeof f) => (v: string) => setF((s) => ({ ...s, [k]: v }));
   const nameOf = (id: string) => people.find((p) => p.id === id)?.name ?? "";
@@ -180,7 +181,7 @@ export function NewProjectDialog({ onClose, onCreated }: { onClose: () => void; 
 
           <div className="space-y-2 rounded-xl border p-3">
             <Label>{t("projects.billingMode")}</Label>
-            <div className="grid gap-2 sm:grid-cols-3" role="radiogroup" aria-label={t("projects.billingMode")}>
+            <div className="grid gap-2 sm:grid-cols-3 lg:grid-cols-5" role="radiogroup" aria-label={t("projects.billingMode")}>
               {MODES.map((m) => (
                 <button key={m} type="button" role="radio" aria-checked={f.mode === m} onClick={() => set("mode")(m)} className={cn("rounded-xl border px-3 py-2 text-left transition-colors", f.mode === m ? "border-[color:var(--gold)]/60 bg-[color:var(--gold)]/10" : "bg-muted/30 hover:bg-accent/40")}>
                   <span className="block text-sm font-medium">{t(`projects.mode.${m}`)}</span>
@@ -210,6 +211,14 @@ export function NewProjectDialog({ onClose, onCreated }: { onClose: () => void; 
             {f.mode === "hourly" && (
               <div className="flex items-center gap-2 text-sm">
                 <Input inputMode="decimal" value={f.rate} onChange={(e) => set("rate")(e.target.value)} placeholder={defaults ? `${defaults.hourlyRate}` : ""} className="h-9 w-28" aria-label={t("projects.hourlyRate")} /> {t("projects.hourlyRate")}
+              </div>
+            )}
+            {(f.mode === "fixed" || f.mode === "bank") && (
+              <div className="space-y-1.5 text-sm">
+                <div className="flex items-center gap-2">
+                  <Input inputMode="decimal" value={f.price} onChange={(e) => set("price")(e.target.value)} className="h-9 w-32" aria-label={t("projects.fixedPrice")} /> {t(f.mode === "bank" ? "projects.bankPrice" : "projects.fixedPrice")}
+                </div>
+                {f.mode === "bank" && <p className="text-xs text-amber-300">{t("projects.bankNeedsHours")}</p>}
               </div>
             )}
             {f.mode === "special" && (

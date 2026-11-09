@@ -80,7 +80,7 @@ export async function billProject(actorId: string, projectId: string) {
   const d = db();
   const [p] = await d.select().from(schema.projects).where(eq(schema.projects.id, projectId));
   if (!p) throw new ProjectBillError("not_found");
-  if (p.billingMode !== "fixed") throw new ProjectBillError("project_not_sold");
+  if (p.billingMode !== "fixed" && p.billingMode !== "bank") throw new ProjectBillError("project_not_sold");
   if (!p.clientId) throw new ProjectBillError("project_no_client");
   if (!p.fixedPriceCents || p.fixedPriceCents <= 0) throw new ProjectBillError("project_no_price");
   const [already] = await d.select({ id: schema.billingItems.id }).from(schema.billingItems).where(like(schema.billingItems.sourceId, `project:${p.id}%`));
@@ -127,6 +127,8 @@ export async function billProject(actorId: string, projectId: string) {
         edited: true,
       })),
   ];
+  // a deposit that already paid everything (a bank of hours is paid in full) leaves nothing to bill
+  if (values.reduce((n, v) => n + v.amountCents, 0) <= 0) throw new ProjectBillError("project_nothing_to_bill");
   await d.insert(schema.billingItems).values(values.map((v) => ({ ...v, syncedAt: now })));
   await d.update(schema.projects).set({ invoicedAt: now, updatedAt: now }).where(eq(schema.projects.id, p.id));
   return { lines: values.length, totalCents: values.reduce((n, v) => n + v.amountCents, 0), deposit: dep ? { number: dep.number, subtotalCents: dep.subtotalCents } : null, actorId };

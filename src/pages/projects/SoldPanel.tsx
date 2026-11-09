@@ -52,7 +52,7 @@ export function SoldPanel({ p, onChanged }: { p: ProjectDetail; onChanged: () =>
             return rest > 0.009 ? [{ label: t("projects.sold.noPhase"), hours: rest }] : [];
           })(),
         ];
-  const canBill = can("accounting.manage") && p.billingMode === "fixed" && !p.billing.invoicedAt && (s.priceCents ?? 0) > 0;
+  const canBill = can("accounting.manage") && (p.billingMode === "fixed" || p.billingMode === "bank") && !p.billing.invoicedAt && (s.priceCents ?? 0) > 0;
 
   return (
     <Card
@@ -115,7 +115,13 @@ export function SoldPanel({ p, onChanged }: { p: ProjectDetail; onChanged: () =>
         </div>
 
         {/* billing of the price sold */}
-        {p.billingMode === "fixed" && (
+        {p.billingMode === "bank" && (
+          <div className={cn("flex items-baseline justify-between rounded-xl border px-3 py-2", over ? "border-red-500/50 bg-red-500/10" : "border-emerald-500/30 bg-emerald-500/[0.06]")}>
+            <span className="text-sm font-medium">{t("projects.sold.bankLeft")}</span>
+            <span className={cn("font-mono text-lg font-bold", over ? "text-red-300" : "text-emerald-300")}>{over ? `−${hoursText(worked - sold)}` : hoursText(sold - worked)} <span className="text-xs font-normal text-muted-foreground">/ {hoursText(sold)}</span></span>
+          </div>
+        )}
+        {(p.billingMode === "fixed" || p.billingMode === "bank") && (
           <div className="space-y-2 rounded-xl border bg-background/30 p-3">
             <p className="text-xs text-muted-foreground">{t("projects.sold.billingHelp", { name: `${p.number} — ${p.name}`, hours: s.hours != null ? hoursText(s.hours) : "—" })}</p>
             {p.billing.deposit && <p className="text-xs">{t("projects.sold.deposit", { number: p.billing.deposit.number, amount: m(p.billing.deposit.subtotalCents) })}</p>}

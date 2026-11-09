@@ -245,7 +245,7 @@ const zProject = z.object({
   startDate: zDay.nullable().optional(),
   dueDate: zDay.nullable().optional(),
   budgetHours: zHours.nullable().optional(),
-  billingMode: z.enum(["hourly", "fixed", "contract", "special"]).optional(),
+  billingMode: z.enum(["hourly", "fixed", "bank", "contract", "special"]).optional(),
   /** The client contract the time is billed under (billingMode contract) */
   contractId: zUuid.nullable().optional(),
   /** Follow up every N days, from this day (none: N days from now) */
@@ -413,6 +413,8 @@ export const projectsRoutes = new Hono<AppEnv>()
       await contractOf(p.clientId ?? null, p.contractId);
     }
     if (mode === "special" && (p.hourlyRate == null || p.hourlyRate <= 0)) throw new HTTPException(400, { message: "rate_required" });
+    if (mode === "fixed" && (p.fixedPrice == null || p.fixedPrice <= 0)) throw new HTTPException(400, { message: "price_required" });
+    if (mode === "bank" && (p.budgetHours == null || p.budgetHours <= 0)) throw new HTTPException(400, { message: "bank_hours_required" });
     // the number and the usual rate are read before the transaction (one connection: nothing else may run inside it)
     const number = await nextNumber();
     const defaultRate = (await billingSettings()).rates.hourly;
@@ -433,7 +435,7 @@ export const projectsRoutes = new Hono<AppEnv>()
           contractId: mode === "contract" ? p.contractId! : null,
           checkpointEveryDays: p.checkpointEveryDays ?? null,
           checkpointDate: p.checkpointEveryDays ? (p.checkpointDate ?? nextCheckpoint(p.checkpointEveryDays, p.startDate ?? null)) : (p.checkpointDate ?? null),
-          hourlyRateCents: mode === "contract" ? null : cents(p.hourlyRate === undefined ? defaultRate : p.hourlyRate),
+          hourlyRateCents: mode === "contract" ? null : mode === "fixed" || mode === "bank" ? cents(p.hourlyRate ?? null) : cents(p.hourlyRate === undefined ? defaultRate : p.hourlyRate),
           fixedPriceCents: cents(p.fixedPrice),
           createdBy: a.user.id,
         })
@@ -489,6 +491,7 @@ export const projectsRoutes = new Hono<AppEnv>()
     const soldCents = p.fixedPriceCents;
     const rateCents = soldHours && soldCents ? Math.round(soldCents / soldHours) : null;
     const sold = {
+      mode: p.billingMode,
       hours: soldHours,
       priceCents: soldCents,
       rateCents,
@@ -1242,7 +1245,7 @@ async function logTime(
   // the task's own contract wins over the project's; a bank of hours is drawn from (the time is not billed one by one)
   const contract = task?.contractId ? await contractOf(p.clientId, task.contractId) : p.billingMode === "contract" ? await contractOf(p.clientId, p.contractId) : null;
   // billed unless the project is a fixed price, or its contract includes the hours (no hourly rate)
-  const billable = t.billable ?? (p.billingMode === "fixed" ? false : contract ? hourlyRateOf(contract, (await billingSettings()).rates.hourly) != null : true);
+  const billable = t.billable ?? (p.billingMode === "fixed" || p.billingMode === "bank" ? false : contract ? hourlyRateOf(contract, (await billingSettings()).rates.hourly) != null : true);
   const [row] = await db()
     .insert(schema.timesheetEntries)
     .values({

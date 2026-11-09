@@ -420,7 +420,7 @@ export function localTicketSource(base: TicketSource): TicketSource {
         .where(and(eq(schema.ticketTimeEntries.billable, true), eq(schema.ticketTimeEntries.billed, false), gte(schema.ticketTimeEntries.startedAt, d)));
       for (const { e, number, companyId, ticketContract, projectMode } of times) {
         // a ticket of a project sold as a package: its hours are in the price sold, never billed on their own
-        if (projectMode === "fixed") continue;
+        if (projectMode === "fixed" || projectMode === "bank") continue;
         const billed = Math.max(0, e.billedMinutes ?? e.minutes - e.offsetMinutes);
         if (!billed) continue;
         const contract = e.contractId ?? ticketContract;
@@ -483,14 +483,16 @@ export function localTicketSource(base: TicketSource): TicketSource {
       for (const { e, number, rate: projectRate, mode, contract, companyId, who, msStatus, msSent } of onProjects) {
         if (companyId == null) continue;
         // time on a milestone is not labour: it is work to bill under "Jalons", only once the milestone is done and sent to approval
-        if (e.milestoneId && !(msStatus === "done" && msSent)) continue;
+        // (time that is on no milestone waits: nothing is billed until a milestone is done and sent)
+        if (!(e.milestoneId && msStatus === "done" && msSent)) continue;
         // under a contract the hour costs what the contract says (none: the hours are included, nothing to bill)
         const underContract = Boolean(contract) && (mode === "contract" || Boolean(e.contractId));
-        const rate = underContract ? hourlyRateOf(contract!, usual) : projectRate;
+        // a fixed-price or bank project has no rate of its own: an entry switched to billable takes the usual one
+        const rate = underContract ? hourlyRateOf(contract!, usual) : (projectRate ?? Math.round(usual * 100));
         if (underContract && rate == null) continue;
         items.push({
           id: `prtime:${e.id}`,
-          kind: e.milestoneId ? "milestone" : "labour",
+          kind: "milestone",
           companyId,
           date: e.date,
           description: [e.ticketTitle, e.note].filter(Boolean).join(" — ").slice(0, 2000),

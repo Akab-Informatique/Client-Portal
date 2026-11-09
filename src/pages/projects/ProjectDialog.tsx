@@ -384,7 +384,7 @@ function TimeTab({ p, edit, onChanged, fail }: { p: ProjectDetail; edit: boolean
   const can = useCan();
   const qc = useQueryClient();
   const closed = p.status === "done" || p.status === "cancelled";
-  const hourly = p.billingMode !== "fixed";
+  const hourly = p.billingMode !== "fixed" && p.billingMode !== "bank";
   const [f, setF] = useState({ date: today(), duration: "", milestoneId: "", taskId: "", note: "", billable: hourly, userId: "" });
   useEffect(() => setF((s) => ({ ...s, billable: hourly })), [hourly]);
   const hours = parseHm(f.duration);

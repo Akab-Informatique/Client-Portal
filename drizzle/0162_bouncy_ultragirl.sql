@@ -1,0 +1,1 @@
+ALTER TABLE "quotes" ADD COLUMN "sale_type" text DEFAULT 'fixed' NOT NULL;

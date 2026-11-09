@@ -35,6 +35,7 @@ type Row = { key: string; id?: string; productId: string | null; serviceId: stri
 type Form = {
   preparedById: string | null;
   kind: QuoteKind;
+  saleType: "fixed" | "bank" | "hourly";
   survey: Record<string, string>;
   clientId: string | null;
   prospectName: string;
@@ -54,11 +55,12 @@ const inDays = (n: number) => new Date(Date.now() + n * 86_400_000).toLocaleDate
 let seq = 0;
 const key = () => `r${++seq}`;
 
-const blank = (kind: QuoteKind = "standard", preparedById: string | null = null): Form => ({ preparedById, kind, survey: {}, clientId: null, prospectName: "", contactName: "", contactEmail: "", title: "", issuedOn: today(), validUntil: inDays(30), taxes: true, notes: "", internalNotes: "", rows: [] });
+const blank = (kind: QuoteKind = "standard", preparedById: string | null = null): Form => ({ preparedById, kind, saleType: "fixed", survey: {}, clientId: null, prospectName: "", contactName: "", contactEmail: "", title: "", issuedOn: today(), validUntil: inDays(30), taxes: true, notes: "", internalNotes: "", rows: [] });
 
 const fromQuote = (q: Quote): Form => ({
   preparedById: q.preparedById,
   kind: q.kind,
+  saleType: q.saleType ?? "fixed",
   survey: q.survey ?? {},
   clientId: q.clientId,
   prospectName: q.prospectName ?? "",
@@ -76,6 +78,7 @@ const fromQuote = (q: Quote): Form => ({
 const payload = (f: Form) => ({
   preparedById: f.preparedById,
   kind: f.kind,
+  saleType: f.saleType,
   survey: Object.fromEntries(Object.entries(f.survey).filter(([, v]) => v !== "")),
   clientId: f.clientId,
   prospectName: f.clientId ? null : f.prospectName.trim() || null,
@@ -392,6 +395,17 @@ export function QuoteEditor() {
               <div className="space-y-1.5 md:col-span-2">
                 <Label htmlFor="q-title">{t("quotes.editor.subject")}</Label>
                 <Input id="q-title" value={form.title} onChange={(e) => set("title", e.target.value)} placeholder={t("quotes.editor.subjectPlaceholder")} className="bg-background/40" />
+              </div>
+              <div className="space-y-1.5 md:col-span-2">
+                <Label>{t("quotes.editor.saleType")}</Label>
+                <div className="grid gap-2 sm:grid-cols-3" role="radiogroup" aria-label={t("quotes.editor.saleType")}>
+                  {(["fixed", "bank", "hourly"] as const).map((v) => (
+                    <button key={v} type="button" role="radio" aria-checked={form.saleType === v} onClick={() => set("saleType", v)} className={cn("rounded-xl border px-3 py-2 text-left transition-colors", form.saleType === v ? "border-[color:var(--gold)]/60 bg-[color:var(--gold)]/10" : "hover:bg-accent/40")}>
+                      <span className="block text-sm font-medium">{t(`quotes.editor.saleType${v === "fixed" ? "Fixed" : v === "bank" ? "Bank" : "Hourly"}`)}</span>
+                      <span className="block text-[11px] leading-snug text-muted-foreground">{t(`quotes.editor.saleTypeHint.${v}`)}</span>
+                    </button>
+                  ))}
+                </div>
               </div>
               <div className="space-y-1.5">
                 <Label htmlFor="q-issued">{t("quotes.editor.issuedOn")}</Label>

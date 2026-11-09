@@ -57,6 +57,7 @@ const quoteColumns = {
   title: schema.quotes.title,
   status: schema.quotes.status,
   kind: schema.quotes.kind,
+  saleType: schema.quotes.saleType,
   survey: schema.quotes.survey,
   issuedOn: schema.quotes.issuedOn,
   validUntil: schema.quotes.validUntil,

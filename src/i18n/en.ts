@@ -1472,6 +1472,15 @@ const en: Dict = {
       contactEmail: "Contact email",
       subject: "Title",
       subjectPlaceholder: "Office workstation replacement",
+      saleType: "Sale type",
+      saleTypeFixed: "Fixed price",
+      saleTypeBank: "Bank of hours",
+      saleTypeHourly: "Hourly rate",
+      saleTypeHint: {
+        fixed: "One price for everything. A deposit (50% by default) can be collected on acceptance; the rest is billed with the project.",
+        bank: "Hours paid in full on acceptance. Hours worked are deducted from the bank.",
+        hourly: "Nothing is billed in advance. Time is billed at the hourly rate when a milestone is done and sent to approval.",
+      },
       issuedOn: "Date",
       validUntil: "Valid until",
       taxes: "Taxes (GST and QST)",
@@ -1546,6 +1555,7 @@ const en: Dict = {
       client_unknown: "Client not found.",
       deposit_needs_client: "Pick a CRM client: a prospect cannot be invoiced.",
       deposit_exists: "This quote's deposit invoice is already made.",
+      deposit_not_allowed: "An hourly quote is not invoiced in advance: the work is billed when a milestone is done.",
       deposit_nothing: "Nothing to pay now: the implementation is $0.",
       deposit_lines_invalid: "A line picked is not a one-time line of the quote.",
       service_not_found: "A service of the quote no longer exists.",
@@ -2478,6 +2488,7 @@ const en: Dict = {
   },
   projects: {
     sold: {
+      bankLeft: "Hours left in the bank",
       title: "Sold vs worked",
       fromQuote: "Quote {{number}}",
       sold: "Sold",
@@ -2723,17 +2734,21 @@ const en: Dict = {
     "toggleBillable": "Click to change: billable or included",
     "billing": "Billing",
     "billingMode": "Project billing",
+    "bankPrice": "Price paid for the bank ($)",
+    "bankNeedsHours": "Enter the bank's hours in \"Planned hours\".",
     "mode": {
       "contract": "Under a contract",
       "hourly": "Hourly rate",
       "special": "Special rate",
-      "fixed": "Fixed price"
+      "fixed": "Fixed price",
+      "bank": "Bank of hours"
     },
     "modeHint": {
+      "bank": "Hours bought and paid in full. Each time entry is deducted from the bank.",
       "contract": "Time is billed at the client's contract hourly rate (or included when it has none).",
       "hourly": "Time is billed at the hourly rate set here (the usual rate to start).",
       "special": "A rate agreed for this project, different from the usual one.",
-      "fixed": "Fixed price: time starts as included in the price."
+      "fixed": "One price for the whole project: each entry's time is counted but never billed one by one. One invoice for the project (a deposit is possible)."
     },
     "contract": "Contract",
     "pickContract": "Pick a contract",

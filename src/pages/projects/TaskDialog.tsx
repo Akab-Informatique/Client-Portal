@@ -98,7 +98,7 @@ export function TaskDialog({ projectId, taskId, onClose, onMinimize }: { project
     if (tk?.timer && canTime) setAskStop((n) => n + 1);
     else onClose();
   };
-  const hourly = tk ? tk.project.billingMode !== "fixed" : false;
+  const hourly = tk ? tk.project.billingMode !== "fixed" && tk.project.billingMode !== "bank" : false;
   // the client's contracts (a bank of hours is drawn from like a ticket's) and the other tasks of the project (the one this waits for)
   const clientId = tk?.project.clientId ?? null;
   const { data: contracts = [] } = useQuery({ queryKey: [...KEY, "client-contracts", clientId], enabled: Boolean(clientId), queryFn: () => api.get<{ id: string; name: string; hourlyRate: number | null; bankLeft: number | null }[]>(`/projects/client-contracts/${clientId}`) });

@@ -312,7 +312,7 @@ function Settings({ p, edit, save, onDelete }: { p: ProjectDetail; edit: boolean
   const memberIds = p.members.map((m) => m.id);
   const none = "none";
   const tone = dueTone(p.dueDate, p.status === "done" || p.status === "cancelled");
-  const modes: BillingMode[] = p.billingMode === "fixed" ? ["contract", "hourly", "special", "fixed"] : ["contract", "hourly", "special"];
+  const modes: BillingMode[] = ["fixed", "bank", "hourly", "contract", "special"];
   const money = (v: string, key: string) => {
     const n = Number(v.replace(",", "."));
     if (!v) save({ [key]: null });
@@ -474,9 +474,9 @@ function Settings({ p, edit, save, onDelete }: { p: ProjectDetail; edit: boolean
               {p.billingMode === "hourly" && defaults && <p className="text-xs text-muted-foreground">{t("projects.usualRateIs", { rate: defaults.hourlyRate })}</p>}
             </div>
           )}
-          {p.billingMode === "fixed" && (
+          {(p.billingMode === "fixed" || p.billingMode === "bank") && (
             <div className="space-y-1.5">
-              <Label className="text-xs">{t("projects.fixedPrice")}</Label>
+              <Label className="text-xs">{t(p.billingMode === "bank" ? "projects.bankPrice" : "projects.fixedPrice")}</Label>
               <Text value={p.fixedPrice == null ? "" : String(p.fixedPrice)} onSave={(v) => money(v, "fixedPrice")} aria-label={t("projects.fixedPrice")} className={cn(!edit && "pointer-events-none")} />
             </div>
           )}

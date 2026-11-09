@@ -4711,7 +4711,8 @@ describe("submitting: timesheets (when required) and expenses", () => {
     expect(mine.map((i) => [i.ticketNumber, i.quantity, i.unitPriceCents]).sort()).toEqual(
       [
         [hourly.number, 2, 12000],
-        [fixed.number, 1.5, usual === 0 ? null : usual * 0 + (fixed.hourlyRate == null ? null : Math.round(fixed.hourlyRate * 100))],
+        // a fixed price has no rate of its own: an entry billed by the hour takes the usual one
+        [fixed.number, 1.5, fixed.hourlyRate == null ? Math.round(usual * 100) : Math.round(fixed.hourlyRate * 100)],
       ].sort(),
     );
 
@@ -7225,6 +7226,50 @@ describe("pipeline: shared to-dos and the day", () => {
     expect(await flag()).toBe(false);
     await tech.post(`/api/projects/${proj.id}/milestones/${ms}/tasks`, { title: "Aujourd'hui", assigneeId: me, checkpointDate: qcToday() });
     expect(await flag()).toBe(true);
+  });
+
+  it("a quote is sold fixed, as a bank of hours or hourly: the deposit and the project follow", async () => {
+    resetRateLimit("login:ip:unknown");
+    const admin = await signIn("admin@akab.local");
+    const [client] = (await admin.get("/api/quotes/clients")).json;
+    const tk0 = (await admin.get("/api/tickets?view=all")).json.items[0];
+    await db().update(schema.clients).set({ autotaskId: tk0.company.id }).where(eq(schema.clients.id, client.id));
+    const make = async (saleType: string) => {
+      const q = (await admin.post("/api/quotes", { clientId: client.id, title: "Vente " + saleType, saleType, lines: [{ description: "Main-d'œuvre : installation", quantityX100: 1000, unitPriceCents: 10000 }] })).json;
+      expect(q.saleType).toBe(saleType);
+      expect((await admin.post(`/api/quotes/${q.id}/status`, { status: "sent" })).status).toBe(200);
+      expect((await admin.post(`/api/quotes/${q.id}/status`, { status: "accepted" })).status).toBe(200);
+      return q;
+    };
+    // hourly: nothing before the work; the project is hourly with a rate (100 $ / h), no price
+    const h = await make("hourly");
+    expect((await admin.post(`/api/quotes/${h.id}/deposit`, { percent: 50, send: false })).json.error).toBe("deposit_not_allowed");
+    const hp = (await admin.post(`/api/quotes/${h.id}/to-project`, {})).json;
+    expect((await admin.get(`/api/projects/${hp.projectId}`)).json).toMatchObject({ billingMode: "hourly", hourlyRate: 100, fixedPrice: null, budgetHours: null });
+    // bank: paid in full whatever percent is asked; the project is a bank of 10 h
+    const b = await make("bank");
+    const dep = await admin.post(`/api/quotes/${b.id}/deposit`, { percent: 30, send: false });
+    expect(dep.status).toBe(201);
+    expect(dep.json.quote.depositPercentX100 ?? 10000).toBe(10000);
+    const bp = (await admin.post(`/api/quotes/${b.id}/to-project`, {})).json;
+    const bank = (await admin.get(`/api/projects/${bp.projectId}`)).json;
+    expect(bank).toMatchObject({ billingMode: "bank", budgetHours: 10, fixedPrice: 1000, sold: { mode: "bank", hours: 10, diffHours: 10 } });
+    // already paid in full: nothing left to bill on the project
+    expect((await admin.post(`/api/projects/${bp.projectId}/bill`, {})).json.error).toBe("project_nothing_to_bill");
+    // fixed: a share (50 %) and the rest with the project
+    const f = await make("fixed");
+    expect((await admin.post(`/api/quotes/${f.id}/deposit`, { percent: 50, send: false })).status).toBe(201);
+    const fp = (await admin.post(`/api/quotes/${f.id}/to-project`, {})).json;
+    expect((await admin.get(`/api/projects/${fp.projectId}`)).json).toMatchObject({ billingMode: "fixed", fixedPrice: 1000, budgetHours: 10 });
+    // a project made by hand: a fixed price needs its price, a bank its hours
+    expect((await admin.post("/api/projects", { name: "x", billingMode: "fixed" })).json.error).toBe("price_required");
+    expect((await admin.post("/api/projects", { name: "x", billingMode: "bank" })).json.error).toBe("bank_hours_required");
+    // time on a bank project is deducted from the bank and never billed by itself
+    const ms = bank.milestones?.[0]?.id ?? (await admin.post(`/api/projects/${bp.projectId}/milestones`, { name: "Phase" })).json.id;
+    const task = (await admin.post(`/api/projects/${bp.projectId}/milestones/${ms}/tasks`, { title: "Installer" })).json;
+    const e = (await admin.post(`/api/projects/${bp.projectId}/time`, { date: qcToday(), hours: 4, taskId: task.id })).json;
+    expect(e.billable).toBe(false);
+    expect((await admin.get(`/api/projects/${bp.projectId}`)).json.sold).toMatchObject({ workedHours: 4, diffHours: 6 });
   });
 
   it("tasks: assign, checklist, subtasks and waiting-for rules, notes", async () => {

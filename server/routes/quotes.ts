@@ -68,6 +68,7 @@ const zQuote = z.object({
   internalNotes: text(4000),
   lines: z.array(zLine).max(300).default([]),
   kind: z.enum(QUOTE_KINDS).default("standard"),
+  saleType: z.enum(["fixed", "bank", "hourly"]).default("fixed"),
   preparedById: zUuid.nullable().optional(),
   survey: z.record(z.string().max(80), z.string().max(2000)).refine((o) => Object.keys(o).length <= 800).default({}),
 });
@@ -231,6 +232,7 @@ export const quoteRoutes = new Hono<AppEnv>()
           contactEmail: p.contactEmail,
           title: p.title,
           kind: p.kind,
+          saleType: p.saleType,
           survey: p.survey,
           preparedBy,
           issuedOn: p.issuedOn ?? today,
@@ -271,6 +273,7 @@ export const quoteRoutes = new Hono<AppEnv>()
           contactName: p.contactName,
           contactEmail: p.contactEmail,
           title: p.title,
+          saleType: p.saleType,
           survey: p.survey,
           preparedBy: p.preparedById ?? cur.preparedById,
           issuedOn: p.issuedOn ?? cur.issuedOn,
@@ -332,7 +335,9 @@ await audit(a.user.id, "quote.updated", id, { number: cur.number, lines: p.lines
     }
     if (!q.clientId) throw new HTTPException(409, { message: "deposit_needs_client" });
     if (q.depositInvoiceId && !q.depositVoided) throw new HTTPException(409, { message: "deposit_exists" });
-    const percentX100 = Math.round(p.percent * 100);
+    // hourly: nothing is billed before the work is done; a bank of hours is paid in full; a fixed price takes the share chosen
+    if (q.saleType === "hourly") throw new HTTPException(409, { message: "deposit_not_allowed" });
+    const percentX100 = q.saleType === "bank" ? 10_000 : Math.round(p.percent * 100);
     // only the lines ticked (e.g. the equipment); none given: every one-time line
     const onceLines = (q.lines ?? []).filter((l) => !l.optional && recurrenceOf(l) === "once");
     if (p.lineIds?.some((lid) => !onceLines.some((l) => l.id === lid))) throw new HTTPException(400, { message: "deposit_lines_invalid" });
@@ -395,6 +400,7 @@ await audit(a.user.id, "quote.updated", id, { number: cur.number, lines: p.lines
           contactEmail: cur.contactEmail,
           title: cur.title,
           kind: cur.kind,
+          saleType: cur.saleType,
           survey: cur.survey ?? {},
           preparedBy: a.user.id,
           issuedOn: todayQc(),
@@ -489,10 +495,11 @@ await audit(a.user.id, "quote.updated", id, { number: cur.number, lines: p.lines
         leadId: lead?.id ?? a.user.id,
         startDate: todayQc(),
         dueDate: p.dueDate ?? null,
-        // sold as a package: the hours sold are the budget, the price sold is billed as one line
-        budgetHoursX100: hours == null ? null : Math.round(hours * 100),
-        billingMode: "fixed",
-        fixedPriceCents: priceCents,
+        // fixed price: one price for everything; bank: the hours bought are the bank, paid in full; hourly: a rate, billed as milestones are done
+        budgetHoursX100: hours == null || q.saleType === "hourly" ? null : Math.round(hours * 100),
+        billingMode: q.saleType === "hourly" ? "hourly" : q.saleType === "bank" ? "bank" : "fixed",
+        fixedPriceCents: q.saleType === "hourly" ? null : priceCents,
+        hourlyRateCents: q.saleType === "hourly" && hours && hours > 0 ? Math.round(priceCents / hours) : null,
         quoteId: q.id,
         createdBy: a.user.id,
       })

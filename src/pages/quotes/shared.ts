@@ -15,6 +15,8 @@ export type QuoteListItem = {
   title: string;
   status: QuoteStatus;
   kind: QuoteKind;
+  /** How the work sold is billed (decides the deposit and the project billing) */
+  saleType: "fixed" | "bank" | "hourly";
   expired: boolean;
   issuedOn: string;
   validUntil: string | null;

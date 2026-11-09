@@ -2623,6 +2623,8 @@ export const quotes = pgTable(
     status: text("status").notNull().default("draft"),
     /** standard | site_visit (a new client: the IT checklist is filled in during the visit) */
     kind: text("kind").notNull().default("standard"),
+    /** How the work sold is billed: a fixed price (a deposit may be taken), a bank of hours (paid in full) or by the hour (nothing before the work) */
+    saleType: text("sale_type", { enum: ["fixed", "bank", "hourly"] }).notNull().default("fixed"),
     /** The answers of the site visit checklist, by field key (shared/quoteSurvey.ts) */
     survey: jsonb("survey").$type<Record<string, string>>().notNull().default({}),
     /** YYYY-MM-DD */
@@ -2835,7 +2837,7 @@ export const projects = pgTable(
     /** Hours planned for the whole project, in hundredths; none = no budget */
     budgetHoursX100: integer("budget_hours_x100"),
     /** How the project is billed: by the hour, or for a fixed price. It only sets whether time entries start billable (hourly) or included (fixed); each entry can be changed. */
-    billingMode: text("billing_mode", { enum: ["hourly", "fixed", "contract", "special"] }).notNull().default("hourly"),
+    billingMode: text("billing_mode", { enum: ["hourly", "fixed", "bank", "contract", "special"] }).notNull().default("hourly"),
     /** billing_mode contract: the client contract the time is billed under */
     contractId: uuid("contract_id").references(() => clientContracts.id, { onDelete: "set null" }),
     /** Follow up on the project every N days; the next follow-up day, and the last one done */

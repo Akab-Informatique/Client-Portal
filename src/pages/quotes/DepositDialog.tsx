@@ -26,7 +26,10 @@ export function DepositDialog({ quote, onClose, onDone }: { quote: Quote; onClos
   const { t, i18n } = useTranslation();
   const qc = useQueryClient();
   const m = (c: number) => money(c, i18n.language);
-  const [pct, setPct] = useState("50");
+  // bank of hours: paid in full; hourly: nothing in advance
+  const bank = quote.saleType === "bank";
+  const hourly = quote.saleType === "hourly";
+  const [pct, setPct] = useState(quote.saleType === "bank" ? "100" : "50");
   const [day, setDay] = useState(today());
   const [send, setSend] = useState(true);
   const [pay, setPay] = useState(true);
@@ -72,6 +75,21 @@ export function DepositDialog({ quote, onClose, onDone }: { quote: Quote; onClos
     onError: (e) => toast.error(e instanceof ApiError ? t(`quotes.errors.${e.code}`, { defaultValue: t("common.error") }) : t("common.error")),
   });
 
+  // an hourly quote is not invoiced in advance
+  if (hourly)
+    return (
+      <Dialog open onOpenChange={(o) => !o && onClose()}>
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle>{t("quotes.deposit.title")}</DialogTitle>
+            <DialogDescription>{t("quotes.errors.deposit_not_allowed")}</DialogDescription>
+          </DialogHeader>
+          <Button variant="outline" onClick={onClose}>
+            {t("common.close")}
+          </Button>
+        </DialogContent>
+      </Dialog>
+    );
   return (
     <Dialog open onOpenChange={(o) => !o && onClose()}>
       <DialogContent className="sm:max-w-md">
@@ -138,10 +156,10 @@ export function DepositDialog({ quote, onClose, onDone }: { quote: Quote; onClos
             <Label htmlFor="dep-pct">{t("quotes.deposit.percent")}</Label>
             <div className="flex items-center gap-2">
               <div className="relative w-24">
-                <Input id="dep-pct" inputMode="decimal" value={pct} onChange={(e) => setPct(e.target.value)} className="pr-7 text-right font-mono" />
+                <Input id="dep-pct" inputMode="decimal" value={pct} disabled={bank} onChange={(e) => setPct(e.target.value)} className="pr-7 text-right font-mono" />
                 <span className="pointer-events-none absolute right-2.5 top-1/2 -translate-y-1/2 text-sm text-muted-foreground">%</span>
               </div>
-              {[25, 30, 50, 100].map((v) => (
+              {(bank ? [] : [25, 30, 50, 100]).map((v) => (
                 <button
                   key={v}
                   type="button"

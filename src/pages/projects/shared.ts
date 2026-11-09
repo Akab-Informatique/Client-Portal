@@ -1,7 +1,7 @@
 import { useQuery } from "@tanstack/react-query";
 import { api } from "@/lib/api";
 
-export type BillingMode = "contract" | "hourly" | "special" | "fixed";
+export type BillingMode = "contract" | "hourly" | "special" | "fixed" | "bank";
 export type Status = "planning" | "active" | "on_hold" | "done" | "cancelled";
 export type MsStatus = "todo" | "doing" | "done";
 export const STATUSES: Status[] = ["planning", "active", "on_hold", "done", "cancelled"];
@@ -135,7 +135,7 @@ export type ProjectDetail = Project & {
   /** The quote it was made from */
   quote: { id: string; number: string } | null;
   /** Sold against worked (hours and money); the hours of its tied tickets included */
-  sold: { hours: number | null; priceCents: number | null; rateCents: number | null; workedHours: number; ticketHours: number; diffHours: number | null; workedValueCents: number | null; diffCents: number | null };
+  sold: { mode?: BillingMode; hours: number | null; priceCents: number | null; rateCents: number | null; workedHours: number; ticketHours: number; diffHours: number | null; workedValueCents: number | null; diffCents: number | null };
   /** The tickets tied to the project (their time counts in it) */
   tickets: { id: number; number: string; title: string; status: string; done: boolean; hours: number }[];
   /** The price sold sent to Approbation (once), and the quote's deposit taken off it */
