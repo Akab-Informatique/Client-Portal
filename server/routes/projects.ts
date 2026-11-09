@@ -382,8 +382,17 @@ export const projectsRoutes = new Hono<AppEnv>()
           .groupBy(schema.projectTasks.projectId)
       : [];
     const nextAt = new Map(next.map((n) => [n.projectId, n.at]));
+    // a project with an open task of mine whose checkpoint or due day is today (it flashes in Operations)
+    const today = todayQc();
+    const dueToday = rows.length
+      ? await db()
+          .selectDistinct({ projectId: schema.projectTasks.projectId })
+          .from(schema.projectTasks)
+          .where(and(inArray(schema.projectTasks.projectId, rows.map((r) => r.id)), eq(schema.projectTasks.assigneeId, a.user.id), ne(schema.projectTasks.status, "done"), or(eq(schema.projectTasks.checkpointDate, today), eq(schema.projectTasks.dueDate, today))))
+      : [];
+    const todayMine = new Set(dueToday.map((r) => r.projectId));
     list = list
-      .map((x) => ({ ...x, nextCheckpoint: nextAt.get(x.id) ?? null }))
+      .map((x) => ({ ...x, nextCheckpoint: nextAt.get(x.id) ?? null, todayMine: todayMine.has(x.id) }))
       .sort((x, y) => (x.nextCheckpoint ?? "9999-99-99").localeCompare(y.nextCheckpoint ?? "9999-99-99") || (x.dueDate ?? "9999-99-99").localeCompare(y.dueDate ?? "9999-99-99"));
     if (q.view === "mine") list = list.filter((x) => x.mine);
     else if (q.view === "attention") list = list.filter((x) => x.attention.length);

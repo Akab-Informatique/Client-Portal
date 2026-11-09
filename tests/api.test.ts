@@ -7214,6 +7214,19 @@ describe("pipeline: shared to-dos and the day", () => {
     expect((await tech.put("/api/pipeline/day/pmilestones/00000000-0000-4000-8000-000000000000", { time: null })).status).toBe(404);
   });
 
+  it("a project with one of my tasks due or at its checkpoint today is flagged to flash", async () => {
+    resetRateLimit("login:ip:unknown");
+    const tech = await signIn("tech@akab.local");
+    const me = (await tech.get("/api/me")).json.id as string;
+    const proj = (await tech.post("/api/projects", { name: "Projet qui clignote", milestones: [{ name: "Phase" }] })).json;
+    const ms = proj.milestones[0].id as string;
+    const flag = async () => ((await tech.get("/api/projects?view=all&status=all")).json as any[]).find((x) => x.id === proj.id).todayMine;
+    await tech.post(`/api/projects/${proj.id}/milestones/${ms}/tasks`, { title: "Pas aujourd'hui", assigneeId: me, dueDate: "2031-01-01" });
+    expect(await flag()).toBe(false);
+    await tech.post(`/api/projects/${proj.id}/milestones/${ms}/tasks`, { title: "Aujourd'hui", assigneeId: me, checkpointDate: qcToday() });
+    expect(await flag()).toBe(true);
+  });
+
   it("tasks: assign, checklist, subtasks and waiting-for rules, notes", async () => {
     resetRateLimit("login:ip:unknown");
     const admin = await signIn("admin@akab.local");

@@ -174,9 +174,9 @@ export function MyDay({ onOpenTask }: { onOpenTask: (id: string) => void }) {
       : i.kind === "ptask"
         ? i.projectId && pws.openTask(i.projectId, i.refId)
         : i.kind === "pmilestone"
-          ? goTo(`/projects?project=${i.projectId}&tab=milestones&milestone=${i.refId}`)
+          ? goTo(`/pipeline?section=projects&project=${i.projectId}&tab=milestones&milestone=${i.refId}`)
           : i.kind === "pproject"
-            ? goTo(`/projects?project=${i.refId}`)
+            ? goTo(`/pipeline?section=projects&project=${i.refId}`)
             : onOpenTask(i.refId);
   const projectTasks = (data?.items ?? []).filter((i) => i.kind === "ptask");
   const when = plan ? new Date(plan.updatedAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }) : "";

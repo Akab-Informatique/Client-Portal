@@ -47,7 +47,7 @@ export function ProjectWorkspaceProvider({ enabled, children }: { enabled: boole
       const d = docked.find((x) => x.taskId === taskId);
       if (d?.folder) {
         // the folder first, then the task on top of it (a window opened later is drawn above the earlier one)
-        navigate(`/projects?project=${projectId}&tab=milestones`);
+        navigate(`/pipeline?section=projects&project=${projectId}&tab=milestones`);
         setTimeout(() => openTask(projectId, taskId), 250);
       } else openTask(projectId, taskId);
     },

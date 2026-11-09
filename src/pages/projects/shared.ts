@@ -115,6 +115,8 @@ export type Project = {
   following: boolean;
   /** Checkpoint of the next open task (YYYY-MM-DD HH:MM), the list is sorted by it */
   nextCheckpoint?: string | null;
+  /** One of my open tasks has its checkpoint or due day today */
+  todayMine?: boolean;
   mine: boolean;
   progress: { done: number; total: number };
   attention: string[];
