@@ -7122,6 +7122,25 @@ describe("pipeline: shared to-dos and the day", () => {
     expect(none).toMatchObject({ checkpointDate: null, checkpointTime: null });
   });
 
+  it("what is late is not planned in the day: it is listed to re-evaluate, unless put on the day by hand", async () => {
+    resetRateLimit("login:ip:unknown");
+    const tech = await signIn("tech@akab.local");
+    const me = (await tech.get("/api/me")).json.id as string;
+    const late = (await tech.post("/api/pipeline/tasks", { title: "En retard", checkpointDate: "2020-01-01", priority: "urgent", assigneeId: me })).json;
+    const day = (await tech.get("/api/pipeline/day")).json;
+    expect(day.reevaluate.some((i: any) => i.refId === late.id)).toBe(true);
+    expect(day.items.some((i: any) => i.refId === late.id)).toBe(false);
+    expect(day.plan.blocks.some((b: any) => b.refId === late.id)).toBe(false);
+    // put on the day by hand: it is planned (and no longer to re-evaluate)
+    expect((await tech.put(`/api/pipeline/day/tasks/${late.id}`, { time: null })).status).toBe(200);
+    await tech.post("/api/pipeline/day/plan", {});
+    const after = (await tech.get("/api/pipeline/day")).json;
+    expect(after.items.some((i: any) => i.refId === late.id && i.added)).toBe(true);
+    expect(after.reevaluate.some((i: any) => i.refId === late.id)).toBe(false);
+    // a project task that does not exist cannot be put on the day
+    expect((await tech.put("/api/pipeline/day/ptasks/00000000-0000-4000-8000-000000000000", { time: null })).status).toBe(404);
+  });
+
   it("tasks: assign, checklist, subtasks and waiting-for rules, notes", async () => {
     resetRateLimit("login:ip:unknown");
     const admin = await signIn("admin@akab.local");
@@ -7177,7 +7196,7 @@ describe("pipeline: shared to-dos and the day", () => {
     const admin = await signIn("admin@akab.local");
     const tech = await signIn("tech@akab.local");
     const me = (await tech.get("/api/me")).json.id as string;
-    await tech.post("/api/pipeline/tasks", { title: "Appeler le fournisseur", assigneeId: me, dueDate: "2000-01-03", priority: "high", estimateMinutes: 45 });
+    await tech.post("/api/pipeline/tasks", { title: "Appeler le fournisseur", assigneeId: me, dueDate: "2026-03-04", priority: "high", estimateMinutes: 45 });
     const day = (await tech.get("/api/pipeline/day?date=2026-03-04")).json;
     expect(day.plan.source).toBe("rules");
     expect(day.plan.capacityMinutes).toBe(480);
@@ -7185,15 +7204,19 @@ describe("pipeline: shared to-dos and the day", () => {
     expect(first).toMatchObject({ kind: "task", start: "08:00", end: "08:45" });
     // never in the lunch hour
     expect(day.plan.blocks.filter((b: any) => b.kind !== "break" && !b.overflow).every((b: any) => b.end <= "12:00" || b.start >= "13:00")).toBe(true);
-    expect(day.items.some((i: any) => i.title === "Appeler le fournisseur" && i.overdue)).toBe(true);
+    // the day before, the same task would be late: not planned, but to re-evaluate
+    const next = (await tech.get("/api/pipeline/day?date=2026-03-05")).json;
+    expect(next.reevaluate.some((i: any) => i.title === "Appeler le fournisseur")).toBe(true);
+    expect(next.plan.blocks.some((b: any) => b.title === "Appeler le fournisseur")).toBe(false);
     // planning again without the AI set up still gives a plan
     const again = (await tech.post("/api/pipeline/day/plan", { date: "2026-03-04" })).json;
     expect(again.plan.source).toBe("rules");
     expect(["not_configured", "disabled"]).toContain(again.aiError);
     // a weekend or a holiday still lays out what is due (a checkpoint that day), in the usual hours
+    await tech.post("/api/pipeline/tasks", { title: "Pour samedi", assigneeId: me, dueDate: "2026-03-07", priority: "high", estimateMinutes: 45 });
     const sat = (await tech.get("/api/pipeline/day?date=2026-03-07")).json;
     expect(sat.plan.capacityMinutes).toBe(480);
-    expect(sat.plan.blocks.some((b: any) => b.title === "Appeler le fournisseur" && b.start === "08:00")).toBe(true);
+    expect(sat.plan.blocks.some((b: any) => b.title === "Pour samedi" && b.start === "08:00")).toBe(true);
     // someone else's day: managers only
     expect((await tech.get(`/api/pipeline/day?userId=${(await admin.get("/api/me")).json.id}`)).status).toBe(403);
     expect((await admin.get(`/api/pipeline/day?userId=${me}`)).status).toBe(200);
@@ -7330,7 +7353,7 @@ describe("pipeline: times, files, recurring and private tasks", () => {
     const tech = await signIn("tech@akab.local");
     const me = (await tech.get("/api/me")).json.id as string;
     const boss = (await admin.get("/api/me")).json.id as string;
-    const priv = (await tech.post("/api/pipeline/tasks", { title: "Évaluation de Jean", visibility: "private", assigneeId: me, dueDate: "2000-01-03" })).json;
+    const priv = (await tech.post("/api/pipeline/tasks", { title: "Évaluation de Jean", visibility: "private", assigneeId: me, dueDate: "2026-03-04" })).json;
     const shared = (await tech.post("/api/pipeline/tasks", { title: "Budget du projet", visibility: "selected", viewerIds: [boss], assigneeId: me, dueDate: "2000-01-03" })).json;
     const team = (await tech.post("/api/pipeline/tasks", { title: "Pour tous", assigneeId: me, dueDate: "2000-01-03" })).json;
     const names = async (s: typeof admin) => (await s.get("/api/pipeline/tasks?status=all")).json.map((x: any) => x.title);

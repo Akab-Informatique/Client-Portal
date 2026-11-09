@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState, type FormEvent, type ReactNode } 
 import { useTranslation } from "react-i18next";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
-import { Clock, Flag, ListTodo, Loader2, Lock, Mail, Minus, Play, Plus, Send, Square, StickyNote, Trash2, X } from "lucide-react";
+import { CalendarPlus, Clock, Flag, ListTodo, Loader2, Lock, Mail, Minus, Play, Plus, Send, Square, StickyNote, Trash2, X } from "lucide-react";
 import { useConfirm } from "@/components/ConfirmDialog";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from "@/components/ui/dialog";
@@ -17,6 +17,7 @@ import { cn } from "@/lib/utils";
 import { hm, parseHm } from "@shared/duration";
 import { RecipientInput } from "@/pages/outlook/RecipientInput";
 import { shortDate, shortDateTime } from "@/pages/tickets/shared";
+import { AddToDayDialog } from "@/pages/tickets/AddToDayDialog";
 import { apiMessage, clock, hoursText, KEY, PRIORITIES, PRIORITY_DOT, TASK_STATUSES, TASK_STYLE, today, useProjectPeople, type ProjectDetail, type TaskDetail, type TaskStatus } from "./shared";
 
 /** What a minimized task keeps to be shown in the dock */
@@ -85,6 +86,7 @@ export function TaskDialog({ projectId, taskId, onClose, onMinimize }: { project
   // like a ticket: opening the task starts its timer (once), closing it with the timer going asks for the time
   const canTime = Boolean(tk) && edit && can("timesheets.use") && !closed;
   const [askStop, setAskStop] = useState(0);
+  const [addingDay, setAddingDay] = useState(false);
   const autoStarted = useRef(false);
   useEffect(() => {
     if (!tk || autoStarted.current || !canTime || tk.timer || tk.status === "done" || tk.dependsOn?.done === false) return;
@@ -104,6 +106,7 @@ export function TaskDialog({ projectId, taskId, onClose, onMinimize }: { project
 
   return (
     <Dialog open onOpenChange={(o) => !o && requestClose()}>
+      {addingDay && tk && <AddToDayDialog open onOpenChange={(o) => !o && setAddingDay(false)} tk={{ id: taskId, number: tk.project.number, title: tk.title }} kind="ptask" />}
       <DialogContent showCloseButton={false} className="flex h-[min(95dvh,66rem)] flex-col gap-0 overflow-hidden border-violet-400/30 p-0 sm:max-w-[min(96vw,96rem)]">
         <header className="space-y-2 border-b bg-gradient-to-b from-violet-500/[0.10] to-transparent px-5 pb-3 pt-4">
           <div className="flex items-start gap-3">
@@ -153,6 +156,11 @@ export function TaskDialog({ projectId, taskId, onClose, onMinimize }: { project
                     ))}
                   </SelectContent>
                 </Select>
+                {can("pipeline.edit") && tk.status !== "done" && (
+                  <button type="button" onClick={() => setAddingDay(true)} aria-label={t("tickets.rowMenu.addToDay")} title={t("tickets.rowMenu.addToDay")} className="rounded-md p-2 text-muted-foreground hover:bg-foreground/[0.06] hover:text-primary">
+                    <CalendarPlus className="size-5" />
+                  </button>
+                )}
                 <button
                   type="button"
                   onClick={() => onMinimize({ projectId, taskId, number: tk.project.number, project: tk.project.name, title: tk.title, milestone: tk.milestone.name, status: tk.status })}

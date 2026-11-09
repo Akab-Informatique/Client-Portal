@@ -196,6 +196,8 @@ export function MyDay({ onOpenTask }: { onOpenTask: (id: string) => void }) {
         )}
       </div>
 
+      {isToday && data && data.reevaluate.length > 0 && <Reevaluate items={data.reevaluate} onOpen={open} />}
+
       {/* the summary: the AI's words, and whether there is time */}
       <section className="glass relative overflow-hidden rounded-2xl border border-[color:var(--gold)]/25 p-5">
         <div className="pointer-events-none absolute -right-16 -top-20 size-64 rounded-full bg-[color:var(--gold)]/10 blur-3xl" />
@@ -393,6 +395,40 @@ type ListSort = (typeof LIST_SORTS)[number];
 const PRIO_RANK = { urgent: 0, high: 1, normal: 2, low: 3 } as const;
 
 /** A list of tasks of the day: checkpoint order by default; the technician picks the sort (their default for this list) or drags their own order. */
+/** What is late and not done is not planned in the day: a reminder on top to look at its dates again */
+function Reevaluate({ items, onOpen }: { items: DayItem[]; onOpen: (i: DayItem) => void }) {
+  const { t } = useTranslation();
+  const [shown, setShown] = useState(true);
+  return (
+    <section className="rounded-2xl border border-orange-400/40 bg-orange-500/[0.07] p-4">
+      <div className="flex flex-wrap items-center gap-2">
+        <AlertTriangle className="size-4 text-orange-300" />
+        <h3 className="text-sm font-semibold text-orange-200">{t("pipeline.day.reevaluate.title", { count: items.length })}</h3>
+        <button type="button" onClick={() => setShown((v) => !v)} className="ml-auto text-xs text-muted-foreground underline-offset-2 hover:underline">
+          {shown ? t("pipeline.day.reevaluate.hide") : t("pipeline.day.reevaluate.show")}
+        </button>
+      </div>
+      {shown && (
+        <>
+          <p className="mt-1 text-xs text-muted-foreground">{t("pipeline.day.reevaluate.text")}</p>
+          <ul className="mt-2 grid gap-1 md:grid-cols-2">
+            {items.map((i) => (
+              <li key={i.key}>
+                <button type="button" onClick={() => onOpen(i)} className="flex w-full items-center gap-2 rounded-lg border border-orange-400/20 bg-background/40 px-2.5 py-1.5 text-left text-sm hover:bg-foreground/[0.05]">
+                  <span className={cn("size-2 shrink-0 rounded-full", i.kind === "ticket" ? "bg-[color:var(--gold)]" : i.kind === "ptask" ? "bg-teal-400" : "bg-violet-400")} />
+                  {i.ticketNumber && <span className="shrink-0 font-mono text-xs text-primary">{i.ticketNumber}</span>}
+                  <span className="min-w-0 flex-1 truncate">{i.title}</span>
+                  <span className="shrink-0 text-[11px] text-orange-300">{t("pipeline.day.reevaluate.since", { date: (i.checkpoint ?? i.due ?? "").slice(0, 10) })}</span>
+                </button>
+              </li>
+            ))}
+          </ul>
+        </>
+      )}
+    </section>
+  );
+}
+
 function ItemList({ title, icon: Icon, items, loading, onOpen, onComplete, empty, sortView }: { title: string; icon: typeof Workflow; items: DayItem[]; loading: boolean; onOpen: (i: DayItem) => void; onComplete?: (i: DayItem) => void; empty: string; sortView: string }) {
   const { t } = useTranslation();
   const [sort, setSort] = useSortDefault<ListSort>(`day.${sortView}`, "checkpoint", LIST_SORTS);

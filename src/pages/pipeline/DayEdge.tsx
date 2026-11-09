@@ -18,7 +18,7 @@ type Kind = "ticket" | "task" | "ptask";
 /**
  * The small edge button before a ticket / task / project task of Ma journée (the same line as on the left of a row of
  * the Tickets list, with the same menu: accept, assign, open, merge, delete) and, for the day, "add to my day".
- * A project task only has "open". Everything goes through the usual routes, which check the rights again.
+ * Everything goes through the usual routes, which check the rights again.
  */
 export function DayEdge({ kind, id, number, title, urgent, onOpen, className }: { kind: Kind; id: string; number?: string | null; title: string; urgent?: boolean; onOpen: () => void; className?: string }) {
   const { t } = useTranslation();
@@ -56,7 +56,7 @@ export function DayEdge({ kind, id, number, title, urgent, onOpen, className }: 
   };
   const ticket = kind === "ticket";
   const canEdit = ticket && can("tickets.edit");
-  const canDay = kind !== "ptask" && can("pipeline.edit");
+  const canDay = can("pipeline.edit");
   return (
     <>
       <DropdownMenu>
@@ -125,7 +125,7 @@ export function DayEdge({ kind, id, number, title, urgent, onOpen, className }: 
           )}
         </DropdownMenuContent>
       </DropdownMenu>
-      {dialog === "day" && <AddToDayDialog open onOpenChange={(o) => !o && setDialog(null)} tk={ticket ? { id: Number(id), number: number ?? undefined, title } : { id, title }} kind={ticket ? "ticket" : "task"} />}
+      {dialog === "day" && <AddToDayDialog open onOpenChange={(o) => !o && setDialog(null)} tk={ticket ? { id: Number(id), number: number ?? undefined, title } : { id, title }} kind={kind} />}
       {dialog === "accept" && detail && <AcceptDialog open onOpenChange={(o) => !o && (setDialog(null), refresh())} tk={detail} statuses={detail.options.statuses} />}
       {dialog === "merge" && detail && <MergeDialog open onOpenChange={(o) => !o && (setDialog(null), refresh())} tk={detail} onDone={refresh} />}
     </>

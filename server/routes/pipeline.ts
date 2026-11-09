@@ -375,6 +375,44 @@ export const pipelineRoutes = new Hono<AppEnv>()
     return c.json({ added: false, dueTime: null });
   })
 
+  // a task of a project put on the day (the task itself does not change)
+  .get("/day/ptasks/:taskId", async (c) => {
+    const a = auth(c);
+    const id = zUuid.parse(c.req.param("taskId"));
+    const who = await dayTarget(a, c.req.query("userId"));
+    await resetDayAdds();
+    const [row] = await db().select().from(schema.ticketDayAdds).where(and(eq(schema.ticketDayAdds.projectTaskId, id), eq(schema.ticketDayAdds.userId, who), eq(schema.ticketDayAdds.forDate, todayQc())));
+    return c.json({ added: Boolean(row), dueTime: row?.dueTime ?? null });
+  })
+
+  .put("/day/ptasks/:taskId", requirePermission("pipeline.edit"), requirePermission("projects.view"), async (c) => {
+    const a = auth(c);
+    const id = zUuid.parse(c.req.param("taskId"));
+    const p = await body(c, z.object({ time: zHm.nullable().default(null), userId: zUuid.optional() }));
+    const who = await dayTarget(a, p.userId);
+    const [t] = await db().select({ title: schema.projectTasks.title, status: schema.projectTasks.status, project: schema.projects.status }).from(schema.projectTasks).innerJoin(schema.projects, eq(schema.projects.id, schema.projectTasks.projectId)).where(eq(schema.projectTasks.id, id));
+    if (!t) throw new HTTPException(404, { message: "not_found" });
+    if (t.status === "done") throw new HTTPException(409, { message: "task_done" });
+    if (t.project !== "planning" && t.project !== "active") throw new HTTPException(409, { message: "project_closed" });
+    const forDate = todayQc();
+    await db()
+      .insert(schema.ticketDayAdds)
+      .values({ projectTaskId: id, userId: who, forDate, dueTime: p.time, addedBy: a.user.id })
+      .onConflictDoUpdate({ target: [schema.ticketDayAdds.projectTaskId, schema.ticketDayAdds.userId, schema.ticketDayAdds.forDate], set: { dueTime: p.time, addedBy: a.user.id } });
+    await audit(a.user.id, "pipeline.ptask_day_added", id, { time: p.time, userId: who });
+    if (who !== a.user.id) await notify([who], { type: "pipeline.day_added", data: { title: t.title.slice(0, 200), by: a.user.name, time: p.time }, link: "/projects" });
+    return c.json({ added: true, dueTime: p.time });
+  })
+
+  .delete("/day/ptasks/:taskId", requirePermission("pipeline.edit"), async (c) => {
+    const a = auth(c);
+    const id = zUuid.parse(c.req.param("taskId"));
+    const who = await dayTarget(a, c.req.query("userId"));
+    await db().delete(schema.ticketDayAdds).where(and(eq(schema.ticketDayAdds.projectTaskId, id), eq(schema.ticketDayAdds.userId, who)));
+    await audit(a.user.id, "pipeline.ptask_day_removed", id, { userId: who });
+    return c.json({ added: false, dueTime: null });
+  })
+
 
   /** Plan the day again (the AI when it is set up, else the portal's own rules). */
   .post("/day/plan", requirePermission("pipeline.edit"), async (c) => {

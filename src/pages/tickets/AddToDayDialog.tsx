@@ -12,7 +12,7 @@ import type { Person } from "@/pages/pipeline/shared";
 import { ticketErrorText } from "./shared";
 
 export type DayTicketState = { added: boolean; dueTime: string | null };
-export type DayKind = "ticket" | "task";
+export type DayKind = "ticket" | "task" | "ptask";
 
 const qs = (userId?: string) => (userId ? `?userId=${userId}` : "");
 
@@ -59,7 +59,7 @@ export function AddToDayDialog({
   const save = useMutation({
     mutationFn: () => api.put(`/pipeline/day/${kind}s/${tk.id}`, { time: time || null, ...(target ? { userId: target } : {}) }),
     onSuccess: () => done(t(target ? "tickets.addDay.addedFor" : "tickets.addDay.added", { number: label, name: people.data?.find((p) => p.id === who)?.name ?? "" })),
-    onError: (e) => toast.error(e instanceof ApiError && (e.code === "ticket_complete" || e.code === "task_done") ? t("tickets.addDay.complete") : ticketErrorText(t, e)),
+    onError: (e) => toast.error(e instanceof ApiError && (e.code === "ticket_complete" || e.code === "task_done" || e.code === "project_closed") ? t("tickets.addDay.complete") : ticketErrorText(t, e)),
   });
   const remove = useMutation({
     mutationFn: () => api.del(`/pipeline/day/${kind}s/${tk.id}${qs(target)}`),

@@ -130,6 +130,8 @@ export type DayData = {
   userId: string;
   plan: { summary: string; blocks: Block[]; capacityMinutes: number; plannedMinutes: number; source: "ai" | "rules"; smsSentAt: string | null; updatedAt: string; calendar: string; calendarEvents: number };
   items: DayItem[];
+  /** Late and not done (checkpoint or due day before the day): not planned, to look at again */
+  reevaluate: DayItem[];
   /** The AI's plan is older than the list: something to do is not in it */
   stale: boolean;
   /** The time given to each item today (by the person, else by the AI) */

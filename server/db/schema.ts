@@ -1406,6 +1406,8 @@ export const ticketDayAdds = pgTable(
     /** A ticket or (the other one) a Pipeline task is put on the day */
     ticketId: bigint("ticket_id", { mode: "number" }),
     taskId: uuid("task_id").references(() => pipelineTasks.id, { onDelete: "cascade" }),
+    /** Or a task of a project */
+    projectTaskId: uuid("project_task_id").references(() => projectTasks.id, { onDelete: "cascade" }),
     userId: uuid("user_id")
       .notNull()
       .references(() => users.id, { onDelete: "cascade" }),
@@ -1417,7 +1419,7 @@ export const ticketDayAdds = pgTable(
     dueTime: text("due_time"),
     createdAt: created(),
   },
-  (t) => [uniqueIndex("ticket_day_adds_unique").on(t.ticketId, t.userId, t.forDate), uniqueIndex("ticket_day_adds_task_unique").on(t.taskId, t.userId, t.forDate), index("ticket_day_adds_user_idx").on(t.userId, t.forDate)],
+  (t) => [uniqueIndex("ticket_day_adds_unique").on(t.ticketId, t.userId, t.forDate), uniqueIndex("ticket_day_adds_task_unique").on(t.taskId, t.userId, t.forDate), uniqueIndex("ticket_day_adds_ptask_unique").on(t.projectTaskId, t.userId, t.forDate), index("ticket_day_adds_user_idx").on(t.userId, t.forDate)],
 );
 
 /** Time reserved by an admin on a technician's calendar (for a pinned ticket, or a reserved slot). */

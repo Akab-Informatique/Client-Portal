@@ -1,0 +1,3 @@
+ALTER TABLE "ticket_day_adds" ADD COLUMN "project_task_id" uuid;--> statement-breakpoint
+ALTER TABLE "ticket_day_adds" ADD CONSTRAINT "ticket_day_adds_project_task_id_project_tasks_id_fk" FOREIGN KEY ("project_task_id") REFERENCES "public"."project_tasks"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
+CREATE UNIQUE INDEX "ticket_day_adds_ptask_unique" ON "ticket_day_adds" USING btree ("project_task_id","user_id","for_date");

@@ -101,6 +101,8 @@ export type DayItem = {
   notBefore?: number;
   /** Today's checkpoint time: the item is put at this time (or in the next free slot after it) before the others are laid out */
   startAt?: number;
+  /** Late (its checkpoint or due day is before the day): not planned, listed apart to re-evaluate its dates */
+  stale?: boolean;
   /** A private task the viewer may not see in detail */
   masked?: boolean;
   /** A priority pinned for the technician (Planning): of the day, or of the week, with its rank and the direction given */
@@ -183,6 +185,8 @@ export async function dayItems(userId: string, date: string, viewerId: string = 
   const taskAdd = new Map(adds.filter((x) => x.taskId !== null).map((x) => [x.taskId as string, x]));
   const extra = [...taskAdd.keys()].filter((id) => !tasks.some((t) => t.id === id));
   if (extra.length) tasks.push(...(await d.select().from(schema.pipelineTasks).where(and(inArray(schema.pipelineTasks.id, extra), ne(schema.pipelineTasks.status, "done")))));
+  // project tasks put on this day by hand
+  const ptaskAdd = new Map(adds.filter((x) => x.projectTaskId !== null).map((x) => [x.projectTaskId as string, x]));
   const hasOpenChildren = new Set(children.map((c) => c.parentId));
   // the earliest open checklist item day of each task: an item due makes the task due
   const itemDays = tasks.length
@@ -231,19 +235,21 @@ export async function dayItems(userId: string, date: string, viewerId: string = 
     .from(schema.projectTasks)
     .innerJoin(schema.projects, eq(schema.projects.id, schema.projectTasks.projectId))
     .innerJoin(schema.projectMilestones, eq(schema.projectMilestones.id, schema.projectTasks.milestoneId))
-    .where(and(eq(schema.projectTasks.assigneeId, userId), ne(schema.projectTasks.status, "done"), inArray(schema.projects.status, ["planning", "active"])));
+    .where(and(ptaskAdd.size ? or(eq(schema.projectTasks.assigneeId, userId), inArray(schema.projectTasks.id, [...ptaskAdd.keys()])) : eq(schema.projectTasks.assigneeId, userId), ne(schema.projectTasks.status, "done"), inArray(schema.projects.status, ["planning", "active"])));
   // a project task waits for the one it depends on until that one is done
   const waitIds = ptasks.map((r) => r.t.dependsOnId).filter((x): x is string => Boolean(x));
   const undone = new Set(waitIds.length ? (await d.select({ id: schema.projectTasks.id }).from(schema.projectTasks).where(and(inArray(schema.projectTasks.id, waitIds), ne(schema.projectTasks.status, "done")))).map((x) => x.id) : []);
   for (const r of ptasks) {
     const t = r.t;
-    if (!(t.status === "doing" || t.priority === "urgent" || (t.dueDate !== null && t.dueDate <= date) || (t.checkpointDate !== null && t.checkpointDate <= date))) continue;
+    const put = ptaskAdd.get(t.id);
+    if (!(put || t.status === "doing" || t.priority === "urgent" || (t.dueDate !== null && t.dueDate <= date) || (t.checkpointDate !== null && t.checkpointDate <= date))) continue;
     items.push({
       key: `ptask:${t.id}`,
       kind: "ptask",
       refId: t.id,
       projectId: r.pid,
       title: t.title,
+      ...(put ? { added: true, pin: "day" as const, pinRank: 0, dueTime: put.dueTime } : {}),
       priority: t.priority,
       due: t.dueDate,
       checkpoint: t.checkpointDate,
@@ -318,6 +324,9 @@ export async function dayItems(userId: string, date: string, viewerId: string = 
   const absent = absences.length > 0;
   // an item whose checkpoint is today starts at the checkpoint's time
   for (const i of items) if (i.checkpoint === date && i.checkpointTime) i.startAt = mins(i.checkpointTime);
+  // what is late is not planned: a checkpoint (or, with none, a due day) before the day, unless put on the day by hand or pinned.
+  // It is listed apart so the dates can be looked at again.
+  for (const i of items) if (!i.added && !i.pin && !i.reminder && ((i.checkpoint !== null && i.checkpoint !== undefined && i.checkpoint < date) || ((i.checkpoint === null || i.checkpoint === undefined) && i.due !== null && i.due < date))) i.stale = true;
   return { items, busy, absent, holiday: holidaysBetween(date, date).has(date) };
 }
 
@@ -569,7 +578,7 @@ export async function buildPlan(userId: string, date: string, opts: { ai: boolea
     const given = alloc.manual.get(i.key) ?? (keepAi || opts.ai ? alloc.ai.get(i.key)?.minutes : undefined);
     return { ...i, need, minutes: given ?? need };
   };
-  const planable = absent ? [] : items.filter((i) => !i.blocked).sort(byUrgency).map(withTime);
+  const planable = absent ? [] : items.filter((i) => !i.blocked && !i.stale).sort(byUrgency).map(withTime);
   let ordered = planable;
   let notes = new Map<string, string>();
   let summary = "";
@@ -639,7 +648,7 @@ export async function buildPlan(userId: string, date: string, opts: { ai: boolea
   }
   const lay = layout(ordered, laySettings, busy, notes, after);
   // the blocked ones are listed after, so they are not forgotten
-  for (const i of absent ? [] : items.filter((x) => x.blocked)) lay.blocks.push({ start: "", end: "", title: i.title, kind: i.kind, refId: i.refId, ...(i.projectId ? { projectId: i.projectId } : {}), ticketNumber: i.ticketNumber ?? null, priority: i.priority, note: locale === "en" ? "Waiting on another task" : "En attente d'une autre tâche", overflow: true });
+  for (const i of absent ? [] : items.filter((x) => x.blocked && !x.stale)) lay.blocks.push({ start: "", end: "", title: i.title, kind: i.kind, refId: i.refId, ...(i.projectId ? { projectId: i.projectId } : {}), ticketNumber: i.ticketNumber ?? null, priority: i.priority, note: locale === "en" ? "Waiting on another task" : "En attente d'une autre tâche", overflow: true });
   const cap = absent ? 0 : lay.capacityMinutes;
   if (!summary) summary = rulesSummary(planable, cap, lay.plannedMinutes, lay.overflowMinutes, locale, absent, holiday);
   const values = { userId, date, summary, blocks: lay.blocks, capacityMinutes: cap, plannedMinutes: lay.plannedMinutes + lay.overflowMinutes, source, calendar: cal.status, calendarEvents: calEvents.length, updatedAt: new Date() };
@@ -661,12 +670,15 @@ export async function planOf(userId: string, date: string) {
 
 /** What the day screen lists besides the plan: everything on the plate, the urgent first */
 export async function buildPipelineView(userId: string, date: string, viewerId: string = userId) {
-  const { items, absent, holiday, busy } = await dayItems(userId, date, viewerId);
+  const { items: all, absent, holiday, busy } = await dayItems(userId, date, viewerId);
+  const items = all.filter((i) => !i.stale);
+  // late and not done: not planned, shown on top to re-evaluate their dates
+  const reevaluate = all.filter((i) => i.stale).sort(byUrgency);
   const doneToday = await db()
     .select({ n: sql<number>`count(*)`.mapWith(Number) })
     .from(schema.pipelineTasks)
     .where(and(assignedTo(userId), eq(schema.pipelineTasks.status, "done"), sql`(${schema.pipelineTasks.completedAt} at time zone 'America/Toronto')::date = ${date}::date`));
-  return { items: [...items].sort(byUrgency), absent, holiday, events: busy.length, doneToday: doneToday[0]?.n ?? 0 };
+  return { items: [...items].sort(byUrgency), reevaluate, absent, holiday, events: busy.length, doneToday: doneToday[0]?.n ?? 0 };
 }
 
 // ── the morning text ──
