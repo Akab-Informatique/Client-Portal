@@ -129,8 +129,9 @@ async function entryFields(kind: string, owner: string, p: EntryInput): Promise<
 
 /** A trip billed to a client becomes work to bill; once approved (or invoiced) it cannot be changed any more */
 async function tripLocked(entryId: string) {
-  const [b] = await db().select({ status: schema.billingItems.status }).from(schema.billingItems).where(eq(schema.billingItems.sourceId, `ptravel:${entryId}`));
-  if (b && (b.status === "approved" || b.status === "posted")) throw new HTTPException(409, { message: "entry_billed" });
+  // (a trip, or project time: its work to bill — `ptravel:` / `prtime:` — approved or invoiced locks the entry)
+  const rows = await db().select({ status: schema.billingItems.status }).from(schema.billingItems).where(inArray(schema.billingItems.sourceId, [`ptravel:${entryId}`, `prtime:${entryId}`]));
+  if (rows.some((b) => b.status === "approved" || b.status === "posted")) throw new HTTPException(409, { message: "entry_billed" });
 }
 
 /** An expense: its owner's, or anyone's for a manager (timesheets.manage) */
@@ -627,7 +628,8 @@ export const timeRoutes = new Hono<AppEnv>()
       .select()
       .from(schema.timesheetEntries)
       .where(and(eq(schema.timesheetEntries.id, zUuid.parse(c.req.param("id"))), manager ? undefined : eq(schema.timesheetEntries.userId, a.user.id)));
-    if (!e || e.source !== "manual") throw new HTTPException(404, { message: "not_found" });
+    // by hand, or time logged on a project (ticket time is changed on its ticket)
+    if (!e || (e.source !== "manual" && e.source !== "project")) throw new HTTPException(404, { message: "not_found" });
     await weekLock(e.userId, e.date, a);
     await tripLocked(e.id);
     // the account rows of the entry go with it (hr_ledger.entry_id cascades)

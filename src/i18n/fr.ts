@@ -2685,6 +2685,7 @@ const fr = {
       "person_invalid": "Cette personne ne peut pas être ajoutée (elle doit être un membre actif de l'équipe).",
       "project_closed": "Ce projet est terminé ou annulé : on ne peut plus y inscrire de temps.",
       "timesheet_locked": "Cette semaine de votre feuille de temps est déjà envoyée.",
+      "entry_billed": "Ce temps est déjà approuvé ou facturé : annulez la facture d'abord.",
       "client_unknown": "Client introuvable.",
       "milestone_has_tasks": "L'état d'un jalon suit ses tâches : terminez-les.",
       "timer_not_running": "Aucun minuteur en marche sur cette tâche.",

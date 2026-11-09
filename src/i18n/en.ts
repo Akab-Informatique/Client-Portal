@@ -2687,6 +2687,7 @@ const en: Dict = {
       "person_invalid": "This person cannot be added (they must be an active team member).",
       "project_closed": "This project is finished or cancelled: no more time can be logged on it.",
       "timesheet_locked": "That week of your timesheet is already sent.",
+      "entry_billed": "This time is already approved or invoiced: cancel the invoice first.",
       "client_unknown": "Client not found.",
       "milestone_has_tasks": "A milestone's state follows its tasks: finish them.",
       "timer_not_running": "No timer is running on this task.",

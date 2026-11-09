@@ -7275,6 +7275,9 @@ describe("pipeline: shared to-dos and the day", () => {
     const e = (await admin.post(`/api/projects/${bp.projectId}/time`, { date: qcToday(), hours: 4, taskId: task.id })).json;
     expect(e.billable).toBe(false);
     expect((await admin.get(`/api/projects/${bp.projectId}`)).json.sold).toMatchObject({ workedHours: 4, diffHours: 6 });
+    // time logged on a project task can be deleted like any manual entry (it used to answer not found), and the bank is given back
+    expect((await admin.del(`/api/time/entries/${e.id}`)).status).toBe(200);
+    expect((await admin.get(`/api/projects/${bp.projectId}`)).json.sold).toMatchObject({ workedHours: 0, diffHours: 10 });
   });
 
   it("tasks: assign, checklist, subtasks and waiting-for rules, notes", async () => {
