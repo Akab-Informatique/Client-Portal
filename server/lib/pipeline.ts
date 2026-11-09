@@ -206,7 +206,7 @@ export async function dayItems(userId: string, date: string, viewerId: string = 
     // a continuous task checked off comes back after its number of days
     const remind = t.kind === "continuous" && t.remindEveryDays && t.lastCheckedOn ? plusDaysOf(t.lastCheckedOn, t.remindEveryDays) <= date : false;
     const put = taskAdd.get(t.id);
-    const relevant = Boolean(put) || remind || t.kind === "daily" || t.status === "doing" || t.priority === "urgent" || (due !== null && due <= date) || (t.checkpointDate !== null && t.checkpointDate <= date);
+    const relevant = Boolean(put) || remind || t.kind === "daily" || t.status === "doing" || t.priority === "urgent" || (due !== null && due <= date && !(t.checkpointDate && t.checkpointDate > date)) || (t.checkpointDate !== null && t.checkpointDate <= date);
     if (!relevant) continue;
     const masked = viewing && t.visibility !== "team" && t.createdBy !== viewerId && !(t.visibility === "selected" && shared.has(t.id));
     items.push({
@@ -242,7 +242,7 @@ export async function dayItems(userId: string, date: string, viewerId: string = 
   for (const r of ptasks) {
     const t = r.t;
     const put = ptaskAdd.get(t.id);
-    if (!(put || t.status === "doing" || t.priority === "urgent" || (t.dueDate !== null && t.dueDate <= date) || (t.checkpointDate !== null && t.checkpointDate <= date))) continue;
+    if (!(put || t.status === "doing" || t.priority === "urgent" || (t.dueDate !== null && t.dueDate <= date && !(t.checkpointDate && t.checkpointDate > date)) || (t.checkpointDate !== null && t.checkpointDate <= date))) continue;
     items.push({
       key: `ptask:${t.id}`,
       kind: "ptask",
@@ -286,7 +286,7 @@ export async function dayItems(userId: string, date: string, viewerId: string = 
       if (r.m && r.time) checkpointTime.set(r.id, r.time);
     }
   }
-  const mine = all.filter((t) => kindOf.get(t.status) !== "complete" && (pinOf.has(t.id) || addOf.has(t.id) || (t.assignee?.id === userId && (new Date(t.dueAt).getTime() < endOfDay || (checkpoint.get(t.id) ?? "9999") <= date))));
+  const mine = all.filter((t) => kindOf.get(t.status) !== "complete" && (pinOf.has(t.id) || addOf.has(t.id) || (t.assignee?.id === userId && (checkpoint.has(t.id) ? checkpoint.get(t.id)! <= date : new Date(t.dueAt).getTime() < endOfDay))));
   const est = mine.length
     ? await d.select({ id: schema.ticketMeta.ticketId, m: schema.ticketMeta.estimateMinutes }).from(schema.ticketMeta).where(inArray(schema.ticketMeta.ticketId, mine.map((t) => t.id)))
     : [];
