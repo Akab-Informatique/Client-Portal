@@ -11,6 +11,7 @@ import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Switch } from "@/components/ui/switch";
 import { Textarea } from "@/components/ui/textarea";
+import { AiTextarea } from "@/components/AiPolish";
 import { api, ApiError } from "@/lib/api";
 import { useCan, useMe } from "@/lib/session";
 import { cn } from "@/lib/utils";
@@ -428,7 +429,7 @@ function Composer({ tk, projectId, edit, canTime, hourly, onChanged, fail }: { t
               </div>
               <div className="space-y-1.5">
                 <Label className="text-xs">{t("projects.note")}</Label>
-                <Input value={f.note} onChange={(e) => setF((s) => ({ ...s, note: e.target.value }))} maxLength={500} />
+                <AiTextarea rows={4} value={f.note} onChange={(e) => setF((s) => ({ ...s, note: e.target.value }))} maxLength={2000} className="min-h-24" />
               </div>
             </div>
             <div className="flex items-center justify-between gap-3">
@@ -615,7 +616,7 @@ function TimerPanel({ tk, projectId, canLog, hourly, onChanged, fail, askStop, o
                   </div>
                   <div className="space-y-1">
                     <Label className="text-xs">{t("projects.note")}</Label>
-                    <Input value={stopping.note} maxLength={500} onChange={(e) => setStopping({ ...stopping, note: e.target.value })} />
+                    <AiTextarea rows={4} value={stopping.note} onChange={(e) => setStopping({ ...stopping, note: e.target.value })} maxLength={2000} className="min-h-24" />
                   </div>
                 </div>
                 <label className="flex items-center gap-2 text-xs text-muted-foreground">

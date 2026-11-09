@@ -1047,7 +1047,7 @@ export const projectsRoutes = new Hono<AppEnv>()
     const task = await loadTask(p.id, c.req.param("tid"));
     const [timer] = await db().select().from(schema.projectTaskTimers).where(and(eq(schema.projectTaskTimers.taskId, task.id), eq(schema.projectTaskTimers.userId, a.user.id)));
     if (!timer) throw new HTTPException(409, { message: "timer_not_running" });
-    const o = await body(c, z.object({ discard: z.boolean().optional(), hours: z.number().min(0.05).max(24).optional(), note: z.string().trim().max(500).optional(), billable: z.boolean().optional(), date: zDay.optional() }));
+    const o = await body(c, z.object({ discard: z.boolean().optional(), hours: z.number().min(0.05).max(24).optional(), note: z.string().trim().max(2000).optional(), billable: z.boolean().optional(), date: zDay.optional() }));
     if (o.discard) {
       await db().delete(schema.projectTaskTimers).where(and(eq(schema.projectTaskTimers.taskId, task.id), eq(schema.projectTaskTimers.userId, a.user.id)));
       return c.json({ discarded: true });
@@ -1155,7 +1155,7 @@ export const projectsRoutes = new Hono<AppEnv>()
     const a = auth(c);
     const p = await loadProject(c.req.param("id"));
     if (p.status === "done" || p.status === "cancelled") throw new HTTPException(409, { message: "project_closed" });
-    const t = await body(c, z.object({ date: zDay, hours: z.number().min(0.05).max(24), milestoneId: zUuid.nullable().optional(), taskId: zUuid.nullable().optional(), note: z.string().trim().max(500).optional(), billable: z.boolean().optional(), userId: zUuid.optional() }));
+    const t = await body(c, z.object({ date: zDay, hours: z.number().min(0.05).max(24), milestoneId: zUuid.nullable().optional(), taskId: zUuid.nullable().optional(), note: z.string().trim().max(2000).optional(), billable: z.boolean().optional(), userId: zUuid.optional() }));
     // time for someone else: a manager only (it goes on that person's timesheet)
     const forOther = t.userId && t.userId !== a.user.id;
     if (forOther) {
@@ -1175,7 +1175,7 @@ export const projectsRoutes = new Hono<AppEnv>()
     const [e] = await db().select().from(schema.timesheetEntries).where(and(eq(schema.timesheetEntries.id, zUuid.parse(c.req.param("eid"))), eq(schema.timesheetEntries.projectId, p.id)));
     if (!e) throw new HTTPException(404, { message: "not_found" });
     if (e.userId !== a.user.id && !a.permissions.includes("projects.manage")) throw new HTTPException(403, { message: "Forbidden" });
-    const o = await body(c, z.object({ billable: z.boolean().optional(), note: z.string().trim().max(500).nullable().optional(), userId: zUuid.optional() }));
+    const o = await body(c, z.object({ billable: z.boolean().optional(), note: z.string().trim().max(2000).nullable().optional(), userId: zUuid.optional() }));
     // whose time it is: a manager changes it (it moves to that person's timesheet)
     const moveTo = o.userId && o.userId !== e.userId ? o.userId : null;
     if (moveTo) {
