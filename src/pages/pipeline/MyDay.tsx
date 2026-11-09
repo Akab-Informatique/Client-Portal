@@ -196,8 +196,6 @@ export function MyDay({ onOpenTask }: { onOpenTask: (id: string) => void }) {
         )}
       </div>
 
-      {isToday && data && data.reevaluate.length > 0 && <Reevaluate items={data.reevaluate} onOpen={open} />}
-
       {/* the summary: the AI's words, and whether there is time */}
       <section className="glass relative overflow-hidden rounded-2xl border border-[color:var(--gold)]/25 p-5">
         <div className="pointer-events-none absolute -right-16 -top-20 size-64 rounded-full bg-[color:var(--gold)]/10 blur-3xl" />
@@ -292,10 +290,12 @@ export function MyDay({ onOpenTask }: { onOpenTask: (id: string) => void }) {
       <div ref={box} className="grid gap-4 xl:gap-0 xl:grid-cols-[var(--split)_12px_minmax(0,1fr)]" style={{ "--split": `${split}%` } as React.CSSProperties}>
         <div className="min-w-0 space-y-4">
           <Priorities items={data?.items ?? []} horizon="day" onOpen={open} canRemove={can("pipeline.edit") && (userId === me.id || can("pipeline.manage"))} forUser={userId === me.id ? undefined : userId} />
-          <section className="glass h-fit rounded-2xl border p-4">
-            <div className="mb-3 flex items-center justify-between gap-2">
-              <h3 className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">{t("pipeline.day.timeline")}</h3>
-              <div className="flex items-center gap-1">
+          <section className="glass h-fit rounded-2xl border border-[color:var(--gold)]/30 p-4 shadow-[0_0_30px_-12px_rgba(255,206,26,0.35)]">
+            <div className="relative mb-3 flex items-center justify-center">
+              <h3 className="flex items-center gap-2 text-center text-base font-bold tracking-wide text-primary">
+                <CalendarClock className="size-5" /> {t("pipeline.day.timeline")}
+              </h3>
+              <div className="absolute right-0 flex items-center gap-1">
               {can("pipeline.edit") && (userId === me.id || can("pipeline.manage")) && (
                 <Tooltip>
                   <TooltipTrigger asChild>
@@ -318,7 +318,12 @@ export function MyDay({ onOpenTask }: { onOpenTask: (id: string) => void }) {
               )}
               </div>
             </div>
-            <div className="mb-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-[10px] text-muted-foreground">
+            {isToday && data && data.reevaluate.length > 0 && (
+              <div className="mb-3">
+                <Reevaluate items={data.reevaluate} onOpen={open} />
+              </div>
+            )}
+            <div className="mb-2 flex flex-wrap items-center justify-center gap-x-3 gap-y-1 text-[10px] text-muted-foreground">
               {[
                 ["bg-[color:var(--gold)]/60", "pipeline.day.legend.ticket"],
                 ["bg-violet-400/70", "pipeline.day.legend.task"],
