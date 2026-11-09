@@ -7178,6 +7178,33 @@ describe("pipeline: shared to-dos and the day", () => {
     expect((await tech.put("/api/pipeline/day/start", { key: "task:00000000-0000-4000-8000-000000000000", minute: 600 })).status).toBe(404);
   });
 
+  it("a whole phase or project is one item of the day, and any item can be taken off it", async () => {
+    resetRateLimit("login:ip:unknown");
+    const tech = await signIn("tech@akab.local");
+    const me = (await tech.get("/api/me")).json.id as string;
+    await db().delete(schema.ticketDayAdds);
+    await db().delete(schema.pipelineDayAlloc);
+    const proj = (await tech.post("/api/projects", { name: "Gros projet du jour", milestones: [{ name: "Phase 1" }] })).json;
+    const ms = proj.milestones[0].id as string;
+    for (const n of ["A", "B", "C"]) await tech.post(`/api/projects/${proj.id}/milestones/${ms}/tasks`, { title: "Tâche " + n, assigneeId: me });
+    expect((await tech.put(`/api/pipeline/day/pmilestones/${ms}`, { time: null })).status).toBe(200);
+    expect((await tech.put(`/api/pipeline/day/pprojects/${proj.id}`, { time: null })).status).toBe(200);
+    let day = (await tech.get("/api/pipeline/day")).json;
+    // two items, not one per task
+    expect(day.items.map((i: any) => i.key).sort()).toEqual([`pmilestone:${ms}`, `pproject:${proj.id}`].sort());
+    expect(day.items.find((i: any) => i.kind === "pmilestone")).toMatchObject({ title: "Phase 1", projectId: proj.id, added: true });
+    expect(day.plan.blocks.filter((b: any) => b.kind === "pmilestone" || b.kind === "pproject").length).toBeGreaterThanOrEqual(2);
+    // dragged like the others
+    expect((await tech.put("/api/pipeline/day/start", { key: `pmilestone:${ms}`, minute: 15 * 60 })).status).toBe(200);
+    expect((await tech.get("/api/pipeline/day")).json.plan.blocks.find((b: any) => b.refId === ms).start).toBe("15:00");
+    // taken off the day
+    expect((await tech.del(`/api/pipeline/day/pmilestones/${ms}`)).status).toBe(200);
+    expect((await tech.del(`/api/pipeline/day/pprojects/${proj.id}`)).status).toBe(200);
+    day = (await tech.get("/api/pipeline/day")).json;
+    expect(day.items).toEqual([]);
+    expect((await tech.put("/api/pipeline/day/pmilestones/00000000-0000-4000-8000-000000000000", { time: null })).status).toBe(404);
+  });
+
   it("tasks: assign, checklist, subtasks and waiting-for rules, notes", async () => {
     resetRateLimit("login:ip:unknown");
     const admin = await signIn("admin@akab.local");

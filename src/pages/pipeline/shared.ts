@@ -68,7 +68,7 @@ export type Block = {
   start: string;
   end: string;
   title: string;
-  kind: "task" | "ptask" | "ticket" | "event" | "break";
+  kind: "task" | "ptask" | "pmilestone" | "pproject" | "ticket" | "event" | "break";
   /** A project task: its project */
   projectId?: string;
   refId: string | null;
@@ -93,9 +93,15 @@ export type Block = {
   partial?: boolean;
 };
 
+export type DayKind = "task" | "ptask" | "pmilestone" | "pproject" | "ticket";
+/** A kind of thing that can be on the day (a block that is not an event or the lunch) */
+export const isWork = (k: string): k is DayKind => k === "ticket" || k === "task" || k === "ptask" || k === "pmilestone" || k === "pproject";
+/** The route segment of a kind: PUT / DELETE /pipeline/day/<segment>/:id */
+export const DAY_ROUTE: Record<DayKind, string> = { ticket: "tickets", task: "tasks", ptask: "ptasks", pmilestone: "pmilestones", pproject: "pprojects" };
+
 export type DayItem = {
   key: string;
-  kind: "task" | "ptask" | "ticket";
+  kind: DayKind;
   /** A project task: its project (number in ticketNumber, name and phase in client) */
   projectId?: string;
   refId: string;

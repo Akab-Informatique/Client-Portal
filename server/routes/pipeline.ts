@@ -253,6 +253,48 @@ const aiLimit = (userId: string) => {
   if (!rateLimit(`pipeline-ai:${userId}`, 20, 60 * 60_000).ok) throw new HTTPException(429, { message: "rate_limited" });
 };
 
+type AddCol = "milestoneId" | "projectId";
+const addKey = (col: AddCol, id: string) => (col === "milestoneId" ? `pmilestone:${id}` : `pproject:${id}`);
+async function dayAddState(c: Context<AppEnv>, col: AddCol) {
+  const a = auth(c);
+  const id = zUuid.parse(c.req.param("id"));
+  const who = await dayTarget(a, c.req.query("userId"));
+  await resetDayAdds();
+  const [row] = await db().select().from(schema.ticketDayAdds).where(and(eq(schema.ticketDayAdds[col], id), eq(schema.ticketDayAdds.userId, who), eq(schema.ticketDayAdds.forDate, todayQc())));
+  return c.json({ added: Boolean(row), dueTime: row?.dueTime ?? null });
+}
+async function dayAddPut(c: Context<AppEnv>, col: AddCol) {
+  const a = auth(c);
+  const id = zUuid.parse(c.req.param("id"));
+  const p = await body(c, z.object({ time: zHm.nullable().default(null), userId: zUuid.optional() }));
+  const who = await dayTarget(a, p.userId);
+  const [pr] =
+    col === "milestoneId"
+      ? await db().select({ title: schema.projectMilestones.name, done: sql<boolean>`${schema.projectMilestones.status} = 'done'`, project: schema.projects.status }).from(schema.projectMilestones).innerJoin(schema.projects, eq(schema.projects.id, schema.projectMilestones.projectId)).where(eq(schema.projectMilestones.id, id))
+      : await db().select({ title: schema.projects.name, done: sql<boolean>`false`, project: schema.projects.status }).from(schema.projects).where(eq(schema.projects.id, id));
+  if (!pr) throw new HTTPException(404, { message: "not_found" });
+  if (pr.done) throw new HTTPException(409, { message: "task_done" });
+  if (pr.project !== "planning" && pr.project !== "active") throw new HTTPException(409, { message: "project_closed" });
+  const forDate = todayQc();
+  const target = col === "milestoneId" ? schema.ticketDayAdds.milestoneId : schema.ticketDayAdds.projectId;
+  await db()
+    .insert(schema.ticketDayAdds)
+    .values({ [col]: id, userId: who, forDate, dueTime: p.time, addedBy: a.user.id })
+    .onConflictDoUpdate({ target: [target, schema.ticketDayAdds.userId, schema.ticketDayAdds.forDate], set: { dueTime: p.time, addedBy: a.user.id } });
+  await startAtNow(who, addKey(col, id));
+  await audit(a.user.id, col === "milestoneId" ? "pipeline.milestone_day_added" : "pipeline.project_day_added", id, { time: p.time, userId: who });
+  if (who !== a.user.id) await notify([who], { type: "pipeline.day_added", data: { title: pr.title.slice(0, 200), by: a.user.name, time: p.time }, link: "/projects" });
+  return c.json({ added: true, dueTime: p.time });
+}
+async function dayAddDelete(c: Context<AppEnv>, col: AddCol) {
+  const a = auth(c);
+  const id = zUuid.parse(c.req.param("id"));
+  const who = await dayTarget(a, c.req.query("userId"));
+  await db().delete(schema.ticketDayAdds).where(and(eq(schema.ticketDayAdds[col], id), eq(schema.ticketDayAdds.userId, who)));
+  await audit(a.user.id, "pipeline.project_day_removed", id, { userId: who });
+  return c.json({ added: false, dueTime: null });
+}
+
 /** Pipeline: the team's shared to-do list and each technician's day (pipeline.view to see, pipeline.edit to change). */
 export const pipelineRoutes = new Hono<AppEnv>()
   .use(requireStaff)
@@ -275,7 +317,7 @@ export const pipelineRoutes = new Hono<AppEnv>()
     const hidden = new Set(view.items.filter((i) => i.masked).map((i) => i.refId));
     // a planned block whose work is no longer on the day's list was done (or taken off): shown struck out
     const live = new Set(view.items.map((i) => i.key));
-    const withDone = (bl: typeof stored.blocks) => bl.map((b) => ((b.kind === "task" || b.kind === "ptask" || b.kind === "ticket") && b.refId && !live.has(`${b.kind}:${b.refId}`) ? { ...b, done: true } : b));
+    const withDone = (bl: typeof stored.blocks) => bl.map((b) => ((b.kind === "task" || b.kind === "ptask" || b.kind === "pmilestone" || b.kind === "pproject" || b.kind === "ticket") && b.refId && !live.has(`${b.kind}:${b.refId}`) ? { ...b, done: true } : b));
     const plan = viewing
       ? {
           ...stored,
@@ -284,7 +326,7 @@ export const pipelineRoutes = new Hono<AppEnv>()
         }
       : { ...stored, blocks: withDone(stored.blocks) };
     // the AI's plan does not follow the list: tell when something to do is not in it
-    const planned = new Set(plan.blocks.filter((b) => (b.kind === "task" || b.kind === "ptask" || b.kind === "ticket") && b.refId).map((b) => `${b.kind}:${b.refId}`));
+    const planned = new Set(plan.blocks.filter((b) => (b.kind === "task" || b.kind === "ptask" || b.kind === "pmilestone" || b.kind === "pproject" || b.kind === "ticket") && b.refId).map((b) => `${b.kind}:${b.refId}`));
     // also when the Outlook calendar changed (a meeting added or moved)
     const cal = plan.source === "ai" ? await calendarOfDay(userId, date).catch(() => null) : null;
     const stale = plan.source === "ai" && (view.items.some((i) => !i.blocked && !planned.has(i.key)) || (cal !== null && cal.events.filter((e) => !e.free).length !== plan.calendarEvents));
@@ -434,7 +476,7 @@ export const pipelineRoutes = new Hono<AppEnv>()
    */
   .put("/day/alloc", requirePermission("pipeline.edit"), async (c) => {
     const a = auth(c);
-    const p = await body(c, z.object({ date: zDate.optional(), userId: zUuid.optional(), key: z.string().regex(/^(ticket:\d+|task:[0-9a-f-]{36}|ptask:[0-9a-f-]{36})$/), minutes: z.number().int().min(15).max(480).nullable() }));
+    const p = await body(c, z.object({ date: zDate.optional(), userId: zUuid.optional(), key: z.string().regex(/^(ticket:\d+|task:[0-9a-f-]{36}|ptask:[0-9a-f-]{36}|pmilestone:[0-9a-f-]{36}|pproject:[0-9a-f-]{36})$/), minutes: z.number().int().min(15).max(480).nullable() }));
     const who = await dayTarget(a, p.userId);
     const date = p.date ?? todayQc();
     const view = await dayItems(who, date, a.user.id, true);
@@ -493,7 +535,7 @@ export const pipelineRoutes = new Hono<AppEnv>()
   // the order of the day, given by dragging the blocks: the keys, first to last (kept for that day)
   .put("/day/order", requirePermission("pipeline.edit"), async (c) => {
     const a = auth(c);
-    const p = await body(c, z.object({ date: zDate.optional(), userId: zUuid.optional(), keys: z.array(z.string().regex(/^(ticket:\d+|task:[0-9a-f-]{36}|ptask:[0-9a-f-]{36})$/)).max(200) }));
+    const p = await body(c, z.object({ date: zDate.optional(), userId: zUuid.optional(), keys: z.array(z.string().regex(/^(ticket:\d+|task:[0-9a-f-]{36}|ptask:[0-9a-f-]{36}|pmilestone:[0-9a-f-]{36}|pproject:[0-9a-f-]{36})$/)).max(200) }));
     const who = await dayTarget(a, p.userId);
     const date = p.date ?? todayQc();
     const view = await dayItems(who, date, a.user.id, true);
@@ -509,7 +551,7 @@ export const pipelineRoutes = new Hono<AppEnv>()
   /** Where an item starts in the day (dragged on the timeline, quarter hours); null puts it back to the automatic place. */
   .put("/day/start", requirePermission("pipeline.edit"), async (c) => {
     const a = auth(c);
-    const p = await body(c, z.object({ date: zDate.optional(), userId: zUuid.optional(), key: z.string().regex(/^(ticket:[0-9]+|task:[0-9a-f-]{36}|ptask:[0-9a-f-]{36})$/), minute: z.number().int().min(0).max(1425).nullable() }));
+    const p = await body(c, z.object({ date: zDate.optional(), userId: zUuid.optional(), key: z.string().regex(/^(ticket:[0-9]+|task:[0-9a-f-]{36}|ptask:[0-9a-f-]{36}|pmilestone:[0-9a-f-]{36}|pproject:[0-9a-f-]{36})$/), minute: z.number().int().min(0).max(1425).nullable() }));
     const who = await dayTarget(a, p.userId);
     const date = p.date ?? todayQc();
     const view = await dayItems(who, date, a.user.id, true);
@@ -520,6 +562,14 @@ export const pipelineRoutes = new Hono<AppEnv>()
     const out = await buildPlan(who, date, { ai: false, reuse: true });
     return c.json({ ok: true, plan: out.plan });
   })
+
+  // a whole phase / a whole project put on the day: one item (the folder opens on it)
+  .get("/day/pmilestones/:id", async (c) => dayAddState(c, "milestoneId"))
+  .put("/day/pmilestones/:id", requirePermission("pipeline.edit"), requirePermission("projects.view"), async (c) => dayAddPut(c, "milestoneId"))
+  .delete("/day/pmilestones/:id", requirePermission("pipeline.edit"), async (c) => dayAddDelete(c, "milestoneId"))
+  .get("/day/pprojects/:id", async (c) => dayAddState(c, "projectId"))
+  .put("/day/pprojects/:id", requirePermission("pipeline.edit"), requirePermission("projects.view"), async (c) => dayAddPut(c, "projectId"))
+  .delete("/day/pprojects/:id", requirePermission("pipeline.edit"), async (c) => dayAddDelete(c, "projectId"))
 
   // ── The team's list ──
   .get("/people", async (c) => {

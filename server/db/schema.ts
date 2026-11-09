@@ -1408,6 +1408,9 @@ export const ticketDayAdds = pgTable(
     taskId: uuid("task_id").references(() => pipelineTasks.id, { onDelete: "cascade" }),
     /** Or a task of a project */
     projectTaskId: uuid("project_task_id").references(() => projectTasks.id, { onDelete: "cascade" }),
+    /** Or a whole phase (milestone) of a project, or a whole project: one item of the day, opened as the folder */
+    milestoneId: uuid("milestone_id").references(() => projectMilestones.id, { onDelete: "cascade" }),
+    projectId: uuid("project_id").references(() => projects.id, { onDelete: "cascade" }),
     userId: uuid("user_id")
       .notNull()
       .references(() => users.id, { onDelete: "cascade" }),
@@ -1419,7 +1422,7 @@ export const ticketDayAdds = pgTable(
     dueTime: text("due_time"),
     createdAt: created(),
   },
-  (t) => [uniqueIndex("ticket_day_adds_unique").on(t.ticketId, t.userId, t.forDate), uniqueIndex("ticket_day_adds_task_unique").on(t.taskId, t.userId, t.forDate), uniqueIndex("ticket_day_adds_ptask_unique").on(t.projectTaskId, t.userId, t.forDate), index("ticket_day_adds_user_idx").on(t.userId, t.forDate)],
+  (t) => [uniqueIndex("ticket_day_adds_unique").on(t.ticketId, t.userId, t.forDate), uniqueIndex("ticket_day_adds_task_unique").on(t.taskId, t.userId, t.forDate), uniqueIndex("ticket_day_adds_ptask_unique").on(t.projectTaskId, t.userId, t.forDate), uniqueIndex("ticket_day_adds_milestone_unique").on(t.milestoneId, t.userId, t.forDate), uniqueIndex("ticket_day_adds_project_unique").on(t.projectId, t.userId, t.forDate), index("ticket_day_adds_user_idx").on(t.userId, t.forDate)],
 );
 
 /** Time reserved by an admin on a technician's calendar (for a pinned ticket, or a reserved slot). */
@@ -2569,7 +2572,7 @@ export type PipelineBlock = {
   start: string;
   end: string;
   title: string;
-  kind: "task" | "ptask" | "ticket" | "event" | "break";
+  kind: "task" | "ptask" | "pmilestone" | "pproject" | "ticket" | "event" | "break";
   /** For a project task: its project (the id opens it) */
   projectId?: string;
   /** The task id, or the ticket id */

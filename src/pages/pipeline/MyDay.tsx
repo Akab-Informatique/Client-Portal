@@ -1,4 +1,5 @@
 import { useRef, useState } from "react";
+import { useNavigate } from "react-router-dom";
 import { useTranslation } from "react-i18next";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
@@ -12,8 +13,9 @@ import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip
 import { api } from "@/lib/api";
 import { useCan, useMe } from "@/lib/session";
 import { cn } from "@/lib/utils";
+import { RemoveFromDay } from "./DayEdge";
 import { useTicketWorkspace } from "@/pages/tickets/workspace";
-import { PRIORITY_STYLE, addDays, dayLabel, hm, longDay, todayYmd, toMinutes, type Block, type DayData, type DayItem, type TaskCard } from "./shared";
+import { PRIORITY_STYLE, addDays, dayLabel, hm, isWork, longDay, todayYmd, toMinutes, type Block, type DayData, type DayItem, type TaskCard } from "./shared";
 import { taskError, usePeople } from "./TaskDialog";
 import { DayProjects, MyTickets, Priorities } from "./DayLists";
 import { DayEdge } from "./DayEdge";
@@ -165,7 +167,17 @@ export function MyDay({ onOpenTask }: { onOpenTask: (id: string) => void }) {
     },
     onError: (e) => toast.error(taskError(t, e)),
   });
-  const open = (i: DayItem) => (i.kind === "ticket" ? ws.open(Number(i.refId)) : i.kind === "ptask" ? i.projectId && pws.openTask(i.projectId, i.refId) : onOpenTask(i.refId));
+  const goTo = useNavigate();
+  const open = (i: DayItem) =>
+    i.kind === "ticket"
+      ? ws.open(Number(i.refId))
+      : i.kind === "ptask"
+        ? i.projectId && pws.openTask(i.projectId, i.refId)
+        : i.kind === "pmilestone"
+          ? goTo(`/projects?project=${i.projectId}&tab=milestones&milestone=${i.refId}`)
+          : i.kind === "pproject"
+            ? goTo(`/projects?project=${i.refId}`)
+            : onOpenTask(i.refId);
   const projectTasks = (data?.items ?? []).filter((i) => i.kind === "ptask");
   const when = plan ? new Date(plan.updatedAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }) : "";
 
@@ -497,7 +509,7 @@ function ItemRow({ i, onOpen, onComplete }: { i: DayItem; onOpen: (i: DayItem) =
       <button type="button" aria-label={t("projects.sort.drag")} title={t("projects.sort.drag")} className="cursor-grab touch-none text-muted-foreground hover:text-foreground active:cursor-grabbing" {...attributes} {...listeners}>
         <GripVertical className="size-4" />
       </button>
-      {!i.masked && (i.kind === "ticket" || i.kind === "task" || i.kind === "ptask") && <DayEdge kind={i.kind} id={i.refId} number={i.ticketNumber} title={i.title} urgent={i.priority === "urgent"} onOpen={() => onOpen(i)} />}
+      {!i.masked && isWork(i.kind) && <DayEdge kind={i.kind} id={i.refId} number={i.ticketNumber} title={i.title} urgent={i.priority === "urgent"} onOpen={() => onOpen(i)} />}
       {onComplete && <Checkbox disabled={i.blocked} onCheckedChange={() => onComplete(i)} aria-label={t("pipeline.complete")} />}
       <span className={cn("size-2 shrink-0 rounded-full", PRIORITY_STYLE[i.priority].dot)} />
       <button type="button" onClick={() => onOpen(i)} className="min-w-0 flex-1 text-left">
@@ -537,7 +549,7 @@ function Timeline({ data, onOpen, onBlock, hourPx, canEdit, forUser, onSaved }: 
   });
   const totals = new Map<string, number>();
   for (const b of data.plan.blocks) {
-    if (!b.overflow && b.start && b.end && b.refId && (b.kind === "ticket" || b.kind === "task" || b.kind === "ptask")) {
+    if (!b.overflow && b.start && b.end && b.refId && isWork(b.kind)) {
       const k = `${b.kind}:${b.refId}`;
       totals.set(k, (totals.get(k) ?? 0) + toMinutes(b.end) - toMinutes(b.start));
     }
@@ -633,7 +645,7 @@ function Timeline({ data, onOpen, onBlock, hourPx, canEdit, forUser, onSaved }: 
             const live = drag && drag.i === i ? drag : null;
             const h = Math.max(((own + (live?.delta ?? 0)) / 60) * hourPx - 3, 18);
             const shift = live?.edge === "top" ? -(live.delta / 60) * hourPx : 0;
-            const stretch = canEdit && !b.done && !b.masked && (b.kind === "ticket" || b.kind === "task" || b.kind === "ptask");
+            const stretch = canEdit && !b.done && !b.masked && isWork(b.kind);
             if (b.kind === "break")
               return (
                 <div key={`br${i}`} className="absolute inset-x-0 flex items-center justify-center gap-1.5 rounded-lg border border-dashed border-muted-foreground/30 bg-[repeating-linear-gradient(135deg,transparent,transparent_6px,rgba(255,255,255,0.03)_6px,rgba(255,255,255,0.03)_12px)] text-[11px] text-muted-foreground" style={{ top: top(s) + 1, height: h }}>
@@ -641,10 +653,10 @@ function Timeline({ data, onOpen, onBlock, hourPx, canEdit, forUser, onSaved }: 
                 </div>
               );
             const task = b.kind === "task";
-            const ptask = b.kind === "ptask";
+            const ptask = b.kind === "ptask" || b.kind === "pmilestone" || b.kind === "pproject";
             const event = b.kind === "event";
             return (
-              <div key={`${b.refId}${i}`} className={cn("absolute inset-x-0", (live || move?.i === i) && "z-20")} style={{ top: top(s) + 1 + shift, height: h, ...(move?.i === i ? { transform: `translateY(${move.dy}px)`, opacity: 0.85, pointerEvents: "none" as const } : {}) }}>
+              <div key={`${b.refId}${i}`} className={cn("group/blk absolute inset-x-0", (live || move?.i === i) && "z-20")} style={{ top: top(s) + 1 + shift, height: h, ...(move?.i === i ? { transform: `translateY(${move.dy}px)`, opacity: 0.85, pointerEvents: "none" as const } : {}) }}>
               <button
                 type="button"
                 disabled={event && !b.local}
@@ -684,9 +696,10 @@ function Timeline({ data, onOpen, onBlock, hourPx, canEdit, forUser, onSaved }: 
                 <span className={cn("block truncate text-[13px] font-medium leading-tight", b.done && "line-through")}>{b.title || t("pipeline.private")}</span>
                 {b.note && h > 50 && <span className="block truncate text-[11px] text-muted-foreground">{b.note}</span>}
               </button>
-              {!event && !b.masked && !b.done && b.refId && (b.kind === "ticket" || b.kind === "task" || b.kind === "ptask") && (
-                <DayEdge kind={b.kind} id={b.refId} number={b.ticketNumber} title={b.title} urgent={b.priority === "urgent"} onOpen={() => onOpen(b)} className="absolute left-0 top-0 z-10 h-full" />
+              {!event && !b.masked && !b.done && b.refId && isWork(b.kind) && (
+                <DayEdge kind={b.kind} id={b.refId} number={b.ticketNumber} title={b.title} urgent={b.priority === "urgent"} onOpen={() => onOpen(b)} onDay={{ forUser }} className="absolute left-0 top-0 z-10 h-full" />
               )}
+              {canEdit && !event && !b.masked && b.refId && isWork(b.kind) && <RemoveFromDay kind={b.kind} id={b.refId} forUser={forUser} className="absolute right-1.5 top-1.5 z-20 opacity-0 transition-opacity group-hover/blk:opacity-100" />}
               {stretch &&
                 (["top", "bottom"] as const).map((edge) => (
                   <div key={edge} role="separator" aria-orientation="horizontal" title={t("pipeline.day.resizeBlock")} onPointerDown={(ev) => startDrag(ev, i, key, own, edge)} className={cn("group/h absolute inset-x-3 z-10 flex h-2 cursor-ns-resize touch-none items-center justify-center", edge === "top" ? "top-0" : "bottom-0")}>

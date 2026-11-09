@@ -80,7 +80,7 @@ const nextDay = (date: string) => new Date(new Date(`${date}T12:00:00Z`).getTime
 // ── what is on the day ──
 export type DayItem = {
   key: string;
-  kind: "task" | "ptask" | "ticket";
+  kind: "task" | "ptask" | "pmilestone" | "pproject" | "ticket";
   /** A project task: its project (number and name go in ticketNumber and client) */
   projectId?: string;
   refId: string;
@@ -264,6 +264,29 @@ export async function dayItems(userId: string, date: string, viewerId: string = 
       client: `${r.pname} · ${r.ms}`,
       blocked: t.status === "blocked" || Boolean(t.dependsOnId && undone.has(t.dependsOnId)),
     });
+  }
+  // a whole phase or a whole project put on the day: one item, opened as the project folder
+  const msAdds = adds.filter((x) => x.milestoneId !== null).map((x) => x.milestoneId as string);
+  const prAdds = adds.filter((x) => x.projectId !== null).map((x) => x.projectId as string);
+  if (msAdds.length) {
+    const rows = await d
+      .select({ m: schema.projectMilestones, pid: schema.projects.id, pnum: schema.projects.number, pname: schema.projects.name, pstatus: schema.projects.status })
+      .from(schema.projectMilestones)
+      .innerJoin(schema.projects, eq(schema.projects.id, schema.projectMilestones.projectId))
+      .where(inArray(schema.projectMilestones.id, msAdds));
+    for (const r of rows) {
+      if (r.m.status === "done" || !["planning", "active"].includes(r.pstatus)) continue;
+      const put = adds.find((x) => x.milestoneId === r.m.id)!;
+      items.push({ key: `pmilestone:${r.m.id}`, kind: "pmilestone", refId: r.m.id, projectId: r.pid, title: r.m.name, priority: "normal", due: r.m.dueDate, overdue: false, minutes: 60, ticketNumber: r.pnum, client: r.pname, added: true, pin: "day", pinRank: 0, dueTime: put.dueTime });
+    }
+  }
+  if (prAdds.length) {
+    const rows = await d.select().from(schema.projects).where(inArray(schema.projects.id, prAdds));
+    for (const r of rows) {
+      if (!["planning", "active"].includes(r.status)) continue;
+      const put = adds.find((x) => x.projectId === r.id)!;
+      items.push({ key: `pproject:${r.id}`, kind: "pproject", refId: r.id, projectId: r.id, title: r.name, priority: "normal", due: r.dueDate, overdue: false, minutes: 60, ticketNumber: r.number, client: null, added: true, pin: "day", pinRank: 0, dueTime: put.dueTime });
+    }
   }
   // the technician's open tickets due by the end of the day, and the ones pinned for the day
   const src = await ticketSource();
@@ -616,7 +639,7 @@ export async function buildPlan(userId: string, date: string, opts: { ai: boolea
     const s = await aiSettings();
     if (s.enabled && s.apiKey) {
       try {
-        const lines = planable.map((i) => `- ${i.key} · ${i.kind === "ticket" ? `billet ${i.ticketNumber ?? ""}` : i.kind === "ptask" ? `tâche du projet ${i.ticketNumber ?? ""}` : "tâche"} · « ${i.title} »${i.client ? ` · client ${i.client}` : ""} · priorité ${i.priority} · échéance ${i.due ?? "aucune"}${i.dueTime ? ` ${i.dueTime}` : ""}${i.overdue ? " (EN RETARD)" : ""}${i.pin ? ` · PRIORITÉ ${i.pin === "day" ? "DU JOUR" : "DE LA SEMAINE"}${i.pinNote ? ` (directive : ${i.pinNote})` : ""}` : ""}${i.notBefore !== undefined ? ` · pas avant ${hhmm(i.notBefore)}` : ""} · estimation ${i.need ?? i.minutes} min${alloc.manual.has(i.key) ? ` · TEMPS IMPOSÉ PAR LE TECHNICIEN : ${alloc.manual.get(i.key)} min` : ""}`);
+        const lines = planable.map((i) => `- ${i.key} · ${i.kind === "ticket" ? `billet ${i.ticketNumber ?? ""}` : i.kind === "ptask" ? `tâche du projet ${i.ticketNumber ?? ""}` : i.kind === "pmilestone" ? `phase du projet ${i.ticketNumber ?? ""}` : i.kind === "pproject" ? `projet ${i.ticketNumber ?? ""}` : "tâche"} · « ${i.title} »${i.client ? ` · client ${i.client}` : ""} · priorité ${i.priority} · échéance ${i.due ?? "aucune"}${i.dueTime ? ` ${i.dueTime}` : ""}${i.overdue ? " (EN RETARD)" : ""}${i.pin ? ` · PRIORITÉ ${i.pin === "day" ? "DU JOUR" : "DE LA SEMAINE"}${i.pinNote ? ` (directive : ${i.pinNote})` : ""}` : ""}${i.notBefore !== undefined ? ` · pas avant ${hhmm(i.notBefore)}` : ""} · estimation ${i.need ?? i.minutes} min${alloc.manual.has(i.key) ? ` · TEMPS IMPOSÉ PAR LE TECHNICIEN : ${alloc.manual.get(i.key)} min` : ""}`);
         const agenda = calEvents.filter((e) => !e.allDay).map((e) => `- ${hhmm(e.start)}–${hhmm(e.end)} ${e.title}`);
         const free = layout([], settings, busy, new Map(), after).capacityMinutes;
         const out = await askClaudeJson<{ summary?: unknown; order?: { ref?: unknown; note?: unknown; minutes?: unknown }[] }>({
@@ -699,7 +722,7 @@ export async function buildPipelineView(userId: string, date: string, viewerId: 
 
 // ── the morning text ──
 export function planSms(name: string, plan: { blocks: PipelineBlock[]; capacityMinutes: number; plannedMinutes: number }, locale: "fr" | "en"): string | null {
-  const work = plan.blocks.filter((b) => b.kind === "task" || b.kind === "ptask" || b.kind === "ticket");
+  const work = plan.blocks.filter((b) => b.kind === "task" || b.kind === "ptask" || b.kind === "pmilestone" || b.kind === "pproject" || b.kind === "ticket");
   const seen = new Set<string>();
   const unique = work.filter((b) => {
     const k = `${b.kind}:${b.refId}`;

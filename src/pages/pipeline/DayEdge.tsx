@@ -2,7 +2,7 @@ import { useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
-import { CalendarPlus, ExternalLink, GitMerge, Star, Trash2, UserCheck, UserRoundPlus, UserX } from "lucide-react";
+import { CalendarMinus, CalendarPlus, ExternalLink, X, GitMerge, Star, Trash2, UserCheck, UserRoundPlus, UserX } from "lucide-react";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuSub, DropdownMenuSubContent, DropdownMenuSubTrigger, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { api } from "@/lib/api";
 import { useCan, useMe } from "@/lib/session";
@@ -12,16 +12,42 @@ import { AddToDayDialog } from "@/pages/tickets/AddToDayDialog";
 import { MergeDialog } from "@/pages/tickets/MergeDialog";
 import { ticketErrorText } from "@/pages/tickets/shared";
 import { usePeople } from "./TaskDialog";
+import { DAY_ROUTE, type DayKind } from "./shared";
 import { ProjectToDayDialog } from "./ProjectToDayDialog";
 
-type Kind = "ticket" | "task" | "ptask";
+type Kind = DayKind;
 
 /**
  * The small edge button before a ticket / task / project task of Ma journée (the same line as on the left of a row of
  * the Tickets list, with the same menu: accept, assign, open, merge, delete) and, for the day, "add to my day".
  * Everything goes through the usual routes, which check the rights again.
  */
-export function DayEdge({ kind, id, number, title, urgent, onOpen, className }: { kind: Kind; id: string; number?: string | null; title: string; urgent?: boolean; onOpen: () => void; className?: string }) {
+/** Takes an item off today's plan (nothing changes on the ticket, task or project). */
+export function useRemoveFromDay(kind: DayKind, id: string, forUser?: string) {
+  const { t } = useTranslation();
+  const qc = useQueryClient();
+  return () =>
+    api.del(`/pipeline/day/${DAY_ROUTE[kind]}/${id}${forUser ? `?userId=${forUser}` : ""}`).then(
+      () => {
+        void qc.invalidateQueries({ queryKey: ["pipeline"] });
+        toast.success(t("pipeline.day.removed"));
+      },
+      (e) => toast.error(ticketErrorText(t, e)),
+    );
+}
+
+/** A small cross on a block of the day: takes the item off the day */
+export function RemoveFromDay({ kind, id, forUser, className }: { kind: DayKind; id: string; forUser?: string; className?: string }) {
+  const { t } = useTranslation();
+  const remove = useRemoveFromDay(kind, id, forUser);
+  return (
+    <button type="button" title={t("pipeline.day.remove")} aria-label={t("pipeline.day.remove")} onClick={(e) => (e.stopPropagation(), void remove())} onPointerDown={(e) => e.stopPropagation()} className={cn("flex size-5 items-center justify-center rounded-full bg-background/80 text-muted-foreground hover:bg-red-500/20 hover:text-red-300", className)}>
+      <X className="size-3" />
+    </button>
+  );
+}
+
+export function DayEdge({ kind, id, number, title, urgent, onOpen, onDay, className }: { kind: Kind; id: string; number?: string | null; title: string; urgent?: boolean; onOpen: () => void; onDay?: { forUser?: string }; className?: string }) {
   const { t } = useTranslation();
   const me = useMe();
   const can = useCan();
@@ -57,7 +83,8 @@ export function DayEdge({ kind, id, number, title, urgent, onOpen, className }: 
   };
   const ticket = kind === "ticket";
   const canEdit = ticket && can("tickets.edit");
-  const canDay = can("pipeline.edit");
+  const canDay = can("pipeline.edit") && !onDay && (kind === "ticket" || kind === "task" || kind === "ptask");
+  const removeFromDay = useRemoveFromDay(kind, id, onDay?.forUser);
   return (
     <>
       <DropdownMenu>
@@ -108,6 +135,11 @@ export function DayEdge({ kind, id, number, title, urgent, onOpen, className }: 
               <CalendarPlus className="size-4 text-primary" /> {t("tickets.rowMenu.addToDay")}
             </DropdownMenuItem>
           )}
+          {onDay && can("pipeline.edit") && (
+            <DropdownMenuItem onSelect={() => void removeFromDay()}>
+              <CalendarMinus className="size-4 text-red-300" /> {t("pipeline.day.remove")}
+            </DropdownMenuItem>
+          )}
           {canEdit && (
             <DropdownMenuItem onSelect={() => void withDetail("merge")}>
               <GitMerge className="size-4" /> {t("tickets.merge.button")}
@@ -126,7 +158,7 @@ export function DayEdge({ kind, id, number, title, urgent, onOpen, className }: 
           )}
         </DropdownMenuContent>
       </DropdownMenu>
-      {dialog === "day" && <AddToDayDialog open onOpenChange={(o) => !o && setDialog(null)} tk={ticket ? { id: Number(id), number: number ?? undefined, title } : { id, title }} kind={kind} />}
+      {dialog === "day" && <AddToDayDialog open onOpenChange={(o) => !o && setDialog(null)} tk={ticket ? { id: Number(id), number: number ?? undefined, title } : { id, title }} kind={kind as "ticket" | "task" | "ptask"} />}
       {dialog === "accept" && detail && <AcceptDialog open onOpenChange={(o) => !o && (setDialog(null), refresh())} tk={detail} statuses={detail.options.statuses} />}
       {dialog === "merge" && detail && <MergeDialog open onOpenChange={(o) => !o && (setDialog(null), refresh())} tk={detail} onDone={refresh} />}
     </>

@@ -30,9 +30,11 @@ export function ProjectToDayDialog({ projectId, onClose }: { projectId: string; 
     setBusy(true);
     let ok = 0;
     let failed = 0;
-    for (const x of chosen) {
+    // the whole project or a phase is ONE item of the day (it opens as the folder); a single task is its own item
+    const calls = scope === "project" ? [`pprojects/${projectId}`] : scope === "milestone" ? [`pmilestones/${phaseId}`] : chosen.map((x) => `ptasks/${x.id}`);
+    for (const path of calls) {
       try {
-        await api.put(`/pipeline/day/ptasks/${x.id}`, { time: null });
+        await api.put(`/pipeline/day/${path}`, { time: null });
         ok++;
       } catch (e) {
         failed++;
@@ -95,7 +97,7 @@ export function ProjectToDayDialog({ projectId, onClose }: { projectId: string; 
               )}
             </div>
             <Button className="bg-grad-gold font-semibold text-[#1a1204] hover:brightness-105" disabled={busy || chosen.length === 0} onClick={() => void add()}>
-              {busy ? <Loader2 className="size-4 animate-spin" /> : <CalendarPlus className="size-4" />} {t("pipeline.day.projectToDay.add", { count: chosen.length })}
+              {busy ? <Loader2 className="size-4 animate-spin" /> : <CalendarPlus className="size-4" />} {t(scope === "task" ? "pipeline.day.projectToDay.addTask" : "pipeline.day.projectToDay.addOne")}
             </Button>
           </>
         )}

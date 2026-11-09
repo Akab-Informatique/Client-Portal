@@ -1121,6 +1121,13 @@
       "when": 1794230729541,
       "tag": "0159_mute_talos",
       "breakpoints": true
+    },
+    {
+      "idx": 160,
+      "version": "7",
+      "when": 1794235938169,
+      "tag": "0160_chief_wong",
+      "breakpoints": true
     }
   ]
 }

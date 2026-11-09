@@ -12,7 +12,7 @@ import { CompactList, KanbanBoard } from "@/pages/tickets/Layouts";
 import { useCan } from "@/lib/session";
 import { shortDate, type TicketList } from "@/pages/tickets/shared";
 import type { Project } from "@/pages/projects/shared";
-import type { DayItem } from "./shared";
+import { DAY_ROUTE, isWork, type DayItem } from "./shared";
 import { DayEdge, ProjectEdge } from "./DayEdge";
 import { usePeople } from "./TaskDialog";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
@@ -147,7 +147,7 @@ export function Priorities({ items, horizon, onOpen, canRemove, forUser }: { ite
   const qc = useQueryClient();
   // a ticket put on the day by hand leaves it with one click (nothing on the ticket changes)
   const remove = useMutation({
-    mutationFn: (i: DayItem) => api.del(`/pipeline/day/${i.kind}s/${i.refId}${forUser ? `?userId=${forUser}` : ""}`),
+    mutationFn: (i: DayItem) => api.del(`/pipeline/day/${DAY_ROUTE[i.kind]}/${i.refId}${forUser ? `?userId=${forUser}` : ""}`),
     onSuccess: () => void qc.invalidateQueries({ queryKey: ["pipeline"] }),
   });
   const list = items.filter((i) => i.pin === horizon);
@@ -162,7 +162,7 @@ export function Priorities({ items, horizon, onOpen, canRemove, forUser }: { ite
         <ul className="divide-y divide-[color:var(--glass-border)]">
           {list.map((i) => (
             <li key={i.key} className="flex items-center gap-1">
-              {!i.masked && (i.kind === "ticket" || i.kind === "task" || i.kind === "ptask") && <DayEdge kind={i.kind} id={i.refId} number={i.ticketNumber} title={i.title} urgent={i.priority === "urgent"} onOpen={() => onOpen(i)} />}
+              {!i.masked && isWork(i.kind) && <DayEdge kind={i.kind} id={i.refId} number={i.ticketNumber} title={i.title} urgent={i.priority === "urgent"} onOpen={() => onOpen(i)} onDay={i.added ? { forUser } : undefined} />}
               <button type="button" onClick={() => onOpen(i)} className="flex min-w-0 flex-1 items-baseline gap-2 py-1.5 text-left">
                 {i.ticketNumber && <span className="shrink-0 font-mono text-[11px] text-primary">{i.ticketNumber}</span>}
                 <span className="min-w-0 flex-1 truncate text-sm font-medium">{i.title}</span>
