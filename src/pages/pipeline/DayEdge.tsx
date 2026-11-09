@@ -12,6 +12,7 @@ import { AddToDayDialog } from "@/pages/tickets/AddToDayDialog";
 import { MergeDialog } from "@/pages/tickets/MergeDialog";
 import { ticketErrorText } from "@/pages/tickets/shared";
 import { usePeople } from "./TaskDialog";
+import { ProjectToDayDialog } from "./ProjectToDayDialog";
 
 type Kind = "ticket" | "task" | "ptask";
 
@@ -136,12 +137,16 @@ export function DayEdge({ kind, id, number, title, urgent, onOpen, className }: 
 export function ProjectEdge({ id, following, onOpen, className }: { id: string; following: boolean; onOpen: () => void; className?: string }) {
   const { t } = useTranslation();
   const qc = useQueryClient();
+  const can = useCan();
+  const [adding, setAdding] = useState(false);
   const follow = () =>
     api.put(`/projects/${id}/follow`, { follow: !following }).then(
       () => void qc.invalidateQueries({ queryKey: ["projects"] }),
       (e) => toast.error(ticketErrorText(t, e)),
     );
   return (
+    <>
+    {adding && <ProjectToDayDialog projectId={id} onClose={() => setAdding(false)} />}
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
         <button type="button" title={t("pipeline.day.projectMenu")} aria-label={t("pipeline.day.projectMenu")} onClick={(e) => e.stopPropagation()} className={cn("group/line flex w-3.5 shrink-0 items-center justify-start self-stretch outline-none", className)}>
@@ -152,10 +157,16 @@ export function ProjectEdge({ id, following, onOpen, className }: { id: string; 
         <DropdownMenuItem onSelect={() => void follow()}>
           <Star className={cn("size-4", following ? "fill-current text-primary" : "")} /> {t(following ? "projects.unfollow" : "projects.follow")}
         </DropdownMenuItem>
+        {can("pipeline.edit") && (
+          <DropdownMenuItem onSelect={() => setAdding(true)}>
+            <CalendarPlus className="size-4 text-primary" /> {t("tickets.rowMenu.addToDay")}
+          </DropdownMenuItem>
+        )}
         <DropdownMenuItem onSelect={onOpen}>
           <ExternalLink className="size-4" /> {t("pipeline.day.openItem")}
         </DropdownMenuItem>
       </DropdownMenuContent>
     </DropdownMenu>
+    </>
   );
 }

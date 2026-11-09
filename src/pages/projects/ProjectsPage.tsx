@@ -4,7 +4,7 @@ import { useTranslation } from "react-i18next";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { motion } from "motion/react";
 import { toast } from "sonner";
-import { AlertTriangle, BellRing, CalendarDays, ChevronDown, ChevronLeft, ChevronRight, ChevronsDownUp, ChevronsUpDown, Eye, Flag, Folder, FolderOpen, ArrowDownUp, Loader2, Plus, Search, SlidersHorizontal, Star, UserRound, X, type LucideIcon } from "lucide-react";
+import { AlertTriangle, BellRing, CalendarDays, CalendarPlus, ChevronDown, ChevronLeft, ChevronRight, ChevronsDownUp, ChevronsUpDown, Eye, Flag, Folder, FolderOpen, ArrowDownUp, Loader2, Plus, Search, SlidersHorizontal, Star, UserRound, X, type LucideIcon } from "lucide-react";
 import { GlassBackdrop } from "@/components/brand/GlassBackdrop";
 import { Button } from "@/components/ui/button";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
@@ -23,6 +23,7 @@ import { useCrmClients } from "@/pages/crm/shared";
 import { shortDate } from "@/pages/tickets/shared";
 import { NewProjectDialog } from "./NewProjectDialog";
 import { ProjectDialog } from "./ProjectDialog";
+import { ProjectToDayDialog } from "@/pages/pipeline/ProjectToDayDialog";
 import { dueTone, hoursText, KEY, MS_TONE, STATUS_STYLE, TONE_TEXT, today, useProjectPeople, type Project, type Summary, type Week } from "./shared";
 
 type View = "mine" | "attention" | "watch" | "all";
@@ -48,6 +49,7 @@ export function ProjectsPage() {
   const me = useMe();
   const can = useCan();
   const qc = useQueryClient();
+  const [dayFor, setDayFor] = useState<string | null>(null);
   const [params, setParams] = useSearchParams();
   const set = (patch: Record<string, string | null>) =>
     setParams(
@@ -345,6 +347,11 @@ export function ProjectsPage() {
                   <span className="hidden w-24 text-right text-xs text-muted-foreground lg:block" title={t("projects.nextCheckpoint")}>{p.nextCheckpoint ? `${shortDate(p.nextCheckpoint.slice(0, 10))} ${p.nextCheckpoint.slice(11)}` : "—"}</span>
                   <span className={cn("hidden w-20 text-right text-xs md:block", TONE_TEXT[tone])}>{p.dueDate ? shortDate(p.dueDate) : "—"}</span>
                   <span className="hidden w-32 truncate text-sm xl:block">{p.lead?.name ?? "—"}</span>
+                  {can("pipeline.edit") && (
+                    <button type="button" aria-label={t("tickets.rowMenu.addToDay")} title={t("tickets.rowMenu.addToDay")} onClick={() => setDayFor(p.id)} className="rounded-md p-1.5 text-muted-foreground/60 transition-colors hover:bg-foreground/[0.06] hover:text-primary">
+                      <CalendarPlus className="size-4" />
+                    </button>
+                  )}
                   <button
                     type="button"
                     aria-label={p.following ? t("projects.unfollow") : t("projects.follow")}
@@ -409,6 +416,7 @@ export function ProjectsPage() {
           }}
         />
       )}
+      {dayFor && <ProjectToDayDialog projectId={dayFor} onClose={() => setDayFor(null)} />}
       {openId && <ProjectDialog id={openId} onClose={() => set({ project: null, tab: null, milestone: null })} tab={params.get("tab")} milestone={params.get("milestone")} onTab={(tab) => set({ tab })} />}
     </div>
   );
