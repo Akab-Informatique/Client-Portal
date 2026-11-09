@@ -293,9 +293,10 @@ function KindTab({ kind, counts, lang, pq }: { kind: Kind; counts: (s: Status) =
         return { ym, items: list, groups: [...m.entries()] };
       });
   }, [items]);
-  const [closedMonths, setClosedMonths] = useState<Set<string>>(new Set());
+  // every month starts folded
+  const [openMonths, setOpenMonths] = useState<Set<string>>(new Set());
   const toggleMonth = (ym: string) =>
-    setClosedMonths((c) => {
+    setOpenMonths((c) => {
       const n = new Set(c);
       if (n.has(ym)) n.delete(ym);
       else n.add(ym);
@@ -510,7 +511,7 @@ function KindTab({ kind, counts, lang, pq }: { kind: Kind; counts: (s: Status) =
       )}
       {months.map((mo) => {
         const monthIds = mo.items.map((i) => i.id);
-        const monthOpen = !closedMonths.has(mo.ym);
+        const monthOpen = openMonths.has(mo.ym);
         return (
           <section key={mo.ym} className="space-y-2 rounded-2xl border border-[color:var(--gold)]/25 bg-background/20 p-2">
             <div className="flex items-center gap-3 px-2 py-1">
