@@ -85,7 +85,8 @@ export function TaskDialog({ projectId, taskId, onClose, onMinimize }: { project
   });
   const closed = tk ? tk.project.status === "done" || tk.project.status === "cancelled" : false;
   // like a ticket: opening the task starts its timer (once), closing it with the timer going asks for the time
-  const canTime = Boolean(tk) && edit && can("timesheets.use") && !closed;
+  // time is entered on the PHASE now: opening a task starts no timer and has no time entry (only a timer still running from before can be stopped)
+  const canTime = false;
   const [askStop, setAskStop] = useState(0);
   const [addingDay, setAddingDay] = useState(false);
   const autoStarted = useRef(false);
@@ -189,7 +190,7 @@ export function TaskDialog({ projectId, taskId, onClose, onMinimize }: { project
                 <Panel title={t("projects.taskDescription")}>
                   <Saved multiline rows={5} value={tk.description} onSave={(v) => patch.mutate({ description: v })} placeholder={t("projects.taskDescriptionPlaceholder")} maxLength={8000} className={cn("min-h-28", !edit && "pointer-events-none")} />
                 </Panel>
-                <Composer tk={tk} projectId={projectId} edit={edit} canTime={edit && can("timesheets.use") && !closed} hourly={Boolean(hourly)} onChanged={refresh} fail={fail} />
+                <Composer tk={tk} projectId={projectId} edit={edit} canTime={false} hourly={Boolean(hourly)} onChanged={refresh} fail={fail} />
                 <Activity tk={tk} projectId={projectId} onChanged={refresh} fail={fail} />
               </div>
 
@@ -303,7 +304,7 @@ export function TaskDialog({ projectId, taskId, onClose, onMinimize }: { project
                   </div>
                 </Panel>
 
-                <TimerPanel tk={tk} projectId={projectId} canLog={edit && can("timesheets.use") && !closed} hourly={Boolean(hourly)} onChanged={refresh} fail={fail} askStop={askStop} onStopped={askStop > 0 ? onClose : undefined} />
+                {tk.timer && <TimerPanel tk={tk} projectId={projectId} canLog={edit && can("timesheets.use") && !closed} hourly={Boolean(hourly)} onChanged={refresh} fail={fail} askStop={askStop} onStopped={askStop > 0 ? onClose : undefined} />}
 
                 {edit && (
                   <Button variant="ghost" size="sm" className="text-muted-foreground hover:text-destructive" onClick={() => void confirm({ title: t("projects.removeTaskTitle", { name: tk.title }), description: t("projects.removeTaskText") }).then((ok) => ok && remove.mutate())}>
