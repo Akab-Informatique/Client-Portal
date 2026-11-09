@@ -569,7 +569,7 @@ function Timeline({ data, onOpen, onBlock, hourPx, canEdit, forUser, onSaved }: 
       setMove(null);
       if (!moved || !lane.current) return;
       justMoved.current = true;
-      setTimeout(() => (justMoved.current = false), 80);
+      setTimeout(() => (justMoved.current = false), 250);
       // dropped where the person wants: the item starts there (quarter hours), the others work around it
       const delta = Math.round((ev.clientY - y0) / (hourPx / 60) / 15) * 15;
       if (delta === 0) return;
@@ -594,6 +594,9 @@ function Timeline({ data, onOpen, onBlock, hourPx, canEdit, forUser, onSaved }: 
       window.removeEventListener("pointermove", move);
       window.removeEventListener("pointerup", up);
       setDrag(null);
+      // the click that follows the release lands on the empty lane when the block grew or shrank under the pointer: ignore it
+      justMoved.current = true;
+      setTimeout(() => (justMoved.current = false), 250);
       if (delta !== 0) saveTime.mutate({ key, minutes: total + delta });
     };
     window.addEventListener("pointermove", move);
