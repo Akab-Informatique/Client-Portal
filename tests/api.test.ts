@@ -7298,6 +7298,14 @@ describe("pipeline: shared to-dos and the day", () => {
     expect((await tech.post(`${base}/timer/start`, {})).status).toBe(200);
     expect((await tech.get(`${base}/activity`)).json.timer).not.toBeNull();
     expect(((await tech.get("/api/projects/timers")).json as any[]).some((x) => x.kind === "phase" && x.taskId === ms)).toBe(true);
+    // the timer can be paused (it counts nothing meanwhile, the dock list says so) and resumed
+    expect((await tech.post(`${base}/timer/pause`, {})).json).toMatchObject({ paused: true });
+    const frozen = (await tech.get(`${base}/activity`)).json.timer;
+    expect(frozen.paused).toBe(true);
+    await new Promise((r) => setTimeout(r, 1100));
+    expect((await tech.get(`${base}/activity`)).json.timer.seconds).toBe(frozen.seconds);
+    expect(((await tech.get("/api/projects/timers")).json as any[]).find((x) => x.taskId === ms).paused).toBe(true);
+    expect((await tech.post(`${base}/timer/resume`, {})).json).toMatchObject({ paused: false });
     // time must say what it covered
     expect((await tech.post(`${base}/time`, { date: DAY, hours: 1, tasks: [] })).json.error).toBe("task_required");
     expect((await tech.post(`${base}/time`, { date: DAY, hours: 1, tasks: [{ taskId: "00000000-0000-4000-8000-000000000000", status: "doing" }] })).json.error).toBe("task_invalid");

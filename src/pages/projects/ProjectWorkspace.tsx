@@ -104,7 +104,7 @@ export function useProjectWorkspace() {
   return ws;
 }
 
-type RunningTimer = { taskId: string; startedAt: string; title: string; projectId: string; number: string; project?: string; milestone: string; kind?: "phase"; milestoneId?: string };
+type RunningTimer = { taskId: string; startedAt: string; title: string; projectId: string; number: string; project?: string; milestone: string; kind?: "phase"; milestoneId?: string; baseSeconds?: number; paused?: boolean };
 
 /** The minimized project tasks, drawn into the drawer of the ticket dock (a project card: project, task, timer) */
 function TaskDock({ docked, folders, onRestoreFolder, onRestore, onDismiss }: { docked: DockedTask[]; folders: DockedFolder[]; onRestoreFolder: (projectId: string) => void; onRestore: (projectId: string, taskId: string) => void; onDismiss: (taskId: string) => void }) {
@@ -137,7 +137,7 @@ function TaskDock({ docked, folders, onRestoreFolder, onRestore, onDismiss }: { 
   return createPortal(
     <AnimatePresence>
       {items.map((d) => {
-        const running = Boolean(d.timer);
+        const running = Boolean(d.timer) && !d.timer?.paused;
         return (
           <motion.div key={d.taskId} layout initial={{ opacity: 0, y: 16, scale: 0.95 }} animate={{ opacity: 1, y: 0, scale: 1 }} exit={{ opacity: 0, y: 16, scale: 0.95 }} className="pointer-events-auto">
             <div className={cn("group relative flex w-72 items-center gap-2 overflow-hidden rounded-xl border border-violet-400/40 bg-popover/95 py-1.5 pl-1.5 pr-1 shadow-[0_12px_40px_-12px_rgba(0,0,0,0.6),0_0_24px_-10px_rgba(167,139,250,0.45)]", running && "project-live border-violet-300/80")}>
@@ -159,7 +159,7 @@ function TaskDock({ docked, folders, onRestoreFolder, onRestore, onDismiss }: { 
                 </span>
               </button>
               {d.timer ? (
-                <span className="shrink-0 rounded-md bg-[color:var(--gold)]/15 px-1.5 py-0.5 font-mono text-[11px] font-semibold tabular-nums text-primary">{clock((now - new Date(d.timer.startedAt).getTime()) / 1000)}</span>
+                <span className={cn("shrink-0 rounded-md px-1.5 py-0.5 font-mono text-[11px] font-semibold tabular-nums", d.timer.paused ? "bg-amber-500/15 text-amber-300" : "bg-[color:var(--gold)]/15 text-primary")}>{clock((d.timer.baseSeconds ?? 0) + (d.timer.paused ? 0 : (now - new Date(d.timer.startedAt).getTime()) / 1000))}</span>
               ) : (
                 !d.folder && <span className={cn("hidden shrink-0 rounded-full border px-1.5 py-0.5 text-[9px] font-medium sm:block", TASK_STYLE[d.status])}>{t(`projects.taskStatus.${d.status}`)}</span>
               )}

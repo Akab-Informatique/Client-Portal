@@ -3053,7 +3053,12 @@ export const projectMilestoneTimers = pgTable(
     userId: uuid("user_id")
       .notNull()
       .references(() => users.id, { onDelete: "cascade" }),
+    /** When it last started or was resumed */
     startedAt: timestamp("started_at", { withTimezone: true }).notNull().defaultNow(),
+    /** Seconds counted before the last start (a paused timer keeps them) */
+    baseSeconds: integer("base_seconds").notNull().default(0),
+    /** Set while the timer is paused: it counts nothing */
+    pausedAt: timestamp("paused_at", { withTimezone: true }),
   },
   (t) => [primaryKey({ columns: [t.milestoneId, t.userId] })],
 );

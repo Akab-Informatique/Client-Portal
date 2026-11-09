@@ -280,7 +280,7 @@ export const projectsRoutes = new Hono<AppEnv>()
   .get("/timers", requirePermission("projects.view"), async (c) => {
     const a = auth(c);
     const phases = await db()
-      .select({ milestoneId: schema.projectMilestoneTimers.milestoneId, startedAt: schema.projectMilestoneTimers.startedAt, title: schema.projectMilestones.name, projectId: schema.projects.id, number: schema.projects.number, project: schema.projects.name })
+      .select({ milestoneId: schema.projectMilestoneTimers.milestoneId, startedAt: schema.projectMilestoneTimers.startedAt, baseSeconds: schema.projectMilestoneTimers.baseSeconds, pausedAt: schema.projectMilestoneTimers.pausedAt, title: schema.projectMilestones.name, projectId: schema.projects.id, number: schema.projects.number, project: schema.projects.name })
       .from(schema.projectMilestoneTimers)
       .innerJoin(schema.projectMilestones, eq(schema.projectMilestones.id, schema.projectMilestoneTimers.milestoneId))
       .innerJoin(schema.projects, eq(schema.projects.id, schema.projectMilestones.projectId))
@@ -294,7 +294,7 @@ export const projectsRoutes = new Hono<AppEnv>()
       .where(eq(schema.projectTaskTimers.userId, a.user.id))
       .orderBy(asc(schema.projectTaskTimers.startedAt));
     // a phase's timer is listed like a task's (kind "phase", its id in taskId), so the dock shows it while the phase is minimized
-    return c.json([...rows, ...phases.map((x) => ({ taskId: x.milestoneId, startedAt: x.startedAt, title: x.title, projectId: x.projectId, number: x.number, project: x.project, milestone: "", kind: "phase" as const, milestoneId: x.milestoneId }))]);
+    return c.json([...rows, ...phases.map((x) => ({ taskId: x.milestoneId, startedAt: x.startedAt, baseSeconds: x.baseSeconds, paused: x.pausedAt !== null, title: x.title, projectId: x.projectId, number: x.number, project: x.project, milestone: "", kind: "phase" as const, milestoneId: x.milestoneId }))]);
   })
 
   /** What a new project starts with: the usual hourly rate of Admin › Facturation (dollars) */
@@ -1102,7 +1102,7 @@ export const projectsRoutes = new Hono<AppEnv>()
           task: e.taskId ? (taskTitle.get(e.taskId) ?? null) : null,
         }))
         .sort((x, y) => y.createdAt.localeCompare(x.createdAt)),
-      timer: timer ? { startedAt: timer.startedAt.toISOString() } : null,
+      timer: timer ? timerView(timer) : null,
     });
   })
   /** A reply to the client (emailed to the contacts picked) or an internal note, on the phase */
@@ -1163,7 +1163,28 @@ export const projectsRoutes = new Hono<AppEnv>()
     if (ms.status === "done") throw new HTTPException(409, { message: "milestone_done" });
     await db().insert(schema.projectMilestoneTimers).values({ milestoneId: ms.id, userId: a.user.id }).onConflictDoNothing();
     const [t] = await db().select().from(schema.projectMilestoneTimers).where(and(eq(schema.projectMilestoneTimers.milestoneId, ms.id), eq(schema.projectMilestoneTimers.userId, a.user.id)));
-    return c.json({ startedAt: t.startedAt.toISOString() });
+    return c.json(timerView(t));
+  })
+  // pause (counts nothing meanwhile) and resume
+  .post("/:id/milestones/:mid/timer/pause", requirePermission("projects.edit"), async (c) => {
+    const a = auth(c);
+    const p = await loadProject(c.req.param("id"));
+    const ms = await loadMilestone(p.id, c.req.param("mid"));
+    const [timer] = await db().select().from(schema.projectMilestoneTimers).where(and(eq(schema.projectMilestoneTimers.milestoneId, ms.id), eq(schema.projectMilestoneTimers.userId, a.user.id)));
+    if (!timer) throw new HTTPException(409, { message: "timer_not_running" });
+    if (!timer.pausedAt) await db().update(schema.projectMilestoneTimers).set({ baseSeconds: timerSeconds(timer), pausedAt: new Date() }).where(and(eq(schema.projectMilestoneTimers.milestoneId, ms.id), eq(schema.projectMilestoneTimers.userId, a.user.id)));
+    const [t] = await db().select().from(schema.projectMilestoneTimers).where(and(eq(schema.projectMilestoneTimers.milestoneId, ms.id), eq(schema.projectMilestoneTimers.userId, a.user.id)));
+    return c.json(timerView(t));
+  })
+  .post("/:id/milestones/:mid/timer/resume", requirePermission("projects.edit"), async (c) => {
+    const a = auth(c);
+    const p = await loadProject(c.req.param("id"));
+    const ms = await loadMilestone(p.id, c.req.param("mid"));
+    const [timer] = await db().select().from(schema.projectMilestoneTimers).where(and(eq(schema.projectMilestoneTimers.milestoneId, ms.id), eq(schema.projectMilestoneTimers.userId, a.user.id)));
+    if (!timer) throw new HTTPException(409, { message: "timer_not_running" });
+    if (timer.pausedAt) await db().update(schema.projectMilestoneTimers).set({ startedAt: new Date(), pausedAt: null }).where(and(eq(schema.projectMilestoneTimers.milestoneId, ms.id), eq(schema.projectMilestoneTimers.userId, a.user.id)));
+    const [t] = await db().select().from(schema.projectMilestoneTimers).where(and(eq(schema.projectMilestoneTimers.milestoneId, ms.id), eq(schema.projectMilestoneTimers.userId, a.user.id)));
+    return c.json(timerView(t));
   })
   .post("/:id/milestones/:mid/timer/stop", requirePermission("projects.edit"), async (c) => {
     const a = auth(c);
@@ -1178,7 +1199,7 @@ export const projectsRoutes = new Hono<AppEnv>()
       await gone();
       return c.json({ discarded: true });
     }
-    const elapsed = Math.max(0.05, Math.round(((Date.now() - timer.startedAt.getTime()) / 3_600_000) * 100) / 100);
+    const elapsed = Math.max(0.05, Math.round((timerSeconds(timer) / 3600) * 100) / 100);
     const entry = await phaseTime(a.user.id, p, ms, { ...o, date: o.date ?? todayQc(), hours: o.hours ?? Math.min(24, elapsed), tasks: o.tasks ?? [] });
     await gone();
     return c.json(entry);
@@ -1360,6 +1381,15 @@ async function syncMilestone(milestoneId: string) {
   const [cur] = await d.select({ status: schema.projectMilestones.status, doneAt: schema.projectMilestones.doneAt }).from(schema.projectMilestones).where(eq(schema.projectMilestones.id, milestoneId));
   if (!cur || cur.status === status) return;
   await d.update(schema.projectMilestones).set({ status, doneAt: status === "done" ? new Date() : null, updatedAt: new Date() }).where(eq(schema.projectMilestones.id, milestoneId));
+}
+
+/** The seconds a phase timer has counted: before its last start, plus the run since unless it is paused */
+function timerSeconds(t: { startedAt: Date; baseSeconds: number; pausedAt: Date | null }) {
+  return t.baseSeconds + (t.pausedAt ? 0 : Math.max(0, Math.floor((Date.now() - t.startedAt.getTime()) / 1000)));
+}
+/** What the screens need to draw the clock: seconds counted at the last start, when it started, and whether it is paused */
+function timerView(t: { startedAt: Date; baseSeconds: number; pausedAt: Date | null }) {
+  return { startedAt: t.startedAt.toISOString(), baseSeconds: t.baseSeconds, paused: t.pausedAt !== null, seconds: timerSeconds(t) };
 }
 
 const zPhaseTime = z.object({

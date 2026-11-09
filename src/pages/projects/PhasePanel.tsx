@@ -3,7 +3,7 @@ import { useTranslation } from "react-i18next";
 import { useSearchParams } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
-import { BellRing, Check, ChevronDown, Clock, Loader2, Lock, Mail, MessagesSquare, Minus, Send, StickyNote, Square, Trash2, X } from "lucide-react";
+import { BellRing, Check, ChevronDown, Clock, Loader2, Lock, Mail, MessagesSquare, Minus, Pause, Play, Send, StickyNote, Square, Trash2, X } from "lucide-react";
 import { AiTextarea } from "@/components/AiPolish";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -24,7 +24,7 @@ import { clock, KEY, useProjectPeople, TASK_STATUSES, TASK_STYLE, today, type Mi
 type Activity = {
   notes: { id: string; kind: "internal" | "reply"; text: string; createdAt: string; authorId: string | null; author: string | null; emailedTo: string[]; task: string | null; phase: boolean }[];
   time: { id: string; date: string; createdAt: string; hours: number; billableHours: number; note: string | null; userId: string; user: string; tasks: { id: string; title: string; status: TaskStatus }[]; task: string | null }[];
-  timer: { startedAt: string } | null;
+  timer: { startedAt: string; baseSeconds: number; paused: boolean; seconds: number } | null;
 };
 type Filter = "all" | "reply" | "internal" | "time";
 
@@ -60,11 +60,20 @@ export function PhasePanel({ p, m, edit, onChanged, fail, onCollapse }: { p: Pro
   }, [data, canTime]);
   const [now, setNow] = useState(Date.now());
   useEffect(() => {
-    if (!data?.timer) return;
+    if (!data?.timer || data.timer.paused) return;
     const id = setInterval(() => setNow(Date.now()), 1000);
     return () => clearInterval(id);
   }, [data?.timer]);
-  const elapsed = data?.timer ? Math.max(0, Math.floor((now - new Date(data.timer.startedAt).getTime()) / 1000)) : 0;
+  // the clock: what was counted before the last start, plus the run since (nothing while paused)
+  const elapsed = data?.timer ? data.timer.baseSeconds + (data.timer.paused ? 0 : Math.max(0, Math.floor((now - new Date(data.timer.startedAt).getTime()) / 1000))) : 0;
+  const pause = useMutation({
+    mutationFn: (on: boolean) => api.post(`${base}/timer/${on ? "pause" : "resume"}`, {}),
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: key });
+      void qc.invalidateQueries({ queryKey: [...KEY, "timers"] });
+    },
+    onError: fail,
+  });
 
   const [dialog, setDialog] = useState<null | { fromTimer: boolean }>(null);
   // "enter the time" from the project's closing question: ?time=<this phase> opens the time window once
@@ -107,8 +116,13 @@ export function PhasePanel({ p, m, edit, onChanged, fail, onCollapse }: { p: Pro
       <div className="flex flex-wrap items-center gap-2">
         <h4 className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">{t("projects.phase.activity")}</h4>
         {data?.timer && (
-          <span className="flex items-center gap-1.5 rounded-full border border-emerald-400/40 bg-emerald-500/10 px-2.5 py-0.5 font-mono text-xs text-emerald-300" title={t("projects.phase.timerHint")}>
-            <span className="size-1.5 animate-pulse rounded-full bg-emerald-400" /> {clock(elapsed)}
+          <span className={cn("flex items-center gap-1.5 rounded-full border px-2.5 py-0.5 font-mono text-xs", data.timer.paused ? "border-amber-400/40 bg-amber-500/10 text-amber-300" : "border-emerald-400/40 bg-emerald-500/10 text-emerald-300")} title={t("projects.phase.timerHint")}>
+            <span className={cn("size-1.5 rounded-full", data.timer.paused ? "bg-amber-400" : "animate-pulse bg-emerald-400")} /> {clock(elapsed)}
+            {canTime && (
+              <button type="button" onClick={() => pause.mutate(!data.timer!.paused)} disabled={pause.isPending} aria-label={t(data.timer.paused ? "projects.phase.resume" : "projects.phase.pause")} title={t(data.timer.paused ? "projects.phase.resume" : "projects.phase.pause")} className="-mr-1 rounded-full p-0.5 hover:bg-foreground/10">
+                {data.timer.paused ? <Play className="size-3 fill-current" /> : <Pause className="size-3 fill-current" />}
+              </button>
+            )}
           </span>
         )}
         <span className="ml-auto flex flex-wrap items-center gap-1.5">
