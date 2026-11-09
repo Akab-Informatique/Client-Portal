@@ -688,7 +688,6 @@ function Timeline({ data, onOpen, onBlock, hourPx, canEdit, forUser, onSaved }: 
                   </span>
                   {b.pinned && <Star className={cn("size-2.5 fill-current", b.pinned === "day" ? "text-primary" : "text-muted-foreground")} />}
                   {b.partial && <span className="rounded-full bg-orange-400/15 px-1.5 text-[9px] font-semibold uppercase tracking-wide text-orange-300">{t("pipeline.day.share.partial")}</span>}
-                  {ptask && <span className="rounded-full bg-teal-400/15 px-1.5 text-[9px] font-semibold uppercase tracking-wide text-teal-300">{t("pipeline.day.share.project")}</span>}
                   {b.ticketNumber && <span className={cn("font-mono text-[10px]", ptask ? "text-teal-300" : "text-primary")}>{b.ticketNumber}</span>}
                   {b.o365 && <span className="flex items-center gap-0.5 text-[10px] font-semibold uppercase tracking-wide text-sky-300"><CalendarDays className="size-2.5" /> Outlook</span>}
                   {b.masked && <EyeOff className="size-3 text-muted-foreground" />}
@@ -698,6 +697,11 @@ function Timeline({ data, onOpen, onBlock, hourPx, canEdit, forUser, onSaved }: 
               </button>
               {!event && !b.masked && !b.done && b.refId && isWork(b.kind) && (
                 <DayEdge kind={b.kind} id={b.refId} number={b.ticketNumber} title={b.title} urgent={b.priority === "urgent"} onOpen={() => onOpen(b)} onDay={{ forUser }} className="absolute left-0 top-0 z-10 h-full" />
+              )}
+              {!event && !b.masked && isWork(b.kind) && (
+                <span className={cn("pointer-events-none absolute right-2 top-1.5 z-10 rounded-full px-1.5 py-px text-[9px] font-semibold uppercase tracking-wide transition-opacity group-hover/blk:opacity-0", b.kind === "ticket" ? "bg-[color:var(--gold)]/15 text-primary" : b.kind === "task" ? "bg-violet-400/15 text-violet-300" : "bg-teal-400/15 text-teal-300")}>
+                  {t(`pipeline.day.kind.${b.kind}`)}
+                </span>
               )}
               {canEdit && !event && !b.masked && b.refId && isWork(b.kind) && <RemoveFromDay kind={b.kind} id={b.refId} forUser={forUser} className="absolute right-1.5 top-1.5 z-20 opacity-0 transition-opacity group-hover/blk:opacity-100" />}
               {stretch &&
