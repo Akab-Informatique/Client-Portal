@@ -509,7 +509,7 @@ export const pipelineRoutes = new Hono<AppEnv>()
   /** Where an item starts in the day (dragged on the timeline, quarter hours); null puts it back to the automatic place. */
   .put("/day/start", requirePermission("pipeline.edit"), async (c) => {
     const a = auth(c);
-    const p = await body(c, z.object({ date: zDate.optional(), userId: zUuid.optional(), key: z.string().regex(/^(ticket:d+|task:[0-9a-f-]{36}|ptask:[0-9a-f-]{36})$/), minute: z.number().int().min(0).max(1425).nullable() }));
+    const p = await body(c, z.object({ date: zDate.optional(), userId: zUuid.optional(), key: z.string().regex(/^(ticket:[0-9]+|task:[0-9a-f-]{36}|ptask:[0-9a-f-]{36})$/), minute: z.number().int().min(0).max(1425).nullable() }));
     const who = await dayTarget(a, p.userId);
     const date = p.date ?? todayQc();
     const view = await dayItems(who, date, a.user.id, true);

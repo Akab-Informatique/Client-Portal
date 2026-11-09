@@ -7169,6 +7169,11 @@ describe("pipeline: shared to-dos and the day", () => {
     expect(await start()).toBe("14:00");
     expect((await tech.put("/api/pipeline/day/start", { key: `task:${t.id}`, minute: null })).status).toBe(200);
     expect(await start()).toBeDefined();
+    // a ticket too
+    const tk = ((await tech.get("/api/tickets?view=all")).json.items as any[]).find((x) => x.statusKind !== "complete")!;
+    expect((await tech.put(`/api/pipeline/day/tickets/${tk.id}`, { time: null })).status).toBe(200);
+    const moved = await tech.put("/api/pipeline/day/start", { key: `ticket:${tk.id}`, minute: 15 * 60 });
+    expect(moved.json).toMatchObject({ ok: true });
     // not on the day: refused
     expect((await tech.put("/api/pipeline/day/start", { key: "task:00000000-0000-4000-8000-000000000000", minute: 600 })).status).toBe(404);
   });
