@@ -3,6 +3,7 @@ import { useTranslation } from "react-i18next";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { AiTextarea } from "@/components/AiPolish";
+import { PhasePanel } from "./PhasePanel";
 import { ArrowDown, ArrowUp, GripVertical, BellRing, Check, Globe, Lock, ChevronDown, Clock, FileText, Flag, FolderOpen, Info, ArrowRightLeft, ListChecks, Loader2, Mail, MessageSquare, MessagesSquare, Plus, Star, Trash2, X } from "lucide-react";
 import { useConfirm } from "@/components/ConfirmDialog";
 import { MoveChargeDialog } from "@/components/MoveChargeDialog";
@@ -348,6 +349,8 @@ function MilestoneRow({ p, m, edit, isOpen, onToggle, onChanged, fail, onUp, onD
                 </form>
               )}
             </div>
+            {/* the phase works like a ticket: its timer, its activity and the box to answer or enter time */}
+            <PhasePanel p={p} m={m} edit={edit} onChanged={onChanged} fail={fail} onCollapse={onToggle} />
             {/* a milestone with no task is reached by hand; with tasks it is reached when they are done */}
             {edit && m.tasksTotal === 0 && (
               <Button variant="outline" size="sm" onClick={() => patch.mutate({ status: m.status === "done" ? "todo" : "done" })}>

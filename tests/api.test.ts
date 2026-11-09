@@ -6978,6 +6978,8 @@ describe("pipeline: shared to-dos and the day", () => {
     expect((await blocksOf()).plan.blocks.find((b: any) => b.refId === pt.id)).toMatchObject({ allocated: 60, need: 120, partial: true });
     await tech.put("/api/pipeline/day/alloc", { date: day, key: `ptask:${pt.id}`, minutes: null });
     // dragging a block puts the day in the order given: the dragged item goes last, then first; a replan by the AI lets it go
+    // (items added to the day start from now; the order given by hand is what is tested here, so the starts are let go)
+    await db().delete(schema.pipelineDayAlloc).where(eq(schema.pipelineDayAlloc.source, "start"));
     const order = (keys: string[]) => tech.put("/api/pipeline/day/order", { date: day, keys });
     const seq = async () => [...new Set((await blocksOf()).plan.blocks.filter((b: any) => b.refId && b.start).map((b: any) => `${b.kind}:${b.refId}`))] as string[];
     const base = await seq();
@@ -7278,6 +7280,68 @@ describe("pipeline: shared to-dos and the day", () => {
     // time logged on a project task can be deleted like any manual entry (it used to answer not found), and the bank is given back
     expect((await admin.del(`/api/time/entries/${e.id}`)).status).toBe(200);
     expect((await admin.get(`/api/projects/${bp.projectId}`)).json.sold).toMatchObject({ workedHours: 0, diffHours: 10 });
+  });
+
+  it("a phase works like a ticket: its timer, its replies and notes, and time that covers several tasks", async () => {
+    resetRateLimit("login:ip:unknown");
+    const tech = await signIn("tech@akab.local");
+    const admin = await signIn("admin@akab.local");
+    const boss = (await admin.get("/api/me")).json.id as string;
+    // (a Monday far ahead: this week of the technician is still open whatever the other tests sent)
+    const DAY = "2031-06-02";
+    const proj = (await tech.post("/api/projects", { name: "Phase comme un billet", milestones: [{ name: "Phase A" }] })).json;
+    const ms = proj.milestones[0].id as string;
+    const t1 = (await tech.post(`/api/projects/${proj.id}/milestones/${ms}/tasks`, { title: "Tâche 1" })).json;
+    const t2 = (await tech.post(`/api/projects/${proj.id}/milestones/${ms}/tasks`, { title: "Tâche 2" })).json;
+    const base = `/api/projects/${proj.id}/milestones/${ms}`;
+    // the timer starts when the phase is opened, and is listed (for the dock) like a task's
+    expect((await tech.post(`${base}/timer/start`, {})).status).toBe(200);
+    expect((await tech.get(`${base}/activity`)).json.timer).not.toBeNull();
+    expect(((await tech.get("/api/projects/timers")).json as any[]).some((x) => x.kind === "phase" && x.taskId === ms)).toBe(true);
+    // time must say what it covered
+    expect((await tech.post(`${base}/time`, { date: DAY, hours: 1, tasks: [] })).json.error).toBe("task_required");
+    expect((await tech.post(`${base}/time`, { date: DAY, hours: 1, tasks: [{ taskId: "00000000-0000-4000-8000-000000000000", status: "doing" }] })).json.error).toBe("task_invalid");
+    // ONE entry covering two tasks: one stays open (partial), the other is done; the phase follows its tasks
+    const e = await tech.post(`${base}/time`, { date: DAY, hours: 1.5, note: "ligne 1\nligne 2", tasks: [{ taskId: t1.id, status: "doing" }, { taskId: t2.id, status: "done" }] });
+    expect(e.status).toBe(201);
+    const act = (await tech.get(`${base}/activity`)).json;
+    expect(act.time).toHaveLength(1);
+    expect(act.time[0]).toMatchObject({ hours: 1.5, note: "ligne 1\nligne 2" });
+    expect(act.time[0].tasks.map((x: any) => [x.title, x.status]).sort()).toEqual([["Tâche 1", "doing"], ["Tâche 2", "done"]]);
+    const detail = (await tech.get(`/api/projects/${proj.id}`)).json;
+    const tasks = detail.milestones[0].tasks;
+    expect(tasks.find((x: any) => x.id === t1.id).status).toBe("doing");
+    expect(tasks.find((x: any) => x.id === t2.id).status).toBe("done");
+    expect(detail.milestones[0].status).toBe("doing");
+    // general work needs no task
+    expect((await tech.post(`${base}/time`, { date: DAY, hours: 0.25, general: true })).status).toBe(201);
+    // replies and notes: a reply can stay in the portal (no email); an email needs a client and an address
+    const silent = await tech.post(`${base}/notes`, { text: "Gardé dans le portail", kind: "reply", email: false });
+    expect(silent.status).toBe(201);
+    expect(silent.json).toMatchObject({ kind: "reply", emailed: null });
+    expect((await tech.post(`${base}/notes`, { text: "x", kind: "reply", email: true, to: [] })).json.error).toBe("reply_needs_recipient");
+    expect((await tech.post(`${base}/notes`, { text: "x", kind: "reply", email: true, to: ["a@b.co"] })).json.error).toBe("project_no_client");
+    // an internal note tells the colleagues picked (the bell)
+    const note = await tech.post(`${base}/notes`, { text: "Regardez ceci", kind: "internal", notifyUserIds: [boss], notifyChannels: { bell: true, email: false, chat: false } });
+    expect(note.status).toBe(201);
+    expect(note.json.notified).toBe(1);
+    expect(((await admin.get("/api/notifications")).json.items as any[]).some((n) => n.type === "project.note" && n.data.number === proj.number)).toBe(true);
+    const feed = (await tech.get(`${base}/activity`)).json.notes;
+    expect(feed.map((n: any) => n.text)).toEqual(expect.arrayContaining(["Gardé dans le portail", "Regardez ceci"]));
+    expect((await tech.del(`${base}/notes/${note.json.id}`)).status).toBe(200);
+    // stopping the timer makes the entry with the tasks it covered; discarding makes nothing
+    const stopped = await tech.post(`${base}/timer/stop`, { date: DAY, hours: 0.5, tasks: [{ taskId: t1.id, status: "doing" }] });
+    expect(stopped.status).toBe(200);
+    expect((await tech.get(`${base}/activity`)).json.timer).toBeNull();
+    expect((await tech.post(`${base}/timer/stop`, { discard: true })).json.error).toBe("timer_not_running");
+    await tech.post(`${base}/timer/start`, {});
+    expect((await tech.post(`${base}/timer/stop`, { discard: true })).json.discarded).toBe(true);
+    // finishing the last open task finishes the phase: no timer starts on it, and an entry can be deleted like any other
+    expect((await tech.post(`${base}/time`, { date: DAY, hours: 0.25, tasks: [{ taskId: t1.id, status: "done" }] })).status).toBe(201);
+    expect((await tech.get(`/api/projects/${proj.id}`)).json.milestones[0].status).toBe("done");
+    expect((await tech.post(`${base}/timer/start`, {})).json.error).toBe("milestone_done");
+    expect((await tech.del(`/api/time/entries/${act.time[0].id}`)).status).toBe(200);
+    expect((await tech.get(`${base}/activity`)).json.time.some((x: any) => x.id === act.time[0].id)).toBe(false);
   });
 
   it("tasks: assign, checklist, subtasks and waiting-for rules, notes", async () => {

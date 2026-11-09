@@ -3026,6 +3026,53 @@ export const projectTaskTimers = pgTable(
   (t) => [primaryKey({ columns: [t.taskId, t.userId] })],
 );
 
+/** A note or a reply to the client on a PHASE (milestone) of a project, like a ticket's activity */
+export const projectMilestoneNotes = pgTable(
+  "project_milestone_notes",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    milestoneId: uuid("milestone_id")
+      .notNull()
+      .references(() => projectMilestones.id, { onDelete: "cascade" }),
+    authorId: uuid("author_id").references(() => users.id, { onDelete: "set null" }),
+    text: text("text").notNull(),
+    kind: text("kind", { enum: ["internal", "reply"] }).notNull().default("internal"),
+    emailedTo: jsonb("emailed_to").$type<string[]>().notNull().default(sql`'[]'::jsonb`),
+    createdAt: created(),
+  },
+  (t) => [index("project_milestone_notes_ms_idx").on(t.milestoneId, t.createdAt)],
+);
+
+/** The timer of a phase for a person: started when the phase is opened, stopping it makes a time entry */
+export const projectMilestoneTimers = pgTable(
+  "project_milestone_timers",
+  {
+    milestoneId: uuid("milestone_id")
+      .notNull()
+      .references(() => projectMilestones.id, { onDelete: "cascade" }),
+    userId: uuid("user_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    startedAt: timestamp("started_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [primaryKey({ columns: [t.milestoneId, t.userId] })],
+);
+
+/** The tasks a time entry of a phase covered, and the status each was left in (a partial step does not finish the task) */
+export const timesheetEntryTasks = pgTable(
+  "timesheet_entry_tasks",
+  {
+    entryId: uuid("entry_id")
+      .notNull()
+      .references(() => timesheetEntries.id, { onDelete: "cascade" }),
+    taskId: uuid("task_id")
+      .notNull()
+      .references(() => projectTasks.id, { onDelete: "cascade" }),
+    statusAfter: text("status_after", { enum: ["todo", "doing", "blocked", "done"] }).notNull(),
+  },
+  (t) => [primaryKey({ columns: [t.entryId, t.taskId] })],
+);
+
 /** A reminder on a project: a day, a person to remind, a few words; the bell rings that day */
 export const projectReminders = pgTable(
   "project_reminders",
