@@ -434,7 +434,7 @@ export const pipelineRoutes = new Hono<AppEnv>()
     const p = await body(c, z.object({ date: zDate.optional(), userId: zUuid.optional(), key: z.string().regex(/^(ticket:\d+|task:[0-9a-f-]{36}|ptask:[0-9a-f-]{36})$/), minutes: z.number().int().min(15).max(480).nullable() }));
     const who = await dayTarget(a, p.userId);
     const date = p.date ?? todayQc();
-    const view = await dayItems(who, date, a.user.id);
+    const view = await dayItems(who, date, a.user.id, true);
     const it = view.items.find((i) => i.key === p.key && !i.masked);
     if (!it) throw new HTTPException(404, { message: "not_found" });
     const d = db();
@@ -493,7 +493,7 @@ export const pipelineRoutes = new Hono<AppEnv>()
     const p = await body(c, z.object({ date: zDate.optional(), userId: zUuid.optional(), keys: z.array(z.string().regex(/^(ticket:\d+|task:[0-9a-f-]{36}|ptask:[0-9a-f-]{36})$/)).max(200) }));
     const who = await dayTarget(a, p.userId);
     const date = p.date ?? todayQc();
-    const view = await dayItems(who, date, a.user.id);
+    const view = await dayItems(who, date, a.user.id, true);
     const known = new Set(view.items.filter((i) => !i.masked).map((i) => i.key));
     const keys = [...new Set(p.keys)].filter((k) => known.has(k));
     const d = db();

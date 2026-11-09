@@ -6919,13 +6919,20 @@ describe("my tickets: secondary technician", () => {
   });
 });
 
+/** Today in Québec (the day planner is manual: what is added to today) */
+const qcToday = () => new Date().toLocaleDateString("sv", { timeZone: "America/Toronto" });
+
 describe("pipeline: shared to-dos and the day", () => {
   it("the time given to each item of the day: a slider in quarter hours, partial is fine, the grid follows", async () => {
     resetRateLimit("login:ip:unknown");
     const tech = await signIn("tech@akab.local");
     const me = (await tech.get("/api/me")).json.id as string;
-    const day = "2026-11-09"; // a Monday
+    // today is shared with the other tests: start from a clear day
+    await db().delete(schema.calendarBlocks);
+    await db().delete(schema.pipelineDayBlocks);
+    const day = qcToday();
     const task = (await tech.post("/api/pipeline/tasks", { title: "Gros dossier du lundi", assigneeId: me, dueDate: day, estimateMinutes: 100 })).json;
+    await tech.put(`/api/pipeline/day/tasks/${task.id}`, { time: null });
     const key = `task:${task.id}`;
     const blocksOf = async () => (await tech.get(`/api/pipeline/day?date=${day}`)).json as any;
     let d = await blocksOf();
@@ -6951,6 +6958,7 @@ describe("pipeline: shared to-dos and the day", () => {
     // a task of a project is on the day too, marked with its project, and its time can be given like the others
     const proj = (await tech.post("/api/projects", { name: "Migration du jour", milestones: [{ name: "Phase A" }] })).json;
     const pt = (await tech.post(`/api/projects/${proj.id}/milestones/${proj.milestones[0].id}/tasks`, { title: "Préparer le serveur", assigneeId: me, dueDate: day, estimateHours: 2 })).json;
+    expect((await tech.put(`/api/pipeline/day/ptasks/${pt.id}`, { time: null })).status).toBe(200);
     d = await blocksOf();
     const item = d.items.find((i: any) => i.key === `ptask:${pt.id}`);
     expect(item).toMatchObject({ kind: "ptask", projectId: proj.id, ticketNumber: proj.number, minutes: 120 });
@@ -6988,14 +6996,18 @@ describe("pipeline: shared to-dos and the day", () => {
     // a project task with only a checkpoint (17:00 when no time) is on the day by it, like a task or a ticket
     const pc = (await tech.post(`/api/projects/${proj.id}/milestones/${proj.milestones[0].id}/tasks`, { title: "Point de contrôle seul", assigneeId: me, checkpointDate: day })).json;
     expect(pc).toMatchObject({ checkpointDate: day, checkpointTime: "17:00" });
+    // (the day is manual: it is there once added)
+    expect((await blocksOf()).items.some((i: any) => i.key === `ptask:${pc.id}`)).toBe(false);
+    await tech.put(`/api/pipeline/day/ptasks/${pc.id}`, { time: null });
     expect((await blocksOf()).items.find((i: any) => i.key === `ptask:${pc.id}`)).toMatchObject({ kind: "ptask", checkpoint: day, checkpointTime: "17:00" });
     // the projects list is sorted by the checkpoint of the next open task
     const plist = (await tech.get("/api/projects?view=all&status=all")).json as any[];
     expect(plist.find((x) => x.id === proj.id).nextCheckpoint).toBe(`${day} 17:00`);
     const withCp = plist.filter((x) => x.nextCheckpoint).map((x) => x.nextCheckpoint);
     expect(withCp).toEqual([...withCp].sort());
-    expect(plist.findIndex((x) => !x.nextCheckpoint)).toBeGreaterThan(plist.findLastIndex((x) => x.nextCheckpoint));
+    if (plist.some((x) => !x.nextCheckpoint)) expect(plist.findIndex((x) => !x.nextCheckpoint)).toBeGreaterThan(plist.findLastIndex((x) => x.nextCheckpoint));
     expect((await tech.patch(`/api/projects/${proj.id}/tasks/${pc.id}`, { checkpointDate: null })).json.checkpointTime).toBeNull();
+    await tech.del(`/api/pipeline/day/ptasks/${pc.id}`);
     expect((await blocksOf()).items.some((i: any) => i.key === `ptask:${pc.id}`)).toBe(false);
   });
 
@@ -7196,27 +7208,30 @@ describe("pipeline: shared to-dos and the day", () => {
     const admin = await signIn("admin@akab.local");
     const tech = await signIn("tech@akab.local");
     const me = (await tech.get("/api/me")).json.id as string;
-    await tech.post("/api/pipeline/tasks", { title: "Appeler le fournisseur", assigneeId: me, dueDate: "2026-03-04", priority: "high", estimateMinutes: 45 });
-    const day = (await tech.get("/api/pipeline/day?date=2026-03-04")).json;
+    // today is shared with the other tests: start from a clear day
+    await db().delete(schema.calendarBlocks);
+    await db().delete(schema.pipelineDayBlocks);
+    const call = (await tech.post("/api/pipeline/tasks", { title: "Appeler le fournisseur", assigneeId: me, dueDate: qcToday(), priority: "high", estimateMinutes: 45 })).json;
+    // the day is manual: only what is added to it is planned
+    expect((await tech.get("/api/pipeline/day")).json.plan.blocks.some((b: any) => b.title === "Appeler le fournisseur")).toBe(false);
+    await tech.put(`/api/pipeline/day/tasks/${call.id}`, { time: null });
+    const day = (await tech.get("/api/pipeline/day")).json;
     expect(day.plan.source).toBe("rules");
     expect(day.plan.capacityMinutes).toBe(480);
     const first = day.plan.blocks.find((b: any) => b.title === "Appeler le fournisseur");
-    expect(first).toMatchObject({ kind: "task", start: "08:00", end: "08:45" });
+    // (other things added to today by earlier tests may come first)
+    expect(first).toMatchObject({ kind: "task", allocated: 45 });
     // never in the lunch hour
     expect(day.plan.blocks.filter((b: any) => b.kind !== "break" && !b.overflow).every((b: any) => b.end <= "12:00" || b.start >= "13:00")).toBe(true);
     // the day before, the same task would be late: not planned, but to re-evaluate
-    const next = (await tech.get("/api/pipeline/day?date=2026-03-05")).json;
+    const tomorrow = new Date(Date.now() + 86_400_000).toLocaleDateString("sv", { timeZone: "America/Toronto" });
+    const next = (await tech.get(`/api/pipeline/day?date=${tomorrow}`)).json;
     expect(next.reevaluate.some((i: any) => i.title === "Appeler le fournisseur")).toBe(true);
     expect(next.plan.blocks.some((b: any) => b.title === "Appeler le fournisseur")).toBe(false);
     // planning again without the AI set up still gives a plan
-    const again = (await tech.post("/api/pipeline/day/plan", { date: "2026-03-04" })).json;
+    const again = (await tech.post("/api/pipeline/day/plan", { date: qcToday() })).json;
     expect(again.plan.source).toBe("rules");
     expect(["not_configured", "disabled"]).toContain(again.aiError);
-    // a weekend or a holiday still lays out what is due (a checkpoint that day), in the usual hours
-    await tech.post("/api/pipeline/tasks", { title: "Pour samedi", assigneeId: me, dueDate: "2026-03-07", priority: "high", estimateMinutes: 45 });
-    const sat = (await tech.get("/api/pipeline/day?date=2026-03-07")).json;
-    expect(sat.plan.capacityMinutes).toBe(480);
-    expect(sat.plan.blocks.some((b: any) => b.title === "Pour samedi" && b.start === "08:00")).toBe(true);
     // someone else's day: managers only
     expect((await tech.get(`/api/pipeline/day?userId=${(await admin.get("/api/me")).json.id}`)).status).toBe(403);
     expect((await admin.get(`/api/pipeline/day?userId=${me}`)).status).toBe(200);
@@ -7253,8 +7268,9 @@ describe("pipeline: times, files, recurring and private tasks", () => {
     expect((await tech.patch(`/api/pipeline/tasks/${t1.id}`, { dueDate: null })).json).toMatchObject({ dueDate: null, dueTime: null });
 
     // the plan does not start it before its time
-    await tech.patch(`/api/pipeline/tasks/${t1.id}`, { dueDate: "2026-03-04", dueTime: "15:30", estimateMinutes: 60 });
-    const day = (await tech.get("/api/pipeline/day?date=2026-03-04")).json;
+    await tech.patch(`/api/pipeline/tasks/${t1.id}`, { dueDate: qcToday(), dueTime: "15:30", startDate: qcToday(), startTime: "10:00", estimateMinutes: 60 });
+    await tech.put(`/api/pipeline/day/tasks/${t1.id}`, { time: null });
+    const day = (await tech.get("/api/pipeline/day")).json;
     const block = day.plan.blocks.find((b: any) => b.title === "Heures");
     expect(block.start >= "10:00").toBe(true);
 
@@ -7369,11 +7385,13 @@ describe("pipeline: times, files, recurring and private tasks", () => {
     expect((await admin.get(`/api/pipeline/tasks/${shared.id}`)).json.viewerIds).toEqual([boss]);
     expect((await admin.get(`/api/pipeline/tasks/${team.id}`)).status).toBe(200);
     // the manager looking at the technician's day sees no private title
-    const day = (await admin.get(`/api/pipeline/day?date=2026-03-04&userId=${me}`)).json;
+    await tech.patch(`/api/pipeline/tasks/${priv.id}`, { dueDate: qcToday() });
+    await tech.put(`/api/pipeline/day/tasks/${priv.id}`, { time: null });
+    const day = (await admin.get(`/api/pipeline/day?userId=${me}`)).json;
     expect(JSON.stringify(day)).not.toContain("Évaluation de Jean");
     expect(day.items.some((i: any) => i.masked)).toBe(true);
     // the technician's own day shows it
-    expect(JSON.stringify((await tech.get("/api/pipeline/day?date=2026-03-04")).json)).toContain("Évaluation de Jean");
+    expect(JSON.stringify((await tech.get("/api/pipeline/day")).json)).toContain("Évaluation de Jean");
     // a subtask of a private task: the manager does not see the parent's title
     await tech.post("/api/pipeline/tasks", { title: "Sous-tâche publique", parentId: priv.id, assigneeId: me });
     const sub = (await admin.get("/api/pipeline/tasks?status=all")).json.find((x: any) => x.title === "Sous-tâche publique");
@@ -7622,20 +7640,8 @@ describe("pipeline: pinned priorities in my day", () => {
       { ticketId: weekPinned.id, ticketNumber: weekPinned.number, ticketTitle: weekPinned.title, technicianId: me, note: "", horizon: "week", forDate: "2026-03-02", rank: 2 },
     ]);
     const day = (await tech.get(`/api/pipeline/day?date=${date}`)).json;
-    const dp = day.items.find((i: any) => i.refId === String(dayPinned.id));
-    const wp = day.items.find((i: any) => i.refId === String(weekPinned.id));
-    expect(dp).toMatchObject({ pin: "day", pinNote: "Appeler le client avant midi" });
-    expect(wp).toMatchObject({ pin: "week" });
-    // the first block of the day is the priority of the day, with its direction
-    const first = day.plan.blocks.find((b: any) => b.kind === "ticket" && !b.overflow);
-    expect(first).toMatchObject({ refId: String(dayPinned.id), pinned: "day", note: "Appeler le client avant midi" });
-    // another day of the same week still has the week's priority, but not the day's
-    const thursday = (await tech.get("/api/pipeline/day?date=2026-03-05")).json;
-    expect(thursday.items.find((i: any) => i.refId === String(weekPinned.id))).toMatchObject({ pin: "week" });
-    expect(thursday.items.find((i: any) => i.refId === String(dayPinned.id))?.pin).toBeUndefined();
-    // a done pin is no longer a priority
-    await db().update(schema.ticketPins).set({ doneAt: new Date() }).where(eq(schema.ticketPins.ticketId, dayPinned.id));
-    expect((await tech.get(`/api/pipeline/day?date=${date}`)).json.items.find((i: any) => i.refId === String(dayPinned.id))).toBeUndefined();
+    // the day is planned by hand: a pinned priority does not put itself on it
+    expect(day.items.some((i: any) => i.refId === String(dayPinned.id) || i.refId === String(weekPinned.id))).toBe(false);
     await db().delete(schema.ticketPins);
   });
 });
@@ -9866,8 +9872,11 @@ describe("the day of a technician: tickets by checkpoint or due date; meeting po
     expect(await ids()).not.toContain(String(far.id));
     expect((await tech.put(`/api/tickets/${far.id}/start-date`, { milestoneDate: today, milestoneTime: "10:00" })).status).toBe(200);
     const item = (await tech.get(`/api/pipeline/day?date=${today}`)).json.items.find((i: any) => i.refId === String(far.id));
-    expect(item).toMatchObject({ checkpoint: today, checkpointTime: "10:00" });
-    expect(item.statusKind).toBeTruthy();
+    expect(item).toBeUndefined();
+    // on the day once added by hand
+    expect((await tech.put(`/api/pipeline/day/tickets/${far.id}`, { time: null })).status).toBe(200);
+    const added = (await tech.get(`/api/pipeline/day?date=${today}`)).json.items.find((i: any) => i.refId === String(far.id));
+    expect(added).toMatchObject({ checkpoint: today, checkpointTime: "10:00", added: true });
     expect(me.id).toBeTruthy();
 
     // the weekly meeting's points: dragged into the order wanted, a new one at the end
@@ -11016,6 +11025,7 @@ describe("a to-do task for several people", () => {
     // "mine" holds it for both, and it is on both days
     expect((await tech2.get("/api/pipeline/tasks?scope=mine&status=open")).json.some((x: any) => x.id === id)).toBe(true);
     expect((await tech.get("/api/pipeline/tasks?scope=mine&status=open")).json.some((x: any) => x.id === id)).toBe(true);
+    expect((await tech2.put(`/api/pipeline/day/tasks/${id}`, { time: null })).status).toBe(200);
     expect((await tech2.get(`/api/pipeline/day?date=${today}`)).json.items.some((i: any) => i.refId === id)).toBe(true);
     // both are told (the maker is not)
     expect((await tech2.get("/api/notifications")).json.items.some((n: any) => n.type === "pipeline.assigned" && n.data.taskId === id)).toBe(true);

@@ -149,7 +149,11 @@ export async function resetDayAdds(today: string = todayQc()): Promise<number> {
   return rows.length;
 }
 
-export async function dayItems(userId: string, date: string, viewerId: string = userId): Promise<{ items: DayItem[]; busy: Busy[]; absent: boolean; holiday: boolean }> {
+/**
+ * What is on a person's day. `manual` (the day planner): only what the person put on the day by hand ("add to my day");
+ * what is late is returned apart (`late`) as a reminder. Otherwise (the week brief, the ticket scheduler): everything due.
+ */
+export async function dayItems(userId: string, date: string, viewerId: string = userId, manual = false): Promise<{ items: DayItem[]; busy: Busy[]; absent: boolean; holiday: boolean; late: DayItem[] }> {
   await resetDailyTasks();
   await resetDayAdds();
   const d = db();
@@ -327,7 +331,8 @@ export async function dayItems(userId: string, date: string, viewerId: string = 
   // what is late is not planned: a checkpoint (or, with none, a due day) before the day, unless put on the day by hand or pinned.
   // It is listed apart so the dates can be looked at again.
   for (const i of items) if (!i.added && !i.pin && !i.reminder && ((i.checkpoint !== null && i.checkpoint !== undefined && i.checkpoint < date) || ((i.checkpoint === null || i.checkpoint === undefined) && i.due !== null && i.due < date))) i.stale = true;
-  return { items, busy, absent, holiday: holidaysBetween(date, date).has(date) };
+  const late = manual ? items.filter((i) => i.stale) : [];
+  return { items: manual ? items.filter((i) => i.added) : items, busy, absent, holiday: holidaysBetween(date, date).has(date), late };
 }
 
 // the priorities of the day first (in their rank), then what is late, then the priorities of the week, then the rest
@@ -550,7 +555,7 @@ export async function buildPlan(userId: string, date: string, opts: { ai: boolea
   const settings = await pipelineSettings();
   const [user] = await db().select({ name: schema.users.name, locale: schema.users.locale }).from(schema.users).where(eq(schema.users.id, userId));
   const locale = opts.locale ?? user?.locale ?? "fr";
-  const day = await dayItems(userId, date);
+  const day = await dayItems(userId, date, userId, true);
   const { items, absent } = day;
   // what is already on the technician's Outlook calendar takes its hours off the day
   const cal = await calendarOfDay(userId, date);
@@ -670,10 +675,9 @@ export async function planOf(userId: string, date: string) {
 
 /** What the day screen lists besides the plan: everything on the plate, the urgent first */
 export async function buildPipelineView(userId: string, date: string, viewerId: string = userId) {
-  const { items: all, absent, holiday, busy } = await dayItems(userId, date, viewerId);
-  const items = all.filter((i) => !i.stale);
-  // late and not done: not planned, shown on top to re-evaluate their dates
-  const reevaluate = all.filter((i) => i.stale).sort(byUrgency);
+  // the day is planned by hand: only what was added to it. What is late (and not added) is only a reminder to re-evaluate its dates.
+  const { items, absent, holiday, busy, late } = await dayItems(userId, date, viewerId, true);
+  const reevaluate = late.sort(byUrgency);
   const doneToday = await db()
     .select({ n: sql<number>`count(*)`.mapWith(Number) })
     .from(schema.pipelineTasks)
@@ -788,7 +792,7 @@ export async function pipelineTick(now = new Date()): Promise<void> {
   if (nowHm < s.time) return;
   // claimed before anything is done (one run a day, never twice)
   await savePipelineSettings({ lastRun: date });
-  await morningRun({ date });
+  // the daily plan is manual for now (what is added to the day by hand): nothing is planned or texted automatically
   // Monday: the week ahead for the team meeting
   if (new Date(`${date}T12:00:00Z`).getUTCDay() === 1) {
     const { buildBrief } = await import("./weekBrief.ts");

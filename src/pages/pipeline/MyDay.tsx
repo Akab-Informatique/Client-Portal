@@ -323,6 +323,7 @@ export function MyDay({ onOpenTask }: { onOpenTask: (id: string) => void }) {
                 <Reevaluate items={data.reevaluate} onOpen={open} />
               </div>
             )}
+            {data && data.items.length === 0 && <p className="mb-3 rounded-lg border border-dashed px-3 py-2 text-center text-xs text-muted-foreground">{t("pipeline.day.emptyManual")}</p>}
             <div className="mb-2 flex flex-wrap items-center justify-center gap-x-3 gap-y-1 text-[10px] text-muted-foreground">
               {[
                 ["bg-[color:var(--gold)]/60", "pipeline.day.legend.ticket"],
