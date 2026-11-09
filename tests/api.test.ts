@@ -7153,6 +7153,26 @@ describe("pipeline: shared to-dos and the day", () => {
     expect((await tech.put("/api/pipeline/day/ptasks/00000000-0000-4000-8000-000000000000", { time: null })).status).toBe(404);
   });
 
+  it("an item added to the day starts from now, and is dragged to any time of the day", async () => {
+    resetRateLimit("login:ip:unknown");
+    const tech = await signIn("tech@akab.local");
+    const me = (await tech.get("/api/me")).json.id as string;
+    await db().delete(schema.calendarBlocks);
+    await db().delete(schema.pipelineDayBlocks);
+    await db().delete(schema.ticketDayAdds);
+    await db().delete(schema.pipelineDayAlloc);
+    const t = (await tech.post("/api/pipeline/tasks", { title: "À placer à la main", assigneeId: me, estimateMinutes: 30 })).json;
+    await tech.put(`/api/pipeline/day/tasks/${t.id}`, { time: null });
+    const start = async () => (await tech.get("/api/pipeline/day")).json.plan.blocks.find((b: any) => b.refId === t.id)?.start as string | undefined;
+    // dragged to 14:00 (quarter hours), then back to the automatic place
+    expect((await tech.put("/api/pipeline/day/start", { key: `task:${t.id}`, minute: 14 * 60 })).status).toBe(200);
+    expect(await start()).toBe("14:00");
+    expect((await tech.put("/api/pipeline/day/start", { key: `task:${t.id}`, minute: null })).status).toBe(200);
+    expect(await start()).toBeDefined();
+    // not on the day: refused
+    expect((await tech.put("/api/pipeline/day/start", { key: "task:00000000-0000-4000-8000-000000000000", minute: 600 })).status).toBe(404);
+  });
+
   it("tasks: assign, checklist, subtasks and waiting-for rules, notes", async () => {
     resetRateLimit("login:ip:unknown");
     const admin = await signIn("admin@akab.local");

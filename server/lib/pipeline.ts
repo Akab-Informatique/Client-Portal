@@ -546,7 +546,18 @@ export async function allocOf(userId: string, date: string) {
     /** the order the person gave the day by dragging (key → position) */
     order: new Map(rows.filter((r) => r.source === "order" && r.position !== null).map((r) => [r.key, r.position as number])),
     ai: new Map(rows.filter((r) => r.source === "ai").map((r) => [r.key, r])),
+    /** where the person put the item in the day (key → start, minutes of the day): dragged there, or the moment it was added */
+    start: new Map(rows.filter((r) => r.source === "start").map((r) => [r.key, r.minutes])),
   };
+}
+
+/** An item added to today starts at the next quarter hour (not in the morning already gone); the person drags it where they want. */
+export async function startAtNow(userId: string, key: string): Promise<void> {
+  const date = todayQc();
+  const now = new Intl.DateTimeFormat("en-GB", { timeZone: TZ, hour: "2-digit", minute: "2-digit", hourCycle: "h23" }).format(new Date());
+  const m = Math.ceil(mins(now) / 15) * 15;
+  if (m >= 24 * 60) return;
+  await db().insert(schema.pipelineDayAlloc).values({ userId, date, key, minutes: m, source: "start" }).onConflictDoNothing();
 }
 const clamp15 = (m: number) => Math.min(480, Math.max(15, Math.round(m / 15) * 15));
 
@@ -581,7 +592,8 @@ export async function buildPlan(userId: string, date: string, opts: { ai: boolea
   const withTime = (i: DayItem): DayItem => {
     const need = clamp15(i.minutes);
     const given = alloc.manual.get(i.key) ?? (keepAi || opts.ai ? alloc.ai.get(i.key)?.minutes : undefined);
-    return { ...i, need, minutes: given ?? need };
+    const at = alloc.start.get(i.key);
+    return { ...i, need, minutes: given ?? need, ...(at !== undefined ? { startAt: at } : {}) };
   };
   const planable = absent ? [] : items.filter((i) => !i.blocked && !i.stale).sort(byUrgency).map(withTime);
   let ordered = planable;

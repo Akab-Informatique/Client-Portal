@@ -11,7 +11,7 @@ import { audit } from "../lib/audit.ts";
 import { aiSettings } from "../lib/ai.ts";
 import { rateLimit } from "../lib/http.ts";
 import { notify, usersWith } from "../lib/notify.ts";
-import { calendarOfDay, buildPipelineView, maskPhone, morningRun, phoneOf, PipelineError, pipelineSettings, planOf, buildPlan, savePipelineSettings, sendTestSms, type PipelineSettings, resetDailyTasks, resetDayAdds, allocOf, dayItems } from "../lib/pipeline.ts";
+import { startAtNow, calendarOfDay, buildPipelineView, maskPhone, morningRun, phoneOf, PipelineError, pipelineSettings, planOf, buildPlan, savePipelineSettings, sendTestSms, type PipelineSettings, resetDailyTasks, resetDayAdds, allocOf, dayItems } from "../lib/pipeline.ts";
 import { ticketSource } from "../lib/ticketSource.ts";
 import { todayQc } from "../lib/timesheets.ts";
 import { notifyTechs } from "../lib/techNotify.ts";
@@ -323,6 +323,7 @@ export const pipelineRoutes = new Hono<AppEnv>()
       .insert(schema.ticketDayAdds)
       .values({ ticketId: id, userId: who, forDate, dueTime: p.time, addedBy: a.user.id })
       .onConflictDoUpdate({ target: [schema.ticketDayAdds.ticketId, schema.ticketDayAdds.userId, schema.ticketDayAdds.forDate], set: { dueTime: p.time, addedBy: a.user.id } });
+    await startAtNow(who, `ticket:${id}`);
     await audit(a.user.id, "pipeline.ticket_day_added", String(id), { time: p.time, userId: who });
     if (who !== a.user.id) await notify([who], { type: "pipeline.day_added", data: { title: `${t.number} ${t.title}`.slice(0, 200), by: a.user.name, time: p.time }, link: `/tickets?t=${id}` });
     return c.json({ added: true, dueTime: p.time });
@@ -361,6 +362,7 @@ export const pipelineRoutes = new Hono<AppEnv>()
       .insert(schema.ticketDayAdds)
       .values({ taskId: id, userId: who, forDate, dueTime: p.time, addedBy: a.user.id })
       .onConflictDoUpdate({ target: [schema.ticketDayAdds.taskId, schema.ticketDayAdds.userId, schema.ticketDayAdds.forDate], set: { dueTime: p.time, addedBy: a.user.id } });
+    await startAtNow(who, `task:${id}`);
     await audit(a.user.id, "pipeline.task_day_added", id, { time: p.time, userId: who });
     if (who !== a.user.id) await notify([who], { type: "pipeline.day_added", data: { title: t.title.slice(0, 200), by: a.user.name, time: p.time }, link: `/pipeline?task=${id}` });
     return c.json({ added: true, dueTime: p.time });
@@ -399,6 +401,7 @@ export const pipelineRoutes = new Hono<AppEnv>()
       .insert(schema.ticketDayAdds)
       .values({ projectTaskId: id, userId: who, forDate, dueTime: p.time, addedBy: a.user.id })
       .onConflictDoUpdate({ target: [schema.ticketDayAdds.projectTaskId, schema.ticketDayAdds.userId, schema.ticketDayAdds.forDate], set: { dueTime: p.time, addedBy: a.user.id } });
+    await startAtNow(who, `ptask:${id}`);
     await audit(a.user.id, "pipeline.ptask_day_added", id, { time: p.time, userId: who });
     if (who !== a.user.id) await notify([who], { type: "pipeline.day_added", data: { title: t.title.slice(0, 200), by: a.user.name, time: p.time }, link: "/projects" });
     return c.json({ added: true, dueTime: p.time });
@@ -500,6 +503,21 @@ export const pipelineRoutes = new Hono<AppEnv>()
     await d.delete(schema.pipelineDayAlloc).where(and(eq(schema.pipelineDayAlloc.userId, who), eq(schema.pipelineDayAlloc.date, date), eq(schema.pipelineDayAlloc.source, "order")));
     if (keys.length) await d.insert(schema.pipelineDayAlloc).values(keys.map((key, position) => ({ userId: who, date, key, minutes: 15, source: "order" as const, position })));
     const out = await buildPlan(who, date, { ai: false, reuse: true, fromNow: true });
+    return c.json({ ok: true, plan: out.plan });
+  })
+
+  /** Where an item starts in the day (dragged on the timeline, quarter hours); null puts it back to the automatic place. */
+  .put("/day/start", requirePermission("pipeline.edit"), async (c) => {
+    const a = auth(c);
+    const p = await body(c, z.object({ date: zDate.optional(), userId: zUuid.optional(), key: z.string().regex(/^(ticket:d+|task:[0-9a-f-]{36}|ptask:[0-9a-f-]{36})$/), minute: z.number().int().min(0).max(1425).nullable() }));
+    const who = await dayTarget(a, p.userId);
+    const date = p.date ?? todayQc();
+    const view = await dayItems(who, date, a.user.id, true);
+    if (!view.items.some((i) => i.key === p.key && !i.masked)) throw new HTTPException(404, { message: "not_found" });
+    const d = db();
+    await d.delete(schema.pipelineDayAlloc).where(and(eq(schema.pipelineDayAlloc.userId, who), eq(schema.pipelineDayAlloc.date, date), eq(schema.pipelineDayAlloc.key, p.key), eq(schema.pipelineDayAlloc.source, "start")));
+    if (p.minute !== null) await d.insert(schema.pipelineDayAlloc).values({ userId: who, date, key: p.key, minutes: Math.round(p.minute / 15) * 15, source: "start" });
+    const out = await buildPlan(who, date, { ai: false, reuse: true });
     return c.json({ ok: true, plan: out.plan });
   })
 

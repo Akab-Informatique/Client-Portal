@@ -530,8 +530,8 @@ function Timeline({ data, onOpen, onBlock, hourPx, canEdit, forUser, onSaved }: 
   const [move, setMove] = useState<{ i: number; dy: number } | null>(null);
   const lane = useRef<HTMLDivElement>(null);
   const justMoved = useRef(false);
-  const saveOrder = useMutation({
-    mutationFn: (keys: string[]) => api.put("/pipeline/day/order", { date: data.date, keys, ...(forUser ? { userId: forUser } : {}) }),
+  const saveStart = useMutation({
+    mutationFn: (v: { key: string; minute: number }) => api.put("/pipeline/day/start", { date: data.date, key: v.key, minute: v.minute, ...(forUser ? { userId: forUser } : {}) }),
     onSuccess: onSaved,
     onError: () => toast.error(t("common.error")),
   });
@@ -558,20 +558,11 @@ function Timeline({ data, onOpen, onBlock, hourPx, canEdit, forUser, onSaved }: 
       if (!moved || !lane.current) return;
       justMoved.current = true;
       setTimeout(() => (justMoved.current = false), 80);
-      // where it was dropped (minutes of the day), against the middle of each other item's first block
-      const minute = startH * 60 + ((ev.clientY - lane.current.getBoundingClientRect().top) / hourPx) * 60;
-      const seq: { key: string; mid: number }[] = [];
-      for (const x of [...placed].sort((a, b2) => a.start.localeCompare(b2.start))) {
-        if (!x.refId || !(x.kind === "ticket" || x.kind === "task" || x.kind === "ptask")) continue;
-        const k = `${x.kind}:${x.refId}`;
-        if (!seq.some((q) => q.key === k)) seq.push({ key: k, mid: toMinutes(x.start) + (totals.get(k) ?? 0) / 2 });
-      }
-      const before = seq.map((q) => q.key);
-      const rest = seq.filter((q) => q.key !== key);
-      const at = rest.findIndex((q) => minute < q.mid);
-      const next = rest.map((q) => q.key);
-      next.splice(at < 0 ? next.length : at, 0, key);
-      if (next.join() !== before.join()) saveOrder.mutate(next);
+      // dropped where the person wants: the item starts there (quarter hours), the others work around it
+      const delta = Math.round((ev.clientY - y0) / (hourPx / 60) / 15) * 15;
+      if (delta === 0) return;
+      const first = Math.min(...placed.filter((x) => `${x.kind}:${x.refId}` === key).map((x) => toMinutes(x.start)));
+      saveStart.mutate({ key, minute: Math.max(0, Math.min(1425, first + delta)) });
     };
     window.addEventListener("pointermove", mv);
     window.addEventListener("pointerup", up);
@@ -629,7 +620,7 @@ function Timeline({ data, onOpen, onBlock, hourPx, canEdit, forUser, onSaved }: 
           className="absolute inset-y-0 left-14 right-0"
           onClick={(e) => {
             // a click on free space blocks time there (from that quarter hour, an hour long)
-            if (e.target !== e.currentTarget || !canEdit) return;
+            if (e.target !== e.currentTarget || !canEdit || justMoved.current) return;
             const m = Math.floor((startH * 60 + ((e.clientY - e.currentTarget.getBoundingClientRect().top) / hourPx) * 60) / 15) * 15;
             onBlock(undefined, `${String(Math.floor(m / 60)).padStart(2, "0")}:${String(m % 60).padStart(2, "0")}`);
           }}

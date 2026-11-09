@@ -2519,7 +2519,7 @@ export const pipelineDayAlloc = pgTable(
     /** ticket:<id> or task:<uuid> */
     key: text("key").notNull(),
     minutes: integer("minutes").notNull(),
-    source: text("source", { enum: ["manual", "ai", "order"] }).notNull(),
+    source: text("source", { enum: ["manual", "ai", "order", "start"] }).notNull(),
     /** The AI's order (0 first); for source "order": the order the person gave the day by hand */
     position: integer("position"),
     note: text("note"),
