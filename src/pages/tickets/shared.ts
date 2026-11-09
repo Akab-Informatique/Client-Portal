@@ -238,6 +238,16 @@ export const CP_TONE: Record<string, string> = {
   none: "border-[color:var(--gold)]/30 bg-[color:var(--gold)]/[0.05] text-primary",
   done: "border-muted-foreground/30 bg-muted/40 text-muted-foreground",
 };
+/** The checkpoint must not come after the due date: true when it does (an open ticket) */
+export function dateConflict(tk: { milestoneDate?: string | null; dueAt?: string | null; statusKind?: StatusKind }): boolean {
+  if (!tk.milestoneDate || !tk.dueAt || tk.statusKind === "complete") return false;
+  const due = new Date(tk.dueAt);
+  if (Number.isNaN(due.getTime())) return false;
+  return tk.milestoneDate > due.toLocaleDateString("sv");
+}
+/** Flashing red ring on the checkpoint and the due date of a ticket whose dates conflict */
+export const CONFLICT_CLASS = "animate-attention rounded-full ring-2 ring-red-500/80";
+
 /** The state of a ticket's checkpoint now ("none" without one, "done" when complete) */
 export function cpState(tk: { milestoneDate?: string | null; milestoneTime?: string | null; dueAt: string; statusKind: StatusKind }): string {
   if (tk.statusKind === "complete") return "done";

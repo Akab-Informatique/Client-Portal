@@ -72,7 +72,7 @@ import { AcceptDialog } from "./AcceptDialog";
 import { AddToDayDialog } from "./AddToDayDialog";
 import { MergeDialog } from "./MergeDialog";
 import { PendingMails } from "./PendingMails";
-import { cpState, CP_TONE, heatState, FILTER_KEYS, PRIORITY_STYLE, dueGlow, useChoiceText, shortDate, shortDateTime, hm, STATUS_STYLE, useTickets, useShowSecondary, VIEWS, type Tally, type TicketList, type TicketSummary, type View, ticketErrorText } from "./shared";
+import { cpState, CP_TONE, CONFLICT_CLASS, dateConflict, heatState, FILTER_KEYS, PRIORITY_STYLE, dueGlow, useChoiceText, shortDate, shortDateTime, hm, STATUS_STYLE, useTickets, useShowSecondary, VIEWS, type Tally, type TicketList, type TicketSummary, type View, ticketErrorText } from "./shared";
 import { useTicketWorkspace } from "./workspace";
 import { GlobalSearch } from "./GlobalSearch";
 import { AgendaCard } from "./Planning";
@@ -1056,7 +1056,7 @@ function TicketRow({
             {(() => {
               const label = (
                 <span
-                  className={cn("block whitespace-nowrap rounded px-0.5 font-mono text-[11px] tabular-nums text-muted-foreground/70", editable && "hover:bg-accent/60 hover:text-muted-foreground")}
+                  className={cn("block whitespace-nowrap rounded px-0.5 font-mono text-[11px] tabular-nums text-muted-foreground/70", editable && "hover:bg-accent/60 hover:text-muted-foreground", dateConflict(tk) && cn(CONFLICT_CLASS, "font-semibold text-red-300"))}
                 >
                   {shortDate(tk.dueAt)}
                 </span>
@@ -1977,7 +1977,7 @@ function CheckpointCell({ tk, editable }: { tk: TicketSummary; editable: boolean
     onError: (e) => toast.error(ticketErrorText(t, e)),
   });
   const label = (
-    <span className={cn("block w-fit whitespace-nowrap rounded-full border px-2 py-0.5 font-mono text-xs font-semibold tabular-nums", tk.milestoneDate ? CP_TONE[cpState(tk)] : "border-transparent font-normal text-muted-foreground", editable && "hover:brightness-125")}>
+    <span className={cn("block w-fit whitespace-nowrap rounded-full border px-2 py-0.5 font-mono text-xs font-semibold tabular-nums", tk.milestoneDate ? CP_TONE[cpState(tk)] : "border-transparent font-normal text-muted-foreground", editable && "hover:brightness-125", dateConflict(tk) && CONFLICT_CLASS)}>
       {tk.milestoneDate ? `${shortDate(tk.milestoneDate)}${tk.milestoneTime ? ` ${tk.milestoneTime}` : ""}` : "—"}
     </span>
   );

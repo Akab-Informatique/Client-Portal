@@ -70,6 +70,8 @@ import {
   hm,
   parseHm,
   fullDate,
+  dateConflict,
+  CONFLICT_CLASS,
 } from "./shared";
 
 const SOURCE_ICON: Record<string, LucideIcon> = { email: Mail, phone: Phone, portal: Inbox, monitoring: MonitorCog };
@@ -314,6 +316,9 @@ function TicketBody({
       : null
     : (tk.assignee?.name ?? null);
   // the checkpoint is what matters: it sets the hue (red passed, orange today, gold soon, green later); the due date stays quiet
+  // the checkpoint after the due date: warned once when the ticket opens, and the two dates flash while it lasts
+  const conflict = dateConflict({ milestoneDate: view.milestoneDate, dueAt: view.dueAt, statusKind });
+  const [conflictOpen, setConflictOpen] = useState(() => dateConflict({ milestoneDate: tk.milestoneDate, dueAt: tk.dueAt, statusKind: tk.statusKind }));
   const cpHeat = statusKind === "complete" ? "done" : view.milestoneDate ? heatState(view.dueAt, statusKind, { milestoneDate: view.milestoneDate, milestoneTime: view.milestoneTime }) : "none";
   const [draft, setDraft] = useState<{ text: string; internal: boolean } | null>(null);
   // Quick actions put the note box in a mode and bring it into view
@@ -513,6 +518,7 @@ function TicketBody({
                 disabled={!editable}
                 onSave={(date) => stage({ startDate: date })}
               />
+              <span className={cn(conflict && CONFLICT_CLASS)} title={conflict ? t("tickets.dateConflict.tip") : undefined}>
               <QuickDate
                 icon={Flag}
                 label={t("tickets.milestone.label")}
@@ -524,11 +530,13 @@ function TicketBody({
                 min={view.startDate}
                 onSave={(date, time) => stage({ milestoneDate: date, milestoneTime: date ? time : null })}
               />
+              </span>
               {(() => {
                 const badge = (
                   <span
                     className={cn(
                       "flex items-center gap-1 rounded-full border border-transparent px-1.5 py-0.5 text-[10px] font-normal text-muted-foreground/70",
+                      conflict && cn(CONFLICT_CLASS, "font-semibold text-red-300"),
                       editable && "cursor-pointer hover:border-[color:var(--gold)]/60 hover:text-muted-foreground",
                     )}
                     title={`${t("tickets.fields.due")} · ${fullDate(view.dueAt)}`}
@@ -891,6 +899,17 @@ function TicketBody({
         </aside>
       </div>
       <OpenedByOthers viewers={viewers} />
+      <Dialog open={conflictOpen} onOpenChange={setConflictOpen}>
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2 text-red-300">
+              <AlertTriangle className="size-5" /> {t("tickets.dateConflict.title")}
+            </DialogTitle>
+            <DialogDescription>{t("tickets.dateConflict.text", { cp: shortDate(view.milestoneDate ?? ""), due: shortDate(view.dueAt) })}</DialogDescription>
+          </DialogHeader>
+          <Button onClick={() => setConflictOpen(false)}>{t("tickets.dateConflict.ok")}</Button>
+        </DialogContent>
+      </Dialog>
       {merging && <MergeDialog open onOpenChange={(o) => !o && setMerging(false)} tk={tk} onDone={() => onClose()} />}
       {toProject && <ToProjectDialog tk={tk} initialMode={toProject} onClose={() => setToProject(false)} onDone={() => (setToProject(false), onClose())} />}
       {addingDay && <AddToDayDialog open onOpenChange={(o) => !o && setAddingDay(false)} tk={tk} />}

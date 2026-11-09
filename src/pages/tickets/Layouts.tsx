@@ -14,7 +14,7 @@ import { useConfirm } from "@/components/ConfirmDialog";
 import { api } from "@/lib/api";
 import { cn, initials } from "@/lib/utils";
 import { useCan, useMe } from "@/lib/session";
-import { cpState, CP_TONE, PRIORITY_STYLE, shortDate, STATUS_STYLE, ticketErrorText, useChoiceText, type TicketList, type TicketSummary } from "./shared";
+import { cpState, CP_TONE, CONFLICT_CLASS, dateConflict, PRIORITY_STYLE, shortDate, STATUS_STYLE, ticketErrorText, useChoiceText, type TicketList, type TicketSummary } from "./shared";
 
 // ── The three ways to look at the list ───────────────────────────────────────────
 /** standard: the table as it always was · kanban: boards the team sorts tickets on · compact: one short line per ticket */
@@ -294,7 +294,7 @@ export function CompactList({ items, activeIds, onOpen, facets }: { items: Compa
                 milestone: (
                   <input
                     type="datetime-local"
-                    className={cn(select, "font-mono font-semibold tabular-nums", tk.milestoneDate ? CP_TONE[cpState(tk)] : "text-muted-foreground")}
+                    className={cn(select, "font-mono font-semibold tabular-nums", tk.milestoneDate ? CP_TONE[cpState(tk)] : "text-muted-foreground", dateConflict(tk) && CONFLICT_CLASS)}
                     value={tk.milestoneDate ? `${tk.milestoneDate}T${tk.milestoneTime ?? "00:00"}` : ""}
                     onChange={(e) => {
                       const [date, time] = e.target.value.split("T");
@@ -342,8 +342,8 @@ export function CompactList({ items, activeIds, onOpen, facets }: { items: Compa
                   <span className="truncate">{txt.priority({ label: tk.priorityLabel, kind: tk.priorityKind })}</span>
                 </span>
               ),
-              milestone: <span className={cn("whitespace-nowrap rounded-full border px-2 py-0.5 font-mono text-xs font-semibold tabular-nums", tk.milestoneDate ? CP_TONE[cpState(tk)] : "border-transparent font-normal text-muted-foreground")}>{tk.milestoneDate ? `${shortDate(tk.milestoneDate)}${tk.milestoneTime ? ` ${tk.milestoneTime}` : ""}` : "—"}</span>,
-              due: <span className="whitespace-nowrap font-mono text-[11px] tabular-nums text-muted-foreground/70">{shortDate(tk.dueAt)}</span>,
+              milestone: <span className={cn("whitespace-nowrap rounded-full border px-2 py-0.5 font-mono text-xs font-semibold tabular-nums", tk.milestoneDate ? CP_TONE[cpState(tk)] : "border-transparent font-normal text-muted-foreground", dateConflict(tk) && CONFLICT_CLASS)}>{tk.milestoneDate ? `${shortDate(tk.milestoneDate)}${tk.milestoneTime ? ` ${tk.milestoneTime}` : ""}` : "—"}</span>,
+              due: <span className={cn("whitespace-nowrap font-mono text-[11px] tabular-nums text-muted-foreground/70", dateConflict(tk) && cn(CONFLICT_CLASS, "px-1.5 font-semibold text-red-300"))}>{shortDate(tk.dueAt)}</span>,
               status: (
                 <span className={cn("inline-flex max-w-full items-center gap-1.5 truncate rounded-full border px-2 py-0.5 text-[11px] font-medium leading-tight", STATUS_STYLE[tk.statusKind])}>
                   <span className="size-1.5 shrink-0 rounded-full bg-current" />
