@@ -7232,8 +7232,13 @@ describe("pipeline: shared to-dos and the day", () => {
     resetRateLimit("login:ip:unknown");
     const admin = await signIn("admin@akab.local");
     const [client] = (await admin.get("/api/quotes/clients")).json;
-    const tk0 = (await admin.get("/api/tickets?view=all")).json.items[0];
-    await db().update(schema.clients).set({ autotaskId: tk0.company.id }).where(eq(schema.clients.id, client.id));
+    // the client needs a company of the ticket source: keep the one it has, else take one nobody uses
+    const [row] = await db().select().from(schema.clients).where(eq(schema.clients.id, client.id));
+    if (!row.autotaskId) {
+      const used = new Set((await db().select({ a: schema.clients.autotaskId }).from(schema.clients)).map((r) => r.a));
+      const free = ((await admin.get("/api/tickets?view=all")).json.items as any[]).map((x) => x.company.id).find((id) => !used.has(id));
+      await db().update(schema.clients).set({ autotaskId: free }).where(eq(schema.clients.id, client.id));
+    }
     const make = async (saleType: string) => {
       const q = (await admin.post("/api/quotes", { clientId: client.id, title: "Vente " + saleType, saleType, lines: [{ description: "Main-d'œuvre : installation", quantityX100: 1000, unitPriceCents: 10000 }] })).json;
       expect(q.saleType).toBe(saleType);
