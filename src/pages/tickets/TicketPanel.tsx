@@ -899,17 +899,19 @@ function TicketBody({
         </aside>
       </div>
       <OpenedByOthers viewers={viewers} />
-      <Dialog open={conflictOpen} onOpenChange={setConflictOpen}>
+      {conflictOpen && view.milestoneDate && (
+      <Dialog open onOpenChange={setConflictOpen}>
         <DialogContent className="sm:max-w-md">
           <DialogHeader>
             <DialogTitle className="flex items-center gap-2 text-red-300">
               <AlertTriangle className="size-5" /> {t("tickets.dateConflict.title")}
             </DialogTitle>
-            <DialogDescription>{t("tickets.dateConflict.text", { cp: shortDate(view.milestoneDate ?? ""), due: shortDate(view.dueAt) })}</DialogDescription>
+            <DialogDescription>{t("tickets.dateConflict.text", { cp: shortDate(view.milestoneDate), due: shortDate(view.dueAt) })}</DialogDescription>
           </DialogHeader>
           <Button onClick={() => setConflictOpen(false)}>{t("tickets.dateConflict.ok")}</Button>
         </DialogContent>
       </Dialog>
+      )}
       {merging && <MergeDialog open onOpenChange={(o) => !o && setMerging(false)} tk={tk} onDone={() => onClose()} />}
       {toProject && <ToProjectDialog tk={tk} initialMode={toProject} onClose={() => setToProject(false)} onDone={() => (setToProject(false), onClose())} />}
       {addingDay && <AddToDayDialog open onOpenChange={(o) => !o && setAddingDay(false)} tk={tk} />}

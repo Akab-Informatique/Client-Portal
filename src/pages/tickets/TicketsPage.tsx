@@ -186,7 +186,16 @@ export function TicketsPage() {
       { replace: true },
     );
   /** Replace the whole query (view + filters), e.g. from a tile or a saved filter. */
-  const apply = (query: string) => setParams(new URLSearchParams(query), { replace: true });
+  // (the Operations tab this page may sit in — `section` — is kept: replacing it sent the user back to Ma journée)
+  const apply = (query: string) =>
+    setParams(
+      (p) => {
+        const next = new URLSearchParams(query);
+        for (const k of ["section"]) if (p.get(k)) next.set(k, p.get(k)!);
+        return next;
+      },
+      { replace: true },
+    );
   const activeFilters = FILTER_KEYS.filter((k) => k !== "sort" && k !== "q" && params.get(k));
 
   // Shortcuts: "/" search, "n" new ticket (not while typing)
