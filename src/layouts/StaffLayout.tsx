@@ -17,6 +17,7 @@ import {
   Sun,
   UserRound,
   ShieldCheck,
+  Star,
 } from "lucide-react";
 import { Logo, LogoMark } from "@/components/brand/Logo";
 import { LanguageToggle } from "@/components/LanguageToggle";
@@ -52,6 +53,7 @@ import { cn, initials } from "@/lib/utils";
 import { TicketWorkspaceProvider } from "@/pages/tickets/workspace";
 import { ProjectWorkspaceProvider } from "@/pages/projects/ProjectWorkspace";
 import { preloadPagesWhenIdle, preloadRoute } from "@/lib/preload";
+import { api } from "@/lib/api";
 
 const AdminOverlay = lazy(() => import("@/admin/AdminOverlay").then((m) => ({ default: m.AdminOverlay })));
 
@@ -164,7 +166,9 @@ export function StaffLayout() {
   );
 }
 
-function NavItem({ m, collapsed, active }: { m: NavModule; collapsed: boolean; active: boolean }) {
+type Fav = { on: boolean; toggle: () => void };
+
+function NavItem({ m, collapsed, active, fav, idPrefix = "nav" }: { m: NavModule; collapsed: boolean; active: boolean; fav?: Fav; idPrefix?: string }) {
   const { t } = useTranslation();
   const qc = useQueryClient();
   if (m.upcoming) {
@@ -198,23 +202,44 @@ function NavItem({ m, collapsed, active }: { m: NavModule; collapsed: boolean; a
     >
       {active && (
         <motion.span
-          layoutId="nav-active"
+          layoutId={`${idPrefix}-active`}
           className="absolute inset-0 rounded-lg border border-[color:var(--gold)]/25 bg-[color:var(--gold)]/10"
           transition={{ type: "spring", bounce: 0.15, duration: 0.4 }}
         />
       )}
-      {active && <motion.span layoutId="nav-bar" className="absolute -left-3 top-2 bottom-2 w-1 rounded-r-full bg-grad-gold" />}
+      {active && <motion.span layoutId={`${idPrefix}-bar`} className="absolute -left-3 top-2 bottom-2 w-1 rounded-r-full bg-grad-gold" />}
       <m.icon className={cn("relative size-[18px] shrink-0", active && "text-primary")} />
-      {!collapsed && <span className="relative truncate">{t(m.labelKey)}</span>}
+      {!collapsed && <span className={cn("relative truncate", fav && "pr-6")}>{t(m.labelKey)}</span>}
     </NavLink>
   );
-  return collapsed ? (
-    <Tooltip>
-      <TooltipTrigger asChild>{link}</TooltipTrigger>
-      <TooltipContent side="right">{t(m.labelKey)}</TooltipContent>
-    </Tooltip>
-  ) : (
-    link
+  if (collapsed) {
+    return (
+      <Tooltip>
+        <TooltipTrigger asChild>{link}</TooltipTrigger>
+        <TooltipContent side="right">{t(m.labelKey)}</TooltipContent>
+      </Tooltip>
+    );
+  }
+  if (!fav) return link;
+  // the star sits beside the link (not inside it, so a click never opens the page)
+  const label = t(fav.on ? "nav.removeFavorite" : "nav.addFavorite");
+  return (
+    <div className="group/nav relative">
+      {link}
+      <button
+        type="button"
+        onClick={fav.toggle}
+        title={label}
+        aria-label={`${label} : ${t(m.labelKey)}`}
+        aria-pressed={fav.on}
+        className={cn(
+          "absolute right-1.5 top-1/2 grid size-7 -translate-y-1/2 place-items-center rounded-md text-muted-foreground opacity-0 transition hover:bg-accent hover:text-foreground focus-visible:opacity-100 group-hover/nav:opacity-100",
+          fav.on && "text-[color:var(--gold)] hover:text-[color:var(--gold)]",
+        )}
+      >
+        <Star className={cn("size-3.5", fav.on && "fill-current")} />
+      </button>
+    </div>
   );
 }
 
@@ -244,6 +269,29 @@ function SidebarContent({ collapsed, onToggle }: { collapsed: boolean; onToggle?
     })),
   ].filter((g) => g.items.length > 0);
   const [open, setOpen] = useOpenSections();
+  // favourites: kept on the account (they follow the person), shown first in the order they were added
+  const qc = useQueryClient();
+  const [favKeys, setFavKeys] = useState<string[]>(me.preferences.navFavorites ?? []);
+  useEffect(() => setFavKeys(me.preferences.navFavorites ?? []), [me.preferences.navFavorites]);
+  const favs = favKeys.map((k) => STAFF_MODULES.find((m) => m.key === k)).filter((m): m is NavModule => !!m && !m.upcoming && moduleVisible(m, me, can));
+  const favOf = (m: NavModule): Fav | undefined => {
+    if (m.upcoming) return undefined;
+    const on = favKeys.includes(m.key);
+    return {
+      on,
+      toggle: () => {
+        const next = on ? favKeys.filter((k) => k !== m.key) : [...favKeys, m.key];
+        setFavKeys(next);
+        api
+          .put("/me/preferences", { navFavorites: next })
+          .then(() => qc.invalidateQueries({ queryKey: ["auth"] }))
+          .catch(() => {
+            setFavKeys(favKeys);
+            toast.error(t("common.error"));
+          });
+      },
+    };
+  };
   // the section of the page shown opens by itself (it can be closed again)
   const current = groups.find((g) => g.items.some((m) => !m.upcoming && isOn(m)))?.key;
   useEffect(() => {
@@ -262,6 +310,26 @@ function SidebarContent({ collapsed, onToggle }: { collapsed: boolean; onToggle?
         {collapsed ? <LogoMark className="h-7" /> : <Logo />}
       </div>
       <nav className={cn("flex-1 overflow-y-auto p-3 scrollbar-thin", collapsed ? "space-y-6" : "space-y-1")}>
+        {favs.length > 0 && (
+          <div>
+            {collapsed ? (
+              <Star className="mx-auto mb-2 size-3 fill-current text-[color:var(--gold)]" aria-label={t("nav.favorites")} />
+            ) : (
+              <div className="flex items-center gap-2 px-3 py-2 text-[11px] font-semibold uppercase tracking-[0.14em] text-muted-foreground">
+                <Star className="size-3 fill-current text-[color:var(--gold)]" />
+                <span className="flex-1 truncate">{t("nav.favorites")}</span>
+              </div>
+            )}
+            <ul className={cn("space-y-1", !collapsed && "pb-2")}>
+              {favs.map((m) => (
+                <li key={m.key}>
+                  <NavItem m={m} collapsed={collapsed} active={isOn(m)} fav={favOf(m)} idPrefix="fav" />
+                </li>
+              ))}
+            </ul>
+            {!collapsed && <div className="mx-3 mb-1 h-px bg-border" />}
+          </div>
+        )}
         {groups.map((g) => {
           // icons only: every section shown, separated by a line
           const shown = collapsed || open.has(g.key);
@@ -289,7 +357,7 @@ function SidebarContent({ collapsed, onToggle }: { collapsed: boolean; onToggle?
                     .filter((m) => !m.group)
                     .map((m) => (
                       <li key={m.key}>
-                        <NavItem m={m} collapsed={collapsed} active={!m.upcoming && isOn(m)} />
+                        <NavItem m={m} collapsed={collapsed} active={!m.upcoming && isOn(m)} fav={favOf(m)} />
                       </li>
                     ))}
                   {/* a sub-menu inside the section (Sécurité): collapsible too, remembered with the sections */}
@@ -315,7 +383,7 @@ function SidebarContent({ collapsed, onToggle }: { collapsed: boolean; onToggle?
                         <ul className={cn("space-y-1 overflow-hidden", !collapsed && "ml-3 border-l pl-2", !collapsed && !subOpen && "hidden")} inert={!subOpen}>
                           {sub.map((m) => (
                             <li key={m.key}>
-                              <NavItem m={m} collapsed={collapsed} active={!m.upcoming && isOn(m)} />
+                              <NavItem m={m} collapsed={collapsed} active={!m.upcoming && isOn(m)} fav={favOf(m)} />
                             </li>
                           ))}
                         </ul>

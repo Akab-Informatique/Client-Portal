@@ -28,7 +28,7 @@ export type Me = {
   features?: { passbolt: boolean };
   /** Fills in a weekly timesheet (set by an admin) */
   timesheetRequired: boolean;
-  preferences: { sortDefaults: Record<string, string>; dashboard: DashboardWidget[] | null; theme: "dark" | "light" | "system"; outlook: boolean; bankHours: boolean; ticketLayout: "standard" | "kanban" | "compact" | null; notify: { email: boolean; sms: boolean; teams: boolean }; pushDetails: boolean };
+  preferences: { sortDefaults: Record<string, string>; dashboard: DashboardWidget[] | null; theme: "dark" | "light" | "system"; outlook: boolean; bankHours: boolean; ticketLayout: "standard" | "kanban" | "compact" | null; notify: { email: boolean; sms: boolean; teams: boolean }; pushDetails: boolean; navFavorites: string[] };
 };
 
 export type AuthState = { stage: Stage; /** Phones that can approve this sign-in (while the second step is asked) */ push?: number; me?: Me | { name: string; email: string; locale: "fr" | "en" } };

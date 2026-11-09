@@ -10125,6 +10125,15 @@ describe("tickets: tags, notes that notify colleagues, texts kept in their ticke
     expect((await tech2.get("/api/me")).json.preferences.ticketLayout).toBeNull();
     expect((await tech.put("/api/me/preferences", { ticketLayout: "cards" })).status).toBe(400);
 
+    // sidebar favourites: the person's own, in order, never twice; kept when another preference changes
+    expect((await tech2.get("/api/me")).json.preferences.navFavorites).toEqual([]);
+    expect((await tech2.put("/api/me/preferences", { navFavorites: ["tickets", "crm", "tickets"] })).status).toBe(200);
+    expect((await tech2.get("/api/me")).json.preferences.navFavorites).toEqual(["tickets", "crm"]);
+    expect((await tech2.put("/api/me/preferences", { theme: "light" })).status).toBe(200);
+    expect((await tech2.get("/api/me")).json.preferences.navFavorites).toEqual(["tickets", "crm"]);
+    expect((await tech.get("/api/me")).json.preferences.navFavorites).toEqual([]);
+    expect((await tech2.put("/api/me/preferences", { navFavorites: ["../admin"] })).status).toBe(400);
+
     // Kanban boards: each person's own
     const mine = await tech.post("/api/ticket-boards", { name: "Mon tableau" });
     expect(mine.status).toBe(201);

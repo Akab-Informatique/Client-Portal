@@ -42,7 +42,7 @@ export async function loadMe(a: AuthContext) {
     features: { passbolt: await passboltMenuShown() },
     /** Fills in a weekly timesheet (otherwise the Timesheets entry is hidden, unless they manage everyone's) */
     timesheetRequired: u.timesheetRequired,
-    preferences: { sortDefaults: prefs?.sortDefaults ?? {}, dashboard: prefs?.dashboard ?? null, theme: prefs?.theme ?? "dark", outlook: prefs?.outlook ?? false, bankHours: prefs?.bankHoursDefault ?? false, ticketLayout: prefs?.ticketLayout ?? null, notify: prefs?.notifyDefaults ?? { email: true, sms: false, teams: false }, pushDetails: prefs?.pushDetails ?? false },
+    preferences: { sortDefaults: prefs?.sortDefaults ?? {}, dashboard: prefs?.dashboard ?? null, theme: prefs?.theme ?? "dark", outlook: prefs?.outlook ?? false, bankHours: prefs?.bankHoursDefault ?? false, ticketLayout: prefs?.ticketLayout ?? null, notify: prefs?.notifyDefaults ?? { email: true, sms: false, teams: false }, pushDetails: prefs?.pushDetails ?? false, navFavorites: prefs?.navFavorites ?? [] },
   };
 }
 
@@ -92,6 +92,8 @@ export const meRoutes = new Hono<AppEnv>()
         pushDetails: z.boolean().optional(),
         /** The tickets list's default view */
         ticketLayout: z.enum(["standard", "kanban", "compact"]).optional(),
+        /** Sidebar favourites: module keys, in order (unknown keys are only hidden by the sidebar) */
+        navFavorites: z.array(z.string().regex(/^[a-z][a-zA-Z0-9-]{0,39}$/)).max(30).optional(),
         /** The sort a list opens on, by view (a null value goes back to the default, the checkpoint) */
         sortDefaults: z.record(z.string().regex(/^[a-z][a-zA-Z0-9.:_-]{0,59}$/), z.string().max(40).nullable()).optional(),
       }),
@@ -107,7 +109,7 @@ export const meRoutes = new Hono<AppEnv>()
     }
     await db()
       .insert(schema.userPreferences)
-      .values({ userId: a.user.id, dashboard: p.dashboard ?? null, theme: p.theme ?? null, outlook: p.outlook ?? false, bankHoursDefault: p.bankHours ?? false, ...(p.notify ? { notifyDefaults: p.notify } : {}), ...(p.pushDetails !== undefined ? { pushDetails: p.pushDetails } : {}), ...(sortDefaults ? { sortDefaults } : {}) })
+      .values({ userId: a.user.id, dashboard: p.dashboard ?? null, theme: p.theme ?? null, outlook: p.outlook ?? false, bankHoursDefault: p.bankHours ?? false, ...(p.notify ? { notifyDefaults: p.notify } : {}), ...(p.pushDetails !== undefined ? { pushDetails: p.pushDetails } : {}), ...(p.ticketLayout !== undefined ? { ticketLayout: p.ticketLayout } : {}), ...(p.navFavorites ? { navFavorites: [...new Set(p.navFavorites)] } : {}), ...(sortDefaults ? { sortDefaults } : {}) })
       .onConflictDoUpdate({
         target: schema.userPreferences.userId,
         set: {
@@ -118,6 +120,7 @@ export const meRoutes = new Hono<AppEnv>()
           ...(p.notify !== undefined ? { notifyDefaults: p.notify } : {}),
           ...(p.pushDetails !== undefined ? { pushDetails: p.pushDetails } : {}),
           ...(p.ticketLayout !== undefined ? { ticketLayout: p.ticketLayout } : {}),
+          ...(p.navFavorites !== undefined ? { navFavorites: [...new Set(p.navFavorites)] } : {}),
           ...(sortDefaults ? { sortDefaults } : {}),
           updatedAt: new Date(),
         },

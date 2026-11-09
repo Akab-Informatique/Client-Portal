@@ -640,6 +640,8 @@ export const userPreferences = pgTable("user_preferences", {
   /** The channels ticked by default when notifying a technician from a ticket (the bell is always on) */
   /** The lock screen of the phone shows the detail of a notification (number, title, text); off = only its kind */
   pushDetails: boolean("push_details").notNull().default(false),
+  /** Sidebar entries the person starred (module keys, in the order added): shown at the top of the sidebar */
+  navFavorites: jsonb("nav_favorites").$type<string[]>().notNull().default(sql`'[]'::jsonb`),
   notifyDefaults: jsonb("notify_defaults").$type<{ email: boolean; sms: boolean; teams: boolean }>().notNull().default({ email: true, sms: false, teams: false }),
   updatedAt: updated(),
 });

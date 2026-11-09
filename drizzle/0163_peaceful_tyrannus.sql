@@ -1,0 +1,1 @@
+ALTER TABLE "user_preferences" ADD COLUMN "nav_favorites" jsonb DEFAULT '[]'::jsonb NOT NULL;

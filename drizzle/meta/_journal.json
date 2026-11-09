@@ -1142,6 +1142,13 @@
       "when": 1794240340118,
       "tag": "0162_bouncy_ultragirl",
       "breakpoints": true
+    },
+    {
+      "idx": 163,
+      "version": "7",
+      "when": 1794242448574,
+      "tag": "0163_peaceful_tyrannus",
+      "breakpoints": true
     }
   ]
 }
