@@ -8,15 +8,15 @@ import { SmsInboxDialog, SmsTile } from "@/pages/sms/SmsPage";
 import { Skeleton } from "@/components/ui/skeleton";
 import { api } from "@/lib/api";
 import { cn } from "@/lib/utils";
-import { CompactList, KanbanBoard } from "@/pages/tickets/Layouts";
-import { useCan } from "@/lib/session";
+import { ColumnHeader, CompactList, KanbanBoard, useColumns } from "@/pages/tickets/Layouts";
+import { useCan, useMe } from "@/lib/session";
 import { shortDate, type TicketList } from "@/pages/tickets/shared";
 import type { Project } from "@/pages/projects/shared";
 import { DAY_ROUTE, isWork, type DayItem } from "./shared";
 import { DayEdge, ProjectEdge } from "./DayEdge";
 import { usePeople } from "./TaskDialog";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { useMe } from "@/lib/session";
+
 
 /**
  * A technician's tickets, as the compact view of the Tickets page with the "My tickets" filter (all of them, not only today's);
@@ -183,51 +183,87 @@ export function Priorities({ items, horizon, onOpen, canRemove, forUser }: { ite
   );
 }
 
-const GRID = "grid grid-cols-[minmax(0,1fr)_9rem_5rem_5.5rem] items-center gap-x-3";
+const PROJECT_COLUMNS = ["project", "client", "milestones", "due", "next"] as const;
+const PROJECT_WIDTHS = { project: 280, client: 170, milestones: 110, due: 120, next: 150 };
 
-/** My open projects, compact: name, client, milestones done, due day. A click opens the project. */
+/** The open projects: number and name, client, milestones done, due day, next milestone due. Columns move and resize like the tickets'. Mine, or another technician's with the right. A click opens the project. */
 export function DayProjects() {
   const { t } = useTranslation();
   const navigate = useNavigate();
-  const { data, isLoading } = useQuery({ queryKey: ["projects", "list", "mine", "open"], queryFn: () => api.get<Project[]>("/projects?view=mine&status=open") });
+  const me = useMe();
+  const can = useCan();
+  const people = usePeople();
+  const cols = useColumns("akab.pipeline.projects.columns.v1", PROJECT_COLUMNS, PROJECT_WIDTHS, "project");
+  const [who, setWho] = useState<string>(me.id);
+  const others = can("projects.manage");
+  const { data, isLoading } = useQuery({
+    queryKey: ["projects", "list", "mine", "open", who],
+    queryFn: () => api.get<Project[]>(`/projects?status=open${who === me.id ? "&view=mine" : `&member=${who}`}`),
+  });
   const today = new Date().toLocaleDateString("en-CA");
+  // by due day, the ones with none last
+  const list = [...(data ?? [])].sort((a, b) => (a.dueDate ?? "9999-99-99").localeCompare(b.dueDate ?? "9999-99-99") || a.number.localeCompare(b.number));
+  const grid = { gridTemplateColumns: cols.template };
+  const labels = { project: t("pipeline.day.project"), client: t("pipeline.day.projectClient"), milestones: t("pipeline.day.projectProgress"), due: t("pipeline.day.projectDue"), next: t("pipeline.day.projectNext") };
+  const day = (d: string | null | undefined) => <span className={cn("whitespace-nowrap font-mono text-xs tabular-nums", d && d < today ? "text-destructive" : "text-muted-foreground")}>{d ? shortDate(d) : "—"}</span>;
   return (
     <section className="glass rounded-2xl border">
-      <h3 className="flex items-center gap-1.5 px-4 pb-2 pt-3 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
-        <FolderKanban className="size-3.5" /> {t("pipeline.day.projects")} <span className="font-mono normal-case opacity-70">{data?.length ?? 0}</span>
-      </h3>
+      <div className="flex flex-wrap items-center gap-2 px-4 pb-2 pt-3">
+        <h3 className="flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
+          <FolderKanban className="size-3.5" /> {t("pipeline.day.projects")} <span className="font-mono normal-case opacity-70">{data?.length ?? 0}</span>
+        </h3>
+        {others && (
+          <select value={who} onChange={(e) => setWho(e.target.value)} aria-label={t("pipeline.day.projectWhose")} className="ml-auto h-7 rounded-md border bg-transparent px-2 text-xs">
+            <option value={me.id}>{t("pipeline.day.projectsMine")}</option>
+            {(people.data ?? []).filter((p) => p.id !== me.id).map((p) => (
+              <option key={p.id} value={p.id}>
+                {p.name}
+              </option>
+            ))}
+          </select>
+        )}
+      </div>
       {isLoading ? (
         <Skeleton className="m-4 h-16" />
-      ) : !data?.length ? (
+      ) : !list.length ? (
         <p className="px-4 pb-4 text-sm text-muted-foreground">{t("pipeline.day.noProjects")}</p>
       ) : (
         <div className="overflow-x-auto">
-          <div className="min-w-[32rem]">
-            <div className={cn(GRID, "border-b border-[color:var(--glass-border)] bg-white/[0.02] px-4 py-1.5 font-mono text-[10px] uppercase tracking-[0.12em] text-muted-foreground")}>
-              <span>{t("pipeline.day.project")}</span>
-              <span>{t("pipeline.day.projectClient")}</span>
-              <span>{t("pipeline.day.projectProgress")}</span>
-              <span>{t("pipeline.day.projectDue")}</span>
-            </div>
+          <div style={{ minWidth: cols.minWidth }}>
+            <ColumnHeader cols={cols} labels={labels} style={grid} />
             <ul className="divide-y divide-[color:var(--glass-border)]">
-              {data.map((p) => (
-                <li key={p.id} className={cn("relative", p.todayMine && "animate-attention bg-[color:var(--gold)]/10 ring-1 ring-inset ring-[color:var(--gold)]/50")} title={p.todayMine ? t("pipeline.day.projectToday") : undefined}>
-                  <ProjectEdge id={p.id} following={p.following} onOpen={() => navigate(`/pipeline?section=projects&project=${p.id}`)} className="absolute left-0 top-0 z-10 h-full" />
-                  <button type="button" onClick={() => navigate(`/pipeline?section=projects&project=${p.id}`)} className={cn(GRID, "w-full px-4 py-1 text-left text-sm transition-colors hover:bg-[linear-gradient(90deg,rgba(255,206,26,0.07),transparent_60%)]")}>
+              {list.map((p) => {
+                const cell: Record<(typeof PROJECT_COLUMNS)[number], React.ReactNode> = {
+                  project: (
                     <span className="flex min-w-0 items-baseline gap-2">
                       <span className="shrink-0 font-mono text-[11px] text-muted-foreground">{p.number}</span>
                       <span className="truncate font-medium" title={p.name}>
                         {p.name}
                       </span>
                     </span>
-                    <span className="truncate text-xs text-muted-foreground">{p.client?.name ?? "—"}</span>
+                  ),
+                  client: <span className="truncate text-xs text-muted-foreground">{p.client?.name ?? "—"}</span>,
+                  milestones: (
                     <span className="font-mono text-xs text-muted-foreground">
                       {p.progress.done}/{p.progress.total}
                     </span>
-                    <span className={cn("whitespace-nowrap font-mono text-xs tabular-nums", p.dueDate && p.dueDate < today ? "text-destructive" : "text-muted-foreground")}>{p.dueDate ? shortDate(p.dueDate) : "—"}</span>
-                  </button>
-                </li>
-              ))}
+                  ),
+                  due: day(p.dueDate),
+                  next: day(p.nextMilestoneDue),
+                };
+                return (
+                  <li key={p.id} className="relative">
+                    <ProjectEdge id={p.id} following={p.following} onOpen={() => navigate(`/pipeline?section=projects&project=${p.id}`)} className="absolute left-0 top-0 z-10 h-full" />
+                    <button type="button" onClick={() => navigate(`/pipeline?section=projects&project=${p.id}`)} style={grid} className="grid w-full items-center gap-x-3 px-4 py-1 text-left text-sm transition-colors hover:bg-[linear-gradient(90deg,rgba(255,206,26,0.07),transparent_60%)]">
+                      {cols.order.map((c) => (
+                        <span key={c} className="min-w-0">
+                          {cell[c]}
+                        </span>
+                      ))}
+                    </button>
+                  </li>
+                );
+              })}
             </ul>
           </div>
         </div>

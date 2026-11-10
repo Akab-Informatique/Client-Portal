@@ -899,17 +899,19 @@ function TicketBody({
         </aside>
       </div>
       <OpenedByOthers viewers={viewers} />
-      <Dialog open={conflictOpen} onOpenChange={setConflictOpen}>
+      {conflictOpen && view.milestoneDate && (
+      <Dialog open onOpenChange={setConflictOpen}>
         <DialogContent className="sm:max-w-md">
           <DialogHeader>
             <DialogTitle className="flex items-center gap-2 text-red-300">
               <AlertTriangle className="size-5" /> {t("tickets.dateConflict.title")}
             </DialogTitle>
-            <DialogDescription>{t("tickets.dateConflict.text", { cp: shortDate(view.milestoneDate ?? ""), due: shortDate(view.dueAt) })}</DialogDescription>
+            <DialogDescription>{t("tickets.dateConflict.text", { cp: shortDate(view.milestoneDate), due: shortDate(view.dueAt) })}</DialogDescription>
           </DialogHeader>
           <Button onClick={() => setConflictOpen(false)}>{t("tickets.dateConflict.ok")}</Button>
         </DialogContent>
       </Dialog>
+      )}
       {merging && <MergeDialog open onOpenChange={(o) => !o && setMerging(false)} tk={tk} onDone={() => onClose()} />}
       {toProject && <ToProjectDialog tk={tk} initialMode={toProject} onClose={() => setToProject(false)} onDone={() => (setToProject(false), onClose())} />}
       {addingDay && <AddToDayDialog open onOpenChange={(o) => !o && setAddingDay(false)} tk={tk} />}
@@ -1955,9 +1957,9 @@ function NoteComposer({
     requestAnimationFrame(() => ref.current?.focus());
   }, [focusRequest]);
   const [focused, setFocused] = useState(false);
-  // a reply also goes by email to the ticket's contact (on by default, switched off for this one if wanted), and to other people
+  // a reply also goes by email to the ticket's contact (off by default, switched on for this one if wanted), and to other people
   const contactEmail = tk.contactInfo?.email ?? null;
-  const [emailIt, setEmailIt] = useState(true);
+  const [emailIt, setEmailIt] = useState(false);
   const [mailOthers, setMailOthers] = useState<string[]>([]);
   // an internal note can tell colleagues: the bell and an email with the note
   const me = useMe();
@@ -1988,7 +1990,7 @@ function NoteComposer({
     onSuccess: (r) => {
       setText("");
       setFiles([]);
-      setEmailIt(true);
+      setEmailIt(false);
       setTell([]);
       void qc.invalidateQueries({ queryKey: ["tickets", "detail", tk.id] });
       if (internal) {

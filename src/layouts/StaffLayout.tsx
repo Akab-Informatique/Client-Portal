@@ -52,6 +52,7 @@ import { signOut, useCan, useMe } from "@/lib/session";
 import { cn, initials } from "@/lib/utils";
 import { TicketWorkspaceProvider } from "@/pages/tickets/workspace";
 import { ProjectWorkspaceProvider } from "@/pages/projects/ProjectWorkspace";
+import { TodoDock } from "@/pages/pipeline/TodoDock";
 import { preloadPagesWhenIdle, preloadRoute } from "@/lib/preload";
 import { api } from "@/lib/api";
 
@@ -119,6 +120,7 @@ export function StaffLayout() {
   return (
     <TicketWorkspaceProvider enabled={me.permissions.includes("tickets.view")}>
     <ProjectWorkspaceProvider enabled={me.permissions.includes("projects.view")}>
+    {me.permissions.includes("pipeline.view") && <TodoDock />}
     <div className="flex min-h-dvh bg-background">
       <motion.aside
         animate={{ width: collapsed ? 76 : 256 }}

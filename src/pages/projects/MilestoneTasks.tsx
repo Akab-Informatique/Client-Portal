@@ -4,13 +4,14 @@ import { useMutation } from "@tanstack/react-query";
 import { useDroppable, type DragEndEvent } from "@dnd-kit/core";
 import { SortableContext, arrayMove, useSortable, verticalListSortingStrategy } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
-import { ArrowDownUp, Check, ChevronDown, Folder, FolderInput, FolderOpen, FolderPlus, GripVertical, Lock, Pencil, Trash2, X } from "lucide-react";
+import { ArrowDownUp, Check, ChevronDown, Folder, FolderInput, FolderOpen, FolderPlus, GripVertical, Lock, Pencil, SlidersHorizontal, Trash2, X } from "lucide-react";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
+import { useConfirm } from "@/components/ConfirmDialog";
 import { api } from "@/lib/api";
 import { byCustom, useCustomOrder, useSortDefault } from "@/lib/sortPrefs";
 import { cn } from "@/lib/utils";
 import { shortDate } from "@/pages/tickets/shared";
-import { hoursText, PRIORITY_DOT, TASK_STYLE, type Milestone } from "./shared";
+import { hoursText, PRIORITY_DOT, TASK_STATUSES, TASK_STYLE, type Milestone, type TaskStatus } from "./shared";
 import { useTaskDnd } from "./taskDnd";
 
 const SORTS = ["checkpoint", "due", "status", "custom"] as const;
@@ -99,12 +100,15 @@ export function MilestoneTasks({ projectId, m, onTask, edit, onChanged, fail }: 
   });
   const rename = useMutation({ mutationFn: (v: { id: string; name: string }) => api.patch(`/projects/${projectId}/groups/${v.id}`, { name: v.name }), onSuccess: onChanged, onError: fail });
   const delGroup = useMutation({ mutationFn: (id: string) => api.del(`/projects/${projectId}/groups/${id}`), onSuccess: onChanged, onError: fail });
+  const setStatus = useMutation({ mutationFn: (v: { id: string; status: TaskStatus }) => api.patch(`/projects/${projectId}/tasks/${v.id}`, { status: v.status }), onSuccess: onChanged, onError: fail });
+  const confirm = useConfirm();
+  const delTask = useMutation({ mutationFn: (id: string) => api.del(`/projects/${projectId}/tasks/${id}`), onSuccess: onChanged, onError: fail });
   const moveTask = useMutation({ mutationFn: (v: { id: string; groupId: string | null }) => api.patch(`/projects/${projectId}/tasks/${v.id}`, { groupId: v.groupId }), onSuccess: onChanged, onError: fail });
   const rows = (list: Task[]) => (
     <SortableContext items={list.map((k) => k.id)} strategy={verticalListSortingStrategy}>
       <ul className="space-y-1">
         {list.map((k) => (
-          <TaskRow key={k.id} k={k} milestoneId={m.id} onTask={onTask} groups={edit ? groups : []} onGroup={(groupId) => moveTask.mutate({ id: k.id, groupId })} />
+          <TaskRow key={k.id} k={k} milestoneId={m.id} onTask={onTask} onStatus={edit ? (status) => setStatus.mutate({ id: k.id, status }) : undefined} groups={edit ? groups : []} onGroup={(groupId) => moveTask.mutate({ id: k.id, groupId })} onDelete={edit ? () => void confirm({ title: t("projects.removeTaskTitle", { name: k.title }), description: t("projects.removeTaskText") }).then((ok) => ok && delTask.mutate(k.id)) : undefined} />
         ))}
       </ul>
     </SortableContext>
@@ -235,7 +239,7 @@ function GroupBox({ g, milestoneId, count, done, open, edit, onToggle, onRename,
   );
 }
 
-function TaskRow({ k, milestoneId, onTask, groups, onGroup }: { k: Task; milestoneId: string; onTask: (id: string) => void; groups: Group[]; onGroup: (groupId: string | null) => void }) {
+function TaskRow({ k, milestoneId, onTask, onStatus, groups, onGroup, onDelete }: { k: Task; milestoneId: string; onTask: (id: string) => void; onStatus?: (s: TaskStatus) => void; groups: Group[]; onGroup: (groupId: string | null) => void; onDelete?: () => void }) {
   const { t } = useTranslation();
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id: k.id, data: { type: "task", milestoneId, groupId: k.groupId } });
   return (
@@ -244,18 +248,41 @@ function TaskRow({ k, milestoneId, onTask, groups, onGroup }: { k: Task; milesto
         <button type="button" aria-label={t("projects.sort.drag")} title={t("projects.sort.drag")} className="cursor-grab touch-none rounded p-1 text-muted-foreground hover:text-foreground active:cursor-grabbing" {...attributes} {...listeners}>
           <GripVertical className="size-4" />
         </button>
-        <button type="button" onClick={() => onTask(k.id)} className="flex min-w-0 flex-1 items-center gap-3 rounded-xl border bg-background/40 px-3 py-2 text-left text-sm transition-colors hover:border-[color:var(--gold)]/40">
+        <div className="flex min-w-0 flex-1 items-center gap-3 rounded-xl border bg-background/40 px-3 py-2 text-left text-sm transition-colors /40">
           <span className={cn("size-2 shrink-0 rounded-full", PRIORITY_DOT[k.priority])} title={t(`projects.priority.${k.priority}`)} />
           {k.waiting && <Lock className="size-3.5 shrink-0 text-fuchsia-300" aria-label={t("projects.waitsFor")} />}
           <span className={cn("min-w-0 flex-1 truncate", k.status === "done" && "text-muted-foreground line-through")}>{k.title}</span>
-          <span className={cn("shrink-0 rounded-full border px-2 py-0.5 text-[10px] font-medium", TASK_STYLE[k.status])}>{t(`projects.taskStatus.${k.status}`)}</span>
+          {onStatus ? (
+            <DropdownMenu>
+              <DropdownMenuTrigger className={cn("shrink-0 rounded-full border px-2 py-0.5 text-[10px] font-medium hover:brightness-125", TASK_STYLE[k.status])} title={t("projects.phase.statusAfter")}>
+                {t(`projects.taskStatus.${k.status}`)}
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end" className="min-w-36">
+                {TASK_STATUSES.map((s) => (
+                  <DropdownMenuItem key={s} disabled={s === k.status} onSelect={() => onStatus(s)}>
+                    <span className={cn("rounded-full border px-2 py-0.5 text-[10px]", TASK_STYLE[s])}>{t(`projects.taskStatus.${s}`)}</span>
+                  </DropdownMenuItem>
+                ))}
+              </DropdownMenuContent>
+            </DropdownMenu>
+          ) : (
+            <span className={cn("shrink-0 rounded-full border px-2 py-0.5 text-[10px] font-medium", TASK_STYLE[k.status])}>{t(`projects.taskStatus.${k.status}`)}</span>
+          )}
           <span className="hidden w-28 shrink-0 truncate text-xs text-muted-foreground sm:block">{k.assigneeName ?? t("projects.unassigned")}</span>
           <span className="hidden w-16 shrink-0 text-right font-mono text-[11px] text-muted-foreground sm:block">{k.hours ? hoursText(k.hours) : ""}</span>
           <span className="hidden w-24 shrink-0 text-right text-xs text-muted-foreground md:block" title={t("pipeline.checkpoint")}>
             {k.checkpointDate ? `${shortDate(k.checkpointDate)} ${k.checkpointTime ?? ""}` : ""}
           </span>
           <span className={cn("w-14 shrink-0 text-right text-xs", k.late ? "text-red-400" : "text-muted-foreground")}>{k.dueDate ? shortDate(k.dueDate) : ""}</span>
+        </div>
+        <button type="button" onClick={() => onTask(k.id)} aria-label={t("projects.phase.taskDetails")} title={t("projects.phase.taskDetails")} className="rounded p-1 text-muted-foreground/70 hover:text-foreground">
+          <SlidersHorizontal className="size-4" />
         </button>
+        {onDelete && (
+          <button type="button" onClick={onDelete} aria-label={t("projects.removeTask")} title={t("projects.removeTask")} className="rounded p-1 text-muted-foreground/70 hover:text-destructive">
+            <Trash2 className="size-4" />
+          </button>
+        )}
         {groups.length > 0 && (
           <DropdownMenu>
             <DropdownMenuTrigger className={cn("rounded p-1 hover:text-foreground", k.groupId ? "text-violet-300" : "text-muted-foreground/70")} title={t("projects.group.move")} aria-label={t("projects.group.move")}>

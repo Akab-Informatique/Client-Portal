@@ -59,6 +59,8 @@ export type TaskFull = TaskCard & {
   notes: string;
   checklistItems: { id: string; text: string; done: boolean; position: number; dueDate: string | null; dueTime: string | null; priority: TaskPriority; assigneeId: string | null; startDate: string | null; dependsOnId: string | null }[];
   comments: { id: string; author: string; text: string; createdAt: string }[];
+  /** Internal time put on the task, with the checklist items each covered */
+  timeEntries: { id: string; userId: string; by: string; date: string; hours: number; note: string; createdAt: string; itemIds: string[] }[];
   subtaskList: TaskCard[];
   fileList: { id: string; name: string; size: number; contentType: string; createdAt: string; by: string | null }[];
   viewerIds: string[];

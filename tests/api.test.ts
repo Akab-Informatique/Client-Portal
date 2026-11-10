@@ -6978,6 +6978,8 @@ describe("pipeline: shared to-dos and the day", () => {
     expect((await blocksOf()).plan.blocks.find((b: any) => b.refId === pt.id)).toMatchObject({ allocated: 60, need: 120, partial: true });
     await tech.put("/api/pipeline/day/alloc", { date: day, key: `ptask:${pt.id}`, minutes: null });
     // dragging a block puts the day in the order given: the dragged item goes last, then first; a replan by the AI lets it go
+    // (items added to the day start from now; the order given by hand is what is tested here, so the starts are let go)
+    await db().delete(schema.pipelineDayAlloc).where(eq(schema.pipelineDayAlloc.source, "start"));
     const order = (keys: string[]) => tech.put("/api/pipeline/day/order", { date: day, keys });
     const seq = async () => [...new Set((await blocksOf()).plan.blocks.filter((b: any) => b.refId && b.start).map((b: any) => `${b.kind}:${b.refId}`))] as string[];
     const base = await seq();
@@ -7067,6 +7069,64 @@ describe("pipeline: shared to-dos and the day", () => {
     ]);
     expect(await resetDayAdds()).toBe(1);
     expect(await resetDayAdds()).toBe(0);
+  });
+
+  it("a to-do task has a timer: start, pause, resume, stop makes the internal entry, or discard", async () => {
+    resetRateLimit("login:ip:unknown");
+    const tech = await signIn("tech@akab.local");
+    const t = (await tech.post("/api/pipeline/tasks", { title: "Minuteur à faire", checklist: [{ text: "Étape" }] })).json;
+    const item = (await tech.get(`/api/pipeline/tasks/${t.id}`)).json.checklistItems[0];
+    expect((await tech.get(`/api/pipeline/tasks/${t.id}/timer`)).json).toBeNull();
+    expect((await tech.post(`/api/pipeline/tasks/${t.id}/timer/pause`, {})).status).toBe(409);
+    const s = await tech.post(`/api/pipeline/tasks/${t.id}/timer/start`, {});
+    expect(s.status).toBe(200);
+    expect(s.json.paused).toBe(false);
+    // starting again keeps the same timer
+    expect((await tech.post(`/api/pipeline/tasks/${t.id}/timer/start`, {})).json.startedAt).toBe(s.json.startedAt);
+    expect((await tech.post(`/api/pipeline/tasks/${t.id}/timer/pause`, {})).json.paused).toBe(true);
+    expect((await tech.post(`/api/pipeline/tasks/${t.id}/timer/resume`, {})).json.paused).toBe(false);
+    // it is listed for the drawer
+    expect(((await tech.get("/api/pipeline/timers")).json as any[]).some((x) => x.taskId === t.id && x.title === "Minuteur à faire")).toBe(true);
+    // stopping makes the internal entry (never billable, no client) and the step it covered
+    const r = await tech.post(`/api/pipeline/tasks/${t.id}/timer/stop`, { date: "2031-03-12", hours: 0.75, note: "Fait", itemIds: [item.id] });
+    expect(r.status).toBe(200);
+    const [row] = await db().select().from(schema.timesheetEntries).where(eq(schema.timesheetEntries.id, r.json.id));
+    expect(row).toMatchObject({ source: "pipeline", clientId: null, billableX100: 0, hoursX100: 75 });
+    expect((await tech.get(`/api/pipeline/tasks/${t.id}`)).json.timeEntries[0].itemIds).toEqual([item.id]);
+    expect((await tech.get(`/api/pipeline/tasks/${t.id}/timer`)).json).toBeNull();
+    // discarded: no entry
+    await tech.post(`/api/pipeline/tasks/${t.id}/timer/start`, {});
+    expect((await tech.post(`/api/pipeline/tasks/${t.id}/timer/stop`, { discard: true })).json.discarded).toBe(true);
+    expect((await tech.get(`/api/pipeline/tasks/${t.id}`)).json.timeEntries).toHaveLength(1);
+  });
+
+  it("time on a to-do task: internal, not billable, tied to the steps it covered", async () => {
+    resetRateLimit("login:ip:unknown");
+    const tech = await signIn("tech@akab.local");
+    const t = (await tech.post("/api/pipeline/tasks", { title: "Ménage des serveurs", checklist: [{ text: "Sauvegardes" }, { text: "Mises à jour" }] })).json;
+    const [a, b] = (await tech.get(`/api/pipeline/tasks/${t.id}`)).json.checklistItems as any[];
+    // time covering one step and finishing it
+    const day = "2031-03-05"; // a week no other test has sent
+    const r = await tech.post(`/api/pipeline/tasks/${t.id}/time`, { date: day, hours: 1.5, note: "Fait", itemIds: [a.id], doneItemIds: [a.id] });
+    expect(r.status).toBe(201);
+    const full = (await tech.get(`/api/pipeline/tasks/${t.id}`)).json;
+    expect(full.timeEntries).toHaveLength(1);
+    expect(full.timeEntries[0]).toMatchObject({ hours: 1.5, itemIds: [a.id] });
+    expect(full.checklistItems.find((i: any) => i.id === a.id).done).toBe(true);
+    // the entry is the person's own, never billable, no client: it cannot count in a billable share
+    const [row] = await db().select().from(schema.timesheetEntries).where(eq(schema.timesheetEntries.id, r.json.id));
+    expect(row).toMatchObject({ source: "pipeline", clientId: null, billableX100: 0, hoursX100: 150 });
+    // a step ticked by hand is tied to an entry afterwards
+    await tech.patch(`/api/pipeline/tasks/${t.id}/checklist/${b.id}`, { done: true });
+    expect((await tech.post(`/api/pipeline/tasks/${t.id}/checklist/${b.id}/time`, { entryId: r.json.id })).status).toBe(200);
+    expect((await tech.get(`/api/pipeline/tasks/${t.id}`)).json.timeEntries[0].itemIds.sort()).toEqual([a.id, b.id].sort());
+    // an item of another task, or an entry that is not the task's, is refused
+    expect((await tech.post(`/api/pipeline/tasks/${t.id}/time`, { date: day, hours: 1, itemIds: ["00000000-0000-4000-8000-000000000000"] })).status).toBe(400);
+    expect((await tech.post(`/api/pipeline/tasks/${t.id}/checklist/${b.id}/time`, { entryId: "00000000-0000-4000-8000-000000000000" })).status).toBe(404);
+    expect((await tech.post(`/api/pipeline/tasks/${t.id}/time`, { date: day, hours: 0 })).status).toBe(400);
+    // taken off the timesheet like any entry
+    expect((await tech.del(`/api/time/entries/${r.json.id}`)).status).toBe(200);
+    expect((await tech.get(`/api/pipeline/tasks/${t.id}`)).json.timeEntries).toHaveLength(0);
   });
 
   it("a daily task starts again every day: reopened, checklist unchecked, notes kept", async () => {
@@ -7228,6 +7288,28 @@ describe("pipeline: shared to-dos and the day", () => {
     expect(await flag()).toBe(true);
   });
 
+  it("projects list: next milestone due, flash for a milestone due today, another technician's projects need the right", async () => {
+    resetRateLimit("login:ip:unknown");
+    const tech = await signIn("tech@akab.local");
+    const admin = await signIn("admin@akab.local");
+    const me = (await tech.get("/api/me")).json.id as string;
+    const proj = (await tech.post("/api/projects", { name: "Jalon du jour", milestones: [{ name: "Plus tard", dueDate: "2031-05-01" }, { name: "Aujourd'hui", dueDate: qcToday() }] })).json;
+    const row = async () => ((await tech.get("/api/projects?view=all&status=all")).json as any[]).find((x) => x.id === proj.id);
+    const r = await row();
+    expect(r.nextMilestoneDue).toBe(qcToday());
+    expect(r.todayFlag).toBe(true);
+    expect(r.lateFlag).toBe(false);
+    const old = (await tech.post("/api/projects", { name: "Jalon en retard", milestones: [{ name: "Vieux", dueDate: "2020-01-01" }] })).json;
+    expect(((await tech.get("/api/projects?view=all&status=all")).json as any[]).find((x) => x.id === old.id).lateFlag).toBe(true);
+    // someone else's projects: refused without the right, allowed for an administrator
+    const adminId = (await admin.get("/api/me")).json.id as string;
+    expect((await tech.get(`/api/projects?status=open&member=${adminId}`)).status).toBe(403);
+    expect((await tech.get(`/api/projects?status=open&member=${me}`)).status).toBe(200);
+    const mine = await admin.get(`/api/projects?status=open&member=${me}`);
+    expect(mine.status).toBe(200);
+    expect((mine.json as any[]).some((x) => x.id === proj.id)).toBe(true);
+  });
+
   it("a quote is sold fixed, as a bank of hours or hourly: the deposit and the project follow", async () => {
     resetRateLimit("login:ip:unknown");
     const admin = await signIn("admin@akab.local");
@@ -7275,6 +7357,79 @@ describe("pipeline: shared to-dos and the day", () => {
     const e = (await admin.post(`/api/projects/${bp.projectId}/time`, { date: qcToday(), hours: 4, taskId: task.id })).json;
     expect(e.billable).toBe(false);
     expect((await admin.get(`/api/projects/${bp.projectId}`)).json.sold).toMatchObject({ workedHours: 4, diffHours: 6 });
+    // time logged on a project task can be deleted like any manual entry (it used to answer not found), and the bank is given back
+    expect((await admin.del(`/api/time/entries/${e.id}`)).status).toBe(200);
+    expect((await admin.get(`/api/projects/${bp.projectId}`)).json.sold).toMatchObject({ workedHours: 0, diffHours: 10 });
+  });
+
+  it("a phase works like a ticket: its timer, its replies and notes, and time that covers several tasks", async () => {
+    resetRateLimit("login:ip:unknown");
+    const tech = await signIn("tech@akab.local");
+    const admin = await signIn("admin@akab.local");
+    const boss = (await admin.get("/api/me")).json.id as string;
+    // (a Monday far ahead: this week of the technician is still open whatever the other tests sent)
+    const DAY = "2031-06-02";
+    const proj = (await tech.post("/api/projects", { name: "Phase comme un billet", milestones: [{ name: "Phase A" }] })).json;
+    const ms = proj.milestones[0].id as string;
+    const t1 = (await tech.post(`/api/projects/${proj.id}/milestones/${ms}/tasks`, { title: "Tâche 1" })).json;
+    const t2 = (await tech.post(`/api/projects/${proj.id}/milestones/${ms}/tasks`, { title: "Tâche 2" })).json;
+    const base = `/api/projects/${proj.id}/milestones/${ms}`;
+    // the timer starts when the phase is opened, and is listed (for the dock) like a task's
+    expect((await tech.post(`${base}/timer/start`, {})).status).toBe(200);
+    expect((await tech.get(`${base}/activity`)).json.timer).not.toBeNull();
+    expect(((await tech.get("/api/projects/timers")).json as any[]).some((x) => x.kind === "phase" && x.taskId === ms)).toBe(true);
+    // the timer can be paused (it counts nothing meanwhile, the dock list says so) and resumed
+    expect((await tech.post(`${base}/timer/pause`, {})).json).toMatchObject({ paused: true });
+    const frozen = (await tech.get(`${base}/activity`)).json.timer;
+    expect(frozen.paused).toBe(true);
+    await new Promise((r) => setTimeout(r, 1100));
+    expect((await tech.get(`${base}/activity`)).json.timer.seconds).toBe(frozen.seconds);
+    expect(((await tech.get("/api/projects/timers")).json as any[]).find((x) => x.taskId === ms).paused).toBe(true);
+    expect((await tech.post(`${base}/timer/resume`, {})).json).toMatchObject({ paused: false });
+    // time must say what it covered
+    expect((await tech.post(`${base}/time`, { date: DAY, hours: 1, tasks: [] })).json.error).toBe("task_required");
+    expect((await tech.post(`${base}/time`, { date: DAY, hours: 1, tasks: [{ taskId: "00000000-0000-4000-8000-000000000000", status: "doing" }] })).json.error).toBe("task_invalid");
+    // ONE entry covering two tasks: one stays open (partial), the other is done; the phase follows its tasks
+    const e = await tech.post(`${base}/time`, { date: DAY, hours: 1.5, note: "ligne 1\nligne 2", tasks: [{ taskId: t1.id, status: "doing" }, { taskId: t2.id, status: "done" }] });
+    expect(e.status).toBe(201);
+    const act = (await tech.get(`${base}/activity`)).json;
+    expect(act.time).toHaveLength(1);
+    expect(act.time[0]).toMatchObject({ hours: 1.5, note: "ligne 1\nligne 2" });
+    expect(act.time[0].tasks.map((x: any) => [x.title, x.status]).sort()).toEqual([["Tâche 1", "doing"], ["Tâche 2", "done"]]);
+    const detail = (await tech.get(`/api/projects/${proj.id}`)).json;
+    const tasks = detail.milestones[0].tasks;
+    expect(tasks.find((x: any) => x.id === t1.id).status).toBe("doing");
+    expect(tasks.find((x: any) => x.id === t2.id).status).toBe("done");
+    expect(detail.milestones[0].status).toBe("doing");
+    // general work needs no task
+    expect((await tech.post(`${base}/time`, { date: DAY, hours: 0.25, general: true })).status).toBe(201);
+    // replies and notes: a reply can stay in the portal (no email); an email needs a client and an address
+    const silent = await tech.post(`${base}/notes`, { text: "Gardé dans le portail", kind: "reply", email: false });
+    expect(silent.status).toBe(201);
+    expect(silent.json).toMatchObject({ kind: "reply", emailed: null });
+    expect((await tech.post(`${base}/notes`, { text: "x", kind: "reply", email: true, to: [] })).json.error).toBe("reply_needs_recipient");
+    expect((await tech.post(`${base}/notes`, { text: "x", kind: "reply", email: true, to: ["a@b.co"] })).json.error).toBe("project_no_client");
+    // an internal note tells the colleagues picked (the bell)
+    const note = await tech.post(`${base}/notes`, { text: "Regardez ceci", kind: "internal", notifyUserIds: [boss], notifyChannels: { bell: true, email: false, chat: false } });
+    expect(note.status).toBe(201);
+    expect(note.json.notified).toBe(1);
+    expect(((await admin.get("/api/notifications")).json.items as any[]).some((n) => n.type === "project.note" && n.data.number === proj.number)).toBe(true);
+    const feed = (await tech.get(`${base}/activity`)).json.notes;
+    expect(feed.map((n: any) => n.text)).toEqual(expect.arrayContaining(["Gardé dans le portail", "Regardez ceci"]));
+    expect((await tech.del(`${base}/notes/${note.json.id}`)).status).toBe(200);
+    // stopping the timer makes the entry with the tasks it covered; discarding makes nothing
+    const stopped = await tech.post(`${base}/timer/stop`, { date: DAY, hours: 0.5, tasks: [{ taskId: t1.id, status: "doing" }] });
+    expect(stopped.status).toBe(200);
+    expect((await tech.get(`${base}/activity`)).json.timer).toBeNull();
+    expect((await tech.post(`${base}/timer/stop`, { discard: true })).json.error).toBe("timer_not_running");
+    await tech.post(`${base}/timer/start`, {});
+    expect((await tech.post(`${base}/timer/stop`, { discard: true })).json.discarded).toBe(true);
+    // finishing the last open task finishes the phase: no timer starts on it, and an entry can be deleted like any other
+    expect((await tech.post(`${base}/time`, { date: DAY, hours: 0.25, tasks: [{ taskId: t1.id, status: "done" }] })).status).toBe(201);
+    expect((await tech.get(`/api/projects/${proj.id}`)).json.milestones[0].status).toBe("done");
+    expect((await tech.post(`${base}/timer/start`, {})).json.error).toBe("milestone_done");
+    expect((await tech.del(`/api/time/entries/${act.time[0].id}`)).status).toBe(200);
+    expect((await tech.get(`${base}/activity`)).json.time.some((x: any) => x.id === act.time[0].id)).toBe(false);
   });
 
   it("tasks: assign, checklist, subtasks and waiting-for rules, notes", async () => {
@@ -11335,6 +11490,11 @@ describe("a charge not approved yet goes to another ticket or a project; an admi
       const [after] = await db().select().from(schema.timesheetEntries).where(eq(schema.timesheetEntries.id, given.json.id));
       expect(after.userId).toBe(adminUser.id);
       expect((await admin.get(`/api/projects/${project.id}`)).json.time.entries.find((e: any) => e.id === given.json.id).userId).toBe(adminUser.id);
+      // the day, the hours and the note of an entry can be changed (billable stays); a bad value is refused
+      expect((await admin.patch(`/api/projects/${project.id}/time/${given.json.id}`, { hours: 0 })).status).toBe(400);
+      expect((await admin.patch(`/api/projects/${project.id}/time/${given.json.id}`, { date: "2026-11-03", hours: 2.25, note: "corrigé" })).status).toBe(200);
+      const [edited] = await db().select().from(schema.timesheetEntries).where(eq(schema.timesheetEntries.id, given.json.id));
+      expect([edited.date, edited.hoursX100, edited.note, edited.billableX100]).toEqual(["2026-11-03", 225, "corrigé", 225]);
     } finally {
       await db().delete(schema.integrations).where(eq(schema.integrations.provider, "tickets"));
       (await import("../server/lib/localTickets.ts")).resetTicketMode();

@@ -1,8 +1,11 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent } from "react";
+import { useSearchParams } from "react-router-dom";
 import { useTranslation } from "react-i18next";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
-import { ArrowDown, ArrowUp, GripVertical, BellRing, Check, Globe, Lock, ChevronDown, Clock, FileText, Flag, FolderOpen, Info, ArrowRightLeft, ListChecks, Loader2, Mail, MessageSquare, MessagesSquare, Plus, Star, Trash2, X } from "lucide-react";
+import { AiTextarea } from "@/components/AiPolish";
+import { PhasePanel } from "./PhasePanel";
+import { ArrowDown, ArrowUp, GripVertical, BellRing, Check, Globe, Lock, ChevronDown, Clock, FileText, Flag, FolderOpen, Info, ArrowRightLeft, ListChecks, Loader2, Mail, MessageSquare, MessagesSquare, Minus, Pencil, Plus, Star, Trash2, X } from "lucide-react";
 import { useConfirm } from "@/components/ConfirmDialog";
 import { MoveChargeDialog } from "@/components/MoveChargeDialog";
 import { Button } from "@/components/ui/button";
@@ -43,6 +46,7 @@ type TabKey = (typeof TABS)[number]["key"];
 export function ProjectDialog({ id, onClose, tab, milestone, onTab }: { id: string; onClose: () => void; tab: string | null; milestone: string | null; onTab: (tab: string) => void }) {
   const ws = useProjectWorkspace();
   const onTask = (taskId: string | null) => taskId && ws.openTask(id, taskId);
+  const [, setSearch] = useSearchParams();
   const { t } = useTranslation();
   const can = useCan();
   const qc = useQueryClient();
@@ -62,10 +66,37 @@ export function ProjectDialog({ id, onClose, tab, milestone, onTab }: { id: stri
     onError: fail,
   });
   const edit = can("projects.edit");
+  // a phase timer running in this project: closing the folder asks what to do with the time; minimizing keeps everything running
+  const { data: runs = [] } = useQuery({ queryKey: [...KEY, "timers"], queryFn: () => api.get<{ taskId: string; startedAt: string; title: string; projectId: string; kind?: "phase" }[]>("/projects/timers"), refetchInterval: 30_000 });
+  const running = runs.filter((x) => x.kind === "phase" && x.projectId === id);
+  const [closing, setClosing] = useState(false);
+  const requestClose = () => (running.length ? setClosing(true) : onClose());
+  const minimize = () => {
+    if (p) ws.minimizeProject({ projectId: id, number: p.number, name: p.name });
+    onClose();
+  };
+  // "enter the time" opens that phase with its time window
+  const enterTime = (milestoneId: string) => {
+    setClosing(false);
+    setSearch((q) => {
+      q.set("tab", "milestones");
+      q.set("milestone", milestoneId);
+      q.set("time", milestoneId);
+      return q;
+    }, { replace: true });
+  };
+  const discardAll = useMutation({
+    mutationFn: () => Promise.all(running.map((x) => api.post(`/projects/${id}/milestones/${x.taskId}/timer/stop`, { discard: true }))),
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: [...KEY, "timers"] });
+      onClose();
+    },
+    onError: fail,
+  });
   const counts: Record<TabKey, number | null> = { overview: null, milestones: p?.milestones.length ?? null, time: p?.time.entries.length ?? null, notes: p?.notes.length ?? null };
 
   return (
-    <Dialog open onOpenChange={(o) => !o && onClose()}>
+    <Dialog open onOpenChange={(o) => !o && requestClose()}>
       <DialogContent showCloseButton={false} className="flex h-[min(96dvh,64rem)] flex-col gap-0 overflow-hidden p-0 sm:max-w-[min(97vw,92rem)]">
         {/* the folder's header */}
         <header className="flex items-start gap-3 border-b bg-gradient-to-b from-[color:var(--gold)]/[0.07] to-transparent px-5 pb-0 pt-4">
@@ -97,10 +128,42 @@ export function ProjectDialog({ id, onClose, tab, milestone, onTab }: { id: stri
               <Star className={cn("size-5", p.following && "fill-current")} />
             </button>
           )}
-          <button type="button" onClick={onClose} aria-label={t("common.close")} className="rounded-md p-2 text-muted-foreground hover:bg-foreground/[0.06] hover:text-foreground">
+          <button type="button" onClick={minimize} aria-label={t("projects.minimize")} title={t("projects.minimize")} className="rounded-md p-2 text-muted-foreground hover:bg-foreground/[0.06] hover:text-foreground">
+            <Minus className="size-5" />
+          </button>
+          <button type="button" onClick={requestClose} aria-label={t("common.close")} className="rounded-md p-2 text-muted-foreground hover:bg-foreground/[0.06] hover:text-foreground">
             <X className="size-5" />
           </button>
         </header>
+        {closing && (
+          <Dialog open onOpenChange={(o) => !o && setClosing(false)}>
+            <DialogContent className="sm:max-w-md">
+              <DialogTitle className="flex items-center gap-2">
+                <Clock className="size-5 text-emerald-300" /> {t("projects.phase.projectCloseTitle")}
+              </DialogTitle>
+              <DialogDescription>{t("projects.phase.closeText")}</DialogDescription>
+              <ul className="space-y-1.5">
+                {running.map((x) => (
+                  <li key={x.taskId} className="flex items-center gap-2 rounded-lg border px-3 py-2 text-sm">
+                    <Flag className="size-4 shrink-0 text-violet-300" />
+                    <span className="min-w-0 flex-1 truncate">{x.title}</span>
+                    <Button size="sm" className="h-8 bg-sky-500 text-white hover:bg-sky-400" onClick={() => enterTime(x.taskId)}>
+                      {t("projects.phase.enterNow")}
+                    </Button>
+                  </li>
+                ))}
+              </ul>
+              <div className="grid gap-2">
+                <Button variant="outline" className="justify-start gap-2" onClick={() => (setClosing(false), onClose())}>
+                  <Minus className="size-4" /> {t("projects.phase.later")}
+                </Button>
+                <Button variant="ghost" className="justify-start gap-2 text-muted-foreground hover:text-destructive" disabled={discardAll.isPending} onClick={() => discardAll.mutate()}>
+                  <Trash2 className="size-4" /> {t("projects.phase.closeNoTime")}
+                </Button>
+              </div>
+            </DialogContent>
+          </Dialog>
+        )}
         {/* the folder's tabs */}
         <div className="flex flex-wrap items-end gap-1 border-b px-4 pt-2" role="tablist">
           {TABS.map((x) => {
@@ -347,6 +410,8 @@ function MilestoneRow({ p, m, edit, isOpen, onToggle, onChanged, fail, onUp, onD
                 </form>
               )}
             </div>
+            {/* the phase works like a ticket: its timer, its activity and the box to answer or enter time */}
+            <PhasePanel p={p} m={m} edit={edit} onChanged={onChanged} fail={fail} onCollapse={onToggle} />
             {/* a milestone with no task is reached by hand; with tasks it is reached when they are done */}
             {edit && m.tasksTotal === 0 && (
               <Button variant="outline" size="sm" onClick={() => patch.mutate({ status: m.status === "done" ? "todo" : "done" })}>
@@ -378,6 +443,91 @@ function MilestoneRow({ p, m, edit, isOpen, onToggle, onChanged, fail, onUp, onD
 }
 
 // ── Time ──
+/** Change an entry of time: day, hours, phase / task and note (billable / included is the chip on the row) */
+function EditTimeDialog({ p, entry, tasks, onClose, onChanged, fail }: { p: ProjectDetail; entry: ProjectDetail["time"]["entries"][number]; tasks: { id: string; title: string; milestone: string }[]; onClose: () => void; onChanged: () => void; fail: (e: unknown) => void }) {
+  const { t } = useTranslation();
+  const [f, setF] = useState({ date: entry.date, duration: hm(entry.hours), milestoneId: entry.milestoneId ?? "", taskId: entry.taskId ?? "", note: entry.note ?? "" });
+  const hours = parseHm(f.duration);
+  const save = useMutation({
+    mutationFn: () => api.patch(`/projects/${p.id}/time/${entry.id}`, { date: f.date, hours, ...(f.taskId ? { taskId: f.taskId } : { taskId: null, milestoneId: f.milestoneId || null }), note: f.note.trim() || null }),
+    onSuccess: () => {
+      onChanged();
+      onClose();
+    },
+    onError: fail,
+  });
+  return (
+    <Dialog open onOpenChange={(o) => !o && onClose()}>
+      <DialogContent className="max-w-lg">
+        <DialogTitle>{t("projects.editTime")}</DialogTitle>
+        <DialogDescription className="sr-only">{t("projects.editTime")}</DialogDescription>
+        <form
+          className="space-y-3"
+          onSubmit={(e: FormEvent) => {
+            e.preventDefault();
+            if (hours && hours > 0) save.mutate();
+          }}
+        >
+          <div className="grid grid-cols-2 gap-3">
+            <div className="space-y-1.5">
+              <Label className="text-xs">{t("projects.date")}</Label>
+              <Input type="date" value={f.date} onChange={(e) => setF((s) => ({ ...s, date: e.target.value }))} required />
+            </div>
+            <div className="space-y-1.5">
+              <Label className="text-xs">{t("projects.duration")}</Label>
+              <Input value={f.duration} onChange={(e) => setF((s) => ({ ...s, duration: e.target.value }))} placeholder="1:30" aria-invalid={hours == null} />
+            </div>
+          </div>
+          <div className="space-y-1.5">
+            <Label className="text-xs">{t("projects.f.milestone")}</Label>
+            <Select value={f.milestoneId || "none"} onValueChange={(v) => setF((s) => ({ ...s, milestoneId: v === "none" ? "" : v, taskId: "" }))}>
+              <SelectTrigger>
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="none">{t("projects.noMilestone")}</SelectItem>
+                {p.milestones.map((m) => (
+                  <SelectItem key={m.id} value={m.id}>
+                    {m.name}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+          <div className="space-y-1.5">
+            <Label className="text-xs">{t("projects.task")}</Label>
+            <Select value={f.taskId || "none"} onValueChange={(v) => setF((s) => ({ ...s, taskId: v === "none" ? "" : v }))}>
+              <SelectTrigger>
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="none">{t("projects.noTask")}</SelectItem>
+                {tasks.map((k) => (
+                  <SelectItem key={k.id} value={k.id}>
+                    {k.milestone} · {k.title}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+          <div className="space-y-1.5">
+            <Label className="text-xs">{t("projects.note")}</Label>
+            <AiTextarea rows={4} value={f.note} onChange={(e) => setF((s) => ({ ...s, note: e.target.value }))} maxLength={2000} />
+          </div>
+          <div className="flex justify-end gap-2">
+            <Button type="button" variant="ghost" onClick={onClose}>
+              {t("common.cancel")}
+            </Button>
+            <Button type="submit" disabled={!hours || hours <= 0 || save.isPending} className="bg-grad-gold font-semibold text-[#1a1204] hover:brightness-105">
+              {save.isPending && <Loader2 className="size-4 animate-spin" />} {t("common.save")}
+            </Button>
+          </div>
+        </form>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
 function TimeTab({ p, edit, onChanged, fail }: { p: ProjectDetail; edit: boolean; onChanged: () => void; fail: (e: unknown) => void }) {
   const { t } = useTranslation();
   const me = useMe();
@@ -392,6 +542,7 @@ function TimeTab({ p, edit, onChanged, fail }: { p: ProjectDetail; edit: boolean
   const manager = can("projects.manage");
   const { data: people = [] } = useProjectPeople();
   const [moving, setMoving] = useState<{ id: string; name: string } | null>(null);
+  const [editing, setEditing] = useState<ProjectDetail["time"]["entries"][number] | null>(null);
   const { data: charges = [], refetch: refetchCharges } = useQuery({ queryKey: [...KEY, "charges", p.id], queryFn: () => api.get<{ id: string; name: string; quantity: number; unitPrice: number | null; rebate: number; billable: boolean; date: string | null; billing: string | null; movable: boolean }[]>(`/projects/${p.id}/charges`) });
   const reassign = useMutation({
     mutationFn: (v: { id: string; userId: string }) => api.patch(`/projects/${p.id}/time/${v.id}`, { userId: v.userId }),
@@ -515,7 +666,7 @@ function TimeTab({ p, edit, onChanged, fail }: { p: ProjectDetail; edit: boolean
             </div>
             <div className="space-y-1.5">
               <Label className="text-xs">{t("projects.note")}</Label>
-              <Input value={f.note} onChange={(e) => setF((s) => ({ ...s, note: e.target.value }))} maxLength={500} />
+              <AiTextarea rows={4} value={f.note} onChange={(e) => setF((s) => ({ ...s, note: e.target.value }))} maxLength={2000} className="min-h-24" />
             </div>
             <div className="flex items-end gap-3">
               {manager && (
@@ -587,7 +738,12 @@ function TimeTab({ p, edit, onChanged, fail }: { p: ProjectDetail; edit: boolean
                 >
                   {e.billableHours > 0 ? t("projects.billable") : t("projects.included")}
                 </button>
-                <span className="w-7">
+                <span className="flex w-14 items-center">
+                  {!e.ticket && (e.userId === me.id || can("projects.manage")) && (
+                    <button type="button" aria-label={t("projects.editTime")} title={t("projects.editTime")} onClick={() => setEditing(e)} className="rounded p-1 text-muted-foreground hover:text-primary">
+                      <Pencil className="size-3.5" />
+                    </button>
+                  )}
                   {!e.ticket && (e.userId === me.id || can("projects.manage")) && (
                     <button type="button" aria-label={t("common.delete")} onClick={() => del.mutate(e.id)} className="rounded p-1 text-muted-foreground hover:text-destructive">
                       <Trash2 className="size-3.5" />
@@ -599,6 +755,8 @@ function TimeTab({ p, edit, onChanged, fail }: { p: ProjectDetail; edit: boolean
           </ul>
         )}
       </Card>
+
+      {editing && <EditTimeDialog p={p} entry={editing} tasks={tasks} onClose={() => setEditing(null)} onChanged={() => { onChanged(); void qc.invalidateQueries({ queryKey: ["time"] }); }} fail={fail} />}
 
       {charges.length > 0 && (
         <Card title={t("chargeMove.projectCharges")}>

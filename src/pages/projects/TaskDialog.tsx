@@ -11,6 +11,7 @@ import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Switch } from "@/components/ui/switch";
 import { Textarea } from "@/components/ui/textarea";
+import { AiTextarea } from "@/components/AiPolish";
 import { api, ApiError } from "@/lib/api";
 import { useCan, useMe } from "@/lib/session";
 import { cn } from "@/lib/utils";
@@ -84,7 +85,8 @@ export function TaskDialog({ projectId, taskId, onClose, onMinimize }: { project
   });
   const closed = tk ? tk.project.status === "done" || tk.project.status === "cancelled" : false;
   // like a ticket: opening the task starts its timer (once), closing it with the timer going asks for the time
-  const canTime = Boolean(tk) && edit && can("timesheets.use") && !closed;
+  // time is entered on the PHASE now: opening a task starts no timer and has no time entry (only a timer still running from before can be stopped)
+  const canTime = false;
   const [askStop, setAskStop] = useState(0);
   const [addingDay, setAddingDay] = useState(false);
   const autoStarted = useRef(false);
@@ -188,7 +190,7 @@ export function TaskDialog({ projectId, taskId, onClose, onMinimize }: { project
                 <Panel title={t("projects.taskDescription")}>
                   <Saved multiline rows={5} value={tk.description} onSave={(v) => patch.mutate({ description: v })} placeholder={t("projects.taskDescriptionPlaceholder")} maxLength={8000} className={cn("min-h-28", !edit && "pointer-events-none")} />
                 </Panel>
-                <Composer tk={tk} projectId={projectId} edit={edit} canTime={edit && can("timesheets.use") && !closed} hourly={Boolean(hourly)} onChanged={refresh} fail={fail} />
+                <Composer tk={tk} projectId={projectId} edit={edit} canTime={false} hourly={Boolean(hourly)} onChanged={refresh} fail={fail} />
                 <Activity tk={tk} projectId={projectId} onChanged={refresh} fail={fail} />
               </div>
 
@@ -302,7 +304,7 @@ export function TaskDialog({ projectId, taskId, onClose, onMinimize }: { project
                   </div>
                 </Panel>
 
-                <TimerPanel tk={tk} projectId={projectId} canLog={edit && can("timesheets.use") && !closed} hourly={Boolean(hourly)} onChanged={refresh} fail={fail} askStop={askStop} onStopped={askStop > 0 ? onClose : undefined} />
+                {tk.timer && <TimerPanel tk={tk} projectId={projectId} canLog={edit && can("timesheets.use") && !closed} hourly={Boolean(hourly)} onChanged={refresh} fail={fail} askStop={askStop} onStopped={askStop > 0 ? onClose : undefined} />}
 
                 {edit && (
                   <Button variant="ghost" size="sm" className="text-muted-foreground hover:text-destructive" onClick={() => void confirm({ title: t("projects.removeTaskTitle", { name: tk.title }), description: t("projects.removeTaskText") }).then((ok) => ok && remove.mutate())}>
@@ -428,7 +430,7 @@ function Composer({ tk, projectId, edit, canTime, hourly, onChanged, fail }: { t
               </div>
               <div className="space-y-1.5">
                 <Label className="text-xs">{t("projects.note")}</Label>
-                <Input value={f.note} onChange={(e) => setF((s) => ({ ...s, note: e.target.value }))} maxLength={500} />
+                <AiTextarea rows={4} value={f.note} onChange={(e) => setF((s) => ({ ...s, note: e.target.value }))} maxLength={2000} className="min-h-24" />
               </div>
             </div>
             <div className="flex items-center justify-between gap-3">
@@ -615,7 +617,7 @@ function TimerPanel({ tk, projectId, canLog, hourly, onChanged, fail, askStop, o
                   </div>
                   <div className="space-y-1">
                     <Label className="text-xs">{t("projects.note")}</Label>
-                    <Input value={stopping.note} maxLength={500} onChange={(e) => setStopping({ ...stopping, note: e.target.value })} />
+                    <AiTextarea rows={4} value={stopping.note} onChange={(e) => setStopping({ ...stopping, note: e.target.value })} maxLength={2000} className="min-h-24" />
                   </div>
                 </div>
                 <label className="flex items-center gap-2 text-xs text-muted-foreground">

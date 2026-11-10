@@ -193,6 +193,9 @@ async function cards(rows: Project[], me: string, withTasks = false) {
       progress: { done: ms.filter((m) => m.status === "done").length, total: ms.length },
       attention,
       nextMilestone: milestoneViews.find((m) => m.status !== "done") ?? null,
+      // the earliest day an unfinished milestone is due
+      nextMilestoneDue: ms.filter((m) => m.status !== "done" && m.dueDate).map((m) => m.dueDate as string).sort()[0] ?? null,
+      milestoneToday: open && ms.some((m) => m.status !== "done" && m.dueDate === today),
       milestones: milestoneViews,
       createdAt: p.createdAt,
       updatedAt: p.updatedAt,
@@ -279,6 +282,12 @@ export const projectsRoutes = new Hono<AppEnv>()
   /** My running timers (they stay in the dock of the minimized tasks) */
   .get("/timers", requirePermission("projects.view"), async (c) => {
     const a = auth(c);
+    const phases = await db()
+      .select({ milestoneId: schema.projectMilestoneTimers.milestoneId, startedAt: schema.projectMilestoneTimers.startedAt, baseSeconds: schema.projectMilestoneTimers.baseSeconds, pausedAt: schema.projectMilestoneTimers.pausedAt, title: schema.projectMilestones.name, projectId: schema.projects.id, number: schema.projects.number, project: schema.projects.name })
+      .from(schema.projectMilestoneTimers)
+      .innerJoin(schema.projectMilestones, eq(schema.projectMilestones.id, schema.projectMilestoneTimers.milestoneId))
+      .innerJoin(schema.projects, eq(schema.projects.id, schema.projectMilestones.projectId))
+      .where(eq(schema.projectMilestoneTimers.userId, a.user.id));
     const rows = await db()
       .select({ taskId: schema.projectTaskTimers.taskId, startedAt: schema.projectTaskTimers.startedAt, title: schema.projectTasks.title, projectId: schema.projects.id, number: schema.projects.number, project: schema.projects.name, milestone: schema.projectMilestones.name })
       .from(schema.projectTaskTimers)
@@ -287,7 +296,8 @@ export const projectsRoutes = new Hono<AppEnv>()
       .innerJoin(schema.projectMilestones, eq(schema.projectMilestones.id, schema.projectTasks.milestoneId))
       .where(eq(schema.projectTaskTimers.userId, a.user.id))
       .orderBy(asc(schema.projectTaskTimers.startedAt));
-    return c.json(rows);
+    // a phase's timer is listed like a task's (kind "phase", its id in taskId), so the dock shows it while the phase is minimized
+    return c.json([...rows, ...phases.map((x) => ({ taskId: x.milestoneId, startedAt: x.startedAt, baseSeconds: x.baseSeconds, paused: x.pausedAt !== null, title: x.title, projectId: x.projectId, number: x.number, project: x.project, milestone: "", kind: "phase" as const, milestoneId: x.milestoneId }))]);
   })
 
   /** What a new project starts with: the usual hourly rate of Admin › Facturation (dollars) */
@@ -355,8 +365,9 @@ export const projectsRoutes = new Hono<AppEnv>()
         lead: zUuid.optional().catch(undefined),
         client: zUuid.optional().catch(undefined),
         state: zStatus.optional().catch(undefined),
+        member: zUuid.optional().catch(undefined),
       })
-      .parse({ view: c.req.query("view"), status: c.req.query("status"), q: c.req.query("q") || undefined, lead: c.req.query("lead") || undefined, client: c.req.query("client") || undefined, state: c.req.query("state") || undefined });
+      .parse({ member: c.req.query("member") || undefined, view: c.req.query("view"), status: c.req.query("status"), q: c.req.query("q") || undefined, lead: c.req.query("lead") || undefined, client: c.req.query("client") || undefined, state: c.req.query("state") || undefined });
     const p = schema.projects;
     const rows = await db()
       .select()
@@ -391,10 +402,32 @@ export const projectsRoutes = new Hono<AppEnv>()
           .where(and(inArray(schema.projectTasks.projectId, rows.map((r) => r.id)), eq(schema.projectTasks.assigneeId, a.user.id), ne(schema.projectTasks.status, "done"), or(eq(schema.projectTasks.checkpointDate, today), eq(schema.projectTasks.dueDate, today))))
       : [];
     const todayMine = new Set(dueToday.map((r) => r.projectId));
+    // looking at another technician's projects, the flash is for that person's tasks
+    const who = q.member ?? a.user.id;
+    const dueWho =
+      who === a.user.id || !rows.length
+        ? dueToday
+        : await db()
+            .selectDistinct({ projectId: schema.projectTasks.projectId })
+            .from(schema.projectTasks)
+            .where(and(inArray(schema.projectTasks.projectId, rows.map((r) => r.id)), eq(schema.projectTasks.assigneeId, who), ne(schema.projectTasks.status, "done"), or(eq(schema.projectTasks.checkpointDate, today), eq(schema.projectTasks.dueDate, today))));
+    const todayWho = new Set(dueWho.map((r) => r.projectId));
+    // past due: the project, an unfinished milestone, or an open task of that person
+    const lateRows = rows.length
+      ? await db()
+          .selectDistinct({ projectId: schema.projectTasks.projectId })
+          .from(schema.projectTasks)
+          .where(and(inArray(schema.projectTasks.projectId, rows.map((r) => r.id)), eq(schema.projectTasks.assigneeId, who), ne(schema.projectTasks.status, "done"), sql`${schema.projectTasks.dueDate} < ${today}`))
+      : [];
+    const lateWho = new Set(lateRows.map((r) => r.projectId));
     list = list
-      .map((x) => ({ ...x, nextCheckpoint: nextAt.get(x.id) ?? null, todayMine: todayMine.has(x.id) }))
+      .map((x) => ({ ...x, nextCheckpoint: nextAt.get(x.id) ?? null, todayMine: todayMine.has(x.id), todayFlag: todayWho.has(x.id) || x.milestoneToday, lateFlag: x.attention.includes("late") || x.attention.includes("milestone_late") || lateWho.has(x.id) }))
       .sort((x, y) => (x.nextCheckpoint ?? "9999-99-99").localeCompare(y.nextCheckpoint ?? "9999-99-99") || (x.dueDate ?? "9999-99-99").localeCompare(y.dueDate ?? "9999-99-99"));
-    if (q.view === "mine") list = list.filter((x) => x.mine);
+    if (q.member) {
+      // another technician's projects (lead or team member): needs the right to manage projects
+      if (q.member !== a.user.id && !a.permissions.includes("projects.manage")) throw new HTTPException(403, { message: "forbidden" });
+      list = list.filter((x) => x.members.some((m) => m.id === q.member));
+    } else if (q.view === "mine") list = list.filter((x) => x.mine);
     else if (q.view === "attention") list = list.filter((x) => x.attention.length);
     else if (q.view === "watch") list = list.filter((x) => x.following);
     return c.json(list);
@@ -512,7 +545,7 @@ export const projectsRoutes = new Hono<AppEnv>()
       notes: notes.map((n) => ({ id: n.id, text: n.text, internal: n.internal, fromClient: n.authorKind === "client", createdAt: n.createdAt, authorId: n.authorId, author: n.author ?? null })),
       time: {
         byPerson: byPerson.map((x) => ({ userId: x.userId, name: x.user, hours: x.h / 100 })),
-        entries: entries.map((e) => ({ id: e.id, date: e.date, hours: e.hoursX100 / 100, billableHours: (e.billableX100 ?? e.hoursX100) / 100, note: e.note, milestoneId: e.milestoneId, milestone: e.milestoneId ? (msName.get(e.milestoneId) ?? null) : null, task: e.taskId ? (taskName.get(e.taskId) ?? null) : null, ticket: e.ticketTimeId ? { number: e.ticketNumber, title: e.ticketTitle } : null, userId: e.userId, user: e.user })),
+        entries: entries.map((e) => ({ id: e.id, date: e.date, hours: e.hoursX100 / 100, billableHours: (e.billableX100 ?? e.hoursX100) / 100, note: e.note, milestoneId: e.milestoneId, taskId: e.taskId, milestone: e.milestoneId ? (msName.get(e.milestoneId) ?? null) : null, task: e.taskId ? (taskName.get(e.taskId) ?? null) : null, ticket: e.ticketTimeId ? { number: e.ticketNumber, title: e.ticketTitle } : null, userId: e.userId, user: e.user })),
       },
     });
   })
@@ -1047,7 +1080,7 @@ export const projectsRoutes = new Hono<AppEnv>()
     const task = await loadTask(p.id, c.req.param("tid"));
     const [timer] = await db().select().from(schema.projectTaskTimers).where(and(eq(schema.projectTaskTimers.taskId, task.id), eq(schema.projectTaskTimers.userId, a.user.id)));
     if (!timer) throw new HTTPException(409, { message: "timer_not_running" });
-    const o = await body(c, z.object({ discard: z.boolean().optional(), hours: z.number().min(0.05).max(24).optional(), note: z.string().trim().max(500).optional(), billable: z.boolean().optional(), date: zDay.optional() }));
+    const o = await body(c, z.object({ discard: z.boolean().optional(), hours: z.number().min(0.05).max(24).optional(), note: z.string().trim().max(2000).optional(), billable: z.boolean().optional(), date: zDay.optional() }));
     if (o.discard) {
       await db().delete(schema.projectTaskTimers).where(and(eq(schema.projectTaskTimers.taskId, task.id), eq(schema.projectTaskTimers.userId, a.user.id)));
       return c.json({ discarded: true });
@@ -1056,6 +1089,156 @@ export const projectsRoutes = new Hono<AppEnv>()
     const entry = await logTime(a.user.id, p, task, { date: o.date ?? todayQc(), hours: o.hours ?? Math.min(24, elapsed), note: o.note, billable: o.billable });
     await db().delete(schema.projectTaskTimers).where(and(eq(schema.projectTaskTimers.taskId, task.id), eq(schema.projectTaskTimers.userId, a.user.id)));
     return c.json(entry);
+  })
+
+  // ── a PHASE works like a ticket: its activity (replies, notes, time), a timer started when it is opened, time that covers several tasks ──
+  .get("/:id/milestones/:mid/activity", requirePermission("projects.view"), async (c) => {
+    const a = auth(c);
+    const p = await loadProject(c.req.param("id"));
+    const ms = await loadMilestone(p.id, c.req.param("mid"));
+    const d = db();
+    const [own, ofTasks, entries, [timer]] = await Promise.all([
+      d.select({ n: schema.projectMilestoneNotes, author: schema.users.name }).from(schema.projectMilestoneNotes).leftJoin(schema.users, eq(schema.users.id, schema.projectMilestoneNotes.authorId)).where(eq(schema.projectMilestoneNotes.milestoneId, ms.id)),
+      // what was said on the phase's tasks before stays visible, tagged with the task
+      d.select({ n: schema.projectTaskNotes, author: schema.users.name, task: schema.projectTasks.title }).from(schema.projectTaskNotes).innerJoin(schema.projectTasks, eq(schema.projectTasks.id, schema.projectTaskNotes.taskId)).leftJoin(schema.users, eq(schema.users.id, schema.projectTaskNotes.authorId)).where(eq(schema.projectTasks.milestoneId, ms.id)),
+      d.select({ e: schema.timesheetEntries, user: schema.users.name }).from(schema.timesheetEntries).innerJoin(schema.users, eq(schema.users.id, schema.timesheetEntries.userId)).where(and(eq(schema.timesheetEntries.milestoneId, ms.id), eq(schema.timesheetEntries.source, "project"))),
+      d.select().from(schema.projectMilestoneTimers).where(and(eq(schema.projectMilestoneTimers.milestoneId, ms.id), eq(schema.projectMilestoneTimers.userId, a.user.id))),
+    ]);
+    const covered = entries.length
+      ? await d.select({ entryId: schema.timesheetEntryTasks.entryId, id: schema.projectTasks.id, title: schema.projectTasks.title, status: schema.timesheetEntryTasks.statusAfter }).from(schema.timesheetEntryTasks).innerJoin(schema.projectTasks, eq(schema.projectTasks.id, schema.timesheetEntryTasks.taskId)).where(inArray(schema.timesheetEntryTasks.entryId, entries.map((x) => x.e.id)))
+      : [];
+    const taskTitle = new Map((await d.select({ id: schema.projectTasks.id, title: schema.projectTasks.title }).from(schema.projectTasks).where(eq(schema.projectTasks.milestoneId, ms.id))).map((t) => [t.id, t.title]));
+    return c.json({
+      notes: [
+        ...own.map((x) => ({ id: x.n.id, kind: x.n.kind, text: x.n.text, createdAt: x.n.createdAt.toISOString(), authorId: x.n.authorId, author: x.author, emailedTo: x.n.emailedTo, task: null as string | null, phase: true })),
+        ...ofTasks.map((x) => ({ id: x.n.id, kind: x.n.kind, text: x.n.text, createdAt: x.n.createdAt.toISOString(), authorId: x.n.authorId, author: x.author, emailedTo: x.n.emailedTo, task: x.task as string | null, phase: false })),
+      ].sort((x, y) => y.createdAt.localeCompare(x.createdAt)),
+      time: entries
+        .map(({ e, user }) => ({
+          id: e.id,
+          date: e.date,
+          createdAt: e.createdAt.toISOString(),
+          hours: e.hoursX100 / 100,
+          billableHours: (e.billableX100 ?? e.hoursX100) / 100,
+          note: e.note,
+          userId: e.userId,
+          user,
+          tasks: covered.filter((x) => x.entryId === e.id).map((x) => ({ id: x.id, title: x.title, status: x.status })),
+          // time logged on one task before this existed
+          task: e.taskId ? (taskTitle.get(e.taskId) ?? null) : null,
+        }))
+        .sort((x, y) => y.createdAt.localeCompare(x.createdAt)),
+      timer: timer ? timerView(timer) : null,
+    });
+  })
+  /** A reply to the client (emailed to the contacts picked) or an internal note, on the phase */
+  .post("/:id/milestones/:mid/notes", requirePermission("projects.edit"), async (c) => {
+    const a = auth(c);
+    const p = await loadProject(c.req.param("id"));
+    const ms = await loadMilestone(p.id, c.req.param("mid"));
+    const n = await body(c, z.object({ text: z.string().trim().min(1).max(8000), kind: z.enum(["internal", "reply"]).optional(), to: z.array(z.string().trim().toLowerCase().email().max(200)).max(10).optional(), email: z.boolean().optional(), notifyUserIds: z.array(zUuid).max(20).default([]), notifyChannels: z.object({ bell: z.boolean().default(true), email: z.boolean().default(true), chat: z.boolean().default(false) }).default({ bell: true, email: true, chat: false }) }));
+    const kind = n.kind ?? "internal";
+    // a reply goes by email to the client's contacts and the addresses added, unless turned off; an internal note tells COLLEAGUES (bell, email, Teams), like a ticket's
+    const mail = kind === "reply" && (n.email ?? true);
+    const to = mail ? [...new Set(n.to ?? [])] : [];
+    if (mail && !to.length) throw new HTTPException(400, { message: "reply_needs_recipient" });
+    if (mail && !p.clientId) throw new HTTPException(409, { message: "project_no_client" });
+    const sent: string[] = [];
+    const failed: string[] = [];
+    if (mail) {
+      const subject = `[${p.number}] ${ms.name}`.slice(0, 250);
+      const text = ["Bonjour,", "", n.text, "", "—", `${a.realUser.name}\nAKAB Informatique`].join("\n");
+      const html = `<p>Bonjour,</p><p style="white-space:pre-wrap">${escapeHtml(n.text)}</p><p>—<br>${escapeHtml(a.realUser.name)}<br>AKAB Informatique</p>`;
+      for (const addr of to) (await sendMail({ to: addr, subject, text, html, replyTo: a.realUser.email })) ? sent.push(addr) : failed.push(addr);
+      await audit(a.user.id, sent.length ? "project.phase_reply_emailed" : "project.phase_reply_email_failed", ms.id, { to: sent.length ? sent : failed, kind });
+    }
+    const [row] = await db().insert(schema.projectMilestoneNotes).values({ milestoneId: ms.id, authorId: a.user.id, text: n.text, kind, emailedTo: sent }).returning();
+    await db().update(schema.projects).set({ updatedAt: new Date() }).where(eq(schema.projects.id, p.id));
+    // internal note: colleagues told (active staff only, never oneself): the bell, and as ticked an email and a Teams chat message
+    let told: Awaited<ReturnType<typeof notifyTechs>> = [];
+    if (kind === "internal" && n.notifyUserIds.length) {
+      const link = `/pipeline?section=projects&project=${p.id}&tab=milestones&milestone=${ms.id}`;
+      told = await notifyTechs(
+        { id: 0, number: p.number, title: ms.name, company: { name: "" }, link, head: `vous signale une note de la phase « ${ms.name} » du projet ${p.number} (${p.name})` },
+        { id: a.user.id, name: a.realUser.name },
+        n.notifyUserIds,
+        n.text,
+        { email: n.notifyChannels.email, sms: false, teams: false, bell: false, chat: n.notifyChannels.chat },
+      );
+      if (n.notifyChannels.bell && told.length) await notify(told.map((x) => x.id), { type: "project.note", data: { by: a.realUser.name, number: p.number, name: p.name, message: n.text.slice(0, 300) }, link });
+      await audit(a.user.id, "project.phase_note_notified", ms.id, { to: told.map((x) => x.id), channels: n.notifyChannels });
+    }
+    return c.json({ ...row, emailed: mail ? failed.length === 0 : null, failed, notified: told.length, chatNotReady: told.some((x) => x.chat === "not_ready"), notifyFailed: told.filter((x) => x.email === "failed" || x.email === "no_address" || x.chat === "failed").length }, 201);
+  })
+  .delete("/:id/milestones/:mid/notes/:nid", requirePermission("projects.edit"), async (c) => {
+    const a = auth(c);
+    const p = await loadProject(c.req.param("id"));
+    const ms = await loadMilestone(p.id, c.req.param("mid"));
+    const [cur] = await db().select().from(schema.projectMilestoneNotes).where(and(eq(schema.projectMilestoneNotes.id, zUuid.parse(c.req.param("nid"))), eq(schema.projectMilestoneNotes.milestoneId, ms.id)));
+    if (!cur) throw new HTTPException(404, { message: "not_found" });
+    if (cur.authorId !== a.user.id && !a.permissions.includes("projects.manage")) throw new HTTPException(403, { message: "Forbidden" });
+    await db().delete(schema.projectMilestoneNotes).where(eq(schema.projectMilestoneNotes.id, cur.id));
+    return c.json({ ok: true });
+  })
+  // the timer of the phase: started when it is opened, stopped into ONE time entry that says which tasks it covered
+  .post("/:id/milestones/:mid/timer/start", requirePermission("projects.edit"), async (c) => {
+    const a = auth(c);
+    const p = await loadProject(c.req.param("id"));
+    if (p.status === "done" || p.status === "cancelled") throw new HTTPException(409, { message: "project_closed" });
+    const ms = await loadMilestone(p.id, c.req.param("mid"));
+    if (ms.status === "done") throw new HTTPException(409, { message: "milestone_done" });
+    await db().insert(schema.projectMilestoneTimers).values({ milestoneId: ms.id, userId: a.user.id }).onConflictDoNothing();
+    const [t] = await db().select().from(schema.projectMilestoneTimers).where(and(eq(schema.projectMilestoneTimers.milestoneId, ms.id), eq(schema.projectMilestoneTimers.userId, a.user.id)));
+    return c.json(timerView(t));
+  })
+  // pause (counts nothing meanwhile) and resume
+  .post("/:id/milestones/:mid/timer/pause", requirePermission("projects.edit"), async (c) => {
+    const a = auth(c);
+    const p = await loadProject(c.req.param("id"));
+    const ms = await loadMilestone(p.id, c.req.param("mid"));
+    const [timer] = await db().select().from(schema.projectMilestoneTimers).where(and(eq(schema.projectMilestoneTimers.milestoneId, ms.id), eq(schema.projectMilestoneTimers.userId, a.user.id)));
+    if (!timer) throw new HTTPException(409, { message: "timer_not_running" });
+    if (!timer.pausedAt) await db().update(schema.projectMilestoneTimers).set({ baseSeconds: timerSeconds(timer), pausedAt: new Date() }).where(and(eq(schema.projectMilestoneTimers.milestoneId, ms.id), eq(schema.projectMilestoneTimers.userId, a.user.id)));
+    const [t] = await db().select().from(schema.projectMilestoneTimers).where(and(eq(schema.projectMilestoneTimers.milestoneId, ms.id), eq(schema.projectMilestoneTimers.userId, a.user.id)));
+    return c.json(timerView(t));
+  })
+  .post("/:id/milestones/:mid/timer/resume", requirePermission("projects.edit"), async (c) => {
+    const a = auth(c);
+    const p = await loadProject(c.req.param("id"));
+    const ms = await loadMilestone(p.id, c.req.param("mid"));
+    const [timer] = await db().select().from(schema.projectMilestoneTimers).where(and(eq(schema.projectMilestoneTimers.milestoneId, ms.id), eq(schema.projectMilestoneTimers.userId, a.user.id)));
+    if (!timer) throw new HTTPException(409, { message: "timer_not_running" });
+    if (timer.pausedAt) await db().update(schema.projectMilestoneTimers).set({ startedAt: new Date(), pausedAt: null }).where(and(eq(schema.projectMilestoneTimers.milestoneId, ms.id), eq(schema.projectMilestoneTimers.userId, a.user.id)));
+    const [t] = await db().select().from(schema.projectMilestoneTimers).where(and(eq(schema.projectMilestoneTimers.milestoneId, ms.id), eq(schema.projectMilestoneTimers.userId, a.user.id)));
+    return c.json(timerView(t));
+  })
+  .post("/:id/milestones/:mid/timer/stop", requirePermission("projects.edit"), async (c) => {
+    const a = auth(c);
+    if (!a.permissions.includes("timesheets.use")) throw new HTTPException(403, { message: "Forbidden" });
+    const p = await loadProject(c.req.param("id"));
+    const ms = await loadMilestone(p.id, c.req.param("mid"));
+    const [timer] = await db().select().from(schema.projectMilestoneTimers).where(and(eq(schema.projectMilestoneTimers.milestoneId, ms.id), eq(schema.projectMilestoneTimers.userId, a.user.id)));
+    if (!timer) throw new HTTPException(409, { message: "timer_not_running" });
+    const o = await body(c, zPhaseTime.partial({ hours: true, date: true }).extend({ discard: z.boolean().optional() }));
+    const gone = () => db().delete(schema.projectMilestoneTimers).where(and(eq(schema.projectMilestoneTimers.milestoneId, ms.id), eq(schema.projectMilestoneTimers.userId, a.user.id)));
+    if (o.discard) {
+      await gone();
+      return c.json({ discarded: true });
+    }
+    const elapsed = Math.max(0.05, Math.round((timerSeconds(timer) / 3600) * 100) / 100);
+    const entry = await phaseTime(a.user.id, p, ms, { ...o, date: o.date ?? todayQc(), hours: o.hours ?? Math.min(24, elapsed), tasks: o.tasks ?? [] });
+    await gone();
+    return c.json(entry);
+  })
+  // time entered by hand on the phase
+  .post("/:id/milestones/:mid/time", requirePermission("projects.edit"), async (c) => {
+    const a = auth(c);
+    if (!a.permissions.includes("timesheets.use")) throw new HTTPException(403, { message: "Forbidden" });
+    const p = await loadProject(c.req.param("id"));
+    if (p.status === "done" || p.status === "cancelled") throw new HTTPException(409, { message: "project_closed" });
+    const ms = await loadMilestone(p.id, c.req.param("mid"));
+    const o = await body(c, zPhaseTime);
+    return c.json(await phaseTime(a.user.id, p, ms, o), 201);
   })
 
   // ── notes ──
@@ -1155,7 +1338,7 @@ export const projectsRoutes = new Hono<AppEnv>()
     const a = auth(c);
     const p = await loadProject(c.req.param("id"));
     if (p.status === "done" || p.status === "cancelled") throw new HTTPException(409, { message: "project_closed" });
-    const t = await body(c, z.object({ date: zDay, hours: z.number().min(0.05).max(24), milestoneId: zUuid.nullable().optional(), taskId: zUuid.nullable().optional(), note: z.string().trim().max(500).optional(), billable: z.boolean().optional(), userId: zUuid.optional() }));
+    const t = await body(c, z.object({ date: zDay, hours: z.number().min(0.05).max(24), milestoneId: zUuid.nullable().optional(), taskId: zUuid.nullable().optional(), note: z.string().trim().max(2000).optional(), billable: z.boolean().optional(), userId: zUuid.optional() }));
     // time for someone else: a manager only (it goes on that person's timesheet)
     const forOther = t.userId && t.userId !== a.user.id;
     if (forOther) {
@@ -1175,7 +1358,17 @@ export const projectsRoutes = new Hono<AppEnv>()
     const [e] = await db().select().from(schema.timesheetEntries).where(and(eq(schema.timesheetEntries.id, zUuid.parse(c.req.param("eid"))), eq(schema.timesheetEntries.projectId, p.id)));
     if (!e) throw new HTTPException(404, { message: "not_found" });
     if (e.userId !== a.user.id && !a.permissions.includes("projects.manage")) throw new HTTPException(403, { message: "Forbidden" });
-    const o = await body(c, z.object({ billable: z.boolean().optional(), note: z.string().trim().max(500).nullable().optional(), userId: zUuid.optional() }));
+    const o = await body(c, z.object({ billable: z.boolean().optional(), note: z.string().trim().max(2000).nullable().optional(), userId: zUuid.optional(), date: zDay.optional(), hours: z.number().min(0.05).max(24).optional(), milestoneId: zUuid.nullable().optional(), taskId: zUuid.nullable().optional() }));
+    // the day, the hours or the phase / task: not for ticket time (changed on its ticket), not once invoiced, and the week must be open (a timesheet manager always can)
+    const reshape = o.date !== undefined || o.hours !== undefined || o.milestoneId !== undefined || o.taskId !== undefined;
+    if (reshape) {
+      if (e.ticketTimeId) throw new HTTPException(409, { message: "time_from_ticket" });
+      const [billed] = await db().select({ id: schema.billingItems.id }).from(schema.billingItems).where(and(eq(schema.billingItems.sourceId, `prtime:${e.id}`), eq(schema.billingItems.status, "posted"))).limit(1);
+      if (billed) throw new HTTPException(409, { message: "time_billed" });
+      if (!a.permissions.includes("timesheets.manage")) {
+        for (const day of new Set([e.date, o.date ?? e.date])) if (!editable((await sheetOf(e.userId, weekStartOf(day))).status)) throw new HTTPException(409, { message: "timesheet_locked" });
+      }
+    }
     // whose time it is: a manager changes it (it moves to that person's timesheet)
     const moveTo = o.userId && o.userId !== e.userId ? o.userId : null;
     if (moveTo) {
@@ -1195,10 +1388,31 @@ export const projectsRoutes = new Hono<AppEnv>()
       const [billed] = await db().select({ id: schema.billingItems.id }).from(schema.billingItems).where(and(eq(schema.billingItems.sourceId, `prtime:${e.id}`), inArray(schema.billingItems.status, ["posted"]))).limit(1);
       if (billed) throw new HTTPException(409, { message: "time_billed" });
     }
+    // phase and task: a task fixes its phase
+    let where: Partial<typeof schema.timesheetEntries.$inferInsert> = {};
+    if (o.taskId !== undefined || o.milestoneId !== undefined) {
+      const task = o.taskId ? await loadTask(p.id, o.taskId) : null;
+      const ms = task ? await loadMilestone(p.id, task.milestoneId) : o.milestoneId ? await loadMilestone(p.id, o.milestoneId) : null;
+      where = { milestoneId: ms?.id ?? null, taskId: task?.id ?? null, ticketTitle: `${p.name}${ms ? ` · ${ms.name}` : ""}${task ? ` · ${task.title}` : ""}`.slice(0, 250) };
+    }
+    const hoursX100 = o.hours !== undefined ? Math.round(o.hours * 100) : e.hoursX100;
+    const wasBillable = (e.billableX100 ?? 0) > 0;
+    const billableNow = o.billable !== undefined ? o.billable : wasBillable;
     await db()
       .update(schema.timesheetEntries)
-      .set({ ...(o.billable !== undefined ? splitBillable(e.hoursX100, o.billable ? e.hoursX100 : 0) : {}), ...(o.note !== undefined ? { note: o.note || null } : {}), ...(moveTo ? { userId: moveTo } : {}) })
+      .set({
+        ...(o.billable !== undefined || o.hours !== undefined ? { hoursX100, ...splitBillable(hoursX100, billableNow ? hoursX100 : 0) } : {}),
+        ...(o.date !== undefined ? { date: o.date } : {}),
+        ...where,
+        ...(o.note !== undefined ? { note: o.note || null } : {}),
+        ...(moveTo ? { userId: moveTo } : {}),
+      })
       .where(eq(schema.timesheetEntries.id, e.id));
+    if (reshape) {
+      await audit(a.user.id, "project.time_changed", p.id, { entry: e.id, ...(o.date !== undefined ? { date: o.date } : {}), ...(o.hours !== undefined ? { hours: o.hours } : {}) });
+      await db().update(schema.projects).set({ updatedAt: new Date() }).where(eq(schema.projects.id, p.id));
+      await syncBillablesNow();
+    }
     if (moveTo) {
       await audit(a.user.id, "project.time_person_changed", p.id, { entry: e.id, from: e.userId, to: moveTo });
       // the line to bill carries the person's name: refreshed (a pending one, not edited by hand)
@@ -1224,6 +1438,51 @@ async function syncMilestone(milestoneId: string) {
   const [cur] = await d.select({ status: schema.projectMilestones.status, doneAt: schema.projectMilestones.doneAt }).from(schema.projectMilestones).where(eq(schema.projectMilestones.id, milestoneId));
   if (!cur || cur.status === status) return;
   await d.update(schema.projectMilestones).set({ status, doneAt: status === "done" ? new Date() : null, updatedAt: new Date() }).where(eq(schema.projectMilestones.id, milestoneId));
+}
+
+/** The seconds a phase timer has counted: before its last start, plus the run since unless it is paused */
+function timerSeconds(t: { startedAt: Date; baseSeconds: number; pausedAt: Date | null }) {
+  return t.baseSeconds + (t.pausedAt ? 0 : Math.max(0, Math.floor((Date.now() - t.startedAt.getTime()) / 1000)));
+}
+/** What the screens need to draw the clock: seconds counted at the last start, when it started, and whether it is paused */
+function timerView(t: { startedAt: Date; baseSeconds: number; pausedAt: Date | null }) {
+  return { startedAt: t.startedAt.toISOString(), baseSeconds: t.baseSeconds, paused: t.pausedAt !== null, seconds: timerSeconds(t) };
+}
+
+const zPhaseTime = z.object({
+  date: zDay,
+  hours: z.number().min(0.05).max(24),
+  note: z.string().trim().max(2000).optional(),
+  billable: z.boolean().optional(),
+  /** the tasks this time covered and the status each is left in (a partial step does not finish the task) */
+  tasks: z.array(z.object({ taskId: zUuid, status: zTaskStatus })).max(60).default([]),
+  /** work on the phase that is no task in particular */
+  general: z.boolean().optional(),
+});
+
+/** Time on a phase: ONE entry, the tasks it covered noted (and moved to the status given), the phase follows its tasks */
+async function phaseTime(userId: string, p: Project, ms: { id: string; name: string }, o: z.infer<typeof zPhaseTime>) {
+  const d = db();
+  const mine = await d.select().from(schema.projectTasks).where(eq(schema.projectTasks.milestoneId, ms.id));
+  const byId = new Map(mine.map((t) => [t.id, t]));
+  const picked = [...new Map((o.tasks ?? []).map((x) => [x.taskId, x])).values()];
+  if (picked.some((x) => !byId.has(x.taskId))) throw new HTTPException(400, { message: "task_invalid" });
+  if (mine.length && !picked.length && !o.general) throw new HTTPException(400, { message: "task_required" });
+  // a task cannot be moved on before the one it waits for is done
+  const done = new Set(mine.filter((t) => t.status === "done").map((t) => t.id));
+  for (const x of picked) {
+    const t = byId.get(x.taskId)!;
+    if (x.status !== t.status && (x.status === "doing" || x.status === "done") && t.dependsOnId && byId.has(t.dependsOnId) && !done.has(t.dependsOnId) && !picked.some((y) => y.taskId === t.dependsOnId && y.status === "done")) throw new HTTPException(409, { message: "task_blocked" });
+  }
+  const single = picked.length === 1 ? byId.get(picked[0].taskId)! : null;
+  const entry = await logTime(userId, p, single, { date: o.date, hours: o.hours, note: o.note, billable: o.billable }, ms);
+  for (const x of picked) {
+    const t = byId.get(x.taskId)!;
+    await d.insert(schema.timesheetEntryTasks).values({ entryId: entry.id, taskId: t.id, statusAfter: x.status }).onConflictDoNothing();
+    if (x.status !== t.status) await d.update(schema.projectTasks).set({ status: x.status, done: x.status === "done", doneAt: x.status === "done" ? (t.doneAt ?? new Date()) : null, updatedAt: new Date() }).where(eq(schema.projectTasks.id, t.id));
+  }
+  if (picked.length) await syncMilestone(ms.id);
+  return { ...entry, tasks: picked.length };
 }
 
 /**

@@ -117,6 +117,12 @@ export type Project = {
   nextCheckpoint?: string | null;
   /** One of my open tasks has its checkpoint or due day today */
   todayMine?: boolean;
+  /** A milestone, or a task of the person looked at, is due or at its checkpoint today */
+  todayFlag?: boolean;
+  /** The project, an unfinished milestone or a task of the person looked at is past due */
+  lateFlag?: boolean;
+  /** The earliest day an unfinished milestone is due */
+  nextMilestoneDue?: string | null;
   mine: boolean;
   progress: { done: number; total: number };
   attention: string[];
@@ -130,7 +136,7 @@ export type ProjectDetail = Project & {
   notes: { id: string; text: string; internal: boolean; fromClient: boolean; createdAt: string; authorId: string | null; author: string | null }[];
   time: {
     byPerson: { userId: string; name: string; hours: number }[];
-    entries: { id: string; date: string; hours: number; billableHours: number; note: string | null; milestoneId: string | null; milestone: string | null; task: string | null; ticket: { number: string | null; title: string | null } | null; userId: string; user: string }[];
+    entries: { id: string; date: string; hours: number; billableHours: number; note: string | null; milestoneId: string | null; taskId: string | null; milestone: string | null; task: string | null; ticket: { number: string | null; title: string | null } | null; userId: string; user: string }[];
   };
   /** The quote it was made from */
   quote: { id: string; number: string } | null;
@@ -182,4 +188,4 @@ export function clock(seconds: number): string {
   return `${Math.floor(s / 3600)}:${String(Math.floor((s % 3600) / 60)).padStart(2, "0")}:${String(s % 60).padStart(2, "0")}`;
 }
 
-export const apiMessage = (code: string | undefined, t: (k: string) => string) => (code && ["project_open_milestones", "project_dates", "person_invalid", "project_closed", "timesheet_locked", "client_unknown", "milestone_has_tasks", "timer_not_running", "time_billed", "project_no_client", "reply_needs_recipient", "contract_required", "contract_invalid", "contract_needs_client", "rate_required", "no_followup", "task_blocked", "task_cycle", "task_invalid"].includes(code) ? t(`projects.errors.${code}`) : t("common.error"));
+export const apiMessage = (code: string | undefined, t: (k: string) => string) => (code && ["project_open_milestones", "project_dates", "person_invalid", "project_closed", "timesheet_locked", "entry_billed", "client_unknown", "milestone_has_tasks", "timer_not_running", "time_billed", "project_no_client", "reply_needs_recipient", "contract_required", "contract_invalid", "contract_needs_client", "rate_required", "no_followup", "task_blocked", "task_cycle", "task_invalid"].includes(code) ? t(`projects.errors.${code}`) : t("common.error"));

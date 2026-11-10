@@ -13,7 +13,8 @@ import { rateLimit } from "../lib/http.ts";
 import { notify, usersWith } from "../lib/notify.ts";
 import { startAtNow, calendarOfDay, buildPipelineView, maskPhone, morningRun, phoneOf, PipelineError, pipelineSettings, planOf, buildPlan, savePipelineSettings, sendTestSms, type PipelineSettings, resetDailyTasks, resetDayAdds, allocOf, dayItems } from "../lib/pipeline.ts";
 import { ticketSource } from "../lib/ticketSource.ts";
-import { todayQc } from "../lib/timesheets.ts";
+import { editable, labourType, sheetOf, todayQc, weekStartOf } from "../lib/timesheets.ts";
+import { splitBillable } from "../lib/hr.ts";
 import { notifyTechs } from "../lib/techNotify.ts";
 
 /** An item of this task, or 400 */
@@ -621,7 +622,16 @@ export const pipelineRoutes = new Hono<AppEnv>()
         .orderBy(asc(schema.pipelineTaskFiles.createdAt)),
       db().select({ id: schema.pipelineTaskViewers.userId }).from(schema.pipelineTaskViewers).where(eq(schema.pipelineTaskViewers.taskId, t.id)),
     ]);
-    return c.json({ ...card, notes: t.notes, checklistItems: checklist, comments: notes, subtaskList: await cards(subtasks, me), fileList: files, viewerIds: viewers.map((v) => v.id) });
+    // the time put on this task (internal), with the checklist items each covered
+    const entries = await db()
+      .select({ id: schema.timesheetEntries.id, userId: schema.timesheetEntries.userId, by: schema.users.name, date: schema.timesheetEntries.date, hoursX100: schema.timesheetEntries.hoursX100, note: schema.timesheetEntries.note, createdAt: schema.timesheetEntries.createdAt })
+      .from(schema.timesheetEntries)
+      .leftJoin(schema.users, eq(schema.users.id, schema.timesheetEntries.userId))
+      .where(eq(schema.timesheetEntries.pipelineTaskId, t.id))
+      .orderBy(asc(schema.timesheetEntries.createdAt));
+    const links = entries.length ? await db().select().from(schema.pipelineEntryItems).where(inArray(schema.pipelineEntryItems.entryId, entries.map((e) => e.id))) : [];
+    const timeEntries = entries.map((e) => ({ id: e.id, userId: e.userId, by: e.by ?? "", date: e.date, hours: e.hoursX100 / 100, note: e.note ?? "", createdAt: e.createdAt, itemIds: links.filter((l) => l.entryId === e.id).map((l) => l.itemId) }));
+    return c.json({ ...card, timeEntries, notes: t.notes, checklistItems: checklist, comments: notes, subtaskList: await cards(subtasks, me), fileList: files, viewerIds: viewers.map((v) => v.id) });
   })
 
   .post("/tasks", requirePermission("pipeline.edit"), async (c) => {
@@ -989,6 +999,85 @@ export const pipelineRoutes = new Hono<AppEnv>()
     return c.json(row, 201);
   })
 
+  // ── Time on a to-do task: internal, never billable, no client (so it never touches anyone's billable share) ──
+  .post("/tasks/:id/time", requirePermission("pipeline.edit"), async (c) => {
+    const a = auth(c);
+    const t = await taskOr404(c, zUuid.parse(c.req.param("id")));
+    const p = await body(c, zTodoTime);
+    return c.json(await todoTime(a.user.id, t, p), 201);
+  })
+  // the timer of a to-do: starts when the person opens it, pauses, resumes; stopping it makes the time entry
+  .get("/timers", async (c) => {
+    const rows = await db()
+      .select({ taskId: schema.pipelineTaskTimers.taskId, startedAt: schema.pipelineTaskTimers.startedAt, baseSeconds: schema.pipelineTaskTimers.baseSeconds, pausedAt: schema.pipelineTaskTimers.pausedAt, title: schema.pipelineTasks.title })
+      .from(schema.pipelineTaskTimers)
+      .innerJoin(schema.pipelineTasks, eq(schema.pipelineTasks.id, schema.pipelineTaskTimers.taskId))
+      .where(eq(schema.pipelineTaskTimers.userId, auth(c).user.id))
+      .orderBy(asc(schema.pipelineTaskTimers.startedAt));
+    return c.json(rows.map((r) => ({ taskId: r.taskId, title: r.title, startedAt: r.startedAt.toISOString(), baseSeconds: r.baseSeconds, paused: r.pausedAt !== null })));
+  })
+  .get("/tasks/:id/timer", async (c) => {
+    const t = await taskOr404(c, zUuid.parse(c.req.param("id")));
+    const [timer] = await db().select().from(schema.pipelineTaskTimers).where(and(eq(schema.pipelineTaskTimers.taskId, t.id), eq(schema.pipelineTaskTimers.userId, auth(c).user.id)));
+    return c.json(timer ? todoTimerView(timer) : null);
+  })
+  .post("/tasks/:id/timer/start", requirePermission("pipeline.edit"), async (c) => {
+    const a = auth(c);
+    const t = await taskOr404(c, zUuid.parse(c.req.param("id")));
+    if (t.status === "done") throw new HTTPException(409, { message: "task_done" });
+    await db().insert(schema.pipelineTaskTimers).values({ taskId: t.id, userId: a.user.id }).onConflictDoNothing();
+    const [timer] = await db().select().from(schema.pipelineTaskTimers).where(and(eq(schema.pipelineTaskTimers.taskId, t.id), eq(schema.pipelineTaskTimers.userId, a.user.id)));
+    return c.json(todoTimerView(timer));
+  })
+  .post("/tasks/:id/timer/pause", requirePermission("pipeline.edit"), async (c) => {
+    const a = auth(c);
+    const t = await taskOr404(c, zUuid.parse(c.req.param("id")));
+    const where = and(eq(schema.pipelineTaskTimers.taskId, t.id), eq(schema.pipelineTaskTimers.userId, a.user.id));
+    const [timer] = await db().select().from(schema.pipelineTaskTimers).where(where);
+    if (!timer) throw new HTTPException(409, { message: "timer_not_running" });
+    if (!timer.pausedAt) await db().update(schema.pipelineTaskTimers).set({ baseSeconds: todoTimerSeconds(timer), pausedAt: new Date() }).where(where);
+    const [now] = await db().select().from(schema.pipelineTaskTimers).where(where);
+    return c.json(todoTimerView(now));
+  })
+  .post("/tasks/:id/timer/resume", requirePermission("pipeline.edit"), async (c) => {
+    const a = auth(c);
+    const t = await taskOr404(c, zUuid.parse(c.req.param("id")));
+    const where = and(eq(schema.pipelineTaskTimers.taskId, t.id), eq(schema.pipelineTaskTimers.userId, a.user.id));
+    const [timer] = await db().select().from(schema.pipelineTaskTimers).where(where);
+    if (!timer) throw new HTTPException(409, { message: "timer_not_running" });
+    if (timer.pausedAt) await db().update(schema.pipelineTaskTimers).set({ startedAt: new Date(), pausedAt: null }).where(where);
+    const [now] = await db().select().from(schema.pipelineTaskTimers).where(where);
+    return c.json(todoTimerView(now));
+  })
+  .post("/tasks/:id/timer/stop", requirePermission("pipeline.edit"), async (c) => {
+    const a = auth(c);
+    const t = await taskOr404(c, zUuid.parse(c.req.param("id")));
+    const where = and(eq(schema.pipelineTaskTimers.taskId, t.id), eq(schema.pipelineTaskTimers.userId, a.user.id));
+    const [timer] = await db().select().from(schema.pipelineTaskTimers).where(where);
+    if (!timer) throw new HTTPException(409, { message: "timer_not_running" });
+    const o = await body(c, zTodoTime.partial({ date: true, hours: true }).extend({ discard: z.boolean().optional() }));
+    if (o.discard) {
+      await db().delete(schema.pipelineTaskTimers).where(where);
+      return c.json({ discarded: true });
+    }
+    const elapsed = Math.max(0.05, Math.round((todoTimerSeconds(timer) / 3600) * 100) / 100);
+    const entry = await todoTime(a.user.id, t, { ...o, itemIds: o.itemIds ?? [], doneItemIds: o.doneItemIds ?? [], date: o.date ?? todayQc(), hours: o.hours ?? Math.min(24, elapsed) });
+    await db().delete(schema.pipelineTaskTimers).where(where);
+    return c.json(entry);
+  })
+  // an item ticked by hand: say in which time entry it was done
+  .post("/tasks/:id/checklist/:cid/time", requirePermission("pipeline.edit"), async (c) => {
+    const a = auth(c);
+    const t = await taskOr404(c, zUuid.parse(c.req.param("id")));
+    const it = await itemOf(t.id, zUuid.parse(c.req.param("cid")));
+    const p = await body(c, z.object({ entryId: zUuid }));
+    const [e] = await db().select().from(schema.timesheetEntries).where(and(eq(schema.timesheetEntries.id, p.entryId), eq(schema.timesheetEntries.pipelineTaskId, t.id)));
+    if (!e) throw new HTTPException(404, { message: "not_found" });
+    if (e.userId !== a.user.id && !a.permissions.includes("timesheets.manage")) throw new HTTPException(403, { message: "forbidden" });
+    await db().insert(schema.pipelineEntryItems).values({ entryId: e.id, itemId: it.id }).onConflictDoNothing();
+    return c.json({ ok: true });
+  })
+
   // ── Morning plan and text (managers) ──
   .get("/settings", requirePermission("pipeline.manage"), async (c) => c.json(await pipelineSettings()))
   .put("/settings", requirePermission("pipeline.manage"), async (c) => {
@@ -1029,3 +1118,41 @@ export const pipelineRoutes = new Hono<AppEnv>()
     return c.json(r);
   });
 
+
+const zTodoTime = z.object({
+  date: zDate,
+  hours: z.number().min(0.05).max(24),
+  note: z.string().trim().max(2000).optional(),
+  /** the checklist items this time worked on, and the ones it finished */
+  itemIds: z.array(zUuid).max(100).default([]),
+  doneItemIds: z.array(zUuid).max(100).default([]),
+});
+
+const todoTimerSeconds = (t: { startedAt: Date; baseSeconds: number; pausedAt: Date | null }) => t.baseSeconds + (t.pausedAt ? 0 : Math.max(0, Math.floor((Date.now() - t.startedAt.getTime()) / 1000)));
+const todoTimerView = (t: { startedAt: Date; baseSeconds: number; pausedAt: Date | null }) => ({ startedAt: t.startedAt.toISOString(), baseSeconds: t.baseSeconds, paused: t.pausedAt !== null, seconds: todoTimerSeconds(t) });
+
+/** Internal time on a to-do: the person's own timesheet entry, never billable, no client, tied to the steps it covered */
+async function todoTime(userId: string, t: typeof schema.pipelineTasks.$inferSelect, p: z.infer<typeof zTodoTime>) {
+  const items = await db().select().from(schema.pipelineChecklist).where(eq(schema.pipelineChecklist.taskId, t.id));
+  const byId = new Map(items.map((i) => [i.id, i]));
+  const covered = [...new Set([...p.itemIds, ...p.doneItemIds])];
+  if (covered.some((id) => !byId.has(id))) throw new HTTPException(400, { message: "item_invalid" });
+  // finishing an item follows the usual rules of the checklist
+  const finishing = p.doneItemIds.filter((id) => !byId.get(id)!.done);
+  for (const id of finishing) {
+    const it = byId.get(id)!;
+    if (it.dependsOnId && !byId.get(it.dependsOnId)?.done && !finishing.includes(it.dependsOnId)) throw new HTTPException(409, { message: "item_blocked" });
+    if (it.startDate && it.startDate > todayQc()) throw new HTTPException(409, { message: "item_not_started" });
+  }
+  if (!editable((await sheetOf(userId, weekStartOf(p.date))).status)) throw new HTTPException(409, { message: "timesheet_locked" });
+  const type = await labourType();
+  const hoursX100 = Math.round(p.hours * 100);
+  const [row] = await db()
+    .insert(schema.timesheetEntries)
+    .values({ userId, date: p.date, typeId: type.id, hoursX100, note: p.note || null, ticketNumber: "À faire", ticketTitle: t.title.slice(0, 250), pipelineTaskId: t.id, ...splitBillable(hoursX100, 0), clientId: null, source: "pipeline" })
+    .returning();
+  if (covered.length) await db().insert(schema.pipelineEntryItems).values(covered.map((itemId) => ({ entryId: row.id, itemId }))).onConflictDoNothing();
+  if (finishing.length) await db().update(schema.pipelineChecklist).set({ done: true }).where(inArray(schema.pipelineChecklist.id, finishing));
+  await db().update(schema.pipelineTasks).set({ updatedAt: new Date(), ...(t.status === "todo" ? { status: "doing" as const } : {}) }).where(eq(schema.pipelineTasks.id, t.id));
+  return { id: row.id, date: row.date, hours: row.hoursX100 / 100, items: covered.length };
+}

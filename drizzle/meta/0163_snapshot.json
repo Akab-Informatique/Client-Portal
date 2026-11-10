@@ -1,5 +1,5 @@
 {
-  "id": "fcc56c6e-7064-4c49-bb4f-dd9167c1da81",
+  "id": "aa43f424-22da-4abd-85c3-f32f9b46cc9f",
   "prevId": "f5dae171-f651-4e0c-b5cd-28accc15c449",
   "version": "7",
   "dialect": "postgresql",
@@ -9189,6 +9189,181 @@
       "checkConstraints": {},
       "isRLSEnabled": false
     },
+    "public.project_milestone_notes": {
+      "name": "project_milestone_notes",
+      "schema": "",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "uuid",
+          "primaryKey": true,
+          "notNull": true,
+          "default": "gen_random_uuid()"
+        },
+        "milestone_id": {
+          "name": "milestone_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "author_id": {
+          "name": "author_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "text": {
+          "name": "text",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "kind": {
+          "name": "kind",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'internal'"
+        },
+        "emailed_to": {
+          "name": "emailed_to",
+          "type": "jsonb",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'[]'::jsonb"
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        }
+      },
+      "indexes": {
+        "project_milestone_notes_ms_idx": {
+          "name": "project_milestone_notes_ms_idx",
+          "columns": [
+            {
+              "expression": "milestone_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "created_at",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        }
+      },
+      "foreignKeys": {
+        "project_milestone_notes_milestone_id_project_milestones_id_fk": {
+          "name": "project_milestone_notes_milestone_id_project_milestones_id_fk",
+          "tableFrom": "project_milestone_notes",
+          "tableTo": "project_milestones",
+          "columnsFrom": [
+            "milestone_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        },
+        "project_milestone_notes_author_id_users_id_fk": {
+          "name": "project_milestone_notes_author_id_users_id_fk",
+          "tableFrom": "project_milestone_notes",
+          "tableTo": "users",
+          "columnsFrom": [
+            "author_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "set null",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {},
+      "isRLSEnabled": false
+    },
+    "public.project_milestone_timers": {
+      "name": "project_milestone_timers",
+      "schema": "",
+      "columns": {
+        "milestone_id": {
+          "name": "milestone_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "user_id": {
+          "name": "user_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "started_at": {
+          "name": "started_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        }
+      },
+      "indexes": {},
+      "foreignKeys": {
+        "project_milestone_timers_milestone_id_project_milestones_id_fk": {
+          "name": "project_milestone_timers_milestone_id_project_milestones_id_fk",
+          "tableFrom": "project_milestone_timers",
+          "tableTo": "project_milestones",
+          "columnsFrom": [
+            "milestone_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        },
+        "project_milestone_timers_user_id_users_id_fk": {
+          "name": "project_milestone_timers_user_id_users_id_fk",
+          "tableFrom": "project_milestone_timers",
+          "tableTo": "users",
+          "columnsFrom": [
+            "user_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {
+        "project_milestone_timers_milestone_id_user_id_pk": {
+          "name": "project_milestone_timers_milestone_id_user_id_pk",
+          "columns": [
+            "milestone_id",
+            "user_id"
+          ]
+        }
+      },
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {},
+      "isRLSEnabled": false
+    },
     "public.project_milestones": {
       "name": "project_milestones",
       "schema": "",
@@ -16510,6 +16685,72 @@
       "checkConstraints": {},
       "isRLSEnabled": false
     },
+    "public.timesheet_entry_tasks": {
+      "name": "timesheet_entry_tasks",
+      "schema": "",
+      "columns": {
+        "entry_id": {
+          "name": "entry_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "task_id": {
+          "name": "task_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "status_after": {
+          "name": "status_after",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        }
+      },
+      "indexes": {},
+      "foreignKeys": {
+        "timesheet_entry_tasks_entry_id_timesheet_entries_id_fk": {
+          "name": "timesheet_entry_tasks_entry_id_timesheet_entries_id_fk",
+          "tableFrom": "timesheet_entry_tasks",
+          "tableTo": "timesheet_entries",
+          "columnsFrom": [
+            "entry_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        },
+        "timesheet_entry_tasks_task_id_project_tasks_id_fk": {
+          "name": "timesheet_entry_tasks_task_id_project_tasks_id_fk",
+          "tableFrom": "timesheet_entry_tasks",
+          "tableTo": "project_tasks",
+          "columnsFrom": [
+            "task_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {
+        "timesheet_entry_tasks_entry_id_task_id_pk": {
+          "name": "timesheet_entry_tasks_entry_id_task_id_pk",
+          "columns": [
+            "entry_id",
+            "task_id"
+          ]
+        }
+      },
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {},
+      "isRLSEnabled": false
+    },
     "public.timesheet_types": {
       "name": "timesheet_types",
       "schema": "",
@@ -16867,13 +17108,6 @@
           "primaryKey": false,
           "notNull": true,
           "default": false
-        },
-        "nav_favorites": {
-          "name": "nav_favorites",
-          "type": "jsonb",
-          "primaryKey": false,
-          "notNull": true,
-          "default": "'[]'::jsonb"
         },
         "notify_defaults": {
           "name": "notify_defaults",

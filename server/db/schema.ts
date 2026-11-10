@@ -2008,6 +2008,8 @@ export const timesheetEntries = pgTable(
     projectId: uuid("project_id"),
     milestoneId: uuid("milestone_id"),
     taskId: uuid("task_id"),
+    /** The to-do task (Opérations › À faire) this time was logged on: internal time, never billable, no client */
+    pipelineTaskId: uuid("pipeline_task_id"),
     /** ticket | manual | project */
     source: text("source").notNull().default("manual"),
     /** The client this time was spent on (a ticket's, a project's, or picked on a trip): billable and non billable hours are kept per client */
@@ -3028,6 +3030,58 @@ export const projectTaskTimers = pgTable(
   (t) => [primaryKey({ columns: [t.taskId, t.userId] })],
 );
 
+/** A note or a reply to the client on a PHASE (milestone) of a project, like a ticket's activity */
+export const projectMilestoneNotes = pgTable(
+  "project_milestone_notes",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    milestoneId: uuid("milestone_id")
+      .notNull()
+      .references(() => projectMilestones.id, { onDelete: "cascade" }),
+    authorId: uuid("author_id").references(() => users.id, { onDelete: "set null" }),
+    text: text("text").notNull(),
+    kind: text("kind", { enum: ["internal", "reply"] }).notNull().default("internal"),
+    emailedTo: jsonb("emailed_to").$type<string[]>().notNull().default(sql`'[]'::jsonb`),
+    createdAt: created(),
+  },
+  (t) => [index("project_milestone_notes_ms_idx").on(t.milestoneId, t.createdAt)],
+);
+
+/** The timer of a phase for a person: started when the phase is opened, stopping it makes a time entry */
+export const projectMilestoneTimers = pgTable(
+  "project_milestone_timers",
+  {
+    milestoneId: uuid("milestone_id")
+      .notNull()
+      .references(() => projectMilestones.id, { onDelete: "cascade" }),
+    userId: uuid("user_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    /** When it last started or was resumed */
+    startedAt: timestamp("started_at", { withTimezone: true }).notNull().defaultNow(),
+    /** Seconds counted before the last start (a paused timer keeps them) */
+    baseSeconds: integer("base_seconds").notNull().default(0),
+    /** Set while the timer is paused: it counts nothing */
+    pausedAt: timestamp("paused_at", { withTimezone: true }),
+  },
+  (t) => [primaryKey({ columns: [t.milestoneId, t.userId] })],
+);
+
+/** The tasks a time entry of a phase covered, and the status each was left in (a partial step does not finish the task) */
+export const timesheetEntryTasks = pgTable(
+  "timesheet_entry_tasks",
+  {
+    entryId: uuid("entry_id")
+      .notNull()
+      .references(() => timesheetEntries.id, { onDelete: "cascade" }),
+    taskId: uuid("task_id")
+      .notNull()
+      .references(() => projectTasks.id, { onDelete: "cascade" }),
+    statusAfter: text("status_after", { enum: ["todo", "doing", "blocked", "done"] }).notNull(),
+  },
+  (t) => [primaryKey({ columns: [t.entryId, t.taskId] })],
+);
+
 /** A reminder on a project: a day, a person to remind, a few words; the bell rings that day */
 export const projectReminders = pgTable(
   "project_reminders",
@@ -3297,4 +3351,35 @@ export const sopSteps = pgTable(
     updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
   },
   (t) => [index("sop_steps_sop_idx").on(t.sopId, t.position)],
+);
+
+/** The checklist items a time entry of a to-do task covered (which step was worked on, or finished, in that time) */
+export const pipelineEntryItems = pgTable(
+  "pipeline_entry_items",
+  {
+    entryId: uuid("entry_id")
+      .notNull()
+      .references(() => timesheetEntries.id, { onDelete: "cascade" }),
+    itemId: uuid("item_id")
+      .notNull()
+      .references(() => pipelineChecklist.id, { onDelete: "cascade" }),
+  },
+  (t) => [primaryKey({ columns: [t.entryId, t.itemId] })],
+);
+
+/** The timer of a to-do task for a person: counts while they work on it; stopping it makes an internal time entry */
+export const pipelineTaskTimers = pgTable(
+  "pipeline_task_timers",
+  {
+    taskId: uuid("task_id")
+      .notNull()
+      .references(() => pipelineTasks.id, { onDelete: "cascade" }),
+    userId: uuid("user_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    startedAt: timestamp("started_at", { withTimezone: true }).notNull().defaultNow(),
+    baseSeconds: integer("base_seconds").notNull().default(0),
+    pausedAt: timestamp("paused_at", { withTimezone: true }),
+  },
+  (t) => [primaryKey({ columns: [t.taskId, t.userId] })],
 );

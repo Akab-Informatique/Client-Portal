@@ -3,9 +3,8 @@ import { useNavigate } from "react-router-dom";
 import { useTranslation } from "react-i18next";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
-import { AlertTriangle, ArrowDownUp, GripVertical, CalendarClock, CalendarDays, Star, CalendarOff, CheckCircle2, EyeOff, ChevronLeft, ChevronRight, Coffee, Loader2, Lock, MessageSquareText, Plus, RefreshCw, Sparkles, Workflow } from "lucide-react";
+import { AlertTriangle, ArrowDownUp, GripVertical, CalendarClock, CalendarDays, Star, CalendarOff, CheckCircle2, EyeOff, ChevronLeft, ChevronRight, Coffee, Lock, Plus, Workflow } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { AiDirection, useAiDirection } from "@/components/AiDirection";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -17,7 +16,7 @@ import { RemoveFromDay } from "./DayEdge";
 import { useTicketWorkspace } from "@/pages/tickets/workspace";
 import { PRIORITY_STYLE, addDays, dayLabel, hm, isWork, longDay, todayYmd, toMinutes, type Block, type DayData, type DayItem, type TaskCard } from "./shared";
 import { taskError, usePeople } from "./TaskDialog";
-import { DayProjects, MyTickets, Priorities } from "./DayLists";
+import { DayProjects, MyTickets } from "./DayLists";
 import { DayEdge } from "./DayEdge";
 import { AgendaCard } from "@/pages/tickets/Planning";
 import { DayBlockDialog, type DayBlockDraft } from "./DayBlockDialog";
@@ -109,7 +108,6 @@ export function MyDay({ onOpenTask }: { onOpenTask: (id: string) => void }) {
     window.addEventListener("pointermove", move);
     window.addEventListener("pointerup", up);
   };
-  const direction = useAiDirection(`pipeline.day:${date}:${userId}`);
   const key = ["pipeline", "day", date, userId];
   const { data, isLoading } = useQuery({
     queryKey: key,
@@ -119,15 +117,6 @@ export function MyDay({ onOpenTask }: { onOpenTask: (id: string) => void }) {
   const refresh = () => void qc.invalidateQueries({ queryKey: ["pipeline"] });
   // a slot of time blocked by hand (new, or an existing one being edited)
   const [blockDraft, setBlockDraft] = useState<DayBlockDraft | null>(null)
-  const replan = useMutation({
-    mutationFn: () => api.post<{ aiError: string | null }>("/pipeline/day/plan", { date, ...(userId !== me.id ? { userId } : {}), ...direction.body }),
-    onSuccess: (r) => {
-      refresh();
-      if (r.aiError) toast.message(t("pipeline.day.rulesOnly"), { description: t(`pipeline.day.aiError.${["not_configured", "disabled"].includes(r.aiError) ? r.aiError : "other"}`) });
-      else toast.success(t("pipeline.day.replanned"));
-    },
-    onError: () => toast.error(t("common.error")),
-  });
   const complete = useMutation({
     mutationFn: (id: string) => api.patch(`/pipeline/tasks/${id}`, { status: "done" }),
     onSuccess: refresh,
@@ -179,7 +168,6 @@ export function MyDay({ onOpenTask }: { onOpenTask: (id: string) => void }) {
             ? goTo(`/pipeline?section=projects&project=${i.refId}`)
             : onOpenTask(i.refId);
   const projectTasks = (data?.items ?? []).filter((i) => i.kind === "ptask");
-  const when = plan ? new Date(plan.updatedAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }) : "";
 
   return (
     <div className="space-y-4">
@@ -222,39 +210,8 @@ export function MyDay({ onOpenTask }: { onOpenTask: (id: string) => void }) {
               <div className="flex flex-wrap items-center gap-2">
                 <h2 className="text-xl font-bold capitalize">{userId === me.id ? t("pipeline.day.hello", { name: first }) : (people.data?.find((p) => p.id === userId)?.name ?? "")}</h2>
                 <span className="text-sm capitalize text-muted-foreground">{longDay(date)}</span>
-                <span
-                  className={cn("flex items-center gap-1 rounded-full border px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide", plan.source === "ai" ? "border-[color:var(--gold)]/40 bg-[color:var(--gold)]/10 text-primary" : "border-muted-foreground/30 text-muted-foreground")}
-                >
-                  <Sparkles className="size-3" /> {plan.source === "ai" ? t("pipeline.day.byAi") : t("pipeline.day.byRules")}
-                </span>
-                {plan.smsSentAt && (
-                  <Tooltip>
-                    <TooltipTrigger asChild>
-                      <span className="flex items-center gap-1 text-[11px] text-muted-foreground">
-                        <MessageSquareText className="size-3" /> {new Date(plan.smsSentAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
-                      </span>
-                    </TooltipTrigger>
-                    <TooltipContent>{t("pipeline.day.smsSent")}</TooltipContent>
-                  </Tooltip>
-                )}
               </div>
               <p className="max-w-3xl text-[15px] leading-relaxed">{plan.summary}</p>
-              <div className="flex flex-wrap items-center gap-3 pt-1 text-xs text-muted-foreground">
-                <span>{t("pipeline.day.updated", { time: when })}</span>
-                <span className={cn("flex items-center gap-1", plan.calendar === "ok" ? "text-sky-300" : plan.calendar === "none" ? "" : "text-orange-300")} title={plan.calendar === "ok" || plan.calendar === "none" ? undefined : plan.calendar}>
-                  <CalendarDays className="size-3" />{" "}
-                  {plan.calendar === "ok" ? t("pipeline.day.calendarOk", { count: plan.calendarEvents }) : plan.calendar === "none" ? t("pipeline.day.calendarNone") : plan.calendar === "o365_not_signed_in" ? t("pipeline.day.calendarSignIn") : t("pipeline.day.calendarError")}
-                </span>
-                {data.stale && <span className="flex items-center gap-1 text-orange-300"><AlertTriangle className="size-3" /> {t("pipeline.day.stale")}</span>}
-                {can("pipeline.edit") && (
-                  <Button variant="outline" size="sm" className="h-8 gap-1.5" disabled={replan.isPending} onClick={() => replan.mutate()}>
-                    {replan.isPending ? <Loader2 className="size-3.5 animate-spin" /> : <RefreshCw className="size-3.5" />} {t("pipeline.day.replan")}
-                  </Button>
-                )}
-                {can("pipeline.edit") && (
-                  <AiDirection id={`pipeline.day:${date}:${userId}`} className="-ml-2" />
-                )}
-              </div>
             </div>
             {/* the time: planned against free */}
             <div className="space-y-2 rounded-xl border bg-background/40 p-4">
@@ -301,7 +258,6 @@ export function MyDay({ onOpenTask }: { onOpenTask: (id: string) => void }) {
       {/* left: the blocks of the day (and the priorities of the day); right: the priorities of the week, all my tickets (compact), projects, tasks. The bar between them is dragged to give one side more room. */}
       <div ref={box} className="grid gap-4 xl:gap-0 xl:grid-cols-[var(--split)_12px_minmax(0,1fr)]" style={{ "--split": `${split}%` } as React.CSSProperties}>
         <div className="min-w-0 space-y-4">
-          <Priorities items={data?.items ?? []} horizon="day" onOpen={open} canRemove={can("pipeline.edit") && (userId === me.id || can("pipeline.manage"))} forUser={userId === me.id ? undefined : userId} />
           <section className="glass h-fit rounded-2xl border border-[color:var(--gold)]/30 p-4 shadow-[0_0_30px_-12px_rgba(255,206,26,0.35)]">
             <div className="relative mb-3 flex items-center justify-center">
               <h3 className="flex items-center gap-2 text-center text-base font-bold tracking-wide text-primary">
@@ -316,16 +272,6 @@ export function MyDay({ onOpenTask }: { onOpenTask: (id: string) => void }) {
                     </Button>
                   </TooltipTrigger>
                   <TooltipContent>{t("pipeline.day.block.title")}</TooltipContent>
-                </Tooltip>
-              )}
-              {can("pipeline.edit") && (
-                <Tooltip>
-                  <TooltipTrigger asChild>
-                    <Button type="button" variant="ghost" size="icon" className="size-7 text-violet-300 hover:bg-violet-500/15" disabled={replan.isPending} onClick={() => replan.mutate()} aria-label={t("pipeline.day.aiRefresh")}>
-                      {replan.isPending ? <Loader2 className="size-4 animate-spin" /> : <Sparkles className="size-4" />}
-                    </Button>
-                  </TooltipTrigger>
-                  <TooltipContent>{t("pipeline.day.aiRefresh")}</TooltipContent>
                 </Tooltip>
               )}
               </div>
@@ -360,7 +306,7 @@ export function MyDay({ onOpenTask }: { onOpenTask: (id: string) => void }) {
                   ))}
               </div>
             )}
-            {isLoading || !data ? <Skeleton className="h-96 w-full" /> : <Timeline data={data} hourPx={hourPx} onBlock={(b, start) => setBlockDraft(b ? { id: b.refId ?? undefined, start: b.start, end: b.end, title: b.title, note: b.detail ?? "" } : { start: start ?? "09:00", end: start ? addMin(start, 60) : "10:00", title: "", note: "" })} canEdit={can("pipeline.edit") && (userId === me.id || can("pipeline.manage"))} forUser={userId === me.id ? undefined : userId} onSaved={refresh} onOpen={(b) => (b.kind === "ticket" ? ws.open(Number(b.refId)) : b.kind === "ptask" ? b.projectId && b.refId && pws.openTask(b.projectId, b.refId) : b.refId && onOpenTask(b.refId))} />}
+            {isLoading || !data ? <Skeleton className="h-96 w-full" /> : <Timeline data={data} hourPx={hourPx} onBlock={(b, start) => setBlockDraft(b ? { id: b.refId ?? undefined, start: b.start, end: b.end, title: b.title, note: b.detail ?? "" } : { start: start ?? "09:00", end: start ? addMin(start, 60) : "10:00", title: "", note: "" })} canEdit={can("pipeline.edit") && (userId === me.id || can("pipeline.manage"))} forUser={userId === me.id ? undefined : userId} onSaved={refresh} onOpen={(b) => b.refId && open(b as unknown as DayItem)} />}
             <div role="separator" aria-orientation="horizontal" title={t("pipeline.day.resizeHeight")} aria-label={t("pipeline.day.resizeHeight")} onPointerDown={startResize} onDoubleClick={() => setHourPx(DEFAULT_HOUR_PX)} className="group mt-2 flex h-3 cursor-row-resize touch-none items-center justify-center">
               <span className="h-0.5 w-16 rounded-full bg-[color:var(--glass-border)] transition-colors group-hover:bg-[color:var(--gold)]/60 group-active:bg-[color:var(--gold)]" />
             </div>
@@ -691,6 +637,9 @@ function Timeline({ data, onOpen, onBlock, hourPx, canEdit, forUser, onSaved }: 
                   </span>
                   {b.pinned && <Star className={cn("size-2.5 fill-current", b.pinned === "day" ? "text-primary" : "text-muted-foreground")} />}
                   {b.partial && <span className="rounded-full bg-orange-400/15 px-1.5 text-[9px] font-semibold uppercase tracking-wide text-orange-300">{t("pipeline.day.share.partial")}</span>}
+                  {!event && !b.masked && isWork(b.kind) && (
+                    <span className={cn("rounded-full px-1.5 py-px text-[9px] font-semibold uppercase tracking-wide", b.kind === "ticket" ? "bg-[color:var(--gold)]/15 text-primary" : b.kind === "task" ? "bg-violet-400/15 text-violet-300" : "bg-teal-400/15 text-teal-300")}>{t(`pipeline.day.kind.${b.kind}`)}</span>
+                  )}
                   {b.ticketNumber && <span className={cn("font-mono text-[10px]", ptask ? "text-teal-300" : "text-primary")}>{b.ticketNumber}</span>}
                   {b.o365 && <span className="flex items-center gap-0.5 text-[10px] font-semibold uppercase tracking-wide text-sky-300"><CalendarDays className="size-2.5" /> Outlook</span>}
                   {b.masked && <EyeOff className="size-3 text-muted-foreground" />}
@@ -700,11 +649,6 @@ function Timeline({ data, onOpen, onBlock, hourPx, canEdit, forUser, onSaved }: 
               </button>
               {!event && !b.masked && !b.done && b.refId && isWork(b.kind) && (
                 <DayEdge kind={b.kind} id={b.refId} number={b.ticketNumber} title={b.title} urgent={b.priority === "urgent"} onOpen={() => onOpen(b)} onDay={{ forUser }} className="absolute left-0 top-0 z-10 h-full" />
-              )}
-              {!event && !b.masked && isWork(b.kind) && (
-                <span className={cn("pointer-events-none absolute right-2 top-1.5 z-10 rounded-full px-1.5 py-px text-[9px] font-semibold uppercase tracking-wide transition-opacity group-hover/blk:opacity-0", b.kind === "ticket" ? "bg-[color:var(--gold)]/15 text-primary" : b.kind === "task" ? "bg-violet-400/15 text-violet-300" : "bg-teal-400/15 text-teal-300")}>
-                  {t(`pipeline.day.kind.${b.kind}`)}
-                </span>
               )}
               {canEdit && !event && !b.masked && b.refId && isWork(b.kind) && <RemoveFromDay kind={b.kind} id={b.refId} forUser={forUser} className="absolute right-1.5 top-1.5 z-20 opacity-0 transition-opacity group-hover/blk:opacity-100" />}
               {stretch &&
