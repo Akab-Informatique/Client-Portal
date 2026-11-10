@@ -2841,7 +2841,7 @@ const fr = {
     "dock": "Tâches réduites",
     "restore": "Rouvrir la tâche",
     "composer": {
-      "reply": "Répondre au client",
+      "reply": "Note publique",
       "internal": "Note interne",
       "time": "Entrée de temps",
       "noClient": "Ce projet n'a pas de client : choisissez-en un dans l'aperçu pour lui répondre.",
@@ -5432,7 +5432,7 @@ const fr = {
     noActivity: "Aucune activité pour l'instant.",
     internal: "Interne",
     hoursValue: "{{hours}} h",
-    noteReply: "Réponse au client",
+    noteReply: "Note publique",
     noteInternal: "Note interne",
     notePlaceholder: "Écrire une réponse ou une note…",
     noteSoon: "Aperçu : la note reste dans le portail",

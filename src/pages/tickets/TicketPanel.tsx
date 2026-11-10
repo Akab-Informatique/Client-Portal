@@ -1957,9 +1957,9 @@ function NoteComposer({
     requestAnimationFrame(() => ref.current?.focus());
   }, [focusRequest]);
   const [focused, setFocused] = useState(false);
-  // a reply also goes by email to the ticket's contact (on by default, switched off for this one if wanted), and to other people
+  // a reply also goes by email to the ticket's contact (off by default, switched on for this one if wanted), and to other people
   const contactEmail = tk.contactInfo?.email ?? null;
-  const [emailIt, setEmailIt] = useState(true);
+  const [emailIt, setEmailIt] = useState(false);
   const [mailOthers, setMailOthers] = useState<string[]>([]);
   // an internal note can tell colleagues: the bell and an email with the note
   const me = useMe();
@@ -1990,7 +1990,7 @@ function NoteComposer({
     onSuccess: (r) => {
       setText("");
       setFiles([]);
-      setEmailIt(true);
+      setEmailIt(false);
       setTell([]);
       void qc.invalidateQueries({ queryKey: ["tickets", "detail", tk.id] });
       if (internal) {

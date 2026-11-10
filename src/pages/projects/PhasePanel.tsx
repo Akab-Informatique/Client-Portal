@@ -241,7 +241,7 @@ function Composer({ p, base, canTime, running, onSaved, fail, onTime }: { p: Pro
   // reply: the client's contacts ticked, other addresses, and whether it goes by email at all
   const [picked, setPicked] = useState<string[] | null>(null);
   const [others, setOthers] = useState<string[]>([]);
-  const [emailOn, setEmailOn] = useState(true);
+  const [emailOn, setEmailOn] = useState(false);
   const hasClient = Boolean(p.client);
   const { data: contacts = [] } = useQuery({ queryKey: [...KEY, "contacts", p.id], queryFn: () => api.get<{ id: string; name: string; email: string }[]>(`/projects/${p.id}/contacts`), enabled: hasClient });
   const to = picked ?? (contacts[0] ? [contacts[0].email.toLowerCase()] : []);

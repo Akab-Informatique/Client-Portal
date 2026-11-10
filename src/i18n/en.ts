@@ -2843,7 +2843,7 @@ const en: Dict = {
     "dock": "Minimized tasks",
     "restore": "Reopen the task",
     "composer": {
-      "reply": "Reply to the client",
+      "reply": "Public note",
       "internal": "Internal note",
       "time": "Time entry",
       "noClient": "This project has no client: pick one in the overview to reply to them.",
@@ -5434,7 +5434,7 @@ const en: Dict = {
     noActivity: "No activity yet.",
     internal: "Internal",
     hoursValue: "{{hours}} h",
-    noteReply: "Reply to client",
+    noteReply: "Public note",
     noteInternal: "Internal note",
     notePlaceholder: "Write a reply or a note…",
     noteSoon: "Preview: the note stays in the portal",
