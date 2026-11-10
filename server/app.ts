@@ -8,6 +8,7 @@ import { compress } from "hono/compress";
 import { serveStatic } from "@hono/node-server/serve-static";
 import { config } from "./config.ts";
 import { loadAuth, readOnlyViewAs, requireStaff, type AppEnv } from "./lib/auth.ts";
+import { audit } from "./lib/audit.ts";
 import { sameOriginJson } from "./lib/http.ts";
 import { authRoutes } from "./routes/auth.ts";
 import { pushAuthRoutes } from "./routes/pushAuth.ts";
@@ -102,6 +103,15 @@ export function createApp() {
   api.use("*", sameOriginJson);
   api.use("*", loadAuth);
   api.use("*", readOnlyViewAs);
+  // every change made through an API key is written to the audit log with the key's name ("changed by Grok")
+  api.use("*", async (c, next) => {
+    await next();
+    const k = c.var.auth?.apiKey;
+    const m = c.req.method;
+    if (k && m !== "GET" && m !== "HEAD" && c.res.status < 400) {
+      await audit(c.var.auth!.user.id, "api_key.write", c.req.path, { key: k.name, keyId: k.id, method: m, path: c.req.path, status: c.res.status });
+    }
+  });
   api.use("*", async (c, next) => {
     await next();
     c.header("Cache-Control", "no-store");

@@ -11618,6 +11618,19 @@ describe("API keys for outside tools", () => {
     expect(spec.status).toBe(200);
     expect(spec.json.openapi).toBe("3.1.0");
     expect(Object.keys(spec.json.paths)).toContain("/api/tickets/{id}/notes");
+    // a change made through a key says so: audit log, a signed note, and a note naming the key on a ticket change
+    const list = await admin.get("/api/tickets");
+    const tid = (list.json.tickets ?? list.json.items ?? list.json.list ?? [])[0]?.id;
+    if (tid) {
+      const wr = bearer(wk.json.key);
+      expect((await robot.req("POST", `/api/tickets/${tid}/notes`, { text: "Bonjour", internal: true }, wr)).status).toBe(201);
+      expect((await robot.req("PATCH", `/api/tickets/${tid}`, { priority: (await admin.get(`/api/tickets/${tid}`)).json.priority?.value ?? undefined }, wr)).status).toBeLessThan(500);
+      const texts = JSON.stringify((await admin.get(`/api/tickets/${tid}`)).json);
+      expect(texts).toContain("Grok écriture (API du portail)");
+    }
+    const logs = await db().select().from(schema.auditLog).where(eq(schema.auditLog.action, "api_key.write"));
+    expect(logs.length).toBeGreaterThan(0);
+    expect(JSON.stringify(logs[0].details)).toContain("Grok écriture");
     // revoked
     expect((await admin.del(`/api/admin/api-keys/${made.json.id}`)).status).toBe(200);
     expect((await robot.req("GET", "/api/tickets", undefined, bearer(key))).status).toBe(401);

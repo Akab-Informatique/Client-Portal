@@ -52,5 +52,5 @@ export async function authFromKey(c: Parameters<MiddlewareHandler<AppEnv>>[0]): 
   if (!row.key.lastUsedAt || now.getTime() - row.key.lastUsedAt.getTime() > 60_000) {
     await db().update(schema.apiKeys).set({ lastUsedAt: now, lastIp: clientIp(c) }).where(eq(schema.apiKeys.id, row.key.id));
   }
-  return { user: row.user, realUser: row.user, sessionId: `key:${row.key.id}`, mfaVerified: true, permissions, isAdmin: false, viewAs: null };
+  return { user: row.user, realUser: row.user, sessionId: `key:${row.key.id}`, mfaVerified: true, permissions, isAdmin: false, viewAs: null, apiKey: { id: row.key.id, name: row.key.name } };
 }

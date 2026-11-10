@@ -33,6 +33,8 @@ export type AuthContext = {
   isAdmin: boolean;
   /** Set while a technician views the portal as a client (read only). */
   viewAs: { clientId: string; clientName: string } | null;
+  /** Set when the request comes from an API key (an outside tool such as Grok): who it is, for "changed by" marks */
+  apiKey?: { id: string; name: string };
 };
 
 export type AppEnv = { Variables: { auth: AuthContext | null } };
