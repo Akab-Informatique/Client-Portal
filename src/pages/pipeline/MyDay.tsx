@@ -3,9 +3,8 @@ import { useNavigate } from "react-router-dom";
 import { useTranslation } from "react-i18next";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
-import { AlertTriangle, ArrowDownUp, GripVertical, CalendarClock, CalendarDays, Star, CalendarOff, CheckCircle2, EyeOff, ChevronLeft, ChevronRight, Coffee, Loader2, Lock, MessageSquareText, Plus, RefreshCw, Sparkles, Workflow } from "lucide-react";
+import { AlertTriangle, ArrowDownUp, GripVertical, CalendarClock, CalendarDays, Star, CalendarOff, CheckCircle2, EyeOff, ChevronLeft, ChevronRight, Coffee, Lock, Plus, Workflow } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { AiDirection, useAiDirection } from "@/components/AiDirection";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -109,7 +108,6 @@ export function MyDay({ onOpenTask }: { onOpenTask: (id: string) => void }) {
     window.addEventListener("pointermove", move);
     window.addEventListener("pointerup", up);
   };
-  const direction = useAiDirection(`pipeline.day:${date}:${userId}`);
   const key = ["pipeline", "day", date, userId];
   const { data, isLoading } = useQuery({
     queryKey: key,
@@ -119,15 +117,6 @@ export function MyDay({ onOpenTask }: { onOpenTask: (id: string) => void }) {
   const refresh = () => void qc.invalidateQueries({ queryKey: ["pipeline"] });
   // a slot of time blocked by hand (new, or an existing one being edited)
   const [blockDraft, setBlockDraft] = useState<DayBlockDraft | null>(null)
-  const replan = useMutation({
-    mutationFn: () => api.post<{ aiError: string | null }>("/pipeline/day/plan", { date, ...(userId !== me.id ? { userId } : {}), ...direction.body }),
-    onSuccess: (r) => {
-      refresh();
-      if (r.aiError) toast.message(t("pipeline.day.rulesOnly"), { description: t(`pipeline.day.aiError.${["not_configured", "disabled"].includes(r.aiError) ? r.aiError : "other"}`) });
-      else toast.success(t("pipeline.day.replanned"));
-    },
-    onError: () => toast.error(t("common.error")),
-  });
   const complete = useMutation({
     mutationFn: (id: string) => api.patch(`/pipeline/tasks/${id}`, { status: "done" }),
     onSuccess: refresh,
@@ -179,7 +168,6 @@ export function MyDay({ onOpenTask }: { onOpenTask: (id: string) => void }) {
             ? goTo(`/pipeline?section=projects&project=${i.refId}`)
             : onOpenTask(i.refId);
   const projectTasks = (data?.items ?? []).filter((i) => i.kind === "ptask");
-  const when = plan ? new Date(plan.updatedAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }) : "";
 
   return (
     <div className="space-y-4">
@@ -222,39 +210,8 @@ export function MyDay({ onOpenTask }: { onOpenTask: (id: string) => void }) {
               <div className="flex flex-wrap items-center gap-2">
                 <h2 className="text-xl font-bold capitalize">{userId === me.id ? t("pipeline.day.hello", { name: first }) : (people.data?.find((p) => p.id === userId)?.name ?? "")}</h2>
                 <span className="text-sm capitalize text-muted-foreground">{longDay(date)}</span>
-                <span
-                  className={cn("flex items-center gap-1 rounded-full border px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide", plan.source === "ai" ? "border-[color:var(--gold)]/40 bg-[color:var(--gold)]/10 text-primary" : "border-muted-foreground/30 text-muted-foreground")}
-                >
-                  <Sparkles className="size-3" /> {plan.source === "ai" ? t("pipeline.day.byAi") : t("pipeline.day.byRules")}
-                </span>
-                {plan.smsSentAt && (
-                  <Tooltip>
-                    <TooltipTrigger asChild>
-                      <span className="flex items-center gap-1 text-[11px] text-muted-foreground">
-                        <MessageSquareText className="size-3" /> {new Date(plan.smsSentAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
-                      </span>
-                    </TooltipTrigger>
-                    <TooltipContent>{t("pipeline.day.smsSent")}</TooltipContent>
-                  </Tooltip>
-                )}
               </div>
               <p className="max-w-3xl text-[15px] leading-relaxed">{plan.summary}</p>
-              <div className="flex flex-wrap items-center gap-3 pt-1 text-xs text-muted-foreground">
-                <span>{t("pipeline.day.updated", { time: when })}</span>
-                <span className={cn("flex items-center gap-1", plan.calendar === "ok" ? "text-sky-300" : plan.calendar === "none" ? "" : "text-orange-300")} title={plan.calendar === "ok" || plan.calendar === "none" ? undefined : plan.calendar}>
-                  <CalendarDays className="size-3" />{" "}
-                  {plan.calendar === "ok" ? t("pipeline.day.calendarOk", { count: plan.calendarEvents }) : plan.calendar === "none" ? t("pipeline.day.calendarNone") : plan.calendar === "o365_not_signed_in" ? t("pipeline.day.calendarSignIn") : t("pipeline.day.calendarError")}
-                </span>
-                {data.stale && <span className="flex items-center gap-1 text-orange-300"><AlertTriangle className="size-3" /> {t("pipeline.day.stale")}</span>}
-                {can("pipeline.edit") && (
-                  <Button variant="outline" size="sm" className="h-8 gap-1.5" disabled={replan.isPending} onClick={() => replan.mutate()}>
-                    {replan.isPending ? <Loader2 className="size-3.5 animate-spin" /> : <RefreshCw className="size-3.5" />} {t("pipeline.day.replan")}
-                  </Button>
-                )}
-                {can("pipeline.edit") && (
-                  <AiDirection id={`pipeline.day:${date}:${userId}`} className="-ml-2" />
-                )}
-              </div>
             </div>
             {/* the time: planned against free */}
             <div className="space-y-2 rounded-xl border bg-background/40 p-4">
@@ -316,16 +273,6 @@ export function MyDay({ onOpenTask }: { onOpenTask: (id: string) => void }) {
                     </Button>
                   </TooltipTrigger>
                   <TooltipContent>{t("pipeline.day.block.title")}</TooltipContent>
-                </Tooltip>
-              )}
-              {can("pipeline.edit") && (
-                <Tooltip>
-                  <TooltipTrigger asChild>
-                    <Button type="button" variant="ghost" size="icon" className="size-7 text-violet-300 hover:bg-violet-500/15" disabled={replan.isPending} onClick={() => replan.mutate()} aria-label={t("pipeline.day.aiRefresh")}>
-                      {replan.isPending ? <Loader2 className="size-4 animate-spin" /> : <Sparkles className="size-4" />}
-                    </Button>
-                  </TooltipTrigger>
-                  <TooltipContent>{t("pipeline.day.aiRefresh")}</TooltipContent>
                 </Tooltip>
               )}
               </div>
