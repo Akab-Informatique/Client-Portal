@@ -16,7 +16,7 @@ import { RemoveFromDay } from "./DayEdge";
 import { useTicketWorkspace } from "@/pages/tickets/workspace";
 import { PRIORITY_STYLE, addDays, dayLabel, hm, isWork, longDay, todayYmd, toMinutes, type Block, type DayData, type DayItem, type TaskCard } from "./shared";
 import { taskError, usePeople } from "./TaskDialog";
-import { DayProjects, MyTickets, Priorities } from "./DayLists";
+import { DayProjects, MyTickets } from "./DayLists";
 import { DayEdge } from "./DayEdge";
 import { AgendaCard } from "@/pages/tickets/Planning";
 import { DayBlockDialog, type DayBlockDraft } from "./DayBlockDialog";
@@ -258,7 +258,6 @@ export function MyDay({ onOpenTask }: { onOpenTask: (id: string) => void }) {
       {/* left: the blocks of the day (and the priorities of the day); right: the priorities of the week, all my tickets (compact), projects, tasks. The bar between them is dragged to give one side more room. */}
       <div ref={box} className="grid gap-4 xl:gap-0 xl:grid-cols-[var(--split)_12px_minmax(0,1fr)]" style={{ "--split": `${split}%` } as React.CSSProperties}>
         <div className="min-w-0 space-y-4">
-          <Priorities items={data?.items ?? []} horizon="day" onOpen={open} canRemove={can("pipeline.edit") && (userId === me.id || can("pipeline.manage"))} forUser={userId === me.id ? undefined : userId} />
           <section className="glass h-fit rounded-2xl border border-[color:var(--gold)]/30 p-4 shadow-[0_0_30px_-12px_rgba(255,206,26,0.35)]">
             <div className="relative mb-3 flex items-center justify-center">
               <h3 className="flex items-center gap-2 text-center text-base font-bold tracking-wide text-primary">
