@@ -629,7 +629,7 @@ export const timeRoutes = new Hono<AppEnv>()
       .from(schema.timesheetEntries)
       .where(and(eq(schema.timesheetEntries.id, zUuid.parse(c.req.param("id"))), manager ? undefined : eq(schema.timesheetEntries.userId, a.user.id)));
     // by hand, or time logged on a project (ticket time is changed on its ticket)
-    if (!e || (e.source !== "manual" && e.source !== "project")) throw new HTTPException(404, { message: "not_found" });
+    if (!e || (e.source !== "manual" && e.source !== "project" && e.source !== "pipeline")) throw new HTTPException(404, { message: "not_found" });
     await weekLock(e.userId, e.date, a);
     await tripLocked(e.id);
     // the account rows of the entry go with it (hr_ledger.entry_id cascades)

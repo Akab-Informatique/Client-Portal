@@ -18,6 +18,7 @@ import { PRIORITIES, PRIORITY_STYLE, STATUSES, STATUS_STYLE, dayLabel, fileToBas
 import { FilesBox, RecurrenceEditor, TagsEditor, VisibilityEditor } from "./TaskParts";
 import { newStep, TaskSteps, type Step } from "./TaskSteps";
 import { TaskNotify } from "./TaskNotify";
+import { PickEntryDialog, TaskActivity } from "./TaskActivity";
 
 const selectCls = "h-9 w-full rounded-md border bg-transparent px-2 text-sm outline-none focus:ring-2 focus:ring-[color:var(--gold)]/40";
 const KNOWN_ERRORS = ["task_blocked", "task_open_children", "task_cycle", "invalid_assignee", "invalid_ticket", "forbidden", "checklist_open", "item_blocked", "item_not_started", "item_cycle", "item_has_done_dependents", "item_invalid", "no_recipient"];
@@ -123,7 +124,8 @@ export function TaskDialog({ taskId, defaults, onClose, onOpenTask }: { taskId: 
   const [title, setTitle] = useState("");
   const [notes, setNotes] = useState("");
   const [estimate, setEstimate] = useState("");
-  const [comment, setComment] = useState("");
+  const [pickItem, setPickItem] = useState<string | null>(null);
+  const [timeTabKey, setTimeTabKey] = useState(0);
   useEffect(() => {
     if (!task) return;
     setTitle(task.title);
@@ -170,7 +172,8 @@ export function TaskDialog({ taskId, defaults, onClose, onOpenTask }: { taskId: 
       }
     },
     onChange: (id: string, p: Partial<Step>) => {
-      if (task) void sub(() => api.patch(`/pipeline/tasks/${task.id}/checklist/${id}`, p));
+      // a step ticked by hand: ask in which time entry it was done
+      if (task) void sub(() => api.patch(`/pipeline/tasks/${task.id}/checklist/${id}`, p)).then((r) => r && p.done === true && setPickItem(id));
       else setNewSteps((l) => l.map((s) => (s.id === id ? { ...s, ...p } : s)));
     },
     onRemove: (id: string) => {
@@ -321,34 +324,11 @@ export function TaskDialog({ taskId, defaults, onClose, onOpenTask }: { taskId: 
 
       {task && (
         <section className="space-y-2">
-          <Heading icon={MessageSquare}>{t("pipeline.teamNotes")}</Heading>
-          <ul className="space-y-2">
-            {task.comments.map((c) => (
-              <li key={c.id} className="rounded-xl border bg-muted/30 px-3 py-2">
-                <p className="text-xs">
-                  <span className="font-semibold">{c.author}</span> <span className="text-muted-foreground">{new Date(c.createdAt).toLocaleString()}</span>
-                </p>
-                <p className="mt-1 whitespace-pre-wrap text-sm">{c.text}</p>
-              </li>
-            ))}
-          </ul>
-          {editable && (
-            <form
-              className="space-y-2"
-              onSubmit={(e) => {
-                e.preventDefault();
-                if (!comment.trim()) return;
-                void sub(() => api.post(`/pipeline/tasks/${task.id}/notes`, { text: comment.trim() })).then(() => setComment(""));
-              }}
-            >
-              <Textarea value={comment} onChange={(e) => setComment(e.target.value)} rows={2} placeholder={t("pipeline.teamNotesPlaceholder")} maxLength={4000} />
-              <Button type="submit" size="sm" variant="outline" disabled={!comment.trim()}>
-                {t("pipeline.addComment")}
-              </Button>
-            </form>
-          )}
+          <Heading icon={MessageSquare}>{t("pipeline.activity.title")}</Heading>
+          <TaskActivity key={timeTabKey} startOnTime={timeTabKey > 0} task={task} editable={editable} onChanged={refresh} />
         </section>
       )}
+      {task && pickItem && <PickEntryDialog task={task} itemId={pickItem} onClose={() => setPickItem(null)} onChanged={refresh} onAddTime={() => setTimeTabKey((k) => k + 1)} />}
     </div>
   );
 

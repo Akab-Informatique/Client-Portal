@@ -7071,6 +7071,35 @@ describe("pipeline: shared to-dos and the day", () => {
     expect(await resetDayAdds()).toBe(0);
   });
 
+  it("time on a to-do task: internal, not billable, tied to the steps it covered", async () => {
+    resetRateLimit("login:ip:unknown");
+    const tech = await signIn("tech@akab.local");
+    const t = (await tech.post("/api/pipeline/tasks", { title: "Ménage des serveurs", checklist: [{ text: "Sauvegardes" }, { text: "Mises à jour" }] })).json;
+    const [a, b] = (await tech.get(`/api/pipeline/tasks/${t.id}`)).json.checklistItems as any[];
+    // time covering one step and finishing it
+    const day = "2031-03-05"; // a week no other test has sent
+    const r = await tech.post(`/api/pipeline/tasks/${t.id}/time`, { date: day, hours: 1.5, note: "Fait", itemIds: [a.id], doneItemIds: [a.id] });
+    expect(r.status).toBe(201);
+    const full = (await tech.get(`/api/pipeline/tasks/${t.id}`)).json;
+    expect(full.timeEntries).toHaveLength(1);
+    expect(full.timeEntries[0]).toMatchObject({ hours: 1.5, itemIds: [a.id] });
+    expect(full.checklistItems.find((i: any) => i.id === a.id).done).toBe(true);
+    // the entry is the person's own, never billable, no client: it cannot count in a billable share
+    const [row] = await db().select().from(schema.timesheetEntries).where(eq(schema.timesheetEntries.id, r.json.id));
+    expect(row).toMatchObject({ source: "pipeline", clientId: null, billableX100: 0, hoursX100: 150 });
+    // a step ticked by hand is tied to an entry afterwards
+    await tech.patch(`/api/pipeline/tasks/${t.id}/checklist/${b.id}`, { done: true });
+    expect((await tech.post(`/api/pipeline/tasks/${t.id}/checklist/${b.id}/time`, { entryId: r.json.id })).status).toBe(200);
+    expect((await tech.get(`/api/pipeline/tasks/${t.id}`)).json.timeEntries[0].itemIds.sort()).toEqual([a.id, b.id].sort());
+    // an item of another task, or an entry that is not the task's, is refused
+    expect((await tech.post(`/api/pipeline/tasks/${t.id}/time`, { date: day, hours: 1, itemIds: ["00000000-0000-4000-8000-000000000000"] })).status).toBe(400);
+    expect((await tech.post(`/api/pipeline/tasks/${t.id}/checklist/${b.id}/time`, { entryId: "00000000-0000-4000-8000-000000000000" })).status).toBe(404);
+    expect((await tech.post(`/api/pipeline/tasks/${t.id}/time`, { date: day, hours: 0 })).status).toBe(400);
+    // taken off the timesheet like any entry
+    expect((await tech.del(`/api/time/entries/${r.json.id}`)).status).toBe(200);
+    expect((await tech.get(`/api/pipeline/tasks/${t.id}`)).json.timeEntries).toHaveLength(0);
+  });
+
   it("a daily task starts again every day: reopened, checklist unchecked, notes kept", async () => {
     resetRateLimit("login:ip:unknown");
     const tech = await signIn("tech@akab.local");

@@ -2006,6 +2006,8 @@ export const timesheetEntries = pgTable(
     projectId: uuid("project_id"),
     milestoneId: uuid("milestone_id"),
     taskId: uuid("task_id"),
+    /** The to-do task (Opérations › À faire) this time was logged on: internal time, never billable, no client */
+    pipelineTaskId: uuid("pipeline_task_id"),
     /** ticket | manual | project */
     source: text("source").notNull().default("manual"),
     /** The client this time was spent on (a ticket's, a project's, or picked on a trip): billable and non billable hours are kept per client */
@@ -3347,4 +3349,18 @@ export const sopSteps = pgTable(
     updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
   },
   (t) => [index("sop_steps_sop_idx").on(t.sopId, t.position)],
+);
+
+/** The checklist items a time entry of a to-do task covered (which step was worked on, or finished, in that time) */
+export const pipelineEntryItems = pgTable(
+  "pipeline_entry_items",
+  {
+    entryId: uuid("entry_id")
+      .notNull()
+      .references(() => timesheetEntries.id, { onDelete: "cascade" }),
+    itemId: uuid("item_id")
+      .notNull()
+      .references(() => pipelineChecklist.id, { onDelete: "cascade" }),
+  },
+  (t) => [primaryKey({ columns: [t.entryId, t.itemId] })],
 );
