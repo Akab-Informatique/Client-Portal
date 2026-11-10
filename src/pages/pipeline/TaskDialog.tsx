@@ -548,8 +548,8 @@ export function TaskDialog({ taskId, defaults, onClose, onOpenTask }: { taskId: 
                 <BellRing className="size-4" /> {t("pipeline.notify")}
               </Button>
             )}
-            <Button variant="ghost" size="icon" className="size-9 text-muted-foreground" aria-label={t("pipeline.activity.minimize")} title={t("pipeline.activity.minimize")} onClick={() => (todoDock.add({ id: t0.id, title: t0.title }), onClose())}>
-              <Minus className="size-4" />
+            <Button variant="outline" size="sm" className="h-9 gap-1.5 border-emerald-400/40 text-emerald-300 hover:bg-emerald-500/10" title={t("pipeline.activity.minimize")} onClick={() => (todoDock.add({ id: t0.id, title: t0.title }), onClose())}>
+              <Minus className="size-4" /> {t("pipeline.activity.minimizeShort")}
             </Button>
             {can("pipeline.edit") && t0.status !== "done" && (
               <Button variant="outline" size="sm" className="h-9" onClick={() => setAddingDay(true)}>
