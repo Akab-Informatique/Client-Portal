@@ -180,7 +180,7 @@ function Dock({
     window.addEventListener("keydown", on);
     return () => window.removeEventListener("keydown", on);
   }, [drawer]);
-  const total = items.length + bus.projects;
+  const total = items.length + bus.projects + bus.todos;
   if (hidden) return null;
   const item = (d: Docked) => {
     const timer = list.find((x) => x.ticketId === d.id);
@@ -206,7 +206,7 @@ function Dock({
   // glows electric while there is something in it.
   return (
     <>
-      <DockLogo count={total} running={list.some((x) => x.state === "running") || bus.projectRunning} open={drawer} onToggle={() => total > 0 && setDrawer((o) => !o)} label={t("tickets.dockDrawer", { count: total })} />
+      <DockLogo count={total} running={list.some((x) => x.state === "running") || bus.projectRunning || bus.todoRunning} open={drawer} onToggle={() => total > 0 && setDrawer((o) => !o)} label={t("tickets.dockDrawer", { count: total })} />
       {drawer && total > 0 && <button type="button" aria-hidden tabIndex={-1} className="fixed inset-0 z-[39] cursor-default" onClick={() => setDrawer(false)} />}
       <div
         className={cn(

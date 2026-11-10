@@ -3364,3 +3364,20 @@ export const pipelineEntryItems = pgTable(
   },
   (t) => [primaryKey({ columns: [t.entryId, t.itemId] })],
 );
+
+/** The timer of a to-do task for a person: counts while they work on it; stopping it makes an internal time entry */
+export const pipelineTaskTimers = pgTable(
+  "pipeline_task_timers",
+  {
+    taskId: uuid("task_id")
+      .notNull()
+      .references(() => pipelineTasks.id, { onDelete: "cascade" }),
+    userId: uuid("user_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    startedAt: timestamp("started_at", { withTimezone: true }).notNull().defaultNow(),
+    baseSeconds: integer("base_seconds").notNull().default(0),
+    pausedAt: timestamp("paused_at", { withTimezone: true }),
+  },
+  (t) => [primaryKey({ columns: [t.taskId, t.userId] })],
+);

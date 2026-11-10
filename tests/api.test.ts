@@ -7071,6 +7071,35 @@ describe("pipeline: shared to-dos and the day", () => {
     expect(await resetDayAdds()).toBe(0);
   });
 
+  it("a to-do task has a timer: start, pause, resume, stop makes the internal entry, or discard", async () => {
+    resetRateLimit("login:ip:unknown");
+    const tech = await signIn("tech@akab.local");
+    const t = (await tech.post("/api/pipeline/tasks", { title: "Minuteur à faire", checklist: [{ text: "Étape" }] })).json;
+    const item = (await tech.get(`/api/pipeline/tasks/${t.id}`)).json.checklistItems[0];
+    expect((await tech.get(`/api/pipeline/tasks/${t.id}/timer`)).json).toBeNull();
+    expect((await tech.post(`/api/pipeline/tasks/${t.id}/timer/pause`, {})).status).toBe(409);
+    const s = await tech.post(`/api/pipeline/tasks/${t.id}/timer/start`, {});
+    expect(s.status).toBe(200);
+    expect(s.json.paused).toBe(false);
+    // starting again keeps the same timer
+    expect((await tech.post(`/api/pipeline/tasks/${t.id}/timer/start`, {})).json.startedAt).toBe(s.json.startedAt);
+    expect((await tech.post(`/api/pipeline/tasks/${t.id}/timer/pause`, {})).json.paused).toBe(true);
+    expect((await tech.post(`/api/pipeline/tasks/${t.id}/timer/resume`, {})).json.paused).toBe(false);
+    // it is listed for the drawer
+    expect(((await tech.get("/api/pipeline/timers")).json as any[]).some((x) => x.taskId === t.id && x.title === "Minuteur à faire")).toBe(true);
+    // stopping makes the internal entry (never billable, no client) and the step it covered
+    const r = await tech.post(`/api/pipeline/tasks/${t.id}/timer/stop`, { date: "2031-03-12", hours: 0.75, note: "Fait", itemIds: [item.id] });
+    expect(r.status).toBe(200);
+    const [row] = await db().select().from(schema.timesheetEntries).where(eq(schema.timesheetEntries.id, r.json.id));
+    expect(row).toMatchObject({ source: "pipeline", clientId: null, billableX100: 0, hoursX100: 75 });
+    expect((await tech.get(`/api/pipeline/tasks/${t.id}`)).json.timeEntries[0].itemIds).toEqual([item.id]);
+    expect((await tech.get(`/api/pipeline/tasks/${t.id}/timer`)).json).toBeNull();
+    // discarded: no entry
+    await tech.post(`/api/pipeline/tasks/${t.id}/timer/start`, {});
+    expect((await tech.post(`/api/pipeline/tasks/${t.id}/timer/stop`, { discard: true })).json.discarded).toBe(true);
+    expect((await tech.get(`/api/pipeline/tasks/${t.id}`)).json.timeEntries).toHaveLength(1);
+  });
+
   it("time on a to-do task: internal, not billable, tied to the steps it covered", async () => {
     resetRateLimit("login:ip:unknown");
     const tech = await signIn("tech@akab.local");

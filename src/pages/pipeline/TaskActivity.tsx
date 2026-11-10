@@ -1,7 +1,8 @@
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
 import { toast } from "sonner";
-import { Clock, Loader2, StickyNote, Trash2 } from "lucide-react";
+import { Clock, Loader2, Pause, Play, Square, StickyNote, Trash2 } from "lucide-react";
 import { AiTextarea } from "@/components/AiPolish";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -13,6 +14,7 @@ import { useCan, useMe } from "@/lib/session";
 import { cn } from "@/lib/utils";
 import { hm, parseHm } from "@shared/duration";
 import { todayYmd, type TaskFull } from "./shared";
+import { clock } from "@/pages/projects/shared";
 import { taskError } from "./TaskDialog";
 
 type Filter = "all" | "notes" | "time";
@@ -39,6 +41,42 @@ export function TaskActivity({ task, editable, onChanged, startOnTime = false }:
   const nameOf = new Map(items.map((i) => [i.id, i.text]));
   const hours = parseHm(duration);
   const canTime = can("timesheets.use");
+  const qc = useQueryClient();
+
+  // ── the timer: starts when the person who has the task opens it (once), counts, pauses; stopping asks for the time ──
+  type TimerView = { startedAt: string; baseSeconds: number; paused: boolean; seconds: number } | null;
+  const timerKey = ["pipeline", "task", task.id, "timer"];
+  const { data: timer, isFetched } = useQuery({ queryKey: timerKey, queryFn: () => api.get<TimerView>(`/pipeline/tasks/${task.id}/timer`), enabled: editable && canTime });
+  const timerCall = useMutation({
+    mutationFn: (what: "start" | "pause" | "resume") => api.post(`/pipeline/tasks/${task.id}/timer/${what}`, {}),
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: timerKey });
+      void qc.invalidateQueries({ queryKey: ["pipeline", "timers"] });
+    },
+    onError: (e) => toast.error(taskError(t, e)),
+  });
+  const mine = task.assignees.some((a) => a.id === me.id);
+  const started = useRef(false);
+  useEffect(() => {
+    if (started.current || !isFetched || timer || !editable || !canTime || !mine || task.status === "done") return;
+    started.current = true;
+    timerCall.mutate("start");
+  }, [isFetched, timer]); // eslint-disable-line react-hooks/exhaustive-deps
+  const [now, setNow] = useState(Date.now());
+  useEffect(() => {
+    if (!timer || timer.paused) return;
+    const id = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(id);
+  }, [timer?.paused, timer?.startedAt]); // eslint-disable-line react-hooks/exhaustive-deps
+  const seconds = timer ? timer.baseSeconds + (timer.paused ? 0 : Math.max(0, (now - new Date(timer.startedAt).getTime()) / 1000)) : 0;
+  const fillFromTimer = () => {
+    setMode("time");
+    if (timer) setDuration(hm(Math.max(1 / 60, Math.round((seconds / 3600) * 100) / 100)));
+  };
+  // asked to enter the time right now (closing with a timer running)
+  useEffect(() => {
+    if (startOnTime && timer && !duration) fillFromTimer();
+  }, [startOnTime, timer?.startedAt]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const run = async (fn: () => Promise<unknown>, after: () => void) => {
     setBusy(true);
@@ -56,8 +94,10 @@ export function TaskActivity({ task, editable, onChanged, startOnTime = false }:
   const addTime = () => {
     if (hours === null || hours < 0.05) return toast.error(t("pipeline.activity.durationFormat"));
     void run(
-      () => api.post(`/pipeline/tasks/${task.id}/time`, { date, hours, note: text.trim() || undefined, itemIds: worked, doneItemIds: finished }),
+      () => api.post(`/pipeline/tasks/${task.id}/${timer ? "timer/stop" : "time"}`, { date, hours, note: text.trim() || undefined, itemIds: worked, doneItemIds: finished }),
       () => {
+        void qc.invalidateQueries({ queryKey: timerKey });
+        void qc.invalidateQueries({ queryKey: ["pipeline", "timers"] });
         setText("");
         setDuration("");
         setWorked([]);
@@ -129,6 +169,24 @@ export function TaskActivity({ task, editable, onChanged, startOnTime = false }:
     <div className="space-y-3">
       {editable && (
         <div className="space-y-2 rounded-xl border bg-background/40 p-3">
+          {timer && (
+            <div className={cn("flex flex-wrap items-center gap-2 rounded-lg border px-3 py-2", timer.paused ? "border-amber-400/40 bg-amber-500/5" : "border-emerald-400/40 bg-emerald-500/5")}>
+              <Clock className={cn("size-4", timer.paused ? "text-amber-300" : "text-emerald-300")} />
+              <span className={cn("font-mono text-base font-semibold tabular-nums", timer.paused ? "text-amber-300" : "text-emerald-300")}>{clock(seconds)}</span>
+              <span className="text-xs text-muted-foreground">{timer.paused ? t("pipeline.activity.timerPaused") : t("pipeline.activity.timerRunning")}</span>
+              <span className="ml-auto flex items-center gap-1.5">
+                <Button type="button" size="sm" variant="outline" className="h-8 gap-1" disabled={timerCall.isPending} onClick={() => timerCall.mutate(timer.paused ? "resume" : "pause")}>
+                  {timer.paused ? <Play className="size-3.5" /> : <Pause className="size-3.5" />} {timer.paused ? t("pipeline.activity.resume") : t("pipeline.activity.pause")}
+                </Button>
+                <Button type="button" size="sm" className="h-8 gap-1" onClick={fillFromTimer}>
+                  <Square className="size-3.5" /> {t("pipeline.activity.stop")}
+                </Button>
+                <Button type="button" size="sm" variant="ghost" className="h-8 text-muted-foreground" onClick={() => void run(() => api.post(`/pipeline/tasks/${task.id}/timer/stop`, { discard: true }), () => { void qc.invalidateQueries({ queryKey: timerKey }); void qc.invalidateQueries({ queryKey: ["pipeline", "timers"] }); })}>
+                  {t("pipeline.activity.discard")}
+                </Button>
+              </span>
+            </div>
+          )}
           <div className="flex gap-1.5" role="tablist">
             <button type="button" role="tab" aria-selected={mode === "note"} onClick={() => setMode("note")} className={cn("flex items-center gap-1.5 rounded-lg border px-3 py-1.5 text-xs font-medium", mode === "note" ? "border-violet-400/50 bg-violet-500/10 text-violet-200" : "text-muted-foreground")}>
               <StickyNote className="size-3.5" /> {t("pipeline.activity.noteTab")}

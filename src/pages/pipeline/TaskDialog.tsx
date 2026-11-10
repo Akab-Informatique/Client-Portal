@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { useTranslation } from "react-i18next";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
-import { BellRing, Check, CalendarClock, CalendarPlus, CheckCircle2, CircleDashed, Clock3, ListChecks, Loader2, Lock, MessageSquare, Paperclip, PlayCircle, Repeat, Tag, Trash2, UserRound, Workflow, Ticket as TicketIcon, Eye } from "lucide-react";
+import { BellRing, Check, CalendarClock, CalendarPlus, CheckCircle2, CircleDashed, Clock3, ListChecks, Loader2, Lock, MessageSquare, Minus, Paperclip, PlayCircle, Repeat, Tag, Trash2, UserRound, Workflow, Ticket as TicketIcon, Eye } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { AddToDayDialog } from "@/pages/tickets/AddToDayDialog";
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from "@/components/ui/dialog";
@@ -19,6 +19,7 @@ import { FilesBox, RecurrenceEditor, TagsEditor, VisibilityEditor } from "./Task
 import { newStep, TaskSteps, type Step } from "./TaskSteps";
 import { TaskNotify } from "./TaskNotify";
 import { PickEntryDialog, TaskActivity } from "./TaskActivity";
+import { todoDock } from "@/lib/todoDock";
 
 const selectCls = "h-9 w-full rounded-md border bg-transparent px-2 text-sm outline-none focus:ring-2 focus:ring-[color:var(--gold)]/40";
 const KNOWN_ERRORS = ["task_blocked", "task_open_children", "task_cycle", "invalid_assignee", "invalid_ticket", "forbidden", "checklist_open", "item_blocked", "item_not_started", "item_cycle", "item_has_done_dependents", "item_invalid", "no_recipient"];
@@ -125,6 +126,13 @@ export function TaskDialog({ taskId, defaults, onClose, onOpenTask }: { taskId: 
   const [notes, setNotes] = useState("");
   const [estimate, setEstimate] = useState("");
   const [pickItem, setPickItem] = useState<string | null>(null);
+  // closing with a timer running asks what to do with the time
+  const [closing, setClosing] = useState(false);
+  const timerQ = useQuery({ queryKey: ["pipeline", "task", taskId, "timer"], queryFn: () => api.get<{ seconds: number } | null>(`/pipeline/tasks/${taskId}/timer`), enabled: Boolean(taskId) && editable && can("timesheets.use") });
+  useEffect(() => {
+    if (taskId) todoDock.remove(taskId);
+  }, [taskId]);
+  const requestClose = () => (timerQ.data ? setClosing(true) : onClose());
   const [timeTabKey, setTimeTabKey] = useState(0);
   useEffect(() => {
     if (!task) return;
@@ -232,11 +240,30 @@ export function TaskDialog({ taskId, defaults, onClose, onOpenTask }: { taskId: 
   });
 
   const shell = (children: ReactNode) => (
-    <Dialog open onOpenChange={(o) => !o && onClose()}>
+    <Dialog open onOpenChange={(o) => !o && requestClose()}>
       <DialogContent className="flex h-[min(97vh,1200px)] w-[min(99vw,1760px)] max-w-none flex-col gap-0 overflow-hidden p-0 sm:max-w-none">
         <DialogTitle className="sr-only">{t("pipeline.task")}</DialogTitle>
         <DialogDescription className="sr-only">{t("pipeline.taskHint")}</DialogDescription>
         {children}
+        {closing && taskId && (
+          <Dialog open onOpenChange={(o) => !o && setClosing(false)}>
+            <DialogContent className="max-w-md">
+              <DialogTitle>{t("pipeline.activity.closeTitle")}</DialogTitle>
+              <DialogDescription>{t("pipeline.activity.closeText")}</DialogDescription>
+              <div className="flex flex-col gap-2 pt-2">
+                <Button type="button" onClick={() => (setClosing(false), setTimeTabKey((k) => k + 1))}>
+                  {t("pipeline.activity.enterNow")}
+                </Button>
+                <Button type="button" variant="outline" onClick={() => (todoDock.add({ id: taskId, title: task?.title ?? "" }), setClosing(false), onClose())}>
+                  {t("pipeline.activity.later")}
+                </Button>
+                <Button type="button" variant="ghost" className="text-muted-foreground" onClick={() => void api.post(`/pipeline/tasks/${taskId}/timer/stop`, { discard: true }).then(() => { void qc.invalidateQueries({ queryKey: ["pipeline"] }); setClosing(false); onClose(); })}>
+                  {t("pipeline.activity.closeNoTime")}
+                </Button>
+              </div>
+            </DialogContent>
+          </Dialog>
+        )}
       </DialogContent>
     </Dialog>
   );
@@ -521,6 +548,9 @@ export function TaskDialog({ taskId, defaults, onClose, onOpenTask }: { taskId: 
                 <BellRing className="size-4" /> {t("pipeline.notify")}
               </Button>
             )}
+            <Button variant="ghost" size="icon" className="size-9 text-muted-foreground" aria-label={t("pipeline.activity.minimize")} title={t("pipeline.activity.minimize")} onClick={() => (todoDock.add({ id: t0.id, title: t0.title }), onClose())}>
+              <Minus className="size-4" />
+            </Button>
             {can("pipeline.edit") && t0.status !== "done" && (
               <Button variant="outline" size="sm" className="h-9" onClick={() => setAddingDay(true)}>
                 <CalendarPlus className="size-4" /> {t("tickets.addDay.title")}
