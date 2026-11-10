@@ -519,7 +519,7 @@ export const projectsRoutes = new Hono<AppEnv>()
       notes: notes.map((n) => ({ id: n.id, text: n.text, internal: n.internal, fromClient: n.authorKind === "client", createdAt: n.createdAt, authorId: n.authorId, author: n.author ?? null })),
       time: {
         byPerson: byPerson.map((x) => ({ userId: x.userId, name: x.user, hours: x.h / 100 })),
-        entries: entries.map((e) => ({ id: e.id, date: e.date, hours: e.hoursX100 / 100, billableHours: (e.billableX100 ?? e.hoursX100) / 100, note: e.note, milestoneId: e.milestoneId, milestone: e.milestoneId ? (msName.get(e.milestoneId) ?? null) : null, task: e.taskId ? (taskName.get(e.taskId) ?? null) : null, ticket: e.ticketTimeId ? { number: e.ticketNumber, title: e.ticketTitle } : null, userId: e.userId, user: e.user })),
+        entries: entries.map((e) => ({ id: e.id, date: e.date, hours: e.hoursX100 / 100, billableHours: (e.billableX100 ?? e.hoursX100) / 100, note: e.note, milestoneId: e.milestoneId, taskId: e.taskId, milestone: e.milestoneId ? (msName.get(e.milestoneId) ?? null) : null, task: e.taskId ? (taskName.get(e.taskId) ?? null) : null, ticket: e.ticketTimeId ? { number: e.ticketNumber, title: e.ticketTitle } : null, userId: e.userId, user: e.user })),
       },
     });
   })
@@ -1332,7 +1332,17 @@ export const projectsRoutes = new Hono<AppEnv>()
     const [e] = await db().select().from(schema.timesheetEntries).where(and(eq(schema.timesheetEntries.id, zUuid.parse(c.req.param("eid"))), eq(schema.timesheetEntries.projectId, p.id)));
     if (!e) throw new HTTPException(404, { message: "not_found" });
     if (e.userId !== a.user.id && !a.permissions.includes("projects.manage")) throw new HTTPException(403, { message: "Forbidden" });
-    const o = await body(c, z.object({ billable: z.boolean().optional(), note: z.string().trim().max(2000).nullable().optional(), userId: zUuid.optional() }));
+    const o = await body(c, z.object({ billable: z.boolean().optional(), note: z.string().trim().max(2000).nullable().optional(), userId: zUuid.optional(), date: zDay.optional(), hours: z.number().min(0.05).max(24).optional(), milestoneId: zUuid.nullable().optional(), taskId: zUuid.nullable().optional() }));
+    // the day, the hours or the phase / task: not for ticket time (changed on its ticket), not once invoiced, and the week must be open (a timesheet manager always can)
+    const reshape = o.date !== undefined || o.hours !== undefined || o.milestoneId !== undefined || o.taskId !== undefined;
+    if (reshape) {
+      if (e.ticketTimeId) throw new HTTPException(409, { message: "time_from_ticket" });
+      const [billed] = await db().select({ id: schema.billingItems.id }).from(schema.billingItems).where(and(eq(schema.billingItems.sourceId, `prtime:${e.id}`), eq(schema.billingItems.status, "posted"))).limit(1);
+      if (billed) throw new HTTPException(409, { message: "time_billed" });
+      if (!a.permissions.includes("timesheets.manage")) {
+        for (const day of new Set([e.date, o.date ?? e.date])) if (!editable((await sheetOf(e.userId, weekStartOf(day))).status)) throw new HTTPException(409, { message: "timesheet_locked" });
+      }
+    }
     // whose time it is: a manager changes it (it moves to that person's timesheet)
     const moveTo = o.userId && o.userId !== e.userId ? o.userId : null;
     if (moveTo) {
@@ -1352,10 +1362,31 @@ export const projectsRoutes = new Hono<AppEnv>()
       const [billed] = await db().select({ id: schema.billingItems.id }).from(schema.billingItems).where(and(eq(schema.billingItems.sourceId, `prtime:${e.id}`), inArray(schema.billingItems.status, ["posted"]))).limit(1);
       if (billed) throw new HTTPException(409, { message: "time_billed" });
     }
+    // phase and task: a task fixes its phase
+    let where: Partial<typeof schema.timesheetEntries.$inferInsert> = {};
+    if (o.taskId !== undefined || o.milestoneId !== undefined) {
+      const task = o.taskId ? await loadTask(p.id, o.taskId) : null;
+      const ms = task ? await loadMilestone(p.id, task.milestoneId) : o.milestoneId ? await loadMilestone(p.id, o.milestoneId) : null;
+      where = { milestoneId: ms?.id ?? null, taskId: task?.id ?? null, ticketTitle: `${p.name}${ms ? ` · ${ms.name}` : ""}${task ? ` · ${task.title}` : ""}`.slice(0, 250) };
+    }
+    const hoursX100 = o.hours !== undefined ? Math.round(o.hours * 100) : e.hoursX100;
+    const wasBillable = (e.billableX100 ?? 0) > 0;
+    const billableNow = o.billable !== undefined ? o.billable : wasBillable;
     await db()
       .update(schema.timesheetEntries)
-      .set({ ...(o.billable !== undefined ? splitBillable(e.hoursX100, o.billable ? e.hoursX100 : 0) : {}), ...(o.note !== undefined ? { note: o.note || null } : {}), ...(moveTo ? { userId: moveTo } : {}) })
+      .set({
+        ...(o.billable !== undefined || o.hours !== undefined ? { hoursX100, ...splitBillable(hoursX100, billableNow ? hoursX100 : 0) } : {}),
+        ...(o.date !== undefined ? { date: o.date } : {}),
+        ...where,
+        ...(o.note !== undefined ? { note: o.note || null } : {}),
+        ...(moveTo ? { userId: moveTo } : {}),
+      })
       .where(eq(schema.timesheetEntries.id, e.id));
+    if (reshape) {
+      await audit(a.user.id, "project.time_changed", p.id, { entry: e.id, ...(o.date !== undefined ? { date: o.date } : {}), ...(o.hours !== undefined ? { hours: o.hours } : {}) });
+      await db().update(schema.projects).set({ updatedAt: new Date() }).where(eq(schema.projects.id, p.id));
+      await syncBillablesNow();
+    }
     if (moveTo) {
       await audit(a.user.id, "project.time_person_changed", p.id, { entry: e.id, from: e.userId, to: moveTo });
       // the line to bill carries the person's name: refreshed (a pending one, not edited by hand)

@@ -2732,6 +2732,7 @@ const en: Dict = {
     "saveTime": "Log the time",
     "discardTimer": "Discard",
     "included": "Included",
+    "editTime": "Edit the time entry",
     "toggleBillable": "Click to change: billable or included",
     "billing": "Billing",
     "billingMode": "Project billing",

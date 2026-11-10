@@ -11401,6 +11401,11 @@ describe("a charge not approved yet goes to another ticket or a project; an admi
       const [after] = await db().select().from(schema.timesheetEntries).where(eq(schema.timesheetEntries.id, given.json.id));
       expect(after.userId).toBe(adminUser.id);
       expect((await admin.get(`/api/projects/${project.id}`)).json.time.entries.find((e: any) => e.id === given.json.id).userId).toBe(adminUser.id);
+      // the day, the hours and the note of an entry can be changed (billable stays); a bad value is refused
+      expect((await admin.patch(`/api/projects/${project.id}/time/${given.json.id}`, { hours: 0 })).status).toBe(400);
+      expect((await admin.patch(`/api/projects/${project.id}/time/${given.json.id}`, { date: "2026-11-03", hours: 2.25, note: "corrigé" })).status).toBe(200);
+      const [edited] = await db().select().from(schema.timesheetEntries).where(eq(schema.timesheetEntries.id, given.json.id));
+      expect([edited.date, edited.hoursX100, edited.note, edited.billableX100]).toEqual(["2026-11-03", 225, "corrigé", 225]);
     } finally {
       await db().delete(schema.integrations).where(eq(schema.integrations.provider, "tickets"));
       (await import("../server/lib/localTickets.ts")).resetTicketMode();

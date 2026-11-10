@@ -5,7 +5,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { AiTextarea } from "@/components/AiPolish";
 import { PhasePanel } from "./PhasePanel";
-import { ArrowDown, ArrowUp, GripVertical, BellRing, Check, Globe, Lock, ChevronDown, Clock, FileText, Flag, FolderOpen, Info, ArrowRightLeft, ListChecks, Loader2, Mail, MessageSquare, MessagesSquare, Minus, Plus, Star, Trash2, X } from "lucide-react";
+import { ArrowDown, ArrowUp, GripVertical, BellRing, Check, Globe, Lock, ChevronDown, Clock, FileText, Flag, FolderOpen, Info, ArrowRightLeft, ListChecks, Loader2, Mail, MessageSquare, MessagesSquare, Minus, Pencil, Plus, Star, Trash2, X } from "lucide-react";
 import { useConfirm } from "@/components/ConfirmDialog";
 import { MoveChargeDialog } from "@/components/MoveChargeDialog";
 import { Button } from "@/components/ui/button";
@@ -443,6 +443,91 @@ function MilestoneRow({ p, m, edit, isOpen, onToggle, onChanged, fail, onUp, onD
 }
 
 // ── Time ──
+/** Change an entry of time: day, hours, phase / task and note (billable / included is the chip on the row) */
+function EditTimeDialog({ p, entry, tasks, onClose, onChanged, fail }: { p: ProjectDetail; entry: ProjectDetail["time"]["entries"][number]; tasks: { id: string; title: string; milestone: string }[]; onClose: () => void; onChanged: () => void; fail: (e: unknown) => void }) {
+  const { t } = useTranslation();
+  const [f, setF] = useState({ date: entry.date, duration: hm(entry.hours), milestoneId: entry.milestoneId ?? "", taskId: entry.taskId ?? "", note: entry.note ?? "" });
+  const hours = parseHm(f.duration);
+  const save = useMutation({
+    mutationFn: () => api.patch(`/projects/${p.id}/time/${entry.id}`, { date: f.date, hours, ...(f.taskId ? { taskId: f.taskId } : { taskId: null, milestoneId: f.milestoneId || null }), note: f.note.trim() || null }),
+    onSuccess: () => {
+      onChanged();
+      onClose();
+    },
+    onError: fail,
+  });
+  return (
+    <Dialog open onOpenChange={(o) => !o && onClose()}>
+      <DialogContent className="max-w-lg">
+        <DialogTitle>{t("projects.editTime")}</DialogTitle>
+        <DialogDescription className="sr-only">{t("projects.editTime")}</DialogDescription>
+        <form
+          className="space-y-3"
+          onSubmit={(e: FormEvent) => {
+            e.preventDefault();
+            if (hours && hours > 0) save.mutate();
+          }}
+        >
+          <div className="grid grid-cols-2 gap-3">
+            <div className="space-y-1.5">
+              <Label className="text-xs">{t("projects.date")}</Label>
+              <Input type="date" value={f.date} onChange={(e) => setF((s) => ({ ...s, date: e.target.value }))} required />
+            </div>
+            <div className="space-y-1.5">
+              <Label className="text-xs">{t("projects.duration")}</Label>
+              <Input value={f.duration} onChange={(e) => setF((s) => ({ ...s, duration: e.target.value }))} placeholder="1:30" aria-invalid={hours == null} />
+            </div>
+          </div>
+          <div className="space-y-1.5">
+            <Label className="text-xs">{t("projects.f.milestone")}</Label>
+            <Select value={f.milestoneId || "none"} onValueChange={(v) => setF((s) => ({ ...s, milestoneId: v === "none" ? "" : v, taskId: "" }))}>
+              <SelectTrigger>
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="none">{t("projects.noMilestone")}</SelectItem>
+                {p.milestones.map((m) => (
+                  <SelectItem key={m.id} value={m.id}>
+                    {m.name}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+          <div className="space-y-1.5">
+            <Label className="text-xs">{t("projects.task")}</Label>
+            <Select value={f.taskId || "none"} onValueChange={(v) => setF((s) => ({ ...s, taskId: v === "none" ? "" : v }))}>
+              <SelectTrigger>
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="none">{t("projects.noTask")}</SelectItem>
+                {tasks.map((k) => (
+                  <SelectItem key={k.id} value={k.id}>
+                    {k.milestone} · {k.title}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+          <div className="space-y-1.5">
+            <Label className="text-xs">{t("projects.note")}</Label>
+            <AiTextarea rows={4} value={f.note} onChange={(e) => setF((s) => ({ ...s, note: e.target.value }))} maxLength={2000} />
+          </div>
+          <div className="flex justify-end gap-2">
+            <Button type="button" variant="ghost" onClick={onClose}>
+              {t("common.cancel")}
+            </Button>
+            <Button type="submit" disabled={!hours || hours <= 0 || save.isPending} className="bg-grad-gold font-semibold text-[#1a1204] hover:brightness-105">
+              {save.isPending && <Loader2 className="size-4 animate-spin" />} {t("common.save")}
+            </Button>
+          </div>
+        </form>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
 function TimeTab({ p, edit, onChanged, fail }: { p: ProjectDetail; edit: boolean; onChanged: () => void; fail: (e: unknown) => void }) {
   const { t } = useTranslation();
   const me = useMe();
@@ -457,6 +542,7 @@ function TimeTab({ p, edit, onChanged, fail }: { p: ProjectDetail; edit: boolean
   const manager = can("projects.manage");
   const { data: people = [] } = useProjectPeople();
   const [moving, setMoving] = useState<{ id: string; name: string } | null>(null);
+  const [editing, setEditing] = useState<ProjectDetail["time"]["entries"][number] | null>(null);
   const { data: charges = [], refetch: refetchCharges } = useQuery({ queryKey: [...KEY, "charges", p.id], queryFn: () => api.get<{ id: string; name: string; quantity: number; unitPrice: number | null; rebate: number; billable: boolean; date: string | null; billing: string | null; movable: boolean }[]>(`/projects/${p.id}/charges`) });
   const reassign = useMutation({
     mutationFn: (v: { id: string; userId: string }) => api.patch(`/projects/${p.id}/time/${v.id}`, { userId: v.userId }),
@@ -652,7 +738,12 @@ function TimeTab({ p, edit, onChanged, fail }: { p: ProjectDetail; edit: boolean
                 >
                   {e.billableHours > 0 ? t("projects.billable") : t("projects.included")}
                 </button>
-                <span className="w-7">
+                <span className="flex w-14 items-center">
+                  {!e.ticket && (e.userId === me.id || can("projects.manage")) && (
+                    <button type="button" aria-label={t("projects.editTime")} title={t("projects.editTime")} onClick={() => setEditing(e)} className="rounded p-1 text-muted-foreground hover:text-primary">
+                      <Pencil className="size-3.5" />
+                    </button>
+                  )}
                   {!e.ticket && (e.userId === me.id || can("projects.manage")) && (
                     <button type="button" aria-label={t("common.delete")} onClick={() => del.mutate(e.id)} className="rounded p-1 text-muted-foreground hover:text-destructive">
                       <Trash2 className="size-3.5" />
@@ -664,6 +755,8 @@ function TimeTab({ p, edit, onChanged, fail }: { p: ProjectDetail; edit: boolean
           </ul>
         )}
       </Card>
+
+      {editing && <EditTimeDialog p={p} entry={editing} tasks={tasks} onClose={() => setEditing(null)} onChanged={() => { onChanged(); void qc.invalidateQueries({ queryKey: ["time"] }); }} fail={fail} />}
 
       {charges.length > 0 && (
         <Card title={t("chargeMove.projectCharges")}>

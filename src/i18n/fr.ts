@@ -2730,6 +2730,7 @@ const fr = {
     "saveTime": "Inscrire le temps",
     "discardTimer": "Jeter",
     "included": "Inclus",
+    "editTime": "Modifier l'entrée de temps",
     "toggleBillable": "Cliquer pour changer : facturable ou inclus",
     "billing": "Facturation",
     "billingMode": "Facturation du projet",

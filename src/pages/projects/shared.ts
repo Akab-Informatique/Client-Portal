@@ -130,7 +130,7 @@ export type ProjectDetail = Project & {
   notes: { id: string; text: string; internal: boolean; fromClient: boolean; createdAt: string; authorId: string | null; author: string | null }[];
   time: {
     byPerson: { userId: string; name: string; hours: number }[];
-    entries: { id: string; date: string; hours: number; billableHours: number; note: string | null; milestoneId: string | null; milestone: string | null; task: string | null; ticket: { number: string | null; title: string | null } | null; userId: string; user: string }[];
+    entries: { id: string; date: string; hours: number; billableHours: number; note: string | null; milestoneId: string | null; taskId: string | null; milestone: string | null; task: string | null; ticket: { number: string | null; title: string | null } | null; userId: string; user: string }[];
   };
   /** The quote it was made from */
   quote: { id: string; number: string } | null;
