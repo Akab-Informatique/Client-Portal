@@ -86,40 +86,42 @@ const COMPACT_COLUMNS = ["ticket", "company", "priority", "milestone", "due", "s
 type CompactCol = (typeof COMPACT_COLUMNS)[number];
 const COMPACT_KEY = "akab.tickets.compact.columns.v1";
 const COMPACT_WIDTHS: Record<CompactCol, number> = { ticket: 240, company: 150, priority: 112, milestone: 176, due: 136, status: 152 };
-type CompactPrefs = { order: CompactCol[]; widths: Partial<Record<CompactCol, number>> };
 
-function readCompact(): CompactPrefs {
+
+function readColumns<C extends string>(key: string, all: readonly C[]): { order: C[]; widths: Partial<Record<C, number>> } {
   try {
-    const v = JSON.parse(localStorage.getItem(COMPACT_KEY) ?? "null") as CompactPrefs | null;
-    if (v && Array.isArray(v.order) && v.order.length === COMPACT_COLUMNS.length && COMPACT_COLUMNS.every((c) => v.order.includes(c))) return { order: v.order, widths: v.widths ?? {} };
+    const v = JSON.parse(localStorage.getItem(key) ?? "null") as { order: C[]; widths?: Partial<Record<C, number>> } | null;
+    if (v && Array.isArray(v.order) && v.order.length === all.length && all.every((c) => v.order.includes(c))) return { order: v.order, widths: v.widths ?? {} };
   } catch {
     /* defaults */
   }
-  return { order: [...COMPACT_COLUMNS], widths: {} };
+  return { order: [...all], widths: {} };
 }
 
-function useCompactColumns() {
-  const [prefs, setPrefs] = useState<CompactPrefs>(readCompact);
-  const keep = (p: CompactPrefs) => {
+/** Columns moved and resized from their titles, kept on this computer. `first` is the one that takes the room left. */
+export function useColumns<C extends string>(storageKey: string, all: readonly C[], defaults: Record<C, number>, first: C) {
+  type Prefs = { order: C[]; widths: Partial<Record<C, number>> };
+  const [prefs, setPrefs] = useState<Prefs>(() => readColumns(storageKey, all));
+  const keep = (p: Prefs) => {
     try {
-      localStorage.setItem(COMPACT_KEY, JSON.stringify(p));
+      localStorage.setItem(storageKey, JSON.stringify(p));
     } catch {
       /* for this page only */
     }
   };
-  const width = (c: CompactCol) => prefs.widths[c] ?? COMPACT_WIDTHS[c];
-  // the ticket column takes the rest until a width is chosen for it
-  const ticketFixed = prefs.widths.ticket !== undefined;
-  const template = prefs.order.map((c) => (c === "ticket" && !ticketFixed ? `minmax(${width(c)}px,1fr)` : `${width(c)}px`)).join(" ");
+  const width = (c: C) => prefs.widths[c] ?? defaults[c];
+  // the first column takes the rest until a width is chosen for it
+  const ticketFixed = prefs.widths[first] !== undefined;
+  const template = prefs.order.map((c) => (c === first && !ticketFixed ? `minmax(${width(c)}px,1fr)` : `${width(c)}px`)).join(" ");
   const minWidth = prefs.order.reduce((n, c) => n + width(c), 0) + 12 * prefs.order.length + 32;
   return {
     order: prefs.order,
     template,
     minWidth,
-    changed: prefs.order.some((c, i) => c !== COMPACT_COLUMNS[i]) || Object.keys(prefs.widths).length > 0,
-    resize: (c: CompactCol, w: number) => setPrefs((p) => ({ ...p, widths: { ...p.widths, [c]: Math.min(c === "ticket" ? 1200 : 480, Math.max(56, Math.round(w))) } })),
+    changed: prefs.order.some((c, i) => c !== all[i]) || Object.keys(prefs.widths).length > 0,
+    resize: (c: C, w: number) => setPrefs((p) => ({ ...p, widths: { ...p.widths, [c]: Math.min(c === first ? 1200 : 480, Math.max(56, Math.round(w))) } })),
     resized: () => setPrefs((p) => (keep(p), p)),
-    resetWidth: (c: CompactCol) =>
+    resetWidth: (c: C) =>
       setPrefs((p) => {
         const widths = { ...p.widths };
         delete widths[c];
@@ -127,7 +129,7 @@ function useCompactColumns() {
         keep(n);
         return n;
       }),
-    move: (c: CompactCol, to: number) =>
+    move: (c: C, to: number) =>
       setPrefs((p) => {
         const rest = p.order.filter((x) => x !== c);
         const n = { ...p, order: [...rest.slice(0, to), c, ...rest.slice(to)] };
@@ -135,9 +137,9 @@ function useCompactColumns() {
         return n;
       }),
     resetAll: () => {
-      setPrefs({ order: [...COMPACT_COLUMNS], widths: {} });
+      setPrefs({ order: [...all], widths: {} });
       try {
-        localStorage.removeItem(COMPACT_KEY);
+        localStorage.removeItem(storageKey);
       } catch {
         /* ignore */
       }
@@ -146,13 +148,13 @@ function useCompactColumns() {
 }
 
 /** The titles: drag one left / right to move the column, drag the line between two to resize (double-click: usual width). */
-function CompactHeader({ cols, labels, style }: { cols: ReturnType<typeof useCompactColumns>; labels: Record<CompactCol, string>; style: CSSProperties }) {
+export function ColumnHeader<C extends string>({ cols, labels, style }: { cols: { order: C[]; changed: boolean; move: (c: C, to: number) => void; resize: (c: C, w: number) => void; resized: () => void; resetWidth: (c: C) => void; resetAll: () => void }; labels: Record<C, string>; style: CSSProperties }) {
   const { t } = useTranslation();
   const row = useRef<HTMLDivElement>(null);
-  const [moving, setMoving] = useState<{ id: CompactCol; x: number } | null>(null);
-  const press = useRef<{ id: CompactCol; x: number; moved: boolean } | null>(null);
-  const resizing = useRef<{ id: CompactCol; x: number; w: number } | null>(null);
-  const target = (id: CompactCol, clientX: number) => {
+  const [moving, setMoving] = useState<{ id: C; x: number } | null>(null);
+  const press = useRef<{ id: C; x: number; moved: boolean } | null>(null);
+  const resizing = useRef<{ id: C; x: number; w: number } | null>(null);
+  const target = (id: C, clientX: number) => {
     const cells = [...(row.current?.querySelectorAll<HTMLElement>("[data-col]") ?? [])].filter((el) => el.dataset.col !== id);
     let to = cells.length;
     for (let i = 0; i < cells.length; i++) {
@@ -240,7 +242,7 @@ export function CompactList({ items, activeIds, onOpen, facets }: { items: Compa
   const txt = useChoiceText();
   const qc = useQueryClient();
   const can = useCan();
-  const cols = useCompactColumns();
+  const cols = useColumns(COMPACT_KEY, COMPACT_COLUMNS, COMPACT_WIDTHS, "ticket");
   const edit = Boolean(facets) && can("tickets.edit");
   const gridStyle: CSSProperties = { gridTemplateColumns: cols.template };
   const refresh = () => void qc.invalidateQueries({ queryKey: ["tickets"] });
@@ -255,7 +257,7 @@ export function CompactList({ items, activeIds, onOpen, facets }: { items: Compa
   return (
     <div className="overflow-x-auto">
       <div style={{ minWidth: cols.minWidth }}>
-        <CompactHeader cols={cols} labels={labels} style={gridStyle} />
+        <ColumnHeader cols={cols} labels={labels} style={gridStyle} />
         <ul className="divide-y divide-[color:var(--glass-border)]">
           {items.map((tk) => {
             const title = (

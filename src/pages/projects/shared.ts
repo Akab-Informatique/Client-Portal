@@ -117,6 +117,10 @@ export type Project = {
   nextCheckpoint?: string | null;
   /** One of my open tasks has its checkpoint or due day today */
   todayMine?: boolean;
+  /** A milestone, or a task of the person looked at, is due or at its checkpoint today */
+  todayFlag?: boolean;
+  /** The earliest day an unfinished milestone is due */
+  nextMilestoneDue?: string | null;
   mine: boolean;
   progress: { done: number; total: number };
   attention: string[];

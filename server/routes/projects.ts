@@ -193,6 +193,9 @@ async function cards(rows: Project[], me: string, withTasks = false) {
       progress: { done: ms.filter((m) => m.status === "done").length, total: ms.length },
       attention,
       nextMilestone: milestoneViews.find((m) => m.status !== "done") ?? null,
+      // the earliest day an unfinished milestone is due
+      nextMilestoneDue: ms.filter((m) => m.status !== "done" && m.dueDate).map((m) => m.dueDate as string).sort()[0] ?? null,
+      milestoneToday: open && ms.some((m) => m.status !== "done" && m.dueDate === today),
       milestones: milestoneViews,
       createdAt: p.createdAt,
       updatedAt: p.updatedAt,
@@ -362,8 +365,9 @@ export const projectsRoutes = new Hono<AppEnv>()
         lead: zUuid.optional().catch(undefined),
         client: zUuid.optional().catch(undefined),
         state: zStatus.optional().catch(undefined),
+        member: zUuid.optional().catch(undefined),
       })
-      .parse({ view: c.req.query("view"), status: c.req.query("status"), q: c.req.query("q") || undefined, lead: c.req.query("lead") || undefined, client: c.req.query("client") || undefined, state: c.req.query("state") || undefined });
+      .parse({ member: c.req.query("member") || undefined, view: c.req.query("view"), status: c.req.query("status"), q: c.req.query("q") || undefined, lead: c.req.query("lead") || undefined, client: c.req.query("client") || undefined, state: c.req.query("state") || undefined });
     const p = schema.projects;
     const rows = await db()
       .select()
@@ -398,10 +402,24 @@ export const projectsRoutes = new Hono<AppEnv>()
           .where(and(inArray(schema.projectTasks.projectId, rows.map((r) => r.id)), eq(schema.projectTasks.assigneeId, a.user.id), ne(schema.projectTasks.status, "done"), or(eq(schema.projectTasks.checkpointDate, today), eq(schema.projectTasks.dueDate, today))))
       : [];
     const todayMine = new Set(dueToday.map((r) => r.projectId));
+    // looking at another technician's projects, the flash is for that person's tasks
+    const who = q.member ?? a.user.id;
+    const dueWho =
+      who === a.user.id || !rows.length
+        ? dueToday
+        : await db()
+            .selectDistinct({ projectId: schema.projectTasks.projectId })
+            .from(schema.projectTasks)
+            .where(and(inArray(schema.projectTasks.projectId, rows.map((r) => r.id)), eq(schema.projectTasks.assigneeId, who), ne(schema.projectTasks.status, "done"), or(eq(schema.projectTasks.checkpointDate, today), eq(schema.projectTasks.dueDate, today))));
+    const todayWho = new Set(dueWho.map((r) => r.projectId));
     list = list
-      .map((x) => ({ ...x, nextCheckpoint: nextAt.get(x.id) ?? null, todayMine: todayMine.has(x.id) }))
+      .map((x) => ({ ...x, nextCheckpoint: nextAt.get(x.id) ?? null, todayMine: todayMine.has(x.id), todayFlag: todayWho.has(x.id) || x.milestoneToday }))
       .sort((x, y) => (x.nextCheckpoint ?? "9999-99-99").localeCompare(y.nextCheckpoint ?? "9999-99-99") || (x.dueDate ?? "9999-99-99").localeCompare(y.dueDate ?? "9999-99-99"));
-    if (q.view === "mine") list = list.filter((x) => x.mine);
+    if (q.member) {
+      // another technician's projects (lead or team member): needs the right to manage projects
+      if (q.member !== a.user.id && !a.permissions.includes("projects.manage")) throw new HTTPException(403, { message: "forbidden" });
+      list = list.filter((x) => x.members.some((m) => m.id === q.member));
+    } else if (q.view === "mine") list = list.filter((x) => x.mine);
     else if (q.view === "attention") list = list.filter((x) => x.attention.length);
     else if (q.view === "watch") list = list.filter((x) => x.following);
     return c.json(list);

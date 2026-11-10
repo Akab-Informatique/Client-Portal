@@ -7230,6 +7230,25 @@ describe("pipeline: shared to-dos and the day", () => {
     expect(await flag()).toBe(true);
   });
 
+  it("projects list: next milestone due, flash for a milestone due today, another technician's projects need the right", async () => {
+    resetRateLimit("login:ip:unknown");
+    const tech = await signIn("tech@akab.local");
+    const admin = await signIn("admin@akab.local");
+    const me = (await tech.get("/api/me")).json.id as string;
+    const proj = (await tech.post("/api/projects", { name: "Jalon du jour", milestones: [{ name: "Plus tard", dueDate: "2031-05-01" }, { name: "Aujourd'hui", dueDate: qcToday() }] })).json;
+    const row = async () => ((await tech.get("/api/projects?view=all&status=all")).json as any[]).find((x) => x.id === proj.id);
+    const r = await row();
+    expect(r.nextMilestoneDue).toBe(qcToday());
+    expect(r.todayFlag).toBe(true);
+    // someone else's projects: refused without the right, allowed for an administrator
+    const adminId = (await admin.get("/api/me")).json.id as string;
+    expect((await tech.get(`/api/projects?status=open&member=${adminId}`)).status).toBe(403);
+    expect((await tech.get(`/api/projects?status=open&member=${me}`)).status).toBe(200);
+    const mine = await admin.get(`/api/projects?status=open&member=${me}`);
+    expect(mine.status).toBe(200);
+    expect((mine.json as any[]).some((x) => x.id === proj.id)).toBe(true);
+  });
+
   it("a quote is sold fixed, as a bank of hours or hourly: the deposit and the project follow", async () => {
     resetRateLimit("login:ip:unknown");
     const admin = await signIn("admin@akab.local");
