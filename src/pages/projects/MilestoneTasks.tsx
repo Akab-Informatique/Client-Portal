@@ -6,6 +6,7 @@ import { SortableContext, arrayMove, useSortable, verticalListSortingStrategy } 
 import { CSS } from "@dnd-kit/utilities";
 import { ArrowDownUp, Check, ChevronDown, Folder, FolderInput, FolderOpen, FolderPlus, GripVertical, Lock, Pencil, SlidersHorizontal, Trash2, X } from "lucide-react";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
+import { useConfirm } from "@/components/ConfirmDialog";
 import { api } from "@/lib/api";
 import { byCustom, useCustomOrder, useSortDefault } from "@/lib/sortPrefs";
 import { cn } from "@/lib/utils";
@@ -100,12 +101,14 @@ export function MilestoneTasks({ projectId, m, onTask, edit, onChanged, fail }: 
   const rename = useMutation({ mutationFn: (v: { id: string; name: string }) => api.patch(`/projects/${projectId}/groups/${v.id}`, { name: v.name }), onSuccess: onChanged, onError: fail });
   const delGroup = useMutation({ mutationFn: (id: string) => api.del(`/projects/${projectId}/groups/${id}`), onSuccess: onChanged, onError: fail });
   const setStatus = useMutation({ mutationFn: (v: { id: string; status: TaskStatus }) => api.patch(`/projects/${projectId}/tasks/${v.id}`, { status: v.status }), onSuccess: onChanged, onError: fail });
+  const confirm = useConfirm();
+  const delTask = useMutation({ mutationFn: (id: string) => api.del(`/projects/${projectId}/tasks/${id}`), onSuccess: onChanged, onError: fail });
   const moveTask = useMutation({ mutationFn: (v: { id: string; groupId: string | null }) => api.patch(`/projects/${projectId}/tasks/${v.id}`, { groupId: v.groupId }), onSuccess: onChanged, onError: fail });
   const rows = (list: Task[]) => (
     <SortableContext items={list.map((k) => k.id)} strategy={verticalListSortingStrategy}>
       <ul className="space-y-1">
         {list.map((k) => (
-          <TaskRow key={k.id} k={k} milestoneId={m.id} onTask={onTask} onStatus={edit ? (status) => setStatus.mutate({ id: k.id, status }) : undefined} groups={edit ? groups : []} onGroup={(groupId) => moveTask.mutate({ id: k.id, groupId })} />
+          <TaskRow key={k.id} k={k} milestoneId={m.id} onTask={onTask} onStatus={edit ? (status) => setStatus.mutate({ id: k.id, status }) : undefined} groups={edit ? groups : []} onGroup={(groupId) => moveTask.mutate({ id: k.id, groupId })} onDelete={edit ? () => void confirm({ title: t("projects.removeTaskTitle", { name: k.title }), description: t("projects.removeTaskText") }).then((ok) => ok && delTask.mutate(k.id)) : undefined} />
         ))}
       </ul>
     </SortableContext>
@@ -236,7 +239,7 @@ function GroupBox({ g, milestoneId, count, done, open, edit, onToggle, onRename,
   );
 }
 
-function TaskRow({ k, milestoneId, onTask, onStatus, groups, onGroup }: { k: Task; milestoneId: string; onTask: (id: string) => void; onStatus?: (s: TaskStatus) => void; groups: Group[]; onGroup: (groupId: string | null) => void }) {
+function TaskRow({ k, milestoneId, onTask, onStatus, groups, onGroup, onDelete }: { k: Task; milestoneId: string; onTask: (id: string) => void; onStatus?: (s: TaskStatus) => void; groups: Group[]; onGroup: (groupId: string | null) => void; onDelete?: () => void }) {
   const { t } = useTranslation();
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id: k.id, data: { type: "task", milestoneId, groupId: k.groupId } });
   return (
@@ -275,6 +278,11 @@ function TaskRow({ k, milestoneId, onTask, onStatus, groups, onGroup }: { k: Tas
         <button type="button" onClick={() => onTask(k.id)} aria-label={t("projects.phase.taskDetails")} title={t("projects.phase.taskDetails")} className="rounded p-1 text-muted-foreground/70 hover:text-foreground">
           <SlidersHorizontal className="size-4" />
         </button>
+        {onDelete && (
+          <button type="button" onClick={onDelete} aria-label={t("projects.removeTask")} title={t("projects.removeTask")} className="rounded p-1 text-muted-foreground/70 hover:text-destructive">
+            <Trash2 className="size-4" />
+          </button>
+        )}
         {groups.length > 0 && (
           <DropdownMenu>
             <DropdownMenuTrigger className={cn("rounded p-1 hover:text-foreground", k.groupId ? "text-violet-300" : "text-muted-foreground/70")} title={t("projects.group.move")} aria-label={t("projects.group.move")}>
